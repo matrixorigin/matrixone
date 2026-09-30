@@ -143,12 +143,12 @@ func (op *operator) Close() error {
 	var err error
 	if op.reset.svc != nil {
 		err = op.reset.svc.Close()
-		if err != nil {
+		if !closeComplete(op.reset.svc, err) {
 			// A service may return a drain timeout while accepted requests still
 			// use its storage and WAL dependencies.  Keep every cleanup owner
 			// reachable and let the caller retry or fail-stop; closing the
 			// stopper or file service here would destroy those dependencies.
-			return err
+			return errors.Join(err, moerr.NewInvalidStateNoCtx("service cleanup is incomplete"))
 		}
 		op.reset.svc = nil
 	}
@@ -161,15 +161,26 @@ func (op *operator) Close() error {
 		op.reset.fs = nil
 	}
 	op.reset.shutdownC = nil
-	if err == nil {
-		op.state = stopped
-	}
+	op.state = stopped
 	return err
+}
+
+// Completion is an ownership contract, independent of diagnostics. Unknown
+// implementations retain the legacy nil-error contract and fail closed on error.
+func closeComplete(owner any, err error) bool {
+	if owner, ok := owner.(interface{ CloseComplete() bool }); ok {
+		return owner.CloseComplete()
+	}
+	return err == nil
 }
 
 func (op *operator) needsCleanup() bool {
 	op.RLock()
 	defer op.RUnlock()
+	return op.needsCleanupLocked()
+}
+
+func (op *operator) needsCleanupLocked() bool {
 	return op.reset.svc != nil ||
 		op.reset.stopper != nil ||
 		op.reset.fs != nil
@@ -181,6 +192,9 @@ func (op *operator) Start() error {
 
 	if op.state == started {
 		return moerr.NewInvalidStateNoCtx("service already started")
+	}
+	if op.needsCleanupLocked() {
+		return moerr.NewInvalidStateNoCtx("service cleanup is incomplete")
 	}
 	configuredType, err := op.cfg.getServiceType()
 	if err != nil {
@@ -595,9 +609,9 @@ func waitStartupRetry(ctx context.Context, interval time.Duration) error {
 }
 
 func (op *operator) waitHAKeeperReadyLocked() (logservice.CNHAKeeperClient, error) {
-	getClient := func() (logservice.CNHAKeeperClient, error) {
-		ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*5, moerr.CauseWaitHAKeeperReadyLocked)
-		defer cancel()
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute*5, moerr.CauseWaitHAKeeperReadyLocked2)
+	defer cancel()
+	return waitHAKeeperClient(ctx, func(ctx context.Context) (logservice.CNHAKeeperClient, error) {
 		client, err := logservice.NewCNHAKeeperClient(
 			ctx,
 			op.sid,
@@ -612,20 +626,26 @@ func (op *operator) waitHAKeeperReadyLocked() (logservice.CNHAKeeperClient, erro
 			return nil, err
 		}
 		return client, nil
-	}
+	})
+}
 
-	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute*5, moerr.CauseWaitHAKeeperReadyLocked2)
-	defer cancel()
+// Each attempt shares the owner's deadline; a failed attempt never sleeps
+// beyond cancellation. A successful client is transferred to the caller.
+func waitHAKeeperClient(ctx context.Context, create func(context.Context) (logservice.CNHAKeeperClient, error)) (logservice.CNHAKeeperClient, error) {
 	for {
 		select {
 		case <-ctx.Done():
 			return nil, errors.Join(moerr.NewInternalErrorNoCtx("wait hakeeper ready timeout"), moerr.CauseWaitHAKeeperReadyLocked2)
 		default:
-			client, err := getClient()
+			attempt, cancel := context.WithTimeoutCause(ctx, 5*time.Second, moerr.CauseWaitHAKeeperReadyLocked)
+			client, err := create(attempt)
+			cancel()
 			if err == nil {
 				return client, nil
 			}
-			time.Sleep(time.Second)
+			if err := waitStartupRetry(ctx, time.Second); err != nil {
+				return nil, errors.Join(moerr.NewInternalErrorNoCtx("wait hakeeper ready timeout"), moerr.CauseWaitHAKeeperReadyLocked2)
+			}
 		}
 	}
 }

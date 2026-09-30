@@ -279,6 +279,46 @@ func TestAnyShardReadyTimeout(t *testing.T) {
 	assert.Equal(t, testingAnyShardReadyTimeout, (&operator{testing: true}).anyShardReadyTimeout())
 }
 
+func TestHAKeeperClientAttemptsHonorOwner(t *testing.T) {
+	t.Run("attempt inherits cancellation", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		calls := 0
+		client, err := waitHAKeeperClient(ctx, func(attempt context.Context) (logservice.CNHAKeeperClient, error) {
+			calls++
+			cancel()
+			require.ErrorIs(t, attempt.Err(), context.Canceled)
+			return nil, attempt.Err()
+		})
+		require.Nil(t, client)
+		require.Error(t, err)
+		require.Equal(t, 1, calls)
+	})
+	t.Run("success transfers client and releases attempt context", func(t *testing.T) {
+		want := &testHAKClient{}
+		var attempt context.Context
+		client, err := waitHAKeeperClient(context.Background(), func(ctx context.Context) (logservice.CNHAKeeperClient, error) {
+			attempt = ctx
+			return want, nil
+		})
+		require.NoError(t, err)
+		require.Same(t, want, client)
+		require.ErrorIs(t, attempt.Err(), context.Canceled)
+		require.Zero(t, want.closeCount)
+		require.NoError(t, client.Close())
+		require.Equal(t, 1, want.closeCount)
+	})
+	t.Run("already cancelled does not create client", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, err := waitHAKeeperClient(ctx, func(context.Context) (logservice.CNHAKeeperClient, error) {
+			t.Fatal("unexpected attempt")
+			return nil, nil
+		})
+		require.Error(t, err)
+	})
+}
+
 func TestStartupRetryWaitsHonorDeadline(t *testing.T) {
 	tests := []struct {
 		name      string

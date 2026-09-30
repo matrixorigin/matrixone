@@ -198,8 +198,24 @@ func NewUsearchBruteForceIndexFlattened[T types.RealNumbers](dataset []T,
 	return idx, nil
 }
 
+// Preload has nothing to measure: the dataset is supplied at construction, so GetIndexSize
+// already answers before Load.
+func (idx *UsearchBruteForceIndex[T]) Preload(sqlproc *sqlexec.SqlProcess) error { return nil }
+
 func (idx *UsearchBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 	return nil
+}
+
+// GetIndexSize reports the flattened dataset the index holds in host memory. Nothing here
+// reaches a GPU, so the device figure is 0.
+// BuildTS is the fulltext2 async-freshness hook; brute-force search has no async watermark.
+func (idx *UsearchBruteForceIndex[T]) BuildTS() int64 { return 0 }
+
+func (idx *UsearchBruteForceIndex[T]) GetIndexSize() (hostBytes, deviceBytes int64) {
+	if idx.Dataset == nil {
+		return 0, 0
+	}
+	return int64(len(*idx.Dataset)) * int64(util.UnsafeSizeOf[T]()), 0
 }
 
 func (idx *UsearchBruteForceIndex[T]) SearchFloat32(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
@@ -324,8 +340,25 @@ func (idx *UsearchBruteForceIndex[T]) Destroy() {
 	}
 }
 
+// Preload has nothing to measure: the dataset is supplied at construction.
+func (idx *GoBruteForceIndex[T, R]) Preload(sqlproc *sqlexec.SqlProcess) error { return nil }
+
 func (idx *GoBruteForceIndex[T, R]) Load(sqlproc *sqlexec.SqlProcess) error {
 	return nil
+}
+
+// GetIndexSize reports the row-major dataset the index holds in host memory: the vectors plus
+// the per-row slice headers backing them. Nothing here reaches a GPU, so the device figure is 0.
+// BuildTS is the fulltext2 async-freshness hook; brute-force search has no async watermark.
+func (idx *GoBruteForceIndex[T, R]) BuildTS() int64 { return 0 }
+
+func (idx *GoBruteForceIndex[T, R]) GetIndexSize() (hostBytes, deviceBytes int64) {
+	var elems int64
+	for _, row := range idx.Dataset {
+		elems += int64(len(row))
+	}
+	rows := int64(len(idx.Dataset))
+	return elems*int64(util.UnsafeSizeOf[T]()) + rows*int64(util.UnsafeSizeOf[[]T]()), 0
 }
 
 func (idx *GoBruteForceIndex[T, R]) Destroy() {
@@ -353,7 +386,7 @@ func (idx *GoBruteForceIndex[T, R]) SearchFloat32(proc *sqlexec.SqlProcess, _que
 	}
 
 	exec := concurrent.NewThreadPoolExecutor(int(nthreads))
-	return exec.Execute(
+	err = exec.Execute(
 		proc.GetContext(),
 		nqueries,
 		func(ctx context.Context, thread_id int, start, end int) error {
@@ -383,6 +416,12 @@ func (idx *GoBruteForceIndex[T, R]) SearchFloat32(proc *sqlexec.SqlProcess, _que
 							minIdx = j
 						}
 					}
+					if minIdx < 0 {
+						// No candidate was ever closer than MaxFloat: the dataset is empty, or
+						// every distance left the element domain. -1 is not a row index -- callers
+						// feed this straight into UnionOne -- so fail instead of returning it.
+						return moerr.NewInternalErrorNoCtx("brute force: no nearest centroid for query; every candidate distance is out of range")
+					}
 					outKeys[k] = int64(minIdx)
 					outDists[k] = float32(minDist)
 					continue
@@ -411,6 +450,15 @@ func (idx *GoBruteForceIndex[T, R]) SearchFloat32(proc *sqlexec.SqlProcess, _que
 			}
 			return nil
 		})
+	if err != nil {
+		return err
+	}
+	// No finite check here. A distance that left the element domain cannot win a min-comparison,
+	// so it never changes the ranking -- it matters only where one is handed back as a score, and
+	// that is the caller's boundary, not this one. Checking in one entry point but not the other
+	// made the same index validate or not depending on which was called. An
+	// all-candidates-out-of-domain query is still caught by the negative-index guard above.
+	return nil
 }
 
 func (idx *GoBruteForceIndex[T, R]) Search(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
@@ -467,6 +515,10 @@ func (idx *GoBruteForceIndex[T, R]) Search(proc *sqlexec.SqlProcess, _queries an
 							minDist = dist
 							minIdx = j
 						}
+					}
+					if minIdx < 0 {
+						// see SearchFloat32: -1 is not a row index
+						return moerr.NewInternalErrorNoCtx("brute force: no nearest centroid for query; every candidate distance is out of range")
 					}
 					retKeys64[k*limit] = int64(minIdx)
 					retDistances[k*limit] = float64(minDist)

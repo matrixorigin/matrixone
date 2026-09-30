@@ -226,10 +226,14 @@ type FeTxnOption struct {
 	// transaction created to execute the SET statement itself.
 	activeTxnAtStart      bool
 	activeTxnAtStartKnown bool
-	// forcePessimisticObjectLifecycle marks statements that delete catalog
-	// objects and therefore must share GRANT's pessimistic lifecycle protocol.
+	// forcePessimisticObjectLifecycle marks lifecycle statements whose owning
+	// transaction must be both pessimistic and RC.
 	forcePessimisticObjectLifecycle bool
-	// implicitCommitBefore marks a top-level TRUNCATE statement. Its old
+	// forcePessimisticLifecycleMode marks fixed-snapshot-compatible lifecycle
+	// statements. They need real pessimistic locks but retain the transaction's
+	// selected isolation level (including an existing SI snapshot).
+	forcePessimisticLifecycleMode bool
+	// implicitCommitBefore marks a top-level implicit-commit DDL statement. Its old
 	// transaction has already been committed before authorization/planning;
 	// the transaction created for the statement must be finalized separately.
 	implicitCommitBefore bool
@@ -243,6 +247,7 @@ func (opt *FeTxnOption) Close() {
 	opt.activeTxnAtStart = false
 	opt.activeTxnAtStartKnown = false
 	opt.forcePessimisticObjectLifecycle = false
+	opt.forcePessimisticLifecycleMode = false
 	opt.implicitCommitBefore = false
 }
 
@@ -437,6 +442,27 @@ func transactionIsolationDefaultValue(
 	return normalized, err
 }
 
+func transactionReadOnlyDefaultValue(
+	ctx context.Context,
+	ses *Session,
+	scope tree.TransactionScope,
+) (interface{}, error) {
+	switch scope {
+	case tree.TransactionScopeSession:
+		// SESSION/LOCAL DEFAULT inherits the account-global value, just like
+		// MySQL's transaction characteristics. It must not use the static
+		// declaration default when SET GLOBAL has changed the account value.
+		return ses.GetGlobalSysVar(transactionReadOnlySystemVariable)
+	case tree.TransactionScopeGlobal:
+		return gSysVarsDefs[transactionReadOnlySystemVariable].Default, nil
+	case tree.TransactionScopeNext:
+		return nil, moerr.NewNotSupported(ctx,
+			"transaction access mode is only supported for SESSION scope")
+	default:
+		return nil, moerr.NewInvalidInputf(ctx, "unsupported transaction scope %d", scope)
+	}
+}
+
 func (th *TxnHandler) setSessionTxnIsolation(isolation pbtxn.TxnIsolation) {
 	th.mu.Lock()
 	defer th.mu.Unlock()
@@ -544,11 +570,19 @@ func (th *TxnHandler) Create(execCtx *ExecCtx) error {
 			)
 		}
 	}
+	if execCtx.txnOpt.forcePessimisticLifecycleMode && th.inActiveTxnUnsafe() {
+		if !th.txnOp.Txn().IsPessimistic() {
+			return moerr.NewNotSupported(
+				execCtx.reqCtx,
+				"lifecycle statements require an existing pessimistic transaction",
+			)
+		}
+	}
 
 	// BEGIN and implicit-commit statements own a fresh transaction.  The latter
 	// has already committed any previous transaction at the statement boundary;
 	// keeping this condition here also makes the post-boundary transaction
-	// explicit and prevents TRUNCATE from reusing a stale workspace.
+	// explicit and prevents TRUNCATE/RENAME from reusing a stale workspace.
 	if execCtx.txnOpt.byBegin || execCtx.txnOpt.implicitCommitBefore || !th.inActiveTxnUnsafe() {
 		//commit existed txn anyway
 		err = th.createUnsafe(execCtx)
@@ -674,8 +708,10 @@ func requiresPessimisticObjectLifecycleTxn(
 	defaultDatabase string,
 ) bool {
 	switch st := stmt.(type) {
-	case *tree.DropDatabase, *tree.DropView, *tree.DropSequence, *tree.AlterView,
-		*tree.AlterSequence, *tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase:
+	case *tree.TruncateTable, *tree.CreatePitr, *tree.DropPitr, *tree.AlterPitr,
+		*tree.DropDatabase, *tree.DropView, *tree.DropSequence, *tree.AlterView,
+		*tree.AlterSequence, *tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase,
+		*tree.DataBranchDiff, *tree.DataBranchMerge, *tree.DataBranchPick:
 		return true
 	case *tree.DropTable:
 		// Ordinary DROP TABLE can resolve to a session temporary alias only after
@@ -684,6 +720,27 @@ func requiresPessimisticObjectLifecycleTxn(
 		return len(capturePersistentDropTableTargets(ses, st, defaultDatabase)) > 0
 	case *tree.CreateView:
 		return st.Replace
+	default:
+		return false
+	}
+}
+
+// requiresPessimisticLifecycleModeTxn identifies lifecycle statements whose
+// fixed caller snapshot is part of their semantics. They must use pessimistic
+// mode so lifecycle barriers are physical locks, but forcing RC would change
+// existing SI behavior.
+func requiresPessimisticLifecycleModeTxn(
+	ses FeSession,
+	stmt tree.Statement,
+	defaultDatabase string,
+) bool {
+	switch st := stmt.(type) {
+	case *tree.AlterTable:
+		return st.Table == nil || !isSessionTemporaryTable(ses, st.Table, defaultDatabase)
+	case *tree.RenameTable,
+		*tree.CloneTable, *tree.CloneDatabase,
+		*tree.DataBranchCreateTable, *tree.DataBranchCreateDatabase:
+		return true
 	default:
 		return false
 	}
@@ -782,6 +839,11 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 		opts = append(opts,
 			txnclient.WithTxnMode(pbtxn.TxnMode_Pessimistic),
 			txnclient.WithTxnIsolation(pbtxn.TxnIsolation_RC))
+	} else if execCtx.txnOpt.forcePessimisticLifecycleMode {
+		opts = append(opts, txnclient.WithTxnMode(pbtxn.TxnMode_Pessimistic))
+		if hasSelectedIsolation {
+			opts = append(opts, txnclient.WithTxnIsolation(selectedIsolation))
+		}
 	} else if hasSelectedIsolation {
 		opts = append(opts, txnclient.WithTxnIsolation(selectedIsolation))
 	}
@@ -878,7 +940,7 @@ func (th *TxnHandler) Commit(execCtx *ExecCtx) error {
 // commitBeforeStatement ends the transaction that precedes a statement with
 // MySQL's implicit-commit-before rule.  It intentionally bypasses Commit's
 // option-bit policy: an explicit BEGIN or AUTOCOMMIT=0 must not keep the old
-// workspace alive across TRUNCATE.  The existing unsafe path remains the sole
+// workspace alive across TRUNCATE or RENAME TABLE. The unsafe path remains the sole
 // owner of commit-result-unknown, temporary-table, and DDL-generation cleanup.
 func (th *TxnHandler) commitBeforeStatement(execCtx *ExecCtx) error {
 	if th == nil || execCtx == nil {
@@ -1174,6 +1236,22 @@ func transactionIsolationAssignmentScope(
 	return assign.TxnScope, true
 }
 
+// transactionReadOnlyAssignmentScope returns the transaction-characteristic
+// scope carried by a transaction_read_only/tx_read_only assignment. The
+// legacy Global flag wins for programmatically constructed ASTs, matching the
+// isolation-variable helper above.
+func transactionReadOnlyAssignmentScope(
+	assign *tree.VarAssignmentExpr,
+) (tree.TransactionScope, bool) {
+	if assign == nil || !assign.System || !isTransactionReadOnlySystemVariable(assign.Name) {
+		return 0, false
+	}
+	if assign.Global {
+		return tree.TransactionScopeGlobal, true
+	}
+	return assign.TxnScope, true
+}
+
 // statementContainsTransactionCharacteristic identifies statements with any
 // transaction-characteristic assignment. Treat the whole SET statement as
 // preserving an already active user transaction even when it also contains
@@ -1187,6 +1265,9 @@ func statementContainsTransactionCharacteristic(stmt tree.Statement) bool {
 	case *tree.SetVar:
 		for _, assign := range st.Assignments {
 			if _, ok := transactionIsolationAssignmentScope(assign); ok {
+				return true
+			}
+			if _, ok := transactionReadOnlyAssignmentScope(assign); ok {
 				return true
 			}
 		}

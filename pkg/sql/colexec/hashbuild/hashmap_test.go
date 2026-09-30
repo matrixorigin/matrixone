@@ -1283,6 +1283,62 @@ func TestDedupBuildIgnoreOnlyMarksCandidateOwnOldKey(t *testing.T) {
 	}
 }
 
+type hashBuildWarning struct {
+	code uint16
+	msg  string
+}
+
+type hashBuildWarningSession struct {
+	total    uint64
+	warnings []hashBuildWarning
+}
+
+func (*hashBuildWarningSession) GetTempTable(string, string) (string, bool) { return "", false }
+func (*hashBuildWarningSession) AddTempTable(string, string, string)        {}
+func (*hashBuildWarningSession) RemoveTempTable(string, string)             {}
+func (*hashBuildWarningSession) RemoveTempTableByRealName(string)           {}
+func (*hashBuildWarningSession) GetSqlModeNoAutoValueOnZero() (bool, bool)  { return false, false }
+func (s *hashBuildWarningSession) AppendWarningBatch(total uint64, codes []uint16, messages []string) {
+	s.total += total
+	for i := 0; i < len(codes) && i < len(messages); i++ {
+		s.warnings = append(s.warnings, hashBuildWarning{code: codes[i], msg: messages[i]})
+	}
+}
+
+func TestDedupBuildIgnoreReportsOneWarningPerSkippedInputRow(t *testing.T) {
+	session := &hashBuildWarningSession{}
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc.Session = session
+	proc.SetStmtProfile(&process.StmtProfile{})
+	proc.GetStmtProfile().SetStatementRuntimeProfile("Insert", "DML", true)
+
+	hb := newTestHashmapBuilder(t)
+	hb.IsDedup = true
+	hb.OnDuplicateAction = plan.Node_IGNORE
+	hb.DedupColName = "PRIMARY"
+	hb.DedupColTypes = []plan.Type{newExpr(0, types.T_int32.ToType()).Typ}
+	defer func() {
+		hb.Reset(proc, true)
+		hb.Free(proc)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	}()
+
+	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, -1, -1, nil, proc))
+	input := makeIntKeyValueBatch(proc, []int32{1, 1, 2}, []int32{10, 11, 20})
+	require.NoError(t, hb.CopyBuildBatch(input, proc))
+	hb.InputBatchRowCount = input.RowCount()
+	input.Clean(proc.Mp())
+
+	require.NoError(t, hb.BuildHashmap(false, false, false, proc))
+	require.Equal(t, uint64(1), session.total)
+	require.Equal(t, []hashBuildWarning{{
+		code: moerr.ER_DUP_ENTRY,
+		msg:  "Duplicate entry '1' for key 'PRIMARY'",
+	}}, session.warnings)
+	require.Equal(t, 2, hb.Batches.RowCount())
+}
+
 func TestDedupBuildIgnoreReleasesAcceptedCandidateOldKey(t *testing.T) {
 	hb := newTestHashmapBuilder(t)
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())

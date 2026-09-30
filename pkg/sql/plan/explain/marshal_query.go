@@ -265,6 +265,12 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		return "postdml", nil
 	case plan.Node_TABLE_CLONE:
 		return "table_clone", nil
+	case plan.Node_ADAPTIVE_TOP:
+		return "adaptive_top", nil
+	case plan.Node_VECTOR_QUERY_TOP:
+		return "vector_query_top", nil
+	case plan.Node_VECTOR_QUERY_SOURCE:
+		return "vector_query_source", nil
 	default:
 		return "", moerr.NewInternalError(ctx, errUnsupportedNodeType)
 	}
@@ -706,6 +712,15 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			Name:  Label_Table_Clone,
 			Value: []string{},
 		})
+	case plan.Node_ADAPTIVE_TOP:
+		labels = append(labels, models.Label{
+			Name:  Label_Unknown,
+			Value: []string{"post", "pre", "force"},
+		})
+	case plan.Node_VECTOR_QUERY_TOP:
+		labels = append(labels, models.Label{Name: Label_Unknown, Value: []string{"provider", "ann", "null-fallback"}})
+	case plan.Node_VECTOR_QUERY_SOURCE:
+		labels = append(labels, models.Label{Name: Label_Unknown, Value: []string{"scalar-vector"}})
 	default:
 		return nil, moerr.NewInternalError(ctx, errUnsupportedNodeType)
 	}

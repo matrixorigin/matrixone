@@ -154,12 +154,20 @@ func (r *chunkTopNReader) directory(ctx context.Context) (uint32, []columnChunkM
 	return parseColumnChunkHeader(header.Entries[0].CachedData.Bytes(), r.ext.Length())
 }
 
-func (r *chunkTopNReader) consume(ctx context.Context, meta columnChunkMeta, selected []int64, ordinalBase int, acc *vectorTopAccumulator) error {
+func (r *chunkTopNReader) consume(
+	ctx context.Context,
+	meta columnChunkMeta,
+	selected []int64,
+	ordinalBase int,
+	acc *vectorTopAccumulator,
+	top *IndexReaderTopOp,
+) error {
 	ioVec, err := r.read(ctx, meta.offset, meta.length, meta.originSize, meta.algorithm, true)
 	if err != nil {
 		return err
 	}
 	defer ioVec.Release()
+	recordVectorChunk(top, ioVec.Entries[0])
 	return r.consumeData(ctx, ioVec.Entries[0].CachedData, meta, selected, ordinalBase, acc)
 }
 
@@ -204,7 +212,7 @@ func readChunkedColumnTopN(
 	}
 	winners, distances, err := searchChunkedTopN(ctx, totalRows, metas, selected, top,
 		func(_ int, meta columnChunkMeta, rows []int64, ordinal int, acc *vectorTopAccumulator) error {
-			return r.consume(ctx, meta, rows, ordinal, acc)
+			return r.consume(ctx, meta, rows, ordinal, acc, top)
 		})
 	return winners, distances, r.fromCache, err
 }
@@ -250,5 +258,9 @@ func searchChunkedTopN(ctx context.Context, totalRows uint32, metas []columnChun
 	if err = ctx.Err(); err != nil {
 		return nil, nil, err
 	}
-	return acc.finish()
+	rows, distances, err := acc.finish()
+	if err == nil {
+		recordVectorTopKOutput(top, len(rows))
+	}
+	return rows, distances, err
 }

@@ -29,8 +29,10 @@ import (
 	"iter"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -1021,6 +1023,193 @@ func TestParquetListToVectorMapping(t *testing.T) {
 	})
 }
 
+func TestParquetListMapperRejectsValueKindMismatch(t *testing.T) {
+	proc := testutil.NewProc(t)
+	f, page := writeListAndGetPage(t, parquet.Leaf(parquet.FloatType), []parquet.Row{
+		{parquet.FloatValue(1).Level(0, 1, 0)},
+	})
+	var h ParquetHandler
+	_, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float32), Width: 1})
+	require.NotNil(t, mp)
+
+	badPage := &parquetPageWithData{Page: page, data: encoding.Int32Values([]int32{1})}
+	vec := vector.NewVec(types.New(types.T_array_float32, 0, 0))
+	err := mp.mapping(badPage, proc, vec)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "expected FLOAT")
+	require.Zero(t, vec.Length())
+}
+
+func TestParquetListMapperRejectsRepetitionLevelOverflow(t *testing.T) {
+	proc := testutil.NewProc(t)
+	f, page := writeListAndGetPage(t, parquet.Leaf(parquet.FloatType), []parquet.Row{
+		{
+			parquet.FloatValue(1).Level(0, 1, 0),
+			parquet.FloatValue(2).Level(1, 1, 0),
+		},
+	})
+	var h ParquetHandler
+	_, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float32), Width: 2})
+	require.NotNil(t, mp)
+
+	badValues := []parquet.Value{
+		parquet.FloatValue(1).Level(0, 1, 0),
+		parquet.FloatValue(2).Level(2, 1, 0),
+	}
+	badPage := &parquetPageWithValues{
+		Page: page,
+		values: parquet.ValueReaderFunc(func(dst []parquet.Value) (int, error) {
+			return copy(dst, badValues), nil
+		}),
+	}
+	vec := vector.NewVec(types.New(types.T_array_float32, 0, 0))
+	err := mp.mapping(badPage, proc, vec)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "repetition level 2 exceeds maximum 1")
+	require.Zero(t, vec.Length())
+}
+
+func TestParquetListMapperRejectsDefinitionLevelNullnessMismatch(t *testing.T) {
+	proc := testutil.NewProc(t)
+	f, page := writeListAndGetPage(t, parquet.Leaf(parquet.FloatType), []parquet.Row{
+		{parquet.FloatValue(1).Level(0, 1, 0)},
+	})
+	var h ParquetHandler
+	_, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float32), Width: 1})
+	require.NotNil(t, mp)
+
+	badValues := []parquet.Value{parquet.FloatValue(1).Level(0, 0, 0)}
+	badPage := &parquetPageWithValues{
+		Page: page,
+		values: parquet.ValueReaderFunc(func(dst []parquet.Value) (int, error) {
+			return copy(dst, badValues), nil
+		}),
+	}
+	vec := vector.NewVec(types.New(types.T_array_float32, 0, 0))
+	err := mp.mapping(badPage, proc, vec)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "NULL status")
+	require.Zero(t, vec.Length())
+}
+
+func TestParquetValueNullnessMustMatchDefinitionLevels(t *testing.T) {
+	proc := testutil.NewProc(t)
+	page := parquet.Int32Type.NewPage(0, 1, encoding.Int32Values([]int32{1}))
+	badPage := &parquetPageWithValues{
+		Page: page,
+		values: parquet.ValueReaderFunc(func(dst []parquet.Value) (int, error) {
+			dst[0] = parquet.NullValue().Level(0, 0, 0)
+			return 1, nil
+		}),
+	}
+	vec := vector.NewVec(types.T_int32.ToType())
+	err := processParquetValuesToFixed[int32](context.Background(),
+		&columnMapper{srcNull: false, dstNull: true}, badPage, proc, vec, 0,
+		func(v parquet.Value) (int32, error) { return v.Int32(), nil })
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "value NULL status disagrees")
+	require.Zero(t, vec.Length())
+}
+
+func TestParquetOptionalNoNullPageRetainsDefinitionLevel(t *testing.T) {
+	proc := testutil.NewProc(t)
+	f, page := writeColumnAndGetPage(t, parquet.Optional(parquet.Leaf(parquet.BooleanType)), []parquet.Row{
+		{parquet.BooleanValue(true).Level(0, 1, 0)},
+		{parquet.BooleanValue(false).Level(0, 1, 0)},
+	})
+
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool)})
+	require.NotNil(t, mp)
+	vec := vector.NewVec(types.T_bool.ToType())
+	require.NoError(t, mp.mapping(page, proc, vec))
+	require.Equal(t, []bool{true, false}, vector.MustFixedColWithTypeCheck[bool](vec))
+	require.False(t, vec.GetNulls().Contains(0))
+	require.False(t, vec.GetNulls().Contains(1))
+}
+
+func TestParquetGenericMappingRejectsValueKindMismatch(t *testing.T) {
+	proc := testutil.NewProc(t)
+	page := parquet.Int32Type.NewPage(0, 1, encoding.Int32Values([]int32{1}))
+	badPage := &parquetPageWithValues{
+		Page: page,
+		values: parquet.ValueReaderFunc(func(dst []parquet.Value) (int, error) {
+			dst[0] = parquet.BooleanValue(true)
+			return 1, nil
+		}),
+	}
+	vec := vector.NewVec(types.T_int32.ToType())
+	err := processParquetValuesToFixed[int32](context.Background(), &columnMapper{}, badPage, proc, vec, 0,
+		func(v parquet.Value) (int32, error) { return v.Int32(), nil })
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "value kind BOOLEAN")
+	require.Zero(t, vec.Length())
+}
+
+func TestParquetGenericMappingRejectsValueLevelMismatch(t *testing.T) {
+	proc := testutil.NewProc(t)
+	page := parquet.Int32Type.NewPage(0, 1, encoding.Int32Values([]int32{1}))
+	for _, tc := range []struct {
+		name  string
+		value parquet.Value
+		want  string
+	}{
+		{name: "definition", value: parquet.Int32Value(1).Level(0, 1, 0), want: "definition level"},
+		{name: "repetition", value: parquet.Int32Value(1).Level(1, 0, 0), want: "repetition level"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			badPage := &parquetPageWithValues{
+				Page: page,
+				values: parquet.ValueReaderFunc(func(dst []parquet.Value) (int, error) {
+					dst[0] = tc.value
+					return 1, nil
+				}),
+			}
+			vec := vector.NewVec(types.T_int32.ToType())
+			err := processParquetValuesToFixed[int32](context.Background(), &columnMapper{}, badPage, proc, vec, 0,
+				func(v parquet.Value) (int32, error) { return v.Int32(), nil })
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+			require.Contains(t, err.Error(), tc.want)
+			require.Zero(t, vec.Length())
+		})
+	}
+}
+
+func TestParquetGenericDictionaryMappingRejectsOutOfRangeIndex(t *testing.T) {
+	proc := testutil.NewProc(t)
+	f, page := writeColumnAndGetPage(t, parquet.Leaf(parquet.FloatType), []parquet.Row{
+		{parquet.FloatValue(1).Level(0, 0, 0)},
+	})
+	dict := parquet.FloatType.NewDictionary(0, 1, encoding.FloatValues([]float32{1}))
+	badData := &parquetPageWithData{Page: page, data: encoding.Int32Values([]int32{1})}
+	badValues := &parquetPageWithValues{
+		Page: badData,
+		values: parquet.ValueReaderFunc(func(dst []parquet.Value) (int, error) {
+			dict.Lookup([]int32{1}, dst[:1])
+			return 1, nil
+		}),
+	}
+	badPage := &parquetPageWithDictionary{Page: badValues, dictionary: dict}
+
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_int32), NotNullable: true})
+	require.NotNil(t, mp)
+	vec := vector.NewVec(types.T_int32.ToType())
+	require.NotPanics(t, func() {
+		err := mp.mapping(badPage, proc, vec)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+		require.Contains(t, err.Error(), "dictionary index 1 out of range")
+	})
+	require.Zero(t, vec.Length())
+}
+
 func TestParquetCrossTypeMappings(t *testing.T) {
 	proc := testutil.NewProc(t)
 	ctx := context.Background()
@@ -1918,6 +2107,10 @@ func TestParquetCrossTypeHelperCoverage(t *testing.T) {
 	micros, err = parquetTimestampValueToMicros(ctx, parquet.Int64Value(3), parquet.Timestamp(parquet.Millisecond).Type().LogicalType())
 	require.NoError(t, err)
 	require.Equal(t, int64(3000), micros)
+	_, err = parquetTimestampValueToMicros(ctx, parquet.Int64Value(math.MaxInt64), parquet.Timestamp(parquet.Millisecond).Type().LogicalType())
+	require.ErrorContains(t, err, "overflows microseconds")
+	_, err = parquetTimestampValueToMicros(ctx, parquet.Int64Value(math.MinInt64), parquet.Timestamp(parquet.Millisecond).Type().LogicalType())
+	require.ErrorContains(t, err, "overflows microseconds")
 
 	_, err = parquetTimestampValueToDatetime(ctx, parquet.TimestampAdjusted(parquet.Microsecond, false).Type(), parquet.Int64Value(1), time.UTC)
 	require.NoError(t, err)
@@ -1951,11 +2144,49 @@ func TestParquetTimestampLogicalMissingUnit(t *testing.T) {
 	require.ErrorContains(t, err, "missing parquet timestamp unit")
 }
 
+func TestParquetTimestampMillisOverflowInFastPath(t *testing.T) {
+	proc := testutil.NewProc(t)
+	node := parquet.Timestamp(parquet.Millisecond)
+	cases := []struct {
+		name string
+	}{
+		{
+			name: "plain",
+		},
+		{
+			name: "dictionary",
+		},
+	}
+	for i := range cases {
+		t.Run(cases[i].name, func(t *testing.T) {
+			var page parquet.Page
+			var file *parquet.File
+			if cases[i].name == "dictionary" {
+				file, page = writeDictAndGetPage(t, parquet.Encoded(node, &parquet.RLEDictionary), []parquet.Value{
+					parquet.Int64Value(math.MaxInt64),
+				})
+			} else {
+				file, page = writeColumnAndGetPage(t, node, []parquet.Row{
+					{parquet.Int64Value(math.MaxInt64).Level(0, 0, 0)},
+				})
+			}
+			vec := vector.NewVec(types.T_timestamp.ToType())
+			var h ParquetHandler
+			mp := h.getMapper(file.Root().Column("c"), plan.Type{Id: int32(types.T_timestamp), NotNullable: true})
+			require.NotNil(t, mp)
+			err := mp.mapping(page, proc, vec)
+			require.ErrorContains(t, err, "overflows microseconds")
+			require.Zero(t, vec.Length())
+		})
+	}
+}
+
 // fakeFS is a minimal ETL-compatible FileService for testing fsReaderAt.
 type fakeFS struct {
 	b           []byte
 	readErr     error
 	readLatency time.Duration
+	shortRead   bool
 
 	lastPolicy          fileservice.Policy
 	lastOffset          int64
@@ -1982,6 +2213,9 @@ func (f *fakeFS) Read(ctx context.Context, v *fileservice.IOVector) error {
 	f.lastOffset = e.Offset
 	if e.Size < 0 {
 		e.Size = int64(len(f.b)) - e.Offset
+	}
+	if f.shortRead && e.Size > 0 {
+		e.Size--
 	}
 	f.lastSize = e.Size
 	if int(e.Offset+e.Size) > len(f.b) {
@@ -2953,27 +3187,1384 @@ func TestParquet_ensureDictionaryIndexes_outOfRange(t *testing.T) {
 	err := ensureDictionaryIndexes(ctx, 3, []int32{0, 1, 5})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "out of range")
+	err = ensureDictionaryIndexes(ctx, 3, []int32{-1})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "out of range")
+	err = ensureDictionaryIndexes(ctx, -1, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "dictionary length -1 is invalid")
 }
 
-func TestParquet_Bool_DictionaryNYI(t *testing.T) {
+func TestParquet_Dictionary_Bool(t *testing.T) {
 	proc := testutil.NewProc(t)
-	// Dictionary-encoded boolean column should be NYI in mapper
+
+	t.Run("required", func(t *testing.T) {
+		node := parquet.Encoded(parquet.Leaf(parquet.BooleanType), &parquet.RLEDictionary)
+		vals := []parquet.Value{
+			parquet.BooleanValue(true), parquet.BooleanValue(false), parquet.BooleanValue(true),
+		}
+		f, page := writeDictAndGetPage(t, node, vals)
+		require.NotNil(t, page.Dictionary())
+
+		vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, []bool{true, false, true}, vector.MustFixedColWithTypeCheck[bool](vec))
+	})
+
+	t.Run("nullable", func(t *testing.T) {
+		node := parquet.Optional(parquet.Encoded(parquet.Leaf(parquet.BooleanType), &parquet.RLEDictionary))
+		rows := []parquet.Row{
+			{parquet.BooleanValue(true).Level(0, 1, 0)},
+			{parquet.NullValue().Level(0, 0, 0)},
+			{parquet.BooleanValue(false).Level(0, 1, 0)},
+			{parquet.BooleanValue(true).Level(0, 1, 0)},
+		}
+		f, page := writeColumnAndGetPage(t, node, rows)
+		require.NotNil(t, page.Dictionary())
+
+		vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool)})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, []bool{true, false, false, true}, vector.MustFixedColWithTypeCheck[bool](vec))
+		require.True(t, vec.GetNulls().Contains(1))
+		require.False(t, vec.GetNulls().Contains(0))
+		require.False(t, vec.GetNulls().Contains(2))
+		require.False(t, vec.GetNulls().Contains(3))
+	})
+}
+
+func TestParquet_Plain_Bool(t *testing.T) {
+	proc := testutil.NewProc(t)
+
+	t.Run("required sliced page", func(t *testing.T) {
+		node := parquet.Leaf(parquet.BooleanType)
+		rows := []parquet.Row{
+			{parquet.BooleanValue(true).Level(0, 0, 0)},
+			{parquet.BooleanValue(false).Level(0, 0, 0)},
+			{parquet.BooleanValue(true).Level(0, 0, 0)},
+			{parquet.BooleanValue(false).Level(0, 0, 0)},
+		}
+		f, page := writeColumnAndGetPage(t, node, rows)
+		require.Nil(t, page.Dictionary())
+		page = page.Slice(1, 4)
+
+		vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, []bool{false, true, false}, vector.MustFixedColWithTypeCheck[bool](vec))
+	})
+
+	t.Run("nullable sliced page", func(t *testing.T) {
+		node := parquet.Optional(parquet.Leaf(parquet.BooleanType))
+		rows := []parquet.Row{
+			{parquet.BooleanValue(true).Level(0, 1, 0)},
+			{parquet.NullValue().Level(0, 0, 0)},
+			{parquet.BooleanValue(false).Level(0, 1, 0)},
+			{parquet.BooleanValue(true).Level(0, 1, 0)},
+			{parquet.NullValue().Level(0, 0, 0)},
+		}
+		f, page := writeColumnAndGetPage(t, node, rows)
+		require.Nil(t, page.Dictionary())
+		page = page.Slice(1, 5)
+
+		vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool)})
+		require.NotNil(t, mp)
+		seedFile, seedPage := writeColumnAndGetPage(t, parquet.Leaf(parquet.BooleanType), []parquet.Row{
+			{parquet.BooleanValue(true).Level(0, 0, 0)},
+			{parquet.BooleanValue(true).Level(0, 0, 0)},
+			{parquet.BooleanValue(true).Level(0, 0, 0)},
+			{parquet.BooleanValue(true).Level(0, 0, 0)},
+		})
+		seedMapper := h.getMapper(seedFile.Root().Column("c"), plan.Type{Id: int32(types.T_bool), NotNullable: true})
+		require.NoError(t, seedMapper.mapping(seedPage, proc, vec))
+		vec.ResetWithSameType()
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, []bool{false, false, true, false}, vector.MustFixedColWithTypeCheck[bool](vec))
+		require.True(t, vec.GetNulls().Contains(0))
+		require.False(t, vec.GetNulls().Contains(1))
+		require.False(t, vec.GetNulls().Contains(2))
+		require.True(t, vec.GetNulls().Contains(3))
+	})
+}
+
+type parquetPageWithData struct {
+	parquet.Page
+	data encoding.Values
+}
+
+func (p *parquetPageWithData) Data() encoding.Values {
+	return p.data
+}
+
+type parquetPageWithValues struct {
+	parquet.Page
+	values parquet.ValueReader
+}
+
+func (p *parquetPageWithValues) Values() parquet.ValueReader {
+	return p.values
+}
+
+type parquetBooleanReaderFunc func([]bool) (int, error)
+
+func (f parquetBooleanReaderFunc) ReadBooleans(values []bool) (int, error) {
+	return f(values)
+}
+
+func (f parquetBooleanReaderFunc) ReadValues([]parquet.Value) (int, error) {
+	return 0, io.EOF
+}
+
+type parquetPageWithDefinitionLevels struct {
+	parquet.Page
+	levels   []byte
+	numNulls int64
+}
+
+func (p *parquetPageWithDefinitionLevels) DefinitionLevels() []byte {
+	return p.levels
+}
+
+func (p *parquetPageWithDefinitionLevels) NumNulls() int64 {
+	return p.numNulls
+}
+
+type parquetPageWithNumValues struct {
+	parquet.Page
+	numValues int64
+}
+
+func (p *parquetPageWithNumValues) NumValues() int64 {
+	return p.numValues
+}
+
+type parquetPageWithNumRows struct {
+	parquet.Page
+	numRows int64
+}
+
+func (p *parquetPageWithNumRows) NumRows() int64 {
+	return p.numRows
+}
+
+type parquetPageWithDictionary struct {
+	parquet.Page
+	dictionary parquet.Dictionary
+}
+
+func (p *parquetPageWithDictionary) Dictionary() parquet.Dictionary {
+	return p.dictionary
+}
+
+type parquetRowGroupWithNumRows struct {
+	parquet.RowGroup
+	numRows int64
+}
+
+func (r *parquetRowGroupWithNumRows) NumRows() int64 {
+	return r.numRows
+}
+
+func TestParquetRowCountOnlyRejectsInvalidRowGroup(t *testing.T) {
+	param := &ExternalParam{ExParamConst: ExParamConst{Ctx: context.Background()}}
+	bat := batch.NewWithSize(0)
+	h := &ParquetHandler{
+		batchCnt: 1,
+		rowGroups: []parquet.RowGroup{
+			&parquetRowGroupWithNumRows{numRows: -1},
+		},
+	}
+
+	err := h.getDataRowCountOnly(bat, param)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "row group: NumRows() -1 is negative")
+	require.Zero(t, bat.RowCount())
+}
+
+func TestParquetPageModeEOFRequiresCompleteRowGroup(t *testing.T) {
+	ctx := context.Background()
+	require.ErrorContains(t,
+		validateParquetPageModeEOF(ctx, 1, 2),
+		"page columns ended after 1 rows, expected 2")
+	require.NoError(t, validateParquetPageModeEOF(ctx, 2, 2))
+	require.ErrorContains(t, validateParquetPageModeEOF(ctx, 0, -1), "NumRows() -1 is negative")
+}
+
+func TestParquetRowModeEOFRequiresCompleteRowGroup(t *testing.T) {
+	ctx := context.Background()
+	require.ErrorContains(t,
+		validateParquetRowModeEOF(ctx, 1, 2),
+		"row reader ended after 1 rows, expected 2")
+	require.NoError(t, validateParquetRowModeEOF(ctx, 2, 2))
+	require.ErrorContains(t, validateParquetRowModeEOF(ctx, 3, 2), "row reader position 3")
+	require.ErrorContains(t, validateParquetRowModeEOF(ctx, 0, -1), "NumRows() -1 is negative")
+}
+
+func TestParquetRowModeZeroBatchCountDoesNotAllocateNegativeBuffer(t *testing.T) {
+	proc := testutil.NewProc(t)
+	param := &ExternalParam{ExParamConst: ExParamConst{Ctx: context.Background()}}
+	bat := batch.NewWithSize(0)
+	h := &ParquetHandler{batchCnt: -1}
+
+	require.NoError(t, h.getDataByRow(bat, param, proc))
+	require.Zero(t, bat.RowCount())
+}
+
+func TestParquetPageRowsStayWithinRowGroup(t *testing.T) {
+	ctx := context.Background()
+	require.NoError(t, validateParquetPageRows(ctx, 2, 1, 3, 5))
+	require.ErrorContains(t, validateParquetPageRows(ctx, 3, 0, 3, 5), "row group has 5 rows")
+	require.ErrorContains(t, validateParquetPageRows(ctx, 2, 3, 0, 5), "page offset 3")
+	require.ErrorContains(t, validateParquetPageRows(ctx, 1, 0, 6, 5), "row position 6")
+}
+
+func TestParquetRowModeLeafConversionsRejectOverflow(t *testing.T) {
+	proc := testutil.NewProc(t)
+	int32File, _ := writeColumnAndGetPage(t, parquet.Leaf(parquet.Int32Type), []parquet.Row{
+		{parquet.Int32Value(256).Level(0, 0, 0)},
+	})
+	int64File, _ := writeColumnAndGetPage(t, parquet.Leaf(parquet.Int64Type), []parquet.Row{
+		{parquet.Int64Value(math.MaxInt64).Level(0, 0, 0)},
+	})
+
+	cases := []struct {
+		name   string
+		col    *parquet.Column
+		value  parquet.Value
+		target types.T
+		want   string
+	}{
+		{name: "int8", col: int32File.Root().Column("c"), value: parquet.Int32Value(128), target: types.T_int8, want: "overflows TINYINT"},
+		{name: "uint8", col: int32File.Root().Column("c"), value: parquet.Int32Value(-1), target: types.T_uint8, want: "negative parquet value"},
+		{name: "int32 from int64", col: int64File.Root().Column("c"), value: parquet.Int64Value(math.MaxInt64), target: types.T_int32, want: "overflows INT"},
+		{name: "uint32", col: int64File.Root().Column("c"), value: parquet.Int64Value(1 << 32), target: types.T_uint32, want: "overflows INT UNSIGNED"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			vec := vector.NewVec(types.New(tc.target, 0, 0))
+			def := &plan.ColDef{Typ: plan.Type{Id: int32(tc.target)}}
+			err := appendLeafValue(tc.value, tc.col, vec, def, proc)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.want)
+			require.Zero(t, vec.Length())
+		})
+	}
+}
+
+func TestParquetRowModeLeafDefinitionLevelMatchesNullness(t *testing.T) {
+	proc := testutil.NewProc(t)
+	f, _ := writeColumnAndGetPage(t, parquet.Optional(parquet.Leaf(parquet.Int32Type)), []parquet.Row{
+		{parquet.Int32Value(1).Level(0, 1, 0)},
+	})
+	col := f.Root().Column("c")
+	def := &plan.ColDef{Typ: plan.Type{Id: int32(types.T_int32)}}
+
+	for _, tc := range []struct {
+		name  string
+		value parquet.Value
+		want  string
+	}{
+		{name: "value at null level", value: parquet.Int32Value(1).Level(0, 0, 0), want: "NULL status disagrees"},
+		{name: "null at value level", value: parquet.NullValue().Level(0, 1, 0), want: "NULL status disagrees"},
+		{name: "definition level overflow", value: parquet.Int32Value(1).Level(0, 2, 0), want: "exceeds maximum"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vec := vector.NewVec(types.T_int32.ToType())
+			h := &ParquetHandler{}
+			err := h.processLeafValue(parquet.Row{tc.value}, col, vec, def, proc)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.want)
+			require.Zero(t, vec.Length())
+		})
+	}
+
+	t.Run("missing nullable leaf appends null", func(t *testing.T) {
+		vec := vector.NewVec(types.T_int32.ToType())
+		t.Cleanup(func() { vec.Free(proc.Mp()) })
+		h := &ParquetHandler{}
+		require.NoError(t, h.processLeafValue(parquet.Row{}, col, vec, def, proc))
+		require.Equal(t, 1, vec.Length())
+		require.True(t, vec.GetNulls().Contains(0))
+	})
+}
+
+func TestParquetNestedNullUsesColumnDefinitionLevel(t *testing.T) {
+	schema := parquet.NewSchema("x", parquet.Group{
+		"outer": parquet.Optional(parquet.Group{
+			"nested": parquet.Optional(parquet.Group{
+				"value": parquet.Leaf(parquet.Int32Type),
+			}),
+		}),
+	})
+	var buf bytes.Buffer
+	w := parquet.NewWriter(&buf, schema)
+	require.NoError(t, w.Close())
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	col := f.Root().Column("outer").Column("nested")
+	leaf := col.Column("value")
+	require.True(t, col.Optional())
+	require.Greater(t, col.MaxDefinitionLevel(), 1)
+
+	nullAtOuterLevel := parquet.Int32Value(1).Level(0, 1, leaf.Index())
+	require.True(t, isNestedColumnNull([]parquet.Value{nullAtOuterLevel}, col))
+
+	valueAtMaxLevel := parquet.Int32Value(1).Level(0, col.MaxDefinitionLevel(), leaf.Index())
+	require.False(t, isNestedColumnNull([]parquet.Value{valueAtMaxLevel}, col))
+}
+
+func TestParquetNestedValuesRejectInvalidLevels(t *testing.T) {
+	schema := parquet.NewSchema("x", parquet.Group{
+		"outer": parquet.Group{
+			"value": parquet.Leaf(parquet.Int32Type),
+		},
+	})
+	var buf bytes.Buffer
+	w := parquet.NewWriter(&buf, schema)
+	require.NoError(t, w.Close())
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	col := f.Root().Column("outer")
+	leaf := col.Column("value")
+
+	for _, tc := range []struct {
+		name  string
+		value parquet.Value
+		want  string
+	}{
+		{name: "definition level", value: parquet.Int32Value(1).Level(0, 1, leaf.Index()), want: "exceeds maximum"},
+		{name: "null mismatch", value: parquet.NullValue().Level(0, 0, leaf.Index()), want: "NULL status disagrees"},
+		{name: "repetition level", value: parquet.Int32Value(1).Level(1, 0, leaf.Index()), want: "repetition level"},
+		{name: "value kind", value: parquet.BooleanValue(true).Level(0, 0, leaf.Index()), want: "value kind BOOLEAN"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateParquetNestedValues(context.Background(), col, []parquet.Value{tc.value})
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+			require.Contains(t, err.Error(), tc.want)
+		})
+	}
+}
+
+func TestParquetNestedOptionalGroupNullIsPreserved(t *testing.T) {
+	schema := parquet.NewSchema("x", parquet.Group{
+		"outer": parquet.Group{
+			"nested": parquet.Optional(parquet.Group{
+				"value": parquet.Leaf(parquet.Int32Type),
+			}),
+		},
+	})
+	var buf bytes.Buffer
+	w := parquet.NewWriter(&buf, schema)
+	require.NoError(t, w.Close())
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	outer := f.Root().Column("outer")
+	leaf := outer.Column("nested").Column("value")
+
+	value, err := reconstructNestedByType(context.Background(), outer, []parquet.Value{
+		parquet.NullValue().Level(0, 0, leaf.Index()),
+	})
+	require.NoError(t, err)
+	result, ok := value.(map[string]any)
+	require.True(t, ok)
+	require.Contains(t, result, "nested")
+	require.Nil(t, result["nested"])
+}
+
+func TestParquetListOfNestedAlignsOptionalFieldsByElement(t *testing.T) {
+	schema := parquet.NewSchema("x", parquet.Group{
+		"items": parquet.List(parquet.Group{
+			"a": parquet.Optional(parquet.Leaf(parquet.Int32Type)),
+			"b": parquet.Optional(parquet.Leaf(parquet.Int32Type)),
+		}),
+	})
+	var buf bytes.Buffer
+	w := parquet.NewWriter(&buf, schema)
+	require.NoError(t, w.Close())
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	element := f.Root().Column("items").Column("list").Column("element")
+	items := f.Root().Column("items")
+	a := element.Column("a")
+	b := element.Column("b")
+
+	got, err := reconstructNestedValue(context.Background(), items, []parquet.Value{
+		parquet.Int32Value(10).Level(0, a.MaxDefinitionLevel(), a.Index()),
+		parquet.NullValue().Level(1, a.MaxDefinitionLevel()-1, a.Index()),
+		parquet.NullValue().Level(0, b.MaxDefinitionLevel()-1, b.Index()),
+		parquet.Int32Value(20).Level(1, b.MaxDefinitionLevel(), b.Index()),
+	})
+	require.NoError(t, err)
+	require.Equal(t, []any{
+		map[string]any{"a": int64(10), "b": nil},
+		map[string]any{"a": nil, "b": int64(20)},
+	}, got)
+}
+
+func TestParquetMapOfNestedAlignsOptionalValuesByEntry(t *testing.T) {
+	schema := parquet.NewSchema("x", parquet.Group{
+		"m": parquet.Map(parquet.String(), parquet.Group{
+			"a": parquet.Optional(parquet.Leaf(parquet.Int32Type)),
+			"b": parquet.Optional(parquet.Leaf(parquet.Int32Type)),
+		}),
+	})
+	var buf bytes.Buffer
+	w := parquet.NewWriter(&buf, schema)
+	require.NoError(t, w.Close())
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	kv := f.Root().Column("m").Column("key_value")
+	key := kv.Column("key")
+	value := kv.Column("value")
+	a := value.Column("a")
+	b := value.Column("b")
+
+	got, err := reconstructMap(context.Background(), kv, []parquet.Value{
+		parquet.ByteArrayValue([]byte("first")).Level(0, key.MaxDefinitionLevel(), key.Index()),
+		parquet.ByteArrayValue([]byte("second")).Level(1, key.MaxDefinitionLevel(), key.Index()),
+		parquet.Int32Value(10).Level(0, a.MaxDefinitionLevel(), a.Index()),
+		parquet.NullValue().Level(1, a.MaxDefinitionLevel()-1, a.Index()),
+		parquet.NullValue().Level(0, b.MaxDefinitionLevel()-1, b.Index()),
+		parquet.Int32Value(20).Level(1, b.MaxDefinitionLevel(), b.Index()),
+	})
+	require.NoError(t, err)
+	require.Equal(t, map[string]any{
+		"first":  map[string]any{"a": int64(10), "b": nil},
+		"second": map[string]any{"a": nil, "b": int64(20)},
+	}, got)
+}
+
+func TestParquetListPreservesNullElement(t *testing.T) {
+	schema := parquet.NewSchema("x", parquet.Group{
+		"items": parquet.List(parquet.Optional(parquet.Leaf(parquet.Int32Type))),
+	})
+	var buf bytes.Buffer
+	w := parquet.NewWriter(&buf, schema)
+	require.NoError(t, w.Close())
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	items := f.Root().Column("items")
+	element := items.Column("list").Column("element")
+	emptyLevel := listEmptyDefinitionLevel(element)
+
+	empty, err := reconstructNestedValue(context.Background(), items, []parquet.Value{
+		parquet.NullValue().Level(0, emptyLevel, element.Index()),
+	})
+	require.NoError(t, err)
+	require.Equal(t, []any{}, empty)
+
+	withNull, err := reconstructNestedValue(context.Background(), items, []parquet.Value{
+		parquet.NullValue().Level(0, emptyLevel+1, element.Index()),
+	})
+	require.NoError(t, err)
+	require.Equal(t, []any{nil}, withNull)
+}
+
+func TestParquetNestedEmptyListMarkers(t *testing.T) {
+	t.Run("logical list of optional struct", func(t *testing.T) {
+		schema := parquet.NewSchema("x", parquet.Group{
+			"items": parquet.List(parquet.Optional(parquet.Group{
+				"value": parquet.Optional(parquet.Leaf(parquet.Int32Type)),
+				"other": parquet.Optional(parquet.Leaf(parquet.Int32Type)),
+			})),
+		})
+		var buf bytes.Buffer
+		w := parquet.NewWriter(&buf, schema)
+		require.NoError(t, w.Close())
+		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		require.NoError(t, err)
+		items := f.Root().Column("items")
+		element := items.Column("list").Column("element")
+		leaf := element.Column("value")
+		other := element.Column("other")
+
+		got, err := reconstructNestedValue(context.Background(), items, []parquet.Value{
+			parquet.NullValue().Level(0, listEmptyDefinitionLevel(element), leaf.Index()),
+			parquet.NullValue().Level(0, listEmptyDefinitionLevel(element), other.Index()),
+		})
+		require.NoError(t, err)
+		require.Equal(t, []any{}, got)
+	})
+
+	t.Run("unannotated list pattern", func(t *testing.T) {
+		schema := parquet.NewSchema("x", parquet.Group{
+			"items": parquet.Group{
+				"list": parquet.Repeated(parquet.Group{
+					"element": parquet.Optional(parquet.Group{
+						"value": parquet.Leaf(parquet.Int32Type),
+					}),
+				}),
+			},
+		})
+		var buf bytes.Buffer
+		w := parquet.NewWriter(&buf, schema)
+		require.NoError(t, w.Close())
+		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		require.NoError(t, err)
+		items := f.Root().Column("items")
+		element := items.Column("list").Column("element")
+		leaf := element.Column("value")
+
+		got, err := reconstructNestedValue(context.Background(), items, []parquet.Value{
+			parquet.NullValue().Level(0, listEmptyDefinitionLevel(element), leaf.Index()),
+		})
+		require.NoError(t, err)
+		require.Equal(t, []any{}, got)
+	})
+}
+
+func TestParquetMapOfNestedListAndScalarAlignsByEntry(t *testing.T) {
+	schema := parquet.NewSchema("x", parquet.Group{
+		"m": parquet.Map(parquet.String(), parquet.Group{
+			"a": parquet.List(parquet.Leaf(parquet.Int32Type)),
+			"b": parquet.Optional(parquet.Leaf(parquet.Int32Type)),
+		}),
+	})
+	var buf bytes.Buffer
+	w := parquet.NewWriter(&buf, schema)
+	require.NoError(t, w.Close())
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	m := f.Root().Column("m")
+	kv := m.Column("key_value")
+	key := kv.Column("key")
+	value := kv.Column("value")
+	a := value.Column("a").Column("list").Column("element")
+	b := value.Column("b")
+
+	got, err := reconstructNestedValue(context.Background(), m, []parquet.Value{
+		parquet.ByteArrayValue([]byte("first")).Level(0, key.MaxDefinitionLevel(), key.Index()),
+		parquet.ByteArrayValue([]byte("second")).Level(1, key.MaxDefinitionLevel(), key.Index()),
+		parquet.Int32Value(1).Level(0, a.MaxDefinitionLevel(), a.Index()),
+		parquet.Int32Value(2).Level(2, a.MaxDefinitionLevel(), a.Index()),
+		parquet.Int32Value(3).Level(1, a.MaxDefinitionLevel(), a.Index()),
+		parquet.Int32Value(10).Level(0, b.MaxDefinitionLevel(), b.Index()),
+		parquet.Int32Value(20).Level(1, b.MaxDefinitionLevel(), b.Index()),
+	})
+	require.NoError(t, err)
+	require.Equal(t, map[string]any{
+		"first":  map[string]any{"a": []any{int64(1), int64(2)}, "b": int64(10)},
+		"second": map[string]any{"a": []any{int64(3)}, "b": int64(20)},
+	}, got)
+}
+
+func TestParquetEmptyMapMarkers(t *testing.T) {
+	t.Run("scalar value", func(t *testing.T) {
+		schema := parquet.NewSchema("x", parquet.Group{
+			"m": parquet.Map(parquet.String(), parquet.Optional(parquet.String())),
+		})
+		var buf bytes.Buffer
+		w := parquet.NewWriter(&buf, schema)
+		require.NoError(t, w.Close())
+		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		require.NoError(t, err)
+		m := f.Root().Column("m")
+		kv := m.Column("key_value")
+		key := kv.Column("key")
+		value := kv.Column("value")
+		emptyLevel := key.MaxDefinitionLevel() - 1
+
+		got, err := reconstructNestedValue(context.Background(), m, []parquet.Value{
+			parquet.NullValue().Level(0, emptyLevel, key.Index()),
+			parquet.NullValue().Level(0, emptyLevel, value.Index()),
+		})
+		require.NoError(t, err)
+		require.Equal(t, map[string]any{}, got)
+	})
+
+	t.Run("nested list value", func(t *testing.T) {
+		schema := parquet.NewSchema("x", parquet.Group{
+			"m": parquet.Map(parquet.String(), parquet.List(parquet.Leaf(parquet.Int32Type))),
+		})
+		var buf bytes.Buffer
+		w := parquet.NewWriter(&buf, schema)
+		require.NoError(t, w.Close())
+		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		require.NoError(t, err)
+		m := f.Root().Column("m")
+		kv := m.Column("key_value")
+		key := kv.Column("key")
+		value := kv.Column("value").Column("list").Column("element")
+		emptyLevel := key.MaxDefinitionLevel() - 1
+
+		got, err := reconstructNestedValue(context.Background(), m, []parquet.Value{
+			parquet.NullValue().Level(0, emptyLevel, key.Index()),
+			parquet.NullValue().Level(0, emptyLevel, value.Index()),
+		})
+		require.NoError(t, err)
+		require.Equal(t, map[string]any{}, got)
+	})
+}
+
+func TestParquetMapNestedEmptyListByEntry(t *testing.T) {
+	schema := parquet.NewSchema("x", parquet.Group{
+		"m": parquet.Map(parquet.String(), parquet.List(parquet.Leaf(parquet.Int32Type))),
+	})
+	var buf bytes.Buffer
+	w := parquet.NewWriter(&buf, schema)
+	require.NoError(t, w.Close())
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	m := f.Root().Column("m")
+	kv := m.Column("key_value")
+	key := kv.Column("key")
+	element := kv.Column("value").Column("list").Column("element")
+
+	got, err := reconstructNestedValue(context.Background(), m, []parquet.Value{
+		parquet.ByteArrayValue([]byte("first")).Level(0, key.MaxDefinitionLevel(), key.Index()),
+		parquet.ByteArrayValue([]byte("second")).Level(1, key.MaxDefinitionLevel(), key.Index()),
+		parquet.Int32Value(1).Level(0, element.MaxDefinitionLevel(), element.Index()),
+		parquet.NullValue().Level(1, listEmptyDefinitionLevel(element), element.Index()),
+	})
+	require.NoError(t, err)
+	require.Equal(t, map[string]any{
+		"first":  []any{int64(1)},
+		"second": []any{},
+	}, got)
+}
+
+func TestParquetLogicalListOfMapsReconstructsOuterElements(t *testing.T) {
+	schema := parquet.NewSchema("x", parquet.Group{
+		"items": parquet.List(parquet.Map(parquet.String(), parquet.String())),
+	})
+	var buf bytes.Buffer
+	w := parquet.NewWriter(&buf, schema)
+	require.NoError(t, w.Close())
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	items := f.Root().Column("items")
+	element := items.Column("list").Column("element")
+	key := element.Column("key_value").Column("key")
+	value := element.Column("key_value").Column("value")
+
+	got, err := reconstructNestedValue(context.Background(), items, []parquet.Value{
+		parquet.ByteArrayValue([]byte("first")).Level(0, key.MaxDefinitionLevel(), key.Index()),
+		parquet.ByteArrayValue([]byte("second")).Level(1, key.MaxDefinitionLevel(), key.Index()),
+		parquet.ByteArrayValue([]byte("one")).Level(0, value.MaxDefinitionLevel(), value.Index()),
+		parquet.ByteArrayValue([]byte("two")).Level(1, value.MaxDefinitionLevel(), value.Index()),
+	})
+	require.NoError(t, err)
+	require.Equal(t, []any{
+		map[string]any{"first": "one"},
+		map[string]any{"second": "two"},
+	}, got)
+}
+
+func TestParquetMapRejectsNullKey(t *testing.T) {
+	schema := parquet.NewSchema("x", parquet.Group{
+		"m": parquet.Map(parquet.String(), parquet.Optional(parquet.String())),
+	})
+	var buf bytes.Buffer
+	w := parquet.NewWriter(&buf, schema)
+	require.NoError(t, w.Close())
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	m := f.Root().Column("m")
+	kv := m.Column("key_value")
+	key := kv.Column("key")
+	value := kv.Column("value")
+
+	_, err = reconstructMap(context.Background(), kv, []parquet.Value{
+		parquet.NullValue().Level(0, key.MaxDefinitionLevel()-1, key.Index()),
+		parquet.ByteArrayValue([]byte("v")).Level(0, value.MaxDefinitionLevel(), value.Index()),
+	})
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "map key cannot be NULL")
+}
+
+func TestParquet_Plain_Bool_ReadErrorRollsBack(t *testing.T) {
+	proc := testutil.NewProc(t)
+	node := parquet.Leaf(parquet.BooleanType)
+	rows := []parquet.Row{
+		{parquet.BooleanValue(true).Level(0, 0, 0)},
+		{parquet.BooleanValue(false).Level(0, 0, 0)},
+		{parquet.BooleanValue(true).Level(0, 0, 0)},
+	}
+	f, page := writeColumnAndGetPage(t, node, rows)
+
+	vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool), NotNullable: true})
+	require.NotNil(t, mp)
+	require.NoError(t, vector.AppendFixed(vec, true, false, proc.Mp()))
+
+	badPage := &parquetPageWithValues{
+		Page: page,
+		values: parquetBooleanReaderFunc(func(values []bool) (int, error) {
+			values[0] = false
+			return 1, io.EOF
+		}),
+	}
+	err := mp.mapping(badPage, proc, vec)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "short read bool")
+	require.Equal(t, []bool{true}, vector.MustFixedColWithTypeCheck[bool](vec))
+}
+
+func TestParquet_Plain_Bool_UnexpectedNullRollsBack(t *testing.T) {
+	proc := testutil.NewProc(t)
+	node := parquet.Leaf(parquet.BooleanType)
+	rows := []parquet.Row{
+		{parquet.BooleanValue(true).Level(0, 0, 0)},
+	}
+	f, page := writeColumnAndGetPage(t, node, rows)
+
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool), NotNullable: true})
+	require.NotNil(t, mp)
+	badPage := &parquetPageWithValues{
+		Page: page,
+		values: parquet.ValueReaderFunc(func(values []parquet.Value) (int, error) {
+			values[0] = parquet.NullValue()
+			return 1, io.EOF
+		}),
+	}
+	vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+	err := mp.mapping(badPage, proc, vec)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "NULL status disagrees")
+	require.Zero(t, vec.Length())
+}
+
+func TestParquet_Plain_Bool_UnexpectedValueKindRollsBack(t *testing.T) {
+	proc := testutil.NewProc(t)
+	node := parquet.Leaf(parquet.BooleanType)
+	rows := []parquet.Row{
+		{parquet.BooleanValue(true).Level(0, 0, 0)},
+	}
+	f, page := writeColumnAndGetPage(t, node, rows)
+
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool), NotNullable: true})
+	require.NotNil(t, mp)
+	badPage := &parquetPageWithValues{
+		Page: page,
+		values: parquet.ValueReaderFunc(func(values []parquet.Value) (int, error) {
+			values[0] = parquet.Int32Value(1)
+			return 1, io.EOF
+		}),
+	}
+	vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+	err := mp.mapping(badPage, proc, vec)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "reader returned INT32 value")
+	require.Zero(t, vec.Length())
+}
+
+func TestParquet_Plain_Bool_DefinitionLevelValueMismatchRollsBack(t *testing.T) {
+	proc := testutil.NewProc(t)
+	node := parquet.Optional(parquet.Leaf(parquet.BooleanType))
+	rows := []parquet.Row{
+		{parquet.BooleanValue(true).Level(0, 1, 0)},
+		{parquet.NullValue().Level(0, 0, 0)},
+	}
+	f, page := writeColumnAndGetPage(t, node, rows)
+
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool)})
+	require.NotNil(t, mp)
+	badPage := &parquetPageWithValues{
+		Page: page,
+		values: parquet.ValueReaderFunc(func(values []parquet.Value) (int, error) {
+			values[0] = parquet.BooleanValue(true)
+			values[1] = parquet.BooleanValue(false)
+			return 2, io.EOF
+		}),
+	}
+	vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+	err := mp.mapping(badPage, proc, vec)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "value definition level")
+	require.Zero(t, vec.Length())
+}
+
+func TestParquet_Plain_Bool_DefinitionLevelMismatch(t *testing.T) {
+	proc := testutil.NewProc(t)
+	node := parquet.Optional(parquet.Leaf(parquet.BooleanType))
+	rows := []parquet.Row{
+		{parquet.BooleanValue(true).Level(0, 1, 0)},
+		{parquet.NullValue().Level(0, 0, 0)},
+	}
+	f, page := writeColumnAndGetPage(t, node, rows)
+
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool)})
+	require.NotNil(t, mp)
+	badPage := &parquetPageWithDefinitionLevels{
+		Page:     page,
+		levels:   []byte{1, 1},
+		numNulls: 1,
+	}
+	vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+	err := mp.mapping(badPage, proc, vec)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "NumNulls() indicates")
+	require.Zero(t, vec.Length())
+}
+
+func TestParquet_Plain_Bool_ValueCountMismatch(t *testing.T) {
+	proc := testutil.NewProc(t)
+	node := parquet.Leaf(parquet.BooleanType)
+	rows := []parquet.Row{
+		{parquet.BooleanValue(true).Level(0, 0, 0)},
+		{parquet.BooleanValue(false).Level(0, 0, 0)},
+		{parquet.BooleanValue(true).Level(0, 0, 0)},
+	}
+	f, page := writeColumnAndGetPage(t, node, rows)
+
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool), NotNullable: true})
+	require.NotNil(t, mp)
+	badPage := &parquetPageWithNumValues{Page: page, numValues: 2}
+	vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+	err := mp.mapping(badPage, proc, vec)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "NumValues() 2 does not match NumRows() 3")
+	require.Zero(t, vec.Length())
+}
+
+func TestParquet_Dictionary_Bool_IndexError(t *testing.T) {
+	proc := testutil.NewProc(t)
 	node := parquet.Encoded(parquet.Leaf(parquet.BooleanType), &parquet.RLEDictionary)
 	vals := []parquet.Value{
 		parquet.BooleanValue(true), parquet.BooleanValue(false), parquet.BooleanValue(true),
 	}
 	f, page := writeDictAndGetPage(t, node, vals)
+
+	vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool), NotNullable: true})
+	require.NotNil(t, mp)
+	badPage := &parquetPageWithData{
+		Page: page,
+		data: encoding.Int32Values([]int32{0, 2, 1}),
+	}
+	err := mp.mapping(badPage, proc, vec)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "out of range")
+	require.Zero(t, vec.Length())
+}
+
+func TestParquet_Dictionary_Bool_IndexCountError(t *testing.T) {
+	proc := testutil.NewProc(t)
+	node := parquet.Encoded(parquet.Leaf(parquet.BooleanType), &parquet.RLEDictionary)
+	vals := []parquet.Value{
+		parquet.BooleanValue(true), parquet.BooleanValue(false), parquet.BooleanValue(true),
+	}
+	f, page := writeDictAndGetPage(t, node, vals)
+
+	vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool), NotNullable: true})
+	require.NotNil(t, mp)
+	badPage := &parquetPageWithData{
+		Page: page,
+		data: encoding.Int32Values([]int32{0, 1}),
+	}
+	err := mp.mapping(badPage, proc, vec)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "dictionary indices")
+	require.Zero(t, vec.Length())
+}
+
+func TestParquet_Dictionary_Bool_NullToNotNull(t *testing.T) {
+	proc := testutil.NewProc(t)
+	node := parquet.Optional(parquet.Encoded(parquet.Leaf(parquet.BooleanType), &parquet.RLEDictionary))
+	rows := []parquet.Row{
+		{parquet.BooleanValue(true).Level(0, 1, 0)},
+		{parquet.NullValue().Level(0, 0, 0)},
+	}
+	f, page := writeColumnAndGetPage(t, node, rows)
+
 	vec := vector.NewVec(types.New(types.T_bool, 0, 0))
 	var h ParquetHandler
 	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool), NotNullable: true})
 	require.NotNil(t, mp)
 	err := mp.mapping(page, proc, vec)
 	require.Error(t, err)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNYI))
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrConstraintViolation), "unexpected error: %v", err)
+	require.Contains(t, err.Error(), "cannot load NULL value")
+	require.Zero(t, vec.Length())
 }
 
-// Note: Constructing explicit nulls for pages requires internal helpers.
-// Mapping null behavior is indirectly exercised in other branches.
+func TestParquet_Dictionary_Bool_ValueKindMismatch(t *testing.T) {
+	proc := testutil.NewProc(t)
+	node := parquet.Encoded(parquet.Leaf(parquet.BooleanType), &parquet.RLEDictionary)
+	f, page := writeDictAndGetPage(t, node, []parquet.Value{parquet.BooleanValue(true)})
+	badDictionary := parquet.Int32Type.NewDictionary(0, 1, encoding.Int32Values([]int32{1}))
+	badPage := &parquetPageWithDictionary{Page: page, dictionary: badDictionary}
+
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool), NotNullable: true})
+	require.NotNil(t, mp)
+	vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+	err := mp.mapping(badPage, proc, vec)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "BOOLEAN dictionary with type INT32")
+	require.Zero(t, vec.Length())
+}
+
+func TestParquet_Dictionary_Bool_IndexKindMismatch(t *testing.T) {
+	proc := testutil.NewProc(t)
+	node := parquet.Encoded(parquet.Leaf(parquet.BooleanType), &parquet.RLEDictionary)
+	f, page := writeDictAndGetPage(t, node, []parquet.Value{parquet.BooleanValue(true)})
+	badPage := &parquetPageWithData{
+		Page: page,
+		data: encoding.BooleanValues([]byte{1}),
+	}
+
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool), NotNullable: true})
+	require.NotNil(t, mp)
+	vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+	err := mp.mapping(badPage, proc, vec)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "BOOLEAN dictionary indexes with type BOOLEAN")
+	require.Zero(t, vec.Length())
+}
+
+func TestParquet_Dictionary_Numeric_IndexKindMismatch(t *testing.T) {
+	proc := testutil.NewProc(t)
+	node := parquet.Encoded(parquet.Leaf(parquet.Int32Type), &parquet.RLEDictionary)
+	f, page := writeDictAndGetPage(t, node, []parquet.Value{parquet.Int32Value(1)})
+	badPage := &parquetPageWithData{
+		Page: page,
+		data: encoding.BooleanValues([]byte{1}),
+	}
+
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_int32), NotNullable: true})
+	require.NotNil(t, mp)
+	vec := vector.NewVec(types.New(types.T_int32, 0, 0))
+	err := mp.mapping(badPage, proc, vec)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "dictionary indexes with type BOOLEAN")
+	require.Zero(t, vec.Length())
+}
+
+func TestParquet_Dictionary_Numeric_ValueKindMismatch(t *testing.T) {
+	proc := testutil.NewProc(t)
+	node := parquet.Encoded(parquet.Leaf(parquet.Int32Type), &parquet.RLEDictionary)
+	f, page := writeDictAndGetPage(t, node, []parquet.Value{parquet.Int32Value(1)})
+	badDictionary := parquet.BooleanType.NewDictionary(0, 1, encoding.BooleanValues([]byte{1}))
+	badPage := &parquetPageWithDictionary{Page: page, dictionary: badDictionary}
+
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_int32), NotNullable: true})
+	require.NotNil(t, mp)
+	vec := vector.NewVec(types.New(types.T_int32, 0, 0))
+	err := mp.mapping(badPage, proc, vec)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "dictionary values with type BOOLEAN")
+	require.Zero(t, vec.Length())
+}
+
+func TestParquet_Dictionary_String_ValueKindMismatch(t *testing.T) {
+	proc := testutil.NewProc(t)
+	node := parquet.Encoded(parquet.String(), &parquet.RLEDictionary)
+	f, page := writeDictAndGetPage(t, node, []parquet.Value{parquet.ByteArrayValue([]byte("value"))})
+	badDictionary := parquet.Int32Type.NewDictionary(0, 1, encoding.Int32Values([]int32{1}))
+	badPage := &parquetPageWithDictionary{Page: page, dictionary: badDictionary}
+
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_varchar), NotNullable: true})
+	require.NotNil(t, mp)
+	vec := vector.NewVec(types.T_varchar.ToType())
+	err := mp.mapping(badPage, proc, vec)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "string values with type INT32")
+	require.Zero(t, vec.Length())
+}
+
+func TestParquet_Dictionary_StringMalformedOffsets(t *testing.T) {
+	proc := testutil.NewProc(t)
+	f, page := writeDictAndGetPage(t, parquet.Encoded(parquet.String(), &parquet.RLEDictionary), []parquet.Value{
+		parquet.ByteArrayValue([]byte("1")),
+	})
+	badDictionary := parquet.String().Type().NewDictionary(0, 1,
+		encoding.ByteArrayValues([]byte("1"), []uint32{0, 2}))
+	badPage := &parquetPageWithDictionary{Page: page, dictionary: badDictionary}
+
+	cases := []struct {
+		name string
+		dt   plan.Type
+		vec  *vector.Vector
+	}{
+		{name: "fixed", dt: plan.Type{Id: int32(types.T_int32), NotNullable: true}, vec: vector.NewVec(types.T_int32.ToType())},
+		{name: "json", dt: plan.Type{Id: int32(types.T_json), NotNullable: true}, vec: vector.NewVec(types.T_json.ToType())},
+		{name: "array", dt: plan.Type{Id: int32(types.T_array_float32), Width: 1, NotNullable: true}, vec: vector.NewVec(types.New(types.T_array_float32, 1, 0))},
+	}
+	var h ParquetHandler
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := h.getMapper(f.Root().Column("c"), tc.dt)
+			require.NotNil(t, mp)
+			var err error
+			require.NotPanics(t, func() { err = mp.mapping(badPage, proc, tc.vec) })
+			require.ErrorContains(t, err, "exceeds buffer length")
+			require.Zero(t, tc.vec.Length())
+		})
+	}
+}
+
+func TestParquet_Plain_Numeric_ValueKindMismatch(t *testing.T) {
+	proc := testutil.NewProc(t)
+	f, page := writeColumnAndGetPage(t, parquet.Leaf(parquet.Int32Type), []parquet.Row{
+		{parquet.Int32Value(1).Level(0, 0, 0)},
+	})
+	badPage := &parquetPageWithData{
+		Page: page,
+		data: encoding.BooleanValues([]byte{1}),
+	}
+
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_int32), NotNullable: true})
+	require.NotNil(t, mp)
+	vec := vector.NewVec(types.New(types.T_int32, 0, 0))
+	err := mp.mapping(badPage, proc, vec)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "page values with type BOOLEAN")
+	require.Zero(t, vec.Length())
+}
+
+func TestParquetDecodedPageSize_InvalidDictionaryIndexes(t *testing.T) {
+	page := parquet.Int32Type.NewPage(0, 1, encoding.Int32Values([]int32{0}))
+	dict := parquet.Int32Type.NewDictionary(0, 1, encoding.Int32Values([]int32{1}))
+	badData := &parquetPageWithData{
+		Page: page,
+		data: encoding.BooleanValues([]byte{1}),
+	}
+	badPage := &parquetPageWithDictionary{Page: badData, dictionary: dict}
+
+	require.NotPanics(t, func() {
+		require.Positive(t, parquetDecodedPageSize(badPage))
+	})
+}
+
+func TestParquetDecodedPageSize_FixedWidthDictionary(t *testing.T) {
+	page := parquet.Int32Type.NewPage(0, 3, encoding.Int32Values([]int32{0, 1, 0}))
+	dict := parquet.Int32Type.NewDictionary(0, 2, encoding.Int32Values([]int32{10, 20}))
+	withDict := &parquetPageWithDictionary{Page: page, dictionary: dict}
+
+	require.Equal(t, uint64(12), parquetDecodedPageSize(withDict))
+}
+
+func TestParquetDecodedPageSize_InvalidDictionaryStringOffsets(t *testing.T) {
+	_, page := writeDictAndGetPage(t, parquet.Encoded(parquet.String(), &parquet.RLEDictionary), []parquet.Value{
+		parquet.ByteArrayValue([]byte("value")),
+	})
+	badDictionary := parquet.String().Type().NewDictionary(0, 1,
+		encoding.ByteArrayValues([]byte("value"), []uint32{0, 6}))
+	badPage := &parquetPageWithDictionary{Page: page, dictionary: badDictionary}
+
+	require.NotPanics(t, func() {
+		require.Positive(t, parquetDecodedPageSize(badPage))
+	})
+}
+
+func TestParquet_Dictionary_Bool_NullableSlicedPage(t *testing.T) {
+	proc := testutil.NewProc(t)
+	node := parquet.Optional(parquet.Encoded(parquet.Leaf(parquet.BooleanType), &parquet.RLEDictionary))
+	rows := []parquet.Row{
+		{parquet.BooleanValue(true).Level(0, 1, 0)},
+		{parquet.NullValue().Level(0, 0, 0)},
+		{parquet.BooleanValue(false).Level(0, 1, 0)},
+		{parquet.BooleanValue(true).Level(0, 1, 0)},
+		{parquet.NullValue().Level(0, 0, 0)},
+	}
+	f, page := writeColumnAndGetPage(t, node, rows)
+	require.NotNil(t, page.Dictionary())
+	page = page.Slice(1, 5)
+
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool)})
+	require.NotNil(t, mp)
+	vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+	require.NoError(t, mp.mapping(page, proc, vec))
+	require.Equal(t, []bool{false, false, true, false}, vector.MustFixedColWithTypeCheck[bool](vec))
+	require.True(t, vec.GetNulls().Contains(0))
+	require.False(t, vec.GetNulls().Contains(1))
+	require.False(t, vec.GetNulls().Contains(2))
+	require.True(t, vec.GetNulls().Contains(3))
+}
+
+func TestParquet_NullableMappingWithAllocationAccount(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+	vec, err := vector.NewOffHeapVecWithTypeAndAllocation(types.New(types.T_bool, 0, 0), selection)
+	require.NoError(t, err)
+	defer func() {
+		vec.Free(proc.Mp())
+		require.Zero(t, account.Snapshot().Used)
+		account.Seal()
+		_, err := registry.Finalize(account)
+		require.NoError(t, err)
+	}()
+
+	rows := []parquet.Row{
+		{parquet.BooleanValue(true).Level(0, 1, 0)},
+		{parquet.NullValue().Level(0, 0, 0)},
+		{parquet.BooleanValue(false).Level(0, 1, 0)},
+	}
+	cases := []struct {
+		name string
+		node parquet.Node
+	}{
+		{name: "plain", node: parquet.Optional(parquet.Leaf(parquet.BooleanType))},
+		{name: "dictionary", node: parquet.Optional(parquet.Encoded(parquet.Leaf(parquet.BooleanType), &parquet.RLEDictionary))},
+	}
+
+	var h ParquetHandler
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, page := writeColumnAndGetPage(t, tc.node, rows)
+			mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool)})
+			require.NotNil(t, mp)
+			vec.ResetWithSameType()
+			require.NoError(t, mp.mapping(page, proc, vec))
+			require.Equal(t, []bool{true, false, false}, vector.MustFixedColWithTypeCheck[bool](vec))
+			require.True(t, vec.GetNulls().Contains(1))
+		})
+	}
+}
+
+func TestParquet_NullableStringFixedMappingWithAllocationAccount(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+	vec, err := vector.NewOffHeapVecWithTypeAndAllocation(types.New(types.T_int32, 0, 0), selection)
+	require.NoError(t, err)
+	defer func() {
+		vec.Free(proc.Mp())
+		require.Zero(t, account.Snapshot().Used)
+		account.Seal()
+		_, err := registry.Finalize(account)
+		require.NoError(t, err)
+	}()
+
+	rows := []parquet.Row{
+		{parquet.ByteArrayValue([]byte("1")).Level(0, 1, 0)},
+		{parquet.NullValue().Level(0, 0, 0)},
+		{parquet.ByteArrayValue([]byte("2")).Level(0, 1, 0)},
+	}
+	f, page := writeColumnAndGetPage(t, parquet.Optional(parquet.String()), rows)
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_int32)})
+	require.NotNil(t, mp)
+	require.NoError(t, mp.mapping(page, proc, vec))
+	require.Equal(t, []int32{1, 0, 2}, vector.MustFixedColWithTypeCheck[int32](vec))
+	require.True(t, vec.GetNulls().Contains(1))
+}
+
+func TestParquet_StringFixedMappingRollsBackOnParseError(t *testing.T) {
+	proc := testutil.NewProc(t)
+	f, page := writeColumnAndGetPage(t, parquet.String(), []parquet.Row{
+		{parquet.ByteArrayValue([]byte("1")).Level(0, 0, 0)},
+		{parquet.ByteArrayValue([]byte("not-an-int")).Level(0, 0, 0)},
+	})
+
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_int32), NotNullable: true})
+	require.NotNil(t, mp)
+	vec := vector.NewVec(types.New(types.T_int32, 0, 0))
+	require.NoError(t, vector.AppendFixed(vec, int32(99), false, proc.Mp()))
+
+	err := mp.mapping(page, proc, vec)
+	require.Error(t, err)
+	require.Equal(t, []int32{99}, vector.MustFixedColWithTypeCheck[int32](vec))
+}
+
+func TestParquet_StringJsonMappingRollsBackOnParseError(t *testing.T) {
+	proc := testutil.NewProc(t)
+	f, page := writeColumnAndGetPage(t, parquet.String(), []parquet.Row{
+		{parquet.ByteArrayValue([]byte(`{"seed":1}`)).Level(0, 0, 0)},
+		{parquet.ByteArrayValue([]byte(`not-json`)).Level(0, 0, 0)},
+	})
+
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_json), NotNullable: true})
+	require.NotNil(t, mp)
+	vec := vector.NewVec(types.T_json.ToType())
+	seed, err := types.ParseStringToByteJson(`{"existing":true}`)
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendByteJson(vec, seed, false, proc.Mp()))
+
+	err = mp.mapping(page, proc, vec)
+	require.Error(t, err)
+	require.Equal(t, 1, vec.Length())
+	require.Equal(t, seed.String(), types.DecodeJson(vec.GetBytesAt(0)).String())
+}
+
+func TestParquet_StringArrayMappingRollsBackOnParseError(t *testing.T) {
+	proc := testutil.NewProc(t)
+	f, page := writeColumnAndGetPage(t, parquet.String(), []parquet.Row{
+		{parquet.ByteArrayValue([]byte("[1,2,3]")).Level(0, 0, 0)},
+		{parquet.ByteArrayValue([]byte("not-a-vector")).Level(0, 0, 0)},
+	})
+
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float32), Width: 3, NotNullable: true})
+	require.NotNil(t, mp)
+	vec := vector.NewVec(types.New(types.T_array_float32, 3, 0))
+	seed := []float32{9, 8, 7}
+	require.NoError(t, vector.AppendArray(vec, seed, false, proc.Mp()))
+
+	err := mp.mapping(page, proc, vec)
+	require.Error(t, err)
+	require.Equal(t, 1, vec.Length())
+	require.Equal(t, seed, vector.GetArrayAt[float32](vec, 0))
+}
+
+func TestParquetStringMappingValidatesBeforeAllocating(t *testing.T) {
+	proc := testutil.NewProc(t)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+	vec, err := vector.NewOffHeapVecWithTypeAndAllocation(types.T_varchar.ToType(), selection)
+	require.NoError(t, err)
+	defer func() {
+		vec.Free(proc.Mp())
+		require.Zero(t, account.Snapshot().Used)
+		account.Seal()
+		_, err := registry.Finalize(account)
+		require.NoError(t, err)
+	}()
+
+	f, page := writeColumnAndGetPage(t, parquet.String(), []parquet.Row{
+		{parquet.ByteArrayValue([]byte("value")).Level(0, 0, 0)},
+	})
+	badPage := &parquetPageWithData{
+		Page: page,
+		data: encoding.ByteArrayValues([]byte("value"), []uint32{0, 6}),
+	}
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_varchar), NotNullable: true})
+	require.NotNil(t, mp)
+	usedBefore := account.Snapshot().Used
+	err = mp.mapping(badPage, proc, vec)
+	require.ErrorContains(t, err, "exceeds buffer length")
+	require.Zero(t, vec.Length())
+	require.Equal(t, usedBefore, account.Snapshot().Used)
+}
+
+func TestParquetValuesToFixedRollsBackOnConversionError(t *testing.T) {
+	proc := testutil.NewProc(t)
+	page := parquet.Int32Type.NewPage(0, 2, encoding.Int32Values([]int32{1, 2}))
+	vec := vector.NewVec(types.T_int32.ToType())
+	require.NoError(t, vector.AppendFixed(vec, int32(99), false, proc.Mp()))
+
+	err := processParquetValuesToFixed[int32](context.Background(), &columnMapper{}, page, proc, vec, 0,
+		func(v parquet.Value) (int32, error) {
+			if v.Int32() == 2 {
+				return 0, errors.New("conversion failed")
+			}
+			return v.Int32(), nil
+		})
+	require.ErrorContains(t, err, "row 1: conversion failed")
+	require.Equal(t, []int32{99}, vector.MustFixedColWithTypeCheck[int32](vec))
+}
+
+func TestParquetValuesToBytesAndJsonRollBackOnConversionError(t *testing.T) {
+	proc := testutil.NewProc(t)
+	bytesPage := parquet.ByteArrayType.NewPage(0, 2,
+		encoding.ByteArrayValues([]byte("onetwo"), []uint32{0, 3, 6}))
+	bytesVec := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(bytesVec, []byte("seed"), false, proc.Mp()))
+
+	err := processParquetValuesToBytes(context.Background(), &columnMapper{}, bytesPage, proc, bytesVec,
+		func(v parquet.Value) ([]byte, error) {
+			if string(v.ByteArray()) == "two" {
+				return nil, errors.New("conversion failed")
+			}
+			return v.ByteArray(), nil
+		})
+	require.ErrorContains(t, err, "row 1: conversion failed")
+	require.Equal(t, 1, bytesVec.Length())
+	require.Equal(t, "seed", string(bytesVec.GetBytesAt(0)))
+
+	jsonFirst := []byte(`{"a":1}`)
+	jsonSecond := []byte(`not-json`)
+	jsonData := append(append([]byte{}, jsonFirst...), jsonSecond...)
+	jsonPage := parquet.ByteArrayType.NewPage(0, 2,
+		encoding.ByteArrayValues(jsonData, []uint32{0, uint32(len(jsonFirst)), uint32(len(jsonData))}))
+	jsonVec := vector.NewVec(types.T_json.ToType())
+	seed, err := types.ParseStringToByteJson(`{"existing":true}`)
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendByteJson(jsonVec, seed, false, proc.Mp()))
+
+	err = processParquetValuesToJson(context.Background(), &columnMapper{}, jsonPage, proc, jsonVec,
+		func(v parquet.Value) (bytejson.ByteJson, error) {
+			return types.ParseSliceToByteJson(v.ByteArray())
+		})
+	require.Error(t, err)
+	require.Equal(t, 1, jsonVec.Length())
+	require.Equal(t, seed.String(), types.DecodeJson(jsonVec.GetBytesAt(0)).String())
+}
+
+func TestParquetListToArrayRollsBackOnConversionError(t *testing.T) {
+	proc := testutil.NewProc(t)
+	_, page := writeListAndGetPage(t, parquet.Leaf(parquet.FloatType), []parquet.Row{
+		{parquet.FloatValue(1).Level(0, 1, 0)},
+		{parquet.FloatValue(2).Level(0, 1, 0)},
+	})
+
+	vec := vector.NewVec(types.New(types.T_array_float32, 1, 0))
+	seed := []float32{9}
+	require.NoError(t, vector.AppendArray(vec, seed, false, proc.Mp()))
+
+	err := processParquetListToArray[float32](context.Background(), &columnMapper{maxDefinitionLevel: 1}, page, proc, vec, 1,
+		func(v parquet.Value) (float32, error) {
+			if v.Float() == 2 {
+				return 0, errors.New("conversion failed")
+			}
+			return v.Float(), nil
+		})
+	require.ErrorContains(t, err, "row 1")
+	require.Equal(t, 1, vec.Length())
+	require.Equal(t, seed, vector.GetArrayAt[float32](vec, 0))
+}
 
 func TestParquet_ScanParquetFile_SteppedBatches(t *testing.T) {
 	// Reduce batch size so scan steps across multiple calls
@@ -3025,6 +4616,57 @@ func TestParquet_ScanParquetFile_SteppedBatches(t *testing.T) {
 		}
 	}
 	require.Equal(t, []int32{10, 20, 30}, got)
+}
+
+func TestParquet_ScanParquetFile_SteppedDictionaryBoolBatches(t *testing.T) {
+	save := maxParquetBatchCnt
+	maxParquetBatchCnt = 1
+	defer func() { maxParquetBatchCnt = save }()
+
+	var buf bytes.Buffer
+	schema := parquet.NewSchema("x", parquet.Group{
+		"c": parquet.Encoded(parquet.Leaf(parquet.BooleanType), &parquet.RLEDictionary),
+	})
+	w := parquet.NewWriter(&buf, schema)
+	rows := []parquet.Row{
+		{parquet.BooleanValue(true).Level(0, 0, 0)},
+		{parquet.BooleanValue(false).Level(0, 0, 0)},
+		{parquet.BooleanValue(true).Level(0, 0, 0)},
+	}
+	_, err := w.WriteRows(rows)
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx:      context.Background(),
+			Attrs:    []plan.ExternAttr{{ColName: "c", ColIndex: 0}},
+			Cols:     []*plan.ColDef{{Typ: plan.Type{Id: int32(types.T_bool), NotNullable: true}}},
+			Extern:   &tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.INLINE}},
+			FileSize: []int64{int64(buf.Len())},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{FileIndex: 1, FileCnt: 1}},
+	}
+	param.Extern.Data = string(buf.Bytes())
+
+	proc := testutil.NewProc(t)
+	r := NewParquetReader(param, proc)
+	_, err = r.Open(param, proc)
+	require.NoError(t, err)
+	defer r.Close()
+
+	got := make([]bool, 0, len(rows))
+	for attempts := 0; attempts < 5; attempts++ {
+		bat := vectorBatch([]types.Type{types.New(types.T_bool, 0, 0)})
+		finished, rerr := r.ReadBatch(context.Background(), bat, proc, nil)
+		require.NoError(t, rerr)
+		vals := vector.MustFixedColWithTypeCheck[bool](bat.Vecs[0])
+		got = append(got, vals[:bat.RowCount()]...)
+		if finished {
+			break
+		}
+	}
+	require.Equal(t, []bool{true, false, true}, got)
 }
 
 func TestParquet_ScanParquetFile_MappingErrorClosesPages(t *testing.T) {
@@ -3635,6 +5277,14 @@ func Test_parquet_strLoader(t *testing.T) {
 	require.Equal(t, "abc", string(ld2.loadNext()))
 	require.Equal(t, "def", string(ld2.loadAt(1)))
 
+	// Reinitializing a loader must clear the previous representation and cursor.
+	var reused strLoader
+	reused.init(encoding.FixedLenByteArrayValues([]byte("abcd"), 2))
+	require.Equal(t, "ab", string(reused.loadNext()))
+	reused.init(encoding.ByteArrayValues([]byte("xyz"), []uint32{0, 1, 3}))
+	require.Equal(t, "x", string(reused.loadNext()))
+	require.Equal(t, "yz", string(reused.loadNext()))
+
 	// Unsupported kind panics
 	defer func() {
 		if r := recover(); r == nil {
@@ -3656,6 +5306,75 @@ func Test_parquet_copyDictPageToVec_indexError(t *testing.T) {
 	// dictLen=3, but index 5 is out of range -> error
 	err := copyDictPageToVec[int32](mp, page, proc, vec, 3, []int32{0, 2, 5}, func(idx int32) int32 { return idx })
 	require.Error(t, err)
+}
+
+func Test_parquet_copyDictPageToVec_indexCountError(t *testing.T) {
+	proc := testutil.NewProc(t)
+	st := parquet.Int32Type
+	page := st.NewPage(0, 3, encoding.Int32Values([]int32{0, 2, 1}))
+	vec := vector.NewVec(types.New(types.T_int32, 0, 0))
+	mp := &columnMapper{srcNull: false, dstNull: false, maxDefinitionLevel: 0}
+
+	err := copyDictPageToVec[int32](mp, page, proc, vec, 3, []int32{0, 2}, func(idx int32) int32 { return idx })
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "dictionary indices")
+	require.Zero(t, vec.Length())
+}
+
+func Test_parquet_copyDictPageToVec_definitionLevelMismatch(t *testing.T) {
+	proc := testutil.NewProc(t)
+	st := parquet.Int32Type
+	page := st.NewPage(0, 3, encoding.Int32Values([]int32{0, 2, 1}))
+	pageWithBadLevels := &parquetPageWithDefinitionLevels{
+		Page:     page,
+		levels:   []byte{0, 0, 0},
+		numNulls: 1,
+	}
+	vec := vector.NewVec(types.New(types.T_int32, 0, 0))
+	mp := &columnMapper{srcNull: true, dstNull: true, maxDefinitionLevel: 1}
+
+	err := copyDictPageToVec[int32](mp, pageWithBadLevels, proc, vec, 3, []int32{0, 2}, func(idx int32) int32 { return idx })
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "NumNulls() indicates")
+	require.Zero(t, vec.Length())
+}
+
+func Test_parquet_copyPageToVecMap_valueCountError(t *testing.T) {
+	proc := testutil.NewProc(t)
+	st := parquet.Int32Type
+	page := st.NewPage(0, 3, encoding.Int32Values([]int32{1, 2, 3}))
+	vec := vector.NewVec(types.New(types.T_int32, 0, 0))
+	mp := &columnMapper{srcNull: false, dstNull: false, maxDefinitionLevel: 0}
+
+	err := copyPageToVec(mp, &parquetPageWithData{
+		Page: page,
+		data: encoding.Int32Values([]int32{1, 2}),
+	}, proc, vec, []int32{1, 2})
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "expected 3 non-null values")
+	require.Zero(t, vec.Length())
+}
+
+func Test_parquet_copyPageToVecMap_definitionLevelCountError(t *testing.T) {
+	proc := testutil.NewProc(t)
+	st := parquet.Int32Type
+	page := st.NewPage(0, 3, encoding.Int32Values([]int32{1, 2, 3}))
+	pageWithBadLevels := &parquetPageWithDefinitionLevels{
+		Page:     page,
+		levels:   []byte{1},
+		numNulls: 1,
+	}
+	vec := vector.NewVec(types.New(types.T_int32, 0, 0))
+	mp := &columnMapper{srcNull: true, dstNull: true, maxDefinitionLevel: 1}
+
+	err := copyPageToVec(mp, pageWithBadLevels, proc, vec, []int32{1, 2})
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "definition levels length 1 != numRows 3")
+	require.Zero(t, vec.Length())
 }
 
 func Test_parquet_decimalBytes_Roundtrip_And_Overflow(t *testing.T) {
@@ -3717,6 +5436,11 @@ func Test_parquet_decodeDecimal_AllBranches(t *testing.T) {
 	require.Len(t, vals64, 2)
 	require.Equal(t, int64(1), int64(vals64[0]))
 	require.Equal(t, int64(-2), int64(vals64[1]))
+	var badErr error
+	require.NotPanics(t, func() {
+		_, badErr = decodeDecimal64Values(ctx, parquet.ByteArray, encoding.ByteArrayValues([]byte{1}, []uint32{0, 2}))
+	})
+	require.ErrorContains(t, badErr, "exceeds buffer length")
 	// fixed len incorrect size
 	_, err = decodeDecimal64Values(ctx, parquet.FixedLenByteArray, encoding.FixedLenByteArrayValues([]byte{0, 1, 2}, 2))
 	require.Error(t, err)
@@ -3740,6 +5464,11 @@ func Test_parquet_decodeDecimal_AllBranches(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 2, len(vals128))
 	}
+	badErr = nil
+	require.NotPanics(t, func() {
+		_, badErr = decodeDecimal128Values(ctx, parquet.ByteArray, encoding.ByteArrayValues([]byte{1}, []uint32{0, 2}))
+	})
+	require.ErrorContains(t, badErr, "exceeds buffer length")
 
 	// decimal256 branches
 	_, err = decodeDecimal256Values(ctx, parquet.FixedLenByteArray, encoding.FixedLenByteArrayValues([]byte{0, 0, 0, 1}, 0))
@@ -3759,6 +5488,11 @@ func Test_parquet_decodeDecimal_AllBranches(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 2, len(vals256))
 	}
+	badErr = nil
+	require.NotPanics(t, func() {
+		_, badErr = decodeDecimal256Values(ctx, parquet.ByteArray, encoding.ByteArrayValues([]byte{1}, []uint32{0, 2}))
+	})
+	require.ErrorContains(t, badErr, "exceeds buffer length")
 
 	// decimal128/256 from int32/int64 success
 	vals128, err := decodeDecimal128Values(ctx, parquet.Int32, encoding.Int32Values([]int32{1, -1}))
@@ -3793,11 +5527,123 @@ func Test_prepareNullCheck_simplePaths(t *testing.T) {
 	require.False(t, nc.isNull(1))
 
 	// when srcNull true but page has no nulls -> noNulls should be true
-	mp = &columnMapper{srcNull: true, dstNull: true, maxDefinitionLevel: 0}
-	nc, err = prepareNullCheck(ctx, mp, page)
+	optionalPage := &parquetPageWithDefinitionLevels{
+		Page:     page,
+		levels:   []byte{1, 1},
+		numNulls: 0,
+	}
+	mp = &columnMapper{srcNull: true, dstNull: true, maxDefinitionLevel: 1}
+	nc, err = prepareNullCheck(ctx, mp, optionalPage)
 	require.NoError(t, err)
 	require.True(t, nc.noNulls)
+	require.Equal(t, byte(1), nc.maxDefinitionLevel)
 	require.False(t, nc.isNull(0))
+}
+
+func Test_prepareNullCheck_rejectsInvalidCounts(t *testing.T) {
+	ctx := context.Background()
+	page := parquet.Int32Type.NewPage(0, 2, encoding.Int32Values([]int32{1, 2}))
+	mp := &columnMapper{srcNull: false, dstNull: true, maxDefinitionLevel: 0}
+
+	for _, tc := range []struct {
+		name string
+		page parquet.Page
+	}{
+		{
+			name: "negative rows",
+			page: &parquetPageWithNumRows{Page: page, numRows: -1},
+		},
+		{
+			name: "negative nulls",
+			page: &parquetPageWithDefinitionLevels{Page: page, numNulls: -1},
+		},
+		{
+			name: "too many nulls",
+			page: &parquetPageWithDefinitionLevels{Page: page, numNulls: 3},
+		},
+		{
+			name: "nulls on required page",
+			page: &parquetPageWithDefinitionLevels{Page: page, numNulls: 1},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := prepareNullCheck(ctx, mp, tc.page)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+		})
+	}
+}
+
+func Test_prepareNullCheck_rejectsInconsistentNoNullLevels(t *testing.T) {
+	ctx := context.Background()
+	page := parquet.Int32Type.NewPage(0, 2, encoding.Int32Values([]int32{1, 2}))
+	mp := &columnMapper{srcNull: true, dstNull: true, maxDefinitionLevel: 1}
+
+	for _, tc := range []struct {
+		name   string
+		levels []byte
+		want   string
+	}{
+		{name: "missing levels", levels: nil, want: "definition levels are empty"},
+		{name: "short levels", levels: []byte{1}, want: "definition levels length"},
+		{name: "null level with zero null count", levels: []byte{1, 0}, want: "not non-null level"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wrapped := &parquetPageWithDefinitionLevels{Page: page, levels: tc.levels, numNulls: 0}
+			_, err := prepareNullCheck(ctx, mp, wrapped)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+			require.Contains(t, err.Error(), tc.want)
+		})
+	}
+}
+
+func Test_prepareNullCheck_rejectsDefinitionLevelAboveMaximum(t *testing.T) {
+	ctx := context.Background()
+	page := parquet.Int32Type.NewPage(0, 2, encoding.Int32Values([]int32{1, 2}))
+	mp := &columnMapper{srcNull: true, dstNull: true, maxDefinitionLevel: 1}
+
+	wrapped := &parquetPageWithDefinitionLevels{
+		Page:     page,
+		levels:   []byte{2, 0},
+		numNulls: 1,
+	}
+	_, err := prepareNullCheck(ctx, mp, wrapped)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "exceeds maximum")
+}
+
+func Test_readParquetPageValues_rejectsNegativeCounts(t *testing.T) {
+	ctx := context.Background()
+	page := parquet.Int32Type.NewPage(0, 1, encoding.Int32Values([]int32{1}))
+
+	_, err := readParquetPageValues(ctx, &parquetPageWithNumRows{Page: page, numRows: -1})
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "NumRows() -1 is negative")
+
+	_, err = readParquetPageAllValues(ctx, &parquetPageWithNumValues{Page: page, numValues: -1})
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "NumValues() -1 is negative")
+}
+
+func TestParquet_EnsureCurrentPageRejectsNegativeRows(t *testing.T) {
+	ctx := context.Background()
+	page := parquet.Int32Type.NewPage(0, 1, encoding.Int32Values([]int32{1}))
+	h := ParquetHandler{
+		pages:       make([]parquet.Pages, 1),
+		currentPage: []parquet.Page{&parquetPageWithNumRows{Page: page, numRows: -1}},
+		pageOffset:  []int64{0},
+	}
+	param := &ExternalParam{ExParamConst: ExParamConst{Ctx: ctx}}
+
+	more, err := h.ensureCurrentPage(0, param)
+	require.False(t, more)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "NumRows() -1 is negative")
 }
 
 func Test_validateStringDataCount(t *testing.T) {
@@ -3844,6 +5690,34 @@ func Test_validateStringDataCount(t *testing.T) {
 		err := validateStringDataCount(ctx, &loader, 0)
 		require.NoError(t, err)
 	}
+
+	// A zero-width fixed-length value is invalid even when the page has no non-NULL values.
+	{
+		var loader strLoader
+		loader.init(encoding.FixedLenByteArrayValues(nil, 0))
+		err := validateStringDataCount(ctx, &loader, 0)
+		require.ErrorContains(t, err, "invalid fixed length 0")
+	}
+
+	for _, tc := range []struct {
+		name    string
+		offsets []uint32
+		want    string
+	}{
+		{name: "offset exceeds buffer", offsets: []uint32{0, 7}, want: "exceeds buffer length"},
+		{name: "offsets decrease", offsets: []uint32{0, 4, 3}, want: "precedes previous offset"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var loader strLoader
+			loader.init(encoding.ByteArrayValues([]byte("abcdef"), tc.offsets))
+			err := validateStringDataCount(ctx, &loader, int64(len(tc.offsets)-1))
+			require.ErrorContains(t, err, tc.want)
+		})
+	}
+
+	var sharedBufferLoader strLoader
+	sharedBufferLoader.init(encoding.ByteArrayValues([]byte("abcdef"), []uint32{1, 3}))
+	require.NoError(t, validateStringDataCount(ctx, &sharedBufferLoader, 1))
 }
 
 func Test_validateDictionaryIndicesCount(t *testing.T) {
@@ -3896,6 +5770,29 @@ func Test_fsReaderAt_ReadAt(t *testing.T) {
 	require.Equal(t, int64(6), fs.lastOffset)
 	require.Equal(t, int64(5), fs.lastSize)
 	require.Equal(t, int64(5), param.takeParquetProfile().BytesRead)
+}
+
+func Test_fsReaderAt_ReadAtReturnsEOFForShortRead(t *testing.T) {
+	fs := &fakeFS{b: []byte("hello"), shortRead: true}
+	r := &fsReaderAt{fs: fs, readPath: "fake:short", ctx: context.Background()}
+	buf := make([]byte, 5)
+	n, err := r.ReadAt(buf, 0)
+	require.Equal(t, 4, n)
+	require.ErrorIs(t, err, io.EOF)
+}
+
+func Test_fsReaderAt_ReadAtRejectsNegativeOffset(t *testing.T) {
+	r := &fsReaderAt{fs: &fakeFS{b: []byte("hello")}, ctx: context.Background()}
+	n, err := r.ReadAt(make([]byte, 1), -1)
+	require.Zero(t, n)
+	require.ErrorContains(t, err, "negative offset")
+}
+
+func Test_fsReaderAt_ReadAtRejectsOffsetOverflow(t *testing.T) {
+	r := &fsReaderAt{fs: &fakeFS{b: []byte("hello")}, ctx: context.Background()}
+	n, err := r.ReadAt(make([]byte, 2), math.MaxInt64)
+	require.Zero(t, n)
+	require.ErrorContains(t, err, "overflows int64")
 }
 
 func TestParquetRangeReadAheadCoalescesSequentialReads(t *testing.T) {
@@ -3954,6 +5851,58 @@ func TestParquetRangeReadAheadPropagatesErrors(t *testing.T) {
 	require.Zero(t, n)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Empty(t, reader.window)
+}
+
+type malformedParquetReaderAt struct{}
+
+func (malformedParquetReaderAt) ReadAt(p []byte, _ int64) (int, error) {
+	return len(p) + 1, nil
+}
+
+func TestParquetRangeReadAheadRejectsInvalidReaderCount(t *testing.T) {
+	reader := &parquetRangeReadAheadReaderAt{
+		reader:   malformedParquetReaderAt{},
+		fileSize: int64(parquetRangeReadAheadMaxBytes),
+	}
+	n, err := reader.ReadAt(make([]byte, 64*1024), 0)
+	require.Zero(t, n)
+	require.ErrorContains(t, err, "invalid byte count")
+	require.Empty(t, reader.window)
+}
+
+type partialParquetReaderAt struct {
+	data []byte
+	n    int
+	err  error
+}
+
+func (r partialParquetReaderAt) ReadAt(p []byte, _ int64) (int, error) {
+	n := min(r.n, len(p))
+	copy(p[:n], r.data[:n])
+	return n, r.err
+}
+
+func TestParquetRangeReadAheadCopiesPartialBytesOnError(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{name: "eof", err: io.EOF},
+		{name: "underlying error", err: context.Canceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reader := &parquetRangeReadAheadReaderAt{
+				reader:   partialParquetReaderAt{data: []byte("partial"), n: 2, err: tc.err},
+				fileSize: 1024,
+			}
+			buf := bytes.Repeat([]byte{0xff}, 4)
+			n, err := reader.ReadAt(buf, 0)
+			require.Equal(t, 2, n)
+			require.ErrorIs(t, err, tc.err)
+			require.Equal(t, []byte("pa"), buf[:2])
+			require.Equal(t, []byte{0xff, 0xff}, buf[2:])
+		})
+	}
 }
 
 func TestParquetRangeReadAheadConcurrentReaderAt(t *testing.T) {

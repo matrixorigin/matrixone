@@ -112,7 +112,6 @@ func GatherTombstoneTasks(ctx context.Context,
 			ret = append(ret, mergeTask{
 				objs:        targets,
 				note:        "oneshot vacuum",
-				kind:        taskHostDN,
 				isTombstone: true,
 			})
 		}
@@ -133,7 +132,6 @@ func GatherTombstoneTasks(ctx context.Context,
 			ret = append(ret, mergeTask{
 				objs:        slices.Collect(tombstoneStats),
 				note:        "long time no merge, do oneshot vacuum",
-				kind:        taskHostDN,
 				isTombstone: true,
 			})
 		}
@@ -143,7 +141,6 @@ func GatherTombstoneTasks(ctx context.Context,
 		ret = append(ret, mergeTask{
 			objs:        small,
 			note:        "l1 small tombstone",
-			kind:        taskHostDN,
 			isTombstone: true,
 		})
 	}
@@ -152,7 +149,6 @@ func GatherTombstoneTasks(ctx context.Context,
 		ret = append(ret, mergeTask{
 			objs:        big,
 			note:        "l2 big tombstone",
-			kind:        taskHostDN,
 			isTombstone: true,
 		})
 	}
@@ -306,7 +302,6 @@ func GatherCompactTasks(
 			// do not check the resource, leave it to mainLoop
 			ret = append(ret, mergeTask{
 				objs:        []*objectio.ObjectStats{item.obj},
-				kind:        taskHostDN,
 				isTombstone: false,
 				level:       int8(lv),
 				note:        note,

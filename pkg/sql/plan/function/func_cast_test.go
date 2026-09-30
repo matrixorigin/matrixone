@@ -433,6 +433,16 @@ func TestYearAssignmentCastHonorsSQLMode(t *testing.T) {
 	}
 }
 
+func TestParseTimePrefixPreservesInvalidFields(t *testing.T) {
+	for _, value := range []string{"12:99:00", "12:99:00tail", "12:34:99", "12:34:99tail", "12:34:56:99"} {
+		_, ok := parseTimePrefix(value, 0)
+		require.False(t, ok, value)
+	}
+	parsed, ok := parseTimePrefix("12:34:56tail", 0)
+	require.True(t, ok)
+	require.Equal(t, "12:34:56", parsed.String())
+}
+
 func TestTimeAssignmentCastHonorsMySQLRange(t *testing.T) {
 	timeType := types.T_time.ToTypeWithScale(6)
 	max := types.MySQLTimeMax
@@ -596,16 +606,11 @@ func TestTimeAssignmentCastHonorsMySQLRange(t *testing.T) {
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
 	})
 
-	t.Run("ordinary expression cast preserves MatrixOne extended time", func(t *testing.T) {
+	t.Run("ordinary expression cast clamps to MySQL TIME range", func(t *testing.T) {
 		result, err := run(t, stringInput, "STRICT_TRANS_TABLES", NewCast)
 		require.NoError(t, err)
 		values := vector.MustFixedColWithTypeCheck[types.Time](result)
-		require.Equal(t, []types.Time{
-			types.TimeFromClock(false, 838, 59, 59, 1),
-			types.TimeFromClock(false, 839, 0, 0, 0),
-			types.TimeFromClock(true, 838, 59, 59, 1),
-			types.TimeFromClock(true, 839, 0, 0, 0),
-		}, values)
+		require.Equal(t, []types.Time{max, max, -max, -max}, values)
 	})
 
 	t.Run("scale zero rejects values that round over the endpoint", func(t *testing.T) {
@@ -908,7 +913,7 @@ func TestBinaryToFloatConversion(t *testing.T) {
 		})
 	}
 
-	for _, input := range []string{"", "this-is-a-very-long-string"} {
+	for _, input := range []string{"this-is-a-very-long-string"} {
 		t.Run("invalid_"+input, func(t *testing.T) {
 			inputVec := testutil.MakeVarlenaVector([][]byte{[]byte(input)}, nil, types.T_blob.ToType(), mp)
 			defer inputVec.Free(mp)
@@ -923,6 +928,15 @@ func TestBinaryToFloatConversion(t *testing.T) {
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 		})
 	}
+
+	inputVec := testutil.MakeVarlenaVector([][]byte{{}}, nil, types.T_blob.ToType(), mp)
+	defer inputVec.Free(mp)
+	inputVec.SetIsBin(true)
+	to := vector.NewFunctionResultWrapper(types.T_float64.ToType(), mp).(*vector.FunctionResult[float64])
+	defer to.Free()
+	require.NoError(t, to.PreExtendAndReset(1))
+	require.NoError(t, strToFloat(ctx, SQLCompatibilityMySQL, vector.GenerateFunctionStrParameter(inputVec), to, 64, 1, nil))
+	require.Equal(t, []float64{0}, vector.MustFixedColNoTypeCheck[float64](to.GetResultVector()))
 }
 
 func Test_CastToDecimal256(t *testing.T) {
@@ -3064,8 +3078,7 @@ func Test_strToSigned_Binary(t *testing.T) {
 			name:    "empty slice",
 			inputs:  [][]byte{{}},
 			bitSize: 64,
-			wantErr: true,
-			errMsg:  "invalid arg",
+			want:    []int64{0},
 		},
 		{
 			name:    "out of range length",
@@ -4378,14 +4391,10 @@ func TestCastJsonToBool(t *testing.T) {
 		{name: "malformed_decimal", value: newTypedByteJson(bytejson.TpCodeDecimal, "not-a-decimal")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			inputs := []FunctionTestInput{
-				NewFunctionTestInput(types.T_json.ToType(), []string{encodeJSONCastValue(t, tc.value)}, nil),
-				NewFunctionTestInput(types.T_bool.ToType(), []bool{}, nil),
-			}
-			expect := NewFunctionTestResult(types.T_bool.ToType(), true, nil, nil)
-			fcTC := NewFunctionTestCase(proc, inputs, expect, NewCast)
-			succeed, info := fcTC.Run()
-			require.True(t, succeed, "%s: %s", tc.name, info)
+			// Arbitrary malformed ByteJSON is rejected by vector admission. Keep
+			// the scalar cast's defensive error contract as a direct internal probe.
+			_, _, err := jsonScalarToBool(proc.Ctx, tc.value)
+			require.Error(t, err)
 		})
 	}
 }
@@ -4410,6 +4419,13 @@ func TestCastJsonToJsonOverloadResolution(t *testing.T) {
 	require.True(t, IfTypeCastSupported(types.T_json, types.T_json))
 
 	_, err := GetFunctionByName(context.Background(), "cast", []types.Type{types.T_json.ToType(), types.T_json.ToType()})
+	require.NoError(t, err)
+}
+
+func TestCastJsonToBlobOverloadResolution(t *testing.T) {
+	require.True(t, IfTypeCastSupported(types.T_json, types.T_blob))
+
+	_, err := GetFunctionByName(context.Background(), "cast", []types.Type{types.T_json.ToType(), types.T_blob.ToType()})
 	require.NoError(t, err)
 }
 
@@ -4607,26 +4623,54 @@ func TestBitToJSONRestoresDeclaredWidth(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestCastJsonToVarchar verifies that casting a JSON value to VARCHAR uses JSON_UNQUOTE semantics,
-// i.e. JSON strings lose their outer double-quotes (MySQL-compatible behavior).
+// TestCastJsonToVarchar distinguishes explicit JSON serialization from the
+// scalar text used by implicit casts, comparisons, and assignments.
 func TestCastJsonToVarchar(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
 	jsonTexts := []string{`"active"`, `42`, `true`, `null`, `[1,2,3]`, `{"k":"v"}`}
-	// After unquote: JSON strings lose outer quotes; other types keep their JSON text representation.
-	expected := []string{"active", "42", "true", "null", "[1, 2, 3]", `{"k": "v"}`}
 	nulls := []bool{false, false, false, false, false, false}
 	encoded := makeJSONEncodedFromText(t, jsonTexts, nulls)
 
 	toType := types.New(types.T_varchar, 256, 0)
-	inputs := []FunctionTestInput{
-		NewFunctionTestInput(types.T_json.ToType(), encoded, nulls),
-		NewFunctionTestInput(toType, []string{}, []bool{}),
+	cases := []struct {
+		name     string
+		cast     fEvalFn
+		expected []string
+	}{
+		{
+			name:     "explicit cast serializes JSON strings",
+			cast:     NewExplicitCast,
+			expected: []string{`"active"`, "42", "true", "null", "[1, 2, 3]", `{"k": "v"}`},
+		},
+		{
+			name:     "implicit cast exposes string payload",
+			cast:     NewCast,
+			expected: []string{"active", "42", "true", "null", "[1, 2, 3]", `{"k": "v"}`},
+		},
+		{
+			name:     "comparison cast exposes string payload",
+			cast:     NewComparisonCast,
+			expected: []string{"active", "42", "true", "null", "[1, 2, 3]", `{"k": "v"}`},
+		},
+		{
+			name:     "assignment cast exposes string payload",
+			cast:     NewAssignCast,
+			expected: []string{"active", "42", "true", "null", "[1, 2, 3]", `{"k": "v"}`},
+		},
 	}
-	expect := NewFunctionTestResult(toType, false, expected, nulls)
-	fcTC := NewFunctionTestCase(proc, inputs, expect, NewCast)
-	succeed, info := fcTC.Run()
-	require.True(t, succeed, info)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(types.T_json.ToType(), encoded, nulls),
+				NewFunctionTestInput(toType, []string{}, []bool{}),
+			}
+			expect := NewFunctionTestResult(toType, false, tc.expected, nulls)
+			fcTC := NewFunctionTestCase(proc, inputs, expect, tc.cast)
+			succeed, info := fcTC.Run()
+			require.True(t, succeed, info)
+		})
+	}
 }
 
 // emptySliceForCastTarget returns an empty slice of the right type for the second (target type) cast parameter.
@@ -5379,5 +5423,59 @@ func TestParseStringToFloatWithBitSize(t *testing.T) {
 			require.Error(t, err)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 		}
+	})
+}
+
+// #28917: arrayToArray must reject a value whose actual element count does not match the DECLARED
+// target dimension (to.Width) -- otherwise a wrong-dimension vector is copied verbatim under the
+// target label, forming a mixed-dimension column. An UNSIZED target (Width == MaxArrayDimension,
+// which an arithmetic result carries) declares no dimension and is left alone.
+func TestCastArrayDimensionMismatch(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	vecf32 := func(w int32) types.Type { return types.New(types.T_array_float32, w, 0) }
+	vecf64 := func(w int32) types.Type { return types.New(types.T_array_float64, w, 0) }
+
+	t.Run("vecf32(3)->vecf32(4) rejected", func(t *testing.T) {
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(vecf32(3), [][]float32{{1, 2, 3}}, []bool{false}),
+				NewFunctionTestInput(vecf32(4), [][]float32{}, []bool{}),
+			},
+			NewFunctionTestResult(vecf32(4), true, nil, nil), NewCast)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	})
+
+	t.Run("vecf32(3)->vecf64(4) rejected (element + dimension change)", func(t *testing.T) {
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(vecf32(3), [][]float32{{1, 2, 3}}, []bool{false}),
+				NewFunctionTestInput(vecf64(4), [][]float64{}, []bool{}),
+			},
+			NewFunctionTestResult(vecf64(4), true, nil, nil), NewCast)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	})
+
+	t.Run("vecf32(3)->vecf32(3) allowed (same declared dimension)", func(t *testing.T) {
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(vecf32(3), [][]float32{{1, 2, 3}}, []bool{false}),
+				NewFunctionTestInput(vecf32(3), [][]float32{}, []bool{}),
+			},
+			NewFunctionTestResult(vecf32(3), false, [][]float32{{1, 2, 3}}, []bool{false}), NewCast)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	})
+
+	t.Run("unsized target skips the dimension check", func(t *testing.T) {
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(vecf32(3), [][]float32{{1, 2, 3}}, []bool{false}),
+				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{}, []bool{}),
+			},
+			NewFunctionTestResult(types.T_array_float32.ToType(), false, [][]float32{{1, 2, 3}}, []bool{false}), NewCast)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
 	})
 }

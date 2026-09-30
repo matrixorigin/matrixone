@@ -53,14 +53,15 @@ import (
 )
 
 const (
-	tableDumpFormatVersion = 1
-	tableDumpManifestName  = "manifest.json"
-	tableDumpReadyName     = "READY"
-	tableDumpMaxManifest   = 64 << 20
-	tableDumpMaxRelations  = 4_096
-	tableDumpMaxObjects    = 250_000
-	tableDumpMaxBlocks     = 1_000_000
-	tableDumpMaxAutoIncr   = tableDumpMaxRelations * 16
+	tableDumpFormatVersion      = 1
+	tableDumpBoundFormatVersion = 2
+	tableDumpManifestName       = "manifest.json"
+	tableDumpReadyName          = "READY"
+	tableDumpMaxManifest        = 64 << 20
+	tableDumpMaxRelations       = 4_096
+	tableDumpMaxObjects         = 250_000
+	tableDumpMaxBlocks          = 1_000_000
+	tableDumpMaxAutoIncr        = tableDumpMaxRelations * 16
 
 	// Keep LOAD object installation separate from real catalog table locks.
 	// The high synthetic table ID follows the existing user-level-lock
@@ -69,13 +70,15 @@ const (
 )
 
 type tableDumpManifest struct {
-	Version        int                 `json:"version"`
-	SourceDatabase string              `json:"source_database"`
-	SourceTable    string              `json:"source_table"`
-	CreateSQL      string              `json:"create_sql,omitempty"`
-	SchemaHash     string              `json:"schema_hash"`
-	MetadataOnly   bool                `json:"metadata_only"`
-	Relations      []tableDumpRelation `json:"relations"`
+	Version          int                 `json:"version"`
+	SourceDatabase   string              `json:"source_database"`
+	SourceTable      string              `json:"source_table"`
+	CreateSQL        string              `json:"create_sql,omitempty"`
+	SchemaHash       string              `json:"schema_hash"`
+	BoundExpressions []byte              `json:"bound_expressions,omitempty"`
+	ExpressionHash   string              `json:"expression_hash,omitempty"`
+	MetadataOnly     bool                `json:"metadata_only"`
+	Relations        []tableDumpRelation `json:"relations"`
 }
 
 type tableDumpRelation struct {
@@ -84,6 +87,7 @@ type tableDumpRelation struct {
 	IndexAlgoTableType string              `json:"index_algo_table_type,omitempty"`
 	SourceTable        string              `json:"source_table"`
 	SchemaHash         string              `json:"schema_hash"`
+	LogicalSchemaHash  string              `json:"logical_schema_hash,omitempty"`
 	AutoIncrement      []tableDumpAutoIncr `json:"auto_increment,omitempty"`
 	Objects            []tableDumpObject   `json:"objects"`
 }
@@ -176,6 +180,13 @@ func tableDumpRelationKey(role, indexName, indexAlgoTableType string) string {
 	return role + "\x00" + indexName + "\x00" + indexAlgoTableType
 }
 
+func tableDumpRelationSchemaMatches(target, dump tableDumpRelation) bool {
+	if dump.LogicalSchemaHash != "" {
+		return target.LogicalSchemaHash == dump.LogicalSchemaHash
+	}
+	return target.SchemaHash == dump.SchemaHash
+}
+
 func tableDumpLegacyTinyTextResolver(
 	ses *Session,
 	defaultDB string,
@@ -236,6 +247,7 @@ func getTableDumpRelations(
 	refs := []tableDumpRelationRef{{
 		tableDumpRelation: tableDumpRelation{
 			Role: "main", SourceTable: master.GetTableName(), SchemaHash: masterHash,
+			LogicalSchemaHash: masterHash,
 		},
 		relation: master,
 	}}
@@ -251,7 +263,12 @@ func getTableDumpRelations(
 		if err != nil {
 			return nil, err
 		}
-		indexHash, err := tableSchemaHashWithResolver(ctx, indexRel.GetTableDef(ctx), resolve)
+		indexDef := indexRel.GetTableDef(ctx)
+		indexHash, err := tableSchemaHashWithResolver(ctx, indexDef, resolve)
+		if err != nil {
+			return nil, err
+		}
+		indexLogicalHash, err := tableLogicalSchemaHashWithResolver(ctx, indexDef, resolve)
 		if err != nil {
 			return nil, err
 		}
@@ -263,6 +280,7 @@ func getTableDumpRelations(
 				IndexAlgoTableType: index.IndexAlgoTableType,
 				SourceTable:        index.IndexTableName,
 				SchemaHash:         indexHash,
+				LogicalSchemaHash:  indexLogicalHash,
 			},
 			relation: indexRel,
 		})
@@ -279,6 +297,23 @@ func tableSchemaHashWithResolver(
 	def *plan.TableDef,
 	resolve sqlplan.LegacyTinyTextTableResolver,
 ) (string, error) {
+	return tableSchemaHashWithOptions(ctx, def, resolve, false)
+}
+
+func tableLogicalSchemaHashWithResolver(
+	ctx context.Context,
+	def *plan.TableDef,
+	resolve sqlplan.LegacyTinyTextTableResolver,
+) (string, error) {
+	return tableSchemaHashWithOptions(ctx, def, resolve, true)
+}
+
+func tableSchemaHashWithOptions(
+	ctx context.Context,
+	def *plan.TableDef,
+	resolve sqlplan.LegacyTinyTextTableResolver,
+	logicalIndexSchema bool,
+) (string, error) {
 	if def == nil {
 		return "", moerr.NewInternalErrorNoCtx("table definition is unavailable")
 	}
@@ -291,11 +326,18 @@ func tableSchemaHashWithResolver(
 	if err := sqlplan.RecoverLegacyTinyText(ctx, def, resolve); err != nil {
 		return "", moerr.NewInternalErrorNoCtxf("cannot normalize table schema: %v", err)
 	}
-	// LOAD recreates legacy bytewise text through the public utf8mb4_bin
-	// compatibility spelling. Normalize that identity before hashing so a dump
-	// from an old catalog compares equal to the schema produced by replaying the
-	// manifest DDL, without changing the engine-owned catalog definition.
-	if tableDumpHasLegacyTextMetadata(def) {
+	// LOAD can recreate internal index relations with equivalent columns but
+	// different catalog-only defaults and CREATE SQL provenance. Normalize those
+	// identities for the new index hash without changing the engine-owned catalog
+	// definition. Keep the legacy hash above for old manifest compatibility.
+	if logicalIndexSchema {
+		normalizeTableDumpIndexSchema(def)
+		// Programmatically created index relations can have no Createsql, while
+		// the same relations recreated from SHOW CREATE retain one. Use the
+		// structural fallback for both forms so that the presence of catalog DDL
+		// does not select two different hashing representations.
+		def.Createsql = ""
+	} else if tableDumpHasLegacyTextMetadata(def) {
 		normalizeTableDumpLegacyTextMetadata(def)
 	}
 	// For ordinary tables, reconstruct the DDL from the expanded TableDef. This
@@ -354,6 +396,29 @@ func tableSchemaHashWithResolver(
 	return hex.EncodeToString(sum[:]), nil
 }
 
+// Internal index relations cannot be altered directly, so their table-level
+// default charset does not affect stored objects. It is also not stable: an
+// index created with an implicit legacy default and the same index recreated
+// from SHOW CREATE can have identical column charsets but a different default.
+// Normalize that non-storage metadata while retaining each column's effective
+// charset, including binary containers used for packed index keys.
+func normalizeTableDumpIndexSchema(def *plan.TableDef) {
+	def.DefaultCharset = uint32(types.CharsetLegacy)
+	for i, col := range def.Cols {
+		if col == nil {
+			continue
+		}
+		switch types.T(col.Typ.Id) {
+		case types.T_char, types.T_varchar, types.T_text:
+			if col.Typ.Charset == uint32(types.CharsetLegacy) {
+				cloned := *col
+				cloned.Typ.Charset = uint32(types.CharsetUTF8MB4Bin)
+				def.Cols[i] = &cloned
+			}
+		}
+	}
+}
+
 func canReconstructTableSchema(def *plan.TableDef) bool {
 	if def == nil || def.TableType == catalog.SystemClusterRel ||
 		def.TableType == catalog.SystemExternalRel || def.Partition != nil ||
@@ -377,7 +442,8 @@ func tableDumpManifestCreateSQL(
 		return "", moerr.NewInternalErrorNoCtx("table definition is unavailable")
 	}
 	needsLegacyCollationRebuild := tableDumpHasLegacyTextMetadata(def)
-	if (!sqlplan.LegacyTinyTextCreateSQLNeedsRebuild(def) && !needsLegacyCollationRebuild) ||
+	needsLegacyBlobRebuild := tableDumpHasLegacyUnboundedBlob(def)
+	if (!sqlplan.LegacyTinyTextCreateSQLNeedsRebuild(def) && !needsLegacyCollationRebuild && !needsLegacyBlobRebuild) ||
 		!canReconstructTableSchema(def) {
 		return def.Createsql, nil
 	}
@@ -399,6 +465,15 @@ func tableDumpManifestCreateSQL(
 		return "", moerr.NewInternalErrorNoCtxf("cannot reconstruct table schema: %v", err)
 	}
 	return canonical, nil
+}
+
+func tableDumpHasLegacyUnboundedBlob(def *plan.TableDef) bool {
+	for _, col := range def.Cols {
+		if col != nil && types.T(col.Typ.Id) == types.T_blob && col.Typ.Width == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func tableDumpHasLegacyTextMetadata(def *plan.TableDef) bool {
@@ -770,13 +845,20 @@ func readTableDumpManifest(ctx context.Context, fs fileservice.FileService) (*ta
 	if err != nil {
 		return nil, moerr.NewInvalidInputNoCtxf("invalid table dump manifest: %v", err)
 	}
-	if manifest.Version != tableDumpFormatVersion {
+	if manifest.Version != tableDumpFormatVersion && manifest.Version != tableDumpBoundFormatVersion {
 		return nil, moerr.NewInvalidInputNoCtxf("unsupported table dump format version %d", manifest.Version)
+	}
+	if manifest.Version == tableDumpBoundFormatVersion &&
+		(len(manifest.BoundExpressions) == 0 || manifest.ExpressionHash == "") {
+		return nil, moerr.NewInvalidInputNoCtx("table dump is missing bound expression metadata")
 	}
 	return manifest, nil
 }
 
 func decodeTableDumpManifest(data []byte) (*tableDumpManifest, error) {
+	if err := rejectDuplicateTableDumpFields(data); err != nil {
+		return nil, err
+	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	start, err := decoder.Token()
 	if err != nil {
@@ -806,6 +888,10 @@ func decodeTableDumpManifest(data []byte) (*tableDumpManifest, error) {
 			err = decoder.Decode(&manifest.CreateSQL)
 		case "schema_hash":
 			err = decoder.Decode(&manifest.SchemaHash)
+		case "bound_expressions":
+			err = decoder.Decode(&manifest.BoundExpressions)
+		case "expression_hash":
+			err = decoder.Decode(&manifest.ExpressionHash)
 		case "metadata_only":
 			err = decoder.Decode(&manifest.MetadataOnly)
 		case "relations":
@@ -832,6 +918,57 @@ func decodeTableDumpManifest(data []byte) (*tableDumpManifest, error) {
 		return nil, err
 	}
 	return manifest, nil
+}
+
+// encoding/json accepts duplicate object keys and silently keeps the last
+// value. A dump is an untrusted restore instruction, so reject ambiguous
+// metadata at every nesting level before interpreting it.
+func rejectDuplicateTableDumpFields(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	type frame struct {
+		object    bool
+		fieldName bool
+		seen      map[string]struct{}
+	}
+	var stack []frame
+	for {
+		token, err := decoder.Token()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if delimiter, ok := token.(json.Delim); ok && (delimiter == '}' || delimiter == ']') {
+			if len(stack) == 0 {
+				return moerr.NewInvalidInputNoCtx("invalid table dump JSON")
+			}
+			stack = stack[:len(stack)-1]
+			continue
+		}
+		if len(stack) != 0 && stack[len(stack)-1].object && stack[len(stack)-1].fieldName {
+			name, ok := token.(string)
+			if !ok {
+				return moerr.NewInvalidInputNoCtx("invalid table dump field name")
+			}
+			current := &stack[len(stack)-1]
+			if _, exists := current.seen[name]; exists {
+				return moerr.NewInvalidInputNoCtxf("duplicate table dump field %s", name)
+			}
+			current.seen[name] = struct{}{}
+			current.fieldName = false
+			continue
+		}
+		if len(stack) != 0 && stack[len(stack)-1].object {
+			stack[len(stack)-1].fieldName = true
+		}
+		if delimiter, ok := token.(json.Delim); ok && (delimiter == '{' || delimiter == '[') {
+			if len(stack) >= 64 {
+				return moerr.NewInvalidInputNoCtx("table dump JSON nesting exceeds limit")
+			}
+			stack = append(stack, frame{object: delimiter == '{', fieldName: delimiter == '{', seen: make(map[string]struct{})})
+		}
+	}
 }
 
 func decodeTableDumpRelations(
@@ -899,6 +1036,8 @@ func decodeTableDumpRelation(
 			err = decoder.Decode(&relation.SourceTable)
 		case "schema_hash":
 			err = decoder.Decode(&relation.SchemaHash)
+		case "logical_schema_hash":
+			err = decoder.Decode(&relation.LogicalSchemaHash)
 		case "auto_increment":
 			relation.AutoIncrement, err = decodeTableDumpAutoIncrement(decoder, autoIncrCount)
 		case "objects":
@@ -1124,6 +1263,20 @@ func handleDumpTable(ctx context.Context, ses *Session, stmt *tree.DumpTable) er
 		Version: tableDumpFormatVersion, SourceDatabase: dbName, SourceTable: tableName,
 		CreateSQL: manifestCreateSQL, SchemaHash: refs[0].SchemaHash, MetadataOnly: stmt.MetadataOnly,
 		Relations: make([]tableDumpRelation, 0, len(refs)),
+	}
+	if tableDumpMayDependOnDivision(def) {
+		var sensitive bool
+		sensitive, err = sqlplan.AnalyzeTableDumpBindings(ses.GetTxnCompileCtx(), def, def)
+		if err != nil {
+			return err
+		}
+		if sensitive {
+			manifest.Version = tableDumpBoundFormatVersion
+			manifest.BoundExpressions, manifest.ExpressionHash, err = tableDumpBoundExpressions(def)
+			if err != nil {
+				return err
+			}
+		}
 	}
 	dumpFS, closeDumpFS, err := openTableDumpFS(ctx, ses, stmt.Path)
 	if err != nil {
@@ -1437,7 +1590,7 @@ func applyTableDumpAutoIncrementRestore(
 	resetInstalled = true
 	for _, restore := range restores {
 		if err = proc.GetIncrService().SetOffset(
-			ctx,
+			incrservice.WithAutoIDCachePolicy(ctx, def.TblId, def.AutoIdCache),
 			tableID,
 			restore.column.ColIndex,
 			restore.column.ColName,
@@ -1538,6 +1691,28 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 	if targetRefs[0].SchemaHash != manifest.SchemaHash {
 		return moerr.NewInvalidInputNoCtx("target table schema does not match table dump")
 	}
+	var restoredDef *plan.TableDef
+	var restoreExpressions bool
+	if manifest.Version == tableDumpBoundFormatVersion {
+		restoredDef, restoreExpressions, err = tableDumpRestoredExpressions(
+			targetDef, manifest.BoundExpressions, manifest.ExpressionHash)
+		if err != nil {
+			return err
+		}
+		if _, err = sqlplan.AnalyzeTableDumpBindings(ses.GetTxnCompileCtx(), targetDef, restoredDef); err != nil {
+			return err
+		}
+	} else if tableDumpMayDependOnDivision(targetDef) {
+		var sensitive bool
+		sensitive, err = sqlplan.AnalyzeTableDumpBindings(ses.GetTxnCompileCtx(), targetDef, nil)
+		if err != nil {
+			return err
+		}
+		if sensitive {
+			return moerr.NewInvalidInputNoCtx(
+				"legacy table dump cannot verify persisted division bindings; create a new dump")
+		}
+	}
 	if len(targetRefs) != len(manifest.Relations) {
 		return moerr.NewInvalidInputNoCtx("target table index topology does not match table dump")
 	}
@@ -1587,7 +1762,6 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 			return moerr.NewNotSupportedNoCtx("LOAD TABLE installing objects with this transaction workspace")
 		}
 	}
-	sharedObjects := make([]string, 0)
 	seenRelations := make(map[string]struct{}, len(manifest.Relations))
 	seenObjects := make(map[string]struct{})
 	var totalBlocks uint64
@@ -1598,7 +1772,7 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 		}
 		seenRelations[key] = struct{}{}
 		targetRef, ok := targetByKey[key]
-		if !ok || targetRef.SchemaHash != relationDump.SchemaHash {
+		if !ok || !tableDumpRelationSchemaMatches(targetRef.tableDumpRelation, relationDump) {
 			return moerr.NewInvalidInputNoCtx("target table index topology does not match table dump")
 		}
 		existingRows, err := targetRef.relation.Rows(ctx)
@@ -1636,6 +1810,27 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 					return moerr.NewInvalidInputNoCtxf("metadata-only object %s is not present in target storage", item.Name)
 				}
 			}
+		}
+	}
+	if restoreExpressions {
+		if err = sqlplan.RequirePersistedExpressionProtocol(ctx, ses.GetProc(), restoredDef); err != nil {
+			return err
+		}
+		creator, owner, createdTime, ownerErr := tableDumpTargetOwnership(ctx, ses, targetDef.TblId)
+		if ownerErr != nil {
+			return ownerErr
+		}
+		if err = rel.AlterTable(ctx, nil, []*api.AlterTableReq{
+			api.NewGuardedReplaceDefReq(
+				targetDef.DbId, targetDef.TblId, targetDef.Version,
+				creator, owner, createdTime, restoredDef),
+		}); err != nil {
+			return err
+		}
+	}
+	sharedObjects := make([]string, 0)
+	for _, relationDump := range manifest.Relations {
+		for _, item := range relationDump.Objects {
 			// Object creation has no cross-CN ownership token. Protect every
 			// installed or reused name from transaction rollback and let the
 			// reference-aware object GC reclaim files left by a failed LOAD.

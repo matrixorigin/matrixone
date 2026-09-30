@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -361,9 +362,9 @@ func testAccountedTopSmallVarlenSpillRejectionCleans(t *testing.T, ordered bool)
 	require.NoError(t, op.Prepare(proc))
 	require.False(t, op.ctr.spilling)
 	_, err = vm.Exec(op, proc)
-	var resourceErr *process.ExecutionResourceError
-	require.ErrorAs(t, err, &resourceErr)
-	require.Equal(t, process.ExecutionResourceComponentSpillDisk, resourceErr.Component)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOOM), err)
+	require.Contains(t, err.Error(), "top spill disk budget exceeded")
+	require.NotContains(t, err.Error(), process.ErrExecutionResourceAdmission.Error())
 	child.Free(proc, true, err)
 	op.Free(proc, true, err)
 	blocker.Release()
@@ -374,13 +375,13 @@ func testAccountedTopSmallVarlenSpillRejectionCleans(t *testing.T, ordered bool)
 
 func TestAccountedTopSpillResourceAdmissionCleans(t *testing.T) {
 	tests := []struct {
-		name      string
-		component process.ExecutionResourceComponent
-		reserve   func(*process.ExecutionResourceGeneration) (func(), error)
+		name    string
+		message string
+		reserve func(*process.ExecutionResourceGeneration) (func(), error)
 	}{
 		{
-			name:      "disk",
-			component: process.ExecutionResourceComponentSpillDisk,
+			name:    "disk",
+			message: "top spill disk budget exceeded",
 			reserve: func(g *process.ExecutionResourceGeneration) (func(), error) {
 				token, err := g.ReserveSpillDisk(g.SpillDiskCap())
 				return func() {
@@ -391,8 +392,8 @@ func TestAccountedTopSpillResourceAdmissionCleans(t *testing.T) {
 			},
 		},
 		{
-			name:      "file-descriptor",
-			component: process.ExecutionResourceComponentSpillFD,
+			name:    "file-descriptor",
+			message: "top spill file descriptor budget exceeded",
 			reserve: func(g *process.ExecutionResourceGeneration) (func(), error) {
 				token, err := g.ReserveSpillFD(g.SpillFDCap())
 				return func() {
@@ -422,9 +423,9 @@ func TestAccountedTopSpillResourceAdmissionCleans(t *testing.T) {
 			op.AppendChild(child)
 			require.NoError(t, op.Prepare(proc))
 			_, err = vm.Exec(op, proc)
-			var resourceErr *process.ExecutionResourceError
-			require.ErrorAs(t, err, &resourceErr)
-			require.Equal(t, test.component, resourceErr.Component)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOOM), err)
+			require.Contains(t, err.Error(), test.message)
+			require.NotContains(t, err.Error(), process.ErrExecutionResourceAdmission.Error())
 
 			child.Free(proc, true, err)
 			op.Free(proc, true, err)

@@ -134,6 +134,12 @@ func (c *Compile) Compile(
 	execTopContext context.Context,
 	queryPlan *plan.Plan,
 	resultWriteBack func(batch *batch.Batch, crs *perfcounter.CounterSet) error) (err error) {
+	if err = validateOctStringProtocol(c.proc, queryPlan); err != nil {
+		return err
+	}
+	if err = validateHexMySQLNumericProtocol(c.proc, queryPlan); err != nil {
+		return err
+	}
 	c.proc.BeginFoundRowsStatement(statementHasSQLCalcFoundRows(c.stmt))
 	c.beginSchedulingTraceAttempt()
 
@@ -154,6 +160,7 @@ func (c *Compile) Compile(
 	// statistical information record and trace.
 	compileStart := time.Now()
 	hasUnresolvedFullTextPlan := false
+	hasUnresolvedIndexHintPlan := false
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Compile")
 	defer func() {
 		if e := recover(); e != nil {
@@ -191,6 +198,8 @@ func (c *Compile) Compile(
 			switch qry.Query.StmtType {
 			case plan.Query_SELECT:
 				c.needLockMeta, hasUnresolvedFullTextPlan = selectMetaLockRequirement(qry.Query)
+				hasUnresolvedIndexHintPlan = len(qry.Query.GetUnresolvedIndexHints()) > 0
+				c.needLockMeta = c.needLockMeta || hasUnresolvedIndexHintPlan
 			case plan.Query_INSERT:
 				markInsertTableScansNotLockMeta(qry.Query)
 				c.needLockMeta = true
@@ -237,11 +246,24 @@ func (c *Compile) Compile(
 	if c.scopes, err = c.compileScope(queryPlan); err != nil {
 		return err
 	}
+	if c.groupConcatMaxLenFloor != 0 {
+		if err = refreshGroupConcatMaxLen(c.scopes, c.proc, c.groupConcatMaxLenFloor); err != nil {
+			return err
+		}
+	}
 	if hasUnresolvedFullTextPlan {
 		// Inert unless the cross-CN visibility test pauses a stale plan before
 		// its pre-pipeline metadata lock validates the catalog generation.
 		fault.TriggerFaultWithContext(c.proc.Ctx, unresolvedFullTextPlanCompiledFault)
 	}
+	if hasUnresolvedIndexHintPlan {
+		// This marker is inert outside the deterministic cross-CN regression test.
+		// The preceding metadata lock either requests a definition retry or leaves
+		// unresolvedIndexHintError to return the original MySQL error.
+		c.appendUnresolvedIndexHintMetaTables(queryPlan.GetQuery())
+		fault.TriggerFaultWithContext(c.proc.Ctx, unresolvedIndexHintPlanCompiledFault)
+	}
+	triggerStatementPlanCompiledFault(c.proc.Ctx, queryPlan)
 	// todo: this is redundant.
 	for _, s := range c.scopes {
 		if len(s.NodeInfo.Addr) == 0 {
@@ -253,6 +275,23 @@ func (c *Compile) Compile(
 }
 
 const unresolvedFullTextPlanCompiledFault = "unresolved-fulltext-plan-compiled"
+
+const unresolvedIndexHintPlanCompiledFault = "unresolved-index-hint-plan-compiled"
+
+const createIndexPlanCompiledFault = "create-index-plan-compiled"
+
+// triggerStatementPlanCompiledFault exposes a deterministic boundary between
+// planning and pre-pipeline locking for cross-CN schema-change tests. Fault
+// injection is disabled in production, so ordinary compilation pays only the
+// enabled-state check.
+func triggerStatementPlanCompiledFault(ctx context.Context, queryPlan *plan.Plan) {
+	if !fault.Status() || queryPlan == nil {
+		return
+	}
+	if queryPlan.GetDdl().GetCreateIndex() != nil {
+		fault.TriggerFaultWithContext(ctx, createIndexPlanCompiledFault)
+	}
+}
 
 // selectMetaLockRequirement reports whether a SELECT must validate its table
 // definitions against mo_tables before execution. An unresolved fulltext
@@ -377,6 +416,30 @@ func expressionsContainUnresolvedFullText(expressions []*plan.Expr) bool {
 
 // Run executes the pipeline and returns the result.
 func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
+	if c.pn.GetDdl().GetDropTable() != nil {
+		// Retry generations share this statement owner. Other statements do
+		// not need a temporary DROP retirement journal.
+		c.temporaryDropRetryStage = &temporaryDropRetireStage{}
+		c.temporaryDropRetryActive = true
+		defer c.finishTemporaryDropRetry()
+	}
+	promoteGroupConcatCut, err := c.strictWriteGroupConcatPromotionEnabled()
+	if err != nil {
+		return nil, err
+	}
+	warningDestination := c.proc.GetWarningSink()
+	warnings := newWarningAttempt(c.proc, promoteGroupConcatCut)
+	warnings.bindScopes(c.scopes)
+	warningsSucceeded := false
+	defer func() { warnings.finish(warningsSucceeded, warningDestination) }()
+
+	// Cached plans can outlive the negotiated cluster capability.
+	if err = validateOctStringProtocol(c.proc, c.pn); err != nil {
+		return nil, err
+	}
+	if err = validateHexMySQLNumericProtocol(c.proc, c.pn); err != nil {
+		return nil, err
+	}
 	var txnOperator = c.proc.GetTxnOperator()
 
 	// init context for pipeline.
@@ -418,6 +481,8 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	defer func() {
 		// if a rerun occurs, it differs from the original c, so we need to release it.
 		if runC != c {
+			// Detach before pooled retry processes can be reused.
+			warnings.restore()
 			runC.Release()
 		}
 	}()
@@ -477,6 +542,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	v2.TxnStatementTotalCounter.Inc()
 	if c.siriusRead != nil {
 		err = c.runSiriusRead(execTopContext)
+		warningsSucceeded = err == nil
 		return queryResult, err
 	}
 	attemptStart := time.Now()
@@ -618,6 +684,8 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 			return nil, err
 		}
 
+		// Seal before cancellation: a late terminal RPC must not leak diagnostics.
+		warnings.discard()
 		c.fatalLog(retryTimes, err)
 		if !c.canRetry(err) {
 			// runOnce may return after a local or coordinator branch fails while a
@@ -709,6 +777,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 			attemptScopes, attemptAnal, c.addr, true,
 		)
 		attemptOpen = false
+		warnings.finish(false, nil)
 		if runC != c {
 			releaseRetryCompile(runC)
 		}
@@ -728,6 +797,8 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		stats.ResetRetryAttemptResource()
 		resetStatsInfoPreRun(stats, isInExecutor)
 
+		// Retry compilation can itself emit expression diagnostics.
+		warnings = newWarningAttempt(c.proc, promoteGroupConcatCut)
 		nextRunC, buildErr := c.buildRetryCompile(defChanged || forcePreMode)
 		carriedPreRunWall = time.Since(attemptStart)
 		attemptPreRunWall = carriedPreRunWall
@@ -741,6 +812,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 			return nil, err
 		}
 		runC = nextRunC
+		warnings.bindScopes(runC.scopes)
 		runC.executionGeneration = c.executionGeneration
 		attemptScopes = runC.scopes
 		attemptAnal = runC.anal
@@ -758,6 +830,13 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		attemptPreRunWall = carriedPreRunWall
 		coordinatorPhaseStart = time.Time{}
 		coordinatorPhaseBase = 0
+	}
+	if promotionErr := c.strictWriteGroupConcatCutError(
+		warnings, promoteGroupConcatCut); promotionErr != nil {
+		err = joinAllocationLifecycleErrors(promotionErr, finishAllocationAttempt())
+		err = abortSinkAttempt(err)
+		finishCurrentAttempt(false)
+		return nil, err
 	}
 	queryResult.AffectRows = runC.getAffectedRows()
 	if c.uid != "mo_logger" &&
@@ -799,7 +878,6 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		}
 		sinkAttemptOpen = false
 	}
-
 	resourceRecorder.finishAttempt(
 		uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
 		attemptScopes, attemptAnal, c.addr, false,
@@ -815,7 +893,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	if isExplainPhyPlan {
 		c.refreshExplainPhyPlanBuffer(runC, queryResult, option)
 	}
-
+	warningsSucceeded = err == nil
 	return queryResult, err
 }
 
@@ -1107,6 +1185,11 @@ func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 
 	var e error
 	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
+	runC.temporaryDropRetryStage = c.temporaryDropRetryStage
+	runC.temporaryDropRetryActive = c.temporaryDropRetryActive
+	runC.preparedJoinDiagnosticFree = c.preparedJoinDiagnosticFree
+	runC.groupConcatMaxLenFloor = c.groupConcatMaxLenFloor
+	runC.SetPreparedParamValues(c.preparedParamValues)
 	runC.inheritTemporaryDDLPolicy(c)
 	runC.inheritLoadUniqueIndexPromotion(c)
 	c.bindRetryPlanGeneration(runC, rebuildPlan)
@@ -1128,12 +1211,19 @@ func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 	}()
 	planForRetry := c.pn
 	if rebuildPlan {
+		runC.preparedJoinDiagnosticFree = false
 		planForRetry, e = c.buildPlanFunc(topContext)
 		if e != nil {
 			return nil, e
 		}
 		if e = c.validateRetryResultMetadata(topContext, planForRetry); e != nil {
 			return nil, e
+		}
+		if c.preparedJoinDiagnosticFree {
+			runC.preparedJoinDiagnosticFree, e = plan2.ProbePreparedJoinParameterDiagnostics(c.proc, planForRetry)
+			if e != nil {
+				return nil, e
+			}
 		}
 	}
 	if e = runC.Compile(topContext, planForRetry, c.fill); e != nil {
@@ -1144,6 +1234,7 @@ func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 		// after physical compilation succeeds. A subsequent ordinary retry must
 		// inherit this generation rather than the one that first hit the fence.
 		c.pn = planForRetry
+		c.preparedJoinDiagnosticFree = runC.preparedJoinDiagnosticFree
 		c.inheritPlanSnapshot(runC)
 		// Update c.anal.qry to point to the new plan's Query. This ensures
 		// fillPlanNodeAnalyzeInfo uses the correct nodes.

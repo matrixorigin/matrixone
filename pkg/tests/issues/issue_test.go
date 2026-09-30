@@ -19,7 +19,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"math/rand"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -44,6 +43,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -69,7 +70,18 @@ func TestIssue23861FulltextSnapshotRestore(t *testing.T) {
 			snapshotName1 := fmt.Sprintf("snap_23861_a_%d", time.Now().UnixNano())
 			snapshotName2 := fmt.Sprintf("snap_23861_b_%d", time.Now().UnixNano())
 
-			defer execSQLMaybe(t, ctx, sqlDB, fmt.Sprintf("drop database if exists `%s`", dbName))
+			defer func() {
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+				defer cleanupCancel()
+				for _, statement := range []string{
+					"drop snapshot if exists " + snapshotName1,
+					"drop snapshot if exists " + snapshotName2,
+					fmt.Sprintf("drop database if exists `%s`", dbName),
+				} {
+					_, err := sqlDB.ExecContext(cleanupCtx, statement)
+					assert.NoError(t, err, statement)
+				}
+			}()
 
 			execSQLRequire(t, ctx, sqlDB, fmt.Sprintf("drop database if exists `%s`", dbName))
 			execSQLRequire(t, ctx, sqlDB, fmt.Sprintf("create database `%s`", dbName))
@@ -190,9 +202,6 @@ func execSQLMaybe(t *testing.T, ctx context.Context, db *sql.DB, statement strin
 func TestWWConflict(t *testing.T) {
 	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-			defer cancel()
-
 			cn1, err := c.GetCNService(0)
 			require.NoError(t, err)
 
@@ -200,6 +209,7 @@ func TestWWConflict(t *testing.T) {
 			require.NoError(t, err)
 
 			db := testutils.GetDatabaseName(t)
+			defer cleanDatabase(t, context.Background(), cn1.RawService().(cnservice.Service), db)
 			table := "t"
 
 			testutils.CreateTableAndWaitCNApplied(
@@ -217,6 +227,12 @@ func TestWWConflict(t *testing.T) {
 				cn1,
 				"insert into "+table+" values (1, 1)",
 			)
+
+			// The timeout guards only the concurrent transaction workflow. Starting
+			// it before shared-cluster fixture setup can consume the whole deadline
+			// under race/CI load and leave the channel choreography waiting forever.
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
 
 			// workflow:
 			// cn1: txn1 update t
@@ -268,7 +284,10 @@ func TestWWConflict(t *testing.T) {
 								close(txn2StartedC)
 
 								// wait txn2 update committed
-								<-txn2CommittedC
+								select {
+								case <-txn2CommittedC:
+								case <-ctx.Done():
+								}
 							},
 						)
 
@@ -323,7 +342,11 @@ func TestWWConflict(t *testing.T) {
 					wg.Done()
 				}()
 
-				<-txn2StartedC
+				select {
+				case <-txn2StartedC:
+				case <-ctx.Done():
+					return
+				}
 				exec := testutils.GetSQLExecutor(cn2)
 
 				res, err := exec.Exec(
@@ -350,102 +373,92 @@ func cleanDatabase(
 	exec := cn.GetSQLExecutor()
 	require.NotNil(t, exec)
 
-	exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
-		eng := cn.GetEngine()
-		require.NoError(t, eng.Delete(ctx, dbName, txn.Txn()))
-		return nil
-	}, executor.Options{})
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	result, err := exec.Exec(ctx, fmt.Sprintf("drop database if exists `%s`", dbName), executor.Options{})
+	defer result.Close()
+	require.NoError(t, err)
 }
 
-// #18754
+// #18754: a cluster-by object is sorted by a, not by its hidden primary key.
 func TestBinarySearchBlkDataOnUnSortedFakePKCol(t *testing.T) {
-	embed.RunBaseClusterTests(t,
-		func(c embed.Cluster) {
-			cn, err := c.GetCNService(0)
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		sqlExecutor := testutils.GetSQLExecutor(cn)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(0))
+		const dbName = "testdb"
+		defer cleanDatabase(t, ctx, cn.RawService().(cnservice.Service), dbName)
+		exec := func(statement string, opts executor.Options) {
+			result, err := sqlExecutor.Exec(ctx, statement, opts)
+			defer result.Close()
 			require.NoError(t, err)
-
-			sqlExecutor := testutils.GetSQLExecutor(cn)
-			require.NotNil(t, sqlExecutor)
-
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-			defer cancel()
-
-			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(0))
-
-			_, err = sqlExecutor.Exec(ctx, "create database testdb;", executor.Options{})
-			require.NoError(t, err)
-			defer func() {
-				cleanDatabase(t, ctx, cn.RawService().(cnservice.Service), "testdb")
-			}()
-
-			_, err = sqlExecutor.Exec(ctx,
-				"create table hhh(a int) cluster by(`a`);",
-				executor.Options{}.WithDatabase("testdb"))
-			require.NoError(t, err)
-
-			willInsertRows := 50
-			for i := 0; i < 5; i++ {
-				_, err = sqlExecutor.Exec(ctx,
-					fmt.Sprintf(
-						"insert into hhh "+
-							"select FLOOR(RAND()*1000*1000)"+
-							"from generate_series(1, %d);", willInsertRows/5),
-					executor.Options{}.WithDatabase("testdb"))
-				require.NoError(t, err)
-
-				_, err = sqlExecutor.Exec(ctx,
-					"select mo_ctl('dn', 'flush', 'testdb.hhh');",
-					executor.Options{}.WithWaitCommittedLogApplied())
-				require.NoError(t, err)
-			}
-
-			res, err := sqlExecutor.Exec(ctx,
-				"select count(*) from hhh",
-				executor.Options{}.WithDatabase("testdb"))
-			require.NoError(t, err)
-
-			n := int64(0)
-			res.ReadRows(
-				func(rows int, cols []*vector.Vector) bool {
-					n = executor.GetFixedRows[int64](cols[0])[0]
-					return true
-				},
-			)
-			require.Equal(t, int64(willInsertRows), n)
-
-			eng := cn.RawService().(cnservice.Service).GetEngine()
-			require.NotNil(t, eng)
-
-			sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
-				op := txn.Txn()
-				db, err := eng.Database(ctx, "testdb", op)
-				require.NoError(t, err)
-				proc := op.GetWorkspace().(*disttae.Transaction).GetProc()
-				rel, err := db.Relation(ctx, "hhh", proc)
-				require.NoError(t, err)
-
-				var keys []int64
-				for r := 0; r < 5; r++ {
-					keys = keys[:0]
-					for i := 0; i < willInsertRows; i++ {
-						keys = append(keys, rand.Int63()%int64(willInsertRows))
-					}
-
-					vec := vector.NewVec(types.T_int64.ToType())
-					for i := 0; i < len(keys); i++ {
-						vector.AppendFixed[int64](vec, keys[i], false, proc.GetMPool())
-					}
-
-					bat := batch.NewWithSize(1)
-					bat.SetVector(0, vec)
-					rel.PrimaryKeysMayBeModified(ctx, types.TS{}, types.MaxTs(), bat, 0, -1)
-
-					vec.Free(proc.GetMPool())
-				}
-
-				return nil
-			}, executor.Options{})
+		}
+		exec("create database "+dbName, executor.Options{})
+		opts := executor.Options{}.WithDatabase(dbName).WithWaitCommittedLogApplied()
+		exec("create table hhh(a int) cluster by(a)", opts)
+		exec("insert into hhh values (30),(10),(20)", opts)
+		exec("select mo_ctl('dn','flush','testdb.hhh')", opts)
+		result, err := sqlExecutor.Exec(ctx, "select a, __mo_fake_pk_col from hhh order by a", opts)
+		defer result.Close()
+		require.NoError(t, err)
+		var values []int32
+		var keys []uint64
+		result.ReadRows(func(_ int, cols []*vector.Vector) bool {
+			values = append(values, executor.GetFixedRows[int32](cols[0])...)
+			keys = append(keys, executor.GetFixedRows[uint64](cols[1])...)
+			return true
 		})
+		require.Equal(t, []int32{10, 20, 30}, values)
+		require.Len(t, keys, 3)
+		require.Greater(t, keys[0], keys[2])
+		require.Greater(t, keys[1], keys[2])
+		require.Positive(t, keys[2])
+
+		eng := cn.RawService().(cnservice.Service).GetEngine().(*disttae.Engine)
+		require.NoError(t, sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+			op := txn.Txn()
+			db, err := eng.Database(ctx, dbName, op)
+			if err != nil {
+				return err
+			}
+			proc := op.GetWorkspace().(*disttae.Transaction).GetProc()
+			rel, err := db.Relation(ctx, "hhh", proc)
+			if err != nil {
+				return err
+			}
+			from, to := types.TS{}, types.TimestampToTS(op.SnapshotTS())
+			state := eng.GetOrCreateLatestPart(ctx, 0, rel.GetDBID(ctx), rel.GetTableID(ctx)).Snapshot()
+			require.True(t, state.CanServe(to))
+			packer := types.NewPacker()
+			defer packer.Close()
+			for _, tc := range []struct {
+				name string
+				key  uint64
+				want bool
+			}{
+				// Binary search on [keys[0], keys[1], keys[2]] misses this
+				// smallest key at the end of the cluster-by sorted object.
+				{"persisted match", keys[2], true},
+				{"absent key", keys[2] - 1, false},
+			} {
+				bat := batch.NewWithSize(1)
+				vec := vector.NewVec(types.T_uint64.ToType())
+				bat.SetVector(0, vec)
+				defer bat.Clean(proc.GetMPool())
+				require.NoError(t, vector.AppendFixed(vec, tc.key, false, proc.GetMPool()))
+				exists, flushed := state.PKExistInMemBetween(from, to, readutil.EncodePrimaryKeyVector(vec, packer))
+				require.False(t, exists, tc.name)
+				require.True(t, flushed, tc.name)
+				changed, err := rel.PrimaryKeysMayBeModified(ctx, from, to, bat, 0, -1)
+				require.NoError(t, err, tc.name)
+				require.Equal(t, tc.want, changed, tc.name)
+			}
+			return nil
+		}, executor.Options{}))
+	})
 }
 
 func TestCNFlushS3Deletes(t *testing.T) {
@@ -486,6 +499,7 @@ func TestCNFlushS3Deletes(t *testing.T) {
 
 				resp, err := exec.Exec(ctx, "select count(1) from t1;",
 					executor.Options{}.WithDatabase("a"))
+				defer resp.Close()
 				require.NoError(t, err)
 
 				resp.ReadRows(func(rows int, cols []*vector.Vector) bool {
@@ -503,6 +517,7 @@ func TestCNFlushS3Deletes(t *testing.T) {
 				require.NoError(t, err)
 
 				resp, err := exec.Exec(ctx, "select count(1) from t1;", executor.Options{}.WithDatabase("a"))
+				defer resp.Close()
 				require.NoError(t, err)
 
 				resp.ReadRows(func(rows int, cols []*vector.Vector) bool {
@@ -512,6 +527,7 @@ func TestCNFlushS3Deletes(t *testing.T) {
 				})
 
 				resp, err = exec.Exec(ctx, "select * from t1 where a = 1;", executor.Options{}.WithDatabase("a"))
+				defer resp.Close()
 				require.NoError(t, err)
 
 				require.Equal(t, int(1), len(resp.Batches))
@@ -554,6 +570,7 @@ func TestDedupForAutoPk(t *testing.T) {
 			require.NoError(t, err)
 
 			db := testutils.GetDatabaseName(t)
+			defer cleanDatabase(t, ctx, cn1.RawService().(cnservice.Service), db)
 			table := "t"
 
 			testutils.CreateTableAndWaitCNApplied(
@@ -612,23 +629,19 @@ func TestDedupForAutoPk(t *testing.T) {
 			exec := testutils.GetSQLExecutor(cn1)
 			res, err := exec.Exec(
 				ctx,
-				"select id from t;",
+				"select count(*), count(distinct id), count(case when id2=1 then 1 end), "+
+					"count(case when id2=2 then 1 end), count(case when id=3 and id2 is null then 1 end) from t;",
 				executor.Options{}.
 					WithDatabase(db).
 					WithWaitCommittedLogApplied(),
 			)
+			defer res.Close()
 			require.NoError(t, err)
-
-			res.ReadRows(
-				func(rows int, cols []*vector.Vector) bool {
-					for i := 0; i < rows; i++ {
-						n := executor.GetFixedRows[int32](cols[0])[i]
-						t.Logf("the value of rows %d is %d", i, n)
-					}
-					return true
-				},
-			)
-			res.Close()
+			require.Len(t, res.Batches, 1)
+			require.Equal(t, 1, res.Batches[0].RowCount())
+			for column, want := range []int64{5, 5, 2, 2, 1} {
+				require.Equal(t, want, vector.GetFixedAtWithTypeCheck[int64](res.Batches[0].Vecs[column], 0))
+			}
 		})
 }
 

@@ -104,6 +104,25 @@ func TestLiveTermDFParity(t *testing.T) {
 	}
 }
 
+// TestLiveTermDFLoadedDirtyAtBlockEdges makes the loaded dirty walk observe
+// live ordinals immediately before, at, and after posting-block boundaries.
+// The expected count comes from the materialized reference, while the loaded
+// posting keeps docIDs compressed.  This case proves boundary correctness;
+// TestLiveTermDFLoadedDirtyDoesNotAllocateByDF provides the independent
+// allocation/streaming evidence for the O(BlockSize) dirty walk.
+func TestLiveTermDFLoadedDirtyAtBlockEdges(t *testing.T) {
+	p := makeLiveDFPostings(2*BlockSize+3, true)
+	live := make([]bool, p.df())
+	for _, ord := range []int{BlockSize - 1, BlockSize, 2 * BlockSize, 2*BlockSize + 2} {
+		live[ord] = true
+	}
+	idx := &Index{liveOrd: [][]bool{live}}
+
+	require.Nil(t, p.docIDs, "loaded postings must stay compressed during the DF walk")
+	require.Equal(t, materializedLiveDF(p, live), idx.liveTermDF(0, p))
+	require.Equal(t, 4, idx.liveTermDF(0, p))
+}
+
 func TestLiveTermDFFullyLiveDoesNotDecode(t *testing.T) {
 	// No block directory or bytes: the only valid operation is the fully-live raw-df path.
 	p := &termPostings{ndoc: 2*BlockSize + 3}

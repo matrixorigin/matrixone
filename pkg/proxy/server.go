@@ -68,6 +68,7 @@ type Server struct {
 	haKeeperClient logservice.ProxyHAKeeperClient
 	// configData will be sent to HAKeeper.
 	configData                      *util.ConfigData
+	catalogMetadataParticipant      logservicepb.CatalogMetadataParticipant
 	viewMetadataAdmissionGeneration uint64
 	viewMetadataObservedEpoch       atomic.Uint64
 	viewMetadataAdmission           atomic.Pointer[logservicepb.ViewMetadataAdmission]

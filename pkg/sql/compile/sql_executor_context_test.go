@@ -25,12 +25,15 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -144,6 +147,17 @@ func TestNewInternalStatementContextPreservesRootAndClaimsStatsOnce(t *testing.T
 	}
 }
 
+func TestInternalStatementContextSuppressesInheritedJSONMergeWarning(t *testing.T) {
+	parent := plan.WithJSONMergeWarningContext(
+		context.Background(), nil, plan.JSONMergeWarningUser)
+	internal := markInternalJSONMergeWarningContext(
+		newInternalStatementContext(parent))
+
+	origin, ok := plan.JSONMergeWarningOriginFromContext(internal)
+	require.True(t, ok)
+	require.Equal(t, plan.JSONMergeWarningInternalReprepare, origin)
+}
+
 func TestCompilerContextUnsupportedOperations(t *testing.T) {
 	r := func() {
 		err := recover()
@@ -185,7 +199,10 @@ type recordingSessionCompilerContext struct {
 	resolvedDatabase     string
 	resolvedTable        string
 	resolvedTableDef     *plan.TableDef
+	proc                 *process.Process
 }
+
+func (c *recordingSessionCompilerContext) GetProcess() *process.Process { return c.proc }
 
 func (c *recordingSessionCompilerContext) ResolveSnapshotWithSnapshotName(name string) (*plan.Snapshot, error) {
 	if name != "daily" {
@@ -262,6 +279,145 @@ func TestCompilerContextDelegatesSnapshotAndSubscriptionBinding(t *testing.T) {
 		require.Equal(t, skipMeta, indexRef.NotLockMeta)
 		require.Equal(t, "hidden_index", delegate.resolvedTable)
 	}
+}
+
+type isolatedViewTestDelegate struct {
+	*recordingSessionCompilerContext
+	child *recordingSessionCompilerContext
+	err   error
+}
+
+func (d *isolatedViewTestDelegate) NewViewDescriptionCompilerContext(
+	_ context.Context,
+) (plan.CompilerContext, func(), error) {
+	if d.err != nil {
+		return nil, nil, d.err
+	}
+	return d.child, func() {}, nil
+}
+
+func TestInternalExecutorViewChildDoesNotMutateParent(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	original := proc.GetTopContext()
+	parentSubscription := &plan.SubscriptionMeta{Name: "parent"}
+	delegate := &isolatedViewTestDelegate{
+		recordingSessionCompilerContext: &recordingSessionCompilerContext{
+			MockCompilerContext:  plan.NewMockCompilerContext(false),
+			queryingSubscription: parentSubscription,
+		},
+		child: &recordingSessionCompilerContext{MockCompilerContext: plan.NewMockCompilerContext(false)},
+	}
+	parent := &compilerContext{proc: proc, ctx: attachInternalExecutorCompilerContext(original, delegate)}
+	childContext := context.WithValue(original, struct{}{}, "child")
+	binding, cleanup, err := parent.NewViewDescriptionCompilerContext(childContext)
+	require.NoError(t, err)
+	defer cleanup()
+	child := binding.(*compilerContext)
+	require.NotSame(t, proc, child.GetProcess())
+	require.NotSame(t, proc.Base, child.GetProcess().Base)
+	require.Same(t, child, child.GetProcess().GetSessionInfo().CompilerContext)
+	child.SetContext(context.WithValue(child.GetContext(), struct{}{}, "nested"))
+	childSubscription := &plan.SubscriptionMeta{Name: "publisher"}
+	child.SetQueryingSubscription(childSubscription)
+	require.Same(t, childSubscription, child.GetQueryingSubscription())
+	require.Same(t, childSubscription, delegate.child.GetQueryingSubscription())
+	require.Same(t, parentSubscription, delegate.GetQueryingSubscription())
+	require.Same(t, original, proc.GetTopContext())
+	require.Same(t, child.GetContext(), child.GetProcess().GetTopContext())
+	child.SetQueryingSubscription(nil)
+	require.Same(t, parentSubscription, delegate.GetQueryingSubscription())
+}
+
+func TestInternalExecutorViewChildUsesDelegateProcess(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	original := proc.GetTopContext()
+	separate := proc.NewViewBindingProcess(original)
+	defer separate.Free()
+	delegate := &isolatedViewTestDelegate{
+		recordingSessionCompilerContext: &recordingSessionCompilerContext{MockCompilerContext: plan.NewMockCompilerContext(false)},
+		child: &recordingSessionCompilerContext{
+			MockCompilerContext: plan.NewMockCompilerContext(false), proc: separate,
+		},
+	}
+	parent := &compilerContext{proc: proc, ctx: attachInternalExecutorCompilerContext(original, delegate)}
+	binding, cleanup, err := parent.NewViewDescriptionCompilerContext(original)
+	require.NoError(t, err)
+	defer cleanup()
+	child := binding.(*compilerContext)
+	require.Same(t, separate, child.GetProcess())
+	child.SetContext(context.WithValue(original, struct{}{}, "nested"))
+	require.Same(t, original, proc.GetTopContext())
+	require.Same(t, child.GetContext(), separate.GetTopContext())
+}
+
+func TestInternalExecutorViewChildPropagatesDelegateFailure(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	original := proc.GetTopContext()
+	delegate := &isolatedViewTestDelegate{
+		recordingSessionCompilerContext: &recordingSessionCompilerContext{MockCompilerContext: plan.NewMockCompilerContext(false)},
+		err:                             errors.New("cannot create child"),
+	}
+	parent := &compilerContext{proc: proc, ctx: attachInternalExecutorCompilerContext(original, delegate)}
+	binding, cleanup, err := parent.NewViewDescriptionCompilerContext(original)
+	require.ErrorContains(t, err, "cannot create child")
+	require.Nil(t, binding)
+	require.Nil(t, cleanup)
+	require.Same(t, original, proc.GetTopContext())
+}
+
+func TestInternalExecutorViewChildRejectsUnisolatedDelegate(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	original := proc.GetTopContext()
+	delegate := &recordingSessionCompilerContext{MockCompilerContext: plan.NewMockCompilerContext(false)}
+	parent := &compilerContext{proc: proc, ctx: attachInternalExecutorCompilerContext(original, delegate)}
+	binding, cleanup, err := parent.NewViewDescriptionCompilerContext(original)
+	require.ErrorContains(t, err, "cannot isolate view binding")
+	require.Nil(t, binding)
+	require.Nil(t, cleanup)
+	require.Same(t, original, proc.GetTopContext())
+}
+
+func TestInternalExecutorViewChildWithoutDelegateIsIsolated(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	original := proc.GetTopContext()
+	parent := &compilerContext{proc: proc, ctx: original}
+	binding, cleanup, err := parent.NewViewDescriptionCompilerContext(original)
+	require.NoError(t, err)
+	defer cleanup()
+	child := binding.(*compilerContext)
+	require.NotSame(t, proc.Base, child.GetProcess().Base)
+	child.SetContext(context.WithValue(original, struct{}{}, "child"))
+	child.SetQueryingSubscription(&plan.SubscriptionMeta{Name: "publisher"})
+	require.Equal(t, "publisher", child.GetQueryingSubscription().Name)
+	require.Same(t, child.GetContext(), child.GetProcess().GetTopContext())
+	require.Same(t, child.GetContext(), child.GetProcess().Ctx)
+	require.Same(t, original, proc.GetTopContext())
+	require.Nil(t, parent.GetQueryingSubscription())
+}
+
+func TestInternalExecutorSubscriptionViewWithoutFrontendDelegate(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	relation := mock_frontend.NewMockRelation(ctrl)
+	relation.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{Name: "v"})
+	relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(42))
+	database := mock_frontend.NewMockDatabase(ctrl)
+	database.EXPECT().Relation(gomock.Any(), "v", nil).Return(relation, nil)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().GetNameById(gomock.Any(), nil, uint64(42)).Return("db", "v", nil)
+	eng.EXPECT().Database(gomock.Any(), "db", nil).Return(database, nil)
+
+	parent := &compilerContext{proc: proc, engine: eng, ctx: proc.GetTopContext()}
+	binding, cleanup, err := parent.NewViewDescriptionCompilerContext(proc.GetTopContext())
+	require.NoError(t, err)
+	defer cleanup()
+	child := binding.(*compilerContext)
+	child.SetContext(defines.AttachAccountId(child.GetContext(), 23))
+	obj, def, err := child.ResolveSubscriptionTableById(42, &plan.SubscriptionMeta{AccountId: 23})
+	require.NoError(t, err)
+	require.Equal(t, "v", obj.ObjName)
+	require.Equal(t, "v", def.Name)
+	require.Nil(t, parent.GetQueryingSubscription())
 }
 
 func TestCompilerContext_Database(t *testing.T) {
@@ -417,10 +573,8 @@ func TestInternalCompilerContextDropTableIfExistsExpectedEOBNoop(t *testing.T) {
 	require.Nil(t, drop.GetTableDef())
 }
 
-// CTAS follow-up SQL is a replay of the user's own statement, so a variable
-// that shaped the plan of that statement must shape the replay identically.
-// Internal SQL with no attached frontend context has no user session whose
-// variables could apply and keeps answering nil.
+// Internal SQL must inherit variables that shape the user's plan, whether it
+// carries the frontend compiler context (CTAS) or its session resolver (ALTER).
 func TestCompilerContextResolveVariableDelegatesToAttachedSession(t *testing.T) {
 	type resolved struct {
 		name               string
@@ -435,6 +589,13 @@ func TestCompilerContextResolveVariableDelegatesToAttachedSession(t *testing.T) 
 		}
 		return nil, moerr.NewInternalErrorNoCtx("unexpected variable")
 	}
+	delegate.ResolveVariableTypeFunc = func(name string, isSystemVar, isGlobalVar bool) (plan.Type, error) {
+		seen = append(seen, resolved{name, isSystemVar, isGlobalVar})
+		if name == "fraction" {
+			return plan.Type{Id: int32(types.T_float64)}, nil
+		}
+		return plan.Type{}, moerr.NewInternalErrorNoCtx("unexpected variable type")
+	}
 
 	attached := &compilerContext{
 		ctx:  attachInternalExecutorCompilerContext(context.Background(), delegate),
@@ -444,6 +605,14 @@ func TestCompilerContextResolveVariableDelegatesToAttachedSession(t *testing.T) 
 	require.NoError(t, err)
 	require.Equal(t, "ONLY_FULL_GROUP_BY,ENABLE_BOOL_SUMAVG", value)
 	require.Equal(t, []resolved{{"sql_mode", true, false}}, seen)
+	declared, err := attached.ResolveVariableType("fraction", false, false)
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_float64), declared.Id)
+	require.Equal(t, []resolved{{"sql_mode", true, false}, {"fraction", false, false}}, seen)
+	attached.proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		t.Fatal("frontend delegate should take precedence over process resolver")
+		return nil, nil
+	})
 
 	// An error from the session must reach the caller rather than being
 	// flattened into the nil default, which would silently compile the replay
@@ -451,10 +620,44 @@ func TestCompilerContextResolveVariableDelegatesToAttachedSession(t *testing.T) 
 	_, err = attached.ResolveVariable("other", true, false)
 	require.Error(t, err)
 
+	processOnly := &compilerContext{ctx: context.Background(), proc: testutil.NewProcess(t)}
+	var processSeen []resolved
+	processOnly.proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+		processSeen = append(processSeen, resolved{name, system, global})
+		if name == "div_precision_increment" {
+			return int64(10), nil
+		}
+		return nil, moerr.NewInternalErrorNoCtx("resolver failed")
+	})
+	value, err = processOnly.ResolveVariable("div_precision_increment", true, false)
+	require.NoError(t, err)
+	require.Equal(t, int64(10), value)
+	// Internal SQL callers can install a resolver for only a subset of
+	// session variables. Unrelated planner lookups retain their nil default.
+	value, err = processOnly.ResolveVariable("foreign_key_checks", true, false)
+	require.NoError(t, err)
+	require.Nil(t, value)
+	value, err = processOnly.ResolveVariable("other", false, true)
+	require.NoError(t, err)
+	require.Nil(t, value)
+	require.Equal(t, []resolved{{"div_precision_increment", true, false}}, processSeen)
+
+	// An actual error resolving the required precision setting must propagate.
+	_, err = processOnly.ResolveVariable("div_precision_increment", false, true)
+	require.NoError(t, err)
+	processOnly.proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return nil, moerr.NewInternalErrorNoCtx("precision resolver failed")
+	})
+	_, err = processOnly.ResolveVariable("div_precision_increment", true, false)
+	require.ErrorContains(t, err, "precision resolver failed")
+
 	detached := &compilerContext{ctx: context.Background(), proc: testutil.NewProcess(t)}
 	value, err = detached.ResolveVariable("sql_mode", true, false)
 	require.NoError(t, err)
 	require.Nil(t, value)
+	declared, err = detached.ResolveVariableType("fraction", false, false)
+	require.NoError(t, err)
+	require.Equal(t, plan.Type{}, declared)
 
 	// A context attaching the same compilerContext must not recurse.
 	selfAttached := &compilerContext{proc: testutil.NewProcess(t)}
@@ -462,4 +665,7 @@ func TestCompilerContextResolveVariableDelegatesToAttachedSession(t *testing.T) 
 	value, err = selfAttached.ResolveVariable("sql_mode", true, false)
 	require.NoError(t, err)
 	require.Nil(t, value)
+	declared, err = selfAttached.ResolveVariableType("fraction", false, false)
+	require.NoError(t, err)
+	require.Equal(t, plan.Type{}, declared)
 }

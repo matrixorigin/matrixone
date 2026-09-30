@@ -18,8 +18,8 @@ insert into t1(a, b) values (1, 2);
 insert into t1(a, b) values (10, 20), (100, 200);
 select * from t1 order by a;
 
--- Implicit column list (generated column auto-excluded)
-insert into t1 values (5, 6);
+-- Explicit ordinary columns continue to omit the generated column.
+insert into t1(a, b) values (5, 6);
 select * from t1 order by a;
 
 -- NULL propagation
@@ -88,8 +88,8 @@ insert into t7(a, b) values (1, 2);
 insert into t7(a, b) values (10, 20), (100, 200);
 select * from t7 order by a;
 
--- Implicit column list with VIRTUAL
-insert into t7 values (5, 6);
+-- Explicit ordinary columns continue to omit the VIRTUAL generated column.
+insert into t7(a, b) values (5, 6);
 select * from t7 order by a;
 
 -- Cannot insert into VIRTUAL column
@@ -350,23 +350,311 @@ insert into t37_odku_pk (a) values (1) on duplicate key update a=5;
 select * from t37_odku_pk;
 
 -- ============================================================
--- 39. MODIFY COLUMN dependency check
+-- 39. MODIFY COLUMN with generated-column dependencies
 -- ============================================================
-create table t38_modify (a int, b int, c int generated always as (a + b) stored);
+create table t38_modify (
+    id int primary key,
+    a int,
+    b int,
+    g bigint generated always as (a + 5) stored,
+    key idx_g(g),
+    key idx_b(b)
+);
+insert into t38_modify (id, a, b) values (1, 10, 20);
 alter table t38_modify modify column a bigint;
+insert into t38_modify (id, a, b) values (2, 4000000000, 30);
+select id, a, g from t38_modify order by id;
+select count(*) as matched from t38_modify force index (idx_g) where g = 15;
+select count(*) as matched from t38_modify force index (idx_g) where g = 4000000005;
+select count(*) as matched from t38_modify force index (idx_b) where b = 20;
+
+-- UNSIGNED, NOT NULL, and column reordering keep generated expressions valid.
+create table t38_unsigned (a int, b int, g bigint generated always as (a + b) stored);
+insert into t38_unsigned (a, b) values (10, 20);
+alter table t38_unsigned modify column a int unsigned;
+alter table t38_unsigned modify column a int unsigned not null;
+insert into t38_unsigned (a, b) values (4000000000, 2);
+select count(*) as matched from t38_unsigned where (a = 10 and g = 30) or (a = 4000000000 and g = 4000000002);
+
+create table t38_reorder (a int, b int, g int generated always as (a * 100 + b) stored);
+insert into t38_reorder (a, b) values (1, 2);
+alter table t38_reorder modify column a int after b;
+insert into t38_reorder (a, b) values (3, 4);
+select * from t38_reorder order by a;
+
+-- Decimal128 -> Decimal256 widening must retain exact generated values.
+create table t38_decimal (
+    id int primary key,
+    d decimal(38, 0),
+    g decimal(41, 0) generated always as (d + 1) stored
+);
+insert into t38_decimal (id, d) values (1, 1);
+alter table t38_decimal modify column d decimal(40, 0);
+insert into t38_decimal (id, d) values (2, cast('9999999999999999999999999999999999999999' as decimal(40, 0)));
+select count(*) as good_rows from t38_decimal where (id = 1 and d = 1 and g = 2) or
+    (id = 2 and d = cast('9999999999999999999999999999999999999999' as decimal(40, 0)) and
+     g = cast('10000000000000000000000000000000000000000' as decimal(41, 0)));
+
+-- A value-changing conversion must rebuild dependent generated indexes while
+-- an unrelated secondary index remains valid.
+create table t38_index_refresh (
+    id int primary key,
+    a decimal(10, 1),
+    payload int,
+    g int generated always as (a * 10) stored,
+    g2 int generated always as (g * 10) stored,
+    key idx_g2(g2),
+    key idx_payload(payload)
+);
+insert into t38_index_refresh (id, a, payload) values (1, 1.1, 7), (2, 1.4, 8);
+alter table t38_index_refresh modify column a int;
+select count(*) as matched from t38_index_refresh force index (idx_g2) where g2 = 100;
+select count(*) as matched from t38_index_refresh force index (idx_g2) where g2 in (110, 140);
+select count(*) as matched from t38_index_refresh ignore index (idx_g2) where g2 = 100;
+select count(*) as matched from t38_index_refresh force index (idx_payload) where payload in (7, 8);
+
+-- A generated primary-key change also requires rebuilding unrelated secondary
+-- indexes because their entries carry the primary-key value.
+create table t38_generated_pk (
+    a decimal(10, 1),
+    payload int,
+    g bigint generated always as (a * 10) stored,
+    primary key (g),
+    unique key idx_payload(payload)
+);
+insert into t38_generated_pk (a, payload) values (1.1, 7), (2.1, 8);
+alter table t38_generated_pk modify column a int;
+select g from t38_generated_pk order by g;
+select a, g, payload from t38_generated_pk force index (idx_payload) where payload in (7, 8) order by payload;
+select a, g, payload from t38_generated_pk ignore index (idx_payload) where payload in (7, 8) order by payload;
+
+-- Failed COPY must leave the old nullable schema/data usable.
+create table t38_rollback (id int primary key, a int, g int generated always as (a + 1) stored);
+insert into t38_rollback (id, a) values (1, null);
+-- @regex("Column 'a' cannot be null",true)
+alter table t38_rollback modify column a int not null;
+insert into t38_rollback (id, a) values (2, null);
+select count(*) as null_rows from t38_rollback where a is null and g is null;
+
+create table t38_unique_rollback (
+    id int primary key,
+    a decimal(10, 1),
+    g int generated always as (a * 10) stored,
+    unique key uk_g(g)
+);
+insert into t38_unique_rollback (id, a) values (1, 1.1), (2, 1.4);
+-- The conversion collides on the generated unique key after both values map to 1.
+-- @regex("Duplicate entry",true)
+alter table t38_unique_rollback modify column a int;
+select count(*) as old_keys from t38_unique_rollback force index (uk_g) where g in (11, 14);
+insert into t38_unique_rollback (id, a) values (3, 2.0);
+select count(*) as total_rows from t38_unique_rollback;
+select count(*) as leaked_copy_tables from information_schema.tables
+where table_schema = database()
+  and (table_name like 't38_rollback_copy_%' or table_name like 't38_unique_rollback_copy_%');
 
 -- ============================================================
--- 40. VIRTUAL generated column cannot be PRIMARY KEY
+-- 40. ALTER COPY protects foreign keys on stored generated values
+-- ============================================================
+set foreign_key_checks = 1;
+create table t45_fk_parent (id int primary key, a decimal(10,1), payload int, g int generated always as (a * 10) stored, unique key uk_g(g));
+create table t45_fk_child (id int primary key, parent_id int, parent_g int, constraint fk_t45_parent_id foreign key (parent_id) references t45_fk_parent(id), constraint fk_t45_parent_g foreign key (parent_g) references t45_fk_parent(g));
+insert into t45_fk_parent (id, a, payload) values (1, 1.1, 7);
+insert into t45_fk_child values (1, 1, 11);
+-- The second FK on this child references a generated parent key. COPY must reject before replacing either table.
+-- @regex("Cannot change column 'g': used in a foreign key constraint 'fk_t45_parent_g'", true)
+alter table t45_fk_parent modify column a int;
+select count(*) as valid_links from t45_fk_parent p join t45_fk_child c on p.id = c.parent_id and p.g = c.parent_g where p.a = 1.1 and p.g = 11 and c.parent_g = 11;
+-- Changing an unrelated source remains supported even while the generated key is referenced.
+alter table t45_fk_parent modify column payload bigint;
+select count(*) as valid_links from t45_fk_parent p join t45_fk_child c on p.id = c.parent_id and p.g = c.parent_g where p.a = 1.1 and p.g = 11 and c.parent_g = 11;
+
+create table t46_fk_parent (k int primary key);
+create table t46_fk_child (id int primary key, a decimal(10,1), g int generated always as (a * 10) stored, constraint fk_t46_generated_child foreign key (g) references t46_fk_parent(k));
+insert into t46_fk_parent values (11);
+insert into t46_fk_child (id, a) values (1, 1.1);
+-- COPY must also reject when the recomputed generated value is the child side of an FK.
+-- @regex("Cannot change column 'g': used in a foreign key constraint 'fk_t46_generated_child'", true)
+alter table t46_fk_child modify column a int;
+select count(*) as valid_links from t46_fk_child c join t46_fk_parent p on c.g = p.k where c.id = 1 and c.a = 1.1 and c.g = 11;
+
+create table t47_fk_self_parent (id int primary key, a decimal(10,1), g int generated always as (a * 10) stored, parent_g int, unique key uk_g(g), constraint fk_t47_self_parent foreign key (parent_g) references t47_fk_self_parent(g));
+insert into t47_fk_self_parent (id, a, parent_g) values (11, 1.1, 11);
+-- Self-references are covered on the referenced-key side too.
+-- @regex("Cannot change column 'g': used in a foreign key constraint 'fk_t47_self_parent'", true)
+alter table t47_fk_self_parent modify column a int;
+select count(*) as valid_links from t47_fk_self_parent c join t47_fk_self_parent p on c.parent_g = p.g where c.id = 11 and c.a = 1.1 and c.g = 11;
+
+create table t48_fk_self_child (id int primary key, a decimal(10,1), g int generated always as (a * 10) stored, constraint fk_t48_self_child foreign key (g) references t48_fk_self_child(id));
+insert into t48_fk_self_child (id, a) values (11, 1.1);
+-- Self-references are covered on the referencing-key side as well.
+-- @regex("Cannot change column 'g': used in a foreign key constraint 'fk_t48_self_child'", true)
+alter table t48_fk_self_child modify column a int;
+select count(*) as valid_links from t48_fk_self_child c join t48_fk_self_child p on c.g = p.id where c.id = 11 and c.a = 1.1 and c.g = 11;
+
+-- Same-type edits to a generated expression also change its stored value and
+-- every stored generated dependent, so FK endpoints must be protected.
+create table t49_expr_fk_parent (
+    id int primary key,
+    a int,
+    g1 int generated always as (a + 1) stored,
+    g2 int generated always as (g1 * 10) stored,
+    unique key uk_g2(g2)
+);
+create table t49_expr_fk_child (
+    id int primary key,
+    parent_g2 int,
+    constraint fk_t49_parent_g2 foreign key (parent_g2) references t49_expr_fk_parent(g2)
+);
+insert into t49_expr_fk_parent (id, a) values (1, 1);
+insert into t49_expr_fk_child values (1, 20);
+-- The generated column's type is unchanged, but changing g1 recomputes g2 and
+-- must not orphan the existing child row.
+-- @regex("Cannot change column 'g2'.*fk_t49_parent_g2", true)
+alter table t49_expr_fk_parent modify column g1 int generated always as (a + 2) stored;
+select count(*) as preserved_links from t49_expr_fk_parent p join t49_expr_fk_child c on p.g2 = c.parent_g2 where p.g1 = 2 and p.g2 = 20;
+
+create table t50_expr_fk_parent (k int primary key);
+create table t50_expr_fk_child (
+    id int primary key,
+    a int,
+    g1 int generated always as (a + 1) stored,
+    g2 int generated always as (g1 + 1) stored,
+    constraint fk_t50_generated_child foreign key (g2) references t50_expr_fk_parent(k)
+);
+insert into t50_expr_fk_parent values (3);
+insert into t50_expr_fk_child (id, a) values (1, 1);
+-- Same-type expression changes must protect generated columns on the child side.
+-- @regex("Cannot change column 'g2'.*fk_t50_generated_child", true)
+alter table t50_expr_fk_child modify column g1 int generated always as (a + 2) stored;
+select count(*) as preserved_links from t50_expr_fk_child c join t50_expr_fk_parent p on c.g2 = p.k where c.id = 1 and c.g1 = 2 and c.g2 = 3;
+
+create table t51_expr_fk_self_parent (
+    id int primary key,
+    a int,
+    g1 int generated always as (a + 1) stored,
+    g2 int generated always as (g1 * 10) stored,
+    parent_g2 int,
+    unique key uk_g2(g2),
+    constraint fk_t51_self_parent foreign key (parent_g2) references t51_expr_fk_self_parent(g2)
+);
+insert into t51_expr_fk_self_parent (id, a, parent_g2) values (1, 1, 20);
+-- Also protect a self-referencing FK on its referenced generated-column side.
+-- @regex("Cannot change column 'g2'.*fk_t51_self_parent", true)
+alter table t51_expr_fk_self_parent modify column g1 int generated always as (a + 2) stored;
+select count(*) as preserved_links from t51_expr_fk_self_parent c join t51_expr_fk_self_parent p on c.parent_g2 = p.g2 where c.g1 = 2 and c.g2 = 20;
+
+create table t52_expr_fk_self_child (
+    id int primary key,
+    a int,
+    g1 int generated always as (a + 1) stored,
+    g2 int generated always as (g1 + 1) stored,
+    constraint fk_t52_self_child foreign key (g2) references t52_expr_fk_self_child(id)
+);
+insert into t52_expr_fk_self_child (id, a) values (3, 1);
+-- And on the child side of a self-reference.
+-- @regex("Cannot change column 'g2'.*fk_t52_self_child", true)
+alter table t52_expr_fk_self_child modify column g1 int generated always as (a + 2) stored;
+select count(*) as preserved_links from t52_expr_fk_self_child c join t52_expr_fk_self_child p on c.g2 = p.id where c.id = 3 and c.g1 = 2 and c.g2 = 3;
+set foreign_key_checks = 1;
+
+-- Direct source columns are FK endpoints too. A scale-changing COPY must not
+-- replace the parent while an existing composite child relationship would be
+-- orphaned; an unrelated widening remains legal.
+create table t53_direct_fk_parent (
+    id int primary key,
+    a decimal(10,1),
+    b int,
+    payload int,
+    g int generated always as (a * 10) stored,
+    unique key uk_ab(a, b),
+    unique key uk_g(g)
+);
+create table t53_direct_fk_child (
+    id int primary key,
+    pa decimal(10,1),
+    pb int,
+    pg int,
+    constraint fk_t53_parent_ab foreign key (pa, pb) references t53_direct_fk_parent(a, b),
+    constraint fk_t53_parent_g foreign key (pg) references t53_direct_fk_parent(g)
+);
+insert into t53_direct_fk_parent (id, a, b, payload) values (1, 1.1, 7, 9);
+insert into t53_direct_fk_child values (1, 1.1, 7, 11);
+-- @regex("Cannot change column 'a'.*fk_t53_parent_ab", true)
+alter table t53_direct_fk_parent modify column a decimal(10,0);
+select p.a, p.b, p.g, c.pa, c.pb, c.pg
+from t53_direct_fk_parent p join t53_direct_fk_child c on p.a = c.pa and p.b = c.pb and p.g = c.pg
+where p.id = 1 and c.id = 1;
+alter table t53_direct_fk_parent modify column payload bigint;
+select p.a, p.b, p.g, c.pa, c.pb, c.pg
+from t53_direct_fk_parent p join t53_direct_fk_child c on p.a = c.pa and p.b = c.pb and p.g = c.pg
+where p.id = 1 and c.id = 1;
+
+-- The child-side direct endpoint must be protected independently of any
+-- generated columns on the same row.
+create table t54_direct_fk_child_parent (
+    k decimal(10,1) primary key
+);
+create table t54_direct_fk_child (
+    id int primary key,
+    pa decimal(10,1),
+    g int generated always as (pa * 10) stored,
+    constraint fk_t54_parent_key foreign key (pa) references t54_direct_fk_child_parent(k)
+);
+insert into t54_direct_fk_child_parent values (1.1);
+insert into t54_direct_fk_child (id, pa) values (1, 1.1);
+-- @regex("Cannot change column 'pa'.*fk_t54_parent_key", true)
+alter table t54_direct_fk_child modify column pa decimal(10,0);
+select c.pa, c.g, p.k
+from t54_direct_fk_child c join t54_direct_fk_child_parent p on c.pa = p.k
+where c.id = 1;
+
+-- Planner unit tests cover both durable self-reference markers (0 and the
+-- physical table ID in older metadata); this SQL case exercises the live
+-- self-reference endpoint path.
+create table t55_direct_fk_self (
+    id int primary key,
+    a decimal(10,1),
+    parent_a decimal(10,1),
+    unique key uk_a(a),
+    constraint fk_t55_self_a foreign key (parent_a) references t55_direct_fk_self(a)
+);
+insert into t55_direct_fk_self (id, a, parent_a) values (1, 1.1, 1.1);
+-- @regex("Cannot change column 'a'.*fk_t55_self_a", true)
+alter table t55_direct_fk_self modify column a decimal(10,0);
+-- @regex("Cannot change column 'parent_a'.*fk_t55_self_a", true)
+alter table t55_direct_fk_self modify column parent_a decimal(10,0);
+select id, a, parent_a from t55_direct_fk_self order by id;
+
+-- CHAR widening is a legal FK endpoint conversion: ordinary COPY assignment
+-- keeps the existing bytes (unlike BINARY, which pads with zero bytes).
+create table t56_char_fk_parent (
+    k char(10) primary key
+);
+create table t56_char_fk_child (
+    id int primary key,
+    k char(10),
+    constraint fk_t56_char_key foreign key (k) references t56_char_fk_parent(k)
+);
+insert into t56_char_fk_parent values ('edge');
+insert into t56_char_fk_child values (1, 'edge');
+alter table t56_char_fk_child modify column k char(20);
+select hex(c.k), length(c.k), char_length(c.k)
+from t56_char_fk_child c join t56_char_fk_parent p on c.k = p.k
+where c.id = 1;
+
+-- ============================================================
+-- 41. VIRTUAL generated column cannot be PRIMARY KEY
 -- ============================================================
 create table t39_vpk (a int, b int generated always as (a+1) virtual, primary key(b));
 
 -- ============================================================
--- 41. Qualified column names rejected in generated expression
+-- 42. Qualified column names rejected in generated expression
 -- ============================================================
 create table t40_qualname (a int, b int generated always as (t40_qualname.a + 1) stored);
 
 -- ============================================================
--- 42. LOAD DATA multi-row correctness
+-- 43. LOAD DATA multi-row correctness
 -- ============================================================
 create table t41_load_bulk (id int, a int, b int, c int generated always as (a + b) stored);
 load data inline format='csv', data='1,10,20\n2,30,40\n3,50,60\n' into table t41_load_bulk fields terminated by ',' (id, a, b);
@@ -374,7 +662,7 @@ select count(*) as bad_rows from t41_load_bulk where c != a + b;
 select * from t41_load_bulk order by id;
 
 -- ============================================================
--- 43. Large-scale DML churn correctness
+-- 44. Large-scale DML churn correctness
 -- ============================================================
 create table t42_churn (id int primary key, a int, b int, c int generated always as (a + b) stored);
 insert into t42_churn (id, a, b) select result, result, result * 2 from generate_series(1, 10000, 1) g;
@@ -386,7 +674,7 @@ select count(*) as bad_rows from t42_churn where c != a + b;
 select * from t42_churn where id between 1 and 5 order by id;
 
 -- ============================================================
--- 44. ODKU generated UNIQUE key safety (#28051)
+-- 45. ODKU generated UNIQUE key safety (#28051)
 -- ============================================================
 create table t43_odku_generated_unique (id int primary key, doc json, kind varchar(20) generated always as (doc ->> '$.kind') stored, payload int, unique key uk_kind(kind));
 insert into t43_odku_generated_unique (id, doc, payload) values (1, '{"kind":"alpha"}', 10), (2, '{"kind":"beta"}', 20);
@@ -404,7 +692,7 @@ select id, kind, payload from t43_odku_generated_unique order by id;
 update t43_odku_generated_unique set doc = json_set(doc, '$.kind', 'beta') where id = 1;
 
 -- ============================================================
--- 45. ODKU generated non-unique index maintenance
+-- 46. ODKU generated non-unique index maintenance
 -- ============================================================
 create table t44_odku_generated_index (id int primary key, source int, payload int, generated_key int generated always as (source * 2) stored, key idx_generated_key(generated_key));
 insert into t44_odku_generated_index (id, source, payload) values (1, 1, 10), (2, 2, 20);
@@ -415,6 +703,60 @@ select id, generated_key from t44_odku_generated_index force index (idx_generate
 select id, generated_key from t44_odku_generated_index force index for order by (idx_generated_key) order by generated_key, id;
 
 -- ============================================================
--- 46. Cleanup
+-- 47. Implicit VALUES requires DEFAULT at generated positions (#28241)
+-- ============================================================
+create table t45_implicit_values (id int primary key, a int, g int generated always as (a + 1) stored, payload int);
+-- Full visible tuple is required; generated position must be DEFAULT.
+insert into t45_implicit_values values (1, 10, default, 100), (2, 20, default, 200);
+select id, a, g, payload from t45_implicit_values order by id;
+-- A short tuple cannot silently omit the generated column.
+insert into t45_implicit_values values (3, 30, 300);
+-- A supplied non-DEFAULT value for the generated position is rejected.
+insert into t45_implicit_values values (3, 30, 31, 300);
+-- A later bad tuple must not leave the earlier tuple from this statement behind.
+insert into t45_implicit_values values (8, 80, default, 800), (9, 90, 91, 900);
+select count(*) as partial_rows from t45_implicit_values where id in (3, 8, 9);
+-- The explicit ordinary-column and implicit INSERT ... SELECT mappings remain unchanged.
+insert into t45_implicit_values (id, a, payload) values (5, 50, 500);
+insert into t45_implicit_values select 6, 60, 600;
+-- REPLACE also consumes the full visible tuple and recomputes the generated value.
+replace into t45_implicit_values values (1, 99, default, 999);
+select id, a, g, payload from t45_implicit_values order by id;
+-- Rebinding a retained PREPARE AST after a schema change must preserve the generated DEFAULT slot.
+prepare t45_replace from 'replace into t45_implicit_values values (7, 70, default, 700)';
+execute t45_replace;
+alter table t45_implicit_values modify column payload bigint;
+execute t45_replace;
+deallocate prepare t45_replace;
+select count(*) as prepared_rows from t45_implicit_values where id = 7;
+select id, a, g, payload from t45_implicit_values where id = 7;
+drop table t45_implicit_values;
+
+-- ============================================================
+-- 48. #29098: generated expressions across range partitions
+-- ============================================================
+create table t46_partition_generated (
+    id int, company_id int, amount decimal(10,2), tax_rate decimal(5,2),
+    amount_with_tax decimal(10,2) as (amount * (1 + tax_rate)), created_date date
+) partition by range (year(created_date)) (
+    partition p2022 values less than (2023),
+    partition p2023 values less than (2024),
+    partition pmax values less than maxvalue
+);
+insert into t46_partition_generated (id, company_id, amount, tax_rate, created_date) values
+    (1,10,100.00,0.10,'2022-06-01'),
+    (2,20,50.00,0.20,'2023-06-01'),
+    (3,30,80.00,0.25,'2024-06-01');
+select id, company_id, amount, tax_rate, amount_with_tax, created_date
+from t46_partition_generated order by id;
+update t46_partition_generated set amount = 120.00 where id = 1;
+select id, amount, amount_with_tax from t46_partition_generated where id = 1;
+update t46_partition_generated set amount = null where id = 3;
+select id, amount, amount_with_tax from t46_partition_generated where id = 3;
+select id, amount_with_tax from t46_partition_generated where created_date < '2020-01-01' order by id;
+drop table t46_partition_generated;
+
+-- ============================================================
+-- 49. Cleanup
 -- ============================================================
 drop database test_generated_col;

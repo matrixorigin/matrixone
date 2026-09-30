@@ -126,6 +126,26 @@ func Test_BuiltInConcat(t *testing.T) {
 	}
 }
 
+func Test_BuiltInConcatSingleArgument(t *testing.T) {
+	require.Equal(t, failedFunctionParametersWrong, builtInConcatCheck(nil, nil).status)
+	require.Equal(t, succeedMatched,
+		builtInConcatCheck(nil, []types.Type{types.T_varchar.ToType()}).status)
+
+	proc := testutil.NewProcess(t)
+	caseData := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"hello", "", "ignored"}, []bool{false, false, true}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"hello", "", ""}, []bool{false, false, true}),
+		builtInConcat,
+	)
+	succeed, info := caseData.Run()
+	require.True(t, succeed, info)
+}
+
 // Test_ConcatWs tests CONCAT_WS function (concat with separator)
 // This is a complex function with conditional logic for NULL handling
 func Test_ConcatWs(t *testing.T) {
@@ -1041,10 +1061,10 @@ func Test_BuiltInCharCheck(t *testing.T) {
 		}
 	}
 
-	// numeric types (float/decimal): cast to int64
+	// numeric and boolean types (float/decimal/bool): cast to int64
 	{
 		got := builtInCharCheck(nil, []types.Type{
-			types.T_float64.ToType(), types.T_decimal128.ToType(),
+			types.T_float64.ToType(), types.T_decimal128.ToType(), types.T_bool.ToType(),
 		})
 		require.Equal(t, succeedWithCast, got.status)
 		for _, ft := range got.finalType {
@@ -1138,4 +1158,44 @@ func Test_BuiltInCharIntTypes(t *testing.T) {
 	tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
 	succeed, info := tcc.Run()
 	require.True(t, succeed, tc.info, info)
+}
+
+func TestConcatJSONSerialization(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	encoded := make([]string, 4)
+	for i, input := range []string{`1.6`, `"a\nb"`, `null`, `"ignored"`} {
+		value, err := types.ParseStringToByteJson(input)
+		require.NoError(t, err)
+		bytes, err := types.EncodeJson(value)
+		require.NoError(t, err)
+		encoded[i] = string(bytes)
+	}
+	jsonInput := NewFunctionTestInput(types.T_json.ToType(), encoded, []bool{false, false, false, true})
+	textInput := NewFunctionTestInput(types.T_varchar.ToType(),
+		[]string{"x", "x", "x", "x"}, nil)
+	for _, tc := range []struct {
+		name   string
+		fn     fEvalFn
+		inputs []FunctionTestInput
+		want   []string
+		nulls  []bool
+	}{
+		{"concat", builtInConcat, []FunctionTestInput{jsonInput, textInput},
+			[]string{"1.6x", `"a\nb"x`, "nullx", ""}, []bool{false, false, false, true}},
+		{"ws separator", ConcatWs, []FunctionTestInput{jsonInput, textInput, textInput},
+			[]string{"x1.6x", `x"a\nb"x`, "xnullx", ""}, []bool{false, false, false, true}},
+		{"ws value", ConcatWs, []FunctionTestInput{textInput, jsonInput, textInput},
+			[]string{"1.6xx", `"a\nb"xx`, "nullxx", "x"}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewFunctionTestCase(proc, tc.inputs,
+				NewFunctionTestResult(types.T_varchar.ToType(), false, tc.want, tc.nulls), tc.fn)
+			defer c.result.Free()
+			for _, parameter := range c.parameters {
+				defer parameter.Free(proc.Mp())
+			}
+			ok, detail := c.Run()
+			require.True(t, ok, detail)
+		})
+	}
 }

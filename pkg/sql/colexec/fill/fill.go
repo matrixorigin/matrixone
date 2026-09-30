@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -155,7 +156,7 @@ func (fill *Fill) Call(proc *process.Process) (vm.CallResult, error) {
 
 	result, err := ctr.process(ctr, fill, proc, analyzer)
 
-	return result, err
+	return result, hashbuild.TerminalBudgetErrorForOperator(proc.Ctx, "fill", err)
 }
 
 func cloneFillBatch(

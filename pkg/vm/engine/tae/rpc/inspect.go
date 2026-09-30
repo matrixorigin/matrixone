@@ -99,9 +99,6 @@ func initCommand(_ context.Context, inspectCtx *inspectContext) *cobra.Command {
 	storage := &storageUsageHistoryArg{}
 	rootCmd.AddCommand(storage.PrepareCommand())
 
-	pstatus := &PolicyStatus{}
-	rootCmd.AddCommand(pstatus.PrepareCommand())
-
 	objPrune := &objectPruneArg{}
 	rootCmd.AddCommand(objPrune.PrepareCommand())
 
@@ -755,44 +752,6 @@ func (c *infoArg) Run() error {
 	}
 	c.ctx.resp.Payload = b.Bytes()
 	return nil
-}
-
-type PolicyStatus struct {
-	ctx      *inspectContext
-	pruneId  uint64
-	pruneAgo time.Duration
-}
-
-func (c *PolicyStatus) FromCommand(cmd *cobra.Command) (err error) {
-	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
-	c.pruneAgo, _ = cmd.Flags().GetDuration("prune-ago")
-	c.pruneId, _ = cmd.Flags().GetUint64("prune-id")
-	return nil
-}
-
-func (c *PolicyStatus) PrepareCommand() *cobra.Command {
-	statusCmd := &cobra.Command{
-		Use:   "policy_status",
-		Short: "check cn merge status",
-		Run:   RunFactory(c),
-	}
-	statusCmd.Flags().DurationP("prune-ago", "a", 0, "prune objects by time ago")
-	statusCmd.Flags().Uint64P("prune-id", "i", 0, "prune objects by table id")
-	return statusCmd
-}
-
-func (c *PolicyStatus) String() string {
-	return fmt.Sprintf("policy status: prune %v ago, by id %v", c.pruneAgo, c.pruneId)
-}
-
-func (c *PolicyStatus) Run() (err error) {
-	if c.pruneAgo == 0 && c.pruneId == 0 {
-		c.ctx.resp.Payload = []byte(c.ctx.db.MergeScheduler.CNActiveObjectsString())
-		return nil
-	} else {
-		c.ctx.db.MergeScheduler.PruneCNActiveObjects(c.pruneId, c.pruneAgo)
-		return nil
-	}
 }
 
 func parseBlkTarget(address string, tbl *catalog.TableEntry) (*catalog.ObjectEntry, int, error) {

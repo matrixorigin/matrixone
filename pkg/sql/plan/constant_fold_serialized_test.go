@@ -24,9 +24,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -219,6 +221,39 @@ func TestConstantFoldPreservesSerialCastSemantics(t *testing.T) {
 		rule.GetConstantValue(foldedResult, false, 0),
 		"constant folding changed the expression value",
 	)
+}
+
+func TestReplaceFoldExprKeepsChildWhenConstantFoldFails(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	target := types.New(types.T_decimal256, 65, 30)
+	badCast, err := makePlan2CastExpr(
+		context.Background(),
+		MakePlan2StringConstExprWithType("not-a-decimal"),
+		makePlan2Type(&target),
+	)
+	require.NoError(t, err)
+
+	column := &planpb.Expr{
+		Typ: makePlan2Type(&target),
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+			Name: "d",
+		}},
+	}
+	filter, err := BindFuncExprImplByPlanExpr(
+		context.Background(), "=", []*planpb.Expr{column, badCast},
+	)
+	require.NoError(t, err)
+
+	var executors []colexec.ExpressionExecutor
+	t.Cleanup(func() {
+		for _, executor := range executors {
+			executor.Free()
+		}
+	})
+	_, err = ReplaceFoldExpr(proc, filter, &executors)
+	require.Error(t, err)
+	require.NotNil(t, filter.GetF().Args[1], "a failed fold must not replace its child with nil")
+	require.Equal(t, "cast", filter.GetF().Args[1].GetF().GetFunc().GetObjName())
 }
 
 func TestOptimizerPreservesByteIdenticalSerializedProvenance(t *testing.T) {
@@ -595,6 +630,31 @@ func TestConstantFoldPreservesSelectedStringDomain(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestConstantFoldDynamicIPFunctionLosesFunctionNode(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	stmt, err := mysql.ParseOne(t.Context(), "select inet_ntoa('1.6')", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	ast := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+	binder := NewGeneratedColBinder(ctx.GetProcess().Ctx, nil, nil)
+	bound, err := binder.BindExpr(ast, 0, false)
+	require.NoError(t, err)
+	require.NotNil(t, bound.GetF(), "the pre-optimization plan must retain the dynamic overload")
+	requiredBefore, err := RequiredPersistedExpressionProtocolVersion(bound)
+	require.NoError(t, err)
+	require.Equal(t, int64(defines.MORPCVersion86), requiredBefore)
+
+	folded, err := ConstantFold(
+		batch.EmptyForConstFoldBatch, DeepCopyExpr(bound), ctx.GetProcess(), false, true)
+	require.NoError(t, err)
+	require.NotNil(t, folded.GetLit(), "the optimizer can fold the constant dynamic overload")
+	requiredAfter, err := RequiredPersistedExpressionProtocolVersion(folded)
+	require.NoError(t, err)
+	require.Zero(t, requiredAfter,
+		"the folded literal no longer exposes the function node; view DDL must retain the pre-fold requirement")
 }
 
 func findFirstLiteralVecExpr(query *planpb.Query) *planpb.Expr {

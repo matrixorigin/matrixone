@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -698,22 +699,45 @@ func TestSendToSidecar_Success(t *testing.T) {
 }
 
 func TestSendToSidecar_ParentCancel(t *testing.T) {
-	// Verify that cancelling the parent context aborts the sidecar HTTP call.
-	// The server simulates a slow query; parent cancellation should abort before
-	// the server responds.
+	// Verify that cancelling the parent context aborts an in-flight sidecar call.
+	// The handler reports entry before waiting for the test to release it, so the
+	// cancellation assertion does not depend on a scheduler-sensitive delay.
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseHandler := func() { releaseOnce.Do(func() { close(release) }) }
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(2 * time.Second)
+		close(entered)
+		<-release
 		w.Write([]byte(`{"meta":[],"data":[],"rows":0}`))
 	}))
 	defer srv.Close()
 
 	parentCtx, parentCancel := context.WithCancel(context.Background())
 	defer parentCancel()
-	time.AfterFunc(100*time.Millisecond, parentCancel)
+	resultCh := make(chan error, 1)
+	go func() {
+		_, err := sendToSidecar(parentCtx, srv.URL, "SELECT 1")
+		resultCh <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		releaseHandler()
+		t.Fatal("timed out waiting for sidecar handler to enter")
+	}
+	parentCancel()
 
 	start := time.Now()
-	_, err := sendToSidecar(parentCtx, srv.URL, "SELECT 1")
+	var err error
+	select {
+	case err = <-resultCh:
+	case <-time.After(time.Second):
+		releaseHandler()
+		t.Fatal("cancelled sidecar request did not return within one second")
+	}
 	elapsed := time.Since(start)
+	releaseHandler()
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "sidecar request failed")

@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -562,5 +563,33 @@ func TestSortColumnsByIndexWithBuf(t *testing.T) {
 			[]byte("POINT(2 2)"),
 			[]byte("POINT(3 3)"),
 		}, vector.InefficientMustBytesCol(vecs[1]))
+	})
+
+	t.Run("JSON cluster key keeps physical byte order", func(t *testing.T) {
+		jsonVector := vector.NewVec(types.T_json.ToType())
+		payloadVector := vector.NewVec(types.T_int32.ToType())
+		defer jsonVector.Free(mp)
+		defer payloadVector.Free(mp)
+		encodeJSON := func(text string) []byte {
+			value, err := bytejson.ParseFromString(text)
+			require.NoError(t, err)
+			encoded, err := value.Marshal()
+			require.NoError(t, err)
+			return encoded
+		}
+
+		for i, value := range []string{"0", "1", "false", "true"} {
+			require.NoError(t, vector.AppendBytes(jsonVector, encodeJSON(value), false, mp))
+			require.NoError(t, vector.AppendFixed(payloadVector, int32(i), false, mp))
+		}
+
+		var idxBuf []int64
+		var shuffleBuf []byte
+		require.NoError(t, SortColumnsByIndexWithBuf(
+			[]*vector.Vector{jsonVector, payloadVector}, 0, mp, &idxBuf, &shuffleBuf))
+		require.Equal(t,
+			[][]byte{encodeJSON("true"), encodeJSON("false"), encodeJSON("0"), encodeJSON("1")},
+			vector.InefficientMustBytesCol(jsonVector))
+		require.Equal(t, []int32{3, 2, 0, 1}, vector.MustFixedColNoTypeCheck[int32](payloadVector))
 	})
 }

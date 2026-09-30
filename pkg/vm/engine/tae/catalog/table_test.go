@@ -15,6 +15,7 @@
 package catalog
 
 import (
+	"bytes"
 	"math"
 	"testing"
 
@@ -107,6 +108,23 @@ func TestSchemaExtraSerializationDoesNotMutateSchema(t *testing.T) {
 	var extra apipb.SchemaExtra
 	require.NoError(t, extra.Unmarshal(data))
 	require.True(t, extra.FromPublication)
+}
+
+func TestSchemaAutoIDCacheRoundTrip(t *testing.T) {
+	for _, size := range []uint64{0, 1, 2, 1000000} {
+		schema := MockSchemaAll(3, 1)
+		schema.Extra.AutoIdCache = size
+		cloned := schema.Clone()
+		require.Equal(t, size, cloned.Extra.AutoIdCache)
+		cloned.Extra.AutoIdCache = size + 1
+		require.Equal(t, size, schema.Extra.AutoIdCache)
+		encoded, err := schema.Marshal()
+		require.NoError(t, err)
+		restored := NewEmptySchema("restored")
+		_, err = restored.ReadFromWithVersion(bytes.NewReader(encoded), IOET_WALTxnCommand_Table_CurrVer)
+		require.NoError(t, err)
+		require.Equal(t, size, restored.Extra.AutoIdCache)
+	}
 }
 
 func TestObjectList(t *testing.T) {

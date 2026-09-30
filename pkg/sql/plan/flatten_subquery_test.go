@@ -47,6 +47,14 @@ func TestCanPullupDeepCorrelatedPredicates(t *testing.T) {
 	}
 }
 
+func TestSubqueryBoolConstIsQueryLocal(t *testing.T) {
+	first := newSubqueryBoolConst(true)
+	second := newSubqueryBoolConst(true)
+	require.NotSame(t, first, second)
+	first.Ndv = 7
+	require.Zero(t, second.Ndv)
+}
+
 func TestHasInnerColumnInDeepCorrelatedFilters(t *testing.T) {
 	const (
 		subID    int32 = 0
@@ -1933,6 +1941,27 @@ func TestCorrelatedScalarAggregateProjectionRunsAfterJoin(t *testing.T) {
 	assertReachablePlanHasNoCorrelatedExpr(t, query)
 }
 
+func TestCorrelatedDistinctAggregateProjectionRunsAfterJoin(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		aggregate string
+	}{
+		{name: "count", aggregate: "count(distinct r.r_name)"},
+		{name: "sum", aggregate: "sum(distinct r.r_regionkey)"},
+		{name: "avg", aggregate: "avg(distinct r.r_regionkey)"},
+		{name: "group concat", aggregate: "group_concat(distinct r.r_name order by r.r_name)"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+				"select n.n_nationkey, (select "+test.aggregate+
+					" from tpch.region r where r.r_regionkey = n.n_regionkey) from tpch.nation n")
+			require.NoError(t, err)
+			require.True(t, hasCorrelatedAggregatePostJoinProjection(logicPlan.GetQuery()))
+			assertReachablePlanHasNoCorrelatedExpr(t, logicPlan.GetQuery())
+		})
+	}
+}
+
 func assertReachablePlanHasNoCorrelatedExpr(t *testing.T, query *plan.Query) {
 	t.Helper()
 	visited := make(map[int32]bool)
@@ -2021,6 +2050,7 @@ func TestCorrelatedScalarAggregatePostJoinProjectionEligibility(t *testing.T) {
 		{
 			name: "having can remove aggregate row",
 			sql:  "select n.n_nationkey, (select coalesce(sum(r.r_regionkey), 0) from tpch.region r where r.r_regionkey = n.n_regionkey having sum(r.r_regionkey) > 100) from tpch.nation n",
+			want: true,
 		},
 		{
 			name: "neutral aggregate",
@@ -2113,37 +2143,31 @@ func TestPrepareCorrelatedScalarAggregatePostJoinProjection(t *testing.T) {
 		hasSingleRow: true,
 		aggregateTag: aggregateTag,
 		aggregates:   aggregates,
+		results:      []*plan.Expr{projection},
 	}
 
-	postJoinProjection, ok, err := builder.prepareCorrelatedScalarAggregatePostJoinProjection(1, ctx, []*plan.Expr{constTrue})
+	newSubID, postJoinProjections, ok, err := builder.prepareCorrelatedScalarAggregatePostJoinProjection(1, ctx, []*plan.Expr{newSubqueryBoolConst(true)}, nil, false)
 	require.NoError(t, err)
 	require.True(t, ok)
-	require.Len(t, builder.qry.Nodes[1].ProjectList, len(aggregates)+1)
+	require.Equal(t, int32(0), newSubID)
+	require.Len(t, postJoinProjections, 1)
+	require.Len(t, builder.qry.Nodes[1].ProjectList, 2)
+	require.Same(t, projection, builder.qry.Nodes[1].ProjectList[0])
 	require.Equal(t, groupTag, builder.qry.Nodes[1].ProjectList[1].GetCol().RelPos)
 	require.Equal(t, int32(0), builder.qry.Nodes[1].ProjectList[1].GetCol().ColPos)
-	rawPositions := []int{0, 2, 3, 4, 5, 6, 7}
-	for i, pos := range rawPositions {
-		raw := builder.qry.Nodes[1].ProjectList[pos]
-		require.Equal(t, aggregateTag, raw.GetCol().RelPos)
-		require.Equal(t, int32(i), raw.GetCol().ColPos)
-	}
 
-	postJoinArgs := postJoinProjection.GetF().Args
+	postJoinArgs := postJoinProjections[0].GetF().Args
 	require.Len(t, postJoinArgs, len(aggregates)+1)
 	for i := 0; i < 5; i++ {
-		require.Equal(t, projectTag, postJoinArgs[i].GetCol().RelPos)
-		projectPos := int32(i + 1)
-		if i == 0 {
-			projectPos = 0
-		}
-		require.Equal(t, projectPos, postJoinArgs[i].GetCol().ColPos)
+		require.Equal(t, aggregateTag, postJoinArgs[i].GetCol().RelPos)
+		require.Equal(t, int32(i), postJoinArgs[i].GetCol().ColPos)
 		require.False(t, postJoinArgs[i].Typ.NotNullable)
 	}
 	for i := 5; i < 7; i++ {
 		countFallback := postJoinArgs[i].GetF()
 		require.Equal(t, "case", countFallback.Func.GetObjName())
-		require.Equal(t, projectTag, countFallback.Args[2].GetCol().RelPos)
-		require.Equal(t, int32(i+1), countFallback.Args[2].GetCol().ColPos)
+		require.Equal(t, aggregateTag, countFallback.Args[2].GetCol().RelPos)
+		require.Equal(t, int32(i), countFallback.Args[2].GetCol().ColPos)
 	}
 	require.Nil(t, postJoinArgs[7].GetCorr())
 	require.Equal(t, outerTag, postJoinArgs[7].GetCol().RelPos)
@@ -2184,6 +2208,36 @@ func TestMakeAggregateEmptyResultExpr(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestRestoreAggregateEmptyResultIgnoresDistinctFlag(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	for _, test := range []struct {
+		name     string
+		typ      plan.Type
+		wantCase bool
+	}{
+		{name: "count", typ: plan.Type{Id: int32(types.T_int64)}, wantCase: true},
+		{name: "sum", typ: plan.Type{Id: int32(types.T_int64)}},
+		{name: "avg", typ: plan.Type{Id: int32(types.T_float64)}},
+		{name: "group_concat", typ: plan.Type{Id: int32(types.T_text)}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			aggregate := newFlattenSubqueryTestAggregate(test.name, test.typ)
+			aggregate.GetF().Func.Obj = int64(uint64(aggregate.GetF().Func.Obj) | function.Distinct)
+			projected := GetColExpr(test.typ, 10, 0)
+			projected.Typ.NotNullable = false
+
+			restored, err := builder.restoreAggregateEmptyResult(projected, aggregate, test.name)
+			require.NoError(t, err)
+			if test.wantCase {
+				require.Equal(t, "case", restored.GetF().Func.ObjName)
+				require.Equal(t, int64(0), restored.GetF().Args[1].GetLit().GetI64Val())
+			} else {
+				require.Same(t, projected, restored)
+			}
+		})
+	}
+}
+
 func TestPrepareCorrelatedScalarAggregatePostJoinProjectionRejectsUnsupportedShapes(t *testing.T) {
 	const (
 		aggregateTag int32 = 21
@@ -2202,13 +2256,6 @@ func TestPrepareCorrelatedScalarAggregatePostJoinProjectionRejectsUnsupportedSha
 			aggregate: "sum",
 			mutate: func(ctx *BindContext, _ []*plan.Node) {
 				ctx.groups = []*plan.Expr{makePlan2Int64ConstExprWithType(1)}
-			},
-		},
-		{
-			name:      "having filter",
-			aggregate: "sum",
-			mutate: func(_ *BindContext, nodes []*plan.Node) {
-				nodes[1].Children[0] = 2
 			},
 		},
 		{
@@ -2248,21 +2295,27 @@ func TestPrepareCorrelatedScalarAggregatePostJoinProjectionRejectsUnsupportedSha
 				},
 				{NodeType: plan.Node_FILTER, Children: []int32{0}},
 			}
-			ctx := &BindContext{hasSingleRow: true, aggregateTag: aggregateTag, aggregates: []*plan.Expr{aggregate}}
+			ctx := &BindContext{
+				hasSingleRow: true,
+				aggregateTag: aggregateTag,
+				aggregates:   []*plan.Expr{aggregate},
+				results:      []*plan.Expr{nodes[1].ProjectList[0]},
+			}
 			if tt.mutate != nil {
 				tt.mutate(ctx, nodes)
 			}
 			builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 			builder.qry.Nodes = nodes
 
-			postJoinProjection, ok, err := builder.prepareCorrelatedScalarAggregatePostJoinProjection(1, ctx, []*plan.Expr{constTrue})
+			newSubID, postJoinProjections, ok, err := builder.prepareCorrelatedScalarAggregatePostJoinProjection(1, ctx, []*plan.Expr{newSubqueryBoolConst(true)}, nil, false)
+			require.Equal(t, int32(1), newSubID)
 			if tt.wantErr {
 				require.Error(t, err)
 				return
 			}
 			require.NoError(t, err)
 			require.False(t, ok)
-			require.Nil(t, postJoinProjection)
+			require.Nil(t, postJoinProjections)
 			require.Len(t, builder.qry.Nodes[1].ProjectList, 1)
 		})
 	}
@@ -2283,10 +2336,11 @@ func TestPrepareCorrelatedScalarAggregatePostJoinProjectionRejectsUnsupportedDir
 		results:      []*plan.Expr{GetColExpr(aggregate.Typ, 21, 0)},
 	}
 
-	postJoinProjection, ok, err := builder.prepareCorrelatedScalarAggregatePostJoinProjection(0, ctx, []*plan.Expr{constTrue})
+	newSubID, postJoinProjections, ok, err := builder.prepareCorrelatedScalarAggregatePostJoinProjection(0, ctx, []*plan.Expr{newSubqueryBoolConst(true)}, nil, false)
+	require.Equal(t, int32(0), newSubID)
 	require.Error(t, err)
 	require.False(t, ok)
-	require.Nil(t, postJoinProjection)
+	require.Nil(t, postJoinProjections)
 }
 
 func hasCorrelatedAggregatePostJoinProjection(query *plan.Query) bool {
@@ -2320,6 +2374,7 @@ func newFlattenSubqueryTestAggregate(name string, typ plan.Type) *plan.Expr {
 	ids := map[string]int64{
 		"sum":           aggexec.AggIdOfSum,
 		"avg":           aggexec.AggIdOfAvg,
+		"group_concat":  aggexec.AggIdOfGroupConcat,
 		"min":           aggexec.AggIdOfMin,
 		"max":           aggexec.AggIdOfMax,
 		"json_arrayagg": aggexec.AggIdOfJsonArrayAgg,
@@ -2607,7 +2662,7 @@ func TestDirectCorrelatedScalarProjectionCasePreservesType(t *testing.T) {
 		{name: "integer", typ: plan.Type{Id: int32(types.T_int32), Width: 32, Scale: -1}, want: true},
 		{name: "enum coerces to ordinal", typ: plan.Type{Id: int32(types.T_enum), Enumvalues: "small,large"}},
 		{name: "rowid unsupported", typ: plan.Type{Id: int32(types.T_Rowid)}},
-		{name: "vector unsupported", typ: plan.Type{Id: int32(types.T_array_float32), Width: 3}},
+		{name: "vector", typ: plan.Type{Id: int32(types.T_array_float32), Width: 3}, want: true},
 		{name: "bit width changes", typ: plan.Type{Id: int32(types.T_bit), Width: 8}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2781,7 +2836,7 @@ func TestGenerateRowComparisonBuildsBalancedTree(t *testing.T) {
 		{name: "tuple not in inequality", op: "<>", logicalOp: "or"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			expr, err := builder.generateRowComparison(tt.op, child, subqueryCtx, false)
+			expr, err := builder.generateRowComparison(tt.op, child, subqueryCtx, false, false)
 			require.NoError(t, err)
 			require.Equal(t, tt.logicalOp, expr.GetF().Func.GetObjName())
 
@@ -2800,7 +2855,7 @@ func TestGenerateRowComparisonRejectsEmptyTuple(t *testing.T) {
 		Expr: &plan.Expr_List{
 			List: &plan.ExprList{},
 		},
-	}, subqueryCtx, false)
+	}, subqueryCtx, false, false)
 	require.ErrorContains(t, err, "row comparison requires at least one column")
 }
 

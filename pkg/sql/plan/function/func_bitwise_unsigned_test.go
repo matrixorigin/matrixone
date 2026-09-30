@@ -198,3 +198,21 @@ func TestBitwiseBinaryArgumentsKeepBytewiseOverloads(t *testing.T) {
 	require.Equal(t, int32(2), get.overloadId)
 	require.Equal(t, types.T_varbinary, get.GetReturnType().Oid)
 }
+
+func TestBitwiseBlobArgumentsSelectBytewiseOverloads(t *testing.T) {
+	ctx := context.Background()
+	for _, operator := range []string{"&", "|", "^"} {
+		t.Run(operator, func(t *testing.T) {
+			get, err := GetFunctionByName(ctx, operator,
+				[]types.Type{types.T_blob.ToType(), types.T_blob.ToType()})
+			require.NoError(t, err)
+			targets, cast := get.ShouldDoImplicitTypeCast()
+			require.False(t, cast)
+			require.Nil(t, targets)
+			require.Equal(t, int32(6), get.overloadId)
+			require.Equal(t, types.T_blob, get.GetReturnType().Oid)
+			require.Equal(t, types.CharsetBinary, get.GetReturnType().Charset)
+			assertBitwiseExecFactory(t, get)
+		})
+	}
+}

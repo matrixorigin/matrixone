@@ -49,7 +49,7 @@ func (txn *Txn) rollback1PC(ctx context.Context) (err error) {
 	return txn.Err
 }
 
-func (txn *Txn) commit1PC(ctx context.Context) (err error) {
+func (txn *Txn) commit1PC(ctx context.Context, onCommit func()) (err error) {
 	state := txn.GetTxnState(false)
 	if state != txnif.TxnStateActive {
 		logutil.Warnf("unexpected txn state : %s", txnif.TxnStrState(state))
@@ -76,6 +76,9 @@ func (txn *Txn) commit1PC(ctx context.Context) (err error) {
 		txn.DoneWithErr(err, true)
 	}
 	txn.Wait()
+	if txn.GetError() == nil && onCommit != nil {
+		onCommit()
+	}
 	if err = txn.Mgr.DeleteTxn(txn.GetID()); err != nil {
 		return
 	}

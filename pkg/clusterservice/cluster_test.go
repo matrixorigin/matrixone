@@ -338,6 +338,34 @@ func TestCluster_DebugUpdateCNWorkState(t *testing.T) {
 		})
 }
 
+func TestCluster_DebugUpdateCNWorkStateWithContext(t *testing.T) {
+	runClusterTest(
+		time.Hour,
+		func(hc *testHAKeeperClient, c *cluster) {
+			hc.addCN("cn0")
+			wantDeadline := time.Now().Add(time.Minute)
+			ctx, cancel := context.WithDeadline(context.Background(), wantDeadline)
+			defer cancel()
+
+			require.NoError(t, c.DebugUpdateCNWorkStateWithContext(ctx, "cn0", int(metadata.WorkState_Draining)))
+			hc.RLock()
+			gotDeadline := hc.updateCNWorkStateDeadline
+			calls := hc.updateCNWorkStateCalls
+			hc.RUnlock()
+			require.True(t, gotDeadline.Equal(wantDeadline), "caller deadline must reach HAKeeper unchanged")
+			require.Equal(t, 1, calls)
+
+			err := c.DebugUpdateCNWorkStateWithContext(context.Background(), "cn0", int(metadata.WorkState_Working))
+			require.ErrorContains(t, err, "context deadline not set")
+			hc.RLock()
+			callsAfterInvalidContext := hc.updateCNWorkStateCalls
+			hc.RUnlock()
+			require.Equal(t, calls, callsAfterInvalidContext,
+				"unbounded state updates must be rejected before contacting HAKeeper")
+		},
+	)
+}
+
 func TestCluster_GetTNService(t *testing.T) {
 	runClusterTest(
 		time.Hour,
@@ -378,8 +406,10 @@ func runClusterTest(
 
 type testHAKeeperClient struct {
 	sync.RWMutex
-	value logpb.ClusterDetails
-	err   error
+	value                     logpb.ClusterDetails
+	err                       error
+	updateCNWorkStateCalls    int
+	updateCNWorkStateDeadline time.Time
 }
 
 func (c *testHAKeeperClient) addCN(serviceIDs ...string) {
@@ -446,6 +476,8 @@ func (c *testHAKeeperClient) UpdateCNLabel(ctx context.Context, label logpb.CNSt
 func (c *testHAKeeperClient) UpdateCNWorkState(ctx context.Context, state logpb.CNWorkState) error {
 	c.Lock()
 	defer c.Unlock()
+	c.updateCNWorkStateCalls++
+	c.updateCNWorkStateDeadline, _ = ctx.Deadline()
 	for i, cn := range c.value.CNStores {
 		if cn.UUID == state.UUID {
 			c.value.CNStores[i].WorkState = state.State

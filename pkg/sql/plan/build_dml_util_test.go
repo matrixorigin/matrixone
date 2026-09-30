@@ -220,6 +220,8 @@ func TestGetSqlForCheckHasDBRefersToEscapesStringLiterals(t *testing.T) {
 	sql := getSqlForCheckHasDBRefersTo("db'name")
 	require.Contains(t, sql, "refer_db_name = 'db\\'name'")
 	require.Contains(t, sql, "db_name != 'db\\'name'")
+	require.Contains(t, sql, "refer_table_name in (select relname from `mo_catalog`.`mo_tables`")
+	require.Contains(t, sql, "account_id = current_account_id() and reldatabase = 'db\\'name' and relkind != '"+catalog.SystemViewRel+"'")
 }
 
 func TestGetSqlForTransferAlterCopyFk(t *testing.T) {
@@ -292,7 +294,9 @@ func TestFkCatalogMutationSqlEscapesIdentifiers(t *testing.T) {
 		"update `mo_catalog`.`mo_foreign_keys` set refer_column_name = 'new\\'name\\\\part' where refer_db_name = 'db\\'name\\\\part' and refer_table_name = 'table\\'name\\\\part' and refer_column_name = 'old\\'name\\\\part' ; ",
 	}, getSqlForRenameColumn(db, table, oldName, newName))
 	require.Equal(t,
-		"select count(*) > 0 from `mo_catalog`.`mo_foreign_keys` where refer_db_name = 'db\\'name\\\\part' and db_name != 'db\\'name\\\\part';",
+		"select count(*) > 0 from `mo_catalog`.`mo_foreign_keys` where refer_db_name = 'db\\'name\\\\part' and db_name != 'db\\'name\\\\part' "+
+			"and refer_table_name in (select relname from `mo_catalog`.`mo_tables` "+
+			"where account_id = current_account_id() and reldatabase = 'db\\'name\\\\part' and relkind != '"+catalog.SystemViewRel+"');",
 		getSqlForCheckHasDBRefersTo(db))
 }
 
@@ -358,6 +362,51 @@ func TestMakeInsertValueConstExprGeometry(t *testing.T) {
 	require.Equal(t, int32(types.T_varchar), fn.Args[0].Typ.Id)
 	require.Equal(t, "POINT(1 1)", fn.Args[0].GetLit().GetSval())
 	require.Equal(t, int32(types.T_geometry), fn.Args[1].Typ.Id)
+}
+
+func TestMakeInsertValueConstExprBoolUsesNonZeroNumericSemantics(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	colType := types.T_bool.ToType()
+	testCases := []struct {
+		name  string
+		value *tree.NumVal
+		want  bool
+	}{
+		{
+			name:  "signed positive non-one",
+			value: tree.NewNumVal(int64(2), "2", false, tree.P_int64),
+			want:  true,
+		},
+		{
+			name:  "signed negative",
+			value: tree.NewNumVal(int64(-1), "-1", true, tree.P_int64),
+			want:  true,
+		},
+		{
+			name:  "unsigned positive non-one",
+			value: tree.NewNumVal(uint64(2), "2", false, tree.P_uint64),
+			want:  true,
+		},
+		{
+			name:  "zero remains false",
+			value: tree.NewNumVal(int64(0), "0", false, tree.P_int64),
+			want:  false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			expr, err := MakeInsertValueConstExpr(proc, tc.value, &colType, false)
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_bool), expr.Typ.Id)
+			require.Equal(t, tc.want, expr.GetLit().GetBval())
+		})
+	}
+
+	nullExpr, err := MakeInsertValueConstExpr(proc,
+		tree.NewNumVal("NULL", "NULL", false, tree.P_null), &colType, false)
+	require.NoError(t, err)
+	require.True(t, nullExpr.GetLit().Isnull)
 }
 
 func TestMakeInsertValueConstExprDefersInternalTimeOverflow(t *testing.T) {

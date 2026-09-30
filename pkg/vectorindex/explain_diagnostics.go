@@ -21,6 +21,7 @@ import (
 )
 
 const ivfSearchRoundDiagnosticHeading = "__mo_ivf_search_round_v1"
+const ivfExecutionDiagnosticHeading = "__mo_ivf_execution_v1"
 
 // IvfSearchRoundDiagnostic is the bounded, execution-owned account of one
 // adaptive IVF search round. It is transported through Query.Headings because
@@ -81,6 +82,132 @@ func DecodeIvfSearchRoundDiagnostic(q *plan.Query) (IvfSearchRoundDiagnostic, bo
 	}
 	if d.Round == 0 || d.BucketCount == 0 {
 		return IvfSearchRoundDiagnostic{}, false
+	}
+	return d, true
+}
+
+// IvfExecutionDiagnostic is one bounded reader-generation summary. Parallel
+// readers emit independent values which the EXPLAIN renderer combines.
+type IvfExecutionDiagnostic struct {
+	SearchCount             uint64
+	ReaderCount             uint64
+	MetadataBlocks          uint64
+	MetadataRows            uint64
+	MetadataTimeNS          uint64
+	CentroidBlocks          uint64
+	CentroidRows            uint64
+	CentroidTimeNS          uint64
+	EntryBlocksSelected     uint64
+	EntryBlocksRead         uint64
+	EntryOutputRows         uint64
+	EntryTimeNS             uint64
+	StorageFilterInputRows  uint64
+	StorageFilterOutputRows uint64
+	VectorRowsScored        uint64
+	VectorChunksRead        uint64
+	VectorChunkCacheHits    uint64
+	VectorCompressedBytes   uint64
+	VectorDecodedBytes      uint64
+	TopKOutputRows          uint64
+	OutputRows              uint64
+}
+
+// Merge adds one reader-generation summary to the receiver.
+func (d *IvfExecutionDiagnostic) Merge(other IvfExecutionDiagnostic) {
+	if d == nil {
+		return
+	}
+	d.SearchCount += other.SearchCount
+	d.ReaderCount += other.ReaderCount
+	d.MetadataBlocks += other.MetadataBlocks
+	d.MetadataRows += other.MetadataRows
+	d.MetadataTimeNS += other.MetadataTimeNS
+	d.CentroidBlocks += other.CentroidBlocks
+	d.CentroidRows += other.CentroidRows
+	d.CentroidTimeNS += other.CentroidTimeNS
+	d.EntryBlocksSelected += other.EntryBlocksSelected
+	d.EntryBlocksRead += other.EntryBlocksRead
+	d.EntryOutputRows += other.EntryOutputRows
+	d.EntryTimeNS += other.EntryTimeNS
+	d.StorageFilterInputRows += other.StorageFilterInputRows
+	d.StorageFilterOutputRows += other.StorageFilterOutputRows
+	d.VectorRowsScored += other.VectorRowsScored
+	d.VectorChunksRead += other.VectorChunksRead
+	d.VectorChunkCacheHits += other.VectorChunkCacheHits
+	d.VectorCompressedBytes += other.VectorCompressedBytes
+	d.VectorDecodedBytes += other.VectorDecodedBytes
+	d.TopKOutputRows += other.TopKOutputRows
+	d.OutputRows += other.OutputRows
+}
+
+// EncodeIvfExecutionDiagnostic creates a remote-plan-safe summary carrier.
+func EncodeIvfExecutionDiagnostic(d IvfExecutionDiagnostic) *plan.Query {
+	values := []uint64{
+		d.SearchCount,
+		d.ReaderCount,
+		d.MetadataBlocks,
+		d.MetadataRows,
+		d.MetadataTimeNS,
+		d.CentroidBlocks,
+		d.CentroidRows,
+		d.CentroidTimeNS,
+		d.EntryBlocksSelected,
+		d.EntryBlocksRead,
+		d.EntryOutputRows,
+		d.EntryTimeNS,
+		d.StorageFilterInputRows,
+		d.StorageFilterOutputRows,
+		d.VectorRowsScored,
+		d.VectorChunksRead,
+		d.VectorChunkCacheHits,
+		d.VectorCompressedBytes,
+		d.VectorDecodedBytes,
+		d.TopKOutputRows,
+		d.OutputRows,
+	}
+	headings := make([]string, 1, len(values)+1)
+	headings[0] = ivfExecutionDiagnosticHeading
+	for _, value := range values {
+		headings = append(headings, strconv.FormatUint(value, 10))
+	}
+	return &plan.Query{Headings: headings}
+}
+
+// DecodeIvfExecutionDiagnostic recognizes a complete v1 execution summary.
+func DecodeIvfExecutionDiagnostic(q *plan.Query) (IvfExecutionDiagnostic, bool) {
+	var d IvfExecutionDiagnostic
+	if q == nil || len(q.Headings) != 22 || q.Headings[0] != ivfExecutionDiagnosticHeading {
+		return d, false
+	}
+	destinations := []*uint64{
+		&d.SearchCount,
+		&d.ReaderCount,
+		&d.MetadataBlocks,
+		&d.MetadataRows,
+		&d.MetadataTimeNS,
+		&d.CentroidBlocks,
+		&d.CentroidRows,
+		&d.CentroidTimeNS,
+		&d.EntryBlocksSelected,
+		&d.EntryBlocksRead,
+		&d.EntryOutputRows,
+		&d.EntryTimeNS,
+		&d.StorageFilterInputRows,
+		&d.StorageFilterOutputRows,
+		&d.VectorRowsScored,
+		&d.VectorChunksRead,
+		&d.VectorChunkCacheHits,
+		&d.VectorCompressedBytes,
+		&d.VectorDecodedBytes,
+		&d.TopKOutputRows,
+		&d.OutputRows,
+	}
+	for i, destination := range destinations {
+		value, err := strconv.ParseUint(q.Headings[i+1], 10, 64)
+		if err != nil {
+			return IvfExecutionDiagnostic{}, false
+		}
+		*destination = value
 	}
 	return d, true
 }

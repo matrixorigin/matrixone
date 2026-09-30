@@ -67,6 +67,12 @@ type container struct {
 type PreInsertUnique struct {
 	ctr          container
 	PreInsertCtx *plan.PreInsertUkCtx
+	// warningKeyMetadata is immutable for one prepared plan.  Build it lazily
+	// on the first warning-producing batch so ordinary INSERT IGNORE keeps the
+	// existing no-diagnostic fast path, while INSERT ... SELECT does not copy
+	// the same protobuf types for every input batch.
+	warningKeyMetadata      []insertIgnoreWarningKey
+	warningKeyMetadataReady bool
 
 	packers util.PackerList
 
@@ -194,6 +200,8 @@ func (preInsertUnique *PreInsertUnique) Free(proc *process.Process, pipelineFail
 	}
 	preInsertUnique.packers.Free()
 	preInsertUnique.freeAcceptedState(proc)
+	preInsertUnique.warningKeyMetadata = nil
+	preInsertUnique.warningKeyMetadataReady = false
 }
 
 func (preInsertUnique *PreInsertUnique) freeAcceptedState(proc *process.Process) {

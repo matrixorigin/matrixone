@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/geo"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -229,8 +230,16 @@ func BuildOverFetchLimitExpr(ctx context.Context, limit *plan.Expr, filteredPost
 	// Clamping the ADDEND instead of guarding the sum keeps this branch-free for
 	// the same reason as above: least(k, MaxUint64-10) + 10 is at most MaxUint64
 	// by construction, so no evaluation order can overflow it.
+	// A prepared LIMIT's implicit uint64 cast may be replaced with the bound
+	// parameter's source domain when the variadic least() is rebound. Pin this
+	// generated arithmetic boundary to uint64, including for DECIMAL inputs.
+	unsignedLimit, err := appendSyntaxExplicitCastBeforeExpr(ctx, DeepCopyExpr(limit), plan.Type{
+		Id: int32(types.T_uint64), NotNullable: true})
+	if err != nil {
+		return nil, err
+	}
 	clampedK, err := BindFuncExprImplByPlanExpr(ctx, "least", []*plan.Expr{
-		DeepCopyExpr(limit),
+		unsignedLimit,
 		makePlan2Uint64ConstExprWithType(math.MaxUint64 - overfetch.MinExtraCandidates)})
 	if err != nil {
 		return nil, err
@@ -358,6 +367,16 @@ func findSpatialIndexFilter(idxDef *IndexDef, node *plan.Node) int32 {
 	if !ok {
 		return -1
 	}
+	// The current R-tree key is an axis-aligned Cartesian envelope. A WGS84
+	// geometry can cross the antimeridian, where its canonical envelope (for
+	// example [-179,179]) does not contain points that are geographically
+	// adjacent through +/-180. Using that envelope as an index candidate would
+	// be unsound because the covering spatial scan can omit a true match. Keep
+	// the exact SRID-aware predicate on the base table until the index key can
+	// represent circular longitude intervals.
+	if isGeodeticSpatialColumn(node.TableDef.Cols[targetColPos]) {
+		return -1
+	}
 	for i := range node.FilterList {
 		col := checkSpatialIndexFilter(node.FilterList[i])
 		if col != nil && col.ColPos == targetColPos {
@@ -365,6 +384,16 @@ func findSpatialIndexFilter(idxDef *IndexDef, node *plan.Node) int32 {
 		}
 	}
 	return -1
+}
+
+func isGeodeticSpatialColumn(col *plan.ColDef) bool {
+	if col == nil {
+		return false
+	}
+	if col.Typ.Id != int32(types.T_geometry) && col.Typ.Id != int32(types.T_geometry32) {
+		return false
+	}
+	return col.Typ.Width == int32(geo.SRIDWGS84+1)
 }
 
 func buildSpatialIndexColMap(idxDef *IndexDef, node *plan.Node, idxTag int32, idxTableDef *plan.TableDef) map[[2]int32]*plan.Expr {
@@ -637,6 +666,41 @@ func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]i
 					filterids, filterFTIdxs, wrappedFTExprs, wrappedFTIdxs, colRefCnt, idxColMap)
 			}
 		}
+
+	case plan.Node_WINDOW:
+		// Fourth fulltext anchor: a WINDOW -> SCAN(MATCH). Adding a window function --
+		// `select ..., row_number() over (...) from t where match(...) against(...)` -- puts a
+		// WINDOW between the query block and the base scan, which the PROJECT-anchored
+		// resolveFullTextIndexPath (SORT/AGG hops only) never sees, so the scan's fulltext_match
+		// survives to execution as error 20105 (#28974). Anchor on the WINDOW like the AGG case:
+		// its single child is the scan, so rewrite the scan's MATCH to the index scan and reparent.
+		// Post-order recursion runs this before the PROJECT pass, which then finds no MATCH and
+		// no-ops -- no double rewrite. resolveScanNodeUnderWindow descends the PARTITION node that
+		// OVER(PARTITION BY ...) inserts between the window and the scan.
+		if len(node.Children) == 1 {
+			if scanNode := builder.resolveScanNodeUnderWindow(builder.qry.Nodes[node.Children[0]]); scanNode != nil {
+				filterids, filterFTIdxs := builder.getFullTextMatchFiltersFromScanNode(scanNode)
+				wrappedFTExprs, wrappedFTIdxs := builder.getWrappedFullTextMatches(nil, scanNode, filterids, nil)
+				if len(filterids) > 0 || len(wrappedFTExprs) > 0 {
+					return builder.applyIndicesForWindowUsingFullTextIndex(nodeID, node, scanNode,
+						filterids, filterFTIdxs, wrappedFTExprs, wrappedFTIdxs, colRefCnt, idxColMap)
+				}
+			}
+		}
+		// A stacked outer window whose scan MATCH was already consumed by an inner window can
+		// still carry that MATCH in its own OVER spec; resolve it against the scores served
+		// below. No-op when nothing was served or the spec holds no MATCH.
+		builder.rewriteWindowMatchesFromServed(node)
+
+	case plan.Node_FILTER:
+		// A FILTER above a WINDOW can retain a served fulltext_match that predicate pushdown could not
+		// move below the window: it neither references a window column (which would land it in
+		// WINDOW.FilterList, handled above) nor pushes onto the partition keys, so an outer
+		// `... where score > 0` stays here as `fulltext_match(...) > 0`. Child recursion already
+		// served the scan below and published its score (builder.ftJoinServed); rewrite the copy to
+		// that score column in place, so it still evaluates post-window. Binding-tag-aware: a MATCH no
+		// served scan answers is left intact and still raises 20105 (#28974 P2).
+		builder.rewriteServedMatchesInFilterList(node)
 	}
 
 	return nodeID, nil
@@ -668,7 +732,7 @@ func (builder *QueryBuilder) applyVectorIndicesEarly(
 			vecCtx = builder.buildVectorSortContextThroughJoin(node)
 		}
 		if vecCtx == nil {
-			return nodeID, nil
+			return builder.applyScalarVectorIndex(nodeID)
 		}
 		newNodeID, handled, err := builder.applyLogicalVectorIndexForSortContext(nodeID, vecCtx, colRefCnt, idxColMap)
 		if handled || err != nil {
@@ -813,9 +877,10 @@ func getColSeqFromColDef(tblCol *plan.ColDef) string {
 }
 
 type fullTextIndexPath struct {
-	sortNode *plan.Node
-	aggNode  *plan.Node
-	scanNode *plan.Node
+	sortNode   *plan.Node
+	aggNode    *plan.Node
+	havingNode *plan.Node // FILTER carrying HAVING between the project and the agg, if any
+	scanNode   *plan.Node
 }
 
 // resolveFullTextIndexPath finds the fulltext rewrite boundary. Projection
@@ -833,15 +898,46 @@ func (builder *QueryBuilder) resolveFullTextIndexPath(projNode *plan.Node) *full
 		}
 	}
 
+	var havingNode *plan.Node
 	for node := projNode; node != nil && len(node.Children) == 1; node = builder.qry.Nodes[node.Children[0]] {
+		if node.NodeType == plan.Node_FILTER {
+			// The HAVING clause sits in a FILTER between the project and the agg
+			// (appendAggNode). Its predicates are what can make an aggregate MATCH a driver.
+			havingNode = node
+			continue
+		}
+		// A cardinality/order/position-sensitive operator between a collected FILTER and the AGG
+		// means that FILTER runs AFTER the barrier and is NOT this AGG's HAVING. Driving the index
+		// below the AGG drops each group's non-matching rows before the barrier, which would
+		// silently change a window function's row numbers, a FILL, a PARTITION, or which rows a
+		// LIMIT keeps. Discard any FILTER collected above such a barrier (#29065).
+		if isFullTextAggHavingBarrier(node) {
+			havingNode = nil
+		}
 		if node.NodeType != plan.Node_AGG {
 			continue
 		}
 		if scanNode := builder.resolveScanNodeWithIndex(node, 1); scanNode != nil {
-			return &fullTextIndexPath{aggNode: node, scanNode: scanNode}
+			return &fullTextIndexPath{aggNode: node, havingNode: havingNode, scanNode: scanNode}
 		}
 	}
 	return nil
+}
+
+// isFullTextAggHavingBarrier reports whether a single-input node between the projection and the AGG
+// is cardinality/order/position-sensitive, so a FILTER sitting ABOVE it cannot be treated as the
+// AGG's HAVING for fulltext-index driving. Driving drops each group's non-matching rows before this
+// node, which would silently change a window function's output, a FILL, a PARTITION, or which rows a
+// LIMIT keeps.
+func isFullTextAggHavingBarrier(node *plan.Node) bool {
+	switch node.NodeType {
+	case plan.Node_WINDOW, plan.Node_TIME_WINDOW, plan.Node_FILL, plan.Node_PARTITION:
+		return true
+	}
+	// LIMIT and OFFSET both change which rows survive: a FILTER above either cannot be
+	// treated as the AGG's HAVING, because driving the index below drops each group's
+	// non-matching rows before the paginating node keeps/skips rows.
+	return node.Limit != nil || node.Offset != nil
 }
 
 func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
@@ -867,6 +963,19 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 			// `select count(*) from t where match(...) > 0.5` has no bare match at all.
 			wrappedFTExprs, wrappedFTIdxs := builder.getWrappedFullTextMatches(
 				nil, path.scanNode, filterids, nil)
+
+			// #29065: a grouped query whose only MATCH is an aggregate -- `MAX(match) AS score ...
+			// HAVING score > 0` / `HAVING MAX(match) > 0` -- has no scan-level driver, so the
+			// aggregate MATCH proven present by the membership-implying HAVING must drive the index.
+			var havingPreds []*plan.Expr
+			if path.havingNode != nil {
+				havingPreds = append(havingPreds, path.havingNode.FilterList...)
+			}
+			havingPreds = append(havingPreds, path.aggNode.FilterList...)
+			aggExprs, aggFTIdxs := builder.getFullTextMatchFromAggHaving(
+				havingPreds, path.aggNode, path.scanNode, fullTextDriverFuncs(path.scanNode, filterids, wrappedFTExprs))
+			wrappedFTExprs = append(wrappedFTExprs, aggExprs...)
+			wrappedFTIdxs = append(wrappedFTIdxs, aggFTIdxs...)
 
 			// apply the match indices (one unified pass handles a mix of MATCH + BM25)
 			if len(filterids) > 0 || len(wrappedFTExprs) > 0 {
@@ -916,6 +1025,11 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 		vecCtx := builder.buildVectorSortContext(projNode)
 		if vecCtx == nil {
 			vecCtx = builder.buildVectorSortContextThroughJoin(projNode)
+		}
+		if vecCtx == nil {
+			if rewritten, err := builder.applyScalarVectorIndex(nodeID); err != nil || rewritten != nodeID {
+				return rewritten, err
+			}
 		}
 		if vecCtx != nil {
 			newNodeID, handled, err := builder.applyVectorIndexForSortContext(nodeID, vecCtx, colRefCnt, idxColMap)
@@ -2476,26 +2590,41 @@ func checkIndexFilter(fn *plan.Function) (int, *plan.ColRef) {
 		}
 		col := fn.Args[0].GetCol()
 		if col != nil && isRuntimeConstExpr(fn.Args[1]) {
+			// Serialized regular-index keys preserve the physical distinction
+			// between -0 and +0. SQL equality does not, so using this predicate
+			// as an index access condition can silently drop one of the zeros.
+			// Fall back to the base scan until the access path compares decoded
+			// floating-point values.
+			if isFloatIndexFilterExpr(fn.Args[0]) {
+				return UnsupportedIndexCondition, nil
+			}
 			return EqualIndexCondition, col
 		}
 
 	case "in", "between":
 		col := fn.Args[0].GetCol()
-		if col != nil {
+		if col != nil && !isFloatIndexFilterExpr(fn.Args[0]) {
 			return NonEqualIndexCondition, col
 		}
 
 	case ">", ">=", "<", "<=":
 		if fn.Args[0].GetCol() != nil && isRuntimeConstExpr(fn.Args[1]) {
+			if isFloatIndexFilterExpr(fn.Args[0]) {
+				return UnsupportedIndexCondition, nil
+			}
 			return NonEqualIndexCondition, fn.Args[0].GetCol()
 		}
 		if isRuntimeConstExpr(fn.Args[0]) && fn.Args[1].GetCol() != nil {
+			if isFloatIndexFilterExpr(fn.Args[1]) {
+				return UnsupportedIndexCondition, nil
+			}
 			return NonEqualIndexCondition, fn.Args[1].GetCol()
 		}
 
 	case "in_range":
 		col := fn.Args[0].GetCol()
-		if col != nil && isRuntimeConstExpr(fn.Args[1]) && isRuntimeConstExpr(fn.Args[2]) {
+		if col != nil && !isFloatIndexFilterExpr(fn.Args[0]) &&
+			isRuntimeConstExpr(fn.Args[1]) && isRuntimeConstExpr(fn.Args[2]) {
 			return NonEqualIndexCondition, col
 		}
 
@@ -2517,6 +2646,14 @@ func checkIndexFilter(fn *plan.Function) (int, *plan.ColRef) {
 		return NonEqualIndexCondition, col
 	}
 	return UnsupportedIndexCondition, nil
+}
+
+func isFloatIndexFilterExpr(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	typ := types.T(expr.Typ.Id)
+	return typ == types.T_float32 || typ == types.T_float64
 }
 
 func findLeadingFilter(idxDef *IndexDef, node *plan.Node) ([]int32, bool) {
@@ -4406,7 +4543,7 @@ func canSerializeDecimalIndexRangeBound(bound *plan.Expr, indexedPartType plan.T
 	if boundType.Oid == indexedType.Oid && boundType.Scale == indexedType.Scale {
 		return true
 	}
-	return checkNoNeedCast(boundType, indexedType, bound)
+	return checkNoNeedCast(context.Background(), boundType, indexedType, bound)
 }
 
 func canSerializeDecimalIndexRangeBounds(fn *plan.Function, indexedPartType plan.Type) bool {

@@ -227,6 +227,12 @@ func checkCommonProtocolVersion(txn executor.TxnExecutor, required int64) error 
 		encoded = cols[0].GetStringAt(0)
 		return false
 	})
+	return CheckProtocolVersionResponse(encoded, required)
+}
+
+// CheckProtocolVersionResponse validates every serving CN's protocol before a
+// persistent definition requiring that protocol is published.
+func CheckProtocolVersionResponse(encoded string, required int64) error {
 	if encoded == "" {
 		return moerr.NewNotSupportedNoCtxf(
 			"upgrade requires all CNs to support protocol version %d: no protocol response", required)
@@ -320,7 +326,7 @@ func CheckTableColumn(txn executor.TxnExecutor,
        mo_show_visible_bin(att_default, 1) AS COLUMN_DEFAULT,
        CASE WHEN att_is_auto_increment = 1 THEN 'auto_increment' ELSE '' END AS EXTRA,
        att_comment AS COLUMN_COMMENT FROM mo_catalog.mo_columns
-            WHERE att_relname != 'mo_increment_columns' AND att_relname NOT LIKE '__mo_cpkey_%%'
+            WHERE att_relname != 'mo_increment_columns' AND NOT prefix_eq(att_relname, '__mo_cpkey_')
             AND attname != '__mo_rowid'
             AND att_database = '%s' and att_relname = '%s' and attname = '%s';`, schema, tableName, columnName)
 
@@ -335,7 +341,7 @@ func CheckTableColumn(txn executor.TxnExecutor,
        mo_show_visible_bin(att_default, 1) AS COLUMN_DEFAULT,
        CASE WHEN att_is_auto_increment = 1 THEN 'auto_increment' ELSE '' END AS EXTRA,
        att_comment AS COLUMN_COMMENT FROM mo_catalog.mo_columns
-            WHERE att_relname != 'mo_increment_columns' AND att_relname NOT LIKE '__mo_cpkey_%%'
+            WHERE att_relname != 'mo_increment_columns' AND NOT prefix_eq(att_relname, '__mo_cpkey_')
             AND attname != '__mo_rowid' AND account_id = 0
             AND att_database = '%s' and att_relname = '%s' and attname = '%s';`, schema, tableName, columnName)
 	}
@@ -412,11 +418,11 @@ var CheckTableDefinition = func(txn executor.TxnExecutor, accountId uint32, sche
 	}
 
 	sql := fmt.Sprintf(`SELECT reldatabase, relname, account_id FROM mo_catalog.mo_tables tbl
-                              WHERE tbl.relname NOT LIKE '__mo_index_%%' AND tbl.relkind != 'partition'
+                              WHERE NOT prefix_eq(tbl.relname, '__mo_index_') AND tbl.relkind != 'partition'
                               AND reldatabase = '%s' AND relname = '%s'`, schema, tableName)
 	if accountId == catalog.System_Account {
 		sql = fmt.Sprintf(`SELECT reldatabase, relname, account_id FROM mo_catalog.mo_tables tbl
-                                  WHERE tbl.relname NOT LIKE '__mo_index_%%' AND tbl.relkind != 'partition'
+                                  WHERE NOT prefix_eq(tbl.relname, '__mo_index_') AND tbl.relkind != 'partition'
                                   AND account_id = 0 AND reldatabase = '%s' AND relname = '%s'`, schema, tableName)
 	}
 
@@ -443,11 +449,11 @@ func CheckTableComment(txn executor.TxnExecutor, accountId uint32, schema string
 	}
 
 	sql := fmt.Sprintf(`SELECT reldatabase, relname, account_id, rel_comment FROM mo_catalog.mo_tables tbl
-                              WHERE tbl.relname NOT LIKE '__mo_index_%%' AND tbl.relkind != 'partition'
+                              WHERE NOT prefix_eq(tbl.relname, '__mo_index_') AND tbl.relkind != 'partition'
                               AND reldatabase = '%s' AND relname = '%s'`, schema, tableName)
 	if accountId == catalog.System_Account {
 		sql = fmt.Sprintf(`SELECT reldatabase, relname, account_id, rel_comment FROM mo_catalog.mo_tables tbl
-                                  WHERE tbl.relname NOT LIKE '__mo_index_%%' AND tbl.relkind != 'partition'
+                                  WHERE NOT prefix_eq(tbl.relname, '__mo_index_') AND tbl.relkind != 'partition'
                                   AND account_id = 0 AND reldatabase = '%s' AND relname = '%s'`, schema, tableName)
 	}
 

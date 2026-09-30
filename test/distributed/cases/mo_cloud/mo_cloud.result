@@ -176,15 +176,15 @@ Event_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
 Trigger_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
 Create_tablespace_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
 ssl_type  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-ssl_cipher  ¦  BLOB(0)  ¦  null  ¦  null  𝄀
-x509_issuer  ¦  BLOB(0)  ¦  null  ¦  null  𝄀
-x509_subject  ¦  BLOB(0)  ¦  null  ¦  null  𝄀
+ssl_cipher  ¦  BLOB  ¦  null  ¦  null  𝄀
+x509_issuer  ¦  BLOB  ¦  null  ¦  null  𝄀
+x509_subject  ¦  BLOB  ¦  null  ¦  null  𝄀
 max_questions  ¦  INT UNSIGNED(32)  ¦  null  ¦  null  𝄀
 max_updates  ¦  INT UNSIGNED(32)  ¦  null  ¦  null  𝄀
 max_connections  ¦  INT UNSIGNED(32)  ¦  null  ¦  null  𝄀
 max_user_connections  ¦  INT UNSIGNED(32)  ¦  null  ¦  null  𝄀
 plugin  ¦  CHAR(64)  ¦  null  ¦  null  𝄀
-authentication_string  ¦  TEXT(0)  ¦  null  ¦  null  𝄀
+authentication_string  ¦  TEXT  ¦  null  ¦  null  𝄀
 password_expired  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
 password_last_changed  ¦  TIMESTAMP(0)  ¦  null  ¦  null  𝄀
 password_lifetime  ¦  SMALLINT UNSIGNED(16)  ¦  null  ¦  null  𝄀
@@ -536,30 +536,30 @@ ROUTINE_TYPE  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦
 DESC `mo_catalog`.`mo_columns` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 att_uniq_name  ¦  VARCHAR(256)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-account_id  ¦  INT UNSIGNED(0)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
-att_database_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+account_id  ¦  INT UNSIGNED  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
+att_database_id  ¦  BIGINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 att_database  ¦  VARCHAR(256)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
-att_relname_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+att_relname_id  ¦  BIGINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 att_relname  ¦  VARCHAR(256)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
 attname  ¦  VARCHAR(256)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
 atttyp  ¦  VARCHAR(256)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attnum  ¦  INT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-att_length  ¦  INT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attnotnull  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-atthasdef  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attnum  ¦  INT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+att_length  ¦  INT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attnotnull  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+atthasdef  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 att_default  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attisdropped  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attisdropped  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 att_constraint_type  ¦  CHAR(1)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-att_is_unsigned  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-att_is_auto_increment  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+att_is_unsigned  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+att_is_auto_increment  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 att_comment  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-att_is_hidden  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attr_has_update  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+att_is_hidden  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attr_has_update  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_update  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attr_is_clusterby  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attr_seqnum  ¦  SMALLINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attr_is_clusterby  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attr_seqnum  ¦  SMALLINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_enum  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attr_has_generated  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attr_has_generated  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_generated  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦  
 DESC `mo_sample_data_tpch_sf10`.`region` ;
 Unknown database mo_sample_data_tpch_sf10
@@ -660,15 +660,15 @@ Event_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
 Trigger_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
 Create_tablespace_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
 ssl_type  ¦  VARCHAR(10)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
-ssl_cipher  ¦  BLOB(0)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-x509_issuer  ¦  BLOB(0)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-x509_subject  ¦  BLOB(0)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+ssl_cipher  ¦  BLOB  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+x509_issuer  ¦  BLOB  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+x509_subject  ¦  BLOB  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 max_questions  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
 max_updates  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
 max_connections  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
 max_user_connections  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
 plugin  ¦  CHAR(64)  ¦  NO  ¦    ¦  caching_sha2_password  ¦    ¦    𝄀
-authentication_string  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+authentication_string  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 password_expired  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
 password_last_changed  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 password_lifetime  ¦  SMALLINT UNSIGNED(16)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀

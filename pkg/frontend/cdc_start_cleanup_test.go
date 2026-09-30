@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"errors"
+	"fmt"
 	"runtime"
 	"strings"
 	"sync"
@@ -770,10 +771,10 @@ func (e *blockingRestartPublicationExecutor) Query(
 			"",
 			tables,
 			"",
-			"",
+			"2026-09-16T00:00:00Z",
 			"",
 			"true",
-			`{}`,
+			fmt.Sprintf(`{"%s":"%s"}`, cdc.CDCTaskExtraOptions_InitialSnapshotProtocol, cdc.CDCInitialSnapshotProtocolNoFullHLC),
 		}}
 	}
 	e.stateMu.Lock()

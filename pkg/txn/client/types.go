@@ -373,6 +373,15 @@ type Workspace interface {
 	GetSyncProtectionJobID() string
 }
 
+// TerminalTableDeletionView is an optional workspace capability for services
+// that retire state after a committed physical table deletion. It may only be
+// read synchronously from a committed ClosedEvent, after workspace preparation
+// and before finalization. The implementation must not acquire locks, perform
+// I/O, or call back into the transaction operator.
+type TerminalTableDeletionView interface {
+	IsTableDeletedAtTxnClose(physicalTableID uint64) bool
+}
+
 // TxnOverview txn overview include meta and status
 type TxnOverview struct {
 	// CreateAt create at
@@ -417,8 +426,16 @@ func (e TxnEvent) Aborted() bool {
 }
 
 type TxnEventCallback struct {
-	Func  func(context.Context, TxnOperator, TxnEvent, any) error
-	Value any
+	Func            func(context.Context, TxnOperator, TxnEvent, any) error
+	Value           any
+	StatementScoped bool // ClosedEvent action discarded if its statement rolls back.
+}
+
+// StatementCallbackOperator is implemented by operators that can discard
+// transaction-close actions owned by a rolled-back statement.
+type StatementCallbackOperator interface {
+	BeginStatementCallbacks()
+	RollbackStatementCallbacks(context.Context) error
 }
 
 func NewTxnEventCallback(f func(context.Context, TxnOperator, TxnEvent, any) error) TxnEventCallback {

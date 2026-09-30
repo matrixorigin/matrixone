@@ -16,11 +16,13 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
@@ -29,6 +31,93 @@ import (
 	index2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGetExecTypeAdaptiveTopIgnoresDeferredForceOneCN(t *testing.T) {
+	large := &planpb.Stats{BlockNum: int32(BlockThresholdForOneCN + 1), Cost: costThresholdForOneCN + 1}
+	qry := &planpb.Query{
+		Steps: []int32{3},
+		Nodes: []*planpb.Node{
+			{NodeId: 0, NodeType: planpb.Node_VECTOR_INDEX_SCAN, Stats: DeepCopyStats(large)},
+			{NodeId: 1, NodeType: planpb.Node_VECTOR_INDEX_SCAN, Stats: &planpb.Stats{ForceOneCN: true}},
+			{NodeId: 2, NodeType: planpb.Node_TABLE_SCAN, Stats: &planpb.Stats{}},
+			{NodeId: 3, NodeType: planpb.Node_ADAPTIVE_TOP, Children: []int32{0, 1, 2}, Stats: DeepCopyStats(large)},
+		},
+	}
+	require.Equal(t, ExecTypeAP_MULTICN, GetExecType(qry, false, false))
+	require.True(t, qry.Nodes[1].Stats.ForceOneCN, "PRE keeps its activation-time local constraint")
+
+	qry.Steps = []int32{1}
+	require.Equal(t, ExecTypeAP_ONECN, GetExecType(qry, false, false), "an active ForceOneCN scan remains local")
+	qry.Steps = nil
+	require.Equal(t, ExecTypeAP_ONECN, GetExecType(qry, false, false), "an incomplete graph must remain conservative")
+}
+
+func TestHintQueryTypePreservesExecutionContracts(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		hint int
+		want *planpb.Stats
+	}{
+		{name: "no override", want: DefaultStats()},
+		{name: "minimal", hint: 1, want: DefaultMinimalStats()},
+		{name: "big", hint: 2, want: DefaultBigStats()},
+		{name: "huge", hint: 3, want: DefaultHugeStats()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stats := DefaultStats()
+			stats.ForceOneCN = true
+			stats.Dop = 3
+			stats.Sql = "scan source"
+			hashmap := &planpb.HashMapStats{
+				HashmapSize: 7, HashOnPK: true, Shuffle: true,
+				ShuffleColIdx: 2, ShuffleColMin: 1, ShuffleColMax: 9,
+				Ranges: []float64{2, 5},
+			}
+			stats.HashmapStats = hashmap
+			builder := &QueryBuilder{
+				qry:            &planpb.Query{Nodes: []*planpb.Node{{Stats: stats}}},
+				optimizerHints: &OptimizerHints{execType: tc.hint},
+			}
+
+			builder.hintQueryType()
+
+			want := *tc.want
+			want.ForceOneCN, want.Dop, want.Sql, want.HashmapStats = true, 3, "scan source", hashmap
+			require.Equal(t, &want, stats)
+			require.Same(t, hashmap, stats.HashmapStats)
+		})
+	}
+}
+
+func TestHintQueryTypeKeepsRuntimeFilterDeliveryLocal(t *testing.T) {
+	for _, hint := range []int{1, 2, 3} {
+		t.Run(fmt.Sprintf("execType-%d", hint), func(t *testing.T) {
+			builder := newRuntimeFilterSingleTestBuilder(false)
+			join := builder.qry.Nodes[2]
+			join.JoinType = planpb.Node_DEDUP
+			join.RuntimeFilterBuildList = []*planpb.RuntimeFilterSpec{{Tag: 1}}
+			builder.forceJoinOnOneCN(2, false)
+			require.True(t, builder.qry.Nodes[0].Stats.ForceOneCN)
+			builder.optimizerHints = &OptimizerHints{execType: hint}
+
+			builder.hintQueryType()
+
+			require.True(t, builder.qry.Nodes[0].Stats.ForceOneCN,
+				"cost overrides must not distribute a current-CN runtime-filter consumer")
+			require.True(t, builder.qry.Nodes[1].Stats.ForceOneCN)
+			require.NotEqual(t, ExecTypeAP_MULTICN, GetExecType(builder.qry, false, false))
+
+			// The same cost hint still permits distributed execution when there is
+			// no locality constraint. This is not a global single-CN fallback.
+			for _, node := range builder.qry.Nodes {
+				node.Stats.ForceOneCN = false
+			}
+			if hint > 1 {
+				require.Equal(t, ExecTypeAP_MULTICN, GetExecType(builder.qry, false, false))
+			}
+		})
+	}
+}
 
 func TestStatsInfoUsableWithoutPersistedObjects(t *testing.T) {
 	for _, test := range []struct {
@@ -903,6 +992,80 @@ func TestDetermineBuildSidePreservesDeclaredRuntimeFilterDependency(t *testing.T
 	builder.determineBuildAndProbeSide(2, false)
 	require.Equal(t, []int32{0, 1}, builder.qry.Nodes[2].Children)
 	require.False(t, builder.qry.Nodes[2].IsRightJoin)
+}
+
+func TestGuardedDiagnosticKeepsLoopJoinSupportedOrientation(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	intType := planpb.Type{Id: int32(types.T_int64)}
+	timeType := planpb.Type{Id: int32(types.T_time)}
+	leftTag, rightTag := int32(10), int32(20)
+	bind := func(name string, args ...*planpb.Expr) *planpb.Expr {
+		expr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), name, args)
+		require.NoError(t, err)
+		return expr
+	}
+	key := bind("=", GetColExpr(intType, leftTag, 0), GetColExpr(intType, rightTag, 0))
+	invalidTime := bind("time", makePlan2StringConstExprWithType("900:00:00"))
+	guard := bind("case",
+		bind("=", GetColExpr(intType, leftTag, 0), makePlan2Int64ConstExprWithType(1)),
+		bind(">", GetColExpr(timeType, leftTag, 1), invalidTime),
+		makePlan2BoolConstExprWithType(true))
+	require.True(t, ContainsGuardedJoinDiagnostic(ctx.GetProcess(), guard))
+
+	for _, joinType := range []planpb.Node_JoinType{
+		planpb.Node_LEFT, planpb.Node_SEMI, planpb.Node_ANTI, planpb.Node_SINGLE,
+	} {
+		t.Run(joinType.String(), func(t *testing.T) {
+			builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, true)
+			builder.qry.Nodes = []*planpb.Node{
+				{NodeId: 0, NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{leftTag}, Stats: &planpb.Stats{Outcnt: 1}},
+				{NodeId: 1, NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{rightTag}, Stats: &planpb.Stats{Outcnt: 100}},
+				{NodeId: 2, NodeType: planpb.Node_JOIN, JoinType: joinType, Children: []int32{0, 1},
+					OnList: []*planpb.Expr{key}, Stats: &planpb.Stats{HashmapStats: &planpb.HashMapStats{}}},
+			}
+			builder.determineBuildAndProbeSide(2, false)
+			require.True(t, builder.qry.Nodes[2].IsRightJoin, "ordinary equijoin retains its cost choice")
+
+			builder.qry.Nodes[2].OnList = []*planpb.Expr{key, guard}
+			builder.determineBuildAndProbeSide(2, false)
+			require.False(t, builder.qry.Nodes[2].IsRightJoin)
+			builder.swapJoinChildren(2)
+			require.Equal(t, []int32{0, 1}, builder.qry.Nodes[2].Children)
+			require.Equal(t, joinType, builder.qry.Nodes[2].JoinType)
+		})
+	}
+
+	param := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_P{
+		P: &planpb.ParamRef{Pos: 0},
+	}}
+	params := vector.NewVec(types.T_text.ToType())
+	proc := ctx.GetProcess()
+	defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+	require.NoError(t, vector.AppendBytes(params, []byte("00:00:01"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+	preparedGuard := bind("case",
+		bind("=", GetColExpr(intType, leftTag, 0), makePlan2Int64ConstExprWithType(1)),
+		bind(">", GetColExpr(timeType, leftTag, 1), bind("time", param)),
+		makePlan2BoolConstExprWithType(true))
+	require.True(t, ContainsGuardedJoinDiagnostic(proc, preparedGuard))
+	for _, joinType := range []planpb.Node_JoinType{
+		planpb.Node_LEFT, planpb.Node_SEMI, planpb.Node_ANTI, planpb.Node_SINGLE,
+	} {
+		builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, true)
+		builder.qry.Nodes = []*planpb.Node{
+			{NodeId: 0, NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{leftTag}, Stats: &planpb.Stats{Outcnt: 1}},
+			{NodeId: 1, NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{rightTag}, Stats: &planpb.Stats{Outcnt: 100}},
+			{NodeId: 2, NodeType: planpb.Node_JOIN, JoinType: joinType, Children: []int32{0, 1},
+				OnList: []*planpb.Expr{key, preparedGuard}, Stats: &planpb.Stats{HashmapStats: &planpb.HashMapStats{}}},
+		}
+		builder.qry.Steps = []int32{2}
+		safe, err := ProbePreparedJoinParameterDiagnostics(proc, &Plan{Plan: &planpb.Plan_Query{Query: builder.qry}})
+		require.NoError(t, err)
+		require.True(t, safe)
+		builder.preparedBindingProof = &safe
+		builder.determineBuildAndProbeSide(2, false)
+		require.True(t, builder.qry.Nodes[2].IsRightJoin, "%s safe prepared operand restores cost choice", joinType)
+	}
 }
 
 func TestDetermineBuildSideCostsUnfilteredIndexByRetainedBytes(t *testing.T) {

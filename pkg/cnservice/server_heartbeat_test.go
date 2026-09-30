@@ -612,6 +612,12 @@ func TestCNHeartbeatHandlesCommandsWhenAdmissionApplyFails(t *testing.T) {
 		testHAKClient: &testHAKClient{cfg: conf},
 		batch:         testCommandBatch(7, command),
 	}
+	client.batch.CatalogMetadataBarrier = &pb.CatalogMetadataBarrier{
+		RecipientGeneration: 13,
+		MembershipEpoch:     2,
+		RequiredGeneration:  3,
+		Phase:               pb.CATALOG_METADATA_BARRIER_SEALED,
+	}
 	client.batch.ViewMetadataAdmission = &pb.ViewMetadataAdmission{
 		Enabled:              true,
 		Epoch:                6,
@@ -643,6 +649,13 @@ func TestCNHeartbeatHandlesCommandsWhenAdmissionApplyFails(t *testing.T) {
 	service.heartbeat(context.Background())
 	require.Equal(t, int32(1), holder.createCount.Load())
 	require.Zero(t, service.viewMetadataCatalogFencedEpoch.Load())
+	require.Equal(t, &pb.CatalogMetadataAck{
+		Generation:         13,
+		MembershipEpoch:    2,
+		RequiredGeneration: 3,
+		ObservedPhase:      pb.CATALOG_METADATA_BARRIER_SEALED,
+	}, service.newCNStoreHeartbeat().CatalogMetadataAck,
+		"旧 admission 失败不得阻止独立的 participant 观察确认")
 }
 
 func TestCNCommandGenerationRolloverDoesNotReplayInheritedCommands(t *testing.T) {

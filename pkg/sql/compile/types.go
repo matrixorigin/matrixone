@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -138,7 +139,9 @@ type Source struct {
 	FilterExpr      *plan.Expr   // todo: change this to []*plan.Expr,  is FilterList + RuntimeFilter
 	FilterList      []*plan.Expr //from node.FilterList, use for reader
 	BlockFilterList []*plan.Expr //from node.BlockFilterList, use for range
-	node            *plan.Node
+	// nil means not initialized; non-nil empty means this execution admitted no block filters.
+	remoteBlockFilters []*plan.Expr
+	node               *plan.Node
 	// vectorIndexScanTemplate retains the immutable prepared-plan expressions.
 	// Each execution folds a fresh copy into node.VectorIndexScan.
 	vectorIndexScanTemplate *plan.VectorIndexScan
@@ -199,6 +202,10 @@ type Scope struct {
 	// branch receiver is exhausted, so an outer LIMIT can leave later branches
 	// completely unstarted.
 	LazyPreScopes bool
+	// lazyRemote* pins one activated lazy branch to its own remote allocation
+	// generation. Deferred branches must not register or inflate this topology.
+	lazyRemoteFragmentCounts map[string]uint32
+	lazyRemoteExecutionID    uuid.UUID
 	// ConcurrentPreScopes forces producer/consumer concurrency for runtime
 	// scope trees whose bounded receiver channels would deadlock under the TP
 	// query's sequential fast path.
@@ -282,6 +289,11 @@ type Compile struct {
 	siriusRead *siriusReadOwner
 
 	pn *plan.Plan
+	// Semantic values for a prepared CTAS follow-up INSERT. SQL text transport
+	// alone cannot recover the source type of each original parameter.
+	preparedParamValues []any
+	// Proof belongs to this bound execution and physical plan generation.
+	preparedJoinDiagnosticFree bool
 
 	execType plan2.ExecType
 
@@ -385,6 +397,9 @@ type Compile struct {
 	loadUniqueIndexPromotion      *loadUniqueIndexPromotionState
 	loadUniqueIndexPromotionOwner bool
 
+	// Lazy scopes may register folds while another scope evaluates block filters.
+	// Protect both the registry and its mutable executors for the whole operation.
+	filterExprMu   sync.Mutex
 	filterExprExes []colexec.ExpressionExecutor
 
 	// compiledLocalRuntimeFilterNodes records SINGLE nodes with current-CN
@@ -395,12 +410,20 @@ type Compile struct {
 	needLockMeta bool
 	needBlock    bool
 	isPrepare    bool
-	disableRetry bool
-	isInternal   bool
+	// Immutable PREPARE-time floor, inherited by every physical generation.
+	groupConcatMaxLenFloor uint64
+	disableRetry           bool
+	isInternal             bool
 	// temporaryDDLInExecutorTxn keeps temporary CREATE/DROP in the transaction
 	// owned by the SQL executor. It is intentionally separate from isInternal,
 	// which also controls routing and other execution policy.
 	temporaryDDLInExecutorTxn bool
+	// Shared by retry generations so a direct-client temporary DROP reached in
+	// an earlier attempt is published if retry setup later fails terminally.
+	temporaryDropRetryStage *temporaryDropRetireStage
+	// Run owns publication after every possible retry decision, including
+	// errors that occur after the DROP scope itself has returned successfully.
+	temporaryDropRetryActive bool
 	// resourceAttemptOwnerEligible is set only for the top-level statement
 	// Compile. The statement root still arbitrates the single actual owner.
 	resourceAttemptOwnerEligible bool

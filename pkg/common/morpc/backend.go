@@ -91,10 +91,19 @@ func WithBackendBatchSendSize(size int) BackendOption {
 	}
 }
 
-// WithBackendConnectTimeout set the timeout for connect to remote. Default 5s.
+// WithBackendConnectTimeout sets the total timeout for connecting to a remote,
+// including retry waits. Default 5s.
 func WithBackendConnectTimeout(timeout time.Duration) BackendOption {
 	return func(rb *remoteBackend) {
 		rb.options.connectTimeout = timeout
+	}
+}
+
+// WithBackendConnectAttemptTimeout sets the timeout for one TCP connect
+// attempt. By default, one attempt may consume the complete connect timeout.
+func WithBackendConnectAttemptTimeout(timeout time.Duration) BackendOption {
+	return func(rb *remoteBackend) {
+		rb.options.connectAttemptTimeout = timeout
 	}
 }
 
@@ -196,19 +205,22 @@ type remoteBackend struct {
 	livenessEpoch   time.Time
 
 	options struct {
-		hasPayloadResponse  bool
-		goettyOptions       []goetty.Option
-		connectTimeout      time.Duration
-		bufferSize          int
-		busySize            int
-		batchSendSize       int
-		streamBufferSize    int
-		disconnectAfterRead int
-		filter              func(msg Message, backendAddr string) bool
-		readTimeout         time.Duration
-		livenessProbe       func(context.Context, string) error
-		freeResponse        func(Message)
-		releaseRequest      func(Message)
+		hasPayloadResponse    bool
+		goettyOptions         []goetty.Option
+		connectTimeout        time.Duration
+		connectAttemptTimeout time.Duration
+		connectNow            func() time.Time
+		connectWait           func(context.Context, time.Duration) error
+		bufferSize            int
+		busySize              int
+		batchSendSize         int
+		streamBufferSize      int
+		disconnectAfterRead   int
+		filter                func(msg Message, backendAddr string) bool
+		readTimeout           time.Duration
+		livenessProbe         func(context.Context, string) error
+		freeResponse          func(Message)
+		releaseRequest        func(Message)
 	}
 
 	stateMu struct {
@@ -309,7 +321,10 @@ func NewRemoteBackend(
 	rb.conn = goetty.NewIOSession(rb.options.goettyOptions...)
 
 	if err := rb.resetConn(); err != nil {
-		rb.logger.Error("connect to remote failed", rb.logFields()...)
+		rb.logger.Error(
+			"connect to remote failed",
+			append(rb.logFields(), zap.Error(err))...,
+		)
 		return nil, err
 	}
 	rb.activeReadLoop(false)
@@ -337,6 +352,16 @@ func (rb *remoteBackend) adjust() {
 	}
 	if rb.options.connectTimeout == 0 {
 		rb.options.connectTimeout = time.Second * 5
+	}
+	if rb.options.connectAttemptTimeout <= 0 ||
+		rb.options.connectAttemptTimeout > rb.options.connectTimeout {
+		rb.options.connectAttemptTimeout = rb.options.connectTimeout
+	}
+	if rb.options.connectNow == nil {
+		rb.options.connectNow = time.Now
+	}
+	if rb.options.connectWait == nil {
+		rb.options.connectWait = waitConnectRetry
 	}
 	if rb.options.streamBufferSize == 0 {
 		rb.options.streamBufferSize = 16
@@ -1181,9 +1206,11 @@ func (rb *remoteBackend) running() bool {
 }
 
 func (rb *remoteBackend) resetConn() error {
-	start := time.Now()
+	start := rb.options.connectNow()
+	deadline := start.Add(rb.options.connectTimeout)
 	defer func() {
-		rb.metrics.connectDurationHistogram.Observe(time.Since(start).Seconds())
+		rb.metrics.connectDurationHistogram.Observe(
+			rb.options.connectNow().Sub(start).Seconds())
 	}()
 
 	wait := time.Second
@@ -1197,11 +1224,21 @@ func (rb *remoteBackend) resetConn() error {
 			return backendClosed
 		default:
 		}
+		remaining := deadline.Sub(rb.options.connectNow())
+		if remaining <= 0 {
+			err := moerr.NewRPCTimeoutNoCtx()
+			rb.metrics.observeBackendError(rb.remote, "connect", err)
+			return err
+		}
 
 		rb.logger.Debug("start connect to remote", rb.logFields()...)
 		rb.closeConn(false)
 		rb.metrics.connectCounter.Inc()
-		err := rb.conn.Connect(rb.remote, rb.options.connectTimeout)
+		attemptTimeout := rb.options.connectAttemptTimeout
+		if attemptTimeout > remaining {
+			attemptTimeout = remaining
+		}
+		err := rb.conn.Connect(rb.remote, attemptTimeout)
 		if err == nil {
 			rb.logger.Debug("connect to remote succeed", rb.logFields()...)
 			// Transport-progress evidence belongs to one physical connection.
@@ -1230,18 +1267,20 @@ func (rb *remoteBackend) resetConn() error {
 		}
 		duration := time.Duration(0)
 		for {
-			time.Sleep(sleep)
-			duration += sleep
-			if time.Since(start) > rb.options.connectTimeout {
+			remaining = deadline.Sub(rb.options.connectNow())
+			if remaining <= 0 {
 				err := moerr.NewRPCTimeoutNoCtx()
 				rb.metrics.observeBackendError(rb.remote, "connect", err)
 				return err
 			}
-			select {
-			case <-rb.ctx.Done():
-				return backendClosed
-			default:
+			delay := sleep
+			if delay > remaining {
+				delay = remaining
 			}
+			if err := rb.options.connectWait(rb.ctx, delay); err != nil {
+				return backendClosed
+			}
+			duration += delay
 			if duration >= wait {
 				break
 			}
@@ -1251,6 +1290,17 @@ func (rb *remoteBackend) resetConn() error {
 		// reconnect failed, notify all future failed
 		backendErr := moerr.NewBackendCannotConnectNoCtx()
 		rb.notifyAllWaitWritesFailed(backendErr)
+	}
+}
+
+func waitConnectRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

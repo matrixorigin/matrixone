@@ -177,9 +177,22 @@ func (a *vectorTopAccumulator) consume(ctx context.Context, vec *vector.Vector, 
 		if localRow < 0 || localRow >= int64(vec.Length()) || nulls.Contains(uint64(localRow)) {
 			continue
 		}
+		if order.Stats != nil {
+			order.Stats.VectorRowsScored++
+		}
 		dist, err := a.distOf(vec.GetBytesAt(int(localRow)))
 		if err != nil {
 			return err
+		}
+		// The public scalar distances (l1_distance, inner_product, cosine_distance) are the float32
+		// domain, but this kernel computes raw float64 and -- for these metrics -- is the FINAL gate
+		// (no bound widening, no exact post-filter downstream). Comparing a raw distance against the
+		// bound drops a row whose public distance satisfies the predicate (e.g. l1 1.00000001 rounds
+		// to 1, so `<= 1` holds) (#29040). Gate/order in the public float32 domain to match. L2 is
+		// excluded: it runs in the squared domain with a conservatively widened bound and an exact
+		// source-domain post-filter, and rounding a squared value would double-round the sqrt.
+		if order.MetricType != metric.Metric_L2Distance && order.MetricType != metric.Metric_L2sqDistance {
+			dist = metric.RoundDistanceToElemDomain(dist)
 		}
 		if a.rangeActive && math.IsNaN(dist) {
 			continue
@@ -251,7 +264,11 @@ func TopNVector(ctx context.Context, selectRows []int64, vecCol *vector.Vector, 
 	if err = acc.consume(ctx, vecCol, 0, selectRows, 0); err != nil {
 		return nil, nil, err
 	}
-	return acc.finish()
+	rows, distances, err := acc.finish()
+	if err == nil {
+		recordVectorTopKOutput(orderByLimit, len(rows))
+	}
+	return rows, distances, err
 }
 
 // SearchCachedVectorTopN computes TopN while the caller-held IOEntry cache
@@ -267,5 +284,29 @@ func SearchCachedVectorTopN(
 		return nil, nil, err
 	}
 	defer source.Free(nil)
+	recordVectorChunk(orderByLimit, entry)
 	return TopNVector(ctx, selectRows, &source, orderByLimit)
+}
+
+func recordVectorTopKOutput(top *IndexReaderTopOp, rows int) {
+	if top == nil || top.Stats == nil || rows <= 0 {
+		return
+	}
+	top.Stats.TopKOutputRows += uint64(rows)
+}
+
+func recordVectorChunk(top *IndexReaderTopOp, entry fileservice.IOEntry) {
+	if top == nil || top.Stats == nil {
+		return
+	}
+	top.Stats.VectorChunksRead++
+	if entry.WasFromCache() {
+		top.Stats.VectorChunkCacheHits++
+	}
+	if entry.Size > 0 {
+		top.Stats.VectorCompressedBytes += uint64(entry.Size)
+	}
+	if entry.CachedData != nil && entry.CachedData.Size() > 0 {
+		top.Stats.VectorDecodedBytes += uint64(entry.CachedData.Size())
+	}
 }

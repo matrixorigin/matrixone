@@ -38,6 +38,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
@@ -2764,6 +2765,9 @@ func TestMergeBaseFilterInKind(t *testing.T) {
 			cols, area := vector.MustVarlenaRawData(retV)
 			for i := range cols {
 				str := string(cols[i].GetByteSlice(area))
+				if ty == types.T_json {
+					str = types.DecodeJson(cols[i].GetByteSlice(area)).String()
+				}
 				val, err := strconv.Atoi(str)
 				require.NoError(t, err)
 				_, ok := mm[float64(val)]
@@ -2937,21 +2941,35 @@ func TestMergeBaseFilterInKind(t *testing.T) {
 				rstrs = make([]string, 0, len(rvals))
 				for i := range rvals {
 					str := strconv.Itoa(int(rvals[i]))
+					if ty == types.T_json {
+						value, err := types.ParseStringToByteJson(str)
+						require.NoError(t, err)
+						encoded, err := types.EncodeJson(value)
+						require.NoError(t, err)
+						str = string(encoded)
+					}
 					rstrs = append(rstrs, str)
 				}
 				slices.Sort(rstrs)
 				for i := range rstrs {
-					vector.AppendBytes(rvec, []byte(rstrs[i]), false, mp)
+					require.NoError(t, vector.AppendBytes(rvec, []byte(rstrs[i]), false, mp))
 				}
 
 				lstrs = make([]string, 0, len(lvals))
 				for i := range lvals {
 					str := strconv.Itoa(int(lvals[i]))
+					if ty == types.T_json {
+						value, err := types.ParseStringToByteJson(str)
+						require.NoError(t, err)
+						encoded, err := types.EncodeJson(value)
+						require.NoError(t, err)
+						str = string(encoded)
+					}
 					lstrs = append(lstrs, str)
 				}
 				slices.Sort(lstrs)
 				for i := range lstrs {
-					vector.AppendBytes(lvec, []byte(lstrs[i]), false, mp)
+					require.NoError(t, vector.AppendBytes(lvec, []byte(lstrs[i]), false, mp))
 				}
 			}
 
@@ -3521,15 +3539,20 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 type testMembershipFilter struct {
 	hits  []uint8
 	calls int
+	exact bool
+	probe func(*vector.Vector)
 }
 
 func (f *testMembershipFilter) Test([]byte) bool { return true }
-func (f *testMembershipFilter) TestVector(*vector.Vector, func(bool, bool, int)) []uint8 {
+func (f *testMembershipFilter) TestVector(v *vector.Vector, _ func(bool, bool, int)) []uint8 {
+	if f.probe != nil {
+		f.probe(v)
+	}
 	f.calls++
 	return f.hits
 }
 func (f *testMembershipFilter) Valid() bool { return true }
-func (f *testMembershipFilter) Exact() bool { return false }
+func (f *testMembershipFilter) Exact() bool { return f.exact }
 func (f *testMembershipFilter) Free()       {}
 
 func TestConstructBlockPKFilterBloomFailOpen(t *testing.T) {
@@ -3570,6 +3593,24 @@ func TestConstructBlockPKFilterBloomFailOpen(t *testing.T) {
 		require.Equal(t, []int64{0, 1, 2}, result)
 		require.Equal(t, 1, bf.calls)
 	})
+}
+
+func TestConstructBlockPKFilterMarksOnlyExactMembership(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		exact bool
+	}{
+		{name: "approximate"},
+		{name: "exact", exact: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			filter, err := ConstructBlockPKFilter(false, BasePKFilter{}, &testMembershipFilter{
+				hits: []uint8{1}, exact: test.exact,
+			})
+			require.NoError(t, err)
+			require.Equal(t, test.exact, filter.ExactMembership)
+		})
+	}
 }
 
 func TestConstructBlockPKFilterIntersectsPrimaryKeyAndBloomFilter(t *testing.T) {
@@ -3951,6 +3992,132 @@ func TestCompileFilterExpr_PrefixInRangeAllFlags(t *testing.T) {
 	}
 }
 
+func TestCompositeLeadingRangeExcludesObjectsBeforeMetadataLoad(t *testing.T) {
+	encode := func(first, second int64) []byte {
+		packer := types.NewPacker()
+		defer packer.Close()
+		packer.EncodeInt64(first)
+		packer.EncodeInt64(second)
+		return append([]byte(nil), packer.GetBuf()...)
+	}
+	bound := func(value int64) *plan.Expr {
+		packer := types.NewPacker()
+		defer packer.Close()
+		packer.EncodeInt64(value)
+		return plan2.MakePlan2StringConstExprWithType(string(packer.GetBuf()), true)
+	}
+	table := &plan.TableDef{
+		Name2ColIndex: map[string]int32{"a": 0, "__mo_cpkey": 1},
+		Pkey:          &plan.PrimaryKeyDef{PkeyColName: "__mo_cpkey", Names: []string{"a", "b"}},
+		Cols: []*plan.ColDef{
+			{Name: "a", Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "__mo_cpkey", Seqnum: 1, Primary: true, Typ: plan.Type{Id: int32(types.T_varchar)}},
+		},
+	}
+	expr := MakeFunctionExprForTest("prefix_in_range", []*plan.Expr{
+		MakeColExprForTest(1, types.T_varchar, "__mo_cpkey"),
+		bound(10), bound(20), plan2.MakePlan2Uint8ConstExprWithType(2),
+	})
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	var exes []colexec.ExpressionExecutor
+	plan2.ReplaceFoldExpr(proc, expr, &exes)
+	plan2.EvalFoldExpr(proc, expr, &exes)
+	for _, exe := range exes {
+		defer exe.Free()
+	}
+	fast, load, _, _, _, canCompile, _ := CompileFilterExpr(expr, table, nil)
+	require.True(t, canCompile)
+	require.NotNil(t, fast)
+	require.NotNil(t, load)
+	var objects []objectio.ObjectStats
+	for i, tc := range []struct {
+		name     string
+		first    int64
+		expected bool
+	}{
+		{"below", 9, false}, {"lower", 10, true}, {"inside", 15, true},
+		{"upper-open", 20, false}, {"above", 21, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stats := filterTestObject(t, byte(i+1))
+			zm := index.NewZM(types.T_varchar, 0)
+			index.UpdateZM(zm, encode(tc.first, 1))
+			index.UpdateZM(zm, encode(tc.first, 2))
+			require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(&stats, zm))
+			selected, err := fast(&stats)
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, selected)
+			objects = append(objects, stats)
+		})
+	}
+	nullFirst := filterTestObject(t, 6)
+	packer := types.NewPacker()
+	packer.EncodeNull()
+	packer.EncodeInt64(1)
+	nullZM := index.NewZM(types.T_varchar, 0)
+	index.UpdateZM(nullZM, packer.GetBuf())
+	packer.Close()
+	require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(&nullFirst, nullZM))
+	objects = append(objects, nullFirst)
+	loads := 0
+	countLoad := func(_ context.Context, _ *objectio.ObjectStats, meta objectio.ObjectMeta, bf objectio.BloomFilter) (objectio.ObjectMeta, objectio.BloomFilter, error) {
+		loads++
+		return meta, bf, nil
+	}
+	var blocks objectio.BlockInfoSlice
+	_, loadHit, _, _, _, _, fastTotal, fastHit, err := FilterObjects(
+		context.Background(), engine.RangesParam{}, fast, countLoad, nil, nil, nil,
+		nil, objects, nil, &blocks, false, nil, nil,
+	)
+	require.NoError(t, err)
+	require.Equal(t, len(objects), fastTotal)
+	require.Equal(t, 4, fastHit)
+	require.Equal(t, 2, loadHit)
+	require.Equal(t, loadHit, loads)
+	for _, tc := range []struct {
+		name     string
+		lower    *plan.Expr
+		upper    *plan.Expr
+		flag     uint8
+		selected []bool
+	}{
+		{"less", nil, bound(10), 2, []bool{true, false, false, false, false, true}},
+		{"less-or-equal", nil, bound(10), 0, []bool{true, true, false, false, false, true}},
+		{"greater", bound(20), nil, 1, []bool{false, false, false, false, true, false}},
+		{"greater-or-equal", bound(20), nil, 0, []bool{false, false, false, true, true, false}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			empty := plan2.MakePlan2StringConstExprWithType("", true)
+			empty.Typ.Id = int32(types.T_varchar)
+			if tc.lower == nil {
+				tc.lower = empty
+			}
+			if tc.upper == nil {
+				tc.upper = empty
+			}
+			expr := MakeFunctionExprForTest("prefix_in_range", []*plan.Expr{
+				MakeColExprForTest(1, types.T_varchar, "__mo_cpkey"),
+				tc.lower, tc.upper, plan2.MakePlan2Uint8ConstExprWithType(tc.flag),
+			})
+			var folded []colexec.ExpressionExecutor
+			_, err := plan2.ReplaceFoldExpr(proc, expr, &folded)
+			require.NoError(t, err)
+			require.NoError(t, plan2.EvalFoldExpr(proc, expr, &folded))
+			for _, exe := range folded {
+				exe.Free()
+			}
+			oneSidedFast, _, _, _, _, compiled, _ := CompileFilterExpr(expr, table, nil)
+			require.True(t, compiled)
+			for i := range objects {
+				selected, err := oneSidedFast(&objects[i])
+				require.NoError(t, err)
+				require.Equal(t, tc.selected[i], selected)
+			}
+		})
+	}
+}
+
 func TestCompileFilterExprsPreservesSupportedConjuncts(t *testing.T) {
 	tableDef := &plan.TableDef{
 		Name:          "test_tbl",
@@ -4220,4 +4387,71 @@ func TestCompileFilterExpr_PrefixSortedSeekOps(t *testing.T) {
 			require.NotNil(t, seekOp, "seekOp should be set for sorted %s", name)
 		})
 	}
+}
+
+// Raw prefix literals emitted by IVF are not folded constants. An invalid
+// extracted filter must not become an equality against the empty compound key.
+func TestConstructBlockPKFilterInvalidCompositePrefix(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	col := &plan.ColDef{Name: "__mo_cpkey_col", Typ: plan.Type{Id: int32(types.T_varchar)}}
+	table := &plan.TableDef{Cols: []*plan.ColDef{col}, Name2ColIndex: map[string]int32{col.Name: 0}, Pkey: &plan.PrimaryKeyDef{PkeyColName: col.Name, CompPkeyCol: col}}
+	expr := MakeFunctionExprForTest("prefix_eq", []*plan.Expr{
+		MakeColExprForTest(0, types.T_varchar, col.Name), plan2.MakePlan2StringConstExprWithType("prefix"),
+	})
+	base, err := ConstructBasePKFilter(expr, table, mp)
+	require.NoError(t, err)
+	require.False(t, base.Valid)
+	require.Equal(t, types.T_varchar, base.Oid)
+	keys := vector.NewVec(types.T_varchar.ToType())
+	defer keys.Free(mp)
+	for _, key := range []string{"prefix-a", "prefix-b", "prefix-c"} {
+		require.NoError(t, vector.AppendBytes(keys, []byte(key), false, mp))
+	}
+	ids := vector.NewVec(types.T_int64.ToType())
+	defer ids.Free(mp)
+	require.NoError(t, vector.AppendFixedList(ids, []int64{7, 11, 19}, nil, mp))
+	for _, exact := range []bool{false, true} {
+		for _, secondary := range []bool{false, true} {
+			t.Run(fmt.Sprintf("exact=%v/secondary=%v", exact, secondary), func(t *testing.T) {
+				vectors := containers.Vectors{*keys}
+				if secondary {
+					vectors = append(vectors, *ids)
+				}
+				bf := &testMembershipFilter{hits: []uint8{1, 0, 1}, exact: exact, probe: func(v *vector.Vector) {
+					if secondary {
+						require.Equal(t, []int64{7, 11, 19}, vector.MustFixedColWithTypeCheck[int64](v))
+					} else {
+						require.Equal(t, "prefix-a", string(v.GetBytesAt(0)))
+					}
+				}}
+				filter, err := ConstructBlockPKFilter(false, base, bf)
+				require.NoError(t, err)
+				if filter.Cleanup != nil {
+					defer filter.Cleanup()
+				}
+				require.True(t, filter.Valid)
+				require.Equal(t, exact, filter.ExactMembership)
+				require.Equal(t, []int64{0, 2}, filter.SortedSearchFunc(vectors))
+				require.Equal(t, []int64{0, 2}, filter.UnSortedSearchFunc(vectors))
+				require.Equal(t, 2, bf.calls)
+			})
+		}
+	}
+}
+
+func TestConstructBlockPKFilterValidEmptyEquality(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	keys := vector.NewVec(types.T_varchar.ToType())
+	defer keys.Free(mp)
+	for _, key := range []string{"", "a", "b"} {
+		require.NoError(t, vector.AppendBytes(keys, []byte(key), false, mp))
+	}
+	bf := &testMembershipFilter{hits: []uint8{1, 1, 1}, exact: true}
+	filter, err := ConstructBlockPKFilter(false, BasePKFilter{Valid: true, Oid: types.T_varchar, Op: function.EQUAL, LB: []byte{}}, bf)
+	require.NoError(t, err)
+	if filter.Cleanup != nil {
+		defer filter.Cleanup()
+	}
+	require.Equal(t, []int64{0}, filter.SortedSearchFunc(containers.Vectors{*keys}))
+	require.Equal(t, []int64{0}, filter.UnSortedSearchFunc(containers.Vectors{*keys}))
 }

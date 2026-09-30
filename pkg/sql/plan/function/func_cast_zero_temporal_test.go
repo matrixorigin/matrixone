@@ -27,6 +27,37 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Empty string payloads retain the 4.2 nullable TIME contract regardless of
+// transport, source vector, or strict mode. IGNORE has its own adjustment rule.
+func TestEmptyTimeConversionPreservesReleaseContract(t *testing.T) {
+	for _, sqlMode := range []string{"", "STRICT_TRANS_TABLES"} {
+		for _, source := range []types.T{types.T_varchar, types.T_varbinary} {
+			for _, binary := range []bool{false, true} {
+				for name, fn := range map[string]fEvalFn{"expression": NewCast, "explicit": NewExplicitCast, "assignment": NewAssignCast} {
+					t.Run(fmt.Sprintf("%s/%s/bin=%t/%s", sqlMode, source, binary, name), func(t *testing.T) {
+						proc := testutil.NewProcess(t)
+						proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return sqlMode, nil })
+						session := &numericWarningSession{}
+						proc.Session = session
+						inputs := []FunctionTestInput{
+							NewFunctionTestInput(source.ToType(), []string{"", " ", "15", "", "bad"}, []bool{false, false, false, true, false}),
+							NewFunctionTestInput(types.T_time.ToType(), []types.Time{}, nil),
+						}
+						expect := NewFunctionTestResult(types.T_time.ToType(), false,
+							[]types.Time{0, 0, 15 * types.MicroSecsPerSec, 0, 0}, []bool{true, false, false, true, true})
+						tc := NewFunctionTestCase(proc, inputs, expect, fn).
+							WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, true, false}})
+						tc.parameters[0].SetIsBin(binary)
+						ok, info := tc.Run()
+						require.True(t, ok, info)
+						require.Empty(t, session.warnings)
+					})
+				}
+			}
+		}
+	}
+}
+
 func TestCastZeroTemporalToNumericUsesZero(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.GetSessionInfo().TimeZone = time.FixedZone("UTC+8", 8*60*60)
@@ -198,10 +229,10 @@ func TestExplicitCastZeroTemporalStringsHonorStrictNoZeroDate(t *testing.T) {
 			},
 		},
 		{
-			name:     "no zero date without strict keeps sentinel",
+			name:     "no zero date without strict nulls expression",
 			input:    "0000-00-00 00:00:00",
 			target:   types.T_datetime.ToType(),
-			wantNull: false,
+			wantNull: true,
 			configure: func(proc *process.Process) {
 				proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
 					return "NO_ZERO_DATE", nil
@@ -466,6 +497,96 @@ func TestUnixTimestampZeroValueReturnsNull(t *testing.T) {
 	}
 }
 
+func TestUnixTimestampInvalidPreEpochAndNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	preEpoch, err := types.ParseTimestamp(time.UTC, "1969-12-31 23:59:59.999999", 6)
+	require.NoError(t, err)
+	epoch, err := types.ParseTimestamp(time.UTC, "1970-01-01 00:00:00.000000", 6)
+	require.NoError(t, err)
+	postEpoch, err := types.ParseTimestamp(time.UTC, "1970-01-01 00:00:01.500000", 6)
+	require.NoError(t, err)
+
+	stringValues := []string{
+		"2021-02-29",
+		"not-a-datetime",
+		"0000-00-00 00:00:00",
+		"1969-12-31 23:59:59.999999",
+		"1970-01-01 00:00:00.000000",
+		"1970-01-01 00:00:01.500000",
+		"",
+	}
+	stringNulls := []bool{false, false, false, false, false, false, true}
+
+	for _, test := range []struct {
+		name   string
+		inputs []FunctionTestInput
+		expect FunctionTestResult
+		fn     fEvalFn
+	}{
+		{
+			name: "typed integer",
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_timestamp.ToType(),
+				[]types.Timestamp{types.ZeroTimestamp, preEpoch, epoch, postEpoch, 0},
+				[]bool{false, false, false, false, true})},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{0, 0, 0, 1, 0}, []bool{true, false, false, false, true}),
+			fn: builtInUnixTimestamp,
+		},
+		{
+			name: "typed decimal",
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_timestamp.ToTypeWithScale(6),
+				[]types.Timestamp{types.ZeroTimestamp, preEpoch, epoch, postEpoch, 0},
+				[]bool{false, false, false, false, true})},
+			expect: NewFunctionTestResult(types.New(types.T_decimal128, 38, 6), false,
+				[]types.Decimal128{{}, {}, {}, mustDecimal128(t, "1.500000", 38, 6), {}},
+				[]bool{true, false, false, false, true}),
+			fn: builtInUnixTimestamp,
+		},
+		{
+			name:   "string integer",
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), stringValues, stringNulls)},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{0, 0, 0, 0, 0, 1, 0}, []bool{false, false, true, false, false, false, true}),
+			fn: builtInUnixTimestampVarcharToInt64,
+		},
+		{
+			name:   "string float",
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), stringValues, stringNulls)},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0, 0, 0, 0, 0, 1.5, 0}, []bool{false, false, true, false, false, false, true}),
+			fn: builtInUnixTimestampVarcharToFloat64,
+		},
+		{
+			name:   "string decimal",
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), stringValues, stringNulls)},
+			expect: NewFunctionTestResult(types.New(types.T_decimal128, 38, 6), false,
+				[]types.Decimal128{{}, {}, {}, {}, {}, mustDecimal128(t, "1.500000", 38, 6), {}},
+				[]bool{false, false, true, false, false, false, true}),
+			fn: builtInUnixTimestampVarcharToDecimal128,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fcTC := NewFunctionTestCase(proc, test.inputs, test.expect, test.fn)
+			ok, info := fcTC.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
+func TestUnixTimestampPreEpochWholeSecondIsNonNullZero(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	preEpoch, err := types.ParseTimestamp(time.UTC, "1969-12-31 23:59:00", 6)
+	require.NoError(t, err)
+	fcTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{preEpoch}, []bool{false})},
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{false}),
+		builtInUnixTimestamp)
+	ok, info := fcTC.Run()
+	require.True(t, ok, info)
+}
+
 func TestUnixTimestampTypedTimestampPreservesFraction(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.GetSessionInfo().TimeZone = time.UTC
@@ -522,7 +643,7 @@ func TestUnixTimestampTypedTimestampDecimalNulls(t *testing.T) {
 			types.New(types.T_decimal128, 38, 6),
 			false,
 			[]types.Decimal128{{}, {}},
-			[]bool{true, true},
+			[]bool{false, true},
 		),
 		builtInUnixTimestamp,
 	)

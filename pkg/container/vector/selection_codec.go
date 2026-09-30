@@ -529,6 +529,9 @@ func (v *Vector) readRawBytesAt(
 		if _, err := io.ReadFull(r, value[1:1+size]); err != nil {
 			return err
 		}
+		if err := validateJSONPayload(v.typ, value.GetByteSlice(nil)); err != nil {
+			return err
+		}
 		return SetFixedAtWithTypeCheck(v, row, value)
 	}
 	oldAreaLength := len(v.area)
@@ -542,6 +545,10 @@ func (v *Vector) readRawBytesAt(
 		return err
 	}
 	if _, err = io.ReadFull(r, area[oldAreaLength:newAreaLength]); err != nil {
+		v.area = area[:oldAreaLength]
+		return err
+	}
+	if err := validateJSONPayload(v.typ, area[oldAreaLength:newAreaLength]); err != nil {
 		v.area = area[:oldAreaLength]
 		return err
 	}

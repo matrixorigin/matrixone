@@ -279,13 +279,52 @@ func informationSchemaSubscriptionColumnAuthorizationPredicate() string {
 		"OR (rp.privilege_level = 'd' AND rp.obj_id = mc.att_database_id)))))"
 }
 
-func informationSchemaColumnsV58DDL() string {
+func informationSchemaCurrentColumnsDDL() string {
+	original := InformationSchemaColumnsV58DDL()
+	prefix := "CREATE VIEW information_schema.COLUMNS AS " + informationSchemaMetadataVisibilityCTE()
+	branches := strings.SplitN(strings.TrimPrefix(original, prefix), " UNION ALL ", 2)
+	local := branches[0]
+	viewRows := strings.Replace(local, informationSchemaColumnsLocalFromSQL(),
+		"from __mo_visible_tables mt cross apply mo_view_columns(mt.rel_id) mc ", 1)
+	viewRows = strings.NewReplacer(
+		"mc.att_database", "mt.reldatabase",
+		"mc.att_relname", "mt.relname",
+		"mc.account_id", "mt.account_id",
+		"mk.key_priority", "0",
+	).Replace(viewRows)
+	viewRows = castViewColumnNames(viewRows)
+	userView := "mt.relkind = 'v' AND mt.reldatabase NOT IN ('mo_catalog','information_schema','mysql','system','system_metrics','mo_task','mo_debug')"
+	// Restrict the left side of APPLY before describing publisher Views. A
+	// post-APPLY WHERE cannot prevent invisible Views from consuming budget.
+	// Keep this projection explicit: CREATE VIEW freezes projection stars and
+	// reformats the entire definition. Upgrade readiness compares the persisted
+	// SQL with this template exactly, so a star would make every retry rebuild it.
+	prefix += ", __mo_visible_subscription_views AS (SELECT mt.account_id, mt.rel_id, mt.relname, " +
+		"mt.reldatabase, mt.relkind, mt.rel_createsql, mt.extra_info, mt.publisher_account_id " +
+		"FROM mo_subscription_tables() mt WHERE mt.relkind = 'v' AND (" +
+		informationSchemaSubscriptionViewAuthorizationPredicate() + ")) "
+	return prefix + local + " AND NOT (" + userView + ") UNION ALL " +
+		viewRows + " AND (" + userView + ") UNION ALL " + branches[1] +
+		" AND NOT (mc.relkind = 'v' AND mc.att_database NOT IN ('mo_catalog','information_schema','mysql','system','system_metrics','mo_task','mo_debug')) UNION ALL " +
+		informationSchemaSubscriptionViewColumnsSelect(local)
+}
+
+func InformationSchemaColumnsV58DDL() string {
 	return strings.NewReplacer(
 		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' WHEN 2 then 'binary' WHEN 3 then 'utf8' else NULL end) AS CHARACTER_SET_NAME,",
 		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8mb4' WHEN 2 then 'binary' WHEN 3 then 'utf8mb4' else NULL end) AS CHARACTER_SET_NAME,",
 		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' WHEN 2 then 'binary' WHEN 3 then 'utf8_bin' else NULL end) AS COLLATION_NAME,",
 		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8_general_ci' WHEN 1 then 'utf8mb4_bin' WHEN 2 then 'binary' WHEN 3 then 'utf8mb4_general_ci' else NULL end) AS COLLATION_NAME,",
 	).Replace(InformationSchemaColumnsV46DDL)
+}
+
+func informationSchemaSubscriptionViewAuthorizationPredicate() string {
+	return strings.NewReplacer(
+		"mc.att_database", "mt.reldatabase",
+		"mc.table_owner", "mt.owner",
+		"mc.att_database_id", "mt.reldatabase_id",
+		"mc.rel_logical_id", "mt.rel_logical_id",
+	).Replace(informationSchemaSubscriptionColumnAuthorizationPredicate())
 }
 
 func informationSchemaSubscriptionColumnsDDL() string {
@@ -320,6 +359,30 @@ func informationSchemaSubscriptionColumnsDDL() string {
 	).Replace(subscriptionSelect)
 	return "CREATE VIEW information_schema.COLUMNS AS " +
 		informationSchemaMetadataVisibilityCTE() + localSelect + " UNION ALL " + subscriptionSelect
+}
+
+// The catalog name columns are varchar(256); without these casts the wider
+// mo_tables names promote the public I_S.COLUMNS UNION output to varchar(5000).
+func castViewColumnNames(selectSQL string) string {
+	return strings.NewReplacer(
+		"mt.reldatabase as TABLE_SCHEMA,", "cast(mt.reldatabase as varchar(256)) as TABLE_SCHEMA,",
+		"mt.relname AS TABLE_NAME,", "cast(mt.relname as varchar(256)) AS TABLE_NAME,",
+	).Replace(selectSQL)
+}
+
+func informationSchemaSubscriptionViewColumnsSelect(localSelect string) string {
+	subscriptionViewSelect := strings.NewReplacer(
+		informationSchemaColumnsLocalFromSQL(),
+		"from __mo_visible_subscription_views mt "+
+			"cross apply mo_subscription_view_columns(mt.publisher_account_id, mt.rel_id) mc ",
+		"mc.att_database", "mt.reldatabase",
+		"mc.att_relname", "mt.relname",
+		"mc.account_id", "mt.account_id",
+		"mk.key_priority", "0",
+	).Replace(localSelect)
+	subscriptionViewSelect = castViewColumnNames(subscriptionViewSelect)
+	subscriptionViewSelect += " AND mt.relkind = 'v'"
+	return subscriptionViewSelect
 }
 
 // `information_schema` database
@@ -409,7 +472,7 @@ var (
 	InformationSchemaColumnsV46UpgradeDDL = strings.NewReplacer(
 		" WHEN 3 then 'utf8'", "", " WHEN 3 then 'utf8_bin'", "",
 	).Replace(InformationSchemaColumnsV46DDL)
-	InformationSchemaColumnsDDL = informationSchemaColumnsV58DDL()
+	InformationSchemaColumnsDDL = informationSchemaCurrentColumnsDDL()
 
 	InformationSchemaProfilingDDL = "CREATE TABLE information_schema.PROFILING (" +
 		"QUERY_ID int NOT NULL DEFAULT '0'," +
@@ -451,7 +514,7 @@ var (
 		"datname AS SCHEMA_NAME," +
 		"'utf8mb4' AS DEFAULT_CHARACTER_SET_NAME," +
 		"'" + DefaultCollationForCharset("utf8mb4") + "' AS DEFAULT_COLLATION_NAME," +
-		"if(true, NULL, '') AS SQL_PATH," +
+		"cast(NULL as char(0)) AS SQL_PATH," +
 		"cast('NO' as varchar(3)) AS DEFAULT_ENCRYPTION " +
 		"FROM __mo_visible_databases"
 
@@ -592,6 +655,9 @@ var (
 		"LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id " +
 		"WHERE tbl.account_id = current_account_id() and tbl.relkind = 'v' and tbl.reldatabase != 'information_schema'"
 
+	// Legacy mo_indexes rows encode the default B-tree algorithm as either NULL
+	// or an empty string. Normalize that representation at the MySQL-compatible
+	// information_schema boundary so ORM filters on INDEX_TYPE remain effective.
 	InformationSchemaStatisticsDDL = fmt.Sprintf("CREATE VIEW information_schema.`STATISTICS` AS "+informationSchemaMetadataVisibilityCTE()+
 		"select 'def' AS `TABLE_CATALOG`,"+
 		"`tbl`.`reldatabase` AS `TABLE_SCHEMA`,"+
@@ -606,7 +672,7 @@ var (
 		"NULL AS `SUB_PART`,"+
 		"NULL AS `PACKED`,"+
 		"if((`tcl`.`attnotnull` = 0),'YES','') AS `NULLABLE`,"+
-		"`idx`.`algo` AS `INDEX_TYPE`,"+
+		"coalesce(nullif(`idx`.`algo`, ''), 'BTREE') AS `INDEX_TYPE`,"+
 		"if(((`idx`.`type` = 'PRIMARY') or (`idx`.`type` = 'UNIQUE')),'','') AS `COMMENT`,"+
 		"`idx`.`comment` AS `INDEX_COMMENT`,"+
 		"if(`idx`.`is_visible`,'YES','NO') AS `IS_VISIBLE`,"+

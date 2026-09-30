@@ -1619,6 +1619,16 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.Selectivity = 1
 		}
 
+	case plan.Node_VECTOR_QUERY_TOP:
+		node.Stats = DeepCopyStats(builder.qry.Nodes[node.Children[1]].Stats)
+		node.Stats.ForceOneCN = true
+
+	case plan.Node_VECTOR_QUERY_SOURCE:
+		node.Stats = DefaultStats()
+		node.Stats.Outcnt = 1
+		node.Stats.TableCnt = 1
+		node.Stats.Selectivity = 1
+
 	case plan.Node_SINK_SCAN:
 		sourceNode := builder.qry.Steps[node.GetSourceStep()[0]]
 		node.Stats = builder.qry.Nodes[sourceNode].Stats
@@ -2272,6 +2282,20 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 	}
 	if node.NodeType != plan.Node_JOIN {
 		return
+	}
+	if node.JoinType == plan.Node_LEFT || node.JoinType == plan.Node_SEMI ||
+		node.JoinType == plan.Node_ANTI || node.JoinType == plan.Node_SINGLE {
+		// A row-dependent diagnostic needs LoopJoin to evaluate the selected
+		// ON arm even when hash keys do not match. LoopJoin implements these
+		// joins with the logical left input as probe; preserve that layout
+		// across both cost-based and recursive-side orientation choices.
+		for _, expr := range node.OnList {
+			if ContainsGuardedJoinDiagnosticWithProof(builder.compCtx.GetProcess(), expr,
+				builder.preparedParameterDiagnosticsFree()) {
+				node.IsRightJoin = false
+				return
+			}
+		}
 	}
 	// A predeclared runtime-filter pair is a physical dependency: child 1 must
 	// build and publish before child 0 may probe. Reversing the children turns
@@ -3209,6 +3233,50 @@ func CalcQueryDOP(p *plan.Plan, ncpu int32, lencn int, typ ExecType) {
 	}
 }
 
+func adaptiveDeferredOnlyNodes(qry *plan.Query) map[int32]struct{} {
+	deferred := make(map[int32]struct{})
+	if qry == nil || len(qry.Steps) == 0 {
+		return deferred
+	}
+	active := make(map[int32]struct{})
+	var walk func(int32, map[int32]struct{}, bool)
+	walk = func(id int32, seen map[int32]struct{}, firstCandidateOnly bool) {
+		if id < 0 || int(id) >= len(qry.Nodes) {
+			return
+		}
+		if _, ok := seen[id]; ok {
+			return
+		}
+		seen[id] = struct{}{}
+		node := qry.Nodes[id]
+		if node == nil {
+			return
+		}
+		children := node.Children
+		if firstCandidateOnly && node.NodeType == plan.Node_ADAPTIVE_TOP && len(children) > 0 {
+			children = children[:1]
+		}
+		for _, child := range children {
+			walk(child, seen, firstCandidateOnly)
+		}
+	}
+	for _, node := range qry.Nodes {
+		if node == nil || node.NodeType != plan.Node_ADAPTIVE_TOP || len(node.Children) < 2 {
+			continue
+		}
+		for _, child := range node.Children[1:] {
+			walk(child, deferred, false)
+		}
+	}
+	for _, step := range qry.Steps {
+		walk(step, active, true)
+	}
+	for id := range active {
+		delete(deferred, id)
+	}
+	return deferred
+}
+
 func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 	if GetForceScanOnMultiCN() {
 		return ExecTypeAP_MULTICN
@@ -3219,8 +3287,12 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 	// the equi-join condition is a function expression (not a plain column ref), it's expr-based.
 	hasExprBasedShuffle := false
 	hasForceOneCN := false
-	for _, node := range qry.GetNodes() {
+	deferredOnly := adaptiveDeferredOnlyNodes(qry)
+	for id, node := range qry.GetNodes() {
 		if node == nil {
+			continue
+		}
+		if _, deferred := deferredOnly[int32(id)]; deferred {
 			continue
 		}
 		if node.GetStats().GetForceOneCN() {
@@ -3253,8 +3325,11 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 	}
 	canUseMultiCN := !txnHaveDDL && !hasExprBasedShuffle && !hasForceOneCN
 	ret := ExecTypeTP
-	for _, node := range qry.GetNodes() {
+	for id, node := range qry.GetNodes() {
 		if node == nil {
+			continue
+		}
+		if _, deferred := deferredOnly[int32(id)]; deferred {
 			continue
 		}
 		switch node.NodeType {
@@ -3463,19 +3538,30 @@ func (builder *QueryBuilder) canSkipStats() bool {
 }
 
 func (builder *QueryBuilder) hintQueryType() {
-	if builder.optimizerHints != nil && builder.optimizerHints.execType != 0 {
-		for _, node := range builder.qry.GetNodes() {
-			switch builder.optimizerHints.execType {
-			case 1:
-				*node.Stats = *DefaultMinimalStats()
-			case 2:
-				*node.Stats = *DefaultBigStats()
-			case 3:
-				*node.Stats = *DefaultHugeStats()
-			default:
-				panic("wrong optimizer hints for execType!")
-			}
-		}
+	if builder.optimizerHints == nil || builder.optimizerHints.execType == 0 {
 		return
+	}
+	var estimates *plan.Stats
+	switch builder.optimizerHints.execType {
+	case 1:
+		estimates = DefaultMinimalStats()
+	case 2:
+		estimates = DefaultBigStats()
+	case 3:
+		estimates = DefaultHugeStats()
+	default:
+		panic("wrong optimizer hints for execType!")
+	}
+	for _, node := range builder.qry.GetNodes() {
+		// This override runs after runtime-filter generation and placement.
+		// Replace cost estimates only: clearing ForceOneCN can strand a scan
+		// waiting for a current-CN-only filter on a remote CN. HashmapStats
+		// likewise contains already-selected hash/shuffle execution contracts.
+		node.Stats.BlockNum = estimates.BlockNum
+		node.Stats.Cost = estimates.Cost
+		node.Stats.Outcnt = estimates.Outcnt
+		node.Stats.Rowsize = estimates.Rowsize
+		node.Stats.TableCnt = estimates.TableCnt
+		node.Stats.Selectivity = estimates.Selectivity
 	}
 }

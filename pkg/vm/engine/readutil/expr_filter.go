@@ -143,7 +143,7 @@ func (m zoneMapMatch) and(other zoneMapMatch) zoneMapMatch {
 }
 
 func rawZoneMapComparable(zm objectio.ZoneMap, columnType types.T) bool {
-	return zm.IsInited() && zm.GetType() == columnType
+	return columnType != types.T_json && zm.IsInited() && zm.GetType() == columnType
 }
 
 func anyLTByBound(
@@ -389,10 +389,10 @@ func seekFirstBlockByZoneMap(
 func zoneMapMetadataComparable(
 	zm objectio.ZoneMap, bound objectio.ZoneMap, columnType types.T,
 ) bool {
-	if !zm.IsInited() || zm.GetType() != columnType {
+	if !rawZoneMapComparable(zm, columnType) {
 		return false
 	}
-	return bound == nil || (bound.IsInited() && bound.GetType() == columnType)
+	return bound == nil || rawZoneMapComparable(bound, columnType)
 }
 
 type temporalFilterRange struct {

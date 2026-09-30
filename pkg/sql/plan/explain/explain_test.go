@@ -32,6 +32,39 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestGetNodeBasicInfoAdaptiveTop(t *testing.T) {
+	for _, verbose := range []bool{false, true} {
+		node := &plan2.Node{NodeType: plan2.Node_ADAPTIVE_TOP, NodeId: 3}
+		got, err := NewNodeDescriptionImpl(node).GetNodeBasicInfo(context.Background(),
+			&ExplainOptions{Format: EXPLAIN_FORMAT_TEXT, Verbose: verbose})
+		require.NoError(t, err)
+		require.Contains(t, got, "Adaptive Top")
+		if verbose {
+			require.Contains(t, got, "[3]")
+		}
+	}
+}
+
+func TestGetNodeBasicInfoScalarVectorQuery(t *testing.T) {
+	for _, tc := range []struct {
+		kind plan2.Node_NodeType
+		name string
+	}{
+		{plan2.Node_VECTOR_QUERY_TOP, "Scalar Vector Query"},
+		{plan2.Node_VECTOR_QUERY_SOURCE, "Scalar Vector Source"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, verbose := range []bool{false, true} {
+				node := &plan2.Node{NodeType: tc.kind, NodeId: 3}
+				got, err := NewNodeDescriptionImpl(node).GetNodeBasicInfo(context.Background(),
+					&ExplainOptions{Format: EXPLAIN_FORMAT_TEXT, Verbose: verbose})
+				require.NoError(t, err)
+				require.Contains(t, got, tc.name)
+			}
+		})
+	}
+}
+
 func TestGetNodeBasicInfoApplyType(t *testing.T) {
 	tests := []struct {
 		name      string

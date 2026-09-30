@@ -27,8 +27,9 @@ import (
 
 // runtimeFilterTopology is built after physical scopes have been constructed
 // and before any local or remote pipeline starts. Runtime-filter messages are
-// current-CN only. Local SINGLE filters therefore require one producer for the
-// whole tag and every blocking scan consumer on that same execution CN.
+// current-CN only. Local right-SINGLE filters therefore require one producer
+// for the whole tag. Scalar-predicate filters may have one complete producer on
+// each execution CN, provided every consumer has exactly one colocated producer.
 type runtimeFilterTopology struct {
 	producers map[int32][]*Scope
 	consumers map[int32][]*Scope
@@ -208,8 +209,9 @@ func validateLocalRuntimeFilterTopology(qry *plan.Query, compiledNodeIDs []int32
 	topology := collectRuntimeFilterTopology(roots, tags)
 	scalarTags := scalarRuntimeFilterTags(qry, compiledNodeIDs)
 	for _, tag := range tags {
-		if err := localRuntimeFilterTopologyError(tag, topology); err != nil {
-			if _, scalar := scalarTags[tag]; scalar {
+		_, scalar := scalarTags[tag]
+		if err := localRuntimeFilterTopologyError(tag, topology, scalar); err != nil {
+			if scalar {
 				disableScalarRuntimeFilter(tag, topology)
 				continue
 			}
@@ -219,7 +221,11 @@ func validateLocalRuntimeFilterTopology(qry *plan.Query, compiledNodeIDs []int32
 	return nil
 }
 
-func localRuntimeFilterTopologyError(tag int32, topology runtimeFilterTopology) error {
+func localRuntimeFilterTopologyError(
+	tag int32,
+	topology runtimeFilterTopology,
+	allowOneProducerPerCN bool,
+) error {
 	producers := topology.producers[tag]
 	consumers := topology.consumers[tag]
 	if len(consumers) == 0 {
@@ -229,6 +235,9 @@ func localRuntimeFilterTopologyError(tag int32, topology runtimeFilterTopology) 
 	if len(producers) == 0 {
 		return moerr.NewInternalErrorNoCtxf(
 			"invalid local runtime-filter topology: tag %d has no producer", tag)
+	}
+	if allowOneProducerPerCN {
+		return perCNLocalRuntimeFilterTopologyError(tag, producers, consumers)
 	}
 	if len(producers) != 1 {
 		return moerr.NewInternalErrorNoCtxf(
@@ -243,6 +252,46 @@ func localRuntimeFilterTopologyError(tag int32, topology runtimeFilterTopology) 
 				"invalid local runtime-filter topology: tag %d consumer %s cannot reach colocated producer %s",
 				tag,
 				runtimeFilterScopeAddress(consumer),
+				runtimeFilterScopeAddress(producer))
+		}
+	}
+	return nil
+}
+
+func perCNLocalRuntimeFilterTopologyError(
+	tag int32,
+	producers []*Scope,
+	consumers []*Scope,
+) error {
+	for _, consumer := range consumers {
+		colocated := 0
+		for _, producer := range producers {
+			if sameRuntimeFilterExecutionNode(consumer.NodeInfo, producer.NodeInfo) {
+				colocated++
+			}
+		}
+		if colocated != 1 {
+			return moerr.NewInternalErrorNoCtxf(
+				"invalid local runtime-filter topology: tag %d consumer %s has %d colocated producers; expected exactly one: %s",
+				tag,
+				runtimeFilterScopeAddress(consumer),
+				colocated,
+				runtimeFilterScopeAddresses(producers))
+		}
+	}
+
+	for _, producer := range producers {
+		colocated := false
+		for _, consumer := range consumers {
+			if sameRuntimeFilterExecutionNode(consumer.NodeInfo, producer.NodeInfo) {
+				colocated = true
+				break
+			}
+		}
+		if !colocated {
+			return moerr.NewInternalErrorNoCtxf(
+				"invalid local runtime-filter topology: tag %d producer %s has no colocated scan consumer",
+				tag,
 				runtimeFilterScopeAddress(producer))
 		}
 	}

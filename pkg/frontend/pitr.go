@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -293,7 +294,7 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) (err
 		newUUid        uuid.UUID
 	)
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
 	// check create pitr priv
@@ -310,17 +311,23 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) (err
 		return err
 	}
 
-	// Hold the stable owner-publication write barrier through PITR creation.
-	// COPY ALTER crosses the same barrier before probing historical owners, so
-	// an empty probe cannot race a PITR whose create time was already chosen.
-	if err = lockDataBranchLineageOwnerLifecycle(ctx, bh); err != nil {
-		return err
-	}
-
 	// 2.only sys can create cluster level pitr
 	tenantInfo := ses.GetTenantInfo()
 	currentAccount := tenantInfo.GetTenant()
 	pitrLevel = stmt.Level
+	if pitrLevel == tree.PITRLEVELDATABASE || pitrLevel == tree.PITRLEVELTABLE {
+		databaseName = string(stmt.DatabaseName)
+		// The exclusive target name also serializes the per-object duplicate
+		// check, whose mo_pitr key is the caller-chosen PITR name.
+		err = admitLocalLifecycleRC(ctx, ses, bh, tenantInfo.GetTenantID(),
+			databaseName, "", lock.LockMode_Exclusive, "", "")
+	} else {
+		// Account and cluster PITR still span more than one database.
+		err = lockDataBranchLineageOwnerLifecycle(ctx, bh)
+	}
+	if err != nil {
+		return err
+	}
 	if pitrLevel == tree.PITRLEVELCLUSTER && currentAccount != sysAccountName {
 		return moerr.NewInternalError(ctx, "only sys tenant can create cluster level pitr")
 	}
@@ -772,7 +779,7 @@ func doDropPitr(ctx context.Context, ses *Session, stmt *tree.DropPitr) (err err
 		erArray   []ExecResult
 	)
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
 	// check drop pitr priv
@@ -856,7 +863,7 @@ func doAlterPitr(ctx context.Context, ses *Session, stmt *tree.AlterPitr) (err e
 		sql       string
 		pitrExist bool
 	)
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
 	// check alter pitr priv
@@ -1043,68 +1050,42 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 	}
 
 	if stmt.Level == tree.RESTORELEVELACCOUNT && len(accountName) > 0 {
+		fromAccount := string(stmt.SrcAccountName)
+		if len(fromAccount) == 0 {
+			fromAccount = pitr.accountName
+		}
+		accountRecord, err = getAccountRecordByTs(ctx, ses, bh, pitrName, ts, fromAccount)
+		if err != nil {
+			return stats, err
+		}
+		if err = preflightRestorePitrEntry(
+			ctx, ses.GetService(), bh, pitrName, ts, stmt.Level, "", uint32(accountRecord.accountId),
+		); err != nil {
+			return stats, err
+		}
+
 		restoreOtherAccount := func() (rtnErr error) {
-			fromAccount := string(stmt.SrcAccountName)
 			var (
 				toAccountId uint32
 			)
 
-			if len(fromAccount) == 0 {
-				// using account level pitr
-				fromAccount = pitr.accountName
-				accountRecord, rtnErr = getAccountRecordByTs(ctx, ses, bh, pitrName, ts, fromAccount)
+			if fromAccount == accountName {
+				getLogger(ses.GetService()).Info("restore to the same account", zap.String("fromAccount", accountName), zap.String("toAccount", accountName))
+				toAccountId, rtnErr = getAccountId(ctx, bh, accountName)
 				if rtnErr != nil {
-					return
-				}
-				if fromAccount == accountName {
-					// restore to the same account
-					getLogger(ses.GetService()).Info("restore to the same account", zap.String("fromAccount", accountName), zap.String("toAccount", accountName))
-					toAccountId, rtnErr = getAccountId(ctx, bh, accountName)
-					if rtnErr != nil {
-						// need create a new account
-						if rtnErr = createDroppedAccount(ctx, ses, bh, pitrName, *accountRecord); rtnErr != nil {
-							return
-						}
-
-						if toAccountId, rtnErr = getAccountId(ctx, bh, accountRecord.accountName); rtnErr != nil {
-							return
-						}
+					if rtnErr = createDroppedAccount(ctx, ses, bh, pitrName, *accountRecord); rtnErr != nil {
+						return
 					}
-				} else {
-					// restore to new account
-					getLogger(ses.GetService()).Info("restore to the same account", zap.String("fromAccount", fromAccount), zap.String("toAccount", accountName))
-					toAccountId, rtnErr = getAccountId(ctx, bh, accountName)
-					if rtnErr != nil {
+
+					if toAccountId, rtnErr = getAccountId(ctx, bh, accountRecord.accountName); rtnErr != nil {
 						return
 					}
 				}
 			} else {
-				// using cluster level pitr
-				accountRecord, rtnErr = getAccountRecordByTs(ctx, ses, bh, pitrName, ts, fromAccount)
+				getLogger(ses.GetService()).Info("restore to another account", zap.String("fromAccount", fromAccount), zap.String("toAccount", accountName))
+				toAccountId, rtnErr = getAccountId(ctx, bh, accountName)
 				if rtnErr != nil {
-					return
-				}
-				if fromAccount == accountName {
-					// restore to the same account
-					getLogger(ses.GetService()).Info("restore to the same account", zap.String("fromAccount", accountName), zap.String("toAccount", accountName))
-					toAccountId, rtnErr = getAccountId(ctx, bh, fromAccount)
-					if rtnErr != nil {
-						// need create a new account
-						if rtnErr = createDroppedAccount(ctx, ses, bh, pitrName, *accountRecord); rtnErr != nil {
-							return
-						}
-
-						if toAccountId, rtnErr = getAccountId(ctx, bh, accountRecord.accountName); rtnErr != nil {
-							return
-						}
-					}
-				} else {
-					// restore to new account
-					getLogger(ses.GetService()).Info("restore to the same account", zap.String("fromAccount", fromAccount), zap.String("toAccount", accountName))
-					toAccountId, rtnErr = getAccountId(ctx, bh, accountName)
-					if rtnErr != nil {
-						return rtnErr
-					}
+					return rtnErr
 				}
 			}
 
@@ -1158,6 +1139,18 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 	if !accountExist {
 		return stats, moerr.NewInternalErrorf(ctx, "account `%s` does not exists at timestamp: %v", tenantInfo.GetTenant(), nanoTimeFormat(ts))
 	}
+	if restoreLevel == tree.RESTORELEVELCLUSTER {
+		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelCluster)
+		if err = restoreToCluster(ctx, ses, bh, pitrName, ts, &retiredMongoDBAccountIDs); err != nil {
+			return stats, err
+		}
+		return stats, nil
+	}
+	if err = preflightRestorePitrEntry(
+		ctx, ses.GetService(), bh, pitrName, ts, restoreLevel, dbName, tenantInfo.TenantID,
+	); err != nil {
+		return stats, err
+	}
 	if restoreLevel == tree.RESTORELEVELACCOUNT {
 		if err = invalidateAccountViewMetadata(ctx, ses, bh, tenantInfo.TenantID); err != nil {
 			return stats, err
@@ -1200,12 +1193,6 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 
 	// restore according the restore level
 	switch restoreLevel {
-	case tree.RESTORELEVELCLUSTER:
-		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelCluster)
-		if err = restoreToCluster(ctx, ses, bh, pitrName, ts, &retiredMongoDBAccountIDs); err != nil {
-			return
-		}
-		return
 	case tree.RESTORELEVELACCOUNT:
 		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelAccount)
 		if err = restoreToAccountWithPitr(ctx, ses.GetService(), bh, pitrName, ts, fkTableMap, viewMap, tenantInfo.TenantID); err != nil {
@@ -1267,6 +1254,42 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 
 }
 
+func preflightRestorePitrEntry(
+	ctx context.Context,
+	sid string,
+	bh BackgroundExec,
+	pitrName string,
+	ts int64,
+	level tree.RestoreLevel,
+	dbName string,
+	sourceAccount uint32,
+) error {
+	sourceCtx := defines.AttachAccountId(ctx, sourceAccount)
+	var databaseNames []string
+	var err error
+	switch level {
+	case tree.RESTORELEVELACCOUNT:
+		databaseNames, err = showDatabasesWithPitr(sourceCtx, sid, bh, pitrName, ts)
+		if err != nil {
+			return err
+		}
+	case tree.RESTORELEVELDATABASE, tree.RESTORELEVELTABLE:
+		databaseNames = []string{dbName}
+	default:
+		return nil
+	}
+	return preflightLogicalRestoreDatabases(
+		sourceCtx,
+		databaseNames,
+		currentProtocolVersionForService(bh.Service()),
+		func(sourceDBName string) (logicalRestoreDatabaseDefinition, error) {
+			return getCreateDatabaseSqlInPitr(
+				sourceCtx, sid, bh, pitrName, sourceDBName, sourceAccount, ts,
+			)
+		},
+	)
+}
+
 func restoreToAccountWithPitr(
 	ctx context.Context,
 	sid string,
@@ -1279,13 +1302,17 @@ func restoreToAccountWithPitr(
 ) (err error) {
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore account '%d', restore timestamp : %d", pitrName, curAccount, ts))
 
-	var dbNames []string
-	// delete current dbs
-	if dbNames, err = showDatabases(ctx, sid, bh, ""); err != nil {
+	var currentDBNames, restoreDBNames []string
+	if restoreDBNames, err = showDatabasesWithPitr(ctx, sid, bh, pitrName, ts); err != nil {
 		return
 	}
 
-	for _, dbName := range dbNames {
+	// delete current dbs
+	if currentDBNames, err = showDatabases(ctx, sid, bh, ""); err != nil {
+		return
+	}
+
+	for _, dbName := range currentDBNames {
 		if needSkipDb(dbName) {
 			// drop existing cluster table
 			if curAccount == 0 && dbName == moCatalog {
@@ -1304,16 +1331,7 @@ func restoreToAccountWithPitr(
 	}
 
 	// restore dbs
-	if dbNames, err = showDatabasesWithPitr(
-		ctx,
-		sid,
-		bh,
-		pitrName,
-		ts); err != nil {
-		return
-	}
-
-	for _, dbName := range dbNames {
+	for _, dbName := range restoreDBNames {
 		if err = restoreToDatabaseWithPitr(
 			ctx,
 			sid,
@@ -1427,11 +1445,18 @@ func restoreToDatabaseOrTableWithPitr(
 	}
 
 	var (
-		createDbSql string
-		tableInfos  []*tableInfo
-		isSubDb     bool
+		definition logicalRestoreDatabaseDefinition
+		tableInfos []*tableInfo
+		isSubDb    bool
 	)
-	createDbSql, err = getCreateDatabaseSqlInPitr(ctx, sid, bh, pitrName, dbName, curAccount, ts)
+	definition, err = getCreateDatabaseSqlInPitr(ctx, sid, bh, pitrName, dbName, curAccount, ts)
+	if err != nil {
+		return
+	}
+	createDbSql := definition.createSQL
+	ctx, err = prepareLogicalRestoreDatabase(
+		ctx, dbName, definition, currentProtocolVersionForService(bh.Service()),
+	)
 	if err != nil {
 		return
 	}
@@ -2515,24 +2540,24 @@ func getCreateDatabaseSqlInPitr(ctx context.Context,
 	dbName string,
 	accountId uint32,
 	ts int64,
-) (string, error) {
+) (logicalRestoreDatabaseDefinition, error) {
 
-	sql := "select datname, dat_createsql from mo_catalog.mo_database"
+	sql := "select datname, dat_createsql, dat_type from mo_catalog.mo_database"
 	if ts > 0 {
 		sql += fmt.Sprintf(" {MO_TS = %d}", ts)
 	}
 	sql += fmt.Sprintf(" where datname = '%s' and account_id = %d", dbName, accountId)
 	getLogger(sid).Info(fmt.Sprintf("[%s] get create database `%s` sql: %s", pitrName, dbName, sql))
 
-	// cols: database_name, create_sql
-	colsList, err := getStringColsList(ctx, bh, sql, 0, 1)
+	// cols: database_name, create_sql, database_type
+	colsList, err := getStringColsList(ctx, bh, sql, 0, 1, 2)
 	if err != nil {
-		return "", err
+		return logicalRestoreDatabaseDefinition{}, err
 	}
 	if len(colsList) == 0 || len(colsList[0]) == 0 {
-		return "", moerr.NewBadDB(ctx, dbName)
+		return logicalRestoreDatabaseDefinition{}, moerr.NewBadDB(ctx, dbName)
 	}
-	return colsList[0][1], nil
+	return newLogicalRestoreDatabaseDefinition(ctx, dbName, colsList[0])
 }
 
 // createPubByPitr create pub after the database is created by pitr

@@ -432,13 +432,13 @@ dayofyear(replace(dd1, 20, 21))
 315
 4
 SELECT id, extract(year FROM REPLACE(dd3, 20, 18)) FROM replace_04;
-id    extract(year, replace(dd3, 20, 18))
+id    extract(year from replace(dd3, 20, 18))
 1    1818
 2    1821
 3    1802
 4    null
 SELECT id, extract(MONTH FROM REPLACE(dd3, 20, 18)) FROM replace_04;
-id    extract(month, replace(dd3, 20, 18))
+id    extract(month from replace(dd3, 20, 18))
 1    02
 2    12
 3    12

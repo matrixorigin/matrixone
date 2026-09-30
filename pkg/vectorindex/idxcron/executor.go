@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -615,8 +616,12 @@ func buildReindexSql(dbName, tableName, indexName, algoToken, reindexOption stri
 	if reindexOption != "" {
 		reindexOpt = " " + reindexOption
 	}
-	return fmt.Sprintf("ALTER TABLE `%s`.`%s` ALTER REINDEX `%s` %s%s FORCE_SYNC",
-		dbName, tableName, indexName, algoToken, reindexOpt)
+	// Identifiers go through sqlquote: a db/table/index name may legally contain a backtick,
+	// and raw interpolation would emit SQL the cron can never execute (it retries the same
+	// broken statement every cadence).
+	return fmt.Sprintf("ALTER TABLE %s ALTER REINDEX %s %s%s FORCE_SYNC",
+		sqlquote.QualifiedIdent(dbName, tableName), sqlquote.Ident(indexName),
+		algoToken, reindexOpt)
 }
 
 // idxcronFastIntervalSec — dev/test override (env MO_IDXCRON_INTERVAL_SEC, in seconds).

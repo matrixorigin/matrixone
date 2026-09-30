@@ -224,7 +224,10 @@ type serverValue struct {
 	requiredLsn  uint64
 	entries      []logservice.LogRecord
 	// fake error
-	fakeErr map[string]struct{}
+	fakeErr      map[string]struct{}
+	fakeErrCount map[string]int
+	callCount    map[string]int
+	failureCount map[string]int
 }
 
 type mockLogServer struct {
@@ -250,7 +253,10 @@ func newMockLogClient(s *mockLogServer, shardID uint64) LogClient {
 	_, ok := s.values[shardID]
 	if !ok || s.values[shardID] == nil {
 		s.values[shardID] = &serverValue{
-			fakeErr: make(map[string]struct{}),
+			fakeErr:      make(map[string]struct{}),
+			fakeErrCount: make(map[string]int),
+			callCount:    make(map[string]int),
+			failureCount: make(map[string]int),
 		}
 	}
 	return &mockLogClient{
@@ -331,7 +337,7 @@ func (m *mockLogClient) getTruncatedLsn(_ context.Context) (uint64, error) {
 func (m *mockLogClient) getLatestLsn(_ context.Context) (uint64, error) {
 	m.s.mu.Lock()
 	defer m.s.mu.Unlock()
-	if _, ok := m.s.values[m.shardID].fakeErr["getLatestLsn"]; ok {
+	if m.shouldFakeErrorLocked("getLatestLsn") {
 		return 0, fakeError
 	}
 	return m.s.values[m.shardID].latestLsn, nil
@@ -340,7 +346,7 @@ func (m *mockLogClient) getLatestLsn(_ context.Context) (uint64, error) {
 func (m *mockLogClient) setRequiredLsn(_ context.Context, lsn uint64) error {
 	m.s.mu.Lock()
 	defer m.s.mu.Unlock()
-	if _, ok := m.s.values[m.shardID].fakeErr["setRequiredLsn"]; ok {
+	if m.shouldFakeErrorLocked("setRequiredLsn") {
 		return fakeError
 	}
 	m.s.values[m.shardID].requiredLsn = lsn
@@ -388,6 +394,37 @@ func (m *mockLogClient) clearFakeError(tag string) {
 	m.s.mu.Lock()
 	defer m.s.mu.Unlock()
 	delete(m.s.values[m.shardID].fakeErr, tag)
+}
+
+func (m *mockLogClient) failNext(tag string, count int) {
+	m.s.mu.Lock()
+	defer m.s.mu.Unlock()
+	v := m.s.values[m.shardID]
+	v.fakeErrCount[tag] = count
+	v.callCount[tag] = 0
+	v.failureCount[tag] = 0
+}
+
+func (m *mockLogClient) callStats(tag string) (calls, failures int) {
+	m.s.mu.Lock()
+	defer m.s.mu.Unlock()
+	v := m.s.values[m.shardID]
+	return v.callCount[tag], v.failureCount[tag]
+}
+
+func (m *mockLogClient) shouldFakeErrorLocked(tag string) bool {
+	v := m.s.values[m.shardID]
+	v.callCount[tag]++
+	if v.fakeErrCount[tag] > 0 {
+		v.fakeErrCount[tag]--
+		v.failureCount[tag]++
+		return true
+	}
+	if _, ok := v.fakeErr[tag]; ok {
+		v.failureCount[tag]++
+		return true
+	}
+	return false
 }
 
 func (m *mockLogClient) setLeaderID(id uint64) {

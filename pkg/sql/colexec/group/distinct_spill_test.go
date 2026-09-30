@@ -93,6 +93,19 @@ func TestDistinctSpillRecordEnvelopeRejectsCorruption(t *testing.T) {
 	require.Zero(t, aggregate)
 	require.Equal(t, []byte("key"), payload)
 
+	var withRepresentative bytes.Buffer
+	_, err = controller.writeRecordWithRepresentative(
+		&withRepresentative, 17, 11, 0, groups, 0,
+		[]byte("canonical"), []byte("raw"))
+	require.NoError(t, err)
+	_, _, _, payload, representative, eof, err :=
+		controller.readRecordWithRepresentative(
+			bytes.NewReader(withRepresentative.Bytes()), groups)
+	require.NoError(t, err)
+	require.False(t, eof)
+	require.Equal(t, []byte("canonical"), payload)
+	require.Equal(t, []byte("raw"), representative)
+
 	for _, test := range []struct {
 		name   string
 		mutate func([]byte) []byte

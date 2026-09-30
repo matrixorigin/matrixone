@@ -9049,6 +9049,14 @@ func TestIscpMeta(t *testing.T) {
 	}
 
 	// Helper function to append ISCP records
+	jobSpec, err := types.ParseStringToByteJson(`{"type":"backup","interval":"1h"}`)
+	require.NoError(t, err)
+	jobStatus, err := types.ParseStringToByteJson(`{"status":"running"}`)
+	require.NoError(t, err)
+	jobSpecBytes, err := types.EncodeJson(jobSpec)
+	require.NoError(t, err)
+	jobStatusBytes, err := types.EncodeJson(jobStatus)
+	require.NoError(t, err)
 	appendIscpRecord := func(accountID uint32, tableID uint64, jobName string, jobID uint64, watermark string, isDropped bool) {
 		opt := containers.Options{}
 		opt.Capacity = 0
@@ -9063,15 +9071,15 @@ func TestIscpMeta(t *testing.T) {
 		data := containers.BuildBatch(attrs, vecTypes, opt)
 		defer data.Close()
 
-		data.Vecs[0].Append(accountID, false)                                   // account_id
-		data.Vecs[1].Append(tableID, false)                                     // table_id
-		data.Vecs[2].Append([]byte(jobName), false)                             // job_name
-		data.Vecs[3].Append(jobID, false)                                       // job_id
-		data.Vecs[4].Append([]byte(`{"type":"backup","interval":"1h"}`), false) // job_spec
-		data.Vecs[5].Append(uint8(1), false)                                    // job_state (active)
-		data.Vecs[6].Append([]byte(watermark), false)                           // watermark
-		data.Vecs[7].Append([]byte(`{"status":"running"}`), false)              // job_status
-		data.Vecs[8].Append([]byte(tae.TxnMgr.Now().ToString()), false)         // create_at
+		data.Vecs[0].Append(accountID, false)                           // account_id
+		data.Vecs[1].Append(tableID, false)                             // table_id
+		data.Vecs[2].Append([]byte(jobName), false)                     // job_name
+		data.Vecs[3].Append(jobID, false)                               // job_id
+		data.Vecs[4].Append(jobSpecBytes, false)                        // job_spec
+		data.Vecs[5].Append(uint8(1), false)                            // job_state (active)
+		data.Vecs[6].Append([]byte(watermark), false)                   // watermark
+		data.Vecs[7].Append(jobStatusBytes, false)                      // job_status
+		data.Vecs[8].Append([]byte(tae.TxnMgr.Now().ToString()), false) // create_at
 
 		if isDropped {
 			data.Vecs[9].Append([]byte(tae.TxnMgr.Now().ToString()), false) // drop_at (not null for dropped jobs)
@@ -9450,6 +9458,10 @@ func TestGlobalCheckpoint2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
+	// Flushing is asynchronous and shares workers with the checkpoint runner;
+	// use the same bounded timeout as checkpoint operations instead of a
+	// load-sensitive four-second deadline.
+	flushTimeoutMS := int(testutil.TestCheckpointTimeout / time.Millisecond)
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	options.WithCheckpointGlobalMinCount(1)(opts)
@@ -9506,7 +9518,7 @@ func TestGlobalCheckpoint2(t *testing.T) {
 
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
-	tae.AllFlushExpected(tae.TxnMgr.Now(), 4000)
+	tae.AllFlushExpected(tae.TxnMgr.Now(), flushTimeoutMS)
 
 	forceTS := tae.TxnMgr.Now()
 	err = tae.DB.ForceCheckpoint(ctx, forceTS)
@@ -9547,10 +9559,7 @@ func TestGlobalCheckpoint2(t *testing.T) {
 
 	currTs := tae.TxnMgr.Now()
 	assert.NoError(t, err)
-	// testutils.WaitExpect(5000, func() bool {
-	// 	return tae.AllCheckpointsFinished()
-	// })
-	tae.AllFlushExpected(currTs, 4000)
+	tae.AllFlushExpected(currTs, flushTimeoutMS)
 	forceTS = tae.TxnMgr.Now()
 	err = tae.DB.ForceGlobalCheckpoint(ctx, forceTS, time.Duration(1))
 	require.NoError(t, err)
@@ -12958,8 +12967,7 @@ func TestMergeBlocksWithCNRewrittenTombstoneInsideTransferRange(t *testing.T) {
 }
 
 func TestMergeBlocksWithCNRewriteAcrossTransferPhases(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
@@ -13019,13 +13027,18 @@ func TestMergeBlocksWithCNRewriteAcrossTransferPhases(t *testing.T) {
 
 	require.True(t, fault.Enable())
 	defer fault.Disable()
+
+	// Bound the phase-controlled operation itself. Engine setup and fixture I/O
+	// must not consume the budget that guards the merge from hanging.
+	mergeCtx, cancelMerge := context.WithTimeout(ctx, 30*time.Second)
+	defer cancelMerge()
 	require.NoError(t, fault.AddFaultPoint(
-		ctx, objectio.FJ_DataMergeAfterCollectTS, ":::", "wait", 0, "", false,
+		mergeCtx, objectio.FJ_DataMergeAfterCollectTS, ":::", "wait", 0, "", false,
 	))
 	defer fault.RemoveFaultPoint(context.Background(), objectio.FJ_DataMergeAfterCollectTS)
 	waiterProbe := t.Name() + "/data-merge-waiters"
 	require.NoError(t, fault.AddFaultPoint(
-		ctx, waiterProbe, ":::", "getwaiters", 0,
+		mergeCtx, waiterProbe, ":::", "getwaiters", 0,
 		objectio.FJ_DataMergeAfterCollectTS, false,
 	))
 	defer fault.RemoveFaultPoint(context.Background(), waiterProbe)
@@ -13033,13 +13046,14 @@ func TestMergeBlocksWithCNRewriteAcrossTransferPhases(t *testing.T) {
 	dataErrC := make(chan error, 1)
 	dataDone := false
 	go func() {
-		dataErrC <- dataTask.OnExec(ctx)
+		dataErrC <- dataTask.OnExec(mergeCtx)
 	}()
 	defer func() {
 		if dataDone {
 			return
 		}
 		_, _ = fault.RemoveFaultPoint(context.Background(), objectio.FJ_DataMergeAfterCollectTS)
+		cancelMerge()
 		select {
 		case <-dataErrC:
 		case <-time.After(10 * time.Second):
@@ -13068,14 +13082,14 @@ func TestMergeBlocksWithCNRewriteAcrossTransferPhases(t *testing.T) {
 	require.True(t, ok)
 	require.NoError(t, rewriteTxn.Commit(ctx))
 
-	removed, err := fault.RemoveFaultPoint(ctx, objectio.FJ_DataMergeAfterCollectTS)
+	removed, err := fault.RemoveFaultPoint(mergeCtx, objectio.FJ_DataMergeAfterCollectTS)
 	require.NoError(t, err)
 	require.True(t, removed)
 	select {
 	case err := <-dataErrC:
 		dataDone = true
 		require.NoError(t, err)
-	case <-ctx.Done():
+	case <-mergeCtx.Done():
 		t.Fatal("data merge did not finish")
 	}
 	require.NoError(t, dataTxn.Commit(ctx))
@@ -13932,7 +13946,7 @@ func newTestTxnServer(t *testing.T) rpc.TxnServer {
 	return server
 }
 
-func Test_BasicTxnModeSwitch(t *testing.T) {
+func Test_BasicTxnModeSwitchRejectsMissingReplayController(t *testing.T) {
 	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
@@ -13947,10 +13961,10 @@ func Test_BasicTxnModeSwitch(t *testing.T) {
 	assert.True(t, tae.TxnMgr.IsReplayMode())
 
 	err = tae.SwitchTxnMode(ctx, 2, "todo")
-	assert.NoError(t, err)
-	assert.True(t, tae.IsWriteMode())
-	assert.True(t, tae.TxnMgr.IsWriteMode())
-	assert.Error(t, db.CheckCronJobs(tae.DB, db.DBTxnMode_Replay))
+	assert.ErrorContains(t, err, "requires a replay controller")
+	assert.True(t, tae.IsReplayMode())
+	assert.True(t, tae.TxnMgr.IsReplayMode())
+	assert.NoError(t, db.CheckCronJobs(tae.DB, db.DBTxnMode_Replay))
 }
 
 func prepareTxnModeSwitchWithInflightTxn(
@@ -15631,4 +15645,79 @@ func TestGlobalCheckpointTableIDHistoryFallbackAndFailClosed(t *testing.T) {
 		0,
 	)
 	require.False(t, historyStart.GT(&requiredStart))
+}
+
+// TestGetByFilterAfterMergeKeepsTheNewAppend verifies that a replacement append
+// remains visible after its source object is merged, and that a second append
+// with the same primary key is rejected by TN deduplication.
+func TestGetByFilterAfterMergeKeepsTheNewAppend(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll2(3, []int{0, 1})
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 10
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+
+	// Build the merge output before the update commits. The merge output still
+	// contains the old row; its PrepareCommit transfer phase will later see the
+	// update's source tombstone and map it to that output row.
+	mergeTxn, mergeRel := tae.GetRelation()
+	source := testutil.GetOneBlockMeta(mergeRel)
+	mergeTask, err := jobs.NewMergeObjectsTask(
+		nil, mergeTxn, []*catalog.ObjectEntry{source}, tae.Runtime, 0, false,
+	)
+	require.NoError(t, err)
+	require.NoError(t, mergeTask.OnExec(ctx))
+
+	// Commit the replacement while the merge transaction is still pending. The
+	// replacement is intentionally flushed before the merge commit so that both
+	// rows are represented by non-appendable objects during candidate lookup.
+	updateTxn, updateRel := tae.GetRelation()
+	updateTxn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+	require.NoError(t, updateRel.UpdateByFilter(
+		ctx, handle.NewEQFilter(pk), 2, int32(42), false,
+	))
+	require.NoError(t, updateTxn.Commit(ctx))
+
+	flushTxn, flushRel := tae.GetRelation()
+	appendableMetas := testutil.GetAllAppendableMetas(flushRel, false)
+	require.Len(t, appendableMetas, 1)
+	flushTask, err := jobs.NewFlushTableTailTask(
+		nil, flushTxn, appendableMetas, nil, tae.Runtime,
+	)
+	require.NoError(t, err)
+	require.NoError(t, flushTask.OnExec(ctx))
+	require.NoError(t, flushTxn.Commit(ctx))
+
+	require.NoError(t, mergeTxn.Commit(ctx))
+
+	readTxn, readRel := tae.GetRelation()
+	id, row, err := readRel.GetByFilter(ctx, handle.NewEQFilter(pk))
+	require.NoError(t, err)
+	value, _, err := readRel.GetValue(id, row, 2, false)
+	require.NoError(t, err)
+	require.Equal(t, int32(42), value)
+	require.NoError(t, readTxn.Commit(ctx))
+
+	insertTxn, insertRel := tae.GetRelation()
+	err = insertRel.Append(ctx, bat)
+	if err == nil {
+		err = insertTxn.Commit(ctx)
+	} else {
+		_ = insertTxn.Rollback(ctx)
+	}
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry), err)
 }

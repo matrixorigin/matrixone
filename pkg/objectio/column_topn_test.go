@@ -231,6 +231,45 @@ func TestReadColumnTopNChunkSelections(t *testing.T) {
 	}
 }
 
+func TestReadColumnTopNLegacyKeepsFullObjectPolicy(t *testing.T) {
+	mp := newTopNTestMP(t)
+	source := newTopNTestVector(t, mp, []float32{6, 1, 1, 0, 3, 2})
+	fs, err := fileservice.NewMemoryFS("topn-legacy-policy", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { fs.Close(context.Background()) })
+	location, ext, _ := persistTopNTestColumn(t, fs, source, nil)
+
+	for _, tc := range []struct {
+		name     string
+		selected []int64
+		policy   fileservice.Policy
+		wantRows []int64
+	}{
+		{name: "sparse default", selected: []int64{0, 4, 5}, wantRows: []int64{4, 5}},
+		{name: "dense default", selected: []int64{0, 1, 2, 3, 4, 5}, wantRows: []int64{1, 3}},
+		{
+			name:     "sparse explicit range",
+			selected: []int64{0, 4, 5},
+			policy:   fileservice.SkipFullFilePreloads,
+			wantRows: []int64{4, 5},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tracked := &topNTrackingFS{FileService: fs, ext: ext}
+			rows, _, _, err := ReadColumnTopN(
+				context.Background(), 0, *source.GetType(), tracked, location,
+				tc.selected, newTopNTestOp(2), mp, tc.policy,
+			)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantRows, rows)
+			require.Equal(t, []topNReadRange{{
+				int64(ext.Offset()), int64(ext.Length()), tc.policy,
+			}}, tracked.reads)
+			require.Zero(t, tracked.live)
+		})
+	}
+}
+
 func TestReadColumnTopNChunkFailureCleanup(t *testing.T) {
 	mp := newTopNTestMP(t)
 	source := newTopNTestVector(t, mp, []float32{6, 1, 1, 0, 3, 2})

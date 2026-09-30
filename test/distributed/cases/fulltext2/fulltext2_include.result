@@ -126,4 +126,27 @@ select count(*) from docs where match(body) against('learning') and status = 'ac
 select count(*) from docs where match(body) against('learning') and prio between 15 and 30;
 ➤ count(*)[-5,64,0]  𝄀
 4
+drop table if exists docs_null;
+create table docs_null(id bigint primary key, left_doc text, right_doc text, status varchar(20));
+insert into docs_null values
+(1,NULL,'righttoken','active'),
+(2,'lefttoken',NULL,NULL),
+(3,NULL,NULL,NULL),
+(4,'lefttoken','righttoken','pending');
+create fulltext2 index ft_null on docs_null(left_doc, right_doc) include (status);
+select id, status from docs_null where match(left_doc, right_doc) against('righttoken') order by id;
+➤ id[-5,64,0]  ¦  status[12,20,0]  𝄀
+1  ¦  active  𝄀
+4  ¦  pending
+select id, status from docs_null where match(left_doc, right_doc) against('lefttoken') and status is null order by id;
+➤ id[-5,64,0]  ¦  status[12,20,0]  𝄀
+2  ¦  null
+select id, status from docs_null where match(left_doc, right_doc) against('righttoken') and status = 'active' order by id;
+➤ id[-5,64,0]  ¦  status[12,20,0]  𝄀
+1  ¦  active
+select id, status from docs_null where match(left_doc, right_doc) against('righttoken') and status is not null order by id;
+➤ id[-5,64,0]  ¦  status[12,20,0]  𝄀
+1  ¦  active  𝄀
+4  ¦  pending
+drop table docs_null;
 drop database fulltext2_include;

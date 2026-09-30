@@ -170,7 +170,7 @@ create table auto_increment12(col1 int auto_increment primary key)auto_increment
 Insert into auto_increment12 values();
 Insert into auto_increment12 values();
 Select * from auto_increment12;
-Insert into auto_increment12 values(16.898291);
+Insert into auto_increment12 values(16.000001);
 insert into auto_increment12 values(124312.4321424324);
 insert into auto_increment12 values();
 select last_insert_id();
@@ -385,7 +385,7 @@ create temporary table auto_increment12(col1 int auto_increment primary key)auto
 Insert into auto_increment12 values();
 Insert into auto_increment12 values();
 Select * from auto_increment12;
-Insert into auto_increment12 values(16.898291);
+Insert into auto_increment12 values(16.000001);
 insert into auto_increment12 values();
 select last_insert_id();
 Select * from auto_increment12;

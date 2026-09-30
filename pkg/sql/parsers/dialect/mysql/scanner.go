@@ -882,6 +882,12 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 	keywordName := s.buf[start:s.Pos]
 	lower := strings.ToLower(keywordName)
 	if keywordID, found := keywords[lower]; found {
+		if isSQLModeSensitiveFunctionName(lower) && !s.sqlMode.Has(SQLModeIgnoreSpace) {
+			pos := s.skipBlankAndCommentsFrom(s.Pos)
+			if pos != s.Pos && pos < len(s.buf) && s.buf[pos] == '(' {
+				return ID, keywordName
+			}
+		}
 		if lower == "within" {
 			if s.withinGroupPhraseAhead(s.Pos) {
 				return keywordID, keywordName

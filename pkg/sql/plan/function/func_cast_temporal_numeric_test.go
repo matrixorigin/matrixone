@@ -127,6 +127,124 @@ func TestCastTemporalNumericUsesMysqlPackedValue(t *testing.T) {
 	}
 }
 
+func TestCastYearToBitRejectsOverflow(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	bit10 := types.New(types.T_bit, 10, 0)
+	tc := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(types.T_year.ToType(), []types.MoYear{2024}, nil),
+		NewFunctionTestInput(bit10, []uint64{}, nil),
+	}, NewFunctionTestResult(bit10, true, nil, nil), NewCast)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
+func TestTimeNumericArithmeticPreservesFractionAndMetadata(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	timeType := types.T_time.ToTypeWithScale(3)
+	decimal64Type := types.New(types.T_decimal64, 18, 3)
+	decimal128Scale3Type := types.New(types.T_decimal128, 38, 3)
+	decimal128Scale7Type := types.New(types.T_decimal128, 21, 7)
+
+	timeSmall, err := types.ParseTime("00:00:00.001", 3)
+	require.NoError(t, err)
+	timeLarge, err := types.ParseTime("00:00:34.500", 3)
+	require.NoError(t, err)
+	wantSmall, err := types.ParseDecimal64("0.001", 18, 3)
+	require.NoError(t, err)
+	wantLarge, err := types.ParseDecimal64("34.500", 18, 3)
+	require.NoError(t, err)
+
+	castCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(timeType, []types.Time{timeSmall, timeLarge}, nil),
+			NewFunctionTestInput(decimal64Type, []types.Decimal64{}, nil),
+		},
+		NewFunctionTestResult(decimal64Type, false, []types.Decimal64{wantSmall, wantLarge}, nil),
+		NewCast,
+	)
+	succeed, info := castCase.Run()
+	require.True(t, succeed, info)
+
+	for _, tc := range []struct {
+		name       string
+		operator   string
+		wantReturn types.Type
+	}{
+		{name: "multiply", operator: "*", wantReturn: decimal128Scale3Type},
+		{name: "divide", operator: "/", wantReturn: decimal128Scale7Type},
+		{name: "modulo", operator: "%", wantReturn: decimal64Type},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(proc.Ctx, tc.operator,
+				[]types.Type{timeType, types.T_int64.ToType()})
+			require.NoError(t, err)
+			targets, needsCast := resolved.ShouldDoImplicitTypeCast()
+			require.True(t, needsCast)
+			wantTargets := []types.Type{decimal64Type, types.T_decimal64.ToType()}
+			if tc.operator == "/" {
+				wantTargets = []types.Type{
+					types.New(types.T_decimal128, 17, 3),
+					types.New(types.T_decimal128, 19, 0),
+				}
+			}
+			require.Equal(t, wantTargets, targets)
+			require.Equal(t, tc.wantReturn, resolved.GetReturnType())
+		})
+	}
+
+	wantMultiplySmall, err := types.ParseDecimal128("0.010", 38, 3)
+	require.NoError(t, err)
+	wantMultiplyLarge, err := types.ParseDecimal128("345.000", 38, 3)
+	require.NoError(t, err)
+	decimalTen, err := types.ParseDecimal64("10", 18, 0)
+	require.NoError(t, err)
+	decimalFive, err := types.ParseDecimal64("5", 18, 0)
+	require.NoError(t, err)
+	multiplyCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(decimal64Type, []types.Decimal64{wantSmall, wantLarge}, nil),
+			NewFunctionTestInput(types.T_decimal64.ToType(), []types.Decimal64{decimalTen, decimalTen}, nil),
+		},
+		NewFunctionTestResult(decimal128Scale3Type, false,
+			[]types.Decimal128{wantMultiplySmall, wantMultiplyLarge}, nil),
+		multiFn,
+	)
+	succeed, info = multiplyCase.Run()
+	require.True(t, succeed, info)
+
+	wantDivideSmall, err := types.ParseDecimal128("0.0001000", 21, 7)
+	require.NoError(t, err)
+	wantDivideLarge, err := types.ParseDecimal128("3.4500000", 21, 7)
+	require.NoError(t, err)
+	divideCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(decimal64Type, []types.Decimal64{wantSmall, wantLarge}, nil),
+			NewFunctionTestInput(types.T_decimal64.ToType(), []types.Decimal64{decimalTen, decimalTen}, nil),
+		},
+		NewFunctionTestResult(decimal128Scale7Type, false,
+			[]types.Decimal128{wantDivideSmall, wantDivideLarge}, nil),
+		divFn,
+	)
+	succeed, info = divideCase.Run()
+	require.True(t, succeed, info)
+
+	wantModuloSmall, err := types.ParseDecimal64("0.001", 18, 3)
+	require.NoError(t, err)
+	wantModuloLarge, err := types.ParseDecimal64("4.500", 18, 3)
+	require.NoError(t, err)
+	moduloCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(decimal64Type, []types.Decimal64{wantSmall, wantLarge}, nil),
+			NewFunctionTestInput(types.T_decimal64.ToType(), []types.Decimal64{decimalFive, decimalFive}, nil),
+		},
+		NewFunctionTestResult(decimal64Type, false,
+			[]types.Decimal64{wantModuloSmall, wantModuloLarge}, nil),
+		modFn,
+	)
+	succeed, info = moduloCase.Run()
+	require.True(t, succeed, info)
+}
+
 func TestTemporalNumericTypeCheckUsesDecimal128ForDateTimeAndTimestamp(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -162,6 +280,30 @@ func TestTemporalNumericTypeCheckUsesDecimal128ForDateTimeAndTimestamp(t *testin
 				require.Equal(t, tc.left.Scale, left.Scale)
 			}
 		})
+	}
+}
+
+func TestTemporalArithmeticWithApproximateSources(t *testing.T) {
+	for _, temporal := range []types.T{types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_year} {
+		for _, floating := range []types.T{types.T_float32, types.T_float64, types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob} {
+			for _, inputs := range [][]types.Type{
+				{temporal.ToTypeWithScale(6), floating.ToType()},
+				{floating.ToType(), temporal.ToTypeWithScale(6)},
+			} {
+				for _, operator := range []string{"+", "-", "*", "%", "/", "div"} {
+					resolved, err := GetFunctionByName(context.Background(), operator, inputs)
+					require.NoError(t, err, "%s %v", operator, inputs)
+					want := types.T_float64
+					if operator == "div" {
+						want = types.T_int64
+					}
+					require.Equal(t, want, resolved.retType.Oid)
+					targets, cast := resolved.ShouldDoImplicitTypeCast()
+					require.True(t, cast)
+					require.Equal(t, []types.Type{types.T_float64.ToType(), types.T_float64.ToType()}, targets)
+				}
+			}
+		}
 	}
 }
 
@@ -490,6 +632,7 @@ func TestTemporalNumericCastDecimalAndNulls(t *testing.T) {
 	dateType128 := types.New(types.T_decimal128, 20, 0)
 	datetimeType128 := types.New(types.T_decimal128, 20, 6)
 	yearType128 := types.New(types.T_decimal128, 20, 0)
+	yearBitType := types.New(types.T_bit, 11, 0)
 	datetimeOutType := types.T_datetime.ToTypeWithScale(6)
 	timestampOutType := types.T_timestamp.ToTypeWithScale(6)
 	nulls := []bool{false, true}
@@ -562,6 +705,14 @@ func TestTemporalNumericCastDecimalAndNulls(t *testing.T) {
 				NewFunctionTestInput(yearType128, []types.Decimal128{}, nil),
 			},
 			expect: NewFunctionTestResult(yearType128, false, []types.Decimal128{yearDecimal128, {}}, nulls),
+		},
+		{
+			name: "year to bit uses numeric value and propagates null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_year.ToType(), []types.MoYear{2024, 0}, nulls),
+				NewFunctionTestInput(yearBitType, []uint64{}, nil),
+			},
+			expect: NewFunctionTestResult(yearBitType, false, []uint64{2024, 0}, nulls),
 		},
 		{
 			name: "decimal64 to datetime propagates null",

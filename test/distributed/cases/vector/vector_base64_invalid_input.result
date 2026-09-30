@@ -1,0 +1,23 @@
+select vecf32_from_base64('!!!');
+invalid input: vec_from_base64: invalid base64 input
+select vecf64_from_base64('!!!');
+invalid input: vec_from_base64: invalid base64 input
+select vecf16_from_base64('!!!');
+invalid input: vec_from_base64: invalid base64 input
+select vecbf16_from_base64('!!!');
+invalid input: vec_from_base64: invalid base64 input
+select vecint8_from_base64('!!!');
+invalid input: vec_from_base64: invalid base64 input
+select vecuint8_from_base64('!!!');
+invalid input: vec_from_base64: invalid base64 input
+select vecf32_from_base64('AA==');
+invalid input: vec_from_base64: decoded length 1 is not a multiple of 4 bytes
+select vecf64_from_base64('AA==');
+invalid input: vec_from_base64: decoded length 1 is not a multiple of 8 bytes
+select vecf16_from_base64('AA==');
+invalid input: vec_from_base64: decoded length 1 is not a multiple of 2 bytes
+select vecbf16_from_base64('AA==');
+invalid input: vec_from_base64: decoded length 1 is not a multiple of 2 bytes
+select vecuint8_from_base64('AA==');
+vecuint8_from_base64(AA==)
+[0]

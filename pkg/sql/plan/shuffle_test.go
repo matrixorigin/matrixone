@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	pbstats "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -3049,6 +3050,96 @@ func TestDetermineShuffleTypeFallsBackWhenRangeStatsAreAbsent(t *testing.T) {
 	require.Equal(t, plan.ShuffleType_Hash, node.Stats.HashmapStats.ShuffleType)
 }
 
+func TestDetermineShuffleTypeRejectsStringRangeForAggregate(t *testing.T) {
+	statsCache := NewStatsCache()
+	stats := NewStatsInfo()
+	stats.TableCnt = 10_000_000
+	stats.NdvMap["url"] = 3_000_000
+	stats.MinValMap["url"] = 1
+	stats.MaxValMap["url"] = 2
+	stats.ShuffleRangeMap["url"] = &pbstats.ShuffleRange{
+		IsStrType: true,
+		Overlap:   0.1,
+		Uniform:   0.1,
+		Result:    []float64{1, 2, 3},
+	}
+	statsCache.Set(1, stats)
+	ctx := &statsCacheCompilerContext{
+		MockCompilerContext: &MockCompilerContext{ctx: context.Background()},
+		statsCache:          statsCache,
+	}
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+	builder.tag2Table[0] = &plan.TableDef{
+		TblId: 1,
+		Cols: []*plan.ColDef{{
+			Name: "url",
+			Typ:  plan.Type{Id: int32(types.T_varchar)},
+		}},
+	}
+	node := &plan.Node{
+		NodeType: plan.Node_AGG,
+		GroupBy: []*plan.Expr{{
+			Typ:  plan.Type{Id: int32(types.T_varchar)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
+		}},
+		Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{ShuffleColIdx: 0}},
+	}
+
+	determineShuffleType(&plan.ColRef{RelPos: 0, ColPos: 0}, node, builder)
+
+	require.Equal(t, plan.ShuffleType_Hash, node.Stats.HashmapStats.ShuffleType)
+	require.Nil(t, node.Stats.HashmapStats.Ranges)
+}
+
+func TestDetermineShuffleTypeDoesNotReuseStringRangeForAggregate(t *testing.T) {
+	statsCache := NewStatsCache()
+	stats := NewStatsInfo()
+	stats.TableCnt = 10_000_000
+	stats.NdvMap["url"] = 3_000_000
+	statsCache.Set(1, stats)
+	ctx := &statsCacheCompilerContext{
+		MockCompilerContext: &MockCompilerContext{ctx: context.Background()},
+		statsCache:          statsCache,
+	}
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+	builder.tag2Table[0] = &plan.TableDef{
+		TblId: 1,
+		Cols: []*plan.ColDef{{
+			Name: "url",
+			Typ:  plan.Type{Id: int32(types.T_varchar)},
+		}},
+	}
+	child := &plan.Node{
+		NodeType:    plan.Node_AGG,
+		BindingTags: []int32{10},
+		GroupBy: []*plan.Expr{{
+			Typ:  plan.Type{Id: int32(types.T_varchar)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
+		}},
+		Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{
+			Shuffle:       true,
+			ShuffleColIdx: 0,
+			ShuffleType:   plan.ShuffleType_Range,
+		}},
+	}
+	node := &plan.Node{
+		NodeType: plan.Node_AGG,
+		Children: []int32{0},
+		GroupBy: []*plan.Expr{{
+			Typ:  plan.Type{Id: int32(types.T_varchar)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 10, ColPos: 0}},
+		}},
+		Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{ShuffleColIdx: 0}},
+	}
+	builder.qry = &plan.Query{Nodes: []*plan.Node{child, node}}
+
+	determineShuffleType(&plan.ColRef{RelPos: 10, ColPos: 0}, node, builder)
+
+	require.Equal(t, plan.ShuffleType_Hash, node.Stats.HashmapStats.ShuffleType)
+	require.Equal(t, plan.ShuffleMethod_Normal, node.Stats.HashmapStats.ShuffleMethod)
+	require.Nil(t, node.Stats.HashmapStats.Ranges)
+}
+
 func TestShuffleByZonemap(t *testing.T) {
 	node := &plan.Node{
 		Stats: DefaultStats(),
@@ -3097,7 +3188,8 @@ func TestShuffleByValueExtractedFromZonemap(t *testing.T) {
 		CNIDX: 0,
 		Init:  false,
 	}
-	idx := shuffleByValueExtractedFromZonemap(rsp, zm, 3)
+	idx, ok := shuffleByValueExtractedFromZonemap(rsp, zm, 3)
+	require.True(t, ok)
 	require.Equal(t, idx, uint64(2))
 
 	node = &plan.Node{
@@ -3125,6 +3217,231 @@ func TestShuffleByValueExtractedFromZonemap(t *testing.T) {
 		CNIDX: 0,
 		Init:  false,
 	}
-	idx = shuffleByValueExtractedFromZonemap(rsp, zm, 4)
+	idx, ok = shuffleByValueExtractedFromZonemap(rsp, zm, 4)
+	require.True(t, ok)
 	require.Equal(t, idx, uint64(1))
+}
+
+func TestCompositeKeyZonemapExtractsFirstElementFromTruncatedTuple(t *testing.T) {
+	const traceID = "trace_000001_f1dff375"
+	packer := types.NewPacker()
+	packer.EncodeStringType([]byte(traceID))
+	packer.EncodeInt32(65536)
+	packer.EncodeStringType([]byte("obs_trace_000001_f1dff375_065536_deadbeef"))
+
+	zm := index2.NewZM(types.T_varchar, 0)
+	index2.UpdateZM(zm, packer.Bytes())
+	require.Len(t, zm.GetMinBuf(), 30)
+	_, err := types.Unpack(zm.GetMinBuf())
+	require.ErrorContains(t, err, "position 29")
+
+	want := ByteSliceToUint64([]byte(traceID))
+	for _, typ := range []types.T{types.T_varchar, types.T_char, types.T_text} {
+		center, ok := GetCenterValueExtractFromZMUnsigned(zm, typ)
+		require.True(t, ok)
+		require.Equal(t, want/2+want/2, center)
+
+		idx, ok := GetRangeShuffleIndexForValuesExtractedFromZMUnsignedSlice(
+			[]uint64{want - 1, want, want + 1},
+			zm,
+			typ,
+		)
+		require.True(t, ok)
+		require.Less(t, idx, uint64(4))
+	}
+}
+
+func TestCompositeKeyZonemapExtractsSignedFirstElement(t *testing.T) {
+	minPacker := types.NewPacker()
+	minPacker.EncodeInt64(-100)
+	minPacker.EncodeStringType(bytes.Repeat([]byte{'a'}, 64))
+	maxPacker := types.NewPacker()
+	maxPacker.EncodeInt64(100)
+	maxPacker.EncodeStringType(bytes.Repeat([]byte{'z'}, 64))
+
+	zm := index2.NewZM(types.T_varchar, 0)
+	index2.UpdateZM(zm, minPacker.Bytes())
+	index2.UpdateZM(zm, maxPacker.Bytes())
+
+	center, ok := GetCenterValueExtractFromZMSigned(zm, types.T_int64)
+	require.True(t, ok)
+	require.Equal(t, int64(0), center)
+
+	idx, ok := GetRangeShuffleIndexForValuesExtractedFromZMSignedSlice(
+		[]int64{-200, 0, 200},
+		zm,
+		types.T_int64,
+	)
+	require.True(t, ok)
+	require.Equal(t, uint64(1), idx)
+}
+
+func TestCompositeKeyZonemapExtractsOtherNumericTypes(t *testing.T) {
+	newZonemap := func(encodeMin, encodeMax func(*types.Packer)) objectio.ZoneMap {
+		minPacker := types.NewPacker()
+		encodeMin(minPacker)
+		minPacker.EncodeStringType(bytes.Repeat([]byte{'a'}, 64))
+		maxPacker := types.NewPacker()
+		encodeMax(maxPacker)
+		maxPacker.EncodeStringType(bytes.Repeat([]byte{'z'}, 64))
+
+		zm := index2.NewZM(types.T_varchar, 0)
+		index2.UpdateZM(zm, minPacker.Bytes())
+		index2.UpdateZM(zm, maxPacker.Bytes())
+		return zm
+	}
+
+	for _, test := range []struct {
+		name      string
+		typ       types.T
+		encodeMin func(*types.Packer)
+		encodeMax func(*types.Packer)
+	}{
+		{
+			name:      "int16",
+			typ:       types.T_int16,
+			encodeMin: func(p *types.Packer) { p.EncodeInt16(-20) },
+			encodeMax: func(p *types.Packer) { p.EncodeInt16(40) },
+		},
+		{
+			name:      "int32",
+			typ:       types.T_int32,
+			encodeMin: func(p *types.Packer) { p.EncodeInt32(-20) },
+			encodeMax: func(p *types.Packer) { p.EncodeInt32(40) },
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			zm := newZonemap(test.encodeMin, test.encodeMax)
+			center, ok := GetCenterValueExtractFromZMSigned(zm, test.typ)
+			require.True(t, ok)
+			require.Equal(t, int64(10), center)
+		})
+	}
+
+	for _, test := range []struct {
+		name      string
+		typ       types.T
+		encodeMin func(*types.Packer)
+		encodeMax func(*types.Packer)
+	}{
+		{
+			name:      "uint16",
+			typ:       types.T_uint16,
+			encodeMin: func(p *types.Packer) { p.EncodeUint16(20) },
+			encodeMax: func(p *types.Packer) { p.EncodeUint16(40) },
+		},
+		{
+			name:      "uint32",
+			typ:       types.T_uint32,
+			encodeMin: func(p *types.Packer) { p.EncodeUint32(20) },
+			encodeMax: func(p *types.Packer) { p.EncodeUint32(40) },
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			zm := newZonemap(test.encodeMin, test.encodeMax)
+			center, ok := GetCenterValueExtractFromZMUnsigned(zm, test.typ)
+			require.True(t, ok)
+			require.Equal(t, uint64(30), center)
+		})
+	}
+}
+
+func TestShuffleByValueExtractedFromZonemapUsesPresetRanges(t *testing.T) {
+	makeNode := func(typ types.T) *plan.Node {
+		node := &plan.Node{Stats: DefaultStats()}
+		node.Stats.HashmapStats.ShuffleColIdx = int32(typ)
+		return node
+	}
+
+	signedPacker := types.NewPacker()
+	signedPacker.EncodeInt64(10)
+	signedZM := index2.NewZM(types.T_varchar, 0)
+	index2.UpdateZM(signedZM, signedPacker.Bytes())
+	signedRsp := &engine.RangesShuffleParam{
+		Node:              makeNode(types.T_int64),
+		Init:              true,
+		ShuffleRangeInt64: []int64{0, 20},
+	}
+	idx, ok := shuffleByValueExtractedFromZonemap(signedRsp, signedZM, 3)
+	require.True(t, ok)
+	require.Equal(t, uint64(1), idx)
+
+	unsignedPacker := types.NewPacker()
+	unsignedPacker.EncodeUint64(10)
+	unsignedZM := index2.NewZM(types.T_varchar, 0)
+	index2.UpdateZM(unsignedZM, unsignedPacker.Bytes())
+	unsignedRsp := &engine.RangesShuffleParam{
+		Node:               makeNode(types.T_uint64),
+		Init:               true,
+		ShuffleRangeUint64: []uint64{0, 20},
+	}
+	idx, ok = shuffleByValueExtractedFromZonemap(unsignedRsp, unsignedZM, 3)
+	require.True(t, ok)
+	require.Equal(t, uint64(1), idx)
+}
+
+func TestCompositeKeyZonemapDecodeFailureFallsBackToObjectHash(t *testing.T) {
+	zm := index2.NewZM(types.T_varchar, 0)
+	index2.UpdateZM(zm, []byte{0xff})
+
+	row := types.RandomRowid()
+	stats := objectio.NewObjectStatsWithObjectID(row.BorrowObjectID(), false, false, true)
+	objectio.SetObjectStatsSortKeyZoneMap(stats, zm)
+	node := &plan.Node{
+		TableDef: &plan.TableDef{
+			Pkey: &plan.PrimaryKeyDef{Names: []string{"a", "b"}},
+		},
+		Stats: DefaultStats(),
+	}
+	node.Stats.HashmapStats.Shuffle = true
+	node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
+	node.Stats.HashmapStats.ShuffleColIdx = int32(types.T_varchar)
+	node.Stats.HashmapStats.ShuffleColMax = math.MaxInt64
+
+	const bucketCount = int32(4)
+	owners := 0
+	for cnidx := int32(0); cnidx < bucketCount; cnidx++ {
+		rsp := &engine.RangesShuffleParam{
+			Node:  node,
+			CNCNT: bucketCount,
+			CNIDX: cnidx,
+		}
+		if !ShouldSkipObjByShuffle(rsp, stats) {
+			owners++
+		}
+	}
+	require.Equal(t, 1, owners)
+
+	rsp := &engine.RangesShuffleParam{Node: node, CNCNT: bucketCount}
+	idx := CalcRangeShuffleIDXForObj(rsp, stats, int(bucketCount))
+	objID := stats.ObjectLocation().ObjectId()
+	require.Equal(t, SimpleCharHashToRange(objID[:], uint64(bucketCount)), idx)
+
+	_, ok := GetRangeShuffleIndexForExtractedZM(0, math.MaxInt64, zm, uint64(bucketCount), types.T_varchar)
+	require.False(t, ok)
+	_, ok = GetRangeShuffleIndexForValuesExtractedFromZMUnsignedSlice([]uint64{1, 2, 3}, zm, types.T_varchar)
+	require.False(t, ok)
+	_, ok = GetRangeShuffleIndexForValuesExtractedFromZMSignedSlice([]int64{1, 2, 3}, zm, types.T_int64)
+	require.False(t, ok)
+
+	unsupportedSigned := types.NewPacker()
+	unsupportedSigned.EncodeInt8(1)
+	unsupportedSignedZM := index2.NewZM(types.T_varchar, 0)
+	index2.UpdateZM(unsupportedSignedZM, unsupportedSigned.Bytes())
+	_, ok = GetCenterValueExtractFromZMSigned(unsupportedSignedZM, types.T_int8)
+	require.False(t, ok)
+
+	unsupportedUnsigned := types.NewPacker()
+	unsupportedUnsigned.EncodeBit(1)
+	unsupportedUnsignedZM := index2.NewZM(types.T_varchar, 0)
+	index2.UpdateZM(unsupportedUnsignedZM, unsupportedUnsigned.Bytes())
+	_, ok = GetCenterValueExtractFromZMUnsigned(unsupportedUnsignedZM, types.T_bit)
+	require.False(t, ok)
+
+	_, ok = GetRangeShuffleIndexForExtractedZM(0, 1, zm, uint64(bucketCount), types.T_float64)
+	require.False(t, ok)
+	_, ok = GetRangeShuffleIndexForValuesExtractedFromZMUnsignedSlice([]uint64{1}, zm, types.T_float64)
+	require.False(t, ok)
+	_, ok = GetRangeShuffleIndexForValuesExtractedFromZMSignedSlice([]int64{1}, zm, types.T_float64)
+	require.False(t, ok)
 }

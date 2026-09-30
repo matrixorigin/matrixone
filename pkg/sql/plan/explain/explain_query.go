@@ -150,9 +150,12 @@ func explainPlanTree(qry *plan.Query, ctx context.Context, buffer *ExplainDataBu
 		return err
 	}
 
-	rounds, backgroundQueries := splitIvfSearchDiagnostics(qry.BackgroundQueries)
+	rounds, executions, backgroundQueries := splitIvfSearchDiagnostics(qry.BackgroundQueries)
 	if options.Analyze && len(rounds) > 0 {
 		explainIvfSearchDiagnostics(rounds, buffer, options.Verbose)
+	}
+	if options.Analyze && len(executions) > 0 {
+		explainIvfExecutionDiagnostics(executions, buffer)
 	}
 	if len(backgroundQueries) == 0 {
 		return nil
@@ -174,18 +177,58 @@ func explainPlanTree(qry *plan.Query, ctx context.Context, buffer *ExplainDataBu
 
 func splitIvfSearchDiagnostics(backgroundQueries []*plan.Query) (
 	[]vectorindex.IvfSearchRoundDiagnostic,
+	[]vectorindex.IvfExecutionDiagnostic,
 	[]*plan.Query,
 ) {
 	rounds := make([]vectorindex.IvfSearchRoundDiagnostic, 0, len(backgroundQueries))
+	executions := make([]vectorindex.IvfExecutionDiagnostic, 0, len(backgroundQueries))
 	remaining := make([]*plan.Query, 0, len(backgroundQueries))
 	for _, query := range backgroundQueries {
 		if diagnostic, ok := vectorindex.DecodeIvfSearchRoundDiagnostic(query); ok {
 			rounds = append(rounds, diagnostic)
 			continue
 		}
+		if diagnostic, ok := vectorindex.DecodeIvfExecutionDiagnostic(query); ok {
+			executions = append(executions, diagnostic)
+			continue
+		}
 		remaining = append(remaining, query)
 	}
-	return rounds, remaining
+	return rounds, executions, remaining
+}
+
+func explainIvfExecutionDiagnostics(
+	diagnostics []vectorindex.IvfExecutionDiagnostic,
+	buffer *ExplainDataBuffer,
+) {
+	var summary vectorindex.IvfExecutionDiagnostic
+	for _, diagnostic := range diagnostics {
+		summary.Merge(diagnostic)
+	}
+	buffer.PushNewLine(fmt.Sprintf(
+		"Vector Index Execution: search_count=%d readers=%d metadata_blocks=%d metadata_rows=%d metadata_time_ns=%d centroid_blocks=%d centroid_rows=%d centroid_time_ns=%d entry_blocks_selected=%d entry_blocks_read=%d entry_output_rows=%d entry_time_ns=%d storage_filter_rows=%d:%d vector_rows_scored=%d vector_chunks=%d vector_chunk_cache_hits=%d vector_compressed_bytes=%d vector_decoded_bytes=%d block_topk_rows=%d output_rows=%d",
+		summary.SearchCount,
+		summary.ReaderCount,
+		summary.MetadataBlocks,
+		summary.MetadataRows,
+		summary.MetadataTimeNS,
+		summary.CentroidBlocks,
+		summary.CentroidRows,
+		summary.CentroidTimeNS,
+		summary.EntryBlocksSelected,
+		summary.EntryBlocksRead,
+		summary.EntryOutputRows,
+		summary.EntryTimeNS,
+		summary.StorageFilterInputRows,
+		summary.StorageFilterOutputRows,
+		summary.VectorRowsScored,
+		summary.VectorChunksRead,
+		summary.VectorChunkCacheHits,
+		summary.VectorCompressedBytes,
+		summary.VectorDecodedBytes,
+		summary.TopKOutputRows,
+		summary.OutputRows,
+	), false, 0)
 }
 
 func explainIvfSearchDiagnostics(

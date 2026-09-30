@@ -39,6 +39,140 @@ func buildPreparedAggregatePlan(t *testing.T, sql string) *planpb.Prepare {
 	return prepare
 }
 
+func TestPreparedBinaryStateMarkersUseVarbinaryDomain(t *testing.T) {
+	for _, sql := range []string{
+		"select hll_cardinality(?)",
+		"select hll_merge_agg(?) from nation",
+		"select bitmap_or_agg(?) from nation",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			prepare := buildPreparedAggregatePlan(t, sql)
+			require.Equal(t, []int32{0}, preparedParamPositions(prepare))
+			name := "hll_cardinality"
+			if sql == "select hll_merge_agg(?) from nation" {
+				name = "hll_merge_agg"
+			} else if sql == "select bitmap_or_agg(?) from nation" {
+				name = "bitmap_or_agg"
+			}
+			fn := findPlanFunctionExpr(prepare.Plan, name)
+			require.NotNil(t, fn)
+			require.Len(t, fn.GetF().Args, 1)
+			arg := fn.GetF().Args[0]
+			require.Equal(t, int32(types.T_varbinary), arg.Typ.Id)
+			require.Zero(t, arg.Typ.Width, "opaque state cast must not impose the SQL VARBINARY width")
+			require.Equal(t, "cast", arg.GetF().GetFunc().GetObjName())
+			require.Equal(t, int32(types.T_text), arg.GetF().Args[0].Typ.Id)
+		})
+	}
+}
+
+func TestPreparedPercentileParameters(t *testing.T) {
+	for _, sql := range []string{
+		"select approx_percentile(n_nationkey, ?) from nation",
+		"select approx_percentile(?) within group (order by n_nationkey) from nation",
+		"select percentile_cont(?) within group (order by n_nationkey) from nation",
+		"select percentile_disc(?) within group (order by n_name) from nation",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			prepare := buildPreparedAggregatePlan(t, sql)
+			require.Equal(t, []int32{0}, preparedParamPositions(prepare))
+			require.True(t, PreparedPlanHasPercentileParams(prepare.Plan))
+		})
+	}
+
+	literal := buildPreparedAggregatePlan(t,
+		"select percentile_disc(0.5) within group (order by n_name) from nation")
+	require.False(t, PreparedPlanHasPercentileParams(literal.Plan))
+
+	_, err := runOneStmt(NewMockOptimizer(false), t,
+		"select percentile_disc(n_regionkey) within group (order by n_name) from nation")
+	require.ErrorContains(t, err, "non-null constant or parameter")
+}
+
+func TestPreparedPercentileParameterExpressions(t *testing.T) {
+	for _, sql := range []string{
+		"select approx_percentile(n_nationkey, ? / 100.0) from nation",
+		"select approx_percentile((? + 5) / 100.0) within group (order by n_nationkey desc) from nation",
+		"select percentile_cont(cast(? as double) / 100.0) within group (order by n_nationkey) from nation",
+		"select percentile_disc((? + ?) / 100.0) within group (order by n_name) from nation",
+		"select percentile_disc(-(-? / 100.0)) within group (order by n_name) over () from nation",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			prepare := buildPreparedAggregatePlan(t, sql)
+			require.NotEmpty(t, preparedParamPositions(prepare))
+			require.True(t, PreparedPlanHasPercentileParams(prepare.Plan))
+		})
+	}
+}
+
+func TestPreparedPercentilePreservesSupportedDecimalConfigType(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: NameApproxPercentile,
+			sql:  "select approx_percentile(n_nationkey, cast(? as decimal(19,18))) from nation",
+		},
+		{
+			name: NameApproxPercentile,
+			sql:  "select approx_percentile(null, cast(? as decimal(19,18)))",
+		},
+		{
+			name: NamePercentileCont,
+			sql:  "select percentile_cont(cast(? as decimal(19,18))) within group (order by n_nationkey) from nation",
+		},
+		{
+			name: NamePercentileDisc,
+			sql:  "select percentile_disc(cast(? as decimal(19,18))) within group (order by n_nationkey) from nation",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prepare := buildPreparedAggregatePlan(t, tc.sql)
+			fn := findAggregateByName(prepare.Plan.GetQuery(), tc.name)
+			require.NotNil(t, fn)
+			require.Len(t, fn.Args, 2)
+			percentile := fn.Args[1]
+			require.Equal(t, int32(types.T_decimal128), percentile.Typ.Id)
+			require.Equal(t, int32(19), percentile.Typ.Width)
+			require.Equal(t, int32(18), percentile.Typ.Scale)
+			require.Equal(t, "cast", percentile.GetF().GetFunc().GetObjName())
+
+			filled, err := FillValuesOfParamsInPlan(
+				context.Background(), prepare.Plan, []any{"0.500000000000000001"})
+			require.NoError(t, err)
+			filledFn := findPlanFunctionExpr(filled, tc.name)
+			require.NotNil(t, filledFn)
+			filledPercentile := filledFn.GetF().Args[1]
+			require.Equal(t, int32(types.T_decimal128), filledPercentile.Typ.Id)
+			require.Equal(t, int32(19), filledPercentile.Typ.Width)
+			require.Equal(t, int32(18), filledPercentile.Typ.Scale)
+			require.Equal(t, "cast", filledPercentile.GetF().GetFunc().GetObjName())
+			require.Equal(t, int32(types.T_text), filledPercentile.GetF().Args[0].Typ.Id)
+
+			originalFn := findAggregateByName(prepare.Plan.GetQuery(), tc.name)
+			require.Equal(t, percentile, originalFn.Args[1],
+				"filling one execution must not mutate the cached plan")
+		})
+	}
+}
+
+func TestPreparedPercentileParameterExpressionsRejectRowDependentOrArbitraryFunctions(t *testing.T) {
+	for _, sql := range []string{
+		"prepare stmt_col from 'select percentile_cont((? + n_regionkey) / 100.0) within group (order by n_nationkey) from nation'",
+		"prepare stmt_subquery from 'select percentile_cont((? + (select 1)) / 100.0) within group (order by n_nationkey) from nation'",
+		"prepare stmt_function from 'select percentile_cont(abs(?) / 100.0) within group (order by n_nationkey) from nation'",
+		"prepare stmt_volatile from 'select percentile_cont((? + rand()) / 100.0) within group (order by n_nationkey) from nation'",
+		"prepare stmt_variable from 'select percentile_cont((? + @percentile_offset) / 100.0) within group (order by n_nationkey) from nation'",
+		"prepare stmt_string_cast from 'select percentile_cont(cast(? as char) / 100.0) within group (order by n_nationkey) from nation'",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, err := runOneStmt(NewMockOptimizer(false), t, sql)
+			require.ErrorContains(t, err, "non-null constant or parameter")
+		})
+	}
+}
+
 func collectParamPositions(expr *planpb.Expr, positions map[int32]struct{}) {
 	if expr == nil {
 		return
@@ -310,6 +444,101 @@ func TestPreparedNumericAggregateParameterIdentity(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestPreparedJSONAggregateValueNeedsRuntimeSpecialization(t *testing.T) {
+	for _, test := range []struct {
+		sql  string
+		name string
+	}{
+		{"select json_arrayagg(?) from nation", "json_arrayagg"},
+		{"select json_objectagg(''k'', ?) from nation", "json_objectagg"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			prepare := buildPreparedAggregatePlan(t, test.sql)
+			for _, value := range []struct {
+				text   string
+				typ    types.Type
+				isNull bool
+			}{
+				{text: "123.4500", typ: types.New(types.T_decimal128, 20, 4)},
+				{text: `{"a":1}`, typ: types.T_json.ToType()},
+				{text: "plain", typ: types.T_text.ToType()},
+				{typ: types.New(types.T_decimal128, 20, 4), isNull: true},
+			} {
+				for _, binary := range []bool{false, true} {
+					param := ParamValue{IsBinaryProtocol: binary, RetainParamRef: true}
+					if !value.isNull {
+						param.Value = value.text
+					}
+					if binary {
+						param.RuntimeType, param.HasRuntimeType = value.typ, true
+					} else {
+						param.SourceType, param.HasSourceType = value.typ, true
+					}
+					filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+						context.Background(), prepare.Plan, []any{param})
+					require.NoError(t, err)
+					require.True(t, specialized)
+					aggregate := findPlanFunctionExpr(filled, test.name)
+					require.NotNil(t, aggregate)
+					if !value.isNull {
+						require.Equal(t, int32(value.typ.Oid), aggregate.GetF().Args[len(aggregate.GetF().Args)-1].Typ.Id)
+					}
+					require.NoError(t, RestorePreparedRuntimeParamRefs(context.Background(), filled))
+					require.True(t, preparedExprContainsParam(aggregate.GetF().Args[len(aggregate.GetF().Args)-1]),
+						"runtime cache must not retain the first EXECUTE value")
+				}
+			}
+		})
+	}
+}
+
+func TestPreparedJSONAggregateValueWithoutRuntimeMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		sql string
+		fn  string
+	}{
+		{sql: "select json_arrayagg(?) from nation", fn: "json_arrayagg"},
+		{sql: "select json_objectagg(''k'', ?) from nation", fn: "json_objectagg"},
+	} {
+		t.Run(tc.fn, func(t *testing.T) {
+			prepared := buildPreparedAggregatePlan(t, tc.sql)
+			preparedAggregate := findPlanFunctionExpr(prepared.Plan, tc.fn)
+			require.NotNil(t, preparedAggregate)
+			preparedArg := preparedAggregate.GetF().Args
+			preparedType := preparedArg[len(preparedArg)-1].Typ.Id
+
+			// A caller without source-type metadata must keep the prepared
+			// marker domain, not infer a JSON atom from the text value.
+			filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+				context.Background(), prepared.Plan,
+				[]any{ParamValue{Value: "plain", RetainParamRef: true}})
+			require.NoError(t, err)
+			require.False(t, specialized, "unknown source type must not invalidate the cached compile")
+			aggregate := findPlanFunctionExpr(filled, tc.fn)
+			require.NotNil(t, aggregate)
+			args := aggregate.GetF().Args
+			require.Equal(t, preparedType, args[len(args)-1].Typ.Id)
+			require.NoError(t, RestorePreparedRuntimeParamRefs(context.Background(), filled))
+			require.True(t, preparedExprContainsParam(args[len(args)-1]))
+
+			// The fallback must not poison the cached template for a later
+			// execution that does supply a concrete source type.
+			filled, specialized, err = FillValuesOfParamsInPlanWithSpecialization(
+				context.Background(), prepared.Plan,
+				[]any{ParamValue{
+					Value: "123.4500", SourceType: types.New(types.T_decimal128, 20, 4),
+					HasSourceType: true, RetainParamRef: true,
+				}})
+			require.NoError(t, err)
+			require.True(t, specialized)
+			aggregate = findPlanFunctionExpr(filled, tc.fn)
+			require.NotNil(t, aggregate)
+			args = aggregate.GetF().Args
+			require.Equal(t, int32(types.T_decimal128), args[len(args)-1].Typ.Id)
+		})
+	}
+}
+
 func TestSQLPreparedNullRetainsBinarySourceTypeAndRuntimeDomain(t *testing.T) {
 	prepare := buildPreparedAggregatePlan(t, "select char_length(?) from nation")
 	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
@@ -406,7 +635,6 @@ func TestPreparedMaxByRuntimeTypeReachesResultProjection(t *testing.T) {
 	for _, name := range []string{"max_by", "max_by_non_null"} {
 		t.Run(name, func(t *testing.T) {
 			prepare := buildPreparedAggregatePlan(t, fmt.Sprintf("select %s(?, 1, 1) from nation", name))
-			require.True(t, PreparedPlanNeedsRuntimeSpecialization(prepare.Plan))
 			filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
 				context.Background(),
 				prepare.Plan,
@@ -427,33 +655,120 @@ func TestPreparedMaxByRuntimeTypeReachesResultProjection(t *testing.T) {
 	}
 }
 
-func TestPreparedRuntimeSpecializationCoversResultDomainAggregates(t *testing.T) {
-	for _, name := range []string{
-		"min", "max", "any_value", "max_by", "max_by_non_null",
+func TestPreparedBitwiseAggregateScansForRuntimeSpecialization(t *testing.T) {
+	prepare := buildPreparedAggregatePlan(t, "select bit_and(?) from nation")
+	aggregate := findPlanFunctionExpr(prepare.Plan, "bit_and")
+	require.NotNil(t, aggregate)
+	require.Len(t, aggregate.GetF().Args, 1)
+	privateCast := aggregate.GetF().Args[0]
+	require.True(t, isBitwiseAggregatePrivateCast(privateCast))
+	require.False(t, isExplicitPreparedCast(privateCast))
+}
+
+func TestPreparedBitwiseAggregateRebindsChangedValueWithinSameDomain(t *testing.T) {
+	prepare := buildPreparedAggregatePlan(t, "select bit_and(?) from nation")
+	decimalType := types.New(types.T_decimal64, 2, 1)
+
+	for _, test := range []struct {
+		value string
+		want  int64
+	}{{value: "2.5", want: 25}, {value: "4.0", want: 40}} {
+		filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+			context.Background(),
+			prepare.Plan,
+			[]any{ParamValue{
+				Value: test.value, SourceType: decimalType, HasSourceType: true,
+				RetainParamRef: true,
+			}},
+		)
+		require.NoError(t, err)
+		require.True(t, specialized)
+
+		aggregate := findPlanFunctionExpr(filled, "bit_and")
+		require.NotNil(t, aggregate)
+		require.Len(t, aggregate.GetF().Args, 1)
+		aggregateCast := aggregate.GetF().Args[0]
+		require.True(t, isBitwiseAggregatePrivateCast(aggregateCast))
+		source := aggregateCast.GetF().Args[0]
+		require.Equal(t, int32(types.T_decimal64), source.Typ.Id)
+		require.Equal(t, test.want, source.GetLit().GetDecimal64Val().A)
+		sourceRef := source.GetLit().GetSrc()
+		require.NotNil(t, sourceRef)
+		require.NotNil(t, sourceRef.GetP())
+		require.Equal(t, int32(0), sourceRef.GetP().GetPos())
+	}
+}
+
+func TestPreparedBitwiseAggregateProjectionRefreshPreservesPrivateCast(t *testing.T) {
+	prepare := buildPreparedAggregatePlan(t,
+		"select bit_and(v) from (select max(?) as v from nation) d")
+	preparedAggregate := findPlanFunctionExpr(prepare.Plan, "bit_and")
+	require.NotNil(t, preparedAggregate)
+	require.Len(t, preparedAggregate.GetF().Args, 1)
+	preparedCast := preparedAggregate.GetF().Args[0]
+	require.True(t, isBitwiseAggregatePrivateCast(preparedCast))
+	require.NotNil(t, preparedCast.GetF().Args[0].GetCol(), preparedCast.String())
+
+	for _, test := range []struct {
+		name        string
+		value       any
+		sourceType  types.Type
+		isBinary    bool
+		wantPrivate bool
+		wantSource  types.T
+	}{
+		{
+			name:        "DECIMAL64 fractional input keeps numeric conversion",
+			value:       "2.5",
+			sourceType:  types.New(types.T_decimal64, 2, 1),
+			wantPrivate: true,
+			wantSource:  types.T_decimal64,
+		},
+		{
+			name:        "DECIMAL128 keeps unsigned numeric conversion",
+			value:       "9223372036854775808",
+			sourceType:  types.New(types.T_decimal128, 20, 0),
+			wantPrivate: true,
+			wantSource:  types.T_decimal128,
+		},
+		{
+			name:       "VARBINARY returns to native byte semantics",
+			value:      []byte{0x02},
+			sourceType: types.New(types.T_varbinary, 1, 0),
+			isBinary:   true,
+			wantSource: types.T_varbinary,
+		},
 	} {
-		t.Run(name, func(t *testing.T) {
-			require.True(t, preparedRuntimeSpecializationFunction(name))
+		t.Run(test.name, func(t *testing.T) {
+			filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+				context.Background(), prepare.Plan, []any{ParamValue{
+					Value: test.value, SourceType: test.sourceType, HasSourceType: true,
+					IsBin: test.isBinary, RetainParamRef: true,
+				}},
+			)
+			require.NoError(t, err)
+			require.True(t, specialized)
+
+			filledAggregate := findPlanFunctionExpr(filled, "bit_and")
+			require.NotNil(t, filledAggregate)
+			require.Len(t, filledAggregate.GetF().Args, 1)
+			aggregateArg := filledAggregate.GetF().Args[0]
+			require.Equal(t, test.wantPrivate,
+				isBitwiseAggregatePrivateCast(aggregateArg), aggregateArg.String())
+			if test.wantPrivate {
+				require.Equal(t, int32(types.T_int64), aggregateArg.Typ.Id)
+				aggregateArg = aggregateArg.GetF().Args[0]
+			}
+			require.Equal(t, int32(test.wantSource), aggregateArg.Typ.Id)
 		})
 	}
 }
 
 func TestPreparedRuntimeSpecializationCoversBinaryStringSemantics(t *testing.T) {
-	for _, name := range []string{
-		"ord", "char_length", "character_length",
-		"left", "right", "substring", "substr", "mid", "reverse",
-		"lower", "lcase", "upper", "ucase", "trim", "ltrim", "rtrim",
-		"locate", "instr", "position", "insert", "replace", "lpad", "rpad",
-		"substring_index", "split_part", "repeat", "concat", "concat_ws",
-		"charset", "collation",
-	} {
-		require.True(t, preparedRuntimeSpecializationFunction(name), name)
-	}
-
 	prepared, err := runOneStmt(NewMockOptimizer(false), t,
 		"prepare binary_domains from 'select charset(left(?, 1)), char_length(?), ord(?)'")
 	require.NoError(t, err)
 	preparedPlan := prepared.GetDcl().GetPrepare().Plan
-	require.True(t, PreparedPlanNeedsRuntimeSpecialization(preparedPlan))
 
 	binaryParam := ParamValue{
 		Value: "\xe4\xbd\xa0", SourceType: types.T_varbinary.ToType(), HasSourceType: true,
@@ -476,37 +791,12 @@ func TestPreparedRuntimeSpecializationCoversBinaryStringSemantics(t *testing.T) 
 }
 
 func TestPreparedDMLRuntimeSpecializationPreservesWriteParameters(t *testing.T) {
-	predicateOnly := buildPreparedAggregatePlan(t,
-		"update nation set n_comment = ''x'' where ? = ?")
-	require.True(t, PreparedPlanNeedsRuntimeSpecialization(predicateOnly.Plan))
-
 	withWriteParameter := buildPreparedAggregatePlan(t,
 		"update nation set n_comment = ? where ? = ?")
-	// The predicate still needs execute-time comparison specialization. The
-	// write projection is materialized with its original assignment cast so a
-	// fresh DML compile cannot change the positional write layout.
-	require.True(t, PreparedPlanNeedsRuntimeSpecialization(withWriteParameter.Plan))
-
-	writeExpressionPredicate := buildPreparedAggregatePlan(t,
-		"update nation set n_comment = (? = ?) where n_nationkey = 1")
-	// A domain-sensitive expression may be nested below the assignment cast;
-	// scanning must descend into the write root while preserving its outer
-	// positional contract.
-	require.True(t, PreparedPlanNeedsRuntimeSpecialization(writeExpressionPredicate.Plan))
-
-	nestedWriteExpression := buildPreparedAggregatePlan(t,
-		"update nation set n_comment = (select d.v from (select ? = ? as v) d) where n_nationkey = 1")
-	// A derived-table projection is not a positional DML write root. Its
-	// marker comparison must therefore remain visible to the specialization
-	// scan instead of being preserved as if it were an assignment cast.
-	require.True(t, PreparedPlanNeedsRuntimeSpecialization(nestedWriteExpression.Plan))
-
 	columnBoundPredicate := buildPreparedAggregatePlan(t,
 		"update nation set n_comment = ? where n_nationkey = ? and n_regionkey = ?")
-	// The generic overload scan can still reuse the cached indexed plan; the
-	// separate text-comparison scan must select the engine DOUBLE conversion.
-	require.False(t, PreparedPlanNeedsRuntimeSpecialization(columnBoundPredicate.Plan))
-	require.True(t, PreparedPlanNeedsRuntimeTextComparisonSpecialization(
+	// The live text-comparison scan still identifies text markers beside numeric columns.
+	require.NotEmpty(t, preparedNumericComparisonTextParamPositions(
 		columnBoundPredicate.Plan,
 		[]types.Type{types.T_text.ToType(), types.T_text.ToType(), types.T_text.ToType()},
 	))
@@ -518,7 +808,7 @@ func TestPreparedDMLRuntimeSpecializationPreservesWriteParameters(t *testing.T) 
 	} {
 		columnExpressionPredicate := buildPreparedAggregatePlan(t,
 			"update nation set n_comment = n_comment where "+predicate)
-		require.True(t, PreparedPlanNeedsRuntimeTextComparisonSpecialization(
+		require.NotEmpty(t, preparedNumericComparisonTextParamPositions(
 			columnExpressionPredicate.Plan, []types.Type{types.T_text.ToType()}), predicate)
 	}
 

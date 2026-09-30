@@ -264,3 +264,16 @@ func HostRowsFitting(perRowBytes uint64, reservedBytes uint64) (rows int64, avai
 	}
 	return rows, avail, nil
 }
+
+// HostIDMapBytesPerRow is the host memory one row costs in a loaded index's id -> position map
+// (id_to_index_): 24 for the unordered_map node, 8 for the allocator header, 8 for the bucket
+// slot. cgo/cuvs/index_base.hpp mirrors it as kIdMapBytesPerRow and names this symbol as the
+// authority.
+//
+// The map is materialised for the WHOLE index by the FIRST replayed delete
+// (index_base.hpp, ensure_id_index) and stays resident for the index's life. The native side
+// reserves it only for the allocation itself and releases the claim immediately, so it is not
+// physical memory the C++ governor keeps tracking -- which makes charging it to the cache
+// budget the Go side's job. An index that never replays a delete never builds the map and is
+// charged nothing.
+const HostIDMapBytesPerRow = 40

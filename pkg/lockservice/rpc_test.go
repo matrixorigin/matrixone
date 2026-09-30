@@ -1097,6 +1097,42 @@ func TestRPCSendWithNotSupport(t *testing.T) {
 	)
 }
 
+func TestRPCWriterFairMethodRejectedBeforeOrdinaryLockAdmission(t *testing.T) {
+	runRPCTests(
+		t,
+		func(c Client, s Server) {
+			var ordinaryLockCalls atomic.Int32
+			s.RegisterMethodHandler(
+				lock.Method_Lock,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
+					req *lock.Request,
+					resp *lock.Response,
+					cs morpc.ClientSession,
+				) {
+					ordinaryLockCalls.Add(1)
+					writeResponse(getLogger(""), cancel, resp, nil, cs)
+				})
+
+			ctx, cancel := context.WithTimeout(context.Background(), rpcTestResponseTimeout)
+			defer cancel()
+			_, err := c.Send(ctx, &lock.Request{
+				LockTable: lock.LockTable{ServiceID: "s1"},
+				Method:    lock.Method_LockWriterFair,
+				Lock: lock.LockRequest{Options: lock.LockOptions{
+					Granularity: lock.Granularity_Row,
+					Mode:        lock.LockMode_Shared,
+					WriterFair:  true,
+				}},
+			})
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported),
+				"expected ErrNotSupported, got %T: %v", err, err)
+			require.Zero(t, ordinaryLockCalls.Load())
+		},
+	)
+}
+
 func TestMOErrorCanHandled(t *testing.T) {
 	runRPCTests(
 		t,
@@ -1436,8 +1472,11 @@ func TestLockServiceDiscoveryUsesPendingCNInventory(t *testing.T) {
 		},
 	}
 	serviceID := "0000000000000000000cn-id"
+	present, err := c.activeTxnOwnerPresent(context.Background(), serviceID)
+	require.NoError(t, err)
+	require.True(t, present, "pending public admission must not suppress active-txn recovery")
 
-	_, err := c.AsyncSend(context.Background(), &lock.Request{
+	_, err = c.AsyncSend(context.Background(), &lock.Request{
 		Method:    lock.Method_Unlock,
 		LockTable: lock.LockTable{ServiceID: serviceID},
 	})

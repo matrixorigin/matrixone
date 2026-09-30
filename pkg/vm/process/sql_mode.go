@@ -16,10 +16,10 @@ package process
 
 import "strings"
 
-func parseStrictSQLMode(mode any) (strict, noZeroDate bool) {
+func parseStrictSQLMode(mode any) (strict, noZeroDate, errorForDivisionByZero bool) {
 	modeStr, ok := mode.(string)
 	if !ok {
-		return false, false
+		return false, false, false
 	}
 
 	for token := range strings.SplitSeq(modeStr, ",") {
@@ -27,23 +27,41 @@ func parseStrictSQLMode(mode any) (strict, noZeroDate bool) {
 		case "TRADITIONAL":
 			strict = true
 			noZeroDate = true
+			errorForDivisionByZero = true
 		case "STRICT_TRANS_TABLES", "STRICT_ALL_TABLES":
 			strict = true
+		case "ERROR_FOR_DIVISION_BY_ZERO":
+			errorForDivisionByZero = true
 		case "NO_ZERO_DATE":
 			noZeroDate = true
 		}
 	}
-	return strict, noZeroDate
+	return strict, noZeroDate, errorForDivisionByZero
 }
 
 func IsStrictMode(mode any) bool {
-	strict, _ := parseStrictSQLMode(mode)
+	strict, _, _ := parseStrictSQLMode(mode)
 	return strict
 }
 
 func IsStrictNoZeroDateMode(mode any) bool {
-	strict, noZeroDate := parseStrictSQLMode(mode)
+	strict, noZeroDate, _ := parseStrictSQLMode(mode)
 	return strict && noZeroDate
+}
+
+// IsNoZeroDateMode is the SELECT-expression rule. Data-changing statements
+// retain their separate strict-mode check at the assignment boundary.
+func IsNoZeroDateMode(mode any) bool {
+	_, noZeroDate, _ := parseStrictSQLMode(mode)
+	return noZeroDate
+}
+
+// IsStrictDivisionByZeroMode reports whether sql_mode requires division by zero
+// to error in data-changing statements without IGNORE. TRADITIONAL enables both
+// strict mode and ERROR_FOR_DIVISION_BY_ZERO.
+func IsStrictDivisionByZeroMode(mode any) bool {
+	strict, _, errorForDivisionByZero := parseStrictSQLMode(mode)
+	return strict && errorForDivisionByZero
 }
 
 func IsPadCharToFullLengthMode(mode any) bool {
@@ -81,17 +99,16 @@ func ResolveExplicitZeroTemporalCastReturnsNull(proc *Process) (bool, error) {
 	if proc == nil {
 		return false, nil
 	}
-	if proc.GetSessionInfo().ExplicitZeroTemporalCastReturnsNull {
-		return true, nil
-	}
 	resolveFunc := proc.GetResolveVariableFunc()
-	if resolveFunc == nil {
-		return false, nil
+	if resolveFunc != nil {
+		mode, err := resolveFunc("sql_mode", true, false)
+		if err != nil {
+			return false, err
+		}
+		return IsNoZeroDateMode(mode), nil
 	}
-
-	mode, err := resolveFunc("sql_mode", true, false)
-	if err != nil {
-		return false, err
+	if proc.GetSessionInfo().SqlMode != "" {
+		return IsNoZeroDateMode(proc.GetSessionInfo().SqlMode), nil
 	}
-	return IsStrictNoZeroDateMode(mode), nil
+	return proc.GetSessionInfo().ExplicitZeroTemporalCastReturnsNull, nil
 }

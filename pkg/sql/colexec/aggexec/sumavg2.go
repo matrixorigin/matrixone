@@ -51,15 +51,31 @@ func AvgReturnType(typs []types.Type) types.Type {
 		}
 		return types.New(types.T_decimal256, precision, scale)
 	case types.T_decimal256:
-		precision := min(typ.Width+4, maxAvgDecimalPrecision)
-		scale := avgDecimalScale(typ.Scale)
-		if precision < scale {
-			precision = scale
-		}
-		return types.New(types.T_decimal256, precision, scale)
+		return avgDecimal256ReturnType(typ)
 	default:
 		return types.T_float64.ToType()
 	}
+}
+
+// avgDecimal256ReturnType adds the usual four fractional digits without
+// reducing the input's integer capacity when the public precision cap is
+// reached. Decimal256 types wider than the public cap are internal domains;
+// retain their historical result rule until a separate contract defines their
+// AVG result domain.
+func avgDecimal256ReturnType(typ types.Type) types.Type {
+	precision := min(typ.Width+avgResultScaleIncrement, maxAvgDecimalPrecision)
+	scale := avgDecimalScale(typ.Scale)
+	if typ.Width <= maxAvgDecimalPrecision {
+		integerDigits := typ.Width - typ.Scale
+		maxScale := precision - integerDigits
+		if scale > maxScale {
+			scale = maxScale
+		}
+	}
+	if precision < scale {
+		precision = scale
+	}
+	return types.New(types.T_decimal256, precision, scale)
 }
 
 const (
@@ -128,7 +144,8 @@ func avgDecimalScale(inputScale int32) int32 {
 }
 
 func SumReturnType(typs []types.Type) types.Type {
-	switch typs[0].Oid {
+	typ := typs[0]
+	switch typ.Oid {
 	case types.T_float32, types.T_float64:
 		return types.T_float64.ToType()
 	case types.T_int8, types.T_int16, types.T_int32, types.T_year:
@@ -139,14 +156,18 @@ func SumReturnType(typs []types.Type) types.Type {
 		return types.T_uint64.ToType()
 	case types.T_uint64:
 		return types.New(types.T_decimal128, 38, 0)
-	case types.T_decimal64:
-		return types.New(types.T_decimal128, 38, typs[0].Scale)
-	case types.T_decimal128:
-		return types.New(types.T_decimal128, 38, typs[0].Scale)
-	case types.T_decimal256:
-		return types.New(types.T_decimal256, 65, typs[0].Scale)
+	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
+		// Reserve the same 22 aggregate digits exposed by MySQL's DECIMAL
+		// SUM metadata. Keeping the accumulator in Decimal128 when that
+		// precision crosses 38 makes the result depend on input order: an
+		// intermediate sum can overflow even when the final value fits.
+		precision := min(typ.Width+22, int32(65))
+		if precision <= 38 {
+			return types.New(types.T_decimal128, precision, typ.Scale)
+		}
+		return types.New(types.T_decimal256, precision, typ.Scale)
 	}
-	panic(moerr.NewInternalErrorNoCtxf("unsupported type '%v' for sum", typs[0]))
+	panic(moerr.NewInternalErrorNoCtxf("unsupported type '%v' for sum", typ))
 }
 
 func int64OfCheck(v1, v2, sum int64) error {
@@ -692,8 +713,8 @@ func (exec *sumAvgExec[T, A]) Flush() (_ []*vector.Vector, retErr error) {
 				} else {
 					sum := T(0)
 					xcnt := 0
-					err := exec.state[i].iter(uint16(j), func(k []byte) error {
-						ptr := util.UnsafeFromBytes[A](k[kAggArgPrefixSz:])
+					err := exec.state[i].iterWithValue(uint16(j), func(k, stored []byte) error {
+						ptr := util.UnsafeFromBytes[A](aggPayloadFromKeyValue(&exec.aggInfo, k, stored))
 						tmp := sum + T(*ptr)
 						if err := exec.ofCheck(sum, T(*ptr), tmp); err != nil {
 							return err
@@ -881,8 +902,8 @@ func (exec *sumAvgExec[T, A]) flushExactAvg() (_ []*vector.Vector, retErr error)
 				}
 				var sum T
 				xcnt := 0
-				err = exec.state[i].iter(uint16(j), func(k []byte) error {
-					ptr := util.UnsafeFromBytes[A](k[kAggArgPrefixSz:])
+				err = exec.state[i].iterWithValue(uint16(j), func(k, stored []byte) error {
+					ptr := util.UnsafeFromBytes[A](aggPayloadFromKeyValue(&exec.aggInfo, k, stored))
 					value := T(*ptr)
 					result := sum + value
 					if err := exec.ofCheck(sum, value, result); err != nil {
@@ -1629,6 +1650,29 @@ func decimal256FitsPrecision(value types.Decimal256, width int32) bool {
 	return value.Less(limit)
 }
 
+// validateDecimal256SumResult checks the SQL precision at the final SUM
+// publication boundary. Intermediate aggregate states use the full physical
+// Decimal256 range so partial sums can cancel during a later merge.
+func validateDecimal256SumResult(value any, resultType types.Type) error {
+	if resultType.Oid != types.T_decimal256 {
+		return nil
+	}
+	if resultType.Width <= 0 || resultType.Width >= int32(len(decimal256PrecisionLimits)) ||
+		resultType.Scale < 0 || resultType.Scale > resultType.Width {
+		return moerr.NewInternalErrorNoCtxf("invalid decimal sum result type %s", resultType.String())
+	}
+	decimal, ok := value.(types.Decimal256)
+	if !ok {
+		return moerr.NewInternalErrorNoCtxf("invalid decimal sum state type %T", value)
+	}
+	if !decimal256FitsPrecision(decimal, resultType.Width) {
+		return moerr.NewInvalidInputNoCtxf(
+			"%s beyond the range, can't be converted to Decimal256(%d,%d).",
+			decimal.Format(resultType.Scale), resultType.Width, resultType.Scale)
+	}
+	return nil
+}
+
 func decimal256AvgAtScale(value types.Decimal256, count int64, argScale, resultScale int32) (types.Decimal256, error) {
 	if count <= 0 {
 		return value, moerr.NewInvalidInputNoCtxf("Decimal256 Div by Zero")
@@ -1822,8 +1866,8 @@ func (exec *sumAvgDecExec[A, S]) Flush() (_ []*vector.Vector, retErr error) {
 					var sum S
 					xcnt := 0
 
-					err = exec.state[i].iter(uint16(j), func(k []byte) error {
-						ptr := util.UnsafeFromBytes[A](k[kAggArgPrefixSz:])
+					err = exec.state[i].iterWithValue(uint16(j), func(k, stored []byte) error {
+						ptr := util.UnsafeFromBytes[A](aggPayloadFromKeyValue(&exec.aggInfo, k, stored))
 						val := decimalStateFromArg[A, S](*ptr, exec.aggInfo.argTypes[0].Scale)
 						var fnerr error
 						if sum, fnerr = decimalStateAdd[S](sum, val); fnerr != nil {
@@ -1841,6 +1885,9 @@ func (exec *sumAvgDecExec[A, S]) Flush() (_ []*vector.Vector, retErr error) {
 					}
 
 					if exec.isSum {
+						if err := validateDecimal256SumResult(sum, resultType); err != nil {
+							return nil, err
+						}
 						if err := vector.AppendFixed(vecs[i], sum, false, exec.mp); err != nil {
 							return nil, err
 						}
@@ -1860,6 +1907,17 @@ func (exec *sumAvgDecExec[A, S]) Flush() (_ []*vector.Vector, retErr error) {
 		for i := range vecs {
 			sumVec := exec.state[i].vecs[0]
 			sums := vector.MustFixedColNoTypeCheck[S](sumVec)
+
+			if exec.isSum && resultType.Oid == types.T_decimal256 {
+				for j, sum := range sums {
+					if sumVec.IsNull(uint64(j)) {
+						continue
+					}
+					if err := validateDecimal256SumResult(sum, resultType); err != nil {
+						return nil, err
+					}
+				}
+			}
 
 			if !exec.isSum {
 				cntVec := exec.state[i].vecs[1]
@@ -1898,6 +1956,14 @@ func makeSumAvgExec(
 	mp *mpool.MPool, isSum bool,
 	aggID int64, isDistinct bool,
 	param types.Type) AggFuncExec {
+	return makeSumAvgExecWithLegacyDecimalSumState(
+		mp, isSum, aggID, isDistinct, param, false, false)
+}
+
+func makeSumAvgExecWithLegacyDecimalSumState(
+	mp *mpool.MPool, isSum bool,
+	aggID int64, isDistinct bool,
+	param types.Type, legacyDecimalSumState bool, legacyDecimalSumResult bool) AggFuncExec {
 
 	switch param.Oid {
 	case types.T_int8:
@@ -1931,8 +1997,20 @@ func makeSumAvgExec(
 	case types.T_float64:
 		return newSumAvgExec[float64, float64](mp, float64OfCheck, isSum, aggID, isDistinct, param)
 	case types.T_decimal64:
+		if isSum && SumReturnType([]types.Type{param}).Oid == types.T_decimal256 {
+			if legacyDecimalSumState {
+				return newSumDecimal64LegacyStateExec(mp, aggID, isDistinct, param, legacyDecimalSumResult)
+			}
+			return newSumAvgDecExec[types.Decimal64, types.Decimal256](mp, isSum, aggID, isDistinct, param)
+		}
 		return newSumDecimal64FastExec(mp, isSum, aggID, isDistinct, param)
 	case types.T_decimal128:
+		if isSum && SumReturnType([]types.Type{param}).Oid == types.T_decimal256 {
+			if legacyDecimalSumState {
+				return newSumDecimal128LegacyStateExec(mp, aggID, isDistinct, param, legacyDecimalSumResult)
+			}
+			return newSumAvgDecExec[types.Decimal128, types.Decimal256](mp, isSum, aggID, isDistinct, param)
+		}
 		if !isSum && AvgReturnType([]types.Type{param}).Oid == types.T_decimal256 {
 			return newSumAvgDecExec[types.Decimal128, types.Decimal256](mp, isSum, aggID, isDistinct, param)
 		}

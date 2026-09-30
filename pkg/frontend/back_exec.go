@@ -410,7 +410,7 @@ func doComQueryInBack(
 		IsRestore:     backSes.GetRestore(),
 	}
 	proc.SetAffectedRows(backSes.lastAffectedRows)
-	bindBackExecSession(proc, backSes)
+	bindBackExecSession(proc, backSes, execCtx.reqCtx)
 	proc.SetStmtProfile(&backSes.stmtProfile)
 	proc.SetResolveVariableFunc(backSes.txnCompileCtx.ResolveVariable)
 	if process.HasSystemCTELimits(execCtx.reqCtx) {
@@ -580,6 +580,18 @@ func refreshBackgroundStatementScopedSessionInfo(backSes *backSession, input *Us
 	backSes.effectiveMatrixOneNativeMode = nativeMode
 	backSes.hasEffectiveMatrixOneNativeMode = true
 	refreshStatementScopedSessionInfoWithNativeMode(nativeMode, proc)
+	var limit int
+	var ok bool
+	if proc != nil && proc.Base != nil {
+		limit, ok = process.WarningRetentionLimitFromContext(proc.GetTopContext())
+	}
+	if !ok {
+		limit, ok = resolveSessionWarningRetentionLimit(backSes)
+	}
+	if ok && proc != nil && proc.Base != nil {
+		proc.Base.SessionInfo.MaxErrorCount = limit
+		proc.Base.SessionInfo.MaxErrorCountSet = true
+	}
 }
 
 func appendNestedCallResults(ctx context.Context, backSes *backSession, results []ExecResult) error {
@@ -613,7 +625,8 @@ func affectedRowsForStatement(execCtx *ExecCtx) int64 {
 // a frontend background executor. The back session forwards temporary-table
 // aliases to its upstream session, while the upstream ID keeps physical table
 // names visible to the temporary-table GC as belonging to the active client.
-func bindBackExecSession(proc *process.Process, backSes *backSession) {
+func bindBackExecSession(proc *process.Process, backSes *backSession, ctx context.Context) {
+	proc.WarningSink = process.WarningSinkFromContext(ctx)
 	if backSes.upstream == nil {
 		return
 	}
@@ -1107,6 +1120,19 @@ func (backSes *backSession) currentMatrixOneNativeMode() bool {
 	return false
 }
 
+func (backSes *backSession) GetWarningRetentionLimit() int {
+	if backSes == nil {
+		return process.WarningDiagnosticDefaultRetentionLimit
+	}
+	if backSes.upstream != nil {
+		return backSes.upstream.GetWarningRetentionLimit()
+	}
+	if backSes.parentBackSession != nil {
+		return backSes.parentBackSession.GetWarningRetentionLimit()
+	}
+	return process.WarningDiagnosticDefaultRetentionLimit
+}
+
 func (backSes *backSession) InitBackExec(txnOp TxnOperator, db string, callBack outputCallBackFunc, opts ...*BackgroundExecOption) BackgroundExec {
 	if txnOp != nil {
 		be := &backExec{}
@@ -1374,6 +1400,14 @@ func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
 		return int64(1), nil
 	case "sql_mode":
 		return "", nil
+	case "max_error_count":
+		if backSes.upstream != nil {
+			return backSes.upstream.GetSessionSysVar(name)
+		}
+		if backSes.parentBackSession != nil {
+			return backSes.parentBackSession.GetSessionSysVar(name)
+		}
+		return int64(process.WarningDiagnosticDefaultRetentionLimit), nil
 	case "foreign_key_checks", "mo_table_stats.force_update", "mo_table_stats.use_old_impl", "mo_table_stats.reset_update_time":
 		return backSes.upstream.GetSessionSysVar(name)
 	}
@@ -1625,6 +1659,13 @@ func (backSes *backSession) AppendWarningDiagnostic(code uint16, msg string) {
 		return
 	}
 	backSes.upstream.AppendWarningDiagnostic(code, msg)
+}
+
+func (backSes *backSession) AppendWarningCount(total uint64) {
+	if backSes == nil || backSes.upstream == nil {
+		return
+	}
+	backSes.upstream.AppendWarningCount(total)
 }
 
 func (backSes *backSession) AppendWarningBatch(total uint64, codes []uint16, messages []string) {

@@ -202,8 +202,13 @@ func remapElidedGroupByPositions(positions map[string]int32, oldToNew []int32) {
 	}
 }
 
-func NewGroupBinder(builder *QueryBuilder, ctx *BindContext, selectList tree.SelectExprs) *GroupBinder {
-	b := &GroupBinder{}
+func NewGroupBinder(
+	builder *QueryBuilder,
+	ctx *BindContext,
+	selectList tree.SelectExprs,
+	allowScalarSubquery bool,
+) *GroupBinder {
+	b := &GroupBinder{allowScalarSubquery: allowScalarSubquery}
 	b.sysCtx = builder.GetContext()
 	b.builder = builder
 	b.ctx = ctx
@@ -377,7 +382,28 @@ func (b *GroupBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth
 }
 
 func (b *GroupBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
-	return nil, moerr.NewNYI(b.GetContext(), "subquery in GROUP BY clause")
+	if !b.allowScalarSubquery || astExpr.Exists {
+		return nil, moerr.NewNYI(b.GetContext(), "subquery in GROUP BY clause")
+	}
+	expr, err := b.baseBindSubquery(astExpr, isRoot)
+	if err != nil {
+		return nil, err
+	}
+	subquery := expr.GetSub()
+	if subquery == nil {
+		return nil, moerr.NewInternalError(b.GetContext(), "GROUP BY scalar subquery has no expression")
+	}
+	if subquery.RowSize != 1 {
+		return nil, moerr.NewInvalidInput(b.GetContext(), "subquery returns more than 1 column")
+	}
+	if subquery.NodeId < 0 || int(subquery.NodeId) >= len(b.builder.ctxByNode) ||
+		b.builder.ctxByNode[subquery.NodeId] == nil {
+		return nil, moerr.NewInternalError(b.GetContext(), "GROUP BY scalar subquery has no bind context")
+	}
+	if b.builder.ctxByNode[subquery.NodeId].isCorrelated {
+		return nil, moerr.NewNYI(b.GetContext(), "correlated subquery in GROUP BY clause")
+	}
+	return expr, nil
 }
 
 func (b *GroupBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {

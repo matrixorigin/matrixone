@@ -608,7 +608,7 @@ class TestLoadDataErrorHandling:
         )
         # Write with options compatible with MatrixOne
         pq.write_table(
-            table, parquet_file, compression='none', use_dictionary=False, write_statistics=False, data_page_version='1.0'
+            table, parquet_file, compression='none', use_dictionary=True, write_statistics=False, data_page_version='1.0'
         )
 
         try:

@@ -673,10 +673,10 @@ select year(null);
 ➤ year(null)[-5,64,0]  𝄀
 null
 select extract(year from '2024-06-15');
-➤ extract(year, 2024-06-15)[12,-1,0]  𝄀
+➤ extract(year from 2024-06-15)[12,-1,0]  𝄀
 2024
 select extract(year from '1999-12-31');
-➤ extract(year, 1999-12-31)[12,-1,0]  𝄀
+➤ extract(year from 1999-12-31)[12,-1,0]  𝄀
 1999
 drop table if exists t_year_date;
 create table t_year_date (id int, d date, y year);

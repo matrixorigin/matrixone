@@ -1,0 +1,8 @@
+# Exact endpoints must not depend on which values the bounded sketch retains.
+select approx_percentile(801 - result, 0) = min(801 - result) as p0_is_min,
+approx_percentile(801 - result, 1) = max(801 - result) as p100_is_max
+from generate_series(1, 800) g;
+
+select approx_percentile(cast(801 - result as decimal(20, 2)), 0) =
+min(cast(801 - result as decimal(20, 2))) as decimal_p0_is_min
+from generate_series(1, 800) g;

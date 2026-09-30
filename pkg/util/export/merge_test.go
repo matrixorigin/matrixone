@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export/etl"
+	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 
@@ -188,6 +189,48 @@ func getdummyMpool() *mpool.MPool {
 		panic(err)
 	}
 	return mp
+}
+
+func TestDiscardIncompatibleFile(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewFS(t)
+	filePath := "etl:sys/logs/legacy-statement-info.csv"
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+		FilePath: filePath,
+		Entries:  []fileservice.IOEntry{{Size: int64(len("legacy")), Data: []byte("legacy")}},
+	}))
+
+	merge, err := NewMerge(ctx, "", WithFileService(fs), WithTable(dummyTable))
+	require.NoError(t, err)
+	require.NoError(t, merge.discardIncompatibleFile(ctx, &FileMeta{FilePath: filePath}, db_holder.ErrIncompatibleStatementInfoRecord))
+
+	_, err = fs.StatFile(ctx, filePath)
+	require.Error(t, err)
+
+	canceledCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	require.Error(t, merge.discardIncompatibleFile(canceledCtx, &FileMeta{FilePath: filePath}, db_holder.ErrIncompatibleStatementInfoRecord))
+}
+
+func TestMergeDiscardsIncompatibleStatementInfoFile(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewFS(t)
+	filePath := "etl:sys/logs/legacy-statement-info.csv"
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+		FilePath: filePath,
+		Entries:  []fileservice.IOEntry{{Size: int64(len("statement\n")), Data: []byte("statement\n")}},
+	}))
+
+	statementInfoTable := &table.Table{Table: "statement_info"}
+	merge, err := NewMerge(ctx, "", WithFileService(fs), WithTable(statementInfoTable))
+	require.NoError(t, err)
+	merge.isRecordExisted = func(context.Context, []string, *table.Table, db_holder.DBConnProvider) (bool, error) {
+		return false, db_holder.ErrIncompatibleStatementInfoRecord
+	}
+
+	require.NoError(t, merge.doMergeFiles(ctx, []*FileMeta{{FilePath: filePath}}))
+	_, err = fs.StatFile(ctx, filePath)
+	require.Error(t, err)
 }
 
 func initSingleLogsFile(ctx context.Context, fs fileservice.FileService, tbl *table.Table, ts time.Time, ext string) (string, error) {

@@ -1,0 +1,138 @@
+select case when true then cast('[1,2]' as vecf32(2)) else cast('[3,4]' as vecf32(2)) end;
+➤ case when true then cast([1,2] as vecf32(2)) else cast([3,4] as vecf32(2)) end[12,2,0]  𝄀
+[1, 2]
+select case when true then cast('[1,2]' as vecf64(2)) else cast('[3,4]' as vecf64(2)) end;
+➤ case when true then cast([1,2] as vecf64(2)) else cast([3,4] as vecf64(2)) end[12,2,0]  𝄀
+[1, 2]
+select case when true then cast('[1,2]' as vecf16(2)) else cast('[3,4]' as vecf16(2)) end;
+➤ case when true then cast([1,2] as vecf16(2)) else cast([3,4] as vecf16(2)) end[12,2,0]  𝄀
+[1, 2]
+select case when true then cast('[1,2]' as vecbf16(2)) else cast('[3,4]' as vecbf16(2)) end;
+➤ case when true then cast([1,2] as vecbf16(2)) else cast([3,4] as vecbf16(2)) end[12,2,0]  𝄀
+[1, 2]
+select case when true then cast('[1,2]' as vecint8(2)) else cast('[3,4]' as vecint8(2)) end;
+➤ case when true then cast([1,2] as vecint8(2)) else cast([3,4] as vecint8(2)) end[12,2,0]  𝄀
+[1, 2]
+select case when true then cast('[1,2]' as vecuint8(2)) else cast('[3,4]' as vecuint8(2)) end;
+➤ case when true then cast([1,2] as vecuint8(2)) else cast([3,4] as vecuint8(2)) end[12,2,0]  𝄀
+[1, 2]
+select case when false then cast('[1,2]' as vecf32(2)) end;
+➤ case when false then cast([1,2] as vecf32(2)) end[12,2,0]  𝄀
+null
+select case when true then cast(null as vecf32(2)) else cast('[3,4]' as vecf32(2)) end;
+➤ case when true then cast(null as vecf32(2)) else cast([3,4] as vecf32(2)) end[12,2,0]  𝄀
+null
+select ifnull(cast(null as vecf32(2)), cast('[1,2]' as vecf32(2)));
+➤ ifnull(cast(null as vecf32(2)), cast([1,2] as vecf32(2)))[12,2,0]  𝄀
+[1, 2]
+select nullif(cast('[1,2]' as vecf32(2)), cast('[1,2]' as vecf32(2)));
+➤ nullif(cast([1,2] as vecf32(2)), cast([1,2] as vecf32(2)))[12,2,0]  𝄀
+null
+select nullif(cast('[1,2]' as vecf32(2)), cast('[3,4]' as vecf32(2)));
+➤ nullif(cast([1,2] as vecf32(2)), cast([3,4] as vecf32(2)))[12,2,0]  𝄀
+[1, 2]
+select ifnull(cast(null as vecf64(2)), cast('[1,2]' as vecf64(2))),
+nullif(cast('[1,2]' as vecf64(2)), cast('[1,2]' as vecf64(2))),
+nullif(cast('[1,2]' as vecf64(2)), cast('[3,4]' as vecf64(2)));
+➤ ifnull(cast(null as vecf64(2)), cast([1,2] as vecf64(2)))[12,2,0]  ¦  nullif(cast([1,2] as vecf64(2)), cast([1,2] as vecf64(2)))[12,2,0]  ¦  nullif(cast([1,2] as vecf64(2)), cast([3,4] as vecf64(2)))[12,2,0]  𝄀
+[1, 2]  ¦  null  ¦  [1, 2]
+select ifnull(cast(null as vecf16(2)), cast('[1,2]' as vecf16(2))),
+nullif(cast('[1,2]' as vecf16(2)), cast('[1,2]' as vecf16(2))),
+nullif(cast('[1,2]' as vecf16(2)), cast('[3,4]' as vecf16(2)));
+➤ ifnull(cast(null as vecf16(2)), cast([1,2] as vecf16(2)))[12,2,0]  ¦  nullif(cast([1,2] as vecf16(2)), cast([1,2] as vecf16(2)))[12,2,0]  ¦  nullif(cast([1,2] as vecf16(2)), cast([3,4] as vecf16(2)))[12,2,0]  𝄀
+[1, 2]  ¦  null  ¦  [1, 2]
+select ifnull(cast(null as vecbf16(2)), cast('[1,2]' as vecbf16(2))),
+nullif(cast('[1,2]' as vecbf16(2)), cast('[1,2]' as vecbf16(2))),
+nullif(cast('[1,2]' as vecbf16(2)), cast('[3,4]' as vecbf16(2)));
+➤ ifnull(cast(null as vecbf16(2)), cast([1,2] as vecbf16(2)))[12,2,0]  ¦  nullif(cast([1,2] as vecbf16(2)), cast([1,2] as vecbf16(2)))[12,2,0]  ¦  nullif(cast([1,2] as vecbf16(2)), cast([3,4] as vecbf16(2)))[12,2,0]  𝄀
+[1, 2]  ¦  null  ¦  [1, 2]
+select ifnull(cast(null as vecint8(2)), cast('[1,2]' as vecint8(2))),
+nullif(cast('[1,2]' as vecint8(2)), cast('[1,2]' as vecint8(2))),
+nullif(cast('[1,2]' as vecint8(2)), cast('[3,4]' as vecint8(2)));
+➤ ifnull(cast(null as vecint8(2)), cast([1,2] as vecint8(2)))[12,2,0]  ¦  nullif(cast([1,2] as vecint8(2)), cast([1,2] as vecint8(2)))[12,2,0]  ¦  nullif(cast([1,2] as vecint8(2)), cast([3,4] as vecint8(2)))[12,2,0]  𝄀
+[1, 2]  ¦  null  ¦  [1, 2]
+select ifnull(cast(null as vecuint8(2)), cast('[1,2]' as vecuint8(2))),
+nullif(cast('[1,2]' as vecuint8(2)), cast('[1,2]' as vecuint8(2))),
+nullif(cast('[1,2]' as vecuint8(2)), cast('[3,4]' as vecuint8(2)));
+➤ ifnull(cast(null as vecuint8(2)), cast([1,2] as vecuint8(2)))[12,2,0]  ¦  nullif(cast([1,2] as vecuint8(2)), cast([1,2] as vecuint8(2)))[12,2,0]  ¦  nullif(cast([1,2] as vecuint8(2)), cast([3,4] as vecuint8(2)))[12,2,0]  𝄀
+[1, 2]  ¦  null  ¦  [1, 2]
+select case
+when true then cast('[1,2]' as vecf32(2))
+when true then cast('[3,4]' as vecf32(2))
+else cast('[5,6]' as vecf32(2))
+end;
+➤ case when true then cast([1,2] as vecf32(2)) when true then cast([3,4] as vecf32(2)) else cast([5,6] as vecf32(2)) end[12,2,0]  𝄀
+[1, 2]
+drop database if exists case_vector_test;
+create database case_vector_test;
+use case_vector_test;
+create table vector_case_ctas as
+select case when true
+then cast('[1,2]' as vecf32(2))
+else cast('[3,4]' as vecf32(2))
+end as embedding;
+show create table vector_case_ctas;
+➤ Table[12,16,0]  ¦  Create Table[12,68,0]  𝄀
+vector_case_ctas  ¦  CREATE TABLE `vector_case_ctas` (
+  `embedding` vecf32(2) NOT NULL
+)
+select embedding from vector_case_ctas;
+➤ embedding[12,2,0]  𝄀
+[1, 2]
+create table vector_case_rows(
+id int primary key,
+choose_first bool,
+a vecf32(2),
+b vecf32(2)
+);
+insert into vector_case_rows values
+(1, true,  '[1,2]', '[11,12]'),
+(2, false, '[3,4]', '[13,14]'),
+(3, null,  '[5,6]', '[15,16]'),
+(4, true,  null,    '[17,18]');
+select id, case when choose_first then a else b end as selected
+from vector_case_rows
+order by id;
+➤ id[4,32,0]  ¦  selected[12,2,0]  𝄀
+1  ¦  [1, 2]  𝄀
+2  ¦  [13, 14]  𝄀
+3  ¦  [15, 16]  𝄀
+4  ¦  null
+select id,
+case when id = 1
+then case when choose_first then a else b end
+else b
+end as nested_selected
+from vector_case_rows
+order by id;
+➤ id[4,32,0]  ¦  nested_selected[12,2,0]  𝄀
+1  ¦  [1, 2]  𝄀
+2  ¦  [13, 14]  𝄀
+3  ¦  [15, 16]  𝄀
+4  ¦  [17, 18]
+prepare vector_case_stmt from
+'select case when ? then cast(''[1,2]'' as vecf32(2)) else cast(''[3,4]'' as vecf32(2)) end';
+set @condition = true;
+execute vector_case_stmt using @condition;
+➤ case when ? then cast([1,2] as vecf32(2)) else cast([3,4] as vecf32(2)) end[12,2,0]  𝄀
+[1, 2]
+set @condition = false;
+execute vector_case_stmt using @condition;
+➤ case when ? then cast([1,2] as vecf32(2)) else cast([3,4] as vecf32(2)) end[12,2,0]  𝄀
+[3, 4]
+set @condition = null;
+execute vector_case_stmt using @condition;
+➤ case when ? then cast([1,2] as vecf32(2)) else cast([3,4] as vecf32(2)) end[12,2,0]  𝄀
+[3, 4]
+set @condition = true;
+execute vector_case_stmt using @condition;
+➤ case when ? then cast([1,2] as vecf32(2)) else cast([3,4] as vecf32(2)) end[12,2,0]  𝄀
+[1, 2]
+deallocate prepare vector_case_stmt;
+select case when true then cast('[1,2]' as vecf32(2)) else cast('[3,4]' as vecf64(2)) end;
+invalid argument operator case, bad value [BOOL VECF32 VECF64]
+select case when true then cast('[1,2]' as vecf32(2)) else cast('[3,4,5]' as vecf32(3)) end;
+invalid argument operator case, bad value [BOOL VECF32 VECF32]
+select case when true then cast('[1,2]' as vecf32(2)) else '[3,4]' end;
+invalid argument operator case, bad value [BOOL VECF32 VARCHAR]
+drop database case_vector_test;

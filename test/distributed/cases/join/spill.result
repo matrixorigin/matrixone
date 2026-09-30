@@ -342,6 +342,7 @@ set @@join_spill_mem = 1000;
 explain (check '["Join Type: DEDUP", "shuffle: hash"]')
 insert into t_dedup_spill select *, 0 from generate_series(200000, 600000) g
 on duplicate key update val = val + 1;
+-- @regex("(?m)^[ \t]*Join Type: DEDUP [(]UPDATE[)][^\r\n]*\r?\n[ \t]*Join Cond: [^\r\n]*shuffle: hash[(]t_dedup_spill[.]id[)]", true)
 ➤ AP QUERY PLAN ON ONE CN(16 core)[12,-1,0]  𝄀
 Multi Update  𝄀
   ->  Join  𝄀

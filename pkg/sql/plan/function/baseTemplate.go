@@ -1658,8 +1658,6 @@ func specialTemplateForModFunction[
 // - In SELECT: always return NULL (never raise error)
 // - In INSERT/UPDATE: raise error if strict mode + ERROR_FOR_DIVISION_BY_ZERO are enabled
 // - In INSERT IGNORE: always return NULL (never raise error, even in strict mode)
-// checkDivisionByZeroBehavior checks if division by zero should raise an error.
-// Returns true if should raise error, false if should return NULL.
 func checkDivisionByZeroBehavior(proc *process.Process, selectList *FunctionSelectList) (shouldError bool) {
 	if proc == nil {
 		return false
@@ -1704,19 +1702,9 @@ func checkDivisionByZeroBehavior(proc *process.Process, selectList *FunctionSele
 		return false
 	}
 
-	modeStr, ok := mode.(string)
-	if !ok {
-		atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
-		return false
-	}
-
-	modeStr = strings.ToUpper(modeStr)
-	hasStrictMode := strings.Contains(modeStr, "STRICT_TRANS_TABLES") || strings.Contains(modeStr, "STRICT_ALL_TABLES")
-	hasErrorForDivByZero := strings.Contains(modeStr, "ERROR_FOR_DIVISION_BY_ZERO")
-
 	// Error only if both strict mode AND ERROR_FOR_DIVISION_BY_ZERO are enabled.
 	// INSERT IGNORE is handled through the statement ignore flag.
-	if hasStrictMode && hasErrorForDivByZero {
+	if process.IsStrictDivisionByZeroMode(mode) {
 		if ignore {
 			atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
 			return false
@@ -3485,6 +3473,98 @@ func opUnaryBytesToBytesWithErrorCheck(
 	return nil
 }
 
+// opUnaryBytesToBytesWithResultNull evaluates a geometry-returning unary
+// function whose valid result can be SQL NULL independently of input NULL.
+// resultFn returns (value, true, nil) for that row-local NULL, and returns a
+// non-nil error only for malformed input or an otherwise fatal evaluation
+// failure. Keeping this separate from opUnaryBytesToBytesWithNullOnError is
+// important: the latter intentionally masks every error, while derived
+// geometry functions must still reject malformed payloads.
+func opUnaryBytesToBytesWithResultNull(
+	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	resultFn func(v []byte) ([]byte, bool, error), selectList *FunctionSelectList) error {
+	if length == 0 {
+		return nil
+	}
+
+	result.UseOptFunctionParamFrame(1)
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0])
+	rsVec := rs.GetResultVector()
+
+	c1 := parameters[0].IsConst()
+	rsNull := rsVec.GetNulls()
+	rsAnyNull := false
+
+	if selectList != nil {
+		if selectList.IgnoreAllRow() {
+			rs.SetNullResult(uint64(length))
+			return nil
+		}
+		if !selectList.ShouldEvalAllRow() {
+			rsAnyNull = true
+			for i := range selectList.SelectList {
+				if selectList.Contains(uint64(i)) {
+					rsNull.Add(uint64(i))
+				}
+			}
+		}
+	}
+
+	appendResult := func(v []byte) error {
+		r, isNull, err := resultFn(v)
+		if err != nil {
+			return err
+		}
+		if isNull {
+			return rs.AppendMustNullForBytesResult()
+		}
+		return rs.AppendMustBytesValue(r)
+	}
+
+	if c1 {
+		v1, null1 := p1.GetStrValue(0)
+		if null1 {
+			rs.SetNullResult(uint64(length))
+			return nil
+		}
+		r, isNull, err := resultFn(v1)
+		if err != nil {
+			return err
+		}
+		if isNull {
+			rs.SetNullResult(uint64(length))
+			return nil
+		}
+		return appendRepeatedBytesResult(rs, r, length)
+	}
+
+	if p1.WithAnyNullValue() || rsAnyNull {
+		nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
+		for i := uint64(0); i < uint64(length); i++ {
+			if rsNull.Contains(i) {
+				if err := rs.AppendMustNullForBytesResult(); err != nil {
+					return err
+				}
+				continue
+			}
+			v1, _ := p1.GetStrValue(i)
+			if err := appendResult(v1); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, _ := p1.GetStrValue(i)
+		if err := appendResult(v1); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func opUnaryBytesToBytesWithNullOnError(
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v []byte) ([]byte, error), selectList *FunctionSelectList) error {
@@ -3740,6 +3820,20 @@ func opUnaryFixedToFixedWithNullOnError[
 	T types.FixedSizeTExceptStrType,
 	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v T) (Tr, error), selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixedWithNullCheck(parameters, result, length, func(v T) (Tr, bool) {
+		r, err := resultFn(v)
+		return r, err != nil
+	}, selectList)
+}
+
+// opUnaryFixedToFixedWithNullCheck evaluates a unary function and marks a row
+// NULL when resultFn reports an invalid result. Unlike
+// opUnaryFixedToFixedWithNullOnError, it lets hot paths reject expected
+// row-local values without allocating an error that will only be discarded.
+func opUnaryFixedToFixedWithNullCheck[
+	T types.FixedSizeTExceptStrType,
+	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, length int,
+	resultFn func(v T) (Tr, bool), selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(1)
 	rs := vector.MustFunctionResult[Tr](result)
 	p1 := vector.OptGetParamFromWrapper[T](rs, 0, parameters[0])
@@ -3769,8 +3863,8 @@ func opUnaryFixedToFixedWithNullOnError[
 		if null1 {
 			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
-			r, err := resultFn(v1)
-			if err != nil {
+			r, invalid := resultFn(v1)
+			if invalid {
 				nulls.AddRange(rsNull, 0, uint64(length))
 			} else {
 				rowCount := uint64(length)
@@ -3790,8 +3884,8 @@ func opUnaryFixedToFixedWithNullOnError[
 				continue
 			}
 			v1, _ := p1.GetValue(i)
-			r, err := resultFn(v1)
-			if err != nil {
+			r, invalid := resultFn(v1)
+			if invalid {
 				rsNull.Add(i)
 				continue
 			}
@@ -3803,8 +3897,8 @@ func opUnaryFixedToFixedWithNullOnError[
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetValue(i)
-		r, err := resultFn(v1)
-		if err != nil {
+		r, invalid := resultFn(v1)
+		if invalid {
 			rsNull.Add(i)
 			continue
 		}

@@ -18,7 +18,6 @@ import (
 	"math"
 	"runtime"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -73,6 +72,7 @@ type HashmapBuilder struct {
 	DelRows                   *bitmap.Bitmap
 	budget                    *process.ExecutionResourceGeneration
 	keyExprs                  []*plan.Expr
+	joinDiagnostic            *colexec.DeferredJoinDiagnostic
 	// retainedSpillTailSelected is the logical spill materialization of the
 	// one partial CopyIntoBatches tail. It avoids rescanning that growing tail.
 	retainedSpillTailSelected uint64
@@ -184,6 +184,7 @@ func (hb *HashmapBuilder) Prepare(
 	dedupDeleteMarkerColIdx int32,
 	dedupDeleteKeepColIdxList []int32,
 	proc *process.Process,
+	foldOwnedConstantCasts ...bool,
 ) error {
 	if len(hb.executors) == 0 {
 		needDupVec := false
@@ -197,11 +198,13 @@ func (hb *HashmapBuilder) Prepare(
 			}
 			keyWidth += width
 		}
-		executors, err := newExpressionExecutorsWithCapacityClass(
+		executors, err := newExpressionExecutorsWithCapacityClassAndDiagnostic(
 			proc,
 			keyCols,
 			hb.mapAllocationAccount,
 			hb.recoveryCapacityClass,
+			len(foldOwnedConstantCasts) > 0 && foldOwnedConstantCasts[0],
+			hb.joinDiagnostic,
 		)
 		if err != nil {
 			return err
@@ -502,6 +505,45 @@ func (hb *HashmapBuilder) buildHashmap(
 	proc *process.Process,
 ) (retErr error) {
 	runtimeFilterRequested := needUniqueVec
+	warningsEnabled := proc != nil && proc.GetStmtProfile() != nil &&
+		proc.GetStmtProfile().GetStatementIgnore() && hb.IsDedup &&
+		hb.OnDuplicateAction == plan.Node_IGNORE
+	var duplicateWarnings process.WarningAccumulator
+	duplicateWarnings.SetWarningRetentionForProcess(proc)
+	defer func() {
+		// Warnings belong to a successfully completed statement.  If the build
+		// fails, the statement is rolled back and diagnostics from this partial
+		// execution must not leak into the next statement.
+		if retErr == nil && warningsEnabled {
+			duplicateWarnings.Flush(proc)
+		} else {
+			duplicateWarnings.Reset()
+		}
+	}()
+	recordDuplicateWarning := func(vec *vector.Vector, row int) {
+		if !warningsEnabled {
+			return
+		}
+		if !duplicateWarnings.NeedsDiagnostic() {
+			duplicateWarnings.AddCount()
+			return
+		}
+		if vec == nil {
+			duplicateWarnings.AddCount()
+			return
+		}
+		rowStr, err := colexec.FormatDedupEntry(vec, row, hb.DedupColName, hb.DedupColTypes)
+		if err != nil {
+			// IGNORE must preserve its historical data-path semantics even if a
+			// user-facing rendering of a corrupt internal key is unavailable.
+			duplicateWarnings.AddCount()
+			return
+		}
+		duplicateWarnings.Add(
+			moerr.ER_DUP_ENTRY,
+			moerr.FormatDuplicateEntry(rowStr, hb.DedupColName),
+		)
+	}
 	if err := checkHashBuildCanceled(proc); err != nil {
 		return err
 	}
@@ -806,28 +848,10 @@ buildUnits:
 							continue
 						}
 
-						var rowStr string
-						if len(hb.DedupColTypes) == 1 {
-							if hb.DedupColName == catalog.IndexTableIndexColName {
-								if hb.curVecs[0].GetType().Oid == types.T_varchar {
-									t, _, schema, err := types.DecodeTuple(hb.curVecs[0].GetBytesAt(vecIdx2 + k))
-									if err == nil && len(schema) > 1 {
-										rowStr = t.ErrString(make([]int32, len(schema)))
-									}
-								}
-							}
-
-							if len(rowStr) == 0 {
-								rowStr, err = colexec.FormatDedupKey(hb.curVecs[0], vecIdx2+k, hb.DedupColTypes)
-								if err != nil {
-									return err
-								}
-							}
-						} else {
-							rowStr, err = colexec.FormatDedupKey(hb.curVecs[0], vecIdx2+k, hb.DedupColTypes)
-							if err != nil {
-								return err
-							}
+						rowStr, err := colexec.FormatDedupEntry(
+							hb.curVecs[0], vecIdx2+k, hb.DedupColName, hb.DedupColTypes)
+						if err != nil {
+							return err
 						}
 						return moerr.NewDuplicateEntry(proc.Ctx, rowStr, hb.DedupColName)
 					case plan.Node_IGNORE:
@@ -835,11 +859,13 @@ buildUnits:
 							previousRow := ignoreSurvivorRows[v]
 							if previousRow > 0 {
 								hb.IgnoreRows.Add(uint64(previousRow - 1))
+								recordDuplicateWarning(hb.curVecs[0], vecIdx2+k)
 							}
 							ignoreSurvivorRows[v] = int64(i+k) + 1
 							ignoreSurvivorOwnsKey[v] = true
 						} else {
 							hb.IgnoreRows.Add(uint64(i + k))
+							recordDuplicateWarning(hb.curVecs[0], vecIdx2+k)
 						}
 					}
 				} else {

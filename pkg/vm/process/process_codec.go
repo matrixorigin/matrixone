@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -146,6 +147,17 @@ func (proc *Process) BuildProcessInfo(
 		if loc == nil {
 			loc = time.Local
 		}
+		maxErrorCount := proc.Base.SessionInfo.MaxErrorCount
+		maxErrorCountSet := proc.Base.SessionInfo.MaxErrorCountSet
+		if provider, ok := proc.WarningSink.(WarningDiagnosticRetentionLimitProvider); ok {
+			maxErrorCount = clampWarningRetentionLimit(provider.GetWarningRetentionLimit())
+			maxErrorCountSet = true
+		}
+		if maxErrorCountSet &&
+			(maxErrorCount < 0 || maxErrorCount > int(^uint16(0))) {
+			return procInfo, moerr.NewInvalidInputNoCtxf(
+				"invalid max_error_count %d", maxErrorCount)
+		}
 		timeBytes, err := time.Time{}.In(loc).MarshalBinary()
 		if err != nil {
 			return procInfo, err
@@ -159,6 +171,7 @@ func (proc *Process) BuildProcessInfo(
 			Database:               proc.Base.SessionInfo.GetDatabase(),
 			Version:                proc.Base.SessionInfo.GetVersion(),
 			TimeZone:               timeBytes,
+			TimeZoneName:           TimeZoneLocationName(loc),
 			QueryId:                proc.Base.SessionInfo.QueryId,
 			LockWaitTimeout:        resolveLockWaitTimeoutSeconds(proc),
 			LockWaitTimeoutSet:     proc.Base.SessionInfo.LockWaitTimeoutSet,
@@ -166,7 +179,15 @@ func (proc *Process) BuildProcessInfo(
 			SqlMode:                resolveSqlMode(proc),
 			AutoIncrementIncrement: proc.Base.SessionInfo.AutoIncrementIncrement,
 			AutoIncrementOffset:    proc.Base.SessionInfo.AutoIncrementOffset,
+			MaxErrorCount:          uint32(maxErrorCount),
+			MaxErrorCountSet:       maxErrorCountSet,
 		}
+		weekMode, weekModeSet, err := ResolveDefaultWeekFormatMode(proc)
+		if err != nil {
+			return procInfo, err
+		}
+		procInfo.SessionInfo.DefaultWeekFormat = uint32(weekMode)
+		procInfo.SessionInfo.DefaultWeekFormatSet = weekModeSet
 		nullifyZeroTemporal, err := ResolveExplicitZeroTemporalCastReturnsNull(proc)
 		if err != nil {
 			return procInfo, err
@@ -452,6 +473,10 @@ func ConvertToProcessLimitation(
 func ConvertToProcessSessionInfo(
 	sei pipeline.SessionInfo,
 ) (SessionInfo, error) {
+	if sei.MaxErrorCountSet && sei.MaxErrorCount > uint32(^uint16(0)) {
+		return SessionInfo{}, moerr.NewInvalidInputNoCtxf(
+			"invalid max_error_count %d", sei.MaxErrorCount)
+	}
 	sessionInfo := SessionInfo{
 		User:                                sei.User,
 		Host:                                sei.Host,
@@ -466,8 +491,23 @@ func ConvertToProcessSessionInfo(
 		MatrixOneNativeMode:                 sei.MatrixoneNativeMode,
 		ExplicitZeroTemporalCastReturnsNull: sei.ExplicitZeroTemporalCastReturnsNull,
 		SqlMode:                             sei.SqlMode,
+		DefaultWeekFormat:                   uint8(sei.DefaultWeekFormat),
+		DefaultWeekFormatSet:                sei.DefaultWeekFormatSet,
 		AutoIncrementIncrement:              sei.AutoIncrementIncrement,
 		AutoIncrementOffset:                 sei.AutoIncrementOffset,
+		MaxErrorCount:                       int(sei.MaxErrorCount),
+		MaxErrorCountSet:                    sei.MaxErrorCountSet,
+	}
+	if sei.TimeZoneName != "" {
+		if sei.TimeZoneName == "Local" {
+			return sessionInfo, moerr.NewInvalidInputNoCtx("remote time zone must not refer to worker Local")
+		}
+		location, err := time.LoadLocation(sei.TimeZoneName)
+		if err != nil {
+			return sessionInfo, moerr.NewInvalidInputNoCtxf("cannot load remote time zone %q: %v", sei.TimeZoneName, err)
+		}
+		sessionInfo.TimeZone = location
+		return sessionInfo, nil
 	}
 	t := time.Time{}
 	err := t.UnmarshalBinary(sei.TimeZone)

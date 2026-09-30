@@ -117,15 +117,15 @@ create table g (id int primary key, t text, v varchar(1) generated always as (co
 
 -- non-strict: over-length generated value is truncated
 set session sql_mode = '';
-insert into g values (1, 'ab');
+insert into g values (1, 'ab', default);
 select id, v, char_length(v) from g;
 
 -- strict: over-length generated value is rejected (1406)
 set session sql_mode = 'STRICT_TRANS_TABLES';
-insert into g values (2, 'cd');
+insert into g values (2, 'cd', default);
 
 -- INSERT IGNORE: truncated even under strict
-insert ignore into g values (2, 'cd');
+insert ignore into g values (2, 'cd', default);
 select id, v, char_length(v) from g order by id;
 
 -- UPDATE recomputes the generated value under sql_mode (non-strict truncates)

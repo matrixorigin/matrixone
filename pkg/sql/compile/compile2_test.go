@@ -416,6 +416,26 @@ func TestSelectMetaLockRequirement(t *testing.T) {
 	}
 }
 
+func TestUnresolvedIndexHintMetadataValidation(t *testing.T) {
+	query := &plan.Query{UnresolvedIndexHints: []*plan.UnresolvedIndexHint{
+		{Table: &plan.ObjectRef{SchemaName: "db", ObjName: "t"}, IndexName: "idx_new"},
+		{Table: &plan.ObjectRef{SchemaName: "db", ObjName: "u"}, IndexName: "idx_later"},
+	}}
+
+	c := &Compile{needLockMeta: true, lockMeta: NewLockMeta()}
+	c.appendUnresolvedIndexHintMetaTables(query)
+	require.Equal(t, map[string]struct{}{"db t": {}, "db u": {}}, c.lockMeta.metaTables)
+
+	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
+	c.proc = testutil.NewProcess(t)
+	err := c.unresolvedIndexHintError()
+	require.ErrorContains(t, err, "Key 'idx_new' doesn't exist in table 't'")
+	require.NotContains(t, err.Error(), "idx_later")
+
+	query.UnresolvedIndexHints = nil
+	require.NoError(t, c.unresolvedIndexHintError())
+}
+
 func TestSelectMetaLockRequirementPlannerPaths(t *testing.T) {
 	tests := []struct {
 		name               string
@@ -961,112 +981,6 @@ func TestForceModePre_NilRows(t *testing.T) {
 func TestRewriteAutoModeInSelect_NilSelect(t *testing.T) {
 	result := rewriteAutoModeInSelect(nil)
 	assert.False(t, result)
-}
-
-// ============================================================================
-// Tests for isAdaptiveVectorSearch
-// ============================================================================
-
-func TestIsAdaptiveVectorSearch(t *testing.T) {
-	c := &Compile{}
-
-	tests := []struct {
-		name     string
-		qry      *plan.Query
-		expected bool
-	}{
-		{
-			name:     "nil query",
-			qry:      nil,
-			expected: false,
-		},
-		{
-			name: "no nodes",
-			qry: &plan.Query{
-				Nodes: []*plan.Node{},
-			},
-			expected: false,
-		},
-		{
-			name: "nodes without RankOption",
-			qry: &plan.Query{
-				Nodes: []*plan.Node{
-					{NodeType: plan.Node_TABLE_SCAN},
-					{NodeType: plan.Node_SORT},
-				},
-			},
-			expected: false,
-		},
-		{
-			name: "node with RankOption but mode is not auto",
-			qry: &plan.Query{
-				Nodes: []*plan.Node{
-					{
-						NodeType:   plan.Node_SORT,
-						RankOption: &plan.RankOption{Mode: "post"},
-					},
-				},
-			},
-			expected: false,
-		},
-		{
-			name: "node with RankOption mode=pre",
-			qry: &plan.Query{
-				Nodes: []*plan.Node{
-					{
-						NodeType:   plan.Node_SORT,
-						RankOption: &plan.RankOption{Mode: "pre"},
-					},
-				},
-			},
-			expected: false,
-		},
-		{
-			name: "node with RankOption mode=auto",
-			qry: &plan.Query{
-				Nodes: []*plan.Node{
-					{
-						NodeType:   plan.Node_SORT,
-						RankOption: &plan.RankOption{Mode: "auto"},
-					},
-				},
-			},
-			expected: true,
-		},
-		{
-			name: "multiple nodes, one with mode=auto",
-			qry: &plan.Query{
-				Nodes: []*plan.Node{
-					{NodeType: plan.Node_TABLE_SCAN},
-					{
-						NodeType:   plan.Node_SORT,
-						RankOption: &plan.RankOption{Mode: "auto"},
-					},
-					{NodeType: plan.Node_PROJECT},
-				},
-			},
-			expected: true,
-		},
-		{
-			name: "node with empty RankOption",
-			qry: &plan.Query{
-				Nodes: []*plan.Node{
-					{
-						NodeType:   plan.Node_SORT,
-						RankOption: &plan.RankOption{},
-					},
-				},
-			},
-			expected: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := c.isAdaptiveVectorSearch(tt.qry)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
 }
 
 // ============================================================================

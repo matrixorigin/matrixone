@@ -22,6 +22,20 @@ select sqrt(-1), log(-1), log(0), asin(2), acos(2), cot(0);
 select PI();
 SELECT COT(2.5),COT(0.2),COT(-0.5),COT(-0.2),COT(PI()),COT(NULL);
 
+# Issue #28489: COT must use the same argument as TAN, rather than subtracting from PI/2.
+SELECT COT(CAST('1e-20' AS DOUBLE)) AS cot_tiny,
+       COT(CAST('-1e-20' AS DOUBLE)) AS cot_negative_tiny,
+       COT(CAST('1e100' AS DOUBLE)) AS cot_large,
+       COT(CAST('1e308' AS DOUBLE)) AS cot_max_finite;
+SELECT COT(CAST('5e-324' AS DOUBLE)) IS NULL AS cot_subnormal_overflow,
+       COT(CAST('-5e-324' AS DOUBLE)) IS NULL AS cot_negative_subnormal_overflow,
+       COT(CAST('1e-308' AS DOUBLE)) IS NOT NULL AS cot_small_finite;
+DROP TABLE IF EXISTS cot_precision_src;
+CREATE TABLE cot_precision_src(id INT PRIMARY KEY, x DOUBLE);
+INSERT INTO cot_precision_src VALUES (1,1e-20),(2,-1e-20),(3,1e100),(4,1e308),(5,5e-324),(6,NULL);
+SELECT id, COT(x) AS cot_value FROM cot_precision_src ORDER BY id;
+DROP TABLE cot_precision_src;
+
 #EXTREME VALUES
 SELECT SIN(13413);
 SELECT SIN(-3114);

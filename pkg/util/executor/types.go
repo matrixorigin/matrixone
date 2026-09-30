@@ -76,6 +76,8 @@ type Options struct {
 	lockWaitTimeoutSet      bool
 	txnIsolation            txn.TxnIsolation
 	txnIsolationSet         bool
+	txnMode                 txn.TxnMode
+	txnModeSet              bool
 	// isFrontend records whether the caller is a frontend
 	// session-bound invocation. Go zero value (false) means
 	// background: every caller of the internal SQL executor is
@@ -100,13 +102,17 @@ type StatementOption struct {
 	ignoreCheckExperimental  bool
 	params                   []string
 	paramNulls               []bool
+	preparedParamValues      []ParamValue
 	alterCopyOpt             *plan.AlterCopyOpt
 	disableDropAutoIncrement bool
 	skipDataBranchReclaim    bool
 	keepAutoIncrement        uint64
 	keepLogicalId            uint64
+	keepRelKind              string
+	hasKeepRelKind           bool
 	disableLock              bool
 	allowMoColumnsUpdate     bool
+	optimizerHints           string
 }
 
 // Result exec sql result

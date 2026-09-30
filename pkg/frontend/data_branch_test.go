@@ -76,8 +76,41 @@ func TestDataBranchDeletePrivateOwnerForcesPessimisticRC(t *testing.T) {
 	require.ErrorIs(t, err, beginErr)
 	err = dataBranchDeleteDatabase(execCtx, ses, &tree.DataBranchDeleteDatabase{})
 	require.ErrorIs(t, err, beginErr)
-	require.Equal(t, []bool{true, true}, forced)
-	require.Equal(t, 2, backExec.closeCalls)
+	err = diffMergeAgency(ses, execCtx, &tree.DataBranchDiff{})
+	require.ErrorIs(t, err, beginErr)
+	require.Equal(t, []bool{true, true, true}, forced)
+	require.Equal(t, 3, backExec.closeCalls)
+}
+
+func TestExplicitCloneInstallsLifecycleValidationOnlyAfterSuccess(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{ByBegin: true}).AnyTimes()
+	txnOp.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
+	ses.proc.Base.TxnOperator = txnOp
+	handler := ses.GetTxnHandler()
+	handler.txnOp = txnOp
+	handler.txnCtx = context.Background()
+
+	bh, cleanup, err := getCloneMutationExecutor(context.Background(), ses, false)
+	require.NoError(t, err)
+	require.NotNil(t, bh)
+	require.NoError(t, cleanup(nil))
+	require.True(t, handler.lineageOwnerLifecycleValidation)
+
+	handler.mu.Lock()
+	handler.lineageOwnerLifecycleValidation = false
+	handler.mu.Unlock()
+
+	bh, cleanup, err = getCloneMutationExecutor(context.Background(), ses, false)
+	require.NoError(t, err)
+	require.NotNil(t, bh)
+	cloneErr := errors.New("clone failed")
+	require.ErrorIs(t, cleanup(cloneErr), cloneErr)
+	require.False(t, handler.lineageOwnerLifecycleValidation)
 }
 
 func TestDataBranchColumnClassification(t *testing.T) {
@@ -175,9 +208,31 @@ func TestValidateDataBranchCreateTxn(t *testing.T) {
 		"CREATE DATA BRANCH is not supported with optimistic transactions")
 }
 
+func TestInstallDataBranchCloneContextRestoresRequestContext(t *testing.T) {
+	type requestKey struct{}
+	baseCtx := context.WithValue(context.Background(), requestKey{}, "request")
+	execCtx := &ExecCtx{reqCtx: baseCtx}
+
+	restore := installDataBranchCloneContext(
+		execCtx, tree.NormalCloneLevelDatabase, catalog.SystemDBTypeDataBranch,
+	)
+	require.Equal(t, tree.NormalCloneLevelDatabase,
+		execCtx.reqCtx.Value(tree.CloneLevelCtxKey{}))
+	require.Equal(t, true, execCtx.reqCtx.Value(dataBranchCloneLockCtxKey{}))
+	require.Equal(t, catalog.SystemDBTypeDataBranch,
+		execCtx.reqCtx.Value(defines.DatTypKey{}))
+	require.Equal(t, "request", execCtx.reqCtx.Value(requestKey{}))
+
+	restore()
+	require.Equal(t, baseCtx, execCtx.reqCtx)
+	require.Nil(t, execCtx.reqCtx.Value(tree.CloneLevelCtxKey{}))
+	require.Nil(t, execCtx.reqCtx.Value(dataBranchCloneLockCtxKey{}))
+	require.Nil(t, execCtx.reqCtx.Value(defines.DatTypKey{}))
+}
+
 func TestBranchQuotaUsageSQLUsesTargetOwnerAndExcludesRootAlterLineage(t *testing.T) {
 	require.Equal(t,
-		"select count(*) from mo_catalog.mo_branch_metadata b join mo_catalog.mo_tables t on b.table_id = t.rel_id where t.account_id = 7 and b.table_deleted = false and b.level != 'alter' for update",
+		"select count(*) from mo_catalog.mo_branch_metadata b join mo_catalog.mo_tables t on b.table_id = t.rel_id where t.account_id = 7 and b.table_deleted = false and b.level != 'alter'",
 		branchQuotaUsageSQL(7),
 	)
 }
