@@ -170,14 +170,18 @@ func NeedToBeCommittedInActiveTransaction(stmt tree.Statement) bool {
 }
 
 // isImplicitCommitStatement identifies statements whose MySQL-compatible
-// transaction boundary is handled by the statement executor.  TRUNCATE is
-// deliberately kept separate from IsDDL: MatrixOne supports transactional
-// execution for several other DDL statements, while TRUNCATE must commit the
+// transaction boundary is handled by the statement executor. TRUNCATE and
+// RENAME TABLE are deliberately kept separate from IsDDL: MatrixOne supports
+// transactional execution for several other DDL statements. These must commit the
 // preceding transaction before it is attempted and commit its own transaction
 // after it succeeds.
 func isImplicitCommitStatement(stmt tree.Statement) bool {
-	_, ok := stmt.(*tree.TruncateTable)
-	return ok
+	switch stmt.(type) {
+	case *tree.TruncateTable, *tree.RenameTable:
+		return true
+	default:
+		return false
+	}
 }
 
 func isLockTableStatement(stmt tree.Statement) bool {
@@ -314,7 +318,7 @@ func statementCanBeExecutedInUncommittedTransaction(
 				USE ROLE role;
 		*/
 		return !st.IsUseRole(), nil
-	case *tree.DropTable, *tree.DropIndex, *tree.DropView, *tree.TruncateTable:
+	case *tree.DropTable, *tree.DropIndex, *tree.DropView, *tree.TruncateTable, *tree.RenameTable:
 		return true, nil
 	case *tree.DropSequence: //Case1, Case3 above
 		//background transaction can execute the DROPxxx in one transaction

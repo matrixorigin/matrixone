@@ -56,6 +56,8 @@ type LockOptions struct {
 	lockTable                bool
 	changeDef                bool
 	refreshTableSnapshot     bool
+	admissionOnly            bool
+	waitPolicy               *lock.WaitPolicy
 	parker                   *types.Packer
 	fetchFunc                FetchLockRowsFunc
 	filter                   RowsFilter

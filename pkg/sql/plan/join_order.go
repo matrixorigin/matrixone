@@ -411,7 +411,7 @@ func (builder *QueryBuilder) joinOwnsConstantDiagnostic(node *plan.Node) bool {
 func (builder *QueryBuilder) containsStatementInvariantFilterDiagnostic(expr *plan.Expr) bool {
 	return containsStatementInvariantFilterDiagnostic(
 		builder.compCtx.GetProcess(), expr,
-		preparedJoinDiagnosticFree(builder.compCtx.GetContext()),
+		builder.preparedParameterDiagnosticsFree(),
 	)
 }
 

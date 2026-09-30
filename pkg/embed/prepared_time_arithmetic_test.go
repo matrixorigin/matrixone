@@ -195,6 +195,14 @@ func TestPreparedTimeArithmeticOverMySQLProtocol(t *testing.T) {
 			}
 		}
 
+		// Recovering NULL's logical type must retain SELECT's aggregate and
+		// window binding capabilities without evaluating either expression twice.
+		exec("set @null_aggregate = sum(null), @null_window = sum(null) over ()")
+		var aggregateNull, windowNull int
+		require.NoError(t, conn.QueryRowContext(ctx, "select isnull(@null_aggregate), isnull(@null_window)").Scan(&aggregateNull, &windowNull))
+		require.Equal(t, 1, aggregateNull)
+		require.Equal(t, 1, windowNull)
+
 		// The SQL path transports values through session user variables. Reusing
 		// one server-side prepared statement makes each SourceType transition
 		// observable, including NULL followed by a concrete value.
@@ -212,11 +220,63 @@ func TestPreparedTimeArithmeticOverMySQLProtocol(t *testing.T) {
 			{assignment: "cast(1.2345678901234 as decimal(14,13))", want: "1.2345678901234", scale: 13},
 			{assignment: "cast(1.25 as decimal(3,2))", want: "1.25", scale: 2},
 			{assignment: "null", wantNull: true, scale: 0},
+			{assignment: "(null)", wantNull: true, scale: 0},
+			{assignment: "@issue28963_time_value", wantNull: true, scale: 0},
+			{assignment: "cast(null as decimal(3,2))", wantNull: true, scale: 2},
 			{assignment: "cast(10 as signed)", want: "10", scale: 0},
 		} {
 			exec("set @issue28963_time_value = " + tc.assignment)
 			queryText("execute issue28963_time_sql using @issue28963_time_value",
 				tc.want, tc.wantNull, tc.scale)
+		}
+
+		// Arithmetic converts typed string NULL at its consumer, preserving the
+		// source domain and recovering on the same statement after NULL.
+		for _, op := range []string{"*", "/", "div"} {
+			func() {
+				exec("prepare typed_null_time from 'select cast(''00:00:01'' as time(0)) " + op + " ? as result'")
+				defer deallocate("deallocate prepare typed_null_time")
+				for _, tc := range []struct {
+					assignment string
+					value      float64
+					null       bool
+				}{
+					{assignment: "cast('0.5' as char)", value: 0.5},
+					{assignment: "cast(null as char)", null: true},
+					{assignment: "cast(null as binary)", null: true},
+					{assignment: "cast('2.5' as char)", value: 2.5},
+				} {
+					exec("set @typed_null_value = " + tc.assignment)
+					func() {
+						rows, err := conn.QueryContext(ctx, "execute typed_null_time using @typed_null_value")
+						require.NoError(t, err)
+						defer rows.Close()
+						columns, err := rows.ColumnTypes()
+						require.NoError(t, err)
+						wantType := "DOUBLE"
+						if op == "div" {
+							wantType = "BIGINT"
+						}
+						require.Equal(t, wantType, columns[0].DatabaseTypeName())
+						require.True(t, rows.Next())
+						var value sql.NullFloat64
+						require.NoError(t, rows.Scan(&value))
+						require.Equal(t, !tc.null, value.Valid)
+						if !tc.null {
+							want := tc.value
+							if op == "/" {
+								want = 1 / tc.value
+							}
+							if op == "div" {
+								want = float64(int64(1 / tc.value))
+							}
+							require.Equal(t, want, value.Float64)
+						}
+						require.False(t, rows.Next())
+						require.NoError(t, rows.Err())
+					}()
+				}
+			}()
 		}
 
 		for _, tc := range []struct {
@@ -256,8 +316,16 @@ func TestPreparedTimeArithmeticOverMySQLProtocol(t *testing.T) {
 		// The same *sql.Stmt is deliberately reused across integer, DOUBLE,
 		// NULL, and integer values again; the last execution catches stale
 		// execute-time metadata or a cached decimal scale. A NULL binary marker
-		// has no numeric source type, so TIME(6) arithmetic falls back to the
-		// prepared decimal envelope and reports scale 12 (6+6).
+		// has no numeric source type, so its TIME(6) peer supplies the decimal
+		// operand domain and multiplication reports scale 12 (6+6).
+		for _, expression := range []string{
+			"cast('03:04:05.123456' as time(6)) * cast(1.25 as double)",
+			"cast(1.25 as double) * cast('03:04:05.123456' as time(6))",
+		} {
+			rows, err := conn.QueryContext(ctx, "select "+expression+" as result")
+			require.NoError(t, err)
+			assertPreparedTimeDoubleResult(t, rows, 38006.40432)
+		}
 		const binarySQLStatement = "select cast('03:04:05.123456' as time(6)) * ? as result"
 		binaryStmt, err := conn.PrepareContext(ctx, binarySQLStatement)
 		require.NoError(t, err)
@@ -331,14 +399,13 @@ func TestPreparedTimeArithmeticOverMySQLProtocol(t *testing.T) {
 		})
 
 		for _, tc := range []struct {
-			name          string
-			op            string
-			want          string
-			nullPrecision int64
+			name string
+			op   string
+			want string
 		}{
-			{name: "add", op: "+", want: "4", nullPrecision: 65},
-			{name: "subtract", op: "-", want: "2", nullPrecision: 65},
-			{name: "mod", op: "%", want: "0", nullPrecision: 38},
+			{name: "add", op: "+", want: "4"},
+			{name: "subtract", op: "-", want: "2"},
+			{name: "mod", op: "%", want: "0"},
 		} {
 			t.Run("binary/nested/"+tc.name, func(t *testing.T) {
 				statement := "select cast('00:00:01' as time(0)) " + tc.op +
@@ -354,11 +421,31 @@ func TestPreparedTimeArithmeticOverMySQLProtocol(t *testing.T) {
 				require.NoError(t, err)
 				assertPreparedTimeResult(t, rows, tc.want, false, 18, 0)
 
+				// The concrete integer sibling supplies NULL's numeric domain.
+				// Compare metadata with the ordinary typed expression instead of
+				// retaining the unresolved PREPARE template's wider envelope.
+				control, err := conn.QueryContext(ctx, "select cast('00:00:01' as time(0)) "+tc.op+
+					" (cast(null as signed) "+tc.op+" cast(2 as signed)) as result")
+				require.NoError(t, err)
+				var precision, scale int64
+				func() {
+					defer control.Close()
+					columns, err := control.ColumnTypes()
+					require.NoError(t, err)
+					var ok bool
+					precision, scale, ok = columns[0].DecimalSize()
+					require.True(t, ok)
+					require.Equal(t, "DECIMAL", columns[0].DatabaseTypeName())
+					require.True(t, control.Next())
+					var value sql.NullString
+					require.NoError(t, control.Scan(&value))
+					require.False(t, value.Valid)
+					require.False(t, control.Next())
+					require.NoError(t, control.Err())
+				}()
 				nullRows, err := stmt.QueryContext(ctx, nil, int64(2))
 				require.NoError(t, err)
-				// A NULL binary marker has no runtime numeric category. Keep the
-				// operation's prepare-time decimal envelope for the unresolved domain.
-				assertPreparedTimeResult(t, nullRows, "", true, tc.nullPrecision, 0)
+				assertPreparedTimeResult(t, nullRows, "", true, precision, scale)
 			})
 		}
 

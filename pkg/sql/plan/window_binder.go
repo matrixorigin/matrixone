@@ -1223,7 +1223,7 @@ func hasWindowFrameParamInOrderBy(orderBy tree.OrderBy) bool {
 }
 
 func (b *baseBinder) bindPreparedWindowFrameBound(expr tree.Expr, typ *plan.Type) (*plan.Expr, error) {
-	if b.builder == nil || !b.builder.isPrepareStatement {
+	if b.builder == nil || !b.builder.isReusablePlan() {
 		return nil, moerr.NewInvalidInput(b.GetContext(), "only prepare statement can use ? expr")
 	}
 	if typ == nil {

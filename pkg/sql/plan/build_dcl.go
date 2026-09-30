@@ -41,6 +41,7 @@ func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, *Query, er
 
 	switch stmt := stmt.(type) {
 	case *tree.Select, *tree.ParenSelect,
+		*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan,
 		*tree.Update, *tree.Delete, *tree.Insert, *tree.MultiInsert,
 		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns,
 		*tree.ShowCreateDatabase, *tree.ShowCreateTable:
@@ -101,11 +102,13 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 	var transientQuery *Query
 	var err error
 	var stmtName string
+	var sourceParameterCount int
 
 	switch pstmt := stmt.(type) {
 	case *tree.PrepareStmt:
 		stmtName = string(pstmt.Name)
 		preparedStmt = pstmt.Stmt
+		sourceParameterCount = tree.ParameterCount(preparedStmt)
 		preparePlan, transientQuery, err = getPreparePlan(ctx, pstmt.Stmt)
 		if err != nil {
 			return nil, err
@@ -138,6 +141,7 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 		}
 		stmtName = string(pstmt.Name)
 		preparedStmt = stmts[0]
+		sourceParameterCount = tree.ParameterCount(preparedStmt)
 		preparePlan, transientQuery, err = getPreparePlan(ctx, stmts[0])
 		if err != nil {
 			return nil, err
@@ -145,7 +149,7 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 		preparePlan.IsPrepare = true
 	}
 
-	schemas, paramTypes, err := resetPreparePlan(ctx, preparePlan, transientQuery)
+	schemas, paramTypes, err := resetPreparePlan(ctx, preparePlan, transientQuery, sourceParameterCount)
 	if err != nil {
 		return nil, err
 	}

@@ -985,5 +985,28 @@ func TestIssue28397FieldKeepsExactNumericComparison(t *testing.T) {
 				})
 			}
 		})
+		t.Run("SQL EXECUTE union keeps each marker value", func(t *testing.T) {
+			_, err := conn.ExecContext(ctx, "prepare union_sources from 'select ? union all select ?'")
+			require.NoError(t, err)
+			defer func() { _, _ = conn.ExecContext(ctx, "deallocate prepare union_sources") }()
+			_, err = conn.ExecContext(ctx, "set @union_left=1.25e0, @union_right=2.5e0")
+			require.NoError(t, err)
+			read := func(query string) []string {
+				rows, queryErr := conn.QueryContext(ctx, query)
+				require.NoError(t, queryErr)
+				defer rows.Close()
+				var values []string
+				for rows.Next() {
+					var value string
+					require.NoError(t, rows.Scan(&value))
+					values = append(values, value)
+				}
+				require.NoError(t, rows.Err())
+				return values
+			}
+			direct := read("select @union_left union all select @union_right")
+			require.Equal(t, []string{"1.25", "2.5"}, direct)
+			require.Equal(t, direct, read("execute union_sources using @union_left,@union_right"))
+		})
 	})
 }
