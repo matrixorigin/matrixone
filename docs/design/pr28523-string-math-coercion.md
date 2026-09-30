@@ -35,9 +35,13 @@ new overload identity, or promise that older peers implement newer semantics.
 - For prepared `ROUND`/`TRUNCATE`, a complete ordinary text value binding may
   select its exact numeric domain at the value argument. This applies to SQL
   `EXECUTE` and COM_STMT text sources; binary bytes, binary static/runtime
-  domains, and unknown sources retain their existing coercion path. The
-  precision argument remains independent, and the cached expression keeps its
-  original parameter reference.
+  domains, and unknown sources retain their existing coercion path. Complete
+  numeric spellings use this exact-domain path in both strict/default and
+  compatibility modes; completeness does not authorize numeric-prefix parsing
+  of malformed text. Incomplete or unparseable text remains on the existing
+  mode-selected string-math conversion path. The precision argument remains
+  independent, and the cached expression keeps its original parameter
+  reference.
 - Implicit casts transparent to the same string value role preserve source
   provenance. SQL-authored explicit `CAST` is a semantic boundary.
 - `NULL` remains `NULL`; masked and unevaluated rows do not cause conversion
@@ -143,6 +147,13 @@ prepare role/source classification
   AST precision consumer binds that source at the current prepared execution
   boundary. The cache key includes binary-protocol identity and source-type
   provenance. DDL/SET paths keep their existing reset-based specialization owner.
+- Prepared `ROUND`/`TRUNCATE` execution also resolves the deferred value
+  occurrence from the original text-source binding when its complete spelling
+  has an exact numeric type. This local value-argument decision uses the
+  existing runtime binder and retains parameter provenance; fixed DECIMAL
+  sources and explicit casts remain authoritative, while incomplete text and
+  binary or unknown sources stay on their existing path. It does not refine
+  the precision occurrence or unrelated string-math functions.
 - The shared expression-role logic is the authority for which value
   occurrences may be rebound. Control arguments and non-owning string
   functions do not inherit a parent's numeric role.
@@ -196,7 +207,7 @@ function-wide zonemap optimization is included.
 
 | Contract | Focused evidence |
 | --- | --- |
-| Source and mode behavior | Literal/column/prepared tests; strict default, explicit MySQL mode, native-wins, warning count/code, and NULL/masked-row controls |
+| Source and mode behavior | Literal/column/prepared tests; strict default, explicit MySQL mode, native-wins, warning count/code, and NULL/masked-row controls; complete-text prepared ROUND/TRUNCATE domains in strict and compatibility modes |
 | Roles and boundaries | Value/control argument tests; precision remains `INT64`; nested ownership; explicit CAST stops provenance; unknown/non-owning function controls |
 | HEX/BIT row provenance | CASE/IF/COALESCE tests for mixed, uniform, marked-plus-NULL, text, ordinary BINARY, explicit casts, and nested/implicit casts; selected-row/vector/batch lifecycle tests |
 | Wire lifecycle | Batch v1/v2/v3 round trips, malformed/truncated rejection, legacy sender, stale/reused vector reset, and remote trailer tests |
@@ -207,9 +218,10 @@ function-wide zonemap optimization is included.
 | Resource/performance | Allocation-failure atomicity, vector reset/cleanup/accounting, focused race checks where shared-state risk applies, and plan/bitmap performance tests |
 
 Public prepared-query validation includes scalar precision results and metadata,
-the binary-protocol numeric overload/error-reuse case, prepared DECIMAL extrema,
-and the existing string-math fixture. Mixed-binary validation records the exact
-source revisions and binaries; mocked protocol integers and UTs alone are not
-evidence of executable interoperability. A same-address replacement after the
-final worker probe remains outside the contract and requires the quiescent
-replacement procedure above.
+the complete-text ROUND/TRUNCATE value-domain path, the binary-protocol numeric
+overload/error-reuse case, prepared DECIMAL extrema, and the existing
+string-math fixture. Mixed-binary validation records the exact source revisions
+and binaries; mocked protocol integers and UTs alone are not evidence of
+executable interoperability. A same-address replacement after the final worker
+probe remains outside the contract and requires the quiescent replacement
+procedure above.
