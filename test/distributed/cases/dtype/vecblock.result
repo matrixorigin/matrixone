@@ -1,0 +1,159 @@
+drop database if exists vecblock_db;
+create database vecblock_db;
+use vecblock_db;
+create table t (id int primary key, a vecf8(4), b vecf4(4), c vecf32(4));
+show create table t;
+➤ Table[12,1,0]  ¦  Create Table[12,150,0]  𝄀
+t  ¦  CREATE TABLE `t` (
+  `id` int NOT NULL,
+  `a` vecf8(4) DEFAULT NULL,
+  `b` vecf4(4) DEFAULT NULL,
+  `c` vecf32(4) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+)
+desc t;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+a  ¦  VECF8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  VECF4(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦  
+insert into t values (1, '[1,-3,0,6]', '[1,-3,0,6]', '[1,-3,0,6]');
+insert into t values (2, '[0.5,0.25,-0.75,1]', '[0.5,0.25,-0.75,1]', '[2,1,-1,0.5]');
+insert into t values (3, null, null, null);
+insert into t (id, a, b) values (4, '[3000,-12,0.001,1000000]', '[3000,-12,0.001,1000000]');
+select mo_ctl('dn', 'flush', 'vecblock_db.t');
+➤ mo_ctl(dn, flush, vecblock_db.t)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select * from t order by id;
+➤ id[4,32,0]  ¦  a[12,4,0]  ¦  b[12,4,0]  ¦  c[12,4,0]  𝄀
+1  ¦  [1, -3, 0, 6]  ¦  [1, -3, 0, 6]  ¦  [1, -3, 0, 6]  𝄀
+2  ¦  [0.5, 0.25, -0.75, 1]  ¦  [0.5, 0.25, -0.6666667, 1]  ¦  [2, 1, -1, 0.5]  𝄀
+3  ¦  null  ¦  null  ¦  null  𝄀
+4  ¦  [3072, -16, 0, 983040]  ¦  [0, -0, 0, 999999.94]  ¦  null
+select cast('[1,2,3]' as vecf8(3)), cast('[1,2,3]' as vecf4(3));
+➤ cast([1,2,3] as vecf8(3))[12,3,0]  ¦  cast([1,2,3] as vecf4(3))[12,3,0]  𝄀
+[1, 2, 3]  ¦  [1, 2, 3]
+select id, cast(a as vecf32(4)), cast(b as vecf32(4)) from t order by id;
+➤ id[4,32,0]  ¦  cast(a as vecf32(4))[12,4,0]  ¦  cast(b as vecf32(4))[12,4,0]  𝄀
+1  ¦  [1, -3, 0, 6]  ¦  [1, -3, 0, 6]  𝄀
+2  ¦  [0.5, 0.25, -0.75, 1]  ¦  [0.5, 0.25, -0.6666667, 1]  𝄀
+3  ¦  null  ¦  null  𝄀
+4  ¦  [3072, -16, 0, 983040]  ¦  [0, -0, 0, 999999.94]
+select id, cast(c as vecf8(4)), cast(c as vecf4(4)) from t order by id;
+➤ id[4,32,0]  ¦  cast(c as vecf8(4))[12,4,0]  ¦  cast(c as vecf4(4))[12,4,0]  𝄀
+1  ¦  [1, -3, 0, 6]  ¦  [1, -3, 0, 6]  𝄀
+2  ¦  [2, 1, -1, 0.5]  ¦  [2, 1, -1, 0.5]  𝄀
+3  ¦  null  ¦  null  𝄀
+4  ¦  null  ¦  null
+select cast(a as vecf4(4)), cast(b as vecf8(4)) from t where id = 1;
+➤ cast(a as vecf4(4))[12,4,0]  ¦  cast(b as vecf8(4))[12,4,0]  𝄀
+[1, -3, 0, 6]  ¦  [1, -3, 0, 6]
+insert into t values (5, '[1,2,3]', '[1,2,3,4]', '[1,2,3,4]');
+invalid input: expected vector dimension 4 != actual dimension 3.
+insert into t values (5, '[1,2,3,4]', '[1,2,3]', '[1,2,3,4]');
+invalid input: expected vector dimension 4 != actual dimension 3.
+select cast('[1,2,3]' as vecf8(4));
+invalid input: expected vector dimension 4 != actual dimension 3.
+insert into t (id, a) values (5, '[1,2,3,nan]');
+internal error: vector element cannot be NaN or Inf: NaN
+insert into t (id, b) values (5, '[1,2,3,inf]');
+internal error: vector element cannot be NaN or Inf: +Inf
+select a + a, a * 2, b - c, a / 2, a + b from t where id = 1;
+➤ a + a[12,4,0]  ¦  a * 2[12,4,0]  ¦  b - c[12,4,0]  ¦  a / 2[12,4,0]  ¦  a + b[12,4,0]  𝄀
+[2, -6, 0, 12]  ¦  [2, -6, 0, 12]  ¦  [0, 0, 0, 0]  ¦  [0.5, -1.5, 0, 3]  ¦  [2, -6, 0, 12]
+select id, inner_product(c, c), inner_product(a, c), inner_product(b, c), inner_product(a, b), inner_product(a, '[1,1,1,1]') from t order by id;
+➤ id[4,32,0]  ¦  inner_product(c, c)[8,53,31]  ¦  inner_product(a, c)[8,53,31]  ¦  inner_product(b, c)[8,53,31]  ¦  inner_product(a, b)[8,53,31]  ¦  inner_product(a, [1,1,1,1])[8,53,31]  𝄀
+1  ¦  -46.0  ¦  -46.0  ¦  -46.0  ¦  -46.0  ¦  -4.0  𝄀
+2  ¦  -6.25  ¦  -2.5  ¦  -2.4166667461395264  ¦  -1.8125  ¦  -1.0  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+4  ¦  null  ¦  null  ¦  null  ¦  -9.83039934464E11  ¦  -986096.0
+select id from t order by a, id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+2  𝄀
+1  𝄀
+4
+select id from t order by b desc, id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+4  𝄀
+3
+select id from t order by c, id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4  𝄀
+1  𝄀
+2
+select a, count(*) from t group by a order by a;
+➤ a[12,4,0]  ¦  count(*)[-5,64,0]  𝄀
+null  ¦  1  𝄀
+[0.5, 0.25, -0.75, 1]  ¦  1  𝄀
+[1, -3, 0, 6]  ¦  1  𝄀
+[3072, -16, 0, 983040]  ¦  1
+select count(distinct b) from t;
+➤ count(distinct b)[-5,64,0]  𝄀
+3
+select id, rank() over (partition by a order by id) from t order by id;
+➤ id[4,32,0]  ¦  rank() over (partition by a order by id)[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  1  𝄀
+4  ¦  1
+select count(a), count(b) from t;
+➤ count(a)[-5,64,0]  ¦  count(b)[-5,64,0]  𝄀
+3  ¦  3
+select group_concat(a order by id separator ';') from t;
+➤ group_concat(a order by id separator ;)[-1,16383,0]  𝄀
+[1, -3, 0, 6];[0.5, 0.25, -0.75, 1];[3072, -16, 0, 983040]
+select any_value(b) from t where id = 1;
+➤ any_value(b)[12,4,0]  𝄀
+[1, -3, 0, 6]
+update t set a = '[4,3,2,1]', b = '[4,3,2,1]' where id = 2;
+select a, b from t where id = 2;
+➤ a[12,4,0]  ¦  b[12,4,0]  𝄀
+[4, 3, 2, 1]  ¦  [4, 2.6666667, 2, 1]
+alter table t add column d vecf4(4) not null;
+select id, d from t order by id;
+➤ id[4,32,0]  ¦  d[12,4,0]  𝄀
+1  ¦  [0, 0, 0, 0]  𝄀
+2  ¦  [0, 0, 0, 0]  𝄀
+3  ¦  [0, 0, 0, 0]  𝄀
+4  ¦  [0, 0, 0, 0]
+prepare s from 'select id from t where inner_product(a, ?) < 0 order by id';
+set @q = '[1,1,1,1]';
+execute s using @q;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+4
+deallocate prepare s;
+select l2_distance(a, c) from t;
+invalid argument function l2_distance, bad value [VECF8 VECF32]
+select cosine_distance(b, b) from t;
+invalid argument function cosine_distance, bad value [VECF4 VECF4]
+select l1_distance(a, a) from t;
+invalid argument function l1_distance, bad value [VECF8 VECF8]
+select sum(a) from t;
+invalid argument aggregate function sum, bad value [VECF8]
+select avg(b) from t;
+invalid argument aggregate function avg, bad value [VECF4]
+select id from t where a = a;
+invalid argument operator =, bad value [VECF8 VECF8]
+create index idx on t(a);
+not supported: VECTOR column 'a' cannot be in index
+create unique index uidx on t(b);
+not supported: VECTOR column 'b' cannot be in index
+create table t2 (a vecf8(4) primary key);
+not supported: VECTOR column 'a' cannot be in primary key
+create table t3 (id int primary key, v vecf4(65536));
+Data truncation: data out of range: data type vecf4,  typeLen is over the MaxVectorLen : 65535
+drop database vecblock_db;
