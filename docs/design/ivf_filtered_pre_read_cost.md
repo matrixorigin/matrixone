@@ -160,7 +160,7 @@ Remote producer and consumer must share the query message board.
   pure-Go constructor. Preload reserves host bytes; Load and cached Search
   verify the same backend. Existing default/GPU keys remain separate. Origin
   GPU dispatch stays local; a remote nil resolver cannot change the route.
-- Add the next MORPC capability version (102 on this base). Existing fragment
+- Add the next MORPC capability version (103 after rebase; 102 is already assigned). Existing fragment
   visitors compute the maximum required version, including nonzero required
   shards. Compilation, actual destination, same stream and decode all enforce
   it. Old/unknown workers cause whole-query local fallback; rollback after
@@ -196,5 +196,5 @@ Placement follows Astra xhigh v4, independently reviewed by GPT-6.1-sol xhigh
 Rollback restores local required placement and prior read policy with a
 protocol-compatible binary. There is no stored data-format migration or
 production write change; new CPU cache keys expire normally. Existing admission
-may advance the persisted authoring version floor to 102, so restarting a 101
+may advance the persisted authoring version floor to 103, so restarting a 102
 binary after that advance is unsupported; do not edit the floor to downgrade.

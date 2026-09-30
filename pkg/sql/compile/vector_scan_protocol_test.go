@@ -255,13 +255,13 @@ func TestRequiredIVFProtocolCoversEveryPartitionAndNestedFragment(t *testing.T) 
 		child := &pipeline.Pipeline{Node: &pipeline.NodeInfo{Id: "b", Addr: "b:6001", CnCnt: 2, CnIdx: ordinal}, DataSource: &pipeline.Source{Node: node}}
 		root := &pipeline.Pipeline{Node: child.Node, Children: []*pipeline.Pipeline{child}}
 		require.Equal(t, defines.MORPCVersion103, minimumRemoteVectorProtocol(root))
-		for _, version := range []int64{defines.MORPCVersion101, defines.MORPCVersion103} {
+		for _, version := range []int64{defines.MORPCVersion101, defines.MORPCVersion102, defines.MORPCVersion103} {
 			runtime.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 			client.version = version
 			var required int64
 			err := validateVectorPartitionDestinationWithResult(c.proc, root, &required)
 			require.Equal(t, defines.MORPCVersion103, required)
-			if version == defines.MORPCVersion101 {
+			if version < defines.MORPCVersion103 {
 				require.Error(t, err)
 				require.Error(t, validateRemoteVectorPartitionProtocol(c.proc, root))
 			} else {
