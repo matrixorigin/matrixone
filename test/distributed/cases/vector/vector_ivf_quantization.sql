@@ -64,6 +64,26 @@ execute clipped_range using @lo,@hi;
 set @lo = 1.5;
 execute clipped_range using @lo,@hi;
 deallocate prepare clipped_range;
+-- PRE membership must filter before its bounded Top-K: 60 nearer nonmatches
+-- exceed the 50-candidate budget for K=10. BF16 represents both 0 and 2 exactly.
+set experimental_ivf_index = 1;
+set ivf_preload_entries = 0;
+create table qmembership(a int primary key, grp int, v vecf32(1));
+insert into qmembership select result, 1, case when result <= 60 then '[0]' else '[2]' end from generate_series(1,70) g;
+create index qmembershipbf16 using ivfflat on qmembership(v) lists=1 op_type 'vector_l2_ops' include(grp) quantization 'bf16';
+select count(*) from (select a from qmembership where l2_distance(v,'[0]') > 1 and l2_distance(v,'[0]') < 3 order by l2_distance(v,'[0]') limit 10 by rank with option 'mode=pre') s;
+select count(*) from (select a from qmembership where l2_distance(v,'[0]') > 1 and l2_distance(v,'[0]') < 3 order by l2_distance(v,'[0]') limit 10 by rank with option 'mode=include') s;
+set @entries = (select distinct i.index_table_name from mo_catalog.mo_indexes i join mo_catalog.mo_tables t on i.table_id=t.rel_id where t.reldatabase=database() and t.relname='qmembership' and i.name='qmembershipbf16' and i.algo_table_type='entries');
+-- @ignore:0
+select mo_ctl('dn','flush',concat(database(),'.',@entries));
+set @stats = concat('select table_cnt, accurate_object_number > 0 as persisted from table_stats("',database(),'.',@entries,'","refresh","full") g');
+prepare entry_stats from @stats;
+execute entry_stats;
+deallocate prepare entry_stats;
+select count(*) from (select a from qmembership where l2_distance(v,'[0]') > 1 and l2_distance(v,'[0]') < 3 order by l2_distance(v,'[0]') limit 10 by rank with option 'mode=pre') s;
+select count(*) from (select a from qmembership where l2_distance(v,'[0]') > 1 and l2_distance(v,'[0]') < 3 order by l2_distance(v,'[0]') limit 10 by rank with option 'mode=include') s;
+select count(*) from (select a from qmembership where v is not null and l2_distance(v,'[0]') > 1 and l2_distance(v,'[0]') < 3 order by l2_distance(v,'[0]') limit 10 by rank with option 'mode=pre') s;
+select count(*) from (select a from qmembership where l2_distance(v,'[0]') > 2 and l2_distance(v,'[0]') < 3 order by l2_distance(v,'[0]') limit 10 by rank with option 'mode=include') s;
 create table q64(a int primary key, v vecf64(4));
 insert into q64 values (1,'[1,1,1,1]'),(2,'[3,3,3,3]'),(3,'[5,5,5,5]'),(4,'[50,50,50,50]'),(5,'[52,52,52,52]'),(6,'[54,54,54,54]');
 create index q64f32 using ivfflat on q64(v) lists=2 op_type 'vector_l2_ops' quantization 'float32';

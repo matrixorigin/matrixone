@@ -16,6 +16,7 @@ package plan
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -69,26 +70,28 @@ func TestApplyIndicesForSortUsingIvfflat_DistancePredicateOwnership(t *testing.T
 		quantization string
 		lossy        bool
 		mode         string
+		async        bool
 	}{
-		{"f32", types.T_array_float32, "", false, "post"},
-		{"f64", types.T_array_float64, "", false, "post"},
-		{"same_f32", types.T_array_float32, "float32", false, "post"},
-		{"same_bf16", types.T_array_bf16, "bf16", false, "post"},
-		{"bf16", types.T_array_float32, "bf16", true, "post"},
-		{"f16", types.T_array_float32, "float16", true, "post"},
-		{"f64_to_f32", types.T_array_float64, "float32", true, "post"},
-		{"int8", types.T_array_float32, "int8", true, "post"},
-		{"uint8", types.T_array_float32, "uint8", true, "post"},
-		{"same_int8_affine", types.T_array_int8, "int8", true, "post"},
-		{"int8_pre", types.T_array_float32, "int8", true, "pre"},
-		{"int8_include", types.T_array_float32, "int8", true, "include"},
+		{"f32", types.T_array_float32, "", false, "post", false},
+		{"f64", types.T_array_float64, "", false, "post", false},
+		{"same_f32", types.T_array_float32, "float32", false, "post", false},
+		{"same_bf16", types.T_array_bf16, "bf16", false, "post", false},
+		{"bf16", types.T_array_float32, "bf16", true, "post", false},
+		{"f16", types.T_array_float32, "float16", true, "post", false},
+		{"f64_to_f32", types.T_array_float64, "float32", true, "post", false},
+		{"int8", types.T_array_float32, "int8", true, "post", false},
+		{"uint8", types.T_array_float32, "uint8", true, "post", false},
+		{"same_int8_affine", types.T_array_int8, "int8", true, "post", false},
+		{"int8_pre", types.T_array_float32, "int8", true, "pre", false},
+		{"int8_include", types.T_array_float32, "int8", true, "include", false},
+		{"int8_pre_async", types.T_array_float32, "int8", true, "pre", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			builder, _, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
 
 			scanNode.TableDef.Cols[1].Typ.Id = int32(tc.source)
 			for _, def := range multiTableIndex.IndexDefs {
-				def.IndexAlgoParams = `{"op_type":"vector_l2_ops","quantization":"` + tc.quantization + `"}`
+				def.IndexAlgoParams = `{"op_type":"vector_l2_ops","quantization":"` + tc.quantization + `","async":"` + fmt.Sprint(tc.async) + `"}`
 			}
 			vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, tc.mode, 0, 2)
 			setIvfIncludeModeTestPagination(vecCtx, 2, 1)
@@ -110,7 +113,10 @@ func TestApplyIndicesForSortUsingIvfflat_DistancePredicateOwnership(t *testing.T
 				},
 			}
 
-			original := DeepCopyExpr(scanNode.FilterList[0])
+			if tc.mode != "post" {
+				scanNode.FilterList = append(scanNode.FilterList, makeIvfIncludeModeIsNotNullFilter(scanNode, 1))
+			}
+			original := DeepCopyExprList(scanNode.FilterList)
 			_, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, nil, nil)
 			require.NoError(t, err)
 
@@ -120,7 +126,28 @@ func TestApplyIndicesForSortUsingIvfflat_DistancePredicateOwnership(t *testing.T
 			if tc.lossy {
 				require.Nil(t, tableFuncNode.VectorIndexScan.GetDistanceRange())
 				require.True(t, tableFuncNode.VectorIndexScan.GetPostFilterOverFetch())
-				require.Equal(t, []*planpb.Expr{original}, scanNode.FilterList)
+				require.Equal(t, original, scanNode.FilterList)
+				if tc.mode != "post" {
+					var membership *planpb.Node
+					for _, node := range builder.qry.Nodes {
+						if node.NodeType == planpb.Node_TABLE_SCAN && node != scanNode && node.TableDef.Name == scanNode.TableDef.Name {
+							require.Nil(t, membership, "one copied membership scan")
+							membership = node
+						}
+					}
+					require.NotNil(t, membership)
+					require.NotEqual(t, scanNode.BindingTags[0], membership.BindingTags[0])
+					expected := DeepCopyExprList(original)
+					if !tc.async {
+						expected = expected[:1]
+					}
+					for _, expr := range expected {
+						replaceColRefTag(expr, scanNode.BindingTags[0], membership.BindingTags[0])
+					}
+					require.Equal(t, expected, membership.FilterList)
+					require.Nil(t, membership.Limit)
+					require.Nil(t, membership.Offset)
+				}
 			} else {
 				require.NotNil(t, tableFuncNode.VectorIndexScan.GetDistanceRange().GetUpperBound())
 				require.False(t, tableFuncNode.VectorIndexScan.GetPostFilterOverFetch())
