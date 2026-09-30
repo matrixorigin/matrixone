@@ -76,10 +76,26 @@ dimension is authoritative from the column type / header, never derived from byt
 - The header never participates in the MXFP payload; stripping it must never require
   rewriting payload bytes.
 
+## GPU / cuVS status (P4 dependency)
+
+MatrixOne's current cuVS integration (`cgo/cuvs`) supports only `float`, `half` (fp16),
+`int8_t`, `uint8_t` element types, with an int8/uint8 scalar quantizer and an fp16
+quantization mode — **there is no MXFP (fp8/fp4) ingestion path today**, and the cuVS
+library headers that would define the MXFP tensor/scale layout are not vendored in the
+repo (they live in the GPU box's CUDA/conda install). Therefore:
+
+- The CPU side — storage format, pack/unpack, casts, LOAD, and CPU distance (dequant per
+  block) — can be built and validated on an ordinary machine now.
+- The GPU side (strip-header + memcpy into a cuVS MXFP kernel) is blocked on (a) a cuVS
+  version that actually consumes MXFP8/MXFP4 and (b) GPU-box access to read its exact
+  tensor/scale contract. The storage payload is defined as byte-exact OCP MXFP precisely
+  so that, once that path exists, the transfer is a memcpy — but the payload sub-region
+  order must be pinned against the real cuVS API at that time (a header-version bump if it
+  disagrees). Until then, the GPU consumer is a forward-looking target, not a shipped path.
+
 ## Open items
 
-- SQL spelling: `vecf8`/`vecf4` (matches `vecf32`) vs `vecfloat8`/`vecfloat4`.
 - Exact payload sub-region order (scales-then-data vs separate scale/data tensors) pinned
-  against the target cuVS MXFP API before the GPU phase; the storage byte order is chosen
-  to match it so the memcpy stays a no-op.
+  against the target cuVS MXFP API at the GPU phase; the storage byte order is chosen to
+  match it so the memcpy stays a no-op.
 - CPU distance accumulation precision (fp32 vs fp16).
