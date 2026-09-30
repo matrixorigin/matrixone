@@ -86,6 +86,7 @@ func TestCDCTargetIdentityAdmissionAndGuard(t *testing.T) {
 		mock.ExpectBegin()
 		mock.ExpectQuery(regexp.QuoteMeta("CALL mo_cdc_target_identity('db', 't')")).
 			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(uint64(42)))
+		mock.ExpectRollback()
 		tx, err := db.BeginTx(ctx, nil)
 		require.NoError(t, err)
 		identity, err := guardedCDCTargetIdentity(ctx, tx, CDCSinkType_MO, "db", "t")
@@ -105,6 +106,7 @@ func TestCDCTargetIdentityAdmissionAndGuard(t *testing.T) {
 		mock.ExpectQuery(regexp.QuoteMeta("SELECT @@server_uuid, TABLE_ID FROM information_schema.INNODB_TABLES WHERE NAME = ?")).
 			WithArgs("db/t").
 			WillReturnRows(sqlmock.NewRows([]string{"server_uuid", "TABLE_ID"}).AddRow("uuid", uint64(7)))
+		mock.ExpectRollback()
 		tx, err := db.BeginTx(ctx, nil)
 		require.NoError(t, err)
 		identity, err := guardedCDCTargetIdentity(ctx, tx, CDCSinkType_MySQL, "db", "t")
