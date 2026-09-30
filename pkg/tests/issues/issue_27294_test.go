@@ -384,7 +384,8 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 		}()
 		require.Equal(t, int64(9007199254740993), exact)
 		var prefixResult float64
-		require.NoError(t, wide.QueryRowContext(ctx, "abc").Scan(&prefixResult))
+		prefixErr := wide.QueryRowContext(ctx, "abc").Scan(&prefixResult)
+		require.ErrorContains(t, prefixErr, `"abc" is invalid numeric string`)
 		var exactText string
 		require.NoError(t, wide.QueryRowContext(ctx, "-9007199254740993").Scan(&exactText))
 		require.Equal(t, "9007199254740993", exactText)
