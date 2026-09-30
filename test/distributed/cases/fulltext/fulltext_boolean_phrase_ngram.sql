@@ -21,7 +21,10 @@ insert into ft values
  (7, 'a中'),
  (8, '中b'),
  (9, 'c-'),
- (10, '文。');
+ (10, '文。'),
+ (11, 'İ中'),
+ (12, 'İstanbul-ankara'),
+ (13, 'İaaaaaaaaaaaaaaaaaaaaaaa');
 create fulltext index fi on ft(body) with parser ngram;
 
 -- CJK phrase: was 0 rows (raw '苹果香蕉' lookup), now matches the trigram-stored row 1, not the
@@ -46,6 +49,17 @@ select id from ft where match(body) against('"中b"' in boolean mode) order by i
 select id from ft where match(body) against('"c-"' in boolean mode) order by id;
 -- punctuation short phrase: '。' discarded, phrase is '文*' and hits row 10.
 select id from ft where match(body) against('"文。"' in boolean mode) order by id;
+
+-- #29271 P2 (case fold): the writer records byte positions from the ORIGINAL phrase bytes and folds
+-- each Latin token AFTER truncating those original bytes. U+0130 (İ) is 2 bytes but folds to i (1
+-- byte), so folding the whole pattern first shifted every following token and truncated one byte early
+-- -- the phrase matched nothing. The query must carry the same İ so it reproduces the stored positions.
+-- İ (2B) + one CJK: index stored i@0, 中@2; the phrase anchors 中* at byte 2 and hits row 11.
+select id from ft where match(body) against('"İ中"' in boolean mode) order by id;
+-- two Latin runs across a hyphen: ankara is stored at byte 10 (after İ's 2 bytes), the phrase hits row 12.
+select id from ft where match(body) against('"İstanbul-ankara"' in boolean mode) order by id;
+-- 23-byte Latin cap AFTER the İ->i fold: writer stores i + 21 a; the phrase looks up the same and hits row 13.
+select id from ft where match(body) against('"İaaaaaaaaaaaaaaaaaaaaaaa"' in boolean mode) order by id;
 
 -- controls: the unquoted natural-language and +boolean forms already matched and are unchanged.
 select id from ft where match(body) against('苹果香蕉' in natural language mode) order by id;

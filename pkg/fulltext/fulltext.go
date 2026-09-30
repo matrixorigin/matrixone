@@ -646,7 +646,11 @@ func CreatePattern(pattern string, parser string) (*Pattern, error) {
 		if lastop == '*' {
 			operator = STAR
 		}
-		return &Pattern{Text: pattern, Operator: operator}, nil
+		// Case-fold the leaf word here (not the whole pattern) so a quoted phrase keeps its original
+		// bytes for SimpleTokenizer (#29271 P2). A TEXT leaf is re-tokenized downstream by GenTextSql
+		// and a STAR prefix is looked up verbatim by truncateStarPrefix (which does not fold), so the
+		// leaf must arrive folded to match the index's lowercased Latin tokens.
+		return &Pattern{Text: strings.ToLower(pattern), Operator: operator}, nil
 	}
 
 	// check sub-expression
@@ -1213,9 +1217,15 @@ func ParsePattern(pattern string, mode int64, parser string) ([]*Pattern, error)
 	case int64(tree.FULLTEXT_BOOLEAN):
 		// BOOLEAN MODE
 
-		lowerp := strings.ToLower(pattern)
-
-		ps, err := ParsePatternInBooleanMode(lowerp, parser)
+		// Do NOT case-fold the whole pattern here. A quoted phrase must reach SimpleTokenizer with its
+		// ORIGINAL bytes so the writer-matching tokenizer owns per-token folding and 23-byte truncation
+		// with ORIGINAL byte positions. Blanket-folding first breaks that: U+0130 (İ, 2 bytes) folds to
+		// i (1 byte), so a pre-folded phrase shifts every following token's byte position and truncates
+		// a Latin run one byte earlier than the index stored it, and its tokens never match (#29271 P2).
+		// Non-phrase TEXT/STAR leaves are folded at the leaf in CreatePattern, reproducing the previous
+		// whole-pattern behavior for words (TEXT re-tokenizes via GenTextSql; STAR prefixes via
+		// truncateStarPrefix, which does not fold).
+		ps, err := ParsePatternInBooleanMode(pattern, parser)
 		if err != nil {
 			return nil, err
 		}

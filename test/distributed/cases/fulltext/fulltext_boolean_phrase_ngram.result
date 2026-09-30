@@ -13,7 +13,10 @@ insert into ft values
 (7, 'a中'),
 (8, '中b'),
 (9, 'c-'),
-(10, '文。');
+(10, '文。'),
+(11, 'İ中'),
+(12, 'İstanbul-ankara'),
+(13, 'İaaaaaaaaaaaaaaaaaaaaaaa');
 create fulltext index fi on ft(body) with parser ngram;
 select id from ft where match(body) against('"苹果香蕉"' in boolean mode) order by id;
 ➤ id[4,32,0]  𝄀
@@ -44,6 +47,15 @@ select id from ft where match(body) against('"c-"' in boolean mode) order by id;
 select id from ft where match(body) against('"文。"' in boolean mode) order by id;
 ➤ id[4,32,0]  𝄀
 10
+select id from ft where match(body) against('"İ中"' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+11
+select id from ft where match(body) against('"İstanbul-ankara"' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+12
+select id from ft where match(body) against('"İaaaaaaaaaaaaaaaaaaaaaaa"' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+13
 select id from ft where match(body) against('苹果香蕉' in natural language mode) order by id;
 ➤ id[4,32,0]  𝄀
 1
