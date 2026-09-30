@@ -1036,6 +1036,15 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	if isLowPrecFloat(fromType.Oid) {
 		return lowPrecFloatToOthers(proc, from, *toType, result, length, selectList, mode)
 	}
+	// vecf8/vecf4 cells are block-scaled, not typed element arrays; route them before
+	// the generic array paths, which decode fixed-size elements. A NULL literal (T_any)
+	// still reaches scalarNullToOthers below.
+	if toType.Oid.IsBlockScaledVector() && fromType.Oid != types.T_any {
+		return castToBlockScaled(proc, from, *toType, result, length)
+	}
+	if fromType.Oid.IsBlockScaledVector() {
+		return blockScaledToOthers(proc, from, *toType, result, length)
+	}
 	if mode.isAssignment() && toType.Oid.IsInteger() {
 		switch fromType.Oid {
 		case types.T_float32:
@@ -1306,7 +1315,8 @@ func scalarNullToOthers(ctx context.Context,
 		return appendNulls[uint64](result, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_text, types.T_json,
-		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry:
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4, types.T_datalink, types.T_geometry:
 		return appendNulls[types.Varlena](result, length, selectList)
 	case types.T_float32:
 		return appendNulls[float32](result, length, selectList)
