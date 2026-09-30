@@ -195,6 +195,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		// -1 means "no old-row delete maintenance" (set only on ODKU into an
 		// irregular-index table); step 0 is a valid index so it cannot be the zero value.
 		irregularMaintDeleteStep:           -1,
+		irregularMaintDeleteRoutePos:       -1,
 		irregularMaintInsertOnlySourceStep: -1,
 		returningSourceStep:                -1,
 		returningFilterPos:                 -1,
@@ -3411,6 +3412,10 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			for _, col := range updateCtx.PartitionCols {
 				colRefCnt[[2]int32{col.RelPos, col.ColPos}]++
 			}
+			if updateCtx.PartitionIndexCtx != nil {
+				col := updateCtx.PartitionIndexCtx.PartitionCol
+				colRefCnt[[2]int32{col.RelPos, col.ColPos}]++
+			}
 			if updateCtx.ChangedRowsCol != nil {
 				colRefCnt[[2]int32{updateCtx.ChangedRowsCol.RelPos, updateCtx.ChangedRowsCol.ColPos}]++
 			}
@@ -3453,6 +3458,13 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 				colRefCnt[[2]int32{col.RelPos, col.ColPos}]--
 				err := builder.remapSingleColRef(&updateCtx.PartitionCols[i], childRemapping.globalToLocal, &remapInfo)
 				if err != nil {
+					return nil, err
+				}
+			}
+			if updateCtx.PartitionIndexCtx != nil {
+				col := &updateCtx.PartitionIndexCtx.PartitionCol
+				colRefCnt[[2]int32{col.RelPos, col.ColPos}]--
+				if err := builder.remapSingleColRef(col, childRemapping.globalToLocal, &remapInfo); err != nil {
 					return nil, err
 				}
 			}
@@ -3906,6 +3918,19 @@ func (builder *QueryBuilder) markSinkProject(nodeID int32, step int32, colRefBoo
 			builder.markSinkProject(node.Children[i], step, colRefBool)
 		}
 	}
+}
+
+// preserveIrregularMaintSource keeps the positional row image consumed by
+// maintenance branches that are appended after createQuery. Keeping only the
+// route drops document columns before the tokenizer and old-key join exist.
+func (builder *QueryBuilder) preserveIrregularMaintSource(step int32) {
+	if step < 0 {
+		return
+	}
+	if builder.preserveSinkProjection == nil {
+		builder.preserveSinkProjection = make(map[int32]struct{})
+	}
+	builder.preserveSinkProjection[builder.qry.Steps[step]] = struct{}{}
 }
 
 func (builder *QueryBuilder) rewriteStarApproxCount(nodeID int32) {

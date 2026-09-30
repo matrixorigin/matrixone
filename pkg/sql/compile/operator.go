@@ -581,6 +581,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.Attrs = t.Attrs
 		op.IsOldUpdate = t.IsOldUpdate
 		op.IsNewUpdate = t.IsNewUpdate
+		op.PreserveInput = t.PreserveInput
 		op.HasAutoCol = t.HasAutoCol
 		op.EstimatedRowCount = t.EstimatedRowCount
 		op.CompPkeyExpr = t.CompPkeyExpr
@@ -918,6 +919,7 @@ func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, 
 	op.Attrs = attrs
 	op.IsOldUpdate = preCtx.IsOldUpdate
 	op.IsNewUpdate = preCtx.IsNewUpdate
+	op.PreserveInput = preCtx.PreserveInput
 	op.EstimatedRowCount = int64(nodes[node.Children[0]].Stats.Outcnt)
 	op.CompPkeyExpr = preCtx.CompPkeyExpr
 	op.ClusterByExpr = preCtx.ClusterByExpr
@@ -1021,6 +1023,7 @@ func constructMultiUpdate(
 		arg.MultiUpdateCtx[i] = &multi_update.MultiUpdateCtx{
 			ObjRef:             updateCtx.ObjRef,
 			TableDef:           updateCtx.TableDef,
+			PartitionIndexCtx:  updateCtx.PartitionIndexCtx,
 			InsertCols:         insertCols,
 			DeleteCols:         deleteCols,
 			PartitionCols:      partitionCols,
@@ -1047,21 +1050,32 @@ func constructMultiUpdate(
 	}
 	arg.Action = action
 
-	ps := proc.GetPartitionService()
-	if !ps.Enabled() {
-		return arg, nil
-	}
-	if !hasPartitionedUpdateTarget(node.UpdateCtxList) {
-		return arg, nil
-	}
+	return wrapPartitionMultiUpdate(arg, node.UpdateCtxList, proc)
+}
 
+// Keep local construction and remote decoding on the same target contract.
+// NewPartitionMultiUpdate deliberately leaves FlushS3Info as a raw consumer.
+func wrapPartitionMultiUpdate(arg *multi_update.MultiUpdate, contexts []*plan.UpdateCtx, proc *process.Process) (vm.Operator, error) {
+	if !hasPartitionedUpdateTarget(contexts) {
+		return arg, nil
+	}
+	if arg.Action != multi_update.UpdateFlushS3Info &&
+		(proc == nil || proc.Base == nil || proc.Base.PartitionService == nil || !proc.GetPartitionService().Enabled()) {
+		arg.Release()
+		return nil, moerr.NewInvalidInputNoCtx("partition maintenance requires partition service")
+	}
 	return multi_update.NewPartitionMultiUpdate(arg), nil
 }
 
 func hasPartitionedUpdateTarget(contexts []*plan.UpdateCtx) bool {
 	for _, updateCtx := range contexts {
-		if !features.IsIndexTable(updateCtx.TableDef.FeatureFlag) &&
-			features.IsPartitioned(updateCtx.TableDef.FeatureFlag) {
+		if updateCtx == nil {
+			continue
+		}
+		if updateCtx.PartitionIndexCtx != nil {
+			return true
+		}
+		if updateCtx.TableDef != nil && !features.IsIndexTable(updateCtx.TableDef.FeatureFlag) && features.IsPartitioned(updateCtx.TableDef.FeatureFlag) {
 			return true
 		}
 	}

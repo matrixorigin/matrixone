@@ -79,7 +79,7 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 			tableType := UpdateMainTable
 			if catalog.IsUniqueIndexTable(updateCtx.TableDef.Name) {
 				tableType = UpdateUniqueIndexTable
-			} else if catalog.IsSecondaryIndexTable(updateCtx.TableDef.Name) {
+			} else if isSecondaryIndexTableDef(updateCtx.TableDef) {
 				tableType = UpdateSecondaryIndexTable
 			}
 			info.tableType = tableType
@@ -325,7 +325,7 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 		tableType := UpdateMainTable
 		if catalog.IsUniqueIndexTable(source.GetTableName()) {
 			tableType = UpdateUniqueIndexTable
-		} else if catalog.IsSecondaryIndexTable(source.GetTableName()) {
+		} else if isSecondaryIndexTableName(source.GetTableName()) {
 			tableType = UpdateSecondaryIndexTable
 		}
 
@@ -851,7 +851,7 @@ func (update *MultiUpdate) resetMultiUpdateCtxs() {
 		tableType := UpdateMainTable
 		if catalog.IsUniqueIndexTable(updateCtx.TableDef.Name) {
 			tableType = UpdateUniqueIndexTable
-		} else if catalog.IsSecondaryIndexTable(updateCtx.TableDef.Name) {
+		} else if isSecondaryIndexTableDef(updateCtx.TableDef) {
 			tableType = UpdateSecondaryIndexTable
 		}
 		info.tableType = tableType

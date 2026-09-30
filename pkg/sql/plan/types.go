@@ -52,6 +52,7 @@ type TableDefType = plan.TableDef_DefType
 type TableDef = plan.TableDef
 type ColDef = plan.ColDef
 type ObjectRef = plan.ObjectRef
+type PartitionIndexCtx = plan.PartitionIndexCtx
 type ColRef = plan.ColRef
 type Stats = plan.Stats
 type Const = plan.Literal
@@ -581,7 +582,10 @@ type QueryBuilder struct {
 	// which can differ from the new PK when the conflict is on a non-PK unique key.
 	irregularMaintDeletePkPos int32
 	irregularMaintDeletePkTyp plan.Type
-	irregularMaintIndexes     []*plan.IndexDef
+	// irregularMaintDeleteRoutePos identifies the old-row partition ordinal in
+	// the materialized maintenance source. It is -1 when no routed delete exists.
+	irregularMaintDeleteRoutePos int32
+	irregularMaintIndexes        []*plan.IndexDef
 	// irregularMaintInsertOnlyIndexes are logical irregular indexes whose parts
 	// cannot change in an ODKU conflict. Their insert maintenance reads only
 	// non-conflicting rows from irregularMaintInsertOnlySourceStep; delete
@@ -645,6 +649,7 @@ type irregularUpdateMaintenance struct {
 	deleteStep              int32
 	deletePkPos             int32
 	deletePkTyp             plan.Type
+	deleteRoutePos          int32
 	indexes                 []*plan.IndexDef
 	insertOnlySourceStep    int32
 	insertOnlyIndexes       []*plan.IndexDef
