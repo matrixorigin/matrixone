@@ -32,6 +32,76 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestReCalcInnerJoinCardinality(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	typ := planpb.Type{Id: int32(types.T_int64)}
+	equality, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{
+		GetColExpr(typ, 1, 0), GetColExpr(typ, 2, 0),
+	})
+	require.NoError(t, err)
+	equality.Ndv = 2
+	for _, tc := range []struct {
+		name                                 string
+		left, right, leftSel, rightSel, want float64
+		on                                   bool
+	}{
+		{name: "cartesian", left: 2, right: 3, leftSel: 1, rightSel: 1, want: 6},
+		{name: "singleton", left: 1, right: 3, leftSel: 1, rightSel: 1, want: 3},
+		{name: "empty left", right: 3, leftSel: 1, rightSel: 1},
+		{name: "empty right", left: 3, leftSel: 1, rightSel: 1},
+		{name: "both empty", leftSel: 1, rightSel: 1},
+		{name: "filtered inputs", left: 2, right: 3, leftSel: .25, rightSel: .5, want: 6},
+		{name: "equality control", left: 2, right: 3, leftSel: 1, rightSel: 1, want: 3, on: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+			join := &planpb.Node{NodeType: planpb.Node_JOIN, JoinType: planpb.Node_INNER,
+				Children: []int32{0, 1}, Stats: DefaultStats()}
+			if tc.on {
+				join.OnList = []*planpb.Expr{equality}
+			}
+			builder.qry.Nodes = []*planpb.Node{
+				{NodeType: planpb.Node_VALUE_SCAN, Stats: &planpb.Stats{Outcnt: tc.left, Selectivity: tc.leftSel}},
+				{NodeType: planpb.Node_VALUE_SCAN, Stats: &planpb.Stats{Outcnt: tc.right, Selectivity: tc.rightSel}},
+				join,
+			}
+			for range 2 {
+				ReCalcNodeStats(2, builder, false, false, false)
+				require.Equal(t, tc.want, join.Stats.Outcnt)
+				require.Equal(t, tc.right, join.Stats.HashmapStats.HashmapSize)
+			}
+		})
+	}
+}
+
+func TestReCalcCartesianChainCardinality(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false), false, false)
+	const want = 300_000_000
+	for i, rows := range []float64{1000, 10, 3, 1000, 10} {
+		leafID := int32(len(builder.qry.Nodes))
+		builder.qry.Nodes = append(builder.qry.Nodes, &planpb.Node{
+			NodeType: planpb.Node_VALUE_SCAN, Stats: &planpb.Stats{Outcnt: rows, Selectivity: 1},
+		})
+		if i > 0 {
+			leftID := leafID - 1
+			builder.qry.Nodes = append(builder.qry.Nodes, &planpb.Node{
+				NodeType: planpb.Node_JOIN, JoinType: planpb.Node_INNER,
+				Children: []int32{leftID, leafID}, Stats: DefaultStats(),
+			})
+			ReCalcNodeStats(leafID+1, builder, false, false, false)
+		}
+	}
+	root := builder.qry.Nodes[len(builder.qry.Nodes)-1]
+	require.Equal(t, float64(want), root.Stats.Outcnt)
+	// The row limit is owned by the existing generic stats tail, rather than
+	// reimplemented in cartesian estimation.
+	for _, limit := range []uint64{0, 1, 7} {
+		root.Limit = MakePlan2Uint64ConstExprWithType(limit)
+		ReCalcNodeStats(int32(len(builder.qry.Nodes)-1), builder, false, false, false)
+		require.Equal(t, float64(limit), root.Stats.Outcnt)
+	}
+}
+
 func TestGetExecTypeAdaptiveTopIgnoresDeferredForceOneCN(t *testing.T) {
 	large := &planpb.Stats{BlockNum: int32(BlockThresholdForOneCN + 1), Cost: costThresholdForOneCN + 1}
 	qry := &planpb.Query{

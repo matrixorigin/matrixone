@@ -1,0 +1,71 @@
+drop database if exists cross_join_cardinality;
+create database cross_join_cardinality;
+use cross_join_cardinality;
+set @saved_max_dop=@@max_dop;
+set @saved_join_spill_mem=@@join_spill_mem;
+set max_dop=2;
+set join_spill_mem=1000;
+create table a(n int primary key);
+create table b(n int primary key);
+create table t(a int,b int,primary key(a,b));
+insert into a values(0),(1);
+insert into b values(0),(1),(2);
+select table_cnt from table_stats('cross_join_cardinality.a','patch','{"table_cnt":1000,"block_number":1,"accurate_object_number":1,"ndv_map":{"n":1000}}') g;
+table_cnt
+1000.0
+select table_cnt from table_stats('cross_join_cardinality.b','patch','{"table_cnt":1000,"block_number":1,"accurate_object_number":1,"ndv_map":{"n":1000}}') g;
+table_cnt
+1000.0
+select table_cnt from table_stats('cross_join_cardinality.t','patch','{"table_cnt":1000,"block_number":1,"accurate_object_number":1,"ndv_map":{"a":1000,"b":1000}}') g;
+table_cnt
+1000.0
+explain (check '["Join Type: DEDUP", "shuffle: hash"]') insert into t select a.n,b.n from a cross join b;
+AP QUERY PLAN ON ONE CN(16 core)
+Multi Update
+  ->  Join
+        Join Type: DEDUP (FAIL)
+        Join Cond: (t.__mo_cpkey_col = #[1,2]) shuffle: hash(t.__mo_cpkey_col)
+        ->  Table Scan on cross_join_cardinality.t
+        ->  Lock
+              ->  PreInsert on cross_join_cardinality.t
+                    ->  Project
+                          ->  Join
+                                Join Type: INNER
+                                ->  Table Scan on cross_join_cardinality.a
+                                ->  Table Scan on cross_join_cardinality.b
+insert into t select a.n,b.n from a cross join b;
+select count(*) as rows_written,count(distinct 100*a+b) as distinct_keys,min(100*a+b) as minimum,max(100*a+b) as maximum,sum(100*a+b) as checksum from t;
+rows_written    distinct_keys    minimum    maximum    checksum
+6    6    0    102    306
+insert into t select a.n,b.n from a cross join b;
+-- @regex("Duplicate entry",true)
+Duplicate entry
+select count(*) as rows_written,sum(100*a+b) as checksum from t;
+rows_written    checksum
+6    306
+select count(*) as pairs,sum(100*a.n+b.n) as checksum from a inner join b on a.n=b.n;
+pairs    checksum
+2    101
+select count(*) as pairs,sum(100*a.n+b.n) as checksum from a inner join b on a.n<b.n;
+pairs    checksum
+3    105
+insert into t select a.n+10,b.n from a cross join b where a.n<0;
+select count(*) as rows_written,sum(100*a+b) as checksum from t;
+rows_written    checksum
+6    306
+begin;
+insert into t select a.n+10,b.n from a cross join b;
+select count(*) as rows_written,sum(100*a+b) as checksum from t;
+rows_written    checksum
+12    6612
+rollback;
+select count(*) as rows_written,sum(100*a+b) as checksum from t;
+rows_written    checksum
+6    306
+insert into t select a.n+20,b.n from a cross join b;
+select count(*) as rows_written,sum(100*a+b) as checksum from t;
+rows_written    checksum
+12    12612
+set join_spill_mem=@saved_join_spill_mem;
+set max_dop=@saved_max_dop;
+drop database cross_join_cardinality;

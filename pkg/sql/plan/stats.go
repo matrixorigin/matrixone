@@ -1414,10 +1414,6 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		if ndv < 1 {
 			ndv = 1
 		}
-		//assume all join is not cross join
-		//will fix this in the future
-		//isCrossJoin := (len(node.OnList) == 0)
-		isCrossJoin := false
 		leftSelectivity := clampSelectivity(leftStats.Selectivity, 1)
 		rightSelectivity := clampSelectivity(rightStats.Selectivity, 1)
 		selectivity := clampSelectivity(math.Pow(rightSelectivity, math.Pow(leftSelectivity, 0.2)), 1)
@@ -1433,12 +1429,15 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 
 		switch node.JoinType {
 		case plan.Node_INNER:
-			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
-			if !isCrossJoin {
-				outcnt *= selectivity
-			}
-			if outcnt < rightStats.Outcnt && leftStats.Selectivity > 0.95 {
-				outcnt = rightStats.Outcnt
+			// Outcnt already includes filters on each input. A cartesian
+			// product has no join-key NDV or additional join selectivity;
+			// in particular, an empty input must keep its zero result.
+			outcnt := leftStats.Outcnt * rightStats.Outcnt
+			if len(node.OnList) > 0 {
+				outcnt = outcnt / ndv * selectivity
+				if outcnt < rightStats.Outcnt && leftStats.Selectivity > 0.95 {
+					outcnt = rightStats.Outcnt
+				}
 			}
 			node.Stats.Outcnt = outcnt
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
