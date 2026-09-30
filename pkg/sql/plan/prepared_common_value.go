@@ -63,9 +63,11 @@ func preparedCommonValueResultArgs(expr *Expr) []*Expr {
 	return nil
 }
 
-// nil peer means unresolved; allowed=false means a concrete type boundary.
+// Empty peers means unresolved; allowed=false means a concrete type boundary.
+// Keep every concrete peer: their combined integral/scale constraints must
+// survive propagation, independently of operand order.
 // A plain NULL is a boundary only when it is the first non-marker operand.
-func preparedCommonValueDomain(ctx context.Context, args []*Expr) (peer *Expr, allowed bool) {
+func preparedCommonValueDomain(ctx context.Context, args []*Expr) (peers []*Expr, allowed bool) {
 	allowed = true
 	state := preparedBindingState(ctx)
 	for _, arg := range args {
@@ -89,11 +91,11 @@ func preparedCommonValueDomain(ctx context.Context, args []*Expr) (peer *Expr, a
 			}
 		}
 		if results := preparedCommonValueResultArgs(source); results != nil {
-			childPeer, childAllowed := preparedCommonValueDomain(ctx, results)
+			childPeers, childAllowed := preparedCommonValueDomain(ctx, results)
 			if !childAllowed {
 				return nil, false
 			}
-			if childPeer == nil {
+			if len(childPeers) == 0 {
 				continue
 			}
 			// A resolved child owns its result domain, rather than inheriting
@@ -103,7 +105,7 @@ func preparedCommonValueDomain(ctx context.Context, args []*Expr) (peer *Expr, a
 			}
 		}
 		if source.GetLit() != nil && source.GetLit().Isnull && source.Typ.Id == int32(types.T_any) {
-			if peer == nil {
+			if len(peers) == 0 {
 				return nil, false
 			}
 			continue
@@ -112,28 +114,30 @@ func preparedCommonValueDomain(ctx context.Context, args []*Expr) (peer *Expr, a
 		if oid.IsFloat() || !oid.ToType().IsNumeric() {
 			return nil, false
 		}
-		if peer == nil || oid.IsDecimal() {
-			peer = source
-		}
+		peers = append(peers, source)
 	}
-	return peer, allowed
+	return peers, allowed
 }
 
 // Run before the owning common-value overload. Only unresolved result
 // children inherit a peer; parameter conversion and precision/overflow policy
 // remain in the existing fixed-DECIMAL numeric-prefix binder.
-func bindPreparedCommonValueResultArguments(ctx context.Context, args []*Expr, inherited *Expr) ([]*Expr, error) {
+func bindPreparedCommonValueResultArguments(ctx context.Context, args []*Expr, inherited []*Expr) ([]*Expr, error) {
 	if preparedBindingState(ctx) == nil {
 		return args, nil
 	}
-	peer, allowed := preparedCommonValueDomain(ctx, args)
+	peers, allowed := preparedCommonValueDomain(ctx, args)
 	if !allowed {
 		return args, nil
 	}
-	if peer == nil {
-		peer = inherited
+	if len(peers) == 0 {
+		peers = inherited
 	}
-	if peer == nil || !types.T(peer.Typ.Id).IsDecimal() {
+	hasDecimal := false
+	for _, peer := range peers {
+		hasDecimal = hasDecimal || types.T(peer.Typ.Id).IsDecimal()
+	}
+	if !hasDecimal {
 		return args, nil
 	}
 	bound := append([]*Expr(nil), args...)
@@ -144,7 +148,7 @@ func bindPreparedCommonValueResultArguments(ctx context.Context, args []*Expr, i
 			if inherited != nil && source.GetP() != nil {
 				// The peer is a type witness only. Never retain it as an extra
 				// executable operand of the nested call.
-				converted, err := bindPreparedCommonValueContextMarker(ctx, source, peer)
+				converted, err := bindPreparedCommonValueContextMarker(ctx, source, peers)
 				if err != nil {
 					return nil, err
 				}
@@ -152,11 +156,11 @@ func bindPreparedCommonValueResultArguments(ctx context.Context, args []*Expr, i
 			}
 			continue
 		}
-		childPeer, childAllowed := preparedCommonValueDomain(ctx, results)
-		if !childAllowed || childPeer != nil {
+		childPeers, childAllowed := preparedCommonValueDomain(ctx, results)
+		if !childAllowed || len(childPeers) != 0 {
 			continue
 		}
-		childArgs, err := bindPreparedCommonValueResultArguments(ctx, results, peer)
+		childArgs, err := bindPreparedCommonValueResultArguments(ctx, results, peers)
 		if err != nil {
 			return nil, err
 		}
@@ -177,7 +181,7 @@ func bindPreparedCommonValueResultArguments(ctx context.Context, args []*Expr, i
 	return bound, nil
 }
 
-func bindPreparedCommonValueContextMarker(ctx context.Context, source, peer *Expr) (*Expr, error) {
+func bindPreparedCommonValueContextMarker(ctx context.Context, source *Expr, peers []*Expr) (*Expr, error) {
 	state := preparedBindingState(ctx)
 	pos := int(source.GetP().Pos)
 	if pos < 0 || pos >= len(state.values) {
@@ -195,11 +199,16 @@ func bindPreparedCommonValueContextMarker(ctx context.Context, source, peer *Exp
 	if value == nil {
 		witness = makePlan2NullConstExprWithType()
 	}
-	// The inherited peer already proves the conversion contract. In
-	// particular, an invalid spelling must not turn this unresolved child
-	// into a new string boundary. Keep the existing prefix/overflow policy.
-	converted, _, err := preparedNumericPrefixArgs(ctx, "coalesce", []*Expr{source, peer}, []*Expr{witness, peer},
-		[]bool{true, false}, []types.StringConversionKind{param.PrepareParamKind, 0}, nil, nil, true)
+	// All inherited peers prove the conversion contract, including every
+	// fixed scale that the existing overflow guard must preserve. They are
+	// type witnesses only; no extra operand escapes into the executable child.
+	args := append([]*Expr{source}, peers...)
+	witnesses := append([]*Expr{witness}, peers...)
+	prefixArgs := make([]bool, len(args))
+	prefixKinds := make([]types.StringConversionKind, len(args))
+	prefixArgs[0], prefixKinds[0] = true, param.PrepareParamKind
+	converted, _, err := preparedNumericPrefixArgs(ctx, "coalesce", args, witnesses,
+		prefixArgs, prefixKinds, nil, nil, true)
 	if err != nil {
 		return nil, err
 	}

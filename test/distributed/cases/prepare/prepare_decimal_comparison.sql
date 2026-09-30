@@ -112,4 +112,37 @@ DEALLOCATE PREPARE p_null_first;
 DEALLOCATE PREPARE p_null_last;
 DEALLOCATE PREPARE p_typed_null;
 
+-- Every fixed peer contributes its scale, independent of operand order or nesting.
+PREPARE p_scale_first FROM 'SELECT GREATEST(CAST(1 AS DECIMAL(65,30)),COALESCE(?,?),CAST(1 AS DECIMAL(38,0))) AS v';
+PREPARE p_scale_last FROM 'SELECT GREATEST(CAST(1 AS DECIMAL(38,0)),COALESCE(?,?),CAST(1 AS DECIMAL(65,30))) AS v';
+PREPARE p_scale_direct_first FROM 'SELECT GREATEST(CAST(1 AS DECIMAL(65,30)),?,?,CAST(1 AS DECIMAL(38,0))) AS v';
+PREPARE p_scale_direct_last FROM 'SELECT GREATEST(CAST(1 AS DECIMAL(38,0)),?,?,CAST(1 AS DECIMAL(65,30))) AS v';
+SET @p=REPEAT('9',65);
+EXECUTE p_scale_first USING @p,@p;
+EXECUTE p_scale_last USING @p,@p;
+EXECUTE p_scale_direct_first USING @p,@p;
+EXECUTE p_scale_direct_last USING @p,@p;
+-- Decimal256 has 76 digits: scale 30 leaves at most 46 integral digits.
+SET @p=REPEAT('9',47);
+EXECUTE p_scale_first USING @p,@p;
+EXECUTE p_scale_last USING @p,@p;
+SET @p=REPEAT('9',46);
+EXECUTE p_scale_first USING @p,@p;
+EXECUTE p_scale_last USING @p,@p;
+SET @p='1';
+EXECUTE p_scale_first USING @p,@p;
+EXECUTE p_scale_last USING @p,@p;
+EXECUTE p_scale_direct_first USING @p,@p;
+EXECUTE p_scale_direct_last USING @p,@p;
+SET @p=REPEAT('9',65);
+EXECUTE p_scale_first USING @p,@p;
+EXECUTE p_scale_last USING @p,@p;
+SET @p='1';
+EXECUTE p_scale_first USING @p,@p;
+EXECUTE p_scale_last USING @p,@p;
+DEALLOCATE PREPARE p_scale_first;
+DEALLOCATE PREPARE p_scale_last;
+DEALLOCATE PREPARE p_scale_direct_first;
+DEALLOCATE PREPARE p_scale_direct_last;
+
 DROP DATABASE prepare_decimal_comparison;

@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -28,6 +29,60 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPreparedCommonValueAggregatesPeerDomains(t *testing.T) {
+	for _, expression := range []string{
+		"greatest(cast(1 as decimal(65,30)),coalesce(?,?),cast(1 as decimal(38,0)))",
+		"greatest(cast(1 as decimal(38,0)),coalesce(?,?),cast(1 as decimal(65,30)))",
+		"greatest(cast(1 as decimal(65,30)),?,?,cast(1 as decimal(38,0)))",
+		"greatest(cast(1 as decimal(38,0)),?,?,cast(1 as decimal(65,30)))",
+	} {
+		for _, binary := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/binary=%t", expression, binary), func(t *testing.T) {
+				mock := NewMockOptimizer(false)
+				proc := mock.ctxt.GetProcess()
+				params := vector.NewVec(types.T_text.ToType())
+				defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+				for i := 0; i < 2; i++ {
+					require.NoError(t, vector.AppendBytes(params, []byte("1"), false, proc.Mp()))
+				}
+				proc.SetPrepareParams(params)
+				stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select "+expression, 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				bindings := []PreparedSourceBinding{
+					{Position: 0, Type: types.T_varchar.ToType()},
+					{Position: 1, Type: types.T_varchar.ToType()},
+				}
+				for _, value := range []string{strings.Repeat("9", 65), strings.Repeat("9", 47), strings.Repeat("9", 46), "1", strings.Repeat("9", 65), "1"} {
+					values := make([]any, 2)
+					for i := range values {
+						require.NoError(t, vector.SetStringAt(params, i, value, proc.Mp()))
+						values[i] = ParamValue{Value: value, SourceType: types.T_varchar.ToType(),
+							HasSourceType: true, EnableNumericPrefix: true, IsBinaryProtocol: binary}
+					}
+					bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings, values)
+					if len(value) > 46 {
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "all fixed scales must constrain the marker: %v", err)
+						continue
+					}
+					require.NoError(t, err)
+					q := bound.Plan.GetQuery()
+					expr := q.Nodes[q.Steps[0]].ProjectList[0]
+					require.Equal(t, int32(types.T_decimal256), expr.Typ.Id)
+					require.Equal(t, int32(max(68, len(value)+30)), expr.Typ.Width)
+					require.Equal(t, int32(30), expr.Typ.Scale)
+					result, free, err := colexec.GetReadonlyResultFromExpression(proc, expr, []*batch.Batch{batch.EmptyForConstFoldBatch})
+					if free != nil {
+						defer free()
+					}
+					require.NoError(t, err)
+					require.Equal(t, value+"."+strings.Repeat("0", 30), vector.GetFixedAtWithTypeCheck[types.Decimal256](result, 0).Format(30))
+				}
+			})
+		}
+	}
+}
 
 func TestIssue26879PreparedExecutionCommonValue(t *testing.T) {
 	for _, domain := range []struct {

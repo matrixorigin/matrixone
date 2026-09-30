@@ -22,7 +22,7 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	mysql "github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/embed"
@@ -108,6 +108,60 @@ func TestIssue26879PreparedCommonValueFollowup(t *testing.T) {
 							}
 							require.Equal(t, want, got, "value=%v", value)
 						}()
+					}
+				})
+			}
+		}
+	})
+}
+
+func TestIssue26879PreparedCommonValuePeerOverflow(t *testing.T) {
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?interpolateParams=false", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		for _, expression := range []string{
+			"greatest(cast(1 as decimal(65,30)),coalesce(?,?),cast(1 as decimal(38,0)))",
+			"greatest(cast(1 as decimal(38,0)),coalesce(?,?),cast(1 as decimal(65,30)))",
+			"greatest(cast(1 as decimal(65,30)),?,?,cast(1 as decimal(38,0)))",
+			"greatest(cast(1 as decimal(38,0)),?,?,cast(1 as decimal(65,30)))",
+		} {
+			for _, protocol := range []string{"sql", "binary"} {
+				t.Run(expression+"/"+protocol, func(t *testing.T) {
+					query := "select " + expression
+					var stmt *sql.Stmt
+					if protocol == "sql" {
+						mustExec(t, ctx, conn, "prepare peer_scales from '"+query+"'")
+						defer mustExec(t, ctx, conn, "deallocate prepare peer_scales")
+					} else {
+						stmt, err = conn.PrepareContext(ctx, query)
+						require.NoError(t, err)
+						defer stmt.Close()
+					}
+					for _, value := range []string{strings.Repeat("9", 65), strings.Repeat("9", 47), strings.Repeat("9", 46), "1", strings.Repeat("9", 65), "1"} {
+						var got string
+						var queryErr error
+						if protocol == "sql" {
+							mustExec(t, ctx, conn, "set @peer_scales='"+value+"'")
+							queryErr = conn.QueryRowContext(ctx, "execute peer_scales using @peer_scales,@peer_scales").Scan(&got)
+						} else {
+							queryErr = stmt.QueryRowContext(ctx, value, value).Scan(&got)
+						}
+						if len(value) > 46 {
+							var sqlError *mysql.MySQLError
+							require.ErrorAs(t, queryErr, &sqlError)
+							require.Equal(t, uint16(1690), sqlError.Number)
+							continue
+						}
+						require.NoError(t, queryErr)
+						require.Equal(t, value+"."+strings.Repeat("0", 30), got)
 					}
 				})
 			}
