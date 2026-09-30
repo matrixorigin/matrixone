@@ -84,6 +84,84 @@ func TestPreparedCommonValueAggregatesPeerDomains(t *testing.T) {
 	}
 }
 
+func TestPreparedCommonValueJointMarkerDomains(t *testing.T) {
+	for _, tc := range []struct {
+		name, expression string
+	}{
+		{"direct", "greatest(cast(1 as decimal(38,0)),?,?)"},
+		{"coalesce", "greatest(cast(1 as decimal(38,0)),coalesce(?,?))"},
+		{"ifnull", "greatest(cast(1 as decimal(38,0)),ifnull(?,?))"},
+		{"deep", "greatest(cast(1 as decimal(38,0)),coalesce(?,coalesce(?,?)))"},
+		{"siblings", "greatest(cast(1 as decimal(38,0)),coalesce(?,?),coalesce(?,?))"},
+	} {
+		for _, binary := range []bool{false, true} {
+			for _, reversed := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/binary=%t/reversed=%t", tc.name, binary, reversed), func(t *testing.T) {
+					mock := NewMockOptimizer(false)
+					proc := mock.ctxt.GetProcess()
+					params := vector.NewVec(types.T_text.ToType())
+					defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+					count := strings.Count(tc.expression, "?")
+					bindings := make([]PreparedSourceBinding, count)
+					for i := range bindings {
+						bindings[i] = PreparedSourceBinding{Position: int32(i), Type: types.T_varchar.ToType()}
+						require.NoError(t, vector.AppendBytes(params, []byte("1"), false, proc.Mp()))
+					}
+					proc.SetPrepareParams(params)
+					stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select "+tc.expression, 1)
+					require.NoError(t, err)
+					defer stmt.Free()
+					for _, integral := range []string{strings.Repeat("9", 65), "1", strings.Repeat("9", 77), strings.Repeat("9", 65)} {
+						func() {
+							pair := []string{integral, "1e-30"}
+							if reversed {
+								pair[0], pair[1] = pair[1], pair[0]
+							}
+							values := make([]any, count)
+							for i := range values {
+								value := pair[i%2]
+								if tc.name == "siblings" {
+									value = pair[i/2]
+								} else if i >= 2 {
+									value = pair[1-i%2]
+								}
+								require.NoError(t, vector.SetStringAt(params, i, value, proc.Mp()))
+								values[i] = ParamValue{Value: value, SourceType: types.T_varchar.ToType(),
+									HasSourceType: true, EnableNumericPrefix: true, IsBinaryProtocol: binary}
+							}
+							bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings, values)
+							if len(integral) == 77 {
+								require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "%v", err)
+								return
+							}
+							require.NoError(t, err)
+							require.True(t, bound.ValueDependent)
+							q := bound.Plan.GetQuery()
+							expr := q.Nodes[q.Steps[0]].ProjectList[0]
+							require.Equal(t, int32(types.T_decimal256), expr.Typ.Id, "must not fall back to DOUBLE")
+							scale := int32(30)
+							if len(integral) == 65 {
+								scale = 11
+							}
+							require.Equal(t, scale, expr.Typ.Scale)
+							result, free, err := colexec.GetReadonlyResultFromExpression(proc, expr, []*batch.Batch{batch.EmptyForConstFoldBatch})
+							if free != nil {
+								defer free()
+							}
+							require.NoError(t, err)
+							want := integral
+							if reversed && (tc.name == "coalesce" || tc.name == "ifnull" || tc.name == "deep") {
+								want = "1"
+							}
+							require.Equal(t, want+"."+strings.Repeat("0", int(scale)), vector.GetFixedAtWithTypeCheck[types.Decimal256](result, 0).Format(scale))
+						}()
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestIssue26879PreparedExecutionCommonValue(t *testing.T) {
 	for _, domain := range []struct {
 		name, prefix string

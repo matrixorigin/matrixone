@@ -169,6 +169,91 @@ func TestIssue26879PreparedCommonValuePeerOverflow(t *testing.T) {
 	})
 }
 
+func TestIssue26879PreparedJointMarkerDomains(t *testing.T) {
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?interpolateParams=false", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		for _, tc := range []struct {
+			name, expression string
+		}{
+			{"direct", "greatest(cast(1 as decimal(38,0)),?,?)"},
+			{"coalesce", "greatest(cast(1 as decimal(38,0)),coalesce(?,?))"},
+			{"ifnull", "greatest(cast(1 as decimal(38,0)),ifnull(?,?))"},
+			{"deep", "greatest(cast(1 as decimal(38,0)),coalesce(?,coalesce(?,?)))"},
+			{"siblings", "greatest(cast(1 as decimal(38,0)),coalesce(?,?),coalesce(?,?))"},
+		} {
+			for _, protocol := range []string{"sql", "binary"} {
+				for _, reversed := range []bool{false, true} {
+					t.Run(fmt.Sprintf("%s/%s/reversed=%t", tc.name, protocol, reversed), func(t *testing.T) {
+						query := "select " + tc.expression
+						var stmt *sql.Stmt
+						if protocol == "sql" {
+							mustExec(t, ctx, conn, "prepare joint_markers from '"+query+"'")
+							defer mustExec(t, ctx, conn, "deallocate prepare joint_markers")
+						} else {
+							stmt, err = conn.PrepareContext(ctx, query)
+							require.NoError(t, err)
+							defer stmt.Close()
+						}
+						for _, integral := range []string{strings.Repeat("9", 65), "1", strings.Repeat("9", 77), strings.Repeat("9", 65)} {
+							pair := []string{integral, "1e-30"}
+							if reversed {
+								pair[0], pair[1] = pair[1], pair[0]
+							}
+							count := strings.Count(tc.expression, "?")
+							values := make([]any, count)
+							variables := make([]string, count)
+							for i := range values {
+								value := pair[i%2]
+								if tc.name == "siblings" {
+									value = pair[i/2]
+								} else if i >= 2 {
+									value = pair[1-i%2]
+								}
+								values[i] = value
+								variables[i] = fmt.Sprintf("@joint_%d", i)
+								if protocol == "sql" {
+									mustExec(t, ctx, conn, "set "+variables[i]+"='"+value+"'")
+								}
+							}
+							var got string
+							if protocol == "sql" {
+								err = conn.QueryRowContext(ctx, "execute joint_markers using "+strings.Join(variables, ",")).Scan(&got)
+							} else {
+								err = stmt.QueryRowContext(ctx, values...).Scan(&got)
+							}
+							if len(integral) == 77 {
+								var sqlError *mysql.MySQLError
+								require.ErrorAs(t, err, &sqlError)
+								require.Equal(t, uint16(1690), sqlError.Number)
+								continue
+							}
+							require.NoError(t, err)
+							scale := 30
+							if len(integral) == 65 {
+								scale = 11
+							}
+							want := integral
+							if reversed && (tc.name == "coalesce" || tc.name == "ifnull" || tc.name == "deep") {
+								want = "1"
+							}
+							require.Equal(t, want+"."+strings.Repeat("0", scale), got)
+						}
+					})
+				}
+			}
+		}
+	})
+}
+
 func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)

@@ -119,48 +119,94 @@ func preparedCommonValueDomain(ctx context.Context, args []*Expr) (peers []*Expr
 	return peers, allowed
 }
 
-// Run before the owning common-value overload. Only unresolved result
-// children inherit a peer; parameter conversion and precision/overflow policy
-// remain in the existing fixed-DECIMAL numeric-prefix binder.
-func bindPreparedCommonValueResultArguments(ctx context.Context, args []*Expr, inherited []*Expr) ([]*Expr, error) {
+// Collect only unresolved result roles. A resolved child or an explicit
+// boundary owns its domain; IFNULL's control condition is never a witness.
+func preparedCommonValueMarkers(ctx context.Context, args []*Expr) ([]*Expr, bool) {
+	state := preparedBindingState(ctx)
+	var markers []*Expr
+	nested := false
+	for _, arg := range args {
+		source := preparedCommonValueSource(arg)
+		if source == nil {
+			continue
+		}
+		if ref := source.GetP(); ref != nil {
+			pos := int(ref.Pos)
+			binding, found := state.bindingForPosition(ref.Pos)
+			if !found || pos < 0 || pos >= len(state.values) ||
+				(binding.Type.Oid != types.T_any && !binding.Type.Oid.IsMySQLString()) {
+				continue
+			}
+			if param, ok := state.values[pos].(ParamValue); ok && param.EnableNumericPrefix {
+				markers = append(markers, source)
+			}
+			continue
+		}
+		if results := preparedCommonValueResultArgs(source); results != nil {
+			peers, allowed := preparedCommonValueDomain(ctx, results)
+			if allowed && len(peers) == 0 {
+				childMarkers, _ := preparedCommonValueMarkers(ctx, results)
+				markers = append(markers, childMarkers...)
+				nested = nested || len(childMarkers) != 0
+			}
+		}
+	}
+	return markers, nested
+}
+
+// Bind one complete inference region before rebuilding its overloads. Runtime
+// marker scales may be rounded by the existing policy, unlike fixed peer scales.
+// Only executable casts are inherited; witnesses never become extra operands.
+func bindPreparedCommonValueResultArguments(ctx context.Context, args []*Expr, inherited map[int32]*Expr) ([]*Expr, error) {
 	if preparedBindingState(ctx) == nil {
 		return args, nil
 	}
-	peers, allowed := preparedCommonValueDomain(ctx, args)
-	if !allowed {
-		return args, nil
-	}
-	if len(peers) == 0 {
-		peers = inherited
-	}
-	hasDecimal := false
-	for _, peer := range peers {
-		hasDecimal = hasDecimal || types.T(peer.Typ.Id).IsDecimal()
-	}
-	if !hasDecimal {
-		return args, nil
+	applyMarkers := inherited != nil
+	if inherited == nil {
+		peers, allowed := preparedCommonValueDomain(ctx, args)
+		if !allowed {
+			return args, nil
+		}
+		hasDecimal := false
+		for _, peer := range peers {
+			hasDecimal = hasDecimal || types.T(peer.Typ.Id).IsDecimal()
+		}
+		if !hasDecimal {
+			return args, nil
+		}
+		markers, nested := preparedCommonValueMarkers(ctx, args)
+		if !nested {
+			// Direct operands keep the existing spelling-sensitive inference
+			// gate (for example, a spelling with no numeric prefix stays text).
+			return args, nil
+		}
+		var err error
+		inherited, err = bindPreparedCommonValueContextMarkers(ctx, markers, peers)
+		if err != nil {
+			return nil, err
+		}
+		if len(inherited) == 0 {
+			return args, nil
+		}
 	}
 	bound := append([]*Expr(nil), args...)
 	for i, arg := range args {
 		source := preparedCommonValueSource(arg)
-		results := preparedCommonValueResultArgs(source)
-		if results == nil {
-			if inherited != nil && source.GetP() != nil {
-				// The peer is a type witness only. Never retain it as an extra
-				// executable operand of the nested call.
-				converted, err := bindPreparedCommonValueContextMarker(ctx, source, peers)
-				if err != nil {
-					return nil, err
-				}
+		if ref := source.GetP(); ref != nil {
+			if converted, ok := inherited[ref.Pos]; ok && applyMarkers {
 				bound[i] = converted
 			}
+			continue
+		}
+		results := preparedCommonValueResultArgs(source)
+		if results == nil {
 			continue
 		}
 		childPeers, childAllowed := preparedCommonValueDomain(ctx, results)
 		if !childAllowed || len(childPeers) != 0 {
 			continue
 		}
-		childArgs, err := bindPreparedCommonValueResultArguments(ctx, results, peers)
+		childArgs, err := bindPreparedCommonValueResultArguments(ctx, results, inherited)
 		if err != nil {
 			return nil, err
 		}
@@ -181,36 +227,35 @@ func bindPreparedCommonValueResultArguments(ctx context.Context, args []*Expr, i
 	return bound, nil
 }
 
-func bindPreparedCommonValueContextMarker(ctx context.Context, source *Expr, peers []*Expr) (*Expr, error) {
-	state := preparedBindingState(ctx)
-	pos := int(source.GetP().Pos)
-	if pos < 0 || pos >= len(state.values) {
-		return source, nil
+func bindPreparedCommonValueContextMarkers(ctx context.Context, markers, peers []*Expr) (map[int32]*Expr, error) {
+	if len(markers) == 0 {
+		return nil, nil
 	}
-	param, ok := state.values[pos].(ParamValue)
-	if !ok || !param.EnableNumericPrefix {
-		return source, nil
-	}
-	value, present := preparedConfigurationValue(ctx, source)
-	if !present {
-		return source, nil
-	}
-	witness := makePlan2StringConstExprWithType(fmt.Sprint(value))
-	if value == nil {
-		witness = makePlan2NullConstExprWithType()
-	}
-	// All inherited peers prove the conversion contract, including every
-	// fixed scale that the existing overflow guard must preserve. They are
-	// type witnesses only; no extra operand escapes into the executable child.
-	args := append([]*Expr{source}, peers...)
-	witnesses := append([]*Expr{witness}, peers...)
+	args := append(append([]*Expr(nil), markers...), peers...)
+	witnesses := append([]*Expr(nil), args...)
 	prefixArgs := make([]bool, len(args))
 	prefixKinds := make([]types.StringConversionKind, len(args))
-	prefixArgs[0], prefixKinds[0] = true, param.PrepareParamKind
+	state := preparedBindingState(ctx)
+	for i, source := range markers {
+		param := state.values[source.GetP().Pos].(ParamValue)
+		value, present := preparedConfigurationValue(ctx, source)
+		if !present {
+			return nil, nil
+		}
+		witnesses[i] = makePlan2StringConstExprWithType(fmt.Sprint(value))
+		if value == nil {
+			witnesses[i] = makePlan2NullConstExprWithType()
+		}
+		prefixArgs[i], prefixKinds[i] = true, param.PrepareParamKind
+	}
 	converted, _, err := preparedNumericPrefixArgs(ctx, "coalesce", args, witnesses,
 		prefixArgs, prefixKinds, nil, nil, true)
 	if err != nil {
 		return nil, err
 	}
-	return converted[0], nil
+	bound := make(map[int32]*Expr, len(markers))
+	for i, marker := range markers {
+		bound[marker.GetP().Pos] = converted[i]
+	}
+	return bound, nil
 }
