@@ -147,10 +147,10 @@ DROP DATABASE IF EXISTS regexp_utf8_test;
 CREATE DATABASE regexp_utf8_test;
 USE regexp_utf8_test;
 DROP TABLE IF EXISTS t_regexp_utf8;
-CREATE TABLE t_regexp_utf8(id INT PRIMARY KEY, s VARCHAR(40), vb VARBINARY(6), bl BLOB);
+CREATE TABLE t_regexp_utf8(id INT PRIMARY KEY, s VARCHAR(40), vb VARBINARY(6), bl BLOB, b BINARY(6));
 INSERT INTO t_regexp_utf8 VALUES
-    (1, '甲😀乙😀丙', _binary'中中', _binary'中中'),
-    (2, 'ASCII', _binary'ASCII', _binary'ASCII');
+    (1, '甲😀乙😀丙', _binary'中中', _binary'中中', _binary'中中'),
+    (2, 'ASCII', _binary'ASCII', _binary'ASCII', _binary'ASCII');
 SELECT id, REGEXP_INSTR(s, '😀', 3, 1, 0) AS pos FROM t_regexp_utf8 ORDER BY id;
 SELECT id, REGEXP_REPLACE(s, '😀', 'X', 3, 0) AS replaced FROM t_regexp_utf8 ORDER BY id;
 SELECT ORD(vb) AS vb_ord, ORD(bl) AS blob_ord,
@@ -160,11 +160,46 @@ SELECT ORD(vb) AS vb_ord, ORD(bl) AS blob_ord,
        HEX(REGEXP_REPLACE(bl, CAST(_binary'中' AS BINARY(3)), _binary'X', 2, 1)) AS blob_replace
 FROM t_regexp_utf8 WHERE id = 1;
 
-# BINARY and BLOB select byte matching but, unlike VARBINARY, do not trigger
-# MySQL error 3995 when paired with a text operand.
+# Physical BINARY and BLOB columns remain compatible with text. An explicit
+# binary cast instead owns a static binary VARCHAR domain and triggers 3995.
 SELECT REGEXP_INSTR(bl, '中', 2) AS blob_text_pos,
-       REGEXP_INSTR(CAST(_binary'中中' AS BINARY(6)), '中', 2) AS binary_text_pos
+       REGEXP_INSTR(b, '中', 2) AS binary_text_pos
 FROM t_regexp_utf8 WHERE id = 1;
+SELECT REGEXP_INSTR(CAST(b AS BINARY(6)), '中', 2) FROM t_regexp_utf8 WHERE id = 1;
+
+# Static incompatibility is checked before NULL propagation or implicit casts.
+SELECT CAST(NULL AS BINARY) REGEXP 'a';
+SELECT 'abc' NOT REGEXP CAST(NULL AS BINARY(1));
+SELECT REGEXP_LIKE(CAST(NULL AS BINARY), 'a');
+SELECT REGEXP_INSTR('abc', CAST(NULL AS BINARY));
+SELECT REGEXP_SUBSTR(CAST(NULL AS BINARY), 'a');
+SELECT REGEXP_REPLACE('abc', 'a', CAST(NULL AS BINARY));
+SELECT CAST('abc' AS BINARY) REGEXP 'a';
+SELECT 'abc' REGEXP CAST('a' AS BINARY(1));
+SELECT REGEXP_LIKE(CAST('abc' AS BINARY(3)), 'a');
+SELECT REGEXP_INSTR('abc', CAST('b' AS BINARY));
+SELECT REGEXP_SUBSTR(CAST('abc' AS BINARY), 'a');
+SELECT REGEXP_REPLACE(CAST('abc' AS BINARY), 'a', 'X');
+
+# Ordinary NULL and homogeneous binary operands retain their existing behavior.
+SELECT NULL REGEXP 'a' AS untyped_null,
+       CAST(NULL AS BINARY) REGEXP _binary'a' AS typed_binary_null,
+       CAST('abc' AS BINARY(3)) REGEXP _binary'a' AS binary_match,
+       HEX(REGEXP_SUBSTR(CAST('你好' AS BINARY), _binary'.')) AS binary_first_byte,
+       HEX(REGEXP_SUBSTR('你好', '.')) AS text_first_character;
+
+# Explicit casts own the domain even when their input is a parameter marker.
+PREPARE regexp_binary_cast_rejected FROM 'SELECT REGEXP_INSTR(CAST(? AS BINARY), ''a'')';
+PREPARE regexp_binary_cast_rebind FROM 'SELECT HEX(REGEXP_SUBSTR(CAST(? AS BINARY), _binary''.'')) AS first_byte';
+SET @regexp_binary_cast_subject = _binary'你好';
+EXECUTE regexp_binary_cast_rebind USING @regexp_binary_cast_subject;
+SET @regexp_binary_cast_subject = '你好';
+EXECUTE regexp_binary_cast_rebind USING @regexp_binary_cast_subject;
+SET @regexp_binary_cast_subject = NULL;
+EXECUTE regexp_binary_cast_rebind USING @regexp_binary_cast_subject;
+SET @regexp_binary_cast_subject = _binary'abc';
+EXECUTE regexp_binary_cast_rebind USING @regexp_binary_cast_subject;
+DEALLOCATE PREPARE regexp_binary_cast_rebind;
 
 # SQL prepared parameters must be rebound from their current string domain on
 # every execution; binary -> text -> binary must not retain stale metadata.

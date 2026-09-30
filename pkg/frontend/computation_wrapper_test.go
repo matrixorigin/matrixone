@@ -1099,6 +1099,18 @@ func TestBuildPlanRegexpStaticStringDomainMatrix(t *testing.T) {
 		"select regexp_substr(_binary'abc123', '[0-9]+')",
 		"select regexp_replace(_binary'abc123', _binary'[0-9]+', 'X')",
 		"select regexp_replace('abc123', '[0-9]+', _binary'X')",
+		"select cast(null as binary) regexp 'a'",
+		"select 'a' not regexp cast(null as binary(3))",
+		"select regexp_like(cast(null as binary), 'a')",
+		"select regexp_instr('abc', cast(null as binary))",
+		"select regexp_substr(cast(null as binary), 'a')",
+		"select regexp_replace('abc', 'a', cast(null as binary))",
+		"select cast('abc' as binary) regexp 'a'",
+		"select 'abc' regexp cast('a' as binary(1))",
+		"select regexp_like(cast('abc' as binary(3)), 'a')",
+		"select regexp_instr('abc', cast('b' as binary))",
+		"select regexp_substr(cast('abc' as binary), 'a')",
+		"select regexp_replace(cast('abc' as binary), 'a', 'X')",
 	} {
 		t.Run(sql, func(t *testing.T) {
 			statements, err := mysql.Parse(ctx, sql, 1)
@@ -1116,7 +1128,10 @@ func TestBuildPlanRegexpStaticStringDomainMatrix(t *testing.T) {
 		"select _binary'abc' regexp _binary'a'",
 		"select regexp_like(null, 'a')",
 		"select regexp_instr(123, _binary'2')",
-		"select cast(null as binary) regexp 'a'",
+		"select cast(null as binary) regexp _binary'a'",
+		"select cast('abc' as binary(3)) regexp _binary'a'",
+		"select regexp_substr(_binary'abc', cast('a' as binary))",
+		"select regexp_replace(cast('abc' as binary), _binary'a', _binary'X')",
 	} {
 		t.Run("accepted_"+sql, func(t *testing.T) {
 			statements, err := mysql.Parse(ctx, sql, 1)
@@ -1146,6 +1161,9 @@ func TestBuildPlanRegexpDefersOnlyRuntimeStringDomains(t *testing.T) {
 	}
 
 	for _, sql := range []string{
+		"select regexp_instr(cast(? as binary), 'a')",
+		"select regexp_instr('abc', cast(? as binary(1)))",
+		"select regexp_replace('abc', 'a', cast(? as binary))",
 		"select regexp_instr(cast(? as char), cast(_binary'中' as varbinary(3)), 2)",
 		"select regexp_instr(hex(?), cast(_binary'中' as varbinary(3)), 2)",
 		"select regexp_instr(concat(hex(?), ''), cast(_binary'中' as varbinary(3)), 2)",
@@ -1267,9 +1285,10 @@ func TestPreparedRegexpTypedNullRetainsStaticDomainAtExecuteRebind(t *testing.T)
 			value: plan2.ParamValue{Value: "a", IsBinaryProtocol: true},
 		},
 		{
-			name:  "binary null with text direct marker",
-			query: "select regexp_instr(cast(NULL as binary), ?)",
-			value: plan2.ParamValue{Value: "a", IsBinaryProtocol: true},
+			name:    "binary null with text direct marker",
+			query:   "select regexp_instr(cast(NULL as binary), ?)",
+			value:   plan2.ParamValue{Value: "a", IsBinaryProtocol: true},
+			wantErr: true,
 		},
 		{
 			name:  "binary null with binary direct marker",

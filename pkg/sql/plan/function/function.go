@@ -187,6 +187,9 @@ const (
 	StringDomainCheckParamMarker
 	// StringDomainCheckDomainless omits a bare, untyped NULL literal.
 	StringDomainCheckDomainless
+	// StringDomainCheckBinaryCast makes CAST AS BINARY a static binary VARCHAR
+	// trigger, unlike a physical BINARY column. Its execution type is unchanged.
+	StringDomainCheckBinaryCast
 )
 
 // GetFunctionByNameWithStringDomainCheckModes resolves a function while

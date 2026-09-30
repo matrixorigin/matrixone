@@ -1256,6 +1256,7 @@ func TestRegexpFunctionsHonorStringDomainCheckModes(t *testing.T) {
 	ctx := context.Background()
 	text := types.T_text.ToType()
 	binary := types.T_varbinary.ToType()
+	fixedBinary := types.T_binary.ToType()
 
 	resolved, err := GetFunctionByNameWithStringDomainCheckModes(
 		ctx, "regexp_substr", []types.Type{text, binary},
@@ -1294,6 +1295,36 @@ func TestRegexpFunctionsHonorStringDomainCheckModes(t *testing.T) {
 		modes     []StringDomainCheckMode
 		wantError bool
 	}{
+		{
+			name: "binary cast triggers against fixed text",
+			args: []types.Type{fixedBinary, text},
+			modes: []StringDomainCheckMode{
+				StringDomainCheckBinaryCast, StringDomainCheckKnown,
+			},
+			wantError: true,
+		},
+		{
+			name: "binary cast pattern triggers against fixed text",
+			args: []types.Type{text, fixedBinary},
+			modes: []StringDomainCheckMode{
+				StringDomainCheckKnown, StringDomainCheckBinaryCast,
+			},
+			wantError: true,
+		},
+		{
+			name: "physical binary field remains compatible with text",
+			args: []types.Type{fixedBinary, text},
+			modes: []StringDomainCheckMode{
+				StringDomainCheckKnown, StringDomainCheckKnown,
+			},
+		},
+		{
+			name: "binary cast remains compatible with binary marker",
+			args: []types.Type{fixedBinary, binary},
+			modes: []StringDomainCheckMode{
+				StringDomainCheckBinaryCast, StringDomainCheckParamMarker,
+			},
+		},
 		{
 			name: "binary marker does not trigger against fixed text",
 			args: []types.Type{binary, text},

@@ -5637,6 +5637,24 @@ func preparedRegexpStringDomainCheckModes(
 	return modes
 }
 
+// regexpBinaryCastOperand distinguishes expression-owned binary casts from
+// physical BINARY fields without changing their padding, width, or result type.
+// Constant folding may replace a cast with a typed literal; parameter literals
+// instead retain their marker/variable source and must keep that exception.
+func regexpBinaryCastOperand(expr *Expr) bool {
+	if expr == nil || types.T(expr.Typ.Id) != types.T_binary {
+		return false
+	}
+	if lit := expr.GetLit(); lit != nil {
+		if lit.Src != nil {
+			return regexpBinaryCastOperand(lit.Src)
+		}
+		source := types.StringSource(lit.GetStringSource())
+		return source == types.StringSourceExpression || source == types.StringSourceLiteral
+	}
+	return isExplicitPreparedCast(expr)
+}
+
 func (b *baseBinder) markPreparedStringDomainSubquerySources(name string, args []*Expr) {
 	stringOperands := preparedRegexpCompatibilityStringOperandCount(name, len(args))
 	for i := 0; i < stringOperands; i++ {
@@ -7147,6 +7165,16 @@ func bindFuncExprImplByPlanExpr(
 		} else {
 			stringDomainModes = preparedRegexpStringDomainCheckModes(name, args)
 		}
+	}
+	for i := 0; i < preparedRegexpCompatibilityStringOperandCount(name, len(args)); i++ {
+		if !regexpBinaryCastOperand(args[i]) ||
+			(stringDomainModes != nil && stringDomainModes[i] != function.StringDomainCheckKnown) {
+			continue
+		}
+		if stringDomainModes == nil {
+			stringDomainModes = make([]function.StringDomainCheckMode, len(args))
+		}
+		stringDomainModes[i] = function.StringDomainCheckBinaryCast
 	}
 	if stringDomainModes != nil {
 		fGet, err = function.GetFunctionByNameWithStringDomainCheckModes(

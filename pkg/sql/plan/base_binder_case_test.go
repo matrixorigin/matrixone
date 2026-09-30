@@ -332,6 +332,53 @@ func TestPreparedBitCountDefaultsToBinaryAndSpecializesNumericValues(t *testing.
 	require.Equal(t, int32(13), overload)
 }
 
+func TestRegexpBinaryCastOperand(t *testing.T) {
+	binaryType := planpb.Type{Id: int32(types.T_binary), Width: 3}
+	cast := func(explicit bool) *Expr {
+		return &Expr{Typ: binaryType, Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{ObjName: "cast"}, SyntaxExplicitCast: explicit,
+		}}}
+	}
+	literal := func(source *Expr) *Expr {
+		return &Expr{Typ: binaryType, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+			Isnull: true, Src: source,
+		}}}
+	}
+	runtimeLiteral := func(source types.StringSource) *Expr {
+		expr := literal(nil)
+		expr.GetLit().StringSource = uint32(source)
+		return expr
+	}
+	for _, tc := range []struct {
+		name string
+		expr *Expr
+		want bool
+	}{
+		{name: "nil"},
+		{name: "literal source", expr: runtimeLiteral(types.StringSourceLiteral), want: true},
+		{name: "user variable without source expression", expr: runtimeLiteral(types.StringSourceUserVariable)},
+		{name: "SQL parameter without source expression", expr: runtimeLiteral(types.StringSourceSQLPrepare)},
+		{name: "protocol parameter without source expression", expr: runtimeLiteral(types.StringSourceCOMStmt)},
+		{name: "text literal", expr: makePlan2StringConstExprWithType("a")},
+		{name: "physical field", expr: &Expr{Typ: binaryType, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}},
+		{name: "explicit binary cast", expr: cast(true), want: true},
+		{name: "implicit cast", expr: cast(false)},
+		{name: "folded typed null", expr: literal(nil), want: true},
+		{name: "folded cast source", expr: literal(cast(true)), want: true},
+		{name: "marker source", expr: literal(&Expr{Typ: binaryType, Expr: &planpb.Expr_P{P: &planpb.ParamRef{}}})},
+		{name: "variable source", expr: literal(&Expr{Typ: binaryType, Expr: &planpb.Expr_V{V: &planpb.VarRef{}}})},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, regexpBinaryCastOperand(tc.expr))
+			if tc.want {
+				_, err := BindFuncExprImplByPlanExpr(context.Background(), "reg_match",
+					[]*Expr{tc.expr, makePlan2StringConstExprWithType("a")})
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrCharacterSetMismatch), err)
+			}
+		})
+	}
+}
+
 func TestPreparedRegexpResultDomainTransferUsesOnlyMatchOperands(t *testing.T) {
 	textType := types.T_text.ToType()
 	binaryType := types.T_varbinary.ToType()
