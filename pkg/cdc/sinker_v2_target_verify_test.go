@@ -311,11 +311,11 @@ func TestCDCTargetIdentityAdmissionAndGuard(t *testing.T) {
 		require.NoError(t, err)
 		defer db.Close()
 		mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = ? AND table_name = ? AND table_type = 'BASE TABLE'")).
-			WithArgs("db", "t").WillReturnError(driver.ErrBadConn)
+			WithArgs("db", "t").WillReturnError(errors.New("catalog query failed"))
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)
 		_, err = observeCDCTargetIdentity(ctx, conn, CDCSinkType_MO, "db", "t")
-		require.Error(t, err)
+		require.ErrorContains(t, err, "catalog query failed")
 		require.NoError(t, conn.Close())
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
