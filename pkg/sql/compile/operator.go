@@ -868,7 +868,7 @@ func constructFuzzyFilter(node, tableScan, sinkScan *plan.Node) *fuzzyfilter.Fuz
 	return op
 }
 
-func constructPreInsert(qry *plan.Query, node *plan.Node, eng engine.Engine, proc *process.Process) (*preinsert.PreInsert, error) {
+func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, proc *process.Process) (*preinsert.PreInsert, error) {
 	preCtx := node.PreInsertCtx
 	if err := incrservice.CheckAutoIDCache(proc.Ctx, proc.GetService(), preCtx.TableDef.GetAutoIdCache()); err != nil {
 		return nil, err
@@ -919,8 +919,8 @@ func constructPreInsert(qry *plan.Query, node *plan.Node, eng engine.Engine, pro
 	op.IsOldUpdate = preCtx.IsOldUpdate
 	op.IsNewUpdate = preCtx.IsNewUpdate
 	op.EstimatedRowCount = 0
-	if preCtx.HasAutoCol {
-		op.EstimatedRowCount = estimatedAutoIncrementRows(qry, node.Children[0])
+	if preCtx.HasAutoCol && nodes[node.Children[0]].Stats != nil {
+		op.EstimatedRowCount = plan2.EstimatedRowsInt64(nodes[node.Children[0]].Stats.Outcnt)
 	}
 	op.CompPkeyExpr = preCtx.CompPkeyExpr
 	op.ClusterByExpr = preCtx.ClusterByExpr
@@ -3493,41 +3493,4 @@ func mapCloneAutoIncrColumns(src, dst *plan.TableDef, sameColumnIDSpace bool) ma
 		}
 	}
 	return result
-}
-
-// Invalid or unbounded source estimates disable speculative ID allocation;
-// actual batch demand still allocates normally, including scalar aggregates.
-func estimatedAutoIncrementRows(qry *plan.Query, nodeID int32) int64 {
-	nodes := qry.Nodes
-	node := nodes[nodeID]
-	if node.Stats == nil || node.Stats.Outcnt >= float64(math.MaxInt64) || math.IsNaN(node.Stats.Outcnt) {
-		return 0
-	}
-	visited := make([]bool, len(nodes))
-	var bounded func(int32) bool
-	bounded = func(id int32) bool {
-		if visited[id] {
-			return true
-		}
-		visited[id] = true
-		n := nodes[id]
-		if n.Stats != nil && (n.Stats.TableCnt >= float64(math.MaxInt64) || n.Stats.Outcnt >= float64(math.MaxInt64)) {
-			return false
-		}
-		for _, child := range n.Children {
-			if !bounded(child) {
-				return false
-			}
-		}
-		for _, step := range n.SourceStep {
-			if !bounded(qry.Steps[step]) {
-				return false
-			}
-		}
-		return true
-	}
-	if !bounded(nodeID) {
-		return 0
-	}
-	return plan2.EstimatedRowsInt64(node.Stats.Outcnt)
 }

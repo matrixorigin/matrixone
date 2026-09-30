@@ -303,6 +303,36 @@ func transientTableStats(published *pb.StatsInfo, rows float64) *pb.StatsInfo {
 	var stats pb.StatsInfo
 	if published != nil {
 		stats = *published
+		validCounts := published.TableCnt > 0 && !math.IsInf(published.TableCnt, 0) &&
+			!math.IsNaN(published.TableCnt) && rows > 0 && !math.IsInf(rows, 0) && !math.IsNaN(rows)
+		if len(published.SizeMap) != 0 && (rows > published.TableCnt || !validCounts) {
+			// SizeMap contains total bytes, so a changed row denominator must
+			// retain the observed average width. Only transient growth copies
+			// this map; completed read-only statistics keep their fast owner.
+			stats.SizeMap = nil
+			if validCounts {
+				sizes := make(map[string]uint64, len(published.SizeMap))
+				var sum uint64
+				for name, total := range published.SizeMap {
+					width := float64(total) / published.TableCnt
+					scaled := math.Ceil(width * rows)
+					if scaled >= float64(math.MaxUint64) || math.IsNaN(scaled) {
+						// An unrepresentable total must use the existing incomplete
+						// width model, rather than expose a partial/shrunken map.
+						sizes = nil
+						break
+					}
+					bytes := uint64(scaled)
+					if float64(bytes)/rows < width || bytes > math.MaxUint64-sum {
+						sizes = nil
+						break
+					}
+					sum += bytes
+					sizes[name] = bytes
+				}
+				stats.SizeMap = sizes
+			}
+		}
 	}
 	stats.TableName = ""
 	stats.TableCnt = rows
@@ -314,7 +344,7 @@ func partitionRowEstimate(part *logtailreplay.PartitionState, snapshot types.TS)
 	if part.ApproxDataObjectsNum() == 0 {
 		return rows, nil
 	}
-	iter, err := part.NewObjectsIter(snapshot, false, false)
+	iter, err := part.NewObjectsIter(snapshot, true, false)
 	if err != nil {
 		return 0, err
 	}
@@ -322,9 +352,10 @@ func partitionRowEstimate(part *logtailreplay.PartitionState, snapshot types.TS)
 	for iter.Next() {
 		obj := iter.Entry()
 		objectRows := obj.Rows()
-		if obj.GetAppendable() || objectRows == 0 {
-			// Growing or incomplete objects cannot contribute a zero/partial
-			// bound. ObjectStats represents each object's row count as uint32.
+		if (obj.GetAppendable() && obj.DeleteTime.IsEmpty()) || objectRows == 0 {
+			// Deleted appendable objects are sealed; their recorded rows bound
+			// historical snapshots. Only growing/incomplete objects need the
+			// structural uint32 capacity instead of a zero/partial bound.
 			objectRows = math.MaxUint32
 		}
 		rows += float64(objectRows)

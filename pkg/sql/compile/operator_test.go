@@ -1936,31 +1936,29 @@ func TestDupOperatorApplyPreservesFulltextReferences(t *testing.T) {
 	require.Equal(t, tableFunction.FulltextIndexRef, dup.TableFunction.FulltextIndexRef)
 }
 
-func TestEstimatedAutoIncrementRows(t *testing.T) {
-	nodes := []*plan.Node{
-		{NodeType: plan.Node_TABLE_SCAN, Stats: &plan.Stats{TableCnt: 5, Outcnt: 5}},
-		{NodeType: plan.Node_AGG, Children: []int32{0}, Stats: &plan.Stats{Outcnt: 1}},
-		{NodeType: plan.Node_PROJECT, Children: []int32{1}, Stats: &plan.Stats{Outcnt: 1}},
+func TestPreInsertEstimatedRowsAreOnlyBoundedPrefetchHints(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		name  string
+		auto  bool
+		stats *plan.Stats
+		want  int64
+	}{
+		{"finite", true, &plan.Stats{Outcnt: 5}, 5},
+		{"finite_conservative_bound", true, &plan.Stats{Outcnt: math.MaxUint32}, math.MaxUint32},
+		{"saturating", true, &plan.Stats{Outcnt: float64(math.MaxUint64)}, math.MaxInt64},
+		{"nan", true, &plan.Stats{Outcnt: math.NaN()}, 0},
+		{"missing", true, nil, 0},
+		{"no_auto", false, &plan.Stats{Outcnt: 5}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			child := &plan.Node{Stats: tc.stats}
+			node := &plan.Node{Children: []int32{0}, PreInsertCtx: &plan.PreInsertCtx{
+				Ref: &plan.ObjectRef{}, TableDef: &plan.TableDef{}, HasAutoCol: tc.auto}}
+			op, err := constructPreInsert([]*plan.Node{child}, node, nil, proc)
+			require.NoError(t, err)
+			defer op.Release()
+			require.Equal(t, tc.want, op.EstimatedRowCount)
+		})
 	}
-	require.Equal(t, int64(5), estimatedAutoIncrementRows(&plan.Query{Nodes: nodes}, 0))
-	require.Equal(t, int64(1), estimatedAutoIncrementRows(&plan.Query{Nodes: nodes}, 2))
-	nodes[0].Stats.TableCnt = float64(^uint64(0))
-	nodes[0].Stats.Outcnt = float64(^uint64(0))
-	require.Zero(t, estimatedAutoIncrementRows(&plan.Query{Nodes: nodes}, 0))
-	require.Zero(t, estimatedAutoIncrementRows(&plan.Query{Nodes: nodes}, 2), "a scalar aggregate must not prefetch IDs for its unbounded source")
-	nodes = append(nodes, &plan.Node{NodeType: plan.Node_SINK_SCAN, SourceStep: []int32{0}, Stats: &plan.Stats{Outcnt: 1}})
-	require.Zero(t, estimatedAutoIncrementRows(&plan.Query{Nodes: nodes, Steps: []int32{2}}, 3),
-		"step-backed scalar aggregates must not hide their unbounded source")
-	nodes[0].Stats.TableCnt = 5
-	nodes[0].Stats.Outcnt = 5
-	require.Equal(t, int64(1), estimatedAutoIncrementRows(&plan.Query{Nodes: nodes}, 2), "ordinary finite generation recovers")
-	qry := &plan.Query{Nodes: nodes, Steps: []int32{2}}
-	require.Equal(t, int64(1), estimatedAutoIncrementRows(qry, 3), "finite step source recovers")
-	nodes[3].SourceStep = []int32{0, 0}
-	require.Equal(t, int64(1), estimatedAutoIncrementRows(qry, 3), "shared source is visited once")
-	nodes[3].NodeType = plan.Node_RECURSIVE_SCAN
-	nodes[2].Children = append(nodes[2].Children, 3)
-	require.Equal(t, int64(1), estimatedAutoIncrementRows(qry, 3), "recursive dependency terminates")
-	nodes[0].Stats.TableCnt = float64(^uint64(0))
-	require.Zero(t, estimatedAutoIncrementRows(qry, 3), "recursive dependency still rejects an unbounded source")
 }

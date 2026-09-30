@@ -2,11 +2,86 @@
 
 Scope: [PR #29527](https://github.com/matrixorigin/matrixone/pull/29527),
 issues #29497, #29533 and #29534. The selected design is
-[revision v6](20260930_cartesian_transient_stats.md).
-Base: `c2abd6a54b7cd3e13c1b1494388cd7a81b8369d4`.
+[revision v7](20260930_cartesian_transient_stats.md).
+Current main/base: `0d3687004d712e0878d63f2e848f69c5df5d1c0f`.
+Historical performance control: `c2abd6a54b7cd3e13c1b1494388cd7a81b8369d4`.
 The original PR head `f93762ed90e618f477a37ecee640ce8395c72d8e` is the regression control.
 Design and final review reuse GPT-6.1-sol / xhigh; the primary agent implements
 and runs adversarial QA. No exact row-count scan is added to planning.
+
+## Follow-up verification of the three reopened findings
+
+The previous delivery review at `aa83017933` was reopened by finite AUTO_INCREMENT
+prefetch, deleted appendable objects and inconsistent SizeMap denominators.
+All three have focused red/green evidence; the changes use their existing owners.
+
+- Default cache, 3 actual INT rows, finite 4.29B or near-MaxInt64 estimates:
+  durable reservation remains 10,000; a second independent allocator using the
+  same store successfully writes 10,001. A 9-row batch with a configured range
+  of 4 reserves its actual demand and the next allocator writes 14. No shared
+  preAllocate clamp changes real batches. The obsolete compiler graph DFS is
+  removed; the planner hint only uses the existing signed conversion.
+- Sealed appendable fixtures exercise snapshots before/equal/after deletion,
+  future objects and unknown zero-row metadata. Current visible object rows
+  remain small, while visible unknown metadata still fails closed. Public SQL
+  flushes the 5-row source, adds five own rows and plans/writes exactly 80 CROSS
+  rows, then verifies full content and rollback.
+- Width tests cover 5→10,005 rows, an 8 KiB observed payload, rounding/zero bytes,
+  invalid denominators, individual and summed uint64 overflow and immutable
+  published maps. Public wide-row growth retains rowsize=8200.00 rather than
+  shrinking its old byte totals across the new row denominator.
+- Real public SQL with a 4.29B estimate inserts only five INT AUTO_INCREMENT
+  rows. The persisted mo_increment_columns offset remains 10,000; after a full
+  owned service restart, a cold allocator successfully writes INT 10,001.
+- Current normal owning packages pass: incrservice, disttae, compile, plan and
+  frontend. Focused race passes for allocator and relation boundaries, and the
+  compiler constructor cases pass race. Incremental lint of all three changed
+  packages reports zero issues. One initial race link and lint run were stopped
+  after prolonged tool-stage inactivity; raw SIGQUIT diagnostics are retained.
+  Successful reruns bound tool GOMAXPROCS=2; no product change masks this event.
+- Fresh two-round controls versus clean base pass 36/36: cached SELECT and COUNT
+  are 1.00x, CROSS 1.00x, LIMIT0 1.03x; binary prepared is 0.465→0.413 ms.
+  The unrelated-500-write controls remain 0.93–1.04x. All four phases pass real
+  prepared growth, atomicity and rollback oracles and clean service teardown.
+- Dedicated AUTO_INCREMENT comparisons alternate pre-follow-up v2 and current
+  binary twice. Five-row writes are 9.293→9.114 ms (0.98x; rounds 1.30/0.94);
+  20,000-row writes crossing the normal allocation unit are 57.037→45.784 ms
+  (0.80x; rounds 0.83/0.79). Each phase has two warmups and nine timed samples,
+  with complete count/distinct-ID/sum/range checks outside timing. There is no
+  demonstrated repeated normal-path slowdown; timings are not universal bounds.
+
+Pre-integration follow-up binary SHA-256:
+`e1a2cb485edc0d83f4af4979d96223f86bcbea8760af8389d40f2e40d6c3ff91`.
+Its source starts at `aa83017933` plus the focused working changes. The only
+production change after that build is the allocator interface's documentation
+comment; the execution semantics match the tested binary. Original capacity,
+spill and BVT evidence below remains qualified evidence for their unchanged
+owners, not a claim that the original 300M workload was replayed after this fix.
+
+## Integration with the updated PR main
+
+The remote main merge `a8a24d7c30` is preserved, with current base
+`0d3687004d712e0878d63f2e848f69c5df5d1c0f`. Its default Sirius adapter
+uses the existing explicit offload gates and the untagged CN stub. No optional
+Sirius/GPU backend is claimed tested. The integrated default production build
+passes; binary SHA-256:
+`138b41b881b1db9879e7352aacde70020a354a0ec92e78de5e5ebe6a4f8c11a9`.
+
+All five owning packages pass on the integrated source: incrservice, disttae,
+compile, plan and frontend. The first GOMAXPROCS=2 compile run fails five
+file-fanout fixtures whose fixed three-scope assertions require
+at least three runtime execution slots; GOMAXPROCS=4 reruns the complete
+compile package successfully. No product or test code is changed to hide the
+configuration-dependent failure. Race and incremental lint evidence above
+cover the unchanged focused production owners.
+
+Public SQL is repeated on this binary with fresh logs: flush plus own writes
+plans and writes 80 rows with full content and rollback; wide growth retains
+8200-byte rows; finite 4.29B AUTO_INCREMENT estimates reserve only 10,000,
+and a full service restart writes INT 10,001. Both owned services exit cleanly
+and the catalog returns to seven databases. Historical matched performance
+controls above remain qualified measurements of the focused correction, not
+a performance comparison against the newer main merge.
 
 ## Contract and adversarial checks
 
@@ -21,7 +96,8 @@ borrowed plans. RIGHT SEMI preserves physical child 1 after swap.
 - Typed tests cover persisted object rows versus metadata-batch length, rollback,
   unrelated writes, mutex contention, snapshot cancellation, remote/combined
   incomplete observations, published-map immutability, integer overflow through
-  scan/AGG/shuffle, and auto-ID source-step traversal.
+  scan/AGG/shuffle. AUTO_INCREMENT persistence is now protected at the bounded
+  speculative allocation owner, not by traversing the source plan.
 - Both compiler contexts cover historical observations, named empty statistics,
   refresh within three seconds and own writes. Actual final-plan LIMIT 0 and
   COUNT models retain their established bypass. Prepared admission preserves
@@ -39,7 +115,7 @@ borrowed plans. RIGHT SEMI preserves physical child 1 after swap.
 - Normal BVT comparison passes 42/42 twice on the same instance; each teardown
   restores seven system databases. Test-owned services exit normally.
 
-## Performance
+## Initial v2 performance evidence
 
 Same native inputs, Go 1.26.4, one CN, local NVMe, 64 MiB query budget. Four
 sequential phases alternate clean base and candidate, twice each. Default,
@@ -80,7 +156,7 @@ for stale estimates. This tradeoff remains explicit; precision is not obtained b
 scanning tables or overriding the published statistics owner. Cold storage, S3,
 concurrent-load tails, multiple CNs and the original 300M rows were not benchmarked.
 
-## Validation and provenance
+## Initial v2 validation and provenance
 
 Production build and normal owning packages pass: plan, frontend, compile,
 disttae, plus upgrade. The four shared-admission owning packages also pass race;
@@ -91,7 +167,7 @@ clean-base molint diagnostics are identical (18 pre-existing findings).
 
 Baseline binary SHA-256:
 `50c8a5bf8ffba569e8beaca04fe0d5fe1dd4325d36ecaa3fc1c5448e6317ae15`.
-Candidate binary SHA-256:
+Initial v2 candidate binary SHA-256:
 `5a01f6a298af799e805c3ae432a07340a238e1b8c16f50a6095441275014cf27`.
 The candidate build records HEAD `9358b8f2a91e5b452ec8bdad25b0c9d3fd04dbba`
 and complete base-to-working-tree diff SHA-256

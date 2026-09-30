@@ -1,12 +1,15 @@
 # Transient optimizer statistics for Cartesian DML
 
-Design revision: v6, reviewed by GPT-6.1-sol / xhigh before implementation.
+Design revision: v7. The original v6 and the focused v7 corrections were reviewed
+by GPT-6.1-sol / xhigh before their respective implementations.
 Owning issues: [#29497](https://github.com/matrixorigin/matrixone/issues/29497),
 [#29533](https://github.com/matrixorigin/matrixone/issues/29533),
 [#29534](https://github.com/matrixorigin/matrixone/issues/29534).
 Implementation: [PR #29527](https://github.com/matrixorigin/matrixone/pull/29527).
 Evidence baseline: `f93762ed90e618f477a37ecee640ce8395c72d8e`;
-verified main/merge-base: `c2abd6a54b7cd3e13c1b1494388cd7a81b8369d4`.
+historical main comparison: `c2abd6a54b7cd3e13c1b1494388cd7a81b8369d4`.
+The follow-up preserves remote main integration `a8a24d7c30`; its current
+main/base is `0d3687004d712e0878d63f2e848f69c5df5d1c0f`.
 
 **Design decision: APPROVED FOR IMPLEMENTATION.** Delivery remains blocked on
 the listed correctness, capacity and performance evidence. Preserve Cartesian
@@ -46,14 +49,19 @@ existing execution owner; estimates are not a universal memory/accuracy guarante
 - Missing stats/no objects: positive ApproxInMemRows is existing O(1) row-tree Len,
   including versions/deletes; zero remains nil/default unless published evidence
   already proves empty. Do not fabricate completed TableName/object counts.
-- Missing stats with objects: sum retained object metadata rows plus memory Len,
-  O(objects), no row scan/I/O. Close iterator locally. Growing/unknown object
-  counts use the existing structural object-capacity bound, not zero/partial rows.
-  Include obsolete/history objects conservatively rather than promising exactness.
+- Missing stats with objects: sum snapshot-visible object metadata rows plus memory Len,
+  O(retained object metadata), no row scan/I/O. Use the existing iterator visibility
+  predicate and close it locally. Deleted appendable objects are sealed: use their
+  recorded rows for snapshots before deletion and exclude them at/after deletion.
+  Only truly growing or zero-row unknown metadata uses structural object capacity.
+  Future objects are excluded; memory Len remains a conservative version bound.
 - Preserve ordinary published statistics on the read-only path. For own writes,
   derive the committed bound and add the workspace estimate; returning only old
-  published 5 after 1.2M own INSERTs is not acceptable. Copy shared maps/metadata
-  immutably when useful; clear the transient copy's completion marker only.
+  published 5 after 1.2M own INSERTs is not acceptable. Borrow immutable published maps/metadata where valid; clear the transient
+  completion marker. SizeMap holds total bytes: growing TableCnt must copy/scale
+  it to preserve observed average widths. Invalid counts, unrepresentable totals,
+  rounded width decrease or summed-byte overflow clear the entire map, using
+  existing incomplete-width fallbacks. Same/decreasing valid counts borrow it.
 
 ## Precise workspace metadata and fail-closed unknown
 
@@ -84,10 +92,11 @@ existing execution owner; estimates are not a universal memory/accuracy guarante
   and keeps no-ON incoming estimates above ordinary shuffle admission.
 - Bound the integer consumers in the same closure: row-derived int32 block hints
   (AGG and scan/filter recalculation) saturate at maxInt32 before conversion/add;
-  int64 shuffle row hints cannot wrap negative. Estimated auto-ID prefetch must be
-  zero/disabled when source/derived cardinality is outside its integer domain,
-  including a derived AGG over an unknown leaf; retain actual-batch demand
-  allocation. Do not prefetch maxInt64 IDs. Float Cartesian output is not capped.
+  int64 shuffle row hints cannot wrap negative. AUTO_INCREMENT speculative prefetch must be bounded at its persistent
+  consumer: tableCache may trigger only the existing CountPerAllocate range,
+  regardless of a finite or saturated planner hint. Keep actual-batch prefetch
+  and synchronous demand allocation unchanged. Delete the obsolete compiler
+  source-graph DFS; safe signed hints need only the existing conversion helper. Float Cartesian output is not capped.
   Prove ordinary finite estimates unchanged and unknown->AGG/PROJECT/DEDUP/writer
   consumers with typed tests. This is required reachability, not a new issue.
 - Delegate/combined observations cannot claim a partial global sum. Preserve
@@ -163,3 +172,16 @@ Do not advance execution snapshotWriteOffset during planning or add admission
 hooks. Preserve readonly O(1), target-only INSERT metadata, TryLock fail-closed,
 rollback log removal, and persisted ObjectStats.Rows validation. The public red
 and expected 80-row green are required delivery evidence.
+
+Revision v7: focused review reopened the previous delivery PASS after three
+counterexamples at `aa83017933`: finite 4.29B-row bounds consumed durable ID
+ranges, deleted appendable metadata inflated flush-followed-by-write estimates,
+and old SizeMap totals divided by larger row counts shrank measured widths.
+The three local fixes use the existing allocator, visibility and width-model
+owners. No new RFC, precision scan, counter, confidence field or execution path
+is required. Add actual durable-offset/fresh-allocator INT writing and a batch
+larger than its configured cache, sealed-object snapshot boundary/unknown-zero
+metadata, growth-width immutability and numeric overflow checks. Public SQL must
+cover flush + own writes, wide-row growth, finite huge estimates and a cold
+allocator after service restart. Normal-path performance must be compared;
+read-only completed observations remain on the original fast owner.

@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -940,13 +941,16 @@ func TestWorkspaceInsertRowEstimate(t *testing.T) {
 
 func TestTransientTableStatsPreservePublishedOwner(t *testing.T) {
 	published := &pbstats.StatsInfo{TableName: "events", TableCnt: 5, AccurateObjectNumber: 1,
-		NdvMap: map[string]float64{"id": 5}, SizeMap: map[string]uint64{"id": 40}}
+		NdvMap: map[string]float64{"id": 5}, SizeMap: map[string]uint64{"id": 40, "payload": 40960}}
 	got := transientTableStats(published, 10005)
 	require.Equal(t, float64(10005), got.TableCnt)
 	require.Empty(t, got.TableName)
 	require.Equal(t, published.AccurateObjectNumber, got.AccurateObjectNumber)
 	require.Equal(t, published.NdvMap, got.NdvMap)
-	require.Equal(t, published.SizeMap, got.SizeMap)
+	require.Equal(t, map[string]uint64{"id": 80040, "payload": 81960960}, got.SizeMap)
+	require.Equal(t, float64(8192), float64(got.SizeMap["payload"])/got.TableCnt)
+	got.SizeMap["payload"] = 1
+	require.Equal(t, uint64(40960), published.SizeMap["payload"], "temporary byte estimates cannot mutate the published map")
 	require.Equal(t, "events", published.TableName)
 	require.Equal(t, float64(5), published.TableCnt, "workspace overlay cannot mutate committed Rows/Size statistics")
 	txn := newTransactionWithActivePKTableForTest(t, "pk")
@@ -1004,6 +1008,66 @@ func TestPartitionRowEstimate(t *testing.T) {
 	state.UpdateDuration(types.BuildTS(10, 0), types.MaxTs())
 	_, err = partitionRowEstimate(state, types.BuildTS(9, 0))
 	require.Error(t, err, "historical state must not be admitted as current statistics")
+}
+
+func TestPartitionRowEstimateAfterAppendableFlush(t *testing.T) {
+	state := logtailreplay.NewPartitionState("test", false, 42, false)
+	for i, spec := range []struct {
+		rows             uint32
+		appendable       bool
+		created, deleted int64
+	}{{5, true, 10, 20}, {5, false, 20, 0}, {7, false, 30, 0}, {0, true, 40, 50}} {
+		oid := types.NewObjectid()
+		stats := objectio.NewObjectStatsWithObjectID(&oid, spec.appendable, false, false)
+		require.NoError(t, objectio.SetObjectStatsRowCnt(stats, spec.rows))
+		require.NoError(t, objectio.SetObjectStatsSize(stats, 1))
+		require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 1))
+		entry := objectio.ObjectEntry{ObjectStats: *stats, CreateTime: types.BuildTS(spec.created, 0)}
+		if spec.deleted != 0 {
+			entry.DeleteTime = types.BuildTS(spec.deleted, 0)
+		}
+		require.NoError(t, state.HandleObjectEntry(context.Background(), nil, entry, false), i)
+	}
+	for _, snapshot := range []int64{15, 20, 25} {
+		rows, err := partitionRowEstimate(state, types.BuildTS(snapshot, 0))
+		require.NoError(t, err)
+		require.Equal(t, float64(5), rows, "sealed historical appendable objects must not inflate a five-row source")
+	}
+	rows, err := partitionRowEstimate(state, types.BuildTS(30, 0))
+	require.NoError(t, err)
+	require.Equal(t, float64(12), rows, "future objects become eligible only at their creation snapshot")
+	rows, err = partitionRowEstimate(state, types.BuildTS(45, 0))
+	require.NoError(t, err)
+	require.Equal(t, float64(12)+float64(math.MaxUint32), rows, "visible sealed metadata with unknown rows still fails closed")
+	rows, err = partitionRowEstimate(state, types.BuildTS(50, 0))
+	require.NoError(t, err)
+	require.Equal(t, float64(12), rows, "a deleted unknown object cannot inflate a later snapshot")
+
+}
+
+func TestTransientTableStatsByteBounds(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		oldRows, newRows float64
+		sizes, want      map[string]uint64
+	}{
+		{"round_up", 3, 5, map[string]uint64{"v": 2, "empty": 0}, map[string]uint64{"v": 4, "empty": 0}},
+		{"same", 5, 5, map[string]uint64{"v": 40960}, map[string]uint64{"v": 40960}},
+		{"smaller", 5, 3, map[string]uint64{"v": 40960}, map[string]uint64{"v": 40960}},
+		{"missing_denominator", 0, 5, map[string]uint64{"v": 1}, nil},
+		{"nan_denominator", math.NaN(), 5, map[string]uint64{"v": 1}, nil},
+		{"infinite_denominator", math.Inf(1), 5, map[string]uint64{"v": 1}, nil},
+		{"invalid_new_rows", 5, math.Inf(1), map[string]uint64{"v": 1}, nil},
+		{"individual_overflow", 5, 10, map[string]uint64{"v": math.MaxUint64, "small": 1}, nil},
+		{"sum_overflow", 5, 10, map[string]uint64{"a": math.MaxUint64 / 3, "b": math.MaxUint64 / 3}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			published := &pbstats.StatsInfo{TableCnt: tc.oldRows, SizeMap: tc.sizes}
+			got := transientTableStats(published, tc.newRows)
+			require.Equal(t, tc.want, got.SizeMap)
+			require.Equal(t, tc.sizes, published.SizeMap)
+		})
+	}
 }
 
 func TestWorkspaceEstimateUnderConcurrentWriter(t *testing.T) {
