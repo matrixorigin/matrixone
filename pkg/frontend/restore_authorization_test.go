@@ -119,6 +119,66 @@ func TestPartialRestoreRebindsOnlyCurrentScopedIDs(t *testing.T) {
 	require.ErrorIs(t, p.rebind(t.Context(), bh), failure)
 }
 
+func TestPartialRestoreKeepsUnchangedIdentities(t *testing.T) {
+	const databases = "select cast(dat_id as char), datname from mo_catalog.mo_database where account_id = 20 and datname = 'app'"
+	const tables = "select cast(coalesce(rel_logical_id, rel_id) as char), reldatabase, relname, relkind from mo_catalog.mo_tables where account_id = 20 and reldatabase = 'app'"
+	bh := &backgroundExecTest{}
+	bh.init()
+	bh.sql2result[databases] = newMrsForRestoreStringRows([]string{"id", "name"}, [][]interface{}{{"10", "app"}})
+	bh.sql2result[tables] = newMrsForRestoreStringRows([]string{"id", "db", "name", "kind"}, [][]interface{}{
+		{"100", "app", "t", catalog.SystemOrdinaryRel},
+		{"101", "app", "v", catalog.SystemViewRel},
+	})
+	p, err := capturePartialRestorePrivileges(t.Context(), bh, 20, "app", "")
+	require.NoError(t, err)
+	require.NoError(t, p.rebind(t.Context(), bh))
+	require.Equal(t, []string{databases, tables, databases, tables}, bh.executedSQLs)
+}
+
+func TestPartialRestorePropagatesCatalogReadFailures(t *testing.T) {
+	const databases = "select cast(dat_id as char), datname from mo_catalog.mo_database where account_id = 20 and datname = 'app'"
+	const tables = "select cast(coalesce(rel_logical_id, rel_id) as char), reldatabase, relname, relkind from mo_catalog.mo_tables where account_id = 20 and reldatabase = 'app'"
+	for _, tc := range []struct {
+		name   string
+		query  string
+		rebind bool
+	}{
+		{"capture databases", databases, false},
+		{"capture tables", tables, false},
+		{"rebind databases", databases, true},
+		{"rebind tables", tables, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			bh.sql2result[databases] = newMrsForRestoreStringRows([]string{"id", "name"}, [][]interface{}{{"10", "app"}})
+			bh.sql2result[tables] = newMrsForRestoreStringRows([]string{"id", "db", "name", "kind"}, [][]interface{}{
+				{"100", "app", "t", catalog.SystemOrdinaryRel},
+			})
+			var p *partialRestorePrivileges
+			if tc.rebind {
+				var err error
+				p, err = capturePartialRestorePrivileges(t.Context(), bh, 20, "app", "")
+				require.NoError(t, err)
+				bh.executedSQLs = nil
+			}
+			failure := errors.New("catalog read failed")
+			bh.sql2err[tc.query] = failure
+			if tc.rebind {
+				require.ErrorIs(t, p.rebind(t.Context(), bh), failure)
+			} else {
+				_, err := capturePartialRestorePrivileges(t.Context(), bh, 20, "app", "")
+				require.ErrorIs(t, err, failure)
+			}
+			expected := []string{databases}
+			if tc.query == tables {
+				expected = append(expected, tables)
+			}
+			require.Equal(t, expected, bh.executedSQLs)
+		})
+	}
+}
+
 func TestRestorePrincipalMapDoesNotReuseMissingIdentity(t *testing.T) {
 	bh := &backgroundExecTest{}
 	bh.init()
