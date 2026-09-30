@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -99,6 +100,22 @@ func (b *baseBinder) bindIntegerSourceAst(ast tree.Expr, depth int32, target typ
 	source, err := b.impl.BindExpr(ast, depth, false)
 	if err != nil {
 		return nil, err
+	}
+	if name == "char" && source.GetP() != nil && types.T(source.Typ.Id).IsMySQLString() &&
+		preparedBindingState(b.GetContext()) != nil {
+		if _, direct := unwrapParenExpr(ast).(*tree.ParamExpr); direct {
+			state := preparedBindingState(b.GetContext())
+			if int(source.GetP().Pos) < len(state.values) {
+				if param, ok := state.values[source.GetP().Pos].(ParamValue); ok && !param.IsBinaryProtocol {
+					if value, present := preparedConfigurationValue(b.GetContext(), source); present && value != nil {
+						source, err = preparedCharSourceCast(b.GetContext(), source, fmt.Sprint(value))
+						if err != nil {
+							return nil, err
+						}
+					}
+				}
+			}
+		}
 	}
 	source, err = b.integerArgumentStorageSource(source)
 	if err != nil {

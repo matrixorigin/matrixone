@@ -1205,7 +1205,7 @@ func concatWsCheck(overloads []overload, inputs []types.Type) checkResult {
 		shouldConvert := false
 
 		for i, t := range inputs {
-			if t.Oid.IsMySQLString() {
+			if t.Oid.IsMySQLString() || t.Oid == types.T_json {
 				ret[i] = t
 				continue
 			}
@@ -1244,6 +1244,10 @@ func ConcatWs(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 			}
 			continue
 		}
+		sp, err = concatStringValue(ivecs[0].GetType().Oid, sp)
+		if err != nil {
+			return err
+		}
 		allNull := true
 		canSp := false
 		var str string
@@ -1251,6 +1255,10 @@ func ConcatWs(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 			v, null := vecs[j].GetStrValue(i)
 			if null {
 				continue
+			}
+			v, err = concatStringValue(ivecs[j].GetType().Oid, v)
+			if err != nil {
+				return err
 			}
 			if canSp {
 				str += string(sp)

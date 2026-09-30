@@ -139,7 +139,9 @@ type Source struct {
 	FilterExpr      *plan.Expr   // todo: change this to []*plan.Expr,  is FilterList + RuntimeFilter
 	FilterList      []*plan.Expr //from node.FilterList, use for reader
 	BlockFilterList []*plan.Expr //from node.BlockFilterList, use for range
-	node            *plan.Node
+	// nil means not initialized; non-nil empty means this execution admitted no block filters.
+	remoteBlockFilters []*plan.Expr
+	node               *plan.Node
 	// vectorIndexScanTemplate retains the immutable prepared-plan expressions.
 	// Each execution folds a fresh copy into node.VectorIndexScan.
 	vectorIndexScanTemplate *plan.VectorIndexScan
