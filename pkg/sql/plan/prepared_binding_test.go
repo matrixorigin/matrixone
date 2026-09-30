@@ -823,7 +823,7 @@ func TestPreparedExecutionPlanMathPrecisionUsesSourceProvenance(t *testing.T) {
 	}
 }
 
-func TestPreparedExecutionPlanRoundTextUsesExactComStmtDomain(t *testing.T) {
+func TestPreparedExecutionPlanRoundTextUsesExactTextDomain(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		source     types.Type
@@ -841,11 +841,17 @@ func TestPreparedExecutionPlanRoundTextUsesExactComStmtDomain(t *testing.T) {
 			wantExact: true,
 		},
 		{
-			name:   "SQL EXECUTE proven VARCHAR keeps prefix domain",
+			name:   "SQL EXECUTE complete VARCHAR uses exact domain",
 			source: types.T_varchar.ToType(),
 			value: ParamValue{
 				Value: "1.5", SourceType: types.T_varchar.ToType(), HasSourceType: true,
 			},
+			wantExact: true,
+		},
+		{
+			name:   "unproven string source stays out of exact domain",
+			source: types.T_varchar.ToType(),
+			value: ParamValue{Value: "1.5"},
 			wantDouble: true,
 		},
 		{
@@ -855,6 +861,7 @@ func TestPreparedExecutionPlanRoundTextUsesExactComStmtDomain(t *testing.T) {
 				Value: "1.5", IsBinaryProtocol: true, IsBin: true,
 				RuntimeStringDomain: types.RuntimeStringText,
 			},
+			wantDouble: true,
 		},
 		{
 			name:   "COM_STMT binary runtime domain stays out of exact domain",
@@ -863,6 +870,7 @@ func TestPreparedExecutionPlanRoundTextUsesExactComStmtDomain(t *testing.T) {
 				Value: "1.5", IsBinaryProtocol: true,
 				RuntimeStringDomain: types.RuntimeStringBinary,
 			},
+			wantDouble: true,
 		},
 		{
 			name:   "COM_STMT VARBINARY source stays out of exact domain",
@@ -871,6 +879,25 @@ func TestPreparedExecutionPlanRoundTextUsesExactComStmtDomain(t *testing.T) {
 				Value: "1.5", IsBinaryProtocol: true,
 				RuntimeStringDomain: types.RuntimeStringBinary,
 			},
+			wantDouble: true,
+		},
+		{
+			name:   "COM_STMT binary-string metadata stays out of exact domain",
+			source: types.T_text.ToType(),
+			value: ParamValue{
+				Value: "1.5", IsBinaryProtocol: true, IsBinaryString: true,
+				RuntimeStringDomain: types.RuntimeStringText,
+			},
+			wantDouble: true,
+		},
+		{
+			name:   "SQL EXECUTE binary static source stays out of exact domain",
+			source: types.T_text.ToType(),
+			value: ParamValue{
+				Value: "1.5", SourceType: types.NewWithCharset(types.T_varchar, 8, 0, types.CharsetBinary),
+				HasSourceType: true,
+			},
+			wantDouble: true,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -908,6 +935,28 @@ func TestPreparedExecutionPlanRoundTextUsesExactComStmtDomain(t *testing.T) {
 			require.Equal(t, int32(types.T_int64), precisionArg.Typ.Id, precisionArg.String())
 		})
 	}
+}
+
+func TestPreparedExecutionPlanRoundScalarBinaryTextKeepsFallbackDomain(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select round((select ?), 0)", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
+		[]PreparedSourceBinding{{Position: 0, Type: types.T_text.ToType()}},
+		[]any{ParamValue{
+			Value: "2.5", IsBinaryProtocol: true, IsBinaryString: true,
+			RuntimeStringDomain: types.RuntimeStringText,
+		}},
+	)
+	require.NoError(t, err)
+	round := findPlanFunctionExpr(bound.Plan, "round")
+	require.NotNil(t, round)
+	require.Equal(t, int32(types.T_float64), round.GetF().Args[0].Typ.Id, round.String())
+	pos, ok := firstPlanParamPosition(round.GetF().Args[0])
+	require.True(t, ok, "binary source remains attached to the original marker")
+	require.Equal(t, int32(0), pos)
 }
 
 func TestPreparedBinarySourceKeepsRuntimeTextWidth(t *testing.T) {

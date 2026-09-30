@@ -32,6 +32,12 @@ new overload identity, or promise that older peers implement newer semantics.
   string numeric source. `ROUND`/`TRUNCATE` precision remains an `INT64` control
   input; `MOD` owns both operands. Numeric return type alone does not transfer
   ownership through string-domain or unknown functions.
+- For prepared `ROUND`/`TRUNCATE`, a complete ordinary text value binding may
+  select its exact numeric domain at the value argument. This applies to SQL
+  `EXECUTE` and COM_STMT text sources; binary bytes, binary static/runtime
+  domains, and unknown sources retain their existing coercion path. The
+  precision argument remains independent, and the cached expression keeps its
+  original parameter reference.
 - Implicit casts transparent to the same string value role preserve source
   provenance. SQL-authored explicit `CAST` is a semantic boundary.
 - `NULL` remains `NULL`; masked and unevaluated rows do not cause conversion
