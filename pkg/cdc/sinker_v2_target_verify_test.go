@@ -108,6 +108,19 @@ func TestCDCTargetIdentityAdmissionAndGuard(t *testing.T) {
 		}
 	})
 
+	t.Run("capability reports engine query failure", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT @@default_storage_engine")).
+			WillReturnError(errors.New("engine query failed"))
+		require.ErrorContains(t, checkMySQLTargetIdentityCapability(ctx, conn, "db", "t", true), "engine query failed")
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
 	t.Run("capability reports identity row scan and close errors", func(t *testing.T) {
 		for _, tc := range []struct {
 			name string
@@ -165,6 +178,22 @@ func TestCDCTargetIdentityAdmissionAndGuard(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
+	t.Run("MO guard reports query failure", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+		mock.ExpectBegin()
+		mock.ExpectQuery(regexp.QuoteMeta("CALL mo_cdc_target_identity('db', 't')")).
+			WillReturnError(errors.New("identity query failed"))
+		mock.ExpectRollback()
+		tx, err := db.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		_, err = guardedCDCTargetIdentity(ctx, tx, CDCSinkType_MO, "db", "t")
+		require.ErrorContains(t, err, "identity query failed")
+		require.NoError(t, tx.Rollback())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
 	t.Run("MySQL guard returns server and table identity", func(t *testing.T) {
 		db, mock, err := sqlmock.New()
 		require.NoError(t, err)
@@ -208,6 +237,35 @@ func TestCDCTargetIdentityAdmissionAndGuard(t *testing.T) {
 					mock.ExpectQuery(regexp.QuoteMeta("SELECT @@server_uuid, TABLE_ID FROM information_schema.INNODB_TABLES WHERE NAME = ?")).
 						WithArgs("db/t").WillReturnError(tc.metaError)
 				}
+				mock.ExpectRollback()
+				tx, err := db.BeginTx(ctx, nil)
+				require.NoError(t, err)
+				_, err = guardedCDCTargetIdentity(ctx, tx, CDCSinkType_MySQL, "db", "t")
+				require.ErrorContains(t, err, tc.want)
+				require.NoError(t, tx.Rollback())
+				require.NoError(t, mock.ExpectationsWereMet())
+			})
+		}
+	})
+
+	t.Run("MySQL guard reports identity row scan and iteration errors", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			rows *sqlmock.Rows
+			want string
+		}{
+			{name: "scan", rows: sqlmock.NewRows([]string{"server_uuid", "TABLE_ID"}).AddRow("uuid", "bad-id"), want: "converting driver.Value"},
+			{name: "iteration", rows: sqlmock.NewRows([]string{"server_uuid", "TABLE_ID"}).AddRow("uuid", uint64(7)).AddRow("uuid", uint64(8)).RowError(1, errors.New("identity rows failed")), want: "identity rows failed"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				db, mock, err := sqlmock.New()
+				require.NoError(t, err)
+				defer db.Close()
+				mock.ExpectBegin()
+				mock.ExpectQuery(regexp.QuoteMeta("SELECT 1 FROM `db`.`t` LIMIT 0")).
+					WillReturnRows(sqlmock.NewRows([]string{"one"}))
+				mock.ExpectQuery(regexp.QuoteMeta("SELECT @@server_uuid, TABLE_ID FROM information_schema.INNODB_TABLES WHERE NAME = ?")).
+					WithArgs("db/t").WillReturnRows(tc.rows)
 				mock.ExpectRollback()
 				tx, err := db.BeginTx(ctx, nil)
 				require.NoError(t, err)
@@ -316,6 +374,21 @@ func TestCDCTargetIdentityAdmissionAndGuard(t *testing.T) {
 		require.NoError(t, err)
 		_, err = observeCDCTargetIdentity(ctx, conn, CDCSinkType_MO, "db", "t")
 		require.ErrorContains(t, err, "catalog query failed")
+		require.NoError(t, conn.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("observe reports begin failure", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = ? AND table_name = ? AND table_type = 'BASE TABLE'"))
+		WithArgs("db", "t").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+		mock.ExpectBegin().WillReturnError(errors.New("begin failed"))
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		_, err = observeCDCTargetIdentity(ctx, conn, CDCSinkType_MO, "db", "t")
+		require.ErrorContains(t, err, "begin failed")
 		require.NoError(t, conn.Close())
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
