@@ -33,6 +33,13 @@ func MayDiagnoseStatementConstant(expr *plan.Expr) bool {
 		ContainsRowScopedConversion(expr) {
 		return false
 	}
+	if expr.GetP() != nil {
+		// A semantic type does not certify the TEXT transport representation.
+		// The parameter executor uses CAST for every non-string concrete type;
+		// retain its diagnostic owner until the current binding is proved safe.
+		typ := types.T(expr.Typ.Id)
+		return typ != types.T_any && !typ.IsMySQLString()
+	}
 	fn := expr.GetF()
 	if fn == nil || fn.Func == nil {
 		return false
@@ -46,7 +53,9 @@ func MayDiagnoseStatementConstant(expr *plan.Expr) bool {
 			return true
 		}
 		return len(fn.Args) > 0 && fn.Args[0] != nil &&
-			types.T(fn.Args[0].Typ.Id).IsMySQLString() && target.ToType().IsNumeric()
+			types.T(fn.Args[0].Typ.Id).IsMySQLString() &&
+			(target.ToType().IsNumeric() ||
+				(fn.Args[0].GetP() != nil && target != types.T_any && !target.IsMySQLString()))
 	case DATE:
 		// DATE(text) reports an out-of-range SQL error for malformed input.
 		// Typed temporal inputs use non-parsing overloads and need no owner.
@@ -54,7 +63,7 @@ func MayDiagnoseStatementConstant(expr *plan.Expr) bool {
 			types.T(fn.Args[0].Typ.Id).IsMySQLString()
 	case TIME, MAKETIME, SEC_TO_TIME, TIMESTAMP,
 		DATE_ADD, DATE_SUB, TIMESTAMPADD, ADDTIME, SUBTIME, TIMEDIFF,
-		PERIOD_ADD, PERIOD_DIFF:
+		PERIOD_ADD, PERIOD_DIFF, INTERNAL_JSON_COMPARISON_PARAM, INTERNAL_JSON_ORDERING_PARAM:
 		return true
 	default:
 		return false

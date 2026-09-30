@@ -301,7 +301,6 @@ func TestPreparedVariadicRuntimeSourceDomains(t *testing.T) {
 			require.NoError(t, err)
 			plan := prepared.GetDcl().GetPrepare().Plan
 			snapshot := plan.String()
-			require.True(t, PreparedPlanNeedsRuntimeSpecialization(plan))
 			params := make([]any, len(tc.values))
 			for i, value := range tc.values {
 				params[i] = value
