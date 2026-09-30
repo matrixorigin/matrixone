@@ -485,3 +485,72 @@ func TestRequiredIVFTopologyBroadcastAndRemoteFragment(t *testing.T) {
 	require.NotNil(t, decoded.Proc.GetMessageBoard())
 	require.Same(t, decoded.Proc.GetMessageBoard(), decoded.PreScopes[0].Proc.GetMessageBoard(), "actual RPC decoding must keep producer and reader on the same board")
 }
+
+func TestOuterPKFilterBuildMergesAllVectorPartitions(t *testing.T) {
+	for _, owners := range []int{1, 2} {
+		t.Run(map[int]string{1: "local row fetch", 2: "distributed row fetch"}[owners], func(t *testing.T) {
+			c := NewMockCompile(t)
+			c.addr = "cn1:6001"
+			c.cnList = engine.Nodes{{Id: "cn1", Addr: c.addr, Mcpu: 1}, {Id: "cn2", Addr: "cn2:6001", Mcpu: 1}}
+			c.execType = plan2.ExecTypeAP_MULTICN
+			c.anal = &AnalyzeModule{qry: &plan.Query{}}
+			const tag int32 = 23
+			filter := &plan.RuntimeFilterSpec{Tag: tag, Expr: &plan.Expr{}}
+			node := &plan.Node{JoinType: plan.Node_INNER, Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{}}, RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{filter}}
+			candidates := make([]*Scope, 2)
+			probes := make([]*Scope, owners)
+			// Register cleanup before assembling the graph; scopes are never run.
+			t.Cleanup(func() {
+				seen := make(map[*Scope]bool)
+				var release func(*Scope)
+				release = func(s *Scope) {
+					if s == nil || seen[s] {
+						return
+					}
+					seen[s] = true
+					for _, child := range s.PreScopes {
+						release(child)
+					}
+					_ = vm.HandleAllOp(s.RootOp, func(_ vm.Operator, op vm.Operator) error { op.Release(); return nil })
+				}
+				for _, s := range probes {
+					release(s)
+				}
+				for _, s := range candidates {
+					release(s)
+				}
+			})
+			for i, cn := range c.cnList {
+				candidates[i] = generateScopeWithRootOperator(c.proc.NewNoContextChildProc(0), []vm.OpType{vm.TableScan})
+				candidates[i].NodeInfo = cn
+				if i < owners {
+					probes[i] = generateScopeWithRootOperator(c.proc.NewNoContextChildProc(0), []vm.OpType{vm.HashJoin})
+					probes[i].NodeInfo = cn
+					probes[i].RootOp.(*hashjoin.HashJoin).RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{filter}
+				}
+			}
+			c.compileBuildSideForBroadcastJoin(node, probes, candidates)
+			complete := probes[0].PreScopes[0]
+			require.Len(t, complete.PreScopes, 2, "both vector partitions must reach the same build before row-fetch filtering")
+			for i, candidate := range candidates {
+				require.Same(t, candidate, complete.PreScopes[i])
+				require.NoError(t, checkScopeWithExpectedList(candidate, []vm.OpType{vm.TableScan, vm.Connector}))
+			}
+			if owners == 1 {
+				require.NoError(t, checkScopeWithExpectedList(complete, []vm.OpType{vm.Merge, vm.HashBuild}))
+				require.Same(t, filter, complete.RootOp.(*hashbuild.HashBuild).RuntimeFilterSpec)
+			} else {
+				require.NoError(t, checkScopeWithExpectedList(complete, []vm.OpType{vm.Merge, vm.Dispatch}))
+				producers := make([]*Scope, 0, owners)
+				for _, probe := range probes {
+					producer := probe.PreScopes[len(probe.PreScopes)-1]
+					require.Equal(t, probe.NodeInfo.Addr, producer.NodeInfo.Addr)
+					require.Same(t, filter, producer.RootOp.(*hashbuild.HashBuild).RuntimeFilterSpec)
+					producers = append(producers, producer)
+				}
+				require.True(t, ivfBroadcastTargets(complete.RootOp.(*dispatch.Dispatch), producers))
+			}
+			require.False(t, filter.MustApply, "outer PK filters retain optional PASS semantics")
+		})
+	}
+}

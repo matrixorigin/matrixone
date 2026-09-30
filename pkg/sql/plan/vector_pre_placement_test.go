@@ -70,3 +70,66 @@ func TestRequiredIVFPlacementProvesPrimaryKeyAndCompleteTree(t *testing.T) {
 		})
 	}
 }
+
+func TestRequiredIVFPlacementOuterPKFilter(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*pb.Query)
+		want   bool
+	}{
+		{"versioned", func(q *pb.Query) {}, true},
+		{"legacy", func(q *pb.Query) { b := q.Nodes[4].RuntimeFilterBuildList[0]; b.Expr, b.BuildExpr = b.BuildExpr, nil }, true},
+		{"legacy dual expression", func(q *pb.Query) { b := q.Nodes[4].RuntimeFilterBuildList[0]; b.Expr = DeepCopyExpr(b.BuildExpr) }, true},
+		{"pruned PK ordinal", func(q *pb.Query) {
+			n := q.Nodes[0]
+			n.TableDef = &pb.TableDef{Cols: []*pb.ColDef{n.TableDef.Cols[1], n.TableDef.Cols[0]}}
+			n.ProjectList[0].GetCol().ColPos, n.ProjectList[1].GetCol().ColPos = 1, 0
+			n.RuntimeFilterProbeList[0].Expr.GetCol().ColPos = 1
+		}, true},
+		{"non PK", func(q *pb.Query) { q.Nodes[0].RuntimeFilterProbeList[0].Expr.GetCol().ColPos = 1 }, false},
+		{"wrong build slot", func(q *pb.Query) { q.Nodes[4].RuntimeFilterBuildList[0].BuildExpr.GetCol().ColPos = 1 }, false},
+		{"wrong build relation", func(q *pb.Query) { q.Nodes[4].RuntimeFilterBuildList[0].BuildExpr.GetCol().RelPos = 1 }, false},
+		{"computed build", func(q *pb.Query) {
+			q.Nodes[4].RuntimeFilterBuildList[0].BuildExpr = &pb.Expr{Expr: &pb.Expr_F{F: &pb.Function{Func: &pb.ObjectRef{ObjName: "abs"}}}}
+		}, false},
+		{"mismatched legacy expression", func(q *pb.Query) {
+			b := q.Nodes[4].RuntimeFilterBuildList[0]
+			b.Expr = DeepCopyExpr(b.BuildExpr)
+			b.Expr.GetCol().ColPos = 1
+		}, false},
+		{"missing build key", func(q *pb.Query) { q.Nodes[4].RuntimeFilterBuildList[0].BuildExpr = nil }, false},
+		{"prefix", func(q *pb.Query) { q.Nodes[4].RuntimeFilterBuildList[0].MatchPrefix = true }, false},
+		{"non PK flag", func(q *pb.Query) { q.Nodes[0].RuntimeFilterProbeList[0].NotOnPk = true }, false},
+		{"required flag", func(q *pb.Query) { q.Nodes[4].RuntimeFilterBuildList[0].MustApply = true }, false},
+		{"membership flag", func(q *pb.Query) { q.Nodes[0].RuntimeFilterProbeList[0].UseMembershipFilter = true }, false},
+		{"scalar flag", func(q *pb.Query) { q.Nodes[0].RuntimeFilterProbeList[0].ScalarPredicate = true }, false},
+		{"required tag collision", func(q *pb.Query) {
+			q.Nodes[4].RuntimeFilterBuildList[0].Tag = 7
+			q.Nodes[0].RuntimeFilterProbeList[0].Tag = 7
+		}, false},
+		{"second root build", func(q *pb.Query) {
+			q.Nodes[4].RuntimeFilterBuildList = append(q.Nodes[4].RuntimeFilterBuildList, q.Nodes[4].RuntimeFilterBuildList[0])
+		}, false},
+		{"membership dependency cycle", func(q *pb.Query) {
+			q.Nodes[2].RuntimeFilterProbeList = q.Nodes[0].RuntimeFilterProbeList
+			q.Nodes[0].RuntimeFilterProbeList = nil
+		}, false},
+		{"unreachable duplicate build", func(q *pb.Query) {
+			q.Nodes = append(q.Nodes, &pb.Node{RuntimeFilterBuildList: q.Nodes[4].RuntimeFilterBuildList})
+		}, false},
+		{"non table duplicate probe", func(q *pb.Query) {
+			q.Nodes = append(q.Nodes, &pb.Node{NodeType: pb.Node_PROJECT, RuntimeFilterProbeList: q.Nodes[0].RuntimeFilterProbeList})
+		}, false},
+		{"unknown optional tag", func(q *pb.Query) { q.Nodes[2].RuntimeFilterProbeList = []*pb.RuntimeFilterSpec{{Tag: 99}} }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			q := requiredIVFPlacementPlan()
+			typ := q.Nodes[0].TableDef.Cols[0].Typ
+			q.Nodes[4].RuntimeFilterBuildList = []*pb.RuntimeFilterSpec{{Tag: 13, BuildExpr: &pb.Expr{Typ: typ, Expr: &pb.Expr_Col{Col: &pb.ColRef{RelPos: -1, ColPos: 0}}}}}
+			q.Nodes[0].RuntimeFilterProbeList = []*pb.RuntimeFilterSpec{{Tag: 13, Expr: &pb.Expr{Typ: typ, Expr: &pb.Expr_Col{Col: &pb.ColRef{RelPos: 0, ColPos: 0}}}}}
+			tc.mutate(q)
+			_, _, _, eligible := RequiredIVFPlacement(q)
+			require.Equal(t, tc.want, eligible)
+		})
+	}
+}

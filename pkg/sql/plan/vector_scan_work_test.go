@@ -139,6 +139,14 @@ type scanWorkCompilerContext struct {
 	statsErr   error
 	calls      int
 	ctx        context.Context
+	statsCache *StatsCache
+}
+
+func (c *scanWorkCompilerContext) GetStatsCache() *StatsCache {
+	if c.statsCache != nil {
+		return c.statsCache
+	}
+	return c.CompilerContext.GetStatsCache()
 }
 
 func (c *scanWorkCompilerContext) GetContext() context.Context {
@@ -227,7 +235,8 @@ func TestVectorLocalDOPHint(t *testing.T) {
 }
 
 func TestIvfRewriteEstimatesWorkWithoutLocalDOPHint(t *testing.T) {
-	for _, enabled := range []bool{false, true} {
+	for _, tc := range []struct{ hint, plain bool }{{false, false}, {true, false}, {false, true}} {
+		enabled := tc.hint
 		builder, _, scan, scanID, indexes := newIvfIncludeModeTestBuilder(t)
 		if enabled {
 			handleOptimizerHints("vectorLocalDOP=1", builder)
@@ -241,13 +250,22 @@ func TestIvfRewriteEstimatesWorkWithoutLocalDOPHint(t *testing.T) {
 			idx.IncludedColumns = nil
 		}
 		scan.ObjRef.Obj, scan.ObjRef.Db = 10, 1
-		scan.TableDef.Indexes = append(scan.TableDef.Indexes, &plan.IndexDef{IndexName: "idx_category", IndexAlgo: "btree", IndexTableName: "category_idx", TableExist: true, Parts: []string{"category", catalog.CreateAlias("id")}})
+		if !tc.plain {
+			scan.TableDef.Indexes = append(scan.TableDef.Indexes, &plan.IndexDef{IndexName: "idx_category", IndexAlgo: "btree", IndexTableName: "category_idx", TableExist: true, Parts: []string{"category", catalog.CreateAlias("id")}})
+		}
 		mock := c.CompilerContext.(*customMockCompilerContext)
 		mock.tables["category_idx"] = &plan.TableDef{Name: "category_idx", Cols: []*plan.ColDef{{Name: catalog.IndexTableIndexColName, Typ: plan.Type{Id: int32(types.T_varchar)}}, {Name: catalog.IndexTablePrimaryColName, Typ: scan.TableDef.Cols[0].Typ}}, Name2ColIndex: map[string]int32{catalog.IndexTableIndexColName: 0, catalog.IndexTablePrimaryColName: 1}}
 		mock.objects["category_idx"] = &plan.ObjectRef{Obj: 11, Db: 1, SchemaName: "db", ObjName: "category_idx"}
 		scan.Stats = &plan.Stats{TableCnt: 100, BlockNum: 1, Rowsize: 16}
 		scan.FilterList = []*plan.Expr{makeIvfHelperFnExpr("=", plan.Type{Id: int32(types.T_bool)},
 			makeIvfHelperColExpr(scan.BindingTags[0], 3, scan.TableDef), MakePlan2Int32ConstExprWithType(20))}
+		if tc.plain {
+			scan.Stats.TableCnt, scan.Stats.BlockNum = 40000, 8
+			c.statsCache = NewStatsCache()
+			c.statsCache.Set(scan.TableDef.TblId, &statsinfo.StatsInfo{TableCnt: 40000, NdvMap: map[string]float64{"id": 40000}})
+			builder.tag2Table[scan.BindingTags[0]] = scan.TableDef
+			scan.FilterList[0].GetF().Args[0] = makeIvfHelperFnExpr("abs", scan.TableDef.Cols[3].Typ, scan.FilterList[0].GetF().Args[0])
+		}
 		vc := newIvfIncludeModeVectorSortContext(scan, scanID, "pre", 0, 2)
 		colCounts := map[[2]int32]int{}
 		for _, expr := range vc.projNode.ProjectList {
@@ -298,6 +316,33 @@ func TestIvfRewriteEstimatesWorkWithoutLocalDOPHint(t *testing.T) {
 		require.NoError(t, remapErr)
 		_, _, localScans, eligible := RequiredIVFPlacement(builder.qry)
 		require.True(t, eligible, "the generated regular-index PRE must remain eligible after actual column remapping")
-		require.NotEmpty(t, localScans, "INDEX access flags remain local scan restrictions")
+		if !tc.plain {
+			require.NotEmpty(t, localScans, "INDEX access flags remain local scan restrictions")
+		} else {
+			require.Empty(t, localScans)
+			var outer, rowFetch *plan.Node
+			for _, node := range builder.qry.Nodes {
+				if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_INNER && len(node.RuntimeFilterBuildList) == 1 {
+					outer, rowFetch = node, builder.qry.Nodes[node.Children[0]]
+				}
+			}
+			require.NotNil(t, outer, "real plain-table rewrite must generate the optional outer PK filter")
+			require.Equal(t, plan.Node_TABLE_SCAN, rowFetch.NodeType)
+			require.Len(t, rowFetch.RuntimeFilterProbeList, 1)
+			require.Equal(t, ExecTypeAP_MULTICN, GetExecType(builder.qry, false, false))
+			builds, probes := outer.RuntimeFilterBuildList, rowFetch.RuntimeFilterProbeList
+			assertEligible := func(want bool) {
+				_, _, _, got := RequiredIVFPlacement(builder.qry)
+				require.Equal(t, want, got)
+			}
+			outer.RuntimeFilterBuildList, rowFetch.RuntimeFilterProbeList = nil, nil
+			assertEligible(true)
+			outer.RuntimeFilterBuildList = builds
+			assertEligible(false)
+			outer.RuntimeFilterBuildList, rowFetch.RuntimeFilterProbeList = nil, probes
+			assertEligible(false)
+			outer.RuntimeFilterBuildList = builds
+			assertEligible(true)
+		}
 	}
 }

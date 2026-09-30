@@ -266,12 +266,71 @@ func RequiredIVFPlacement(q *plan.Query) (vectorID, membershipID int32, localSca
 	if !access(root.Children[0], false) || !access(member.Children[1], false) {
 		return vectorID, membershipID, nil, false
 	}
+	// A plain row fetch receives the outer INNER's optional PK filter. Prove
+	// its source and unique endpoints; encoding remains the existing RF owner's.
+	var outerProbe *plan.Node
+	var outerTag int32
+	if len(root.RuntimeFilterBuildList) > 1 {
+		return vectorID, membershipID, nil, false
+	}
+	if len(root.RuntimeFilterBuildList) == 1 {
+		outerBuild := root.RuntimeFilterBuildList[0]
+		rowFetch := nodes[root.Children[0]]
+		optionalPK := func(rf *plan.RuntimeFilterSpec) bool {
+			return rf != nil && !rf.MustApply && !rf.UseMembershipFilter && !rf.ScalarPredicate && !rf.MatchPrefix && !rf.NotOnPk
+		}
+		pkSlot := func(expr *plan.Expr) bool {
+			col := expr.GetCol()
+			return col != nil && col.RelPos == -1 && col.ColPos == 0 && expr.Typ.Id == pkType
+		}
+		if !optionalPK(outerBuild) || outerBuild.Tag <= 0 || outerBuild.Tag == build.Tag || indexTags[outerBuild.Tag] || rowFetch.NodeType != plan.Node_TABLE_SCAN ||
+			(outerBuild.BuildExpr == nil && outerBuild.Expr == nil) || (outerBuild.BuildExpr != nil && !pkSlot(outerBuild.BuildExpr)) || (outerBuild.Expr != nil && !pkSlot(outerBuild.Expr)) {
+			return vectorID, membershipID, nil, false
+		}
+		outerTag = outerBuild.Tag
+		buildCount, probeCount := 0, 0
+		for _, n := range q.Nodes {
+			if n == nil {
+				continue
+			}
+			for _, rf := range n.RuntimeFilterBuildList {
+				if rf != nil && rf.Tag == outerTag {
+					if n != root {
+						return vectorID, membershipID, nil, false
+					}
+					buildCount++
+				}
+			}
+			for _, rf := range n.RuntimeFilterProbeList {
+				if rf == nil || rf.Tag != outerTag {
+					continue
+				}
+				col := rf.Expr.GetCol()
+				if n != rowFetch || !optionalPK(rf) || col == nil || col.RelPos != 0 || col.ColPos < 0 || int(col.ColPos) >= len(n.TableDef.Cols) || rf.Expr.Typ.Id != pkType {
+					return vectorID, membershipID, nil, false
+				}
+				expected := pk.PkeyColName
+				if n.IndexScanInfo.IsIndexScan {
+					expected = catalog.IndexTablePrimaryColName
+				}
+				column := n.TableDef.Cols[col.ColPos]
+				if column == nil || column.Name != expected || column.Typ.Id != pkType {
+					return vectorID, membershipID, nil, false
+				}
+				probeCount++
+			}
+		}
+		if buildCount != 1 || probeCount != 1 {
+			return vectorID, membershipID, nil, false
+		}
+		outerProbe = rowFetch
+	}
 	for _, n := range nodes {
 		if n.NodeType != plan.Node_TABLE_SCAN {
 			continue
 		}
 		for _, rf := range n.RuntimeFilterProbeList {
-			if rf == nil || !indexTags[rf.Tag] {
+			if rf == nil || (!indexTags[rf.Tag] && !(n == outerProbe && rf.Tag == outerTag)) {
 				return vectorID, membershipID, nil, false
 			}
 		}
