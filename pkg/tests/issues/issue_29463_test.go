@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,6 +41,28 @@ func TestIssue29463PreparedCompositeKeyDomains(t *testing.T) {
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)
 		defer conn.Close()
+		withNumericCompatibility := func(t *testing.T) {
+			t.Helper()
+			var originalSQLMode string
+			require.NoError(t, conn.QueryRowContext(ctx, "select @@session.sql_mode").Scan(&originalSQLMode))
+			t.Cleanup(func() {
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cleanupCancel()
+				_, restoreErr := conn.ExecContext(cleanupCtx, fmt.Sprintf(
+					"set session sql_mode = '%s'", strings.ReplaceAll(originalSQLMode, "'", "''")))
+				require.NoError(t, restoreErr, "restore session sql_mode")
+			})
+			compatibilitySQLMode := originalSQLMode
+			if !strings.Contains(compatibilitySQLMode, "MYSQL_NUMERIC_COMPATIBILITY") {
+				if compatibilitySQLMode != "" {
+					compatibilitySQLMode += ","
+				}
+				compatibilitySQLMode += "MYSQL_NUMERIC_COMPATIBILITY"
+			}
+			_, err = conn.ExecContext(ctx, fmt.Sprintf(
+				"set session sql_mode = '%s'", strings.ReplaceAll(compatibilitySQLMode, "'", "''")))
+			require.NoError(t, err, "enable numeric compatibility for legacy prefix case")
+		}
 		dbName := testutils.GetDatabaseName(t)
 		mustExec(t, ctx, conn, "create database "+dbName)
 		defer func() {
@@ -93,6 +116,9 @@ func TestIssue29463PreparedCompositeKeyDomains(t *testing.T) {
 					}
 					for _, protocol := range []string{"binary", "text"} {
 						t.Run(fmt.Sprintf("%s/%s/%s/%T:%v", key, protocol, op, tc.value, tc.value), func(t *testing.T) {
+							if tc.warnings > 0 {
+								withNumericCompatibility(t)
+							}
 							var rows *sql.Rows
 							var err error
 							if protocol == "binary" {

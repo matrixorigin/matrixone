@@ -73,6 +73,26 @@ func TestPreparedSpecializedDomains(t *testing.T) {
 			require.NoError(t, rows.Err())
 			return out
 		}
+		withNumericCompatibility := func(t *testing.T) {
+			t.Helper()
+			var originalSQLMode string
+			require.NoError(t, conn.QueryRowContext(ctx, "select @@session.sql_mode").Scan(&originalSQLMode))
+			t.Cleanup(func() {
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cleanupCancel()
+				_, restoreErr := conn.ExecContext(cleanupCtx, fmt.Sprintf(
+					"set session sql_mode = '%s'", strings.ReplaceAll(originalSQLMode, "'", "''")))
+				require.NoError(t, restoreErr, "restore session sql_mode")
+			})
+			compatibilitySQLMode := originalSQLMode
+			if !strings.Contains(compatibilitySQLMode, "MYSQL_NUMERIC_COMPATIBILITY") {
+				if compatibilitySQLMode != "" {
+					compatibilitySQLMode += ","
+				}
+				compatibilitySQLMode += "MYSQL_NUMERIC_COMPATIBILITY"
+			}
+			exec(t, fmt.Sprintf("set session sql_mode = '%s'", strings.ReplaceAll(compatibilitySQLMode, "'", "''")))
+		}
 		exec(t, "create database review29349")
 		exec(t, "use review29349")
 		defer conn.ExecContext(context.Background(), "drop database review29349")
@@ -81,6 +101,7 @@ func TestPreparedSpecializedDomains(t *testing.T) {
 			require.Equal(t, [][]string{{"NULL"}}, query(t, "select @alias_of_unassigned"))
 		})
 		t.Run("numeric_aggregate_source_transitions", func(t *testing.T) {
+			withNumericCompatibility(t)
 			exec(t, "prepare numeric_sum from 'select cast(sum(?) as signed)'")
 			defer conn.ExecContext(ctx, "deallocate prepare numeric_sum")
 			for _, tc := range []struct{ assignment, want string }{
@@ -554,6 +575,7 @@ func TestPreparedSpecializedDomains(t *testing.T) {
 			}
 		})
 		t.Run("prepared_numeric_text_range", func(t *testing.T) {
+			withNumericCompatibility(t)
 			exec(t, "create table range_source(v varchar(20))")
 			exec(t, "insert into range_source values('02'),('2'),('invalid')")
 			exec(t, "set @low=2,@high=3")
@@ -667,6 +689,7 @@ func TestPreparedSpecializedDomains(t *testing.T) {
 			require.Equal(t, [][]string{{"1"}}, query(t, "execute volatile_between using @lower,@upper"))
 		})
 		t.Run("between_text_warning_once", func(t *testing.T) {
+			withNumericCompatibility(t)
 			exec(t, "prepare warning_between from 'select ''invalid'' between ? and ?'")
 			defer conn.ExecContext(ctx, "deallocate prepare warning_between")
 			exec(t, "set @lower=-1,@upper=1")

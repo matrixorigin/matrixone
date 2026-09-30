@@ -21,7 +21,11 @@ set @key = cast(4294967296 as signed);
 explain force execute equal_key using @key;
 execute equal_key using @key;
 set @key = '12345tail';
+set @issue_29506_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = concat_ws(',', nullif(@@session.sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 execute equal_key using @key;
+set session sql_mode = @issue_29506_saved_sql_mode;
+set @issue_29506_saved_sql_mode = null;
 deallocate prepare equal_key;
 
 prepare between_keys from 'select count(*) from keys32 where id between ? and ?';

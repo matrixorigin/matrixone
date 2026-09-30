@@ -1,3 +1,5 @@
+set @bound_domain_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = concat_ws(',', nullif(@@session.sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 set @bound_domain_s = _binary'你';
 prepare bound_domain_binary from 'select char_length(@bound_domain_s), hex(left(@bound_domain_s, 1)), ord(@bound_domain_s), @bound_domain_s + 0';
 execute bound_domain_binary;
@@ -51,6 +53,8 @@ execute bound_domain_marker using @bound_domain_s, @bound_domain_s;
 deallocate prepare bound_domain_marker;
 deallocate prepare bound_domain_text;
 deallocate prepare bound_domain_binary;
+set session sql_mode = @bound_domain_saved_sql_mode;
+set @bound_domain_saved_sql_mode = null;
 set @bound_domain_s = if(false, X'ff', '你a');
 prepare bound_selected_text from 'select charset(@bound_domain_s), collation(@bound_domain_s), char_length(@bound_domain_s), hex(left(@bound_domain_s, 1))';
 execute bound_selected_text;
