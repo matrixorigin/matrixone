@@ -29,6 +29,92 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 )
 
+func TestIssue26879PreparedCommonValueFollowup(t *testing.T) {
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?interpolateParams=false", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		mustExec(t, ctx, conn, "create database issue_26879_followup")
+		defer mustExec(t, ctx, conn, "drop database issue_26879_followup")
+		mustExec(t, ctx, conn, "use issue_26879_followup")
+		mustExec(t, ctx, conn, "create table t(id int primary key,d decimal(38,10))")
+		mustExec(t, ctx, conn, "insert into t values (1,9007199254740992.0000000001),(2,9007199254740992.0000000002),(3,9007199254740992.0000000003)")
+		for _, tc := range []struct {
+			name, expression             string
+			want, changed, null, invalid []int
+		}{
+			{"marker-only child", "greatest(d,coalesce(?,?))", []int{2, 3}, []int{3}, nil, []int{1, 2, 3}},
+			{"ifnull child", "greatest(?,ifnull(?,d))", []int{2}, []int{3}, nil, nil},
+			{"marker-derived result", "greatest(abs(?),coalesce(?,?))", []int{2}, []int{3}, nil, nil},
+			{"null-first peer", "coalesce(?,NULL,d)", []int{1, 2, 3}, []int{1, 2, 3}, []int{1, 2, 3}, nil},
+			{"null-last peer", "coalesce(?,d,NULL)", []int{2}, []int{3}, []int{1, 2, 3}, nil},
+			{"typed-null peer", "coalesce(?,cast(NULL as decimal(38,10)),d)", []int{2}, []int{3}, []int{1, 2, 3}, nil},
+		} {
+			for _, protocol := range []string{"sql", "binary"} {
+				t.Run(tc.name+"/"+protocol, func(t *testing.T) {
+					query := "select id from t where " + tc.expression + "=d order by id"
+					count := strings.Count(tc.expression, "?")
+					var stmt *sql.Stmt
+					if protocol == "sql" {
+						mustExec(t, ctx, conn, "prepare followup from '"+query+"'")
+						defer mustExec(t, ctx, conn, "deallocate prepare followup")
+					} else {
+						stmt, err = conn.PrepareContext(ctx, query)
+						require.NoError(t, err)
+						defer stmt.Close()
+					}
+					for _, value := range []any{nil, "9007199254740992.0000000002", "9007199254740992.0000000003", nil, "not-a-number", "9007199254740992.0000000002"} {
+						func() {
+							var rows *sql.Rows
+							var queryErr error
+							if protocol == "sql" {
+								literal := "NULL"
+								if value != nil {
+									literal = "'" + value.(string) + "'"
+								}
+								mustExec(t, ctx, conn, "set @followup="+literal)
+								rows, queryErr = conn.QueryContext(ctx, "execute followup using "+strings.TrimSuffix(strings.Repeat("@followup,", count), ","))
+							} else {
+								args := make([]any, count)
+								for i := range args {
+									args[i] = value
+								}
+								rows, queryErr = stmt.QueryContext(ctx, args...)
+							}
+							require.NoError(t, queryErr)
+							defer rows.Close()
+							var got []int
+							for rows.Next() {
+								var id int
+								require.NoError(t, rows.Scan(&id))
+								got = append(got, id)
+							}
+							require.NoError(t, rows.Err())
+							want := tc.want
+							switch value {
+							case nil:
+								want = tc.null
+							case "not-a-number":
+								want = tc.invalid
+							case "9007199254740992.0000000003":
+								want = tc.changed
+							}
+							require.Equal(t, want, got, "value=%v", value)
+						}()
+					}
+				})
+			}
+		}
+	})
+}
+
 func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)

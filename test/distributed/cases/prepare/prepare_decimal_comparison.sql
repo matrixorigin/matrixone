@@ -65,4 +65,51 @@ DEALLOCATE PREPARE p_le;
 DEALLOCATE PREPARE p_gt;
 DEALLOCATE PREPARE p_ge;
 
+-- Unresolved nested results inherit the fixed DECIMAL peer.
+CREATE TABLE common_value (id INT PRIMARY KEY, d DECIMAL(38,10));
+INSERT INTO common_value VALUES
+  (1,9007199254740992.0000000001),
+  (2,9007199254740992.0000000002),
+  (3,9007199254740992.0000000003);
+PREPARE p_nested FROM 'SELECT id FROM common_value WHERE GREATEST(d,COALESCE(?,?))=d ORDER BY id';
+PREPARE p_ifnull FROM 'SELECT id FROM common_value WHERE GREATEST(?,IFNULL(?,d))=d ORDER BY id';
+PREPARE p_marker_abs FROM 'SELECT id FROM common_value WHERE GREATEST(ABS(?),COALESCE(?,?))=d ORDER BY id';
+PREPARE p_null_first FROM 'SELECT id FROM common_value WHERE COALESCE(?,NULL,d)=d ORDER BY id';
+PREPARE p_null_last FROM 'SELECT id FROM common_value WHERE COALESCE(?,d,NULL)=d ORDER BY id';
+PREPARE p_typed_null FROM 'SELECT id FROM common_value WHERE COALESCE(?,CAST(NULL AS DECIMAL(38,10)),d)=d ORDER BY id';
+SET @p=NULL;
+EXECUTE p_nested USING @p,@p;
+EXECUTE p_ifnull USING @p,@p;
+EXECUTE p_marker_abs USING @p,@p,@p;
+EXECUTE p_null_first USING @p;
+SET @p='9007199254740992.0000000002';
+EXECUTE p_nested USING @p,@p;
+EXECUTE p_ifnull USING @p,@p;
+EXECUTE p_marker_abs USING @p,@p,@p;
+EXECUTE p_null_first USING @p;
+EXECUTE p_null_last USING @p;
+EXECUTE p_typed_null USING @p;
+SET @p='9007199254740992.0000000003';
+EXECUTE p_nested USING @p,@p;
+EXECUTE p_ifnull USING @p,@p;
+EXECUTE p_marker_abs USING @p,@p,@p;
+SET @p=NULL;
+EXECUTE p_nested USING @p,@p;
+EXECUTE p_ifnull USING @p,@p;
+EXECUTE p_null_first USING @p;
+SET @p='not-a-number';
+EXECUTE p_nested USING @p,@p;
+EXECUTE p_ifnull USING @p,@p;
+EXECUTE p_marker_abs USING @p,@p,@p;
+SET @p='9007199254740992.0000000002';
+EXECUTE p_nested USING @p,@p;
+EXECUTE p_ifnull USING @p,@p;
+EXECUTE p_marker_abs USING @p,@p,@p;
+DEALLOCATE PREPARE p_nested;
+DEALLOCATE PREPARE p_ifnull;
+DEALLOCATE PREPARE p_marker_abs;
+DEALLOCATE PREPARE p_null_first;
+DEALLOCATE PREPARE p_null_last;
+DEALLOCATE PREPARE p_typed_null;
+
 DROP DATABASE prepare_decimal_comparison;
