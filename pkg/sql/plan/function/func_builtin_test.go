@@ -2694,32 +2694,40 @@ func TestSerialFullDecimal256ReuseAfterNull(t *testing.T) {
 	}
 }
 
-func TestSerialExtractDecimal256RejectsInvalidIndex(t *testing.T) {
+func TestSerialExtractRejectsInvalidIndex(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
-	packer := types.NewPacker()
-	defer packer.Close()
-	packer.EncodeDecimal256(types.Decimal256{B128_191: 1})
-	input := vector.NewVec(types.T_varchar.ToType())
-	defer input.Free(proc.Mp())
-	require.NoError(t, vector.AppendBytes(input, packer.GetBuf(), false, proc.Mp()))
-	resultType := vector.NewVec(types.T_decimal256.ToType())
-	defer resultType.Free(proc.Mp())
-	for _, constant := range []bool{false, true} {
-		for _, index := range []int64{-1, 1, math.MaxInt64} {
-			t.Run(fmt.Sprintf("constant=%t/index=%d", constant, index), func(t *testing.T) {
-				idx := vector.NewVec(types.T_int64.ToType())
-				defer idx.Free(proc.Mp())
-				require.NoError(t, vector.AppendFixed(idx, index, false, proc.Mp()))
-				if constant {
-					idx.SetClass(vector.CONSTANT)
+	for _, oid := range []types.T{types.T_decimal256, types.T_varchar} {
+		t.Run(oid.String(), func(t *testing.T) {
+			packer := types.NewPacker()
+			defer packer.Close()
+			if oid == types.T_decimal256 {
+				packer.EncodeDecimal256(types.Decimal256{B128_191: 1})
+			} else {
+				packer.EncodeStringType([]byte("value"))
+			}
+			input := vector.NewVec(types.T_varchar.ToType())
+			defer input.Free(proc.Mp())
+			require.NoError(t, vector.AppendBytes(input, packer.GetBuf(), false, proc.Mp()))
+			resultType := vector.NewVec(oid.ToType())
+			defer resultType.Free(proc.Mp())
+			for _, constant := range []bool{false, true} {
+				for _, index := range []int64{-1, 1, math.MaxInt64} {
+					t.Run(fmt.Sprintf("constant=%t/index=%d", constant, index), func(t *testing.T) {
+						idx := vector.NewVec(types.T_int64.ToType())
+						defer idx.Free(proc.Mp())
+						require.NoError(t, vector.AppendFixed(idx, index, false, proc.Mp()))
+						if constant {
+							idx.SetClass(vector.CONSTANT)
+						}
+						rs := vector.NewFunctionResultWrapper(oid.ToType(), proc.Mp())
+						defer rs.Free()
+						require.NoError(t, rs.PreExtendAndReset(1))
+						err := builtInSerialExtract([]*vector.Vector{input, idx, resultType}, rs, proc, 1, nil)
+						require.ErrorContains(t, err, "index out of range")
+					})
 				}
-				rs := vector.NewFunctionResultWrapper(types.T_decimal256.ToType(), proc.Mp())
-				defer rs.Free()
-				require.NoError(t, rs.PreExtendAndReset(1))
-				err := builtInSerialExtract([]*vector.Vector{input, idx, resultType}, rs, proc, 1, nil)
-				require.ErrorContains(t, err, "index out of range")
-			})
-		}
+			}
+		})
 	}
 }

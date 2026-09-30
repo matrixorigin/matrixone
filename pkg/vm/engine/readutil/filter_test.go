@@ -3988,11 +3988,14 @@ func TestCompositeLeadingRangeExcludesObjectsBeforeMetadataLoad(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	var exes []colexec.ExpressionExecutor
-	plan2.ReplaceFoldExpr(proc, expr, &exes)
-	plan2.EvalFoldExpr(proc, expr, &exes)
-	for _, exe := range exes {
-		defer exe.Free()
-	}
+	defer func() {
+		for _, exe := range exes {
+			exe.Free()
+		}
+	}()
+	_, err := plan2.ReplaceFoldExpr(proc, expr, &exes)
+	require.NoError(t, err)
+	require.NoError(t, plan2.EvalFoldExpr(proc, expr, &exes))
 	fast, load, _, _, _, canCompile, _ := CompileFilterExpr(expr, table, nil)
 	require.True(t, canCompile)
 	require.NotNil(t, fast)
@@ -4068,12 +4071,14 @@ func TestCompositeLeadingRangeExcludesObjectsBeforeMetadataLoad(t *testing.T) {
 				tc.lower, tc.upper, plan2.MakePlan2Uint8ConstExprWithType(tc.flag),
 			})
 			var folded []colexec.ExpressionExecutor
+			defer func() {
+				for _, exe := range folded {
+					exe.Free()
+				}
+			}()
 			_, err := plan2.ReplaceFoldExpr(proc, expr, &folded)
 			require.NoError(t, err)
 			require.NoError(t, plan2.EvalFoldExpr(proc, expr, &folded))
-			for _, exe := range folded {
-				exe.Free()
-			}
 			oneSidedFast, _, _, _, _, compiled, _ := CompileFilterExpr(expr, table, nil)
 			require.True(t, compiled)
 			for i := range objects {

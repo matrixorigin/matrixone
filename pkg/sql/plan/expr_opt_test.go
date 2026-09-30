@@ -157,14 +157,13 @@ func TestLeadingCompositeRangeRejectsUnsafeEncoding(t *testing.T) {
 
 func TestLeadingCompositeRangeDecimalSerializerEligibility(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		oid      types.T
-		width    int32
-		eligible bool
+		name  string
+		oid   types.T
+		width int32
 	}{
-		{"decimal64", types.T_decimal64, 18, true},
-		{"decimal128", types.T_decimal128, 38, true},
-		{"decimal256", types.T_decimal256, 40, true},
+		{"decimal64", types.T_decimal64, 18},
+		{"decimal128", types.T_decimal128, 38},
+		{"decimal256", types.T_decimal256, 40},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := NewMockCompilerContext(true)
@@ -190,22 +189,18 @@ func TestLeadingCompositeRangeDecimalSerializerEligibility(t *testing.T) {
 						}
 						found = true
 						require.NotEmpty(t, node.FilterList)
-						if tc.eligible {
-							requireFuncNames(t, node.BlockFilterList, "prefix_in_range")
-							for _, filter := range node.BlockFilterList {
-								fold := DeepCopyExpr(filter)
-								var exes []colexec.ExpressionExecutor
-								t.Cleanup(func() {
-									for _, exe := range exes {
-										exe.Free()
-									}
-								})
-								_, err = ReplaceFoldExpr(ctx.GetProcess(), fold, &exes)
-								require.NoError(t, err)
-								require.NoError(t, EvalFoldExpr(ctx.GetProcess(), fold, &exes))
-							}
-						} else {
-							requireNoFuncNames(t, node.BlockFilterList, "prefix_in_range", "prefix_between", "serial")
+						requireFuncNames(t, node.BlockFilterList, "prefix_in_range")
+						for _, filter := range node.BlockFilterList {
+							fold := DeepCopyExpr(filter)
+							var exes []colexec.ExpressionExecutor
+							t.Cleanup(func() {
+								for _, exe := range exes {
+									exe.Free()
+								}
+							})
+							_, err = ReplaceFoldExpr(proc, fold, &exes)
+							require.NoError(t, err)
+							require.NoError(t, EvalFoldExpr(proc, fold, &exes))
 						}
 					}
 					require.True(t, found)

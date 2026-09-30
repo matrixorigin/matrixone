@@ -49,7 +49,7 @@ create table load_probe(id int primary key,a decimal(65,0),b int,index ab(a,b),f
 load data infile {'filepath'='$resources/optimizer/composite_range_decimal.parq','format'='parquet'} into table load_probe;
 select id from load_probe force index(ab) where a=cast(1000000000000000000000000000000000000000 as decimal(65,0)) and b=1 order by id;
 select id from load_probe ignore index(ab) where a=cast(1000000000000000000000000000000000000000 as decimal(65,0)) and b=1 order by id;
--- Existing index rebuild repairs keys written by the old legacy writer.
+-- Exercise the rebuild DDL; old-writer upgrade evidence is recorded separately.
 alter table load_probe drop index ab;
 create index ab on load_probe(a,b);
 select id from load_probe force index(ab) where a=cast(1000000000000000000000000000000000000000 as decimal(65,0)) and b=1 order by id;

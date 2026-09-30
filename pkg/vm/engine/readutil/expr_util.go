@@ -16,7 +16,6 @@ package readutil
 
 import (
 	"context"
-	"strings"
 
 	"go.uber.org/zap"
 
@@ -84,12 +83,6 @@ func getColDefByName(expr *plan.Expr, col *plan.ColRef, tableDef *plan.TableDef)
 	return tableDef.Cols[pos]
 }
 
-func compPkCol(colName string, pkName string) bool {
-	dotIdx := strings.Index(colName, ".")
-	colName = colName[dotIdx+1:]
-	return colName == pkName
-}
-
 func evalValue(
 	expr *plan.Expr,
 	exprImpl *plan.Expr_F,
@@ -125,27 +118,20 @@ func evalValue(
 			)
 		}
 	})
-	if !compPkCol(colName, pkName) {
+	physicalName := plan2.ColRefColumnName(col.Col)
+	if physicalName != pkName {
 		return false, 0, nil
 	}
 
-	var (
-		colPos int32
-		idx    = strings.Index(colName, ".")
-	)
-	if idx == -1 {
-		colPos = tblDef.Name2ColIndex[colName]
-	} else {
-		colPos = tblDef.Name2ColIndex[colName[idx+1:]]
-	}
+	colPos := tblDef.Name2ColIndex[physicalName]
 
 	common.DoIfDebugEnabled(func() {
-		if colPos != col.Col.ColPos {
+		if int(colPos) >= len(tblDef.Cols) || tblDef.Cols[colPos].Name != physicalName {
 			logutil.Error(
 				"Bad-ColExpr",
 				zap.String("col-name", colName),
-				zap.Int32("col-actual-pos", col.Col.ColPos),
-				zap.Int32("col-expected-pos", colPos),
+				zap.Int32("scan-col-pos", col.Col.ColPos),
+				zap.Int32("relation-col-pos", colPos),
 				zap.String("col-expr", plan2.FormatExpr(expr, plan2.FormatOption{})),
 			)
 		}
@@ -349,7 +335,7 @@ func getPkExpr(
 
 		case "=":
 			if col := exprImpl.F.Args[0].GetCol(); col != nil {
-				if !compPkCol(col.Name, pkName) {
+				if plan2.ColRefColumnName(col) != pkName {
 					return nil
 				}
 				constVal := getConstValueByExpr(exprImpl.F.Args[1], proc)
@@ -364,7 +350,7 @@ func getPkExpr(
 				}
 			}
 			if col := exprImpl.F.Args[1].GetCol(); col != nil {
-				if !compPkCol(col.Name, pkName) {
+				if plan2.ColRefColumnName(col) != pkName {
 					return nil
 				}
 				constVal := getConstValueByExpr(exprImpl.F.Args[0], proc)
@@ -382,7 +368,7 @@ func getPkExpr(
 
 		case "in":
 			if col := exprImpl.F.Args[0].GetCol(); col != nil {
-				if !compPkCol(col.Name, pkName) {
+				if plan2.ColRefColumnName(col) != pkName {
 					return nil
 				}
 				return exprImpl.F.Args[1]
@@ -390,7 +376,7 @@ func getPkExpr(
 
 		case "prefix_eq", "prefix_between", "prefix_in", "prefix_in_range", "between":
 			if col := exprImpl.F.Args[0].GetCol(); col != nil {
-				if !compPkCol(col.Name, pkName) {
+				if plan2.ColRefColumnName(col) != pkName {
 					return nil
 				}
 				return expr
