@@ -1,6 +1,8 @@
 -- @suite
 -- @case
 -- 直接用户变量的字符串域属于绑定语句；marker 使用本次赋值域。
+set @bound_domain_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = concat_ws(',', nullif(@@session.sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 set @bound_domain_s = _binary'你';
 prepare bound_domain_binary from 'select char_length(@bound_domain_s), hex(left(@bound_domain_s, 1)), ord(@bound_domain_s), @bound_domain_s + 0';
 execute bound_domain_binary;
@@ -31,6 +33,8 @@ execute bound_domain_marker using @bound_domain_s, @bound_domain_s;
 deallocate prepare bound_domain_marker;
 deallocate prepare bound_domain_text;
 deallocate prepare bound_domain_binary;
+set session sql_mode = @bound_domain_saved_sql_mode;
+set @bound_domain_saved_sql_mode = null;
 
 -- 静态 binary 身份与选中行的 text 域独立冻结，不能用后者改写 CHARSET。
 set @bound_domain_s = if(false, X'ff', '你a');
