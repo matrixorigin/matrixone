@@ -915,6 +915,19 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		}
 	}
 
+	ownershipCtx, err := prepareRestoreOwnership(ctx, bh, snapshot.ts, restoreAccount, toAccountId, dbName, tblName)
+	if err != nil {
+		return stats, err
+	}
+	ctx = ownershipCtx
+	var partialPrivileges *partialRestorePrivileges
+	if stmt.Level == tree.RESTORELEVELDATABASE || stmt.Level == tree.RESTORELEVELTABLE {
+		partialPrivileges, err = capturePartialRestorePrivileges(ctx, bh, toAccountId, dbName, tblName)
+		if err != nil {
+			return stats, err
+		}
+	}
+
 	// drop foreign key related tables first
 	if err = deleteCurFkTables(ctx, ses.GetService(), bh, dbName, tblName, toAccountId); err != nil {
 		return
@@ -1042,6 +1055,12 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	}
 	if stmt.Level == tree.RESTORELEVELACCOUNT && toAccountId == catalog.System_Account {
 		if err = seedMissingViewMetadataAfterCatalogReset(ctx, ses, bh); err != nil {
+			return stats, err
+		}
+	}
+
+	if partialPrivileges != nil {
+		if err = partialPrivileges.rebind(ctx, bh); err != nil {
 			return stats, err
 		}
 	}
@@ -1560,7 +1579,10 @@ func restoreToDatabaseOrTable(
 		// else skip restore the db
 
 		var isPubExist bool
-		isPubExist, _ = checkPubExistOrNot(toCtx, sid, bh, snapshotName, dbName, snapshotTs)
+		isPubExist, err = checkPubExistOrNot(toCtx, sid, bh, snapshotName, dbName, snapshotTs)
+		if err != nil {
+			return err
+		}
 		if !isPubExist {
 			getLogger(sid).Debug(fmt.Sprintf("[%s] skip restore db: %v, no publication", snapshotName, dbName))
 			return
@@ -1568,7 +1590,7 @@ func restoreToDatabaseOrTable(
 
 		// create db with publication
 		getLogger(sid).Debug(fmt.Sprintf("[%s] start to create db with pub: %v, create db sql: %s", snapshotName, dbName, createDbSql))
-		if err = bh.Exec(toCtx, createDbSql); err != nil {
+		if err = execRestoreCreateDatabase(toCtx, bh, dbName, createDbSql); err != nil {
 			return
 		}
 
@@ -1577,7 +1599,7 @@ func restoreToDatabaseOrTable(
 		createDbSql = createDatabaseIfNotExistsSQL(dbName)
 		// create db
 		getLogger(sid).Debug(fmt.Sprintf("[%s] start to create db: %v, create db sql: %s", snapshotName, dbName, createDbSql))
-		if err = bh.Exec(toCtx, createDbSql); err != nil {
+		if err = execRestoreCreateDatabase(toCtx, bh, dbName, createDbSql); err != nil {
 			return
 		}
 	}
@@ -1702,15 +1724,22 @@ func restoreToSubDb(
 	// a cluster restore.
 	sourceCtx := defines.AttachAccountId(ctx, subDb.sourceAccount)
 	var isPubExist bool
-	isPubExist, _ = checkPubExistOrNot(sourceCtx, sid, bh, snapshotName, subDb.dbName, subDb.snapshotTs)
+	isPubExist, err = checkPubExistOrNot(sourceCtx, sid, bh, snapshotName, subDb.dbName, subDb.snapshotTs)
+	if err != nil {
+		return err
+	}
 	if !isPubExist {
 		getLogger(sid).Debug(fmt.Sprintf("[%s] skip restore db: %v, no publication", snapshotName, subDb.dbName))
 		return
 	}
 
 	targetCtx := defines.AttachAccountId(ctx, subDb.targetAccount)
+	targetCtx, err = prepareRestoreOwnership(targetCtx, bh, subDb.snapshotTs, subDb.sourceAccount, subDb.targetAccount, "", "")
+	if err != nil {
+		return err
+	}
 	getLogger(sid).Debug(fmt.Sprintf("[%s] account %d start to create sub db: %v, create db sql: %s", snapshotName, subDb.targetAccount, subDb.dbName, subDb.createSql))
-	if err = bh.Exec(targetCtx, subDb.createSql); err != nil {
+	if err = execRestoreCreateDatabase(targetCtx, bh, subDb.dbName, subDb.createSql); err != nil {
 		return
 	}
 
@@ -2058,6 +2087,10 @@ func recreateTable(
 		return restoreUserDefinedFunctionCatalogWithCurrentSchema(
 			ctx, bh, sourceSnapshot, curAccountID, toAccountId,
 		)
+	}
+	ctx, err = restoreDDLContext(ctx, tblInfo.dbName, tblInfo.tblName)
+	if err != nil {
+		return err
 	}
 	if isSequence(tblInfo) {
 		curAccountID, accountErr := defines.GetAccountId(ctx)
@@ -2864,6 +2897,10 @@ func parseViewCreateSQLForRestore(ctx context.Context, tblInfo *tableInfo, lower
 }
 
 func executeViewCreateSQLForRestore(ctx context.Context, bh BackgroundExec, tblInfo *tableInfo) error {
+	ctx, err := restoreDDLContext(ctx, tblInfo.dbName, tblInfo.tblName)
+	if err != nil {
+		return err
+	}
 	if err := requirePersistedViewProtocolForRestore(ctx, bh, tblInfo); err != nil {
 		return err
 	}
@@ -3785,6 +3822,11 @@ func restoreAccountUsingClusterSnapshotToNew(ctx context.Context,
 
 	getLogger(ses.GetService()).Debug(fmt.Sprintf("[%s] start to restore dropped account: %v, account id: %d to new account id: %d, restore timestamp: %d", snapshotName, account.accountName, account.accountId, toAccountId, snapshotTs))
 	fromAccount := account.accountId
+	ownershipCtx, err := prepareRestoreOwnership(ctx, bh, snapshotTs, uint32(fromAccount), uint32(toAccountId), "", "")
+	if err != nil {
+		return err
+	}
+	ctx = ownershipCtx
 
 	// drop foreign key related tables first
 	if isNeedToCleanToDatabase {
@@ -4324,8 +4366,7 @@ func checkPubValid(
 	}
 
 	if !execResultArrayHasData(erArray) {
-		err = moerr.NewInternalErrorf(newCtx, "there is no publication account %s", pubAccountName)
-		return
+		return false, nil
 	}
 	if accId, err = erArray[0].GetInt64(newCtx, 0, 0); err != nil {
 		return
@@ -4338,8 +4379,7 @@ func checkPubValid(
 		return
 	}
 	if pubInfo == nil {
-		err = moerr.NewInternalErrorf(newCtx, "there is no publication %s", pubName)
-		return
+		return false, nil
 	}
 
 	return true, nil

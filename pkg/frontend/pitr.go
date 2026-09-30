@@ -1157,6 +1157,19 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		}
 	}
 
+	ownershipCtx, ownershipErr := prepareRestoreOwnership(ctx, bh, ts, tenantInfo.TenantID, tenantInfo.TenantID, dbName, tblName)
+	if ownershipErr != nil {
+		return stats, ownershipErr
+	}
+	ctx = ownershipCtx
+	var partialPrivileges *partialRestorePrivileges
+	if restoreLevel == tree.RESTORELEVELDATABASE || restoreLevel == tree.RESTORELEVELTABLE {
+		partialPrivileges, err = capturePartialRestorePrivileges(ctx, bh, tenantInfo.TenantID, dbName, tblName)
+		if err != nil {
+			return stats, err
+		}
+	}
+
 	//drop foreign key related tables first
 	if err = deleteCurFkTableInPitrRestore(ctx, ses.GetService(), bh, pitrName, dbName, tblName); err != nil {
 		return
@@ -1244,6 +1257,11 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		}
 		if err = reconcileAccountViewMetadata(ctx, ses, bh, tenantInfo.GetTenantID()); err != nil {
 			return
+		}
+	}
+	if partialPrivileges != nil {
+		if err = partialPrivileges.rebind(ctx, bh); err != nil {
+			return stats, err
 		}
 	}
 
@@ -1499,7 +1517,10 @@ func restoreToDatabaseOrTableWithPitr(
 		// else skip restore the db
 
 		var isPubExist bool
-		isPubExist, _ = checkPubExistOrNot(ctx, sid, bh, pitrName, dbName, ts)
+		isPubExist, err = checkPubExistOrNot(ctx, sid, bh, pitrName, dbName, ts)
+		if err != nil {
+			return err
+		}
 		if !isPubExist {
 			getLogger(sid).Info(fmt.Sprintf("[%s] skip restore db: %v, no publication", pitrName, dbName))
 			return
@@ -1507,7 +1528,7 @@ func restoreToDatabaseOrTableWithPitr(
 
 		// create db with publication
 		getLogger(sid).Info(fmt.Sprintf("[%s] start to create db with pub: %v, create db sql: %s", pitrName, dbName, createDbSql))
-		if err = bh.Exec(ctx, createDbSql); err != nil {
+		if err = execRestoreCreateDatabase(ctx, bh, dbName, createDbSql); err != nil {
 			return
 		}
 
@@ -1516,7 +1537,7 @@ func restoreToDatabaseOrTableWithPitr(
 		createDbSql = createDatabaseIfNotExistsSQL(dbName)
 		// create db
 		getLogger(sid).Info(fmt.Sprintf("[%s] start to create db: %v, create db sql: %s", pitrName, dbName, createDbSql))
-		if err = bh.Exec(ctx, createDbSql); err != nil {
+		if err = execRestoreCreateDatabase(ctx, bh, dbName, createDbSql); err != nil {
 			return
 		}
 	}
@@ -1605,6 +1626,10 @@ func reCreateTableWithPitr(
 			accountID,
 			accountID,
 		)
+	}
+	ctx, err = restoreDDLContext(ctx, tblInfo.dbName, tblInfo.tblName)
+	if err != nil {
+		return err
 	}
 	if isSequence(tblInfo) {
 		accountID, accountErr := defines.GetAccountId(ctx)
