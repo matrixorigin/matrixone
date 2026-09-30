@@ -408,7 +408,8 @@ func TestRequiredIVFTopologyBroadcastAndRemoteFragment(t *testing.T) {
 	c.proc.Ctx = defines.AttachAccountId(context.Background(), 0)
 	c.proc.SetMessageBoard(message.NewMessageBoard())
 	const tag int32 = 17
-	var roots, producers []*Scope
+	roots := make([]*Scope, 0, len(c.cnList))
+	producers := make([]*Scope, 0, len(c.cnList))
 	for i, cn := range c.cnList {
 		cn.Mcpu, cn.CNCNT, cn.CNIDX = 1, 2, int32(i)
 		consumer := makeRuntimeFilterConsumerScope(tag, cn)
