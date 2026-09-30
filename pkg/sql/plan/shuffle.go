@@ -1615,10 +1615,15 @@ func determineShuffleForScan(node *plan.Node, builder *QueryBuilder) {
 	var firstSortColName string
 	if node.TableDef.ClusterBy != nil {
 		firstSortColName = util.GetClusterByFirstColumn(node.TableDef.ClusterBy.Name)
-	} else if node.TableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
-		return
 	} else {
-		firstSortColName = node.TableDef.Pkey.Names[0]
+		// Catalog-only scans retain identity for cache invalidation without
+		// loading sort-key metadata. Cached statistics do not prove a key;
+		// keep hash shuffle unless the definition supplies that evidence.
+		pkey := node.TableDef.Pkey
+		if pkey == nil || len(pkey.Names) == 0 || pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+			return
+		}
+		firstSortColName = pkey.Names[0]
 	}
 
 	s := w.GetStats()
