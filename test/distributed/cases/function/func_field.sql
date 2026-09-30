@@ -4,6 +4,39 @@
 -- @desc:test for FIELD() function
 -- @label:bvt
 
+-- Binary subjects compare bytes, including invalid UTF-8 and embedded NULs.
+select field(_binary 'a', _binary 'A', _binary 'a') as binary_case,
+       field(_binary X'FF', _binary X'FE', _binary X'FF') as invalid_bytes,
+       field(cast('a' as binary), cast('A' as binary), cast('a' as binary)) as cast_binary;
+select field(_binary 'a', 'A', 'a') as binary_subject,
+       field('a', _binary 'A', _binary 'a') as text_subject,
+       field('a', 'A', 'a') as text_control;
+select field(_binary X'610062', X'610063', X'610062', X'610062') as embedded_nul,
+       field(_binary '', null, _binary '') as empty_value,
+       field(cast(null as binary), X'00', null) as null_subject,
+       field(X'FF', X'FE', null) as no_match;
+
+drop table if exists field_binary_subjects;
+create table field_binary_subjects (id int primary key, b blob, vb varbinary(8));
+insert into field_binary_subjects values (1, X'61', X'61'), (2, X'FF', X'FF'), (3, null, null);
+select id, field(b, X'41', X'FE', X'61', X'FF') as blob_field,
+       field(vb, X'41', X'FE', X'61', X'FF') as varbinary_field
+from field_binary_subjects order by id;
+drop table field_binary_subjects;
+
+-- Explicit binary subjects retain byte equality across prepared executions.
+set @field_subject = _binary 'a';
+prepare field_binary_stmt from 'select field(cast(? as binary), ''A'', ''a'', X''FE'', X''FF'') as prepared_field';
+execute field_binary_stmt using @field_subject;
+set @field_subject = X'FF';
+execute field_binary_stmt using @field_subject;
+set @field_subject = null;
+execute field_binary_stmt using @field_subject;
+set @field_subject = 'a';
+execute field_binary_stmt using @field_subject;
+deallocate prepare field_binary_stmt;
+set @field_subject = null;
+
 select field('Bb', 'Aa', 'Bb', 'Cc', 'Dd', 'Ff');
 select field('Gg', 'Aa', 'Bb', 'Cc', 'Dd', 'Ff');
 select field('aa', 'AA', 'BB','Aa', 'aA');

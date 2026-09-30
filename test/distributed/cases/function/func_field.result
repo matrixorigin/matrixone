@@ -1,3 +1,49 @@
+select field(_binary 'a', _binary 'A', _binary 'a') as binary_case,
+field(_binary X'FF', _binary X'FE', _binary X'FF') as invalid_bytes,
+field(cast('a' as binary), cast('A' as binary), cast('a' as binary)) as cast_binary;
+➤ binary_case[-5,64,0]  ¦  invalid_bytes[-5,64,0]  ¦  cast_binary[-5,64,0]  𝄀
+2  ¦  2  ¦  2
+select field(_binary 'a', 'A', 'a') as binary_subject,
+field('a', _binary 'A', _binary 'a') as text_subject,
+field('a', 'A', 'a') as text_control;
+➤ binary_subject[-5,64,0]  ¦  text_subject[-5,64,0]  ¦  text_control[-5,64,0]  𝄀
+2  ¦  1  ¦  1
+select field(_binary X'610062', X'610063', X'610062', X'610062') as embedded_nul,
+field(_binary '', null, _binary '') as empty_value,
+field(cast(null as binary), X'00', null) as null_subject,
+field(X'FF', X'FE', null) as no_match;
+➤ embedded_nul[-5,64,0]  ¦  empty_value[-5,64,0]  ¦  null_subject[-5,64,0]  ¦  no_match[-5,64,0]  𝄀
+2  ¦  2  ¦  0  ¦  0
+drop table if exists field_binary_subjects;
+create table field_binary_subjects (id int primary key, b blob, vb varbinary(8));
+insert into field_binary_subjects values (1, X'61', X'61'), (2, X'FF', X'FF'), (3, null, null);
+select id, field(b, X'41', X'FE', X'61', X'FF') as blob_field,
+field(vb, X'41', X'FE', X'61', X'FF') as varbinary_field
+from field_binary_subjects order by id;
+➤ id[4,32,0]  ¦  blob_field[-5,64,0]  ¦  varbinary_field[-5,64,0]  𝄀
+1  ¦  3  ¦  3  𝄀
+2  ¦  4  ¦  4  𝄀
+3  ¦  0  ¦  0
+drop table field_binary_subjects;
+set @field_subject = _binary 'a';
+prepare field_binary_stmt from 'select field(cast(? as binary), ''A'', ''a'', X''FE'', X''FF'') as prepared_field';
+execute field_binary_stmt using @field_subject;
+➤ prepared_field[-5,64,0]  𝄀
+2
+set @field_subject = X'FF';
+execute field_binary_stmt using @field_subject;
+➤ prepared_field[-5,64,0]  𝄀
+4
+set @field_subject = null;
+execute field_binary_stmt using @field_subject;
+➤ prepared_field[-5,64,0]  𝄀
+0
+set @field_subject = 'a';
+execute field_binary_stmt using @field_subject;
+➤ prepared_field[-5,64,0]  𝄀
+2
+deallocate prepare field_binary_stmt;
+set @field_subject = null;
 select field('Bb', 'Aa', 'Bb', 'Cc', 'Dd', 'Ff');
 ➤ field(Bb, Aa, Bb, Cc, Dd, Ff)[-5,64,0]  𝄀
 2

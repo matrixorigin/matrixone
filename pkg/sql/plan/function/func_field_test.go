@@ -15,10 +15,12 @@
 package function
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestFieldExactTypeResolution(t *testing.T) {
@@ -55,6 +57,76 @@ func TestFieldExactTypeResolution(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFieldStringSubjectDomain(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		subjectType   types.T
+		candidateType types.T
+		want          uint64
+	}{
+		{"binary", types.T_binary, types.T_binary, 2},
+		{"varbinary", types.T_varbinary, types.T_varbinary, 2},
+		{"blob", types.T_blob, types.T_blob, 2},
+		{"binary subject text candidates", types.T_varbinary, types.T_varchar, 2},
+		{"text subject binary candidates", types.T_varchar, types.T_varbinary, 1},
+		{"text control", types.T_varchar, types.T_varchar, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(tc.subjectType.ToType(), []string{"a", "\xff", "", "a\x00b", "missing", "ignored"}, []bool{false, false, false, false, false, true}),
+				NewFunctionTestInput(tc.candidateType.ToType(), []string{"A", "\xfe", "", "a\x00c", "other", "ignored"}, []bool{false, false, true, false, false, false}),
+				NewFunctionTestInput(tc.candidateType.ToType(), []string{"a", "\xff", "", "a\x00b", "other", "ignored"}, nil),
+				NewFunctionTestInput(tc.candidateType.ToType(), []string{"a", "\xff", "", "a\x00b", "other", "ignored"}, nil),
+			}
+			fc := NewFunctionTestCase(proc, inputs,
+				NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{tc.want, tc.want, 2, 2, 0, 0}, nil), FieldString)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
+func TestFieldStringRuntimeSubjectDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, subjectType := range []types.T{types.T_varchar, types.T_varbinary} {
+		t.Run(subjectType.String(), func(t *testing.T) {
+			subject := makeBinaryStringTestInput(t, proc, subjectType.ToType(), [][]byte{
+				[]byte("a"), []byte("a"), {0xff}, {0xff},
+			}, []types.RuntimeStringDomain{
+				types.RuntimeStringText, types.RuntimeStringBinary, types.RuntimeStringText, types.RuntimeStringBinary,
+			})
+			defer subject.Free(proc.Mp())
+			first := makeBinaryStringTestInput(t, proc, types.T_varbinary.ToType(), [][]byte{
+				[]byte("A"), []byte("A"), {0xfe}, {0xfe},
+			}, nil)
+			defer first.Free(proc.Mp())
+			second := makeBinaryStringTestInput(t, proc, types.T_varchar.ToType(), [][]byte{
+				[]byte("a"), []byte("a"), {0xff}, {0xff},
+			}, nil)
+			defer second.Free(proc.Mp())
+			result := vector.NewFunctionResultWrapper(types.T_uint64.ToType(), proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(subject.Length()))
+			require.NoError(t, FieldString([]*vector.Vector{subject, first, second}, result, proc, subject.Length(), nil))
+			require.Equal(t, []uint64{1, 2, 1, 2}, vector.MustFixedColNoTypeCheck[uint64](result.GetResultVector()))
+		})
+	}
+}
+
+func TestFieldStringConstantSubject(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestConstInput(types.T_varbinary.ToType(), []string{"a"}, nil),
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"A", "a", ""}, nil),
+		NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"a"}, nil),
+	}
+	fc := NewFunctionTestCase(proc, inputs,
+		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{2, 1, 2}, nil), FieldString)
+	ok, info := fc.Run()
+	require.True(t, ok, info)
 }
 
 func TestFieldIntegerRepresentations(t *testing.T) {
