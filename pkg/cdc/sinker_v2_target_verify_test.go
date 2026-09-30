@@ -79,6 +79,34 @@ func TestCDCTargetIdentityAdmissionAndGuard(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
+	t.Run("capability rejects non InnoDB and probe failures", func(t *testing.T) {
+		for _, tc := range []struct {
+			name  string
+			rows  *sqlmock.Rows
+			query error
+			want  string
+		}{
+			{name: "non innodb", rows: sqlmock.NewRows([]string{"engine"}).AddRow("MyISAM"), want: "InnoDB"},
+			{name: "probe unavailable", rows: sqlmock.NewRows([]string{"engine"}).AddRow("InnoDB"), query: driver.ErrBadConn, want: "unavailable"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				db, mock, err := sqlmock.New()
+				require.NoError(t, err)
+				defer db.Close()
+				conn, err := db.Conn(ctx)
+				require.NoError(t, err)
+				defer conn.Close()
+				mock.ExpectQuery(regexp.QuoteMeta("SELECT @@default_storage_engine")).WillReturnRows(tc.rows)
+				if tc.query != nil {
+					mock.ExpectQuery(regexp.QuoteMeta("SELECT TABLE_ID FROM information_schema.INNODB_TABLES WHERE NAME = ?")).
+						WithArgs("__mo_cdc_capability_probe__/__absent__").WillReturnError(tc.query)
+				}
+				require.ErrorContains(t, checkMySQLTargetIdentityCapability(ctx, conn, "db", "t", true), tc.want)
+				require.NoError(t, mock.ExpectationsWereMet())
+			})
+		}
+	})
+
 	t.Run("MO guard returns durable identity", func(t *testing.T) {
 		db, mock, err := sqlmock.New()
 		require.NoError(t, err)
@@ -116,6 +144,44 @@ func TestCDCTargetIdentityAdmissionAndGuard(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
+	t.Run("guard rejects unsupported and malformed identities", func(t *testing.T) {
+		tests := []struct {
+			name   string
+			sink   string
+			db     string
+			rows   *sqlmock.Rows
+			server string
+			id     uint64
+			want   string
+		}{
+			{name: "unsupported sink", sink: "other", want: "unsupported"},
+			{name: "bad mysql identifier", sink: CDCSinkType_MySQL, db: "bad-name", want: "unambiguous"},
+			{name: "missing table identity", sink: CDCSinkType_MySQL, db: "db", rows: sqlmock.NewRows([]string{"server_uuid", "TABLE_ID"}), want: "no InnoDB table identity"},
+			{name: "empty server uuid", sink: CDCSinkType_MySQL, db: "db", rows: sqlmock.NewRows([]string{"server_uuid", "TABLE_ID"}).AddRow("", uint64(1)), want: "server UUID"},
+			{name: "duplicate identity", sink: CDCSinkType_MySQL, db: "db", rows: sqlmock.NewRows([]string{"server_uuid", "TABLE_ID"}).AddRow("uuid", uint64(1)).AddRow("uuid", uint64(2)), want: "unique InnoDB"},
+		}
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				db, mock, err := sqlmock.New()
+				require.NoError(t, err)
+				defer db.Close()
+				mock.ExpectBegin()
+				if tc.sink == CDCSinkType_MySQL && tc.want != "unambiguous" {
+					mock.ExpectQuery(regexp.QuoteMeta("SELECT 1 FROM `db`.`t` LIMIT 0")).WillReturnRows(sqlmock.NewRows([]string{"one"}))
+					mock.ExpectQuery(regexp.QuoteMeta("SELECT @@server_uuid, TABLE_ID FROM information_schema.INNODB_TABLES WHERE NAME = ?")).
+						WithArgs("db/t").WillReturnRows(tc.rows)
+				}
+				mock.ExpectRollback()
+				tx, err := db.BeginTx(ctx, nil)
+				require.NoError(t, err)
+				_, err = guardedCDCTargetIdentity(ctx, tx, tc.sink, tc.db, "t")
+				require.ErrorContains(t, err, tc.want)
+				require.NoError(t, tx.Rollback())
+				require.NoError(t, mock.ExpectationsWereMet())
+			})
+		}
+	})
+
 	t.Run("observe absent target", func(t *testing.T) {
 		db, mock, err := sqlmock.New()
 		require.NoError(t, err)
@@ -128,6 +194,20 @@ func TestCDCTargetIdentityAdmissionAndGuard(t *testing.T) {
 		identity, err := observeCDCTargetIdentity(ctx, conn, CDCSinkType_MO, "db", "t")
 		require.NoError(t, err)
 		require.Equal(t, absentCDCTargetIdentity, identity)
+		require.NoError(t, conn.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("observe rejects ambiguous target metadata", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = ? AND table_name = ? AND table_type = 'BASE TABLE'")).
+			WithArgs("db", "t").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		_, err = observeCDCTargetIdentity(ctx, conn, CDCSinkType_MO, "db", "t")
+		require.ErrorContains(t, err, "ambiguous")
 		require.NoError(t, conn.Close())
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
