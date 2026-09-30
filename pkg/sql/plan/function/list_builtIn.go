@@ -7455,6 +7455,55 @@ var supportedArrayOperations = []FuncNew{
 				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
 				newOp:      func() executeLogicOfOverload { return InnerProductArrayViaF32[uint8] },
 			},
+			// vecf8/vecf4 (optionally against vecf32): fp32 dot product over dequantized values.
+			{
+				overloadId: 6,
+				args:       []types.T{types.T_array_float8, types.T_array_float8},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return InnerProductVecBlock },
+			},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_array_float4, types.T_array_float4},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return InnerProductVecBlock },
+			},
+			{
+				overloadId: 8,
+				args:       []types.T{types.T_array_float8, types.T_array_float32},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return InnerProductVecBlock },
+			},
+			{
+				overloadId: 9,
+				args:       []types.T{types.T_array_float32, types.T_array_float8},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return InnerProductVecBlock },
+			},
+			{
+				overloadId: 10,
+				args:       []types.T{types.T_array_float4, types.T_array_float32},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return InnerProductVecBlock },
+			},
+			{
+				overloadId: 11,
+				args:       []types.T{types.T_array_float32, types.T_array_float4},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return InnerProductVecBlock },
+			},
+			{
+				overloadId: 12,
+				args:       []types.T{types.T_array_float8, types.T_array_float4},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return InnerProductVecBlock },
+			},
+			{
+				overloadId: 13,
+				args:       []types.T{types.T_array_float4, types.T_array_float8},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return InnerProductVecBlock },
+			},
 		},
 	},
 

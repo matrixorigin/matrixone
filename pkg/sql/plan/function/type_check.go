@@ -130,7 +130,19 @@ func fixedTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
 // so pairing BIT with a signed bigint must use the same exact DECIMAL128
 // domain as UINT64 with a signed bigint. Keeping this adjustment here, rather
 // than changing fixedTypeCastRule1, leaves comparison coercion unchanged.
+// promoteBlockScaledVector maps vecf8/vecf4 to vecf32 of the same dimension; arithmetic
+// on them runs as vecf32 (no native arithmetic, like the scalar float8/float4).
+func promoteBlockScaledVector(t types.Type) (types.Type, bool) {
+	if t.Oid.IsBlockScaledVector() {
+		return types.New(types.T_array_float32, t.Width, 0), true
+	}
+	return t, false
+}
+
 func arithmeticTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
+	var promoted1, promoted2 bool
+	s1, promoted1 = promoteBlockScaledVector(s1)
+	s2, promoted2 = promoteBlockScaledVector(s2)
 	// JSON is a dynamic scalar domain. Numeric arithmetic must retain its
 	// fractional values instead of borrowing an integer peer's domain.
 	hasJSON := s1.Oid == types.T_json || s2.Oid == types.T_json
@@ -146,6 +158,10 @@ func arithmeticTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
 		s2.Oid = types.T_uint64
 	}
 	cast, left, right := fixedTypeCastRule1(s1, s2)
+	if !cast && (promoted1 || promoted2) {
+		// vecf32 op vecf32 has no cast rule; a promoted operand must still be cast.
+		return true, s1, s2
+	}
 	return cast || hasJSON, left, right
 }
 
@@ -158,6 +174,15 @@ func temporalArithmeticUsesFloat(left, right types.Type) bool {
 //  1. Div
 //  2. IntegerDiv
 func fixedTypeCastRule2(s1, s2 types.Type) (bool, types.Type, types.Type) {
+	var promoted1, promoted2 bool
+	s1, promoted1 = promoteBlockScaledVector(s1)
+	s2, promoted2 = promoteBlockScaledVector(s2)
+	if promoted1 || promoted2 {
+		if cast, left, right := fixedTypeCastRule2(s1, s2); cast {
+			return true, left, right
+		}
+		return true, s1, s2
+	}
 	lowPrec := false
 	if isLowPrecFloat(s1.Oid) {
 		s1 = types.T_float32.ToType()

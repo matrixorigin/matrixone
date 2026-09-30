@@ -3125,7 +3125,8 @@ func IsGroupConcatSupported(t types.Type) bool {
 		types.T_TS, types.T_Rowid, types.T_Blockid,
 		types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16,
-		types.T_array_int8, types.T_array_uint8:
+		types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4:
 		return true
 	default:
 		return false

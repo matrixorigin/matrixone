@@ -215,9 +215,10 @@ only when it is stored into a `vecf8`/`vecf4` column (assignment cast).
 |-----------|----------|
 | `CAST` | text ↔ `vecf8`/`vecf4`; `vecf32` ↔ `vecf8`/`vecf4` |
 | `+ - * /` (vector–vector, vector–scalar) | operands promoted to `vecf32`; result `vecf32` |
-| `SUM` / `AVG` over a vector column | accumulated in float; result `vecf32` |
+| `ANY_VALUE`, `COUNT`, `GROUP_CONCAT` | as for `vecf32`; `GROUP_CONCAT` renders the dequantized text |
 | `inner_product(a, b)` | fp32 dot product over dequantized values; `a`/`b` each `vecf8`, `vecf4` or `vecf32` |
 | `l2_distance`, `cosine_distance`, `l1_distance`, … | not supported |
+| `SUM`/`AVG`/`MIN`/`MAX` over vectors | not supported (no vector type has them) |
 | comparison, `ORDER BY`, `GROUP BY`, `DISTINCT`, join keys | not supported |
 | primary key, partition key, secondary/unique index, vector index | rejected at DDL |
 | `LOAD` | CSV text `"[…]"`; Parquet `LIST<FLOAT/DOUBLE>` and text columns, quantized per row |
@@ -341,8 +342,8 @@ provided by these functions.
 - **P1 — storage (CPU):** `vecf8`/`vecf4` types, header codec, E8M0 scale codec,
   pack/unpack, string cast, display; a golden test pinning the element codecs to the CUDA
   outputs above.
-- **P2 — column operations (CPU):** casts, arithmetic, `SUM`/`AVG`, `inner_product`,
-  DDL rejections, CSV/Parquet `LOAD`.
+- **P2 — column operations (CPU):** casts, arithmetic, `ANY_VALUE`/`GROUP_CONCAT`,
+  `inner_product`, DDL rejections, CSV/Parquet `LOAD`.
 - **P3 — CPU functions:** `vector_matmul` in `cpu` mode (fp32 dot product over dequantized
   blocks) and `vector_matmul_merge`; UT + BVT.
 - **P4 — GPU engine:** `cgo/cublaslt` (tiled scale re-layout, K padding, dataset-as-A
