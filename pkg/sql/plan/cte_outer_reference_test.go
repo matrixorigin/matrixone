@@ -632,6 +632,20 @@ func TestLocalCTEOuterReferencesRejectUnsafeDomains(t *testing.T) {
 				select n from q) from tpch.nation p`,
 		},
 		{
+			name: "variable demand cannot cross dependent producer row selection",
+			sql: `select p.n_nationkey, (with recursive r(n) as (
+				select p.n_nationkey union all select n from r where n<0),
+				q(n) as (select n from r where n<0)
+				select count(*) from q where p.n_nationkey=@demand) from tpch.nation p`,
+		},
+		{
+			name: "system variable demand cannot cross dependent producer",
+			sql: `select p.n_nationkey, (with recursive r(n) as (
+				select p.n_nationkey union all select n from r where n<0),
+				q(n) as (select n from r where n<0)
+				select count(*) from q where p.n_nationkey=@@session.auto_increment_increment) from tpch.nation p`,
+		},
+		{
 			name: "variable demand cannot cross a failing seed input",
 			sql: `select p.n_nationkey, (with q(n) as (
 				select p.n_nationkey where cast(p.n_name as signed)>0)

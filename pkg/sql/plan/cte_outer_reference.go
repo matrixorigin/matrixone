@@ -343,7 +343,10 @@ func (d *localCTEDomain) admitVariableDemand(root int32) error {
 	var safeInput func(int32) bool
 	safeInput = func(id int32) bool {
 		n := d.builder.qry.Nodes[id]
-		if !localCTEReplaySafeNode(n, true) {
+		// A dependent producer has its own row-selection and operator effects.
+		// Scalar totality does not prove that evaluating demand at its seed
+		// preserves the consuming producer's (possibly empty) input domain.
+		if len(n.SourceStep) != 0 || !localCTEReplaySafeNode(n, true) {
 			return false
 		}
 		if n.RowsetData != nil {
@@ -371,16 +374,30 @@ func (d *localCTEDomain) admitVariableDemand(root int32) error {
 		d.variableDemandProjects[id] = true
 		return nil
 	}
-	for id := range d.nodes {
-		n := d.builder.qry.Nodes[id]
-		if n.NodeType == plan.Node_SINK && !n.RecursiveCte && !n.RecursiveSink {
-			if err := mark(n.Children[0]); err != nil {
-				return err
-			}
-		}
-	}
-	if len(d.builder.qry.Nodes[root].SourceStep) == 0 {
+	rootNode := d.builder.qry.Nodes[root]
+	if len(rootNode.SourceStep) == 0 {
 		if err := mark(root); err != nil {
+			return err
+		}
+	} else {
+		// Select only this recursive producer's anchor, not every SINK in
+		// the transitive dependency graph collected for payload propagation.
+		if rootNode.NodeType != plan.Node_SINK_SCAN || len(rootNode.SourceStep) != 1 {
+			return d.unsupported("variable demand has no unique recursive producer")
+		}
+		sink := d.builder.qry.Nodes[d.builder.qry.Steps[rootNode.SourceStep[0]]]
+		if !sink.RecursiveSink || len(sink.Children) != 1 {
+			return d.unsupported("variable demand has no recursive seed owner")
+		}
+		cte := d.builder.qry.Nodes[sink.Children[0]]
+		if cte.NodeType != plan.Node_RECURSIVE_CTE || len(cte.SourceStep) == 0 {
+			return d.unsupported("variable demand has no recursive anchor")
+		}
+		anchor := d.builder.qry.Nodes[d.builder.qry.Steps[cte.SourceStep[0]]]
+		if anchor.NodeType != plan.Node_SINK || len(anchor.Children) != 1 {
+			return d.unsupported("variable demand has no unique seed projection")
+		}
+		if err := mark(anchor.Children[0]); err != nil {
 			return err
 		}
 	}
