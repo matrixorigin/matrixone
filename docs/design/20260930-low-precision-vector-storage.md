@@ -205,9 +205,31 @@ Build integration:
 
 ## SQL surface
 
+### Column operations
+
+`vecf8`/`vecf4` follow the scalar `float8`/`float4` rule: no native arithmetic; a value
+in an expression is dequantized and computed as `vecf32`, and a result is quantized again
+only when it is stored into a `vecf8`/`vecf4` column (assignment cast).
+
+| Operation | Behavior |
+|-----------|----------|
+| `CAST` | text ↔ `vecf8`/`vecf4`; `vecf32` ↔ `vecf8`/`vecf4` |
+| `+ - * /` (vector–vector, vector–scalar) | operands promoted to `vecf32`; result `vecf32` |
+| `SUM` / `AVG` over a vector column | accumulated in float; result `vecf32` |
+| `inner_product(a, b)` | fp32 dot product over dequantized values; `a`/`b` each `vecf8`, `vecf4` or `vecf32` |
+| `l2_distance`, `cosine_distance`, `l1_distance`, … | not supported |
+| comparison, `ORDER BY`, `GROUP BY`, `DISTINCT`, join keys | not supported |
+| primary key, partition key, secondary/unique index, vector index | rejected at DDL |
+| `LOAD` | CSV text `"[…]"`; Parquet `LIST<FLOAT/DOUBLE>` and text columns, quantized per row |
+
+The promotion is implemented in these operations only; there is no implicit
+`vecf8`/`vecf4` → `vecf32` cast, so unsupported functions reject the types.
+
+### Batch dot-product search
+
 Two functions, sharing one JSON result format.
 
-### `vector_matmul` (table function)
+#### `vector_matmul` (table function)
 
 ```sql
 vector_matmul(params, src_id, src_vec, queries) → (result JSON)
@@ -236,7 +258,7 @@ In `cpu` mode (and on CPU builds) the same function computes the dot products wi
 CPU kernel over the dequantized values in fp32; results match the GPU within fp32
 summation-order tolerance.
 
-### `vector_matmul_merge` (aggregate)
+#### `vector_matmul_merge` (aggregate)
 
 ```sql
 vector_matmul_merge(result JSON, limit) → JSON
@@ -246,7 +268,7 @@ Merges any number of partial results of the same queries into the final top `lim
 query. Its input and output use the same format, so it is independent of how many CNs
 or instances produced partials.
 
-### Result format
+#### Result format
 
 ```json
 [
@@ -264,7 +286,7 @@ or instances produced partials.
   - Position 1, `score`: the dot product, a JSON number.
   - A field added later takes position 2; positions 0 and 1 keep their meaning.
 
-### Usage
+#### Usage
 
 ```sql
 SELECT vector_matmul_merge(p.result, 10) AS result
@@ -287,7 +309,7 @@ FROM m CROSS APPLY unnest(m.result, '$') q
        CROSS APPLY unnest(q.value, '$') h;
 ```
 
-### Scores
+#### Scores
 
 The score is the dot product. Cosine similarity equals the dot product for unit-normalized
 vectors, the usual form of embeddings. L2, cosine on non-normalized vectors and L1 are not
@@ -319,7 +341,8 @@ provided by these functions.
 - **P1 — storage (CPU):** `vecf8`/`vecf4` types, header codec, E8M0 scale codec,
   pack/unpack, string cast, display; a golden test pinning the element codecs to the CUDA
   outputs above.
-- **P2 — casts + LOAD (CPU):** `vecf32 ↔ vecf8/vecf4`, CSV/parquet import.
+- **P2 — column operations (CPU):** casts, arithmetic, `SUM`/`AVG`, `inner_product`,
+  DDL rejections, CSV/Parquet `LOAD`.
 - **P3 — CPU functions:** `vector_matmul` in `cpu` mode (fp32 dot product over dequantized
   blocks) and `vector_matmul_merge`; UT + BVT.
 - **P4 — GPU engine:** `cgo/cublaslt` (tiled scale re-layout, K padding, dataset-as-A
