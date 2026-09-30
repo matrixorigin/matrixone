@@ -382,8 +382,8 @@ func TestCDCTargetIdentityAdmissionAndGuard(t *testing.T) {
 		db, mock, err := sqlmock.New()
 		require.NoError(t, err)
 		defer db.Close()
-		mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = ? AND table_name = ? AND table_type = 'BASE TABLE'"))
-		WithArgs("db", "t").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = ? AND table_name = ? AND table_type = 'BASE TABLE'")).
+			WithArgs("db", "t").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
 		mock.ExpectBegin().WillReturnError(errors.New("begin failed"))
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)
