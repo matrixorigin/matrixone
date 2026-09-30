@@ -876,7 +876,7 @@ func TestDecimalSuffixCoercionRecordsProtocolDependency(t *testing.T) {
 					Decimal128Val: &plan.Decimal128{A: int64(coefficient.B0_63), B: int64(coefficient.B64_127)},
 				}}},
 			}
-			require.Equal(t, tc.wantSafe, checkNoNeedCast(constantType, types.New(types.T_decimal128, 30, 0), literal))
+			require.Equal(t, tc.wantSafe, checkNoNeedCast(context.Background(), constantType, types.New(types.T_decimal128, 30, 0), literal))
 			require.Equal(t, tc.wantMarker, literal.GetLit().DecimalLiteralRequiresV82,
 				"record the dependency at the coercion decision, even when coercion is rejected")
 		})

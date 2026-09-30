@@ -305,10 +305,6 @@ func (s *service) Delete(
 	ctx context.Context,
 	tableID uint64,
 	txnOp client.TxnOperator) error {
-	s.logger.Info("delete auto increment table",
-		zap.Uint64("table-id", tableID),
-		zap.String("txn", txnOp.Txn().DebugString()))
-
 	delCtx, err := newDeleteCtx(ctx, tableID)
 	if err != nil {
 		return err
@@ -1223,11 +1219,19 @@ func (s *service) createClosed(_ context.Context, _ client.TxnOperator, event cl
 	return nil
 }
 
-func (s *service) deleteClosed(_ context.Context, _ client.TxnOperator, event client.TxnEvent, v any) error {
+func (s *service) deleteClosed(_ context.Context, txnOp client.TxnOperator, event client.TxnEvent, v any) error {
 	if !event.Committed() {
 		return nil
 	}
 	delCtx := v.(deleteCtx)
+	if txnOp != nil {
+		// Statement callbacks cover ordinary rollback; the workspace confirms
+		// that a physical table deletion still exists at transaction close.
+		if deletions, ok := txnOp.GetWorkspace().(client.TerminalTableDeletionView); ok &&
+			!deletions.IsTableDeletedAtTxnClose(delCtx.tableID) {
+			return nil
+		}
+	}
 	s.mu.Lock()
 	if s.mu.closed {
 		s.mu.Unlock()

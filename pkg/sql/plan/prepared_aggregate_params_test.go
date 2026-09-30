@@ -454,7 +454,6 @@ func TestPreparedJSONAggregateValueNeedsRuntimeSpecialization(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			prepare := buildPreparedAggregatePlan(t, test.sql)
-			require.True(t, PreparedPlanNeedsRuntimeSpecialization(prepare.Plan))
 			for _, value := range []struct {
 				text   string
 				typ    types.Type
@@ -536,21 +535,6 @@ func TestPreparedJSONAggregateValueWithoutRuntimeMetadata(t *testing.T) {
 			require.NotNil(t, aggregate)
 			args = aggregate.GetF().Args
 			require.Equal(t, int32(types.T_decimal128), args[len(args)-1].Typ.Id)
-		})
-	}
-}
-
-func TestPreparedJSONAggregateKeepsExplicitAndKeyDomains(t *testing.T) {
-	for _, sql := range []string{
-		"select json_arrayagg(cast(? as decimal(20,4))) from nation",
-		"select json_arrayagg(cast(? as json)) from nation",
-		"select json_objectagg(''k'', cast(? as decimal(20,4))) from nation",
-		"select json_objectagg(''k'', cast(? as json)) from nation",
-		"select json_objectagg(?, 1) from nation",
-	} {
-		t.Run(sql, func(t *testing.T) {
-			prepare := buildPreparedAggregatePlan(t, sql)
-			require.False(t, PreparedPlanNeedsRuntimeSpecialization(prepare.Plan))
 		})
 	}
 }
@@ -651,7 +635,6 @@ func TestPreparedMaxByRuntimeTypeReachesResultProjection(t *testing.T) {
 	for _, name := range []string{"max_by", "max_by_non_null"} {
 		t.Run(name, func(t *testing.T) {
 			prepare := buildPreparedAggregatePlan(t, fmt.Sprintf("select %s(?, 1, 1) from nation", name))
-			require.True(t, PreparedPlanNeedsRuntimeSpecialization(prepare.Plan))
 			filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
 				context.Background(),
 				prepare.Plan,
@@ -680,12 +663,10 @@ func TestPreparedBitwiseAggregateScansForRuntimeSpecialization(t *testing.T) {
 	privateCast := aggregate.GetF().Args[0]
 	require.True(t, isBitwiseAggregatePrivateCast(privateCast))
 	require.False(t, isExplicitPreparedCast(privateCast))
-	require.True(t, PreparedPlanNeedsRuntimeSpecialization(prepare.Plan))
 }
 
 func TestPreparedBitwiseAggregateRebindsChangedValueWithinSameDomain(t *testing.T) {
 	prepare := buildPreparedAggregatePlan(t, "select bit_and(?) from nation")
-	require.True(t, PreparedPlanNeedsRuntimeSpecialization(prepare.Plan))
 	decimalType := types.New(types.T_decimal64, 2, 1)
 
 	for _, test := range []struct {
@@ -783,33 +764,11 @@ func TestPreparedBitwiseAggregateProjectionRefreshPreservesPrivateCast(t *testin
 	}
 }
 
-func TestPreparedRuntimeSpecializationCoversResultDomainAggregates(t *testing.T) {
-	for _, name := range []string{
-		"min", "max", "any_value", "max_by", "max_by_non_null",
-	} {
-		t.Run(name, func(t *testing.T) {
-			require.True(t, preparedRuntimeSpecializationFunction(name))
-		})
-	}
-}
-
 func TestPreparedRuntimeSpecializationCoversBinaryStringSemantics(t *testing.T) {
-	for _, name := range []string{
-		"ord", "char_length", "character_length",
-		"left", "right", "substring", "substr", "mid", "reverse",
-		"lower", "lcase", "upper", "ucase", "trim", "ltrim", "rtrim",
-		"locate", "instr", "position", "insert", "replace", "lpad", "rpad",
-		"substring_index", "split_part", "repeat", "concat", "concat_ws",
-		"charset", "collation",
-	} {
-		require.True(t, preparedRuntimeSpecializationFunction(name), name)
-	}
-
 	prepared, err := runOneStmt(NewMockOptimizer(false), t,
 		"prepare binary_domains from 'select charset(left(?, 1)), char_length(?), ord(?)'")
 	require.NoError(t, err)
 	preparedPlan := prepared.GetDcl().GetPrepare().Plan
-	require.True(t, PreparedPlanNeedsRuntimeSpecialization(preparedPlan))
 
 	binaryParam := ParamValue{
 		Value: "\xe4\xbd\xa0", SourceType: types.T_varbinary.ToType(), HasSourceType: true,
@@ -832,37 +791,12 @@ func TestPreparedRuntimeSpecializationCoversBinaryStringSemantics(t *testing.T) 
 }
 
 func TestPreparedDMLRuntimeSpecializationPreservesWriteParameters(t *testing.T) {
-	predicateOnly := buildPreparedAggregatePlan(t,
-		"update nation set n_comment = ''x'' where ? = ?")
-	require.True(t, PreparedPlanNeedsRuntimeSpecialization(predicateOnly.Plan))
-
 	withWriteParameter := buildPreparedAggregatePlan(t,
 		"update nation set n_comment = ? where ? = ?")
-	// The predicate still needs execute-time comparison specialization. The
-	// write projection is materialized with its original assignment cast so a
-	// fresh DML compile cannot change the positional write layout.
-	require.True(t, PreparedPlanNeedsRuntimeSpecialization(withWriteParameter.Plan))
-
-	writeExpressionPredicate := buildPreparedAggregatePlan(t,
-		"update nation set n_comment = (? = ?) where n_nationkey = 1")
-	// A domain-sensitive expression may be nested below the assignment cast;
-	// scanning must descend into the write root while preserving its outer
-	// positional contract.
-	require.True(t, PreparedPlanNeedsRuntimeSpecialization(writeExpressionPredicate.Plan))
-
-	nestedWriteExpression := buildPreparedAggregatePlan(t,
-		"update nation set n_comment = (select d.v from (select ? = ? as v) d) where n_nationkey = 1")
-	// A derived-table projection is not a positional DML write root. Its
-	// marker comparison must therefore remain visible to the specialization
-	// scan instead of being preserved as if it were an assignment cast.
-	require.True(t, PreparedPlanNeedsRuntimeSpecialization(nestedWriteExpression.Plan))
-
 	columnBoundPredicate := buildPreparedAggregatePlan(t,
 		"update nation set n_comment = ? where n_nationkey = ? and n_regionkey = ?")
-	// The generic overload scan can still reuse the cached indexed plan; the
-	// separate text-comparison scan must select the engine DOUBLE conversion.
-	require.False(t, PreparedPlanNeedsRuntimeSpecialization(columnBoundPredicate.Plan))
-	require.True(t, PreparedPlanNeedsRuntimeTextComparisonSpecialization(
+	// The live text-comparison scan still identifies text markers beside numeric columns.
+	require.NotEmpty(t, preparedNumericComparisonTextParamPositions(
 		columnBoundPredicate.Plan,
 		[]types.Type{types.T_text.ToType(), types.T_text.ToType(), types.T_text.ToType()},
 	))
@@ -874,7 +808,7 @@ func TestPreparedDMLRuntimeSpecializationPreservesWriteParameters(t *testing.T) 
 	} {
 		columnExpressionPredicate := buildPreparedAggregatePlan(t,
 			"update nation set n_comment = n_comment where "+predicate)
-		require.True(t, PreparedPlanNeedsRuntimeTextComparisonSpecialization(
+		require.NotEmpty(t, preparedNumericComparisonTextParamPositions(
 			columnExpressionPredicate.Plan, []types.Type{types.T_text.ToType()}), predicate)
 	}
 

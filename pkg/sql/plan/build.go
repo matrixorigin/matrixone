@@ -66,7 +66,7 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 	builder.sqlCalcFoundRows = selectHasSQLCalcFoundRows(stmt)
 	builder.persistedViewTarget = persistedViewTarget
 	builder.sessionSelectLimitMayStopEarly = sessionSelectLimitMayStopEarly(
-		ctx, stmt, isPrepareStmt,
+		ctx, stmt, builder.isReusablePlan(),
 	)
 	bindCtx := NewBindContext(builder, nil)
 	bindCtx.restoreViewMySQLSpecialTypes = restoreViewMySQLSpecialTypes
@@ -80,6 +80,9 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 
 	rootId, err := builder.bindSelect(stmt, bindCtx, true)
 	if err != nil {
+		return nil, err
+	}
+	if err = builder.bindPreparedPredicateDiagnostics(); err != nil {
 		return nil, err
 	}
 	builder.skipStats = skipStats

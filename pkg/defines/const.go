@@ -136,7 +136,10 @@ const (
 	MORPCVersion98     int64 = 98  // canonical FORMAT precision and MAKEDATE/MAKETIME integer signatures
 	MORPCVersion99     int64 = 99  // owner-atomic writer-fair row-lock admission
 	MORPCVersion100    int64 = 100 // on-demand View metadata column descriptions
-	MORPCVersion101    int64 = 101 // owned generated columns for functional indexes
+	// Version 101 gates the cumulative JSON source-domain and functional-index
+	// wire capabilities. These features share the same protocol epoch and must
+	// be landed as one ordered compatibility set.
+	MORPCVersion101    int64 = 101
 	MORPCLatestVersion       = MORPCVersion101
 )
 

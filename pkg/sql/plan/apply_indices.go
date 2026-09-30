@@ -4549,7 +4549,7 @@ func canSerializeDecimalIndexRangeBound(bound *plan.Expr, indexedPartType plan.T
 	if boundType.Oid == indexedType.Oid && boundType.Scale == indexedType.Scale {
 		return true
 	}
-	return checkNoNeedCast(boundType, indexedType, bound)
+	return checkNoNeedCast(context.Background(), boundType, indexedType, bound)
 }
 
 func canSerializeDecimalIndexRangeBounds(fn *plan.Function, indexedPartType plan.Type) bool {
