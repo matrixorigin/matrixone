@@ -86,6 +86,21 @@ ALTER TABLE t_byte_boundary MODIFY data VARCHAR(100) CHARACTER SET latin1;
 SELECT character_set_name, collation_name FROM information_schema.columns
 WHERE table_schema = 'charset_error_test' AND table_name = 't_byte_boundary' AND column_name = 'data';
 
+-- 表级兼容选项同样先准入，组合 COLLATE 不得被 parser 丢弃。
+ALTER TABLE t_byte_boundary CHARACTER SET latin1;
+ALTER TABLE t_byte_boundary CONVERT TO CHARACTER SET latin1;
+ALTER TABLE t_byte_boundary CHARACTER SET latin1, ALGORITHM = COPY;
+ALTER TABLE t_byte_boundary ADD COLUMN rejected_column INT, CHARACTER SET latin1;
+ALTER TABLE t_byte_boundary CHARACTER SET utf8mb4 COLLATE latin1_bin;
+ALTER TABLE t_byte_boundary CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin;
+ALTER TABLE t_byte_boundary CONVERT TO CHARACTER SET utf8 COLLATE 'binary';
+SELECT COUNT(*) FROM information_schema.columns
+WHERE table_schema = 'charset_error_test' AND table_name = 't_byte_boundary' AND column_name = 'rejected_column';
+ALTER TABLE t_byte_boundary CHARACTER SET utf8;
+ALTER TABLE t_byte_boundary CONVERT TO CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
+SELECT character_set_name, collation_name FROM information_schema.columns
+WHERE table_schema = 'charset_error_test' AND table_name = 't_byte_boundary' AND column_name = 'data';
+
 -- UTF-8 can have 1-4 bytes per character
 -- Test 1-byte characters (ASCII)
 INSERT INTO t_byte_boundary VALUES (1, 'A');

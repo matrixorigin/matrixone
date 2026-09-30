@@ -15,6 +15,7 @@
 package sysview
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/collation"
@@ -64,6 +65,21 @@ func DefaultCollationForCharset(charset string) string {
 		}
 	}
 	return ""
+}
+
+// InformationSchemaCharacterSetsCheckSQL is shared by tenant upgrades so their
+// completion predicate uses the same effective capacities as fresh catalogs.
+// The exact row count also detects duplicate or obsolete advertised charsets.
+func InformationSchemaCharacterSetsCheckSQL() string {
+	charsets := []string{"binary", "utf8", "utf8mb4"}
+	clauses := []string{fmt.Sprintf("(SELECT COUNT(*) FROM information_schema.CHARACTER_SETS) = %d", len(charsets))}
+	for _, charset := range charsets {
+		clauses = append(clauses, fmt.Sprintf(
+			"EXISTS (SELECT 1 FROM information_schema.CHARACTER_SETS "+
+				"WHERE CHARACTER_SET_NAME = '%s' AND DEFAULT_COLLATE_NAME = '%s' AND MAXLEN = %d)",
+			charset, DefaultCollationForCharset(charset), characterSetMaxBytes(charset)))
+	}
+	return "SELECT 1 WHERE " + strings.Join(clauses, " AND ")
 }
 
 // Report the admitted encoding's capacity, not the strict native domain's.

@@ -76,6 +76,30 @@ SELECT character_set_name, collation_name FROM information_schema.columns
 WHERE table_schema = 'charset_error_test' AND table_name = 't_byte_boundary' AND column_name = 'data';
 ➤ character_set_name[12,7,0]  ¦  collation_name[12,18,0]  𝄀
 utf8mb4  ¦  utf8mb4_general_ci
+ALTER TABLE t_byte_boundary CHARACTER SET latin1;
+invalid input: unsupported character set 'latin1'
+ALTER TABLE t_byte_boundary CONVERT TO CHARACTER SET latin1;
+invalid input: unsupported character set 'latin1'
+ALTER TABLE t_byte_boundary CHARACTER SET latin1, ALGORITHM = COPY;
+invalid input: unsupported character set 'latin1'
+ALTER TABLE t_byte_boundary ADD COLUMN rejected_column INT, CHARACTER SET latin1;
+invalid input: unsupported character set 'latin1'
+ALTER TABLE t_byte_boundary CHARACTER SET utf8mb4 COLLATE latin1_bin;
+invalid input: unsupported collation 'latin1_bin'
+ALTER TABLE t_byte_boundary CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin;
+invalid input: unsupported collation 'utf8mb4_0900_bin'; replace it with 'utf8mb4_bin' when restoring legacy MatrixOne DDL
+ALTER TABLE t_byte_boundary CONVERT TO CHARACTER SET utf8 COLLATE 'binary';
+invalid input: COLLATION 'binary' is not valid for CHARACTER SET 'utf8'
+SELECT COUNT(*) FROM information_schema.columns
+WHERE table_schema = 'charset_error_test' AND table_name = 't_byte_boundary' AND column_name = 'rejected_column';
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+ALTER TABLE t_byte_boundary CHARACTER SET utf8;
+ALTER TABLE t_byte_boundary CONVERT TO CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
+SELECT character_set_name, collation_name FROM information_schema.columns
+WHERE table_schema = 'charset_error_test' AND table_name = 't_byte_boundary' AND column_name = 'data';
+➤ character_set_name[12,7,0]  ¦  collation_name[12,18,0]  𝄀
+utf8mb4  ¦  utf8mb4_general_ci
 INSERT INTO t_byte_boundary VALUES (1, 'A');
 SELECT id, LENGTH(data), CHAR_LENGTH(data) FROM t_byte_boundary WHERE id = 1;
 ➤ id[4,32,0]  ¦  LENGTH(data)[-5,64,0]  ¦  CHAR_LENGTH(data)[-5,64,0]  𝄀
