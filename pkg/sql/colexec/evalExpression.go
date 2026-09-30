@@ -2076,7 +2076,7 @@ func generateConstExpressionExecutor(
 			// consumers such as JSON constructors can preserve MySQL type tags.
 			if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary || typ.Oid == types.T_blob {
 				vec, err = newExpressionConstBytes(typ, []byte(sval), 1, proc.Mp(), selection)
-			} else if typ.Oid == types.T_geometry {
+			} else if typ.Oid == types.T_geometry || typ.Oid == types.T_json {
 				vec, err = newExpressionConstBytes(typ, []byte(sval), 1, proc.Mp(), selection)
 			} else if typ.Oid == types.T_array_float32 {
 				array, err1 := types.StringToArray[float32](sval)
