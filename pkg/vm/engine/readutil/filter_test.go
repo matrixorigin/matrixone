@@ -1947,8 +1947,8 @@ func TestConstructBlockPKFilterWithOr(t *testing.T) {
 		sortedVec, unsortedVec *vector.Vector,
 	) {
 		var (
-			singleSorted []objectio.ReadFilterSearchFuncType
-			singleUnsort []objectio.ReadFilterSearchFuncType
+			singleSorted = make([]objectio.ReadFilterSearchFuncType, 0, len(disjuncts))
+			singleUnsort = make([]objectio.ReadFilterSearchFuncType, 0, len(disjuncts))
 		)
 		for i := range disjuncts {
 			disjuncts[i].Valid = true
@@ -1972,7 +1972,7 @@ func TestConstructBlockPKFilterWithOr(t *testing.T) {
 		require.NotNil(t, combined.SortedSearchFunc, ty.String())
 		require.NotNil(t, combined.UnSortedSearchFunc, ty.String())
 
-		var sortedResults [][]int64
+		sortedResults := make([][]int64, 0, len(singleSorted))
 		sortedCache := containers.Vectors{*sortedVec}
 		for _, fn := range singleSorted {
 			sortedResults = append(sortedResults, fn(sortedCache))
@@ -1980,7 +1980,7 @@ func TestConstructBlockPKFilterWithOr(t *testing.T) {
 		expectedSorted := unionOffsets(sortedResults)
 		require.Equal(t, expectedSorted, combined.SortedSearchFunc(sortedCache), ty.String())
 
-		var unsortedResults [][]int64
+		unsortedResults := make([][]int64, 0, len(singleUnsort))
 		unsortedCache := containers.Vectors{*unsortedVec}
 		for _, fn := range singleUnsort {
 			unsortedResults = append(unsortedResults, fn(unsortedCache))

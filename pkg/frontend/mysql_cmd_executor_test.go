@@ -10221,7 +10221,7 @@ func TestExecRequestStmtSendLongDataRowCount(t *testing.T) {
 	require.NoError(t, ses.SetPrepareStmt(ctx, stmtName, prepareStmt))
 
 	setRowCount(ses, ses.GetProc(), 7)
-	payload := make([]byte, 6)
+	payload := make([]byte, 6, 15)
 	binary.LittleEndian.PutUint32(payload, stmtID)
 	binary.LittleEndian.PutUint16(payload[4:], 0)
 	payload = append(payload, "long data"...)
@@ -10274,7 +10274,7 @@ func TestExecRequestStmtSendLongDataDefersFailureUntilExecute(t *testing.T) {
 	defer stmt.Close()
 	require.NoError(t, ses.SetPrepareStmt(ctx, stmtName, stmt))
 
-	data := make([]byte, 6)
+	data := make([]byte, 6, 606)
 	binary.LittleEndian.PutUint32(data, stmtID)
 	data = append(data, bytes.Repeat([]byte{'x'}, 600)...)
 	for i := 0; i < 3; i++ {
@@ -10287,7 +10287,7 @@ func TestExecRequestStmtSendLongDataDefersFailureUntilExecute(t *testing.T) {
 	require.Empty(t, stmt.longDataBuffers)
 	require.True(t, stmt.hasPendingLongData(), "a deferred error must block migration")
 
-	execute := make([]byte, 4)
+	execute := make([]byte, 4, 13)
 	binary.LittleEndian.PutUint32(execute, stmtID)
 	execute = append(execute, buildNullExecutePacket(defines.MYSQL_TYPE_VAR_STRING)...)
 	resp, err := ExecRequest(ses, execCtx,
@@ -10386,7 +10386,7 @@ func Test_ExecRequestStmtExecuteErrorClearsPreparedParamState(t *testing.T) {
 	}
 	require.NoError(t, ses.SetPrepareStmt(ctx, prepareStmt.Name, prepareStmt))
 
-	payload := make([]byte, 4)
+	payload := make([]byte, 4, 16)
 	binary.LittleEndian.PutUint32(payload, 1)
 	payload = append(payload, 0)          // flag
 	payload = append(payload, 0, 0, 0, 0) // iteration-count
@@ -11171,7 +11171,7 @@ func Test_parseStmtSendLongData(t *testing.T) {
 		convey.Convey("GetPrepareStmt returns error", func() {
 			ses := newTestSession(t, ctrl)
 			stmtID := uint32(123)
-			data := make([]byte, 4)
+			data := make([]byte, 4, 19)
 			binary.LittleEndian.PutUint32(data, stmtID)
 			// Add some additional data
 			data = append(data, []byte("additional data")...)
@@ -11209,7 +11209,7 @@ func Test_parseStmtSendLongData(t *testing.T) {
 			ses.respr = NewMysqlResp(testWriter)
 
 			// Create data with stmtID
-			data := make([]byte, 4)
+			data := make([]byte, 4, 21)
 			binary.LittleEndian.PutUint32(data, stmtID)
 			data = append(data, []byte("long data content")...)
 
@@ -11246,7 +11246,7 @@ func Test_parseStmtSendLongData(t *testing.T) {
 			ses.respr = NewMysqlResp(testWriter)
 
 			// Create data with stmtID
-			data := make([]byte, 4)
+			data := make([]byte, 4, 21)
 			binary.LittleEndian.PutUint32(data, stmtID)
 			data = append(data, []byte("long data content")...)
 
@@ -11288,7 +11288,7 @@ func Test_parseStmtSendLongData(t *testing.T) {
 			ses.respr = NewMysqlResp(testWriter)
 
 			// Create data with stmtID
-			data := make([]byte, 4)
+			data := make([]byte, 4, 21)
 			binary.LittleEndian.PutUint32(data, stmtID)
 			data = append(data, []byte("long data content")...)
 
@@ -11362,7 +11362,7 @@ func Test_parseStmtSendLongData(t *testing.T) {
 			ses.respr = NewMysqlResp(testWriter)
 
 			// Create data with stmtID
-			data := make([]byte, 4)
+			data := make([]byte, 4, 13)
 			binary.LittleEndian.PutUint32(data, stmtID)
 			data = append(data, []byte("test data")...)
 

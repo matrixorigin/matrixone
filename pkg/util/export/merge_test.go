@@ -162,7 +162,7 @@ func initEmptyLogFile(ctx context.Context, fs fileservice.FileService, tbl *tabl
 	mux.Lock()
 	defer mux.Unlock()
 
-	files := []string{}
+	files := make([]string, 0, 1)
 	buf := make([]byte, 0, 4096)
 
 	ts1 := ts

@@ -2441,7 +2441,7 @@ func hasParamExprReflectively(value reflect.Value, visited map[paramExprVisit]st
 		}
 		return hasParamExprReflectively(value.Elem(), visited)
 
-	case reflect.Ptr:
+	case reflect.Pointer:
 		if value.IsNil() {
 			return false
 		}

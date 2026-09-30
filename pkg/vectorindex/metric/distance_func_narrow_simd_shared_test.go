@@ -1,3 +1,5 @@
+//go:build (amd64 || arm64) && go1.27 && goexperiment.simd
+
 // Copyright 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,10 +17,10 @@
 // Fixtures shared by the per-architecture narrow-kernel equivalence tests
 // (distance_func_narrow_amd64_test.go, distance_func_narrow_arm64_test.go).
 //
-// Deliberately UNTAGGED: the amd64 and arm64 SIMD test files are mutually
-// exclusive, so anything they both need has to live somewhere that compiles in
-// every configuration — otherwise the dim list and generators get duplicated and
-// drift apart. Nothing here touches archsimd, so it is safe in a non-SIMD build.
+// Tagged to match its only consumers — the amd64/arm64 SIMD test files, both
+// //go:build ...goexperiment.simd — so the shared dim list and generators are not
+// duplicated across them, yet are excluded from non-SIMD builds where neither
+// consumer compiles (otherwise these fixtures read as unused).
 
 package metric
 

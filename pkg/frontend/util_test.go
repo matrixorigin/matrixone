@@ -2487,7 +2487,7 @@ func Test_isLegal(t *testing.T) {
 		want bool
 	}
 
-	tests := []kase{}
+	tests := make([]kase, 0, len(trueNames))
 	for i, name := range trueNames {
 		tests = append(tests, kase{
 			name: fmt.Sprintf("t%d", i),

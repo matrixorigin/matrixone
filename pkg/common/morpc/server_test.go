@@ -1788,7 +1788,8 @@ func testRPCServer(t assert.TestingT, testFunc func(*server), options ...ServerO
 func newTestClient(t assert.TestingT, options ...ClientOption) RPCClient {
 	bf := NewGoettyBasedBackendFactory(newTestCodec())
 	// Add auto-create by default for tests
-	defaultOptions := []ClientOption{WithClientEnableAutoCreateBackend()}
+	defaultOptions := make([]ClientOption, 0, 1+len(options))
+	defaultOptions = append(defaultOptions, WithClientEnableAutoCreateBackend())
 	defaultOptions = append(defaultOptions, options...)
 	c, err := NewClient(
 		"",

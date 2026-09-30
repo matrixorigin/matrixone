@@ -410,7 +410,7 @@ func TestAESAllMaskedSkipsWork(t *testing.T) {
 		proc.Ctx = ctx
 		// AllNull intentionally carries no bitmap. Even cancellation, invalid
 		// IV and invalid KDF must not be evaluated for a wholly masked input.
-		var inputs []FunctionTestInput
+		inputs := make([]FunctionTestInput, 0, 4)
 		for _, arg := range []string{"hello", "password", "short", "bad"} {
 			inputs = append(inputs, NewFunctionTestInput(types.T_varchar.ToType(), []string{arg, arg}, nil))
 		}

@@ -2662,7 +2662,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow(mrs *MysqlResultSet, rowId
 				bitLength := mysqlColumn.ColumnImpl.Length()
 				byteLength := (bitLength + 7) / 8
 				b := types.EncodeUint64(&value)[:byteLength]
-				slices.Reverse(b)
+				slices.Reverse(b) //nolint:govet // inline: cannot inline generic slices.Reverse (type-param inference unsupported)
 				err = AppendCountOfBytesLenEnc(mp, b)
 				if err != nil {
 					return err
@@ -2865,7 +2865,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 				bitLength := mysqlColumn.ColumnImpl.Length()
 				byteLength := (bitLength + 7) / 8
 				b := types.EncodeUint64(&value)[:byteLength]
-				slices.Reverse(b)
+				slices.Reverse(b) //nolint:govet // inline: cannot inline generic slices.Reverse (type-param inference unsupported)
 				err = mp.appendStringLenEnc(string(b))
 				if err != nil {
 					return err
@@ -3172,7 +3172,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 			bitLength := mysqlColumn.ColumnImpl.Length()
 			byteLength := (bitLength + 7) / 8
 			b := types.EncodeUint64(&value)[:byteLength]
-			slices.Reverse(b)
+			slices.Reverse(b) //nolint:govet // inline: cannot inline generic slices.Reverse (type-param inference unsupported)
 			err = AppendCountOfBytesLenEnc(mp, b)
 			if err != nil {
 				return err
@@ -3467,7 +3467,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 			bitLength := mysqlColumn.ColumnImpl.Length()
 			byteLength := (bitLength + 7) / 8
 			b := types.EncodeUint64(&value)[:byteLength]
-			slices.Reverse(b)
+			slices.Reverse(b) //nolint:govet // inline: cannot inline generic call (type-param inference unsupported)
 			err = AppendCountOfBytesLenEnc(mp, b)
 			if err != nil {
 				return err
