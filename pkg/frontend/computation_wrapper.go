@@ -643,7 +643,12 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 		*/
 	} else {
 		var planSnapshotTS *timestamp.Timestamp
-		if cwft.hasPlanSnapshotTS {
+		if cwft.preparedStmt != nil {
+			// Executable EXPLAIN uses the already bound prepared plan. Carry the
+			// binding's diagnostic proof and snapshot into Compile as EXECUTE does.
+			preparedExprRetry = cwft.preparedExecutionRetry()
+			planSnapshotTS = &cwft.preparedStmt.Ts
+		} else if cwft.hasPlanSnapshotTS {
 			planSnapshotTS = &cwft.planSnapshotTS
 		}
 		cwft.compile, err = createCompile(
