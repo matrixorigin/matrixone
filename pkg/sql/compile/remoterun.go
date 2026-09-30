@@ -2279,9 +2279,10 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 				"string numeric compatibility cannot run with a legacy session contract",
 			)
 		}
-		if !hasProtocolVersion || protocolVersion < defines.MORPCVersion101 {
-			return moerr.NewNotSupportedNoCtx(
-				"string numeric compatibility requires MORPC protocol version 101",
+		if !hasProtocolVersion || protocolVersion < defines.MORPCLatestVersion {
+			return moerr.NewNotSupportedNoCtxf(
+				"string numeric compatibility requires MORPC protocol version %d",
+				defines.MORPCLatestVersion,
 			)
 		}
 	}
@@ -2379,7 +2380,7 @@ func requiresStringNumericCompatibilityProtocol(proc *process.Process, features 
 }
 
 // strictStringNumericCompatibilityDefault reports whether this execution
-// generation relies on the v101 strict-by-default contract. A legacy process
+// generation relies on the current strict-by-default contract. A legacy process
 // snapshot remains strict locally, but is rejected for changed remote
 // expressions until its sender contract is known. Explicit MySQL and native
 // modes preserve the old CAST/IF contract.

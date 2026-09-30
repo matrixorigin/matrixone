@@ -848,6 +848,37 @@ func TestBuildProcessInfoRejectsInvalidBinaryStringMetadataLength(t *testing.T) 
 	require.Empty(t, info.PrepareParams.IsBinaryString)
 }
 
+func TestSessionInfoNumericCompatibilityWireFieldSeparation(t *testing.T) {
+	// A foreign sender that still writes these two varint fields must not
+	// establish this PR's explicit mode or current-sender marker.
+	foreignWire := []byte{0xb0, 0x01, 0x01, 0xb8, 0x01, 0x01}
+	var foreign pipeline.SessionInfo
+	require.NoError(t, foreign.Unmarshal(foreignWire))
+	require.False(t, foreign.GetMysqlNumericCompatibilityMode())
+	require.Zero(t, foreign.GetNumericCompatibilityContractVersion())
+	legacy, err := ConvertToProcessSessionInfo(foreign)
+	require.NoError(t, err)
+	require.True(t, legacy.LegacyNumericCompatibilityMode)
+	require.False(t, legacy.MySQLNumericCompatibilityMode)
+
+	current := pipeline.SessionInfo{
+		MysqlNumericCompatibilityMode:       true,
+		NumericCompatibilityContractVersion: 1,
+	}
+	encoded, err := current.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, []byte{0xc0, 0x01, 0x01, 0xc8, 0x01, 0x01}, encoded,
+		"the current mode and marker use SessionInfo fields 24 and 25")
+	var decoded pipeline.SessionInfo
+	require.NoError(t, decoded.Unmarshal(encoded))
+	require.True(t, decoded.GetMysqlNumericCompatibilityMode())
+	require.Equal(t, uint32(1), decoded.GetNumericCompatibilityContractVersion())
+	currentSession, err := ConvertToProcessSessionInfo(decoded)
+	require.NoError(t, err)
+	require.False(t, currentSession.LegacyNumericCompatibilityMode)
+	require.True(t, currentSession.MySQLNumericCompatibilityMode)
+}
+
 func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	proc, _ := newCodecTestProcess(t)
 	decodedTxn := fakeCodecTxnOperator{}
