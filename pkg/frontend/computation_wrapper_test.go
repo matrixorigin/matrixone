@@ -1111,6 +1111,19 @@ func TestBuildPlanRegexpStaticStringDomainMatrix(t *testing.T) {
 		"select regexp_instr('abc', cast('b' as binary))",
 		"select regexp_substr(cast('abc' as binary), 'a')",
 		"select regexp_replace(cast('abc' as binary), 'a', 'X')",
+		"select regexp_like(cast(@v as binary(3)), 'a')",
+		"select regexp_like(cast(@int_var as binary), 'a')",
+		"select regexp_like(cast(@unset_var as binary), 'a')",
+		"select regexp_like(cast(@v as binary(0)), 'a')",
+		"select regexp_like((select cast('a' as binary)), 'a')",
+		"select regexp_like(v, 'a') from (select cast('a' as binary) v) s",
+		"select regexp_like((select cast(null as binary)), 'a')",
+		"select regexp_like(v, 'a') from (select cast(null as binary) v) s",
+		"select regexp_like(v, 'a') from (select cast(@v as binary(3)) v) s",
+		"select regexp_like(v, 'a') from (select v from (select cast('a' as binary) v) s) t",
+		"select regexp_instr('abc', (select cast('a' as binary)))",
+		"select regexp_instr(regexp_substr((select 'a'), 'a'), _binary'a')",
+		"select regexp_replace('abc', 'a', (select cast(null as binary)))",
 	} {
 		t.Run(sql, func(t *testing.T) {
 			statements, err := mysql.Parse(ctx, sql, 1)
@@ -1132,11 +1145,24 @@ func TestBuildPlanRegexpStaticStringDomainMatrix(t *testing.T) {
 		"select cast('abc' as binary(3)) regexp _binary'a'",
 		"select regexp_substr(_binary'abc', cast('a' as binary))",
 		"select regexp_replace(cast('abc' as binary), _binary'a', _binary'X')",
+		"select regexp_like(cast(@v as binary), 'a')",
+		"select regexp_like((select cast(@v as binary)), 'a')",
+		"select regexp_like(v, 'a') from (select cast(@v as binary) v) s",
+		"select regexp_like(v, 'a') from (select v from (select cast(@v as binary) v) s) t",
+		"select regexp_like((select cast('a' as binary)), _binary'a')",
+		"select regexp_like(v, _binary'a') from (select cast('a' as binary) v) s",
 	} {
 		t.Run("accepted_"+sql, func(t *testing.T) {
 			statements, err := mysql.Parse(ctx, sql, 1)
 			require.NoError(t, err)
-			_, err = buildPlan(ctx, nil, plan2.NewEmptyCompilerContext(), statements[0])
+			compiler := plan2.NewEmptyCompilerContext()
+			compiler.ResolveVariableTypeFunc = func(name string, _, _ bool) (plan2.Type, error) {
+				if name == "v" {
+					return plan2.Type{Id: int32(types.T_text)}, nil
+				}
+				return plan2.Type{}, nil
+			}
+			_, err = buildPlan(ctx, nil, compiler, statements[0])
 			require.NoError(t, err)
 		})
 	}
@@ -1162,6 +1188,10 @@ func TestBuildPlanRegexpDefersOnlyRuntimeStringDomains(t *testing.T) {
 
 	for _, sql := range []string{
 		"select regexp_instr(cast(? as binary), 'a')",
+		"select regexp_like((select cast('a' as binary)), 'a')",
+		"select regexp_like((select cast(null as binary)), 'a')",
+		"select regexp_like((select cast(? as binary)), 'a')",
+		"select regexp_like(v, 'a') from (select cast(? as binary) v) s",
 		"select regexp_instr('abc', cast(? as binary(1)))",
 		"select regexp_replace('abc', 'a', cast(? as binary))",
 		"select regexp_instr(cast(? as char), cast(_binary'中' as varbinary(3)), 2)",

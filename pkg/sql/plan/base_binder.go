@@ -201,6 +201,20 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		} else {
 			expr, err = appendSyntaxExplicitCastBeforeExpr(b.GetContext(), expr, typ)
 		}
+		if err == nil && types.T(typ.Id) == types.T_binary && typ.Width < 0 &&
+			preparedBindingState(b.GetContext()) == nil {
+			if variable, ok := unwrapParenExpr(exprImpl.Expr).(*tree.VarExpr); ok && !variable.System {
+				if sourceType, resolved := b.resolveUserVariableType(variable); resolved &&
+					types.T(sourceType.Id) == types.T_any {
+					// Binding normally envelopes a NULL variable in TEXT. Preserve
+					// its zero-bound CAST classification before that envelope can
+					// falsely confer the unbounded string-variable exemption.
+					ensurePreparedNumericMetadata(expr).StringDomainSource = &Expr{
+						Typ: typ, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
+					}
+				}
+			}
+		}
 
 	case *tree.BitCastExpr:
 		expr, err = b.bindFuncExprImplByAstExpr("bit_cast", []tree.Expr{astExpr}, depth)
@@ -5825,6 +5839,12 @@ func regexpBinaryCastOperand(expr *Expr) bool {
 	if expr == nil || types.T(expr.Typ.Id) != types.T_binary {
 		return false
 	}
+	if isExplicitPreparedCast(expr) {
+		return !regexpUnboundedUserVariableBinaryCast(expr)
+	}
+	if source := expr.GetPreparedNumeric().GetStringDomainSource(); source != nil {
+		return regexpBinaryCastOperand(source)
+	}
 	if lit := expr.GetLit(); lit != nil {
 		if lit.Src != nil {
 			return regexpBinaryCastOperand(lit.Src)
@@ -5832,7 +5852,37 @@ func regexpBinaryCastOperand(expr *Expr) bool {
 		source := types.StringSource(lit.GetStringSource())
 		return source == types.StringSourceExpression || source == types.StringSourceLiteral
 	}
-	return isExplicitPreparedCast(expr)
+	return false
+}
+
+func regexpUnboundedUserVariableBinaryCast(expr *Expr) bool {
+	if expr == nil || types.T(expr.Typ.Id) != types.T_binary || expr.Typ.Width >= 0 {
+		return false
+	}
+	if source := expr.GetPreparedNumeric().GetStringDomainSource(); source != nil {
+		return types.T(source.Typ.Id) == types.T_blob
+	}
+	if lit := expr.GetLit(); lit != nil && lit.Src != nil {
+		return regexpUnboundedUserVariableBinaryCast(lit.Src)
+	}
+	if !isExplicitPreparedCast(expr) || len(expr.GetF().Args) == 0 {
+		return false
+	}
+	// MySQL gives an unbounded user-variable BINARY cast a BLOB-shaped result,
+	// unlike BINARY(n), including BINARY(0). EXECUTE may replace the variable
+	// with a sourced literal, but must retain the same classification.
+	source := expr.GetF().Args[0]
+	for source.GetLit() != nil && source.GetLit().Src != nil {
+		source = source.GetLit().Src
+	}
+	if !types.T(source.Typ.Id).IsMySQLString() {
+		return false
+	}
+	if variable := source.GetV(); variable != nil && !variable.System {
+		return true
+	}
+	return source.GetLit() != nil &&
+		types.StringSource(source.GetLit().GetStringSource()) == types.StringSourceUserVariable
 }
 
 func (b *baseBinder) markPreparedStringDomainSubquerySources(name string, args []*Expr) {
@@ -5950,6 +6000,31 @@ func (b *baseBinder) annotateStringDomainSource(
 	}
 	if sub := expr.GetSub(); sub != nil {
 		b.annotateStringDomainSource(sub.Child, visited, memo)
+		if types.T(expr.Typ.Id) != types.T_binary || sub.Typ != plan.SubqueryRef_SCALAR ||
+			b.builder == nil || b.builder.qry == nil || sub.NodeId < 0 || int(sub.NodeId) >= len(b.builder.qry.Nodes) {
+			return
+		}
+		key := [2]int32{sub.NodeId, -1}
+		if _, seen := visited[key]; seen {
+			return
+		}
+		visited[key] = struct{}{}
+		defer delete(visited, key)
+		node := b.builder.qry.Nodes[sub.NodeId]
+		if node == nil || len(node.ProjectList) == 0 {
+			return
+		}
+		source := node.ProjectList[0]
+		b.annotateStringDomainSource(source, visited, memo)
+		if (source.GetCol() != nil || source.GetSub() != nil) &&
+			source.GetPreparedNumeric().GetStringDomainSource() == nil {
+			return // A physical field, including a nested scalar projection, stays compatible.
+		}
+		if domains := possibleStringDomainsForExpr(source); domains != 0 {
+			// Keep static CAST provenance too: it must be checked even before
+			// PREPARE or constant folding, rather than deferred until EXECUTE.
+			ensurePreparedNumericMetadata(expr).StringDomainSource = stringDomainSourceWitness(source, domains)
+		}
 	}
 }
 
@@ -6195,6 +6270,15 @@ func compactStringDomainWitnessArg(arg *Expr) *Expr {
 
 func stringDomainWitnessType(source *Expr, domains uint8) plan.Type {
 	typ := source.Typ
+	if domains == possibleStringDomainBinary && types.T(typ.Id) == types.T_binary &&
+		(regexpUnboundedUserVariableBinaryCast(source) ||
+			(!isExplicitPreparedCast(source) &&
+				types.T(source.GetPreparedNumeric().GetStringDomainSource().GetTyp().Id) == types.T_blob)) {
+		// This metadata-only witness retains the BLOB-compatible classification
+		// of an unbounded variable cast. A plain BINARY literal would falsely
+		// turn it into an expression-owned VARCHAR trigger at the next boundary.
+		typ.Id = int32(types.T_blob)
+	}
 	if domains == possibleStringDomainText &&
 		types.StaticStringDomain(makeTypeByPlan2Expr(source)) == types.StringDomainBinary {
 		typ.Id = int32(types.T_varchar)
@@ -7347,10 +7431,11 @@ func bindFuncExprImplByPlanExpr(
 		}
 	}
 	for i := 0; i < preparedRegexpCompatibilityStringOperandCount(name, len(args)); i++ {
-		if !regexpBinaryCastOperand(args[i]) ||
-			(stringDomainModes != nil && stringDomainModes[i] != function.StringDomainCheckKnown) {
+		if !regexpBinaryCastOperand(args[i]) {
 			continue
 		}
+		// A fixed CAST domain stays static even when a derived-column witness
+		// makes the generic provenance path conservatively defer the operand.
 		if stringDomainModes == nil {
 			stringDomainModes = make([]function.StringDomainCheckMode, len(args))
 		}

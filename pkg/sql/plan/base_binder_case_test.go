@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"unsafe"
 
@@ -374,6 +375,115 @@ func TestRegexpBinaryCastOperand(t *testing.T) {
 				_, err := BindFuncExprImplByPlanExpr(context.Background(), "reg_match",
 					[]*Expr{tc.expr, makePlan2StringConstExprWithType("a")})
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrCharacterSetMismatch), err)
+			}
+		})
+	}
+}
+
+func TestRegexpBinaryCastAcrossQueryBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		sql     string
+		wantErr bool
+	}{
+		{"select regexp_like(cast(@int_var as binary), 'a')", true},
+		{"select regexp_like(cast(@unset_var as binary), 'a')", true},
+		{"select regexp_like((select cast(@unset_var as binary)), 'a')", true},
+		{"select regexp_like((select cast('a' as binary)), 'a')", true},
+		{"select regexp_like(v, 'a') from (select cast('a' as binary) v) s", true},
+		{"select regexp_like(v, 'a') from (select v from (select cast('a' as binary) v) s) t", true},
+		{"select regexp_like((select cast(null as binary)), 'a')", true},
+		{"select regexp_like(v, 'a') from (select cast(null as binary) v) s", true},
+		{"select regexp_like(v, 'a') from (select cast(@v as binary(3)) v) s", true},
+		{"select regexp_like(cast(v as binary(3)), 'a') from (select cast(@v as binary) v) s", true},
+		{"select regexp_instr('abc', (select cast('a' as binary)))", true},
+		{"select regexp_replace('abc', 'a', (select cast(null as binary)))", true},
+		{"select regexp_instr(regexp_substr((select 'a'), 'a'), _binary'a')", true},
+		{"select regexp_like(cast(@v as binary), 'a')", false},
+		{"select regexp_like((select cast(@v as binary)), 'a')", false},
+		{"select regexp_like(v, 'a') from (select cast(@v as binary) v) s", false},
+		{"select regexp_like(v, 'a') from (select v from (select cast(@v as binary) v) s) t", false},
+		{"select regexp_like((select cast('a' as binary)), _binary'a')", false},
+		{"select regexp_like(v, _binary'a') from (select cast('a' as binary) v) s", false},
+	} {
+		for _, prepare := range []bool{false, true} {
+			sql := strings.ReplaceAll(tc.sql, "@v", "@str_var")
+			if prepare {
+				sql = "prepare regexp_boundary from '" + strings.ReplaceAll(sql, "'", "''") + "'"
+			}
+			t.Run(sql, func(t *testing.T) {
+				_, err := runOneStmt(NewMockOptimizer(false), t, sql)
+				if tc.wantErr {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrCharacterSetMismatch), err)
+				} else {
+					require.NoError(t, err)
+				}
+			})
+		}
+	}
+	for _, sql := range []string{
+		"prepare regexp_marker from 'select regexp_like((select cast(? as binary)), ''a'')'",
+		"prepare regexp_marker from 'select regexp_like(v, ''a'') from (select cast(? as binary) v) s'",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, err := runOneStmt(NewMockOptimizer(false), t, sql)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrCharacterSetMismatch), err)
+		})
+	}
+}
+
+func TestRegexpBinaryCastWitnessClassification(t *testing.T) {
+	variable := &Expr{Typ: planpb.Type{Id: int32(types.T_text)},
+		Expr: &planpb.Expr_V{V: &planpb.VarRef{Name: "v"}}}
+	sourcedVariable := makePlan2StringConstExprWithType("abc")
+	sourcedVariable.GetLit().Src = DeepCopyExpr(variable)
+	frozenVariable := makePlan2StringConstExprWithType("abc")
+	frozenVariable.GetLit().StringSource = uint32(types.StringSourceUserVariable)
+	for _, tc := range []struct {
+		name   string
+		width  int32
+		source *Expr
+		want   bool
+	}{
+		{"unbounded variable", -1, variable, false},
+		{"unbounded sourced variable", -1, sourcedVariable, false},
+		{"unbounded frozen variable", -1, frozenVariable, false},
+		{"bounded variable", 3, variable, true},
+		{"zero length variable", 0, variable, true},
+		{"unbounded literal", -1, makePlan2StringConstExprWithType("a"), true},
+		{"unbounded numeric variable", -1, &Expr{Typ: planpb.Type{Id: int32(types.T_int64)},
+			Expr: &planpb.Expr_V{V: &planpb.VarRef{Name: "v"}}}, true},
+		{"unbounded parameter", -1, &Expr{Typ: variable.Typ,
+			Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cast := &Expr{Typ: planpb.Type{Id: int32(types.T_binary), Width: tc.width},
+				Expr: &planpb.Expr_F{F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "cast"}, SyntaxExplicitCast: true,
+					Args: []*Expr{DeepCopyExpr(tc.source)},
+				}}}
+			require.Equal(t, tc.want, regexpBinaryCastOperand(cast))
+			if tc.width >= 0 {
+				// An outer explicit length owns the domain even if its input's
+				// compatible lineage was carried forward as metadata.
+				ensurePreparedNumericMetadata(cast).StringDomainSource = &Expr{Typ: planpb.Type{Id: int32(types.T_blob)}}
+				require.True(t, regexpBinaryCastOperand(cast))
+				require.True(t, regexpBinaryCastOperand(stringDomainSourceWitness(cast, possibleStringDomainBinary)))
+				cast.PreparedNumeric = nil
+			}
+			originalType := cast.Typ
+			folded := &Expr{Typ: originalType, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true, Src: cast}}}
+			foldedWitness := stringDomainSourceWitness(folded, possibleStringDomainBinary)
+			require.Equal(t, tc.want, regexpBinaryCastOperand(foldedWitness), "folding must retain the cast classification")
+			witness := stringDomainSourceWitness(cast, possibleStringDomainBinary)
+			require.NotNil(t, witness.GetLit(), "retain only a compact domain witness")
+			require.Equal(t, tc.want, regexpBinaryCastOperand(witness))
+			require.Equal(t, originalType, cast.Typ, "metadata must not change execution types")
+			for i := 0; i < 8; i++ {
+				column := &Expr{Typ: originalType, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}
+				ensurePreparedNumericMetadata(column).StringDomainSource = witness
+				require.Equal(t, tc.want, regexpBinaryCastOperand(column))
+				witness = stringDomainSourceWitness(column, possibleStringDomainBinary)
+				require.NotNil(t, witness.GetLit(), "nested boundaries must not copy the query graph")
 			}
 		})
 	}

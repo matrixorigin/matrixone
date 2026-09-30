@@ -324,6 +324,86 @@ HEX(REGEXP_SUBSTR(CAST('你好' AS BINARY), _binary'.')) AS binary_first_byte,
 HEX(REGEXP_SUBSTR('你好', '.')) AS text_first_character;
 ➤ untyped_null[-7,1,0]  ¦  typed_binary_null[-7,1,0]  ¦  binary_match[-7,1,0]  ¦  binary_first_byte[-1,16383,0]  ¦  text_first_character[12,16,0]  𝄀
 null  ¦  null  ¦  1  ¦  E4  ¦  E4BDA0
+SET @regexp_cast_numeric = 123;
+SELECT REGEXP_LIKE(CAST(@regexp_cast_numeric AS BINARY), '1');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SET @regexp_cast_null = NULL;
+SELECT REGEXP_LIKE(CAST(@regexp_cast_null AS BINARY), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE((SELECT CAST(@regexp_cast_null AS BINARY)), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SET @regexp_cast_variable = 'abc';
+SELECT REGEXP_LIKE(CAST(@regexp_cast_variable AS BINARY), 'a') AS variable_match;
+➤ variable_match[-7,1,0]  𝄀
+1
+SELECT REGEXP_LIKE(CAST(@regexp_cast_variable AS BINARY(3)), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(CAST(@regexp_cast_variable AS BINARY(0)), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE((SELECT CAST(@regexp_cast_variable AS BINARY)), 'a') AS scalar_variable_match;
+➤ scalar_variable_match[-7,1,0]  𝄀
+1
+SELECT REGEXP_LIKE(v, 'a') AS derived_variable_match FROM (SELECT CAST(@regexp_cast_variable AS BINARY) v) s;
+➤ derived_variable_match[-7,1,0]  𝄀
+1
+SELECT REGEXP_LIKE(v, 'a') FROM (SELECT CAST(@regexp_cast_variable AS BINARY(3)) v) s;
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(CAST(v AS BINARY(3)), 'a') FROM (SELECT CAST(@regexp_cast_variable AS BINARY) v) s;
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE((SELECT CAST('a' AS BINARY)), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(v, 'a') FROM (SELECT CAST('a' AS BINARY) v) s;
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(v, 'a') FROM (SELECT v FROM (SELECT CAST('a' AS BINARY) v) s) t;
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE((SELECT CAST(NULL AS BINARY)), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(v, 'a') FROM (SELECT CAST(NULL AS BINARY) v) s;
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_INSTR('abc', (SELECT CAST('a' AS BINARY)));
+Character set 'utf8mb4_general_ci' cannot be used in conjunction with 'binary' in call to regexp_instr.
+SELECT REGEXP_REPLACE('abc', 'a', (SELECT CAST(NULL AS BINARY)));
+Character set 'utf8mb4_general_ci' cannot be used in conjunction with 'binary' in call to regexp_replace.
+SELECT REGEXP_LIKE((SELECT b FROM t_regexp_utf8 WHERE id = 2), 'A') AS physical_binary_match,
+REGEXP_LIKE((SELECT bl FROM t_regexp_utf8 WHERE id = 2), 'A') AS physical_blob_match,
+REGEXP_LIKE((SELECT (SELECT b FROM t_regexp_utf8 WHERE id = 2)), 'A') AS nested_physical_binary_match;
+➤ physical_binary_match[-7,1,0]  ¦  physical_blob_match[-7,1,0]  ¦  nested_physical_binary_match[-7,1,0]  𝄀
+1  ¦  1  ¦  1
+SELECT REGEXP_LIKE(v, 'A') AS derived_physical_match FROM (SELECT b v FROM t_regexp_utf8 WHERE id = 2) s;
+➤ derived_physical_match[-7,1,0]  𝄀
+1
+SELECT REGEXP_LIKE((SELECT CAST('a' AS BINARY)), _binary'a') AS scalar_binary_match;
+➤ scalar_binary_match[-7,1,0]  𝄀
+1
+SELECT REGEXP_LIKE(v, _binary'a') AS derived_binary_match FROM (SELECT CAST('a' AS BINARY) v) s;
+➤ derived_binary_match[-7,1,0]  𝄀
+1
+PREPARE regexp_scalar_cast_rejected FROM 'SELECT REGEXP_LIKE((SELECT CAST(''a'' AS BINARY)), ''a'')';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+PREPARE regexp_scalar_null_cast_rejected FROM 'SELECT REGEXP_LIKE((SELECT CAST(NULL AS BINARY)), ''a'')';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+PREPARE regexp_scalar_param_cast_rejected FROM 'SELECT REGEXP_LIKE((SELECT CAST(? AS BINARY)), ''a'')';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+PREPARE regexp_derived_param_cast_rejected FROM 'SELECT REGEXP_LIKE(v, ''a'') FROM (SELECT CAST(? AS BINARY) v) s';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+PREPARE regexp_variable_cast_rebind FROM
+'SELECT REGEXP_LIKE(CAST(@regexp_cast_variable AS BINARY), ''a'') AS variable_match, REGEXP_LIKE((SELECT CAST(@regexp_cast_variable AS BINARY)), ''a'') AS scalar_variable_match, REGEXP_LIKE(v, ''a'') AS derived_variable_match FROM (SELECT CAST(@regexp_cast_variable AS BINARY) v) s';
+EXECUTE regexp_variable_cast_rebind;
+➤ variable_match[-7,1,0]  ¦  scalar_variable_match[-7,1,0]  ¦  derived_variable_match[-7,1,0]  𝄀
+1  ¦  1  ¦  1
+SET @regexp_cast_variable = _binary'abc';
+EXECUTE regexp_variable_cast_rebind;
+➤ variable_match[-7,1,0]  ¦  scalar_variable_match[-7,1,0]  ¦  derived_variable_match[-7,1,0]  𝄀
+1  ¦  1  ¦  1
+SET @regexp_cast_variable = NULL;
+EXECUTE regexp_variable_cast_rebind;
+➤ variable_match[-7,1,0]  ¦  scalar_variable_match[-7,1,0]  ¦  derived_variable_match[-7,1,0]  𝄀
+null  ¦  null  ¦  null
+SET @regexp_cast_variable = 'abc';
+EXECUTE regexp_variable_cast_rebind;
+➤ variable_match[-7,1,0]  ¦  scalar_variable_match[-7,1,0]  ¦  derived_variable_match[-7,1,0]  𝄀
+1  ¦  1  ¦  1
+DEALLOCATE PREPARE regexp_variable_cast_rebind;
 PREPARE regexp_binary_cast_rejected FROM 'SELECT REGEXP_INSTR(CAST(? AS BINARY), ''a'')';
 Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_instr.
 PREPARE regexp_binary_cast_rebind FROM 'SELECT HEX(REGEXP_SUBSTR(CAST(? AS BINARY), _binary''.'')) AS first_byte';
