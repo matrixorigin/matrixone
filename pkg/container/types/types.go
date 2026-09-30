@@ -466,6 +466,18 @@ type FixedSizeTExceptStrType interface {
 	bool | OrderedT | Decimal | TS | Rowid | Uuid | Blockid
 }
 
+// LowPrecFloat is the set of scalar low-precision float types (bf16/float16/float8/
+// float4): fixed-size values that widen losslessly to float32. It combines the
+// fixed-size storage bound (so DecodeFixed / column accessors work) with the
+// ToFloat32 method (so ordering / compare / sum / min-max / cast helpers compute by
+// float VALUE, not raw bits). The union + method together admit exactly the four
+// types. It is the single constraint for the generic helpers these types share
+// instead of an inline `interface{ ToFloat32() float32 }` repeated per site.
+type LowPrecFloat interface {
+	FixedSizeTExceptStrType
+	ToFloat32() float32
+}
+
 type Number interface {
 	Ints | UInts | Floats | Decimal
 }

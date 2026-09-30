@@ -641,19 +641,19 @@ func float32OrderDescLess(data []float32, i, j int64) bool {
 
 // Low-precision float comparators widen each element to float32 (raw bits do not order
 // floats) and reuse the float32 SQL NaN-aware ordering.
-func lowPrecOrderAscLess[T interface{ ToFloat32() float32 }](data []T, i, j int64) bool {
+func lowPrecOrderAscLess[T types.LowPrecFloat](data []T, i, j int64) bool {
 	return types.Float32OrderAscCompare(data[i].ToFloat32(), data[j].ToFloat32()) < 0
 }
 
-func lowPrecOrderDescLess[T interface{ ToFloat32() float32 }](data []T, i, j int64) bool {
+func lowPrecOrderDescLess[T types.LowPrecFloat](data []T, i, j int64) bool {
 	return types.Float32OrderDescCompare(data[i].ToFloat32(), data[j].ToFloat32()) < 0
 }
 
-func lowPrecLess[T interface{ ToFloat32() float32 }](data []T, i, j int64) bool {
+func lowPrecLess[T types.LowPrecFloat](data []T, i, j int64) bool {
 	return data[i].ToFloat32() < data[j].ToFloat32()
 }
 
-func lowPrecGreater[T interface{ ToFloat32() float32 }](data []T, i, j int64) bool {
+func lowPrecGreater[T types.LowPrecFloat](data []T, i, j int64) bool {
 	return data[i].ToFloat32() > data[j].ToFloat32()
 }
 

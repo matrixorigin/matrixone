@@ -31,10 +31,7 @@ import (
 // and pruned by float VALUE, not raw bits. The negative bound is the discriminator: a
 // negative float's raw uint bits exceed a positive's, so a bit-wise zonemap would order
 // min/max backwards and prune wrongly. Values are exactly representable in all four formats.
-func zonemapLowPrecCase[T interface {
-	types.FixedSizeTExceptStrType
-	ToFloat32() float32
-}](t *testing.T, oid types.T, from func(float32) T, mp *mpool.MPool) {
+func zonemapLowPrecCase[T types.LowPrecFloat](t *testing.T, oid types.T, from func(float32) T, mp *mpool.MPool) {
 	// min=-3.0, max=2.0 fed in reversed order so Update must value-order them.
 	zm := NewZM(oid, 0)
 	UpdateZM(zm, types.EncodeFixed(from(2.0)))

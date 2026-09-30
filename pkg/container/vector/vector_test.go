@@ -4799,10 +4799,7 @@ func TestInplaceSortMarksSupportedVectorsSortedWithoutCompacting(t *testing.T) {
 
 // lowPrecValueOrderingCase exercises the container ordering/aggregation paths for one
 // low-precision float type, asserting they order/aggregate by FLOAT VALUE, not raw bits.
-func lowPrecValueOrderingCase[T interface {
-	types.FixedSizeT
-	ToFloat32() float32
-}](
+func lowPrecValueOrderingCase[T types.LowPrecFloat](
 	t *testing.T, oid types.T, from func(float32) T,
 ) {
 	mp := mpool.MustNew(t.Name())

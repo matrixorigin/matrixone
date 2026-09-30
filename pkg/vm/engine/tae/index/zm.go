@@ -813,10 +813,7 @@ func (zm ZM) PrefixIn(vec *vector.Vector) bool {
 // subVecInLowPrecFloat is the SubVecIn bound search for a low-precision float column
 // (bf16/float16/float8/float4). The column is sorted by float value (InplaceSort widens
 // via ToFloat32), so bounds are searched on the widened float value, not the raw bits.
-func subVecInLowPrecFloat[T interface {
-	types.FixedSizeTExceptStrType
-	ToFloat32() float32
-}](zm ZM, vec *vector.Vector) (int, int) {
+func subVecInLowPrecFloat[T types.LowPrecFloat](zm ZM, vec *vector.Vector) (int, int) {
 	col := vector.MustFixedColNoTypeCheck[T](vec)
 	minVal := types.DecodeFixed[T](zm.GetMinBuf()).ToFloat32()
 	maxVal := types.DecodeFixed[T](zm.GetMaxBuf()).ToFloat32()

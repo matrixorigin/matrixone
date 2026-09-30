@@ -253,7 +253,7 @@ func FloatGetMinAndMax[T ~float32 | ~float64](vec *Vector) (
 // LowPrecFloatGetSum sums a low-precision float vector (bf16/float16/float8/float4)
 // by widening each value to float64 via ToFloat32. Raw bits do not order or add as
 // floats, so the widen is mandatory; the result is float64 like FloatGetSum.
-func LowPrecFloatGetSum[T interface{ ToFloat32() float32 }](vec *Vector) (sum float64) {
+func LowPrecFloatGetSum[T types.LowPrecFloat](vec *Vector) (sum float64) {
 	col := MustFixedColNoTypeCheck[T](vec)
 	if vec.HasNull() {
 		for i, v := range col {
@@ -275,7 +275,7 @@ func LowPrecFloatGetSum[T interface{ ToFloat32() float32 }](vec *Vector) (sum fl
 // makes raw uint order disagree with value order). NaN is skipped like
 // FloatGetMinAndMax; ok=false for an all-NULL/all-NaN vector keeps the zonemap
 // uninitialized rather than publishing poisoned bounds.
-func LowPrecFloatGetMinAndMax[T interface{ ToFloat32() float32 }](vec *Vector) (
+func LowPrecFloatGetMinAndMax[T types.LowPrecFloat](vec *Vector) (
 	minv, maxv T,
 	ok bool,
 ) {

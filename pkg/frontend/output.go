@@ -819,7 +819,7 @@ func lowPrecFloatVecToFloat32Slice(vec *vector.Vector) []float32 {
 	return nil
 }
 
-func widenLowPrecFloatSlice[T interface{ ToFloat32() float32 }](in []T) []float32 {
+func widenLowPrecFloatSlice[T types.LowPrecFloat](in []T) []float32 {
 	out := make([]float32, len(in))
 	for i := range in {
 		out[i] = in[i].ToFloat32()

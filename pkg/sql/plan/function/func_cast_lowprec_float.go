@@ -92,20 +92,13 @@ func castToLowPrecFloat(parameters []*vector.Vector, toType types.Type, result v
 	return moerr.NewInternalError(proc.Ctx, fmt.Sprintf("unsupported cast to %s", toType))
 }
 
-// lowPrecFloatConstraint is a low-precision float value type: a fixed-size ordered
-// type that widens to float32.
-type lowPrecFloatConstraint interface {
-	types.FixedSizeTExceptStrType
-	ToFloat32() float32
-}
-
 // anyToLowPrecFloat widens each source value to float32 and rounds it to Tr via ctor.
 // Every value is finite-checked (RejectNonFiniteNarrowFloat) before rounding, so a NaN,
 // Inf, or out-of-range source errors instead of persisting a non-finite / saturated
 // value -- this keeps the numeric path consistent with the string path and upholds the
 // repo-wide "never persist non-finite float" invariant (#29084); bf16/float16 otherwise
 // overflow to Inf and float8 otherwise maps NaN to its NaN slot.
-func anyToLowPrecFloat[Tr lowPrecFloatConstraint](
+func anyToLowPrecFloat[Tr types.LowPrecFloat](
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, ctor func(float32) Tr,
 ) error {
 	from := parameters[0]
@@ -179,7 +172,7 @@ func anyToLowPrecFloat[Tr lowPrecFloatConstraint](
 
 // strToLowPrecFloat parses each string to a float then rounds it to Tr. A malformed
 // value errors, matching a strict numeric cast.
-func strToLowPrecFloat[Tr lowPrecFloatConstraint](
+func strToLowPrecFloat[Tr types.LowPrecFloat](
 	ctx context.Context, from *vector.Vector, result vector.FunctionResultWrapper, length int, ctor func(float32) Tr,
 ) error {
 	src := vector.GenerateFunctionStrParameter(from)
@@ -239,7 +232,7 @@ func materializeLowPrecAsFloat32(ctx context.Context, from, tmp *vector.Vector, 
 	return moerr.NewInternalError(ctx, fmt.Sprintf("not a low-precision float: %s", from.GetType()))
 }
 
-func appendLowPrecAsFloat32[Ts lowPrecFloatConstraint](from, tmp *vector.Vector, length int, mp *mpool.MPool) error {
+func appendLowPrecAsFloat32[Ts types.LowPrecFloat](from, tmp *vector.Vector, length int, mp *mpool.MPool) error {
 	src := vector.GenerateFunctionFixedTypeParameter[Ts](from)
 	for i := 0; i < length; i++ {
 		v, isnull := src.GetValue(uint64(i))

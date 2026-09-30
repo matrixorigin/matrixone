@@ -11268,7 +11268,7 @@ func compareOrderedRows[T cmp.Ordered](v *Vector, left, right int) int {
 // compareFloatRows orders two low-precision float rows (bf16/float16/float8/float4)
 // by widened float VALUE. Raw bits do not order floats (the sign bit inverts), so
 // the values are compared through ToFloat32 with cmp.Compare (NaN-aware ordering).
-func compareFloatRows[T interface{ ToFloat32() float32 }](v *Vector, left, right int) int {
+func compareFloatRows[T types.LowPrecFloat](v *Vector, left, right int) int {
 	return cmp.Compare(
 		GetFixedAtNoTypeCheck[T](v, left).ToFloat32(),
 		GetFixedAtNoTypeCheck[T](v, right).ToFloat32(),
@@ -11588,7 +11588,7 @@ func (v *Vector) inplaceSortRowMetadata(compact bool) bool {
 
 // sortLowPrecFloatCol sorts a low-precision float column (bf16/float16/float8/float4)
 // by widened float value; raw uint bits do not order floats (the sign bit inverts).
-func sortLowPrecFloatCol[T interface{ ToFloat32() float32 }](v *Vector) {
+func sortLowPrecFloatCol[T types.LowPrecFloat](v *Vector) {
 	col := MustFixedColNoTypeCheck[T](v)
 	slices.SortFunc(col, func(a, b T) int {
 		return cmp.Compare(a.ToFloat32(), b.ToFloat32())
@@ -11598,7 +11598,7 @@ func sortLowPrecFloatCol[T interface{ ToFloat32() float32 }](v *Vector) {
 // sortAndCompactLowPrecFloatCol sorts by float value then removes value-duplicates.
 // Equality is by ToFloat32 (so +0/-0 collapse and NaN never compacts), matching the
 // native float32 slices.Sort+Compact path.
-func sortAndCompactLowPrecFloatCol[T interface{ ToFloat32() float32 }](v *Vector) {
+func sortAndCompactLowPrecFloatCol[T types.LowPrecFloat](v *Vector) {
 	col := MustFixedColNoTypeCheck[T](v)
 	slices.SortFunc(col, func(a, b T) int {
 		return cmp.Compare(a.ToFloat32(), b.ToFloat32())
