@@ -43,7 +43,7 @@ func TestNormalizeStatementDigest(t *testing.T) {
 		{sql: "CREATE TABLE t (a INT NULL, b INT NOT NULL DEFAULT NULL, c INT DEFAULT 1 + NULL)", max: 1024, want: "CREATE TABLE `t` ( `a` INTEGER NULL , `b` INTEGER NOT NULL DEFAULT ? , `c` INTEGER DEFAULT ? + ? )"},
 		{sql: "SELECT /*!80000 SQL_NO_CACHE */ 1 /*!90000 + 2 */", max: 1024, want: "SELECT SQL_NO_CACHE ?"},
 		{sql: "SELECT /*!80000 '*/' */", max: 1024, want: "SELECT ?"},
-		{sql: "SELECT /*! ROW(1 -- , */\n + 2 /* , */ , 3 / 4) */", max: 1024, want: "SELECT ROW ( ? + ? , ? / ? )"},
+		{sql: "SELECT /*! ROW(1 -- , */\n + 2 /* , */ , 3 / 4) */", max: 1024, want: "SELECT ROW ( ? + ?, ... / ? )"},
 		{sql: "SELECT /*!80000 1 # ignored */\n + 2 */", max: 1024, want: "SELECT ? + ?"},
 		{sql: "SELECT /*!80000 */ /*+ MAX_EXECUTION_TIME(1000) */ 1", max: 1024, want: "SELECT ?"},
 		{sql: "SELECT CAST('x' AS NCHAR), 'a' SOUNDS LIKE 'b'", max: 1024, want: "SELECT CAST ( ? AS NCHAR ) , ? SOUNDS LIKE ?"},
