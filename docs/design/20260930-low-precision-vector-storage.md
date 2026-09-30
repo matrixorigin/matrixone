@@ -128,8 +128,21 @@ original fp32 vectors because the storage is quantized. `vecf8` is the quality f
 
 The engine computes one thing: the fp32 **dot-product matrix** `S = D × Qᵀ` of a packed
 dataset tile `D` and packed queries `Q`, with `cublasLtMatmul` block-scaled matmul. It
-has no metric, filter or top-k logic. It lives in `cgo/cublaslt`, separate from
-`cgo/cuvs` (untouched) and `cgo/cuda` (the `xcall` kernels), behind the GPU build tag.
+has no metric, filter or top-k logic.
+
+Code layout — all GPU code for these types lives in two directories, following
+`cgo/cuvs` + `pkg/cuvs`; both are separate from `cgo/cuvs`/`pkg/cuvs` (untouched) and
+`cgo/cuda` (the `xcall` kernels):
+
+- `cgo/cublaslt` — all C++/CUDA code: the engine (built only with `MO_CL_CUDA=1`) and
+  `test/` (CUDA programs, including the Float8/Float4 golden-data generator).
+- `pkg/cublaslt` — all Go GPU code: the cgo bindings and the Go API that `vector_matmul`
+  calls. Every file carries `//go:build gpu`; there is no CPU stub. Callers split by build
+  tag (`*_gpu.go` imports `pkg/cublaslt`, `*_cpu.go` does not), as the cuVS table
+  functions do.
+
+Everything else is CPU code in its usual place: the cell codec in `pkg/container/types`,
+the SQL functions under `pkg/sql`, and the CPU dot product.
 
 cuBLASLt call sequence:
 
