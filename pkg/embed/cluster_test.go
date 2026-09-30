@@ -219,7 +219,6 @@ func TestClusterLifecycleAndCNExpansion(t *testing.T) {
 	c, err := NewCluster(
 		WithTesting(),
 		WithPreStart(func(svc ServiceOperator) {
-			adjustClusterStartupRetryIntervals(svc)
 			if svc.ServiceType() == metadata.ServiceType_CN {
 				svc.Adjust(func(config *ServiceConfig) {
 					config.CN.AutomaticUpgrade = true
@@ -268,7 +267,7 @@ func TestClusterLifecycleAndCNExpansion(t *testing.T) {
 
 	// Preserve the original dynamic-expansion coverage with the generated CN
 	// defaults after the first three CNs have exercised automatic upgrade.
-	c.(*cluster).options.preStart = adjustClusterStartupRetryIntervals
+	c.(*cluster).options.preStart = nil
 	require.NoError(t, c.StartNewCNService(1))
 	validCNCanWork(t, c, 3)
 	cn, err = c.GetCNService(3)
@@ -661,7 +660,7 @@ func TestWithTestingBoundsHeartbeatRecoveryInsideStoreLiveness(t *testing.T) {
 	}
 }
 
-func TestTestingTxnTraceBufferPreservesOverrides(t *testing.T) {
+func TestTestingServiceDefaultsPreserveOverrides(t *testing.T) {
 	cfg := newServiceConfig()
 	cfg.CN.Txn.Trace.BufferSize = 4096
 	applyTestingTxnTraceBuffer(&cfg)
@@ -673,6 +672,21 @@ func TestTestingTxnTraceBufferPreservesOverrides(t *testing.T) {
 				opts = append(opts, WithTesting())
 			}
 			opts = append(opts, WithPreStart(func(svc ServiceOperator) {
+				if svc.ServiceType() == metadata.ServiceType_LOG {
+					cfg := svc.GetServiceConfig()
+					wantRTT := uint64(200)
+					wantRetry := time.Second
+					if testingMode {
+						wantRTT = 50
+						wantRetry = basicClusterHAKeeperBootstrapRetryInterval
+					}
+					require.Equal(t, wantRTT, cfg.LogService.RTTMillisecond)
+					require.Equal(t, wantRetry, cfg.LogService.HAKeeperBootstrapRetryInterval.Duration)
+					// This interval also defines the bootstrap failure budget.
+					require.Equal(t, 3*time.Second, cfg.LogService.HAKeeperCheckInterval.Duration)
+					svc.Adjust(func(cfg *ServiceConfig) { cfg.LogService.RTTMillisecond = 75 })
+				}
+
 				if svc.ServiceType() != metadata.ServiceType_CN {
 					return
 				}
@@ -688,6 +702,12 @@ func TestTestingTxnTraceBufferPreservesOverrides(t *testing.T) {
 				t.Cleanup(func() { require.NoError(t, c.Close()) })
 			}
 			require.NoError(t, err)
+			for _, svc := range c.(*cluster).services {
+				if svc.ServiceType() == metadata.ServiceType_LOG {
+					require.Equal(t, uint64(75), svc.GetServiceConfig().LogService.RTTMillisecond)
+				}
+			}
+
 			for i := range 2 {
 				cn, err := c.GetCNService(i)
 				require.NoError(t, err)
