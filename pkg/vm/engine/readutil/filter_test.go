@@ -46,6 +46,99 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestRawDecimal256FiltersKeepBlocksWithoutZoneMaps(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	value := types.Decimal256{B192_255: 1}
+	typ := plan.Type{Id: int32(types.T_decimal256), Width: 65}
+	bound := &plan.Expr{Typ: typ, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{
+		IsConst: true, Data: types.EncodeDecimal256(&value),
+	}}}
+	flag := &plan.Expr{Typ: plan.Type{Id: int32(types.T_uint8)}, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{
+		IsConst: true, Data: []byte{0},
+	}}}
+	for _, primary := range []bool{false, true} {
+		t.Run(fmt.Sprintf("primary=%t", primary), func(t *testing.T) {
+			table := &plan.TableDef{
+				Name2ColIndex: map[string]int32{"a": 0, "b": 1},
+				Cols: []*plan.ColDef{
+					{Name: "a", Primary: primary, Typ: typ},
+					{Name: "b", Seqnum: 1, Typ: plan.Type{Id: int32(types.T_int64)}},
+				},
+			}
+			meta := objectio.BuildMetaData(1, 2)
+			block := meta.GetBlockMeta(0)
+			block.BlockHeader().SetRows(2)
+			zm := index.NewZM(types.T_decimal256, 0)
+			index.UpdateZM(zm, types.EncodeDecimal256(&value))
+			require.False(t, zm.IsInited(), "raw DECIMAL256 has no persisted min/max")
+			block.MustGetColumn(0).SetZoneMap(zm)
+			bZM := index.NewZM(types.T_int64, 0)
+			index.UpdateZMAny(bZM, int64(1))
+			block.MustGetColumn(1).SetZoneMap(bZM)
+			column := MakeColExprForTest(0, types.T_decimal256, "a")
+			column.Typ = typ
+			bFilter := MakeFunctionExprForTest("=", []*plan.Expr{
+				MakeColExprForTest(1, types.T_int64, "b"), plan2.MakePlan2Int64ConstExprWithType(2),
+			})
+			foldExpressionForTest(t, proc, bFilter)
+			for _, op := range []string{"=", "<", "<=", ">", ">=", "between", "in_range", "in"} {
+				t.Run(op, func(t *testing.T) {
+					args := []*plan.Expr{column, bound}
+					if op == "between" || op == "in_range" {
+						args = append(args, bound)
+					}
+					if op == "in_range" {
+						args = append(args, flag)
+					}
+					var expr *plan.Expr
+					if op == "in" {
+						expr = MakeInExprForTest(column, []types.Decimal256{value}, types.T_decimal256, proc.Mp())
+					} else {
+						expr = MakeFunctionExprForTest(op, args)
+					}
+					_, _, _, filter, seek, canCompile, _ := CompileFilterExpr(expr, table, nil)
+					require.True(t, canCompile)
+					require.NotNil(t, filter)
+					stop, selected, err := filter(0, block, nil)
+					require.NoError(t, err)
+					require.False(t, stop)
+					require.True(t, selected, "absent statistics cannot prove that no row matches")
+					if seek != nil {
+						require.Zero(t, seek(meta), "absent statistics cannot skip the first block")
+					}
+					// The unknown decimal branch must not drop an OR match, or
+					// prevent a supported integer branch from pruning an AND.
+					for _, logic := range []string{"and", "or"} {
+						combined := MakeFunctionExprForTest(logic, []*plan.Expr{expr, bFilter})
+						_, _, _, combinedFilter, _, compiled, _ := CompileFilterExpr(combined, table, nil)
+						require.True(t, compiled)
+						_, selected, err := combinedFilter(0, block, nil)
+						require.NoError(t, err)
+						require.Equal(t, logic == "or", selected)
+					}
+				})
+			}
+			for _, nullCount := range []uint32{0, 2} {
+				block.MustGetColumn(0).SetNullCnt(nullCount)
+				for _, op := range []string{"isnull", "isnotnull"} {
+					expr := MakeFunctionExprForTest(op, []*plan.Expr{column})
+					_, _, _, filter, _, canCompile, _ := CompileFilterExpr(expr, table, nil)
+					if !canCompile {
+						// NULL predicates may remain on the exact row path;
+						// an uncompiled predicate must not expose a pruning op.
+						require.Nil(t, filter)
+						continue
+					}
+					_, selected, err := filter(0, block, nil)
+					require.NoError(t, err)
+					require.Equal(t, (op == "isnull") == (nullCount == 2), selected)
+				}
+			}
+		})
+	}
+}
+
 func TestCompileTemporalFilterExprUsesSessionTimezone(t *testing.T) {
 	zone := time.FixedZone("UTC+08", 8*3600)
 	proc := testutil.NewProcess(t)
