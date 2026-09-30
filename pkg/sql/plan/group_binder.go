@@ -66,7 +66,7 @@ func canonicalGroupByAstKey(ctx *BindContext, astExpr tree.Expr) string {
 	normalized := cloneTreeExpr(astExpr)
 	var resolvedColumns strings.Builder
 	functionNames := make(map[*tree.UnresolvedName]struct{})
-	walkGroupingSetOrderByExpr(normalized, func(expr tree.Expr) bool {
+	walkASTExpressions(normalized, func(expr tree.Expr) bool {
 		switch node := expr.(type) {
 		case *tree.UnresolvedName:
 			normalizeGroupByName(node)

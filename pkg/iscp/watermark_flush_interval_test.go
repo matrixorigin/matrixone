@@ -37,11 +37,11 @@ func TestFlushThresholdIsPerConsumerClass(t *testing.T) {
 	opt := &ISCPExecutorOption{IndexFlushWatermarkInterval: 5 * time.Second}
 
 	idx := jobEntryForFlush(t, ConsumerType_IndexSync, opt)
-	require.True(t, idx.isIndexJob)
+	require.Equal(t, ConsumerType_IndexSync, idx.consumerType)
 	require.Equal(t, 5*time.Second, idx.flushThreshold(general))
 
 	cn := jobEntryForFlush(t, ConsumerType_CNConsumer, opt)
-	require.False(t, cn.isIndexJob)
+	require.Equal(t, ConsumerType_CNConsumer, cn.consumerType)
 	require.Equal(t, general, cn.flushThreshold(general))
 }
 

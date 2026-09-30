@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/catalog/mvdefinition"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -53,6 +54,9 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	if t == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
+	if IsMaterializedViewStateTableDef(t) && !mvdefinition.CanWrite(ctx.GetContext(), t) {
+		return nil, moerr.NewUnsupportedDML(ctx.GetContext(), "insert into materialized view internal state")
+	}
 	qualifierDB := string(stmt.TargetDatabaseName)
 	if qualifierDB == "" {
 		qualifierDB = dbName
@@ -80,6 +84,9 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		tblInfo: tblInfo,
 	}
 	tableDef := tblInfo.tableDefs[0]
+	if (IsMaterializedViewTableDef(tableDef) || IsMaterializedViewStateTableDef(tableDef)) && !mvdefinition.CanWrite(ctx.GetContext(), tableDef) {
+		return nil, moerr.NewUnsupportedDML(ctx.GetContext(), "insert into materialized view")
+	}
 	// clusterTable, err := getAccountInfoOfClusterTable(ctx, stmt.Accounts, tableDef, tblInfo.isClusterTable[0])
 	// if err != nil {
 	// 	return nil, err

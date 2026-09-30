@@ -1626,6 +1626,9 @@ func TestLegacyDiscoveryCursorFailurePaths(t *testing.T) {
 		require.Contains(t, exec.sqls[1], "where t.relkind='v'")
 		require.Contains(t, exec.sqls[1],
 			"t.reldatabase not in ('information_schema','mo_catalog','mo_debug','mo_task','mysql','system','system_metrics')")
+		require.Contains(t, exec.sqls[1], "t.viewdef")
+		require.NotContains(t, exec.sqls[1], "lower(coalesce(t.viewdef,'')) not like '%create materialized view %'")
+		require.Contains(t, exec.sqls[1], "t.relname not like '__mo_mv_state_%'")
 	})
 
 	t.Run("revalidation page enqueues current view", func(t *testing.T) {
@@ -1633,18 +1636,23 @@ func TestLegacyDiscoveryCursorFailurePaths(t *testing.T) {
 		page := executor.NewMemResult([]types.Type{
 			types.T_uint32.ToType(), types.T_uint64.ToType(), types.T_uint64.ToType(),
 			types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(),
-			types.T_varchar.ToType(), types.T_uint64.ToType(), types.T_varchar.ToType(),
+			types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_uint64.ToType(),
+			types.T_varchar.ToType(),
 		}, proc.Mp())
-		page.NewBatchWithRowCount(1)
-		require.NoError(t, executor.AppendFixedRows(page, 0, []uint32{1}))
-		require.NoError(t, executor.AppendFixedRows(page, 1, []uint64{2}))
-		require.NoError(t, executor.AppendFixedRows(page, 2, []uint64{3}))
-		require.NoError(t, executor.AppendFixedRows(page, 3, []uint64{4}))
-		require.NoError(t, executor.AppendStringRows(page, 4, []string{"db"}))
-		require.NoError(t, executor.AppendStringRows(page, 5, []string{"view"}))
-		require.NoError(t, executor.AppendStringRows(page, 6, []string{catalog.SystemViewRel}))
-		require.NoError(t, executor.AppendFixedRows(page, 7, []uint64{3}))
-		require.NoError(t, executor.AppendStringRows(page, 8, []string{viewRefreshStatusCurrent}))
+		page.NewBatchWithRowCount(2)
+		require.NoError(t, executor.AppendFixedRows(page, 0, []uint32{1, 1}))
+		require.NoError(t, executor.AppendFixedRows(page, 1, []uint64{2, 2}))
+		require.NoError(t, executor.AppendFixedRows(page, 2, []uint64{3, 4}))
+		require.NoError(t, executor.AppendFixedRows(page, 3, []uint64{4, 5}))
+		require.NoError(t, executor.AppendStringRows(page, 4, []string{"db", "db"}))
+		require.NoError(t, executor.AppendStringRows(page, 5, []string{"view", "mv"}))
+		require.NoError(t, executor.AppendStringRows(page, 6, []string{catalog.SystemViewRel, catalog.SystemViewRel}))
+		require.NoError(t, executor.AppendStringRows(page, 7, []string{
+			`{"Stmt":"create view view as select 1","DefaultDatabase":"db"}`,
+			`{"Stmt":"create materialized view mv as select 1","DefaultDatabase":"db"}`,
+		}))
+		require.NoError(t, executor.AppendFixedRows(page, 8, []uint64{3, 4}))
+		require.NoError(t, executor.AppendStringRows(page, 9, []string{viewRefreshStatusCurrent, viewRefreshStatusCurrent}))
 		exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{
 			makeCursor(t, proc, catalog.ViewRefreshStatusRevalidateScan),
 			page.GetResult(), {}, {AffectedRows: 1},
