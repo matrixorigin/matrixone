@@ -2086,6 +2086,7 @@ func TestSearchPlanReaderUsesBoundedMembershipStorageTopK(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", mp)
 	scanner := &scriptedRelationScanner{t: t}
+	currentFunction := metric.DistFn_L2Distance
 	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
 		switch req.Table {
 		case "centroids_plan_reader":
@@ -2104,6 +2105,7 @@ func TestSearchPlanReaderUsesBoundedMembershipStorageTopK(t *testing.T) {
 		case "entries_plan_reader":
 			require.NotNil(t, req.IndexParam)
 			require.Equal(t, uint64(12), req.IndexParam.GetLimit().GetLit().GetU64Val())
+			require.Equal(t, currentFunction, req.IndexParam.OrigFuncName)
 			require.False(t, req.PostFilterTopOnly)
 			require.NotNil(t, req.IndexParam.DistRange)
 			require.Equal(t, float64(3), req.IndexParam.DistRange.UpperBound.GetLit().GetDval())
@@ -2181,35 +2183,51 @@ func TestSearchPlanReaderUsesBoundedMembershipStorageTopK(t *testing.T) {
 	membership, err := membershipVec.MarshalBinary()
 	require.NoError(t, err)
 	sqlproc.IvfHasMembershipFilter = true
-	r := &planReader{
-		spec: &plan.VectorIndexScan{
-			InitialProbeCount: 1,
-			DistanceFunction:  metric.DistFn_L2Distance,
-			IncludedColumns:   []string{"payload"},
-			SourceTable:       &plan.ObjectRef{PubInfo: &plan.PubInfo{TenantId: 42}},
-		},
-		req: searchplugin.Request{
-			ResultLimit:         2,
-			CandidateBudget:     12,
-			MembershipFilter:    membership,
-			HasMembershipFilter: true,
-			DistanceRange: &plan.DistRange{
-				LowerBoundType: plan.BoundType_UNBOUNDED,
-				UpperBoundType: plan.BoundType_INCLUSIVE,
-				UpperBound:     ivfFloat64Expr(3),
-			},
-			Identity: searchplugin.ScanIdentity{
-				PartitionCount: 2,
-				PartitionIndex: 1,
-			},
-		},
-	}
 
-	require.NoError(t, searchPlanReader(r, sqlproc, idxcfg, tblcfg, []float32{0, 0}, false))
-	require.Equal(t, []any{int64(1), int64(2), int64(3), int64(4)}, r.keys)
-	require.Equal(t, []float64{0, 1, 2, 3}, r.distances)
-	require.Equal(t, []any{int32(10), int32(20), int32(30), int32(40)}, r.includeData["payload"])
-	require.Len(t, scanner.requests, 2)
+	for _, cachedFunction := range []string{metric.DistFn_L2Distance, metric.DistFn_L2sqDistance} {
+		cache.Cache.Remove(cacheKey)
+		tblcfg.OrigFuncName = cachedFunction
+		for _, requestFunction := range []string{cachedFunction, metric.DistFn_L2Distance, metric.DistFn_L2sqDistance, cachedFunction} {
+			currentFunction = requestFunction
+			r := &planReader{
+				spec: &plan.VectorIndexScan{
+					InitialProbeCount: 1,
+					DistanceFunction:  requestFunction,
+					IncludedColumns:   []string{"payload"},
+					SourceTable:       &plan.ObjectRef{PubInfo: &plan.PubInfo{TenantId: 42}},
+				},
+				req: searchplugin.Request{
+					ResultLimit:         2,
+					CandidateBudget:     12,
+					MembershipFilter:    membership,
+					HasMembershipFilter: true,
+					DistanceRange: &plan.DistRange{
+						LowerBoundType: plan.BoundType_UNBOUNDED,
+						UpperBoundType: plan.BoundType_INCLUSIVE,
+						UpperBound:     ivfFloat64Expr(3),
+					},
+					Identity: searchplugin.ScanIdentity{
+						PartitionCount: 2,
+						PartitionIndex: 1,
+					},
+				},
+			}
+
+			require.NoError(t, searchPlanReader(r, sqlproc, idxcfg, tblcfg, []float32{0, 0}, false))
+
+			if requestFunction == metric.DistFn_L2Distance {
+				require.Equal(t, []any{int64(1), int64(2), int64(3), int64(4)}, r.keys)
+				require.Equal(t, []float64{0, 1, 2, 3}, r.distances)
+				require.Equal(t, []any{int32(10), int32(20), int32(30), int32(40)}, r.includeData["payload"])
+			} else {
+				require.Equal(t, []any{int64(1), int64(2)}, r.keys)
+				require.Equal(t, []float64{0, 1}, r.distances)
+				require.Equal(t, []any{int32(10), int32(20)}, r.includeData["payload"])
+			}
+			require.Equal(t, cachedFunction, tblcfg.OrigFuncName)
+		}
+	}
+	require.Len(t, scanner.requests, 10) // One centroid load and four searches per generation.
 }
 
 func TestPlanReaderInitializesThroughTypedEngineRelations(t *testing.T) {

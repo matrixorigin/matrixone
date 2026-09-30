@@ -759,6 +759,13 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	_ int64,
 ) (keys any, distances []float64, err error) {
 
+	// The cached table config describes the first load, but the distance function
+	// belongs to this request. Resolve it only in these by-value search configs.
+	if rt.OrigFuncName == "" {
+		rt.OrigFuncName = tblcfg.OrigFuncName
+	}
+	tblcfg.OrigFuncName = rt.OrigFuncName
+
 	// usearch/cuvs and the entries SQL compute distances in float32, so a float64 base can hold a
 	// finite value whose distance overflows float32 and saturates to +/-Inf. Serving that would
 	// silently corrupt the value, Top-K order, and any outer predicate (#29040 / #29050), so fail

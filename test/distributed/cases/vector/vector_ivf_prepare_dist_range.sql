@@ -40,6 +40,13 @@ create table u(id int primary key, v vecf32(3), lim double);
 insert into u values (1,'[1,1,1]',5),(2,'[2,2,2]',5),(3,'[9,9,9]',0.5),(4,'[10,10,10]',100);
 create index uidx using ivfflat on u(v) lists=1 op_type 'vector_l2_ops';
 
+-- #29038: t is warm with L2; u is cold and first searched with squared L2.
+-- Each request must use its own units, including when switching back.
+select id from t where l2_distance_sq(v,'[1,1,1]') > 100 and l2_distance_sq(v,'[1,1,1]') < 200 order by l2_distance_sq(v,'[1,1,1]') limit 4;
+select id from t where l2_distance(v,'[1,1,1]') > 5 and l2_distance(v,'[1,1,1]') < 14 order by l2_distance(v,'[1,1,1]') limit 4;
+select id from u where l2_distance_sq(v,'[1,1,1]') > 100 and l2_distance_sq(v,'[1,1,1]') < 200 order by l2_distance_sq(v,'[1,1,1]') limit 4;
+select id from u where l2_distance(v,'[1,1,1]') > 5 and l2_distance(v,'[1,1,1]') < 14 order by l2_distance(v,'[1,1,1]') limit 4;
+
 -- ============ the plan, not just the answer ============
 -- The pushdown is invisible in the results -- an unpushed bound gives the same rows
 -- from a base-table scan joined to the index stream. Assert the SHAPE, or this case
