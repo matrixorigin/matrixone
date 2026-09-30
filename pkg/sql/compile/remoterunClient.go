@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
@@ -84,14 +83,14 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 	var scopeEncodeData, processEncodeData []byte
 	var withoutOutput, folded bool
 	remoteFragmentCounts, remoteExecutionID := remoteExecutionTopology(c, s)
-	var requiresBoundProtocol bool
+	var requiredVectorProtocol int64
 	scopeEncodeData, withoutOutput, processEncodeData, folded, err = prepareRemoteRunSendingDataWithVectorProtocol(
 		c.sql,
 		s,
 		c.proc,
 		remoteFragmentCounts,
 		remoteExecutionID,
-		&requiresBoundProtocol,
+		&requiredVectorProtocol,
 	)
 	if err != nil {
 		return nil, err
@@ -123,8 +122,8 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 	// before an old RPC callback is delivered; a closed captured sink then drops
 	// that stale callback instead of publishing it into the new attempt.
 	sender.warningSink = s.Proc.GetWarningSink()
-	if requiresBoundProtocol {
-		if err = sender.confirmProtocolOnStream(defines.MORPCVersion96); err != nil {
+	if requiredVectorProtocol > 0 {
+		if err = sender.confirmProtocolOnStream(requiredVectorProtocol); err != nil {
 			return sender, err
 		}
 	}
@@ -260,7 +259,7 @@ func prepareRemoteRunSendingDataWithVectorProtocol(
 	proc *process.Process,
 	remoteFragmentCounts map[string]uint32,
 	remoteExecutionID uuid.UUID,
-	requiresBoundProtocol *bool,
+	requiredVectorProtocol *int64,
 ) (scopeData []byte, withoutOutput bool, processData []byte, folded bool, err error) {
 	// The output dispatch executes on the initiating CN and is stripped from
 	// the encoded scope below. Validate its consumers before losing that edge.
@@ -289,7 +288,7 @@ func prepareRemoteRunSendingDataWithVectorProtocol(
 	}
 
 	// Encode the ScopeList which need to be sent.
-	if scopeData, err = encodeRemoteScopeWithVectorProtocol(encodedScope, proc, requiresBoundProtocol); err != nil {
+	if scopeData, err = encodeRemoteScopeWithVectorProtocol(encodedScope, proc, requiredVectorProtocol); err != nil {
 		return nil, false, nil, false, err
 	}
 

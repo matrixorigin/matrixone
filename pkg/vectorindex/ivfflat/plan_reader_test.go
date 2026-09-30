@@ -2205,7 +2205,16 @@ func TestPlanReadersSharePreparedGeneration(t *testing.T) {
 	}
 }
 
-func testTypedPlanReaders(t *testing.T, parallelism int) {
+func TestDistributedPlanReadersRetainIdentityAndMemoryOwner(t *testing.T) {
+	for _, identity := range []searchplugin.ScanIdentity{
+		{PartitionCount: 2, PartitionIndex: 1, IsRemote: false},
+		{PartitionCount: 2, PartitionIndex: 0, IsRemote: true},
+	} {
+		t.Run(fmt.Sprint(identity.PartitionIndex), func(t *testing.T) { testTypedPlanReaders(t, 1, identity) })
+	}
+}
+
+func testTypedPlanReaders(t *testing.T, parallelism int, identity ...searchplugin.ScanIdentity) {
 	cache.Cache.Once()
 	cache.Cache.Remove("centroids_init:991")
 	t.Cleanup(func() { cache.Cache.Remove("centroids_init:991") })
@@ -2364,8 +2373,14 @@ func testTypedPlanReaders(t *testing.T, parallelism int) {
 	ranges := make(chan int32, max(1, parallelism))
 	entriesRel.EXPECT().GetTableDef(gomock.Any()).Return(entriesDef).AnyTimes()
 	entriesRel.EXPECT().Ranges(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, param engine.RangesParam) (engine.RelData, error) {
-		require.Equal(t, int32(max(1, parallelism)), param.Rsp.CNCNT)
-		require.Equal(t, param.Rsp.CNIDX == 0, param.Rsp.IsLocalCN)
+		if len(identity) != 0 {
+			require.Equal(t, identity[0].PartitionCount, param.Rsp.CNCNT)
+			require.Equal(t, identity[0].PartitionIndex, param.Rsp.CNIDX)
+			require.Equal(t, !identity[0].IsRemote, param.Rsp.IsLocalCN)
+		} else {
+			require.Equal(t, int32(max(1, parallelism)), param.Rsp.CNCNT)
+			require.Equal(t, param.Rsp.CNIDX == 0, param.Rsp.IsLocalCN)
+		}
 		ranges <- param.Rsp.CNIDX
 		return nil, nil
 	}).Times(max(1, parallelism))
@@ -2442,6 +2457,9 @@ func testTypedPlanReaders(t *testing.T, parallelism int) {
 			r.req.Identity.Snapshot = &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 10}}
 		}
 		spec.ScanWork = &plan.VectorIndexScanWork{Rows: 2, Blocks: 2, Objects: 2, VectorBytesPerRow: 8}
+		if len(identity) != 0 {
+			r.req.Identity = identity[0]
+		}
 		readers, err = NewPlanReaders(proc, spec, r.req, parallelism)
 		require.NoError(t, err)
 		require.Len(t, readers, parallelism)
@@ -2453,9 +2471,16 @@ func testTypedPlanReaders(t *testing.T, parallelism int) {
 			rr := reader.(*planReader)
 			shards[rr.proc] = i
 			require.Same(t, generation, rr.generation)
-			require.Equal(t, int32(i), rr.scanner.partitionIndex)
-			require.Equal(t, i == 0, rr.scanner.ownsInMemory)
-			require.Equal(t, int32(0), rr.req.Identity.PartitionCount, "local shards do not change logical cache identity")
+			if len(identity) != 0 {
+				require.Equal(t, identity[0].PartitionIndex, rr.scanner.partitionIndex)
+				require.Equal(t, identity[0].PartitionCount, rr.scanner.partitionCount)
+				require.Equal(t, !identity[0].IsRemote, rr.scanner.ownsInMemory)
+				require.Equal(t, identity[0], rr.req.Identity)
+			} else {
+				require.Equal(t, int32(i), rr.scanner.partitionIndex)
+				require.Equal(t, i == 0, rr.scanner.ownsInMemory)
+				require.Equal(t, int32(0), rr.req.Identity.PartitionCount, "local shards do not change logical cache identity")
+			}
 			require.Same(t, &payload[0], &rr.req.MembershipFilter[0])
 			require.Same(t, generation.membership, rr.newSearchProcess().IvfMembershipFilterObject)
 		}
@@ -2514,7 +2539,11 @@ func testTypedPlanReaders(t *testing.T, parallelism int) {
 		}
 		require.Equal(t, 1, roundCount)
 		require.Equal(t, len(readers), executionCount)
-		require.Equal(t, uint64(1), executionSummary.SearchCount)
+		logicalSearchCount := uint64(1)
+		if len(identity) != 0 && identity[0].PartitionIndex != 0 {
+			logicalSearchCount = 0
+		}
+		require.Equal(t, logicalSearchCount, executionSummary.SearchCount)
 		require.Equal(t, uint64(len(readers)), executionSummary.ReaderCount)
 		first := readers[0].(*planReader)
 		childCtx, sharedCtx := first.proc.Ctx, generation.proc.Ctx

@@ -149,6 +149,9 @@ func (c *scanWorkCompilerContext) GetContext() context.Context {
 }
 
 func (c *scanWorkCompilerContext) ResolveIndexTableByRef(source *plan.ObjectRef, name string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+	if name != "entries" {
+		return c.CompilerContext.ResolveIndexTableByRef(source, name, snapshot)
+	}
 	c.calls++
 	require.Equal(c.t, c.source, source)
 	require.Equal(c.t, c.snapshot, snapshot)
@@ -223,7 +226,7 @@ func TestVectorLocalDOPHint(t *testing.T) {
 	}
 }
 
-func TestIvfRewriteGatesWorkButRequiresScalarDomain(t *testing.T) {
+func TestIvfRewriteEstimatesWorkWithoutLocalDOPHint(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
 		builder, _, scan, scanID, indexes := newIvfIncludeModeTestBuilder(t)
 		if enabled {
@@ -237,11 +240,21 @@ func TestIvfRewriteGatesWorkButRequiresScalarDomain(t *testing.T) {
 			idx.IndexAlgoParams = `{"op_type":"vector_l2_ops","lists":"1"}`
 			idx.IncludedColumns = nil
 		}
+		scan.ObjRef.Obj, scan.ObjRef.Db = 10, 1
+		scan.TableDef.Indexes = append(scan.TableDef.Indexes, &plan.IndexDef{IndexName: "idx_category", IndexAlgo: "btree", IndexTableName: "category_idx", TableExist: true, Parts: []string{"category", catalog.CreateAlias("id")}})
+		mock := c.CompilerContext.(*customMockCompilerContext)
+		mock.tables["category_idx"] = &plan.TableDef{Name: "category_idx", Cols: []*plan.ColDef{{Name: catalog.IndexTableIndexColName, Typ: plan.Type{Id: int32(types.T_varchar)}}, {Name: catalog.IndexTablePrimaryColName, Typ: scan.TableDef.Cols[0].Typ}}, Name2ColIndex: map[string]int32{catalog.IndexTableIndexColName: 0, catalog.IndexTablePrimaryColName: 1}}
+		mock.objects["category_idx"] = &plan.ObjectRef{Obj: 11, Db: 1, SchemaName: "db", ObjName: "category_idx"}
 		scan.Stats = &plan.Stats{TableCnt: 100, BlockNum: 1, Rowsize: 16}
 		scan.FilterList = []*plan.Expr{makeIvfHelperFnExpr("=", plan.Type{Id: int32(types.T_bool)},
 			makeIvfHelperColExpr(scan.BindingTags[0], 3, scan.TableDef), MakePlan2Int32ConstExprWithType(20))}
-		vc := newIvfIncludeModeVectorSortContext(scan, scanID, "pre", 0, 3)
-		_, err := builder.applyIndicesForSortUsingIvfflat(scanID, vc, indexes, nil, nil)
+		vc := newIvfIncludeModeVectorSortContext(scan, scanID, "pre", 0, 2)
+		colCounts := map[[2]int32]int{}
+		for _, expr := range vc.projNode.ProjectList {
+			increaseRefCnt(expr, 1, colCounts)
+		}
+		indexColumns := map[[2]int32]*plan.Expr{}
+		_, err := builder.applyIndicesForSortUsingIvfflat(scanID, vc, indexes, colCounts, indexColumns)
 		require.NoError(t, err)
 		n := findIvfTableFunctionNode(builder, vc.projNode.Children[0])
 		require.NotNil(t, n)
@@ -271,9 +284,20 @@ func TestIvfRewriteGatesWorkButRequiresScalarDomain(t *testing.T) {
 			require.NoError(t, decoded.Unmarshal(data))
 			require.Equal(t, copy.ScanWork, decoded.ScanWork)
 		} else {
-			require.Nil(t, n.VectorIndexScan.ScanWork)
-			require.Equal(t, int32(1), n.Stats.Dop)
-			require.Zero(t, c.calls)
+			require.NotNil(t, n.VectorIndexScan.ScanWork, "distributed placement needs work without the local DOP hint")
+			require.Equal(t, int32(2), n.Stats.Dop, "physical compilation still independently gates local DOP")
+			require.Equal(t, 1, c.calls)
 		}
+		replaceColumnsForNode(vc.projNode, indexColumns)
+		vc.projNode.BindingTags = []int32{builder.genNewBindTag()}
+		rootID := builder.appendNode(vc.projNode, NewBindContext(builder, nil))
+		builder.qry.Steps = []int32{rootID}
+		builder.generateRuntimeFilters(rootID)
+		builder.forceJoinOnOneCN(rootID, false)
+		_, remapErr := builder.remapAllColRefs(rootID, 0, map[[2]int32]int{}, map[[2]int32]bool{}, map[[2]int32]int{})
+		require.NoError(t, remapErr)
+		_, _, localScans, eligible := RequiredIVFPlacement(builder.qry)
+		require.True(t, eligible, "the generated regular-index PRE must remain eligible after actual column remapping")
+		require.NotEmpty(t, localScans, "INDEX access flags remain local scan restrictions")
 	}
 }

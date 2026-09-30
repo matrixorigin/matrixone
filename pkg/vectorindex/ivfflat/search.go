@@ -49,8 +49,9 @@ var runSql = sqlexec.RunSql
 
 // Ivf search index struct to hold the usearch index
 type IvfflatSearchIndex[T types.RealNumbers] struct {
-	Version   int64
-	Centroids cache.VectorIndexSearchIf
+	forceCPURoute bool
+	Version       int64
+	Centroids     cache.VectorIndexSearchIf
 	// QuantMul/QuantAdd are the int8 scalar-quantizer params (q(x)=round(x*mul+add))
 	// derived from the trained [min,max] in metadata; the query uses the same
 	// transform as the entries. Defaults (1,0) = identity when not int8-quantized.
@@ -60,6 +61,7 @@ type IvfflatSearchIndex[T types.RealNumbers] struct {
 
 // This is the Ivf search implementation that implement VectorIndexSearchIf interface
 type IvfflatSearch[T types.RealNumbers] struct {
+	forceCPURoute bool
 	Idxcfg        vectorindex.IndexConfig
 	Tblcfg        vectorindex.IndexTableConfig
 	Index         *IvfflatSearchIndex[T]
@@ -149,8 +151,13 @@ func (idx *IvfflatSearchIndex[T]) LoadCentroids(proc *sqlexec.SqlProcess, idxcfg
 		return moerr.NewInternalErrorNoCtx("number of centroids in db != Nlist")
 	}
 
-	gpuMode := gpumode.EffectiveGpuMode(proc.GetResolveVariableFunc())
-	bfidx, err := brute_force.NewBruteForceIndex[T](centroids, idxcfg.Ivfflat.Dimensions, metric.MetricType(idxcfg.Ivfflat.Metric), uint(elemsz), uint(nthread), gpuMode)
+	var bfidx cache.VectorIndexSearchIf
+	if idx.forceCPURoute {
+		bfidx, err = brute_force.NewCpuBruteForceIndex[T](centroids, idxcfg.Ivfflat.Dimensions, metric.MetricType(idxcfg.Ivfflat.Metric), uint(elemsz))
+	} else {
+		gpuMode := gpumode.EffectiveGpuMode(proc.GetResolveVariableFunc())
+		bfidx, err = brute_force.NewBruteForceIndex[T](centroids, idxcfg.Ivfflat.Dimensions, metric.MetricType(idxcfg.Ivfflat.Metric), uint(elemsz), uint(nthread), gpuMode)
+	}
 	if err != nil {
 		return err
 	}
@@ -1165,6 +1172,16 @@ func (s *IvfflatSearch[T]) Search(
 		return nil, nil, moerr.NewInternalErrorNoCtx("IvfSearch: query not match with index type")
 	}
 
+	if s.forceCPURoute {
+		if s.Index == nil {
+			return nil, nil, moerr.NewInvalidStateNoCtx("distributed PRE centroid generation is not loaded")
+		}
+		if s.Index.Centroids != nil {
+			if _, ok := s.Index.Centroids.(*brute_force.GoBruteForceIndex[T, T]); !ok {
+				return nil, nil, moerr.NewInvalidStateNoCtx("distributed PRE requires the CPU centroid route")
+			}
+		}
+	}
 	return s.Index.Search(sqlproc, s.Idxcfg, s.Tblcfg, query, rt, s.ThreadsSearch)
 }
 
@@ -1202,7 +1219,7 @@ func (s *IvfflatSearch[T]) Preload(sqlproc *sqlexec.SqlProcess) error {
 	if sqlproc != nil && (sqlproc.Proc != nil || sqlproc.SqlCtx != nil) {
 		resolver = sqlproc.GetResolveVariableFunc()
 	}
-	useGPU := brute_force.DispatchesToDevice[T](gpumode.EffectiveGpuMode(resolver))
+	useGPU := !s.forceCPURoute && brute_force.DispatchesToDevice[T](gpumode.EffectiveGpuMode(resolver))
 
 	elementSize := uint64(util.UnsafeSizeOf[T]())
 	maxUint64 := ^uint64(0)
@@ -1236,7 +1253,7 @@ func (s *IvfflatSearch[T]) Preload(sqlproc *sqlexec.SqlProcess) error {
 
 func (s *IvfflatSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 
-	idx := &IvfflatSearchIndex[T]{}
+	idx := &IvfflatSearchIndex[T]{forceCPURoute: s.forceCPURoute}
 	// load index model
 	err := idx.LoadIndex(sqlproc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch)
 	if err != nil {

@@ -456,12 +456,16 @@ func searchPlanReader[T types.RealNumbers](
 ) error {
 	cache.Cache.Once()
 	algo := NewIvfflatSearch[T](idxcfg, tblcfg)
+	algo.forceCPURoute = r.req.MembershipFilterRequired && r.req.Identity.PartitionCount > 1
 	key := fmt.Sprintf("%s:%d", tblcfg.IndexTable, idxcfg.Ivfflat.Version)
 	if source := r.spec.SourceTable; source != nil && source.PubInfo != nil {
 		key = fmt.Sprintf("tenant=%d:%s", source.PubInfo.TenantId, key)
 	}
 	if r.req.Identity.PartitionCount > 1 {
 		key = fmt.Sprintf("%s:%d/%d", key, r.req.Identity.PartitionIndex, r.req.Identity.PartitionCount)
+	}
+	if algo.forceCPURoute {
+		key += ":cpu-route-v1"
 	}
 	if prepareOnly {
 		cursor := new(vectorindex.IvfSearchCursor)

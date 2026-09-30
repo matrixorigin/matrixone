@@ -15,9 +15,15 @@
 package compile
 
 import (
+	"context"
 	"testing"
+	"time"
 
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
@@ -25,6 +31,8 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -389,4 +397,90 @@ func BenchmarkValidateLocalRuntimeFilterTopologyNoFilter(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+}
+
+func TestRequiredIVFTopologyBroadcastAndRemoteFragment(t *testing.T) {
+	c, client := vectorPlacementCompile(t, engine.Nodes{{Id: "a", Addr: "a:6001"}, {Id: "b", Addr: "b:6001"}})
+	moruntime.ServiceRuntime(c.proc.GetService()).SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion103)
+	client.version = defines.MORPCVersion103
+	c.proc.Base.TxnOperator = fakeTxnOperator{}
+	c.proc.Base.SessionInfo.TimeZone = time.UTC
+	c.proc.Ctx = defines.AttachAccountId(context.Background(), 0)
+	c.proc.SetMessageBoard(message.NewMessageBoard())
+	const tag int32 = 17
+	var roots, producers []*Scope
+	for i, cn := range c.cnList {
+		cn.Mcpu, cn.CNCNT, cn.CNIDX = 1, 2, int32(i)
+		consumer := makeRuntimeFilterConsumerScope(tag, cn)
+		consumer.Proc = c.proc.NewNoContextChildProc(0)
+		consumer.DataSource.node.NodeType = plan.Node_VECTOR_INDEX_SCAN
+		consumer.DataSource.node.RuntimeFilterProbeList[0].MustApply = true
+		consumer.DataSource.node.RuntimeFilterProbeList[0].UseMembershipFilter = true
+		consumer.RootOp = table_scan.NewArgument()
+		t.Cleanup(consumer.RootOp.Release)
+		producer, op := makeRuntimeFilterProducerScope(tag, cn)
+		op.RuntimeFilterSpec.MustApply, op.RuntimeFilterSpec.UseMembershipFilter = true, true
+		t.Cleanup(op.Release)
+		producer.Proc = c.proc.NewNoContextChildProc(0)
+		producer.Proc.Reg.MergeReceivers = []*process.WaitRegister{process.NewPipelineEdge(1, 0)}
+		consumer.PreScopes = []*Scope{producer}
+		roots, producers = append(roots, consumer), append(producers, producer)
+	}
+	input := &Scope{NodeInfo: roots[0].NodeInfo, Proc: c.proc.NewNoContextChildProc(0)}
+	_, d := constructDispatchLocalAndRemote(0, producers, input)
+	d.FuncId = dispatch.SendToAllFunc
+	t.Cleanup(d.Release)
+	input.RootOp = d
+	roots[0].PreScopes = append(roots[0].PreScopes, input)
+	topology := collectRuntimeFilterTopology(roots, []int32{tag})
+	require.NoError(t, requiredIVFTopologyError(tag, topology, roots))
+	// Both Any and a missing remote edge would send partial domains.
+	d.FuncId = dispatch.SendToAllLocalFunc
+	require.Error(t, requiredIVFTopologyError(tag, topology, roots))
+	d.FuncId = dispatch.SendToAnyFunc
+	require.Error(t, requiredIVFTopologyError(tag, topology, roots))
+	d.FuncId = dispatch.SendToAllFunc
+	remoteRegs := d.RemoteRegs
+	d.RemoteRegs = nil
+	require.Error(t, requiredIVFTopologyError(tag, topology, roots))
+	d.RemoteRegs = remoteRegs
+	extra := dispatch.NewArgument()
+	extra.FuncId, extra.LocalRegs = dispatch.SendToAllLocalFunc, d.LocalRegs
+	t.Cleanup(extra.Release)
+	extraSource := &Scope{NodeInfo: input.NodeInfo, Proc: c.proc.NewNoContextChildProc(0), RootOp: extra}
+	roots[0].PreScopes = append(roots[0].PreScopes, extraSource)
+	require.Error(t, requiredIVFTopologyError(tag, topology, roots), "an extra partial sender cannot seal the domain")
+	roots[0].PreScopes = roots[0].PreScopes[:len(roots[0].PreScopes)-1]
+	connectorOp := connector.NewArgument().WithReg(producers[0].Proc.Reg.MergeReceivers[0])
+	t.Cleanup(connectorOp.Release)
+	roots[0].PreScopes = append(roots[0].PreScopes, &Scope{NodeInfo: input.NodeInfo, RootOp: connectorOp})
+	require.Error(t, requiredIVFTopologyError(tag, topology, roots))
+	roots[0].PreScopes = roots[0].PreScopes[:len(roots[0].PreScopes)-1]
+	producers[0].RootOp.(*hashbuild.HashBuild).IsShuffle = true
+	require.Error(t, requiredIVFTopologyError(tag, topology, roots))
+	producers[0].RootOp.(*hashbuild.HashBuild).IsShuffle = false
+	roots[1].NodeInfo.CNIDX = 0
+	require.Error(t, requiredIVFTopologyError(tag, topology, roots))
+	roots[1].NodeInfo.CNIDX = 1
+	// A separate RPC fragment can be colocated but have an unreachable board.
+	saved := roots[1].PreScopes
+	roots[1].PreScopes = nil
+	require.Error(t, requiredIVFTopologyError(tag, topology, roots))
+	roots[1].PreScopes = saved
+	var required int64
+	data, err := encodeRemoteScopeWithVectorProtocol(roots[1], c.proc, &required)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion103, required)
+	decoded, err := decodeScope(data, c.proc, true, nil)
+	require.NoError(t, err)
+	t.Cleanup(decoded.release)
+	require.Len(t, decoded.PreScopes, 1)
+	message.SendMessage(message.RuntimeFilterMessage{Tag: tag, Typ: message.RuntimeFilter_DROP}, decoded.PreScopes[0].Proc.GetMessageBoard())
+	receiver := message.NewMessageReceiver([]int32{tag}, message.MessageAddress{CnAddr: message.CURRENTCN}, decoded.Proc.GetMessageBoard())
+	msgs, _, receiveErr := receiver.ReceiveMessage(false, context.Background())
+	require.NoError(t, receiveErr)
+	require.Len(t, msgs, 1)
+	require.Equal(t, int32(message.RuntimeFilter_DROP), msgs[0].(message.RuntimeFilterMessage).Typ)
+	require.NotNil(t, decoded.Proc.GetMessageBoard())
+	require.Same(t, decoded.Proc.GetMessageBoard(), decoded.PreScopes[0].Proc.GetMessageBoard(), "actual RPC decoding must keep producer and reader on the same board")
 }

@@ -190,6 +190,30 @@ func TestPlanGenerationFailsClosedBeforeStorage(t *testing.T) {
 		require.NoError(t, r.Close())
 	}
 
+	// Empty domains still validate the distributed identity and work before
+	// publishing readers, and never open storage.
+	distributed := empty
+	distributed.Identity.PartitionCount = 2
+	distributed.Identity.PartitionIndex = 1
+	distributed.Identity.IsRemote = true
+	spec.ScanWork = &plan.VectorIndexScanWork{Objects: 2, Rows: 10, Blocks: 2, VectorBytesPerRow: 512}
+	readers, err = NewPlanReaders(proc, spec, distributed, 1)
+	require.NoError(t, err)
+	require.Len(t, readers, 1)
+	require.NoError(t, readers[0].Close())
+	for _, invalid := range []*plan.VectorIndexScanWork{
+		{Objects: 1, Rows: 10, Blocks: 2, VectorBytesPerRow: 512},
+		{Objects: 2, Rows: -1, Blocks: 2, VectorBytesPerRow: 512},
+		{Objects: 2, Rows: 10, Blocks: 0, VectorBytesPerRow: 512},
+		{Objects: 2, Rows: 10, Blocks: 2, VectorBytesPerRow: 0},
+	} {
+		spec.ScanWork = invalid
+		readers, err = NewPlanReaders(proc, spec, distributed, 1)
+		require.Error(t, err)
+		require.Nil(t, readers)
+	}
+	spec.ScanWork = &plan.VectorIndexScanWork{}
+
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	old, exists := rt.GetGlobalVariables(moruntime.CNMemoryThrottler)
 	for _, denyAt := range []int{1, 2, 0} {

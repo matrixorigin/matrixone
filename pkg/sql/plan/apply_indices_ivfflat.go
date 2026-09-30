@@ -1058,12 +1058,12 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflatWithContext(
 		probeSpec.UseMembershipFilter = true
 		probeSpec.MustApply = requiredDomain
 		tableFuncNode.RuntimeFilterProbeList = []*plan.RuntimeFilterSpec{probeSpec}
-		// Required membership is sealed on this CN before any entry reader opens.
-		// Local DOP does not authorize distributing the domain to another CN.
+		// The final placement proof decides whether every CN can receive the
+		// complete domain. Unproved shapes retain the local execution restriction.
 		tableFuncNode.Stats.ForceOneCN = true
 		if !asyncIndex && candidateNodeID == tableFuncNodeID && requiredDomain &&
 			bucketExpandStep == 0 && firstRoundLimitExpr == nil &&
-			types.T(ivfCtx.pkType.Id).IsInteger() && builder.optimizerHints != nil && builder.optimizerHints.vectorLocalDOP == 1 {
+			types.T(ivfCtx.pkType.Id).IsInteger() {
 			work, workErr := builder.estimateIvfScanWork(scanNode.ObjRef, scanNode.ScanSnapshot,
 				ivfCtx.entriesDef.IndexTableName, ivfCtx.totalLists, ivfCtx.nProbe)
 			if workErr != nil {
