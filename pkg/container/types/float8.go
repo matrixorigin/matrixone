@@ -161,9 +161,13 @@ func Float8FromFloat32(v float32) Float8 {
 			// far below the smallest subnormal -> signed zero (RNE)
 			return Float8(sign)
 		}
-		mant, _ := roundMantissaRNE(full, shift+f8e4m3MantW, f8e4m3MantW)
-		// mant can be 0..8; 8 means it rounded up into the smallest normal.
-		if mant >= 8 {
+		mant, carry := roundMantissaRNE(full, shift+f8e4m3MantW, f8e4m3MantW)
+		// A carry (roundMantissaRNE masks the result, so mant itself never reaches 8)
+		// means the value rounded up across the subnormal->normal boundary into the
+		// smallest normal (exponent field 1, mantissa 0 = 0x08). Honoring the carry is
+		// required: dropping it returned signed zero for the (largest-subnormal, smallest
+		// -normal) input band -- silent narrowing-to-zero data loss.
+		if carry != 0 || mant >= 8 {
 			return Float8(sign | uint8(1<<f8e4m3MantW))
 		}
 		return Float8(sign | uint8(mant))

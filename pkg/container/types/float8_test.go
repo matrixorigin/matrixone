@@ -218,3 +218,21 @@ func TestLowPrecTypeRegistration(t *testing.T) {
 	require.Equal(t, []float32{1.5}, BF16ToFloat32Slice([]BF16{BF16FromFloat32(1.5)}))
 	require.Equal(t, []float32{1.5}, Float16ToFloat32Slice([]Float16{Float16FromFloat32(1.5)}))
 }
+
+// TestFloat8SubnormalRoundUpToNormal is the regression for the subnormal->normal round-up
+// that silently returned zero: a value in (largest subnormal 0.013671875, smallest normal
+// 0.015625) must round to the smallest normal (0x08), not 0. The bug dropped roundMantissaRNE's
+// carry, and the mant>=8 guard was dead because the result is masked to 3 bits.
+func TestFloat8SubnormalRoundUpToNormal(t *testing.T) {
+	smallestNormal := float32(math.Ldexp(1, -6)) // 0.015625, bits 0x08
+	for _, in := range []float32{0.015, 0.0151, 0.01546, 0.0155} {
+		got := Float8FromFloat32(in)
+		require.NotEqualf(t, Float8(0), got, "%v must not narrow to zero", in)
+		require.Equalf(t, Float8(0x08), got, "%v must round to the smallest normal 0x08", in)
+		require.Equal(t, smallestNormal, got.ToFloat32())
+	}
+	// Just below the midpoint to the smallest normal still resolves to the largest
+	// subnormal (0x07), and a value near zero underflows to 0 (unchanged behavior).
+	require.Equal(t, Float8(0x07), Float8FromFloat32(0.0138))
+	require.Equal(t, Float8(0), Float8FromFloat32(0.0001))
+}

@@ -394,6 +394,15 @@ func (zm ZM) hasNaNBound() bool {
 	case types.T_float64:
 		return math.IsNaN(types.DecodeFloat64(zm.GetMinBuf())) ||
 			math.IsNaN(types.DecodeFloat64(zm.GetMaxBuf()))
+	case types.T_bf16:
+		return math.IsNaN(float64(types.DecodeFixed[types.BF16](zm.GetMinBuf()).ToFloat32())) ||
+			math.IsNaN(float64(types.DecodeFixed[types.BF16](zm.GetMaxBuf()).ToFloat32()))
+	case types.T_float16:
+		return math.IsNaN(float64(types.DecodeFixed[types.Float16](zm.GetMinBuf()).ToFloat32())) ||
+			math.IsNaN(float64(types.DecodeFixed[types.Float16](zm.GetMaxBuf()).ToFloat32()))
+	case types.T_float8:
+		return math.IsNaN(float64(types.DecodeFixed[types.Float8](zm.GetMinBuf()).ToFloat32())) ||
+			math.IsNaN(float64(types.DecodeFixed[types.Float8](zm.GetMaxBuf()).ToFloat32()))
 	default:
 		return false
 	}

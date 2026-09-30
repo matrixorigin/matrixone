@@ -5628,3 +5628,60 @@ func TestCastLowPrecFloatMatrix(t *testing.T) {
 	tgtRun("decimal64", types.New(types.T_decimal64, 10, 0), []types.Decimal64{}, []types.Decimal64{types.Decimal64(2)})
 	tgtRun("decimal256", types.New(types.T_decimal256, 20, 0), []types.Decimal256{}, []types.Decimal256{{B0_63: 2}})
 }
+
+// TestCastLowPrecFloatDecimal256AndNonFinite covers two self-review fixes (#20567):
+//   - decimal256 -> low-precision float is implemented (was declared supported but the
+//     executor lacked the case, so a planned cast errored at runtime).
+//   - a numeric source that overflows / is non-finite is rejected, not silently
+//     persisted as +Inf (bf16/float16) or saturated (float8/float4) -- upholding the
+//     repo-wide "never persist non-finite float" invariant (#29084), consistent with
+//     the string-cast path.
+func TestCastLowPrecFloatDecimal256AndNonFinite(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// decimal256(2) value 2.00 -> bf16 == 2.
+	dec, err := types.ParseDecimal256("2", 20, 0)
+	require.NoError(t, err)
+	bf16 := types.T_bf16.ToType()
+	tcc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.New(types.T_decimal256, 20, 0), []types.Decimal256{dec}, nil),
+			NewFunctionTestInput(bf16, []types.BF16{}, nil),
+		},
+		NewFunctionTestResult(bf16, false, []types.BF16{types.BF16FromFloat32(2)}, nil), NewCast)
+	ok, info := tcc.Run()
+	require.True(t, ok, info)
+
+	// A float64 source that overflows the target's finite range must ERROR, not persist
+	// Inf (bf16/float16) or a saturated value (float8/float4).
+	for _, c := range []struct {
+		oid types.T
+		in  float64
+	}{
+		{types.T_float16, 70000}, // > float16 max 65504 -> would overflow to Inf
+		{types.T_bf16, 1e300},    // > bf16 finite range -> would overflow to Inf
+		{types.T_float8, 1000},   // > float8 max 448 -> would saturate
+		{types.T_float4, 7},      // > float4 max 6 -> would saturate
+	} {
+		tgt := c.oid.ToType()
+		var zero any
+		switch c.oid {
+		case types.T_bf16:
+			zero = []types.BF16{}
+		case types.T_float16:
+			zero = []types.Float16{}
+		case types.T_float8:
+			zero = []types.Float8{}
+		case types.T_float4:
+			zero = []types.Float4{}
+		}
+		tcc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(), []float64{c.in}, nil),
+				NewFunctionTestInput(tgt, zero, nil),
+			},
+			NewFunctionTestResult(tgt, false, zero, nil), NewCast)
+		ok, _ := tcc.Run()
+		require.Falsef(t, ok, "CAST(%v AS %s) must error (out of range), not persist a non-finite/saturated value", c.in, c.oid)
+	}
+}

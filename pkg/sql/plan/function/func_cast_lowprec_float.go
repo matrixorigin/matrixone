@@ -100,57 +100,75 @@ type lowPrecFloatConstraint interface {
 }
 
 // anyToLowPrecFloat widens each source value to float32 and rounds it to Tr via ctor.
+// Every value is finite-checked (RejectNonFiniteNarrowFloat) before rounding, so a NaN,
+// Inf, or out-of-range source errors instead of persisting a non-finite / saturated
+// value -- this keeps the numeric path consistent with the string path and upholds the
+// repo-wide "never persist non-finite float" invariant (#29084); bf16/float16 otherwise
+// overflow to Inf and float8 otherwise maps NaN to its NaN slot.
 func anyToLowPrecFloat[Tr lowPrecFloatConstraint](
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, ctor func(float32) Tr,
 ) error {
 	from := parameters[0]
+	oid := result.GetResultVector().GetType().Oid
+	conv := func(f float32) (Tr, error) {
+		var zero Tr
+		if err := types.RejectNonFiniteNarrowFloat(f, oid); err != nil {
+			return zero, err
+		}
+		return ctor(f), nil
+	}
 	switch from.GetType().Oid {
 	case types.T_bool:
-		return opUnaryFixedToFixed[bool, Tr](parameters, result, proc, length, func(v bool) Tr {
+		return opUnaryFixedToFixedWithErrorCheck[bool, Tr](parameters, result, proc, length, func(v bool) (Tr, error) {
 			if v {
-				return ctor(1)
+				return conv(1)
 			}
-			return ctor(0)
+			return conv(0)
 		}, selectList)
 	case types.T_bit:
-		return opUnaryFixedToFixed[uint64, Tr](parameters, result, proc, length, func(v uint64) Tr { return ctor(float32(v)) }, selectList)
+		return opUnaryFixedToFixedWithErrorCheck[uint64, Tr](parameters, result, proc, length, func(v uint64) (Tr, error) { return conv(float32(v)) }, selectList)
 	case types.T_int8:
-		return opUnaryFixedToFixed[int8, Tr](parameters, result, proc, length, func(v int8) Tr { return ctor(float32(v)) }, selectList)
+		return opUnaryFixedToFixedWithErrorCheck[int8, Tr](parameters, result, proc, length, func(v int8) (Tr, error) { return conv(float32(v)) }, selectList)
 	case types.T_int16:
-		return opUnaryFixedToFixed[int16, Tr](parameters, result, proc, length, func(v int16) Tr { return ctor(float32(v)) }, selectList)
+		return opUnaryFixedToFixedWithErrorCheck[int16, Tr](parameters, result, proc, length, func(v int16) (Tr, error) { return conv(float32(v)) }, selectList)
 	case types.T_int32:
-		return opUnaryFixedToFixed[int32, Tr](parameters, result, proc, length, func(v int32) Tr { return ctor(float32(v)) }, selectList)
+		return opUnaryFixedToFixedWithErrorCheck[int32, Tr](parameters, result, proc, length, func(v int32) (Tr, error) { return conv(float32(v)) }, selectList)
 	case types.T_int64:
-		return opUnaryFixedToFixed[int64, Tr](parameters, result, proc, length, func(v int64) Tr { return ctor(float32(v)) }, selectList)
+		return opUnaryFixedToFixedWithErrorCheck[int64, Tr](parameters, result, proc, length, func(v int64) (Tr, error) { return conv(float32(v)) }, selectList)
 	case types.T_uint8:
-		return opUnaryFixedToFixed[uint8, Tr](parameters, result, proc, length, func(v uint8) Tr { return ctor(float32(v)) }, selectList)
+		return opUnaryFixedToFixedWithErrorCheck[uint8, Tr](parameters, result, proc, length, func(v uint8) (Tr, error) { return conv(float32(v)) }, selectList)
 	case types.T_uint16:
-		return opUnaryFixedToFixed[uint16, Tr](parameters, result, proc, length, func(v uint16) Tr { return ctor(float32(v)) }, selectList)
+		return opUnaryFixedToFixedWithErrorCheck[uint16, Tr](parameters, result, proc, length, func(v uint16) (Tr, error) { return conv(float32(v)) }, selectList)
 	case types.T_uint32:
-		return opUnaryFixedToFixed[uint32, Tr](parameters, result, proc, length, func(v uint32) Tr { return ctor(float32(v)) }, selectList)
+		return opUnaryFixedToFixedWithErrorCheck[uint32, Tr](parameters, result, proc, length, func(v uint32) (Tr, error) { return conv(float32(v)) }, selectList)
 	case types.T_uint64:
-		return opUnaryFixedToFixed[uint64, Tr](parameters, result, proc, length, func(v uint64) Tr { return ctor(float32(v)) }, selectList)
+		return opUnaryFixedToFixedWithErrorCheck[uint64, Tr](parameters, result, proc, length, func(v uint64) (Tr, error) { return conv(float32(v)) }, selectList)
 	case types.T_float32:
-		return opUnaryFixedToFixed[float32, Tr](parameters, result, proc, length, func(v float32) Tr { return ctor(v) }, selectList)
+		return opUnaryFixedToFixedWithErrorCheck[float32, Tr](parameters, result, proc, length, func(v float32) (Tr, error) { return conv(v) }, selectList)
 	case types.T_float64:
-		return opUnaryFixedToFixed[float64, Tr](parameters, result, proc, length, func(v float64) Tr { return ctor(float32(v)) }, selectList)
+		return opUnaryFixedToFixedWithErrorCheck[float64, Tr](parameters, result, proc, length, func(v float64) (Tr, error) { return conv(float32(v)) }, selectList)
 	case types.T_bf16:
-		return opUnaryFixedToFixed[types.BF16, Tr](parameters, result, proc, length, func(v types.BF16) Tr { return ctor(v.ToFloat32()) }, selectList)
+		return opUnaryFixedToFixedWithErrorCheck[types.BF16, Tr](parameters, result, proc, length, func(v types.BF16) (Tr, error) { return conv(v.ToFloat32()) }, selectList)
 	case types.T_float16:
-		return opUnaryFixedToFixed[types.Float16, Tr](parameters, result, proc, length, func(v types.Float16) Tr { return ctor(v.ToFloat32()) }, selectList)
+		return opUnaryFixedToFixedWithErrorCheck[types.Float16, Tr](parameters, result, proc, length, func(v types.Float16) (Tr, error) { return conv(v.ToFloat32()) }, selectList)
 	case types.T_float8:
-		return opUnaryFixedToFixed[types.Float8, Tr](parameters, result, proc, length, func(v types.Float8) Tr { return ctor(v.ToFloat32()) }, selectList)
+		return opUnaryFixedToFixedWithErrorCheck[types.Float8, Tr](parameters, result, proc, length, func(v types.Float8) (Tr, error) { return conv(v.ToFloat32()) }, selectList)
 	case types.T_float4:
-		return opUnaryFixedToFixed[types.Float4, Tr](parameters, result, proc, length, func(v types.Float4) Tr { return ctor(v.ToFloat32()) }, selectList)
+		return opUnaryFixedToFixedWithErrorCheck[types.Float4, Tr](parameters, result, proc, length, func(v types.Float4) (Tr, error) { return conv(v.ToFloat32()) }, selectList)
 	case types.T_decimal64:
 		scale := from.GetType().Scale
-		return opUnaryFixedToFixed[types.Decimal64, Tr](parameters, result, proc, length, func(v types.Decimal64) Tr {
-			return ctor(float32(types.Decimal64ToFloat64(v, scale)))
+		return opUnaryFixedToFixedWithErrorCheck[types.Decimal64, Tr](parameters, result, proc, length, func(v types.Decimal64) (Tr, error) {
+			return conv(float32(types.Decimal64ToFloat64(v, scale)))
 		}, selectList)
 	case types.T_decimal128:
 		scale := from.GetType().Scale
-		return opUnaryFixedToFixed[types.Decimal128, Tr](parameters, result, proc, length, func(v types.Decimal128) Tr {
-			return ctor(float32(types.Decimal128ToFloat64(v, scale)))
+		return opUnaryFixedToFixedWithErrorCheck[types.Decimal128, Tr](parameters, result, proc, length, func(v types.Decimal128) (Tr, error) {
+			return conv(float32(types.Decimal128ToFloat64(v, scale)))
+		}, selectList)
+	case types.T_decimal256:
+		scale := from.GetType().Scale
+		return opUnaryFixedToFixedWithErrorCheck[types.Decimal256, Tr](parameters, result, proc, length, func(v types.Decimal256) (Tr, error) {
+			return conv(float32(types.Decimal256ToFloat64(v, scale)))
 		}, selectList)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_datalink:
