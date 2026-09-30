@@ -109,6 +109,8 @@ const (
 	T_array_float16 T = 227 // In SQL , it is vecf16  (IEEE fp16/half)
 	T_array_int8    T = 228 // In SQL , it is vecint8  (int8)
 	T_array_uint8   T = 229 // In SQL , it is vecuint8 (uint8)
+	T_array_float8  T = 230 // In SQL , it is vecf8 (MXFP8 block-scaled, see vecblock.go)
+	T_array_float4  T = 231 // In SQL , it is vecf4 (NVFP4 block-scaled, see vecblock.go)
 
 	//note: max value of uint8 is 255
 )
@@ -124,6 +126,8 @@ const (
 	ArrayFloat16SQLName = "vecf16"
 	ArrayInt8SQLName    = "vecint8"
 	ArrayUint8SQLName   = "vecuint8"
+	ArrayFloat8SQLName  = "vecf8"
+	ArrayFloat4SQLName  = "vecf4"
 )
 
 // ArraySQLName returns the lowercase SQL type name for an array element type
@@ -142,6 +146,10 @@ func (t T) ArraySQLName() string {
 		return ArrayInt8SQLName
 	case T_array_uint8:
 		return ArrayUint8SQLName
+	case T_array_float8:
+		return ArrayFloat8SQLName
+	case T_array_float4:
+		return ArrayFloat4SQLName
 	}
 	return ""
 }
@@ -543,6 +551,8 @@ var Types = map[string]T{
 	"array float16": T_array_float16,
 	"array int8":    T_array_int8,
 	"array uint8":   T_array_uint8,
+	"array float8":  T_array_float8,
+	"array float4":  T_array_float4,
 }
 
 func New(oid T, width, scale int32) Type {
@@ -709,10 +719,24 @@ func (t Type) DescString() string {
 		return fmt.Sprintf("VECINT8(%d)", t.Width)
 	case T_array_uint8:
 		return fmt.Sprintf("VECUINT8(%d)", t.Width)
+	case T_array_float8:
+		return fmt.Sprintf("VECF8(%d)", t.Width)
+	case T_array_float4:
+		return fmt.Sprintf("VECF4(%d)", t.Width)
 	}
 	return t.Oid.String()
 }
 
+// ArrayCellBytes returns the cell byte length of a vector type of dimension Width.
+func (t Type) ArrayCellBytes() int {
+	if f, ok := t.Oid.BlockScaledFormat(); ok {
+		return BlockScaledCellSize(f, int(t.Width))
+	}
+	return int(t.Width) * t.GetArrayElementSize()
+}
+
+// GetArrayElementSize returns the element byte size of an IsArrayRelate type; it
+// panics for any other type, including vecf8/vecf4.
 func (t Type) GetArrayElementSize() int {
 	switch t.Oid {
 	case T_array_float32:
@@ -807,7 +831,8 @@ func (t T) ToType() Type {
 	case T_varchar:
 		typ.Size = VarlenaSize
 		typ.Width = MaxVarcharLen
-	case T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8:
+	case T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8,
+		T_array_float8, T_array_float4:
 		typ.Size = VarlenaSize
 		typ.Width = MaxArrayDimension
 	case T_binary:
@@ -932,6 +957,10 @@ func (t T) String() string {
 		return "VECINT8"
 	case T_array_uint8:
 		return "VECUINT8"
+	case T_array_float8:
+		return "VECF8"
+	case T_array_float4:
+		return "VECF4"
 	case T_enum:
 		return "ENUM"
 	}
@@ -1033,6 +1062,10 @@ func (t T) OidString() string {
 		return "T_array_int8"
 	case T_array_uint8:
 		return "T_array_uint8"
+	case T_array_float8:
+		return "T_array_float8"
+	case T_array_float4:
+		return "T_array_float4"
 	}
 	return "unknown_type"
 }
@@ -1066,7 +1099,7 @@ func (t T) TypeLen() int {
 		return 4
 	case T_float64:
 		return 8
-	case T_char, T_varchar, T_json, T_blob, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8, T_datalink, T_geometry, T_geometry32:
+	case T_char, T_varchar, T_json, T_blob, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8, T_array_float8, T_array_float4, T_datalink, T_geometry, T_geometry32:
 		return VarlenaSize
 	case T_decimal64:
 		return 8
@@ -1121,7 +1154,7 @@ func (t T) FixedLength() int {
 		return RowidSize
 	case T_Blockid:
 		return BlockidSize
-	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8, T_datalink, T_geometry, T_geometry32:
+	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8, T_array_float8, T_array_float4, T_datalink, T_geometry, T_geometry32:
 		return -24
 	case T_enum:
 		return 2
@@ -1201,12 +1234,35 @@ func (t T) IsDateRelate() bool {
 	return false
 }
 
+// IsArrayRelate reports the fixed-element vector types, whose cell is Width
+// elements of GetArrayElementSize bytes. It excludes vecf8/vecf4.
 func (t T) IsArrayRelate() bool {
 	if t == T_array_float32 || t == T_array_float64 ||
 		t == T_array_bf16 || t == T_array_float16 || t == T_array_int8 || t == T_array_uint8 {
 		return true
 	}
 	return false
+}
+
+// IsBlockScaledVector reports vecf8/vecf4, whose cell is a vecblock.go cell.
+func (t T) IsBlockScaledVector() bool {
+	return t == T_array_float8 || t == T_array_float4
+}
+
+// IsVectorType reports every vector column type: IsArrayRelate or IsBlockScaledVector.
+func (t T) IsVectorType() bool {
+	return t.IsArrayRelate() || t.IsBlockScaledVector()
+}
+
+// BlockScaledFormat returns the cell format of vecf8/vecf4.
+func (t T) BlockScaledFormat() (BlockScaledFormat, bool) {
+	switch t {
+	case T_array_float8:
+		return BlockScaledMXFP8, true
+	case T_array_float4:
+		return BlockScaledNVFP4, true
+	}
+	return 0, false
 }
 
 func (t T) IsDatalink() bool {

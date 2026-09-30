@@ -326,3 +326,64 @@ func TestUE4M3ScaleForIsMinimal(t *testing.T) {
 		}
 	}
 }
+
+func TestBlockScaledVectorTypes(t *testing.T) {
+	for _, tc := range []struct {
+		oid     T
+		sqlName string
+		upper   string
+		oidName string
+		format  BlockScaledFormat
+	}{
+		{T_array_float8, "vecf8", "VECF8", "T_array_float8", BlockScaledMXFP8},
+		{T_array_float4, "vecf4", "VECF4", "T_array_float4", BlockScaledNVFP4},
+	} {
+		require.Equal(t, tc.sqlName, tc.oid.ArraySQLName())
+		require.Equal(t, tc.upper, tc.oid.String())
+		require.Equal(t, tc.oidName, tc.oid.OidString())
+		require.Equal(t, VarlenaSize, tc.oid.TypeLen())
+		require.Equal(t, -24, tc.oid.FixedLength())
+		require.False(t, tc.oid.IsFixedLen())
+
+		require.True(t, tc.oid.IsBlockScaledVector())
+		require.True(t, tc.oid.IsVectorType())
+		require.False(t, tc.oid.IsArrayRelate())
+		f, ok := tc.oid.BlockScaledFormat()
+		require.True(t, ok)
+		require.Equal(t, tc.format, f)
+
+		typ := tc.oid.ToType()
+		require.Equal(t, int32(VarlenaSize), typ.Size)
+		require.Equal(t, int32(MaxArrayDimension), typ.Width)
+
+		typ.Width = 1024
+		require.Equal(t, tc.upper+"(1024)", typ.DescString())
+		require.Equal(t, BlockScaledCellSize(tc.format, 1024), typ.ArrayCellBytes())
+		require.Panics(t, func() { typ.GetArrayElementSize() })
+
+		require.Equal(t, []byte{1, 2}, DecodeValue([]byte{1, 2}, tc.oid))
+		require.Equal(t, []byte{1, 2}, EncodeValue([]byte{1, 2}, tc.oid))
+	}
+	require.Equal(t, T_array_float8, Types["array float8"])
+	require.Equal(t, T_array_float4, Types["array float4"])
+	require.Equal(t, 1068, New(T_array_float8, 1024, 0).ArrayCellBytes())
+	require.Equal(t, 588, New(T_array_float4, 1024, 0).ArrayCellBytes())
+}
+
+func TestVectorTypePredicates(t *testing.T) {
+	fixed := []T{T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8}
+	for _, oid := range fixed {
+		require.True(t, oid.IsArrayRelate(), oid.String())
+		require.True(t, oid.IsVectorType(), oid.String())
+		require.False(t, oid.IsBlockScaledVector(), oid.String())
+		_, ok := oid.BlockScaledFormat()
+		require.False(t, ok)
+		typ := New(oid, 10, 0)
+		require.Equal(t, 10*typ.GetArrayElementSize(), typ.ArrayCellBytes())
+	}
+	for _, oid := range []T{T_float32, T_float8, T_float4, T_varchar, T_json, T_int64} {
+		require.False(t, oid.IsArrayRelate(), oid.String())
+		require.False(t, oid.IsVectorType(), oid.String())
+		require.False(t, oid.IsBlockScaledVector(), oid.String())
+	}
+}
