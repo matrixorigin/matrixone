@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -124,6 +125,7 @@ func TestScanEntriesUsesTypedFilterAndPhysicalTop(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mp)
 	scanner := &scriptedRelationScanner{t: t}
 	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
+		require.Zero(t, req.ReadPolicy)
 		require.Equal(t, "entries1", req.Table)
 		require.NotNil(t, req.Filter)
 		require.NotNil(t, req.IndexParam)
@@ -1227,14 +1229,18 @@ func TestCollectRelationFilterColumnsAcceptsOnlySafeExpressionShapes(t *testing.
 }
 
 type fixedRelationReader struct {
-	emitted bool
-	closed  int
-	rows    [][2]int64
+	checkContext func(context.Context)
+	emitted      bool
+	closed       int
+	rows         [][2]int64
 }
 
 var _ engine.Reader = (*fixedRelationReader)(nil)
 
-func (r *fixedRelationReader) Read(_ context.Context, _ []string, _ *plan.Expr, mp *mpool.MPool, out *batch.Batch) (bool, error) {
+func (r *fixedRelationReader) Read(ctx context.Context, _ []string, _ *plan.Expr, mp *mpool.MPool, out *batch.Batch) (bool, error) {
+	if r.checkContext != nil {
+		r.checkContext(ctx)
+	}
 	if r.emitted {
 		return true, nil
 	}
@@ -1445,6 +1451,10 @@ func TestRelationScannerExecutesTypedReaderLifecycle(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProc(t)
 	t.Cleanup(proc.Free)
+	proc.Ctx = fileservice.WithFileServicePolicy(proc.Ctx, fileservice.SkipDiskCacheWrites)
+	checkPolicy := func(ctx context.Context) {
+		require.Equal(t, fileservice.Policy(fileservice.SkipDiskCacheWrites|fileservice.SkipFullFilePreloads), fileservice.GetFileServicePolicy(ctx))
+	}
 	eng := mock_frontend.NewMockEngine(ctrl)
 	db := mock_frontend.NewMockDatabase(ctrl)
 	rel := mock_frontend.NewMockRelation(ctrl)
@@ -1458,12 +1468,13 @@ func TestRelationScannerExecutesTypedReaderLifecycle(t *testing.T) {
 		},
 		Name2ColIndex: map[string]int32{"version": 0, "id": 1},
 	}
-	reader := &fixedRelationReader{rows: [][2]int64{{7, 11}, {7, 12}}}
+	reader := &fixedRelationReader{checkContext: checkPolicy, rows: [][2]int64{{7, 11}, {7, 12}}}
 	eng.EXPECT().Database(gomock.Any(), "db", nil).Return(db, nil)
 	db.EXPECT().Relation(gomock.Any(), "entries", proc).Return(rel, nil)
 	rel.EXPECT().GetTableDef(gomock.Any()).Return(tableDef)
 	rel.EXPECT().Ranges(gomock.Any(), gomock.Any()).DoAndReturn(
-		func(_ context.Context, param engine.RangesParam) (engine.RelData, error) {
+		func(ctx context.Context, param engine.RangesParam) (engine.RelData, error) {
+			checkPolicy(ctx)
 			require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectCommittedPersistedData), param.Policy)
 			require.Equal(t, int32(2), param.Rsp.CNCNT)
 			require.Equal(t, int32(1), param.Rsp.CNIDX)
@@ -1481,9 +1492,10 @@ func TestRelationScannerExecutesTypedReaderLifecycle(t *testing.T) {
 		ownsInMemory:   false,
 	}
 	res, err := scanner.ScanRelation(sqlexec.RelationScanRequest{
-		Schema:  "db",
-		Table:   "entries",
-		Columns: []string{"version", "id"},
+		ReadPolicy: fileservice.SkipFullFilePreloads,
+		Schema:     "db",
+		Table:      "entries",
+		Columns:    []string{"version", "id"},
 	})
 	require.NoError(t, err)
 	defer res.Close()
@@ -1491,6 +1503,7 @@ func TestRelationScannerExecutesTypedReaderLifecycle(t *testing.T) {
 	require.Equal(t, []int64{7, 7}, vector.MustFixedColWithTypeCheck[int64](res.Batches[0].Vecs[0]))
 	require.Equal(t, []int64{11, 12}, vector.MustFixedColWithTypeCheck[int64](res.Batches[0].Vecs[1]))
 	require.Equal(t, 1, reader.closed)
+	require.Equal(t, fileservice.Policy(fileservice.SkipDiskCacheWrites), fileservice.GetFileServicePolicy(proc.Ctx))
 }
 
 func TestRelationScannerPropagatesStorageFailure(t *testing.T) {

@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -200,7 +201,12 @@ func (idx *IvfflatSearchIndex[T]) scanEntriesInDomain(
 		// Optional domains retain their existing transported-filter contract.
 		filterHint.MembershipFilterBytes = sqlproc.IvfMembershipFilter
 	}
+	var readPolicy fileservice.Policy
+	if sqlproc.IvfHasMembershipFilter || len(filters) > 0 {
+		readPolicy = fileservice.SkipFullFilePreloads
+	}
 	res, err := sqlproc.RelationScanner.ScanRelation(sqlexec.RelationScanRequest{
+		ReadPolicy:        readPolicy,
 		Schema:            tblcfg.DbName,
 		Table:             tblcfg.EntriesTable,
 		Columns:           columns,

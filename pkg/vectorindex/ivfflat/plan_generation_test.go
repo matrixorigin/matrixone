@@ -23,6 +23,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -75,6 +76,7 @@ func TestRequiredMembershipStoragePaths(t *testing.T) {
 			scanner := &scriptedRelationScanner{t: t}
 			p.RelationScanner = scanner
 			scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
+				require.Equal(t, fileservice.Policy(fileservice.SkipFullFilePreloads), req.ReadPolicy)
 				require.Equal(t, tc.desc, req.PostFilterTopOnly)
 				require.Equal(t, !tc.desc && (!tc.integer || tc.residual), req.FilterBeforeTopK)
 				require.Equal(t, tc.integer && !tc.desc, req.FilterHint.BF != nil)

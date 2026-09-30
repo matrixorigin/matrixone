@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -665,6 +666,9 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 		defer req.FilterHint.BF.Free()
 	}
 	ctx := s.proc.Ctx
+	if req.ReadPolicy != 0 {
+		ctx = fileservice.WithFileServicePolicy(ctx, fileservice.GetFileServicePolicy(ctx)|req.ReadPolicy)
+	}
 	if s.accountID != nil {
 		ctx = defines.AttachAccountId(ctx, *s.accountID)
 	}
