@@ -279,7 +279,14 @@ func validateFunctionalTable(ctx context.Context, table *TableDef) error {
 		}
 		functional := false
 		for _, part := range index.Parts {
-			functional = functional || strings.HasPrefix(catalog.ResolveAlias(part), functionalColumnPrefix)
+			if catalog.IsAlias(part) || !strings.HasPrefix(part, functionalColumnPrefix) {
+				continue
+			}
+			col := FindColumn(table.Cols, part)
+			if col == nil {
+				return moerr.NewInvalidInput(ctx, "invalid functional index metadata")
+			}
+			functional = functional || col.Hidden
 		}
 		if !functional {
 			continue
@@ -288,7 +295,10 @@ func validateFunctionalTable(ctx context.Context, table *TableDef) error {
 			return moerr.NewInvalidInput(ctx, "invalid functional index metadata")
 		}
 		for ordinal, part := range index.Parts {
-			if !strings.HasPrefix(catalog.ResolveAlias(part), functionalColumnPrefix) {
+			if catalog.IsAlias(part) || !strings.HasPrefix(part, functionalColumnPrefix) {
+				continue
+			}
+			if col := FindColumn(table.Cols, part); col != nil && !col.Hidden {
 				continue
 			}
 			col := functionalIndexPartColumn(table, index, ordinal)
@@ -301,7 +311,7 @@ func validateFunctionalTable(ctx context.Context, table *TableDef) error {
 		}
 	}
 	for _, col := range table.Cols {
-		if strings.HasPrefix(col.Name, functionalColumnPrefix) && (!isFunctionalColumn(col) || owners[col.Name] != 1) {
+		if col.Hidden && strings.HasPrefix(col.Name, functionalColumnPrefix) && (!isFunctionalColumn(col) || owners[col.Name] != 1) {
 			return moerr.NewInvalidInput(ctx, "orphaned functional index backing column")
 		}
 	}

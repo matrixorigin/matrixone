@@ -456,7 +456,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		}
 		for _, assignment := range updateAssignments {
 			colName := assignment.Column
-			if strings.HasPrefix(strings.ToLower(colName), functionalColumnPrefix) {
+			if isFunctionalColumn(FindColumn(tableDef.Cols, colName)) {
 				return 0, moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
 			}
 			updateExpr := assignment.Expr

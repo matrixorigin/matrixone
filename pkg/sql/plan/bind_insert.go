@@ -4452,6 +4452,9 @@ func (builder *QueryBuilder) getInsertColsFromStmt(astCols tree.IdentifierList, 
 			if !ok {
 				return nil, moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
 			}
+			if isFunctionalColumn(tableDef.Cols[idx]) {
+				return nil, moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
+			}
 			if tableDef.Cols[idx].GeneratedCol != nil {
 				return nil, moerr.NewInvalidInputf(builder.GetContext(), "the value specified for generated column '%s' in table '%s' is not allowed", colName, tableDef.Name)
 			}
@@ -4466,9 +4469,6 @@ func (builder *QueryBuilder) rejectDuplicateInsertColumns(astCols tree.Identifie
 	for _, column := range astCols {
 		columnName := string(column)
 		key := strings.ToLower(columnName)
-		if strings.HasPrefix(key, functionalColumnPrefix) {
-			return moerr.NewBadFieldError(builder.GetContext(), columnName, "field list")
-		}
 		if _, ok := seen[key]; ok {
 			return moerr.NewFieldSpecifiedTwice(builder.GetContext(), columnName)
 		}
@@ -4536,6 +4536,9 @@ func (builder *QueryBuilder) stripGeneratedDefaultCols(astCols tree.IdentifierLi
 	for i, col := range astCols {
 		colName := strings.ToLower(string(col))
 		if idx, ok := tableDef.Name2ColIndex[colName]; ok {
+			if isFunctionalColumn(tableDef.Cols[idx]) {
+				return nil, nil, moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
+			}
 			if tableDef.Cols[idx].GeneratedCol != nil {
 				genPositions[i] = true
 				generatedColumnCount++

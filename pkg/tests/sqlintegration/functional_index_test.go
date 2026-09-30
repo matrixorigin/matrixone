@@ -260,6 +260,20 @@ func TestFunctionalCompositeIndexLifecycle(t *testing.T) {
 		}
 		exec("create database functional_index_multi")
 		exec("use functional_index_multi")
+		// Pre-feature schemas could use this prefix for visible ordinary columns.
+		exec("create table legacy(id int primary key,__mo_fi_user int,index ordinary(__mo_fi_user))")
+		exec("insert into legacy(id,__mo_fi_user) values(1,7)")
+		exec("insert into legacy(id,__mo_fi_user) values(3,default)")
+		exec("update legacy set __mo_fi_user=default where id=3")
+		exec("delete from legacy where id=3")
+		exec("update legacy set __mo_fi_user=8 where id=1")
+		count("select count(*) from legacy force index(ordinary) where __mo_fi_user=8", 1)
+		exec("alter table legacy add column extra int")
+		exec("create table legacy_like like legacy")
+		exec("insert into legacy_like(id,__mo_fi_user) values(2,9)")
+		count("select count(*) from legacy_like force index(ordinary) where __mo_fi_user=9", 1)
+		exec("delete from legacy where __mo_fi_user=8")
+		count("select count(*) from legacy", 0)
 		exec("create table t(id int primary key, tenant int, name varchar(40), index ie ((lower(name)), (id+1)), index il (tenant,(lower(name))), index ir ((lower(name)),tenant), index idup ((lower(name)),(lower(name))))")
 		exec("insert into t values(1,7,'ABC'),(2,7,'abc'),(3,8,'ABC'),(4,7,NULL)")
 		checks := []struct {

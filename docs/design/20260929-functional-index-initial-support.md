@@ -37,8 +37,11 @@ normalized index name's SHA-256 prefix and its zero-based key ordinal. Position
 zero retains the earlier single-expression name; later positions append the
 ordinal. Hidden values are not shared across parts or indexes. Each value is materialized using existing
 generated-column DML machinery; ordinary secondary-index maintenance owns the
-physical index. Explicit INSERT/UPDATE assignments to the reserved internal
-name are rejected, including DEFAULT. SELECT-star and public column metadata
+physical index. Visible user columns with the `__mo_fi_` prefix remain ordinary
+columns, including in existing catalog schemas and checkpoint replay. Hidden
+generated metadata and the owning index identify internal backing values.
+Explicit INSERT/UPDATE assignments to those values are rejected, including
+DEFAULT. SELECT-star and public column metadata
 omit the backing column.
 
 Dropping an ordinary key column rebases every surviving expression backing name

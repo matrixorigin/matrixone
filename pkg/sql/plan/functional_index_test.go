@@ -15,6 +15,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -62,6 +63,62 @@ func TestFunctionalIndexOwnershipAfterDropColumn(t *testing.T) {
 		require.Equal(t, alias, table.Indexes[0].Parts[3])
 		require.Len(t, functionalIndexColumns(table, table.Indexes[1]), 1)
 	}
+}
+
+func TestFunctionalIndexLegacyVisibleColumn(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "create table legacy(id int primary key,user_value int,index ordinary(user_value))", 1)
+	require.NoError(t, err)
+	p, err := BuildPlan(ctx, stmt, false)
+	stmt.Free()
+	require.NoError(t, err)
+	// Model catalog metadata written before the functional-index feature.
+	table := p.GetDdl().GetCreateTable().TableDef
+	col := FindColumn(table.Cols, "user_value")
+	col.Name, col.OriginName = "__mo_fi_user", "__mo_fi_user"
+	table.Indexes[0].Parts[0] = col.Name
+	table.Cols = append(table.Cols, &ColDef{Name: catalog.Row_ID, Hidden: true, Typ: Type{Id: int32(types.T_Rowid)}})
+	table.Name2ColIndex = nil
+	ensureName2ColIndexForReplace(table)
+	require.NoError(t, validateTableIndexDefinitions(table))
+	require.Nil(t, functionalIndexColumn(table, table.Indexes[0]))
+	ctx.tables["legacy"] = table
+	ctx.objects["legacy"] = &ObjectRef{ObjName: "legacy", SchemaName: "tpch"}
+	ctx.isDml = true
+	for _, indexTable := range p.GetDdl().GetCreateTable().IndexTables {
+		indexTable.Cols = append(indexTable.Cols, &ColDef{Name: catalog.Row_ID, Hidden: true, Typ: Type{Id: int32(types.T_Rowid)}})
+		ctx.tables[indexTable.Name] = indexTable
+		ctx.objects[indexTable.Name] = &ObjectRef{ObjName: indexTable.Name, SchemaName: "tpch"}
+	}
+	for _, sql := range []string{
+		"select __mo_fi_user from legacy", "insert into legacy(id,__mo_fi_user) values(1,7)",
+		"insert into legacy(id,__mo_fi_user) values(1,default)",
+		"update legacy set __mo_fi_user=8 where id=1", "delete from legacy where __mo_fi_user=8",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			_, err = BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+		})
+	}
+	bad := DeepCopyTableDef(table, true)
+	FindColumn(bad.Cols, "__mo_fi_user").Hidden = true
+	require.Error(t, validateFunctionalTable(t.Context(), bad), "hidden backing metadata cannot lose its generated expression")
+	bad = DeepCopyTableDef(table, true)
+	bad.Indexes[0].Parts[0] = "__mo_fi_missing"
+	require.Error(t, validateFunctionalTable(t.Context(), bad), "missing internal key metadata must fail closed")
+	rt := runtime.ServiceRuntime(ctx.GetProcess().GetService())
+	old, _ := rt.GetGlobalVariables(runtime.MOProtocolVersion)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion101)
+	t.Cleanup(func() { rt.SetGlobalVariables(runtime.MOProtocolVersion, old) })
+	stmt, err = parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create table collision(name varchar(40),"+functionalColumnName("ix")+" int,index ix((lower(name))))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	_, err = BuildPlan(ctx, stmt, false)
+	require.ErrorContains(t, err, "backing column already exists")
 }
 
 func TestFunctionalIndexSyntheticKeyLayout(t *testing.T) {

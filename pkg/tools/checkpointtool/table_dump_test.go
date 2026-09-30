@@ -72,6 +72,24 @@ func TestFunctionalIndexCheckpointDDL(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestOrdinaryPrefixedColumnCheckpointDDL(t *testing.T) {
+	schema := &TableSchema{TableName: "legacy", Columns: []TableColumn{{Name: "__mo_fi_user", SQLType: "INT", Position: 1}},
+		UniqueKeys: []TableUniqueKey{{Name: "ordinary", Columns: []string{"__mo_fi_user"}}}}
+	ddl := RenderCreateTableDDLFromSchema(schema)
+	require.Contains(t, ddl, "KEY `ordinary`(`__mo_fi_user`)")
+	indexes := &LogicalTableView{Headers: []string{"object", "block", "row", "table_id", "name", "column_name", "type", "ordinal_position", "hidden"},
+		Rows: [][]string{{"o", "0", "0", "42", "ordinary", "__mo_fi_user", "INDEX", "1", "0"}}}
+	statements, err := buildCreateIndexStatementsFromMoIndexes(indexes, 42, "legacy", schema)
+	require.NoError(t, err)
+	require.Equal(t, []string{"ALTER TABLE `legacy` ADD KEY `ordinary`(`__mo_fi_user`);"}, statements)
+	// Visible catalog columns take precedence over stale expression annotations.
+	schema.UniqueKeys[0].Expressions = map[string]string{"__mo_fi_user": "lower(`name`)"}
+	require.Contains(t, RenderCreateTableDDLFromSchema(schema), "KEY `ordinary`(`__mo_fi_user`)")
+	statements, err = buildCreateIndexStatementsFromMoIndexes(indexes, 42, "legacy", schema)
+	require.NoError(t, err)
+	require.Equal(t, []string{"ALTER TABLE `legacy` ADD KEY `ordinary`(`__mo_fi_user`);"}, statements)
+}
+
 func TestFunctionalCompositeIndexCheckpointDDL(t *testing.T) {
 	const first, second = "__mo_fi_a_1", "__mo_fi_a_2"
 	schema := &TableSchema{TableName: "fi", Columns: []TableColumn{{Name: "id", SQLType: "INT", Position: 1}, {Name: "name", SQLType: "VARCHAR(40)", Position: 2}}, UniqueKeys: []TableUniqueKey{{Name: "idx", Columns: []string{"id", first, second}}}}
