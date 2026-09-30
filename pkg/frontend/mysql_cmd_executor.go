@@ -7023,6 +7023,10 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 		col.SetSigned(false)
 	case types.T_float32:
 		col.SetColumnType(defines.MYSQL_TYPE_FLOAT)
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		// The low-precision float types have no MySQL wire type; present them as
+		// FLOAT (they widen losslessly to float32 for the protocol).
+		col.SetColumnType(defines.MYSQL_TYPE_FLOAT)
 	case types.T_float64:
 		col.SetColumnType(defines.MYSQL_TYPE_DOUBLE)
 	case types.T_char:

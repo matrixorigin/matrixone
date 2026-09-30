@@ -923,6 +923,10 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 					return false
 				}
 			}
+		case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+			if _, err := strconv.ParseFloat(field.Val, 32); err != nil {
+				return false
+			}
 		case types.T_float64:
 			// origin float64 data type
 			if col.Typ.Scale < 0 || col.Typ.Width == 0 {
@@ -1318,6 +1322,8 @@ func appendLoadEmptyNumericZero(vec *vector.Vector, id types.T, asBytes bool, mp
 		return vector.AppendFixed(vec, uint64(0), false, mp)
 	case types.T_float32:
 		return vector.AppendFixed(vec, float32(0), false, mp)
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		return appendLowPrecFloatFromFloat32(vec, 0, mp)
 	case types.T_float64:
 		return vector.AppendFixed(vec, float64(0), false, mp)
 	case types.T_decimal64:
@@ -1329,6 +1335,22 @@ func appendLoadEmptyNumericZero(vec *vector.Vector, id types.T, asBytes bool, mp
 	default:
 		return moerr.NewInternalErrorNoCtxf("unsupported type %v for empty numeric LOAD DATA zero-fill", id)
 	}
+}
+
+// appendLowPrecFloatFromFloat32 rounds v to the low-precision float type of vec
+// (bf16/float16/float8/float4) and appends it. Used by the CSV/LOAD field parser.
+func appendLowPrecFloatFromFloat32(vec *vector.Vector, v float32, mp *mpool.MPool) error {
+	switch vec.GetType().Oid {
+	case types.T_bf16:
+		return vector.AppendFixed(vec, types.BF16FromFloat32(v), false, mp)
+	case types.T_float16:
+		return vector.AppendFixed(vec, types.Float16FromFloat32(v), false, mp)
+	case types.T_float8:
+		return vector.AppendFixed(vec, types.Float8FromFloat32(v), false, mp)
+	case types.T_float4:
+		return vector.AppendFixed(vec, types.Float4FromFloat32(v), false, mp)
+	}
+	return moerr.NewInternalErrorNoCtxf("not a low-precision float: %v", vec.GetType().Oid)
 }
 
 // resolveExternalErrorMode decides, once per scan, whether the error-mode
@@ -1846,6 +1868,21 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			if err := vector.AppendFixed(vec, float32(types.Decimal128ToFloat64(d, vec.GetType().Scale)), false, mp); err != nil {
 				return err
 			}
+		}
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		// Low-precision floats: parse as float32 then round to the target format.
+		// Reject NaN/Inf and out-of-range values (strict, like the narrow-vector
+		// element parser) instead of silently saturating.
+		d, err := strconv.ParseFloat(field.Val, 32)
+		if err != nil {
+			logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+			return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not %s type for column %d", field.Val, vec.GetType().Oid, colIdx)
+		}
+		if err := types.RejectNonFiniteNarrowFloat(float32(d), vec.GetType().Oid); err != nil {
+			return err
+		}
+		if err := appendLowPrecFloatFromFloat32(vec, float32(d), mp); err != nil {
+			return err
 		}
 	case types.T_float64:
 		// origin float64 data type

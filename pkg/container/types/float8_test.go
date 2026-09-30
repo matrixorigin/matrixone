@@ -88,3 +88,91 @@ func TestFloat8E4M3FromFloat32(t *testing.T) {
 		require.Equalf(t, b, Float8FromFloat32(f), "roundtrip 0x%02x (%v)", u, f)
 	}
 }
+
+func TestRejectNonFiniteNarrowFloat(t *testing.T) {
+	nan := float32(math.NaN())
+	inf := float32(math.Inf(1))
+
+	// NaN/Inf are rejected for every low-precision float type.
+	for _, oid := range []T{T_bf16, T_float16, T_float8, T_float4} {
+		require.Error(t, RejectNonFiniteNarrowFloat(nan, oid), "nan %s", oid)
+		require.Error(t, RejectNonFiniteNarrowFloat(inf, oid), "inf %s", oid)
+		require.Error(t, RejectNonFiniteNarrowFloat(-inf, oid), "-inf %s", oid)
+		// In-range finite values pass.
+		require.NoError(t, RejectNonFiniteNarrowFloat(1.5, oid), "1.5 %s", oid)
+		require.NoError(t, RejectNonFiniteNarrowFloat(-2.0, oid), "-2.0 %s", oid)
+		require.NoError(t, RejectNonFiniteNarrowFloat(0, oid), "0 %s", oid)
+	}
+
+	// Overflow beyond each type's finite range is rejected (would otherwise saturate).
+	require.Error(t, RejectNonFiniteNarrowFloat(70000, T_float16), "float16 max is 65504")
+	require.NoError(t, RejectNonFiniteNarrowFloat(60000, T_float16))
+	require.Error(t, RejectNonFiniteNarrowFloat(1000, T_float8), "float8 max is 448")
+	require.NoError(t, RejectNonFiniteNarrowFloat(448, T_float8))
+	require.Error(t, RejectNonFiniteNarrowFloat(7, T_float4), "float4 max is 6")
+	require.NoError(t, RejectNonFiniteNarrowFloat(6, T_float4))
+	require.Error(t, RejectNonFiniteNarrowFloat(-7, T_float4))
+	// bf16 shares float32's exponent range, so a normal float32 never overflows it.
+	require.NoError(t, RejectNonFiniteNarrowFloat(3.0e38, T_bf16))
+}
+
+// TestLowPrecInfConversion covers +/-Inf conversion for all four low-precision float
+// types: bf16/float16 preserve Inf (they have an Inf encoding); float8/float4 have no
+// Inf and saturate to their max finite magnitude.
+func TestLowPrecInfConversion(t *testing.T) {
+	pinf := float32(math.Inf(1))
+	ninf := float32(math.Inf(-1))
+
+	// bf16 preserves Inf: float32 +Inf (0x7f800000) truncates to 0x7f80.
+	require.Equal(t, BF16(0x7f80), BF16FromFloat32(pinf))
+	require.Equal(t, BF16(0xff80), BF16FromFloat32(ninf))
+	require.True(t, math.IsInf(float64(BF16(0x7f80).ToFloat32()), 1))
+	require.True(t, math.IsInf(float64(BF16(0xff80).ToFloat32()), -1))
+
+	// float16 preserves Inf.
+	require.Equal(t, Float16(0x7c00), Float16FromFloat32(pinf))
+	require.Equal(t, Float16(0xfc00), Float16FromFloat32(ninf))
+	require.True(t, math.IsInf(float64(Float16(0x7c00).ToFloat32()), 1))
+
+	// float8 has no Inf: +/-Inf saturate to +/-448 (max finite), never NaN.
+	require.Equal(t, Float8(0x7e), Float8FromFloat32(pinf))
+	require.Equal(t, Float8(0xfe), Float8FromFloat32(ninf))
+	require.InDelta(t, 448.0, float64(Float8(0x7e).ToFloat32()), 1e-3)
+	require.False(t, math.IsInf(float64(Float8FromFloat32(pinf).ToFloat32()), 0))
+
+	// float4 has no Inf: +/-Inf saturate to +/-6.
+	require.Equal(t, Float4(0x7), Float4FromFloat32(pinf))
+	require.Equal(t, Float4(0xf), Float4FromFloat32(ninf))
+	require.Equal(t, float32(6), Float4(0x7).ToFloat32())
+	require.False(t, math.IsInf(float64(Float4FromFloat32(pinf).ToFloat32()), 0))
+}
+
+// TestLowPrecSubnormal covers subnormal (denormal) values for all four types: values
+// below the smallest normal that are still representable with reduced mantissa precision.
+func TestLowPrecSubnormal(t *testing.T) {
+	// bf16 shares float32's exponent range; its smallest subnormal is 2^-133
+	// (bits 0x0001), the largest 2^-126*(127/128) (bits 0x007f).
+	require.Equal(t, float32(math.Ldexp(1, -133)), BF16(0x0001).ToFloat32())
+	require.Equal(t, BF16(0x0001), BF16FromFloat32(float32(math.Ldexp(1, -133))))
+	require.InEpsilon(t, math.Ldexp(127, -133), float64(BF16(0x007f).ToFloat32()), 1e-6)
+
+	// float16 smallest positive subnormal is 2^-24 (bits 0x0001); largest 2^-14*(1023/1024).
+	require.Equal(t, float32(math.Ldexp(1, -24)), Float16(0x0001).ToFloat32())
+	require.Equal(t, Float16(0x0001), Float16FromFloat32(float32(math.Ldexp(1, -24))))
+
+	// float8 E4M3 subnormals are m/8 * 2^-6 for m=1..7 (step 2^-9), bits 0x01..0x07.
+	for m := 1; m <= 7; m++ {
+		want := float32(float64(m) / 8.0 * math.Ldexp(1, -6))
+		require.Equal(t, want, Float8(uint8(m)).ToFloat32(), "float8 subnormal m=%d", m)
+		require.Equal(t, Float8(uint8(m)), Float8FromFloat32(want), "float8 subnormal roundtrip m=%d", m)
+	}
+	// Smallest float8 subnormal is 2^-9; half of it rounds to zero (RNE).
+	require.Equal(t, float32(math.Ldexp(1, -9)), Float8(0x01).ToFloat32())
+	require.Equal(t, Float8(0), Float8FromFloat32(float32(math.Ldexp(1, -10))))
+
+	// float4 E2M1: the only subnormal is 0.5 (code 0x1); 0.25 rounds to even (0).
+	require.Equal(t, float32(0.5), Float4(0x1).ToFloat32())
+	require.Equal(t, Float4(0x1), Float4FromFloat32(0.5))
+	require.Equal(t, Float4(0x9), Float4FromFloat32(-0.5))
+	require.Equal(t, Float4(0), Float4FromFloat32(0.25))
+}

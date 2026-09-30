@@ -14,7 +14,44 @@
 
 package types
 
-import "math"
+import (
+	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+)
+
+// RejectNonFiniteNarrowFloat returns an error if v (widened to float32) is NaN, Inf,
+// or outside the finite range of the low-precision float type oid. Strict SQL string
+// parsing and LOAD use it so an out-of-range value errors -- MySQL-style -- instead of
+// silently saturating (bf16/float16 have Inf, so overflow is detected as Inf after
+// narrowing; float8/float4 saturate, so their input magnitude is range-checked). This
+// mirrors the narrow-vector element parser's rejectNonFiniteArrayElem. oid must be one
+// of T_bf16/T_float16/T_float8/T_float4.
+func RejectNonFiniteNarrowFloat(v float32, oid T) error {
+	f := float64(v)
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return moerr.NewInvalidInputNoCtxf("value %v is not a finite %s", v, oid.String())
+	}
+	switch oid {
+	case T_bf16:
+		if math.IsInf(float64(BF16FromFloat32(v).ToFloat32()), 0) {
+			return moerr.NewOutOfRangeNoCtxf(oid.String(), "value %v", v)
+		}
+	case T_float16:
+		if math.IsInf(float64(Float16FromFloat32(v).ToFloat32()), 0) {
+			return moerr.NewOutOfRangeNoCtxf(oid.String(), "value %v", v)
+		}
+	case T_float8:
+		if v > f8e4m3MaxNorm || v < -f8e4m3MaxNorm {
+			return moerr.NewOutOfRangeNoCtxf(oid.String(), "value %v", v)
+		}
+	case T_float4:
+		if v > f4e2m1Mags[7] || v < -f4e2m1Mags[7] {
+			return moerr.NewOutOfRangeNoCtxf(oid.String(), "value %v", v)
+		}
+	}
+	return nil
+}
 
 // Float8 is the OCP FP8 E4M3 format: 1 sign bit, 4 exponent bits (bias 7), 3
 // mantissa bits. Unlike IEEE formats it has NO infinity: the all-ones exponent

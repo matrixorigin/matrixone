@@ -580,3 +580,76 @@ func TestColumnSlicesGetDatetime(t *testing.T) {
 		})
 	}
 }
+
+// TestColumnSlicesLowPrecFloat verifies the MySQL result path presents the scalar
+// low-precision float types (bf16/float16/float8/float4) as float32 (#20567): the column
+// is widened into the float32 slice and the GetFloat32/GetFloat64 getters read it, so a
+// negative value (whose raw bits exceed a positive's) comes through with its true sign.
+func TestColumnSlicesLowPrecFloat(t *testing.T) {
+	ctx := context.TODO()
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+
+	cases := []struct {
+		name string
+		oid  types.T
+		make func(float32) any
+	}{
+		{"bf16", types.T_bf16, func(f float32) any { return types.BF16FromFloat32(f) }},
+		{"float16", types.T_float16, func(f float32) any { return types.Float16FromFloat32(f) }},
+		{"float8", types.T_float8, func(f float32) any { return types.Float8FromFloat32(f) }},
+		{"float4", types.T_float4, func(f float32) any { return types.Float4FromFloat32(f) }},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(c.oid.ToType())
+			// -1.5 and 2.0 are exactly representable in all four formats.
+			switch c.oid {
+			case types.T_bf16:
+				require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.BF16FromFloat32(-1.5), false, mp))
+				require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.BF16FromFloat32(2.0), false, mp))
+			case types.T_float16:
+				require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.Float16FromFloat32(-1.5), false, mp))
+				require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.Float16FromFloat32(2.0), false, mp))
+			case types.T_float8:
+				require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.Float8FromFloat32(-1.5), false, mp))
+				require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.Float8FromFloat32(2.0), false, mp))
+			case types.T_float4:
+				require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.Float4FromFloat32(-1.5), false, mp))
+				require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.Float4FromFloat32(2.0), false, mp))
+			}
+			bat.SetRowCount(2)
+			defer bat.Clean(mp)
+
+			colSlices := &ColumnSlices{
+				ctx:             ctx,
+				colIdx2SliceIdx: make([]int, 1),
+				dataSet:         bat,
+			}
+			defer colSlices.Close()
+			require.NoError(t, convertVectorToSlice(ctx, nil, bat.Vecs[0], 0, colSlices))
+
+			// GetFloat32 reads the widened slice with the correct sign.
+			v0, err := colSlices.GetFloat32(0, 0)
+			require.NoError(t, err)
+			require.InDelta(t, float32(-1.5), v0, 1e-6)
+			v1, err := colSlices.GetFloat32(1, 0)
+			require.NoError(t, err)
+			require.InDelta(t, float32(2.0), v1, 1e-6)
+
+			// GetFloat64 widens the same slice.
+			d0, err := colSlices.GetFloat64(0, 0)
+			require.NoError(t, err)
+			require.InDelta(t, -1.5, d0, 1e-6)
+
+			// extractRowFromVector2 yields a float32 value.
+			row := make([]any, 1)
+			require.NoError(t, extractRowFromVector2(ctx, nil, bat.Vecs[0], 0, row, 0, false, colSlices))
+			f, ok := row[0].(float32)
+			require.True(t, ok, "expected float32, got %T", row[0])
+			require.InDelta(t, float32(-1.5), f, 1e-6)
+		})
+	}
+}

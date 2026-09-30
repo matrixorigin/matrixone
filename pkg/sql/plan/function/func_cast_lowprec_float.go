@@ -179,6 +179,9 @@ func strToLowPrecFloat[Tr lowPrecFloatConstraint](
 		if err != nil {
 			return moerr.NewInvalidInput(ctx, fmt.Sprintf("invalid float value %q", string(bs)))
 		}
+		if err := types.RejectNonFiniteNarrowFloat(float32(f), rs.GetType().Oid); err != nil {
+			return err
+		}
 		if err := rs.Append(ctor(float32(f)), false); err != nil {
 			return err
 		}
