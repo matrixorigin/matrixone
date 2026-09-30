@@ -714,9 +714,11 @@ func LoadCheckpointEntriesFromKey(
 			}
 
 			bo := &objectio.BackupObject{
-				Location: objectStats.ObjectLocation(),
-				CrateTS:  createAt,
-				DropTS:   deletedAt,
+				Location:   objectStats.ObjectLocation(),
+				CrateTS:    createAt,
+				DropTS:     deletedAt,
+				TableID:    tid,
+				ObjectType: objectType,
 			}
 			if baseTS.IsEmpty() || (!baseTS.IsEmpty() &&
 				(createAt.GE(baseTS) || commitAt.GE(baseTS))) {

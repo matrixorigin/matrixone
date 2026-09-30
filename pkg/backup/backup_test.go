@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
@@ -204,6 +205,90 @@ func TestExecBackupKeepsObjectDeletedAfterRestoreTimestamp(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestSelectBackupObjectsFromIncrementalCheckpointOmitsHistoricalObject(t *testing.T) {
+	for _, appendable := range []bool{false, true} {
+		name := "nonappendable"
+		if appendable {
+			name = "appendable"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := t.Context()
+			src := newBackupMemoryFS(t, "historical-src")
+			dst := newBackupMemoryFS(t, "historical-dst")
+			objectID := objectio.NewObjectid()
+			objectName := objectio.BuildObjectNameWithObjectID(&objectID)
+			stats := objectio.NewObjectStatsWithObjectID(&objectID, appendable, false, false)
+			require.NoError(t, objectio.SetObjectStatsLocation(
+				stats,
+				objectio.BuildLocation(objectName, objectio.NewExtent(0, 0, 1, 1), 1, 0),
+			))
+			require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 1))
+			require.NoError(t, objectio.SetObjectStatsRowCnt(stats, 1))
+
+			cat := catalog.MockCatalog(nil)
+			defer cat.Close()
+			db, err := cat.CreateDBEntry("backup_test", "", "", nil)
+			require.NoError(t, err)
+			table, err := db.CreateTableEntry(catalog.MockSchema(2, 0), nil, nil)
+			require.NoError(t, err)
+			createTS := types.BuildTS(5, 0)
+			dropTS := types.BuildTS(10, 0)
+			restoreTS := types.BuildTS(20, 1)
+			entry, err := table.CreateCommittedObject(createTS, &objectio.CreateObjOpt{Stats: stats}, nil)
+			require.NoError(t, err)
+			catalog.MockDroppedObjectEntry2List(entry, dropTS)
+
+			checkpointData, err := logtail.IncrementalCheckpointDataFactory(
+				types.BuildTS(1, 0), types.BuildTS(20, 0), 0, src,
+			)(cat)
+			require.NoError(t, err)
+			defer checkpointData.Close()
+			checkpointLocation, _, err := checkpointData.Sync(ctx, src)
+			require.NoError(t, err)
+			objects, _, err := logtail.LoadCheckpointEntriesFromKey(
+				ctx, "backup-test", src, checkpointLocation,
+				logtail.CheckpointCurrentVersion, nil, &types.TS{},
+			)
+			require.NoError(t, err)
+
+			var creationRows, deletionRows int
+			for _, object := range objects {
+				if object.Location.Name().String() != objectName.String() {
+					continue
+				}
+				require.Equal(t, table.ID, object.TableID)
+				require.Equal(t, ckputil.ObjectType_Data, object.ObjectType)
+				require.Equal(t, createTS, object.CrateTS)
+				if object.DropTS.IsEmpty() {
+					creationRows++
+				} else {
+					require.Equal(t, dropTS, object.DropTS)
+					deletionRows++
+				}
+			}
+			if appendable {
+				require.Zero(t, creationRows)
+			} else {
+				require.Equal(t, 1, creationRows)
+			}
+			require.Equal(t, 1, deletionRows)
+
+			// The object file is deliberately absent; only checkpoint files may be copied.
+			_, err = src.StatFile(ctx, objectName.String())
+			require.Error(t, err)
+			files := selectBackupObjects(objects, restoreTS, nil, nil)
+			require.Contains(t, files, checkpointLocation.Name().String())
+			_, err = parallelCopyData(ctx, src, dst, files, 1, nil)
+			require.NoError(t, err)
+			require.NotContains(t, files, objectName.String())
+			for name := range files {
+				_, err = dst.StatFile(ctx, name)
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestSelectBackupObjectsOnlySkipsObjectsDeletedBeforeRestoreTimestamp(t *testing.T) {
 	newObject := func(dropTS types.TS) *objectio.BackupObject {
 		objectID := objectio.NewObjectid()
@@ -233,6 +318,148 @@ func TestSelectBackupObjectsOnlySkipsObjectsDeletedBeforeRestoreTimestamp(t *tes
 	require.NotContains(t, files, before.Location.Name().String())
 	require.Contains(t, files, at.Location.Name().String())
 	require.Contains(t, files, after.Location.Name().String())
+}
+
+func TestSelectBackupObjectsOwnerLifecycle(t *testing.T) {
+	type row struct {
+		tableID    uint64
+		objectType int8
+		createTS   types.TS
+		dropTS     types.TS
+		needCopy   bool
+	}
+	create := types.BuildTS(5, 0)
+	drop := types.BuildTS(10, 0)
+	restore := types.BuildTS(20, 1)
+	dataType := ckputil.ObjectType_Data
+	tombstoneType := ckputil.ObjectType_Tombstone
+	created := row{tableID: 1, objectType: dataType, createTS: create, needCopy: true}
+	deleted := row{tableID: 1, objectType: dataType, createTS: create, dropTS: drop, needCopy: true}
+
+	tests := []struct {
+		name       string
+		rows       []row
+		restoreTS  types.TS
+		wantFile   bool
+		wantCopy   bool
+		dstHave    bool
+		globalHave bool
+	}{
+		{"creation then deletion", []row{created, deleted}, restore, false, false, false, false},
+		{"deletion then creation", []row{deleted, created}, restore, false, false, false, false},
+		{"different table keeps shared live file", []row{created, deleted, {
+			tableID: 2, objectType: dataType, createTS: create, needCopy: true,
+		}}, restore, true, true, false, false},
+		{"different creation epoch keeps shared live file", []row{created, deleted, {
+			tableID: 1, objectType: dataType, createTS: types.BuildTS(15, 0), needCopy: true,
+		}}, restore, true, true, false, false},
+		{"tombstone owner keeps shared live file", []row{created, deleted, {
+			tableID: 1, objectType: tombstoneType, createTS: create, needCopy: true,
+		}}, restore, true, true, false, false},
+		{"drop before logical restore", []row{created, {
+			tableID: 1, objectType: dataType, createTS: create, dropTS: types.BuildTS(20, 0), needCopy: true,
+		}}, restore, false, false, false, false},
+		{"drop equal logical restore", []row{created, {
+			tableID: 1, objectType: dataType, createTS: create, dropTS: restore, needCopy: true,
+		}}, restore, true, true, false, false},
+		{"drop after logical restore", []row{created, {
+			tableID: 1, objectType: dataType, createTS: create, dropTS: types.BuildTS(20, 2), needCopy: true,
+		}}, restore, true, true, false, false},
+		{"conflicting drops before then equal", []row{created, deleted, {
+			tableID: 1, objectType: dataType, createTS: create, dropTS: restore, needCopy: true,
+		}}, restore, true, true, false, false},
+		{"conflicting drops equal then before", []row{created, {
+			tableID: 1, objectType: dataType, createTS: create, dropTS: restore, needCopy: true,
+		}, deleted}, restore, true, true, false, false},
+		{"conflicting drops before then after", []row{created, deleted, {
+			tableID: 1, objectType: dataType, createTS: create, dropTS: types.BuildTS(20, 2), needCopy: true,
+		}}, restore, true, true, false, false},
+		{"conflicting drops after then before", []row{created, {
+			tableID: 1, objectType: dataType, createTS: create, dropTS: types.BuildTS(20, 2), needCopy: true,
+		}, deleted}, restore, true, true, false, false},
+		{"empty restore keeps lifecycle", []row{created, deleted}, types.TS{}, true, true, false, false},
+		{"unowned metadata shares deleted file", []row{created, deleted, {
+			createTS: create, needCopy: true,
+		}}, restore, true, true, false, false},
+		{"unowned creation survives unowned deletion", []row{
+			{createTS: create, needCopy: true},
+			{createTS: create, dropTS: drop, needCopy: true},
+		}, restore, true, true, false, false},
+		{"unowned deletion alone follows row boundary", []row{{
+			createTS: create, dropTS: drop, needCopy: true,
+		}}, restore, false, false, false, false},
+		{"retained owners OR copy false then true", []row{
+			{tableID: 1, objectType: dataType, createTS: create},
+			{tableID: 2, objectType: dataType, createTS: create, needCopy: true},
+		}, restore, true, true, false, false},
+		{"retained owners OR copy true then false", []row{
+			{tableID: 1, objectType: dataType, createTS: create, needCopy: true},
+			{tableID: 2, objectType: dataType, createTS: create},
+		}, restore, true, true, false, false},
+		{"retained owners both no copy", []row{
+			{tableID: 1, objectType: dataType, createTS: create},
+			{tableID: 2, objectType: dataType, createTS: create},
+		}, restore, true, false, false, false},
+		{"destination already has shared file", []row{
+			{tableID: 1, objectType: dataType, createTS: create},
+			{tableID: 2, objectType: dataType, createTS: create, needCopy: true},
+		}, restore, true, false, true, false},
+		{"global index already has shared file", []row{
+			{tableID: 1, objectType: dataType, createTS: create},
+			{tableID: 2, objectType: dataType, createTS: create, needCopy: true},
+		}, restore, true, false, false, true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			objectID := objectio.NewObjectid()
+			objectName := objectio.BuildObjectNameWithObjectID(&objectID)
+			location := objectio.BuildLocation(objectName, objectio.NewExtent(0, 0, 1, 1), 1, 0)
+			objects := make([]*objectio.BackupObject, 0, len(test.rows))
+			for _, r := range test.rows {
+				objects = append(objects, &objectio.BackupObject{
+					Location: location, CrateTS: r.createTS, DropTS: r.dropTS,
+					NeedCopy: r.needCopy, TableID: r.tableID, ObjectType: r.objectType,
+				})
+			}
+			name := objectName.String()
+			var dstHave map[string]bool
+			if test.dstHave {
+				dstHave = map[string]bool{name: true}
+			}
+			var globalIndex *GlobalFileIndex
+			if test.globalHave {
+				globalIndex = NewGlobalFileIndex()
+				globalIndex.Add(name)
+			}
+			files := selectBackupObjects(objects, test.restoreTS, dstHave, globalIndex)
+			if !test.wantFile {
+				require.NotContains(t, files, name)
+				return
+			}
+			require.Len(t, files, 1)
+			require.Equal(t, test.wantCopy, files[name].NeedCopy)
+		})
+	}
+	t.Run("distinct names with same owner and creation epoch", func(t *testing.T) {
+		oldID := objectio.NewObjectid()
+		liveID := objectio.NewObjectid()
+		oldName := objectio.BuildObjectNameWithObjectID(&oldID)
+		liveName := objectio.BuildObjectNameWithObjectID(&liveID)
+		location := func(name objectio.ObjectName) objectio.Location {
+			return objectio.BuildLocation(name, objectio.NewExtent(0, 0, 1, 1), 1, 0)
+		}
+		objects := []*objectio.BackupObject{
+			{Location: location(oldName), TableID: 1, ObjectType: dataType, CrateTS: create, NeedCopy: true},
+			{Location: location(oldName), TableID: 1, ObjectType: dataType, CrateTS: create, DropTS: drop, NeedCopy: true},
+			{Location: location(liveName), TableID: 1, ObjectType: dataType, CrateTS: create, NeedCopy: true},
+		}
+		files := selectBackupObjects(objects, restore, nil, nil)
+		require.NotContains(t, files, oldName.String())
+		require.Contains(t, files, liveName.String())
+		require.True(t, files[liveName.String()].NeedCopy)
+		require.Len(t, files, 1)
+	})
 }
 
 func TestBackupData(t *testing.T) {

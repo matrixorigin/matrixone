@@ -516,12 +516,50 @@ func execBackup(
 	return err
 }
 
+type backupObjectKey struct {
+	tableID    uint64
+	objectType int8
+	name       objectio.ObjectNameShort
+	createTS   types.TS
+}
+
+func backupObjectIdentity(obj *objectio.BackupObject) backupObjectKey {
+	return backupObjectKey{
+		tableID:    obj.TableID,
+		objectType: obj.ObjectType,
+		name:       *obj.Location.Name().Short(),
+		createTS:   obj.CrateTS,
+	}
+}
+
 func selectBackupObjects(
 	oNames []*objectio.BackupObject,
 	restoreTS types.TS,
 	dstHave map[string]bool,
 	globalIndex *GlobalFileIndex,
 ) map[string]*objectio.BackupObject {
+	// Incremental checkpoints can contain separate create/delete rows for one
+	// lifecycle. Resolve those before physical-file deduplication: another table
+	// (e.g. a clone) may still own a live reference to the same physical file.
+	var dropTSByObject map[backupObjectKey]types.TS
+	if !restoreTS.IsEmpty() {
+		for _, obj := range oNames {
+			if obj.TableID == 0 || obj.DropTS.IsEmpty() {
+				continue
+			}
+			if dropTSByObject == nil {
+				dropTSByObject = make(map[backupObjectKey]types.TS)
+			}
+			key := backupObjectIdentity(obj)
+			dropTS, exists := dropTSByObject[key]
+			// Keep the later timestamp if duplicated records disagree, so an
+			// earlier record cannot discard an object still needed at restoreTS.
+			if !exists || dropTS.LT(&obj.DropTS) {
+				dropTSByObject[key] = obj.DropTS
+			}
+		}
+	}
+
 	files := make(map[string]*objectio.BackupObject, len(oNames))
 	for _, oName := range oNames {
 		objName := oName.Location.Name().String()
@@ -529,7 +567,11 @@ func selectBackupObjects(
 		// snapshot being restored. The special checkpoint rewrite makes objects
 		// dropped at or after restoreTS live again, so only an earlier DropTS is
 		// safe to omit.
-		if !restoreTS.IsEmpty() && !oName.DropTS.IsEmpty() && oName.DropTS.LT(&restoreTS) {
+		dropTS := oName.DropTS
+		if !restoreTS.IsEmpty() && oName.TableID != 0 {
+			dropTS = dropTSByObject[backupObjectIdentity(oName)]
+		}
+		if !restoreTS.IsEmpty() && !dropTS.IsEmpty() && dropTS.LT(&restoreTS) {
 			continue
 		}
 		// Check if file already exists in current backup directory
@@ -542,6 +584,10 @@ func selectBackupObjects(
 		}
 		if files[objName] == nil {
 			files[objName] = oName
+		} else {
+			// Any retained reference requiring a copy must override an older
+			// reference marked reusable by the incremental-backup watermark.
+			files[objName].NeedCopy = files[objName].NeedCopy || oName.NeedCopy
 		}
 	}
 	return files
