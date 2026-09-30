@@ -294,6 +294,14 @@ func TestPreparedSpecializedDomains(t *testing.T) {
 				}
 			}
 		})
+		t.Run("nested_float_arithmetic_preserves_rows", func(t *testing.T) {
+			exec(t, "create table floating_filters(id int primary key, v double)")
+			defer conn.ExecContext(ctx, "drop table floating_filters")
+			exec(t, "insert into floating_filters values (1,1e-17),(2,2e0)")
+			want := [][]string{{"1"}, {"2"}}
+			require.Equal(t, want, query(t, "select id from floating_filters where cast(v+1e0 as double)=1e0 or v=2e0 order by id"))
+			require.Equal(t, want, query(t, "select id from floating_filters where v+1e0=1e0 or v=2e0 order by id"))
+		})
 		t.Run("ntile_null_runtime_error", func(t *testing.T) {
 			exec(t, "create table ntile_source(id int)")
 			exec(t, "insert into ntile_source values (1),(2)")
