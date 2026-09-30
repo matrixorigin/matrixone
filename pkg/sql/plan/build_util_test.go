@@ -280,6 +280,48 @@ func TestGetTypeFromAstLowPrecFloat(t *testing.T) {
 	}
 }
 
+func TestGetTypeFromAstVectorTypes(t *testing.T) {
+	for _, tc := range []struct {
+		def   string
+		want  types.T
+		width int32
+	}{
+		{"vecf32(3)", types.T_array_float32, 3},
+		{"vecf64(3)", types.T_array_float64, 3},
+		{"vecbf16(3)", types.T_array_bf16, 3},
+		{"vecf16(3)", types.T_array_float16, 3},
+		{"vecint8(3)", types.T_array_int8, 3},
+		{"vecuint8(3)", types.T_array_uint8, 3},
+		{"vecf8(3)", types.T_array_float8, 3},
+		{"vecf4(1024)", types.T_array_float4, 1024},
+		{"vecf8", types.T_array_float8, types.MaxArrayDimension},
+		{"vecf4(65535)", types.T_array_float4, types.MaxArrayDimension},
+	} {
+		t.Run(tc.def, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(), "create table t (v "+tc.def+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			column := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
+			typ, err := getTypeFromAst(context.Background(), column.Type)
+			require.NoError(t, err)
+			require.Equal(t, int32(tc.want), typ.Id)
+			require.Equal(t, tc.width, typ.Width)
+		})
+	}
+	for _, def := range []string{"vecf8(65536)", "vecf4(0)"} {
+		t.Run(def, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(), "create table t (v "+def+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			column := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
+			_, err = getTypeFromAst(context.Background(), column.Type)
+			require.Error(t, err)
+		})
+	}
+}
+
 func TestGetTypeFromAstGeometrySubtype(t *testing.T) {
 	stmt, err := mysql.ParseOne(context.Background(), "create table t (g point)", 1)
 	require.NoError(t, err)

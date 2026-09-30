@@ -387,3 +387,16 @@ func TestVectorTypePredicates(t *testing.T) {
 		require.False(t, oid.IsBlockScaledVector(), oid.String())
 	}
 }
+
+func TestVectorTypeBySQLName(t *testing.T) {
+	for _, oid := range []T{T_array_float32, T_array_float64, T_array_bf16, T_array_float16,
+		T_array_int8, T_array_uint8, T_array_float8, T_array_float4} {
+		got, ok := VectorTypeBySQLName(oid.ArraySQLName())
+		require.True(t, ok, oid.String())
+		require.Equal(t, oid, got)
+	}
+	for _, name := range []string{"", "vecf2", "VECF8", "varchar", "float8"} {
+		_, ok := VectorTypeBySQLName(name)
+		require.False(t, ok, name)
+	}
+}

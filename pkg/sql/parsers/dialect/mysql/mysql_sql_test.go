@@ -5064,6 +5064,20 @@ var (
 			output: "create table t1 (a vecuint8(3))",
 		},
 		{
+			// #20567: block-scaled vecf8 (MXFP8) / vecf4 (NVFP4).
+			input:  "create table t1(a vecf8(3), b vecf4(1024), c vecf8(65535), d vecf4(1))",
+			output: "create table t1 (a vecf8(3), b vecf4(1024), c vecf8(65535), d vecf4(1))",
+		},
+		{
+			input:  "select cast('[1,2,3]' as vecf8(3)), cast(v as vecf4(3)) from t1",
+			output: "select cast([1,2,3] as vecf8(3)), cast(v as vecf4(3)) from t1",
+		},
+		{
+			// vecf8/vecf4 are non-reserved keywords.
+			input:  "create table vecf8 (vecf4 int)",
+			output: "create table vecf8 (vecf4 int)",
+		},
+		{
 			input:  "create table t1(a vecuint8(128), b vecuint8(65535), c vecuint8(1))",
 			output: "create table t1 (a vecuint8(128), b vecuint8(65535), c vecuint8(1))",
 		},

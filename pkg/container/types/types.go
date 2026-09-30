@@ -130,6 +130,30 @@ const (
 	ArrayFloat4SQLName  = "vecf4"
 )
 
+// VectorTypeBySQLName returns the vector type for a lowercase SQL type name
+// (e.g. "vecf8" -> T_array_float8).
+func VectorTypeBySQLName(name string) (T, bool) {
+	switch name {
+	case ArrayFloat32SQLName:
+		return T_array_float32, true
+	case ArrayFloat64SQLName:
+		return T_array_float64, true
+	case ArrayBF16SQLName:
+		return T_array_bf16, true
+	case ArrayFloat16SQLName:
+		return T_array_float16, true
+	case ArrayInt8SQLName:
+		return T_array_int8, true
+	case ArrayUint8SQLName:
+		return T_array_uint8, true
+	case ArrayFloat8SQLName:
+		return T_array_float8, true
+	case ArrayFloat4SQLName:
+		return T_array_float4, true
+	}
+	return 0, false
+}
+
 // ArraySQLName returns the lowercase SQL type name for an array element type
 // (e.g. T_array_float32 -> "vecf32"), or "" if t is not an array/vector type.
 func (t T) ArraySQLName() string {
