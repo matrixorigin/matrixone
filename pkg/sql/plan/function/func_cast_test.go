@@ -5545,3 +5545,58 @@ func TestCastArrayDimensionMismatch(t *testing.T) {
 		require.True(t, ok, info)
 	})
 }
+
+// TestCastLowPrecFloatMatrix broadens #20567 cast coverage across the source types that
+// convert TO a low-precision float, and the targets a low-precision float converts to,
+// so each branch of anyToLowPrecFloat / lowPrecFloatToOthers is exercised.
+func TestCastLowPrecFloatMatrix(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	bf16 := types.T_bf16.ToType()
+	f8 := types.T_float8.ToType()
+
+	// Sources -> bf16 (value 2, exactly representable), asserting the widened result.
+	want2 := []types.BF16{types.BF16FromFloat32(2)}
+	srcRun := func(name string, in FunctionTestInput) {
+		t.Run("to_bf16_"+name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{in, NewFunctionTestInput(bf16, []types.BF16{}, nil)},
+				NewFunctionTestResult(bf16, false, want2, nil), NewCast)
+			ok, info := tcc.Run()
+			require.True(t, ok, info)
+		})
+	}
+	srcRun("int8", NewFunctionTestInput(types.T_int8.ToType(), []int8{2}, nil))
+	srcRun("int32", NewFunctionTestInput(types.T_int32.ToType(), []int32{2}, nil))
+	srcRun("int64", NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, nil))
+	srcRun("uint8", NewFunctionTestInput(types.T_uint8.ToType(), []uint8{2}, nil))
+	srcRun("uint64", NewFunctionTestInput(types.T_uint64.ToType(), []uint64{2}, nil))
+	srcRun("float32", NewFunctionTestInput(types.T_float32.ToType(), []float32{2}, nil))
+	srcRun("float16", NewFunctionTestInput(types.T_float16.ToType(), []types.Float16{types.Float16FromFloat32(2)}, nil))
+	srcRun("float4", NewFunctionTestInput(types.T_float4.ToType(), []types.Float4{types.Float4FromFloat32(2)}, nil))
+	srcRun("decimal64", NewFunctionTestInput(types.New(types.T_decimal64, 10, 0), []types.Decimal64{types.Decimal64(2)}, nil))
+	// bool source special-cases true->1 and false->0.
+	t.Run("bool_to_bf16", func(t *testing.T) {
+		tcc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false}, nil), NewFunctionTestInput(bf16, []types.BF16{}, nil)},
+			NewFunctionTestResult(bf16, false, []types.BF16{types.BF16FromFloat32(1), types.BF16FromFloat32(0)}, nil), NewCast)
+		ok, info := tcc.Run()
+		require.True(t, ok, info)
+	})
+
+	// float8 -> targets (lowPrecFloatToOthers widens through float32).
+	tgtRun := func(name string, target types.Type, zero, want any) {
+		t.Run("float8_to_"+name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{NewFunctionTestInput(f8, []types.Float8{types.Float8FromFloat32(2)}, nil), NewFunctionTestInput(target, zero, nil)},
+				NewFunctionTestResult(target, false, want, nil), NewCast)
+			ok, info := tcc.Run()
+			require.True(t, ok, info)
+		})
+	}
+	tgtRun("int32", types.T_int32.ToType(), []int32{}, []int32{2})
+	tgtRun("int64", types.T_int64.ToType(), []int64{}, []int64{2})
+	tgtRun("uint64", types.T_uint64.ToType(), []uint64{}, []uint64{2})
+	tgtRun("float64", types.T_float64.ToType(), []float64{}, []float64{2})
+	tgtRun("decimal64", types.New(types.T_decimal64, 10, 0), []types.Decimal64{}, []types.Decimal64{types.Decimal64(2)})
+	tgtRun("decimal256", types.New(types.T_decimal256, 20, 0), []types.Decimal256{}, []types.Decimal256{{B0_63: 2}})
+}

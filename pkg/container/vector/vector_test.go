@@ -7055,3 +7055,82 @@ func TestStringSourceGenericNullAppendUsesExpression(t *testing.T) {
 
 	require.Zero(t, mp.CurrNB())
 }
+
+// TestLowPrecFloatAccessMovement exercises the access/movement/string switches for the
+// scalar low-precision float types (bf16/float16/float8/float4) so each per-type arm is
+// covered: GetAny/AppendAny round-trip, Shrink, ShrinkByMask, Shuffle, ShuffleWithBuf,
+// String, RowToString, and NewFunctionResultWrapper (#20567).
+func TestLowPrecFloatAccessMovement(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+
+	cases := []struct {
+		oid types.T
+		mk  func(float32) any
+	}{
+		{types.T_bf16, func(f float32) any { return types.BF16FromFloat32(f) }},
+		{types.T_float16, func(f float32) any { return types.Float16FromFloat32(f) }},
+		{types.T_float8, func(f float32) any { return types.Float8FromFloat32(f) }},
+		{types.T_float4, func(f float32) any { return types.Float4FromFloat32(f) }},
+	}
+
+	for _, c := range cases {
+		t.Run(c.oid.String(), func(t *testing.T) {
+			// AppendAny builds the column; GetAny reads it back.
+			v := NewVec(c.oid.ToType())
+			for _, f := range []float32{1.0, -2.0, 0.5, 4.0} {
+				require.NoError(t, AppendAny(v, c.mk(f), false, mp))
+			}
+			require.Equal(t, c.mk(1.0), GetAny(v, 0, true))
+			require.Equal(t, c.mk(-2.0), GetAny(v, 1, true))
+
+			// String and RowToString must not panic and render the row.
+			_ = v.String()
+			require.NotEmpty(t, v.RowToString(0))
+
+			// NewFunctionResultWrapper builds a result vector for the type.
+			rw := NewFunctionResultWrapper(c.oid.ToType(), mp)
+			require.NotNil(t, rw)
+			rw.Free()
+
+			// Shuffle reorders in place.
+			require.NoError(t, v.Shuffle([]int64{3, 2, 1, 0}, mp))
+			require.Equal(t, c.mk(4.0), GetAny(v, 0, true))
+			v.Free(mp)
+
+			// ShuffleWithBuf.
+			v2 := NewVec(c.oid.ToType())
+			for _, f := range []float32{1.0, 2.0, 3.0} {
+				require.NoError(t, AppendAny(v2, c.mk(f), false, mp))
+			}
+			var buf []byte
+			require.NoError(t, v2.ShuffleWithBuf([]int64{2, 1, 0}, mp, &buf))
+			require.Equal(t, c.mk(3.0), GetAny(v2, 0, true))
+			v2.Free(mp)
+
+			// Shrink keeps selected rows.
+			v3 := NewVec(c.oid.ToType())
+			for _, f := range []float32{1.0, 2.0, 3.0, 4.0} {
+				require.NoError(t, AppendAny(v3, c.mk(f), false, mp))
+			}
+			v3.Shrink([]int64{0, 2}, false)
+			require.Equal(t, 2, v3.Length())
+			require.Equal(t, c.mk(1.0), GetAny(v3, 0, true))
+			require.Equal(t, c.mk(3.0), GetAny(v3, 1, true))
+			v3.Free(mp)
+
+			// ShrinkByMask.
+			v4 := NewVec(c.oid.ToType())
+			for _, f := range []float32{1.0, 2.0, 3.0, 4.0} {
+				require.NoError(t, AppendAny(v4, c.mk(f), false, mp))
+			}
+			var bm bitmap.Bitmap
+			bm.InitWithSize(4)
+			bm.Add(1)
+			bm.Add(3)
+			v4.ShrinkByMask(&bm, false, 0)
+			require.Equal(t, 2, v4.Length())
+			require.Equal(t, c.mk(2.0), GetAny(v4, 0, true))
+			v4.Free(mp)
+		})
+	}
+}

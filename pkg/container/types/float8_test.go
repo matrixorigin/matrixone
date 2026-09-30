@@ -176,3 +176,45 @@ func TestLowPrecSubnormal(t *testing.T) {
 	require.Equal(t, Float4(0x9), Float4FromFloat32(-0.5))
 	require.Equal(t, Float4(0), Float4FromFloat32(0.25))
 }
+
+// TestLowPrecTypeRegistration covers the type-system switches for the four scalar
+// low-precision float types: sizes, names, IsFloat, ToType, and the value codec /
+// slice converters (#20567).
+func TestLowPrecTypeRegistration(t *testing.T) {
+	for _, tc := range []struct {
+		oid     T
+		sqlName string
+		sz      int
+	}{
+		{T_bf16, "BF16", 2},
+		{T_float16, "FLOAT16", 2},
+		{T_float8, "FLOAT8", 1},
+		{T_float4, "FLOAT4", 1},
+	} {
+		require.True(t, tc.oid.IsFloat(), "%s T.IsFloat", tc.oid)
+		require.True(t, tc.oid.ToType().IsFloat(), "%s Type.IsFloat", tc.oid)
+		require.Equal(t, tc.sz, tc.oid.TypeLen(), "%s TypeLen", tc.oid)
+		require.Equal(t, tc.sz, tc.oid.FixedLength(), "%s FixedLength", tc.oid)
+		require.Equal(t, tc.sqlName, tc.oid.String(), "%s String", tc.oid)
+		require.NotEmpty(t, tc.oid.OidString(), "%s OidString", tc.oid)
+		require.Equal(t, tc.oid, tc.oid.ToType().Oid)
+	}
+
+	// EncodeValue / DecodeValue round-trip for each type.
+	bf := BF16FromFloat32(1.5)
+	require.Equal(t, bf, DecodeValue(EncodeValue(bf, T_bf16), T_bf16))
+	h := Float16FromFloat32(1.5)
+	require.Equal(t, h, DecodeValue(EncodeValue(h, T_float16), T_float16))
+	f8 := Float8FromFloat32(1.5)
+	require.Equal(t, f8, DecodeValue(EncodeValue(f8, T_float8), T_float8))
+	f4 := Float4FromFloat32(1.5)
+	require.Equal(t, f4, DecodeValue(EncodeValue(f4, T_float4), T_float4))
+
+	// Slice converters.
+	require.Equal(t, []float32{1.5, -2.0}, Float8ToFloat32Slice([]Float8{Float8FromFloat32(1.5), Float8FromFloat32(-2.0)}))
+	require.Equal(t, []Float8{Float8FromFloat32(1.5)}, Float32ToFloat8Slice([]float32{1.5}))
+	require.Equal(t, []float32{1.5, -2.0}, Float4ToFloat32Slice([]Float4{Float4FromFloat32(1.5), Float4FromFloat32(-2.0)}))
+	require.Equal(t, []Float4{Float4FromFloat32(1.5)}, Float32ToFloat4Slice([]float32{1.5}))
+	require.Equal(t, []float32{1.5}, BF16ToFloat32Slice([]BF16{BF16FromFloat32(1.5)}))
+	require.Equal(t, []float32{1.5}, Float16ToFloat32Slice([]Float16{Float16FromFloat32(1.5)}))
+}

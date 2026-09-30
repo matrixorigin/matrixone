@@ -2697,3 +2697,71 @@ func TestMakeTypeParallelLoadKeepsVectorType(t *testing.T) {
 	require.Equal(t, int32(3), vectorType.Width)
 	require.Equal(t, types.T_varchar, makeType(&plan.Type{Id: int32(types.T_int64)}, true).Oid)
 }
+
+// TestGetColDataLowPrecFloat covers the CSV/LOAD parse path for the scalar low-precision
+// float types (#20567): a valid value rounds to the target format, an empty field
+// zero-fills, and a non-finite / out-of-range value is rejected instead of saturating.
+func TestGetColDataLowPrecFloat(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	cases := []struct {
+		name    string
+		oid     types.T
+		good    string
+		wantF32 float32
+		bad     string // out-of-range or non-finite -> reject
+	}{
+		{"bf16", types.T_bf16, "1.5", 1.5, "inf"},
+		{"float16", types.T_float16, "1.5", 1.5, "70000"},
+		{"float8", types.T_float8, "1.5", 1.5, "1000"},
+		{"float4", types.T_float4, "1.5", 1.5, "7"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(tc.oid.ToType())
+			defer bat.Clean(proc.Mp())
+
+			param := &ExternalParam{
+				ExParamConst: ExParamConst{
+					Cols: []*plan.ColDef{{Name: "c", Typ: plan.Type{Id: int32(tc.oid)}}},
+					Extern: &tree.ExternParam{
+						ExParam: tree.ExParam{ExternType: int32(plan.ExternType_LOAD)},
+					},
+				},
+				ExParam: ExParam{Fileparam: &ExFileparam{}},
+			}
+			attr := plan.ExternAttr{ColName: "c", ColIndex: 0, ColFieldIndex: 0}
+
+			// Valid value rounds to the target format.
+			require.NoError(t, getColData(bat, []csvparser.Field{{Val: tc.good}}, 0, param, proc.Mp(), attr, proc))
+			require.Equal(t, 1, bat.Vecs[0].Length())
+
+			// Empty field zero-fills (append typed zero).
+			bat.CleanOnlyData()
+			require.NoError(t, getColData(bat, []csvparser.Field{{Val: ""}}, 0, param, proc.Mp(), attr, proc))
+			require.Equal(t, 1, bat.Vecs[0].Length())
+
+			// Out-of-range / non-finite value is rejected, not silently saturated.
+			bat.CleanOnlyData()
+			err := getColData(bat, []csvparser.Field{{Val: tc.bad}}, 0, param, proc.Mp(), attr, proc)
+			require.Error(t, err, "%s should reject %q", tc.oid, tc.bad)
+		})
+	}
+}
+
+// TestAppendLoadEmptyNumericZeroLowPrecFloat covers the zero-fill path for the four
+// low-precision float types.
+func TestAppendLoadEmptyNumericZeroLowPrecFloat(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	for _, oid := range []types.T{types.T_bf16, types.T_float16, types.T_float8, types.T_float4} {
+		vec := vector.NewVec(oid.ToType())
+		require.NoError(t, appendLoadEmptyNumericZero(vec, oid, false, proc.Mp()))
+		require.Equal(t, 1, vec.Length())
+		require.False(t, vec.GetNulls().Contains(0))
+		vec.Free(proc.Mp())
+	}
+}

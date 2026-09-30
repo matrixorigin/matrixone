@@ -51,10 +51,11 @@ func zonemapLowPrecCase[T interface {
 	require.True(t, zm.Contains(from(2.0)))
 	require.False(t, zm.Contains(from(6.0)))
 
-	// SubVecIn on a value-sorted column prunes by value.
+	// SubVecIn on a value-sorted column prunes by value. Use >3 rows so SubVecIn
+	// passes its small-vector early return and reaches the per-type bound search.
 	vec := vector.NewVec(oid.ToType())
 	defer vec.Free(mp)
-	for _, f := range []float32{-3.0, -1.0, 2.0} {
+	for _, f := range []float32{-3.0, -1.0, 0.5, 2.0} {
 		require.NoError(t, vector.AppendFixed(vec, from(f), false, mp))
 	}
 	require.True(t, zm.AnyIn(vec))

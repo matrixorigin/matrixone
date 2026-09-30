@@ -3049,3 +3049,46 @@ func Test_parseCmdCheckSnapshotFlushed_GoodPath(t *testing.T) {
 		convey.So(err.Error(), convey.ShouldContainSubstring, "invalid")
 	})
 }
+
+// TestLowPrecFloatFrontendPaths covers the frontend value paths for the scalar
+// low-precision float types (#20567): getValueFromVector (const scalar), the legacy
+// extractRowFromVector row path, and convertEngineTypeToMysqlType (presented as FLOAT).
+func TestLowPrecFloatFrontendPaths(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	ctx := context.Background()
+
+	cases := []struct {
+		oid types.T
+		app func(*vector.Vector, float32)
+	}{
+		{types.T_bf16, func(v *vector.Vector, f float32) { vector.AppendFixed(v, types.BF16FromFloat32(f), false, mp) }},
+		{types.T_float16, func(v *vector.Vector, f float32) { vector.AppendFixed(v, types.Float16FromFloat32(f), false, mp) }},
+		{types.T_float8, func(v *vector.Vector, f float32) { vector.AppendFixed(v, types.Float8FromFloat32(f), false, mp) }},
+		{types.T_float4, func(v *vector.Vector, f float32) { vector.AppendFixed(v, types.Float4FromFloat32(f), false, mp) }},
+	}
+
+	for _, c := range cases {
+		t.Run(c.oid.String(), func(t *testing.T) {
+			// convertEngineTypeToMysqlType -> FLOAT.
+			col := &MysqlColumn{}
+			require.NoError(t, convertEngineTypeToMysqlType(ctx, c.oid, col))
+			require.Equal(t, defines.MYSQL_TYPE_FLOAT, col.ColumnType())
+
+			// getValueFromVector widens a const scalar to float32.
+			cv := vector.NewVec(c.oid.ToType())
+			defer cv.Free(mp)
+			c.app(cv, 1.5)
+			got, err := getValueFromVector(ctx, cv, nil, nil)
+			require.NoError(t, err)
+			require.Equal(t, float32(1.5), got)
+
+			// extractRowFromVector (legacy any-row path) yields float32.
+			rv := vector.NewVec(c.oid.ToType())
+			defer rv.Free(mp)
+			c.app(rv, -2.0)
+			row := make([]any, 1)
+			require.NoError(t, extractRowFromVector(ctx, nil, rv, 0, row, 0, false))
+			require.Equal(t, float32(-2.0), row[0])
+		})
+	}
+}
