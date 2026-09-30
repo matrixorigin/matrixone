@@ -437,6 +437,15 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			}
 			return 0, err
 		}
+		// RETURNING retains its narrower synchronous-index contract even when
+		// ordinary FULLTEXT UPDATE can rebuild the hidden rows after a PK move.
+		if stmt.HasReturning() && primaryKeyUpdated(tableDef, dmlCtx.updateCol2Expr[i]) {
+			for _, idxDef := range inlineIrregularIndexes[i] {
+				if catalog.IsFullTextIndexAlgo(idxDef.IndexAlgo) {
+					return 0, returningNotSupported(builder, "primary-key UPDATE on synchronous full-text/vector index")
+				}
+			}
+		}
 		if unsupportedIrregularRoute {
 			return 0, newRejectedUpdatePlannerRouteError(
 				updateRouteReasonIrregularIndex,

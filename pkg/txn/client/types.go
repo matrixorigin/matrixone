@@ -373,6 +373,15 @@ type Workspace interface {
 	GetSyncProtectionJobID() string
 }
 
+// TerminalTableDeletionView is an optional workspace capability for services
+// that retire state after a committed physical table deletion. It may only be
+// read synchronously from a committed ClosedEvent, after workspace preparation
+// and before finalization. The implementation must not acquire locks, perform
+// I/O, or call back into the transaction operator.
+type TerminalTableDeletionView interface {
+	IsTableDeletedAtTxnClose(physicalTableID uint64) bool
+}
+
 // TxnOverview txn overview include meta and status
 type TxnOverview struct {
 	// CreateAt create at

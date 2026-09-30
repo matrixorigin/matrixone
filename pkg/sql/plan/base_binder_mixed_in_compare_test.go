@@ -290,3 +290,28 @@ func TestNumericInStringLiteralKeepsExactNumericComparison(t *testing.T) {
 		})
 	}
 }
+
+func TestIntegerColumnStringLiteralProof(t *testing.T) {
+	for _, tc := range []struct {
+		text string
+		oid  types.T
+		fits bool
+	}{
+		{"9223372036854775806", types.T_int64, true},
+		{"9223372036854775807", types.T_int64, true},
+		{"-9223372036854775808", types.T_int64, true},
+		{"9223372036854775808", types.T_int64, false},
+		{"18446744073709551615", types.T_uint64, true},
+		{"18446744073709551616", types.T_uint64, false},
+		{"-1", types.T_uint64, false}, {"256", types.T_uint8, false},
+		{"2.5", types.T_int32, false}, {"2x", types.T_int32, false},
+		{"2e0", types.T_int32, false}, {" \t+2\r\n", types.T_int32, true},
+	} {
+		column := &planpb.Expr{Typ: makeSimplePlan2Type(tc.oid), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+		literal := makePlan2StringConstExprWithType(tc.text)
+		require.Equal(t, tc.fits, integerColumnStringLiteralFits(column, literal), tc.text)
+		require.False(t, integerColumnStringLiteralFits(makePlan2Int64ConstExprWithType(2), literal))
+		literal.GetLit().IsBin = true
+		require.False(t, integerColumnStringLiteralFits(column, literal))
+	}
+}

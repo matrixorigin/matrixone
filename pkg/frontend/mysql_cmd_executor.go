@@ -3052,7 +3052,7 @@ func createPrepareStmtInSession(
 	prepareControl := preparePlan.GetDcl().GetPrepare()
 	_, isQueryPlan := prepareControl.Plan.Plan.(*plan.Plan_Query)
 	if !executionSes.IsBackgroundSession() &&
-		isQueryPlan &&
+		isQueryPlan && len(prepareControl.ParamTypes) == 0 &&
 		shouldCachePrepareCompile(prepareControl.Plan) &&
 		(!prepareSchedulingIntent.Explicit ||
 			schedule.ValidateSchedulingIntent(prepareSchedulingIntent) != "") {
@@ -3121,7 +3121,6 @@ func createPrepareStmtInSession(
 			prepareControl.Plan),
 		directResultParamPositions: plan2.PreparedPlanDirectResultParamPositions(
 			prepareControl.Plan),
-		directResultParamPositionsSet: true,
 		jsonComparisonParamPositions: plan2.PreparedJSONComparisonParamPositions(
 			prepareControl.Plan),
 		jsonMemberOfParamPositions: plan2.PreparedJSONMemberOfParamPositions(
@@ -3132,12 +3131,7 @@ func createPrepareStmtInSession(
 		getFromSendLongData:        make(map[int]struct{}),
 		schedulingSQLMode:          schedulingSQLMode,
 	}
-	prepareStmt.refreshNumericPrefixConsumer(
-		prepareControl.Plan, len(prepareControl.ParamTypes))
 	prepareStmt.refreshGenerateSeriesParamMetadata(prepareControl.Plan)
-	prepareStmt.refreshGeometrySRIDParamPositions(prepareControl.Plan)
-	prepareStmt.directResultParamPositions = plan2.PreparedPlanDirectResultParamPositions(prepareControl.Plan)
-	prepareStmt.directResultParamPositionsSet = true
 
 	_, ok := preparePlan.GetDcl().Control.(*plan.DataControl_Prepare)
 	if ok {
@@ -4098,9 +4092,71 @@ func buildPlanWithPrepareMode(
 	stmt tree.Statement,
 	forcePrepare bool,
 ) (*plan2.Plan, error) {
-	var ret *plan2.Plan
-	var err error
+	return buildPlanWithStats(reqCtx, ses, ctx, func() (*plan2.Plan, error) {
+		var ret *plan2.Plan
+		var err error
 
+		isPrepareStmt := forcePrepare
+		if ses != nil {
+			if len(ses.GetSql()) > 8 {
+				prefix := strings.ToLower(ses.GetSql()[:8])
+				isPrepareStmt = isPrepareStmt || prefix == "execute " || prefix == "prepare "
+			}
+		}
+		// Handle specific statement types
+		if s, ok := stmt.(*tree.Insert); ok {
+			if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
+				ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+
+		if ret != nil {
+			ret.IsPrepare = isPrepareStmt
+			if forcePrepare {
+				err = plan2.NormalizePrepareParamRefs(reqCtx, ret)
+			}
+			return ret, err
+		}
+
+		// Default handling of various statements
+		switch stmt := stmt.(type) {
+		case *tree.Select, *tree.ParenSelect, *tree.ValuesStatement,
+			*tree.Update, *tree.Delete, *tree.Insert, *tree.MultiInsert,
+			*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns, *tree.ShowColumnNumber,
+			*tree.ShowTableNumber, *tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex,
+			*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
+			opt := plan2.NewBaseOptimizer(ctx)
+			optimized, err := opt.Optimize(stmt, isPrepareStmt)
+			if err != nil {
+				return nil, err
+			}
+
+			ret = &plan2.Plan{
+				Plan: &plan2.Plan_Query{
+					Query: optimized,
+				},
+			}
+		default:
+			ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt)
+		}
+
+		if ret != nil {
+			ret.IsPrepare = isPrepareStmt
+			if forcePrepare && err == nil {
+				err = plan2.NormalizePrepareParamRefs(reqCtx, ret)
+			}
+		}
+		return ret, err
+	})
+}
+
+// Share request accounting and context ownership across ordinary and prepared
+// planning. Parameter binding changes the planner entry, not its trace lifetime.
+func buildPlanWithStats(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
+	build func() (*plan2.Plan, error)) (ret *plan2.Plan, err error) {
 	// A later statement in a multi-statement packet can reuse a compiler
 	// context whose process has already been released.  Planning does not
 	// require a transaction operator, so keep the tracing setup optional
@@ -4175,66 +4231,14 @@ func buildPlanWithPrepareMode(
 		stats.PlanEnd()
 	}()
 
-	isPrepareStmt := forcePrepare
 	if ses != nil {
-		accId, err := defines.GetAccountId(reqCtx)
-		if err != nil {
-			return nil, err
+		accId, accountErr := defines.GetAccountId(reqCtx)
+		if accountErr != nil {
+			return nil, accountErr
 		}
 		ses.SetAccountId(accId)
-
-		if len(ses.GetSql()) > 8 {
-			prefix := strings.ToLower(ses.GetSql()[:8])
-			isPrepareStmt = isPrepareStmt || prefix == "execute " || prefix == "prepare "
-		}
 	}
-	// Handle specific statement types
-	if s, ok := stmt.(*tree.Insert); ok {
-		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
-			ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt)
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	if ret != nil {
-		ret.IsPrepare = isPrepareStmt
-		if forcePrepare {
-			err = plan2.NormalizePrepareParamRefs(reqCtx, ret)
-		}
-		return ret, err
-	}
-
-	// Default handling of various statements
-	switch stmt := stmt.(type) {
-	case *tree.Select, *tree.ParenSelect, *tree.ValuesStatement,
-		*tree.Update, *tree.Delete, *tree.Insert, *tree.MultiInsert,
-		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns, *tree.ShowColumnNumber,
-		*tree.ShowTableNumber, *tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex,
-		*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
-		opt := plan2.NewBaseOptimizer(ctx)
-		optimized, err := opt.Optimize(stmt, isPrepareStmt)
-		if err != nil {
-			return nil, err
-		}
-
-		ret = &plan2.Plan{
-			Plan: &plan2.Plan_Query{
-				Query: optimized,
-			},
-		}
-	default:
-		ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt)
-	}
-
-	if ret != nil {
-		ret.IsPrepare = isPrepareStmt
-		if forcePrepare && err == nil {
-			err = plan2.NormalizePrepareParamRefs(reqCtx, ret)
-		}
-	}
-	return ret, err
+	return build()
 }
 
 // buildPlanWithAuthorization wraps the buildPlan function to perform permission checks
@@ -6125,7 +6129,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// binary PREPARE metadata captured before doComQuery.
 		execCtx.beginStatementGeneration(currentInput)
 		// Keep the transaction origin available to compile-time lineage admission.
-		// TRUNCATE commits the old transaction before its plan is built, so the
+		// Implicit-commit DDL commits the old transaction before planning, so the
 		// fresh transaction alone cannot tell whether the client was already in an
 		// explicit transaction.  Reset the marker for every statement generation;
 		// otherwise a later statement in the same request could inherit it.
@@ -6215,7 +6219,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		}
 		// Commit only after the current statement has passed local admission and
 		// has a current statement identity. Authorization and plan construction
-		// still run after this boundary, matching TRUNCATE's implicit-commit
+		// still run after this boundary, matching the DDL implicit-commit
 		// contract while keeping instrumentation failures side-effect free.
 		if execCtx.implicitCommitBefore {
 			if err = ses.GetTxnHandler().commitBeforeStatement(execCtx); err != nil {

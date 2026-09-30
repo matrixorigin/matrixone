@@ -396,11 +396,16 @@ func TestLockNamedDataBranchCloneSnapshot(t *testing.T) {
 	t.Run("matching snapshot is locked", func(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
+		sourceCtx := defines.AttachAccountId(ctx, 47)
 		bh.sql2result[lockSQL] = newMrsForSnapshotRecord(
 			"id", "snap", 42, "table", "acc", "db", "tbl", 7,
 		)
-		require.NoError(t, lockNamedDataBranchCloneSnapshot(ctx, bh, snapshot))
+		require.NoError(t, lockNamedDataBranchCloneSnapshot(sourceCtx, bh, snapshot))
 		require.Equal(t, []string{lockSQL}, bh.executedSQLs)
+		require.Equal(t, []uint32{47}, bh.executionAccountIDs)
+		accountID, err := defines.GetAccountId(sourceCtx)
+		require.NoError(t, err)
+		require.Equal(t, uint32(47), accountID)
 	})
 
 	for _, tc := range []struct {
@@ -909,9 +914,10 @@ func TestHandleCloneDatabaseWithSourceAuthorizesTargetBeforeIfNotExistsCheck(t *
 			},
 		},
 		&cloneDatabaseSource{
-			opAccountId: 1,
-			toAccountId: 2,
-			snapshot:    &plan.Snapshot{},
+			opAccountId:     1,
+			toAccountId:     2,
+			snapshot:        &plan.Snapshot{},
+			requestSnapshot: &plan.Snapshot{},
 		},
 	)
 	require.EqualError(t, err, "internal error: only sys can clone table to another account")

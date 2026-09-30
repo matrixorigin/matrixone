@@ -136,8 +136,9 @@ const (
 	MORPCVersion98     int64 = 98  // canonical FORMAT precision and MAKEDATE/MAKETIME integer signatures
 	MORPCVersion99     int64 = 99  // owner-atomic writer-fair row-lock admission
 	MORPCVersion100    int64 = 100 // on-demand View metadata column descriptions
-	MORPCVersion101    int64 = 101 // route-preserving PRE_INSERT for partitioned classic FULLTEXT
-	MORPCLatestVersion       = MORPCVersion101
+	MORPCVersion101    int64 = 101 // JSON source domains for CONCAT and JSON_DEPTH
+	MORPCVersion102    int64 = 102 // route-preserving PRE_INSERT for partitioned classic FULLTEXT
+	MORPCLatestVersion       = MORPCVersion102
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

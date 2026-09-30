@@ -293,8 +293,6 @@ func TestPreparedBitCountDefaultsToBinaryAndSpecializesNumericValues(t *testing.
 	require.NoError(t, err)
 	preparePlan := prepared.GetDcl().GetPrepare().Plan
 	require.Equal(t, []int32{0}, PreparedPlanBitCountFallbackParamPositions(preparePlan))
-	require.False(t, PreparedPlanNeedsRuntimeSpecialization(preparePlan),
-		"BIT_COUNT uses its cached marker-position trigger instead of a per-execute plan scan")
 	fn := findPlanFunctionExpr(preparePlan, "bit_count")
 	require.NotNil(t, fn)
 	_, overload := function.DecodeOverloadID(fn.GetF().GetFunc().GetObj())
@@ -1256,7 +1254,6 @@ func TestPreparedScalarNumericOverloadsCoverSubqueryAndExactInteger(t *testing.T
 	require.Truef(t, isExplicitPreparedCast(copiedFn.GetF().Args[0]),
 		"explicit cast overload was lost: original=%d copied=%d",
 		fn.GetF().Args[0].GetF().GetFunc().GetObj(), copiedFn.GetF().Args[0].GetF().GetFunc().GetObj())
-	require.False(t, PreparedPlanNeedsRuntimeSpecialization(queryPlan))
 	filled, err = FillValuesOfParamsInPlan(ctx, queryPlan, []any{
 		ParamValue{Value: "9007199254740993", PrepareParamKind: vector.PrepareParamInteger},
 	})

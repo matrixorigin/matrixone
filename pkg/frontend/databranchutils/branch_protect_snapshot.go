@@ -478,6 +478,50 @@ func (d BranchReclaimDag) ComponentHasLiveLogicalBranch(start uint64) bool {
 	return hasLiveLogicalBranch
 }
 
+// ComponentHasAlterLineage reports whether a DROP of this connected component
+// can require historical Snapshot/PITR owner validation before compaction.
+func (d BranchReclaimDag) ComponentHasAlterLineage(start uint64) bool {
+	return d.ComponentsHaveAlterLineage([]uint64{start})
+}
+
+// ComponentsHaveAlterLineage visits each connected component at most once,
+// even when a database DROP supplies many table IDs in the same component.
+func (d BranchReclaimDag) ComponentsHaveAlterLineage(starts []uint64) bool {
+	visited := make(map[uint64]struct{}, len(d.Info))
+	for _, start := range starts {
+		if _, ok := visited[start]; ok {
+			continue
+		}
+		component, _ := d.connectedComponent(start, visited)
+		for _, id := range component {
+			if meta, ok := d.Info[id]; ok && IsAlterLineageLevel(meta.Level) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// ComponentIDs returns every row connected to start, including siblings
+// reached through an ancestor that may itself have been physically dropped.
+func (d BranchReclaimDag) ComponentIDs(start uint64) []uint64 {
+	return d.ComponentsIDs([]uint64{start})
+}
+
+// ComponentsIDs traverses the union of connected components once.
+func (d BranchReclaimDag) ComponentsIDs(starts []uint64) []uint64 {
+	visited := make(map[uint64]struct{}, len(d.Info))
+	var ids []uint64
+	for _, start := range starts {
+		if _, ok := visited[start]; ok {
+			continue
+		}
+		component, _ := d.connectedComponent(start, visited)
+		ids = append(ids, component...)
+	}
+	return ids
+}
+
 // BuildAlterLineageSnapshotDeleteSQL deletes only branch-managed snapshots.
 func BuildAlterLineageSnapshotDeleteSQL(snames []string) string {
 	return BuildBranchSnapshotDeleteSQL(snames)
