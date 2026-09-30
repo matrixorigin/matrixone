@@ -138,6 +138,10 @@ type SessionInfo struct {
 	// Captured per execution for one-argument WEEK on remote/forwarded CNs.
 	DefaultWeekFormat    uint8
 	DefaultWeekFormatSet bool
+	// MaxDigestLength is captured on the initiating CN so STATEMENT_DIGEST_TEXT uses
+	// the same token-buffer limit when its expression runs on a remote CN.
+	MaxDigestLength    int64
+	MaxDigestLengthSet bool // distinguishes an explicit zero from an unset value
 	// AutoIncrementIncrement and AutoIncrementOffset are captured on the
 	// initiating CN and used by remote PRE_INSERT operators.  They are
 	// statement-scoped; zero means the default value one for compatibility with
@@ -485,6 +489,7 @@ type BaseProcess struct {
 	UdfService                          udf.Service
 	WaitPolicy                          lock.WaitPolicy
 	messageBoard                        *message.MessageBoard
+	statementSettingsMu                 sync.Mutex
 	executionResourceBudgetMu           sync.Mutex
 	executionResourceBudget             *ExecutionResourceGeneration
 	warningDiagnosticBudgetMu           sync.Mutex
