@@ -120,6 +120,8 @@ const (
 	AdaptiveTop
 	// MinusAll is appended to preserve all existing remote operator wire values.
 	MinusAll
+	// VectorQuery and its materialized source are coordinator-local only.
+	VectorQuery
 	// OpTypeEnd is the exclusive upper bound for executable operator types.
 	// New operator types must be added before it.
 	OpTypeEnd
@@ -197,6 +199,7 @@ func init() {
 		ShuffleStable:           "ShuffleStable",
 		PreInsertAutoIDCache:    "PreInsertAutoIDCache",
 		AdaptiveTop:             "AdaptiveTop",
+		VectorQuery:             "VectorQuery",
 		MinusAll:                "MinusAll",
 	}
 

@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"math"
 	"strconv"
 	"testing"
 
@@ -24,6 +25,41 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDecimalFloatComparisonUniqueValue(t *testing.T) {
+	decimal, err := makePlan2DecimalExprWithType(context.Background(), "12345.00")
+	require.NoError(t, err)
+	target := makeSimplePlan2Type(types.T_float64)
+	target.Scale = -1
+	cast, err := makePlan2CastExpr(context.Background(), decimal, target)
+	require.NoError(t, err)
+	value, ok := decimalFloatComparisonConstant(cast)
+	require.True(t, ok)
+	require.Equal(t, float64(12345), value)
+	cast.Typ.Width, cast.Typ.Scale = 3, 1
+	_, ok = decimalFloatComparisonConstant(cast)
+	require.False(t, ok, "DOUBLE(M,D) rounds before comparison")
+
+	for _, test := range []struct {
+		name   string
+		value  float64
+		column types.Type
+		unique bool
+	}{
+		{"integral decimal64", 54321, types.New(types.T_decimal64, 12, 2), true},
+		{"fractional decimal64", 0.1, types.New(types.T_decimal64, 12, 2), true},
+		{"between scale points", 0.104, types.New(types.T_decimal64, 12, 2), false},
+		{"negative", -54321, types.New(types.T_decimal64, 12, 2), true},
+		{"outside width", 1e11, types.New(types.T_decimal64, 12, 2), false},
+		{"decimal128 collision", 9007199254740992, types.New(types.T_decimal128, 20, 0), false},
+		{"decimal128 ordinary", 54321, types.New(types.T_decimal128, 20, 2), true},
+		{"infinity", math.Inf(1), types.New(types.T_decimal64, 12, 2), false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.unique, decimalFloatComparisonHasUniqueValue(test.value, test.column))
+		})
+	}
+}
 
 // TestComparisonTypeCastOptimization tests that comparison operators avoid casting columns
 // when comparing with constants to preserve index usage
@@ -876,7 +912,7 @@ func TestDecimalSuffixCoercionRecordsProtocolDependency(t *testing.T) {
 					Decimal128Val: &plan.Decimal128{A: int64(coefficient.B0_63), B: int64(coefficient.B64_127)},
 				}}},
 			}
-			require.Equal(t, tc.wantSafe, checkNoNeedCast(constantType, types.New(types.T_decimal128, 30, 0), literal))
+			require.Equal(t, tc.wantSafe, checkNoNeedCast(context.Background(), constantType, types.New(types.T_decimal128, 30, 0), literal))
 			require.Equal(t, tc.wantMarker, literal.GetLit().DecimalLiteralRequiresV82,
 				"record the dependency at the coercion decision, even when coercion is rejected")
 		})

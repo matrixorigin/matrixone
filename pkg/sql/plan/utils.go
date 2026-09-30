@@ -1477,7 +1477,7 @@ func preparedPlanFunctionFallbackParamPositions(preparePlan *Plan, functionName 
 
 func isPreparedNumericFallbackFunction(name string) bool {
 	switch strings.ToLower(name) {
-	case "abs", "sign", "elt":
+	case "abs", "sign", "elt", "round", "truncate":
 		return true
 	default:
 		return false
@@ -1493,6 +1493,8 @@ func isPreparedNumericFallbackFunctionCall(name string, argCount int) bool {
 		return argCount >= 2
 	case "abs", "sign":
 		return argCount == 1
+	case "round", "truncate":
+		return argCount == 1 || argCount == 2
 	default:
 		return false
 	}
@@ -2011,6 +2013,14 @@ func getPath(expr *plan.Expr) []int {
 }
 
 func ConstantTranspose(expr *plan.Expr, proc *process.Process) (*plan.Expr, error) {
+	normalized, err := normalizeNativeRangeDirection(expr, proc)
+	if err != nil || normalized != expr {
+		return normalized, err
+	}
+	fn := expr.GetF()
+	if hasNonNilFunctionArgs(fn, 2) && fn.Args[0].GetCol() != nil {
+		return expr, nil
+	}
 	can, leftCnt, rightCnt := canTranspose(expr)
 	if !can {
 		return expr, nil
@@ -2026,7 +2036,7 @@ func ConstantTranspose(expr *plan.Expr, proc *process.Process) (*plan.Expr, erro
 		expr = exchangedExpr
 	}
 
-	fn := expr.GetF()
+	fn = expr.GetF()
 	curLeft, curRight := fn.Args[0], fn.Args[1]
 
 	colPath := getPath(curLeft)
@@ -2084,6 +2094,38 @@ func ConstantTranspose(expr *plan.Expr, proc *process.Process) (*plan.Expr, erro
 	}
 
 	return newExpr, nil
+}
+
+// Normalize comparison direction inside Boolean trees without applying the
+// legacy equality algebra, which is not valid for every arithmetic domain.
+func normalizeNativeRangeDirection(expr *plan.Expr, proc *process.Process) (*plan.Expr, error) {
+	fn := expr.GetF()
+	if hasNonNilFunctionArgs(fn, 2) {
+		if fn.Func.ObjName == "and" || fn.Func.ObjName == "or" {
+			var args []*plan.Expr
+			for i, arg := range fn.Args {
+				transposed, err := normalizeNativeRangeDirection(arg, proc)
+				if err != nil {
+					return nil, err
+				}
+				if transposed != arg {
+					if args == nil {
+						args = append([]*plan.Expr(nil), fn.Args...)
+					}
+					args[i] = transposed
+				}
+			}
+			if args == nil {
+				return expr, nil
+			}
+			return BindFuncExprImplByPlanExpr(proc.Ctx, fn.Func.ObjName, args)
+		}
+		// Scan consumers interpret native ranges with the column on the left.
+		if isRangeOp(fn) && fn.Args[1].GetCol() != nil && isScanInvariantRuntimeConstExpr(fn.Args[0]) {
+			return BindFuncExprImplByPlanExpr(proc.Ctx, canonicalRangeOp(fn), []*plan.Expr{fn.Args[1], fn.Args[0]})
+		}
+	}
+	return expr, nil
 }
 
 func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varAndParamIsConst bool, foldInExpr bool) (*plan.Expr, error) {
@@ -2588,9 +2630,13 @@ func unwrapCast(expr *plan.Expr) *plan.Expr {
 	return expr
 }
 
-func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr) bool {
+func checkNoNeedCast(ctx context.Context, constT, columnT types.Type, constExpr *plan.Expr) bool {
 	if constExpr.GetP() != nil && columnT.IsNumeric() {
-		return true
+		// An unresolved PREPARE marker has a provisional TEXT transport type.
+		// A resolved execution marker must satisfy the same source-domain
+		// constraint as any other non-literal expression.
+		return isUnresolvedPreparedParam(ctx, constExpr) || constT.Eq(columnT) ||
+			integerDomainFits(constT.Oid, columnT.Oid)
 	}
 	// Runtime specialization materializes prepared values as typed constant
 	// casts. When their domain already equals the IN left side, they are safe to
@@ -3660,8 +3706,8 @@ func detectedExprWhetherTimeRelated(expr *plan.Expr) bool {
 	return false
 }
 
-func ResetPreparePlan(ctx CompilerContext, preparePlan *Plan) ([]*plan.ObjectRef, []int32, error) {
-	return resetPreparePlan(ctx, preparePlan, nil)
+func ResetPreparePlan(ctx CompilerContext, preparePlan *Plan, sourceParameterCount ...int) ([]*plan.ObjectRef, []int32, error) {
+	return resetPreparePlan(ctx, preparePlan, nil, sourceParameterCount...)
 }
 
 // NormalizePrepareParamRefs converts the parser's one-based parameter ordinals
@@ -3724,10 +3770,20 @@ func resetPreparePlan(
 	ctx CompilerContext,
 	preparePlan *Plan,
 	transientQuery *Query,
+	sourceParameterCount ...int,
 ) ([]*plan.ObjectRef, []int32, error) {
 	// dcl tcl is not support
 	var schemas []*plan.ObjectRef
 	var paramTypes []int32
+	newParamRule := func() *GetParamRule {
+		rule := NewGetParamRule()
+		if len(sourceParameterCount) != 0 {
+			for ordinal := 1; ordinal <= sourceParameterCount[0]; ordinal++ {
+				rule.params[ordinal] = ordinal - 1
+			}
+		}
+		return rule
+	}
 	resolveIndexDependencies := func(getParamRule *GetParamRule) ([]*plan.ObjectRef, error) {
 		querySchemas := getParamRule.schemas
 		for _, dependency := range getParamRule.indexDependencies {
@@ -3745,7 +3801,7 @@ func resetPreparePlan(
 	}
 	resetQuery := func(query *Query) ([]*plan.ObjectRef, []int32, error) {
 		queryPlan := &Plan{Plan: &plan.Plan_Query{Query: query}}
-		getParamRule := NewGetParamRule()
+		getParamRule := newParamRule()
 		subqueryRoots := newSubqueryRootRule()
 		visitQuery := NewVisitPlan(queryPlan, []VisitPlanRule{getParamRule, subqueryRoots})
 		if err := visitQuery.Visit(ctx.GetContext()); err != nil {
@@ -3823,7 +3879,7 @@ func resetPreparePlan(
 		return querySchemas, getParamRule.paramTypes, nil
 	}
 	resetSetVariables := func(setVars *plan.SetVariables) ([]*plan.ObjectRef, []int32, error) {
-		getParamRule := NewGetParamRule()
+		getParamRule := newParamRule()
 		subqueryRoots := newSubqueryRootRule()
 		for _, item := range setVars.Items {
 			var err error
@@ -4152,11 +4208,11 @@ func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals 
 	return filled, err
 }
 
-// ValidatePreparedLagLeadParams validates LAG/LEAD offset markers before the
+// ValidatePreparedWindowParams validates LAG/LEAD/NTH_VALUE markers before the
 // generic expression cast path can discard their protocol source type. This
 // is also called by the cached prepared-execution path, which does not replace
 // ParamRefs in the plan for each execution.
-func ValidatePreparedLagLeadParams(ctx context.Context, preparePlan *Plan, paramVals []any) error {
+func ValidatePreparedWindowParams(ctx context.Context, preparePlan *Plan, paramVals []any) error {
 	if preparePlan == nil || len(paramVals) == 0 {
 		return nil
 	}
@@ -4182,14 +4238,18 @@ func ValidatePreparedLagLeadParams(ctx context.Context, preparePlan *Plan, param
 				continue
 			}
 			name := function.GetFunc().GetObjName()
-			if name != "lag" && name != "lead" {
+			if name != "lag" && name != "lead" && name != "nth_value" {
 				continue
 			}
 			if position, ok := preparedWindowArgumentParamPosition(function.Args[1]); ok {
 				if position < 0 || int(position) >= len(paramVals) {
-					continue
+					return moerr.NewInternalErrorf(ctx, "get prepare params error, index %d not exists", position)
 				}
-				if !isNonNegativePreparedInteger(paramVals[position]) {
+				valid := isNonNegativePreparedInteger(paramVals[position])
+				if name == "nth_value" {
+					valid = isPositivePreparedInteger(paramVals[position])
+				}
+				if !valid {
 					return moerr.NewWrongArguments(ctx, name)
 				}
 			}
@@ -4242,77 +4302,6 @@ func PreparedLagLeadParamPositions(preparePlan *Plan) []int32 {
 	}
 	slices.Sort(result)
 	return result
-}
-
-// PreparedPlanNeedsRuntimeSpecialization reports whether a binary prepared
-// execution can change a result-column domain or an overloaded expression.
-// Most prepared DML only needs the current parameter values.  Avoid copying
-// and walking those plans on every execute, but retain the correctness path
-// for predicates and expressions whose overload depends on the parameter
-// domain (for example, `? = ?` in an UPDATE filter).
-func PreparedPlanNeedsRuntimeSpecialization(preparePlan *Plan) bool {
-	needs, integerAssignments := PreparedPlanRuntimeSpecializationRequirements(preparePlan)
-	return needs || len(integerAssignments) != 0
-}
-
-// PreparedPlanRuntimeSpecializationRequirements separates general specialization
-// from direct integer assignments. When needs is false, integerAssignments lists
-// the only markers that may still need source-domain restoration. A caller with
-// current protocol types can keep ordinary integer values on the original plan;
-// callers without that evidence must use PreparedPlanNeedsRuntimeSpecialization.
-// When needs is true, specialization is required regardless of those markers.
-func PreparedPlanRuntimeSpecializationRequirements(preparePlan *Plan) (needs bool, integerAssignments []int32) {
-	if preparePlan == nil {
-		return false, nil
-	}
-
-	scanPlan := DeepCopyPlan(preparePlan)
-	if scanPlan == nil {
-		return true, nil
-	}
-	query := scanPlan.GetQuery()
-	if query == nil && scanPlan.GetDdl() != nil {
-		query = scanPlan.GetDdl().GetQuery()
-	}
-	if query == nil {
-		return false, nil
-	}
-	if scanPlan.GetQuery() == nil {
-		scanPlan = &Plan{Plan: &plan.Plan_Query{Query: query}}
-	}
-
-	rule := &preparedRuntimeSpecializationScanRule{
-		// A bare SELECT parameter keeps the cached result domain unless the
-		// binary protocol path explicitly identifies it as a direct result
-		// column.  Direct-result metadata is handled by
-		// PreparedPlanDirectResultParamPositions; treating every root marker as
-		// runtime-specialized here would put ordinary COM_STMT queries on the
-		// per-execute deep-copy path.
-		directResult: false,
-		skipExprs:    preparedDMLWriteExpressions(query),
-		seen:         make(map[*plan.Expr]struct{}),
-		query:        query,
-	}
-	if err := NewVisitPlan(scanPlan, []VisitPlanRule{rule}).Visit(context.Background()); err != nil {
-		// The scan is an optimization only. Preserve correctness if a newly
-		// added plan field cannot be visited here.
-		return true, nil
-	}
-	slices.Sort(rule.integerAssignments)
-	return rule.needs, slices.Compact(rule.integerAssignments)
-}
-
-// PreparedPlanNeedsRuntimeTextComparisonSpecialization reports whether the
-// current binary-protocol parameter domains expose a text operand inside a
-// numeric comparison. Prepare-time overload resolution may have wrapped that
-// marker in a provisional integer cast; only text executions need to replace
-// it with the engine's DOUBLE cast and its MySQL-compatible prefix, range, and
-// warning semantics. Numeric executions can keep the cached compile.
-func PreparedPlanNeedsRuntimeTextComparisonSpecialization(
-	preparePlan *Plan,
-	runtimeParamTypes []types.Type,
-) bool {
-	return len(preparedNumericComparisonTextParamPositions(preparePlan, runtimeParamTypes)) > 0
 }
 
 func preparedNumericComparisonTextParamPositions(
@@ -4452,16 +4441,6 @@ func preparedDMLWriteExpressions(query *plan.Query) map[*plan.Expr]struct{} {
 		}
 	}
 	return writeExprs
-}
-
-type preparedRuntimeSpecializationScanRule struct {
-	directResult       bool
-	needs              bool
-	integerAssignments []int32
-	skipExprs          map[*plan.Expr]struct{}
-	seen               map[*plan.Expr]struct{}
-	query              *plan.Query
-	node               *plan.Node
 }
 
 type preparedRuntimeTextComparisonScanRule struct {
@@ -4668,303 +4647,8 @@ func (rule *preparedRuntimeTextComparisonScanRule) paramTypeIsText(position int)
 		rule.runtimeParamTypes[position].Oid.IsMySQLString()
 }
 
-func (rule *preparedRuntimeSpecializationScanRule) MatchNode(node *Node) bool {
-	rule.node = node
-	if node.NodeType == plan.Node_FUNCTION_SCAN && node.TableDef != nil &&
-		node.TableDef.TblFunc != nil && node.TableDef.TblFunc.Name == "generate_series" &&
-		len(node.TblFuncExprList) > 0 {
-		for _, arg := range node.TblFuncExprList {
-			if _, ok := preparedRuntimeSourceParamPosition(arg); ok {
-				rule.needs = true
-				break
-			}
-		}
-	}
-	return false
-}
-
-func (rule *preparedRuntimeSpecializationScanRule) IsApplyExpr() bool {
-	return true
-}
-
-func (rule *preparedRuntimeSpecializationScanRule) ApplyNode(_ *Node) error {
-	return nil
-}
-
-func (rule *preparedRuntimeSpecializationScanRule) ApplyExpr(expr *plan.Expr) (*plan.Expr, error) {
-	if _, ok := rule.skipExprs[expr]; ok {
-		// The outer expression is a positional write value and must not make
-		// the write layout look like a different plan.  Its children are still
-		// ordinary expressions, however: a comparison or CASE below the
-		// assignment can have an execute-time parameter domain of its own.
-		rule.scanExpr(expr, false)
-		return expr, nil
-	}
-	rule.scanExpr(expr, true)
-	return expr, nil
-}
-
-func (rule *preparedRuntimeSpecializationScanRule) scanExpr(expr *plan.Expr, root bool) {
-	if expr == nil || rule.needs {
-		return
-	}
-	if _, ok := rule.seen[expr]; ok {
-		return
-	}
-	rule.seen[expr] = struct{}{}
-	if expr.GetPreparedNumeric().GetProvisionalResultCast() {
-		// The parameter can be behind a surviving relational projection.
-		// Its consumer still owns an execute-time overload even when this
-		// expression no longer contains the marker itself.
-		rule.needs = true
-		return
-	}
-	if pos, ok := directIntegerAssignmentParam(expr); ok {
-		rule.integerAssignments = append(rule.integerAssignments, int32(pos))
-		return
-	}
-
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_P:
-		if root && rule.directResult {
-			rule.needs = true
-		}
-	case *plan.Expr_F:
-		if exprImpl.F == nil || exprImpl.F.Func == nil {
-			return
-		}
-		name := strings.ToLower(exprImpl.F.Func.GetObjName())
-		for i, arg := range exprImpl.F.Args {
-			if !preparedProjectedValueOperand(name, i, len(exprImpl.F.Args)) || arg.GetCol() == nil {
-				continue
-			}
-			if _, ok := preparedProjectedParamPosition(rule.query, rule.node, arg,
-				make(map[preparedSetOperationNullKey]bool), true); ok {
-				rule.needs = true
-				return
-			}
-		}
-		if isPreparedGeometrySRIDFunction(name) && len(exprImpl.F.Args) >= 2 {
-			if len(preparedGeometrySRIDParamPositionsInExpr(exprImpl.F.Args[len(exprImpl.F.Args)-1])) > 0 {
-				rule.needs = true
-				return
-			}
-		}
-		if name == "bit_count" && len(exprImpl.F.Args) == 1 &&
-			isPreparedNumericFallbackExpr(exprImpl.F.Args[0]) {
-			// BIT_COUNT has its own value-aware trigger; text/BLOB executions keep
-			// the binary default until a numeric execution advances its category.
-			return
-		}
-		if name == "cast" && isExplicitPreparedCast(expr) {
-			// The user-selected cast owns the parameter domain. Its direct marker
-			// does not require runtime specialization, but a nested expression can
-			// still contain a genuinely deferred overload of its own.
-			for _, arg := range exprImpl.F.Args {
-				rule.scanExpr(arg, false)
-			}
-			return
-		}
-		if preparedRuntimeSpecializationFunction(name) || preparedFunctionResultDependsOnRuntimeParam(expr) {
-			for argIndex, arg := range exprImpl.F.Args {
-				if preparedExprRequiresRuntimeSpecializationAt(name, argIndex, arg) {
-					rule.needs = true
-					return
-				}
-			}
-		}
-		for _, arg := range exprImpl.F.Args {
-			rule.scanExpr(arg, false)
-		}
-	case *plan.Expr_W:
-		if exprImpl.W == nil {
-			return
-		}
-		rule.scanExpr(exprImpl.W.WindowFunc, false)
-		for _, arg := range exprImpl.W.PartitionBy {
-			rule.scanExpr(arg, false)
-		}
-		for _, order := range exprImpl.W.OrderBy {
-			if order != nil {
-				rule.scanExpr(order.Expr, false)
-			}
-		}
-		if exprImpl.W.Frame != nil {
-			if exprImpl.W.Frame.Start != nil {
-				rule.scanExpr(exprImpl.W.Frame.Start.Val, false)
-			}
-			if exprImpl.W.Frame.End != nil {
-				rule.scanExpr(exprImpl.W.Frame.End.Val, false)
-			}
-		}
-	case *plan.Expr_List:
-		if exprImpl.List != nil {
-			for _, item := range exprImpl.List.List {
-				rule.scanExpr(item, false)
-			}
-		}
-	}
-}
-
-// PreparedPlanGeometrySRIDParamPositions returns the direct prepared markers
-// that own geometry SRID metadata. The positions are part of the runtime cache
-// key because two executions with the same scalar parameter type can still
-// produce different geometry result types (for example SRID 0 and 4326).
-func PreparedPlanGeometrySRIDParamPositions(preparePlan *Plan) []int32 {
-	sridPositions, _ := PreparedPlanGeometrySRIDCacheParamPositions(preparePlan)
-	return sridPositions
-}
-
-// PreparedPlanGeometrySRIDSourceParamPositions returns the prepared markers at
-// the geometry input of explicit-SRID constructors. A typed runtime NULL at
-// these positions changes the result metadata to an undefined SRID even when
-// the explicit SRID is a constant.
-func PreparedPlanGeometrySRIDSourceParamPositions(preparePlan *Plan) []int32 {
-	_, sourcePositions := PreparedPlanGeometrySRIDCacheParamPositions(preparePlan)
-	return sourcePositions
-}
-
-// PreparedPlanGeometrySRIDCacheParamPositions collects both classes of
-// geometry-SRID cache dependencies in one plan walk. Callers that execute a
-// prepared statement repeatedly should retain the returned slices for the
-// lifetime of that prepared-plan generation.
-func PreparedPlanGeometrySRIDCacheParamPositions(preparePlan *Plan) ([]int32, []int32) {
-	if preparePlan == nil {
-		return nil, nil
-	}
-	sridPositions := make(map[int32]struct{})
-	sourcePositions := make(map[int32]struct{})
-	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
-		collectPreparedGeometrySRIDPositions(expr, sridPositions, sourcePositions)
-		return nil
-	})
-	return sortedPreparedGeometrySRIDPositions(sridPositions),
-		sortedPreparedGeometrySRIDPositions(sourcePositions)
-}
-
-func sortedPreparedGeometrySRIDPositions(positions map[int32]struct{}) []int32 {
-	result := make([]int32, 0, len(positions))
-	for position := range positions {
-		result = append(result, position)
-	}
-	slices.Sort(result)
-	return result
-}
-
-// PreparedPlanGeometrySRIDSemanticKey adds the value-dependent part of the
-// runtime cache key for prepared geometry SRID setters/constructors. The
-// regular prepared key intentionally groups values by scalar domain; geometry
-// Width is metadata and therefore must distinguish each SRID value.
-func PreparedPlanGeometrySRIDSemanticKey(preparePlan *Plan, paramVals []any) string {
-	sridPositions, sourcePositions := PreparedPlanGeometrySRIDCacheParamPositions(preparePlan)
-	return PreparedPlanGeometrySRIDSemanticKeyForPositions(paramVals, sridPositions, sourcePositions)
-}
-
-// PreparedPlanGeometrySRIDSemanticKeyForPositions encodes the runtime values
-// for precomputed geometry-SRID dependencies. Keeping plan discovery separate
-// from value encoding lets EXECUTE avoid walking an otherwise unrelated plan.
-func PreparedPlanGeometrySRIDSemanticKeyForPositions(
-	paramVals []any, sridPositions, sourcePositions []int32,
-) string {
-	if len(sridPositions) == 0 && len(sourcePositions) == 0 {
-		return ""
-	}
-	var key strings.Builder
-	for _, position := range sridPositions {
-		if position < 0 || int(position) >= len(paramVals) {
-			return ""
-		}
-		param, ok := paramVals[position].(ParamValue)
-		if !ok {
-			return ""
-		}
-		if preparedParamValueIsNull(param) {
-			fmt.Fprintf(&key, "geometry-srid:%d:null;", position)
-			continue
-		}
-		rawValue := param.MaterializedValue
-		if rawValue == "" && param.Value != nil {
-			switch value := param.Value.(type) {
-			case []byte:
-				rawValue = string(value)
-			default:
-				rawValue = fmt.Sprint(value)
-			}
-		}
-		// Encode the value length as well as its contents.  The explicit NULL
-		// token keeps a user value such as "<null>" from aliasing a typed
-		// protocol NULL, while the length keeps delimiters in a value from
-		// colliding with the next cache-key field.
-		fmt.Fprintf(&key, "geometry-srid:%d:value:%d:%s;", position, len(rawValue), rawValue)
-	}
-	// A NULL geometry source can make the binder produce an undefined-SRID
-	// result even when the SRID marker itself is valid. That metadata decision
-	// is part of the specialized plan, so a typed protocol NULL and a non-NULL
-	// payload must not share one cache category merely because their physical
-	// source type is the same (for example BLOB NULL -> WKB).
-	for _, position := range sourcePositions {
-		if position < 0 || int(position) >= len(paramVals) {
-			return ""
-		}
-		param, ok := paramVals[position].(ParamValue)
-		if !ok {
-			return ""
-		}
-		fmt.Fprintf(&key, "geometry-source-null:%d:%t;", position, preparedParamValueIsNull(param))
-	}
-	return key.String()
-}
-
 func preparedParamValueIsNull(param ParamValue) bool {
 	return param.Value == nil && param.MaterializedValue == ""
-}
-
-func collectPreparedGeometrySRIDSourceParamPositions(expr *plan.Expr, positions map[int32]struct{}) {
-	collectPreparedGeometryParamPositions(expr, positions)
-}
-
-func collectPreparedGeometrySRIDPositions(
-	expr *plan.Expr,
-	sridPositions map[int32]struct{},
-	sourcePositions map[int32]struct{},
-) {
-	if expr == nil {
-		return
-	}
-	if fn := expr.GetF(); fn != nil {
-		if fn.Func != nil && isGeometrySRIDProducingFunction(fn.Func.GetObjName()) && len(fn.Args) >= 2 {
-			if sridPositions != nil && isPreparedGeometrySRIDFunction(fn.Func.GetObjName()) {
-				for _, position := range preparedGeometrySRIDParamPositionsInExpr(fn.Args[len(fn.Args)-1]) {
-					sridPositions[position] = struct{}{}
-				}
-			}
-			if sourcePositions != nil {
-				collectPreparedGeometrySRIDSourceParamPositions(fn.Args[0], sourcePositions)
-			}
-		}
-		for _, arg := range fn.Args {
-			collectPreparedGeometrySRIDPositions(arg, sridPositions, sourcePositions)
-		}
-	}
-	if window := expr.GetW(); window != nil {
-		collectPreparedGeometrySRIDPositions(window.WindowFunc, sridPositions, sourcePositions)
-		for _, arg := range window.PartitionBy {
-			collectPreparedGeometrySRIDPositions(arg, sridPositions, sourcePositions)
-		}
-		for _, order := range window.OrderBy {
-			if order != nil {
-				collectPreparedGeometrySRIDPositions(order.Expr, sridPositions, sourcePositions)
-			}
-		}
-	}
-	if list := expr.GetList(); list != nil {
-		for _, item := range list.List {
-			collectPreparedGeometrySRIDPositions(item, sridPositions, sourcePositions)
-		}
-	}
-	if sub := expr.GetSub(); sub != nil {
-		collectPreparedGeometrySRIDPositions(sub.Child, sridPositions, sourcePositions)
-	}
 }
 
 func preparedGeometrySRIDParamPositionsInExpr(expr *plan.Expr) []int32 {
@@ -5016,76 +4700,6 @@ func collectPreparedGeometryParamPositions(expr *plan.Expr, positions map[int32]
 			collectPreparedGeometryParamPositions(exprImpl.Sub.Child, positions)
 		}
 	}
-}
-
-func preparedExprRequiresRuntimeSpecialization(functionName string, expr *plan.Expr) bool {
-	if !preparedExprContainsParam(expr) {
-		return false
-	}
-	if isExplicitPreparedCast(expr) {
-		return false
-	}
-	// A comparison against a table column already has a prepare-time cast to
-	// the column's domain. Rebinding that cast on every execute is unnecessary
-	// and would force otherwise cacheable DML writes down the fresh-compile
-	// path. Marker-to-marker comparisons have no such domain owner and must
-	// still be specialized.
-	if isPreparedNumericComparison(functionName) {
-		return preparedExprHasUnboundParam(expr)
-	}
-	return true
-}
-
-func preparedExprRequiresRuntimeSpecializationAt(functionName string, argIndex int, expr *plan.Expr) bool {
-	// JSON_OBJECTAGG keys are deliberately normalized to VARCHAR at prepare
-	// time; only its value can change the JSON atom type at execution.
-	if functionName == "json_objectagg" && argIndex == 0 {
-		return false
-	}
-	// Only CONV's first operand changes the executor domain. The base operands
-	// are numeric controls and do not justify copying/rebinding the plan.
-	if functionName == "bin" || functionName == "conv" {
-		return argIndex == 0 && preparedExprRequiresRuntimeSpecialization(functionName, expr)
-	}
-	// LAG/LEAD/NTH_VALUE offset markers affect row selection, not the result
-	// value's type. Their value argument remains domain-sensitive, while the
-	// cached compile can safely retain an offset parameter after validation.
-	if (functionName == "lag" || functionName == "lead" || functionName == "nth_value") && argIndex == 1 {
-		return false
-	}
-	return preparedExprRequiresRuntimeSpecialization(functionName, expr)
-}
-
-// preparedExprHasUnboundParam distinguishes a marker whose domain is still
-// owned by the comparison from one already constrained by a prepare-time
-// cast. Composite-key predicates may wrap several such casts in a serial()
-// helper, so inspect the complete expression rather than only its root.
-func preparedExprHasUnboundParam(expr *plan.Expr) bool {
-	if expr == nil {
-		return false
-	}
-	if expr.GetP() != nil || expr.GetV() != nil {
-		return true
-	}
-	if isImplicitPreparedParamCast(expr) {
-		return false
-	}
-	if function := expr.GetF(); function != nil {
-		for _, arg := range function.Args {
-			if preparedExprHasUnboundParam(arg) {
-				return true
-			}
-		}
-		return false
-	}
-	if list := expr.GetList(); list != nil {
-		for _, item := range list.List {
-			if preparedExprHasUnboundParam(item) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func preparedExprContainsParam(expr *plan.Expr) bool {
@@ -5150,81 +4764,6 @@ func preparedNumericResultPolymorphicFunction(name string) bool {
 	default:
 		return false
 	}
-}
-
-func preparedRuntimeSpecializationFunction(name string) bool {
-	if isNumericContextFunction(name) || supportsGenericNumericFunctionContext(name) ||
-		preparedNumericResultPolymorphicFunction(name) {
-		return true
-	}
-	// Result-domain-polymorphic functions must stay on the specialization path
-	// even when their overload itself is stable. For example, max_by returns
-	// the type of its first argument, so a binary parameter can change the
-	// result-column type from the prepare-time placeholder domain.
-	switch name {
-	case "bin", "char", "conv", "field", "ntile", "sleep",
-		"json_arrayagg", "json_objectagg",
-		"date_add", "date_sub", "adddate", "subdate", "timestampadd", "timestampdiff",
-		"ord", "char_length", "character_length",
-		"left", "right", "substring", "substr", "mid", "reverse",
-		"lower", "lcase", "upper", "ucase", "trim", "ltrim", "rtrim",
-		"locate", "instr", "position", "insert", "replace", "lpad", "rpad",
-		"substring_index", "split_part", "repeat", "concat", "concat_ws",
-		"charset", "collation",
-		"=", "<=>", "!=", "<>", "<", "<=", ">", ">=",
-		"like", "ilike", "regexp", "not_regexp", "between", "not_between",
-		"in", "not_in", "partition_in":
-		return true
-	default:
-		return false
-	}
-}
-
-// preparedFunctionResultDependsOnRuntimeParam uses the function registry as a
-// forward-compatible fallback for polymorphic functions.  The explicit list
-// above covers functions whose executor semantics are known to depend on the
-// parameter domain even when their return type is fixed.  For other functions,
-// compare the selected overload and return type against the legal binary
-// protocol parameter domains.  This keeps new first-argument-returning
-// aggregates (for example max_by variants) from silently inheriting the
-// prepare-time TEXT overload.
-func preparedFunctionResultDependsOnRuntimeParam(expr *plan.Expr) bool {
-	if expr == nil {
-		return false
-	}
-	fn := expr.GetF()
-	if fn == nil || fn.Func == nil || len(fn.Args) == 0 {
-		return false
-	}
-	paramArgs := make([]int, 0, len(fn.Args))
-	argTypes := make([]types.Type, len(fn.Args))
-	for i, arg := range fn.Args {
-		if arg == nil {
-			return false
-		}
-		argTypes[i] = makeTypeByPlan2Expr(arg)
-		if preparedExprContainsParam(arg) {
-			paramArgs = append(paramArgs, i)
-		}
-	}
-	if len(paramArgs) == 0 {
-		return false
-	}
-
-	for _, paramArg := range paramArgs {
-		for _, candidate := range preparedRuntimeParamTypeCandidates() {
-			candidateArgs := append([]types.Type(nil), argTypes...)
-			candidateArgs[paramArg] = candidate
-			resolved, ok := function.GetFunctionByNameWithoutError(fn.Func.GetObjName(), candidateArgs)
-			if !ok {
-				continue
-			}
-			if resolved.GetEncodedOverloadID() != fn.Func.GetObj() || !resolved.GetReturnType().Eq(makeTypeByPlan2Expr(expr)) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 var preparedRuntimeParamTypes = []types.Type{
@@ -5329,7 +4868,7 @@ func fillValuesOfParamsInPlanWithSpecializationSelected(
 			return nil, false, moerr.NewInvalidInput(ctx, "cannot prepare this DCL statement")
 		}
 	}
-	if err := ValidatePreparedLagLeadParams(ctx, preparePlan, paramVals); err != nil {
+	if err := ValidatePreparedWindowParams(ctx, preparePlan, paramVals); err != nil {
 		return nil, false, err
 	}
 	if err := ValidatePreparedPaginationParams(ctx, preparePlan, paramVals); err != nil {
@@ -6220,9 +5759,9 @@ func PreparedNumericStringIsComplete(value string) bool {
 }
 
 // PreparedCharSourceTypeFromString returns the effective source domain used by
-// a bare prepared CHAR marker.  A complete numeric lexeme uses the exact
-// integer/DECIMAL type inferred from its value; every other string follows
-// CHAR's VARCHAR prefix parser.  Keeping the fallback type explicit lets the
+// a bare prepared CHAR marker. A complete integer lexeme retains its exact
+// integer type; fractional text follows CHAR's truncating VARCHAR parser.
+// Keeping the fallback type explicit lets the
 // frontend runtime cache distinguish values whose numeric-prefix envelope is
 // equal but whose CHAR signedness differs.
 func PreparedCharSourceTypeFromString(value string) (types.Type, bool) {
@@ -6230,7 +5769,7 @@ func PreparedCharSourceTypeFromString(value string) (types.Type, bool) {
 		return types.T_varchar.ToType(), false
 	}
 	typ, ok := PreparedRuntimeTypeFromString(strings.Trim(value, " \t\n\v\f\r"))
-	if !ok {
+	if !ok || typ.Oid.IsDecimal() || typ.Oid.IsFloat() {
 		return types.T_varchar.ToType(), false
 	}
 	return typ, true
@@ -7336,22 +6875,7 @@ func replaceParamValsWithSelection(
 			}
 		}
 	}
-	paramRule.validateFunctionArgs = func(name string, args []*Expr) error {
-		if name != "nth_value" || len(args) != 2 {
-			return nil
-		}
-		pos, ok := preparedWindowArgumentParamPosition(args[1])
-		if !ok {
-			return nil
-		}
-		if pos < 0 || int(pos) >= len(paramVals) {
-			return moerr.NewInternalErrorf(ctx, "get prepare params error, index %d not exists", pos)
-		}
-		if !isPositivePreparedInteger(paramVals[pos]) {
-			return moerr.NewWrongArguments(ctx, name)
-		}
-		return nil
-	}
+
 	if setVariables := plan0.GetDcl().GetSetVariables(); setVariables != nil {
 		for _, item := range setVariables.Items {
 			if item.Value != nil {
@@ -8741,6 +8265,14 @@ func refreshPreparedPlanProjectionTypes(
 				return plan.Type{}, false
 			}
 			switch node.NodeType {
+			case plan.Node_FUNCTION_SCAN, plan.Node_VECTOR_INDEX_SCAN, plan.Node_VECTOR_QUERY_SOURCE:
+				// These scans project their own result schema. A child supplies
+				// function inputs (for example a query vector), not output columns.
+				if col.RelPos == 0 && node.TableDef != nil && int(col.ColPos) < len(node.TableDef.Cols) &&
+					node.TableDef.Cols[col.ColPos] != nil {
+					return node.TableDef.Cols[col.ColPos].Typ, true
+				}
+				return plan.Type{}, false
 			case plan.Node_AGG:
 				switch col.RelPos {
 				case -1:

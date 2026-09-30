@@ -119,10 +119,18 @@ class GPUImageRecipeContractTest(unittest.TestCase):
         self.assertIn("COPY . .", development)
         self.assertIn("ENV GOWORK=off", development)
         self.assertIn("pixi run --frozen env TAR_OPTIONS=--no-same-owner", development)
-        self.assertIn("make --jobserver-style=pipe", development)
+        self.assertIn("make -C ../.. MO_CL_CUDA=1 -j8", development)
         self.assertIn("FROM builder AS development", development)
         for obsolete_input in ("COPY cuvs", "COPY go.work", "CONDA_PREFIX", "/usr/local/cuda"):
             self.assertNotIn(obsolete_input, development)
+
+    def test_images_keep_the_default_fifo_jobserver_for_ninja(self):
+        manifest = (IMAGE_DIR.parents[1] / "gpu" / "pixi.toml").read_text()
+        self.assertIn('CMAKE_GENERATOR = "Ninja"', manifest)
+        for name in ("Dockerfile", "Dockerfile.dev"):
+            recipe = (IMAGE_DIR / name).read_text()
+            self.assertIn("make -C ../.. MO_CL_CUDA=1 -j8", recipe, name)
+            self.assertNotIn("--jobserver-style", recipe, name)
 
     def test_runtime_image_audit_attaches_its_shell_input(self):
         audit = (IMAGE_DIR / "verify-runtime-image.sh").read_text()

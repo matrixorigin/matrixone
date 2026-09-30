@@ -868,7 +868,7 @@ func runJSONToStrWidth(t *testing.T, mp *mpool.MPool, jsonText string, toType ty
 	defer to.Free()
 	require.NoError(t, to.PreExtendAndReset(1))
 
-	if err := jsonToStr(proc, context.Background(), from, to, 1, nil, strict, allowTrim, allowTrim, allowTrim); err != nil {
+	if err := jsonToStr(proc, context.Background(), from, to, 1, nil, strict, allowTrim, allowTrim, false, allowTrim); err != nil {
 		return "", err
 	}
 	got, _ := vector.GenerateFunctionStrParameter(to.GetResultVector()).GetStrValue(0)
