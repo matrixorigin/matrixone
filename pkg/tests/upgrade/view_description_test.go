@@ -698,8 +698,13 @@ func (txn failedViewColumnsUpgradeTxn) Exec(sql string, opts executor.StatementO
 
 func testViewColumnsUpgradeRollback(t *testing.T, ctx context.Context, sqlExecutor executor.SQLExecutor, tenantID uint32) {
 	t.Helper()
+	// Run the tenant-upgrade transaction as the sys account, mirroring the production
+	// driver (service.MaybeUpgradeTenant scopes the txn to System_Account and targets
+	// the tenant via the tenantID passed to HandleTenantUpgrade, whose per-tenant
+	// statements carry UpgradeStatementOption(tenantID)). An upgrade entry's cluster-wide
+	// protocol-version check runs mo_ctl, which only the sys account may execute (#28985).
 	opts := executor.Options{}.WithDatabase(catalog.MO_CATALOG).
-		WithAccountID(tenantID).WithWaitCommittedLogApplied()
+		WithAccountID(catalog.System_Account).WithWaitCommittedLogApplied()
 	definition := func() string {
 		t.Helper()
 		var exists bool
