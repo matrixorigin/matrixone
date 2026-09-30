@@ -79,14 +79,14 @@ func TestIntegerArgumentProtocolBoundaries(t *testing.T) {
 				if features.OrdinaryFloatInt64Bounds {
 					// These FLOAT -> INT64 identities use the corrected bounds,
 					// independently of the v85 private integer-argument casts.
-					require.ErrorContains(t, err, "version 101")
-					// Upstream versions 94–100 are reserved for independent
-					// contracts; the strict numeric contract begins at v101.
-					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion99)
-					require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 101")
-					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion100)
-					require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 101")
-					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion101)
+					require.ErrorContains(t, err, "version 103")
+					// Upstream v101 and the reserved v102 do not establish this
+					// PR's numeric contract; it begins at v103.
+					rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(101))
+					require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 103")
+					rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(102))
+					require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 103")
+					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion103)
 					require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
 					// The same ordinary identity with an integer source remains
 					// executable on old peers; do not fence every CAST0/2/3.

@@ -48,8 +48,10 @@ new overload identity, or promise that older peers implement newer semantics.
 `MYSQL_NUMERIC_COMPATIBILITY` is a positive SQL mode, not the similarly named
 account/database `MYSQL_COMPATIBILITY_MODE` setting. The mode is explicit on
 the process wire state and absent legacy fields do not imply MySQL behavior.
-Append the new mode without shifting existing SQL-mode values; use protobuf
-field numbers 22 and 23 for the compatibility mode and sender contract marker.
+Append the new mode without shifting existing SQL-mode values. `SessionInfo`
+field 24 carries the opt-in and field 25 carries the sender contract marker.
+Fields 22 and 23 are not part of this numeric contract and are not interpreted
+as its mode or sender marker.
 Direct string executors, casts, prepared parameters, and historical CEIL/FLOOR
 string overloads use the same effective-mode decision.
 
@@ -66,8 +68,10 @@ string overloads use the same effective-mode decision.
 - The marker survives implicit binder casts, selection, vector/batch transfer,
   and remote pipeline transport. It is not stored in stable vector bytes or
   ordinary materialized table columns. The versioned batch metadata trailer is
-  the transport owner; the ordinary runtime-domain sidecar remains separate.
-- Provenance-sensitive flow-control output is fenced at MORPC v101 in every SQL
+  the transport owner and remains trailer v3, independently numbered from
+  MORPC; stable vector/batch bytes and the ordinary runtime-domain sidecar
+  remain unchanged.
+- Provenance-sensitive flow-control output is fenced at MORPC v103 in every SQL
   mode when it can select a non-NULL HEX/BIT value. This includes mixed rows,
   uniformly marked results, and marked-plus-NULL results: older flow-control
   executors can drop the marker even when no mixed-row bitmap is needed.
@@ -83,11 +87,36 @@ accounts.
 
 ### Remote compatibility
 
-MORPC v93 belongs to the existing `LAST_INSERT_ID` connection-migration
-contract. Changed string-numeric and flow-control provenance behavior uses the
-separate v101 boundary. Placement falls back to local execution when a worker
-is too old or has unknown capability; sender preflight rejects a destination
-downgrade; and receivers fail closed on pre-v101 or legacy session contracts.
+MORPC v101 retains the upstream JSON/YearBit contract. This change's
+string-numeric and flow-control provenance behavior uses MORPC v103. Placement
+falls back to local execution when a worker is below v103 or has unknown
+capability; sender preflight rejects a destination downgrade; and receivers
+fail closed on pre-v103 or legacy session contracts.
+
+## Deployment and rollback boundary
+
+The new numeric contract is guaranteed for new SQL coordinators and admitted
+new workers. During a mixed-version rollout, route SQL that relies on the new
+numeric behavior through new frontends. An old frontend can still execute its
+local query with the older default behavior and may reject the new SQL-mode
+token, so arbitrary frontend routing does not promise identical results.
+
+Worker placement and the final send-time version probe are separate operations.
+The new coordinator falls back to local execution for an old or unknown worker
+and rejects a downgrade observed by the final probe before it marshals or sends
+the remote scope. A new receiver validates the expression and legacy sender
+marker before constructing operators. The final probe is not an atomic lease on
+the worker process: replacement of the same address after the probe is outside
+the guarantee.
+
+Before replacing or downgrading a worker, withdraw its endpoint from SQL
+routing and worker placement, stop new admissions, and drain or cancel
+in-flight executions and batch streams. Reuse the address only after that
+quiescent boundary. Reconnect clients and recreate prepared sessions before
+traffic resumes. On rollback, stop relying on the new mode token and results
+before routing to old frontends. A full-cluster quiescent cutover is also a
+valid rollout. This change does not introduce a stable vector format migration
+or claim general historical catalog/data rollback compatibility.
 
 ## Ownership and correctness decisions
 
@@ -101,8 +130,11 @@ prepare role/source classification
   -> cache restoration or remote transport
 ```
 
-- The binder owns provisional types. `ResetParamRefRule` owns each execution's
-  source expression and rebind state.
+- The binder owns provisional types. Prepared execution keeps original
+  `ParamValue` and source-type provenance in its binding state, and the existing
+  AST precision consumer binds that source at the current prepared execution
+  boundary. The cache key includes binary-protocol identity. DDL/SET paths keep
+  their existing reset-based specialization owner.
 - The shared expression-role logic is the authority for which value
   occurrences may be rebound. Control arguments and non-owning string
   functions do not inherit a parent's numeric role.
@@ -112,21 +144,29 @@ prepare role/source classification
   metadata. Stable storage/materialization drops execution-only provenance.
 - Existing warning-aware casts own conversion warnings. No new goroutine,
   background resource, external I/O, or retry loop is introduced.
+- Native SQL DOUBLE precision `2.5` retains the private ties-to-even conversion
+  to `2`; native DECIMAL precision `2.5` remains `3`. Binary or unproven DOUBLE
+  precision retains ordinary INT64 conversion to `3`. The source distinction
+  comes from original binding provenance, with binary protocol taking
+  precedence; it is not inferred from a numeric payload or binding type. Value
+  DECIMAL domains remain separate from precision controls, and explicit SQL
+  casts retain their own boundary. Failed specialization cannot replace the
+  cached valid plan.
 - String-to-number conversion is not monotonic under string ordering. String
   paths therefore do not advertise function-wide zonemap pruning; correctness
   takes priority over that optimization.
 
 ## Performance decision
 
-Prepared source discovery remains a bounded per-parameter expression scan with
-`O(P*N)` worst-case work for `P` parameters and `N` expression nodes; it avoids
-rescanning descendants at every function edge. The recorded role-discovery
-benchmark on Darwin/arm64 reported zero allocations, approximately 2.7–2.9 μs
-for common single-parameter ownership cases, 50.8 μs for a deep no-match
-`P=8` case, and 23.4–23.8 μs for a mixed-role `P=5` case. Those measurements
-support retaining the bounded scan, not a zero-cost claim. A shared role table
-or cross-execution cache is deferred until cache invalidation and ownership
-equivalence are specified and measured.
+The recorded role-discovery benchmark on Darwin/arm64 reported zero
+allocations, approximately 2.7–2.9 μs for common single-parameter ownership
+cases, 50.8 μs for a deep no-match `P=8` case, and 23.4–23.8 μs for a
+mixed-role `P=5` case. These measurements apply to the reset-based role scan,
+not the public prepared-QUERY execution path, and are not end-to-end query
+latencies. The current prepared-QUERY binding path preserves per-execution
+source provenance at the existing AST consumer; it has not been measured by
+that benchmark. A shared role table or cross-execution cache is deferred until
+cache invalidation and ownership equivalence are specified and measured.
 
 The row-provenance bitmap uses bulk population/normalization and a uniform
 append fast path; it must not rescan or renormalize the existing prefix on
@@ -152,7 +192,16 @@ function-wide zonemap optimization is included.
 | Roles and boundaries | Value/control argument tests; precision remains `INT64`; nested ownership; explicit CAST stops provenance; unknown/non-owning function controls |
 | HEX/BIT row provenance | CASE/IF/COALESCE tests for mixed, uniform, marked-plus-NULL, text, ordinary BINARY, explicit casts, and nested/implicit casts; selected-row/vector/batch lifecycle tests |
 | Wire lifecycle | Batch v1/v2/v3 round trips, malformed/truncated rejection, legacy sender, stale/reused vector reset, and remote trailer tests |
-| Mixed-version admission | v99/v100 local fallback plus destination and receiver rejection; v101 placement/send/receive acceptance; default/MySQL/native modes; legacy-session rejection |
+| Mixed-version admission | v101/v102 local fallback plus destination and receiver rejection; v103 placement/send/receive acceptance; upstream JSON/YearBit v101 controls; default/MySQL/native modes; legacy-session rejection |
+| SessionInfo wire allocation | Unrelated varints at fields 22/23 are not interpreted as numeric mode/marker; fields 24/25 round trip the explicit mode and sender marker; forwarding preserves a zero legacy marker |
 | Prepared-plan reuse | Type changes, error-to-success, NULL-to-success, and restoration of the cached base plan |
 | Numeric correctness and pruning | Integer/DECIMAL/FLOAT source controls; zonemap endpoint traps must not prune matching rows |
 | Resource/performance | Allocation-failure atomicity, vector reset/cleanup/accounting, focused race checks where shared-state risk applies, and plan/bitmap performance tests |
+
+Public prepared-query validation includes scalar precision results and metadata,
+the binary-protocol numeric overload/error-reuse case, prepared DECIMAL extrema,
+and the existing string-math fixture. Mixed-binary validation records the exact
+source revisions and binaries; mocked protocol integers and UTs alone are not
+evidence of executable interoperability. A same-address replacement after the
+final worker probe remains outside the contract and requires the quiescent
+replacement procedure above.
