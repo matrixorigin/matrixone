@@ -704,6 +704,35 @@ set @cte_demand=2;
 execute active_runtime_seed using @cte_demand;
 deallocate prepare active_runtime_seed;
 set @cte_demand=null;
+-- An outer runtime-only FILTER must retain the derived input's empty boundary.
+set @cte_demand='bad';
+select p.id, (with q(n) as (select p.id)
+select n from (select n from q where n<0) d where p.id=@cte_demand) as c
+from guarded_abs p order by p.id;
+select p.id, (with q(n) as (select p.id)
+select count(*) from (select n from q where n<0) d where p.id=@cte_demand) as c
+from guarded_abs p order by p.id;
+select p.id, (with q(n) as (select p.id)
+select n from (select n from q where n<0) d where p.id=cast(@cte_demand as signed)) as c
+from guarded_abs p order by p.id;
+prepare derived_variable_demand from 'select p.id, (with q(n) as (select p.id) select n from (select n from q where n<0) d where p.id=@cte_demand) as c from guarded_abs p order by p.id';
+execute derived_variable_demand;
+set @cte_demand=2;
+execute derived_variable_demand;
+set @cte_demand=null;
+execute derived_variable_demand;
+set @cte_demand='bad';
+execute derived_variable_demand;
+deallocate prepare derived_variable_demand;
+-- A nonempty derived input must still evaluate the conversion.
+select p.id, (with q(n) as (select p.id)
+select n from (select n from q where n>0) d where p.id=@cte_demand) as c
+from guarded_abs p order by p.id;
+set @cte_demand=2;
+select p.id, (with q(n) as (select p.id)
+select n from (select n from q where n>0) d where p.id=@cte_demand) as c
+from guarded_abs p order by p.id;
+set @cte_demand=null;
 -- INT32_MIN is representable after the ABS widening.
 insert into guarded_abs values (-2147483648,0);
 select p.id, (with recursive q(n) as (

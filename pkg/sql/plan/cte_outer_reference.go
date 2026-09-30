@@ -1019,11 +1019,16 @@ func (d *localCTEDomain) splitConsumerDemandFilters() {
 				remaining = append(remaining, expr)
 			}
 		}
+		if len(remaining) > 0 {
+			// Even without a total conjunct in this FilterList, its child
+			// may delete rows. Do not push runtime demand through that input
+			// boundary and evaluate conversions for rows that never arrive.
+			n.FilterIsBarrier = true
+		}
 		if len(total) > 0 && len(remaining) > 0 {
 			n.Children[0] = d.builder.appendNode(&plan.Node{NodeType: plan.Node_FILTER,
 				Children: []int32{n.Children[0]}, FilterList: total, FilterIsBarrier: true}, d.builder.ctxByNode[id])
 			n.FilterList = remaining
-			n.FilterIsBarrier = true
 		}
 	}
 }

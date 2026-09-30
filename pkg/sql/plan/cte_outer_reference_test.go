@@ -494,6 +494,43 @@ func TestLocalCTERuntimeDemandFollowsConsumerFilter(t *testing.T) {
 	require.True(t, found, "the live plan must retain both ordered barriers")
 }
 
+func TestLocalCTERuntimeDemandRetainsDerivedInputBoundary(t *testing.T) {
+	for _, result := range []string{"n", "count(*)"} {
+		for _, demand := range []string{"@demand", "cast(@demand as signed)"} {
+			t.Run(result+"/"+demand, func(t *testing.T) {
+				logicPlan, err := runOneStmt(NewMockOptimizer(false), t,
+					`select p.n_nationkey, (with q(n) as (select p.n_nationkey)
+					select `+result+` from (select n from q where n<0) d
+					where p.n_nationkey=`+demand+`) from tpch.nation p`)
+				require.NoError(t, err)
+				query := logicPlan.GetQuery()
+				assertReachablePlanHasNoCorrelatedExpr(t, query)
+				found := false
+				var visit func(int32)
+				visit = func(id int32) {
+					n := query.Nodes[id]
+					for _, filter := range n.FilterList {
+						walkLocalCTEExpr(filter, func(e *planpb.Expr) {
+							if e.GetV() != nil {
+								require.Equal(t, planpb.Node_FILTER, n.NodeType, "variable must not reach the replay scan")
+								require.True(t, n.FilterIsBarrier, "runtime-only WHERE must retain its input boundary")
+								found = true
+							}
+						})
+					}
+					for _, child := range n.Children {
+						visit(child)
+					}
+				}
+				for _, root := range query.Steps {
+					visit(root)
+				}
+				require.True(t, found)
+			})
+		}
+	}
+}
+
 func TestLocalCTEVariableDemandPreservesReferences(t *testing.T) {
 	for _, tc := range []struct {
 		sqlVar         string
