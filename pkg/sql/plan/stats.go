@@ -2847,7 +2847,19 @@ func (builder *QueryBuilder) disableMemoryUnsafeRightDedup(rootID int32) {
 			budget = perWorkerBudget * workers
 		}
 	}
+	var queryLimit int64
+	if builder.compCtx != nil {
+		if proc := builder.compCtx.GetProcess(); proc != nil && proc.Base != nil {
+			queryLimit = proc.GetLim().Size
+		}
+	}
 	memoryUnsafe := func(totalBytes, totalRows uint64) bool {
+		// Map estimates cover cells only. Leave half of the query cap for
+		// growth, key evaluation and live input; explicit spill thresholds cannot
+		// enlarge that cap. Do not open an execution generation during planning.
+		if queryLimit > 0 && totalBytes > uint64(queryLimit)/2 {
+			return true
+		}
 		if builder.joinSpillMem == 0 {
 			return totalBytes > budget
 		}
