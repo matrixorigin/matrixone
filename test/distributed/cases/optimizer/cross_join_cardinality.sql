@@ -33,6 +33,16 @@ rollback;
 select count(*) as rows_written,sum(100*a+b) as checksum from t;
 insert into t select a.n+20,b.n from a cross join b;
 select count(*) as rows_written,sum(100*a+b) as checksum from t;
+-- Repeated matches must delete each preserved row once; rollback restores it.
+-- @ignore:0
+explain (check '["Join Type: RIGHT SEMI"]') delete from t where a in (select a.n from a cross join b);
+begin;
+delete from t where a in (select a.n from a cross join b);
+select count(*) as rows_remaining,sum(100*a+b) as checksum from t;
+rollback;
+select count(*) as rows_remaining,sum(100*a+b) as checksum from t;
+delete from t where a in (select a.n from a cross join b);
+select count(*) as rows_remaining,min(a) as minimum,max(a) as maximum,sum(100*a+b) as checksum from t;
 set join_spill_mem=@saved_join_spill_mem;
 set max_dop=@saved_max_dop;
 drop database cross_join_cardinality;

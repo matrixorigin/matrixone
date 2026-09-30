@@ -868,7 +868,7 @@ func constructFuzzyFilter(node, tableScan, sinkScan *plan.Node) *fuzzyfilter.Fuz
 	return op
 }
 
-func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, proc *process.Process) (*preinsert.PreInsert, error) {
+func constructPreInsert(qry *plan.Query, node *plan.Node, eng engine.Engine, proc *process.Process) (*preinsert.PreInsert, error) {
 	preCtx := node.PreInsertCtx
 	if err := incrservice.CheckAutoIDCache(proc.Ctx, proc.GetService(), preCtx.TableDef.GetAutoIdCache()); err != nil {
 		return nil, err
@@ -918,7 +918,10 @@ func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, 
 	op.Attrs = attrs
 	op.IsOldUpdate = preCtx.IsOldUpdate
 	op.IsNewUpdate = preCtx.IsNewUpdate
-	op.EstimatedRowCount = int64(nodes[node.Children[0]].Stats.Outcnt)
+	op.EstimatedRowCount = 0
+	if preCtx.HasAutoCol {
+		op.EstimatedRowCount = estimatedAutoIncrementRows(qry, node.Children[0])
+	}
 	op.CompPkeyExpr = preCtx.CompPkeyExpr
 	op.ClusterByExpr = preCtx.ClusterByExpr
 	op.ColOffset = preCtx.ColOffset
@@ -2328,9 +2331,9 @@ func constructShuffleOperatorForJoin(bucketNum int32, node *plan.Node, left bool
 	arg.StringHashKey = isStringShuffleKeyType(typ)
 	switch types.T(typ) {
 	case types.T_int64, types.T_int32, types.T_int16:
-		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
+		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, plan2.EstimatedRowsInt64(node.Stats.TableCnt))
 	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
-		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
+		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, plan2.EstimatedRowsInt64(node.Stats.TableCnt))
 	}
 	if left && len(node.RuntimeFilterProbeList) > 0 {
 		arg.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(node.RuntimeFilterProbeList[0])
@@ -2354,9 +2357,9 @@ func constructShuffleArgForGroup(bucketNum int32, node *plan.Node) *shuffle.Shuf
 	arg.StringHashKey = isStringShuffleKeyType(typ)
 	switch types.T(typ) {
 	case types.T_int64, types.T_int32, types.T_int16:
-		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
+		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, plan2.EstimatedRowsInt64(node.Stats.TableCnt))
 	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
-		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
+		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, plan2.EstimatedRowsInt64(node.Stats.TableCnt))
 	}
 	return arg
 }
@@ -3490,4 +3493,41 @@ func mapCloneAutoIncrColumns(src, dst *plan.TableDef, sameColumnIDSpace bool) ma
 		}
 	}
 	return result
+}
+
+// Invalid or unbounded source estimates disable speculative ID allocation;
+// actual batch demand still allocates normally, including scalar aggregates.
+func estimatedAutoIncrementRows(qry *plan.Query, nodeID int32) int64 {
+	nodes := qry.Nodes
+	node := nodes[nodeID]
+	if node.Stats == nil || node.Stats.Outcnt >= float64(math.MaxInt64) || math.IsNaN(node.Stats.Outcnt) {
+		return 0
+	}
+	visited := make([]bool, len(nodes))
+	var bounded func(int32) bool
+	bounded = func(id int32) bool {
+		if visited[id] {
+			return true
+		}
+		visited[id] = true
+		n := nodes[id]
+		if n.Stats != nil && (n.Stats.TableCnt >= float64(math.MaxInt64) || n.Stats.Outcnt >= float64(math.MaxInt64)) {
+			return false
+		}
+		for _, child := range n.Children {
+			if !bounded(child) {
+				return false
+			}
+		}
+		for _, step := range n.SourceStep {
+			if !bounded(qry.Steps[step]) {
+				return false
+			}
+		}
+		return true
+	}
+	if !bounded(nodeID) {
+		return 0
+	}
+	return plan2.EstimatedRowsInt64(node.Stats.Outcnt)
 }

@@ -1773,6 +1773,17 @@ func TestCombinedTxnTable_Stats(t *testing.T) {
 	assert.Equal(t, stats.BlockNumber, result.BlockNumber)
 	assert.Equal(t, stats.ApproxObjectNumber, result.ApproxObjectNumber)
 	assert.Equal(t, stats.TableCnt, result.TableCnt)
+	partial := newCombinedTxnTable(nil, func() ([]engine.Relation, error) {
+		return []engine.Relation{
+			&mockRelation{statsFunc: func(context.Context, bool) (*statsinfo.StatsInfo, error) { return stats, nil }},
+			&mockRelation{statsFunc: func(context.Context, bool) (*statsinfo.StatsInfo, error) { return nil, nil }},
+		}, nil
+	}, nil, nil)
+	result, err = partial.Stats(context.Background(), false)
+	require.NoError(t, err)
+	require.Equal(t, float64(^uint64(0)), result.TableCnt, "missing child cannot publish a partial small bound")
+	require.Empty(t, result.TableName)
+	require.Equal(t, stats.BlockNumber, result.BlockNumber, "known metadata remains available")
 }
 
 // Test CombinedRelData panic methods

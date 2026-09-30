@@ -147,3 +147,22 @@ func TestTxnTableDelegate_Delete(t *testing.T) {
 		table.Delete(context.Background(), &batch.Batch{}, "")
 	})
 }
+
+func TestNonlocalStatsRejectLocalWorkspaceBound(t *testing.T) {
+	txn := newTransactionWithActivePKTableForTest(t, "pk")
+	origin := txn.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
+	tbl := &txnTableDelegate{origin: origin, isLocal: func() (bool, error) { return false, nil }}
+	bat := batch.NewWithSize(0)
+	bat.SetRowCount(5)
+	txn.writes = []Entry{{typ: INSERT, databaseId: 7, tableId: 42, bat: bat}}
+	stats, err := tbl.Stats(context.Background(), false)
+	require.NoError(t, err)
+	require.Equal(t, float64(^uint64(0)), stats.TableCnt,
+		"remote completed metadata cannot include this CN's own writes; do not forward a partial local count")
+	require.Empty(t, stats.TableName)
+	txn.Lock()
+	stats, err = tbl.Stats(context.Background(), false)
+	txn.Unlock()
+	require.NoError(t, err)
+	require.Equal(t, float64(^uint64(0)), stats.TableCnt)
+}

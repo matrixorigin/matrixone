@@ -66,6 +66,31 @@ insert into t select a.n+20,b.n from a cross join b;
 select count(*) as rows_written,sum(100*a+b) as checksum from t;
 rows_written    checksum
 12    12612
+explain (check '["Join Type: RIGHT SEMI"]') delete from t where a in (select a.n from a cross join b);
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Multi Update  𝄀
+  ->  Lock  𝄀
+        ->  Join  𝄀
+              Join Type: RIGHT SEMI  𝄀
+              Join Cond: (a.n = t.a)  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    ->  Table Scan on cross_join_cardinality.a  𝄀
+                    ->  Table Scan on cross_join_cardinality.b  𝄀
+              ->  Table Scan on cross_join_cardinality.t
+begin;
+delete from t where a in (select a.n from a cross join b);
+select count(*) as rows_remaining,sum(100*a+b) as checksum from t;
+➤ rows_remaining[-5,64,0]  ¦  checksum[3,38,0]  𝄀
+6  ¦  12306
+rollback;
+select count(*) as rows_remaining,sum(100*a+b) as checksum from t;
+➤ rows_remaining[-5,64,0]  ¦  checksum[3,38,0]  𝄀
+12  ¦  12612
+delete from t where a in (select a.n from a cross join b);
+select count(*) as rows_remaining,min(a) as minimum,max(a) as maximum,sum(100*a+b) as checksum from t;
+➤ rows_remaining[-5,64,0]  ¦  minimum[4,32,0]  ¦  maximum[4,32,0]  ¦  checksum[3,38,0]  𝄀
+6  ¦  20  ¦  21  ¦  12306
 set join_spill_mem=@saved_join_spill_mem;
 set max_dop=@saved_max_dop;
 drop database cross_join_cardinality;

@@ -330,13 +330,24 @@ func (t *combinedTxnTable) Stats(
 	}
 
 	value := splan.NewStatsInfo()
+	complete := len(tables) > 0
 	for _, rel := range tables {
 		v, err := rel.Stats(ctx, sync)
 		if err != nil {
 			return nil, err
 		}
 
+		if !splan.StatsInfoUsable(v) {
+			value.TableCnt = float64(^uint64(0))
+			complete = false
+			continue
+		}
+		complete = complete && splan.StatsInfoUsableForCache(v)
 		value.Merge(v)
+	}
+	value.TableCnt = min(value.TableCnt, float64(^uint64(0)))
+	if complete {
+		value.TableName = tables[0].GetTableName()
 	}
 	return value, nil
 }

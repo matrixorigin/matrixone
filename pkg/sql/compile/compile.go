@@ -8972,7 +8972,7 @@ func (c *Compile) appendPrescopes(parents, children []*Scope, stageNodes engine.
 func (c *Compile) compilePreInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
-		preInsertArg, err := constructPreInsert(nodes, node, c.e, c.proc)
+		preInsertArg, err := constructPreInsert(c.anal.qry, node, c.e, c.proc)
 		if err != nil {
 			return nil, err
 		}
