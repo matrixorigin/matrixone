@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"errors"
 	"regexp"
 	"testing"
 
@@ -107,6 +108,30 @@ func TestCDCTargetIdentityAdmissionAndGuard(t *testing.T) {
 		}
 	})
 
+	t.Run("capability reports identity row scan and close errors", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			rows *sqlmock.Rows
+			want string
+		}{
+			{name: "scan error", rows: sqlmock.NewRows([]string{"TABLE_ID"}).AddRow("not-a-number"), want: "converting driver.Value"},
+			{name: "row error", rows: sqlmock.NewRows([]string{"TABLE_ID"}).AddRow(uint64(1)).RowError(0, errors.New("capability row failed")), want: "capability row failed"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				db, mock, err := sqlmock.New()
+				require.NoError(t, err)
+				defer db.Close()
+				conn, err := db.Conn(ctx)
+				require.NoError(t, err)
+				defer conn.Close()
+				mock.ExpectQuery(regexp.QuoteMeta("SELECT TABLE_ID FROM information_schema.INNODB_TABLES WHERE NAME = ?")).
+					WithArgs("__mo_cdc_capability_probe__/__absent__").WillReturnRows(tc.rows)
+				require.ErrorContains(t, checkMySQLTargetIdentityCapability(ctx, conn, "db", "t", false), tc.want)
+				require.NoError(t, mock.ExpectationsWereMet())
+			})
+		}
+	})
+
 	t.Run("MO guard returns durable identity", func(t *testing.T) {
 		db, mock, err := sqlmock.New()
 		require.NoError(t, err)
@@ -120,6 +145,22 @@ func TestCDCTargetIdentityAdmissionAndGuard(t *testing.T) {
 		identity, err := guardedCDCTargetIdentity(ctx, tx, CDCSinkType_MO, "db", "t")
 		require.NoError(t, err)
 		require.Equal(t, "mo:42", identity)
+		require.NoError(t, tx.Rollback())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("MO guard rejects zero identity", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+		mock.ExpectBegin()
+		mock.ExpectQuery(regexp.QuoteMeta("CALL mo_cdc_target_identity('db', 't')")).
+			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(uint64(0)))
+		mock.ExpectRollback()
+		tx, err := db.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		_, err = guardedCDCTargetIdentity(ctx, tx, CDCSinkType_MO, "db", "t")
+		require.ErrorContains(t, err, "zero table ID")
 		require.NoError(t, tx.Rollback())
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
@@ -142,6 +183,40 @@ func TestCDCTargetIdentityAdmissionAndGuard(t *testing.T) {
 		require.Equal(t, "mysql:uuid:7", identity)
 		require.NoError(t, tx.Rollback())
 		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("MySQL guard reports lock and metadata query errors", func(t *testing.T) {
+		for _, tc := range []struct {
+			name      string
+			lockError error
+			metaError error
+			want      string
+		}{
+			{name: "lock query", lockError: driver.ErrBadConn, want: "bad connection"},
+			{name: "metadata query", metaError: driver.ErrBadConn, want: "bad connection"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				db, mock, err := sqlmock.New()
+				require.NoError(t, err)
+				defer db.Close()
+				mock.ExpectBegin()
+				lock := mock.ExpectQuery(regexp.QuoteMeta("SELECT 1 FROM `db`.`t` LIMIT 0"))
+				if tc.lockError != nil {
+					lock.WillReturnError(tc.lockError)
+				} else {
+					lock.WillReturnRows(sqlmock.NewRows([]string{"one"}))
+					mock.ExpectQuery(regexp.QuoteMeta("SELECT @@server_uuid, TABLE_ID FROM information_schema.INNODB_TABLES WHERE NAME = ?")).
+						WithArgs("db/t").WillReturnError(tc.metaError)
+				}
+				mock.ExpectRollback()
+				tx, err := db.BeginTx(ctx, nil)
+				require.NoError(t, err)
+				_, err = guardedCDCTargetIdentity(ctx, tx, CDCSinkType_MySQL, "db", "t")
+				require.ErrorContains(t, err, tc.want)
+				require.NoError(t, tx.Rollback())
+				require.NoError(t, mock.ExpectationsWereMet())
+			})
+		}
 	})
 
 	t.Run("guard rejects unsupported and malformed identities", func(t *testing.T) {
@@ -208,6 +283,39 @@ func TestCDCTargetIdentityAdmissionAndGuard(t *testing.T) {
 		require.NoError(t, err)
 		_, err = observeCDCTargetIdentity(ctx, conn, CDCSinkType_MO, "db", "t")
 		require.ErrorContains(t, err, "ambiguous")
+		require.NoError(t, conn.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("observe target identity guards an existing table", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = ? AND table_name = ? AND table_type = 'BASE TABLE'")).
+			WithArgs("db", "t").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+		mock.ExpectBegin()
+		mock.ExpectQuery(regexp.QuoteMeta("CALL mo_cdc_target_identity('db', 't')")).
+			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(uint64(9)))
+		mock.ExpectRollback()
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		identity, err := observeCDCTargetIdentity(ctx, conn, CDCSinkType_MO, "db", "t")
+		require.NoError(t, err)
+		require.Equal(t, "mo:9", identity)
+		require.NoError(t, conn.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("observe propagates catalog query failure", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = ? AND table_name = ? AND table_type = 'BASE TABLE'")).
+			WithArgs("db", "t").WillReturnError(driver.ErrBadConn)
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		_, err = observeCDCTargetIdentity(ctx, conn, CDCSinkType_MO, "db", "t")
+		require.Error(t, err)
 		require.NoError(t, conn.Close())
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
