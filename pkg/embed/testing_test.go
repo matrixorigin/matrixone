@@ -129,20 +129,25 @@ func TestWaitBasicClusterTaskServicesReportsReadinessCancellation(t *testing.T) 
 }
 
 func TestBasicClusterUsesShortStartupRetryIntervals(t *testing.T) {
-	services := []*operator{
-		{serviceType: metadata.ServiceType_LOG, cfg: newServiceConfig()},
-		{serviceType: metadata.ServiceType_TN, cfg: newServiceConfig()},
-		{serviceType: metadata.ServiceType_CN, cfg: newServiceConfig()},
+	c, err := NewCluster(WithTesting(), WithPreStart(adjustBasicClusterService))
+	if c != nil {
+		t.Cleanup(func() { require.NoError(t, c.Close()) })
 	}
-	for _, service := range services {
-		adjustBasicClusterService(service)
-	}
-
-	assert.Equal(t, time.Second, services[0].cfg.LogService.HAKeeperCheckInterval.Duration)
-	assert.Equal(t, 500*time.Millisecond, services[0].cfg.LogService.HAKeeperBootstrapRetryInterval.Duration)
-	assert.Equal(t, 100*time.Millisecond, services[1].cfg.HAKeeperRunningRetryInterval.Duration)
-	assert.Equal(t, 100*time.Millisecond, services[2].cfg.TNShardReadyRetryInterval.Duration)
-	assert.True(t, services[2].cfg.CN.AutoIncrement.EnableAutoIDCache)
+	require.NoError(t, err)
+	c.ForeachServices(func(service ServiceOperator) bool {
+		cfg := service.GetServiceConfig()
+		switch service.ServiceType() {
+		case metadata.ServiceType_LOG:
+			assert.Equal(t, time.Second, cfg.LogService.HAKeeperCheckInterval.Duration)
+			assert.Equal(t, 500*time.Millisecond, cfg.LogService.HAKeeperBootstrapRetryInterval.Duration)
+		case metadata.ServiceType_TN:
+			assert.Equal(t, 100*time.Millisecond, cfg.HAKeeperRunningRetryInterval.Duration)
+		case metadata.ServiceType_CN:
+			assert.Equal(t, 100*time.Millisecond, cfg.TNShardReadyRetryInterval.Duration)
+			assert.True(t, cfg.CN.AutoIncrement.EnableAutoIDCache)
+		}
+		return true
+	})
 }
 
 type panicTestReporter struct{}

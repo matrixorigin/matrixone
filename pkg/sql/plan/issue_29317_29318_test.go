@@ -21,6 +21,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/stretchr/testify/require"
 )
 
@@ -461,4 +463,66 @@ func TestPreparedRoundRebindsNestedFixedDecimalChild(t *testing.T) {
 	round = findPlanFunctionExpr(filled, "round")
 	require.NotNil(t, round)
 	require.Equal(t, int32(types.T_float64), round.GetF().Args[0].Typ.Id, round.String())
+}
+
+func TestPreparedRoundAndTruncateKeepRuntimeValueDomain(t *testing.T) {
+	for _, name := range []string{"round", "truncate"} {
+		t.Run(name, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+				"prepare p from 'select "+name+"(?,?)'")
+			require.NoError(t, err)
+			template := prepared.GetDcl().GetPrepare().Plan
+			require.Equal(t, []int32{0, 1}, PreparedPlanNumericFallbackParamPositions(template),
+				"value overload and integer precision each require execution-time source decoding")
+			fn := findPlanFunctionExpr(template, name)
+			require.NotNil(t, fn)
+			require.Equal(t, int32(types.T_float64), fn.GetF().Args[0].Typ.Id, fn.String())
+			require.Equal(t, int32(types.T_int64), fn.GetF().Args[1].Typ.Id, fn.String())
+
+			textValue := ParamValue{
+				Value: "1.46", SourceType: types.T_varchar.ToType(),
+				HasSourceType: true, EnableNumericPrefix: true,
+			}
+			filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+				context.Background(), template, []any{textValue, int64(1)})
+			require.NoError(t, err)
+			require.True(t, specialized)
+			fn = findPlanFunctionExpr(filled, name)
+			require.NotNil(t, fn)
+			require.True(t, types.T(fn.GetF().Args[0].Typ.Id).IsDecimal(), fn.String(),
+				"numeric text with a complete decimal spelling should keep its exact domain")
+
+			decimalValue := ParamValue{
+				Value: "1.46", PrepareParamKind: vector.PrepareParamDecimal,
+			}
+			filled, specialized, err = FillValuesOfParamsInPlanWithSpecialization(
+				context.Background(), template, []any{decimalValue, int64(1)})
+			require.NoError(t, err)
+			require.True(t, specialized)
+			fn = findPlanFunctionExpr(filled, name)
+			require.NotNil(t, fn)
+			require.True(t, types.T(fn.GetF().Args[0].Typ.Id).IsDecimal(), fn.String())
+
+			explicit, err := runOneStmt(NewMockOptimizer(false), t,
+				"prepare p from 'select "+name+"(cast(? as decimal(10,2)),1)'")
+			require.NoError(t, err)
+			explicitPlan := explicit.GetDcl().GetPrepare().Plan
+			require.Empty(t, PreparedPlanNumericFallbackParamPositions(explicitPlan))
+
+			for _, valueExpr := range []string{"cast(? as decimal(10,2))", "(select cast(? as decimal(10,2)))"} {
+				stmt, parseErr := parsers.ParseOne(context.Background(), dialect.MYSQL,
+					"select "+name+"("+valueExpr+",1)", 1)
+				require.NoError(t, parseErr)
+				mock := NewMockOptimizer(false)
+				source := types.T_varchar.ToType()
+				bound, bindErr := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
+					[]PreparedSourceBinding{{Position: 0, Type: source}},
+					[]any{ParamValue{Value: "1.46", SourceType: source, HasSourceType: true}})
+				require.NoError(t, bindErr)
+				require.False(t, bound.ValueDependent,
+					"an explicit numeric cast fixes the overload without inspecting text: %s", valueExpr)
+				stmt.Free()
+			}
+		})
+	}
 }

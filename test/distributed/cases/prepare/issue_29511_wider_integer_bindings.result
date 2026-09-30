@@ -1,0 +1,112 @@
+drop database if exists issue_29511_filters;
+create database issue_29511_filters;
+use issue_29511_filters;
+create table lookup_key(id int primary key, u bigint unsigned);
+insert into lookup_key select result, result from generate_series(1, 20000) g;
+prepare signed_key from 'select count(*) from lookup_key where id = ?';
+set @key = cast(12345 as signed);
+explain force execute signed_key using @key;
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on issue_29511_filters.lookup_key  𝄀
+              Filter Cond: (lookup_key.id = cast(cast('12345' AS BIGINT) AS INT))  𝄀
+              Block Filter Cond: (lookup_key.id = cast(cast('12345' AS BIGINT) AS INT))
+explain analyze force execute signed_key using @key;
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=4 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64.00 KiB (min=64.00 KiB, max=64.00 KiB)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on issue_29511_filters.lookup_key  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=1 outputRows=1 (min=1, max=1) InputSize=4 bytes OutputSize=4 bytes ReadSize=64.33 KiB|0 bytes|32.16 KiB MemorySize=9 bytes (min=9 bytes, max=9 bytes)  𝄀
+              Filter Cond: (lookup_key.id = cast(cast('12345' AS BIGINT) AS INT))  𝄀
+              Block Filter Cond: (lookup_key.id = cast(cast('12345' AS BIGINT) AS INT))
+execute signed_key using @key;
+➤ count(*)[-5,64,0]  𝄀
+1
+set @key = cast(4294967296 as signed);
+explain force execute signed_key using @key;
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on issue_29511_filters.lookup_key  𝄀
+              Filter Cond: (cast(lookup_key.id AS BIGINT) = cast('4294967296' AS BIGINT))
+              -- HINT: Cast expression may prevent index usage
+execute signed_key using @key;
+➤ count(*)[-5,64,0]  𝄀
+0
+set @key = cast(-1 as signed);
+explain force execute signed_key using @key;
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on issue_29511_filters.lookup_key  𝄀
+              Filter Cond: (lookup_key.id = cast(cast('-1' AS BIGINT) AS INT))  𝄀
+              Block Filter Cond: (lookup_key.id = cast(cast('-1' AS BIGINT) AS INT))
+execute signed_key using @key;
+➤ count(*)[-5,64,0]  𝄀
+0
+set @key = cast(12346 as signed);
+execute signed_key using @key;
+➤ count(*)[-5,64,0]  𝄀
+1
+deallocate prepare signed_key;
+prepare unsigned_key from 'select count(*) from lookup_key where u = ?';
+set @key = cast(12345 as signed);
+explain force execute unsigned_key using @key;
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on issue_29511_filters.lookup_key  𝄀
+              Filter Cond: (lookup_key.u = cast(cast('12345' AS BIGINT) AS BIGINT UNSIGNED))  𝄀
+              Block Filter Cond: (lookup_key.u = cast(cast('12345' AS BIGINT) AS BIGINT UNSIGNED))
+explain analyze force execute unsigned_key using @key;
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64.00 KiB (min=64.00 KiB, max=64.00 KiB)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on issue_29511_filters.lookup_key  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=8192 outputRows=1 (min=1, max=1) InputSize=64.00 KiB OutputSize=8 bytes ReadSize=32.07 KiB|0 bytes|32.07 KiB MemorySize=72.01 KiB (min=72.01 KiB, max=72.01 KiB)  𝄀
+              Filter Cond: (lookup_key.u = cast(cast('12345' AS BIGINT) AS BIGINT UNSIGNED))  𝄀
+              Block Filter Cond: (lookup_key.u = cast(cast('12345' AS BIGINT) AS BIGINT UNSIGNED))
+execute unsigned_key using @key;
+➤ count(*)[-5,64,0]  𝄀
+1
+set @key = cast(-1 as signed);
+explain force execute unsigned_key using @key;
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on issue_29511_filters.lookup_key  𝄀
+              Filter Cond: (cast(lookup_key.u AS DECIMAL128(38, 0)) = cast(cast('-1' AS BIGINT) AS DECIMAL128(38, 0)))
+              -- HINT: Cast expression may prevent index usage
+execute unsigned_key using @key;
+➤ count(*)[-5,64,0]  𝄀
+0
+set @key = cast(9007199254740993 as signed);
+explain force execute unsigned_key using @key;
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on issue_29511_filters.lookup_key  𝄀
+              Filter Cond: (cast(lookup_key.u AS DECIMAL128(38, 0)) = cast(cast('9007199254740993' AS BIGINT) AS DECIMAL128(38, 0)))
+              -- HINT: Cast expression may prevent index usage
+execute unsigned_key using @key;
+➤ count(*)[-5,64,0]  𝄀
+0
+set @key = cast(12346 as signed);
+execute unsigned_key using @key;
+➤ count(*)[-5,64,0]  𝄀
+1
+deallocate prepare unsigned_key;
+drop database issue_29511_filters;
