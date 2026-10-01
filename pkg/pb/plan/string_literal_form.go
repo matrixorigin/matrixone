@@ -374,21 +374,24 @@ const (
 // execution contracts.
 // JSONScalarLiteralContracts requires MORPC v104 because older executors
 // decode JSON-typed Sval literals as VARCHAR rather than encoded JSON.
+// LowPrecisionFloatIntegerArguments requires MORPC v105 because older
+// executors reject bf16/float16/float8/float4 sources of private CAST 5..8.
 type RemoteExpressionFeatures struct {
-	JSONScalarLiteralContracts      bool
-	JSONInputContracts              bool
-	YearBitCast                     bool
-	NumericPrefix                   bool
-	JSONComparisonParam             bool
-	MixedJSONBooleanEquality        bool
-	FormatNumericArguments          bool
-	TypedConversionFunctions        bool
-	IntegerArithmeticDomains        bool
-	RowDependentConvBases           bool
-	ASCIIInt32Result                bool
-	StringNumericResultContracts    bool
-	BoundedConditionalStringDomains bool
-	IPFunctionSemantics             bool
+	LowPrecisionFloatIntegerArguments bool
+	JSONScalarLiteralContracts        bool
+	JSONInputContracts                bool
+	YearBitCast                       bool
+	NumericPrefix                     bool
+	JSONComparisonParam               bool
+	MixedJSONBooleanEquality          bool
+	FormatNumericArguments            bool
+	TypedConversionFunctions          bool
+	IntegerArithmeticDomains          bool
+	RowDependentConvBases             bool
+	ASCIIInt32Result                  bool
+	StringNumericResultContracts      bool
+	BoundedConditionalStringDomains   bool
+	IPFunctionSemantics               bool
 	// IntegerParameterCoercion requires v85 for private CAST 5..8.
 	IntegerParameterCoercion          bool
 	TOBase64ResultContracts           bool
@@ -408,7 +411,7 @@ type RemoteExpressionFeatures struct {
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
-	return features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
+	return features.LowPrecisionFloatIntegerArguments || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
 		features.FormatNumericArguments ||
@@ -985,6 +988,9 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 						return err
 					}
 					features.IntegerParameterCoercion = true
+					if isPlanLowPrecisionFloatType(current.GetF().Args[0].Typ.Id) {
+						features.LowPrecisionFloatIntegerArguments = true
+					}
 				}
 				// PLUS/MINUS/MULTI are stable function IDs 10/11/12.
 				if (id >= 10 && id <= 12 && overload == 2) || (id == 11 && overload == 3) {
@@ -1240,6 +1246,11 @@ func isNumericFormatFunction(function *Function) (bool, error) {
 // that package (container/types itself depends on pb/plan). The IDs are part
 // of the plan wire contract and include BIT, integer, floating-point and
 // decimal families.
+// isPlanLowPrecisionFloatType reports bf16, float16, float8 and float4.
+func isPlanLowPrecisionFloatType(id int32) bool {
+	return id >= 73 && id <= 76
+}
+
 func isPlanNumericType(id int32) bool {
 	switch id {
 	case 11, // BIT

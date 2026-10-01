@@ -174,7 +174,8 @@ func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requir
 		}
 	}
 	if features.IPFunctionSemantics || features.TOBase64ResultContracts || features.IPFunctionResultContracts ||
-		features.ExpressionResultMetadataContracts || features.JSONInputContracts || features.YearBitCast || features.JSONScalarLiteralContracts {
+		features.ExpressionResultMetadataContracts || features.JSONInputContracts || features.YearBitCast || features.JSONScalarLiteralContracts ||
+		features.LowPrecisionFloatIntegerArguments {
 		if err = validateIPFunctionDestination(proc, p); err != nil {
 			return nil, err
 		}
@@ -2299,6 +2300,9 @@ func validateRemoteExpressionPipelineProtocol(
 	protocolVersion, hasProtocolVersion := int64(0), false
 	if proc != nil {
 		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
+	}
+	if features.LowPrecisionFloatIntegerArguments && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion105) {
+		return moerr.NewNotSupportedNoCtx("low-precision float integer arguments require MORPC protocol version 105")
 	}
 	if features.JSONScalarLiteralContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion104) {
 		return moerr.NewNotSupportedNoCtx("typed JSON scalar literals require MORPC protocol version 104")

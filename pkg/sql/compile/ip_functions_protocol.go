@@ -52,6 +52,9 @@ func validateIPFunctionDestination(proc *process.Process, p *pipeline.Pipeline) 
 }
 
 func requiredExpressionContractProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
+	if features.LowPrecisionFloatIntegerArguments {
+		return defines.MORPCVersion105
+	}
 	if features.JSONScalarLiteralContracts {
 		return defines.MORPCVersion104
 	}
