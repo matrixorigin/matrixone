@@ -17,7 +17,9 @@ package test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -36,12 +38,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	testutil2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 )
 
 type snapshotAdvanceTombstoneMode int
@@ -63,15 +69,18 @@ type snapshotAdvanceHarness struct {
 	deletedPKs []int32
 }
 
-func newSnapshotAdvanceHarness(t *testing.T, mode snapshotAdvanceTombstoneMode) *snapshotAdvanceHarness {
+func newSnapshotAdvanceHarness(t *testing.T, mode snapshotAdvanceTombstoneMode, stringKeys ...string) *snapshotAdvanceHarness {
 	t.Helper()
 
 	const (
 		databaseName = "db1"
 		tableName    = "test1"
-		rowCount     = 20
 	)
 
+	rowCount := 20
+	if len(stringKeys) > 0 {
+		rowCount = len(stringKeys)
+	}
 	ctx, cancel := context.WithTimeout(
 		context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(0)),
 		time.Minute,
@@ -85,6 +94,9 @@ func newSnapshotAdvanceHarness(t *testing.T, mode snapshotAdvanceTombstoneMode) 
 		schema: catalog2.MockSchemaEnhanced(1, 0, 2),
 	}
 	h.schema.Name = tableName
+	if len(stringKeys) > 0 {
+		h.schema.ColDefs[0].Type = types.T_varchar.ToType()
+	}
 
 	createTxn := pack.StartCNTxn()
 	_, h.rel = pack.CreateDBAndTable(createTxn, databaseName, h.schema)
@@ -95,6 +107,12 @@ func newSnapshotAdvanceHarness(t *testing.T, mode snapshotAdvanceTombstoneMode) 
 	_, h.rel, insertTxn, err = pack.D.GetTable(ctx, databaseName, tableName)
 	require.NoError(t, err)
 	insertBat := containers.ToCNBatch(catalog2.MockBatch(h.schema, rowCount))
+	if len(stringKeys) > 0 {
+		insertBat.Vecs[0].Reset(h.schema.ColDefs[0].Type)
+		for _, key := range stringKeys {
+			require.NoError(t, vector.AppendBytes(insertBat.Vecs[0], []byte(key), false, pack.Mp))
+		}
+	}
 	require.NoError(t, testutil.WriteToRelation(ctx, insertTxn, h.rel, insertBat, false, true))
 	require.NoError(t, insertTxn.Commit(ctx))
 
@@ -122,7 +140,9 @@ func newSnapshotAdvanceHarness(t *testing.T, mode snapshotAdvanceTombstoneMode) 
 	require.NoError(t, err)
 
 	uncommittedDeletes := h.collectDeletes(h.txn, h.rel, rowCount/2)
-	h.deletedPKs = slices.Clone(vector.MustFixedColNoTypeCheck[int32](uncommittedDeletes.Vecs[1]))
+	if len(stringKeys) == 0 {
+		h.deletedPKs = slices.Clone(vector.MustFixedColNoTypeCheck[int32](uncommittedDeletes.Vecs[1]))
+	}
 	switch mode {
 	case snapshotAdvanceInMemoryTombstone:
 		require.NoError(t, testutil.WriteToRelation(
@@ -169,9 +189,10 @@ func (h *snapshotAdvanceHarness) collectDeletes(
 	deletes := batch.NewWithSize(2)
 	deletes.Attrs = []string{catalog.Row_ID, h.schema.GetPrimaryKey().Name}
 	deletes.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	deletes.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	deletes.Vecs[1] = vector.NewVec(h.schema.GetPrimaryKey().Type)
 
 	ret := testutil.EmptyBatchFromSchema(h.schema)
+	defer ret.Clean(h.pack.Mp)
 	for deletes.RowCount() < limit {
 		done, err := reader.Read(
 			h.ctx,
@@ -193,12 +214,7 @@ func (h *snapshotAdvanceHarness) collectDeletes(
 				false,
 				h.pack.Mp,
 			))
-			require.NoError(h.t, vector.AppendFixed(
-				deletes.Vecs[1],
-				vector.GetFixedAtNoTypeCheck[int32](ret.Vecs[0], i),
-				false,
-				h.pack.Mp,
-			))
+			require.NoError(h.t, deletes.Vecs[1].UnionOne(ret.Vecs[0], int64(i), h.pack.Mp))
 		}
 		deletes.SetRowCount(deletes.Vecs[0].Length())
 	}
@@ -584,4 +600,59 @@ func TestTransferPartialIORecovery(t *testing.T) {
 
 		})
 	}
+}
+
+// 129 maximum-width PKs cross the byte boundary and leave a one-row tail;
+// cardinality is the minimum boundary input, not a performance workload.
+func TestRCMemoryTransferWidePKBoundary(t *testing.T) {
+	keys := make([]string, 258)
+	suffix := strings.Repeat("x", types.MaxVarcharLen-8)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("%08d", i) + suffix
+	}
+	h := newSnapshotAdvanceHarness(t, snapshotAdvanceInMemoryTombstone, keys...)
+	defer h.close()
+	// Read the exact target identities through a separate transaction, then
+	// inspect deletion entries: zero visible rows alone could mask bad pairing.
+	require.NoError(t, h.pack.T.GetDB().FlushTable(h.ctx, catalog.System_Account, h.rel.GetDBID(h.ctx), h.rel.GetTableID(h.ctx), types.TimestampToTS(h.pack.D.Now())))
+	testutil2.MergeBlocks(t, 0, h.pack.T.GetDB(), "db1", h.schema, false)
+	_, oracleRel, oracleTxn, err := h.pack.D.GetTable(h.ctx, "db1", "test1")
+	require.NoError(t, err)
+	defer oracleTxn.Rollback(h.ctx)
+	oracle := h.collectDeletes(oracleTxn, oracleRel, len(keys)/2)
+	defer oracle.Clean(h.pack.Mp)
+	expected := make(map[string]types.Rowid, oracle.RowCount())
+	for i, rid := range vector.MustFixedColNoTypeCheck[types.Rowid](oracle.Vecs[0]) {
+		expected[string(oracle.Vecs[1].GetBytesAt(i))] = rid
+	}
+	var before, after dto.Metric
+	histogram := v2.BatchTransferTombstonesDurationHistogram.(prometheus.Metric)
+	require.NoError(t, histogram.Write(&before))
+	_, err = databranchutils.AdvanceLineageSnapshot(h.ctx, h.txn)
+	require.NoError(t, err)
+	require.NoError(t, histogram.Write(&after))
+	require.Equal(t, before.GetHistogram().GetSampleCount()+2, after.GetHistogram().GetSampleCount(), "byte-triggered batch plus one-row tail")
+
+	checked := 0
+	ws := h.txn.GetWorkspace().(*disttae.Transaction)
+	ws.ForEachTableWrites(h.rel.GetDBID(h.ctx), h.rel.GetTableID(h.ctx), int(ws.WriteOffset()), func(e disttae.Entry) {
+		if e.Type() != disttae.DELETE || e.FileName() != "" {
+			return
+		}
+		for i, rid := range vector.MustFixedColNoTypeCheck[types.Rowid](e.Bat().Vecs[0]) {
+			key := string(e.Bat().Vecs[1].GetBytesAt(i))
+			want, ok := expected[key]
+			require.True(t, ok)
+			require.Equal(t, want, rid)
+			checked++
+		}
+	})
+	require.Equal(t, len(keys)/2, checked)
+	require.Zero(t, h.countRows(h.txn, h.rel))
+	require.NoError(t, h.txn.Commit(h.ctx))
+	h.txn = nil
+	_, rel, txn, err := h.pack.D.GetTable(h.ctx, "db1", "test1")
+	require.NoError(t, err)
+	h.txn, h.rel = txn, rel
+	require.Zero(t, h.countRows(txn, rel))
 }

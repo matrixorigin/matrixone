@@ -316,7 +316,8 @@ func transferTombstones(
 				return
 			}
 
-			if transferIntents.Length() >= 8192 {
+			if transferBatchLimitReached(transferIntents.Length(),
+				transferIntents.Size()+searchPKColumn.Size()+searchEntryPos.Size()+searchBatPos.Size(), true) {
 				transferCnt += transferIntents.Length()
 				if err = batchTransferToTombstones(
 					ctx,
