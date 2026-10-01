@@ -97,7 +97,7 @@ func TestCompileParallelDistinctSetMergesWorkerResults(t *testing.T) {
 	}
 }
 
-func TestCompileParallelIntersectAllKeepsWorkerResults(t *testing.T) {
+func TestCompileParallelIntersectAllUsesSingleMultiplicityOwner(t *testing.T) {
 	c := newDistinctSetTestCompile(t)
 	node := newParallelDistinctSetTestNode(plan.Node_INTERSECT_ALL)
 
@@ -107,17 +107,20 @@ func TestCompileParallelIntersectAllKeepsWorkerResults(t *testing.T) {
 		newDistinctSetTestScopes(c, 2),
 		plan.Node_INTERSECT_ALL,
 	)
-	require.Len(t, result, 2)
-	for _, scope := range result {
-		require.IsType(t, &intersectall.IntersectAll{}, scope.RootOp)
+	t.Cleanup(func() {
+		for _, scope := range result {
+			scope.FreeOperator(c)
+			scope.release()
+		}
+		c.proc.Free()
+	})
+	require.Len(t, result, 1)
+	require.IsType(t, &intersectall.IntersectAll{}, result[0].RootOp)
+	require.Len(t, result[0].PreScopes, 2)
+	for _, input := range result[0].PreScopes {
+		require.Len(t, input.PreScopes, 2, "parallel producers must each feed the owner once")
 	}
 	require.False(t, c.anal.isFirst)
-
-	for _, scope := range result {
-		scope.FreeOperator(c)
-		scope.release()
-	}
-	c.proc.Free()
 }
 
 func TestCompileParallelMinusAllUsesSingleMultiplicityOwner(t *testing.T) {

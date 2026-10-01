@@ -6351,8 +6351,8 @@ func (c *Compile) compileTpMinusAndIntersect(node *plan.Node, left []*Scope, rig
 }
 
 func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
-	if nodeType == plan.Node_MINUS_ALL {
-		// Multiplicity subtraction needs one owner of every occurrence from both
+	if nodeType == plan.Node_MINUS_ALL || nodeType == plan.Node_INTERSECT_ALL {
+		// Multiset operations need one owner of every occurrence from both
 		// inputs. The existing parallel set-op path broadcasts rows to workers;
 		// using it here would multiply the result cardinality.
 		return c.compileTpMinusAndIntersect(
