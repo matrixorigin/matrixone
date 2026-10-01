@@ -1324,6 +1324,142 @@ func handleCmdFieldList(ses FeSession, execCtx *ExecCtx, icfl *InternalCmdFieldL
 	return err
 }
 
+// staticSetExprValue recognizes only literal SET expressions. Keeping this
+// deliberately small lets transaction-characteristic preflight validate
+// obvious failures without evaluating user variables, parameters, subqueries,
+// or functions ahead of their original order.
+func staticSetExprValue(expr tree.Expr) (value interface{}, static bool, isDefault bool) {
+	switch v := expr.(type) {
+	case *tree.DefaultVal:
+		return nil, true, true
+	case *tree.NumVal:
+		switch v.ValType {
+		case tree.P_bool:
+			return v.Bool(), true, false
+		case tree.P_int64:
+			value, _ = v.Int64()
+			return value, true, false
+		case tree.P_uint64:
+			value, _ = v.Uint64()
+			return value, true, false
+		case tree.P_float64:
+			value, _ = v.Float64()
+			return value, true, false
+		case tree.P_null:
+			return nil, true, false
+		case tree.P_char:
+			return v.String(), true, false
+		default:
+			return nil, false, false
+		}
+	default:
+		return nil, false, false
+	}
+}
+
+func transactionReadOnlyBooleanValue(expr tree.Expr) (int64, bool) {
+	value, ok := expr.(*tree.NumVal)
+	if !ok || value.ValType != tree.P_bool {
+		return 0, false
+	}
+	if value.Bool() {
+		return 1, true
+	}
+	return 0, true
+}
+
+// validateTransactionAssignmentScopes rejects unsupported transaction
+// characteristic scopes before any assignment in the SET list is applied.
+// In particular, an unqualified @@transaction_read_only must not silently
+// become a SESSION assignment.
+func validateTransactionAssignmentScopes(
+	ctx context.Context,
+	sv *tree.SetVar,
+) error {
+	for _, assign := range sv.Assignments {
+		if scope, ok := transactionIsolationAssignmentScope(assign); ok {
+			switch scope {
+			case tree.TransactionScopeNext, tree.TransactionScopeSession, tree.TransactionScopeGlobal:
+			default:
+				return moerr.NewInvalidInputf(ctx, "unsupported transaction scope %d", scope)
+			}
+		}
+		if scope, ok := transactionReadOnlyAssignmentScope(assign); ok {
+			switch scope {
+			case tree.TransactionScopeSession, tree.TransactionScopeGlobal:
+			case tree.TransactionScopeNext:
+				return moerr.NewNotSupported(ctx,
+					"transaction access mode is only supported for SESSION scope")
+			default:
+				return moerr.NewInvalidInputf(ctx, "unsupported transaction scope %d", scope)
+			}
+		}
+	}
+	return nil
+}
+
+// validateStaticTransactionAssignments is a bounded atomicity guard. It
+// prevalidates a leading run of literal/DEFAULT assignments so a mixed SET
+// cannot first change read-only state and then fail on an obviously unsupported
+// isolation level. Unrelated literal assignments remain part of that prefix;
+// the first dynamic expression ends preflight, preserving expression
+// evaluation order for the wider SET language instead of attempting general
+// SET atomicity here.
+func validateStaticTransactionAssignments(
+	ctx context.Context,
+	ses *Session,
+	sv *tree.SetVar,
+	activeTxnAtStart bool,
+) error {
+	for _, assign := range sv.Assignments {
+		value, static, isDefault := staticSetExprValue(assign.Value)
+		if !static {
+			return nil
+		}
+
+		isolationScope, isolation := transactionIsolationAssignmentScope(assign)
+		readOnlyScope, readOnly := transactionReadOnlyAssignmentScope(assign)
+		if !isolation && !readOnly {
+			continue
+		}
+		if (isolation && isolationScope == tree.TransactionScopeGlobal) ||
+			(readOnly && readOnlyScope == tree.TransactionScopeGlobal) {
+			if err := doCheckRole(ctx, ses); err != nil {
+				return err
+			}
+		}
+		if isDefault {
+			if isolation && isolationScope == tree.TransactionScopeNext && activeTxnAtStart {
+				return moerr.NewCantChangeTxCharacteristics(ctx)
+			}
+			continue
+		}
+		if readOnly {
+			if normalized, ok := transactionReadOnlyBooleanValue(assign.Value); ok {
+				value = normalized
+			}
+		}
+		def, ok := gSysVarsDefs[assign.Name]
+		if !ok {
+			return moerr.NewInternalErrorf(ctx,
+				"transaction system variable %q is not registered", assign.Name)
+		}
+		converted, err := def.GetType().Convert(value)
+		if err != nil {
+			return err
+		}
+		if isolation {
+			if _, err = txnIsolationFromSystemValue(ctx, converted); err != nil {
+				return err
+			}
+			if isolationScope == tree.TransactionScopeNext && activeTxnAtStart {
+				return moerr.NewCantChangeTxCharacteristics(ctx)
+			}
+		}
+	}
+	return nil
+}
+
 func doSetVar(
 	ses *Session,
 	execCtx *ExecCtx,
@@ -1337,6 +1473,19 @@ func doSetVar(
 				return moerr.NewNotSupported(execCtx.reqCtx,
 					"prepared multi-assignment SET supports user variables only")
 			}
+		}
+	}
+	if err := validateTransactionAssignmentScopes(execCtx.reqCtx, sv); err != nil {
+		return err
+	}
+	if !preparedExpression {
+		if err := validateStaticTransactionAssignments(
+			execCtx.reqCtx,
+			ses,
+			sv,
+			execCtx.txnOpt.activeTxnAtStartKnown && execCtx.txnOpt.activeTxnAtStart,
+		); err != nil {
+			return err
 		}
 	}
 
@@ -1416,15 +1565,26 @@ func doSetVar(
 		}
 
 		if systemVar, exists := gSysVarsDefs[assign.Name]; exists {
-			if isDefault, isBool := value.(bool); isBool && isDefault {
+			_, isDefault := assign.Value.(*tree.DefaultVal)
+			if isDefault {
 				if scope, isTxnIsolation := transactionIsolationAssignmentScope(assign); isTxnIsolation {
 					value, evalErr = transactionIsolationDefaultValue(
 						execCtx.reqCtx, ses, scope)
 					if evalErr != nil {
 						return evaluatedAssignment{}, evalErr
 					}
+				} else if scope, isTxnReadOnly := transactionReadOnlyAssignmentScope(assign); isTxnReadOnly {
+					value, evalErr = transactionReadOnlyDefaultValue(
+						execCtx.reqCtx, ses, scope)
+					if evalErr != nil {
+						return evaluatedAssignment{}, evalErr
+					}
 				} else {
 					value = systemVar.Default
+				}
+			} else if _, isTxnReadOnly := transactionReadOnlyAssignmentScope(assign); isTxnReadOnly {
+				if boolValue, isBool := transactionReadOnlyBooleanValue(assign.Value); isBool {
+					value = boolValue
 				}
 			}
 		}
@@ -1575,6 +1735,19 @@ func doSetVar(
 				ses.markMigrationSystemVarReplayable(
 					migrationNextTxnIsolationKey, !preparedExpression && sql != "" && execCtx.singleStatementQuery)
 				return nil
+			case tree.TransactionScopeSession:
+				return setVarFunc(true, false, name, value, sql)
+			case tree.TransactionScopeGlobal:
+				return setVarFunc(true, true, name, value, sql)
+			default:
+				return moerr.NewInvalidInputf(execCtx.reqCtx,
+					"unsupported transaction scope %d", scope)
+			}
+		} else if scope, isTxnReadOnly := transactionReadOnlyAssignmentScope(assign); isTxnReadOnly {
+			switch scope {
+			case tree.TransactionScopeNext:
+				return moerr.NewNotSupported(execCtx.reqCtx,
+					"transaction access mode is only supported for SESSION scope")
 			case tree.TransactionScopeSession:
 				return setVarFunc(true, false, name, value, sql)
 			case tree.TransactionScopeGlobal:
@@ -1764,42 +1937,61 @@ func handleSetTransaction(ses *Session, execCtx *ExecCtx, stmt *tree.SetTransact
 		}
 	}
 
+	var accessMode string
+	var readOnly int64
 	if accessCharacteristic != nil {
-		var accessMode string
 		switch accessCharacteristic.Access {
 		case tree.ACCESS_MODE_READ_ONLY:
 			accessMode = "READ ONLY"
+			readOnly = 1
 		case tree.ACCESS_MODE_READ_WRITE:
 			accessMode = "READ WRITE"
 		default:
 			return moerr.NewInvalidInputf(execCtx.reqCtx,
 				"unsupported transaction access mode %d", accessCharacteristic.Access)
 		}
-		return moerr.NewNotSupported(execCtx.reqCtx,
-			"transaction access mode "+accessMode+" is not supported")
-	}
-	if isolationCharacteristic == nil {
-		return moerr.NewInvalidInput(execCtx.reqCtx,
-			"transaction characteristic list must not be empty")
+		if stmt.Scope != tree.TransactionScopeSession {
+			return moerr.NewNotSupported(execCtx.reqCtx,
+				"transaction access mode "+accessMode+" is only supported for SESSION scope")
+		}
 	}
 
 	var value string
 	var isolation pbtxn.TxnIsolation
-	switch isolationCharacteristic.Isolation {
-	case tree.ISOLATION_LEVEL_REPEATABLE_READ:
-		value = "REPEATABLE-READ"
-		isolation = pbtxn.TxnIsolation_SI
-	case tree.ISOLATION_LEVEL_READ_COMMITTED:
-		value = "READ-COMMITTED"
-		isolation = pbtxn.TxnIsolation_RC
-	case tree.ISOLATION_LEVEL_READ_UNCOMMITTED:
-		return moerr.NewNotSupported(execCtx.reqCtx,
-			"transaction isolation level READ-UNCOMMITTED is not supported")
-	case tree.ISOLATION_LEVEL_SERIALIZABLE:
-		return moerr.NewNotSupported(execCtx.reqCtx,
-			"transaction isolation level SERIALIZABLE is not supported")
-	default:
-		return moerr.NewInvalidInputf(execCtx.reqCtx, "unsupported transaction isolation level %d", isolationCharacteristic.Isolation)
+	if isolationCharacteristic != nil {
+		switch isolationCharacteristic.Isolation {
+		case tree.ISOLATION_LEVEL_REPEATABLE_READ:
+			value = "REPEATABLE-READ"
+			isolation = pbtxn.TxnIsolation_SI
+		case tree.ISOLATION_LEVEL_READ_COMMITTED:
+			value = "READ-COMMITTED"
+			isolation = pbtxn.TxnIsolation_RC
+		case tree.ISOLATION_LEVEL_READ_UNCOMMITTED:
+			return moerr.NewNotSupported(execCtx.reqCtx,
+				"transaction isolation level READ-UNCOMMITTED is not supported")
+		case tree.ISOLATION_LEVEL_SERIALIZABLE:
+			return moerr.NewNotSupported(execCtx.reqCtx,
+				"transaction isolation level SERIALIZABLE is not supported")
+		default:
+			return moerr.NewInvalidInputf(execCtx.reqCtx, "unsupported transaction isolation level %d", isolationCharacteristic.Isolation)
+		}
+	}
+
+	if accessCharacteristic != nil {
+		// Connector/J uses SET SESSION TRANSACTION READ ONLY/READ WRITE for
+		// Connection.setReadOnly. Keep both MySQL spellings synchronized so
+		// frameworks that inspect either variable observe the negotiated mode.
+		if err := ses.SetSessionSysVar(
+			execCtx.reqCtx, transactionReadOnlySystemVariable, readOnly); err != nil {
+			return err
+		}
+	}
+	if isolationCharacteristic == nil {
+		if accessCharacteristic == nil {
+			return moerr.NewInvalidInput(execCtx.reqCtx,
+				"transaction characteristic list must not be empty")
+		}
+		return nil
 	}
 
 	switch stmt.Scope {
@@ -2860,7 +3052,7 @@ func createPrepareStmtInSession(
 	prepareControl := preparePlan.GetDcl().GetPrepare()
 	_, isQueryPlan := prepareControl.Plan.Plan.(*plan.Plan_Query)
 	if !executionSes.IsBackgroundSession() &&
-		isQueryPlan &&
+		isQueryPlan && len(prepareControl.ParamTypes) == 0 &&
 		shouldCachePrepareCompile(prepareControl.Plan) &&
 		(!prepareSchedulingIntent.Explicit ||
 			schedule.ValidateSchedulingIntent(prepareSchedulingIntent) != "") {
@@ -2900,23 +3092,25 @@ func createPrepareStmtInSession(
 	fixedIntegerParamPositions, hasPaginationParams, hasLagLeadParams :=
 		preparedFixedIntegerParamPositions(prepareControl.Plan)
 	prepareStmt := &PrepareStmt{
-		groupConcatMaxLenFloor: groupConcatFloor,
-		Name:                   preparePlan.GetDcl().GetPrepare().GetName(),
-		Sql:                    originSQL,
-		compile:                comp,
-		PreparePlan:            preparePlan,
-		PrepareStmt:            saveStmt,
-		NativeMode:             owner.sqlModeHasMatrixOneNative(),
-		OnlyFullGroupBy:        owner.sqlModeHasOnlyFullGroupBy(),
-		BoolSumAvg:             owner.sqlModeHasEnableBoolSumAvg(),
-		NoUnsignedSubtraction:  owner.sqlModeHasNoUnsignedSubtraction(),
-		sqlModeFlagsSet:        true,
-		remapDb:                maps.Clone(execCtx.remapDb),
-		defaultDatabase:        executionSes.GetTxnCompileCtx().GetDatabase(),
-		tempTableVersion:       owner.GetTempTableVersion(),
-		ddlVersion:             owner.getDDLVersion(),
-		cloneSQL:               cloneSQL,
-		protocolVersion:        protocolVersion,
+		groupConcatMaxLenFloor:   groupConcatFloor,
+		Name:                     preparePlan.GetDcl().GetPrepare().GetName(),
+		Sql:                      originSQL,
+		compile:                  comp,
+		PreparePlan:              preparePlan,
+		PrepareStmt:              saveStmt,
+		NativeMode:               owner.sqlModeHasMatrixOneNative(),
+		OnlyFullGroupBy:          owner.sqlModeHasOnlyFullGroupBy(),
+		BoolSumAvg:               owner.sqlModeHasEnableBoolSumAvg(),
+		NoUnsignedSubtraction:    owner.sqlModeHasNoUnsignedSubtraction(),
+		divPrecisionIncrement:    owner.currentDivPrecisionIncrement(),
+		sqlModeFlagsSet:          true,
+		divPrecisionIncrementSet: true,
+		remapDb:                  maps.Clone(execCtx.remapDb),
+		defaultDatabase:          executionSes.GetTxnCompileCtx().GetDatabase(),
+		tempTableVersion:         owner.GetTempTableVersion(),
+		ddlVersion:               owner.getDDLVersion(),
+		cloneSQL:                 cloneSQL,
+		protocolVersion:          protocolVersion,
 		numericOverloadParamPositions: plan2.PreparedPlanNumericFallbackParamPositions(
 			prepareControl.Plan),
 		bitCountOverloadParamPositions: plan2.PreparedPlanBitCountFallbackParamPositions(
@@ -2927,7 +3121,6 @@ func createPrepareStmtInSession(
 			prepareControl.Plan),
 		directResultParamPositions: plan2.PreparedPlanDirectResultParamPositions(
 			prepareControl.Plan),
-		directResultParamPositionsSet: true,
 		jsonComparisonParamPositions: plan2.PreparedJSONComparisonParamPositions(
 			prepareControl.Plan),
 		jsonMemberOfParamPositions: plan2.PreparedJSONMemberOfParamPositions(
@@ -2938,12 +3131,7 @@ func createPrepareStmtInSession(
 		getFromSendLongData:        make(map[int]struct{}),
 		schedulingSQLMode:          schedulingSQLMode,
 	}
-	prepareStmt.refreshNumericPrefixConsumer(
-		prepareControl.Plan, len(prepareControl.ParamTypes))
 	prepareStmt.refreshGenerateSeriesParamMetadata(prepareControl.Plan)
-	prepareStmt.refreshGeometrySRIDParamPositions(prepareControl.Plan)
-	prepareStmt.directResultParamPositions = plan2.PreparedPlanDirectResultParamPositions(prepareControl.Plan)
-	prepareStmt.directResultParamPositionsSet = true
 
 	_, ok := preparePlan.GetDcl().Control.(*plan.DataControl_Prepare)
 	if ok {
@@ -3146,7 +3334,10 @@ func handleCreateAccount(ses FeSession, execCtx *ExecCtx, ca *tree.CreateAccount
 		return b.err
 	}
 
-	bh := ses.GetBackgroundExec(execCtx.reqCtx)
+	bh := ses.GetBackgroundExec(
+		execCtx.reqCtx,
+		&BackgroundExecOption{forcePessimisticRC: true},
+	)
 	defer bh.Close()
 
 	err = bh.Exec(execCtx.reqCtx, "begin;")
@@ -3643,6 +3834,16 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 }
 
 func handleShowPublications(ses FeSession, execCtx *ExecCtx, sp *tree.ShowPublications) error {
+	if sp.Like != nil {
+		if _, parameterized := sp.Like.Right.(*tree.ParamExpr); parameterized {
+			// SQL EXECUTE can leave its owned parameter vector on the session
+			// process. A bare SHOW must never borrow that previous binding.
+			cw, ok := execCtx.cw.(*TxnComputationWrapper)
+			if !ok || !cw.ifIsExeccute {
+				return moerr.NewInvalidInput(execCtx.reqCtx, "SHOW PUBLICATIONS LIKE parameter requires prepared execution")
+			}
+		}
+	}
 	return doShowPublications(execCtx.reqCtx, ses.(*Session), sp)
 }
 
@@ -3891,9 +4092,71 @@ func buildPlanWithPrepareMode(
 	stmt tree.Statement,
 	forcePrepare bool,
 ) (*plan2.Plan, error) {
-	var ret *plan2.Plan
-	var err error
+	return buildPlanWithStats(reqCtx, ses, ctx, func() (*plan2.Plan, error) {
+		var ret *plan2.Plan
+		var err error
 
+		isPrepareStmt := forcePrepare
+		if ses != nil {
+			if len(ses.GetSql()) > 8 {
+				prefix := strings.ToLower(ses.GetSql()[:8])
+				isPrepareStmt = isPrepareStmt || prefix == "execute " || prefix == "prepare "
+			}
+		}
+		// Handle specific statement types
+		if s, ok := stmt.(*tree.Insert); ok {
+			if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
+				ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+
+		if ret != nil {
+			ret.IsPrepare = isPrepareStmt
+			if forcePrepare {
+				err = plan2.NormalizePrepareParamRefs(reqCtx, ret)
+			}
+			return ret, err
+		}
+
+		// Default handling of various statements
+		switch stmt := stmt.(type) {
+		case *tree.Select, *tree.ParenSelect, *tree.ValuesStatement,
+			*tree.Update, *tree.Delete, *tree.Insert, *tree.MultiInsert,
+			*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns, *tree.ShowColumnNumber,
+			*tree.ShowTableNumber, *tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex,
+			*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
+			opt := plan2.NewBaseOptimizer(ctx)
+			optimized, err := opt.Optimize(stmt, isPrepareStmt)
+			if err != nil {
+				return nil, err
+			}
+
+			ret = &plan2.Plan{
+				Plan: &plan2.Plan_Query{
+					Query: optimized,
+				},
+			}
+		default:
+			ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt)
+		}
+
+		if ret != nil {
+			ret.IsPrepare = isPrepareStmt
+			if forcePrepare && err == nil {
+				err = plan2.NormalizePrepareParamRefs(reqCtx, ret)
+			}
+		}
+		return ret, err
+	})
+}
+
+// Share request accounting and context ownership across ordinary and prepared
+// planning. Parameter binding changes the planner entry, not its trace lifetime.
+func buildPlanWithStats(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
+	build func() (*plan2.Plan, error)) (ret *plan2.Plan, err error) {
 	// A later statement in a multi-statement packet can reuse a compiler
 	// context whose process has already been released.  Planning does not
 	// require a transaction operator, so keep the tracing setup optional
@@ -3968,66 +4231,14 @@ func buildPlanWithPrepareMode(
 		stats.PlanEnd()
 	}()
 
-	isPrepareStmt := forcePrepare
 	if ses != nil {
-		accId, err := defines.GetAccountId(reqCtx)
-		if err != nil {
-			return nil, err
+		accId, accountErr := defines.GetAccountId(reqCtx)
+		if accountErr != nil {
+			return nil, accountErr
 		}
 		ses.SetAccountId(accId)
-
-		if len(ses.GetSql()) > 8 {
-			prefix := strings.ToLower(ses.GetSql()[:8])
-			isPrepareStmt = isPrepareStmt || prefix == "execute " || prefix == "prepare "
-		}
 	}
-	// Handle specific statement types
-	if s, ok := stmt.(*tree.Insert); ok {
-		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
-			ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt)
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	if ret != nil {
-		ret.IsPrepare = isPrepareStmt
-		if forcePrepare {
-			err = plan2.NormalizePrepareParamRefs(reqCtx, ret)
-		}
-		return ret, err
-	}
-
-	// Default handling of various statements
-	switch stmt := stmt.(type) {
-	case *tree.Select, *tree.ParenSelect, *tree.ValuesStatement,
-		*tree.Update, *tree.Delete, *tree.Insert, *tree.MultiInsert,
-		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns, *tree.ShowColumnNumber,
-		*tree.ShowTableNumber, *tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex,
-		*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
-		opt := plan2.NewBaseOptimizer(ctx)
-		optimized, err := opt.Optimize(stmt, isPrepareStmt)
-		if err != nil {
-			return nil, err
-		}
-
-		ret = &plan2.Plan{
-			Plan: &plan2.Plan_Query{
-				Query: optimized,
-			},
-		}
-	default:
-		ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt)
-	}
-
-	if ret != nil {
-		ret.IsPrepare = isPrepareStmt
-		if forcePrepare && err == nil {
-			err = plan2.NormalizePrepareParamRefs(reqCtx, ret)
-		}
-	}
-	return ret, err
+	return build()
 }
 
 // buildPlanWithAuthorization wraps the buildPlan function to perform permission checks
@@ -4059,57 +4270,92 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 		return true, nil
 	}
 
+	// Scan nodes and binding-time dependencies often describe the same object.
+	// Resolve each identity/snapshot once per validation, while checking every
+	// captured version against that result. Nothing is retained across requests.
+	type lookupKey struct{ database, table, snapshot string }
+	type resolvedObject struct {
+		ref *plan2.ObjectRef
+		def *plan2.TableDef
+	}
+	resolved := make(map[lookupKey]resolvedObject)
 	checkCatalogObject := func(
 		ref *plan.ObjectRef,
 		name string,
 		snapshot *plan2.Snapshot,
 		version int64,
 		tableID int64,
+		databaseID uint64,
 	) (bool, error) {
 		if ref == nil {
 			return true, nil
 		}
-		_, tableDef, err := resolveFn(plan2.DbNameOfObjRef(ref), name, snapshot)
-		if err != nil {
-			return true, err
+		// An isolated SHOW binder can capture an unpublished publisher source.
+		// A name-only resolver in the subscriber cannot validate it. Rebind the
+		// description rather than resolving a same-named subscriber object.
+		if ref.PubInfo != nil && ref.SubscriptionName == "" {
+			return true, nil
 		}
+		key := lookupKey{database: plan2.DbNameOfObjRef(ref), table: name}
+		if snapshot != nil {
+			key.snapshot = snapshot.String()
+		}
+		object, exists := resolved[key]
+		if !exists {
+			var err error
+			object.ref, object.def, err = resolveFn(key.database, name, snapshot)
+			if err != nil {
+				return true, err
+			}
+			resolved[key] = object
+		}
+		current, tableDef := object.ref, object.def
 		if tableDef == nil {
 			return true, nil
 		}
-		if int64(tableDef.Version) != version || int64(tableDef.TblId) != tableID {
+		if int64(tableDef.Version) != version || int64(tableDef.TblId) != tableID ||
+			(databaseID != 0 && tableDef.DbId != databaseID) {
+			return true, nil
+		}
+		if (ref.PubInfo == nil) != (current.GetPubInfo() == nil) ||
+			(ref.PubInfo != nil && (current.PubInfo.TenantId != ref.PubInfo.TenantId ||
+				current.SubscriptionName != ref.SubscriptionName || current.SchemaName != ref.SchemaName)) {
 			return true, nil
 		}
 		return false, nil
 	}
-	checkFn := func(ref *plan.ObjectRef, def *plan.TableDef) (bool, error) {
+	checkFn := func(ref *plan.ObjectRef, def *plan.TableDef, snapshot *plan2.Snapshot) (bool, error) {
 		if ref == nil || def == nil {
 			return true, nil
 		}
-		return checkCatalogObject(ref, def.Name, nil, int64(def.Version), int64(def.TblId))
+		return checkCatalogObject(ref, def.Name, snapshot, int64(def.Version), int64(def.TblId), def.DbId)
 	}
 	switch p := plan0.Plan.(type) {
 	case *plan.Plan_Query:
+		if p.Query.GetViewMetadataDependsOnUdf() {
+			return true, nil
+		}
 		for i := range p.Query.Nodes {
 			if def := p.Query.Nodes[i].TableDef; def != nil {
-				flag, err := checkFn(p.Query.Nodes[i].ObjRef, def)
+				flag, err := checkFn(p.Query.Nodes[i].ObjRef, def, p.Query.Nodes[i].ScanSnapshot)
 				if err != nil || flag {
 					return true, err
 				}
 			}
 			if ctx := p.Query.Nodes[i].InsertCtx; ctx != nil {
-				flag, err := checkFn(ctx.Ref, ctx.TableDef)
+				flag, err := checkFn(ctx.Ref, ctx.TableDef, nil)
 				if err != nil || flag {
 					return true, err
 				}
 			}
 			if ctx := p.Query.Nodes[i].DeleteCtx; ctx != nil {
-				flag, err := checkFn(ctx.Ref, ctx.TableDef)
+				flag, err := checkFn(ctx.Ref, ctx.TableDef, nil)
 				if err != nil || flag {
 					return true, err
 				}
 			}
 			if ctx := p.Query.Nodes[i].PreInsertCtx; ctx != nil {
-				flag, err := checkFn(ctx.Ref, ctx.TableDef)
+				flag, err := checkFn(ctx.Ref, ctx.TableDef, nil)
 				if err != nil || flag {
 					return true, err
 				}
@@ -4122,6 +4368,7 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 				dependency.GetSnapshot(),
 				dependency.GetServer(),
 				dependency.GetObj(),
+				uint64(dependency.GetDb()),
 			)
 			if err != nil || flag {
 				return true, err
@@ -5200,6 +5447,9 @@ func executeStmtWithWorkspace(ses FeSession,
 	execCtx.txnOpt.forcePessimisticObjectLifecycle = requiresPessimisticObjectLifecycleTxn(
 		ses, effectiveStmt, effectiveDefaultDatabase,
 	)
+	execCtx.txnOpt.forcePessimisticLifecycleMode = requiresPessimisticLifecycleModeTxn(
+		ses, effectiveStmt, effectiveDefaultDatabase,
+	)
 	execCtx.txnOpt.activeTxnAtStart = ses.GetTxnHandler().InActiveTxn()
 	execCtx.txnOpt.activeTxnAtStartKnown = true
 	switch execCtx.stmt.(type) {
@@ -5701,6 +5951,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		StorageEngine:          pu.StorageEngine,
 		LastInsertID:           ses.GetLastInsertID(),
 		SqlHelper:              ses.GetSqlHelper(),
+		CompilerContext:        ses.txnCompileCtx,
 		Buf:                    ses.GetBuffer(),
 		LogLevel:               zapcore.InfoLevel, //TODO: need set by session level config
 		SessionId:              ses.GetSessId(),
@@ -5911,7 +6162,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// binary PREPARE metadata captured before doComQuery.
 		execCtx.beginStatementGeneration(currentInput)
 		// Keep the transaction origin available to compile-time lineage admission.
-		// TRUNCATE commits the old transaction before its plan is built, so the
+		// Implicit-commit DDL commits the old transaction before planning, so the
 		// fresh transaction alone cannot tell whether the client was already in an
 		// explicit transaction.  Reset the marker for every statement generation;
 		// otherwise a later statement in the same request could inherit it.
@@ -6001,7 +6252,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		}
 		// Commit only after the current statement has passed local admission and
 		// has a current statement identity. Authorization and plan construction
-		// still run after this boundary, matching TRUNCATE's implicit-commit
+		// still run after this boundary, matching the DDL implicit-commit
 		// contract while keeping instrumentation failures side-effect free.
 		if execCtx.implicitCommitBefore {
 			if err = ses.GetTxnHandler().commitBeforeStatement(execCtx); err != nil {

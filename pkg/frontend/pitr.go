@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -293,7 +294,7 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) (err
 		newUUid        uuid.UUID
 	)
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
 	// check create pitr priv
@@ -310,17 +311,23 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) (err
 		return err
 	}
 
-	// Hold the stable owner-publication write barrier through PITR creation.
-	// COPY ALTER crosses the same barrier before probing historical owners, so
-	// an empty probe cannot race a PITR whose create time was already chosen.
-	if err = lockDataBranchLineageOwnerLifecycle(ctx, bh); err != nil {
-		return err
-	}
-
 	// 2.only sys can create cluster level pitr
 	tenantInfo := ses.GetTenantInfo()
 	currentAccount := tenantInfo.GetTenant()
 	pitrLevel = stmt.Level
+	if pitrLevel == tree.PITRLEVELDATABASE || pitrLevel == tree.PITRLEVELTABLE {
+		databaseName = string(stmt.DatabaseName)
+		// The exclusive target name also serializes the per-object duplicate
+		// check, whose mo_pitr key is the caller-chosen PITR name.
+		err = admitLocalLifecycleRC(ctx, ses, bh, tenantInfo.GetTenantID(),
+			databaseName, "", lock.LockMode_Exclusive, "", "")
+	} else {
+		// Account and cluster PITR still span more than one database.
+		err = lockDataBranchLineageOwnerLifecycle(ctx, bh)
+	}
+	if err != nil {
+		return err
+	}
 	if pitrLevel == tree.PITRLEVELCLUSTER && currentAccount != sysAccountName {
 		return moerr.NewInternalError(ctx, "only sys tenant can create cluster level pitr")
 	}
@@ -772,7 +779,7 @@ func doDropPitr(ctx context.Context, ses *Session, stmt *tree.DropPitr) (err err
 		erArray   []ExecResult
 	)
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
 	// check drop pitr priv
@@ -856,7 +863,7 @@ func doAlterPitr(ctx context.Context, ses *Session, stmt *tree.AlterPitr) (err e
 		sql       string
 		pitrExist bool
 	)
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
 	// check alter pitr priv

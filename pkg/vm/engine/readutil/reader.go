@@ -1032,10 +1032,10 @@ func (r *reader) read(
 		statsCtx, numRead, numHit = prepareGatherStats(ctx)
 	}
 
-	var policy fileservice.Policy
+	policy := fileservice.GetFileServicePolicy(ctx)
 
 	if r.readBlockCnt > r.threshHold {
-		policy = fileservice.SkipMemoryCacheWrites
+		policy |= fileservice.SkipMemoryCacheWrites
 	}
 	r.readBlockCnt++
 

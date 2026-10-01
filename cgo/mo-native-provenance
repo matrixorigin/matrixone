@@ -73,6 +73,12 @@ host_platform() {
 }
 
 native_common_environment_hash() {
+    common_accelerator=$1
+    common_pixi_lock_hash=
+    if [ "$common_accelerator" = gpu ]; then
+        common_pixi_lock_hash=$(git hash-object --no-filters \
+            "$PIXI_PROJECT_ROOT/pixi.lock") || return 1
+    fi
     {
         # These are the supported Make/toolchain overrides that can change
         # regular CGo or thirdparty bytes. Empty values represent repository
@@ -95,14 +101,27 @@ native_common_environment_hash() {
         printf 'MACOSX_DEPLOYMENT_TARGET=%s\n' "${MACOSX_DEPLOYMENT_TARGET-}"
         printf 'UNAME_S=%s\n' "${UNAME_S-}"
         printf 'UNAME_M=%s\n' "${UNAME_M-}"
+        if [ "$common_accelerator" = gpu ]; then
+            # A Pixi lock replacement can change the compiler and sysroot at
+            # the same CC/CXX paths. Thirdparties must then be rebuilt too,
+            # even though accelerator-only flag changes need only rebuild CGo.
+            printf 'PIXI_LOCK_HASH=%s\n' "$common_pixi_lock_hash"
+        fi
     } | git hash-object --stdin
 }
 
 native_accelerator_environment_hash() {
     environment_accelerator=$1
+    pixi_lock_hash=
+    if [ "$environment_accelerator" = gpu ]; then
+        pixi_lock_hash=$(git hash-object --no-filters "$PIXI_PROJECT_ROOT/pixi.lock") || return 1
+    fi
     {
         printf 'accelerator=%s\n' "$environment_accelerator"
         if [ "$environment_accelerator" = gpu ]; then
+            printf 'PIXI_PROJECT_ROOT=%s\n' "$PIXI_PROJECT_ROOT"
+            printf 'PIXI_ENVIRONMENT_NAME=%s\n' "$PIXI_ENVIRONMENT_NAME"
+            printf 'PIXI_LOCK_HASH=%s\n' "$pixi_lock_hash"
             # Keep both GPU sub-build variable families explicit. cuda uses
             # NVCCFLAGS while cuVS uses NVCC_FLAGS; treating them as aliases
             # lets a real compiler-profile change reuse the previous objects.
@@ -152,7 +171,10 @@ emit_provenance() {
     cgo_hash=$(git -C "$root" rev-parse "$head:cgo") || return 1
     thirdparties_hash=$(git -C "$root" rev-parse "$head:thirdparties") || return 1
 
-    common_environment_hash=$(native_common_environment_hash) || return 1
+    if [ "$accelerator" = gpu ]; then
+        . "$root/cgo/mo-gpu-env" || return 1
+    fi
+    common_environment_hash=$(native_common_environment_hash "$accelerator") || return 1
     accelerator_environment_hash=$(native_accelerator_environment_hash \
         "$accelerator") || return 1
 

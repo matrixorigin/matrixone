@@ -327,6 +327,8 @@ const (
 	planTimeTypeID                   int32 = 51
 	planDatetimeTypeID               int32 = 52
 	planTimestampTypeID              int32 = 53
+	planInt64TypeID                  int32 = 23
+	planUint32TypeID                 int32 = 27
 	planAnyTypeID                    int32 = 0
 	maxVarcharWidth                  int32 = 65535
 )
@@ -365,7 +367,17 @@ const (
 // overloads and the distance family adds length-unit overloads.
 // PreparedPrecisionScalar requires MORPC v95 because older executors lose
 // scalar identity when CEIL/FLOOR precision passes through private CAST 5/6.
+// DecimalDivisionSemantics requires MORPC v97 for new plans because older
+// executors derive the quotient scale from the left operand instead of the
+// result type. Legacy plans remain executable by v97 receivers.
+// JSONInputContracts and YearBitCast require MORPC v101 for their new
+// execution contracts.
+// JSONScalarLiteralContracts requires MORPC v104 because older executors
+// decode JSON-typed Sval literals as VARCHAR rather than encoded JSON.
 type RemoteExpressionFeatures struct {
+	JSONScalarLiteralContracts      bool
+	JSONInputContracts              bool
+	YearBitCast                     bool
 	NumericPrefix                   bool
 	JSONComparisonParam             bool
 	MixedJSONBooleanEquality        bool
@@ -385,10 +397,18 @@ type RemoteExpressionFeatures struct {
 	DecimalLiteralSemantics           bool
 	SpatialDistanceSemantics          bool
 	PreparedPrecisionScalar           bool
+	DecimalDivisionSemantics          bool
+	// SpecialIntegerConsumers requires v98 independently of private CASTs.
+	SpecialIntegerConsumers       bool
+	TemporalResultContracts       bool
+	InvalidTemporalResultContract bool
+	NormalizedIntervalUnits       bool
+	LegacyIntervalUnits           bool
+	WeekSessionDefault            bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
-	return features.NumericPrefix ||
+	return features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
 		features.FormatNumericArguments ||
@@ -405,7 +425,14 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.ExpressionResultMetadataContracts ||
 		features.DecimalLiteralSemantics ||
 		features.SpatialDistanceSemantics ||
-		features.PreparedPrecisionScalar
+		features.PreparedPrecisionScalar ||
+		features.SpecialIntegerConsumers ||
+		features.DecimalDivisionSemantics ||
+		features.TemporalResultContracts ||
+		features.InvalidTemporalResultContract ||
+		features.NormalizedIntervalUnits ||
+		features.LegacyIntervalUnits ||
+		features.WeekSessionDefault
 }
 
 func hasPrivateIntegerPrecisionCast(expr *Expr) bool {
@@ -825,6 +852,10 @@ func isExpressionResultMetadataContract(expr *Expr) bool {
 func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatures, err error) {
 	err = walkExpressionsInOwner(owner, func(expr *Expr) error {
 		return VisitExprTree(expr, func(current *Expr) error {
+			if literal := current.GetLit(); literal != nil && !literal.Isnull && current.Typ.Id == planJSONTypeID {
+				_, encodedJSON := literal.Value.(*Literal_Sval)
+				features.JSONScalarLiteralContracts = features.JSONScalarLiteralContracts || encodedJSON
+			}
 			if !features.DecimalLiteralSemantics {
 				if literal := current.GetLit(); literal != nil {
 					features.DecimalLiteralSemantics = literal.DecimalLiteralRequiresV82
@@ -836,6 +867,113 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			fn := current.GetF()
 			if fn != nil && fn.Func != nil {
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
+				if id == 21 && current.Typ.Id == 11 && len(fn.Args) > 0 &&
+					fn.Args[0] != nil && fn.Args[0].Typ.Id == 55 { // CAST YEAR -> BIT
+					features.YearBitCast = true
+				}
+				if id == 16 || id == 76 { // CONCAT / CONCAT_WS
+					for _, arg := range fn.Args {
+						if arg != nil && arg.Typ.Id == planJSONTypeID {
+							features.JSONInputContracts = true
+						}
+					}
+				}
+				if id == 584 && len(fn.Args) == 1 && fn.Args[0] != nil &&
+					staticStringDomainForPlanType(fn.Args[0].Typ) == planStringDomainBinary { // JSON_DEPTH
+					features.JSONInputContracts = true
+				}
+				special, err := isSpecialIntegerConsumer(fn, id, overload)
+				if err != nil {
+					return err
+				}
+				features.SpecialIntegerConsumers = features.SpecialIntegerConsumers || special
+				// DIV overload 0 keeps its function identity, but v97 changes
+				// decimal result scale and coefficient interpretation.
+				if id == 13 && overload == 0 &&
+					(current.Typ.Id == 32 || current.Typ.Id == 33 || current.Typ.Id == 34) {
+					features.DecimalDivisionSemantics = true
+				}
+				// Function IDs live in the function registry, which cannot be
+				// imported here because the planner depends on this package.
+				if id == 189 { // legacy TO_INTERVAL: ambiguous across pre-v97 and v97 binaries
+					features.LegacyIntervalUnits = true
+				}
+				if id == 583 { // TO_INTERVAL_MICROSECOND
+					features.NormalizedIntervalUnits = true
+				}
+				if (id == 224 || id == 225) && overload >= 8 && overload <= 15 { // DATE_ADD/SUB raw TIME interval
+					features.NormalizedIntervalUnits = true
+				}
+				if (id == 205 || id == 218 || id == 141) && overload == 2 { // DAY/YEAR/MONTH(VARCHAR) raw field contract
+					features.TemporalResultContracts = true
+				}
+				if id == 216 && (overload == 0 || overload == 1) { // one-arg WEEK
+					features.WeekSessionDefault = true
+				}
+				// Released overloads retain their physical vector ABI. The new
+				// numeric EXTRACT and string ADDTIME/SUBTIME results use appended
+				// identities, so 4.2 catalog expressions remain executable.
+				if id == 208 && overload >= 0 && overload <= 9 {
+					want := planVarcharTypeID
+					if overload == 1 {
+						want = planUint32TypeID
+					}
+					if overload >= 5 {
+						want = planInt64TypeID
+						features.TemporalResultContracts = true
+					}
+					features.InvalidTemporalResultContract = features.InvalidTemporalResultContract || current.Typ.Id != want
+				}
+				if (id == 41 && overload >= 6 && overload <= 11) || (id == 378 && overload >= 6 && overload <= 15) {
+					want := planDatetimeTypeID
+					preparedTime := false
+					if (id == 41 && overload >= 9) || (id == 378 && overload >= 11) {
+						want = planVarcharTypeID
+						// A direct prepared first marker has a TIME(6) result;
+						// its string payload still uses this executor.
+						preparedTime = current.Typ.Id == planTimeTypeID
+						features.TemporalResultContracts = true
+					}
+					features.InvalidTemporalResultContract = features.InvalidTemporalResultContract || (!preparedTime && current.Typ.Id != want)
+				}
+				// A stable physical ABI does not imply stable value/diagnostic
+				// semantics. Newly executing arithmetic must use one final
+				// temporal contract, including on released 4.2 workers.
+				if (id == 41 || id == 378) && overload >= 0 && overload <= 5 {
+					features.TemporalResultContracts = true
+				}
+				switch id {
+				case 93, 94, 95, 224, 225, 250, 364, 373, 375, 376: // differences, arithmetic, construction, periods
+					features.TemporalResultContracts = true
+				case 141, 201, 203, 204, 205, 206, 216, 217, 218, 219, 220, 221, 222, 223,
+					360, 361, 362, 368, 369, 370, 374, 383: // components, zero calendars and week modes
+					features.TemporalResultContracts = true
+				case 187, 188, 196, 197, 251, 363: // parsing, Unix conversion and formatting
+					features.TemporalResultContracts = true
+				}
+
+				// CAST keeps its physical identity. The changed TIME conversion
+				// includes numeric inputs; other temporal casts use the shared
+				// text parser, or (for explicit typed DATE) the zero-date policy.
+				// SQL HEX/BIT literals also changed numeric coercion.
+				if id == 21 && len(fn.Args) > 0 && fn.Args[0] != nil {
+					source := fn.Args[0]
+					if isPlanTemporalType(current.Typ.Id) &&
+						(isPlanStringType(source.Typ.Id) ||
+							(current.Typ.Id == planTimeTypeID && isPlanNumericType(source.Typ.Id)) ||
+							(overload == 1 && current.Typ.Id == planDateTypeID &&
+								(source.Typ.Id == planDateTypeID || source.Typ.Id == planDatetimeTypeID))) {
+						features.TemporalResultContracts = true
+					}
+					if isPlanNumericType(current.Typ.Id) {
+						if lit := source.GetLit(); lit != nil &&
+							(lit.LiteralForm == StringLiteralForm_STRING_LITERAL_HEX ||
+								lit.LiteralForm == StringLiteralForm_STRING_LITERAL_BIT) {
+							features.TemporalResultContracts = true
+						}
+					}
+				}
+
 				if (id == 72 || id == 103) && len(fn.Args) == 2 &&
 					hasPrivateIntegerPrecisionCast(fn.Args[1]) {
 					features.PreparedPrecisionScalar = true
@@ -1024,6 +1162,59 @@ func isTypedConversionFunction(function *Function) bool {
 	default:
 		return false
 	}
+}
+
+// Stable execution IDs and type IDs are part of the wire contract. Keep this
+// validation independent of container/types and function (which import plan).
+func isSpecialIntegerConsumer(fn *Function, id, overload int32) (bool, error) {
+	count, integerCount := 0, 0
+	switch {
+	case id == 262 && (overload == 2 || overload == 3): // FORMAT
+		count = int(overload)
+	case id == 202 && overload == 1: // MAKEDATE
+		count, integerCount = 2, 2
+	case id == 373 && overload >= 36 && overload <= 38: // MAKETIME
+		count, integerCount = 3, 2
+	default:
+		return false, nil
+	}
+	if len(fn.Args) != count {
+		return false, moerr.NewInvalidInputNoCtx("invalid special integer consumer arity")
+	}
+	for _, arg := range fn.Args {
+		if arg == nil {
+			return false, moerr.NewInvalidInputNoCtx("missing special integer consumer argument")
+		}
+	}
+	for i := 0; i < integerCount; i++ {
+		if fn.Args[i].Typ.Id != 23 {
+			return false, moerr.NewInvalidInputNoCtx("special integer consumer requires INT64 operands")
+		}
+	}
+	if id == 262 {
+		if fn.Args[1].Typ.Id != 23 {
+			return false, moerr.NewInvalidInputNoCtx("FORMAT precision requires INT64")
+		}
+		if !isPlanNumericType(fn.Args[0].Typ.Id) && !isPlanMySQLStringType(fn.Args[0].Typ.Id) {
+			return false, moerr.NewInvalidInputNoCtx("invalid FORMAT number signature")
+		}
+		if count == 3 && !isPlanMySQLStringType(fn.Args[2].Typ.Id) {
+			return false, moerr.NewInvalidInputNoCtx("invalid FORMAT locale signature")
+		}
+	}
+	if id == 373 {
+		second := int32(31) // FLOAT64
+		if overload == 37 {
+			second = 61
+		} // VARCHAR
+		if overload == 38 {
+			second = 28
+		} // UINT64
+		if fn.Args[2].Typ.Id != second {
+			return false, moerr.NewInvalidInputNoCtx("invalid MAKETIME seconds signature")
+		}
+	}
+	return true, nil
 }
 
 // FORMAT reuses its historical VARCHAR overload IDs for the new typed numeric

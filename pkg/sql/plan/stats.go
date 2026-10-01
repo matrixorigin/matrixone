@@ -1619,6 +1619,16 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.Selectivity = 1
 		}
 
+	case plan.Node_VECTOR_QUERY_TOP:
+		node.Stats = DeepCopyStats(builder.qry.Nodes[node.Children[1]].Stats)
+		node.Stats.ForceOneCN = true
+
+	case plan.Node_VECTOR_QUERY_SOURCE:
+		node.Stats = DefaultStats()
+		node.Stats.Outcnt = 1
+		node.Stats.TableCnt = 1
+		node.Stats.Selectivity = 1
+
 	case plan.Node_SINK_SCAN:
 		sourceNode := builder.qry.Steps[node.GetSourceStep()[0]]
 		node.Stats = builder.qry.Nodes[sourceNode].Stats
@@ -2272,6 +2282,20 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 	}
 	if node.NodeType != plan.Node_JOIN {
 		return
+	}
+	if node.JoinType == plan.Node_LEFT || node.JoinType == plan.Node_SEMI ||
+		node.JoinType == plan.Node_ANTI || node.JoinType == plan.Node_SINGLE {
+		// A row-dependent diagnostic needs LoopJoin to evaluate the selected
+		// ON arm even when hash keys do not match. LoopJoin implements these
+		// joins with the logical left input as probe; preserve that layout
+		// across both cost-based and recursive-side orientation choices.
+		for _, expr := range node.OnList {
+			if ContainsGuardedJoinDiagnosticWithProof(builder.compCtx.GetProcess(), expr,
+				builder.preparedParameterDiagnosticsFree()) {
+				node.IsRightJoin = false
+				return
+			}
+		}
 	}
 	// A predeclared runtime-filter pair is a physical dependency: child 1 must
 	// build and publish before child 0 may probe. Reversing the children turns
@@ -3263,6 +3287,7 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 	// the equi-join condition is a function expression (not a plain column ref), it's expr-based.
 	hasExprBasedShuffle := false
 	hasForceOneCN := false
+	vectorID, _, localIndexScans, distributedPRE := RequiredIVFPlacement(qry)
 	deferredOnly := adaptiveDeferredOnlyNodes(qry)
 	for id, node := range qry.GetNodes() {
 		if node == nil {
@@ -3272,7 +3297,17 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 			continue
 		}
 		if node.GetStats().GetForceOneCN() {
-			hasForceOneCN = true
+			_, localIndex := localIndexScans[int32(id)]
+			if !distributedPRE || (!localIndex && int32(id) != vectorID) {
+				hasForceOneCN = true
+			}
+		}
+		if node.NodeType == plan.Node_VECTOR_INDEX_SCAN && !distributedPRE {
+			for _, spec := range node.RuntimeFilterProbeList {
+				if spec != nil && spec.MustApply && spec.UseMembershipFilter {
+					hasForceOneCN = true
+				}
+			}
 		}
 		if node.Stats == nil || node.Stats.HashmapStats == nil {
 			continue
@@ -3331,7 +3366,7 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 		}
 		if node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
 			execType := ExecTypeAP_MULTICN
-			if stats.GetForceOneCN() || !canUseMultiCN {
+			if (stats.GetForceOneCN() && !(distributedPRE && int32(id) == vectorID)) || !canUseMultiCN {
 				execType = ExecTypeAP_ONECN
 			}
 			if execType > ret {

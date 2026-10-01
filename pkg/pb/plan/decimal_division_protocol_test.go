@@ -12,21 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package isolated
+package plan
 
 import (
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/stretchr/testify/require"
 )
 
-// releaseSharedSingleCNCluster lets a specialized scenario acquire the
-// process-wide test-cluster admission after a shared one-CN scenario. A
-// successful release leaves the fixture reusable, so this helper is safe when
-// test order is shuffled or -count runs the package again. It is a no-op when
-// the shared fixture was not selected by -run.
-func releaseSharedSingleCNCluster(t *testing.T) {
-	t.Helper()
-	require.NoError(t, embed.CloseSingleCNBaseClusterTests())
+func TestDecimalDivisionRemoteFeature(t *testing.T) {
+	// Wire type IDs 32..34 are DECIMAL64/128/256; 31 is FLOAT64.
+	for _, oid := range []int32{32, 33, 34, 31} {
+		for _, overload := range []int32{0, 1} {
+			expr := &Expr{Typ: Type{Id: oid}, Expr: &Expr_F{F: &Function{Func: &ObjectRef{Obj: int64(13)<<32 | int64(overload)}}}}
+			features, err := RequiredRemoteExpressionFeatures(expr)
+			require.NoError(t, err)
+			require.Equal(t, oid >= 32 && oid <= 34 && overload == 0, features.DecimalDivisionSemantics, "oid=%v overload=%d", oid, overload)
+		}
+	}
 }

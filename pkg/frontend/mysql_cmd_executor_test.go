@@ -982,12 +982,32 @@ func TestHandleSetTransaction(t *testing.T) {
 		})
 	}
 
+	for _, test := range []struct {
+		sql      string
+		readOnly int64
+	}{
+		{sql: "set session transaction read only", readOnly: 1},
+		{sql: "set session transaction read write", readOnly: 0},
+	} {
+		t.Run(test.sql, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(ctx, test.sql, 1)
+			require.NoError(t, err)
+
+			_, err = execInFrontend(ses, &ExecCtx{reqCtx: ctx, stmt: stmt})
+			require.NoError(t, err)
+			for _, name := range []string{"transaction_read_only", "tx_read_only"} {
+				got, getErr := ses.GetSessionSysVar(name)
+				require.NoError(t, getErr)
+				require.Equal(t, test.readOnly, got)
+			}
+		})
+	}
+
 	for _, sql := range []string{
 		"set transaction read only",
-		"set session transaction read only",
 		"set global transaction read write",
 	} {
-		t.Run(sql+" fails closed", func(t *testing.T) {
+		t.Run(sql+" remains unsupported", func(t *testing.T) {
 			stmt, err := mysql.ParseOne(ctx, sql, 1)
 			require.NoError(t, err)
 
@@ -995,30 +1015,68 @@ func TestHandleSetTransaction(t *testing.T) {
 			require.Error(t, err)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 			require.ErrorContains(t, err, "transaction access mode")
-
-			got, getErr := ses.GetSessionSysVar("transaction_isolation")
-			require.NoError(t, getErr)
-			require.Equal(t, "REPEATABLE-READ", got)
-			handler := ses.GetTxnHandler()
-			handler.mu.Lock()
-			hasNextIsolation := handler.hasNextTxnIsolation
-			handler.mu.Unlock()
-			require.False(t, hasNextIsolation)
 		})
 	}
 
-	t.Run("access mode prevents partial isolation update", func(t *testing.T) {
+	t.Run("access mode and isolation update together", func(t *testing.T) {
 		stmt, err := mysql.ParseOne(ctx,
 			"set session transaction isolation level read committed, read only", 1)
 		require.NoError(t, err)
 
 		_, err = execInFrontend(ses, &ExecCtx{reqCtx: ctx, stmt: stmt})
-		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+		require.NoError(t, err)
 
 		got, getErr := ses.GetSessionSysVar("transaction_isolation")
 		require.NoError(t, getErr)
-		require.Equal(t, "REPEATABLE-READ", got)
+		require.Equal(t, "READ-COMMITTED", got)
+		readOnly, getErr := ses.GetSessionSysVar("transaction_read_only")
+		require.NoError(t, getErr)
+		require.Equal(t, int64(1), readOnly)
+		require.NoError(t, ses.SetSessionSysVar(ctx, "transaction_isolation", "REPEATABLE-READ"))
+	})
+
+	t.Run("unsupported isolation does not update access mode", func(t *testing.T) {
+		for _, test := range []struct {
+			sql             string
+			initialReadOnly int64
+		}{
+			{
+				sql:             "set session transaction isolation level read uncommitted, read only",
+				initialReadOnly: 0,
+			},
+			{
+				sql:             "set session transaction read only, isolation level read uncommitted",
+				initialReadOnly: 0,
+			},
+			{
+				sql:             "set session transaction isolation level serializable, read write",
+				initialReadOnly: 1,
+			},
+			{
+				sql:             "set session transaction read write, isolation level serializable",
+				initialReadOnly: 1,
+			},
+		} {
+			t.Run(test.sql, func(t *testing.T) {
+				for _, name := range []string{"transaction_read_only", "tx_read_only"} {
+					require.NoError(t, ses.SetSessionSysVar(ctx, name, test.initialReadOnly))
+				}
+
+				stmt, err := mysql.ParseOne(ctx, test.sql, 1)
+				require.NoError(t, err)
+
+				_, err = execInFrontend(ses, &ExecCtx{reqCtx: ctx, stmt: stmt})
+				require.ErrorContains(t, err, "is not supported")
+				for _, name := range []string{"transaction_read_only", "tx_read_only"} {
+					got, getErr := ses.GetSessionSysVar(name)
+					require.NoError(t, getErr)
+					require.Equal(t, test.initialReadOnly, got)
+				}
+				got, getErr := ses.GetSessionSysVar("transaction_isolation")
+				require.NoError(t, getErr)
+				require.Equal(t, "REPEATABLE-READ", got)
+			})
+		}
 	})
 
 	for _, test := range []struct {
@@ -1253,6 +1311,9 @@ func TestSetTransactionDoesNotFinishExistingTransaction(t *testing.T) {
 	t.Run("session system variable scope preserves prior work", func(t *testing.T) {
 		run(t, "set session transaction_isolation = 'READ-COMMITTED'", "")
 	})
+	t.Run("session read-only system variable scope preserves prior work", func(t *testing.T) {
+		run(t, "set session transaction_read_only = 1", "")
+	})
 	t.Run("rejected next scope preserves prior work", func(t *testing.T) {
 		run(t,
 			"set transaction isolation level read committed",
@@ -1277,16 +1338,16 @@ func TestSetTransactionDoesNotFinishExistingTransaction(t *testing.T) {
 			"",
 		)
 	})
-	t.Run("unsupported access mode preserves prior work", func(t *testing.T) {
+	t.Run("session access mode preserves prior work", func(t *testing.T) {
 		run(t,
 			"set session transaction read only",
-			"transaction access mode READ ONLY is not supported",
+			"",
 		)
 	})
-	t.Run("unsupported next access mode preserves prior work", func(t *testing.T) {
+	t.Run("next access mode remains unsupported", func(t *testing.T) {
 		run(t,
 			"set transaction read only",
-			"transaction access mode READ ONLY is not supported",
+			"transaction access mode READ ONLY is only supported for SESSION scope",
 		)
 	})
 
@@ -1351,6 +1412,388 @@ func TestTransactionIsolationAliasUsesCanonicalState(t *testing.T) {
 	vars.mu.Unlock()
 	require.Equal(t, "REPEATABLE-READ", canonicalValue)
 	require.Equal(t, "REPEATABLE-READ", aliasValue)
+}
+
+func TestGenericTransactionReadOnlyAssignments(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	execSet := func(sql string) error {
+		t.Helper()
+		stmt, err := mysql.ParseOne(ctx, sql, 1)
+		require.NoError(t, err)
+		_, err = execInFrontend(ses, &ExecCtx{reqCtx: ctx, stmt: stmt})
+		return err
+	}
+	assertReadOnly := func(want int64) {
+		t.Helper()
+		for _, name := range []string{
+			transactionReadOnlySystemVariable,
+			transactionReadOnlySystemVariableAlias,
+		} {
+			got, err := ses.GetSessionSysVar(name)
+			require.NoError(t, err)
+			require.Equal(t, want, got, name)
+		}
+	}
+
+	// Both SQL spellings are one canonical session state, including direct
+	// generic SET assignments rather than only SET TRANSACTION syntax.
+	require.NoError(t, execSet("set session transaction_read_only = 1"))
+	assertReadOnly(1)
+	require.NoError(t, execSet("set session tx_read_only = 0"))
+	assertReadOnly(0)
+
+	for _, test := range []struct {
+		sql      string
+		readOnly int64
+	}{
+		{sql: "set session transaction_read_only = true", readOnly: 1},
+		{sql: "set session transaction_read_only = false", readOnly: 0},
+		{sql: "set session tx_read_only = true", readOnly: 1},
+		{sql: "set session tx_read_only = false", readOnly: 0},
+	} {
+		t.Run(test.sql, func(t *testing.T) {
+			require.NoError(t, execSet(test.sql))
+			assertReadOnly(test.readOnly)
+		})
+	}
+
+	// SESSION DEFAULT inherits the account-global value. The static default is
+	// only used by GLOBAL DEFAULT.
+	ses.gSysVars.Set(transactionReadOnlySystemVariable, int64(1))
+	for _, sql := range []string{
+		"set session transaction_read_only = default",
+		"set session tx_read_only = default",
+	} {
+		require.NoError(t, execSet(sql))
+		assertReadOnly(1)
+	}
+	// DEFAULT follows the global value, while an explicit FALSE remains zero.
+	require.NoError(t, execSet("set session transaction_read_only = false"))
+	assertReadOnly(0)
+	require.NoError(t, execSet("set session tx_read_only = false"))
+	assertReadOnly(0)
+	require.NoError(t, execSet("set session transaction_read_only = true"))
+	assertReadOnly(1)
+
+	// An unqualified @@ read-only assignment is NEXT scope and must not be
+	// silently treated as a SESSION assignment.
+	for _, sql := range []string{
+		"set @@transaction_read_only = 0",
+		"set @@tx_read_only = 0",
+	} {
+		err := execSet(sql)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+		require.ErrorContains(t, err, "transaction access mode")
+		assertReadOnly(1)
+	}
+
+	// Literal transaction assignments are prevalidated as a bounded atomic
+	// prefix, so an unsupported isolation level cannot leave read-only changed.
+	require.NoError(t, ses.SetSessionSysVar(ctx, transactionReadOnlySystemVariable, int64(0)))
+	require.NoError(t, ses.SetSessionSysVar(ctx, transactionIsolationSystemVariable, "REPEATABLE-READ"))
+	require.NoError(t,
+		execSet("set session transaction_read_only = true, transaction_isolation = 'READ-COMMITTED'"))
+	assertReadOnly(1)
+	gotIsolation, err := ses.GetSessionSysVar(transactionIsolationSystemVariable)
+	require.NoError(t, err)
+	require.Equal(t, "READ-COMMITTED", gotIsolation)
+	require.NoError(t, ses.SetSessionSysVar(ctx, transactionReadOnlySystemVariable, int64(0)))
+	require.NoError(t, ses.SetSessionSysVar(ctx, transactionIsolationSystemVariable, "REPEATABLE-READ"))
+	assertReadOnly(0)
+	err = execSet("set session transaction_read_only = 1, transaction_isolation = 'READ-UNCOMMITTED'")
+	require.ErrorContains(t, err, "is not supported")
+	assertReadOnly(0)
+	gotIsolation, err = ses.GetSessionSysVar(transactionIsolationSystemVariable)
+	require.NoError(t, err)
+	require.Equal(t, "REPEATABLE-READ", gotIsolation)
+
+	// The reverse clause order is a supported mixed assignment as well.
+	require.NoError(t,
+		execSet("set session transaction_read_only = 1, transaction_isolation = 'READ-COMMITTED'"))
+	assertReadOnly(1)
+	gotIsolation, err = ses.GetSessionSysVar(transactionIsolationSystemVariable)
+	require.NoError(t, err)
+	require.Equal(t, "READ-COMMITTED", gotIsolation)
+}
+
+func TestGenericTransactionAssignmentsRejectActiveNextIsolationBeforeMutation(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+
+	for _, test := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "read-only before isolation",
+			sql:  "set session transaction_read_only = 1, @@transaction_isolation = 'READ-COMMITTED'",
+		},
+		{
+			name: "isolation before read-only",
+			sql:  "set @@transaction_isolation = 'READ-COMMITTED', session transaction_read_only = 1",
+		},
+		{
+			name: "read-only before default isolation",
+			sql:  "set session transaction_read_only = 1, @@transaction_isolation = default",
+		},
+		{
+			name: "default isolation before read-only",
+			sql:  "set @@transaction_isolation = default, session transaction_read_only = 1",
+		},
+		{
+			name: "unrelated static assignment between transaction assignments",
+			sql:  "set session transaction_read_only = 1, session sql_mode = 'ANSI_QUOTES', @@transaction_isolation = 'READ-COMMITTED'",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ses := newTestSession(t, ctrl)
+			defer ses.Close()
+
+			require.NoError(t, ses.SetSessionSysVar(
+				ctx, transactionReadOnlySystemVariable, int64(0)))
+			require.NoError(t, ses.SetSessionSysVar(
+				ctx, transactionIsolationSystemVariable, "REPEATABLE-READ"))
+			require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "ONLY_FULL_GROUP_BY"))
+
+			handler := ses.GetTxnHandler()
+			op := newTestTxnOp()
+			handler.mu.Lock()
+			handler.txnOp = op
+			handler.mu.Unlock()
+			defer func() {
+				handler.mu.Lock()
+				handler.txnOp = nil
+				handler.mu.Unlock()
+			}()
+
+			stmt, err := mysql.ParseOne(ctx, test.sql, 1)
+			require.NoError(t, err)
+			_, err = execInFrontend(ses, &ExecCtx{
+				reqCtx: ctx,
+				stmt:   stmt,
+				txnOpt: FeTxnOption{
+					activeTxnAtStartKnown: true,
+					activeTxnAtStart:      true,
+				},
+			})
+			require.ErrorContains(t, err,
+				"Transaction characteristics can't be changed while a transaction is in progress")
+			moErr, ok := err.(*moerr.Error)
+			require.True(t, ok)
+			require.Equal(t, uint16(moerr.ER_CANT_CHANGE_TX_CHARACTERISTICS), moErr.MySQLCode())
+			require.Equal(t, "25001", moErr.SqlState())
+
+			for _, name := range []string{
+				transactionReadOnlySystemVariable,
+				transactionReadOnlySystemVariableAlias,
+			} {
+				got, getErr := ses.GetSessionSysVar(name)
+				require.NoError(t, getErr)
+				require.Equal(t, int64(0), got, name)
+			}
+			gotIsolation, getErr := ses.GetSessionSysVar(transactionIsolationSystemVariable)
+			require.NoError(t, getErr)
+			require.Equal(t, "REPEATABLE-READ", gotIsolation)
+			gotSQLMode, getErr := ses.GetSessionSysVar("sql_mode")
+			require.NoError(t, getErr)
+			require.Equal(t, "ONLY_FULL_GROUP_BY", gotSQLMode)
+			require.True(t, handler.InActiveTxn())
+			require.Same(t, op, handler.GetTxn())
+			_, hasNextIsolation := handler.nextTxnIsolationSnapshot()
+			require.False(t, hasNextIsolation)
+		})
+	}
+}
+
+func TestGenericTransactionPreflightStopsAtDynamicAssignment(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	require.NoError(t, ses.SetSessionSysVar(
+		ctx, transactionReadOnlySystemVariable, int64(0)))
+	require.NoError(t, ses.SetSessionSysVar(
+		ctx, transactionIsolationSystemVariable, "REPEATABLE-READ"))
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "ONLY_FULL_GROUP_BY"))
+	require.NoError(t, ses.SetUserDefinedVar(
+		"mode", "ANSI_QUOTES", "set @mode = 'ANSI_QUOTES'"))
+
+	handler := ses.GetTxnHandler()
+	op := newTestTxnOp()
+	handler.mu.Lock()
+	handler.txnOp = op
+	handler.mu.Unlock()
+	defer func() {
+		handler.mu.Lock()
+		handler.txnOp = nil
+		handler.mu.Unlock()
+	}()
+
+	stmt, err := mysql.ParseOne(ctx,
+		"set session transaction_read_only = 1, session sql_mode = @mode, @@transaction_isolation = 'READ-COMMITTED'", 1)
+	require.NoError(t, err)
+	_, err = execInFrontend(ses, &ExecCtx{
+		reqCtx: ctx,
+		stmt:   stmt,
+		txnOpt: FeTxnOption{
+			activeTxnAtStartKnown: true,
+			activeTxnAtStart:      true,
+		},
+	})
+	require.ErrorContains(t, err,
+		"Transaction characteristics can't be changed while a transaction is in progress")
+
+	// A dynamic assignment ends static preflight, so the earlier assignments
+	// retain their normal left-to-right application semantics.
+	for _, name := range []string{
+		transactionReadOnlySystemVariable,
+		transactionReadOnlySystemVariableAlias,
+	} {
+		got, getErr := ses.GetSessionSysVar(name)
+		require.NoError(t, getErr)
+		require.Equal(t, int64(1), got, name)
+	}
+	gotSQLMode, err := ses.GetSessionSysVar("sql_mode")
+	require.NoError(t, err)
+	require.Equal(t, "ANSI_QUOTES", gotSQLMode)
+	gotIsolation, err := ses.GetSessionSysVar(transactionIsolationSystemVariable)
+	require.NoError(t, err)
+	require.Equal(t, "REPEATABLE-READ", gotIsolation)
+	_, hasNextIsolation := handler.nextTxnIsolationSnapshot()
+	require.False(t, hasNextIsolation)
+}
+
+func TestGenericTransactionGlobalAssignmentsRejectNonAdminBeforeMutation(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+
+	for _, test := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "read-only before global isolation",
+			sql:  "set session transaction_read_only = 1, global transaction_isolation = 'READ-COMMITTED'",
+		},
+		{
+			name: "global isolation before read-only",
+			sql:  "set global transaction_isolation = 'READ-COMMITTED', session transaction_read_only = 1",
+		},
+		{
+			name: "read-only before global default isolation",
+			sql:  "set session transaction_read_only = 1, global transaction_isolation = default",
+		},
+		{
+			name: "global default isolation before read-only",
+			sql:  "set global transaction_isolation = default, session transaction_read_only = 1",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ses := newTestSession(t, ctrl)
+			defer ses.Close()
+			ses.SetTenantInfo(&TenantInfo{
+				Tenant:        sysAccountName,
+				User:          rootName,
+				DefaultRole:   publicRoleName,
+				TenantID:      sysAccountID,
+				UserID:        rootID,
+				DefaultRoleID: publicRoleID,
+			})
+
+			require.NoError(t, ses.SetSessionSysVar(
+				ctx, transactionReadOnlySystemVariable, int64(0)))
+			require.NoError(t, ses.SetSessionSysVar(
+				ctx, transactionIsolationSystemVariable, "REPEATABLE-READ"))
+			initialSessionIsolation, err := ses.GetSessionSysVar(transactionIsolationSystemVariable)
+			require.NoError(t, err)
+			initialGlobalIsolation, err := ses.GetGlobalSysVar(transactionIsolationSystemVariable)
+			require.NoError(t, err)
+			initialGlobalIsolationAlias, err := ses.GetGlobalSysVar(transactionIsolationSystemVariableAlias)
+			require.NoError(t, err)
+
+			handler := ses.GetTxnHandler()
+			op := newTestTxnOp()
+			handler.mu.Lock()
+			handler.txnOp = op
+			handler.mu.Unlock()
+			defer func() {
+				handler.mu.Lock()
+				handler.txnOp = nil
+				handler.mu.Unlock()
+			}()
+
+			stmt, err := mysql.ParseOne(ctx, test.sql, 1)
+			require.NoError(t, err)
+			_, err = execInFrontend(ses, &ExecCtx{
+				reqCtx: ctx,
+				stmt:   stmt,
+				txnOpt: FeTxnOption{
+					activeTxnAtStartKnown: true,
+					activeTxnAtStart:      true,
+				},
+			})
+			require.ErrorContains(t, err, "do not have privilege to execute the statement")
+
+			for _, name := range []string{
+				transactionReadOnlySystemVariable,
+				transactionReadOnlySystemVariableAlias,
+			} {
+				got, getErr := ses.GetSessionSysVar(name)
+				require.NoError(t, getErr)
+				require.Equal(t, int64(0), got, name)
+			}
+			got, err := ses.GetSessionSysVar(transactionIsolationSystemVariable)
+			require.NoError(t, err)
+			require.Equal(t, initialSessionIsolation, got)
+			got, err = ses.GetGlobalSysVar(transactionIsolationSystemVariable)
+			require.NoError(t, err)
+			require.Equal(t, initialGlobalIsolation, got)
+			got, err = ses.GetGlobalSysVar(transactionIsolationSystemVariableAlias)
+			require.NoError(t, err)
+			require.Equal(t, initialGlobalIsolationAlias, got)
+			require.True(t, handler.InActiveTxn())
+			require.Same(t, op, handler.GetTxn())
+			require.Zero(t, op.commitCalls)
+			require.Zero(t, op.rollbackCalls)
+		})
+	}
+}
+
+func TestGlobalSystemVariablesLoadReadOnlyAlias(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	rows := [][]interface{}{
+		{transactionReadOnlySystemVariableAlias, "0"},
+		{transactionReadOnlySystemVariable, "1"},
+	}
+	stub := gostub.Stub(&ExeSqlInBgSes, func(
+		context.Context,
+		BackgroundExec,
+		string,
+	) ([]ExecResult, error) {
+		return []ExecResult{newMrsForGlobalSystemVariables(rows)}, nil
+	})
+	defer stub.Reset()
+
+	vars, err := ses.getGlobalSysVars(ctx, nil)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), vars[transactionReadOnlySystemVariable])
+	require.Equal(t, int64(1), vars[transactionReadOnlySystemVariableAlias])
+
+	rows = [][]interface{}{{transactionReadOnlySystemVariableAlias, "1"}}
+	vars, err = ses.getGlobalSysVars(ctx, nil)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), vars[transactionReadOnlySystemVariable])
+	require.Equal(t, int64(1), vars[transactionReadOnlySystemVariableAlias])
 }
 
 func TestSetTransactionIsolationAppliedToTxnMeta(t *testing.T) {
@@ -1627,6 +2070,43 @@ func TestForcedObjectLifecycleTxnConsumesNextIsolation(t *testing.T) {
 	})
 }
 
+func TestForcedLifecycleModePreservesNextIsolation(t *testing.T) {
+	txnclient.RunTxnTests(func(realTxnClient txnclient.TxnClient, _ rpc.TxnSender) {
+		ctrl := gomock.NewController(t)
+		ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+		originalTxnClient := getPu("").TxnClient
+		defer func() { getPu("").TxnClient = originalTxnClient }()
+		getPu("").TxnClient = realTxnClient
+
+		handler := ses.GetTxnHandler()
+		require.NoError(t, handler.setNextTxnIsolation(ctx, txn.TxnIsolation_SI, false))
+		execCtx := &ExecCtx{
+			reqCtx: ctx,
+			ses:    ses,
+			stmt:   &tree.AlterTable{},
+			txnOpt: FeTxnOption{
+				autoCommit:                    true,
+				forcePessimisticLifecycleMode: true,
+			},
+		}
+
+		handler.mu.Lock()
+		err := handler.createTxnOpUnsafe(execCtx)
+		op := handler.txnOp
+		handler.txnOp = nil
+		handler.mu.Unlock()
+		require.NoError(t, err)
+		require.NotNil(t, op)
+		require.Equal(t, txn.TxnMode_Pessimistic, op.Txn().Mode)
+		require.Equal(t, txn.TxnIsolation_SI, op.Txn().Isolation)
+		require.NoError(t, op.Rollback(ctx))
+		_, hasNextIsolation := handler.nextTxnIsolationSnapshot()
+		require.False(t, hasNextIsolation)
+	})
+}
+
 func TestExecCtxStatementGenerationPreparedDatabase(t *testing.T) {
 	preparedStmt := &PrepareStmt{
 		Name:            "binary_drop",
@@ -1715,6 +2195,39 @@ func TestHandleDropAccountUsesLifecycleOwnerTxn(t *testing.T) {
 	}
 
 	err := handleDropAccount(ses, &ExecCtx{reqCtx: ctx}, &tree.DropAccount{Name: boxExprStr("tenant")}, ses.GetProc())
+	require.ErrorIs(t, err, beginErr)
+	require.True(t, forcedPessimisticRC)
+}
+
+func TestHandleCreateAccountUsesLifecycleOwnerTxn(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := context.Background()
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	bh := &backgroundExecTest{}
+	bh.init()
+	beginErr := errors.New("begin failed")
+	bh.sql2err["begin;"] = beginErr
+	oldNewBackgroundExec := NewBackgroundExec
+	defer func() { NewBackgroundExec = oldNewBackgroundExec }()
+	forcedPessimisticRC := false
+	NewBackgroundExec = func(_ context.Context, _ FeSession, opts ...*BackgroundExecOption) BackgroundExec {
+		for _, opt := range opts {
+			forcedPessimisticRC = forcedPessimisticRC || opt != nil && opt.forcePessimisticRC
+		}
+		return bh
+	}
+
+	err := handleCreateAccount(ses, &ExecCtx{reqCtx: ctx}, &tree.CreateAccount{
+		Name: boxExprStr("tenant"),
+		AuthOption: tree.AccountAuthOption{
+			AdminName: boxExprStr("admin"),
+			IdentifiedType: tree.AccountIdentified{
+				Typ: tree.AccountIdentifiedByPassword,
+				Str: boxExprStr("111"),
+			},
+		},
+	}, ses.GetProc())
 	require.ErrorIs(t, err, beginErr)
 	require.True(t, forcedPessimisticRC)
 }
@@ -1863,7 +2376,7 @@ func TestPrepareConsumesNextTransactionIsolationWhenAutocommitOff(t *testing.T) 
 }
 
 func TestHandleSetGlobalTransaction(t *testing.T) {
-	ctx := context.Background()
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
 	bh := &backgroundExecTest{}
 	bh.init()
 	bh.sql2result["begin;"] = nil
@@ -1901,6 +2414,33 @@ func TestHandleSetGlobalTransaction(t *testing.T) {
 	require.Contains(t, bh.executedSQLs,
 		getSqlForInsertSysVarWithAccount(
 			sysAccountID, sysAccountName, "tx_isolation", "READ-COMMITTED"))
+
+	bh.sql2result[getSqlForGetSysVarWithAccount(sysAccountID, transactionReadOnlySystemVariable)] =
+		newMrsForSystemVariableNameOfAccount(nil)
+	bh.sql2result[getSqlForInsertSysVarWithAccount(
+		sysAccountID, sysAccountName, transactionReadOnlySystemVariable, "1")] = nil
+	bh.sql2result[getSqlForGetSysVarWithAccount(sysAccountID, transactionReadOnlySystemVariableAlias)] =
+		newMrsForSystemVariableNameOfAccount(nil)
+	bh.sql2result[getSqlForInsertSysVarWithAccount(
+		sysAccountID, sysAccountName, transactionReadOnlySystemVariableAlias, "1")] = nil
+
+	readOnlyStmt, err := mysql.ParseOne(ctx,
+		"set global transaction_read_only = 1", 1)
+	require.NoError(t, err)
+	_, err = execInFrontend(ses, &ExecCtx{reqCtx: ctx, stmt: readOnlyStmt})
+	require.NoError(t, err)
+	require.Contains(t, bh.executedSQLs,
+		getSqlForInsertSysVarWithAccount(
+			sysAccountID, sysAccountName, transactionReadOnlySystemVariable, "1"))
+	require.Contains(t, bh.executedSQLs,
+		getSqlForInsertSysVarWithAccount(
+			sysAccountID, sysAccountName, transactionReadOnlySystemVariableAlias, "1"))
+	readOnlyValue, err := ses.GetGlobalSysVar(transactionReadOnlySystemVariable)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), readOnlyValue)
+	readOnlyValue, err = ses.GetGlobalSysVar(transactionReadOnlySystemVariableAlias)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), readOnlyValue)
 
 	got, err := ses.GetGlobalSysVar("transaction_isolation")
 	require.NoError(t, err)
@@ -5704,6 +6244,9 @@ func Test_statement_type(t *testing.T) {
 		kases := []kase{
 			{&tree.CreateTable{}},
 			{&tree.CreateTable{IsAsSelect: true}},
+			{&tree.RenameTable{}},
+			{&tree.PrepareStmt{Stmt: &tree.RenameTable{}}},
+			{&tree.PrepareString{Sql: "rename table old_name to new_name"}},
 			{&tree.Insert{}},
 			{&tree.BeginTransaction{}},
 			{&tree.ShowTables{}},
@@ -5724,6 +6267,15 @@ func Test_statement_type(t *testing.T) {
 
 		convey.So(IsDDL(&tree.CreateTable{}), convey.ShouldBeTrue)
 		convey.So(isImplicitCommitStatement(&tree.TruncateTable{}), convey.ShouldBeTrue)
+		convey.So(isImplicitCommitStatement(&tree.RenameTable{}), convey.ShouldBeTrue)
+		convey.So(isImplicitCommitStatement(&tree.PrepareStmt{Stmt: &tree.RenameTable{}}), convey.ShouldBeFalse)
+		convey.So(isImplicitCommitStatement(&tree.AlterTable{}), convey.ShouldBeFalse)
+		convey.So(needToFinishTransactionAtStatementEnd(&ExecCtx{
+			ses: &backSession{}, stmt: &tree.RenameTable{},
+		}), convey.ShouldBeFalse)
+		convey.So(needToFinishTransactionAtStatementEnd(&ExecCtx{
+			stmt: &tree.RenameTable{}, txnOpt: FeTxnOption{implicitCommitBefore: true},
+		}), convey.ShouldBeTrue)
 		convey.So(isImplicitCommitStatement(&tree.CreateTable{}), convey.ShouldBeFalse)
 		convey.So(IsDropStatement(&tree.DropTable{}), convey.ShouldBeTrue)
 		convey.So(IsAdministrativeStatement(&tree.CreateAccount{}), convey.ShouldBeTrue)
@@ -7108,6 +7660,26 @@ func TestPreparedSetExpressionRetryKeepsGlobalParserOrdinal(t *testing.T) {
 	require.Equal(t, 2, secondParam.Offset)
 }
 
+func TestPreparedQueryRetryKeepsPrunedParserOrdinal(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	ses := newTestSession(t, gomock.NewController(t))
+	defer ses.Close()
+	ses.SetSql("execute p")
+	for _, sql := range []string{
+		"select b from (select ? a, ? b) d",
+		"with d as (select ? a, ? b) select b from d",
+	} {
+		func() {
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			retryPlan, err := buildPlanForCompileRetry(ctx, ses, plan.NewEmptyCompilerContext(), stmt, false, nil)
+			require.NoError(t, err)
+			require.Equal(t, []int32{1}, queryParamPositions(retryPlan.GetQuery()))
+		}()
+	}
+}
+
 func TestBuildPlanForCompileRetryReappliesPreparedRuntimeSpecialization(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select coalesce(?, ?) from dual", 1)
@@ -7125,7 +7697,7 @@ func TestBuildPlanForCompileRetryReappliesPreparedRuntimeSpecialization(t *testi
 			PrepareParamKind:    vector.PrepareParamDecimal,
 			EnableNumericPrefix: true,
 		},
-	}, true)
+	})
 	retryPlan, err := buildPlanForCompileRetry(
 		ctx, nil, plan.NewEmptyCompilerContext(), stmt, true, retry)
 	require.NoError(t, err)
@@ -7142,6 +7714,66 @@ func TestBuildPlanForCompileRetryReappliesPreparedRuntimeSpecialization(t *testi
 	require.True(t, requiresV26, commonValue.String())
 }
 
+func TestBuildPlanForCompileRetryReprovesPreparedJoin(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	ses := newTestSession(t, gomock.NewController(t))
+	defer ses.Close()
+	ses.SetSql("execute p")
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL,
+		"select count(*) from select_test.bind_select a join select_test.bind_select b on a.a=b.a and a.a=hour(time(?)) where a.a=?", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	compilerCtx := plan.NewMockCompilerContext(true)
+	compilerCtx.SetContext(ctx)
+	proc := compilerCtx.GetProcess()
+	params := vector.NewVec(types.T_text.ToType())
+	defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+	require.NoError(t, vector.AppendBytes(params, []byte("01:00:00"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(params, []byte("1"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+	scanFilters := func(query *plan0.Query) int {
+		count := 0
+		for _, node := range query.Nodes {
+			if node.NodeType == plan0.Node_TABLE_SCAN {
+				count += len(node.FilterList)
+			}
+		}
+		return count
+	}
+	retry := newPreparedExecutionRetry([]any{
+		plan.ParamValue{Value: "01:00:00"}, plan.ParamValue{Value: int64(1)},
+	})
+	retry.bindings = []plan.PreparedSourceBinding{
+		{Position: 0, Type: types.T_text.ToType()},
+		{Position: 1, Type: types.T_int64.ToType()},
+	}
+	safe, err := buildPlanForCompileRetry(ctx, ses, compilerCtx, stmt, false, retry)
+	require.NoError(t, err)
+	require.NotNil(t, safe.GetQuery())
+	require.Positive(t, scanFilters(safe.GetQuery()), "safe values must restore selective scans")
+
+	require.NoError(t, vector.SetStringAt(params, 0, "900:00:00", proc.Mp()))
+	retry.paramVals[0] = plan.ParamValue{Value: "900:00:00"}
+	unsafe, err := buildPlanForCompileRetry(ctx, ses, compilerCtx, stmt, false, retry)
+	require.NoError(t, err)
+	require.NotNil(t, unsafe.GetQuery())
+	require.Zero(t, scanFilters(unsafe.GetQuery()), "warning-producing values keep the JOIN boundary")
+
+	require.NoError(t, vector.SetStringAt(params, 0, "01:00:00", proc.Mp()))
+	retry.paramVals[0] = plan.ParamValue{Value: "01:00:00"}
+	again, err := buildPlanForCompileRetry(ctx, ses, compilerCtx, stmt, false, retry)
+	require.NoError(t, err)
+	require.Positive(t, scanFilters(again.GetQuery()), "the earlier unsafe retry must not retain its barrier")
+
+	previousCtx := compilerCtx.GetContext()
+	invalid, err := parsers.ParseOne(ctx, dialect.MYSQL, "select missing_column", 1)
+	require.NoError(t, err)
+	defer invalid.Free()
+	_, err = buildPreparedBoundQuery(ctx, ses, compilerCtx, invalid, nil, nil)
+	require.Error(t, err)
+	require.Same(t, previousCtx, compilerCtx.GetContext())
+}
+
 func TestBuildPlanForPreparedExpressionRetryPreservesBinaryRuntimeType(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select ? from dual", 1)
@@ -7154,7 +7786,7 @@ func TestBuildPlanForPreparedExpressionRetryPreservesBinaryRuntimeType(t *testin
 			IsBinaryProtocol: true,
 			RuntimeType:      types.T_int64.ToType(),
 			HasRuntimeType:   true,
-		}}, true))
+		}}))
 	require.NoError(t, err)
 	require.Empty(t, queryParamPositions(retryPlan.GetQuery()), retryPlan.String())
 	root := retryPlan.GetQuery().Nodes[retryPlan.GetQuery().Steps[len(retryPlan.GetQuery().Steps)-1]]
@@ -10409,6 +11041,16 @@ func Test_checkModify(t *testing.T) {
 			assert.Nil(t, err)
 		}
 	}
+}
+
+func TestCheckModifyRebindsViewMetadataUdf(t *testing.T) {
+	queryPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{ViewMetadataDependsOnUdf: true}}}
+	changed, err := checkModify(queryPlan, func(string, string, *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+		t.Fatal("UDF-backed SHOW must rebind without relying on a table schema change")
+		return nil, nil, nil
+	})
+	require.NoError(t, err)
+	require.True(t, changed)
 }
 
 func TestCheckModifyValidatesCatalogDependencies(t *testing.T) {

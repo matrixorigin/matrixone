@@ -1477,6 +1477,14 @@ func (txn *Transaction) getTable(
 	return tbl, nil
 }
 
+func physicalCatalogTableName(databaseId, tableId uint64, tableName string) string {
+	if databaseId == catalog.MO_CATALOG_ID && tableId == catalog.MO_COLUMNS_ID &&
+		tableName == catalog.MO_COLUMNS_UPDATE {
+		return catalog.MO_COLUMNS
+	}
+	return tableName
+}
+
 func (txn *Transaction) resolvePKCheckPosForWrite(
 	ctx context.Context,
 	typ int,
@@ -1546,6 +1554,7 @@ func (txn *Transaction) resolvePKCheckPosForWrite(
 func (txn *Transaction) registerCNObjects(
 	objId types.Objectid,
 	accountId uint32,
+	databaseId, tableId uint64,
 	objBat *batch.Batch,
 	dbName string,
 	tbName string,
@@ -1555,6 +1564,8 @@ func (txn *Transaction) registerCNObjects(
 	txn.cnObjsSummary[objId] = Summary{
 		objBat:             objBat,
 		accountId:          accountId,
+		databaseId:         databaseId,
+		tableId:            tableId,
 		dbName:             dbName,
 		tbName:             tbName,
 		autoIncrEpoch:      autoIncrEpoch,
@@ -1629,7 +1640,7 @@ func (txn *Transaction) writeFileLockedWithAutoIncrEpochKnown(
 			sid := oid.Segment()
 
 			server.PutCnSegment(txn.op.Txn().ID, tableId, sid, colexec.TxnWorkspaceUnCommitType)
-			txn.registerCNObjects(*oid, accountId, copied, databaseName, tableName, autoIncrEpoch, autoIncrEpochKnown)
+			txn.registerCNObjects(*oid, accountId, databaseId, tableId, copied, databaseName, tableName, autoIncrEpoch, autoIncrEpochKnown)
 		}
 	}
 
@@ -1743,7 +1754,7 @@ func (txn *Transaction) writeFileLockedSkipTransferWithAutoIncrEpochKnown(
 			sid := oid.Segment()
 
 			server.PutCnSegment(txn.op.Txn().ID, tableId, sid, colexec.TxnWorkspaceUnCommitType)
-			txn.registerCNObjects(*oid, accountId, copied, databaseName, tableName, autoIncrEpoch, autoIncrEpochKnown)
+			txn.registerCNObjects(*oid, accountId, databaseId, tableId, copied, databaseName, tableName, autoIncrEpoch, autoIncrEpochKnown)
 		}
 	}
 
@@ -2234,9 +2245,13 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 // the lock is released, the scan-resolve cycle repeats until every table
 // referenced by txn.deletedBlocks is resolved.
 func (txn *Transaction) resolveCompactTablesLocked(ctx context.Context) (map[tableKey]engine.Relation, error) {
+	type lookup struct {
+		key          tableKey
+		relationName string
+	}
 	tables := make(map[tableKey]engine.Relation)
 	for {
-		var missing []tableKey
+		var missing []lookup
 		seen := make(map[tableKey]bool)
 		txn.deletedBlocks.iter(
 			func(blkId *types.Blockid, offsets []int64) bool {
@@ -2248,7 +2263,7 @@ func (txn *Transaction) resolveCompactTablesLocked(ctx context.Context) (map[tab
 				}
 				if _, ok := tables[k]; !ok && !seen[k] {
 					seen[k] = true
-					missing = append(missing, k)
+					missing = append(missing, lookup{k, physicalCatalogTableName(summary.databaseId, summary.tableId, summary.tbName)})
 				}
 				return true
 			})
@@ -2257,8 +2272,9 @@ func (txn *Transaction) resolveCompactTablesLocked(ctx context.Context) (map[tab
 		}
 
 		txn.Unlock()
-		for _, k := range missing {
-			tbl, err := txn.getTable(ctx, k.accountId, k.dbName, k.name)
+		for _, entry := range missing {
+			k := entry.key
+			tbl, err := txn.getTable(ctx, k.accountId, k.dbName, entry.relationName)
 			if err != nil {
 				txn.Lock()
 				return nil, err
@@ -2375,13 +2391,18 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 
 		locker.Lock()
 		defer locker.Unlock()
+		writeName := tbl.tableName
+		if tbl.db.databaseId == catalog.MO_CATALOG_ID && tbl.tableId == catalog.MO_COLUMNS_ID &&
+			tbKey.name == catalog.MO_COLUMNS_UPDATE {
+			writeName = tbKey.name
+		}
 		if err = txn.writeFileLockedWithAutoIncrEpochKnown(
 			INSERT,
 			tbl.accountId,
 			tbl.db.databaseId,
 			tbl.tableId,
 			tbl.db.databaseName,
-			tbl.tableName,
+			writeName,
 			fileName,
 			bat,
 			txn.tnStores[0],
@@ -2567,47 +2588,79 @@ func (txn *Transaction) getUncommittedS3Tombstone(
 	return nil
 }
 
-// TODO:: refactor in next PR, to make it more efficient and include persisted deletes in S3
-func (txn *Transaction) forEachTableHasDeletesLocked(
-	isObject bool,
-	f func(tbl *txnTable) error) error {
-	tables := make(map[uint64]*txnTable)
-	for i := 0; i < len(txn.writes); i++ {
-		e := txn.writes[i]
-		if e.typ != DELETE || e.bat == nil || e.bat.RowCount() == 0 ||
-			(!isObject && e.fileName != "" || isObject && e.fileName == "") ||
-			e.skipTransfer {
+type tombstoneTransferKey struct {
+	accountId           uint32
+	databaseId, tableId uint64
+}
+
+type tombstoneTransferTable struct {
+	databaseName string
+	writeNames   [2]string
+	hasDeletes   [2]bool
+	table        *txnTable
+}
+
+// collectTombstoneTransferTablesLocked retains only scalar lookup metadata for
+// this invocation. Relation lookup may unlock and reenter the workspace.
+func (txn *Transaction) collectTombstoneTransferTablesLocked() map[tombstoneTransferKey]tombstoneTransferTable {
+	var tables map[tombstoneTransferKey]tombstoneTransferTable
+	for i := range txn.writes {
+		e := &txn.writes[i]
+		if e.typ != DELETE || e.bat == nil || e.bat.RowCount() == 0 || e.skipTransfer {
 			continue
 		}
-
-		if _, ok := tables[e.tableId]; ok {
-			continue
+		key := tombstoneTransferKey{e.accountId, e.databaseId, e.tableId}
+		if tables == nil {
+			tables = make(map[tombstoneTransferKey]tombstoneTransferTable)
 		}
-		ctx := context.WithValue(txn.proc.Ctx, defines.TenantIDKey{}, e.accountId)
-		// Database might craft a sql on the current txn to get the table,
-		// so we need to unlock the txn
-		txn.Unlock()
-		db, err := txn.engine.Database(ctx, e.databaseName, txn.op)
-		if err != nil {
-			txn.Lock()
-			return err
+		t := tables[key]
+		if !t.hasDeletes[0] && !t.hasDeletes[1] {
+			t.databaseName = e.databaseName
 		}
-		rel, err := db.Relation(ctx, e.tableName, nil)
-		if err != nil {
-			txn.Lock()
-			return err
+		kind := 0
+		if e.fileName != "" {
+			kind = 1
 		}
-		txn.Lock()
-		if v, ok := rel.(*txnTableDelegate); ok {
-			tables[e.tableId] = v.origin
-		} else {
-			tables[e.tableId] = rel.(*txnTable)
+		if !t.hasDeletes[kind] {
+			t.hasDeletes[kind] = true
+			t.writeNames[kind] = e.tableName
+			tables[key] = t
 		}
-
 	}
-	for _, tbl := range tables {
-		if err := f(tbl); err != nil {
+	return tables
+}
+
+func (txn *Transaction) forEachTableHasDeletesLocked(
+	tables map[tombstoneTransferKey]tombstoneTransferTable,
+	kind int,
+	f func(tbl *txnTable, writeName string) error) error {
+	for key, t := range tables {
+		if !t.hasDeletes[kind] || t.table != nil {
+			continue
+		}
+		name := physicalCatalogTableName(key.databaseId, key.tableId, t.writeNames[kind])
+		dbName := t.databaseName
+		// Database lookup may run internal SQL on this transaction.
+		rel, err := func() (engine.Relation, error) {
+			txn.Unlock()
+			defer txn.Lock()
+			return txn.getTable(txn.proc.Ctx, key.accountId, dbName, name)
+		}()
+		if err != nil {
 			return err
+		}
+		if v, ok := rel.(*txnTableDelegate); ok {
+			t.table = v.origin
+		} else {
+			t.table = rel.(*txnTable)
+		}
+		tables[key] = t
+	}
+	for _, t := range tables {
+		if t.hasDeletes[kind] {
+			if err := f(t.table, t.writeNames[kind]); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -2942,11 +2995,12 @@ func (txn *Transaction) transferTombstones(
 		txn.transfer.lastTransferred = end
 	}()
 
-	if err = transferInmemTombstones(ctx, txn, start, end); err != nil {
+	tables := txn.collectTombstoneTransferTablesLocked()
+	if err = transferInmemTombstones(ctx, txn, tables, start, end); err != nil {
 		return err
 	}
 
-	return transferTombstoneObjects(ctx, txn, start, end)
+	return transferTombstoneObjects(ctx, txn, tables, start, end)
 }
 
 func forceTransfer(ctx context.Context) bool {
@@ -3043,6 +3097,17 @@ func (txn *Transaction) rollbackTableOpLocked() {
 			delete(txn.tablesInVain, k)
 		}
 	}
+}
+
+var _ client.TerminalTableDeletionView = (*Transaction)(nil)
+
+// IsTableDeletedAtTxnClose reads the surviving physical deletion set after
+// statement rollback and commit preparation. The terminal callback runs while
+// the transaction is quiescent, so taking the workspace lock here would add an
+// operator-to-workspace lock edge without protecting a concurrent writer.
+func (txn *Transaction) IsTableDeletedAtTxnClose(physicalTableID uint64) bool {
+	_, deleted := txn.tablesInVain[physicalTableID]
+	return deleted
 }
 
 func (txn *Transaction) clearTableCache() {

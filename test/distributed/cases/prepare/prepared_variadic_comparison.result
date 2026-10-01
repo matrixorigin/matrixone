@@ -45,6 +45,67 @@ EXECUTE p_field USING @needle, @first, @second, @text, @nil;
 ➤ FIELD(?, ?, ?, ?, ?)[-5,64,0]  𝄀
 2
 DEALLOCATE PREPARE p_field;
+SELECT FIELD(CAST(9007199254740993 AS DECIMAL(20,0)), CAST(9007199254740992 AS DECIMAL(20,0)));
+➤ FIELD(cast(9007199254740993 as decimal(20)), cast(9007199254740992 as decimal(20)))[-5,64,0]  𝄀
+0
+PREPARE p_field_fixed FROM 'SELECT FIELD(?, CAST(9007199254740992 AS DECIMAL(20,0)))';
+SET @field_exact = CAST(9007199254740993 AS DECIMAL(20,0));
+EXECUTE p_field_fixed USING @field_exact;
+➤ FIELD(?, cast(9007199254740992 as decimal(20)))[-5,64,0]  𝄀
+0
+DEALLOCATE PREPARE p_field_fixed;
+SELECT FIELD(ABS(CAST(9007199254740993 AS DECIMAL(20,0))), CAST(9007199254740992 AS DECIMAL(20,0))),
+FIELD(CAST(9007199254740993 AS DECIMAL(20,0)), ABS(CAST(9007199254740992 AS DECIMAL(20,0))));
+➤ FIELD(ABS(cast(9007199254740993 as decimal(20))), cast(9007199254740992 as decimal(20)))[-5,64,0]  ¦  FIELD(cast(9007199254740993 as decimal(20)), ABS(cast(9007199254740992 as decimal(20))))[-5,64,0]  𝄀
+0  ¦  0
+PREPARE p_field_nested FROM 'SELECT FIELD(ABS(?), CAST(9007199254740992 AS DECIMAL(20,0))),
+FIELD(CAST(9007199254740993 AS DECIMAL(20,0)), ABS(?))';
+SET @field_exact = CAST(9007199254740993 AS DECIMAL(20,0));
+SET @field_other = CAST(9007199254740992 AS DECIMAL(20,0));
+EXECUTE p_field_nested USING @field_exact, @field_other;
+➤ FIELD(ABS(?), cast(9007199254740992 as decimal(20)))[-5,64,0]  ¦  FIELD(cast(9007199254740993 as decimal(20)), ABS(?))[-5,64,0]  𝄀
+0  ¦  0
+DEALLOCATE PREPARE p_field_nested;
+SELECT FIELD(CAST(9007199254740993 AS DECIMAL(20,0)), ABS(CAST(9007199254740992 AS DECIMAL(20,0)))) AS fixed_abs,
+FIELD(CAST(9007199254740993 AS DECIMAL(20,0)), COALESCE(CAST(9007199254740992 AS DECIMAL(20,0)), CAST(0 AS DECIMAL(20,0)))) AS fixed_coalesce,
+FIELD(GREATEST(CAST(9007199254740993 AS DECIMAL(20,0)), CAST(0 AS DECIMAL(20,0))), CAST(9007199254740992 AS DECIMAL(20,0))) AS nested_greatest,
+FIELD(LEAST(CAST(9007199254740993 AS DECIMAL(20,0)), CAST(9007199254740994 AS DECIMAL(20,0))), CAST(9007199254740992 AS DECIMAL(20,0))) AS nested_least;
+➤ fixed_abs[-5,64,0]  ¦  fixed_coalesce[-5,64,0]  ¦  nested_greatest[-5,64,0]  ¦  nested_least[-5,64,0]  𝄀
+0  ¦  0  ¦  0  ¦  0
+PREPARE p_field_folded FROM 'SELECT FIELD(?, ABS(CAST(9007199254740992 AS DECIMAL(20,0)))) AS fixed_abs,
+FIELD(?, COALESCE(CAST(9007199254740992 AS DECIMAL(20,0)), CAST(0 AS DECIMAL(20,0)))) AS fixed_coalesce,
+FIELD(GREATEST(?, CAST(0 AS DECIMAL(20,0))), CAST(9007199254740992 AS DECIMAL(20,0))) AS nested_greatest,
+FIELD(LEAST(?, CAST(9007199254740994 AS DECIMAL(20,0))), CAST(9007199254740992 AS DECIMAL(20,0))) AS nested_least';
+SET @field_exact = CAST(9007199254740993 AS DECIMAL(20,0));
+EXECUTE p_field_folded USING @field_exact, @field_exact, @field_exact, @field_exact;
+➤ fixed_abs[-5,64,0]  ¦  fixed_coalesce[-5,64,0]  ¦  nested_greatest[-5,64,0]  ¦  nested_least[-5,64,0]  𝄀
+0  ¦  0  ¦  0  ¦  0
+DEALLOCATE PREPARE p_field_folded;
+SELECT FIELD(CAST(9007199254740992 AS DECIMAL(20,0)), CAST(9007199254740993 AS CHAR)) AS explicit_char,
+FIELD(COALESCE(NULL, ABS(CAST(9007199254740993 AS DECIMAL(20,0)))),
+ABS(CAST(9007199254740992 AS DECIMAL(20,0)))) AS nested_null;
+➤ explicit_char[-5,64,0]  ¦  nested_null[-5,64,0]  𝄀
+1  ¦  0
+PREPARE p_field_boundary FROM 'SELECT FIELD(?, CAST(9007199254740993 AS CHAR)) AS explicit_char,
+FIELD(COALESCE(?, ABS(?)), ABS(CAST(9007199254740992 AS DECIMAL(20,0)))) AS nested_null';
+SET @char_needle = CAST(9007199254740992 AS DECIMAL(20,0));
+SET @fallback = NULL, @nested = CAST(9007199254740993 AS DECIMAL(20,0));
+EXECUTE p_field_boundary USING @char_needle, @fallback, @nested;
+➤ explicit_char[-5,64,0]  ¦  nested_null[-5,64,0]  𝄀
+1  ¦  1
+SET @nested = CAST(9007199254740992 AS DECIMAL(20,0));
+EXECUTE p_field_boundary USING @char_needle, @fallback, @nested;
+➤ explicit_char[-5,64,0]  ¦  nested_null[-5,64,0]  𝄀
+1  ¦  1
+SET @fallback = '9007199254740993', @nested = CAST(9007199254740993 AS DECIMAL(20,0));
+EXECUTE p_field_boundary USING @char_needle, @fallback, @nested;
+➤ explicit_char[-5,64,0]  ¦  nested_null[-5,64,0]  𝄀
+1  ¦  1
+SET @fallback = NULL;
+EXECUTE p_field_boundary USING @char_needle, @fallback, @nested;
+➤ explicit_char[-5,64,0]  ¦  nested_null[-5,64,0]  𝄀
+1  ¦  1
+DEALLOCATE PREPARE p_field_boundary;
 SELECT FIELD(x'0062', x'61', x'0062'), FIELD(x'0062', x'62'), FIELD(x'41', x'61');
 ➤ FIELD(0x0062, 0x61, 0x0062)[-5,64,0]  ¦  FIELD(0x0062, 0x62)[-5,64,0]  ¦  FIELD(0x41, 0x61)[-5,64,0]  𝄀
 2  ¦  0  ¦  1
@@ -65,3 +126,36 @@ EXECUTE p_cast USING @cast_num, @cast_text, @cast_num, @cast_text;
 ➤ GREATEST(cast(? as varchar), ?)[-1,16383,0]  ¦  FIELD(cast(? as varchar), ?)[-5,64,0]  𝄀
 2  ¦  0
 DEALLOCATE PREPARE p_cast;
+SET @dnull = CAST(NULL AS DECIMAL(20,0)), @snull = CAST(NULL AS CHAR), @exact = CAST(9007199254740993 AS DECIMAL(20,0));
+PREPARE p_tuple FROM 'SELECT FIELD(COALESCE(?, ?, ABS(?)), ABS(CAST(9007199254740992 AS DECIMAL(20,0)))) AS f';
+EXECUTE p_tuple USING @dnull, @snull, @exact;
+➤ f[-5,64,0]  𝄀
+1
+EXECUTE p_tuple USING @snull, @dnull, @exact;
+➤ f[-5,64,0]  𝄀
+1
+EXECUTE p_tuple USING @dnull, @dnull, @exact;
+➤ f[-5,64,0]  𝄀
+0
+DEALLOCATE PREPARE p_tuple;
+PREPARE p_limit FROM 'SELECT x, FIELD(x, ABS(CAST(9007199254740992 AS DECIMAL(20,0)))) AS f FROM (SELECT ? AS x LIMIT 1) d';
+EXECUTE p_limit USING @exact;
+➤ x[-1,16383,0]  ¦  f[-5,64,0]  𝄀
+9007199254740993  ¦  0
+DEALLOCATE PREPARE p_limit;
+PREPARE p_agg FROM 'SELECT FIELD(x, ABS(CAST(9007199254740992 AS DECIMAL(20,0)))) AS f FROM (SELECT MAX(?) AS x) d';
+EXECUTE p_agg USING @exact;
+➤ f[-5,64,0]  𝄀
+0
+DEALLOCATE PREPARE p_agg;
+PREPARE p_union FROM 'SELECT FIELD(x, ABS(CAST(9007199254740992 AS DECIMAL(20,0)))) AS f FROM (SELECT ? AS x UNION ALL SELECT CAST(9007199254740993 AS DECIMAL(20,0))) d';
+EXECUTE p_union USING @exact;
+➤ f[-5,64,0]  𝄀
+0  𝄀
+0
+DEALLOCATE PREPARE p_union;
+PREPARE p_having FROM 'SELECT 1 AS kept FROM (SELECT ? AS x) d GROUP BY x HAVING FIELD(x, ABS(CAST(9007199254740992 AS DECIMAL(20,0))))=0';
+EXECUTE p_having USING @exact;
+➤ kept[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE p_having;

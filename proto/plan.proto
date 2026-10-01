@@ -115,6 +115,12 @@ message VarRef {
   string name = 1;
   bool system = 2;
   bool global = 3;
+  // Frozen row domain, independent of Expr.typ's static charset:
+  // 0 = legacy/unbound; 1 = INHERIT; 2 = TEXT; 3 = BINARY.
+  // Nonzero values encode container/types.RuntimeStringDomain + 1 and are
+  // valid only for non-system MySQL string variables. Never re-resolve them
+  // from the current assignment during execution.
+  uint32 bound_string_domain = 4;
 }
 
 // Reference a column in the proj list of a node.
@@ -279,6 +285,12 @@ message PreparedNumericMetadata {
   // expression needed to recompute a runtime string domain after derived-column
   // or scalar-subquery flattening without adding another pointer to every Expr.
   Expr string_domain_source = 11;
+  // IFNULL is lowered to CASE, but its reconciled common value remains a
+  // value-producing boundary for source-dependent integer consumers.
+  bool ifnull_common_value = 12;
+  // A selector inlined from a projected column owns its reconciled result
+  // domain; integer consumers must not reinterpret its individual arms.
+  bool projected_common_value = 13;
 }
 
 message Expr {
@@ -986,6 +998,9 @@ message Node {
     TABLE_CLONE = 56;
     // Coordinator-local selector for bounded POST -> PRE -> FORCE Top-K candidates.
     ADAPTIVE_TOP = 57;
+    // Coordinator-local scalar query-vector selection and its materialized readers.
+    VECTOR_QUERY_TOP = 58;
+    VECTOR_QUERY_SOURCE = 59;
   }
 
   enum JoinType {
@@ -1249,6 +1264,9 @@ message Node {
   // final candidate only when the initial candidate is empty. This is used by
   // explicit IVF POST fallback and preserves its partial-result behavior.
   bool adaptive_top_fallback_on_empty = 92;
+
+  // VECTOR_QUERY_TOP/SOURCE only: statement-local immutable provider identity.
+  int32 vector_query_source_id = 93;
 }
 
 message SnapshotExtraInfo {
@@ -1709,6 +1727,10 @@ message Query {
   // execution so a committed concurrent CREATE INDEX can rebuild the plan;
   // without a definition change, it returns the original key-not-found error.
   repeated UnresolvedIndexHint unresolved_index_hints = 16;
+
+  // SHOW View column VALUES were bound using a mutable UDF catalog row.
+  // Neither the View nor the UDF catalog table changes schema when that row is replaced.
+  bool view_metadata_depends_on_udf = 17;
 }
 
 message TransationControl {

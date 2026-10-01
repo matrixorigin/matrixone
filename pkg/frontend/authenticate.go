@@ -33,6 +33,7 @@ import (
 	"github.com/tidwall/btree"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -1635,7 +1636,7 @@ const (
 
 	fetchSqlOfSpFormat = `select lang, body, args, sql_mode from mo_catalog.mo_stored_procedure where name = '%s' and db = '%s' order by proc_id;`
 
-	getTableColumnDefFormat = `select attname, atttyp, attnum, attnotnull, att_default, att_is_auto_increment, att_is_hidden from mo_catalog.mo_columns where account_id = %d and att_database = '%s' and att_relname = '%s' order by attnum;`
+	getTableColumnDefFormat = `select col.attname, col.atttyp, col.attnum, col.attnotnull, col.att_default, col.att_is_auto_increment, col.att_is_hidden, tbl.relkind, tbl.rel_id, tbl.rel_version, tbl.reldatabase_id from mo_catalog.mo_columns col join mo_catalog.mo_tables tbl on col.account_id = tbl.account_id and col.att_relname_id = tbl.rel_id where col.account_id = %d and col.att_database = %s and col.att_relname = %s order by col.attnum;`
 )
 
 var (
@@ -2118,7 +2119,7 @@ func privilegeTypeListSQL(objTyp objectType, privId PrivilegeType, includeSysSco
 }
 
 func getTableColumnDefSql(accountId uint64, dbName, tableName string) (string, error) {
-	return fmt.Sprintf(getTableColumnDefFormat, accountId, dbName, tableName), nil
+	return fmt.Sprintf(getTableColumnDefFormat, accountId, escapeSQLString(dbName), escapeSQLString(tableName)), nil
 }
 
 func getSqlForCheckDatabase(_ context.Context, dbName string) (string, error) {
@@ -9207,13 +9208,14 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 	}
 
 	priv := determinePrivilegeSetOfStatement(stmt)
+	// Only the sys account moadmin role may run mo_ctrl / fault_inject, wherever it appears in the
+	// plan. Check it BEFORE the object-type branch: a statement can carry the call in an expression
+	// with no table object (e.g. SELECT 1 WHERE mo_ctl(...) IS NOT NULL), which would otherwise skip
+	// this gate entirely.
+	if hasMoCtrl(p) && !verifyAccountCanExecMoCtrl(ses.GetTenantInfo()) {
+		return false, stats, moerr.NewInternalError(ctx, "do not have privilege to execute the statement")
+	}
 	if priv.objectType() == objectTypeTable {
-		// only sys account, moadmin role can exec mo_ctrl
-		if hasMoCtrl(p) {
-			if !verifyAccountCanExecMoCtrl(ses.GetTenantInfo()) {
-				return false, stats, moerr.NewInternalError(ctx, "do not have privilege to execute the statement")
-			}
-		}
 		if isTargetSysWhiteList(p) && verifyAccountCanExecMoCtrl(ses.GetTenantInfo()) {
 			return true, stats, nil
 		}
@@ -10546,11 +10548,10 @@ func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca 
 			return rtnErr
 		}
 
-		// Account lifecycle mutations take SNAPSHOT before the account-name gate.
-		// DROP ACCOUNT already enters its lineage lifecycle barrier in this order.
-		// Holding the same order prevents CREATE and DROP of one account from
-		// waiting on each other's first gate.
-		if rtnErr = lockSnapshotLifecycle(ctx, bh); rtnErr != nil &&
+		// Account creation reads the lifecycle generation and writes only its new,
+		// account-local marker. Take the shared SNAPSHOT gate before the account-name
+		// gate so unrelated CREATEs can coexist while retaining DROP's lock order.
+		if rtnErr = lockSnapshotLifecycleShared(ctx, ses, bh); rtnErr != nil &&
 			!ignoreUnsupportedViewMetadataLifecycleGate(ses.GetService(), rtnErr) {
 			return rtnErr
 		}
@@ -10653,7 +10654,10 @@ func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca 
 		if rtnErr != nil {
 			return rtnErr
 		}
-		if rtnErr = inheritViewMetadataRevalidation(ctx, bh, ses.GetService(), newTenant.GetTenantID()); rtnErr != nil {
+		if hook := createAccountBeforeViewLifecycleHook.Load(); hook != nil {
+			(*hook)(newTenant.GetTenantID())
+		}
+		if rtnErr = inheritViewMetadataRevalidation(ctx, bh, ses, newTenant.GetTenantID()); rtnErr != nil {
 			return rtnErr
 		}
 
@@ -10675,14 +10679,17 @@ func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca 
 func inheritViewMetadataRevalidation(
 	ctx context.Context,
 	bh BackgroundExec,
-	serviceID string,
+	ses *Session,
 	accountID uint32,
 ) error {
-	if err := lockViewMetadataLifecycle(ctx, bh); err != nil {
-		if ignoreUnsupportedViewMetadataLifecycleGate(serviceID, err) {
+	if err := lockViewMetadataLifecycleShared(ctx, ses, bh); err != nil {
+		if ignoreUnsupportedViewMetadataLifecycleGate(ses.GetService(), err) {
 			return nil
 		}
 		return err
+	}
+	if hook := createAccountViewLifecycleLockedHook.Load(); hook != nil {
+		(*hook)(accountID)
 	}
 	err := bh.Exec(ctx, fmt.Sprintf(
 		"insert into %s.%s (%s) select %d,0,0,0,'%s','%s',0,0,0,0,0,'','','','',d.source_relation_kind,'',0,null,0,d.dependency_generation "+
@@ -10695,11 +10702,44 @@ func inheritViewMetadataRevalidation(
 		catalog.ViewRefreshStatusRevalidateRequired, catalog.ViewRefreshStatusRevalidateScan,
 		catalog.ViewRefreshStatusActivated, catalog.ViewRefreshStatusLegacyScan,
 		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, accountID))
-	if !compile.ViewMetadataRefreshEnabled(serviceID) &&
+	if !compile.ViewMetadataRefreshEnabled(ses.GetService()) &&
 		(moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) || moerr.IsMoErrCode(err, moerr.ErrBadDB)) {
 		return nil
 	}
 	return err
+}
+
+var (
+	createAccountBeforeViewLifecycleHook atomic.Pointer[func(uint32)]
+	createAccountViewLifecycleLockedHook atomic.Pointer[func(uint32)]
+)
+
+// SetCreateAccountBeforeViewLifecycleHookForTest installs a process-local
+// barrier immediately before CREATE ACCOUNT re-enters SNAPSHOT and acquires
+// the View lifecycle row. It is intended only for deterministic multi-CN
+// lock-order tests.
+func SetCreateAccountBeforeViewLifecycleHookForTest(hook func(uint32)) func() {
+	previous := createAccountBeforeViewLifecycleHook.Load()
+	if hook == nil {
+		createAccountBeforeViewLifecycleHook.Store(nil)
+	} else {
+		createAccountBeforeViewLifecycleHook.Store(&hook)
+	}
+	return func() { createAccountBeforeViewLifecycleHook.Store(previous) }
+}
+
+// SetCreateAccountViewLifecycleLockedHookForTest installs a process-local
+// barrier after CREATE ACCOUNT has acquired the real View lifecycle row and
+// before it publishes inherited metadata. It is intended only for deterministic
+// multi-CN lock-order tests.
+func SetCreateAccountViewLifecycleLockedHookForTest(hook func(uint32)) func() {
+	previous := createAccountViewLifecycleLockedHook.Load()
+	if hook == nil {
+		createAccountViewLifecycleLockedHook.Store(nil)
+	} else {
+		createAccountViewLifecycleLockedHook.Store(&hook)
+	}
+	return func() { createAccountViewLifecycleLockedHook.Store(previous) }
 }
 
 func ignoreUnsupportedViewMetadataLifecycleGate(serviceID string, err error) bool {
@@ -11014,7 +11054,15 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 	// TODO: when we have the auto_increment column, we need new strategy.
 
 	var err error
-	informationSchemaTables := sysview.InitInformationSchemaSysTablesForProtocol(protocolVersionForTenantInitialization(service))
+	protocol := protocolVersionForTenantInitialization(service)
+	if protocol >= defines.MORPCVersion100 {
+		// A new CN can already speak 96 while an older CN still serves the
+		// cluster. Do not persist a View using a function that peer cannot plan.
+		if err := requireCommonViewColumnsProtocol(ctx, bh); err != nil {
+			return err
+		}
+	}
+	informationSchemaTables := sysview.InitInformationSchemaSysTablesForProtocol(protocol)
 	sqls := make([]string, 0, len(informationSchemaTables)+len(sysview.InitMysqlSysTables)+4)
 
 	sqls = append(sqls, "use information_schema;")
@@ -11030,6 +11078,27 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 		}
 	}
 	return err
+}
+
+func requireCommonViewColumnsProtocol(ctx context.Context, bh BackgroundExec) error {
+	bh.ClearExecResultSet()
+	// This fixed cluster probe is system-authored; subsequent tenant DDL keeps its original identity.
+	probeCtx := defines.AttachAccount(ctx, catalog.System_Account, catalog.System_User, catalog.System_Role)
+	if err := bh.Exec(probeCtx, "SELECT mo_ctl('cn', 'GetProtocolVersion', '')"); err != nil {
+		return err
+	}
+	results, err := getResultSet(ctx, bh)
+	if err != nil {
+		return err
+	}
+	if len(results) == 0 || results[0].GetRowCount() == 0 {
+		return versions.CheckProtocolVersionResponse("", defines.MORPCVersion100)
+	}
+	encoded, err := results[0].GetString(ctx, 0, 0)
+	if err != nil {
+		return err
+	}
+	return versions.CheckProtocolVersionResponse(encoded, defines.MORPCVersion100)
 }
 
 func protocolVersionForTenantInitialization(service string) int64 {
@@ -12519,8 +12588,8 @@ func doRevokePrivilegeImplicitly(
 }
 
 // doSetGlobalSystemVariables persists equivalent compatibility names in one
-// catalog transaction. transaction_isolation uses this to update both the
-// canonical name and tx_isolation so old and new CNs agree during a rolling
+// catalog transaction. Transaction characteristic aliases use this to update
+// both canonical and legacy names so old and new CNs agree during a rolling
 // upgrade.
 func doSetGlobalSystemVariables(
 	ctx context.Context,

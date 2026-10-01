@@ -28,11 +28,10 @@ import (
 
 const minClusterReadinessRetryInterval = 100 * time.Millisecond
 
-// waitForClusterSelfReady prevents ingress from opening before this CN's local
-// authoritative cluster snapshot contains the heartbeat generation it just
-// published. Proxy and CN maintain independent snapshots, so a replacement CN
-// can otherwise receive traffic while its own snapshot still predates itself.
-func (s *service) waitForClusterSelfReady() error {
+// waitForClusterSelfReady checks raw self registration before bootstrap, then
+// admission-aware query membership before public SQL acceptance. The latter
+// must follow ingress publication so HAKeeper can make this incarnation routable.
+func (s *service) waitForClusterSelfReady(requireQueryReady bool) error {
 	// Some focused lifecycle tests build only the service dependencies relevant
 	// to their assertion. NewService always initializes moCluster.
 	if s.moCluster == nil {
@@ -43,23 +42,28 @@ func (s *service) waitForClusterSelfReady() error {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	parent := context.Background()
+	if requireQueryReady && s.bootstrapUpgradeContext != nil {
+		parent = s.bootstrapUpgradeContext
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 
 	retryInterval := s.cfg.HAKeeper.HeatbeatInterval.Duration
 	if retryInterval < minClusterReadinessRetryInterval {
 		retryInterval = minClusterReadinessRetryInterval
 	}
-	return s.waitForClusterSelfReadyWithContext(ctx, retryInterval)
+	return s.waitForClusterSelfReadyWithContext(ctx, retryInterval, requireQueryReady)
 }
 
 func (s *service) waitForClusterSelfReadyWithContext(
 	ctx context.Context,
 	retryInterval time.Duration,
+	requireQueryReady bool,
 ) error {
 	select {
 	case <-ctx.Done():
-		return s.clusterSelfReadinessError(ctx, nil)
+		return s.clusterSelfReadinessError(ctx, nil, requireQueryReady)
 	case <-s.hakeeperConnected:
 	}
 
@@ -69,17 +73,39 @@ func (s *service) waitForClusterSelfReadyWithContext(
 			"CN cluster service does not support authoritative refresh")
 	}
 
+	var upgradeResult <-chan error
+	if requireQueryReady {
+		upgradeResult = s.bootstrapUpgradeResult
+	}
+	checkStartup := func() error {
+		if err := s.checkViewMetadataGenerationRevoked(); err != nil {
+			return err
+		}
+		if requireQueryReady {
+			var err error
+			upgradeResult, err = pollBootstrapUpgradeResult(s.bootstrapUpgradeContext, upgradeResult)
+			return err
+		}
+		return nil
+	}
 	var lastRefreshErr error
 	for attempts := 1; ; attempts++ {
+		if err := checkStartup(); err != nil {
+			return err
+		}
 		lastRefreshErr = refresher.Refresh(ctx)
+		if err := checkStartup(); err != nil {
+			return err
+		}
 		if lastRefreshErr == nil {
-			ready, err := s.clusterSnapshotContainsSelf(ctx)
+			ready, err := s.clusterSnapshotContainsSelf(ctx, requireQueryReady)
 			if err != nil {
 				lastRefreshErr = err
 			} else if ready {
 				s.logger.Info("CN is visible in local cluster inventory",
 					zap.String("uuid", s.cfg.UUID),
-					zap.Int("refresh-attempts", attempts))
+					zap.Int("refresh-attempts", attempts),
+					zap.Bool("query-ready", requireQueryReady))
 				return nil
 			}
 		}
@@ -93,25 +119,40 @@ func (s *service) waitForClusterSelfReadyWithContext(
 				default:
 				}
 			}
-			return s.clusterSelfReadinessError(ctx, lastRefreshErr)
+			return s.clusterSelfReadinessError(ctx, lastRefreshErr, requireQueryReady)
+		case err := <-upgradeResult:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			upgradeResult = nil
+			if err != nil {
+				return err
+			}
 		case <-timer.C:
 		}
 	}
 }
 
-func (s *service) clusterSnapshotContainsSelf(ctx context.Context) (bool, error) {
+func (s *service) clusterSnapshotContainsSelf(ctx context.Context, requireQueryReady bool) (bool, error) {
 	found := false
-	requireGeneration := false
-	if reader, ok := s.moCluster.(clusterservice.ViewMetadataAdmissionReader); ok {
+	requireGeneration := requireQueryReady
+	if reader, ok := s.moCluster.(clusterservice.ViewMetadataAdmissionReader); ok && !requireQueryReady {
 		admission := reader.GetViewMetadataAdmission()
 		requireGeneration = admission.Preparing || admission.Enabled
 	}
-	err := clusterservice.GetCNServiceRawWithContext(
+	read := clusterservice.GetCNServiceRawWithContext
+	if requireQueryReady {
+		read = clusterservice.GetCNServiceWithoutWorkingStateWithContext
+	}
+	err := read(
 		ctx,
 		s.moCluster,
 		clusterservice.NewServiceIDSelector(s.cfg.UUID),
 		func(cn metadata.CNService) bool {
-			found = cn.PipelineServiceAddress == s.pipelineServiceServiceAddr() &&
+			found = cn.ServiceID == s.cfg.UUID && cn.PipelineServiceAddress == s.pipelineServiceServiceAddr() &&
 				cn.CommitID == version.CommitID &&
 				(!requireGeneration || s.viewMetadataAdmissionGeneration == 0 ||
 					cn.ViewMetadataAdmissionGeneration == s.viewMetadataAdmissionGeneration)
@@ -120,18 +161,20 @@ func (s *service) clusterSnapshotContainsSelf(ctx context.Context) (bool, error)
 	return found, err
 }
 
-func (s *service) clusterSelfReadinessError(ctx context.Context, refreshErr error) error {
+func (s *service) clusterSelfReadinessError(ctx context.Context, refreshErr error, requireQueryReady bool) error {
 	if refreshErr != nil {
 		return moerr.NewInternalErrorf(
 			context.Background(),
-			"CN %s was not published in its local cluster inventory before startup deadline: %v: %v",
+			"CN %s was not published in its local cluster inventory before startup deadline (query-ready=%t): %v: %v",
 			s.cfg.UUID,
+			requireQueryReady,
 			ctx.Err(),
 			refreshErr)
 	}
 	return moerr.NewInternalErrorf(
 		context.Background(),
-		"CN %s was not published in its local cluster inventory before startup deadline: %v",
+		"CN %s was not published in its local cluster inventory before startup deadline (query-ready=%t): %v",
 		s.cfg.UUID,
+		requireQueryReady,
 		ctx.Err())
 }

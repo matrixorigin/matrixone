@@ -811,7 +811,7 @@ func TestPreparedCharSourceTypeFromString(t *testing.T) {
 	}{
 		{name: "signed minimum", value: "-9223372036854775808", want: types.T_int64, wantExact: true},
 		{name: "unsigned above signed maximum", value: "9223372036854775809", want: types.T_uint64, wantExact: true},
-		{name: "decimal", value: "65.5e0", want: types.T_decimal64, wantExact: true},
+		{name: "fractional text retains truncation", value: "65.5e0", want: types.T_varchar},
 		{name: "numeric suffix", value: "65.5xyz", want: types.T_varchar},
 		{name: "non-numeric", value: "abc", want: types.T_varchar},
 		{name: "decimal overflow falls back to string", value: strings.Repeat("9", 77), want: types.T_varchar},
@@ -1218,14 +1218,14 @@ func TestCheckNoNeedCastAcceptsSameTypeConstantCastOnly(t *testing.T) {
 	target := types.T_int64.ToType()
 	literalCast, err := appendCastBeforeExpr(ctx, makePlan2Int32ConstExprWithType(7), makePlan2Type(&target))
 	require.NoError(t, err)
-	require.True(t, checkNoNeedCast(target, target, literalCast))
+	require.True(t, checkNoNeedCast(context.Background(), target, target, literalCast))
 
 	columnCast, err := appendCastBeforeExpr(ctx, &plan.Expr{
 		Typ:  plan.Type{Id: int32(types.T_int32)},
 		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
 	}, makePlan2Type(&target))
 	require.NoError(t, err)
-	require.False(t, checkNoNeedCast(target, target, columnCast))
+	require.False(t, checkNoNeedCast(context.Background(), target, target, columnCast))
 
 	uuidType := types.T_uuid.ToType()
 	uuidCast, err := appendExplicitCastBeforeExpr(
@@ -1234,7 +1234,7 @@ func TestCheckNoNeedCastAcceptsSameTypeConstantCastOnly(t *testing.T) {
 		makePlan2Type(&uuidType),
 	)
 	require.NoError(t, err)
-	require.True(t, checkNoNeedCast(uuidType, uuidType, uuidCast), uuidCast.String())
+	require.True(t, checkNoNeedCast(context.Background(), uuidType, uuidType, uuidCast), uuidCast.String())
 	secondUUIDCast, err := appendExplicitCastBeforeExpr(
 		ctx,
 		makePlan2StringConstExprWithType("00000000-0000-0000-0000-000000000002", false),
@@ -1786,7 +1786,7 @@ func TestCheckNoNeedCastWithTrailingZeros(t *testing.T) {
 			}
 
 			// Test checkNoNeedCast
-			result := checkNoNeedCast(constType, columnType, constExpr)
+			result := checkNoNeedCast(context.Background(), constType, columnType, constExpr)
 
 			t.Logf("ConstValue: %s, ConstScale: %d, ColumnScale: %d", tt.constValue, tt.constScale, tt.columnScale)
 			t.Logf("Expected: %v, Got: %v", tt.expectResult, result)
@@ -3262,4 +3262,49 @@ func TestGetRowSizeFromTableDefLongTextDoesNotOverflow(t *testing.T) {
 	got := GetRowSizeFromTableDef(tableDef, true)
 	require.Equal(t, float64(math.MaxInt32), got)
 	require.GreaterOrEqual(t, got, float64(0))
+}
+
+func TestNodeHasMoCtrl(t *testing.T) {
+	moCtl := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: "mo_ctl"}}}}
+	other := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: "="}}}}
+
+	require.False(t, NodeHasMoCtrl(nil))
+	require.False(t, NodeHasMoCtrl(&plan.Node{ProjectList: []*plan.Expr{other}}))
+
+	// mo_ctl in every executable position must be detected, not just ProjectList.
+	require.True(t, NodeHasMoCtrl(&plan.Node{ProjectList: []*plan.Expr{moCtl}}))
+	require.True(t, NodeHasMoCtrl(&plan.Node{FilterList: []*plan.Expr{moCtl}}))
+	require.True(t, NodeHasMoCtrl(&plan.Node{OnList: []*plan.Expr{moCtl}}))
+	require.True(t, NodeHasMoCtrl(&plan.Node{GroupBy: []*plan.Expr{moCtl}}))
+	require.True(t, NodeHasMoCtrl(&plan.Node{AggList: []*plan.Expr{moCtl}}))
+	require.True(t, NodeHasMoCtrl(&plan.Node{TblFuncExprList: []*plan.Expr{moCtl}}))
+	require.True(t, NodeHasMoCtrl(&plan.Node{Limit: moCtl}))
+	require.True(t, NodeHasMoCtrl(&plan.Node{OrderBy: []*plan.OrderBySpec{{Expr: moCtl}}}))
+	require.True(t, NodeHasMoCtrl(&plan.Node{RowsetData: &plan.RowsetData{
+		Cols: []*plan.ColData{{Data: []*plan.RowsetExpr{{Expr: moCtl}}}},
+	}}))
+	// nested inside a function argument (e.g. mo_ctl(...) IS NOT NULL)
+	require.True(t, NodeHasMoCtrl(&plan.Node{FilterList: []*plan.Expr{
+		{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: "is_not_null"}, Args: []*plan.Expr{moCtl}}}},
+	}}))
+
+	// A window entry hides the call inside an Expr_W (WinSpecList), where the pre-Expr_W traversal
+	// never looked: MAX(mo_ctl(...)) OVER () or mo_ctl(...) OVER (...) must still be detected.
+	winWith := func(spec *plan.WindowSpec) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_W{W: spec}}
+	}
+	require.True(t, NodeHasMoCtrl(&plan.Node{WinSpecList: []*plan.Expr{
+		winWith(&plan.WindowSpec{WindowFunc: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: "max"}, Args: []*plan.Expr{moCtl}}}}}),
+	}}))
+	require.True(t, NodeHasMoCtrl(&plan.Node{WinSpecList: []*plan.Expr{
+		winWith(&plan.WindowSpec{PartitionBy: []*plan.Expr{moCtl}}),
+	}}))
+	require.True(t, NodeHasMoCtrl(&plan.Node{WinSpecList: []*plan.Expr{
+		winWith(&plan.WindowSpec{OrderBy: []*plan.OrderBySpec{{Expr: moCtl}}}),
+	}}))
+	// a window with no mo_ctl, and a nil spec, must be safe and false.
+	require.False(t, NodeHasMoCtrl(&plan.Node{WinSpecList: []*plan.Expr{
+		winWith(&plan.WindowSpec{WindowFunc: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: "row_number"}}}}}),
+	}}))
+	require.False(t, HasMoCtrl(&plan.Expr{Expr: &plan.Expr_W{W: nil}}))
 }

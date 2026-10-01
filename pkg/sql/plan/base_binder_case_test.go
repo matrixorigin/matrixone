@@ -206,6 +206,86 @@ func TestTemporalBindingUsesPrivatePreparedProvenance(t *testing.T) {
 	}
 }
 
+func TestPreparedTimeArithmeticMarkerKeepsTimeMetadata(t *testing.T) {
+	ctx := context.Background()
+	first := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_text)}, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+	second := makePlan2StringConstExprWithType("01:02:03")
+	for _, name := range []string{"addtime", "subtime"} {
+		bound, err := BindFuncExprImplByPlanExpr(ctx, name, []*planpb.Expr{DeepCopyExpr(first), DeepCopyExpr(second)})
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_time), bound.Typ.Id)
+		require.Equal(t, int32(6), bound.Typ.Scale)
+		rebound, err := bindPreparedFuncExprImplByPlanExpr(ctx, bound, name,
+			[]*planpb.Expr{makePlan2StringConstExprWithType("2024-02-29 12:34:56"), DeepCopyExpr(second)}, nil)
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_time), rebound.Typ.Id)
+		require.Equal(t, int32(6), rebound.Typ.Scale)
+	}
+}
+
+func TestExtractStringAndMarkerUseTolerantParser(t *testing.T) {
+	for _, kind := range []types.T{types.T_any, types.T_char, types.T_varchar, types.T_text} {
+		source := &planpb.Expr{Typ: planpb.Type{Id: int32(kind)}, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+		bound, err := BindFuncExprImplByPlanExpr(context.Background(), "extract", []*planpb.Expr{makePlan2StringConstExprWithType("hour"), source})
+		require.NoError(t, err)
+		_, overload := function.DecodeOverloadID(bound.GetF().Func.Obj)
+		require.Equal(t, int32(8), overload)
+		require.Equal(t, int32(types.T_int64), bound.Typ.Id)
+		require.Equal(t, int32(types.T_varchar), bound.GetF().Args[1].Typ.Id)
+	}
+}
+
+func TestTypedTimeArithmeticDurationPrecision(t *testing.T) {
+	ctx := context.Background()
+	for _, name := range []string{"addtime", "subtime"} {
+		for _, kind := range []types.T{types.T_time, types.T_datetime} {
+			first := &planpb.Expr{Typ: planpb.Type{Id: int32(kind)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+			literal := makePlan2StringConstExprWithType("00:00:00.1")
+			bound, err := BindFuncExprImplByPlanExpr(ctx, name, []*planpb.Expr{DeepCopyExpr(first), literal})
+			require.NoError(t, err)
+			require.Equal(t, int32(kind), bound.Typ.Id)
+			require.Equal(t, int32(1), bound.Typ.Scale)
+			marker := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_text)}, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+			bound, err = BindFuncExprImplByPlanExpr(ctx, name, []*planpb.Expr{DeepCopyExpr(first), marker})
+			require.NoError(t, err)
+			require.Equal(t, int32(6), bound.Typ.Scale)
+			rebound, err := bindPreparedFuncExprImplByPlanExpr(ctx, bound, name, []*planpb.Expr{DeepCopyExpr(first), DeepCopyExpr(literal)}, nil)
+			require.NoError(t, err)
+			require.Equal(t, int32(6), rebound.Typ.Scale)
+		}
+	}
+}
+
+func TestTimeDiffStringLiteralPrecision(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		left, right string
+		want        int32
+	}{
+		{"12:00:00.1", "11:00:00.0", 1},
+		{"12:00:00.123456", "11:00:00", 6},
+		{"bad", "11:00:00", 6},
+	} {
+		bound, err := BindFuncExprImplByPlanExpr(ctx, "timediff", []*planpb.Expr{
+			makePlan2StringConstExprWithType(tc.left), makePlan2StringConstExprWithType(tc.right),
+		})
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_time), bound.Typ.Id)
+		require.Equal(t, tc.want, bound.Typ.Scale)
+	}
+	marker := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_text)}, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+	bound, err := BindFuncExprImplByPlanExpr(ctx, "timediff", []*planpb.Expr{
+		DeepCopyExpr(marker), makePlan2StringConstExprWithType("11:00:00"),
+	})
+	require.NoError(t, err)
+	require.Equal(t, int32(6), bound.Typ.Scale)
+	rebound, err := bindPreparedFuncExprImplByPlanExpr(ctx, bound, "timediff", []*planpb.Expr{
+		makePlan2StringConstExprWithType("12:00:00.1"), makePlan2StringConstExprWithType("11:00:00"),
+	}, nil)
+	require.NoError(t, err)
+	require.Equal(t, int32(6), rebound.Typ.Scale)
+}
+
 func TestPreparedBitCountDefaultsToBinaryAndSpecializesNumericValues(t *testing.T) {
 	ctx := context.Background()
 	prepared, err := runOneStmt(NewMockOptimizer(false), t,
@@ -213,8 +293,6 @@ func TestPreparedBitCountDefaultsToBinaryAndSpecializesNumericValues(t *testing.
 	require.NoError(t, err)
 	preparePlan := prepared.GetDcl().GetPrepare().Plan
 	require.Equal(t, []int32{0}, PreparedPlanBitCountFallbackParamPositions(preparePlan))
-	require.False(t, PreparedPlanNeedsRuntimeSpecialization(preparePlan),
-		"BIT_COUNT uses its cached marker-position trigger instead of a per-execute plan scan")
 	fn := findPlanFunctionExpr(preparePlan, "bit_count")
 	require.NotNil(t, fn)
 	_, overload := function.DecodeOverloadID(fn.GetF().GetFunc().GetObj())
@@ -1176,7 +1254,6 @@ func TestPreparedScalarNumericOverloadsCoverSubqueryAndExactInteger(t *testing.T
 	require.Truef(t, isExplicitPreparedCast(copiedFn.GetF().Args[0]),
 		"explicit cast overload was lost: original=%d copied=%d",
 		fn.GetF().Args[0].GetF().GetFunc().GetObj(), copiedFn.GetF().Args[0].GetF().GetFunc().GetObj())
-	require.False(t, PreparedPlanNeedsRuntimeSpecialization(queryPlan))
 	filled, err = FillValuesOfParamsInPlan(ctx, queryPlan, []any{
 		ParamValue{Value: "9007199254740993", PrepareParamKind: vector.PrepareParamInteger},
 	})

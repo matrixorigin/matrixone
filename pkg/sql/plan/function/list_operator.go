@@ -2074,6 +2074,15 @@ var supportedOperators = []FuncNew{
 					return newCheckResultWithCast(2, integerDomainOperands(inputs))
 				}
 				has, t1, t2 := arithmeticTypeCastRule1(inputs[0], inputs[1])
+				// D64 is a signed coefficient. MUL's D128 result cannot recover
+				// a UINT64/BIT value narrowed before multiplication.
+				wideUnsigned := inputs[0].Oid == types.T_uint64 || inputs[0].Oid == types.T_bit ||
+					inputs[1].Oid == types.T_uint64 || inputs[1].Oid == types.T_bit
+				if wideUnsigned && t1.Oid == types.T_decimal64 && t2.Oid == types.T_decimal64 {
+					t1 = types.New(types.T_decimal128, 38, t1.Scale)
+					t2 = types.New(types.T_decimal128, 38, t2.Scale)
+					has = true
+				}
 				if widened, ok := widenedDecimalArithmeticInputs("*", inputs, []types.Type{t1, t2}); ok {
 					return newCheckResultWithCast(0, widened)
 				}
@@ -2082,13 +2091,12 @@ var supportedOperators = []FuncNew{
 					// D128×D128, downgrade to D64×D64. The d64Mul kernel produces
 					// D128 output so overflow is impossible, and it's ~4× faster
 					// than d128Mul (1 vs 4 hardware MUL instructions).
-					// Exclude uint64 (values > max_int64 can't fit in D64=int64).
+					// Exclude UINT64/BIT (their full domain does not fit in D64).
 					if t1.Oid == types.T_decimal128 && t2.Oid == types.T_decimal128 {
 						i0, i1 := inputs[0].Oid, inputs[1].Oid
 						hasD64 := i0 == types.T_decimal64 || i1 == types.T_decimal64
 						noD128 := i0 != types.T_decimal128 && i1 != types.T_decimal128
-						noU64 := i0 != types.T_uint64 && i1 != types.T_uint64
-						if hasD64 && noD128 && noU64 {
+						if hasD64 && noD128 && !wideUnsigned {
 							t1 = types.T_decimal64.ToType()
 							t2 = types.T_decimal64.ToType()
 							SetTargetScaleFromSource(&inputs[0], &t1)
@@ -2194,27 +2202,17 @@ var supportedOperators = []FuncNew{
 			{
 				overloadId: 0,
 				retType: func(parameters []types.Type) types.Type {
-					if parameters[0].Oid == types.T_decimal256 || parameters[1].Oid == types.T_decimal256 {
-						scale := int32(12)
-						scale1 := parameters[0].Scale
-						if scale > scale1+6 {
-							scale = scale1 + 6
+					if result, ok := decimalDivisionReturnType(
+						parameters, parameters, DefaultDivPrecisionIncrement,
+					); ok {
+						// Context-aware binding promotes operands together with the
+						// result. Keep the raw overload callback physically compatible
+						// for legacy direct execution, which bypasses binding casts.
+						if result.Oid == types.T_decimal256 &&
+							parameters[0].Oid != types.T_decimal256 && parameters[1].Oid != types.T_decimal256 {
+							result = types.New(types.T_decimal128, min(result.Width, int32(38)), result.Scale)
 						}
-						if scale < scale1 {
-							scale = scale1
-						}
-						return types.New(types.T_decimal256, 65, scale)
-					}
-					if parameters[0].Oid.IsDecimal() {
-						scale := int32(12)
-						scale1 := parameters[0].Scale
-						if scale1 > scale {
-							scale = scale1
-						}
-						if scale1+6 < scale {
-							scale = scale1 + 6
-						}
-						return types.New(types.T_decimal128, 38, scale)
+						return result
 					}
 					if parameters[0].Oid == types.T_year {
 						return types.T_float64.ToType()

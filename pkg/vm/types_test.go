@@ -108,6 +108,11 @@ func TestPrepareUsesOperatorChildProcessAndKeepsPostOrder(t *testing.T) {
 }
 
 func TestOperatorTypeAndBaseAccessors(t *testing.T) {
+	// New local operators must not renumber existing remote wire opcodes.
+	require.Equal(t, OpType(65), AdaptiveTop)
+	require.Equal(t, OpType(66), MinusAll)
+	require.Equal(t, OpType(67), VectorQuery)
+	require.Equal(t, "VectorQuery", VectorQuery.String())
 	require.Equal(t, "IcebergWrite", IcebergWrite.String())
 	require.Equal(t, "Unknown", OpType(9999).String())
 

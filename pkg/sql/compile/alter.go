@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"slices"
 	"strings"
 	"time"
@@ -43,7 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_clone"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -276,6 +274,11 @@ func (c *Compile) alterTableHasLatestHistoricalBranchSource(
 }
 
 func (c *Compile) lockDataBranchLineageOwnerLifecycle() error {
+	txnOp := c.proc.GetTxnOperator()
+	if txnOp == nil || !txnOp.Txn().IsPessimistic() {
+		return moerr.NewInternalError(c.proc.Ctx,
+			"data branch lineage lifecycle writer requires a pessimistic transaction")
+	}
 	return databranchutils.LockLineageOwnerLifecycle(func(sql string) error {
 		return c.runSqlWithAccountId(sql, int32(catalog.System_Account))
 	})
@@ -374,24 +377,7 @@ func shouldAdvanceAlterDataBranchLineageSnapshot(pessimistic, rcIsolation bool) 
 }
 
 func (c *Compile) advanceAlterDataBranchLineageSnapshot() (int64, error) {
-	op := c.proc.GetTxnOperator()
-	physicalTime := op.SnapshotTS().PhysicalTime
-	if physicalTime > math.MaxInt64-int64(time.Microsecond) {
-		return 0, moerr.NewInternalErrorNoCtx(
-			"cannot advance ALTER data-branch lineage snapshot past the timestamp limit",
-		)
-	}
-	requested := physicalTime + int64(time.Microsecond)
-	if err := op.UpdateSnapshot(c.proc.Ctx, timestamp.Timestamp{PhysicalTime: requested}); err != nil {
-		return 0, err
-	}
-	updated := op.SnapshotTS().PhysicalTime
-	if updated <= requested {
-		return 0, moerr.NewInternalErrorNoCtx(
-			"failed to advance ALTER data-branch lineage snapshot",
-		)
-	}
-	return updated - int64(time.Nanosecond), nil
+	return databranchutils.AdvanceLineageSnapshot(c.proc.Ctx, c.proc.GetTxnOperator())
 }
 
 type alterDataBranchQuery func(string) (executor.Result, error)
@@ -1165,20 +1151,21 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 	lineageSnapshotAdvanced := false
 	lineageCloneTS := int64(0)
 	lineageTxnOp := c.proc.GetTxnOperator()
-	lineageOriginalSnapshot := timestamp.Timestamp{}
-	lineageRestoreSnapshot := false
-	defer func() {
-		if lineageRestoreSnapshot {
-			lineageTxnOp.SetSnapshotTS(lineageOriginalSnapshot)
-		}
-	}()
 	if lineageTxnOp.Txn().IsPessimistic() {
 		var retryErr error
 		if !isTemp {
-			// TRUNCATE, DROP TABLE, and DROP ACCOUNT enter this lifecycle
-			// before locking table metadata. Use the same order for COPY ALTER.
-			if err = c.lockDataBranchLineageOwnerLifecyclePessimistic(); err != nil {
-				return err
+			if c.isLifecycleRC() {
+				if dbSource, originRel, err = c.admitBroadTableLifecycleRC(dbName, tblName, oldId, false); err != nil {
+					return err
+				}
+				if plannedID := qry.TableDef.GetTblId(); plannedID != 0 && plannedID != oldId {
+					return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+				}
+			} else {
+				// SI keeps the existing broad lifecycle and fixed snapshot.
+				if err = c.lockDataBranchLineageOwnerLifecyclePessimistic(); err != nil {
+					return err
+				}
 			}
 		}
 		// 0. lock origin database metadata in catalog
@@ -1251,8 +1238,6 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 			// Under RC, advance the statement snapshot while holding it so a branch
 			// that committed just before lock acquisition is visible to the lineage
 			// probe below, even when lock acquisition itself did not wait.
-			lineageOriginalSnapshot = lineageTxnOp.SnapshotTS()
-			lineageRestoreSnapshot = true
 			if lineageCloneTS, err = c.advanceAlterDataBranchLineageSnapshot(); err != nil {
 				return err
 			}
@@ -1352,7 +1337,16 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 	// those relationships are reconciled after the source relation is replaced.
 	// Get logicalId from tableDef and pass it when creating the temporary table.
 	createTmpOpts := alterCopyCreateOptions(qry)
-	err = c.runSqlWithOptions(qry.CreateTmpTableSql, createTmpOpts)
+	err = func() error {
+		originalCtx := c.proc.Ctx
+		baseCtx := originalCtx
+		if baseCtx == nil {
+			baseCtx = c.proc.GetTopContext()
+		}
+		c.proc.Ctx = plan2.WithPersistedDDLReplay(baseCtx, qry.TableDef, qry.CopyTableDef)
+		defer func() { c.proc.Ctx = originalCtx }()
+		return c.runSqlWithOptions(qry.CreateTmpTableSql, createTmpOpts)
+	}()
 	if err != nil {
 		c.proc.Error(c.proc.Ctx, "Create copy table for alter table",
 			zap.String("databaseName", dbName),
@@ -1494,12 +1488,22 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 	if isTemp {
 		dropSql = "drop temporary table " + sqlquote.QualifiedIdent(dbName, qry.TableDef.Name)
 	}
-	if err := c.runSqlWithOptions(
-		dropSql,
-		// ALTER TABLE COPY replaces the source table internally. It is not a
-		// user-visible DROP TABLE, so keep table-level publications unchanged.
-		executor.StatementOption{}.WithIgnoreForeignKey().WithIgnorePublish(),
-	); err != nil {
+	drop := func() error {
+		return c.runSqlWithOptions(
+			dropSql,
+			// ALTER TABLE COPY replaces the source table internally. It is not a
+			// user-visible DROP TABLE, so keep table-level publications unchanged.
+			executor.StatementOption{}.WithIgnoreForeignKey().WithIgnorePublish(),
+		)
+	}
+	if !isTemp && c.isLifecycleRC() {
+		// G-X and the source table lock are already held. The synchronous
+		// internal DROP must not reacquire C after G or advance its snapshot.
+		err = c.withBroadDropLifecycle(drop)
+	} else {
+		err = drop()
+	}
+	if err != nil {
 		c.proc.Error(c.proc.Ctx, "drop original table for alter table",
 			zap.String("databaseName", dbName),
 			zap.String("origin tableName", qry.GetTableDef().Name),

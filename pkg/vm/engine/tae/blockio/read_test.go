@@ -975,6 +975,8 @@ func TestBlockDataReadInnerAppendableVisibility(t *testing.T) {
 	require.True(t, usable)
 	require.True(t, matched)
 
+	observed := &filterPolicyFS{FileService: fs}
+	filterPolicy := fileservice.Policy(fileservice.SkipFullFilePreloads | fileservice.SkipDiskCacheWrites)
 	pointSearch := objectio.NewReadFilterSearch(types.T_varchar, [][]byte{
 		[]byte("k1"), []byte("k2"), []byte("k3"),
 	})
@@ -991,9 +993,13 @@ func TestBlockDataReadInnerAppendableVisibility(t *testing.T) {
 		false,
 		cacheVectors,
 		queryMP,
-		fs,
+		observed,
 		nil,
+		filterPolicy,
 	)
+
+	require.Contains(t, observed.policies, filterPolicy)
+	observed.policies = nil
 	require.NoError(t, err)
 	require.Equal(t, []int64{2}, sels)
 
@@ -1013,9 +1019,13 @@ func TestBlockDataReadInnerAppendableVisibility(t *testing.T) {
 		false,
 		cacheVectors,
 		queryMP,
-		fs,
+		observed,
 		prefixStats,
+		filterPolicy,
 	)
+
+	require.Contains(t, observed.policies, filterPolicy)
+	observed.policies = nil
 	require.NoError(t, err)
 	require.Equal(t, []int64{0, 2, 3, 4}, prefixSels)
 	require.Equal(t, uint64(5), prefixStats.StorageFilterInputRows)
@@ -1035,9 +1045,13 @@ func TestBlockDataReadInnerAppendableVisibility(t *testing.T) {
 		false,
 		cacheVectors,
 		queryMP,
-		fs,
+		observed,
 		noMatchStats,
+		filterPolicy,
 	)
+
+	require.Contains(t, observed.policies, filterPolicy)
+	observed.policies = nil
 	require.NoError(t, err)
 	require.Empty(t, noMatchSels)
 	require.Equal(t, uint64(5), noMatchStats.StorageFilterInputRows)
@@ -1060,9 +1074,13 @@ func TestBlockDataReadInnerAppendableVisibility(t *testing.T) {
 		false,
 		cacheVectors,
 		queryMP,
-		fs,
+		observed,
 		topStats,
+		filterPolicy,
 	)
+
+	require.Contains(t, observed.policies, filterPolicy)
+	observed.policies = nil
 	require.NoError(t, err)
 	require.Equal(t, []int64{0, 2}, statsSels)
 	require.Equal(t, uint64(5), topStats.StorageFilterInputRows)
@@ -1819,4 +1837,14 @@ func TestHandleOrderByLimitOnSelectRows_Narrow(t *testing.T) {
 		require.Equalf(t, int64(1), resSels[0], "%s closest", c.name)
 		require.Equalf(t, int64(2), resSels[1], "%s next", c.name)
 	}
+}
+
+type filterPolicyFS struct {
+	fileservice.FileService
+	policies []fileservice.Policy
+}
+
+func (fs *filterPolicyFS) Read(ctx context.Context, v *fileservice.IOVector) error {
+	fs.policies = append(fs.policies, v.Policy)
+	return fs.FileService.Read(ctx, v)
 }

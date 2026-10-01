@@ -219,7 +219,6 @@ func TestClusterLifecycleAndCNExpansion(t *testing.T) {
 	c, err := NewCluster(
 		WithTesting(),
 		WithPreStart(func(svc ServiceOperator) {
-			adjustClusterStartupRetryIntervals(svc)
 			if svc.ServiceType() == metadata.ServiceType_CN {
 				svc.Adjust(func(config *ServiceConfig) {
 					config.CN.AutomaticUpgrade = true
@@ -235,6 +234,18 @@ func TestClusterLifecycleAndCNExpansion(t *testing.T) {
 	require.Error(t, c.Start())
 
 	validCNCanWork(t, c, 0)
+	assertBootstrapViews(t, c, 0)
+
+	// Exercise recovery of a core-only / partially completed bootstrap using
+	// the existing cluster. A new CN must reconcile missing derived views.
+	firstCN, err := c.GetCNService(0)
+	require.NoError(t, err)
+	exec := firstCN.(*operator).reset.svc.(cnservice.Service).GetSQLExecutor()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	res, err := exec.Exec(ctx, "drop view system.sql_statement_hotspot", executor.Options{})
+	res.Close()
+	require.NoError(t, err)
 
 	_, err = c.GetService("no")
 	require.Error(t, err)
@@ -251,10 +262,12 @@ func TestClusterLifecycleAndCNExpansion(t *testing.T) {
 	require.NoError(t, c.StartNewCNService(2))
 	validCNCanWork(t, c, 1)
 	validCNCanWork(t, c, 2)
+	assertBootstrapViews(t, c, 1)
+	assertBootstrapViews(t, c, 2)
 
 	// Preserve the original dynamic-expansion coverage with the generated CN
 	// defaults after the first three CNs have exercised automatic upgrade.
-	c.(*cluster).options.preStart = adjustClusterStartupRetryIntervals
+	c.(*cluster).options.preStart = nil
 	require.NoError(t, c.StartNewCNService(1))
 	validCNCanWork(t, c, 3)
 	cn, err = c.GetCNService(3)
@@ -647,7 +660,7 @@ func TestWithTestingBoundsHeartbeatRecoveryInsideStoreLiveness(t *testing.T) {
 	}
 }
 
-func TestTestingTxnTraceBufferPreservesOverrides(t *testing.T) {
+func TestTestingServiceDefaultsPreserveOverrides(t *testing.T) {
 	cfg := newServiceConfig()
 	cfg.CN.Txn.Trace.BufferSize = 4096
 	applyTestingTxnTraceBuffer(&cfg)
@@ -659,6 +672,21 @@ func TestTestingTxnTraceBufferPreservesOverrides(t *testing.T) {
 				opts = append(opts, WithTesting())
 			}
 			opts = append(opts, WithPreStart(func(svc ServiceOperator) {
+				if svc.ServiceType() == metadata.ServiceType_LOG {
+					cfg := svc.GetServiceConfig()
+					wantRTT := uint64(200)
+					wantRetry := time.Second
+					if testingMode {
+						wantRTT = 50
+						wantRetry = basicClusterHAKeeperBootstrapRetryInterval
+					}
+					require.Equal(t, wantRTT, cfg.LogService.RTTMillisecond)
+					require.Equal(t, wantRetry, cfg.LogService.HAKeeperBootstrapRetryInterval.Duration)
+					// This interval also defines the bootstrap failure budget.
+					require.Equal(t, 3*time.Second, cfg.LogService.HAKeeperCheckInterval.Duration)
+					svc.Adjust(func(cfg *ServiceConfig) { cfg.LogService.RTTMillisecond = 75 })
+				}
+
 				if svc.ServiceType() != metadata.ServiceType_CN {
 					return
 				}
@@ -674,6 +702,12 @@ func TestTestingTxnTraceBufferPreservesOverrides(t *testing.T) {
 				t.Cleanup(func() { require.NoError(t, c.Close()) })
 			}
 			require.NoError(t, err)
+			for _, svc := range c.(*cluster).services {
+				if svc.ServiceType() == metadata.ServiceType_LOG {
+					require.Equal(t, uint64(75), svc.GetServiceConfig().LogService.RTTMillisecond)
+				}
+			}
+
 			for i := range 2 {
 				cn, err := c.GetCNService(i)
 				require.NoError(t, err)
@@ -1200,4 +1234,22 @@ func TestRollbackNewServicesDropsTopologyAfterCloseError(t *testing.T) {
 	require.Empty(t, c.pendingCleanup)
 	require.NoError(t, c.Close())
 	require.Equal(t, int32(3), newService.closeCount.Load())
+}
+
+func assertBootstrapViews(t *testing.T, c Cluster, index int) {
+	t.Helper()
+	svc, err := c.GetCNService(index)
+	require.NoError(t, err)
+	exec := svc.(*operator).reset.svc.(cnservice.Service).GetSQLExecutor()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	res, err := exec.Exec(ctx, "select count(*) from mo_catalog.mo_tables where account_id=0 and reldatabase='system' and relkind='v' and relname in ('log_info','error_info','span_info','sql_statement_hotspot')", executor.Options{})
+	require.NoError(t, err)
+	defer res.Close()
+	var count int64
+	res.ReadRows(func(_ int, cols []*vector.Vector) bool { count = executor.GetFixedRows[int64](cols[0])[0]; return true })
+	require.Equal(t, int64(4), count)
+	hotspot, err := exec.Exec(ctx, "select * from system.sql_statement_hotspot limit 1", executor.Options{})
+	hotspot.Close()
+	require.NoError(t, err)
 }

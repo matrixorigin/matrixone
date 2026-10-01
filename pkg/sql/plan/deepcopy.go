@@ -375,6 +375,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		DedupInputKeysUnique:       node.DedupInputKeysUnique,
 		EmitCompressedRowCount:     node.EmitCompressedRowCount,
 		AdaptiveTopFallbackOnEmpty: node.AdaptiveTopFallbackOnEmpty,
+		VectorQuerySourceId:        node.VectorQuerySourceId,
 		SpillMem:                   node.SpillMem,
 		RuntimeFilterProbeList: DeepCopyRuntimeFilterSpecList(
 			node.RuntimeFilterProbeList),
@@ -843,21 +844,22 @@ func DeepCopyQuery(qry *plan.Query) *plan.Query {
 		}
 	}
 	newQry := &plan.Query{
-		StmtType:            qry.StmtType,
-		Steps:               slices.Clone(qry.Steps),
-		Nodes:               make([]*plan.Node, len(qry.Nodes)),
-		Params:              DeepCopyExprList(qry.Params),
-		Headings:            slices.Clone(qry.Headings),
-		LoadTag:             qry.LoadTag,
-		LoadWriteS3:         qry.LoadWriteS3,
-		BackgroundQueries:   backgroundQueries,
-		MaxDop:              qry.MaxDop,
-		HasForeignKeyAction: qry.HasForeignKeyAction,
-		HasReturning:        qry.HasReturning,
-		ReturningStep:       qry.ReturningStep,
-		ApplySqlSelectLimit: qry.ApplySqlSelectLimit,
-		DetectSqls:          slices.Clone(qry.DetectSqls),
-		CatalogDependencies: make([]*plan.ObjectRef, len(qry.CatalogDependencies)),
+		StmtType:                 qry.StmtType,
+		Steps:                    slices.Clone(qry.Steps),
+		Nodes:                    make([]*plan.Node, len(qry.Nodes)),
+		Params:                   DeepCopyExprList(qry.Params),
+		Headings:                 slices.Clone(qry.Headings),
+		LoadTag:                  qry.LoadTag,
+		LoadWriteS3:              qry.LoadWriteS3,
+		BackgroundQueries:        backgroundQueries,
+		MaxDop:                   qry.MaxDop,
+		HasForeignKeyAction:      qry.HasForeignKeyAction,
+		HasReturning:             qry.HasReturning,
+		ReturningStep:            qry.ReturningStep,
+		ApplySqlSelectLimit:      qry.ApplySqlSelectLimit,
+		DetectSqls:               slices.Clone(qry.DetectSqls),
+		CatalogDependencies:      make([]*plan.ObjectRef, len(qry.CatalogDependencies)),
+		ViewMetadataDependsOnUdf: qry.ViewMetadataDependsOnUdf,
 	}
 	for idx, node := range qry.Nodes {
 		newQry.Nodes[idx] = DeepCopyNode(node)
@@ -1242,9 +1244,10 @@ func DeepCopyExpr(expr *Expr) *Expr {
 	case *plan.Expr_V:
 		newExpr.Expr = &plan.Expr_V{
 			V: &plan.VarRef{
-				Name:   item.V.GetName(),
-				Global: item.V.GetGlobal(),
-				System: item.V.GetSystem(),
+				Name:              item.V.GetName(),
+				Global:            item.V.GetGlobal(),
+				System:            item.V.GetSystem(),
+				BoundStringDomain: item.V.GetBoundStringDomain(),
 			},
 		}
 

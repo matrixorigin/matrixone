@@ -446,7 +446,7 @@ func (s *service) Start() (err error) {
 		s.lifecycle = serviceStarted
 	}()
 
-	if err = s.waitForClusterSelfReady(); err != nil {
+	if err = s.waitForClusterSelfReady(false); err != nil {
 		return err
 	}
 	if err = s.bootstrap(); err != nil {
@@ -464,6 +464,23 @@ func (s *service) Start() (err error) {
 		return err
 	}
 	if err = s.startUnlessViewMetadataGenerationRevoked(func() error {
+		ctx, cancel := context.WithTimeoutCause(context.Background(), 5*time.Minute, moerr.CauseBootstrap)
+		defer cancel()
+		if s.pu != nil {
+			ctx = context.WithValue(ctx, config.ParameterUnitKey, s.pu)
+		}
+		complete, err := bootstrap.SystemViewsExist(ctx, s.sqlExecutor)
+		if err != nil || complete {
+			return err
+		}
+		if err = s.waitForViewMetadataAdmissionHandoff(false, uint64(defines.MORPCVersion98)); err != nil {
+			return err
+		}
+		return bootstrap.InitSystemViews(ctx, s.sqlExecutor)
+	}); err != nil {
+		return err
+	}
+	if err = s.startUnlessViewMetadataGenerationRevoked(func() error {
 		return s.startSiriusRuntime(context.Background())
 	}); err != nil {
 		return err
@@ -471,26 +488,33 @@ func (s *service) Start() (err error) {
 
 	s.initSqlWriterFactory()
 
-	if err = s.startFrontendUnlessViewMetadataGenerationRevoked(); err != nil {
-		return err
-	}
 	if err = s.startUnlessViewMetadataGenerationRevoked(s.server.Start); err != nil {
 		return err
 	}
 
 	// Admission authorizes local initialization; it does not make this CN
-	// routable. Revalidate after every remote entry point is listening, then
+	// routable. SQL sockets are bound but do not yet accept connections.
+	// Revalidate after the internal remote entry points are listening, then
 	// linearize authoritative snapshot validation and ingress publication with
 	// heartbeat snapshot storage. Keep the automatic upgrade owner alive until
 	// this final handoff closes.
 	if err = s.waitForViewMetadataIngressAdmission(); err != nil {
 		return err
 	}
-	s.completeBootstrapUpgradeStartupWait()
 	if err = s.checkViewMetadataGenerationRevoked(); err != nil {
 		return err
 	}
 	s.notifyHeartbeat()
+	// Ingress advertisement needs a heartbeat and a local inventory refresh
+	// before query scheduling can use this CN. Keep SQL acceptance closed until
+	// the authoritative admission-aware snapshot contains this incarnation.
+	if err = s.waitForClusterSelfReady(true); err != nil {
+		return err
+	}
+	if err = s.startFrontendUnlessViewMetadataGenerationRevoked(); err != nil {
+		return err
+	}
+	s.completeBootstrapUpgradeStartupWait()
 
 	if err = s.checkViewMetadataGenerationRevoked(); err != nil {
 		return err

@@ -128,12 +128,15 @@ func builtInStrToTime(parameters []*vector.Vector, result vector.FunctionResultW
 
 			success := coreStrToDate(proc.Ctx, time, functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v2))
 			if success {
-				if types.ValidTime(uint64(time.hour), uint64(time.minute), uint64(time.second)) {
-					value := types.TimeFromClock(false, uint64(time.hour), time.minute, time.second, time.microsecond)
-					if err := rs.Append(value, false); err != nil {
-						return err
+				hours := uint64(time.day)*24 + uint64(time.hour)
+				if types.ValidTime(hours, uint64(time.minute), uint64(time.second)) {
+					value := types.TimeFromClock(false, hours, time.minute, time.second, time.microsecond)
+					if types.IsMySQLTime(value) {
+						if err := rs.Append(value, false); err != nil {
+							return err
+						}
+						continue
 					}
-					continue
 				}
 			}
 			if err := rs.Append(0, true); err != nil {

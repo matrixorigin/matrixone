@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_10"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_8"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -135,11 +136,17 @@ func TestV408UpgradeRefreshesStatistics(t *testing.T) {
 
 				for run := 0; run < 2; run++ {
 					var creates int
+					// Run the tenant-upgrade transaction as the sys account, mirroring the
+					// production driver (service.MaybeUpgradeTenant scopes the txn to
+					// System_Account and targets the tenant via the tenantID passed to
+					// HandleTenantUpgrade, whose per-tenant statements carry
+					// UpgradeStatementOption(tenantID)). The cluster-wide protocol-version check
+					// runs mo_ctl, which only the sys account may execute.
 					require.NoError(t, sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
 						return v4_0_8.Handler.HandleTenantUpgrade(ctx, int32(test.accountID),
 							&statisticsUpgradeTxn{TxnExecutor: txn, creates: &creates})
 					}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).
-						WithAccountID(test.accountID).WithWaitCommittedLogApplied()))
+						WithAccountID(catalog.System_Account).WithWaitCommittedLogApplied()))
 					if run == 0 {
 						require.Equal(t, 1, creates, "the old view must be recreated")
 					} else {
@@ -240,7 +247,7 @@ func TestV408LoginRepairsTenantCreatedAfterUpgradeSnapshot(t *testing.T) {
 		}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).WithWaitCommittedLogApplied()))
 		require.NoError(t, catalogExec(ctx,
 			fmt.Sprintf("update mo_catalog.mo_upgrade_tenant set ready = 1 where upgrade_id = %d", upgradeID)))
-		final := v4_0_8.Handler.Metadata()
+		final := v4_0_10.Handler.Metadata()
 		require.NoError(t, sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
 			return versions.UpdateVersionState(final.Version, final.VersionOffset, versions.StateReady, txn)
 		}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).WithWaitCommittedLogApplied()))

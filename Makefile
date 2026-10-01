@@ -38,14 +38,8 @@
 #
 # make proto-vendor
 #
-# To compile mo-service with GPU support,
-# 1. install CUDA toolkit (version 13.3 or above)
-# 2. install cuVS Go bindings with conda
-#  % conda env create --name go -f optools/images/gpu/go_cuda-133_arch-$(uname -m).yaml
-#  % conda activate go
-# 3. compile matrixone
-#  % cd matrixone
-#  % MO_CL_CUDA=1 make
+# To compile mo-service with GPU support, use the frozen Pixi profile described
+# in optools/gpu/README.md. CPU-only builds do not require Pixi.
 
 # Go toolchain (override with `make GO=/path/to/go ...`); defaults to `go`.
 # Requires Go 1.26+ for the arch-specific SIMD kernels (built by default on x86_64).
@@ -54,7 +48,7 @@ ifeq ($(GO),)
 endif
 
 # where am I
-ROOT_DIR = $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
+ROOT_DIR := $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 BIN_NAME := mo-service
 # MatrixOne is a single-module repository. Official Make targets must not
 # inherit a parent or user-selected go.work that can replace dependencies.
@@ -235,7 +229,8 @@ JIEBA_DICT_SRC_DIR=$(ROOT_DIR)/pkg/monlp/tokenizer/dict
 RACE_OPT :=
 DEBUG_OPT :=
 CGO_DEBUG_OPT :=
-TAGS :=
+BUILD_TAGS :=
+TAGS = $(if $(strip $(BUILD_TAGS)),-tags "$(strip $(BUILD_TAGS))")
 
 # Native artifacts are reusable only when every semantic build input matches.
 # Keep these dimensions independent so adding one feature cannot silently alias
@@ -271,22 +266,53 @@ ifeq ("$(UNAME_M)", "x86_64")
 endif
 
 ifeq ($(MO_CL_CUDA),1)
-  ifeq ($(CONDA_PREFIX),)
-    $(error CONDA_PREFIX env variable not found.)
-  endif
-	CUVS_CFLAGS := -I$(CONDA_PREFIX)/include
-	CUVS_LDFLAGS := -L$(CONDA_PREFIX)/lib -lcuvs -lcuvs_c
-	CUDA_CFLAGS := -I/usr/local/cuda/include $(CUVS_CFLAGS)
-	CUDA_LDFLAGS := -L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64 -lcudart $(CUVS_LDFLAGS) -lstdc++
-	TAGS += -tags "gpu"
+	include $(ROOT_DIR)/cgo/gpu-toolchain.mk
+	CUDA_CFLAGS := $(MO_GPU_CFLAGS)
+	CUDA_LDFLAGS := $(MO_GPU_LDFLAGS)
+	BUILD_TAGS += gpu
 endif
 
 ifeq ($(TYPECHECK),1)
-	TAGS += -tags "typecheck"
+	BUILD_TAGS += typecheck
 endif
 
-CGO_OPTS :=CGO_CFLAGS="-I$(CGO_DIR) -I$(THIRDPARTIES_INSTALL_DIR)/include $(CUDA_CFLAGS)"
-GOLDFLAGS=-ldflags="-extldflags '$(CUDA_LDFLAGS) -L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,\$${ORIGIN}/lib -fopenmp' $(VERSION_INFO)"
+SIRIUS_SDK ?=
+SIRIUS_BUILD_MODE ?= release
+SIRIUS_MERGED_REF ?=
+SIRIUS_PREPARED := $(ROOT_DIR)/.sirius-sdk
+ifeq ($(MO_SIRIUS),1)
+ifneq ($(UNAME_S)/$(UNAME_M),linux/x86_64)
+$(error MO_SIRIUS=1 requires Linux amd64)
+endif
+ifeq ($(strip $(SIRIUS_SDK)),)
+$(error MO_SIRIUS=1 requires a generated SIRIUS_SDK directory)
+endif
+ifneq ($(PIXI_ENVIRONMENT_NAME),mo)
+$(error MO_SIRIUS=1 requires pixi run --frozen -e mo)
+endif
+ifeq ($(strip $(PIXI_PROJECT_ROOT)),)
+$(error MO_SIRIUS=1 requires an activated Sirius Pixi project)
+endif
+ifeq ($(strip $(CONDA_PREFIX)),)
+$(error MO_SIRIUS=1 requires an activated Sirius Pixi prefix)
+endif
+ifneq ($(realpath $(CONDA_PREFIX)),$(realpath $(PIXI_PROJECT_ROOT)/.pixi/envs/mo))
+$(error MO_SIRIUS=1 requires the Sirius mo Pixi prefix)
+endif
+	BUILD_TAGS += sirius
+	# Go's cache does not track external headers/archives behind an unchanged
+	# include path or response file. Bind CGo compilation to the verified SDK.
+	SIRIUS_SDK_FINGERPRINT := $(shell python3 -c 'import hashlib; print(hashlib.sha256(open("$(SIRIUS_SDK)/link.json", "rb").read()).hexdigest())')
+	SIRIUS_CFLAGS := -I$(abspath $(SIRIUS_SDK)) -DSIRIUS_SDK_BUILD_$(SIRIUS_SDK_FINGERPRINT)=1
+	SIRIUS_LDFLAGS := @$(SIRIUS_PREPARED)/link.rsp
+	SIRIUS_CC := $(shell python3 -c 'import json; print(json.load(open("$(SIRIUS_SDK)/link.json"))["c_compiler"])')
+	SIRIUS_CXX := $(shell python3 -c 'import json; print(json.load(open("$(SIRIUS_SDK)/link.json"))["compiler"])')
+	SIRIUS_CGO_ENV := CC="$(SIRIUS_CC)" CXX="$(SIRIUS_CXX)"
+	SIRIUS_EXTLD := -extld=$(SIRIUS_CXX)
+endif
+
+CGO_OPTS :=$(SIRIUS_CGO_ENV) CGO_CFLAGS="-I$(CGO_DIR) -I$(THIRDPARTIES_INSTALL_DIR)/include $(CUDA_CFLAGS) $(SIRIUS_CFLAGS)"
+GOLDFLAGS=-ldflags="$(SIRIUS_EXTLD) -extldflags '$(CUDA_LDFLAGS) -L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib $(SIRIUS_LDFLAGS) -Wl,-rpath,\$${ORIGIN}/lib -fopenmp' $(VERSION_INFO)"
 
 ifeq ("$(UNAME_S)","darwin")
 GOLDFLAGS:=-ldflags="-extldflags '-L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,@executable_path/lib' $(VERSION_INFO)"
@@ -296,6 +322,18 @@ endif
 # may differ in how native dependencies are produced, never in the Go binary
 # they emit.
 MO_SERVICE_BUILD=$(GOEXPERIMENT_OPT) $(CGO_OPTS) $(GO) build $(GO_MODULE_MODE) $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
+
+define SIRIUS_PREPARE
+$(if $(filter 1,$(MO_SIRIUS)),python3 "$(ROOT_DIR)/optools/sirius_sdk.py" prepare --sdk "$(SIRIUS_SDK)" --mode "$(SIRIUS_BUILD_MODE)" --merged-ref "$(SIRIUS_MERGED_REF)" --mo-root "$(ROOT_DIR)" --output "$(SIRIUS_PREPARED)")
+endef
+
+.PHONY: sirius-sdk-prepare
+sirius-sdk-prepare:
+	$(SIRIUS_PREPARE)
+
+define SIRIUS_PACKAGE
+$(if $(filter 1,$(MO_SIRIUS)),python3 "$(ROOT_DIR)/optools/sirius_sdk.py" package --prepared "$(SIRIUS_PREPARED)" --binary "$(ROOT_DIR)/$(BIN_NAME)" --output "$(ROOT_DIR)/lib")
+endef
 
 ifeq ($(GOBUILD_OPT),)
 	GOBUILD_OPT :=
@@ -398,8 +436,10 @@ jieba-dict:
 # build mo-service binary
 .PHONY: build
 build: config cgo jieba-dict
+	$(SIRIUS_PREPARE)
 	$(info [Build binary])
 	$(MO_SERVICE_BUILD)
+	$(SIRIUS_PACKAGE)
 
 # Build with native libraries supplied by a prebuilt stage or image. This target
 # is for CI image builds: unlike build, it must not rebuild cgo or thirdparties
@@ -408,8 +448,18 @@ build: config cgo jieba-dict
 build-with-prebuilt-native: config jieba-dict
 	@test -f "$(CGO_DIR)/libmo.so" || test -f "$(CGO_DIR)/libmo.dylib"
 	@test -f "$(THIRDPARTIES_INSTALL_DIR)/lib/libusearch_c.so" || test -f "$(THIRDPARTIES_INSTALL_DIR)/lib/libusearch_c.dylib"
+	@"$(ROOT_DIR)/cgo/mo-stage-native-libs" "$(THIRDPARTIES_INSTALL_DIR)/lib" "$(ROOT_DIR)/lib"
+	@"$(ROOT_DIR)/cgo/mo-stage-native-libs" --file \
+		"$(CGO_DIR)/$(LIBMO_NAME)" "$(ROOT_DIR)/lib/$(LIBMO_NAME)"
+ifeq ($(MO_CL_CUDA),1)
+	@"$(ROOT_DIR)/cgo/mo-stage-native-libs" --file \
+		"$(ROOT_DIR)/cgo/cuda/mocl_kernel64.fatbin" \
+		"$(ROOT_DIR)/mocl_kernel64.fatbin"
+endif
+	$(SIRIUS_PREPARE)
 	$(info [Build binary with prebuilt native libraries])
 	$(MO_SERVICE_BUILD)
+	$(SIRIUS_PACKAGE)
 
 # https://wiki.musl-libc.org/getting-started.html
 # https://musl.cc/
