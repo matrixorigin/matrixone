@@ -182,5 +182,6 @@ func TestIssue28909DirectFunctionWireMetadata(t *testing.T) {
 		rows, err = db.QueryContext(ctx, "select pos,cmp,id from "+schema+".rejected order by id")
 		require.NoError(t, err)
 		check(rows, []string{"INT", "INT", "INT"}, want)
+		require.NoError(t, rows.Err())
 	})
 }
