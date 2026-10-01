@@ -1318,3 +1318,24 @@ func TestDecimal64MulCappedScale(t *testing.T) {
 	_, _, err = minimum.Mul(Decimal64(1).Minus(), 0, 0)
 	require.Error(t, err)
 }
+
+func TestDecimalScientificExponentBoundaries(t *testing.T) {
+	for _, spelling := range []string{"1E-2", "1e-2", "1E+2", "0E2147483647", "1E-2147483647"} {
+		d64, e64 := ParseDecimal64(spelling, 18, 2)
+		d128, e128 := ParseDecimal128(spelling, 38, 2)
+		d256, e256 := ParseDecimal256(spelling, 65, 2)
+		require.NoError(t, e64, spelling)
+		require.NoError(t, e128, spelling)
+		require.NoError(t, e256, spelling)
+		require.Equal(t, d64.Format(2), d128.Format(2), spelling)
+		require.Equal(t, d64.Format(2), d256.Format(2), spelling)
+	}
+	for _, spelling := range []string{"1E4294967296", "1E-4294967296", "1E2147483647"} {
+		_, e64 := ParseDecimal64(spelling, 18, 2)
+		_, e128 := ParseDecimal128(spelling, 38, 2)
+		_, e256 := ParseDecimal256(spelling, 65, 2)
+		require.Error(t, e64)
+		require.Error(t, e128)
+		require.Error(t, e256)
+	}
+}

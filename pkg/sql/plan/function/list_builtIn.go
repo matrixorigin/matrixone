@@ -13076,14 +13076,14 @@ var supportedControlBuiltIns = []FuncNew{
 		functionId: LAST_DAY,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    lastDayTypeMatch,
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return types.T_date.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return LastDay
@@ -13093,12 +13093,18 @@ var supportedControlBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return types.T_date.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return LastDay
 				},
 			},
+			{overloadId: 2, args: []types.T{types.T_date},
+				retType: func([]types.Type) types.Type { return types.T_date.ToType() },
+				newOp:   func() executeLogicOfOverload { return LastDay }},
+			{overloadId: 3, args: []types.T{types.T_datetime},
+				retType: func([]types.Type) types.Type { return types.T_date.ToType() },
+				newOp:   func() executeLogicOfOverload { return LastDay }},
 		},
 	},
 

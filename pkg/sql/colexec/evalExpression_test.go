@@ -3839,3 +3839,34 @@ func TestGetExprZoneMapConstantFold(t *testing.T) {
 	}
 	proc.Free()
 }
+
+func TestLastDayPersistedVarcharABI(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	input := batch.NewWithSize(1)
+	defer input.Clean(proc.Mp())
+	input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendStringList(input.Vecs[0], []string{"2024-02-10", "0000-00-00", "bad"}, nil, proc.Mp()))
+	input.SetRowCount(3)
+	for _, oid := range []int64{0, 1} {
+		func() {
+			expr := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{Obj: int64(function.LAST_DAY)<<32 | oid, ObjName: "last_day"},
+				Args: []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}},
+			}}}
+			encoded, err := expr.Marshal()
+			require.NoError(t, err)
+			var restored plan.Expr
+			require.NoError(t, restored.Unmarshal(encoded))
+			executor, err := NewExpressionExecutor(proc, &restored)
+			require.NoError(t, err)
+			defer executor.Free()
+			result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+			require.NoError(t, err)
+			require.Equal(t, types.T_varchar, result.GetType().Oid)
+			require.Equal(t, "2024-02-29", result.GetStringAt(0))
+			require.True(t, result.IsNull(1))
+			require.True(t, result.IsNull(2))
+		}()
+	}
+}

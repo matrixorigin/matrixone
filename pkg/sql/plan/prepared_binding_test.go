@@ -864,3 +864,21 @@ func TestPreparedExecutionRegexpDomainModes(t *testing.T) {
 	_, err = BuildPreparedExecutionPlan(&mock.ctxt, stmt, nil, nil)
 	require.NoError(t, err, "untyped NULL literal has no string domain")
 }
+
+func TestPreparedExplainSelectClassification(t *testing.T) {
+	for _, tc := range []struct {
+		sql  string
+		want bool
+	}{
+		{"select 1", true}, {"explain select 1", true}, {"explain analyze select 1", true}, {"explain phyplan select 1", true},
+		{"insert into t select 1", false}, {"update t set n=1", false}, {"explain update t set n=1", false}, {"explain analyze delete from t", false},
+	} {
+		stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, tc.sql, 1)
+		require.NoError(t, err, tc.sql)
+		require.Equal(t, tc.want, preparedUnderlyingSelect(stmts[0]), tc.sql)
+		for _, stmt := range stmts {
+			stmt.Free()
+		}
+	}
+	require.False(t, preparedUnderlyingSelect(nil))
+}

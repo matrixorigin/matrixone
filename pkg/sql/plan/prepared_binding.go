@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 // A binding fixes a parser ordinal's execution slot and SQL source domain.
@@ -278,9 +279,15 @@ func preparedSafeRoundIntegerComparison(ctx context.Context, source *Expr, targe
 	if !present || value == nil {
 		return nil, false, nil
 	}
-	_, exact, err := preparedComparisonExactIntegerExpr(ctx, preparedNumericValueSpelling(value), target)
+	witness, exact, err := preparedComparisonExactIntegerExpr(ctx, preparedNumericValueSpelling(value), target)
 	if err != nil || !exact {
 		return nil, false, err
+	}
+	if types.T(target.Id).IsSignedInt() {
+		integer := witness.GetLit().GetI64Val()
+		if integer < -(1<<53)+1 || integer > (1<<53)-1 {
+			return nil, false, nil
+		}
 	}
 	cast, err := makePlan2CastExpr(ctx, source, target)
 	return cast, err == nil, err
@@ -519,11 +526,12 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 				if proofErr != nil {
 					return nil, proofErr
 				}
-				if binding.Type.Oid.IsInteger() {
+				if binding.Type.Oid.IsInteger() || binding.Type.Oid.IsFloat() {
 					// Some mixed integer comparisons enter an approximate domain.
 					// Keep the existing comparison at values
 					// whose adjacent integers may collide in DOUBLE.
-					integer, err := strconv.ParseInt(spelling, 10, 54)
+					normalized, _ := planfunction.NormalizeExactIntegerString(spelling)
+					integer, err := strconv.ParseInt(normalized, 10, 54)
 					exact = exact && err == nil && integer >= -(1<<53)+1 && integer <= (1<<53)-1
 				}
 				if exact {
@@ -738,6 +746,25 @@ type PreparedExecutionPlan struct {
 	ValueDependent       bool
 }
 
+// EXPLAIN must profile the same binding semantics as its underlying statement.
+// Keep the wrapper for planning/authorization, and never classify explained DML
+// as SELECT merely because it is wrapped in a diagnostic statement.
+func preparedUnderlyingSelect(stmt tree.Statement) bool {
+	for stmt != nil {
+		switch wrapped := stmt.(type) {
+		case *tree.ExplainStmt:
+			stmt = wrapped.Statement
+		case *tree.ExplainAnalyze:
+			stmt = wrapped.Statement
+		case *tree.ExplainPhyPlan:
+			stmt = wrapped.Statement
+		default:
+			return stmt.GetQueryType() == tree.QueryTypeDQL
+		}
+	}
+	return false
+}
+
 // BuildPreparedExecutionPlan binds SQL source domains before optimization.
 // The caller installs the current Process parameter vector before invoking it.
 func BuildPreparedExecutionPlan(ctx CompilerContext, stmt tree.Statement,
@@ -747,7 +774,7 @@ func BuildPreparedExecutionPlan(ctx CompilerContext, stmt tree.Statement,
 		return nil, moerr.NewInvalidInput(previous, "Incorrect arguments to EXECUTE")
 	}
 	planning := withPreparedSourceBindings(previous, bindings, values)
-	preparedBindingState(planning).selectStatement = stmt.GetQueryType() == tree.QueryTypeDQL
+	preparedBindingState(planning).selectStatement = preparedUnderlyingSelect(stmt)
 	ctx.SetContext(planning)
 	defer ctx.SetContext(previous)
 	query, err := NewPrepareOptimizer(ctx).Optimize(stmt, false)

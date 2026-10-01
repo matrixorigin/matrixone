@@ -7894,14 +7894,9 @@ func strToDecimal64(
 				if totype.Charset == 255 {
 					result, err = parseMySQLDecimal64Prefix(s, totype.Width, totype.Scale)
 				} else if isExplicit {
-					result, err = parseExplicitDecimal64CastString(s, totype.Width, totype.Scale)
+					result, err = ParseExplicitDecimal64CastString(s, totype.Width, totype.Scale)
 				} else {
 					result, err = parseDecimal64CastString(s, totype.Width, totype.Scale)
-				}
-				if err != nil && isExplicit {
-					if clamped, clampErr := clampDecimal64CastString(s, totype.Width, totype.Scale); clampErr == nil {
-						result, err = clamped, nil
-					}
 				}
 				if err != nil {
 					if mode == castModeAssignmentIgnore && !isAssignmentSpecialNumericSyntax(s) {
@@ -7940,24 +7935,36 @@ func strToDecimal64(
 	return nil
 }
 
-func decimalCastStringSign(s string) (bool, error) {
+// decimalCastStringOverflow proves range overflow before a failed conversion
+// may saturate. Grammar/capacity failures, including zero, are not range proofs.
+func decimalCastStringOverflow(s, bound string) (bool, error) {
 	token, err := parseCastNumericToken(s)
 	if err != nil {
 		return false, err
 	}
+	var magnitude *big.Float
 	if token.base != 10 {
-		var value big.Int
-		if _, ok := value.SetString(token.digits, token.base); !ok {
+		var integer big.Int
+		if _, ok := integer.SetString(token.digits, token.base); !ok {
 			return false, strconv.ErrSyntax
 		}
-		return token.negative, nil
+		magnitude = new(big.Float).SetPrec(256).SetInt(&integer)
+	} else {
+		// ParseFloat also accepts binary exponents; the CAST decimal grammar does not.
+		if len(mysqlDecimalPrefix(token.digits)) != len(token.digits) {
+			return false, strconv.ErrSyntax
+		}
+		magnitude, _, err = big.ParseFloat(token.digits, 10, 256, big.ToNearestEven)
+		if err != nil {
+			return false, err
+		}
 	}
-	value, _, err := big.ParseFloat(token.digits, 10, 256, big.ToNearestEven)
+	maximum, _, err := big.ParseFloat(bound, 10, 256, big.ToNearestEven)
 	if err != nil {
 		return false, err
 	}
-	if value.IsInf() {
-		return false, moerr.NewInvalidInputNoCtxf("%q is not a finite decimal", s)
+	if magnitude.IsInf() || magnitude.Cmp(maximum) <= 0 {
+		return false, moerr.NewInvalidInputNoCtxf("%q does not prove decimal overflow", s)
 	}
 	return token.negative, nil
 }
@@ -7974,11 +7981,43 @@ func clampDecimal64Value(negative bool, width, scale int32) (types.Decimal64, er
 }
 
 func clampDecimal64CastString(s string, width, scale int32) (types.Decimal64, error) {
-	negative, err := decimalCastStringSign(s)
+	bound, err := clampDecimal64Value(false, width, scale)
 	if err != nil {
 		return 0, err
 	}
-	return clampDecimal64Value(negative, width, scale)
+	negative, err := decimalCastStringOverflow(s, bound.Format(scale))
+	if err != nil {
+		return 0, err
+	}
+	if negative {
+		bound = bound.Minus()
+	}
+	return bound, nil
+}
+
+// decimalCastParseString prevents a coefficient-capacity stop from hiding a
+// scientific suffix. Reuse the bounded integral normalizer where it proves an
+// exact spelling; unsupported long nonintegral values must report an error.
+func decimalCastParseString(token castNumericToken, precision int) (string, error) {
+	s, err := prefixedDigitsToDecimalString(token.digits, token.base)
+	if err != nil || token.base != 10 || len(s) <= precision+2 {
+		return s, err
+	}
+	exponent := strings.IndexAny(s, "eE")
+	if exponent < 0 {
+		return s, nil
+	}
+	digits := exponent
+	if strings.IndexByte(s[:exponent], '.') >= 0 {
+		digits--
+	}
+	if digits <= precision {
+		return s, nil
+	}
+	if normalized, ok := NormalizeExactIntegerString(s); ok {
+		return normalized, nil
+	}
+	return "", moerr.NewInvalidInputNoCtxf("decimal scientific mantissa exceeds %d digits", precision)
 }
 
 func parseDecimal64CastString(s string, width, scale int32) (types.Decimal64, error) {
@@ -7986,11 +8025,16 @@ func parseDecimal64CastString(s string, width, scale int32) (types.Decimal64, er
 	if err != nil {
 		return 0, err
 	}
-	parseStr, err := prefixedDigitsToDecimalString(token.digits, token.base)
+	parseStr, err := decimalCastParseString(token, 18)
 	if err != nil {
 		return 0, err
 	}
 	result, err := types.ParseDecimal64(parseStr, width, scale)
+	if err != nil && token.base == 10 {
+		if normalized, ok := NormalizeExactIntegerString(parseStr); ok {
+			result, err = types.ParseDecimal64(normalized, width, scale)
+		}
+	}
 	if err != nil {
 		return 0, err
 	}
@@ -8247,11 +8291,16 @@ func parseDecimal128CastString(s string, width, scale int32) (types.Decimal128, 
 	if err != nil {
 		return types.Decimal128{}, err
 	}
-	parseStr, err := prefixedDigitsToDecimalString(token.digits, token.base)
+	parseStr, err := decimalCastParseString(token, 38)
 	if err != nil {
 		return types.Decimal128{}, err
 	}
 	result, err := types.ParseDecimal128(parseStr, width, scale)
+	if err != nil && token.base == 10 {
+		if normalized, ok := NormalizeExactIntegerString(parseStr); ok {
+			result, err = types.ParseDecimal128(normalized, width, scale)
+		}
+	}
 	if err != nil {
 		return types.Decimal128{}, err
 	}
@@ -8266,11 +8315,16 @@ func parseDecimal256CastString(s string, width, scale int32) (types.Decimal256, 
 	if err != nil {
 		return types.Decimal256{}, err
 	}
-	parseStr, err := prefixedDigitsToDecimalString(token.digits, token.base)
+	parseStr, err := decimalCastParseString(token, 76)
 	if err != nil {
 		return types.Decimal256{}, err
 	}
 	result, err := types.ParseDecimal256(parseStr, width, scale)
+	if err != nil && token.base == 10 {
+		if normalized, ok := NormalizeExactIntegerString(parseStr); ok {
+			result, err = types.ParseDecimal256(normalized, width, scale)
+		}
+	}
 	if err != nil {
 		return types.Decimal256{}, err
 	}
@@ -8374,14 +8428,9 @@ func strToDecimal128(
 				if totype.Charset == 255 {
 					result, err = parseMySQLDecimal128Prefix(s, totype.Width, totype.Scale)
 				} else if isExplicit {
-					result, err = parseExplicitDecimal128CastString(s, totype.Width, totype.Scale)
+					result, err = ParseExplicitDecimal128CastString(s, totype.Width, totype.Scale)
 				} else {
 					result, err = parseDecimal128CastString(s, totype.Width, totype.Scale)
-				}
-				if err != nil && isExplicit {
-					if clamped, clampErr := clampDecimal128CastString(s, totype.Width, totype.Scale); clampErr == nil {
-						result, err = clamped, nil
-					}
 				}
 				if err != nil {
 					if mode == castModeAssignmentIgnore && !isAssignmentSpecialNumericSyntax(s) {
@@ -8444,11 +8493,18 @@ func clampDecimal128Value(negative bool, width, scale int32) (types.Decimal128, 
 }
 
 func clampDecimal128CastString(s string, width, scale int32) (types.Decimal128, error) {
-	negative, err := decimalCastStringSign(s)
+	bound, err := clampDecimal128Value(false, width, scale)
 	if err != nil {
 		return types.Decimal128{}, err
 	}
-	return clampDecimal128Value(negative, width, scale)
+	negative, err := decimalCastStringOverflow(s, bound.Format(scale))
+	if err != nil {
+		return types.Decimal128{}, err
+	}
+	if negative {
+		bound = bound.Minus()
+	}
+	return bound, nil
 }
 
 func strToDecimal256(
@@ -8500,14 +8556,9 @@ func strToDecimal256(
 				if totype.Charset == 255 {
 					result, err = parseMySQLDecimal256Prefix(s, totype.Width, totype.Scale)
 				} else if isExplicit {
-					result, err = parseExplicitDecimal256CastString(s, totype.Width, totype.Scale)
+					result, err = ParseExplicitDecimal256CastString(s, totype.Width, totype.Scale)
 				} else {
 					result, err = parseDecimal256CastString(s, totype.Width, totype.Scale)
-				}
-				if err != nil && isExplicit {
-					if clamped, clampErr := clampDecimal256CastString(s, totype.Width, totype.Scale); clampErr == nil {
-						result, err = clamped, nil
-					}
 				}
 				if err != nil {
 					if mode == castModeAssignmentIgnore && !isAssignmentSpecialNumericSyntax(s) {
@@ -8570,11 +8621,18 @@ func clampDecimal256Value(negative bool, width, scale int32) (types.Decimal256, 
 }
 
 func clampDecimal256CastString(s string, width, scale int32) (types.Decimal256, error) {
-	negative, err := decimalCastStringSign(s)
+	bound, err := clampDecimal256Value(false, width, scale)
 	if err != nil {
 		return types.Decimal256{}, err
 	}
-	return clampDecimal256Value(negative, width, scale)
+	negative, err := decimalCastStringOverflow(s, bound.Format(scale))
+	if err != nil {
+		return types.Decimal256{}, err
+	}
+	if negative {
+		bound = bound.Minus()
+	}
+	return bound, nil
 }
 
 func strToBool(

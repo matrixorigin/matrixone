@@ -358,6 +358,12 @@ func (x Decimal256) Right(n int) (y Decimal256) {
 }
 
 func (x Decimal64) Scale(n int32) (Decimal64, error) {
+	if n == 0 || x == 0 {
+		return x, nil
+	}
+	if n < -19 {
+		return 0, nil
+	}
 	signx := x.Sign()
 	x1 := x
 	if signx {
@@ -374,7 +380,7 @@ func (x Decimal64) Scale(n int32) (Decimal64, error) {
 			x1, err = x1.Div64(Decimal64(Pow10[19]))
 		}
 		if err != nil {
-			err = moerr.NewInvalidInputNoCtxf("Decimal64 scale overflow: %s", x.Format(n))
+			err = moerr.NewInvalidInputNoCtxf("Decimal64 scale overflow: coefficient %s, target scale=%d", x.Format(0), n)
 			return x, err
 		}
 	}
@@ -390,7 +396,7 @@ func (x Decimal64) Scale(n int32) (Decimal64, error) {
 		x1, err = x1.Div64(Decimal64(Pow10[m-n]))
 	}
 	if err != nil {
-		err = moerr.NewInvalidInputNoCtxf("Decimal64 scale overflow: %s", x.Format(n))
+		err = moerr.NewInvalidInputNoCtxf("Decimal64 scale overflow: coefficient %s, target scale=%d", x.Format(0), n)
 		return x, err
 	}
 	if signx {
@@ -422,7 +428,7 @@ func (x *Decimal128) ScaleInplace(n int32) error {
 			*x, err = x.Div128Trunc(Decimal128{Pow10[19], 0})
 		}
 		if err != nil {
-			err = moerr.NewInvalidInputNoCtxf("Decimal128 scale overflow: %s", x.Format(n))
+			err = moerr.NewInvalidInputNoCtxf("Decimal128 scale overflow: coefficient %s, target scale=%d", x.Format(0), n)
 			return err
 		}
 	}
@@ -438,7 +444,7 @@ func (x *Decimal128) ScaleInplace(n int32) error {
 		err = x.Div128InPlace(&Decimal128{Pow10[m-n], 0})
 	}
 	if err != nil {
-		err = moerr.NewInvalidInputNoCtxf("Decimal128 scale overflow: %s", x.Format(n))
+		err = moerr.NewInvalidInputNoCtxf("Decimal128 scale overflow: coefficient %s, target scale=%d", x.Format(0), n)
 		return err
 	}
 	if signx {
@@ -448,7 +454,7 @@ func (x *Decimal128) ScaleInplace(n int32) error {
 }
 
 func (x Decimal128) Scale(n int32) (Decimal128, error) {
-	if n == 0 {
+	if n == 0 || (x.B0_63 == 0 && x.B64_127 == 0) {
 		return x, nil
 	}
 	if n < -38 {
@@ -470,7 +476,7 @@ func (x Decimal128) Scale(n int32) (Decimal128, error) {
 			x1, err = x1.Div128Trunc(Decimal128{Pow10[19], 0})
 		}
 		if err != nil {
-			err = moerr.NewInvalidInputNoCtxf("Decimal128 scale overflow: %s", x.Format(n))
+			err = moerr.NewInvalidInputNoCtxf("Decimal128 scale overflow: coefficient %s, target scale=%d", x.Format(0), n)
 			return x, err
 		}
 	}
@@ -486,7 +492,7 @@ func (x Decimal128) Scale(n int32) (Decimal128, error) {
 		x1, err = x1.Div128(Decimal128{Pow10[m-n], 0})
 	}
 	if err != nil {
-		err = moerr.NewInvalidInputNoCtxf("Decimal128 scale overflow: %s", x.Format(n))
+		err = moerr.NewInvalidInputNoCtxf("Decimal128 scale overflow: coefficient %s, target scale=%d", x.Format(0), n)
 		return x, err
 	}
 	if signx {
@@ -518,7 +524,7 @@ func (x Decimal128) ScaleTruncate(n int32) (Decimal128, error) {
 			x1, err = x1.div128Trunc(Decimal128{Pow10[19], 0})
 		}
 		if err != nil {
-			err = moerr.NewInvalidInputNoCtxf("Decimal128 scale overflow: %s", x.Format(n))
+			err = moerr.NewInvalidInputNoCtxf("Decimal128 scale overflow: coefficient %s, target scale=%d", x.Format(0), n)
 			return x, err
 		}
 	}
@@ -534,7 +540,7 @@ func (x Decimal128) ScaleTruncate(n int32) (Decimal128, error) {
 		x1, err = x1.div128Trunc(Decimal128{Pow10[m-n], 0})
 	}
 	if err != nil {
-		err = moerr.NewInvalidInputNoCtxf("Decimal128 scale overflow: %s", x.Format(n))
+		err = moerr.NewInvalidInputNoCtxf("Decimal128 scale overflow: coefficient %s, target scale=%d", x.Format(0), n)
 		return x, err
 	}
 	if signx {
@@ -631,7 +637,7 @@ func (x Decimal256) ScaleTruncate(n int32) (Decimal256, error) {
 			x1, _ = div256ByUint64(x1, Pow10[19])
 		}
 		if err != nil {
-			err = moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", x.Format(n))
+			err = moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: coefficient %s, target scale=%d", x.Format(0), n)
 			return x, err
 		}
 	}
@@ -647,7 +653,7 @@ func (x Decimal256) ScaleTruncate(n int32) (Decimal256, error) {
 		x1, _ = div256ByUint64(x1, Pow10[m-n])
 	}
 	if err != nil {
-		err = moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", x.Format(n))
+		err = moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: coefficient %s, target scale=%d", x.Format(0), n)
 		return x, err
 	}
 	if signx {
@@ -1978,7 +1984,6 @@ func Parse64(x string) (y Decimal64, scale int32, err error) {
 	t := false
 	floatflag := false
 	scalecount := int32(0)
-	scalesign := false
 	signx := false
 	err = nil
 	if x[0] == '-' {
@@ -2029,23 +2034,22 @@ func Parse64(x string) (y Decimal64, scale int32, err error) {
 				return
 			}
 		} else if x[i] < '0' || x[i] > '9' {
-			if x[i] == 'e' {
+			if x[i] == 'e' || x[i] == 'E' {
+				// Parse the entire exponent once: empty, repeated signs/markers and
+				// int32 overflow must not become a valid scale by wrapping.
+				var exponent int64
+				exponent, err = strconv.ParseInt(x[i+1:], 10, 32)
+				if err != nil {
+					err = moerr.NewInvalidInputNoCtxf("%s has an invalid Decimal64 exponent.", x)
+					return
+				}
+				scalecount = int32(exponent)
 				floatflag = true
-				i++
-				continue
-			}
-			if x[i] == '-' && floatflag {
-				scalesign = true
-				i++
-				continue
-			}
-			if x[i] == '+' && floatflag {
-				i++
-				continue
+				break
 			}
 			err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal64.", x)
 			return
-		} else if !floatflag {
+		} else {
 			if width == 18 {
 				if scale == -1 {
 					err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal64.", x)
@@ -2071,8 +2075,6 @@ func Parse64(x string) (y Decimal64, scale int32, err error) {
 			if scale != -1 {
 				scale++
 			}
-		} else {
-			scalecount = scalecount*10 + int32(x[i]-'0')
 		}
 		i++
 	}
@@ -2084,10 +2086,12 @@ func Parse64(x string) (y Decimal64, scale int32, err error) {
 		scale = 0
 	}
 	if floatflag {
-		if scalesign {
-			scalecount = -scalecount
+		nextScale := int64(scale) - int64(scalecount)
+		if nextScale < math.MinInt32 || nextScale > math.MaxInt32 {
+			err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal64.", x)
+			return
 		}
-		scale -= scalecount
+		scale = int32(nextScale)
 		if scale < 0 {
 			y, err = y.Scale(-scale)
 			scale = 0
@@ -2172,7 +2176,6 @@ func Parse128(x string) (y Decimal128, scale int32, err error) {
 	flag := false
 	floatflag := false
 	scalecount := int32(0)
-	scalesign := false
 	signx := false
 	if x[0] == '-' {
 		i++
@@ -2222,19 +2225,22 @@ func Parse128(x string) (y Decimal128, scale int32, err error) {
 				return
 			}
 		} else if x[i] < '0' || x[i] > '9' {
-			if x[i] == 'e' {
+			if x[i] == 'e' || x[i] == 'E' {
+				// Parse the entire exponent once: empty, repeated signs/markers and
+				// int32 overflow must not become a valid scale by wrapping.
+				var exponent int64
+				exponent, err = strconv.ParseInt(x[i+1:], 10, 32)
+				if err != nil {
+					err = moerr.NewInvalidInputNoCtxf("%s has an invalid Decimal128 exponent.", x)
+					return
+				}
+				scalecount = int32(exponent)
 				floatflag = true
-				i++
-				continue
-			}
-			if x[i] == '-' && floatflag {
-				scalesign = true
-				i++
-				continue
+				break
 			}
 			err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal128.", x)
 			return
-		} else if !floatflag {
+		} else {
 			if width == 38 {
 				if scale == -1 {
 					err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal128.", x)
@@ -2262,8 +2268,6 @@ func Parse128(x string) (y Decimal128, scale int32, err error) {
 			if scale != -1 {
 				scale++
 			}
-		} else {
-			scalecount = scalecount*10 + int32(x[i]-'0')
 		}
 		i++
 	}
@@ -2275,10 +2279,12 @@ func Parse128(x string) (y Decimal128, scale int32, err error) {
 		scale = 0
 	}
 	if floatflag {
-		if scalesign {
-			scalecount = -scalecount
+		nextScale := int64(scale) - int64(scalecount)
+		if nextScale < math.MinInt32 || nextScale > math.MaxInt32 {
+			err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal128.", x)
+			return
 		}
-		scale -= scalecount
+		scale = int32(nextScale)
 		if scale < 0 {
 			y, err = y.Scale(-scale)
 			scale = 0
@@ -2305,7 +2311,6 @@ func Parse256(x string) (y Decimal256, scale int32, err error) {
 	flag := false
 	floatflag := false
 	scalecount := int32(0)
-	scalesign := false
 	signx := false
 	if x[0] == '-' {
 		i++
@@ -2356,19 +2361,22 @@ func Parse256(x string) (y Decimal256, scale int32, err error) {
 				return
 			}
 		} else if x[i] < '0' || x[i] > '9' {
-			if x[i] == 'e' {
+			if x[i] == 'e' || x[i] == 'E' {
+				// Parse the entire exponent once: empty, repeated signs/markers and
+				// int32 overflow must not become a valid scale by wrapping.
+				var exponent int64
+				exponent, err = strconv.ParseInt(x[i+1:], 10, 32)
+				if err != nil {
+					err = moerr.NewInvalidInputNoCtxf("%s has an invalid Decimal256 exponent.", x)
+					return
+				}
+				scalecount = int32(exponent)
 				floatflag = true
-				i++
-				continue
-			}
-			if x[i] == '-' && floatflag {
-				scalesign = true
-				i++
-				continue
+				break
 			}
 			err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal256.", x)
 			return
-		} else if !floatflag {
+		} else {
 			if width == 76 {
 				if scale == -1 {
 					err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256.", x)
@@ -2400,13 +2408,6 @@ func Parse256(x string) (y Decimal256, scale int32, err error) {
 			if scale != -1 {
 				scale++
 			}
-		} else {
-			digit := int32(x[i] - '0')
-			if scalecount > (math.MaxInt32-digit)/10 {
-				err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256.", x)
-				return
-			}
-			scalecount = scalecount*10 + digit
 		}
 		i++
 	}
@@ -2418,9 +2419,6 @@ func Parse256(x string) (y Decimal256, scale int32, err error) {
 		scale = 0
 	}
 	if floatflag {
-		if scalesign {
-			scalecount = -scalecount
-		}
 		nextScale := int64(scale) - int64(scalecount)
 		if nextScale < math.MinInt32 || nextScale > math.MaxInt32 {
 			err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256.", x)
