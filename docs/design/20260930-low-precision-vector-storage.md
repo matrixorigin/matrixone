@@ -139,8 +139,25 @@ original fp32 vectors because the storage is quantized. `vecf8` is the quality f
 ## GPU engine: cuBLASLt in `cgo/cuvs`
 
 The engine computes one thing: the fp32 **dot-product matrix** `S = D × Qᵀ` of a packed
-dataset tile `D` and packed queries `Q`, with `cublasLtMatmul` block-scaled matmul. It
-has no metric, filter or top-k logic.
+dataset tile `D` and packed queries `Q`, with `cublasLtMatmul`: a block-scaled matmul for
+`vecf8`/`vecf4`, a plain matmul for `vecf32`, `vecf16`, `vecbf16`, `vecint8` and
+`vecuint8`. It has no metric, filter or top-k logic.
+
+| Column type | Engine format | Element type | Compute | Output |
+|-------------|---------------|--------------|---------|--------|
+| `vecf8` | MXFP8 | `CUDA_R_8F_E4M3` + `VEC32_UE8M0` scales | `CUBLAS_COMPUTE_32F` | `CUDA_R_32F` |
+| `vecf4` | NVFP4 | `CUDA_R_4F_E2M1` + `VEC16_UE4M3` scales | `CUBLAS_COMPUTE_32F` | `CUDA_R_32F` |
+| `vecf32` | F32 | `CUDA_R_32F` | `CUBLAS_COMPUTE_32F` (no TF32) | `CUDA_R_32F` |
+| `vecf16` | F16 | `CUDA_R_16F` | `CUBLAS_COMPUTE_32F` | `CUDA_R_32F` |
+| `vecbf16` | BF16 | `CUDA_R_16BF` | `CUBLAS_COMPUTE_32F` | `CUDA_R_32F` |
+| `vecint8` | I8 | `CUDA_R_8I` | `CUBLAS_COMPUTE_32I` | `CUDA_R_32I` |
+| `vecuint8` | U8 | `CUDA_R_8I` (x − 128) | `CUBLAS_COMPUTE_32I` | `CUDA_R_32I` |
+
+Plain rows are the column's raw element bytes, copied into the padded tile with no header,
+scales or global. `vecuint8` has no cuBLASLt integer path: each element is shifted to int8
+on the host (`x ^ 0x80` = x − 128), the row and query sums of the shifted values are kept,
+and the int32 result is corrected as `x·q = x′·q′ + 128 (Σx′ + Σq′) + 128² · dim` in int64.
+Integer dot products are exact; they are rounded once to fp32 when written out.
 
 Code layout — the engine lives with the other GPU code in `cgo/cuvs` + `pkg/cuvs`:
 
@@ -165,12 +182,12 @@ cuBLASLt call sequence:
 | Step | Call | Setting |
 |------|------|---------|
 | 1 | `cublasLtCreate` | once per engine |
-| 2 | `cublasLtMatmulDescCreate` | `CUBLAS_COMPUTE_32F`, scale type `CUDA_R_32F` |
-| 3 | `cublasLtMatmulDescSetAttribute` | `TRANSA=T`, `TRANSB=N`; `A/B_SCALE_MODE` = `VEC32_UE8M0` (vecf8) or `VEC16_UE4M3` (vecf4); `A/B_SCALE_POINTER` = tiled scale tensors |
-| 4 | `cublasLtMatrixLayoutCreate` | A: element type, K × rows(D), ld = K; B: K × rows(Q), ld = K; D: `CUDA_R_32F`, rows(D) × rows(Q) |
+| 2 | `cublasLtMatmulDescCreate` | `CUBLAS_COMPUTE_32F`, scale type `CUDA_R_32F`; integer formats `CUBLAS_COMPUTE_32I`, `CUDA_R_32I` |
+| 3 | `cublasLtMatmulDescSetAttribute` | `TRANSA=T`, `TRANSB=N`; block-scaled formats only: `A/B_SCALE_MODE` = `VEC32_UE8M0` (vecf8) or `VEC16_UE4M3` (vecf4), `A/B_SCALE_POINTER` = tiled scale tensors |
+| 4 | `cublasLtMatrixLayoutCreate` | A: element type, K × rows(D), ld = K; B: K × rows(Q), ld = K; D: `CUDA_R_32F` (`CUDA_R_32I` for integer formats), rows(D) × rows(Q) |
 | 5 | `cublasLtMatmulPreferenceCreate` / `SetAttribute` | workspace limit (32 MiB) |
 | 6 | `cublasLtMatmulAlgoGetHeuristic` | per tile |
-| 7 | `cublasLtMatmul` | alpha = 1.0, beta = 0; the per-vector `g` of row and query is applied in double when the scores are copied out, then rounded once to fp32 |
+| 7 | `cublasLtMatmul` | alpha = 1, beta = 0; the per-vector `g` of row and query is applied in double when the scores are copied out, then rounded once to fp32 (plain formats have `g` = 1) |
 
 Contract (each point measured on sm_120 with cuBLASLt 13.6):
 
@@ -193,7 +210,8 @@ Contract (each point measured on sm_120 with cuBLASLt 13.6):
 - **K padding.** The dimension is padded with zero elements to a multiple of 32 (NVFP4 at
   K = 48 has no algorithm; 32, 96, 512, 768, 1536 run). Storage keeps the true `N`.
 - **Precision.** Against a double-precision CPU reference: MXFP8 relative error ≤ 1e-6,
-  NVFP4 exact, at fp32 output.
+  NVFP4 exact, at fp32 output; `vecint8`/`vecuint8` exact; `vecf32`/`vecf16`/`vecbf16`
+  within fp32 summation-order tolerance.
 
 Engine state, per `vector_matmul` executor: a CUDA stream, the cuBLASLt handle and
 workspace, the queries on the device, and host and device buffers for one tile. The
@@ -281,8 +299,8 @@ vector_matmul(topk, src_id, src_vec, queries [, options]) → JSON
 |----------|------|---------|
 | `topk` | constant integer | the hits kept per query, 1–16384 |
 | `src_id` | column | the row key: an integer, `char`/`varchar`/`text` or `uuid` column |
-| `src_vec` | column | `vecf8(N)` or `vecf4(N)` |
-| `queries` | constant string or JSON | array of query vectors `[[…], …]`, each of length `N`; quantized once to the column's format |
+| `src_vec` | column | `vecf8(N)`, `vecf4(N)`, `vecf32(N)`, `vecf16(N)`, `vecbf16(N)`, `vecint8(N)` or `vecuint8(N)`; `vecf64` is rejected |
+| `queries` | constant string or JSON | array of query vectors `[[…], …]`, each of length `N`; converted once to the column's type (quantized for `vecf8`/`vecf4`); for `vecint8`/`vecuint8` every value is an integer in the type's range, otherwise an error |
 | `options` | optional constant JSON string | `"mode": "auto" \| "cpu"`, `"tile_bytes": n`; validated, not used for dispatch, which follows the session's `gpu_mode` |
 
 An aggregate: one result per group (one row without `GROUP BY`), of MO's `JSON` type.
@@ -308,9 +326,10 @@ Instances on one CN share its GPU: each uses its own CUDA stream and cuBLASLt
 handle/workspace, and host and device tile memory scale with the instance count
 (`instances` × one tile of at most 64 MiB).
 
-On the CPU (gpu_mode off, a CPU build, or no visible device) the dot products come from the CPU distance kernel
-over the quantized cells (`VecBlockInnerProduct`); results match the GPU within fp32
-summation-order tolerance. An overflowing dot product (NaN, mapped to the +Inf distance)
+On the CPU (gpu_mode off, a CPU build, or no visible device) the dot products come from the
+CPU distance kernels: `VecBlockInnerProduct` over the quantized cells for `vecf8`/`vecf4`,
+the column type's inner-product kernel (`metric.ResolveDistanceFn`) for the other types;
+results match the GPU within fp32 summation-order tolerance. An overflowing dot product (NaN, mapped to the +Inf distance)
 ranks last; a non-finite score in the result is an overflow error, since JSON has no
 infinity.
 
@@ -414,10 +433,16 @@ summation-order tolerance.
 - **Multi CN** (`etc/launch-multi-cn`): the BVT passes; on an 8,000,000-row table (above
   the 512-block multi-CN threshold) the plan runs a remote scope on each CN, the partial
   states are serialized to the merging CN, and the result equals the reference.
+- **Unit, plain types** (`aggexec/vector_matmul_test.go`): `vecf32`, `vecf16`, `vecbf16`,
+  `vecint8`, `vecuint8` against a brute-force dot-product reference; integer queries out
+  of range or fractional are rejected. Function resolution and binder tests accept the
+  plain types and reject `vecf64`.
 - **GPU engine** (`cgo/cuvs/test/blockscaled_matmul_test.cu`, the `test_blockscaled_matmul`
-  executable): both formats against a double-precision dequantized reference, dimensions
-  4–768 (K padding), 1 to 300 rows (row padding, a 1-row tile, tile reuse), 1 and 3
-  queries, non-unit vecf4 global scales; the C API and its errors.
+  executable): both block-scaled formats against a double-precision dequantized reference,
+  dimensions 4–768 (K padding), 1 to 300 rows (row padding, a 1-row tile, tile reuse), 1
+  and 3 queries, non-unit vecf4 global scales; the five plain formats against a
+  double-precision reference (integer formats exact), dimensions 4, 33, 768, 1 to 300
+  rows, 1 and 3 queries; the C API and its errors.
 - **GPU binding** (`pkg/cuvs/blockscaled_matmul_test.go`): engine scores equal the CPU
   kernel (`VecBlockDot`) over the same cells for both formats, dimensions 4–768, 1 and 5
   queries.
@@ -427,7 +452,10 @@ summation-order tolerance.
   the same top-k.
 - **GPU BVT** (`gpu_cases/vector/vector_matmul_gpu.sql`): the same queries under
   `gpu_mode = 1` and `0` return identical JSON (values exact in both formats); the
-  400,000-row vecf8 table, scored in GPU tiles by parallel pipelines, equals the reference.
+  400,000-row vecf8 table, scored in GPU tiles by parallel pipelines, equals the reference;
+  `vecf32`, `vecf16`, `vecbf16`, `vecint8` and `vecuint8` return identical JSON in both
+  modes (`vecuint8` values up to 255, which exercise the shift correction), and a
+  200,000-row `vecf32`/`vecint8`/`vecuint8` table equals the reference.
   The CPU BVTs (`vector/vector_matmul.sql`, `dtype/vecblock.sql`) also pass on a GPU build,
   where they run on the GPU.
 
@@ -448,6 +476,22 @@ each pipeline pays the engine setup (cuBLASLt handle, tile and workspace allocat
 query upload). At large batches the host-side top-k over the copied scores dominates the
 GPU time.
 
+Performance and recall — `wiki_all` 1M × 768, rows unit-normalized (`normalize_l2` over a
+`vecf32` table, cast to each type), 1,000 queries in one `vector_matmul`, top 10,
+`gpu_mode = 1`, single CN, RTX 5070 Laptop. Recall@10 is against the exact top 10 over the
+normalized vectors, and against the dataset's L2 ground truth over the raw vectors:
+
+| Type | Bytes/row | Runs (3 passes) | Recall@10, normalized exact | Recall@10, raw L2 ground truth |
+|------|-----------|-----------------|-----------------------------|--------------------------------|
+| `vecf32` | 3,072 | 14.91 / 5.73 / 5.04 s | 0.9999 | 0.701 |
+| `vecbf16` | 1,536 | 4.20 / 3.99 / 4.17 s | 0.9976 | 0.701 |
+| `vecf8` | 804 | 2.98 / 4.19 / 3.92 s | 0.964 | 0.700 |
+| `vecf4` | 444 | 3.75 / 3.65 / 3.72 s | 0.893 | 0.687 |
+
+Warm runs take about 4 s for every type: the 10⁹ scores are copied to the host and pass
+through the per-query top-k heaps, which dominate the time. The raw-L2 column is about
+0.70 for every type; normalization changes the ranking, independent of the format.
+
 ## Decisions
 
 - `vecf4` = NVFP4 (e2m1, unsigned E4M3 16-block scale, fp32 global per vector in the
@@ -457,6 +501,9 @@ GPU time.
 - Cells store scales per row in block order; the GPU engine re-lays them into the tiled
   scale tensor.
 - The GPU engine is dot-product matmul only, via cuBLASLt, with the dataset as operand A.
+- `vector_matmul` also takes `vecf32`, `vecf16`, `vecbf16`, `vecint8` and `vecuint8`,
+  through the same engine with plain formats; `vecf64` is rejected (the engine has no fp64
+  format). `vecuint8` runs on the int8 path with the shift correction.
 - v1 is a function call per tile with no index, residency or dataset cache; the cuVS
   brute-force index is unchanged.
 - SQL surface = one aggregate, `vector_matmul`; partials per pipeline and the cross-CN

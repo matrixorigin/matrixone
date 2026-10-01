@@ -15,8 +15,8 @@
 #pragma once
 
 // Block-scaled dot-product matmul on cuBLASLt for vecf8 (MXFP8) and vecf4 (NVFP4) cells,
-// and a plain matmul for vecf32 and vecf16 rows (CUBLAS_COMPUTE_32F: fp32 accumulation,
-// no TF32).
+// and a plain matmul for vecf32, vecf16, vecbf16, vecint8 and vecuint8 rows (float formats:
+// CUBLAS_COMPUTE_32F, fp32 accumulation, no TF32; integer formats: CUBLAS_COMPUTE_32I).
 //
 // A cell is the vecblock.go layout: a 12-byte header (version, format, reserved[2],
 // dim uint32 LE, global float32 LE), one scale byte per block (E8M0 per 32 elements for
