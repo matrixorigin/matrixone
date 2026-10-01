@@ -24,20 +24,21 @@ select mo_ctl('dn', 'flush', 'd1.t4');
 explain select * from t4 where c1 + 2 = 5;
 
 -- check filter condition in explain output
-explain (check '["Table Scan", "= 3", "Filter Cond"]') select * from t4 where c1 + 2 = 5;
+explain (check '["Table Scan", "[+] 2", "= 5", "Filter Cond"]') select * from t4 where c1 + 2 = 5;
 
 -- the following should fail
-explain (check '["= 5"]') select * from t4 where c1 + 2 = 5;
+explain (check '["= 3"]') select * from t4 where c1 + 2 = 5;
 
 -- check ReadSize format (ReadSize=xx|xx|xx), filter condition, and other key fields
 -- verify: ReadSize format with pipe separator, Analyze info fields, Table Scan node, and filter condition
+-- The safe arithmetic bound excludes the second 1,808-row block.
 -- Note: ReadSize values may vary (cache state, data distribution), so we only verify format, not specific values
 
 -- @regex("ReadSize=",true)
-explain (analyze true, check '["Table Scan", "ReadSize=", "|", "bytes", "InputSize=", "OutputSize=", "MemorySize=", "timeConsumed=", "inputRows=", "outputRows=", "= 3", "Filter Cond"]') select * from t4 where c1 + 2 = 5;
+explain (analyze true, check '["Table Scan", "ReadSize=", "|", "bytes", "InputSize=", "OutputSize=", "MemorySize=", "timeConsumed=", "inputRows=", "outputRows=", "inputBlocks=1 inputRows=8192", "[+] 2", "= 5", "Filter Cond"]') select * from t4 where c1 + 2 = 5;
 
 -- the following should fail
-explain (analyze true, check '["= 5"]') select * from t4 where c1 + 2 = 5;
+explain (analyze true, check '["= 3"]') select * from t4 where c1 + 2 = 5;
 
 -- check complex query plan with Sort, Limit, Filter, and multiple conditions
 -- @regex("Sort",true)

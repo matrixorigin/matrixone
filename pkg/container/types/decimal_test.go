@@ -1299,3 +1299,22 @@ func TestDecimalScaleLoopOverflow(t *testing.T) {
 		}
 	})
 }
+
+func TestDecimal64MulCappedScale(t *testing.T) {
+	for _, tc := range []struct{ input, want Decimal64 }{
+		{100000000, 10000},
+		{Decimal64(100000000).Minus(), Decimal64(10000).Minus()},
+		{Decimal64(1) << 63, Decimal64(922337203685478).Minus()},
+	} {
+		got, scale, err := tc.input.Mul(1, 8, 8)
+		require.NoError(t, err)
+		require.Equal(t, int32(12), scale)
+		require.Equal(t, tc.want, got)
+	}
+	minimum := Decimal64(1) << 63
+	got, _, err := minimum.Mul(1, 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, minimum, got)
+	_, _, err = minimum.Mul(Decimal64(1).Minus(), 0, 0)
+	require.Error(t, err)
+}
