@@ -2,7 +2,7 @@
 
 Scope: [PR #29527](https://github.com/matrixorigin/matrixone/pull/29527),
 issues #29497, #29533 and #29534. The selected design is
-[revision v7](20260930_cartesian_transient_stats.md).
+[revision v8](20260930_cartesian_transient_stats.md).
 Current main/base: `0d3687004d712e0878d63f2e848f69c5df5d1c0f`.
 Historical performance control: `c2abd6a54b7cd3e13c1b1494388cd7a81b8369d4`.
 The original PR head `f93762ed90e618f477a37ecee640ce8395c72d8e` is the regression control.
@@ -177,3 +177,50 @@ production semantics match the tested binary. Local raw logs are retained outsid
 this repository; this document and the PR provide reviewer-accessible results.
 New-head CI is not awaited, as requested. Older green CI does not certify this
 remediation revision; Iceberg is outside the requested scope.
+
+
+## Reopened CI repair evidence
+
+The exact `91e413abca` CI run failed UT and coverage on the same Adaptive Top
+fixture, plus 7 PROXY and 32 PESSIMISTIC BVT statements. Dependent summary
+checks also failed. This supersedes earlier delivery PASS; it is not a claim
+that the repaired revision has passed CI. Iceberg is excluded by user direction.
+
+BOOL producer and persisted metadata tests fail before repair and pass afterward.
+A real disk writer/reader fixture preserves legacy false/false raw bytes, exposes
+conservative read bounds and preserves current raw false/true writes and area
+length. Clean-main forced-block-filter control proves the producer bug predates
+this PR. The unchanged native BOOL PICK BVT passes after the common-owner repair.
+
+Warm same-SQL and same-handle vector controls reproduce stale FORCE after AUTO
+is disabled, while cold planning returns the required POST empty result. The
+original empty expectation is retained. Added parameterized handle executions
+prove repeated AUTO→POST→AUTO changes. Cache UTs cover both defaults, normalized
+same values, invalid SET, exactly-once AST free and preservation of prepared handles.
+
+Normal owning vector, objectio, readutil and index packages pass. Focused zonemap
+consumers and session-cache tests pass. The initial full vector run encountered an
+existing timezone-dependent assertion; UTC matches the CI environment and passes.
+Existing /tmp object fixtures were owned by another process/user; full objectio
+passes in a private mount namespace without changing those files. Full frontend
+passes (24.369s), focused session-cache race passes (1.181s), and the selected
+vector/objectio/frontend vet checks pass. Final malformed BOOL-bound coverage
+also passes; non-BOOL metadata read views retain zero allocations.
+The final exact-source production build passes. Incremental golangci-lint
+(Go 1.26.4, v2.6.2) on the four newly changed owning packages reports zero issues;
+qualified prior incremental checks are reused for unchanged package closures.
+
+GPU-tagged tests are **NOT VERIFIED**: this environment has neither the CUDA
+toolchain nor a GPU device. The mo-dev CGo reference requires the whole GPU set
+after a shared vector edit; CPU results do not satisfy that separate gate.
+On 2026-09-30 the user explicitly instructed immediate push of these repairs.
+That instruction overrides the skill's pre-push GPU gate for this delivery only;
+the GPU suite remains NOT VERIFIED, with no GPU correctness/performance claim.
+
+All 13 affected BVT scripts pass normal comparison twice on the same owned
+service: 2,508/2,508 statements each round, zero failures, ignored or abnormal.
+The catalog returns to seven databases and owned service exit is 0. Range JOIN,
+REUSE, nonzero SpillRows/SpillSize, exact content and mode-off empty results are
+retained. Full BVT uses the repository default process budget; the dedicated
+64MiB capacity/performance evidence above remains separate. No CI wait or full
+PROXY/PESSIMISTIC topology-pass claim is made from this normal comparison.

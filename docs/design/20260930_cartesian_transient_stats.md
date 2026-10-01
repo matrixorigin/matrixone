@@ -1,6 +1,6 @@
 # Transient optimizer statistics for Cartesian DML
 
-Design revision: v7. The original v6 and the focused v7 corrections were reviewed
+Design revision: v8 (v7 core plus the approved CI repair addendum). The original v6 and the focused v7 corrections were reviewed
 by GPT-6.1-sol / xhigh before their respective implementations.
 Owning issues: [#29497](https://github.com/matrixorigin/matrixone/issues/29497),
 [#29533](https://github.com/matrixorigin/matrixone/issues/29533),
@@ -185,3 +185,39 @@ metadata, growth-width immutability and numeric overflow checks. Public SQL must
 cover flush + own writes, wide-row growth, finite huge estimates and a cold
 allocator after service restart. Normal-path performance must be compared;
 read-only completed observations remain on the original fast owner.
+
+
+## Revision v8: CI counterexamples and minimum owner repairs
+
+Exact head `91e413abca893f1337495ebdce45e85251f24237` failed the adaptive
+embedded test and 39 BVT statements. Delivery was reopened. GPT-6.1-sol / xhigh
+approved the following focused repairs before production implementation:
+
+* The BOOL vector min/max producer used AND for both bounds. Mixed false/true
+  values persisted as false/false; the new statistics exposed those invalid
+  bounds through block pruning. Clean main reproduces filtered-read loss when
+  block pruning is forced. Correct max to OR. Since old mixed and valid all-false
+  bounds share the same serialized bytes, the three objectio metadata getters
+  return a private conservative BOOL view. Two existing writer serialization
+  paths keep raw bounds. Do not change expression literals, format versions,
+  runtime-filter comparisons or statistics precision. Legacy false-only BOOL
+  blocks can require extra reads; non-BOOL metadata returns its existing view.
+* A cached vector FORCE plan survived AUTO-default changes, including a prepared
+  handle. A cold alias under AUTO=0 correctly chooses POST and returns no row.
+  In SetSessionSysVar, successful changes to the existing AUTO/PRE defaults clear
+  ordinary plans and mark existing prepared statements for their established
+  EXECUTE rebuild. Same-value and rejected SET retain caches. Handles, parameter
+  buffers and cursors keep their existing owners; no new invalidation epoch or
+  per-query plan scan is added.
+* Shuffle/spill's reduced data fixture patched costs before pending publication
+  completed. After the first query, 5M/4M became 100K/80K and range metadata
+  disappeared. Flush followed by synchronous full refresh before patch preserves
+  the existing range, REUSE and real-spill assertions without product changes.
+* Adaptive Top receives completed persisted stats and an explicit NDV boundary;
+  its plan and result assertions remain. The unordered ROWS window receives an
+  explicit window order. Other reported BlockFilter/join-layout goldens change
+  only where the existing cost contract explains them; content oracles remain.
+
+The original small-table hot path remains metadata-only: no exact row scan,
+new cache, state machine, retry controller or query-wide validation pass.
+Final delivery review and optional-platform gate status are recorded separately.
