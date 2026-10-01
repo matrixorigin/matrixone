@@ -104,6 +104,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -2080,7 +2081,8 @@ func constructAggregateConfigWithError(
 				return nil, nil, err
 			}
 		}
-		return []*plan.Expr{args[1], args[2]}, aggexec.EncodeVectorMatmulConfig(topk, queries, options), nil
+		gpu := gpumode.EffectiveGpuMode(proc.GetResolveVariableFunc())
+		return []*plan.Expr{args[1], args[2]}, aggexec.EncodeVectorMatmulConfig(topk, queries, options, gpu), nil
 
 	case plan2.NamePercentileCont, plan2.NamePercentileDisc:
 		args, config, err := constructOrderedPercentileConfig(f, proc)

@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
 	"github.com/stretchr/testify/require"
 )
 
@@ -44,12 +45,12 @@ func TestConstructVectorMatmulConfig(t *testing.T) {
 	args, config, err := call(topk, id, vec, queries)
 	require.NoError(t, err)
 	require.Equal(t, []*plan.Expr{id, vec}, args)
-	require.Equal(t, aggexec.EncodeVectorMatmulConfig(3, `[[1,0,0,0]]`, ""), config)
+	require.Equal(t, aggexec.EncodeVectorMatmulConfig(3, `[[1,0,0,0]]`, "", gpumode.GpuMode), config)
 
 	args, config, err = call(topk, id, vec, queries, options)
 	require.NoError(t, err)
 	require.Equal(t, []*plan.Expr{id, vec}, args)
-	require.Equal(t, aggexec.EncodeVectorMatmulConfig(3, `[[1,0,0,0]]`, `{"mode":"cpu"}`), config)
+	require.Equal(t, aggexec.EncodeVectorMatmulConfig(3, `[[1,0,0,0]]`, `{"mode":"cpu"}`, gpumode.GpuMode), config)
 
 	_, _, err = call(topk, id, vec)
 	require.ErrorContains(t, err, "requires 4 or 5 arguments")

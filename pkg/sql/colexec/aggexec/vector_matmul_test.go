@@ -35,7 +35,7 @@ func vmVecType() types.Type { return types.New(types.T_array_float8, vmDim, 0) }
 
 func vmConfig(topk int, queries [][]float32) []byte {
 	q, _ := json.Marshal(queries)
-	return EncodeVectorMatmulConfig(int64(topk), string(q), "")
+	return EncodeVectorMatmulConfig(int64(topk), string(q), "", false)
 }
 
 func vmExec(t *testing.T, mp *mpool.MPool, idType types.Type, groups int, cfg []byte) *vectorMatmulExec {
@@ -347,19 +347,26 @@ func TestVectorMatmulConfigErrors(t *testing.T) {
 		{2, `[[1,0,0]]`, ``, `different dimensions`},
 		{2, `[[1,0,0,"x"]]`, ``, `JSON array of vectors`},
 	} {
-		_, err := parseVectorMatmulConfig(EncodeVectorMatmulConfig(tc.topk, tc.queries, tc.options), vt)
+		_, err := parseVectorMatmulConfig(EncodeVectorMatmulConfig(tc.topk, tc.queries, tc.options, false), vt)
 		require.ErrorContains(t, err, tc.want, "%d %s %s", tc.topk, tc.queries, tc.options)
 	}
 	many := "[" + strings.TrimSuffix(strings.Repeat(`[1,0,0,0],`, vectorMatmulMaxEntries/vectorMatmulMaxTopK+1), ",") + "]"
-	_, err := parseVectorMatmulConfig(EncodeVectorMatmulConfig(vectorMatmulMaxTopK, many, ""), vt)
+	_, err := parseVectorMatmulConfig(EncodeVectorMatmulConfig(vectorMatmulMaxTopK, many, "", false), vt)
 	require.ErrorContains(t, err, "queries x topk exceeds")
 	for _, options := range []string{``, `{"mode":"auto"}`, `{"mode":"cpu","tile_bytes":1024}`} {
-		_, err := parseVectorMatmulConfig(EncodeVectorMatmulConfig(1, `[[1,0,0,0]]`, options), vt)
+		_, err := parseVectorMatmulConfig(EncodeVectorMatmulConfig(1, `[[1,0,0,0]]`, options, false), vt)
 		require.NoError(t, err, options)
 	}
-	for _, bad := range [][]byte{{1, 2}, EncodeVectorMatmulConfig(1, `[[1]]`, "")[:12], append(EncodeVectorMatmulConfig(1, `[[1]]`, ""), 0)} {
-		_, _, _, err := decodeVectorMatmulConfig(bad)
+	badFlag := EncodeVectorMatmulConfig(1, `[[1]]`, "", true)
+	badFlag[len(badFlag)-1] = 2
+	for _, bad := range [][]byte{{1, 2}, EncodeVectorMatmulConfig(1, `[[1]]`, "", false)[:12], append(EncodeVectorMatmulConfig(1, `[[1]]`, "", false), 0), badFlag} {
+		_, _, _, _, err := decodeVectorMatmulConfig(bad)
 		require.Error(t, err)
+	}
+	for _, gpu := range []bool{false, true} {
+		topk, queries, options, got, err := decodeVectorMatmulConfig(EncodeVectorMatmulConfig(7, `[[1]]`, `{}`, gpu))
+		require.NoError(t, err)
+		require.Equal(t, []any{int64(7), `[[1]]`, `{}`, gpu}, []any{topk, queries, options, got})
 	}
 
 	mp := mpool.MustNewZero()
@@ -527,7 +534,7 @@ func TestVectorMatmulOverflowRanksLast(t *testing.T) {
 		exec, err := makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{types.T_int64.ToType(), vt})
 		require.NoError(t, err)
 		require.NoError(t, exec.GroupGrow(1))
-		require.NoError(t, exec.SetExtraInformation(EncodeVectorMatmulConfig(int64(topk), string(q), ""), 0))
+		require.NoError(t, exec.SetExtraInformation(EncodeVectorMatmulConfig(int64(topk), string(q), "", false), 0))
 		return exec.(*vectorMatmulExec)
 	}
 	idv := vector.NewVec(types.T_int64.ToType())
@@ -557,4 +564,58 @@ func TestVectorMatmulOverflowRanksLast(t *testing.T) {
 	require.NoError(t, top3.BulkFill(0, []*vector.Vector{idv, vv}))
 	_, err := top3.Flush()
 	require.ErrorContains(t, err, "overflows the float32 domain")
+}
+
+// Merging must keep each hit's id text when appending an id compacts the target arena:
+// the target carries garbage from evicted ids, and source ids are shared across queries.
+func TestVectorMatmulStateMergeAcrossCompaction(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	r := rand.New(rand.NewSource(11))
+	const q, k = 3, 4
+	type hit struct {
+		id    string
+		score float64
+	}
+	for iter := 0; iter < 200; iter++ {
+		var all []hit
+		perQuery := make([][]hit, q)
+		mkState := func(rows int) *vectorMatmulState {
+			s, err := newVectorMatmulState(mp, nil, q, k)
+			require.NoError(t, err)
+			for i := 0; i < rows; i++ {
+				id := strings.Repeat(string(rune('a'+r.Intn(26))), 1+r.Intn(40)) + strconv.Itoa(len(all))
+				scores := make([]float64, q)
+				for j := range scores {
+					scores[j] = float64(r.Intn(1000))
+					perQuery[j] = append(perQuery[j], hit{id, scores[j]})
+				}
+				all = append(all, hit{id, 0})
+				require.NoError(t, s.offer(scores, []byte(id)))
+			}
+			return s
+		}
+		target := mkState(30)
+		for src := 0; src < 4; src++ {
+			s := mkState(10)
+			require.NoError(t, target.Merge(s))
+			s.Free()
+		}
+		for j := 0; j < q; j++ {
+			want := perQuery[j]
+			sort.Slice(want, func(a, b int) bool {
+				if want[a].score != want[b].score {
+					return want[a].score > want[b].score
+				}
+				return want[a].id < want[b].id
+			})
+			got := target.sorted(j)
+			require.Len(t, got, k)
+			for i, e := range got {
+				require.Equal(t, want[i].id, string(target.id(e)), "iter %d query %d rank %d", iter, j, i)
+				require.Equal(t, want[i].score, e.score)
+			}
+		}
+		target.Free()
+	}
 }

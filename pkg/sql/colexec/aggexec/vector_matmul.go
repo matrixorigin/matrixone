@@ -61,17 +61,22 @@ func VectorMatmulReturnType(_ []types.Type) types.Type {
 	return types.T_json.ToType()
 }
 
-// EncodeVectorMatmulConfig packs topk and the queries and options JSON strings.
-func EncodeVectorMatmulConfig(topk int64, queries, options string) []byte {
-	out := make([]byte, 0, 16+len(queries)+len(options))
+// EncodeVectorMatmulConfig packs topk, the queries and options JSON strings and whether
+// the session allows the GPU (gpu_mode).
+func EncodeVectorMatmulConfig(topk int64, queries, options string, gpu bool) []byte {
+	out := make([]byte, 0, 17+len(queries)+len(options))
 	out = binary.LittleEndian.AppendUint64(out, uint64(topk))
 	out = binary.LittleEndian.AppendUint32(out, uint32(len(queries)))
 	out = append(out, queries...)
 	out = binary.LittleEndian.AppendUint32(out, uint32(len(options)))
-	return append(out, options...)
+	out = append(out, options...)
+	if gpu {
+		return append(out, 1)
+	}
+	return append(out, 0)
 }
 
-func decodeVectorMatmulConfig(b []byte) (topk int64, queries, options string, err error) {
+func decodeVectorMatmulConfig(b []byte) (topk int64, queries, options string, gpu bool, err error) {
 	read := func() (string, bool) {
 		if len(b) < 4 {
 			return "", false
@@ -85,17 +90,17 @@ func decodeVectorMatmulConfig(b []byte) (topk int64, queries, options string, er
 		return s, true
 	}
 	if len(b) < 8 {
-		return 0, "", "", moerr.NewInternalErrorNoCtx("vector_matmul: malformed configuration")
+		return 0, "", "", false, moerr.NewInternalErrorNoCtx("vector_matmul: malformed configuration")
 	}
 	topk = int64(binary.LittleEndian.Uint64(b))
 	b = b[8:]
 	var ok1, ok2 bool
 	queries, ok1 = read()
 	options, ok2 = read()
-	if !ok1 || !ok2 || len(b) != 0 {
-		return 0, "", "", moerr.NewInternalErrorNoCtx("vector_matmul: malformed configuration")
+	if !ok1 || !ok2 || len(b) != 1 || b[0] > 1 {
+		return 0, "", "", false, moerr.NewInternalErrorNoCtx("vector_matmul: malformed configuration")
 	}
-	return topk, queries, options, nil
+	return topk, queries, options, b[0] == 1, nil
 }
 
 // vectorMatmulOptions is the optional fifth argument.
@@ -108,10 +113,14 @@ type vectorMatmulOptions struct {
 type vectorMatmulConfig struct {
 	topk    int
 	queries []metric.VecBlockOperand
+	// queryCells holds the query cells back to back.
+	queryCells []byte
+	// gpu reports that the session allows the GPU.
+	gpu bool
 }
 
 func parseVectorMatmulConfig(raw []byte, vecType types.Type) (*vectorMatmulConfig, error) {
-	topk, queriesText, optionsText, err := decodeVectorMatmulConfig(raw)
+	topk, queriesText, optionsText, gpu, err := decodeVectorMatmulConfig(raw)
 	if err != nil {
 		return nil, err
 	}
@@ -153,16 +162,17 @@ func parseVectorMatmulConfig(raw []byte, vecType types.Type) (*vectorMatmulConfi
 	if len(queries)*int(topk) > vectorMatmulMaxEntries {
 		return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: queries x topk exceeds %d", vectorMatmulMaxEntries)
 	}
-	cfg := &vectorMatmulConfig{topk: int(topk), queries: make([]metric.VecBlockOperand, len(queries))}
+	cfg := &vectorMatmulConfig{topk: int(topk), queries: make([]metric.VecBlockOperand, len(queries)), gpu: gpu}
 	for i, q := range queries {
 		if len(q) != int(vecType.Width) {
 			return nil, moerr.NewArrayInvalidOpNoCtx(int(vecType.Width), len(q))
 		}
-		cell, err := types.AppendBlockScaled(nil, format, q)
-		if err != nil {
+		start := len(cfg.queryCells)
+		var err error
+		if cfg.queryCells, err = types.AppendBlockScaled(cfg.queryCells, format, q); err != nil {
 			return nil, err
 		}
-		if cfg.queries[i].Cell, err = types.ParseBlockScaledCell(cell); err != nil {
+		if cfg.queries[i].Cell, err = types.ParseBlockScaledCell(cfg.queryCells[start:len(cfg.queryCells):len(cfg.queryCells)]); err != nil {
 			return nil, err
 		}
 	}
@@ -179,11 +189,14 @@ type vectorMatmulEntry struct {
 // vectorMatmulState is one group's state: per query a min-heap of at most k entries
 // ordered worst first, and an arena holding the id text of the entries.
 type vectorMatmulState struct {
-	q, k       int
-	counts     []uint32
-	entries    []vectorMatmulEntry // q*k; heap of query j at [j*k, j*k+counts[j])
-	arena      []byte              // used prefix [0, used)
-	used       int
+	q, k    int
+	counts  []uint32
+	entries []vectorMatmulEntry // q*k; heap of query j at [j*k, j*k+counts[j])
+	arena   []byte              // used prefix [0, used)
+	used    int
+	// pending is the id text of this group's rows waiting in the GPU tile; preflight
+	// reserves arena space for it.
+	pending    int
 	mp         *mpool.MPool
 	allocation *AllocationAccount
 }
@@ -365,6 +378,10 @@ func (s *vectorMatmulState) Merge(other *vectorMatmulState) error {
 	}
 	if other.q != s.q || other.k != s.k {
 		return moerr.NewInvalidInputNoCtx("vector_matmul: cannot merge different query configurations")
+	}
+	// reserve up front: a compaction inside the loop would move offsets cached in moved
+	if err := s.reserve(other.used); err != nil {
+		return err
 	}
 	moved := make(map[uint32]uint32)
 	for j := 0; j < other.q; j++ {
@@ -590,6 +607,30 @@ func vectorMatmulIDLenBound(vec *vector.Vector, row int) int {
 	return vectorMatmulMaxFixedIDLen
 }
 
+// vectorMatmulEngine scores tiles of cells against the queries on a GPU.
+type vectorMatmulEngine interface {
+	MaxRows() int
+	CellBytes() int
+	Run(cells []byte, scores []float32) error
+	Close()
+}
+
+// newVectorMatmulEngine creates a GPU engine. It is nil in builds without GPU support and
+// returns a nil engine when no device is visible.
+var newVectorMatmulEngine func(format types.BlockScaledFormat, dim, nq int, queryCells []byte, maxRows int) (vectorMatmulEngine, error)
+
+// vectorMatmulTileBytes bounds the host tile: cells plus scores.
+var vectorMatmulTileBytes = 64 << 20
+
+// vectorMatmulTile holds rows waiting for the GPU: their cells back to back, groups and ids.
+type vectorMatmulTile struct {
+	cells  []byte
+	groups []uint64
+	idEnds []int
+	ids    []byte
+	scores []float32
+}
+
 var _ GroupAggFuncExec = (*vectorMatmulExec)(nil)
 
 type vectorMatmulExec struct {
@@ -599,6 +640,10 @@ type vectorMatmulExec struct {
 	row    metric.VecBlockOperand
 	scores []float64
 	idBuf  []byte
+
+	engine      vectorMatmulEngine
+	engineTried bool
+	tile        vectorMatmulTile
 }
 
 func makeVectorMatmul(mp *mpool.MPool, id int64, isDistinct bool, params []types.Type) (AggFuncExec, error) {
@@ -706,9 +751,16 @@ func (exec *vectorMatmulExec) fillRow(group uint64, row int, vectors []*vector.V
 	if ids.IsNull(uint64(idRow)) || vecs.IsNull(uint64(vecRow)) {
 		return nil
 	}
-	cell, err := types.ParseBlockScaledCell(vecs.GetBytesAt(vecRow))
+	raw := vecs.GetBytesAt(vecRow)
+	cell, err := types.ParseBlockScaledCell(raw)
 	if err != nil {
 		return err
+	}
+	if err := exec.ensureEngine(); err != nil {
+		return err
+	}
+	if exec.engine != nil {
+		return exec.enqueue(group, raw, ids, idRow)
 	}
 	exec.row.Cell = cell
 	for j := range exec.cfg.queries {
@@ -725,6 +777,126 @@ func (exec *vectorMatmulExec) fillRow(group uint64, row int, vectors []*vector.V
 	}
 	exec.idBuf = appendVectorMatmulID(exec.idBuf[:0], ids, idRow)
 	return s.offer(exec.scores, exec.idBuf)
+}
+
+// ensureEngine creates the GPU engine on first use when the session allows the GPU and
+// the build has a device; otherwise rows are scored on the CPU.
+func (exec *vectorMatmulExec) ensureEngine() error {
+	if exec.engineTried {
+		return nil
+	}
+	exec.engineTried = true
+	if !exec.cfg.gpu || newVectorMatmulEngine == nil {
+		return nil
+	}
+	format, _ := exec.argTypes[1].Oid.BlockScaledFormat()
+	dim := int(exec.argTypes[1].Width)
+	nq := len(exec.cfg.queries)
+	cellBytes := types.BlockScaledCellSize(format, dim)
+	rows := max(1, min(65536, vectorMatmulTileBytes/(cellBytes+4*nq)))
+	engine, err := newVectorMatmulEngine(format, dim, nq, exec.cfg.queryCells, rows)
+	if err != nil || engine == nil {
+		return err
+	}
+	exec.engine = engine
+	n := engine.MaxRows()
+	exec.tile = vectorMatmulTile{
+		cells:  make([]byte, 0, n*engine.CellBytes()),
+		groups: make([]uint64, 0, n),
+		idEnds: make([]int, 0, n),
+		scores: make([]float32, n*nq),
+	}
+	return nil
+}
+
+// enqueue appends a row to the GPU tile and scores the tile when it is full.
+func (exec *vectorMatmulExec) enqueue(group uint64, cell []byte, ids *vector.Vector, idRow int) error {
+	s, err := exec.stateAt(group)
+	if err != nil {
+		return err
+	}
+	t := &exec.tile
+	before := len(t.ids)
+	t.ids = appendVectorMatmulID(t.ids, ids, idRow)
+	s.pending += len(t.ids) - before
+	t.idEnds = append(t.idEnds, len(t.ids))
+	t.cells = append(t.cells, cell...)
+	t.groups = append(t.groups, group)
+	if len(t.groups) == exec.engine.MaxRows() {
+		return exec.drain()
+	}
+	return nil
+}
+
+// drain scores the rows waiting in the GPU tile and offers them to their groups.
+func (exec *vectorMatmulExec) drain() error {
+	t := &exec.tile
+	n := len(t.groups)
+	if exec.engine == nil || n == 0 {
+		return nil
+	}
+	nq := len(exec.cfg.queries)
+	if err := exec.engine.Run(t.cells, t.scores[:n*nq]); err != nil {
+		return err
+	}
+	start := 0
+	for i, group := range t.groups {
+		id := t.ids[start:t.idEnds[i]]
+		start = t.idEnds[i]
+		s, err := exec.stateAt(group)
+		if err != nil {
+			return err
+		}
+		s.pending -= len(id)
+		for j := 0; j < nq; j++ {
+			// an overflow NaN is the +Inf distance, which ranks last
+			score := float64(t.scores[i*nq+j])
+			if math.IsNaN(score) {
+				score = math.Inf(-1)
+			}
+			exec.scores[j] = score
+		}
+		if err := s.offer(exec.scores, id); err != nil {
+			return err
+		}
+	}
+	t.cells, t.groups, t.idEnds, t.ids = t.cells[:0], t.groups[:0], t.idEnds[:0], t.ids[:0]
+	return nil
+}
+
+func (exec *vectorMatmulExec) SaveIntermediateResult(cnt int64, flags [][]uint8, writer io.Writer) error {
+	if err := exec.drain(); err != nil {
+		return err
+	}
+	return exec.aggExec.SaveIntermediateResult(cnt, flags, writer)
+}
+
+func (exec *vectorMatmulExec) SaveIntermediateResultWithStringSource(cnt int64, flags [][]uint8, writer io.Writer, includeStringSource bool) error {
+	if err := exec.drain(); err != nil {
+		return err
+	}
+	return exec.aggExec.SaveIntermediateResultWithStringSource(cnt, flags, writer, includeStringSource)
+}
+
+func (exec *vectorMatmulExec) SaveIntermediateResultOfChunk(chunk int, writer io.Writer) error {
+	if err := exec.drain(); err != nil {
+		return err
+	}
+	return exec.aggExec.SaveIntermediateResultOfChunk(chunk, writer)
+}
+
+func (exec *vectorMatmulExec) SaveIntermediateResultOfChunkWithStringSource(chunk int, writer io.Writer, includeStringSource bool) error {
+	if err := exec.drain(); err != nil {
+		return err
+	}
+	return exec.aggExec.SaveIntermediateResultOfChunkWithStringSource(chunk, writer, includeStringSource)
+}
+
+func (exec *vectorMatmulExec) SaveSpillIntermediateRows(chunk int, rows []int32, writer io.Writer) error {
+	if err := exec.drain(); err != nil {
+		return err
+	}
+	return exec.aggExec.SaveSpillIntermediateRows(chunk, rows, writer)
 }
 
 func (exec *vectorMatmulExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
@@ -794,7 +966,7 @@ func (exec *vectorMatmulExec) PreflightBatchFill(offset int, groups []uint64, ve
 		if err != nil {
 			return err
 		}
-		if err := s.reserve(extra[i]); err != nil {
+		if err := s.reserve(extra[i] + s.pending); err != nil {
 			return err
 		}
 	}
@@ -811,6 +983,9 @@ func (exec *vectorMatmulExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) 
 	other, ok := next.(*vectorMatmulExec)
 	if !ok || !exec.mergeCompatible(other) {
 		return mpool.ErrAllocationAccountMismatch
+	}
+	if err := other.drain(); err != nil {
+		return err
 	}
 	x2, y2 := other.getXY(uint64(groupIdx2))
 	if other.state[x2].mobs[y2] == nil {
@@ -844,6 +1019,9 @@ func (exec *vectorMatmulExec) PreflightBatchMerge(next AggFuncExec, offset int, 
 	if !ok || !exec.mergeCompatible(other) || len(groups) > hashmap.UnitLimit ||
 		offset < 0 || offset > other.GetNumGroups()-len(groups) {
 		return mpool.ErrAllocationAccountInvalid
+	}
+	if err := other.drain(); err != nil {
+		return err
 	}
 	var targets [hashmap.UnitLimit]uint64
 	var extra [hashmap.UnitLimit]int
@@ -886,6 +1064,9 @@ func (exec *vectorMatmulExec) PreflightBatchMerge(next AggFuncExec, offset int, 
 func (exec *vectorMatmulExec) Flush() (_ []*vector.Vector, retErr error) {
 	if exec.cfg == nil {
 		return nil, moerr.NewInternalErrorNoCtx("vector_matmul: configuration is not set")
+	}
+	if err := exec.drain(); err != nil {
+		return nil, err
 	}
 	results := make([]*vector.Vector, len(exec.state))
 	defer func() {
@@ -942,6 +1123,11 @@ func (exec *vectorMatmulExec) Size() int64 {
 }
 
 func (exec *vectorMatmulExec) Free() {
+	if exec.engine != nil {
+		exec.engine.Close()
+		exec.engine = nil
+	}
+	exec.tile = vectorMatmulTile{}
 	exec.aggExec.Free()
 	exec.state = nil
 }

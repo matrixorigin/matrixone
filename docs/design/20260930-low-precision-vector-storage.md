@@ -136,22 +136,26 @@ The GEMM is exact on the stored values; the ranking is approximate relative to t
 original fp32 vectors because the storage is quantized. `vecf8` is the quality format,
 `vecf4` the memory format.
 
-## GPU engine: `cgo/cublaslt`
+## GPU engine: cuBLASLt in `cgo/cuvs`
 
 The engine computes one thing: the fp32 **dot-product matrix** `S = D × Qᵀ` of a packed
 dataset tile `D` and packed queries `Q`, with `cublasLtMatmul` block-scaled matmul. It
 has no metric, filter or top-k logic.
 
-Code layout — all GPU code for these types lives in two directories, following
-`cgo/cuvs` + `pkg/cuvs`; both are separate from `cgo/cuvs`/`pkg/cuvs` (untouched) and
-`cgo/cuda` (the `xcall` kernels):
+Code layout — the engine lives with the other GPU code in `cgo/cuvs` + `pkg/cuvs`:
 
-- `cgo/cublaslt` — all C++/CUDA code: the engine (built only with `MO_CL_CUDA=1`) and
-  `test/` (CUDA programs, including the Float8/Float4 golden-data generator).
-- `pkg/cublaslt` — all Go GPU code: the cgo bindings and the Go API that `vector_matmul`
-  calls. Every file carries `//go:build gpu`; there is no CPU stub. Callers split by build
-  tag (`*_gpu.go` imports `pkg/cublaslt`, `*_cpu.go` does not), as the cuVS table
-  functions do.
+- `cgo/cuvs/blockscaled_matmul.hpp` — the engine class (header only, C++): packs cells
+  into padded element rows and tiled scales, owns the device buffers, CUDA stream and
+  cuBLASLt handle, and runs the matmul.
+- `cgo/cuvs/blockscaled_matmul_c.h` / `blockscaled_matmul_c.cpp` — the C API
+  (`gpu_blockscaled_matmul_new/_run/_max_rows/_destroy`), compiled into libmo with the
+  other `*_c.cpp` objects.
+- `cgo/cuvs/test/blockscaled_matmul_test.cu` — the standalone `test_blockscaled_matmul`
+  executable; `cgo/cuvs/test/narrow_float_golden_gen.cu` — the Float8/Float4 golden-data
+  generator.
+- `pkg/cuvs/blockscaled_matmul.go` — the Go binding (`//go:build gpu`).
+- `pkg/sql/colexec/aggexec/vector_matmul_gpu.go` (`//go:build gpu`) registers the engine
+  with the aggregate; CPU builds have no engine and score on the CPU.
 
 Everything else is CPU code in its usual place: the cell codec in `pkg/container/types`,
 the SQL functions under `pkg/sql`, and the CPU dot product.
@@ -160,19 +164,21 @@ cuBLASLt call sequence:
 
 | Step | Call | Setting |
 |------|------|---------|
-| 1 | `cublasLtCreate` | once per process |
+| 1 | `cublasLtCreate` | once per engine |
 | 2 | `cublasLtMatmulDescCreate` | `CUBLAS_COMPUTE_32F`, scale type `CUDA_R_32F` |
 | 3 | `cublasLtMatmulDescSetAttribute` | `TRANSA=T`, `TRANSB=N`; `A/B_SCALE_MODE` = `VEC32_UE8M0` (vecf8) or `VEC16_UE4M3` (vecf4); `A/B_SCALE_POINTER` = tiled scale tensors |
 | 4 | `cublasLtMatrixLayoutCreate` | A: element type, K × rows(D), ld = K; B: K × rows(Q), ld = K; D: `CUDA_R_32F`, rows(D) × rows(Q) |
-| 5 | `cublasLtMatmulPreferenceCreate` / `SetAttribute` | workspace limit |
-| 6 | `cublasLtMatmulAlgoGetHeuristic` | cached per shape |
-| 7 | `cublasLtMatmul` | alpha = 1.0, beta = 0 (per-vector `g` is applied by the caller) |
+| 5 | `cublasLtMatmulPreferenceCreate` / `SetAttribute` | workspace limit (32 MiB) |
+| 6 | `cublasLtMatmulAlgoGetHeuristic` | per tile |
+| 7 | `cublasLtMatmul` | alpha = 1.0, beta = 0; the per-vector `g` is applied when the scores are copied out |
 
 Contract (each point measured on sm_120 with cuBLASLt 13.6):
 
 - **Operand orientation: dataset = A, queries = B.** With queries as A, a single query
   (M = 1) returns silently wrong results and M = 2 has no algorithm; with the dataset as A,
   every query count (1, 2, 3, 5, …) matches the CPU reference, up to 100,000 dataset rows.
+- **Row padding.** Dataset rows and queries are padded with zero elements to a multiple
+  of 128, so a 1-row tail tile is never an M = 1 operand.
 - **Scale tensor layout is tiled, not per row.** Per-row scales produce wrong results
   (relative error ≈ 1). The correct layout pads rows to 128 and blocks to 4, and stores
   128 × 4 tiles of 512 bytes:
@@ -183,23 +189,28 @@ Contract (each point measured on sm_120 with cuBLASLt 13.6):
                + (r % 32) * 16 + ((r % 128) / 32) * 4 + (s % 4)
   ```
 
-  The engine copies each row's scales to the device and applies this re-layout on the GPU.
+  The engine writes each row's scales to these offsets on the host while packing the tile.
 - **K padding.** The dimension is padded with zero elements to a multiple of 32 (NVFP4 at
   K = 48 has no algorithm; 32, 96, 512, 768, 1536 run). Storage keeps the true `N`.
 - **Precision.** Against a double-precision CPU reference: MXFP8 relative error ≤ 1e-6,
   NVFP4 exact, at fp32 output.
 
-Engine state kept across calls, per caller instance: a CUDA stream, the cuBLASLt handle
-and workspace, and the heuristic algorithm per shape. No dataset is cached; every call
-uploads its tile.
+Engine state, per `vector_matmul` executor: a CUDA stream, the cuBLASLt handle and
+workspace, the queries on the device, and host and device buffers for one tile. The
+device memory is claimed through `device_memory_governor` before it is allocated. No
+dataset is cached; every tile is uploaded.
+
+Dispatch: the compiler reads the session's `gpu_mode` and stores it in the aggregate's
+configuration. An executor uses the engine when `gpu_mode` is on and the build has a
+visible device; otherwise it scores on the CPU. Rows are buffered in a tile of at most
+64 MiB (cells plus scores, up to 65,536 rows), scored when the tile is full, and the tile
+is drained before the states are read (final result, merge, intermediate result, spill).
 
 Build integration:
 
-- `cgo/cublaslt/Makefile` includes `../gpu-toolchain.mk` and builds with the Pixi `nvcc`.
-- `cgo/Makefile` links `cublaslt/*.o` into libmo next to `cuvs/*.o`.
-- `cgo/gpu-toolchain.mk` adds `-lcublasLt` to `MO_GPU_LDFLAGS` (consumed by the top-level
-  Go link flags and `mo-cgo-test`).
-- The native provenance/contract tests treat `cublaslt` sources as native inputs.
+- `cgo/cuvs/Makefile` lists `blockscaled_matmul_c.cpp` in `C_SRCS` and builds the
+  `test_blockscaled_matmul` executable.
+- `cgo/gpu-toolchain.mk` adds `-lcublasLt` to `MO_GPU_LDFLAGS`.
 - No new runtime dependency: `libcuvs.so` already requires `libcublasLt.so.13`, which the
   Pixi environment and the GPU runtime image ship.
 
@@ -272,7 +283,7 @@ vector_matmul(topk, src_id, src_vec, queries [, options]) → JSON
 | `src_id` | column | the row key: an integer, `char`/`varchar`/`text` or `uuid` column |
 | `src_vec` | column | `vecf8(N)` or `vecf4(N)` |
 | `queries` | constant string or JSON | array of query vectors `[[…], …]`, each of length `N`; quantized once to the column's format |
-| `options` | optional constant JSON string | `"mode": "auto" \| "gpu" \| "cpu"` (default `auto`: GPU when the build and a device are present, else CPU); `"tile_bytes": n` (default 64 MiB) |
+| `options` | optional constant JSON string | `"mode": "auto" \| "cpu"`, `"tile_bytes": n`; validated, not used for dispatch, which follows the session's `gpu_mode` |
 
 An aggregate: one result per group (one row without `GROUP BY`), of MO's `JSON` type.
 `topk`, `queries` and `options` are constants, prepared parameters or user variables; the
@@ -281,9 +292,9 @@ compiler moves them into the aggregate's configuration, so each executor receive
 so query vectors stored in a table go through a user variable:
 `SET @q = (SELECT json_arrayagg(v) FROM query_vectors)`.
 MO's distributed aggregation runs it in two phases. Each scan pipeline on each CN fills
-its own state, which keeps the top `topk` scores per query: in `cpu` mode each row is
-scored on arrival; the GPU engine appends rows to a host tile and scores a tile when it
-reaches `tile_bytes` or input ends. The partial states are then merged into the final
+its own state, which keeps the top `topk` scores per query: on the CPU each row is scored
+on arrival; with the GPU engine rows are appended to a host tile, which is scored when it
+is full or before the states are read. The partial states are then merged into the final
 top `topk`; across CNs the states are serialized to the merging CN. Rows with a NULL
 `src_id` or `src_vec` are skipped. A `WHERE` on the source table filters rows before they
 reach the aggregate.
@@ -295,9 +306,9 @@ a batch before the batch is filled, and the arena compacts in place.
 
 Instances on one CN share its GPU: each uses its own CUDA stream and cuBLASLt
 handle/workspace, and host and device tile memory scale with the instance count
-(`instances × tile_bytes`).
+(`instances` × one tile of at most 64 MiB).
 
-In `cpu` mode (and on CPU builds) the dot products come from the CPU distance kernel
+On the CPU (gpu_mode off, a CPU build, or no visible device) the dot products come from the CPU distance kernel
 over the quantized cells (`VecBlockInnerProduct`); results match the GPU within fp32
 summation-order tolerance. An overflowing dot product (NaN, mapped to the +Inf distance)
 ranks last; a non-finite score in the result is an overflow error, since JSON has no
@@ -378,8 +389,8 @@ provided by these functions.
   distance functions, DDL rejections, CSV/Parquet `LOAD`.
 - **P3 — CPU aggregate:** `vector_matmul` in `cpu` mode (CPU distance kernel over the
   quantized cells), partial merge and state serialization; UT + BVT.
-- **P4 — GPU engine:** `cgo/cublaslt` (tiled scale re-layout, K padding, dataset-as-A
-  matmul) and `vector_matmul` `gpu`/`auto` mode; acceptance cases from the verification
+- **P4 — GPU engine:** the cuBLASLt engine in `cgo/cuvs` (tiled scale layout, row and K
+  padding, dataset-as-A matmul) and `vector_matmul` GPU dispatch by `gpu_mode`; acceptance cases from the verification
   harness (both formats, 1-query batches, non-multiple-of-128 rows, 100,000-row tiles),
   compared with P3 within fp32 tolerance.
 
