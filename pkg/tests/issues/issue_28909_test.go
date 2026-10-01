@@ -181,6 +181,7 @@ func TestIssue28909DirectFunctionWireMetadata(t *testing.T) {
 		execSQLRequire(t, ctx, db, "create view "+schema+".rejected as "+projection)
 		rows, err = db.QueryContext(ctx, "select pos,cmp,id from "+schema+".rejected order by id")
 		require.NoError(t, err)
+		defer rows.Close()
 		check(rows, []string{"INT", "INT", "INT"}, want)
 		require.NoError(t, rows.Err())
 	})
