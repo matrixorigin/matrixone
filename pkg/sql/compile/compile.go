@@ -1450,37 +1450,7 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	if err = c.constrainRequiredIVFWorkers(qry); err != nil {
 		return nil, err
 	}
-	if err = c.constrainIntegerDomainWorkers(qry); err != nil {
-		return nil, err
-	}
-	if err = c.constrainConvBasesWorkers(qry); err != nil {
-		return nil, err
-	}
-	if err = c.constrainIntegerArgumentWorkers(qry); err != nil {
-		return nil, err
-	}
-	if err = c.constrainPreparedPrecisionWorkers(qry); err != nil {
-		return nil, err
-	}
-	if err = c.constrainDecimalDivisionWorkers(qry); err != nil {
-		return nil, err
-	}
-	if err = c.constrainTemporalResultWorkers(qry); err != nil {
-		return nil, err
-	}
-	if err = c.constrainIPFunctionWorkers(qry); err != nil {
-		return nil, err
-	}
-	if err = c.constrainStringNumericResultWorkers(qry); err != nil {
-		return nil, err
-	}
-	if err = c.constrainBoundedConditionalStringWorkers(qry); err != nil {
-		return nil, err
-	}
-	if err = c.constrainSpatialDistanceWorkers(qry); err != nil {
-		return nil, err
-	}
-	if err = c.constrainDecimalLiteralWorkers(qry); err != nil {
+	if err = c.constrainRemoteExpressionWorkers(qry); err != nil {
 		return nil, err
 	}
 	if err = c.constrainStrictWriteWorkers(); err != nil {
@@ -8957,7 +8927,7 @@ func (c *Compile) appendPrescopes(parents, children []*Scope, stageNodes engine.
 func (c *Compile) compilePreInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
-		preInsertArg, err := constructPreInsert(nodes, node, c.e, c.proc)
+		preInsertArg, err := constructPreInsert(c.anal.qry.Nodes, node, c.e, c.proc)
 		if err != nil {
 			return nil, err
 		}

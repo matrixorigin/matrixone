@@ -290,7 +290,9 @@ insert into wf07 values (3, '2002-06-09');
 insert into wf07 values (4, '2002-06-09');
 insert into wf07 values (4, '2002-06-09');
 insert into wf07 values (5, '2002-06-09');
-select id value, sum(id) over (rows unbounded preceding) from wf06 inner join wf07 on wf07.user_id = wf06.id;
+-- ROWS accumulation follows the window order, independent of join orientation.
+select id value, sum(id) over (order by wf06.id rows unbounded preceding)
+from wf06 inner join wf07 on wf07.user_id = wf06.id order by value, 2;
 drop table wf06;
 drop table wf07;
 

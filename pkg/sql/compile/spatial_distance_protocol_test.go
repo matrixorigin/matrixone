@@ -121,7 +121,7 @@ func TestSpatialDistanceDestinationProtocolValidation(t *testing.T) {
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 	client.version = defines.MORPCVersion89
-	require.NoError(t, c.constrainSpatialDistanceWorkers(&planpb.Query{
+	require.NoError(t, c.constrainRemoteExpressionWorkers(&planpb.Query{
 		Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}},
 	}))
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
@@ -131,7 +131,7 @@ func TestSpatialDistanceDestinationProtocolValidation(t *testing.T) {
 	client.version = defines.MORPCVersion90
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-	require.NoError(t, c.constrainSpatialDistanceWorkers(&planpb.Query{
+	require.NoError(t, c.constrainRemoteExpressionWorkers(&planpb.Query{
 		Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}},
 	}))
 	require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)

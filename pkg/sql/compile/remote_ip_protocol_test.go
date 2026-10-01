@@ -226,7 +226,7 @@ func TestIPFunctionDestinationProtocolValidation(t *testing.T) {
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 	client.version = defines.MORPCVersion70
-	require.NoError(t, c.constrainIPFunctionWorkers(qry))
+	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
 	require.ErrorContains(t, err, "remote destination")
@@ -234,13 +234,13 @@ func TestIPFunctionDestinationProtocolValidation(t *testing.T) {
 	client.version = defines.MORPCVersion71
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-	require.NoError(t, c.constrainIPFunctionWorkers(qry))
+	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 
 	client.version = defines.MORPCVersion72
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-	require.NoError(t, c.constrainIPFunctionWorkers(qry))
+	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 	require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
 	data, err := encodeRemoteScope(scope, c.proc)
 	require.NoError(t, err)
@@ -330,7 +330,7 @@ func TestVersion101ExpressionContractsProtocolBoundaries(t *testing.T) {
 				client.version = version
 				c.execType = plan2.ExecTypeAP_MULTICN
 				c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-				require.NoError(t, c.constrainIPFunctionWorkers(qry))
+				require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 			}
 			place(defines.MORPCVersion100)
 			require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
