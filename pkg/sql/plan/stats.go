@@ -50,6 +50,7 @@ const costThresholdForTpQuery = 240000
 const highNDVcolumnThreshHold = 0.95
 const statsCacheInitSize = 128
 const statsCacheMaxSize = 8192
+const defaultTableCount = 1000.0
 
 // StatsInfoUsable reports whether a statistics object contains a real table
 // cardinality observation. Persisted-object statistics use
@@ -2274,12 +2275,12 @@ func DefaultBigStats() *plan.Stats {
 }
 
 func IsDefaultStats(stats *plan.Stats) bool {
-	return stats.Cost == 1000 && stats.TableCnt == 1000 && stats.Outcnt == 1000 && stats.Selectivity == 1 && stats.BlockNum == 1 && stats.Rowsize == 100
+	return stats.Cost == 1000 && stats.TableCnt == defaultTableCount && stats.Outcnt == 1000 && stats.Selectivity == 1 && stats.BlockNum == 1 && stats.Rowsize == 100
 }
 
 func DefaultStats() *plan.Stats {
 	stats := new(Stats)
-	stats.TableCnt = 1000
+	stats.TableCnt = defaultTableCount
 	stats.Cost = 1000
 	stats.Outcnt = 1000
 	stats.Selectivity = 1
@@ -3661,7 +3662,7 @@ func CachedPlanStatsChanged(p *plan.Plan, ctx CompilerContext) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		rows := DefaultStats().TableCnt
+		rows := defaultTableCount
 		if StatsInfoUsable(stats) {
 			rows = stats.TableCnt
 		}

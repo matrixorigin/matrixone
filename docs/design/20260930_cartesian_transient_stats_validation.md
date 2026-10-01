@@ -2,12 +2,13 @@
 
 Scope: [PR #29527](https://github.com/matrixorigin/matrixone/pull/29527),
 issues #29497, #29533 and #29534. The selected design is
-[revision v8](20260930_cartesian_transient_stats.md).
-Current main/base: `0d3687004d712e0878d63f2e848f69c5df5d1c0f`.
+[current implementation contract](20260930_cartesian_transient_stats.md).
+Rebased main/base: `7b3d0c3bcfa91e1ef8e8077c45802b27c631b2fe`.
+Earlier integrated evidence used base `0d3687004d712e0878d63f2e848f69c5df5d1c0f`.
 Historical performance control: `c2abd6a54b7cd3e13c1b1494388cd7a81b8369d4`.
 The original PR head `f93762ed90e618f477a37ecee640ce8395c72d8e` is the regression control.
-Design and final review reuse GPT-6.1-sol / xhigh; the primary agent implements
-and runs adversarial QA. No exact row-count scan is added to planning.
+No exact row-count scan is added to planning. Earlier design and independent
+review used GPT-6.1-sol / xhigh; later direct reviews are identified separately.
 
 ## Follow-up verification of the three reopened findings
 
@@ -183,8 +184,8 @@ remediation revision; Iceberg is outside the requested scope.
 
 The exact `91e413abca` CI run failed UT and coverage on the same Adaptive Top
 fixture, plus 7 PROXY and 32 PESSIMISTIC BVT statements. Dependent summary
-checks also failed. This supersedes earlier delivery PASS; it is not a claim
-that the repaired revision has passed CI. Iceberg is excluded by user direction.
+checks also failed. These are historical failures, not the status of the current head.
+Iceberg is excluded by user direction.
 
 BOOL producer and persisted metadata tests fail before repair and pass afterward.
 A real disk writer/reader fixture preserves legacy false/false raw bytes, exposes
@@ -211,11 +212,8 @@ The final exact-source production build passes. Incremental golangci-lint
 qualified prior incremental checks are reused for unchanged package closures.
 
 GPU-tagged tests are **NOT VERIFIED**: this environment has neither the CUDA
-toolchain nor a GPU device. The mo-dev CGo reference requires the whole GPU set
-after a shared vector edit; CPU results do not satisfy that separate gate.
-On 2026-09-30 the user explicitly instructed immediate push of these repairs.
-That instruction overrides the skill's pre-push GPU gate for this delivery only;
-the GPU suite remains NOT VERIFIED, with no GPU correctness/performance claim.
+toolchain nor a GPU device. CPU results do not establish GPU correctness or performance.
+The user explicitly authorized the 2026-09-30 delivery with this gap recorded.
 
 All 13 affected BVT scripts pass normal comparison twice on the same owned
 service: 2,508/2,508 statements each round, zero failures, ignored or abnormal.
@@ -248,3 +246,44 @@ New validation, using matching verified native artifacts and `mo-cgo-test`:
   O(column metadata) validation per positive partition child, no row scans/I/O,
   extra byte-map storage, or general SELECT/DML entry overhead. No throughput
   improvement or new cluster/OOM reproduction is claimed.
+
+## Cache-admission allocation follow-up (2026-10-01)
+
+A local admission-only probe at `41d5bf29`, with completed statistics supplied by
+an existing test compiler context, measures 112 bytes / one allocation per scan.
+The comparison constructed `DefaultStats()` solely to read its default count,
+even when a valid observation replaced it. Sharing the default cardinality
+constant with `DefaultStats` and `IsDefaultStats` removes that unused allocation
+without changing fallback, cache eligibility or generation semantics.
+
+Two one-second repetitions on Linux/amd64, Go 1.26.4, GOMAXPROCS=4:
+
+| Cached scans | Before ns/op | After ns/op | Before B/allocs | After B/allocs |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 59.48–69.67 | 39.50–39.51 | 112 / 1 | 0 / 0 |
+| 8 | 253.6–304.6 | 74.26–75.16 | 896 / 8 | 0 / 0 |
+
+The probe excludes storage observation and SQL execution. It does not establish
+the cause or resolution of the historical CROSS GROUP/REPLACE regressions above.
+Their original raw harness is not present in this continuation's task directory;
+those timings remain qualified historical evidence. Existing cached-plan tests
+retain stable/growing/lost/default/empty observations, error and LIMIT0 controls.
+The benchmark fixture is an external overlay, not additional delivery test code.
+
+## Rebase validation (2026-10-01)
+
+Rebased onto the main revision above without conflicts; `range-diff` preserves
+all nine feature patches. Fresh controlled checks cover the upstream view/cache
+validation and vector-placement interactions:
+
+- Full normal `plan`, `disttae`, `compile`: pass (6.935s, 6.233s, 4.256s),
+  `-v -count=1 -timeout=240s`, GOMAXPROCS=4.
+- Focused frontend/compile `-race`: pass (1.171s, 1.150s): prepared stats errors
+  and stable reuse, subscription/named snapshots, view/catalog dependencies,
+  vector mode changes and internal stats cache. No whole-frontend race claim.
+- Four affected packages: `go vet` passes; incremental `golangci-lint` against
+  the rebased main reports zero issues. Native/Makefile/module inputs are
+  unchanged and verified by the controlled CGo wrapper.
+
+Historical SQL/BVT, capacity and performance evidence retains its recorded
+scope; unit checks do not establish new-head multi-CN or SQL performance results.

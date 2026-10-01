@@ -1,26 +1,16 @@
 # Transient optimizer statistics for Cartesian DML
 
-Design revision: v9 (v8 plus partition and remote byte-coverage closure). The original v6 and the focused v7 corrections were reviewed
-by GPT-6.1-sol / xhigh before their respective implementations.
-Owning issues: [#29497](https://github.com/matrixorigin/matrixone/issues/29497),
+Current implementation contract: v9. Owning issues:
+[#29497](https://github.com/matrixorigin/matrixone/issues/29497),
 [#29533](https://github.com/matrixorigin/matrixone/issues/29533),
 [#29534](https://github.com/matrixorigin/matrixone/issues/29534).
 Implementation: [PR #29527](https://github.com/matrixorigin/matrixone/pull/29527).
-Evidence baseline: `f93762ed90e618f477a37ecee640ce8395c72d8e`;
-historical main comparison: `c2abd6a54b7cd3e13c1b1494388cd7a81b8369d4`.
-The follow-up preserves remote main integration `a8a24d7c30`; its current
-main/base is `0d3687004d712e0878d63f2e848f69c5df5d1c0f`.
+[Validation and measured limits](20260930_cartesian_transient_stats_validation.md)
+record source/binary provenance, completed checks and unverified environments.
 
-**Design decision: APPROVED FOR IMPLEMENTATION.** Delivery remains blocked on
-the listed correctness, capacity and performance evidence. Preserve Cartesian
-estimated-child multiplication and half-query-cap RIGHT DEDUP guard. No new
-cache, registry, counter, protocol/confidence flag, per-SQL switch or executor.
-
-The SEMI correction is an ordinary local fix. Stats/cache expands the estimate
-and reusable-generation contract across owners and hot paths; the design gate
-applies. Publish this selected design in a versioned reviewer-accessible document
-in the existing PR, record its exact revision and approval before implementation.
-Provider/metadata is R2; snapshot/cache/mutex admission is the bounded R3 closure.
+Preserve Cartesian estimated-child multiplication and the half-query-cap RIGHT
+DEDUP guard. Estimates do not guarantee runtime capacity; existing allocation
+and spill paths remain responsible for actual resource admission.
 
 ## Cause and invariant
 
@@ -39,7 +29,7 @@ existing execution owner; estimates are not a universal memory/accuracy guarante
 ## Provider and snapshot owner
 
 - Extract original txnTable.Stats published/engine lookup into one private
-  getPublishedStats/getEngineStats. Rows/getCommittedRows and Size use that owner,
+  getPublishedStats. Rows/getCommittedRows and Size use that owner,
   preserving original maps/counts and avoiding double-counting memory estimates.
 - Add optional observation in txnTable, not GlobalStats: the relation knows the
   transaction/snapshot. Do not publish/store anonymous estimates in GlobalStats.
@@ -75,9 +65,8 @@ existing execution owner; estimates are not a universal memory/accuracy guarante
   omits the preceding statement's writes (public own-growth red: 40 vs 80).
   Including any tail beyond the execution prefix can only increase the bound. Sum INSERT memory batch.RowCount and persisted INSERT
   ObjectStats.Rows at the actual metadata attribute. Ignore DELETE conservatively.
-  Malformed/incomplete metadata must not yield a partial low sum. Do not call
-  ForEachTableWrites while locked; reuse/extract its private locked iteration if
-  appropriate. No engine/subscription/internal SQL/I/O under the workspace lock.
+  Malformed/incomplete metadata must not yield a partial low sum. The observation reads the locked log directly; it does not call
+  ForEachTableWrites while locked. No engine/subscription/internal SQL/I/O under the workspace lock.
 - This is O(existing entries + matching object metadata), not O(rows). Read-only
   autocommit stays O(1). The exceptional writing-transaction cost must be measured.
   The global memory counter is rejected: 500 unrelated inserts would estimate
@@ -125,7 +114,8 @@ existing execution owner; estimates are not a universal memory/accuracy guarante
 - One shared comparison checks normal TABLE_SCAN Stats.TableCnt against current
   StatsWithTableDef, passing ObjRef/TableDef/ScanSnapshot intact. Compare unfiltered
   TableCnt, not runtime-filter-mutated Outcnt. nil maps to existing default1000:
-  cached1000 stays stable, cached5->nil rebuilds once. Same-count object transition
+  cached1000 stays stable, cached5->nil rebuilds once. The comparison shares the
+  DefaultStats cardinality constant without allocating a full default object. Same-count object transition
   alone does not rebuild; existing ranges/Reset refresh execution dependencies.
 - Ordinary SQL uses transaction-admitted dispatchStmt/checkModify and existing
   rebuildStaleCachedStatements. SQL/binary EXECUTE ORs the comparison into existing
@@ -145,86 +135,37 @@ Only the after-swap RIGHT SEMI owner uses child1 preserved / child0 matching for
 Outcnt and BlockNum. Keep physical-right hashmap size, sum cost, existing combined
 selectivity and LIMIT tail; no unrelated join heuristics change. Reuse the SINGLE
 fixture for pre/post orientation, asymmetric filters, zero, LIMIT0/1/7, repeated
-recalc, PROJECT and downstream build. Recorded red and owning-package/public
-SEMI green prove this independent closure, not the future provider implementation.
+recalc, PROJECT and downstream build. Directional SEMI estimates have separate typed and public result oracles.
 
-Focused existing-fixture UT: memory/object/zero/published maps; Rows/Size ownership;
-workspace memory versus multi-object batches, unrelated500 rows, log rollback/
-compaction and already-held mutex; huge anonymous bounds through integer consumers;
-both compiler caches within3s; stable generation/compile identity and rapid growth,
-nil/default/forced-model controls, snapshot/tenant/version and rebuild rejection.
+## BOOL metadata and vector mode changes
 
-Public BVT: natural no-patch tiny DML/index/SEMI content, 1062 atomicity, rollback/
-follow-up, stable prepared and rapid source growth; same-instance rerun and clean
-catalog. Separate actual1.2M/64MiB/default-spill success remains mandatory capacity
-evidence. Keep published-stale accuracy limitations explicit; 300M is unrun.
+- The BOOL min/max producer computes minimum with AND and maximum with OR.
+  Historical mixed and valid all-false bounds share false/false serialized bytes;
+  the three existing objectio metadata getters return a private conservative
+  BOOL view. The two writer serialization paths retain raw bounds. The format
+  and non-BOOL metadata views are unchanged. Legacy false-only blocks may need
+  extra reads; read compatibility cannot recover their lost provenance.
+- Successful changes to the existing vector AUTO/PRE defaults clear ordinary
+  cached plans and mark prepared statements for the existing EXECUTE rebuild.
+  Equivalent normalized values and rejected SET preserve caches. Prepared
+  handles, parameter buffers and cursors retain their original owners.
 
-Rerun the identical two-round default/accurate/stale-high performance matrix.
-Proved tiny writer/shuffle regressions must disappear; plain scans/conditioned
-joins/VALUES/plain DML/repeated SELECT/stable binary prepared, COUNT/LIMIT0, writes
-in a transaction and unrelated500 rows are acceptance controls. Measure metadata
-scan cost at representative/large existing workspace prefixes; no new production
-diagnostics. Report absolute cost plus ratios for sub-ms cases. An unacceptable
-control regression requires refinement/review, not a nominal delivery PASS.
+## Validation contract
 
-Changed packages need focused red-green, owning-package tests, gofmt/vet/lint;
-race only the actual shared-admission closure. Cover cancellation of snapshot wait,
-TryLock fail-closed return, iterator cleanup, errors before stale cached execution,
-and failed metadata publication/compile cleanup. Existing untouched spill lifecycle
-evidence can be reused. Old-head CI cannot certify unimplemented remediation.
+- Verify real producer-to-planner cardinality and width, immutable published
+  inputs, unknown/overflow bounds, snapshot visibility and Rows/Size ownership.
+- Verify stable ordinary/prepared reuse, source growth and rollback, statistics
+  errors before cached execution, historical cache isolation and configuration
+  transitions. Preserve COUNT/LIMIT0/internal/execution-hint model controls.
+- Verify durable AUTO_INCREMENT offsets with a fresh allocator and actual
+  batches exceeding their configured range; planner hints cannot reserve an
+  unbounded persistent range.
+- Preserve public content, duplicate-key atomicity, rollback/follow-up writes,
+  real spill and metadata compatibility oracles. Complete initial publication
+  before injecting fixture costs; do not weaken execution assertions.
+- Compare small writers and ordinary cached reads with matched controls. Report
+  workspace metadata cost and stale-statistics regressions, including absolute
+  timings. A known limitation is not a performance pass.
 
-Revision v6: GPT-6.1-sol / xhigh independently approved the complete-log
-workspace bound on 2026-09-30 after the public transaction-growth counterexample.
-Do not advance execution snapshotWriteOffset during planning or add admission
-hooks. Preserve readonly O(1), target-only INSERT metadata, TryLock fail-closed,
-rollback log removal, and persisted ObjectStats.Rows validation. The public red
-and expected 80-row green are required delivery evidence.
-
-Revision v7: focused review reopened the previous delivery PASS after three
-counterexamples at `aa83017933`: finite 4.29B-row bounds consumed durable ID
-ranges, deleted appendable metadata inflated flush-followed-by-write estimates,
-and old SizeMap totals divided by larger row counts shrank measured widths.
-The three local fixes use the existing allocator, visibility and width-model
-owners. No new RFC, precision scan, counter, confidence field or execution path
-is required. Add actual durable-offset/fresh-allocator INT writing and a batch
-larger than its configured cache, sealed-object snapshot boundary/unknown-zero
-metadata, growth-width immutability and numeric overflow checks. Public SQL must
-cover flush + own writes, wide-row growth, finite huge estimates and a cold
-allocator after service restart. Normal-path performance must be compared;
-read-only completed observations remain on the original fast owner.
-
-
-## Revision v8: CI counterexamples and minimum owner repairs
-
-Exact head `91e413abca893f1337495ebdce45e85251f24237` failed the adaptive
-embedded test and 39 BVT statements. Delivery was reopened. GPT-6.1-sol / xhigh
-approved the following focused repairs before production implementation:
-
-* The BOOL vector min/max producer used AND for both bounds. Mixed false/true
-  values persisted as false/false; the new statistics exposed those invalid
-  bounds through block pruning. Clean main reproduces filtered-read loss when
-  block pruning is forced. Correct max to OR. Since old mixed and valid all-false
-  bounds share the same serialized bytes, the three objectio metadata getters
-  return a private conservative BOOL view. Two existing writer serialization
-  paths keep raw bounds. Do not change expression literals, format versions,
-  runtime-filter comparisons or statistics precision. Legacy false-only BOOL
-  blocks can require extra reads; non-BOOL metadata returns its existing view.
-* A cached vector FORCE plan survived AUTO-default changes, including a prepared
-  handle. A cold alias under AUTO=0 correctly chooses POST and returns no row.
-  In SetSessionSysVar, successful changes to the existing AUTO/PRE defaults clear
-  ordinary plans and mark existing prepared statements for their established
-  EXECUTE rebuild. Same-value and rejected SET retain caches. Handles, parameter
-  buffers and cursors keep their existing owners; no new invalidation epoch or
-  per-query plan scan is added.
-* Shuffle/spill's reduced data fixture patched costs before pending publication
-  completed. After the first query, 5M/4M became 100K/80K and range metadata
-  disappeared. Flush followed by synchronous full refresh before patch preserves
-  the existing range, REUSE and real-spill assertions without product changes.
-* Adaptive Top receives completed persisted stats and an explicit NDV boundary;
-  its plan and result assertions remain. The unordered ROWS window receives an
-  explicit window order. Other reported BlockFilter/join-layout goldens change
-  only where the existing cost contract explains them; content oracles remain.
-
-The original small-table hot path remains metadata-only: no exact row scan,
-new cache, state machine, retry controller or query-wide validation pass.
-Final delivery review and optional-platform gate status are recorded separately.
+Measurements, test commands, platform gaps and historical revision evidence
+belong in the linked validation record or PR, not this implementation contract.
