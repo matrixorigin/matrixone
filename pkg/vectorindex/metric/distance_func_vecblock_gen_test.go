@@ -12,55 +12,75 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build ignore
-
-// mkvecblock generates distance_func_vecblock_kernels.go: scalar, fully unrolled kernels over
-// 16-element units for each vecf8/vecf4/vecf32 operand pair and metric.
-package main
+package metric
 
 import (
 	"bytes"
+	"flag"
 	"fmt"
 	"go/format"
-	"log"
 	"os"
+	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
-const unit = 16
+// The generator of distance_func_vecblock_kernels.go: scalar, fully unrolled kernels over
+// 16-element units for each vecf8/vecf4/vecf32 operand pair and metric.
 
-type operand struct {
+var updateVecBlockKernels = flag.Bool("update", false, "rewrite distance_func_vecblock_kernels.go")
+
+const vecBlockKernelsFile = "distance_func_vecblock_kernels.go"
+
+// TestVecBlockKernelsGenerated fails when the kernels file differs from the generator output;
+// -update rewrites it.
+func TestVecBlockKernelsGenerated(t *testing.T) {
+	src, err := genVecBlockKernels()
+	require.NoError(t, err)
+	if *updateVecBlockKernels {
+		require.NoError(t, os.WriteFile(vecBlockKernelsFile, src, 0644))
+		return
+	}
+	got, err := os.ReadFile(vecBlockKernelsFile)
+	require.NoError(t, err)
+	require.Equal(t, string(src), string(got), "regenerate with: go test -run TestVecBlockKernelsGenerated -args -update")
+}
+
+const vbGenUnit = 16
+
+type vbGenOperand struct {
 	name string // F8, F4, F32
 	typ  string
 }
 
 var (
-	opF8  = operand{"F8", "*types.BlockScaledCell"}
-	opF4  = operand{"F4", "*types.BlockScaledCell"}
-	opF32 = operand{"F32", "[]float32"}
+	vbGenF8  = vbGenOperand{"F8", "*types.BlockScaledCell"}
+	vbGenF4  = vbGenOperand{"F4", "*types.BlockScaledCell"}
+	vbGenF32 = vbGenOperand{"F32", "[]float32"}
 )
 
-var pairs = [][2]operand{
-	{opF8, opF8},
-	{opF4, opF4},
-	{opF8, opF32},
-	{opF4, opF32},
-	{opF8, opF4},
+var vbGenPairs = [][2]vbGenOperand{
+	{vbGenF8, vbGenF8},
+	{vbGenF4, vbGenF4},
+	{vbGenF8, vbGenF32},
+	{vbGenF4, vbGenF32},
+	{vbGenF8, vbGenF4},
 }
 
-type metricKind struct {
+type vbGenMetric struct {
 	name    string
 	doc     string
 	results string
-	accs    []string // float32 per-unit accumulators
+	accs    []string // float32 per-vbGenUnit accumulators
 	elem    func(a, b string, k int) string
-	fold    string // folds the unit accumulators into the float64 results
+	fold    string // folds the vbGenUnit accumulators into the float64 results
 }
 
-func abs32(x string) string {
+func vbGenAbs32(x string) string {
 	return fmt.Sprintf("math.Float32frombits(math.Float32bits(%s) &^ (1 << 31))", x)
 }
 
-var metrics = []metricKind{
+var vbGenMetrics = []vbGenMetric{
 	{
 		name: "Dot", doc: "the dot product", results: "r float64",
 		accs: []string{"t0", "t1", "t2", "t3"},
@@ -79,7 +99,7 @@ var metrics = []metricKind{
 		name: "L1", doc: "the L1 distance", results: "r float64",
 		accs: []string{"t0", "t1", "t2", "t3"},
 		elem: func(a, b string, k int) string {
-			return fmt.Sprintf("t%d += %s\n", k%4, abs32(a+" - "+b))
+			return fmt.Sprintf("t%d += %s\n", k%4, vbGenAbs32(a+" - "+b))
 		},
 		fold: "r += float64(t0+t1) + float64(t2+t3)\n",
 	},
@@ -94,22 +114,22 @@ var metrics = []metricKind{
 	},
 }
 
-// load emits the per-unit setup for operand v ("x" or "y").
-func load(w *bytes.Buffer, o operand, v string) {
+// vbGenLoad emits the per-vbGenUnit setup for vbGenOperand v ("x" or "y").
+func vbGenLoad(w *bytes.Buffer, o vbGenOperand, v string) {
 	switch o.name {
 	case "F8":
 		fmt.Fprintf(w, "%ss := %s.Global * e8[%s.Scales[off>>5]]\n", v, v, v)
-		fmt.Fprintf(w, "%se := (*[%d]byte)(%s.Elems[off : off+%d])\n", v, unit, v, unit)
+		fmt.Fprintf(w, "%se := (*[%d]byte)(%s.Elems[off : off+%d])\n", v, vbGenUnit, v, vbGenUnit)
 	case "F4":
 		fmt.Fprintf(w, "%ss := %s.Global * f8[%s.Scales[off>>4]]\n", v, v, v)
-		fmt.Fprintf(w, "%se := (*[%d]byte)(%s.Elems[off>>1 : off>>1+%d])\n", v, unit/2, v, unit/2)
+		fmt.Fprintf(w, "%se := (*[%d]byte)(%s.Elems[off>>1 : off>>1+%d])\n", v, vbGenUnit/2, v, vbGenUnit/2)
 	case "F32":
-		fmt.Fprintf(w, "%sv := (*[%d]float32)(%s[off : off+%d])\n", v, unit, v, unit)
+		fmt.Fprintf(w, "%sv := (*[%d]float32)(%s[off : off+%d])\n", v, vbGenUnit, v, vbGenUnit)
 	}
 }
 
-// elems emits the decode of elements [g, g+4) of operand v into v0..v3 and returns their names.
-func elems(w *bytes.Buffer, o operand, v string, g int) []string {
+// vbGenElems emits the decode of elements [g, g+4) of vbGenOperand v into v0..v3 and returns their names.
+func vbGenElems(w *bytes.Buffer, o vbGenOperand, v string, g int) []string {
 	names := make([]string, 4)
 	for k := 0; k < 4; k++ {
 		names[k] = fmt.Sprintf("%s%d", v, g+k)
@@ -133,11 +153,11 @@ func elems(w *bytes.Buffer, o operand, v string, g int) []string {
 	return names
 }
 
-func uses(p [2]operand, n string) bool { return p[0].name == n || p[1].name == n }
+func vbGenUses(p [2]vbGenOperand, n string) bool { return p[0].name == n || p[1].name == n }
 
-func main() {
+func genVecBlockKernels() ([]byte, error) {
 	var w bytes.Buffer
-	w.WriteString(`// Code generated by mkvecblock.go; DO NOT EDIT.
+	w.WriteString(`// Code generated by TestVecBlockKernelsGenerated; DO NOT EDIT.
 
 // Copyright 2026 Matrix Origin
 //
@@ -163,23 +183,23 @@ import (
 
 var _ = math.Float32bits
 `)
-	for _, m := range metrics {
-		for _, p := range pairs {
+	for _, m := range vbGenMetrics {
+		for _, p := range vbGenPairs {
 			fname := fmt.Sprintf("vecBlock%s%s%s", m.name, p[0].name, p[1].name)
-			fmt.Fprintf(&w, "\n// %s returns %s of the first units*%d elements of x and y.\n", fname, m.doc, unit)
+			fmt.Fprintf(&w, "\n// %s returns %s of the first units*%d elements of x and y.\n", fname, m.doc, vbGenUnit)
 			fmt.Fprintf(&w, "func %s(x %s, y %s, units int) (%s) {\n", fname, p[0].typ, p[1].typ, m.results)
-			needF8 := uses(p, "F8") || uses(p, "F4")
+			needF8 := vbGenUses(p, "F8") || vbGenUses(p, "F4")
 			if needF8 {
 				fmt.Fprintf(&w, "f8, e8, f4 := types.BlockScaledTables()\n")
 				fmt.Fprintf(&w, "_, _, _ = f8, e8, f4\n")
 			}
-			fmt.Fprintf(&w, "for u := 0; u < units; u++ {\noff := u * %d\n", unit)
-			load(&w, p[0], "x")
-			load(&w, p[1], "y")
-			fmt.Fprintf(&w, "var %s float32\n", join(m.accs))
-			for g := 0; g < unit; g += 4 {
-				xa := elems(&w, p[0], "x", g)
-				yb := elems(&w, p[1], "y", g)
+			fmt.Fprintf(&w, "for u := 0; u < units; u++ {\noff := u * %d\n", vbGenUnit)
+			vbGenLoad(&w, p[0], "x")
+			vbGenLoad(&w, p[1], "y")
+			fmt.Fprintf(&w, "var %s float32\n", vbGenJoin(m.accs))
+			for g := 0; g < vbGenUnit; g += 4 {
+				xa := vbGenElems(&w, p[0], "x", g)
+				yb := vbGenElems(&w, p[1], "y", g)
 				for k := 0; k < 4; k++ {
 					w.WriteString(m.elem(xa[k], yb[k], g+k))
 				}
@@ -188,17 +208,10 @@ var _ = math.Float32bits
 			w.WriteString("}\nreturn\n}\n")
 		}
 	}
-	src, err := format.Source(w.Bytes())
-	if err != nil {
-		os.WriteFile("distance_func_vecblock_kernels.go", w.Bytes(), 0644)
-		log.Fatal(err)
-	}
-	if err := os.WriteFile("distance_func_vecblock_kernels.go", src, 0644); err != nil {
-		log.Fatal(err)
-	}
+	return format.Source(w.Bytes())
 }
 
-func join(s []string) string {
+func vbGenJoin(s []string) string {
 	var b bytes.Buffer
 	for i, x := range s {
 		if i > 0 {

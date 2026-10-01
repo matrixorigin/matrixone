@@ -14,7 +14,7 @@
 
 package metric
 
-//go:generate go run mkvecblock.go
+//go:generate go test -run TestVecBlockKernelsGenerated -args -update
 
 import (
 	"math"
