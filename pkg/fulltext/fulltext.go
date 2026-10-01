@@ -1106,7 +1106,7 @@ func simpleTokenizePatterns(pattern string, parser string, forPhrase bool) ([]*P
 		word := string(t.TokenBytes[1 : slen+1])
 
 		newBytePos := t.BytePos
-		newEndBytePos := t.BytePos + int32(slen)
+		newEndBytePos := t.BytePos + t.OrigLen
 		if newBytePos >= currBytePos && newBytePos < currEndBytePos {
 			// skip the overlapping token
 			overlaps = append(overlaps, t)
@@ -1124,7 +1124,7 @@ func simpleTokenizePatterns(pattern string, parser string, forPhrase bool) ([]*P
 				for _, tt := range overlaps {
 					ttslen := tt.TokenBytes[0]
 					ttword := string(tt.TokenBytes[1 : ttslen+1])
-					endpos := tt.BytePos + int32(ttslen)
+					endpos := tt.BytePos + tt.OrigLen
 					if endpos == newEndBytePos {
 						//  longest overlap
 						runeSlice = []rune(ttword)
@@ -1139,8 +1139,10 @@ func simpleTokenizePatterns(pattern string, parser string, forPhrase bool) ([]*P
 				}
 			}
 			if !found {
-				if forPhrase && !isAllCJK(runeSlice) {
+				if forPhrase && t.Latin {
 					// A short Latin token (no overlapping trigram) is stored whole; match it exactly.
+					// Use the writer's ORIGINAL rune class, not []rune of the folded spelling: a Latin
+					// rune (e.g. U+023A) can fold to a >=0x7FF rune and be misclassified as CJK (#29271 P2).
 					list = append(list, &Pattern{Text: word, Operator: TEXT, Position: t.BytePos})
 				} else {
 					list = append(list, &Pattern{Text: word + "*", Operator: STAR, Position: t.BytePos})

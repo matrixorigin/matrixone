@@ -63,13 +63,19 @@ func findPhrasePattern(ps []*Pattern) *Pattern {
 // nowhere in the row (#29271 P2). Each phrase child is checked against the writer oracle: the writer
 // must hold a token at the child's exact Position, equal for a TEXT child and prefixed for a STAR.
 func TestBooleanPhraseKeepsOriginalBytesForCaseFold29271(t *testing.T) {
-	bodies := []string{
-		"İ中",                          // Latin İ (2B) then one short CJK -> CJK must stay at byte 2, not 1
-		"İstanbul-ankara",             // the second Latin run must stay at byte 10, not 9
-		"İ" + strings.Repeat("a", 23), // 23-byte Latin cap AFTER the length-changing fold
-		"ABC-DEF",                     // control: ASCII fold + hyphen split, no length change
+	cases := []struct {
+		body string
+		want int // expected phrase-child count; an omission check — alignment alone passes when a child is silently dropped
+	}{
+		{"İ中", 2},                          // Latin İ (2B) then one short CJK -> CJK must stay at byte 2, not 1
+		{"İstanbul-ankara", 2},             // the second Latin run must stay at byte 10, not 9
+		{"İ" + strings.Repeat("a", 23), 1}, // 23-byte Latin cap AFTER the length-changing fold
+		{"ABC-DEF", 2},                     // control: ASCII fold + hyphen split, no length change
+		{"Ⱥ中", 2},                          // U+023A (Latin, 2B) folds to U+2C65 (>=0x7FF, 3B): class/span from the ORIGINAL, else 中@2 is dropped (#29271 P2)
+		{"Ⱥb中", 2},                         // overlap defect is independent of prefix classification: the 中 suffix must survive
 	}
-	for _, body := range bodies {
+	for _, c := range cases {
+		body := c.body
 		oracle := writerTokens(t, body)
 		require.NotEmpty(t, oracle, body)
 
@@ -77,7 +83,7 @@ func TestBooleanPhraseKeepsOriginalBytesForCaseFold29271(t *testing.T) {
 		require.NoError(t, err, body)
 		phrase := findPhrasePattern(ps)
 		require.NotNil(t, phrase, body)
-		require.NotEmpty(t, phrase.Children, body)
+		require.Lenf(t, phrase.Children, c.want, "%q: wrong phrase-child count — a required child may be silently dropped", body)
 
 		// Overlapping CJK trigrams share a start position; keep the longest stored token per position.
 		byPos := make(map[int32]writerTok, len(oracle))
@@ -115,6 +121,12 @@ func TestBooleanPhraseCaseFoldExactPositions29271(t *testing.T) {
 		{pattern: `"İ` + strings.Repeat("a", 23) + `"`, expect: "(phrase (text 0 0 i" + strings.Repeat("a", 21) + "))"},
 		// ASCII fold and hyphen split are unchanged.
 		{pattern: `"ABC-DEF"`, expect: "(phrase (text 0 0 abc) (text 1 4 def))"},
+		// U+023A (Ⱥ, Latin <0x7FF, 2B) folds to U+2C65 (ⱥ, >=0x7FF, 3B). Class/span must come from the
+		// ORIGINAL token, else ⱥ is misclassified CJK (STAR) and the 中 suffix is dropped as an overlap.
+		{pattern: `"Ⱥ中"`, expect: "(phrase (text 0 0 ⱥ) (* 1 2 中*))"},
+		{pattern: `"Ⱥb中"`, expect: "(phrase (text 0 0 ⱥb) (* 1 3 中*))"},
+		// Standalone single Latin phrase: exact word (not a prefix), so it does not false-match ⱥbc.
+		{pattern: `"Ⱥ"`, expect: "(phrase (text 0 0 ⱥ))"},
 	}
 	for _, c := range cases {
 		got, err := PatternToStringWithPosition(c.pattern, int64(tree.FULLTEXT_BOOLEAN))

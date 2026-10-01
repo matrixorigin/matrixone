@@ -24,7 +24,11 @@ insert into ft values
  (10, '文。'),
  (11, 'İ中'),
  (12, 'İstanbul-ankara'),
- (13, 'İaaaaaaaaaaaaaaaaaaaaaaa');
+ (13, 'İaaaaaaaaaaaaaaaaaaaaaaa'),
+ (14, 'Ⱥ中'),
+ (15, 'Ⱥ文'),
+ (16, 'Ⱥbc'),
+ (17, 'Ⱥ');
 create fulltext index fi on ft(body) with parser ngram;
 
 -- CJK phrase: was 0 rows (raw '苹果香蕉' lookup), now matches the trigram-stored row 1, not the
@@ -60,6 +64,16 @@ select id from ft where match(body) against('"İ中"' in boolean mode) order by 
 select id from ft where match(body) against('"İstanbul-ankara"' in boolean mode) order by id;
 -- 23-byte Latin cap AFTER the İ->i fold: writer stores i + 21 a; the phrase looks up the same and hits row 13.
 select id from ft where match(body) against('"İaaaaaaaaaaaaaaaaaaaaaaa"' in boolean mode) order by id;
+
+-- #29271 P2: U+023A (Ⱥ, Latin <0x7FF, 2 bytes) folds to U+2C65 (ⱥ, >=0x7FF, 3 bytes). The phrase path
+-- must take the token class and byte span from the ORIGINAL input, not the folded spelling -- otherwise
+-- ⱥ is misread as a CJK prefix and the following token is dropped as an overlap. Writer stores ⱥ@0, 中@2.
+-- expansion: phrase "Ⱥ中" needs BOTH ⱥ@0 and 中*@2, so it hits row 14 and the missing-suffix row 15
+-- (Ⱥ文 -> ⱥ@0, 文@2) must NOT match.
+select id from ft where match(body) against('"Ⱥ中"' in boolean mode) order by id;
+-- a single Latin phrase is an exact word, not a prefix: it hits the standalone ⱥ in rows 14, 15, 17 but
+-- the longer Latin word in row 16 (Ⱥbc -> ⱥbc) must NOT match.
+select id from ft where match(body) against('"Ⱥ"' in boolean mode) order by id;
 
 -- controls: the unquoted natural-language and +boolean forms already matched and are unchanged.
 select id from ft where match(body) against('苹果香蕉' in natural language mode) order by id;

@@ -31,6 +31,15 @@ type Token struct {
 	TokenBytes [1 + MAX_TOKEN_SIZE]byte
 	TokenPos   int32
 	BytePos    int32
+	// OrigLen is the token's span in the ORIGINAL input bytes [BytePos, BytePos+OrigLen).
+	// It can differ from len(TokenBytes) when case folding changes the byte length (e.g.
+	// U+023A folds to a 3-byte rune from a 2-byte one), so overlap detection must use this,
+	// not the folded length.
+	OrigLen int32
+	// Latin reports the ORIGINAL rune class of the run (outputLatin vs outputCJK), independent
+	// of the folded spelling's class. A Latin rune can fold to a >=0x7FF rune, so classification
+	// must use this, not []rune of the folded token.
+	Latin bool
 }
 
 // Tokenizer yields a sequence of (Token, error) pairs. Implementations may
@@ -177,6 +186,8 @@ func outputLatin(st *simpleState, pos int, yield func(Token, error) bool) {
 	copy(token.TokenBytes[1:], []byte(ls))
 	token.TokenPos = st.currTokenPos
 	token.BytePos = int32(st.begin)
+	token.OrigLen = int32(pos - st.begin)
+	token.Latin = true
 	if !yield(token, nil) {
 		st.done = true
 		return
@@ -201,6 +212,7 @@ func outputCJK(st *simpleState, pos int, yield func(Token, error) bool) {
 		copy(token.TokenBytes[1:], ibuf[ia:id])
 		token.TokenPos = st.currTokenPos
 		token.BytePos = int32(st.begin + ia)
+		token.OrigLen = int32(id - ia)
 		if !yield(token, nil) {
 			st.done = true
 			return
