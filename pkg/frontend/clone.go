@@ -20,7 +20,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -1658,24 +1657,7 @@ func tryToIncreaseTxnPhysicalTS(
 		return curTxnPhysicalTS, nil
 	}
 
-	// a slight increase added to the physical to make sure
-	// the updated ts is greater than the old txn timestamp (physical + logic)
-	curTxnPhysicalTS += int64(time.Microsecond)
-	if err = txnOp.UpdateSnapshot(ctx, timestamp.Timestamp{
-		PhysicalTime: curTxnPhysicalTS,
-	}); err != nil {
-		return
-	}
-
-	updatedPhysical = txnOp.SnapshotTS().PhysicalTime
-	if updatedPhysical <= curTxnPhysicalTS {
-		return 0, moerr.NewInternalErrorNoCtxf("try to update the snapshot ts failed in clone database")
-	}
-
-	// return a nanosecond precision
-	updatedPhysical -= int64(time.Nanosecond)
-
-	return updatedPhysical, nil
+	return databranchutils.AdvanceLineageSnapshot(ctx, txnOp)
 }
 
 func updateBranchMetaTable(

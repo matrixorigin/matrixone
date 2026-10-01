@@ -49,19 +49,24 @@ var (
 	DiskCleanerMethod        = "DISKCLEANER"
 	GetProtocolVersionMethod = "GETPROTOCOLVERSION"
 	SetProtocolVersionMethod = "SETPROTOCOLVERSION"
-	RemoveRemoteLockTable    = strings.ToUpper("RemoveRemoteLockTable")
-	GetLatestBind            = strings.ToUpper("GetLatestBind")
-	UnsubscribeTable         = "UNSUBSCRIBE_TABLE"
-	HandleTxnTrace           = strings.ToUpper("txn-trace")
-	ReloadAutoIncrementCache = strings.ToUpper("reload-auto-increment-cache")
-	CtlReaderMethod          = strings.ToUpper("reader")
-	GetTableShards           = strings.ToUpper("get-table-shards")
-	MoTableStats             = strings.ToUpper("MoTableStats")
-	WorkspaceThreshold       = strings.ToUpper("WorkspaceThreshold")
-	TableExtra               = strings.ToUpper("table-extra")
-	PrefetchOnSubscribed     = strings.ToUpper("prefetch-on-subscribed")
-	GCCatalogCacheMethod     = strings.ToUpper("GCCatalogCache")
-	RefreshViewMetadata      = strings.ToUpper("RefreshViewMetadata")
+
+	SetVectorIndexFreshnessIntervalMethod = strings.ToUpper("SetVectorIndexFreshnessInterval")
+	GetVectorIndexCacheInfoMethod         = strings.ToUpper("GetVectorIndexCacheInfo")
+	EvictVectorIndexCacheMethod           = strings.ToUpper("EvictVectorIndexCache")
+	GetVectorIndexCacheKeysMethod         = strings.ToUpper("GetVectorIndexCacheKeys")
+	RemoveRemoteLockTable                 = strings.ToUpper("RemoveRemoteLockTable")
+	GetLatestBind                         = strings.ToUpper("GetLatestBind")
+	UnsubscribeTable                      = "UNSUBSCRIBE_TABLE"
+	HandleTxnTrace                        = strings.ToUpper("txn-trace")
+	ReloadAutoIncrementCache              = strings.ToUpper("reload-auto-increment-cache")
+	CtlReaderMethod                       = strings.ToUpper("reader")
+	GetTableShards                        = strings.ToUpper("get-table-shards")
+	MoTableStats                          = strings.ToUpper("MoTableStats")
+	WorkspaceThreshold                    = strings.ToUpper("WorkspaceThreshold")
+	TableExtra                            = strings.ToUpper("table-extra")
+	PrefetchOnSubscribed                  = strings.ToUpper("prefetch-on-subscribed")
+	GCCatalogCacheMethod                  = strings.ToUpper("GCCatalogCache")
+	RefreshViewMetadata                   = strings.ToUpper("RefreshViewMetadata")
 )
 
 var (
@@ -94,19 +99,24 @@ var (
 		DiskCleanerMethod:        handleDiskCleaner(),
 		GetProtocolVersionMethod: handleGetProtocolVersion,
 		SetProtocolVersionMethod: handleSetProtocolVersion,
-		RemoveRemoteLockTable:    handleRemoveRemoteLockTable,
-		GetLatestBind:            handleGetLatestBind,
-		UnsubscribeTable:         handleUnsubscribeTable,
-		HandleTxnTrace:           handleTxnTrace,
-		ReloadAutoIncrementCache: handleReloadAutoIncrementCache,
-		CtlReaderMethod:          handleCtlReader,
-		GetTableShards:           handleGetTableShards,
-		MoTableStats:             handleMoTableStats,
-		WorkspaceThreshold:       handleWorkspaceThreshold,
-		TableExtra:               handleTableExtra,
-		PrefetchOnSubscribed:     handlePrefetchOnSubscribed,
-		GCCatalogCacheMethod:     handleGCCatalogCache,
-		RefreshViewMetadata:      handleRefreshViewMetadata,
+
+		SetVectorIndexFreshnessIntervalMethod: handleSetVectorIndexFreshnessInterval,
+		GetVectorIndexCacheInfoMethod:         handleGetVectorIndexCacheInfo,
+		EvictVectorIndexCacheMethod:           handleEvictVectorIndexCache,
+		GetVectorIndexCacheKeysMethod:         handleGetVectorIndexCacheKeys,
+		RemoveRemoteLockTable:                 handleRemoveRemoteLockTable,
+		GetLatestBind:                         handleGetLatestBind,
+		UnsubscribeTable:                      handleUnsubscribeTable,
+		HandleTxnTrace:                        handleTxnTrace,
+		ReloadAutoIncrementCache:              handleReloadAutoIncrementCache,
+		CtlReaderMethod:                       handleCtlReader,
+		GetTableShards:                        handleGetTableShards,
+		MoTableStats:                          handleMoTableStats,
+		WorkspaceThreshold:                    handleWorkspaceThreshold,
+		TableExtra:                            handleTableExtra,
+		PrefetchOnSubscribed:                  handlePrefetchOnSubscribed,
+		GCCatalogCacheMethod:                  handleGCCatalogCache,
+		RefreshViewMetadata:                   handleRefreshViewMetadata,
 	}
 )
 
