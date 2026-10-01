@@ -3904,19 +3904,23 @@ func TestGetExprZoneMapConstantFold(t *testing.T) {
 		}
 	}
 	defer cleanScratch()
+	shared := literal(42)
 	for _, tc := range []struct {
 		name     string
-		arg      *plan.Expr
+		expr     *plan.Expr
 		want     int64
 		overflow bool
 	}{
-		{"literal", literal(-42), 42, false},
-		{"nested", bind("round", literal(-11), literal(-1)), 10, false},
-		{"nested overflow", bind("round", literal(5000000000000000000), literal(-19)), 0, true},
-		{"nested reuse", bind("round", literal(-11), literal(-1)), 10, false},
+		{"literal", bind("abs", literal(-42)), 42, false},
+		{"nested", bind("abs", bind("round", literal(-11), literal(-1))), 10, false},
+		{"nested overflow", bind("abs", bind("round", literal(5000000000000000000), literal(-19))), 0, true},
+		{"later argument failure", bind("greatest", literal(42), bind("round", literal(5000000000000000000), literal(-19))), 0, true},
+		{"later unavailable Fold", bind("round", literal(-11), &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{IsConst: true}}}), 0, true},
+		{"repeated argument", bind("greatest", shared, shared), 42, false},
+		{"nested reuse", bind("abs", bind("round", literal(-11), literal(-1))), 10, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			expression := bind("abs", tc.arg)
+			expression := tc.expr
 			expression.AuxId = 1
 			var zm index.ZM
 			var escaped any

@@ -132,16 +132,29 @@ func validFunctionOverloadID(fid, oIndex int32) bool {
 // IsConstant applies the existing folding policy, including prepare-time
 // parameter and statement-time handling, at the function semantic owner.
 func IsConstant(expr *plan.Expr, varAndParamIsConst bool) bool {
-	return isConstant(expr, varAndParamIsConst, varAndParamIsConst)
+	return isConstant(expr, varAndParamIsConst, varAndParamIsConst, constantForFolding)
 }
 
-// IsStatementConstant requires a value independent of rows in this execution.
-// Parameters and variables must first be bound/materialized by their owner.
+// IsStatementConstant conservatively admits speculative evaluation and endpoint
+// CONST provenance. Parameters and variables must already be materialized.
 func IsStatementConstant(expr *plan.Expr) bool {
-	return isConstant(expr, false, true)
+	return isConstant(expr, false, true, constantForFolding)
 }
 
-func isConstant(expr *plan.Expr, allowParameters, currentExecution bool) bool {
+// IsRuntimeConstant admits one row-independent value for a scan. Parameters
+// retain their runtime binding promise; lazy selectors stay unevaluated.
+func IsRuntimeConstant(expr *plan.Expr) bool {
+	return isConstant(expr, true, true, constantForRuntime)
+}
+
+type constantPurpose uint8
+
+const (
+	constantForFolding constantPurpose = iota
+	constantForRuntime
+)
+
+func isConstant(expr *plan.Expr, allowParameters, currentExecution bool, purpose constantPurpose) bool {
 	if expr == nil {
 		return false
 	}
@@ -157,7 +170,7 @@ func isConstant(expr *plan.Expr, allowParameters, currentExecution bool) bool {
 			return false
 		}
 		for _, arg := range e.List.List {
-			if !isConstant(arg, allowParameters, currentExecution) {
+			if !isConstant(arg, allowParameters, currentExecution, purpose) {
 				return false
 			}
 		}
@@ -167,15 +180,18 @@ func isConstant(expr *plan.Expr, allowParameters, currentExecution bool) bool {
 			return false
 		}
 		fid, _ := DecodeOverloadID(e.F.Func.GetObj())
-		if fid == CASE {
+		if fid == CASE && purpose == constantForFolding {
 			return false
 		}
 		f, ok := GetFunctionByIdWithoutError(e.F.Func.GetObj())
 		if !ok || f.CannotFold() || (f.IsRealTimeRelated() && !currentExecution) {
 			return false
 		}
+		if purpose == constantForRuntime && (allSupportedFunctions[fid].isAggregate() || allSupportedFunctions[fid].isWindow()) {
+			return false
+		}
 		for _, arg := range e.F.Args {
-			if !isConstant(arg, allowParameters, currentExecution) {
+			if !isConstant(arg, allowParameters, currentExecution, purpose) {
 				return false
 			}
 		}

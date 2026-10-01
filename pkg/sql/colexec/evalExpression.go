@@ -3133,12 +3133,23 @@ func GetExprZoneMap(
 							zms[expr.AuxId].Reset()
 						}
 					}()
+					allConst := isAllConst(args)
+					if !allConst {
+						if f() {
+							return
+						}
+						// Paired endpoints need a current point-valued divisor.
+						if (fid == function.DIV || fid == function.INTEGER_DIV) && !isSingleValueZoneMap(zms[args[1].AuxId]) {
+							zms[expr.AuxId].Reset()
+							return
+						}
+					}
 					probe := &process.WarningProbe{}
 					child := proc.NewNoContextChildProc(0)
 					child.Ctx = proc.Ctx
 					child.WarningSink = probe
 					ivecs := make([]*vector.Vector, len(args))
-					if isAllConst(args) { // constant fold
+					if allConst { // constant fold
 						defer func() {
 							for _, v := range ivecs {
 								if v != nil {
@@ -3147,42 +3158,29 @@ func GetExprZoneMap(
 							}
 						}()
 						for i, arg := range args {
-							if vecs[arg.AuxId] != nil {
-								vecs[arg.AuxId].Free(proc.Mp())
-							}
 							if arg.GetFold() != nil {
 								// Fold payloads are interpreted by their checked adapter,
 								// never by an executor reconstructed from a Fold ID.
 								zms[expr.AuxId].Reset()
 								return
 							}
-							if vecs[arg.AuxId], err = GetWritableResultFromNoColumnExpression(child, arg); err != nil {
+							input, evalErr := GetWritableResultFromNoColumnExpression(child, arg)
+							if evalErr != nil {
 								zms[expr.AuxId].Reset()
 								return
 							}
-							if ivecs[i], err = vecs[arg.AuxId].Dup(proc.Mp()); err != nil {
-								zms[expr.AuxId].Reset()
-								return
-							}
+							ivecs[i] = input
 						}
 					} else {
-						if f() {
-							return
-						}
-						// Division accepts FLAT operands, but paired endpoints only
-						// bound a quotient when the current divisor range is a point.
-						if (fid == function.DIV || fid == function.INTEGER_DIV) && !isSingleValueZoneMap(zms[args[1].AuxId]) {
-							zms[expr.AuxId].Reset()
-							return
-						}
 						for i, arg := range args {
+							constant := isConst(arg)
 							if !finiteZoneMapEndpoints(zms[arg.AuxId]) {
 								zms[expr.AuxId].Reset()
 								return
 							}
 							// Registered kernels need exact constant bytes, never a
 							// truncated string interval substituted for that value.
-							if isConst(arg) && zms[arg.AuxId].IsString() {
+							if constant && zms[arg.AuxId].IsString() {
 								data, exact := prefixBoundBytes(arg)
 								if !exact || !bytes.Equal(data, zms[arg.AuxId].GetMinBuf()) || !bytes.Equal(data, zms[arg.AuxId].GetMaxBuf()) {
 									zms[expr.AuxId].Reset()
@@ -3201,7 +3199,7 @@ func GetExprZoneMap(
 							argType.Charset = uint8(arg.Typ.Charset)
 							vecs[arg.AuxId].SetType(argType)
 							// Class is provenance, not a property of a point column ZM.
-							if isConst(arg) && isSingleValueZoneMap(zms[arg.AuxId]) {
+							if constant && isSingleValueZoneMap(zms[arg.AuxId]) {
 								vecs[arg.AuxId].ToConst()
 							}
 							ivecs[i] = vecs[arg.AuxId]

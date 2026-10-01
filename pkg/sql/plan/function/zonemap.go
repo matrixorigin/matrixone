@@ -117,7 +117,7 @@ func GetZoneMapEvaluation(fn *plan.Function) ZoneMapEvaluation {
 			return ZoneMapIndex
 		}
 	case DIV, INTEGER_DIV:
-		if len(args) == 2 && fixed(1) && oid(0) == oid(1) {
+		if len(args) == 2 && oid(0) == oid(1) {
 			switch oid(0) {
 			case types.T_int64, types.T_uint64, types.T_float64:
 				return ZoneMapEndpoints

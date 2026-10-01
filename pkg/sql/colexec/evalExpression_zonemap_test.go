@@ -1302,9 +1302,9 @@ func TestEvaluateFilterByZoneMapConstantDiagnostics(t *testing.T) {
 		requireBoolValue(t, vec, 0, false, true)
 		require.Positive(t, sink.count, "the actual residual expression produces a warning")
 	}()
-	sink.count = 0
+	sink.count = 7
 	require.True(t, colexec.EvaluateFilterByZoneMap(proc.Ctx, proc, expr, nil, nil, nil, nil), "a warning producer must remain executable")
-	require.Zero(t, sink.count)
+	require.Equal(t, 7, sink.count)
 	require.Same(t, sink, proc.GetWarningSink())
 	col := makeVarcharColExpr()
 	mixed := bindZoneMapFunction(t, proc, "=", col, addTime)
@@ -1314,8 +1314,17 @@ func TestEvaluateFilterByZoneMapConstantDiagnostics(t *testing.T) {
 	meta.MustGetColumn(0).SetZoneMap(zm)
 	zms, vecs := makeZoneMapEvalScratch(mixed)
 	require.True(t, colexec.EvaluateFilterByZoneMap(proc.Ctx, proc, mixed, meta, map[int]int{0: 0}, zms, vecs))
-	require.Zero(t, sink.count)
+	require.Equal(t, 7, sink.count)
 	require.Same(t, sink, proc.GetWarningSink())
+	clean := bindZoneMapFunction(t, proc, "=", col, bindZoneMapFunction(t, proc, "reverse", plan2.MakePlan2StringConstExprWithType("tnereffid")))
+	for _, candidate := range []*plan.Expr{mixed, clean, mixed} {
+		scratch, inputs := makeZoneMapEvalScratch(candidate)
+		require.Equal(t, candidate == mixed, colexec.EvaluateFilterByZoneMap(proc.Ctx, proc, candidate, meta, map[int]int{0: 0}, scratch, inputs))
+		require.Equal(t, 7, sink.count, "speculation must preserve seeded diagnostics")
+		require.Same(t, sink, proc.GetWarningSink())
+		require.Zero(t, proc.Mp().CurrNB())
+		require.Zero(t, proc.Mp().OnHeapCurrNB())
+	}
 	overflow := bindZoneMapFunction(t, proc, "=", bindZoneMapFunction(t, proc, "round", plan2.MakePlan2Int64ConstExprWithType(math.MaxInt64), plan2.MakePlan2Int64ConstExprWithType(-1)), plan2.MakePlan2Int64ConstExprWithType(0))
 	require.NotPanics(t, func() { require.True(t, colexec.EvaluateFilterByZoneMap(proc.Ctx, proc, overflow, nil, nil, nil, nil)) })
 	for _, data := range [][]byte{{0}, {1}, nil, {2}} {

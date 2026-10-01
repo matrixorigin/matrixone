@@ -690,9 +690,13 @@ func findFirstLiteralVecExpr(query *planpb.Query) *planpb.Expr {
 }
 
 func TestConstantFoldDefersGuardedKernelFailure(t *testing.T) {
-	for _, name := range []string{"case", "if", "coalesce"} {
+	for _, selector := range []struct {
+		name     string
+		constant bool
+	}{{"case", false}, {"case", true}, {"if", false}, {"coalesce", false}} {
+		name := selector.name
 		for _, public := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/public=%t", name, public), func(t *testing.T) {
+			t.Run(fmt.Sprintf("%s/constant=%t/public=%t", name, selector.constant, public), func(t *testing.T) {
 				proc := testutil.NewProcess(t)
 				t.Cleanup(func() {
 					defer proc.Free()
@@ -716,6 +720,9 @@ func TestConstantFoldDefersGuardedKernelFailure(t *testing.T) {
 				}
 				t.Cleanup(func() { input.Clean(proc.Mp()) })
 				condition := &planpb.Expr{Typ: planpb.Type{Id: int32(conditionType)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+				if selector.constant {
+					condition = makePlan2BoolConstExprWithType(false)
+				}
 				expr := bind(name, condition, bad, safe)
 				var folded *planpb.Expr
 				if public {
@@ -740,7 +747,9 @@ func TestConstantFoldDefersGuardedKernelFailure(t *testing.T) {
 					require.Equal(t, int64(7), vector.MustFixedColNoTypeCheck[int64](result)[0])
 				}()
 				require.Equal(t, baseline, [2]int64{proc.Mp().CurrNB(), proc.Mp().OnHeapCurrNB()})
-				if name == "coalesce" {
+				if selector.constant {
+					folded.GetF().Args[0].GetLit().Value.(*planpb.Literal_Bval).Bval = true
+				} else if name == "coalesce" {
 					input.Vecs[0].GetNulls().Add(0)
 				} else {
 					vector.MustFixedColNoTypeCheck[bool](input.Vecs[0])[0] = true

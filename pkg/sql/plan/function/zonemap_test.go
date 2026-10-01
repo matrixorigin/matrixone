@@ -61,6 +61,7 @@ func TestZoneMapStatementConstantPolicy(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			require.Equal(t, tc.statement, IsStatementConstant(tc.expr))
 			require.Equal(t, tc.prepared, IsConstant(tc.expr, true))
+			require.Equal(t, tc.prepared, IsRuntimeConstant(tc.expr))
 		})
 	}
 	for _, name := range []string{"current_timestamp", "localtime", "rand"} {
@@ -74,6 +75,41 @@ func TestZoneMapStatementConstantPolicy(t *testing.T) {
 		} else {
 			require.Equal(t, ZoneMapConstant, GetZoneMapEvaluation(expr.GetF()))
 		}
+	}
+}
+
+func TestRuntimeConstantKeepsLazyFoldingPolicy(t *testing.T) {
+	literal := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 1}}}}
+	wrap := func(id int32, args ...*plan.Expr) *plan.Expr {
+		return &plan.Expr{Typ: literal.Typ, Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{Obj: EncodeOverloadID(id, 0)}, Args: args}}}
+	}
+	parameter := &plan.Expr{Typ: literal.Typ, Expr: &plan.Expr_P{P: &plan.ParamRef{}}}
+	column := &plan.Expr{Typ: literal.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{}}}
+	condition := &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Bval{Bval: true}}}}
+	selector := wrap(CASE, condition, literal, literal)
+	for _, tc := range []struct {
+		name    string
+		expr    *plan.Expr
+		runtime bool
+	}{
+		{"constant case", selector, true},
+		{"nested case", wrap(ABS, selector), true},
+		{"parameter case", wrap(CASE, condition, parameter, literal), true},
+		{"column case", wrap(CASE, condition, column, literal), false},
+		{"volatile inactive branch", wrap(CASE, condition, literal, wrap(RANDOM)), false},
+		{"list case", &plan.Expr{Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{selector}}}}, true},
+		{"aggregate", wrap(SUM, literal), false},
+		{"window", wrap(ROW_NUMBER), false},
+		{"invalid identity", wrap(-1), false},
+		{"nil child", wrap(CASE, condition, nil, literal), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.runtime, IsRuntimeConstant(tc.expr))
+			if tc.runtime {
+				require.False(t, IsConstant(tc.expr, true))
+				require.False(t, IsStatementConstant(tc.expr))
+			}
+		})
 	}
 }
 

@@ -280,7 +280,7 @@ func containsDynamicParam(expr *plan.Expr) bool {
 }
 
 func isRuntimeConstExpr(expr *plan.Expr) bool {
-	return function.IsConstant(expr, true)
+	return function.IsRuntimeConstant(expr)
 }
 
 func checkSpatialIndexFilter(expr *plan.Expr) *plan.ColRef {
@@ -1262,22 +1262,14 @@ func indexPartFixedByEquality(part string, scanNode *plan.Node) bool {
 		}
 		leftCol := fn.Args[0].GetCol()
 		rightCol := fn.Args[1].GetCol()
-		if leftCol != nil && leftCol.RelPos == tag && leftCol.ColPos == colPos && isScanInvariantRuntimeConstExpr(fn.Args[1]) {
+		if leftCol != nil && leftCol.RelPos == tag && leftCol.ColPos == colPos && isRuntimeConstExpr(fn.Args[1]) {
 			return true
 		}
-		if rightCol != nil && rightCol.RelPos == tag && rightCol.ColPos == colPos && isScanInvariantRuntimeConstExpr(fn.Args[0]) {
+		if rightCol != nil && rightCol.RelPos == tag && rightCol.ColPos == colPos && isRuntimeConstExpr(fn.Args[0]) {
 			return true
 		}
 	}
 	return false
-}
-
-// isScanInvariantRuntimeConstExpr is stricter than isRuntimeConstExpr: an
-// expression can be independent of table columns while still producing a new
-// value for every row. Such volatile expressions cannot fix an index prefix to
-// one value for the duration of a scan.
-func isScanInvariantRuntimeConstExpr(expr *plan.Expr) bool {
-	return !containsVolatileFunction(expr) && isRuntimeConstExpr(expr)
 }
 
 func containsVolatileFunction(expr *plan.Expr) bool {

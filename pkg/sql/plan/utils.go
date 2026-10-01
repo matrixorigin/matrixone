@@ -1925,7 +1925,7 @@ func normalizeNativeRangeDirection(expr *plan.Expr, proc *process.Process) (*pla
 			return BindFuncExprImplByPlanExpr(proc.Ctx, fn.Func.ObjName, args)
 		}
 		// Scan consumers interpret native comparisons with the column on the left.
-		if (isRangeOp(fn) || fn.Func.ObjName == "=") && fn.Args[1].GetCol() != nil && isScanInvariantRuntimeConstExpr(fn.Args[0]) {
+		if (isRangeOp(fn) || fn.Func.ObjName == "=") && fn.Args[1].GetCol() != nil && isRuntimeConstExpr(fn.Args[0]) {
 			return BindFuncExprImplByPlanExpr(proc.Ctx, canonicalRangeOp(fn), []*plan.Expr{fn.Args[1], fn.Args[0]})
 		}
 	}
