@@ -59,6 +59,9 @@ func TestIntersectAllParallelMultiplicity(t *testing.T) {
 		defer cleanupTestDatabases(t, db, name)
 		execSQLDB(t, ctx, db, "create database "+name)
 		execSQLDB(t, ctx, db, "use "+name)
+		var singleCount int64
+		require.NoError(t, db.QueryRowContext(ctx, "select count(*) from (select 1 v intersect all select 1 v) q").Scan(&singleCount))
+		require.Equal(t, int64(1), singleCount)
 		for _, table := range []string{"left_bag", "right_bag"} {
 			execSQLDB(t, ctx, db, "create table "+table+"(v int)")
 		}
