@@ -170,7 +170,7 @@ cuBLASLt call sequence:
 | 4 | `cublasLtMatrixLayoutCreate` | A: element type, K × rows(D), ld = K; B: K × rows(Q), ld = K; D: `CUDA_R_32F`, rows(D) × rows(Q) |
 | 5 | `cublasLtMatmulPreferenceCreate` / `SetAttribute` | workspace limit (32 MiB) |
 | 6 | `cublasLtMatmulAlgoGetHeuristic` | per tile |
-| 7 | `cublasLtMatmul` | alpha = 1.0, beta = 0; the per-vector `g` is applied when the scores are copied out |
+| 7 | `cublasLtMatmul` | alpha = 1.0, beta = 0; the per-vector `g` of row and query is applied in double when the scores are copied out, then rounded once to fp32 |
 
 Contract (each point measured on sm_120 with cuBLASLt 13.6):
 
@@ -390,9 +390,8 @@ provided by these functions.
 - **P3 — CPU aggregate:** `vector_matmul` in `cpu` mode (CPU distance kernel over the
   quantized cells), partial merge and state serialization; UT + BVT.
 - **P4 — GPU engine:** the cuBLASLt engine in `cgo/cuvs` (tiled scale layout, row and K
-  padding, dataset-as-A matmul) and `vector_matmul` GPU dispatch by `gpu_mode`; acceptance cases from the verification
-  harness (both formats, 1-query batches, non-multiple-of-128 rows, 100,000-row tiles),
-  compared with P3 within fp32 tolerance.
+  padding, dataset-as-A matmul) and `vector_matmul` GPU dispatch by `gpu_mode`, compared
+  with P3 within fp32 tolerance.
 
 ## Testing
 
@@ -415,6 +414,39 @@ summation-order tolerance.
 - **Multi CN** (`etc/launch-multi-cn`): the BVT passes; on an 8,000,000-row table (above
   the 512-block multi-CN threshold) the plan runs a remote scope on each CN, the partial
   states are serialized to the merging CN, and the result equals the reference.
+- **GPU engine** (`cgo/cuvs/test/blockscaled_matmul_test.cu`, the `test_blockscaled_matmul`
+  executable): both formats against a double-precision dequantized reference, dimensions
+  4–768 (K padding), 1 to 300 rows (row padding, a 1-row tile, tile reuse), 1 and 3
+  queries, non-unit vecf4 global scales; the C API and its errors.
+- **GPU binding** (`pkg/cuvs/blockscaled_matmul_test.go`): engine scores equal the CPU
+  kernel (`VecBlockDot`) over the same cells for both formats, dimensions 4–768, 1 and 5
+  queries.
+- **GPU aggregate** (`aggexec/vector_matmul_gpu_test.go`): the executor with `gpu_mode`
+  on and off over the same rows — several groups, tiles drained mid-batch, a merge from an
+  executor whose rows are still in its tile, an intermediate-result round trip — returns
+  the same top-k.
+- **GPU BVT** (`gpu_cases/vector/vector_matmul_gpu.sql`): the same queries under
+  `gpu_mode = 1` and `0` return identical JSON (values exact in both formats); the
+  400,000-row vecf8 table, scored in GPU tiles by parallel pipelines, equals the reference.
+  The CPU BVTs (`vector/vector_matmul.sql`, `dtype/vecblock.sql`) also pass on a GPU build,
+  where they run on the GPU.
+
+Performance — 50,000 × 768 rows, top 10, single CN (8 pipelines), RTX 5070 Laptop;
+`gpu_mode = 1` against `0`, the same top-10 ids in every case:
+
+| Queries | vecf8 GPU | vecf8 CPU | vecf4 GPU | vecf4 CPU |
+|---------|-----------|-----------|-----------|-----------|
+| 1       | 62 ms     | 25 ms     | 77 ms     | 23 ms     |
+| 16      | 66 ms     | 249 ms    | 58 ms     | 260 ms    |
+| 128     | 123 ms    | 1,893 ms  | 139 ms    | 2,033 ms  |
+| 512     | 404 ms    | 6,565 ms  | 294 ms    | 7,059 ms  |
+| 1,024   | 648 ms    | 14,063 ms | 703 ms    | 15,093 ms |
+
+CPU time grows with the query count (about 14 ms per query over 50,000 rows); the GPU is
+3.8–4.5× faster at 16 queries and about 21× at 1,024. A single query is faster on the CPU:
+each pipeline pays the engine setup (cuBLASLt handle, tile and workspace allocation,
+query upload). At large batches the host-side top-k over the copied scores dominates the
+GPU time.
 
 ## Decisions
 
@@ -431,5 +463,8 @@ summation-order tolerance.
   merge come from MO's two-phase aggregation. A `CROSS APPLY` table function cannot emit a
   row at end of input, which rules out a table-function + merge-aggregate pair.
 - Result = JSON with string ids.
-- CPU dot-product accumulation = fp32.
+- CPU dot-product accumulation = fp32 within a 16-element unit, fp64 across units; the
+  GPU accumulates in fp32 (cuBLASLt `CUBLAS_COMPUTE_32F`).
+- GPU dispatch follows the session's `gpu_mode` only; the `options` argument is validated
+  and not used for dispatch.
 - Non-finite values are rejected at build.
