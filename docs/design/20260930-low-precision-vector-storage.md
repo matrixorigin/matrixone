@@ -254,46 +254,42 @@ Parsing a cell (header and validation) adds 52 ns for `vecf4` and 186 ns for `ve
 
 ### Batch dot-product search
 
-Two functions, sharing one JSON result format.
-
-#### `vector_matmul` (table function)
+#### `vector_matmul` (aggregate)
 
 ```sql
-vector_matmul(params, src_id, src_vec, queries) → (result JSON)
+vector_matmul(params, src_id, src_vec, queries) → JSON
 ```
 
 | Argument | Type | Meaning |
 |----------|------|---------|
 | `params` | constant JSON string | `{"limit": k}` (required); `"mode": "auto" \| "gpu" \| "cpu"` (default `auto`: GPU when the build and a device are present, else CPU); `"tile_bytes": n` (default 64 MiB) |
-| `src_id` | source column | the row key, any type |
-| `src_vec` | source column | `vecf8(N)` or `vecf4(N)` |
+| `src_id` | column | the row key: an integer, `char`/`varchar`/`text` or `uuid` column |
+| `src_vec` | column | `vecf8(N)` or `vecf4(N)` |
 | `queries` | constant JSON string | array of query vectors `[[…], …]`, each of length `N`; quantized once to the column's format |
 
-It is fed by `CROSS APPLY` from the dataset table and runs without `IsSingle`: one
-instance per scan pipeline, so the scan keeps its full parallelism. Each instance appends
-incoming rows to its own host tile; when the tile reaches `tile_bytes` or input ends it
-calls the engine, multiplies each dot product by `g_d × g_q`, and keeps the top `limit`
-scores per query. At end of input it emits one row holding its partial result;
-`vector_matmul_merge` combines the partials of all instances on all CNs. NULL vectors
-are skipped. A `WHERE` on the source table filters rows before they reach the function.
+An aggregate: one result per group (one row without `GROUP BY`), of MO's `JSON` type.
+`params` and `queries` are constants or prepared parameters; the compiler moves them into
+the aggregate's configuration, so each executor receives only `src_id` and `src_vec`.
+MO's distributed aggregation runs it in two phases. Each scan pipeline on each CN fills
+its own state, which keeps the top `limit` scores per query: in `cpu` mode each row is
+scored on arrival; the GPU engine appends rows to a host tile and scores a tile when it
+reaches `tile_bytes` or input ends. The partial states are then merged into the final
+top `limit`; across CNs the states are serialized to the merging CN. Rows with a NULL
+`src_id` or `src_vec` are skipped. A `WHERE` on the source table filters rows before they
+reach the aggregate.
+
+Per group the state holds, for each query, a heap of at most `limit` hits, plus an arena
+with the hits' id text (a row that enters several queries stores its id once). All of it
+is charged to the aggregate's allocation account; preflight reserves the arena space for
+a batch before the batch is filled, and the arena compacts in place.
 
 Instances on one CN share its GPU: each uses its own CUDA stream and cuBLASLt
 handle/workspace, and host and device tile memory scale with the instance count
 (`instances × tile_bytes`).
 
-In `cpu` mode (and on CPU builds) the same function computes the dot products with the
-CPU kernel over the dequantized values in fp32; results match the GPU within fp32
+In `cpu` mode (and on CPU builds) the dot products come from the CPU distance kernel
+over the quantized cells (`VecBlockDot`); results match the GPU within fp32
 summation-order tolerance.
-
-#### `vector_matmul_merge` (aggregate)
-
-```sql
-vector_matmul_merge(result JSON, limit) → JSON
-```
-
-Merges any number of partial results of the same queries into the final top `limit` per
-query. Its input and output use the same format, so it is independent of how many CNs
-or instances produced partials.
 
 #### Result format
 
@@ -305,8 +301,8 @@ or instances produced partials.
 ```
 
 - Outer array: one entry per query, in input order (position = query id).
-- Inner array: that query's hits, score descending, ties by id ascending; at most
-  `limit` entries, `[]` when there is no input row.
+- Inner array: that query's hits, score descending, ties by the id text in byte order
+  (so `"10"` before `"9"`); at most `limit` entries, `[]` when there is no input row.
 - Hit: a pair `[id, score]`.
   - Position 0, `id`: the source key as a JSON string (exact for 64-bit integers and
     non-integer keys).
@@ -316,11 +312,9 @@ or instances produced partials.
 #### Usage
 
 ```sql
-SELECT vector_matmul_merge(p.result, 10) AS result
-FROM (SELECT f.result
-      FROM t AS src
-      CROSS APPLY vector_matmul('{"limit":10}', src.id, src.v, '[[0.12, …], [0.33, …]]') AS f
-      WHERE src.category = 'news') p;
+SELECT vector_matmul('{"limit":10}', id, v, '[[0.12, …], [0.33, …]]') AS result
+FROM t
+WHERE category = 'news';
 ```
 
 Relational form of the final result (chained `CROSS APPLY unnest`, verified on the
@@ -360,8 +354,8 @@ provided by these functions.
   needs no column-wide statistics.
 - The engine returns dot products only; metric, filtering and top-k live in the SQL
   functions.
-- `vector_matmul` and `vector_matmul_merge` produce and consume the same result format;
-  merging a single partial returns it unchanged.
+- Merging partial states is order-independent: the final result does not depend on how
+  rows were split across pipelines and CNs (ties are broken by `id`).
 
 ## Phasing
 
@@ -370,8 +364,8 @@ provided by these functions.
   outputs above.
 - **P2 — column operations (CPU):** casts, arithmetic, `ANY_VALUE`/`GROUP_CONCAT`,
   distance functions, DDL rejections, CSV/Parquet `LOAD`.
-- **P3 — CPU functions:** `vector_matmul` in `cpu` mode (fp32 dot product over dequantized
-  blocks) and `vector_matmul_merge`; UT + BVT.
+- **P3 — CPU aggregate:** `vector_matmul` in `cpu` mode (CPU distance kernel over the
+  quantized cells), partial merge and state serialization; UT + BVT.
 - **P4 — GPU engine:** `cgo/cublaslt` (tiled scale re-layout, K padding, dataset-as-A
   matmul) and `vector_matmul` `gpu`/`auto` mode; acceptance cases from the verification
   harness (both formats, 1-query batches, non-multiple-of-128 rows, 100,000-row tiles),
@@ -379,21 +373,25 @@ provided by these functions.
 
 ## Testing
 
-Oracle: the final JSON of `vector_matmul_merge` equals a single-partial reference (CPU mode
-over the whole table) — the same ids in the same order per query, ties broken by `id`,
-scores within fp32 summation-order tolerance.
+Oracle: the result equals a reference computed over the whole table by
+`ORDER BY inner_product(src_vec, query) DESC, id-text LIMIT k` per query, with the query
+cast to the column's format — the same ids in the same order, scores within fp32
+summation-order tolerance.
 
-- **Unit (`vector_matmul_merge`):** one partial (returned unchanged), several partials with
-  overlapping and disjoint ids, partials shorter than `limit`, empty partials (`[]`), equal
-  scores across partials (tie order), a query count mismatch between partials (error).
-- **Single CN** (`etc/launch`, BVT): `vector_matmul` + `vector_matmul_merge` on `vecf8` and
-  `vecf4` in `cpu` mode, and `auto`/`gpu` mode on a GPU build; `WHERE` pre-filter; NULL
-  vectors; one and several queries; a table smaller than `limit`.
-- **Multi CN** (`etc/launch-multi-cn`, BVT; `etc/docker-multi-cn-local-disk` for separate
-  CN processes): the same cases on a table large enough to be scanned by more than one
-  CN. The test asserts that the partial count (`SELECT count(*)` over the `vector_matmul`
-  output) is greater than 1, so the merge is exercised, and that the merged result equals
-  the single-partial reference.
+- **Unit** (`aggexec/vector_matmul_test.go`): top-k and tie order; NULL ids and vectors;
+  empty groups (`[]` per query); several groups; merge of three partial states in both
+  orders against a brute-force reference; intermediate-result round trip; accounted fill
+  and merge under an allocation account (preflight, in-place arena compaction, no leaked
+  bytes); state codec including malformed input; id text of every supported id type;
+  configuration errors. Binder and compile tests cover the constant-argument rule and the
+  configuration encoding.
+- **BVT** (`vector/vector_matmul.sql`): both formats; `WHERE`, `GROUP BY`, empty input,
+  string and `uuid` ids, the relational form, prepared parameters, the error cases; and a
+  400,000-row table scanned by parallel pipelines (partial states merged by `merge group`),
+  where the ids and ranks equal the reference (0 mismatches for `vecf8` and `vecf4`).
+- **Multi CN** (`etc/launch-multi-cn`): the BVT passes; on an 8,000,000-row table (above
+  the 512-block multi-CN threshold) the plan runs a remote scope on each CN, the partial
+  states are serialized to the merging CN, and the result equals the reference.
 
 ## Decisions
 
@@ -406,7 +404,9 @@ scores within fp32 summation-order tolerance.
 - The GPU engine is dot-product matmul only, via cuBLASLt, with the dataset as operand A.
 - v1 is a function call per tile with no index, residency or dataset cache; the cuVS
   brute-force index is unchanged.
-- SQL surface = `vector_matmul` (one partial per scan pipeline, no `IsSingle`) + `vector_matmul_merge`
-  (final), JSON result format with string ids.
+- SQL surface = one aggregate, `vector_matmul`; partials per pipeline and the cross-CN
+  merge come from MO's two-phase aggregation. A `CROSS APPLY` table function cannot emit a
+  row at end of input, which rules out a table-function + merge-aggregate pair.
+- Result = JSON with string ids.
 - CPU dot-product accumulation = fp32.
 - Non-finite values are rejected at build.

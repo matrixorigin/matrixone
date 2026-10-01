@@ -5650,6 +5650,35 @@ func validateApproxPercentileArgs(ctx context.Context, args []*Expr) error {
 	return nil
 }
 
+// validateVectorMatmulArgs requires the params and queries arguments of vector_matmul to
+// be non-null constants or parameters.
+func validateVectorMatmulArgs(ctx context.Context, args []*Expr) error {
+	if len(args) != 4 {
+		return moerr.NewInvalidInputf(ctx, "vector_matmul requires 4 arguments, got %d", len(args))
+	}
+	for _, i := range []int{0, 3} {
+		arg := args[i]
+		if arg == nil || isNullExpr(arg) || !IsVectorMatmulConfigExpr(arg) {
+			return moerr.NewInvalidInput(ctx,
+				"params and queries arguments of vector_matmul must be non-null constants or parameters")
+		}
+	}
+	return nil
+}
+
+// IsVectorMatmulConfigExpr reports whether expr can be evaluated without an input row:
+// a constant, a prepared parameter or a variable.
+func IsVectorMatmulConfigExpr(expr *Expr) bool {
+	if rule.IsConstant(expr, false) {
+		return true
+	}
+	switch expr.Expr.(type) {
+	case *plan.Expr_P, *plan.Expr_V:
+		return true
+	}
+	return false
+}
+
 // validateOrderedPercentileArgs enforces the scalar MVP contract for the
 // ordered-set percentile aggregates. The aggregate executor consumes the
 // percentile as compile-time configuration, while the first argument is the
@@ -6609,6 +6638,11 @@ func bindFuncExprImplByPlanExpr(
 	}
 	if name == NameApproxPercentile {
 		if err = validateApproxPercentileArgs(ctx, args); err != nil {
+			return nil, err
+		}
+	}
+	if name == NameVectorMatmul {
+		if err = validateVectorMatmulArgs(ctx, args); err != nil {
 			return nil, err
 		}
 	}

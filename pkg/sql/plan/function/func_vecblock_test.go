@@ -293,3 +293,34 @@ func TestVecBlockArithmeticCastRules(t *testing.T) {
 		require.Equal(t, types.T_float8, p.Oid)
 	}
 }
+
+func TestVectorMatmulResolution(t *testing.T) {
+	ctx := context.Background()
+	vc := types.T_varchar.ToType()
+	for _, oid := range vecBlockOids {
+		vb := types.New(oid, 4, 0)
+		for _, id := range []types.T{types.T_int32, types.T_int64, types.T_uint64, types.T_varchar, types.T_char, types.T_text, types.T_uuid} {
+			r, err := GetFunctionByName(ctx, "vector_matmul", []types.Type{vc, id.ToType(), vb, vc})
+			require.NoError(t, err, id.String())
+			require.Equal(t, types.T_json, r.GetReturnType().Oid)
+		}
+		r, err := GetFunctionByName(ctx, "vector_matmul", []types.Type{types.T_any.ToType(), types.T_int64.ToType(), vb, types.T_any.ToType()})
+		require.NoError(t, err)
+		targets, cast := r.ShouldDoImplicitTypeCast()
+		require.True(t, cast)
+		require.Equal(t, types.T_varchar, targets[0].Oid)
+		require.Equal(t, types.T_varchar, targets[3].Oid)
+		require.True(t, GetFunctionIsAggregateByName("vector_matmul"))
+
+		for _, args := range [][]types.Type{
+			{vc, types.T_int64.ToType(), vb},
+			{types.T_int64.ToType(), types.T_int64.ToType(), vb, vc},
+			{vc, types.T_int64.ToType(), vb, types.T_int64.ToType()},
+			{vc, types.T_float64.ToType(), vb, vc},
+			{vc, types.T_int64.ToType(), types.New(types.T_array_float32, 4, 0), vc},
+		} {
+			_, err := GetFunctionByName(ctx, "vector_matmul", args)
+			require.Error(t, err, "%v", args)
+		}
+	}
+}

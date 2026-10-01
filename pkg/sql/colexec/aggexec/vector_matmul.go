@@ -1,0 +1,938 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package aggexec
+
+import (
+	"bytes"
+	"encoding/binary"
+	"encoding/json"
+	"io"
+	"math"
+	"slices"
+	"strconv"
+
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+)
+
+// vector_matmul(params, id, vec, queries): per group, the top `limit` dot products of
+// each query against the group's vectors, as JSON
+// [[["id", score], ...], ...] with one inner array per query. params and queries are
+// compile-time configuration; the executor receives [id, vec].
+
+const (
+	vectorMatmulMaxLimit   = 16384
+	vectorMatmulMaxQueries = 4096
+	vectorMatmulMaxEntries = 1 << 22
+	vectorMatmulStateV1    = 1
+	// vectorMatmulMaxFixedIDLen bounds the text of a non-string id (int64, uint64, uuid).
+	vectorMatmulMaxFixedIDLen = 36
+)
+
+// VectorMatmulIDSupported reports the id column types vector_matmul accepts.
+func VectorMatmulIDSupported(oid types.T) bool {
+	switch oid {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_char, types.T_varchar, types.T_text, types.T_uuid:
+		return true
+	}
+	return false
+}
+
+// VectorMatmulReturnType is the JSON result type.
+func VectorMatmulReturnType(_ []types.Type) types.Type {
+	return types.T_json.ToType()
+}
+
+// EncodeVectorMatmulConfig packs the params and queries JSON strings.
+func EncodeVectorMatmulConfig(params, queries string) []byte {
+	out := make([]byte, 0, 8+len(params)+len(queries))
+	out = binary.LittleEndian.AppendUint32(out, uint32(len(params)))
+	out = append(out, params...)
+	out = binary.LittleEndian.AppendUint32(out, uint32(len(queries)))
+	return append(out, queries...)
+}
+
+func decodeVectorMatmulConfig(b []byte) (params, queries string, err error) {
+	read := func() (string, bool) {
+		if len(b) < 4 {
+			return "", false
+		}
+		n := binary.LittleEndian.Uint32(b)
+		if uint64(len(b)-4) < uint64(n) {
+			return "", false
+		}
+		s := string(b[4 : 4+n])
+		b = b[4+n:]
+		return s, true
+	}
+	var ok1, ok2 bool
+	params, ok1 = read()
+	queries, ok2 = read()
+	if !ok1 || !ok2 || len(b) != 0 {
+		return "", "", moerr.NewInternalErrorNoCtx("vector_matmul: malformed configuration")
+	}
+	return params, queries, nil
+}
+
+type vectorMatmulParams struct {
+	Limit     *int    `json:"limit"`
+	Mode      *string `json:"mode"`
+	TileBytes *int64  `json:"tile_bytes"`
+}
+
+// vectorMatmulConfig is the parsed configuration shared by all groups.
+type vectorMatmulConfig struct {
+	limit   int
+	queries []metric.VecBlockOperand
+}
+
+func parseVectorMatmulConfig(raw []byte, vecType types.Type) (*vectorMatmulConfig, error) {
+	paramsText, queriesText, err := decodeVectorMatmulConfig(raw)
+	if err != nil {
+		return nil, err
+	}
+	var params vectorMatmulParams
+	dec := json.NewDecoder(bytes.NewReader([]byte(paramsText)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&params); err != nil {
+		return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: invalid params %q: %v", paramsText, err)
+	}
+	if params.Limit == nil {
+		return nil, moerr.NewInvalidInputNoCtx("vector_matmul: params requires \"limit\"")
+	}
+	if *params.Limit < 1 || *params.Limit > vectorMatmulMaxLimit {
+		return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: limit %d out of range [1, %d]", *params.Limit, vectorMatmulMaxLimit)
+	}
+	if params.Mode != nil {
+		switch *params.Mode {
+		case "auto", "cpu":
+		case "gpu":
+			return nil, moerr.NewNotSupportedNoCtx("vector_matmul: gpu mode in this build")
+		default:
+			return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: invalid mode %q", *params.Mode)
+		}
+	}
+	if params.TileBytes != nil && *params.TileBytes < 0 {
+		return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: invalid tile_bytes %d", *params.TileBytes)
+	}
+
+	format, ok := vecType.Oid.BlockScaledFormat()
+	if !ok {
+		return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: unsupported vector type %s", vecType.Oid)
+	}
+	var queries [][]float32
+	if err := json.Unmarshal([]byte(queriesText), &queries); err != nil {
+		return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: queries must be a JSON array of vectors: %v", err)
+	}
+	if len(queries) == 0 || len(queries) > vectorMatmulMaxQueries {
+		return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: query count %d out of range [1, %d]", len(queries), vectorMatmulMaxQueries)
+	}
+	if len(queries)*(*params.Limit) > vectorMatmulMaxEntries {
+		return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: queries x limit exceeds %d", vectorMatmulMaxEntries)
+	}
+	cfg := &vectorMatmulConfig{limit: *params.Limit, queries: make([]metric.VecBlockOperand, len(queries))}
+	for i, q := range queries {
+		if len(q) != int(vecType.Width) {
+			return nil, moerr.NewArrayInvalidOpNoCtx(int(vecType.Width), len(q))
+		}
+		cell, err := types.AppendBlockScaled(nil, format, q)
+		if err != nil {
+			return nil, err
+		}
+		if cfg.queries[i].Cell, err = types.ParseBlockScaledCell(cell); err != nil {
+			return nil, err
+		}
+	}
+	return cfg, nil
+}
+
+// vectorMatmulEntry is one hit; the id text lives in the state arena at [off, off+n).
+type vectorMatmulEntry struct {
+	score float64
+	off   uint32
+	n     uint32
+}
+
+// vectorMatmulState is one group's state: per query a min-heap of at most k entries
+// ordered worst first, and an arena holding the id text of the entries.
+type vectorMatmulState struct {
+	q, k       int
+	counts     []uint32
+	entries    []vectorMatmulEntry // q*k; heap of query j at [j*k, j*k+counts[j])
+	arena      []byte              // used prefix [0, used)
+	used       int
+	mp         *mpool.MPool
+	allocation *AllocationAccount
+}
+
+func newVectorMatmulState(mp *mpool.MPool, allocation *AllocationAccount, q, k int) (*vectorMatmulState, error) {
+	s := &vectorMatmulState{q: q, k: k, mp: mp, allocation: allocation}
+	if q == 0 {
+		return s, nil
+	}
+	var err error
+	if s.counts, err = makeAccountedScratch[uint32](allocation, mp, q); err != nil {
+		return nil, err
+	}
+	if s.entries, err = makeAccountedScratch[vectorMatmulEntry](allocation, mp, q*k); err != nil {
+		s.Free()
+		return nil, err
+	}
+	return s, nil
+}
+
+// hits returns query j's heap.
+func (s *vectorMatmulState) hits(j int) []vectorMatmulEntry {
+	if s.counts[j] == 0 {
+		return nil
+	}
+	return s.entries[j*s.k : j*s.k+int(s.counts[j])]
+}
+
+func (s *vectorMatmulState) id(e vectorMatmulEntry) []byte {
+	return s.arena[e.off : e.off+e.n]
+}
+
+// worse orders a before b when a ranks lower: smaller score, or equal score and larger id.
+func (s *vectorMatmulState) worse(a, b vectorMatmulEntry, aID, bID []byte) bool {
+	if a.score != b.score {
+		return a.score < b.score
+	}
+	return bytes.Compare(aID, bID) > 0
+}
+
+// admits reports whether a hit with this score and id enters query j's heap.
+func (s *vectorMatmulState) admits(j int, score float64, id []byte) bool {
+	if int(s.counts[j]) < s.k {
+		return true
+	}
+	root := s.entries[j*s.k]
+	return s.worse(root, vectorMatmulEntry{score: score}, s.id(root), id)
+}
+
+// insert adds a hit already admitted by admits; e.off/e.n point into the arena.
+func (s *vectorMatmulState) insert(j int, e vectorMatmulEntry) {
+	h := s.entries[j*s.k : j*s.k+s.k]
+	n := int(s.counts[j])
+	if n < s.k {
+		h[n] = e
+		s.counts[j]++
+		for i := n; i > 0; {
+			p := (i - 1) / 2
+			if !s.worse(h[i], h[p], s.id(h[i]), s.id(h[p])) {
+				break
+			}
+			h[i], h[p] = h[p], h[i]
+			i = p
+		}
+		return
+	}
+	h[0] = e
+	for i := 0; ; {
+		l, r, m := 2*i+1, 2*i+2, i
+		if l < n && s.worse(h[l], h[m], s.id(h[l]), s.id(h[m])) {
+			m = l
+		}
+		if r < n && s.worse(h[r], h[m], s.id(h[r]), s.id(h[m])) {
+			m = r
+		}
+		if m == i {
+			return
+		}
+		h[i], h[m] = h[m], h[i]
+		i = m
+	}
+}
+
+// compact moves the referenced id text to the front of the arena in offset order.
+func (s *vectorMatmulState) compact() {
+	type ref struct{ off, n uint32 }
+	var refs []ref
+	seen := make(map[uint32]struct{})
+	for j := 0; j < s.q; j++ {
+		for _, e := range s.hits(j) {
+			if _, ok := seen[e.off]; !ok {
+				seen[e.off] = struct{}{}
+				refs = append(refs, ref{e.off, e.n})
+			}
+		}
+	}
+	slices.SortFunc(refs, func(a, b ref) int { return int(a.off) - int(b.off) })
+	moved := make(map[uint32]uint32, len(refs))
+	w := 0
+	for _, r := range refs {
+		copy(s.arena[w:], s.arena[r.off:r.off+r.n])
+		moved[r.off] = uint32(w)
+		w += int(r.n)
+	}
+	for j := 0; j < s.q; j++ {
+		h := s.hits(j)
+		for i := range h {
+			h[i].off = moved[h[i].off]
+		}
+	}
+	s.used = w
+}
+
+// reserve makes room for extra more arena bytes, compacting before growing.
+func (s *vectorMatmulState) reserve(extra int) error {
+	if s.used+extra <= len(s.arena) {
+		return nil
+	}
+	s.compact()
+	need := s.used + extra
+	if need <= len(s.arena) {
+		return nil
+	}
+	if need > math.MaxUint32 {
+		return moerr.NewInvalidInputNoCtx("vector_matmul: id text exceeds 4 GiB")
+	}
+	capacity := max(64, 2*len(s.arena))
+	for capacity < need {
+		capacity *= 2
+	}
+	arena, err := makeAccountedScratch[byte](s.allocation, s.mp, capacity)
+	if err != nil {
+		return err
+	}
+	copy(arena, s.arena[:s.used])
+	if cap(s.arena) > 0 {
+		mpool.FreeSlice(s.mp, s.arena)
+	}
+	s.arena = arena
+	return nil
+}
+
+// appendID copies id into reserved arena space.
+func (s *vectorMatmulState) appendID(id []byte) (uint32, error) {
+	if s.used+len(id) > len(s.arena) {
+		if err := s.reserve(len(id)); err != nil {
+			return 0, err
+		}
+	}
+	off := s.used
+	copy(s.arena[off:], id)
+	s.used += len(id)
+	return uint32(off), nil
+}
+
+// offer scores a row against every query and records the hits it wins.
+func (s *vectorMatmulState) offer(scores []float64, id []byte) error {
+	off, stored := uint32(0), false
+	for j, score := range scores {
+		if !s.admits(j, score, id) {
+			continue
+		}
+		if !stored {
+			var err error
+			if off, err = s.appendID(id); err != nil {
+				return err
+			}
+			stored = true
+		}
+		s.insert(j, vectorMatmulEntry{score: score, off: off, n: uint32(len(id))})
+	}
+	return nil
+}
+
+// Merge offers every hit of other.
+func (s *vectorMatmulState) Merge(other *vectorMatmulState) error {
+	if other == nil {
+		return nil
+	}
+	if other.q != s.q || other.k != s.k {
+		return moerr.NewInvalidInputNoCtx("vector_matmul: cannot merge different query configurations")
+	}
+	moved := make(map[uint32]uint32)
+	for j := 0; j < other.q; j++ {
+		for _, e := range other.hits(j) {
+			id := other.id(e)
+			if !s.admits(j, e.score, id) {
+				continue
+			}
+			off, ok := moved[e.off]
+			if !ok {
+				var err error
+				if off, err = s.appendID(id); err != nil {
+					return err
+				}
+				moved[e.off] = off
+			}
+			s.insert(j, vectorMatmulEntry{score: e.score, off: off, n: e.n})
+		}
+	}
+	return nil
+}
+
+// sorted returns query j's hits best first.
+func (s *vectorMatmulState) sorted(j int) []vectorMatmulEntry {
+	out := slices.Clone(s.hits(j))
+	slices.SortFunc(out, func(a, b vectorMatmulEntry) int {
+		if s.worse(b, a, s.id(b), s.id(a)) {
+			return -1
+		}
+		if s.worse(a, b, s.id(a), s.id(b)) {
+			return 1
+		}
+		return 0
+	})
+	return out
+}
+
+func (s *vectorMatmulState) Size() int64 {
+	return int64(cap(s.counts))*4 + int64(cap(s.entries))*16 + int64(cap(s.arena))
+}
+
+func (s *vectorMatmulState) Free() {
+	if cap(s.counts) > 0 {
+		mpool.FreeSlice(s.mp, s.counts)
+	}
+	if cap(s.entries) > 0 {
+		mpool.FreeSlice(s.mp, s.entries)
+	}
+	if cap(s.arena) > 0 {
+		mpool.FreeSlice(s.mp, s.arena)
+	}
+	s.counts, s.entries, s.arena, s.used = nil, nil, nil, 0
+}
+
+// Encoding: version byte, q uint32, k uint32, then per query a count uint32 and per hit
+// score float64 bits, id length uint32 and the id bytes.
+
+func (s *vectorMatmulState) MarshaledSize() int {
+	size := 1 + 4 + 4
+	for j := 0; j < s.q; j++ {
+		size += 4
+		for _, e := range s.hits(j) {
+			size += 8 + 4 + int(e.n)
+		}
+	}
+	return size
+}
+
+func (s *vectorMatmulState) MarshalTo(w io.Writer) error {
+	var buf [12]byte
+	buf[0] = vectorMatmulStateV1
+	binary.LittleEndian.PutUint32(buf[1:], uint32(s.q))
+	binary.LittleEndian.PutUint32(buf[5:], uint32(s.k))
+	if _, err := w.Write(buf[:9]); err != nil {
+		return err
+	}
+	for j := 0; j < s.q; j++ {
+		binary.LittleEndian.PutUint32(buf[:4], s.counts[j])
+		if _, err := w.Write(buf[:4]); err != nil {
+			return err
+		}
+		for _, e := range s.hits(j) {
+			binary.LittleEndian.PutUint64(buf[:8], math.Float64bits(e.score))
+			binary.LittleEndian.PutUint32(buf[8:], e.n)
+			if _, err := w.Write(buf[:12]); err != nil {
+				return err
+			}
+			if _, err := w.Write(s.id(e)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (s *vectorMatmulState) MarshalBinary() ([]byte, error) {
+	var b bytes.Buffer
+	b.Grow(s.MarshaledSize())
+	err := s.MarshalTo(&b)
+	return b.Bytes(), err
+}
+
+func (s *vectorMatmulState) UnmarshalBinary(data []byte) error {
+	return s.UnmarshalFromReader(bytes.NewReader(data))
+}
+
+func (s *vectorMatmulState) UnmarshalFromReader(r io.Reader) error {
+	var buf [12]byte
+	if _, err := io.ReadFull(r, buf[:9]); err != nil {
+		return err
+	}
+	if buf[0] != vectorMatmulStateV1 {
+		return moerr.NewInternalErrorNoCtxf("vector_matmul: unsupported state version %d", buf[0])
+	}
+	q, k := int(binary.LittleEndian.Uint32(buf[1:])), int(binary.LittleEndian.Uint32(buf[5:]))
+	if q != s.q || k != s.k {
+		if q > vectorMatmulMaxQueries || k > vectorMatmulMaxLimit || q*k > vectorMatmulMaxEntries {
+			return moerr.NewInternalErrorNoCtx("vector_matmul: malformed state")
+		}
+		mp, allocation := s.mp, s.allocation
+		s.Free()
+		fresh, err := newVectorMatmulState(mp, allocation, q, k)
+		if err != nil {
+			return err
+		}
+		*s = *fresh
+	}
+	for j := 0; j < s.q; j++ {
+		if _, err := io.ReadFull(r, buf[:4]); err != nil {
+			return err
+		}
+		n := binary.LittleEndian.Uint32(buf[:4])
+		if int(n) > s.k {
+			return moerr.NewInternalErrorNoCtx("vector_matmul: malformed state")
+		}
+		for i := uint32(0); i < n; i++ {
+			if _, err := io.ReadFull(r, buf[:12]); err != nil {
+				return err
+			}
+			score := math.Float64frombits(binary.LittleEndian.Uint64(buf[:8]))
+			idLen := binary.LittleEndian.Uint32(buf[8:])
+			if idLen > math.MaxInt32 {
+				return moerr.NewInternalErrorNoCtx("vector_matmul: malformed state")
+			}
+			if err := s.reserve(int(idLen)); err != nil {
+				return err
+			}
+			off := s.used
+			if _, err := io.ReadFull(r, s.arena[off:off+int(idLen)]); err != nil {
+				return err
+			}
+			s.used += int(idLen)
+			e := vectorMatmulEntry{score: score, off: uint32(off), n: idLen}
+			if s.admits(j, score, s.id(e)) {
+				s.insert(j, e)
+			}
+		}
+	}
+	return nil
+}
+
+// appendJSON appends the group's result to out.
+func (s *vectorMatmulState) appendJSON(out []byte) ([]byte, error) {
+	out = append(out, '[')
+	for j := 0; j < s.q; j++ {
+		if j > 0 {
+			out = append(out, ',')
+		}
+		out = append(out, '[')
+		for i, e := range s.sorted(j) {
+			if i > 0 {
+				out = append(out, ',')
+			}
+			id, err := json.Marshal(string(s.id(e)))
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, '[')
+			out = append(out, id...)
+			out = append(out, ',')
+			out = strconv.AppendFloat(out, e.score, 'g', -1, 32)
+			out = append(out, ']')
+		}
+		out = append(out, ']')
+	}
+	return append(out, ']'), nil
+}
+
+// appendVectorMatmulID appends the JSON-string text of the id at row.
+func appendVectorMatmulID(dst []byte, vec *vector.Vector, row int) []byte {
+	switch vec.GetType().Oid {
+	case types.T_int8:
+		return strconv.AppendInt(dst, int64(vector.GetFixedAtNoTypeCheck[int8](vec, row)), 10)
+	case types.T_int16:
+		return strconv.AppendInt(dst, int64(vector.GetFixedAtNoTypeCheck[int16](vec, row)), 10)
+	case types.T_int32:
+		return strconv.AppendInt(dst, int64(vector.GetFixedAtNoTypeCheck[int32](vec, row)), 10)
+	case types.T_int64:
+		return strconv.AppendInt(dst, vector.GetFixedAtNoTypeCheck[int64](vec, row), 10)
+	case types.T_uint8:
+		return strconv.AppendUint(dst, uint64(vector.GetFixedAtNoTypeCheck[uint8](vec, row)), 10)
+	case types.T_uint16:
+		return strconv.AppendUint(dst, uint64(vector.GetFixedAtNoTypeCheck[uint16](vec, row)), 10)
+	case types.T_uint32:
+		return strconv.AppendUint(dst, uint64(vector.GetFixedAtNoTypeCheck[uint32](vec, row)), 10)
+	case types.T_uint64:
+		return strconv.AppendUint(dst, vector.GetFixedAtNoTypeCheck[uint64](vec, row), 10)
+	case types.T_uuid:
+		return append(dst, vector.GetFixedAtNoTypeCheck[types.Uuid](vec, row).String()...)
+	default:
+		return append(dst, vec.GetBytesAt(row)...)
+	}
+}
+
+// vectorMatmulIDLenBound bounds the id text length at row.
+func vectorMatmulIDLenBound(vec *vector.Vector, row int) int {
+	if vec.GetType().IsVarlen() {
+		return len(vec.GetBytesAt(row))
+	}
+	return vectorMatmulMaxFixedIDLen
+}
+
+var _ GroupAggFuncExec = (*vectorMatmulExec)(nil)
+
+type vectorMatmulExec struct {
+	aggExec
+	cfg *vectorMatmulConfig
+
+	row    metric.VecBlockOperand
+	scores []float64
+	idBuf  []byte
+}
+
+func makeVectorMatmul(mp *mpool.MPool, id int64, isDistinct bool, params []types.Type) (AggFuncExec, error) {
+	if isDistinct {
+		return nil, moerr.NewNotSupportedNoCtx("vector_matmul in distinct mode")
+	}
+	if len(params) != 2 || !VectorMatmulIDSupported(params[0].Oid) || !params[1].Oid.IsBlockScaledArray() {
+		return nil, moerr.NewInternalErrorNoCtxf("vector_matmul: unexpected argument types %v", params)
+	}
+	exec := &vectorMatmulExec{}
+	exec.mp = mp
+	exec.aggInfo = aggInfo{
+		aggId:              id,
+		argTypes:           slices.Clone(params),
+		retType:            VectorMatmulReturnType(params),
+		emptyNull:          false,
+		boundedOpaqueState: true,
+		makeMarshalerUnmarshaler: func(mp *mpool.MPool, allocation *AllocationAccount) (MarshalerUnmarshaler, error) {
+			return exec.newState(mp, allocation)
+		},
+		stableEmptyOpaqueState: func(w io.Writer) error {
+			empty := exec.emptyState()
+			if err := types.WriteInt32(w, int32(empty.MarshaledSize())); err != nil {
+				return err
+			}
+			return empty.MarshalTo(w)
+		},
+	}
+	return exec, nil
+}
+
+// emptyState is a group with no rows; it owns no pool memory and is never freed.
+func (exec *vectorMatmulExec) emptyState() *vectorMatmulState {
+	empty := &vectorMatmulState{}
+	if exec.cfg != nil {
+		empty.q, empty.k = len(exec.cfg.queries), exec.cfg.limit
+		empty.counts = make([]uint32, empty.q)
+	}
+	return empty
+}
+
+func (exec *vectorMatmulExec) newState(mp *mpool.MPool, allocation *AllocationAccount) (*vectorMatmulState, error) {
+	if exec.cfg == nil {
+		return nil, moerr.NewInternalErrorNoCtx("vector_matmul: configuration is not set")
+	}
+	return newVectorMatmulState(mp, allocation, len(exec.cfg.queries), exec.cfg.limit)
+}
+
+func (exec *vectorMatmulExec) SetExtraInformation(partialResult any, _ int) error {
+	raw, ok := partialResult.([]byte)
+	if !ok {
+		return moerr.NewInternalErrorNoCtxf("vector_matmul: unexpected configuration %T", partialResult)
+	}
+	cfg, err := parseVectorMatmulConfig(raw, exec.argTypes[1])
+	if err != nil {
+		return err
+	}
+	exec.cfg = cfg
+	exec.scores = make([]float64, len(cfg.queries))
+	return nil
+}
+
+func (exec *vectorMatmulExec) stateAt(group uint64) (*vectorMatmulState, error) {
+	x, y := exec.getXY(group)
+	if exec.state[x].mobs[y] == nil {
+		s, err := exec.newState(exec.mp, exec.allocation)
+		if err != nil {
+			return nil, err
+		}
+		exec.state[x].mobs[y] = s
+	}
+	return exec.state[x].mobs[y].(*vectorMatmulState), nil
+}
+
+func (exec *vectorMatmulExec) preflightState(group uint64) (*vectorMatmulState, error) {
+	x, y := exec.getXY(group)
+	state := exec.preflightStateAt(x)
+	if state == nil || int(y) >= len(state.mobs) {
+		return nil, mpool.ErrAllocationAccountInvariant
+	}
+	if state.mobs[y] == nil {
+		s, err := exec.newState(exec.mp, exec.allocation)
+		if err != nil {
+			return nil, err
+		}
+		state.mobs[y] = s
+	}
+	s, ok := state.mobs[y].(*vectorMatmulState)
+	if !ok {
+		return nil, mpool.ErrAllocationAccountInvariant
+	}
+	return s, nil
+}
+
+// fillRow scores one row and offers it to the group's state.
+func (exec *vectorMatmulExec) fillRow(group uint64, row int, vectors []*vector.Vector) error {
+	ids, vecs := vectors[0], vectors[1]
+	idRow, vecRow := row, row
+	if ids.IsConst() {
+		idRow = 0
+	}
+	if vecs.IsConst() {
+		vecRow = 0
+	}
+	if ids.IsNull(uint64(idRow)) || vecs.IsNull(uint64(vecRow)) {
+		return nil
+	}
+	cell, err := types.ParseBlockScaledCell(vecs.GetBytesAt(vecRow))
+	if err != nil {
+		return err
+	}
+	exec.row.Cell = cell
+	for j := range exec.cfg.queries {
+		dot, err := metric.VecBlockDot(&exec.row, &exec.cfg.queries[j])
+		if err != nil {
+			return err
+		}
+		exec.scores[j] = float64(float32(dot))
+	}
+	s, err := exec.stateAt(group)
+	if err != nil {
+		return err
+	}
+	exec.idBuf = appendVectorMatmulID(exec.idBuf[:0], ids, idRow)
+	return s.offer(exec.scores, exec.idBuf)
+}
+
+func (exec *vectorMatmulExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
+	return exec.fillRow(uint64(groupIndex), row, vectors)
+}
+
+func (exec *vectorMatmulExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
+	for row := 0; row < vectors[1].Length(); row++ {
+		if err := exec.fillRow(uint64(groupIndex), row, vectors); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (exec *vectorMatmulExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	for i, group := range groups {
+		if group == GroupNotMatched {
+			continue
+		}
+		if err := exec.fillRow(group-1, offset+i, vectors); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// PreflightBatchFill creates the target states and reserves arena space for one id per row.
+func (exec *vectorMatmulExec) PreflightBatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	if exec.allocation == nil {
+		return nil
+	}
+	if err := validatePreflightVectors(vectors, offset, len(groups)); err != nil {
+		return err
+	}
+	var targets [hashmap.UnitLimit]uint64
+	var extra [hashmap.UnitLimit]int
+	n := 0
+	for i, group := range groups {
+		if group == GroupNotMatched {
+			continue
+		}
+		row := offset + i
+		idRow, vecRow := row, row
+		if vectors[0].IsConst() {
+			idRow = 0
+		}
+		if vectors[1].IsConst() {
+			vecRow = 0
+		}
+		if vectors[0].IsNull(uint64(idRow)) || vectors[1].IsNull(uint64(vecRow)) {
+			continue
+		}
+		if _, _, _, err := exec.validatePreflightTarget(group); err != nil {
+			return err
+		}
+		found := slices.Index(targets[:n], group)
+		if found < 0 {
+			found = n
+			targets[n] = group
+			n++
+		}
+		extra[found] += vectorMatmulIDLenBound(vectors[0], idRow)
+	}
+	for i := 0; i < n; i++ {
+		s, err := exec.preflightState(targets[i] - 1)
+		if err != nil {
+			return err
+		}
+		if err := s.reserve(extra[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (exec *vectorMatmulExec) mergeCompatible(other *vectorMatmulExec) bool {
+	return other != nil && exec.aggId == other.aggId &&
+		len(other.argTypes) == 2 &&
+		exec.argTypes[0].Eq(other.argTypes[0]) && exec.argTypes[1].Eq(other.argTypes[1])
+}
+
+func (exec *vectorMatmulExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
+	other, ok := next.(*vectorMatmulExec)
+	if !ok || !exec.mergeCompatible(other) {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	x2, y2 := other.getXY(uint64(groupIdx2))
+	if other.state[x2].mobs[y2] == nil {
+		return nil
+	}
+	target, err := exec.stateAt(uint64(groupIdx1))
+	if err != nil {
+		return err
+	}
+	return target.Merge(other.state[x2].mobs[y2].(*vectorMatmulState))
+}
+
+func (exec *vectorMatmulExec) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
+	for i, group := range groups {
+		if group == GroupNotMatched {
+			continue
+		}
+		if err := exec.Merge(next, int(group-1), offset+i); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// PreflightBatchMerge creates the target states and reserves each source's arena bytes.
+func (exec *vectorMatmulExec) PreflightBatchMerge(next AggFuncExec, offset int, groups []uint64) error {
+	if exec.allocation == nil {
+		return nil
+	}
+	other, ok := next.(*vectorMatmulExec)
+	if !ok || !exec.mergeCompatible(other) || len(groups) > hashmap.UnitLimit ||
+		offset < 0 || offset > other.GetNumGroups()-len(groups) {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	var targets [hashmap.UnitLimit]uint64
+	var extra [hashmap.UnitLimit]int
+	n := 0
+	for i, group := range groups {
+		if group == GroupNotMatched {
+			continue
+		}
+		sx, sy := other.getXY(uint64(offset + i))
+		if sx >= len(other.state) || int(sy) >= len(other.state[sx].mobs) {
+			return mpool.ErrAllocationAccountInvariant
+		}
+		source, _ := other.state[sx].mobs[sy].(*vectorMatmulState)
+		if source == nil {
+			continue
+		}
+		if _, _, _, err := exec.validatePreflightTarget(group); err != nil {
+			return err
+		}
+		found := slices.Index(targets[:n], group)
+		if found < 0 {
+			found = n
+			targets[n] = group
+			n++
+		}
+		extra[found] += source.used
+	}
+	for i := 0; i < n; i++ {
+		s, err := exec.preflightState(targets[i] - 1)
+		if err != nil {
+			return err
+		}
+		if err := s.reserve(extra[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (exec *vectorMatmulExec) Flush() (_ []*vector.Vector, retErr error) {
+	if exec.cfg == nil {
+		return nil, moerr.NewInternalErrorNoCtx("vector_matmul: configuration is not set")
+	}
+	results := make([]*vector.Vector, len(exec.state))
+	defer func() {
+		if retErr != nil {
+			for _, result := range results {
+				if result != nil {
+					result.Free(exec.mp)
+				}
+			}
+		}
+	}()
+	empty := exec.emptyState()
+	var buf []byte
+	for x, state := range exec.state {
+		result, err := exec.allocation.newVector(exec.retType)
+		if err != nil {
+			return nil, err
+		}
+		results[x] = result
+		if err := result.PreExtend(int(state.length), exec.mp); err != nil {
+			return nil, err
+		}
+		for y := 0; y < int(state.length); y++ {
+			s := empty
+			if state.mobs[y] != nil {
+				s = state.mobs[y].(*vectorMatmulState)
+			}
+			if buf, err = s.appendJSON(buf[:0]); err != nil {
+				return nil, err
+			}
+			bj, err := types.ParseSliceToByteJson(buf)
+			if err != nil {
+				return nil, err
+			}
+			if err := vector.AppendByteJson(result, bj, false, exec.mp); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return results, nil
+}
+
+func (exec *vectorMatmulExec) Size() int64 {
+	var size int64
+	for _, state := range exec.state {
+		size += int64(cap(state.mobs)) * 8
+		for _, mob := range state.mobs {
+			if mob != nil {
+				size += mob.(*vectorMatmulState).Size()
+			}
+		}
+	}
+	return size
+}
+
+func (exec *vectorMatmulExec) Free() {
+	exec.aggExec.Free()
+	exec.state = nil
+}

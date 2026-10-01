@@ -2055,6 +2055,27 @@ func constructAggregateConfigWithError(
 			return args, config, nil
 		}
 
+	case plan2.NameVectorMatmul:
+		if len(args) != 4 {
+			return nil, nil, moerr.NewInvalidInputNoCtxf(
+				"vector_matmul requires 4 arguments, got %d", len(args))
+		}
+		for _, i := range []int{0, 3} {
+			if args[i] == nil || !plan2.IsVectorMatmulConfigExpr(args[i]) {
+				return nil, nil, moerr.NewInvalidInputNoCtx(
+					"params and queries arguments of vector_matmul must be non-null constants or parameters")
+			}
+		}
+		params, err := evaluateAggregateConfigString(proc, args[0])
+		if err != nil {
+			return nil, nil, err
+		}
+		queries, err := evaluateAggregateConfigString(proc, args[3])
+		if err != nil {
+			return nil, nil, err
+		}
+		return []*plan.Expr{args[1], args[2]}, aggexec.EncodeVectorMatmulConfig(params, queries), nil
+
 	case plan2.NamePercentileCont, plan2.NamePercentileDisc:
 		args, config, err := constructOrderedPercentileConfig(f, proc)
 		if err != nil {

@@ -567,6 +567,46 @@ var supportedAggInNewFramework = []FuncNew{
 		},
 	},
 	{
+		functionId: VECTOR_MATMUL,
+		class:      plan.Function_AGG,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			// vector_matmul(params, id, vec, queries)
+			if len(inputs) != 4 {
+				return newCheckResultWithFailure(failedAggParametersWrong)
+			}
+			finalTypes := append([]types.Type(nil), inputs...)
+			needCast := false
+			for _, i := range []int{0, 3} {
+				switch finalTypes[i].Oid {
+				case types.T_char, types.T_varchar, types.T_text:
+				case types.T_any:
+					finalTypes[i] = types.T_varchar.ToType()
+					needCast = true
+				default:
+					return newCheckResultWithFailure(failedAggParametersWrong)
+				}
+			}
+			if !aggexec.VectorMatmulIDSupported(finalTypes[1].Oid) ||
+				!finalTypes[2].Oid.IsBlockScaledArray() {
+				return newCheckResultWithFailure(failedAggParametersWrong)
+			}
+			if needCast {
+				return newCheckResultWithCast(0, finalTypes)
+			}
+			return newCheckResultWithSuccess(0)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isAgg:      true,
+				retType:    aggexec.VectorMatmulReturnType,
+				aggName:    "vector_matmul",
+			},
+		},
+	},
+	{
 		functionId: PERCENTILE_CONT,
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
