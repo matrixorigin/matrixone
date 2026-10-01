@@ -47,7 +47,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/floor"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/format"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -204,43 +203,47 @@ func CeilStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 }
 
 func ceilInt64(x, digits int64) int64 {
-	switch {
-	case digits >= 0:
+	if digits >= 0 {
 		return x
-	case digits > -floor.MaxInt64digits:
-		scale := int64(floor.ScaleTable[-digits])
-		t := x % scale
-		s := x
-		if t != 0 {
-			s -= t
-			if s >= 0 && x > 0 {
-				x = (s + scale) / scale * scale
-			} else {
-				x = s
-			}
-		}
-	case digits <= -floor.MaxInt64digits:
-		x = 0
 	}
-	return x
+	if digits <= -MaxInt64digits {
+		if x > 0 {
+			panic(moerr.NewOutOfRangeNoCtx("int64", "CEIL"))
+		}
+		return 0
+	}
+	scale := int64(ScaleTable[-digits])
+	remainder := x % scale
+	base := x - remainder
+	if remainder > 0 {
+		if base > math.MaxInt64-scale {
+			panic(moerr.NewOutOfRangeNoCtx("int64", "CEIL"))
+		}
+		base += scale
+	}
+	return base
 }
 
 func ceilUint64(x uint64, digits int64) uint64 {
-	switch {
-	case digits >= 0:
+	if digits >= 0 {
 		return x
-	case digits > -floor.MaxUint64digits:
-		scale := floor.ScaleTable[-digits]
-		t := x % scale
-		s := x
-		if t != 0 {
-			s -= t
-			x = (s + scale) / scale * scale
-		}
-	case digits <= -floor.MaxUint64digits:
-		x = 0
 	}
-	return x
+	if digits <= -MaxUint64digits {
+		if x != 0 {
+			panic(moerr.NewOutOfRangeNoCtx("uint64", "CEIL"))
+		}
+		return 0
+	}
+	scale := ScaleTable[-digits]
+	remainder := x % scale
+	base := x - remainder
+	if remainder != 0 {
+		if base > math.MaxUint64-scale {
+			panic(moerr.NewOutOfRangeNoCtx("uint64", "CEIL"))
+		}
+		base += scale
+	}
+	return base
 }
 
 func ceilFloat64(x float64, digits int64) float64 {
@@ -391,20 +394,25 @@ func FloorUInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 }
 
 func floorInt64(x int64, digits int64) int64 {
-	switch {
-	case digits >= 0:
+	if digits >= 0 {
 		return x
-	case digits > -MaxInt64digits:
-		scale := int64(ScaleTable[-digits])
-		value := x
-		if value < 0 {
-			value -= scale - 1
-		}
-		x = value / scale * scale
-	case digits <= -MaxInt64digits:
-		x = 0
 	}
-	return x
+	if digits <= -MaxInt64digits {
+		if x < 0 {
+			panic(moerr.NewOutOfRangeNoCtx("int64", "FLOOR"))
+		}
+		return 0
+	}
+	scale := int64(ScaleTable[-digits])
+	remainder := x % scale
+	base := x - remainder
+	if remainder < 0 {
+		if base < math.MinInt64+scale {
+			panic(moerr.NewOutOfRangeNoCtx("int64", "FLOOR"))
+		}
+		base -= scale
+	}
+	return base
 }
 
 func FloorInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
@@ -563,7 +571,7 @@ func roundInt64(x int64, digits int64) int64 {
 		} else if x < 0 {
 			step1 := x / scale * scale
 			step2 := x % scale // module operation with negative numbers, the result is negative
-			if step2 <= scale/2 {
+			if step2 <= -scale/2 {
 				x = step1 - scale
 				if x > step1 {
 					panic(moerr.NewOutOfRangeNoCtx("int64", "ROUND"))
@@ -574,7 +582,15 @@ func roundInt64(x int64, digits int64) int64 {
 		} else {
 			x = 0
 		}
-	case digits <= MaxInt64digits:
+	case digits <= -MaxInt64digits:
+		// At 10^19, rounding a magnitude of at least 5e18 would produce
+		// +/-10^19, outside BIGINT. Coarser scales always round to zero.
+		if digits == -MaxInt64digits {
+			half := int64(ScaleTable[MaxInt64digits] / 2)
+			if x >= half || x <= -half {
+				panic(moerr.NewOutOfRangeNoCtx("int64", "ROUND"))
+			}
+		}
 		x = 0
 	}
 	return x
@@ -7156,7 +7172,8 @@ func FromUnixTimeUint64(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
-func floatUnixTimeParts(v float64) (sec int64, nsec int64, ok bool) {
+// FloatUnixTimeParts is the scalar conversion shared with temporal metadata proof.
+func FloatUnixTimeParts(v float64) (sec int64, nsec int64, ok bool) {
 	if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 {
 		return 0, 0, false
 	}
@@ -7310,7 +7327,7 @@ func FromUnixTimeFloat64(ivecs []*vector.Vector, result vector.FunctionResultWra
 			if err = rs.Append(d, true); err != nil {
 				return err
 			}
-		} else if sec, nsec, ok := floatUnixTimeParts(v); !ok {
+		} else if sec, nsec, ok := FloatUnixTimeParts(v); !ok {
 			if err = rs.Append(d, true); err != nil {
 				return err
 			}
@@ -7437,7 +7454,7 @@ func FromUnixTimeFloat64Format(ivecs []*vector.Vector, result vector.FunctionRes
 		v, null := vs.GetValue(i)
 		formatMask, null1 := formats.GetStrValue(i)
 
-		sec, nsec, ok := floatUnixTimeParts(v)
+		sec, nsec, ok := FloatUnixTimeParts(v)
 		if null || !ok || null1 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
