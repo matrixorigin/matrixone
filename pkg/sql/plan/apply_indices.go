@@ -1628,7 +1628,7 @@ func (builder *QueryBuilder) tryHintedIndexAccess(idxDef *plan.IndexDef, node *p
 }
 
 func (builder *QueryBuilder) buildHintedIndexBackfillJoin(idxDef *plan.IndexDef, node *plan.Node) (int32, int32, error) {
-	if !usableRegularHintIndex(idxDef) || node == nil || node.TableDef == nil || node.TableDef.Pkey == nil || len(node.BindingTags) == 0 {
+	if !usableRegularHintIndex(idxDef) || node == nil || node.TableDef == nil || node.TableDef.Pkey == nil || len(node.BindingTags) == 0 || !hintedIndexContainsQualifyingRows(idxDef, node) {
 		return -1, -1, nil
 	}
 	snapshot := node.ScanSnapshot
@@ -1683,7 +1683,7 @@ func (builder *QueryBuilder) buildHintedIndexBackfillJoin(idxDef *plan.IndexDef,
 }
 
 func (builder *QueryBuilder) tryHintedCoveringIndexScan(idxDef *plan.IndexDef, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
-	if !usableRegularHintIndex(idxDef) || node == nil || len(node.BindingTags) == 0 {
+	if !usableRegularHintIndex(idxDef) || node == nil || node.TableDef == nil || len(node.BindingTags) == 0 || !hintedIndexContainsQualifyingRows(idxDef, node) {
 		return -1, nil
 	}
 	for i, col := range node.TableDef.Cols {
@@ -5165,6 +5165,82 @@ func (builder *QueryBuilder) indexAccessUsesIndex(nodeID int32, indexName string
 		if builder.indexAccessUsesIndex(childID, indexName) {
 			return true
 		}
+	}
+	return false
+}
+
+// UNIQUE hidden tables omit rows with any NULL key component. Column coverage
+// alone cannot make them a complete row source, even under FORCE INDEX.
+func hintedIndexContainsQualifyingRows(index *plan.IndexDef, node *plan.Node) bool {
+	if !index.Unique {
+		return true
+	}
+	if node.TableDef == nil || len(node.BindingTags) == 0 || len(index.Parts) == 0 {
+		return false
+	}
+	for _, part := range index.Parts {
+		position, ok := node.TableDef.Name2ColIndex[catalog.ResolveAlias(part)]
+		if !ok || position < 0 || int(position) >= len(node.TableDef.Cols) {
+			return false
+		}
+		column := node.TableDef.Cols[position]
+		if column.Typ.NotNullable && (column.Default == nil || !column.Default.NullAbility) {
+			continue
+		}
+		proven := false
+		for _, filter := range node.FilterList {
+			if filterRejectsTargetNull(filter, node.BindingTags[0], position) {
+				proven = true
+				break
+			}
+		}
+		if !proven {
+			return false
+		}
+	}
+	return true
+}
+
+func filterRejectsTargetNull(expr *plan.Expr, tag, position int32) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	switch fn.Func.ObjName {
+	case "and":
+		for _, arg := range fn.Args {
+			if filterRejectsTargetNull(arg, tag, position) {
+				return true
+			}
+		}
+	case "or":
+		if len(fn.Args) == 0 {
+			return false
+		}
+		for _, arg := range fn.Args {
+			if !filterRejectsTargetNull(arg, tag, position) {
+				return false
+			}
+		}
+		return true
+	case "isnotnull", "is_not_null", "in", "not_in", "between":
+		return len(fn.Args) > 0 && nullPreservingTarget(fn.Args[0], tag, position)
+	case "=", "<>", "!=", "<", "<=", ">", ">=":
+		return len(fn.Args) == 2 && (nullPreservingTarget(fn.Args[0], tag, position) || nullPreservingTarget(fn.Args[1], tag, position))
+	}
+	return false
+}
+
+func nullPreservingTarget(expr *plan.Expr, tag, position int32) bool {
+	for expr != nil {
+		if col := expr.GetCol(); col != nil {
+			return col.RelPos == tag && col.ColPos == position
+		}
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || len(fn.Args) != 2 {
+			return false
+		}
+		expr = fn.Args[0]
 	}
 	return false
 }
