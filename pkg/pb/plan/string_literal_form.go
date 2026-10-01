@@ -1246,6 +1246,7 @@ func isPlanNumericType(id int32) bool {
 		20, 21, 22, 23, // signed integers
 		25, 26, 27, 28, // unsigned integers
 		30, 31, // floating point
+		73, 74, 75, 76, // bf16, float16, float8, float4
 		32, 33, 34: // decimals
 		return true
 	default:
