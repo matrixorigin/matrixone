@@ -243,7 +243,7 @@ func (tbl *txnTableDelegate) Stats(
 		return transientTableStats(nil, float64(^uint64(0))), nil
 	}
 	if stats.TableName == "" && stats.TableCnt > 0 {
-		stats.TableCnt = float64(^uint64(0))
+		return transientTableStats(&stats, float64(^uint64(0))), nil
 	}
 
 	return &stats, nil

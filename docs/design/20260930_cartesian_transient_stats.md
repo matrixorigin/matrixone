@@ -1,6 +1,6 @@
 # Transient optimizer statistics for Cartesian DML
 
-Design revision: v8 (v7 core plus the approved CI repair addendum). The original v6 and the focused v7 corrections were reviewed
+Design revision: v9 (v8 plus partition and remote byte-coverage closure). The original v6 and the focused v7 corrections were reviewed
 by GPT-6.1-sol / xhigh before their respective implementations.
 Owning issues: [#29497](https://github.com/matrixorigin/matrixone/issues/29497),
 [#29533](https://github.com/matrixorigin/matrixone/issues/29533),
@@ -101,7 +101,14 @@ existing execution owner; estimates are not a universal memory/accuracy guarante
   consumers with typed tests. This is required reachability, not a new issue.
 - Delegate/combined observations cannot claim a partial global sum. Preserve
   published values where valid; unavailable shard/workspace ownership must not
-  serialize an anonymous local low bound as global. No sharding wire changes.
+  serialize an anonymous local low bound as global. Positive partition children
+  must cover the same byte-map columns, and each column sum must be representable;
+  otherwise discard the aggregate SizeMap after all merges. Empty children add
+  metadata but no bytes. Byte coverage is independent of the TableName cache
+  marker. Remote anonymous row promotion reuses transientTableStats so observed
+  width is scaled or falls back when bytes are unrepresentable. Final cross-column
+  overflow remains the existing planner completeStatsSizeMap responsibility.
+  No sharding wire changes.
 
 ## Compiler cache and existing generation owners
 

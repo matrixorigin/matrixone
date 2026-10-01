@@ -224,3 +224,27 @@ REUSE, nonzero SpillRows/SpillSize, exact content and mode-off empty results are
 retained. Full BVT uses the repository default process budget; the dedicated
 64MiB capacity/performance evidence above remains separate. No CI wait or full
 PROXY/PESSIMISTIC topology-pass claim is made from this normal comparison.
+
+## v9: partition and remote byte coverage (2026-10-01)
+
+Baseline `8bd0b30a2c`: actual combined/remote producer outputs fed through
+`BuildPlan` reproduce partial, wrapped, and unscaled byte totals, including the
+reported near-zero scan width. The same regression assertions pass after the
+owner repairs. Controls retain 8-byte observed width and 6.4-byte BIGINT schema
+fallback; anonymous representable promotion retains its measured 0.125-byte width.
+
+New validation, using matching verified native artifacts and `mo-cgo-test`:
+
+- Focused `TestCombinedStatsPreserveByteCoverage`, `TestRemoteStatsPreserveByteWidth`,
+  `TestCombinedTxnTable_Stats`, `TestTransientTableStatsByteBounds`, and
+  `TestNonlocalStatsRejectLocalWorkspaceBound`: exit 0, including late-child and
+  forwarding errors, both child orders, empty/complete/transient controls, and
+  published-map immutability. Full `disttae`: exit 0, 8.235s.
+- Existing planner byte-coverage, retained-cost, and fixed-width matrices: exit 0,
+  0.387s. Owning-package `go build` and `go vet`: exit 0. Incremental
+  `golangci-lint --new-from-rev=8bd0b30a`: exit 0, zero issues; `git diff --check` clean.
+- No new shared state, lifecycle or synchronization changes; this sequential
+  arithmetic repair does not require repeating unchanged race suites. It adds
+  O(column metadata) validation per positive partition child, no row scans/I/O,
+  extra byte-map storage, or general SELECT/DML entry overhead. No throughput
+  improvement or new cluster/OOM reproduction is claimed.
