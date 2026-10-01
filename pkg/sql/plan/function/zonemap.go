@@ -101,7 +101,7 @@ func GetZoneMapEvaluation(fn *plan.Function) ZoneMapEvaluation {
 			return ZoneMapIndex
 		}
 	case PLUS, MINUS, MULTI:
-		if len(args) == 2 && oid(0) == oid(1) && args[0].Typ.Scale == args[1].Typ.Scale {
+		if len(args) == 2 && oid(0) == oid(1) && (!oid(0).IsDecimal() || args[0].Typ.Scale == args[1].Typ.Scale) {
 			return ZoneMapIndex
 		}
 	case PREFIX_EQ:

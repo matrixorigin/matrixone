@@ -76,3 +76,20 @@ func TestZoneMapStatementConstantPolicy(t *testing.T) {
 		}
 	}
 }
+
+func TestZoneMapArithmeticScaleDomain(t *testing.T) {
+	for _, oid := range []types.T{types.T_int64, types.T_uint64, types.T_float64, types.T_decimal64, types.T_decimal128} {
+		for _, id := range []int32{PLUS, MINUS, MULTI} {
+			left := &plan.Expr{Typ: plan.Type{Id: int32(oid), Scale: 0}, Expr: &plan.Expr_Col{Col: &plan.ColRef{}}}
+			right := &plan.Expr{Typ: plan.Type{Id: int32(oid), Scale: 1}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}}
+			fn := &plan.Function{Func: &plan.ObjectRef{Obj: encodeOverloadID(id, 0)}, Args: []*plan.Expr{left, right}}
+			expected := ZoneMapIndex
+			if oid.IsDecimal() {
+				expected = ZoneMapUnsupported
+			}
+			require.Equal(t, expected, GetZoneMapEvaluation(fn), "%s arithmetic %d scale annotations", oid, id)
+			right.Typ.Scale = left.Typ.Scale
+			require.Equal(t, ZoneMapIndex, GetZoneMapEvaluation(fn))
+		}
+	}
+}
