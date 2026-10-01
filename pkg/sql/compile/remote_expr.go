@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -371,7 +372,9 @@ func foldVarExprsInExprInPlace(expr *plan.Expr, proc *process.Process) (bool, er
 		}
 		defer free()
 
-		lit := rule.GetConstantValue(vec, false, 0)
+		// JSON carries encoded bytes, not SQL text. Its existing literal format
+		// is safe here because the copied expression retains the JSON type.
+		lit := rule.GetConstantValue(vec, vec.GetType().Oid == types.T_json, 0)
 		if lit == nil {
 			return false, nil
 		}
