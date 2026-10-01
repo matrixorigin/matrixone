@@ -1486,7 +1486,7 @@ func TestRemoteJSONLiteralProtocolValidation(t *testing.T) {
 		if exists {
 			rt.SetGlobalVariables(runtime.MOProtocolVersion, previous)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion102)
+			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion104)
 		}
 	})
 	variable := makeTestVarExprWithType("json_value", types.T_json.ToType())
@@ -1504,14 +1504,18 @@ func TestRemoteJSONLiteralProtocolValidation(t *testing.T) {
 	features, err := plan.RequiredRemoteExpressionFeatures(p)
 	require.NoError(t, err)
 	require.True(t, features.JSONScalarLiteralContracts)
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion101)
-	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "typed JSON scalar literals")
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion102)
+	for _, version := range []int64{defines.MORPCVersion101, defines.MORPCVersion102, defines.MORPCVersion103} {
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, version)
+		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "typed JSON scalar literals")
+	}
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion104)
 	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
-	client.version = defines.MORPCVersion101
-	_, err = encodeRemoteScope(remote, c.proc)
-	require.ErrorContains(t, err, "remote destination")
-	client.version = defines.MORPCVersion102
+	for _, version := range []int64{defines.MORPCVersion101, defines.MORPCVersion102, defines.MORPCVersion103} {
+		client.version = version
+		_, err = encodeRemoteScope(remote, c.proc)
+		require.ErrorContains(t, err, "remote destination")
+	}
+	client.version = defines.MORPCVersion104
 	_, err = encodeRemoteScope(remote, c.proc)
 	require.NoError(t, err)
 

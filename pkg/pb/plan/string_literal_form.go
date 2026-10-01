@@ -372,7 +372,7 @@ const (
 // result type. Legacy plans remain executable by v97 receivers.
 // JSONInputContracts and YearBitCast require MORPC v101 for their new
 // execution contracts.
-// JSONScalarLiteralContracts requires MORPC v102 because older executors
+// JSONScalarLiteralContracts requires MORPC v104 because older executors
 // decode JSON-typed Sval literals as VARCHAR rather than encoded JSON.
 type RemoteExpressionFeatures struct {
 	JSONScalarLiteralContracts      bool

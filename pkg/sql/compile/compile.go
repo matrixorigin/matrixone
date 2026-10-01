@@ -1447,6 +1447,9 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err = c.constrainRequiredIVFWorkers(qry); err != nil {
+		return nil, err
+	}
 	if err = c.constrainIntegerDomainWorkers(qry); err != nil {
 		return nil, err
 	}
@@ -1905,7 +1908,11 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		return c.compileLimit(node, []*Scope{rs}), nil
 	}
 
-	if nodeHasLocalRuntimeFilter(node) {
+	qualifiedIVFIndex := false
+	if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_INDEX {
+		_, _, _, qualifiedIVFIndex = plan2.RequiredIVFPlacement(c.pn.GetQuery())
+	}
+	if nodeHasLocalRuntimeFilter(node) || qualifiedIVFIndex {
 		// This is deliberately after the literal LIMIT 0 shortcut. The flat
 		// logical plan retains pruned descendants, while topology validation must
 		// cover only local-filter nodes whose physical subtree was constructed.
@@ -5477,9 +5484,12 @@ func (c *Compile) compileVectorIndexScan(node *plan.Node) ([]*Scope, error) {
 	if txnOp := c.proc.GetTxnOperator(); txnOp != nil {
 		workspace = txnOp.GetWorkspace()
 	}
+	vectorID, _, _, qualified := plan2.RequiredIVFPlacement(c.pn.GetQuery())
+	required := requiredVectorMembership(node)
+	distributedPRE := required && qualified && vectorID == node.NodeId
 	if c.execType == plan2.ExecTypeAP_MULTICN && len(c.cnList) > 1 &&
 		(workspace == nil || workspace.Readonly()) &&
-		(node.Stats == nil || !node.Stats.ForceOneCN) && !requiredVectorMembership(node) {
+		((node.Stats == nil || !node.Stats.ForceOneCN) && !required || distributedPRE) {
 		nodes = make(engine.Nodes, len(c.cnList))
 		for i := range c.cnList {
 			nodes[i] = engine.Node{
@@ -5490,9 +5500,16 @@ func (c *Compile) compileVectorIndexScan(node *plan.Node) ([]*Scope, error) {
 				CNIDX: int32(i),
 			}
 		}
-		stable, err := remoteWorkersSupportProtocol(c.proc, nodes, defines.MORPCVersion96)
+		version := defines.MORPCVersion96
+		if distributedPRE {
+			version = defines.MORPCVersion103
+		}
+		stable, err := remoteWorkersSupportProtocol(c.proc, nodes, version)
 		if err != nil {
 			return nil, err
+		}
+		if distributedPRE && !stable {
+			return nil, moerr.NewNotSupportedNoCtx("required IVF worker capability changed after placement")
 		}
 		if stable {
 			// Keep the query's coordinator-first list intact for other scans.

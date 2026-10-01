@@ -16,6 +16,7 @@ package test
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -45,13 +47,14 @@ const (
 )
 
 type snapshotAdvanceHarness struct {
-	t      *testing.T
-	ctx    context.Context
-	cancel context.CancelFunc
-	pack   *testutil.EnginePack
-	schema *catalog2.Schema
-	rel    engine.Relation
-	txn    client.TxnOperator
+	t          *testing.T
+	ctx        context.Context
+	cancel     context.CancelFunc
+	pack       *testutil.EnginePack
+	schema     *catalog2.Schema
+	rel        engine.Relation
+	txn        client.TxnOperator
+	deletedPKs []int32
 }
 
 func newSnapshotAdvanceHarness(t *testing.T, mode snapshotAdvanceTombstoneMode) *snapshotAdvanceHarness {
@@ -113,6 +116,7 @@ func newSnapshotAdvanceHarness(t *testing.T, mode snapshotAdvanceTombstoneMode) 
 	require.NoError(t, err)
 
 	uncommittedDeletes := h.collectDeletes(h.txn, h.rel, rowCount/2)
+	h.deletedPKs = slices.Clone(vector.MustFixedColNoTypeCheck[int32](uncommittedDeletes.Vecs[1]))
 	switch mode {
 	case snapshotAdvanceInMemoryTombstone:
 		require.NoError(t, testutil.WriteToRelation(
@@ -260,7 +264,11 @@ func (h *snapshotAdvanceHarness) flushAndAdvance() {
 		h.rel.GetTableID(h.ctx),
 		types.TimestampToTS(h.pack.D.Now()),
 	))
-	require.NoError(h.t, h.txn.GetWorkspace().AdvanceSnapshot(h.ctx, h.pack.D.Now()))
+	// Exercise the actual shared CLONE/SNAPSHOT/DDL advance protocol, including
+	// its physical-only history timestamp, over real relocated tombstones.
+	cloneTS, err := databranchutils.AdvanceLineageSnapshot(h.ctx, h.txn)
+	require.NoError(h.t, err)
+	require.Equal(h.t, h.txn.SnapshotTS().PhysicalTime-1, cloneTS)
 }
 
 func (h *snapshotAdvanceHarness) transferAtStatementBoundary() {
@@ -371,15 +379,18 @@ func Test_RCSnapshotAdvanceHarnessSubsequentStatement(t *testing.T) {
 
 func Test_RCSnapshotAdvanceHarnessStatementRollback(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		mode     snapshotAdvanceTombstoneMode
-		commit   bool
-		wantRows int
+		name              string
+		mode              snapshotAdvanceTombstoneMode
+		commit            bool
+		wantRows          int
+		commitImmediately bool
 	}{
 		{name: "in-memory tombstone/commit", mode: snapshotAdvanceInMemoryTombstone, commit: true},
 		{name: "in-memory tombstone/rollback", mode: snapshotAdvanceInMemoryTombstone, wantRows: 10},
 		{name: "persisted tombstone/commit", mode: snapshotAdvancePersistedTombstone, commit: true},
 		{name: "persisted tombstone/rollback", mode: snapshotAdvancePersistedTombstone, wantRows: 10},
+		{name: "in-memory tombstone/immediate commit", mode: snapshotAdvanceInMemoryTombstone, commit: true, commitImmediately: true},
+		{name: "persisted tombstone/immediate commit", mode: snapshotAdvancePersistedTombstone, commit: true, commitImmediately: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newSnapshotAdvanceHarness(t, tc.mode)
@@ -396,10 +407,12 @@ func Test_RCSnapshotAdvanceHarnessStatementRollback(t *testing.T) {
 			require.NoError(t, ws.RollbackLastStatement(h.ctx))
 			ws.EndStatement()
 
-			// The next statement must transfer the original tombstones again before
-			// the transaction is allowed to commit or continue reading.
-			h.transferAtStatementBoundary()
-			require.Zero(t, h.countRows(h.txn, h.rel))
+			// Reading again and committing immediately are separate recovery paths.
+			// Commit must also restore transfers removed by statement rollback.
+			if !tc.commitImmediately {
+				h.transferAtStatementBoundary()
+				require.Zero(t, h.countRows(h.txn, h.rel))
+			}
 
 			if tc.commit {
 				require.NoError(t, h.txn.Commit(h.ctx))
@@ -412,6 +425,45 @@ func Test_RCSnapshotAdvanceHarnessStatementRollback(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, tc.wantRows, h.countRows(txn, relation))
 			require.NoError(t, txn.Commit(h.ctx))
+		})
+	}
+}
+
+// A no-op UPDATE still deletes the old Rowid and inserts a replacement. Check
+// exact keys, not just successful execution, across relocation and repeated refresh.
+func TestRCLineageSnapshotPreservesUniqueReplacements(t *testing.T) {
+	for _, mode := range []snapshotAdvanceTombstoneMode{snapshotAdvanceInMemoryTombstone, snapshotAdvancePersistedTombstone} {
+		t.Run(map[snapshotAdvanceTombstoneMode]string{snapshotAdvanceInMemoryTombstone: "in-memory", snapshotAdvancePersistedTombstone: "persisted"}[mode], func(t *testing.T) {
+			h := newSnapshotAdvanceHarness(t, mode)
+			defer h.close()
+			replacements := batch.NewWithSize(1)
+			defer replacements.Clean(h.pack.Mp)
+			replacements.Attrs = []string{h.schema.GetPrimaryKey().Name}
+			replacements.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+			for _, pk := range h.deletedPKs {
+				require.NoError(t, vector.AppendFixed(replacements.Vecs[0], pk, false, h.pack.Mp))
+			}
+			replacements.SetRowCount(len(h.deletedPKs))
+			require.NoError(t, testutil.WriteToRelation(h.ctx, h.txn, h.rel, replacements, false, true))
+			require.Equal(t, len(h.deletedPKs), h.countRows(h.txn, h.rel))
+			h.flushAndAdvance()
+			assertKeys := func() {
+				require.Equal(t, len(h.deletedPKs), h.countRows(h.txn, h.rel))
+				rows := h.collectDeletes(h.txn, h.rel, len(h.deletedPKs))
+				defer rows.Clean(h.pack.Mp)
+				require.ElementsMatch(t, h.deletedPKs, vector.MustFixedColNoTypeCheck[int32](rows.Vecs[1]))
+			}
+			assertKeys()
+			// A second lineage refresh must retain the same replacement set.
+			_, err := databranchutils.AdvanceLineageSnapshot(h.ctx, h.txn)
+			require.NoError(t, err)
+			assertKeys()
+			require.NoError(t, h.txn.Rollback(h.ctx))
+			h.txn = nil
+			_, rel, txn, err := h.pack.D.GetTable(h.ctx, "db1", "test1")
+			require.NoError(t, err)
+			h.txn, h.rel = txn, rel
+			assertKeys()
 		})
 	}
 }

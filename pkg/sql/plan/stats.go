@@ -3287,6 +3287,7 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 	// the equi-join condition is a function expression (not a plain column ref), it's expr-based.
 	hasExprBasedShuffle := false
 	hasForceOneCN := false
+	vectorID, _, localIndexScans, distributedPRE := RequiredIVFPlacement(qry)
 	deferredOnly := adaptiveDeferredOnlyNodes(qry)
 	for id, node := range qry.GetNodes() {
 		if node == nil {
@@ -3296,7 +3297,17 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 			continue
 		}
 		if node.GetStats().GetForceOneCN() {
-			hasForceOneCN = true
+			_, localIndex := localIndexScans[int32(id)]
+			if !distributedPRE || (!localIndex && int32(id) != vectorID) {
+				hasForceOneCN = true
+			}
+		}
+		if node.NodeType == plan.Node_VECTOR_INDEX_SCAN && !distributedPRE {
+			for _, spec := range node.RuntimeFilterProbeList {
+				if spec != nil && spec.MustApply && spec.UseMembershipFilter {
+					hasForceOneCN = true
+				}
+			}
 		}
 		if node.Stats == nil || node.Stats.HashmapStats == nil {
 			continue
@@ -3355,7 +3366,7 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 		}
 		if node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
 			execType := ExecTypeAP_MULTICN
-			if stats.GetForceOneCN() || !canUseMultiCN {
+			if (stats.GetForceOneCN() && !(distributedPRE && int32(id) == vectorID)) || !canUseMultiCN {
 				execType = ExecTypeAP_ONECN
 			}
 			if execType > ret {
