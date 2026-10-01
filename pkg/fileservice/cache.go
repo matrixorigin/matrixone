@@ -340,6 +340,9 @@ func EvictMemoryCachesToCapacityPercent(ctx context.Context, percent int64) map[
 		)
 		used := cache.EvictToCapacityPercent(ctx, percent)
 		metric.FSCachePressureMemoryEvictCounter.Inc()
+		if evicted := beforeUsed - used; evicted > 0 {
+			metric.FSCachePressureMemoryEvictedBytesCounter.Add(float64(evicted))
+		}
 		metric.FSCachePressureMemoryEvictDuration.Observe(time.Since(start).Seconds())
 		ret[name] = used
 		logutil.Info("memory cache pressure evicted",

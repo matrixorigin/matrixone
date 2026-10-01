@@ -142,6 +142,7 @@ func initFileServiceMetrics() {
 	registry.MustRegister(fsCacheBytes)
 	registry.MustRegister(fsCacheAllocatorArenas)
 	registry.MustRegister(fsCachePressureCounter)
+	registry.MustRegister(fsCachePressureEvictedBytesCounter)
 	registry.MustRegister(fsCachePressureEvictDuration)
 
 	registry.MustRegister(s3IOBytesHistogram)
