@@ -22,66 +22,56 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// CONTRACT: the metric distance kernels DO NOT reject a non-finite result. An
-// accumulation that overflows the element domain returns +/-Inf (and NaN once
-// opposite-signed SIMD lanes cancel) with a nil error. This test pins that
-// contract: if someone adds a finite check INSIDE a kernel (the wrong layer),
-// these assertions fail and point them back to the boundary (#29496).
+// CONTRACT: no distance function returns NaN. A magnitude that overflows the
+// element domain yields a well-ordered result -- a genuine +/-Inf, a clamped
+// finite value, or the NaN-from-cancellation mapped to +Inf -- never an unordered
+// NaN that would corrupt a top-k ranking. This holds on every build: these inputs
+// are all same-signed, so they overflow the accumulator sequentially too (the
+// lane-cancellation NaN that is SIMD-specific is covered in the _simd_test).
 //
-// WHY returning NaN/Inf (not an error) is correct here:
-//   - These kernels are the innermost hot-path primitive: a brute-force or pairwise
-//     search calls them O(rows) times, each over O(dim) elements. A per-call finite
-//     branch (or a defensive clamp) is pure overhead on the common path for a case
-//     that cannot occur with stored data -- an indexed vector can never hold Inf/NaN
-//     (#28688), so a non-finite result only arises from ~1e19+ synthetic magnitudes.
-//   - IEEE-754 +/-Inf/NaN IS the correct, information-preserving signal that the
-//     accumulation left the element domain; swallowing it in the kernel would hide
-//     the condition from the one place that can report it cleanly.
-//
-// WHEN/WHERE to check finiteness instead -- ONCE, at the consumer boundary, so the
-// cost is one pass per batch/row rather than one branch per distance:
-//   - batch index Search: CheckFiniteDists over the result slice (usearch/hnsw/
-//     ivfpq/cagra, metric/gpu), or riding along the existing pass (the L2 sqrt
-//     screen in GoPairWiseDistance);
-//   - single scalar result: CheckFiniteDist in moarray and the SQL array-distance
-//     builtins (e.g. arrayDistanceNarrow).
-//
-// Only bf16/f32/f64 can overflow: f16's max magnitude is 65504, so its products
-// stay well within the float32 accumulator (hence it is absent here, as in the
-// issue's table).
-func TestMetricReturnsNonFiniteWithoutChecking29496(t *testing.T) {
+// Finiteness is NOT turned into an error here: an overflow is reported as an error
+// only at the consumer score boundary (moarray / the SQL array-distance builtins /
+// index Search's CheckFiniteDists). The kernels return the well-ordered value so
+// search ranking stays correct (#29496).
+func TestMetricNeverReturnsNaN29496(t *testing.T) {
 	const n = 128
-	nonFinite := func(v float64) bool { return math.IsInf(v, 0) || math.IsNaN(v) }
+	mag := float32(1 << 63)
+	ab := make([]types.BF16, n)
+	for i := range ab {
+		ab[i] = types.BF16FromFloat32(mag)
+	}
+	bigF32 := make([]float32, n)
+	bigF64 := make([]float64, n)
+	for i := range bigF32 {
+		bigF32[i], bigF64[i] = mag, 1e200
+	}
 
-	t.Run("f32", func(t *testing.T) {
+	check := func(t *testing.T, d float64, err error) {
+		t.Helper()
+		require.NoError(t, err, "kernel must not turn overflow into an error")
+		require.Falsef(t, math.IsNaN(d), "distance must never be NaN, got %v", d)
+	}
+
+	t.Run("ip_f32", func(t *testing.T) { d, err := InnerProduct[float32](bigF32, bigF32); check(t, float64(d), err) })
+	t.Run("ip_f64", func(t *testing.T) { d, err := InnerProduct[float64](bigF64, bigF64); check(t, d, err) })
+	for _, m := range []MetricType{Metric_InnerProduct, Metric_CosineDistance, Metric_L2sqDistance, Metric_L1Distance} {
+		t.Run("bf16_"+MetricWhat(m), func(t *testing.T) {
+			fn, err := ResolveDistanceFn[types.BF16, float64](m)
+			require.NoError(t, err)
+			d, err := fn(ab, ab)
+			check(t, d, err)
+		})
+	}
+	t.Run("spherical_f32", func(t *testing.T) { d, err := SphericalDistance[float32](bigF32, bigF32); check(t, float64(d), err) })
+
+	// Ordinary vectors are unaffected.
+	t.Run("finite_ok", func(t *testing.T) {
 		a, b := make([]float32, n), make([]float32, n)
 		for i := range a {
-			// product 2^126 is finite in float32; the sum of n overflows to +Inf.
-			a[i], b[i] = float32(1<<63), float32(1<<63)
+			a[i], b[i] = 1.5, 2.0
 		}
 		d, err := InnerProduct[float32](a, b)
-		require.NoError(t, err, "metric must not reject a non-finite result")
-		require.Truef(t, nonFinite(float64(d)), "metric must return the raw non-finite value, got %v", d)
-	})
-	t.Run("f64", func(t *testing.T) {
-		a, b := make([]float64, n), make([]float64, n)
-		for i := range a {
-			// product 1e308 is finite in float64; the sum of n overflows to +Inf.
-			a[i], b[i] = 1e154, 1e154
-		}
-		d, err := InnerProduct[float64](a, b)
-		require.NoError(t, err, "metric must not reject a non-finite result")
-		require.Truef(t, nonFinite(d), "metric must return the raw non-finite value, got %v", d)
-	})
-	t.Run("bf16_via_resolve", func(t *testing.T) {
-		a, b := make([]types.BF16, n), make([]types.BF16, n)
-		for i := range a {
-			a[i], b[i] = types.BF16FromFloat32(float32(1<<63)), types.BF16FromFloat32(float32(1<<63))
-		}
-		fn, err := ResolveDistanceFn[types.BF16, float64](Metric_InnerProduct)
 		require.NoError(t, err)
-		d, err := fn(a, b)
-		require.NoError(t, err, "ResolveDistanceFn must not reject a non-finite result")
-		require.Truef(t, nonFinite(d), "metric must return the raw non-finite value, got %v", d)
+		require.False(t, math.IsNaN(float64(d)) || math.IsInf(float64(d), 0))
 	})
 }

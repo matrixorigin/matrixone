@@ -1,3 +1,5 @@
+//go:build (amd64 || arm64) && go1.27 && goexperiment.simd
+
 // Copyright 2026 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,67 +17,60 @@
 package brute_force
 
 import (
-	"math"
+	"sort"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
-// LOCK: GoBruteForceIndex deliberately returns a non-finite distance verbatim,
-// with no error, instead of rejecting it. Finiteness is enforced at the consumer
-// score boundary (moarray / the SQL scalar distance builtins / the native index
-// Search), never inside this shared index -- see the recorded decision in
-// GoBruteForceIndex.SearchFloat32 and metric/metric_nonfinite_contract_test.go.
-// This pins that contract so a future in-index finite check (the wrong layer) is
-// caught here (#29496).
-func TestBruteForceReturnsNonFiniteDistance29496(t *testing.T) {
+// A candidate whose inner product overflows on the SIMD lanes (products finite, but
+// per-lane partial sums reach +Inf and -Inf before the reduction cancels them) used
+// to compute as NaN. NaN is unordered: it never compares as the max a top-k heap
+// evicts, so it was retained in a slot and dropped a genuinely-nearer finite
+// candidate -- a silent wrong result the final-score check could not catch (its
+// score was a finite 2^63). The metric now maps that NaN to +Inf, which ranks the
+// overflowing candidate LAST, so the two finite candidates are selected correctly.
+// This is the wrong-winner-prevention for #29496.
+func TestBruteForceExcludesOverflowCandidate29496(t *testing.T) {
+	const dim = 32
+	mag := float32(1 << 63)
+	query := make([]float32, dim)
+	cand0 := make([]float32, dim) // alternating +/-mag: dot cancels to 0, but SIMD lanes overflow
+	cand1 := make([]float32, dim) // [1,0,...]:   dot = mag,  distance -mag   (finite, near)
+	cand2 := make([]float32, dim) // [1,1,0,...]: dot = 2*mag, distance -2*mag (finite, nearest)
+	for i := range query {
+		query[i] = mag
+		if i%2 == 0 {
+			cand0[i] = mag
+		} else {
+			cand0[i] = -mag
+		}
+	}
+	cand1[0] = 1
+	cand2[0], cand2[1] = 1, 1
+
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)
-	isInf := func(v float64) bool { return math.IsInf(v, 0) }
-
-	// Inner product distance is -dot. An overflowing dot (2e19*2e19 > float32 max)
-	// yields -Inf, which is the SMALLEST distance and therefore WINS. Both entry
-	// points return that -Inf score, with a valid key and no error.
-	ip := &GoBruteForceIndex[float32, float32]{
-		Dataset:   [][]float32{{2e19}},
+	idx := &GoBruteForceIndex[float32, float32]{
+		Dataset:   [][]float32{cand0, cand1, cand2},
 		Metric:    metric.Metric_InnerProduct,
-		Dimension: 1,
-		Count:     1,
+		Dimension: dim,
+		Count:     3,
 	}
-	rt1 := vectorindex.RuntimeConfig{Limit: 1, NThreads: 1}
 
-	keys := make([]int64, 1)
-	dists := make([]float32, 1)
-	require.NoError(t, ip.SearchFloat32(sqlproc, [][]float32{{2e19}}, rt1, keys, dists))
-	require.EqualValues(t, 0, keys[0], "the overflowing row still wins")
-	require.Truef(t, isInf(float64(dists[0])), "SearchFloat32 must return the non-finite winner, got %v", dists[0])
+	keys := make([]int64, 2)
+	dists := make([]float32, 2)
+	require.NoError(t, idx.SearchFloat32(sqlproc, [][]float32{query},
+		vectorindex.RuntimeConfig{Limit: 2, NThreads: 1}, keys, dists))
 
-	_, distances, err := ip.Search(sqlproc, [][]float32{{2e19}}, rt1)
-	require.NoError(t, err)
-	require.Len(t, distances, 1)
-	require.Truef(t, isInf(distances[0]), "Search must return the non-finite winner verbatim, got %v", distances[0])
-
-	// limit>1 heap: a LOSING row whose L2sq distance overflows to +Inf (all-positive,
-	// cannot win the min) is still returned in its slot as +Inf, not rejected.
-	bfBig := types.BF16FromFloat32(2e19)
-	bfZero := types.BF16FromFloat32(0)
-	l2 := &GoBruteForceIndex[types.BF16, float32]{
-		Dataset:   [][]types.BF16{{bfZero, bfZero}, {bfBig, bfBig}},
-		Metric:    metric.Metric_L2sqDistance,
-		Dimension: 2,
-		Count:     2,
-	}
-	kbf := make([]int64, 2)
-	dbf := make([]float32, 2)
-	require.NoError(t, l2.SearchFloat32(sqlproc, [][]types.BF16{{bfZero, bfZero}},
-		vectorindex.RuntimeConfig{Limit: 2, NThreads: 1}, kbf, dbf))
-	require.Truef(t, isInf(float64(dbf[0])) || isInf(float64(dbf[1])),
-		"the overflowing loser's +Inf distance must be returned, got %v", dbf)
+	got := []int64{keys[0], keys[1]}
+	sort.Slice(got, func(i, j int) bool { return got[i] < got[j] })
+	require.Equalf(t, []int64{1, 2}, got,
+		"top-2 must be the finite candidates {1,2}; the overflowing candidate 0 must be excluded, got keys=%v dists=%v", keys, dists)
 }

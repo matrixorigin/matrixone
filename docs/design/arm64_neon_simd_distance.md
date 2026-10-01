@@ -1,9 +1,20 @@
 # Design: arm64 NEON SIMD vector-distance kernels
 
 - Issue: #29495 · PR: #29496
-- Status: Approved by fengttt
 - Author: cpegeric
-- Reviewers: fengttt (approved PR #29496); XuPeng-SH (requested a versioned design review)
+
+### Status (by revision)
+
+- **v1 — Approved.** Scope: the core arm64 NEON kernels for the full metric set and
+  the build/delivery contract (§1, §3–§6). Approved by fengttt as the implementation
+  at PR revision 2b3efca (2026-09-30); this document (first added at a964312) records
+  that approved design.
+- **v2 — Pending design review.** Scope: the §2 numerical/selection contract,
+  corrected to the **NaN→+Inf** rule in response to the #29496 review, plus the
+  static-analysis / Go 1.27 delivery additions (§5–§6) introduced with this document.
+  These post-date fengttt's v1 approval. XuPeng-SH requested a versioned,
+  design-first review per `.agents/skills/mo-dev/references/feature-design-review.md`;
+  update to "v2 — Approved by &lt;name&gt; (revision &lt;sha&gt;, &lt;date&gt;)" once that review lands.
 
 ## 1. Context & goal
 
@@ -15,27 +26,35 @@ contract as amd64**, with **identical observable results**.
 
 ## 2. Numerical / result contract (the central decision)
 
-- A distance kernel computes in IEEE-754 and returns its **raw result, including
-  ±Inf and NaN, with no error**. It never rejects or clamps a non-finite value.
-  Rationale: the kernel is the innermost hot-path primitive (per element, per
-  candidate); a per-call finiteness branch is overhead on the common path for a
-  condition that stored data cannot produce (an indexed vector is never non-finite
-  by construction). A non-finite result is the correct, information-preserving
-  signal that an accumulation left the element domain.
-- **Finiteness is enforced exactly once, at the boundary where a distance is
-  handed back as a user-visible score** — the scalar distance builtins, the
-  per-row vector functions, and the index-search result path. Overflow there is
-  reported as an error, not returned as Inf/NaN.
-- **Search / selection does not check.** A non-finite distance cannot win a
-  nearest (min/argmin) comparison, so it never changes ranking; an
-  all-out-of-domain query is caught by the no-winner guard. Centroid assignment
-  and brute-force selection therefore intentionally pass non-finite distances
-  through untouched.
-- A result must not depend on *which* kernel ran. For one input, the scalar
-  reference, every SIMD tier, and each architecture must agree — the same finite
-  value, or the same error at the same boundary. Making an operand constant
-  (which may select a batch kernel) or changing architecture must not change what
-  a query returns.
+- A distance kernel computes in IEEE-754. A multi-lane SIMD accumulation can
+  produce **NaN** on an extreme input whose products are each finite but whose
+  per-lane partial sums reach +Inf and −Inf before the cross-lane reduction
+  cancels them (a sequential scalar sum would stay finite). NaN is **unordered**,
+  so it corrupts a top-k ranking: it never compares as the maximum a heap evicts,
+  so it is retained in a slot and discards a genuinely-nearer finite candidate — a
+  silent wrong result no final-score check can catch, because the returned winner's
+  score is a finite value. Therefore **every distance function maps NaN to +Inf**
+  (the largest distance): the overflowing candidate ranks last / is excluded, and
+  every finite candidate ranks correctly. A distance function never returns NaN.
+- A genuine ±Inf — a non-cancelling overflow (a huge-similarity dot → −Inf, a
+  squared magnitude → +Inf) — is already well-ordered and is left as is. Only the
+  unordered NaN is mapped.
+- The map is applied **inside each distance function** that can produce NaN: inner
+  product (the f32/f64 `InnerProduct[T]` entry, and every narrow bf16/f16 tier
+  kernel — scalar/NEON/AVX-512/AVX2, which share no finalizer), cosine (the single
+  shared `cosineDistClamped` finalizer, covering all tiers), and spherical (its
+  `acos` result). L2/L2sq/L1 are non-negative sums and cannot produce NaN;
+  cosine-similarity f32/f64 has its own normal-norm recompute. The map is a
+  single-constant sentinel, not a scalar recompute — it costs one NaN test, keeps
+  search selection correct, and needs no second pass.
+- **Finiteness-as-an-error is still enforced once, at the consumer score boundary**
+  — the scalar/SQL array-distance builtins (`moarray`, `arrayDistanceNarrow`) and
+  index Search (`CheckFiniteDists`). A non-finite result (now ±Inf, never NaN)
+  handed back there is reported as an overflow error; inside search ranking it is
+  simply ordered last.
+- A result must not depend on *which* kernel ran. For one input, every SIMD tier
+  and architecture agrees with the scalar reference up to ordinary FP rounding, and
+  a non-finite case is the same well-ordered ±Inf (never NaN) everywhere.
 
 ## 3. Ownership: one scalar oracle, per-arch SIMD
 
@@ -95,10 +114,15 @@ contract as amd64**, with **identical observable results**.
 
 ## 7. Invariants (review checklist)
 
-- Kernels return raw non-finite values; no kernel rejects a non-finite result.
-- Every user-score boundary rejects non-finite; search/selection does not.
-- Scalar oracle ≡ every SIMD tier ≡ every architecture on finite inputs; same
-  error at the same boundary on out-of-domain inputs.
+- No distance function returns NaN: a NaN is mapped to +Inf; a genuine ±Inf is left
+  well-ordered. The map is inside each NaN-capable function (inner product, cosine's
+  `cosineDistClamped`, spherical), never a scalar recompute.
+- Search/selection relies on well-ordered distances: the overflow candidate ranks
+  last (never a wrong winner). Finiteness-as-an-error is enforced only at the
+  consumer score boundary.
+- Scalar oracle ≡ every SIMD tier ≡ every architecture on finite inputs; a
+  non-finite case is the same well-ordered ±Inf (never NaN) everywhere, and the same
+  error at the same boundary when handed back as a score.
 - No architecture branch outside build-tagged kernel files.
 - Build-experiment default on + opt-out honored; capability-gated paths fail
   closed.

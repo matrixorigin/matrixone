@@ -256,11 +256,11 @@ func L2DistanceSq[T types.RealNumbers](p, q []T) (T, error) {
 func InnerProduct[T types.RealNumbers](p, q []T) (T, error) {
 	if pf32, ok := any(p).([]float32); ok {
 		res, err := InnerProductFloat32(pf32, any(q).([]float32))
-		return T(res), err
+		return nanToPosInf(T(res)), err
 	}
 	if pf64, ok := any(p).([]float64); ok {
 		res, err := InnerProductFloat64(pf64, any(q).([]float64))
-		return T(res), err
+		return nanToPosInf(T(res)), err
 	}
 	return 0, moerr.NewInternalErrorNoCtx("vector type not supported")
 }
@@ -640,7 +640,10 @@ func SphericalDistanceFloat32(a, b []float32) (float32, error) {
 	} else if total < -1.0 {
 		total = -1.0
 	}
-	return float32(math.Acos(float64(total)) / math.Pi), nil
+	// A NaN total (float lane overflow cancelling signs) is not caught by the clamp
+	// (NaN compares false) and acos(NaN) is NaN; map to +Inf so ranking stays
+	// well-ordered (#29496).
+	return nanToPosInf(float32(math.Acos(float64(total)) / math.Pi)), nil
 }
 
 func SphericalDistanceFloat64(a, b []float64) (float64, error) {
@@ -680,7 +683,7 @@ func SphericalDistanceFloat64(a, b []float64) (float64, error) {
 	} else if total < -1.0 {
 		total = -1.0
 	}
-	return math.Acos(total) / math.Pi, nil
+	return nanToPosInf(math.Acos(total) / math.Pi), nil
 }
 
 func SphericalDistance[T types.RealNumbers](p, q []T) (T, error) {

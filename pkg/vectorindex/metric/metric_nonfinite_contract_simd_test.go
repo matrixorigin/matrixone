@@ -24,52 +24,61 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// CONTRACT (SIMD specific): the SIMD kernels accumulate signed products in several
-// float lanes and reduce at the end, so an input whose products are each finite but
-// whose per-lane partial sums overflow to +/-Inf before the reduction (here
-// a[i]*b[i] is +/-mag^2 with adjacent pairs cancelling) yields NaN -- returned with
-// a nil error. The sequential scalar build cancels in source order and never hits
-// this, which is why it is SIMD-tagged.
-//
-// Returning the NaN is correct, not a bug to paper over in the kernel: the lanes are
-// what make the kernel fast, the input cannot occur with stored data (an indexed
-// vector never holds such magnitudes, #28688), and NaN faithfully reports that the
-// accumulation overflowed. The caller screens it ONCE at the consumer boundary
-// (index Search via CheckFiniteDists; moarray and the SQL array-distance builtins
-// via CheckFiniteDist) -- never with a per-distance branch inside the search loop
-// (#29496). See metric_nonfinite_contract_test.go for the full rationale.
-func TestMetricReturnsNaNOnLaneCancellation29496(t *testing.T) {
-	const n = 128
-	t.Run("f32", func(t *testing.T) {
-		a, b := make([]float32, n), make([]float32, n)
-		mag := float32(1 << 63)
-		for i := range a {
-			a[i] = mag
-			if i%2 == 0 {
-				b[i] = mag
-			} else {
-				b[i] = -mag
-			}
+// CONTRACT: a distance function maps a NaN to +Inf, it never returns NaN. The SIMD
+// kernels accumulate signed products in several float lanes and reduce at the end,
+// so an input whose products are each finite but whose per-lane partial sums
+// overflow to +/-Inf before the reduction produces NaN (Inf + -Inf) where a
+// sequential scalar sum would stay finite. NaN is unordered and corrupts a top-k
+// ranking (it is never evicted and drops a valid candidate), so every NaN-capable
+// distance function maps it to +Inf -- the largest distance -- which ranks the
+// overflowing candidate last instead. This input (a[i]=mag, b[i] alternating
+// +/-mag, dim 32) drives the lanes to NaN on the SIMD build; the scalar build
+// cancels in source order and never hits it, which is why this is SIMD-tagged
+// (#29496).
+func TestMetricMapsLaneCancellationToPosInf29496(t *testing.T) {
+	const dim = 32
+	mag32 := float32(1 << 63)
+	af, bf := make([]float32, dim), make([]float32, dim)
+	ad, bd := make([]float64, dim), make([]float64, dim)
+	ab, bb := make([]types.BF16, dim), make([]types.BF16, dim)
+	mag64 := math.Ldexp(1, 511)
+	for i := 0; i < dim; i++ {
+		af[i], ad[i], ab[i] = mag32, mag64, types.BF16FromFloat32(mag32)
+		if i%2 == 0 {
+			bf[i], bd[i], bb[i] = mag32, mag64, types.BF16FromFloat32(mag32)
+		} else {
+			bf[i], bd[i], bb[i] = -mag32, -mag64, types.BF16FromFloat32(-mag32)
 		}
-		d, err := InnerProduct[float32](a, b)
-		require.NoError(t, err, "metric must not reject a NaN result")
-		require.Truef(t, math.IsNaN(float64(d)), "lane cancellation must yield NaN, got %v", d)
+	}
+	isPosInf := func(v float64) bool { return math.IsInf(v, 1) }
+
+	t.Run("ip_f32", func(t *testing.T) {
+		d, err := InnerProduct[float32](af, bf)
+		require.NoError(t, err)
+		require.Truef(t, isPosInf(float64(d)), "lane cancellation must map to +Inf, got %v", d)
 	})
-	t.Run("bf16_via_resolve", func(t *testing.T) {
-		a, b := make([]types.BF16, n), make([]types.BF16, n)
-		mag := float32(1 << 63)
-		for i := range a {
-			a[i] = types.BF16FromFloat32(mag)
-			if i%2 == 0 {
-				b[i] = types.BF16FromFloat32(mag)
-			} else {
-				b[i] = types.BF16FromFloat32(-mag)
-			}
-		}
+	t.Run("ip_f64", func(t *testing.T) {
+		d, err := InnerProduct[float64](ad, bd)
+		require.NoError(t, err)
+		require.Truef(t, isPosInf(d), "lane cancellation must map to +Inf, got %v", d)
+	})
+	t.Run("ip_bf16", func(t *testing.T) {
 		fn, err := ResolveDistanceFn[types.BF16, float64](Metric_InnerProduct)
 		require.NoError(t, err)
-		d, err := fn(a, b)
-		require.NoError(t, err, "ResolveDistanceFn must not reject a NaN result")
-		require.Truef(t, math.IsNaN(d), "lane cancellation must yield NaN, got %v", d)
+		d, err := fn(ab, bb)
+		require.NoError(t, err)
+		require.Truef(t, isPosInf(d), "lane cancellation must map to +Inf, got %v", d)
+	})
+	t.Run("cosine_bf16", func(t *testing.T) {
+		fn, err := ResolveDistanceFn[types.BF16, float64](Metric_CosineDistance)
+		require.NoError(t, err)
+		d, err := fn(ab, bb)
+		require.NoError(t, err)
+		require.Truef(t, isPosInf(d), "lane cancellation must map to +Inf, got %v", d)
+	})
+	t.Run("spherical_f32", func(t *testing.T) {
+		d, err := SphericalDistance[float32](af, bf)
+		require.NoError(t, err)
+		require.Truef(t, isPosInf(float64(d)), "lane cancellation must map to +Inf, got %v", d)
 	})
 }

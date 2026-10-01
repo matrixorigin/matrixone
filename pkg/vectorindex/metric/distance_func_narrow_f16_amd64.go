@@ -132,7 +132,7 @@ func innerProductF16SIMD(a, b []types.Float16) (float64, error) {
 	for i := j * 2; i < n; i++ {
 		sum += f16fast(a[i]) * f16fast(b[i])
 	}
-	return float64(-sum), nil
+	return nanToPosInf(float64(-sum)), nil
 }
 
 func l1DistanceF16SIMD(a, b []types.Float16) (float64, error) {
