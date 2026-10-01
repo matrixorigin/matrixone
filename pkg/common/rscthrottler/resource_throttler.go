@@ -97,10 +97,19 @@ func readRuntimeMemorySnapshot() runtimeMemorySnapshot {
 
 func logRuntimeReclamation(action string, before runtimeMemorySnapshot, started time.Time) {
 	after := readRuntimeMemorySnapshot()
+	duration := time.Since(started)
+	heapReleasedDelta := int64(after.heapReleased) - int64(before.heapReleased)
+	metric.MemoryThrottlerReclamationCounter.WithLabelValues(action).Inc()
+	metric.MemoryThrottlerReclamationDuration.WithLabelValues(action).Observe(duration.Seconds())
+	if heapReleasedDelta > 0 {
+		metric.MemoryThrottlerReclamationHeapReleasedBytes.
+			WithLabelValues(action).
+			Add(float64(heapReleasedDelta))
+	}
 	logutil.Info(
 		fmt.Sprintf("%s-Reclamation", MemoryThrottlerLogHeader),
 		zap.String("action", action),
-		zap.Duration("duration", time.Since(started)),
+		zap.Duration("duration", duration),
 		zap.Uint64("heap-alloc-before", before.heapAlloc),
 		zap.Uint64("heap-alloc-after", after.heapAlloc),
 		zap.Int64("heap-alloc-delta", int64(after.heapAlloc)-int64(before.heapAlloc)),
@@ -112,7 +121,8 @@ func logRuntimeReclamation(action string, before runtimeMemorySnapshot, started 
 		zap.Int64("heap-idle-delta", int64(after.heapIdle)-int64(before.heapIdle)),
 		zap.Uint64("heap-released-before", before.heapReleased),
 		zap.Uint64("heap-released-after", after.heapReleased),
-		zap.Int64("heap-released-delta", int64(after.heapReleased)-int64(before.heapReleased)),
+		zap.Int64("heap-released-delta", heapReleasedDelta),
+		zap.Int64("heap-released-bytes", max(0, heapReleasedDelta)),
 		zap.Uint32("gc-count-before", before.numGC),
 		zap.Uint32("gc-count-after", after.numGC),
 		zap.Uint64("gc-pause-total-before-ns", before.pauseTotalNs),
@@ -736,10 +746,26 @@ func (m *memThrottler) Acquire(ask int64) (int64, bool) {
 		left, granted = defaultAcquirePolicy(m, ask)
 	}
 
+	result := "granted"
+	reason := "accepted"
+	if !granted {
+		result = "denied"
+		if ask < 0 {
+			reason = "invalid_request"
+		} else {
+			reason = "out_of_available"
+		}
+	}
+	metric.MemoryThrottlerAdmissionCounter.WithLabelValues(result, reason).Inc()
+	metric.MemoryThrottlerAdmissionBytesCounter.WithLabelValues(result, reason).Add(float64(max(0, ask)))
+
 	if !granted {
 		logutil.Info(
 			fmt.Sprintf("%s-Acquire", MemoryThrottlerLogHeader),
 			zap.String("err", "out of available"),
+			zap.String("result", result),
+			zap.String("reason", reason),
+			zap.Int64("ask-bytes", ask),
 			zap.String("ask", common.HumanReadableBytes(int(ask))),
 			zap.String("detail", m.String()),
 		)
@@ -759,7 +785,9 @@ func (m *memThrottler) Release(mem int64) int64 {
 			newReserved = 0
 		}
 		if m.reserved.CompareAndSwap(currReserved, newReserved) {
-			m.releaseCgroup(currReserved - newReserved)
+			released := currReserved - newReserved
+			m.releaseCgroup(released)
+			metric.MemoryThrottlerReservationReleasedBytesCounter.Add(float64(released))
 			return m.Available()
 		}
 	}

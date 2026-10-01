@@ -61,6 +61,7 @@ func init() {
 	initExecutionResourceMetrics()
 	initHashBuildMetrics()
 	initArrowLoadMetrics()
+	initResourceThrottlerMetrics()
 
 	registry.MustRegister(HeartbeatHistogram)
 	registry.MustRegister(HeartbeatFailureCounter)
@@ -88,6 +89,16 @@ func initArrowLoadMetrics() {
 	registry.MustRegister(ArrowLoadPhaseDurationHistogram)
 	registry.MustRegister(ArrowLoadPinnedBytesGauge)
 	registry.MustRegister(ArrowLoadPinnedBytesHighWaterGauge)
+}
+
+func initResourceThrottlerMetrics() {
+	registry.MustRegister(MemoryThrottlerAdmissionCounter)
+	registry.MustRegister(MemoryThrottlerAdmissionBytesCounter)
+	registry.MustRegister(MemoryThrottlerReservationReleasedBytesCounter)
+	registry.MustRegister(MemoryThrottlerReclamationCounter)
+	registry.MustRegister(MemoryThrottlerReclamationDuration)
+	registry.MustRegister(MemoryThrottlerReclamationHeapReleasedBytes)
+	initResourceThrottlerMetricLabels()
 }
 
 func initMemMetrics() {
