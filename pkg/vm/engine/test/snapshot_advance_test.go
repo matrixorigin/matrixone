@@ -16,7 +16,9 @@ package test
 
 import (
 	"context"
+	"errors"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,10 +29,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -44,6 +49,7 @@ type snapshotAdvanceTombstoneMode int
 const (
 	snapshotAdvanceInMemoryTombstone snapshotAdvanceTombstoneMode = iota
 	snapshotAdvancePersistedTombstone
+	snapshotAdvanceMixedTombstones
 )
 
 type snapshotAdvanceHarness struct {
@@ -124,6 +130,15 @@ func newSnapshotAdvanceHarness(t *testing.T, mode snapshotAdvanceTombstoneMode) 
 		))
 	case snapshotAdvancePersistedTombstone:
 		h.writePersistedDeletes(uncommittedDeletes)
+	case snapshotAdvanceMixedTombstones:
+		inMemory, err := uncommittedDeletes.Window(0, rowCount/4)
+		require.NoError(t, err)
+		defer inMemory.Clean(nil)
+		persisted, err := uncommittedDeletes.Window(rowCount/4, rowCount/2)
+		require.NoError(t, err)
+		defer persisted.Clean(nil)
+		require.NoError(t, testutil.WriteToRelation(ctx, h.txn, h.rel, inMemory, true, true))
+		h.writePersistedDeletes(persisted)
 	default:
 		t.Fatalf("unknown tombstone mode %d", mode)
 	}
@@ -289,6 +304,7 @@ func Test_RCSnapshotAdvancePreservesUncommittedDeletes(t *testing.T) {
 	}{
 		{name: "in-memory tombstone", mode: snapshotAdvanceInMemoryTombstone},
 		{name: "persisted tombstone", mode: snapshotAdvancePersistedTombstone},
+		{name: "mixed tombstones", mode: snapshotAdvanceMixedTombstones},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newSnapshotAdvanceHarness(t, tc.mode)
@@ -309,6 +325,7 @@ func Test_RCSnapshotAdvanceHarnessRollback(t *testing.T) {
 	}{
 		{name: "in-memory tombstone", mode: snapshotAdvanceInMemoryTombstone},
 		{name: "persisted tombstone", mode: snapshotAdvancePersistedTombstone},
+		{name: "mixed tombstones", mode: snapshotAdvanceMixedTombstones},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newSnapshotAdvanceHarness(t, tc.mode)
@@ -334,6 +351,7 @@ func Test_RCSnapshotAdvanceHarnessCommit(t *testing.T) {
 	}{
 		{name: "in-memory tombstone", mode: snapshotAdvanceInMemoryTombstone},
 		{name: "persisted tombstone", mode: snapshotAdvancePersistedTombstone},
+		{name: "mixed tombstones", mode: snapshotAdvanceMixedTombstones},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newSnapshotAdvanceHarness(t, tc.mode)
@@ -359,6 +377,7 @@ func Test_RCSnapshotAdvanceHarnessSubsequentStatement(t *testing.T) {
 	}{
 		{name: "in-memory tombstone", mode: snapshotAdvanceInMemoryTombstone},
 		{name: "persisted tombstone", mode: snapshotAdvancePersistedTombstone},
+		{name: "mixed tombstones", mode: snapshotAdvanceMixedTombstones},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newSnapshotAdvanceHarness(t, tc.mode)
@@ -391,6 +410,7 @@ func Test_RCSnapshotAdvanceHarnessStatementRollback(t *testing.T) {
 		{name: "persisted tombstone/rollback", mode: snapshotAdvancePersistedTombstone, wantRows: 10},
 		{name: "in-memory tombstone/immediate commit", mode: snapshotAdvanceInMemoryTombstone, commit: true, commitImmediately: true},
 		{name: "persisted tombstone/immediate commit", mode: snapshotAdvancePersistedTombstone, commit: true, commitImmediately: true},
+		{name: "mixed tombstones/immediate commit", mode: snapshotAdvanceMixedTombstones, commit: true, commitImmediately: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newSnapshotAdvanceHarness(t, tc.mode)
@@ -432,8 +452,8 @@ func Test_RCSnapshotAdvanceHarnessStatementRollback(t *testing.T) {
 // A no-op UPDATE still deletes the old Rowid and inserts a replacement. Check
 // exact keys, not just successful execution, across relocation and repeated refresh.
 func TestRCLineageSnapshotPreservesUniqueReplacements(t *testing.T) {
-	for _, mode := range []snapshotAdvanceTombstoneMode{snapshotAdvanceInMemoryTombstone, snapshotAdvancePersistedTombstone} {
-		t.Run(map[snapshotAdvanceTombstoneMode]string{snapshotAdvanceInMemoryTombstone: "in-memory", snapshotAdvancePersistedTombstone: "persisted"}[mode], func(t *testing.T) {
+	for _, mode := range []snapshotAdvanceTombstoneMode{snapshotAdvanceInMemoryTombstone, snapshotAdvancePersistedTombstone, snapshotAdvanceMixedTombstones} {
+		t.Run(map[snapshotAdvanceTombstoneMode]string{snapshotAdvanceInMemoryTombstone: "in-memory", snapshotAdvancePersistedTombstone: "persisted", snapshotAdvanceMixedTombstones: "mixed"}[mode], func(t *testing.T) {
 			h := newSnapshotAdvanceHarness(t, mode)
 			defer h.close()
 			replacements := batch.NewWithSize(1)
@@ -446,7 +466,22 @@ func TestRCLineageSnapshotPreservesUniqueReplacements(t *testing.T) {
 			replacements.SetRowCount(len(h.deletedPKs))
 			require.NoError(t, testutil.WriteToRelation(h.ctx, h.txn, h.rel, replacements, false, true))
 			require.Equal(t, len(h.deletedPKs), h.countRows(h.txn, h.rel))
+
+			// Fail a second relation lookup during the same mixed transfer. This
+			// proves successful resolution is reused, rather than just prefilled.
+			if mode == snapshotAdvanceMixedTombstones {
+				fault.Enable()
+				defer fault.Disable()
+				require.NoError(t, fault.AddFaultPoint(h.ctx,
+					objectio.FJ_CNReenterSnapshotOffsetOnGetTable, "2:::", "echo", 0, "", false))
+				defer fault.RemoveFaultPoint(h.ctx, objectio.FJ_CNReenterSnapshotOffsetOnGetTable)
+			}
 			h.flushAndAdvance()
+			if mode == snapshotAdvanceMixedTombstones {
+				_, err := fault.RemoveFaultPoint(h.ctx, objectio.FJ_CNReenterSnapshotOffsetOnGetTable)
+				require.NoError(t, err)
+				fault.Disable()
+			}
 			assertKeys := func() {
 				require.Equal(t, len(h.deletedPKs), h.countRows(h.txn, h.rel))
 				rows := h.collectDeletes(h.txn, h.rel, len(h.deletedPKs))
@@ -464,6 +499,89 @@ func TestRCLineageSnapshotPreservesUniqueReplacements(t *testing.T) {
 			require.NoError(t, err)
 			h.txn, h.rel = txn, rel
 			assertKeys()
+		})
+	}
+}
+
+type failTransferReadFS struct {
+	fileservice.FileService
+	armed       atomic.Bool
+	fired       atomic.Bool
+	failure     error
+	readStarted chan struct{}
+}
+
+func (f *failTransferReadFS) Read(ctx context.Context, v *fileservice.IOVector) error {
+	// The tombstone source requests Rowid and PK together after flow construction;
+	// coarse filtering reads a single metadata extent.
+	if len(v.Entries) > 1 && f.armed.Swap(false) {
+		f.fired.Store(true)
+		if f.readStarted != nil {
+			close(f.readStarted)
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		return f.failure
+	}
+	return f.FileService.Read(ctx, v)
+}
+func TestTransferPartialIORecovery(t *testing.T) {
+	for _, canceled := range []bool{false, true} {
+		name := "read failure"
+		if canceled {
+			name = "canceled read"
+		}
+		t.Run(name, func(t *testing.T) {
+			h := newSnapshotAdvanceHarness(t, snapshotAdvanceMixedTombstones)
+			defer h.close()
+			ws := h.txn.GetWorkspace()
+			ws.StartStatement()
+			require.NoError(t, ws.IncrStatementID(h.ctx, false))
+			require.NoError(t, h.pack.T.GetDB().FlushTable(h.ctx, catalog.System_Account, h.rel.GetDBID(h.ctx), h.rel.GetTableID(h.ctx), types.TimestampToTS(h.pack.D.Now())))
+			proc := h.rel.GetProcess().(*process.Process)
+			original := proc.GetFileService()
+			defer proc.SetFileService(original)
+			fs, err := fileservice.Get[fileservice.FileService](original, defines.SharedFileServiceName)
+			require.NoError(t, err)
+			var failure error = errors.New("injected persisted transfer read failure")
+			ctx, cancel := context.WithCancel(h.ctx)
+			defer cancel()
+			if canceled {
+				failure = context.Canceled
+			}
+			wrapped := &failTransferReadFS{FileService: fs, failure: failure}
+			if canceled {
+				wrapped.readStarted = make(chan struct{})
+				done := make(chan struct{})
+				go func() {
+					defer close(done)
+					select {
+					case <-wrapped.readStarted:
+						cancel()
+					case <-ctx.Done():
+					}
+				}()
+				defer func() { cancel(); <-done }()
+			}
+			wrapped.armed.Store(true)
+			proc.SetFileService(wrapped)
+			snapshot := h.txn.SnapshotTS()
+			before := proc.Mp().CurrNB()
+			_, err = databranchutils.AdvanceLineageSnapshot(ctx, h.txn)
+			require.True(t, snapshot.Less(h.txn.SnapshotTS()), "failure occurs after snapshot advancement")
+			require.True(t, wrapped.fired.Load(), "must reach constructed flow source IO")
+			require.Equal(t, before, proc.Mp().CurrNB(), "failed flow must release transient batch memory")
+			require.ErrorIs(t, err, failure)
+			require.Equal(t, 5, h.countRows(h.txn, h.rel), "memory deletes have moved, persisted deletes have not")
+			require.NoError(t, ws.RollbackLastStatement(h.ctx))
+			ws.EndStatement()
+			require.NoError(t, h.txn.Commit(h.ctx))
+			h.txn = nil
+			_, rel, txn, err := h.pack.D.GetTable(h.ctx, "db1", "test1")
+			require.NoError(t, err)
+			h.txn, h.rel = txn, rel
+			require.Zero(t, h.countRows(txn, rel), "both halves must persist after immediate COMMIT")
+
 		})
 	}
 }
