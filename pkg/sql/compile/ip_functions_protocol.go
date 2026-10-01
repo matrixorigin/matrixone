@@ -19,36 +19,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
-
-// constrainIPFunctionWorkers keeps expression contracts that changed after
-// the current rolling-upgrade fence on compatible workers. The capability
-// probe is performed once per compile and has no per-row execution cost.
-func (c *Compile) constrainIPFunctionWorkers(qry *plan.Query) error {
-	if c.execType != plan2.ExecTypeAP_MULTICN {
-		return nil
-	}
-	features, err := plan.RequiredRemoteExpressionFeatures(qry)
-	if err != nil || (!features.IPFunctionSemantics &&
-		!features.TOBase64ResultContracts && !features.IPFunctionResultContracts &&
-		!features.ExpressionResultMetadataContracts && !features.JSONInputContracts && !features.YearBitCast && !features.JSONScalarLiteralContracts) {
-		return err
-	}
-	required := requiredExpressionContractProtocolVersion(features)
-	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, required)
-	if err != nil {
-		return err
-	}
-	if supported {
-		return nil
-	}
-	c.execType = plan2.ExecTypeAP_ONECN
-	c.cnList, err = c.scheduleQueryWorkers()
-	return err
-}
 
 // validateIPFunctionDestination rechecks the actual serialized destination at
 // send time. A worker can be downgraded or replaced after compile-time

@@ -148,11 +148,36 @@ set enable_vector_auto_mode_by_default = 1;
 select id from t_phase6 where filter_col = 1 order by l2_distance(vec, '[0,0,0]') limit 1;
 ➤ id[4,32,0]  𝄀
 999
+select id from t_phase6 where filter_col = 1 order by l2_distance(vec, '[0,0,0]') limit 1;
+➤ id[4,32,0]  𝄀
+999
 select id from t_phase6 where filter_col = 1 order by l2_distance(vec, '[0,0,0]') limit 1 by rank with option 'mode=post';
 ➤ id[4,32,0]
 set enable_vector_auto_mode_by_default = 0;
 select id from t_phase6 where filter_col = 1 order by l2_distance(vec, '[0,0,0]') limit 1;
 ➤ id[4,32,0]
+select id from t_phase6 where filter_col = 1 order by l2_distance(vec, '[0,0,0]') limit 1;
+➤ id[4,32,0]
+set @vector_filter = 1;
+set enable_vector_auto_mode_by_default = 1;
+prepare vector_default_modes from 'select id from t_phase6 where filter_col = ? order by l2_distance(vec, ''[0,0,0]'') limit 1';
+execute vector_default_modes using @vector_filter;
+➤ id[4,32,0]  𝄀
+999
+execute vector_default_modes using @vector_filter;
+➤ id[4,32,0]  𝄀
+999
+set enable_vector_auto_mode_by_default = 0;
+execute vector_default_modes using @vector_filter;
+➤ id[4,32,0]
+execute vector_default_modes using @vector_filter;
+➤ id[4,32,0]
+set enable_vector_auto_mode_by_default = 1;
+execute vector_default_modes using @vector_filter;
+➤ id[4,32,0]  𝄀
+999
+deallocate prepare vector_default_modes;
+set enable_vector_auto_mode_by_default = 0;
 drop table if exists t_bit_pk_retry;
 create table t_bit_pk_retry(id bit(16) primary key, selected int, vec vecf32(2));
 insert into t_bit_pk_retry

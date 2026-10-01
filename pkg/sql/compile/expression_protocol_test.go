@@ -20,9 +20,13 @@ import (
 	"testing"
 
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -30,6 +34,7 @@ import (
 type expressionVersionClient struct {
 	fakeQueryClient
 	version         int64
+	versions        map[string]int64
 	calls, releases int
 	customResponse  bool
 	response        *query.Response
@@ -39,7 +44,7 @@ type expressionVersionClient struct {
 func (c *expressionVersionClient) NewRequest(m query.CmdMethod) *query.Request {
 	return &query.Request{CmdMethod: m}
 }
-func (c *expressionVersionClient) SendMessage(ctx context.Context, _ string, _ *query.Request) (*query.Response, error) {
+func (c *expressionVersionClient) SendMessage(ctx context.Context, addr string, _ *query.Request) (*query.Response, error) {
 	c.calls++
 	if c.customResponse {
 		return c.response, c.sendErr
@@ -47,7 +52,11 @@ func (c *expressionVersionClient) SendMessage(ctx context.Context, _ string, _ *
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return &query.Response{GetProtocolVersion: &query.GetProtocolVersionResponse{Version: c.version}}, nil
+	version := c.version
+	if c.versions != nil {
+		version = c.versions[addr]
+	}
+	return &query.Response{GetProtocolVersion: &query.GetProtocolVersionResponse{Version: version}}, nil
 }
 func (c *expressionVersionClient) Release(*query.Response) { c.releases++ }
 func expressionProtocolTestCompile(t *testing.T) (*Compile, *expressionVersionClient) {
@@ -135,4 +144,78 @@ func TestExpressionProtocolFailedResponsesAreReleased(t *testing.T) {
 			require.Equal(t, want, client.releases)
 		})
 	}
+}
+
+func TestRemoteExpressionPlacementRechecksGenerationAndWorkers(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	ip, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "inet_aton", []*planpb.Expr{{
+		Typ:  planpb.Type{Id: int32(types.T_varchar)},
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
+	}})
+	require.NoError(t, err)
+	qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{
+		ip, decimalDivisionProtocolExpr(types.T_decimal128),
+	}}}, Steps: []int32{0}}
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	cluster, _ := rt.GetGlobalVariables(moruntime.ClusterService)
+	cluster.(*schedulerTestCluster).cns = append(cluster.(*schedulerTestCluster).cns,
+		metadata.CNService{ServiceID: "second-worker", QueryAddress: "second:9000", PipelineServiceAddress: "second:6001"})
+	workers := engine.Nodes{
+		{Id: "old-worker", Addr: "remote:6001", Mcpu: 4},
+		{Id: "second-worker", Addr: "second:6001", Mcpu: 4},
+	}
+	client.versions = map[string]int64{"worker:9000": defines.MORPCVersion97, "second:9000": defines.MORPCVersion96}
+	place := func(want plan2.ExecType, probes int) {
+		t.Helper()
+		c.execType = plan2.ExecTypeAP_MULTICN
+		c.cnList = workers
+		calls, releases := client.calls, client.releases
+		require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
+		require.Equal(t, want, c.execType)
+		require.Equal(t, probes, client.calls-calls)
+		require.Equal(t, probes, client.releases-releases)
+		if want == plan2.ExecTypeAP_ONECN {
+			require.Len(t, c.cnList, 1)
+			require.Equal(t, c.addr, c.cnList[0].Addr)
+		}
+	}
+	// The lower-version feature succeeds on both workers, but DIV still
+	// requires v97 on the second. One probe per worker proves both floors.
+	place(plan2.ExecTypeAP_ONECN, 2)
+	client.versions["second:9000"] = defines.MORPCVersion97
+	place(plan2.ExecTypeAP_MULTICN, 2)
+	// Mutating the same query and reusing Compile must recompute its floor.
+	qry.Nodes[0].ProjectList = []*planpb.Expr{ip}
+	client.versions["second:9000"] = defines.MORPCVersion72
+	place(plan2.ExecTypeAP_MULTICN, 2)
+	client.versions["second:9000"] = defines.MORPCVersion71
+	place(plan2.ExecTypeAP_ONECN, 2)
+	qry.Nodes[0].ProjectList = []*planpb.Expr{plan2.MakePlan2Int64ConstExprWithType(1)}
+	place(plan2.ExecTypeAP_MULTICN, 0)
+}
+
+func TestRemoteExpressionPlacementLocalRebindAndErrors(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	legacy := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.TO_INTERVAL, 0)},
+	}}}
+	qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{legacy}}}}
+	for _, kind := range []plan2.ExecType{plan2.ExecTypeTP, plan2.ExecTypeAP_ONECN, plan2.ExecTypeAP_MULTICN} {
+		c.execType = kind
+		require.ErrorContains(t, c.constrainRemoteExpressionWorkers(qry), "legacy interval")
+		require.Equal(t, kind, c.execType)
+	}
+	malformed := integerProtocolExpr(function.IntegerArgumentCastOverload)
+	malformed.GetF().Args = nil
+	qry.Nodes[0].ProjectList = []*planpb.Expr{malformed}
+	require.ErrorContains(t, c.constrainRemoteExpressionWorkers(qry), "CAST arity")
+	require.Zero(t, client.calls)
+	qry.Nodes[0].ProjectList = []*planpb.Expr{decimalDivisionProtocolExpr(types.T_decimal128)}
+	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001"}}
+	ctx, cancel := context.WithCancel(c.proc.Ctx)
+	cancel()
+	c.proc.Ctx = ctx
+	require.ErrorIs(t, c.constrainRemoteExpressionWorkers(qry), context.Canceled)
+	require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
+	require.Zero(t, client.calls)
 }

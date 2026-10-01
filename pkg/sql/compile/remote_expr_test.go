@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1673,4 +1674,49 @@ func makeTestConstBoolExpr(v bool) *plan.Expr {
 			},
 		},
 	}
+}
+
+// Reflection must inspect expression owners without boxing unrelated mutable
+// state. Interface() on a struct copies private fields, even if field traversal
+// would otherwise skip them.
+func TestVarExprTraversalDoesNotCopySharedPrivateState(t *testing.T) {
+	shared := &struct {
+		privateCounter int
+		Expr           *plan.Expr
+	}{Expr: makeTestConstBoolExpr(true)}
+	owner := &struct{ State any }{State: shared}
+	started, stop, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		shared.privateCounter++
+		close(started)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				shared.privateCounter++
+			}
+		}
+	}()
+	<-started
+	func() {
+		defer func() { close(stop); <-done }()
+		for i := 0; i < 1000; i++ {
+			require.False(t, containsVarExprInValue(reflect.ValueOf(owner), nil))
+			folded, err := foldVarExprsInValue(reflect.ValueOf(owner), nil, nil)
+			require.NoError(t, err)
+			require.False(t, folded)
+		}
+	}()
+	// Skipping a non-getter's boxing must still traverse its exported Expr.
+	shared.Expr = makeTestVarExpr("sql_mode")
+	require.True(t, containsVarExprInValue(reflect.ValueOf(owner), nil))
+	folded, err := foldVarExprsInValue(reflect.ValueOf(owner), nil, newResolveVariableProcess(t, "ANSI"))
+	require.NoError(t, err)
+	require.True(t, folded)
+	require.Equal(t, "ANSI", owner.State.(*struct {
+		privateCounter int
+		Expr           *plan.Expr
+	}).Expr.GetLit().GetSval())
 }
