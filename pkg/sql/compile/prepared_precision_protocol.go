@@ -18,33 +18,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
-
-// Old CNs execute the same private CAST identity but lose the scalar property
-// required by CEIL/FLOOR. Keep these plans on the coordinator during rollout.
-func (c *Compile) constrainPreparedPrecisionWorkers(qry *plan.Query) error {
-	if c.execType != plan2.ExecTypeAP_MULTICN {
-		return nil
-	}
-	features, err := plan.RequiredRemoteExpressionFeatures(qry)
-	if err != nil || !features.PreparedPrecisionScalar {
-		return err
-	}
-	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion95)
-	if err != nil {
-		return err
-	}
-	if supported {
-		return nil
-	}
-	c.execType = plan2.ExecTypeAP_ONECN
-	c.cnList, err = c.scheduleQueryWorkers()
-	return err
-}
 
 func validatePreparedPrecisionDestination(proc *process.Process, p *pipeline.Pipeline) error {
 	if p == nil || p.Node == nil {

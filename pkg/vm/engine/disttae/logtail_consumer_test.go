@@ -3573,3 +3573,16 @@ func TestIsSubscribed_StateChangeAfterCheck(t *testing.T) {
 	assert.True(t, trueCount >= 10, "should have successful reads")
 	assert.True(t, falseCount > 0, "should observe non-subscribed states as well")
 }
+
+func TestWaitCanServeTableSnapshotCancellation(t *testing.T) {
+	ps := logtailreplay.NewPartitionState("test", false, 42, false)
+	ps.UpdateDuration(types.TS{}, types.MaxTs())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var client PushClient
+	state, ready, err := client.waitCanServeTableSnapshot(ctx, 0, 10, 42, ps, true,
+		timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 1})
+	require.ErrorIs(t, err, context.Canceled)
+	require.False(t, ready)
+	require.Nil(t, state, "cancellation cannot admit a stale pre-apply snapshot")
+}
