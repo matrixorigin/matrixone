@@ -180,10 +180,16 @@ func TruncateLatinToken(bs []byte) []byte {
 func outputLatin(st *simpleState, pos int, yield func(Token, error) bool) {
 	bs := TruncateLatinToken(st.input[st.begin:pos])
 
-	ls := strings.ToLower(string(bs))
+	// Case folding can EXPAND a Latin run -- U+023A is 2 bytes, its lowercase U+2C65
+	// is 3 -- so the lowered form can exceed MAX_TOKEN_SIZE even when the original
+	// bytes fit. Re-apply the cap to the folded bytes on the same byte-boundary rule,
+	// so TokenBytes[0] never claims more than the fixed buffer holds. Without this, a
+	// quoted BOOLEAN phrase of 8x U+023A folded to 24 bytes, stored length 24, and
+	// panicked when a reader sliced TokenBytes[1:25] from the 24-byte array (#29271 P2).
+	ls := TruncateLatinToken([]byte(strings.ToLower(string(bs))))
 	token := Token{}
 	token.TokenBytes[0] = byte(len(ls))
-	copy(token.TokenBytes[1:], []byte(ls))
+	copy(token.TokenBytes[1:], ls)
 	token.TokenPos = st.currTokenPos
 	token.BytePos = int32(st.begin)
 	token.OrigLen = int32(pos - st.begin)

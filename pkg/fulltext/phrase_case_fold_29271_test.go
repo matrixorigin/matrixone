@@ -127,6 +127,12 @@ func TestBooleanPhraseCaseFoldExactPositions29271(t *testing.T) {
 		{pattern: `"Ⱥb中"`, expect: "(phrase (text 0 0 ⱥb) (* 1 3 中*))"},
 		// Standalone single Latin phrase: exact word (not a prefix), so it does not false-match ⱥbc.
 		{pattern: `"Ⱥ"`, expect: "(phrase (text 0 0 ⱥ))"},
+		// Capacity: U+023A folds to a 3-byte rune, so 8×Ⱥ (16 input bytes, fits) folds to 24 bytes and
+		// must be re-capped to the 7-rune (21-byte) token the fixed buffer holds -- it previously stored
+		// length 24 and panicked on TokenBytes[1:25] (#29271 P2). 7×Ⱥ folds to exactly 21 bytes and is
+		// the boundary control; both decompose to the same stored token and neither panics.
+		{pattern: `"` + strings.Repeat("Ⱥ", 8) + `"`, expect: "(phrase (text 0 0 " + strings.Repeat("ⱥ", 7) + "))"},
+		{pattern: `"` + strings.Repeat("Ⱥ", 7) + `"`, expect: "(phrase (text 0 0 " + strings.Repeat("ⱥ", 7) + "))"},
 	}
 	for _, c := range cases {
 		got, err := PatternToStringWithPosition(c.pattern, int64(tree.FULLTEXT_BOOLEAN))

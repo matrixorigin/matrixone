@@ -75,6 +75,14 @@ select id from ft where match(body) against('"Ⱥ中"' in boolean mode) order by 
 -- the longer Latin word in row 16 (Ⱥbc -> ⱥbc) must NOT match.
 select id from ft where match(body) against('"Ⱥ"' in boolean mode) order by id;
 
+-- #29271 P2 (capacity): U+023A folds to a 3-byte rune, so a quoted phrase of 8×Ⱥ (16 input bytes, which
+-- fit before folding) folds to 24 bytes. The tokenizer must re-cap it to the 7-rune (21-byte) token the
+-- fixed buffer holds instead of storing length 24 and panicking (slice bounds out of range [:25] with
+-- length 24). No row holds that token, so it matches nothing -- the point is the query returns cleanly
+-- rather than erroring 20101. 7×Ⱥ folds to exactly 21 bytes and is the boundary control.
+select id from ft where match(body) against('"ȺȺȺȺȺȺȺȺ"' in boolean mode) order by id;
+select id from ft where match(body) against('"ȺȺȺȺȺȺȺ"' in boolean mode) order by id;
+
 -- controls: the unquoted natural-language and +boolean forms already matched and are unchanged.
 select id from ft where match(body) against('苹果香蕉' in natural language mode) order by id;
 select id from ft where match(body) against('+苹果香蕉' in boolean mode) order by id;

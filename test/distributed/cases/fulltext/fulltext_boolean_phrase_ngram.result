@@ -69,6 +69,10 @@ select id from ft where match(body) against('"Ⱥ"' in boolean mode) order by id;
 14  𝄀
 15  𝄀
 17
+select id from ft where match(body) against('"ȺȺȺȺȺȺȺȺ"' in boolean mode) order by id;
+➤ id[4,32,0]
+select id from ft where match(body) against('"ȺȺȺȺȺȺȺ"' in boolean mode) order by id;
+➤ id[4,32,0]
 select id from ft where match(body) against('苹果香蕉' in natural language mode) order by id;
 ➤ id[4,32,0]  𝄀
 1
