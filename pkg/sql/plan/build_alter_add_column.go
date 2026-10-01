@@ -297,7 +297,7 @@ func checkPrimaryKeyPartType(ctx context.Context, colType plan.Type, columnName 
 	if colType.GetId() == int32(types.T_json) {
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("JSON column '%s' cannot be in primary key", columnName))
 	}
-	if types.T(colType.GetId()).IsVectorType() {
+	if types.T(colType.GetId()).IsArray() {
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("VECTOR column '%s' cannot be in primary key", columnName))
 	}
 	if isSetPlanType(&colType) {

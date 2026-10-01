@@ -5049,7 +5049,7 @@ func validateVectorBinary(
 			if arrayElementSize > 0 && payloadLen%uint32(arrayElementSize) != 0 {
 				return moerr.NewInvalidInputNoCtx("invalid vector array payload size")
 			}
-			if typ.Oid.IsBlockScaledVector() {
+			if typ.Oid.IsBlockScaledArray() {
 				if _, err := types.ParseBlockScaledCell(values[i].GetByteSlice(area)); err != nil {
 					return err
 				}

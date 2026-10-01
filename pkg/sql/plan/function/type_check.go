@@ -133,7 +133,7 @@ func fixedTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
 // promoteBlockScaledVector maps vecf8/vecf4 to vecf32 of the same dimension; arithmetic
 // on them runs as vecf32 (no native arithmetic, like the scalar float8/float4).
 func promoteBlockScaledVector(t types.Type) (types.Type, bool) {
-	if t.Oid.IsBlockScaledVector() {
+	if t.Oid.IsBlockScaledArray() {
 		return types.New(types.T_array_float32, t.Width, 0), true
 	}
 	return t, false

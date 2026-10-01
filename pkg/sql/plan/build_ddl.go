@@ -3431,7 +3431,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					if colType.GetId() == int32(types.T_json) {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in primary key", colNameOrigin))
 					}
-					if types.T(colType.GetId()).IsVectorType() {
+					if types.T(colType.GetId()).IsArray() {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("VECTOR column '%s' cannot be in primary key", colNameOrigin))
 					}
 					if isSetPlanType(&colType) {
@@ -8126,7 +8126,7 @@ func validateAndSetHivePartitionOptions(ctx context.Context, stmt *tree.CreateTa
 			return moerr.NewBadConfigf(ctx, "partition column '%s' cannot be a generated column", pc)
 		}
 		typId := types.T(col.Typ.Id)
-		if typId.IsVectorType() {
+		if typId.IsArray() {
 			// IsArrayRelate covers all six vector types: a vector can never
 			// round-trip through a `col=value` path component, so the rejection
 			// applies to the narrow types exactly as it does to vecf32/vecf64.

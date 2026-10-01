@@ -25,7 +25,7 @@ import (
 
 // setVecBlockOperand points o at a vecf8/vecf4 cell or a vecf32 array.
 func setVecBlockOperand(o *metric.VecBlockOperand, oid types.T, v []byte) error {
-	if !oid.IsBlockScaledVector() {
+	if !oid.IsBlockScaledArray() {
 		o.Cell, o.F32 = types.BlockScaledCell{}, types.BytesToArray[float32](v)
 		return nil
 	}

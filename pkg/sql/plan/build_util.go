@@ -233,7 +233,7 @@ func getTypeFromAstWithoutCharset(ctx context.Context, typ tree.ResolvableTypeRe
 				// create table t1(a char) -> DisplayWith = -1；but get width=1 in MySQL and PgSQL
 				if fstr == "char" || fstr == "binary" {
 					width = 1
-				} else if _, isVec := types.VectorTypeBySQLName(fstr); isVec {
+				} else if _, isVec := types.ArrayTypeBySQLName(fstr); isVec {
 					width = types.MaxArrayDimension
 				} else {
 					width = types.MaxVarcharLen
@@ -244,7 +244,7 @@ func getTypeFromAstWithoutCharset(ctx context.Context, typ tree.ResolvableTypeRe
 				return plan.Type{}, moerr.NewOutOfRangef(ctx, fstr, " typeLen is over the MaxCharLen: %v", types.MaxCharLen)
 			} else if (fstr == "varchar" || fstr == "varbinary") && width > types.MaxVarcharLen {
 				return plan.Type{}, moerr.NewOutOfRangef(ctx, fstr, " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
-			} else if _, isVec := types.VectorTypeBySQLName(fstr); isVec {
+			} else if _, isVec := types.ArrayTypeBySQLName(fstr); isVec {
 				if width > types.MaxArrayDimension {
 					return plan.Type{}, moerr.NewOutOfRangef(ctx, fstr, " typeLen is over the MaxVectorLen : %v", types.MaxArrayDimension)
 				}
@@ -260,7 +260,7 @@ func getTypeFromAstWithoutCharset(ctx context.Context, typ tree.ResolvableTypeRe
 			case "varchar":
 				return plan.Type{Id: int32(types.T_varchar), Width: width}, nil
 			}
-			if vecType, isVec := types.VectorTypeBySQLName(fstr); isVec {
+			if vecType, isVec := types.ArrayTypeBySQLName(fstr); isVec {
 				return plan.Type{Id: int32(vecType), Width: width}, nil
 			}
 			// varbinary
@@ -2081,7 +2081,7 @@ func (builder *QueryBuilder) applyGeneratedColumnAssignmentCast(expr *plan.Expr,
 		return expr, nil
 	}
 	f := expr.GetF()
-	if types.T(expr.Typ.Id).IsVectorType() && needsSameTypeAssignmentCast(expr.Typ) {
+	if types.T(expr.Typ.Id).IsArray() && needsSameTypeAssignmentCast(expr.Typ) {
 		// 旧目录中的生成列表达式可能没有赋值 CAST；执行新 DML 时补齐，
 		// 已有的根 CAST 则继续复用，避免重复复制每个向量。
 		if f != nil && f.Func != nil && f.Func.ObjName == "cast" {

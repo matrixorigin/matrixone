@@ -201,7 +201,7 @@ func checkChangeTypeCompatible(
 	// old dimension: a mixed-dimension column that breaks distance queries and HNSW/IVFFLAT index
 	// construction (#28917). Reject any vector dimension change here, at validation, BEFORE the
 	// copy runs, rather than relying on the per-row cast guard to fail mid-copy.
-	if types.T(origin.Id).IsVectorType() && types.T(to.Id).IsVectorType() && origin.Width != to.Width {
+	if types.T(origin.Id).IsArray() && types.T(to.Id).IsArray() && origin.Width != to.Width {
 		return moerr.NewNotSupportedf(ctx,
 			"change vector dimension from %d to %d", origin.Width, to.Width)
 	}

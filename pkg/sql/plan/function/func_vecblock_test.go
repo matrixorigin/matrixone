@@ -151,7 +151,7 @@ func runVecBlockFn(t *testing.T, op executeLogicOfOverload, rt types.Type, args 
 
 func vecBlockRowFloat32(t *testing.T, v *vector.Vector, i int) []float32 {
 	t.Helper()
-	if !v.GetType().Oid.IsBlockScaledVector() {
+	if !v.GetType().Oid.IsBlockScaledArray() {
 		return vector.GetArrayAt[float32](v, i)
 	}
 	d, err := types.BlockScaledToFloat32(v.GetBytesAt(i))

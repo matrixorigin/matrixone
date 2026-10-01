@@ -126,7 +126,7 @@ func TestCheckVectorPrimaryKeyPartTypes(t *testing.T) {
 		types.T_array_int8, types.T_array_uint8,
 		types.T_array_float8, types.T_array_float4,
 	} {
-		require.True(t, id.IsVectorType(), "%s should be a vector type", id)
+		require.True(t, id.IsArray(), "%s should be a vector type", id)
 		err := checkPrimaryKeyPartType(context.Background(), plan.Type{Id: int32(id)}, "v")
 		require.Error(t, err, "type %s must be rejected in primary key", id)
 		require.Contains(t, err.Error(), "VECTOR column 'v' cannot be in primary key")

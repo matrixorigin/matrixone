@@ -327,7 +327,7 @@ func TestUE4M3ScaleForIsMinimal(t *testing.T) {
 	}
 }
 
-func TestBlockScaledVectorTypes(t *testing.T) {
+func TestBlockScaledArrayTypes(t *testing.T) {
 	for _, tc := range []struct {
 		oid     T
 		sqlName string
@@ -345,8 +345,8 @@ func TestBlockScaledVectorTypes(t *testing.T) {
 		require.Equal(t, -24, tc.oid.FixedLength())
 		require.False(t, tc.oid.IsFixedLen())
 
-		require.True(t, tc.oid.IsBlockScaledVector())
-		require.True(t, tc.oid.IsVectorType())
+		require.True(t, tc.oid.IsBlockScaledArray())
+		require.True(t, tc.oid.IsArray())
 		require.False(t, tc.oid.IsArrayRelate())
 		f, ok := tc.oid.BlockScaledFormat()
 		require.True(t, ok)
@@ -370,12 +370,12 @@ func TestBlockScaledVectorTypes(t *testing.T) {
 	require.Equal(t, 588, New(T_array_float4, 1024, 0).ArrayCellBytes())
 }
 
-func TestVectorTypePredicates(t *testing.T) {
+func TestArrayTypePredicates(t *testing.T) {
 	fixed := []T{T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8}
 	for _, oid := range fixed {
 		require.True(t, oid.IsArrayRelate(), oid.String())
-		require.True(t, oid.IsVectorType(), oid.String())
-		require.False(t, oid.IsBlockScaledVector(), oid.String())
+		require.True(t, oid.IsArray(), oid.String())
+		require.False(t, oid.IsBlockScaledArray(), oid.String())
 		_, ok := oid.BlockScaledFormat()
 		require.False(t, ok)
 		typ := New(oid, 10, 0)
@@ -383,20 +383,20 @@ func TestVectorTypePredicates(t *testing.T) {
 	}
 	for _, oid := range []T{T_float32, T_float8, T_float4, T_varchar, T_json, T_int64} {
 		require.False(t, oid.IsArrayRelate(), oid.String())
-		require.False(t, oid.IsVectorType(), oid.String())
-		require.False(t, oid.IsBlockScaledVector(), oid.String())
+		require.False(t, oid.IsArray(), oid.String())
+		require.False(t, oid.IsBlockScaledArray(), oid.String())
 	}
 }
 
-func TestVectorTypeBySQLName(t *testing.T) {
+func TestArrayTypeBySQLName(t *testing.T) {
 	for _, oid := range []T{T_array_float32, T_array_float64, T_array_bf16, T_array_float16,
 		T_array_int8, T_array_uint8, T_array_float8, T_array_float4} {
-		got, ok := VectorTypeBySQLName(oid.ArraySQLName())
+		got, ok := ArrayTypeBySQLName(oid.ArraySQLName())
 		require.True(t, ok, oid.String())
 		require.Equal(t, oid, got)
 	}
 	for _, name := range []string{"", "vecf2", "VECF8", "varchar", "float8"} {
-		_, ok := VectorTypeBySQLName(name)
+		_, ok := ArrayTypeBySQLName(name)
 		require.False(t, ok, name)
 	}
 }

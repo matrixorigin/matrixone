@@ -160,7 +160,7 @@ func (zm ZM) IsString() bool {
 }
 
 func (zm ZM) IsArray() bool {
-	return zm.GetType().IsVectorType()
+	return zm.GetType().IsArray()
 }
 
 func (zm ZM) Valid() bool {

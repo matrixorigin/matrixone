@@ -132,7 +132,7 @@ func GenVectorByVarValueWithAllocation(
 		}
 		return vector.NewConstNullWithAllocation(typ, 1, selection)
 	}
-	if typ.Oid.IsVectorType() {
+	if typ.Oid.IsArray() {
 		value, err := arrayUserVariableValueToBytes(typ, val)
 		if err != nil {
 			return nil, err
@@ -865,7 +865,7 @@ func SetInsertValueString(proc *process.Process, numVal *tree.NumVal, typ *types
 		// hard rejection that would ignore sql_mode.
 		checkWidth := typ.Oid != types.T_char && typ.Oid != types.T_varchar &&
 			typ.Oid != types.T_text && typ.Oid != types.T_datalink &&
-			(typ.Oid != types.T_binary || binaryLiteral) && destLen != 0 && !typ.Oid.IsVectorType()
+			(typ.Oid != types.T_binary || binaryLiteral) && destLen != 0 && !typ.Oid.IsArray()
 		if checkWidth {
 			srcLen := utf8.RuneCountInString(s)
 			if binaryLiteral && (typ.Oid == types.T_binary || typ.Oid == types.T_varbinary) {
@@ -883,7 +883,7 @@ func SetInsertValueString(proc *process.Process, numVal *tree.NumVal, typ *types
 		}
 
 		var v []byte
-		if typ.Oid.IsVectorType() {
+		if typ.Oid.IsArray() {
 			// 与参数绑定共用向量类型解析及固定/动态维度校验。
 			var err error
 			v, err = arrayUserVariableValueToBytes(*typ, s)

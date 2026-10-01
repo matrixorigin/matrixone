@@ -74,7 +74,7 @@ func castToBlockScaled(proc *process.Process, from *vector.Vector, toType types.
 				return moerr.NewInvalidInputNoCtx("vector payload is not aligned to its element size")
 			}
 			arr = types.BytesToArray[float32](v)
-		case fromOid.IsBlockScaledVector():
+		case fromOid.IsBlockScaledArray():
 			c, err := types.ParseBlockScaledCell(v)
 			if err != nil {
 				return err

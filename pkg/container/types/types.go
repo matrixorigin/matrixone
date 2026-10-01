@@ -130,9 +130,9 @@ const (
 	ArrayFloat4SQLName  = "vecf4"
 )
 
-// VectorTypeBySQLName returns the vector type for a lowercase SQL type name
+// ArrayTypeBySQLName returns the T_array_* type for a lowercase SQL type name
 // (e.g. "vecf8" -> T_array_float8).
-func VectorTypeBySQLName(name string) (T, bool) {
+func ArrayTypeBySQLName(name string) (T, bool) {
 	switch name {
 	case ArrayFloat32SQLName:
 		return T_array_float32, true
@@ -751,7 +751,7 @@ func (t Type) DescString() string {
 	return t.Oid.String()
 }
 
-// ArrayCellBytes returns the cell byte length of a vector type of dimension Width.
+// ArrayCellBytes returns the cell byte length of a T_array_* type of dimension Width.
 func (t Type) ArrayCellBytes() int {
 	if f, ok := t.Oid.BlockScaledFormat(); ok {
 		return BlockScaledCellSize(f, int(t.Width))
@@ -1268,14 +1268,14 @@ func (t T) IsArrayRelate() bool {
 	return false
 }
 
-// IsBlockScaledVector reports vecf8/vecf4, whose cell is a vecblock.go cell.
-func (t T) IsBlockScaledVector() bool {
+// IsBlockScaledArray reports vecf8/vecf4, whose cell is a vecblock.go cell.
+func (t T) IsBlockScaledArray() bool {
 	return t == T_array_float8 || t == T_array_float4
 }
 
-// IsVectorType reports every vector column type: IsArrayRelate or IsBlockScaledVector.
-func (t T) IsVectorType() bool {
-	return t.IsArrayRelate() || t.IsBlockScaledVector()
+// IsArray reports every T_array_* type: IsArrayRelate or IsBlockScaledArray.
+func (t T) IsArray() bool {
+	return t.IsArrayRelate() || t.IsBlockScaledArray()
 }
 
 // BlockScaledFormat returns the cell format of vecf8/vecf4.

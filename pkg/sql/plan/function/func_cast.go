@@ -1039,10 +1039,10 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	// vecf8/vecf4 cells are block-scaled, not typed element arrays; route them before
 	// the generic array paths, which decode fixed-size elements. A NULL literal (T_any)
 	// still reaches scalarNullToOthers below.
-	if toType.Oid.IsBlockScaledVector() && fromType.Oid != types.T_any {
+	if toType.Oid.IsBlockScaledArray() && fromType.Oid != types.T_any {
 		return castToBlockScaled(proc, from, *toType, result, length)
 	}
-	if fromType.Oid.IsBlockScaledVector() {
+	if fromType.Oid.IsBlockScaledArray() {
 		return blockScaledToOthers(proc, from, *toType, result, length)
 	}
 	if mode.isAssignment() && toType.Oid.IsInteger() {
