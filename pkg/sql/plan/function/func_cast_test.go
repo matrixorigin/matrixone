@@ -5299,11 +5299,6 @@ func TestMySQLDecimalPrefixExtremeExponents(t *testing.T) {
 		negativeUnderflow = "1e-2147483648tail"
 		zeroMantissa      = "0e2147483648tail"
 	)
-	started := time.Now()
-	require.False(t, mysqlDecimalPrefixOverflows("1", 18, 6))
-	require.False(t, mysqlDecimalPrefixOverflows("1e-1", 18, 6))
-	require.False(t, mysqlDecimalPrefixOverflows("1.25e+1", 18, 6))
-	require.True(t, mysqlDecimalPrefixOverflows("1234567890123e0", 18, 6))
 
 	max64, err := clampDecimal64Value(false, 18, 6)
 	require.NoError(t, err)
@@ -5356,10 +5351,6 @@ func TestMySQLDecimalPrefixExtremeExponents(t *testing.T) {
 		require.Equal(t, want, got)
 	}
 
-	// The old Decimal64/128 path scaled by the wrapped exponent and took about
-	// one second for this matrix. The bounded prefix scan should finish with a
-	// large margin even on a loaded CI worker.
-	require.Less(t, time.Since(started), 250*time.Millisecond)
 }
 
 func TestMySQLDecimalPrefixHalfUpUnderflowBoundary(t *testing.T) {

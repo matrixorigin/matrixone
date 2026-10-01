@@ -113,3 +113,34 @@ progress; no CI success is claimed.
 Implementation, tests and documentation must each justify their additions.
 Prefer existing responsibilities, remove replaced branches and redundant work,
 and test observable behavior and unhappy paths rather than helper structure.
+
+## Post-review correction and validation
+
+F1 now quantizes the complete validated scientific coefficient directly into the
+requested decimal width and scale before physical parsing. Output and arithmetic
+are bounded by the destination precision; the integer normalizer remains an exact
+integer owner. Removed the replaced overflow and underflow parsing branches.
+
+F2 now proves the actual typed, parameter-dependent peer with the existing
+constant evaluator and preserves its executable conversions. The late numeric
+rewrite handles scan filters and JOIN conditions. Its shared singleton projection
+resolver admits only an ordinary PROJECT over the executor's one-row dummy
+VALUE_SCAN, with matching value types and no filtering, limits or expansion.
+The existing runtime-filter and outer-join policy remains responsible for pruning.
+
+QA caught and corrected an intermediate JOIN regression: scanning 20004 rows
+instead of one. The final BVT retains runtime-filter build/probe and the original
+1-block/1-row expectation; only the retained conversion text changed.
+
+Current local evidence: incremental vet/lint (zero issues), full function and
+planner UT, prepared public integration, selected race UT, bounded decimal
+public probes, JOIN rebinding and LEFT/RIGHT/FULL controls passed. Eight BVT
+cases passed twice on one instance, 453/453 each, with fixture cleanup checked.
+The 30000-row flushed single-table decimal/ABS probes read one block/one row
+versus four blocks/30000 rows previously. This is scanned-work evidence, not a
+matched throughput comparison. Final independent review and remote CI remain
+separate delivery gates.
+
+Independent overall review: **APPROVE**, actual `gpt-6.1-sol` / `xhigh`,
+session `01a0f853-da2a-7d62-a00f-763bffd0b158`. All 31 changed files were reviewed against the
+main base with no unresolved material blocker. Remote CI is not certified here.

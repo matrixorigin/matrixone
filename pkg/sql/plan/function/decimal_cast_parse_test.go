@@ -74,22 +74,51 @@ func TestDecimalScientificCastContracts(t *testing.T) {
 				{"1E-2", "0.01"}, {"1e-2", "0.01"}, {"-1E-2", "-0.01"}, {"+1E+2", "100.00"},
 				{"0E2", "0.00"}, {"0E2147483647", "0.00"}, {"1E-2147483647", "0.00"},
 				{"999.99", "999.99"}, {"999.994", "999.99"}, {"999.995", "999.99"},
-				{"-1E10", "-999.99"}, {"1E10", "999.99"}, {"0xFFFFFF", "999.99"},
+				{"-1E10", "-999.99"}, {"1E10", "999.99"}, {"1E2147483647", "999.99"}, {"1E999999999999999999999999999", "999.99"}, {"0E999999999999999999999999999", "0.00"}, {"0xFFFFFF", "999.99"},
 				{"1" + strings.Repeat("0", 80) + "E-80", "1.00"},
+				{"0." + strings.Repeat("0", 80) + "123E81", "1.23"},
+				{"1.234" + strings.Repeat("9", 80) + "E0", "1.23"},
+				{"1.235" + strings.Repeat("0", 80) + "E0", "1.24"},
+				{"-1.235" + strings.Repeat("0", 80) + "E0", "-1.24"},
 			} {
 				got, err := p.parse(tc.input)
 				require.NoError(t, err, tc.input)
 				require.Equal(t, tc.want, got, tc.input)
 			}
-			for _, input := range []string{"1p2", "1P2", "1E", "1E2tail", "0Ebad", "0xGG", "1E2147483647", "0." + strings.Repeat("0", 80) + "123E81", "0." + strings.Repeat("0", 80) + "123Ebad"} {
+			for _, input := range []string{"1p2", "1P2", "1E", "1E2tail", "0Ebad", "0xGG", "0." + strings.Repeat("0", 80) + "123Ebad"} {
 				_, err := p.parse(input)
 				require.Error(t, err, input)
 			}
 		})
 	}
-	// An in-range storage-parser capacity failure is never evidence of overflow.
-	_, err := clampDecimal64CastString("1"+strings.Repeat("0", 80)+"E-80", 5, 2)
+	// Strict conversion rejects genuine overflow and malformed zero.
+	_, err := ParseDecimal64CastString("1E10", 5, 2)
 	require.Error(t, err)
-	_, err = clampDecimal64CastString("0E2", 5, 2)
+	_, err = ParseDecimal64CastString("0Ebad", 5, 2)
 	require.Error(t, err)
+}
+
+func TestDecimalScientificWideValues(t *testing.T) {
+	for _, width := range []int32{38, 65, 76} {
+		parse := func(input string, scale int32) (string, error) {
+			if width == 38 {
+				v, err := ParseExplicitDecimal128CastString(input, width, scale)
+				return v.Format(scale), err
+			}
+			v, err := ParseExplicitDecimal256CastString(input, width, scale)
+			return v.Format(scale), err
+		}
+		for _, value := range []string{"12345678901234567890", "123456789012345678901", strings.Repeat("9", int(width))} {
+			for _, spelling := range []string{value, value + strings.Repeat("0", 80) + "E-80", strings.Repeat("0", 80) + value + "e0"} {
+				for _, sign := range []string{"", "-"} {
+					got, err := parse(sign+spelling, 0)
+					require.NoError(t, err, spelling)
+					require.Equal(t, sign+value, got)
+				}
+			}
+		}
+		got, err := parse("0."+strings.Repeat("9", int(width))+"E0", width)
+		require.NoError(t, err)
+		require.Equal(t, "0."+strings.Repeat("9", int(width)), got)
+	}
 }

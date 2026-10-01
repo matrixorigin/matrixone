@@ -71,10 +71,27 @@ func TestPreparedNumericTemporalContracts(t *testing.T) {
 					require.Equal(t, 1, same)
 				}()
 			}
-			var longFraction string
-			err := conn.QueryRowContext(ctx, "select cast(? as decimal(5,2))", "0."+strings.Repeat("0", 60)+"123E61").Scan(&longFraction)
-			t.Logf("long fractional scientific cast value=%s error=%v", longFraction, err)
-			require.Error(t, err, "unsupported long nonintegral mantissa must not silently become zero")
+			require.Equal(t, "1.23", scalar(t, "select cast(? as decimal(5,2))", "0."+strings.Repeat("0", 60)+"123E61"))
+			exec(t, "create table wide_source(v varchar(128))")
+			const wide = "123456789012345678901"
+			padded := wide + strings.Repeat("0", 80) + "E-80"
+			exec(t, "insert into wide_source values (?)", padded)
+			for _, typ := range []string{"decimal(38,0)", "decimal(65,0)"} {
+				require.Equal(t, wide, scalar(t, "select cast('"+padded+"' as "+typ+")"))
+				require.Equal(t, wide, scalar(t, "select cast(v as "+typ+") from wide_source"))
+				func() {
+					p, err := conn.PrepareContext(ctx, "select cast(? as "+typ+")")
+					require.NoError(t, err)
+					defer p.Close()
+					var value string
+					require.NoError(t, p.QueryRowContext(ctx, padded).Scan(&value))
+					require.Equal(t, wide, value)
+					exec(t, "prepare wide_cast from 'select cast(? as "+typ+")'")
+					defer exec(t, "deallocate prepare wide_cast")
+					exec(t, "set @wide=?", padded)
+					require.Equal(t, wide, scalar(t, "execute wide_cast using @wide"))
+				}()
+			}
 			exec(t, "create table converted(v decimal(5,2))")
 			exec(t, "insert into converted select cast(v as decimal(5,2)) from source")
 			require.Equal(t, "-0.01,0.00,0.01", scalar(t, "select group_concat(v order by v) from converted"))
@@ -128,6 +145,27 @@ func TestPreparedNumericTemporalContracts(t *testing.T) {
 				got, err := readPreparedContractIDs(p.QueryContext(ctx, tc.value))
 				require.NoError(t, err)
 				require.Equal(t, tc.want, got, tc.value)
+			}
+			for _, expression := range []string{"cast(? as decimal(38,0))", "abs(cast(? as decimal(38,0)))", "cast(? as decimal(65,0))+0"} {
+				func() {
+					p, err := conn.PrepareContext(ctx, "select id from keys_t where id="+expression+" order by id")
+					require.NoError(t, err)
+					defer p.Close()
+					for _, tc := range []struct {
+						value any
+						want  []int64
+					}{
+						{"9007199254740993", []int64{target}},
+						{"9007199254740993.5", []int64{target + 1}},
+						{nil, []int64{}},
+						{"9223372036854775808", []int64{}},
+						{"9007199254740993", []int64{target}},
+					} {
+						got, err := readPreparedContractIDs(p.QueryContext(ctx, tc.value))
+						require.NoError(t, err)
+						require.Equal(t, tc.want, got, expression)
+					}
+				}()
 			}
 			// Preserve the existing literal comparison path independently of marker binding.
 			got, err := readPreparedContractIDs(conn.QueryContext(ctx, "select id from keys_t where id='9007199254740993' order by id"))

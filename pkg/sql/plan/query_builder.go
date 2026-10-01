@@ -4035,7 +4035,10 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.skipStats = builder.canSkipStats()
 		builder.rewriteDistinctToAGG(rootID)
 		rootID = builder.rewriteEffectlessAggToProject(rootID)
-		rootID = builder.optimizeFilters(rootID)
+		rootID, err = builder.optimizeFilters(rootID)
+		if err != nil {
+			return nil, err
+		}
 		// WHERE predicates are initially represented by a Filter between AGG
 		// and TABLE_SCAN.  Revisit the proof after filter pushdown so a unique
 		// grouped scan can be eliminated without moving LIMIT below HAVING.
