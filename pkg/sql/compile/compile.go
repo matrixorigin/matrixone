@@ -1440,11 +1440,14 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		v2.TxnStatementCompileQueryHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	c.execType = sequenceExecType(
-		plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare), qry)
+	c.execType = vectorQueryExecType(sequenceExecType(
+		plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare), qry), qry)
 
 	c.cnList, err = c.scheduleQueryWorkers()
 	if err != nil {
+		return nil, err
+	}
+	if err = c.constrainRequiredIVFWorkers(qry); err != nil {
 		return nil, err
 	}
 	if err = c.constrainIntegerDomainWorkers(qry); err != nil {
@@ -1905,7 +1908,11 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		return c.compileLimit(node, []*Scope{rs}), nil
 	}
 
-	if nodeHasLocalRuntimeFilter(node) {
+	qualifiedIVFIndex := false
+	if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_INDEX {
+		_, _, _, qualifiedIVFIndex = plan2.RequiredIVFPlacement(c.pn.GetQuery())
+	}
+	if nodeHasLocalRuntimeFilter(node) || qualifiedIVFIndex {
 		// This is deliberately after the literal LIMIT 0 shortcut. The flat
 		// logical plan retains pruned descendants, while topology validation must
 		// cover only local-filter nodes whose physical subtree was constructed.
@@ -2138,6 +2145,10 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileSort(node, ss)
 		return ss, nil
+	case plan.Node_VECTOR_QUERY_TOP:
+		return c.compileVectorQueryTop(step, node, nodes, curNodeIdx)
+	case plan.Node_VECTOR_QUERY_SOURCE:
+		return c.compileVectorQuerySource(node)
 	case plan.Node_ADAPTIVE_TOP:
 		if len(node.Children) < 2 || len(node.Children) > 3 || node.Limit == nil {
 			return nil, moerr.NewInternalErrorNoCtx("invalid adaptive top plan")
@@ -5473,9 +5484,12 @@ func (c *Compile) compileVectorIndexScan(node *plan.Node) ([]*Scope, error) {
 	if txnOp := c.proc.GetTxnOperator(); txnOp != nil {
 		workspace = txnOp.GetWorkspace()
 	}
+	vectorID, _, _, qualified := plan2.RequiredIVFPlacement(c.pn.GetQuery())
+	required := requiredVectorMembership(node)
+	distributedPRE := required && qualified && vectorID == node.NodeId
 	if c.execType == plan2.ExecTypeAP_MULTICN && len(c.cnList) > 1 &&
 		(workspace == nil || workspace.Readonly()) &&
-		(node.Stats == nil || !node.Stats.ForceOneCN) && !requiredVectorMembership(node) {
+		((node.Stats == nil || !node.Stats.ForceOneCN) && !required || distributedPRE) {
 		nodes = make(engine.Nodes, len(c.cnList))
 		for i := range c.cnList {
 			nodes[i] = engine.Node{
@@ -5486,9 +5500,16 @@ func (c *Compile) compileVectorIndexScan(node *plan.Node) ([]*Scope, error) {
 				CNIDX: int32(i),
 			}
 		}
-		stable, err := remoteWorkersSupportProtocol(c.proc, nodes, defines.MORPCVersion96)
+		version := defines.MORPCVersion96
+		if distributedPRE {
+			version = defines.MORPCVersion103
+		}
+		stable, err := remoteWorkersSupportProtocol(c.proc, nodes, version)
 		if err != nil {
 			return nil, err
+		}
+		if distributedPRE && !stable {
+			return nil, moerr.NewNotSupportedNoCtx("required IVF worker capability changed after placement")
 		}
 		if stable {
 			// Keep the query's coordinator-first list intact for other scans.

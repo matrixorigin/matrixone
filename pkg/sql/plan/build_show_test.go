@@ -326,8 +326,15 @@ func TestShowColumnsTracksTargetDependency(t *testing.T) {
 			p, err := runOneStmt(mock, t, sql)
 			require.NoError(t, err)
 			dependencies := p.GetQuery().GetCatalogDependencies()
-			require.Len(t, dependencies, 1, "SHOW embeds target-specific metadata outside its catalog scans")
-			target := dependencies[0]
+			require.Len(t, dependencies, 3, "retain both catalog scans and SHOW's embedded target metadata")
+			targetIndex := -1
+			for i, dependency := range dependencies {
+				if dependency.SchemaName == "tpch" && dependency.ObjName == "nation" {
+					targetIndex = i
+				}
+			}
+			require.NotEqual(t, -1, targetIndex)
+			target := dependencies[targetIndex]
 			require.Equal(t, "tpch", target.SchemaName)
 			require.Equal(t, "nation", target.ObjName)
 			require.Equal(t, int64(42), target.Db)
@@ -337,7 +344,7 @@ func TestShowColumnsTracksTargetDependency(t *testing.T) {
 
 			copied := DeepCopyPlan(p)
 			require.Equal(t, dependencies, copied.GetQuery().GetCatalogDependencies())
-			require.NotSame(t, target, copied.GetQuery().CatalogDependencies[0])
+			require.NotSame(t, target, copied.GetQuery().CatalogDependencies[targetIndex])
 			data, err := p.Marshal()
 			require.NoError(t, err)
 			var decoded plan.Plan
@@ -353,13 +360,14 @@ func TestShowColumnsTracksTargetDependency(t *testing.T) {
 		p, err := runOneStmt(mock, t, "show columns from v1")
 		require.NoError(t, err)
 		dependencies := p.GetQuery().GetCatalogDependencies()
-		require.Len(t, dependencies, 2)
-		require.ElementsMatch(t, []string{"nation", "v1"}, []string{dependencies[0].ObjName, dependencies[1].ObjName})
+		require.Len(t, dependencies, 3)
+		require.ElementsMatch(t, []string{"mo_tables", "nation", "v1"}, []string{dependencies[0].ObjName, dependencies[1].ObjName, dependencies[2].ObjName})
 	})
 	t.Run("ordinary SELECT keeps scan dependencies", func(t *testing.T) {
 		p, err := runOneStmt(NewMockOptimizer(false), t, "select n_name from nation")
 		require.NoError(t, err)
-		require.Empty(t, p.GetQuery().GetCatalogDependencies())
+		require.Len(t, p.GetQuery().GetCatalogDependencies(), 1)
+		require.Equal(t, "nation", p.GetQuery().CatalogDependencies[0].ObjName)
 	})
 }
 

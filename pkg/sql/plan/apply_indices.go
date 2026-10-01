@@ -732,7 +732,7 @@ func (builder *QueryBuilder) applyVectorIndicesEarly(
 			vecCtx = builder.buildVectorSortContextThroughJoin(node)
 		}
 		if vecCtx == nil {
-			return nodeID, nil
+			return builder.applyScalarVectorIndex(nodeID)
 		}
 		newNodeID, handled, err := builder.applyLogicalVectorIndexForSortContext(nodeID, vecCtx, colRefCnt, idxColMap)
 		if handled || err != nil {
@@ -1025,6 +1025,11 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 		vecCtx := builder.buildVectorSortContext(projNode)
 		if vecCtx == nil {
 			vecCtx = builder.buildVectorSortContextThroughJoin(projNode)
+		}
+		if vecCtx == nil {
+			if rewritten, err := builder.applyScalarVectorIndex(nodeID); err != nil || rewritten != nodeID {
+				return rewritten, err
+			}
 		}
 		if vecCtx != nil {
 			newNodeID, handled, err := builder.applyVectorIndexForSortContext(nodeID, vecCtx, colRefCnt, idxColMap)

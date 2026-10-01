@@ -110,6 +110,18 @@ enum CmdMethod {
   MongoDBClientRetire = 39;
   // RefreshSessionAuth revalidates a cached backend against the current catalog.
   RefreshSessionAuth = 40;
+  // SetVectorIndexFreshnessInterval overrides the vector/fulltext2 index cache's cross-CN
+  // freshness sweep cadence on a CN (sys-admin/test knob; not persisted).
+  SetVectorIndexFreshnessInterval = 41;
+  // GetVectorIndexCacheInfo reports how many vector/fulltext2 index cache entries a CN holds for a
+  // given index key (0 = not cached). Used to observe cross-CN eviction (test/ops).
+  GetVectorIndexCacheInfo = 42;
+  // EvictVectorIndexCache drops a vector/fulltext2 index's cache entries on a CN so the next query
+  // reloads a current generation (sys-admin/test; synchronous).
+  EvictVectorIndexCache = 43;
+  // GetVectorIndexCacheKeys lists the exact cache keys a CN currently holds, so an operator can
+  // discover the key to pass to GetVectorIndexCacheInfo / EvictVectorIndexCache (test/ops).
+  GetVectorIndexCacheKeys = 44;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -168,6 +180,44 @@ message GetProtocolVersionResponse {
 message SetProtocolVersionRequest {
   // ProtocolVersion is the version of the protocol
   int64 Version = 1;
+}
+
+message SetVectorIndexFreshnessIntervalRequest {
+  // IntervalNs is the cross-CN freshness sweep cadence in nanoseconds; <=0 restores the default.
+  int64 IntervalNs = 1;
+}
+
+message SetVectorIndexFreshnessIntervalResponse {
+  // IntervalNs echoes the applied interval in nanoseconds (0 = default restored).
+  int64 IntervalNs = 1;
+}
+
+message GetVectorIndexCacheInfoRequest {
+  // Key is the index (hidden) table name to count cached entries for; empty = all entries.
+  string Key = 1;
+}
+
+message GetVectorIndexCacheInfoResponse {
+  // Count is the number of cached entries this CN holds for Key.
+  int64 Count = 1;
+}
+
+message EvictVectorIndexCacheRequest {
+  // Key is the index (hidden) table name to evict from this CN's cache; empty = all entries.
+  string Key = 1;
+}
+
+message EvictVectorIndexCacheResponse {
+  // Evicted is the number of cache entries this CN dropped for Key.
+  int64 Evicted = 1;
+}
+
+message GetVectorIndexCacheKeysRequest {
+}
+
+message GetVectorIndexCacheKeysResponse {
+  // Keys are the exact cache keys this CN currently holds.
+  repeated string Keys = 1;
 }
 
 message SetProtocolVersionResponse {
@@ -255,6 +305,10 @@ message Request {
   MongoDBClientRetireRequest MongoDBClientRetireRequest = 41 [ (gogoproto.nullable) = false ];
   // RefreshSessionAuthRequest reauthenticates a cached backend for a new login.
   RefreshSessionAuthRequest RefreshSessionAuthRequest = 42;
+  SetVectorIndexFreshnessIntervalRequest SetVectorIndexFreshnessInterval = 43 [ (gogoproto.nullable) = false ];
+  GetVectorIndexCacheInfoRequest GetVectorIndexCacheInfo = 44 [ (gogoproto.nullable) = false ];
+  EvictVectorIndexCacheRequest EvictVectorIndexCache = 45 [ (gogoproto.nullable) = false ];
+  GetVectorIndexCacheKeysRequest GetVectorIndexCacheKeys = 46 [ (gogoproto.nullable) = false ];
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -325,6 +379,10 @@ message Response {
   MongoDBClientRetireResponse MongoDBClientRetireResponse = 42 [ (gogoproto.nullable) = false ];
   // RefreshSessionAuthResponse contains the current authentication string.
   RefreshSessionAuthResponse RefreshSessionAuthResponse = 43;
+  SetVectorIndexFreshnessIntervalResponse SetVectorIndexFreshnessInterval = 44 [ (gogoproto.nullable) = false ];
+  GetVectorIndexCacheInfoResponse GetVectorIndexCacheInfo = 45 [ (gogoproto.nullable) = false ];
+  EvictVectorIndexCacheResponse EvictVectorIndexCache = 46 [ (gogoproto.nullable) = false ];
+  GetVectorIndexCacheKeysResponse GetVectorIndexCacheKeys = 47 [ (gogoproto.nullable) = false ];
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.

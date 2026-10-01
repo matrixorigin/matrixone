@@ -494,20 +494,6 @@ func init() {
 // is non-nil solely so the caller can retain it and retry Close.
 func StartTestCluster(opts ...Option) (Cluster, error) {
 	opts = append([]Option{WithTesting()}, opts...)
-	// Keep every embedded UT cluster on the short test-only readiness cadence.
-	// Shared base clusters already use this callback, but dedicated scenarios
-	// commonly provide their own pre-start adjustment and would otherwise fall
-	// back to the production one-second polling intervals. Apply the cadence
-	// first so an explicit scenario-specific value can still override it.
-	opts = append(opts, func(c *cluster) {
-		preStart := c.options.preStart
-		c.options.preStart = func(svc ServiceOperator) {
-			adjustClusterStartupRetryIntervals(svc)
-			if preStart != nil {
-				preStart(svc)
-			}
-		}
-	})
 	c, err := NewCluster(opts...)
 	if err != nil {
 		return cleanupClusterOnError(c, err)
@@ -561,8 +547,6 @@ func startBasicCluster(
 }
 
 func adjustBasicClusterService(svc ServiceOperator) {
-	adjustClusterStartupRetryIntervals(svc)
-
 	switch svc.ServiceType() {
 	case metadata.ServiceType_CN:
 		svc.Adjust(
@@ -592,14 +576,15 @@ func adjustBasicClusterService(svc ServiceOperator) {
 	}
 }
 
-// adjustClusterStartupRetryIntervals keeps test-only cluster startup
-// responsive while services are converging. These intervals only affect the
-// polling cadence; readiness is still gated by the same HAKeeper state and
-// shard conditions.
-func adjustClusterStartupRetryIntervals(svc ServiceOperator) {
+// adjustTestingClusterStartup applies local test-cluster Raft timing
+// and readiness polling before scenario overrides. Readiness conditions,
+// store liveness, and bootstrap failure budgets are unchanged.
+func adjustTestingClusterStartup(svc ServiceOperator) {
 	switch svc.ServiceType() {
 	case metadata.ServiceType_LOG:
 		svc.Adjust(func(config *ServiceConfig) {
+			// A single local LOG needs no production network RTT allowance.
+			config.LogService.RTTMillisecond = 50
 			config.LogService.HAKeeperBootstrapRetryInterval.Duration =
 				basicClusterHAKeeperBootstrapRetryInterval
 		})

@@ -34,9 +34,6 @@ const (
 	SpillFileServiceName = "__spill"
 )
 
-// MORPCVersion101 gates the cumulative JSON source-domain and functional-index
-// wire capabilities. These features share the same protocol epoch and must be
-// landed as one ordered compatibility set.
 const (
 	MORPCMinVersion    int64 = math.MinInt64
 	MORPCVersion1      int64 = 1
@@ -139,8 +136,11 @@ const (
 	MORPCVersion98     int64 = 98  // canonical FORMAT precision and MAKEDATE/MAKETIME integer signatures
 	MORPCVersion99     int64 = 99  // owner-atomic writer-fair row-lock admission
 	MORPCVersion100    int64 = 100 // on-demand View metadata column descriptions
-	MORPCVersion101    int64 = 101
-	MORPCLatestVersion       = MORPCVersion101
+	MORPCVersion101    int64 = 101 // JSON source domains for CONCAT and JSON_DEPTH
+	MORPCVersion102    int64 = 102 // sys-admin vector-index cache freshness-interval, cache-info, evict, and list-keys ctl
+	MORPCVersion103    int64 = 103 // distributed required IVF PRE domains and CPU centroid routing
+	MORPCVersion104    int64 = 104 // functional-index metadata and generated-key maintenance
+	MORPCLatestVersion       = MORPCVersion104
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

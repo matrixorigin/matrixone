@@ -203,7 +203,7 @@ func lowerFunctionalIndex(ctx CompilerContext, table *TableDef, index *tree.Inde
 			return fail()
 		}
 	}
-	if err := RequirePersistedProtocolVersionForAuthoring(ctx.GetContext(), ctx.GetProcess(), defines.MORPCVersion101); err != nil {
+	if err := RequirePersistedProtocolVersionForAuthoring(ctx.GetContext(), ctx.GetProcess(), defines.MORPCVersion104); err != nil {
 		return nil, err
 	}
 	names := make([]string, len(table.Cols))

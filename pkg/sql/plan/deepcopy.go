@@ -376,6 +376,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		DedupInputKeysUnique:       node.DedupInputKeysUnique,
 		EmitCompressedRowCount:     node.EmitCompressedRowCount,
 		AdaptiveTopFallbackOnEmpty: node.AdaptiveTopFallbackOnEmpty,
+		VectorQuerySourceId:        node.VectorQuerySourceId,
 		SpillMem:                   node.SpillMem,
 		RuntimeFilterProbeList: DeepCopyRuntimeFilterSpecList(
 			node.RuntimeFilterProbeList),

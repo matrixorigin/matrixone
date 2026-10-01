@@ -4023,19 +4023,10 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	lineageTxnOp := c.proc.GetTxnOperator()
 	lineageSnapshotAdvanced := false
 	lineageCloneTS := int64(0)
-	lineageOriginalSnapshot := timestamp.Timestamp{}
-	lineageRestoreSnapshot := false
-	defer func() {
-		if lineageRestoreSnapshot {
-			lineageTxnOp.SetSnapshotTS(lineageOriginalSnapshot)
-		}
-	}()
 	if !isTemp {
 		if shouldAdvanceAlterDataBranchLineageSnapshot(
 			lineageTxnOp.Txn().IsPessimistic(), lineageTxnOp.Txn().IsRCIsolation(),
 		) {
-			lineageOriginalSnapshot = lineageTxnOp.SnapshotTS()
-			lineageRestoreSnapshot = true
 			if lineageCloneTS, err = c.advanceAlterDataBranchLineageSnapshot(); err != nil {
 				return err
 			}
