@@ -15,6 +15,7 @@
 package rule
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -1173,11 +1174,18 @@ func (s *foldWarningSink) GetWarningRetentionLimit() int          { return 0 }
 // EvaluateConstantExpression is shared by binder and optimizer folding. The
 // child borrows the context and memory pool; only the expression result needs
 // freeing. Never mutate the statement's immutable warning destination.
-func EvaluateConstantExpression(proc *process.Process, expr *plan.Expr, bat *batch.Batch) (*vector.Vector, func(), bool, error) {
+func EvaluateConstantExpression(proc *process.Process, expr *plan.Expr, bat *batch.Batch) (vec *vector.Vector, free func(), warned bool, err error) {
 	sink := &foldWarningSink{}
+	// A speculative kernel failure must use the same error channel as a
+	// returned error, so selection can leave an inactive operand unevaluated.
+	defer func() {
+		if failure := recover(); failure != nil {
+			vec, free, warned, err = nil, nil, sink.warned, moerr.ConvertPanicError(proc.Ctx, failure)
+		}
+	}()
 	child := proc.NewNoContextChildProc(0)
 	child.Ctx = proc.Ctx
 	child.WarningSink = sink
-	vec, free, err := colexec.GetReadonlyResultFromExpression(child, expr, []*batch.Batch{bat})
+	vec, free, err = colexec.GetReadonlyResultFromExpression(child, expr, []*batch.Batch{bat})
 	return vec, free, sink.warned, err
 }

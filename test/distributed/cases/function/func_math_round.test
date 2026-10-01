@@ -271,3 +271,111 @@ insert into t1 values (13, 20.89123);
 insert into t1 values (14, 23.40123);
 insert into t1 values (15, 123.45678);
 select a, b, round(b,2) from t1;
+
+
+-- Signed integer nearest rounding, extreme precision, reuse and masked errors.
+drop table t1;
+drop table if exists round_signed_values;
+drop table if exists round_signed_ctas;
+drop table if exists round_mask_digits;
+create table round_signed_values(id int primary key,t tinyint,s smallint,i int,b bigint,d bigint);
+insert into round_signed_values values (1,-1,-1,-1,-1,-1),(2,-5,-5,-5,-5,-1),(3,-10,-10,-10,-10,-1),(4,-11,-11,-11,-11,-1),(5,-15,-15,-15,-15,-1),(6,-20,-20,-20,-20,-2),(7,null,null,null,null,-1),(8,15,15,15,15,0),(9,10,10,10,10,2),(10,-100,-100,-100,-100,-2),(11,-101,-101,-101,-101,-2),(12,-128,-128,-128,-128,-1),(13,-125,-125,-125,-125,-1),(14,-1,-1,-1,-1,null);
+-- @metacmp(true)
+select id,round(t,d) as r_t,round(s,d) as r_s,round(i,d) as r_i,round(b,d) as r_b from round_signed_values order by id;
+create table round_signed_ctas as select id,round(b,d) as r from round_signed_values;
+-- @metacmp(true)
+select id,r from round_signed_ctas order by id;
+-- @metacmp(true)
+select round(-11+1,-1) as expression_result,round(cast(-11 as decimal(6,0)),-1) as decimal_control,round(-11e0,-1) as float_control,truncate(-11,-1) as truncate_control;
+prepare round_signed_parameter from 'select round(cast(? as signed),cast(? as signed)) as r';
+set @round_value=-11,@round_digits=-1;
+-- @metacmp(true)
+execute round_signed_parameter using @round_value,@round_digits;
+set @round_value=-10,@round_digits=-1;
+-- @metacmp(true)
+execute round_signed_parameter using @round_value,@round_digits;
+set @round_value=-1,@round_digits=-1;
+-- @metacmp(true)
+execute round_signed_parameter using @round_value,@round_digits;
+set @round_value=null,@round_digits=-1;
+-- @metacmp(true)
+execute round_signed_parameter using @round_value,@round_digits;
+set @round_value=-9223372036854775808,@round_digits=-18;
+-- @metacmp(true)
+execute round_signed_parameter using @round_value,@round_digits;
+set @round_value=-9223372036854775808,@round_digits=-19;
+-- @regex("^Data truncation: data out of range: data type int64, ROUND",true)
+execute round_signed_parameter using @round_value,@round_digits;
+set @round_value=-11,@round_digits=-1;
+-- @metacmp(true)
+execute round_signed_parameter using @round_value,@round_digits;
+deallocate prepare round_signed_parameter;
+-- @regex("^Data truncation: data out of range: data type int64, ROUND",true)
+select round(cast(-9223372036854775808 as signed),-1) as r;
+-- @regex("^Data truncation: data out of range: data type int64, ROUND",true)
+select round(cast(9223372036854775807 as signed),-1) as r;
+-- @metacmp(true)
+select round(cast(4999999999999999999 as signed),-19) as r;
+-- @metacmp(true)
+select round(cast(-4999999999999999999 as signed),-19) as r;
+-- @regex("^Data truncation: data out of range: data type int64, ROUND",true)
+select round(cast(5000000000000000000 as signed),-19) as r;
+-- @regex("^Data truncation: data out of range: data type int64, ROUND",true)
+select round(cast(-5000000000000000000 as signed),-19) as r;
+-- @metacmp(true)
+select round(cast(-9223372036854775808 as signed),-20) as r;
+-- @metacmp(true)
+select round(cast(9223372036854775807 as signed),-20) as r;
+-- @metacmp(true)
+select round(cast(-9223372036854775808 as signed),-9223372036854775808) as r;
+create table round_mask_digits(d bigint);
+insert into round_mask_digits values (-19),(-1),(0);
+-- @metacmp(true)
+select d,case when d<0 then 0 else round(cast(-9223372036854775808 as signed),d) end as r from round_mask_digits order by d;
+-- Speculative folding preserves lazy branch ownership of overflow.
+-- @metacmp(true)
+select case when false then round(cast(5000000000000000000 as signed),-19) else 7 end as r;
+-- @metacmp(true)
+select case when true then 7 else round(cast(5000000000000000000 as signed),-19) end as r;
+-- @metacmp(true)
+select if(false,round(cast(5000000000000000000 as signed),-19),7) as r;
+-- @metacmp(true)
+select if(true,7,round(cast(5000000000000000000 as signed),-19)) as r;
+-- @metacmp(true)
+select coalesce(7,round(cast(5000000000000000000 as signed),-19)) as r;
+-- @metacmp(true)
+select case when null then round(cast(5000000000000000000 as signed),-19) else 7 end as r;
+-- @metacmp(true)
+select if(null,round(cast(5000000000000000000 as signed),-19),7) as r;
+-- @metacmp(true)
+select case when false then if(true,round(cast(5000000000000000000 as signed),-19),0) else 7 end as r;
+-- @regex("^Data truncation: data out of range: data type int64, ROUND",true)
+select case when true then round(cast(5000000000000000000 as signed),-19) else 7 end as r;
+-- @regex("^Data truncation: data out of range: data type int64, ROUND",true)
+select if(true,round(cast(5000000000000000000 as signed),-19),7) as r;
+-- @regex("^Data truncation: data out of range: data type int64, ROUND",true)
+select coalesce(null,round(cast(5000000000000000000 as signed),-19)) as r;
+-- @metacmp(true)
+select case when d=0 then 7 else round(cast(5000000000000000000 as signed),-19) end as r from round_mask_digits where d=0;
+-- @metacmp(true)
+select case when d=0 then 7 else round(cast(-9223372036854775808 as signed),-1) end as r from round_mask_digits where d=0;
+-- @metacmp(true)
+select if(d=0,7,round(cast(5000000000000000000 as signed),-19)) as r from round_mask_digits where d=0;
+-- @metacmp(true)
+select coalesce(d,round(cast(5000000000000000000 as signed),-19)) as r from round_mask_digits where d=0;
+-- @regex("^Data truncation: data out of range: data type int64, ROUND",true)
+select case when d<0 then round(cast(5000000000000000000 as signed),-19) else 7 end as r from round_mask_digits;
+prepare round_guarded_parameter from 'select case when ? then round(cast(5000000000000000000 as signed),-19) else 7 end as r';
+set @round_guard=false;
+-- @metacmp(true)
+execute round_guarded_parameter using @round_guard;
+set @round_guard=true;
+-- @regex("^Data truncation: data out of range: data type int64, ROUND",true)
+execute round_guarded_parameter using @round_guard;
+set @round_guard=false;
+-- @metacmp(true)
+execute round_guarded_parameter using @round_guard;
+deallocate prepare round_guarded_parameter;
+drop table round_mask_digits;
+drop table round_signed_ctas;
+drop table round_signed_values;

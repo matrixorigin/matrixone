@@ -563,7 +563,7 @@ func roundInt64(x int64, digits int64) int64 {
 		} else if x < 0 {
 			step1 := x / scale * scale
 			step2 := x % scale // module operation with negative numbers, the result is negative
-			if step2 <= scale/2 {
+			if step2 <= -scale/2 {
 				x = step1 - scale
 				if x > step1 {
 					panic(moerr.NewOutOfRangeNoCtx("int64", "ROUND"))
@@ -574,7 +574,15 @@ func roundInt64(x int64, digits int64) int64 {
 		} else {
 			x = 0
 		}
-	case digits <= MaxInt64digits:
+	case digits <= -MaxInt64digits:
+		// At 10^19, rounding a magnitude of at least 5e18 would produce
+		// +/-10^19, outside BIGINT. Coarser scales always round to zero.
+		if digits == -MaxInt64digits {
+			half := int64(ScaleTable[MaxInt64digits] / 2)
+			if x >= half || x <= -half {
+				panic(moerr.NewOutOfRangeNoCtx("int64", "ROUND"))
+			}
+		}
 		x = 0
 	}
 	return x

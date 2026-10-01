@@ -3791,51 +3791,147 @@ func TestTimestampLiteral_ScaleValidation(t *testing.T) {
 	})
 }
 
-func TestGetExprZoneMapConstantFold(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	ctx := proc.Ctx
-
-	// Build abs(-42): a function in the "default" case with all-constant args.
-	// This exercises the constant-fold path and the defer cleanup for ivecs.
-	argExpr := &plan.Expr{
-		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
-			Isnull: false,
-			Value:  &plan.Literal_I64Val{I64Val: -42},
-		}},
-		Typ:   plan.Type{Id: int32(types.T_int64), NotNullable: true},
-		AuxId: 0,
-	}
-
-	// Resolve the "abs" function for int64
-	fGet, err := function.GetFunctionByName(ctx, "abs", []types.Type{types.T_int64.ToType()})
-	require.NoError(t, err)
-	funcID := fGet.GetEncodedOverloadID()
-	retType := fGet.GetReturnType()
-
-	funcExpr := &plan.Expr{
-		Expr: &plan.Expr_F{F: &plan.Function{
-			Func: &plan.ObjectRef{
-				Obj:     funcID,
-				ObjName: "abs",
-			},
-			Args: []*plan.Expr{argExpr},
-		}},
-		Typ:   plan.Type{Id: int32(retType.Oid), Width: retType.Width, Scale: retType.Scale},
-		AuxId: 1,
-	}
-
-	// Allocate ZM and vec arrays (size = max AuxId + 1)
-	zms := make([]index.ZM, 2)
-	vecs := make([]*vector.Vector, 2)
-
-	zm := GetExprZoneMap(ctx, proc, funcExpr, nil, nil, zms, vecs)
-	require.True(t, zm.IsInited(), "result zone map should be initialized")
-
-	// Clean up any vecs allocated during evaluation
-	for _, v := range vecs {
-		if v != nil {
-			v.Free(proc.Mp())
+func TestOneShotExpressionOwnership(t *testing.T) {
+	for _, writable := range []bool{false, true} {
+		for _, tc := range []struct {
+			name, function string
+			args           []int64
+			want           int64
+			panics, fails  bool
+		}{
+			{"round panic", "round", []int64{5000000000000000000, -19}, 0, true, false},
+			{"returned error", "abs", []int64{math.MinInt64}, 0, false, true},
+			{"function result", "round", []int64{-11, -1}, -10, false, false},
+			{"literal result", "", []int64{math.MinInt64}, math.MinInt64, false, false},
+			{"column result", "column", []int64{42}, 42, false, false},
+		} {
+			t.Run(fmt.Sprintf("writable=%t/%s", writable, tc.name), func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				t.Cleanup(func() {
+					defer proc.Free()
+					require.Equal(t, [2]int64{}, [2]int64{proc.Mp().CurrNB(), proc.Mp().OnHeapCurrNB()}, "native and on-heap ownership")
+				})
+				args := make([]*plan.Expr, len(tc.args))
+				argTypes := make([]types.Type, len(tc.args))
+				for i, value := range tc.args {
+					argTypes[i] = types.T_int64.ToType()
+					args[i] = &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: value}}}}
+				}
+				expression := args[0]
+				data := fixedOnlyOneRowBatch
+				if tc.function == "column" {
+					input := batch.NewWithSize(1)
+					input.Vecs[0] = testutil.MakeInt64Vector(tc.args, nil, proc.Mp())
+					input.SetRowCount(1)
+					t.Cleanup(func() { input.Clean(proc.Mp()) })
+					data = []*batch.Batch{input}
+					expression = &plan.Expr{Typ: expression.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+				} else if tc.function != "" {
+					fn, err := function.GetFunctionByName(proc.Ctx, tc.function, argTypes)
+					require.NoError(t, err)
+					expression = &plan.Expr{Typ: plan.Type{Id: int32(fn.GetReturnType().Oid)}, Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{Obj: fn.GetEncodedOverloadID(), ObjName: tc.function}, Args: args}}}
+				}
+				var result *vector.Vector
+				var free func()
+				var err error
+				var escaped any
+				func() {
+					defer func() { escaped = recover() }()
+					if writable {
+						result, err = GetWritableResultFromExpression(proc, expression, data)
+						if err == nil {
+							free = func() { result.Free(proc.Mp()) }
+						}
+					} else {
+						result, free, err = GetReadonlyResultFromExpression(proc, expression, data)
+					}
+				}()
+				if free != nil {
+					t.Cleanup(free)
+				}
+				if tc.panics {
+					panicErr, ok := escaped.(error)
+					require.True(t, ok, "evaluation must preserve the kernel panic")
+					require.True(t, moerr.IsMoErrCode(panicErr, moerr.ErrOutOfRange))
+				} else {
+					require.Nil(t, escaped)
+					if tc.fails {
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange))
+					} else {
+						require.NoError(t, err)
+						require.NotNil(t, free)
+						require.Equal(t, tc.want, vector.MustFixedColNoTypeCheck[int64](result)[0])
+						if tc.function == "column" {
+							if writable {
+								require.NotSame(t, data[0].Vecs[0], result)
+							} else {
+								require.Same(t, data[0].Vecs[0], result)
+							}
+						}
+					}
+				}
+				if tc.panics || tc.fails {
+					require.Equal(t, [2]int64{}, [2]int64{proc.Mp().CurrNB(), proc.Mp().OnHeapCurrNB()})
+				}
+			})
 		}
 	}
-	proc.Free()
+}
+
+func TestGetExprZoneMapConstantFold(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	bind := func(name string, args ...*plan.Expr) *plan.Expr {
+		argTypes := make([]types.Type, len(args))
+		for i := range args {
+			argTypes[i] = types.T_int64.ToType()
+		}
+		fn, err := function.GetFunctionByName(proc.Ctx, name, argTypes)
+		require.NoError(t, err)
+		return &plan.Expr{Typ: plan.Type{Id: int32(fn.GetReturnType().Oid)}, Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{Obj: fn.GetEncodedOverloadID(), ObjName: name}, Args: args}}}
+	}
+	literal := func(value int64) *plan.Expr {
+		return &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: makePlan2Int64ConstExpr(value)}
+	}
+	zms := make([]index.ZM, 2)
+	vecs := make([]*vector.Vector, 2)
+	cleanScratch := func() {
+		for i, vec := range vecs {
+			if vec != nil {
+				vec.Free(proc.Mp())
+				vecs[i] = nil
+			}
+		}
+	}
+	defer cleanScratch()
+	for _, tc := range []struct {
+		name     string
+		arg      *plan.Expr
+		want     int64
+		overflow bool
+	}{
+		{"literal", literal(-42), 42, false},
+		{"nested", bind("round", literal(-11), literal(-1)), 10, false},
+		{"nested overflow", bind("round", literal(5000000000000000000), literal(-19)), 0, true},
+		{"nested reuse", bind("round", literal(-11), literal(-1)), 10, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expression := bind("abs", tc.arg)
+			expression.AuxId = 1
+			var zm index.ZM
+			var escaped any
+			func() {
+				defer func() { escaped = recover() }()
+				zm = GetExprZoneMap(proc.Ctx, proc, expression, nil, nil, zms, vecs)
+			}()
+			cleanScratch()
+			require.Nil(t, escaped, "speculative argument failure must return unknown")
+			require.Equal(t, !tc.overflow, zm.IsInited())
+			if !tc.overflow {
+				require.Equal(t, tc.want, types.DecodeInt64(zm.GetMinBuf()))
+				require.Equal(t, tc.want, types.DecodeInt64(zm.GetMaxBuf()))
+			}
+			require.Equal(t, [2]int64{}, [2]int64{proc.Mp().CurrNB(), proc.Mp().OnHeapCurrNB()}, "argument tree and metadata result must be released")
+		})
+	}
 }

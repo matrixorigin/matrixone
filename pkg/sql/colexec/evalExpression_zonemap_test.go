@@ -673,6 +673,39 @@ func makeBareNullExpr() *plan.Expr {
 	}
 }
 
+func TestEvaluateFilterByZoneMapRoundOverflowCleanup(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	column := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+	rounded, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "round", []*plan.Expr{column, plan2.MakePlan2Int64ConstExprWithType(-19)})
+	require.NoError(t, err)
+	predicate, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "=", []*plan.Expr{rounded, plan2.MakePlan2Int64ConstExprWithType(1)})
+	require.NoError(t, err)
+	meta := objectio.BuildMetaData(1, 1).GetBlockMeta(0)
+	zms, vecs := makeZoneMapEvalScratch(predicate)
+	t.Cleanup(func() {
+		for _, vec := range vecs {
+			if vec != nil {
+				vec.Free(proc.Mp())
+			}
+		}
+	})
+	for i, value := range []int64{4999999999999999999, 5000000000000000000, 4999999999999999999} {
+		zm := index.NewZM(types.T_int64, 0)
+		index.UpdateZM(zm, types.EncodeInt64(&value))
+		meta.MustGetColumn(0).SetZoneMap(zm)
+		var escaped any
+		selected := false
+		func() {
+			defer func() { escaped = recover() }()
+			selected = colexec.EvaluateFilterByZoneMap(proc.Ctx, proc, predicate, meta, map[int]int{0: 0}, zms, vecs)
+		}()
+		require.Nil(t, escaped, "metadata failure must defer to row execution; native bytes=%d", proc.Mp().CurrNB())
+		require.Equal(t, i == 1, selected)
+		require.Zero(t, proc.Mp().CurrNB(), "speculative result and operand vectors must be freed")
+	}
+}
+
 func makeVarcharBlockMeta(values ...string) objectio.BlockObject {
 	dataMeta := objectio.BuildMetaData(1, 1)
 	meta := dataMeta.GetBlockMeta(0)

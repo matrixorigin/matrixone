@@ -15,7 +15,10 @@
 package function
 
 import (
+	"math"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -87,21 +90,28 @@ func Test_RoundUint64(t *testing.T) {
 // Test_RoundInt64 tests ROUND function for int64
 func Test_RoundInt64(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 
 	{
 		tc := tcTemp{
 			info: "select round(int64_col, -1)",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{123, -456, 785}, []bool{false, false, false}),
+					[]int64{123, -456, 785, -1, -4, -5, -6, -10, -11, -14, -15, -16, 0}, nil),
 				NewFunctionTestConstInput(types.T_int64.ToType(),
 					[]int64{-1}, nil),
 			},
 			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
-				// 123->120, -456->-460, 785->790
-				[]int64{120, -460, 790}, []bool{false, false, false}),
+				// Exact multiples stay fixed and signed ties round away from zero.
+				[]int64{120, -460, 790, 0, 0, -10, -10, -10, -10, -10, -20, -20, 0}, nil),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, RoundInt64)
+		t.Cleanup(func() {
+			for _, parameter := range tcc.parameters {
+				parameter.Free(proc.Mp())
+			}
+			tcc.result.Free()
+		})
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
@@ -117,10 +127,16 @@ func Test_RoundInt64(t *testing.T) {
 					[]int64{-2}, nil),
 			},
 			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
-				// -1004->-1100 (step2=-4, step1-100), 1995->2000, 1050->1100
-				[]int64{-1100, 2000, 1100}, []bool{false, false, false}),
+				// -1004->-1000, 1995->2000, 1050->1100
+				[]int64{-1000, 2000, 1100}, []bool{false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, RoundInt64)
+		t.Cleanup(func() {
+			for _, parameter := range tcc.parameters {
+				parameter.Free(proc.Mp())
+			}
+			tcc.result.Free()
+		})
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
@@ -139,9 +155,70 @@ func Test_RoundInt64(t *testing.T) {
 				[]int64{100, -200, 0}, []bool{false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, RoundInt64)
+		t.Cleanup(func() {
+			for _, parameter := range tcc.parameters {
+				parameter.Free(proc.Mp())
+			}
+			tcc.result.Free()
+		})
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
+}
+
+func TestRoundInt64Boundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name                string
+		value, digits, want int64
+		overflow            bool
+	}{
+		{"minimum representable coarse result", math.MinInt64, -18, -9000000000000000000, false},
+		{"minimum rounding overflow", math.MinInt64, -1, 0, true},
+		{"maximum rounding overflow", math.MaxInt64, -1, 0, true},
+		{"positive nineteen below half", 4999999999999999999, -19, 0, false},
+		{"negative nineteen below half", -4999999999999999999, -19, 0, false},
+		{"positive nineteen tie", 5000000000000000000, -19, 0, true},
+		{"negative nineteen tie", -5000000000000000000, -19, 0, true},
+		{"maximum nineteen overflow", math.MaxInt64, -19, 0, true},
+		{"minimum nineteen overflow", math.MinInt64, -19, 0, true},
+		{"minimum twenty", math.MinInt64, -20, 0, false},
+		{"maximum twenty", math.MaxInt64, -20, 0, false},
+		{"minimum digits", math.MinInt64, math.MinInt64, 0, false},
+		{"maximum digits identity", math.MinInt64, math.MaxInt64, math.MinInt64, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var result int64
+			var recovered any
+			func() { defer func() { recovered = recover() }(); result = roundInt64(tc.value, tc.digits) }()
+			if !tc.overflow {
+				require.Nil(t, recovered, "representable ROUND must succeed")
+				require.Equal(t, tc.want, result)
+				return
+			}
+			err, ok := recovered.(error)
+			require.True(t, ok, "expected a typed overflow, got %v", recovered)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange))
+		})
+	}
+}
+
+func TestRoundInt64DynamicPrecisionAndNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	values := NewFunctionTestConstInput(types.T_int64.ToType(), []int64{math.MinInt64}, nil)
+	digits := NewFunctionTestInput(types.T_int64.ToType(), []int64{0, -18, math.MinInt64, math.MaxInt64, -1}, []bool{false, false, false, false, true})
+	expected := NewFunctionTestResult(types.T_int64.ToType(), false, []int64{math.MinInt64, -9000000000000000000, 0, math.MinInt64, 0}, []bool{false, false, false, false, true})
+	tc := NewFunctionTestCase(proc, []FunctionTestInput{values, digits}, expected, RoundInt64)
+	t.Cleanup(func() {
+		for _, parameter := range tc.parameters {
+			parameter.Free(proc.Mp())
+		}
+		tc.result.Free()
+	})
+	tc.fnLength = tc.parameters[1].Length()
+	tc.parameters[0].SetLength(tc.fnLength)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
 }
 
 // Test_RoundFloat64 tests ROUND function for float64

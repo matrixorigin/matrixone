@@ -2962,58 +2962,71 @@ func GetExprZoneMap(
 				zms[expr.AuxId] = index.ZMMulti(zms[args[0].AuxId], zms[args[1].AuxId], zms[expr.AuxId])
 
 			default:
-				ivecs := make([]*vector.Vector, len(args))
-				if isAllConst(args) { // constant fold
+				// Metadata is speculative. A failing argument or kernel cannot
+				// prove rows are absent; every temporary keeps its cleanup owner.
+				func() {
 					defer func() {
-						for _, v := range ivecs {
-							if v != nil {
-								v.Free(proc.Mp())
-							}
+						if recover() != nil {
+							zms[expr.AuxId].Reset()
 						}
 					}()
-					for i, arg := range args {
-						if vecs[arg.AuxId] != nil {
-							vecs[arg.AuxId].Free(proc.Mp())
+					ivecs := make([]*vector.Vector, len(args))
+					if isAllConst(args) { // constant fold
+						defer func() {
+							for _, v := range ivecs {
+								if v != nil {
+									v.Free(proc.Mp())
+								}
+							}
+						}()
+						for i, arg := range args {
+							if vecs[arg.AuxId] != nil {
+								vecs[arg.AuxId].Free(proc.Mp())
+							}
+							if vecs[arg.AuxId], err = GetWritableResultFromNoColumnExpression(proc, arg); err != nil {
+								zms[expr.AuxId].Reset()
+								return
+							}
+							if ivecs[i], err = vecs[arg.AuxId].Dup(proc.Mp()); err != nil {
+								zms[expr.AuxId].Reset()
+								return
+							}
 						}
-						if vecs[arg.AuxId], _, err = GetReadonlyResultFromNoColumnExpression(proc, arg); err != nil {
-							zms[expr.AuxId].Reset()
-							return zms[expr.AuxId]
+					} else {
+						if f() {
+							return
 						}
-						if ivecs[i], err = vecs[arg.AuxId].Dup(proc.Mp()); err != nil {
-							zms[expr.AuxId].Reset()
-							return zms[expr.AuxId]
+						for i, arg := range args {
+							if vecs[arg.AuxId] != nil {
+								vecs[arg.AuxId].Free(proc.Mp())
+							}
+							if vecs[arg.AuxId], err = index.ZMToVector(zms[arg.AuxId], vecs[arg.AuxId], proc.Mp()); err != nil {
+								zms[expr.AuxId].Reset()
+								return
+							}
+							ivecs[i] = vecs[arg.AuxId]
 						}
 					}
-				} else {
-					if f() {
-						return zms[expr.AuxId]
-					}
-					// Endpoint pairs do not bound a quotient with a varying
-					// denominator, even when that interval excludes zero.
-					if (t.F.Func.ObjName == "/" || t.F.Func.ObjName == "div") &&
-						!bytes.Equal(zms[args[1].AuxId].GetMinBuf(), zms[args[1].AuxId].GetMaxBuf()) {
-						zms[expr.AuxId].Reset()
-						return zms[expr.AuxId]
-					}
-					for i, arg := range args {
-						if vecs[arg.AuxId] != nil {
-							vecs[arg.AuxId].Free(proc.Mp())
-						}
-						if vecs[arg.AuxId], err = index.ZMToVector(zms[arg.AuxId], vecs[arg.AuxId], proc.Mp()); err != nil {
-							zms[expr.AuxId].Reset()
-							return zms[expr.AuxId]
-						}
-						ivecs[i] = vecs[arg.AuxId]
-					}
-				}
-				fn, _, fnFree, _ := overload.GetExecuteMethod()
-				typ := types.NewWithCharset(
-					types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset),
-				)
+					fn, _, fnFree, _ := overload.GetExecuteMethod()
+					typ := types.NewWithCharset(
+						types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset),
+					)
 
-				zms[expr.AuxId] = evaluateZoneMapFunction(proc, typ, zms[expr.AuxId], func(result vector.FunctionResultWrapper) error {
-					return fn(ivecs, result, proc, 2, nil)
-				}, fnFree)
+					if fnFree != nil {
+						defer func() { _ = fnFree() }()
+					}
+					result := vector.NewFunctionResultWrapper(typ, proc.Mp())
+					defer result.Free()
+					if err = result.PreExtendAndReset(2); err != nil {
+						zms[expr.AuxId].Reset()
+						return
+					}
+					if err = fn(ivecs, result, proc, 2, nil); err != nil {
+						zms[expr.AuxId].Reset()
+						return
+					}
+					zms[expr.AuxId] = index.VectorToZM(result.GetResultVector(), zms[expr.AuxId])
+				}()
 			}
 		}
 
