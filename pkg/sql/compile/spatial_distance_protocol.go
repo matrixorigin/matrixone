@@ -18,34 +18,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
-
-// constrainSpatialDistanceWorkers keeps changed spatial-distance expressions
-// on one CN while a rolling cluster still contains workers below MORPC v90.
-// The capability probe is performed once per compile and has no per-row cost.
-func (c *Compile) constrainSpatialDistanceWorkers(qry *plan.Query) error {
-	if c.execType != plan2.ExecTypeAP_MULTICN {
-		return nil
-	}
-	features, err := plan.RequiredRemoteExpressionFeatures(qry)
-	if err != nil || !features.SpatialDistanceSemantics {
-		return err
-	}
-	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion90)
-	if err != nil {
-		return err
-	}
-	if supported {
-		return nil
-	}
-	c.execType = plan2.ExecTypeAP_ONECN
-	c.cnList, err = c.scheduleQueryWorkers()
-	return err
-}
 
 // validateSpatialDistanceDestination rechecks the actual serialized
 // destination at send time. A worker can be downgraded or replaced after

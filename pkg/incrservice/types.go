@@ -165,13 +165,9 @@ type AutoIncrementService interface {
 // falls below this realm, an asynchronous task will be started to advance the allocation of
 // the next Range.
 //
-// In addition to passively assigning the next Range in advance, we are going to need to have
-// the ability to actively assign it in advance. Each allocated Range has a size, if the
-// allocated Range is not enough to meet the demand of one write, it will cause a delayed
-// wait for a write process that needs to go to allocate multiple Ranges. So when the amount
-// of data written at one time is particularly large, such as load, you need to actively tell
-// the cacheItem the approximate amount of data to be written, to avoid the scenario of multiple
-// allocations for one write.
+// Planner estimates can trigger one configured cache range in advance, but cannot
+// determine the size of a durable reservation. Actual batch demand can request a
+// larger range through the existing column-cache allocation path.
 type incrTableCache interface {
 	table() uint64
 	epoch() uint32
