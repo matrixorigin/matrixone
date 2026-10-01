@@ -7131,3 +7131,37 @@ func TestLowPrecFloatAccessMovement(t *testing.T) {
 		})
 	}
 }
+
+func TestBoolMinMax(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		values       []bool
+		nulls        []int
+		ok, min, max bool
+	}{
+		{name: "empty"},
+		{name: "false", values: []bool{false, false}, ok: true},
+		{name: "true", values: []bool{true, true}, ok: true, min: true, max: true},
+		{name: "mixed", values: []bool{false, true}, ok: true, max: true},
+		{name: "mixed reversed", values: []bool{true, false}, ok: true, max: true},
+		{name: "nullable mixed", values: []bool{true, false, true}, nulls: []int{0}, ok: true, max: true},
+		{name: "null false", values: []bool{false, true}, nulls: []int{0}, ok: true, min: true, max: true},
+		{name: "null true", values: []bool{false, true}, nulls: []int{1}, ok: true},
+		{name: "all null", values: []bool{false, true}, nulls: []int{0, 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			v := NewVec(types.T_bool.ToType())
+			defer func() { v.Free(mp); require.Zero(t, mp.CurrNB()) }()
+			for i, value := range tc.values {
+				require.NoError(t, AppendFixed(v, value, slices.Contains(tc.nulls, i), mp))
+			}
+			ok, min, max := v.GetMinMaxValue()
+			require.Equal(t, tc.ok, ok)
+			if ok {
+				require.Equal(t, tc.min, types.DecodeBool(min))
+				require.Equal(t, tc.max, types.DecodeBool(max))
+			}
+		})
+	}
+}

@@ -351,8 +351,8 @@ type PrepareStmt struct {
 	// protocolVersion is the cluster protocol used to build PreparePlan.
 	// A version change can alter internal function IDs in generated DML plans.
 	protocolVersion int64
-	// needsRebuild is set when execution-time retry discovers that the cached
-	// prepared plan generation is stale before frontend metadata catches up.
+	// needsRebuild marks a stale prepared plan after execution-time retry or
+	// a session planning setting changes. EXECUTE owns the actual rebuild.
 	needsRebuild bool
 	// compileNeedsRebuild remembers that this statement had an eligible cached
 	// topology before it was invalidated, even after that topology is released.
@@ -1896,6 +1896,20 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 		return
 	}
 
+	// Both defaults affect the physical vector plan. Compare normalized values
+	// so equivalent SET spellings preserve warm plans.
+	vectorModeVariable := name == "enable_vector_auto_mode_by_default" || name == "enable_vector_prefilter_by_default"
+	oldVectorMode := false
+	if vectorModeVariable {
+		var oldValue interface{}
+		if oldValue, err = ses.GetSessionSysVar(name); err != nil {
+			return err
+		}
+		if oldVectorMode, err = valueIsBoolTrue(oldValue); err != nil {
+			return err
+		}
+	}
+
 	var txnIsolation pbtxn.TxnIsolation
 	setTxnIsolation := isTransactionIsolationSystemVariable(name)
 	if setTxnIsolation {
@@ -1941,6 +1955,19 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	if err == nil && name == "div_precision_increment" {
 		if increment, ok := val.(int64); ok && increment != oldDivPrecisionIncrement {
 			ses.cleanCache()
+		}
+	}
+	if err == nil && vectorModeVariable {
+		// val has already passed the BOOL variable conversion.
+		if (val.(int8) != 0) != oldVectorMode {
+			ses.cleanCache()
+			// Preserve prepared handles and runtime buffers; EXECUTE owns rebuilding
+			// their existing plan through the established needsRebuild path.
+			ses.mu.Lock()
+			for _, prepared := range ses.prepareStmts {
+				prepared.needsRebuild = true
+			}
+			ses.mu.Unlock()
 		}
 	}
 	if err == nil && setTxnIsolation {

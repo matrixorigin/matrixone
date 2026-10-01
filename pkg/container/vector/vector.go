@@ -10911,14 +10911,14 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 					first = false
 				} else {
 					minVal = minVal && col[i]
-					maxVal = maxVal && col[i]
+					maxVal = maxVal || col[i]
 				}
 			}
 		} else {
 			minVal, maxVal = col[0], col[0]
 			for i, j := 1, len(col); i < j; i++ {
 				minVal = minVal && col[i]
-				maxVal = maxVal && col[i]
+				maxVal = maxVal || col[i]
 			}
 		}
 		minv = types.EncodeBool(&minVal)

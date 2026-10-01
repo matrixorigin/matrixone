@@ -20,11 +20,79 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+// constrainRemoteExpressionWorkers analyzes the current expression generation
+// once for placement. A worker must satisfy every independent feature floor;
+// their maximum needs only one capability probe per selected worker. Send-time
+// validation still checks the actual pipeline and destination independently.
+func (c *Compile) constrainRemoteExpressionWorkers(qry *plan.Query) error {
+	features, err := plan.RequiredRemoteExpressionFeatures(qry)
+	if err != nil {
+		return err
+	}
+	// This rebind requirement also applies to local execution. Do not hide it
+	// behind the remote-placement fast path or an earlier worker fallback.
+	if features.LegacyIntervalUnits {
+		return moerr.NewNotSupportedNoCtx("legacy interval unit contract requires rebinding")
+	}
+	if c.execType != plan2.ExecTypeAP_MULTICN {
+		return nil
+	}
+	required := remoteExpressionProtocolVersion(features)
+	if required == 0 {
+		return nil
+	}
+	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, required)
+	if err != nil || supported {
+		return err
+	}
+	c.execType = plan2.ExecTypeAP_ONECN
+	c.cnList, err = c.scheduleQueryWorkers()
+	return err
+}
+
+func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
+	required := max(requiredExpressionContractProtocolVersion(features), temporalExpressionProtocolVersion(features))
+	if features.IntegerArithmeticDomains {
+		required = max(required, defines.MORPCVersion71)
+	}
+	if features.RowDependentConvBases {
+		required = max(required, defines.MORPCVersion70)
+	}
+	if features.IntegerParameterCoercion {
+		required = max(required, defines.MORPCVersion85)
+	}
+	if features.SpecialIntegerConsumers {
+		required = max(required, defines.MORPCVersion98)
+	}
+	if features.PreparedPrecisionScalar {
+		required = max(required, defines.MORPCVersion95)
+	}
+	if features.DecimalDivisionSemantics {
+		required = max(required, defines.MORPCVersion97)
+	}
+	if features.StringNumericResultContracts {
+		required = max(required, defines.MORPCVersion80)
+	}
+	if features.BoundedConditionalStringDomains {
+		required = max(required, defines.MORPCVersion83)
+	}
+	if features.SpatialDistanceSemantics {
+		required = max(required, defines.MORPCVersion90)
+	}
+	if features.DecimalLiteralSemantics {
+		required = max(required, defines.MORPCVersion89)
+	}
+	return required
+}
 
 // A timeout cause must not report an error when a probe succeeds.
 var errRemoteCapabilityProbeTimeout = moerr.NewInternalError(

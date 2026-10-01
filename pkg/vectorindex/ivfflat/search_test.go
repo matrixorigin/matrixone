@@ -527,7 +527,7 @@ func TestIvfSearchSequentialCallsDoNotLeakQueryScopedRuntimeState(t *testing.T) 
 			bat.Vecs[1] = vector.NewVec(types.T_float64.ToType())
 
 			require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(8), false, sqlproc.Proc.Mp()))
-			require.NoError(t, vector.AppendFixed(bat.Vecs[1], float64(0.5), false, sqlproc.Proc.Mp()))
+			require.NoError(t, vector.AppendFixed(bat.Vecs[1], float64(0.5000000001), false, sqlproc.Proc.Mp()))
 			bat.SetRowCount(1)
 			return executor.Result{Mp: sqlproc.Proc.Mp(), Batches: []*batch.Batch{bat}}, nil
 		default:
@@ -539,9 +539,10 @@ func TestIvfSearchSequentialCallsDoNotLeakQueryScopedRuntimeState(t *testing.T) 
 	proc := testutil.NewProcessWithMPool(t, "", m)
 
 	idxcfg := vectorindex.IndexConfig{}
-	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2Distance)
+	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2sqDistance)
 
 	tblcfg := vectorindex.IndexTableConfig{
+		OrigFuncName:       metric.DistFn_L2sqDistance,
 		DbName:             "test_db",
 		EntriesTable:       "test_entries",
 		IncludeColumns:     []string{"rank"},
@@ -567,7 +568,6 @@ func TestIvfSearchSequentialCallsDoNotLeakQueryScopedRuntimeState(t *testing.T) 
 	rt2 := vectorindex.RuntimeConfig{
 		Limit:         4,
 		Probe:         1,
-		OrigFuncName:  "l2_distance",
 		IncludeResult: &vectorindex.IvfIncludeResult{},
 		SearchCursor:  &vectorindex.IvfSearchCursor{},
 	}
@@ -581,14 +581,16 @@ func TestIvfSearchSequentialCallsDoNotLeakQueryScopedRuntimeState(t *testing.T) 
 	require.NotContains(t, capturedSQL[1], " > 3")
 
 	require.Equal(t, []any{int64(7)}, keys1.([]any))
-	require.Equal(t, []float64{0.25}, distances1)
+	require.Equal(t, []float64{0.5}, distances1)
 	require.Equal(t, []string{"rank"}, rt1.IncludeResult.ColNames)
 	require.Equal(t, []any{int32(9)}, rt1.IncludeResult.Data["rank"])
 	require.Equal(t, []bool{false}, rt1.IncludeResult.Nulls["rank"])
 	require.Equal(t, uint(1), rt1.SearchCursor.Round)
 
 	require.Equal(t, []any{int64(8)}, keys2.([]any))
-	require.Equal(t, []float64{0.5}, distances2)
+	require.Equal(t, []float64{0.5000000001}, distances2)
+	require.Empty(t, rt2.OrigFuncName)
+	require.Equal(t, metric.DistFn_L2sqDistance, tblcfg.OrigFuncName)
 	require.Empty(t, rt2.IncludeResult.ColNames)
 	require.Empty(t, rt2.IncludeResult.Data)
 	require.Empty(t, rt2.IncludeResult.Nulls)

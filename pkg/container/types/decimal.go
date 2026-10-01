@@ -1444,12 +1444,12 @@ func (x Decimal64) Mul(y Decimal64, scale1, scale2 int32) (z Decimal64, scale in
 		y1 = y1.Minus()
 	}
 	z, err = x1.Mul64(y1)
-	if err != nil {
+	if err != nil || z.Sign() {
 		x2 := Decimal128{uint64(x1), 0}
 		y2 := Decimal128{uint64(y1), 0}
 		x2, _ = x2.Mul128(y2)
 		x2, _ = x2.Scale(scale - scale1 - scale2)
-		if x2.B64_127 != 0 || x2.B0_63>>63 != 0 {
+		if x2.B64_127 != 0 || (x2.B0_63>>63 != 0 && (signx == signy || x2.B0_63 != uint64(1)<<63)) {
 			err = moerr.NewInvalidInputNoCtxf("Decimal64 Mul overflow: %s*%s", x.Format(scale1), y.Format(scale2))
 			return
 		} else {
@@ -1460,6 +1460,12 @@ func (x Decimal64) Mul(y Decimal64, scale1, scale2 int32) (z Decimal64, scale in
 			z = z.Minus()
 		}
 		return
+	}
+	if scale != scale1+scale2 {
+		z, err = z.Scale(scale - scale1 - scale2)
+		if err != nil {
+			return
+		}
 	}
 	if signx != signy {
 		z = z.Minus()

@@ -1277,7 +1277,7 @@ func newTxnOperatorForTest(t *testing.T) *mock_frontend.MockTxnOperator {
 }
 
 func newTxnOperatorForTestWithWorkspace(
-	t *testing.T,
+	t testing.TB,
 	workspace client.Workspace,
 ) *mock_frontend.MockTxnOperator {
 	t.Helper()
@@ -1291,7 +1291,7 @@ func newTxnOperatorForTestWithWorkspace(
 }
 
 func newTransactionWithActivePKTableForTest(
-	t *testing.T,
+	t testing.TB,
 	pkName string,
 ) *Transaction {
 	t.Helper()

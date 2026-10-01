@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	pbstats "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -6495,4 +6496,39 @@ func TestPreparedCompositeIntegerDiagnosticProofUsesDecodedBinaryBinding(t *test
 			require.Equal(t, tc.wantProbe, free)
 		})
 	}
+}
+
+type preparedStatsTestCompiler struct {
+	*preparedTestCompiler
+	stats *pbstats.StatsInfo
+	err   error
+}
+
+func (c *preparedStatsTestCompiler) StatsWithTableDef(_ *plan.ObjectRef, _ *plan.TableDef, _ *plan.Snapshot) (*pbstats.StatsInfo, error) {
+	return c.stats, c.err
+}
+
+func TestPreparedStatsAdmissionPreservesStableCompileAndRejectsError(t *testing.T) {
+	base := plan2.NewMockCompilerContext(false)
+	ctx := &preparedStatsTestCompiler{preparedTestCompiler: &preparedTestCompiler{CompilerContext: base, proc: base.GetProcess()},
+		stats: &pbstats.StatsInfo{TableCnt: 5}}
+	ses, prepared, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(t, 225, "select n_nationkey from nation", ctx)
+	defer prepared.Close()
+	ctx.proc = cw.proc
+	sentinel := compile.NewCompile("", "", prepared.Sql, "", "", nil, cw.proc, prepared.PrepareStmt, false, nil, time.Now())
+	prepared.compile = sentinel
+	for range 2 {
+		ret, _, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepared.Name, base.Resolve, ctx)
+		if owned && stmt != nil {
+			stmt.Free()
+		}
+		require.NoError(t, err)
+		require.Same(t, sentinel, ret, "stable transient counts reuse the existing compile generation")
+		require.True(t, cw.planGenerationReused)
+	}
+	ctx.err = fmt.Errorf("statistics admission failed")
+	_, _, _, _, _, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepared.Name, base.Resolve, ctx)
+	require.ErrorIs(t, err, ctx.err)
+	require.True(t, prepared.needsRebuild, "a rejected generation must not be admitted on a later execute")
+	require.Same(t, sentinel, prepared.compile, "existing rebuild/Close owns exactly-once compile cleanup")
 }

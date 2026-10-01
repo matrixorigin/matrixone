@@ -2588,53 +2588,79 @@ func (txn *Transaction) getUncommittedS3Tombstone(
 	return nil
 }
 
-// TODO:: refactor in next PR, to make it more efficient and include persisted deletes in S3
+type tombstoneTransferKey struct {
+	accountId           uint32
+	databaseId, tableId uint64
+}
+
+type tombstoneTransferTable struct {
+	databaseName string
+	writeNames   [2]string
+	hasDeletes   [2]bool
+	table        *txnTable
+}
+
+// collectTombstoneTransferTablesLocked retains only scalar lookup metadata for
+// this invocation. Relation lookup may unlock and reenter the workspace.
+func (txn *Transaction) collectTombstoneTransferTablesLocked() map[tombstoneTransferKey]tombstoneTransferTable {
+	var tables map[tombstoneTransferKey]tombstoneTransferTable
+	for i := range txn.writes {
+		e := &txn.writes[i]
+		if e.typ != DELETE || e.bat == nil || e.bat.RowCount() == 0 || e.skipTransfer {
+			continue
+		}
+		key := tombstoneTransferKey{e.accountId, e.databaseId, e.tableId}
+		if tables == nil {
+			tables = make(map[tombstoneTransferKey]tombstoneTransferTable)
+		}
+		t := tables[key]
+		if !t.hasDeletes[0] && !t.hasDeletes[1] {
+			t.databaseName = e.databaseName
+		}
+		kind := 0
+		if e.fileName != "" {
+			kind = 1
+		}
+		if !t.hasDeletes[kind] {
+			t.hasDeletes[kind] = true
+			t.writeNames[kind] = e.tableName
+			tables[key] = t
+		}
+	}
+	return tables
+}
+
 func (txn *Transaction) forEachTableHasDeletesLocked(
-	isObject bool,
+	tables map[tombstoneTransferKey]tombstoneTransferTable,
+	kind int,
 	f func(tbl *txnTable, writeName string) error) error {
-	type tableWrite struct {
-		table     *txnTable
-		writeName string
-	}
-	tables := make(map[uint64]tableWrite)
-	for i := 0; i < len(txn.writes); i++ {
-		e := txn.writes[i]
-		if e.typ != DELETE || e.bat == nil || e.bat.RowCount() == 0 ||
-			(!isObject && e.fileName != "" || isObject && e.fileName == "") ||
-			e.skipTransfer {
+	for key, t := range tables {
+		if !t.hasDeletes[kind] || t.table != nil {
 			continue
 		}
-
-		if _, ok := tables[e.tableId]; ok {
-			continue
-		}
-		ctx := context.WithValue(txn.proc.Ctx, defines.TenantIDKey{}, e.accountId)
-		// Database might craft a sql on the current txn to get the table,
-		// so we need to unlock the txn
-		txn.Unlock()
-		db, err := txn.engine.Database(ctx, e.databaseName, txn.op)
+		name := physicalCatalogTableName(key.databaseId, key.tableId, t.writeNames[kind])
+		dbName := t.databaseName
+		// Database lookup may run internal SQL on this transaction.
+		rel, err := func() (engine.Relation, error) {
+			txn.Unlock()
+			defer txn.Lock()
+			return txn.getTable(txn.proc.Ctx, key.accountId, dbName, name)
+		}()
 		if err != nil {
-			txn.Lock()
 			return err
 		}
-		// mo_columns_update is a TN write marker, not a catalog relation.
-		relationName := physicalCatalogTableName(e.databaseId, e.tableId, e.tableName)
-		rel, err := db.Relation(ctx, relationName, nil)
-		if err != nil {
-			txn.Lock()
-			return err
-		}
-		txn.Lock()
 		if v, ok := rel.(*txnTableDelegate); ok {
-			tables[e.tableId] = tableWrite{v.origin, e.tableName}
+			t.table = v.origin
 		} else {
-			tables[e.tableId] = tableWrite{rel.(*txnTable), e.tableName}
+			t.table = rel.(*txnTable)
 		}
-
+		tables[key] = t
 	}
-	for _, write := range tables {
-		if err := f(write.table, write.writeName); err != nil {
-			return err
+	for _, t := range tables {
+		if t.hasDeletes[kind] {
+			if err := f(t.table, t.writeNames[kind]); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -2969,11 +2995,12 @@ func (txn *Transaction) transferTombstones(
 		txn.transfer.lastTransferred = end
 	}()
 
-	if err = transferInmemTombstones(ctx, txn, start, end); err != nil {
+	tables := txn.collectTombstoneTransferTablesLocked()
+	if err = transferInmemTombstones(ctx, txn, tables, start, end); err != nil {
 		return err
 	}
 
-	return transferTombstoneObjects(ctx, txn, start, end)
+	return transferTombstoneObjects(ctx, txn, tables, start, end)
 }
 
 func forceTransfer(ctx context.Context) bool {
