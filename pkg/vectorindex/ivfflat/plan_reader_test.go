@@ -439,55 +439,85 @@ func TestStorageTopKEligibilityMatchesVectorTopNDirection(t *testing.T) {
 }
 
 func TestScanEntriesPushesDistanceRangeToStorageTopK(t *testing.T) {
-	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
-	scanner := &scriptedRelationScanner{t: t}
-	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
-		require.False(t, req.PostFilterTopOnly)
-		require.Equal(t, metric.DistFn_L2Distance, req.IndexParam.OrigFuncName)
-		require.NotNil(t, req.IndexParam.DistRange)
-		require.Equal(t, float64(2), req.IndexParam.DistRange.UpperBound.GetLit().GetDval())
-		require.Equal(t, []byte{1}, req.FilterHint.MembershipFilterBytes)
-
-		bat := batch.NewWithSize(len(req.Columns) + 1)
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-		bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
-		bat.Vecs[3] = vector.NewVec(types.New(types.T_array_float32, 1, 0))
-		bat.Vecs[4] = vector.NewVec(types.T_varchar.ToType())
-		bat.Vecs[5] = vector.NewVec(types.T_float64.ToType())
-		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
-		require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(2), false, mp))
-		require.NoError(t, vector.AppendFixed(bat.Vecs[2], int64(7), false, mp))
-		require.NoError(t, vector.AppendArray(bat.Vecs[3], []float32{2}, false, mp))
-		require.NoError(t, vector.AppendBytes(bat.Vecs[4], []byte("cpkey"), false, mp))
-		require.NoError(t, vector.AppendFixed(bat.Vecs[5], float64(4), false, mp))
-		bat.SetRowCount(1)
-		return executor.Result{Batches: []*batch.Batch{bat}, Mp: mp}
+	for _, tc := range []struct {
+		name          string
+		upper         float64
+		wantIDs       []int64
+		wantDistances []float64
+		malformed     bool
+	}{
+		{name: "all", upper: 3, wantIDs: []int64{7, 8}, wantDistances: []float64{1, 6.25}},
+		{name: "none", upper: 0},
+		{name: "partial", upper: 2.49999999, wantIDs: []int64{7}, wantDistances: []float64{1}},
+		{name: "empty_scalar", upper: 3, malformed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithMPool(t, "", mp)
+			scanner := &scriptedRelationScanner{t: t}
+			scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
+				require.False(t, req.PostFilterTopOnly)
+				require.Equal(t, metric.DistFn_L2Distance, req.IndexParam.OrigFuncName)
+				require.Equal(t, tc.upper, req.IndexParam.DistRange.UpperBound.GetLit().GetDval())
+				require.Equal(t, []byte{1}, req.FilterHint.MembershipFilterBytes)
+				bat := batch.NewWithSize(len(req.Columns) + 1)
+				for pos := 0; pos < 3; pos++ {
+					bat.Vecs[pos] = vector.NewVec(types.T_int64.ToType())
+				}
+				bat.Vecs[3] = vector.NewVec(types.New(types.T_array_float32, 1, 0))
+				bat.Vecs[4] = vector.NewVec(types.T_varchar.ToType())
+				bat.Vecs[5] = vector.NewVec(types.T_varchar.ToType())
+				bat.Vecs[6] = vector.NewVec(types.T_float64.ToType())
+				for row, distance := range []float64{1, 6.25} {
+					require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
+					require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(2), false, mp))
+					if !tc.malformed {
+						require.NoError(t, vector.AppendFixed(bat.Vecs[2], int64(7+row), false, mp))
+					}
+					require.NoError(t, vector.AppendBytes(bat.Vecs[4], []byte(fmt.Sprintf("payload-%d", row)), row == 0, mp))
+					require.NoError(t, vector.AppendBytes(bat.Vecs[5], []byte("cpkey"), false, mp))
+					require.NoError(t, vector.AppendFixed(bat.Vecs[6], distance, false, mp))
+				}
+				bat.SetRowCount(2)
+				return executor.Result{Batches: []*batch.Batch{bat}, Mp: mp}
+			}
+			sqlproc := sqlexec.NewSqlProcess(proc)
+			sqlproc.RelationScanner = scanner
+			sqlproc.IvfHasMembershipFilter = true
+			sqlproc.IvfMembershipFilter = []byte{1}
+			sqlproc.IndexReaderParam = &plan.IndexReaderParam{DistRange: &plan.DistRange{
+				LowerBoundType: plan.BoundType_UNBOUNDED, UpperBoundType: plan.BoundType_INCLUSIVE,
+				UpperBound: ivfFloat64Expr(tc.upper),
+			}}
+			idxcfg := vectorindex.IndexConfig{}
+			idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2sqDistance)
+			idxcfg.Ivfflat.VectorType = int32(types.T_array_float32)
+			res, err := (&IvfflatSearchIndex[float32]{QuantMul: 1}).scanEntries(sqlproc, idxcfg, vectorindex.IndexTableConfig{
+				DbName: "db", EntriesTable: "entries", PKeyType: int32(types.T_int64), OrigFuncName: metric.DistFn_L2Distance, IncludeColumns: []string{"payload"},
+			}, []float32{0}, 1, []int64{2}, []string{"payload"}, nil, 2)
+			if tc.malformed {
+				require.ErrorContains(t, err, "storage Top-K column 2 has 0 rows, expected 2")
+				return
+			}
+			require.NoError(t, err)
+			defer res.Close()
+			var ids []int64
+			var distances []float64
+			for _, bat := range res.Batches {
+				require.Equal(t, len(tc.wantIDs), bat.RowCount())
+				ids = append(ids, vector.MustFixedColWithTypeCheck[int64](bat.Vecs[0])...)
+				distances = append(distances, vector.MustFixedColWithTypeCheck[float64](bat.Vecs[1])...)
+				for row, id := range vector.MustFixedColWithTypeCheck[int64](bat.Vecs[0]) {
+					require.Equal(t, id == 7, bat.Vecs[2].IsNull(uint64(row)))
+					if id == 8 {
+						require.Equal(t, "payload-1", bat.Vecs[2].GetStringAt(row))
+					}
+				}
+			}
+			require.Equal(t, tc.wantIDs, ids)
+			require.Equal(t, tc.wantDistances, distances)
+		})
 	}
-
-	sqlproc := sqlexec.NewSqlProcess(proc)
-	sqlproc.RelationScanner = scanner
-	sqlproc.IvfHasMembershipFilter = true
-	sqlproc.IvfMembershipFilter = []byte{1}
-	sqlproc.IndexReaderParam = &plan.IndexReaderParam{DistRange: &plan.DistRange{
-		LowerBoundType: plan.BoundType_UNBOUNDED,
-		UpperBoundType: plan.BoundType_INCLUSIVE,
-		UpperBound:     ivfFloat64Expr(2),
-	}}
-	idxcfg := vectorindex.IndexConfig{}
-	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2sqDistance)
-	idxcfg.Ivfflat.VectorType = int32(types.T_array_float32)
-	idx := &IvfflatSearchIndex[float32]{QuantMul: 1}
-	res, err := idx.scanEntries(sqlproc, idxcfg, vectorindex.IndexTableConfig{
-		DbName: "db", EntriesTable: "entries", PKeyType: int32(types.T_int64),
-		OrigFuncName: metric.DistFn_L2Distance,
-	}, []float32{0}, 1, []int64{2}, nil, nil, 1)
-	require.NoError(t, err)
-	defer res.Close()
-	require.Len(t, res.Batches, 1)
-	require.Equal(t, []int64{7}, vector.MustFixedColWithTypeCheck[int64](res.Batches[0].Vecs[0]))
-	require.Equal(t, []float64{4}, vector.MustFixedColWithTypeCheck[float64](res.Batches[0].Vecs[1]))
 }
 
 func TestScanEntriesFallsBackForUnsafeDistanceRanges(t *testing.T) {
@@ -875,7 +905,7 @@ func TestDistanceRangeFiltersBeforeTopInSourceUnits(t *testing.T) {
 	}
 
 	require.NoError(t, idx.filterEntryDistanceRange(
-		&res, distRange, metric.DistFn_L2Distance, metric.Metric_L2sqDistance))
+		&res, distRange, metric.DistFn_L2Distance, metric.Metric_L2sqDistance, nil))
 	require.NoError(t, compactRelationTop(&res, 2, false))
 
 	require.Equal(t, []int64{2, 3}, vector.MustFixedColWithTypeCheck[int64](res.Batches[0].Vecs[0]))
@@ -998,15 +1028,15 @@ func TestRelationSearchBoundaryBranches(t *testing.T) {
 		return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}
 	}
 	idx := &IvfflatSearchIndex[float32]{QuantMul: 1}
-	require.NoError(t, idx.filterEntryDistanceRange(nil, rangeExclusive, metric.DistFn_L2sqDistance, metric.Metric_L2sqDistance))
+	require.NoError(t, idx.filterEntryDistanceRange(nil, rangeExclusive, metric.DistFn_L2sqDistance, metric.Metric_L2sqDistance, nil))
 	unbounded := &plan.DistRange{LowerBoundType: plan.BoundType_UNBOUNDED, UpperBoundType: plan.BoundType_UNBOUNDED}
 	all := newResult(1, 2)
-	require.NoError(t, idx.filterEntryDistanceRange(&all, unbounded, metric.DistFn_L2sqDistance, metric.Metric_L2sqDistance))
+	require.NoError(t, idx.filterEntryDistanceRange(&all, unbounded, metric.DistFn_L2sqDistance, metric.Metric_L2sqDistance, nil))
 	require.Equal(t, 2, all.Batches[0].RowCount())
 	all.Close()
 	all = newResult(1, 2)
 	noneRange := &plan.DistRange{LowerBoundType: plan.BoundType_INCLUSIVE, LowerBound: floatLiteral(3), UpperBoundType: plan.BoundType_UNBOUNDED}
-	require.NoError(t, idx.filterEntryDistanceRange(&all, noneRange, metric.DistFn_L2sqDistance, metric.Metric_L2sqDistance))
+	require.NoError(t, idx.filterEntryDistanceRange(&all, noneRange, metric.DistFn_L2sqDistance, metric.Metric_L2sqDistance, nil))
 	require.Zero(t, all.Batches[0].RowCount())
 	all.Close()
 
@@ -2056,6 +2086,7 @@ func TestSearchPlanReaderUsesBoundedMembershipStorageTopK(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", mp)
 	scanner := &scriptedRelationScanner{t: t}
+	currentFunction := metric.DistFn_L2Distance
 	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
 		switch req.Table {
 		case "centroids_plan_reader":
@@ -2074,6 +2105,7 @@ func TestSearchPlanReaderUsesBoundedMembershipStorageTopK(t *testing.T) {
 		case "entries_plan_reader":
 			require.NotNil(t, req.IndexParam)
 			require.Equal(t, uint64(12), req.IndexParam.GetLimit().GetLit().GetU64Val())
+			require.Equal(t, currentFunction, req.IndexParam.OrigFuncName)
 			require.False(t, req.PostFilterTopOnly)
 			require.NotNil(t, req.IndexParam.DistRange)
 			require.Equal(t, float64(3), req.IndexParam.DistRange.UpperBound.GetLit().GetDval())
@@ -2151,35 +2183,51 @@ func TestSearchPlanReaderUsesBoundedMembershipStorageTopK(t *testing.T) {
 	membership, err := membershipVec.MarshalBinary()
 	require.NoError(t, err)
 	sqlproc.IvfHasMembershipFilter = true
-	r := &planReader{
-		spec: &plan.VectorIndexScan{
-			InitialProbeCount: 1,
-			DistanceFunction:  metric.DistFn_L2Distance,
-			IncludedColumns:   []string{"payload"},
-			SourceTable:       &plan.ObjectRef{PubInfo: &plan.PubInfo{TenantId: 42}},
-		},
-		req: searchplugin.Request{
-			ResultLimit:         2,
-			CandidateBudget:     12,
-			MembershipFilter:    membership,
-			HasMembershipFilter: true,
-			DistanceRange: &plan.DistRange{
-				LowerBoundType: plan.BoundType_UNBOUNDED,
-				UpperBoundType: plan.BoundType_INCLUSIVE,
-				UpperBound:     ivfFloat64Expr(3),
-			},
-			Identity: searchplugin.ScanIdentity{
-				PartitionCount: 2,
-				PartitionIndex: 1,
-			},
-		},
-	}
 
-	require.NoError(t, searchPlanReader(r, sqlproc, idxcfg, tblcfg, []float32{0, 0}, false))
-	require.Equal(t, []any{int64(1), int64(2), int64(3), int64(4)}, r.keys)
-	require.Equal(t, []float64{0, 1, 2, 3}, r.distances)
-	require.Equal(t, []any{int32(10), int32(20), int32(30), int32(40)}, r.includeData["payload"])
-	require.Len(t, scanner.requests, 2)
+	for _, cachedFunction := range []string{metric.DistFn_L2Distance, metric.DistFn_L2sqDistance} {
+		cache.Cache.Remove(cacheKey)
+		tblcfg.OrigFuncName = cachedFunction
+		for _, requestFunction := range []string{cachedFunction, metric.DistFn_L2Distance, metric.DistFn_L2sqDistance, cachedFunction} {
+			currentFunction = requestFunction
+			r := &planReader{
+				spec: &plan.VectorIndexScan{
+					InitialProbeCount: 1,
+					DistanceFunction:  requestFunction,
+					IncludedColumns:   []string{"payload"},
+					SourceTable:       &plan.ObjectRef{PubInfo: &plan.PubInfo{TenantId: 42}},
+				},
+				req: searchplugin.Request{
+					ResultLimit:         2,
+					CandidateBudget:     12,
+					MembershipFilter:    membership,
+					HasMembershipFilter: true,
+					DistanceRange: &plan.DistRange{
+						LowerBoundType: plan.BoundType_UNBOUNDED,
+						UpperBoundType: plan.BoundType_INCLUSIVE,
+						UpperBound:     ivfFloat64Expr(3),
+					},
+					Identity: searchplugin.ScanIdentity{
+						PartitionCount: 2,
+						PartitionIndex: 1,
+					},
+				},
+			}
+
+			require.NoError(t, searchPlanReader(r, sqlproc, idxcfg, tblcfg, []float32{0, 0}, false))
+
+			if requestFunction == metric.DistFn_L2Distance {
+				require.Equal(t, []any{int64(1), int64(2), int64(3), int64(4)}, r.keys)
+				require.Equal(t, []float64{0, 1, 2, 3}, r.distances)
+				require.Equal(t, []any{int32(10), int32(20), int32(30), int32(40)}, r.includeData["payload"])
+			} else {
+				require.Equal(t, []any{int64(1), int64(2)}, r.keys)
+				require.Equal(t, []float64{0, 1}, r.distances)
+				require.Equal(t, []any{int32(10), int32(20)}, r.includeData["payload"])
+			}
+			require.Equal(t, cachedFunction, tblcfg.OrigFuncName)
+		}
+	}
+	require.Len(t, scanner.requests, 10) // One centroid load and four searches per generation.
 }
 
 func TestPlanReaderInitializesThroughTypedEngineRelations(t *testing.T) {

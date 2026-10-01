@@ -970,12 +970,18 @@ func filterRelationBatchRows(
 			sels = append(sels, int64(row))
 		}
 	}
+	return selectRelationBatchRows(bat, sels, loadedColumns), nil
+}
+
+// selectRelationBatchRows preserves unloaded slots when columns were materialized
+// selectively. A nil column list denotes a fully materialized batch.
+func selectRelationBatchRows(bat *batch.Batch, sels []int64, loadedColumns []int) engine.ReaderFilterResult {
 	if len(sels) == bat.RowCount() {
-		return engine.ReaderFilterResult{All: true}, nil
+		return engine.ReaderFilterResult{All: true}
 	}
 	if len(sels) == 0 {
 		bat.CleanOnlyData()
-		return engine.ReaderFilterResult{Sels: sels}, nil
+		return engine.ReaderFilterResult{Sels: sels}
 	}
 	if loadedColumns == nil {
 		bat.Shrink(sels, false)
@@ -985,7 +991,7 @@ func filterRelationBatchRows(
 		}
 		bat.SetRowCount(len(sels))
 	}
-	return engine.ReaderFilterResult{Sels: sels}, nil
+	return engine.ReaderFilterResult{Sels: sels}
 }
 
 // relationFilterEarlyColumns returns the output positions that must be loaded
