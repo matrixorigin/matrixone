@@ -36,8 +36,22 @@ id  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 code  ¦  VARCHAR(60)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 qty  ¦  BIGINT(64)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
 price  ¦  DECIMAL(20,5)  ¦  YES  ¦    ¦  null  ¦    ¦  
+CREATE VIEW nested_v AS SELECT code, qty, price FROM v;
+CREATE TABLE empty_copy AS SELECT * FROM nested_v LIMIT 0;
+SELECT column_name, column_type, is_nullable FROM information_schema.columns
+WHERE table_schema = 'view_metadata_on_demand' AND table_name = 'empty_copy'
+ORDER BY ordinal_position;
+➤ column_name[12,256,0]  ¦  column_type[12,65535,0]  ¦  is_nullable[12,3,0]  𝄀
+code  ¦  VARCHAR(60)  ¦  YES  𝄀
+qty  ¦  BIGINT(64)  ¦  NO  𝄀
+price  ¦  DECIMAL(20,5)  ¦  YES
+SHOW COLUMN_NUMBER FROM nested_v;
+➤ Number of columns in nested_v[-5,64,0]  𝄀
+3
 DROP TABLE src;
 DESC v;
+SQL parser error: table "src" does not exist
+SHOW COLUMN_NUMBER FROM nested_v;
 SQL parser error: table "src" does not exist
 CREATE TABLE src (
 id BIGINT,
@@ -87,6 +101,11 @@ DEALLOCATE PREPARE show_target;
 DROP SNAPSHOT IF EXISTS view_metadata_restore;
 CREATE SNAPSHOT view_metadata_restore FOR ACCOUNT;
 ALTER TABLE src MODIFY COLUMN code VARCHAR(180);
+SELECT column_name, column_type
+FROM information_schema.columns {snapshot='view_metadata_restore'}
+WHERE table_schema = 'view_metadata_on_demand' AND table_name = 'v' AND column_name = 'code';
+➤ column_name[12,256,0]  ¦  column_type[12,65535,0]  𝄀
+code  ¦  VARCHAR(120)
 PREPARE restored_view FROM 'SHOW COLUMNS FROM view_metadata_on_demand.v';
 EXECUTE restored_view;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
@@ -118,4 +137,15 @@ DESC restored_copy;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 code  ¦  VARCHAR(120)  ¦  YES  ¦    ¦  null  ¦    ¦  
 DROP SNAPSHOT view_metadata_restore;
+CREATE TABLE json_src (j JSON);
+CREATE VIEW values_v AS SELECT j FROM json_src;
+ALTER TABLE json_src MODIFY COLUMN j VARCHAR(60);
+INSERT INTO json_src VALUES ('a'), ('z');
+SHOW TABLE_VALUES FROM values_v;
+➤ max(j)[12,60,0]  ¦  min(j)[12,60,0]  𝄀
+z  ¦  a
+USE mo_catalog;
+SHOW TABLE_VALUES FROM view_metadata_on_demand.values_v;
+➤ max(j)[12,60,0]  ¦  min(j)[12,60,0]  𝄀
+z  ¦  a
 DROP DATABASE view_metadata_on_demand;

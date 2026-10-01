@@ -62,6 +62,9 @@ func TestViewDescriptionPublicSQL(t *testing.T) {
 		t.Run("SHOW target replacement", func(t *testing.T) {
 			testShowColumnsTargetReplacement(t, ctx, db)
 		})
+		t.Run("current schema consumers", func(t *testing.T) {
+			testViewMetadataConsumers(t, ctx, db)
+		})
 		exec("create table view_description_test.src (x varchar(5), qty int not null default 7)")
 		exec("create view view_description_test.v as select x as label, qty from view_description_test.src")
 		describe := func(query string) [][]sql.NullString {
@@ -698,8 +701,13 @@ func (txn failedViewColumnsUpgradeTxn) Exec(sql string, opts executor.StatementO
 
 func testViewColumnsUpgradeRollback(t *testing.T, ctx context.Context, sqlExecutor executor.SQLExecutor, tenantID uint32) {
 	t.Helper()
+	// Run the tenant-upgrade transaction as the sys account, mirroring the production
+	// driver (service.MaybeUpgradeTenant scopes the txn to System_Account and targets
+	// the tenant via the tenantID passed to HandleTenantUpgrade, whose per-tenant
+	// statements carry UpgradeStatementOption(tenantID)). An upgrade entry's cluster-wide
+	// protocol-version check runs mo_ctl, which only the sys account may execute (#28985).
 	opts := executor.Options{}.WithDatabase(catalog.MO_CATALOG).
-		WithAccountID(tenantID).WithWaitCommittedLogApplied()
+		WithAccountID(catalog.System_Account).WithWaitCommittedLogApplied()
 	definition := func() string {
 		t.Helper()
 		var exists bool
@@ -785,6 +793,16 @@ func TestViewDescriptionSubscription(t *testing.T) {
 		require.NoError(t, subscriber.QueryRowContext(ctx,
 			"select column_name from information_schema.columns where table_schema='subscribed' and table_name='v'").Scan(&legacyColumn))
 		require.Equal(t, "x", legacyColumn)
+		// The historical system template is still V58, but its View must be
+		// described using the source visible at that snapshot after migration.
+		exec("alter table view_description_pub.src modify column x varchar(7)")
+		_, err = subscriber.ExecContext(ctx, "create snapshot view_description_legacy_columns for account")
+		require.NoError(t, err)
+		defer func() {
+			_, err := subscriber.ExecContext(ctx, "drop snapshot view_description_legacy_columns")
+			require.NoError(t, err)
+		}()
+		exec("alter table view_description_pub.src modify column x varchar(5)")
 		// Compare the historical projection with the new one on the same CN.
 		// Publisher View, subscription table and subscription View must all
 		// agree on the supported character-set selector variants.
@@ -839,6 +857,11 @@ func TestViewDescriptionSubscription(t *testing.T) {
 		require.Equal(t, publisherTable, readCharsets(subscriber, "subscribed", "charset_src"))
 		require.Equal(t, publisherView, readCharsets(subscriber, "subscribed", "charset_v"))
 		require.Equal(t, legacySubscriptionView, readCharsets(subscriber, "subscribed", "charset_v"))
+		var historicalWidth int
+		require.NoError(t, subscriber.QueryRowContext(ctx,
+			"select character_maximum_length from information_schema.columns {snapshot='view_description_legacy_columns'} "+
+				"where table_schema='subscribed' and table_name='v' and column_name='x'").Scan(&historicalWidth))
+		require.Equal(t, 7, historicalWidth, "an old system template must not resurrect creation-time View columns")
 
 		// The snapshot belongs to the subscriber, but the View's source database
 		// belongs to the publisher. Database existence and relation binding must
