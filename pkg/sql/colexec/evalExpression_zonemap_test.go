@@ -16,6 +16,7 @@ package colexec_test
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -717,4 +718,218 @@ func makeBoolAndVarcharBlockMeta(minBool, maxBool bool, values ...string) object
 func makeZoneMapEvalScratch(expr *plan.Expr) ([]objectio.ZoneMap, []*vector.Vector) {
 	need := plan2.AssignAuxIdForExpr(expr, 0)
 	return make([]objectio.ZoneMap, need), make([]*vector.Vector, need)
+}
+
+func TestEvaluateFilterByZoneMapCheckedArithmetic(t *testing.T) {
+	for _, tc := range []struct {
+		name, op string
+		value    int64
+		selected bool
+	}{
+		{"addition overflow retained", "+", math.MaxInt64, true},
+		{"multiplication overflow retained", "*", math.MaxInt64, true},
+		{"safe addition prunes", "+", 10, false},
+		{"safe subtraction prunes", "-", 10, false},
+		{"safe multiplication prunes", "*", 10, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			column := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+			arithmetic, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, tc.op, []*plan.Expr{column, column})
+			require.NoError(t, err)
+			predicate, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "=", []*plan.Expr{arithmetic, column})
+			require.NoError(t, err)
+			require.True(t, plan2.ExprIsZonemappable(proc.Ctx, predicate))
+			meta := objectio.BuildMetaData(1, 1).GetBlockMeta(0)
+			zms, vecs := makeZoneMapEvalScratch(predicate)
+			for i, value := range []int64{tc.value, 10, tc.value} {
+				zm := index.NewZM(types.T_int64, 0)
+				index.UpdateZM(zm, types.EncodeInt64(&value))
+				meta.MustGetColumn(0).SetZoneMap(zm)
+				selected := tc.selected && i != 1
+				require.Equal(t, selected, colexec.EvaluateFilterByZoneMap(proc.Ctx, proc, predicate, meta, map[int]int{0: 0}, zms, vecs), "scratch must not retain previous block's proof")
+			}
+		})
+	}
+}
+
+func TestEvaluateFilterByZoneMapConstantArithmetic(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	for _, tc := range []struct {
+		name, op         string
+		constant, result int64
+		constantOnLeft   bool
+		overflow         int64
+	}{
+		{"addition", "+", 2, 5, false, math.MaxInt64},
+		{"subtraction", "-", 2, 5, false, math.MinInt64},
+		{"constant minus column", "-", 14, 5, true, math.MinInt64},
+		{"multiplication", "*", 2, 6, false, math.MaxInt64},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			column := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+			constant := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{IsConst: true, Data: types.EncodeInt64(&tc.constant)}}}
+			args := []*plan.Expr{column, constant}
+			if tc.constantOnLeft {
+				args[0], args[1] = args[1], args[0]
+			}
+			arithmetic, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, tc.op, args)
+			require.NoError(t, err)
+			result := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{IsConst: true, Data: types.EncodeInt64(&tc.result)}}}
+			predicate, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "=", []*plan.Expr{arithmetic, result})
+			require.NoError(t, err)
+			require.True(t, plan2.ExprIsZonemappable(proc.Ctx, predicate))
+			meta := objectio.BuildMetaData(1, 1).GetBlockMeta(0)
+			zms, vecs := makeZoneMapEvalScratch(predicate)
+			for _, block := range []struct {
+				min, max int64
+				selected bool
+			}{
+				{1, 10, true},
+				{100, 110, false},
+				{tc.overflow, tc.overflow, true},
+				{1, 10, true},
+			} {
+				zm := index.NewZM(types.T_int64, 0)
+				index.UpdateZM(zm, types.EncodeInt64(&block.min))
+				index.UpdateZM(zm, types.EncodeInt64(&block.max))
+				meta.MustGetColumn(0).SetZoneMap(zm)
+				require.Equal(t, block.selected, colexec.EvaluateFilterByZoneMap(proc.Ctx, proc, predicate, meta, map[int]int{0: 0}, zms, vecs))
+			}
+			// Reuse scratch while the statement's Fold value changes. Unknown
+			// payloads must erase the previous exclusion proof.
+			fold := constant.GetFold()
+			for _, value := range []struct {
+				data   []byte
+				scalar bool
+			}{
+				{nil, true},
+				{[]byte{1}, true},
+				{types.EncodeInt64(&tc.constant), false},
+				{types.EncodeInt64(&tc.constant), true},
+			} {
+				fold.Data, fold.IsConst = value.data, value.scalar
+				require.True(t, colexec.EvaluateFilterByZoneMap(proc.Ctx, proc, predicate, meta, map[int]int{0: 0}, zms, vecs))
+			}
+			min, max := int64(100), int64(110)
+			zm := index.NewZM(types.T_int64, 0)
+			index.UpdateZM(zm, types.EncodeInt64(&min))
+			index.UpdateZM(zm, types.EncodeInt64(&max))
+			meta.MustGetColumn(0).SetZoneMap(zm)
+			require.False(t, colexec.EvaluateFilterByZoneMap(proc.Ctx, proc, predicate, meta, map[int]int{0: 0}, zms, vecs))
+			bound := min + tc.constant
+			if tc.op == "-" {
+				bound = min - tc.constant
+				if tc.constantOnLeft {
+					bound = tc.constant - min
+				}
+			} else if tc.op == "*" {
+				bound = min * tc.constant
+			}
+			result.GetFold().Data = types.EncodeInt64(&bound)
+			require.True(t, colexec.EvaluateFilterByZoneMap(proc.Ctx, proc, predicate, meta, map[int]int{0: 0}, zms, vecs))
+			result.GetFold().Data = types.EncodeInt64(&tc.result)
+			require.False(t, colexec.EvaluateFilterByZoneMap(proc.Ctx, proc, predicate, meta, map[int]int{0: 0}, zms, vecs))
+
+			fold.Data = nil
+			require.True(t, colexec.EvaluateFilterByZoneMap(proc.Ctx, proc, predicate, meta, map[int]int{0: 0}, zms, vecs))
+
+		})
+	}
+}
+
+func TestEvaluateFilterByZoneMapVaryingDenominator(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	one, two := float64(1), float64(2)
+	constant := &plan.Expr{Typ: plan.Type{Id: int32(types.T_float64)}, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{IsConst: true, Data: types.EncodeFloat64(&one)}}}
+	column := &plan.Expr{Typ: constant.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+	quotient, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "/", []*plan.Expr{constant, column})
+	require.NoError(t, err)
+	bound := &plan.Expr{Typ: constant.Typ, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{IsConst: true, Data: types.EncodeFloat64(&two)}}}
+	predicate, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, ">", []*plan.Expr{quotient, bound})
+	require.NoError(t, err)
+	meta := objectio.BuildMetaData(1, 1).GetBlockMeta(0)
+	zms, vecs := makeZoneMapEvalScratch(predicate)
+	for _, tc := range []struct {
+		min, max float64
+		selected bool
+	}{
+		{-1, 1, true}, // 0.1 matches although neither endpoint does.
+		{1, 2, true},  // Varying denominators have no endpoint-pair proof.
+		{1, 1, false}, // Preserve a safe singleton exclusion after unknown.
+	} {
+		zm := index.NewZM(types.T_float64, 0)
+		index.UpdateZM(zm, types.EncodeFloat64(&tc.min))
+		index.UpdateZM(zm, types.EncodeFloat64(&tc.max))
+		meta.MustGetColumn(0).SetZoneMap(zm)
+		require.Equal(t, tc.selected, colexec.EvaluateFilterByZoneMap(proc.Ctx, proc, predicate, meta, map[int]int{0: 0}, zms, vecs))
+	}
+}
+
+func TestEvaluateFilterByZoneMapScalarOverflowCleanup(t *testing.T) {
+	for _, typeID := range []types.T{types.T_int64, types.T_uint64} {
+		t.Run(typeID.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			col := func(pos int32) *plan.Expr {
+				return &plan.Expr{Typ: plan.Type{Id: int32(typeID)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: pos}}}
+			}
+			sum, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "+", []*plan.Expr{col(0), col(1)})
+			require.NoError(t, err)
+			digits := int64(-1)
+			precision := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{IsConst: true, Data: types.EncodeInt64(&digits)}}}
+			rounded, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "round", []*plan.Expr{sum, precision})
+			require.NoError(t, err)
+			target := plan2.MakePlan2Int64ConstExprWithType(100)
+			upper := uint64(math.MaxInt64)
+			if typeID == types.T_uint64 {
+				target = plan2.MakePlan2Uint64ConstExprWithType(100)
+				upper = math.MaxUint64
+			}
+			predicate, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "=", []*plan.Expr{rounded, target})
+			require.NoError(t, err)
+			meta := objectio.BuildMetaData(1, 2).GetBlockMeta(0)
+			zms, vecs := makeZoneMapEvalScratch(predicate)
+			baseline := proc.Mp().CurrNB()
+			for _, tc := range []struct {
+				vmin, vmax, wmin, wmax uint64
+				selected               bool
+				unknown                bool
+			}{
+				{1, 2, 1, 2, false, false},
+				{0, upper - 100, 0, 100, true, true}, // Independent endpoints overflow ROUND; actual correlated rows do not.
+				{1, 2, 1, 2, false, false},           // Reuse the same scratch after losing the proof.
+				{90, 100, 0, 0, true, false},
+				{0, upper - 110, 0, 100, true, false}, // Nearby endpoint remains within the ROUND domain.
+			} {
+				for i, bounds := range [][2]uint64{{tc.vmin, tc.vmax}, {tc.wmin, tc.wmax}} {
+					zm := index.NewZM(typeID, 0)
+					index.UpdateZM(zm, types.EncodeUint64(&bounds[0]))
+					index.UpdateZM(zm, types.EncodeUint64(&bounds[1]))
+					meta.MustGetColumn(uint16(i)).SetZoneMap(zm)
+				}
+				var selected bool
+				var panicked any
+				func() {
+					defer func() { panicked = recover() }()
+					selected = colexec.EvaluateFilterByZoneMap(proc.Ctx, proc, predicate, meta, map[int]int{0: 0, 1: 1}, zms, vecs)
+				}()
+				for i, vec := range vecs {
+					if vec != nil {
+						vec.Free(proc.Mp())
+						vecs[i] = nil
+					}
+				}
+				if panicked != nil {
+					t.Errorf("metadata scalar panic escaped: %v", panicked)
+				}
+				require.Equal(t, baseline, proc.Mp().CurrNB(), "temporary result must be released on every exit")
+				require.Equal(t, tc.selected, selected)
+				require.Equal(t, tc.unknown, !zms[rounded.AuxId].IsInited(), "only the invalid endpoint loses its proof")
+			}
+		})
+	}
 }

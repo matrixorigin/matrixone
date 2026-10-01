@@ -372,7 +372,10 @@ const (
 // result type. Legacy plans remain executable by v97 receivers.
 // JSONInputContracts and YearBitCast require MORPC v101 for their new
 // execution contracts.
+// JSONScalarLiteralContracts requires MORPC v104 because older executors
+// decode JSON-typed Sval literals as VARCHAR rather than encoded JSON.
 type RemoteExpressionFeatures struct {
+	JSONScalarLiteralContracts      bool
 	JSONInputContracts              bool
 	YearBitCast                     bool
 	NumericPrefix                   bool
@@ -405,7 +408,7 @@ type RemoteExpressionFeatures struct {
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
-	return features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
+	return features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
 		features.FormatNumericArguments ||
@@ -849,6 +852,10 @@ func isExpressionResultMetadataContract(expr *Expr) bool {
 func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatures, err error) {
 	err = walkExpressionsInOwner(owner, func(expr *Expr) error {
 		return VisitExprTree(expr, func(current *Expr) error {
+			if literal := current.GetLit(); literal != nil && !literal.Isnull && current.Typ.Id == planJSONTypeID {
+				_, encodedJSON := literal.Value.(*Literal_Sval)
+				features.JSONScalarLiteralContracts = features.JSONScalarLiteralContracts || encodedJSON
+			}
 			if !features.DecimalLiteralSemantics {
 				if literal := current.GetLit(); literal != nil {
 					features.DecimalLiteralSemantics = literal.DecimalLiteralRequiresV82

@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -625,4 +626,43 @@ func TestSessionSQLModeHighNotPrecedenceHelpers(t *testing.T) {
 	var nilSession *Session
 	require.False(t, nilSession.sqlModeHasHighNotPrecedence())
 	require.Zero(t, nilSession.sqlModeParserFlags())
+}
+
+func TestSessionVectorModeChangeClearsPlanCache(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	for _, name := range []string{"enable_vector_auto_mode_by_default", "enable_vector_prefilter_by_default"} {
+		t.Run(name, func(t *testing.T) {
+			ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+			t.Cleanup(ses.cleanCache)
+			require.NoError(t, ses.SetSessionSysVar(ctx, name, int64(0)))
+			prepared := &PrepareStmt{}
+			ses.prepareStmts["vector-prepare"] = prepared
+			off := &trackedStatement{}
+			ses.cachePlan("vector-sql", []tree.Statement{off}, []*plan.Plan{{}})
+			require.NoError(t, ses.SetSessionSysVar(ctx, strings.ToUpper(name), "off"))
+			require.Error(t, ses.SetSessionSysVar(ctx, name, "invalid"))
+			require.True(t, ses.isCached("vector-sql"))
+			require.Zero(t, off.freed)
+			require.False(t, prepared.needsRebuild)
+			require.NoError(t, ses.SetSessionSysVar(ctx, name, int64(1)))
+			require.False(t, ses.isCached("vector-sql"))
+			require.Equal(t, 1, off.freed)
+			require.True(t, prepared.needsRebuild)
+			require.Same(t, prepared, ses.prepareStmts["vector-prepare"])
+			prepared.needsRebuild = false // Simulate the existing successful EXECUTE rebuild.
+			on := &trackedStatement{}
+			ses.cachePlan("vector-sql", []tree.Statement{on}, []*plan.Plan{{}})
+			require.NoError(t, ses.SetSessionSysVar(ctx, name, "on"))
+			require.True(t, ses.isCached("vector-sql"))
+			require.Zero(t, on.freed)
+			require.False(t, prepared.needsRebuild)
+			require.NoError(t, ses.SetSessionSysVar(ctx, name, int64(0)))
+			require.False(t, ses.isCached("vector-sql"))
+			require.Equal(t, 1, on.freed)
+			require.True(t, prepared.needsRebuild)
+			require.Same(t, prepared, ses.prepareStmts["vector-prepare"])
+			require.Equal(t, 1, off.freed)
+		})
+	}
 }

@@ -1379,6 +1379,54 @@ func TestSingleJoinStatsUseSemanticPreservedSide(t *testing.T) {
 	})
 }
 
+func TestSemiJoinStatsUseSemanticPreservedSide(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		preservedRows     float64
+		matchingSel       float64
+		preservedSel      float64
+		wantLogicalLeft   float64
+		wantPhysicalRight float64
+		limit             *planpb.Expr
+	}{
+		{name: "unfiltered", preservedRows: 5, matchingSel: 1, preservedSel: 1, wantLogicalLeft: 40, wantPhysicalRight: 5},
+		{name: "directional filtering", preservedRows: 5, matchingSel: 0, preservedSel: 1, wantLogicalLeft: 40, wantPhysicalRight: 0},
+		{name: "empty preserved input", matchingSel: 1, preservedSel: 1, wantLogicalLeft: 40},
+		{name: "limit zero", preservedRows: 5, matchingSel: 1, preservedSel: 1, limit: MakePlan2Uint64ConstExprWithType(0)},
+		{name: "limit one", preservedRows: 5, matchingSel: 1, preservedSel: 1, wantLogicalLeft: 1, wantPhysicalRight: 1, limit: MakePlan2Uint64ConstExprWithType(1)},
+		{name: "limit above preserved input", preservedRows: 5, matchingSel: 1, preservedSel: 1, wantLogicalLeft: 7, wantPhysicalRight: 5, limit: MakePlan2Uint64ConstExprWithType(7)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			builder := newRuntimeFilterSingleTestBuilder(true)
+			matching, preserved, join := builder.qry.Nodes[0], builder.qry.Nodes[1], builder.qry.Nodes[2]
+			matching.Stats = &planpb.Stats{Cost: 40, Outcnt: 40, TableCnt: 40, BlockNum: 11, Selectivity: tc.matchingSel}
+			preserved.Stats = &planpb.Stats{Cost: tc.preservedRows, Outcnt: tc.preservedRows, TableCnt: tc.preservedRows, BlockNum: 7, Selectivity: tc.preservedSel}
+			join.JoinType, join.Limit = planpb.Node_SEMI, tc.limit
+
+			// IsRightJoin is set before the physical swap. The ordinary pass
+			// must still preserve the logical left input at this point.
+			ReCalcNodeStats(2, builder, false, false, false)
+			require.Equal(t, tc.wantLogicalLeft, join.Stats.Outcnt)
+			require.Equal(t, matching.Stats.BlockNum, join.Stats.BlockNum)
+
+			builder.qry.Nodes = append(builder.qry.Nodes,
+				&planpb.Node{NodeType: planpb.Node_PROJECT, NodeId: 3, Children: []int32{2}, Stats: DefaultStats()},
+				&planpb.Node{NodeType: planpb.Node_JOIN, NodeId: 4, Children: []int32{0, 3}, JoinType: planpb.Node_INNER, Stats: DefaultStats()},
+			)
+			for range 2 {
+				reCalcNodeStatsAfterSwap(4, builder, true, false, false)
+				require.Equal(t, tc.wantPhysicalRight, join.Stats.Outcnt)
+				require.LessOrEqual(t, join.Stats.Outcnt, preserved.Stats.Outcnt)
+				require.Equal(t, preserved.Stats.BlockNum, join.Stats.BlockNum)
+				require.Equal(t, preserved.Stats.Outcnt, join.Stats.HashmapStats.HashmapSize)
+				require.Equal(t, matching.Stats.Cost+preserved.Stats.Cost, join.Stats.Cost)
+				require.Equal(t, tc.wantPhysicalRight, builder.qry.Nodes[3].Stats.Outcnt)
+				require.Equal(t, tc.wantPhysicalRight, builder.qry.Nodes[4].Stats.HashmapStats.HashmapSize)
+			}
+		})
+	}
+}
+
 func TestRightSingleRuntimeFilterConservativeEligibility(t *testing.T) {
 	tests := []struct {
 		name   string

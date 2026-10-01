@@ -106,7 +106,8 @@ Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: group_concat(keys64.id ORDER BY keys64.id ASC SEPARATOR ',')  𝄀
         ->  Table Scan on issue_29506_filters.keys64  𝄀
-              Filter Cond: (keys64.id = 9007199254740991)
+              Filter Cond: (keys64.id = 9007199254740991)  𝄀
+              Block Filter Cond: (keys64.id = 9007199254740991)
 execute large_key using @key;
 ➤ group_concat(keys64.id order by id separator ,)[-1,536870911,0]  𝄀
 9007199254740991

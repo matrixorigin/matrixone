@@ -2076,7 +2076,7 @@ func generateConstExpressionExecutor(
 			// consumers such as JSON constructors can preserve MySQL type tags.
 			if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary || typ.Oid == types.T_blob {
 				vec, err = newExpressionConstBytes(typ, []byte(sval), 1, proc.Mp(), selection)
-			} else if typ.Oid == types.T_geometry {
+			} else if typ.Oid == types.T_geometry || typ.Oid == types.T_json {
 				vec, err = newExpressionConstBytes(typ, []byte(sval), 1, proc.Mp(), selection)
 			} else if typ.Oid == types.T_array_float32 {
 				array, err1 := types.StringToArray[float32](sval)
@@ -2624,6 +2624,22 @@ func GetExprZoneMap(
 			}
 		}
 
+	case *plan.Expr_Fold:
+		// EvalFoldExpr owns execution. Consume only its materialized scalar
+		// bytes; NULL, lists and unsupported types cannot prove exclusion.
+		zm := zms[expr.AuxId]
+		zm.Reset()
+		typ := types.T(expr.Typ.Id)
+		if t.Fold != nil && t.Fold.IsConst && t.Fold.Data != nil &&
+			(typ.IsOrdered() || typ == types.T_bool || typ == types.T_decimal64 || typ == types.T_decimal128) &&
+			len(t.Fold.Data) == typ.TypeLen() {
+			if zm == nil || zm.GetType() != typ || zm.GetScale() != expr.Typ.Scale {
+				zm = objectio.NewZM(typ, expr.Typ.Scale)
+			}
+			index.UpdateZM(zm, t.Fold.Data)
+		}
+		zms[expr.AuxId] = zm
+
 	case *plan.Expr_Col:
 		zms[expr.AuxId] = meta.MustGetColumn(uint16(columnMap[int(t.Col.ColPos)])).ZoneMap()
 
@@ -2637,6 +2653,13 @@ func GetExprZoneMap(
 
 			// Some expressions need to be handled specifically
 			switch t.F.Func.ObjName {
+			case "+", "-", "*":
+				// The primitive ZM arithmetic preserves its input representation.
+				// Widening (notably decimal64 multiplication) needs a typed proof.
+				if expr.Typ.Id != args[0].Typ.Id {
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
 			case "round", "truncate":
 				// Precision endpoints do not bound ROUND's interior extrema or
 				// TRUNCATE's sign-dependent precision direction. Only derive a
@@ -2965,6 +2988,13 @@ func GetExprZoneMap(
 					if f() {
 						return zms[expr.AuxId]
 					}
+					// Endpoint pairs do not bound a quotient with a varying
+					// denominator, even when that interval excludes zero.
+					if (t.F.Func.ObjName == "/" || t.F.Func.ObjName == "div") &&
+						!bytes.Equal(zms[args[1].AuxId].GetMinBuf(), zms[args[1].AuxId].GetMaxBuf()) {
+						zms[expr.AuxId].Reset()
+						return zms[expr.AuxId]
+					}
 					for i, arg := range args {
 						if vecs[arg.AuxId] != nil {
 							vecs[arg.AuxId].Free(proc.Mp())
@@ -2981,34 +3011,9 @@ func GetExprZoneMap(
 					types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset),
 				)
 
-				result := vector.NewFunctionResultWrapper(typ, proc.Mp())
-				if err = result.PreExtendAndReset(2); err != nil {
-					zms[expr.AuxId].Reset()
-					result.Free()
-					if fnFree != nil {
-						// NOTE: fnFree is only applicable for serial and serial_full.
-						// if fnFree is not nil, then make sure to call it after fn() is done.
-						_ = fnFree()
-					}
-					return zms[expr.AuxId]
-				}
-				if err = fn(ivecs, result, proc, 2, nil); err != nil {
-					zms[expr.AuxId].Reset()
-					result.Free()
-					if fnFree != nil {
-						// NOTE: fnFree is only applicable for serial and serial_full.
-						// if fnFree is not nil, then make sure to call it after fn() is done.
-						_ = fnFree()
-					}
-					return zms[expr.AuxId]
-				}
-				if fnFree != nil {
-					// NOTE: fnFree is only applicable for serial and serial_full.
-					// if fnFree is not nil, then make sure to call it after fn() is done.
-					_ = fnFree()
-				}
-				zms[expr.AuxId] = index.VectorToZM(result.GetResultVector(), zms[expr.AuxId])
-				result.Free()
+				zms[expr.AuxId] = evaluateZoneMapFunction(proc, typ, zms[expr.AuxId], func(result vector.FunctionResultWrapper) error {
+					return fn(ivecs, result, proc, 2, nil)
+				}, fnFree)
 			}
 		}
 
@@ -3017,6 +3022,38 @@ func GetExprZoneMap(
 	}
 
 	return zms[expr.AuxId]
+}
+
+// evaluateZoneMapFunction owns the temporary scalar result, not its arguments.
+// Synthetic endpoints can fail even when every actual row is valid.
+func evaluateZoneMapFunction(proc *process.Process, typ types.Type, zm objectio.ZoneMap,
+	eval func(vector.FunctionResultWrapper) error, fnFree func() error) objectio.ZoneMap {
+	if fnFree != nil {
+		defer func() { _ = fnFree() }()
+	}
+	result := vector.NewFunctionResultWrapper(typ, proc.Mp())
+	defer result.Free()
+	if err := result.PreExtendAndReset(2); err != nil {
+		zm.Reset()
+		return zm
+	}
+	err := func() (err error) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				if arithmeticErr, ok := recovered.(*moerr.Error); ok && arithmeticErr != nil && arithmeticErr.ErrorCode() == moerr.ErrOutOfRange {
+					err = arithmeticErr
+				} else {
+					panic(recovered)
+				}
+			}
+		}()
+		return eval(result)
+	}()
+	if err != nil {
+		zm.Reset()
+		return zm
+	}
+	return index.VectorToZM(result.GetResultVector(), zm)
 }
 
 func hasConstNullArg(args []*plan.Expr) bool {

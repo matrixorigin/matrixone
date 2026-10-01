@@ -19,14 +19,33 @@ insert into t values (1,'[1,1,1]'),(2,'[2,2,2]'),(3,'[9,9,9]'),(4,'[10,10,10]');
 create index idx using ivfflat on t(v) lists=1 op_type 'vector_l2_ops';
 -- distances from [1,1,1]: id1=0, id2=1.73, id3=13.86, id4=15.59
 
+-- Persist entries so storage Top-K scores without loading the embedding.
+set @entries = (select distinct i.index_table_name from mo_catalog.mo_indexes i join mo_catalog.mo_tables t on i.table_id=t.rel_id where t.reldatabase=database() and t.relname='t' and i.name='idx' and i.algo_table_type='entries');
+-- @ignore:0
+select mo_ctl('dn','flush',concat(database(),'.',@entries));
+set @stats = concat('select table_cnt, accurate_object_number > 0 as persisted from table_stats("',database(),'.',@entries,'","refresh","full") g');
+prepare entry_stats from @stats;
+execute entry_stats;
+deallocate prepare entry_stats;
+
 -- ============ literal controls ============
 select id from t where l2_distance(v,'[1,1,1]') < 5 order by l2_distance(v,'[1,1,1]') limit 2;
 select id from t where l2_distance(v,'[1,1,1]') > 5 order by l2_distance(v,'[1,1,1]') limit 2;
 select id from t where l2_distance(v,'[1,1,1]') <= 1.7320508 order by l2_distance(v,'[1,1,1]') limit 4;
+-- #29381: the widened storage gate includes id2; exact filtering must compact
+-- the remaining scalar/distance columns while preserving the empty entry slot.
+select id from t where l2_distance(v,'[1,1,1]') <= 1.73205077 order by l2_distance(v,'[1,1,1]') limit 4;
 
 create table u(id int primary key, v vecf32(3), lim double);
 insert into u values (1,'[1,1,1]',5),(2,'[2,2,2]',5),(3,'[9,9,9]',0.5),(4,'[10,10,10]',100);
 create index uidx using ivfflat on u(v) lists=1 op_type 'vector_l2_ops';
+
+-- #29038: t is warm with L2; u is cold and first searched with squared L2.
+-- Each request must use its own units, including when switching back.
+select id from t where l2_distance_sq(v,'[1,1,1]') > 100 and l2_distance_sq(v,'[1,1,1]') < 200 order by l2_distance_sq(v,'[1,1,1]') limit 4;
+select id from t where l2_distance(v,'[1,1,1]') > 5 and l2_distance(v,'[1,1,1]') < 14 order by l2_distance(v,'[1,1,1]') limit 4;
+select id from u where l2_distance_sq(v,'[1,1,1]') > 100 and l2_distance_sq(v,'[1,1,1]') < 200 order by l2_distance_sq(v,'[1,1,1]') limit 4;
+select id from u where l2_distance(v,'[1,1,1]') > 5 and l2_distance(v,'[1,1,1]') < 14 order by l2_distance(v,'[1,1,1]') limit 4;
 
 -- ============ the plan, not just the answer ============
 -- The pushdown is invisible in the results -- an unpushed bound gives the same rows

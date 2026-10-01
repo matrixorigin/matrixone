@@ -15,6 +15,7 @@
 package ivfflat
 
 import (
+	"math"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -59,8 +60,8 @@ func (s *planSearchGeneration) release() {
 	s.proc, s.snapshot, s.route, s.search = nil, nil, nil, nil
 }
 
-// NewPlanReaders creates disjoint local PRE readers, retaining logical CN
-// identity for centroid cache keys. No entry reader opens until initialization
+// NewPlanReaders creates PRE readers within one logical CN partition, retaining
+// its identity for centroid cache keys and persisted-object ownership. No entry reader opens until initialization
 // has sealed the shared domain, snapshot, version and centroid route.
 func NewPlanReaders(proc *process.Process, spec *plan.VectorIndexScan, req searchplugin.Request, parallelism int) ([]engine.Reader, error) {
 	if parallelism <= 0 || int64(parallelism) > int64(^uint32(0)>>1) {
@@ -71,8 +72,11 @@ func NewPlanReaders(proc *process.Process, spec *plan.VectorIndexScan, req searc
 		return nil, err
 	}
 	prototype := prototypeReader.(*planReader)
-	if proc.Ctx == nil || !req.MembershipFilterRequired || req.Identity.PartitionCount > 1 || req.Identity.PartitionIndex != 0 {
-		return nil, moerr.NewInvalidInputNoCtx("local PRE readers require a coordinator context and exact domain")
+	distributed := req.Identity.PartitionCount > 1
+	if proc.Ctx == nil || !req.MembershipFilterRequired || req.Identity.PartitionIndex < 0 ||
+		(distributed && req.Identity.PartitionIndex >= req.Identity.PartitionCount) ||
+		(!distributed && req.Identity.PartitionIndex != 0) {
+		return nil, moerr.NewInvalidInputNoCtx("PRE readers require a valid logical partition and exact domain")
 	}
 	if err := proc.Ctx.Err(); err != nil {
 		return nil, err
@@ -81,8 +85,11 @@ func NewPlanReaders(proc *process.Process, spec *plan.VectorIndexScan, req searc
 	if err != nil {
 		return nil, err
 	}
-	if parallelism > 1 && (async || req.HasFirstRound || spec.FirstRoundLimit != nil || spec.BucketExpandStep > 0 || spec.ScanWork == nil) {
+	if (parallelism > 1 || distributed) && (async || req.HasFirstRound || spec.FirstRoundLimit != nil || spec.BucketExpandStep > 0 || spec.ScanWork == nil) {
 		return nil, moerr.NewInvalidInputNoCtx("vector execution mode does not support local DOP")
+	}
+	if distributed && (parallelism != 1 || spec.ScanWork.Objects < 2 || spec.ScanWork.Rows <= 0 || math.IsNaN(spec.ScanWork.Rows) || math.IsInf(spec.ScanWork.Rows, 0) || spec.ScanWork.VectorBytesPerRow <= 0 || math.IsNaN(spec.ScanWork.VectorBytesPerRow) || math.IsInf(spec.ScanWork.VectorBytesPerRow, 0) || spec.ScanWork.Blocks <= 0) {
+		return nil, moerr.NewInvalidInputNoCtx("distributed PRE requires one reader per logical partition and multiple objects")
 	}
 	if req.CandidateBudget == 0 || len(req.MembershipFilter) == 0 {
 		readers := make([]engine.Reader, parallelism)
@@ -105,7 +112,7 @@ func NewPlanReaders(proc *process.Process, spec *plan.VectorIndexScan, req searc
 		keys.GetType().Oid != types.T(spec.SourceTableDef.Cols[pos].Typ.Id) {
 		return nil, moerr.NewInvalidInputNoCtx("PRE membership key type does not match the source primary key")
 	}
-	if parallelism > 1 && !docfilter.SupportsBitset(*keys.GetType()) {
+	if (parallelism > 1 || distributed) && !docfilter.SupportsBitset(*keys.GetType()) {
 		return nil, moerr.NewInvalidInputNoCtx("local PRE DOP requires an exact integer domain")
 	}
 	session := &planSearchGeneration{proc: proc.NewContextChildProc(0), snapshot: proc.GetTxnOperator(), parallelism: int32(parallelism)}
@@ -152,8 +159,12 @@ func NewPlanReaders(proc *process.Process, spec *plan.VectorIndexScan, req searc
 		r.generation, r.ownsContext = session, true
 		session.refs.Add(1)
 		r.scanner.generation = session
-		r.scanner.partitionCount, r.scanner.partitionIndex = int32(parallelism), int32(i)
-		r.scanner.ownsInMemory = i == 0
+		if distributed {
+			r.scanner.ownsInMemory = !req.Identity.IsRemote
+		} else {
+			r.scanner.partitionCount, r.scanner.partitionIndex = int32(parallelism), int32(i)
+			r.scanner.ownsInMemory = i == 0
+		}
 		if i == 0 && r.executionStats != nil {
 			r.executionStats.Merge(session.prepareStats)
 		}
