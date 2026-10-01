@@ -5209,16 +5209,23 @@ func preparedSQLExecuteTextConsumerType(functionName string, expr *Expr, param P
 // context through domain-preserving expressions. Fixed binary contributors
 // retain a binary comparison context; explicit casts already own their domain.
 func preparedFieldOperandComparisonType(ctx context.Context, expr *Expr, lookup preparedStringDomainParamLookup) (types.Type, bool, error) {
-	if expr == nil || !types.T(expr.Typ.Id).IsMySQLString() ||
-		!preparedExprContainsParam(expr) || isExplicitPreparedCast(expr) {
+	if expr == nil || !types.T(expr.Typ.Id).IsMySQLString() || isExplicitPreparedCast(expr) {
 		return types.Type{}, false, nil
 	}
-	hasSQLStringMarker, hasNumericSourceMarker := false, false
+	// Reuse the compact value-domain witness: it follows projection lineage,
+	// excludes control arguments, and preserves explicit domain boundaries.
+	// Unlike probing the whole operand, a numeric IF condition or SUBSTRING
+	// offset cannot be mistaken for a numeric source of the returned value.
+	probe := stringDomainSourceWitness(expr, possibleStringDomainText|possibleStringDomainBinary)
+	if probe == nil || !preparedExprContainsParam(probe) {
+		return types.Type{}, false, nil
+	}
+	hasSQLStringMarker := false
+	// The compact string witness intentionally omits numeric-only leaves.
+	// Inspect value roles on the original tree as well, including typed NULLs.
+	hasNumericSourceMarker := preparedFieldHasNumericValueMarker(expr, lookup)
 	markerLookup := func(pos int) (any, types.Type, bool) {
 		value, fallback, found := lookup(pos)
-		if param, ok := value.(ParamValue); ok && param.HasSourceType && param.SourceType.IsNumeric() {
-			hasNumericSourceMarker = true
-		}
 		if param, ok := value.(ParamValue); ok && !param.IsBinaryProtocol &&
 			((param.HasSourceType && param.SourceType.Oid.IsMySQLString()) ||
 				param.IsBinaryString || param.IsBin || param.RuntimeStringDomain != types.RuntimeStringInherit) {
@@ -5231,7 +5238,6 @@ func preparedFieldOperandComparisonType(ctx context.Context, expr *Expr, lookup 
 	}
 	// A provisional common-type cast may have widened a fixed binary literal
 	// to TEXT. Recover its literal domain only in this private type probe.
-	probe := DeepCopyExpr(expr)
 	if err := plan.VisitExprTree(probe, func(value *Expr) error {
 		// Common-type casts around an entire expression are just as
 		// provisional as casts around a bare marker. Keep explicit boundaries.
@@ -5292,6 +5298,54 @@ func preparedFieldOperandComparisonType(ctx context.Context, expr *Expr, lookup 
 		typ.Width = -1
 	}
 	return typ, err == nil && hasSQLStringMarker && types.StaticStringDomain(typ) != types.StringDomainNone, err
+}
+
+// preparedFieldHasNumericValueMarker follows returned values, not conditions
+// or string-function controls. String-producing functions own the conversion
+// boundary even when their source marker is numeric.
+func preparedFieldHasNumericValueMarker(expr *Expr, lookup preparedStringDomainParamLookup) bool {
+	if expr == nil || isExplicitPreparedCast(expr) {
+		return false
+	}
+	if param := expr.GetP(); param != nil {
+		value, _, found := lookup(int(param.Pos))
+		p, ok := value.(ParamValue)
+		return found && ok && p.HasSourceType && p.SourceType.IsNumeric()
+	}
+	if source := expr.GetPreparedNumeric().GetStringDomainSource(); source != nil {
+		return preparedFieldHasNumericValueMarker(source, lookup)
+	}
+	if lit := expr.GetLit(); lit != nil {
+		return preparedFieldHasNumericValueMarker(lit.Src, lookup)
+	}
+	if sub := expr.GetSub(); sub != nil {
+		return preparedFieldHasNumericValueMarker(sub.Child, lookup)
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	name := strings.ToLower(fn.Func.ObjName)
+	if preparedStringDomainSourceIndex(name, len(fn.Args)) >= 0 {
+		return false
+	}
+	if indexes, ok := numericFunctionResultArgs(name, len(fn.Args)); ok {
+		for _, index := range indexes {
+			if index >= 0 && index < len(fn.Args) && preparedFieldHasNumericValueMarker(fn.Args[index], lookup) {
+				return true
+			}
+		}
+		return false
+	}
+	for index, arg := range fn.Args {
+		if name == "case" && !numericFunctionArgKeepsContext(name, index, len(fn.Args)) {
+			continue
+		}
+		if preparedFieldHasNumericValueMarker(arg, lookup) {
+			return true
+		}
+	}
+	return false
 }
 
 // preparedSQLExecuteTextFunctionArg performs a byte-preserving cast into the

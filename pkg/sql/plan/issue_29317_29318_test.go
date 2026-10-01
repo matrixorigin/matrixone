@@ -243,6 +243,59 @@ func TestPreparedVariadicRuntimeSourceDomains(t *testing.T) {
 			want: []types.T{types.T_text, types.T_text},
 		},
 		{
+			name: "field IF numeric condition", sql: "prepare p from 'select field(if(?, ?, ?), ?)'", fn: "field",
+			values: []ParamValue{
+				{Value: int64(1), SourceType: types.T_int64.ToType(), HasSourceType: true},
+				{Value: "A", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+				{Value: "B", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+				{Value: "a", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+			},
+			want: []types.T{types.T_text, types.T_text},
+		},
+		{
+			name: "field IF nested substring numeric control", sql: "prepare p from 'select field(if(?, substring(?, ?), ?), ?)'", fn: "field",
+			values: []ParamValue{
+				{Value: int64(1), SourceType: types.T_int64.ToType(), HasSourceType: true},
+				{Value: "A", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+				{Value: int64(1), SourceType: types.T_int64.ToType(), HasSourceType: true},
+				{Value: "B", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+				{Value: "a", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+			},
+			want: []types.T{types.T_text, types.T_text},
+		},
+		{
+			name: "field derived marker projection", sql: "prepare p from 'select field(x, ?) from (select ? as x limit 1) d'", fn: "field",
+			values: []ParamValue{
+				{Value: "a", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+				{Value: "A", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+			},
+			want: []types.T{types.T_text, types.T_text},
+		},
+		{
+			name: "field scalar marker projection", sql: "prepare p from 'select field((select ? from (select 1 as x) d limit 1), ?)'", fn: "field",
+			values: []ParamValue{
+				{Value: "A", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+				{Value: "a", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+			},
+			want: []types.T{types.T_text, types.T_text},
+		},
+		{
+			name: "field MAX marker projection", sql: "prepare p from 'select field(max(?), ?)'", fn: "field",
+			values: []ParamValue{
+				{Value: "A", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+				{Value: "a", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+			},
+			want: []types.T{types.T_text, types.T_text},
+		},
+		{
+			name: "field NULLIF marker context", sql: "prepare p from 'select field(nullif(?, ''''), ?)'", fn: "field",
+			values: []ParamValue{
+				{Value: "A", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+				{Value: "a", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+			},
+			want: []types.T{types.T_text, types.T_text},
+		},
+		{
 			name: "field explicit binary cast boundary", sql: "prepare p from 'select field(cast(? as binary), ?)'", fn: "field",
 			values: []ParamValue{
 				{Value: "A", SourceType: types.T_varbinary.ToType(), HasSourceType: true, IsBinaryString: true},
@@ -360,7 +413,10 @@ func TestPreparedVariadicRuntimeSourceDomains(t *testing.T) {
 				require.Equal(t, want, types.T(fn.GetF().Args[i].Typ.Id), fn.String())
 			}
 			if tc.name == "field coalesce marker text context" || tc.name == "field substring marker text context" ||
-				tc.name == "field substring numeric control" ||
+				tc.name == "field substring numeric control" || tc.name == "field IF numeric condition" ||
+				tc.name == "field IF nested substring numeric control" || tc.name == "field derived marker projection" ||
+				tc.name == "field scalar marker projection" || tc.name == "field MAX marker projection" ||
+				tc.name == "field NULLIF marker context" ||
 				tc.name == "field fixed binary contributor boundary" {
 				comparison := fn.GetF().Args[0]
 				wantDomain, wantWidth := types.StringDomainText, -1

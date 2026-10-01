@@ -5819,6 +5819,9 @@ func preparedRegexpStringDomainCheckModes(
 
 func (b *baseBinder) markPreparedStringDomainSubquerySources(name string, args []*Expr) {
 	stringOperands := preparedRegexpCompatibilityStringOperandCount(name, len(args))
+	if name == "field" {
+		stringOperands = len(args)
+	}
 	for i := 0; i < stringOperands; i++ {
 		b.markPreparedStringDomainSubquerySource(args[i], make(map[[2]int32]struct{}))
 	}
@@ -5850,7 +5853,8 @@ func (b *baseBinder) annotateStringDomainSource(
 			return
 		}
 		var source *Expr
-		if b.ctx != nil && col.RelPos == b.ctx.groupTag {
+		if b.ctx != nil && (col.RelPos == b.ctx.groupTag ||
+			col.RelPos == b.ctx.aggregateTag || col.RelPos == b.ctx.windowTag) {
 			source = b.pendingColumnSource(col)
 		} else {
 			nodeID, ok := b.builder.tag2NodeID[col.RelPos]
@@ -5862,8 +5866,12 @@ func (b *baseBinder) annotateStringDomainSource(
 				return
 			}
 			outputs := node.ProjectList
-			if node.NodeType == plan.Node_AGG && len(node.BindingTags) > 0 && col.RelPos == node.BindingTags[0] {
-				outputs = node.GroupBy
+			if node.NodeType == plan.Node_AGG && len(node.BindingTags) > 0 {
+				if col.RelPos == node.BindingTags[0] {
+					outputs = node.GroupBy
+				} else if len(node.BindingTags) > 1 && col.RelPos == node.BindingTags[1] {
+					outputs = node.AggList
+				}
 			}
 			if int(col.ColPos) >= len(outputs) {
 				return

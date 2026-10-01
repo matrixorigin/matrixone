@@ -73,6 +73,47 @@ execute field_nested_stmt using @field_subject, @field_subject, @field_candidate
 1  ¦  1  ¦  1
 deallocate prepare field_nested_stmt;
 set @field_candidate = null;
+set @field_subject = X'41';
+set @field_candidate = X'61';
+set @field_control = 1;
+prepare field_control_stmt from 'select field(if(?, substring(?, ?), ?), ?) as if_control';
+execute field_control_stmt using @field_control, @field_subject, @field_control, @field_subject, @field_candidate;
+➤ if_control[-5,64,0]  𝄀
+1
+deallocate prepare field_control_stmt;
+prepare field_nullif_stmt from 'select field(nullif(?, ''''), ?) as nullif_field';
+execute field_nullif_stmt using @field_subject, @field_candidate;
+➤ nullif_field[-5,64,0]  𝄀
+1
+set @field_subject = '';
+execute field_nullif_stmt using @field_subject, @field_candidate;
+➤ nullif_field[-5,64,0]  𝄀
+0
+set @field_subject = null;
+execute field_nullif_stmt using @field_subject, @field_candidate;
+➤ nullif_field[-5,64,0]  𝄀
+0
+set @field_subject = X'41';
+execute field_nullif_stmt using @field_subject, @field_candidate;
+➤ nullif_field[-5,64,0]  𝄀
+1
+deallocate prepare field_nullif_stmt;
+prepare field_derived_stmt from 'select field(x, ?) as derived_field, field(cast(x as binary), ?) as binary_control from (select ? as x limit 1) d';
+execute field_derived_stmt using @field_candidate, @field_candidate, @field_subject;
+➤ derived_field[-5,64,0]  ¦  binary_control[-5,64,0]  𝄀
+1  ¦  0
+deallocate prepare field_derived_stmt;
+prepare field_scalar_stmt from 'select field((select ? from (select 1 as x) d limit 1), ?) as scalar_field';
+execute field_scalar_stmt using @field_subject, @field_candidate;
+➤ scalar_field[-5,64,0]  𝄀
+1
+deallocate prepare field_scalar_stmt;
+prepare field_max_stmt from 'select field(max(?), ?) as max_field';
+execute field_max_stmt using @field_subject, @field_candidate;
+➤ max_field[-5,64,0]  𝄀
+1
+deallocate prepare field_max_stmt;
+set @field_control = null;
 set @field_subject = _binary 'a';
 prepare field_binary_stmt from 'select field(cast(? as binary), ''A'', ''a'', X''FE'', X''FF'') as prepared_field';
 execute field_binary_stmt using @field_subject;

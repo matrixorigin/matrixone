@@ -59,6 +59,37 @@ execute field_nested_stmt using @field_subject, @field_subject, @field_candidate
 deallocate prepare field_nested_stmt;
 set @field_candidate = null;
 
+-- Numeric control arguments do not own the returned string comparison domain.
+set @field_subject = X'41';
+set @field_candidate = X'61';
+set @field_control = 1;
+prepare field_control_stmt from 'select field(if(?, substring(?, ?), ?), ?) as if_control';
+execute field_control_stmt using @field_control, @field_subject, @field_control, @field_subject, @field_candidate;
+deallocate prepare field_control_stmt;
+
+-- NULLIF keeps the marker domain across its CASE rewrite and cached reuse.
+prepare field_nullif_stmt from 'select field(nullif(?, ''''), ?) as nullif_field';
+execute field_nullif_stmt using @field_subject, @field_candidate;
+set @field_subject = '';
+execute field_nullif_stmt using @field_subject, @field_candidate;
+set @field_subject = null;
+execute field_nullif_stmt using @field_subject, @field_candidate;
+set @field_subject = X'41';
+execute field_nullif_stmt using @field_subject, @field_candidate;
+deallocate prepare field_nullif_stmt;
+
+-- Projection lineage preserves SQL marker context, not explicit binary casts.
+prepare field_derived_stmt from 'select field(x, ?) as derived_field, field(cast(x as binary), ?) as binary_control from (select ? as x limit 1) d';
+execute field_derived_stmt using @field_candidate, @field_candidate, @field_subject;
+deallocate prepare field_derived_stmt;
+prepare field_scalar_stmt from 'select field((select ? from (select 1 as x) d limit 1), ?) as scalar_field';
+execute field_scalar_stmt using @field_subject, @field_candidate;
+deallocate prepare field_scalar_stmt;
+prepare field_max_stmt from 'select field(max(?), ?) as max_field';
+execute field_max_stmt using @field_subject, @field_candidate;
+deallocate prepare field_max_stmt;
+set @field_control = null;
+
 -- Explicit binary subjects retain byte equality across prepared executions.
 set @field_subject = _binary 'a';
 prepare field_binary_stmt from 'select field(cast(? as binary), ''A'', ''a'', X''FE'', X''FF'') as prepared_field';
