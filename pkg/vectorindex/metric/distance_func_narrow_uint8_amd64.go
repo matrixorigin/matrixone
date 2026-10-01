@@ -97,6 +97,7 @@ func l2sqUint8SIMD(a, b []uint8) (float64, error) {
 		acc = acc.Add(d0.Mul(d0).Add(d1.Mul(d1)).Add(d2.Mul(d2).Add(d3.Mul(d3))))
 	}
 	sum := sumI32x16(acc)
+	archsimd.ClearAVXUpperBits()
 	for i := j * 4; i < n; i++ {
 		d := int32(a[i]) - int32(b[i])
 		sum += int64(d * d)
@@ -119,6 +120,7 @@ func innerProductUint8SIMD(a, b []uint8) (float64, error) {
 		acc = acc.Add(a0.Mul(b0).Add(a1.Mul(b1)).Add(a2.Mul(b2).Add(a3.Mul(b3))))
 	}
 	sum := sumI32x16(acc)
+	archsimd.ClearAVXUpperBits()
 	for i := j * 4; i < n; i++ {
 		sum += int64(int32(a[i]) * int32(b[i]))
 	}
@@ -142,6 +144,7 @@ func l1DistanceUint8SIMD(a, b []uint8) (float64, error) {
 		acc = acc.Add(abs(a0.Sub(b0)).Add(abs(a1.Sub(b1))).Add(abs(a2.Sub(b2)).Add(abs(a3.Sub(b3)))))
 	}
 	sum := sumI32x16(acc)
+	archsimd.ClearAVXUpperBits()
 	for i := j * 4; i < n; i++ {
 		d := int32(a[i]) - int32(b[i])
 		if d < 0 {
@@ -172,6 +175,7 @@ func cosineDistanceUint8SIMD(a, b []uint8) (float64, error) {
 		nbA = nbA.Add(b0.Mul(b0).Add(b1.Mul(b1)).Add(b2.Mul(b2).Add(b3.Mul(b3))))
 	}
 	dot, na2, nb2 := sumI32x16(dotA), sumI32x16(naA), sumI32x16(nbA)
+	archsimd.ClearAVXUpperBits()
 	for i := j * 4; i < n; i++ {
 		ai, bi := int64(a[i]), int64(b[i])
 		dot += ai * bi
@@ -212,6 +216,7 @@ func l2sqUint8AVX2(a, b []uint8) (float64, error) {
 		acc = acc.Add(d0.Mul(d0).Add(d1.Mul(d1)).Add(d2.Mul(d2).Add(d3.Mul(d3))))
 	}
 	sum := sumI32x8(acc)
+	archsimd.ClearAVXUpperBits()
 	for i := j * 4; i < n; i++ {
 		d := int32(a[i]) - int32(b[i])
 		sum += int64(d * d)
@@ -234,6 +239,7 @@ func innerProductUint8AVX2(a, b []uint8) (float64, error) {
 		acc = acc.Add(a0.Mul(b0).Add(a1.Mul(b1)).Add(a2.Mul(b2).Add(a3.Mul(b3))))
 	}
 	sum := sumI32x8(acc)
+	archsimd.ClearAVXUpperBits()
 	for i := j * 4; i < n; i++ {
 		sum += int64(int32(a[i]) * int32(b[i]))
 	}
@@ -257,6 +263,7 @@ func l1DistanceUint8AVX2(a, b []uint8) (float64, error) {
 		acc = acc.Add(abs(a0.Sub(b0)).Add(abs(a1.Sub(b1))).Add(abs(a2.Sub(b2)).Add(abs(a3.Sub(b3)))))
 	}
 	sum := sumI32x8(acc)
+	archsimd.ClearAVXUpperBits()
 	for i := j * 4; i < n; i++ {
 		d := int32(a[i]) - int32(b[i])
 		if d < 0 {
@@ -287,6 +294,7 @@ func cosineDistanceUint8AVX2(a, b []uint8) (float64, error) {
 		nbA = nbA.Add(b0.Mul(b0).Add(b1.Mul(b1)).Add(b2.Mul(b2).Add(b3.Mul(b3))))
 	}
 	dot, na2, nb2 := sumI32x8(dotA), sumI32x8(naA), sumI32x8(nbA)
+	archsimd.ClearAVXUpperBits()
 	for i := j * 4; i < n; i++ {
 		ai, bi := int64(a[i]), int64(b[i])
 		dot += ai * bi

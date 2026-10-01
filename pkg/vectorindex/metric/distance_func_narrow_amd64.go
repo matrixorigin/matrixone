@@ -84,6 +84,7 @@ func l2sqBF16SIMD(a, b []types.BF16) (float64, error) {
 		acc1 = dO.MulAdd(dO, acc1)
 	}
 	sum := sumF32x16(acc0.Add(acc1))
+	archsimd.ClearAVXUpperBits()
 	for i := j * 2; i < n; i++ {
 		d := a[i].ToFloat32() - b[i].ToFloat32()
 		sum += d * d
@@ -107,6 +108,7 @@ func innerProductBF16SIMD(a, b []types.BF16) (float64, error) {
 		acc1 = ua.And(hi).AsFloat32x16().MulAdd(ub.And(hi).AsFloat32x16(), acc1)
 	}
 	sum := sumF32x16(acc0.Add(acc1))
+	archsimd.ClearAVXUpperBits()
 	for i := j * 2; i < n; i++ {
 		sum += a[i].ToFloat32() * b[i].ToFloat32()
 	}
@@ -132,6 +134,7 @@ func l1DistanceBF16SIMD(a, b []types.BF16) (float64, error) {
 		acc1 = acc1.Add(dO.AsUint32x16().And(absMask).AsFloat32x16())
 	}
 	sum := sumF32x16(acc0.Add(acc1))
+	archsimd.ClearAVXUpperBits()
 	for i := j * 2; i < n; i++ {
 		d := a[i].ToFloat32() - b[i].ToFloat32()
 		if d < 0 {
@@ -173,6 +176,7 @@ func cosineDistanceBF16SIMD(a, b []types.BF16) (float64, error) {
 	dot := sumF32x16(dot0.Add(dot1))
 	na2 := sumF32x16(na0.Add(na1))
 	nb2 := sumF32x16(nb0.Add(nb1))
+	archsimd.ClearAVXUpperBits()
 	for i := j * 2; i < n; i++ {
 		ai, bi := a[i].ToFloat32(), b[i].ToFloat32()
 		dot += ai * bi
