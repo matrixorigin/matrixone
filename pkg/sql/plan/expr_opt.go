@@ -396,31 +396,37 @@ func (builder *QueryBuilder) rewriteNativeIntegerComparison(expr *plan.Expr) *pl
 	return expr
 }
 
-// Scalar subqueries can expose constants only after filter pushdown. Rewrite
-// proven numeric domains before scan statistics choose block filters.
-func (builder *QueryBuilder) rewriteNumericDomainFilters(nodeID int32) error {
+// Rewrite scan domains after filter pushdown, before choosing block filters.
+// Rewrite JOIN domains after simple projections expose singleton peers.
+func (builder *QueryBuilder) rewriteNumericDomainFilters(nodeID int32, target plan.Node_NodeType) error {
 	var visit func(int32) error
 	visit = func(id int32) error {
+		if err := builder.checkPlanningCanceled(); err != nil {
+			return err
+		}
 		node := builder.qry.Nodes[id]
 		for _, child := range node.Children {
 			if err := visit(child); err != nil {
 				return err
 			}
 		}
-		filters := node.FilterList
-		if node.NodeType == plan.Node_JOIN {
-			filters = node.OnList
-		}
-		if node.NodeType != plan.Node_TABLE_SCAN && node.NodeType != plan.Node_JOIN {
+		if node.NodeType != target {
 			return nil
 		}
+		filters := node.FilterList
+		if target == plan.Node_JOIN {
+			filters = node.OnList
+		}
 		for _, filter := range filters {
+			changed := false
 			if err := plan.VisitExprTree(filter, func(current *plan.Expr) error {
 				if rewritten := builder.rewriteNativeIntegerComparison(current); rewritten != current {
 					*current = *rewritten
+					changed = true
 				}
 				if rewritten := builder.rewriteUniqueDecimalFloatComparison(node, current); rewritten != current {
 					*current = *rewritten
+					changed = true
 				}
 				rewritten, err := builder.rewritePreparedIntegerComparison(node, current)
 				if err != nil {
@@ -428,10 +434,20 @@ func (builder *QueryBuilder) rewriteNumericDomainFilters(nodeID int32) error {
 				}
 				if rewritten != current {
 					*current = *rewritten
+					changed = true
 				}
 				return nil
 			}); err != nil {
 				return err
+			}
+			if changed && target == plan.Node_JOIN {
+				// Logical parents may still carry estimates from the old domain.
+				if err := plan.VisitExprTree(filter, func(current *plan.Expr) error {
+					current.Ndv, current.Selectivity = 0, 0
+					return nil
+				}); err != nil {
+					return err
+				}
 			}
 		}
 		return nil

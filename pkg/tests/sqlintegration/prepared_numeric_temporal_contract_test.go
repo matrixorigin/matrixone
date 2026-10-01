@@ -167,6 +167,35 @@ func TestPreparedNumericTemporalContracts(t *testing.T) {
 					}
 				}()
 			}
+			for _, projection := range []string{
+				"select v from (select cast(? as decimal(38,1)) as v) y",
+				"select abs(v) as v from (select cast(? as decimal(38,1)) as v) y",
+			} {
+				func() {
+					p, err := conn.PrepareContext(ctx, "select k.id from keys_t k join ("+projection+") x on k.id=x.v order by k.id")
+					require.NoError(t, err)
+					defer p.Close()
+					for _, tc := range []struct {
+						value any
+						want  []int64
+					}{
+						{"9007199254740993", []int64{target}},
+						{"9007199254740993.5", []int64{}},
+						{nil, []int64{}},
+						{"9223372036854775808", []int64{}},
+						{"9007199254740993", []int64{target}},
+					} {
+						got, err := readPreparedContractIDs(p.QueryContext(ctx, tc.value))
+						require.NoError(t, err)
+						require.Equal(t, tc.want, got, projection)
+					}
+					_, err = readPreparedContractIDs(p.QueryContext(ctx, "not-a-number"))
+					require.ErrorContains(t, err, "invalid decimal string")
+					got, err := readPreparedContractIDs(p.QueryContext(ctx, "9007199254740993"))
+					require.NoError(t, err)
+					require.Equal(t, []int64{target}, got)
+				}()
+			}
 			// Preserve the existing literal comparison path independently of marker binding.
 			got, err := readPreparedContractIDs(conn.QueryContext(ctx, "select id from keys_t where id='9007199254740993' order by id"))
 			require.NoError(t, err)

@@ -4060,12 +4060,13 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		colRefCnt := make(map[[2]int32]int)
 		builder.countColRefs(rootID, colRefCnt)
 		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, colRefCnt)
-		var fusedScalarAggs bool
-		rootID, fusedScalarAggs = builder.fuseScalarAggregates(rootID)
-		if fusedScalarAggs {
-			colRefCnt = make(map[[2]int32]int)
-			builder.countColRefs(rootID, colRefCnt)
+		// Safe derived aliases now expose the existing singleton proof shape.
+		if err = builder.rewriteNumericDomainFilters(rootID, plan.Node_JOIN); err != nil {
+			return nil, err
 		}
+		rootID, _ = builder.fuseScalarAggregates(rootID)
+		clear(colRefCnt)
+		builder.countColRefs(rootID, colRefCnt)
 		// Removing a proof-eliminated aggregate can expose a direct Project ->
 		// TableScan edge only after the first limit-pushdown pass. Re-run the
 		// idempotent rule so the newly streaming path can honor source demand.

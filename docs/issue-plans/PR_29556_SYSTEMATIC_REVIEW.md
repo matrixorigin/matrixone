@@ -144,3 +144,38 @@ separate delivery gates.
 Independent overall review: **APPROVE**, actual `gpt-6.1-sol` / `xhigh`,
 session `01a0f853-da2a-7d62-a00f-763bffd0b158`. All 31 changed files were reviewed against the
 main base with no unresolved material blocker. Remote CI is not certified here.
+
+## Projection normalization and singleton cardinality follow-up
+
+Two scanned-work gaps remained in the late proof pipeline. Harmless nested
+aliases/arithmetic/ABS/CTEs exposed the admitted singleton shape only after
+simple projection removal; JOIN proof now runs immediately after that existing
+normalization. Scan proof remains before block-filter selection. Column references
+are recounted after rewriting/fusion, and changed JOIN predicate estimates are
+invalidated before the existing statistics recalculation. No new resolver or
+numeric interpreter was added; LIMIT/UNION and volatile guards remain intact.
+
+The existing VALUE_SCAN statistics owner now reports the executor's one dummy
+row for no-rowset, no-table, childless input. Explicit VALUES and general default
+statistics retain their owners. Runtime-filter benefit thresholds are unchanged.
+This restores useful filtering at 10000 rows without broadening proof admission.
+
+Local follow-up evidence: full planner UT, relevant public UT, selected planner
+race UT, vet and incremental lint passed. Forty-three SQL shapes passed result
+checks and successful EXPLAIN execution; eligible point shapes read 1 block/1 row
+at 10000 and 30000 rows, including nested projection and CTE JOINs. Rebindings,
+unsafe numeric controls and LEFT/RIGHT/FULL unmatched-row controls passed.
+These are scanned-work measurements, not throughput estimates.
+
+Ten BVT files passed normal comparison, 766/766, including the two CI failures.
+Their malformed DECIMAL expectations now match the existing lexical error
+instead of the old range wording. New nested/CTE goldens retain runtime-filter
+build/probe and 1-block/1-row assertions; existing goldens and ignore flags were
+preserved. The added tests reuse existing fixtures and result-reading ownership. A prepared
+BETWEEN assertion verifies key references change from one to two when lowered,
+and the refreshed count reflects both executable bounds.
+Requested rebase was performed against c2cad8af38f1; the branch was up to date.
+
+Follow-up overall review: **APPROVE**, actual `gpt-6.1-sol` / `xhigh`, session
+`01a0f8b5-2a3a-7510-a83b-1181755d8bc0`. Final golden pairing and BETWEEN
+reference-count race/lint gates are closed; no material blocker remains.

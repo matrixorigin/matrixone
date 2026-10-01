@@ -2396,7 +2396,7 @@ func (builder *QueryBuilder) optimizeFilters(rootID int32) (int32, error) {
 	rootID, _ = builder.pushdownFilters(rootID, nil, false)
 	transposeTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID)
 	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, false)
-	if err := builder.rewriteNumericDomainFilters(rootID); err != nil {
+	if err := builder.rewriteNumericDomainFilters(rootID, plan.Node_TABLE_SCAN); err != nil {
 		return rootID, err
 	}
 	ReCalcNodeStats(rootID, builder, true, true, true)

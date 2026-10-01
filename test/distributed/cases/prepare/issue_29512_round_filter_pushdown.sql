@@ -45,6 +45,18 @@ explain analyze force execute derived_round using @value;
 execute derived_round using @value;
 deallocate prepare derived_round;
 
+-- Harmless forwarding/CTE projections must retain the same runtime filter.
+prepare nested_decimal from 'select count(*) from lookup_key k join (select v from (select cast(? as decimal(38,0)) as v) y) x on k.id=x.v';
+explain force execute nested_decimal using @value;
+-- @ignore:0
+explain analyze force execute nested_decimal using @value;
+execute nested_decimal using @value;
+deallocate prepare nested_decimal;
+prepare cte_decimal from 'with y as (select cast(? as decimal(38,0)) as v), x as (select v+0 as v from y) select count(*) from lookup_key k join x on k.id=x.v';
+explain force execute cte_decimal using @value;
+execute cte_decimal using @value;
+deallocate prepare cte_decimal;
+
 prepare truncate_key from 'select count(*) from lookup_key where id = truncate(?, 0)';
 explain force execute truncate_key using @value;
 -- @ignore:0
