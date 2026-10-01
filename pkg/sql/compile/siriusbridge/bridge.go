@@ -597,7 +597,7 @@ func (q *Query) Run(ctx context.Context, fill func(Result) error) (err error) {
 	ctx, cancelDeadline := context.WithDeadlineCause(ctx, q.deadline, moerr.NewInternalErrorNoCtx("Sirius query deadline exceeded"))
 	defer cancelDeadline()
 	if err := ctx.Err(); err != nil {
-		return err
+		return errors.Join(err, context.Cause(ctx))
 	}
 	q.mu.Lock()
 	if q.running || q.closing || q.native == nil {
@@ -608,12 +608,13 @@ func (q *Query) Run(ctx context.Context, fill func(Result) error) (err error) {
 	q.idle = make(chan struct{})
 	d := q.native
 	q.mu.Unlock()
-	ctx, cancel := context.WithCancel(ctx)
+	statementCtx := ctx
+	ctx, cancel := context.WithCancelCause(ctx)
 	callbackDone := make(chan struct{})
 	stop := context.AfterFunc(ctx, func() { _ = d.cancel(); close(callbackDone) })
 	var producers sync.WaitGroup
 	defer func() {
-		cancel()
+		cancel(nil)
 		if !stop() {
 			<-callbackDone
 		}
@@ -644,7 +645,7 @@ func (q *Query) Run(ctx context.Context, fill func(Result) error) (err error) {
 				}()
 				return read.Producer(ctx, &Input{native: input})
 			}()
-			if IsNotNeeded(e) {
+			if isProducerStopError(ctx, e) {
 				return
 			}
 			if e == nil {
@@ -652,11 +653,11 @@ func (q *Query) Run(ctx context.Context, fill func(Result) error) (err error) {
 			} else {
 				e = errors.Join(e, input.fail(e))
 			}
-			if e != nil && !IsNotNeeded(e) {
+			if e != nil && !isProducerStopError(ctx, e) {
 				producerMu.Lock()
 				producerErr = errors.Join(producerErr, e)
 				producerMu.Unlock()
-				cancel()
+				cancel(e)
 			}
 		}(read)
 	}
@@ -667,18 +668,52 @@ func (q *Query) Run(ctx context.Context, fill func(Result) error) (err error) {
 		err = d.next(fill)
 		if errors.Is(err, errEOF) {
 			err = nil
+			// Native completion retires any unfinished MO readers. This cause
+			// is distinct from caller cancellation and a producer failure; only
+			// cancellation fallout belonging to this retirement is ignorable.
+			cancel(errNotNeeded)
 			break
 		}
 		if err != nil {
 			break
 		}
 	}
-	cancel()
+	cancel(err)
 	producers.Wait()
 	producerMu.Lock()
-	err = errors.Join(err, producerErr)
+	// The caller may cancel while readers are retiring after native EOF. Keep
+	// its error class and cause even when the producer context retired first.
+	err = errors.Join(err, producerErr, statementCtx.Err(), context.Cause(statementCtx))
 	producerMu.Unlock()
 	return err
+}
+
+// A stop result is secondary only when every leaf belongs to input retirement.
+// errors.Is alone would hide a real reader/cleanup error joined with a stop
+// signal, or an independent deadline that raced successful native EOF.
+func isProducerStopError(ctx context.Context, err error) bool {
+	if err == nil {
+		return false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !isProducerStopError(ctx, child) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		if child := wrapped.Unwrap(); child != nil {
+			return isProducerStopError(ctx, child)
+		}
+	}
+	return IsNotNeeded(err) || context.Cause(ctx) == errNotNeeded &&
+		(errors.Is(err, context.Canceled) || moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
 }
 
 func (q *Query) Close(ctx context.Context) (resultErr error) {

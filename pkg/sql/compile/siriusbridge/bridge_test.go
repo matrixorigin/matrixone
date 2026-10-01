@@ -69,6 +69,7 @@ type testQuery struct {
 	closed     atomic.Bool
 	fill       bool
 	nextErr    error
+	nextFn     func(func(Result) error) error
 	starts     atomic.Int32
 	cancels    atomic.Int32
 	closes     atomic.Int32
@@ -111,6 +112,9 @@ func (q *testQuery) cancel() error {
 }
 func (q *testQuery) next(fill func(Result) error) error {
 	close(q.entered)
+	if q.nextFn != nil {
+		return q.nextFn(fill)
+	}
 	if q.nextErr != nil {
 		return q.nextErr
 	}

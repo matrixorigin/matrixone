@@ -169,7 +169,9 @@ func (s siriusReaderSpec) run(ctx context.Context, input SiriusInput) (err error
 		scopes = c.compileLimit(node, scopes)
 	}
 	root := scopes[0]
-	if len(scopes) > 1 {
+	if !c.IsSingleScope(scopes) {
+		// One scope may still have several scan workers. Output is a single
+		// publisher and must remain above the parallel operator duplication.
 		root = c.newMergeScope(scopes)
 	}
 	root.setRootOperator(output.NewArgument().WithBlock(false).WithFunc(func(bat *batch.Batch, _ *perfcounter.CounterSet) error {

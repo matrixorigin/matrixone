@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -47,6 +48,7 @@ type siriusBatchRecorder struct {
 	acquired, published, released      int
 	acquireErr, publishErr, releaseErr error
 	onAcquire                          func(context.Context) error
+	onPublish                          func(uint32, []SiriusInputVector) error
 }
 
 func (r *siriusBatchRecorder) Acquire(ctx context.Context, bytes uint64) (SiriusInputLease, error) {
@@ -69,6 +71,9 @@ func (r *siriusBatchRecorder) Publish(_ context.Context, rows uint32, vs []Siriu
 	r.rows, r.vectors = rows, make([]SiriusInputVector, len(vs))
 	for i, v := range vs {
 		r.vectors[i] = SiriusInputVector{Class: v.Class, Data: append([]byte(nil), v.Data...), Area: append([]byte(nil), v.Area...), Nulls: append([]byte(nil), v.Nulls...)}
+	}
+	if r.onPublish != nil {
+		return r.onPublish(rows, vs)
 	}
 	return r.publishErr
 }
@@ -284,15 +289,16 @@ func TestSiriusReaderSchemaRequiresPhysicalIdentity(t *testing.T) {
 type siriusSpecRelation struct {
 	*readerPathCaptureRelation
 	definition *planpb.TableDef
-	reader     *siriusCountingReader
+	readers    []engine.Reader
 }
 
 func (r *siriusSpecRelation) GetTableDef(context.Context) *planpb.TableDef { return r.definition }
 func (r *siriusSpecRelation) BuildReaders(_ context.Context, _ any, _ *planpb.Expr, _ engine.RelData, count, offset int, _ bool, _ engine.TombstoneApplyPolicy, _ engine.FilterHint) ([]engine.Reader, error) {
-	if count != 1 || offset != 3 {
+	if count != len(r.readers) || offset != 3 {
 		return nil, errors.New("reader DOP/statement offset changed")
 	}
-	return []engine.Reader{r.reader}, nil
+	r.buildReadersCalls++
+	return r.readers, nil
 }
 
 func TestEmbeddedSiriusReaderReusesScanFilterProjectionAndFetch(t *testing.T) {
@@ -315,7 +321,7 @@ func TestEmbeddedSiriusReaderReusesScanFilterProjectionAndFetch(t *testing.T) {
 		RuntimeFilterProbeList: []*planpb.RuntimeFilterSpec{{Tag: 7}},
 	}
 	reader := &siriusCountingReader{}
-	relation := &siriusSpecRelation{readerPathCaptureRelation: &readerPathCaptureRelation{rangesData: readutil.BuildEmptyRelData()}, definition: definition, reader: reader}
+	relation := &siriusSpecRelation{readerPathCaptureRelation: &readerPathCaptureRelation{rangesData: readutil.BuildEmptyRelData()}, definition: definition, readers: []engine.Reader{reader}}
 	db := &readerPathCaptureDatabase{relation: relation}
 	eng := &readerPathCaptureEngine{database: db}
 	spec := siriusReaderSpec{parent: proc, e: eng, addr: "cn:6001", ncpu: 1, txnOffset: 3, node: plan2.DeepCopyNode(node), columns: []SiriusReadColumn{{Type: intType}}}
@@ -327,4 +333,51 @@ func TestEmbeddedSiriusReaderReusesScanFilterProjectionAndFetch(t *testing.T) {
 	require.Equal(t, 0, eng.buildBlockReadersCalls, "local MO input must use the complete relation reader")
 	require.Len(t, node.RuntimeFilterProbeList, 1, "only the private scan copy may lose GPU-owned runtime filters")
 	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestEmbeddedSiriusReaderPreservesParallelScanAndCleanup(t *testing.T) {
+	for _, dop := range []int{1, 2} {
+		t.Run(fmt.Sprintf("DOP%d_without_fetch", dop), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			t.Cleanup(proc.Free)
+			ctrl := gomock.NewController(t)
+			tx := mock_frontend.NewMockTxnOperator(ctrl)
+			tx.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+			tx.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+			tx.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
+			tx.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+			proc.Base.TxnOperator = tx
+			intType := planpb.Type{Id: int32(types.T_int64)}
+			definition := &planpb.TableDef{TblId: 7, Version: 3, Name: "t", Cols: []*planpb.ColDef{{Name: "n", Typ: intType}}}
+			node := &planpb.Node{NodeType: planpb.Node_TABLE_SCAN, ObjRef: &planpb.ObjectRef{SchemaName: "db", ObjName: "t"}, TableDef: definition,
+				Stats: &planpb.Stats{Outcnt: 6, BlockNum: 16}, ProjectList: []*planpb.Expr{plan2.GetColExpr(intType, 0, 0)},
+			}
+			readers := make([]engine.Reader, dop)
+			for i := range readers {
+				readers[i] = &siriusCountingReader{}
+			}
+			relation := &siriusSpecRelation{readerPathCaptureRelation: &readerPathCaptureRelation{rangesData: readutil.BuildEmptyRelData()}, definition: definition, readers: readers}
+			eng := &readerPathCaptureEngine{database: &readerPathCaptureDatabase{relation: relation}}
+			spec := siriusReaderSpec{parent: proc, e: eng, addr: "cn:6001", ncpu: dop, txnOffset: 3, node: node, columns: []SiriusReadColumn{{Type: intType}}}
+			var values []int64
+			recorder := &siriusBatchRecorder{onPublish: func(rows uint32, vectors []SiriusInputVector) error {
+				for i := range rows {
+					values = append(values, int64(binary.LittleEndian.Uint64(vectors[0].Data[int(i)*8:])))
+				}
+				return nil
+			}}
+			require.NoError(t, spec.run(t.Context(), recorder))
+			require.Equal(t, int32(dop), node.Stats.Dop, "the merge boundary must preserve scan parallelism")
+			require.Equal(t, 1, relation.buildReadersCalls)
+			var expected []int64
+			for _, reader := range readers {
+				r := reader.(*siriusCountingReader)
+				require.Equal(t, int32(3), r.reads.Load(), "each reader reaches EOF")
+				require.Equal(t, int32(1), r.closes.Load(), "every opened reader closes exactly once")
+				expected = append(expected, 0, 1, 2, 0, 1, 2)
+			}
+			require.ElementsMatch(t, expected, values)
+			require.Zero(t, proc.Mp().CurrNB())
+		})
+	}
 }
