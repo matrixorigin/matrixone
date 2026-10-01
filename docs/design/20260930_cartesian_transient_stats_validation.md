@@ -287,3 +287,134 @@ validation and vector-placement interactions:
 
 Historical SQL/BVT, capacity and performance evidence retains its recorded
 scope; unit checks do not establish new-head multi-CN or SQL performance results.
+
+## Remote-expression placement consolidation (2026-10-01)
+
+A fresh matched retest uses actual PR merge base `7b3d0c3b`, pre-optimization
+head `68d0c449`, and that head plus the v10 consolidation. The raw harness,
+SQL samples, plans, build provenance, profiles and terminal logs are retained in
+`/mnt/nvme/issue29527-perf-current` and
+`/mnt/nvme/issue29527-perf-opt`; these new measurements supersede the qualified
+historical timings for the selected scenarios, not other workloads.
+
+The root cause is extra compatibility work exposed by correct Cartesian cost:
+a deliberately stale 1.2M-row estimate produces 9.6M Cartesian rows, and the
+existing aggregate cost/block thresholds select AP_MULTICN rather than the
+base's AP_ONECN. Eleven independent placement gates each rediscovered the same
+expression features. The existing combined feature-discovery owner now runs
+once per compilation; the maximum of the original protocol floors requires
+one bounded probe per selected worker. All replaced placement methods are
+removed. Independent send-time checks still inspect the lowered payload and
+current destination; no cache, Compile field, exact row scan, new classifier,
+protocol revision or placement threshold is introduced. Local legacy-interval
+rejection and unknown-worker fallback remain enforced.
+
+Matched methodology: same Go1.26.4/GCC/native inputs, one CN/local NVMe,
+64MiB query cap, max_dop=2, join_spill_mem=0, service GOMAXPROCS=4. Source tables
+contain 5 and 8 rows. Existing synchronous statistics observation completes
+before the controlled stats patch; all setup, oracle checks and reset work
+are outside timing. Three counterbalanced rounds run base/before/optimized,
+optimized/before/base, base/before/optimized. Reads have 50 warmups/200 samples;
+writes 5/40. All 63 scenario-phases and 8,280 timed statements complete with
+correct results; all nine owned services terminate with exit 0. Values below
+are pooled medians in milliseconds, not confidence intervals or throughput.
+
+| Scenario | Main base | Before optimization | Optimized | Optimized/base |
+| --- | ---: | ---: | ---: | ---: |
+| Accurate CROSS GROUP | 0.399 | 0.471 | 0.409 | 1.026 |
+| Accurate INSERT | 9.268 | 8.345 | 8.922 | 0.963 |
+| Accurate REPLACE | 7.748 | 8.073 | 8.340 | 1.076 |
+| Default CROSS GROUP | 0.462 | 0.463 | 0.429 | 0.929 |
+| Default REPLACE | 9.943 | 9.720 | 9.876 | 0.993 |
+| Stale-high CROSS GROUP | 0.406 | 0.920 | 0.493 | 1.214 |
+| Stale-high scan | 0.232 | 0.257 | 0.250 | 1.078 |
+
+Stale-high CROSS GROUP improves 46.4%; each matched round improves 44–48%.
+An eight-second natural-query CPU profile falls from 40.7% sampled CPU in
+RequiredRemoteExpressionFeatures (3.59/8.82s, 6,129 queries) to 6.47%
+(0.65/10.05s, 18,199 queries). Sampled CPU may exceed wall time. These profile
+query counts are diagnostic, not a general throughput benchmark.
+
+Remaining limits are explicit: stale-high CROSS GROUP is still 21.4% / 0.087ms
+slower than main in all three rounds, while retaining the correct estimates and
+existing AP_MULTICN placement. Accurate REPLACE is 7.6% above main and 3.3%
+above the pre-optimization head in this run; all rounds show a positive delta,
+but its cause is not established. Accurate INSERT also rises 6.9% against the
+before head while remaining below main. Do not label these deltas noise or
+claim zero ordinary-query regression. Default CROSS GROUP changes physical
+shape relative to main. No cold-S3, real multi-CN rollout, high concurrency,
+300M-row original reproduction, or new GPU performance result is established.
+Changing execution policy to hide a small stale-stats cost requires a separate
+causal justification and risk assessment; this patch preserves that policy.
+
+Completed incremental QA on these exact source inputs:
+
+- Whole owning `compile` package: PASS, verbose/count=1, 3.979s. Existing per-
+  feature boundaries and independent sender downgrade checks remain. New tests
+  cover strongest mixed feature floors, heterogeneous workers, exact probe/
+  response-release counts, same-plan generation changes, feature-free queries,
+  local legacy rejection, malformed private CAST and parent cancellation.
+- Focused `plan`/`frontend` consumers: PASS, covering prepared stats errors and
+  stable reuse, vector mode/cache changes, LIMIT0, semi-join preserved side and
+  query-memory right-dedup decisions. Scoped compile `go vet`: PASS.
+- Incremental golangci-lint2.6.2 built with Go1.26.4: zero issues. Matching
+  molint compares exactly seven pre-existing recover diagnostics against clean
+  main base, zero added. An older ambient lint tool rejected Go1.26 input;
+  the compatible rerun supplies the recorded result.
+- Public SQL: normal/forced AP_MULTICN decimal division plus INET_ATON, prepared
+  parameter rebinding and repeated mode changes match explicit result oracles;
+  divide-by-zero NULL and the subsequent valid query succeed. Existing
+  cross_join_cardinality, issue_29509_explain_analyze_execute and dtype/decimal
+  SQL cases each pass twice on one owned instance. Service exit 0.
+
+Design and implementation are reviewed read-only by designated
+GPT-6.1-sol / xhigh, with no concrete implementation blockers. Final evidence
+review is recorded in the external `final-review.md` alongside manifests.
+Previous whole-PR capacity, persistence and GPU qualifications remain as above;
+this incremental normal SQL/CPU evidence does not remove them. CI is not awaited.
+
+## CI race ownership closure and final-source validation (2026-10-01)
+
+The known pre-optimization head's run36806744834/job110192904210 fails only
+TestIssue28246SequencePlacementAcrossCNs/coordinator-cn-1 (and its parent),
+with two data-race stacks repeated in the report. CI Required is a downstream
+summary failure, not an additional kernel error. Build, SCA, coverage and
+multi-CN BVT checks succeed. No OOM kill is reported. The actual read is
+reflect.Value.Interface in containsVarExprInHiddenExpressions; it copies the
+whole operator-reachable Engine, including privately embedded dynamicCtx.
+The background table-stats task concurrently updates its private timestamps
+under its existing mutex. Exported-field-only traversal does not prevent that
+earlier boxing read. The relevant files are identical in actual main base7b3
+and head68d; this is an inherited source ownership defect, not an infrastructure
+failure or proof the Cartesian patch introduced it. Clean-main CI reproduction
+is not claimed.
+
+The v11 repair checks existing getter/rewriter method sets before boxing in
+both hidden-expression hooks. Value and addressable-pointer owners and normal
+exported expression traversal remain. No locks, runtime field exclusions, type
+cache or second scanner are added. The injected small concurrent-private-field
+fixture reproduces the identical boxing stack before repair: -race exit1.
+After repair, that fixture and retained private-copy/public-expression/placement
+controls pass -race, exit0, 1.248s. The actual two-CN sequence test then passes
+-race, exit0, 20.885s, both coordinator children pass. Its first local attempt
+failed during package initialization on a pre-existing /tmp/mo-test.cluster
+permission problem; it ran no test. The successful rerun uses this task's owned
+TMPDIR. Both logs are retained, not conflated with the CI race.
+
+Final changed-source checks: whole compile package passes 4.079s, scoped vet
+passes, compatible incremental golangci-lint reports zero issues. Newly built
+mo-service-final passes the same explicit decimal/IP/prepare/mode/NULL oracles
+and all six public SQL case runs, service exit0. The final natural stale-high
+profile probe measures 0.468ms and 0.457ms medians; its eight-second CPU profile
+has one compatibility-discovery caller, 0.77/10.10 sampled CPU seconds (7.62%),
+17,874 diagnostic queries and service exit0. This corroborates retained duplicate-
+work removal; it is not a refreshed three-way/write benchmark. The full matrix
+above remains scoped to the placement-consolidation binary before this narrow
+race repair, with all residual main/before deltas retained. No zero-regression,
+new-head CI-green or generic runtime-graph race-free claim is made.
+
+Design, implementation and evidence undergo read-only GPT-6.1-sol / xhigh
+review. Raw diagnosis, red/green, actual consumer and final binary evidence live
+under /mnt/nvme/issue29527-perf-opt/ci; final-source and binary hashes are in
+final-source-manifest.json. CI is not awaited; previously documented GPU and
+large distributed workload limitations remain.

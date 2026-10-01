@@ -1,6 +1,6 @@
 # Transient optimizer statistics for Cartesian DML
 
-Current implementation contract: v9. Owning issues:
+Current implementation contract: v11. Owning issues:
 [#29497](https://github.com/matrixorigin/matrixone/issues/29497),
 [#29533](https://github.com/matrixorigin/matrixone/issues/29533),
 [#29534](https://github.com/matrixorigin/matrixone/issues/29534).
@@ -169,3 +169,59 @@ recalc, PROJECT and downstream build. Directional SEMI estimates have separate t
 
 Measurements, test commands, platform gaps and historical revision evidence
 belong in the linked validation record or PR, not this implementation contract.
+
+## Compile-time remote expression compatibility work
+
+The latest-head three-round comparison against its actual main merge base
+confirms stale-high CROSS GROUP latency of 0.432→0.969 ms (2.24x). Corrected
+Cartesian multiplication raises AGG BlockNum from 147 to 1172, crossing the
+existing AP_MULTICN threshold. Physical scopes can remain identical on one CN,
+while eleven placement guards repeatedly discover the same expression features.
+CPU profiling attributes 40.70% of sampled CPU to that repeated discovery.
+
+Design-first review by GPT-6.1-sol / xhigh approved this focused consolidation
+before implementation. Reuse RequiredRemoteExpressionFeatures and the existing
+expression_protocol placement owner: discover the current query generation once,
+take the maximum of exactly the prior eleven independent feature floors, and
+use the existing bounded worker probe and local fallback once. All selected
+workers and the coordinator must meet that maximum; no feature-free query
+requires a probe. Existing temporal/IP floor helpers retain their sender users.
+Delete the replaced placement methods and move their tests to the real common
+entry. There is no Compile field, long-lived cache, extra generation/reset state,
+row scan, new scheduling policy, or change to Cartesian/resource admission.
+
+LegacyIntervalUnits remains a rebind error for TP, AP_ONECN and AP_MULTICN.
+Malformed expression errors propagate before scheduling fallback. A mixed legacy
+interval and another feature is now rejected before worker probing; this earlier
+rebind diagnostic is intentional. Valid-plan cancellation, capability response
+release, unknown-worker fallback and fallback scheduling errors keep their
+existing owners. A mutated/rebound query is rediscovered on every compile.
+Sender and receiver checks still inspect their actual pipeline and destination
+independently, closing downgrade/replacement after placement. GROUP_CONCAT,
+strict-write, vector and grouping placement keep their distinct responsibilities.
+
+## Existing CI race: hidden-expression ownership
+
+The pre-optimization head's Ubuntu race job failed in the two-CN sequence test.
+The remote variable-expression detector boxed an arbitrary operator-reachable
+struct before checking hidden getter interfaces. Boxing Engine copied its
+private embedded dynamic statistics while the background table-stats task
+updated them under its own lock. Skipping private fields during subsequent
+traversal did not prevent that earlier whole-struct read. This source is
+identical in the actual main base; it is an existing defect exposed by this CI,
+not a consequence of changed Cartesian cardinality.
+
+Both detection and folding hidden hooks must check the existing getter or
+rewriter method set before Interface conversion. Preserve value receivers,
+addressable pointer receivers and public-field expression traversal. Non-owner
+runtime objects must not be boxed just to discover their method set. Actual
+expression owners retain their synchronization responsibility; this does not
+promise every runtime-object graph is race-free. No engine lock, exclusion
+list, type cache or replacement traversal is introduced.
+
+A small nested mutable-private-state regression must fail under -race before
+repair and pass afterward, while public Expr detection/folding remains intact.
+Existing aggregate and lock hidden-expression private-copy tests, and the
+actual two-CN sequence consumer, supply reverse-path evidence. Rebuild and
+revalidate the changed sender source; earlier placement performance profiles
+remain tied to their recorded pre-race-fix binary unless explicitly refreshed.

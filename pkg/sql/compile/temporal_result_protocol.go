@@ -19,37 +19,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
-
-// The final temporal result, interval, and WEEK contracts share one release
-// boundary. The supported upgrade source is the 4.2 release line (latest
-// 4.2.4 advertises MORPC 10); main's internal epochs are not release versions.
-func (c *Compile) constrainTemporalResultWorkers(qry *plan.Query) error {
-	features, err := plan.RequiredRemoteExpressionFeatures(qry)
-	if err != nil {
-		return err
-	}
-	if features.LegacyIntervalUnits {
-		return moerr.NewNotSupportedNoCtx("legacy interval unit contract requires rebinding")
-	}
-	if c.execType != plan2.ExecTypeAP_MULTICN {
-		return nil
-	}
-	required := temporalExpressionProtocolVersion(features)
-	if required == 0 {
-		return nil
-	}
-	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, required)
-	if err != nil || supported {
-		return err
-	}
-	c.execType = plan2.ExecTypeAP_ONECN
-	c.cnList, err = c.scheduleQueryWorkers()
-	return err
-}
 
 func temporalExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
 	if features.TemporalResultContracts || features.NormalizedIntervalUnits || features.WeekSessionDefault {

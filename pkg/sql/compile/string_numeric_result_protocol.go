@@ -18,35 +18,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
-
-// constrainStringNumericResultWorkers keeps corrected string numeric result
-// expressions on one CN while a rolling cluster still contains workers below
-// MORPC v80. The result wrapper and persisted numeric schema are part of the
-// serialized expression contract, so every selected remote worker must agree.
-func (c *Compile) constrainStringNumericResultWorkers(qry *plan.Query) error {
-	if c.execType != plan2.ExecTypeAP_MULTICN {
-		return nil
-	}
-	features, err := plan.RequiredRemoteExpressionFeatures(qry)
-	if err != nil || !features.StringNumericResultContracts {
-		return err
-	}
-	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion80)
-	if err != nil {
-		return err
-	}
-	if supported {
-		return nil
-	}
-	c.execType = plan2.ExecTypeAP_ONECN
-	c.cnList, err = c.scheduleQueryWorkers()
-	return err
-}
 
 // validateStringNumericResultDestination rechecks the actual serialized
 // destination at send time. A worker can be downgraded or replaced after

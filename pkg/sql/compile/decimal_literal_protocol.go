@@ -18,35 +18,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
-
-// constrainDecimalLiteralWorkers keeps exact DECIMAL256 literal plans local
-// while a rolling cluster still contains workers below MORPC v89. The marker
-// is execution-inert on this CN, but an older worker may rebind the persisted
-// spelling with a different decimal carrier.
-func (c *Compile) constrainDecimalLiteralWorkers(qry *plan.Query) error {
-	if c.execType != plan2.ExecTypeAP_MULTICN {
-		return nil
-	}
-	features, err := plan.RequiredRemoteExpressionFeatures(qry)
-	if err != nil || !features.DecimalLiteralSemantics {
-		return err
-	}
-	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion89)
-	if err != nil {
-		return err
-	}
-	if supported {
-		return nil
-	}
-	c.execType = plan2.ExecTypeAP_ONECN
-	c.cnList, err = c.scheduleQueryWorkers()
-	return err
-}
 
 // validateDecimalLiteralDestination closes the placement/send race for a
 // marked literal. The coordinator may have selected a worker before it was
