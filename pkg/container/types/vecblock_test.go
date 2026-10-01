@@ -419,3 +419,56 @@ func TestCompareBlockScaledFromBytes(t *testing.T) {
 		require.Equal(t, -1, CompareBlockScaledFromBytes([]byte{0}, []byte{1}, false))
 	}
 }
+
+func TestBlockScaledDecodePaths(t *testing.T) {
+	r := rand.New(rand.NewSource(5))
+	for _, f := range blockScaledFormats {
+		for _, dim := range []int{1, 2, 15, 16, 17, 31, 32, 33, 63, 64, 65, 100, 768} {
+			v := make([]float32, dim)
+			for i := range v {
+				v[i] = float32(r.NormFloat64())
+			}
+			c, err := ParseBlockScaledCell(mustBlockScaled(t, f, v))
+			require.NoError(t, err)
+			want := make([]float32, dim)
+			for i := range want {
+				want[i] = c.At(i)
+			}
+			got := make([]float32, dim)
+			c.Dequantize(got)
+			require.Equal(t, want, got, "%s dim %d", f, dim)
+			for off := 0; off < dim; off += 32 {
+				for n := 1; off+n <= dim; n += 7 {
+					part := make([]float32, n)
+					c.DequantizeRange(off, part)
+					require.Equal(t, want[off:off+n], part, "%s dim %d range [%d,%d)", f, dim, off, off+n)
+				}
+			}
+		}
+	}
+	f8, e8, f4 := BlockScaledTables()
+	for i := 0; i < 256; i++ {
+		if b := uint8(i); b&0x7f != f8e4m3NaN {
+			require.Equal(t, Float8(b).ToFloat32(), f8[i])
+		}
+		require.Equal(t, math.Float32bits(E8M0ToFloat32(uint8(i))), math.Float32bits(e8[i]))
+		require.Equal(t, [2]float32{Float4(uint8(i)).ToFloat32(), Float4(uint8(i) >> 4).ToFloat32()}, f4[i])
+	}
+}
+
+func TestHasF8E4M3NaN(t *testing.T) {
+	for n := 0; n <= 19; n++ {
+		b := make([]byte, n)
+		for i := range b {
+			b[i] = 0x7e
+		}
+		require.False(t, hasF8E4M3NaN(b), "len %d", n)
+		for pos := 0; pos < n; pos++ {
+			for v := 0; v < 256; v++ {
+				b[pos] = byte(v)
+				require.Equal(t, byte(v)&0x7f == f8e4m3NaN, hasF8E4M3NaN(b), "len %d pos %d byte %#x", n, pos, v)
+			}
+			b[pos] = 0x7e
+		}
+	}
+}

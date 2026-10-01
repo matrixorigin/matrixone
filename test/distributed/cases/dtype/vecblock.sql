@@ -35,6 +35,19 @@ select a + a, a * 2, b - c, a / 2, a + b from t where id = 1;
 -- inner_product (MO returns the negated dot product; c is the vecf32 control)
 select id, inner_product(c, c), inner_product(a, c), inner_product(b, c), inner_product(a, b), inner_product(a, '[1,1,1,1]') from t order by id;
 
+-- distances: each block-scaled column against itself, the other format, vecf32 and a literal
+select id, l2_distance(c, c), l2_distance(a, c), l2_distance(b, c), l2_distance(a, b), l2_distance(a, '[1,1,1,1]') from t order by id;
+select id, l2_distance_sq(a, c), l2_distance_sq(b, '[1,1,1,1]'), l2_distance_sq(c, b) from t order by id;
+select id, l1_distance(a, c), l1_distance(b, c), l1_distance(a, b), l1_distance('[1,1,1,1]', b) from t order by id;
+select id, cosine_distance(a, c), cosine_distance(b, c), cosine_distance(a, b), cosine_distance(a, a) from t order by id;
+select id, cosine_similarity(a, c), cosine_similarity(c, b), cosine_similarity(a, '[1,1,1,1]') from t order by id;
+select id, vector_dims(a), vector_dims(b), normalize_l2(a), normalize_l2(b) from t order by id;
+select id from t where l2_distance(a, '[1,-3,0,6]') < 1 order by id;
+select id from t order by l2_distance(b, '[1,1,1,1]'), id limit 2;
+select l2_distance(a, '[1,2,3]') from t where id = 1;
+select cosine_similarity(a, '[0,0,0,0]') from t where id = 1;
+select cosine_distance(a, '[0,0,0,0]') from t where id = 1;
+
 -- ordering by value and grouping, as for vecf32
 select id from t order by a, id;
 select id from t order by b desc, id;
@@ -59,11 +72,14 @@ prepare s from 'select id from t where inner_product(a, ?) < 0 order by id';
 set @q = '[1,1,1,1]';
 execute s using @q;
 deallocate prepare s;
+prepare s2 from 'select id, cosine_distance(b, ?) from t where l2_distance(b, ?) < 5 order by id';
+execute s2 using @q, @q;
+deallocate prepare s2;
 
 -- not supported
-select l2_distance(a, c) from t;
-select cosine_distance(b, b) from t;
-select l1_distance(a, a) from t;
+select summation(a) from t;
+select l1_norm(b) from t;
+select l2_norm(a) from t;
 select sum(a) from t;
 select avg(b) from t;
 select id from t where a = a;

@@ -7400,6 +7400,18 @@ var supportedArrayOperations = []FuncNew{
 				retType:    func(parameters []types.Type) types.Type { return types.T_int64.ToType() },
 				newOp:      func() executeLogicOfOverload { return VectorDimsArray[uint8] },
 			},
+			{
+				overloadId: 6,
+				args:       []types.T{types.T_array_float8},
+				retType:    func(parameters []types.Type) types.Type { return types.T_int64.ToType() },
+				newOp:      func() executeLogicOfOverload { return VectorDimsVecBlock },
+			},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_array_float4},
+				retType:    func(parameters []types.Type) types.Type { return types.T_int64.ToType() },
+				newOp:      func() executeLogicOfOverload { return VectorDimsVecBlock },
+			},
 		},
 	},
 
@@ -7410,7 +7422,7 @@ var supportedArrayOperations = []FuncNew{
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
 
-		Overloads: []overload{
+		Overloads: append([]overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_array_float32, types.T_array_float32},
@@ -7455,56 +7467,7 @@ var supportedArrayOperations = []FuncNew{
 				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
 				newOp:      func() executeLogicOfOverload { return InnerProductArrayViaF32[uint8] },
 			},
-			// vecf8/vecf4 (optionally against vecf32): fp32 dot product over dequantized values.
-			{
-				overloadId: 6,
-				args:       []types.T{types.T_array_float8, types.T_array_float8},
-				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
-				newOp:      func() executeLogicOfOverload { return InnerProductVecBlock },
-			},
-			{
-				overloadId: 7,
-				args:       []types.T{types.T_array_float4, types.T_array_float4},
-				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
-				newOp:      func() executeLogicOfOverload { return InnerProductVecBlock },
-			},
-			{
-				overloadId: 8,
-				args:       []types.T{types.T_array_float8, types.T_array_float32},
-				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
-				newOp:      func() executeLogicOfOverload { return InnerProductVecBlock },
-			},
-			{
-				overloadId: 9,
-				args:       []types.T{types.T_array_float32, types.T_array_float8},
-				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
-				newOp:      func() executeLogicOfOverload { return InnerProductVecBlock },
-			},
-			{
-				overloadId: 10,
-				args:       []types.T{types.T_array_float4, types.T_array_float32},
-				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
-				newOp:      func() executeLogicOfOverload { return InnerProductVecBlock },
-			},
-			{
-				overloadId: 11,
-				args:       []types.T{types.T_array_float32, types.T_array_float4},
-				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
-				newOp:      func() executeLogicOfOverload { return InnerProductVecBlock },
-			},
-			{
-				overloadId: 12,
-				args:       []types.T{types.T_array_float8, types.T_array_float4},
-				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
-				newOp:      func() executeLogicOfOverload { return InnerProductVecBlock },
-			},
-			{
-				overloadId: 13,
-				args:       []types.T{types.T_array_float4, types.T_array_float8},
-				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
-				newOp:      func() executeLogicOfOverload { return InnerProductVecBlock },
-			},
-		},
+		}, vecBlockBinaryOverloads(6, InnerProductVecBlock)...),
 	},
 
 	// function `cosine_similarity`
@@ -7514,7 +7477,7 @@ var supportedArrayOperations = []FuncNew{
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
 
-		Overloads: []overload{
+		Overloads: append([]overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_array_float32, types.T_array_float32},
@@ -7559,7 +7522,7 @@ var supportedArrayOperations = []FuncNew{
 				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
 				newOp:      func() executeLogicOfOverload { return CosineSimilarityArrayViaF32[uint8] },
 			},
-		},
+		}, vecBlockBinaryOverloads(6, CosineSimilarityVecBlock)...),
 	},
 
 	// function `l1_distance`
@@ -7569,7 +7532,7 @@ var supportedArrayOperations = []FuncNew{
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
 
-		Overloads: []overload{
+		Overloads: append([]overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_array_float32, types.T_array_float32},
@@ -7614,7 +7577,7 @@ var supportedArrayOperations = []FuncNew{
 				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
 				newOp:      func() executeLogicOfOverload { return L1DistanceArrayViaF32[uint8] },
 			},
-		},
+		}, vecBlockBinaryOverloads(6, L1DistanceVecBlock)...),
 	},
 
 	// function `l2_distance`
@@ -7624,7 +7587,7 @@ var supportedArrayOperations = []FuncNew{
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
 
-		Overloads: []overload{
+		Overloads: append([]overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_array_float32, types.T_array_float32},
@@ -7669,7 +7632,7 @@ var supportedArrayOperations = []FuncNew{
 				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
 				newOp:      func() executeLogicOfOverload { return L2DistanceArrayViaF32[uint8] },
 			},
-		},
+		}, vecBlockBinaryOverloads(6, L2DistanceVecBlock)...),
 	},
 
 	// function `l2_distance_xc`
@@ -7710,7 +7673,7 @@ var supportedArrayOperations = []FuncNew{
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
 
-		Overloads: []overload{
+		Overloads: append([]overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_array_float32, types.T_array_float32},
@@ -7755,7 +7718,7 @@ var supportedArrayOperations = []FuncNew{
 				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
 				newOp:      func() executeLogicOfOverload { return L2DistanceSqArrayViaF32[uint8] },
 			},
-		},
+		}, vecBlockBinaryOverloads(6, L2DistanceSqVecBlock)...),
 	},
 
 	// function `l2_distance_sq_xc`
@@ -7796,7 +7759,7 @@ var supportedArrayOperations = []FuncNew{
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
 
-		Overloads: []overload{
+		Overloads: append([]overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_array_float32, types.T_array_float32},
@@ -7841,7 +7804,7 @@ var supportedArrayOperations = []FuncNew{
 				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
 				newOp:      func() executeLogicOfOverload { return CosineDistanceArrayViaF32[uint8] },
 			},
-		},
+		}, vecBlockBinaryOverloads(6, CosineDistanceVecBlock)...),
 	},
 	// function `normalize_l2`
 	{
@@ -7900,6 +7863,18 @@ var supportedArrayOperations = []FuncNew{
 					return types.New(types.T_array_float32, parameters[0].Width, parameters[0].Scale)
 				},
 				newOp: func() executeLogicOfOverload { return NormalizeL2Array[uint8] },
+			},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_array_float8},
+				retType:    func(parameters []types.Type) types.Type { return parameters[0] },
+				newOp:      func() executeLogicOfOverload { return NormalizeL2VecBlock },
+			},
+			{
+				overloadId: 8,
+				args:       []types.T{types.T_array_float4},
+				retType:    func(parameters []types.Type) types.Type { return parameters[0] },
+				newOp:      func() executeLogicOfOverload { return NormalizeL2VecBlock },
 			},
 		},
 	},

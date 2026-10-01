@@ -268,10 +268,8 @@ func ParseBlockScaledCell(cell []byte) (BlockScaledCell, error) {
 		}
 	}
 	if f == BlockScaledMXFP8 {
-		for _, e := range c.Elems {
-			if e&0x7f == f8e4m3NaN {
-				return BlockScaledCell{}, moerr.NewInvalidInputNoCtx("vecf8 cell has a NaN element")
-			}
+		if hasF8E4M3NaN(c.Elems) {
+			return BlockScaledCell{}, moerr.NewInvalidInputNoCtx("vecf8 cell has a NaN element")
 		}
 	} else if dim%2 == 1 && c.Elems[len(c.Elems)-1]>>4 != 0 {
 		return BlockScaledCell{}, moerr.NewInvalidInputNoCtx("vecf4 cell has a non-zero padding nibble")
@@ -279,20 +277,98 @@ func ParseBlockScaledCell(cell []byte) (BlockScaledCell, error) {
 	return c, nil
 }
 
+// hasF8E4M3NaN reports whether any byte is an E4M3 NaN (low 7 bits all set), 8 bytes per step.
+func hasF8E4M3NaN(b []byte) bool {
+	const lo7, one, hi = 0x7f7f7f7f7f7f7f7f, 0x0101010101010101, 0x8080808080808080
+	i := 0
+	for ; i+8 <= len(b); i += 8 {
+		if (binary.LittleEndian.Uint64(b[i:])&lo7+one)&hi != 0 {
+			return true
+		}
+	}
+	for ; i < len(b); i++ {
+		if b[i]&0x7f == f8e4m3NaN {
+			return true
+		}
+	}
+	return false
+}
+
+var (
+	f8e4m3Values [256]float32
+	e8m0Values   [256]float32
+	f4e2m1Pairs  [256][2]float32
+)
+
+func init() {
+	for i := 0; i < 256; i++ {
+		f8e4m3Values[i] = Float8(uint8(i)).ToFloat32()
+		e8m0Values[i] = E8M0ToFloat32(uint8(i))
+		f4e2m1Pairs[i] = [2]float32{Float4(uint8(i)).ToFloat32(), Float4(uint8(i) >> 4).ToFloat32()}
+	}
+}
+
+// BlockScaledTables returns the decode tables: E4M3 code to value, E8M0 code to value, and an
+// E2M1 byte to its low and high nibble values.
+func BlockScaledTables() (f8 *[256]float32, e8 *[256]float32, f4 *[256][2]float32) {
+	return &f8e4m3Values, &e8m0Values, &f4e2m1Pairs
+}
+
+// At returns the dequantized element i.
+func (c *BlockScaledCell) At(i int) float32 {
+	if c.Format == BlockScaledMXFP8 {
+		return f8e4m3Values[c.Elems[i]] * (c.Global * e8m0Values[c.Scales[i/32]])
+	}
+	return f4e2m1Pairs[c.Elems[i/2]][i%2] * (c.Global * f8e4m3Values[c.Scales[i/16]])
+}
+
 // Dequantize writes the dequantized elements into dst, which must hold Dim values.
-func (c BlockScaledCell) Dequantize(dst []float32) {
-	bs := c.Format.BlockSize()
-	for b, sb := range c.Scales {
-		scale := c.Global * blockScaleValue(c.Format, sb)
-		lo, hi := b*bs, min((b+1)*bs, c.Dim)
-		for i := lo; i < hi; i++ {
-			var e float32
-			if c.Format == BlockScaledMXFP8 {
-				e = Float8(c.Elems[i]).ToFloat32()
-			} else {
-				e = Float4(c.Elems[i/2] >> (4 * (i % 2))).ToFloat32()
+func (c *BlockScaledCell) Dequantize(dst []float32) {
+	c.DequantizeRange(0, dst[:c.Dim])
+}
+
+// DequantizeRange writes the dequantized elements [off, off+len(dst)) into dst. off must be a
+// multiple of 32 and off+len(dst) at most Dim.
+func (c *BlockScaledCell) DequantizeRange(off int, dst []float32) {
+	end := off + len(dst)
+	if c.Format == BlockScaledMXFP8 {
+		for lo := off; lo < end; lo += 32 {
+			scale := c.Global * e8m0Values[c.Scales[lo/32]]
+			d := dst[lo-off:]
+			if lo+32 <= end {
+				e := (*[32]byte)(c.Elems[lo : lo+32])
+				d := (*[32]float32)(d[:32])
+				for i := 0; i < 32; i += 4 {
+					d[i] = f8e4m3Values[e[i]] * scale
+					d[i+1] = f8e4m3Values[e[i+1]] * scale
+					d[i+2] = f8e4m3Values[e[i+2]] * scale
+					d[i+3] = f8e4m3Values[e[i+3]] * scale
+				}
+				continue
 			}
-			dst[i] = e * scale
+			for i, b := range c.Elems[lo:end] {
+				d[i] = f8e4m3Values[b] * scale
+			}
+		}
+		return
+	}
+	for lo := off; lo < end; lo += 16 {
+		scale := c.Global * f8e4m3Values[c.Scales[lo/16]]
+		d := dst[lo-off:]
+		if lo+16 <= end {
+			e := (*[8]byte)(c.Elems[lo/2 : lo/2+8])
+			d := (*[16]float32)(d[:16])
+			for i := 0; i < 8; i += 2 {
+				p, q := &f4e2m1Pairs[e[i]], &f4e2m1Pairs[e[i+1]]
+				d[2*i] = p[0] * scale
+				d[2*i+1] = p[1] * scale
+				d[2*i+2] = q[0] * scale
+				d[2*i+3] = q[1] * scale
+			}
+			continue
+		}
+		for i := 0; i < end-lo; i++ {
+			d[i] = f4e2m1Pairs[c.Elems[(lo+i)/2]][(lo+i)%2] * scale
 		}
 	}
 }

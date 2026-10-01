@@ -16,6 +16,8 @@ package function
 
 import (
 	"context"
+	"math"
+	"math/rand"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -55,42 +57,45 @@ func TestVecBlockFunctionResolution(t *testing.T) {
 			require.Equal(t, types.T_array_float32, r.GetReturnType().Oid, op)
 		}
 
-		// inner_product: against itself, the other format and vecf32; a text literal
-		// becomes vecf32 so the query side is not quantized.
-		for _, other := range []types.Type{vb, f32, types.New(types.T_array_float8, 4, 0), types.New(types.T_array_float4, 4, 0)} {
-			for _, args := range [][]types.Type{{vb, other}, {other, vb}} {
-				r, err := GetFunctionByName(ctx, "inner_product", args)
-				require.NoError(t, err, "%v", args)
-				_, cast := r.ShouldDoImplicitTypeCast()
-				require.False(t, cast, "%v", args)
-				require.Equal(t, types.T_float64, r.GetReturnType().Oid)
+		// Distances: against itself, the other format and vecf32; a text literal becomes
+		// vecf32 so the query side is not quantized.
+		for _, name := range vecBlockDistanceNames {
+			for _, other := range []types.Type{vb, f32, types.New(types.T_array_float8, 4, 0), types.New(types.T_array_float4, 4, 0)} {
+				for _, args := range [][]types.Type{{vb, other}, {other, vb}} {
+					r, err := GetFunctionByName(ctx, name, args)
+					require.NoError(t, err, "%s %v", name, args)
+					_, cast := r.ShouldDoImplicitTypeCast()
+					require.False(t, cast, "%s %v", name, args)
+					require.Equal(t, types.T_float64, r.GetReturnType().Oid)
+				}
 			}
+			r, err := GetFunctionByName(ctx, name, []types.Type{vb, types.T_varchar.ToType()})
+			require.NoError(t, err, name)
+			targets, cast := r.ShouldDoImplicitTypeCast()
+			require.True(t, cast, name)
+			require.Equal(t, oid, targets[0].Oid, name)
+			require.Equal(t, types.T_array_float32, targets[1].Oid, name)
 		}
-		r, err := GetFunctionByName(ctx, "inner_product", []types.Type{vb, types.T_varchar.ToType()})
+		r, err := GetFunctionByName(ctx, "vector_dims", []types.Type{vb})
 		require.NoError(t, err)
-		targets, cast := r.ShouldDoImplicitTypeCast()
-		require.True(t, cast)
-		require.Equal(t, oid, targets[0].Oid)
-		require.Equal(t, types.T_array_float32, targets[1].Oid)
+		require.Equal(t, types.T_int64, r.GetReturnType().Oid)
+		r, err = GetFunctionByName(ctx, "normalize_l2", []types.Type{vb})
+		require.NoError(t, err)
+		require.Equal(t, vb, r.GetReturnType())
 
 		for _, name := range []string{"any_value", "group_concat"} {
 			_, err := GetFunctionByName(ctx, name, []types.Type{vb})
 			require.NoError(t, err, name)
 		}
 
-		// Not supported: other distances, comparison, SUM/AVG, vector-only functions.
+		// Not supported: comparison, SUM/AVG, functions vecf32-only among the vector types.
 		for _, tc := range []struct {
 			name string
 			args []types.Type
 		}{
-			{"l2_distance", []types.Type{vb, vb}},
-			{"l2_distance", []types.Type{vb, f32}},
-			{"l2_distance_sq", []types.Type{vb, vb}},
-			{"cosine_distance", []types.Type{vb, vb}},
-			{"cosine_similarity", []types.Type{vb, vb}},
-			{"l1_distance", []types.Type{vb, vb}},
-			{"normalize_l2", []types.Type{vb}},
-			{"vector_dims", []types.Type{vb}},
+			{"summation", []types.Type{vb}},
+			{"l1_norm", []types.Type{vb}},
+			{"l2_norm", []types.Type{vb}},
 			{"=", []types.Type{vb, vb}},
 			{"<", []types.Type{vb, vb}},
 			{"sum", []types.Type{vb}},
@@ -120,61 +125,153 @@ func vecBlockCellVector(t *testing.T, oid types.T, dim int32, rows [][]float32, 
 	return vec
 }
 
-func runInnerProductVecBlock(t *testing.T, a, b *vector.Vector) (*vector.Vector, error) {
+var vecBlockDistanceNames = []string{"inner_product", "l2_distance", "l2_distance_sq", "l1_distance", "cosine_distance", "cosine_similarity"}
+
+var vecBlockDistances = []struct {
+	name string
+	op   executeLogicOfOverload
+	ref  func(a, b []float32) (float64, error)
+}{
+	{"inner_product", InnerProductVecBlock, moarray.InnerProduct[float32]},
+	{"l2_distance", L2DistanceVecBlock, moarray.L2Distance[float32]},
+	{"l2_distance_sq", L2DistanceSqVecBlock, moarray.L2DistanceSq[float32]},
+	{"l1_distance", L1DistanceVecBlock, moarray.L1Distance[float32]},
+	{"cosine_distance", CosineDistanceVecBlock, moarray.CosineDistance[float32]},
+	{"cosine_similarity", CosineSimilarityVecBlock, moarray.CosineSimilarity[float32]},
+}
+
+func runVecBlockFn(t *testing.T, op executeLogicOfOverload, rt types.Type, args ...*vector.Vector) (*vector.Vector, error) {
 	t.Helper()
 	proc := testutil.NewProcess(t)
-	result := vector.NewFunctionResultWrapper(types.T_float64.ToType(), proc.Mp())
-	require.NoError(t, result.PreExtendAndReset(a.Length()))
-	err := InnerProductVecBlock([]*vector.Vector{a, b}, result, proc, a.Length(), nil)
+	result := vector.NewFunctionResultWrapper(rt, proc.Mp())
+	require.NoError(t, result.PreExtendAndReset(args[0].Length()))
+	err := op(args, result, proc, args[0].Length(), nil)
 	return result.GetResultVector(), err
 }
 
-func TestInnerProductVecBlock(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	rows := [][]float32{{1, -3, 0, 6}, {0.25, 0.5, -0.75, 1}, {9, 9, 9, 9}}
-	queries := [][]float32{{2, 1, -1, 0.5}, {1, 1, 1, 1}, {0, 0, 0, 0}}
-	nulls := []bool{false, false, true}
-	f32 := vector.NewVec(types.New(types.T_array_float32, 4, 0))
-	for _, q := range queries {
-		require.NoError(t, vector.AppendArray(f32, q, false, proc.Mp()))
+func vecBlockRowFloat32(t *testing.T, v *vector.Vector, i int) []float32 {
+	t.Helper()
+	if !v.GetType().Oid.IsBlockScaledVector() {
+		return vector.GetArrayAt[float32](v, i)
 	}
-	for _, oid := range vecBlockOids {
-		a := vecBlockCellVector(t, oid, 4, rows, nulls)
-		for name, b := range map[string]*vector.Vector{
-			"vecf32": f32,
-			"vecf8":  vecBlockCellVector(t, types.T_array_float8, 4, queries, nil),
-			"vecf4":  vecBlockCellVector(t, types.T_array_float4, 4, queries, nil),
-		} {
-			out, err := runInnerProductVecBlock(t, a, b)
-			require.NoError(t, err, "%s x %s", oid, name)
-			col := vector.MustFixedColNoTypeCheck[float64](out)
-			for i := range rows {
-				if nulls[i] {
-					require.True(t, out.GetNulls().Contains(uint64(i)))
-					continue
-				}
-				da, err := types.BlockScaledToFloat32(a.GetBytesAt(i))
-				require.NoError(t, err)
-				db := vector.GetArrayAt[float32](f32, i)
-				if b.GetType().Oid.IsBlockScaledVector() {
-					db, err = types.BlockScaledToFloat32(b.GetBytesAt(i))
-					require.NoError(t, err)
-				}
-				want, err := moarray.InnerProduct[float32](da, db)
-				require.NoError(t, err)
-				require.Equal(t, want, col[i], "%s x %s row %d", oid, name, i)
+	d, err := types.BlockScaledToFloat32(v.GetBytesAt(i))
+	require.NoError(t, err)
+	return d
+}
+
+func TestVecBlockDistances(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	r := rand.New(rand.NewSource(3))
+	random := func(n, dim int) [][]float32 {
+		rows := make([][]float32, n)
+		for i := range rows {
+			rows[i] = make([]float32, dim)
+			for j := range rows[i] {
+				rows[i][j] = float32(r.NormFloat64())
 			}
 		}
-
-		// dimension mismatch and a malformed cell are errors
-		short := vecBlockCellVector(t, oid, 3, [][]float32{{1, 2, 3}, {1, 2, 3}, {1, 2, 3}}, nil)
-		_, err := runInnerProductVecBlock(t, a, short)
-		require.Error(t, err)
-		bad := vector.NewVec(types.New(oid, 4, 0))
-		for range rows {
-			require.NoError(t, vector.AppendBytes(bad, []byte{0x7f, 1, 0, 0, 4, 0, 0, 0}, false, proc.Mp()))
+		return rows
+	}
+	for _, tc := range []struct {
+		dim     int32
+		rows    [][]float32
+		queries [][]float32
+		nulls   []bool
+	}{
+		{4, [][]float32{{1, -3, 0, 6}, {0.25, 0.5, -0.75, 1}, {9, 9, 9, 9}}, [][]float32{{2, 1, -1, 0.5}, {1, 1, 1, 1}, {0, 0, 0, 0}}, []bool{false, false, true}},
+		{40, random(5, 40), random(5, 40), nil},
+	} {
+		f32 := vector.NewVec(types.New(types.T_array_float32, tc.dim, 0))
+		for _, q := range tc.queries {
+			require.NoError(t, vector.AppendArray(f32, q, false, proc.Mp()))
 		}
-		_, err = runInnerProductVecBlock(t, bad, f32)
+		for _, oid := range vecBlockOids {
+			a := vecBlockCellVector(t, oid, tc.dim, tc.rows, tc.nulls)
+			for name, b := range map[string]*vector.Vector{
+				"vecf32": f32,
+				"vecf8":  vecBlockCellVector(t, types.T_array_float8, tc.dim, tc.queries, nil),
+				"vecf4":  vecBlockCellVector(t, types.T_array_float4, tc.dim, tc.queries, nil),
+			} {
+				for _, d := range vecBlockDistances {
+					for _, args := range [][]*vector.Vector{{a, b}, {b, a}} {
+						out, err := runVecBlockFn(t, d.op, types.T_float64.ToType(), args...)
+						require.NoError(t, err, "%s %s x %s", d.name, oid, name)
+						col := vector.MustFixedColNoTypeCheck[float64](out)
+						for i := range tc.rows {
+							if tc.nulls != nil && tc.nulls[i] {
+								require.True(t, out.GetNulls().Contains(uint64(i)))
+								continue
+							}
+							want, err := d.ref(vecBlockRowFloat32(t, args[0], i), vecBlockRowFloat32(t, args[1], i))
+							require.NoError(t, err)
+							require.InDelta(t, want, col[i], 1e-5*math.Max(1, math.Abs(want)), "%s %s x %s row %d", d.name, oid, name, i)
+						}
+					}
+				}
+			}
+
+			// dimension mismatch and a malformed cell are errors
+			short := vecBlockCellVector(t, oid, 3, [][]float32{{1, 2, 3}, {1, 2, 3}, {1, 2, 3}}, nil)
+			bad := vector.NewVec(types.New(oid, tc.dim, 0))
+			for range tc.rows {
+				require.NoError(t, vector.AppendBytes(bad, []byte{0x7f, 1, 0, 0, 4, 0, 0, 0}, false, proc.Mp()))
+			}
+			for _, d := range vecBlockDistances {
+				_, err := runVecBlockFn(t, d.op, types.T_float64.ToType(), a, short)
+				require.Error(t, err, d.name)
+				_, err = runVecBlockFn(t, d.op, types.T_float64.ToType(), bad, f32)
+				require.Error(t, err, d.name)
+			}
+		}
+	}
+}
+
+func TestVecBlockCosineZeroVector(t *testing.T) {
+	for _, oid := range vecBlockOids {
+		a := vecBlockCellVector(t, oid, 3, [][]float32{{1, 2, 3}}, nil)
+		zero := vecBlockCellVector(t, oid, 3, [][]float32{{0, 0, 0}}, nil)
+		out, err := runVecBlockFn(t, CosineDistanceVecBlock, types.T_float64.ToType(), a, zero)
+		require.NoError(t, err)
+		require.Equal(t, []float64{1}, vector.MustFixedColNoTypeCheck[float64](out))
+		_, err = runVecBlockFn(t, CosineSimilarityVecBlock, types.T_float64.ToType(), a, zero)
+		require.Error(t, err)
+	}
+}
+
+func TestVectorDimsAndNormalizeL2VecBlock(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rows := [][]float32{{3, 0, -4}, {0, 0, 0}, {1, 1, 1}}
+	nulls := []bool{false, false, true}
+	for _, oid := range vecBlockOids {
+		a := vecBlockCellVector(t, oid, 3, rows, nulls)
+		out, err := runVecBlockFn(t, VectorDimsVecBlock, types.T_int64.ToType(), a)
+		require.NoError(t, err)
+		require.Equal(t, []int64{3, 3}, vector.MustFixedColNoTypeCheck[int64](out)[:2])
+		require.True(t, out.GetNulls().Contains(2))
+
+		out, err = runVecBlockFn(t, NormalizeL2VecBlock, *a.GetType(), a)
+		require.NoError(t, err)
+		require.True(t, out.GetNulls().Contains(2))
+		got, err := types.BlockScaledToFloat32(out.GetBytesAt(0))
+		require.NoError(t, err)
+		require.InDeltaSlice(t, []float32{0.6, 0, -0.8}, got, 0.1)
+		in, err := types.BlockScaledToFloat32(a.GetBytesAt(0))
+		require.NoError(t, err)
+		norm := make([]float32, len(in))
+		require.NoError(t, moarray.NormalizeL2(in, norm))
+		f, _ := oid.BlockScaledFormat()
+		want, err := types.AppendBlockScaled(nil, f, norm)
+		require.NoError(t, err)
+		require.Equal(t, want, out.GetBytesAt(0))
+		got, err = types.BlockScaledToFloat32(out.GetBytesAt(1))
+		require.NoError(t, err)
+		require.Equal(t, []float32{0, 0, 0}, got)
+
+		bad := vector.NewVec(types.New(oid, 3, 0))
+		require.NoError(t, vector.AppendBytes(bad, []byte{0x7f, 1, 0, 0, 3, 0, 0, 0}, false, proc.Mp()))
+		_, err = runVecBlockFn(t, VectorDimsVecBlock, types.T_int64.ToType(), bad)
+		require.Error(t, err)
+		_, err = runVecBlockFn(t, NormalizeL2VecBlock, *bad.GetType(), bad)
 		require.Error(t, err)
 	}
 }

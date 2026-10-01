@@ -75,6 +75,56 @@ select id, inner_product(c, c), inner_product(a, c), inner_product(b, c), inner_
 2  ¦  -6.25  ¦  -2.5  ¦  -2.4166667461395264  ¦  -1.8125  ¦  -1.0  𝄀
 3  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
 4  ¦  null  ¦  null  ¦  null  ¦  -9.83039934464E11  ¦  -986096.0
+select id, l2_distance(c, c), l2_distance(a, c), l2_distance(b, c), l2_distance(a, b), l2_distance(a, '[1,1,1,1]') from t order by id;
+➤ id[4,32,0]  ¦  l2_distance(c, c)[8,53,31]  ¦  l2_distance(a, c)[8,53,31]  ¦  l2_distance(b, c)[8,53,31]  ¦  l2_distance(a, b)[8,53,31]  ¦  l2_distance(a, [1,1,1,1])[8,53,31]  𝄀
+1  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0.0  ¦  6.480740547180176  𝄀
+2  ¦  0.0  ¦  1.7677669525146484  ¦  1.7814631462097168  ¦  0.08333331346511841  ¦  1.9685019254684448  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+4  ¦  null  ¦  null  ¦  null  ¦  17235.919921875  ¦  983043.8125
+select id, l2_distance_sq(a, c), l2_distance_sq(b, '[1,1,1,1]'), l2_distance_sq(c, b) from t order by id;
+➤ id[4,32,0]  ¦  l2_distance_sq(a, c)[8,53,31]  ¦  l2_distance_sq(b, [1,1,1,1])[8,53,31]  ¦  l2_distance_sq(c, b)[8,53,31]  𝄀
+1  ¦  0.0  ¦  42.0  ¦  0.0  𝄀
+2  ¦  3.125  ¦  3.5902778440051613  ¦  3.173611097865635  𝄀
+3  ¦  null  ¦  null  ¦  null  𝄀
+4  ¦  null  ¦  9.999978750041289E11  ¦  null
+select id, l1_distance(a, c), l1_distance(b, c), l1_distance(a, b), l1_distance('[1,1,1,1]', b) from t order by id;
+➤ id[4,32,0]  ¦  l1_distance(a, c)[8,53,31]  ¦  l1_distance(b, c)[8,53,31]  ¦  l1_distance(a, b)[8,53,31]  ¦  l1_distance([1,1,1,1], b)[8,53,31]  𝄀
+1  ¦  0.0  ¦  0.0  ¦  0.0  ¦  10.0  𝄀
+2  ¦  3.0  ¦  3.0833332538604736  ¦  0.08333331346511841  ¦  2.9166667461395264  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+4  ¦  null  ¦  null  ¦  20047.9375  ¦  1000001.9375
+select id, cosine_distance(a, c), cosine_distance(b, c), cosine_distance(a, b), cosine_distance(a, a) from t order by id;
+➤ id[4,32,0]  ¦  cosine_distance(a, c)[8,53,31]  ¦  cosine_distance(b, c)[8,53,31]  ¦  cosine_distance(a, b)[8,53,31]  ¦  cosine_distance(a, a)[8,53,31]  𝄀
+1  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0.0  𝄀
+2  ¦  0.2697032690048218  ¦  0.27071425318717957  ¦  0.0013843567576259375  ¦  0.0  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+4  ¦  null  ¦  null  ¦  4.882909252046375E-6  ¦  0.0
+select id, cosine_similarity(a, c), cosine_similarity(c, b), cosine_similarity(a, '[1,1,1,1]') from t order by id;
+➤ id[4,32,0]  ¦  cosine_similarity(a, c)[8,53,31]  ¦  cosine_similarity(c, b)[8,53,31]  ¦  cosine_similarity(a, [1,1,1,1])[8,53,31]  𝄀
+1  ¦  1.0  ¦  1.0  ¦  0.2948839068412781  𝄀
+2  ¦  0.7302967309951782  ¦  0.7292857766151428  ¦  0.3651483654975891  𝄀
+3  ¦  null  ¦  null  ¦  null  𝄀
+4  ¦  null  ¦  null  ¦  0.5015519261360168
+select id, vector_dims(a), vector_dims(b), normalize_l2(a), normalize_l2(b) from t order by id;
+➤ id[4,32,0]  ¦  vector_dims(a)[-5,64,0]  ¦  vector_dims(b)[-5,64,0]  ¦  normalize_l2(a)[12,4,0]  ¦  normalize_l2(b)[12,4,0]  𝄀
+1  ¦  4  ¦  4  ¦  [0.140625, -0.4375, 0, 0.875]  ¦  [0.14744195, -0.44232586, 0, 0.8846517]  𝄀
+2  ¦  4  ¦  4  ¦  [0.375, 0.1875, -0.5625, 0.75]  ¦  [0.37721676, 0.18860838, -0.5029557, 0.7544335]  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+4  ¦  4  ¦  4  ¦  [0.0031738281, -0.000015258789, 0, 1]  ¦  [0, -0, 0, 1]
+select id from t where l2_distance(a, '[1,-3,0,6]') < 1 order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from t order by l2_distance(b, '[1,1,1,1]'), id limit 2;
+➤ id[4,32,0]  𝄀
+3  𝄀
+2
+select l2_distance(a, '[1,2,3]') from t where id = 1;
+invalid input: vector ops between different dimensions (4, 3) is not permitted.
+select cosine_similarity(a, '[0,0,0,0]') from t where id = 1;
+internal error: cosine similarity: one of the vector is zero
+select cosine_distance(a, '[0,0,0,0]') from t where id = 1;
+➤ cosine_distance(a, [0,0,0,0])[8,53,31]  𝄀
+1.0
 select id from t order by a, id;
 ➤ id[4,32,0]  𝄀
 3  𝄀
@@ -136,12 +186,17 @@ execute s using @q;
 2  𝄀
 4
 deallocate prepare s;
-select l2_distance(a, c) from t;
-invalid argument function l2_distance, bad value [VECF8 VECF32]
-select cosine_distance(b, b) from t;
-invalid argument function cosine_distance, bad value [VECF4 VECF4]
-select l1_distance(a, a) from t;
-invalid argument function l1_distance, bad value [VECF8 VECF8]
+prepare s2 from 'select id, cosine_distance(b, ?) from t where l2_distance(b, ?) < 5 order by id';
+execute s2 using @q, @q;
+➤ id[4,32,0]  ¦  cosine_distance(t.b, ?)[8,53,31]  𝄀
+2  ¦  0.08839280903339386
+deallocate prepare s2;
+select summation(a) from t;
+invalid argument function summation, bad value [VECF8]
+select l1_norm(b) from t;
+invalid argument function l1_norm, bad value [VECF4]
+select l2_norm(a) from t;
+invalid argument function l2_norm, bad value [VECF8]
 select sum(a) from t;
 invalid argument aggregate function sum, bad value [VECF8]
 select avg(b) from t;
