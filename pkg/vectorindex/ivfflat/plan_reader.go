@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -455,12 +456,16 @@ func searchPlanReader[T types.RealNumbers](
 ) error {
 	cache.Cache.Once()
 	algo := NewIvfflatSearch[T](idxcfg, tblcfg)
+	algo.forceCPURoute = r.req.MembershipFilterRequired && r.req.Identity.PartitionCount > 1
 	key := fmt.Sprintf("%s:%d", tblcfg.IndexTable, idxcfg.Ivfflat.Version)
 	if source := r.spec.SourceTable; source != nil && source.PubInfo != nil {
 		key = fmt.Sprintf("tenant=%d:%s", source.PubInfo.TenantId, key)
 	}
 	if r.req.Identity.PartitionCount > 1 {
 		key = fmt.Sprintf("%s:%d/%d", key, r.req.Identity.PartitionIndex, r.req.Identity.PartitionCount)
+	}
+	if algo.forceCPURoute {
+		key += ":cpu-route-v1"
 	}
 	if prepareOnly {
 		cursor := new(vectorindex.IvfSearchCursor)
@@ -665,6 +670,9 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 		defer req.FilterHint.BF.Free()
 	}
 	ctx := s.proc.Ctx
+	if req.ReadPolicy != 0 {
+		ctx = fileservice.WithFileServicePolicy(ctx, fileservice.GetFileServicePolicy(ctx)|req.ReadPolicy)
+	}
 	if s.accountID != nil {
 		ctx = defines.AttachAccountId(ctx, *s.accountID)
 	}

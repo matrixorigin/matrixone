@@ -119,7 +119,7 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	return encodeRemoteScopeWithVectorProtocol(s, proc, nil)
 }
 
-func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requiresBoundProtocol *bool) ([]byte, error) {
+func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requiredVectorProtocol *int64) ([]byte, error) {
 	p, err := fillPipeline(s)
 	if err != nil {
 		return nil, err
@@ -127,7 +127,7 @@ func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requir
 	if err = validateRemoteBoundStringVariables(p); err != nil {
 		return nil, err
 	}
-	if err = validateVectorPartitionDestinationWithResult(proc, p, requiresBoundProtocol); err != nil {
+	if err = validateVectorPartitionDestinationWithResult(proc, p, requiredVectorProtocol); err != nil {
 		return nil, err
 	}
 	if err = validateGroupingTransportDestinations(proc, p); err != nil {

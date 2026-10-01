@@ -16,6 +16,7 @@ package sqlexec
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -27,6 +28,8 @@ import (
 // physical top-k parameters; the execution adapter opens readers in the
 // current transaction and returns owned batches.
 type RelationScanRequest struct {
+	// ReadPolicy augments the caller policy for this scan without changing session state.
+	ReadPolicy   fileservice.Policy
 	Schema       string
 	Table        string
 	Columns      []string
