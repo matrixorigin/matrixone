@@ -2435,6 +2435,9 @@ func unwrapCast(expr *plan.Expr) *plan.Expr {
 }
 
 func checkNoNeedCast(ctx context.Context, constT, columnT types.Type, constExpr *plan.Expr) bool {
+	if columnT.Oid.IsInteger() && constT.Oid.IsDecimal() {
+		return exactDecimalIntegerFits(constExpr, columnT.Oid)
+	}
 	if constExpr.GetP() != nil && columnT.IsNumeric() {
 		// An unresolved PREPARE marker has a provisional TEXT transport type.
 		// A resolved execution marker must satisfy the same source-domain
