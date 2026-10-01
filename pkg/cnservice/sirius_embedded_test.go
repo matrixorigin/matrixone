@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -190,14 +191,18 @@ func TestEmbeddedSiriusInputLeaseAdapter(t *testing.T) {
 }
 
 type embeddedPreparedRecorder struct {
-	results  []siriusbridge.Result
-	stats    siriusbridge.ExecutionStats
-	ready    bool
-	closeErr error
-	closes   int
+	results   []siriusbridge.Result
+	stats     siriusbridge.ExecutionStats
+	ready     bool
+	closeErr  error
+	closes    int
+	beforeRun func()
 }
 
 func (q *embeddedPreparedRecorder) Run(_ context.Context, fill func(siriusbridge.Result) error) error {
+	if q.beforeRun != nil {
+		q.beforeRun()
+	}
 	for _, r := range q.results {
 		if err := fill(r); err != nil {
 			return err
@@ -211,7 +216,7 @@ func (q *embeddedPreparedRecorder) Statistics() (siriusbridge.ExecutionStats, bo
 }
 
 func TestEmbeddedSiriusExecutionOutputAndTerminalCleanup(t *testing.T) {
-	for _, outcome := range []string{"success", "output error", "invalid output", "cleanup error", "fatal", "not terminal"} {
+	for _, outcome := range []string{"success", "output error", "invalid output", "cleanup error", "fatal", "not terminal", "zero first-row latency", "empty result"} {
 		t.Run(outcome, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
 			t.Cleanup(proc.Free)
@@ -226,10 +231,26 @@ func TestEmbeddedSiriusExecutionOutputAndTerminalCleanup(t *testing.T) {
 				q.closeErr = failure
 			}
 			e := &embeddedExecution{query: q, streams: 2, counters: &embeddedExecutionCounters{}, request: compile.SiriusPrepareRequest{Headings: []string{"n"}, OutputTypes: []planpb.Type{{Id: int32(types.T_int64)}}}}
+			if outcome == "zero first-row latency" {
+				q.beforeRun = func() {
+					// Model an already observed first row in the starting clock
+					// tick. Later callbacks must preserve its valid 0ns sample.
+					e.counters.mu.Lock()
+					e.counters.firstRowAt = e.counters.started
+					e.counters.mu.Unlock()
+				}
+			}
+			if outcome == "empty result" {
+				q.results = []siriusbridge.Result{{Vectors: []siriusbridge.Vector{{}}}}
+			}
 			fills := 0
 			err := e.Run(t.Context(), proc.Mp(), nil, func(bat *batch.Batch, _ *perfcounter.CounterSet) error {
 				fills++
-				require.Equal(t, 1, bat.RowCount())
+				if outcome == "empty result" {
+					require.Zero(t, bat.RowCount())
+				} else {
+					require.Equal(t, 1, bat.RowCount())
+				}
 				if outcome == "output error" {
 					return failure
 				}
@@ -249,7 +270,15 @@ func TestEmbeddedSiriusExecutionOutputAndTerminalCleanup(t *testing.T) {
 			} else {
 				require.NoError(t, e.Cleanup(t.Context()))
 			}
-			require.Positive(t, e.counters.firstRow)
+			if outcome == "empty result" {
+				require.True(t, e.counters.firstRowAt.IsZero(), "an empty batch is not a first-row observation")
+			} else {
+				require.False(t, e.counters.firstRowAt.IsZero(), "a nonempty result must record its arrival")
+				require.GreaterOrEqual(t, e.counters.firstRowAt.Sub(e.counters.started), time.Duration(0))
+			}
+			if outcome == "zero first-row latency" {
+				require.Equal(t, e.counters.started, e.counters.firstRowAt, "later callbacks cannot replace the first observation")
+			}
 			q.closeErr = nil
 			require.NoError(t, e.CleanupAfterRun(t.Context(), err), "terminal reporting cannot repeat side effects")
 			require.Equal(t, 2, q.closes)

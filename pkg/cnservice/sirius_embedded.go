@@ -182,7 +182,7 @@ type embeddedExecutionCounters struct {
 	inputRows, inputBytes atomic.Uint64
 	mu                    sync.Mutex
 	started               time.Time
-	firstRow              time.Duration
+	firstRowAt            time.Time
 }
 
 func (e *embeddedExecution) Run(ctx context.Context, mp *mpool.MPool, counters *perfcounter.CounterSet, fill func(*batch.Batch, *perfcounter.CounterSet) error) error {
@@ -192,8 +192,10 @@ func (e *embeddedExecution) Run(ctx context.Context, mp *mpool.MPool, counters *
 	return e.query.Run(ctx, func(result siriusbridge.Result) error {
 		if result.Rows > 0 {
 			e.counters.mu.Lock()
-			if e.counters.firstRow == 0 {
-				e.counters.firstRow = time.Since(e.counters.started)
+			if e.counters.firstRowAt.IsZero() {
+				// A zero elapsed duration is a valid first-row sample. The event
+				// timestamp, not its duration, records whether it was observed.
+				e.counters.firstRowAt = time.Now()
 			}
 			e.counters.mu.Unlock()
 		}
@@ -210,11 +212,14 @@ func (e *embeddedExecution) Cleanup(ctx context.Context) error {
 	if stats, ready := e.query.Statistics(); ready {
 		e.recorded.Do(func() {
 			e.counters.mu.Lock()
-			firstRow, started := e.counters.firstRow, e.counters.started
+			firstRowAt, started := e.counters.firstRowAt, e.counters.started
 			e.counters.mu.Unlock()
-			var wall time.Duration
+			var wall, firstRow time.Duration
 			if !started.IsZero() {
 				wall = time.Since(started)
+				if !firstRowAt.IsZero() {
+					firstRow = firstRowAt.Sub(started)
+				}
 			}
 			health := "healthy"
 			if err != nil {
