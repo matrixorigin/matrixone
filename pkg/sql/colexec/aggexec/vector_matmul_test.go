@@ -125,7 +125,7 @@ func vmReference(ids []int64, rows [][]float32, queries [][]float32, k int) stri
 		id    string
 		score float64
 	}
-	var out []string
+	out := make([]string, 0, len(queries))
 	for _, q := range queries {
 		qc, _ := types.AppendBlockScaled(nil, types.BlockScaledMXFP8, q)
 		qv, _ := types.BlockScaledToFloat32(qc)
