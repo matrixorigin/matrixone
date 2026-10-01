@@ -190,7 +190,7 @@ var testCases = []*testCase{
 		arithExpects: []*testArithRes{
 			{makeZM(types.T_decimal64, 8, types.Decimal64(3001), types.Decimal64(20004)), true},
 			{makeZM(types.T_decimal64, 8, types.Decimal64(2996), types.Decimal64(19999)), true},
-			{makeZM(types.T_decimal64, 12, types.Decimal64(3), types.Decimal64(80)), true},
+			{makeZM(types.T_decimal64, 12, types.Decimal64(0), types.Decimal64(8)), true},
 		},
 		idx: 4,
 	},

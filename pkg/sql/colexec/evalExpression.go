@@ -2624,6 +2624,22 @@ func GetExprZoneMap(
 			}
 		}
 
+	case *plan.Expr_Fold:
+		// EvalFoldExpr owns execution. Consume only its materialized scalar
+		// bytes; NULL, lists and unsupported types cannot prove exclusion.
+		zm := zms[expr.AuxId]
+		zm.Reset()
+		typ := types.T(expr.Typ.Id)
+		if t.Fold != nil && t.Fold.IsConst && t.Fold.Data != nil &&
+			(typ.IsOrdered() || typ == types.T_bool || typ == types.T_decimal64 || typ == types.T_decimal128) &&
+			len(t.Fold.Data) == typ.TypeLen() {
+			if zm == nil || zm.GetType() != typ || zm.GetScale() != expr.Typ.Scale {
+				zm = objectio.NewZM(typ, expr.Typ.Scale)
+			}
+			index.UpdateZM(zm, t.Fold.Data)
+		}
+		zms[expr.AuxId] = zm
+
 	case *plan.Expr_Col:
 		zms[expr.AuxId] = meta.MustGetColumn(uint16(columnMap[int(t.Col.ColPos)])).ZoneMap()
 
@@ -2637,6 +2653,13 @@ func GetExprZoneMap(
 
 			// Some expressions need to be handled specifically
 			switch t.F.Func.ObjName {
+			case "+", "-", "*":
+				// The primitive ZM arithmetic preserves its input representation.
+				// Widening (notably decimal64 multiplication) needs a typed proof.
+				if expr.Typ.Id != args[0].Typ.Id {
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
 			case "round", "truncate":
 				// Precision endpoints do not bound ROUND's interior extrema or
 				// TRUNCATE's sign-dependent precision direction. Only derive a
@@ -2963,6 +2986,13 @@ func GetExprZoneMap(
 					}
 				} else {
 					if f() {
+						return zms[expr.AuxId]
+					}
+					// Endpoint pairs do not bound a quotient with a varying
+					// denominator, even when that interval excludes zero.
+					if (t.F.Func.ObjName == "/" || t.F.Func.ObjName == "div") &&
+						!bytes.Equal(zms[args[1].AuxId].GetMinBuf(), zms[args[1].AuxId].GetMaxBuf()) {
+						zms[expr.AuxId].Reset()
 						return zms[expr.AuxId]
 					}
 					for i, arg := range args {

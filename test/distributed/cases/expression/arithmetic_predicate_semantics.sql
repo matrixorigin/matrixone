@@ -42,13 +42,37 @@ insert into ov values (-9223372036854775808);
 select v from ov where v-1=-9223372036854775808;
 -- Column-only arithmetic has no constant-fold escape from metadata pruning.
 create table persisted_overflow(v bigint primary key);
-insert into persisted_overflow values (9223372036854775807);
+-- A matching PK row must not hide another row's arithmetic overflow.
+insert into persisted_overflow values (3),(9223372036854775807);
+select v from persisted_overflow where v+2=5;
 -- @ignore:0
 select mo_ctl('dn','flush','arithmetic_predicate_semantics.persisted_overflow');
 set optimizer_hints='blockFilter=1';
+select v from persisted_overflow where v+2=5;
 select v from persisted_overflow where v+v=v;
 select v from persisted_overflow where v*v=v;
 select v from persisted_overflow where v-v=v;
 select count(*) as healthy from persisted_overflow;
+-- Fold support must not activate invalid quotient or decimal bounds.
+-- @session:id=1{
+use arithmetic_predicate_semantics;
+set optimizer_hints='blockFilter=1';
+create table reciprocal(v double);
+insert into reciprocal values(-1),(.1),(1);
+select v from reciprocal where 1/v>2;
+-- @ignore:0
+select mo_ctl('dn','flush','arithmetic_predicate_semantics.reciprocal');
+select v from reciprocal where 1/v>2;
+-- @regex("Analyze:",true)
+explain (analyze true, check '["outputRows=1", "Block Filter Cond"]') select v from reciprocal where 1/v>2;
+create table scaled_product(v decimal(16,8));
+insert into scaled_product values(1);
+select v from scaled_product where round(v*cast('0.00000001' as decimal(16,8)),8)=0.00000001;
+-- @ignore:0
+select mo_ctl('dn','flush','arithmetic_predicate_semantics.scaled_product');
+select v from scaled_product where round(v*cast('0.00000001' as decimal(16,8)),8)=0.00000001;
+-- @regex("Analyze:",true)
+explain (analyze true, check '["outputRows=1", "Block Filter Cond"]') select v from scaled_product where round(v*cast('0.00000001' as decimal(16,8)),8)=0.00000001;
+-- @session}
 set optimizer_hints=@saved_transpose_hints;
 drop database arithmetic_predicate_semantics;
