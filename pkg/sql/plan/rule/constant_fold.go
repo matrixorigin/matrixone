@@ -1064,44 +1064,7 @@ func IsLegacyTimeAssignmentOutsideInternalRange(fn *plan.Function) bool {
 }
 
 func IsConstant(e *plan.Expr, varAndParamIsConst bool) bool {
-	switch ef := e.GetExpr().(type) {
-	case *plan.Expr_Lit, *plan.Expr_T, *plan.Expr_Vec:
-		return true
-	case *plan.Expr_F:
-		// CASE expressions should always be evaluated at runtime to preserve
-		// branch semantics; treat them as non-constant.
-		if fid, _ := function.DecodeOverloadID(ef.F.Func.GetObj()); fid == function.CASE {
-			return false
-		}
-		overloadID := ef.F.Func.GetObj()
-		f, exists := function.GetFunctionByIdWithoutError(overloadID)
-		if !exists {
-			return false
-		}
-		if f.CannotFold() { // function cannot be fold
-			return false
-		}
-		if f.IsRealTimeRelated() && !varAndParamIsConst {
-			return false
-		}
-		for i := range ef.F.Args {
-			if !IsConstant(ef.F.Args[i], varAndParamIsConst) {
-				return false
-			}
-		}
-		return true
-	case *plan.Expr_List:
-		for _, arg := range ef.List.List {
-			if !IsConstant(arg, varAndParamIsConst) {
-				return false
-			}
-		}
-		return true
-	case *plan.Expr_P, *plan.Expr_V:
-		return varAndParamIsConst
-	default:
-		return false
-	}
+	return function.IsConstant(e, varAndParamIsConst)
 }
 
 // IsDivisionByZeroConstant checks if the expression is a division/modulo operation
@@ -1163,29 +1126,21 @@ func isZeroLiteral(lit *plan.Literal) bool {
 	return false
 }
 
-// foldWarningSink records only the presence of diagnostics. Speculative
-// evaluation must neither publish a warning nor erase its runtime producer.
-type foldWarningSink struct{ warned bool }
-
-func (s *foldWarningSink) AppendWarningDiagnostic(uint16, string) { s.warned = true }
-func (s *foldWarningSink) AppendWarningCount(n uint64)            { s.warned = s.warned || n != 0 }
-func (s *foldWarningSink) GetWarningRetentionLimit() int          { return 0 }
-
 // EvaluateConstantExpression is shared by binder and optimizer folding. The
 // child borrows the context and memory pool; only the expression result needs
 // freeing. Never mutate the statement's immutable warning destination.
 func EvaluateConstantExpression(proc *process.Process, expr *plan.Expr, bat *batch.Batch) (vec *vector.Vector, free func(), warned bool, err error) {
-	sink := &foldWarningSink{}
+	sink := &process.WarningProbe{}
 	// A speculative kernel failure must use the same error channel as a
 	// returned error, so selection can leave an inactive operand unevaluated.
 	defer func() {
 		if failure := recover(); failure != nil {
-			vec, free, warned, err = nil, nil, sink.warned, moerr.ConvertPanicError(proc.Ctx, failure)
+			vec, free, warned, err = nil, nil, sink.Warned(), moerr.ConvertPanicError(proc.Ctx, failure)
 		}
 	}()
 	child := proc.NewNoContextChildProc(0)
 	child.Ctx = proc.Ctx
 	child.WarningSink = sink
 	vec, free, err = colexec.GetReadonlyResultFromExpression(child, expr, []*batch.Batch{bat})
-	return vec, free, sink.warned, err
+	return vec, free, sink.Warned(), err
 }

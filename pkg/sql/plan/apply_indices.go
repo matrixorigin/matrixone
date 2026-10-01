@@ -280,31 +280,7 @@ func containsDynamicParam(expr *plan.Expr) bool {
 }
 
 func isRuntimeConstExpr(expr *plan.Expr) bool {
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Vec, *plan.Expr_T:
-		return true
-
-	case *plan.Expr_F:
-		for _, subExpr := range exprImpl.F.Args {
-			if !isRuntimeConstExpr(subExpr) {
-				return false
-			}
-		}
-
-		return true
-
-	case *plan.Expr_List:
-		for _, subExpr := range exprImpl.List.List {
-			if !isRuntimeConstExpr(subExpr) {
-				return false
-			}
-		}
-
-		return true
-
-	default:
-		return false
-	}
+	return function.IsConstant(expr, true)
 }
 
 func checkSpatialIndexFilter(expr *plan.Expr) *plan.ColRef {

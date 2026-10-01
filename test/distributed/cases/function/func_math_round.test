@@ -379,3 +379,83 @@ deallocate prepare round_guarded_parameter;
 drop table round_mask_digits;
 drop table round_signed_ctas;
 drop table round_signed_values;
+
+-- Materialized function pruning and CHAR comparison-domain safety share four persisted rows.
+drop database if exists round_pruning;
+create database round_pruning;
+use round_pruning;
+set optimizer_hints='blockFilter=1';
+create table t(id bigint primary key,v bigint,c1 char(8),c2 char(8));
+insert into t values (1,-5,'MO','MO '),(2,-10,'MO','MO ');
+-- @regex("OK",true)
+select mo_ctl('dn','flush','round_pruning.t');
+insert into t values (3,-1000,'XX','XX '),(4,-1010,'XX','XX ');
+-- @regex("OK",true)
+select mo_ctl('dn','flush','round_pruning.t');
+-- @metacmp(true)
+select count(*) as n from t where round(v,-1)=-10;
+-- @regex("inputBlocks=1 inputRows=2",true)
+explain analyze select id from t where round(v,-1)=-10;
+-- @metacmp(true)
+select count(*) as n from t where round(v)=-10;
+-- @regex("inputBlocks=1 inputRows=2",true)
+explain analyze select id from t where round(v)=-10;
+-- @metacmp(true)
+select count(*) as n from t where floor(v)=-10;
+-- @regex("inputBlocks=1 inputRows=2",true)
+explain analyze select id from t where floor(v)=-10;
+-- @metacmp(true)
+select count(*) as n from t where ceil(v)=-10;
+-- @regex("inputBlocks=1 inputRows=2",true)
+explain analyze select id from t where ceil(v)=-10;
+-- @metacmp(true)
+select count(*) as n from t where v+1=-9;
+-- @regex("inputBlocks=1 inputRows=2",true)
+explain analyze select id from t where v+1=-9;
+-- @metacmp(true)
+select count(*) as n from t where truncate(v,-1)=-10;
+-- @metacmp(true)
+select count(*) as n from t where abs(v)=10;
+-- @metacmp(true)
+select count(*) as n from t where c1=cast('MO ' as char(8));
+-- @metacmp(true)
+select count(*) as n from t where c1=cast('MO ' as char(8)) or round(v,-1)=-9999;
+-- @metacmp(true)
+select count(*) as n from t where c1=c2 or round(v,-1)=-9999;
+-- @metacmp(true)
+select count(*) as n from t where c1 in (cast('MO ' as char(8)),cast('ZZ' as char(8))) or round(v,-1)=-9999;
+-- @metacmp(true)
+select count(*) as n from t where c1=cast('ZZ ' as char(8)) or round(v,-1)=-9999;
+-- @metacmp(true)
+select count(*) as n from t where cast(c1 as varchar(8))='MO ' or round(v,-1)=-9999;
+prepare round_pruning_stmt from 'select count(*) as n from t where round(v,?)=?';
+set @digits=-1,@bound=-10;
+-- @metacmp(true)
+execute round_pruning_stmt using @digits,@bound;
+set @digits=-1,@bound=-1000;
+-- @metacmp(true)
+execute round_pruning_stmt using @digits,@bound;
+set @digits=null,@bound=-10;
+-- @metacmp(true)
+execute round_pruning_stmt using @digits,@bound;
+set @digits=-1,@bound=-10;
+-- @metacmp(true)
+execute round_pruning_stmt using @digits,@bound;
+deallocate prepare round_pruning_stmt;
+-- @metacmp(true)
+select count(*) as n from t where round(v,case when id=1 then -1 else -3 end)=-10;
+insert into t values (5,5000000000000000000,'ZZ','ZZ');
+-- @regex("OK",true)
+select mo_ctl('dn','flush','round_pruning.t');
+-- @regex("^Data truncation: data out of range: data type int64, ROUND",true)
+select count(*) as n from t where round(v,-19)=1;
+create table argument_bounds(v double);
+insert into argument_bounds values (-2),(1),(2);
+-- @regex("OK",true)
+select mo_ctl('dn','flush','round_pruning.argument_bounds');
+-- @metacmp(true)
+select count(*) as n from argument_bounds where 1/v=1;
+-- @metacmp(true)
+select count(*) as n from argument_bounds where 1 div cast(v as signed)=1;
+set optimizer_hints='';
+drop database round_pruning;

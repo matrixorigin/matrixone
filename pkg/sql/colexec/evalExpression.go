@@ -2458,18 +2458,49 @@ func EvaluateFilterByZoneMap(
 	}
 
 	if len(columnMap) == 0 {
-		vec, free, err := GetReadonlyResultFromNoColumnExpression(proc, expr)
+		if fold := expr.GetFold(); fold != nil {
+			if types.T(expr.Typ.Id) != types.T_bool {
+				return true
+			}
+			data, available := foldedScalarBytes(expr)
+			return !available || types.DecodeBool(data)
+		}
+		if !function.IsStatementConstant(expr) {
+			return true
+		}
+		// A partially materialized subtree cannot be reconstructed from Fold IDs.
+		hasFold := false
+		_ = plan.VisitExprTree(expr, func(e *plan.Expr) error {
+			hasFold = hasFold || e.GetFold() != nil
+			return nil
+		})
+		if hasFold {
+			return true
+		}
+		selected = true
+		defer func() {
+			if recover() != nil {
+				selected = true
+			}
+		}()
+		probe := &process.WarningProbe{}
+		child := proc.NewNoContextChildProc(0)
+		child.Ctx = proc.Ctx
+		child.WarningSink = probe
+		vec, free, err := GetReadonlyResultFromNoColumnExpression(child, expr)
 		if err != nil {
+			return true
+		}
+		defer free()
+		if probe.Warned() || vec.GetType().Oid != types.T_bool || vec.IsConstNull() || vec.GetNulls().Any() {
 			return true
 		}
 		cols := vector.MustFixedColWithTypeCheck[bool](vec)
 		for _, isNeed := range cols {
 			if isNeed {
-				free()
 				return true
 			}
 		}
-		free()
 		return false
 	}
 
@@ -2511,8 +2542,10 @@ func zoneMapInVector(data []byte, prefixSearch bool) (*vector.Vector, bool) {
 	if err := vec.UnmarshalBinary(data); err != nil {
 		return nil, false
 	}
-	if vec.IsConst() {
-		return vec, true
+	if !prefixSearch && vec.GetType().Oid == types.T_char {
+		// IN dispatches on the decoded item type; SQL CHAR trims spaces,
+		// whereas AnyIn searches persisted raw-byte metadata.
+		return nil, false
 	}
 	if prefixSearch {
 		// PrefixIn is defined on physical varlena bytes and does not require
@@ -2520,6 +2553,9 @@ func zoneMapInVector(data []byte, prefixSearch bool) (*vector.Vector, bool) {
 		if vec.GetType().Oid.IsArrayRelate() || !vec.GetType().IsVarlen() {
 			return nil, false
 		}
+		return vec, true
+	}
+	if vec.IsConst() {
 		return vec, true
 	}
 	if !prefixSearch && vec.GetNulls().Any() {
@@ -2606,6 +2642,96 @@ func zoneMapInVectorOrderIsKnown(vec *vector.Vector) bool {
 	return true
 }
 
+// foldedScalarBytes accepts only the scalar encoding owned by EvalFoldExpr.
+// Nil cannot distinguish NULL, an unavailable value, and an unsupported encoding.
+func foldedScalarBytes(expr *plan.Expr) ([]byte, bool) {
+	fold := expr.GetFold()
+	if fold == nil || !fold.IsConst || fold.Data == nil {
+		return nil, false
+	}
+	oid := types.T(expr.Typ.Id)
+	switch oid {
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
+		types.T_text, types.T_blob, types.T_datalink:
+		return fold.Data, true
+	case types.T_bool, types.T_bit, types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64, types.T_date, types.T_time, types.T_datetime,
+		types.T_timestamp, types.T_decimal64, types.T_decimal128:
+	default:
+		return nil, false
+	}
+	if len(fold.Data) != oid.TypeLen() {
+		return nil, false
+	}
+	switch oid {
+	case types.T_bool:
+		if fold.Data[0] > 1 {
+			return nil, false
+		}
+	case types.T_float32:
+		v := float64(types.DecodeFloat32(fold.Data))
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return nil, false
+		}
+	case types.T_float64:
+		v := types.DecodeFloat64(fold.Data)
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return nil, false
+		}
+	case types.T_timestamp, types.T_time, types.T_datetime:
+		if expr.Typ.Scale < 0 || expr.Typ.Scale > 6 {
+			return nil, false
+		}
+	case types.T_decimal64:
+		if expr.Typ.Scale < 0 || expr.Typ.Scale > 18 {
+			return nil, false
+		}
+	case types.T_decimal128:
+		if expr.Typ.Scale < 0 || expr.Typ.Scale > 38 {
+			return nil, false
+		}
+	}
+	return fold.Data, true
+}
+
+// prefixBoundBytes preserves the complete byte bound rather than a truncated ZM.
+func prefixBoundBytes(expr *plan.Expr) ([]byte, bool) {
+	if lit := expr.GetLit(); lit != nil && !lit.Isnull {
+		if value, ok := lit.Value.(*plan.Literal_Sval); ok {
+			return []byte(value.Sval), true
+		}
+	}
+	switch types.T(expr.Typ.Id) {
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
+		types.T_text, types.T_blob, types.T_datalink:
+		return foldedScalarBytes(expr)
+	}
+	return nil, false
+}
+
+// zoneMapMembershipVector shares the existing checked, read-only payload decoder.
+func zoneMapMembershipVector(expr *plan.Expr, prefix bool) (*vector.Vector, bool) {
+	if data := expr.GetVec(); data != nil {
+		return zoneMapInVector(data.Data, prefix)
+	}
+	fold := expr.GetFold()
+	if fold == nil || fold.IsConst || len(fold.Data) == 0 {
+		return nil, false
+	}
+	vec, ok := zoneMapInVector(fold.Data, prefix)
+	if !ok {
+		return nil, false
+	}
+	typ := vec.GetType()
+	if int32(typ.Oid) != expr.Typ.Id || typ.Scale != expr.Typ.Scale ||
+		(typ.Width != 0 && expr.Typ.Width != 0 && typ.Width != expr.Typ.Width) ||
+		(typ.Charset != 0 && expr.Typ.Charset != 0 && uint32(typ.Charset) != expr.Typ.Charset) {
+		return nil, false
+	}
+	return vec, true
+}
+
 func GetExprZoneMap(
 	ctx context.Context,
 	proc *process.Process,
@@ -2625,18 +2751,14 @@ func GetExprZoneMap(
 		}
 
 	case *plan.Expr_Fold:
-		// EvalFoldExpr owns execution. Consume only its materialized scalar
-		// bytes; NULL, lists and unsupported types cannot prove exclusion.
 		zm := zms[expr.AuxId]
 		zm.Reset()
-		typ := types.T(expr.Typ.Id)
-		if t.Fold != nil && t.Fold.IsConst && t.Fold.Data != nil &&
-			(typ.IsOrdered() || typ == types.T_bool || typ == types.T_decimal64 || typ == types.T_decimal128) &&
-			len(t.Fold.Data) == typ.TypeLen() {
+		if data, ok := foldedScalarBytes(expr); ok {
+			typ := types.T(expr.Typ.Id)
 			if zm == nil || zm.GetType() != typ || zm.GetScale() != expr.Typ.Scale {
-				zm = objectio.NewZM(typ, expr.Typ.Scale)
+				zm = index.NewZM(typ, expr.Typ.Scale)
 			}
-			index.UpdateZM(zm, t.Fold.Data)
+			index.UpdateZM(zm, data)
 		}
 		zms[expr.AuxId] = zm
 
@@ -2644,6 +2766,11 @@ func GetExprZoneMap(
 		zms[expr.AuxId] = meta.MustGetColumn(uint16(columnMap[int(t.Col.ColPos)])).ZoneMap()
 
 	case *plan.Expr_F:
+		kind := function.GetZoneMapEvaluation(t.F)
+		if kind == function.ZoneMapUnsupported {
+			zms[expr.AuxId].Reset()
+			return zms[expr.AuxId]
+		}
 		id := t.F.GetFunc().GetObj()
 		if overload, errGetFunc := function.GetFunctionById(ctx, id); errGetFunc != nil {
 			zms[expr.AuxId].Reset()
@@ -2651,24 +2778,13 @@ func GetExprZoneMap(
 		} else {
 			args := t.F.Args
 
-			// Some expressions need to be handled specifically
-			switch t.F.Func.ObjName {
-			case "+", "-", "*":
-				// The primitive ZM arithmetic preserves its input representation.
-				// Widening (notably decimal64 multiplication) needs a typed proof.
-				if expr.Typ.Id != args[0].Typ.Id {
-					zms[expr.AuxId].Reset()
-					return zms[expr.AuxId]
-				}
-			case "round", "truncate":
-				// Precision endpoints do not bound ROUND's interior extrema or
-				// TRUNCATE's sign-dependent precision direction. Only derive a
-				// range when precision is independent of the row value.
-				if len(args) > 1 && !isConst(args[1]) {
-					zms[expr.AuxId].Reset()
-					return zms[expr.AuxId]
-				}
-			case "isnull", "is_null":
+			fid, _ := function.DecodeOverloadID(id)
+			if (fid == function.PLUS || fid == function.MINUS || fid == function.MULTI) && expr.Typ.Id != args[0].Typ.Id {
+				zms[expr.AuxId].Reset()
+				return zms[expr.AuxId]
+			}
+			switch fid {
+			case function.ISNULL:
 				switch exprImpl := args[0].Expr.(type) {
 				case *plan.Expr_Col:
 					nullCnt := meta.MustGetColumn(uint16(columnMap[int(exprImpl.Col.ColPos)])).NullCnt()
@@ -2678,7 +2794,7 @@ func GetExprZoneMap(
 					zms[expr.AuxId].Reset()
 					return zms[expr.AuxId]
 				}
-			case "isnotnull", "is_not_null":
+			case function.ISNOTNULL:
 				switch exprImpl := args[0].Expr.(type) {
 				case *plan.Expr_Col:
 					zm := meta.MustGetColumn(uint16(columnMap[int(exprImpl.Col.ColPos)])).ZoneMap()
@@ -2688,25 +2804,19 @@ func GetExprZoneMap(
 					zms[expr.AuxId].Reset()
 					return zms[expr.AuxId]
 				}
-			case "in":
+			case function.IN:
 				if list := args[1].GetList(); list != nil {
 					return foldNativeInListZoneMap(ctx, proc, meta, columnMap, zms, vecs, args, expr.AuxId, false)
 				}
 				rid := args[1].AuxId
 				if vecs[rid] == nil {
-					if data, ok := args[1].Expr.(*plan.Expr_Vec); ok {
-						vec, decoded := zoneMapInVector(data.Vec.Data, false)
-						if !decoded {
-							zms[expr.AuxId].Reset()
-							vecs[rid] = vector.NewConstNull(types.T_any.ToType(), math.MaxInt, proc.Mp())
-							return zms[expr.AuxId]
-						}
-						vecs[rid] = vec
-					} else {
+					vec, decoded := zoneMapMembershipVector(args[1], false)
+					if !decoded {
 						zms[expr.AuxId].Reset()
 						vecs[rid] = vector.NewConstNull(types.T_any.ToType(), math.MaxInt, proc.Mp())
 						return zms[expr.AuxId]
 					}
+					vecs[rid] = vec
 				}
 
 				if vecs[rid].IsConstNull() && vecs[rid].Length() == math.MaxInt {
@@ -2723,67 +2833,116 @@ func GetExprZoneMap(
 				zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], lhs.AnyIn(vecs[rid]))
 				return zms[expr.AuxId]
 
-			case "not_in":
+			case function.NOT_IN:
 				if list := args[1].GetList(); list != nil {
 					return foldNativeInListZoneMap(ctx, proc, meta, columnMap, zms, vecs, args, expr.AuxId, true)
 				}
 				zms[expr.AuxId].Reset()
 				return zms[expr.AuxId]
 
-			case "prefix_eq":
+			case function.PREFIX_EQ:
 				lhs := GetExprZoneMap(ctx, proc, args[0], meta, columnMap, zms, vecs)
 				if !lhs.IsInited() {
 					zms[expr.AuxId].Reset()
 					return zms[expr.AuxId]
 				}
 
-				s := []byte(args[1].GetLit().GetSval())
+				s, ok := prefixBoundBytes(args[1])
+				if !ok {
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
 
 				zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], lhs.PrefixEq(s))
 				return zms[expr.AuxId]
 
-			case "prefix_between":
+			case function.PREFIX_BETWEEN:
 				lhs := GetExprZoneMap(ctx, proc, args[0], meta, columnMap, zms, vecs)
 				if !lhs.IsInited() {
 					zms[expr.AuxId].Reset()
 					return zms[expr.AuxId]
 				}
 
-				lb := []byte(args[1].GetLit().GetSval())
-				ub := []byte(args[2].GetLit().GetSval())
+				lb, lowerOK := prefixBoundBytes(args[1])
+				ub, upperOK := prefixBoundBytes(args[2])
+				if !lowerOK || !upperOK {
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
 
 				zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], lhs.PrefixBetween(lb, ub))
 				return zms[expr.AuxId]
 
-			case "prefix_in_range":
+			case function.IN_RANGE:
+				if len(args) != 4 {
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
+				lhs := GetExprZoneMap(ctx, proc, args[0], meta, columnMap, zms, vecs)
+				bounds := [3][]byte{}
+				valid := lhs.IsInited()
+				for i, arg := range args[1:] {
+					if arg.GetLit() == nil && arg.GetFold() == nil {
+						valid = false
+						break
+					}
+					bound := GetExprZoneMap(ctx, proc, arg, meta, columnMap, zms, vecs)
+					if !bound.IsInited() || (!bound.IsString() && !isSingleValueZoneMap(bound)) {
+						valid = false
+						break
+					}
+					if i < 2 {
+						if bound.GetType() != lhs.GetType() || bound.GetScale() != lhs.GetScale() {
+							valid = false
+							break
+						}
+						if bound.IsString() {
+							bounds[i], valid = prefixBoundBytes(arg)
+							if !valid {
+								break
+							}
+						} else {
+							bounds[i] = bound.GetMinBuf()
+						}
+					} else {
+						valid = bound.GetType() == types.T_uint8
+						bounds[i] = bound.GetMinBuf()
+					}
+				}
+				if !valid || len(bounds[2]) != 1 {
+					zms[expr.AuxId].Reset()
+				} else {
+					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], lhs.InRange(bounds[0], bounds[1], bounds[2][0]))
+				}
+				return zms[expr.AuxId]
+
+			case function.PREFIX_IN_RANGE:
 				lhs := GetExprZoneMap(ctx, proc, args[0], meta, columnMap, zms, vecs)
 				if !lhs.IsInited() {
 					zms[expr.AuxId].Reset()
 					return zms[expr.AuxId]
 				}
 
-				lb := []byte(args[1].GetLit().GetSval())
-				ub := []byte(args[2].GetLit().GetSval())
+				lb, lowerOK := prefixBoundBytes(args[1])
+				ub, upperOK := prefixBoundBytes(args[2])
+				if !lowerOK || !upperOK {
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
 
 				zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], lhs.PrefixBetween(lb, ub))
 				return zms[expr.AuxId]
 
-			case "prefix_in":
+			case function.PREFIX_IN:
 				rid := args[1].AuxId
 				if vecs[rid] == nil {
-					if data, ok := args[1].Expr.(*plan.Expr_Vec); ok {
-						vec, decoded := zoneMapInVector(data.Vec.Data, true)
-						if !decoded {
-							zms[expr.AuxId].Reset()
-							vecs[rid] = vector.NewConstNull(types.T_any.ToType(), math.MaxInt, proc.Mp())
-							return zms[expr.AuxId]
-						}
-						vecs[rid] = vec
-					} else {
+					vec, decoded := zoneMapMembershipVector(args[1], true)
+					if !decoded {
 						zms[expr.AuxId].Reset()
 						vecs[rid] = vector.NewConstNull(types.T_any.ToType(), math.MaxInt, proc.Mp())
 						return zms[expr.AuxId]
 					}
+					vecs[rid] = vec
 				}
 
 				if vecs[rid].IsConstNull() && vecs[rid].Length() == math.MaxInt {
@@ -2813,8 +2972,8 @@ func GetExprZoneMap(
 			}
 
 			var res, ok bool
-			switch t.F.Func.ObjName {
-			case ">":
+			switch fid {
+			case function.GREAT_THAN:
 				if hasConstNullArg(args) {
 					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], false)
 					return zms[expr.AuxId]
@@ -2831,7 +2990,7 @@ func GetExprZoneMap(
 					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], res)
 				}
 
-			case "<":
+			case function.LESS_THAN:
 				if hasConstNullArg(args) {
 					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], false)
 					return zms[expr.AuxId]
@@ -2848,7 +3007,7 @@ func GetExprZoneMap(
 					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], res)
 				}
 
-			case ">=":
+			case function.GREAT_EQUAL:
 				if hasConstNullArg(args) {
 					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], false)
 					return zms[expr.AuxId]
@@ -2865,7 +3024,7 @@ func GetExprZoneMap(
 					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], res)
 				}
 
-			case "<=":
+			case function.LESS_EQUAL:
 				if hasConstNullArg(args) {
 					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], false)
 					return zms[expr.AuxId]
@@ -2882,7 +3041,7 @@ func GetExprZoneMap(
 					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], res)
 				}
 
-			case "=":
+			case function.EQUAL:
 				if hasConstNullArg(args) {
 					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], false)
 					return zms[expr.AuxId]
@@ -2899,7 +3058,7 @@ func GetExprZoneMap(
 					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], res)
 				}
 
-			case "!=", "<>":
+			case function.NOT_EQUAL:
 				if hasConstNullArg(args) {
 					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], false)
 					return zms[expr.AuxId]
@@ -2916,7 +3075,7 @@ func GetExprZoneMap(
 					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], res)
 				}
 
-			case "between":
+			case function.BETWEEN:
 				if hasConstNullArg(args) {
 					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], false)
 					return zms[expr.AuxId]
@@ -2933,35 +3092,39 @@ func GetExprZoneMap(
 					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], res)
 				}
 
-			case "and":
+			case function.AND:
 				if hasResult := foldAndZoneMap(ctx, proc, meta, columnMap, zms, vecs, args, expr.AuxId); hasResult {
 					return zms[expr.AuxId]
 				}
 
-			case "or":
+			case function.OR:
 				if hasResult := foldOrZoneMap(ctx, proc, meta, columnMap, zms, vecs, args, expr.AuxId); hasResult {
 					return zms[expr.AuxId]
 				}
 
-			case "+":
+			case function.PLUS:
 				if f() {
 					return zms[expr.AuxId]
 				}
 				zms[expr.AuxId] = index.ZMPlus(zms[args[0].AuxId], zms[args[1].AuxId], zms[expr.AuxId])
 
-			case "-":
+			case function.MINUS:
 				if f() {
 					return zms[expr.AuxId]
 				}
 				zms[expr.AuxId] = index.ZMMinus(zms[args[0].AuxId], zms[args[1].AuxId], zms[expr.AuxId])
 
-			case "*":
+			case function.MULTI:
 				if f() {
 					return zms[expr.AuxId]
 				}
 				zms[expr.AuxId] = index.ZMMulti(zms[args[0].AuxId], zms[args[1].AuxId], zms[expr.AuxId])
 
 			default:
+				if kind == function.ZoneMapIndex {
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
 				// Metadata is speculative. A failing argument or kernel cannot
 				// prove rows are absent; every temporary keeps its cleanup owner.
 				func() {
@@ -2970,6 +3133,10 @@ func GetExprZoneMap(
 							zms[expr.AuxId].Reset()
 						}
 					}()
+					probe := &process.WarningProbe{}
+					child := proc.NewNoContextChildProc(0)
+					child.Ctx = proc.Ctx
+					child.WarningSink = probe
 					ivecs := make([]*vector.Vector, len(args))
 					if isAllConst(args) { // constant fold
 						defer func() {
@@ -2983,7 +3150,13 @@ func GetExprZoneMap(
 							if vecs[arg.AuxId] != nil {
 								vecs[arg.AuxId].Free(proc.Mp())
 							}
-							if vecs[arg.AuxId], err = GetWritableResultFromNoColumnExpression(proc, arg); err != nil {
+							if arg.GetFold() != nil {
+								// Fold payloads are interpreted by their checked adapter,
+								// never by an executor reconstructed from a Fold ID.
+								zms[expr.AuxId].Reset()
+								return
+							}
+							if vecs[arg.AuxId], err = GetWritableResultFromNoColumnExpression(child, arg); err != nil {
 								zms[expr.AuxId].Reset()
 								return
 							}
@@ -2996,13 +3169,40 @@ func GetExprZoneMap(
 						if f() {
 							return
 						}
+						// Division accepts FLAT operands, but paired endpoints only
+						// bound a quotient when the current divisor range is a point.
+						if (fid == function.DIV || fid == function.INTEGER_DIV) && !isSingleValueZoneMap(zms[args[1].AuxId]) {
+							zms[expr.AuxId].Reset()
+							return
+						}
 						for i, arg := range args {
+							if !finiteZoneMapEndpoints(zms[arg.AuxId]) {
+								zms[expr.AuxId].Reset()
+								return
+							}
+							// Registered kernels need exact constant bytes, never a
+							// truncated string interval substituted for that value.
+							if isConst(arg) && zms[arg.AuxId].IsString() {
+								data, exact := prefixBoundBytes(arg)
+								if !exact || !bytes.Equal(data, zms[arg.AuxId].GetMinBuf()) || !bytes.Equal(data, zms[arg.AuxId].GetMaxBuf()) {
+									zms[expr.AuxId].Reset()
+									return
+								}
+							}
 							if vecs[arg.AuxId] != nil {
 								vecs[arg.AuxId].Free(proc.Mp())
 							}
 							if vecs[arg.AuxId], err = index.ZMToVector(zms[arg.AuxId], vecs[arg.AuxId], proc.Mp()); err != nil {
 								zms[expr.AuxId].Reset()
 								return
+							}
+							argType := *vecs[arg.AuxId].GetType()
+							argType.Width = arg.Typ.Width
+							argType.Charset = uint8(arg.Typ.Charset)
+							vecs[arg.AuxId].SetType(argType)
+							// Class is provenance, not a property of a point column ZM.
+							if isConst(arg) && isSingleValueZoneMap(zms[arg.AuxId]) {
+								vecs[arg.AuxId].ToConst()
 							}
 							ivecs[i] = vecs[arg.AuxId]
 						}
@@ -3012,20 +3212,11 @@ func GetExprZoneMap(
 						types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset),
 					)
 
-					if fnFree != nil {
-						defer func() { _ = fnFree() }()
-					}
-					result := vector.NewFunctionResultWrapper(typ, proc.Mp())
-					defer result.Free()
-					if err = result.PreExtendAndReset(2); err != nil {
-						zms[expr.AuxId].Reset()
-						return
-					}
-					if err = fn(ivecs, result, proc, 2, nil); err != nil {
-						zms[expr.AuxId].Reset()
-						return
-					}
-					zms[expr.AuxId] = index.VectorToZM(result.GetResultVector(), zms[expr.AuxId])
+					zms[expr.AuxId] = evaluateZoneMapFunction(child, typ, zms[expr.AuxId], func(result vector.FunctionResultWrapper) error {
+						return fn(ivecs, result, child, 2, nil)
+					}, fnFree, func(output *vector.Vector) bool {
+						return !probe.Warned() && (kind != function.ZoneMapTemporal || zoneMapTemporalEndpoints(proc, args, ivecs, output))
+					})
 				}()
 			}
 		}
@@ -3037,10 +3228,10 @@ func GetExprZoneMap(
 	return zms[expr.AuxId]
 }
 
-// evaluateZoneMapFunction owns the temporary scalar result, not its arguments.
-// Synthetic endpoints can fail even when every actual row is valid.
+// evaluateZoneMapFunction owns result cleanup and final publication. Its validator
+// borrows the completed output; argument vectors remain owned by its caller.
 func evaluateZoneMapFunction(proc *process.Process, typ types.Type, zm objectio.ZoneMap,
-	eval func(vector.FunctionResultWrapper) error, fnFree func() error) objectio.ZoneMap {
+	eval func(vector.FunctionResultWrapper) error, fnFree func() error, validate func(*vector.Vector) bool) objectio.ZoneMap {
 	if fnFree != nil {
 		defer func() { _ = fnFree() }()
 	}
@@ -3066,7 +3257,109 @@ func evaluateZoneMapFunction(proc *process.Process, typ types.Type, zm objectio.
 		zm.Reset()
 		return zm
 	}
-	return index.VectorToZM(result.GetResultVector(), zm)
+	output := result.GetResultVector()
+	if output.IsConstNull() || output.GetNulls().Any() || !finiteVectorEndpoints(output) || validate != nil && !validate(output) {
+		zm.Reset()
+		return zm
+	}
+	return index.VectorToZM(output, zm)
+}
+
+func finiteZoneMapEndpoints(zm objectio.ZoneMap) bool {
+	if !zm.IsInited() {
+		return false
+	}
+	switch zm.GetType() {
+	case types.T_float32:
+		for _, data := range [][]byte{zm.GetMinBuf(), zm.GetMaxBuf()} {
+			v := float64(types.DecodeFloat32(data))
+			if math.IsNaN(v) || math.IsInf(v, 0) {
+				return false
+			}
+		}
+	case types.T_float64:
+		for _, data := range [][]byte{zm.GetMinBuf(), zm.GetMaxBuf()} {
+			v := types.DecodeFloat64(data)
+			if math.IsNaN(v) || math.IsInf(v, 0) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func finiteVectorEndpoints(v *vector.Vector) bool {
+	switch v.GetType().Oid {
+	case types.T_float32:
+		for _, x := range vector.MustFixedColNoTypeCheck[float32](v) {
+			if math.IsNaN(float64(x)) || math.IsInf(float64(x), 0) {
+				return false
+			}
+		}
+	case types.T_float64:
+		for _, x := range vector.MustFixedColNoTypeCheck[float64](v) {
+			if math.IsNaN(x) || math.IsInf(x, 0) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func zoneMapTemporalEndpoints(proc *process.Process, args []*plan.Expr, inputs []*vector.Vector, output *vector.Vector) bool {
+	zone := proc.GetSessionInfo().TimeZone
+	if zone == nil {
+		return false
+	}
+	if output.GetType().Oid == types.T_datetime {
+		values := vector.GenerateFunctionFixedTypeParameter[types.Datetime](output)
+		lo, _ := values.GetValue(0)
+		hi, _ := values.GetValue(1)
+		minTimestamp, maxTimestamp, ok := types.DatetimeRangeToTimestampRange(lo, hi, zone)
+		if !ok || len(inputs) != 1 {
+			return false
+		}
+		instant := func(row uint64) (types.Timestamp, bool) {
+			switch inputs[0].GetType().Oid {
+			case types.T_int64:
+				v, null := vector.GenerateFunctionFixedTypeParameter[int64](inputs[0]).GetValue(row)
+				return types.UnixToTimestamp(v), !null
+			case types.T_uint64:
+				v, null := vector.GenerateFunctionFixedTypeParameter[uint64](inputs[0]).GetValue(row)
+				return types.UnixToTimestamp(int64(v)), !null
+			case types.T_float64:
+				v, null := vector.GenerateFunctionFixedTypeParameter[float64](inputs[0]).GetValue(row)
+				sec, nsec, valid := function.FloatUnixTimeParts(v)
+				return types.UnixToTimestamp(sec) + types.Timestamp(nsec/1000), valid && !null
+			}
+			return 0, false
+		}
+		left, leftOK := instant(0)
+		right, rightOK := instant(1)
+		return leftOK && rightOK && minTimestamp == left && maxTimestamp == right
+	}
+	if output.GetType().Oid != types.T_timestamp {
+		return false
+	}
+	// Calendar shifts/truncation can extend below the original input. Certify
+	// their complete local input/result envelope using the existing TZ owner.
+	lo, hi := types.Datetime(math.MaxInt64), types.Datetime(math.MinInt64)
+	include := func(v *vector.Vector) {
+		values := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](v)
+		for i := uint64(0); i < 2; i++ {
+			x, _ := values.GetValue(i)
+			d := x.ToDatetime(zone)
+			lo, hi = min(lo, d), max(hi, d)
+		}
+	}
+	include(output)
+	for i, arg := range args {
+		if types.T(arg.Typ.Id) == types.T_timestamp {
+			include(inputs[i])
+		}
+	}
+	_, _, ok := types.DatetimeRangeToTimestampRange(lo, hi, zone)
+	return ok
 }
 
 func hasConstNullArg(args []*plan.Expr) bool {
@@ -3520,14 +3813,7 @@ func isAllConst(exprs []*plan.Expr) bool {
 }
 
 func isConst(expr *plan.Expr) bool {
-	switch t := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		return false
-	case *plan.Expr_F:
-		return isAllConst(t.F.Args)
-	default:
-		return true
-	}
+	return function.IsStatementConstant(expr)
 }
 
 type ExprEvalVector struct {
