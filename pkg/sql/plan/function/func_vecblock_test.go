@@ -320,6 +320,10 @@ func TestVectorMatmulResolution(t *testing.T) {
 		targets, _ = r.ShouldDoImplicitTypeCast()
 		require.Equal(t, types.T_int64, targets[0].Oid)
 		require.True(t, GetFunctionIsAggregateByName("vector_matmul"))
+		for _, plain := range []types.T{types.T_array_float32, types.T_array_float16, types.T_array_bf16, types.T_array_int8, types.T_array_uint8} {
+			_, err := GetFunctionByName(ctx, "vector_matmul", []types.Type{i64, i64, types.New(plain, 4, 0), vc})
+			require.NoError(t, err, plain.String())
+		}
 
 		for _, args := range [][]types.Type{
 			{i64, i64, vb},
@@ -327,7 +331,7 @@ func TestVectorMatmulResolution(t *testing.T) {
 			{i64, i64, vb, i64},
 			{i64, i64, vb, vc, types.T_json.ToType()},
 			{i64, types.T_float64.ToType(), vb, vc},
-			{i64, i64, types.New(types.T_array_float32, 4, 0), vc},
+			{i64, i64, types.New(types.T_array_float64, 4, 0), vc},
 			{i64, i64, vb, vc, vc, vc},
 		} {
 			_, err := GetFunctionByName(ctx, "vector_matmul", args)

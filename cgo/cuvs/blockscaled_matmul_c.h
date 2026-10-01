@@ -25,6 +25,13 @@ extern "C" {
 
 #define GPU_BLOCKSCALED_MXFP8 1
 #define GPU_BLOCKSCALED_NVFP4 2
+/* Plain formats: cells are raw vectors: float32 (vecf32), IEEE half (vecf16), int8
+ * (vecint8), uint8 (vecuint8) or bfloat16 (vecbf16). */
+#define GPU_BLOCKSCALED_F32 3
+#define GPU_BLOCKSCALED_F16 4
+#define GPU_BLOCKSCALED_I8 5
+#define GPU_BLOCKSCALED_U8 6
+#define GPU_BLOCKSCALED_BF16 7
 
 typedef void* gpu_blockscaled_matmul_c;
 
@@ -33,7 +40,8 @@ typedef void* gpu_blockscaled_matmul_c;
  *
  * The device is selected round-robin across the visible devices.
  *
- * @param format GPU_BLOCKSCALED_MXFP8 (vecf8) or GPU_BLOCKSCALED_NVFP4 (vecf4).
+ * @param format GPU_BLOCKSCALED_MXFP8 (vecf8), GPU_BLOCKSCALED_NVFP4 (vecf4) or
+ *               or a plain format GPU_BLOCKSCALED_F32/_F16/_I8/_U8/_BF16.
  * @param dim Vector dimension.
  * @param nq Number of query cells.
  * @param query_cells nq cells packed back to back.

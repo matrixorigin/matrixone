@@ -26,11 +26,11 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-// BlockScaledMatmul scores tiles of vecf8/vecf4 cells against a fixed set of query cells
-// on a GPU with cuBLASLt. It is not safe for concurrent use.
+// BlockScaledMatmul scores tiles of vector cells against a fixed set of query cells on a GPU
+// with cuBLASLt: vecf8/vecf4 block-scaled cells, or raw vecf32/vecf16/vecbf16/vecint8/
+// vecuint8 vectors. It is not safe for concurrent use.
 type BlockScaledMatmul struct {
 	ptr       C.gpu_blockscaled_matmul_c
 	nq        int
@@ -38,11 +38,22 @@ type BlockScaledMatmul struct {
 	maxRows   int
 }
 
-// NewBlockScaledMatmul creates an engine for nq query cells of format and dim, packed
-// back to back in queryCells; a tile holds at most maxRows cells (rounded up to 128).
-func NewBlockScaledMatmul(format types.BlockScaledFormat, dim, nq int, queryCells []byte, maxRows int) (*BlockScaledMatmul, error) {
-	cellBytes := types.BlockScaledCellSize(format, dim)
-	if dim <= 0 || nq <= 0 || maxRows <= 0 || len(queryCells) != nq*cellBytes {
+// Engine formats, as in cgo/cuvs/blockscaled_matmul_c.h.
+const (
+	BlockScaledMatmulMXFP8 = int(C.GPU_BLOCKSCALED_MXFP8)
+	BlockScaledMatmulNVFP4 = int(C.GPU_BLOCKSCALED_NVFP4)
+	BlockScaledMatmulF32   = int(C.GPU_BLOCKSCALED_F32)
+	BlockScaledMatmulF16   = int(C.GPU_BLOCKSCALED_F16)
+	BlockScaledMatmulI8    = int(C.GPU_BLOCKSCALED_I8)
+	BlockScaledMatmulU8    = int(C.GPU_BLOCKSCALED_U8)
+	BlockScaledMatmulBF16  = int(C.GPU_BLOCKSCALED_BF16)
+)
+
+// NewBlockScaledMatmul creates an engine for nq query cells of format and dim, each
+// cellBytes long and packed back to back in queryCells; a tile holds at most maxRows cells
+// (rounded up to 128).
+func NewBlockScaledMatmul(format, dim, nq int, queryCells []byte, cellBytes, maxRows int) (*BlockScaledMatmul, error) {
+	if dim <= 0 || nq <= 0 || maxRows <= 0 || cellBytes <= 0 || len(queryCells) != nq*cellBytes {
 		return nil, moerr.NewInvalidInputNoCtxf("block-scaled matmul: invalid dim %d, query count %d, tile %d or query bytes %d",
 			dim, nq, maxRows, len(queryCells))
 	}

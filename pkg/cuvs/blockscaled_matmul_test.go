@@ -53,7 +53,7 @@ func TestBlockScaledMatmulMatchesCPU(t *testing.T) {
 		for _, dim := range []int{4, 33, 100, 768} {
 			for _, nq := range []int{1, 5} {
 				queries, qops := blockScaledCells(t, r, f, nq, dim)
-				m, err := cuvs.NewBlockScaledMatmul(f, dim, nq, queries, 200)
+				m, err := cuvs.NewBlockScaledMatmul(int(f), dim, nq, queries, types.BlockScaledCellSize(f, dim), 200)
 				require.NoError(t, err)
 				require.Equal(t, 256, m.MaxRows())
 				rows := 300
@@ -81,12 +81,12 @@ func TestBlockScaledMatmulMatchesCPU(t *testing.T) {
 func TestBlockScaledMatmulErrors(t *testing.T) {
 	r := rand.New(rand.NewSource(1))
 	queries, _ := blockScaledCells(t, r, types.BlockScaledMXFP8, 2, 64)
-	_, err := cuvs.NewBlockScaledMatmul(types.BlockScaledMXFP8, 64, 3, queries, 10)
+	_, err := cuvs.NewBlockScaledMatmul(int(types.BlockScaledMXFP8), 64, 3, queries, types.BlockScaledCellSize(types.BlockScaledMXFP8, 64), 10)
 	require.Error(t, err)
-	_, err = cuvs.NewBlockScaledMatmul(types.BlockScaledMXFP8, 64, 2, queries, 0)
+	_, err = cuvs.NewBlockScaledMatmul(int(types.BlockScaledMXFP8), 64, 2, queries, types.BlockScaledCellSize(types.BlockScaledMXFP8, 64), 0)
 	require.Error(t, err)
 
-	m, err := cuvs.NewBlockScaledMatmul(types.BlockScaledMXFP8, 64, 2, queries, 10)
+	m, err := cuvs.NewBlockScaledMatmul(int(types.BlockScaledMXFP8), 64, 2, queries, types.BlockScaledCellSize(types.BlockScaledMXFP8, 64), 10)
 	require.NoError(t, err)
 	defer m.Close()
 	require.NoError(t, m.Run(nil, nil))

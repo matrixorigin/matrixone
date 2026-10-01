@@ -57,7 +57,7 @@ select vector_matmul(2, id, a, cat) from t;
 select vector_matmul(2, id, a) from t;
 select vector_matmul(2, id, a, '[[1,0,0,0]]', '{}', 1) from t;
 select vector_matmul(2, id, a, '[[1,0,0,0]]', cat) from t;
-create table f (id int primary key, v vecf32(4));
+create table f (id int primary key, v vecf64(4));
 select vector_matmul(2, id, v, '[[1,0,0,0]]') from f;
 
 -- 400,000 rows, scanned in parallel: the ids and ranks equal ORDER BY inner_product ... LIMIT

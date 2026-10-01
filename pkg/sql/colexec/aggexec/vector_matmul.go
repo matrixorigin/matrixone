@@ -56,6 +56,27 @@ func VectorMatmulIDSupported(oid types.T) bool {
 	return false
 }
 
+// VectorMatmulVecSupported reports the vector column types vector_matmul accepts.
+func VectorMatmulVecSupported(oid types.T) bool {
+	switch oid {
+	case types.T_array_float8, types.T_array_float4, types.T_array_float32,
+		types.T_array_float16, types.T_array_bf16, types.T_array_int8, types.T_array_uint8:
+		return true
+	}
+	return false
+}
+
+// GPU engine formats, as in cgo/cuvs/blockscaled_matmul_c.h.
+const (
+	vectorMatmulEngineMXFP8 = 1
+	vectorMatmulEngineNVFP4 = 2
+	vectorMatmulEngineF32   = 3
+	vectorMatmulEngineF16   = 4
+	vectorMatmulEngineI8    = 5
+	vectorMatmulEngineU8    = 6
+	vectorMatmulEngineBF16  = 7
+)
+
 // VectorMatmulReturnType is the JSON result type.
 func VectorMatmulReturnType(_ []types.Type) types.Type {
 	return types.T_json.ToType()
@@ -111,10 +132,16 @@ type vectorMatmulOptions struct {
 
 // vectorMatmulConfig is the parsed configuration shared by all groups.
 type vectorMatmulConfig struct {
-	topk    int
-	queries []metric.VecBlockOperand
-	// queryCells holds the query cells back to back.
+	topk int
+	nq   int
+	// queryCells holds the queries back to back in the column's cell format.
 	queryCells []byte
+	// cellBytes is the byte length of one cell.
+	cellBytes int
+	// engineFormat is the GPU engine format of the column type.
+	engineFormat int
+	// score validates a cell and writes its dot product with each query into out.
+	score func(cell []byte, out []float64) error
 	// gpu reports that the session allows the GPU.
 	gpu bool
 }
@@ -148,10 +175,6 @@ func parseVectorMatmulConfig(raw []byte, vecType types.Type) (*vectorMatmulConfi
 		}
 	}
 
-	format, ok := vecType.Oid.BlockScaledFormat()
-	if !ok {
-		return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: unsupported vector type %s", vecType.Oid)
-	}
 	var queries [][]float32
 	if err := json.Unmarshal([]byte(queriesText), &queries); err != nil {
 		return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: queries must be a JSON array of vectors: %v", err)
@@ -162,21 +185,114 @@ func parseVectorMatmulConfig(raw []byte, vecType types.Type) (*vectorMatmulConfi
 	if len(queries)*int(topk) > vectorMatmulMaxEntries {
 		return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: queries x topk exceeds %d", vectorMatmulMaxEntries)
 	}
-	cfg := &vectorMatmulConfig{topk: int(topk), queries: make([]metric.VecBlockOperand, len(queries)), gpu: gpu}
-	for i, q := range queries {
-		if len(q) != int(vecType.Width) {
-			return nil, moerr.NewArrayInvalidOpNoCtx(int(vecType.Width), len(q))
+	dim := int(vecType.Width)
+	for _, q := range queries {
+		if len(q) != dim {
+			return nil, moerr.NewArrayInvalidOpNoCtx(dim, len(q))
 		}
+	}
+	cfg := &vectorMatmulConfig{topk: int(topk), nq: len(queries), gpu: gpu}
+	switch oid := vecType.Oid; oid {
+	case types.T_array_float8, types.T_array_float4:
+		err = cfg.setBlockScaled(oid, dim, queries)
+	case types.T_array_float32:
+		err = setVectorMatmulPlain(cfg, vectorMatmulEngineF32, queries, func(v float32) (float32, bool) { return v, true })
+	case types.T_array_float16:
+		err = setVectorMatmulPlain(cfg, vectorMatmulEngineF16, queries, func(v float32) (types.Float16, bool) { return types.Float16FromFloat32(v), true })
+	case types.T_array_bf16:
+		err = setVectorMatmulPlain(cfg, vectorMatmulEngineBF16, queries, func(v float32) (types.BF16, bool) { return types.BF16FromFloat32(v), true })
+	case types.T_array_int8:
+		err = setVectorMatmulPlain(cfg, vectorMatmulEngineI8, queries, func(v float32) (int8, bool) {
+			return int8(v), v == float32(math.Trunc(float64(v))) && v >= math.MinInt8 && v <= math.MaxInt8
+		})
+	case types.T_array_uint8:
+		err = setVectorMatmulPlain(cfg, vectorMatmulEngineU8, queries, func(v float32) (uint8, bool) {
+			return uint8(v), v == float32(math.Trunc(float64(v))) && v >= 0 && v <= math.MaxUint8
+		})
+	default:
+		err = moerr.NewInvalidInputNoCtxf("vector_matmul: unsupported vector type %s", oid)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+// setBlockScaled quantizes the queries to the vecf8/vecf4 format and scores cells with the
+// block-scaled CPU kernel.
+func (cfg *vectorMatmulConfig) setBlockScaled(oid types.T, dim int, queries [][]float32) error {
+	format, _ := oid.BlockScaledFormat()
+	cfg.engineFormat = vectorMatmulEngineMXFP8
+	if format == types.BlockScaledNVFP4 {
+		cfg.engineFormat = vectorMatmulEngineNVFP4
+	}
+	cfg.cellBytes = types.BlockScaledCellSize(format, dim)
+	ops := make([]metric.VecBlockOperand, len(queries))
+	for i, q := range queries {
 		start := len(cfg.queryCells)
 		var err error
 		if cfg.queryCells, err = types.AppendBlockScaled(cfg.queryCells, format, q); err != nil {
-			return nil, err
+			return err
 		}
-		if cfg.queries[i].Cell, err = types.ParseBlockScaledCell(cfg.queryCells[start:len(cfg.queryCells):len(cfg.queryCells)]); err != nil {
-			return nil, err
+		if ops[i].Cell, err = types.ParseBlockScaledCell(cfg.queryCells[start:len(cfg.queryCells):len(cfg.queryCells)]); err != nil {
+			return err
 		}
 	}
-	return cfg, nil
+	var row metric.VecBlockOperand
+	cfg.score = func(cell []byte, out []float64) error {
+		c, err := types.ParseBlockScaledCell(cell)
+		if err != nil {
+			return err
+		}
+		row.Cell = c
+		for j := range ops {
+			// the inner product distance is -dot; an overflow NaN is +Inf, which ranks last
+			dist, err := metric.VecBlockInnerProduct(&row, &ops[j])
+			if err != nil {
+				return err
+			}
+			out[j] = -dist
+		}
+		return nil
+	}
+	return nil
+}
+
+// setVectorMatmulPlain converts the queries to the element type T and scores cells with the
+// inner product kernel of T. conv reports whether a value is representable.
+func setVectorMatmulPlain[T types.ArrayElement](cfg *vectorMatmulConfig, engineFormat int, queries [][]float32, conv func(float32) (T, bool)) error {
+	fn, err := metric.ResolveDistanceFn[T, float64](metric.Metric_InnerProduct)
+	if err != nil {
+		return err
+	}
+	typed := make([][]T, len(queries))
+	for i, q := range queries {
+		typed[i] = make([]T, len(q))
+		for k, v := range q {
+			var ok bool
+			if typed[i][k], ok = conv(v); !ok {
+				return moerr.NewInvalidInputNoCtxf("vector_matmul: query value %v is not representable in the column type", v)
+			}
+		}
+		cfg.queryCells = append(cfg.queryCells, types.ArrayToBytes(typed[i])...)
+	}
+	cfg.engineFormat = engineFormat
+	cfg.cellBytes = len(cfg.queryCells) / len(queries)
+	cfg.score = func(cell []byte, out []float64) error {
+		if len(cell) != cfg.cellBytes {
+			return moerr.NewInvalidInputNoCtxf("vector_matmul: cell is %d bytes, want %d", len(cell), cfg.cellBytes)
+		}
+		row := types.BytesToArray[T](cell)
+		for j, q := range typed {
+			dist, err := fn(row, q)
+			if err != nil {
+				return err
+			}
+			out[j] = -dist
+		}
+		return nil
+	}
+	return nil
 }
 
 // vectorMatmulEntry is one hit; the id text lives in the state arena at [off, off+n).
@@ -617,7 +733,7 @@ type vectorMatmulEngine interface {
 
 // newVectorMatmulEngine creates a GPU engine. It is nil in builds without GPU support and
 // returns a nil engine when no device is visible.
-var newVectorMatmulEngine func(format types.BlockScaledFormat, dim, nq int, queryCells []byte, maxRows int) (vectorMatmulEngine, error)
+var newVectorMatmulEngine func(format, dim, nq int, queryCells []byte, cellBytes, maxRows int) (vectorMatmulEngine, error)
 
 // vectorMatmulTileBytes bounds the host tile: cells plus scores.
 var vectorMatmulTileBytes = 64 << 20
@@ -637,7 +753,6 @@ type vectorMatmulExec struct {
 	aggExec
 	cfg *vectorMatmulConfig
 
-	row    metric.VecBlockOperand
 	scores []float64
 	idBuf  []byte
 
@@ -650,7 +765,7 @@ func makeVectorMatmul(mp *mpool.MPool, id int64, isDistinct bool, params []types
 	if isDistinct {
 		return nil, moerr.NewNotSupportedNoCtx("vector_matmul in distinct mode")
 	}
-	if len(params) != 2 || !VectorMatmulIDSupported(params[0].Oid) || !params[1].Oid.IsBlockScaledArray() {
+	if len(params) != 2 || !VectorMatmulIDSupported(params[0].Oid) || !VectorMatmulVecSupported(params[1].Oid) {
 		return nil, moerr.NewInternalErrorNoCtxf("vector_matmul: unexpected argument types %v", params)
 	}
 	exec := &vectorMatmulExec{}
@@ -679,7 +794,7 @@ func makeVectorMatmul(mp *mpool.MPool, id int64, isDistinct bool, params []types
 func (exec *vectorMatmulExec) emptyState() *vectorMatmulState {
 	empty := &vectorMatmulState{}
 	if exec.cfg != nil {
-		empty.q, empty.k = len(exec.cfg.queries), exec.cfg.topk
+		empty.q, empty.k = exec.cfg.nq, exec.cfg.topk
 		empty.counts = make([]uint32, empty.q)
 	}
 	return empty
@@ -689,7 +804,7 @@ func (exec *vectorMatmulExec) newState(mp *mpool.MPool, allocation *AllocationAc
 	if exec.cfg == nil {
 		return nil, moerr.NewInternalErrorNoCtx("vector_matmul: configuration is not set")
 	}
-	return newVectorMatmulState(mp, allocation, len(exec.cfg.queries), exec.cfg.topk)
+	return newVectorMatmulState(mp, allocation, exec.cfg.nq, exec.cfg.topk)
 }
 
 func (exec *vectorMatmulExec) SetExtraInformation(partialResult any, _ int) error {
@@ -702,7 +817,7 @@ func (exec *vectorMatmulExec) SetExtraInformation(partialResult any, _ int) erro
 		return err
 	}
 	exec.cfg = cfg
-	exec.scores = make([]float64, len(cfg.queries))
+	exec.scores = make([]float64, cfg.nq)
 	return nil
 }
 
@@ -752,24 +867,29 @@ func (exec *vectorMatmulExec) fillRow(group uint64, row int, vectors []*vector.V
 		return nil
 	}
 	raw := vecs.GetBytesAt(vecRow)
-	cell, err := types.ParseBlockScaledCell(raw)
-	if err != nil {
-		return err
-	}
 	if err := exec.ensureEngine(); err != nil {
 		return err
 	}
 	if exec.engine != nil {
+		if len(raw) != exec.cfg.cellBytes {
+			return moerr.NewInvalidInputNoCtxf("vector_matmul: cell is %d bytes, want %d", len(raw), exec.cfg.cellBytes)
+		}
+		if exec.argTypes[1].Oid.IsBlockScaledArray() {
+			if _, err := types.ParseBlockScaledCell(raw); err != nil {
+				return err
+			}
+		}
 		return exec.enqueue(group, raw, ids, idRow)
 	}
-	exec.row.Cell = cell
-	for j := range exec.cfg.queries {
-		// the inner product distance is -dot; an overflow NaN is +Inf, which ranks last
-		dist, err := metric.VecBlockInnerProduct(&exec.row, &exec.cfg.queries[j])
-		if err != nil {
-			return err
+	if err := exec.cfg.score(raw, exec.scores); err != nil {
+		return err
+	}
+	for j, score := range exec.scores {
+		// an overflow NaN ranks last
+		if math.IsNaN(score) {
+			score = math.Inf(-1)
 		}
-		exec.scores[j] = float64(float32(-dist))
+		exec.scores[j] = float64(float32(score))
 	}
 	s, err := exec.stateAt(group)
 	if err != nil {
@@ -789,12 +909,11 @@ func (exec *vectorMatmulExec) ensureEngine() error {
 	if !exec.cfg.gpu || newVectorMatmulEngine == nil {
 		return nil
 	}
-	format, _ := exec.argTypes[1].Oid.BlockScaledFormat()
 	dim := int(exec.argTypes[1].Width)
-	nq := len(exec.cfg.queries)
-	cellBytes := types.BlockScaledCellSize(format, dim)
+	nq := exec.cfg.nq
+	cellBytes := exec.cfg.cellBytes
 	rows := max(1, min(65536, vectorMatmulTileBytes/(cellBytes+4*nq)))
-	engine, err := newVectorMatmulEngine(format, dim, nq, exec.cfg.queryCells, rows)
+	engine, err := newVectorMatmulEngine(exec.cfg.engineFormat, dim, nq, exec.cfg.queryCells, cellBytes, rows)
 	if err != nil || engine == nil {
 		return err
 	}
@@ -835,7 +954,7 @@ func (exec *vectorMatmulExec) drain() error {
 	if exec.engine == nil || n == 0 {
 		return nil
 	}
-	nq := len(exec.cfg.queries)
+	nq := exec.cfg.nq
 	if err := exec.engine.Run(t.cells, t.scores[:n*nq]); err != nil {
 		return err
 	}

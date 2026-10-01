@@ -17,6 +17,7 @@ package aggexec
 import (
 	"bytes"
 	"encoding/json"
+	"math"
 	"math/rand"
 	"sort"
 	"strconv"
@@ -618,4 +619,132 @@ func TestVectorMatmulStateMergeAcrossCompaction(t *testing.T) {
 		}
 		target.Free()
 	}
+}
+
+// vmPlainCase holds a plain vector type and how a float32 maps to it.
+type vmPlainCase struct {
+	oid    types.T
+	toCell func(v []float32) []byte
+	value  func(v float32) float64
+}
+
+func vmPlainCases() []vmPlainCase {
+	return []vmPlainCase{
+		{types.T_array_float32, func(v []float32) []byte { return types.ArrayToBytes(v) }, func(v float32) float64 { return float64(v) }},
+		{types.T_array_float16, func(v []float32) []byte {
+			out := make([]types.Float16, len(v))
+			for i, x := range v {
+				out[i] = types.Float16FromFloat32(x)
+			}
+			return types.ArrayToBytes(out)
+		}, func(v float32) float64 { return float64(types.Float16FromFloat32(v).ToFloat32()) }},
+		{types.T_array_bf16, func(v []float32) []byte {
+			out := make([]types.BF16, len(v))
+			for i, x := range v {
+				out[i] = types.BF16FromFloat32(x)
+			}
+			return types.ArrayToBytes(out)
+		}, func(v float32) float64 { return float64(types.BF16FromFloat32(v).ToFloat32()) }},
+		{types.T_array_int8, func(v []float32) []byte {
+			out := make([]int8, len(v))
+			for i, x := range v {
+				out[i] = int8(x)
+			}
+			return types.ArrayToBytes(out)
+		}, func(v float32) float64 { return float64(v) }},
+		{types.T_array_uint8, func(v []float32) []byte {
+			out := make([]uint8, len(v))
+			for i, x := range v {
+				out[i] = uint8(x)
+			}
+			return types.ArrayToBytes(out)
+		}, func(v float32) float64 { return float64(v) }},
+	}
+}
+
+func TestVectorMatmulPlainTypes(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	r := rand.New(rand.NewSource(9))
+	const dim, nrows, k = 8, 200, 5
+	for _, c := range vmPlainCases() {
+		gen := func() []float32 {
+			v := make([]float32, dim)
+			for i := range v {
+				switch c.oid {
+				case types.T_array_int8:
+					v[i] = float32(r.Intn(255) - 127)
+				case types.T_array_uint8:
+					v[i] = float32(r.Intn(256))
+				default:
+					v[i] = float32(r.NormFloat64())
+				}
+			}
+			return v
+		}
+		queries := [][]float32{gen(), gen()}
+		rows := make([][]float32, nrows)
+		for i := range rows {
+			rows[i] = gen()
+		}
+		vt := types.New(c.oid, dim, 0)
+		q, _ := json.Marshal(queries)
+		exec, err := makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{types.T_int64.ToType(), vt})
+		require.NoError(t, err)
+		require.NoError(t, exec.GroupGrow(1))
+		require.NoError(t, exec.SetExtraInformation(EncodeVectorMatmulConfig(k, string(q), "", false), 0))
+		idv := vector.NewVec(types.T_int64.ToType())
+		vv := vector.NewVec(vt)
+		for i, row := range rows {
+			require.NoError(t, vector.AppendFixed(idv, int64(i), false, mp))
+			require.NoError(t, vector.AppendBytes(vv, c.toCell(row), false, mp))
+		}
+		require.NoError(t, exec.BulkFill(0, []*vector.Vector{idv, vv}))
+		out := vmFlush(t, mp, exec)
+		exec.Free()
+		vmFree(mp, []*vector.Vector{idv, vv})
+
+		var got [][][]any
+		require.NoError(t, json.Unmarshal([]byte(out[0]), &got))
+		for j, qv := range queries {
+			type hit struct {
+				id    int
+				score float64
+			}
+			hits := make([]hit, nrows)
+			for i, row := range rows {
+				var dot float64
+				for d := range row {
+					dot += c.value(row[d]) * c.value(qv[d])
+				}
+				hits[i] = hit{i, float64(float32(dot))}
+			}
+			sort.Slice(hits, func(a, b int) bool {
+				if hits[a].score != hits[b].score {
+					return hits[a].score > hits[b].score
+				}
+				return strconv.Itoa(hits[a].id) < strconv.Itoa(hits[b].id)
+			})
+			require.Len(t, got[j], k, c.oid.String())
+			for i := 0; i < k; i++ {
+				require.Equal(t, strconv.Itoa(hits[i].id), got[j][i][0], "%s query %d rank %d", c.oid, j, i)
+				require.InDelta(t, hits[i].score, got[j][i][1], 1e-4*math.Max(1, math.Abs(hits[i].score)), c.oid.String())
+			}
+		}
+	}
+
+	// integer columns take integer queries in range
+	for _, tc := range []struct {
+		oid     types.T
+		queries string
+	}{
+		{types.T_array_int8, `[[1.5,0,0,0,0,0,0,0]]`},
+		{types.T_array_int8, `[[200,0,0,0,0,0,0,0]]`},
+		{types.T_array_uint8, `[[-1,0,0,0,0,0,0,0]]`},
+	} {
+		_, err := parseVectorMatmulConfig(EncodeVectorMatmulConfig(1, tc.queries, "", false), types.New(tc.oid, dim, 0))
+		require.ErrorContains(t, err, "not representable", tc.queries)
+	}
+	_, err := makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{types.T_int64.ToType(), types.New(types.T_array_float64, dim, 0)})
+	require.Error(t, err)
 }

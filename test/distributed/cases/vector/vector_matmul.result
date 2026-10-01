@@ -79,9 +79,9 @@ select vector_matmul(2, id, a, '[[1,0,0,0]]', '{}', 1) from t;
 invalid input: vector_matmul requires 4 or 5 arguments, got 6
 select vector_matmul(2, id, a, '[[1,0,0,0]]', cat) from t;
 invalid input: topk, queries and options arguments of vector_matmul must be non-null constants, parameters or variables
-create table f (id int primary key, v vecf32(4));
+create table f (id int primary key, v vecf64(4));
 select vector_matmul(2, id, v, '[[1,0,0,0]]') from f;
-invalid argument aggregate function vector_matmul, bad value [BIGINT INT VECF32 VARCHAR]
+invalid argument aggregate function vector_matmul, bad value [BIGINT INT VECF64 VARCHAR]
 create table big (id bigint primary key, a vecf8(4), b vecf4(4));
 insert into big
 select g.result,

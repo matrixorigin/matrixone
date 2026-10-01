@@ -59,8 +59,8 @@ func TestBindVectorMatmulRequiresConstantConfig(t *testing.T) {
 	_, err = BindFuncExprImplByPlanExpr(ctx, NameVectorMatmul, []*planpb.Expr{topk, id, vec})
 	require.ErrorContains(t, err, "requires 4 or 5 arguments")
 
-	// the vector argument must be vecf8/vecf4
-	f32 := col(1, planpb.Type{Id: int32(types.T_array_float32), Width: 4})
+	// vecf64 is not supported
+	f32 := col(1, planpb.Type{Id: int32(types.T_array_float64), Width: 4})
 	_, err = BindFuncExprImplByPlanExpr(ctx, NameVectorMatmul, []*planpb.Expr{topk, id, f32, queries})
 	require.Error(t, err)
 }

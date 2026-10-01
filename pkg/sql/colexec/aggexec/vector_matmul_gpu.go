@@ -17,15 +17,14 @@
 package aggexec
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 )
 
 func init() {
-	newVectorMatmulEngine = func(format types.BlockScaledFormat, dim, nq int, queryCells []byte, maxRows int) (vectorMatmulEngine, error) {
+	newVectorMatmulEngine = func(format, dim, nq int, queryCells []byte, cellBytes, maxRows int) (vectorMatmulEngine, error) {
 		if n, err := cuvs.GetGpuDeviceCount(); err != nil || n == 0 {
 			return nil, nil
 		}
-		return cuvs.NewBlockScaledMatmul(format, dim, nq, queryCells, maxRows)
+		return cuvs.NewBlockScaledMatmul(format, dim, nq, queryCells, cellBytes, maxRows)
 	}
 }

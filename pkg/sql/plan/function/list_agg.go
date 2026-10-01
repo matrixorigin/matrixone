@@ -601,7 +601,7 @@ var supportedAggInNewFramework = []FuncNew{
 				}
 			}
 			if !aggexec.VectorMatmulIDSupported(finalTypes[1].Oid) ||
-				!finalTypes[2].Oid.IsBlockScaledArray() {
+				!aggexec.VectorMatmulVecSupported(finalTypes[2].Oid) {
 				return newCheckResultWithFailure(failedAggParametersWrong)
 			}
 			if needCast {
