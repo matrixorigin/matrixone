@@ -218,6 +218,134 @@ func (builder *QueryBuilder) rewriteUniqueDecimalFloatComparison(node *plan.Node
 	return expr
 }
 
+// A small peer alone cannot authorize removing a lossy conversion of the column.
+func implicitIntegerPromotionIsExact(expr *plan.Expr) bool {
+	column := comparisonCastSource(expr)
+	if column == nil || column.GetCol() == nil || !types.T(column.Typ.Id).IsInteger() || expr.GetF().GetSyntaxExplicitCast() {
+		return false
+	}
+	castID, overload := function.DecodeOverloadID(expr.GetF().Func.Obj)
+	if castID != function.CAST || overload != 0 {
+		return false
+	}
+	target := expr.GetF().Args[1]
+	if target.GetT() == nil || target.Typ.Id != expr.Typ.Id || target.Typ.Width != expr.Typ.Width || target.Typ.Scale != expr.Typ.Scale {
+		return false
+	}
+	sourceID, targetID := types.T(column.Typ.Id), types.T(expr.Typ.Id)
+	if targetID.IsInteger() {
+		return integerDomainFits(sourceID, targetID)
+	}
+	if !targetID.IsDecimal() {
+		return false
+	}
+	precision := expr.Typ.Width
+	capacity := targetID.ToType().Width
+	if precision == 0 {
+		// Integer-to-decimal execution scales into the physical carrier. Width=0
+		// does not imply safety; the entire scaled source domain must still fit.
+		precision = capacity
+	}
+	return precision > 0 && precision <= capacity && expr.Typ.Scale >= 0 &&
+		integerDecimalDigits(sourceID) <= precision-expr.Typ.Scale
+}
+
+// Folded literals can retain their executable source in Src. Do not use an
+// execution-specific value or unresolved prepared provenance as a static proof.
+func staticIntegerComparisonPeer(expr *plan.Expr) bool {
+	if expr == nil || expr.PreparedNumeric != nil {
+		return false
+	}
+	if lit := expr.GetLit(); lit != nil {
+		return !lit.Isnull && (lit.Src == nil || staticIntegerComparisonPeer(lit.Src))
+	}
+	if expr.GetT() != nil {
+		return true
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	f, ok := function.GetFunctionByIdWithoutError(fn.Func.Obj)
+	if !ok || f.CannotFold() || f.IsRealTimeRelated() || f.IsAgg() || f.IsWin() {
+		return false
+	}
+	for _, arg := range fn.Args {
+		if !staticIntegerComparisonPeer(arg) {
+			return false
+		}
+	}
+	return true
+}
+
+func (builder *QueryBuilder) rewriteNativeIntegerComparison(expr *plan.Expr) *plan.Expr {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return expr
+	}
+	name := fn.Func.ObjName
+	isList := (name == "in" || name == "not_in") && len(fn.Args) == 2 && fn.Args[1].GetList() != nil
+	isBetween := name == "between" && len(fn.Args) == 3
+	if !isList && !isBetween && (!isDecimalComparisonOperator(name) || len(fn.Args) != 2) {
+		return expr
+	}
+	for side, castColumn := range fn.Args {
+		if (isList || isBetween) && side != 0 {
+			break
+		}
+		if !implicitIntegerPromotionIsExact(castColumn) {
+			continue
+		}
+		column := comparisonCastSource(castColumn)
+		peers := []*plan.Expr{fn.Args[1-side]}
+		if isList {
+			peers = fn.Args[1].GetList().List
+		} else if isBetween {
+			peers = fn.Args[1:]
+		}
+		if len(peers) == 0 {
+			return expr
+		}
+		converted := make([]*plan.Expr, len(peers))
+		for i, peer := range peers {
+			peerID := types.T(peer.Typ.Id)
+			if !staticIntegerComparisonPeer(peer) || (!peerID.IsInteger() && !peerID.IsDecimal()) ||
+				!checkNoNeedCast(builder.GetContext(), makeTypeByPlan2Expr(peer), makeTypeByPlan2Expr(column), peer) {
+				break
+			}
+			var err error
+			converted[i], err = makePlan2CastExpr(builder.GetContext(), DeepCopyExpr(peer), column.Typ)
+			if err != nil {
+				break
+			}
+		}
+		if converted[len(converted)-1] == nil {
+			continue
+		}
+		args := make([]*plan.Expr, len(fn.Args))
+		for i, arg := range fn.Args {
+			args[i] = DeepCopyExpr(arg)
+		}
+		args[side] = DeepCopyExpr(column)
+		if isList {
+			args[1].Typ = column.Typ
+			args[1].GetList().List = converted
+		} else if isBetween {
+			copy(args[1:], converted)
+		} else {
+			args[1-side] = converted[0]
+			name = canonicalRangeOp(&plan.Function{Func: fn.Func, Args: args})
+			args = []*plan.Expr{args[side], args[1-side]}
+		}
+		rewritten, err := BindFuncExprImplByPlanExpr(builder.GetContext(), name, args)
+		if err == nil {
+			rewritten.PreparedNumeric = copyPreparedNumericMetadata(expr.PreparedNumeric)
+			return rewritten
+		}
+	}
+	return expr
+}
+
 // Scalar subqueries can expose constants only after filter pushdown. Rewrite
 // proven numeric domains before scan statistics choose block filters.
 func (builder *QueryBuilder) rewriteNumericDomainFilters(nodeID int32) {
@@ -232,6 +360,9 @@ func (builder *QueryBuilder) rewriteNumericDomainFilters(nodeID int32) {
 		if node.NodeType == plan.Node_JOIN {
 			for _, condition := range node.OnList {
 				_ = plan.VisitExprTree(condition, func(current *plan.Expr) error {
+					if rewritten := builder.rewriteNativeIntegerComparison(current); rewritten != current {
+						*current = *rewritten
+					}
 					if rewritten := builder.rewriteUniqueDecimalFloatComparison(node, current); rewritten != current {
 						*current = *rewritten
 					}
@@ -244,6 +375,9 @@ func (builder *QueryBuilder) rewriteNumericDomainFilters(nodeID int32) {
 		}
 		for _, filter := range node.FilterList {
 			_ = plan.VisitExprTree(filter, func(current *plan.Expr) error {
+				if rewritten := builder.rewriteNativeIntegerComparison(current); rewritten != current {
+					*current = *rewritten
+				}
 				if rewritten := builder.rewriteUniqueDecimalFloatComparison(node, current); rewritten != current {
 					*current = *rewritten
 				}

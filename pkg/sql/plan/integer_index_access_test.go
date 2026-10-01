@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
 
@@ -70,7 +71,10 @@ func TestExactDecimalIntegerDomain(t *testing.T) {
 }
 
 func TestExactDecimalNativeIntegerFilters(t *testing.T) {
-	for _, predicate := range []string{"id=3.0", "3.0=id", "id>=3.0", "3.0<id", "id in (1.0,3.0)", "id between 1.0 and 3.0"} {
+	for _, predicate := range []string{"id=3.0", "3.0=id", "id>=3.0", "3.0<id", "id in (1.0,3.0)", "id between 1.0 and 3.0",
+		"id=(select 3.0)", "id<(select 3.0)", "(select 3.0)<id", "id=(select 3)", "id=1.0+2.0", "id<=>(select 3.0)",
+		"id in (1.0,(select 3.0))", "id not in (1.0,(select 3.0))", "id between (select 1.0) and (select 3.0)",
+		"id=(select 2147483647.0)", "id=(select 3.0000000000000000000000000000000000000000)"} {
 		t.Run(predicate, func(t *testing.T) {
 			mock := NewMockOptimizer(true)
 			addIndexHintChoiceTableForTest(mock)
@@ -85,7 +89,8 @@ func TestExactDecimalNativeIntegerFilters(t *testing.T) {
 			require.NotNil(t, scan)
 			require.NotEmpty(t, scan.FilterList)
 			for _, filter := range scan.FilterList {
-				require.Zero(t, countExprFunctionCalls([]*pb.Expr{filter}, "cast"), predicate)
+				require.NotNil(t, filter.GetF().Args[0].GetCol(), predicate)
+				require.Equal(t, int32(types.T_int32), filter.GetF().Args[0].Typ.Id)
 			}
 		})
 	}
@@ -146,7 +151,8 @@ func TestSparseUniqueRejectionIsAtomic(t *testing.T) {
 }
 
 func TestExactDecimalPreservesOtherDomains(t *testing.T) {
-	for _, predicate := range []string{"id=3.1", "id=2147483648.0", "id=3e0", "cast(id as decimal(12,1))=3.0"} {
+	for _, predicate := range []string{"id=3.1", "id=2147483648.0", "id=3e0", "cast(id as decimal(12,1))=3.0",
+		"id=(select 3.1)", "id=(select 2147483648.0)", "id=(select 3e0)", "cast(id as decimal(12,1))=(select 3.0)"} {
 		t.Run(predicate, func(t *testing.T) {
 			mock := NewMockOptimizer(true)
 			addIndexHintChoiceTableForTest(mock)
@@ -160,5 +166,108 @@ func TestExactDecimalPreservesOtherDomains(t *testing.T) {
 			}
 			require.Positive(t, casts, "unproven and explicitly declared domains retain their column cast")
 		})
+	}
+}
+
+func TestNativeIntegerNormalizationSafety(t *testing.T) {
+	ctx := context.Background()
+	decimalPeer, err := makePlan2DecimalExprWithType(ctx, "3.0")
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name   string
+		source types.T
+		target pb.Type
+		accept bool
+	}{
+		{"integer widening", types.T_int32, pb.Type{Id: int32(types.T_int64)}, true},
+		{"unsigned widening", types.T_uint32, pb.Type{Id: int32(types.T_int64)}, true},
+		{"integer narrowing", types.T_int64, pb.Type{Id: int32(types.T_int32)}, false},
+		{"signed to unsigned", types.T_int32, pb.Type{Id: int32(types.T_uint64)}, false},
+		{"unsigned to signed", types.T_uint64, pb.Type{Id: int32(types.T_int64)}, false},
+		{"decimal capacity", types.T_int32, pb.Type{Id: int32(types.T_decimal64), Width: 11, Scale: 1}, true},
+		{"decimal too narrow", types.T_int32, pb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 1}, false},
+		{"zero width safe", types.T_int64, pb.Type{Id: int32(types.T_decimal128), Scale: 1}, true},
+		{"zero width unsafe", types.T_int64, pb.Type{Id: int32(types.T_decimal64), Scale: 1}, false},
+		{"negative scale", types.T_int32, pb.Type{Id: int32(types.T_decimal128), Width: 38, Scale: -1}, false},
+		{"physical overflow", types.T_int64, pb.Type{Id: int32(types.T_decimal128), Width: 38, Scale: 20}, false},
+		{"approximate", types.T_int32, pb.Type{Id: int32(types.T_float64)}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			builder := NewQueryBuilder(pb.Query_SELECT, NewMockCompilerContext(true), false, true)
+			column := GetColExpr(pb.Type{Id: int32(tc.source)}, 0, 0)
+			cast, err := appendCastBeforeExpr(ctx, column, tc.target)
+			require.NoError(t, err)
+			original := &pb.Expr{Expr: &pb.Expr_F{F: &pb.Function{Func: &pb.ObjectRef{ObjName: "="}, Args: []*pb.Expr{cast, DeepCopyExpr(decimalPeer)}}}}
+			before := DeepCopyExpr(original)
+			rewritten := builder.rewriteNativeIntegerComparison(original)
+			require.Equal(t, tc.accept, rewritten != original)
+			require.Equal(t, before, original, "proof must not modify the candidate")
+			if tc.accept {
+				require.NotNil(t, rewritten.GetF().Args[0].GetCol())
+				require.Equal(t, int32(tc.source), rewritten.GetF().Args[1].Typ.Id)
+				require.Same(t, rewritten, builder.rewriteNativeIntegerComparison(rewritten), "idempotent")
+			}
+		})
+	}
+
+	builder := NewQueryBuilder(pb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	column := GetColExpr(pb.Type{Id: int32(types.T_int32)}, 0, 0)
+	cast, err := appendCastBeforeExpr(ctx, column, pb.Type{Id: int32(types.T_decimal128), Width: 11, Scale: 1})
+	require.NoError(t, err)
+	for _, change := range []struct {
+		name string
+		edit func(*pb.Expr)
+	}{
+		{"explicit syntax", func(e *pb.Expr) { e.GetF().Args[0].GetF().SyntaxExplicitCast = true }},
+		{"private CAST4", func(e *pb.Expr) { e.GetF().Args[0].GetF().Func.Obj = function.EncodeOverloadID(function.CAST, 4) }},
+		{"target mismatch", func(e *pb.Expr) { e.GetF().Args[0].GetF().Args[1].Typ.Scale++ }},
+		{"fractional peer", func(e *pb.Expr) {
+			e.GetF().Args[1], err = makePlan2DecimalExprWithType(ctx, "3.1")
+			require.NoError(t, err)
+		}},
+		{"NULL peer", func(e *pb.Expr) {
+			e.GetF().Args[1] = &pb.Expr{Typ: decimalPeer.Typ, Expr: &pb.Expr_Lit{Lit: &pb.Literal{Isnull: true}}}
+		}},
+	} {
+		t.Run(change.name, func(t *testing.T) {
+			expr := &pb.Expr{Expr: &pb.Expr_F{F: &pb.Function{Func: &pb.ObjectRef{ObjName: "="}, Args: []*pb.Expr{DeepCopyExpr(cast), DeepCopyExpr(decimalPeer)}}}}
+			change.edit(expr)
+			before := DeepCopyExpr(expr)
+			require.Same(t, expr, builder.rewriteNativeIntegerComparison(expr))
+			require.Equal(t, before, expr)
+		})
+	}
+	for _, source := range []*pb.Expr{
+		{Expr: &pb.Expr_P{P: &pb.ParamRef{Pos: 0}}},
+		{Expr: &pb.Expr_V{V: &pb.VarRef{Name: "value"}}},
+		GetColExpr(pb.Type{Id: int32(types.T_decimal128)}, 1, 0),
+		{PreparedNumeric: &pb.PreparedNumericMetadata{ProvisionalResultPeer: true}, Expr: &pb.Expr_Lit{Lit: &pb.Literal{Value: &pb.Literal_I64Val{I64Val: 3}}}},
+	} {
+		peer := MakePlan2Decimal64ExprWithType(types.Decimal64(30), &pb.Type{Id: int32(types.T_decimal64), Width: 18, Scale: 1})
+		peer.GetLit().Src = source
+		expr := &pb.Expr{Expr: &pb.Expr_F{F: &pb.Function{Func: &pb.ObjectRef{ObjName: "="}, Args: []*pb.Expr{cast, peer}}}}
+		require.Same(t, expr, builder.rewriteNativeIntegerComparison(expr), "dynamic Src is not a static proof")
+	}
+	fraction, err := makePlan2DecimalExprWithType(ctx, "3.1")
+	require.NoError(t, err)
+	for _, name := range []string{"in", "not_in", "between"} {
+		for _, last := range []*pb.Expr{decimalPeer, fraction, {Typ: decimalPeer.Typ, Expr: &pb.Expr_Lit{Lit: &pb.Literal{Isnull: true}}}} {
+			args := []*pb.Expr{DeepCopyExpr(cast), DeepCopyExpr(decimalPeer), DeepCopyExpr(last)}
+			if name != "between" {
+				args = []*pb.Expr{args[0], {Typ: cast.Typ, Expr: &pb.Expr_List{List: &pb.ExprList{List: args[1:]}}}}
+			}
+			expr := &pb.Expr{Expr: &pb.Expr_F{F: &pb.Function{Func: &pb.ObjectRef{ObjName: name}, Args: args}}}
+			before := DeepCopyExpr(expr)
+			require.Equal(t, last == decimalPeer, builder.rewriteNativeIntegerComparison(expr) != expr, name)
+			require.Equal(t, before, expr, "list rejection and publication are atomic")
+		}
+	}
+	// The shared pass serves JOIN OnList as well as scan FilterList, without
+	// treating the other JOIN column as a constant.
+	for _, peer := range []*pb.Expr{decimalPeer, GetColExpr(decimalPeer.Typ, 1, 0)} {
+		condition := &pb.Expr{Expr: &pb.Expr_F{F: &pb.Function{Func: &pb.ObjectRef{ObjName: "="}, Args: []*pb.Expr{DeepCopyExpr(cast), DeepCopyExpr(peer)}}}}
+		builder.qry.Nodes = []*pb.Node{{NodeType: pb.Node_JOIN, OnList: []*pb.Expr{condition}}}
+		builder.rewriteNumericDomainFilters(0)
+		require.Equal(t, peer.GetCol() == nil, condition.GetF().Args[0].GetCol() != nil)
 	}
 }

@@ -118,15 +118,48 @@ func TestIntegerIndexAccess(t *testing.T) {
 			{"id=9223372036854775808.0", [][]string{}}, {"id=3.1", [][]string{}},
 			{"id=3.0000000000000000000000000000000000000000", [][]string{{"3"}}},
 			{"id=0.00000000000000000000000000000000000001", [][]string{}},
+			{"id=(select 3.0)", [][]string{{"3"}}},
+			{"id<(select 3.0)", [][]string{{"-9223372036854775808"}, {"0"}}},
+			{"(select 3.0)<id", [][]string{{"9007199254740993"}, {"9223372036854775807"}}},
+			{"id=(select -9223372036854775808.0)", [][]string{{"-9223372036854775808"}}},
+			{"id=(select 3.0000000000000000000000000000000000000000)", [][]string{{"3"}}},
+			{"id=(select 9007199254740993.0)", [][]string{{"9007199254740993"}}},
+			{"id=(select 9223372036854775808.0)", [][]string{}},
+			{"id=(select 3.1)", [][]string{}},
+			{"id=(select 3e0)", [][]string{{"3"}}},
+			{"cast(id as decimal(21,1))=(select 3.0)", [][]string{{"3"}}},
+			{"id=(select cast(3.1 as decimal(10,0)))", [][]string{{"3"}}},
+			{"id<=>(select 3.0)", [][]string{{"3"}}},
+			{"id=(select null)", [][]string{}},
+			{"id=(select 3.0 limit 0)", [][]string{}},
+			{"id=(select 3.0 limit 1 offset 1)", [][]string{}},
+			{"id=(select k from t where id=3)", [][]string{}},
+			{"id in (0.0,(select 3.0))", [][]string{{"0"}, {"3"}}},
+			{"id not in (0.0,(select 3.1))", [][]string{{"-9223372036854775808"}, {"3"}, {"9007199254740993"}, {"9223372036854775807"}}},
+			{"id in (0.0,(select 9223372036854775808.0))", [][]string{{"0"}}},
+			{"id between (select 0.1) and (select 3.1)", [][]string{{"3"}}},
+			{"id in (null,(select 3.0))", [][]string{{"3"}}},
+			{"id not in (null,(select 3.0))", [][]string{}},
+			{"id between (select 0.0) and (select 3.0)", [][]string{{"0"}, {"3"}}},
 		} {
-			require.Equal(t, tc.expected, query("select id from ints where "+tc.predicate), tc.predicate)
+			require.Equal(t, tc.expected, query("select id from ints where "+tc.predicate+" order by id"), tc.predicate)
 		}
 		exec("create table unsigned_ints(id bigint unsigned primary key)")
 		exec("insert into unsigned_ints values(0),(18446744073709551615)")
 		require.Equal(t, [][]string{{"18446744073709551615"}}, query("select id from unsigned_ints where id=18446744073709551615.0"))
 		require.Empty(t, query("select id from unsigned_ints where id=-1.0"))
 		require.Empty(t, query("select id from unsigned_ints where id=18446744073709551616.0"))
-		for _, predicate := range []string{"id=3.0", "3.0<id", "id in (1.0,3.0)", "id between 1.0 and 3.0"} {
+		require.Empty(t, query("select id from unsigned_ints where id=(select -1.0)"))
+		require.Equal(t, [][]string{{"18446744073709551615"}}, query("select id from unsigned_ints where id=(select 18446744073709551615.0)"))
+		require.Equal(t, [][]string{{"1"}, {"2"}}, query("select id from t where k<=>(select null) order by id"))
+		require.Equal(t, [][]string{{"1", "NULL"}, {"2", "NULL"}, {"3", "1"}}, query("select id,k=(select 1.0) from t order by id"))
+		for _, join := range []string{"join", "left join", "right join"} {
+			prefix := "select t.id,s.k from t " + join + " (select 1.0 as k) s on "
+			require.Equal(t, query(prefix+"cast(t.k as decimal(11,1))=s.k order by t.id"), query(prefix+"t.k=s.k order by t.id"), join)
+		}
+		for _, predicate := range []string{"id=3.0", "3.0<id", "id in (1.0,3.0)", "id between 1.0 and 3.0",
+			"id=(select 3.0)", "id<(select 3.0)", "(select 3.0)<id", "id=1.0+2.0",
+			"id in (1.0,(select 3.0))", "id between (select 1.0) and (select 3.0)"} {
 			text := ""
 			for _, row := range query("explain select id from ints where " + predicate) {
 				text += strings.Join(row, " ")
@@ -134,6 +167,10 @@ func TestIntegerIndexAccess(t *testing.T) {
 			require.Contains(t, text, "Block Filter Cond", predicate)
 			require.NotContains(t, text, "cast(ints.id", predicate)
 		}
+		integerScalarPlan := fmt.Sprint(query("explain select id from t where id=(select 3)"))
+		require.Contains(t, integerScalarPlan, "Block Filter Cond")
+		require.NotContains(t, integerScalarPlan, "cast(t.id")
+		require.Equal(t, [][]string{{"3"}}, query("select id from t where id=(select 3)"))
 		exec("prepare exact from 'select id from ints where id=?'")
 		for _, value := range []string{"3.0", "3.1", "9223372036854775808.0", "3.0"} {
 			exec("set @value=" + value)
@@ -144,5 +181,14 @@ func TestIntegerIndexAccess(t *testing.T) {
 			require.Equal(t, want, query("execute exact using @value"), value)
 		}
 		exec("deallocate prepare exact")
+		exec("prepare fixed_scalar from 'select id from ints where id=(select 3.0)'")
+		require.Equal(t, [][]string{{"3"}}, query("execute fixed_scalar"))
+		exec("deallocate prepare fixed_scalar")
+		exec("prepare scalar from 'select id from ints where id=(select ?)'")
+		for _, value := range []string{"3.0", "3.1", "9223372036854775808.0", "3.0"} {
+			exec("set @value=" + value)
+			require.Equal(t, query("select id from ints where id=(select "+value+")"), query("execute scalar using @value"), value)
+		}
+		exec("deallocate prepare scalar")
 	})
 }
