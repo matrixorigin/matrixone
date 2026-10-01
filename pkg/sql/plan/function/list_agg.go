@@ -571,15 +571,28 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			// vector_matmul(params, id, vec, queries)
-			if len(inputs) != 4 {
+			// vector_matmul(topk, id, vec, queries [, options])
+			if len(inputs) != 4 && len(inputs) != 5 {
 				return newCheckResultWithFailure(failedAggParametersWrong)
 			}
 			finalTypes := append([]types.Type(nil), inputs...)
 			needCast := false
-			for _, i := range []int{0, 3} {
+			switch {
+			case finalTypes[0].Oid == types.T_int64:
+			case finalTypes[0].Oid == types.T_any || finalTypes[0].Oid.IsInteger() || finalTypes[0].Oid.IsMySQLString():
+				// a prepared parameter is typed as text at PREPARE
+				finalTypes[0] = types.T_int64.ToType()
+				needCast = true
+			default:
+				return newCheckResultWithFailure(failedAggParametersWrong)
+			}
+			for i := 3; i < len(finalTypes); i++ {
 				switch finalTypes[i].Oid {
 				case types.T_char, types.T_varchar, types.T_text:
+				case types.T_json:
+					if i == 4 {
+						return newCheckResultWithFailure(failedAggParametersWrong)
+					}
 				case types.T_any:
 					finalTypes[i] = types.T_varchar.ToType()
 					needCast = true

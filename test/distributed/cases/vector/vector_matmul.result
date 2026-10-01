@@ -8,34 +8,34 @@ insert into t values
 (3, 'y', '[1,1,0,0]', '[1,1,0,0]'),
 (4, 'y', '[-1,0,0,0]', '[-1,0,0,0]'),
 (5, 'x', null, null);
-select vector_matmul('{"limit":2}', id, a, '[[1,0,0,0],[0,1,0,0]]') from t;
-➤ vector_matmul({"limit":2}, id, a, [[1,0,0,0],[0,1,0,0]])[-1,2147483647,0]  𝄀
+select vector_matmul(2, id, a, '[[1,0,0,0],[0,1,0,0]]') from t;
+➤ vector_matmul(2, id, a, [[1,0,0,0],[0,1,0,0]])[-1,2147483647,0]  𝄀
 [[["1", 1], ["3", 1]], [["2", 1], ["3", 1]]]
-select vector_matmul('{"limit":10}', id, b, '[[1,1,0,0]]') from t;
-➤ vector_matmul({"limit":10}, id, b, [[1,1,0,0]])[-1,2147483647,0]  𝄀
+select vector_matmul(10, id, b, '[[1,1,0,0]]') from t;
+➤ vector_matmul(10, id, b, [[1,1,0,0]])[-1,2147483647,0]  𝄀
 [[["3", 2], ["1", 1], ["2", 1], ["4", -1]]]
-select vector_matmul('{"limit":3,"mode":"cpu"}', id, a, '[[1,1,0,0]]') from t where cat = 'x';
-➤ vector_matmul({"limit":3,"mode":"cpu"}, id, a, [[1,1,0,0]])[-1,2147483647,0]  𝄀
+select vector_matmul(3, id, a, '[[1,1,0,0]]', '{"mode":"cpu"}') from t where cat = 'x';
+➤ vector_matmul(3, id, a, [[1,1,0,0]], {"mode":"cpu"})[-1,2147483647,0]  𝄀
 [[["1", 1], ["2", 1]]]
-select cat, vector_matmul('{"limit":1}', id, a, '[[1,0,0,0]]') r from t group by cat order by cat;
+select cat, vector_matmul(1, id, a, '[[1,0,0,0]]') r from t group by cat order by cat;
 ➤ cat[12,10,0]  ¦  r[-1,2147483647,0]  𝄀
 x  ¦  [[["1", 1]]]  𝄀
 y  ¦  [[["3", 1]]]
-select vector_matmul('{"limit":2,"mode":"auto"}', id, a, '[[1,0,0,0],[0,0,1,0]]') from t where id > 100;
-➤ vector_matmul({"limit":2,"mode":"auto"}, id, a, [[1,0,0,0],[0,0,1,0]])[-1,2147483647,0]  𝄀
+select vector_matmul(2, id, a, '[[1,0,0,0],[0,0,1,0]]', '{"mode":"auto","tile_bytes":1048576}') from t where id > 100;
+➤ vector_matmul(2, id, a, [[1,0,0,0],[0,0,1,0]], {"mode":"auto","tile_bytes":1048576})[-1,2147483647,0]  𝄀
 [[], []]
-select vector_matmul('{"limit":2}', cat, a, '[[1,0,0,0]]') from t;
-➤ vector_matmul({"limit":2}, cat, a, [[1,0,0,0]])[-1,2147483647,0]  𝄀
+select vector_matmul(2, cat, a, '[[1,0,0,0]]') from t;
+➤ vector_matmul(2, cat, a, [[1,0,0,0]])[-1,2147483647,0]  𝄀
 [[["x", 1], ["y", 1]]]
 create table u (k uuid primary key, a vecf8(2));
 insert into u values ('6ba7b810-9dad-11d1-80b4-00c04fd430c8', '[1,2]'), ('6ba7b811-9dad-11d1-80b4-00c04fd430c8', '[2,1]');
-select vector_matmul('{"limit":2}', k, a, '[[1,0],[0,1]]') from u;
-➤ vector_matmul({"limit":2}, k, a, [[1,0],[0,1]])[-1,2147483647,0]  𝄀
+select vector_matmul(2, k, a, '[[1,0],[0,1]]') from u;
+➤ vector_matmul(2, k, a, [[1,0],[0,1]])[-1,2147483647,0]  𝄀
 [[["6ba7b811-9dad-11d1-80b4-00c04fd430c8", 2], ["6ba7b810-9dad-11d1-80b4-00c04fd430c8", 1]], [["6ba7b810-9dad-11d1-80b4-00c04fd430c8", 2], ["6ba7b811-9dad-11d1-80b4-00c04fd430c8", 1]]]
 select q.`index` as q_id, h.`index` as rnk,
 json_unquote(json_extract(h.value, '$[0]')) as src_id,
 cast(json_extract(h.value, '$[1]') as double) as score
-from (select vector_matmul('{"limit":2}', id, a, '[[1,0,0,0],[0,1,0,0]]') as r from t) m
+from (select vector_matmul(2, id, a, '[[1,0,0,0],[0,1,0,0]]') as r from t) m
 cross apply unnest(m.r, '$') q
 cross apply unnest(q.value, '$') h
 order by q_id, rnk;
@@ -45,33 +45,43 @@ order by q_id, rnk;
 1  ¦  0  ¦  2  ¦  1.0  𝄀
 1  ¦  1  ¦  3  ¦  1.0
 prepare s from 'select vector_matmul(?, id, b, ?) from t';
-set @p = '{"limit":1}';
+set @p = 1;
 set @q = '[[0,1,0,0]]';
 execute s using @p, @q;
 ➤ vector_matmul(?, t.id, t.b, ?)[-1,2147483647,0]  𝄀
 [[["2", 1]]]
 deallocate prepare s;
-select vector_matmul('{}', id, a, '[[1,0,0,0]]') from t;
-invalid input: vector_matmul: params requires "limit"
-select vector_matmul('{"limit":0}', id, a, '[[1,0,0,0]]') from t;
-invalid input: vector_matmul: limit 0 out of range [1, 16384]
-select vector_matmul('{"limit":2,"bogus":1}', id, a, '[[1,0,0,0]]') from t;
-invalid input: vector_matmul: invalid params "{\"limit\":2,\"bogus\":1}": json: unknown field "bogus"
-select vector_matmul('{"limit":2,"mode":"gpu"}', id, a, '[[1,0,0,0]]') from t;
+create table qv (qid int primary key, v vecf32(4));
+insert into qv values (1, '[1,0,0,0]'), (2, '[0,0,1,1]');
+set @qs = (select json_arrayagg(v) from qv);
+select vector_matmul(1, id, a, @qs) from t;
+➤ vector_matmul(1, id, a, @qs)[-1,2147483647,0]  𝄀
+[[["1", 1]], [["1", 0]]]
+select vector_matmul('abc', id, a, '[[1,0,0,0]]') from t;
+invalid argument cast to int, bad value abc
+select vector_matmul(0, id, a, '[[1,0,0,0]]') from t;
+invalid input: vector_matmul: topk 0 out of range [1, 16384]
+select vector_matmul(2, id, a, '[[1,0,0,0]]', '{"bogus":1}') from t;
+invalid input: vector_matmul: invalid options "{\"bogus\":1}": json: unknown field "bogus"
+select vector_matmul(2, id, a, '[[1,0,0,0]]', '{"mode":"gpu"}') from t;
 not supported: vector_matmul: gpu mode in this build
-select vector_matmul('{"limit":2}', id, a, '[[1,0,0]]') from t;
+select vector_matmul(2, id, a, '[[1,0,0]]') from t;
 invalid input: vector ops between different dimensions (4, 3) is not permitted.
-select vector_matmul('{"limit":2}', id, a, '[]') from t;
+select vector_matmul(2, id, a, '[]') from t;
 invalid input: vector_matmul: query count 0 out of range [1, 4096]
-select vector_matmul(cat, id, a, '[[1,0,0,0]]') from t;
-invalid input: params and queries arguments of vector_matmul must be non-null constants or parameters
-select vector_matmul('{"limit":2}', id, a, cat) from t;
-invalid input: params and queries arguments of vector_matmul must be non-null constants or parameters
-select vector_matmul('{"limit":2}', id, a) from t;
-invalid input: vector_matmul requires 4 arguments, got 3
+select vector_matmul(id, id, a, '[[1,0,0,0]]') from t;
+invalid input: topk, queries and options arguments of vector_matmul must be non-null constants, parameters or variables
+select vector_matmul(2, id, a, cat) from t;
+invalid input: topk, queries and options arguments of vector_matmul must be non-null constants, parameters or variables
+select vector_matmul(2, id, a) from t;
+invalid input: vector_matmul requires 4 or 5 arguments, got 3
+select vector_matmul(2, id, a, '[[1,0,0,0]]', '{}', 1) from t;
+invalid input: vector_matmul requires 4 or 5 arguments, got 6
+select vector_matmul(2, id, a, '[[1,0,0,0]]', cat) from t;
+invalid input: topk, queries and options arguments of vector_matmul must be non-null constants, parameters or variables
 create table f (id int primary key, v vecf32(4));
-select vector_matmul('{"limit":2}', id, v, '[[1,0,0,0]]') from f;
-invalid argument aggregate function vector_matmul, bad value [VARCHAR INT VECF32 VARCHAR]
+select vector_matmul(2, id, v, '[[1,0,0,0]]') from f;
+invalid argument aggregate function vector_matmul, bad value [BIGINT INT VECF32 VARCHAR]
 create table big (id bigint primary key, a vecf8(4), b vecf4(4));
 insert into big
 select g.result,
@@ -81,7 +91,7 @@ from generate_series(1, 400000) g;
 select count(*) from big;
 ➤ count(*)[-5,64,0]  𝄀
 400000
-with m as (select vector_matmul('{"limit":20}', id, a, '[[1,2,3,4]]') r from big),
+with m as (select vector_matmul(20, id, a, '[[1,2,3,4]]') r from big),
 got as (select json_unquote(json_extract(h.value, '$[0]')) as id, h.`index` as rnk
 from m cross apply unnest(m.r, '$[0]') h),
 want as (select cast(id as varchar) as id, row_number() over (order by s desc, cast(id as varchar)) - 1 as rnk
@@ -91,7 +101,7 @@ select (select count(*) from got) as got_rows,
 (select count(*) from (select id, rnk from got except select id, rnk from want) d) as mismatches;
 ➤ got_rows[-5,64,0]  ¦  mismatches[-5,64,0]  𝄀
 20  ¦  0
-with m as (select vector_matmul('{"limit":20}', id, b, '[[-2,1,0,3]]') r from big),
+with m as (select vector_matmul(20, id, b, '[[-2,1,0,3]]') r from big),
 got as (select json_unquote(json_extract(h.value, '$[0]')) as id, h.`index` as rnk
 from m cross apply unnest(m.r, '$[0]') h),
 want as (select cast(id as varchar) as id, row_number() over (order by s desc, cast(id as varchar)) - 1 as rnk

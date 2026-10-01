@@ -2056,17 +2056,17 @@ func constructAggregateConfigWithError(
 		}
 
 	case plan2.NameVectorMatmul:
-		if len(args) != 4 {
+		if len(args) != 4 && len(args) != 5 {
 			return nil, nil, moerr.NewInvalidInputNoCtxf(
-				"vector_matmul requires 4 arguments, got %d", len(args))
+				"vector_matmul requires 4 or 5 arguments, got %d", len(args))
 		}
-		for _, i := range []int{0, 3} {
+		for _, i := range plan2.VectorMatmulConfigArgs(len(args)) {
 			if args[i] == nil || !plan2.IsVectorMatmulConfigExpr(args[i]) {
 				return nil, nil, moerr.NewInvalidInputNoCtx(
-					"params and queries arguments of vector_matmul must be non-null constants or parameters")
+					"topk, queries and options arguments of vector_matmul must be non-null constants, parameters or variables")
 			}
 		}
-		params, err := evaluateAggregateConfigString(proc, args[0])
+		topk, err := evaluateAggregateConfigInt64(proc, args[0])
 		if err != nil {
 			return nil, nil, err
 		}
@@ -2074,7 +2074,13 @@ func constructAggregateConfigWithError(
 		if err != nil {
 			return nil, nil, err
 		}
-		return []*plan.Expr{args[1], args[2]}, aggexec.EncodeVectorMatmulConfig(params, queries), nil
+		options := ""
+		if len(args) == 5 {
+			if options, err = evaluateAggregateConfigString(proc, args[4]); err != nil {
+				return nil, nil, err
+			}
+		}
+		return []*plan.Expr{args[1], args[2]}, aggexec.EncodeVectorMatmulConfig(topk, queries, options), nil
 
 	case plan2.NamePercentileCont, plan2.NamePercentileDisc:
 		args, config, err := constructOrderedPercentileConfig(f, proc)
@@ -2215,7 +2221,26 @@ func evaluateAggregateConfigString(proc *process.Process, expr *plan.Expr) (stri
 	if vec.Length() == 0 || vec.IsConstNull() || vec.IsNull(0) {
 		return "", nil
 	}
+	if vec.GetType().Oid == types.T_json {
+		return types.DecodeJson(vec.GetBytesAt(0)).String(), nil
+	}
 	return vec.GetStringAt(0), nil
+}
+
+// evaluateAggregateConfigInt64 evaluates an int64 configuration argument; NULL is an error.
+func evaluateAggregateConfigInt64(proc *process.Process, expr *plan.Expr) (int64, error) {
+	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, expr)
+	if err != nil {
+		return 0, err
+	}
+	defer free()
+	if vec.Length() == 0 || vec.IsConstNull() || vec.IsNull(0) {
+		return 0, moerr.NewInvalidInputNoCtx("aggregate integer configuration must not be NULL")
+	}
+	if vec.GetType().Oid != types.T_int64 {
+		return 0, moerr.NewInvalidInputNoCtxf("aggregate integer configuration has type %s", vec.GetType().Oid)
+	}
+	return vector.GetFixedAtNoTypeCheck[int64](vec, 0), nil
 }
 
 func constructDispatchLocal(all bool, isSink, rec bool, recCTE bool, regs []*process.WaitRegister) *dispatch.Dispatch {

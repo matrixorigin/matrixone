@@ -31,31 +31,36 @@ func TestBindVectorMatmulRequiresConstantConfig(t *testing.T) {
 	id := col(0, planpb.Type{Id: int32(types.T_int64)})
 	vec := col(1, planpb.Type{Id: int32(types.T_array_float8), Width: 4})
 	text := col(2, planpb.Type{Id: int32(types.T_varchar), Width: 100})
-	params := makePlan2StringConstExprWithType(`{"limit":3}`)
+	topk := makePlan2Int64ConstExprWithType(3)
 	queries := makePlan2StringConstExprWithType(`[[1,0,0,0]]`)
+	options := makePlan2StringConstExprWithType(`{"mode":"cpu"}`)
 
-	expr, err := BindFuncExprImplByPlanExpr(ctx, NameVectorMatmul, []*planpb.Expr{params, id, vec, queries})
+	expr, err := BindFuncExprImplByPlanExpr(ctx, NameVectorMatmul, []*planpb.Expr{topk, id, vec, queries})
 	require.NoError(t, err)
 	require.Equal(t, int32(types.T_json), expr.Typ.Id)
-
-	param := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 1}}}
-	_, err = BindFuncExprImplByPlanExpr(ctx, NameVectorMatmul, []*planpb.Expr{params, id, vec, param})
+	_, err = BindFuncExprImplByPlanExpr(ctx, NameVectorMatmul, []*planpb.Expr{topk, id, vec, queries, options})
 	require.NoError(t, err)
 
+	param := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 1}}}
+	_, err = BindFuncExprImplByPlanExpr(ctx, NameVectorMatmul, []*planpb.Expr{topk, id, vec, param})
+	require.NoError(t, err)
+
+	intCol := col(3, planpb.Type{Id: int32(types.T_int64)})
 	for _, args := range [][]*planpb.Expr{
-		{text, id, vec, queries},
-		{params, id, vec, text},
+		{intCol, id, vec, queries},
+		{topk, id, vec, text},
+		{topk, id, vec, queries, text},
 		{makePlan2NullConstExprWithType(), id, vec, queries},
-		{params, id, vec, nil},
+		{topk, id, vec, nil},
 	} {
 		_, err = BindFuncExprImplByPlanExpr(ctx, NameVectorMatmul, args)
-		require.ErrorContains(t, err, "must be non-null constants or parameters")
+		require.ErrorContains(t, err, "must be non-null constants, parameters or variables")
 	}
-	_, err = BindFuncExprImplByPlanExpr(ctx, NameVectorMatmul, []*planpb.Expr{params, id, vec})
-	require.ErrorContains(t, err, "requires 4 arguments")
+	_, err = BindFuncExprImplByPlanExpr(ctx, NameVectorMatmul, []*planpb.Expr{topk, id, vec})
+	require.ErrorContains(t, err, "requires 4 or 5 arguments")
 
 	// the vector argument must be vecf8/vecf4
 	f32 := col(1, planpb.Type{Id: int32(types.T_array_float32), Width: 4})
-	_, err = BindFuncExprImplByPlanExpr(ctx, NameVectorMatmul, []*planpb.Expr{params, id, f32, queries})
+	_, err = BindFuncExprImplByPlanExpr(ctx, NameVectorMatmul, []*planpb.Expr{topk, id, f32, queries})
 	require.Error(t, err)
 }

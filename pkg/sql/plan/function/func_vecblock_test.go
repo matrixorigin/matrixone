@@ -297,30 +297,63 @@ func TestVecBlockArithmeticCastRules(t *testing.T) {
 func TestVectorMatmulResolution(t *testing.T) {
 	ctx := context.Background()
 	vc := types.T_varchar.ToType()
+	i64 := types.T_int64.ToType()
 	for _, oid := range vecBlockOids {
 		vb := types.New(oid, 4, 0)
 		for _, id := range []types.T{types.T_int32, types.T_int64, types.T_uint64, types.T_varchar, types.T_char, types.T_text, types.T_uuid} {
-			r, err := GetFunctionByName(ctx, "vector_matmul", []types.Type{vc, id.ToType(), vb, vc})
+			r, err := GetFunctionByName(ctx, "vector_matmul", []types.Type{i64, id.ToType(), vb, vc})
 			require.NoError(t, err, id.String())
 			require.Equal(t, types.T_json, r.GetReturnType().Oid)
 		}
-		r, err := GetFunctionByName(ctx, "vector_matmul", []types.Type{types.T_any.ToType(), types.T_int64.ToType(), vb, types.T_any.ToType()})
+		_, err := GetFunctionByName(ctx, "vector_matmul", []types.Type{i64, i64, vb, types.T_json.ToType(), vc})
+		require.NoError(t, err)
+		// a non-int64 topk, untyped queries and options are cast
+		r, err := GetFunctionByName(ctx, "vector_matmul", []types.Type{types.T_uint8.ToType(), i64, vb, types.T_any.ToType(), types.T_any.ToType()})
 		require.NoError(t, err)
 		targets, cast := r.ShouldDoImplicitTypeCast()
 		require.True(t, cast)
-		require.Equal(t, types.T_varchar, targets[0].Oid)
+		require.Equal(t, types.T_int64, targets[0].Oid)
 		require.Equal(t, types.T_varchar, targets[3].Oid)
+		require.Equal(t, types.T_varchar, targets[4].Oid)
+		r, err = GetFunctionByName(ctx, "vector_matmul", []types.Type{types.T_text.ToType(), i64, vb, vc})
+		require.NoError(t, err)
+		targets, _ = r.ShouldDoImplicitTypeCast()
+		require.Equal(t, types.T_int64, targets[0].Oid)
 		require.True(t, GetFunctionIsAggregateByName("vector_matmul"))
 
 		for _, args := range [][]types.Type{
-			{vc, types.T_int64.ToType(), vb},
-			{types.T_int64.ToType(), types.T_int64.ToType(), vb, vc},
-			{vc, types.T_int64.ToType(), vb, types.T_int64.ToType()},
-			{vc, types.T_float64.ToType(), vb, vc},
-			{vc, types.T_int64.ToType(), types.New(types.T_array_float32, 4, 0), vc},
+			{i64, i64, vb},
+			{types.T_float64.ToType(), i64, vb, vc},
+			{i64, i64, vb, i64},
+			{i64, i64, vb, vc, types.T_json.ToType()},
+			{i64, types.T_float64.ToType(), vb, vc},
+			{i64, i64, types.New(types.T_array_float32, 4, 0), vc},
+			{i64, i64, vb, vc, vc, vc},
 		} {
 			_, err := GetFunctionByName(ctx, "vector_matmul", args)
 			require.Error(t, err, "%v", args)
+		}
+	}
+}
+
+func TestVecBlockDistanceOverflowIsAnError(t *testing.T) {
+	const m = 3e38
+	x, y := make([]float32, 32), make([]float32, 32)
+	for i := range x {
+		x[i], y[i] = m, m
+		if i%2 == 1 {
+			y[i] = -m
+		}
+	}
+	for _, oid := range vecBlockOids {
+		a := vecBlockCellVector(t, oid, 32, [][]float32{x}, nil)
+		b := vecBlockCellVector(t, oid, 32, [][]float32{y}, nil)
+		for _, d := range []struct {
+			name string
+			op   executeLogicOfOverload
+		}{{"inner_product", InnerProductVecBlock}, {"cosine_distance", CosineDistanceVecBlock}, {"cosine_similarity", CosineSimilarityVecBlock}} {
+			_, err := runVecBlockFn(t, d.op, types.T_float64.ToType(), a, b)
+			require.Error(t, err, "%s %s", d.name, oid)
 		}
 	}
 }

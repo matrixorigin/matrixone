@@ -5650,30 +5650,53 @@ func validateApproxPercentileArgs(ctx context.Context, args []*Expr) error {
 	return nil
 }
 
-// validateVectorMatmulArgs requires the params and queries arguments of vector_matmul to
-// be non-null constants or parameters.
+// validateVectorMatmulArgs requires the topk, queries and options arguments of
+// vector_matmul to be non-null constants, parameters or variables.
 func validateVectorMatmulArgs(ctx context.Context, args []*Expr) error {
-	if len(args) != 4 {
-		return moerr.NewInvalidInputf(ctx, "vector_matmul requires 4 arguments, got %d", len(args))
+	if len(args) != 4 && len(args) != 5 {
+		return moerr.NewInvalidInputf(ctx, "vector_matmul requires 4 or 5 arguments, got %d", len(args))
 	}
-	for _, i := range []int{0, 3} {
+	for _, i := range VectorMatmulConfigArgs(len(args)) {
 		arg := args[i]
 		if arg == nil || isNullExpr(arg) || !IsVectorMatmulConfigExpr(arg) {
 			return moerr.NewInvalidInput(ctx,
-				"params and queries arguments of vector_matmul must be non-null constants or parameters")
+				"topk, queries and options arguments of vector_matmul must be non-null constants, parameters or variables")
 		}
 	}
 	return nil
 }
 
+// VectorMatmulConfigArgs returns the positions of vector_matmul's configuration
+// arguments for a call with n arguments.
+func VectorMatmulConfigArgs(n int) []int {
+	if n == 5 {
+		return []int{0, 3, 4}
+	}
+	return []int{0, 3}
+}
+
 // IsVectorMatmulConfigExpr reports whether expr can be evaluated without an input row:
 // a constant, a prepared parameter or a variable.
 func IsVectorMatmulConfigExpr(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
 	if rule.IsConstant(expr, false) {
 		return true
 	}
-	switch expr.Expr.(type) {
-	case *plan.Expr_P, *plan.Expr_V:
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_P, *plan.Expr_V, *plan.Expr_T:
+		return true
+	case *plan.Expr_F:
+		// a cast or other function over parameters, e.g. CAST(? AS BIGINT)
+		if e.F == nil {
+			return false
+		}
+		for _, arg := range e.F.Args {
+			if !IsVectorMatmulConfigExpr(arg) {
+				return false
+			}
+		}
 		return true
 	}
 	return false

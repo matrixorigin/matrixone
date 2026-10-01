@@ -17,7 +17,6 @@ package aggexec
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"math/rand"
 	"sort"
 	"strconv"
@@ -34,9 +33,9 @@ const vmDim = 4
 
 func vmVecType() types.Type { return types.New(types.T_array_float8, vmDim, 0) }
 
-func vmConfig(limit int, queries [][]float32) []byte {
+func vmConfig(topk int, queries [][]float32) []byte {
 	q, _ := json.Marshal(queries)
-	return EncodeVectorMatmulConfig(fmt.Sprintf(`{"limit":%d}`, limit), string(q))
+	return EncodeVectorMatmulConfig(int64(topk), string(q), "")
 }
 
 func vmExec(t *testing.T, mp *mpool.MPool, idType types.Type, groups int, cfg []byte) *vectorMatmulExec {
@@ -332,29 +331,36 @@ func TestVectorMatmulIDText(t *testing.T) {
 func TestVectorMatmulConfigErrors(t *testing.T) {
 	vt := vmVecType()
 	for _, tc := range []struct {
-		params, queries, want string
+		topk             int64
+		queries, options string
+		want             string
 	}{
-		{`{}`, `[[1,0,0,0]]`, `requires "limit"`},
-		{`{"limit":0}`, `[[1,0,0,0]]`, `out of range`},
-		{`{"limit":2,"bogus":1}`, `[[1,0,0,0]]`, `invalid params`},
-		{`{"limit":2,"mode":"fast"}`, `[[1,0,0,0]]`, `invalid mode`},
-		{`{"limit":2,"mode":"gpu"}`, `[[1,0,0,0]]`, `gpu mode`},
-		{`{"limit":2,"tile_bytes":-1}`, `[[1,0,0,0]]`, `tile_bytes`},
-		{`not json`, `[[1,0,0,0]]`, `invalid params`},
-		{`{"limit":2}`, `[]`, `query count`},
-		{`{"limit":2}`, `[1,2]`, `JSON array of vectors`},
-		{`{"limit":2}`, `[[1,0,0]]`, `different dimensions`},
-		{`{"limit":2}`, `[[1,0,0,"x"]]`, `JSON array of vectors`},
+		{0, `[[1,0,0,0]]`, ``, `topk 0 out of range`},
+		{vectorMatmulMaxTopK + 1, `[[1,0,0,0]]`, ``, `out of range`},
+		{2, `[[1,0,0,0]]`, `{"bogus":1}`, `invalid options`},
+		{2, `[[1,0,0,0]]`, `{"mode":"fast"}`, `invalid mode`},
+		{2, `[[1,0,0,0]]`, `{"mode":"gpu"}`, `gpu mode`},
+		{2, `[[1,0,0,0]]`, `{"tile_bytes":-1}`, `tile_bytes`},
+		{2, `[[1,0,0,0]]`, `not json`, `invalid options`},
+		{2, `[]`, ``, `query count`},
+		{2, `[1,2]`, ``, `JSON array of vectors`},
+		{2, `[[1,0,0]]`, ``, `different dimensions`},
+		{2, `[[1,0,0,"x"]]`, ``, `JSON array of vectors`},
 	} {
-		_, err := parseVectorMatmulConfig(EncodeVectorMatmulConfig(tc.params, tc.queries), vt)
-		require.ErrorContains(t, err, tc.want, tc.params+" "+tc.queries)
+		_, err := parseVectorMatmulConfig(EncodeVectorMatmulConfig(tc.topk, tc.queries, tc.options), vt)
+		require.ErrorContains(t, err, tc.want, "%d %s %s", tc.topk, tc.queries, tc.options)
 	}
-	for _, mode := range []string{`"auto"`, `"cpu"`} {
-		_, err := parseVectorMatmulConfig(EncodeVectorMatmulConfig(`{"limit":1,"mode":`+mode+`,"tile_bytes":1024}`, `[[1,0,0,0]]`), vt)
-		require.NoError(t, err)
+	many := "[" + strings.TrimSuffix(strings.Repeat(`[1,0,0,0],`, vectorMatmulMaxEntries/vectorMatmulMaxTopK+1), ",") + "]"
+	_, err := parseVectorMatmulConfig(EncodeVectorMatmulConfig(vectorMatmulMaxTopK, many, ""), vt)
+	require.ErrorContains(t, err, "queries x topk exceeds")
+	for _, options := range []string{``, `{"mode":"auto"}`, `{"mode":"cpu","tile_bytes":1024}`} {
+		_, err := parseVectorMatmulConfig(EncodeVectorMatmulConfig(1, `[[1,0,0,0]]`, options), vt)
+		require.NoError(t, err, options)
 	}
-	_, _, err := decodeVectorMatmulConfig([]byte{1, 2})
-	require.Error(t, err)
+	for _, bad := range [][]byte{{1, 2}, EncodeVectorMatmulConfig(1, `[[1]]`, "")[:12], append(EncodeVectorMatmulConfig(1, `[[1]]`, ""), 0)} {
+		_, _, _, err := decodeVectorMatmulConfig(bad)
+		require.Error(t, err)
+	}
 
 	mp := mpool.MustNewZero()
 	exec, err := makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{types.T_int64.ToType(), vt})
@@ -499,4 +505,56 @@ func TestVectorMatmulNullAndConstInputs(t *testing.T) {
 	require.NoError(t, vector.AppendFixed(one, int64(9), false, mp))
 	defer one.Free(mp)
 	require.Error(t, exec.Fill(0, 0, []*vector.Vector{one, bad}))
+}
+
+// An overflowing row (its float32 lanes reach +Inf and -Inf, so the dot is NaN) ranks
+// last; it is an error only when it reaches the result.
+func TestVectorMatmulOverflowRanksLast(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	const m = 3e38
+	big := make([]float32, 32)
+	query := make([]float32, 32)
+	for i := range big {
+		big[i], query[i] = m, m
+		if i%2 == 1 {
+			query[i] = -m
+		}
+	}
+	vt := types.New(types.T_array_float8, 32, 0)
+	mk := func(topk int) *vectorMatmulExec {
+		q, _ := json.Marshal([][]float32{query})
+		exec, err := makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{types.T_int64.ToType(), vt})
+		require.NoError(t, err)
+		require.NoError(t, exec.GroupGrow(1))
+		require.NoError(t, exec.SetExtraInformation(EncodeVectorMatmulConfig(int64(topk), string(q), ""), 0))
+		return exec.(*vectorMatmulExec)
+	}
+	idv := vector.NewVec(types.T_int64.ToType())
+	vv := vector.NewVec(vt)
+	small := make([]float32, 32)
+	small[0] = 1
+	for i, row := range [][]float32{big, small, small} {
+		require.NoError(t, vector.AppendFixed(idv, int64(i), false, mp))
+		cell, err := types.AppendBlockScaled(nil, types.BlockScaledMXFP8, row)
+		require.NoError(t, err)
+		require.NoError(t, vector.AppendBytes(vv, cell, false, mp))
+	}
+	defer vmFree(mp, []*vector.Vector{idv, vv})
+
+	top2 := mk(2)
+	defer top2.Free()
+	require.NoError(t, top2.BulkFill(0, []*vector.Vector{idv, vv}))
+	out := vmFlush(t, mp, top2)
+	require.Len(t, out, 1)
+	var got [][][]any
+	require.NoError(t, json.Unmarshal([]byte(out[0]), &got))
+	require.Equal(t, "1", got[0][0][0])
+	require.Equal(t, "2", got[0][1][0])
+
+	top3 := mk(3)
+	defer top3.Free()
+	require.NoError(t, top3.BulkFill(0, []*vector.Vector{idv, vv}))
+	_, err := top3.Flush()
+	require.ErrorContains(t, err, "overflows the float32 domain")
 }

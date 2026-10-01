@@ -252,33 +252,43 @@ folds into float64; elements past the last full unit take a per-element path.
 
 Parsing a cell (header and validation) adds 52 ns for `vecf4` and 186 ns for `vecf8`.
 
+Overflow: a unit accumulates in float32 lanes, so finite products can overflow one lane
+to +Inf and another to −Inf, whose sum is NaN. Following the metric package's
+non-finite contract, the inner product and cosine distances map NaN to +Inf (the largest
+distance); L2 and L1 are sums of non-negative terms and cannot produce NaN. The SQL
+functions report any non-finite result as an overflow error.
+
 ### Batch dot-product search
 
 #### `vector_matmul` (aggregate)
 
 ```sql
-vector_matmul(params, src_id, src_vec, queries) → JSON
+vector_matmul(topk, src_id, src_vec, queries [, options]) → JSON
 ```
 
 | Argument | Type | Meaning |
 |----------|------|---------|
-| `params` | constant JSON string | `{"limit": k}` (required); `"mode": "auto" \| "gpu" \| "cpu"` (default `auto`: GPU when the build and a device are present, else CPU); `"tile_bytes": n` (default 64 MiB) |
+| `topk` | constant integer | the hits kept per query, 1–16384 |
 | `src_id` | column | the row key: an integer, `char`/`varchar`/`text` or `uuid` column |
 | `src_vec` | column | `vecf8(N)` or `vecf4(N)` |
-| `queries` | constant JSON string | array of query vectors `[[…], …]`, each of length `N`; quantized once to the column's format |
+| `queries` | constant string or JSON | array of query vectors `[[…], …]`, each of length `N`; quantized once to the column's format |
+| `options` | optional constant JSON string | `"mode": "auto" \| "gpu" \| "cpu"` (default `auto`: GPU when the build and a device are present, else CPU); `"tile_bytes": n` (default 64 MiB) |
 
 An aggregate: one result per group (one row without `GROUP BY`), of MO's `JSON` type.
-`params` and `queries` are constants or prepared parameters; the compiler moves them into
-the aggregate's configuration, so each executor receives only `src_id` and `src_vec`.
+`topk`, `queries` and `options` are constants, prepared parameters or user variables; the
+compiler moves them into the aggregate's configuration, so each executor receives only
+`src_id` and `src_vec`. A scalar subquery is planned as a join and arrives as a column,
+so query vectors stored in a table go through a user variable:
+`SET @q = (SELECT json_arrayagg(v) FROM query_vectors)`.
 MO's distributed aggregation runs it in two phases. Each scan pipeline on each CN fills
-its own state, which keeps the top `limit` scores per query: in `cpu` mode each row is
+its own state, which keeps the top `topk` scores per query: in `cpu` mode each row is
 scored on arrival; the GPU engine appends rows to a host tile and scores a tile when it
 reaches `tile_bytes` or input ends. The partial states are then merged into the final
-top `limit`; across CNs the states are serialized to the merging CN. Rows with a NULL
+top `topk`; across CNs the states are serialized to the merging CN. Rows with a NULL
 `src_id` or `src_vec` are skipped. A `WHERE` on the source table filters rows before they
 reach the aggregate.
 
-Per group the state holds, for each query, a heap of at most `limit` hits, plus an arena
+Per group the state holds, for each query, a heap of at most `topk` hits, plus an arena
 with the hits' id text (a row that enters several queries stores its id once). All of it
 is charged to the aggregate's allocation account; preflight reserves the arena space for
 a batch before the batch is filled, and the arena compacts in place.
@@ -288,8 +298,10 @@ handle/workspace, and host and device tile memory scale with the instance count
 (`instances × tile_bytes`).
 
 In `cpu` mode (and on CPU builds) the dot products come from the CPU distance kernel
-over the quantized cells (`VecBlockDot`); results match the GPU within fp32
-summation-order tolerance.
+over the quantized cells (`VecBlockInnerProduct`); results match the GPU within fp32
+summation-order tolerance. An overflowing dot product (NaN, mapped to the +Inf distance)
+ranks last; a non-finite score in the result is an overflow error, since JSON has no
+infinity.
 
 #### Result format
 
@@ -302,7 +314,7 @@ summation-order tolerance.
 
 - Outer array: one entry per query, in input order (position = query id).
 - Inner array: that query's hits, score descending, ties by the id text in byte order
-  (so `"10"` before `"9"`); at most `limit` entries, `[]` when there is no input row.
+  (so `"10"` before `"9"`); at most `topk` entries, `[]` when there is no input row.
 - Hit: a pair `[id, score]`.
   - Position 0, `id`: the source key as a JSON string (exact for 64-bit integers and
     non-integer keys).
@@ -312,7 +324,7 @@ summation-order tolerance.
 #### Usage
 
 ```sql
-SELECT vector_matmul('{"limit":10}', id, v, '[[0.12, …], [0.33, …]]') AS result
+SELECT vector_matmul(10, id, v, '[[0.12, …], [0.33, …]]') AS result
 FROM t
 WHERE category = 'news';
 ```

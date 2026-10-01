@@ -56,11 +56,11 @@ func vecBlockDistance(fn func(x, y *metric.VecBlockOperand) (float64, error)) ex
 
 // InnerProductVecBlock is inner_product: the negated dot product.
 var InnerProductVecBlock = vecBlockDistance(func(x, y *metric.VecBlockOperand) (float64, error) {
-	d, err := metric.VecBlockDot(x, y)
+	d, err := metric.VecBlockInnerProduct(x, y)
 	if err != nil {
 		return 0, err
 	}
-	return metric.CheckFiniteDist(metric.RoundDistanceToElemDomain(-d), metric.MetricWhat(metric.Metric_InnerProduct))
+	return metric.CheckFiniteDist(metric.RoundDistanceToElemDomain(d), metric.MetricWhat(metric.Metric_InnerProduct))
 })
 
 // L2DistanceVecBlock is l2_distance.
@@ -97,7 +97,10 @@ var L1DistanceVecBlock = vecBlockDistance(func(x, y *metric.VecBlockOperand) (fl
 // CosineDistanceVecBlock is cosine_distance.
 var CosineDistanceVecBlock = vecBlockDistance(func(x, y *metric.VecBlockOperand) (float64, error) {
 	d, err := metric.VecBlockCosineDistance(x, y)
-	return metric.RoundDistanceToElemDomain(d), err
+	if err != nil {
+		return 0, err
+	}
+	return metric.CheckFiniteDist(metric.RoundDistanceToElemDomain(d), metric.MetricWhat(metric.Metric_CosineDistance))
 })
 
 // CosineSimilarityVecBlock is cosine_similarity.
@@ -106,7 +109,7 @@ var CosineSimilarityVecBlock = vecBlockDistance(func(x, y *metric.VecBlockOperan
 	if err != nil {
 		return 0, err
 	}
-	return metric.RoundDistanceToElemDomain(d), nil
+	return metric.CheckFiniteDist(metric.RoundDistanceToElemDomain(d), "cosine similarity")
 })
 
 // VectorDimsVecBlock is vector_dims over a vecf8/vecf4 cell.

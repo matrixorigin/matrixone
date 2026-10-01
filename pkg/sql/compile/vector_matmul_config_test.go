@@ -31,28 +31,38 @@ func TestConstructVectorMatmulConfig(t *testing.T) {
 	defer proc.Free()
 	id := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
 	vec := &plan.Expr{Typ: plan.Type{Id: int32(types.T_array_float8), Width: 4}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}}
-	params := plan2.MakePlan2StringConstExprWithType(`{"limit":3}`)
+	topk := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 3}}}}
 	queries := plan2.MakePlan2StringConstExprWithType(`[[1,0,0,0]]`)
-
-	args, config, err := constructAggregateConfigWithError(&plan.Function{
-		Func: &plan.ObjectRef{ObjName: plan2.NameVectorMatmul},
-		Args: []*plan.Expr{params, id, vec, queries},
-	}, proc)
-	require.NoError(t, err)
-	require.Equal(t, []*plan.Expr{id, vec}, args)
-	require.Equal(t, aggexec.EncodeVectorMatmulConfig(`{"limit":3}`, `[[1,0,0,0]]`), config)
-
-	_, _, err = constructAggregateConfigWithError(&plan.Function{
-		Func: &plan.ObjectRef{ObjName: plan2.NameVectorMatmul},
-		Args: []*plan.Expr{params, id, vec},
-	}, proc)
-	require.ErrorContains(t, err, "requires 4 arguments")
-
-	for _, args := range [][]*plan.Expr{{id, id, vec, queries}, {params, id, vec, vec}} {
-		_, _, err = constructAggregateConfigWithError(&plan.Function{
+	options := plan2.MakePlan2StringConstExprWithType(`{"mode":"cpu"}`)
+	call := func(args ...*plan.Expr) ([]*plan.Expr, []byte, error) {
+		return constructAggregateConfigWithError(&plan.Function{
 			Func: &plan.ObjectRef{ObjName: plan2.NameVectorMatmul},
 			Args: args,
 		}, proc)
+	}
+
+	args, config, err := call(topk, id, vec, queries)
+	require.NoError(t, err)
+	require.Equal(t, []*plan.Expr{id, vec}, args)
+	require.Equal(t, aggexec.EncodeVectorMatmulConfig(3, `[[1,0,0,0]]`, ""), config)
+
+	args, config, err = call(topk, id, vec, queries, options)
+	require.NoError(t, err)
+	require.Equal(t, []*plan.Expr{id, vec}, args)
+	require.Equal(t, aggexec.EncodeVectorMatmulConfig(3, `[[1,0,0,0]]`, `{"mode":"cpu"}`), config)
+
+	_, _, err = call(topk, id, vec)
+	require.ErrorContains(t, err, "requires 4 or 5 arguments")
+	for _, bad := range [][]*plan.Expr{
+		{id, id, vec, queries},
+		{topk, id, vec, vec},
+		{topk, id, vec, queries, vec},
+		{queries, id, vec, queries},
+	} {
+		_, _, err = call(bad...)
 		require.Error(t, err)
 	}
+	nullTopk := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}
+	_, _, err = call(nullTopk, id, vec, queries)
+	require.ErrorContains(t, err, "must not be NULL")
 }

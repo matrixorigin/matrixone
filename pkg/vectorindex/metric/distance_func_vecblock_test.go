@@ -237,3 +237,54 @@ func BenchmarkVecBlockKernels(b *testing.B) {
 		}
 	}
 }
+
+// vecBlockOverflowPair returns x = [M, M, ...] and y = [M, -M, M, -M, ...] with M near the
+// float32 maximum: each product overflows float32, lane 0 sums to +Inf and lane 1 to -Inf.
+func vecBlockOverflowPair(dim int) ([]float32, []float32) {
+	const m = 3e38
+	x, y := make([]float32, dim), make([]float32, dim)
+	for i := range x {
+		x[i] = m
+		y[i] = m
+		if i%2 == 1 {
+			y[i] = -m
+		}
+	}
+	return x, y
+}
+
+func TestVecBlockOverflowNaNMapsToPosInf(t *testing.T) {
+	xv, yv := vecBlockOverflowPair(32)
+	for _, fx := range vecBlockKinds[1:] {
+		for _, fy := range vecBlockKinds {
+			x, _ := vecBlockTestOperand(t, fx, xv)
+			y, _ := vecBlockTestOperand(t, fy, yv)
+			msg := fx.String() + " x " + fy.String()
+			dot, err := VecBlockDot(x, y)
+			require.NoError(t, err)
+			require.True(t, math.IsNaN(dot), msg)
+
+			d, err := VecBlockInnerProduct(x, y)
+			require.NoError(t, err)
+			require.True(t, math.IsInf(d, 1), msg)
+			d, err = VecBlockCosineDistance(x, y)
+			require.NoError(t, err)
+			require.True(t, math.IsInf(d, 1), msg)
+
+			// L2 and L1 are sums of non-negative terms: never NaN
+			for _, fn := range []func(x, y *VecBlockOperand) (float64, error){VecBlockL2DistanceSq, VecBlockL1Distance} {
+				d, err := fn(x, y)
+				require.NoError(t, err)
+				require.False(t, math.IsNaN(d), msg)
+			}
+		}
+	}
+	// finite results are unchanged
+	x, _ := vecBlockTestOperand(t, types.BlockScaledMXFP8, []float32{1, 2, 3, 4})
+	y, _ := vecBlockTestOperand(t, types.BlockScaledMXFP8, []float32{1, 0, 0, 1})
+	d, err := VecBlockInnerProduct(x, y)
+	require.NoError(t, err)
+	require.Equal(t, -5.0, d)
+	require.Equal(t, 1.0, vecBlockNaNToPosInf(1))
+	require.True(t, math.IsInf(vecBlockNaNToPosInf(math.Inf(-1)), -1))
+}

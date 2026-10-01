@@ -125,6 +125,12 @@ internal error: cosine similarity: one of the vector is zero
 select cosine_distance(a, '[0,0,0,0]') from t where id = 1;
 ➤ cosine_distance(a, [0,0,0,0])[8,53,31]  𝄀
 1.0
+select inner_product(cast('[3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38]' as vecf8(32)), cast('[3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38]' as vecf8(32)));
+internal error: inner product: vector magnitude is too large, the result overflows the element domain
+select cosine_distance(cast('[3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38]' as vecf4(32)), cast('[3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38]' as vecf4(32)));
+internal error: cosine distance: vector magnitude is too large, the result overflows the element domain
+select l2_distance(cast('[3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38]' as vecf8(32)), cast('[3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38]' as vecf8(32)));
+internal error: l2 distance: vector magnitude is too large, the result overflows the element domain
 select id from t order by a, id;
 ➤ id[4,32,0]  𝄀
 3  𝄀

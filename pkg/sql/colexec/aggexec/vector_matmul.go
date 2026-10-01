@@ -31,13 +31,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
-// vector_matmul(params, id, vec, queries): per group, the top `limit` dot products of
-// each query against the group's vectors, as JSON
-// [[["id", score], ...], ...] with one inner array per query. params and queries are
-// compile-time configuration; the executor receives [id, vec].
+// vector_matmul(topk, id, vec, queries [, options]): per group, the top `topk` dot
+// products of each query against the group's vectors, as JSON
+// [[["id", score], ...], ...] with one inner array per query. topk, queries and options
+// are compile-time configuration; the executor receives [id, vec].
 
 const (
-	vectorMatmulMaxLimit   = 16384
+	vectorMatmulMaxTopK    = 16384
 	vectorMatmulMaxQueries = 4096
 	vectorMatmulMaxEntries = 1 << 22
 	vectorMatmulStateV1    = 1
@@ -61,16 +61,17 @@ func VectorMatmulReturnType(_ []types.Type) types.Type {
 	return types.T_json.ToType()
 }
 
-// EncodeVectorMatmulConfig packs the params and queries JSON strings.
-func EncodeVectorMatmulConfig(params, queries string) []byte {
-	out := make([]byte, 0, 8+len(params)+len(queries))
-	out = binary.LittleEndian.AppendUint32(out, uint32(len(params)))
-	out = append(out, params...)
+// EncodeVectorMatmulConfig packs topk and the queries and options JSON strings.
+func EncodeVectorMatmulConfig(topk int64, queries, options string) []byte {
+	out := make([]byte, 0, 16+len(queries)+len(options))
+	out = binary.LittleEndian.AppendUint64(out, uint64(topk))
 	out = binary.LittleEndian.AppendUint32(out, uint32(len(queries)))
-	return append(out, queries...)
+	out = append(out, queries...)
+	out = binary.LittleEndian.AppendUint32(out, uint32(len(options)))
+	return append(out, options...)
 }
 
-func decodeVectorMatmulConfig(b []byte) (params, queries string, err error) {
+func decodeVectorMatmulConfig(b []byte) (topk int64, queries, options string, err error) {
 	read := func() (string, bool) {
 		if len(b) < 4 {
 			return "", false
@@ -83,55 +84,59 @@ func decodeVectorMatmulConfig(b []byte) (params, queries string, err error) {
 		b = b[4+n:]
 		return s, true
 	}
-	var ok1, ok2 bool
-	params, ok1 = read()
-	queries, ok2 = read()
-	if !ok1 || !ok2 || len(b) != 0 {
-		return "", "", moerr.NewInternalErrorNoCtx("vector_matmul: malformed configuration")
+	if len(b) < 8 {
+		return 0, "", "", moerr.NewInternalErrorNoCtx("vector_matmul: malformed configuration")
 	}
-	return params, queries, nil
+	topk = int64(binary.LittleEndian.Uint64(b))
+	b = b[8:]
+	var ok1, ok2 bool
+	queries, ok1 = read()
+	options, ok2 = read()
+	if !ok1 || !ok2 || len(b) != 0 {
+		return 0, "", "", moerr.NewInternalErrorNoCtx("vector_matmul: malformed configuration")
+	}
+	return topk, queries, options, nil
 }
 
-type vectorMatmulParams struct {
-	Limit     *int    `json:"limit"`
+// vectorMatmulOptions is the optional fifth argument.
+type vectorMatmulOptions struct {
 	Mode      *string `json:"mode"`
 	TileBytes *int64  `json:"tile_bytes"`
 }
 
 // vectorMatmulConfig is the parsed configuration shared by all groups.
 type vectorMatmulConfig struct {
-	limit   int
+	topk    int
 	queries []metric.VecBlockOperand
 }
 
 func parseVectorMatmulConfig(raw []byte, vecType types.Type) (*vectorMatmulConfig, error) {
-	paramsText, queriesText, err := decodeVectorMatmulConfig(raw)
+	topk, queriesText, optionsText, err := decodeVectorMatmulConfig(raw)
 	if err != nil {
 		return nil, err
 	}
-	var params vectorMatmulParams
-	dec := json.NewDecoder(bytes.NewReader([]byte(paramsText)))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&params); err != nil {
-		return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: invalid params %q: %v", paramsText, err)
+	if topk < 1 || topk > vectorMatmulMaxTopK {
+		return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: topk %d out of range [1, %d]", topk, vectorMatmulMaxTopK)
 	}
-	if params.Limit == nil {
-		return nil, moerr.NewInvalidInputNoCtx("vector_matmul: params requires \"limit\"")
-	}
-	if *params.Limit < 1 || *params.Limit > vectorMatmulMaxLimit {
-		return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: limit %d out of range [1, %d]", *params.Limit, vectorMatmulMaxLimit)
-	}
-	if params.Mode != nil {
-		switch *params.Mode {
-		case "auto", "cpu":
-		case "gpu":
-			return nil, moerr.NewNotSupportedNoCtx("vector_matmul: gpu mode in this build")
-		default:
-			return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: invalid mode %q", *params.Mode)
+	if optionsText != "" {
+		var options vectorMatmulOptions
+		dec := json.NewDecoder(bytes.NewReader([]byte(optionsText)))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&options); err != nil {
+			return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: invalid options %q: %v", optionsText, err)
 		}
-	}
-	if params.TileBytes != nil && *params.TileBytes < 0 {
-		return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: invalid tile_bytes %d", *params.TileBytes)
+		if options.Mode != nil {
+			switch *options.Mode {
+			case "auto", "cpu":
+			case "gpu":
+				return nil, moerr.NewNotSupportedNoCtx("vector_matmul: gpu mode in this build")
+			default:
+				return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: invalid mode %q", *options.Mode)
+			}
+		}
+		if options.TileBytes != nil && *options.TileBytes < 0 {
+			return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: invalid tile_bytes %d", *options.TileBytes)
+		}
 	}
 
 	format, ok := vecType.Oid.BlockScaledFormat()
@@ -145,10 +150,10 @@ func parseVectorMatmulConfig(raw []byte, vecType types.Type) (*vectorMatmulConfi
 	if len(queries) == 0 || len(queries) > vectorMatmulMaxQueries {
 		return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: query count %d out of range [1, %d]", len(queries), vectorMatmulMaxQueries)
 	}
-	if len(queries)*(*params.Limit) > vectorMatmulMaxEntries {
-		return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: queries x limit exceeds %d", vectorMatmulMaxEntries)
+	if len(queries)*int(topk) > vectorMatmulMaxEntries {
+		return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: queries x topk exceeds %d", vectorMatmulMaxEntries)
 	}
-	cfg := &vectorMatmulConfig{limit: *params.Limit, queries: make([]metric.VecBlockOperand, len(queries))}
+	cfg := &vectorMatmulConfig{topk: int(topk), queries: make([]metric.VecBlockOperand, len(queries))}
 	for i, q := range queries {
 		if len(q) != int(vecType.Width) {
 			return nil, moerr.NewArrayInvalidOpNoCtx(int(vecType.Width), len(q))
@@ -476,7 +481,7 @@ func (s *vectorMatmulState) UnmarshalFromReader(r io.Reader) error {
 	}
 	q, k := int(binary.LittleEndian.Uint32(buf[1:])), int(binary.LittleEndian.Uint32(buf[5:]))
 	if q != s.q || k != s.k {
-		if q > vectorMatmulMaxQueries || k > vectorMatmulMaxLimit || q*k > vectorMatmulMaxEntries {
+		if q > vectorMatmulMaxQueries || k > vectorMatmulMaxTopK || q*k > vectorMatmulMaxEntries {
 			return moerr.NewInternalErrorNoCtx("vector_matmul: malformed state")
 		}
 		mp, allocation := s.mp, s.allocation
@@ -536,6 +541,9 @@ func (s *vectorMatmulState) appendJSON(out []byte) ([]byte, error) {
 			id, err := json.Marshal(string(s.id(e)))
 			if err != nil {
 				return nil, err
+			}
+			if math.IsInf(e.score, 0) || math.IsNaN(e.score) {
+				return nil, moerr.NewInvalidInputNoCtx("vector_matmul: dot product overflows the float32 domain")
 			}
 			out = append(out, '[')
 			out = append(out, id...)
@@ -626,7 +634,7 @@ func makeVectorMatmul(mp *mpool.MPool, id int64, isDistinct bool, params []types
 func (exec *vectorMatmulExec) emptyState() *vectorMatmulState {
 	empty := &vectorMatmulState{}
 	if exec.cfg != nil {
-		empty.q, empty.k = len(exec.cfg.queries), exec.cfg.limit
+		empty.q, empty.k = len(exec.cfg.queries), exec.cfg.topk
 		empty.counts = make([]uint32, empty.q)
 	}
 	return empty
@@ -636,7 +644,7 @@ func (exec *vectorMatmulExec) newState(mp *mpool.MPool, allocation *AllocationAc
 	if exec.cfg == nil {
 		return nil, moerr.NewInternalErrorNoCtx("vector_matmul: configuration is not set")
 	}
-	return newVectorMatmulState(mp, allocation, len(exec.cfg.queries), exec.cfg.limit)
+	return newVectorMatmulState(mp, allocation, len(exec.cfg.queries), exec.cfg.topk)
 }
 
 func (exec *vectorMatmulExec) SetExtraInformation(partialResult any, _ int) error {
@@ -704,11 +712,12 @@ func (exec *vectorMatmulExec) fillRow(group uint64, row int, vectors []*vector.V
 	}
 	exec.row.Cell = cell
 	for j := range exec.cfg.queries {
-		dot, err := metric.VecBlockDot(&exec.row, &exec.cfg.queries[j])
+		// the inner product distance is -dot; an overflow NaN is +Inf, which ranks last
+		dist, err := metric.VecBlockInnerProduct(&exec.row, &exec.cfg.queries[j])
 		if err != nil {
 			return err
 		}
-		exec.scores[j] = float64(float32(dot))
+		exec.scores[j] = float64(float32(-dist))
 	}
 	s, err := exec.stateAt(group)
 	if err != nil {
