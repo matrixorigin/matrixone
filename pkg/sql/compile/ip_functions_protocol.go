@@ -34,7 +34,7 @@ func (c *Compile) constrainIPFunctionWorkers(qry *plan.Query) error {
 	features, err := plan.RequiredRemoteExpressionFeatures(qry)
 	if err != nil || (!features.IPFunctionSemantics &&
 		!features.TOBase64ResultContracts && !features.IPFunctionResultContracts &&
-		!features.ExpressionResultMetadataContracts && !features.JSONInputContracts && !features.YearBitCast) {
+		!features.ExpressionResultMetadataContracts && !features.JSONInputContracts && !features.YearBitCast && !features.JSONScalarLiteralContracts) {
 		return err
 	}
 	required := requiredExpressionContractProtocolVersion(features)
@@ -79,6 +79,9 @@ func validateIPFunctionDestination(proc *process.Process, p *pipeline.Pipeline) 
 }
 
 func requiredExpressionContractProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
+	if features.JSONScalarLiteralContracts {
+		return defines.MORPCVersion104
+	}
 	if features.JSONInputContracts || features.YearBitCast {
 		return defines.MORPCVersion101
 	}
