@@ -45,10 +45,18 @@ create table persisted_overflow(v bigint primary key);
 -- A matching PK row must not hide another row's arithmetic overflow.
 insert into persisted_overflow values (3),(9223372036854775807);
 select v from persisted_overflow where v+2=5;
+-- @regex("data out of range: data type int64, ROUND",true)
+select v from persisted_overflow where round(v,-1)=100;
 -- @ignore:0
 select mo_ctl('dn','flush','arithmetic_predicate_semantics.persisted_overflow');
 set optimizer_hints='blockFilter=1';
 select v from persisted_overflow where v+2=5;
+-- @regex("data out of range: data type int64, ROUND",true)
+select v from persisted_overflow where round(v,-1)=100;
+set optimizer_hints='blockFilter=2';
+-- @regex("data out of range: data type int64, ROUND",true)
+select v from persisted_overflow where round(v,-1)=100;
+set optimizer_hints='blockFilter=1';
 select v from persisted_overflow where v+v=v;
 select v from persisted_overflow where v*v=v;
 select v from persisted_overflow where v-v=v;
@@ -73,6 +81,18 @@ select mo_ctl('dn','flush','arithmetic_predicate_semantics.scaled_product');
 select v from scaled_product where round(v*cast('0.00000001' as decimal(16,8)),8)=0.00000001;
 -- @regex("Analyze:",true)
 explain (analyze true, check '["outputRows=1", "Block Filter Cond"]') select v from scaled_product where round(v*cast('0.00000001' as decimal(16,8)),8)=0.00000001;
+-- Independent column bounds contain an overflowing ROUND endpoint absent
+-- from either actual row. Losing this proof must keep the matching row.
+create table correlated(v bigint,w bigint);
+insert into correlated values(9223372036854775707,0),(0,100);
+select w from correlated where round(v+w,-1)=100;
+-- @ignore:0
+select mo_ctl('dn','flush','arithmetic_predicate_semantics.correlated');
+select w from correlated where round(v+w,-1)=100;
+-- @regex("Analyze:",true)
+explain (analyze true, check '["outputRows=1", "Block Filter Cond"]') select w from correlated where round(v+w,-1)=100;
+set optimizer_hints='blockFilter=2';
+select w from correlated where round(v+w,-1)=100;
 -- @session}
 set optimizer_hints=@saved_transpose_hints;
 drop database arithmetic_predicate_semantics;

@@ -101,12 +101,23 @@ create table persisted_overflow(v bigint primary key);
 insert into persisted_overflow values (3),(9223372036854775807);
 select v from persisted_overflow where v+2=5;
 Data truncation: data out of range: data type int64, (9223372036854775807 + 2)
+select v from persisted_overflow where round(v,-1)=100;
+-- @regex("data out of range: data type int64, ROUND", true)
+Data truncation: data out of range: data type int64, ROUND
 select mo_ctl('dn','flush','arithmetic_predicate_semantics.persisted_overflow');
 mo_ctl(dn, flush, arithmetic_predicate_semantics.persisted_overflow)
 ignored
 set optimizer_hints='blockFilter=1';
 select v from persisted_overflow where v+2=5;
 Data truncation: data out of range: data type int64, (9223372036854775807 + 2)
+select v from persisted_overflow where round(v,-1)=100;
+-- @regex("data out of range: data type int64, ROUND", true)
+Data truncation: data out of range: data type int64, ROUND
+set optimizer_hints='blockFilter=2';
+select v from persisted_overflow where round(v,-1)=100;
+-- @regex("data out of range: data type int64, ROUND", true)
+Data truncation: data out of range: data type int64, ROUND
+set optimizer_hints='blockFilter=1';
 select v from persisted_overflow where v+v=v;
 Data truncation: data out of range: data type int64, (9223372036854775807 + 9223372036854775807)
 select v from persisted_overflow where v*v=v;
@@ -158,5 +169,29 @@ Project  𝄀
         Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=43 bytes|0 bytes|0 bytes MemorySize=17 bytes (min=17 bytes, max=17 bytes)  𝄀
         Filter Cond: (round((scaled_product.v * 0.00000001), 8) = 0.00000001)  𝄀
         Block Filter Cond: (round((scaled_product.v * 0.00000001), 8) = 0.00000001)
+create table correlated(v bigint,w bigint);
+insert into correlated values(9223372036854775707,0),(0,100);
+select w from correlated where round(v+w,-1)=100;
+w
+100
+select mo_ctl('dn','flush','arithmetic_predicate_semantics.correlated');
+mo_ctl(dn, flush, arithmetic_predicate_semantics.correlated)
+ignored
+select w from correlated where round(v+w,-1)=100;
+w
+100
+explain (analyze true, check '["outputRows=1", "Block Filter Cond"]') select w from correlated where round(v+w,-1)=100;
+-- @regex("Analyze:", true)
+tp query plan  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Table Scan on arithmetic_predicate_semantics.correlated  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=2 outputRows=1 (min=1, max=1) InputSize=32 bytes OutputSize=8 bytes ReadSize=104 bytes|0 bytes|0 bytes MemorySize=42 bytes (min=42 bytes, max=42 bytes)  𝄀
+        Filter Cond: (round((correlated.v + correlated.w), -1) = 100)  𝄀
+        Block Filter Cond: (round((correlated.v + correlated.w), -1) = 100)
+set optimizer_hints='blockFilter=2';
+select w from correlated where round(v+w,-1)=100;
+w
+100
 set optimizer_hints=@saved_transpose_hints;
 drop database arithmetic_predicate_semantics;

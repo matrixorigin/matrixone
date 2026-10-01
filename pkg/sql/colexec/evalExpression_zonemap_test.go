@@ -868,3 +868,68 @@ func TestEvaluateFilterByZoneMapVaryingDenominator(t *testing.T) {
 		require.Equal(t, tc.selected, colexec.EvaluateFilterByZoneMap(proc.Ctx, proc, predicate, meta, map[int]int{0: 0}, zms, vecs))
 	}
 }
+
+func TestEvaluateFilterByZoneMapScalarOverflowCleanup(t *testing.T) {
+	for _, typeID := range []types.T{types.T_int64, types.T_uint64} {
+		t.Run(typeID.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			col := func(pos int32) *plan.Expr {
+				return &plan.Expr{Typ: plan.Type{Id: int32(typeID)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: pos}}}
+			}
+			sum, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "+", []*plan.Expr{col(0), col(1)})
+			require.NoError(t, err)
+			digits := int64(-1)
+			precision := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{IsConst: true, Data: types.EncodeInt64(&digits)}}}
+			rounded, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "round", []*plan.Expr{sum, precision})
+			require.NoError(t, err)
+			target := plan2.MakePlan2Int64ConstExprWithType(100)
+			upper := uint64(math.MaxInt64)
+			if typeID == types.T_uint64 {
+				target = plan2.MakePlan2Uint64ConstExprWithType(100)
+				upper = math.MaxUint64
+			}
+			predicate, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "=", []*plan.Expr{rounded, target})
+			require.NoError(t, err)
+			meta := objectio.BuildMetaData(1, 2).GetBlockMeta(0)
+			zms, vecs := makeZoneMapEvalScratch(predicate)
+			baseline := proc.Mp().CurrNB()
+			for _, tc := range []struct {
+				vmin, vmax, wmin, wmax uint64
+				selected               bool
+				unknown                bool
+			}{
+				{1, 2, 1, 2, false, false},
+				{0, upper - 100, 0, 100, true, true}, // Independent endpoints overflow ROUND; actual correlated rows do not.
+				{1, 2, 1, 2, false, false},           // Reuse the same scratch after losing the proof.
+				{90, 100, 0, 0, true, false},
+				{0, upper - 110, 0, 100, true, false}, // Nearby endpoint remains within the ROUND domain.
+			} {
+				for i, bounds := range [][2]uint64{{tc.vmin, tc.vmax}, {tc.wmin, tc.wmax}} {
+					zm := index.NewZM(typeID, 0)
+					index.UpdateZM(zm, types.EncodeUint64(&bounds[0]))
+					index.UpdateZM(zm, types.EncodeUint64(&bounds[1]))
+					meta.MustGetColumn(uint16(i)).SetZoneMap(zm)
+				}
+				var selected bool
+				var panicked any
+				func() {
+					defer func() { panicked = recover() }()
+					selected = colexec.EvaluateFilterByZoneMap(proc.Ctx, proc, predicate, meta, map[int]int{0: 0, 1: 1}, zms, vecs)
+				}()
+				for i, vec := range vecs {
+					if vec != nil {
+						vec.Free(proc.Mp())
+						vecs[i] = nil
+					}
+				}
+				if panicked != nil {
+					t.Errorf("metadata scalar panic escaped: %v", panicked)
+				}
+				require.Equal(t, baseline, proc.Mp().CurrNB(), "temporary result must be released on every exit")
+				require.Equal(t, tc.selected, selected)
+				require.Equal(t, tc.unknown, !zms[rounded.AuxId].IsInited(), "only the invalid endpoint loses its proof")
+			}
+		})
+	}
+}

@@ -3011,34 +3011,9 @@ func GetExprZoneMap(
 					types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset),
 				)
 
-				result := vector.NewFunctionResultWrapper(typ, proc.Mp())
-				if err = result.PreExtendAndReset(2); err != nil {
-					zms[expr.AuxId].Reset()
-					result.Free()
-					if fnFree != nil {
-						// NOTE: fnFree is only applicable for serial and serial_full.
-						// if fnFree is not nil, then make sure to call it after fn() is done.
-						_ = fnFree()
-					}
-					return zms[expr.AuxId]
-				}
-				if err = fn(ivecs, result, proc, 2, nil); err != nil {
-					zms[expr.AuxId].Reset()
-					result.Free()
-					if fnFree != nil {
-						// NOTE: fnFree is only applicable for serial and serial_full.
-						// if fnFree is not nil, then make sure to call it after fn() is done.
-						_ = fnFree()
-					}
-					return zms[expr.AuxId]
-				}
-				if fnFree != nil {
-					// NOTE: fnFree is only applicable for serial and serial_full.
-					// if fnFree is not nil, then make sure to call it after fn() is done.
-					_ = fnFree()
-				}
-				zms[expr.AuxId] = index.VectorToZM(result.GetResultVector(), zms[expr.AuxId])
-				result.Free()
+				zms[expr.AuxId] = evaluateZoneMapFunction(proc, typ, zms[expr.AuxId], func(result vector.FunctionResultWrapper) error {
+					return fn(ivecs, result, proc, 2, nil)
+				}, fnFree)
 			}
 		}
 
@@ -3047,6 +3022,38 @@ func GetExprZoneMap(
 	}
 
 	return zms[expr.AuxId]
+}
+
+// evaluateZoneMapFunction owns the temporary scalar result, not its arguments.
+// Synthetic endpoints can fail even when every actual row is valid.
+func evaluateZoneMapFunction(proc *process.Process, typ types.Type, zm objectio.ZoneMap,
+	eval func(vector.FunctionResultWrapper) error, fnFree func() error) objectio.ZoneMap {
+	if fnFree != nil {
+		defer func() { _ = fnFree() }()
+	}
+	result := vector.NewFunctionResultWrapper(typ, proc.Mp())
+	defer result.Free()
+	if err := result.PreExtendAndReset(2); err != nil {
+		zm.Reset()
+		return zm
+	}
+	err := func() (err error) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				if arithmeticErr, ok := recovered.(*moerr.Error); ok && arithmeticErr != nil && arithmeticErr.ErrorCode() == moerr.ErrOutOfRange {
+					err = arithmeticErr
+				} else {
+					panic(recovered)
+				}
+			}
+		}()
+		return eval(result)
+	}()
+	if err != nil {
+		zm.Reset()
+		return zm
+	}
+	return index.VectorToZM(result.GetResultVector(), zm)
 }
 
 func hasConstNullArg(args []*plan.Expr) bool {
