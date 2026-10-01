@@ -28,6 +28,7 @@ import (
 	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/overfetch"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 )
 
 type ivfIndexContext struct {
@@ -41,7 +42,7 @@ type ivfIndexContext struct {
 	partType        plan.Type
 	pkPos           int32
 	pkType          plan.Type
-	params          string
+	lossyEntries    bool
 	nThread         int64
 	nProbe          int64
 	totalLists      int64
@@ -573,6 +574,10 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 	pkPos := vecCtx.scanNode.TableDef.Name2ColIndex[vecCtx.scanNode.TableDef.Pkey.PkeyColName]
 	pkType := vecCtx.scanNode.TableDef.Cols[pkPos].Typ
 	partType := vecCtx.scanNode.TableDef.Cols[partPos].Typ
+	quantization, _ := vectorIndexStringParam(params, catalog.Quantization)
+	entryType, quantized := quantizer.ToVectorType(quantization)
+	lossyEntries := quantized && (entryType != types.T(partType.Id) ||
+		entryType == types.T_array_int8 || entryType == types.T_array_uint8)
 
 	return &ivfIndexContext{
 		vecCtx:          vecCtx,
@@ -585,7 +590,7 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 		partType:        partType,
 		pkPos:           pkPos,
 		pkType:          pkType,
-		params:          idxDef.IndexAlgoParams,
+		lossyEntries:    lossyEntries,
 		nThread:         nThread.(int64),
 		nProbe:          nProbe,
 		totalLists:      totalLists,
@@ -663,7 +668,14 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflatWithContext(
 		}
 	}
 
-	newFilterList, distRange := builder.getDistRangeFromFilters(scanNode.FilterList, ivfCtx.partPos, ivfCtx.origFuncName, ivfCtx.vecLitArg)
+	// Lossy entries can round or clip distinct source distances to the same
+	// score. Keep their distance predicates on the source scan; encoded scores
+	// still order bounded ANN candidates, but cannot decide exact SQL predicates.
+	newFilterList := scanNode.FilterList
+	var distRange *plan.DistRange
+	if !ivfCtx.lossyEntries {
+		newFilterList, distRange = builder.getDistRangeFromFilters(newFilterList, ivfCtx.partPos, ivfCtx.origFuncName, ivfCtx.vecLitArg)
+	}
 	includeColumns, err := getVectorIndexIncludedColumns(multiTableIndex)
 	if err != nil {
 		return 0, err
@@ -921,21 +933,14 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflatWithContext(
 		}
 
 		if builder.canApplyRegularIndex(secondScanNode) {
-			// Remove filters that reference the vector column (e.g. "embedding IS NOT NULL").
-			// The copied second scan only needs to produce PKs for the inner BloomFilter join;
-			// the original outer scan still keeps the full filter list as the safety net.
-			partPos := ivfCtx.partPos
-			var cleanedFilters []*plan.Expr
-			for _, expr := range secondScanNode.FilterList {
-				if refsColumn(expr, newTag, partPos) {
-					continue
-				}
-				cleanedFilters = append(cleanedFilters, expr)
+			// Membership is enforced before candidate Top-K. Only predicates implied
+			// by synchronous IVF candidates may be removed from its producer.
+			if !asyncIndex {
+				secondScanNode.FilterList, _ = removeIvfCandidateImpliedNotNullFilter(
+					secondScanNode.FilterList, newTag, ivfCtx.partPos)
 			}
-			secondScanNode.FilterList = cleanedFilters
 
-			// Build a minimal colRefCnt for the copied scan so index-only planning is still
-			// possible after removing vector-column-only filters.
+			// Retained predicates must participate in column-use accounting.
 			secondColRefCnt := make(map[[2]int32]int)
 			secondColRefCnt[[2]int32{newTag, ivfCtx.pkPos}] = 1
 			for _, expr := range secondScanNode.FilterList {
@@ -1673,31 +1678,6 @@ func extractColRefs(expr *plan.Expr, tag int32, colRefCnt map[[2]int32]int) {
 			extractColRefs(sub, tag, colRefCnt)
 		}
 	}
-}
-
-func refsColumn(expr *plan.Expr, tag int32, colPos int32) bool {
-	if expr == nil {
-		return false
-	}
-	switch impl := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		return impl.Col.RelPos == tag && impl.Col.ColPos == colPos
-	case *plan.Expr_F:
-		for _, arg := range impl.F.Args {
-			if refsColumn(arg, tag, colPos) {
-				return true
-			}
-		}
-	case *plan.Expr_Sub:
-		return false
-	case *plan.Expr_List:
-		for _, sub := range impl.List.List {
-			if refsColumn(sub, tag, colPos) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // -----------------------------------------------------------------------------

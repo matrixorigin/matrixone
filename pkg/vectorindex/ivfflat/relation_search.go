@@ -223,6 +223,25 @@ func (idx *IvfflatSearchIndex[T]) scanEntriesInDomain(
 				return moerr.NewInternalErrorNoCtxf(
 					"ivfflat storage Top-K returned %d vectors, expected %d", len(bat.Vecs), len(columns)+1)
 			}
+			var loadedColumns []int
+			if storageDistance && bat.RowCount() != 0 {
+				// Storage Top-K may omit the embedding after scoring. Only that
+				// slot may be empty; scalar and distance columns must stay aligned.
+				if bat.Vecs[3].Length() == 0 {
+					loadedColumns = make([]int, 0, len(bat.Vecs)-1)
+				}
+				for pos, vec := range bat.Vecs {
+					if pos == 3 && loadedColumns != nil {
+						continue
+					}
+					if vec.Length() != bat.RowCount() {
+						return moerr.NewInternalErrorNoCtxf("ivfflat storage Top-K column %d has %d rows, expected %d", pos, vec.Length(), bat.RowCount())
+					}
+					if loadedColumns != nil {
+						loadedColumns = append(loadedColumns, pos)
+					}
+				}
+			}
 			if !storageDistance {
 				if transformErr := appendEntryDistances(sqlproc, &batchResult, queryBytes, queryType,
 					metric.MetricTypeToDistFuncName[metricType]); transformErr != nil {
@@ -230,7 +249,7 @@ func (idx *IvfflatSearchIndex[T]) scanEntriesInDomain(
 				}
 			}
 			if transformErr := idx.filterEntryDistanceRange(&batchResult, sqlproc.IndexReaderParam.GetDistRange(),
-				tblcfg.OrigFuncName, metricType); transformErr != nil {
+				tblcfg.OrigFuncName, metricType, loadedColumns); transformErr != nil {
 				return transformErr
 			}
 			// Distance and exact filters have consumed the high-width entry vector.
@@ -531,6 +550,7 @@ func (idx *IvfflatSearchIndex[T]) filterEntryDistanceRange(
 	distRange *plan.DistRange,
 	origFuncName string,
 	metricType metric.MetricType,
+	loadedColumns []int,
 ) error {
 	if distRange == nil || res == nil {
 		return nil
@@ -581,13 +601,7 @@ func (idx *IvfflatSearchIndex[T]) filterEntryDistanceRange(
 				sels = append(sels, int64(row))
 			}
 		}
-		switch {
-		case len(sels) == bat.RowCount():
-		case len(sels) == 0:
-			bat.CleanOnlyData()
-		default:
-			bat.Shrink(sels, false)
-		}
+		selectRelationBatchRows(bat, sels, loadedColumns)
 	}
 	return nil
 }
