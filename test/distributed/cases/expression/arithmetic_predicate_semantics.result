@@ -1,0 +1,116 @@
+drop database if exists arithmetic_predicate_semantics;
+create database arithmetic_predicate_semantics;
+use arithmetic_predicate_semantics;
+set @saved_transpose_hints=@@optimizer_hints;
+create table fp(id int primary key, v double);
+insert into fp values (1,-1e-17),(2,0),(3,1e-17),(4,null),(5,2);
+select id,v+1e0=1e0 as p from fp order by id;
+id	p
+1	1
+2	1
+3	1
+4	null
+5	0
+select id from fp where v+1e0=1e0 order by id;
+id
+1
+2
+3
+select id from fp where v-1e0=-1e0 order by id;
+id
+1
+2
+3
+select id from fp where 1e0-v=1e0 order by id;
+id
+1
+2
+3
+select id from fp where 1e0=v+1e0 order by id;
+id
+1
+2
+3
+select id from fp where v+1e0=1e0 or v is null order by id;
+id
+1
+2
+3
+4
+select id from fp where id>=2 and v+1e0=1e0 order by id;
+id
+2
+3
+prepare fp_predicate from 'select id from fp where v+cast(? as double)=cast(? as double) order by id';
+set @one=1e0;
+execute fp_predicate using @one,@one;
+id
+1
+2
+3
+set @one=0;
+execute fp_predicate using @one,@one;
+id
+2
+set @one=null;
+execute fp_predicate using @one,@one;
+id
+set @one=1e0;
+execute fp_predicate using @one,@one;
+id
+1
+2
+3
+deallocate prepare fp_predicate;
+select mo_ctl('dn','flush','arithmetic_predicate_semantics.fp');
+mo_ctl(dn, flush, arithmetic_predicate_semantics.fp)
+ignored
+set optimizer_hints='blockFilter=1';
+select id from fp where v+1e0=1e0 order by id;
+id
+1
+2
+3
+select id from fp where v-1e0=-1e0 order by id;
+id
+1
+2
+3
+select id from fp where 1e0<=v order by id;
+id
+5
+create table ov(v bigint);
+insert into ov values (9223372036854775807);
+select v from ov where v+1=9223372036854775807;
+Data truncation: data out of range: data type int64, (9223372036854775807 + 1)
+select mo_ctl('dn','flush','arithmetic_predicate_semantics.ov');
+mo_ctl(dn, flush, arithmetic_predicate_semantics.ov)
+ignored
+select v from ov where v+1=9223372036854775807;
+Data truncation: data out of range: data type int64, (9223372036854775807 + 1)
+set optimizer_hints='blockFilter=2';
+select v from ov where v+1=9223372036854775807;
+Data truncation: data out of range: data type int64, (9223372036854775807 + 1)
+select v,v+1 from ov;
+Data truncation: data out of range: data type int64, (9223372036854775807 + 1)
+truncate table ov;
+insert into ov values (-9223372036854775808);
+select v from ov where v-1=-9223372036854775808;
+Data truncation: data out of range: data type int64, (-9223372036854775808 - 1)
+create table persisted_overflow(v bigint primary key);
+insert into persisted_overflow values (9223372036854775807);
+select mo_ctl('dn','flush','arithmetic_predicate_semantics.persisted_overflow');
+mo_ctl(dn, flush, arithmetic_predicate_semantics.persisted_overflow)
+ignored
+set optimizer_hints='blockFilter=1';
+select v from persisted_overflow where v+v=v;
+Data truncation: data out of range: data type int64, (9223372036854775807 + 9223372036854775807)
+select v from persisted_overflow where v*v=v;
+Data truncation: data out of range: data type int64, (9223372036854775807 * 9223372036854775807)
+select v from persisted_overflow where v-v=v;
+v
+select count(*) as healthy from persisted_overflow;
+healthy
+1
+set optimizer_hints=@saved_transpose_hints;
+drop database arithmetic_predicate_semantics;

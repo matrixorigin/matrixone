@@ -16,6 +16,7 @@ package colexec_test
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -717,4 +718,38 @@ func makeBoolAndVarcharBlockMeta(minBool, maxBool bool, values ...string) object
 func makeZoneMapEvalScratch(expr *plan.Expr) ([]objectio.ZoneMap, []*vector.Vector) {
 	need := plan2.AssignAuxIdForExpr(expr, 0)
 	return make([]objectio.ZoneMap, need), make([]*vector.Vector, need)
+}
+
+func TestEvaluateFilterByZoneMapCheckedArithmetic(t *testing.T) {
+	for _, tc := range []struct {
+		name, op string
+		value    int64
+		selected bool
+	}{
+		{"addition overflow retained", "+", math.MaxInt64, true},
+		{"multiplication overflow retained", "*", math.MaxInt64, true},
+		{"safe addition prunes", "+", 10, false},
+		{"safe subtraction prunes", "-", 10, false},
+		{"safe multiplication prunes", "*", 10, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			column := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+			arithmetic, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, tc.op, []*plan.Expr{column, column})
+			require.NoError(t, err)
+			predicate, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "=", []*plan.Expr{arithmetic, column})
+			require.NoError(t, err)
+			require.True(t, plan2.ExprIsZonemappable(proc.Ctx, predicate))
+			meta := objectio.BuildMetaData(1, 1).GetBlockMeta(0)
+			zms, vecs := makeZoneMapEvalScratch(predicate)
+			for i, value := range []int64{tc.value, 10, tc.value} {
+				zm := index.NewZM(types.T_int64, 0)
+				index.UpdateZM(zm, types.EncodeInt64(&value))
+				meta.MustGetColumn(0).SetZoneMap(zm)
+				selected := tc.selected && i != 1
+				require.Equal(t, selected, colexec.EvaluateFilterByZoneMap(proc.Ctx, proc, predicate, meta, map[int]int{0: 0}, zms, vecs), "scratch must not retain previous block's proof")
+			}
+		})
+	}
 }
