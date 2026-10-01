@@ -363,11 +363,28 @@ func (e *PipelineEdge) recordFatalTerminalLocked(signal PipelineSignal) Pipeline
 }
 
 func (e *PipelineEdge) trySendTerminal(signal PipelineSignal) bool {
-	if e == nil || e.Ch2 == nil {
-		return false
-	}
 	if !signal.EventType.IsTerminal() {
 		return e.trySend(signal)
+	}
+	_, _, delivered := e.publishTerminal(signal)
+	return delivered
+}
+
+// PublishTerminal records cleanup without depending on data-channel capacity.
+// The effective signal is the first fatal cause, or End after graceful
+// completion. ok reports durable publication, not whether a message fitted in
+// Ch2; receivers recover missing messages from this same terminal state.
+func (e *PipelineEdge) PublishTerminal(signal PipelineSignal) (effective PipelineSignal, ok bool) {
+	effective, ok, _ = e.publishTerminal(signal)
+	return
+}
+
+func (e *PipelineEdge) publishTerminal(signal PipelineSignal) (PipelineSignal, bool, bool) {
+	if e == nil || e.Ch2 == nil {
+		return PipelineSignal{}, false, false
+	}
+	if !signal.EventType.IsTerminal() {
+		return PipelineSignal{}, false, false
 	}
 	e.initTerminalState()
 
@@ -376,7 +393,10 @@ func (e *PipelineEdge) trySendTerminal(signal PipelineSignal) bool {
 
 	if signal.EventType == EventEnd {
 		if !e.canDeliverEndLocked() {
-			return false
+			if e.fatalTerminal {
+				return e.fatalSignal, true, false
+			}
+			return NewEndSignal(), true, false
 		}
 		// End is a durable edge state, not merely a best-effort channel
 		// message.  Record it even when buffered data occupies Ch2.  Once all
@@ -387,25 +407,25 @@ func (e *PipelineEdge) trySendTerminal(signal PipelineSignal) bool {
 		default:
 		}
 		e.recordEndLocked()
-		return true
+		return signal, true, true
 	}
 
 	if e.doneClosed && !e.fatalTerminal {
-		return false
+		return NewEndSignal(), true, false
 	}
 	signal = e.recordFatalTerminalLocked(signal)
 	if e.fatalDelivered >= e.fatalRemaining {
-		return false
+		return signal, true, false
 	}
 	for e.fatalDelivered < e.fatalRemaining {
 		select {
 		case e.Ch2 <- signal:
 			e.fatalDelivered++
 		default:
-			return false
+			return signal, true, false
 		}
 	}
-	return true
+	return signal, true, true
 }
 
 func (e *PipelineEdge) sendTerminalWithContext(ctx context.Context, signal PipelineSignal) bool {
@@ -418,46 +438,7 @@ func (e *PipelineEdge) sendTerminalWithContext(ctx context.Context, signal Pipel
 	if !signal.EventType.IsTerminal() {
 		return e.sendSignal(ctx, signal)
 	}
-	e.initTerminalState()
-
-	e.terminalMu.Lock()
-	defer e.terminalMu.Unlock()
-
-	if signal.EventType == EventEnd {
-		if !e.canDeliverEndLocked() {
-			return false
-		}
-		// Terminal progress must not depend on spare data-channel capacity.
-		// A non-blocking enqueue preserves the common fast path; durable state
-		// plus Done is the fallback delivery path.
-		select {
-		case e.Ch2 <- signal:
-		default:
-		}
-		e.recordEndLocked()
-		return true
-	}
-
-	if e.doneClosed && !e.fatalTerminal {
-		return false
-	}
-	signal = e.recordFatalTerminalLocked(signal)
-	if e.fatalDelivered >= e.fatalRemaining {
-		return false
-	}
-	// Fatal state is durable and wakes PipelineSignalReceiver through Done.
-	// Never make this control path wait behind the data channel it terminates;
-	// enqueue as many fatal signals as fit and let the receiver synthesize any
-	// missing remainder from the recorded state.
-	for e.fatalDelivered < e.fatalRemaining {
-		select {
-		case e.Ch2 <- signal:
-			e.fatalDelivered++
-		default:
-			return false
-		}
-	}
-	return true
+	return e.trySendTerminal(signal)
 }
 
 func (e *PipelineEdge) sendSignal(ctx context.Context, signal PipelineSignal) bool {

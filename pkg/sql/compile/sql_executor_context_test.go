@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	pbstats "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -668,4 +669,64 @@ func TestCompilerContextResolveVariableDelegatesToAttachedSession(t *testing.T) 
 	declared, err = selfAttached.ResolveVariableType("fraction", false, false)
 	require.NoError(t, err)
 	require.Equal(t, plan.Type{}, declared)
+}
+
+func TestInternalCompilerStatsCacheObservations(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProcess(t)
+	op := mock_frontend.NewMockTxnOperator(ctrl)
+	proc.Base.TxnOperator = op
+	readonly := true
+	ws := mock_frontend.NewMockWorkspace(ctrl)
+	ws.EXPECT().Readonly().DoAndReturn(func() bool { return readonly }).AnyTimes()
+	op.EXPECT().GetWorkspace().Return(ws).AnyTimes()
+	op.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	eng := mock_frontend.NewMockEngine(ctrl)
+	db := mock_frontend.NewMockDatabase(ctrl)
+	rel := mock_frontend.NewMockRelation(ctrl)
+	eng.EXPECT().Database(gomock.Any(), "d", op).Return(db, nil).AnyTimes()
+	db.EXPECT().Relation(gomock.Any(), "t", nil).Return(rel, nil).AnyTimes()
+	current := &pbstats.StatsInfo{TableName: "t", TableCnt: 5, NdvMap: map[string]float64{"v": 5}}
+	observed := current
+	calls := 0
+	rel.EXPECT().Stats(gomock.Any(), true).DoAndReturn(func(context.Context, bool) (*pbstats.StatsInfo, error) {
+		calls++
+		return observed, nil
+	}).AnyTimes()
+	ctx := &compilerContext{ctx: context.Background(), proc: proc, engine: eng, statsCache: plan.NewStatsCache()}
+	obj := &plan.ObjectRef{Obj: 42, SchemaName: "d", ObjName: "t"}
+	tableDef := &plan.TableDef{Version: 7}
+	got, err := ctx.StatsWithTableDef(obj, tableDef, nil)
+	require.NoError(t, err)
+	require.Same(t, current, got)
+	_, err = ctx.StatsWithTableDef(obj, tableDef, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, calls, "completed readonly observation is reused")
+	snapshot := &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 1}}
+	for _, count := range []float64{2, 0} {
+		observed = &pbstats.StatsInfo{TableName: "t", TableCnt: count, NdvMap: map[string]float64{"v": count}}
+		got, err = ctx.StatsWithTableDef(obj, tableDef, snapshot)
+		require.NoError(t, err)
+		require.Same(t, observed, got)
+		wrapper := ctx.GetStatsCache().Get(42)
+		require.Equal(t, observed.NdvMap, wrapper.GetStats().NdvMap)
+		require.Empty(t, wrapper.GetStats().TableName)
+		require.Equal(t, "t", observed.TableName)
+		observed = current
+		before := calls
+		got, err = ctx.StatsWithTableDef(obj, tableDef, nil)
+		require.NoError(t, err)
+		require.Same(t, current, got)
+		require.Equal(t, before+1, calls, "historical maps cannot serve the current fast cache")
+	}
+	readonly = false
+	observed = &pbstats.StatsInfo{TableCnt: 10, AccurateObjectNumber: 1}
+	got, err = ctx.StatsWithTableDef(obj, tableDef, nil)
+	require.NoError(t, err)
+	require.Same(t, observed, got)
+	readonly = true
+	before := calls
+	_, err = ctx.StatsWithTableDef(obj, tableDef, nil)
+	require.NoError(t, err)
+	require.Equal(t, before+1, calls, "anonymous overlays cannot retain the 3s fast hit")
 }

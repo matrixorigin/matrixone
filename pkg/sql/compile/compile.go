@@ -1450,37 +1450,7 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	if err = c.constrainRequiredIVFWorkers(qry); err != nil {
 		return nil, err
 	}
-	if err = c.constrainIntegerDomainWorkers(qry); err != nil {
-		return nil, err
-	}
-	if err = c.constrainConvBasesWorkers(qry); err != nil {
-		return nil, err
-	}
-	if err = c.constrainIntegerArgumentWorkers(qry); err != nil {
-		return nil, err
-	}
-	if err = c.constrainPreparedPrecisionWorkers(qry); err != nil {
-		return nil, err
-	}
-	if err = c.constrainDecimalDivisionWorkers(qry); err != nil {
-		return nil, err
-	}
-	if err = c.constrainTemporalResultWorkers(qry); err != nil {
-		return nil, err
-	}
-	if err = c.constrainIPFunctionWorkers(qry); err != nil {
-		return nil, err
-	}
-	if err = c.constrainStringNumericResultWorkers(qry); err != nil {
-		return nil, err
-	}
-	if err = c.constrainBoundedConditionalStringWorkers(qry); err != nil {
-		return nil, err
-	}
-	if err = c.constrainSpatialDistanceWorkers(qry); err != nil {
-		return nil, err
-	}
-	if err = c.constrainDecimalLiteralWorkers(qry); err != nil {
+	if err = c.constrainRemoteExpressionWorkers(qry); err != nil {
 		return nil, err
 	}
 	if err = c.constrainStrictWriteWorkers(); err != nil {
@@ -6351,8 +6321,11 @@ func (c *Compile) compileTpMinusAndIntersect(node *plan.Node, left []*Scope, rig
 }
 
 func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
-	if nodeType == plan.Node_MINUS_ALL {
-		// Multiplicity subtraction needs one owner of every occurrence from both
+	if c.IsSingleScope(left) && c.IsSingleScope(right) {
+		return c.compileTpMinusAndIntersect(node, left, right, nodeType)
+	}
+	if nodeType == plan.Node_MINUS_ALL || nodeType == plan.Node_INTERSECT_ALL {
+		// Multiset operations need one owner of every occurrence from both
 		// inputs. The existing parallel set-op path broadcasts rows to workers;
 		// using it here would multiply the result cardinality.
 		return c.compileTpMinusAndIntersect(
@@ -6361,9 +6334,6 @@ func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right
 			[]*Scope{c.newMergeScope(right)},
 			nodeType,
 		)
-	}
-	if c.IsSingleScope(left) && c.IsSingleScope(right) {
-		return c.compileTpMinusAndIntersect(node, left, right, nodeType)
 	}
 	rs := c.newScopeListOnSingleWorkerStage(2, int(node.Stats.Dop))
 	rs = c.newScopeListForMinusAndIntersect(rs, left, right, node)
@@ -6393,23 +6363,8 @@ func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right
 			rs[i].setRootOperator(arg)
 			arg.AppendChild(merge1)
 		}
-	case plan.Node_INTERSECT_ALL:
-		for i := range rs {
-			merge0 := rs[i].RootOp.(*merge.Merge)
-			merge0.WithPartial(0, 1)
-			merge1 := merge.NewArgument().WithPartial(1, 2)
-			arg := intersectall.NewArgument()
-			arg.KeyExprs = node.PhysicalEqualityKeyList
-			arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-			rs[i].setRootOperator(arg)
-			arg.AppendChild(merge1)
-		}
 	}
-	if nodeType != plan.Node_INTERSECT_ALL {
-		return c.mergeDistinctSetScopes(node, rs, currentFirstFlag)
-	}
-	c.anal.isFirst = false
-	return rs
+	return c.mergeDistinctSetScopes(node, rs, currentFirstFlag)
 }
 
 func (c *Compile) compileAdaptiveTop(node *plan.Node, candidates [][]*Scope) []*Scope {
@@ -8972,7 +8927,7 @@ func (c *Compile) appendPrescopes(parents, children []*Scope, stageNodes engine.
 func (c *Compile) compilePreInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
-		preInsertArg, err := constructPreInsert(nodes, node, c.e, c.proc)
+		preInsertArg, err := constructPreInsert(c.anal.qry.Nodes, node, c.e, c.proc)
 		if err != nil {
 			return nil, err
 		}

@@ -20,8 +20,46 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDisableMemoryUnsafeRightDedupHonorsQueryLimit(t *testing.T) {
+	const combinedMapBytes = 64*1024 + 128*1024
+	for _, tc := range []struct {
+		name         string
+		spill, limit int64
+		wantRight    bool
+	}{
+		{"auto query cap", 0, combinedMapBytes - 1, false},
+		{"row threshold does not override query cap", 3000, combinedMapBytes - 1, false},
+		{"byte threshold does not override query cap", 1 << 30, combinedMapBytes - 1, false},
+		{"cells consume query cap", 1 << 30, combinedMapBytes, false},
+		{"exact map allowance", 1 << 30, 2 * combinedMapBytes, true},
+		{"larger query cap", 1 << 30, 2*combinedMapBytes + 1, true},
+		{"no narrower query cap", 1 << 30, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			builder, joins := makeChainedRightDedupBuilder(tc.spill)
+			proc := &process.Process{Base: &process.BaseProcess{Lim: process.Limitation{Size: tc.limit}}}
+			builder.compCtx = &MockCompilerContext{GetProcessFunc: func() *process.Process { return proc }}
+			builder.disableMemoryUnsafeRightDedup(4)
+			require.Equal(t, tc.wantRight, joins[0].IsRightJoin)
+			require.Equal(t, tc.wantRight, joins[1].IsRightJoin)
+		})
+	}
+}
+
+func TestDisableMemoryUnsafeRightDedupSharesQueryLimitWithLookupOnlyMap(t *testing.T) {
+	builder, joins := makeChainedRightDedupBuilder(1 << 30)
+	proc := &process.Process{Base: &process.BaseProcess{Lim: process.Limitation{Size: 300 * 1024}}}
+	builder.compCtx = &MockCompilerContext{GetProcessFunc: func() *process.Process { return proc }}
+	joins[0].DedupInputKeysUnique = true
+	builder.qry.Nodes[1].Stats = &planpb.Stats{Outcnt: 1100}
+	builder.disableMemoryUnsafeRightDedup(4)
+	require.True(t, joins[0].IsRightJoin, "the safe lookup-only map remains resident")
+	require.False(t, joins[1].IsRightJoin, "ordinary maps must share the query cap with it")
+}
 
 func TestDisableMemoryUnsafeRightDedupUsesCombinedMapSize(t *testing.T) {
 	const combinedMapBytes = 64*1024 + 128*1024

@@ -51,7 +51,7 @@ func TestDecimalDivisionProtocolPlacementSendAndReceive(t *testing.T) {
 		client.version = version
 		c.execType = plan2.ExecTypeAP_MULTICN
 		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-		require.NoError(t, c.constrainDecimalDivisionWorkers(qry))
+		require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 	}
 	place(defines.MORPCVersion96)
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
@@ -88,6 +88,6 @@ func TestDecimalDivisionProtocolUnknownWorkerFallsBack(t *testing.T) {
 	qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{decimalDivisionProtocolExpr(types.T_decimal128)}}}, Steps: []int32{0}}
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-	require.NoError(t, c.constrainDecimalDivisionWorkers(qry))
+	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 }

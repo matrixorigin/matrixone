@@ -19,36 +19,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
-
-// Keep new coercion on the current CN while old workers remain. Admission at
-// serialization still rechecks the actual destination after placement.
-func (c *Compile) constrainIntegerArgumentWorkers(qry *plan.Query) error {
-	if c.execType != plan2.ExecTypeAP_MULTICN {
-		return nil
-	}
-	features, err := plan.RequiredRemoteExpressionFeatures(qry)
-	if err != nil || (!features.IntegerParameterCoercion && !features.SpecialIntegerConsumers) {
-		return err
-	}
-	version := defines.MORPCVersion85
-	if features.SpecialIntegerConsumers {
-		version = defines.MORPCVersion98
-	}
-	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, version)
-	if err != nil {
-		return err
-	}
-	if supported {
-		return nil
-	}
-	c.execType = plan2.ExecTypeAP_ONECN
-	c.cnList, err = c.scheduleQueryWorkers()
-	return err
-}
 
 func validateIntegerArgumentDestination(proc *process.Process, p *pipeline.Pipeline) error {
 	if p == nil || p.Node == nil {
