@@ -16,8 +16,13 @@ package cnservice
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -177,4 +182,78 @@ func TestEmbeddedSiriusInputLeaseAdapter(t *testing.T) {
 	require.ErrorContains(t, adapter.Publish(t.Context(), 3, nil), "registered schema")
 	require.Equal(t, 1, recorder.publishes)
 	require.NoError(t, adapter.Publish(t.Context(), 3, []compile.SiriusInputVector{vector}))
+	counts := &embeddedExecutionCounters{}
+	adapter = embeddedInputLease{lease: recorder, columns: 1, counters: counts}
+	require.NoError(t, adapter.Publish(t.Context(), 3, []compile.SiriusInputVector{vector}))
+	require.Equal(t, uint64(3), counts.inputRows.Load())
+	require.Equal(t, uint64(6), counts.inputBytes.Load())
+}
+
+type embeddedPreparedRecorder struct {
+	results  []siriusbridge.Result
+	stats    siriusbridge.ExecutionStats
+	ready    bool
+	closeErr error
+	closes   int
+}
+
+func (q *embeddedPreparedRecorder) Run(_ context.Context, fill func(siriusbridge.Result) error) error {
+	for _, r := range q.results {
+		if err := fill(r); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (q *embeddedPreparedRecorder) Close(context.Context) error { q.closes++; return q.closeErr }
+func (q *embeddedPreparedRecorder) Statistics() (siriusbridge.ExecutionStats, bool) {
+	return q.stats, q.ready
+}
+
+func TestEmbeddedSiriusExecutionOutputAndTerminalCleanup(t *testing.T) {
+	for _, outcome := range []string{"success", "output error", "invalid output", "cleanup error", "fatal", "not terminal"} {
+		t.Run(outcome, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			t.Cleanup(proc.Free)
+			data := make([]byte, 8)
+			binary.LittleEndian.PutUint64(data, 42)
+			q := &embeddedPreparedRecorder{results: []siriusbridge.Result{{Rows: 1, Backing: data, Vectors: []siriusbridge.Vector{{Data: data}}}}, ready: outcome != "not terminal", stats: siriusbridge.ExecutionStats{Terminal: true, SourceMask: 1, Fatal: outcome == "fatal"}}
+			if outcome == "invalid output" {
+				q.results[0].Vectors[0].Data = data[:7]
+			}
+			failure := errors.New("output/cleanup failure")
+			if outcome == "cleanup error" {
+				q.closeErr = failure
+			}
+			e := &embeddedExecution{query: q, streams: 2, counters: &embeddedExecutionCounters{}, request: compile.SiriusPrepareRequest{Headings: []string{"n"}, OutputTypes: []planpb.Type{{Id: int32(types.T_int64)}}}}
+			fills := 0
+			err := e.Run(t.Context(), proc.Mp(), nil, func(bat *batch.Batch, _ *perfcounter.CounterSet) error {
+				fills++
+				require.Equal(t, 1, bat.RowCount())
+				if outcome == "output error" {
+					return failure
+				}
+				return nil
+			})
+			if outcome == "invalid output" {
+				require.Error(t, err)
+				require.Zero(t, fills)
+			} else if outcome == "output error" {
+				require.ErrorIs(t, err, failure)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, 1, fills)
+			}
+			if outcome == "cleanup error" {
+				require.ErrorIs(t, e.Cleanup(t.Context()), failure)
+			} else {
+				require.NoError(t, e.Cleanup(t.Context()))
+			}
+			require.Positive(t, e.counters.firstRow)
+			q.closeErr = nil
+			require.NoError(t, e.CleanupAfterRun(t.Context(), err), "terminal reporting cannot repeat side effects")
+			require.Equal(t, 2, q.closes)
+			require.Zero(t, proc.Mp().CurrNB())
+		})
+	}
 }

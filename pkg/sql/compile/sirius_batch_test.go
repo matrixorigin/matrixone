@@ -135,6 +135,70 @@ func TestSiriusSlicesBoundLogicalExpansion(t *testing.T) {
 	require.Equal(t, 6, end)
 }
 
+func TestSiriusSplitAndConstantVarlenaPublication(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(proc.Free)
+	columns := []SiriusReadColumn{{Type: planpb.Type{Id: int32(types.T_varchar)}}}
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	t.Cleanup(func() { bat.Clean(proc.Mp()) })
+	for _, value := range []string{strings.Repeat("a", 25), strings.Repeat("b", 26), "c"} {
+		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte(value), false, proc.Mp()))
+	}
+	bat.SetRowCount(3)
+	recorder := &siriusBatchRecorder{}
+	require.NoError(t, publishSiriusSlice(t.Context(), recorder, bat, columns, 1, 2))
+	require.Equal(t, []byte(strings.Repeat("b", 26)), recorder.vectors[0].Area)
+	require.Zero(t, binary.LittleEndian.Uint32(recorder.vectors[0].Data[4:]), "split descriptors must rebase to the new area")
+	end, err := siriusSliceEnd(bat, columns, 0, 58)
+	require.NoError(t, err)
+	require.Equal(t, 1, end)
+	constant, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte(strings.Repeat("x", 25)), 3, proc.Mp())
+	require.NoError(t, err)
+	bat.Vecs[0].Free(proc.Mp())
+	bat.Vecs[0] = constant
+	require.NoError(t, publishSiriusBatch(t.Context(), recorder, bat, columns))
+	require.Equal(t, uint32(1), recorder.vectors[0].Class)
+	require.Len(t, recorder.vectors[0].Data, types.VarlenaSize)
+	require.Len(t, recorder.vectors[0].Area, 25)
+	require.Equal(t, uint32(3), recorder.rows)
+}
+
+func TestSiriusNativeElementSizesAndBatchRejections(t *testing.T) {
+	for _, group := range []struct {
+		width int
+		oids  []types.T
+	}{
+		{1, []types.T{types.T_bool, types.T_int8, types.T_uint8}},
+		{2, []types.T{types.T_int16, types.T_uint16}},
+		{4, []types.T{types.T_int32, types.T_uint32, types.T_float32, types.T_date}},
+		{8, []types.T{types.T_int64, types.T_uint64, types.T_float64, types.T_decimal64, types.T_timestamp}},
+		{16, []types.T{types.T_decimal128}},
+		{24, []types.T{types.T_char, types.T_varchar, types.T_binary, types.T_varbinary}},
+	} {
+		for _, oid := range group.oids {
+			width, err := siriusElementSize(oid)
+			require.NoError(t, err)
+			require.Equal(t, group.width, width)
+		}
+	}
+	_, err := siriusElementSize(types.T_decimal256)
+	require.Error(t, err, "wide types stay declined until numeric support is delivered")
+	proc := testutil.NewProcess(t)
+	t.Cleanup(proc.Free)
+	bat := batch.NewWithSize(1)
+	t.Cleanup(func() { bat.Clean(proc.Mp()) })
+	bat.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 1, proc.Mp())
+	bat.SetRowCount(1)
+	recorder := &siriusBatchRecorder{}
+	require.Error(t, publishSiriusBatch(t.Context(), recorder, bat, nil))
+	require.Error(t, publishSiriusBatch(t.Context(), recorder, bat, []SiriusReadColumn{{Type: planpb.Type{Id: int32(types.T_varchar)}}}))
+	bat.Vecs[0].SetLength(2)
+	require.Error(t, publishSiriusBatch(t.Context(), recorder, bat, []SiriusReadColumn{{Type: planpb.Type{Id: int32(types.T_int64)}}}))
+	require.Zero(t, recorder.acquired)
+	require.NoError(t, publishSiriusBatch(t.Context(), recorder, nil, nil))
+}
+
 type siriusCountingReader struct {
 	readutil.EmptyReader
 	reads, closes atomic.Int32

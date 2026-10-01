@@ -165,11 +165,17 @@ var _ compile.SiriusInput = embeddedInput{}
 var _ compile.SiriusInputLease = embeddedInputLease{}
 
 type embeddedExecution struct {
-	query    *siriusbridge.Query
+	query    embeddedPreparedQuery
 	request  compile.SiriusPrepareRequest
 	counters *embeddedExecutionCounters
 	streams  uint32
 	recorded sync.Once
+}
+
+type embeddedPreparedQuery interface {
+	Run(context.Context, func(siriusbridge.Result) error) error
+	Close(context.Context) error
+	Statistics() (siriusbridge.ExecutionStats, bool)
 }
 
 type embeddedExecutionCounters struct {
