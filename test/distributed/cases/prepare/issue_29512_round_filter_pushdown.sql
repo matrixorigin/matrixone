@@ -48,7 +48,7 @@ deallocate prepare derived_round;
 -- Harmless forwarding/CTE projections must retain the same runtime filter.
 prepare nested_decimal from 'select count(*) from lookup_key k join (select v from (select cast(? as decimal(38,0)) as v) y) x on k.id=x.v';
 explain force execute nested_decimal using @value;
--- @ignore:0
+-- @regex("Table Scan on issue_29512_round_filter[.]lookup_key[^\r\n]*\r?\n[ \t]*Analyze:[^\r\n]*\binputBlocks=1\b[^\r\n]*\binputRows=1\b", true)
 explain analyze force execute nested_decimal using @value;
 execute nested_decimal using @value;
 deallocate prepare nested_decimal;

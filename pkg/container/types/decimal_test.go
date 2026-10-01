@@ -19,6 +19,7 @@ import (
 	"math"
 	"math/big"
 	"math/rand"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -1337,5 +1338,32 @@ func TestDecimalScientificExponentBoundaries(t *testing.T) {
 		require.Error(t, e64)
 		require.Error(t, e128)
 		require.Error(t, e256)
+	}
+}
+
+func TestDecimalFromCoefficient(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		width int
+		parse func([]byte) (string, error)
+	}{
+		{"64", 18, func(d []byte) (string, error) { v, e := Decimal64FromCoefficient(d); return v.Format(0), e }},
+		{"128", 38, func(d []byte) (string, error) { v, e := Decimal128FromCoefficient(d); return v.Format(0), e }},
+		{"256", 76, func(d []byte) (string, error) { v, e := Decimal256FromCoefficient(d); return v.Format(0), e }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, digits := range []string{"", "0", "1234567", strings.Repeat("9", tc.width)} {
+				got, err := tc.parse([]byte(digits))
+				require.NoError(t, err)
+				if digits == "" {
+					digits = "0"
+				}
+				require.Equal(t, digits, got)
+			}
+			for _, digits := range []string{"-1", "1.2", "1e2", "a", strings.Repeat("9", tc.width+1)} {
+				_, err := tc.parse([]byte(digits))
+				require.Error(t, err, digits)
+			}
+		})
 	}
 }

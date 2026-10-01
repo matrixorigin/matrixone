@@ -7219,9 +7219,8 @@ func saturatingDecimalPosition(integerDigits, exponent, limit int64) int64 {
 
 // assignmentDecimalPrefix uses the same prefix grammar as MySQL decimal
 // conversion, but reports whether a numeric token actually exists. The
-// existing mysqlDecimalPrefix helper returns a synthetic "0" for "abc", which
-// is useful for ordinary prefix conversion but would blur lexical failure and
-// a real zero here.
+// MySQL decimal prefix conversion treats "abc" as zero, which would blur
+// lexical failure and a real zero here.
 func assignmentDecimalPrefix(s string) (string, bool) {
 	prefix, _, ok := scanDecimalFloatPrefix(s)
 	if !ok {
@@ -7386,6 +7385,20 @@ func isAssignmentSpecialNumericSyntax(s string) bool {
 }
 
 func scanDecimalFloatPrefix(s string) (prefix string, negative bool, ok bool) {
+	return scanDecimalPrefix(s, nil)
+}
+
+// decimalPrefixFacts are borrowed lexical facts, not a second numeric parser.
+// Non-decimal consumers use the same scanner without requesting these facts.
+type decimalPrefixFacts struct {
+	mantissa string
+	integral int64
+	digits   int64
+	first    int64
+	exponent int64
+}
+
+func scanDecimalPrefix(s string, facts *decimalPrefixFacts) (prefix string, negative bool, ok bool) {
 	i := skipASCIISpace(s, 0)
 	if i >= len(s) {
 		return "", false, false
@@ -7396,14 +7409,27 @@ func scanDecimalFloatPrefix(s string) (prefix string, negative bool, ok bool) {
 		negative = s[i] == '-'
 		i++
 	}
+	mantissaStart := i
+	if facts != nil {
+		*facts = decimalPrefixFacts{first: -1}
+	}
 	mantissaDigits := 0
 	for i < len(s) && isASCIIDigit(s[i]) {
+		if facts != nil && facts.first < 0 && s[i] != '0' {
+			facts.first = int64(mantissaDigits)
+		}
 		i++
 		mantissaDigits++
+	}
+	if facts != nil {
+		facts.integral = int64(mantissaDigits)
 	}
 	if i < len(s) && s[i] == '.' {
 		i++
 		for i < len(s) && isASCIIDigit(s[i]) {
+			if facts != nil && facts.first < 0 && s[i] != '0' {
+				facts.first = int64(mantissaDigits)
+			}
 			i++
 			mantissaDigits++
 		}
@@ -7413,18 +7439,36 @@ func scanDecimalFloatPrefix(s string) (prefix string, negative bool, ok bool) {
 	}
 
 	prefixEnd := i
+	if facts != nil {
+		facts.mantissa = s[mantissaStart:i]
+		facts.digits = int64(mantissaDigits)
+	}
 	if i < len(s) && (s[i] == 'e' || s[i] == 'E') {
 		expStart := i
 		i++
+		expNegative := false
 		if i < len(s) && (s[i] == '+' || s[i] == '-') {
+			expNegative = s[i] == '-'
 			i++
 		}
 		expDigitsStart := i
+		limit := min(int64(len(s)), int64(math.MaxInt64-152)) + 152
 		for i < len(s) && isASCIIDigit(s[i]) {
+			if facts != nil {
+				digit := int64(s[i] - '0')
+				if facts.exponent > (limit-digit)/10 {
+					facts.exponent = limit
+				} else {
+					facts.exponent = facts.exponent*10 + digit
+				}
+			}
 			i++
 		}
 		if i > expDigitsStart {
 			prefixEnd = i
+			if facts != nil && expNegative {
+				facts.exponent = -facts.exponent
+			}
 		} else {
 			prefixEnd = expStart
 		}
@@ -7946,18 +7990,20 @@ func clampDecimal64Value(negative bool, width, scale int32) (types.Decimal64, er
 	return result, nil
 }
 
-// decimalCastParseString validates the complete CAST token before quantizing it
+// decimalCastCoefficient validates the complete CAST token before quantizing it
 // to the destination. Overflow is a numeric fact, never a parser-capacity failure.
-func decimalCastParseString(token castNumericToken, width, scale int32) (string, bool, error) {
+func decimalCastCoefficient(token castNumericToken, width, scale int32, scratch *[76]byte) ([]byte, bool, bool, error) {
 	s, err := prefixedDigitsToDecimalString(token.digits, token.base)
 	if err != nil {
-		return "", false, err
+		return nil, false, false, err
 	}
-	prefix, _, ok := scanDecimalFloatPrefix(s)
+	var facts decimalPrefixFacts
+	prefix, negative, ok := scanDecimalPrefix(s, &facts)
 	if !ok || prefix != s {
-		return "", false, moerr.NewInvalidInputNoCtxf("%q is invalid decimal string", s)
+		return nil, false, false, moerr.NewInvalidInputNoCtxf("%q is invalid decimal string", s)
 	}
-	return canonicalizeMySQLDecimalPrefix(prefix, width, scale)
+	coefficient, overflow, err := quantizeDecimalCoefficient(facts, width, scale, scratch)
+	return coefficient, negative, overflow, err
 }
 
 func parseDecimal64CastString(s string, width, scale int32) (types.Decimal64, error) {
@@ -7969,7 +8015,8 @@ func parseDecimal64CastStringMode(s string, width, scale int32, explicit bool) (
 	if err != nil {
 		return 0, err
 	}
-	parseStr, overflow, err := decimalCastParseString(token, min(width, int32(18)), scale)
+	var scratch [76]byte
+	digits, negative, overflow, err := decimalCastCoefficient(token, min(width, int32(18)), scale, &scratch)
 	if err != nil {
 		return 0, err
 	}
@@ -7979,104 +8026,57 @@ func parseDecimal64CastStringMode(s string, width, scale int32, explicit bool) (
 		}
 		return 0, moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal64(%d,%d).", s, width, scale)
 	}
-	result, err := types.ParseDecimal64(parseStr, width, scale)
-	if err != nil {
-		return 0, err
-	}
-	if token.negative {
+	result, err := types.Decimal64FromCoefficient(digits)
+	if negative != token.negative {
 		result = result.Minus()
 	}
-	return result, nil
+	return result, err
 }
 
-func mysqlDecimalPrefix(s string) string {
-	prefix, _, ok := scanDecimalFloatPrefix(s)
-	if !ok {
-		return "0"
-	}
-	return strings.Replace(prefix, "E", "e", 1)
-}
-
-// canonicalizeMySQLDecimalPrefix rounds a validated decimal prefix once to the
-// destination coefficient. Work is linear in the supplied text; scratch and
-// emitted coefficient are bounded by precision, independently of the exponent.
-func canonicalizeMySQLDecimalPrefix(prefix string, width, scale int32) (string, bool, error) {
+// quantizeDecimalCoefficient rounds a validated token once into borrowed,
+// unsigned destination-scale digits. Neither scratch nor work grows with an exponent.
+func quantizeDecimalCoefficient(facts decimalPrefixFacts, width, scale int32, scratch *[76]byte) ([]byte, bool, error) {
 	if width <= 0 || width > 76 || scale < 0 || scale > width {
-		return "", false, moerr.NewInvalidInputNoCtxf("invalid Decimal(%d,%d)", width, scale)
+		return nil, false, moerr.NewInvalidInputNoCtxf("invalid Decimal(%d,%d)", width, scale)
 	}
-	start := 0
-	negative := prefix[0] == '-'
-	if prefix[0] == '+' || negative {
-		start++
+	if facts.first < 0 {
+		return nil, false, nil
 	}
-	end := strings.IndexAny(prefix, "eE")
-	if end < 0 {
-		end = len(prefix)
-	}
-	var count, integral int64
-	first := int64(-1)
-	dot := false
-	for i := start; i < end; i++ {
-		if prefix[i] == '.' {
-			dot = true
-			continue
-		}
-		if !dot {
-			integral++
-		}
-		if prefix[i] != '0' && first < 0 {
-			first = count
-		}
-		count++
-	}
-	// Saturation still consumes the entire validated exponent. Its bound allows
-	// every cancellation with the supplied mantissa and destination scale.
-	limit := min(int64(len(prefix)), int64(math.MaxInt64-152)) + 152
-	var exponent int64
-	if end < len(prefix) {
-		i := end + 1
-		neg := prefix[i] == '-'
-		if prefix[i] == '+' || neg {
-			i++
-		}
-		for ; i < len(prefix); i++ {
-			digit := int64(prefix[i] - '0')
-			if exponent > (limit-digit)/10 {
-				exponent = limit
-			} else {
-				exponent = exponent*10 + digit
-			}
-		}
-		if neg {
-			exponent = -exponent
-		}
-	}
-	if first < 0 {
-		return "0", false, nil
-	}
-	cut := saturatingDecimalPosition(integral, exponent, limit)
+	limit := min(int64(len(facts.mantissa)), int64(math.MaxInt64-152)) + 152
+	cut := saturatingDecimalPosition(facts.integral, facts.exponent, limit)
 	cut = saturatingDecimalPosition(cut, int64(scale), limit)
-	if cut-first > int64(width) {
-		return "", true, nil
+	if cut-facts.first > int64(width) {
+		return nil, true, nil
 	}
-	coefficient := make([]byte, 0, int(width))
-	var index int64
+	coefficient := scratch[:0]
+	// The scanner already located the decimal point and significant digits.
+	// Copy only the retained coefficient, rather than scanning the mantissa again.
+	start, end := facts.first, min(cut, facts.digits)
+	hasPoint := int64(len(facts.mantissa)) > facts.digits
+	if end > start {
+		if hasPoint && start < facts.integral {
+			before := min(end, facts.integral)
+			coefficient = append(coefficient, facts.mantissa[start:before]...)
+			start = before
+		}
+		if end > start {
+			offset := int64(0)
+			if hasPoint {
+				offset = 1
+			}
+			coefficient = append(coefficient, facts.mantissa[start+offset:end+offset]...)
+		}
+	}
 	round := false
-	for i := start; i < end; i++ {
-		digit := prefix[i]
-		if digit == '.' {
-			continue
+	if cut >= 0 && cut < facts.digits {
+		position := cut
+		if hasPoint && cut >= facts.integral {
+			position++
 		}
-		if index >= first && index < cut {
-			coefficient = append(coefficient, digit)
-		}
-		if index == cut {
-			round = digit >= '5'
-		}
-		index++
+		round = facts.mantissa[position] >= '5'
 	}
-	if cut > count {
-		for i := count; i < cut; i++ {
+	if cut > facts.digits {
+		for i := facts.digits; i < cut; i++ {
 			coefficient = append(coefficient, '0')
 		}
 	}
@@ -8090,78 +8090,81 @@ func canonicalizeMySQLDecimalPrefix(prefix string, width, scale int32) (string, 
 			coefficient[i]++
 		} else {
 			if len(coefficient) == int(width) {
-				return "", true, nil
+				return nil, true, nil
 			}
-			coefficient = append([]byte{'1'}, coefficient...)
+			coefficient = scratch[:len(coefficient)+1]
+			copy(coefficient[1:], coefficient[:len(coefficient)-1])
+			coefficient[0] = '1'
 		}
 	}
-	if len(coefficient) == 0 {
-		return "0", false, nil
-	}
-	result := string(coefficient)
-	if negative {
-		result = "-" + result
-	}
-	if scale != 0 {
-		result += "e-" + strconv.FormatInt(int64(scale), 10)
-	}
-	return result, false, nil
+	return coefficient, false, nil
+}
+
+func mysqlDecimalCoefficient(s string, width, scale int32, scratch *[76]byte) ([]byte, bool, bool, error) {
+	facts := decimalPrefixFacts{first: -1}
+	_, negative, _ := scanDecimalPrefix(s, &facts)
+	digits, overflow, err := quantizeDecimalCoefficient(facts, width, scale, scratch)
+	return digits, negative, overflow, err
 }
 
 func parseMySQLDecimal64Prefix(s string, width, scale int32) (types.Decimal64, error) {
-	prefix := mysqlDecimalPrefix(s)
-	canonical, overflow, err := canonicalizeMySQLDecimalPrefix(prefix, min(width, int32(18)), scale)
+	var scratch [76]byte
+	digits, negative, overflow, err := mysqlDecimalCoefficient(s, min(width, int32(18)), scale, &scratch)
 	if err != nil {
 		return 0, err
 	}
-	if !overflow {
-		return types.ParseDecimal64(canonical, width, scale)
+	if overflow {
+		return clampDecimal64Value(negative, width, scale)
 	}
-	return clampDecimal64Value(len(prefix) > 0 && prefix[0] == '-', width, scale)
+	result, err := types.Decimal64FromCoefficient(digits)
+	if negative {
+		result = result.Minus()
+	}
+	return result, err
 }
 
 func parseMySQLDecimal128Prefix(s string, width, scale int32) (types.Decimal128, error) {
-	prefix := mysqlDecimalPrefix(s)
-	canonical, overflow, err := canonicalizeMySQLDecimalPrefix(prefix, min(width, int32(38)), scale)
+	var scratch [76]byte
+	digits, negative, overflow, err := mysqlDecimalCoefficient(s, min(width, int32(38)), scale, &scratch)
 	if err != nil {
 		return types.Decimal128{}, err
 	}
-	if !overflow {
-		return types.ParseDecimal128(canonical, width, scale)
+	if overflow {
+		return clampDecimal128Value(negative, width, scale)
 	}
-	return clampDecimal128Value(len(prefix) > 0 && prefix[0] == '-', width, scale)
+	result, err := types.Decimal128FromCoefficient(digits)
+	if negative {
+		result = result.Minus()
+	}
+	return result, err
 }
 
 func parseMySQLDecimal256Prefix(s string, width, scale int32) (types.Decimal256, error) {
-	prefix := mysqlDecimalPrefix(s)
-	canonical, overflow, err := canonicalizeMySQLDecimalPrefix(prefix, min(width, int32(76)), scale)
+	var scratch [76]byte
+	digits, negative, overflow, err := mysqlDecimalCoefficient(s, min(width, int32(76)), scale, &scratch)
 	if err != nil {
 		return types.Decimal256{}, err
 	}
 	if !overflow {
-		return types.ParseDecimal256(canonical, width, scale)
+		result, err := types.Decimal256FromCoefficient(digits)
+		if negative {
+			result = result.Minus()
+		}
+		return result, err
 	}
 	if width > 65 {
-		// MySQL first converts an overflowing numeric prefix in its 65-digit
-		// DECIMAL input domain, then adopts the wider common-expression scale.
-		// Clamping directly in the Decimal256 result domain would incorrectly
-		// fill the newly introduced fractional digits with nines.
+		// MySQL clamps in its 65-digit input domain before adopting a wider scale.
 		inputIntegralWidth := min(width-scale, int32(65))
 		if inputIntegralWidth <= 0 {
-			return clampDecimal256Value(len(prefix) > 0 && prefix[0] == '-', width, scale)
+			return clampDecimal256Value(negative, width, scale)
 		}
-		result, clampErr := clampDecimal256Value(
-			len(prefix) > 0 && prefix[0] == '-', inputIntegralWidth, 0)
+		result, clampErr := clampDecimal256Value(negative, inputIntegralWidth, 0)
 		if clampErr != nil {
 			return types.Decimal256{}, clampErr
 		}
-		result, scaleErr := result.Scale(scale)
-		if scaleErr != nil {
-			return types.Decimal256{}, scaleErr
-		}
-		return result, nil
+		return result.Scale(scale)
 	}
-	return clampDecimal256Value(len(prefix) > 0 && prefix[0] == '-', width, scale)
+	return clampDecimal256Value(negative, width, scale)
 }
 
 func parseDecimal128CastString(s string, width, scale int32) (types.Decimal128, error) {
@@ -8173,7 +8176,8 @@ func parseDecimal128CastStringMode(s string, width, scale int32, explicit bool) 
 	if err != nil {
 		return types.Decimal128{}, err
 	}
-	parseStr, overflow, err := decimalCastParseString(token, min(width, int32(38)), scale)
+	var scratch [76]byte
+	digits, negative, overflow, err := decimalCastCoefficient(token, min(width, int32(38)), scale, &scratch)
 	if err != nil {
 		return types.Decimal128{}, err
 	}
@@ -8183,14 +8187,11 @@ func parseDecimal128CastStringMode(s string, width, scale int32, explicit bool) 
 		}
 		return types.Decimal128{}, moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal128(%d,%d).", s, width, scale)
 	}
-	result, err := types.ParseDecimal128(parseStr, width, scale)
-	if err != nil {
-		return types.Decimal128{}, err
-	}
-	if token.negative {
+	result, err := types.Decimal128FromCoefficient(digits)
+	if negative != token.negative {
 		result = result.Minus()
 	}
-	return result, nil
+	return result, err
 }
 
 func parseDecimal256CastString(s string, width, scale int32) (types.Decimal256, error) {
@@ -8202,7 +8203,8 @@ func parseDecimal256CastStringMode(s string, width, scale int32, explicit bool) 
 	if err != nil {
 		return types.Decimal256{}, err
 	}
-	parseStr, overflow, err := decimalCastParseString(token, min(width, int32(76)), scale)
+	var scratch [76]byte
+	digits, negative, overflow, err := decimalCastCoefficient(token, min(width, int32(76)), scale, &scratch)
 	if err != nil {
 		return types.Decimal256{}, err
 	}
@@ -8212,14 +8214,11 @@ func parseDecimal256CastStringMode(s string, width, scale int32, explicit bool) 
 		}
 		return types.Decimal256{}, moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256(%d,%d).", s, width, scale)
 	}
-	result, err := types.ParseDecimal256(parseStr, width, scale)
-	if err != nil {
-		return types.Decimal256{}, err
-	}
-	if token.negative {
+	result, err := types.Decimal256FromCoefficient(digits)
+	if negative != token.negative {
 		result = result.Minus()
 	}
-	return result, nil
+	return result, err
 }
 
 func strToDecimal128(

@@ -1971,6 +1971,83 @@ func Decimal256ToFloat64(x Decimal256, scale int32) float64 {
 	return y
 }
 
+func appendDecimal64Digit(x Decimal64, digit byte) (Decimal64, bool) {
+	y := x*10 + Decimal64(digit-'0')
+	return y, y>>63 == 0 && y/10 == x
+}
+
+func appendDecimal128Digit(x Decimal128, digit byte) (Decimal128, error) {
+	y, err := x.Mul128(Decimal128{10, 0})
+	if err != nil {
+		return Decimal128{}, err
+	}
+	return y.Add128(Decimal128{uint64(digit - '0'), 0})
+}
+
+func appendDecimal256Digit(x Decimal256, digit byte) (Decimal256, error) {
+	y, err := x.Mul256(Decimal256{10, 0, 0, 0})
+	if err != nil {
+		return Decimal256{}, err
+	}
+	return y.Add256(Decimal256{uint64(digit - '0'), 0, 0, 0})
+}
+
+// Decimal64FromCoefficient consumes unsigned decimal digits without interpreting
+// a sign, exponent or scale. Empty digits represent zero; the input is not retained.
+func Decimal64FromCoefficient(digits []byte) (Decimal64, error) {
+	if len(digits) > 18 {
+		return 0, moerr.NewInvalidInputNoCtx("invalid Decimal64 coefficient")
+	}
+	var value Decimal64
+	for _, digit := range digits {
+		if digit < '0' || digit > '9' {
+			return 0, moerr.NewInvalidInputNoCtx("invalid Decimal64 coefficient")
+		}
+		// At most 18 decimal digits are strictly below 10^18 and cannot
+		// overflow the signed storage range. The parser's range check is redundant here.
+		value, _ = appendDecimal64Digit(value, digit)
+	}
+	return value, nil
+}
+
+// Decimal128FromCoefficient is the 38-digit counterpart of Decimal64FromCoefficient.
+func Decimal128FromCoefficient(digits []byte) (Decimal128, error) {
+	if len(digits) > 38 {
+		return Decimal128{}, moerr.NewInvalidInputNoCtx("invalid Decimal128 coefficient")
+	}
+	var value Decimal128
+	for _, digit := range digits {
+		if digit < '0' || digit > '9' {
+			return Decimal128{}, moerr.NewInvalidInputNoCtx("invalid Decimal128 coefficient")
+		}
+		var err error
+		value, err = appendDecimal128Digit(value, digit)
+		if err != nil {
+			return Decimal128{}, err
+		}
+	}
+	return value, nil
+}
+
+// Decimal256FromCoefficient is the 76-digit counterpart of Decimal64FromCoefficient.
+func Decimal256FromCoefficient(digits []byte) (Decimal256, error) {
+	if len(digits) > 76 {
+		return Decimal256{}, moerr.NewInvalidInputNoCtx("invalid Decimal256 coefficient")
+	}
+	var value Decimal256
+	for _, digit := range digits {
+		if digit < '0' || digit > '9' {
+			return Decimal256{}, moerr.NewInvalidInputNoCtx("invalid Decimal256 coefficient")
+		}
+		var err error
+		value, err = appendDecimal256Digit(value, digit)
+		if err != nil {
+			return Decimal256{}, err
+		}
+	}
+	return value, nil
+}
+
 func Parse64(x string) (y Decimal64, scale int32, err error) {
 	if x == "" {
 		return 0, 0, moerr.NewInvalidInputNoCtx("can't cast empty string to Decimal64")
@@ -2065,9 +2142,9 @@ func Parse64(x string) (y Decimal64, scale int32, err error) {
 				break
 			}
 			flag = true
-			z = y
-			y = y*10 + Decimal64(x[i]-'0')
-			if y>>63 != 0 || y/10 != z {
+			var ok bool
+			y, ok = appendDecimal64Digit(y, x[i])
+			if !ok {
 				err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal64.", x)
 				return
 			}
@@ -2256,10 +2333,7 @@ func Parse128(x string) (y Decimal128, scale int32, err error) {
 				break
 			}
 			flag = true
-			z, err = y.Mul128(Decimal128{Pow10[1], 0})
-			if err == nil {
-				y, err = z.Add128(Decimal128{uint64(x[i] - '0'), 0})
-			}
+			y, err = appendDecimal128Digit(y, x[i])
 			if err != nil {
 				err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal128.", x)
 				return
@@ -2396,10 +2470,7 @@ func Parse256(x string) (y Decimal256, scale int32, err error) {
 				break
 			}
 			flag = true
-			z, err = y.Mul256(Decimal256{Pow10[1], 0, 0, 0})
-			if err == nil {
-				y, err = z.Add256(Decimal256{uint64(x[i] - '0'), 0, 0, 0})
-			}
+			y, err = appendDecimal256Digit(y, x[i])
 			if err != nil {
 				err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256.", x)
 				return

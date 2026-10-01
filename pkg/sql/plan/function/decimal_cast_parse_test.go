@@ -18,6 +18,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -120,5 +121,31 @@ func TestDecimalScientificWideValues(t *testing.T) {
 		got, err := parse("0."+strings.Repeat("9", int(width))+"E0", width)
 		require.NoError(t, err)
 		require.Equal(t, "0."+strings.Repeat("9", int(width)), got)
+	}
+}
+
+func TestDecimalCastShortTextAllocations(t *testing.T) {
+	for _, parse := range []func(string, int32, int32) (types.Decimal64, error){ParseDecimal64CastString, ParseExplicitDecimal64CastString} {
+		var value types.Decimal64
+		var err error
+		allocs := testing.AllocsPerRun(100, func() { value, err = parse("12345.67", 18, 2) })
+		require.NoError(t, err)
+		require.Equal(t, types.Decimal64(1234567), value)
+		require.Zero(t, allocs, "successful short-text conversion must not allocate per row")
+	}
+}
+
+func BenchmarkDecimalCastString(b *testing.B) {
+	for _, tc := range []struct{ name, input string }{
+		{"plain", "12345.67"}, {"scientific", "1.234567E4"}, {"rounding", "12345.675"},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				if _, err := ParseExplicitDecimal64CastString(tc.input, 18, 2); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }

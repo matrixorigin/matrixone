@@ -1,181 +1,68 @@
-# PR #29556: systemic QA findings
+# Numeric and temporal SQL contracts
 
-Reviewed on 2026-10-01. Source head: `6624b1baae427b48016e81d727a65ad61c1c69b6`.
-Base: `152a1c4f5f072dab37e5af620b10c7086deeb1f4`.
+## DECIMAL conversion
 
-This records executed review findings before implementation. Both findings remain
-open at this revision; existing passing tests do not establish their closure.
+String CAST, assignment and MySQL numeric-prefix conversion share the existing
+numeric scanner and destination-scale quantizer. Strict CAST validates the
+complete token; prefix conversion retains its established prefix grammar.
+Binary/octal/hex tokens retain their existing decoding owner.
 
-## F1: representable wide DECIMAL values rejected (blocking)
+Quantization combines mantissa position, exponent and destination scale before
+checking precision. Wide mantissas and cancelling exponents are therefore judged
+by the represented value, not by spelling length. Magnitudes are rounded once,
+half away from zero. Only proven numeric overflow may clamp in explicit CAST;
+invalid syntax and physical-construction errors remain errors.
 
-```sql
-SELECT CAST('12345678901234567890100000000000000000000E-20'
-            AS DECIMAL(38,0));
-```
+Work is linear in supplied text plus destination precision. Exponents are
+saturated only after a cancellation-safe bound and are consumed completely.
+Coefficient scratch is caller-owned and bounded to 76 bytes. The existing typed
+decimal accumulator consumes these digits directly, without building or
+reparsing a canonical string. Successful ordinary base-10 conversion adds no
+per-row heap allocation. Persisted decimal representations are unchanged.
 
-Expected: `123456789012345678901`. Observed: invalid input, scientific
-mantissa exceeds 38 digits. The compact spelling succeeds. The same scientific
-spelling succeeds for DECIMAL(65,0), but adding 80 trailing zeros and a cancelling
-exponent fails for both destination widths. Literal, VARCHAR column and prepared
-execution reproduce the failure. Independent exact decimal arithmetic confirms
-that these spellings represent the same in-range integer.
+## Prepared integer predicates
 
-### Cause and ownership
+Complete in-range integer text uses the integer peer's actual domain, preserving
+adjacent BIGINT identities beyond DOUBLE's exact range. Approximate FLOAT,
+fractional, NULL, volatile and diagnostic-producing expressions retain their
+existing guarded conversion paths.
 
-`decimalCastParseString` in `pkg/sql/plan/function/func_cast.go` recovers long
-scientific mantissas with `NormalizeExactIntegerString`. That helper deliberately
-limits its output to 20 digits for prepared integer comparisons; DECIMAL has a
-wider domain. Reusing that bounded integer witness as a decimal parser imposes
-the wrong contract.
+Derived constant comparisons use the existing typed evaluator. Their original
+executable conversions and parameter provenance are preserved; value-dependent
+proofs retain the existing cache-admission owner. No new evaluator or cache is
+introduced.
 
-The fix belongs to existing decimal parsing, scale and rounding responsibilities.
-Preserve the prepared integer witness contract. Canonicalization must respect
-actual decimal precision, complete exponent syntax and rounding semantics without
-allocating strings proportional to an arbitrary exponent. Reconsider long
-fractional scientific spellings through this same owner rather than adding
-individual exceptions. Only proven numeric overflow may enter overflow clamping.
+Singleton JOIN peers are admitted only through guarded PROJECT over the
+executor's one-row dummy VALUE_SCAN. Proof follows existing projection
+normalization; column references and changed predicate estimates are refreshed.
+Existing runtime-filter and outer-join policies remain authoritative.
 
-### Required evidence
+The prepared regression's operator-scoped regex checks the lookup table scan's
+own inputBlocks and inputRows counters. Result cardinality and ordinary EXPLAIN
+runtime-filter checks remain independent assertions. Timing, costs and node IDs
+are not performance oracles.
 
-- Equivalent compact/scientific/zero-padded spellings at 20/21 digits and widths
-  38/65, including signs, zero, e/E and cancelling exponents.
-- Literal, vector and prepared paths agree.
-- Fractional rounding, malformed input, underflow and true overflow retain their
-  intended behavior; extreme exponents have bounded work.
+## LAST_DAY and EXPLAIN
 
-## F2: derived prepared constants lose integer block pruning
+New LAST_DAY bindings return nullable DATE values and metadata, including
+CTAS and views. Native DATE/DATETIME evaluation avoids string formatting.
+Invalid, zero and NULL inputs remain NULL. Existing serialized VARCHAR overload
+IDs retain their executable ABI; mixed-version rollout is not part of this
+contract.
 
-A BIGINT primary-key point comparison with `CAST(? AS DECIMAL(38,0))`, or
-`ABS(CAST(? AS DECIMAL(38,0)))`, returns the correct row but casts the entire
-integer column to DECIMAL and has no block filter.
+Prepared EXPLAIN, ANALYZE and PHYPLAN classify the underlying SELECT while
+retaining the diagnostic wrapper. Explained DML does not enter SELECT-only
+numeric proofs.
 
-Executed fixture:
+## Validation boundaries
 
-```sql
-CREATE TABLE t(id BIGINT PRIMARY KEY);
-INSERT INTO t
-SELECT CAST(9007199254740992 AS BIGINT) + CAST(result AS BIGINT)
-FROM generate_series(1,30000) g;
--- Substitute the fixture's database name below.
-SELECT mo_ctl('dn', 'flush', '<database>.t');
-SET @p = '9007199254740993';
-PREPARE q FROM 'SELECT COUNT(*) FROM t WHERE id=CAST(? AS DECIMAL(38,0))';
-EXECUTE q USING @p;
-```
+Focused decimal tests cover precision, scientific spellings, rounding, syntax,
+radix and bounded-exponent behavior. Coefficient tests cover physical widths and
+reject non-digit or over-width inputs; a short-text allocation guard and
+benchmark protect the hot path. Public frontend tests exercise persisted values,
+prepared rebinding/DML, DATE metadata and EXPLAIN consumers.
 
-EXPLAIN ANALYZE and execution were checked for all four forms on the flushed
-fixture, with a private instance and an 8 MB memory cache:
-
-| Comparison | Result count | Input blocks | Input rows | Block filter |
-| --- | ---: | ---: | ---: | --- |
-| `id=?` | 1 | 1 | 1 | Present |
-| `id=CAST(? AS SIGNED)` | 1 | 1 | 1 | Present |
-| `id=CAST(? AS DECIMAL(38,0))` | 1 | 4 | 30000 | Absent |
-| `id=ABS(CAST(? AS DECIMAL(38,0)))` | 1 | 4 | 30000 | Absent |
-
-These counters establish excess scanned work. They do not establish a throughput
-ratio on this shared machine. The fixture and private runtime were cleaned up.
-
-### Cause and ownership
-
-The derived-expression branch in `prepared_binding.go` attempts a ROUND-specific
-proof and then continues. The exact-value proof for direct parameter markers does
-not cover these deterministic derived constants.
-
-Reuse existing constant evaluation and comparison conversion owners. Evaluate
-actual CAST/function semantics before admitting an exact, in-range integer
-comparison. Preserve parameter provenance, value-dependent plan handling,
-diagnostics and conservative behavior for expressions that cannot be proved safe.
-Do not introduce a second expression evaluator or prepared state machine.
-
-### Required evidence
-
-- Results and scan counters for direct, explicitly cast and derived constants.
-- Fractional CAST rounding, signed boundaries, NULL, errors and volatile functions.
-- Repeated execution with changed parameter values; column-dependent expressions
-  must not be treated as constants.
-- Existing fractional, FLOAT and ROUND comparisons keep their semantics.
-
-## Overall review disposition
-
-Request changes for F1; F2 is a measured optimization gap now included in the
-requested systemic repair. Existing decimal, prepared binding, LAST_DAY ABI and
-EXPLAIN changes were reviewed together. No additional lifecycle or persisted
-LAST_DAY compatibility blocker was confirmed. GitHub had no actionable inline
-review comments at the reviewed revision.
-
-Earlier local incremental SCA, owning UT, selected race UT and seven BVT cases
-passed on the reviewed source. Changed BVT cases also passed twice on one live
-instance with cleanup checks. Those results are historical evidence: production
-or test changes require validation of the resulting revision. CI was still in
-progress; no CI success is claimed.
-
-Implementation, tests and documentation must each justify their additions.
-Prefer existing responsibilities, remove replaced branches and redundant work,
-and test observable behavior and unhappy paths rather than helper structure.
-
-## Post-review correction and validation
-
-F1 now quantizes the complete validated scientific coefficient directly into the
-requested decimal width and scale before physical parsing. Output and arithmetic
-are bounded by the destination precision; the integer normalizer remains an exact
-integer owner. Removed the replaced overflow and underflow parsing branches.
-
-F2 now proves the actual typed, parameter-dependent peer with the existing
-constant evaluator and preserves its executable conversions. The late numeric
-rewrite handles scan filters and JOIN conditions. Its shared singleton projection
-resolver admits only an ordinary PROJECT over the executor's one-row dummy
-VALUE_SCAN, with matching value types and no filtering, limits or expansion.
-The existing runtime-filter and outer-join policy remains responsible for pruning.
-
-QA caught and corrected an intermediate JOIN regression: scanning 20004 rows
-instead of one. The final BVT retains runtime-filter build/probe and the original
-1-block/1-row expectation; only the retained conversion text changed.
-
-Current local evidence: incremental vet/lint (zero issues), full function and
-planner UT, prepared public integration, selected race UT, bounded decimal
-public probes, JOIN rebinding and LEFT/RIGHT/FULL controls passed. Eight BVT
-cases passed twice on one instance, 453/453 each, with fixture cleanup checked.
-The 30000-row flushed single-table decimal/ABS probes read one block/one row
-versus four blocks/30000 rows previously. This is scanned-work evidence, not a
-matched throughput comparison. Final independent review and remote CI remain
-separate delivery gates.
-
-Independent overall review: **APPROVE**, actual `gpt-6.1-sol` / `xhigh`,
-session `01a0f853-da2a-7d62-a00f-763bffd0b158`. All 31 changed files were reviewed against the
-main base with no unresolved material blocker. Remote CI is not certified here.
-
-## Projection normalization and singleton cardinality follow-up
-
-Two scanned-work gaps remained in the late proof pipeline. Harmless nested
-aliases/arithmetic/ABS/CTEs exposed the admitted singleton shape only after
-simple projection removal; JOIN proof now runs immediately after that existing
-normalization. Scan proof remains before block-filter selection. Column references
-are recounted after rewriting/fusion, and changed JOIN predicate estimates are
-invalidated before the existing statistics recalculation. No new resolver or
-numeric interpreter was added; LIMIT/UNION and volatile guards remain intact.
-
-The existing VALUE_SCAN statistics owner now reports the executor's one dummy
-row for no-rowset, no-table, childless input. Explicit VALUES and general default
-statistics retain their owners. Runtime-filter benefit thresholds are unchanged.
-This restores useful filtering at 10000 rows without broadening proof admission.
-
-Local follow-up evidence: full planner UT, relevant public UT, selected planner
-race UT, vet and incremental lint passed. Forty-three SQL shapes passed result
-checks and successful EXPLAIN execution; eligible point shapes read 1 block/1 row
-at 10000 and 30000 rows, including nested projection and CTE JOINs. Rebindings,
-unsafe numeric controls and LEFT/RIGHT/FULL unmatched-row controls passed.
-These are scanned-work measurements, not throughput estimates.
-
-Ten BVT files passed normal comparison, 766/766, including the two CI failures.
-Their malformed DECIMAL expectations now match the existing lexical error
-instead of the old range wording. New nested/CTE goldens retain runtime-filter
-build/probe and 1-block/1-row assertions; existing goldens and ignore flags were
-preserved. The added tests reuse existing fixtures and result-reading ownership. A prepared
-BETWEEN assertion verifies key references change from one to two when lowered,
-and the refreshed count reflects both executable bounds.
-Requested rebase was performed against c2cad8af38f1; the branch was up to date.
-
-Follow-up overall review: **APPROVE**, actual `gpt-6.1-sol` / `xhigh`, session
-`01a0f8b5-2a3a-7510-a83b-1181755d8bc0`. Final golden pairing and BETWEEN
-reference-count race/lint gates are closed; no material blocker remains.
+Performance measurements compare matched source/toolchain/native modes.
+CAST-stage or scanned-work improvements do not establish whole-query throughput.
+Current execution evidence and review decisions belong on the PR, not in this
+contract document.

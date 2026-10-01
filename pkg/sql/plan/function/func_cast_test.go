@@ -5228,16 +5228,22 @@ func TestMySQLDecimalPrefix(t *testing.T) {
 		{input: "abc", want: "0"},
 		{input: "", want: "0"},
 		{input: " \t\v\f\r\n", want: "0"},
-		{input: "12.5tail", want: "12.5"},
-		{input: "2026-08-10", want: "2026"},
-		{input: "9007199254740993e0tail", want: "9007199254740993e0"},
-		{input: "1E2", want: "1e2"},
-		{input: "1E-2tail", want: "1e-2"},
-		{input: "1e+tail", want: "1"},
-		{input: "-.5x", want: "-.5"},
+		{input: "12.5tail", want: "12.50"},
+		{input: "2026-08-10", want: "2026.00"},
+		{input: "9007199254740993e0tail", want: "9007199254740993.00"},
+		{input: "1E2", want: "100.00"},
+		{input: "1E-2tail", want: "0.01"},
+		{input: "1e+tail", want: "1.00"},
+		{input: "-.5x", want: "-0.50"},
 	} {
 		t.Run(test.input, func(t *testing.T) {
-			require.Equal(t, test.want, mysqlDecimalPrefix(test.input))
+			value, err := parseMySQLDecimal128Prefix(test.input, 38, 2)
+			require.NoError(t, err)
+			want := test.want
+			if want == "0" {
+				want = "0.00"
+			}
+			require.Equal(t, want, value.Format(2))
 		})
 	}
 

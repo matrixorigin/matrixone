@@ -150,6 +150,7 @@ Project  𝄀
                     Runtime Filter Probe: k.id  𝄀
               ->  Project  𝄀
                     ->  Values Scan "*VALUES*" 
+-- @regex("Table Scan on issue_29512_round_filter[.]lookup_key[^\r\n]*\r?\n[ \t]*Analyze:[^\r\n]*\binputBlocks=1\b[^\r\n]*\binputRows=1\b", true)
 explain analyze force execute nested_decimal using @value;
 ➤ tp query plan[12,-1,0]  𝄀
 Project  𝄀
