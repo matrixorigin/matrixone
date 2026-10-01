@@ -68,6 +68,7 @@ type SiriusRuntime struct {
 	DataDir                  string
 	LeaseTTL                 time.Duration
 	CleanupTimeout           time.Duration
+	RequestTimeout           time.Duration
 	// BenchmarkNoGC is set only by the CN launcher after it verifies that the
 	// paired TN has disabled GC. It permits the explicitly non-durable,
 	// process-local lease manager used by the local-CN benchmark profile.
@@ -182,9 +183,7 @@ func (c *Compile) tryCompileSiriusRead(ctx context.Context, queryPlan *planpb.Pl
 		if err := runtime.Validate(); err != nil {
 			return false, err
 		}
-		// Reader admission/wiring is delivered separately. Do not route an
-		// embedded request through the existing Flight/TAE admission path.
-		return false, moerr.NewNotSupported(ctx, "embedded Sirius MO reader admission is not yet available")
+		return c.compileEmbeddedSiriusRead(ctx, queryPlan, runtime)
 	}
 	if !ok {
 		return false, nil

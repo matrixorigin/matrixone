@@ -16,16 +16,19 @@ package cnservice
 
 import (
 	"context"
-	"encoding/binary"
+	"encoding/hex"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile/siriusbridge"
+	"go.uber.org/zap"
 )
 
 func validateSiriusEmbeddedBuild() error {
@@ -60,7 +63,10 @@ type embeddedRuntime interface {
 	Prepare(context.Context, siriusbridge.Request) (*siriusbridge.Query, error)
 }
 
-type embeddedBackend struct{ native embeddedRuntime }
+type embeddedBackend struct {
+	native  embeddedRuntime
+	streams uint32
+}
 
 func (b *embeddedBackend) Accepting() bool { return b.native.Accepting() }
 
@@ -71,6 +77,7 @@ func (*embeddedBackend) Reconcile(uint64, []byte, func(context.Context) error) e
 }
 
 func (b *embeddedBackend) Prepare(ctx context.Context, req compile.SiriusPrepareRequest) (compile.SiriusExecution, error) {
+	counters := &embeddedExecutionCounters{}
 	nativeReq := siriusbridge.Request{AccountID: req.AccountID, QueryID: req.QueryID, Snapshot: req.Snapshot, Plan: req.Plan, Deadline: req.Deadline, Release: req.Release}
 	if len(req.OutputTypes) == len(req.Headings) {
 		for i, t := range req.OutputTypes {
@@ -86,7 +93,7 @@ func (b *embeddedBackend) Prepare(ctx context.Context, req compile.SiriusPrepare
 			producer := read.Producer
 			columns := len(read.Columns)
 			r.Producer = func(ctx context.Context, input *siriusbridge.Input) error {
-				return producer(ctx, embeddedInput{input: input, columns: columns})
+				return producer(ctx, embeddedInput{input: input, columns: columns, counters: counters})
 			}
 		}
 		nativeReq.Reads = append(nativeReq.Reads, r)
@@ -95,12 +102,13 @@ func (b *embeddedBackend) Prepare(ctx context.Context, req compile.SiriusPrepare
 	if err != nil {
 		return nil, err
 	}
-	return &embeddedExecution{query: q, request: req}, nil
+	return &embeddedExecution{query: q, request: req, counters: counters, streams: b.streams}, nil
 }
 
 type embeddedInput struct {
-	input   *siriusbridge.Input
-	columns int
+	input    *siriusbridge.Input
+	columns  int
+	counters *embeddedExecutionCounters
 }
 
 func (i embeddedInput) Acquire(ctx context.Context, bytes uint64) (compile.SiriusInputLease, error) {
@@ -108,7 +116,7 @@ func (i embeddedInput) Acquire(ctx context.Context, bytes uint64) (compile.Siriu
 	if err != nil {
 		return nil, err
 	}
-	return embeddedInputLease{lease: lease, columns: i.columns}, nil
+	return embeddedInputLease{lease: lease, columns: i.columns, counters: i.counters}, nil
 }
 
 type embeddedNativeInputLease interface {
@@ -118,8 +126,9 @@ type embeddedNativeInputLease interface {
 }
 
 type embeddedInputLease struct {
-	lease   embeddedNativeInputLease
-	columns int
+	lease    embeddedNativeInputLease
+	columns  int
+	counters *embeddedExecutionCounters
 }
 
 func (l embeddedInputLease) Capacity() uint64 { return l.lease.Capacity() }
@@ -138,49 +147,86 @@ func (l embeddedInputLease) Publish(ctx context.Context, rows uint32, vs []compi
 	for n, v := range vs {
 		vectors[n] = siriusbridge.Vector{Class: v.Class, Data: v.Data, Area: v.Area, Nulls: v.Nulls}
 	}
-	return l.lease.Publish(ctx, rows, vectors)
+	if err := l.lease.Publish(ctx, rows, vectors); err != nil {
+		return err
+	}
+	if l.counters != nil {
+		l.counters.inputRows.Add(uint64(rows))
+		var bytes uint64
+		for _, v := range vs {
+			bytes += uint64(len(v.Data) + len(v.Area) + len(v.Nulls))
+		}
+		l.counters.inputBytes.Add(bytes)
+	}
+	return nil
 }
 
 var _ compile.SiriusInput = embeddedInput{}
 var _ compile.SiriusInputLease = embeddedInputLease{}
 
 type embeddedExecution struct {
-	query   *siriusbridge.Query
-	request compile.SiriusPrepareRequest
+	query    *siriusbridge.Query
+	request  compile.SiriusPrepareRequest
+	counters *embeddedExecutionCounters
+	streams  uint32
+	recorded sync.Once
+}
+
+type embeddedExecutionCounters struct {
+	inputRows, inputBytes atomic.Uint64
+	mu                    sync.Mutex
+	started               time.Time
+	firstRow              time.Duration
 }
 
 func (e *embeddedExecution) Run(ctx context.Context, mp *mpool.MPool, counters *perfcounter.CounterSet, fill func(*batch.Batch, *perfcounter.CounterSet) error) error {
+	e.counters.mu.Lock()
+	e.counters.started = time.Now()
+	e.counters.mu.Unlock()
 	return e.query.Run(ctx, func(result siriusbridge.Result) error {
-		if len(result.Vectors) != len(e.request.OutputTypes) {
-			return moerr.NewInvalidInputNoCtx("Sirius output schema mismatch")
+		if result.Rows > 0 {
+			e.counters.mu.Lock()
+			if e.counters.firstRow == 0 {
+				e.counters.firstRow = time.Since(e.counters.started)
+			}
+			e.counters.mu.Unlock()
 		}
-		bat := batch.NewWithSize(len(result.Vectors))
+		bat, err := decodeEmbeddedSiriusResult(result, e.request, mp)
+		if err != nil {
+			return err
+		}
 		defer bat.Clean(mp)
-		bat.Attrs = e.request.Headings
-		bat.SetRowCount(int(result.Rows))
-		for i, v := range result.Vectors {
-			t := e.request.OutputTypes[i]
-			typ := types.New(types.T(t.Id), t.Width, t.Scale)
-			if v.Class != 0 || uint64(len(v.Data)) != uint64(result.Rows)*uint64(typ.TypeSize()) || len(v.Nulls)%8 != 0 {
-				return moerr.NewInvalidInputNoCtx("invalid Sirius native vector layout")
-			}
-			vec, err := vector.NewVecWithDataCopy(typ, int(result.Rows), v.Data, v.Area, mp)
-			if err != nil {
-				return err
-			}
-			bat.Vecs[i] = vec
-			for row := uint32(0); row < result.Rows; row++ {
-				word := int(row/64) * 8
-				if word < len(v.Nulls) && binary.LittleEndian.Uint64(v.Nulls[word:word+8])&(uint64(1)<<(row%64)) != 0 {
-					vec.SetNull(uint64(row))
-				}
-			}
-		}
 		return fill(bat, counters)
 	})
 }
 func (e *embeddedExecution) Cleanup(ctx context.Context) error {
-	return e.query.Close(ctx)
+	err := e.query.Close(ctx)
+	if stats, ready := e.query.Statistics(); ready {
+		e.recorded.Do(func() {
+			e.counters.mu.Lock()
+			firstRow, started := e.counters.firstRow, e.counters.started
+			e.counters.mu.Unlock()
+			var wall time.Duration
+			if !started.IsZero() {
+				wall = time.Since(started)
+			}
+			health := "healthy"
+			if err != nil {
+				health = "draining"
+			}
+			if stats.Fatal {
+				health = "unavailable"
+			}
+			logutil.Info("Sirius embedded execution",
+				zap.String("query_id", hex.EncodeToString(e.request.QueryID)), zap.Uint64("account_id", e.request.AccountID),
+				zap.String("backend", "embedded"), zap.String("scan_mode", "mo"), zap.Bool("fallback", false),
+				zap.Uint32("gpu_streams", e.streams), zap.Int("read_bindings", len(e.request.Reads)),
+				zap.Uint64("input_rows", e.counters.inputRows.Load()), zap.Uint64("input_payload_bytes", e.counters.inputBytes.Load()),
+				zap.Float64("first_row_seconds", firstRow.Seconds()), zap.Float64("wall_seconds", wall.Seconds()),
+				zap.String("terminal_health", health), zap.Any("execution_stats", stats))
+		})
+	}
+	return err
 }
 func (e *embeddedExecution) CleanupAfterRun(ctx context.Context, _ error) error {
 	return e.Cleanup(ctx)

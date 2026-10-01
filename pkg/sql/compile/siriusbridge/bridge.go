@@ -95,6 +95,9 @@ type Vector struct {
 type Result struct {
 	Rows    uint32
 	Vectors []Vector
+	// Backing owns the bounded Go copy. All vector views borrow this backing
+	// for the duration of fill, while the native result lease remains charged.
+	Backing []byte
 }
 
 // driver keeps the native ownership implementation testable without CUDA. A
@@ -575,6 +578,7 @@ func (r *Runtime) Close(ctx context.Context) error {
 }
 
 type Query struct {
+	statistics       ExecutionStats
 	mu               sync.Mutex
 	runtime          *Runtime
 	native           queryDriver
@@ -743,6 +747,11 @@ func (q *Query) closeAttempt(ctx context.Context, native queryDriver, idle <-cha
 	if native != nil {
 		closeErr := callCleanup("native query close", func() error { return native.close(ctx) })
 		err = errors.Join(err, closeErr)
+		if source, ok := native.(interface{ statisticsSnapshot() ExecutionStats }); ok {
+			q.mu.Lock()
+			q.statistics = source.statisticsSnapshot()
+			q.mu.Unlock()
+		}
 		if closeErr == nil {
 			q.mu.Lock()
 			q.native = nil
