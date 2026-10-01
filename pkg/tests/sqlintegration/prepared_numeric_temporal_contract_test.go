@@ -86,19 +86,6 @@ func TestPreparedNumericTemporalContracts(t *testing.T) {
 			}
 		})
 		t.Run("signed prepared identity and DML", func(t *testing.T) {
-			ids := func(rows *sql.Rows, err error) []int64 {
-				t.Helper()
-				require.NoError(t, err)
-				defer rows.Close()
-				out := []int64{}
-				for rows.Next() {
-					var v int64
-					require.NoError(t, rows.Scan(&v))
-					out = append(out, v)
-				}
-				require.NoError(t, rows.Err())
-				return out
-			}
 
 			exec(t, "create table keys_t(id bigint primary key,n int)")
 			exec(t, "insert into keys_t values(9007199254740992,0),(9007199254740993,0),(9007199254740994,0)")
@@ -111,7 +98,9 @@ func TestPreparedNumericTemporalContracts(t *testing.T) {
 					p, err := conn.PrepareContext(ctx, "select id from keys_t where id"+tc.op+"? order by id")
 					require.NoError(t, err)
 					defer p.Close()
-					require.Equal(t, tc.want, ids(p.QueryContext(ctx, "9007199254740993")))
+					got, err := readPreparedContractIDs(p.QueryContext(ctx, "9007199254740993"))
+					require.NoError(t, err)
+					require.Equal(t, tc.want, got)
 				}()
 			}
 			p, err := conn.PrepareContext(ctx, "select id from keys_t where id=? order by id")
@@ -122,7 +111,9 @@ func TestPreparedNumericTemporalContracts(t *testing.T) {
 				if v == nil {
 					want = []int64{}
 				}
-				require.Equal(t, want, ids(p.QueryContext(ctx, v)))
+				got, err := readPreparedContractIDs(p.QueryContext(ctx, v))
+				require.NoError(t, err)
+				require.Equal(t, want, got)
 			}
 			for _, tc := range []struct {
 				value string
@@ -134,63 +125,58 @@ func TestPreparedNumericTemporalContracts(t *testing.T) {
 				{"9007199254740993tail", []int64{target - 1, target}},
 				{"9007199254740993", []int64{target}},
 			} {
-				require.Equal(t, tc.want, ids(p.QueryContext(ctx, tc.value)), tc.value)
+				got, err := readPreparedContractIDs(p.QueryContext(ctx, tc.value))
+				require.NoError(t, err)
+				require.Equal(t, tc.want, got, tc.value)
 			}
-			// Plain string literal comparison retains its existing approximate domain.
-			require.Equal(t, []int64{target}, ids(conn.QueryContext(ctx, "select id from keys_t where id='9007199254740993' order by id")))
-			require.Equal(t, []int64{target}, ids(conn.QueryContext(ctx, "select id from keys_t where id in (?) order by id", "9007199254740993")))
-			require.Equal(t, []int64{target}, ids(conn.QueryContext(ctx, "select id from keys_t where ?=id order by id", "9007199254740993")))
+			// Preserve the existing literal comparison path independently of marker binding.
+			got, err := readPreparedContractIDs(conn.QueryContext(ctx, "select id from keys_t where id='9007199254740993' order by id"))
+			require.NoError(t, err)
+			require.Equal(t, []int64{target}, got)
+			got, err = readPreparedContractIDs(conn.QueryContext(ctx, "select id from keys_t where id in (?) order by id", "9007199254740993"))
+			require.NoError(t, err)
+			require.Equal(t, []int64{target}, got)
+			got, err = readPreparedContractIDs(conn.QueryContext(ctx, "select id from keys_t where ?=id order by id", "9007199254740993"))
+			require.NoError(t, err)
+			require.Equal(t, []int64{target}, got)
 			exec(t, "prepare s from 'select id from keys_t where id=? order by id'")
 			defer exec(t, "deallocate prepare s")
 			exec(t, "set @v='9007199254740993'")
-			require.Equal(t, []int64{target}, ids(conn.QueryContext(ctx, "execute s using @v")))
+			got, err = readPreparedContractIDs(conn.QueryContext(ctx, "execute s using @v"))
+			require.NoError(t, err)
+			require.Equal(t, []int64{target}, got)
 			exec(t, "prepare u from 'update keys_t set n=n+1 where id=?'")
 			defer exec(t, "deallocate prepare u")
 			exec(t, "execute u using @v")
 			require.Equal(t, "9007199254740993", scalar(t, "select group_concat(id order by id) from keys_t where n=1"))
 			exec(t, "select mo_ctl('dn','flush','"+schema+".keys_t')")
-			require.Equal(t, []int64{target}, ids(p.QueryContext(ctx, "9007199254740993")))
+			got, err = readPreparedContractIDs(p.QueryContext(ctx, "9007199254740993"))
+			require.NoError(t, err)
+			require.Equal(t, []int64{target}, got)
 			d, err := conn.PrepareContext(ctx, "delete from keys_t where id=?")
 			require.NoError(t, err)
 			defer d.Close()
 			_, err = d.ExecContext(ctx, "9007199254740993")
 			require.NoError(t, err)
-			require.Equal(t, []int64{target - 1, target + 1}, ids(conn.QueryContext(ctx, "select id from keys_t order by id")))
+			got, err = readPreparedContractIDs(conn.QueryContext(ctx, "select id from keys_t order by id"))
+			require.NoError(t, err)
+			require.Equal(t, []int64{target - 1, target + 1}, got)
 		})
 		t.Run("last day DATE metadata and schema", func(t *testing.T) {
-			check := func(rows *sql.Rows, err error) {
-				t.Helper()
-				require.NoError(t, err)
-				defer rows.Close()
-				cols, err := rows.ColumnTypes()
-				require.NoError(t, err)
-				for _, col := range cols {
-					require.Equal(t, "DATE", col.DatabaseTypeName())
-				}
-				require.True(t, rows.Next())
-				vals := make([]sql.NullString, len(cols))
-				dest := make([]any, len(cols))
-				for i := range vals {
-					dest[i] = &vals[i]
-				}
-				require.NoError(t, rows.Scan(dest...))
-				for _, v := range vals {
-					require.True(t, v.Valid)
-					require.Equal(t, "2024-02-29", v.String)
-				}
-				require.False(t, rows.Next())
-				require.NoError(t, rows.Err())
-			}
-			check(conn.QueryContext(ctx, "select last_day('2024-02-10'),last_day(cast('2024-02-10' as date)),last_day(cast('2024-02-10 13:00:00' as datetime))"))
+
+			rows, queryErr := conn.QueryContext(ctx, "select last_day('2024-02-10'),last_day(cast('2024-02-10' as date)),last_day(cast('2024-02-10 13:00:00' as datetime))")
+			checkPreparedLastDay(t, rows, queryErr)
 			p, err := conn.PrepareContext(ctx, "select last_day(?)")
 			require.NoError(t, err)
 			defer p.Close()
-			check(p.QueryContext(ctx, "2024-02-10"))
+			rows, queryErr = p.QueryContext(ctx, "2024-02-10")
+			checkPreparedLastDay(t, rows, queryErr)
 			exec(t, "prepare l from 'select last_day(?)'")
 			defer exec(t, "deallocate prepare l")
 			exec(t, "set @l='2024-02-10'")
-			check(conn.QueryContext(ctx, "execute l using @l"))
-			exec(t, "create table calendar as select last_day(v) as d from source")
+			rows, queryErr = conn.QueryContext(ctx, "execute l using @l")
+			checkPreparedLastDay(t, rows, queryErr)
+			exec(t, "create table calendar as select last_day(v) as d from (select 'not-a-date' as v union all select '0000-00-00' union all select null) as calendar_source")
 			exec(t, "create view calendar_view as select last_day('2024-02-10') as d")
 			for _, name := range []string{"calendar", "calendar_view"} {
 				require.Equal(t, "date", scalar(t, "select data_type from information_schema.columns where table_schema='"+schema+"' and table_name='"+name+"' and column_name='d'"))
@@ -202,30 +188,15 @@ func TestPreparedNumericTemporalContracts(t *testing.T) {
 		t.Run("EXPLAIN preserves underlying SELECT binding", func(t *testing.T) {
 			exec(t, "create table explain_t(id int primary key)")
 			exec(t, "insert into explain_t values(1),(2)")
-			explainText := func(rows *sql.Rows, err error) string {
-				t.Helper()
-				require.NoError(t, err)
-				defer rows.Close()
-				var lines []string
-				for rows.Next() {
-					var line string
-					require.NoError(t, rows.Scan(&line))
-					lines = append(lines, line)
-				}
-				require.NoError(t, rows.Err())
-				require.NotEmpty(t, lines)
-				text := strings.Join(lines, "\n")
-				require.NotContains(t, strings.ToLower(text), "cast(explain_t.id as bigint)")
-				require.NotContains(t, text, "Cast expression may prevent index usage")
-				return text
-			}
+
 			for _, wrapper := range []string{"explain ", "explain analyze ", "explain phyplan "} {
 				func() {
 					exec(t, "prepare prof from '"+wrapper+"select sum(id) from explain_t where id=?'")
 					defer exec(t, "deallocate prepare prof")
 					for _, v := range []any{int64(1), "1", int64(2)} {
 						exec(t, "set @p=?", v)
-						text := explainText(conn.QueryContext(ctx, "execute prof using @p"))
+						rows, queryErr := conn.QueryContext(ctx, "execute prof using @p")
+						text := readPreparedExplain(t, rows, queryErr)
 						if wrapper != "explain phyplan " {
 							require.Contains(t, text, "Filter Cond:")
 						}
@@ -233,10 +204,70 @@ func TestPreparedNumericTemporalContracts(t *testing.T) {
 					p, err := conn.PrepareContext(ctx, wrapper+"select sum(id) from explain_t where id=?")
 					require.NoError(t, err)
 					defer p.Close()
-					explainText(p.QueryContext(ctx, int64(1)))
+					rows, queryErr := p.QueryContext(ctx, int64(1))
+					readPreparedExplain(t, rows, queryErr)
 				}()
 			}
 
 		})
 	})
+}
+
+// readPreparedContractIDs owns each query result through scan, terminal error and close.
+func readPreparedContractIDs(rows *sql.Rows, queryErr error) ([]int64, error) {
+	if queryErr != nil {
+		return nil, queryErr
+	}
+	defer rows.Close()
+	ids := []int64{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+func checkPreparedLastDay(t *testing.T, rows *sql.Rows, err error) {
+	t.Helper()
+	require.NoError(t, err)
+	defer rows.Close()
+	cols, err := rows.ColumnTypes()
+	require.NoError(t, err)
+	for _, col := range cols {
+		require.Equal(t, "DATE", col.DatabaseTypeName())
+	}
+	require.True(t, rows.Next())
+	vals := make([]sql.NullString, len(cols))
+	dest := make([]any, len(cols))
+	for i := range vals {
+		dest[i] = &vals[i]
+	}
+	require.NoError(t, rows.Scan(dest...))
+	for _, v := range vals {
+		require.True(t, v.Valid)
+		require.Equal(t, "2024-02-29", v.String)
+	}
+	require.False(t, rows.Next())
+	require.NoError(t, rows.Err())
+}
+
+func readPreparedExplain(t *testing.T, rows *sql.Rows, err error) string {
+	t.Helper()
+	require.NoError(t, err)
+	defer rows.Close()
+	var lines []string
+	for rows.Next() {
+		var line string
+		require.NoError(t, rows.Scan(&line))
+		lines = append(lines, line)
+	}
+	require.NoError(t, rows.Err())
+	require.NotEmpty(t, lines)
+	text := strings.Join(lines, "\n")
+	require.NotContains(t, strings.ToLower(text), "cast(explain_t.id as bigint)")
+	require.NotContains(t, text, "Cast expression may prevent index usage")
+	return text
 }

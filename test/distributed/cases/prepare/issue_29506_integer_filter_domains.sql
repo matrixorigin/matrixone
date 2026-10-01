@@ -45,6 +45,10 @@ execute large_key using @key;
 set @key = '9007199254740991';
 explain force execute large_key using @key;
 execute large_key using @key;
+set @key = '9007199254740993';
+execute large_key using @key;
+set @key = '9007199254740992.5';
+execute large_key using @key;
 deallocate prepare large_key;
 
 drop database issue_29506_filters;
