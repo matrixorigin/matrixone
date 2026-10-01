@@ -95,6 +95,8 @@ func StreamTerminalTokenFromContext(ctx context.Context) (StreamTerminalToken, b
 
 // StreamFinisher is implemented by server-side sessions that can synchronously
 // flush a final response and atomically retire the stream sequence state.
+// FinishStream consumes a non-nil response on every outcome; callers must not
+// access or release it after handing it off.
 type StreamFinisher interface {
 	FinishStream(context.Context, StreamTerminalToken, Message) error
 }
