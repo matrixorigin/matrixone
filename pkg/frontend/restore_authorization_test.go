@@ -17,6 +17,8 @@ package frontend
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -50,17 +52,17 @@ func TestRestoreDDLContext(t *testing.T) {
 	require.ErrorContains(t, err, "missing historical ownership")
 }
 
-func TestPrepareRestoreOwnershipRebindsCurrentPrincipals(t *testing.T) {
+func TestPrepareRestoreOwnershipRetainsPrincipalIDs(t *testing.T) {
 	const databaseQuery = "select datname, '', cast(creator as char), cast(owner as char) from mo_catalog.mo_database {MO_TS = 42} where account_id = 10 and datname = 'app'"
 	const tableQuery = "select reldatabase, relname, cast(creator as char), cast(owner as char) from mo_catalog.mo_tables {MO_TS = 42} where account_id = 10 and reldatabase = 'app' and relname = 't'"
-	const oldUsers = "select cast(user_id as char), user_name from mo_catalog.mo_user {MO_TS = 42}"
-	const currentUsers = "select cast(user_id as char), user_name from mo_catalog.mo_user"
-	const oldRoles = "select cast(role_id as char), role_name from mo_catalog.mo_role {MO_TS = 42}"
-	const currentRoles = "select cast(role_id as char), role_name from mo_catalog.mo_role"
+	const oldUsers = "select cast(user_id as char), user_name from mo_catalog.mo_user {MO_TS = 42} where user_id in (1,3)"
+	const currentUsers = "select cast(user_id as char), user_name from mo_catalog.mo_user where user_id in (1,3) order by user_id for update"
+	const oldRoles = "select cast(role_id as char), role_name from mo_catalog.mo_role {MO_TS = 42} where role_id in (2,4)"
+	const currentRoles = "select cast(role_id as char), role_name from mo_catalog.mo_role where role_id in (2,4) order by role_id for update"
 
 	bh := &backgroundExecTest{}
 	bh.init()
-	lockedDatabase, err := getSqlForCheckDatabaseByAccount(defines.AttachAccountId(t.Context(), 20), "app")
+	lockedDatabase, err := getSqlForCheckDatabaseByAccount(defines.AttachAccountId(t.Context(), 10), "app")
 	require.NoError(t, err)
 	lockedDatabase = strings.TrimSuffix(lockedDatabase, ";") + " for update;"
 	bh.sql2result[lockedDatabase] = newMrsForCheckDatabase(nil)
@@ -70,19 +72,24 @@ func TestPrepareRestoreOwnershipRebindsCurrentPrincipals(t *testing.T) {
 	setRows(databaseQuery, []string{"database", "table", "creator", "owner"}, [][]interface{}{{"app", "", "1", "2"}})
 	setRows(tableQuery, []string{"database", "table", "creator", "owner"}, [][]interface{}{{"app", "t", "3", "4"}})
 	setRows(oldUsers, []string{"id", "name"}, [][]interface{}{{"1", "creator"}, {"3", "editor"}})
-	setRows(currentUsers, []string{"id", "name"}, [][]interface{}{{"11", "creator"}, {"33", "editor"}})
+	setRows(currentUsers, []string{"id", "name"}, [][]interface{}{{"1", "creator"}, {"3", "editor"}})
 	setRows(oldRoles, []string{"id", "name"}, [][]interface{}{{"2", "db_owner"}, {"4", "table_owner"}})
-	setRows(currentRoles, []string{"id", "name"}, [][]interface{}{{"22", "db_owner"}, {"44", "table_owner"}})
+	setRows(currentRoles, []string{"id", "name"}, [][]interface{}{{"2", "db_owner"}, {"4", "renamed_owner"}})
 
-	ctx, err := prepareRestoreOwnership(t.Context(), bh, 42, 10, 20, "app", "t")
+	for _, catalogTable := range []string{"mo_user", "mo_role"} {
+		filter := " where account_id = 10 and reldatabase = 'mo_catalog' and relname = '" + catalogTable + "'"
+		setRows("select cast(rel_id as char) from mo_catalog.mo_tables {MO_TS = 42}"+filter, []string{"id"}, [][]interface{}{{"100"}})
+		setRows("select cast(rel_id as char) from mo_catalog.mo_tables"+filter+" for update", []string{"id"}, [][]interface{}{{"100"}})
+	}
+	ctx, err := prepareRestoreOwnership(t.Context(), bh, 42, 10, 10, "app", "t")
 	require.NoError(t, err)
 	for _, tc := range []struct {
 		table string
 		user  uint32
 		role  uint32
 	}{
-		{"", 11, 22},
-		{"t", 33, 44},
+		{"", 1, 2},
+		{"t", 3, 4},
 	} {
 		ownerCtx, err := restoreDDLContext(ctx, "app", tc.table)
 		require.NoError(t, err)
@@ -90,38 +97,42 @@ func TestPrepareRestoreOwnershipRebindsCurrentPrincipals(t *testing.T) {
 		require.Equal(t, tc.role, defines.GetRoleId(ownerCtx))
 	}
 
-	setRows(currentUsers, []string{"id", "name"}, [][]interface{}{{"11", "creator"}})
-	_, err = prepareRestoreOwnership(t.Context(), bh, 42, 10, 20, "app", "t")
+	setRows(currentUsers, []string{"id", "name"}, [][]interface{}{{"1", "creator"}})
+	_, err = prepareRestoreOwnership(t.Context(), bh, 42, 10, 10, "app", "t")
 	require.ErrorContains(t, err, "creator no longer exists")
-	setRows(currentUsers, []string{"id", "name"}, [][]interface{}{{"11", "creator"}, {"33", "editor"}})
-	setRows(currentRoles, []string{"id", "name"}, [][]interface{}{{"22", "db_owner"}})
-	_, err = prepareRestoreOwnership(t.Context(), bh, 42, 10, 20, "app", "t")
+	setRows(currentUsers, []string{"id", "name"}, [][]interface{}{{"1", "creator"}, {"3", "editor"}})
+	setRows(currentRoles, []string{"id", "name"}, [][]interface{}{{"2", "db_owner"}})
+	_, err = prepareRestoreOwnership(t.Context(), bh, 42, 10, 10, "app", "t")
 	require.ErrorContains(t, err, "owner role no longer exists")
 
 	// A retained database needs neither its historical creator nor its role.
 	// The selected table still needs both, and the existence query is locked
 	// in the target account before reading any historical metadata.
 	bh.sql2result[lockedDatabase] = newMrsForCheckDatabase([][]interface{}{{uint64(100)}})
-	setRows(currentUsers, []string{"id", "name"}, [][]interface{}{{"33", "editor"}})
-	setRows(currentRoles, []string{"id", "name"}, [][]interface{}{{"44", "table_owner"}})
+	setRows(currentUsers, []string{"id", "name"}, [][]interface{}{{"3", "editor"}})
+	setRows(currentRoles, []string{"id", "name"}, [][]interface{}{{"4", "table_owner"}})
+	for _, query := range []string{oldUsers, currentUsers, oldRoles, currentRoles} {
+		single := strings.ReplaceAll(strings.ReplaceAll(query, "(1,3)", "(3)"), "(2,4)", "(4)")
+		bh.sql2result[single] = bh.sql2result[query]
+	}
 	start := len(bh.executedSQLs)
 	accountStart := len(bh.executionAccountIDs)
-	ctx, err = prepareRestoreOwnership(t.Context(), bh, 42, 10, 20, "app", "t")
+	ctx, err = prepareRestoreOwnership(t.Context(), bh, 42, 10, 10, "app", "t")
 	require.NoError(t, err)
 	require.Equal(t, lockedDatabase, bh.executedSQLs[start])
-	require.Equal(t, uint32(20), bh.executionAccountIDs[accountStart])
+	require.Equal(t, uint32(10), bh.executionAccountIDs[accountStart])
 	require.NotContains(t, bh.executedSQLs[start:], databaseQuery)
 	_, err = restoreDDLContext(ctx, "app", "")
 	require.ErrorContains(t, err, "missing historical ownership")
 	tableCtx, err := restoreDDLContext(ctx, "app", "t")
 	require.NoError(t, err)
-	require.Equal(t, uint32(33), defines.GetUserId(tableCtx))
-	ctx = defines.AttachAccountId(ctx, 20)
+	require.Equal(t, uint32(3), defines.GetUserId(tableCtx))
+	ctx = defines.AttachAccountId(ctx, 10)
 	require.NoError(t, execRestoreCreateDatabase(ctx, bh, "app", "create database if not exists app"))
 	bh.sql2result[lockedDatabase] = newMrsForCheckDatabase(nil)
 	require.ErrorContains(t, execRestoreCreateDatabase(ctx, bh, "app", "create database if not exists app"), "missing historical ownership")
 	bh.sql2err[lockedDatabase] = errors.New("database lookup failed")
-	_, err = prepareRestoreOwnership(t.Context(), bh, 42, 10, 20, "app", "t")
+	_, err = prepareRestoreOwnership(t.Context(), bh, 42, 10, 10, "app", "t")
 	require.ErrorContains(t, err, "database lookup failed")
 	require.ErrorContains(t, execRestoreCreateDatabase(ctx, bh, "app", "create database if not exists app"), "database lookup failed")
 }
@@ -261,16 +272,123 @@ func TestPartialRestorePropagatesCatalogReadFailures(t *testing.T) {
 	}
 }
 
-func TestRestorePrincipalMapDoesNotReuseMissingIdentity(t *testing.T) {
-	bh := &backgroundExecTest{}
-	bh.init()
-	const query = "select cast(role_id as char), role_name from mo_catalog.mo_role"
-	bh.sql2result[query+" {MO_TS = 42}"] = newMrsForRestoreStringRows([]string{"id", "name"}, [][]interface{}{{"3", "owner"}, {"4", "deleted"}})
-	bh.sql2result[query] = newMrsForRestoreStringRows([]string{"id", "name"}, [][]interface{}{{"30", "owner"}, {"4", "unrelated"}})
-	ids, err := restorePrincipalMap(t.Context(), bh, 42, 10, 20, "mo_role", "role_id", "role_name")
-	require.NoError(t, err)
-	require.Equal(t, map[uint32]uint32{3: 30}, ids)
-	bh.sql2result[query] = newMrsForRestoreStringRows([]string{"id", "name"}, [][]interface{}{{"4294967296", "owner"}})
-	_, err = restorePrincipalMap(t.Context(), bh, 42, 10, 20, "mo_role", "role_id", "role_name")
-	require.Error(t, err)
+func TestRestorePrincipalMapIdentityContinuity(t *testing.T) {
+	const historic = "select cast(role_id as char), role_name from mo_catalog.mo_role {MO_TS = 42} where role_id in (3,4)"
+	const current = "select cast(role_id as char), role_name from mo_catalog.mo_role where role_id in (3,4) order by role_id for update"
+	const generation = "select cast(rel_id as char) from mo_catalog.mo_tables"
+	const filter = " where account_id = 10 and reldatabase = 'mo_catalog' and relname = 'mo_role'"
+	for _, tc := range []struct {
+		name       string
+		live       [][]interface{}
+		generation [][]interface{}
+		expected   map[uint32]uint32
+		error      string
+	}{
+		{"rename", [][]interface{}{{"3", "renamed"}, {"5", "owner"}}, [][]interface{}{{"100"}}, map[uint32]uint32{3: 3}, ""},
+		{"deleted and name reused", [][]interface{}{{"5", "owner"}}, [][]interface{}{{"100"}}, map[uint32]uint32{}, ""},
+		{"catalog rollback collision", [][]interface{}{{"3", "owner"}}, [][]interface{}{{"101"}}, nil, "catalog was rebuilt"},
+		{"missing catalog", nil, nil, nil, "invalid restore principal catalog identity"},
+		{"duplicate catalog", nil, [][]interface{}{{"100"}, {"100"}}, nil, "invalid restore principal catalog identity"},
+		{"invalid catalog", nil, [][]interface{}{{"0"}}, nil, "invalid restore principal catalog identity"},
+		{"invalid principal", [][]interface{}{{"4294967296", "owner"}}, [][]interface{}{{"100"}}, nil, "catalog identity exceeds uint32"},
+		{"duplicate principal", [][]interface{}{{"3", "owner"}, {"3", "renamed"}}, [][]interface{}{{"100"}}, nil, "duplicate restore principal identity"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			bh.sql2result[historic] = newMrsForRestoreStringRows([]string{"id", "name"}, [][]interface{}{{"3", "owner"}, {"4", "deleted"}})
+			bh.sql2result[current] = newMrsForRestoreStringRows([]string{"id", "name"}, tc.live)
+			bh.sql2result[generation+" {MO_TS = 42}"+filter] = newMrsForRestoreStringRows([]string{"id"}, [][]interface{}{{"100"}})
+			bh.sql2result[generation+filter+" for update"] = newMrsForRestoreStringRows([]string{"id"}, tc.generation)
+			ids, err := restorePrincipalMap(t.Context(), bh, 42, 10, "mo_role", "role_id", "role_name", map[uint32]struct{}{3: {}, 4: {}})
+			if tc.error != "" {
+				require.ErrorContains(t, err, tc.error)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, tc.expected, ids)
+			}
+			for _, query := range bh.executedSQLs {
+				require.True(t, strings.HasPrefix(query, "select "), query)
+			}
+		})
+	}
+}
+
+func TestRestorePrincipalMapReservedSlotsAcrossGenerations(t *testing.T) {
+	for _, tc := range []struct {
+		name, table, id, principal string
+		account                    uint32
+		value                      uint32
+		protected                  bool
+		allowed                    bool
+	}{
+		{"tenant admin role", "mo_role", "role_id", accountAdminRoleName, 10, accountAdminRoleID, false, true},
+		{"public role", "mo_role", "role_id", publicRoleName, 10, publicRoleID, false, true},
+		{"system admin role zero", "mo_role", "role_id", moAdminRoleName, sysAccountID, moAdminRoleID, false, true},
+		{"wrong reserved role name", "mo_role", "role_id", "replacement", 10, accountAdminRoleID, false, false},
+		{"wrong tenant role", "mo_role", "role_id", moAdminRoleName, 10, moAdminRoleID, false, false},
+		{"bootstrap custom admin name", "mo_user", "user_id", "bootstrap_admin", 10, GetAdminUserId(), true, true},
+		{"bootstrap without protection", "mo_user", "user_id", "bootstrap_admin", 10, GetAdminUserId(), false, false},
+		{"additional admin", "mo_user", "user_id", "other_admin", 10, GetAdminUserId() + 1, true, false},
+		{"root zero", "mo_user", "user_id", rootName, sysAccountID, rootID, true, true},
+		{"dump", "mo_user", "user_id", dumpName, sysAccountID, dumpID, true, true},
+		{"wrong bootstrap name", "mo_user", "user_id", "replacement", sysAccountID, rootID, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			nameColumn := "role_name"
+			if tc.table == "mo_user" {
+				nameColumn = "user_name"
+			}
+			query := "select cast(" + tc.id + " as char), " + nameColumn + " from mo_catalog." + tc.table
+			predicate := fmt.Sprintf(" where %s in (%d)", tc.id, tc.value)
+			rows := newMrsForRestoreStringRows([]string{"id", "name"}, [][]interface{}{{strconv.FormatUint(uint64(tc.value), 10), tc.principal}})
+			bh.sql2result[query+" {MO_TS = 42}"+predicate] = rows
+			bh.sql2result[query+predicate+" order by "+tc.id+" for update"] = rows
+			generation := "select cast(rel_id as char) from mo_catalog.mo_tables"
+			filter := fmt.Sprintf(" where account_id = %d and reldatabase = 'mo_catalog' and relname = '%s'", tc.account, tc.table)
+			bh.sql2result[generation+" {MO_TS = 42}"+filter] = newMrsForRestoreStringRows([]string{"id"}, [][]interface{}{{"100"}})
+			bh.sql2result[generation+filter+" for update"] = newMrsForRestoreStringRows([]string{"id"}, [][]interface{}{{"101"}})
+			adminRole := uint32(accountAdminRoleID)
+			if tc.account == sysAccountID {
+				adminRole = moAdminRoleID
+			}
+			grantQuery := "select cast(user_id as char) from mo_catalog.mo_user_grant"
+			grantFilter := fmt.Sprintf(" where user_id = %d and role_id = %d", tc.value, adminRole)
+			var grants [][]interface{}
+			if tc.protected {
+				grants = [][]interface{}{{strconv.FormatUint(uint64(tc.value), 10)}}
+			}
+			for _, query := range []string{grantQuery + " {MO_TS = 42}" + grantFilter, grantQuery + grantFilter} {
+				bh.sql2result[query] = newMrsForRestoreStringRows([]string{"user"}, grants)
+			}
+			ids, err := restorePrincipalMap(t.Context(), bh, 42, tc.account, tc.table, tc.id, nameColumn, map[uint32]struct{}{tc.value: {}})
+			if !tc.allowed {
+				require.ErrorContains(t, err, "catalog was rebuilt")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, map[uint32]uint32{tc.value: tc.value}, ids)
+			// Check each protection independently, so validating only one side
+			// cannot pass. Every catalog/grant read also propagates its failure.
+			queries := append([]string(nil), bh.executedSQLs...)
+			if tc.table == "mo_user" {
+				for _, query := range []string{grantQuery + " {MO_TS = 42}" + grantFilter, grantQuery + grantFilter} {
+					protected := bh.sql2result[query]
+					bh.sql2result[query] = newMrsForRestoreStringRows([]string{"user"}, nil)
+					_, err = restorePrincipalMap(t.Context(), bh, 42, tc.account, tc.table, tc.id, nameColumn, map[uint32]struct{}{tc.value: {}})
+					require.ErrorContains(t, err, "catalog was rebuilt")
+					bh.sql2result[query] = protected
+				}
+			}
+			for _, query := range queries {
+				failure := errors.New("catalog read failed")
+				bh.sql2err[query] = failure
+				_, err = restorePrincipalMap(t.Context(), bh, 42, tc.account, tc.table, tc.id, nameColumn, map[uint32]struct{}{tc.value: {}})
+				require.ErrorIs(t, err, failure)
+				delete(bh.sql2err, query)
+			}
+		})
+	}
 }

@@ -97,7 +97,14 @@ create table owned.t(id int);
 create snapshot auth_maker_s for account;
 restore table owned.t {snapshot='auth_maker_s'};
 restore database owned {snapshot='auth_maker_s'};
-drop snapshot auth_maker_s;
+-- Rename preserves identity; a newly allocated role with the old name does not.
+alter role maker rename to renamed_maker;
+create role maker;
+restore table owned.t {snapshot='auth_maker_s'};
+restore database owned {snapshot='auth_maker_s'};
+select t.owner=r.role_id as correct_owner from mo_catalog.mo_tables t,mo_catalog.mo_role r where t.reldatabase='owned' and t.relname='t' and r.role_name='renamed_maker';
+drop role maker;
+alter role renamed_maker rename to maker;
 -- @session
 create snapshot auth_owner_s for account auth_restore;
 -- @session:id=1&user=auth_restore:admin&password=111
@@ -118,6 +125,15 @@ select * from dst.v;
 -- @session:id=1&user=auth_restore:admin&password=111
 select d.owner=r.role_id as correct_owner,d.creator=u.user_id as correct_creator from mo_catalog.mo_database d,mo_catalog.mo_role r,mo_catalog.mo_user u where d.datname='owned' and r.role_name='maker' and u.user_name='u2';
 select t.owner=r.role_id as correct_owner,t.creator=u.user_id as correct_creator from mo_catalog.mo_tables t,mo_catalog.mo_role r,mo_catalog.mo_user u where t.reldatabase='owned' and t.relname='t' and r.role_name='maker' and u.user_name='u2';
+-- Full restore may rewind ordinary principal IDs. Historical custom identity
+-- continuity cannot be proved across that boundary, so reject before DROP.
+insert into owned.t values(91);
+restore table owned.t {snapshot='auth_maker_s'};
+restore database owned {snapshot='auth_maker_s'};
+select * from owned.t;
+-- Reserved bootstrap identities remain valid across account reconstruction.
+restore table dst.t {snapshot='auth_maker_s'};
+select * from dst.t;
 grant delete on table dst.t to reader;
 -- @session
 -- @session:id=2&user=auth_restore:u1:reader&password=111
@@ -135,6 +151,7 @@ deallocate prepare cached_delete;
 drop database owned;
 -- @session
 -- @session:id=1&user=auth_restore:admin&password=111
+drop snapshot auth_maker_s;
 drop snapshot auth_partial_s;
 -- @session
 drop snapshot auth_owner_s;

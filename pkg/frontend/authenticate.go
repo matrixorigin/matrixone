@@ -4644,7 +4644,8 @@ func doDropUser(ctx context.Context, ses *Session, du *tree.DropUser) (err error
 		return err
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
+	// Retain creator-row locks held by partial restore through recreation.
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
 	// put it into the single transaction

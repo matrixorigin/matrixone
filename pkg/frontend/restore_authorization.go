@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -30,9 +31,12 @@ type restoreObjectName struct{ database, table string }
 type restoreOwner struct{ user, role uint32 }
 
 // Install historical DDL identities before recreating objects. Full account
-// restore also restores the principal catalogs; partial restore must map names
-// to the current principals, never revive a removed role or reuse its old ID.
+// restore also restores the principal catalogs. Partial restore keeps live
+// principal IDs within their catalog generation; names are not identities.
 func prepareRestoreOwnership(ctx context.Context, bh BackgroundExec, ts int64, source, target uint32, database, table string) (context.Context, error) {
+	if database != "" && source != target {
+		return nil, moerr.NewInternalErrorNoCtx("partial restore requires the same account")
+	}
 	sourceCtx := defines.AttachAccountId(ctx, source)
 	dbFilter := fmt.Sprintf("account_id = %d", source)
 	tableFilter := dbFilter
@@ -46,12 +50,12 @@ func prepareRestoreOwnership(ctx context.Context, bh BackgroundExec, ts int64, s
 	// Table restore retains an existing database. Lock its current identity
 	// before deciding which historical principals the DDL actually needs.
 	recreateDatabase := true
-	if database != "" && table != "" {
+	if database != "" {
 		exists, err := checkDatabaseExistsOrNotWithLock(defines.AttachAccountId(ctx, target), bh, database, true)
 		if err != nil {
 			return nil, err
 		}
-		recreateDatabase = !exists
+		recreateDatabase = table == "" || !exists
 	}
 	var dbs [][]string
 	if recreateDatabase {
@@ -67,19 +71,10 @@ func prepareRestoreOwnership(ctx context.Context, bh BackgroundExec, ts int64, s
 	if err != nil {
 		return nil, err
 	}
-	var users, roles map[uint32]uint32
-	if database != "" {
-		users, err = restorePrincipalMap(ctx, bh, ts, source, target, "mo_user", "user_id", "user_name")
-		if err != nil {
-			return nil, err
-		}
-		roles, err = restorePrincipalMap(ctx, bh, ts, source, target, "mo_role", "role_id", "role_name")
-		if err != nil {
-			return nil, err
-		}
-	}
 	owners := make(map[restoreObjectName]restoreOwner, len(dbs)+len(tables))
-	for _, row := range append(dbs, tables...) {
+	neededUsers, neededRoles := make(map[uint32]struct{}), make(map[uint32]struct{})
+	ownershipRows := append(dbs, tables...)
+	for _, row := range ownershipRows {
 		if len(row) != 4 {
 			return nil, moerr.NewInternalErrorNoCtx("invalid restore ownership row")
 		}
@@ -93,32 +88,164 @@ func prepareRestoreOwnership(ctx context.Context, bh BackgroundExec, ts int64, s
 		}
 		owner := restoreOwner{uint32(user), uint32(role)}
 		if database != "" {
-			var ok bool
-			owner.user, ok = users[owner.user]
-			if !ok {
-				return nil, moerr.NewInternalErrorf(ctx, "cannot restore %s.%s: creator no longer exists", row[0], row[1])
-			}
-			owner.role, ok = roles[owner.role]
-			if !ok {
-				return nil, moerr.NewInternalErrorf(ctx, "cannot restore %s.%s: owner role no longer exists", row[0], row[1])
-			}
+			neededUsers[owner.user] = struct{}{}
+			neededRoles[owner.role] = struct{}{}
 		}
 		owners[restoreObjectName{row[0], row[1]}] = owner
+	}
+	if database != "" && len(owners) != 0 {
+		users, err := restorePrincipalMap(ctx, bh, ts, source, "mo_user", "user_id", "user_name", neededUsers)
+		if err != nil {
+			return nil, err
+		}
+		roles, err := restorePrincipalMap(ctx, bh, ts, source, "mo_role", "role_id", "role_name", neededRoles)
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range ownershipRows {
+			object := restoreObjectName{row[0], row[1]}
+			owner := owners[object]
+			if _, ok := users[owner.user]; !ok {
+				return nil, moerr.NewInternalErrorf(ctx, "cannot restore %s.%s: creator no longer exists", object.database, object.table)
+			}
+			if _, ok := roles[owner.role]; !ok {
+				return nil, moerr.NewInternalErrorf(ctx, "cannot restore %s.%s: owner role no longer exists", object.database, object.table)
+			}
+		}
 	}
 	return context.WithValue(ctx, restoreOwnershipKey{}, owners), nil
 }
 
-func restorePrincipalMap(ctx context.Context, bh BackgroundExec, ts int64, source, target uint32, table, id, name string) (map[uint32]uint32, error) {
+// Principal IDs are not reused by ordinary DROP/CREATE, but account restore
+// replaces these auto-increment catalogs and can rewind their allocators. Across
+// generations only reserved slots with their bootstrap protections are provable;
+// ordinary principals fail before DROP even if names and numeric IDs match.
+func restorePrincipalMap(ctx context.Context, bh BackgroundExec, ts int64, account uint32, table, id, name string, needed map[uint32]struct{}) (map[uint32]uint32, error) {
+	if len(needed) == 0 {
+		return map[uint32]uint32{}, nil
+	}
+	ctx = defines.AttachAccountId(ctx, account)
+	filter := fmt.Sprintf(" where account_id = %d and reldatabase = 'mo_catalog' and relname = %s", account, quoteSQLStringLiteral(table))
+	generationQuery := "select cast(rel_id as char) from mo_catalog.mo_tables"
+	oldGeneration, err := getStringColsListFromTS(ctx, bh, fmt.Sprintf("%s {MO_TS = %d}%s", generationQuery, ts, filter), account, account, 0)
+	if err != nil {
+		return nil, err
+	}
+	newGeneration, err := getStringColsList(ctx, bh, generationQuery+filter+" for update", 0)
+	if err != nil {
+		return nil, err
+	}
+	parseGeneration := func(rows [][]string) (uint64, error) {
+		if len(rows) != 1 || len(rows[0]) != 1 {
+			return 0, moerr.NewInternalErrorNoCtx("invalid restore principal catalog identity")
+		}
+		value, err := parseCatalogID(rows[0], 1)
+		if err != nil {
+			return 0, err
+		}
+		if value == 0 {
+			return 0, moerr.NewInternalErrorNoCtx("invalid restore principal catalog identity")
+		}
+		return value, nil
+	}
+	oldID, err := parseGeneration(oldGeneration)
+	if err != nil {
+		return nil, err
+	}
+	newID, err := parseGeneration(newGeneration)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]uint32, 0, len(needed))
+	for value := range needed {
+		ids = append(ids, value)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	values := make([]string, len(ids))
+	for i, value := range ids {
+		values[i] = strconv.FormatUint(uint64(value), 10)
+	}
+	predicate := " where " + id + " in (" + strings.Join(values, ",") + ")"
 	query := fmt.Sprintf("select cast(%s as char), %s from mo_catalog.%s", id, name, table)
-	oldRows, err := getStringColsListFromTS(defines.AttachAccountId(ctx, source), bh, fmt.Sprintf("%s {MO_TS = %d}", query, ts), source, target, 0, 1)
+	oldRows, err := getStringColsListFromTS(ctx, bh, fmt.Sprintf("%s {MO_TS = %d}%s", query, ts, predicate), account, account, 0, 1)
 	if err != nil {
 		return nil, err
 	}
-	newRows, err := getStringColsList(defines.AttachAccountId(ctx, target), bh, query, 0, 1)
+	newRows, err := getStringColsList(ctx, bh, query+predicate+" order by "+id+" for update", 0, 1)
 	if err != nil {
 		return nil, err
 	}
-	return buildCatalogRestoreNamedIdentityMap(oldRows, newRows)
+	parseRows := func(rows [][]string) (map[uint32]string, error) {
+		result := make(map[uint32]string, len(rows))
+		for _, row := range rows {
+			key, err := parseCatalogUint32ID(row)
+			if err != nil {
+				return nil, err
+			}
+			if _, duplicate := result[key]; duplicate {
+				return nil, moerr.NewInternalErrorNoCtx("duplicate restore principal identity")
+			}
+			result[key] = row[1]
+		}
+		return result, nil
+	}
+	oldNames, err := parseRows(oldRows)
+	if err != nil {
+		return nil, err
+	}
+	newNames, err := parseRows(newRows)
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[uint32]uint32, len(ids))
+	for _, value := range ids {
+		oldName, existed := oldNames[value]
+		newName, exists := newNames[value]
+		if !existed || !exists {
+			continue
+		}
+		if oldID != newID {
+			reserved := false
+			if oldName == newName {
+				if table == "mo_role" {
+					reserved = value == publicRoleID && oldName == publicRoleName ||
+						account == sysAccountID && value == moAdminRoleID && oldName == moAdminRoleName ||
+						account != sysAccountID && value == accountAdminRoleID && oldName == accountAdminRoleName
+				} else {
+					reserved = account != sysAccountID && value == GetAdminUserId() ||
+						account == sysAccountID && (value == rootID && oldName == rootName || value == dumpID && oldName == dumpName)
+					if reserved {
+						adminRole := uint32(accountAdminRoleID)
+						if account == sysAccountID {
+							adminRole = moAdminRoleID
+						}
+						grantQuery := "select cast(user_id as char) from mo_catalog.mo_user_grant"
+						grantFilter := fmt.Sprintf(" where user_id = %d and role_id = %d", value, adminRole)
+						oldGrants, err := getStringColsListFromTS(ctx, bh, fmt.Sprintf("%s {MO_TS = %d}%s", grantQuery, ts, grantFilter), account, account, 0)
+						if err != nil {
+							return nil, err
+						}
+						newGrants, err := getStringColsList(ctx, bh, grantQuery+grantFilter, 0)
+						if err != nil {
+							return nil, err
+						}
+						isProtected := func(rows [][]string) bool {
+							return len(rows) == 1 && len(rows[0]) == 1 && rows[0][0] == strconv.FormatUint(uint64(value), 10)
+						}
+						reserved = isProtected(oldGrants) && isProtected(newGrants)
+					}
+				}
+			}
+			if !reserved {
+				return nil, moerr.NewInternalErrorf(ctx, "cannot restore: %s principal catalog was rebuilt; identity continuity cannot be established", table)
+			}
+		}
+		if table == "mo_user" && oldName != newName {
+			continue
+		}
+		result[value] = value
+	}
+	return result, nil
 }
 
 func restoreDDLContext(ctx context.Context, database, table string) (context.Context, error) {

@@ -498,3 +498,237 @@ func TestIssue29399AccountPITRRebindsPrivileges(t *testing.T) {
 		require.ErrorContains(t, err, "do not have privilege", "account PITR left a stale prepared privilege")
 	})
 }
+
+// Principal names are mutable, and account rollback can rewind principal IDs.
+// Exercise both boundaries through authenticated SQL, including actual ownership
+// authority and preservation of the replacement object on rejected restores.
+func TestIssue29399PartialRestorePrincipalIdentity(t *testing.T) {
+	runAuthenticatedClusterTest(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(t.Context(), 240*time.Second)
+		defer cancel()
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		open := func(user string) *sql.DB {
+			db, err := sql.Open("mysql", fmt.Sprintf("%s:111@tcp(127.0.0.1:%d)/", user, cn.GetServiceConfig().CN.Frontend.Port))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, db.Close()) })
+			return db
+		}
+		sys := open("dump")
+		const account = "issue_29399_identity"
+		execSQLRequire(t, ctx, sys, "create account "+account+" admin_name 'admin' identified by '111'")
+		admin := open(account + "#admin#accountadmin")
+		defer func() {
+			clean, stop := context.WithTimeout(context.Background(), 30*time.Second)
+			defer stop()
+			for _, snapshot := range []string{"issue_29399_identity_floor", "issue_29399_identity_s"} {
+				execSQLMaybe(t, clean, sys, "drop snapshot if exists "+snapshot)
+			}
+			execSQLMaybe(t, clean, admin, "drop pitr if exists issue_29399_identity_p")
+			execSQLMaybe(t, clean, sys, "drop account if exists "+account)
+		}()
+		for _, q := range []string{
+			"create snapshot issue_29399_identity_floor for account",
+			"create role maker", "create user builder identified by '111' default role maker",
+			"grant maker to builder", "grant connect,create database on account * to maker",
+			"grant create table on database * to maker",
+			"create pitr issue_29399_identity_p for account range 1 'h'",
+		} {
+			execSQLRequire(t, ctx, admin, q)
+		}
+		builder := open(account + "#builder#maker")
+		for _, q := range []string{"create database app", "create table app.t(id int)", "create table app.disposable(id int)"} {
+			execSQLRequire(t, ctx, builder, q)
+		}
+		execSQLRequire(t, ctx, admin, "insert into app.t values(1)")
+		execSQLRequire(t, ctx, admin, "create snapshot issue_29399_identity_s for account")
+		var slept int
+		require.NoError(t, admin.QueryRowContext(ctx, "select sleep(1)").Scan(&slept))
+		var at string
+		require.NoError(t, admin.QueryRowContext(ctx, "select date_format(current_timestamp(6), '%Y-%m-%d %H:%i:%s')").Scan(&at))
+		statements := []string{
+			"restore table app.t {snapshot='issue_29399_identity_s'}",
+			"restore database app {snapshot='issue_29399_identity_s'}",
+			"restore database app table t from pitr issue_29399_identity_p '" + at + "'",
+			"restore database app from pitr issue_29399_identity_p '" + at + "'",
+		}
+		var originalRole, originalUser uint64
+		require.NoError(t, admin.QueryRowContext(ctx, "select role_id from mo_catalog.mo_role where role_name='maker'").Scan(&originalRole))
+		require.NoError(t, admin.QueryRowContext(ctx, "select user_id from mo_catalog.mo_user where user_name='builder'").Scan(&originalUser))
+		execSQLRequire(t, ctx, admin, statements[0]) // unchanged-name control
+		execSQLRequire(t, ctx, admin, "alter role maker rename to maker2")
+		checkOwner := func() {
+			var value int
+			var user, owner uint64
+			require.NoError(t, admin.QueryRowContext(ctx, "select id from app.t").Scan(&value))
+			require.Equal(t, 1, value)
+			require.NoError(t, admin.QueryRowContext(ctx, "select creator,owner from mo_catalog.mo_tables where reldatabase='app' and relname='t'").Scan(&user, &owner))
+			require.Equal(t, []uint64{originalUser, originalRole}, []uint64{user, owner})
+		}
+		for _, statement := range statements {
+			execSQLRequire(t, ctx, admin, "update app.t set id=9")
+			execSQLRequire(t, ctx, admin, statement)
+			checkOwner()
+		}
+		for _, q := range []string{"create role maker", "create user newcomer identified by '111' default role maker", "grant maker to newcomer", "grant connect on account * to maker"} {
+			execSQLRequire(t, ctx, admin, q)
+		}
+		newcomer := open(account + "#newcomer#maker")
+		for _, statement := range statements {
+			_, err := newcomer.ExecContext(ctx, "drop table app.t")
+			require.Error(t, err)
+			execSQLRequire(t, ctx, admin, "update app.t set id=9")
+			execSQLRequire(t, ctx, admin, statement)
+			checkOwner()
+			_, err = newcomer.ExecContext(ctx, "drop table app.t")
+			require.Error(t, err, "vacated name must not acquire ownership")
+		}
+		renamedOwner := open(account + "#builder#maker2")
+		execSQLRequire(t, ctx, renamedOwner, "drop table app.disposable")
+		checkRejected := func(statement, message string) {
+			var before, after uint64
+			var value int
+			require.NoError(t, admin.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase='app' and relname='t'").Scan(&before))
+			_, err := admin.ExecContext(ctx, statement)
+			require.ErrorContains(t, err, message)
+			require.NoError(t, admin.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase='app' and relname='t'").Scan(&after))
+			require.Equal(t, before, after, "rejected restore must precede DROP")
+			require.NoError(t, admin.QueryRowContext(ctx, "select id from app.t").Scan(&value))
+			require.Equal(t, 9, value)
+		}
+		execSQLRequire(t, ctx, admin, "update app.t set id=9")
+		execSQLRequire(t, ctx, admin, "drop role maker2")
+		for _, statement := range statements {
+			checkRejected(statement, "owner role no longer exists")
+		}
+		execSQLRequire(t, ctx, admin, "drop user builder")
+		execSQLRequire(t, ctx, admin, "create user builder identified by '111'")
+		for _, statement := range statements {
+			checkRejected(statement, "creator no longer exists")
+		}
+
+		// A full rollback changes the catalog generation and really reuses ID 3.
+		execSQLRequire(t, ctx, admin, "restore account "+account+" {snapshot='issue_29399_identity_floor'}")
+		for _, q := range []string{"create role replacement", "create user replacement_user identified by '111' default role replacement", "grant replacement to replacement_user", "grant connect on account * to replacement", "create database app", "create table app.t(id int)", "insert into app.t values(9)"} {
+			execSQLRequire(t, ctx, admin, q)
+		}
+		var reusedRole, reusedUser uint64
+		require.NoError(t, admin.QueryRowContext(ctx, "select role_id from mo_catalog.mo_role where role_name='replacement'").Scan(&reusedRole))
+		require.NoError(t, admin.QueryRowContext(ctx, "select user_id from mo_catalog.mo_user where user_name='replacement_user'").Scan(&reusedUser))
+		require.Equal(t, originalRole, reusedRole)
+		require.Equal(t, originalUser, reusedUser)
+		checkRejected(statements[0], "catalog was rebuilt")
+		checkRejected(statements[1], "catalog was rebuilt")
+		replacement := open(account + "#replacement_user#replacement")
+		_, err = replacement.ExecContext(ctx, "drop table app.t")
+		require.Error(t, err)
+	})
+}
+
+func TestIssue29399PartialRestorePinsPrincipals(t *testing.T) {
+	runAuthenticatedClusterTest(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(t.Context(), 180*time.Second)
+		defer cancel()
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		open := func(user string) *sql.DB {
+			db, err := sql.Open("mysql", fmt.Sprintf("%s:111@tcp(127.0.0.1:%d)/", user, cn.GetServiceConfig().CN.Frontend.Port))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, db.Close()) })
+			return db
+		}
+		sys := open("dump")
+		const account = "issue_29399_principal_pins"
+		execSQLRequire(t, ctx, sys, "create account "+account+" admin_name 'admin' identified by '111'")
+		admin := open(account + "#admin#accountadmin")
+		defer func() {
+			clean, stop := context.WithTimeout(context.Background(), 30*time.Second)
+			defer stop()
+			execSQLMaybe(t, clean, sys, "drop snapshot if exists issue_29399_pins_s")
+			execSQLMaybe(t, clean, admin, "drop pitr if exists issue_29399_pins_p")
+			execSQLMaybe(t, clean, sys, "drop account if exists "+account)
+		}()
+		execSQLRequire(t, ctx, admin, "create database app")
+		execSQLRequire(t, ctx, admin, "create pitr issue_29399_pins_p for account range 1 'h'")
+		for i := 0; i < 2; i++ {
+			role, user := fmt.Sprintf("pin_role_%d", i), fmt.Sprintf("pin_user_%d", i)
+			for _, q := range []string{"create role " + role, "create user " + user + " identified by '111' default role " + role,
+				"grant " + role + " to " + user, "grant connect on account * to " + role, "grant create table on database app to " + role} {
+				execSQLRequire(t, ctx, admin, q)
+			}
+			creator := open(account + "#" + user + "#" + role)
+			execSQLRequire(t, ctx, creator, fmt.Sprintf("create table app.t%d(id int)", i))
+			execSQLRequire(t, ctx, admin, fmt.Sprintf("insert into app.t%d values(1)", i))
+		}
+		execSQLRequire(t, ctx, admin, "create snapshot issue_29399_pins_s for account")
+		var slept int
+		require.NoError(t, admin.QueryRowContext(ctx, "select sleep(1)").Scan(&slept))
+		var at string
+		require.NoError(t, admin.QueryRowContext(ctx, "select date_format(current_timestamp(6), '%Y-%m-%d %H:%i:%s')").Scan(&at))
+		for i, tc := range []struct{ catalog, mutation, restore string }{
+			{"mo_user", "drop user pin_user_0", "restore table app.t0 {snapshot='issue_29399_pins_s'}"},
+			{"mo_role", "drop role pin_role_1", "restore database app table t1 from pitr issue_29399_pins_p '" + at + "'"},
+		} {
+			t.Run(tc.mutation, func(t *testing.T) {
+				// The current table belongs to admin, with no scoped grant for the
+				// historical owner. Only principal-row pins can block this deletion.
+				name := fmt.Sprintf("app.t%d", i)
+				execSQLRequire(t, ctx, admin, "drop table "+name)
+				execSQLRequire(t, ctx, admin, "create table "+name+"(id int)")
+				execSQLRequire(t, ctx, admin, "insert into "+name+" values(9)")
+				var gateID uint64
+				require.NoError(t, admin.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase='mo_catalog' and relname='"+tc.catalog+"'").Scan(&gateID))
+				restoreMode := setIssue27718TxnConfig([]embed.ServiceOperator{cn}, pbtxn.TxnMode_Optimistic, pbtxn.TxnIsolation_SI)
+				defer restoreMode()
+				captured, release, queued := make(chan struct{}), make(chan struct{}), make(chan struct{})
+				var captureOnce, releaseOnce, queueOnce sync.Once
+				releaseRestore := func() { releaseOnce.Do(func() { close(release) }) }
+				defer releaseRestore()
+				restoreCapture := frontend.SetPartialRestorePrivilegesCapturedHookForTest(func() {
+					captureOnce.Do(func() { close(captured) })
+					<-release
+				})
+				defer restoreCapture()
+				restoreWaiter := lockservice.SetWaiterEnqueuedHookForTest(func(tableID uint64, waiter []byte, holders [][]byte) {
+					if tableID == gateID && len(waiter) != 0 && len(holders) != 0 {
+						queueOnce.Do(func() { close(queued) })
+					}
+				})
+				defer restoreWaiter()
+				restored := make(chan error, 1)
+				go func() { _, err := admin.ExecContext(ctx, tc.restore); restored <- err }()
+				select {
+				case <-captured:
+				case err := <-restored:
+					t.Fatalf("restore returned before capture: %v", err)
+				case <-ctx.Done():
+					t.Fatal(ctx.Err())
+				}
+				deleted := make(chan error, 1)
+				go func() { _, err := admin.ExecContext(ctx, tc.mutation); deleted <- err }()
+				select {
+				case <-queued:
+				case err := <-deleted:
+					releaseRestore()
+					require.NoError(t, <-restored)
+					t.Fatalf("deletion bypassed principal pin: %v", err)
+				case <-ctx.Done():
+					t.Fatal(ctx.Err())
+				}
+				releaseRestore()
+				require.NoError(t, <-restored)
+				require.NoError(t, <-deleted)
+				restoreMode()
+				var value, principals int
+				require.NoError(t, admin.QueryRowContext(ctx, "select id from "+name).Scan(&value))
+				require.Equal(t, 1, value)
+				principalName := "user_name='pin_user_0'"
+				if tc.catalog == "mo_role" {
+					principalName = "role_name='pin_role_1'"
+				}
+				require.NoError(t, admin.QueryRowContext(ctx, "select count(*) from mo_catalog."+tc.catalog+" where "+principalName).Scan(&principals))
+				require.Zero(t, principals)
+			})
+		}
+	})
+}
