@@ -54,7 +54,7 @@ func TestRestoreDDLContext(t *testing.T) {
 
 func TestPrepareRestoreOwnershipRetainsPrincipalIDs(t *testing.T) {
 	const databaseQuery = "select datname, '', cast(creator as char), cast(owner as char) from mo_catalog.mo_database {MO_TS = 42} where account_id = 10 and datname = 'app'"
-	const tableQuery = "select reldatabase, relname, cast(creator as char), cast(owner as char) from mo_catalog.mo_tables {MO_TS = 42} where account_id = 10 and reldatabase = 'app' and relname = 't'"
+	const tableQuery = "select reldatabase, relname, cast(creator as char), cast(owner as char), relkind from mo_catalog.mo_tables {MO_TS = 42} where account_id = 10 and reldatabase = 'app' and relname = 't'"
 	const oldUsers = "select cast(user_id as char), user_name from mo_catalog.mo_user {MO_TS = 42} where user_id in (1,3)"
 	const currentUsers = "select cast(user_id as char), user_name from mo_catalog.mo_user where user_id in (1,3) order by user_id for update"
 	const oldRoles = "select cast(role_id as char), role_name from mo_catalog.mo_role {MO_TS = 42} where role_id in (2,4)"
@@ -70,7 +70,7 @@ func TestPrepareRestoreOwnershipRetainsPrincipalIDs(t *testing.T) {
 		bh.sql2result[query] = newMrsForRestoreStringRows(columns, rows)
 	}
 	setRows(databaseQuery, []string{"database", "table", "creator", "owner"}, [][]interface{}{{"app", "", "1", "2"}})
-	setRows(tableQuery, []string{"database", "table", "creator", "owner"}, [][]interface{}{{"app", "t", "3", "4"}})
+	setRows(tableQuery, []string{"database", "table", "creator", "owner", "relkind"}, [][]interface{}{{"app", "t", "3", "4", catalog.SystemOrdinaryRel}})
 	setRows(oldUsers, []string{"id", "name"}, [][]interface{}{{"1", "creator"}, {"3", "editor"}})
 	setRows(currentUsers, []string{"id", "name"}, [][]interface{}{{"1", "creator"}, {"3", "editor"}})
 	setRows(oldRoles, []string{"id", "name"}, [][]interface{}{{"2", "db_owner"}, {"4", "table_owner"}})
@@ -96,6 +96,38 @@ func TestPrepareRestoreOwnershipRetainsPrincipalIDs(t *testing.T) {
 		require.Equal(t, tc.user, defines.GetUserId(ownerCtx))
 		require.Equal(t, tc.role, defines.GetRoleId(ownerCtx))
 	}
+
+	// External creator/owner requirements are independently absent. Views and
+	// sequences are deferred by execution, not omitted from recreation.
+	bulkQuery := strings.TrimSuffix(tableQuery, " and relname = 't'")
+	columns := []string{"database", "table", "creator", "owner", "relkind"}
+	for _, external := range [][]interface{}{
+		{"app", "ext", "99", "4", catalog.SystemExternalRel},
+		{"app", "ext", "3", "99", catalog.SystemExternalRel},
+	} {
+		setRows(bulkQuery, columns, [][]interface{}{
+			{"app", "t", "3", "4", catalog.SystemOrdinaryRel},
+			{"app", "v", "3", "4", catalog.SystemViewRel},
+			{"app", "s", "3", "4", catalog.SystemSequenceRel}, external,
+		})
+		bulkCtx, err := prepareRestoreOwnership(t.Context(), bh, 42, 10, 10, "app", "")
+		require.NoError(t, err)
+		for _, table := range []string{"t", "v", "s"} {
+			ownerCtx, err := restoreDDLContext(bulkCtx, "app", table)
+			require.NoError(t, err)
+			require.Equal(t, uint32(3), defines.GetUserId(ownerCtx))
+			require.Equal(t, uint32(4), defines.GetRoleId(ownerCtx))
+		}
+		_, err = restoreDDLContext(bulkCtx, "app", "ext")
+		require.ErrorContains(t, err, "missing historical ownership")
+	}
+	bh.sql2err[bulkQuery] = errors.New("ownership read failed")
+	_, err = prepareRestoreOwnership(t.Context(), bh, 42, 10, 10, "app", "")
+	require.ErrorContains(t, err, "ownership read failed")
+	delete(bh.sql2err, bulkQuery)
+	setRows(bulkQuery, columns[:4], [][]interface{}{{"app", "t", "3", "4"}})
+	_, err = prepareRestoreOwnership(t.Context(), bh, 42, 10, 10, "app", "")
+	require.Error(t, err, "missing relation kind must fail closed")
 
 	setRows(currentUsers, []string{"id", "name"}, [][]interface{}{{"1", "creator"}})
 	_, err = prepareRestoreOwnership(t.Context(), bh, 42, 10, 10, "app", "t")

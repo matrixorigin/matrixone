@@ -49,7 +49,7 @@ func TestRestoreSubscriptionPropagatesErrors(t *testing.T) {
 		"select 1 from mo_catalog.mo_columns where att_database = 'mo_catalog' and att_relname = 'mo_pubs' and attname = 'account_name'",
 		fmt.Sprintf(getPubInfoSql, 30) + " and pub_name = 'p'",
 		"select datname, '', cast(creator as char), cast(owner as char) from mo_catalog.mo_database {MO_TS = 42} where account_id = 10",
-		"select reldatabase, relname, cast(creator as char), cast(owner as char) from mo_catalog.mo_tables {MO_TS = 42} where account_id = 10",
+		"select reldatabase, relname, cast(creator as char), cast(owner as char), relkind from mo_catalog.mo_tables {MO_TS = 42} where account_id = 10",
 		"create database subdb from publisher publication p",
 	}
 	fixture := func() *subscriptionRestoreExec {
@@ -61,7 +61,7 @@ func TestRestoreSubscriptionPropagatesErrors(t *testing.T) {
 			{{int64(1)}},
 			{{int64(30), "publisher", "p", "app", uint64(300), "*", "subscriber", "", nil, uint64(2), uint64(0), ""}},
 			{{"subdb", "", "2", "2"}},
-			{{"subdb", "t", "2", "2"}},
+			{{"subdb", "t", "2", "2", "r"}},
 		}
 		for i, row := range rows {
 			names := make([]string, len(row[0]))

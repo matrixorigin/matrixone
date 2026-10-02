@@ -7908,7 +7908,8 @@ func verifyPrivilegeEntryInMultiPrivilegeLevels(
 	// Duplicate levels can generate the same complete predicate. Remember only
 	// successful misses in this invocation, retaining ordered cache/error checks
 	// and the early wildcard hit without allocating a collection.
-	var missedSQL []string
+	var missedSQLStorage [int(privilegeLevelEnd)]string
+	missedSQL := missedSQLStorage[:0]
 	for _, pl := range pls {
 		if cache != nil && enableCache {
 			yes = cache.has(entry.objType, pl, dbName, entry.tableName, entry.privilegeId)

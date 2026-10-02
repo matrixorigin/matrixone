@@ -70,10 +70,16 @@ func TestIssue29399TableRestoreRetainsDatabaseOwnership(t *testing.T) {
 			"create table app.t(id int)", "insert into app.t values (1)",
 			"insert into app.owned values (3)",
 			"create database recreated", "create table recreated.t(id int)", "insert into recreated.t values (7)",
-			"create snapshot issue_29399_owner_scope_s for account",
+			"create database role_owned", "create table role_owned.t(id int)", "insert into role_owned.t values (5)",
+			"create role external_owner", "grant external_owner to admin",
+			"grant connect on account * to external_owner", "grant create table on database role_owned to external_owner",
 		} {
 			execSQLRequire(t, ctx, admin, stmt)
 		}
+		execSQLRequire(t, ctx, creator, "create external table recreated.ext(id int) infile{'filepath'='/tmp/issue29399-unused.csv','format'='csv'} fields terminated by ','")
+		externalOwner := open(account + "#admin#external_owner")
+		execSQLRequire(t, ctx, externalOwner, "create external table role_owned.ext(id int) infile{'filepath'='/tmp/issue29399-unused.csv','format'='csv'} fields terminated by ','")
+		execSQLRequire(t, ctx, admin, "create snapshot issue_29399_owner_scope_s for account")
 		// PITR accepts second-resolution timestamps. This delay crosses that
 		// public precision boundary; it does not schedule competing operations.
 		var slept int
@@ -82,7 +88,59 @@ func TestIssue29399TableRestoreRetainsDatabaseOwnership(t *testing.T) {
 		require.NoError(t, admin.QueryRowContext(ctx, "select date_format(current_timestamp(6), '%Y-%m-%d %H:%i:%s')").Scan(&at))
 		var id, owner, user uint64
 		require.NoError(t, admin.QueryRowContext(ctx, "select dat_id, owner, creator from mo_catalog.mo_database where datname='app'").Scan(&id, &owner, &user))
+		var userCatalog, roleCatalog uint64
+		require.NoError(t, admin.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase='mo_catalog' and relname='mo_user'").Scan(&userCatalog))
+		require.NoError(t, admin.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase='mo_catalog' and relname='mo_role'").Scan(&roleCatalog))
 		execSQLRequire(t, ctx, admin, "drop user db_creator")
+		execSQLRequire(t, ctx, admin, "drop role external_owner")
+		// Each database isolates one missing principal of an external table:
+		// recreated has a missing creator; role_owned has a missing owner only.
+		for _, target := range []struct {
+			database string
+			value    int
+		}{{"recreated", 7}, {"role_owned", 5}} {
+			database := target.database
+			execSQLRequire(t, ctx, admin, "drop table "+database+".ext")
+			execSQLRequire(t, ctx, admin, "create table "+database+".ext(id int)")
+			execSQLRequire(t, ctx, admin, "insert into "+database+".ext values(42)")
+			execSQLRequire(t, ctx, admin, "update "+database+".t set id=9")
+			var before uint64
+			identitySQL := "select rel_id from mo_catalog.mo_tables where reldatabase='" + database + "' and relname='ext'"
+			require.NoError(t, admin.QueryRowContext(ctx, identitySQL).Scan(&before))
+			for _, restore := range []string{
+				"restore table " + database + ".ext {snapshot='issue_29399_owner_scope_s'}",
+				"restore database " + database + " table ext from pitr issue_29399_owner_scope_p '" + at + "'",
+			} {
+				_, err := admin.ExecContext(ctx, restore)
+				require.ErrorContains(t, err, "external table "+database+".ext cannot be restored")
+				var after uint64
+				var value int
+				require.NoError(t, admin.QueryRowContext(ctx, identitySQL).Scan(&after))
+				require.Equal(t, before, after)
+				require.NoError(t, admin.QueryRowContext(ctx, "select id from "+database+".ext").Scan(&value))
+				require.Equal(t, 42, value)
+				require.NoError(t, admin.QueryRowContext(ctx, "select id from "+database+".t").Scan(&value))
+				require.Equal(t, 9, value)
+			}
+			for _, restore := range []string{
+				"restore database " + database + " {snapshot='issue_29399_owner_scope_s'}",
+				"restore database " + database + " from pitr issue_29399_owner_scope_p '" + at + "'",
+			} {
+				execSQLRequire(t, ctx, admin, "update "+database+".t set id=9")
+				execSQLRequire(t, ctx, admin, restore)
+				var value, externalTables int
+				require.NoError(t, admin.QueryRowContext(ctx, "select id from "+database+".t").Scan(&value))
+				require.Equal(t, target.value, value)
+				require.NoError(t, admin.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase='"+database+"' and relname='ext'").Scan(&externalTables))
+				require.Zero(t, externalTables)
+			}
+		}
+		var currentUserCatalog, currentRoleCatalog uint64
+		require.NoError(t, admin.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase='mo_catalog' and relname='mo_user'").Scan(&currentUserCatalog))
+		require.NoError(t, admin.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase='mo_catalog' and relname='mo_role'").Scan(&currentRoleCatalog))
+		require.Equal(t, userCatalog, currentUserCatalog)
+		require.Equal(t, roleCatalog, currentRoleCatalog)
+
 		for _, restore := range []string{
 			"restore table app.t {snapshot='issue_29399_owner_scope_s'}",
 			"restore database app table t from pitr issue_29399_owner_scope_p '" + at + "'",

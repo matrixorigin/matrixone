@@ -67,13 +67,25 @@ func prepareRestoreOwnership(ctx context.Context, bh BackgroundExec, ts int64, s
 		}
 	}
 	tables, err := getStringColsListFromTS(sourceCtx, bh, fmt.Sprintf(
-		"select reldatabase, relname, cast(creator as char), cast(owner as char) from mo_catalog.mo_tables {MO_TS = %d} where %s", ts, tableFilter), source, target, 0, 1, 2, 3)
+		"select reldatabase, relname, cast(creator as char), cast(owner as char), relkind from mo_catalog.mo_tables {MO_TS = %d} where %s", ts, tableFilter), source, target, 0, 1, 2, 3, 4)
 	if err != nil {
 		return nil, err
 	}
-	owners := make(map[restoreObjectName]restoreOwner, len(dbs)+len(tables))
+	// Match the existing recreation policy before collecting principal pins.
+	// Keep execution's table list intact: explicitly selected external tables
+	// must still reach their normal rejection before ownership is consumed.
+	ownershipRows := dbs
+	for _, row := range tables {
+		if len(row) != 5 {
+			return nil, moerr.NewInternalErrorNoCtx("invalid restore ownership row")
+		}
+		if shouldSkipRestoreTableInBulk(&tableInfo{dbName: row[0], tblName: row[1], relKind: row[4]}) {
+			continue
+		}
+		ownershipRows = append(ownershipRows, row[:4])
+	}
+	owners := make(map[restoreObjectName]restoreOwner, len(ownershipRows))
 	neededUsers, neededRoles := make(map[uint32]struct{}), make(map[uint32]struct{})
-	ownershipRows := append(dbs, tables...)
 	for _, row := range ownershipRows {
 		if len(row) != 4 {
 			return nil, moerr.NewInternalErrorNoCtx("invalid restore ownership row")
