@@ -18,8 +18,10 @@ import (
 	"math"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -233,4 +235,47 @@ func makeRightDedupEquality(typ types.T) *planpb.Expr {
 			{Typ: planType, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1, ColPos: 0}}},
 		}}},
 	}
+}
+
+// One extra estimated target key can cross a resident-map allocation step even
+// though its relative drift is small. Admission must reach the real optimizer.
+func TestCachedRightDedupGrowthReplansAtMapBoundary(t *testing.T) {
+	mock := NewMockCompilerContext(true)
+	cache := NewStatsCache()
+	ctx := &fixedStatsCompilerContext{statsCacheCompilerContext: &statsCacheCompilerContext{MockCompilerContext: mock, statsCache: cache}}
+	ctx.GetProcess().Base.Lim.Size = int64(2 * hashtable.EstimateInt64HashMapSize(2048))
+	setRows := func(name string, rows float64) {
+		stats := NewStatsInfo()
+		stats.TableName, stats.TableCnt = name, rows
+		stats.AccurateObjectNumber, stats.BlockNumber = 1, 1
+		cache.Set(mock.tables[name].TblId, stats)
+	}
+	setRows("nation", 48)
+	setRows("region", 2000)
+	stmts, err := mysql.Parse(ctx.GetContext(), "insert into nation select r_regionkey % 100,r_name,r_regionkey,r_comment from region", 1)
+	require.NoError(t, err)
+	defer stmts[0].Free()
+	cached, err := BuildPlan(ctx, stmts[0], false)
+	require.NoError(t, err)
+	findDedup := func(p *planpb.Plan) *planpb.Node {
+		for _, n := range p.GetQuery().Nodes {
+			if n.NodeType == planpb.Node_JOIN && n.JoinType == planpb.Node_DEDUP {
+				return n
+			}
+		}
+		t.Fatal("real INSERT plan must contain DEDUP")
+		return nil
+	}
+	require.True(t, findDedup(cached).IsRightJoin, "%s", cached.String())
+	changed, err := CachedPlanStatsChanged(cached, ctx)
+	require.NoError(t, err)
+	require.False(t, changed)
+	setRows("nation", 49)
+	changed, err = CachedPlanStatsChanged(cached, ctx)
+	require.NoError(t, err)
+	require.True(t, changed)
+	fresh, err := BuildPlan(ctx, stmts[0], false)
+	require.NoError(t, err)
+	require.False(t, findDedup(fresh).IsRightJoin, "%s", fresh.String())
+	require.True(t, findDedup(cached).IsRightJoin, "admission must not patch the borrowed generation")
 }
