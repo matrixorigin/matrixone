@@ -3812,6 +3812,10 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Default:           int64(0),
 	},
 	// Inert setting retained for stopped-version rollback; transaction tracing is retired.
+	// SET/SHOW use generic variable storage only; there is no tracing consumer.
+	// TODO(retire-txn-trace, #29249): remove this declaration and its inert-setting
+	// tests once the rollback window excludes collector-bearing versions and
+	// client/session initialization no longer sends this setting.
 	"disable_txn_trace": {
 		Name:              "disable_txn_trace",
 		Scope:             ScopeSession,

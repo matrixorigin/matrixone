@@ -304,6 +304,9 @@ type Config struct {
 
 		// Trace is retained for stopped-version rollback configuration.
 		// The transaction data collector is retired; every field is inert.
+		// TODO(retire-txn-trace, #29249): remove this block and its parsing tests
+		// after the rollback window excludes collector-bearing versions and
+		// deployed service TOMLs no longer contain these keys. Do not add readers.
 		Trace struct {
 			BufferSize    int           `toml:"buffer-size"`
 			FlushBytes    toml.ByteSize `toml:"flush-bytes"`

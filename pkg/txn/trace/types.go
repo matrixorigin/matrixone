@@ -13,7 +13,12 @@
 // limitations under the License.
 
 // Package trace retains only catalog definitions for stopped-version rollback.
-// No transaction trace runtime or collection API remains.
+// No transaction trace runtime or collection API remains. Historical rows and
+// files are not consumed or cleaned up by this package.
+// TODO(retire-txn-trace, #29249): after the release rollback window no longer
+// includes a collector-bearing version, remove these declarations together with
+// bootstrap/upgrade registrations, the planner's mo_debug protection and their
+// retirement tests. Removing declarations must not implicitly delete user data.
 package trace
 
 import "fmt"

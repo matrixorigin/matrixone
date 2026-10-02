@@ -122,6 +122,7 @@ func init() {
 	sql = predefine.GenInitPublicationTaskSQL()
 	initSQLs = append(initSQLs, sql)
 
+	// Retired collector catalog only; removal follows pkg/txn/trace's rollback gate.
 	initSQLs = append(initSQLs, trace.InitSQLs...)
 
 	initSQLs = append(initSQLs, shardservice.InitSQLs...)
