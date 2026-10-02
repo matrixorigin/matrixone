@@ -16,6 +16,7 @@ package embed
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -1254,8 +1255,6 @@ func TestRetiredTransactionTracePreservesRollbackArtifacts(t *testing.T) {
 	// through its lifecycle owner before acquiring exclusive admission.
 	require.NoError(t, CloseSingleCNBaseClusterTests())
 	root := t.TempDir()
-	marker := filepath.Join(root, "historical.csv")
-	require.NoError(t, os.WriteFile(marker, []byte("historical trace data"), 0600))
 	var parsed cnservice.Config
 	md, err := toml.Decode(fmt.Sprintf(`[txn.trace]
 enable = true
@@ -1281,6 +1280,14 @@ load-to-mo = true
 		t.Cleanup(func() { require.NoError(t, c.Close()) })
 	}
 	require.NoError(t, err)
+	cn, err := c.GetCNService(0)
+	require.NoError(t, err)
+	// Seed the actual former collector-owned layout before startup.
+	legacyRoot := filepath.Join(cn.GetServiceConfig().DataDir, parsed.Txn.Trace.Dir)
+	legacyDir := filepath.Join(legacyRoot, fmt.Sprintf("cn-%x", sha256.Sum256([]byte(cn.ServiceID()))))
+	require.NoError(t, os.MkdirAll(legacyDir, 0700))
+	marker := filepath.Join(legacyDir, "historical.csv")
+	require.NoError(t, os.WriteFile(marker, []byte("historical trace data"), 0600))
 	require.NoError(t, c.Start())
 
 	check := func(seed bool) {
@@ -1334,9 +1341,9 @@ load-to-mo = true
 		data, err := os.ReadFile(marker)
 		require.NoError(t, err)
 		require.Equal(t, "historical trace data", string(data))
-		entries, err := os.ReadDir(root)
+		entries, err := os.ReadDir(legacyDir)
 		require.NoError(t, err)
-		require.Len(t, entries, 1, "retired trace must not create directories or output")
+		require.Len(t, entries, 1, "retired trace must not create output")
 	}
 	check(true)
 	require.NoError(t, c.Close())
