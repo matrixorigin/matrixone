@@ -23,10 +23,12 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/stretchr/testify/require"
 )
 
-func TestPreparedPointUpdatesPreserveWorkspaceVisibility(t *testing.T) {
+func TestPreparedPlansPreserveWorkspaceVisibility(t *testing.T) {
 	runSQLIntegration(t, func(c embed.Cluster) {
 		cn, err := c.GetCNService(0)
 		require.NoError(t, err)
@@ -148,7 +150,7 @@ func TestPreparedPointUpdatesPreserveWorkspaceVisibility(t *testing.T) {
 		require.NoError(t, conn.QueryRowContext(ctx, "select sum(v) from composite_t").Scan(&sum))
 		require.Zero(t, sum)
 		// Real COM_QUERY dispatch sees growth; frontend owner tests distinguish
-		// point reuse from sensitive range rebuilding.
+		// minor-drift reuse from material-growth rebuilding.
 		exec("begin")
 		inTxn = true
 		for i := 129; i < 132; i++ {
@@ -163,6 +165,94 @@ func TestPreparedPointUpdatesPreserveWorkspaceVisibility(t *testing.T) {
 		require.NoError(t, conn.QueryRowContext(ctx, "select count(*),sum(v) from t").Scan(&countRows, &sum))
 		require.Equal(t, 128, countRows)
 		require.Zero(t, sum)
+		// Small NewOrder/Delivery-like mix: matching integer domains permit
+		// prepared reuse, while every statement sees current transaction writes.
+		exec("create table orders_t(w bigint,id bigint,v bigint,primary key(w,id))")
+		exec("insert into orders_t values(1,1,10),(1,2,20),(1,3,30),(1,4,40),(2,1,100)")
+		var ordersTableID uint64
+		require.NoError(t, conn.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase='prepared_stats_reuse' and relname='orders_t'").Scan(&ordersTableID))
+		lockedRows := func() int {
+			count := 0
+			lockservice.GetLockServiceByServiceID(cn.ServiceID()).IterLocks(func(tableID uint64, keys [][]byte, lock lockservice.Lock) bool {
+				if tableID == ordersTableID && !lock.IsRangeLock() && lock.GetLockMode() == lockpb.LockMode_Exclusive {
+					count += len(keys)
+				}
+				return true
+			})
+			return count
+		}
+		prepare := func(query string) *sql.Stmt {
+			t.Helper()
+			stmt, err := conn.PrepareContext(ctx, query)
+			require.NoError(t, err)
+			return stmt
+		}
+		locked := prepare("select v from orders_t where w=? and id=? for update")
+		defer locked.Close()
+		change := prepare("update orders_t set v=v+1 where w=? and id=?")
+		defer change.Close()
+		rangeSum := prepare("select sum(v) from orders_t where w=?")
+		defer rangeSum.Close()
+		oldest := prepare("select id from orders_t where w=? order by id")
+		defer oldest.Close()
+		remove := prepare("delete from orders_t where w=? and id=?")
+		defer remove.Close()
+		for _, finish := range []string{"rollback", "commit"} {
+			exec("begin")
+			inTxn = true
+			for id := 1; id <= 4; id++ {
+				require.NoError(t, locked.QueryRowContext(ctx, 1, id).Scan(&restored))
+				require.Equal(t, id*10, restored)
+				require.Equal(t, id, lockedRows(), "reused locking read must lock each newly bound key before UPDATE")
+				result, err := change.ExecContext(ctx, 1, id)
+				require.NoError(t, err)
+				affected, err := result.RowsAffected()
+				require.NoError(t, err)
+				require.Equal(t, int64(1), affected)
+				require.NoError(t, locked.QueryRowContext(ctx, 1, id).Scan(&restored))
+				require.Equal(t, id*10+1, restored)
+				require.NoError(t, rangeSum.QueryRowContext(ctx, 1).Scan(&sum))
+				require.Equal(t, 100+id, sum)
+			}
+			exec("insert into orders_t values(1,5,50)")
+			require.NoError(t, locked.QueryRowContext(ctx, 1, 5).Scan(&restored))
+			require.Equal(t, 50, restored)
+			for id := 1; id <= 2; id++ {
+				readIDs := func() []int {
+					rows, err := oldest.QueryContext(ctx, 1)
+					require.NoError(t, err)
+					defer rows.Close()
+					var ids []int
+					for rows.Next() {
+						var got int
+						require.NoError(t, rows.Scan(&got))
+						ids = append(ids, got)
+					}
+					require.NoError(t, rows.Err())
+					return ids
+				}
+				require.Equal(t, []int{1, 2, 3, 4, 5}[id-1:], readIDs())
+				result, err := remove.ExecContext(ctx, 1, id)
+				require.NoError(t, err)
+				affected, err := result.RowsAffected()
+				require.NoError(t, err)
+				require.Equal(t, int64(1), affected)
+				require.ErrorIs(t, locked.QueryRowContext(ctx, 1, id).Scan(&restored), sql.ErrNoRows)
+			}
+			require.NoError(t, rangeSum.QueryRowContext(ctx, 1).Scan(&sum))
+			require.Equal(t, 122, sum)
+			exec(finish)
+			inTxn = false
+			wantSum, wantCount := 122, 3
+			if finish == "rollback" {
+				wantSum, wantCount = 100, 4
+			}
+			require.NoError(t, conn.QueryRowContext(ctx, "select count(*),sum(v) from orders_t where w=1").Scan(&countRows, &sum))
+			require.Equal(t, wantCount, countRows)
+			require.Equal(t, wantSum, sum)
+		}
+		require.NoError(t, conn.QueryRowContext(ctx, "select v from orders_t where w=2 and id=1").Scan(&restored))
+		require.Equal(t, 100, restored, "composite-key prefix must isolate the other warehouse")
 		exec("create table string_t(id varchar(8) primary key,v int)")
 		exec("insert into string_t values('1',0),('01',0)")
 		stringUpdate, err := conn.PrepareContext(ctx, "update string_t set v=v+1 where id=?")

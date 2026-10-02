@@ -6543,28 +6543,9 @@ func TestPreparedStatsAdmissionPreservesStableCompileAndRejectsError(t *testing.
 	require.Same(t, sentinel, prepared.compile, "existing rebuild/Close owns exactly-once compile cleanup")
 }
 
-func TestPreparedStatsAdmissionChecksInstalledSpecialization(t *testing.T) {
-	base := plan2.NewMockCompilerContext(false)
-	ctx := &preparedStatsTestCompiler{preparedTestCompiler: &preparedTestCompiler{CompilerContext: base, proc: base.GetProcess()}, stats: &pbstats.StatsInfo{TableCnt: 5}}
-	ses, prepared, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(t, 226, "select n_name from nation where n_nationkey=?", ctx)
-	defer prepared.Close()
-	ctx.proc = cw.proc
-	// A differently bound runtime plan may be statistics-sensitive even when
-	// the template is a point lookup. It must not inherit the template's proof.
-	stmts, err := mysql.Parse(ctx.GetContext(), "select n_name from nation", 1)
-	require.NoError(t, err)
-	defer stmts[0].Free()
-	prepared.runtimePlan, err = plan2.BuildPlan(ctx, stmts[0], false)
-	require.NoError(t, err)
-	ctx.err = fmt.Errorf("installed specialization requires current statistics")
-	_, _, _, _, _, err = initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepared.Name, base.Resolve, ctx)
-	require.ErrorIs(t, err, ctx.err)
-	require.True(t, prepared.needsRebuild)
-}
-
 // Replace storage observations only; admission, binding and rebuild use their
 // real frontend owners. The fixtures are sequential and restore the global PU.
-func installStatsAdmissionStorage(t *testing.T, ses *Session, table *plan.TableDef, stats func() *pbstats.StatsInfo) {
+func installStatsAdmissionStorage(t testing.TB, ses *Session, table *plan.TableDef, stats func() *pbstats.StatsInfo) {
 	t.Helper()
 	ctrl := gomock.NewController(t)
 	eng := mock_frontend.NewMockEngine(ctrl)
@@ -6600,6 +6581,29 @@ func TestPreparedStatsGrowthRebuildsExecutionStrategy(t *testing.T) {
 	require.NoError(t, err)
 	installStatsAdmissionStorage(t, ses, table, func() *pbstats.StatsInfo { return ctx.stats })
 	defer ses.GetTxnCompileCtx().Close()
+	for _, node := range original.GetQuery().Nodes {
+		if node.NodeType == plan.Node_TABLE_SCAN {
+			node.Stats.TableCnt = 128
+		}
+	}
+	// A material change installs a new baseline. Rolling back by the same
+	// factor must replan from that new generation rather than slide the old one.
+	for _, rows := range []float64{256, 128} {
+		ctx.stats = &pbstats.StatsInfo{TableCnt: rows, BlockNumber: 1, AccurateObjectNumber: 1}
+		_, fresh, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepared.Name, base.Resolve, ctx)
+		if owned && stmt != nil {
+			stmt.Free()
+		}
+		require.NoError(t, err)
+		require.False(t, cw.planGenerationReused)
+		require.NotSame(t, original, fresh)
+		for _, node := range fresh.GetQuery().Nodes {
+			if node.NodeType == plan.Node_TABLE_SCAN {
+				require.Equal(t, rows, node.Stats.TableCnt)
+			}
+		}
+		original = fresh
+	}
 	ctx.stats = &pbstats.StatsInfo{TableCnt: 1e9, BlockNumber: 1e6, AccurateObjectNumber: 1}
 	ret, fresh, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepared.Name, base.Resolve, ctx)
 	if owned && stmt != nil {
@@ -6615,12 +6619,20 @@ func TestPreparedStatsGrowthRebuildsExecutionStrategy(t *testing.T) {
 
 // Assert the installed generation, not a process-wide planning metric: other
 // sessions and background tasks may plan while this statement is executing.
-func TestPreparedPointGenerationSurvivesTransientStatsGrowth(t *testing.T) {
+func TestPreparedGenerationSurvivesSmallStatsDrift(t *testing.T) {
 	for _, tc := range []struct {
 		name, sql string
 		params    int
 	}{
 		{"single", "update nation set n_regionkey=n_regionkey+1 where n_nationkey=?", 1},
+		{"locking_read", "select n_name from nation where n_nationkey=? for update", 1},
+		{"point_delete", "delete from nation where n_nationkey=?", 1},
+		{"range_read", "select n_name from nation where n_nationkey>?", 1},
+		{"range_aggregate", "select sum(n_regionkey) from nation where n_nationkey>?", 1},
+		{"range_update", "update nation set n_regionkey=n_regionkey+1 where n_nationkey>?", 1},
+		{"ordered_range", "select n_nationkey from nation where n_nationkey>? order by n_nationkey", 1},
+		{"connected_join", "select n_name from nation join region on n_regionkey=r_regionkey where n_nationkey=?", 1},
+		{"insert", "insert into nation(n_nationkey,n_name,n_regionkey,n_comment) values(?,'a',1,'')", 1},
 		{"composite", "update partsupp set ps_availqty=ps_availqty+1 where ps_partkey=? and ps_suppkey=?", 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -6672,7 +6684,7 @@ func TestPreparedPointGenerationSurvivesTransientStatsGrowth(t *testing.T) {
 						v = value
 					}
 					require.NoError(t, vector.AppendBytes(prepared.params, []byte(fmt.Sprintf("%d", v)), false, cw.proc.Mp()))
-					prepared.ParamTypes = append(prepared.ParamTypes, byte(defines.MYSQL_TYPE_LONGLONG), 0)
+					prepared.ParamTypes = append(prepared.ParamTypes, byte(defines.MYSQL_TYPE_LONG), 0)
 				}
 			}
 			bind(1)
@@ -6686,6 +6698,13 @@ func TestPreparedPointGenerationSurvivesTransientStatsGrowth(t *testing.T) {
 			}
 			sentinel := compile.NewCompile("", "", prepared.Sql, "", "", nil, cw.proc, prepared.PrepareStmt, false, nil, time.Now())
 			require.True(t, cw.installRuntimeCacheCandidate(sentinel))
+			// PREPARE and first specialization can capture different estimates.
+			// Admission must compare with the installed runtime generation.
+			for _, node := range prepared.PreparePlan.GetDcl().GetPrepare().Plan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_TABLE_SCAN {
+					node.Stats.TableCnt = 1
+				}
+			}
 			for i := 2; i <= 21; i++ {
 				ctx.stats.TableCnt = float64(127 + i)
 				bind(i)
@@ -6703,6 +6722,60 @@ func TestPreparedPointGenerationSurvivesTransientStatsGrowth(t *testing.T) {
 			require.NoError(t, err)
 			require.Same(t, sentinel, ret)
 			require.Same(t, runtimePlan, reused)
+		})
+	}
+}
+
+// Benchmark the real admission/binding/rebuild owner under small observation
+// drift. Storage is controlled; SQL execution and network time are excluded.
+func BenchmarkPreparedStatsDrift(b *testing.B) {
+	for _, tc := range []struct{ name, sql string }{
+		{"locking_read", "select n_name from nation where n_nationkey=? for update"},
+		{"point_delete", "delete from nation where n_nationkey=?"},
+		{"range_read", "select n_name from nation where n_nationkey>?"},
+		{"range_aggregate", "select sum(n_regionkey) from nation where n_nationkey>?"},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			base := plan2.NewMockCompilerContext(true)
+			ctx := &preparedStatsTestCompiler{preparedTestCompiler: &preparedTestCompiler{CompilerContext: base, proc: base.GetProcess()}, stats: &pbstats.StatsInfo{TableCnt: 128}}
+			ses, prepared, cw, ec := newPreparedExecuteEnvForSQLWithCompilerContext(b, 230, tc.sql, ctx)
+			defer prepared.Close()
+			defer ses.GetTxnCompileCtx().Close()
+			ctx.proc = cw.proc
+			prepared.defaultDatabase = "tpch"
+			_, table, err := base.Resolve("tpch", "nation", nil)
+			require.NoError(b, err)
+			installStatsAdmissionStorage(b, ses, table, func() *pbstats.StatsInfo { return ctx.stats })
+			prepared.params = vector.NewVec(types.T_text.ToType())
+			require.NoError(b, vector.AppendBytes(prepared.params, []byte("1"), false, cw.proc.Mp()))
+			prepared.ParamTypes = []byte{byte(defines.MYSQL_TYPE_LONG), 0}
+			execute := func() {
+				ret, _, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(ec, ses, ses, cw, nil, prepared.Name, base.Resolve, ctx)
+				if owned && stmt != nil {
+					stmt.Free()
+				}
+				if err != nil {
+					b.Fatal(err)
+				}
+				if ret == nil {
+					candidate := compile.NewCompile("", "", prepared.Sql, "", "", nil, cw.proc, prepared.PrepareStmt, false, nil, time.Now())
+					if !cw.installRuntimeCacheCandidate(candidate) {
+						b.Fatal("no reusable specialization")
+					}
+				}
+			}
+			execute()
+			for _, node := range prepared.runtimePlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_TABLE_SCAN {
+					node.Stats.TableCnt = 128
+				}
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				ctx.stats.TableCnt = float64(129 + i%20)
+				execute()
+			}
 		})
 	}
 }

@@ -11544,14 +11544,17 @@ type statsAdmissionStopResponse struct {
 
 func (r *statsAdmissionStopResponse) RespPreMeta(*ExecCtx, any) error { return r.err }
 
-func TestOrdinaryCacheStatsAdmissionRetainsPointAndRebuildsRange(t *testing.T) {
+func TestOrdinaryCacheStatsAdmissionUsesGenerationBaseline(t *testing.T) {
 	for _, tc := range []struct {
-		name, sql       string
-		growth, rebuild bool
+		name, sql string
+		rows      float64
+		rebuild   bool
 	}{
-		{"point growth", "select n_name from nation where n_nationkey=1", true, false},
-		{"stable range", "select n_name from nation where n_nationkey>=1", false, false},
-		{"range growth", "select n_name from nation where n_nationkey>=1", true, true},
+		{"minor point growth", "select n_name from nation where n_nationkey=1", 129, false},
+		{"material point growth", "select n_name from nation where n_nationkey=1", 256, true},
+		{"stable range", "select n_name from nation where n_nationkey>=1", 128, false},
+		{"minor range growth", "select n_name from nation where n_nationkey>=1", 129, false},
+		{"material range growth", "select n_name from nation where n_nationkey>=1", 256, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			base := plan.NewMockCompilerContext(false)
@@ -11591,9 +11594,7 @@ func TestOrdinaryCacheStatsAdmissionRetainsPointAndRebuildsRange(t *testing.T) {
 			require.Same(t, cached, cw.Plan())
 			require.True(t, cw.planGenerationReused)
 			ec.cw, ec.cws, ec.stmt = cw, cws, cw.GetAst()
-			if tc.growth {
-				ctx.stats.TableCnt = 129
-			}
+			ctx.stats.TableCnt = tc.rows
 			err = dispatchStmt(ses, statistic.NewStatsArray(), ec)
 			require.ErrorIs(t, err, stop)
 			if tc.rebuild {

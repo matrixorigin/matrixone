@@ -3643,14 +3643,17 @@ func (builder *QueryBuilder) hintQueryType() {
 	}
 }
 
-// CachedPlanStatsChanged compares unfiltered scan cardinality, preserving the
-// existing intentional COUNT/LIMIT/internal/execution-hint models. Execution
-// ranges and Reset remain responsible for same-count object transitions.
+// CachedPlanStatsChanged admits reuse against the unfiltered counts captured
+// in this generation. Ordinary estimates may drift by less than a factor of
+// two; this is a reoptimization policy, not a bound on actual resource demand.
+// Cartesian and resident RIGHT DEDUP plans retain exact admission. Execution
+// ranges, Reset and allocation/spill remain responsible for runtime state.
 func CachedPlanStatsChanged(p *plan.Plan, ctx CompilerContext) (bool, error) {
 	qry := p.GetQuery()
-	if qry == nil || queryCanSkipStats(qry) || cachedPlanHasCardinalityIndependentShape(qry) {
+	if qry == nil || queryCanSkipStats(qry) {
 		return false, nil
 	}
+	strict := cachedPlanRequiresExactStats(qry)
 	checkedHints := false
 	for _, node := range qry.Nodes {
 		if node.NodeType != plan.Node_TABLE_SCAN || node.Stats == nil || node.TableDef == nil ||
@@ -3670,125 +3673,92 @@ func CachedPlanStatsChanged(p *plan.Plan, ctx CompilerContext) (bool, error) {
 			return false, err
 		}
 		rows := defaultTableCount
-		if StatsInfoUsable(stats) {
+		usable := StatsInfoUsable(stats)
+		if usable {
 			rows = stats.TableCnt
 		}
-		if rows != node.Stats.TableCnt {
+		if cachedCardinalityNeedsRebuild(node.Stats.TableCnt, rows, strict || !usable) {
 			return true, nil
 		}
 	}
 	return false, nil
 }
 
-// cachedPlanHasCardinalityIndependentShape proves a singleton input structurally.
-// Workspace row-version bounds can grow after a point UPDATE without changing
-// this execution contract. Unproved shapes retain statistics admission.
-func cachedPlanHasCardinalityIndependentShape(q *plan.Query) bool {
-	if len(q.Steps) != 1 || len(q.BackgroundQueries) != 0 || (q.StmtType != plan.Query_SELECT && q.StmtType != plan.Query_UPDATE) {
-		return false
-	}
-	id := q.Steps[0]
-	var target uint64
-	for remaining := len(q.Nodes); remaining > 0; remaining-- {
-		if id < 0 || int(id) >= len(q.Nodes) {
-			return false
-		}
-		n := q.Nodes[id]
-		if n == nil {
-			return false
-		}
-		switch n.NodeType {
-		case plan.Node_PROJECT, plan.Node_FILTER:
-		case plan.Node_LOCK_OP:
-			if q.StmtType != plan.Query_UPDATE || len(n.LockTargets) != 1 {
-				return false
-			}
-		case plan.Node_MULTI_UPDATE:
-			if q.StmtType != plan.Query_UPDATE || len(n.UpdateCtxList) != 1 || n.UpdateCtxList[0].TableDef == nil {
-				return false
-			}
-			target = n.UpdateCtxList[0].TableDef.TblId
-		case plan.Node_TABLE_SCAN:
-			if len(n.Children) != 0 || n.TableDef == nil || (target != 0 && target != n.TableDef.TblId) {
-				return false
-			}
-			return cachedScanHasPrimaryKeyPointPredicate(n)
-		default:
-			return false
-		}
-		if len(n.Children) != 1 {
-			return false
-		}
-		id = n.Children[0]
-	}
-	return false
-}
-
-func cachedScanHasPrimaryKeyPointPredicate(scan *plan.Node) bool {
-	// Final scan columns have been pruned/remapped; the catalog name index still
-	// addresses original ordinals. Use a private view of the actual scan layout.
-	table := *scan.TableDef
-	table.Name2ColIndex = nil
-	if table.Pkey == nil || len(table.Fkeys) != 0 || len(table.RefChildTbls) != 0 {
-		return false
-	}
-	positions, componentProof := sqlEqualityCompatiblePrimaryKeyColumnPositions(&table)
-	encodedPos, encodedProof := int32(0), false
-	if len(table.Pkey.Names) > 1 && isCompositePrimaryKeyStorageColumnName(table.Pkey.PkeyColName, table.Pkey.Names) {
-		encodedPos, encodedProof = tableColumnPosition(&table, table.Pkey.PkeyColName)
-	}
-	if !componentProof && !encodedProof {
-		return false
-	}
-	matched := make(map[int32]bool, len(positions))
-	for _, expr := range splitPlanConjunctions(scan.FilterList) {
-		f := expr.GetF()
-		if f != nil && f.Func != nil && f.Func.ObjName == "istrue" && len(f.Args) == 1 {
-			f = f.Args[0].GetF()
-		}
-		if f == nil || f.Func == nil || f.Func.ObjName != "=" || len(f.Args) != 2 {
-			continue
-		}
-		for side := 0; side < 2; side++ {
-			key, value := f.Args[side], f.Args[1-side]
-			if !isRuntimeConstExpr(value) || value.GetVec() != nil || value.GetList() != nil {
-				continue
-			}
-			// Widening an integer is injective; float/string/lossy conversions are not.
-			for cast := key.GetF(); cast != nil && cast.Func != nil && cast.Func.ObjName == "cast" && len(cast.Args) == 2; cast = key.GetF() {
-				if !integerDomainFits(types.T(cast.Args[0].Typ.Id), types.T(key.Typ.Id)) {
-					break
-				}
-				key = cast.Args[0]
-			}
-			col := key.GetCol()
-			if col == nil || col.RelPos != 0 || col.ColPos < 0 || int(col.ColPos) >= len(table.Cols) {
-				continue
-			}
-			typ := table.Cols[col.ColPos].Typ
-			if !sqlEqualityJoinUsesOneIdentityDomain(key.Typ, typ) || !primaryKeyColumnTypeSupportsSQLEqualityProof(typ) {
-				continue
-			}
-			compared := f.Args[side].Typ
-			if !sqlEqualityJoinUsesOneIdentityDomain(compared, value.Typ) {
-				continue
-			}
-			if compared.Id != typ.Id && !integerDomainFits(types.T(typ.Id), types.T(compared.Id)) {
-				continue
-			}
-			matched[col.ColPos] = true
-		}
-	}
-	if encodedProof && matched[encodedPos] {
+// Compare with the immutable generation baseline, never the last observation:
+// gradual growth must eventually replan. Zero, unavailable observations and the
+// existing conservative uint64-domain maximum do not receive a drift allowance.
+func cachedCardinalityNeedsRebuild(captured, fresh float64, exact bool) bool {
+	if math.IsNaN(captured) || math.IsInf(captured, 0) || captured < 0 {
 		return true
 	}
-	if !componentProof {
+	if captured == fresh {
 		return false
 	}
-	for _, pos := range positions {
-		if !matched[pos] {
-			return false
+	if exact || captured == 0 || fresh == 0 || captured >= float64(^uint64(0)) || fresh >= float64(^uint64(0)) {
+		return true
+	}
+	return fresh >= 2*captured || captured >= 2*fresh
+}
+
+func cachedPlanRequiresExactStats(q *plan.Query) bool {
+	if len(q.BackgroundQueries) != 0 || len(q.Steps) == 0 {
+		return true
+	}
+	strictNode := func(n *plan.Node) bool {
+		return n.NodeType == plan.Node_JOIN &&
+			(n.JoinType == plan.Node_DEDUP && n.IsRightJoin || n.JoinType == plan.Node_INNER && len(n.OnList) == 0)
+	}
+	// Most reusable plans have no strict candidate. Avoid a traversal bitmap
+	// on that hot path, while keeping invalid node references conservative.
+	candidate := false
+	for _, n := range q.Nodes {
+		if n == nil {
+			return true
+		}
+		candidate = candidate || strictNode(n)
+		for _, child := range n.Children {
+			if child < 0 || int(child) >= len(q.Nodes) {
+				return true
+			}
 		}
 	}
-	return true
+	for _, root := range q.Steps {
+		if root < 0 || int(root) >= len(q.Nodes) {
+			return true
+		}
+	}
+	if !candidate {
+		return false
+	}
+	// Prepared construction may leave abandoned joins in Nodes. Only an
+	// executable strict join changes the policy; shared subtrees are visited
+	// once, and a cycle is treated as unclassifiable.
+	visited := make([]uint8, len(q.Nodes))
+	var visit func(int32) bool
+	visit = func(id int32) bool {
+		if visited[id] == 1 {
+			return true
+		}
+		if visited[id] == 2 {
+			return false
+		}
+		visited[id] = 1
+		n := q.Nodes[id]
+		if strictNode(n) {
+			return true
+		}
+		for _, child := range n.Children {
+			if visit(child) {
+				return true
+			}
+		}
+		visited[id] = 2
+		return false
+	}
+	for _, root := range q.Steps {
+		if visit(root) {
+			return true
+		}
+	}
+	return false
 }
