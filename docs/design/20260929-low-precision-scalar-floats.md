@@ -49,6 +49,13 @@ GPU kernels agree on the encoding.
   percentiles and RANGE frames with an offset take the argument as `float32`.
   `COUNT`, `MIN`/`MAX`, `SUM`/`AVG` and the value window functions (`FIRST_VALUE`,
   `LAG`, ...) keep the column type.
+- **Comparison with a literal.** A numeric literal compared with a column of these types
+  (`=`, `<>`, `<`, `<=`, `>`, `>=`, `IN`) is rounded to the column's type, as the stored
+  value was, and the column is compared without a cast, as for `float` and `vecbf16`: a
+  row inserted as `-0.1` (stored as `-0.100097656` in `bf16`) matches `WHERE a = -0.1`. A
+  literal outside the type's finite range, a prepared parameter or another expression
+  keeps the comparison in `float32`/`float64`. For `<`/`>` this follows the column's grid:
+  a literal that rounds down compares as its rounded value.
 - **One zero.** A zero of either sign is stored as `+0` (code 0 in every format) by
   casts, writes, `LOAD` and user variables, so equal values have equal bits for hashing
   (`GROUP BY`, `DISTINCT`, joins) and equality. Peer groups (window `PARTITION BY`,

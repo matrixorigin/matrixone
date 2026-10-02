@@ -7459,6 +7459,17 @@ func bindFuncExprImplByPlanExpr(
 				canUse := func(colType, otherType types.Type, colExpr, otherExpr *plan.Expr) bool {
 					colOid, otherOid := colType.Oid, otherType.Oid
 
+					// bf16/float16/float8/float4: a numeric literal inside the type's finite
+					// range compares in the column's precision, rounded as a stored value is,
+					// so a value equals the literal it was inserted from
+					if colOid.IsLowPrecisionFloat() {
+						if otherExpr == nil || !(otherOid.IsFloat() || otherOid.IsDecimal() || otherOid.IsInteger()) {
+							return false
+						}
+						v, ok := numericLiteralFloat64(otherExpr)
+						return ok && types.RejectNonFiniteNarrowFloat(float32(v), colOid) == nil
+					}
+
 					// For integers, check if constant value is within column type range
 					if colOid.IsInteger() && otherOid.IsInteger() {
 						// Use checkNoNeedCast to verify value range

@@ -105,9 +105,14 @@ INSERT INTO lp VALUES (6, 1.5, 1.5, 1.5, 1.5) ON DUPLICATE KEY UPDATE a = VALUES
 SELECT ROW_COUNT();
 UPDATE lp SET a = 3 WHERE id = 6;
 SELECT id, a FROM lp WHERE id = 6;
--- a stored value equals a literal only in the column's precision: -0.1 is stored as -0.100097656
+-- a numeric literal compares in the column's precision, rounded as the stored value was
+-- (-0.1 is stored as -0.100097656 in bf16); a literal outside the type's range compares
+-- as a wider float
 SELECT COUNT(*) FROM lp WHERE a = -0.1;
 SELECT COUNT(*) FROM lp WHERE a = CAST(-0.1 AS bf16);
+SELECT id FROM lp WHERE b IN (-0.1, 1.5) ORDER BY id;
+SELECT id FROM lp WHERE c < 0.1 ORDER BY id;
+SELECT COUNT(*) FROM lp WHERE c < 1000;
 SELECT id FROM lp WHERE b IN (CAST(1 AS float16), CAST(2 AS float16)) ORDER BY id;
 SELECT id FROM lp WHERE c >= CAST(1 AS float8) AND d <> CAST(2 AS float4) ORDER BY id;
 SELECT id FROM lp WHERE a <=> CAST(NULL AS bf16);

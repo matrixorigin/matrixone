@@ -192,10 +192,21 @@ SELECT id, a FROM lp WHERE id = 6;
 6  ¦  3.0
 SELECT COUNT(*) FROM lp WHERE a = -0.1;
 ➤ COUNT(*)[-5,64,0]  𝄀
-0
+1
 SELECT COUNT(*) FROM lp WHERE a = CAST(-0.1 AS bf16);
 ➤ COUNT(*)[-5,64,0]  𝄀
 1
+SELECT id FROM lp WHERE b IN (-0.1, 1.5) ORDER BY id;
+➤ id[4,32,0]  𝄀
+4  𝄀
+6
+SELECT id FROM lp WHERE c < 0.1 ORDER BY id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4
+SELECT COUNT(*) FROM lp WHERE c < 1000;
+➤ COUNT(*)[-5,64,0]  𝄀
+5
 SELECT id FROM lp WHERE b IN (CAST(1 AS float16), CAST(2 AS float16)) ORDER BY id;
 ➤ id[4,32,0]  𝄀
 1  𝄀

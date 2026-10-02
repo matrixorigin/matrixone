@@ -6928,6 +6928,42 @@ func TestDeleteSelfReferCascadeAcrossForeignKeys(t *testing.T) {
 	requireRecursiveCTESources(t, query)
 }
 
+// TestLowPrecisionFloatLiteralNarrowing checks that a comparison of a bf16 column with a
+// numeric literal inside the type's range compares in the column's precision (the column
+// is not cast), and that an out-of-range literal keeps the widened comparison.
+func TestLowPrecisionFloatLiteralNarrowing(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	firstFilter := func(sql string) *plan.Expr {
+		p, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, sql)
+		for _, n := range p.GetQuery().Nodes {
+			if len(n.FilterList) > 0 {
+				return n.FilterList[0]
+			}
+		}
+		t.Fatalf("no filter: %s", sql)
+		return nil
+	}
+	for _, sql := range []string{
+		"SELECT id FROM vecblock_t WHERE f = 0.3",
+		"SELECT id FROM vecblock_t WHERE f >= 2",
+		"SELECT id FROM vecblock_t WHERE f < -1.5e3",
+		"SELECT id FROM vecblock_t WHERE 0.3 = f",
+		"SELECT id FROM vecblock_t WHERE f IN (0.3, 1.5)",
+	} {
+		args := firstFilter(sql).GetF().Args
+		col := args[0]
+		if col.GetCol() == nil {
+			col = args[1]
+		}
+		require.NotNil(t, col.GetCol(), "%s: the column is compared without a cast", sql)
+		require.Equal(t, int32(types.T_bf16), col.Typ.Id, sql)
+	}
+	args := firstFilter("SELECT id FROM vecblock_t WHERE f < 1e39").GetF().Args
+	require.Nil(t, args[0].GetCol(), "an out-of-range literal widens the column")
+	require.Equal(t, int32(types.T_float64), args[0].Typ.Id)
+}
+
 // TestUpdateChangedRowsBlockScaledVector checks that counting changed rows plans an UPDATE
 // of vecf8/vecf4 columns, which have no equality operator.
 func TestUpdateChangedRowsBlockScaledVector(t *testing.T) {
