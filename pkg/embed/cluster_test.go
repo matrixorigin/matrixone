@@ -1250,6 +1250,9 @@ func assertBootstrapViews(t *testing.T, c Cluster, index int) {
 }
 
 func TestRetiredTransactionTracePreservesRollbackArtifacts(t *testing.T) {
+	// Stopped restart requires an owned cluster, so release the reusable fixture
+	// through its lifecycle owner before acquiring exclusive admission.
+	require.NoError(t, CloseSingleCNBaseClusterTests())
 	root := t.TempDir()
 	marker := filepath.Join(root, "historical.csv")
 	require.NoError(t, os.WriteFile(marker, []byte("historical trace data"), 0600))

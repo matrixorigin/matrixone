@@ -35,7 +35,6 @@ const (
 	FeatureTraceTxnWorkspace = "txn-workspace"
 	FeatureTraceTxnAction    = "txn-action"
 	FeatureTraceData         = "data"
-	StateEnable              = "enable"
 	StateDisable             = "disable"
 )
 
