@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -2346,4 +2347,85 @@ func TestStartReplicas_SkipsZombie(t *testing.T) {
 	}
 	assert.True(t, started[zombieKey{shardID: 1, replicaID: 2}], "legit replica must be started")
 	assert.False(t, started[zombieKey{shardID: 1, replicaID: 99}], "zombie replica must be skipped")
+}
+
+func TestHAKeeperCheckWakeupCoalescesAfterShutdown(t *testing.T) {
+	l := &store{
+		hakeeperCheckWakeup: make(chan struct{}, 1),
+		tickerStopper:       stopper.NewStopper("check-wakeup"),
+		stopper:             stopper.NewStopper("store-wakeup"),
+	}
+	// Notification does not depend on a started worker and does not create one.
+	var wg sync.WaitGroup
+	for range 16 {
+		wg.Go(func() {
+			for range 100 {
+				l.notifyHAKeeperCheck()
+			}
+		})
+	}
+	wg.Wait()
+	require.Len(t, l.hakeeperCheckWakeup, 1)
+	require.NoError(t, l.close())
+	l.notifyHAKeeperCheck()
+	<-l.hakeeperCheckWakeup
+	l.notifyHAKeeperCheck()
+	require.Len(t, l.hakeeperCheckWakeup, 1)
+	// A disabled or partially initialized store also cannot block a producer.
+	(&store{}).notifyHAKeeperCheck()
+}
+
+// checkWakeupGate observes the existing checker owner without another driver.
+type checkWakeupGate struct {
+	entered chan struct{}
+	release <-chan struct{}
+	calls   int
+}
+
+func (g *checkWakeupGate) Check(_ util.IDAllocator, _ pb.CheckerState, _ bool) []pb.ScheduleCommand {
+	g.calls++
+	if g.calls <= 2 {
+		g.entered <- struct{}{}
+	}
+	if g.calls == 1 {
+		<-g.release
+	}
+	return nil
+}
+
+func TestHAKeeperCheckWakeupRechecksDuringActiveCheck(t *testing.T) {
+	runManualHAKeeperStoreTest(t, false, func(t *testing.T, l *store) {
+		proceedHAKeeperToRunning(t, l)
+		l.cfg.HAKeeperCheckInterval.Duration = time.Hour
+		l.cfg.HAKeeperTickInterval.Duration = time.Hour
+		release := make(chan struct{})
+		var releaseOnce sync.Once
+		unblock := func() { releaseOnce.Do(func() { close(release) }) }
+		gate := &checkWakeupGate{entered: make(chan struct{}, 2), release: release}
+		l.checker = gate
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() { defer close(done); l.ticker(ctx) }()
+		defer func() { cancel(); unblock(); <-done }()
+		wait := func() {
+			t.Helper()
+			select {
+			case <-gate.entered:
+			case <-time.After(30 * time.Second):
+				t.Fatal("existing checker did not consume state-change notification")
+			}
+		}
+		// Manual initial configuration queued a notification before worker startup.
+		wait()
+		for range 100 {
+			l.notifyHAKeeperCheck()
+		}
+		require.Len(t, l.hakeeperCheckWakeup, 1)
+		unblock()
+		// A hint received while the owner is executing must survive for a next pass.
+		wait()
+		cancel()
+		<-done
+		require.GreaterOrEqual(t, gate.calls, 2)
+	})
 }
