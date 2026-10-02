@@ -266,8 +266,28 @@ func TestNativeIntegerNormalizationSafety(t *testing.T) {
 	// treating the other JOIN column as a constant.
 	for _, peer := range []*pb.Expr{decimalPeer, GetColExpr(decimalPeer.Typ, 1, 0)} {
 		condition := &pb.Expr{Expr: &pb.Expr_F{F: &pb.Function{Func: &pb.ObjectRef{ObjName: "="}, Args: []*pb.Expr{DeepCopyExpr(cast), DeepCopyExpr(peer)}}}}
-		builder.qry.Nodes = []*pb.Node{{NodeType: pb.Node_JOIN, OnList: []*pb.Expr{condition}}}
-		builder.rewriteNumericDomainFilters(0)
+		parent, err := BindFuncExprImplByPlanExpr(ctx, "and", []*pb.Expr{condition, MakePlan2BoolConstExprWithType(true)})
+		require.NoError(t, err)
+		parent.Ndv, parent.Selectivity = 37, .8
+		builder.qry.Nodes = []*pb.Node{{NodeType: pb.Node_JOIN, OnList: []*pb.Expr{parent}}}
+		require.NoError(t, builder.rewriteNumericDomainFilters(0, pb.Node_TABLE_SCAN))
+		require.Nil(t, condition.GetF().Args[0].GetCol(), "scan phase must not prove JOINs")
+		require.NoError(t, builder.rewriteNumericDomainFilters(0, pb.Node_JOIN))
 		require.Equal(t, peer.GetCol() == nil, condition.GetF().Args[0].GetCol() != nil)
+		if peer.GetCol() == nil {
+			require.Zero(t, parent.Ndv)
+			require.Zero(t, parent.Selectivity)
+		} else {
+			require.Equal(t, float64(37), parent.Ndv)
+		}
 	}
+}
+
+func TestNumericDomainProofCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	compiler := NewMockCompilerContext(false)
+	compiler.SetContext(ctx)
+	b := NewQueryBuilder(pb.Query_SELECT, compiler, false, false)
+	require.ErrorIs(t, b.rewriteNumericDomainFilters(0, pb.Node_JOIN), context.Canceled)
 }

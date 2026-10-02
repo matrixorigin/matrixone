@@ -4035,7 +4035,10 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.skipStats = builder.canSkipStats()
 		builder.rewriteDistinctToAGG(rootID)
 		rootID = builder.rewriteEffectlessAggToProject(rootID)
-		rootID = builder.optimizeFilters(rootID)
+		rootID, err = builder.optimizeFilters(rootID)
+		if err != nil {
+			return nil, err
+		}
 		// WHERE predicates are initially represented by a Filter between AGG
 		// and TABLE_SCAN.  Revisit the proof after filter pushdown so a unique
 		// grouped scan can be eliminated without moving LIMIT below HAVING.
@@ -4057,12 +4060,13 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		colRefCnt := make(map[[2]int32]int)
 		builder.countColRefs(rootID, colRefCnt)
 		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, colRefCnt)
-		var fusedScalarAggs bool
-		rootID, fusedScalarAggs = builder.fuseScalarAggregates(rootID)
-		if fusedScalarAggs {
-			colRefCnt = make(map[[2]int32]int)
-			builder.countColRefs(rootID, colRefCnt)
+		// Safe derived aliases now expose the existing singleton proof shape.
+		if err = builder.rewriteNumericDomainFilters(rootID, plan.Node_JOIN); err != nil {
+			return nil, err
 		}
+		rootID, _ = builder.fuseScalarAggregates(rootID)
+		clear(colRefCnt)
+		builder.countColRefs(rootID, colRefCnt)
 		// Removing a proof-eliminated aggregate can expose a direct Project ->
 		// TableScan edge only after the first limit-pushdown pass. Re-run the
 		// idempotent rule so the newly streaming path can honor source demand.

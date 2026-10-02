@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -22,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	statspb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
@@ -1776,4 +1778,28 @@ func TestDisableRightSingleRuntimeFilterHint(t *testing.T) {
 	require.Equal(t, 1, builder.optimizerHints.disableRightSingleRF)
 	require.Empty(t, builder.qry.Nodes[2].RuntimeFilterBuildList)
 	require.Empty(t, builder.qry.Nodes[0].RuntimeFilterProbeList)
+}
+
+func TestSingletonRuntimeFilterBenefitBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		ndv  float64
+		want bool
+	}{{9, false}, {10, false}, {11, true}, {10000, true}, {30000, true}} {
+		t.Run(fmt.Sprintf("ndv=%g", tc.ndv), func(t *testing.T) {
+			b := newRuntimeFilterSingleTestBuilder(false)
+			probe, join := b.qry.Nodes[0], b.qry.Nodes[2]
+			probe.TableDef.TblId = 41
+			probe.Stats.TableCnt, probe.Stats.Outcnt = tc.ndv, tc.ndv
+			ctx := &statsCacheCompilerContext{MockCompilerContext: b.compCtx.(*MockCompilerContext), statsCache: NewStatsCache()}
+			ctx.statsCache.Set(41, &statspb.StatsInfo{NdvMap: map[string]float64{"id": tc.ndv}})
+			b.compCtx = ctx
+			b.tag2Table = map[int32]*TableDef{1: probe.TableDef}
+			join.JoinType = planpb.Node_INNER
+			join.Stats.HashmapStats.HashmapSize = 1
+			b.qry.Nodes[1].Stats.Outcnt = 1
+			b.generateRuntimeFilters(2)
+			require.Equal(t, tc.want, len(join.RuntimeFilterBuildList) == 1)
+			require.Equal(t, tc.want, len(probe.RuntimeFilterProbeList) == 1)
+		})
+	}
 }

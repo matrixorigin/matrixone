@@ -35,6 +35,7 @@ import (
 	hll "github.com/axiomhq/hyperloglog"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -14227,5 +14228,47 @@ func TestOctLegacyOverloadIdentities(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, []types.T{oid}, old.args)
 		require.Equal(t, types.T_decimal128.ToType(), old.retType([]types.Type{oid.ToType()}))
+	}
+}
+
+func TestLastDayDateResultContracts(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	date := func(s string) types.Date { v, e := types.ParseDateCast(s); require.NoError(t, e); return v }
+	datetime := func(s string) types.Datetime { v, e := types.ParseDatetime(s, 6); require.NoError(t, e); return v }
+	for _, input := range []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"2024-02-10", "2023-02-10", "2024-12-01", "bad", "0000-00-00", ""}, []bool{false, false, false, false, false, true}),
+		NewFunctionTestInput(types.T_date.ToType(), []types.Date{date("2024-02-10"), date("2023-02-10"), date("2024-12-01"), 0, types.ZeroDate, 0}, []bool{false, false, false, true, false, true}),
+		NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{datetime("2024-02-10 12:00:00"), datetime("2023-02-10 12:00:00"), datetime("2024-12-01 12:00:00"), 0, types.ZeroDatetime, 0}, []bool{false, false, false, true, false, true}),
+	} {
+		fc := NewFunctionTestCase(proc, []FunctionTestInput{input}, NewFunctionTestResult(types.T_date.ToType(), false, []types.Date{date("2024-02-29"), date("2023-02-28"), date("2024-12-31"), 0, 0, 0}, []bool{false, false, false, true, true, true}), LastDay)
+		func() {
+			defer func() {
+				for _, v := range fc.parameters {
+					v.Free(proc.Mp())
+				}
+				fc.result.Free()
+			}()
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		}()
+	}
+	func() {
+		fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{"2024-02-10", "2024-02-10"}, nil)}, NewFunctionTestResult(types.T_date.ToType(), false, []types.Date{date("2024-02-29"), 0}, []bool{false, true}), LastDay).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}})
+		defer func() {
+			for _, v := range fc.parameters {
+				v.Free(proc.Mp())
+			}
+			fc.result.Free()
+		}()
+		ok, info := fc.Run()
+		require.True(t, ok, info)
+	}()
+
+	for _, typ := range []types.Type{types.T_varchar.ToType(), types.T_char.ToType(), types.T_date.ToType(), types.T_datetime.ToType()} {
+		f, err := GetFunctionByName(context.Background(), "last_day", []types.Type{typ})
+		require.NoError(t, err)
+		require.Equal(t, types.T_date, f.GetReturnType().Oid)
+		require.False(t, DeduceNotNullable(f.GetEncodedOverloadID(), []*plan.Expr{{Typ: plan.Type{Id: int32(typ.Oid), NotNullable: true}}}))
 	}
 }

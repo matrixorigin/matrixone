@@ -541,7 +541,7 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 		if len(args) == 1 && types.T(args[0].Typ.Id).IsMySQLString() {
 			return false
 		}
-	case WEEK, WEEKOFYEAR, WEEKDAY, YEARWEEK, DAYOFWEEK, DAYOFYEAR, DAYNAME, MONTHNAME, FROM_DAYS:
+	case LAST_DAY, WEEK, WEEKOFYEAR, WEEKDAY, YEARWEEK, DAYOFWEEK, DAYOFYEAR, DAYNAME, MONTHNAME, FROM_DAYS:
 		// Calendar calculations reject zero dates; FROM_DAYS rejects values
 		// above the representable calendar even when the input is NOT NULL.
 		return false

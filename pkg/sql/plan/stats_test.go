@@ -318,9 +318,10 @@ func TestSafeStatsRatiosAvoidNonFiniteSelectivity(t *testing.T) {
 	t.Run("limit never increases cardinality", func(t *testing.T) {
 		builder := NewQueryBuilder(planpb.Query_SELECT, &MockCompilerContext{ctx: context.Background()}, false, false)
 		node := &planpb.Node{
-			NodeType: planpb.Node_VALUE_SCAN,
-			Stats:    &planpb.Stats{Outcnt: 10, Cost: 10, Selectivity: 1},
-			Limit:    MakePlan2Uint64ConstExprWithType(100),
+			NodeType:   planpb.Node_VALUE_SCAN,
+			RowsetData: &planpb.RowsetData{RowCount: 10},
+			Stats:      &planpb.Stats{Outcnt: 10, Cost: 10, Selectivity: 1},
+			Limit:      MakePlan2Uint64ConstExprWithType(100),
 		}
 		builder.qry.Nodes = []*planpb.Node{node}
 
@@ -332,10 +333,11 @@ func TestSafeStatsRatiosAvoidNonFiniteSelectivity(t *testing.T) {
 	t.Run("offset estimate remains idempotent", func(t *testing.T) {
 		builder := NewQueryBuilder(planpb.Query_SELECT, &MockCompilerContext{ctx: context.Background()}, false, false)
 		node := &planpb.Node{
-			NodeType: planpb.Node_VALUE_SCAN,
-			Stats:    &planpb.Stats{Outcnt: 10, Cost: 10, Selectivity: 1},
-			Limit:    MakePlan2Uint64ConstExprWithType(8),
-			Offset:   MakePlan2Uint64ConstExprWithType(7),
+			NodeType:   planpb.Node_VALUE_SCAN,
+			RowsetData: &planpb.RowsetData{RowCount: 10},
+			Stats:      &planpb.Stats{Outcnt: 10, Cost: 10, Selectivity: 1},
+			Limit:      MakePlan2Uint64ConstExprWithType(8),
+			Offset:     MakePlan2Uint64ConstExprWithType(7),
 		}
 		builder.qry.Nodes = []*planpb.Node{node}
 
@@ -2975,5 +2977,37 @@ func TestAggregateBlockEstimateThroughL2(t *testing.T) {
 		builder.qry.Nodes[4].Stats.BlockNum = tc.blocks
 		ReCalcNodeStats(5, builder, false, false, false)
 		require.Equal(t, tc.want, builder.qry.Nodes[5].Stats.BlockNum)
+	}
+}
+
+func TestValueScanCardinality(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		rowset *planpb.RowsetData
+		table  *planpb.TableDef
+		limit  *Expr
+		want   float64
+	}{
+		{name: "dummy", want: 1},
+		{name: "dummy limit zero", limit: MakePlan2Uint64ConstExprWithType(0)},
+		{name: "empty values", rowset: &planpb.RowsetData{}},
+		{name: "one value", rowset: &planpb.RowsetData{RowCount: 1}, want: 1},
+		{name: "multiple values", rowset: &planpb.RowsetData{RowCount: 3}, want: 3},
+		{name: "table control", table: &planpb.TableDef{}, want: 1000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false), false, false)
+			n := &planpb.Node{NodeType: planpb.Node_VALUE_SCAN, RowsetData: tc.rowset, TableDef: tc.table, Limit: tc.limit, Stats: DefaultStats()}
+			b.qry.Nodes = []*planpb.Node{n, {NodeType: planpb.Node_PROJECT, Children: []int32{0}, Stats: DefaultStats()},
+				{NodeType: planpb.Node_VALUE_SCAN, RowsetData: &planpb.RowsetData{RowCount: 10}, Stats: DefaultStats()},
+				{NodeType: planpb.Node_JOIN, JoinType: planpb.Node_INNER, Children: []int32{2, 1}, Stats: DefaultStats()}}
+			for range 2 {
+				ReCalcNodeStats(3, b, true, true, true)
+				require.Equal(t, tc.want, n.Stats.Outcnt)
+				require.Equal(t, tc.want, b.qry.Nodes[1].Stats.Outcnt)
+				require.Equal(t, tc.want, b.qry.Nodes[3].Stats.HashmapStats.HashmapSize)
+				require.Equal(t, 10*tc.want, b.qry.Nodes[3].Stats.Outcnt)
+			}
+		})
 	}
 }
