@@ -9,12 +9,18 @@
   the build/delivery contract (§1, §3–§6). Approved by fengttt as the implementation
   at PR revision 2b3efca (2026-09-30); this document (first added at a964312) records
   that approved design.
-- **v2 — Pending design review.** Scope: the §2 numerical/selection contract,
-  corrected to the **NaN→+Inf** rule in response to the #29496 review, plus the
-  static-analysis / Go 1.27 delivery additions (§5–§6) introduced with this document.
-  These post-date fengttt's v1 approval. XuPeng-SH requested a versioned,
-  design-first review per `.agents/skills/mo-dev/references/feature-design-review.md`;
-  update to "v2 — Approved by &lt;name&gt; (revision &lt;sha&gt;, &lt;date&gt;)" once that review lands.
+- **v2 — Approved by fengttt (revision af0eb99, 2026-10-01).** Scope: the §2
+  numerical/selection contract (the **NaN→+Inf** rule) and the static-analysis / Go
+  1.27 delivery additions (§5–§6) introduced with this document; these post-date the
+  v1 approval. fengttt approved this design at PR #29496 revision af0eb99 (2026-10-01
+  19:21 UTC). XuPeng-SH's change requests on the same revision are tracked in the PR
+  thread.
+- **§2/§5/§7 editorial correction (post-af0eb99).** The contract wording was
+  corrected to state the SIMD/scalar divergence on degenerate overflow inputs as an
+  explicit **by-design** decision (one kernel per deployment → internally consistent;
+  toy 2^63 input only; +Inf internal, error at the serve boundary), with the
+  supporting benchmark (§2 reason 1 / §5). This aligns the document with the behavior
+  of the already-approved code (af0eb99); it does not change the approved contract.
 
 ## 1. Context & goal
 
@@ -52,9 +58,32 @@ contract as amd64**, with **identical observable results**.
   index Search (`CheckFiniteDists`). A non-finite result (now ±Inf, never NaN)
   handed back there is reported as an overflow error; inside search ranking it is
   simply ordered last.
-- A result must not depend on *which* kernel ran. For one input, every SIMD tier
-  and architecture agrees with the scalar reference up to ordinary FP rounding, and
-  a non-finite case is the same well-ordered ±Inf (never NaN) everywhere.
+- **Finite inputs:** every SIMD tier and architecture agrees with the scalar
+  reference up to ordinary floating-point rounding. This is the equivalence the
+  tests assert.
+- **Degenerate overflow inputs — paths may diverge, and this is not fixed, by
+  design.** A SIMD kernel sums strided lanes, so a 2^63-magnitude input overflows a
+  lane to ±Inf → NaN → +Inf; the scalar reference sums in source order, so the same
+  input can cancel and stay finite. The divergence is accepted for three reasons:
+  1. **The f32 accumulator is the point of SIMD.** Widening it to f64 to force
+     agreement was measured (NEON, 768-D inner product) at ~2.5× slower than the f32
+     kernel and only ~1.1× faster than the pre-SIMD scalar loop — versus ~2.8× for
+     the f32 kernel — i.e. it hands back almost the entire SIMD gain, and f64 inputs
+     still overflow (no wider lane to catch them), so it buys nothing there either.
+  2. **One path runs per deployment, never mixed.** A given build uses either SIMD
+     or the scalar oracle for every candidate of every query, so its ranking is
+     internally self-consistent; the divergence is only observable across builds.
+  3. **The input cannot arise from real data.** A 2^63-magnitude element is a
+     toy/adversarial input; stored vectors are finite (#28688) and real embeddings
+     are small-magnitude.
+- **The +Inf is an internal, ranking-safe intermediate — a toy vector's final
+  answer is an error.** Mapping NaN→+Inf only keeps internal selection well-ordered
+  (brute_force centroid/candidate ranking, which has no serve-time check because it
+  is internal, never retains a NaN). The user-facing serve boundary then rejects any
+  non-finite result with an error (ivfflat's `HasFloat64DistanceOverflow`,
+  hnsw/usearch `CheckFiniteDists`, GPU `CheckFiniteDists64`). So a toy vector is
+  never *served* a +Inf distance: it is either excluded (ranked last behind finite
+  candidates) or errored out at the boundary.
 
 ## 3. Ownership: one scalar oracle, per-arch SIMD
 
@@ -78,11 +107,16 @@ contract as amd64**, with **identical observable results**.
 
 ## 5. Precision / performance tradeoffs
 
-- Narrow float kernels accumulate in **float32**, not a wider type. A wider
-  accumulator is rejected: it does not actually remove overflow (an input can be
-  built at any accumulation type's limit) and it halves the usable SIMD lane
-  width, erasing the throughput the feature exists to deliver. The residual
-  overflow case is handled by the §2 boundary contract, not by widening.
+- Float kernels (narrow and real f32) accumulate in **float32**, not a wider type.
+  A wider accumulator is rejected: it does not actually remove overflow (an input can
+  be built at any accumulation type's limit — f64 inputs overflow an f64 accumulator,
+  and there is no f128 lane) and it halves the usable SIMD lane width, erasing the
+  throughput the feature exists to deliver. Measured (NEON, 768-D inner product): an
+  f64-accumulator kernel is ~2.5× slower than the f32 kernel and only ~1.1× faster
+  than the pre-SIMD scalar loop, versus ~2.8× for the f32 kernel — it gives back
+  almost the entire SIMD gain. The residual overflow case is handled by the §2
+  boundary contract (NaN→+Inf internally, error at the serve boundary), not by
+  widening.
 - f16 cannot overflow the float32 accumulator (its magnitude range is small);
   bf16 shares float32's exponent range and therefore can — the §2 contract covers
   it.
@@ -120,9 +154,18 @@ contract as amd64**, with **identical observable results**.
 - Search/selection relies on well-ordered distances: the overflow candidate ranks
   last (never a wrong winner). Finiteness-as-an-error is enforced only at the
   consumer score boundary.
-- Scalar oracle ≡ every SIMD tier ≡ every architecture on finite inputs; a
-  non-finite case is the same well-ordered ±Inf (never NaN) everywhere, and the same
-  error at the same boundary when handed back as a score.
+- Scalar oracle ≡ every SIMD tier ≡ every architecture **on finite inputs** (up to
+  FP rounding). On a degenerate overflow input the SIMD and scalar paths MAY diverge
+  (SIMD → +Inf; the scalar oracle may cancel to a finite value) — accepted by design
+  (§2): one path runs per deployment, so ranking stays internally consistent, and the
+  toy input cannot arise from real finite data. The SIMD contract test therefore runs
+  the SIMD kernels directly (narrow by name; real kernels with the tier flag forced
+  on), not through the resolver, so it asserts the +Inf contract regardless of the
+  opt-out override.
+- A non-finite result is never NaN (always well-ordered +Inf) on every path. It is
+  the internal, ranking-safe intermediate only: inside search it is ordered last, and
+  at the consumer serve boundary it is rejected with an error. A toy vector is never
+  served a +Inf distance.
 - No architecture branch outside build-tagged kernel files.
 - Build-experiment default on + opt-out honored; capability-gated paths fail
   closed.
