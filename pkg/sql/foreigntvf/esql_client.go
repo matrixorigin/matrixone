@@ -27,6 +27,8 @@ import (
 
 	"github.com/elastic/elastic-transport-go/v8/elastictransport"
 	tpversion "github.com/elastic/elastic-transport-go/v8/elastictransport/version"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // newClient receives a config admitted by parseESQLConfig and selects only the two requests ESQL uses, instead of NewClient's
@@ -38,19 +40,19 @@ func (c esqlConfig) newClient(transport *http.Transport) (*esqlHeaders, error) {
 	addresses := c.Addresses
 	if c.CloudID != "" {
 		if len(addresses) != 0 {
-			return nil, fmt.Errorf("cannot create client: both Addresses and CloudID are set")
+			return nil, moerr.NewInvalidInputNoCtx("cannot create client: both Addresses and CloudID are set")
 		}
 		values := strings.Split(c.CloudID, ":")
 		if len(values) != 2 {
-			return nil, fmt.Errorf("cannot parse CloudID: unexpected format: %q", c.CloudID)
+			return nil, moerr.NewInvalidInputNoCtxf("cannot parse CloudID: unexpected format: %q", c.CloudID)
 		}
 		data, err := base64.StdEncoding.DecodeString(values[1])
 		if err != nil {
-			return nil, fmt.Errorf("cannot parse CloudID: %w", err)
+			return nil, moerr.NewInvalidInputNoCtxf("cannot parse CloudID: %v", err)
 		}
 		parts := strings.Split(string(data), "$")
 		if len(parts) < 2 {
-			return nil, fmt.Errorf("cannot parse CloudID: invalid encoded value: %s", parts)
+			return nil, moerr.NewInvalidInputNoCtxf("cannot parse CloudID: invalid encoded value: %s", parts)
 		}
 		addresses = []string{"https://" + parts[1] + "." + parts[0]}
 	}
@@ -58,7 +60,7 @@ func (c esqlConfig) newClient(transport *http.Transport) (*esqlHeaders, error) {
 	for _, address := range addresses {
 		u, err := url.Parse(strings.TrimRight(address, "/"))
 		if err != nil {
-			return nil, fmt.Errorf("cannot parse url: %w", err)
+			return nil, moerr.NewInvalidInputNoCtxf("cannot parse url: %v", err)
 		}
 		urls = append(urls, u)
 	}
