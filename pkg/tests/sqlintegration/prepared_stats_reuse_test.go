@@ -23,12 +23,10 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/embed"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 )
 
-func TestPreparedPointUpdateReusesPlanAfterWorkspaceWrites(t *testing.T) {
+func TestPreparedPointUpdatesPreserveWorkspaceVisibility(t *testing.T) {
 	runSQLIntegration(t, func(c embed.Cluster) {
 		cn, err := c.GetCNService(0)
 		require.NoError(t, err)
@@ -67,29 +65,18 @@ func TestPreparedPointUpdateReusesPlanAfterWorkspaceWrites(t *testing.T) {
 		update, err := conn.PrepareContext(ctx, "update t set v=v+1 where id=?")
 		require.NoError(t, err)
 		defer update.Close()
-		count := func() uint64 {
-			m := &dto.Metric{}
-			err := v2.TxnStatementBuildPlanHistogram.(interface{ Write(*dto.Metric) error }).Write(m)
-			require.NoError(t, err)
-			return m.GetHistogram().GetSampleCount()
-		}
-		reads := func(want int) {
-			for range 20 {
-				var got int
-				require.NoError(t, read.QueryRowContext(ctx, 1).Scan(&got))
-				require.Equal(t, want, got)
-			}
+		checkRead := func(want int) {
+			var got int
+			require.NoError(t, read.QueryRowContext(ctx, 1).Scan(&got))
+			require.Equal(t, want, got)
 		}
 		exec("begin")
 		inTxn = true
-		before := count()
-		reads(0)
-		cleanReads := count() - before
+		checkRead(0)
 		exec("commit")
 		inTxn = false
 		exec("begin")
 		inTxn = true
-		before = count()
 		for i := 1; i <= 20; i++ {
 			result, err := update.ExecContext(ctx, i)
 			require.NoError(t, err)
@@ -97,17 +84,15 @@ func TestPreparedPointUpdateReusesPlanAfterWorkspaceWrites(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, int64(1), n)
 		}
-		updates := count() - before
-		before = count()
-		reads(1)
-		dirtyReads := count() - before
+		checkRead(1)
+		var updatedKeys int
+		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from t where id<=20 and v=1").Scan(&updatedKeys))
+		require.Equal(t, 20, updatedKeys, "each bound key must be updated exactly once")
 		exec("rollback")
 		inTxn = false
 		var restored int
 		require.NoError(t, read.QueryRowContext(ctx, 1).Scan(&restored))
 		require.Zero(t, restored)
-		require.Equal(t, uint64(1), updates, "only the first parameter specialization should plan the point UPDATE")
-		require.Equal(t, cleanReads, dirtyReads, "workspace row versions must not add point SELECT planning")
 		var countRows int
 		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from t").Scan(&countRows))
 		require.Equal(t, 128, countRows)
@@ -118,29 +103,25 @@ func TestPreparedPointUpdateReusesPlanAfterWorkspaceWrites(t *testing.T) {
 		}
 		require.ErrorIs(t, read.QueryRowContext(ctx, nil).Scan(&restored), sql.ErrNoRows)
 
-		// This UPDATE has an installed specialization (unlike the INT SELECT,
-		// whose wider parameter triggers value-dependent rebinding).
+		// The same prepared UPDATE must see a newly inserted key, then lose
+		// that key after rollback. Frontend owner tests assert generation reuse.
 		exec("begin")
 		inTxn = true
 		exec("insert into t values(129,7)")
-		before = count()
 		result, err := update.ExecContext(ctx, 129)
 		require.NoError(t, err)
 		affected, err := result.RowsAffected()
 		require.NoError(t, err)
 		require.Equal(t, int64(1), affected)
-		require.Equal(t, uint64(0), count()-before, "new-key visibility must use the cached specialization")
 		require.NoError(t, conn.QueryRowContext(ctx, "select v from t where id=129").Scan(&restored))
 		require.Equal(t, 8, restored)
 		exec("rollback")
 		inTxn = false
-		before = count()
 		result, err = update.ExecContext(ctx, 129)
 		require.NoError(t, err)
 		affected, err = result.RowsAffected()
 		require.NoError(t, err)
 		require.Zero(t, affected)
-		require.Equal(t, uint64(0), count()-before, "rollback must refresh the cached reader too")
 
 		exec("create table composite_t(a int, b int, v int, primary key(a,b))")
 		exec("insert into composite_t select id,1,v from t")
@@ -149,7 +130,6 @@ func TestPreparedPointUpdateReusesPlanAfterWorkspaceWrites(t *testing.T) {
 		defer composite.Close()
 		exec("begin")
 		inTxn = true
-		before = count()
 		for i := 1; i <= 20; i++ {
 			result, err := composite.ExecContext(ctx, i, 1)
 			require.NoError(t, err)
@@ -157,34 +137,32 @@ func TestPreparedPointUpdateReusesPlanAfterWorkspaceWrites(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, int64(1), n)
 		}
-		require.Equal(t, uint64(1), count()-before, "complete composite PK has the same bounded update contract")
 		var sum int
 		require.NoError(t, conn.QueryRowContext(ctx, "select count(*),sum(v) from composite_t").Scan(&countRows, &sum))
 		require.Equal(t, 128, countRows)
 		require.Equal(t, 20, sum)
+		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from composite_t where a<=20 and b=1 and v=1").Scan(&updatedKeys))
+		require.Equal(t, 20, updatedKeys, "a reused composite plan must bind every new key")
 		exec("rollback")
 		inTxn = false
 		require.NoError(t, conn.QueryRowContext(ctx, "select sum(v) from composite_t").Scan(&sum))
 		require.Zero(t, sum)
-		// Real COM_QUERY dispatch: the same cached SQL sees growing tables.
+		// Real COM_QUERY dispatch sees growth; frontend owner tests distinguish
+		// point reuse from sensitive range rebuilding.
 		exec("begin")
 		inTxn = true
-		var pointPlans, sensitivePlans uint64
 		for i := 129; i < 132; i++ {
-			exec(fmt.Sprintf("insert into t values(%d,0)", i))
-			before = count()
+			exec(fmt.Sprintf("insert into t values(%d,%d)", i, i-128))
 			require.NoError(t, conn.QueryRowContext(ctx, "select v from t where id=1").Scan(&restored))
-			pointPlans += count() - before
 			require.Zero(t, restored)
-			before = count()
 			require.NoError(t, conn.QueryRowContext(ctx, "select sum(v) from t where id>=1").Scan(&sum))
-			sensitivePlans += count() - before
-			require.Zero(t, sum)
+			require.Equal(t, (i-128)*(i-127)/2, sum)
 		}
-		require.Equal(t, uint64(1), pointPlans, "ordinary point cache must survive growth")
-		require.Equal(t, uint64(3), sensitivePlans, "ordinary range plan must be rebuilt after each growth")
 		exec("rollback")
 		inTxn = false
+		require.NoError(t, conn.QueryRowContext(ctx, "select count(*),sum(v) from t").Scan(&countRows, &sum))
+		require.Equal(t, 128, countRows)
+		require.Zero(t, sum)
 		exec("create table string_t(id varchar(8) primary key,v int)")
 		exec("insert into string_t values('1',0),('01',0)")
 		stringUpdate, err := conn.PrepareContext(ctx, "update string_t set v=v+1 where id=?")

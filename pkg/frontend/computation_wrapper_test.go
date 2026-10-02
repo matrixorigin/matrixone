@@ -6503,10 +6503,19 @@ type preparedStatsTestCompiler struct {
 	*preparedTestCompiler
 	stats *pbstats.StatsInfo
 	err   error
+	table *plan.TableDef
 }
 
 func (c *preparedStatsTestCompiler) StatsWithTableDef(_ *plan.ObjectRef, _ *plan.TableDef, _ *plan.Snapshot) (*pbstats.StatsInfo, error) {
 	return c.stats, c.err
+}
+
+func (c *preparedStatsTestCompiler) Resolve(dbName, tableName string, snapshot *plan2.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+	obj, table, err := c.CompilerContext.Resolve(dbName, tableName, snapshot)
+	if err == nil && c.table != nil && tableName == c.table.Name {
+		table = plan2.DeepCopyTableDef(c.table, true)
+	}
+	return obj, table, err
 }
 
 func TestPreparedStatsAdmissionPreservesStableCompileAndRejectsError(t *testing.T) {
@@ -6553,6 +6562,27 @@ func TestPreparedStatsAdmissionChecksInstalledSpecialization(t *testing.T) {
 	require.True(t, prepared.needsRebuild)
 }
 
+// Replace storage observations only; admission, binding and rebuild use their
+// real frontend owners. The fixtures are sequential and restore the global PU.
+func installStatsAdmissionStorage(t *testing.T, ses *Session, table *plan.TableDef, stats func() *pbstats.StatsInfo) {
+	t.Helper()
+	ctrl := gomock.NewController(t)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Nodes(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(engine.Nodes{{Id: "stats-cn", Addr: "stats-cn:6001", Mcpu: 1}}, nil).AnyTimes()
+	db := mock_frontend.NewMockDatabase(ctrl)
+	relation := mock_frontend.NewMockRelation(ctrl)
+	eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
+	db.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(relation, nil).AnyTimes()
+	db.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
+	relation.EXPECT().GetTableDef(gomock.Any()).Return(table).AnyTimes()
+	relation.EXPECT().GetTableID(gomock.Any()).Return(table.TblId).AnyTimes()
+	relation.EXPECT().Stats(gomock.Any(), gomock.Any()).DoAndReturn(func(context.Context, bool) (*pbstats.StatsInfo, error) { return stats(), nil }).AnyTimes()
+	ses.txnHandler.storage = eng
+	oldEngine := getPu("").StorageEngine
+	getPu("").StorageEngine = eng
+	t.Cleanup(func() { getPu("").StorageEngine = oldEngine })
+}
+
 func TestPreparedStatsGrowthRebuildsExecutionStrategy(t *testing.T) {
 	base := plan2.NewMockCompilerContext(false)
 	ctx := &preparedStatsTestCompiler{preparedTestCompiler: &preparedTestCompiler{CompilerContext: base, proc: base.GetProcess()}, stats: &pbstats.StatsInfo{TableCnt: 5, BlockNumber: 1}}
@@ -6566,23 +6596,9 @@ func TestPreparedStatsGrowthRebuildsExecutionStrategy(t *testing.T) {
 	prepared.compile = sentinel
 	// Keep the real session compiler/rebuild owner, replacing only storage
 	// observations so the distribution threshold needs no large physical data.
-	ctrl := gomock.NewController(t)
-	eng := mock_frontend.NewMockEngine(ctrl)
-	eng.EXPECT().Nodes(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(engine.Nodes{{Id: "stats-cn", Addr: "stats-cn:6001", Mcpu: 1}}, nil).AnyTimes()
-	db := mock_frontend.NewMockDatabase(ctrl)
-	relation := mock_frontend.NewMockRelation(ctrl)
 	_, table, err := base.Resolve("tpch", "nation", nil)
 	require.NoError(t, err)
-	eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
-	db.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(relation, nil).AnyTimes()
-	db.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
-	relation.EXPECT().GetTableDef(gomock.Any()).Return(table).AnyTimes()
-	relation.EXPECT().GetTableID(gomock.Any()).Return(table.TblId).AnyTimes()
-	relation.EXPECT().Stats(gomock.Any(), gomock.Any()).DoAndReturn(func(context.Context, bool) (*pbstats.StatsInfo, error) { return ctx.stats, nil }).AnyTimes()
-	ses.txnHandler.storage = eng
-	oldEngine := getPu("").StorageEngine
-	getPu("").StorageEngine = eng
-	defer func() { getPu("").StorageEngine = oldEngine }()
+	installStatsAdmissionStorage(t, ses, table, func() *pbstats.StatsInfo { return ctx.stats })
 	defer ses.GetTxnCompileCtx().Close()
 	ctx.stats = &pbstats.StatsInfo{TableCnt: 1e9, BlockNumber: 1e6, AccurateObjectNumber: 1}
 	ret, fresh, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepared.Name, base.Resolve, ctx)
@@ -6595,4 +6611,98 @@ func TestPreparedStatsGrowthRebuildsExecutionStrategy(t *testing.T) {
 	require.NotSame(t, original, fresh)
 	require.Equal(t, plan2.ExecTypeAP_MULTICN, plan2.GetExecType(fresh.GetQuery(), false, true))
 	require.Same(t, fresh, prepared.PreparePlan.GetDcl().GetPrepare().Plan)
+}
+
+// Assert the installed generation, not a process-wide planning metric: other
+// sessions and background tasks may plan while this statement is executing.
+func TestPreparedPointGenerationSurvivesTransientStatsGrowth(t *testing.T) {
+	for _, tc := range []struct {
+		name, sql string
+		params    int
+	}{
+		{"single", "update nation set n_regionkey=n_regionkey+1 where n_nationkey=?", 1},
+		{"composite", "update partsupp set ps_availqty=ps_availqty+1 where ps_partkey=? and ps_suppkey=?", 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := plan2.NewMockCompilerContext(true)
+			ctx := &preparedStatsTestCompiler{preparedTestCompiler: &preparedTestCompiler{CompilerContext: base, proc: base.GetProcess()}, stats: &pbstats.StatsInfo{TableCnt: 128}}
+			if tc.params == 2 {
+				_, table, err := base.Resolve("tpch", "partsupp", nil)
+				require.NoError(t, err)
+				hidden := plan2.MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
+				table.Pkey = &plan.PrimaryKeyDef{PkeyColName: catalog.CPrimaryKeyColName, Names: []string{"ps_partkey", "ps_suppkey"}, CompPkeyCol: hidden}
+				table.ClusterBy = nil
+				rowID := table.Cols[len(table.Cols)-1]
+				table.Cols[len(table.Cols)-1] = hidden
+				table.Cols = append(table.Cols, rowID)
+				table.Name2ColIndex = make(map[string]int32)
+				for i, col := range table.Cols {
+					table.Name2ColIndex[col.Name] = int32(i)
+				}
+				ctx.table = table
+			}
+			ses, prepared, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(t, 228, tc.sql, ctx)
+			defer prepared.Close()
+			ctx.proc = cw.proc
+			defer ses.GetTxnCompileCtx().Close()
+			prepared.defaultDatabase = "tpch"
+			tableName := "nation"
+			if tc.params == 2 {
+				tableName = "partsupp"
+			}
+			_, table, err := ctx.Resolve("tpch", tableName, nil)
+			require.NoError(t, err)
+			installStatsAdmissionStorage(t, ses, table, func() *pbstats.StatsInfo { return ctx.stats })
+			for _, node := range prepared.PreparePlan.GetDcl().GetPrepare().Plan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_TABLE_SCAN {
+					node.Stats.TableCnt = 128
+				}
+			}
+			bind := func(value int) {
+				t.Helper()
+				cw.proc.SetPrepareParams(nil)
+				if prepared.params != nil {
+					prepared.params.Free(cw.proc.Mp())
+				}
+				prepared.params = vector.NewVec(types.T_text.ToType())
+				prepared.ParamTypes = nil
+				for i := 0; i < tc.params; i++ {
+					v := 1
+					if i == 0 {
+						v = value
+					}
+					require.NoError(t, vector.AppendBytes(prepared.params, []byte(fmt.Sprintf("%d", v)), false, cw.proc.Mp()))
+					prepared.ParamTypes = append(prepared.ParamTypes, byte(defines.MYSQL_TYPE_LONGLONG), 0)
+				}
+			}
+			bind(1)
+			ret, runtimePlan, _, _, _, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepared.Name, ctx.Resolve, ctx)
+			require.NoError(t, err)
+			require.Nil(t, ret)
+			for _, node := range runtimePlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_TABLE_SCAN {
+					node.Stats.TableCnt = 128
+				}
+			}
+			sentinel := compile.NewCompile("", "", prepared.Sql, "", "", nil, cw.proc, prepared.PrepareStmt, false, nil, time.Now())
+			require.True(t, cw.installRuntimeCacheCandidate(sentinel))
+			for i := 2; i <= 21; i++ {
+				ctx.stats.TableCnt = float64(127 + i)
+				bind(i)
+				ret, reused, _, _, _, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepared.Name, ctx.Resolve, ctx)
+				require.NoError(t, err)
+				require.Same(t, sentinel, ret)
+				require.Same(t, runtimePlan, reused)
+				require.Same(t, runtimePlan, prepared.runtimePlan)
+				require.True(t, cw.planGenerationReused)
+				require.Nil(t, cw.runtimeCacheTarget, "reuse must not stage a replacement")
+			}
+			ctx.stats.TableCnt = 128 // rollback returns to the original observation
+			bind(1)
+			ret, reused, _, _, _, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepared.Name, ctx.Resolve, ctx)
+			require.NoError(t, err)
+			require.Same(t, sentinel, ret)
+			require.Same(t, runtimePlan, reused)
+		})
+	}
 }

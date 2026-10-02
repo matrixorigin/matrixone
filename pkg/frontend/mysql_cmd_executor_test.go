@@ -11536,3 +11536,75 @@ func TestPreparedGroupConcatFloorCapturedWithoutPhysicalCompile(t *testing.T) {
 		return nil
 	})
 }
+
+type statsAdmissionStopResponse struct {
+	Responser
+	err error
+}
+
+func (r *statsAdmissionStopResponse) RespPreMeta(*ExecCtx, any) error { return r.err }
+
+func TestOrdinaryCacheStatsAdmissionRetainsPointAndRebuildsRange(t *testing.T) {
+	for _, tc := range []struct {
+		name, sql       string
+		growth, rebuild bool
+	}{
+		{"point growth", "select n_name from nation where n_nationkey=1", true, false},
+		{"stable range", "select n_name from nation where n_nationkey>=1", false, false},
+		{"range growth", "select n_name from nation where n_nationkey>=1", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := plan.NewMockCompilerContext(false)
+			ctx := &preparedStatsTestCompiler{preparedTestCompiler: &preparedTestCompiler{CompilerContext: base, proc: base.GetProcess()}, stats: &pbstats.StatsInfo{TableCnt: 128}}
+			ses, prepared, initialCW, ec := newPreparedExecuteEnvForSQLWithCompilerContext(t, 229, tc.sql, ctx)
+			defer prepared.Close()
+			defer initialCW.Free()
+			ses.SetDatabaseName("tpch")
+			ses.GetTxnCompileCtx().SetDatabase("tpch")
+			defer ses.GetTxnCompileCtx().Close()
+			stop := fmt.Errorf("stop after compile before result execution")
+			ec.resper = &statsAdmissionStopResponse{Responser: ses.GetResponser(), err: stop}
+			_, table, err := base.Resolve("tpch", "nation", nil)
+			require.NoError(t, err)
+			installStatsAdmissionStorage(t, ses, table, func() *pbstats.StatsInfo { return ctx.stats })
+			stmts, err := mysql.Parse(ec.reqCtx, tc.sql, 1)
+			require.NoError(t, err)
+			cached, err := plan.BuildPlan(ctx, stmts[0], false)
+			require.NoError(t, err)
+			// Supply a real captured stats count, rather than relying on the TPCH
+			// mock's default estimate, and keep the schema/snapshot checks active.
+			for _, node := range cached.GetQuery().Nodes {
+				if node.NodeType == plan0.Node_TABLE_SCAN {
+					node.Stats.TableCnt = 128
+				}
+			}
+			input := &UserInput{sql: tc.sql}
+			input.genHash()
+			ses.cachePlan(input.getHash(), stmts, []*plan0.Plan{cached})
+			defer ses.cleanCache()
+			ec.input = input
+			cws, err := GetComputationWrapper(ec, "tpch", "root", nil, ses.GetProc(), ses)
+			require.NoError(t, err)
+			require.Len(t, cws, 1)
+			cw := cws[0].(*TxnComputationWrapper)
+			defer cw.Free()
+			require.Same(t, cached, cw.Plan())
+			require.True(t, cw.planGenerationReused)
+			ec.cw, ec.cws, ec.stmt = cw, cws, cw.GetAst()
+			if tc.growth {
+				ctx.stats.TableCnt = 129
+			}
+			err = dispatchStmt(ses, statistic.NewStatsArray(), ec)
+			require.ErrorIs(t, err, stop)
+			if tc.rebuild {
+				require.NotSame(t, cached, cw.Plan())
+				require.False(t, cw.planGenerationReused)
+				require.False(t, ses.isCached(input.getHash()))
+			} else {
+				require.Same(t, cached, cw.Plan())
+				require.True(t, cw.planGenerationReused)
+				require.True(t, ses.isCached(input.getHash()))
+			}
+		})
+	}
+}
