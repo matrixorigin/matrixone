@@ -24,6 +24,7 @@ import (
 	"math"
 	"math/bits"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -7903,6 +7904,10 @@ func verifyPrivilegeEntryInMultiPrivilegeLevels(
 	if len(dbName) == 0 {
 		dbName = ses.GetDatabaseName()
 	}
+	// Duplicate levels can generate the same complete predicate. Remember only
+	// successful misses in this invocation, retaining ordered cache/error checks
+	// and the early wildcard hit without allocating a collection.
+	var missedSQL []string
 	for _, pl := range pls {
 		if cache != nil && enableCache {
 			yes = cache.has(entry.objType, pl, dbName, entry.tableName, entry.privilegeId)
@@ -7913,6 +7918,10 @@ func verifyPrivilegeEntryInMultiPrivilegeLevels(
 		sql, err = getSqlForPrivilege2(ctx, ses, roleId, entry, pl)
 		if err != nil {
 			return false, err
+		}
+
+		if slices.Contains(missedSQL, sql) {
+			continue
 		}
 
 		bh.ClearExecResultSet()
@@ -7932,6 +7941,7 @@ func verifyPrivilegeEntryInMultiPrivilegeLevels(
 			}
 			return true, nil
 		}
+		missedSQL = append(missedSQL, sql)
 	}
 	return false, nil
 }

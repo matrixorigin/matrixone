@@ -32,6 +32,105 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestIssue29399TableRestoreRetainsDatabaseOwnership(t *testing.T) {
+	runAuthenticatedClusterTest(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(t.Context(), 240*time.Second)
+		defer cancel()
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		open := func(user string) *sql.DB {
+			db, err := sql.Open("mysql", fmt.Sprintf("%s:111@tcp(127.0.0.1:%d)/", user, cn.GetServiceConfig().CN.Frontend.Port))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, db.Close()) })
+			return db
+		}
+		sys := open("dump")
+		const account = "issue_29399_owner_scope"
+		execSQLRequire(t, ctx, sys, "create account "+account+" admin_name 'admin' identified by '111'")
+		admin := open(account + "#admin#accountadmin")
+		defer func() {
+			cleanup, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			execSQLRequire(t, cleanup, admin, "drop snapshot if exists issue_29399_owner_scope_s")
+			execSQLRequire(t, cleanup, admin, "drop pitr if exists issue_29399_owner_scope_p")
+			execSQLRequire(t, cleanup, sys, "drop account if exists "+account)
+		}()
+		for _, stmt := range []string{
+			"create role builder", "create user db_creator identified by '111' default role builder",
+			"grant builder to db_creator", "grant connect, create database on account * to builder",
+			"grant create table on database * to builder",
+			"create pitr issue_29399_owner_scope_p for account range 1 'h'",
+		} {
+			execSQLRequire(t, ctx, admin, stmt)
+		}
+		creator := open(account + "#db_creator#builder")
+		execSQLRequire(t, ctx, creator, "create database app")
+		execSQLRequire(t, ctx, creator, "create table app.owned(id int)")
+		for _, stmt := range []string{
+			"create table app.t(id int)", "insert into app.t values (1)",
+			"insert into app.owned values (3)",
+			"create database recreated", "create table recreated.t(id int)", "insert into recreated.t values (7)",
+			"create snapshot issue_29399_owner_scope_s for account",
+		} {
+			execSQLRequire(t, ctx, admin, stmt)
+		}
+		// PITR accepts second-resolution timestamps. This delay crosses that
+		// public precision boundary; it does not schedule competing operations.
+		var slept int
+		require.NoError(t, admin.QueryRowContext(ctx, "select sleep(1)").Scan(&slept))
+		var at string
+		require.NoError(t, admin.QueryRowContext(ctx, "select date_format(current_timestamp(6), '%Y-%m-%d %H:%i:%s')").Scan(&at))
+		var id, owner, user uint64
+		require.NoError(t, admin.QueryRowContext(ctx, "select dat_id, owner, creator from mo_catalog.mo_database where datname='app'").Scan(&id, &owner, &user))
+		execSQLRequire(t, ctx, admin, "drop user db_creator")
+		for _, restore := range []string{
+			"restore table app.t {snapshot='issue_29399_owner_scope_s'}",
+			"restore database app table t from pitr issue_29399_owner_scope_p '" + at + "'",
+		} {
+			execSQLRequire(t, ctx, admin, "update app.t set id=2")
+			execSQLRequire(t, ctx, admin, restore)
+			var value int
+			require.NoError(t, admin.QueryRowContext(ctx, "select id from app.t").Scan(&value))
+			require.Equal(t, 1, value)
+			var currentID, currentOwner, currentUser uint64
+			require.NoError(t, admin.QueryRowContext(ctx, "select dat_id, owner, creator from mo_catalog.mo_database where datname='app'").Scan(&currentID, &currentOwner, &currentUser))
+			require.Equal(t, []uint64{id, owner, user}, []uint64{currentID, currentOwner, currentUser})
+		}
+		// Retaining the DB does not exempt a recreated table's own principal.
+		execSQLRequire(t, ctx, admin, "update app.owned set id=9")
+		var beforeTable uint64
+		require.NoError(t, admin.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase='app' and relname='owned'").Scan(&beforeTable))
+		for _, restore := range []string{
+			"restore table app.owned {snapshot='issue_29399_owner_scope_s'}",
+			"restore database app table owned from pitr issue_29399_owner_scope_p '" + at + "'",
+		} {
+			_, err = admin.ExecContext(ctx, restore)
+			require.ErrorContains(t, err, "creator no longer exists")
+			var afterTable uint64
+			var value int
+			require.NoError(t, admin.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase='app' and relname='owned'").Scan(&afterTable))
+			require.Equal(t, beforeTable, afterTable, "rejected restore must fail before DROP")
+			require.NoError(t, admin.QueryRowContext(ctx, "select id from app.owned").Scan(&value))
+			require.Equal(t, 9, value)
+		}
+		// A genuinely missing database still needs its historical identities.
+		execSQLRequire(t, ctx, admin, "drop database app")
+		_, err = admin.ExecContext(ctx, "restore table app.t {snapshot='issue_29399_owner_scope_s'}")
+		require.ErrorContains(t, err, "creator no longer exists")
+		var databases int
+		require.NoError(t, admin.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_database where datname='app'").Scan(&databases))
+		require.Zero(t, databases)
+		execSQLRequire(t, ctx, admin, "drop database recreated")
+		execSQLRequire(t, ctx, admin, "restore table recreated.t {snapshot='issue_29399_owner_scope_s'}")
+		var value int
+		require.NoError(t, admin.QueryRowContext(ctx, "select id from recreated.t").Scan(&value))
+		require.Equal(t, 7, value)
+		var correctOwners int
+		require.NoError(t, admin.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_database d join mo_catalog.mo_user u on d.creator=u.user_id join mo_catalog.mo_role r on d.owner=r.role_id where d.datname='recreated' and u.user_name='admin' and r.role_name='accountadmin'").Scan(&correctOwners))
+		require.Equal(t, 1, correctOwners)
+	})
+}
+
 func TestIssue29399PartialRestoreSerializesPrivilegeRemoval(t *testing.T) {
 	runAuthenticatedClusterTest(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(t.Context(), 240*time.Second)

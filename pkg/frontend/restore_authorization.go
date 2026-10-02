@@ -43,10 +43,24 @@ func prepareRestoreOwnership(ctx context.Context, bh BackgroundExec, ts int64, s
 	if table != "" {
 		tableFilter += " and relname = " + quoteSQLStringLiteral(table)
 	}
-	dbs, err := getStringColsListFromTS(sourceCtx, bh, fmt.Sprintf(
-		"select datname, '', cast(creator as char), cast(owner as char) from mo_catalog.mo_database {MO_TS = %d} where %s", ts, dbFilter), source, target, 0, 1, 2, 3)
-	if err != nil {
-		return nil, err
+	// Table restore retains an existing database. Lock its current identity
+	// before deciding which historical principals the DDL actually needs.
+	recreateDatabase := true
+	if database != "" && table != "" {
+		exists, err := checkDatabaseExistsOrNotWithLock(defines.AttachAccountId(ctx, target), bh, database, true)
+		if err != nil {
+			return nil, err
+		}
+		recreateDatabase = !exists
+	}
+	var dbs [][]string
+	if recreateDatabase {
+		var err error
+		dbs, err = getStringColsListFromTS(sourceCtx, bh, fmt.Sprintf(
+			"select datname, '', cast(creator as char), cast(owner as char) from mo_catalog.mo_database {MO_TS = %d} where %s", ts, dbFilter), source, target, 0, 1, 2, 3)
+		if err != nil {
+			return nil, err
+		}
 	}
 	tables, err := getStringColsListFromTS(sourceCtx, bh, fmt.Sprintf(
 		"select reldatabase, relname, cast(creator as char), cast(owner as char) from mo_catalog.mo_tables {MO_TS = %d} where %s", ts, tableFilter), source, target, 0, 1, 2, 3)
@@ -123,6 +137,20 @@ func restoreDDLContext(ctx context.Context, database, table string) (context.Con
 }
 
 func execRestoreCreateDatabase(ctx context.Context, bh BackgroundExec, database, sql string) error {
+	if owners, restoring := ctx.Value(restoreOwnershipKey{}).(map[restoreObjectName]restoreOwner); restoring {
+		if _, recreated := owners[restoreObjectName{database, ""}]; !recreated {
+			// Only a locked, existing database permits the no-op DDL without a
+			// historical identity. Missing metadata must never create a database
+			// owned by the invoking SYS role.
+			exists, err := checkDatabaseExistsOrNotWithLock(ctx, bh, database, true)
+			if err != nil {
+				return err
+			}
+			if exists {
+				return bh.Exec(ctx, sql)
+			}
+		}
+	}
 	ctx, err := restoreDDLContext(ctx, database, "")
 	if err != nil {
 		return err

@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -59,6 +60,10 @@ func TestPrepareRestoreOwnershipRebindsCurrentPrincipals(t *testing.T) {
 
 	bh := &backgroundExecTest{}
 	bh.init()
+	lockedDatabase, err := getSqlForCheckDatabaseByAccount(defines.AttachAccountId(t.Context(), 20), "app")
+	require.NoError(t, err)
+	lockedDatabase = strings.TrimSuffix(lockedDatabase, ";") + " for update;"
+	bh.sql2result[lockedDatabase] = newMrsForCheckDatabase(nil)
 	setRows := func(query string, columns []string, rows [][]interface{}) {
 		bh.sql2result[query] = newMrsForRestoreStringRows(columns, rows)
 	}
@@ -92,6 +97,33 @@ func TestPrepareRestoreOwnershipRebindsCurrentPrincipals(t *testing.T) {
 	setRows(currentRoles, []string{"id", "name"}, [][]interface{}{{"22", "db_owner"}})
 	_, err = prepareRestoreOwnership(t.Context(), bh, 42, 10, 20, "app", "t")
 	require.ErrorContains(t, err, "owner role no longer exists")
+
+	// A retained database needs neither its historical creator nor its role.
+	// The selected table still needs both, and the existence query is locked
+	// in the target account before reading any historical metadata.
+	bh.sql2result[lockedDatabase] = newMrsForCheckDatabase([][]interface{}{{uint64(100)}})
+	setRows(currentUsers, []string{"id", "name"}, [][]interface{}{{"33", "editor"}})
+	setRows(currentRoles, []string{"id", "name"}, [][]interface{}{{"44", "table_owner"}})
+	start := len(bh.executedSQLs)
+	accountStart := len(bh.executionAccountIDs)
+	ctx, err = prepareRestoreOwnership(t.Context(), bh, 42, 10, 20, "app", "t")
+	require.NoError(t, err)
+	require.Equal(t, lockedDatabase, bh.executedSQLs[start])
+	require.Equal(t, uint32(20), bh.executionAccountIDs[accountStart])
+	require.NotContains(t, bh.executedSQLs[start:], databaseQuery)
+	_, err = restoreDDLContext(ctx, "app", "")
+	require.ErrorContains(t, err, "missing historical ownership")
+	tableCtx, err := restoreDDLContext(ctx, "app", "t")
+	require.NoError(t, err)
+	require.Equal(t, uint32(33), defines.GetUserId(tableCtx))
+	ctx = defines.AttachAccountId(ctx, 20)
+	require.NoError(t, execRestoreCreateDatabase(ctx, bh, "app", "create database if not exists app"))
+	bh.sql2result[lockedDatabase] = newMrsForCheckDatabase(nil)
+	require.ErrorContains(t, execRestoreCreateDatabase(ctx, bh, "app", "create database if not exists app"), "missing historical ownership")
+	bh.sql2err[lockedDatabase] = errors.New("database lookup failed")
+	_, err = prepareRestoreOwnership(t.Context(), bh, 42, 10, 20, "app", "t")
+	require.ErrorContains(t, err, "database lookup failed")
+	require.ErrorContains(t, execRestoreCreateDatabase(ctx, bh, "app", "create database if not exists app"), "database lookup failed")
 }
 
 func TestPartialRestoreRebindsOnlyCurrentScopedIDs(t *testing.T) {

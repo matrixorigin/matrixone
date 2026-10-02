@@ -625,17 +625,6 @@ func copyRolePrivilegeRangeForUpgradeTest(
 ) {
 	t.Helper()
 	require.Positive(t, count)
-	// Keep the bulk objects in key order for the physical LIMIT assertions.
-	// Parallel writers produce overlapping ranges that each need a reader page.
-	var savedDOP int64
-	require.NoError(t, conn.QueryRowContext(ctx, "select @@max_dop").Scan(&savedDOP))
-	mustExecOrphanPrivilegeUpgradeSQL(t, ctx, conn, "set max_dop=1")
-	defer func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		_, err := conn.ExecContext(cleanupCtx, fmt.Sprintf("set max_dop=%d", savedDOP))
-		require.NoError(t, err)
-	}()
 	statement := fmt.Sprintf(
 		"insert into mo_catalog.mo_role_privs "+
 			"select role_id, role_name, obj_type, %d + result, privilege_id, privilege_name, privilege_level, "+
@@ -675,7 +664,18 @@ func execOrphanPrivilegeUpgradeInternalSQLForAccountAffected(
 		affectedRows = res.AffectedRows
 		res.Close()
 		return nil
-	}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).WithWaitCommittedLogApplied())
+	}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).WithWaitCommittedLogApplied().
+		WithResolveVariableFunc(func(name string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+			// Keep fixture seed keys in writer order for the physical LIMIT assertions.
+			// Scope DOP to these internal writes, leaving client sessions and maintenance unchanged.
+			if isSystemVar && !isGlobalVar && strings.EqualFold(name, "max_dop") {
+				return int64(1), nil
+			}
+			if executor.DefaultResolveVariable != nil {
+				return executor.DefaultResolveVariable(name, isSystemVar, isGlobalVar)
+			}
+			return nil, nil
+		}))
 	return affectedRows, err
 }
 

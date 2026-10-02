@@ -156,9 +156,19 @@ create table app.t(id int);
 -- @session
 -- @session:id=10&user=auth_missing:admin&password=111
 insert into app.t values(1);
+create table app.retained(id int);
+insert into app.retained values(7);
+set @retained_db_id=(select dat_id from mo_catalog.mo_database where datname='app');
 create snapshot auth_missing_s for account;
 drop user builder;
+-- A table owned by a live principal does not recreate the existing database.
+update app.retained set id=9;
+restore table app.retained {snapshot='auth_missing_s'};
+select * from app.retained;
+select dat_id=@retained_db_id as retained_database from mo_catalog.mo_database where datname='app';
 insert into app.t values(2);
+-- The selected table's missing creator must still fail before DROP.
+restore table app.t {snapshot='auth_missing_s'};
 restore database app {snapshot='auth_missing_s'};
 select * from app.t order by id;
 drop snapshot auth_missing_s;
