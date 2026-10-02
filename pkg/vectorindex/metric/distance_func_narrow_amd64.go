@@ -110,7 +110,7 @@ func innerProductBF16SIMD(a, b []types.BF16) (float64, error) {
 	for i := j * 2; i < n; i++ {
 		sum += a[i].ToFloat32() * b[i].ToFloat32()
 	}
-	return recoverInnerProductBF16(float64(-sum), a, b), nil
+	return recoverInnerProductBF16(float64(-sum), a, b)
 }
 
 func l1DistanceBF16SIMD(a, b []types.BF16) (float64, error) {

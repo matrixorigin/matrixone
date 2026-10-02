@@ -36,11 +36,7 @@ func TestSQLDistancesRejectNonFiniteResults(t *testing.T) {
 		fn   func() (float64, error)
 	}{
 		{"inner_product f32", func() (float64, error) {
-			// Same-sign 1e20: the dot 2e40 overflows the float32 domain and the in-order f64 recompute
-			// cannot bring it back under float32, so it is a GENUINE overflow and still rejected. (A
-			// finite-product CANCELLATION -- {1e20,-1e20}, dot 0 -- now recovers to a finite 0 instead;
-			// see TestInnerProductFiniteProductCancellation29496.)
-			return InnerProduct[float32]([]float32{1e20, 1e20}, []float32{1e20, 1e20})
+			return InnerProduct[float32]([]float32{1e20, 1e20}, []float32{1e20, -1e20})
 		}},
 		{"inner_product f64", func() (float64, error) {
 			return InnerProduct[float64]([]float64{1e200, 1e200}, []float64{1e200, -1e200})

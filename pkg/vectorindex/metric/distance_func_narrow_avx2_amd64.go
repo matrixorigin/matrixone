@@ -104,7 +104,7 @@ func innerProductBF16AVX2(a, b []types.BF16) (float64, error) {
 	for i := j * 2; i < n; i++ {
 		sum += a[i].ToFloat32() * b[i].ToFloat32()
 	}
-	return recoverInnerProductBF16(float64(-sum), a, b), nil
+	return recoverInnerProductBF16(float64(-sum), a, b)
 }
 
 func l1DistanceBF16AVX2(a, b []types.BF16) (float64, error) {
@@ -361,7 +361,7 @@ func innerProductF16AVX2(a, b []types.Float16) (float64, error) {
 	for i := j * 2; i < n; i++ {
 		sum += f16fast(a[i]) * f16fast(b[i])
 	}
-	return recoverInnerProductF16(float64(-sum), a, b), nil
+	return recoverInnerProductF16(float64(-sum), a, b)
 }
 
 func l1DistanceF16AVX2(a, b []types.Float16) (float64, error) {
