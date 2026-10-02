@@ -1487,6 +1487,18 @@ func (tbl *txnTable) rangesOnePart(
 		)
 	}
 
+	// Fold is a materialized statement value, not a reason to discard every
+	// predicate. Only standalone unavailable values have no metadata proof.
+	// Use a private slice so the caller's reusable filter list stays intact.
+	filters := make([]*plan.Expr, 0, len(rangesParam.BlockFilters))
+	for _, expr := range rangesParam.BlockFilters {
+		if folded, ok := expr.Expr.(*plan.Expr_Fold); ok && (folded.Fold == nil || folded.Fold.Data == nil) {
+			continue
+		}
+		filters = append(filters, expr)
+	}
+	rangesParam.BlockFilters = filters
+
 	var (
 		objMeta    objectio.ObjectMeta
 		zms        []objectio.ZoneMap

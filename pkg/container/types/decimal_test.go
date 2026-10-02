@@ -22,8 +22,65 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDecimalPrecisionCheckedOwner(t *testing.T) {
+	for _, tc := range []struct {
+		x, ceil, floor, round int64
+	}{
+		{105, 110, 100, 110}, {-105, -100, -110, -110},
+		{100, 100, 100, 100}, {-100, -100, -100, -100}, {0, 0, 0, 0},
+	} {
+		for _, constantScale := range []bool{false, true} {
+			divisor := int64(1)
+			if constantScale {
+				divisor = 10
+			}
+			x64 := Decimal64(uint64(tc.x))
+			x128 := Decimal128FromInt64(tc.x)
+			require.Equal(t, Decimal64(uint64(tc.ceil/divisor)), x64.Ceil(2, 1, constantScale))
+			require.Equal(t, Decimal64(uint64(tc.floor/divisor)), x64.Floor(2, 1, constantScale))
+			require.Equal(t, Decimal64(uint64(tc.round/divisor)), x64.Round(2, 1, constantScale))
+			require.Equal(t, Decimal128FromInt64(tc.ceil/divisor), x128.Ceil(2, 1, constantScale))
+			require.Equal(t, Decimal128FromInt64(tc.floor/divisor), x128.Floor(2, 1, constantScale))
+			require.Equal(t, Decimal128FromInt64(tc.round/divisor), x128.Round(2, 1, constantScale))
+		}
+	}
+	for _, constantScale := range []bool{false, true} {
+		for _, x := range []Decimal64{Decimal64Min, Decimal64Max} {
+			require.Equal(t, x, x.Ceil(0, 0, constantScale))
+			require.Equal(t, x, x.Floor(0, 0, constantScale))
+			require.Equal(t, x, x.Round(0, 0, constantScale))
+		}
+		for _, x := range []Decimal128{Decimal128Min, Decimal128Max} {
+			require.Equal(t, x, x.Ceil(0, 0, constantScale))
+			require.Equal(t, x, x.Floor(0, 0, constantScale))
+			require.Equal(t, x, x.Round(0, 0, constantScale))
+		}
+		for _, operation := range []func(){
+			func() { Decimal64Min.Ceil(0, -1, constantScale) },
+			func() { Decimal64Min.Floor(0, -1, constantScale) },
+			func() { Decimal128Min.Ceil(0, -1, constantScale) },
+			func() { Decimal128Min.Floor(0, -1, constantScale) },
+			func() { Decimal64Max.Round(0, -1, constantScale) },
+			func() { Decimal64Max.Minus().Round(0, -1, constantScale) },
+			func() { Decimal128Max.Round(0, -1, constantScale) },
+			func() { Decimal128Max.Minus().Round(0, -1, constantScale) },
+			func() { Decimal64Max.Ceil(0, -1, constantScale) },
+			func() { Decimal64Max.Minus().Floor(0, -1, constantScale) },
+			func() { Decimal128Max.Ceil(0, -1, constantScale) },
+			func() { Decimal128Max.Minus().Floor(0, -1, constantScale) },
+		} {
+			var failure any
+			func() { defer func() { failure = recover() }(); operation() }()
+			err, ok := failure.(error)
+			require.True(t, ok, "quantizer must reject a nonrepresentable result")
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange))
+		}
+	}
+}
 
 func TestParseDecimalRejectsBothPrecisionEndpoints(t *testing.T) {
 	for _, test := range []struct {

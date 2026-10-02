@@ -2761,44 +2761,76 @@ func (x Decimal256) Format(scale int32) string {
 }
 
 func (x Decimal64) Ceil(scale1, scale2 int32, isConst bool) Decimal64 {
-	if x.Sign() {
-		return x.Minus().Floor(scale1, scale2, isConst).Minus()
+	if scale2 >= scale1 {
+		return x
 	}
-	if scale1 > scale2 {
-		k := scale1 - scale2
-		if k > 18 {
-			k = 18
+	if x.Sign() {
+		magnitude := x.Minus()
+		if magnitude.Sign() {
+			panic(moerr.NewOutOfRangeNoCtx("decimal64", "CEIL"))
 		}
-		y, _, _ := x.Mod(Decimal64(1), k, 0)
-		if y != 0 {
-			x, _ = x.Sub64(y)
-			x, _, _ = x.Add(Decimal64(1), k, 0)
+		return magnitude.Floor(scale1, scale2, isConst).Minus()
+	}
+	k := scale1 - scale2
+	if k > 18 {
+		k = 18
+	}
+	y, _, err := x.Mod(Decimal64(1), k, 0)
+	if err != nil {
+		panic(moerr.NewOutOfRangeNoCtx("decimal64", "CEIL"))
+	}
+	if y != 0 {
+		x, err = x.Sub64(y)
+		if err != nil {
+			panic(moerr.NewOutOfRangeNoCtx("decimal64", "CEIL"))
 		}
-		if isConst {
-			if scale2 < 0 {
-				k = scale1
-			}
-			x, _ = x.Scale(-k)
+		x, _, err = x.Add(Decimal64(1), k, 0)
+		if err != nil {
+			panic(moerr.NewOutOfRangeNoCtx("decimal64", "CEIL"))
+		}
+	}
+	if isConst {
+		if scale2 < 0 {
+			k = scale1
+		}
+		x, err = x.Scale(-k)
+		if err != nil {
+			panic(moerr.NewOutOfRangeNoCtx("decimal64", "CEIL"))
 		}
 	}
 	return x
 }
+
 func (x Decimal64) Floor(scale1, scale2 int32, isConst bool) Decimal64 {
-	if x.Sign() {
-		return x.Minus().Ceil(scale1, scale2, isConst).Minus()
+	if scale2 >= scale1 {
+		return x
 	}
-	if scale1 > scale2 {
-		k := scale1 - scale2
-		if k > 18 {
-			k = 18
+	if x.Sign() {
+		magnitude := x.Minus()
+		if magnitude.Sign() {
+			panic(moerr.NewOutOfRangeNoCtx("decimal64", "FLOOR"))
 		}
-		y, _, _ := x.Mod(Decimal64(1), k, 0)
-		x, _ = x.Sub64(y)
-		if isConst {
-			if scale2 < 0 {
-				k = scale1
-			}
-			x, _ = x.Scale(-k)
+		return magnitude.Ceil(scale1, scale2, isConst).Minus()
+	}
+	k := scale1 - scale2
+	if k > 18 {
+		k = 18
+	}
+	y, _, err := x.Mod(Decimal64(1), k, 0)
+	if err != nil {
+		panic(moerr.NewOutOfRangeNoCtx("decimal64", "FLOOR"))
+	}
+	x, err = x.Sub64(y)
+	if err != nil {
+		panic(moerr.NewOutOfRangeNoCtx("decimal64", "FLOOR"))
+	}
+	if isConst {
+		if scale2 < 0 {
+			k = scale1
+		}
+		x, err = x.Scale(-k)
+		if err != nil {
+			panic(moerr.NewOutOfRangeNoCtx("decimal64", "FLOOR"))
 		}
 	}
 	return x
@@ -2808,58 +2840,98 @@ func (x Decimal64) Round(scale1, scale2 int32, isConst bool) Decimal64 {
 	if scale2 >= scale1 {
 		return x
 	}
+	negative := x.Sign()
 	k := scale1 - scale2
 	if k > 18 {
 		k = 18
 	}
-	x, _ = x.Scale(-k)
+	var err error
+	x, err = x.Scale(-k)
+	if err != nil || (x != 0 && x.Sign() != negative) {
+		panic(moerr.NewOutOfRangeNoCtx("decimal64", "ROUND"))
+	}
 	if !isConst {
-		x, _ = x.Scale(k)
+		x, err = x.Scale(k)
 	} else if scale2 < 0 {
-		x, _ = x.Scale(-scale2)
+		x, err = x.Scale(-scale2)
+	}
+	if err != nil || (x != 0 && x.Sign() != negative) {
+		panic(moerr.NewOutOfRangeNoCtx("decimal64", "ROUND"))
 	}
 	return x
 }
 
 func (x Decimal128) Ceil(scale1, scale2 int32, isConst bool) Decimal128 {
-	if x.Sign() {
-		return x.Minus().Floor(scale1, scale2, isConst).Minus()
+	if scale2 >= scale1 {
+		return x
 	}
-	if scale1 > scale2 {
-		k := scale1 - scale2
-		if k > 38 {
-			k = 38
+	if x.Sign() {
+		magnitude := x.Minus()
+		if magnitude.Sign() {
+			panic(moerr.NewOutOfRangeNoCtx("decimal128", "CEIL"))
 		}
-		y, _, _ := x.Mod(Decimal128{1, 0}, k, 0)
-		if y.B0_63 != 0 || y.B64_127 != 0 {
-			x, _ = x.Sub128(y)
-			x, _, _ = x.Add(Decimal128{1, 0}, k, 0)
+		return magnitude.Floor(scale1, scale2, isConst).Minus()
+	}
+	k := scale1 - scale2
+	if k > 38 {
+		k = 38
+	}
+	y, _, err := x.Mod(Decimal128{1, 0}, k, 0)
+	if err != nil {
+		panic(moerr.NewOutOfRangeNoCtx("decimal128", "CEIL"))
+	}
+	if y.B0_63 != 0 || y.B64_127 != 0 {
+		x, err = x.Sub128(y)
+		if err != nil {
+			panic(moerr.NewOutOfRangeNoCtx("decimal128", "CEIL"))
 		}
-		if isConst {
-			if scale2 < 0 {
-				k = scale1
-			}
-			x, _ = x.Scale(-k)
+		x, _, err = x.Add(Decimal128{1, 0}, k, 0)
+		if err != nil {
+			panic(moerr.NewOutOfRangeNoCtx("decimal128", "CEIL"))
+		}
+	}
+	if isConst {
+		if scale2 < 0 {
+			k = scale1
+		}
+		x, err = x.Scale(-k)
+		if err != nil {
+			panic(moerr.NewOutOfRangeNoCtx("decimal128", "CEIL"))
 		}
 	}
 	return x
 }
+
 func (x Decimal128) Floor(scale1, scale2 int32, isConst bool) Decimal128 {
-	if x.Sign() {
-		return x.Minus().Ceil(scale1, scale2, isConst).Minus()
+	if scale2 >= scale1 {
+		return x
 	}
-	if scale1 > scale2 {
-		k := scale1 - scale2
-		if k > 38 {
-			k = 38
+	if x.Sign() {
+		magnitude := x.Minus()
+		if magnitude.Sign() {
+			panic(moerr.NewOutOfRangeNoCtx("decimal128", "FLOOR"))
 		}
-		y, _, _ := x.Mod(Decimal128{1, 0}, k, 0)
-		x, _ = x.Sub128(y)
-		if isConst {
-			if scale2 < 0 {
-				k = scale1
-			}
-			x, _ = x.Scale(-k)
+		return magnitude.Ceil(scale1, scale2, isConst).Minus()
+	}
+	k := scale1 - scale2
+	if k > 38 {
+		k = 38
+	}
+	y, _, err := x.Mod(Decimal128{1, 0}, k, 0)
+	if err != nil {
+		panic(moerr.NewOutOfRangeNoCtx("decimal128", "FLOOR"))
+	}
+	x, err = x.Sub128(y)
+	if err != nil {
+		panic(moerr.NewOutOfRangeNoCtx("decimal128", "FLOOR"))
+	}
+	if isConst {
+		if scale2 < 0 {
+			k = scale1
+		}
+		x, err = x.Scale(-k)
+		if err != nil {
+			panic(moerr.NewOutOfRangeNoCtx("decimal128", "FLOOR"))
 		}
 	}
 	return x
@@ -2869,15 +2941,23 @@ func (x Decimal128) Round(scale1, scale2 int32, isConst bool) Decimal128 {
 	if scale2 >= scale1 {
 		return x
 	}
+	negative := x.Sign()
 	k := scale1 - scale2
 	if k > 38 {
 		k = 38
 	}
-	x, _ = x.Scale(-k)
+	var err error
+	x, err = x.Scale(-k)
+	if err != nil || ((x.B0_63 != 0 || x.B64_127 != 0) && x.Sign() != negative) {
+		panic(moerr.NewOutOfRangeNoCtx("decimal128", "ROUND"))
+	}
 	if !isConst {
-		x, _ = x.Scale(k)
+		x, err = x.Scale(k)
 	} else if scale2 < 0 {
-		x, _ = x.Scale(-scale2)
+		x, err = x.Scale(-scale2)
+	}
+	if err != nil || ((x.B0_63 != 0 || x.B64_127 != 0) && x.Sign() != negative) {
+		panic(moerr.NewOutOfRangeNoCtx("decimal128", "ROUND"))
 	}
 	return x
 }
