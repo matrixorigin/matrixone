@@ -11244,16 +11244,16 @@ func TestGeometryDistanceHelpersRejectMalformedSlices(t *testing.T) {
 		{
 			name: "point to polygon requires three points",
 			run: func() error {
-				_, err := pointDistanceToPolygon(geometryPoint2D{x: 0, y: 0}, []geometryPoint2D{{x: 0, y: 0}, {x: 1, y: 1}})
+				_, err := pointDistanceToPolygonGeometry(geometryPoint2D{x: 0, y: 0}, geometryPolygon2D{outer: []geometryPoint2D{{x: 0, y: 0}, {x: 1, y: 1}}})
 				return err
 			},
 		},
 		{
 			name: "linestring to polygon validates both sides",
 			run: func() error {
-				_, err := lineStringDistanceToPolygon(
+				_, err := lineStringDistanceToPolygonGeometry(
 					[]geometryPoint2D{{x: 0, y: 0}},
-					[]geometryPoint2D{{x: 0, y: 0}, {x: 1, y: 0}, {x: 0, y: 1}},
+					geometryPolygon2D{outer: []geometryPoint2D{{x: 0, y: 0}, {x: 1, y: 0}, {x: 0, y: 1}}},
 				)
 				return err
 			},
@@ -11261,9 +11261,9 @@ func TestGeometryDistanceHelpersRejectMalformedSlices(t *testing.T) {
 		{
 			name: "polygon to polygon requires three points each",
 			run: func() error {
-				_, err := polygonDistanceToPolygon(
-					[]geometryPoint2D{{x: 0, y: 0}, {x: 1, y: 0}, {x: 0, y: 1}},
-					[]geometryPoint2D{{x: 0, y: 0}, {x: 1, y: 1}},
+				_, err := polygonDistanceToPolygonGeometry(
+					geometryPolygon2D{outer: []geometryPoint2D{{x: 0, y: 0}, {x: 1, y: 0}, {x: 0, y: 1}}},
+					geometryPolygon2D{outer: []geometryPoint2D{{x: 0, y: 0}, {x: 1, y: 1}}},
 				)
 				return err
 			},
@@ -14810,101 +14810,74 @@ func TestIsDatetimeOverflowMaxError(t *testing.T) {
 	require.False(t, isDatetimeOverflowMaxError(moerr.NewInvalidArgNoCtx("test", "different error")))
 }
 
-// TestTimestampAddDateWithConstantDateUnitAndDateResultType tests TimestampAddDate with constant date unit and DATE result type
-func TestTimestampAddDateWithConstantDateUnitAndDateResultType(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte("DAY"), 1, proc.Mp())
-	intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), int64(1), 1, proc.Mp())
-	dateVec, _ := vector.NewConstFixed(types.T_date.ToType(), types.Date(0), 1, proc.Mp())
-
-	parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
-	result := vector.NewFunctionResultWrapper(types.T_date.ToType(), proc.Mp())
-
-	err := result.PreExtendAndReset(1)
-	require.NoError(t, err)
-
-	err = TimestampAddDate(parameters, result, proc, 1, nil)
-	require.NoError(t, err)
-
-	v := result.GetResultVector()
-	require.Equal(t, types.T_date, v.GetType().Oid)
-
-	// Cleanup
-	for _, v := range parameters {
-		if v != nil {
-			v.Free(proc.Mp())
-		}
-	}
-	if result != nil {
-		result.Free()
-	}
-}
-
-// TestTimestampAddDateWithConstantDateUnitAndDatetimeResultType tests TimestampAddDate with constant date unit and DATETIME result type
-func TestTimestampAddDateWithConstantDateUnitAndDatetimeResultType(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte("DAY"), 1, proc.Mp())
-	intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), int64(1), 1, proc.Mp())
-	dateVec, _ := vector.NewConstFixed(types.T_date.ToType(), types.Date(0), 1, proc.Mp())
-
-	parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
-	result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
-
-	err := result.PreExtendAndReset(1)
-	require.NoError(t, err)
-
-	err = TimestampAddDate(parameters, result, proc, 1, nil)
-	require.NoError(t, err)
-
-	v := result.GetResultVector()
-	require.Equal(t, types.T_date, v.GetType().Oid) // Should be converted to DATE
-
-	// Cleanup
-	for _, v := range parameters {
-		if v != nil {
-			v.Free(proc.Mp())
-		}
-	}
-	if result != nil {
-		result.Free()
-	}
-}
-
-// TestTimestampAddDateWithConstantTimeUnitAndDatetimeResultType tests TimestampAddDate with constant time unit and DATETIME result type
-func TestTimestampAddDateWithConstantTimeUnitAndDatetimeResultType(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte("HOUR"), 1, proc.Mp())
-	intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), int64(1), 1, proc.Mp())
-	dateVec, _ := vector.NewConstFixed(types.T_date.ToType(), types.Date(0), 1, proc.Mp())
-
-	parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
-	result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
-
-	err := result.PreExtendAndReset(1)
-	require.NoError(t, err)
-
-	err = TimestampAddDate(parameters, result, proc, 1, nil)
-	require.NoError(t, err)
-
-	v := result.GetResultVector()
-	require.Equal(t, types.T_datetime, v.GetType().Oid)
-
-	// Cleanup
-	for _, v := range parameters {
-		if v != nil {
-			v.Free(proc.Mp())
-		}
-	}
-	if result != nil {
-		result.Free()
+func TestTimestampAddDateMetadataAndWrapperReuse(t *testing.T) {
+	for _, initial := range []types.T{types.T_date, types.T_datetime} {
+		t.Run(initial.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			result := vector.NewFunctionResultWrapper(initial.ToType(), proc.Mp())
+			defer result.Free()
+			for _, tc := range []struct {
+				name                string
+				units               []string
+				constant, nullFirst bool
+				wantType            types.T
+				scale               int32
+				want                []string
+			}{
+				{"constant day", []string{"DAY"}, true, false, types.T_date, 0, []string{"2024-01-02", "2024-01-04"}},
+				{"constant hour", []string{"HOUR"}, true, false, types.T_datetime, 0, []string{"2024-01-01 01:00:00", "2024-01-02 02:00:00"}},
+				{"dynamic hour minute", []string{"HOUR", "MINUTE"}, false, false, types.T_datetime, 0, []string{"2024-01-01 01:00:00", "2024-01-02 00:02:00"}},
+				{"dynamic hour second", []string{"HOUR", "SECOND"}, false, false, types.T_datetime, 0, []string{"2024-01-01 01:00:00", "2024-01-02 00:00:02"}},
+				{"dynamic day week", []string{"DAY", "WEEK"}, false, false, types.T_date, 0, []string{"2024-01-02", "2024-01-16"}},
+				{"dynamic day month", []string{"DAY", "MONTH"}, false, false, types.T_date, 0, []string{"2024-01-02", "2024-03-02"}},
+				{"dynamic null day", []string{"", "DAY"}, false, true, types.T_date, 0, []string{"", "2024-01-04"}},
+				{"dynamic microsecond", []string{"MICROSECOND", "DAY"}, false, false, types.T_datetime, 6, []string{"2024-01-01 00:00:00.000001", "2024-01-04 00:00:00.000000"}},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					var units *vector.Vector
+					var err error
+					if tc.constant {
+						units, err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.units[0]), 2, proc.Mp())
+					} else {
+						units = vector.NewVec(types.T_varchar.ToType())
+						err = vector.AppendStringList(units, tc.units, []bool{tc.nullFirst, false}, proc.Mp())
+					}
+					require.NoError(t, err)
+					defer units.Free(proc.Mp())
+					intervals := vector.NewVec(types.T_int64.ToType())
+					defer intervals.Free(proc.Mp())
+					require.NoError(t, vector.AppendFixedList(intervals, []int64{1, 2}, nil, proc.Mp()))
+					dates := vector.NewVec(types.T_date.ToType())
+					defer dates.Free(proc.Mp())
+					first, err := types.ParseDateCast("2024-01-01")
+					require.NoError(t, err)
+					second, err := types.ParseDateCast("2024-01-02")
+					require.NoError(t, err)
+					require.NoError(t, vector.AppendFixedList(dates, []types.Date{first, second}, nil, proc.Mp()))
+					require.NoError(t, result.PreExtendAndReset(2))
+					require.NoError(t, TimestampAddDate([]*vector.Vector{units, intervals, dates}, result, proc, 2, nil))
+					vec := result.GetResultVector()
+					require.Equal(t, tc.wantType, vec.GetType().Oid)
+					require.Equal(t, tc.scale, vec.GetType().Scale)
+					require.Equal(t, 2, vec.Length())
+					for i, want := range tc.want {
+						require.Equal(t, want == "", vec.GetNulls().Contains(uint64(i)))
+						if want == "" {
+							continue
+						}
+						if tc.wantType == types.T_date {
+							require.Equal(t, want, vector.MustFixedColNoTypeCheck[types.Date](vec)[i].String())
+						} else {
+							require.Equal(t, want, vector.MustFixedColNoTypeCheck[types.Datetime](vec)[i].String2(tc.scale))
+						}
+					}
+				})
+			}
+		})
 	}
 }
 
-// TestTimestampAddTimestampWithMaxInt64Interval tests TimestampAddTimestamp with math.MaxInt64 interval
-// Note: math.MaxInt64 is used as a marker for invalid interval, so it should return NULL
 func TestTimestampAddTimestampWithMaxInt64Interval(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
@@ -14941,257 +14914,6 @@ func TestTimestampAddTimestampWithMaxInt64Interval(t *testing.T) {
 	}
 }
 
-// TestTimestampAddDateNonConstantTimeUnitWithDateResultType tests TimestampAddDate with non-constant time unit and DATE result type
-func TestTimestampAddDateNonConstantTimeUnitWithDateResultType(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	// Create non-constant unit vector with time units
-	unitVec := vector.NewVec(types.T_varchar.ToType())
-	err := vector.AppendStringList(unitVec, []string{"HOUR", "MINUTE"}, nil, proc.Mp())
-	require.NoError(t, err)
-	unitVec.SetLength(2)
-
-	// Create interval vector
-	intervalVec := vector.NewVec(types.T_int64.ToType())
-	err = vector.AppendFixedList(intervalVec, []int64{1, 2}, nil, proc.Mp())
-	require.NoError(t, err)
-	intervalVec.SetLength(2)
-
-	// Create date vector
-	dateVec := vector.NewVec(types.T_date.ToType())
-	d1, _ := types.ParseDateCast("2024-01-01")
-	d2, _ := types.ParseDateCast("2024-01-02")
-	err = vector.AppendFixedList(dateVec, []types.Date{d1, d2}, nil, proc.Mp())
-	require.NoError(t, err)
-	dateVec.SetLength(2)
-
-	parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
-	// Result type is DATE, but should be converted to DATETIME for time units
-	result := vector.NewFunctionResultWrapper(types.T_date.ToType(), proc.Mp())
-
-	fnLength := dateVec.Length()
-	err = result.PreExtendAndReset(fnLength)
-	require.NoError(t, err)
-
-	err = TimestampAddDate(parameters, result, proc, fnLength, nil)
-	require.NoError(t, err)
-
-	v := result.GetResultVector()
-	require.Equal(t, fnLength, v.Length())
-	require.Equal(t, types.T_datetime, v.GetType().Oid) // Should be converted to DATETIME
-
-	// Cleanup
-	for _, v := range parameters {
-		if v != nil {
-			v.Free(proc.Mp())
-		}
-	}
-	if result != nil {
-		result.Free()
-	}
-}
-
-// TestTimestampAddDateNonConstantTimeUnitWithDatetimeResultType tests TimestampAddDate with non-constant time unit and DATETIME result type
-func TestTimestampAddDateNonConstantTimeUnitWithDatetimeResultType(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	// Create non-constant unit vector with time units
-	unitVec := vector.NewVec(types.T_varchar.ToType())
-	err := vector.AppendStringList(unitVec, []string{"HOUR", "SECOND"}, nil, proc.Mp())
-	require.NoError(t, err)
-	unitVec.SetLength(2)
-
-	// Create interval vector
-	intervalVec := vector.NewVec(types.T_int64.ToType())
-	err = vector.AppendFixedList(intervalVec, []int64{1, 2}, nil, proc.Mp())
-	require.NoError(t, err)
-	intervalVec.SetLength(2)
-
-	// Create date vector
-	dateVec := vector.NewVec(types.T_date.ToType())
-	d1, _ := types.ParseDateCast("2024-01-01")
-	d2, _ := types.ParseDateCast("2024-01-02")
-	err = vector.AppendFixedList(dateVec, []types.Date{d1, d2}, nil, proc.Mp())
-	require.NoError(t, err)
-	dateVec.SetLength(2)
-
-	parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
-	// Result type is DATETIME
-	result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
-
-	fnLength := dateVec.Length()
-	err = result.PreExtendAndReset(fnLength)
-	require.NoError(t, err)
-
-	err = TimestampAddDate(parameters, result, proc, fnLength, nil)
-	require.NoError(t, err)
-
-	v := result.GetResultVector()
-	require.Equal(t, fnLength, v.Length())
-	require.Equal(t, types.T_datetime, v.GetType().Oid)
-
-	// Cleanup
-	for _, v := range parameters {
-		if v != nil {
-			v.Free(proc.Mp())
-		}
-	}
-	if result != nil {
-		result.Free()
-	}
-}
-
-// TestTimestampAddDateNonConstantDateUnitWithDateResultType tests TimestampAddDate with non-constant date unit and DATE result type
-func TestTimestampAddDateNonConstantDateUnitWithDateResultType(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	// Create non-constant unit vector with date units
-	unitVec := vector.NewVec(types.T_varchar.ToType())
-	err := vector.AppendStringList(unitVec, []string{"DAY", "WEEK"}, nil, proc.Mp())
-	require.NoError(t, err)
-	unitVec.SetLength(2)
-
-	// Create interval vector
-	intervalVec := vector.NewVec(types.T_int64.ToType())
-	err = vector.AppendFixedList(intervalVec, []int64{1, 2}, nil, proc.Mp())
-	require.NoError(t, err)
-	intervalVec.SetLength(2)
-
-	// Create date vector
-	dateVec := vector.NewVec(types.T_date.ToType())
-	d1, _ := types.ParseDateCast("2024-01-01")
-	d2, _ := types.ParseDateCast("2024-01-02")
-	err = vector.AppendFixedList(dateVec, []types.Date{d1, d2}, nil, proc.Mp())
-	require.NoError(t, err)
-	dateVec.SetLength(2)
-
-	parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
-	// Result type is DATE
-	result := vector.NewFunctionResultWrapper(types.T_date.ToType(), proc.Mp())
-
-	fnLength := dateVec.Length()
-	err = result.PreExtendAndReset(fnLength)
-	require.NoError(t, err)
-
-	err = TimestampAddDate(parameters, result, proc, fnLength, nil)
-	require.NoError(t, err)
-
-	v := result.GetResultVector()
-	require.Equal(t, fnLength, v.Length())
-	require.Equal(t, types.T_date, v.GetType().Oid)
-
-	// Cleanup
-	for _, v := range parameters {
-		if v != nil {
-			v.Free(proc.Mp())
-		}
-	}
-	if result != nil {
-		result.Free()
-	}
-}
-
-// TestTimestampAddDateNonConstantDateUnitWithDatetimeResultType tests TimestampAddDate with non-constant date unit and DATETIME result type
-func TestTimestampAddDateNonConstantDateUnitWithDatetimeResultType(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	// Create non-constant unit vector with date units
-	unitVec := vector.NewVec(types.T_varchar.ToType())
-	err := vector.AppendStringList(unitVec, []string{"DAY", "MONTH"}, nil, proc.Mp())
-	require.NoError(t, err)
-	unitVec.SetLength(2)
-
-	// Create interval vector
-	intervalVec := vector.NewVec(types.T_int64.ToType())
-	err = vector.AppendFixedList(intervalVec, []int64{1, 2}, nil, proc.Mp())
-	require.NoError(t, err)
-	intervalVec.SetLength(2)
-
-	// Create date vector
-	dateVec := vector.NewVec(types.T_date.ToType())
-	d1, _ := types.ParseDateCast("2024-01-01")
-	d2, _ := types.ParseDateCast("2024-01-02")
-	err = vector.AppendFixedList(dateVec, []types.Date{d1, d2}, nil, proc.Mp())
-	require.NoError(t, err)
-	dateVec.SetLength(2)
-
-	parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
-	// Result type is DATETIME, but should be converted to DATE for date units
-	result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
-
-	fnLength := dateVec.Length()
-	err = result.PreExtendAndReset(fnLength)
-	require.NoError(t, err)
-
-	err = TimestampAddDate(parameters, result, proc, fnLength, nil)
-	require.NoError(t, err)
-
-	v := result.GetResultVector()
-	require.Equal(t, fnLength, v.Length())
-	require.Equal(t, types.T_date, v.GetType().Oid) // Should be converted to DATE
-
-	// Cleanup
-	for _, v := range parameters {
-		if v != nil {
-			v.Free(proc.Mp())
-		}
-	}
-	if result != nil {
-		result.Free()
-	}
-}
-
-// TestTimestampAddDateNonConstantUnitWithNullUnit tests TimestampAddDate with non-constant unit containing NULL
-func TestTimestampAddDateNonConstantUnitWithNullUnit(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	// Create non-constant unit vector with NULL
-	unitVec := vector.NewVec(types.T_varchar.ToType())
-	isNulls := []bool{true, false} // First unit is NULL
-	err := vector.AppendStringList(unitVec, []string{"", "DAY"}, isNulls, proc.Mp())
-	require.NoError(t, err)
-	unitVec.SetLength(2)
-
-	// Create interval vector
-	intervalVec := vector.NewVec(types.T_int64.ToType())
-	err = vector.AppendFixedList(intervalVec, []int64{1, 2}, nil, proc.Mp())
-	require.NoError(t, err)
-	intervalVec.SetLength(2)
-
-	// Create date vector
-	dateVec := vector.NewVec(types.T_date.ToType())
-	d1, _ := types.ParseDateCast("2024-01-01")
-	d2, _ := types.ParseDateCast("2024-01-02")
-	err = vector.AppendFixedList(dateVec, []types.Date{d1, d2}, nil, proc.Mp())
-	require.NoError(t, err)
-	dateVec.SetLength(2)
-
-	parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
-	result := vector.NewFunctionResultWrapper(types.T_date.ToType(), proc.Mp())
-
-	fnLength := dateVec.Length()
-	err = result.PreExtendAndReset(fnLength)
-	require.NoError(t, err)
-
-	err = TimestampAddDate(parameters, result, proc, fnLength, nil)
-	require.NoError(t, err)
-
-	v := result.GetResultVector()
-	require.Equal(t, fnLength, v.Length())
-	require.True(t, v.GetNulls().Contains(0)) // First result should be NULL
-
-	// Cleanup
-	for _, v := range parameters {
-		if v != nil {
-			v.Free(proc.Mp())
-		}
-	}
-	if result != nil {
-		result.Free()
-	}
-}
-
-// TestDoTimestampAddWithAddIntervalFailure tests doTimestampAdd when AddInterval fails (else branch)
 func TestDoTimestampAddWithAddIntervalFailure(t *testing.T) {
 	loc := time.UTC
 
@@ -17411,6 +17133,53 @@ func TestDateStringIntervalCountOverflow(t *testing.T) {
 			})
 			ok, info := c.Run()
 			require.True(t, ok, info)
+		})
+	}
+}
+
+func TestTimestampAddDateDeniedTypeGrowth(t *testing.T) {
+	for _, constant := range []bool{false, true} {
+		t.Run(fmt.Sprintf("constant=%t", constant), func(t *testing.T) {
+			proc := newTmpProcess(t)
+			registry, err := mpool.NewAllocationAccountRegistry(1, 4)
+			require.NoError(t, err)
+			account, err := registry.Open(528)
+			require.NoError(t, err)
+			selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+			require.NoError(t, err)
+			result, err := vector.NewFunctionResultWrapperWithAllocation(types.T_date.ToType(), proc.Mp(), selection)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				result.Free()
+				require.Zero(t, account.Seal().Used)
+				_, err := registry.Finalize(account)
+				require.NoError(t, err)
+			})
+			require.NoError(t, result.PreExtendAndReset(128))
+			date, err := vector.NewConstFixed(types.T_date.ToType(), types.DateFromCalendar(2024, 2, 29), 128, proc.Mp())
+			require.NoError(t, err)
+			defer date.Free(proc.Mp())
+			count, err := vector.NewConstFixed(types.T_int64.ToType(), int64(1), 128, proc.Mp())
+			require.NoError(t, err)
+			defer count.Free(proc.Mp())
+			unit, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("SECOND"), 128, proc.Mp())
+			require.NoError(t, err)
+			if !constant {
+				unit.Free(proc.Mp())
+				unit = vector.NewVec(types.T_varchar.ToType())
+				for i := 0; i < 128; i++ {
+					require.NoError(t, vector.AppendBytes(unit, []byte("SECOND"), false, proc.Mp()))
+				}
+			}
+			defer unit.Free(proc.Mp())
+			require.NotPanics(t, func() {
+				err = TimestampAddDate([]*vector.Vector{unit, count, date}, result, proc, 128, nil)
+			})
+			require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+			require.Equal(t, types.T_date, result.GetResultVector().GetType().Oid)
+			require.Equal(t, 128, result.GetResultVector().Length())
+			require.Equal(t, uint64(528), account.Snapshot().Used)
+			require.Equal(t, make([]types.Date, 128), vector.MustFixedColNoTypeCheck[types.Date](result.GetResultVector()))
 		})
 	}
 }

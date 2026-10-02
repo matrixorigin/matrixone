@@ -2528,358 +2528,99 @@ func timeIntervalRaw(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 	return nil
 }
 
-// TimestampAddDate: TIMESTAMPADD(unit, interval, date)
-// Parameters: ivecs[0] = unit (string), ivecs[1] = interval (int64), ivecs[2] = date (Date)
-// MySQL behavior: Returns DATE for date units (DAY, WEEK, MONTH, QUARTER, YEAR)
-//
-//	Returns DATETIME for time units (HOUR, MINUTE, SECOND, MICROSECOND)
-//
-// Supports both constant and non-constant unit parameters
-func TimestampAddDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+// TimestampAddDate resolves the batch result metadata before evaluating rows.
+// Dynamic units retain their internal-call contract; ordinary SQL binds a constant unit.
+func TimestampAddDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	dates := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[2])
 	intervals := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
-	unitStrings := vector.GenerateFunctionStrParameter(ivecs[0])
-
-	// Check result wrapper type: it can be DATE (from BindFuncExprImplByPlanExpr) or DATETIME (from retType)
-	vec := result.GetResultVector()
-	resultType := vec.GetType().Oid
-
-	// Handle constant unit (optimized path)
-	if ivecs[0].IsConst() {
-		unitStr, _ := unitStrings.GetStrValue(0)
-		iTyp, err := types.IntervalTypeOf(functionUtil.QuickBytesToStr(unitStr))
+	units := vector.GenerateFunctionStrParameter(ivecs[0])
+	constant := ivecs[0].IsConst()
+	unit := types.IntervalType(0)
+	hasTime := false
+	scale := int32(0)
+	// Unit admission precedes operand NULL handling because it also determines metadata.
+	unitRows := length
+	if constant {
+		unitRows = 1
+	}
+	for i := uint64(0); i < uint64(unitRows); i++ {
+		if !constant && functionRowSkipped(selectList, i) {
+			continue
+		}
+		text, null := units.GetStrValue(i)
+		if null && !constant {
+			continue
+		}
+		var err error
+		unit, err = types.IntervalTypeOf(functionUtil.QuickBytesToStr(text))
 		if err != nil {
 			return err
 		}
-
-		// Check if interval type is a time unit (HOUR, MINUTE, SECOND, MICROSECOND)
-		isTimeUnit := iTyp == types.Hour || iTyp == types.Minute || iTyp == types.Second || iTyp == types.MicroSecond
-
-		if isTimeUnit {
-			// Return DATETIME for time units (MySQL compatible)
-			// When input is DATE but unit is time unit, MySQL returns DATETIME
-			// Set scale based on interval type:
-			// - MICROSECOND: scale=6 (microsecond precision)
-			// - HOUR, MINUTE, SECOND: scale=0 (no fractional seconds)
-			scale := int32(0)
-			if iTyp == types.MicroSecond {
-				scale = 6
-			}
-
-			if resultType == types.T_date {
-				// Result wrapper is DATE, but we need to return DATETIME
-				// Convert to DATETIME type
-				vec.SetTypeAndFixData(types.New(types.T_datetime, scale, scale), proc.GetMPool())
-				rss := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
-				rsNull := vec.GetNulls()
-
-				for i := uint64(0); i < uint64(length); i++ {
-					if functionRowSkipped(selectList, i) {
-						rsNull.Add(i)
-						continue
-					}
-
-					date, null1 := dates.GetValue(i)
-					interval, null2 := intervals.GetValue(i)
-					if null1 || null2 {
-						rsNull.Add(i)
-					} else {
-						// Convert DATE to DATETIME, add interval, return DATETIME
-						dt := date.ToDatetime()
-						resultDt, err := doCalendarInterval(dt, interval, iTyp, false)
-						if err != nil {
-							if handleTemporalArithmeticError(proc, err) {
-								// MySQL behavior: maximum overflow returns NULL
-								rsNull.Add(i)
-							} else {
-								return err
-							}
-						} else {
-							rss[i] = resultDt
-						}
-					}
-				}
-			} else {
-				// Result wrapper is DATETIME (backward compatibility)
-				rsDatetime := vector.MustFunctionResult[types.Datetime](result)
-				rsDatetime.TempSetType(types.New(types.T_datetime, scale, scale))
-				rss := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
-				rsNull := vec.GetNulls()
-
-				for i := uint64(0); i < uint64(length); i++ {
-					if functionRowSkipped(selectList, i) {
-						rsNull.Add(i)
-						continue
-					}
-
-					date, null1 := dates.GetValue(i)
-					interval, null2 := intervals.GetValue(i)
-					if null1 || null2 {
-						rsNull.Add(i)
-					} else {
-						// Convert DATE to DATETIME, add interval, return DATETIME
-						dt := date.ToDatetime()
-						resultDt, err := doCalendarInterval(dt, interval, iTyp, false)
-						if err != nil {
-							if handleTemporalArithmeticError(proc, err) {
-								// MySQL behavior: maximum overflow returns NULL
-								rsNull.Add(i)
-							} else {
-								return err
-							}
-						} else {
-							rss[i] = resultDt
-						}
-					}
-				}
-			}
-		} else {
-			// Return DATE for date units (DAY, WEEK, MONTH, QUARTER, YEAR)
-			// MySQL behavior: DATE input + date unit → DATE output
-			if resultType == types.T_date {
-				// Result wrapper is already DATE (from BindFuncExprImplByPlanExpr)
-				rss := vector.MustFixedColNoTypeCheck[types.Date](vec)
-				rsNull := vec.GetNulls()
-
-				for i := uint64(0); i < uint64(length); i++ {
-					if functionRowSkipped(selectList, i) {
-						rsNull.Add(i)
-						continue
-					}
-
-					date, null1 := dates.GetValue(i)
-					interval, null2 := intervals.GetValue(i)
-					if null1 || null2 {
-						rsNull.Add(i)
-					} else {
-						resultDate, err := doDateInterval(date, interval, iTyp, false)
-						if err != nil {
-							if handleTemporalArithmeticError(proc, err) {
-								// MySQL behavior: maximum overflow returns NULL
-								rsNull.Add(i)
-							} else {
-								return err
-							}
-						} else {
-							rss[i] = resultDate
-						}
-					}
-				}
-			} else {
-				// Result wrapper is DATETIME (backward compatibility)
-				// Use SetType to change vector type to DATE
-				vec.SetTypeAndFixData(types.New(types.T_date, 0, 0), proc.GetMPool())
-				rss := vector.MustFixedColNoTypeCheck[types.Date](vec)
-				rsNull := vec.GetNulls()
-
-				for i := uint64(0); i < uint64(length); i++ {
-					if functionRowSkipped(selectList, i) {
-						rsNull.Add(i)
-						continue
-					}
-
-					date, null1 := dates.GetValue(i)
-					interval, null2 := intervals.GetValue(i)
-					if null1 || null2 {
-						rsNull.Add(i)
-					} else {
-						resultDate, err := doDateInterval(date, interval, iTyp, false)
-						if err != nil {
-							if handleTemporalArithmeticError(proc, err) {
-								// MySQL behavior: maximum overflow returns NULL
-								rsNull.Add(i)
-							} else {
-								return err
-							}
-						} else {
-							rss[i] = resultDate
-						}
-					}
-				}
-			}
+		if unit == types.Hour || unit == types.Minute || unit == types.Second || unit == types.MicroSecond {
+			hasTime = true
 		}
-		return nil
+		if unit == types.MicroSecond {
+			scale = 6
+		}
+		if constant {
+			break
+		}
 	}
-
-	// Handle non-constant unit (runtime processing)
-	// First pass: check all units to determine result type
-	// MySQL behavior: if any unit is time unit, return DATETIME; otherwise return DATE
-	hasTimeUnit := false
-	maxScale := int32(0)
-
+	typ := types.New(types.T_date, 0, 0)
+	if hasTime {
+		typ = types.New(types.T_datetime, scale, scale)
+	}
+	vec := result.GetResultVector()
+	if vec.GetType().Oid != typ.Oid {
+		if err := vec.SetTypeAndFixData(typ, proc.Mp()); err != nil {
+			return err
+		}
+	} else if hasTime {
+		vec.SetType(typ)
+	}
+	var dateValues []types.Date
+	var datetimeValues []types.Datetime
+	if hasTime {
+		datetimeValues = vector.MustFixedColNoTypeCheck[types.Datetime](vec)
+	} else {
+		dateValues = vector.MustFixedColNoTypeCheck[types.Date](vec)
+	}
+	nulls := vec.GetNulls()
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
+			nulls.Add(i)
 			continue
 		}
-
-		unitStr, null := unitStrings.GetStrValue(i)
-		if null {
+		date, nullDate := dates.GetValue(i)
+		count, nullCount := intervals.GetValue(i)
+		if nullDate || nullCount {
+			nulls.Add(i)
 			continue
 		}
-		iTyp, err := types.IntervalTypeOf(functionUtil.QuickBytesToStr(unitStr))
+		if !constant {
+			text, null := units.GetStrValue(i)
+			if null {
+				nulls.Add(i)
+				continue
+			}
+			var err error
+			unit, err = types.IntervalTypeOf(functionUtil.QuickBytesToStr(text))
+			if err != nil {
+				return err
+			}
+		}
+		dt, err := doCalendarInterval(date.ToDatetime(), count, unit, false)
 		if err != nil {
-			return err
-		}
-		isTimeUnit := iTyp == types.Hour || iTyp == types.Minute || iTyp == types.Second || iTyp == types.MicroSecond
-		if isTimeUnit {
-			hasTimeUnit = true
-			if iTyp == types.MicroSecond {
-				maxScale = 6
+			if !handleTemporalArithmeticError(proc, err) {
+				return err
 			}
+			nulls.Add(i)
+			continue
 		}
-	}
-
-	// Second pass: process data based on determined result type
-	if hasTimeUnit {
-		// Return DATETIME for time units (MySQL compatible)
-		scale := maxScale
-		if resultType == types.T_date {
-			// Result wrapper is DATE, but we need to return DATETIME
-			vec.SetTypeAndFixData(types.New(types.T_datetime, scale, scale), proc.GetMPool())
-			rss := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
-			rsNull := vec.GetNulls()
-
-			for i := uint64(0); i < uint64(length); i++ {
-				if functionRowSkipped(selectList, i) {
-					rsNull.Add(i)
-					continue
-				}
-
-				date, null1 := dates.GetValue(i)
-				interval, null2 := intervals.GetValue(i)
-				unitStr, null3 := unitStrings.GetStrValue(i)
-				if null1 || null2 || null3 {
-					rsNull.Add(i)
-				} else {
-					iTyp, err := types.IntervalTypeOf(functionUtil.QuickBytesToStr(unitStr))
-					if err != nil {
-						return err
-					}
-					// Convert DATE to DATETIME, add interval, return DATETIME
-					dt := date.ToDatetime()
-					resultDt, err := doCalendarInterval(dt, interval, iTyp, false)
-					if err != nil {
-						if handleTemporalArithmeticError(proc, err) {
-							// MySQL behavior: maximum overflow returns NULL
-							rsNull.Add(i)
-						} else {
-							return err
-						}
-					} else {
-						rss[i] = resultDt
-					}
-				}
-			}
+		if hasTime {
+			datetimeValues[i] = dt
 		} else {
-			// Result wrapper is DATETIME
-			rsDatetime := vector.MustFunctionResult[types.Datetime](result)
-			rsDatetime.TempSetType(types.New(types.T_datetime, scale, scale))
-			rss := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
-			rsNull := vec.GetNulls()
-
-			for i := uint64(0); i < uint64(length); i++ {
-				if functionRowSkipped(selectList, i) {
-					rsNull.Add(i)
-					continue
-				}
-
-				date, null1 := dates.GetValue(i)
-				interval, null2 := intervals.GetValue(i)
-				unitStr, null3 := unitStrings.GetStrValue(i)
-				if null1 || null2 || null3 {
-					rsNull.Add(i)
-				} else {
-					iTyp, err := types.IntervalTypeOf(functionUtil.QuickBytesToStr(unitStr))
-					if err != nil {
-						return err
-					}
-					// Convert DATE to DATETIME, add interval, return DATETIME
-					dt := date.ToDatetime()
-					resultDt, err := doCalendarInterval(dt, interval, iTyp, false)
-					if err != nil {
-						if handleTemporalArithmeticError(proc, err) {
-							// MySQL behavior: maximum overflow returns NULL
-							rsNull.Add(i)
-						} else {
-							return err
-						}
-					} else {
-						rss[i] = resultDt
-					}
-				}
-			}
-		}
-	} else {
-		// Return DATE for date units (all units are date units)
-		if resultType == types.T_date {
-			// Result wrapper is already DATE
-			rss := vector.MustFixedColNoTypeCheck[types.Date](vec)
-			rsNull := vec.GetNulls()
-
-			for i := uint64(0); i < uint64(length); i++ {
-				if functionRowSkipped(selectList, i) {
-					rsNull.Add(i)
-					continue
-				}
-
-				date, null1 := dates.GetValue(i)
-				interval, null2 := intervals.GetValue(i)
-				unitStr, null3 := unitStrings.GetStrValue(i)
-				if null1 || null2 || null3 {
-					rsNull.Add(i)
-				} else {
-					iTyp, err := types.IntervalTypeOf(functionUtil.QuickBytesToStr(unitStr))
-					if err != nil {
-						return err
-					}
-					resultDate, err := doDateInterval(date, interval, iTyp, false)
-					if err != nil {
-						if handleTemporalArithmeticError(proc, err) {
-							// MySQL behavior: maximum overflow returns NULL
-							rsNull.Add(i)
-						} else {
-							return err
-						}
-					} else {
-						rss[i] = resultDate
-					}
-				}
-			}
-		} else {
-			// Result wrapper is DATETIME, but all units are date units, so return DATE
-			vec.SetTypeAndFixData(types.New(types.T_date, 0, 0), proc.GetMPool())
-			rss := vector.MustFixedColNoTypeCheck[types.Date](vec)
-			rsNull := vec.GetNulls()
-
-			for i := uint64(0); i < uint64(length); i++ {
-				if functionRowSkipped(selectList, i) {
-					rsNull.Add(i)
-					continue
-				}
-
-				date, null1 := dates.GetValue(i)
-				interval, null2 := intervals.GetValue(i)
-				unitStr, null3 := unitStrings.GetStrValue(i)
-				if null1 || null2 || null3 {
-					rsNull.Add(i)
-				} else {
-					iTyp, err := types.IntervalTypeOf(functionUtil.QuickBytesToStr(unitStr))
-					if err != nil {
-						return err
-					}
-					resultDate, err := doDateInterval(date, interval, iTyp, false)
-					if err != nil {
-						if handleTemporalArithmeticError(proc, err) {
-							// MySQL behavior: maximum overflow returns NULL
-							rsNull.Add(i)
-						} else {
-							return err
-						}
-					} else {
-						rss[i] = resultDate
-					}
-				}
-			}
+			dateValues[i] = dt.ToDate()
 		}
 	}
 	return nil
@@ -12099,27 +11840,6 @@ func lineStringDistanceToLineString(left, right []geometryPoint2D) (float64, err
 	return minDistance, nil
 }
 
-func lineStringDistanceToPolygon(line, polygon []geometryPoint2D) (float64, error) {
-	if len(line) < 2 {
-		return 0, moerr.NewInvalidInputNoCtx("invalid linestring payload")
-	}
-	if len(polygon) < 3 {
-		return 0, moerr.NewInvalidInputNoCtx("invalid polygon payload")
-	}
-	if lineStringIntersectsPolygon(line, polygon) {
-		return 0, nil
-	}
-
-	minDistance := lineSegmentDistance(line[0], line[1], polygon[0], polygon[1])
-	for i := 0; i < len(line)-1; i++ {
-		for j := 0; j < len(polygon); j++ {
-			next := (j + 1) % len(polygon)
-			minDistance = math.Min(minDistance, lineSegmentDistance(line[i], line[i+1], polygon[j], polygon[next]))
-		}
-	}
-	return minDistance, nil
-}
-
 func lineStringDistanceToPolygonGeometry(line []geometryPoint2D, polygon geometryPolygon2D) (float64, error) {
 	if len(line) < 2 {
 		return 0, moerr.NewInvalidInputNoCtx("invalid linestring payload")
@@ -12166,25 +11886,6 @@ func polygonGeometryRings(polygon geometryPolygon2D) [][]geometryPoint2D {
 	return rings
 }
 
-func polygonDistanceToPolygon(left, right []geometryPoint2D) (float64, error) {
-	if len(left) < 3 || len(right) < 3 {
-		return 0, moerr.NewInvalidInputNoCtx("invalid polygon payload")
-	}
-	if polygonIntersectsPolygon(left, right) {
-		return 0, nil
-	}
-
-	minDistance := lineSegmentDistance(left[0], left[1], right[0], right[1])
-	for i := 0; i < len(left); i++ {
-		leftNext := (i + 1) % len(left)
-		for j := 0; j < len(right); j++ {
-			rightNext := (j + 1) % len(right)
-			minDistance = math.Min(minDistance, lineSegmentDistance(left[i], left[leftNext], right[j], right[rightNext]))
-		}
-	}
-	return minDistance, nil
-}
-
 func polygonDistanceToPolygonGeometry(left, right geometryPolygon2D) (float64, error) {
 	if err := validatePolygonGeometry(left); err != nil {
 		return 0, err
@@ -12209,22 +11910,6 @@ func polygonDistanceToPolygonGeometry(left, right geometryPolygon2D) (float64, e
 				}
 			}
 		}
-	}
-	return minDistance, nil
-}
-
-func pointDistanceToPolygon(point geometryPoint2D, polygon []geometryPoint2D) (float64, error) {
-	if len(polygon) < 3 {
-		return 0, moerr.NewInvalidInputNoCtx("invalid polygon payload")
-	}
-	if pointIntersectsPolygon(point, polygon) {
-		return 0, nil
-	}
-
-	minDistance := pointDistanceToLineSegment(point, polygon[0], polygon[1])
-	for i := 1; i < len(polygon); i++ {
-		next := (i + 1) % len(polygon)
-		minDistance = math.Min(minDistance, pointDistanceToLineSegment(point, polygon[i], polygon[next]))
 	}
 	return minDistance, nil
 }

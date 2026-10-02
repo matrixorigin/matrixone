@@ -1323,8 +1323,6 @@ const (
 
 	updateStatusLockOfUserForeverFormat = `update mo_catalog.mo_user set status = "%s" where user_name = "%s";`
 
-	checkRoleExistsFormat = `select role_id from mo_catalog.mo_role where role_id = %d and role_name = "%s";`
-
 	roleNameOfRoleIdFormat = `select role_name from mo_catalog.mo_role where role_id = %d;`
 
 	roleIdOfRoleFormat = `select role_id from mo_catalog.mo_role where role_name = "%s" order by role_id;`
@@ -1840,14 +1838,6 @@ func getSqlForUpdateStatusLockOfUserForever(status string, user string) string {
 	return fmt.Sprintf(updateStatusLockOfUserForeverFormat, status, user)
 }
 
-func getSqlForCheckRoleExists(ctx context.Context, roleID int, roleName string) (string, error) {
-	err := inputNameIsInvalid(ctx, roleName)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(checkRoleExistsFormat, roleID, roleName), nil
-}
-
 func getSqlForRoleNameOfRoleId(roleId int64) string {
 	return fmt.Sprintf(roleNameOfRoleIdFormat, roleId)
 }
@@ -2055,10 +2045,6 @@ func getSqlForCheckRoleHasTableLevelPrivilegeWithObjType(_ context.Context, objT
 	return fmt.Sprintf(checkRoleHasTableLevelPrivilegeFormat, objType, roleId, privId,
 		privilegeLevelDatabaseTable, privilegeLevelTable,
 		escapeSQLString(dbName), escapeSQLString(tableName)), nil
-}
-
-func getSqlForCheckRoleHasTableLevelPrivilege(ctx context.Context, roleId int64, privId PrivilegeType, dbName string, tableName string) (string, error) {
-	return getSqlForCheckRoleHasTableLevelPrivilegeWithObjType(ctx, objectTypeTable, roleId, privId, dbName, tableName)
 }
 
 func getSqlForCheckRoleHasTableLevelForDatabaseStarWithObjType(_ context.Context, objType objectType, roleId int64, privId PrivilegeType, dbName string) (string, error) {
@@ -9825,48 +9811,6 @@ func mergeRoleSets(dst, src *btree.Set[int64]) {
 	for _, id := range src.Keys() {
 		dst.Insert(id)
 	}
-}
-
-func getRoleSetThatPrivilegeGrantedToWGOWithObj(
-	ctx context.Context,
-	bh BackgroundExec,
-	privType PrivilegeType,
-	objType objectType,
-	objId int64,
-) (*btree.Set[int64], error) {
-	var sql string
-	switch privType {
-	case PrivilegeTypeSelect, PrivilegeTypeInsert, PrivilegeTypeUpdate,
-		PrivilegeTypeTruncate, PrivilegeTypeDelete, PrivilegeTypeReference,
-		PrivilegeTypeIndex, PrivilegeTypeValues, PrivilegeTypeTableAll:
-		sql = getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObj(
-			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership), objType, objId)
-	case PrivilegeTypeTableOwnership:
-		sql = getSqlForCheckRoleHasPrivilegeWGOWithObj(int64(privType), objType, objId)
-	default:
-		sql = getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType)
-	}
-
-	rset := &btree.Set[int64]{}
-	bh.ClearExecResultSet()
-	err := bh.Exec(ctx, sql)
-	if err != nil {
-		return nil, err
-	}
-	erArray, err := getResultSet(ctx, bh)
-	if err != nil {
-		return nil, err
-	}
-	if execResultArrayHasData(erArray) {
-		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-			id, err := erArray[0].GetInt64(ctx, i, 0)
-			if err != nil {
-				return nil, err
-			}
-			rset.Insert(id)
-		}
-	}
-	return rset, err
 }
 
 func getRoleSetThatDatabasePrivilegeGrantedToWGOWithObjAndLevel(
