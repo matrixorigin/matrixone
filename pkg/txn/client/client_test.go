@@ -17,6 +17,7 @@ package client
 import (
 	"context"
 	"errors"
+	"fmt"
 	goruntime "runtime"
 	"sync"
 	"testing"
@@ -2747,4 +2748,70 @@ func benchmarkTxnClientNewRollbackParallel(b *testing.B, parallelism int) {
 		}
 	})
 	b.StopTimer()
+}
+
+func TestReadSnapshotAndFixedReadOnlyView(t *testing.T) {
+	tw := NewTimestampWaiter(runtime.DefaultRuntime().Logger())
+	defer tw.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	latest := timestamp.Timestamp{PhysicalTime: 200}
+	tw.NotifyLatestCommitTS(latest)
+	_, err := tw.GetTimestamp(ctx, latest)
+	require.NoError(t, err)
+	RunTxnTests(func(c TxnClient, _ rpc.TxnSender) {
+		reader := c.(ReadSnapshotClient)
+		snapshot, err := reader.ReadSnapshot(ctx, timestamp.Timestamp{PhysicalTime: 100})
+		require.NoError(t, err)
+		require.Equal(t, latest.Next(), snapshot)
+		require.Empty(t, c.GetState().ActiveTxns, "a visibility read must not register an operator")
+
+		fixed := timestamp.Timestamp{PhysicalTime: 101}
+		op, err := c.New(ctx, timestamp.Timestamp{}, WithReadOnlySnapshot(fixed))
+		require.NoError(t, err)
+		require.Equal(t, fixed, op.SnapshotTS(), "a newer applied frontier must not relabel an older read")
+		require.True(t, op.TxnOptions().ReadOnly())
+		require.Equal(t, txn.TxnIsolation_SI, op.Txn().Isolation)
+		require.NoError(t, op.UpdateSnapshot(ctx, latest.Next()))
+		require.Equal(t, fixed, op.SnapshotTS())
+		require.NoError(t, op.Rollback(ctx))
+		require.Empty(t, c.GetState().ActiveTxns)
+
+		op, err = c.New(ctx, timestamp.Timestamp{}, WithReadOnlySnapshot(fixed), WithUserTxn())
+		require.Error(t, err)
+		require.Nil(t, op)
+		require.Empty(t, c.GetState().ActiveTxns, "rejected fixed-view admission must release client ownership")
+	}, WithTimestampWaiter(tw), WithEnableSacrificingFreshness())
+}
+
+func TestReadSnapshotCloseCancelsVisibilityWait(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		t.Run(fmt.Sprintf("legacy=%t", legacy), func(t *testing.T) {
+			entered := make(chan struct{}, 1)
+			var waiter TimestampWaiter = &blockingTimestampWaiter{entered: entered}
+			if legacy {
+				waiter = &legacyBlockingTimestampWaiter{entered: entered}
+			}
+			RunTxnTests(func(c TxnClient, _ rpc.TxnSender) {
+				done := make(chan error, 1)
+				go func() {
+					_, err := c.(ReadSnapshotClient).ReadSnapshot(context.Background(), timestamp.Timestamp{})
+					done <- err
+				}()
+				select {
+				case <-entered:
+				case <-time.After(time.Second):
+					t.Fatal("read snapshot did not enter visibility wait")
+				}
+				require.NoError(t, c.Close())
+				select {
+				case err := <-done:
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrClientClosed))
+				case <-time.After(time.Second):
+					t.Fatal("client close did not cancel the metadata reader")
+				}
+				require.Empty(t, c.GetState().ActiveTxns)
+			}, WithTimestampWaiter(waiter), WithEnableSacrificingFreshness())
+		})
+	}
 }

@@ -354,7 +354,13 @@ select count(*) from snapshot_read.users;
 
 restore account test_account{snapshot="sp_01"} to account acc02;
 
+-- The old target admin must not inherit the restored source identity.
 -- @session:id=5&user=acc02:admin&password=111
+select count(*) from snapshot_read.students;
+select count(*) from snapshot_read.users;
+-- @session
+
+-- @session:id=6&user=acc02:test_user&password=111
 select count(*) from snapshot_read.students;
 select count(*) from snapshot_read.users;
 -- @session

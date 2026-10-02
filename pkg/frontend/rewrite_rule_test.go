@@ -440,7 +440,7 @@ func TestLoadRuleCacheIncludesSecondaryRoles(t *testing.T) {
 	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 	defer bhStub.Reset()
 
-	ses := newSes(&privilege{}, ctrl)
+	ses := newSes(ctrl)
 	tenant := &TenantInfo{
 		Tenant:        sysAccountName,
 		User:          "test_rule_user",
@@ -490,7 +490,7 @@ func TestLoadRuleCacheReturnsParseErrorForConflictingRules(t *testing.T) {
 	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 	defer bhStub.Reset()
 
-	ses := newSes(&privilege{}, ctrl)
+	ses := newSes(ctrl)
 	tenant := &TenantInfo{
 		Tenant:        sysAccountName,
 		User:          "test_rule_user",
@@ -522,7 +522,7 @@ func TestRewriteSQLPropagatesRuleCacheLoadError(t *testing.T) {
 	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 	defer bhStub.Reset()
 
-	ses := newSes(&privilege{}, ctrl)
+	ses := newSes(ctrl)
 	tenant := &TenantInfo{
 		Tenant:        sysAccountName,
 		User:          "test_rule_user",
@@ -802,7 +802,7 @@ func TestHandleAlterRoleAddRuleRejectsInvalidRuleSQLBeforeWriting(t *testing.T) 
 	defer bhStub.Reset()
 
 	ctx := context.Background()
-	ses := newSes(&privilege{}, ctrl)
+	ses := newSes(ctrl)
 	execCtx := &ExecCtx{reqCtx: ctx, ses: ses}
 
 	roleSQL, err := getSqlForRoleIdOfRole(ctx, "role10")
@@ -1108,7 +1108,7 @@ func TestHandleAlterRoleAddRuleWritesValidRuleAndInvalidatesCache(t *testing.T) 
 	defer bhStub.Reset()
 
 	ctx := context.Background()
-	ses := newSes(&privilege{}, ctrl)
+	ses := newSes(ctrl)
 	ses.ruleCache = map[string]string{"db1.t1": "select old_a from db1.t1"}
 	execCtx := &ExecCtx{reqCtx: ctx, ses: ses}
 
@@ -1153,7 +1153,7 @@ func TestHandleAlterRoleAddRuleRejectsNonSelectRuleSQLBeforeWriting(t *testing.T
 	defer bhStub.Reset()
 
 	ctx := context.Background()
-	ses := newSes(&privilege{}, ctrl)
+	ses := newSes(ctrl)
 	execCtx := &ExecCtx{reqCtx: ctx, ses: ses}
 
 	roleSQL, err := getSqlForRoleIdOfRole(ctx, "role10")

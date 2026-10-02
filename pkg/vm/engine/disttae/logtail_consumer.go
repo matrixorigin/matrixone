@@ -145,7 +145,8 @@ type PushClient struct {
 	connector *connector
 
 	// initialized is true means that it is not the first time to init push client.
-	initialized bool
+	initialized   bool
+	replayVersion atomic.Uint64 // invalidates read proofs across replay resets
 
 	mu struct {
 		sync.Mutex
@@ -241,10 +242,7 @@ func (c *PushClient) GetState() State {
 func (c *PushClient) SetSubscribeState(dbId, tblId uint64, state SubscribeState) {
 	c.subscribed.rw.Lock()
 	defer c.subscribed.rw.Unlock()
-	ent := &subEntry{
-		dbID:  dbId,
-		state: state,
-	}
+	ent := c.subscribed.newEntry(dbId, tblId, state)
 	ent.lastTs.Store(time.Now().UnixNano())
 	c.subscribed.m[tblId] = ent
 }
@@ -293,6 +291,15 @@ func (c *connector) run(ctx context.Context) {
 	}
 }
 
+// Replay incarnations are unique across engine replacement as well as reconnect.
+// Read certificates retain this scalar, never an engine or partition snapshot.
+var nextReplayVersion atomic.Uint64
+
+func (c *PushClient) invalidateReadContinuity() {
+	c.receivedLogTailTime.ready.Store(false)
+	c.replayVersion.Store(nextReplayVersion.Add(1))
+}
+
 func (c *PushClient) init(
 	ctx context.Context,
 	serviceAddr string,
@@ -310,7 +317,7 @@ func (c *PushClient) init(
 	// release subscribed lock when init finished.
 	// release subscriber lock when we received enough response from service.
 	c.receivedLogTailTime.e = e
-	c.receivedLogTailTime.ready.Store(false)
+	c.invalidateReadContinuity()
 	c.dca = delayedCacheApply{}
 	c.subscriber.setNotReady()
 	c.subscribed.rw.Lock()
@@ -1276,15 +1283,52 @@ type subscribedTable struct {
 	rw  sync.RWMutex
 
 	// value is table's subscription entry with atomic timestamp.
-	m map[uint64]*subEntry
+	m               map[uint64]*subEntry
+	nextIncarnation uint64 // protected by rw; survives map resets
 }
 
 // subEntry holds subscription state with atomic timestamp for lock-free updates.
 type subEntry struct {
-	dbID      uint64
-	state     SubscribeState
-	lastTs    atomic.Int64 // UnixNano, for GC to check if table is still in use
-	pendingTo atomic.Pointer[timestamp.Timestamp]
+	incarnation uint64
+	partition   *logtailreplay.Partition
+	dbID        uint64
+	state       SubscribeState
+	lastTs      atomic.Int64 // UnixNano, for GC to check if table is still in use
+	pendingTo   atomic.Pointer[timestamp.Timestamp]
+}
+
+// newEntry requires the subscription write lock. Each replacement gets a
+// fresh incarnation even when storage reuses the same physical table IDs.
+func (s *subscribedTable) newEntry(dbID, tableID uint64, state SubscribeState) *subEntry {
+	s.nextIncarnation++
+	ent := &subEntry{dbID: dbID, state: state, incarnation: s.nextIncarnation}
+	if state == Subscribed && s.eng != nil {
+		s.eng.Lock()
+		ent.partition = s.eng.partitions[[2]uint64{dbID, tableID}]
+		s.eng.Unlock()
+	}
+	return ent
+}
+
+// bindPartition invalidates continuity if local cleanup replaced a partition
+// without an unsubscribe round trip. It runs before taking the partition lock,
+// preserving the subscription-to-partition lock order of checkpoint loading.
+func (s *subscribedTable) bindPartition(dbID, tableID uint64, part *logtailreplay.Partition) {
+	s.rw.RLock()
+	ent := s.m[tableID]
+	changed := ent != nil && ent.dbID == dbID && ent.state == Subscribed && ent.partition != part
+	s.rw.RUnlock()
+	if !changed {
+		return
+	}
+	s.rw.Lock()
+	defer s.rw.Unlock()
+	ent = s.m[tableID]
+	if ent != nil && ent.dbID == dbID && ent.state == Subscribed && ent.partition != part {
+		s.nextIncarnation++
+		ent.incarnation = s.nextIncarnation
+		ent.partition = part
+	}
 }
 
 // SubTableStatus is used for external API compatibility (e.g., GetState).
@@ -1425,10 +1469,7 @@ func (c *PushClient) toSubIfUnsubscribed(ctx context.Context, dbId, tblId uint64
 		if exist && ent.state == Subscribed {
 			return Subscribed, nil
 		}
-		c.subscribed.m[tblId] = &subEntry{
-			dbID:  dbId,
-			state: Subscribing,
-		}
+		c.subscribed.m[tblId] = c.subscribed.newEntry(dbId, tblId, Subscribing)
 
 		if err := c.subscribeTable(ctx, api.TableID{DbId: dbId, TbId: tblId}); err != nil {
 			//restore the table status.
@@ -1515,11 +1556,16 @@ func (c *PushClient) loadAndConsumeLatestCkp(
 	defer c.subscribed.rw.Unlock()
 	ent, exist := c.subscribed.m[tableID]
 	if exist && (ent.state == SubRspReceived || ent.state == Subscribed) {
-		_, err := c.eng.LazyLoadLatestCkp(ctx, accId, tableID, tableName, dbID, dbName)
+		part, err := c.eng.LazyLoadLatestCkp(ctx, accId, tableID, tableName, dbID, dbName)
 		if err != nil {
 			return InvalidSubState, err
 		}
 		//update state and timestamp
+		if ent.partition != part {
+			c.subscribed.nextIncarnation++
+			ent.incarnation = c.subscribed.nextIncarnation
+			ent.partition = part
+		}
 		ent.state = Subscribed
 		ent.lastTs.Store(time.Now().UnixNano())
 		return Subscribed, nil
@@ -1529,10 +1575,7 @@ func (c *PushClient) loadAndConsumeLatestCkp(
 		if !c.subscriber.ready() {
 			return Unsubscribed, moerr.NewInternalError(ctx, "log tail subscriber is not ready")
 		}
-		c.subscribed.m[tableID] = &subEntry{
-			dbID:  dbID,
-			state: Subscribing,
-		}
+		c.subscribed.m[tableID] = c.subscribed.newEntry(dbID, tableID, Subscribing)
 		if err := c.subscribeTable(ctx, api.TableID{DbId: dbID, TbId: tableID}); err != nil {
 			//restore the table status.
 			delete(c.subscribed.m, tableID)
@@ -1608,10 +1651,7 @@ func (c *PushClient) isNotSubscribing(ctx context.Context, dbId, tblId uint64) (
 		// let wait the subscriber ready.
 		return false, Unsubscribed, nil //moerr.NewInternalError(ctx, "log tail subscriber is not ready")
 	}
-	c.subscribed.m[tblId] = &subEntry{
-		dbID:  dbId,
-		state: Subscribing,
-	}
+	c.subscribed.m[tblId] = c.subscribed.newEntry(dbId, tblId, Subscribing)
 	if err := c.subscribeTable(ctx, api.TableID{DbId: dbId, TbId: tblId}); err != nil {
 		//restore the table status.
 		delete(c.subscribed.m, tblId)
@@ -1636,10 +1676,7 @@ func (c *PushClient) isNotUnsubscribing(ctx context.Context, dbId, tblId uint64)
 	if !c.subscriber.ready() {
 		return false, Unsubscribed, nil //moerr.NewInternalError(ctx, "log tail subscriber is not ready")
 	}
-	c.subscribed.m[tblId] = &subEntry{
-		dbID:  dbId,
-		state: Subscribing,
-	}
+	c.subscribed.m[tblId] = c.subscribed.newEntry(dbId, tblId, Subscribing)
 	if err := c.subscribeTable(ctx, api.TableID{DbId: dbId, TbId: tblId}); err != nil {
 		//restore the table status.
 		delete(c.subscribed.m, tblId)
@@ -1657,10 +1694,7 @@ func (c *PushClient) Disconnect() error {
 func (s *subscribedTable) setTableSubNotExist(dbId, tblId uint64) {
 	s.rw.Lock()
 	defer s.rw.Unlock()
-	ent := &subEntry{
-		dbID:  dbId,
-		state: SubRspTableNotExist,
-	}
+	ent := s.newEntry(dbId, tblId, SubRspTableNotExist)
 	ent.lastTs.Store(time.Now().UnixNano())
 	s.m[tblId] = ent
 	logutil.Error(
@@ -1679,10 +1713,7 @@ func (s *subscribedTable) clearTable(dbId, tblId uint64) {
 func (s *subscribedTable) setTableSubscribed(dbId, tblId uint64) {
 	s.rw.Lock()
 	defer s.rw.Unlock()
-	ent := &subEntry{
-		dbID:  dbId,
-		state: Subscribed,
-	}
+	ent := s.newEntry(dbId, tblId, Subscribed)
 	ent.lastTs.Store(time.Now().UnixNano())
 	s.m[tblId] = ent
 	logutil.Info(
@@ -1695,10 +1726,7 @@ func (s *subscribedTable) setTableSubscribed(dbId, tblId uint64) {
 func (s *subscribedTable) setTableSubRspReceived(dbId, tblId uint64) {
 	s.rw.Lock()
 	defer s.rw.Unlock()
-	ent := &subEntry{
-		dbID:  dbId,
-		state: SubRspReceived,
-	}
+	ent := s.newEntry(dbId, tblId, SubRspReceived)
 	ent.lastTs.Store(time.Now().UnixNano())
 	s.m[tblId] = ent
 	logutil.Info(
@@ -2477,6 +2505,7 @@ func updatePartitionOfPush(
 
 	t0 := time.Now()
 	partition := e.GetOrCreateLatestPart(ctx, uint64(tl.Table.AccId), dbId, tblId)
+	e.pClient.subscribed.bindPartition(dbId, tblId, partition)
 	v2.LogtailUpdatePartitonGetPartitionDurationHistogram.Observe(time.Since(t0).Seconds())
 
 	t0 = time.Now()
@@ -2496,6 +2525,7 @@ func updatePartitionOfPush(
 	}
 
 	state, doneMutate := partition.MutateState()
+	contentChanged := len(tl.Commands) > 0 || len(tl.CkpLocation) > 0
 
 	var (
 		ckpStart types.TS
@@ -2572,6 +2602,9 @@ func updatePartitionOfPush(
 		applied = *tl.Ts
 	}
 	state.UpdateAppliedTo(types.TimestampToTS(applied))
+	if contentChanged {
+		state.RecordContentChange(types.TimestampToTS(applied))
+	}
 
 	doneMutate()
 

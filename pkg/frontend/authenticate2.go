@@ -119,11 +119,12 @@ func verifyPrivilegeEntryInMultiPrivilegeLevelsInCache(
 var checkPrivilegeInCache = func(ctx context.Context, ses *Session, priv *privilege, enableCache bool) (bool, error) {
 	var err error
 	var pls []privilegeLevelType
-	var yes2, yes bool
+	var yes2 bool
 	cache := ses.GetPrivilegeCache()
 	if cache != nil && enableCache {
 		for _, entry := range priv.entries {
 			if entry.privilegeEntryTyp == privilegeEntryTypeGeneral {
+				var yes bool
 				pls, err = getPrivilegeLevelsOfObjectType(ctx, entry.objType)
 				if err != nil {
 					return false, err
@@ -150,29 +151,9 @@ var checkPrivilegeInCache = func(ctx context.Context, ses *Session, priv *privil
 					allTrue := true
 					//multi privileges take effect together
 					for _, mi := range entry.compound.items {
+						var yes bool
 						if mi.privilegeTyp == PrivilegeTypeCanGrantRoleToOthersInCreateUser {
-							//TODO: normalize the name
-							//TODO: simplify the logic
-							// yes, err = determineUserCanGrantRolesToOthersInternal(ctx, bh, ses, []*tree.Role{mi.role})
-							// if err != nil {
-							// 	return false, err
-							// }
-							// if yes {
-							// 	from := &verifiedRole{
-							// 		typ:  roleType,
-							// 		name: mi.role.UserName,
-							// 	}
-							// 	for _, user := range mi.users {
-							// 		to := &verifiedRole{
-							// 			typ:  userType,
-							// 			name: user.Username,
-							// 		}
-							// 		err = verifySpecialRolesInGrant(ctx, ses.GetTenantInfo(), from, to)
-							// 		if err != nil {
-							// 			return false, err
-							// 		}
-							// 	}
-							// }
+							// Role grants require the SQL evaluator.
 							yes = false
 						} else {
 							if len(mi.originViews) > 0 || mi.directView != "" {
@@ -461,24 +442,4 @@ func privilegeTipWritesDatabase(tip privilegeTips) bool {
 	default:
 		return true
 	}
-}
-
-func checkProtectedDatabaseWriteByPrivilegeTips(ctx context.Context, ses *Session, tips privilegeTipsArray) bool {
-	if ses == nil || !ses.GetFromRealUser() {
-		return true
-	}
-	if canWriteProtectedDatabase(ses) {
-		return true
-	}
-	protectedDatabases := getProtectedDatabaseSet(ses)
-	if len(protectedDatabases) == 0 {
-		return true
-	}
-	dbNames := make([]string, 0, len(tips))
-	for _, tip := range tips {
-		if privilegeTipWritesDatabase(tip) {
-			dbNames = append(dbNames, tip.databaseName)
-		}
-	}
-	return checkProtectedDatabaseWriteWithSet(ctx, ses, protectedDatabases, dbNames...)
 }

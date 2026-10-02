@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"sync"
 
@@ -33,12 +34,19 @@ import (
 
 const DefaultTenantMoAdmin = "sys:internal:moadmin"
 
-func applyOverride(sess *Session, opts ie.SessionOverrideOptions) {
+func applyOverride(ctx context.Context, sess *Session, opts ie.SessionOverrideOptions) error {
 	if opts.Database != nil {
 		sess.SetDatabaseName(*opts.Database)
 	}
 
 	if opts.Username != nil {
+		principal, err := GetTenantInfo(ctx, *opts.Username)
+		if err != nil {
+			return err
+		}
+		if acc := sess.GetTenantInfo(); acc != nil {
+			acc.SetUser(principal.GetUser())
+		}
 		sess.respr.SetStr(USERNAME, *opts.Username)
 	}
 
@@ -60,7 +68,44 @@ func applyOverride(sess *Session, opts ie.SessionOverrideOptions) {
 			acc.SetDefaultRoleID(*opts.DefaultRoleId)
 		}
 	}
+	return nil
+}
 
+// Overrides carry the selected numeric role, which can differ from the role
+// in the login name after SET ROLE. Bind policy names after both override layers.
+func bindInternalSessionPrincipal(ctx context.Context, sess *Session) error {
+	acc := sess.GetTenantInfo()
+	bh := sess.GetBackgroundExec(ctx)
+	defer bh.Close()
+	accountID := acc.GetTenantID()
+	accountName := sysAccountName
+	if accountID != sysAccountID {
+		sysCtx := defines.AttachAccountId(ctx, sysAccountID)
+		bh.ClearExecResultSet()
+		if err := bh.Exec(sysCtx, fmt.Sprintf("select account_name from mo_catalog.mo_account where account_id = %d", accountID)); err != nil {
+			return err
+		}
+		rows, err := getResultSet(sysCtx, bh)
+		if err != nil {
+			return err
+		}
+		if !execResultArrayHasData(rows) {
+			return moerr.NewInternalErrorf(ctx, "there is no account id %d", accountID)
+		}
+		accountName, err = rows[0].GetString(sysCtx, 0, 0)
+		if err != nil {
+			return err
+		}
+	}
+	roleName, err := getRoleNameByIDWithBackgroundExec(defines.AttachAccountId(ctx, accountID), bh, acc.GetDefaultRoleID())
+	if err != nil {
+		return err
+	}
+	acc.mu.Lock()
+	acc.Tenant = accountName
+	acc.DefaultRole = roleName
+	acc.mu.Unlock()
+	return nil
 }
 
 type internalExecutor struct {
@@ -148,7 +193,10 @@ func (ie *internalExecutor) ExecWithStatus(ctx context.Context, sql string, opts
 	var cancel context.CancelFunc
 	ctx, cancel = context.WithTimeoutCause(ctx, getPu(ie.service).SV.SessionTimeout.Duration, moerr.CauseInternalExecutorExec)
 	defer cancel()
-	sess := ie.newCmdSession(ctx, opts)
+	sess, err := ie.newCmdSession(ctx, opts)
+	if err != nil {
+		return status, err
+	}
 	defer func() {
 		sess.Close()
 	}()
@@ -178,7 +226,10 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 	var cancel context.CancelFunc
 	ctx, cancel = context.WithTimeoutCause(ctx, getPu(ie.service).SV.SessionTimeout.Duration, moerr.CauseInternalExecutorQuery)
 	defer cancel()
-	sess := ie.newCmdSession(ctx, opts)
+	sess, err := ie.newCmdSession(ctx, opts)
+	if err != nil {
+		return &internalExecResult{resultSet: &MysqlResultSet{}, err: err}
+	}
 	defer sess.Close()
 	sess.EnterFPrint(FPInternalExecutorQuery)
 	defer sess.ExitFPrint(FPInternalExecutorQuery)
@@ -189,13 +240,13 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 		ses:    sess,
 	}
 	defer tempExecCtx.Close()
-	err := doComQuery(sess, &tempExecCtx, &UserInput{sql: sql})
+	err = doComQuery(sess, &tempExecCtx, &UserInput{sql: sql})
 	res := ie.proto.swapOutResult()
 	res.err = moerr.AttachCause(ctx, err)
 	return res
 }
 
-func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOverrideOptions) *Session {
+func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOverrideOptions) (*Session, error) {
 	// Use the Mid configuration for session. We can make Mid a configuration
 	// param, or, compute from GuestMmuLimitation.   Lazy.
 	//
@@ -230,15 +281,28 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 		t, _ = GetTenantInfo(ctx, DefaultTenantMoAdmin)
 	}
 	sess.SetTenantInfo(t)
-	applyOverride(sess, ie.baseSessOpts)
-	applyOverride(sess, opts)
+	if err := applyOverride(ctx, sess, ie.baseSessOpts); err != nil {
+		sess.Close()
+		return nil, err
+	}
+	if err := applyOverride(ctx, sess, opts); err != nil {
+		sess.Close()
+		return nil, err
+	}
 
 	//make sure init tasks can see the prev task's data
 	now, _ := runtime.ServiceRuntime(ie.service).Clock().Now()
 	sess.lastCommitTS = now
 
+	if ie.baseSessOpts.Username != nil || opts.Username != nil {
+		if err := bindInternalSessionPrincipal(ctx, sess); err != nil {
+			sess.Close()
+			return nil, err
+		}
+	}
+
 	sess.initLogger()
-	return sess
+	return sess, nil
 }
 
 func (ie *internalExecutor) ApplySessionOverride(opts ie.SessionOverrideOptions) {

@@ -166,7 +166,27 @@ func authenticateDataBranchCreateDatabaseSourceTables(
 		delta statistic.StatsArray
 		err   error
 	)
+	if _, systemDB := sysDatabases[strings.ToLower(source.srcResolveDBName)]; systemDB && ses.GetTenantInfo().IsMoAdminRole() {
+		return stats, nil
+	}
 	for _, tblInfo := range source.srcTblInfos {
+		if tblInfo.typ == view && source.srcResolveDBName != source.srcPrivilegeDBName {
+			if ses.GetTenantInfo().IsAdminRole() {
+				continue
+			}
+			delta, err = requireAllBranchPrivileges(ctx, ses, []branchPrivilegeRequirement{{
+				objType:                       objectTypeView,
+				databaseName:                  source.srcPrivilegeDBName,
+				tableName:                     tblInfo.tblName,
+				privilegeTypes:                []PrivilegeType{PrivilegeTypeSelect, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership},
+				writeDatabaseAndTableDirectly: true,
+			}})
+			stats.Add(&delta)
+			if err != nil {
+				return stats, err
+			}
+			continue
+		}
 		srcName := makeBranchTableName(
 			source.srcPrivilegeDBName,
 			tblInfo.tblName,
@@ -384,7 +404,8 @@ func determineBranchRequirement(
 	req branchPrivilegeRequirement,
 ) (bool, statistic.StatsArray, error) {
 	priv := branchRequirementToPrivilege(req)
-	return determineUserHasPrivilegeSet(ctx, ses, priv)
+	ok, stats, _, err := determineUserHasPrivilegeSet(ctx, ses, priv)
+	return ok, stats, err
 }
 
 func branchRequirementToPrivilege(req branchPrivilegeRequirement) *privilege {

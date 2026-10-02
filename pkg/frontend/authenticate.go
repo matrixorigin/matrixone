@@ -27,8 +27,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/tidwall/btree"
 	"golang.org/x/sync/errgroup"
@@ -1537,13 +1538,6 @@ const (
 					and rp.privilege_id in (%s)
 					and rp.privilege_level = "%s";`
 
-	getUserRolesExpectPublicRoleFormat = `select role.role_id, role.role_name 
-				from mo_catalog.mo_role role, mo_catalog.mo_user_grant mg 
-				where role.role_id = mg.role_id 
-					and role.role_id != %d  
-					and mg.user_id = %d 
-					order by role.created_time asc limit 1;`
-
 	checkUdfArgs = `select args,function_id,body from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s" order by function_id;`
 
 	checkUdfWithDb = `select function_id,body from mo_catalog.mo_user_defined_function where db = "%s" order by function_id;`
@@ -1639,11 +1633,9 @@ var (
 		objectTypeDatabase: {privilegeLevelDatabase,
 			privilegeLevelStar, privilegeLevelStarStar},
 		objectTypeTable: {privilegeLevelStarStar,
-			privilegeLevelDatabaseStar, privilegeLevelStar,
-			privilegeLevelDatabaseTable, privilegeLevelTable},
+			privilegeLevelDatabaseStar, privilegeLevelDatabaseTable},
 		objectTypeView: {privilegeLevelStarStar,
-			privilegeLevelDatabaseStar, privilegeLevelStar,
-			privilegeLevelDatabaseTable, privilegeLevelTable},
+			privilegeLevelDatabaseStar, privilegeLevelDatabaseTable},
 	}
 
 	// the databases that can not operated by the real user
@@ -2066,10 +2058,6 @@ func getSqlForCheckRoleHasAccountLevelForStarWithSysScope(roleId int64, privId P
 	return fmt.Sprintf(checkRoleHasAccountLevelForStarFormat, objectTypeAccount, roleId, privilegeTypeListSQL(objectTypeAccount, privId, includeSysScopeAccountAll), privilegeLevelStar)
 }
 
-func privilegeTypeWithCoveringPrivileges(objTyp objectType, privId PrivilegeType) []PrivilegeType {
-	return privilegeTypeWithCoveringPrivilegesForScope(objTyp, privId, false)
-}
-
 func privilegeTypeWithCoveringPrivilegesForScope(objTyp objectType, privId PrivilegeType, includeSysScopeAccountAll bool) []PrivilegeType {
 	if objTyp != objectTypeAccount {
 		return []PrivilegeType{privId}
@@ -2077,15 +2065,15 @@ func privilegeTypeWithCoveringPrivilegesForScope(objTyp objectType, privId Privi
 	if privId == PrivilegeTypeAccountAll || privId == PrivilegeTypeAccountOwnership {
 		return []PrivilegeType{privId}
 	}
-	switch privId.Scope() {
-	case PrivilegeScopeAccount:
+	if accountAllCoversPrivilege(privId, includeSysScopeAccountAll) {
 		return []PrivilegeType{privId, PrivilegeTypeAccountAll}
-	case PrivilegeScopeSys:
-		if includeSysScopeAccountAll {
-			return []PrivilegeType{privId, PrivilegeTypeAccountAll}
-		}
 	}
 	return []PrivilegeType{privId}
+}
+
+func accountAllCoversPrivilege(priv PrivilegeType, includeSys bool) bool {
+	return priv != PrivilegeTypeAccountAll && priv != PrivilegeTypeAccountOwnership &&
+		(priv.Scope() == PrivilegeScopeAccount || (includeSys && priv.Scope() == PrivilegeScopeSys))
 }
 
 func privilegeTypeListSQL(objTyp objectType, privId PrivilegeType, includeSysScopeAccountAll bool) string {
@@ -2095,10 +2083,6 @@ func privilegeTypeListSQL(objTyp objectType, privId PrivilegeType, includeSysSco
 		parts = append(parts, fmt.Sprintf("%d", p))
 	}
 	return strings.Join(parts, ",")
-}
-
-func getSqlForgetUserRolesExpectPublicRole(pRoleId int, userId uint32) string {
-	return fmt.Sprintf(getUserRolesExpectPublicRoleFormat, pRoleId, userId)
 }
 
 func getTableColumnDefSql(accountId uint64, dbName, tableName string) (string, error) {
@@ -2415,7 +2399,6 @@ type privilege struct {
 	// can execute in password expired status
 	canExecInPasswordExpired bool
 	needMatchedRole          bool
-	matchedRoleID            int64
 	// databases that may be written by statement-level DDL or account/database operations
 	writeDatabaseTargets []string
 }
@@ -2605,17 +2588,23 @@ const (
 
 // privilegeCache cache privileges on table
 type privilegeCache struct {
+	// All retained grant facts belong to one reachable SQL role.
+	grantRoleID      int64
+	observedVersions [authorizationDependencyCount]engine.TableContentVersion
+	certificate      authorizationCertificate
+	scopeEntries     int
+	nameBytes        int
 	// For objectType table
-	// For objectType table *, *.*
+	// For objectType table *.*
 	storeForTable [int(privilegeLevelEnd)]btree.Set[PrivilegeType]
-	// For objectType table database.*
+	// For objectType table *, database.*
 	storeForTable2 btree.Map[string, *btree.Set[PrivilegeType]]
 	// For objectType table database.table , table
 	storeForTable3 btree.Map[string, *btree.Map[string, *btree.Set[PrivilegeType]]]
 	//For objectType view
-	//For objectType view *, *.*
+	//For objectType view *.*
 	storeForView [int(privilegeLevelEnd)]btree.Set[PrivilegeType]
-	//For objectType view database.*
+	//For objectType view *, database.*
 	storeForView2 btree.Map[string, *btree.Set[PrivilegeType]]
 	//For objectType view database.view , view
 	storeForView3 btree.Map[string, *btree.Map[string, *btree.Set[PrivilegeType]]]
@@ -2626,48 +2615,58 @@ type privilegeCache struct {
 	storeForDatabase2 btree.Map[string, *btree.Set[PrivilegeType]]
 	// For objectType account *
 	storeForAccount [int(privilegeLevelEnd)]btree.Set[PrivilegeType]
-	total           atomic.Uint64
-	hit             atomic.Uint64
 }
 
 // has checks the cache has privilege on a table
 func (pc *privilegeCache) has(objTyp objectType, plt privilegeLevelType, dbName, tableName string, priv PrivilegeType) bool {
-	pc.total.Add(1)
-	privSet := pc.getPrivilegeSet(objTyp, plt, dbName, tableName)
-	if privSet != nil {
-		for _, p := range privilegeTypeWithCoveringPrivileges(objTyp, priv) {
-			if privSet.Contains(p) {
-				pc.hit.Add(1)
-				return true
-			}
-		}
+	privSet := pc.getPrivilegeSet(objTyp, plt, dbName, tableName, false)
+	if privSet != nil && (privSet.Contains(priv) ||
+		(objTyp == objectTypeAccount && accountAllCoversPrivilege(priv, false) && privSet.Contains(PrivilegeTypeAccountAll))) {
+		return true
 	}
 	return false
 }
 
-func (pc *privilegeCache) getPrivilegeSet(objTyp objectType, plt privilegeLevelType, dbName, tableName string) *btree.Set[PrivilegeType] {
+func (pc *privilegeCache) getPrivilegeSet(objTyp objectType, plt privilegeLevelType, dbName, tableName string, create bool) *btree.Set[PrivilegeType] {
 	switch objTyp {
 	case objectTypeTable:
 		switch plt {
-		case privilegeLevelStarStar, privilegeLevelStar:
+		case privilegeLevelStarStar:
 			return &pc.storeForTable[plt]
-		case privilegeLevelDatabaseStar:
+		case privilegeLevelDatabaseStar, privilegeLevelStar:
 			dbStore, ok1 := pc.storeForTable2.Get(dbName)
 			if !ok1 {
+				if !create {
+					return nil
+				}
+				if !pc.reserveScope(dbName, "") {
+					return nil
+				}
 				dbStore = &btree.Set[PrivilegeType]{}
-				pc.storeForTable2.Set(dbName, dbStore)
+				pc.storeForTable2.Set(strings.Clone(dbName), dbStore)
 			}
 			return dbStore
 		case privilegeLevelDatabaseTable, privilegeLevelTable:
+			if create && pc.getPrivilegeSet(objTyp, plt, dbName, tableName, false) == nil {
+				if !pc.reserveScope(dbName, tableName) {
+					return nil
+				}
+			}
 			tableStore, ok1 := pc.storeForTable3.Get(dbName)
 			if !ok1 {
+				if !create {
+					return nil
+				}
 				tableStore = &btree.Map[string, *btree.Set[PrivilegeType]]{}
-				pc.storeForTable3.Set(dbName, tableStore)
+				pc.storeForTable3.Set(strings.Clone(dbName), tableStore)
 			}
 			privSet, ok2 := tableStore.Get(tableName)
 			if !ok2 {
+				if !create {
+					return nil
+				}
 				privSet = &btree.Set[PrivilegeType]{}
-				tableStore.Set(tableName, privSet)
+				tableStore.Set(strings.Clone(tableName), privSet)
 			}
 			return privSet
 		default:
@@ -2675,25 +2674,42 @@ func (pc *privilegeCache) getPrivilegeSet(objTyp objectType, plt privilegeLevelT
 		}
 	case objectTypeView:
 		switch plt {
-		case privilegeLevelStarStar, privilegeLevelStar:
+		case privilegeLevelStarStar:
 			return &pc.storeForView[plt]
-		case privilegeLevelDatabaseStar:
+		case privilegeLevelDatabaseStar, privilegeLevelStar:
 			dbStore, ok1 := pc.storeForView2.Get(dbName)
 			if !ok1 {
+				if !create {
+					return nil
+				}
+				if !pc.reserveScope(dbName, "") {
+					return nil
+				}
 				dbStore = &btree.Set[PrivilegeType]{}
-				pc.storeForView2.Set(dbName, dbStore)
+				pc.storeForView2.Set(strings.Clone(dbName), dbStore)
 			}
 			return dbStore
 		case privilegeLevelDatabaseTable, privilegeLevelTable:
+			if create && pc.getPrivilegeSet(objTyp, plt, dbName, tableName, false) == nil {
+				if !pc.reserveScope(dbName, tableName) {
+					return nil
+				}
+			}
 			viewStore, ok1 := pc.storeForView3.Get(dbName)
 			if !ok1 {
+				if !create {
+					return nil
+				}
 				viewStore = &btree.Map[string, *btree.Set[PrivilegeType]]{}
-				pc.storeForView3.Set(dbName, viewStore)
+				pc.storeForView3.Set(strings.Clone(dbName), viewStore)
 			}
 			privSet, ok2 := viewStore.Get(tableName)
 			if !ok2 {
+				if !create {
+					return nil
+				}
 				privSet = &btree.Set[PrivilegeType]{}
-				viewStore.Set(tableName, privSet)
+				viewStore.Set(strings.Clone(tableName), privSet)
 			}
 			return privSet
 		default:
@@ -2706,8 +2722,14 @@ func (pc *privilegeCache) getPrivilegeSet(objTyp objectType, plt privilegeLevelT
 		case privilegeLevelDatabase:
 			dbStore, ok1 := pc.storeForDatabase2.Get(dbName)
 			if !ok1 {
+				if !create {
+					return nil
+				}
+				if !pc.reserveScope(dbName, "") {
+					return nil
+				}
 				dbStore = &btree.Set[PrivilegeType]{}
-				pc.storeForDatabase2.Set(dbName, dbStore)
+				pc.storeForDatabase2.Set(strings.Clone(dbName), dbStore)
 			}
 			return dbStore
 		default:
@@ -2721,9 +2743,27 @@ func (pc *privilegeCache) getPrivilegeSet(objTyp objectType, plt privilegeLevelT
 
 }
 
+// Cached keys own their bytes instead of retaining the SQL lexer buffer.
+// Bound both the scope count and retained names. Each scope holds a finite set
+// of privilege kinds, so the count also bounds tree storage. Clearing remains
+// owned by the existing cache, with no eviction history or catalog snapshots.
+func (pc *privilegeCache) reserveScope(database, table string) bool {
+	const maxScopes, maxBytes = 1024, 256 << 10
+	cost := len(database) + len(table)
+	if cost > maxBytes {
+		return false
+	}
+	if pc.scopeEntries >= maxScopes || pc.nameBytes+cost > maxBytes {
+		pc.invalidate()
+	}
+	pc.scopeEntries++
+	pc.nameBytes += cost
+	return true
+}
+
 // set replaces the privileges by new ones
 func (pc *privilegeCache) set(objTyp objectType, plt privilegeLevelType, dbName, tableName string, priv ...PrivilegeType) {
-	privSet := pc.getPrivilegeSet(objTyp, plt, dbName, tableName)
+	privSet := pc.getPrivilegeSet(objTyp, plt, dbName, tableName, true)
 	if privSet != nil {
 		privSet.Clear()
 		for _, p := range priv {
@@ -2734,7 +2774,7 @@ func (pc *privilegeCache) set(objTyp objectType, plt privilegeLevelType, dbName,
 
 // add puts the privileges without replacing existed ones
 func (pc *privilegeCache) add(objTyp objectType, plt privilegeLevelType, dbName, tableName string, priv ...PrivilegeType) {
-	privSet := pc.getPrivilegeSet(objTyp, plt, dbName, tableName)
+	privSet := pc.getPrivilegeSet(objTyp, plt, dbName, tableName, true)
 	if privSet != nil {
 		for _, p := range priv {
 			privSet.Insert(p)
@@ -2742,13 +2782,14 @@ func (pc *privilegeCache) add(objTyp objectType, plt privilegeLevelType, dbName,
 	}
 }
 
-// invalidate makes the cache empty
+// invalidate makes the cache empty. Keep grantRoleID: bounded eviction can
+// occur inside a fill for that role; the tag alone conveys no authority.
 func (pc *privilegeCache) invalidate() {
 	if pc == nil {
 		return
 	}
-	// total := pc.total.Swap(0)
-	// hit := pc.hit.Swap(0)
+	pc.certificate = authorizationCertificate{}
+	pc.scopeEntries, pc.nameBytes = 0, 0
 	for i := privilegeLevelStar; i < privilegeLevelEnd; i++ {
 		pc.storeForTable[i].Clear()
 		pc.storeForView[i].Clear()
@@ -2760,13 +2801,6 @@ func (pc *privilegeCache) invalidate() {
 	pc.storeForView2.Clear()
 	pc.storeForView3.Clear()
 	pc.storeForDatabase2.Clear()
-	// ratio := float64(0)
-	// if total == 0 {
-	//	ratio = 0
-	// } else {
-	//	ratio = float64(hit) / float64(total)
-	// }
-	// logutil.Debugf("-->hit %d total %d ratio %f", hit, total, ratio)
 }
 
 // verifiedRole holds the role info that has been checked
@@ -3566,138 +3600,82 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 	return err
 }
 
-// doSetSecondaryRoleAll validates user role metadata before enabling all secondary roles.
-// The current primary role must not change; SET SECONDARY ROLE ALL only affects secondary roles.
-func doSetSecondaryRoleAll(ctx context.Context, ses *Session) (err error) {
-	var sql string
-	var userId uint32
-
+// doSwitchRole validates identity and the target membership in one independent
+// authorization snapshot. A revoked primary role must not prevent recovery.
+func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err error) {
 	account := ses.GetTenantInfo()
-	// get current user_id
-	userId = account.GetUserID()
-
-	// step1:get all roles expect public
-	bh := ses.GetBackgroundExec(ctx)
+	var roleID int64
+	bh, _, err := newAuthorizationBackgroundExec(ctx, ses)
+	if err != nil {
+		return err
+	}
 	defer bh.Close()
-
 	err = bh.Exec(ctx, "begin;")
 	defer func() {
 		err = finishTxn(ctx, bh, err)
+		if err != nil {
+			return
+		}
+		// Publish session state only after the read transaction closes successfully.
+		if sr.SecondaryRole {
+			account.SetUseSecondaryRole(sr.SecondaryRoleType == tree.SecondaryRoleTypeAll)
+		} else if sr.Role != nil {
+			account.SetDefaultRoleID(uint32(roleID))
+			account.SetDefaultRole(sr.Role.UserName)
+			account.SetUseSecondaryRole(false)
+		}
+		ses.InvalidatePrivilegeCache()
 	}()
 	if err != nil {
 		return err
 	}
-
-	sql = getSqlForgetUserRolesExpectPublicRole(publicRoleID, userId)
-	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
+	if err = validateAuthorizationAccount(ctx, ses, bh); err != nil {
+		return err
+	}
+	if err = validateAuthorizationUser(ctx, bh, account); err != nil {
+		return err
+	}
+	if sr.SecondaryRole {
+		// ALL is evaluated by the existing role loader on the next statement.
+		// Reading and discarding its role rows here served no authorization purpose.
+		return nil
+	}
+	if sr.Role == nil {
+		return moerr.NewInternalError(ctx, "missing target role")
+	}
+	if err = normalizeNameOfRole(ctx, sr.Role); err != nil {
+		return err
+	}
+	query, err := getSqlForRoleIdOfRole(ctx, sr.Role.UserName)
 	if err != nil {
 		return err
 	}
-
-	_, err = getResultSet(ctx, bh)
-	return err
-}
-
-// doSwitchRole accomplishes the Use Role and Use Secondary Role statement
-func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err error) {
-	var sql string
-	var erArray []ExecResult
-	var roleId int64
-
-	account := ses.GetTenantInfo()
-
-	if sr.SecondaryRole {
-		// use secondary role all or none
-		switch sr.SecondaryRoleType {
-		case tree.SecondaryRoleTypeAll:
-			if err = doSetSecondaryRoleAll(ctx, ses); err != nil {
-				return err
-			}
-			account.SetUseSecondaryRole(true)
-			ses.InvalidatePrivilegeCache()
-		case tree.SecondaryRoleTypeNone:
-			account.SetUseSecondaryRole(false)
-			ses.InvalidatePrivilegeCache()
-		}
-	} else if sr.Role != nil {
-		err = normalizeNameOfRole(ctx, sr.Role)
-		if err != nil {
-			return err
-		}
-
-		// step1 : check the role exists or not;
-
-		switchRoleFunc := func() (rtnErr error) {
-			bh := ses.GetBackgroundExec(ctx)
-			defer bh.Close()
-
-			rtnErr = bh.Exec(ctx, "begin;")
-			defer func() {
-				rtnErr = finishTxn(ctx, bh, rtnErr)
-			}()
-			if rtnErr != nil {
-				return rtnErr
-			}
-
-			sql, rtnErr = getSqlForRoleIdOfRole(ctx, sr.Role.UserName)
-			if rtnErr != nil {
-				return rtnErr
-			}
-			bh.ClearExecResultSet()
-			rtnErr = bh.Exec(ctx, sql)
-			if rtnErr != nil {
-				return rtnErr
-			}
-
-			erArray, rtnErr = getResultSet(ctx, bh)
-			if rtnErr != nil {
-				return rtnErr
-			}
-			if execResultArrayHasData(erArray) {
-				roleId, rtnErr = erArray[0].GetInt64(ctx, 0, 0)
-				if rtnErr != nil {
-					return rtnErr
-				}
-			} else {
-				return moerr.NewInternalErrorf(ctx, "there is no role %s", sr.Role.UserName)
-			}
-
-			// step2 : check the role has been granted to the user or not
-			sql = getSqlForCheckUserGrant(roleId, int64(account.GetUserID()))
-			bh.ClearExecResultSet()
-			rtnErr = bh.Exec(ctx, sql)
-			if rtnErr != nil {
-				return rtnErr
-			}
-
-			erArray, rtnErr = getResultSet(ctx, bh)
-			if rtnErr != nil {
-				return rtnErr
-			}
-
-			if !execResultArrayHasData(erArray) {
-				return moerr.NewInternalErrorf(ctx, "the role %s has not be granted to the user %s", sr.Role.UserName, account.GetUser())
-			}
-			return rtnErr
-		}
-
-		err = switchRoleFunc()
-		if err != nil {
-			return err
-		}
-
-		// step3 : switch the default role and role id;
-		account.SetDefaultRoleID(uint32(roleId))
-		account.SetDefaultRole(sr.Role.UserName)
-		// then, reset secondary role to none
-		account.SetUseSecondaryRole(false)
-		ses.InvalidatePrivilegeCache()
-
+	bh.ClearExecResultSet()
+	if err = bh.Exec(ctx, query); err != nil {
 		return err
 	}
-
-	return err
+	rows, err := getResultSet(ctx, bh)
+	if err != nil {
+		return err
+	}
+	if !execResultArrayHasData(rows) {
+		return moerr.NewInternalErrorf(ctx, "there is no role %s", sr.Role.UserName)
+	}
+	if roleID, err = rows[0].GetInt64(ctx, 0, 0); err != nil {
+		return err
+	}
+	bh.ClearExecResultSet()
+	if err = bh.Exec(ctx, getSqlForCheckUserGrant(roleID, int64(account.GetUserID()))); err != nil {
+		return err
+	}
+	rows, err = getResultSet(ctx, bh)
+	if err != nil {
+		return err
+	}
+	if !execResultArrayHasData(rows) {
+		return moerr.NewInternalErrorf(ctx, "the role %s has not be granted to the user %s", sr.Role.UserName, account.GetUser())
+	}
+	return nil
 }
 
 func checkStageExistOrNot(ctx context.Context, bh BackgroundExec, stageName string) (bool, error) {
@@ -6234,7 +6212,25 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) (err err
 
 // determinePrivilegeSetOfStatement decides the privileges that the statement needs before running it.
 // That is the Set P for the privilege Set .
+// authorizationStatement unwraps executable EXPLAIN forms for policy checks.
+// Planning and result rendering continue to own the original wrapper AST.
+func authorizationStatement(stmt tree.Statement) tree.Statement {
+	for {
+		switch s := stmt.(type) {
+		case *tree.ExplainStmt:
+			stmt = s.Statement
+		case *tree.ExplainAnalyze:
+			stmt = s.Statement
+		case *tree.ExplainPhyPlan:
+			stmt = s.Statement
+		default:
+			return stmt
+		}
+	}
+}
+
 func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
+	stmt = authorizationStatement(stmt)
 	typs := make([]PrivilegeType, 0, 5)
 	kind := privilegeKindGeneral
 	special := specialTagNone
@@ -7596,7 +7592,7 @@ func verifyPrivilegeEntryInMultiPrivilegeLevels(
 		dbName = ses.GetDatabaseName()
 	}
 	for _, pl := range pls {
-		if cache != nil && enableCache {
+		if cache != nil && enableCache && cache.grantRoleID == roleId {
 			yes = cache.has(entry.objType, pl, dbName, entry.tableName, entry.privilegeId)
 			if yes {
 				return true, nil
@@ -7620,6 +7616,10 @@ func verifyPrivilegeEntryInMultiPrivilegeLevels(
 
 		if execResultArrayHasData(erArray) {
 			if cache != nil && enableCache {
+				if cache.grantRoleID != roleId {
+					cache.invalidate()
+					cache.grantRoleID = roleId
+				}
 				cache.add(entry.objType, pl, dbName, entry.tableName, entry.privilegeId)
 			}
 			return true, nil
@@ -7864,38 +7864,69 @@ func orderedRoleIDsForPrivilegeCheck(ses *Session, roleIds *btree.Set[int64], pr
 
 // determineUserHasPrivilegeSet decides the privileges of user can satisfy the requirement of the privilege set
 // The algorithm 1.
-func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privilege) (ret bool, stats statistic.StatsArray, err error) {
+func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privilege) (ret bool, stats statistic.StatsArray, roleID int64, err error) {
+	var enableCache bool
+	var yes bool
+	stats.Reset()
+
+	// A nil requirement checks the authenticated identity and selected roles.
+	if priv != nil && len(priv.entries) == 0 {
+		return false, stats, roleID, nil
+	}
+	enableCache, err = privilegeCacheIsEnabled(ctx, ses)
+	if err != nil {
+		return false, stats, roleID, err
+	}
+	snapshot, err := authorizationReadSnapshot(ctx, ses)
+	if err != nil {
+		return false, stats, roleID, err
+	}
+	cache := ses.GetPrivilegeCache()
+	if enableCache && cache != nil && cache.certificate.valid(ctx, ses, snapshot, cache) {
+		if priv == nil {
+			if err = ctx.Err(); err != nil {
+				return false, stats, roleID, err
+			}
+			return true, stats, roleID, nil
+		} else if !priv.needMatchedRole {
+			yes, err = checkPrivilegeInCache(ctx, ses, priv, true)
+			if err != nil {
+				return false, stats, roleID, err
+			}
+			if yes {
+				if err = ctx.Err(); err != nil {
+					return false, stats, roleID, err
+				}
+				return true, stats, roleID, nil
+			}
+		}
+	} else if cache != nil {
+		cache.invalidate()
+	}
+
+	return determineUserHasPrivilegeSetAtSnapshot(ctx, ses, priv, snapshot, enableCache)
+}
+
+// Keep the cold transaction and certificate copy off the warm path: passing
+// its dependency slice through the engine interface makes that copy escape.
+func determineUserHasPrivilegeSetAtSnapshot(ctx context.Context, ses *Session, priv *privilege, snapshot timestamp.Timestamp, enableCache bool) (ret bool, stats statistic.StatsArray, roleID int64, err error) {
 	var erArray []ExecResult
 	var yes bool
 	var roleB int64
 	var ok bool
 	var grantedIds *btree.Set[int64]
-	var enableCache bool
 	var matchedRoleID int64
 	stats.Reset()
-
-	// check privilege cache first
-	if len(priv.entries) == 0 {
-		return false, stats, nil
+	cache := ses.GetPrivilegeCache()
+	var before authorizationCertificate
+	var reusable bool
+	if enableCache && cache != nil && cache.certificate.valid(ctx, ses, snapshot, cache) {
+		before, reusable = cache.certificate, true
+	} else if cache != nil {
+		cache.invalidate()
 	}
 
-	enableCache, err = privilegeCacheIsEnabled(ctx, ses)
-	if err != nil {
-		return false, stats, err
-	}
-	if enableCache && !priv.needMatchedRole {
-		yes, err = checkPrivilegeInCache(ctx, ses, priv, enableCache)
-		if err != nil {
-			return false, stats, err
-		}
-		if yes {
-			priv.matchedRoleID = int64(ses.GetTenantInfo().GetDefaultRoleID())
-			return true, stats, nil
-		}
-	}
-
-	tenant := ses.GetTenantInfo()
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, readSnapshot: snapshot})
 	defer func() {
 		stats = bh.GetExecStatsArray()
 		bh.Close()
@@ -7907,10 +7938,44 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 		ses.tStmt.SetSkipTxn(true)
 	}
 
+	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+		if cache == nil {
+			return
+		}
+		if err == nil && ret && reusable && before.valid(ctx, ses, snapshot, cache) {
+			before.reusableFrom = snapshot
+			cache.certificate = before
+		} else {
+			// Errors and racing publication cannot expose a partial cache fill.
+			cache.invalidate()
+		}
+	}()
+	if err != nil {
+		return false, stats, roleID, err
+	}
+	if enableCache && cache != nil && !reusable {
+		before, reusable, err = prepareAuthorizationCertificate(ctx, ses, bh, snapshot)
+		if err != nil {
+			return false, stats, roleID, err
+		}
+	}
+
+	roleSetOfKthIteration := &btree.Set[int64]{}
+	// step 2: The Set R2 {the roleid granted to the userid}
+	// Validate the selected role and load any enabled secondary roles.
+	err = loadActiveRolesForAuthorization(ctx, bh, ses, roleSetOfKthIteration)
+	if err != nil {
+		return false, stats, roleID, err
+	}
+
+	if priv == nil {
+		return true, stats, roleID, nil
+	}
+
 	// the set of roles the (k+1) th iteration during the execution
 	roleSetOfKPlusOneThIteration := &btree.Set[int64]{}
-	// the set of roles the k th iteration during the execution
-	roleSetOfKthIteration := &btree.Set[int64]{}
 	// the set of roles visited by traversal algorithm
 	roleSetOfVisited := &btree.Set[int64]{}
 	// simple mo_role_grant cache
@@ -7918,25 +7983,6 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 	// roleRoot maps each visited inherited role back to the active role that brought it
 	// into the privilege search. DDL ownership should follow that active role.
 	roleRoot := make(map[int64]int64)
-
-	// step 1: The Set R1 {default role id}
-	// The primary role (in use)
-	roleSetOfKthIteration.Insert((int64)(tenant.GetDefaultRoleID()))
-
-	err = bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
-		return false, stats, err
-	}
-
-	// step 2: The Set R2 {the roleid granted to the userid}
-	// If the user uses the all secondary roles, the secondary roles needed to be loaded
-	err = loadAllSecondaryRoles(ctx, bh, tenant, roleSetOfKthIteration)
-	if err != nil {
-		return false, stats, err
-	}
 
 	// init RVisited = Rk
 	roleSetOfKthIteration.Scan(func(roleId int64) bool {
@@ -7949,13 +7995,13 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 	// If the result of the algorithm 2 is true, Then return true;
 	yes, matchedRoleID, err = determineRoleSetHasPrivilegeSet(ctx, bh, ses, roleSetOfKthIteration, priv, enableCache)
 	if err != nil {
-		return false, stats, err
+		return false, stats, roleID, err
 	}
 	if yes {
 		matchedRoleID = matchedActiveRoleID(priv, matchedRoleID, roleRoot)
-		priv.matchedRoleID = matchedRoleID
+		roleID = matchedRoleID
 		ret = true
-		return ret, stats, err
+		return ret, stats, roleID, err
 	}
 	/*
 		step 3: !!!NOTE all roleid in Rk has been processed by the algorithm 2.
@@ -8009,19 +8055,19 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 			bh.ClearExecResultSet()
 			err = bh.Exec(ctx, sqlForInheritedRoleIdOfRoleId)
 			if err != nil {
-				return false, stats, moerr.NewInternalErrorf(ctx, "get inherited role id of the role id. error:%v", err)
+				return false, stats, roleID, moerr.NewInternalErrorf(ctx, "get inherited role id of the role id. error:%v", err)
 			}
 
 			erArray, err = getResultSet(ctx, bh)
 			if err != nil {
-				return false, stats, err
+				return false, stats, roleID, err
 			}
 
 			if execResultArrayHasData(erArray) {
 				for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
 					roleB, err = erArray[0].GetInt64(ctx, i, 0)
 					if err != nil {
-						return false, stats, err
+						return false, stats, roleID, err
 					}
 
 					if !roleSetOfVisited.Contains(roleB) {
@@ -8037,25 +8083,25 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 		// no more roleB, it is done
 		if roleSetOfKPlusOneThIteration.Len() == 0 {
 			ret = false
-			return ret, stats, err
+			return ret, stats, roleID, err
 		}
 
 		// Call the algorithm 2.
 		// If the result of the algorithm 2 is true, Then return true;
 		yes, matchedRoleID, err = determineRoleSetHasPrivilegeSet(ctx, bh, ses, roleSetOfKPlusOneThIteration, priv, enableCache)
 		if err != nil {
-			return false, stats, err
+			return false, stats, roleID, err
 		}
 
 		if yes {
 			matchedRoleID = matchedActiveRoleID(priv, matchedRoleID, roleRoot)
-			priv.matchedRoleID = matchedRoleID
+			roleID = matchedRoleID
 			ret = true
-			return ret, stats, err
+			return ret, stats, roleID, err
 		}
 		roleSetOfKthIteration, roleSetOfKPlusOneThIteration = roleSetOfKPlusOneThIteration, roleSetOfKthIteration
 	}
-	return ret, stats, err
+	return ret, stats, roleID, err
 }
 
 func matchedActiveRoleID(priv *privilege, matchedRoleID int64, roleRoot map[int64]int64) int64 {
@@ -8073,38 +8119,83 @@ const (
 	successDone     // ri has indirect relation with the Uc
 )
 
-// loadAllSecondaryRoles loads all secondary roles
-var loadAllSecondaryRoles = func(ctx context.Context, bh BackgroundExec, account *TenantInfo, roleSetOfCurrentUser *btree.Set[int64]) error {
-	var err error
-	var sql string
+func getSqlForAuthorizationUser(account *TenantInfo) string {
+	return fmt.Sprintf("select u.user_id from mo_catalog.mo_user u where u.user_id = %d and u.user_name = %s", account.GetUserID(), quoteSQLStringLiteral(account.GetUser()))
+}
 
-	var erArray []ExecResult
-	var roleId int64
+func validateAuthorizationUser(ctx context.Context, bh BackgroundExec, account *TenantInfo) error {
+	ctx = defines.AttachAccountId(ctx, account.GetTenantID())
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, getSqlForAuthorizationUser(account)); err != nil {
+		return err
+	}
+	rows, err := getResultSet(ctx, bh)
+	if err != nil {
+		return err
+	}
+	if !execResultArrayHasData(rows) {
+		return moerr.NewInternalError(ctx, "do not have privilege: authenticated user no longer matches current catalog")
+	}
+	return nil
+}
 
-	if account.GetUseSecondaryRole() {
-		sql = getSqlForRoleIdOfUserId(int(account.GetUserID()))
-		bh.ClearExecResultSet()
-		err = bh.Exec(ctx, sql)
-		if err != nil {
-			return err
-		}
+func getSqlForActiveRolesForAuthorization(account *TenantInfo, trusted bool) string {
+	filter := fmt.Sprintf(" where u.user_id = %d and u.user_name = %s", account.GetUserID(), quoteSQLStringLiteral(account.GetUser()))
+	if trusted && !account.GetUseSecondaryRole() {
+		return getSqlForAuthorizationUser(account)
+	}
+	query := "select ug.role_id from mo_catalog.mo_user u left join mo_catalog.mo_user_grant ug on ug.user_id = u.user_id"
+	if !account.GetUseSecondaryRole() {
+		query += fmt.Sprintf(" and ug.role_id = %d", account.GetDefaultRoleID())
+	}
+	return query + filter
+}
 
-		erArray, err = getResultSet(ctx, bh)
-		if err != nil {
-			return err
-		}
-
-		if execResultArrayHasData(erArray) {
-			for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-				roleId, err = erArray[0].GetInt64(ctx, i, 0)
-				if err != nil {
-					return err
-				}
-				roleSetOfCurrentUser.Insert(roleId)
+// loadActiveRolesForAuthorization proves the authenticated user still matches
+// the current catalog, then loads roles in the caller's authorization transaction.
+// Numeric IDs can belong to a different principal after account restore.
+var loadActiveRolesForAuthorization = func(ctx context.Context, bh BackgroundExec, ses *Session, roles *btree.Set[int64]) error {
+	account := ses.GetTenantInfo()
+	if err := validateAuthorizationAccount(ctx, ses, bh); err != nil {
+		return err
+	}
+	ctx = defines.AttachAccountId(ctx, account.GetTenantID())
+	primary := int64(account.GetDefaultRoleID())
+	trusted := primary == publicRoleID || (account.IsSysTenant() && primary == moAdminRoleID) || (!account.IsSysTenant() && primary == accountAdminRoleID)
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, getSqlForActiveRolesForAuthorization(account, trusted)); err != nil {
+		return err
+	}
+	rows, err := getResultSet(ctx, bh)
+	if err != nil {
+		return err
+	}
+	if !execResultArrayHasData(rows) {
+		return moerr.NewInternalError(ctx, "do not have privilege: authenticated user no longer matches current catalog")
+	}
+	foundPrimary := false
+	if account.GetUseSecondaryRole() || !trusted {
+		for i := uint64(0); i < rows[0].GetRowCount(); i++ {
+			null, err := rows[0].ColumnIsNull(ctx, i, 0)
+			if err != nil {
+				return err
 			}
+			if null {
+				continue
+			}
+			role, err := rows[0].GetInt64(ctx, i, 0)
+			if err != nil {
+				return err
+			}
+			roles.Insert(role)
+			foundPrimary = foundPrimary || role == primary
 		}
 	}
-	return err
+	if !trusted && !foundPrimary {
+		return moerr.NewInternalError(ctx, "do not have privilege: active role is no longer granted to the user")
+	}
+	roles.Insert(primary)
+	return nil
 }
 
 // determineUserCanGrantRolesToOthersInternal decides if the user can grant roles to other users or roles
@@ -8137,9 +8228,6 @@ func determineUserCanGrantRolesToOthersInternal(ctx context.Context, bh Backgrou
 	roleSetOfVisited := &btree.Set[int64]{}
 	verifiedFromRoles := make([]*verifiedRole, len(fromRoles))
 
-	// step 1 : add the primary role
-	roleSetOfCurrentUser.Insert(int64(account.GetDefaultRoleID()))
-
 	for i, role := range fromRoles {
 		sql, err = getSqlForRoleIdOfRole(ctx, role.UserName)
 		if err != nil {
@@ -8156,8 +8244,8 @@ func determineUserCanGrantRolesToOthersInternal(ctx context.Context, bh Backgrou
 	}
 
 	// step 2: The Set R2 {the roleid granted to the userid}
-	// If the user uses the all secondary roles, the secondary roles needed to be loaded
-	err = loadAllSecondaryRoles(ctx, bh, account, roleSetOfCurrentUser)
+	// Validate the selected role and load any enabled secondary roles.
+	err = loadActiveRolesForAuthorization(ctx, bh, ses, roleSetOfCurrentUser)
 	if err != nil {
 		return false, err
 	}
@@ -8220,7 +8308,10 @@ func determineUserCanGrantRolesToOthers(ctx context.Context, ses *Session, fromR
 	}
 
 	// step2: decide the current user
-	bh := ses.GetBackgroundExec(ctx)
+	bh, _, err := newAuthorizationBackgroundExec(ctx, ses)
+	if err != nil {
+		return false, stats, err
+	}
 	defer func() {
 		stats = bh.GetExecStatsArray()
 		bh.Close()
@@ -8304,26 +8395,25 @@ func getRoleSetThatRoleGrantedToWGO(ctx context.Context, bh BackgroundExec, role
 }
 
 // authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase decides the user has the privilege of executing the statement with object type account
-func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx context.Context, ses *Session, stmt tree.Statement) (bool, statistic.StatsArray, error) {
+func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx context.Context, ses *Session, stmt tree.Statement, priv *privilege) (bool, statistic.StatsArray, error) {
 	var err error
 	var ok, yes bool
 	var stats statistic.StatsArray
 	stats.Reset()
 
-	priv := ses.GetPrivilege()
 	if priv.objectType() != objectTypeAccount && priv.objectType() != objectTypeDatabase { // do nothing
 		return true, stats, nil
 	}
 	if !checkProtectedDatabaseWriteByPrivilege(ctx, ses, priv) {
 		return false, stats, nil
 	}
-	ok, delta, err := determineUserHasPrivilegeSet(ctx, ses, priv)
+	ok, delta, roleID, err := determineUserHasPrivilegeSet(ctx, ses, priv)
 	if err != nil {
 		return false, stats, err
 	}
 	stats.Add(&delta)
 	if ok {
-		setDDLOwnerRoleFromPrivilege(ses, stmt, priv)
+		setDDLOwnerRole(ses, stmt, roleID)
 	}
 
 	if st, isDropTable := stmt.(*tree.DropTable); isDropTable && len(st.Names) > 1 {
@@ -8409,13 +8499,13 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 	return ok, stats, nil
 }
 
-func setDDLOwnerRoleFromPrivilege(ses *Session, stmt tree.Statement, priv *privilege) {
-	if ses == nil || priv == nil || priv.matchedRoleID <= 0 {
+func setDDLOwnerRole(ses *Session, stmt tree.Statement, roleID int64) {
+	if ses == nil || roleID <= 0 {
 		return
 	}
 	switch stmt.(type) {
 	case *tree.CreateDatabase, *tree.CreateTable:
-		ses.SetDDLOwnerRoleID(uint32(priv.matchedRoleID))
+		ses.SetDDLOwnerRoleID(uint32(roleID))
 	}
 }
 
@@ -8513,7 +8603,7 @@ func authenticateMultiDropTableTargets(ctx context.Context, ses *Session, st *tr
 		targetPriv := determinePrivilegeSetOfStatement(&tree.DropTable{
 			Names: tree.TableNames{name},
 		})
-		ok, delta, err := determineUserHasPrivilegeSet(ctx, ses, targetPriv)
+		ok, delta, _, err := determineUserHasPrivilegeSet(ctx, ses, targetPriv)
 		stats.Add(&delta)
 		if err != nil {
 			return false, stats, err
@@ -8555,7 +8645,10 @@ func checkRoleWhetherTableOwner(ctx context.Context, ses *Session, dbName, tbNam
 	// current user
 	currentUser := tenantInfo.GetUserID()
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh, _, err := newAuthorizationBackgroundExec(ctx, ses)
+	if err != nil {
+		return false, stats, err
+	}
 	defer func() {
 		stats = bh.GetExecStatsArray()
 		bh.Close()
@@ -8636,7 +8729,10 @@ func checkRoleWhetherDatabaseOwner(ctx context.Context, ses *Session, dbName str
 	// current user
 	currentUser := tenantInfo.GetUserID()
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh, _, err := newAuthorizationBackgroundExec(ctx, ses)
+	if err != nil {
+		return false, stats, err
+	}
 	defer func() {
 		stats = bh.GetExecStatsArray()
 		bh.Close()
@@ -8710,6 +8806,11 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 	ses *Session,
 	stmt tree.Statement,
 	p *plan2.Plan) (bool, statistic.StatsArray, error) {
+	return authenticateStatementPlanPrivilege(ctx, ses, stmt, p, determinePrivilegeSetOfStatement(stmt))
+}
+
+func authenticateStatementPlanPrivilege(ctx context.Context, ses *Session, stmt tree.Statement, p *plan2.Plan, priv *privilege) (bool, statistic.StatsArray, error) {
+	stmt = authorizationStatement(stmt)
 	var stats statistic.StatsArray
 	stats.Reset()
 
@@ -8727,55 +8828,11 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 		return ok, stats, nil
 	}
 
-	priv := determinePrivilegeSetOfStatement(stmt)
-	if priv.objectType() == objectTypeTable {
-		// only sys account, moadmin role can exec mo_ctrl
-		if hasMoCtrl(p) {
-			if !verifyAccountCanExecMoCtrl(ses.GetTenantInfo()) {
-				return false, stats, moerr.NewInternalError(ctx, "do not have privilege to execute the statement")
-			}
-		}
-		if isTargetSysWhiteList(p) && verifyAccountCanExecMoCtrl(ses.GetTenantInfo()) {
-			return true, stats, nil
-		}
-		arr := extractPrivilegeTipsFromPlan(p)
-		if _, ok := stmt.(*tree.Replace); ok {
-			arr = addReplaceDeletePrivilegeTips(arr, p)
-		}
-		if mergeStmt, ok := stmt.(*tree.Merge); ok {
-			arr = appendMergeActionPrivilegeTips(ses, mergeStmt, p, arr)
-		}
-		if len(arr) == 0 {
-			if ins, ok := stmt.(*tree.Insert); ok {
-				dbName, tableName, ok := getInsertTargetTableName(ins, ses)
-				if ok {
-					arr = append(arr, privilegeTips{
-						typ:                   PrivilegeTypeInsert,
-						objType:               objectTypeTable,
-						databaseName:          dbName,
-						tableName:             tableName,
-						isClusterTable:        isClusterTable(dbName, tableName),
-						clusterTableOperation: clusterTableModify,
-					})
-				}
-			}
-		}
-		if len(arr) == 0 {
-			return true, stats, nil
-		}
-		if !checkProtectedDatabaseWriteByPrivilegeTips(ctx, ses, arr) {
-			return false, stats, nil
-		}
-		convertPrivilegeTipsToPrivilege(priv, arr)
-		ok, delta, err := determineUserHasPrivilegeSet(ctx, ses, priv)
-		if err != nil {
-			return false, stats, err
-		}
-		stats.Add(&delta)
-
-		return ok, stats, nil
+	if priv.objectType() != objectTypeTable {
+		return true, stats, nil
 	}
-	return true, stats, nil
+	requirement := derivePlanAuthorization(ses, stmt, p, priv)
+	return evaluatePlanAuthorization(ctx, ses, &requirement)
 }
 
 func getInsertTargetTableName(stmt *tree.Insert, ses *Session) (string, string, bool) {
@@ -8917,7 +8974,7 @@ func authenticateCreateTableAsSelectSourcePrivilege(
 	sourcePriv := determinePrivilegeSetOfStatement(st.AsSource)
 	convertPrivilegeTipsToPrivilege(sourcePriv, arr)
 
-	ok, delta, err := determineUserHasPrivilegeSet(ctx, ses, sourcePriv)
+	ok, delta, _, err := determineUserHasPrivilegeSet(ctx, ses, sourcePriv)
 	stats.Add(&delta)
 	return ok, stats, err
 }
@@ -9598,8 +9655,10 @@ func determineUserCanGrantPrivilegesToOthers(ctx context.Context, ses *Session, 
 
 	// step1: normalize the names of roles and users
 	// step2: decide the current user
-	account := ses.GetTenantInfo()
-	bh := ses.GetBackgroundExec(ctx)
+	bh, _, err := newAuthorizationBackgroundExec(ctx, ses)
+	if err != nil {
+		return false, stats, err
+	}
 	defer func() {
 		stats = bh.GetExecStatsArray()
 		bh.Close()
@@ -9622,8 +9681,6 @@ func determineUserCanGrantPrivilegesToOthers(ctx context.Context, ses *Session, 
 	roleSetOfCurrentUser := &btree.Set[int64]{}
 	currentUserRoleSetExpanded := false
 
-	roleSetOfCurrentUser.Insert(int64(account.GetDefaultRoleID()))
-
 	// put it into the single transaction
 	err = bh.Exec(ctx, "begin;")
 	defer func() {
@@ -9634,8 +9691,8 @@ func determineUserCanGrantPrivilegesToOthers(ctx context.Context, ses *Session, 
 	}
 
 	// step 2: The Set R2 {the roleid granted to the userid}
-	// If the user uses the all secondary roles, the secondary roles needed to be loaded
-	err = loadAllSecondaryRoles(ctx, bh, account, roleSetOfCurrentUser)
+	// Validate the selected role and load any enabled secondary roles.
+	err = loadActiveRolesForAuthorization(ctx, bh, ses, roleSetOfCurrentUser)
 	if err != nil {
 		return false, stats, err
 	}
@@ -9795,12 +9852,35 @@ func convertAstPrivilegeTypeToPrivilegeType(ctx context.Context, priv tree.Privi
 	return privType, nil
 }
 
+// Session controls and wrappers do not use cached administrative authority.
+// Everything else must validate the current authenticated principal before the
+// native executor can consult its role IDs or names.
+func nativeStatementNeedsAuthorization(stmt tree.Statement) bool {
+	switch st := stmt.(type) {
+	case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction,
+		*tree.SavePoint, *tree.ReleaseSavePoint, *tree.RollbackToSavePoint,
+		*tree.SetTransaction, *tree.SetRole,
+		*tree.PrepareStmt, *tree.PrepareString, *tree.PrepareVar, *tree.Execute,
+		*tree.Deallocate, *tree.Reset, *tree.EmptyStmt,
+		*tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt, *tree.ExplainPhyPlan,
+		*tree.ShowWarnings, *tree.ShowErrors, *tree.ShowVariables, *tree.ShowStatus:
+		return false
+	case *tree.SetVar:
+		for _, assignment := range st.Assignments {
+			if assignment.Global {
+				return true
+			}
+		}
+		return false
+	default:
+		return true
+	}
+}
+
 // authenticateUserCanExecuteStatementWithObjectTypeNone decides the user has the privilege of executing the statement with object type none
-func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, ses *Session, stmt tree.Statement) (bool, statistic.StatsArray, error) {
-	var stats statistic.StatsArray
+func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, ses *Session, stmt tree.Statement, priv *privilege) (ret bool, stats statistic.StatsArray, err error) {
 	stats.Reset()
 
-	priv := ses.GetPrivilege()
 	if priv.objectType() != objectTypeNone { // do nothing
 		return true, stats, nil
 	}
@@ -9810,9 +9890,27 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 		return false, stats, nil
 	}
 
-	if priv.privilegeKind() == privilegeKindNone { // do nothing
+	if priv.privilegeKind() == privilegeKindNone {
+		if nativeStatementNeedsAuthorization(stmt) {
+			ok, stats, _, err := determineUserHasPrivilegeSet(ctx, ses, nil)
+			return ok, stats, err
+		}
 		return true, stats, nil
 	} else if priv.privilegeKind() == privilegeKindSpecial { // GrantPrivilege, RevokePrivilege
+		defer func() {
+			if ret && err == nil {
+				if _, ok := stmt.(*tree.GrantPrivilege); ok && !tenant.IsAdminRole() {
+					// Grant-option authorization already validated this identity.
+					return
+				}
+				if g, ok := stmt.(*tree.Grant); ok && g.Typ == tree.GrantTypePrivilege && !tenant.IsAdminRole() {
+					return
+				}
+				var delta statistic.StatsArray
+				ret, delta, _, err = determineUserHasPrivilegeSet(ctx, ses, nil)
+				stats.Add(&delta)
+			}
+		}()
 
 		checkGrantPrivilege := func(g *tree.GrantPrivilege) (bool, statistic.StatsArray, error) {
 			var temp statistic.StatsArray

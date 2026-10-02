@@ -138,6 +138,9 @@ func startBasicCluster() (Cluster, error) {
 					func(config *ServiceConfig) {
 						config.CN.LockService.MaxFixedSliceSize = 10001
 						config.CN.LockService.MaxLockRowCount = 10000
+						// Publish the actual endpoint in the first heartbeat, before
+						// task storage chooses a CN SQL address.
+						config.CN.SQLAddress = fmt.Sprintf("127.0.0.1:%d", config.CN.Frontend.Port)
 						config.CN.Frontend.SkipCheckUser = false
 						config.CN.Frontend.Iceberg.Enable = true
 						config.CN.Frontend.Iceberg.EnableWrite = true

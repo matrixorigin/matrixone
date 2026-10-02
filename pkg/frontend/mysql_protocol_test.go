@@ -270,6 +270,17 @@ func TestKill(t *testing.T) {
 	pu.SV.SkipCheckUser = true
 	pu.SV.KillRountinesInterval = 0
 	setPu("", pu)
+	// Each protocol connection gets independent current identity rows. The
+	// protocol mock engine deliberately has no catalog execution capability.
+	authorization := gostub.Stub(&NewBackgroundExec, func(_ context.Context, upstream FeSession, _ ...*BackgroundExecOption) BackgroundExec {
+		bh := &backgroundExecTest{}
+		bh.init()
+		tenant := upstream.GetTenantInfo()
+		bh.sql2result[getSqlForActiveRolesForAuthorization(tenant, true)] = newMrsForRoleIdOfUserId([][]interface{}{{int64(tenant.GetUserID())}})
+		return bh
+	})
+	defer authorization.Reset()
+
 	setSessionAlloc("", NewLeakCheckAllocator())
 	sql1 := "select connection_id();"
 	var sql2, sql3, sql4 string

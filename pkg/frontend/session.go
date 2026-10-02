@@ -168,8 +168,6 @@ type Session struct {
 	prepareStmts map[string]*PrepareStmt
 	lastStmtId   uint32
 
-	priv *privilege
-
 	ddlOwnerRoleID uint32
 
 	errInfo *errInfo
@@ -977,7 +975,6 @@ func (ses *Session) Close() {
 	ses.prepareStmts = nil
 	ses.allResultSet = nil
 	ses.tenant = nil
-	ses.priv = nil
 	ses.errInfo = nil
 	ses.cache = nil
 	ses.debugStr = ""
@@ -1193,6 +1190,7 @@ func (ses *Session) InitBackExec(txnOp TxnOperator, db string, callBack outputCa
 	if len(opts) > 0 && opts[0] != nil {
 		be.backSes.fromRealUser = opts[0].fromRealUser
 		be.backSes.forcePessimisticRC = opts[0].forcePessimisticRC
+		be.backSes.readSnapshot = opts[0].readSnapshot
 	}
 	return be
 }
@@ -1981,18 +1979,6 @@ func (ses *Session) refreshGlobalSysVars(ctx context.Context, bh BackgroundExec)
 	defer ses.mu.Unlock()
 	ses.gSysVars = sv
 	return
-}
-
-func (ses *Session) GetPrivilege() *privilege {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	return ses.priv
-}
-
-func (ses *Session) SetPrivilege(priv *privilege) {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	ses.priv = priv
 }
 
 func (ses *Session) SetDDLOwnerRoleID(roleID uint32) {
