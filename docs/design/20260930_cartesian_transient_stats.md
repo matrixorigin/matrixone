@@ -1,6 +1,6 @@
 # Transient optimizer statistics for Cartesian DML
 
-Current implementation contract: v11. Owning issues:
+Current implementation contract: v12. Owning issues:
 [#29497](https://github.com/matrixorigin/matrixone/issues/29497),
 [#29533](https://github.com/matrixorigin/matrixone/issues/29533),
 [#29534](https://github.com/matrixorigin/matrixone/issues/29534).
@@ -113,9 +113,21 @@ existing execution owner; estimates are not a universal memory/accuracy guarante
   snapshot-only cached copy anonymous if needed. Preserve tenant/schema binding.
 - One shared comparison checks normal TABLE_SCAN Stats.TableCnt against current
   StatsWithTableDef, passing ObjRef/TableDef/ScanSnapshot intact. Compare unfiltered
-  TableCnt, not runtime-filter-mutated Outcnt. nil maps to existing default1000:
-  cached1000 stays stable, cached5->nil rebuilds once. The comparison shares the
-  DefaultStats cardinality constant without allocating a full default object. Same-count object transition
+  TableCnt, not runtime-filter-mutated Outcnt. Ordinary cached plans tolerate
+  estimate drift below doubling/halving, compared with the immutable installed
+  generation rather than a sliding observation. This shared policy covers locking
+  reads, DELETE, ranges, aggregates and connected joins; no primary-key shape
+  exemption remains. It bounds per-scan estimate drift, not actual rows, join
+  products, bytes or memory, and can retain a less suitable placement near a
+  strategy threshold. Factor two is a reoptimization tradeoff, not a measured
+  optimum or a safety guarantee; oscillating across its boundaries may replan.
+  Executable Cartesian/RIGHT DEDUP plans and queries with background plans retain
+  exact checks. Classify joins reachable from every query step, not abandoned
+  construction nodes. Zero, invalid captured counts, unavailable observations
+  and the conservative uint64-domain maximum receive no drift allowance.
+  nil maps to existing default1000: cached1000 stays stable, cached5->nil rebuilds
+  once. The comparison shares the DefaultStats cardinality constant without
+  allocating a full default object. Same-count object transition
   alone does not rebuild; existing ranges/Reset refresh execution dependencies.
 - Ordinary SQL uses transaction-admitted dispatchStmt/checkModify and existing
   rebuildStaleCachedStatements. SQL/binary EXECUTE ORs the comparison into existing

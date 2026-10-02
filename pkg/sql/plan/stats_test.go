@@ -2911,6 +2911,19 @@ func TestCachedPlanStatsChanged(t *testing.T) {
 	}{
 		{"stable despite runtime filter", &pb.StatsInfo{TableCnt: 5}, 5, false},
 		{"growth", &pb.StatsInfo{TableCnt: 5000}, 5, true},
+		{"minor growth", &pb.StatsInfo{TableCnt: 148}, 128, false},
+		{"below doubling", &pb.StatsInfo{TableCnt: 255}, 128, false},
+		{"doubling", &pb.StatsInfo{TableCnt: 256}, 128, true},
+		{"above halving", &pb.StatsInfo{TableCnt: 129}, 256, false},
+		{"halving after rollback", &pb.StatsInfo{TableCnt: 128}, 256, true},
+		{"observed empty to one", &pb.StatsInfo{TableCnt: 1}, 0, true},
+		{"stable empty", &pb.StatsInfo{TableName: "events"}, 0, false},
+		{"missing despite nearby default", nil, 1001, true},
+		{"invalid captured", &pb.StatsInfo{TableCnt: 128}, math.NaN(), true},
+		{"invalid observation", &pb.StatsInfo{TableCnt: math.Inf(1)}, 128, true},
+		{"conservative max growth", &pb.StatsInfo{TableCnt: float64(^uint64(0))}, float64(^uint64(0)) / 1.5, true},
+		{"conservative max recovery", &pb.StatsInfo{TableCnt: float64(^uint64(0)) / 1.5}, float64(^uint64(0)), true},
+		{"stable conservative max", &pb.StatsInfo{TableCnt: float64(^uint64(0))}, float64(^uint64(0)), false},
 		{"same-count object transition", &pb.StatsInfo{TableName: "events", AccurateObjectNumber: 1, TableCnt: 5}, 5, false},
 		{"lost observation", nil, 5, true},
 		{"stable unknown default", nil, 1000, false},
@@ -3008,6 +3021,117 @@ func TestValueScanCardinality(t *testing.T) {
 				require.Equal(t, tc.want, b.qry.Nodes[3].Stats.HashmapStats.HashmapSize)
 				require.Equal(t, 10*tc.want, b.qry.Nodes[3].Stats.Outcnt)
 			}
+		})
+	}
+}
+
+func TestCachedPlanStatsAdmissionQueryShapes(t *testing.T) {
+	for _, tc := range []struct {
+		sql    string
+		strict bool
+	}{
+		{"select n_name from nation where n_nationkey=1", false},
+		{"update nation set n_regionkey=2 where n_nationkey=1", false},
+		{"select n_name from nation where n_nationkey=1 for update", false},
+		{"delete from nation where n_nationkey=1", false},
+		{"select sum(n_regionkey) from nation where n_nationkey>1", false},
+		{"select n_name from nation where n_nationkey>1 order by n_nationkey", false},
+		{"select n_name from nation where n_nationkey>1", false},
+		{"select n_name from nation cross join region", true},
+		{"update nation set n_regionkey=2 where n_nationkey>1", false},
+		{"select n_name from nation where cast(n_nationkey as double)=1", false},
+		{"select n_name from nation limit 1", false},
+		{"select ps_availqty from partsupp where ps_partkey=1 and ps_suppkey=2", false},
+		{"select ps_availqty from partsupp where ps_partkey=1", false},
+		{"select n_name from nation where cast(n_nationkey as bigint)=1", false},
+		{"select n_name from nation where n_nationkey in (1,2)", false},
+		{"select n_name from nation where n_nationkey=1 or n_nationkey=2", false},
+		{"select n_name from nation join region on n_regionkey=r_regionkey where n_nationkey=1", false},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			ctx := &tableDefStatsTestCompilerContext{MockCompilerContext: NewMockCompilerContext(true)}
+			// The legacy TPCH mock uses cluster-key metadata with empty key
+			// names. Supply a real composite primary-key catalog for this test.
+			table := ctx.tables["partsupp"]
+			table.Pkey = &planpb.PrimaryKeyDef{PkeyColName: catalog.CPrimaryKeyColName, Names: []string{"ps_partkey", "ps_suppkey"}}
+			hidden := MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
+			table.Pkey.CompPkeyCol = hidden
+			table.Cols = append(table.Cols, hidden)
+
+			stmts, err := mysql.Parse(ctx.GetContext(), tc.sql, 1)
+			require.NoError(t, err)
+			defer stmts[0].Free()
+			p, err := BuildPlan(ctx, stmts[0], false)
+			require.NoError(t, err)
+			require.Equal(t, tc.strict, cachedPlanRequiresExactStats(p.GetQuery()), "%s", p.String())
+			for _, node := range p.GetQuery().Nodes {
+				if node.NodeType == planpb.Node_TABLE_SCAN {
+					node.Stats.TableCnt = 128
+				}
+			}
+			for _, rows := range []float64{129, 148, 255, 128, 256} {
+				ctx.stats = &pb.StatsInfo{TableCnt: rows}
+				changed, err := CachedPlanStatsChanged(p, ctx)
+				require.NoError(t, err)
+				require.Equal(t, rows == 256 || tc.strict && rows != 128, changed)
+			}
+			for _, node := range p.GetQuery().Nodes {
+				if node.NodeType == planpb.Node_TABLE_SCAN {
+					require.Equal(t, float64(128), node.Stats.TableCnt)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkCachedPointPlanAdmission(b *testing.B) {
+	ctx := NewMockCompilerContext(false)
+	stmts, err := mysql.Parse(ctx.GetContext(), "select n_name from nation where n_nationkey=1", 1)
+	require.NoError(b, err)
+	defer stmts[0].Free()
+	p, err := BuildPlan(ctx, stmts[0], false)
+	require.NoError(b, err)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		changed, err := CachedPlanStatsChanged(p, ctx)
+		if err != nil || changed {
+			b.Fatal("point admission failed", err)
+		}
+	}
+}
+
+func TestCachedPlanStrictStatsReachability(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		joinType planpb.Node_JoinType
+		right    bool
+	}{
+		{"cartesian", planpb.Node_INNER, false}, {"resident dedup", planpb.Node_DEDUP, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scan := &planpb.Node{NodeType: planpb.Node_TABLE_SCAN, TableDef: &planpb.TableDef{Name: "events"}, ObjRef: &planpb.ObjectRef{Obj: 42}, Stats: &planpb.Stats{TableCnt: 128}}
+			q := &planpb.Query{Nodes: []*planpb.Node{scan,
+				{NodeType: planpb.Node_JOIN, JoinType: tc.joinType, IsRightJoin: tc.right, Children: []int32{0, 0}}}, Steps: []int32{0}}
+			p := &planpb.Plan{Plan: &planpb.Plan_Query{Query: q}}
+			ctx := &tableDefStatsTestCompilerContext{MockCompilerContext: NewMockCompilerContext(false), stats: &pb.StatsInfo{TableCnt: 129}}
+			changed, err := CachedPlanStatsChanged(p, ctx)
+			require.NoError(t, err)
+			require.False(t, changed, "abandoned construction joins are not executable")
+			q.Steps = append(q.Steps, 1)
+			changed, err = CachedPlanStatsChanged(p, ctx)
+			require.NoError(t, err)
+			require.True(t, changed, "every executable step contributes its contract")
+			ctx.stats.TableCnt = 128
+			changed, err = CachedPlanStatsChanged(p, ctx)
+			require.NoError(t, err)
+			require.False(t, changed, "strict admission still allows stable reuse")
+			q.Steps = []int32{0}
+			q.BackgroundQueries = []*planpb.Query{{}}
+			ctx.stats.TableCnt = 129
+			changed, err = CachedPlanStatsChanged(p, ctx)
+			require.NoError(t, err)
+			require.True(t, changed, "background contracts retain exact admission")
 		})
 	}
 }
