@@ -6324,6 +6324,48 @@ func TestUnionOneMetadataTransitions(t *testing.T) {
 	}
 }
 
+func TestUnionOneOrdinaryMetadataAfterNullPrefix(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_int64.ToType())
+	destination := NewVec(types.T_int64.ToType())
+	t.Cleanup(func() {
+		destination.Free(mp)
+		source.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+	require.NoError(t, AppendFixed(source, int64(7), false, mp))
+	require.NoError(t, AppendFixed(destination, int64(0), true, mp))
+	destination.SetPrepareParamType(types.T_int16)
+	destination.SetPreparedJSONComparisonParam()
+	require.NoError(t, destination.UnionOne(source, 0, mp))
+	require.True(t, destination.IsNull(0))
+	require.Equal(t, int64(7), MustFixedColNoTypeCheck[int64](destination)[1])
+	require.Equal(t, types.T_any, destination.GetPrepareParamType())
+	require.False(t, destination.IsPreparedJSONComparisonParam())
+	require.True(t, destination.HasPrepareParamKind())
+	require.Equal(t, PrepareParamNone, destination.GetPrepareParamKind())
+}
+
+func TestUnionOneFinalizesCollapsedStringSourcePreflight(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_varchar.ToType())
+	destination := NewVec(types.T_varchar.ToType())
+	t.Cleanup(func() {
+		destination.Free(mp)
+		source.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+	require.NoError(t, AppendBytes(source, []byte("value"), false, mp))
+	require.NoError(t, AppendBytes(destination, []byte("prefix"), false, mp))
+	require.NoError(t, destination.PreflightSetStringSourceAtLength(1, 2, types.StringSourceLiteral, mp))
+	require.True(t, destination.preflightStringSourceReady)
+	require.NoError(t, destination.SetStringSource(types.StringSourceExpression))
+	require.Nil(t, destination.stringSources)
+	require.NoError(t, destination.UnionOne(source, 0, mp))
+	require.False(t, destination.preflightStringSourceReady)
+	require.Equal(t, []string{"prefix", "value"}, []string{destination.GetStringAt(0), destination.GetStringAt(1)})
+}
+
 func BenchmarkUnionOneUniformMetadata(b *testing.B) {
 	for _, oid := range []types.T{types.T_int64, types.T_varchar} {
 		for _, kind := range []PrepareParamKind{PrepareParamNone, PrepareParamInteger} {
