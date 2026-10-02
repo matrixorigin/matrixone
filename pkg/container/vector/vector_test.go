@@ -4797,6 +4797,118 @@ func TestInplaceSortMarksSupportedVectorsSortedWithoutCompacting(t *testing.T) {
 	require.False(t, unsupported.GetSorted())
 }
 
+// lowPrecValueOrderingCase exercises the container ordering/aggregation paths for one
+// low-precision float type, asserting they order/aggregate by FLOAT VALUE, not raw bits.
+func lowPrecValueOrderingCase[T types.LowPrecFloat](
+	t *testing.T, oid types.T, from func(float32) T,
+) {
+	mp := mpool.MustNew(t.Name())
+
+	// Values exactly representable in ALL four formats (float4 magnitudes are
+	// {0,.5,1,1.5,2,3,4,6}). Negatives are the discriminator: a negative float's raw
+	// uint bits exceed a positive's, so a bit-wise sort would reverse them.
+	vals := []float32{2.0, -1.0, -3.0, 0.5}
+	wantSorted := []float32{-3.0, -1.0, 0.5, 2.0}
+
+	build := func(fs []float32) *Vector {
+		v := NewVec(oid.ToType())
+		for _, f := range fs {
+			require.NoError(t, AppendFixed(v, from(f), false, mp))
+		}
+		return v
+	}
+	toF := func(v *Vector) []float32 {
+		col := MustFixedColNoTypeCheck[T](v)
+		out := make([]float32, len(col))
+		for i := range col {
+			out[i] = col[i].ToFloat32()
+		}
+		return out
+	}
+
+	// InplaceSort: value order (negatives first), no compaction.
+	v := build(vals)
+	require.True(t, supportsInplaceSort(oid))
+	v.InplaceSort()
+	require.Equal(t, wantSorted, toF(v), "InplaceSort")
+	require.True(t, v.GetSorted())
+	v.Free(mp)
+
+	// compareVectorRows: -3.0 (row 2) < 2.0 (row 0); a raw-bit compare would say the
+	// negative is larger.
+	v = build(vals)
+	require.Less(t, compareVectorRows(v, 2, 0), 0, "compareVectorRows neg<pos")
+	require.Greater(t, compareVectorRows(v, 0, 1), 0, "compareVectorRows 2.0>-1.0")
+	v.Free(mp)
+
+	// InplaceSortAndCompact: dedup by value (+0/-0 collapse; here plain dups).
+	v = build([]float32{1.0, -1.0, 1.0, -1.0})
+	v.InplaceSortAndCompact()
+	require.Equal(t, []float32{-1.0, 1.0}, toF(v), "InplaceSortAndCompact")
+	require.True(t, v.GetSorted())
+	v.Free(mp)
+
+	// GetSumValue: widened float64 sum = 2-1-3+0.5 = -1.5.
+	v = build(vals)
+	ok, sumBytes := v.GetSumValue()
+	require.True(t, ok)
+	require.InDelta(t, -1.5, types.DecodeFloat64(sumBytes), 1e-6, "GetSumValue")
+	v.Free(mp)
+
+	// GetMinMaxValue: by value, min=-3.0 max=2.0.
+	v = build(vals)
+	ok, minBytes, maxBytes := v.GetMinMaxValue()
+	require.True(t, ok)
+	require.Equal(t, float32(-3.0), types.DecodeFixed[T](minBytes).ToFloat32(), "GetMinMaxValue min")
+	require.Equal(t, float32(2.0), types.DecodeFixed[T](maxBytes).ToFloat32(), "GetMinMaxValue max")
+	v.Free(mp)
+}
+
+// TestLowPrecFloatContainerValueOrdering covers the Layer-4 container paths for the
+// scalar low-precision float types (#20567): they must order/aggregate by float value
+// (via ToFloat32), never by the raw uint bits, whose sign bit inverts float order.
+func TestLowPrecFloatContainerValueOrdering(t *testing.T) {
+	t.Run("bf16", func(t *testing.T) {
+		lowPrecValueOrderingCase(t, types.T_bf16, types.BF16FromFloat32)
+	})
+	t.Run("float16", func(t *testing.T) {
+		lowPrecValueOrderingCase(t, types.T_float16, types.Float16FromFloat32)
+	})
+	t.Run("float8", func(t *testing.T) {
+		lowPrecValueOrderingCase(t, types.T_float8, types.Float8FromFloat32)
+	})
+	t.Run("float4", func(t *testing.T) {
+		lowPrecValueOrderingCase(t, types.T_float4, types.Float4FromFloat32)
+	})
+}
+
+// TestLowPrecFloatGetMinMaxSkipsNaN verifies NaN never poisons the zonemap bounds
+// (bf16/float16/float8 have a NaN encoding; float4 has none).
+func TestLowPrecFloatGetMinMaxSkipsNaN(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	nan := float32(math.NaN())
+
+	// bf16 with a NaN mixed in: min/max come from the finite values only.
+	v := NewVec(types.T_bf16.ToType())
+	for _, f := range []float32{nan, -2.0, 4.0, nan} {
+		require.NoError(t, AppendFixed(v, types.BF16FromFloat32(f), false, mp))
+	}
+	ok, minB, maxB := v.GetMinMaxValue()
+	require.True(t, ok)
+	require.Equal(t, float32(-2.0), types.DecodeFixed[types.BF16](minB).ToFloat32())
+	require.Equal(t, float32(4.0), types.DecodeFixed[types.BF16](maxB).ToFloat32())
+	v.Free(mp)
+
+	// All-NaN bf16: no comparable value → ok=false, zonemap left uninitialized.
+	v = NewVec(types.T_bf16.ToType())
+	for i := 0; i < 3; i++ {
+		require.NoError(t, AppendFixed(v, types.BF16FromFloat32(nan), false, mp))
+	}
+	ok, _, _ = v.GetMinMaxValue()
+	require.False(t, ok)
+	v.Free(mp)
+}
+
 func TestVarlenaAreaDisjointLifecycle(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
@@ -6981,6 +7093,85 @@ func TestStringSourceGenericNullAppendUsesExpression(t *testing.T) {
 	mixed.Free(mp)
 
 	require.Zero(t, mp.CurrNB())
+}
+
+// TestLowPrecFloatAccessMovement exercises the access/movement/string switches for the
+// scalar low-precision float types (bf16/float16/float8/float4) so each per-type arm is
+// covered: GetAny/AppendAny round-trip, Shrink, ShrinkByMask, Shuffle, ShuffleWithBuf,
+// String, RowToString, and NewFunctionResultWrapper (#20567).
+func TestLowPrecFloatAccessMovement(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+
+	cases := []struct {
+		oid types.T
+		mk  func(float32) any
+	}{
+		{types.T_bf16, func(f float32) any { return types.BF16FromFloat32(f) }},
+		{types.T_float16, func(f float32) any { return types.Float16FromFloat32(f) }},
+		{types.T_float8, func(f float32) any { return types.Float8FromFloat32(f) }},
+		{types.T_float4, func(f float32) any { return types.Float4FromFloat32(f) }},
+	}
+
+	for _, c := range cases {
+		t.Run(c.oid.String(), func(t *testing.T) {
+			// AppendAny builds the column; GetAny reads it back.
+			v := NewVec(c.oid.ToType())
+			for _, f := range []float32{1.0, -2.0, 0.5, 4.0} {
+				require.NoError(t, AppendAny(v, c.mk(f), false, mp))
+			}
+			require.Equal(t, c.mk(1.0), GetAny(v, 0, true))
+			require.Equal(t, c.mk(-2.0), GetAny(v, 1, true))
+
+			// String and RowToString must not panic and render the row.
+			_ = v.String()
+			require.NotEmpty(t, v.RowToString(0))
+
+			// NewFunctionResultWrapper builds a result vector for the type.
+			rw := NewFunctionResultWrapper(c.oid.ToType(), mp)
+			require.NotNil(t, rw)
+			rw.Free()
+
+			// Shuffle reorders in place.
+			require.NoError(t, v.Shuffle([]int64{3, 2, 1, 0}, mp))
+			require.Equal(t, c.mk(4.0), GetAny(v, 0, true))
+			v.Free(mp)
+
+			// ShuffleWithBuf.
+			v2 := NewVec(c.oid.ToType())
+			for _, f := range []float32{1.0, 2.0, 3.0} {
+				require.NoError(t, AppendAny(v2, c.mk(f), false, mp))
+			}
+			var buf []byte
+			require.NoError(t, v2.ShuffleWithBuf([]int64{2, 1, 0}, mp, &buf))
+			require.Equal(t, c.mk(3.0), GetAny(v2, 0, true))
+			v2.Free(mp)
+
+			// Shrink keeps selected rows.
+			v3 := NewVec(c.oid.ToType())
+			for _, f := range []float32{1.0, 2.0, 3.0, 4.0} {
+				require.NoError(t, AppendAny(v3, c.mk(f), false, mp))
+			}
+			v3.Shrink([]int64{0, 2}, false)
+			require.Equal(t, 2, v3.Length())
+			require.Equal(t, c.mk(1.0), GetAny(v3, 0, true))
+			require.Equal(t, c.mk(3.0), GetAny(v3, 1, true))
+			v3.Free(mp)
+
+			// ShrinkByMask.
+			v4 := NewVec(c.oid.ToType())
+			for _, f := range []float32{1.0, 2.0, 3.0, 4.0} {
+				require.NoError(t, AppendAny(v4, c.mk(f), false, mp))
+			}
+			var bm bitmap.Bitmap
+			bm.InitWithSize(4)
+			bm.Add(1)
+			bm.Add(3)
+			v4.ShrinkByMask(&bm, false, 0)
+			require.Equal(t, 2, v4.Length())
+			require.Equal(t, c.mk(2.0), GetAny(v4, 0, true))
+			v4.Free(mp)
+		})
+	}
 }
 
 func TestBoolMinMax(t *testing.T) {

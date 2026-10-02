@@ -969,6 +969,21 @@ func unaryMinusMatch(overloads []overload, inputs []types.Type) checkResult {
 			// use the historical BIGINT overload after an explicit widening cast,
 			// so old workers execute the same physical argument/result contract.
 			return newCheckResultWithCast(3, []types.Type{types.T_int64.ToType()})
+		case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+			// The low-precision floats widen losslessly to float32 (overload 4).
+			return newCheckResultWithCast(4, []types.Type{types.T_float32.ToType()})
+		}
+	}
+	return fixedTypeMatch(overloads, inputs)
+}
+
+// unaryPlusMatch widens a low-precision float operand to float32 (overload 8); every
+// other type keeps its existing unary-plus overload.
+func unaryPlusMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 1 {
+		switch inputs[0].Oid {
+		case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+			return newCheckResultWithCast(8, []types.Type{types.T_float32.ToType()})
 		}
 	}
 	return fixedTypeMatch(overloads, inputs)

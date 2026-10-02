@@ -4605,7 +4605,7 @@ func prepareParamKindFromType(oid types.T) vector.PrepareParamKind {
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_year:
 		return vector.PrepareParamInteger
-	case types.T_float32, types.T_float64:
+	case types.T_float32, types.T_float64, types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
 		return vector.PrepareParamFloat
 	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		return vector.PrepareParamDecimal

@@ -2579,6 +2579,18 @@ func buildColumnDomainExpr(ctx context.Context, colExpr *plan.Expr, values []*pl
 			stripped[0],
 		})
 	}
+	if types.T(colExpr.Typ.Id).IsLowPrecisionFloat() {
+		// bf16/float16/float8/float4 have no IN kernel: a disjunction of equalities
+		eqs := make([]*plan.Expr, len(stripped))
+		for i, v := range stripped {
+			eq, err := BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{DeepCopyExpr(colExpr), v})
+			if err != nil {
+				return nil, err
+			}
+			eqs[i] = eq
+		}
+		return combinePlanDisjunction(ctx, eqs)
+	}
 	listExpr := &plan.Expr{
 		Typ: colExpr.Typ,
 		Expr: &plan.Expr_List{

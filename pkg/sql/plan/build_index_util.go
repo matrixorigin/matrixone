@@ -225,12 +225,35 @@ func indexColumnCheckKind(indexType tree.IndexType) string {
 	}
 }
 
+// lowPrecisionFloatKeyError rejects a bf16, float16, float8 or float4 column as a key part:
+// key encoding, locking and TN merge/dedup have no support for these types. kind is
+// "primary", "unique", "cluster" or another index kind.
+func lowPrecisionFloatKeyError(ctx context.Context, id int32, colName, kind string) error {
+	t := types.T(id)
+	if !t.IsLowPrecisionFloat() {
+		return nil
+	}
+	switch kind {
+	case "primary":
+		return moerr.NewNotSupported(ctx, fmt.Sprintf("%s column '%s' cannot be in primary key", t, colName))
+	case "unique":
+		return moerr.NewNotSupported(ctx, fmt.Sprintf("%s column '%s' cannot be in unique index", t, colName))
+	case "cluster":
+		return moerr.NewNotSupported(ctx, fmt.Sprintf("%s column '%s' cannot be a cluster by key", t, colName))
+	default:
+		return moerr.NewNotSupported(ctx, fmt.Sprintf("%s column '%s' cannot be in index", t, colName))
+	}
+}
+
 func checkIndexColumnSupportability(ctx context.Context, col *ColDef, keyPart *tree.KeyPart, indexKind string) error {
 	if col == nil || keyPart == nil || keyPart.ColName == nil {
 		return moerr.NewInternalError(ctx, "index column definition is nil")
 	}
 
 	colName := keyPart.ColName.ColNameOrigin()
+	if err := lowPrecisionFloatKeyError(ctx, col.Typ.Id, colName, indexKind); err != nil {
+		return err
+	}
 
 	switch col.Typ.Id {
 	case int32(types.T_blob):
@@ -249,7 +272,8 @@ func checkIndexColumnSupportability(ctx context.Context, col *ColDef, keyPart *t
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("JSON column '%s' cannot be in index", colName))
 	case int32(types.T_array_float32), int32(types.T_array_float64),
 		int32(types.T_array_float16), int32(types.T_array_bf16),
-		int32(types.T_array_int8), int32(types.T_array_uint8):
+		int32(types.T_array_int8), int32(types.T_array_uint8),
+		int32(types.T_array_float8), int32(types.T_array_float4):
 		// A vector column is valid only as the key of a vector index, AND only if
 		// that algorithm supports this element type. Delegate to the plugin's
 		// catalog hook (SupportedVectorTypes) rather than hardcoding — each algo

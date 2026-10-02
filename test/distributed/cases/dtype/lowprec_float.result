@@ -1,0 +1,296 @@
+DROP DATABASE IF EXISTS lowprec_float;
+CREATE DATABASE lowprec_float;
+USE lowprec_float;
+CREATE TABLE t (id INT PRIMARY KEY, a bf16, b float16, c float8, d float4);
+INSERT INTO t VALUES (1, 1.5, 1.5, 1.5, 1.5), (2, -2.0, -2.0, -2.0, -2.0), (3, 0, 0, 0, 0), (4, NULL, NULL, NULL, NULL);
+SELECT id, a, b, c, d FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  a[7,24,0]  ¦  b[7,24,0]  ¦  c[7,24,0]  ¦  d[7,24,0]  𝄀
+1  ¦  1.5  ¦  1.5  ¦  1.5  ¦  1.5  𝄀
+2  ¦  -2.0  ¦  -2.0  ¦  -2.0  ¦  -2.0  𝄀
+3  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0.0  𝄀
+4  ¦  null  ¦  null  ¦  null  ¦  null
+DROP TABLE IF EXISTS r;
+CREATE TABLE r (id INT PRIMARY KEY, v float4);
+INSERT INTO r VALUES (1, 0.5), (2, 1), (3, 1.5), (4, 2), (5, 3), (6, 4), (7, 6), (8, -6);
+SELECT id, v FROM r ORDER BY id;
+➤ id[4,32,0]  ¦  v[7,24,0]  𝄀
+1  ¦  0.5  𝄀
+2  ¦  1.0  𝄀
+3  ¦  1.5  𝄀
+4  ¦  2.0  𝄀
+5  ¦  3.0  𝄀
+6  ¦  4.0  𝄀
+7  ¦  6.0  𝄀
+8  ¦  -6.0
+SELECT id, a FROM t WHERE a IS NOT NULL ORDER BY a;
+➤ id[4,32,0]  ¦  a[7,24,0]  𝄀
+2  ¦  -2.0  𝄀
+3  ¦  0.0  𝄀
+1  ¦  1.5
+SELECT id, v FROM r ORDER BY v DESC;
+➤ id[4,32,0]  ¦  v[7,24,0]  𝄀
+7  ¦  6.0  𝄀
+6  ¦  4.0  𝄀
+5  ¦  3.0  𝄀
+4  ¦  2.0  𝄀
+3  ¦  1.5  𝄀
+2  ¦  1.0  𝄀
+1  ¦  0.5  𝄀
+8  ¦  -6.0
+SELECT id FROM t WHERE a < 0 ORDER BY id;
+➤ id[4,32,0]  𝄀
+2
+SELECT id FROM r WHERE v >= 2 ORDER BY id;
+➤ id[4,32,0]  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7
+SELECT id, a + b AS ab, c * 2 AS c2, d - 1 AS dm FROM t WHERE id = 1;
+➤ id[4,32,0]  ¦  ab[7,23,31]  ¦  c2[8,53,31]  ¦  dm[8,53,31]  𝄀
+1  ¦  3.0  ¦  3.0  ¦  0.5
+SELECT SUM(v), AVG(v), MIN(v), MAX(v) FROM r;
+➤ SUM(v)[8,53,31]  ¦  AVG(v)[8,53,31]  ¦  MIN(v)[7,23,31]  ¦  MAX(v)[7,23,31]  𝄀
+12.0  ¦  1.5  ¦  -6.0  ¦  6.0
+SELECT COUNT(a), MIN(a), MAX(a) FROM t;
+➤ COUNT(a)[-5,64,0]  ¦  MIN(a)[7,23,31]  ¦  MAX(a)[7,23,31]  𝄀
+3  ¦  -2.0  ¦  1.5
+SELECT CAST(3.5 AS bf16) AS bf, CAST(2 AS float8) AS f8, CAST(1.5 AS float4) AS f4;
+➤ bf[7,24,0]  ¦  f8[7,24,0]  ¦  f4[7,24,0]  𝄀
+3.5  ¦  2.0  ¦  1.5
+SELECT CAST(a AS DOUBLE) AS ad, CAST(c AS INT) AS ci FROM t WHERE id = 1;
+➤ ad[8,53,31]  ¦  ci[4,32,0]  𝄀
+1.5  ¦  2
+SELECT CAST('4' AS float8) AS s8;
+➤ s8[7,24,0]  𝄀
+4.0
+SELECT CAST('7' AS float4);
+Data truncation: data out of range: data type FLOAT4, value 7
+SELECT CAST('1000' AS float8);
+Data truncation: data out of range: data type FLOAT8, value 1000
+SELECT CAST(7 AS float4);
+Data truncation: data out of range: data type FLOAT4, value 7
+SELECT CAST(1000 AS float8);
+Data truncation: data out of range: data type FLOAT8, value 1000
+SELECT CAST(70000 AS float16);
+Data truncation: data out of range: data type FLOAT16, value 70000
+SELECT CAST(1e300 AS bf16);
+invalid input: value +Inf is not a finite BF16
+SELECT CAST('inf' AS float8);
+invalid input: value +Inf is not a finite FLOAT8
+SELECT CAST('nan' AS bf16);
+invalid input: value NaN is not a finite BF16
+SELECT CAST('-inf' AS float16);
+invalid input: value -Inf is not a finite FLOAT16
+SELECT CAST(1e308 * 100 AS bf16);
+Data truncation: data out of range: data type float64, DOUBLE value is out of range in '(1e+308 * 100)'
+SELECT CAST(6 * 2 AS float4);
+Data truncation: data out of range: data type FLOAT4, value 12
+DROP TABLE IF EXISTS t2_ovf;
+CREATE TABLE t2_ovf (id INT PRIMARY KEY, a float4, b float4);
+INSERT INTO t2_ovf VALUES (1, 3, 4);
+SELECT CAST(a + b AS float4) FROM t2_ovf;
+Data truncation: data out of range: data type FLOAT4, value 7
+SELECT CAST(0.015 AS float8);
+➤ cast(0.015 as float8)[7,24,0]  𝄀
+0.015625
+SELECT CAST(0.001953125 AS float8), CAST(0.0001 AS float8);
+➤ cast(0.001953125 as float8)[7,24,0]  ¦  cast(0.0001 as float8)[7,24,0]  𝄀
+0.001953125  ¦  0.0
+SELECT CAST(0.5 AS float4), CAST(0.25 AS float4);
+➤ cast(0.5 as float4)[7,24,0]  ¦  cast(0.25 as float4)[7,24,0]  𝄀
+0.5  ¦  0.0
+DROP TABLE IF EXISTS d256;
+CREATE TABLE d256 (id INT PRIMARY KEY, v decimal(40,2));
+INSERT INTO d256 VALUES (1, 2.00), (2, -3.50);
+SELECT id, CAST(v AS bf16) AS b, CAST(v AS float8) AS c FROM d256 ORDER BY id;
+➤ id[4,32,0]  ¦  b[7,24,0]  ¦  c[7,24,0]  𝄀
+1  ¦  2.0  ¦  2.0  𝄀
+2  ¦  -3.5  ¦  -3.5
+DROP TABLE IF EXISTS t2;
+CREATE TABLE t2 (id INT PRIMARY KEY, a bf16, c float8);
+INSERT INTO t2 SELECT id, a, c FROM t WHERE a IS NOT NULL;
+SELECT id, a, c FROM t2 ORDER BY id;
+➤ id[4,32,0]  ¦  a[7,24,0]  ¦  c[7,24,0]  𝄀
+1  ¦  1.5  ¦  1.5  𝄀
+2  ¦  -2.0  ¦  -2.0  𝄀
+3  ¦  0.0  ¦  0.0
+CREATE TABLE lp (id INT PRIMARY KEY, a bf16, b float16, c float8, d float4);
+INSERT INTO lp VALUES (1, 1, 1, 1, 1), (2, 2, 2, 2, 2), (3, 0, 0, 0, 0), (4, -0.1, -0.1, -0.1, -0.1), (5, NULL, NULL, NULL, NULL), (6, 1.5, 1.5, 1.5, 1.5);
+SELECT * FROM lp ORDER BY id LIMIT 3;
+➤ id[4,32,0]  ¦  a[7,24,0]  ¦  b[7,24,0]  ¦  c[7,24,0]  ¦  d[7,24,0]  𝄀
+1  ¦  1.0  ¦  1.0  ¦  1.0  ¦  1.0  𝄀
+2  ¦  2.0  ¦  2.0  ¦  2.0  ¦  2.0  𝄀
+3  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0.0
+SELECT id, a FROM lp ORDER BY a DESC, id LIMIT 3;
+➤ id[4,32,0]  ¦  a[7,24,0]  𝄀
+2  ¦  2.0  𝄀
+6  ¦  1.5  𝄀
+1  ¦  1.0
+SELECT id, RANK() OVER (ORDER BY b), LAG(c) OVER (ORDER BY id), LAST_VALUE(d) OVER (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) FROM lp ORDER BY id;
+➤ id[4,32,0]  ¦  RANK() over (order by b)[-5,64,0]  ¦  LAG(c) over (order by id)[7,24,0]  ¦  LAST_VALUE(d) over (order by id rows between unbounded preceding and unbounded following)[7,24,0]  𝄀
+1  ¦  4  ¦  null  ¦  1.5  𝄀
+2  ¦  6  ¦  1.0  ¦  1.5  𝄀
+3  ¦  3  ¦  2.0  ¦  1.5  𝄀
+4  ¦  2  ¦  0.0  ¦  1.5  𝄀
+5  ¦  1  ¦  -0.1015625  ¦  1.5  𝄀
+6  ¦  5  ¦  null  ¦  1.5
+SELECT id, SUM(id) OVER (PARTITION BY d ORDER BY id) FROM lp ORDER BY id;
+➤ id[4,32,0]  ¦  SUM(id) over (partition by d order by id)[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+4  ¦  7  𝄀
+5  ¦  5  𝄀
+6  ¦  6
+SELECT id, SUM(id) OVER (ORDER BY a RANGE BETWEEN 1 PRECEDING AND CURRENT ROW) FROM lp ORDER BY id;
+➤ id[4,32,0]  ¦  SUM(id) over (order by a range between 1 preceding and current row)[-5,64,0]  𝄀
+1  ¦  4  𝄀
+2  ¦  9  𝄀
+3  ¦  7  𝄀
+4  ¦  4  𝄀
+5  ¦  5  𝄀
+6  ¦  7
+SELECT d, COUNT(*) FROM lp WHERE id IN (3, 4) GROUP BY d;
+➤ d[7,24,0]  ¦  COUNT(*)[-5,64,0]  𝄀
+0.0  ¦  2
+SELECT COUNT(DISTINCT d), COUNT(DISTINCT a) FROM lp WHERE id IN (3, 4);
+➤ COUNT(distinct d)[-5,64,0]  ¦  COUNT(distinct a)[-5,64,0]  𝄀
+1  ¦  2
+SELECT ANY_VALUE(a), MEDIAN(b), STDDEV(c), GROUP_CONCAT(d ORDER BY id) FROM lp WHERE id < 3;
+➤ ANY_VALUE(a)[7,23,31]  ¦  MEDIAN(b)[8,53,31]  ¦  STDDEV(c)[8,53,31]  ¦  GROUP_CONCAT(d order by id separator ,)[-1,16383,0]  𝄀
+1.0  ¦  1.5  ¦  0.5  ¦  1,2
+SELECT JSON_ARRAYAGG(a), JSON_OBJECTAGG('k', b) FROM lp WHERE id = 2;
+➤ JSON_ARRAYAGG(a)[-1,2147483647,0]  ¦  JSON_OBJECTAGG(k, b)[-1,2147483647,0]  𝄀
+[2]  ¦  {"k": 2}
+SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY c), PERCENTILE_DISC(0.5) WITHIN GROUP (ORDER BY d) FROM lp;
+➤ PERCENTILE_CONT(0.5) within group (order by c)[8,53,31]  ¦  PERCENTILE_DISC(0.5) within group (order by d)[7,23,31]  𝄀
+1.0  ¦  1.0
+SELECT COALESCE(a, 0), IFNULL(b, 1), GREATEST(c, 1), IF(d > 1, 'y', 'n'), JSON_OBJECT('k', a) FROM lp ORDER BY id;
+➤ COALESCE(a, 0)[7,23,31]  ¦  IFNULL(b, 1)[7,23,31]  ¦  GREATEST(c, 1)[8,53,31]  ¦  IF(d > 1, y, n)[12,1,0]  ¦  JSON_OBJECT(k, a)[-1,2147483647,0]  𝄀
+1.0  ¦  1.0  ¦  1.0  ¦  n  ¦  {"k": 1}  𝄀
+2.0  ¦  2.0  ¦  2.0  ¦  y  ¦  {"k": 2}  𝄀
+0.0  ¦  0.0  ¦  1.0  ¦  n  ¦  {"k": 0}  𝄀
+-0.100097656  ¦  -0.099975586  ¦  1.0  ¦  n  ¦  {"k": -0.10009765625}  𝄀
+0.0  ¦  1.0  ¦  null  ¦  n  ¦  {"k": null}  𝄀
+1.5  ¦  1.5  ¦  1.5  ¦  y  ¦  {"k": 1.5}
+SELECT a FROM lp INTERSECT SELECT a FROM lp WHERE id < 3 ORDER BY 1;
+➤ a[7,23,31]  𝄀
+1.0  𝄀
+2.0
+SET @v = (SELECT b FROM lp WHERE id = 2);
+SELECT @v, @v + 1;
+➤ @v[7,24,0]  ¦  @v + 1[-5,64,0]  𝄀
+2.0  ¦  3
+INSERT INTO lp VALUES (6, 1.5, 1.5, 1.5, 1.5) ON DUPLICATE KEY UPDATE a = VALUES(a);
+SELECT ROW_COUNT();
+➤ ROW_COUNT()[-5,64,0]  𝄀
+1
+UPDATE lp SET a = 3 WHERE id = 6;
+SELECT id, a FROM lp WHERE id = 6;
+➤ id[4,32,0]  ¦  a[7,24,0]  𝄀
+6  ¦  3.0
+SELECT COUNT(*) FROM lp WHERE a = -0.1;
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT COUNT(*) FROM lp WHERE a = CAST(-0.1 AS bf16);
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT id FROM lp WHERE b IN (-0.1, 1.5) ORDER BY id;
+➤ id[4,32,0]  𝄀
+4  𝄀
+6
+SELECT id FROM lp WHERE c < 0.1 ORDER BY id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4
+SELECT COUNT(*) FROM lp WHERE c < 1000;
+➤ COUNT(*)[-5,64,0]  𝄀
+5
+SELECT id FROM lp WHERE b IN (CAST(1 AS float16), CAST(2 AS float16)) ORDER BY id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+SELECT id FROM lp WHERE c >= CAST(1 AS float8) AND d <> CAST(2 AS float4) ORDER BY id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+6
+SELECT id FROM lp WHERE a <=> CAST(NULL AS bf16);
+➤ id[4,32,0]  𝄀
+5
+DROP TABLE lp;
+CREATE TABLE kp (k bf16 PRIMARY KEY, v INT);
+not supported: BF16 column 'k' cannot be in primary key
+CREATE TABLE ku (id INT PRIMARY KEY, k float16 UNIQUE KEY);
+not supported: FLOAT16 column 'k' cannot be in unique index
+CREATE TABLE kc (k float4, j INT, PRIMARY KEY (k, j));
+not supported: FLOAT4 column 'k' cannot be in primary key
+CREATE TABLE ki (id INT PRIMARY KEY, k float8, KEY ik (k));
+not supported: FLOAT8 column 'k' cannot be in index
+CREATE TABLE kb (id INT, k float8) CLUSTER BY (k);
+not supported: FLOAT8 column 'k' cannot be a cluster by key
+CREATE INDEX ia ON t2 (a);
+not supported: BF16 column 'a' cannot be in index
+CREATE TABLE pp (id INT, b bf16, h float16, e float8, q float4);
+INSERT INTO pp VALUES (1, 0.3, 0.3, 0.3, 0.5), (2, 1.5, 1.5, 1.5, 1.5);
+PREPARE pb FROM 'SELECT id FROM pp WHERE b IN (?, 9) ORDER BY id';
+PREPARE ph FROM 'SELECT id FROM pp WHERE h IN (?, 9) ORDER BY id';
+PREPARE pe FROM 'SELECT id FROM pp WHERE e IN (?, 9) ORDER BY id';
+PREPARE pq FROM 'SELECT id FROM pp WHERE q = ? ORDER BY id';
+PREPARE nb FROM 'SELECT id FROM pp WHERE b NOT IN (?, 9) ORDER BY id';
+PREPARE eb FROM 'SELECT id FROM pp WHERE b = ? ORDER BY id';
+PREPARE lb FROM 'SELECT id FROM pp WHERE b <= ? ORDER BY id';
+SET @v = 0.3;
+EXECUTE pb USING @v;
+➤ id[4,32,0]  𝄀
+1
+EXECUTE ph USING @v;
+➤ id[4,32,0]  𝄀
+1
+EXECUTE pe USING @v;
+➤ id[4,32,0]  𝄀
+1
+EXECUTE nb USING @v;
+➤ id[4,32,0]  𝄀
+2
+EXECUTE eb USING @v;
+➤ id[4,32,0]  𝄀
+1
+EXECUTE lb USING @v;
+➤ id[4,32,0]  𝄀
+1
+SET @v = '0.3';
+EXECUTE pb USING @v;
+➤ id[4,32,0]  𝄀
+1
+EXECUTE eb USING @v;
+➤ id[4,32,0]  𝄀
+1
+SET @v = 0.5;
+EXECUTE pq USING @v;
+➤ id[4,32,0]  𝄀
+1
+SET @v = 1.5;
+EXECUTE pb USING @v;
+➤ id[4,32,0]  𝄀
+2
+EXECUTE nb USING @v;
+➤ id[4,32,0]  𝄀
+1
+SET @v = 1e30;
+EXECUTE pb USING @v;
+➤ id[4,32,0]
+EXECUTE eb USING @v;
+➤ id[4,32,0]
+EXECUTE lb USING @v;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+DEALLOCATE PREPARE pb;
+DEALLOCATE PREPARE ph;
+DEALLOCATE PREPARE pe;
+DEALLOCATE PREPARE pq;
+DEALLOCATE PREPARE nb;
+DEALLOCATE PREPARE eb;
+DEALLOCATE PREPARE lb;
+DROP DATABASE lowprec_float;

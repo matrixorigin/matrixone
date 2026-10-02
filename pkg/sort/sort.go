@@ -70,6 +70,7 @@ type sortType interface {
 	} | ~[]bool | ~[]int | ~[]int8 | ~[]int16 | ~[]int32 | ~[]int64 |
 		~[]uint | ~[]uint8 | ~[]uint16 | ~[]uint32 | ~[]uint64 | ~[]uintptr |
 		~[]float32 | ~[]float64 |
+		~[]types.BF16 | ~[]types.Float16 | ~[]types.Float8 | ~[]types.Float4 |
 		~[]types.Date | ~[]types.Datetime | ~[]types.Timestamp |
 		~[]types.Time | ~[]types.Enum | ~[]types.MoYear | ~[]types.TS |
 		~[]types.Decimal64 | ~[]types.Decimal128 | ~[]types.Decimal256 |
@@ -89,6 +90,7 @@ func IsSupportedType(typ types.T) bool {
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
+		types.T_bf16, types.T_float16, types.T_float8, types.T_float4,
 		types.T_uuid, types.T_date, types.T_datetime, types.T_time,
 		types.T_timestamp, types.T_enum, types.T_year,
 		types.T_decimal64, types.T_decimal128, types.T_decimal256,
@@ -96,7 +98,8 @@ func IsSupportedType(typ types.T) bool {
 		types.T_char, types.T_varchar, types.T_json, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink,
 		types.T_array_float32, types.T_array_float64, types.T_array_bf16,
-		types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+		types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4:
 		return true
 	default:
 		return false
@@ -297,6 +300,50 @@ func sortByVector(
 		} else {
 			genericSort(col, os, genericGreater[float64])
 		}
+	case types.T_bf16:
+		col := vector.MustFixedColNoTypeCheck[types.BF16](vec)
+		if sqlOrder && !desc {
+			genericSort(col, os, lowPrecOrderAscLess[types.BF16])
+		} else if sqlOrder {
+			genericSort(col, os, lowPrecOrderDescLess[types.BF16])
+		} else if !desc {
+			genericSort(col, os, lowPrecLess[types.BF16])
+		} else {
+			genericSort(col, os, lowPrecGreater[types.BF16])
+		}
+	case types.T_float16:
+		col := vector.MustFixedColNoTypeCheck[types.Float16](vec)
+		if sqlOrder && !desc {
+			genericSort(col, os, lowPrecOrderAscLess[types.Float16])
+		} else if sqlOrder {
+			genericSort(col, os, lowPrecOrderDescLess[types.Float16])
+		} else if !desc {
+			genericSort(col, os, lowPrecLess[types.Float16])
+		} else {
+			genericSort(col, os, lowPrecGreater[types.Float16])
+		}
+	case types.T_float8:
+		col := vector.MustFixedColNoTypeCheck[types.Float8](vec)
+		if sqlOrder && !desc {
+			genericSort(col, os, lowPrecOrderAscLess[types.Float8])
+		} else if sqlOrder {
+			genericSort(col, os, lowPrecOrderDescLess[types.Float8])
+		} else if !desc {
+			genericSort(col, os, lowPrecLess[types.Float8])
+		} else {
+			genericSort(col, os, lowPrecGreater[types.Float8])
+		}
+	case types.T_float4:
+		col := vector.MustFixedColNoTypeCheck[types.Float4](vec)
+		if sqlOrder && !desc {
+			genericSort(col, os, lowPrecOrderAscLess[types.Float4])
+		} else if sqlOrder {
+			genericSort(col, os, lowPrecOrderDescLess[types.Float4])
+		} else if !desc {
+			genericSort(col, os, lowPrecLess[types.Float4])
+		} else {
+			genericSort(col, os, lowPrecGreater[types.Float4])
+		}
 	case types.T_date:
 		col := vector.MustFixedColNoTypeCheck[types.Date](vec)
 		if !desc {
@@ -419,6 +466,14 @@ func sortByVector(
 			genericSort(col, os, arrayElementLess[uint8])
 		} else {
 			genericSort(col, os, arrayElementGreater[uint8])
+		}
+	case types.T_array_float8, types.T_array_float4:
+		// Order by the dequantized values, as vecf32 does.
+		col := blockScaledSortColumn(vec)
+		if !desc {
+			genericSort(col, os, arrayLess[float32])
+		} else {
+			genericSort(col, os, arrayGreater[float32])
 		}
 	case types.T_TS:
 		col := vector.MustFixedColNoTypeCheck[types.TS](vec)
@@ -591,6 +646,24 @@ func float32OrderAscLess(data []float32, i, j int64) bool {
 
 func float32OrderDescLess(data []float32, i, j int64) bool {
 	return types.Float32OrderDescCompare(data[i], data[j]) < 0
+}
+
+// Low-precision float comparators widen each element to float32 (raw bits do not order
+// floats) and reuse the float32 SQL NaN-aware ordering.
+func lowPrecOrderAscLess[T types.LowPrecFloat](data []T, i, j int64) bool {
+	return types.Float32OrderAscCompare(data[i].ToFloat32(), data[j].ToFloat32()) < 0
+}
+
+func lowPrecOrderDescLess[T types.LowPrecFloat](data []T, i, j int64) bool {
+	return types.Float32OrderDescCompare(data[i].ToFloat32(), data[j].ToFloat32()) < 0
+}
+
+func lowPrecLess[T types.LowPrecFloat](data []T, i, j int64) bool {
+	return data[i].ToFloat32() < data[j].ToFloat32()
+}
+
+func lowPrecGreater[T types.LowPrecFloat](data []T, i, j int64) bool {
+	return data[i].ToFloat32() > data[j].ToFloat32()
 }
 
 func float64OrderAscLess(data []float64, i, j int64) bool {
@@ -1104,4 +1177,19 @@ func reverseRange(a, b int, os []int64) {
 		i++
 		j--
 	}
+}
+
+// blockScaledSortColumn dequantizes a vecf8/vecf4 vector; a NULL or malformed cell
+// becomes an empty row.
+func blockScaledSortColumn(vec *vector.Vector) [][]float32 {
+	col := make([][]float32, vec.Length())
+	for i := range col {
+		if vec.IsNull(uint64(i)) {
+			continue
+		}
+		if v, err := types.BlockScaledToFloat32(vec.GetBytesAt(i)); err == nil {
+			col[i] = v
+		}
+	}
+	return col
 }

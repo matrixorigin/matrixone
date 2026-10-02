@@ -6928,6 +6928,98 @@ func TestDeleteSelfReferCascadeAcrossForeignKeys(t *testing.T) {
 	requireRecursiveCTESources(t, query)
 }
 
+// TestLowPrecisionFloatLiteralNarrowing checks that a comparison of a bf16 column with a
+// numeric literal inside the type's range compares in the column's precision (the column
+// is not cast), and that an out-of-range literal keeps the widened comparison.
+func TestLowPrecisionFloatLiteralNarrowing(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	firstFilter := func(sql string) *plan.Expr {
+		p, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, sql)
+		for _, n := range p.GetQuery().Nodes {
+			if len(n.FilterList) > 0 {
+				return n.FilterList[0]
+			}
+		}
+		t.Fatalf("no filter: %s", sql)
+		return nil
+	}
+	for _, sql := range []string{
+		"SELECT id FROM vecblock_t WHERE f = 0.3",
+		"SELECT id FROM vecblock_t WHERE f >= 2",
+		"SELECT id FROM vecblock_t WHERE f < -1.5e3",
+		"SELECT id FROM vecblock_t WHERE 0.3 = f",
+		"SELECT id FROM vecblock_t WHERE f IN (0.3, 1.5)",
+	} {
+		args := firstFilter(sql).GetF().Args
+		col := args[0]
+		if col.GetCol() == nil {
+			col = args[1]
+		}
+		require.NotNil(t, col.GetCol(), "%s: the column is compared without a cast", sql)
+		require.Equal(t, int32(types.T_bf16), col.Typ.Id, sql)
+	}
+	args := firstFilter("SELECT id FROM vecblock_t WHERE f < 1e39").GetF().Args
+	require.Nil(t, args[0].GetCol(), "an out-of-range literal widens the column")
+	require.Equal(t, int32(types.T_float64), args[0].Typ.Id)
+}
+
+// TestUpdateChangedRowsBlockScaledVector checks that counting changed rows plans an UPDATE
+// of vecf8/vecf4 columns, which have no equality operator.
+func TestUpdateChangedRowsBlockScaledVector(t *testing.T) {
+	for _, count := range []bool{true, false} {
+		mock := NewMockOptimizer(true)
+		mock.CurrentContext().GetProcess().Base.SessionInfo.CountUpdateChangedRows = count
+		_, err := runOneStmt(mock, t, "UPDATE vecblock_t SET a = '[4,3,2,1]', b = '[1,2,3,4]' WHERE id = 2")
+		require.NoError(t, err, "count changed rows %v", count)
+	}
+}
+
+// TestLowPrecisionFloatPlans checks that a bf16 column binds where it has no overload of
+// its own by widening to float32 (RANGE frames, aggregates, JSON and percentile functions),
+// that vecf8/vecf4 widen to vecf32 for the allowlisted functions and compare as the other
+// narrow vector types, and that their byte encodings stay rejected.
+func TestLowPrecisionFloatPlans(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	for _, sql := range []string{
+		"SELECT id, SUM(id) OVER (ORDER BY f RANGE BETWEEN 1 PRECEDING AND CURRENT ROW) FROM vecblock_t",
+		"SELECT ANY_VALUE(f), MEDIAN(f), STDDEV(f), GROUP_CONCAT(f) FROM vecblock_t",
+		"SELECT JSON_ARRAYAGG(f), JSON_OBJECTAGG('k', f), JSON_ARRAYAGG(a) FROM vecblock_t",
+		"SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY f) FROM vecblock_t",
+		"SELECT COALESCE(f, 0), GREATEST(f, 1), IF(f > 1, f, 0), JSON_OBJECT('k', f) FROM vecblock_t",
+		"SELECT id FROM vecblock_t WHERE f = CAST(0.3 AS BF16) OR f IN (CAST(0.3 AS BF16), CAST(1.5 AS BF16))",
+	} {
+		_, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, sql)
+	}
+	// vecf8/vecf4 dequantize to vecf32 for NULL handling, conditionals, element math and JSON
+	for _, sql := range []string{
+		"SELECT COALESCE(a, '[0,0,0,0]'), GREATEST(a, a), CASE WHEN id > 1 THEN b ELSE a END FROM vecblock_t",
+		"SELECT ABS(a), SQRT(b), SUMMATION(a), L1_NORM(b), L2_NORM(a) FROM vecblock_t",
+		"SELECT JSON_OBJECT('k', a), JSON_ARRAY(a, b) FROM vecblock_t",
+	} {
+		_, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, sql)
+	}
+	// comparisons as for the other narrow vector types; hex/to_base64 are vecf32-only
+	for _, sql := range []string{
+		"SELECT id FROM vecblock_t WHERE a = a",
+		"SELECT id FROM vecblock_t WHERE a < '[1,1,1,1]' OR b >= '[0,0,0,1]'",
+		"SELECT id FROM vecblock_t WHERE a IN ('[1,0,0,0]', '[0,1,0,0]')",
+		"SELECT id FROM vecblock_t WHERE b BETWEEN '[0,0,0,0]' AND '[1,1,1,1]'",
+	} {
+		_, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, sql)
+	}
+	for _, sql := range []string{
+		"SELECT HEX(a) FROM vecblock_t",
+		"SELECT TO_BASE64(b) FROM vecblock_t",
+	} {
+		_, err := runOneStmt(mock, t, sql)
+		require.Error(t, err, sql)
+	}
+}
+
 func TestUpdateSelfReferCascadeUsesModernPlan(t *testing.T) {
 	for _, sql := range []string{
 		"UPDATE self_ref_cascade SET id = 10 WHERE id = 1",

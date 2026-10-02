@@ -1492,6 +1492,19 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		outcnt:    4,
 	}
 
+	// vecf8/vecf4 columns, which have no equality operator.
+	constraintTestSchema["vecblock_t"] = &Schema{
+		tblId: 88970,
+		cols: []col{
+			{"id", types.T_int32, false, 32, 0},
+			{"a", types.T_array_float8, true, 4, 0},
+			{"b", types.T_array_float4, true, 4, 0},
+			{"f", types.T_bf16, true, 16, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+	}
+
 	constraintTestSchema["docs_ft"] = &Schema{
 		tblId: 88950,
 		cols: []col{

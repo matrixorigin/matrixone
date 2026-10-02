@@ -334,6 +334,29 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 			continue
 		}
 		if source.GetP() == nil {
+			if list := source.GetList(); list != nil && i == 1 && args[0] != nil &&
+				(name == "in" || name == "not_in") {
+				var items []*Expr
+				for j, item := range list.List {
+					converted, narrowed, err := narrowPreparedLowPrecisionOperand(ctx, state, item, args[0].Typ)
+					if err != nil {
+						return nil, err
+					}
+					if !narrowed {
+						continue
+					}
+					if items == nil {
+						items = append([]*Expr(nil), list.List...)
+					}
+					items[j] = converted
+				}
+				if items != nil {
+					copied := *source
+					copied.Expr = &plan.Expr_List{List: &plan.ExprList{List: items}}
+					args[i] = &copied
+					continue
+				}
+			}
 			if len(args) == 1 && types.T(source.Typ.Id).IsMySQLString() &&
 				(name == "sum" || name == "avg" || name == "abs" || name == "sign" || name == "sleep") {
 				// The source may be a projected marker, scalar subquery, or
@@ -370,6 +393,16 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 				if castErr != nil {
 					return nil, castErr
 				}
+				args[i] = converted
+				continue
+			}
+		}
+		if len(args) == 2 && isPreparedNumericComparisonContext(name) && args[1-i] != nil {
+			converted, narrowed, castErr := narrowPreparedLowPrecisionOperand(ctx, state, source, args[1-i].Typ)
+			if castErr != nil {
+				return nil, castErr
+			}
+			if narrowed {
 				args[i] = converted
 				continue
 			}
@@ -594,6 +627,29 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 	bound, _, err := preparedNumericPrefixArgs(ctx, name, args, witnesses,
 		prefixArgs, prefixKinds, prefixListArgs, prefixListKinds, fixed)
 	return bound, err
+}
+
+// narrowPreparedLowPrecisionOperand casts a marker compared with a
+// bf16/float16/float8/float4 operand to that operand's type, as a literal is,
+// when this execution's value is inside the type's finite range. Reading the
+// value keeps the plan out of the type-only cache. Other values keep the wider
+// comparison.
+func narrowPreparedLowPrecisionOperand(ctx context.Context, state *preparedSourceBindingState,
+	source *Expr, peer plan.Type) (*Expr, bool, error) {
+	peerOid := types.T(peer.Id)
+	if source == nil || source.GetP() == nil || !peerOid.IsLowPrecisionFloat() {
+		return nil, false, nil
+	}
+	binding, ok := state.bindingForPosition(source.GetP().Pos)
+	if !ok || !(binding.Type.IsNumeric() || binding.Type.Oid.IsMySQLString()) {
+		return nil, false, nil
+	}
+	value, ok := preparedBoundDoubleValue(ctx, source)
+	if !ok || types.RejectNonFiniteNarrowFloat(float32(value), peerOid) != nil {
+		return nil, false, nil
+	}
+	converted, err := makePlan2CastExpr(ctx, source, peer)
+	return converted, err == nil, err
 }
 
 func (state *preparedSourceBindingState) bindingForPosition(position int32) (PreparedSourceBinding, bool) {

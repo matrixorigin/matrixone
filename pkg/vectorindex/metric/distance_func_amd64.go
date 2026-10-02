@@ -77,6 +77,7 @@ func L2DistanceSqFloat32(a, b []float32) (float32, error) {
 			i += 64
 		}
 		sum += sumF32x16(acc0.Add(acc1).Add(acc2.Add(acc3)))
+		archsimd.ClearAVXUpperBits()
 	}
 
 	for i <= n-8 {
@@ -122,6 +123,7 @@ func InnerProductFloat32(a, b []float32) (float32, error) {
 			i += 64
 		}
 		total += sumF32x16(acc0.Add(acc1).Add(acc2.Add(acc3)))
+		archsimd.ClearAVXUpperBits()
 	}
 
 	for i <= n-8 {
@@ -181,6 +183,7 @@ func L2DistanceSqFloat64(a, b []float64) (float64, error) {
 			i += 32
 		}
 		sum += sumF64x8(acc0.Add(acc1).Add(acc2.Add(acc3)))
+		archsimd.ClearAVXUpperBits()
 	}
 
 	for i <= n-8 {
@@ -224,6 +227,7 @@ func InnerProductFloat64(a, b []float64) (float64, error) {
 			i += 32
 		}
 		total += sumF64x8(acc0.Add(acc1).Add(acc2.Add(acc3)))
+		archsimd.ClearAVXUpperBits()
 	}
 
 	for i <= n-8 {
@@ -283,6 +287,7 @@ func L1DistanceFloat32(a, b []float32) (float32, error) {
 			i += 64
 		}
 		sum += sumF32x16(acc0.Add(acc1).Add(acc2.Add(acc3)))
+		archsimd.ClearAVXUpperBits()
 	}
 
 	abs := func(x float32) float32 {
@@ -321,6 +326,7 @@ func L1DistanceFloat64(a, b []float64) (float64, error) {
 			i += 32
 		}
 		sum += sumF64x8(acc0.Add(acc1).Add(acc2.Add(acc3)))
+		archsimd.ClearAVXUpperBits()
 	}
 
 	abs := func(x float64) float64 {
@@ -370,6 +376,7 @@ func CosineDistanceF32(a, b []float32) (float32, error) {
 			i += 16
 		}
 		dot, normA, normB = sumF32x16(accD), sumF32x16(accA), sumF32x16(accB)
+		archsimd.ClearAVXUpperBits()
 	}
 
 	for i <= n-4 {
@@ -421,6 +428,7 @@ func CosineDistanceF64(a, b []float64) (float64, error) {
 			i += 8
 		}
 		dot, normA, normB = sumF64x8(accD), sumF64x8(accA), sumF64x8(accB)
+		archsimd.ClearAVXUpperBits()
 	}
 
 	for i <= n-4 {
@@ -487,6 +495,7 @@ func CosineSimilarityF32(a, b []float32) (float32, error) {
 			i += 16
 		}
 		dot, normA, normB = sumF32x16(accD), sumF32x16(accA), sumF32x16(accB)
+		archsimd.ClearAVXUpperBits()
 	}
 
 	for i <= n-4 {
@@ -549,6 +558,7 @@ func CosineSimilarityF64(a, b []float64) (float64, error) {
 			i += 8
 		}
 		dot, normA, normB = sumF64x8(accD), sumF64x8(accA), sumF64x8(accB)
+		archsimd.ClearAVXUpperBits()
 	}
 
 	for i <= n-4 {
@@ -621,6 +631,7 @@ func SphericalDistanceFloat32(a, b []float32) (float32, error) {
 			i += 64
 		}
 		total += sumF32x16(acc0.Add(acc1).Add(acc2.Add(acc3)))
+		archsimd.ClearAVXUpperBits()
 	}
 
 	for i <= n-8 {
@@ -661,6 +672,7 @@ func SphericalDistanceFloat64(a, b []float64) (float64, error) {
 			i += 32
 		}
 		total += sumF64x8(acc0.Add(acc1).Add(acc2.Add(acc3)))
+		archsimd.ClearAVXUpperBits()
 	}
 
 	for i <= n-8 {

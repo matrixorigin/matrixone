@@ -74,6 +74,22 @@ func genericPartition[T types.FixedSizeT](sels []int64, diffs []bool, partitions
 	return partitions
 }
 
+// lowPrecisionIdentity compares bf16, float16, float8 and float4 values as float32 values
+// for GROUP BY and PARTITION BY peers: 0 when equal (so -0 equals +0 and NaN equals
+// nothing), 1 otherwise.
+func lowPrecisionIdentity[T interface{ ToFloat32() float32 }](x, y T) int {
+	if x.ToFloat32() == y.ToFloat32() {
+		return 0
+	}
+	return 1
+}
+
+// lowPrecisionOrder compares bf16, float16, float8 and float4 values with the float32
+// ORDER BY relation.
+func lowPrecisionOrder[T interface{ ToFloat32() float32 }](x, y T) int {
+	return types.Float32OrderAscCompare(x.ToFloat32(), y.ToFloat32())
+}
+
 func floatOrderPartition[T types.FixedSizeT](
 	sels []int64,
 	diffs []bool,
@@ -223,10 +239,19 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		return genericPartition[types.Rowid](sels, diffs, partitions, vec)
 	case types.T_Blockid:
 		return genericPartition[types.Blockid](sels, diffs, partitions, vec)
+	case types.T_bf16:
+		return floatOrderPartition(sels, diffs, partitions, vec, lowPrecisionIdentity[types.BF16])
+	case types.T_float16:
+		return floatOrderPartition(sels, diffs, partitions, vec, lowPrecisionIdentity[types.Float16])
+	case types.T_float8:
+		return floatOrderPartition(sels, diffs, partitions, vec, lowPrecisionIdentity[types.Float8])
+	case types.T_float4:
+		return floatOrderPartition(sels, diffs, partitions, vec, lowPrecisionIdentity[types.Float4])
 	case types.T_char, types.T_varchar, types.T_json, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_blob,
 		types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4,
 		types.T_datalink:
 		return bytesPartition(sels, diffs, partitions, vec)
 		//Used by ORDER_BY SQL clause.
@@ -248,6 +273,14 @@ func PartitionForOrder(sels []int64, diffs []bool, partitions []int64, vec *vect
 		return floatOrderPartition(sels, diffs, partitions, vec, types.Float64OrderAscCompare)
 	case types.T_json:
 		return jsonOrderPartition(sels, diffs, partitions, vec)
+	case types.T_bf16:
+		return floatOrderPartition(sels, diffs, partitions, vec, lowPrecisionOrder[types.BF16])
+	case types.T_float16:
+		return floatOrderPartition(sels, diffs, partitions, vec, lowPrecisionOrder[types.Float16])
+	case types.T_float8:
+		return floatOrderPartition(sels, diffs, partitions, vec, lowPrecisionOrder[types.Float8])
+	case types.T_float4:
+		return floatOrderPartition(sels, diffs, partitions, vec, lowPrecisionOrder[types.Float4])
 	default:
 		return Partition(sels, diffs, partitions, vec)
 	}

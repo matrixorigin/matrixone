@@ -5650,6 +5650,58 @@ func validateApproxPercentileArgs(ctx context.Context, args []*Expr) error {
 	return nil
 }
 
+// validateVectorMatmulArgs requires the topk, queries and options arguments of
+// vector_matmul to be non-null constants, parameters or variables.
+func validateVectorMatmulArgs(ctx context.Context, args []*Expr) error {
+	if len(args) != 4 && len(args) != 5 {
+		return moerr.NewInvalidInputf(ctx, "vector_matmul requires 4 or 5 arguments, got %d", len(args))
+	}
+	for _, i := range VectorMatmulConfigArgs(len(args)) {
+		arg := args[i]
+		if arg == nil || isNullExpr(arg) || !IsVectorMatmulConfigExpr(arg) {
+			return moerr.NewInvalidInput(ctx,
+				"topk, queries and options arguments of vector_matmul must be non-null constants, parameters or variables")
+		}
+	}
+	return nil
+}
+
+// VectorMatmulConfigArgs returns the positions of vector_matmul's configuration
+// arguments for a call with n arguments.
+func VectorMatmulConfigArgs(n int) []int {
+	if n == 5 {
+		return []int{0, 3, 4}
+	}
+	return []int{0, 3}
+}
+
+// IsVectorMatmulConfigExpr reports whether expr can be evaluated without an input row:
+// a constant, a prepared parameter or a variable.
+func IsVectorMatmulConfigExpr(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if rule.IsConstant(expr, false) {
+		return true
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_P, *plan.Expr_V, *plan.Expr_T:
+		return true
+	case *plan.Expr_F:
+		// a cast or other function over parameters, e.g. CAST(? AS BIGINT)
+		if e.F == nil {
+			return false
+		}
+		for _, arg := range e.F.Args {
+			if !IsVectorMatmulConfigExpr(arg) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
 // validateOrderedPercentileArgs enforces the scalar MVP contract for the
 // ordered-set percentile aggregates. The aggregate executor consumes the
 // percentile as compile-time configuration, while the first argument is the
@@ -6612,6 +6664,11 @@ func bindFuncExprImplByPlanExpr(
 			return nil, err
 		}
 	}
+	if name == NameVectorMatmul {
+		if err = validateVectorMatmulArgs(ctx, args); err != nil {
+			return nil, err
+		}
+	}
 	if name == NamePercentileCont || name == NamePercentileDisc {
 		if err = validateOrderedPercentileArgs(ctx, name, args); err != nil {
 			return nil, err
@@ -7168,7 +7225,9 @@ func bindFuncExprImplByPlanExpr(
 					orExprList = append(orExprList, rightVal)
 					continue
 				}
-				if partitionIn || exactIntegerList || checkNoNeedCast(ctx, makeTypeByPlan2Expr(rightVal), typLeft, rightVal) {
+				// bf16/float16/float8/float4 items stay in the OR list, whose equalities
+				// narrow in-range literals to the column type
+				if partitionIn || exactIntegerList || (!typLeft.Oid.IsLowPrecisionFloat() && checkNoNeedCast(ctx, makeTypeByPlan2Expr(rightVal), typLeft, rightVal)) {
 					inExpr := rightVal
 					// Keep the partition-IN coercion path unchanged. Ordinary IN can
 					// retain an already same-typed constant cast; casting UUID to UUID
@@ -7399,6 +7458,17 @@ func bindFuncExprImplByPlanExpr(
 				// Check if we can use column type to avoid casting it
 				canUse := func(colType, otherType types.Type, colExpr, otherExpr *plan.Expr) bool {
 					colOid, otherOid := colType.Oid, otherType.Oid
+
+					// bf16/float16/float8/float4: a numeric literal inside the type's finite
+					// range compares in the column's precision, rounded as a stored value is,
+					// so a value equals the literal it was inserted from
+					if colOid.IsLowPrecisionFloat() {
+						if otherExpr == nil || !(otherOid.IsFloat() || otherOid.IsDecimal() || otherOid.IsInteger()) {
+							return false
+						}
+						v, ok := numericLiteralFloat64(otherExpr)
+						return ok && types.RejectNonFiniteNarrowFloat(float32(v), colOid) == nil
+					}
 
 					// For integers, check if constant value is within column type range
 					if colOid.IsInteger() && otherOid.IsInteger() {

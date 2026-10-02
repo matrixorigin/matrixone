@@ -24,6 +24,7 @@ import (
 	"math/bits"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 	"unsafe"
 
@@ -79,7 +80,7 @@ func PrepareParamKindForType(typ types.T) (PrepareParamKind, bool) {
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_enum,
 		types.T_geometry, types.T_geometry32, types.T_uuid,
 		types.T_array_float32, types.T_array_float64, types.T_array_bf16,
-		types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+		types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_array_float8, types.T_array_float4:
 		return PrepareParamNone, true
 	default:
 		return PrepareParamNone, false
@@ -3910,6 +3911,14 @@ func GetAny(vec *Vector, i int, deepCopy bool) any {
 		return GetFixedAtNoTypeCheck[float32](vec, i)
 	case types.T_float64:
 		return GetFixedAtNoTypeCheck[float64](vec, i)
+	case types.T_bf16:
+		return GetFixedAtNoTypeCheck[types.BF16](vec, i)
+	case types.T_float16:
+		return GetFixedAtNoTypeCheck[types.Float16](vec, i)
+	case types.T_float8:
+		return GetFixedAtNoTypeCheck[types.Float8](vec, i)
+	case types.T_float4:
+		return GetFixedAtNoTypeCheck[types.Float4](vec, i)
 	case types.T_date:
 		return GetFixedAtNoTypeCheck[types.Date](vec, i)
 	case types.T_datetime:
@@ -3937,7 +3946,7 @@ func GetAny(vec *Vector, i int, deepCopy bool) any {
 	case types.T_Blockid:
 		return GetFixedAtNoTypeCheck[types.Blockid](vec, i)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry, types.T_geometry32:
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_array_float8, types.T_array_float4, types.T_datalink, types.T_geometry, types.T_geometry32:
 		ret := vec.GetBytesAt(i)
 		if deepCopy {
 			copied := make([]byte, len(ret))
@@ -4658,7 +4667,7 @@ func isVarlenaMarshalType(oid types.T) bool {
 	switch oid {
 	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_array_float8, types.T_array_float4,
 		types.T_datalink, types.T_geometry, types.T_geometry32:
 		return true
 	default:
@@ -5040,6 +5049,11 @@ func validateVectorBinary(
 			if arrayElementSize > 0 && payloadLen%uint32(arrayElementSize) != 0 {
 				return moerr.NewInvalidInputNoCtx("invalid vector array payload size")
 			}
+			if typ.Oid.IsBlockScaledArray() {
+				if _, err := types.ParseBlockScaledCell(values[i].GetByteSlice(area)); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	return nil
@@ -5091,6 +5105,7 @@ func canonicalVectorTypeSize(typ types.Type) (int, error) {
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
+		types.T_bf16, types.T_float16, types.T_float8, types.T_float4,
 		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_year,
 		types.T_char, types.T_varchar, types.T_json, types.T_uuid,
@@ -5098,7 +5113,7 @@ func canonicalVectorTypeSize(typ types.Type) (int, error) {
 		types.T_blob, types.T_text, types.T_datalink,
 		types.T_TS, types.T_Rowid, types.T_Blockid,
 		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16,
-		types.T_array_int8, types.T_array_uint8:
+		types.T_array_int8, types.T_array_uint8, types.T_array_float8, types.T_array_float4:
 	default:
 		return 0, moerr.NewInvalidInputNoCtx("unknown vector type")
 	}
@@ -6068,8 +6083,16 @@ func (v *Vector) Shrink(sels []int64, negate bool) {
 		shrinkFixed[float32](v, sels, negate)
 	case types.T_float64:
 		shrinkFixed[float64](v, sels, negate)
+	case types.T_bf16:
+		shrinkFixed[types.BF16](v, sels, negate)
+	case types.T_float16:
+		shrinkFixed[types.Float16](v, sels, negate)
+	case types.T_float8:
+		shrinkFixed[types.Float8](v, sels, negate)
+	case types.T_float4:
+		shrinkFixed[types.Float4](v, sels, negate)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry, types.T_geometry32:
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_array_float8, types.T_array_float4, types.T_datalink, types.T_geometry, types.T_geometry32:
 		// XXX shrink varlena, but did not shrink area.  For our vector, this
 		// may well be the right thing.  If want to shrink area as well, we
 		// have to copy each varlena value and swizzle pointer.
@@ -6153,8 +6176,16 @@ func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64) {
 		shrinkFixedByMask[float32](v, sels, negate, offset)
 	case types.T_float64:
 		shrinkFixedByMask[float64](v, sels, negate, offset)
+	case types.T_bf16:
+		shrinkFixedByMask[types.BF16](v, sels, negate, offset)
+	case types.T_float16:
+		shrinkFixedByMask[types.Float16](v, sels, negate, offset)
+	case types.T_float8:
+		shrinkFixedByMask[types.Float8](v, sels, negate, offset)
+	case types.T_float4:
+		shrinkFixedByMask[types.Float4](v, sels, negate, offset)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry, types.T_geometry32:
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_array_float8, types.T_array_float4, types.T_datalink, types.T_geometry, types.T_geometry32:
 		// XXX shrink varlena, but did not shrink area.  For our vector, this
 		// may well be the right thing.  If want to shrink area as well, we
 		// have to copy each varlena value and swizzle pointer.
@@ -6514,8 +6545,16 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 		err = shuffleFixedNoTypeCheck[float32](v, sels, mp)
 	case types.T_float64:
 		err = shuffleFixedNoTypeCheck[float64](v, sels, mp)
+	case types.T_bf16:
+		err = shuffleFixedNoTypeCheck[types.BF16](v, sels, mp)
+	case types.T_float16:
+		err = shuffleFixedNoTypeCheck[types.Float16](v, sels, mp)
+	case types.T_float8:
+		err = shuffleFixedNoTypeCheck[types.Float8](v, sels, mp)
+	case types.T_float4:
+		err = shuffleFixedNoTypeCheck[types.Float4](v, sels, mp)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry, types.T_geometry32:
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_array_float8, types.T_array_float4, types.T_datalink, types.T_geometry, types.T_geometry32:
 		err = shuffleFixedNoTypeCheck[types.Varlena](v, sels, mp)
 	case types.T_date:
 		err = shuffleFixedNoTypeCheck[types.Date](v, sels, mp)
@@ -6636,8 +6675,16 @@ func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err
 		err = shuffleFixedNoTypeCheckWithBuf[float32](v, sels, buf)
 	case types.T_float64:
 		err = shuffleFixedNoTypeCheckWithBuf[float64](v, sels, buf)
+	case types.T_bf16:
+		err = shuffleFixedNoTypeCheckWithBuf[types.BF16](v, sels, buf)
+	case types.T_float16:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Float16](v, sels, buf)
+	case types.T_float8:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Float8](v, sels, buf)
+	case types.T_float4:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Float4](v, sels, buf)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry, types.T_geometry32:
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_array_float8, types.T_array_float4, types.T_datalink, types.T_geometry, types.T_geometry32:
 		err = shuffleFixedNoTypeCheckWithBuf[types.Varlena](v, sels, buf)
 	case types.T_date:
 		err = shuffleFixedNoTypeCheckWithBuf[types.Date](v, sels, buf)
@@ -7064,7 +7111,7 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			v.setLengthAfterExtend(v.length + w.length)
 			return nil
 		}
-	case types.T_uint8:
+	case types.T_uint8, types.T_float8, types.T_float4:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
 				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
@@ -7093,7 +7140,7 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			v.setLengthAfterExtend(v.length + w.length)
 			return nil
 		}
-	case types.T_uint16:
+	case types.T_uint16, types.T_bf16, types.T_float16:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
 				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
@@ -7588,7 +7635,7 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 		}
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
 		types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry, types.T_geometry32:
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_array_float8, types.T_array_float4, types.T_datalink, types.T_geometry, types.T_geometry32:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
 				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
@@ -7749,7 +7796,7 @@ func getConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 			}
 			return SetConstFixed(v, ws[sel], length, mp)
 		}
-	case types.T_uint8:
+	case types.T_uint8, types.T_float8, types.T_float4:
 		return func(v, w *Vector, sel int64, length int) error {
 			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
 				return SetConstNull(v, length, mp)
@@ -7760,7 +7807,7 @@ func getConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 			}
 			return SetConstFixed(v, ws[sel], length, mp)
 		}
-	case types.T_uint16:
+	case types.T_uint16, types.T_bf16, types.T_float16:
 		return func(v, w *Vector, sel int64, length int) error {
 			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
 				return SetConstNull(v, length, mp)
@@ -7948,7 +7995,7 @@ func getConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 			return SetConstFixed(v, ws[sel], length, mp)
 		}
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
-		types.T_json, types.T_blob, types.T_text, types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry, types.T_geometry32:
+		types.T_json, types.T_blob, types.T_text, types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_array_float8, types.T_array_float4, types.T_datalink, types.T_geometry, types.T_geometry32:
 		return func(v, w *Vector, sel int64, length int) error {
 			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
 				return SetConstNull(v, length, mp)
@@ -8873,6 +8920,14 @@ func (v *Vector) String() string {
 		return vecToString[float32](v)
 	case types.T_float64:
 		return vecToString[float64](v)
+	case types.T_bf16:
+		return vecToString[types.BF16](v)
+	case types.T_float16:
+		return vecToString[types.Float16](v)
+	case types.T_float8:
+		return vecToString[types.Float8](v)
+	case types.T_float4:
+		return vecToString[types.Float4](v)
 	case types.T_date:
 		return vecToString[types.Date](v)
 	case types.T_datetime:
@@ -8965,6 +9020,8 @@ func (v *Vector) String() string {
 		}
 		str := types.ArraysToString[types.Float16](col, types.DefaultArraysToStringSep)
 		return fmt.Sprintf("%v-%s", str, v.nsp.GetBitmap().String())
+	case types.T_array_float8, types.T_array_float4:
+		return blockScaledVectorString(v)
 	case types.T_array_uint8:
 		col := MustArrayCol[uint8](v)
 		if len(col) == 1 {
@@ -9071,6 +9128,46 @@ func implDecimalRowToString[T types.DecimalWithFormat](v *Vector, idx int) strin
 	}
 }
 
+// blockScaledCellString renders a vecf8/vecf4 cell; a malformed cell renders its error.
+func blockScaledCellString(cell []byte) string {
+	s, err := types.BlockScaledToString(cell)
+	if err != nil {
+		return err.Error()
+	}
+	return s
+}
+
+func blockScaledRowToString(v *Vector, idx int) string {
+	if v.IsConstNull() {
+		return "null"
+	}
+	if v.IsConst() {
+		idx = 0
+	}
+	if v.nsp.Contains(uint64(idx)) {
+		return "null"
+	}
+	return blockScaledCellString(v.GetBytesAt(idx))
+}
+
+func blockScaledVectorString(v *Vector) string {
+	if v.IsConstNull() {
+		return "null"
+	}
+	n := v.Length()
+	if v.IsConst() {
+		n = 1
+	}
+	strs := make([]string, n)
+	for i := range strs {
+		strs[i] = blockScaledRowToString(v, i)
+	}
+	if n == 1 {
+		return strs[0]
+	}
+	return fmt.Sprintf("%v-%s", strings.Join(strs, types.DefaultArraysToStringSep), v.nsp.GetBitmap().String())
+}
+
 func implArrayRowToString[T types.ArrayElement](v *Vector, idx int) string {
 	if v.IsConstNull() {
 		return "null"
@@ -9116,6 +9213,14 @@ func (v *Vector) RowToString(idx int) string {
 		return implFixedRowToString[float32](v, idx)
 	case types.T_float64:
 		return implFixedRowToString[float64](v, idx)
+	case types.T_bf16:
+		return implFixedRowToString[types.BF16](v, idx)
+	case types.T_float16:
+		return implFixedRowToString[types.Float16](v, idx)
+	case types.T_float8:
+		return implFixedRowToString[types.Float8](v, idx)
+	case types.T_float4:
+		return implFixedRowToString[types.Float4](v, idx)
 	case types.T_date:
 		return implFixedRowToString[types.Date](v, idx)
 	case types.T_year:
@@ -9169,6 +9274,8 @@ func (v *Vector) RowToString(idx int) string {
 		return implArrayRowToString[int8](v, idx)
 	case types.T_array_uint8:
 		return implArrayRowToString[uint8](v, idx)
+	case types.T_array_float8, types.T_array_float4:
+		return blockScaledRowToString(v, idx)
 	default:
 		panic("vec to string unknown types.")
 	}
@@ -9340,6 +9447,14 @@ func AppendAny(vec *Vector, val any, isNull bool, mp *mpool.MPool) error {
 		return appendOneFixed(vec, val.(float32), false, mp)
 	case types.T_float64:
 		return appendOneFixed(vec, val.(float64), false, mp)
+	case types.T_bf16:
+		return appendOneFixed(vec, val.(types.BF16), false, mp)
+	case types.T_float16:
+		return appendOneFixed(vec, val.(types.Float16), false, mp)
+	case types.T_float8:
+		return appendOneFixed(vec, val.(types.Float8), false, mp)
+	case types.T_float4:
+		return appendOneFixed(vec, val.(types.Float4), false, mp)
 	case types.T_date:
 		return appendOneFixed(vec, val.(types.Date), false, mp)
 	case types.T_year:
@@ -9367,7 +9482,7 @@ func AppendAny(vec *Vector, val any, isNull bool, mp *mpool.MPool) error {
 	case types.T_Blockid:
 		return appendOneFixed(vec, val.(types.Blockid), false, mp)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry, types.T_geometry32:
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_array_float8, types.T_array_float4, types.T_datalink, types.T_geometry, types.T_geometry32:
 		return appendOneBytes(vec, val.([]byte), false, mp)
 	}
 	return nil
@@ -10773,6 +10888,18 @@ func (v *Vector) GetSumValue() (ok bool, sumv []byte) {
 	case types.T_float64:
 		sumVal := FloatGetSum[float64](v)
 		sumv = types.EncodeFloat64(&sumVal)
+	case types.T_bf16:
+		sumVal := LowPrecFloatGetSum[types.BF16](v)
+		sumv = types.EncodeFloat64(&sumVal)
+	case types.T_float16:
+		sumVal := LowPrecFloatGetSum[types.Float16](v)
+		sumv = types.EncodeFloat64(&sumVal)
+	case types.T_float8:
+		sumVal := LowPrecFloatGetSum[types.Float8](v)
+		sumv = types.EncodeFloat64(&sumVal)
+	case types.T_float4:
+		sumVal := LowPrecFloatGetSum[types.Float4](v)
+		sumv = types.EncodeFloat64(&sumVal)
 	case types.T_decimal64:
 		sumVal := Decimal64GetSum(v)
 		sumv = types.EncodeDecimal64(&sumVal)
@@ -10879,6 +11006,42 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		}
 		minv = types.EncodeFloat64(&minVal)
 		maxv = types.EncodeFloat64(&maxVal)
+
+	case types.T_bf16:
+		minVal, maxVal, hasComparableValue := LowPrecFloatGetMinAndMax[types.BF16](v)
+		if !hasComparableValue {
+			ok = false
+			return
+		}
+		minv = types.EncodeFixed(minVal)
+		maxv = types.EncodeFixed(maxVal)
+
+	case types.T_float16:
+		minVal, maxVal, hasComparableValue := LowPrecFloatGetMinAndMax[types.Float16](v)
+		if !hasComparableValue {
+			ok = false
+			return
+		}
+		minv = types.EncodeFixed(minVal)
+		maxv = types.EncodeFixed(maxVal)
+
+	case types.T_float8:
+		minVal, maxVal, hasComparableValue := LowPrecFloatGetMinAndMax[types.Float8](v)
+		if !hasComparableValue {
+			ok = false
+			return
+		}
+		minv = types.EncodeFixed(minVal)
+		maxv = types.EncodeFixed(maxVal)
+
+	case types.T_float4:
+		minVal, maxVal, hasComparableValue := LowPrecFloatGetMinAndMax[types.Float4](v)
+		if !hasComparableValue {
+			ok = false
+			return
+		}
+		minv = types.EncodeFixed(minVal)
+		maxv = types.EncodeFixed(maxVal)
 
 	case types.T_date:
 		minVal, maxVal := OrderedGetMinAndMax[types.Date](v)
@@ -11162,6 +11325,10 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		_minv, _maxv := ArrayElementGetMinMax[uint8](v)
 		minv = types.ArrayToBytes[uint8](_minv)
 		maxv = types.ArrayToBytes[uint8](_maxv)
+	case types.T_array_float8, types.T_array_float4:
+		// Block-scaled cells have no value order and vector zonemaps are not used for
+		// pruning (ZM.IsArray); flush still records byte-wise bounds.
+		minv, maxv = VarlenGetMinMax(v)
 	default:
 		panic(fmt.Sprintf("unsupported type %s", v.GetType().String()))
 	}
@@ -11172,12 +11339,23 @@ func compareOrderedRows[T cmp.Ordered](v *Vector, left, right int) int {
 	return cmp.Compare(GetFixedAtNoTypeCheck[T](v, left), GetFixedAtNoTypeCheck[T](v, right))
 }
 
+// compareFloatRows orders two low-precision float rows (bf16/float16/float8/float4)
+// by widened float VALUE. Raw bits do not order floats (the sign bit inverts), so
+// the values are compared through ToFloat32 with cmp.Compare (NaN-aware ordering).
+func compareFloatRows[T types.LowPrecFloat](v *Vector, left, right int) int {
+	return cmp.Compare(
+		GetFixedAtNoTypeCheck[T](v, left).ToFloat32(),
+		GetFixedAtNoTypeCheck[T](v, right).ToFloat32(),
+	)
+}
+
 func supportsInplaceSort(oid types.T) bool {
 	switch oid {
 	case types.T_bool, types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
+		types.T_bf16, types.T_float16, types.T_float8, types.T_float4,
 		types.T_date, types.T_year, types.T_datetime, types.T_time, types.T_timestamp, types.T_enum,
 		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_TS, types.T_uuid, types.T_Rowid,
@@ -11224,6 +11402,14 @@ func compareVectorRows(v *Vector, left, right int) int {
 		return compareOrderedRows[float32](v, left, right)
 	case types.T_float64:
 		return compareOrderedRows[float64](v, left, right)
+	case types.T_bf16:
+		return compareFloatRows[types.BF16](v, left, right)
+	case types.T_float16:
+		return compareFloatRows[types.Float16](v, left, right)
+	case types.T_float8:
+		return compareFloatRows[types.Float8](v, left, right)
+	case types.T_float4:
+		return compareFloatRows[types.Float4](v, left, right)
 	case types.T_date:
 		return compareOrderedRows[types.Date](v, left, right)
 	case types.T_year:
@@ -11284,6 +11470,8 @@ func compareVectorRows(v *Vector, left, right int) int {
 	case types.T_array_uint8:
 		return types.ArrayElementCompare[uint8](
 			types.BytesToArray[uint8](v.GetBytesAt(left)), types.BytesToArray[uint8](v.GetBytesAt(right)))
+	case types.T_array_float8, types.T_array_float4:
+		return types.CompareBlockScaledFromBytes(v.GetBytesAt(left), v.GetBytesAt(right), false)
 	default:
 		return bytes.Compare(v.GetBytesAt(left), v.GetBytesAt(right))
 	}
@@ -11474,6 +11662,33 @@ func (v *Vector) inplaceSortRowMetadata(compact bool) bool {
 	return true
 }
 
+// sortLowPrecFloatCol sorts a low-precision float column (bf16/float16/float8/float4)
+// by widened float value; raw uint bits do not order floats (the sign bit inverts).
+func sortLowPrecFloatCol[T types.LowPrecFloat](v *Vector) {
+	col := MustFixedColNoTypeCheck[T](v)
+	slices.SortFunc(col, func(a, b T) int {
+		return cmp.Compare(a.ToFloat32(), b.ToFloat32())
+	})
+}
+
+// sortAndCompactLowPrecFloatCol sorts by float value then removes value-duplicates.
+// Equality is by ToFloat32 (so +0/-0 collapse and NaN never compacts), matching the
+// native float32 slices.Sort+Compact path.
+func sortAndCompactLowPrecFloatCol[T types.LowPrecFloat](v *Vector) {
+	col := MustFixedColNoTypeCheck[T](v)
+	slices.SortFunc(col, func(a, b T) int {
+		return cmp.Compare(a.ToFloat32(), b.ToFloat32())
+	})
+	newCol := slices.CompactFunc(col, func(a, b T) bool {
+		return a.ToFloat32() == b.ToFloat32()
+	})
+	if len(newCol) != len(col) {
+		v.CleanOnlyData()
+		v.SetSorted(true)
+		appendList(v, newCol, nil, nil)
+	}
+}
+
 // InplaceSortAndCompact @todo optimization in the future
 func (v *Vector) InplaceSortAndCompact() {
 	if v.inplaceSortRowMetadata(true) {
@@ -11615,6 +11830,15 @@ func (v *Vector) InplaceSortAndCompact() {
 			v.SetSorted(true)
 			appendList(v, newCol, nil, nil)
 		}
+
+	case types.T_bf16:
+		sortAndCompactLowPrecFloatCol[types.BF16](v)
+	case types.T_float16:
+		sortAndCompactLowPrecFloatCol[types.Float16](v)
+	case types.T_float8:
+		sortAndCompactLowPrecFloatCol[types.Float8](v)
+	case types.T_float4:
+		sortAndCompactLowPrecFloatCol[types.Float4](v)
 
 	case types.T_date:
 		col := MustFixedColNoTypeCheck[types.Date](v)
@@ -11941,6 +12165,15 @@ func (v *Vector) InplaceSort() {
 	case types.T_float64:
 		col := MustFixedColNoTypeCheck[float64](v)
 		slices.Sort(col)
+
+	case types.T_bf16:
+		sortLowPrecFloatCol[types.BF16](v)
+	case types.T_float16:
+		sortLowPrecFloatCol[types.Float16](v)
+	case types.T_float8:
+		sortLowPrecFloatCol[types.Float8](v)
+	case types.T_float4:
+		sortLowPrecFloatCol[types.Float4](v)
 
 	case types.T_date:
 		col := MustFixedColNoTypeCheck[types.Date](v)

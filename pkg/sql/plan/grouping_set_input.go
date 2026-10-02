@@ -533,6 +533,8 @@ func materializedDeclaredRowSize(rowTypes []planpb.Type) (float64, bool) {
 				types.T_array_bf16, types.T_array_float16,
 				types.T_array_int8, types.T_array_uint8:
 				payloadSize *= float64(types.New(oid, typ.Width, typ.Scale).GetArrayElementSize())
+			case types.T_array_float8, types.T_array_float4:
+				payloadSize = float64(types.New(oid, typ.Width, typ.Scale).ArrayCellBytes())
 			case types.T_json, types.T_blob, types.T_text,
 				types.T_binary, types.T_varbinary, types.T_datalink,
 				types.T_geometry, types.T_geometry32:

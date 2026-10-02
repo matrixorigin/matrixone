@@ -1364,7 +1364,7 @@ func needsSameTypeAssignmentCast(targetType Type) bool {
 	return targetType.Id == int32(types.T_blob) ||
 		targetType.Id == int32(types.T_text) ||
 		targetType.Id == int32(types.T_time) ||
-		(types.T(targetType.Id).IsArrayRelate() && targetType.Width > 0 && targetType.Width != types.MaxArrayDimension)
+		(types.T(targetType.Id).IsArray() && targetType.Width > 0 && targetType.Width != types.MaxArrayDimension)
 }
 
 func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *plan.Expr) (*Expr, error) {

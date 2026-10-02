@@ -583,3 +583,42 @@ func newTestCase(t *testing.T, desc bool, m *mpool.MPool, typ types.Type) testCa
 		vec:  testutil.NewVector(Rows, typ, m, true, nil),
 	}
 }
+
+// TestSortLowPrecFloat verifies ORDER BY on the scalar low-precision float types sorts by
+// float VALUE, not raw bits: a negative value's raw uint bits exceed a positive's, so a
+// bit-wise sort would misorder them (#20567). Rows: [1.5, -2.0, 0.0].
+func TestSortLowPrecFloat(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	check := func(oid types.T, appended func(*vector.Vector)) {
+		t.Run(oid.String(), func(t *testing.T) {
+			require.True(t, IsSupportedType(oid))
+			vec := vector.NewVec(oid.ToType())
+			defer vec.Free(mp)
+			appended(vec)
+
+			// Ascending: -2.0 (row 1), 0.0 (row 2), 1.5 (row 0).
+			os := []int64{0, 1, 2}
+			Sort(false, false, false, os, vec)
+			require.Equal(t, []int64{1, 2, 0}, os, "asc %s", oid)
+
+			// Descending: 1.5, 0.0, -2.0.
+			os = []int64{0, 1, 2}
+			Sort(true, false, false, os, vec)
+			require.Equal(t, []int64{0, 2, 1}, os, "desc %s", oid)
+		})
+	}
+
+	check(types.T_bf16, func(v *vector.Vector) {
+		require.NoError(t, vector.AppendFixedList(v, []types.BF16{types.BF16FromFloat32(1.5), types.BF16FromFloat32(-2.0), types.BF16FromFloat32(0)}, nil, mp))
+	})
+	check(types.T_float16, func(v *vector.Vector) {
+		require.NoError(t, vector.AppendFixedList(v, []types.Float16{types.Float16FromFloat32(1.5), types.Float16FromFloat32(-2.0), types.Float16FromFloat32(0)}, nil, mp))
+	})
+	check(types.T_float8, func(v *vector.Vector) {
+		require.NoError(t, vector.AppendFixedList(v, []types.Float8{types.Float8FromFloat32(1.5), types.Float8FromFloat32(-2.0), types.Float8FromFloat32(0)}, nil, mp))
+	})
+	check(types.T_float4, func(v *vector.Vector) {
+		require.NoError(t, vector.AppendFixedList(v, []types.Float4{types.Float4FromFloat32(1.5), types.Float4FromFloat32(-2.0), types.Float4FromFloat32(0)}, nil, mp))
+	})
+}

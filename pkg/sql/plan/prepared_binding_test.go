@@ -1091,3 +1091,63 @@ func TestSingletonProjectedPeerAdmission(t *testing.T) {
 		})
 	}
 }
+
+func TestPreparedLowPrecisionFloatMarkerNarrowing(t *testing.T) {
+	decimalSource := types.New(types.T_decimal64, 1, 1)
+	for _, tc := range []struct {
+		name      string
+		predicate string
+		value     string
+		binding   types.Type
+		binary    bool
+		narrowed  bool
+	}{
+		{"equal sql decimal", "f = ?", "0.3", decimalSource, false, true},
+		{"in sql decimal", "f in (?, 9)", "0.3", decimalSource, false, true},
+		{"not in sql decimal", "f not in (?, 9)", "0.3", decimalSource, false, true},
+		{"less equal sql decimal", "f <= ?", "0.3", decimalSource, false, true},
+		{"in binary double", "f in (?, 9)", "0.3", types.T_float64.ToType(), true, true},
+		{"in binary text", "f in (?, 9)", "0.3", types.T_varchar.ToType(), true, true},
+		{"equal out of range", "f = ?", "1e300", types.T_float64.ToType(), true, false},
+		{"in out of range", "f in (?, 9)", "1e300", types.T_float64.ToType(), true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			proc := mock.ctxt.GetProcess()
+			params := vector.NewVec(types.T_text.ToType())
+			defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+			require.NoError(t, vector.AppendBytes(params, []byte(tc.value), false, proc.Mp()))
+			proc.SetPrepareParams(params)
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+				"select id from vecblock_t where "+tc.predicate, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			value := ParamValue{Value: tc.value, IsBinaryProtocol: tc.binary}
+			if !tc.binary {
+				value.EnableNumericPrefix = true
+				value.SourceType, value.HasSourceType = tc.binding, true
+			}
+			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
+				[]PreparedSourceBinding{{Position: 0, Type: tc.binding}}, []any{value})
+			require.NoError(t, err)
+			markerNarrowed, filters := false, 0
+			for _, node := range bound.Plan.GetQuery().Nodes {
+				for _, filter := range node.FilterList {
+					filters++
+					require.NoError(t, planpb.VisitExprTree(filter, func(expr *Expr) error {
+						if fn := expr.GetF(); fn != nil && fn.Func.ObjName == "cast" &&
+							expr.Typ.Id == int32(types.T_bf16) && function.ContainsParameter(fn.Args[0]) {
+							markerNarrowed = true
+						}
+						return nil
+					}))
+				}
+			}
+			require.Positive(t, filters)
+			require.Equal(t, tc.narrowed, markerNarrowed, bound.Plan.String())
+			if tc.narrowed {
+				require.True(t, bound.ValueDependent, "a narrowed marker must not enter the type-only cache")
+			}
+		})
+	}
+}

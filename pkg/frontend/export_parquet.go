@@ -177,6 +177,9 @@ func vectorValueToParquet(vec *vector.Vector, i int, timeZone *time.Location) (a
 		return int64(vector.GetFixedAtNoTypeCheck[uint64](vec, i)), nil
 	case types.T_float32:
 		return vector.GetFixedAtNoTypeCheck[float32](vec, i), nil
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		f, _ := vector.GetLowPrecisionFloatAt(vec, i)
+		return f, nil
 	case types.T_float64:
 		return vector.GetFixedAtNoTypeCheck[float64](vec, i), nil
 	case types.T_char, types.T_varchar, types.T_text:

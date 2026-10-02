@@ -856,9 +856,12 @@ const (
 	UPDATEXML               = 582
 	TO_INTERVAL_MICROSECOND = 583
 
+	// VECTOR_MATMUL is the batch dot-product top-k aggregate over vecf8/vecf4 columns.
+	VECTOR_MATMUL = 586
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 586
+	FUNCTION_END_NUMBER = 587
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1164,6 +1167,7 @@ var functionIdRegister = map[string]int32{
 	"json_agg_to_double":             JSON_AGG_TO_DOUBLE,
 	"json_storage_free":              JSON_STORAGE_FREE,
 	"json_depth":                     JSON_DEPTH,
+	"vector_matmul":                  VECTOR_MATMUL,
 	"json_contains":                  JSON_CONTAINS,
 	"json_contains_path":             JSON_CONTAINS_PATH,
 	"json_merge":                     JSON_MERGE_PRESERVE,

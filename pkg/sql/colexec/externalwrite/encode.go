@@ -230,6 +230,9 @@ func (w *externalWriter) csvValue(vec *vector.Vector, i int) (val []byte, quote 
 		return []byte(strconv.FormatUint(uint64(vector.GetFixedAtNoTypeCheck[uint32](vec, i)), 10)), false, nil
 	case types.T_uint64:
 		return []byte(strconv.FormatUint(vector.GetFixedAtNoTypeCheck[uint64](vec, i), 10)), false, nil
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		v, _ := vector.GetLowPrecisionFloatAt(vec, i)
+		return []byte(strconv.FormatFloat(float64(v), 'f', -1, 32)), false, nil
 	case types.T_float32:
 		v := vector.GetFixedAtNoTypeCheck[float32](vec, i)
 		if vec.GetType().Scale < 0 || vec.GetType().Width == 0 {
@@ -254,6 +257,12 @@ func (w *externalWriter) csvValue(vec *vector.Vector, i int) (val []byte, quote 
 		return []byte(types.BytesToArrayToString[float64](vec.GetBytesAt(i))), true, nil
 	// Narrow vector element types — BytesToArrayToString is generic over
 	// types.ArrayElement and already formats BF16/Float16/int8/uint8.
+	case types.T_array_float8, types.T_array_float4:
+		text, err := types.BlockScaledToString(vec.GetBytesAt(i))
+		if err != nil {
+			return nil, false, err
+		}
+		return []byte(text), true, nil
 	case types.T_array_bf16:
 		return []byte(types.BytesToArrayToString[types.BF16](vec.GetBytesAt(i))), true, nil
 	case types.T_array_float16:
@@ -388,6 +397,9 @@ func (w *externalWriter) appendJSONValue(buf *bytes.Buffer, vec *vector.Vector, 
 		w.scratch = strconv.AppendUint(w.scratch[:0], vector.GetFixedAtNoTypeCheck[uint64](vec, i), 10)
 	case types.T_float32:
 		return w.appendJSONFloat(buf, float64(vector.GetFixedAtNoTypeCheck[float32](vec, i)), 32)
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		v, _ := vector.GetLowPrecisionFloatAt(vec, i)
+		return w.appendJSONFloat(buf, float64(v), 32)
 	case types.T_float64:
 		return w.appendJSONFloat(buf, vector.GetFixedAtNoTypeCheck[float64](vec, i), 64)
 	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
@@ -421,6 +433,12 @@ func (w *externalWriter) appendJSONValue(buf *bytes.Buffer, vec *vector.Vector, 
 	// Narrow vector element types. appendJSONFloatArray is constrained to
 	// float32|float64, so widen first: BF16/Float16 via ToFloat32 (exact), and
 	// int8/uint8 are small integers that float32 represents exactly.
+	case types.T_array_float8, types.T_array_float4:
+		values, err := types.BlockScaledToFloat32(vec.GetBytesAt(i))
+		if err != nil {
+			return err
+		}
+		return appendJSONFloatArray(w, buf, values, 32)
 	case types.T_array_bf16:
 		return appendJSONFloatArray(w, buf,
 			types.BF16ToFloat32Slice(types.BytesToArray[types.BF16](vec.GetBytesAt(i))), 32)

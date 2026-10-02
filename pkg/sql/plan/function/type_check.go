@@ -35,6 +35,25 @@ func fixedTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
 	if s2.Oid == types.T_enum {
 		s2 = types.T_uint16.ToType()
 	}
+	// The scalar low-precision float types (bf16/float16/float8/float4) all fit
+	// losslessly in float32, so binary arithmetic and comparison treat them as
+	// float32 while selecting the coercion rule; the operand is then cast from its
+	// low-precision type to the chosen target, mirroring the T_enum treatment above.
+	lowPrec := false
+	if isLowPrecFloat(s1.Oid) {
+		s1 = types.T_float32.ToType()
+		lowPrec = true
+	}
+	if isLowPrecFloat(s2.Oid) {
+		s2 = types.T_float32.ToType()
+		lowPrec = true
+	}
+	// float32+float32 has no diagonal cast rule (equal types normally need no cast),
+	// so a low-precision pair that both normalized to float32 must still be cast from
+	// its low-precision type. Force that cast to float32 here.
+	if lowPrec && s1.Oid == types.T_float32 && s2.Oid == types.T_float32 {
+		return true, s1, s2
+	}
 	check := fixedBinaryCastRule1[s1.Oid][s2.Oid]
 	if check.cast {
 		t1, t2 := check.left.ToType(), check.right.ToType()
@@ -111,7 +130,19 @@ func fixedTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
 // so pairing BIT with a signed bigint must use the same exact DECIMAL128
 // domain as UINT64 with a signed bigint. Keeping this adjustment here, rather
 // than changing fixedTypeCastRule1, leaves comparison coercion unchanged.
+// promoteBlockScaledVector maps vecf8/vecf4 to vecf32 of the same dimension; arithmetic
+// on them runs as vecf32 (no native arithmetic, like the scalar float8/float4).
+func promoteBlockScaledVector(t types.Type) (types.Type, bool) {
+	if t.Oid.IsBlockScaledArray() {
+		return types.New(types.T_array_float32, t.Width, 0), true
+	}
+	return t, false
+}
+
 func arithmeticTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
+	var promoted1, promoted2 bool
+	s1, promoted1 = promoteBlockScaledVector(s1)
+	s2, promoted2 = promoteBlockScaledVector(s2)
 	// JSON is a dynamic scalar domain. Numeric arithmetic must retain its
 	// fractional values instead of borrowing an integer peer's domain.
 	hasJSON := s1.Oid == types.T_json || s2.Oid == types.T_json
@@ -127,6 +158,10 @@ func arithmeticTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
 		s2.Oid = types.T_uint64
 	}
 	cast, left, right := fixedTypeCastRule1(s1, s2)
+	if !cast && (promoted1 || promoted2) {
+		// vecf32 op vecf32 has no cast rule; a promoted operand must still be cast.
+		return true, s1, s2
+	}
 	return cast || hasJSON, left, right
 }
 
@@ -139,10 +174,33 @@ func temporalArithmeticUsesFloat(left, right types.Type) bool {
 //  1. Div
 //  2. IntegerDiv
 func fixedTypeCastRule2(s1, s2 types.Type) (bool, types.Type, types.Type) {
+	var promoted1, promoted2 bool
+	s1, promoted1 = promoteBlockScaledVector(s1)
+	s2, promoted2 = promoteBlockScaledVector(s2)
+	if promoted1 || promoted2 {
+		if cast, left, right := fixedTypeCastRule2(s1, s2); cast {
+			return true, left, right
+		}
+		return true, s1, s2
+	}
+	lowPrec := false
+	if isLowPrecFloat(s1.Oid) {
+		s1 = types.T_float32.ToType()
+		lowPrec = true
+	}
+	if isLowPrecFloat(s2.Oid) {
+		s2 = types.T_float32.ToType()
+		lowPrec = true
+	}
 	hasJSON := s1.Oid == types.T_json || s2.Oid == types.T_json
 	s1, s2 = numericJSONType(s1), numericJSONType(s2)
 	if temporalArithmeticUsesFloat(s1, s2) {
 		return true, types.T_float64.ToType(), types.T_float64.ToType()
+	}
+	// float32+float32 has no diagonal cast rule (equal types need none), so a
+	// low-precision pair that both normalized to float32 must still be cast.
+	if lowPrec && s1.Oid == types.T_float32 && s2.Oid == types.T_float32 {
+		return true, s1, s2
 	}
 	check := fixedBinaryCastRule2[s1.Oid][s2.Oid]
 	if check.cast {
@@ -1678,6 +1736,8 @@ func initFixed1() {
 		{types.T_varchar, types.T_array_float32, types.T_array_float32, types.T_array_float32},
 		{types.T_varchar, types.T_array_float64, types.T_array_float64, types.T_array_float64},
 		{types.T_varchar, types.T_array_bf16, types.T_array_bf16, types.T_array_bf16},
+		{types.T_varchar, types.T_array_float8, types.T_array_float8, types.T_array_float8},
+		{types.T_varchar, types.T_array_float4, types.T_array_float4, types.T_array_float4},
 		{types.T_varchar, types.T_array_float16, types.T_array_float16, types.T_array_float16},
 		{types.T_varchar, types.T_array_int8, types.T_array_int8, types.T_array_int8},
 		{types.T_varchar, types.T_array_uint8, types.T_array_uint8, types.T_array_uint8},
@@ -1826,6 +1886,12 @@ func initFixed1() {
 		{types.T_array_bf16, types.T_varchar, types.T_array_bf16, types.T_array_bf16},
 		{types.T_array_bf16, types.T_text, types.T_array_bf16, types.T_array_bf16},
 		{types.T_text, types.T_array_bf16, types.T_array_bf16, types.T_array_bf16},
+		{types.T_array_float8, types.T_varchar, types.T_array_float8, types.T_array_float8},
+		{types.T_array_float8, types.T_text, types.T_array_float8, types.T_array_float8},
+		{types.T_text, types.T_array_float8, types.T_array_float8, types.T_array_float8},
+		{types.T_array_float4, types.T_varchar, types.T_array_float4, types.T_array_float4},
+		{types.T_array_float4, types.T_text, types.T_array_float4, types.T_array_float4},
+		{types.T_text, types.T_array_float4, types.T_array_float4, types.T_array_float4},
 		{types.T_array_float16, types.T_varchar, types.T_array_float16, types.T_array_float16},
 		{types.T_array_float16, types.T_text, types.T_array_float16, types.T_array_float16},
 		{types.T_text, types.T_array_float16, types.T_array_float16, types.T_array_float16},
@@ -3142,6 +3208,19 @@ func initFixed3() {
 	for _, r := range implicitCastSupported {
 		for _, to := range r.toList {
 			addFixedImplicitTypeCastRule(r.from, to.toType, to.preferLevel)
+		}
+	}
+	// bf16, float16, float8 and float4 have no function overloads of their own: they widen
+	// to float32 (exact), then float64, then follow float32's integer and string targets.
+	for _, from := range []types.T{types.T_bf16, types.T_float16, types.T_float8, types.T_float4} {
+		addFixedImplicitTypeCastRule(from, types.T_float32, 1)
+		addFixedImplicitTypeCastRule(from, types.T_float64, 2)
+		for _, to := range []types.T{
+			types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+			types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+			types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
+		} {
+			addFixedImplicitTypeCastRule(from, to, 3)
 		}
 	}
 }

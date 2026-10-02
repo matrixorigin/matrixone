@@ -3389,3 +3389,17 @@ func TestConstantTransposeArithmeticSemantics(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateAndSetHivePartitionOptions_LowPrecisionFloat(t *testing.T) {
+	stmt := &tree.CreateTable{Param: &tree.ExternParam{}}
+	stmt.Param.Option = []string{
+		"format", "parquet",
+		"hive_partitioning", "true",
+		"hive_partition_columns", "p",
+	}
+	for _, id := range []types.T{types.T_bf16, types.T_float16, types.T_float8, types.T_float4} {
+		ct := makeHivePlan(&plan.ColDef{Name: "p", Typ: plan.Type{Id: int32(id)}})
+		err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+		require.ErrorContains(t, err, "partition column 'p' cannot be a "+id.String()+" type")
+	}
+}

@@ -466,6 +466,9 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 			case types.T_uint64:
 				val := vector.GetFixedAtNoTypeCheck[uint64](vec, i)
 				formatOutputString(ep, []byte(strconv.FormatUint(uint64(val), 10)), symbol[j], closeby, flag[j], buffer)
+			case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+				val, _ := vector.GetLowPrecisionFloatAt(vec, i)
+				formatOutputString(ep, []byte(strconv.FormatFloat(float64(val), 'f', -1, 32)), symbol[j], closeby, flag[j], buffer)
 			case types.T_float32:
 				val := vector.GetFixedAtNoTypeCheck[float32](vec, i)
 				if vec.GetType().Scale < 0 || vec.GetType().Width == 0 {
@@ -498,6 +501,15 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
 			case types.T_array_float64:
 				arrStr := types.BytesToArrayToString[float64](vec.GetBytesAt(i))
+				value := addEscapeToString(util2.UnsafeStringToBytes(arrStr), closeby)
+				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
+			case types.T_array_float8, types.T_array_float4:
+				arrStr, err := types.BlockScaledToString(vec.GetBytesAt(i))
+				if err != nil {
+					sendExportBatchByte(ctx, ByteChan, &BatchByte{err: err})
+					bat.Clean(mp)
+					return
+				}
 				value := addEscapeToString(util2.UnsafeStringToBytes(arrStr), closeby)
 				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
 			case types.T_array_bf16:
@@ -1244,6 +1256,9 @@ func vectorValueToJSON(vec *vector.Vector, i int, ss *Session, backSes *backSess
 		return vector.GetFixedAtNoTypeCheck[uint64](vec, i), nil
 	case types.T_float32:
 		return vector.GetFixedAtNoTypeCheck[float32](vec, i), nil
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		val, _ := vector.GetLowPrecisionFloatAt(vec, i)
+		return val, nil
 	case types.T_float64:
 		return vector.GetFixedAtNoTypeCheck[float64](vec, i), nil
 	case types.T_char, types.T_varchar, types.T_text:
@@ -1259,6 +1274,8 @@ func vectorValueToJSON(vec *vector.Vector, i int, ss *Session, backSes *backSess
 		return types.BytesToArray[float32](vec.GetBytesAt(i)), nil
 	case types.T_array_float64:
 		return types.BytesToArray[float64](vec.GetBytesAt(i)), nil
+	case types.T_array_float8, types.T_array_float4:
+		return types.BlockScaledToFloat32(vec.GetBytesAt(i))
 	case types.T_array_bf16:
 		// bf16/f16 are uint16-backed; widen to float32 so JSON emits their float values
 		// (a raw []BF16 would marshal the uint16 bit patterns).

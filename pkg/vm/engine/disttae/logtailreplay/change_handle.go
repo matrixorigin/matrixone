@@ -3941,6 +3941,14 @@ func appendFromEntry(src, vec *vector.Vector, offset int, mp *mpool.MPool) {
 			val = vector.GetFixedAtNoTypeCheck[types.Uuid](src, offset)
 		case types.T_float32:
 			val = vector.GetFixedAtNoTypeCheck[float32](src, offset)
+		case types.T_bf16:
+			val = vector.GetFixedAtNoTypeCheck[types.BF16](src, offset)
+		case types.T_float16:
+			val = vector.GetFixedAtNoTypeCheck[types.Float16](src, offset)
+		case types.T_float8:
+			val = vector.GetFixedAtNoTypeCheck[types.Float8](src, offset)
+		case types.T_float4:
+			val = vector.GetFixedAtNoTypeCheck[types.Float4](src, offset)
 		case types.T_float64:
 			val = vector.GetFixedAtNoTypeCheck[float64](src, offset)
 		case types.T_date:
@@ -3964,6 +3972,7 @@ func appendFromEntry(src, vec *vector.Vector, offset int, mp *mpool.MPool) {
 		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
 			types.T_array_float32, types.T_array_float64,
 			types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+			types.T_array_float8, types.T_array_float4,
 			types.T_datalink, types.T_geometry, types.T_geometry32:
 			val = src.GetBytesAt(offset)
 		default:
