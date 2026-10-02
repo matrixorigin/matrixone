@@ -1655,6 +1655,13 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.Cost = rowCount
 			node.Stats.Outcnt = rowCount
 			node.Stats.Selectivity = 1
+		} else if node.TableDef == nil && len(node.Children) == 0 {
+			// The executor supplies one dummy row for no-FROM/DUAL input.
+			node.Stats.TableCnt = 1
+			node.Stats.Cost = 1
+			node.Stats.Outcnt = 1
+			node.Stats.Selectivity = 1
+			node.Stats.BlockNum = 1
 		}
 
 	case plan.Node_VECTOR_QUERY_TOP:

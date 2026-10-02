@@ -45,6 +45,25 @@ execute large_key using @key;
 set @key = '9007199254740991';
 explain force execute large_key using @key;
 execute large_key using @key;
+set @key = '9007199254740993';
+execute large_key using @key;
+set @key = '9007199254740992.5';
+execute large_key using @key;
 deallocate prepare large_key;
+
+-- Derived numeric parameters retain their casts and native key filtering.
+prepare derived_key from 'select group_concat(id order by id) from keys64 where id=abs(cast(? as decimal(38,0)))';
+set @key = '-9007199254740993';
+explain force execute derived_key using @key;
+execute derived_key using @key;
+set @key = '9007199254740992.5';
+execute derived_key using @key;
+set @key = null;
+execute derived_key using @key;
+set @key = '9223372036854775808';
+execute derived_key using @key;
+set @key = '9007199254740993';
+execute derived_key using @key;
+deallocate prepare derived_key;
 
 drop database issue_29506_filters;
