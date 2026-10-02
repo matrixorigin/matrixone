@@ -33,12 +33,19 @@ import (
 
 const DefaultTenantMoAdmin = "sys:internal:moadmin"
 
-func applyOverride(sess *Session, opts ie.SessionOverrideOptions) {
+func applyOverride(ctx context.Context, sess *Session, opts ie.SessionOverrideOptions) error {
 	if opts.Database != nil {
 		sess.SetDatabaseName(*opts.Database)
 	}
 
 	if opts.Username != nil {
+		principal, err := GetTenantInfo(ctx, *opts.Username)
+		if err != nil {
+			return err
+		}
+		if acc := sess.GetTenantInfo(); acc != nil {
+			acc.SetUser(principal.GetUser())
+		}
 		sess.respr.SetStr(USERNAME, *opts.Username)
 	}
 
@@ -60,7 +67,7 @@ func applyOverride(sess *Session, opts ie.SessionOverrideOptions) {
 			acc.SetDefaultRoleID(*opts.DefaultRoleId)
 		}
 	}
-
+	return nil
 }
 
 type internalExecutor struct {
@@ -148,7 +155,10 @@ func (ie *internalExecutor) ExecWithStatus(ctx context.Context, sql string, opts
 	var cancel context.CancelFunc
 	ctx, cancel = context.WithTimeoutCause(ctx, getPu(ie.service).SV.SessionTimeout.Duration, moerr.CauseInternalExecutorExec)
 	defer cancel()
-	sess := ie.newCmdSession(ctx, opts)
+	sess, err := ie.newCmdSession(ctx, opts)
+	if err != nil {
+		return status, err
+	}
 	defer func() {
 		sess.Close()
 	}()
@@ -178,7 +188,10 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 	var cancel context.CancelFunc
 	ctx, cancel = context.WithTimeoutCause(ctx, getPu(ie.service).SV.SessionTimeout.Duration, moerr.CauseInternalExecutorQuery)
 	defer cancel()
-	sess := ie.newCmdSession(ctx, opts)
+	sess, err := ie.newCmdSession(ctx, opts)
+	if err != nil {
+		return &internalExecResult{resultSet: &MysqlResultSet{}, err: err}
+	}
 	defer sess.Close()
 	sess.EnterFPrint(FPInternalExecutorQuery)
 	defer sess.ExitFPrint(FPInternalExecutorQuery)
@@ -189,13 +202,13 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 		ses:    sess,
 	}
 	defer tempExecCtx.Close()
-	err := doComQuery(sess, &tempExecCtx, &UserInput{sql: sql})
+	err = doComQuery(sess, &tempExecCtx, &UserInput{sql: sql})
 	res := ie.proto.swapOutResult()
 	res.err = moerr.AttachCause(ctx, err)
 	return res
 }
 
-func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOverrideOptions) *Session {
+func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOverrideOptions) (*Session, error) {
 	// Use the Mid configuration for session. We can make Mid a configuration
 	// param, or, compute from GuestMmuLimitation.   Lazy.
 	//
@@ -230,15 +243,21 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 		t, _ = GetTenantInfo(ctx, DefaultTenantMoAdmin)
 	}
 	sess.SetTenantInfo(t)
-	applyOverride(sess, ie.baseSessOpts)
-	applyOverride(sess, opts)
+	if err := applyOverride(ctx, sess, ie.baseSessOpts); err != nil {
+		sess.Close()
+		return nil, err
+	}
+	if err := applyOverride(ctx, sess, opts); err != nil {
+		sess.Close()
+		return nil, err
+	}
 
 	//make sure init tasks can see the prev task's data
 	now, _ := runtime.ServiceRuntime(ie.service).Clock().Now()
 	sess.lastCommitTS = now
 
 	sess.initLogger()
-	return sess
+	return sess, nil
 }
 
 func (ie *internalExecutor) ApplySessionOverride(opts ie.SessionOverrideOptions) {

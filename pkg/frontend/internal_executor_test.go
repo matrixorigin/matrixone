@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 )
@@ -53,16 +54,69 @@ func TestIe(t *testing.T) {
 			setPu("", pu)
 			executor := newIe(sid)
 			executor.ApplySessionOverride(ie.NewOptsBuilder().Username("dump").Finish())
-			sess := executor.newCmdSession(ctx, ie.NewOptsBuilder().Database("mo_catalog").Internal(true).Finish())
+			sess, err := executor.newCmdSession(ctx, ie.NewOptsBuilder().Database("mo_catalog").Internal(true).Finish())
+			require.NoError(t, err)
+			defer sess.Close()
 			assert.Equal(t, "dump", sess.GetResponser().GetStr(USERNAME))
+			assert.Equal(t, "dump", sess.GetTenantInfo().GetUser())
 
-			err := executor.Exec(ctx, "whatever", ie.NewOptsBuilder().Finish())
+			err = executor.Exec(ctx, "whatever", ie.NewOptsBuilder().Finish())
 			assert.Error(t, err)
 			res := executor.Query(ctx, "whatever", ie.NewOptsBuilder().Finish())
 			assert.Error(t, err)
 			assert.Equal(t, uint64(0), res.RowCount())
 		},
 	)
+}
+
+func TestInternalExecutorAuthorizationIdentity(t *testing.T) {
+	runtime.RunTest("", func(rt runtime.Runtime) {
+		setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+		for _, username := range []string{"definer", "tenant:definer", "tenant:definer:writer", "tenant#definer#writer", "tenant%3Adefiner%3Awriter", "tenant:definer:writer?label=value"} {
+			t.Run(username, func(t *testing.T) {
+				executor := newIe("")
+				executor.ApplySessionOverride(ie.NewOptsBuilder().Username("base").Finish())
+				ctx := defines.AttachAccount(t.Context(), 0, 0, 0)
+				opts := taskservice.DefinerOpts(taskservice.SQLTask{AccountID: 10, Creator: username, CreatorUserID: 42, CreatorRoleID: 43})
+				sess, err := executor.newCmdSession(ctx, opts)
+				require.NoError(t, err)
+				defer sess.Close()
+				principal := sess.GetTenantInfo()
+				require.Equal(t, "definer", principal.GetUser())
+				require.Equal(t, username, sess.GetUserName())
+				require.Equal(t, uint32(10), principal.GetTenantID())
+				require.Equal(t, uint32(42), principal.GetUserID())
+				require.Equal(t, uint32(43), principal.GetDefaultRoleID())
+				require.Contains(t, getSqlForActiveRolesForAuthorization(principal, false), "u.user_name = 'definer'")
+			})
+		}
+		t.Run("root zero IDs", func(t *testing.T) {
+			executor := newIe("")
+			ctx := defines.AttachAccount(t.Context(), 0, 0, 0)
+			opts := taskservice.DefinerOpts(taskservice.SQLTask{Creator: "root"})
+			sess, err := executor.newCmdSession(ctx, opts)
+			require.NoError(t, err)
+			defer sess.Close()
+			require.Equal(t, "root", sess.GetTenantInfo().GetUser())
+			require.Zero(t, sess.GetTenantInfo().GetTenantID())
+			require.Zero(t, sess.GetTenantInfo().GetUserID())
+			require.Zero(t, sess.GetTenantInfo().GetDefaultRoleID())
+		})
+		for _, username := range []string{"tenant:", "tenant::writer"} {
+			for _, base := range []bool{false, true} {
+				t.Run("invalid/"+username+map[bool]string{false: "/command", true: "/base"}[base], func(t *testing.T) {
+					executor := newIe("")
+					opts := ie.NewOptsBuilder().Username(username).Finish()
+					if base {
+						executor.ApplySessionOverride(opts)
+						opts = ie.NewOptsBuilder().Finish()
+					}
+					require.ErrorContains(t, executor.Exec(t.Context(), "select 1", opts), "invalid user name")
+					require.ErrorContains(t, executor.Query(t.Context(), "select 1", opts).Error(), "invalid user name")
+				})
+			}
+		}
+	})
 }
 
 func TestIeProto(t *testing.T) {
@@ -159,7 +213,8 @@ func Test_internalProtocol_Write(t *testing.T) {
 	assert.Nil(t, ip.WriteOK(1, 1, 0, 0, ""))
 	assert.Nil(t, ip.WriteEOFOrOK(0, 1))
 
-	ses := executorVar.newCmdSession(ctx, ie.NewOptsBuilder().Finish())
+	ses, err := executorVar.newCmdSession(ctx, ie.NewOptsBuilder().Finish())
+	require.NoError(t, err)
 	col1 := &MysqlColumn{}
 	col1.SetName("col1")
 	col1.SetColumnType(defines.MYSQL_TYPE_LONG)
@@ -189,7 +244,7 @@ func Test_internalProtocol_Write(t *testing.T) {
 
 	// ======================= main ===================
 	ip.Reset(ses)
-	err := ip.Write(execCtx, nil, batch1)
+	err = ip.Write(execCtx, nil, batch1)
 	require.NoError(t, err)
 	require.Equal(t, 1, int(ip.result.affectedRows))
 	require.Equal(t, 1, len(ip.result.resultSet.Data))
