@@ -2392,11 +2392,13 @@ func (builder *QueryBuilder) parseOptimizeHints() {
 	}
 }
 
-func (builder *QueryBuilder) optimizeFilters(rootID int32) int32 {
+func (builder *QueryBuilder) optimizeFilters(rootID int32) (int32, error) {
 	rootID, _ = builder.pushdownFilters(rootID, nil, false)
 	transposeTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID)
 	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, false)
-	builder.rewriteNumericDomainFilters(rootID)
+	if err := builder.rewriteNumericDomainFilters(rootID, plan.Node_TABLE_SCAN); err != nil {
+		return rootID, err
+	}
 	ReCalcNodeStats(rootID, builder, true, true, true)
 	builder.rewriteInDomainNotInFilters(rootID)
 	compositePartBlockFilters := builder.collectCompositePartBlockFilters(rootID)
@@ -2409,7 +2411,7 @@ func (builder *QueryBuilder) optimizeFilters(rootID int32) int32 {
 	builder.appendCompoundKeyBlockFilters(rootID)
 	builder.appendCompositePartBlockFilters(compositePartBlockFilters)
 	sortFilterListByStats(builder.GetContext(), rootID, builder)
-	return rootID
+	return rootID, nil
 }
 
 // plan for dml  don't go optimizer, which cause some problem, and this need refactoring

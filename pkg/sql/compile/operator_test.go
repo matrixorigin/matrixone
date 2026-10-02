@@ -1935,3 +1935,30 @@ func TestDupOperatorApplyPreservesFulltextReferences(t *testing.T) {
 	require.Equal(t, tableFunction.FulltextSourceRef, dup.TableFunction.FulltextSourceRef)
 	require.Equal(t, tableFunction.FulltextIndexRef, dup.TableFunction.FulltextIndexRef)
 }
+
+func TestPreInsertEstimatedRowsAreOnlyBoundedPrefetchHints(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		name  string
+		auto  bool
+		stats *plan.Stats
+		want  int64
+	}{
+		{"finite", true, &plan.Stats{Outcnt: 5}, 5},
+		{"finite_conservative_bound", true, &plan.Stats{Outcnt: math.MaxUint32}, math.MaxUint32},
+		{"saturating", true, &plan.Stats{Outcnt: float64(math.MaxUint64)}, math.MaxInt64},
+		{"nan", true, &plan.Stats{Outcnt: math.NaN()}, 0},
+		{"missing", true, nil, 0},
+		{"no_auto", false, &plan.Stats{Outcnt: 5}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			child := &plan.Node{Stats: tc.stats}
+			node := &plan.Node{Children: []int32{0}, PreInsertCtx: &plan.PreInsertCtx{
+				Ref: &plan.ObjectRef{}, TableDef: &plan.TableDef{}, HasAutoCol: tc.auto}}
+			op, err := constructPreInsert([]*plan.Node{child}, node, nil, proc)
+			require.NoError(t, err)
+			defer op.Release()
+			require.Equal(t, tc.want, op.EstimatedRowCount)
+		})
+	}
+}

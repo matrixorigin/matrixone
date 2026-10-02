@@ -4455,3 +4455,49 @@ func TestConstructBlockPKFilterValidEmptyEquality(t *testing.T) {
 	require.Equal(t, []int64{0}, filter.SortedSearchFunc(containers.Vectors{*keys}))
 	require.Equal(t, []int64{0}, filter.UnSortedSearchFunc(containers.Vectors{*keys}))
 }
+
+func TestCompileFilterExprCharComparisonDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(func() { require.Zero(t, proc.Mp().CurrNB()); proc.Free() })
+	var executors []colexec.ExpressionExecutor
+	t.Cleanup(func() {
+		for _, executor := range executors {
+			executor.Free()
+		}
+	})
+	materialize := func(expr *plan.Expr) {
+		_, err := plan2.ReplaceFoldExpr(proc, expr, &executors)
+		require.NoError(t, err)
+		require.NoError(t, plan2.EvalFoldExpr(proc, expr, &executors))
+	}
+	table := &plan.TableDef{Name: "t", Name2ColIndex: map[string]int32{"c": 0, "v": 1}, Cols: []*plan.ColDef{
+		{Name: "c", Seqnum: 0, Typ: plan.Type{Id: int32(types.T_char), Width: 8}},
+		{Name: "v", Seqnum: 1, Typ: plan.Type{Id: int32(types.T_int64)}},
+	}}
+	char := MakeFunctionExprForTest("=", []*plan.Expr{MakeColExprForTest(0, types.T_char, "c"), plan2.MakePlan2StringConstExprWithType("MO ")})
+	materialize(char)
+	_, _, _, _, _, compiled, _ := CompileFilterExpr(char, table, nil)
+	require.False(t, compiled)
+	charType := plan.Type{Id: int32(types.T_char), Width: 8}
+	item := plan2.MakePlan2StringConstExprWithType("MO ")
+	item.Typ = charType
+	otherItem := plan2.MakePlan2StringConstExprWithType("ZZ")
+	otherItem.Typ = charType
+	list := &plan.Expr{Typ: plan.Type{Id: int32(types.T_tuple)}, Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{item, otherItem}}}}
+	charIn, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "in", []*plan.Expr{MakeColExprForTest(0, types.T_char, "c"), list})
+	require.NoError(t, err)
+	functionID, _ := function.DecodeOverloadID(charIn.GetF().Func.GetObj())
+	require.Equal(t, int32(function.IN), functionID, "exercise membership rather than singleton equality")
+	materialize(charIn)
+	_, _, _, _, _, compiled, _ = CompileFilterExpr(charIn, table, nil)
+	require.False(t, compiled, "native membership cannot use raw CHAR keys")
+	numeric := MakeFunctionExprForTest("=", []*plan.Expr{MakeColExprForTest(1, types.T_int64, "v"), plan2.MakePlan2Int64ConstExprWithType(-10)})
+	materialize(numeric)
+	_, _, _, _, _, compiled, _ = CompileFilterExpr(numeric, table, nil)
+	require.True(t, compiled, "nearby native numeric control")
+	_, _, _, _, _, compiled, _ = CompileFilterExprs([]*plan.Expr{char, numeric}, table, nil)
+	require.True(t, compiled, "a compatible independent conjunct remains usable")
+	disjunction := MakeFunctionExprForTest("or", []*plan.Expr{char, numeric})
+	_, _, _, _, _, compiled, _ = CompileFilterExpr(disjunction, table, nil)
+	require.False(t, compiled, "an unsupported disjunct cannot prove absence")
+}

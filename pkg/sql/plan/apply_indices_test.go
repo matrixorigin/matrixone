@@ -773,6 +773,42 @@ func TestIndexHintAffectsRegularIndexChoice(t *testing.T) {
 	require.Equal(t, "idx_ab", findFirstIndexScanName(plan))
 }
 
+func TestIndexHintRuntimeConstantSelectors(t *testing.T) {
+	for _, tc := range []struct {
+		name, rhs string
+		indexed   bool
+	}{
+		{"literal", "1", true},
+		{"constant case", "case when true then 1 else 2 end", true},
+		{"constant else", "case when false then 2 else 1 end", true},
+		{"nested case", "abs(case when true then -1 else -2 end)", true},
+		{"if control", "if(true,1,2)", true},
+		{"row dependent", "case when b=1 then 1 else 2 end", false},
+	} {
+		for _, reverse := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/reverse=%t", tc.name, reverse), func(t *testing.T) {
+				mock := NewMockOptimizer(true)
+				t.Cleanup(mock.ctxt.GetProcess().Free)
+				addIndexHintChoiceTableForTest(mock)
+				// Avoid an implicit widening cast on the indexed column.
+				mock.ctxt.tables["index_hint_t"].Cols[1].Typ = planpb.Type{Id: int32(types.T_int64)}
+				predicate := "a = " + tc.rhs
+				if reverse {
+					predicate = tc.rhs + " = a"
+				}
+				p, err := runOneStmt(mock, t, "select b from index_hint_t force index(idx_a) where "+predicate)
+				require.NoError(t, err)
+				if tc.indexed {
+					require.Equal(t, "idx_a", findFirstIndexScanName(p))
+					require.True(t, planHasIndexJoin(p))
+				} else {
+					require.Empty(t, findFirstIndexScanName(p))
+				}
+			})
+		}
+	}
+}
+
 func TestIndexHintUseEmptyDisablesRegularIndexChoice(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addIndexHintChoiceTableForTest(mock)
@@ -1157,11 +1193,11 @@ func TestIndexHintGroupScopeSelectsAndIgnoresCoveringIndex(t *testing.T) {
 	require.Equal(t, "idx_a", findFirstIndexScanName(queryPlan))
 	require.True(t, planHasIndexJoin(queryPlan))
 
-	queryPlan, err = runOneStmt(mock, t, "select a,b from index_hint_t force index for order by(uk_ab) order by a,b")
+	queryPlan, err = runOneStmt(mock, t, "select a,b from index_hint_t force index for order by(uk_ab) where a is not null and b is not null order by a,b")
 	require.NoError(t, err)
 	require.Equal(t, "uk_ab", findFirstIndexScanName(queryPlan))
 
-	queryPlan, err = runOneStmt(mock, t, "select a,b,count(*) from index_hint_t force index for group by(uk_ab) group by a,b")
+	queryPlan, err = runOneStmt(mock, t, "select a,b,count(*) from index_hint_t force index for group by(uk_ab) where a is not null and b is not null group by a,b")
 	require.NoError(t, err)
 	require.Equal(t, "uk_ab", findFirstIndexScanName(queryPlan))
 }

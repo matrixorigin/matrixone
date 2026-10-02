@@ -347,7 +347,7 @@ func (c *compilerContext) statsWithTableDefVersion(
 	if w := c.GetStatsCache().Get(tableID); w.Exists() {
 		if time.Now().Unix()-w.GetLastVisit() < 3 {
 			s := w.GetStats()
-			if plan.StatsInfoUsable(s) {
+			if plan.StatsCacheEligible(c.proc, snapshot) && plan.StatsInfoUsableForCache(s) {
 				return s, nil
 			}
 			// Stats is nil or empty, need to re-check
@@ -360,8 +360,16 @@ func (c *compilerContext) statsWithTableDefVersion(
 		return nil, err
 	}
 
-	// Cache the result
-	if c.GetStatsCache().SetAndReportReset(tableID, result) {
+	// NDV/range consumers read the table-ID wrapper during this planning pass.
+	// Keep snapshot maps there without permitting a later ordinary fast hit;
+	// return the completed observation itself so named empty remains usable.
+	cachedResult := result
+	if plan.IsSnapshotValid(snapshot) && result != nil {
+		copy := *result
+		copy.TableName = ""
+		cachedResult = &copy
+	}
+	if c.GetStatsCache().SetAndReportReset(tableID, cachedResult) {
 		clear(c.statsCacheVersions)
 	}
 	if tableDefVersion != nil {

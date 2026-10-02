@@ -920,7 +920,10 @@ func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, 
 	op.Attrs = attrs
 	op.IsOldUpdate = preCtx.IsOldUpdate
 	op.IsNewUpdate = preCtx.IsNewUpdate
-	op.EstimatedRowCount = int64(nodes[node.Children[0]].Stats.Outcnt)
+	op.EstimatedRowCount = 0
+	if preCtx.HasAutoCol && nodes[node.Children[0]].Stats != nil {
+		op.EstimatedRowCount = plan2.EstimatedRowsInt64(nodes[node.Children[0]].Stats.Outcnt)
+	}
 	op.CompPkeyExpr = preCtx.CompPkeyExpr
 	op.ClusterByExpr = preCtx.ClusterByExpr
 	op.ColOffset = preCtx.ColOffset
@@ -2330,9 +2333,9 @@ func constructShuffleOperatorForJoin(bucketNum int32, node *plan.Node, left bool
 	arg.StringHashKey = isStringShuffleKeyType(typ)
 	switch types.T(typ) {
 	case types.T_int64, types.T_int32, types.T_int16:
-		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
+		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, plan2.EstimatedRowsInt64(node.Stats.TableCnt))
 	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
-		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
+		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, plan2.EstimatedRowsInt64(node.Stats.TableCnt))
 	}
 	if left && len(node.RuntimeFilterProbeList) > 0 {
 		arg.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(node.RuntimeFilterProbeList[0])
@@ -2356,9 +2359,9 @@ func constructShuffleArgForGroup(bucketNum int32, node *plan.Node) *shuffle.Shuf
 	arg.StringHashKey = isStringShuffleKeyType(typ)
 	switch types.T(typ) {
 	case types.T_int64, types.T_int32, types.T_int16:
-		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
+		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, plan2.EstimatedRowsInt64(node.Stats.TableCnt))
 	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
-		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
+		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, plan2.EstimatedRowsInt64(node.Stats.TableCnt))
 	}
 	return arg
 }

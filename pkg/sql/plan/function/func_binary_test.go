@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"math/big"
 	"strconv"
 	"strings"
 	"testing"
@@ -34,6 +35,74 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func TestIntegerCeilFloorCheckedBoundaries(t *testing.T) {
+	// big.Int supplies an independent mathematical result, including values
+	// outside the registered integer return type.
+	oracle := func(x *big.Int, digits int64, ceil bool) *big.Int {
+		if digits >= 0 {
+			return new(big.Int).Set(x)
+		}
+		exponent := int64(21)
+		if digits > -21 {
+			exponent = -digits
+		}
+		scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(exponent), nil)
+		q, r := new(big.Int), new(big.Int)
+		q.QuoRem(x, scale, r)
+		if ceil && r.Sign() > 0 {
+			q.Add(q, big.NewInt(1))
+		} else if !ceil && r.Sign() < 0 {
+			q.Sub(q, big.NewInt(1))
+		}
+		return q.Mul(q, scale)
+	}
+	digits := []int64{math.MinInt64, -20, -19, -18, -1, 0, math.MaxInt64}
+	for _, x := range []int64{math.MinInt64, math.MinInt64 + 10, -20, -11, -10, -1, 0, 1, 10, 11, 20, math.MaxInt64 - 10, math.MaxInt64} {
+		for _, d := range digits {
+			for _, ceil := range []bool{false, true} {
+				want := oracle(big.NewInt(x), d, ceil)
+				var got int64
+				var failure any
+				func() {
+					defer func() { failure = recover() }()
+					if ceil {
+						got = ceilInt64(x, d)
+					} else {
+						got = floorInt64(x, d)
+					}
+				}()
+				if want.IsInt64() {
+					require.Nil(t, failure, "x=%d digits=%d ceil=%v", x, d, ceil)
+					require.Equal(t, want.Int64(), got)
+				} else {
+					err, ok := failure.(error)
+					require.True(t, ok)
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange))
+				}
+			}
+		}
+	}
+	for _, x := range []uint64{0, 1, 10, 11, 10000000000000000000, math.MaxUint64 - 10, math.MaxUint64} {
+		for _, d := range digits {
+			want := oracle(new(big.Int).SetUint64(x), d, true)
+			var got uint64
+			var failure any
+			func() {
+				defer func() { failure = recover() }()
+				got = ceilUint64(x, d)
+			}()
+			if want.IsUint64() {
+				require.Nil(t, failure, "x=%d digits=%d", x, d)
+				require.Equal(t, want.Uint64(), got)
+			} else {
+				err, ok := failure.(error)
+				require.True(t, ok)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange))
+			}
+		}
+	}
+}
 
 func TestTimestampWindowBoundarySequenceSteps(t *testing.T) {
 	zone, err := time.LoadLocation("America/New_York")
@@ -18229,4 +18298,151 @@ func TestValidateGeometryCollectionNestingDepthContract(t *testing.T) {
 		buildNestedCollection(maxGeometryCollectionNestingDepth + 1))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "geometry collection nesting depth exceeds")
+}
+
+func TestDecimalPrecisionKernelSelection(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(func() { require.Zero(t, proc.Mp().CurrNB()); proc.Free() })
+	for _, oid := range []types.T{types.T_decimal64, types.T_decimal128} {
+		width := int32(18)
+		if oid == types.T_decimal128 {
+			width = 38
+		}
+		for _, name := range []string{"ceil", "floor", "round"} {
+			t.Run(oid.String()+"/"+name, func(t *testing.T) {
+				typ := types.New(oid, width, 0)
+				resolved, err := GetFunctionByName(proc.Ctx, name, []types.Type{typ, types.T_int64.ToType()})
+				require.NoError(t, err)
+				overload, err := GetFunctionById(proc.Ctx, resolved.GetEncodedOverloadID())
+				require.NoError(t, err)
+				kernel, _, cleanup, _ := overload.GetExecuteMethod()
+				if cleanup != nil {
+					defer func() { require.NoError(t, cleanup()) }()
+				}
+				// A legal fractional carry must preserve both existing result-scale forms.
+				for _, outputScale := range []int32{0, 2} {
+					func() {
+						input := vector.NewVec(types.New(oid, width, 2))
+						defer input.Free(proc.Mp())
+						var value any = types.Decimal64(999)
+						if oid == types.T_decimal128 {
+							value = types.Decimal128{B0_63: 999}
+						}
+						require.NoError(t, vector.AppendAny(input, value, false, proc.Mp()))
+						digits, err := vector.NewConstFixed(types.T_int64.ToType(), int64(0), 1, proc.Mp())
+						require.NoError(t, err)
+						defer digits.Free(proc.Mp())
+						result := vector.NewFunctionResultWrapper(types.New(oid, width, outputScale), proc.Mp())
+						defer result.Free()
+						require.NoError(t, result.PreExtendAndReset(1))
+						require.NoError(t, kernel([]*vector.Vector{input, digits}, result, proc, 1, nil))
+						expected := uint64(10)
+						if name == "floor" {
+							expected = 9
+						}
+						if outputScale == 2 {
+							expected *= 100
+						}
+						if oid == types.T_decimal64 {
+							require.Equal(t, types.Decimal64(expected), vector.MustFixedColNoTypeCheck[types.Decimal64](result.GetResultVector())[0])
+						} else {
+							require.Equal(t, types.Decimal128{B0_63: expected}, vector.MustFixedColNoTypeCheck[types.Decimal128](result.GetResultVector())[0])
+						}
+					}()
+				}
+				for _, mode := range []string{"selected", "null", "masked"} {
+					func() {
+						input := vector.NewVec(typ)
+						defer input.Free(proc.Mp())
+						var good, bad any = types.Decimal64(10), types.Decimal64Max
+						if name == "floor" {
+							bad = types.Decimal64Min
+						}
+						if oid == types.T_decimal128 {
+							good = types.Decimal128{B0_63: 10}
+							bad = types.Decimal128Max
+							if name == "floor" {
+								bad = types.Decimal128Min
+							}
+						}
+						require.NoError(t, vector.AppendAny(input, good, false, proc.Mp()))
+						require.NoError(t, vector.AppendAny(input, bad, false, proc.Mp()))
+						if mode == "null" {
+							input.GetNulls().Add(1)
+						}
+						digits, err := vector.NewConstFixed(types.T_int64.ToType(), int64(-1), 2, proc.Mp())
+						require.NoError(t, err)
+						defer digits.Free(proc.Mp())
+						result := vector.NewFunctionResultWrapper(resolved.GetReturnType(), proc.Mp())
+						defer result.Free()
+						require.NoError(t, result.PreExtendAndReset(2))
+						var selection *FunctionSelectList
+						if mode == "masked" {
+							selection = &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}
+						}
+						invoke := func() error { return kernel([]*vector.Vector{input, digits}, result, proc, 2, selection) }
+						if mode == "selected" {
+							var caught any
+							var diagnostic error
+							func() { defer func() { caught = recover() }(); diagnostic = invoke() }()
+							if caught != nil {
+								var ok bool
+								diagnostic, ok = caught.(error)
+								require.True(t, ok, "panic must carry a typed error")
+							}
+							require.True(t, moerr.IsMoErrCode(diagnostic, moerr.ErrOutOfRange))
+						} else {
+							var kernelErr error
+							require.NotPanics(t, func() { kernelErr = invoke() })
+							require.NoError(t, kernelErr)
+							require.True(t, result.GetResultVector().GetNulls().Contains(1))
+							if oid == types.T_decimal64 {
+								require.Equal(t, types.Decimal64(10), vector.MustFixedColNoTypeCheck[types.Decimal64](result.GetResultVector())[0])
+							} else {
+								require.Equal(t, types.Decimal128{B0_63: 10}, vector.MustFixedColNoTypeCheck[types.Decimal128](result.GetResultVector())[0])
+							}
+						}
+					}()
+				}
+			})
+		}
+	}
+}
+
+func TestDecimalPrecisionCallerBoundaries(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(func() { require.Zero(t, proc.Mp().CurrNB()); proc.Free() })
+	// Scale-zero conversion is an identity even at physical storage boundaries.
+	require.NotPanics(t, func() {
+		count, err := bitCountFromDecimal128(types.Decimal128Min, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(1), count)
+	})
+	require.NotPanics(t, func() {
+		_, err := bitCountFromDecimal128(types.Decimal128Max, 0)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	})
+	for _, tc := range []struct {
+		name     string
+		typ      types.Type
+		values   any
+		expected FunctionTestResult
+		fn       fEvalFn
+	}{
+		{"hex64 identity", types.New(types.T_decimal64, 18, 0), []types.Decimal64{types.Decimal64Min, types.Decimal64Max, 0}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"8000000000000000", "7FFFFFFFFFFFFFFF", ""}, []bool{false, false, true}), HexDecimal64},
+		{"hex64 fractional", types.New(types.T_decimal64, 18, 1), []types.Decimal64{95, 0, 0}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"A", "0", ""}, []bool{false, false, true}), HexDecimal64},
+		{"bitcount128 fractional", types.New(types.T_decimal128, 38, 1), []types.Decimal128{{B0_63: 15}, {B0_63: 25}, {}}, NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{1, 2, 0}, []bool{false, false, true}), BitCountDecimal128},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(tc.typ, tc.values, []bool{false, false, true})}, tc.expected, tc.fn)
+			defer func() {
+				for _, v := range fc.parameters {
+					v.Free(proc.Mp())
+				}
+				fc.result.Free()
+			}()
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
+	}
 }

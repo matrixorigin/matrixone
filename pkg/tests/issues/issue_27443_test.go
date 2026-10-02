@@ -323,10 +323,8 @@ func TestIssue27443BinaryPreparedDMLAndAggregate(t *testing.T) {
 			"select status from `"+dbName+"`.predicate_dst where id=1").Scan(&status))
 		require.Equal(t, int64(0), status)
 
-		// Text values above DOUBLE's exact-integer range must keep the filter in
-		// the common DOUBLE domain. Narrowing the converted value back to BIGINT
-		// would silently select only 9007199254740992 instead of both adjacent
-		// values, which compare equal after MySQL's string/numeric conversion.
+		// Complete signed integer text retains its exact identity beyond 2^53.
+		// The neighboring key must remain untouched by prepared DML.
 		execSQLRequire(t, ctx, db, "create table `"+dbName+"`.bigint_precision (id bigint primary key, status int)")
 		execSQLRequire(t, ctx, db, "insert into `"+dbName+"`.bigint_precision values (9007199254740992, 0), (9007199254740993, 0)")
 		bigintPrecisionStmt, err := db.PrepareContext(ctx,
@@ -338,7 +336,11 @@ func TestIssue27443BinaryPreparedDMLAndAggregate(t *testing.T) {
 		var matched int64
 		require.NoError(t, db.QueryRowContext(ctx,
 			"select count(*) from `"+dbName+"`.bigint_precision where status = 24").Scan(&matched))
-		require.Equal(t, int64(2), matched)
+		require.Equal(t, int64(1), matched)
+		var identities string
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select group_concat(concat(id, ':', status) order by id) from `"+dbName+"`.bigint_precision").Scan(&identities))
+		require.Equal(t, "9007199254740992:0,9007199254740993:24", identities)
 
 		// A fractional text prefix can round to an integral DOUBLE at the edge
 		// of DOUBLE's exact-integer range. It must stay in the common DOUBLE
@@ -350,6 +352,9 @@ func TestIssue27443BinaryPreparedDMLAndAggregate(t *testing.T) {
 		require.NoError(t, db.QueryRowContext(ctx,
 			"select count(*) from `"+dbName+"`.bigint_precision where status = 24").Scan(&matched))
 		require.Equal(t, int64(2), matched)
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select group_concat(id order by id) from `"+dbName+"`.bigint_precision where status = 24").Scan(&identities))
+		require.Equal(t, "9007199254740992,9007199254740993", identities)
 
 		// DECIMAL/text comparison has the same common DOUBLE domain. Casting the
 		// text through DOUBLE and then back to DECIMAL changes this value to

@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
@@ -31,6 +32,76 @@ import (
 	index2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/require"
 )
+
+func TestReCalcInnerJoinCardinality(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	typ := planpb.Type{Id: int32(types.T_int64)}
+	equality, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{
+		GetColExpr(typ, 1, 0), GetColExpr(typ, 2, 0),
+	})
+	require.NoError(t, err)
+	equality.Ndv = 2
+	for _, tc := range []struct {
+		name                                 string
+		left, right, leftSel, rightSel, want float64
+		on                                   bool
+	}{
+		{name: "cartesian", left: 2, right: 3, leftSel: 1, rightSel: 1, want: 6},
+		{name: "singleton", left: 1, right: 3, leftSel: 1, rightSel: 1, want: 3},
+		{name: "empty left", right: 3, leftSel: 1, rightSel: 1},
+		{name: "empty right", left: 3, leftSel: 1, rightSel: 1},
+		{name: "both empty", leftSel: 1, rightSel: 1},
+		{name: "filtered inputs", left: 2, right: 3, leftSel: .25, rightSel: .5, want: 6},
+		{name: "equality control", left: 2, right: 3, leftSel: 1, rightSel: 1, want: 3, on: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+			join := &planpb.Node{NodeType: planpb.Node_JOIN, JoinType: planpb.Node_INNER,
+				Children: []int32{0, 1}, Stats: DefaultStats()}
+			if tc.on {
+				join.OnList = []*planpb.Expr{equality}
+			}
+			builder.qry.Nodes = []*planpb.Node{
+				{NodeType: planpb.Node_VALUE_SCAN, Stats: &planpb.Stats{Outcnt: tc.left, Selectivity: tc.leftSel}},
+				{NodeType: planpb.Node_VALUE_SCAN, Stats: &planpb.Stats{Outcnt: tc.right, Selectivity: tc.rightSel}},
+				join,
+			}
+			for range 2 {
+				ReCalcNodeStats(2, builder, false, false, false)
+				require.Equal(t, tc.want, join.Stats.Outcnt)
+				require.Equal(t, tc.right, join.Stats.HashmapStats.HashmapSize)
+			}
+		})
+	}
+}
+
+func TestReCalcCartesianChainCardinality(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false), false, false)
+	const want = 300_000_000
+	for i, rows := range []float64{1000, 10, 3, 1000, 10} {
+		leafID := int32(len(builder.qry.Nodes))
+		builder.qry.Nodes = append(builder.qry.Nodes, &planpb.Node{
+			NodeType: planpb.Node_VALUE_SCAN, Stats: &planpb.Stats{Outcnt: rows, Selectivity: 1},
+		})
+		if i > 0 {
+			leftID := leafID - 1
+			builder.qry.Nodes = append(builder.qry.Nodes, &planpb.Node{
+				NodeType: planpb.Node_JOIN, JoinType: planpb.Node_INNER,
+				Children: []int32{leftID, leafID}, Stats: DefaultStats(),
+			})
+			ReCalcNodeStats(leafID+1, builder, false, false, false)
+		}
+	}
+	root := builder.qry.Nodes[len(builder.qry.Nodes)-1]
+	require.Equal(t, float64(want), root.Stats.Outcnt)
+	// The row limit is owned by the existing generic stats tail, rather than
+	// reimplemented in cartesian estimation.
+	for _, limit := range []uint64{0, 1, 7} {
+		root.Limit = MakePlan2Uint64ConstExprWithType(limit)
+		ReCalcNodeStats(int32(len(builder.qry.Nodes)-1), builder, false, false, false)
+		require.Equal(t, float64(limit), root.Stats.Outcnt)
+	}
+}
 
 func TestGetExecTypeAdaptiveTopIgnoresDeferredForceOneCN(t *testing.T) {
 	large := &planpb.Stats{BlockNum: int32(BlockThresholdForOneCN + 1), Cost: costThresholdForOneCN + 1}
@@ -119,6 +190,30 @@ func TestHintQueryTypeKeepsRuntimeFilterDeliveryLocal(t *testing.T) {
 	}
 }
 
+func TestAggregateBlockEstimateSaturates(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		rows float64
+		want int32
+	}{
+		{name: "partial block", rows: objectio.BlockMaxRows - 1, want: 1},
+		{name: "block boundary", rows: objectio.BlockMaxRows, want: 2},
+		{name: "last representable hint", rows: float64(math.MaxInt32-1) * objectio.BlockMaxRows, want: math.MaxInt32},
+		{name: "hint overflow", rows: float64(math.MaxInt32) * objectio.BlockMaxRows, want: math.MaxInt32},
+		{name: "unknown row upper bound", rows: float64(^uint64(0)), want: math.MaxInt32},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			builder := newRuntimeFilterSingleTestBuilder(false)
+			builder.qry.Nodes[0].Stats.Outcnt = tc.rows
+			builder.qry.Nodes = append(builder.qry.Nodes, &planpb.Node{
+				NodeType: planpb.Node_AGG, NodeId: 3, Children: []int32{0}, Stats: DefaultStats(),
+			})
+			ReCalcNodeStats(3, builder, false, false, false)
+			require.Equal(t, tc.want, builder.qry.Nodes[3].Stats.BlockNum)
+		})
+	}
+}
+
 func TestStatsInfoUsableWithoutPersistedObjects(t *testing.T) {
 	for _, test := range []struct {
 		name  string
@@ -147,15 +242,18 @@ type tableDefStatsTestCompilerContext struct {
 	*MockCompilerContext
 	stats       *pb.StatsInfo
 	gotTableDef *planpb.TableDef
+	gotObject   *planpb.ObjectRef
+	gotSnapshot *Snapshot
+	err         error
 }
 
 func (c *tableDefStatsTestCompilerContext) StatsWithTableDef(
-	_ *planpb.ObjectRef,
+	obj *planpb.ObjectRef,
 	tableDef *planpb.TableDef,
-	_ *Snapshot,
+	snapshot *Snapshot,
 ) (*pb.StatsInfo, error) {
-	c.gotTableDef = tableDef
-	return c.stats, nil
+	c.gotTableDef, c.gotObject, c.gotSnapshot = tableDef, obj, snapshot
+	return c.stats, c.err
 }
 
 func TestStatsForTableDefUsesVersionAwareCompilerContext(t *testing.T) {
@@ -220,9 +318,10 @@ func TestSafeStatsRatiosAvoidNonFiniteSelectivity(t *testing.T) {
 	t.Run("limit never increases cardinality", func(t *testing.T) {
 		builder := NewQueryBuilder(planpb.Query_SELECT, &MockCompilerContext{ctx: context.Background()}, false, false)
 		node := &planpb.Node{
-			NodeType: planpb.Node_VALUE_SCAN,
-			Stats:    &planpb.Stats{Outcnt: 10, Cost: 10, Selectivity: 1},
-			Limit:    MakePlan2Uint64ConstExprWithType(100),
+			NodeType:   planpb.Node_VALUE_SCAN,
+			RowsetData: &planpb.RowsetData{RowCount: 10},
+			Stats:      &planpb.Stats{Outcnt: 10, Cost: 10, Selectivity: 1},
+			Limit:      MakePlan2Uint64ConstExprWithType(100),
 		}
 		builder.qry.Nodes = []*planpb.Node{node}
 
@@ -234,10 +333,11 @@ func TestSafeStatsRatiosAvoidNonFiniteSelectivity(t *testing.T) {
 	t.Run("offset estimate remains idempotent", func(t *testing.T) {
 		builder := NewQueryBuilder(planpb.Query_SELECT, &MockCompilerContext{ctx: context.Background()}, false, false)
 		node := &planpb.Node{
-			NodeType: planpb.Node_VALUE_SCAN,
-			Stats:    &planpb.Stats{Outcnt: 10, Cost: 10, Selectivity: 1},
-			Limit:    MakePlan2Uint64ConstExprWithType(8),
-			Offset:   MakePlan2Uint64ConstExprWithType(7),
+			NodeType:   planpb.Node_VALUE_SCAN,
+			RowsetData: &planpb.RowsetData{RowCount: 10},
+			Stats:      &planpb.Stats{Outcnt: 10, Cost: 10, Selectivity: 1},
+			Limit:      MakePlan2Uint64ConstExprWithType(8),
+			Offset:     MakePlan2Uint64ConstExprWithType(7),
 		}
 		builder.qry.Nodes = []*planpb.Node{node}
 
@@ -2765,5 +2865,149 @@ func TestCompareStatsIsStrictWeakOrdering(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestStatsInfoCacheCompletion(t *testing.T) {
+	for _, tc := range []struct {
+		stats *pb.StatsInfo
+		want  bool
+	}{
+		{nil, false},
+		{&pb.StatsInfo{TableCnt: 5}, false},
+		{&pb.StatsInfo{AccurateObjectNumber: 1, TableCnt: 5}, false},
+		{&pb.StatsInfo{TableName: "t"}, true},
+		{&pb.StatsInfo{TableName: "t", TableCnt: 5}, true},
+		{&pb.StatsInfo{TableName: "t", TableCnt: math.NaN()}, false},
+	} {
+		require.Equal(t, tc.want, StatsInfoUsableForCache(tc.stats))
+	}
+}
+
+func TestEstimatedRowsInt64(t *testing.T) {
+	for _, tc := range []struct {
+		rows float64
+		want int64
+	}{
+		{0, 0}, {5.75, 5}, {-1, 0}, {math.NaN(), 0},
+		{float64(^uint64(0)), math.MaxInt64}, {math.Inf(1), math.MaxInt64},
+	} {
+		require.Equal(t, tc.want, EstimatedRowsInt64(tc.rows))
+	}
+}
+
+func TestCachedPlanStatsChanged(t *testing.T) {
+	ctx := &tableDefStatsTestCompilerContext{MockCompilerContext: NewMockCompilerContext(false)}
+	scan := &planpb.Node{NodeType: planpb.Node_TABLE_SCAN,
+		ObjRef: &planpb.ObjectRef{Obj: 42}, TableDef: &planpb.TableDef{Name: "events", Version: 7},
+		Stats: &planpb.Stats{TableCnt: 5, Outcnt: 1},
+	}
+	p := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{Nodes: []*planpb.Node{scan}, Steps: []int32{0}}}}
+	for _, tc := range []struct {
+		name    string
+		stats   *pb.StatsInfo
+		cached  float64
+		changed bool
+	}{
+		{"stable despite runtime filter", &pb.StatsInfo{TableCnt: 5}, 5, false},
+		{"growth", &pb.StatsInfo{TableCnt: 5000}, 5, true},
+		{"same-count object transition", &pb.StatsInfo{TableName: "events", AccurateObjectNumber: 1, TableCnt: 5}, 5, false},
+		{"lost observation", nil, 5, true},
+		{"stable unknown default", nil, 1000, false},
+		{"named empty", &pb.StatsInfo{TableName: "events"}, 5, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx.stats, scan.Stats.TableCnt = tc.stats, tc.cached
+			changed, err := CachedPlanStatsChanged(p, ctx)
+			require.NoError(t, err)
+			require.Equal(t, tc.changed, changed)
+			require.Same(t, scan.TableDef, ctx.gotTableDef)
+			require.Same(t, scan.ObjRef, ctx.gotObject)
+			require.Same(t, scan.ScanSnapshot, ctx.gotSnapshot)
+			require.Equal(t, float64(1), scan.Stats.Outcnt, "admission never patches a borrowed plan")
+		})
+	}
+	ctx.err = fmt.Errorf("stats unavailable")
+	changed, err := CachedPlanStatsChanged(p, ctx)
+	require.ErrorIs(t, err, ctx.err)
+	require.False(t, changed, "do not execute or rebuild using a failed observation")
+	scan.Limit = MakePlan2Uint64ConstExprWithType(0)
+	changed, err = CachedPlanStatsChanged(p, ctx)
+	require.NoError(t, err, "minimal LIMIT0 scan model does not read storage statistics")
+	require.False(t, changed)
+}
+
+func TestCachedLimitZeroFinalPlan(t *testing.T) {
+	ctx := &tableDefStatsTestCompilerContext{MockCompilerContext: NewMockCompilerContext(false)}
+	statements, err := mysql.Parse(ctx.GetContext(), "select n_nationkey from nation limit 0", 1)
+	require.NoError(t, err)
+	defer statements[0].Free()
+	p, err := BuildPlan(ctx, statements[0], false)
+	require.NoError(t, err)
+	qry := p.GetQuery()
+	require.NotNil(t, qry)
+	root := qry.Nodes[qry.Steps[0]]
+	require.Equal(t, planpb.Node_PROJECT, root.NodeType)
+	require.Nil(t, root.Limit, "optimizer moves pagination while retaining output projection")
+	scan := qry.Nodes[root.Children[0]]
+	require.Equal(t, planpb.Node_TABLE_SCAN, scan.NodeType)
+	require.NotNil(t, scan.Limit)
+	ctx.stats, ctx.err = &pb.StatsInfo{TableCnt: 5}, fmt.Errorf("unexpected stats read")
+	changed, err := CachedPlanStatsChanged(p, ctx)
+	require.NoError(t, err)
+	require.False(t, changed)
+	scan.Limit = MakePlan2Uint64ConstExprWithType(1)
+	_, err = CachedPlanStatsChanged(p, ctx)
+	require.ErrorIs(t, err, ctx.err, "positive LIMIT still validates the normal scan model")
+}
+
+func TestAggregateBlockEstimateThroughL2(t *testing.T) {
+	builder := newRuntimeFilterSingleTestBuilder(false)
+	builder.qry.Nodes[0].Stats.Outcnt = float64(^uint64(0))
+	builder.qry.Nodes = append(builder.qry.Nodes,
+		&planpb.Node{NodeType: planpb.Node_AGG, Children: []int32{0}, Stats: DefaultStats()},
+		&planpb.Node{NodeType: planpb.Node_PROJECT, Children: []int32{3}, Stats: DefaultStats()},
+		&planpb.Node{NodeType: planpb.Node_JOIN, JoinType: planpb.Node_L2, Children: []int32{4, 1}, Stats: DefaultStats()},
+	)
+	ReCalcNodeStats(5, builder, true, false, false)
+	require.Equal(t, int32(math.MaxInt32), builder.qry.Nodes[5].Stats.BlockNum)
+	for _, tc := range []struct{ blocks, want int32 }{
+		{2, 16}, {268435455, 2147483640}, {268435456, math.MaxInt32},
+	} {
+		builder.qry.Nodes[4].Stats.BlockNum = tc.blocks
+		ReCalcNodeStats(5, builder, false, false, false)
+		require.Equal(t, tc.want, builder.qry.Nodes[5].Stats.BlockNum)
+	}
+}
+
+func TestValueScanCardinality(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		rowset *planpb.RowsetData
+		table  *planpb.TableDef
+		limit  *Expr
+		want   float64
+	}{
+		{name: "dummy", want: 1},
+		{name: "dummy limit zero", limit: MakePlan2Uint64ConstExprWithType(0)},
+		{name: "empty values", rowset: &planpb.RowsetData{}},
+		{name: "one value", rowset: &planpb.RowsetData{RowCount: 1}, want: 1},
+		{name: "multiple values", rowset: &planpb.RowsetData{RowCount: 3}, want: 3},
+		{name: "table control", table: &planpb.TableDef{}, want: 1000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false), false, false)
+			n := &planpb.Node{NodeType: planpb.Node_VALUE_SCAN, RowsetData: tc.rowset, TableDef: tc.table, Limit: tc.limit, Stats: DefaultStats()}
+			b.qry.Nodes = []*planpb.Node{n, {NodeType: planpb.Node_PROJECT, Children: []int32{0}, Stats: DefaultStats()},
+				{NodeType: planpb.Node_VALUE_SCAN, RowsetData: &planpb.RowsetData{RowCount: 10}, Stats: DefaultStats()},
+				{NodeType: planpb.Node_JOIN, JoinType: planpb.Node_INNER, Children: []int32{2, 1}, Stats: DefaultStats()}}
+			for range 2 {
+				ReCalcNodeStats(3, b, true, true, true)
+				require.Equal(t, tc.want, n.Stats.Outcnt)
+				require.Equal(t, tc.want, b.qry.Nodes[1].Stats.Outcnt)
+				require.Equal(t, tc.want, b.qry.Nodes[3].Stats.HashmapStats.HashmapSize)
+				require.Equal(t, 10*tc.want, b.qry.Nodes[3].Stats.Outcnt)
+			}
+		})
 	}
 }

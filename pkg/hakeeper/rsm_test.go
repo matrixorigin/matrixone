@@ -2501,3 +2501,44 @@ func TestHandleLogShardUpdate(t *testing.T) {
 	_, ok := shards[10]
 	assert.True(t, ok)
 }
+
+func TestCheckerStateConfigurationSnapshotsAreIndependent(t *testing.T) {
+	sm := NewStateMachine(DefaultHAKeeperShardID, 1).(*stateMachine)
+	config := &pb.ConfigData{Content: map[string]*pb.ConfigItem{
+		"setting": {Name: "setting", CurrentValue: "before"},
+	}}
+	sm.state.CNState.Stores["cn"] = pb.CNStoreInfo{ConfigData: config}
+	sm.state.TNState.Stores["tn"] = pb.TNStoreInfo{ConfigData: config}
+	sm.state.LogState.Stores["log"] = pb.LogStoreInfo{ConfigData: config}
+	sm.state.ProxyState.Stores["proxy"] = pb.ProxyStore{ConfigData: config}
+	sm.state.NextIDByKey["key"] = 7
+	sm.state.Tick = 11
+	lookup := func() *pb.CheckerState {
+		t.Helper()
+		value, err := sm.Lookup(&StateQuery{})
+		require.NoError(t, err)
+		return value.(*pb.CheckerState)
+	}
+	first := lookup()
+	require.Equal(t, uint64(11), first.Tick)
+	require.Equal(t, uint64(7), first.NextIDByKey["key"])
+	// Updating live state must not mutate any earlier snapshot, including
+	// configuration nested inside map values for every service kind.
+	config.Content["setting"].CurrentValue = "after"
+	sm.state.NextIDByKey["key"] = 9
+	second := lookup()
+	for _, pair := range [][2]*pb.ConfigData{
+		{first.CNState.Stores["cn"].ConfigData, second.CNState.Stores["cn"].ConfigData},
+		{first.TNState.Stores["tn"].ConfigData, second.TNState.Stores["tn"].ConfigData},
+		{first.LogState.Stores["log"].ConfigData, second.LogState.Stores["log"].ConfigData},
+		{first.ProxyState.Stores["proxy"].ConfigData, second.ProxyState.Stores["proxy"].ConfigData},
+	} {
+		require.Equal(t, "before", pair[0].Content["setting"].CurrentValue)
+		require.Equal(t, "after", pair[1].Content["setting"].CurrentValue)
+		pair[0].Content["setting"].CurrentValue = "snapshot-only"
+	}
+	require.Equal(t, "after", config.Content["setting"].CurrentValue)
+	require.Equal(t, uint64(9), second.NextIDByKey["key"])
+	first.NextIDByKey["key"] = 100
+	require.Equal(t, uint64(9), sm.state.NextIDByKey["key"])
+}

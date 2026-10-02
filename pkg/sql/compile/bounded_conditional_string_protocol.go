@@ -18,34 +18,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
-
-// constrainBoundedConditionalStringWorkers keeps the new bounded binary
-// COALESCE overloads on one CN while a rolling cluster contains pre-v83
-// workers. Those workers do not have overload identities 30 and 31.
-func (c *Compile) constrainBoundedConditionalStringWorkers(qry *plan.Query) error {
-	if c.execType != plan2.ExecTypeAP_MULTICN {
-		return nil
-	}
-	features, err := plan.RequiredRemoteExpressionFeatures(qry)
-	if err != nil || !features.BoundedConditionalStringDomains {
-		return err
-	}
-	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion83)
-	if err != nil {
-		return err
-	}
-	if supported {
-		return nil
-	}
-	c.execType = plan2.ExecTypeAP_ONECN
-	c.cnList, err = c.scheduleQueryWorkers()
-	return err
-}
 
 // validateBoundedConditionalStringDestination closes the race between worker
 // placement and serialization if a selected worker is replaced or downgraded.

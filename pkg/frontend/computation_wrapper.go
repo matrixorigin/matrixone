@@ -1379,6 +1379,14 @@ func initExecuteStmtParamWithResolverInSession(
 	needRebuild := prepareStmt.needsRebuild ||
 		preparePlanNeedsRebuild(change, modeMismatch, protocolMismatch) || rebuildEveryExecute ||
 		!reusablePlanGenerationSupported(cwft.proc)
+	if !needRebuild {
+		statsChanged, err := plan2.CachedPlanStatsChanged(executionPlan, planningContext)
+		if err != nil {
+			prepareStmt.needsRebuild = true
+			return nil, nil, nil, "", false, err
+		}
+		needRebuild = statsChanged
+	}
 	cwft.planGenerationReused = !needRebuild
 	var pendingGroupConcatColDefData [][]byte
 	pendingGroupConcatColDefDataSet := false
