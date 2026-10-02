@@ -13407,10 +13407,6 @@ func collinearSegmentsOverlapWithLength(a, b, c, d geometryPoint2D) bool {
 	return overlap > 1e-9
 }
 
-func pointIntersectsPolygon(point geometryPoint2D, polygon []geometryPoint2D) bool {
-	return pointOnPolygonBoundary(polygon, point.x, point.y) || pointInPolygon(polygon, point.x, point.y)
-}
-
 func pointIntersectsPolygonGeometry(point geometryPoint2D, polygon geometryPolygon2D) bool {
 	if pointOnPolygonBoundaryGeometry(polygon, point.x, point.y) {
 		return true
@@ -13430,23 +13426,6 @@ func lineStringIntersectsLineString(left, right []geometryPoint2D) bool {
 	for i := 0; i < len(left)-1; i++ {
 		for j := 0; j < len(right)-1; j++ {
 			if lineSegmentsIntersect(left[i], left[i+1], right[j], right[j+1]) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func lineStringIntersectsPolygon(line []geometryPoint2D, polygon []geometryPoint2D) bool {
-	for _, point := range line {
-		if pointIntersectsPolygon(point, polygon) {
-			return true
-		}
-	}
-	for i := 0; i < len(line)-1; i++ {
-		for j := 0; j < len(polygon); j++ {
-			next := (j + 1) % len(polygon)
-			if lineSegmentsIntersect(line[i], line[i+1], polygon[j], polygon[next]) {
 				return true
 			}
 		}
@@ -13476,29 +13455,6 @@ func lineStringIntersectsPolygonGeometry(line []geometryPoint2D, polygon geometr
 	}
 	for _, hole := range polygon.holes {
 		if checkRing(hole) {
-			return true
-		}
-	}
-	return false
-}
-
-func polygonIntersectsPolygon(left, right []geometryPoint2D) bool {
-	for i := 0; i < len(left); i++ {
-		leftNext := (i + 1) % len(left)
-		for j := 0; j < len(right); j++ {
-			rightNext := (j + 1) % len(right)
-			if lineSegmentsIntersect(left[i], left[leftNext], right[j], right[rightNext]) {
-				return true
-			}
-		}
-	}
-	for _, point := range left {
-		if pointIntersectsPolygon(point, right) {
-			return true
-		}
-	}
-	for _, point := range right {
-		if pointIntersectsPolygon(point, left) {
 			return true
 		}
 	}
