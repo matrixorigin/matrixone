@@ -915,24 +915,6 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		}
 	}
 
-	ownershipCtx, err := prepareRestoreOwnership(ctx, bh, snapshot.ts, restoreAccount, toAccountId, dbName, tblName)
-	if err != nil {
-		return stats, err
-	}
-	ctx = ownershipCtx
-	var partialPrivileges *partialRestorePrivileges
-	if stmt.Level == tree.RESTORELEVELDATABASE || stmt.Level == tree.RESTORELEVELTABLE {
-		partialPrivileges, err = capturePartialRestorePrivileges(ctx, bh, toAccountId, dbName, tblName)
-		if err != nil {
-			return stats, err
-		}
-	}
-
-	// drop foreign key related tables first
-	if err = deleteCurFkTables(ctx, ses.GetService(), bh, dbName, tblName, toAccountId); err != nil {
-		return
-	}
-
 	tempSnap := &plan.Snapshot{
 		TS:     &timestamp.Timestamp{PhysicalTime: snapshot.ts},
 		Tenant: &plan.SnapshotTenant{TenantID: restoreAccount},
@@ -952,6 +934,32 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		return stats, err
 	}
 
+	var source *partialRestoreSource
+	var selected map[restoreObjectName]struct{}
+	if dbName != "" {
+		source, selected, err = preparePartialRestoreSource(ctx, ses, bh, snapshotName, tempSnap, sourceTableInfos, restoreAccount, toAccountId)
+		if err != nil {
+			return stats, err
+		}
+	}
+	ownershipCtx, err := prepareRestoreOwnership(ctx, bh, snapshot.ts, restoreAccount, toAccountId, dbName, tblName, selected)
+	if err != nil {
+		return stats, err
+	}
+	ctx = ownershipCtx
+	var partialPrivileges *partialRestorePrivileges
+	if stmt.Level == tree.RESTORELEVELDATABASE || stmt.Level == tree.RESTORELEVELTABLE {
+		partialPrivileges, err = capturePartialRestorePrivileges(ctx, bh, toAccountId, dbName, tblName)
+		if err != nil {
+			return stats, err
+		}
+	}
+
+	// drop foreign key related tables first
+	if err = deleteCurFkTables(ctx, ses.GetService(), bh, dbName, tblName, toAccountId); err != nil {
+		return
+	}
+
 	// get topo sorted tables with foreign key
 	sortedFkTbls, err := fkTablesTopoSort(ctx, bh, tempSnap, dbName, tblName, sourceTableInfos)
 	if err != nil {
@@ -959,7 +967,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	}
 
 	// get foreign key table infos
-	fkTableMap, err := getTableInfoMap(ctx, ses.GetService(), bh, tempSnap, dbName, tblName, sortedFkTbls)
+	fkTableMap, err := getTableInfoMap(ctx, ses.GetService(), bh, tempSnap, dbName, tblName, sortedFkTbls, source)
 	if err != nil {
 		return
 	}
@@ -998,7 +1006,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 			snapshot.ts,
 			restoreAccount,
 			false,
-			nil); err != nil {
+			nil, source); err != nil {
 			return stats, err
 		}
 	case tree.RESTORELEVELTABLE:
@@ -1014,7 +1022,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 			fkTableMap,
 			viewMap,
 			snapshot.ts,
-			restoreAccount); err != nil {
+			restoreAccount, source); err != nil {
 			return stats, err
 		}
 	}
@@ -1031,11 +1039,13 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 
 	if len(viewMap) > 0 {
 		var sortedView []string
-		if sortedView, err = sortedViewInfos(
-			ctx, ses, bh, snapshotName, nil, viewMap,
-			restoreAccount, toAccountId,
-		); err != nil {
-			return
+		if source != nil {
+			sortedView = source.sortedViews
+		} else {
+			sortedView, err = sortedViewInfos(ctx, ses, bh, snapshotName, nil, viewMap, restoreAccount, toAccountId)
+			if err != nil {
+				return
+			}
 		}
 
 		if err = restoreViews(
@@ -1307,7 +1317,7 @@ func deleteCurFkTables(
 	}
 
 	// collect table infos which need to be dropped in current state; snapshotName must set to empty
-	curFkTableMap, err := getTableInfoMap(ctx, sid, bh, nil, dbName, tblName, sortedFkTbls)
+	curFkTableMap, err := getTableInfoMap(ctx, sid, bh, nil, dbName, tblName, sortedFkTbls, nil)
 	if err != nil {
 		return
 	}
@@ -1392,7 +1402,7 @@ func restoreToAccount(
 			snapshotTs,
 			restoreAccount,
 			isRestoreCluster,
-			subDbToRestore); err != nil {
+			subDbToRestore, nil); err != nil {
 			return
 		}
 	}
@@ -1446,6 +1456,7 @@ func restoreToDatabase(
 	restoreAccount uint32,
 	isRestoreCluster bool,
 	subDbToRestore map[string]*subDbRestoreRecord,
+	source *partialRestoreSource,
 ) (err error) {
 	getLogger(sid).Debug(fmt.Sprintf("[%s] start to restore db: %v, restore timestamp: %d", snapshotName, dbName, snapshotTs))
 	return restoreToDatabaseOrTable(ctx,
@@ -1460,7 +1471,7 @@ func restoreToDatabase(
 		snapshotTs,
 		restoreAccount,
 		isRestoreCluster,
-		subDbToRestore)
+		subDbToRestore, source)
 }
 
 func restoreToTable(
@@ -1474,7 +1485,9 @@ func restoreToTable(
 	fkTableMap map[string]*tableInfo,
 	viewMap map[string]*tableInfo,
 	snapshotTs int64,
-	restoreAccount uint32) (err error) {
+	restoreAccount uint32,
+	source *partialRestoreSource,
+) (err error) {
 	getLogger(sid).Debug(fmt.Sprintf("[%s] start to restore table: %v, restore timestamp: %d", snapshotName, tblName, snapshotTs))
 	return restoreToDatabaseOrTable(ctx,
 		sid,
@@ -1488,7 +1501,7 @@ func restoreToTable(
 		snapshotTs,
 		restoreAccount,
 		false,
-		nil)
+		nil, source)
 }
 
 func restoreToDatabaseOrTable(
@@ -1505,6 +1518,7 @@ func restoreToDatabaseOrTable(
 	restoreAccount uint32,
 	isRestoreCluster bool,
 	subDbToRestore map[string]*subDbRestoreRecord,
+	source *partialRestoreSource,
 ) (err error) {
 	if needSkipDb(dbName) {
 		getLogger(sid).Debug(fmt.Sprintf("[%s] skip restore db: %v", snapshotName, dbName))
@@ -1609,9 +1623,14 @@ func restoreToDatabaseOrTable(
 		Tenant: &plan.SnapshotTenant{TenantID: restoreAccount},
 	}
 
-	tableInfos, err := getTableInfos(ctx, sid, bh, tempSnap, dbName, tblName)
-	if err != nil {
-		return
+	var tableInfos []*tableInfo
+	if source != nil {
+		tableInfos = source.tables
+	} else {
+		tableInfos, err = getTableInfos(ctx, sid, bh, tempSnap, dbName, tblName)
+		if err != nil {
+			return
+		}
 	}
 
 	// if restore to table, expect only one table here
@@ -1734,7 +1753,7 @@ func restoreToSubDb(
 	}
 
 	targetCtx := defines.AttachAccountId(ctx, subDb.targetAccount)
-	targetCtx, err = prepareRestoreOwnership(targetCtx, bh, subDb.snapshotTs, subDb.sourceAccount, subDb.targetAccount, "", "")
+	targetCtx, err = prepareRestoreOwnership(targetCtx, bh, subDb.snapshotTs, subDb.sourceAccount, subDb.targetAccount, "", "", nil)
 	if err != nil {
 		return err
 	}
@@ -2025,17 +2044,9 @@ func sortedViewInfos(
 				// #27027 refusal lands here first and would abort the whole restore -- the
 				// skip further down never gets a chance.
 				//
-				// KEEP the vertex and mark the view instead of dropping it from the graph.
-				// Dropping it meant the restore loop never visited it, so it never ran the
-				// DROP either: wherever the target database is not rebuilt (a table-level
-				// restore, a restore into a live account), the OLD view object stayed behind
-				// and the restore reported success over it. Marked, it is dropped like any
-				// other restored view and only its CREATE is skipped, so the target ends up
-				// without the view rather than with a stale one.
-				//
-				// No dependency edges are added: its plan never built, so its dependencies
-				// are unknown. A view that depends on THIS one plans the same definition
-				// through it and trips the same refusal, so it is marked here too.
+				// Preserve the vertex and classification for execution. A marked
+				// view reaches neither DROP nor CREATE; an existing live view
+				// survives when its database is retained.
 				if markUnservableViewInSort(ses, snapshotName, viewEntry, &g, key, err) {
 					continue
 				}
@@ -3183,6 +3194,7 @@ func getTableInfoMap(
 	dbName string,
 	tblName string,
 	tblKeys []string,
+	source *partialRestoreSource,
 ) (tblInfoMap map[string]*tableInfo, err error) {
 
 	tblInfoMap = make(map[string]*tableInfo)
@@ -3208,6 +3220,12 @@ func getTableInfoMap(
 			continue
 		}
 
+		if source != nil {
+			if info, ok := source.byName[restoreObjectName{d, t}]; ok {
+				tblInfoMap[key] = info
+			}
+			continue
+		}
 		if tblInfoMap[key], err = getTableInfo(ctx, sid, bh, snapshot, d, t); err != nil {
 			return
 		}
@@ -3822,7 +3840,7 @@ func restoreAccountUsingClusterSnapshotToNew(ctx context.Context,
 
 	getLogger(ses.GetService()).Debug(fmt.Sprintf("[%s] start to restore dropped account: %v, account id: %d to new account id: %d, restore timestamp: %d", snapshotName, account.accountName, account.accountId, toAccountId, snapshotTs))
 	fromAccount := account.accountId
-	ownershipCtx, err := prepareRestoreOwnership(ctx, bh, snapshotTs, uint32(fromAccount), uint32(toAccountId), "", "")
+	ownershipCtx, err := prepareRestoreOwnership(ctx, bh, snapshotTs, uint32(fromAccount), uint32(toAccountId), "", "", nil)
 	if err != nil {
 		return err
 	}

@@ -1157,7 +1157,30 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		}
 	}
 
-	ownershipCtx, ownershipErr := prepareRestoreOwnership(ctx, bh, ts, tenantInfo.TenantID, tenantInfo.TenantID, dbName, tblName)
+	sourceSnapshot := &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: ts}, Tenant: &plan.SnapshotTenant{TenantID: tenantInfo.TenantID}}
+	sourceTableInfos, err := collectRestoreSourceTableInfos(
+		dbName,
+		tblName,
+		func() ([]string, error) {
+			return showDatabasesWithPitr(ctx, ses.GetService(), bh, pitrName, ts)
+		},
+		func(sourceDBName string, sourceTblName string) ([]*tableInfo, error) {
+			return getTableInfoWithPitr(ctx, ses.GetService(), bh, pitrName, ts, sourceDBName, sourceTblName)
+		},
+	)
+	if err != nil {
+		return
+	}
+
+	var source *partialRestoreSource
+	var selected map[restoreObjectName]struct{}
+	if dbName != "" {
+		source, selected, err = preparePartialRestoreSource(ctx, ses, bh, pitrName, sourceSnapshot, sourceTableInfos, tenantInfo.TenantID, tenantInfo.TenantID)
+		if err != nil {
+			return stats, err
+		}
+	}
+	ownershipCtx, ownershipErr := prepareRestoreOwnership(ctx, bh, ts, tenantInfo.TenantID, tenantInfo.TenantID, dbName, tblName, selected)
 	if ownershipErr != nil {
 		return stats, ownershipErr
 	}
@@ -1175,20 +1198,6 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		return
 	}
 
-	sourceTableInfos, err := collectRestoreSourceTableInfos(
-		dbName,
-		tblName,
-		func() ([]string, error) {
-			return showDatabasesWithPitr(ctx, ses.GetService(), bh, pitrName, ts)
-		},
-		func(sourceDBName string, sourceTblName string) ([]*tableInfo, error) {
-			return getTableInfoWithPitr(ctx, ses.GetService(), bh, pitrName, ts, sourceDBName, sourceTblName)
-		},
-	)
-	if err != nil {
-		return
-	}
-
 	// get topo sorted tables with foreign key
 	sortedFkTbls, err = fkTablesTopoSortInPitrRestore(ctx, bh, ts, dbName, tblName, sourceTableInfos)
 	if err != nil {
@@ -1196,7 +1205,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 	}
 
 	// get foreign key table infos
-	fkTableMap, err = getTableInfoMapInPitrRestore(ctx, ses.GetService(), bh, pitrName, ts, dbName, tblName, sortedFkTbls)
+	fkTableMap, err = getTableInfoMapInPitrRestore(ctx, ses.GetService(), bh, pitrName, ts, dbName, tblName, sortedFkTbls, source)
 	if err != nil {
 		return
 	}
@@ -1214,12 +1223,12 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		markMongoDBAccountForRetirement(&retiredMongoDBAccountIDs, tenantInfo.TenantID)
 	case tree.RESTORELEVELDATABASE:
 		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelDatabase)
-		if err = restoreToDatabaseWithPitr(ctx, ses.GetService(), bh, pitrName, ts, dbName, fkTableMap, viewMap, tenantInfo.TenantID); err != nil {
+		if err = restoreToDatabaseWithPitr(ctx, ses.GetService(), bh, pitrName, ts, dbName, fkTableMap, viewMap, tenantInfo.TenantID, source); err != nil {
 			return
 		}
 	case tree.RESTORELEVELTABLE:
 		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelTable)
-		if err = restoreToTableWithPitr(ctx, ses.service, bh, pitrName, ts, dbName, tblName, fkTableMap, viewMap, tenantInfo.TenantID); err != nil {
+		if err = restoreToTableWithPitr(ctx, ses.service, bh, pitrName, ts, dbName, tblName, fkTableMap, viewMap, tenantInfo.TenantID, source); err != nil {
 			return
 		}
 
@@ -1234,7 +1243,12 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 	}
 
 	if len(viewMap) > 0 {
-		if err = restoreViewsWithPitr(ctx, ses, bh, pitrName, ts, viewMap, tenantInfo.GetTenant(), tenantInfo.GetTenantID()); err != nil {
+		if source != nil {
+			err = restoreViews(ctx, ses, bh, pitrName, viewMap, tenantInfo.TenantID, source.sortedViews, false)
+		} else {
+			err = restoreViewsWithPitr(ctx, ses, bh, pitrName, ts, viewMap, tenantInfo.GetTenant(), tenantInfo.GetTenantID())
+		}
+		if err != nil {
 			return
 		}
 	}
@@ -1359,7 +1373,7 @@ func restoreToAccountWithPitr(
 			dbName,
 			fkTableMap,
 			viewMap,
-			curAccount); err != nil {
+			curAccount, nil); err != nil {
 			return
 		}
 	}
@@ -1387,6 +1401,7 @@ func restoreToDatabaseWithPitr(
 	fkTableMap map[string]*tableInfo,
 	viewMap map[string]*tableInfo,
 	curAccount uint32,
+	source *partialRestoreSource,
 ) (err error) {
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore db: '%s', restore timestamp: %d", pitrName, dbName, ts))
 
@@ -1408,7 +1423,7 @@ func restoreToDatabaseWithPitr(
 		"",
 		fkTableMap,
 		viewMap,
-		curAccount)
+		curAccount, source)
 }
 
 func restoreToTableWithPitr(
@@ -1422,6 +1437,7 @@ func restoreToTableWithPitr(
 	fkTableMap map[string]*tableInfo,
 	viewMap map[string]*tableInfo,
 	curAccount uint32,
+	source *partialRestoreSource,
 ) (err error) {
 	getLogger(sid).Info(fmt.Sprintf("[%s]  start to restore table: '%v' at timestamp %d", pitrName, tblName, ts))
 
@@ -1442,7 +1458,7 @@ func restoreToTableWithPitr(
 		tblName,
 		fkTableMap,
 		viewMap,
-		curAccount)
+		curAccount, source)
 }
 
 func restoreToDatabaseOrTableWithPitr(
@@ -1456,6 +1472,7 @@ func restoreToDatabaseOrTableWithPitr(
 	fkTableMap map[string]*tableInfo,
 	viewMap map[string]*tableInfo,
 	curAccount uint32,
+	source *partialRestoreSource,
 ) (err error) {
 	if needSkipDb(dbName) {
 		getLogger(sid).Info(fmt.Sprintf("[%s] skip restore db: '%v'", pitrName, dbName))
@@ -1542,9 +1559,13 @@ func restoreToDatabaseOrTableWithPitr(
 		}
 	}
 
-	tableInfos, err = getTableInfoWithPitr(ctx, sid, bh, pitrName, ts, dbName, tblName)
-	if err != nil {
-		return
+	if source != nil {
+		tableInfos = source.tables
+	} else {
+		tableInfos, err = getTableInfoWithPitr(ctx, sid, bh, pitrName, ts, dbName, tblName)
+		if err != nil {
+			return
+		}
 	}
 
 	// if restore to table, expect only one table here
@@ -1833,7 +1854,7 @@ func deleteCurFkTableInPitrRestore(ctx context.Context,
 		return
 	}
 	// collect table infos which need to be dropped in current state; snapshotName must set to empty
-	curFkTableMap, err = getTableInfoMap(ctx, sid, bh, nil, dbName, tblName, sortedFkTbls)
+	curFkTableMap, err = getTableInfoMap(ctx, sid, bh, nil, dbName, tblName, sortedFkTbls, nil)
 	if err != nil {
 		return
 	}
@@ -1953,11 +1974,9 @@ func restoreViewsWithPitr(
 				// #27027 refusal lands here first and would abort the whole restore -- the
 				// skip further down never gets a chance.
 				//
-				// KEEP the vertex and mark the view (same reasoning as sortedViewInfos):
-				// dropping it from the graph meant the restore loop never visited it and so
-				// never ran the DROP, leaving the old object standing wherever the target
-				// database is not rebuilt. Marked, it is dropped and only its CREATE is
-				// skipped. No edges: its plan never built, so its dependencies are unknown.
+				// Preserve the vertex and classification for execution. A marked
+				// view reaches neither DROP nor CREATE; an existing live view
+				// survives when its database is retained.
 				if markUnservableViewInSort(ses, pitrName, viewEntry, &g, key, err) {
 					continue
 				}
@@ -2406,7 +2425,9 @@ func getTableInfoMapInPitrRestore(
 	ts int64,
 	dbName string,
 	tblName string,
-	tblKeys []string) (tblInfoMap map[string]*tableInfo, err error) {
+	tblKeys []string,
+	source *partialRestoreSource,
+) (tblInfoMap map[string]*tableInfo, err error) {
 	tblInfoMap = make(map[string]*tableInfo)
 	curAccountId, err := defines.GetAccountId(ctx)
 	if err != nil {
@@ -2429,6 +2450,12 @@ func getTableInfoMapInPitrRestore(
 			continue
 		}
 
+		if source != nil {
+			if info, ok := source.byName[restoreObjectName{d, t}]; ok {
+				tblInfoMap[key] = info
+			}
+			continue
+		}
 		if tblInfoMap[key], err = getTableInfoInPitrRestore(ctx, sid, bh, pitrName, ts, d, t); err != nil {
 			return
 		}

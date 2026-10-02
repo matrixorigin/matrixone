@@ -24,16 +24,53 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 type restoreOwnershipKey struct{}
 type restoreObjectName struct{ database, table string }
 type restoreOwner struct{ user, role uint32 }
 
+// partialRestoreSource shares historical logical objects between ownership
+// preflight and execution. Runtime guards may omit candidates, never add them.
+type partialRestoreSource struct {
+	tables      []*tableInfo
+	byName      map[restoreObjectName]*tableInfo
+	sortedViews []string
+}
+
+func preparePartialRestoreSource(ctx context.Context, ses *Session, bh BackgroundExec, label string, snapshot *plan.Snapshot, tables []*tableInfo, source, target uint32) (*partialRestoreSource, map[restoreObjectName]struct{}, error) {
+	resolved := &partialRestoreSource{tables: tables, byName: make(map[restoreObjectName]*tableInfo, len(tables))}
+	views := make(map[string]*tableInfo)
+	for _, info := range tables {
+		resolved.byName[restoreObjectName{info.dbName, info.tblName}] = info
+		if info.typ == view {
+			views[genKey(info.dbName, info.tblName)] = info
+		}
+	}
+	if len(views) != 0 {
+		var err error
+		resolved.sortedViews, err = sortedViewInfos(ctx, ses, bh, label, snapshot, views, source, target)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	selected := make(map[restoreObjectName]struct{}, len(tables))
+	for key, info := range resolved.byName {
+		if !shouldSkipRestoreTableInBulk(info) && !info.unservable {
+			selected[key] = struct{}{}
+		}
+	}
+	return resolved, selected, nil
+}
+
 // Install historical DDL identities before recreating objects. Full account
 // restore also restores the principal catalogs. Partial restore keeps live
 // principal IDs within their catalog generation; names are not identities.
-func prepareRestoreOwnership(ctx context.Context, bh BackgroundExec, ts int64, source, target uint32, database, table string) (context.Context, error) {
+func prepareRestoreOwnership(ctx context.Context, bh BackgroundExec, ts int64, source, target uint32, database, table string, selected map[restoreObjectName]struct{}) (context.Context, error) {
+	if database != "" && selected == nil {
+		return nil, moerr.NewInternalErrorNoCtx("missing partial restore source")
+	}
 	if database != "" && source != target {
 		return nil, moerr.NewInternalErrorNoCtx("partial restore requires the same account")
 	}
@@ -71,18 +108,29 @@ func prepareRestoreOwnership(ctx context.Context, bh BackgroundExec, ts int64, s
 	if err != nil {
 		return nil, err
 	}
-	// Match the existing recreation policy before collecting principal pins.
-	// Keep execution's table list intact: explicitly selected external tables
-	// must still reach their normal rejection before ownership is consumed.
+	// Historical metadata supplies identities only; logical enumeration and
+	// view planning own partial restore selection.
 	ownershipRows := dbs
+	found := make(map[restoreObjectName]struct{}, len(selected))
 	for _, row := range tables {
 		if len(row) != 5 {
 			return nil, moerr.NewInternalErrorNoCtx("invalid restore ownership row")
 		}
-		if shouldSkipRestoreTableInBulk(&tableInfo{dbName: row[0], tblName: row[1], relKind: row[4]}) {
+		key := restoreObjectName{row[0], row[1]}
+		if database != "" {
+			if _, ok := selected[key]; !ok {
+				continue
+			}
+			found[key] = struct{}{}
+		} else if shouldSkipRestoreTableInBulk(&tableInfo{relKind: row[4]}) {
 			continue
 		}
 		ownershipRows = append(ownershipRows, row[:4])
+	}
+	for key := range selected {
+		if _, ok := found[key]; !ok {
+			return nil, moerr.NewInternalErrorf(ctx, "missing historical ownership for %s.%s", key.database, key.table)
+		}
 	}
 	owners := make(map[restoreObjectName]restoreOwner, len(ownershipRows))
 	neededUsers, neededRoles := make(map[uint32]struct{}), make(map[uint32]struct{})

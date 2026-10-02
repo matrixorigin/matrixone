@@ -58,7 +58,8 @@ func TestIssue29399TableRestoreRetainsDatabaseOwnership(t *testing.T) {
 		for _, stmt := range []string{
 			"create role builder", "create user db_creator identified by '111' default role builder",
 			"grant builder to db_creator", "grant connect, create database on account * to builder",
-			"grant create table on database * to builder",
+			"grant create table, create view on database * to builder",
+			"grant select on table *.* to builder",
 			"create pitr issue_29399_owner_scope_p for account range 1 'h'",
 		} {
 			execSQLRequire(t, ctx, admin, stmt)
@@ -72,13 +73,35 @@ func TestIssue29399TableRestoreRetainsDatabaseOwnership(t *testing.T) {
 			"create database recreated", "create table recreated.t(id int)", "insert into recreated.t values (7)",
 			"create database role_owned", "create table role_owned.t(id int)", "insert into role_owned.t values (5)",
 			"create role external_owner", "grant external_owner to admin",
-			"grant connect on account * to external_owner", "grant create table on database role_owned to external_owner",
+			"grant connect on account * to external_owner", "grant create table, create view on database role_owned to external_owner",
+			"grant select on table *.* to external_owner",
 		} {
 			execSQLRequire(t, ctx, admin, stmt)
 		}
 		execSQLRequire(t, ctx, creator, "create external table recreated.ext(id int) infile{'filepath'='/tmp/issue29399-unused.csv','format'='csv'} fields terminated by ','")
 		externalOwner := open(account + "#admin#external_owner")
 		execSQLRequire(t, ctx, externalOwner, "create external table role_owned.ext(id int) infile{'filepath'='/tmp/issue29399-unused.csv','format'='csv'} fields terminated by ','")
+		// The stored MATCH views become unservable only after their index is
+		// removed. They must be skipped without pinning their deleted principals.
+		for _, stmt := range []string{
+			"set experimental_fulltext_index=1", "set ft_relevancy_algorithm='TF-IDF'",
+			"create table recreated.docs(id int primary key, body text)",
+			"insert into recreated.docs values (1, 'apple banana'), (2, 'apple cherry'), (3, 'banana cherry')",
+			"create fulltext index ft_body on recreated.docs(body)",
+		} {
+			execSQLRequire(t, ctx, admin, stmt)
+		}
+		for _, db := range []*sql.DB{creator, externalOwner} {
+			execSQLRequire(t, ctx, db, "set experimental_fulltext_index=1")
+			execSQLRequire(t, ctx, db, "set ft_relevancy_algorithm='TF-IDF'")
+		}
+		execSQLRequire(t, ctx, creator, "create view recreated.v_ft as select id from recreated.docs where match(body) against('apple')")
+		execSQLRequire(t, ctx, externalOwner, "create view role_owned.v_ft as select id from recreated.docs where match(body) against('apple')")
+		execSQLRequire(t, ctx, creator, "create view app.owned_view as select 3 as id")
+		var matches int
+		require.NoError(t, admin.QueryRowContext(ctx, "select count(*) from recreated.v_ft").Scan(&matches))
+		require.Equal(t, 2, matches)
+		execSQLRequire(t, ctx, admin, "drop index ft_body on recreated.docs")
 		execSQLRequire(t, ctx, admin, "create snapshot issue_29399_owner_scope_s for account")
 		// PITR accepts second-resolution timestamps. This delay crosses that
 		// public precision boundary; it does not schedule competing operations.
@@ -122,6 +145,26 @@ func TestIssue29399TableRestoreRetainsDatabaseOwnership(t *testing.T) {
 				require.NoError(t, admin.QueryRowContext(ctx, "select id from "+database+".t").Scan(&value))
 				require.Equal(t, 9, value)
 			}
+			execSQLRequire(t, ctx, admin, "drop view "+database+".v_ft")
+			execSQLRequire(t, ctx, admin, "create view "+database+".v_ft as select 42 as id")
+			viewIdentitySQL := "select rel_id, rel_createsql from mo_catalog.mo_tables where reldatabase='" + database + "' and relname='v_ft'"
+			var viewID uint64
+			var viewSQL string
+			require.NoError(t, admin.QueryRowContext(ctx, viewIdentitySQL).Scan(&viewID, &viewSQL))
+			for _, restore := range []string{
+				"restore table " + database + ".v_ft {snapshot='issue_29399_owner_scope_s'}",
+				"restore database " + database + " table v_ft from pitr issue_29399_owner_scope_p '" + at + "'",
+			} {
+				execSQLRequire(t, ctx, admin, restore)
+				var currentID uint64
+				var currentSQL string
+				var value int
+				require.NoError(t, admin.QueryRowContext(ctx, viewIdentitySQL).Scan(&currentID, &currentSQL))
+				require.Equal(t, viewID, currentID)
+				require.Equal(t, viewSQL, currentSQL)
+				require.NoError(t, admin.QueryRowContext(ctx, "select id from "+database+".v_ft").Scan(&value))
+				require.Equal(t, 42, value)
+			}
 			for _, restore := range []string{
 				"restore database " + database + " {snapshot='issue_29399_owner_scope_s'}",
 				"restore database " + database + " from pitr issue_29399_owner_scope_p '" + at + "'",
@@ -131,7 +174,7 @@ func TestIssue29399TableRestoreRetainsDatabaseOwnership(t *testing.T) {
 				var value, externalTables int
 				require.NoError(t, admin.QueryRowContext(ctx, "select id from "+database+".t").Scan(&value))
 				require.Equal(t, target.value, value)
-				require.NoError(t, admin.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase='"+database+"' and relname='ext'").Scan(&externalTables))
+				require.NoError(t, admin.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase='"+database+"' and relname in ('ext','v_ft')").Scan(&externalTables))
 				require.Zero(t, externalTables)
 			}
 		}
@@ -170,6 +213,25 @@ func TestIssue29399TableRestoreRetainsDatabaseOwnership(t *testing.T) {
 			require.Equal(t, beforeTable, afterTable, "rejected restore must fail before DROP")
 			require.NoError(t, admin.QueryRowContext(ctx, "select id from app.owned").Scan(&value))
 			require.Equal(t, 9, value)
+		}
+		// A servable view still requires its historical creator before DROP.
+		execSQLRequire(t, ctx, admin, "drop view app.owned_view")
+		execSQLRequire(t, ctx, admin, "create view app.owned_view as select 42 as id")
+		var viewBefore uint64
+		const viewIDSQL = "select rel_id from mo_catalog.mo_tables where reldatabase='app' and relname='owned_view'"
+		require.NoError(t, admin.QueryRowContext(ctx, viewIDSQL).Scan(&viewBefore))
+		for _, restore := range []string{
+			"restore table app.owned_view {snapshot='issue_29399_owner_scope_s'}",
+			"restore database app table owned_view from pitr issue_29399_owner_scope_p '" + at + "'",
+		} {
+			_, err = admin.ExecContext(ctx, restore)
+			require.ErrorContains(t, err, "creator no longer exists")
+			var after uint64
+			var value int
+			require.NoError(t, admin.QueryRowContext(ctx, viewIDSQL).Scan(&after))
+			require.Equal(t, viewBefore, after)
+			require.NoError(t, admin.QueryRowContext(ctx, "select id from app.owned_view").Scan(&value))
+			require.Equal(t, 42, value)
 		}
 		// A genuinely missing database still needs its historical identities.
 		execSQLRequire(t, ctx, admin, "drop database app")

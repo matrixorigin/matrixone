@@ -81,7 +81,7 @@ func TestPrepareRestoreOwnershipRetainsPrincipalIDs(t *testing.T) {
 		setRows("select cast(rel_id as char) from mo_catalog.mo_tables {MO_TS = 42}"+filter, []string{"id"}, [][]interface{}{{"100"}})
 		setRows("select cast(rel_id as char) from mo_catalog.mo_tables"+filter+" for update", []string{"id"}, [][]interface{}{{"100"}})
 	}
-	ctx, err := prepareRestoreOwnership(t.Context(), bh, 42, 10, 10, "app", "t")
+	ctx, err := prepareRestoreOwnership(t.Context(), bh, 42, 10, 10, "app", "t", map[restoreObjectName]struct{}{{"app", "t"}: {}})
 	require.NoError(t, err)
 	for _, tc := range []struct {
 		table string
@@ -97,8 +97,8 @@ func TestPrepareRestoreOwnershipRetainsPrincipalIDs(t *testing.T) {
 		require.Equal(t, tc.role, defines.GetRoleId(ownerCtx))
 	}
 
-	// External creator/owner requirements are independently absent. Views and
-	// sequences are deferred by execution, not omitted from recreation.
+	// Logical selection, including servable views and sequences, owns the
+	// requirements. Excluded catalog rows must not contribute principals.
 	bulkQuery := strings.TrimSuffix(tableQuery, " and relname = 't'")
 	columns := []string{"database", "table", "creator", "owner", "relkind"}
 	for _, external := range [][]interface{}{
@@ -109,8 +109,10 @@ func TestPrepareRestoreOwnershipRetainsPrincipalIDs(t *testing.T) {
 			{"app", "t", "3", "4", catalog.SystemOrdinaryRel},
 			{"app", "v", "3", "4", catalog.SystemViewRel},
 			{"app", "s", "3", "4", catalog.SystemSequenceRel}, external,
+			{"app", "skipped_view", "invalid", "99", catalog.SystemViewRel},
+			{"app", "hidden_index", "99", "invalid", catalog.SystemOrdinaryRel},
 		})
-		bulkCtx, err := prepareRestoreOwnership(t.Context(), bh, 42, 10, 10, "app", "")
+		bulkCtx, err := prepareRestoreOwnership(t.Context(), bh, 42, 10, 10, "app", "", map[restoreObjectName]struct{}{{"app", "t"}: {}, {"app", "v"}: {}, {"app", "s"}: {}})
 		require.NoError(t, err)
 		for _, table := range []string{"t", "v", "s"} {
 			ownerCtx, err := restoreDDLContext(bulkCtx, "app", table)
@@ -122,19 +124,19 @@ func TestPrepareRestoreOwnershipRetainsPrincipalIDs(t *testing.T) {
 		require.ErrorContains(t, err, "missing historical ownership")
 	}
 	bh.sql2err[bulkQuery] = errors.New("ownership read failed")
-	_, err = prepareRestoreOwnership(t.Context(), bh, 42, 10, 10, "app", "")
+	_, err = prepareRestoreOwnership(t.Context(), bh, 42, 10, 10, "app", "", map[restoreObjectName]struct{}{{"app", "t"}: {}, {"app", "v"}: {}, {"app", "s"}: {}})
 	require.ErrorContains(t, err, "ownership read failed")
 	delete(bh.sql2err, bulkQuery)
-	setRows(bulkQuery, columns[:4], [][]interface{}{{"app", "t", "3", "4"}})
-	_, err = prepareRestoreOwnership(t.Context(), bh, 42, 10, 10, "app", "")
-	require.Error(t, err, "missing relation kind must fail closed")
+	setRows(bulkQuery, columns, [][]interface{}{{"app", "t", "3", "4", catalog.SystemOrdinaryRel}})
+	_, err = prepareRestoreOwnership(t.Context(), bh, 42, 10, 10, "app", "", map[restoreObjectName]struct{}{{"app", "t"}: {}, {"app", "v"}: {}, {"app", "s"}: {}})
+	require.ErrorContains(t, err, "missing historical ownership")
 
 	setRows(currentUsers, []string{"id", "name"}, [][]interface{}{{"1", "creator"}})
-	_, err = prepareRestoreOwnership(t.Context(), bh, 42, 10, 10, "app", "t")
+	_, err = prepareRestoreOwnership(t.Context(), bh, 42, 10, 10, "app", "t", map[restoreObjectName]struct{}{{"app", "t"}: {}})
 	require.ErrorContains(t, err, "creator no longer exists")
 	setRows(currentUsers, []string{"id", "name"}, [][]interface{}{{"1", "creator"}, {"3", "editor"}})
 	setRows(currentRoles, []string{"id", "name"}, [][]interface{}{{"2", "db_owner"}})
-	_, err = prepareRestoreOwnership(t.Context(), bh, 42, 10, 10, "app", "t")
+	_, err = prepareRestoreOwnership(t.Context(), bh, 42, 10, 10, "app", "t", map[restoreObjectName]struct{}{{"app", "t"}: {}})
 	require.ErrorContains(t, err, "owner role no longer exists")
 
 	// A retained database needs neither its historical creator nor its role.
@@ -149,7 +151,7 @@ func TestPrepareRestoreOwnershipRetainsPrincipalIDs(t *testing.T) {
 	}
 	start := len(bh.executedSQLs)
 	accountStart := len(bh.executionAccountIDs)
-	ctx, err = prepareRestoreOwnership(t.Context(), bh, 42, 10, 10, "app", "t")
+	ctx, err = prepareRestoreOwnership(t.Context(), bh, 42, 10, 10, "app", "t", map[restoreObjectName]struct{}{{"app", "t"}: {}})
 	require.NoError(t, err)
 	require.Equal(t, lockedDatabase, bh.executedSQLs[start])
 	require.Equal(t, uint32(10), bh.executionAccountIDs[accountStart])
@@ -164,9 +166,29 @@ func TestPrepareRestoreOwnershipRetainsPrincipalIDs(t *testing.T) {
 	bh.sql2result[lockedDatabase] = newMrsForCheckDatabase(nil)
 	require.ErrorContains(t, execRestoreCreateDatabase(ctx, bh, "app", "create database if not exists app"), "missing historical ownership")
 	bh.sql2err[lockedDatabase] = errors.New("database lookup failed")
-	_, err = prepareRestoreOwnership(t.Context(), bh, 42, 10, 10, "app", "t")
+	_, err = prepareRestoreOwnership(t.Context(), bh, 42, 10, 10, "app", "t", map[restoreObjectName]struct{}{{"app", "t"}: {}})
 	require.ErrorContains(t, err, "database lookup failed")
 	require.ErrorContains(t, execRestoreCreateDatabase(ctx, bh, "app", "create database if not exists app"), "database lookup failed")
+}
+
+// FK traversal must not re-enumerate physical objects outside the logical
+// source, or replace the pointers classified by view preflight.
+func TestPartialRestoreFKSourceScope(t *testing.T) {
+	ctx := defines.AttachAccountId(t.Context(), 10)
+	info := &tableInfo{dbName: "app", tblName: "t"}
+	source := &partialRestoreSource{tables: []*tableInfo{info}, byName: map[restoreObjectName]*tableInfo{{"app", "t"}: info}}
+	bh := &backgroundExecTest{}
+	bh.init()
+	keys := []string{genKey("app", "t"), genKey("app", "hidden"), genKey("other", "t")}
+	snapshot, err := getTableInfoMap(ctx, "", bh, nil, "app", "", keys, source)
+	require.NoError(t, err)
+	pitr, err := getTableInfoMapInPitrRestore(ctx, "", bh, "p", 42, "app", "", keys, source)
+	require.NoError(t, err)
+	for _, result := range []map[string]*tableInfo{snapshot, pitr} {
+		require.Len(t, result, 1)
+		require.Same(t, info, result[genKey("app", "t")])
+	}
+	require.Empty(t, bh.executedSQLs)
 }
 
 func TestPartialRestoreRebindsOnlyCurrentScopedIDs(t *testing.T) {
