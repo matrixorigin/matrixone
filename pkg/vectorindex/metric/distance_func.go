@@ -202,7 +202,7 @@ func InnerProduct[T types.RealNumbers](p, q []T) (T, error) {
 		i++
 	}
 
-	return -sum, nil
+	return recoverInnerProduct(-sum, p, q), nil
 }
 
 // CosineDistance calculates the cosine distance between two vectors using generics.

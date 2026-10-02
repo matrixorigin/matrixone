@@ -24,31 +24,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// CONTRACT (NEON): the SIMD kernels accumulate signed products in several float
-// lanes and reduce at the end, so an input whose products are each finite but
-// whose per-lane partial sums overflow to +/-Inf before the reduction produces
-// NaN (Inf + -Inf). NaN is unordered and corrupts a top-k ranking, so every
-// NaN-capable kernel maps it to +Inf -- the largest distance -- ranking the
-// overflowing candidate last instead. That +Inf is an INTERNAL, ranking-safe
-// intermediate (it keeps brute_force centroid/candidate selection well-ordered,
-// with no NaN corruption); the user-facing serve boundary -- ivfflat's
-// HasFloat64DistanceOverflow and hnsw/usearch CheckFiniteDists -- then rejects any
-// non-finite result with an error. So a toy 2^63-magnitude vector's FINAL answer
-// is an error, never a returned +Inf.
+// CONTRACT (NEON): the SIMD kernels accumulate signed products in several float lanes and
+// reduce at the end, so an input whose products are each finite but whose per-lane partial
+// sums overflow to +/-Inf before the reduction produces NaN (Inf + -Inf) where the in-order
+// scalar reference cancels and stays finite. The metric owner RECOVERS that reference answer:
+// on a non-finite SIMD result it recomputes the dot in float64 in source order (the exceptional
+// path, mirroring cosineRecomputeF64), so SIMD agrees with the scalar oracle. Only a GENUINE
+// overflow -- one the in-order f64 sum cannot represent either -- fast-fails to +Inf, which the
+// serve boundary rejects. The ordinary fast path is unchanged; the recompute runs only on the
+// rare non-finite result.
 //
-// This is a SIMD-path property BY DESIGN: a single deployment runs exactly one
-// kernel (SIMD or the scalar oracle, never mixed), so its ranking is internally
-// consistent; the scalar oracle sums in source order and cancels this input to a
-// finite value, which is a harmless cross-build difference on a 2^63-magnitude
-// input that stored finite vectors never hold. We do NOT widen the accumulator to
-// fix it (measured ~2.5x slower and collapses the SIMD win to ~1.1x over scalar,
-// and cannot fix vecf64 at all).
-//
-// The test exercises the SIMD kernels DIRECTLY, independent of the
-// MO_METRIC_NO_NEON runtime override: the narrow kernels are gate-free (called by
-// name), and hasNeon is forced on for the real kernels. NEON is ARMv8 baseline,
-// always present, so executing these is always safe here (#29496).
-func TestMetricMapsLaneCancellationToPosInf29496(t *testing.T) {
+// The test exercises the SIMD kernels DIRECTLY, independent of the MO_METRIC_NO_NEON override:
+// narrow kernels by name (gate-free), and hasNeon forced on for the real kernels. NEON is ARMv8
+// baseline, always present, so executing these is always safe here. The cancellation dot is 0,
+// so inner product recovers 0 and spherical recovers acos(0)/pi = 0.5 -- exactly what the scalar
+// path returns (#29496 / #29271-review).
+func TestMetricRecoversLaneCancellation29496(t *testing.T) {
 	saved := hasNeon
 	hasNeon = true
 	defer func() { hasNeon = saved }()
@@ -67,36 +58,40 @@ func TestMetricMapsLaneCancellationToPosInf29496(t *testing.T) {
 			bf[i], bd[i], bb[i] = -mag32, -mag64, types.BF16FromFloat32(-mag32)
 		}
 	}
-	isPosInf := func(v float64) bool { return math.IsInf(v, 1) }
 
-	// Real kernels: the generic InnerProduct[T]/SphericalDistance[T] apply
-	// nanToPosInf; hasNeon is forced on so the SIMD leaf runs.
+	// Real kernels: the generic InnerProduct[T]/SphericalDistance[T] own the recompute; hasNeon
+	// is forced on so the SIMD leaf runs and produces the non-finite result that triggers it.
 	t.Run("ip_f32", func(t *testing.T) {
 		d, err := InnerProduct[float32](af, bf)
 		require.NoError(t, err)
-		require.Truef(t, isPosInf(float64(d)), "lane cancellation must map to +Inf, got %v", d)
+		require.InDelta(t, 0.0, float64(d), 1e-9, "lane cancellation must recover the in-order 0, got %v", d)
 	})
 	t.Run("ip_f64", func(t *testing.T) {
 		d, err := InnerProduct[float64](ad, bd)
 		require.NoError(t, err)
-		require.Truef(t, isPosInf(d), "lane cancellation must map to +Inf, got %v", d)
+		require.InDelta(t, 0.0, d, 1e-9, "lane cancellation must recover the in-order 0, got %v", d)
 	})
 	t.Run("spherical_f32", func(t *testing.T) {
 		d, err := SphericalDistance[float32](af, bf)
 		require.NoError(t, err)
-		require.Truef(t, isPosInf(float64(d)), "lane cancellation must map to +Inf, got %v", d)
+		require.InDelta(t, 0.5, float64(d), 1e-6, "lane cancellation must recover acos(0)/pi = 0.5, got %v", d)
 	})
 
-	// Narrow kernels: call the gate-free SIMD leaf directly (nanToPosInf baked in),
-	// bypassing ResolveDistanceFn and the init-time pointer swap.
+	// Narrow bf16: call the gate-free SIMD leaf directly; it owns the recompute.
 	t.Run("ip_bf16", func(t *testing.T) {
 		d, err := innerProductBF16SIMD(ab, bb)
 		require.NoError(t, err)
-		require.Truef(t, isPosInf(d), "lane cancellation must map to +Inf, got %v", d)
+		require.InDelta(t, 0.0, d, 1e-9, "lane cancellation must recover the in-order 0, got %v", d)
 	})
-	t.Run("cosine_bf16", func(t *testing.T) {
+
+	// NARROW COSINE is intentionally NOT recovered here: real (f32/f64) cosine recovers via its
+	// f64 norm recompute (cosineNormsOK/cosineRecomputeF64), but the narrow cosine kernels have no
+	// such guard and still map the lane-cancellation NaN to +Inf. Recovering it is a separate
+	// follow-up (out of the inner-product/spherical scope of this change); the +Inf is well-ordered
+	// and rejected at the serve boundary, never a wrong finite winner.
+	t.Run("cosine_bf16_still_posinf", func(t *testing.T) {
 		d, err := cosineDistanceBF16SIMD(ab, bb)
 		require.NoError(t, err)
-		require.Truef(t, isPosInf(d), "lane cancellation must map to +Inf, got %v", d)
+		require.Truef(t, math.IsInf(d, 1), "narrow cosine lane cancellation still maps to +Inf, got %v", d)
 	})
 }

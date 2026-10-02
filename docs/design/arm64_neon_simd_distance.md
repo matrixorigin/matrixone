@@ -15,12 +15,16 @@
   v1 approval. fengttt approved this design at PR #29496 revision af0eb99 (2026-10-01
   19:21 UTC). XuPeng-SH's change requests on the same revision are tracked in the PR
   thread.
-- **§2/§5/§7 editorial correction (post-af0eb99).** The contract wording was
-  corrected to state the SIMD/scalar divergence on degenerate overflow inputs as an
-  explicit **by-design** decision (one kernel per deployment → internally consistent;
-  toy 2^63 input only; +Inf internal, error at the serve boundary), with the
-  supporting benchmark (§2 reason 1 / §5). This aligns the document with the behavior
-  of the already-approved code (af0eb99); it does not change the approved contract.
+- **v3 — Pending design review.** Scope: the §2 numerical contract changes from
+  "NaN→+Inf, divergence accepted by design" (v2) to **recover the in-order float64
+  reference at the metric owner** on a non-finite SIMD result (inner product +
+  spherical; fast-fail genuine overflow), per XuPeng-SH's review. This supersedes the
+  v2 §2 rule and the interim post-af0eb99 by-design wording: the SIMD and scalar paths
+  now **agree** on the cancellation input instead of diverging. It reuses the cosine
+  kernel's existing `cosineRecomputeF64` exception pattern and is **free on the fast
+  path** (measured: 47.5 ns at 768-D, identical to the prior sentinel; the recompute
+  runs only on a non-finite result). Narrow bf16/f16 **cosine** recovery remains a
+  deferred gap (§2, §7). The v1 scope (§3–§6 kernels/build) is unaffected.
 
 ## 1. Context & goal
 
@@ -35,55 +39,51 @@ contract as amd64**, with **identical observable results**.
 - A distance kernel computes in IEEE-754. A multi-lane SIMD accumulation can
   produce **NaN** on an extreme input whose products are each finite but whose
   per-lane partial sums reach +Inf and −Inf before the cross-lane reduction
-  cancels them (a sequential scalar sum would stay finite). NaN is **unordered**,
-  so it corrupts a top-k ranking: it never compares as the maximum a heap evicts,
-  so it is retained in a slot and discards a genuinely-nearer finite candidate — a
-  silent wrong result no final-score check can catch, because the returned winner's
-  score is a finite value. Therefore **every distance function maps NaN to +Inf**
-  (the largest distance): the overflowing candidate ranks last / is excluded, and
-  every finite candidate ranks correctly. A distance function never returns NaN.
-- A genuine ±Inf — a non-cancelling overflow (a huge-similarity dot → −Inf, a
-  squared magnitude → +Inf) — is already well-ordered and is left as is. Only the
-  unordered NaN is mapped.
-- The map is applied **inside each distance function** that can produce NaN: inner
-  product (the f32/f64 `InnerProduct[T]` entry, and every narrow bf16/f16 tier
-  kernel — scalar/NEON/AVX-512/AVX2, which share no finalizer), cosine (the single
-  shared `cosineDistClamped` finalizer, covering all tiers), and spherical (its
-  `acos` result). L2/L2sq/L1 are non-negative sums and cannot produce NaN;
-  cosine-similarity f32/f64 has its own normal-norm recompute. The map is a
-  single-constant sentinel, not a scalar recompute — it costs one NaN test, keeps
-  search selection correct, and needs no second pass.
+  cancels them, where a **sequential (in-order) scalar sum cancels and stays
+  finite**. NaN is **unordered**, so it corrupts a top-k ranking: it never compares
+  as the maximum a heap evicts, so it is retained in a slot and discards a
+  genuinely-nearer finite candidate — a silent wrong result no final-score check can
+  catch, because the returned winner's score is a finite value. A distance function
+  never returns NaN.
+- **Resolution — recover the in-order reference at the metric owner.** The ordinary
+  fast path is the SIMD kernel, unchanged. Only when its result is **non-finite** does
+  the metric owner take an exceptional path: recompute the dot in **float64, in source
+  order** — the reference the parallel lane sum diverged from — and return it. So the
+  SIMD result agrees with the scalar oracle even on the cancellation input (the
+  cancellation dot recomputes to 0: inner product → 0, spherical → acos(0)/π = 0.5).
+  This mirrors the cosine kernel's existing `cosineRecomputeF64` exception, which this
+  package has shipped since the float32-domain standardization (#29040/#29050/#29100).
+- **Fast-fail genuine overflow.** When even the in-order float64 result leaves the
+  element domain, the overflow is **genuine** — not a lane-ordering artifact — so the
+  recompute returns +Inf, a well-ordered distance the serve boundary rejects. This is
+  the `ok=false` branch of `cosineRecomputeF64`, applied to inner product / spherical.
+- The recompute is applied at the **metric owner**: inner product (`InnerProduct[T]`
+  for f32/f64, and every narrow bf16/f16 tier kernel — scalar/NEON/AVX-512/AVX2) and
+  spherical (its `acos` result). Cosine already recovers via its f64 **norm** recompute
+  (`cosineNormsOK`/`cosineRecomputeF64`), which fixes the dot as a side effect — so
+  cosine is unchanged. L2/L2sq/L1 are non-negative sums and cannot produce NaN.
+- **Known gap (follow-up):** the narrow bf16/f16 **cosine** kernels have no f64 norm
+  recompute (only the f32/f64 cosine kernels do), so their lane-cancellation result
+  still maps to +Inf via the shared `cosineDistClamped`/`nanToPosInf` backstop. That is
+  well-ordered and rejected at the serve boundary (never a wrong finite winner);
+  extending the norm recompute to the narrow cosine kernels is deferred, out of the
+  inner-product/spherical scope of this change.
+- **Cost.** The exceptional recompute adds **nothing measurable** to the fast path: a
+  finite SIMD result pays only one finiteness test (what the prior +Inf sentinel already
+  paid) — measured at 47.5 ns at 768-D, identical to the prior path. The recompute runs
+  only on a non-finite result, which finite stored vectors never produce. This is
+  distinct from **always** widening the accumulator to float64, which measured ~2.5×
+  slower (and still cannot fix f64 — no f128 lane); see §5.
 - **Finiteness-as-an-error is still enforced once, at the consumer score boundary**
-  — the scalar/SQL array-distance builtins (`moarray`, `arrayDistanceNarrow`) and
-  index Search (`CheckFiniteDists`). A non-finite result (now ±Inf, never NaN)
-  handed back there is reported as an overflow error; inside search ranking it is
-  simply ordered last.
-- **Finite inputs:** every SIMD tier and architecture agrees with the scalar
-  reference up to ordinary floating-point rounding. This is the equivalence the
-  tests assert.
-- **Degenerate overflow inputs — paths may diverge, and this is not fixed, by
-  design.** A SIMD kernel sums strided lanes, so a 2^63-magnitude input overflows a
-  lane to ±Inf → NaN → +Inf; the scalar reference sums in source order, so the same
-  input can cancel and stay finite. The divergence is accepted for three reasons:
-  1. **The f32 accumulator is the point of SIMD.** Widening it to f64 to force
-     agreement was measured (NEON, 768-D inner product) at ~2.5× slower than the f32
-     kernel and only ~1.1× faster than the pre-SIMD scalar loop — versus ~2.8× for
-     the f32 kernel — i.e. it hands back almost the entire SIMD gain, and f64 inputs
-     still overflow (no wider lane to catch them), so it buys nothing there either.
-  2. **One path runs per deployment, never mixed.** A given build uses either SIMD
-     or the scalar oracle for every candidate of every query, so its ranking is
-     internally self-consistent; the divergence is only observable across builds.
-  3. **The input cannot arise from real data.** A 2^63-magnitude element is a
-     toy/adversarial input; stored vectors are finite (#28688) and real embeddings
-     are small-magnitude.
-- **The +Inf is an internal, ranking-safe intermediate — a toy vector's final
-  answer is an error.** Mapping NaN→+Inf only keeps internal selection well-ordered
-  (brute_force centroid/candidate ranking, which has no serve-time check because it
-  is internal, never retains a NaN). The user-facing serve boundary then rejects any
-  non-finite result with an error (ivfflat's `HasFloat64DistanceOverflow`,
-  hnsw/usearch `CheckFiniteDists`, GPU `CheckFiniteDists64`). So a toy vector is
-  never *served* a +Inf distance: it is either excluded (ranked last behind finite
-  candidates) or errored out at the boundary.
+  — the scalar/SQL array-distance builtins (`moarray`, `arrayDistanceNarrow`), index
+  Search (`CheckFiniteDists`), and ivfflat's `HasFloat64DistanceOverflow`. A genuine
+  non-finite result handed back there is reported as an overflow error.
+- **Equivalence.** On finite inputs every SIMD tier and architecture agrees with the
+  scalar reference up to ordinary floating-point rounding; on the degenerate
+  cancellation input they now **also** agree, because both yield the in-order reference
+  (the fast path recovers it, the scalar path computes it directly). A genuine overflow
+  is the same +Inf everywhere and the same error at the same boundary. Tests assert this
+  equivalence in both the default and the SIMD-opt-out modes.
 
 ## 3. Ownership: one scalar oracle, per-arch SIMD
 
@@ -114,9 +114,10 @@ contract as amd64**, with **identical observable results**.
   throughput the feature exists to deliver. Measured (NEON, 768-D inner product): an
   f64-accumulator kernel is ~2.5× slower than the f32 kernel and only ~1.1× faster
   than the pre-SIMD scalar loop, versus ~2.8× for the f32 kernel — it gives back
-  almost the entire SIMD gain. The residual overflow case is handled by the §2
-  boundary contract (NaN→+Inf internally, error at the serve boundary), not by
-  widening.
+  almost the entire SIMD gain. The residual non-finite case is handled by the §2
+  **exceptional recompute** (recover the in-order float64 reference only when the SIMD
+  result is non-finite; fast-fail genuine overflow), which is free on the fast path —
+  not by widening every accumulation.
 - f16 cannot overflow the float32 accumulator (its magnitude range is small);
   bf16 shares float32's exponent range and therefore can — the §2 contract covers
   it.
@@ -148,24 +149,26 @@ contract as amd64**, with **identical observable results**.
 
 ## 7. Invariants (review checklist)
 
-- No distance function returns NaN: a NaN is mapped to +Inf; a genuine ±Inf is left
-  well-ordered. The map is inside each NaN-capable function (inner product, cosine's
-  `cosineDistClamped`, spherical), never a scalar recompute.
-- Search/selection relies on well-ordered distances: the overflow candidate ranks
-  last (never a wrong winner). Finiteness-as-an-error is enforced only at the
-  consumer score boundary.
-- Scalar oracle ≡ every SIMD tier ≡ every architecture **on finite inputs** (up to
-  FP rounding). On a degenerate overflow input the SIMD and scalar paths MAY diverge
-  (SIMD → +Inf; the scalar oracle may cancel to a finite value) — accepted by design
-  (§2): one path runs per deployment, so ranking stays internally consistent, and the
-  toy input cannot arise from real finite data. The SIMD contract test therefore runs
-  the SIMD kernels directly (narrow by name; real kernels with the tier flag forced
-  on), not through the resolver, so it asserts the +Inf contract regardless of the
-  opt-out override.
-- A non-finite result is never NaN (always well-ordered +Inf) on every path. It is
-  the internal, ranking-safe intermediate only: inside search it is ordered last, and
-  at the consumer serve boundary it is rejected with an error. A toy vector is never
-  served a +Inf distance.
+- No distance function returns NaN. On a non-finite SIMD result the metric owner
+  recomputes the dot in float64 in source order and returns that in-order reference
+  (inner product `InnerProduct[T]` + narrow bf16/f16 kernels; spherical's `acos`).
+  Cosine already recovers via its f64 norm recompute. A genuine overflow — one the
+  in-order float64 sum cannot represent either — fast-fails to +Inf.
+- Scalar oracle ≡ every SIMD tier ≡ every architecture: on finite inputs up to FP
+  rounding, AND on the degenerate cancellation input, where both yield the same
+  in-order reference (SIMD recovers it, scalar computes it directly). A genuine
+  overflow is the same +Inf everywhere. The SIMD contract test runs the SIMD kernels
+  directly (narrow by name; real kernels with the tier flag forced on), not through
+  the resolver, so it asserts the recovered value regardless of the opt-out override.
+- The recompute is free on the fast path: a finite SIMD result pays one finiteness
+  test; the recompute runs only on a non-finite result, which finite stored vectors
+  never produce. Never widen every accumulation (§5).
+- KNOWN GAP: the narrow bf16/f16 **cosine** kernels have no f64 norm recompute, so
+  their lane-cancellation still maps to +Inf (well-ordered, boundary-rejected);
+  recovering them is a deferred follow-up.
+- Finiteness-as-an-error is enforced at the consumer serve boundary
+  (`CheckFiniteDists`, ivfflat `HasFloat64DistanceOverflow`); a genuine non-finite
+  result is reported as an overflow error there.
 - No architecture branch outside build-tagged kernel files.
 - Build-experiment default on + opt-out honored; capability-gated paths fail
   closed.
