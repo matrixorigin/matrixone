@@ -167,8 +167,6 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 			if tableScan.ctr.buf.IsEmpty() {
 				continue
 			}
-			if tableScan.ctr.filterLateMaterialized {
-			}
 		} else {
 			if tableScan.ctr.buf.IsEmpty() {
 				continue

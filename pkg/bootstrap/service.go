@@ -386,7 +386,6 @@ func (s *service) checkBootstrapVersionTable(ctx context.Context) (bool, error) 
 func (s *service) execBootstrap(ctx context.Context) (bool, error) {
 	opts := executor.Options{}.
 		WithMinCommittedTS(s.now()).
-		WithDisableTrace().
 		WithWaitCommittedLogApplied().
 		WithTimeZone(time.Local).
 		WithAccountID(catalog.System_Account)
@@ -472,7 +471,7 @@ func initPreprocessSQL(ctx context.Context, txn executor.TxnExecutor, finalVersi
 // ingress opens. Reconciliation on every startup also repairs a crash between
 // the prerequisite commit and this phase, without a separate completion marker.
 func InitSystemViews(ctx context.Context, exec executor.SQLExecutor) error {
-	opts := executor.Options{}.WithDisableTrace().WithWaitCommittedLogApplied().
+	opts := executor.Options{}.WithWaitCommittedLogApplied().
 		WithTimeZone(time.Local).WithAccountID(catalog.System_Account)
 	for {
 		if err := ctx.Err(); err != nil {
@@ -522,6 +521,6 @@ func SystemViewsExist(ctx context.Context, exec executor.SQLExecutor) (bool, err
 		var err error
 		complete, err = motrace.SchemaViewsExistWithTxn(ctx, txn)
 		return err
-	}, executor.Options{}.WithDisableTrace().WithAccountID(catalog.System_Account))
+	}, executor.Options{}.WithAccountID(catalog.System_Account))
 	return complete, err
 }

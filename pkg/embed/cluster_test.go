@@ -20,12 +20,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -661,9 +663,6 @@ func TestWithTestingBoundsHeartbeatRecoveryInsideStoreLiveness(t *testing.T) {
 }
 
 func TestTestingServiceDefaultsPreserveOverrides(t *testing.T) {
-	cfg := newServiceConfig()
-	cfg.CN.Txn.Trace.BufferSize = 4096
-	require.Equal(t, 4096, cfg.CN.Txn.Trace.BufferSize)
 	for _, testingMode := range []bool{false, true} {
 		t.Run(fmt.Sprintf("testing=%t", testingMode), func(t *testing.T) {
 			opts := []Option{WithCNCount(2)}
@@ -1248,4 +1247,96 @@ func assertBootstrapViews(t *testing.T, c Cluster, index int) {
 	hotspot, err := exec.Exec(ctx, "select * from system.sql_statement_hotspot limit 1", executor.Options{})
 	hotspot.Close()
 	require.NoError(t, err)
+}
+
+func TestRetiredTransactionTracePreservesRollbackArtifacts(t *testing.T) {
+	root := t.TempDir()
+	marker := filepath.Join(root, "historical.csv")
+	require.NoError(t, os.WriteFile(marker, []byte("historical trace data"), 0600))
+	var parsed cnservice.Config
+	md, err := toml.Decode(fmt.Sprintf(`[txn.trace]
+enable = true
+buffer-size = -1
+flush-bytes = "1KiB"
+force-flush-duration = "1ms"
+dir = %q
+tables = [1]
+load-to-mo = true
+`, root), &parsed)
+	require.NoError(t, err)
+	require.Empty(t, md.Undecoded())
+	c, err := NewCluster(WithTesting(), WithCNCount(1), WithPreStart(func(svc ServiceOperator) {
+		adjustBasicClusterService(svc)
+		if svc.ServiceType() == metadata.ServiceType_CN {
+			svc.Adjust(func(cfg *ServiceConfig) {
+				// Enabled controls and invalid former queue capacity must be inert.
+				cfg.CN.Txn.Trace = parsed.Txn.Trace
+			})
+		}
+	}))
+	if c != nil {
+		t.Cleanup(func() { require.NoError(t, c.Close()) })
+	}
+	require.NoError(t, err)
+	require.NoError(t, c.Start())
+
+	check := func(seed bool) {
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+		defer cancel()
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		if seed {
+			var count int
+			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase='mo_debug'").Scan(&count))
+			require.Equal(t, 9, count)
+			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from mo_debug.trace_features where state='disable'").Scan(&count))
+			require.Equal(t, 5, count)
+			// Historical collector rows are seeded through its former internal SQL
+			// ownership path; public writes remain subject to catalog authorization.
+			exec := cn.(*operator).reset.svc.(cnservice.Service).GetSQLExecutor()
+			for _, query := range []string{
+				"insert into mo_debug.trace_statement values (1,'historical','select historical',1)",
+				"update mo_debug.trace_features set state='enable'",
+			} {
+				res, err := exec.Exec(ctx, query, executor.Options{})
+				require.NoError(t, err)
+				res.Close()
+			}
+		}
+		for _, setting := range []string{"0", "1"} {
+			_, err = conn.ExecContext(ctx, "set disable_txn_trace="+setting)
+			require.NoError(t, err)
+			tx, err := conn.BeginTx(ctx, nil)
+			require.NoError(t, err)
+			func() {
+				defer tx.Rollback()
+				_, err = tx.ExecContext(ctx, "select 1")
+				require.NoError(t, err)
+				require.NoError(t, tx.Commit())
+			}()
+		}
+		_, err = conn.ExecContext(ctx, "select mo_ctl('cn','txn-trace','enable txn')")
+		require.ErrorContains(t, err, "command TXN-TRACE not supported")
+		var count int
+		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from mo_debug.trace_statement").Scan(&count))
+		require.Equal(t, 1, count, "retired collector must not append statements")
+		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from mo_debug.trace_features where state='enable'").Scan(&count))
+		require.Equal(t, 5, count, "historical controls must not be rewritten")
+		data, err := os.ReadFile(marker)
+		require.NoError(t, err)
+		require.Equal(t, "historical trace data", string(data))
+		entries, err := os.ReadDir(root)
+		require.NoError(t, err)
+		require.Len(t, entries, 1, "retired trace must not create directories or output")
+	}
+	check(true)
+	require.NoError(t, c.Close())
+	require.NoError(t, c.Start())
+	check(false)
 }

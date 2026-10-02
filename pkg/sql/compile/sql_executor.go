@@ -277,8 +277,7 @@ func (s *sqlExecutor) adjustOptions(
 				opts.AccountID(),
 				"",
 				"sql-executor",
-				0),
-			client.WithDisableTrace(!opts.EnableTrace()))
+				0))
 		txnOp, err := s.txnClient.New(
 			ctx,
 			opts.MinCommittedTS(),

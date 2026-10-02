@@ -108,7 +108,7 @@ func (s *sqlStore) Create(
 	if txnOp != nil {
 		opts = opts.WithDisableIncrStatement()
 	} else {
-		opts = opts.WithEnableTrace().WithDisableWaitPaused()
+		opts = opts.WithDisableWaitPaused()
 	}
 
 	return s.exec.ExecTxn(
@@ -148,7 +148,7 @@ func (s *sqlStore) Allocate(
 	if txnOp != nil {
 		opts = opts.WithDisableIncrStatement()
 	} else {
-		opts = opts.WithEnableTrace().WithDisableWaitPaused()
+		opts = opts.WithDisableWaitPaused()
 	}
 
 	ctxDone := func() bool {
@@ -317,7 +317,6 @@ func (s *sqlStore) UpdateMinValue(
 	if txnOp == nil {
 		opts = opts.
 			WithWaitCommittedLogApplied().
-			WithEnableTrace().
 			WithDisableWaitPaused().
 			WithStatementOption(executor.StatementOption{}.WithDisableLog())
 	} else {
@@ -352,7 +351,6 @@ func (s *sqlStore) SetOffset(
 	if txnOp == nil {
 		opts = opts.
 			WithWaitCommittedLogApplied().
-			WithEnableTrace().
 			WithDisableWaitPaused().
 			WithStatementOption(executor.StatementOption{}.WithDisableLog())
 	} else {
@@ -390,7 +388,6 @@ func (s *sqlStore) ForceSetOffset(
 	if txnOp == nil {
 		opts = opts.
 			WithWaitCommittedLogApplied().
-			WithEnableTrace().
 			WithDisableWaitPaused().
 			WithStatementOption(executor.StatementOption{}.WithDisableLog())
 	} else {
@@ -458,7 +455,6 @@ func (s *sqlStore) Delete(ctx context.Context, tableID uint64) error {
 	// and joins this worker and that wait does not observe the worker context.
 	opts := executor.Options{}.
 		WithDatabase(database).
-		WithEnableTrace().
 		WithDisableWaitPaused().
 		WithStatementOption(executor.StatementOption{}.WithDisableLog())
 
@@ -600,7 +596,7 @@ func autoColumnReadOptions(txnOp client.TxnOperator) executor.Options {
 	if txnOp != nil {
 		return opts.WithDisableIncrStatement()
 	}
-	return opts.WithEnableTrace().WithDisableWaitPaused()
+	return opts.WithDisableWaitPaused()
 }
 
 // GetColumnValue uses the allocator's (table_id, col_name) key. Policy is

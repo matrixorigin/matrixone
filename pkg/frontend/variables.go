@@ -3811,6 +3811,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("transaction_operator_open_log"),
 		Default:           int64(0),
 	},
+	// Inert setting retained for stopped-version rollback; transaction tracing is retired.
 	"disable_txn_trace": {
 		Name:              "disable_txn_trace",
 		Scope:             ScopeSession,
