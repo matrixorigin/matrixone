@@ -3648,7 +3648,7 @@ func (builder *QueryBuilder) hintQueryType() {
 // ranges and Reset remain responsible for same-count object transitions.
 func CachedPlanStatsChanged(p *plan.Plan, ctx CompilerContext) (bool, error) {
 	qry := p.GetQuery()
-	if qry == nil || queryCanSkipStats(qry) {
+	if qry == nil || queryCanSkipStats(qry) || cachedPlanHasCardinalityIndependentShape(qry) {
 		return false, nil
 	}
 	checkedHints := false
@@ -3678,4 +3678,117 @@ func CachedPlanStatsChanged(p *plan.Plan, ctx CompilerContext) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// cachedPlanHasCardinalityIndependentShape proves a singleton input structurally.
+// Workspace row-version bounds can grow after a point UPDATE without changing
+// this execution contract. Unproved shapes retain statistics admission.
+func cachedPlanHasCardinalityIndependentShape(q *plan.Query) bool {
+	if len(q.Steps) != 1 || len(q.BackgroundQueries) != 0 || (q.StmtType != plan.Query_SELECT && q.StmtType != plan.Query_UPDATE) {
+		return false
+	}
+	id := q.Steps[0]
+	var target uint64
+	for remaining := len(q.Nodes); remaining > 0; remaining-- {
+		if id < 0 || int(id) >= len(q.Nodes) {
+			return false
+		}
+		n := q.Nodes[id]
+		if n == nil {
+			return false
+		}
+		switch n.NodeType {
+		case plan.Node_PROJECT, plan.Node_FILTER:
+		case plan.Node_LOCK_OP:
+			if q.StmtType != plan.Query_UPDATE || len(n.LockTargets) != 1 {
+				return false
+			}
+		case plan.Node_MULTI_UPDATE:
+			if q.StmtType != plan.Query_UPDATE || len(n.UpdateCtxList) != 1 || n.UpdateCtxList[0].TableDef == nil {
+				return false
+			}
+			target = n.UpdateCtxList[0].TableDef.TblId
+		case plan.Node_TABLE_SCAN:
+			if len(n.Children) != 0 || n.TableDef == nil || (target != 0 && target != n.TableDef.TblId) {
+				return false
+			}
+			return cachedScanHasPrimaryKeyPointPredicate(n)
+		default:
+			return false
+		}
+		if len(n.Children) != 1 {
+			return false
+		}
+		id = n.Children[0]
+	}
+	return false
+}
+
+func cachedScanHasPrimaryKeyPointPredicate(scan *plan.Node) bool {
+	// Final scan columns have been pruned/remapped; the catalog name index still
+	// addresses original ordinals. Use a private view of the actual scan layout.
+	table := *scan.TableDef
+	table.Name2ColIndex = nil
+	if table.Pkey == nil || len(table.Fkeys) != 0 || len(table.RefChildTbls) != 0 {
+		return false
+	}
+	positions, componentProof := sqlEqualityCompatiblePrimaryKeyColumnPositions(&table)
+	encodedPos, encodedProof := int32(0), false
+	if len(table.Pkey.Names) > 1 && isCompositePrimaryKeyStorageColumnName(table.Pkey.PkeyColName, table.Pkey.Names) {
+		encodedPos, encodedProof = tableColumnPosition(&table, table.Pkey.PkeyColName)
+	}
+	if !componentProof && !encodedProof {
+		return false
+	}
+	matched := make(map[int32]bool, len(positions))
+	for _, expr := range splitPlanConjunctions(scan.FilterList) {
+		f := expr.GetF()
+		if f != nil && f.Func != nil && f.Func.ObjName == "istrue" && len(f.Args) == 1 {
+			f = f.Args[0].GetF()
+		}
+		if f == nil || f.Func == nil || f.Func.ObjName != "=" || len(f.Args) != 2 {
+			continue
+		}
+		for side := 0; side < 2; side++ {
+			key, value := f.Args[side], f.Args[1-side]
+			if !isRuntimeConstExpr(value) || value.GetVec() != nil || value.GetList() != nil {
+				continue
+			}
+			// Widening an integer is injective; float/string/lossy conversions are not.
+			for cast := key.GetF(); cast != nil && cast.Func != nil && cast.Func.ObjName == "cast" && len(cast.Args) == 2; cast = key.GetF() {
+				if !integerDomainFits(types.T(cast.Args[0].Typ.Id), types.T(key.Typ.Id)) {
+					break
+				}
+				key = cast.Args[0]
+			}
+			col := key.GetCol()
+			if col == nil || col.RelPos != 0 || col.ColPos < 0 || int(col.ColPos) >= len(table.Cols) {
+				continue
+			}
+			typ := table.Cols[col.ColPos].Typ
+			if !sqlEqualityJoinUsesOneIdentityDomain(key.Typ, typ) || !primaryKeyColumnTypeSupportsSQLEqualityProof(typ) {
+				continue
+			}
+			compared := f.Args[side].Typ
+			if !sqlEqualityJoinUsesOneIdentityDomain(compared, value.Typ) {
+				continue
+			}
+			if compared.Id != typ.Id && !integerDomainFits(types.T(typ.Id), types.T(compared.Id)) {
+				continue
+			}
+			matched[col.ColPos] = true
+		}
+	}
+	if encodedProof && matched[encodedPos] {
+		return true
+	}
+	if !componentProof {
+		return false
+	}
+	for _, pos := range positions {
+		if !matched[pos] {
+			return false
+		}
+	}
+	return true
 }

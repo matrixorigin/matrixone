@@ -3011,3 +3011,62 @@ func TestValueScanCardinality(t *testing.T) {
 		})
 	}
 }
+
+func TestCachedPointPlanAdmission(t *testing.T) {
+	for _, tc := range []struct {
+		sql   string
+		point bool
+	}{
+		{"select n_name from nation where n_nationkey=1", true},
+		{"update nation set n_regionkey=2 where n_nationkey=1", true},
+		{"select n_name from nation where n_nationkey>1", false},
+		{"update nation set n_regionkey=2 where n_nationkey>1", false},
+		{"select n_name from nation where cast(n_nationkey as double)=1", false},
+		{"select n_name from nation limit 1", false},
+		{"select ps_availqty from partsupp where ps_partkey=1 and ps_suppkey=2", true},
+		{"select ps_availqty from partsupp where ps_partkey=1", false},
+		{"select n_name from nation where cast(n_nationkey as bigint)=1", true},
+		{"select n_name from nation where n_nationkey in (1,2)", false},
+		{"select n_name from nation where n_nationkey=1 or n_nationkey=2", false},
+		{"select n_name from nation join region on n_regionkey=r_regionkey where n_nationkey=1", false},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			ctx := &tableDefStatsTestCompilerContext{MockCompilerContext: NewMockCompilerContext(true)}
+			// The legacy TPCH mock uses cluster-key metadata with empty key
+			// names. Supply a real composite primary-key catalog for this test.
+			table := ctx.tables["partsupp"]
+			table.Pkey = &planpb.PrimaryKeyDef{PkeyColName: catalog.CPrimaryKeyColName, Names: []string{"ps_partkey", "ps_suppkey"}}
+			hidden := MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
+			table.Pkey.CompPkeyCol = hidden
+			table.Cols = append(table.Cols, hidden)
+
+			stmts, err := mysql.Parse(ctx.GetContext(), tc.sql, 1)
+			require.NoError(t, err)
+			defer stmts[0].Free()
+			p, err := BuildPlan(ctx, stmts[0], false)
+			require.NoError(t, err)
+			require.Equal(t, tc.point, cachedPlanHasCardinalityIndependentShape(p.GetQuery()), "%s", p.String())
+			ctx.stats = &pb.StatsInfo{TableCnt: 1e9}
+			changed, err := CachedPlanStatsChanged(p, ctx)
+			require.NoError(t, err)
+			require.Equal(t, !tc.point, changed)
+		})
+	}
+}
+
+func BenchmarkCachedPointPlanAdmission(b *testing.B) {
+	ctx := NewMockCompilerContext(false)
+	stmts, err := mysql.Parse(ctx.GetContext(), "select n_name from nation where n_nationkey=1", 1)
+	require.NoError(b, err)
+	defer stmts[0].Free()
+	p, err := BuildPlan(ctx, stmts[0], false)
+	require.NoError(b, err)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		changed, err := CachedPlanStatsChanged(p, ctx)
+		if err != nil || changed {
+			b.Fatal("point admission failed", err)
+		}
+	}
+}

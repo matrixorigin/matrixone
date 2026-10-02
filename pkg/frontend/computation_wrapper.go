@@ -1380,7 +1380,13 @@ func initExecuteStmtParamWithResolverInSession(
 		preparePlanNeedsRebuild(change, modeMismatch, protocolMismatch) || rebuildEveryExecute ||
 		!reusablePlanGenerationSupported(cwft.proc)
 	if !needRebuild {
-		statsChanged, err := plan2.CachedPlanStatsChanged(executionPlan, planningContext)
+		// Admit the installed specialization that may actually be reused. A
+		// template's point shape cannot authorize a differently bound plan.
+		candidate := executionPlan
+		if executionPlan.GetQuery() != nil && len(preparePlan.ParamTypes) > 0 && prepareStmt.runtimePlan != nil {
+			candidate = prepareStmt.runtimePlan
+		}
+		statsChanged, err := plan2.CachedPlanStatsChanged(candidate, planningContext)
 		if err != nil {
 			prepareStmt.needsRebuild = true
 			return nil, nil, nil, "", false, err

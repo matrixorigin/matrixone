@@ -49,6 +49,7 @@ import (
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
@@ -6531,4 +6532,67 @@ func TestPreparedStatsAdmissionPreservesStableCompileAndRejectsError(t *testing.
 	require.ErrorIs(t, err, ctx.err)
 	require.True(t, prepared.needsRebuild, "a rejected generation must not be admitted on a later execute")
 	require.Same(t, sentinel, prepared.compile, "existing rebuild/Close owns exactly-once compile cleanup")
+}
+
+func TestPreparedStatsAdmissionChecksInstalledSpecialization(t *testing.T) {
+	base := plan2.NewMockCompilerContext(false)
+	ctx := &preparedStatsTestCompiler{preparedTestCompiler: &preparedTestCompiler{CompilerContext: base, proc: base.GetProcess()}, stats: &pbstats.StatsInfo{TableCnt: 5}}
+	ses, prepared, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(t, 226, "select n_name from nation where n_nationkey=?", ctx)
+	defer prepared.Close()
+	ctx.proc = cw.proc
+	// A differently bound runtime plan may be statistics-sensitive even when
+	// the template is a point lookup. It must not inherit the template's proof.
+	stmts, err := mysql.Parse(ctx.GetContext(), "select n_name from nation", 1)
+	require.NoError(t, err)
+	defer stmts[0].Free()
+	prepared.runtimePlan, err = plan2.BuildPlan(ctx, stmts[0], false)
+	require.NoError(t, err)
+	ctx.err = fmt.Errorf("installed specialization requires current statistics")
+	_, _, _, _, _, err = initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepared.Name, base.Resolve, ctx)
+	require.ErrorIs(t, err, ctx.err)
+	require.True(t, prepared.needsRebuild)
+}
+
+func TestPreparedStatsGrowthRebuildsExecutionStrategy(t *testing.T) {
+	base := plan2.NewMockCompilerContext(false)
+	ctx := &preparedStatsTestCompiler{preparedTestCompiler: &preparedTestCompiler{CompilerContext: base, proc: base.GetProcess()}, stats: &pbstats.StatsInfo{TableCnt: 5, BlockNumber: 1}}
+	ses, prepared, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(t, 227, "select n_name from nation", ctx)
+	defer prepared.Close()
+	ctx.proc = cw.proc
+	prepared.defaultDatabase = "tpch"
+	original := prepared.PreparePlan.GetDcl().GetPrepare().Plan
+	require.Equal(t, plan2.ExecTypeTP, plan2.GetExecType(original.GetQuery(), false, true))
+	sentinel := compile.NewCompile("", "", prepared.Sql, "", "", nil, cw.proc, prepared.PrepareStmt, false, nil, time.Now())
+	prepared.compile = sentinel
+	// Keep the real session compiler/rebuild owner, replacing only storage
+	// observations so the distribution threshold needs no large physical data.
+	ctrl := gomock.NewController(t)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Nodes(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(engine.Nodes{{Id: "stats-cn", Addr: "stats-cn:6001", Mcpu: 1}}, nil).AnyTimes()
+	db := mock_frontend.NewMockDatabase(ctrl)
+	relation := mock_frontend.NewMockRelation(ctrl)
+	_, table, err := base.Resolve("tpch", "nation", nil)
+	require.NoError(t, err)
+	eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
+	db.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(relation, nil).AnyTimes()
+	db.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
+	relation.EXPECT().GetTableDef(gomock.Any()).Return(table).AnyTimes()
+	relation.EXPECT().GetTableID(gomock.Any()).Return(table.TblId).AnyTimes()
+	relation.EXPECT().Stats(gomock.Any(), gomock.Any()).DoAndReturn(func(context.Context, bool) (*pbstats.StatsInfo, error) { return ctx.stats, nil }).AnyTimes()
+	ses.txnHandler.storage = eng
+	oldEngine := getPu("").StorageEngine
+	getPu("").StorageEngine = eng
+	defer func() { getPu("").StorageEngine = oldEngine }()
+	defer ses.GetTxnCompileCtx().Close()
+	ctx.stats = &pbstats.StatsInfo{TableCnt: 1e9, BlockNumber: 1e6, AccurateObjectNumber: 1}
+	ret, fresh, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepared.Name, base.Resolve, ctx)
+	if owned && stmt != nil {
+		stmt.Free()
+	}
+	require.NoError(t, err)
+	require.Nil(t, ret, "the old compiled strategy cannot survive growth")
+	require.False(t, cw.planGenerationReused)
+	require.NotSame(t, original, fresh)
+	require.Equal(t, plan2.ExecTypeAP_MULTICN, plan2.GetExecType(fresh.GetQuery(), false, true))
+	require.Same(t, fresh, prepared.PreparePlan.GetDcl().GetPrepare().Plan)
 }
