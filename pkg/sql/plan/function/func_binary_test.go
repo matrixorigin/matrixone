@@ -14818,21 +14818,30 @@ func TestTimestampAddDateMetadataAndWrapperReuse(t *testing.T) {
 			result := vector.NewFunctionResultWrapper(initial.ToType(), proc.Mp())
 			defer result.Free()
 			for _, tc := range []struct {
-				name                string
-				units               []string
-				constant, nullFirst bool
-				wantType            types.T
-				scale               int32
-				want                []string
+				name                 string
+				units                []string
+				constant, nullFirst  bool
+				wantType             types.T
+				scale                int32
+				want                 []string
+				selected             []bool
+				nullDates, wantError bool
 			}{
-				{"constant day", []string{"DAY"}, true, false, types.T_date, 0, []string{"2024-01-02", "2024-01-04"}},
-				{"constant hour", []string{"HOUR"}, true, false, types.T_datetime, 0, []string{"2024-01-01 01:00:00", "2024-01-02 02:00:00"}},
-				{"dynamic hour minute", []string{"HOUR", "MINUTE"}, false, false, types.T_datetime, 0, []string{"2024-01-01 01:00:00", "2024-01-02 00:02:00"}},
-				{"dynamic hour second", []string{"HOUR", "SECOND"}, false, false, types.T_datetime, 0, []string{"2024-01-01 01:00:00", "2024-01-02 00:00:02"}},
-				{"dynamic day week", []string{"DAY", "WEEK"}, false, false, types.T_date, 0, []string{"2024-01-02", "2024-01-16"}},
-				{"dynamic day month", []string{"DAY", "MONTH"}, false, false, types.T_date, 0, []string{"2024-01-02", "2024-03-02"}},
-				{"dynamic null day", []string{"", "DAY"}, false, true, types.T_date, 0, []string{"", "2024-01-04"}},
-				{"dynamic microsecond", []string{"MICROSECOND", "DAY"}, false, false, types.T_datetime, 6, []string{"2024-01-01 00:00:00.000001", "2024-01-04 00:00:00.000000"}},
+				{"constant day", []string{"DAY"}, true, false, types.T_date, 0, []string{"2024-01-02", "2024-01-04"}, nil, false, false},
+				{"constant hour", []string{"HOUR"}, true, false, types.T_datetime, 0, []string{"2024-01-01 01:00:00", "2024-01-02 02:00:00"}, nil, false, false},
+				{"dynamic hour minute", []string{"HOUR", "MINUTE"}, false, false, types.T_datetime, 0, []string{"2024-01-01 01:00:00", "2024-01-02 00:02:00"}, nil, false, false},
+				{"dynamic hour second", []string{"HOUR", "SECOND"}, false, false, types.T_datetime, 0, []string{"2024-01-01 01:00:00", "2024-01-02 00:00:02"}, nil, false, false},
+				{"dynamic day week", []string{"DAY", "WEEK"}, false, false, types.T_date, 0, []string{"2024-01-02", "2024-01-16"}, nil, false, false},
+				{"dynamic day month", []string{"DAY", "MONTH"}, false, false, types.T_date, 0, []string{"2024-01-02", "2024-03-02"}, nil, false, false},
+				{"dynamic null day", []string{"", "DAY"}, false, true, types.T_date, 0, []string{"", "2024-01-04"}, nil, false, false},
+				{"dynamic microsecond", []string{"MICROSECOND", "DAY"}, false, false, types.T_datetime, 6, []string{"2024-01-01 00:00:00.000001", "2024-01-04 00:00:00.000000"}, nil, false, false},
+				{"dynamic day hour", []string{"DAY", "HOUR"}, false, false, types.T_datetime, 0, []string{"2024-01-02 00:00:00", "2024-01-02 02:00:00"}, nil, false, false},
+				{"masked microsecond", []string{"DAY", "MICROSECOND"}, false, false, types.T_date, 0, []string{"2024-01-02", ""}, []bool{true, false}, false, false},
+				{"NULL dates retain microsecond metadata", []string{"DAY", "MICROSECOND"}, false, false, types.T_datetime, 6, []string{"", ""}, nil, true, false},
+				{"masked invalid unit", []string{"DAY", "INVALID"}, false, false, types.T_date, 0, []string{"2024-01-02", ""}, []bool{true, false}, false, false},
+				{"invalid unit before NULL dates", []string{"DAY", "INVALID"}, false, false, types.T_date, 0, nil, nil, true, true},
+				{"invalid unit after overflowing microsecond", []string{"MICROSECOND", "INVALID"}, false, false, types.T_date, 0, nil, nil, false, true},
+				{"constant invalid unit before NULL dates", []string{"INVALID"}, true, false, types.T_date, 0, nil, nil, true, true},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
 					var units *vector.Vector
@@ -14847,16 +14856,34 @@ func TestTimestampAddDateMetadataAndWrapperReuse(t *testing.T) {
 					defer units.Free(proc.Mp())
 					intervals := vector.NewVec(types.T_int64.ToType())
 					defer intervals.Free(proc.Mp())
-					require.NoError(t, vector.AppendFixedList(intervals, []int64{1, 2}, nil, proc.Mp()))
+					counts := []int64{1, 2}
+					if tc.wantError {
+						counts[0] = math.MaxInt64
+					}
+					require.NoError(t, vector.AppendFixedList(intervals, counts, nil, proc.Mp()))
 					dates := vector.NewVec(types.T_date.ToType())
 					defer dates.Free(proc.Mp())
 					first, err := types.ParseDateCast("2024-01-01")
 					require.NoError(t, err)
 					second, err := types.ParseDateCast("2024-01-02")
 					require.NoError(t, err)
-					require.NoError(t, vector.AppendFixedList(dates, []types.Date{first, second}, nil, proc.Mp()))
+					require.NoError(t, vector.AppendFixedList(dates, []types.Date{first, second}, []bool{tc.nullDates, tc.nullDates}, proc.Mp()))
 					require.NoError(t, result.PreExtendAndReset(2))
-					require.NoError(t, TimestampAddDate([]*vector.Vector{units, intervals, dates}, result, proc, 2, nil))
+					var selected *FunctionSelectList
+					if tc.selected != nil {
+						selected = &FunctionSelectList{AnyNull: true, SelectList: tc.selected}
+					}
+					beforeType := *result.GetResultVector().GetType()
+					warnings := &numericWarningSession{}
+					proc.WarningSink = warnings
+					err = TimestampAddDate([]*vector.Vector{units, intervals, dates}, result, proc, 2, selected)
+					if tc.wantError {
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+						require.Empty(t, warnings.warnings, "unit admission must finish before row evaluation")
+						require.Equal(t, beforeType, *result.GetResultVector().GetType())
+						return
+					}
+					require.NoError(t, err)
 					vec := result.GetResultVector()
 					require.Equal(t, tc.wantType, vec.GetType().Oid)
 					require.Equal(t, tc.scale, vec.GetType().Scale)
@@ -17180,6 +17207,112 @@ func TestTimestampAddDateDeniedTypeGrowth(t *testing.T) {
 			require.Equal(t, 128, result.GetResultVector().Length())
 			require.Equal(t, uint64(528), account.Snapshot().Used)
 			require.Equal(t, make([]types.Date, 128), vector.MustFixedColNoTypeCheck[types.Date](result.GetResultVector()))
+		})
+	}
+}
+
+func TestTimestampAddDateWarningsPerSelectedRow(t *testing.T) {
+	for _, unitText := range []string{"DAY", "HOUR"} {
+		for _, constant := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/constant=%t", unitText, constant), func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				defer proc.Free()
+				warnings := &numericWarningSession{}
+				proc.WarningSink = warnings
+				unit, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte(unitText), 3, proc.Mp())
+				require.NoError(t, err)
+				if !constant {
+					unit.Free(proc.Mp())
+					unit = vector.NewVec(types.T_varchar.ToType())
+					require.NoError(t, vector.AppendStringList(unit, []string{unitText, unitText, unitText}, nil, proc.Mp()))
+				}
+				defer unit.Free(proc.Mp())
+				count, err := vector.NewConstFixed(types.T_int64.ToType(), int64(math.MaxInt64), 3, proc.Mp())
+				require.NoError(t, err)
+				defer count.Free(proc.Mp())
+				date, err := vector.NewConstFixed(types.T_date.ToType(), types.DateFromCalendar(2024, 2, 29), 3, proc.Mp())
+				require.NoError(t, err)
+				defer date.Free(proc.Mp())
+				result := vector.NewFunctionResultWrapper(types.T_date.ToType(), proc.Mp())
+				defer result.Free()
+				require.NoError(t, result.PreExtendAndReset(3))
+				require.NoError(t, TimestampAddDate([]*vector.Vector{unit, count, date}, result, proc, 3, &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}}))
+				require.Equal(t, 3, result.GetResultVector().GetNulls().Count())
+				require.Len(t, warnings.warnings, 2, "each evaluated overflowing row emits one warning; masked rows emit none")
+			})
+		}
+	}
+}
+
+func BenchmarkTimestampAddDate(b *testing.B) {
+	const size = 2048
+	for _, tc := range []struct {
+		name     string
+		units    []string
+		constant bool
+		output   types.T
+		scale    int32
+	}{
+		{"fixed/day", []string{"DAY"}, true, types.T_date, 0},
+		{"fixed/second", []string{"SECOND"}, true, types.T_datetime, 0},
+		{"fixed/microsecond", []string{"MICROSECOND"}, true, types.T_datetime, 6},
+		{"fixed/month", []string{"MONTH"}, true, types.T_date, 0},
+		{"dynamic/date", []string{"DAY", "MONTH"}, false, types.T_date, 0},
+		{"dynamic/clock", []string{"DAY", "HOUR"}, false, types.T_datetime, 0},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			proc := testutil.NewProcess(b)
+			defer proc.Free()
+			dates := vector.NewVec(types.T_date.ToType())
+			defer dates.Free(proc.Mp())
+			var units *vector.Vector
+			var err error
+			if tc.constant {
+				units, err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.units[0]), size, proc.Mp())
+			} else {
+				units = vector.NewVec(types.T_varchar.ToType())
+			}
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer units.Free(proc.Mp())
+			for i := 0; i < size; i++ {
+				if err = vector.AppendFixed(dates, types.DateFromCalendar(2024, 1, 31), false, proc.Mp()); err != nil {
+					b.Fatal(err)
+				}
+				if !tc.constant {
+					if err = vector.AppendBytes(units, []byte(tc.units[i%len(tc.units)]), false, proc.Mp()); err != nil {
+						b.Fatal(err)
+					}
+				}
+			}
+			counts, err := vector.NewConstFixed(types.T_int64.ToType(), int64(1), size, proc.Mp())
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer counts.Free(proc.Mp())
+			typ := tc.output.ToTypeWithScale(tc.scale)
+			result := vector.NewFunctionResultWrapper(typ, proc.Mp())
+			defer result.Free()
+			inputs := []*vector.Vector{units, counts, dates}
+			if err = result.PreExtendAndReset(size); err != nil {
+				b.Fatal(err)
+			}
+			if err = TimestampAddDate(inputs, result, proc, size, nil); err != nil {
+				b.Fatal(err)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				// Match the executor's bound-type reset before reusing its result.
+				result.GetResultVector().SetType(typ)
+				if err = result.PreExtendAndReset(size); err != nil {
+					b.Fatal(err)
+				}
+				if err = TimestampAddDate(inputs, result, proc, size, nil); err != nil {
+					b.Fatal(err)
+				}
+			}
 		})
 	}
 }

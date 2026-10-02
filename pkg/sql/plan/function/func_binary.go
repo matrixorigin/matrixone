@@ -2539,31 +2539,37 @@ func TimestampAddDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	hasTime := false
 	scale := int32(0)
 	// Unit admission precedes operand NULL handling because it also determines metadata.
-	unitRows := length
 	if constant {
-		unitRows = 1
-	}
-	for i := uint64(0); i < uint64(unitRows); i++ {
-		if !constant && functionRowSkipped(selectList, i) {
-			continue
-		}
-		text, null := units.GetStrValue(i)
-		if null && !constant {
-			continue
-		}
+		text, _ := units.GetStrValue(0)
 		var err error
 		unit, err = types.IntervalTypeOf(functionUtil.QuickBytesToStr(text))
 		if err != nil {
 			return err
 		}
-		if unit == types.Hour || unit == types.Minute || unit == types.Second || unit == types.MicroSecond {
-			hasTime = true
-		}
+		hasTime = unit == types.Hour || unit == types.Minute || unit == types.Second || unit == types.MicroSecond
 		if unit == types.MicroSecond {
 			scale = 6
 		}
-		if constant {
-			break
+	} else {
+		for i := uint64(0); i < uint64(length); i++ {
+			if functionRowSkipped(selectList, i) {
+				continue
+			}
+			text, null := units.GetStrValue(i)
+			if null {
+				continue
+			}
+			var err error
+			unit, err = types.IntervalTypeOf(functionUtil.QuickBytesToStr(text))
+			if err != nil {
+				return err
+			}
+			if unit == types.Hour || unit == types.Minute || unit == types.Second || unit == types.MicroSecond {
+				hasTime = true
+			}
+			if unit == types.MicroSecond {
+				scale = 6
+			}
 		}
 	}
 	typ := types.New(types.T_date, 0, 0)
@@ -2578,51 +2584,119 @@ func TimestampAddDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	} else if hasTime {
 		vec.SetType(typ)
 	}
-	var dateValues []types.Date
-	var datetimeValues []types.Datetime
-	if hasTime {
-		datetimeValues = vector.MustFixedColNoTypeCheck[types.Datetime](vec)
-	} else {
-		dateValues = vector.MustFixedColNoTypeCheck[types.Date](vec)
-	}
-	nulls := vec.GetNulls()
-	for i := uint64(0); i < uint64(length); i++ {
-		if functionRowSkipped(selectList, i) {
-			nulls.Add(i)
-			continue
-		}
-		date, nullDate := dates.GetValue(i)
-		count, nullCount := intervals.GetValue(i)
-		if nullDate || nullCount {
-			nulls.Add(i)
-			continue
-		}
-		if !constant {
-			text, null := units.GetStrValue(i)
-			if null {
-				nulls.Add(i)
-				continue
-			}
-			var err error
-			unit, err = types.IntervalTypeOf(functionUtil.QuickBytesToStr(text))
-			if err != nil {
-				return err
-			}
-		}
-		dt, err := doCalendarInterval(date.ToDatetime(), count, unit, false)
-		if err != nil {
-			if !handleTemporalArithmeticError(proc, err) {
-				return err
-			}
-			nulls.Add(i)
-			continue
-		}
+	nsp := vec.GetNulls()
+	// Both choices are batch invariants. Dispatch before the hot loops, while
+	// sharing NULL publication, error policy and checked calendar arithmetic.
+	if constant {
 		if hasTime {
-			datetimeValues[i] = dt
+			values := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
+			for i := uint64(0); i < uint64(length); i++ {
+				if timestampAddDateNull(nsp, i, functionRowSkipped(selectList, i)) {
+					continue
+				}
+				date, nullDate := dates.GetValue(i)
+				count, nullCount := intervals.GetValue(i)
+				if timestampAddDateNull(nsp, i, nullDate || nullCount) {
+					continue
+				}
+				dt, err := doCalendarInterval(date.ToDatetime(), count, unit, false)
+				if err != nil {
+					if err = timestampAddDateError(proc, nsp, i, err); err != nil {
+						return err
+					}
+					continue
+				}
+				values[i] = dt
+			}
 		} else {
-			dateValues[i] = dt.ToDate()
+			values := vector.MustFixedColNoTypeCheck[types.Date](vec)
+			for i := uint64(0); i < uint64(length); i++ {
+				if timestampAddDateNull(nsp, i, functionRowSkipped(selectList, i)) {
+					continue
+				}
+				date, nullDate := dates.GetValue(i)
+				count, nullCount := intervals.GetValue(i)
+				if timestampAddDateNull(nsp, i, nullDate || nullCount) {
+					continue
+				}
+				dt, err := doCalendarInterval(date.ToDatetime(), count, unit, false)
+				if err != nil {
+					if err = timestampAddDateError(proc, nsp, i, err); err != nil {
+						return err
+					}
+					continue
+				}
+				values[i] = dt.ToDate()
+			}
+		}
+	} else {
+		if hasTime {
+			values := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
+			for i := uint64(0); i < uint64(length); i++ {
+				if timestampAddDateNull(nsp, i, functionRowSkipped(selectList, i)) {
+					continue
+				}
+				date, nullDate := dates.GetValue(i)
+				count, nullCount := intervals.GetValue(i)
+				text, nullUnit := units.GetStrValue(i)
+				if timestampAddDateNull(nsp, i, nullDate || nullCount || nullUnit) {
+					continue
+				}
+				unit, err := types.IntervalTypeOf(functionUtil.QuickBytesToStr(text))
+				if err != nil {
+					return err
+				}
+				dt, err := doCalendarInterval(date.ToDatetime(), count, unit, false)
+				if err != nil {
+					if err = timestampAddDateError(proc, nsp, i, err); err != nil {
+						return err
+					}
+					continue
+				}
+				values[i] = dt
+			}
+		} else {
+			values := vector.MustFixedColNoTypeCheck[types.Date](vec)
+			for i := uint64(0); i < uint64(length); i++ {
+				if timestampAddDateNull(nsp, i, functionRowSkipped(selectList, i)) {
+					continue
+				}
+				date, nullDate := dates.GetValue(i)
+				count, nullCount := intervals.GetValue(i)
+				text, nullUnit := units.GetStrValue(i)
+				if timestampAddDateNull(nsp, i, nullDate || nullCount || nullUnit) {
+					continue
+				}
+				unit, err := types.IntervalTypeOf(functionUtil.QuickBytesToStr(text))
+				if err != nil {
+					return err
+				}
+				dt, err := doCalendarInterval(date.ToDatetime(), count, unit, false)
+				if err != nil {
+					if err = timestampAddDateError(proc, nsp, i, err); err != nil {
+						return err
+					}
+					continue
+				}
+				values[i] = dt.ToDate()
+			}
 		}
 	}
+	return nil
+}
+
+func timestampAddDateNull(nsp *nulls.Nulls, row uint64, null bool) bool {
+	if null {
+		nsp.Add(row)
+	}
+	return null
+}
+
+func timestampAddDateError(proc *process.Process, nsp *nulls.Nulls, row uint64, err error) error {
+	if !handleTemporalArithmeticError(proc, err) {
+		return err
+	}
+	nsp.Add(row)
 	return nil
 }
 
