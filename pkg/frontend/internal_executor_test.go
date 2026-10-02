@@ -145,8 +145,12 @@ func TestInternalExecutorAuthorizationIdentity(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				executor := newIe("")
 				opts := ie.NewOptsBuilder().Username("tenant:definer:writer").AccountId(tc.accountID).DefaultRoleId(tc.roleID).Finish()
-				require.ErrorContains(t, executor.Exec(t.Context(), "select 1", opts), tc.errorText)
-				require.ErrorContains(t, executor.Query(t.Context(), "select 1", opts).Error(), tc.errorText)
+				execErr := executor.Exec(t.Context(), "select 1", opts)
+				require.ErrorContains(t, execErr, tc.errorText)
+				require.True(t, moerr.IsMoErrCode(execErr, moerr.ErrInternal))
+				queryErr := executor.Query(t.Context(), "select 1", opts).Error()
+				require.ErrorContains(t, queryErr, tc.errorText)
+				require.True(t, moerr.IsMoErrCode(queryErr, moerr.ErrInternal))
 			})
 		}
 	})

@@ -99,7 +99,7 @@ func bindInternalSessionPrincipal(ctx context.Context, sess *Session) error {
 	}
 	roleName, err := getRoleNameByIDWithBackgroundExec(defines.AttachAccountId(ctx, accountID), bh, acc.GetDefaultRoleID())
 	if err != nil {
-		return fmt.Errorf("bind internal principal for account %d: %w", accountID, err)
+		return err
 	}
 	acc.mu.Lock()
 	acc.Tenant = accountName
