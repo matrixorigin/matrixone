@@ -13913,60 +13913,74 @@ func SHA1Func(
 	}, selectList)
 }
 
-func LastDay(
-	ivecs []*vector.Vector,
-	result vector.FunctionResultWrapper,
-	_ *process.Process,
-	length int,
-	selectList *FunctionSelectList,
-) error {
+// lastDayDate is shared by native temporal inputs and the tolerant text parser.
+func lastDayDate(dt types.Date) (types.Date, bool) {
+	year, month, _, _ := dt.Calendar(true)
+	if dt == types.ZeroDate || month == 0 {
+		return 0, true
+	}
+	return types.DateFromCalendar(year, month, types.LastDay(year, month)), false
+}
+
+func LastDay(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
+	_ *process.Process, length int, selectList *FunctionSelectList) error {
+	switch ivecs[0].GetType().Oid {
+	case types.T_date:
+		return opUnaryFixedToFixedWithNullCheck[types.Date, types.Date](ivecs, result, length, lastDayDate, selectList)
+	case types.T_datetime:
+		return opUnaryFixedToFixedWithNullCheck[types.Datetime, types.Date](ivecs, result, length,
+			func(dt types.Datetime) (types.Date, bool) { return lastDayDate(dt.ToDate()) }, selectList)
+	}
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
-	rs := vector.MustFunctionResult[types.Varlena](result)
-
+	// Stopped upgrades can still load old catalog expressions with VARCHAR
+	// results and released overload IDs. Keep their physical wrapper executable.
+	legacy, oldResult := result.(*vector.FunctionResult[types.Varlena])
+	var dates *vector.FunctionResult[types.Date]
+	if !oldResult {
+		dates = vector.MustFunctionResult[types.Date](result)
+	}
+	appendDate := func(dt types.Date, null bool) error {
+		if oldResult {
+			if null {
+				return legacy.AppendBytes(nil, true)
+			}
+			return legacy.AppendBytes([]byte(dt.String()), false)
+		}
+		return dates.Append(dt, null)
+	}
 	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := p1.GetStrValue(i)
-		if null1 {
-			if err := rs.AppendBytes(nil, true); err != nil {
+		if functionRowSkipped(selectList, i) {
+			if err := appendDate(0, true); err != nil {
 				return err
 			}
+			continue
+		}
+		v, null := p1.GetStrValue(i)
+		if null {
+			if err := appendDate(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		day := functionUtil.QuickBytesToStr(v)
+		var dt types.Date
+		var err error
+		if len(day) < 14 {
+			dt, err = types.ParseDateCast(day)
 		} else {
-			day := functionUtil.QuickBytesToStr(v1)
-			var dt types.Date
-			var err error
-			var dtt types.Datetime
-			if len(day) < 14 {
-				dt, err = types.ParseDateCast(day)
-				if err != nil {
-					if err := rs.AppendBytes(nil, true); err != nil {
-						return err
-					}
-					continue
-				}
-			} else {
-				dtt, err = types.ParseDatetime(day, 6)
-				if err != nil {
-					if err := rs.AppendBytes(nil, true); err != nil {
-						return err
-					}
-					continue
-				}
-				dt = dtt.ToDate()
-			}
-
-			year := dt.Year()
-			month := dt.Month()
-			if dt == types.ZeroDate || month == 0 {
-				if err := rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-				continue
-			}
-
-			lastDay := types.LastDay(int32(year), month)
-			resDt := types.DateFromCalendar(int32(year), month, lastDay)
-			if err := rs.AppendBytes([]byte(resDt.String()), false); err != nil {
+			var datetime types.Datetime
+			datetime, err = types.ParseDatetime(day, 6)
+			dt = datetime.ToDate()
+		}
+		if err != nil {
+			if err := appendDate(0, true); err != nil {
 				return err
 			}
+			continue
+		}
+		dt, null = lastDayDate(dt)
+		if err := appendDate(dt, null); err != nil {
+			return err
 		}
 	}
 	return nil

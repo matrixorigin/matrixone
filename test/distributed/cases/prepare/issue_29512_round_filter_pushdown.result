@@ -12,8 +12,8 @@ Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on issue_29512_round_filter.lookup_key  𝄀
-              Filter Cond: (lookup_key.id = cast(round(cast('12345.0' AS DOUBLE), 0) AS BIGINT))  𝄀
-              Block Filter Cond: (lookup_key.id = cast(round(cast('12345.0' AS DOUBLE), 0) AS BIGINT))
+              Filter Cond: (lookup_key.id = cast(cast(round(cast('12345.0' AS DOUBLE), 0) AS DECIMAL128(38, 0)) AS BIGINT))  𝄀
+              Block Filter Cond: (lookup_key.id = cast(cast(round(cast('12345.0' AS DOUBLE), 0) AS DECIMAL128(38, 0)) AS BIGINT))
 explain analyze force execute round_key using @value;
 ➤ tp query plan[12,-1,0]  𝄀
 Project  𝄀
@@ -35,8 +35,8 @@ Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on issue_29512_round_filter.lookup_key  𝄀
-              Filter Cond: (lookup_key.id = cast(round(cast('1.2345e4' AS DOUBLE), 0) AS BIGINT))  𝄀
-              Block Filter Cond: (lookup_key.id = cast(round(cast('1.2345e4' AS DOUBLE), 0) AS BIGINT))
+              Filter Cond: (lookup_key.id = cast(cast(round(cast('1.2345e4' AS DOUBLE), 0) AS DECIMAL128(38, 0)) AS BIGINT))  𝄀
+              Block Filter Cond: (lookup_key.id = cast(cast(round(cast('1.2345e4' AS DOUBLE), 0) AS DECIMAL128(38, 0)) AS BIGINT))
 execute round_key using @value;
 ➤ count(*)[-5,64,0]  𝄀
 1
@@ -51,8 +51,8 @@ Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on issue_29512_round_filter.lookup_key  𝄀
-              Filter Cond: (cast(lookup_key.id AS DECIMAL128(38, 0)) = cast(round(cast('12345.5' AS DOUBLE), 0) AS DECIMAL128(38, 0)))
-              -- HINT: Cast expression may prevent index usage
+              Filter Cond: (lookup_key.id = cast(cast(round(cast('12345.5' AS DOUBLE), 0) AS DECIMAL128(38, 0)) AS BIGINT))  𝄀
+              Block Filter Cond: (lookup_key.id = cast(cast(round(cast('12345.5' AS DOUBLE), 0) AS DECIMAL128(38, 0)) AS BIGINT))
 execute round_key using @value;
 ➤ count(*)[-5,64,0]  𝄀
 1
@@ -82,8 +82,8 @@ Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on issue_29512_round_filter.lookup_key  𝄀
-              Filter Cond: (lookup_key.id = cast(round(cast('12345.0' AS DOUBLE), 0) AS BIGINT))  𝄀
-              Block Filter Cond: (lookup_key.id = cast(round(cast('12345.0' AS DOUBLE), 0) AS BIGINT))
+              Filter Cond: (lookup_key.id = cast(cast(round(cast('12345.0' AS DOUBLE), 0) AS DECIMAL128(38, 0)) AS BIGINT))  𝄀
+              Block Filter Cond: (lookup_key.id = cast(cast(round(cast('12345.0' AS DOUBLE), 0) AS DECIMAL128(38, 0)) AS BIGINT))
 explain analyze force execute scalar_round using @value;
 ➤ tp query plan[12,-1,0]  𝄀
 Project  𝄀
@@ -107,7 +107,7 @@ Project  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Join  𝄀
               Join Type: INNER  𝄀
-              Join Cond: (k.id = cast(round(cast(x.v AS DECIMAL64(5, 0)), 0) AS BIGINT))  𝄀
+              Join Cond: (k.id = cast(cast(round(cast(x.v AS DECIMAL64(5, 0)), 0) AS DECIMAL128(38, 0)) AS BIGINT))  𝄀
               Runtime Filter Build: #[-1,0]  𝄀
               ->  Table Scan on issue_29512_round_filter.lookup_key  𝄀
                     Runtime Filter Probe: k.id  𝄀
@@ -123,7 +123,7 @@ Project  𝄀
         ->  Join  𝄀
               Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=1 (min=1, max=1) InputSize=32 bytes OutputSize=0 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=32.16 KiB (min=16.06 KiB, max=16.09 KiB)  𝄀
               Join Type: INNER  𝄀
-              Join Cond: (k.id = cast(round(cast(x.v AS DECIMAL64(5, 0)), 0) AS BIGINT))  𝄀
+              Join Cond: (k.id = cast(cast(round(cast(x.v AS DECIMAL64(5, 0)), 0) AS DECIMAL128(38, 0)) AS BIGINT))  𝄀
               Runtime Filter Build: #[-1,0]  𝄀
               ->  Table Scan on issue_29512_round_filter.lookup_key  𝄀
                     Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=64.13 KiB|0 bytes|0 bytes MemorySize=16 bytes (min=16 bytes, max=16 bytes)  𝄀
@@ -136,6 +136,62 @@ execute derived_round using @value;
 ➤ count(*)[-5,64,0]  𝄀
 1
 deallocate prepare derived_round;
+prepare nested_decimal from 'select count(*) from lookup_key k join (select v from (select cast(? as decimal(38,0)) as v) y) x on k.id=x.v';
+explain force execute nested_decimal using @value;
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (k.id = cast(x.v AS BIGINT))  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on issue_29512_round_filter.lookup_key  𝄀
+                    Runtime Filter Probe: k.id  𝄀
+              ->  Project  𝄀
+                    ->  Values Scan "*VALUES*" 
+-- @regex("Table Scan on issue_29512_round_filter[.]lookup_key[^\r\n]*\r?\n[ \t]*Analyze:[^\r\n]*\binputBlocks=1\b[^\r\n]*\binputRows=1\b", true)
+explain analyze force execute nested_decimal using @value;
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64.00 KiB (min=64.00 KiB, max=64.00 KiB)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Join  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=1 (min=1, max=1) InputSize=24 bytes OutputSize=0 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=32.15 KiB (min=16.06 KiB, max=16.09 KiB)  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (k.id = cast(x.v AS BIGINT))  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on issue_29512_round_filter.lookup_key  𝄀
+                    Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=64.13 KiB|0 bytes|0 bytes MemorySize=16 bytes (min=16 bytes, max=16 bytes)  𝄀
+                    Runtime Filter Probe: k.id  𝄀
+              ->  Project  𝄀
+                    Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=16 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=16 bytes (min=16 bytes, max=16 bytes)  𝄀
+                    ->  Values Scan "*VALUES*"   𝄀
+                          Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)
+execute nested_decimal using @value;
+➤ count(*)[-5,64,0]  𝄀
+1
+deallocate prepare nested_decimal;
+prepare cte_decimal from 'with y as (select cast(? as decimal(38,0)) as v), x as (select v+0 as v from y) select count(*) from lookup_key k join x on k.id=x.v';
+explain force execute cte_decimal using @value;
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (k.id = cast(x.v AS BIGINT))  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on issue_29512_round_filter.lookup_key  𝄀
+                    Runtime Filter Probe: k.id  𝄀
+              ->  Project  𝄀
+                    ->  Values Scan "*VALUES*" 
+execute cte_decimal using @value;
+➤ count(*)[-5,64,0]  𝄀
+1
+deallocate prepare cte_decimal;
 prepare truncate_key from 'select count(*) from lookup_key where id = truncate(?, 0)';
 explain force execute truncate_key using @value;
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
@@ -143,8 +199,8 @@ Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on issue_29512_round_filter.lookup_key  𝄀
-              Filter Cond: (lookup_key.id = cast(truncate(cast('12345.0' AS DOUBLE), 0) AS BIGINT))  𝄀
-              Block Filter Cond: (lookup_key.id = cast(truncate(cast('12345.0' AS DOUBLE), 0) AS BIGINT))
+              Filter Cond: (lookup_key.id = cast(cast(truncate(cast('12345.0' AS DOUBLE), 0) AS DECIMAL128(38, 0)) AS BIGINT))  𝄀
+              Block Filter Cond: (lookup_key.id = cast(cast(truncate(cast('12345.0' AS DOUBLE), 0) AS DECIMAL128(38, 0)) AS BIGINT))
 explain analyze force execute truncate_key using @value;
 ➤ tp query plan[12,-1,0]  𝄀
 Project  𝄀
@@ -172,8 +228,8 @@ Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on issue_29512_round_filter.lookup_key  𝄀
-              Filter Cond: (lookup_key.id = cast(round(cast('12345.0' AS DOUBLE), 0) AS BIGINT))  𝄀
-              Block Filter Cond: (lookup_key.id = cast(round(cast('12345.0' AS DOUBLE), 0) AS BIGINT))
+              Filter Cond: (lookup_key.id = cast(cast(round(cast('12345.0' AS DOUBLE), 0) AS DECIMAL128(38, 0)) AS BIGINT))  𝄀
+              Block Filter Cond: (lookup_key.id = cast(cast(round(cast('12345.0' AS DOUBLE), 0) AS DECIMAL128(38, 0)) AS BIGINT))
 execute dynamic_round using @value, @precision;
 ➤ count(*)[-5,64,0]  𝄀
 1
@@ -192,8 +248,8 @@ Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on issue_29512_round_filter.lookup_key  𝄀
-              Filter Cond: (lookup_key.id = cast(round(cast('12345.0' AS DOUBLE), 0) AS BIGINT))  𝄀
-              Block Filter Cond: (lookup_key.id = cast(round(cast('12345.0' AS DOUBLE), 0) AS BIGINT))
+              Filter Cond: (lookup_key.id = cast(cast(round(cast('12345.0' AS DOUBLE), 0) AS DECIMAL128(38, 0)) AS BIGINT))  𝄀
+              Block Filter Cond: (lookup_key.id = cast(cast(round(cast('12345.0' AS DOUBLE), 0) AS DECIMAL128(38, 0)) AS BIGINT))
 execute dynamic_round using @value, @precision;
 ➤ count(*)[-5,64,0]  𝄀
 1
@@ -205,8 +261,8 @@ Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on issue_29512_round_filter.lookup_key  𝄀
-              Filter Cond: (lookup_key.id = cast(truncate(cast('12345.0' AS DOUBLE), cast(cast('0' AS BIGINT) AS BIGINT)) AS BIGINT))  𝄀
-              Block Filter Cond: (lookup_key.id = cast(truncate(cast('12345.0' AS DOUBLE), cast(cast('0' AS BIGINT) AS BIGINT)) AS BIGINT))
+              Filter Cond: (lookup_key.id = cast(cast(truncate(cast('12345.0' AS DOUBLE), cast(cast('0' AS BIGINT) AS BIGINT)) AS DECIMAL128(38, 0)) AS BIGINT))  𝄀
+              Block Filter Cond: (lookup_key.id = cast(cast(truncate(cast('12345.0' AS DOUBLE), cast(cast('0' AS BIGINT) AS BIGINT)) AS DECIMAL128(38, 0)) AS BIGINT))
 execute dynamic_truncate using @value, @precision;
 ➤ count(*)[-5,64,0]  𝄀
 1

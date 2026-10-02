@@ -3311,7 +3311,16 @@ func TestNodeHasMoCtrl(t *testing.T) {
 	require.False(t, HasMoCtrl(&plan.Expr{Expr: &plan.Expr_W{W: nil}}))
 }
 
-// Arithmetic equality must retain the expression's rounding and error domain.
+func TestExprIsZonemappableComparisonDomain(t *testing.T) {
+	for _, oid := range []types.T{types.T_char, types.T_varchar} {
+		left := &plan.Expr{Typ: plan.Type{Id: int32(oid)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+		right := &plan.Expr{Typ: left.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}}
+		expr, err := BindFuncExprImplByPlanExpr(context.Background(), "=", []*plan.Expr{left, right})
+		require.NoError(t, err)
+		require.Equal(t, oid != types.T_char, ExprIsZonemappable(context.Background(), expr))
+	}
+}
+
 func TestConstantTransposeArithmeticSemantics(t *testing.T) {
 	for _, tc := range []struct {
 		name, op                                 string

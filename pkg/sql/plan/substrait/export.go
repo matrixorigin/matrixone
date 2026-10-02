@@ -48,10 +48,11 @@ const (
 // Candidate is a fully validated logical plan with unresolved storage reads.
 // The read handles are installed only after snapshot admission succeeds.
 type Candidate struct {
-	query    *planpb.Query
-	reads    []Read
-	headings []string
-	types    []planpb.Type
+	query      *planpb.Query
+	reads      []Read
+	headings   []string
+	types      []planpb.Type
+	embeddedMO bool
 }
 
 // Read identifies one physical table scan which needs a TaeRead lease.
@@ -96,6 +97,17 @@ func (c *Candidate) OutputTypes() []planpb.Type {
 
 // Export validates q without performing I/O.
 func Export(q *planpb.Query) (*Candidate, error) {
+	return exportCandidate(q, false)
+}
+
+// ExportEmbeddedMO validates a plan whose entire scans remain owned by MO.
+// Storage ordering hints are legal only at those scan boundaries; Flight
+// cannot claim their semantics because it bypasses the MO reader.
+func ExportEmbeddedMO(q *planpb.Query) (*Candidate, error) {
+	return exportCandidate(q, true)
+}
+
+func exportCandidate(q *planpb.Query, embeddedMO bool) (*Candidate, error) {
 	if q == nil {
 		return nil, moerr.NewInternalErrorNoCtx("substrait: missing query")
 	}
@@ -110,8 +122,8 @@ func Export(q *planpb.Query) (*Candidate, error) {
 			return nil, notEligiblef(EligibilityOperator, "node %d carries unsupported rank semantics", nodeID)
 		}
 	}
-	c := &Candidate{query: q}
-	e := exporter{query: q, readValues: make(map[int32][]byte), validateOnly: true}
+	c := &Candidate{query: q, embeddedMO: embeddedMO}
+	e := exporter{query: q, readValues: make(map[int32][]byte), validateOnly: true, embeddedMO: embeddedMO}
 	for step, rootID := range q.Steps {
 		if rootID < 0 || int(rootID) >= len(q.Nodes) {
 			return nil, moerr.NewInternalErrorNoCtxf("substrait: invalid root node id %d at step %d", rootID, step)
@@ -153,6 +165,9 @@ func (c *Candidate) Build(readValues map[int32][]byte) ([]byte, error) {
 	if c == nil {
 		return nil, moerr.NewInternalErrorNoCtxf("substrait: nil candidate")
 	}
+	if c.embeddedMO {
+		return nil, notEligiblef(EligibilityPlanShape, "MO-reader candidate cannot be emitted as Flight")
+	}
 	e := exporter{query: c.query, readValues: readValues}
 	relations := make([]*spb.PlanRel, 0, len(c.query.Steps))
 	for step, rootID := range c.query.Steps {
@@ -184,6 +199,7 @@ func (c *Candidate) Build(readValues map[int32][]byte) ([]byte, error) {
 }
 
 type exporter struct {
+	embeddedMO       bool
 	query            *planpb.Query
 	readValues       map[int32][]byte
 	embeddedBindings map[int32]EmbeddedReadBinding
@@ -212,7 +228,8 @@ func (e *exporter) node(id int32) (*spb.Rel, error) {
 	if n == nil || n.NodeId != id {
 		return nil, moerr.NewInternalErrorNoCtxf("substrait: node %d is missing or misindexed", id)
 	}
-	if n.NodeType != planpb.Node_SORT && len(n.OrderBy) != 0 {
+	moScan := n.NodeType == planpb.Node_TABLE_SCAN && (e.embeddedMO || e.embeddedBindings != nil)
+	if n.NodeType != planpb.Node_SORT && !moScan && len(n.OrderBy) != 0 {
 		return nil, notEligiblef(EligibilityOperator, "node %d carries sort semantics outside a SORT node", id)
 	}
 	var rel *spb.Rel

@@ -17,6 +17,7 @@ package dml
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -65,6 +67,50 @@ func TestIntersectAllParallelMultiplicity(t *testing.T) {
 		for _, table := range []string{"left_bag", "right_bag"} {
 			execSQLDB(t, ctx, db, "create table "+table+"(v int)")
 		}
+
+		// A flush does not pin block layout: auto-merge can collapse the tiny
+		// objects before planning. Pause only these empty test tables, and wait
+		// for scheduler acknowledgement before constructing parallel scan work.
+		inspect := func(ctx context.Context, command string) (string, error) {
+			var raw string
+			err := db.QueryRowContext(ctx, "select mo_ctl('dn','inspect','"+command+"')").Scan(&raw)
+			if err == nil && (strings.Contains(raw, "run err:") || strings.Contains(raw, "parse err:")) {
+				err = fmt.Errorf("%s: %s", command, raw)
+			}
+			return raw, err
+		}
+		for _, table := range []string{"left_bag", "right_bag"} {
+			target := name + "." + table
+			var last string
+			err = waitForIntersectFixture(ctx, func(queryCtx context.Context) (bool, error) {
+				var queryErr error
+				last, queryErr = inspect(queryCtx, "merge show -t "+target)
+				return strings.Contains(last, "\n\tauto merge: true"), queryErr
+			})
+			require.NoError(t, err, "merge registration: %s", last)
+			// Register restoration before sending the pause: an unsuccessful
+			// observation must not leave a successfully queued pause behind.
+			defer func() {
+				cleanup, stop := context.WithTimeout(context.Background(), 10*time.Second)
+				defer stop()
+				response, err := inspect(cleanup, "merge switch on -t "+target)
+				assert.NoError(t, err)
+				assert.Contains(t, response, "merge enabled for table")
+				response, err = inspect(cleanup, "merge show -t "+target)
+				assert.NoError(t, err)
+				assert.Contains(t, response, "\n\tauto merge: true")
+			}()
+			last, err = inspect(ctx, "merge switch off -t "+target)
+			require.NoError(t, err)
+			require.Contains(t, last, "merge disabled for table")
+			err = waitForIntersectFixture(ctx, func(queryCtx context.Context) (bool, error) {
+				var queryErr error
+				last, queryErr = inspect(queryCtx, "merge show -t "+target)
+				return strings.Contains(last, "\n\tauto merge: false") && strings.Contains(last, "\n\tmerge tasks in queue: 0"), queryErr
+			})
+			require.NoError(t, err, "merge pause: %s", last)
+		}
+
 		// Sixteen physical blocks on each side cross calcDOP's block threshold.
 		// Unmatched filler keys do not change the issue's 3-row intersection.
 		for _, input := range []struct {
@@ -85,13 +131,26 @@ func TestIntersectAllParallelMultiplicity(t *testing.T) {
 			}
 		}
 
+		for _, table := range []string{"left_bag", "right_bag"} {
+			var rows, blocks, objects int64
+			err = waitForIntersectFixture(ctx, func(queryCtx context.Context) (bool, error) {
+				queryErr := db.QueryRowContext(queryCtx, "select table_cnt,block_number,accurate_object_number from table_stats('"+name+"."+table+"','refresh','full') g").Scan(&rows, &blocks, &objects)
+				return rows == 16 && blocks == 16 && objects == 16, queryErr
+			})
+			require.NoError(t, err, "parallel scan fixture: %s rows=%d blocks=%d objects=%d", table, rows, blocks, objects)
+		}
 		oldForce := plan.GetForceScanOnMultiCN()
 		plan.SetForceScanOnMultiCN(true)
 		defer plan.SetForceScanOnMultiCN(oldForce)
 		var oldMaxDop int64
 		require.NoError(t, db.QueryRowContext(ctx, "select @@max_dop").Scan(&oldMaxDop))
 		execSQLDB(t, ctx, db, "set max_dop=4")
-		defer execSQLDB(t, ctx, db, "set max_dop="+strconv.FormatInt(oldMaxDop, 10))
+		defer func() {
+			cleanup, stop := context.WithTimeout(context.Background(), 10*time.Second)
+			defer stop()
+			_, err := db.ExecContext(cleanup, "set max_dop="+strconv.FormatInt(oldMaxDop, 10))
+			assert.NoError(t, err)
+		}()
 		for _, input := range []struct {
 			table string
 			want  int
@@ -126,8 +185,8 @@ func TestIntersectAllParallelMultiplicity(t *testing.T) {
 		require.Contains(t, strings.ToLower(physical.Text), "intersect all")
 		for _, table := range []string{"left_bag", "right_bag"} {
 			require.Regexp(t, regexp.MustCompile(`(?m)Scope [^\n]*Magic: Remote, addr:`+regexp.QuoteMeta(peerAddr)+`[^\n]*\n\s*DataSource: [^\n]*`+table), physical.Text)
+			require.Regexp(t, regexp.MustCompile(`(?m)Scope [^\n]*mcpu: [2-9][0-9]*[^\n]*\n\s*DataSource: [^\n]*`+table), physical.Text)
 		}
-		require.Regexp(t, regexp.MustCompile(`mcpu: [2-9][0-9]*`), physical.Text)
 		t.Logf("INTERSECT ALL physical plan:\n%s", physical.Text)
 
 		rows, err := db.QueryContext(ctx, "select v,count(*) from ("+set+") q group by v order by v is null,v")
@@ -166,4 +225,60 @@ func TestIntersectAllParallelMultiplicity(t *testing.T) {
 		require.NoError(t, err)
 		require.Zero(t, empty)
 	})
+}
+
+// Observe synchronously so a phase timeout cancels the SQL query and the
+// observation finishes before callers inspect results or restore settings.
+func waitForIntersectFixture(ctx context.Context, observe func(context.Context) (bool, error)) error {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		ready, err := observe(ctx)
+		if contextErr := ctx.Err(); contextErr != nil {
+			return contextErr
+		}
+		if err != nil {
+			return err
+		}
+		if ready {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func TestIntersectFixtureWaitFinishesBlockedObservationBeforeCleanup(t *testing.T) {
+	for _, lateSuccess := range []bool{false, true} {
+		t.Run(fmt.Sprintf("late_success=%v", lateSuccess), func(t *testing.T) {
+			// The timeout is the behavior under test; no sleep or elapsed-time
+			// assertion acts as synchronization. The callback blocks on the
+			// waiter's context and records termination before cleanup can start.
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			finished := make(chan struct{})
+			err := waitForIntersectFixture(ctx, func(queryCtx context.Context) (bool, error) {
+				<-queryCtx.Done()
+				defer close(finished)
+				if lateSuccess {
+					return true, nil
+				}
+				return false, queryCtx.Err()
+			})
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			select {
+			case <-finished:
+			default:
+				t.Fatal("observation still running when cleanup would start")
+			}
+		})
+	}
 }

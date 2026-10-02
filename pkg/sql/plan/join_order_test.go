@@ -190,7 +190,7 @@ func TestJoinGraphOrdersDimensionsByFactKeyActiveDomain(t *testing.T) {
 	require.InDelta(t, 3282.0/289_000.0, vertices[1].selectivityOnParent, 1e-12)
 	require.InDelta(t, 365.0/1823.0, vertices[2].selectivityOnParent, 1e-12)
 
-	builder.buildSubJoinTree(vertices, 0)
+	builder.buildSubJoinTree(vertices, 0, nil)
 	require.Equal(t, []int32{0, 1}, builder.qry.Nodes[3].Children,
 		"the item restriction must be applied before the one-year date restriction")
 }
@@ -351,4 +351,37 @@ func makeJoinVertices(n int) []*joinVertex {
 		}
 	}
 	return vertices
+}
+
+func TestOrderedJoinInstallsOnlyAvailableCrossingPredicates(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+	typ := plan.Type{Id: int32(types.T_int64)}
+	for i := int32(0); i < 3; i++ {
+		builder.qry.Nodes = append(builder.qry.Nodes, &plan.Node{NodeId: i, NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{i + 1}, Stats: &plan.Stats{Outcnt: 10, Cost: 10, Selectivity: 1}})
+	}
+	bind := func(name string, args ...*plan.Expr) *plan.Expr {
+		e, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), name, args)
+		require.NoError(t, err)
+		return e
+	}
+	a, b, c := GetColExpr(typ, 1, 0), GetColExpr(typ, 2, 0), GetColExpr(typ, 3, 0)
+	first := bind("=", a, b)
+	composite := bind("=", GetColExpr(typ, 1, 1), GetColExpr(typ, 2, 1))
+	nonEqui := bind("<", a, b)
+	three := bind("=", bind("+", a, b), c)
+	leafOnly := bind("=", a, MakePlan2Int64ConstExprWithType(1))
+	pending := []*plan.Expr{three, first, leafOnly, composite, nonEqui}
+	ab, pending := builder.appendOrderedJoin([]int32{0, 1}, pending)
+	require.Equal(t, []*plan.Expr{first, composite, nonEqui}, builder.qry.Nodes[ab].OnList)
+	require.Equal(t, []*plan.Expr{three, leafOnly}, pending)
+	abc, pending := builder.appendOrderedJoin([]int32{ab, 2}, pending)
+	require.Equal(t, []*plan.Expr{three}, builder.qry.Nodes[abc].OnList)
+	require.Equal(t, []*plan.Expr{leafOnly}, pending)
+	require.Equal(t, []*plan.Expr{first, composite, nonEqui}, builder.qry.Nodes[ab].OnList, "pending slice compaction must not overwrite transferred predicates")
+	// A connected three-way predicate cannot constrain the initial two inputs.
+	cross, remaining := builder.appendOrderedJoin([]int32{0, 1}, []*plan.Expr{three})
+	require.Empty(t, builder.qry.Nodes[cross].OnList)
+	require.Equal(t, float64(100), builder.qry.Nodes[cross].Stats.Outcnt)
+	require.Equal(t, []*plan.Expr{three}, remaining)
 }

@@ -272,6 +272,20 @@ func fixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 	return fixedTypeMatchExcept(overloads, inputs, -1)
 }
 
+// Native temporal inputs avoid formatting and reparsing. Other inputs retain
+// the historical character coercion (including numeric and NULL arguments).
+func lastDayTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 1 {
+		if inputs[0].Oid == types.T_date {
+			return fixedTypeMatchOnly(overloads, inputs, 2)
+		}
+		if inputs[0].Oid == types.T_datetime {
+			return fixedTypeMatchOnly(overloads, inputs, 3)
+		}
+	}
+	return fixedTypeMatch(overloads[:2], inputs)
+}
+
 // Persisted 4.2 expressions keep overloads 0..4 and their original physical
 // results. Only newly bound EXTRACT expressions select the numeric results.
 func extractNumericTypeMatch(overloads []overload, inputs []types.Type) checkResult {

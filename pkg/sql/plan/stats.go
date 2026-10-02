@@ -1707,6 +1707,13 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.Cost = rowCount
 			node.Stats.Outcnt = rowCount
 			node.Stats.Selectivity = 1
+		} else if node.TableDef == nil && len(node.Children) == 0 {
+			// The executor supplies one dummy row for no-FROM/DUAL input.
+			node.Stats.TableCnt = 1
+			node.Stats.Cost = 1
+			node.Stats.Outcnt = 1
+			node.Stats.Selectivity = 1
+			node.Stats.BlockNum = 1
 		}
 
 	case plan.Node_VECTOR_QUERY_TOP:
@@ -3688,14 +3695,17 @@ func (builder *QueryBuilder) hintQueryType() {
 	}
 }
 
-// CachedPlanStatsChanged compares unfiltered scan cardinality, preserving the
-// existing intentional COUNT/LIMIT/internal/execution-hint models. Execution
-// ranges and Reset remain responsible for same-count object transitions.
+// CachedPlanStatsChanged admits reuse against the unfiltered counts captured
+// in this generation. Ordinary estimates may drift by less than a factor of
+// two; this is a reoptimization policy, not a bound on actual resource demand.
+// Cartesian and resident RIGHT DEDUP plans retain exact admission. Execution
+// ranges, Reset and allocation/spill remain responsible for runtime state.
 func CachedPlanStatsChanged(p *plan.Plan, ctx CompilerContext) (bool, error) {
 	qry := p.GetQuery()
 	if qry == nil || queryCanSkipStats(qry) {
 		return false, nil
 	}
+	strict := cachedPlanRequiresExactStats(qry)
 	checkedHints := false
 	for _, node := range qry.Nodes {
 		if node.NodeType != plan.Node_TABLE_SCAN || node.Stats == nil || node.TableDef == nil ||
@@ -3715,12 +3725,92 @@ func CachedPlanStatsChanged(p *plan.Plan, ctx CompilerContext) (bool, error) {
 			return false, err
 		}
 		rows := defaultTableCount
-		if StatsInfoUsable(stats) {
+		usable := StatsInfoUsable(stats)
+		if usable {
 			rows = stats.TableCnt
 		}
-		if rows != node.Stats.TableCnt {
+		if cachedCardinalityNeedsRebuild(node.Stats.TableCnt, rows, strict || !usable) {
 			return true, nil
 		}
 	}
 	return false, nil
+}
+
+// Compare with the immutable generation baseline, never the last observation:
+// gradual growth must eventually replan. Zero, unavailable observations and the
+// existing conservative uint64-domain maximum do not receive a drift allowance.
+func cachedCardinalityNeedsRebuild(captured, fresh float64, exact bool) bool {
+	if math.IsNaN(captured) || math.IsInf(captured, 0) || captured < 0 {
+		return true
+	}
+	if captured == fresh {
+		return false
+	}
+	if exact || captured == 0 || fresh == 0 || captured >= float64(^uint64(0)) || fresh >= float64(^uint64(0)) {
+		return true
+	}
+	return fresh >= 2*captured || captured >= 2*fresh
+}
+
+func cachedPlanRequiresExactStats(q *plan.Query) bool {
+	if len(q.BackgroundQueries) != 0 || len(q.Steps) == 0 {
+		return true
+	}
+	strictNode := func(n *plan.Node) bool {
+		return n.NodeType == plan.Node_JOIN &&
+			(n.JoinType == plan.Node_DEDUP && n.IsRightJoin || n.JoinType == plan.Node_INNER && len(n.OnList) == 0)
+	}
+	// Most reusable plans have no strict candidate. Avoid a traversal bitmap
+	// on that hot path, while keeping invalid node references conservative.
+	candidate := false
+	for _, n := range q.Nodes {
+		if n == nil {
+			return true
+		}
+		candidate = candidate || strictNode(n)
+		for _, child := range n.Children {
+			if child < 0 || int(child) >= len(q.Nodes) {
+				return true
+			}
+		}
+	}
+	for _, root := range q.Steps {
+		if root < 0 || int(root) >= len(q.Nodes) {
+			return true
+		}
+	}
+	if !candidate {
+		return false
+	}
+	// Prepared construction may leave abandoned joins in Nodes. Only an
+	// executable strict join changes the policy; shared subtrees are visited
+	// once, and a cycle is treated as unclassifiable.
+	visited := make([]uint8, len(q.Nodes))
+	var visit func(int32) bool
+	visit = func(id int32) bool {
+		if visited[id] == 1 {
+			return true
+		}
+		if visited[id] == 2 {
+			return false
+		}
+		visited[id] = 1
+		n := q.Nodes[id]
+		if strictNode(n) {
+			return true
+		}
+		for _, child := range n.Children {
+			if visit(child) {
+				return true
+			}
+		}
+		visited[id] = 2
+		return false
+	}
+	for _, root := range q.Steps {
+		if visit(root) {
+			return true
+		}
+	}
+	return false
 }

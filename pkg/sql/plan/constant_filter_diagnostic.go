@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"errors"
+	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -350,18 +351,8 @@ func ProbeStatementParameterDiagnosticFree(proc *process.Process, expr *plan.Exp
 			free()
 		}
 		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return false, err
-			}
-			for _, code := range [...]uint16{
-				moerr.ErrDivByZero, moerr.ErrOutOfRange, moerr.ErrDataTruncated,
-				moerr.ErrInvalidArg, moerr.ErrTruncatedWrongValueForField,
-				moerr.ErrTruncatedWrongValue, moerr.ErrInvalidInput,
-				moerr.ErrWrongDatetimeSpec, moerr.ErrWrongArguments,
-			} {
-				if moerr.IsMoErrCode(err, code) {
-					return false, nil
-				}
+			if isStatementConversionError(err) {
+				return false, nil
 			}
 			return false, err
 		}
@@ -419,4 +410,26 @@ func containsConstantFilterDiagnostic(proc *process.Process, expr *plan.Expr) bo
 // diagnostics without publishing the probe's warning or changing the plan.
 func isExecutionConstant(expr *plan.Expr) bool {
 	return function.IsStatementConstantInput(expr) && !function.ContainsParameter(expr)
+}
+
+// isStatementConversionError identifies SQL diagnostics that must retain their
+// runtime owner. Cancellation, memory and internal failures are not diagnostics.
+func isStatementConversionError(err error) bool {
+	if errors.Is(err, strconv.ErrSyntax) || errors.Is(err, strconv.ErrRange) {
+		return true
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	for _, code := range [...]uint16{
+		moerr.ErrDivByZero, moerr.ErrOutOfRange, moerr.ErrDataTruncated,
+		moerr.ErrInvalidArg, moerr.ErrTruncatedWrongValueForField,
+		moerr.ErrTruncatedWrongValue, moerr.ErrInvalidInput,
+		moerr.ErrWrongDatetimeSpec, moerr.ErrWrongArguments,
+	} {
+		if moerr.IsMoErrCode(err, code) {
+			return true
+		}
+	}
+	return false
 }

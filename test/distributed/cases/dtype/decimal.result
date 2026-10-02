@@ -1368,7 +1368,7 @@ SELECT CAST(NULL AS decimal(6));
 ➤ cast(null as decimal(6))[3,7,0]  𝄀
 null
 SELECT 10.0 + CAST('aaa' AS decimal(38,0));
-invalid input: aaa beyond the range, can't be converted to Decimal128(38,0).
+invalid input: "aaa" is invalid decimal string
 SELECT CAST('101010101001' AS decimal(38,0));
 ➤ cast(101010101001 as decimal(38))[3,39,0]  𝄀
 101010101001
