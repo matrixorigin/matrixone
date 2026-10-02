@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -61,6 +62,97 @@ func TestPreparedPlansPreserveWorkspaceVisibility(t *testing.T) {
 			values[i] = fmt.Sprintf("(%d,0)", i+1)
 		}
 		exec("insert into t values " + strings.Join(values, ","))
+		// Admission may retain the physical UPDATE across small workspace drift.
+		// Constraint errors must still use current keys and leave durable state
+		// intact; successful updates alone do not prove this contract.
+		for _, tc := range []struct{ name, typ, unique string }{
+			{"unique_int", "int", "v"},
+			{"unique_bigint", "bigint", "v"},
+			{"unique_string", "varchar(20)", "v"},
+			{"unique_composite", "int", "v,w"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				exec := func(q string) {
+					t.Helper()
+					_, err := conn.ExecContext(ctx, q)
+					require.NoError(t, err, q)
+				}
+				inTxn := false
+				t.Cleanup(func() {
+					if inTxn {
+						cleanup, stop := context.WithTimeout(context.Background(), 10*time.Second)
+						defer stop()
+						_, err := conn.ExecContext(cleanup, "rollback")
+						if err != nil {
+							t.Errorf("rollback: %v", err)
+						}
+					}
+				})
+				exec(fmt.Sprintf("create table %s(id int primary key,v %s,w int default 1,unique key uq(%s))", tc.name, tc.typ, tc.unique))
+				seed := make([]string, 128)
+				for i := range seed {
+					seed[i] = fmt.Sprintf("(%d,'%d')", i+1, (i+1)*10)
+				}
+				exec("insert into " + tc.name + "(id,v) values " + strings.Join(seed, ","))
+				stmt, err := conn.PrepareContext(ctx, "update "+tc.name+" set v=? where id=?")
+				require.NoError(t, err)
+				defer stmt.Close()
+				bind := func(v int) any {
+					if tc.typ == "varchar(20)" {
+						return fmt.Sprint(v)
+					}
+					return v
+				}
+				updateOne := func(v any, id int) {
+					result, err := stmt.ExecContext(ctx, v, id)
+					require.NoError(t, err)
+					n, err := result.RowsAffected()
+					require.NoError(t, err)
+					require.Equal(t, int64(1), n)
+				}
+				updateOne(bind(11), 1)
+				for _, finish := range []string{"rollback", "commit"} {
+					var old string
+					require.NoError(t, conn.QueryRowContext(ctx, "select v from "+tc.name+" where id=2").Scan(&old))
+					exec("begin")
+					inTxn = true
+					updateOne(bind(21), 2)
+					_, err := stmt.ExecContext(ctx, bind(11), 2)
+					var duplicate *mysql.MySQLError
+					require.ErrorAs(t, err, &duplicate)
+					require.Equal(t, uint16(1062), duplicate.Number)
+					var current string
+					require.NoError(t, conn.QueryRowContext(ctx, "select v from "+tc.name+" where id=2").Scan(&current))
+					require.Equal(t, "21", current, "failed statement must not replace prior successful work")
+					exec(finish)
+					inTxn = false
+					want := old
+					if finish == "commit" {
+						want = "21"
+					}
+					// db uses a different connection from the pinned prepared session.
+					require.NoError(t, db.QueryRowContext(ctx, "select v from prepared_stats_reuse."+tc.name+" where id=2").Scan(&current))
+					require.Equal(t, want, current)
+					for _, hint := range []string{"ignore index(uq)", "force index(uq)"} {
+						var count, id int
+						require.NoError(t, db.QueryRowContext(ctx, "select count(*),min(id) from prepared_stats_reuse."+tc.name+" "+hint+" where v='11' and w=1").Scan(&count, &id))
+						require.Equal(t, 1, count)
+						require.Equal(t, 1, id)
+					}
+					updateOne(bind(22), 2)
+				}
+				// SQL NULL does not conflict with another NULL. Self-updates must
+				// exclude their own old key, including after a failed execution.
+				updateOne(nil, 2)
+				updateOne(nil, 3)
+				updateOne(bind(23), 2)
+				_, err = stmt.ExecContext(ctx, bind(23), 2)
+				require.NoError(t, err)
+				var nulls int
+				require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from "+tc.name+" where v is null").Scan(&nulls))
+				require.Equal(t, 1, nulls)
+			})
+		}
 		read, err := conn.PrepareContext(ctx, "select v from t where id=?")
 		require.NoError(t, err)
 		defer read.Close()
