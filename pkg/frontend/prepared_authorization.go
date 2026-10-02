@@ -94,8 +94,8 @@ func evaluatePlanAuthorization(ctx context.Context, ses *Session, requirement *p
 	return ok, stats, err
 }
 
-func (prepared *PrepareStmt) authorizationRequirements(ses *Session, stmt tree.Statement, p *plan.Plan) *preparedAuthorization {
-	if prepared == nil || prepared.PreparePlan.GetDcl().GetPrepare().GetPlan() != p || prepared.PrepareStmt != stmt {
+func (prepareStmt *PrepareStmt) authorizationRequirements(ses *Session, stmt tree.Statement, p *plan.Plan) *preparedAuthorization {
+	if prepareStmt == nil || prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan() != p || prepareStmt.PrepareStmt != stmt {
 		return nil
 	}
 	// Context-dependent DDL, MERGE and executable wrappers keep fresh derivation.
@@ -104,7 +104,7 @@ func (prepared *PrepareStmt) authorizationRequirements(ses *Session, stmt tree.S
 	default:
 		return nil
 	}
-	if saved := prepared.authorization; saved != nil && saved.source == p && saved.statement == stmt {
+	if saved := prepareStmt.authorization; saved != nil && saved.source == p && saved.statement == stmt {
 		return saved
 	}
 	admission := determinePrivilegeSetOfStatement(stmt)
@@ -116,6 +116,6 @@ func (prepared *PrepareStmt) authorizationRequirements(ses *Session, stmt tree.S
 		return nil
 	}
 	saved := &preparedAuthorization{source: p, statement: stmt, admission: admission, plan: derived}
-	prepared.authorization = saved
+	prepareStmt.authorization = saved
 	return saved
 }

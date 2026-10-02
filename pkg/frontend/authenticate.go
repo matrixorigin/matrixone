@@ -1538,13 +1538,6 @@ const (
 					and rp.privilege_id in (%s)
 					and rp.privilege_level = "%s";`
 
-	getUserRolesExpectPublicRoleFormat = `select role.role_id, role.role_name 
-				from mo_catalog.mo_role role, mo_catalog.mo_user_grant mg 
-				where role.role_id = mg.role_id 
-					and role.role_id != %d  
-					and mg.user_id = %d 
-					order by role.created_time asc limit 1;`
-
 	checkUdfArgs = `select args,function_id,body from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s" order by function_id;`
 
 	checkUdfWithDb = `select function_id,body from mo_catalog.mo_user_defined_function where db = "%s" order by function_id;`
@@ -2090,10 +2083,6 @@ func privilegeTypeListSQL(objTyp objectType, privId PrivilegeType, includeSysSco
 		parts = append(parts, fmt.Sprintf("%d", p))
 	}
 	return strings.Join(parts, ",")
-}
-
-func getSqlForgetUserRolesExpectPublicRole(pRoleId int, userId uint32) string {
-	return fmt.Sprintf(getUserRolesExpectPublicRoleFormat, pRoleId, userId)
 }
 
 func getTableColumnDefSql(accountId uint64, dbName, tableName string) (string, error) {
