@@ -128,29 +128,29 @@ func TestV406MaintenanceCleansHistoricalOrphanObjectPrivileges(t *testing.T) {
 		bulkDatabaseOrphanStart := maxObjectID + 2000000
 
 		copyRolePrivilegeRangeForUpgradeTest(
-			t, ctx, conn, roleName, databaseID, bulkDatabaseOrphanStart,
+			t, ctx, sqlExecutor, roleName, databaseID, bulkDatabaseOrphanStart,
 			bulkDatabaseOrphanCount, "database", "d",
 		)
 		copyRolePrivilegeForUpgradeTest(
-			t, ctx, conn, roleName, databaseID, orphanIDs[0], "database", "d", "d",
+			t, ctx, sqlExecutor, roleName, databaseID, orphanIDs[0], "database", "d", "d",
 		)
 		copyRolePrivilegeForUpgradeTest(
-			t, ctx, conn, roleName, databaseID, orphanIDs[1], "table", "d.*", "d.*",
+			t, ctx, sqlExecutor, roleName, databaseID, orphanIDs[1], "table", "d.*", "d.*",
 		)
 		copyRolePrivilegeForUpgradeTest(
-			t, ctx, conn, roleName, tableID, orphanIDs[2], "table", "d.t", "d.t",
+			t, ctx, sqlExecutor, roleName, tableID, orphanIDs[2], "table", "d.t", "d.t",
 		)
 		copyRolePrivilegeForUpgradeTest(
-			t, ctx, conn, roleName, viewID, orphanIDs[3], "view", "d.t", "d.t",
+			t, ctx, sqlExecutor, roleName, viewID, orphanIDs[3], "view", "d.t", "d.t",
 		)
 		copyRolePrivilegeForUpgradeTest(
-			t, ctx, conn, roleName, sequenceID, orphanIDs[4], "table", "d.t", "d.t",
+			t, ctx, sqlExecutor, roleName, sequenceID, orphanIDs[4], "table", "d.t", "d.t",
 		)
 		copyRolePrivilegeForUpgradeTest(
-			t, ctx, conn, roleName, tableID, malformedControlID, "table", "d.t", "legacy.unknown",
+			t, ctx, sqlExecutor, roleName, tableID, malformedControlID, "table", "d.t", "legacy.unknown",
 		)
 		copyRolePrivilegeForUpgradeTest(
-			t, ctx, conn, roleName, tableID, hiddenIndexID, "table", "d.t", "d.t",
+			t, ctx, sqlExecutor, roleName, tableID, hiddenIndexID, "table", "d.t", "d.t",
 		)
 
 		require.Equal(t, 5, countRolePrivilegesByObjectIDs(
@@ -583,7 +583,7 @@ func queryOrphanPrivilegeUpgradeID(
 func copyRolePrivilegeForUpgradeTest(
 	t *testing.T,
 	ctx context.Context,
-	conn *sql.Conn,
+	sqlExecutor executor.SQLExecutor,
 	roleName string,
 	sourceObjectID uint64,
 	targetObjectID uint64,
@@ -605,13 +605,17 @@ func copyRolePrivilegeForUpgradeTest(
 		sqlquote.String(objectType),
 		sqlquote.String(sourcePrivilegeLevel),
 	)
-	mustExecOrphanPrivilegeUpgradeSQL(t, ctx, conn, statement)
+	seeded, err := execOrphanPrivilegeUpgradeInternalSQLForAccountAffected(
+		ctx, sqlExecutor, catalog.System_Account, statement,
+	)
+	require.NoError(t, err, statement)
+	require.Equal(t, uint64(1), seeded, statement)
 }
 
 func copyRolePrivilegeRangeForUpgradeTest(
 	t *testing.T,
 	ctx context.Context,
-	conn *sql.Conn,
+	sqlExecutor executor.SQLExecutor,
 	roleName string,
 	sourceObjectID uint64,
 	targetObjectIDStart uint64,
@@ -621,17 +625,6 @@ func copyRolePrivilegeRangeForUpgradeTest(
 ) {
 	t.Helper()
 	require.Positive(t, count)
-	// Keep the bulk objects in key order for the physical LIMIT assertions.
-	// Parallel writers produce overlapping ranges that each need a reader page.
-	var savedDOP int64
-	require.NoError(t, conn.QueryRowContext(ctx, "select @@max_dop").Scan(&savedDOP))
-	mustExecOrphanPrivilegeUpgradeSQL(t, ctx, conn, "set max_dop=1")
-	defer func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		_, err := conn.ExecContext(cleanupCtx, fmt.Sprintf("set max_dop=%d", savedDOP))
-		require.NoError(t, err)
-	}()
 	statement := fmt.Sprintf(
 		"insert into mo_catalog.mo_role_privs "+
 			"select role_id, role_name, obj_type, %d + result, privilege_id, privilege_name, privilege_level, "+
@@ -645,7 +638,11 @@ func copyRolePrivilegeRangeForUpgradeTest(
 		sqlquote.String(objectType),
 		sqlquote.String(privilegeLevel),
 	)
-	mustExecOrphanPrivilegeUpgradeSQL(t, ctx, conn, statement)
+	seeded, err := execOrphanPrivilegeUpgradeInternalSQLForAccountAffected(
+		ctx, sqlExecutor, catalog.System_Account, statement,
+	)
+	require.NoError(t, err, statement)
+	require.Equal(t, count, seeded, statement)
 }
 
 func execOrphanPrivilegeUpgradeInternalSQLForAccountAffected(
@@ -667,7 +664,18 @@ func execOrphanPrivilegeUpgradeInternalSQLForAccountAffected(
 		affectedRows = res.AffectedRows
 		res.Close()
 		return nil
-	}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).WithWaitCommittedLogApplied())
+	}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).WithWaitCommittedLogApplied().
+		WithResolveVariableFunc(func(name string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+			// Keep fixture seed keys in writer order for the physical LIMIT assertions.
+			// Scope DOP to these internal writes, leaving client sessions and maintenance unchanged.
+			if isSystemVar && !isGlobalVar && strings.EqualFold(name, "max_dop") {
+				return int64(1), nil
+			}
+			if executor.DefaultResolveVariable != nil {
+				return executor.DefaultResolveVariable(name, isSystemVar, isGlobalVar)
+			}
+			return nil, nil
+		}))
 	return affectedRows, err
 }
 
