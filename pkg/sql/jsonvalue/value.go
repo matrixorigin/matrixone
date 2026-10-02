@@ -97,6 +97,9 @@ func FromVector(
 		return vector.GetFixedAtNoTypeCheck[uint64](v, row), nil
 	case types.T_float32:
 		return float64(vector.GetFixedAtNoTypeCheck[float32](v, row)), nil
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		f, _ := vector.GetLowPrecisionFloatAt(v, row)
+		return float64(f), nil
 	case types.T_float64:
 		return vector.GetFixedAtNoTypeCheck[float64](v, row), nil
 	case types.T_char, types.T_varchar, types.T_text:

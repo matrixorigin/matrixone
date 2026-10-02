@@ -5105,6 +5105,7 @@ func canonicalVectorTypeSize(typ types.Type) (int, error) {
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
+		types.T_bf16, types.T_float16, types.T_float8, types.T_float4,
 		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_year,
 		types.T_char, types.T_varchar, types.T_json, types.T_uuid,

@@ -509,3 +509,19 @@ func typeCompatible[T any](typ types.Type) bool {
 	}
 	return false
 }
+
+// GetLowPrecisionFloatAt returns the bf16, float16, float8 or float4 value at i widened to
+// float32, which holds every such value exactly; ok is false for any other type.
+func GetLowPrecisionFloatAt(v *Vector, i int) (f float32, ok bool) {
+	switch v.GetType().Oid {
+	case types.T_bf16:
+		return GetFixedAtNoTypeCheck[types.BF16](v, i).ToFloat32(), true
+	case types.T_float16:
+		return GetFixedAtNoTypeCheck[types.Float16](v, i).ToFloat32(), true
+	case types.T_float8:
+		return GetFixedAtNoTypeCheck[types.Float8](v, i).ToFloat32(), true
+	case types.T_float4:
+		return GetFixedAtNoTypeCheck[types.Float4](v, i).ToFloat32(), true
+	}
+	return 0, false
+}

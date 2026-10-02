@@ -124,6 +124,8 @@ func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []
 		row[i] = vector.GetFixedAtWithTypeCheck[uint64](vec, rowIndex)
 	case types.T_float32:
 		row[i] = vector.GetFixedAtWithTypeCheck[float32](vec, rowIndex)
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		row[i], _ = vector.GetLowPrecisionFloatAt(vec, rowIndex)
 	case types.T_float64:
 		row[i] = vector.GetFixedAtWithTypeCheck[float64](vec, rowIndex)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
@@ -281,7 +283,7 @@ func convertColIntoSql(
 	case types.T_uint64:
 		value := data.(uint64)
 		sqlBuff = appendUint64(sqlBuff, value)
-	case types.T_float32:
+	case types.T_float32, types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
 		value := data.(float32)
 		sqlBuff = appendFloat64(sqlBuff, float64(value), 32)
 	case types.T_float64:

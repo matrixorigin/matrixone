@@ -115,4 +115,16 @@ SELECT id, a, c FROM t2 ORDER BY id;
 1  ¦  1.5  ¦  1.5  𝄀
 2  ¦  -2.0  ¦  -2.0  𝄀
 3  ¦  0.0  ¦  0.0
+CREATE TABLE kp (k bf16 PRIMARY KEY, v INT);
+not supported: BF16 column 'k' cannot be in primary key
+CREATE TABLE ku (id INT PRIMARY KEY, k float16 UNIQUE KEY);
+not supported: FLOAT16 column 'k' cannot be in unique index
+CREATE TABLE kc (k float4, j INT, PRIMARY KEY (k, j));
+not supported: FLOAT4 column 'k' cannot be in primary key
+CREATE TABLE ki (id INT PRIMARY KEY, k float8, KEY ik (k));
+not supported: FLOAT8 column 'k' cannot be in index
+CREATE TABLE kb (id INT, k float8) CLUSTER BY (k);
+not supported: FLOAT8 column 'k' cannot be a cluster by key
+CREATE INDEX ia ON t2 (a);
+not supported: BF16 column 'a' cannot be in index
 DROP DATABASE lowprec_float;

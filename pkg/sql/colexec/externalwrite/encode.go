@@ -230,6 +230,9 @@ func (w *externalWriter) csvValue(vec *vector.Vector, i int) (val []byte, quote 
 		return []byte(strconv.FormatUint(uint64(vector.GetFixedAtNoTypeCheck[uint32](vec, i)), 10)), false, nil
 	case types.T_uint64:
 		return []byte(strconv.FormatUint(vector.GetFixedAtNoTypeCheck[uint64](vec, i), 10)), false, nil
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		v, _ := vector.GetLowPrecisionFloatAt(vec, i)
+		return []byte(strconv.FormatFloat(float64(v), 'f', -1, 32)), false, nil
 	case types.T_float32:
 		v := vector.GetFixedAtNoTypeCheck[float32](vec, i)
 		if vec.GetType().Scale < 0 || vec.GetType().Width == 0 {
@@ -394,6 +397,9 @@ func (w *externalWriter) appendJSONValue(buf *bytes.Buffer, vec *vector.Vector, 
 		w.scratch = strconv.AppendUint(w.scratch[:0], vector.GetFixedAtNoTypeCheck[uint64](vec, i), 10)
 	case types.T_float32:
 		return w.appendJSONFloat(buf, float64(vector.GetFixedAtNoTypeCheck[float32](vec, i)), 32)
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		v, _ := vector.GetLowPrecisionFloatAt(vec, i)
+		return w.appendJSONFloat(buf, float64(v), 32)
 	case types.T_float64:
 		return w.appendJSONFloat(buf, vector.GetFixedAtNoTypeCheck[float64](vec, i), 64)
 	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:

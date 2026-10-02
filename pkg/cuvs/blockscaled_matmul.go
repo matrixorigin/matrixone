@@ -50,6 +50,18 @@ const (
 	BlockScaledMatmulBF16  = int(C.GPU_BLOCKSCALED_BF16)
 )
 
+// BlockScaledMatmulDeviceCount returns the number of visible devices meeting the engine's
+// baseline, compute capability 10.0 or newer; it is queried once per process.
+func BlockScaledMatmulDeviceCount() int {
+	return int(C.gpu_blockscaled_matmul_device_count())
+}
+
+// BlockScaledMatmulHostBytes returns the host memory NewBlockScaledMatmul allocates for
+// this shape.
+func BlockScaledMatmulHostBytes(format, dim, nq, maxRows int) uint64 {
+	return uint64(C.gpu_blockscaled_matmul_host_bytes(C.int(format), C.uint32_t(dim), C.uint32_t(nq), C.uint64_t(maxRows)))
+}
+
 // NewBlockScaledMatmul creates an engine for nq query cells of format and dim, each
 // cellBytes long and packed back to back in queryCells; a tile holds at most maxRows cells
 // (rounded up to 128). topk > 0 enables RunTopK, which keeps min(topk, MaxRows) hits per

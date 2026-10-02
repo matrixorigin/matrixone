@@ -714,7 +714,7 @@ func formatValIntoStringWithFloatCast(
 		writeInt(int64(val.(int32)))
 	case types.T_int64:
 		writeInt(val.(int64))
-	case types.T_float32:
+	case types.T_float32, types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
 		v := val.(float32)
 		writeFloat(float64(v), uint64(math.Float32bits(v)), 32, "float")
 	case types.T_float64:
@@ -949,6 +949,9 @@ func compareValueFromVector(vec *vector.Vector, rowIdx int) (any, error) {
 		return vector.GetFixedAtNoTypeCheck[uint64](vec, rowIdx), nil
 	case types.T_float32:
 		return vector.GetFixedAtNoTypeCheck[float32](vec, rowIdx), nil
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		v, _ := vector.GetLowPrecisionFloatAt(vec, rowIdx)
+		return v, nil
 	case types.T_float64:
 		return vector.GetFixedAtNoTypeCheck[float64](vec, rowIdx), nil
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink, types.T_geometry, types.T_geometry32:

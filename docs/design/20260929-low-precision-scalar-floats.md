@@ -43,13 +43,23 @@ GPU kernels agree on the encoding.
   float32 path, and rounds the result back into the narrow format. A `bf16`/
   `float16`/`float8`/`float4` value in an expression therefore promotes to
   `float32`; only a stored column is narrowed again.
-- **Rounding.** Narrowing from float32 is round-to-nearest-even. Overflow
-  saturates to the maximum finite magnitude (e.g. `float8` → ±448, `float4` → ±6)
-  rather than producing an infinity. NaN is preserved where the format has a NaN
-  slot (`bf16`/`float16`/`float8`); `float4` maps NaN to +0.
+- **Rounding and range.** Narrowing from float32 is round-to-nearest-even. Every
+  cast and write rejects a value outside the type's finite range with a "data out of
+  range" error (e.g. `float8` above ±448, `float4` above ±6) and NaN or ±Inf with an
+  invalid-input error, so no SQL path stores a saturated or non-finite value. The
+  codec's own float32 conversion saturates and keeps NaN where the format has a NaN
+  slot; it is only reached after these checks.
 - **Casts.** Each type casts to and from `float32`, `float64`, decimal, the integer
-  types, and character strings — always through the float32 bridge. A cast that
-  leaves the target's finite range saturates, consistent with narrowing.
+  types, and character strings — always through the float32 bridge, with the same
+  range and finiteness checks.
+- **Not a key.** A `bf16`/`float16`/`float8`/`float4` column cannot be part of a primary
+  key, unique key, secondary index or `CLUSTER BY` key; DDL rejects it. Key encoding,
+  row locking and TN merge/dedup have no support for these types.
+- **External forms.** CDC and ISCP SQL, `SELECT … INTO OUTFILE` (CSV and JSON), external
+  writes, JSON values and data-branch diff/merge use the widened float32 value; every
+  value of these types is exact in float32, so the text converts back to the same bits.
+  Marshalled vectors (WAL, batches sent between services) carry the raw 1-/2-byte
+  encoding.
 
 ## Invariants
 

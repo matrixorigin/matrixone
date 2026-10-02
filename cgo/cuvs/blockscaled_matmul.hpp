@@ -45,6 +45,7 @@
 #include <raft/core/resources.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -136,6 +137,55 @@ public:
     static constexpr int kFormatBF16 = 7;
     static constexpr size_t kHeader = 12;
     static constexpr size_t kWorkspace = size_t(32) << 20;
+    // kMinComputeMajor is the supported GPU baseline: compute capability 10.0 or newer
+    // (Blackwell, sm_100 / sm_120), which the MXFP8 and NVFP4 block-scaled modes need.
+    // The engine runs only on such devices, for every format.
+    static constexpr int kMinComputeMajor = 10;
+
+    static bool meets_baseline(int compute_major) { return compute_major >= kMinComputeMajor; }
+
+    // eligible_devices returns the visible devices meeting the baseline, queried once per
+    // process.
+    static const std::vector<int>& eligible_devices() {
+        static const std::vector<int> devices = [] {
+            std::vector<int> out;
+            int n = 0;
+            if (cudaGetDeviceCount(&n) != cudaSuccess) {
+                cudaGetLastError();
+                return out;
+            }
+            for (int d = 0; d < n; d++) {
+                int major = 0;
+                if (cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, d) ==
+                        cudaSuccess &&
+                    meets_baseline(major)) {
+                    out.push_back(d);
+                }
+            }
+            cudaGetLastError();
+            return out;
+        }();
+        return devices;
+    }
+
+    // next_device returns an eligible device round-robin, or -1 when there is none.
+    static int next_device() {
+        static std::atomic<uint64_t> next{0};
+        const std::vector<int>& devices = eligible_devices();
+        if (devices.empty()) return -1;
+        return devices[next.fetch_add(1) % devices.size()];
+    }
+
+    // host_bytes returns the host memory an engine of this shape allocates: the tile
+    // staging and score copy, per-row and per-query globals and sums, and the query
+    // packing buffers used while it is constructed.
+    static uint64_t host_bytes(int format, uint32_t dim, uint32_t nq, uint64_t max_rows) {
+        const shape sh = shape::of(format, dim);
+        const uint64_t M = roundup(max_rows, 128), nq_pad = roundup(nq, 128);
+        return M * sh.row_bytes + M * sh.Sp + M * nq * sizeof(float) +
+               M * (sizeof(float) + sizeof(int64_t)) + nq * (sizeof(float) + sizeof(int64_t)) +
+               nq_pad * (sh.row_bytes + sh.Sp);
+    }
 
     // topk > 0 sizes the buffers of run_topk; 0 allows run only.
     blockscaled_matmul(int device_id, int format, uint32_t dim, uint32_t nq,
@@ -148,22 +198,14 @@ public:
         }
         format_ = format;
         dim_ = dim;
-        K_ = roundup(dim, 32);
-        if (plain(format)) {
-            const size_t esize = format == kFormatF32                           ? 4
-                                 : format == kFormatF16 || format == kFormatBF16 ? 2
-                                                                                 : 1;
-            elem_bytes_ = size_t(dim) * esize;
-            cell_bytes_ = elem_bytes_;
-            row_bytes_ = K_ * esize;
-        } else {
-            block_ = format == kFormatMXFP8 ? 32 : 16;
-            nscale_ = (dim + block_ - 1) / block_;
-            elem_bytes_ = format == kFormatMXFP8 ? dim : (dim + 1) / 2;
-            cell_bytes_ = kHeader + nscale_ + elem_bytes_;
-            Sp_ = roundup(K_ / block_, 4);
-            row_bytes_ = format == kFormatMXFP8 ? K_ : K_ / 2;
-        }
+        const shape sh = shape::of(format, dim);
+        K_ = sh.K;
+        block_ = sh.block;
+        nscale_ = sh.nscale;
+        elem_bytes_ = sh.elem_bytes;
+        cell_bytes_ = sh.cell_bytes;
+        Sp_ = sh.Sp;
+        row_bytes_ = sh.row_bytes;
         nq_ = nq;
         nq_pad_ = roundup(nq, 128);
         max_rows_ = roundup(max_rows, 128);
@@ -285,6 +327,33 @@ public:
     }
 
 private:
+    // shape is the cell and padded-row layout of a format and dimension.
+    struct shape {
+        size_t K = 0, block = 0, nscale = 0, elem_bytes = 0, cell_bytes = 0, Sp = 0,
+               row_bytes = 0;
+
+        static shape of(int format, uint32_t dim) {
+            shape sh;
+            sh.K = roundup(dim, 32);
+            if (plain(format)) {
+                const size_t esize = format == kFormatF32                           ? 4
+                                     : format == kFormatF16 || format == kFormatBF16 ? 2
+                                                                                     : 1;
+                sh.elem_bytes = size_t(dim) * esize;
+                sh.cell_bytes = sh.elem_bytes;
+                sh.row_bytes = sh.K * esize;
+            } else {
+                sh.block = format == kFormatMXFP8 ? 32 : 16;
+                sh.nscale = (dim + sh.block - 1) / sh.block;
+                sh.elem_bytes = format == kFormatMXFP8 ? dim : (dim + 1) / 2;
+                sh.cell_bytes = kHeader + sh.nscale + sh.elem_bytes;
+                sh.Sp = roundup(sh.K / sh.block, 4);
+                sh.row_bytes = format == kFormatMXFP8 ? sh.K : sh.K / 2;
+            }
+            return sh;
+        }
+    };
+
     // matmul packs and uploads n cells and enqueues D = A^T B on the stream; it returns the
     // padded row count M.
     size_t matmul(const uint8_t* cells, uint64_t n) {

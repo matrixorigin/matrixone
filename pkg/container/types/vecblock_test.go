@@ -16,6 +16,7 @@ package types
 
 import (
 	"encoding/binary"
+	"encoding/hex"
 	"math"
 	"math/rand"
 	"testing"
@@ -471,4 +472,59 @@ func TestHasF8E4M3NaN(t *testing.T) {
 			b[pos] = 0x7e
 		}
 	}
+}
+
+// TestBlockScaledDecodedFinite checks that every accepted cell decodes to finite values:
+// the encoder rejects inputs whose quantized value overflows float32, the parser rejects
+// cells that decode to an infinite value, and accepted cells round-trip through text.
+func TestBlockScaledDecodedFinite(t *testing.T) {
+	for _, f := range []BlockScaledFormat{BlockScaledMXFP8, BlockScaledNVFP4} {
+		var inputs []float32
+		for _, x := range []float32{math.MaxFloat32, 3.3e38, 3.0e38, float32(math.Ldexp(1, 127)), 1e38, 1} {
+			inputs = append(inputs, x, -x, math.Nextafter32(x, 0))
+		}
+		for _, x := range inputs {
+			for _, v := range [][]float32{{x}, {x, 1, -2}, {0.5, x}} {
+				cell, err := AppendBlockScaled(nil, f, v)
+				if err != nil {
+					require.ErrorContains(t, err, "out of range", "%s %v", f, v)
+					continue
+				}
+				c, err := ParseBlockScaledCell(cell)
+				require.NoError(t, err, "%s %v", f, v)
+				for i := 0; i < c.Dim; i++ {
+					require.False(t, math.IsInf(float64(c.At(i)), 0), "%s %v element %d", f, v, i)
+				}
+				text, err := BlockScaledToString(cell)
+				require.NoError(t, err)
+				_, err = StringToBlockScaled(f, text)
+				require.NoError(t, err, "%s %v -> %s", f, v, text)
+			}
+		}
+	}
+
+	// the maximum float32 rounds to 256*2^120 in MXFP8, which decodes to +Inf
+	for _, x := range []float32{math.MaxFloat32, -math.MaxFloat32} {
+		_, err := AppendBlockScaled(nil, BlockScaledMXFP8, []float32{x})
+		require.ErrorContains(t, err, "out of range")
+	}
+	// the same value is finite in NVFP4
+	_, err := AppendBlockScaled(nil, BlockScaledNVFP4, []float32{math.MaxFloat32})
+	require.NoError(t, err)
+
+	// a crafted MXFP8 cell: scale 2^120 and element 256
+	raw, err := hex.DecodeString("01010000010000000000803ff778")
+	require.NoError(t, err)
+	_, err = ParseBlockScaledCell(raw)
+	require.ErrorContains(t, err, "infinite")
+	raw[13] = 0x70 // element 128: 2^127 is finite
+	_, err = ParseBlockScaledCell(raw)
+	require.NoError(t, err)
+
+	// a crafted NVFP4 cell whose global scale times the block scale overflows
+	cell, err := AppendBlockScaled(nil, BlockScaledNVFP4, []float32{6, 0})
+	require.NoError(t, err)
+	binary.LittleEndian.PutUint32(cell[8:12], math.Float32bits(math.MaxFloat32))
+	_, err = ParseBlockScaledCell(cell)
+	require.ErrorContains(t, err, "infinite")
 }

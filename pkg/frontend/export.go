@@ -466,6 +466,9 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 			case types.T_uint64:
 				val := vector.GetFixedAtNoTypeCheck[uint64](vec, i)
 				formatOutputString(ep, []byte(strconv.FormatUint(uint64(val), 10)), symbol[j], closeby, flag[j], buffer)
+			case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+				val, _ := vector.GetLowPrecisionFloatAt(vec, i)
+				formatOutputString(ep, []byte(strconv.FormatFloat(float64(val), 'f', -1, 32)), symbol[j], closeby, flag[j], buffer)
 			case types.T_float32:
 				val := vector.GetFixedAtNoTypeCheck[float32](vec, i)
 				if vec.GetType().Scale < 0 || vec.GetType().Width == 0 {
@@ -1253,6 +1256,9 @@ func vectorValueToJSON(vec *vector.Vector, i int, ss *Session, backSes *backSess
 		return vector.GetFixedAtNoTypeCheck[uint64](vec, i), nil
 	case types.T_float32:
 		return vector.GetFixedAtNoTypeCheck[float32](vec, i), nil
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		val, _ := vector.GetLowPrecisionFloatAt(vec, i)
+		return val, nil
 	case types.T_float64:
 		return vector.GetFixedAtNoTypeCheck[float64](vec, i), nil
 	case types.T_char, types.T_varchar, types.T_text:

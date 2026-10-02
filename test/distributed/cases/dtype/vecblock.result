@@ -66,6 +66,13 @@ insert into t (id, a) values (5, '[1,2,3,nan]');
 internal error: vector element cannot be NaN or Inf: NaN
 insert into t (id, b) values (5, '[1,2,3,inf]');
 internal error: vector element cannot be NaN or Inf: +Inf
+select cast('[3.4028235e38]' as vecf8(1));
+invalid input: vecf8 element 0 value 3.4028235e+38 is out of range: it decodes to an infinite value
+select cast('[-3.4028235e38, 1]' as vecf8(2));
+invalid input: vecf8 element 0 value -3.4028235e+38 is out of range: it decodes to an infinite value
+select cast('[3.4028235e38]' as vecf4(1));
+➤ cast([3.4028235e38] as vecf4(1))[12,1,0]  𝄀
+[340282350000000000000000000000000000000]
 select a + a, a * 2, b - c, a / 2, a + b from t where id = 1;
 ➤ a + a[12,4,0]  ¦  a * 2[12,4,0]  ¦  b - c[12,4,0]  ¦  a / 2[12,4,0]  ¦  a + b[12,4,0]  𝄀
 [2, -6, 0, 12]  ¦  [2, -6, 0, 12]  ¦  [0, 0, 0, 0]  ¦  [0.5, -1.5, 0, 3]  ¦  [2, -6, 0, 12]

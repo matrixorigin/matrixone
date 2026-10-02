@@ -216,13 +216,39 @@ func AppendBlockScaled(dst []byte, f BlockScaledFormat, v []float32) ([]byte, er
 			}
 		}
 	}
+	c := BlockScaledCell{Format: f, Dim: dim, Global: global, Scales: scales, Elems: elems}
+	if i := c.firstInfinite(); i >= 0 {
+		return nil, moerr.NewInvalidInputNoCtxf("%s element %d value %v is out of range: it decodes to an infinite value", f, i, v[i])
+	}
 	return dst, nil
+}
+
+// firstInfinite returns the first element whose dequantized value (as At computes it) is
+// not finite, or -1. Only a block whose largest element code would overflow is scanned.
+func (c *BlockScaledCell) firstInfinite() int {
+	bs := c.Format.BlockSize()
+	maxCode := float32(f8e4m3MaxNorm)
+	if c.Format == BlockScaledNVFP4 {
+		maxCode = f4e2m1Mags[7]
+	}
+	for b := range c.Scales {
+		scale := c.Global * blockScaleValue(c.Format, c.Scales[b])
+		if !math.IsInf(float64(maxCode*scale), 0) {
+			continue
+		}
+		for i := b * bs; i < min((b+1)*bs, c.Dim); i++ {
+			if math.IsInf(float64(scale), 0) || math.IsInf(float64(c.At(i)), 0) {
+				return i
+			}
+		}
+	}
+	return -1
 }
 
 // ParseBlockScaledCell validates cell and returns a view of it. It rejects a wrong
 // length, version, format or dimension, non-zero reserved or padding bits, a global
 // scale that is not finite and non-negative (or not 1 for vecf8), NaN scale or element
-// codes, and signed vecf4 scales.
+// codes, signed vecf4 scales, and elements whose dequantized value is not finite.
 func ParseBlockScaledCell(cell []byte) (BlockScaledCell, error) {
 	if len(cell) < BlockScaledHeaderSize {
 		return BlockScaledCell{}, moerr.NewInvalidInputNoCtxf("block-scaled vector cell too short: %d bytes", len(cell))
@@ -273,6 +299,9 @@ func ParseBlockScaledCell(cell []byte) (BlockScaledCell, error) {
 		}
 	} else if dim%2 == 1 && c.Elems[len(c.Elems)-1]>>4 != 0 {
 		return BlockScaledCell{}, moerr.NewInvalidInputNoCtx("vecf4 cell has a non-zero padding nibble")
+	}
+	if i := c.firstInfinite(); i >= 0 {
+		return BlockScaledCell{}, moerr.NewInvalidInputNoCtxf("%s cell element %d decodes to an infinite value", f, i)
 	}
 	return c, nil
 }

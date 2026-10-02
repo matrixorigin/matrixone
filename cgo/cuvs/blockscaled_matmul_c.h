@@ -36,9 +36,23 @@ extern "C" {
 typedef void* gpu_blockscaled_matmul_c;
 
 /**
+ * @brief Returns the number of visible devices meeting the engine's baseline, compute
+ * capability 10.0 or newer (Blackwell). It is queried once per process; 0 means the
+ * engine is unavailable.
+ */
+int gpu_blockscaled_matmul_device_count(void);
+
+/**
+ * @brief Returns the host memory in bytes that gpu_blockscaled_matmul_new allocates for
+ * this shape, so the caller can reserve it first.
+ */
+uint64_t gpu_blockscaled_matmul_host_bytes(int format, uint32_t dim, uint32_t nq, uint64_t max_rows);
+
+/**
  * @brief Creates a cuBLASLt block-scaled matmul engine for vecf8/vecf4 cells.
  *
- * The device is selected round-robin across the visible devices.
+ * The device is selected round-robin across the devices counted by
+ * gpu_blockscaled_matmul_device_count; with none, it fails.
  *
  * @param format GPU_BLOCKSCALED_MXFP8 (vecf8), GPU_BLOCKSCALED_NVFP4 (vecf4) or
  *               or a plain format GPU_BLOCKSCALED_F32/_F16/_I8/_U8/_BF16.

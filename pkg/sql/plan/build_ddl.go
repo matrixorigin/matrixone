@@ -3434,6 +3434,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					if types.T(colType.GetId()).IsArray() {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("VECTOR column '%s' cannot be in primary key", colNameOrigin))
 					}
+					if err := lowPrecisionFloatKeyError(ctx.GetContext(), colType.GetId(), colNameOrigin, "primary"); err != nil {
+						return err
+					}
 					if isSetPlanType(&colType) {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("SET column '%s' cannot be in primary key", colNameOrigin))
 
@@ -3459,6 +3462,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					}
 					if isGeometryPlanType(&colType) {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("GEOMETRY column '%s' cannot be in unique index", colNameOrigin))
+					}
+					if err := lowPrecisionFloatKeyError(ctx.GetContext(), colType.GetId(), colNameOrigin, "unique"); err != nil {
+						return err
 					}
 					uniqueIndexInfos = append(uniqueIndexInfos, &tree.UniqueIndex{
 						KeyParts: []*tree.KeyPart{{ColName: def.Name}},
@@ -4030,8 +4036,12 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		var clusterByKeys []string
 		for i := 0; i < lenClusterBy; i++ {
 			colName := stmt.ClusterByOption.ColumnList[i].ColName()
-			if _, ok := colMap[colName]; !ok {
+			col, ok := colMap[colName]
+			if !ok {
 				return moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' doesn't exist in table", stmt.ClusterByOption.ColumnList[i].ColNameOrigin())
+			}
+			if err := lowPrecisionFloatKeyError(ctx.GetContext(), col.Typ.Id, stmt.ClusterByOption.ColumnList[i].ColNameOrigin(), "cluster"); err != nil {
+				return err
 			}
 			clusterByKeys = append(clusterByKeys, colName)
 		}

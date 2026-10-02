@@ -17,14 +17,18 @@
 package aggexec
 
 import (
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 )
 
 func init() {
-	newVectorMatmulEngine = func(format, dim, nq int, queryCells []byte, cellBytes, maxRows, topk int) (vectorMatmulEngine, error) {
-		if n, err := cuvs.GetGpuDeviceCount(); err != nil || n == 0 {
-			return nil, nil
-		}
-		return cuvs.NewBlockScaledMatmul(format, dim, nq, queryCells, cellBytes, maxRows, topk)
+	devices := sync.OnceValue(cuvs.BlockScaledMatmulDeviceCount)
+	vectorMatmulGPU = &vectorMatmulGPUHooks{
+		available: func() bool { return devices() > 0 },
+		hostBytes: cuvs.BlockScaledMatmulHostBytes,
+		create: func(format, dim, nq int, queryCells []byte, cellBytes, maxRows, topk int) (vectorMatmulEngine, error) {
+			return cuvs.NewBlockScaledMatmul(format, dim, nq, queryCells, cellBytes, maxRows, topk)
+		},
 	}
 }

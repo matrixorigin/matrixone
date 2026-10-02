@@ -19,15 +19,28 @@
 #include "helper.h"
 
 #include <exception>
+#include <stdexcept>
 
 extern "C" {
+
+int gpu_blockscaled_matmul_device_count(void) {
+    return int(matrixone::blockscaled_matmul::eligible_devices().size());
+}
+
+uint64_t gpu_blockscaled_matmul_host_bytes(int format, uint32_t dim, uint32_t nq, uint64_t max_rows) {
+    return matrixone::blockscaled_matmul::host_bytes(format, dim, nq, max_rows);
+}
 
 gpu_blockscaled_matmul_c gpu_blockscaled_matmul_new(int format, uint32_t dim, uint32_t nq,
                                                     const uint8_t* query_cells, uint64_t max_rows,
                                                     uint32_t topk, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        int device_id = matrixone::get_next_device_id();
+        int device_id = matrixone::blockscaled_matmul::next_device();
+        if (device_id < 0) {
+            throw std::runtime_error(
+                "no visible GPU with compute capability 10.0 or newer for block-scaled matmul");
+        }
         return new matrixone::blockscaled_matmul(device_id, format, dim, nq, query_cells, max_rows,
                                                  topk);
     } catch (const std::exception& e) {

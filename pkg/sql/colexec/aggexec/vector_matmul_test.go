@@ -339,11 +339,6 @@ func TestVectorMatmulConfigErrors(t *testing.T) {
 	}{
 		{0, `[[1,0,0,0]]`, ``, `topk 0 out of range`},
 		{vectorMatmulMaxTopK + 1, `[[1,0,0,0]]`, ``, `out of range`},
-		{2, `[[1,0,0,0]]`, `{"bogus":1}`, `invalid options`},
-		{2, `[[1,0,0,0]]`, `{"mode":"fast"}`, `invalid mode`},
-		{2, `[[1,0,0,0]]`, `{"mode":"gpu"}`, `gpu mode`},
-		{2, `[[1,0,0,0]]`, `{"tile_bytes":-1}`, `tile_bytes`},
-		{2, `[[1,0,0,0]]`, `not json`, `invalid options`},
 		{2, `[]`, ``, `query count`},
 		{2, `[1,2]`, ``, `JSON array of vectors`},
 		{2, `[[1,0,0]]`, ``, `different dimensions`},
@@ -355,7 +350,8 @@ func TestVectorMatmulConfigErrors(t *testing.T) {
 	many := "[" + strings.TrimSuffix(strings.Repeat(`[1,0,0,0],`, vectorMatmulMaxEntries/vectorMatmulMaxTopK+1), ",") + "]"
 	_, err := parseVectorMatmulConfig(EncodeVectorMatmulConfig(vectorMatmulMaxTopK, many, "", false), vt)
 	require.ErrorContains(t, err, "queries x topk exceeds")
-	for _, options := range []string{``, `{"mode":"auto"}`, `{"mode":"cpu","tile_bytes":1024}`} {
+	// the options argument is not interpreted: any text is accepted
+	for _, options := range []string{``, `{"mode":"auto"}`, `{"mode":"gpu","tile_bytes":-1}`, `{"bogus":1}`, `not json`} {
 		_, err := parseVectorMatmulConfig(EncodeVectorMatmulConfig(1, `[[1,0,0,0]]`, options, false), vt)
 		require.NoError(t, err, options)
 	}
@@ -805,5 +801,104 @@ func TestVectorMatmulConfigShared(t *testing.T) {
 	vectorMatmulConfigs.Lock()
 	require.Empty(t, vectorMatmulConfigs.m)
 	vectorMatmulConfigs.Unlock()
+	require.Zero(t, mp.CurrNB())
+}
+
+// vmFakeEngine is a shape-only GPU engine: it keeps no row and reports no hit.
+type vmFakeEngine struct {
+	maxRows, cellBytes, topk int
+	closed                   *int
+}
+
+func (e *vmFakeEngine) MaxRows() int   { return e.maxRows }
+func (e *vmFakeEngine) CellBytes() int { return e.cellBytes }
+func (e *vmFakeEngine) TopK() int      { return e.topk }
+func (e *vmFakeEngine) Close()         { *e.closed++ }
+func (e *vmFakeEngine) Run(cells []byte, scores []float32) error {
+	clear(scores)
+	return nil
+}
+func (e *vmFakeEngine) RunTopK(cells []byte, top []float32, rows []int32, full []float32, tied []uint8) error {
+	for i := range rows {
+		rows[i] = -1
+	}
+	clear(tied)
+	return nil
+}
+
+// TestVectorMatmulGPUMemoryAdmission checks that the engine's native host memory and the
+// tile buffers are charged to the allocation account before they are allocated, counted in
+// Size, released by Free, and that an account without room scores on the CPU instead.
+func TestVectorMatmulGPUMemoryAdmission(t *testing.T) {
+	saved := vectorMatmulGPU
+	defer func() { vectorMatmulGPU = saved }()
+	const hostBytes = 1 << 20
+	created, closed := 0, 0
+	vectorMatmulGPU = &vectorMatmulGPUHooks{
+		available: func() bool { return true },
+		hostBytes: func(format, dim, nq, maxRows int) uint64 { return hostBytes },
+		create: func(format, dim, nq int, queryCells []byte, cellBytes, maxRows, topk int) (vectorMatmulEngine, error) {
+			created++
+			return &vmFakeEngine{maxRows: (maxRows + 127) / 128 * 128, cellBytes: cellBytes, topk: min(topk, maxRows), closed: &closed}, nil
+		},
+	}
+	q, _ := json.Marshal([][]float32{{1, 0, 0, 0}})
+	gpuCfg := EncodeVectorMatmulConfig(1, string(q), "", true)
+	run := func(limit uint64) (*vectorMatmulExec, *mpool.AllocationAccount, []*vector.Vector, *mpool.MPool) {
+		mp := mpool.MustNewZero()
+		registry, err := mpool.NewAllocationAccountRegistry(1, 512)
+		require.NoError(t, err)
+		account, err := registry.Open(limit)
+		require.NoError(t, err)
+		allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{
+			VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+		})
+		require.NoError(t, err)
+		agg, err := makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{types.T_int64.ToType(), vmVecType()})
+		require.NoError(t, err)
+		exec := agg.(*vectorMatmulExec)
+		require.NoError(t, exec.SetExtraInformation(gpuCfg, 0))
+		require.NoError(t, exec.SetAllocationAccount(allocation))
+		require.NoError(t, exec.GroupGrow(1))
+		vecs := vmVectors(t, mp, []int64{1, 2}, [][]float32{{1, 0, 0, 0}, {2, 0, 0, 0}})
+		groups := []uint64{1, 1}
+		require.NoError(t, exec.PreflightBatchFill(0, groups, vecs))
+		require.NoError(t, exec.BatchFill(0, groups, vecs))
+		return exec, account, vecs, mp
+	}
+
+	// room for the engine: native memory and tile are charged and counted
+	exec, account, vecs, mp := run(256 << 20)
+	require.Equal(t, 1, created)
+	require.NotNil(t, exec.engine)
+	tile := exec.tileSize()
+	require.Greater(t, tile, int64(hostBytes))
+	require.GreaterOrEqual(t, account.Snapshot().Used, uint64(tile))
+	require.GreaterOrEqual(t, exec.Size(), tile)
+	exec.Free()
+	vmFree(mp, vecs)
+	require.Equal(t, 1, closed)
+	require.Zero(t, account.Snapshot().Used)
+	require.Zero(t, mp.CurrNB())
+
+	// no room for the native memory: no engine, rows scored on the CPU
+	exec, account, vecs, mp = run(hostBytes / 2)
+	require.Equal(t, 1, created)
+	require.Nil(t, exec.engine)
+	require.Equal(t, []string{`[[["2",2]]]`}, vmFlush(t, mp, exec))
+	exec.Free()
+	vmFree(mp, vecs)
+	require.Zero(t, account.Snapshot().Used)
+	require.Zero(t, mp.CurrNB())
+
+	// room for the native memory but not the tile: the engine is closed, its charge released
+	exec, account, vecs, mp = run(hostBytes + 64<<10)
+	require.Equal(t, 2, created)
+	require.Equal(t, 2, closed)
+	require.Nil(t, exec.engine)
+	require.Equal(t, []string{`[[["2",2]]]`}, vmFlush(t, mp, exec))
+	exec.Free()
+	vmFree(mp, vecs)
+	require.Zero(t, account.Snapshot().Used)
 	require.Zero(t, mp.CurrNB())
 }

@@ -57,14 +57,16 @@ set @qs = (select json_arrayagg(v) from qv);
 select vector_matmul(1, id, a, @qs) from t;
 ➤ vector_matmul(1, id, a, @qs)[-1,2147483647,0]  𝄀
 [[["1", 1]], [["1", 0]]]
+select vector_matmul(2, id, a, '[[1,0,0,0]]', '{"bogus":1}') from t;
+➤ vector_matmul(2, id, a, [[1,0,0,0]], {"bogus":1})[-1,2147483647,0]  𝄀
+[[["1", 1], ["3", 1]]]
+select vector_matmul(2, id, a, '[[1,0,0,0]]', 'not json') from t;
+➤ vector_matmul(2, id, a, [[1,0,0,0]], not json)[-1,2147483647,0]  𝄀
+[[["1", 1], ["3", 1]]]
 select vector_matmul('abc', id, a, '[[1,0,0,0]]') from t;
 invalid argument cast to int, bad value abc
 select vector_matmul(0, id, a, '[[1,0,0,0]]') from t;
 invalid input: vector_matmul: topk 0 out of range [1, 16384]
-select vector_matmul(2, id, a, '[[1,0,0,0]]', '{"bogus":1}') from t;
-invalid input: vector_matmul: invalid options "{\"bogus\":1}": json: unknown field "bogus"
-select vector_matmul(2, id, a, '[[1,0,0,0]]', '{"mode":"gpu"}') from t;
-not supported: vector_matmul: gpu mode in this build
 select vector_matmul(2, id, a, '[[1,0,0]]') from t;
 invalid input: vector ops between different dimensions (4, 3) is not permitted.
 select vector_matmul(2, id, a, '[]') from t;

@@ -28,6 +28,10 @@ insert into t values (5, '[1,2,3,4]', '[1,2,3]', '[1,2,3,4]');
 select cast('[1,2,3]' as vecf8(4));
 insert into t (id, a) values (5, '[1,2,3,nan]');
 insert into t (id, b) values (5, '[1,2,3,inf]');
+-- a finite value whose quantized vecf8 value decodes to Inf is rejected; vecf4 keeps it finite
+select cast('[3.4028235e38]' as vecf8(1));
+select cast('[-3.4028235e38, 1]' as vecf8(2));
+select cast('[3.4028235e38]' as vecf4(1));
 
 -- arithmetic promotes to vecf32
 select a + a, a * 2, b - c, a / 2, a + b from t where id = 1;

@@ -155,3 +155,50 @@ func TestCheckIndexedColumnTypeChangeGeometry(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "GEOMETRY column 'id' cannot be in primary key")
 }
+
+// TestLowPrecisionFloatKeyParts checks that bf16, float16, float8 and float4 columns are
+// rejected as primary key, unique key, index and cluster by parts, and accepted as plain
+// columns.
+func TestLowPrecisionFloatKeyParts(t *testing.T) {
+	ctx := context.Background()
+	for _, id := range []types.T{types.T_bf16, types.T_float16, types.T_float8, types.T_float4} {
+		typ := plan.Type{Id: int32(id)}
+		err := checkPrimaryKeyPartType(ctx, typ, "k")
+		require.ErrorContains(t, err, id.String()+" column 'k' cannot be in primary key")
+		err = checkUniqueKeyPartType(ctx, typ, "k")
+		require.ErrorContains(t, err, id.String()+" column 'k' cannot be in unique index")
+		col := &ColDef{Typ: typ}
+		key := &tree.KeyPart{ColName: tree.NewUnresolvedColName("k")}
+		for kind, want := range map[string]string{
+			"primary":   "cannot be in primary key",
+			"unique":    "cannot be in unique index",
+			"secondary": "cannot be in index",
+		} {
+			err = checkIndexColumnSupportability(ctx, col, key, kind)
+			require.ErrorContains(t, err, id.String()+" column 'k' "+want)
+		}
+		require.ErrorContains(t, lowPrecisionFloatKeyError(ctx, int32(id), "k", "cluster"), "cannot be a cluster by key")
+	}
+	for _, id := range []types.T{types.T_float32, types.T_float64, types.T_int32} {
+		require.NoError(t, lowPrecisionFloatKeyError(ctx, int32(id), "k", "primary"))
+		require.NoError(t, checkPrimaryKeyPartType(ctx, plan.Type{Id: int32(id)}, "k"))
+	}
+
+	mock := NewMockOptimizer(false)
+	for _, typ := range []string{"bf16", "float16", "float8", "float4"} {
+		for _, sql := range []string{
+			"create table lp (k " + typ + " primary key, v int)",
+			"create table lp (id int primary key, k " + typ + " unique key)",
+			"create table lp (k " + typ + ", j int, primary key (k, j))",
+			"create table lp (id int primary key, k " + typ + ", unique key uk (k))",
+			"create table lp (id int primary key, k " + typ + ", key ik (k))",
+			"create table lp (id int, k " + typ + ") cluster by (k)",
+			"create table lp (id int, k " + typ + ") cluster by (id, k)",
+		} {
+			_, err := runOneStmt(mock, t, sql)
+			require.ErrorContains(t, err, "cannot be", sql)
+		}
+		_, err := runOneStmt(mock, t, "create table lp (id int primary key, k "+typ+")")
+		require.NoError(t, err, typ)
+	}
+}

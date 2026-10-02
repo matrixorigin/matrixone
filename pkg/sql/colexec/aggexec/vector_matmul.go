@@ -126,12 +126,6 @@ func decodeVectorMatmulConfig(b []byte) (topk int64, queries, options string, gp
 	return topk, queries, options, b[0] == 1, nil
 }
 
-// vectorMatmulOptions is the optional fifth argument.
-type vectorMatmulOptions struct {
-	Mode      *string `json:"mode"`
-	TileBytes *int64  `json:"tile_bytes"`
-}
-
 // vectorMatmulConfig is the parsed configuration shared by all groups and, through
 // vectorMatmulConfigs, by the executors of a query; it is read only.
 type vectorMatmulConfig struct {
@@ -200,34 +194,14 @@ func acquireVectorMatmulConfig(raw []byte, vecType types.Type) (cfg *vectorMatmu
 }
 
 func parseVectorMatmulConfig(raw []byte, vecType types.Type) (*vectorMatmulConfig, error) {
-	topk, queriesText, optionsText, gpu, err := decodeVectorMatmulConfig(raw)
+	// the options argument is carried in the configuration and not interpreted
+	topk, queriesText, _, gpu, err := decodeVectorMatmulConfig(raw)
 	if err != nil {
 		return nil, err
 	}
 	if topk < 1 || topk > vectorMatmulMaxTopK {
 		return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: topk %d out of range [1, %d]", topk, vectorMatmulMaxTopK)
 	}
-	if optionsText != "" {
-		var options vectorMatmulOptions
-		dec := json.NewDecoder(bytes.NewReader([]byte(optionsText)))
-		dec.DisallowUnknownFields()
-		if err := dec.Decode(&options); err != nil {
-			return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: invalid options %q: %v", optionsText, err)
-		}
-		if options.Mode != nil {
-			switch *options.Mode {
-			case "auto", "cpu":
-			case "gpu":
-				return nil, moerr.NewNotSupportedNoCtx("vector_matmul: gpu mode in this build")
-			default:
-				return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: invalid mode %q", *options.Mode)
-			}
-		}
-		if options.TileBytes != nil && *options.TileBytes < 0 {
-			return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: invalid tile_bytes %d", *options.TileBytes)
-		}
-	}
-
 	var queries [][]float32
 	if err := json.Unmarshal([]byte(queriesText), &queries); err != nil {
 		return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: queries must be a JSON array of vectors: %v", err)
@@ -804,9 +778,16 @@ type vectorMatmulEngine interface {
 	Close()
 }
 
-// newVectorMatmulEngine creates a GPU engine. It is nil in builds without GPU support and
-// returns a nil engine when no device is visible.
-var newVectorMatmulEngine func(format, dim, nq int, queryCells []byte, cellBytes, maxRows, topk int) (vectorMatmulEngine, error)
+// vectorMatmulGPUHooks create GPU engines: available reports a device meeting the
+// engine's baseline, hostBytes the native host memory create allocates for a shape.
+type vectorMatmulGPUHooks struct {
+	available func() bool
+	hostBytes func(format, dim, nq, maxRows int) uint64
+	create    func(format, dim, nq int, queryCells []byte, cellBytes, maxRows, topk int) (vectorMatmulEngine, error)
+}
+
+// vectorMatmulGPU is nil in builds without GPU support.
+var vectorMatmulGPU *vectorMatmulGPUHooks
 
 // vectorMatmulTileBytes bounds the host tile: cells plus scores.
 var vectorMatmulTileBytes = 64 << 20
@@ -839,7 +820,9 @@ type vectorMatmulExec struct {
 	// releaseCfg drops the hold on cfg in vectorMatmulConfigs.
 	releaseCfg func()
 
-	engine      vectorMatmulEngine
+	engine vectorMatmulEngine
+	// engineLease holds the account's charge for the engine's native host memory.
+	engineLease *mpool.CapacityLease
 	engineTried bool
 	tile        vectorMatmulTile
 }
@@ -986,38 +969,130 @@ func (exec *vectorMatmulExec) fillRow(group uint64, row int, vectors []*vector.V
 }
 
 // ensureEngine creates the GPU engine on first use when the session allows the GPU and
-// the build has a device; otherwise rows are scored on the CPU.
+// the build has a device meeting the baseline; otherwise rows are scored on the CPU. The
+// engine's native host memory and the tile buffers are charged to the allocation account
+// before they are allocated; when the account has no room the rows are scored on the CPU.
 func (exec *vectorMatmulExec) ensureEngine() error {
-	if exec.engineTried {
+	if exec.engineTried || exec.cfg == nil {
 		return nil
 	}
 	exec.engineTried = true
-	if !exec.cfg.gpu || newVectorMatmulEngine == nil {
+	gpu := vectorMatmulGPU
+	if !exec.cfg.gpu || gpu == nil || !gpu.available() {
 		return nil
 	}
 	dim := int(exec.argTypes[1].Width)
 	nq := exec.cfg.nq
 	cellBytes := exec.cfg.cellBytes
 	rows := max(1, min(65536, vectorMatmulTileBytes/(cellBytes+4*nq)))
-	engine, err := newVectorMatmulEngine(exec.cfg.engineFormat, dim, nq, exec.cfg.queryCells, cellBytes, rows, exec.cfg.topk)
+	hostBytes := gpu.hostBytes(exec.cfg.engineFormat, dim, nq, rows)
+	reservation, err := exec.allocation.reserveCapacity(hostBytes)
+	if err != nil {
+		return nil
+	}
+	engine, err := gpu.create(exec.cfg.engineFormat, dim, nq, exec.cfg.queryCells, cellBytes, rows, exec.cfg.topk)
 	if err != nil || engine == nil {
+		reservation.Abort()
 		return err
 	}
-	exec.engine = engine
-	n := engine.MaxRows()
-	exec.tile = vectorMatmulTile{
-		cells:  make([]byte, 0, n*engine.CellBytes()),
-		groups: make([]uint64, 0, n),
-		idEnds: make([]int, 0, n),
-		scores: make([]float32, n*nq),
+	var lease *mpool.CapacityLease
+	if reservation != nil {
+		if lease, err = reservation.Commit(hostBytes); err != nil {
+			reservation.Abort()
+			engine.Close()
+			return err
+		}
 	}
-	if k := engine.TopK(); k == exec.cfg.topk {
-		exec.tile.top = make([]float32, nq*k)
-		exec.tile.rows = make([]int32, nq*k)
-		exec.tile.tied = make([]uint8, nq)
-		exec.tile.offs = make([]int64, n)
+	k := 0
+	if engine.TopK() == exec.cfg.topk {
+		k = exec.cfg.topk
 	}
+	if err := exec.allocTile(engine.MaxRows(), engine.CellBytes(), nq, k); err != nil {
+		engine.Close()
+		lease.Release()
+		return nil
+	}
+	exec.engine, exec.engineLease = engine, lease
 	return nil
+}
+
+// allocTile allocates the tile buffers for n rows from the allocation account; k > 0 adds
+// the GPU top-k buffers.
+func (exec *vectorMatmulExec) allocTile(n, cellBytes, nq, k int) (err error) {
+	a, mp, t := exec.allocation, exec.mp, &exec.tile
+	defer func() {
+		if err != nil {
+			exec.freeTile()
+		}
+	}()
+	if t.cells, err = makeAccountedScratch[byte](a, mp, n*cellBytes); err != nil {
+		return err
+	}
+	if t.groups, err = makeAccountedScratch[uint64](a, mp, n); err != nil {
+		return err
+	}
+	if t.idEnds, err = makeAccountedScratch[int](a, mp, n); err != nil {
+		return err
+	}
+	if t.ids, err = makeAccountedScratch[byte](a, mp, n*8); err != nil {
+		return err
+	}
+	if t.scores, err = makeAccountedScratch[float32](a, mp, n*nq); err != nil {
+		return err
+	}
+	t.cells, t.groups, t.idEnds, t.ids = t.cells[:0], t.groups[:0], t.idEnds[:0], t.ids[:0]
+	if k == 0 {
+		return nil
+	}
+	if t.top, err = makeAccountedScratch[float32](a, mp, nq*k); err != nil {
+		return err
+	}
+	if t.rows, err = makeAccountedScratch[int32](a, mp, nq*k); err != nil {
+		return err
+	}
+	if t.tied, err = makeAccountedScratch[uint8](a, mp, nq); err != nil {
+		return err
+	}
+	t.offs, err = makeAccountedScratch[int64](a, mp, n)
+	return err
+}
+
+// growTileIDs makes room for extra more bytes of id text in the tile.
+func (exec *vectorMatmulExec) growTileIDs(extra int) error {
+	t := &exec.tile
+	if cap(t.ids)-len(t.ids) >= extra {
+		return nil
+	}
+	ids, err := makeAccountedScratch[byte](exec.allocation, exec.mp, max(2*cap(t.ids), len(t.ids)+extra))
+	if err != nil {
+		return err
+	}
+	ids = ids[:copy(ids, t.ids)]
+	mpool.FreeSlice(exec.mp, t.ids)
+	t.ids = ids
+	return nil
+}
+
+// freeTile returns the tile buffers to the pool.
+func (exec *vectorMatmulExec) freeTile() {
+	t := &exec.tile
+	mpool.FreeSlice(exec.mp, t.cells)
+	mpool.FreeSlice(exec.mp, t.groups)
+	mpool.FreeSlice(exec.mp, t.idEnds)
+	mpool.FreeSlice(exec.mp, t.ids)
+	mpool.FreeSlice(exec.mp, t.scores)
+	mpool.FreeSlice(exec.mp, t.top)
+	mpool.FreeSlice(exec.mp, t.rows)
+	mpool.FreeSlice(exec.mp, t.tied)
+	mpool.FreeSlice(exec.mp, t.offs)
+	*t = vectorMatmulTile{}
+}
+
+// tileSize is the bytes held by the tile buffers and the engine's native host memory.
+func (exec *vectorMatmulExec) tileSize() int64 {
+	t := &exec.tile
+	return int64(cap(t.cells)+cap(t.ids)+cap(t.tied)) + int64(cap(t.groups)+cap(t.idEnds)+cap(t.offs))*8 +
+		int64(cap(t.scores)+cap(t.top)+cap(t.rows))*4 + int64(exec.engineLease.Capacity())
 }
 
 // enqueue appends a row to the GPU tile and scores the tile when it is full.
@@ -1027,6 +1102,9 @@ func (exec *vectorMatmulExec) enqueue(group uint64, cell []byte, ids *vector.Vec
 		return err
 	}
 	t := &exec.tile
+	if err := exec.growTileIDs(vectorMatmulIDLenBound(ids, idRow)); err != nil {
+		return err
+	}
 	before := len(t.ids)
 	t.ids = appendVectorMatmulID(t.ids, ids, idRow)
 	s.pending += len(t.ids) - before
@@ -1239,6 +1317,19 @@ func (exec *vectorMatmulExec) PreflightBatchFill(offset int, groups []uint64, ve
 			return err
 		}
 	}
+	// the GPU engine and its tile are created and sized here, before the fill
+	if err := exec.ensureEngine(); err != nil {
+		return err
+	}
+	if exec.engine != nil {
+		total := 0
+		for i := 0; i < n; i++ {
+			total += extra[i]
+		}
+		if err := exec.growTileIDs(total); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -1388,7 +1479,7 @@ func (exec *vectorMatmulExec) Size() int64 {
 			}
 		}
 	}
-	return size
+	return size + exec.tileSize()
 }
 
 func (exec *vectorMatmulExec) Free() {
@@ -1396,7 +1487,9 @@ func (exec *vectorMatmulExec) Free() {
 		exec.engine.Close()
 		exec.engine = nil
 	}
-	exec.tile = vectorMatmulTile{}
+	exec.freeTile()
+	exec.engineLease.Release()
+	exec.engineLease = nil
 	exec.aggExec.Free()
 	exec.state = nil
 	if exec.releaseCfg != nil {

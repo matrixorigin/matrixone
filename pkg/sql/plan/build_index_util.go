@@ -225,12 +225,35 @@ func indexColumnCheckKind(indexType tree.IndexType) string {
 	}
 }
 
+// lowPrecisionFloatKeyError rejects a bf16, float16, float8 or float4 column as a key part:
+// key encoding, locking and TN merge/dedup have no support for these types. kind is
+// "primary", "unique", "cluster" or another index kind.
+func lowPrecisionFloatKeyError(ctx context.Context, id int32, colName, kind string) error {
+	t := types.T(id)
+	if !t.IsLowPrecisionFloat() {
+		return nil
+	}
+	switch kind {
+	case "primary":
+		return moerr.NewNotSupported(ctx, fmt.Sprintf("%s column '%s' cannot be in primary key", t, colName))
+	case "unique":
+		return moerr.NewNotSupported(ctx, fmt.Sprintf("%s column '%s' cannot be in unique index", t, colName))
+	case "cluster":
+		return moerr.NewNotSupported(ctx, fmt.Sprintf("%s column '%s' cannot be a cluster by key", t, colName))
+	default:
+		return moerr.NewNotSupported(ctx, fmt.Sprintf("%s column '%s' cannot be in index", t, colName))
+	}
+}
+
 func checkIndexColumnSupportability(ctx context.Context, col *ColDef, keyPart *tree.KeyPart, indexKind string) error {
 	if col == nil || keyPart == nil || keyPart.ColName == nil {
 		return moerr.NewInternalError(ctx, "index column definition is nil")
 	}
 
 	colName := keyPart.ColName.ColNameOrigin()
+	if err := lowPrecisionFloatKeyError(ctx, col.Typ.Id, colName, indexKind); err != nil {
+		return err
+	}
 
 	switch col.Typ.Id {
 	case int32(types.T_blob):

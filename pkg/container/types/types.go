@@ -1235,6 +1235,11 @@ func (t T) IsFloat() bool {
 	return false
 }
 
+// IsLowPrecisionFloat reports the scalar bf16, float16, float8 and float4 types.
+func (t T) IsLowPrecisionFloat() bool {
+	return t == T_bf16 || t == T_float16 || t == T_float8 || t == T_float4
+}
+
 // IsEnum return true if the types.T is Enum type
 func (t T) IsEnum() bool {
 	return t == T_enum

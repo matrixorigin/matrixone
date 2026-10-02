@@ -83,4 +83,12 @@ CREATE TABLE t2 (id INT PRIMARY KEY, a bf16, c float8);
 INSERT INTO t2 SELECT id, a, c FROM t WHERE a IS NOT NULL;
 SELECT id, a, c FROM t2 ORDER BY id;
 
+-- low-precision floats cannot be key parts
+CREATE TABLE kp (k bf16 PRIMARY KEY, v INT);
+CREATE TABLE ku (id INT PRIMARY KEY, k float16 UNIQUE KEY);
+CREATE TABLE kc (k float4, j INT, PRIMARY KEY (k, j));
+CREATE TABLE ki (id INT PRIMARY KEY, k float8, KEY ik (k));
+CREATE TABLE kb (id INT, k float8) CLUSTER BY (k);
+CREATE INDEX ia ON t2 (a);
+
 DROP DATABASE lowprec_float;

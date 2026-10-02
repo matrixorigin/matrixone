@@ -45,11 +45,13 @@ insert into qv values (1, '[1,0,0,0]'), (2, '[0,0,1,1]');
 set @qs = (select json_arrayagg(v) from qv);
 select vector_matmul(1, id, a, @qs) from t;
 
+-- the options argument is accepted and not interpreted
+select vector_matmul(2, id, a, '[[1,0,0,0]]', '{"bogus":1}') from t;
+select vector_matmul(2, id, a, '[[1,0,0,0]]', 'not json') from t;
+
 -- errors
 select vector_matmul('abc', id, a, '[[1,0,0,0]]') from t;
 select vector_matmul(0, id, a, '[[1,0,0,0]]') from t;
-select vector_matmul(2, id, a, '[[1,0,0,0]]', '{"bogus":1}') from t;
-select vector_matmul(2, id, a, '[[1,0,0,0]]', '{"mode":"gpu"}') from t;
 select vector_matmul(2, id, a, '[[1,0,0]]') from t;
 select vector_matmul(2, id, a, '[]') from t;
 select vector_matmul(id, id, a, '[[1,0,0,0]]') from t;

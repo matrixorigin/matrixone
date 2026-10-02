@@ -275,6 +275,24 @@ TEST(BlockScaledMatmulTest, TopKMatchesFullScores) {
         std::vector<uint8_t> cells = small_int_cells(4, 1000, rng);
         check_topk(format, 4, queries, cells, 1000, 2, 5, 512, true);
     }
+    // k above 256: select_k takes the radix path instead of the warp sort
+    {
+        std::vector<uint8_t> queries(3 * 64 * 4), cells(1000 * 64 * 4);
+        std::normal_distribution<float> nd(0.0f, 1.0f);
+        for (size_t i = 0; i < queries.size() / 4; i++) {
+            float v = nd(rng);
+            std::memcpy(&queries[i * 4], &v, 4);
+        }
+        for (size_t i = 0; i < cells.size() / 4; i++) {
+            float v = nd(rng);
+            std::memcpy(&cells[i * 4], &v, 4);
+        }
+        check_topk(GPU_BLOCKSCALED_F32, 64, queries, cells, 1000, 3, 300, 512, false);
+        std::vector<uint8_t> iq = small_int_cells(4, 2, rng);
+        iq[0] = iq[4] = 1;
+        std::vector<uint8_t> ic = small_int_cells(4, 2000, rng);
+        check_topk(GPU_BLOCKSCALED_I8, 4, iq, ic, 2000, 2, 300, 1024, true);
+    }
     // k larger than the tile keeps every row
     std::vector<uint8_t> queries = small_int_cells(8, 1, rng);
     std::vector<uint8_t> cells = small_int_cells(8, 50, rng);
@@ -312,6 +330,30 @@ TEST(BlockScaledMatmulTest, PlainFormatsMatchReference) {
             }
         }
     }
+}
+
+TEST(BlockScaledMatmulTest, DeviceBaselineAndHostBytes) {
+    // Volta, Ampere, Ada and Hopper are below the baseline; Blackwell meets it
+    for (int major : {7, 8, 9}) ASSERT_TRUE(!blockscaled_matmul::meets_baseline(major));
+    for (int major : {10, 11, 12}) ASSERT_TRUE(blockscaled_matmul::meets_baseline(major));
+    int n = 0;
+    ASSERT_EQ(cudaGetDeviceCount(&n), cudaSuccess);
+    size_t want = 0;
+    for (int d = 0; d < n; d++) {
+        int major = 0;
+        ASSERT_EQ(cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, d), cudaSuccess);
+        if (blockscaled_matmul::meets_baseline(major)) want++;
+    }
+    ASSERT_EQ(blockscaled_matmul::eligible_devices().size(), want);
+    ASSERT_EQ(gpu_blockscaled_matmul_device_count(), int(want));
+
+    // MXFP8, dim 768, 3 queries, 256 rows: K 768, 24 scales padded to 24, 128 padded queries
+    const uint64_t mx = 256 * 768 + 256 * 24 + 256 * 3 * 4 + 256 * 12 + 3 * 12 + 128 * (768 + 24);
+    ASSERT_EQ(blockscaled_matmul::host_bytes(GPU_BLOCKSCALED_MXFP8, 768, 3, 200), mx);
+    ASSERT_EQ(gpu_blockscaled_matmul_host_bytes(GPU_BLOCKSCALED_MXFP8, 768, 3, 200), mx);
+    // F32, dim 33: K 64, 4-byte elements, no scales
+    const uint64_t f32 = 128 * 256 + 128 * 2 * 4 + 128 * 12 + 2 * 12 + 128 * 256;
+    ASSERT_EQ(blockscaled_matmul::host_bytes(GPU_BLOCKSCALED_F32, 33, 2, 1), f32);
 }
 
 TEST(BlockScaledMatmulTest, CWrapper) {

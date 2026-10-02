@@ -109,8 +109,14 @@ product of the block-scaled values, and the caller multiplies it by `g_d × g_q`
   (0% of scales on unit-normalized embeddings, vs 60% with a fixed global of 1.0).
 - Scales round **up** to a representable value, so no element overflows its format. An
   all-zero block stores scale 0 and zero elements.
-- **Non-finite is never stored.** NaN/Inf input is rejected at build, per the repo-wide
-  finite-persistence rule.
+- **Every stored value decodes finite.** NaN/Inf input is rejected at build, per the
+  repo-wide finite-persistence rule, and so is a finite input whose quantized value
+  decodes outside float32: MXFP8 rounds ±3.4028235e38 to 256 × 2^120 = 2^128, which
+  decodes to ±Inf, so the cast fails with "out of range" (the same value is finite in
+  NVFP4). Cell parsing applies the same rule to stored and received cells: a cell with an
+  element whose dequantized value (global × block scale × element, in float32) is not
+  finite is rejected. Only blocks whose largest element code could overflow are scanned.
+  Every accepted cell therefore renders as finite text and parses back.
 
 ## Storage size, 1024-dim
 
@@ -227,13 +233,27 @@ Contract (each point measured on sm_120 with cuBLASLt 13.6):
   within fp32 summation-order tolerance.
 
 Engine state, per `vector_matmul` executor: a CUDA stream, the cuBLASLt handle and
-workspace, the queries on the device, and host and device buffers for one tile. The
-device memory is claimed through `device_memory_governor` before it is allocated. No
+workspace, the queries on the device, and host and device buffers for one tile. No
 dataset is cached; every tile is uploaded.
 
+Memory admission:
+
+- Device memory is claimed through `device_memory_governor` before it is allocated. The
+  `select_k` temporary workspace is allocated per call from the default device resource
+  and is not claimed.
+- The engine's native host memory (`gpu_blockscaled_matmul_host_bytes`: tile staging,
+  score copy, per-row globals and sums, query packing) is reserved against the
+  aggregate's allocation account (`ReserveCapacity`, committed to a `CapacityLease`)
+  before the engine is created.
+- The Go tile buffers (cells, ids, groups, scores and the top-k buffers) are allocated
+  from the same account; the id buffer grows in preflight to hold the batch.
+- Both count in the aggregate's `Size` and are released by `Free`. When the account has
+  no room for either, the executor scores on the CPU, which needs no tile.
+- The engine is created in preflight, so a fill never allocates tile memory.
+
 Dispatch: the compiler reads the session's `gpu_mode` and stores it in the aggregate's
-configuration. An executor uses the engine when `gpu_mode` is on and the build has a
-visible device; otherwise it scores on the CPU. Rows are buffered in a tile of at most
+configuration. An executor uses the engine when `gpu_mode` is on and the process has a
+visible device meeting the baseline below; otherwise it scores on the CPU. Rows are buffered in a tile of at most
 64 MiB (cells plus scores, up to 65,536 rows), scored when the tile is full, and the tile
 is drained before the states are read (final result, merge, intermediate result, spill).
 A tile whose rows all belong to one group (always the case without `GROUP BY`) is scored
@@ -324,7 +344,7 @@ vector_matmul(topk, src_id, src_vec, queries [, options]) → JSON
 | `src_id` | column | the row key: an integer, `char`/`varchar`/`text` or `uuid` column |
 | `src_vec` | column | `vecf8(N)`, `vecf4(N)`, `vecf32(N)`, `vecf16(N)`, `vecbf16(N)`, `vecint8(N)` or `vecuint8(N)`; `vecf64` is rejected |
 | `queries` | constant string or JSON | array of query vectors `[[…], …]`, each of length `N`; converted once to the column's type (quantized for `vecf8`/`vecf4`); for `vecint8`/`vecuint8` every value is an integer in the type's range, otherwise an error |
-| `options` | optional constant JSON string | `"mode": "auto" \| "cpu"`, `"tile_bytes": n`; validated, not used for dispatch, which follows the session's `gpu_mode` |
+| `options` | optional constant string | accepted and not interpreted; dispatch follows the session's `gpu_mode` |
 
 An aggregate: one result per group (one row without `GROUP BY`), of MO's `JSON` type.
 `topk`, `queries` and `options` are constants, prepared parameters or user variables; the
@@ -403,8 +423,12 @@ provided by these functions.
 
 ## Hardware & toolchain
 
-- FP4 needs NVIDIA Blackwell with hardware FP4: `sm_100` (B200) or `sm_120` (GeForce RTX
-  50). MXFP8 block-scaled matmul also runs on Hopper.
+- Supported GPU baseline: compute capability 10.0 or newer (Blackwell: `sm_100` B200,
+  `sm_120` GeForce RTX 50). The MXFP8 (`VEC32_UE8M0`) and NVFP4 (`VEC16_UE4M3`) scale
+  modes start at 10.0; Hopper and older devices are not used, for any format.
+- The visible devices are checked once per process
+  (`gpu_blockscaled_matmul_device_count`), not per call. Engines use only devices meeting
+  the baseline, round-robin; with none, `vector_matmul` scores on the CPU.
 - Toolchain: CUDA ≥ 12.8 and cuBLAS ≥ 12.9 for sm_120. The Pixi GPU profile provides
   CUDA 13.3 and cuBLASLt 13.6, on which everything above was measured (RTX 5070 Laptop,
   sm_120, 8 GB).
@@ -455,9 +479,24 @@ summation-order tolerance.
   string and `uuid` ids, the relational form, prepared parameters, the error cases; and a
   400,000-row table scanned by parallel pipelines (partial states merged by `merge group`),
   where the ids and ranks equal the reference (0 mismatches for `vecf8` and `vecf4`).
+  400,000 rows is about 49 blocks, enough for a single CN to scan with several pipelines
+  (4 group pipelines on the 8-core development machine), which is the topology the merge
+  path needs; the insert takes 1.7 s and each query under 0.4 s.
 - **Multi CN** (`etc/launch-multi-cn`): the BVT passes; on an 8,000,000-row table (above
   the 512-block multi-CN threshold) the plan runs a remote scope on each CN, the partial
   states are serialized to the merging CN, and the result equals the reference.
+- **Finiteness** (`types/vecblock_test.go`): large magnitudes near the float32 maximum,
+  both signs, alone and in mixed blocks, in both formats — the encoder either rejects
+  with "out of range" or the cell parses, every element decodes finite and the text
+  round-trips; ±MaxFloat32 is rejected in MXFP8 and accepted in NVFP4; crafted cells
+  (MXFP8 scale 2^120 with element 256; NVFP4 global × block scale overflowing) are
+  rejected, with a finite neighbour accepted.
+- **Memory admission** (`aggexec/vector_matmul_test.go`, CPU build, shape-only fake engine
+  through the real preflight/fill path under an allocation account): with room, the native
+  host bytes and tile buffers are charged, counted in `Size` and released by `Free` (account
+  and pool back to zero); without room for the native memory, or for the tile after the
+  native memory, no engine is kept (the created one is closed and its charge released) and
+  the result comes from the CPU.
 - **Unit, plain types** (`aggexec/vector_matmul_test.go`): `vecf32`, `vecf16`, `vecbf16`,
   `vecint8`, `vecuint8` against a brute-force dot-product reference; integer queries out
   of range or fractional are rejected. Function resolution and binder tests accept the
@@ -470,7 +509,9 @@ summation-order tolerance.
   rows, 1 and 3 queries; `run_topk` against the full scores of `run` for MXFP8, NVFP4,
   F32, int8 and uint8 (exact kept scores, every row above the `k`-th score kept, ties at
   the `k`-th score flagged with the full column, `k` above the tile size); the C API and
-  its errors.
+  its errors; the device baseline (compute capability 7–9 rejected, 10–12 accepted), the
+  eligible-device count against the visible devices, and `host_bytes` for two shapes
+  computed by hand.
 - **GPU binding** (`pkg/cuvs/blockscaled_matmul_test.go`): engine scores equal the CPU
   kernel (`VecBlockDot`) over the same cells for both formats, dimensions 4–768, 1 and 5
   queries; `RunTopK` against `Run` for MXFP8, NVFP4, int8 and uint8, including tied
@@ -554,6 +595,12 @@ type; normalization changes the ranking, independent of the format.
 - Result = JSON with string ids.
 - CPU dot-product accumulation = fp32 within a 16-element unit, fp64 across units; the
   GPU accumulates in fp32 (cuBLASLt `CUBLAS_COMPUTE_32F`).
-- GPU dispatch follows the session's `gpu_mode` only; the `options` argument is validated
-  and not used for dispatch.
-- Non-finite values are rejected at build.
+- GPU dispatch follows the session's `gpu_mode` only. The `options` argument is kept in
+  the signature and the configuration and is not parsed or checked; a tile size is an
+  internal choice bounded by the allocation account, not a user setting.
+- Non-finite values are rejected at build, including finite inputs that would decode to
+  ±Inf, and cell parsing rejects any cell that decodes to a non-finite value.
+- The GPU engine runs only on compute capability 10.0 or newer, checked once per process;
+  other devices fall back to the CPU.
+- The engine's native host memory and the tile buffers are admitted by the aggregate's
+  allocation account before allocation; a denial falls back to the CPU.

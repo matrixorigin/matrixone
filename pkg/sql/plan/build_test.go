@@ -6928,6 +6928,17 @@ func TestDeleteSelfReferCascadeAcrossForeignKeys(t *testing.T) {
 	requireRecursiveCTESources(t, query)
 }
 
+// TestUpdateChangedRowsBlockScaledVector checks that counting changed rows plans an UPDATE
+// of vecf8/vecf4 columns, which have no equality operator.
+func TestUpdateChangedRowsBlockScaledVector(t *testing.T) {
+	for _, count := range []bool{true, false} {
+		mock := NewMockOptimizer(true)
+		mock.CurrentContext().GetProcess().Base.SessionInfo.CountUpdateChangedRows = count
+		_, err := runOneStmt(mock, t, "UPDATE vecblock_t SET a = '[4,3,2,1]', b = '[1,2,3,4]' WHERE id = 2")
+		require.NoError(t, err, "count changed rows %v", count)
+	}
+}
+
 func TestUpdateSelfReferCascadeUsesModernPlan(t *testing.T) {
 	for _, sql := range []string{
 		"UPDATE self_ref_cascade SET id = 10 WHERE id = 1",
