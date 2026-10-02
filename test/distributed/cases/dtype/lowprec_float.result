@@ -231,4 +231,66 @@ CREATE TABLE kb (id INT, k float8) CLUSTER BY (k);
 not supported: FLOAT8 column 'k' cannot be a cluster by key
 CREATE INDEX ia ON t2 (a);
 not supported: BF16 column 'a' cannot be in index
+CREATE TABLE pp (id INT, b bf16, h float16, e float8, q float4);
+INSERT INTO pp VALUES (1, 0.3, 0.3, 0.3, 0.5), (2, 1.5, 1.5, 1.5, 1.5);
+PREPARE pb FROM 'SELECT id FROM pp WHERE b IN (?, 9) ORDER BY id';
+PREPARE ph FROM 'SELECT id FROM pp WHERE h IN (?, 9) ORDER BY id';
+PREPARE pe FROM 'SELECT id FROM pp WHERE e IN (?, 9) ORDER BY id';
+PREPARE pq FROM 'SELECT id FROM pp WHERE q = ? ORDER BY id';
+PREPARE nb FROM 'SELECT id FROM pp WHERE b NOT IN (?, 9) ORDER BY id';
+PREPARE eb FROM 'SELECT id FROM pp WHERE b = ? ORDER BY id';
+PREPARE lb FROM 'SELECT id FROM pp WHERE b <= ? ORDER BY id';
+SET @v = 0.3;
+EXECUTE pb USING @v;
+➤ id[4,32,0]  𝄀
+1
+EXECUTE ph USING @v;
+➤ id[4,32,0]  𝄀
+1
+EXECUTE pe USING @v;
+➤ id[4,32,0]  𝄀
+1
+EXECUTE nb USING @v;
+➤ id[4,32,0]  𝄀
+2
+EXECUTE eb USING @v;
+➤ id[4,32,0]  𝄀
+1
+EXECUTE lb USING @v;
+➤ id[4,32,0]  𝄀
+1
+SET @v = '0.3';
+EXECUTE pb USING @v;
+➤ id[4,32,0]  𝄀
+1
+EXECUTE eb USING @v;
+➤ id[4,32,0]  𝄀
+1
+SET @v = 0.5;
+EXECUTE pq USING @v;
+➤ id[4,32,0]  𝄀
+1
+SET @v = 1.5;
+EXECUTE pb USING @v;
+➤ id[4,32,0]  𝄀
+2
+EXECUTE nb USING @v;
+➤ id[4,32,0]  𝄀
+1
+SET @v = 1e30;
+EXECUTE pb USING @v;
+➤ id[4,32,0]
+EXECUTE eb USING @v;
+➤ id[4,32,0]
+EXECUTE lb USING @v;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+DEALLOCATE PREPARE pb;
+DEALLOCATE PREPARE ph;
+DEALLOCATE PREPARE pe;
+DEALLOCATE PREPARE pq;
+DEALLOCATE PREPARE nb;
+DEALLOCATE PREPARE eb;
+DEALLOCATE PREPARE lb;
 DROP DATABASE lowprec_float;

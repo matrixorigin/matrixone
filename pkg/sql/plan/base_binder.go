@@ -7225,8 +7225,8 @@ func bindFuncExprImplByPlanExpr(
 					orExprList = append(orExprList, rightVal)
 					continue
 				}
-				// bf16/float16/float8/float4 have no IN kernel of their own; their items stay in
-				// the OR list, whose equalities compare as float32
+				// bf16/float16/float8/float4 items stay in the OR list, whose equalities
+				// narrow in-range literals to the column type
 				if partitionIn || exactIntegerList || (!typLeft.Oid.IsLowPrecisionFloat() && checkNoNeedCast(ctx, makeTypeByPlan2Expr(rightVal), typLeft, rightVal)) {
 					inExpr := rightVal
 					// Keep the partition-IN coercion path unchanged. Ordinary IN can
