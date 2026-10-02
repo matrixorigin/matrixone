@@ -299,7 +299,8 @@ only when it is stored into a `vecf8`/`vecf4` column (assignment cast).
 | `ORDER BY`, window `ORDER BY` | as for `vecf32`: by the dequantized values, element-wise |
 | `GROUP BY`, `DISTINCT`, window `PARTITION BY` | by cell bytes (the encoding of a given input is deterministic) |
 | `subvector` | not supported (as for the other narrow vector types) |
-| comparison operators (`=`, `<`, `IN`, …), `hex`, `to_base64` | not supported, unlike `vecf32`: a quantized value rarely equals a literal written in full precision (`'[0.3, …]'` is stored as 0.3125 in `vecf8`), and the encodings would show the dequantized bytes, not the cell. `CAST(… AS vecf32(N))` gives them explicitly |
+| comparison operators (`=`, `<>`, `<`, `<=`, `>`, `>=`, `<=>`, `IN`, `BETWEEN`) | as for `vecbf16`: a text literal is quantized to the column's type, as a stored value is, so a row matches the text it was inserted from (`'[3000, -12, 0.001, 1000000]'` matches the cell that displays as `[3072, -16, 0, 983040]`); cells compare by their dequantized values, element-wise |
+| `hex`, `to_base64` | not supported, as for the other narrow vector types (`vecf32` only) |
 | primary key, partition key, secondary/unique index, vector index | rejected at DDL |
 | `LOAD` | CSV text `"[…]"`; Parquet `LIST<FLOAT/DOUBLE>` and text columns, quantized per row |
 

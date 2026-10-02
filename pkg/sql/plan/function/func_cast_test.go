@@ -5576,7 +5576,7 @@ func TestCastArrayDimensionMismatch(t *testing.T) {
 
 // TestCastLowPrecFloatMatrix broadens #20567 cast coverage across the source types that
 // convert TO a low-precision float, and the targets a low-precision float converts to,
-// so each branch of anyToLowPrecFloat / lowPrecFloatToOthers is exercised.
+// so each branch of anyToLowPrecFloat and of the float32 widening in newCast is exercised.
 func TestCastLowPrecFloatMatrix(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	bf16 := types.T_bf16.ToType()
@@ -5611,7 +5611,7 @@ func TestCastLowPrecFloatMatrix(t *testing.T) {
 		require.True(t, ok, info)
 	})
 
-	// float8 -> targets (lowPrecFloatToOthers widens through float32).
+	// float8 -> targets (newCast widens to float32 and casts that).
 	tgtRun := func(name string, target types.Type, zero, want any) {
 		t.Run("float8_to_"+name, func(t *testing.T) {
 			tcc := NewFunctionTestCase(proc,

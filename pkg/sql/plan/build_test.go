@@ -6977,8 +6977,8 @@ func TestUpdateChangedRowsBlockScaledVector(t *testing.T) {
 
 // TestLowPrecisionFloatPlans checks that a bf16 column binds where it has no overload of
 // its own by widening to float32 (RANGE frames, aggregates, JSON and percentile functions),
-// that vecf8/vecf4 widen to vecf32 only for the allowlisted functions, and that their
-// comparisons and byte encodings stay rejected.
+// that vecf8/vecf4 widen to vecf32 for the allowlisted functions and compare as the other
+// narrow vector types, and that their byte encodings stay rejected.
 func TestLowPrecisionFloatPlans(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	for _, sql := range []string{
@@ -7001,11 +7001,17 @@ func TestLowPrecisionFloatPlans(t *testing.T) {
 		_, err := runOneStmt(mock, t, sql)
 		require.NoError(t, err, sql)
 	}
-	// comparisons and byte encodings stay rejected
+	// comparisons as for the other narrow vector types; hex/to_base64 are vecf32-only
 	for _, sql := range []string{
 		"SELECT id FROM vecblock_t WHERE a = a",
-		"SELECT id FROM vecblock_t WHERE a < '[1,1,1,1]'",
-		"SELECT id FROM vecblock_t WHERE a IN (a, b)",
+		"SELECT id FROM vecblock_t WHERE a < '[1,1,1,1]' OR b >= '[0,0,0,1]'",
+		"SELECT id FROM vecblock_t WHERE a IN ('[1,0,0,0]', '[0,1,0,0]')",
+		"SELECT id FROM vecblock_t WHERE b BETWEEN '[0,0,0,0]' AND '[1,1,1,1]'",
+	} {
+		_, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, sql)
+	}
+	for _, sql := range []string{
 		"SELECT HEX(a) FROM vecblock_t",
 		"SELECT TO_BASE64(b) FROM vecblock_t",
 	} {

@@ -266,6 +266,22 @@ func integerArgumentCast[R int64 | uint64](source *vector.Vector, result *vector
 		return integerArgumentRows(source, result, proc, length, selectList, func(v float32) (integerArgumentValue, error) { return realIntegerArgument(float64(v), truncate), nil })
 	case types.T_float64:
 		return integerArgumentRows(source, result, proc, length, selectList, func(v float64) (integerArgumentValue, error) { return realIntegerArgument(v, truncate), nil })
+	case types.T_bf16:
+		return integerArgumentRows(source, result, proc, length, selectList, func(v types.BF16) (integerArgumentValue, error) {
+			return realIntegerArgument(float64(v.ToFloat32()), truncate), nil
+		})
+	case types.T_float16:
+		return integerArgumentRows(source, result, proc, length, selectList, func(v types.Float16) (integerArgumentValue, error) {
+			return realIntegerArgument(float64(v.ToFloat32()), truncate), nil
+		})
+	case types.T_float8:
+		return integerArgumentRows(source, result, proc, length, selectList, func(v types.Float8) (integerArgumentValue, error) {
+			return realIntegerArgument(float64(v.ToFloat32()), truncate), nil
+		})
+	case types.T_float4:
+		return integerArgumentRows(source, result, proc, length, selectList, func(v types.Float4) (integerArgumentValue, error) {
+			return realIntegerArgument(float64(v.ToFloat32()), truncate), nil
+		})
 	case types.T_decimal64:
 		return integerArgumentRows(source, result, proc, length, selectList, func(v types.Decimal64) (integerArgumentValue, error) {
 			return decimal64IntegerArgument(v, source.GetType().Scale)

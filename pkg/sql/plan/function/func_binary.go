@@ -7097,6 +7097,9 @@ func formatNumericValueAt(v *vector.Vector, row uint64) (value string, exact, is
 		return strconv.FormatUint(vector.GetFixedAtNoTypeCheck[uint64](v, idx), 10), true, false, nil
 	case types.T_float32:
 		return strconv.FormatFloat(float64(vector.GetFixedAtNoTypeCheck[float32](v, idx)), 'g', -1, 64), false, false, nil
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		f, _ := vector.GetLowPrecisionFloatAt(v, idx)
+		return strconv.FormatFloat(float64(f), 'g', -1, 64), false, false, nil
 	case types.T_float64:
 		return strconv.FormatFloat(vector.GetFixedAtNoTypeCheck[float64](v, idx), 'g', -1, 64), false, false, nil
 	case types.T_decimal64:

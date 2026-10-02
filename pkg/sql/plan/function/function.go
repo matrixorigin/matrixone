@@ -844,9 +844,8 @@ const (
 
 // blockScaledWideningFunctions are the functions that take vecf8/vecf4 arguments
 // dequantized to vecf32: NULL handling and conditionals, element-wise math and JSON.
-// Comparisons stay rejected (a quantized column rarely equals a literal written in full
-// precision) and so do hex/to_base64 (they would encode the dequantized bytes, not the
-// stored cell); CAST(... AS vecf32(N)) gives them explicitly.
+// Comparisons have kernels of their own; hex, to_base64 and subvector are vecf32-only, as
+// for the other narrow vector types.
 var blockScaledWideningFunctions = map[int]bool{
 	COALESCE: true, CASE: true, GREATEST: true, LEAST: true,
 	ABS: true, SQRT: true, SUMMATION: true, L1_NORM: true, L2_NORM: true,

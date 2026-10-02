@@ -91,14 +91,21 @@ select id, abs(a), sqrt(abs(b)) from t where id = 1;
 select id, coalesce(a, '[0,0,0,0]'), greatest(a, b), case when id = 1 then a else b end from t where id in (1, 3) order by id;
 select json_object('a', a), json_array(b) from t where id = 1;
 
--- not supported: comparisons (a quantized value rarely equals a full-precision literal)
--- and byte encodings of the dequantized values; CAST(... AS vecf32(N)) gives them explicitly
-select id from t where a < '[1,1,1,1]';
+-- comparisons as for the other narrow vector types: a literal is quantized to the column's
+-- type, as the stored value was, and cells compare by their dequantized values element-wise
+select id from t where a = '[3000,-12,0.001,1000000]';
+select id from t where b = '[3000,-12,0.001,1000000]';
+select id from t where a = '[3072,-16,0,983040]';
+select id from t where a < '[1,1,1,1]' order by id;
+select id from t where b >= '[1,-3,0,6]' order by id;
+select id from t where a in ('[1,-3,0,6]', '[4,3,2,1]') order by id;
+select id from t where a = a order by id;
+select id from t where b between '[0,0,0,0]' and '[2,2,2,2]' order by id;
+
+-- not supported (vecf32-only, as for the other narrow vector types)
 select hex(a) from t;
-select id from t where cast(a as vecf32(4)) = cast(a as vecf32(4)) order by id;
 select sum(a) from t;
 select avg(b) from t;
-select id from t where a = a;
 create index idx on t(a);
 create unique index uidx on t(b);
 create table t2 (a vecf8(4) primary key);

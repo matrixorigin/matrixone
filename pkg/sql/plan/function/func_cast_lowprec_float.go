@@ -200,23 +200,6 @@ func strToLowPrecFloat[Tr types.LowPrecFloat](
 	return nil
 }
 
-// lowPrecFloatToOthers widens a low-precision float source to a float32 temp vector,
-// then reuses the float32 target machinery for every non-low-precision target. The
-// decimal256 target is not handled by float32ToOthers, so it is routed to
-// castToDecimal256 directly.
-func lowPrecFloatToOthers(proc *process.Process, from *vector.Vector, toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, mode castMode) error {
-	tmp := vector.NewVec(types.T_float32.ToType())
-	defer tmp.Free(proc.Mp())
-	if err := materializeLowPrecAsFloat32(proc.Ctx, from, tmp, length, proc.Mp()); err != nil {
-		return err
-	}
-	if toType.Oid == types.T_decimal256 {
-		return castToDecimal256(proc, tmp, toType, result, length, selectList, mode)
-	}
-	src := vector.GenerateFunctionFixedTypeParameter[float32](tmp)
-	return float32ToOthers(proc, src, toType, result, length, selectList, mode.strictStringWidth())
-}
-
 // materializeLowPrecAsFloat32 appends every source value, widened to float32, to tmp.
 func materializeLowPrecAsFloat32(ctx context.Context, from, tmp *vector.Vector, length int, mp *mpool.MPool) error {
 	switch from.GetType().Oid {

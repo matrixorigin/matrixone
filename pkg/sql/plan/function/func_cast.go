@@ -1037,7 +1037,14 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		return castToLowPrecFloat(parameters, *toType, result, proc, length, selectList)
 	}
 	if isLowPrecFloat(fromType.Oid) {
-		return lowPrecFloatToOthers(proc, from, *toType, result, length, selectList, mode)
+		// widen to float32 and cast it as a float32 value, so every float32 rule of this
+		// cast mode (explicit, assignment, decimal) applies
+		tmp := vector.NewVec(types.T_float32.ToType())
+		defer tmp.Free(proc.Mp())
+		if err := materializeLowPrecAsFloat32(proc.Ctx, from, tmp, length, proc.Mp()); err != nil {
+			return err
+		}
+		return newCast([]*vector.Vector{tmp, parameters[1]}, result, proc, length, selectList, mode, allowTrailingSpaceTrim)
 	}
 	// vecf8/vecf4 cells are block-scaled, not typed element arrays; route them before
 	// the generic array paths, which decode fixed-size elements. A NULL literal (T_any)

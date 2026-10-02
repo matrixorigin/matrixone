@@ -726,7 +726,8 @@ func otherCompareOperatorSupports(typ1, typ2 types.Type) bool {
 	case types.T_uuid:
 	case types.T_Rowid:
 	case types.T_array_float32, types.T_array_float64:
-	case types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+	case types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4:
 	case types.T_year:
 	default:
 		return false
@@ -769,7 +770,8 @@ func equalAndNotEqualOperatorSupports(typ1, typ2 types.Type) bool {
 	case types.T_uuid:
 	case types.T_Rowid:
 	case types.T_array_float32, types.T_array_float64:
-	case types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+	case types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4:
 	case types.T_enum:
 	case types.T_year:
 	default:
@@ -1115,6 +1117,23 @@ func float32ComparisonNormalizers(leftScale, rightScale int32) (
 	return left, right, leftScale > 0 || rightScale > 0
 }
 
+// blockScaledCompare compares two vecf8 or vecf4 operands of the same type by their
+// dequantized values, element-wise as for the other vector types; done is false for any
+// other pair. A string literal is cast to the column's type before, so it is quantized as
+// a stored value is.
+func blockScaledCompare(parameters []*vector.Vector, rs *vector.FunctionResult[bool], proc *process.Process, length int,
+	selectList *FunctionSelectList, nullSafe bool, cmp func(c int) bool) (done bool, err error) {
+	oid := parameters[0].GetType().Oid
+	if !oid.IsBlockScaledArray() || parameters[1].GetType().Oid != oid {
+		return false, nil
+	}
+	f := func(v1, v2 []byte) bool { return cmp(types.CompareBlockScaledFromBytes(v1, v2, false)) }
+	if nullSafe {
+		return true, opBinaryBytesBytesToFixedNullSafe(parameters, rs, proc, length, f, selectList)
+	}
+	return true, opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, f, selectList)
+}
+
 // lowPrecisionCompare compares two bf16, float16, float8 or float4 operands of the same
 // type by their float32 values; done is false for any other pair. Binding widens these
 // operands to float32, so this covers plans in which both sides keep the column type.
@@ -1148,6 +1167,9 @@ func lowPrecisionCompareOf[T types.LowPrecFloat](parameters []*vector.Vector, rs
 func nullSafeEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
+	if done, err := blockScaledCompare(parameters, rs, proc, length, selectList, true, func(c int) bool { return c == 0 }); done {
+		return err
+	}
 	if done, err := lowPrecisionCompare(parameters, rs, proc, length, selectList, true, func(a, b float32) bool { return a == b }); done {
 		return err
 	}
@@ -1319,6 +1341,9 @@ func nullSafeEqualFn(parameters []*vector.Vector, result vector.FunctionResultWr
 func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
+	if done, err := blockScaledCompare(parameters, rs, proc, length, selectList, false, func(c int) bool { return c == 0 }); done {
+		return err
+	}
 	if done, err := lowPrecisionCompare(parameters, rs, proc, length, selectList, false, func(a, b float32) bool { return a == b }); done {
 		return err
 	}
@@ -1746,6 +1771,9 @@ func valueDec256Compare(
 func greatThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
+	if done, err := blockScaledCompare(parameters, rs, proc, length, selectList, false, func(c int) bool { return c > 0 }); done {
+		return err
+	}
 	if done, err := lowPrecisionCompare(parameters, rs, proc, length, selectList, false, func(a, b float32) bool { return a > b }); done {
 		return err
 	}
@@ -1915,6 +1943,9 @@ func greatThanFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
+	if done, err := blockScaledCompare(parameters, rs, proc, length, selectList, false, func(c int) bool { return c >= 0 }); done {
+		return err
+	}
 	if done, err := lowPrecisionCompare(parameters, rs, proc, length, selectList, false, func(a, b float32) bool { return a >= b }); done {
 		return err
 	}
@@ -2084,6 +2115,9 @@ func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
+	if done, err := blockScaledCompare(parameters, rs, proc, length, selectList, false, func(c int) bool { return c != 0 }); done {
+		return err
+	}
 	if done, err := lowPrecisionCompare(parameters, rs, proc, length, selectList, false, func(a, b float32) bool { return a != b }); done {
 		return err
 	}
@@ -2259,6 +2293,9 @@ func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 func lessThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
+	if done, err := blockScaledCompare(parameters, rs, proc, length, selectList, false, func(c int) bool { return c < 0 }); done {
+		return err
+	}
 	if done, err := lowPrecisionCompare(parameters, rs, proc, length, selectList, false, func(a, b float32) bool { return a < b }); done {
 		return err
 	}
@@ -2428,6 +2465,9 @@ func lessThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 func lessEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
+	if done, err := blockScaledCompare(parameters, rs, proc, length, selectList, false, func(c int) bool { return c <= 0 }); done {
+		return err
+	}
 	if done, err := lowPrecisionCompare(parameters, rs, proc, length, selectList, false, func(a, b float32) bool { return a <= b }); done {
 		return err
 	}

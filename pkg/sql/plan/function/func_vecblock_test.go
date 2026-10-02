@@ -95,8 +95,6 @@ func TestVecBlockFunctionResolution(t *testing.T) {
 		}{
 			{"hex", []types.Type{vb}},
 			{"to_base64", []types.Type{vb}},
-			{"=", []types.Type{vb, vb}},
-			{"<", []types.Type{vb, vb}},
 			{"sum", []types.Type{vb}},
 			{"avg", []types.Type{vb}},
 			{"max", []types.Type{vb}},
