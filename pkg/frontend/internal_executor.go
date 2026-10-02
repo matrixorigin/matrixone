@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"sync"
 
@@ -67,6 +68,43 @@ func applyOverride(ctx context.Context, sess *Session, opts ie.SessionOverrideOp
 			acc.SetDefaultRoleID(*opts.DefaultRoleId)
 		}
 	}
+	return nil
+}
+
+// Overrides carry the selected numeric role, which can differ from the role
+// in the login name after SET ROLE. Bind policy names after both override layers.
+func bindInternalSessionPrincipal(ctx context.Context, sess *Session) error {
+	acc := sess.GetTenantInfo()
+	bh := sess.GetBackgroundExec(ctx)
+	defer bh.Close()
+	accountID := acc.GetTenantID()
+	accountName := sysAccountName
+	if accountID != sysAccountID {
+		sysCtx := defines.AttachAccountId(ctx, sysAccountID)
+		bh.ClearExecResultSet()
+		if err := bh.Exec(sysCtx, fmt.Sprintf("select account_name from mo_catalog.mo_account where account_id = %d", accountID)); err != nil {
+			return err
+		}
+		rows, err := getResultSet(sysCtx, bh)
+		if err != nil {
+			return err
+		}
+		if !execResultArrayHasData(rows) {
+			return moerr.NewInternalErrorf(ctx, "there is no account id %d", accountID)
+		}
+		accountName, err = rows[0].GetString(sysCtx, 0, 0)
+		if err != nil {
+			return err
+		}
+	}
+	roleName, err := getRoleNameByIDWithBackgroundExec(defines.AttachAccountId(ctx, accountID), bh, acc.GetDefaultRoleID())
+	if err != nil {
+		return fmt.Errorf("bind internal principal for account %d: %w", accountID, err)
+	}
+	acc.mu.Lock()
+	acc.Tenant = accountName
+	acc.DefaultRole = roleName
+	acc.mu.Unlock()
 	return nil
 }
 
@@ -255,6 +293,13 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 	//make sure init tasks can see the prev task's data
 	now, _ := runtime.ServiceRuntime(ie.service).Clock().Now()
 	sess.lastCommitTS = now
+
+	if ie.baseSessOpts.Username != nil || opts.Username != nil {
+		if err := bindInternalSessionPrincipal(ctx, sess); err != nil {
+			sess.Close()
+			return nil, err
+		}
+	}
 
 	sess.initLogger()
 	return sess, nil

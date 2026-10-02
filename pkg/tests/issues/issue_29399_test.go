@@ -26,10 +26,127 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestIssue29399SQLTaskDefinerAuthorization(t *testing.T) {
+	runAuthenticatedClusterTest(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
+		defer cancel()
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		open := func(user string) *sql.DB {
+			db, err := sql.Open("mysql", fmt.Sprintf("%s:111@tcp(127.0.0.1:%d)/", user, cn.GetServiceConfig().CN.Frontend.Port))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, db.Close()) })
+			return db
+		}
+		sys := open("dump")
+		const account = "issue_29399_task_definer"
+		defer func() {
+			cleanup, done := context.WithTimeout(context.Background(), 30*time.Second)
+			defer done()
+			execSQLRequire(t, cleanup, sys, "drop account if exists "+account)
+		}()
+		execSQLRequire(t, ctx, sys, "create account "+account+" admin_name 'admin' identified by '111'")
+		var accountID uint32
+		require.NoError(t, sys.QueryRowContext(ctx, "select account_id from mo_catalog.mo_account where account_name=?", account).Scan(&accountID))
+		admin := open(account + "#admin#accountadmin")
+		for _, statement := range []string{
+			"create database app", "create table app.t(id int)", "insert into app.t values(1)",
+			"create role reader", "grant connect on account * to reader", "grant reader to admin",
+			"create user ordinary identified by '111' default role reader", "grant reader to ordinary",
+			"grant select on table app.t to reader",
+		} {
+			execSQLRequire(t, ctx, admin, statement)
+		}
+		const revoke = "revoke select on table app.t from reader"
+		const grant = "grant select on table app.t to reader"
+		grantCount := func(want int) {
+			var got int
+			require.NoError(t, admin.QueryRowContext(ctx,
+				"select count(*) from mo_catalog.mo_role_privs where role_name='reader' and obj_type='table' and privilege_name='select'").Scan(&got))
+			require.Equal(t, want, got)
+		}
+		execSQLRequire(t, ctx, admin, revoke)
+		grantCount(0)
+		execSQLRequire(t, ctx, admin, grant)
+		execSQLRequire(t, ctx, admin, "create task task_insert as begin insert into app.t values(2); end;")
+		execSQLRequire(t, ctx, admin, "execute task task_insert")
+		var count int
+		require.NoError(t, admin.QueryRowContext(ctx, "select count(*) from app.t").Scan(&count))
+		require.Equal(t, 2, count)
+		t.Run("accountadmin task changes the actual grant", func(t *testing.T) {
+			execSQLRequire(t, ctx, admin, "create task task_revoke as begin "+revoke+"; end;")
+			execSQLRequire(t, ctx, admin, "execute task task_revoke")
+			grantCount(0)
+			execSQLRequire(t, ctx, admin, grant)
+		})
+		t.Run("SET ROLE supersedes the login role", func(t *testing.T) {
+			conn, err := open(account + "#admin#reader").Conn(ctx)
+			require.NoError(t, err)
+			defer conn.Close()
+			_, err = conn.ExecContext(ctx, "set role accountadmin")
+			require.NoError(t, err)
+			_, err = conn.ExecContext(ctx, "create task task_selected_role as begin "+revoke+"; end;")
+			require.NoError(t, err)
+			var storedAccount, storedRole uint32
+			var creator string
+			require.NoError(t, sys.QueryRowContext(ctx, "select account_id, creator, creator_role_id from mo_task.sql_task where task_name='task_selected_role'").Scan(&storedAccount, &creator, &storedRole))
+			require.Equal(t, accountID, storedAccount)
+			require.Equal(t, uint32(2), storedRole)
+			require.Equal(t, account+"#admin#reader", creator, "login role must remain distinct from selected role")
+			_, err = conn.ExecContext(ctx, "execute task task_selected_role")
+			require.NoError(t, err)
+			grantCount(0)
+			execSQLRequire(t, ctx, admin, grant)
+		})
+		var adminID, ordinaryID, readerID uint32
+		require.NoError(t, admin.QueryRowContext(ctx, "select user_id from mo_catalog.mo_user where user_name='admin'").Scan(&adminID))
+		require.NoError(t, admin.QueryRowContext(ctx, "select user_id from mo_catalog.mo_user where user_name='ordinary'").Scan(&ordinaryID))
+		require.NoError(t, admin.QueryRowContext(ctx, "select role_id from mo_catalog.mo_role where role_name='reader'").Scan(&readerID))
+		internal := frontend.NewInternalExecutor(cn.ServiceID())
+		for _, tc := range []struct {
+			name, creator string
+			user, role    uint32
+			allowed       bool
+		}{
+			{"bare username with explicit IDs", "admin", adminID, 2, true},
+			{"ordinary role", account + "#ordinary#reader", ordinaryID, readerID, false},
+			{"login administrator with selected ordinary role", account + "#admin#accountadmin", adminID, readerID, false},
+			{"administrator role with mismatched username and user ID", account + "#ordinary#accountadmin", adminID, 2, false},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				task := taskservice.SQLTask{AccountID: accountID, Creator: tc.creator, CreatorUserID: tc.user, CreatorRoleID: tc.role}
+				err := internal.Exec(defines.AttachAccount(ctx, accountID, tc.user, tc.role), revoke, taskservice.DefinerOpts(task))
+				if tc.allowed {
+					require.NoError(t, err)
+					grantCount(0)
+					execSQLRequire(t, ctx, admin, grant)
+				} else {
+					require.ErrorContains(t, err, "do not have privilege")
+					grantCount(1)
+				}
+			})
+		}
+		t.Run("current membership remains required", func(t *testing.T) {
+			task := taskservice.SQLTask{AccountID: accountID, Creator: account + "#ordinary#reader", CreatorUserID: ordinaryID, CreatorRoleID: readerID}
+			definerCtx := defines.AttachAccount(ctx, accountID, ordinaryID, readerID)
+			opts := taskservice.DefinerOpts(task)
+			result := internal.Query(definerCtx, "select count(*) from app.t", opts)
+			require.NoError(t, result.Error())
+			got, err := result.GetUint64(ctx, 0, 0)
+			require.NoError(t, err)
+			require.Equal(t, uint64(2), got)
+			execSQLRequire(t, ctx, admin, "revoke reader from ordinary")
+			require.ErrorContains(t, internal.Query(definerCtx, "select count(*) from app.t", opts).Error(), "do not have privilege")
+		})
+	})
+}
 
 func TestIssue29399AccountRestoreRollsBackInvalidPrivileges(t *testing.T) {
 	runAuthenticatedClusterTest(t, func(c embed.Cluster) {

@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -52,6 +53,11 @@ func TestIe(t *testing.T) {
 			ctx := context.TODO()
 			pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 			setPu("", pu)
+			bh := &backgroundExecTest{}
+			bh.init()
+			bh.sql2result[getSqlForRoleNameOfRoleId(0)] = newMrsForRestoreStringRows([]string{"role_name"}, [][]interface{}{{moAdminRoleName}})
+			stub := gostub.StubFunc(&NewBackgroundExec, bh)
+			defer stub.Reset()
 			executor := newIe(sid)
 			executor.ApplySessionOverride(ie.NewOptsBuilder().Username("dump").Finish())
 			sess, err := executor.newCmdSession(ctx, ie.NewOptsBuilder().Database("mo_catalog").Internal(true).Finish())
@@ -72,6 +78,15 @@ func TestIe(t *testing.T) {
 func TestInternalExecutorAuthorizationIdentity(t *testing.T) {
 	runtime.RunTest("", func(rt runtime.Runtime) {
 		setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result["select account_name from mo_catalog.mo_account where account_id = 10"] = newMrsForRestoreStringRows([]string{"account_name"}, [][]interface{}{{"tenant"}})
+		bh.sql2result[getSqlForRoleNameOfRoleId(43)] = newMrsForRestoreStringRows([]string{"role_name"}, [][]interface{}{{"selected_writer"}})
+		bh.sql2result[getSqlForRoleNameOfRoleId(0)] = newMrsForRestoreStringRows([]string{"role_name"}, [][]interface{}{{moAdminRoleName}})
+		bh.sql2result["select account_name from mo_catalog.mo_account where account_id = 99"] = newMrsForRestoreStringRows([]string{"account_name"}, nil)
+		bh.sql2result[getSqlForRoleNameOfRoleId(99)] = newMrsForRestoreStringRows([]string{"role_name"}, nil)
+		stub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer stub.Reset()
 		for _, username := range []string{"definer", "tenant:definer", "tenant:definer:writer", "tenant#definer#writer", "tenant%3Adefiner%3Awriter", "tenant:definer:writer?label=value"} {
 			t.Run(username, func(t *testing.T) {
 				executor := newIe("")
@@ -87,6 +102,8 @@ func TestInternalExecutorAuthorizationIdentity(t *testing.T) {
 				require.Equal(t, uint32(10), principal.GetTenantID())
 				require.Equal(t, uint32(42), principal.GetUserID())
 				require.Equal(t, uint32(43), principal.GetDefaultRoleID())
+				require.Equal(t, "tenant", principal.GetTenant())
+				require.Equal(t, "selected_writer", principal.GetDefaultRole(), "selected numeric role, not login role")
 				require.Contains(t, getSqlForActiveRolesForAuthorization(principal, false), "u.user_name = 'definer'")
 			})
 		}
@@ -115,6 +132,22 @@ func TestInternalExecutorAuthorizationIdentity(t *testing.T) {
 					require.ErrorContains(t, executor.Query(t.Context(), "select 1", opts).Error(), "invalid user name")
 				})
 			}
+		}
+		for _, tc := range []struct {
+			name      string
+			accountID uint32
+			roleID    uint32
+			errorText string
+		}{
+			{"missing account", 99, 43, "there is no account id 99"},
+			{"missing selected role", 10, 99, "there is no role id 99"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				executor := newIe("")
+				opts := ie.NewOptsBuilder().Username("tenant:definer:writer").AccountId(tc.accountID).DefaultRoleId(tc.roleID).Finish()
+				require.ErrorContains(t, executor.Exec(t.Context(), "select 1", opts), tc.errorText)
+				require.ErrorContains(t, executor.Query(t.Context(), "select 1", opts).Error(), tc.errorText)
+			})
 		}
 	})
 }
