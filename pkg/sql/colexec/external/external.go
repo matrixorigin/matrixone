@@ -1232,6 +1232,7 @@ func isLoadNumericZeroFillType(id types.T) bool {
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
+		types.T_bf16, types.T_float16, types.T_float8, types.T_float4,
 		types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		return true
 	default:
@@ -1244,6 +1245,7 @@ func isLoadNumericAdjustedValueType(id types.T) bool {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
+		types.T_bf16, types.T_float16, types.T_float8, types.T_float4,
 		types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		return true
 	default:
@@ -1347,13 +1349,13 @@ func appendLoadEmptyNumericZero(vec *vector.Vector, id types.T, asBytes bool, mp
 func appendLowPrecFloatFromFloat32(vec *vector.Vector, v float32, mp *mpool.MPool) error {
 	switch vec.GetType().Oid {
 	case types.T_bf16:
-		return vector.AppendFixed(vec, types.BF16FromFloat32(v), false, mp)
+		return vector.AppendFixed(vec, types.CanonicalLowPrecFloat(types.BF16FromFloat32(v)), false, mp)
 	case types.T_float16:
-		return vector.AppendFixed(vec, types.Float16FromFloat32(v), false, mp)
+		return vector.AppendFixed(vec, types.CanonicalLowPrecFloat(types.Float16FromFloat32(v)), false, mp)
 	case types.T_float8:
-		return vector.AppendFixed(vec, types.Float8FromFloat32(v), false, mp)
+		return vector.AppendFixed(vec, types.CanonicalLowPrecFloat(types.Float8FromFloat32(v)), false, mp)
 	case types.T_float4:
-		return vector.AppendFixed(vec, types.Float4FromFloat32(v), false, mp)
+		return vector.AppendFixed(vec, types.CanonicalLowPrecFloat(types.Float4FromFloat32(v)), false, mp)
 	}
 	return moerr.NewInternalErrorNoCtxf("not a low-precision float: %v", vec.GetType().Oid)
 }

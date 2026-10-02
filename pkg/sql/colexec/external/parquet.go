@@ -1388,6 +1388,20 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				return parquetValueToFloat32(proc.Ctx, st, v)
 			})
 		}
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		if !isParquetFloatConvertibleSource(st) {
+			break
+		}
+		switch oid := types.T(dt.Id); oid {
+		case types.T_bf16:
+			mp.mapper = parquetLowPrecFloatMapper(st, oid, types.BF16FromFloat32)
+		case types.T_float16:
+			mp.mapper = parquetLowPrecFloatMapper(st, oid, types.Float16FromFloat32)
+		case types.T_float8:
+			mp.mapper = parquetLowPrecFloatMapper(st, oid, types.Float8FromFloat32)
+		case types.T_float4:
+			mp.mapper = parquetLowPrecFloatMapper(st, oid, types.Float4FromFloat32)
+		}
 	case types.T_float64:
 		if st.Kind() == parquet.Boolean {
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
@@ -3352,6 +3366,24 @@ func isParquetIntegerSource(st parquet.Type, includeBoolean bool) bool {
 func isPlainOrSignedIntegerLogical(st parquet.Type) bool {
 	lt := st.LogicalType()
 	return lt == nil || (lt.Integer != nil && lt.Integer.IsSigned)
+}
+
+// parquetLowPrecFloatMapper loads a numeric parquet column into a bf16, float16, float8 or
+// float4 column through float32, with the range and finiteness checks of a SQL cast.
+func parquetLowPrecFloatMapper[T types.LowPrecFloat](st parquet.Type, oid types.T, ctor func(float32) T) func(*columnMapper, parquet.Page, *process.Process, *vector.Vector) error {
+	return func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+		var zero T
+		return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, zero, func(v parquet.Value) (T, error) {
+			f, err := parquetValueToFloat32(proc.Ctx, st, v)
+			if err != nil {
+				return zero, err
+			}
+			if err := types.RejectNonFiniteNarrowFloat(f, oid); err != nil {
+				return zero, err
+			}
+			return types.CanonicalLowPrecFloat(ctor(f)), nil
+		})
+	}
 }
 
 func isParquetFloatConvertibleSource(st parquet.Type) bool {

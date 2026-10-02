@@ -108,6 +108,14 @@ func newCompareFor(typ types.Type, desc, nullsLast, sqlOrder bool) Compare {
 			return newCompare(types.Float64OrderDescCompare, genericCopy[float64], nullsLast)
 		}
 		return newCompare(types.Float64OrderAscCompare, genericCopy[float64], nullsLast)
+	case types.T_bf16:
+		return newCompare(lowPrecisionCompare[types.BF16](desc), valueCopy[types.BF16], nullsLast)
+	case types.T_float16:
+		return newCompare(lowPrecisionCompare[types.Float16](desc), valueCopy[types.Float16], nullsLast)
+	case types.T_float8:
+		return newCompare(lowPrecisionCompare[types.Float8](desc), valueCopy[types.Float8], nullsLast)
+	case types.T_float4:
+		return newCompare(lowPrecisionCompare[types.Float4](desc), valueCopy[types.Float4], nullsLast)
 	case types.T_date:
 		if desc {
 			return newCompare(types.GenericDescCompare[types.Date], genericCopy[types.Date], nullsLast)
@@ -238,6 +246,19 @@ func rowidCopy(vecDst, vecSrc []types.Rowid, dst, src int64) {
 }
 
 func blockidCopy(vecDst, vecSrc []types.Blockid, dst, src int64) {
+	vecDst[dst] = vecSrc[src]
+}
+
+// lowPrecisionCompare orders bf16, float16, float8 and float4 values by their float32
+// value, with the float32 ORDER BY relation (NaNs are peers and sort last).
+func lowPrecisionCompare[T interface{ ToFloat32() float32 }](desc bool) func(T, T) int {
+	if desc {
+		return func(x, y T) int { return types.Float32OrderDescCompare(x.ToFloat32(), y.ToFloat32()) }
+	}
+	return func(x, y T) int { return types.Float32OrderAscCompare(x.ToFloat32(), y.ToFloat32()) }
+}
+
+func valueCopy[T any](vecDst, vecSrc []T, dst, src int64) {
 	vecDst[dst] = vecSrc[src]
 }
 

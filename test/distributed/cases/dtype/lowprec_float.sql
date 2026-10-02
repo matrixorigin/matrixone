@@ -83,6 +83,36 @@ CREATE TABLE t2 (id INT PRIMARY KEY, a bf16, c float8);
 INSERT INTO t2 SELECT id, a, c FROM t WHERE a IS NOT NULL;
 SELECT id, a, c FROM t2 ORDER BY id;
 
+-- engine paths: top-k, window functions, peer groups, -0, widening
+CREATE TABLE lp (id INT PRIMARY KEY, a bf16, b float16, c float8, d float4);
+INSERT INTO lp VALUES (1, 1, 1, 1, 1), (2, 2, 2, 2, 2), (3, 0, 0, 0, 0), (4, -0.1, -0.1, -0.1, -0.1), (5, NULL, NULL, NULL, NULL), (6, 1.5, 1.5, 1.5, 1.5);
+SELECT * FROM lp ORDER BY id LIMIT 3;
+SELECT id, a FROM lp ORDER BY a DESC, id LIMIT 3;
+SELECT id, RANK() OVER (ORDER BY b), LAG(c) OVER (ORDER BY id), LAST_VALUE(d) OVER (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) FROM lp ORDER BY id;
+SELECT id, SUM(id) OVER (PARTITION BY d ORDER BY id) FROM lp ORDER BY id;
+SELECT id, SUM(id) OVER (ORDER BY a RANGE BETWEEN 1 PRECEDING AND CURRENT ROW) FROM lp ORDER BY id;
+-- -0.1 rounds to -0 in float4, which groups with 0
+SELECT d, COUNT(*) FROM lp WHERE id IN (3, 4) GROUP BY d;
+SELECT COUNT(DISTINCT d), COUNT(DISTINCT a) FROM lp WHERE id IN (3, 4);
+SELECT ANY_VALUE(a), MEDIAN(b), STDDEV(c), GROUP_CONCAT(d ORDER BY id) FROM lp WHERE id < 3;
+SELECT JSON_ARRAYAGG(a), JSON_OBJECTAGG('k', b) FROM lp WHERE id = 2;
+SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY c), PERCENTILE_DISC(0.5) WITHIN GROUP (ORDER BY d) FROM lp;
+SELECT COALESCE(a, 0), IFNULL(b, 1), GREATEST(c, 1), IF(d > 1, 'y', 'n'), JSON_OBJECT('k', a) FROM lp ORDER BY id;
+SELECT a FROM lp INTERSECT SELECT a FROM lp WHERE id < 3 ORDER BY 1;
+SET @v = (SELECT b FROM lp WHERE id = 2);
+SELECT @v, @v + 1;
+INSERT INTO lp VALUES (6, 1.5, 1.5, 1.5, 1.5) ON DUPLICATE KEY UPDATE a = VALUES(a);
+SELECT ROW_COUNT();
+UPDATE lp SET a = 3 WHERE id = 6;
+SELECT id, a FROM lp WHERE id = 6;
+-- a stored value equals a literal only in the column's precision: -0.1 is stored as -0.100097656
+SELECT COUNT(*) FROM lp WHERE a = -0.1;
+SELECT COUNT(*) FROM lp WHERE a = CAST(-0.1 AS bf16);
+SELECT id FROM lp WHERE b IN (CAST(1 AS float16), CAST(2 AS float16)) ORDER BY id;
+SELECT id FROM lp WHERE c >= CAST(1 AS float8) AND d <> CAST(2 AS float4) ORDER BY id;
+SELECT id FROM lp WHERE a <=> CAST(NULL AS bf16);
+DROP TABLE lp;
+
 -- low-precision floats cannot be key parts
 CREATE TABLE kp (k bf16 PRIMARY KEY, v INT);
 CREATE TABLE ku (id INT PRIMARY KEY, k float16 UNIQUE KEY);

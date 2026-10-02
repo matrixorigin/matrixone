@@ -6939,6 +6939,45 @@ func TestUpdateChangedRowsBlockScaledVector(t *testing.T) {
 	}
 }
 
+// TestLowPrecisionFloatPlans checks that a bf16 column binds where it has no overload of
+// its own by widening to float32 (RANGE frames, aggregates, JSON and percentile functions),
+// that vecf8/vecf4 widen to vecf32 only for the allowlisted functions, and that their
+// comparisons and byte encodings stay rejected.
+func TestLowPrecisionFloatPlans(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	for _, sql := range []string{
+		"SELECT id, SUM(id) OVER (ORDER BY f RANGE BETWEEN 1 PRECEDING AND CURRENT ROW) FROM vecblock_t",
+		"SELECT ANY_VALUE(f), MEDIAN(f), STDDEV(f), GROUP_CONCAT(f) FROM vecblock_t",
+		"SELECT JSON_ARRAYAGG(f), JSON_OBJECTAGG('k', f), JSON_ARRAYAGG(a) FROM vecblock_t",
+		"SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY f) FROM vecblock_t",
+		"SELECT COALESCE(f, 0), GREATEST(f, 1), IF(f > 1, f, 0), JSON_OBJECT('k', f) FROM vecblock_t",
+		"SELECT id FROM vecblock_t WHERE f = CAST(0.3 AS BF16) OR f IN (CAST(0.3 AS BF16), CAST(1.5 AS BF16))",
+	} {
+		_, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, sql)
+	}
+	// vecf8/vecf4 dequantize to vecf32 for NULL handling, conditionals, element math and JSON
+	for _, sql := range []string{
+		"SELECT COALESCE(a, '[0,0,0,0]'), GREATEST(a, a), CASE WHEN id > 1 THEN b ELSE a END FROM vecblock_t",
+		"SELECT ABS(a), SQRT(b), SUMMATION(a), L1_NORM(b), L2_NORM(a) FROM vecblock_t",
+		"SELECT JSON_OBJECT('k', a), JSON_ARRAY(a, b) FROM vecblock_t",
+	} {
+		_, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, sql)
+	}
+	// comparisons and byte encodings stay rejected
+	for _, sql := range []string{
+		"SELECT id FROM vecblock_t WHERE a = a",
+		"SELECT id FROM vecblock_t WHERE a < '[1,1,1,1]'",
+		"SELECT id FROM vecblock_t WHERE a IN (a, b)",
+		"SELECT HEX(a) FROM vecblock_t",
+		"SELECT TO_BASE64(b) FROM vecblock_t",
+	} {
+		_, err := runOneStmt(mock, t, sql)
+		require.Error(t, err, sql)
+	}
+}
+
 func TestUpdateSelfReferCascadeUsesModernPlan(t *testing.T) {
 	for _, sql := range []string{
 		"UPDATE self_ref_cascade SET id = 10 WHERE id = 1",

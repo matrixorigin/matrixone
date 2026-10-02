@@ -108,7 +108,7 @@ func anyToLowPrecFloat[Tr types.LowPrecFloat](
 		if err := types.RejectNonFiniteNarrowFloat(f, oid); err != nil {
 			return zero, err
 		}
-		return ctor(f), nil
+		return types.CanonicalLowPrecFloat(ctor(f)), nil
 	}
 	switch from.GetType().Oid {
 	case types.T_bool:
@@ -193,7 +193,7 @@ func strToLowPrecFloat[Tr types.LowPrecFloat](
 		if err := types.RejectNonFiniteNarrowFloat(float32(f), rs.GetType().Oid); err != nil {
 			return err
 		}
-		if err := rs.Append(ctor(float32(f)), false); err != nil {
+		if err := rs.Append(types.CanonicalLowPrecFloat(ctor(float32(f))), false); err != nil {
 			return err
 		}
 	}

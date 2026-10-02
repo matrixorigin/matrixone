@@ -42,7 +42,17 @@ GPU kernels agree on the encoding.
   Every operation widens the operand to `float32`, computes on the existing
   float32 path, and rounds the result back into the narrow format. A `bf16`/
   `float16`/`float8`/`float4` value in an expression therefore promotes to
-  `float32`; only a stored column is narrowed again.
+  `float32`; only a stored column is narrowed again. Binary operators widen through
+  the operator cast rules; any other function, aggregate or window function without an
+  overload for these types resolves by casting the argument to `float32` (the
+  implicit-cast table ranks `float32` first, then `float64`), and the JSON aggregates,
+  percentiles and RANGE frames with an offset take the argument as `float32`.
+  `COUNT`, `MIN`/`MAX`, `SUM`/`AVG` and the value window functions (`FIRST_VALUE`,
+  `LAG`, ...) keep the column type.
+- **One zero.** A zero of either sign is stored as `+0` (code 0 in every format) by
+  casts, writes, `LOAD` and user variables, so equal values have equal bits for hashing
+  (`GROUP BY`, `DISTINCT`, joins) and equality. Peer groups (window `PARTITION BY`,
+  `ORDER BY` ties) compare the float32 value.
 - **Rounding and range.** Narrowing from float32 is round-to-nearest-even. Every
   cast and write rejects a value outside the type's finite range with a "data out of
   range" error (e.g. `float8` above ±448, `float4` above ±6) and NaN or ±Inf with an
@@ -62,6 +72,11 @@ GPU kernels agree on the encoding.
   encoding.
 
 ## Invariants
+
+- **Engine paths.** Sorting and top-k comparators, window partitioning, the value
+  window functions, `ON DUPLICATE KEY UPDATE` change detection, the change reader
+  (`table_changes`, CDC), marshalled vectors and parquet `LOAD`/export handle these
+  types as fixed-size 2-byte (`bf16`, `float16`) or 1-byte (`float8`, `float4`) values.
 
 - **Ordering is by value, not by bits.** Sorting, comparison, `MIN`/`MAX`, range
   and zonemap pruning order these columns by their float value. The raw 1-/2-byte

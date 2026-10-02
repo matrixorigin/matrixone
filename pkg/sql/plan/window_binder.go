@@ -985,6 +985,15 @@ func bindWindowSpec(
 		if len(w.OrderBy) == 0 {
 			break
 		}
+		if types.T(w.OrderBy[0].Expr.Typ.Id).IsLowPrecisionFloat() && isNRange(ws.Frame) {
+			// bf16/float16/float8/float4 order and offset as float32, which holds them exactly
+			f32 := plan.Type{Id: int32(types.T_float32)}
+			expr, err := appendCastBeforeExpr(b.GetContext(), w.OrderBy[0].Expr, f32)
+			if err != nil {
+				return nil, err
+			}
+			w.OrderBy[0].Expr = expr
+		}
 		typ = &w.OrderBy[0].Expr.Typ
 		t := types.Type{Oid: types.T(typ.Id)}
 		if consumerSpecific && !function.GetFunctionIsWinOrderFunByName(funcName) && isNRange(ws.Frame) && !t.IsNumericOrTemporal() {

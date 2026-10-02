@@ -117,6 +117,9 @@ product of the block-scaled values, and the caller multiplies it by `g_d × g_q`
   element whose dequantized value (global × block scale × element, in float32) is not
   finite is rejected. Only blocks whose largest element code could overflow are scanned.
   Every accepted cell therefore renders as finite text and parses back.
+- **One zero.** The encoder stores an element that quantizes to zero of either sign as
+  code 0, so cells of equal values have equal bytes for `GROUP BY` and `DISTINCT`,
+  which group vecf8/vecf4 by bytes.
 
 ## Storage size, 1024-dim
 
@@ -290,16 +293,19 @@ only when it is stored into a `vecf8`/`vecf4` column (assignment cast).
 | `ANY_VALUE`, `COUNT`, `GROUP_CONCAT` | as for `vecf32`; `GROUP_CONCAT` renders the dequantized text |
 | `inner_product`, `l2_distance`, `l2_distance_sq`, `l1_distance`, `cosine_distance`, `cosine_similarity` | over the dequantized values; `a`/`b` each `vecf8`, `vecf4` or `vecf32`, a text literal binds as `vecf32`; results as for `vecf32` |
 | `vector_dims`, `normalize_l2` | as for `vecf32`; `normalize_l2` returns the argument's type |
-| `summation`, `l1_norm`, `l2_norm`, `subvector` | not supported (as for the other narrow vector types) |
+| `summation`, `l1_norm`, `l2_norm`, `abs`, `sqrt` | on the values dequantized to `vecf32`; results as for `vecf32` |
+| `coalesce`, `case`, `greatest`, `least`, `json_object`, `json_array`, `JSON_ARRAYAGG`, `JSON_OBJECTAGG` | on the values dequantized to `vecf32`; results as for `vecf32` |
 | `SUM`/`AVG`/`MIN`/`MAX` over vectors | not supported (no vector type has them) |
 | `ORDER BY`, window `ORDER BY` | as for `vecf32`: by the dequantized values, element-wise |
 | `GROUP BY`, `DISTINCT`, window `PARTITION BY` | by cell bytes (the encoding of a given input is deterministic) |
-| comparison operators (`=`, `<`, …) | not supported (as for every vector type) |
+| `subvector` | not supported (as for the other narrow vector types) |
+| comparison operators (`=`, `<`, `IN`, …), `hex`, `to_base64` | not supported, unlike `vecf32`: a quantized value rarely equals a literal written in full precision (`'[0.3, …]'` is stored as 0.3125 in `vecf8`), and the encodings would show the dequantized bytes, not the cell. `CAST(… AS vecf32(N))` gives them explicitly |
 | primary key, partition key, secondary/unique index, vector index | rejected at DDL |
 | `LOAD` | CSV text `"[…]"`; Parquet `LIST<FLOAT/DOUBLE>` and text columns, quantized per row |
 
-The promotion is implemented in these operations only; there is no implicit
-`vecf8`/`vecf4` → `vecf32` cast, so unsupported functions reject the types.
+The promotion is implemented in these operations only: function resolution dequantizes a
+`vecf8`/`vecf4` argument to `vecf32` for the functions listed above, and every other
+function rejects the types.
 
 #### Distance kernels
 

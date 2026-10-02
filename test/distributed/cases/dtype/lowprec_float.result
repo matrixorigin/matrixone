@@ -115,6 +115,99 @@ SELECT id, a, c FROM t2 ORDER BY id;
 1  ¦  1.5  ¦  1.5  𝄀
 2  ¦  -2.0  ¦  -2.0  𝄀
 3  ¦  0.0  ¦  0.0
+CREATE TABLE lp (id INT PRIMARY KEY, a bf16, b float16, c float8, d float4);
+INSERT INTO lp VALUES (1, 1, 1, 1, 1), (2, 2, 2, 2, 2), (3, 0, 0, 0, 0), (4, -0.1, -0.1, -0.1, -0.1), (5, NULL, NULL, NULL, NULL), (6, 1.5, 1.5, 1.5, 1.5);
+SELECT * FROM lp ORDER BY id LIMIT 3;
+➤ id[4,32,0]  ¦  a[7,24,0]  ¦  b[7,24,0]  ¦  c[7,24,0]  ¦  d[7,24,0]  𝄀
+1  ¦  1.0  ¦  1.0  ¦  1.0  ¦  1.0  𝄀
+2  ¦  2.0  ¦  2.0  ¦  2.0  ¦  2.0  𝄀
+3  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0.0
+SELECT id, a FROM lp ORDER BY a DESC, id LIMIT 3;
+➤ id[4,32,0]  ¦  a[7,24,0]  𝄀
+2  ¦  2.0  𝄀
+6  ¦  1.5  𝄀
+1  ¦  1.0
+SELECT id, RANK() OVER (ORDER BY b), LAG(c) OVER (ORDER BY id), LAST_VALUE(d) OVER (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) FROM lp ORDER BY id;
+➤ id[4,32,0]  ¦  RANK() over (order by b)[-5,64,0]  ¦  LAG(c) over (order by id)[7,24,0]  ¦  LAST_VALUE(d) over (order by id rows between unbounded preceding and unbounded following)[7,24,0]  𝄀
+1  ¦  4  ¦  null  ¦  1.5  𝄀
+2  ¦  6  ¦  1.0  ¦  1.5  𝄀
+3  ¦  3  ¦  2.0  ¦  1.5  𝄀
+4  ¦  2  ¦  0.0  ¦  1.5  𝄀
+5  ¦  1  ¦  -0.1015625  ¦  1.5  𝄀
+6  ¦  5  ¦  null  ¦  1.5
+SELECT id, SUM(id) OVER (PARTITION BY d ORDER BY id) FROM lp ORDER BY id;
+➤ id[4,32,0]  ¦  SUM(id) over (partition by d order by id)[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+4  ¦  7  𝄀
+5  ¦  5  𝄀
+6  ¦  6
+SELECT id, SUM(id) OVER (ORDER BY a RANGE BETWEEN 1 PRECEDING AND CURRENT ROW) FROM lp ORDER BY id;
+➤ id[4,32,0]  ¦  SUM(id) over (order by a range between 1 preceding and current row)[-5,64,0]  𝄀
+1  ¦  4  𝄀
+2  ¦  9  𝄀
+3  ¦  7  𝄀
+4  ¦  4  𝄀
+5  ¦  5  𝄀
+6  ¦  7
+SELECT d, COUNT(*) FROM lp WHERE id IN (3, 4) GROUP BY d;
+➤ d[7,24,0]  ¦  COUNT(*)[-5,64,0]  𝄀
+0.0  ¦  2
+SELECT COUNT(DISTINCT d), COUNT(DISTINCT a) FROM lp WHERE id IN (3, 4);
+➤ COUNT(distinct d)[-5,64,0]  ¦  COUNT(distinct a)[-5,64,0]  𝄀
+1  ¦  2
+SELECT ANY_VALUE(a), MEDIAN(b), STDDEV(c), GROUP_CONCAT(d ORDER BY id) FROM lp WHERE id < 3;
+➤ ANY_VALUE(a)[7,23,31]  ¦  MEDIAN(b)[8,53,31]  ¦  STDDEV(c)[8,53,31]  ¦  GROUP_CONCAT(d order by id separator ,)[-1,16383,0]  𝄀
+1.0  ¦  1.5  ¦  0.5  ¦  1,2
+SELECT JSON_ARRAYAGG(a), JSON_OBJECTAGG('k', b) FROM lp WHERE id = 2;
+➤ JSON_ARRAYAGG(a)[-1,2147483647,0]  ¦  JSON_OBJECTAGG(k, b)[-1,2147483647,0]  𝄀
+[2]  ¦  {"k": 2}
+SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY c), PERCENTILE_DISC(0.5) WITHIN GROUP (ORDER BY d) FROM lp;
+➤ PERCENTILE_CONT(0.5) within group (order by c)[8,53,31]  ¦  PERCENTILE_DISC(0.5) within group (order by d)[7,23,31]  𝄀
+1.0  ¦  1.0
+SELECT COALESCE(a, 0), IFNULL(b, 1), GREATEST(c, 1), IF(d > 1, 'y', 'n'), JSON_OBJECT('k', a) FROM lp ORDER BY id;
+➤ COALESCE(a, 0)[7,23,31]  ¦  IFNULL(b, 1)[7,23,31]  ¦  GREATEST(c, 1)[8,53,31]  ¦  IF(d > 1, y, n)[12,1,0]  ¦  JSON_OBJECT(k, a)[-1,2147483647,0]  𝄀
+1.0  ¦  1.0  ¦  1.0  ¦  n  ¦  {"k": 1}  𝄀
+2.0  ¦  2.0  ¦  2.0  ¦  y  ¦  {"k": 2}  𝄀
+0.0  ¦  0.0  ¦  1.0  ¦  n  ¦  {"k": 0}  𝄀
+-0.100097656  ¦  -0.099975586  ¦  1.0  ¦  n  ¦  {"k": -0.10009765625}  𝄀
+0.0  ¦  1.0  ¦  null  ¦  n  ¦  {"k": null}  𝄀
+1.5  ¦  1.5  ¦  1.5  ¦  y  ¦  {"k": 1.5}
+SELECT a FROM lp INTERSECT SELECT a FROM lp WHERE id < 3 ORDER BY 1;
+➤ a[7,23,31]  𝄀
+1.0  𝄀
+2.0
+SET @v = (SELECT b FROM lp WHERE id = 2);
+SELECT @v, @v + 1;
+➤ @v[7,24,0]  ¦  @v + 1[-5,64,0]  𝄀
+2.0  ¦  3
+INSERT INTO lp VALUES (6, 1.5, 1.5, 1.5, 1.5) ON DUPLICATE KEY UPDATE a = VALUES(a);
+SELECT ROW_COUNT();
+➤ ROW_COUNT()[-5,64,0]  𝄀
+1
+UPDATE lp SET a = 3 WHERE id = 6;
+SELECT id, a FROM lp WHERE id = 6;
+➤ id[4,32,0]  ¦  a[7,24,0]  𝄀
+6  ¦  3.0
+SELECT COUNT(*) FROM lp WHERE a = -0.1;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SELECT COUNT(*) FROM lp WHERE a = CAST(-0.1 AS bf16);
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT id FROM lp WHERE b IN (CAST(1 AS float16), CAST(2 AS float16)) ORDER BY id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+SELECT id FROM lp WHERE c >= CAST(1 AS float8) AND d <> CAST(2 AS float4) ORDER BY id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+6
+SELECT id FROM lp WHERE a <=> CAST(NULL AS bf16);
+➤ id[4,32,0]  𝄀
+5
+DROP TABLE lp;
 CREATE TABLE kp (k bf16 PRIMARY KEY, v INT);
 not supported: BF16 column 'k' cannot be in primary key
 CREATE TABLE ku (id INT PRIMARY KEY, k float16 UNIQUE KEY);

@@ -3941,6 +3941,14 @@ func appendFromEntry(src, vec *vector.Vector, offset int, mp *mpool.MPool) {
 			val = vector.GetFixedAtNoTypeCheck[types.Uuid](src, offset)
 		case types.T_float32:
 			val = vector.GetFixedAtNoTypeCheck[float32](src, offset)
+		case types.T_bf16:
+			val = vector.GetFixedAtNoTypeCheck[types.BF16](src, offset)
+		case types.T_float16:
+			val = vector.GetFixedAtNoTypeCheck[types.Float16](src, offset)
+		case types.T_float8:
+			val = vector.GetFixedAtNoTypeCheck[types.Float8](src, offset)
+		case types.T_float4:
+			val = vector.GetFixedAtNoTypeCheck[types.Float4](src, offset)
 		case types.T_float64:
 			val = vector.GetFixedAtNoTypeCheck[float64](src, offset)
 		case types.T_date:

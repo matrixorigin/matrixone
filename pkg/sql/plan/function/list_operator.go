@@ -1334,6 +1334,48 @@ var supportedOperators = []FuncNew{
 					return newOpOperatorFixedIn[uint64]().operatorIn
 				},
 			},
+			// bf16/float16/float8/float4: stored values are canonical (one zero, no NaN), so
+			// equality of the codes is equality of the values
+			{
+				overloadId: 103,
+				args:       []types.T{types.T_bf16, types.T_bf16},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.BF16]().operatorIn
+				},
+			},
+			{
+				overloadId: 104,
+				args:       []types.T{types.T_float16, types.T_float16},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.Float16]().operatorIn
+				},
+			},
+			{
+				overloadId: 105,
+				args:       []types.T{types.T_float8, types.T_float8},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.Float8]().operatorIn
+				},
+			},
+			{
+				overloadId: 106,
+				args:       []types.T{types.T_float4, types.T_float4},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.Float4]().operatorIn
+				},
+			},
 		},
 	},
 
@@ -1894,6 +1936,48 @@ var supportedOperators = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return newOpOperatorFixedIn[uint64]().operatorNotIn
+				},
+			},
+			// bf16/float16/float8/float4: stored values are canonical (one zero, no NaN), so
+			// equality of the codes is equality of the values
+			{
+				overloadId: 103,
+				args:       []types.T{types.T_bf16, types.T_bf16},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.BF16]().operatorNotIn
+				},
+			},
+			{
+				overloadId: 104,
+				args:       []types.T{types.T_float16, types.T_float16},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.Float16]().operatorNotIn
+				},
+			},
+			{
+				overloadId: 105,
+				args:       []types.T{types.T_float8, types.T_float8},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.Float8]().operatorNotIn
+				},
+			},
+			{
+				overloadId: 106,
+				args:       []types.T{types.T_float4, types.T_float4},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.Float4]().operatorNotIn
 				},
 			},
 		},

@@ -93,9 +93,8 @@ func TestVecBlockFunctionResolution(t *testing.T) {
 			name string
 			args []types.Type
 		}{
-			{"summation", []types.Type{vb}},
-			{"l1_norm", []types.Type{vb}},
-			{"l2_norm", []types.Type{vb}},
+			{"hex", []types.Type{vb}},
+			{"to_base64", []types.Type{vb}},
 			{"=", []types.Type{vb, vb}},
 			{"<", []types.Type{vb, vb}},
 			{"sum", []types.Type{vb}},

@@ -208,11 +208,14 @@ func AppendBlockScaled(dst []byte, f BlockScaledFormat, v []float32) ([]byte, er
 		}
 		div := float64(global) * float64(blockScaleValue(f, scales[b]))
 		for i := lo; i < hi; i++ {
+			// a zero of either sign is stored as code 0, so equal cells have equal bytes
 			q := float32(float64(v[i]) / div)
 			if f == BlockScaledMXFP8 {
-				elems[i] = uint8(Float8FromFloat32(q))
-			} else {
-				elems[i/2] |= uint8(Float4FromFloat32(q)) << (4 * (i % 2))
+				if c := uint8(Float8FromFloat32(q)); c&0x7f != 0 {
+					elems[i] = c
+				}
+			} else if c := uint8(Float4FromFloat32(q)); c&0x07 != 0 {
+				elems[i/2] |= c << (4 * (i % 2))
 			}
 		}
 	}

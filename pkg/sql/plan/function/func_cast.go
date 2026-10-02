@@ -1031,6 +1031,9 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	// Route them ahead of the integer/decimal fast-paths below so a low-precision
 	// source or target is never misdispatched into a specialization that lacks it.
 	if isLowPrecFloat(toType.Oid) {
+		if fromType.Oid == types.T_any {
+			return scalarNullToOthers(proc.Ctx, *toType, result, length, selectList)
+		}
 		return castToLowPrecFloat(parameters, *toType, result, proc, length, selectList)
 	}
 	if isLowPrecFloat(fromType.Oid) {
@@ -1318,6 +1321,14 @@ func scalarNullToOthers(ctx context.Context,
 		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
 		types.T_array_float8, types.T_array_float4, types.T_datalink, types.T_geometry:
 		return appendNulls[types.Varlena](result, length, selectList)
+	case types.T_bf16:
+		return appendNulls[types.BF16](result, length, selectList)
+	case types.T_float16:
+		return appendNulls[types.Float16](result, length, selectList)
+	case types.T_float8:
+		return appendNulls[types.Float8](result, length, selectList)
+	case types.T_float4:
+		return appendNulls[types.Float4](result, length, selectList)
 	case types.T_float32:
 		return appendNulls[float32](result, length, selectList)
 	case types.T_float64:

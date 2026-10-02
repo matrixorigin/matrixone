@@ -510,6 +510,16 @@ type LowPrecFloat interface {
 	ToFloat32() float32
 }
 
+// CanonicalLowPrecFloat stores a zero of either sign as +0 (code 0 in every format), so
+// equal bf16/float16/float8/float4 values have equal bits for hashing and equality.
+func CanonicalLowPrecFloat[T LowPrecFloat](v T) T {
+	if v.ToFloat32() == 0 {
+		var zero T
+		return zero
+	}
+	return v
+}
+
 type Number interface {
 	Ints | UInts | Floats | Decimal
 }

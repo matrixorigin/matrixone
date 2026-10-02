@@ -441,6 +441,24 @@ func SetBytesToAnyVector(ctx context.Context, val string, row int,
 			return moerr.NewOutOfRangef(ctx, "float64", "value '%v'", val)
 		}
 		return vector.SetFixedAtNoTypeCheck(vec, row, float64(v))
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		v, err := strconv.ParseFloat(val, 32)
+		if err != nil {
+			return moerr.NewOutOfRangef(ctx, vec.GetType().Oid.String(), "value '%v'", val)
+		}
+		if err := types.RejectNonFiniteNarrowFloat(float32(v), vec.GetType().Oid); err != nil {
+			return err
+		}
+		switch vec.GetType().Oid {
+		case types.T_bf16:
+			return vector.SetFixedAtNoTypeCheck(vec, row, types.CanonicalLowPrecFloat(types.BF16FromFloat32(float32(v))))
+		case types.T_float16:
+			return vector.SetFixedAtNoTypeCheck(vec, row, types.CanonicalLowPrecFloat(types.Float16FromFloat32(float32(v))))
+		case types.T_float8:
+			return vector.SetFixedAtNoTypeCheck(vec, row, types.CanonicalLowPrecFloat(types.Float8FromFloat32(float32(v))))
+		default:
+			return vector.SetFixedAtNoTypeCheck(vec, row, types.CanonicalLowPrecFloat(types.Float4FromFloat32(float32(v))))
+		}
 	case types.T_decimal64:
 		v, err := types.ParseDecimal64(val, vec.GetType().Width, vec.GetType().Scale)
 		if err != nil {

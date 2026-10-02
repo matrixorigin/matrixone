@@ -8142,6 +8142,9 @@ func validateAndSetHivePartitionOptions(ctx context.Context, stmt *tree.CreateTa
 			// applies to the narrow types exactly as it does to vecf32/vecf64.
 			return moerr.NewBadConfigf(ctx, "partition column '%s' cannot be a VECTOR type", pc)
 		}
+		if typId.IsLowPrecisionFloat() {
+			return moerr.NewBadConfigf(ctx, "partition column '%s' cannot be a %s type", pc, typId)
+		}
 		canonical := strings.ToLower(col.Name)
 		if seen[canonical] {
 			return moerr.NewBadConfigf(ctx, "duplicate partition column '%s'", pc)

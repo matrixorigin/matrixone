@@ -250,6 +250,9 @@ var supportedAggInNewFramework = []FuncNew{
 			case types.T_binary, types.T_varbinary, types.T_blob:
 				return newCheckResultWithFailure(failedAggParametersWrong)
 			}
+			if widened, ok := jsonAggWidenedType(inputs[0]); ok {
+				return newCheckResultWithCast(0, []types.Type{widened})
+			}
 			return newCheckResultWithSuccess(0)
 		},
 		Overloads: []overload{
@@ -287,6 +290,9 @@ var supportedAggInNewFramework = []FuncNew{
 			switch val.Oid {
 			case types.T_binary, types.T_varbinary, types.T_blob:
 				return newCheckResultWithFailure(failedAggParametersWrong)
+			}
+			if widened, ok := jsonAggWidenedType(val); ok {
+				val = widened
 			}
 			return newCheckResultWithCast(0, []types.Type{key, val})
 		},
@@ -936,4 +942,16 @@ var BitOpsReturnType = func(typs []types.Type) types.Type {
 		return typs[0]
 	}
 	return types.T_uint64.ToType()
+}
+
+// jsonAggWidenedType maps bf16/float16/float8/float4 to float32 and vecf8/vecf4 to vecf32
+// of the same dimension, the types the JSON aggregates render; ok is false otherwise.
+func jsonAggWidenedType(t types.Type) (types.Type, bool) {
+	switch {
+	case t.Oid.IsLowPrecisionFloat():
+		return types.T_float32.ToType(), true
+	case t.Oid.IsBlockScaledArray():
+		return types.New(types.T_array_float32, t.Width, 0), true
+	}
+	return t, false
 }

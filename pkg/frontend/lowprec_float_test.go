@@ -73,3 +73,28 @@ func TestLowPrecisionFloatExportAndBranch(t *testing.T) {
 		vec.Free(mp)
 	}
 }
+
+// TestLowPrecisionFloatParquetParamsAndBranchTuples covers parquet export values,
+// prepared-parameter kinds and data-branch tuple decoding for bf16, float16, float8 and
+// float4 columns.
+func TestLowPrecisionFloatParquetParamsAndBranchTuples(t *testing.T) {
+	mp := mpool.MustNewZero()
+	for _, oid := range lowPrecTypes {
+		vec := lowPrecVector(t, oid, mp)
+		v, err := vectorValueToParquet(vec, 0, nil)
+		require.NoError(t, err)
+		require.Equal(t, float32(1.5), v, oid.String())
+		require.Equal(t, vector.PrepareParamFloat, prepareParamKindFromType(oid))
+
+		raw := vec.GetRawBytesAt(1)
+		got, err := normalizeTupleColumnValue(append([]byte(nil), raw...), oid.ToType())
+		require.NoError(t, err, oid.String())
+		c, err := compareTupleValueWithVector(got, vec, 1)
+		require.NoError(t, err, oid.String())
+		require.Zero(t, c, oid.String())
+		c, err = compareTupleValueWithVector(got, vec, 0)
+		require.NoError(t, err)
+		require.NotZero(t, c, oid.String())
+		vec.Free(mp)
+	}
+}

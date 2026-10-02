@@ -1003,6 +1003,12 @@ func compareValueFromVector(vec *vector.Vector, rowIdx int) (any, error) {
 }
 
 func normalizeCompareValue(typ types.Type, val any) (any, error) {
+	if typ.Oid.IsLowPrecisionFloat() {
+		// compareValueFromVector widens these to float32
+		if v, ok := val.(interface{ ToFloat32() float32 }); ok {
+			return v.ToFloat32(), nil
+		}
+	}
 	switch typ.Oid {
 	case types.T_json:
 		switch v := val.(type) {

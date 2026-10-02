@@ -85,10 +85,17 @@ prepare s2 from 'select id, cosine_distance(b, ?) from t where l2_distance(b, ?)
 execute s2 using @q, @q;
 deallocate prepare s2;
 
--- not supported
-select summation(a) from t;
-select l1_norm(b) from t;
-select l2_norm(a) from t;
+-- NULL handling, conditionals, element math and JSON dequantize to vecf32
+select id, summation(a), l1_norm(b), l2_norm(a) from t where id in (1, 2) order by id;
+select id, abs(a), sqrt(abs(b)) from t where id = 1;
+select id, coalesce(a, '[0,0,0,0]'), greatest(a, b), case when id = 1 then a else b end from t where id in (1, 3) order by id;
+select json_object('a', a), json_array(b) from t where id = 1;
+
+-- not supported: comparisons (a quantized value rarely equals a full-precision literal)
+-- and byte encodings of the dequantized values; CAST(... AS vecf32(N)) gives them explicitly
+select id from t where a < '[1,1,1,1]';
+select hex(a) from t;
+select id from t where cast(a as vecf32(4)) = cast(a as vecf32(4)) order by id;
 select sum(a) from t;
 select avg(b) from t;
 select id from t where a = a;

@@ -528,3 +528,22 @@ func TestBlockScaledDecodedFinite(t *testing.T) {
 	_, err = ParseBlockScaledCell(cell)
 	require.ErrorContains(t, err, "infinite")
 }
+
+// TestCanonicalZero checks that a zero of either sign is stored as code 0: the scalar
+// low-precision types through CanonicalLowPrecFloat and vecf8/vecf4 elements through the
+// encoder, so equal values have equal bytes.
+func TestCanonicalZero(t *testing.T) {
+	negZero := float32(math.Copysign(0, -1))
+	require.Equal(t, BF16(0), CanonicalLowPrecFloat(BF16FromFloat32(negZero)))
+	require.Equal(t, Float16(0), CanonicalLowPrecFloat(Float16FromFloat32(negZero)))
+	require.Equal(t, Float8(0), CanonicalLowPrecFloat(Float8FromFloat32(negZero)))
+	require.Equal(t, Float4(0), CanonicalLowPrecFloat(Float4FromFloat32(-0.1)))
+	require.Equal(t, BF16FromFloat32(-1.5), CanonicalLowPrecFloat(BF16FromFloat32(-1.5)))
+	for _, f := range []BlockScaledFormat{BlockScaledMXFP8, BlockScaledNVFP4} {
+		pos, err := AppendBlockScaled(nil, f, []float32{0, 1, 1e-9})
+		require.NoError(t, err)
+		neg, err := AppendBlockScaled(nil, f, []float32{negZero, 1, -1e-9})
+		require.NoError(t, err)
+		require.Equal(t, pos, neg, f.String())
+	}
+}

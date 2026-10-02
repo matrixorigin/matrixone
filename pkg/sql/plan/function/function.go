@@ -216,7 +216,7 @@ func getFunctionByName(
 		return r, moerr.NewNYIf(ctx, "should implement the function %s", name)
 	}
 
-	check := f.checkArgumentTypes(args, stringDomainModes)
+	check := f.checkArgumentTypesWidening(args, stringDomainModes)
 	if (r.fid == FORMAT || r.fid == MAKEDATE || r.fid == MAKETIME) && LegacySpecialConsumers(ctx) {
 		if legacy, ok := legacySpecialConsumerCheck(r.fid, f.Overloads, args); ok {
 			check = legacy
@@ -281,7 +281,7 @@ func GetFunctionByNameWithoutError(name string, args []types.Type) (r FuncGetRes
 		return FuncGetResult{}, false
 	}
 
-	check := f.checkArgumentTypes(args, nil)
+	check := f.checkArgumentTypesWidening(args, nil)
 	switch check.status {
 	case succeedMatched:
 		r.overloadId = int32(check.idx)
@@ -841,6 +841,54 @@ const (
 	failedTooManyFunctionMatched       overloadCheckSituation = -4
 	failedBitwiseAggregateOperandsSize overloadCheckSituation = -5
 )
+
+// blockScaledWideningFunctions are the functions that take vecf8/vecf4 arguments
+// dequantized to vecf32: NULL handling and conditionals, element-wise math and JSON.
+// Comparisons stay rejected (a quantized column rarely equals a literal written in full
+// precision) and so do hex/to_base64 (they would encode the dequantized bytes, not the
+// stored cell); CAST(... AS vecf32(N)) gives them explicitly.
+var blockScaledWideningFunctions = map[int]bool{
+	COALESCE: true, CASE: true, GREATEST: true, LEAST: true,
+	ABS: true, SQRT: true, SUMMATION: true, L1_NORM: true, L2_NORM: true,
+	JSON_ARRAY: true, JSON_OBJECT: true,
+}
+
+// checkArgumentTypesWidening retries a failed resolution with bf16, float16, float8 and
+// float4 arguments widened to float32, which holds them exactly, so a function without
+// an overload for them runs on float32 as their arithmetic does; for the functions in
+// blockScaledWideningFunctions, vecf8/vecf4 arguments are dequantized to vecf32.
+func (fn FuncNew) checkArgumentTypesWidening(inputs []types.Type, modes []StringDomainCheckMode) checkResult {
+	check := fn.checkArgumentTypes(inputs, modes)
+	if check.status == succeedMatched || check.status == succeedWithCast {
+		return check
+	}
+	var widened []types.Type
+	for i, t := range inputs {
+		var to types.Type
+		switch {
+		case t.Oid.IsLowPrecisionFloat():
+			to = types.T_float32.ToType()
+		case t.Oid.IsBlockScaledArray() && blockScaledWideningFunctions[fn.functionId]:
+			to = types.New(types.T_array_float32, t.Width, 0)
+		default:
+			continue
+		}
+		if widened == nil {
+			widened = append([]types.Type(nil), inputs...)
+		}
+		widened[i] = to
+	}
+	if widened == nil {
+		return check
+	}
+	switch retry := fn.checkArgumentTypes(widened, modes); retry.status {
+	case succeedMatched:
+		return newCheckResultWithCast(retry.idx, widened)
+	case succeedWithCast:
+		return retry
+	}
+	return check
+}
 
 type checkResult struct {
 	status overloadCheckSituation

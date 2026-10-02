@@ -1383,6 +1383,10 @@ func odkuValuesEqual(left, right *vector.Vector) bool {
 			vector.GetFixedAtNoTypeCheck[float64](left, 0),
 			vector.GetFixedAtNoTypeCheck[float64](right, 0),
 		)
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		l, _ := vector.GetLowPrecisionFloatAt(left, 0)
+		r, _ := vector.GetLowPrecisionFloatAt(right, 0)
+		return odkuFloat32Equal(l, r)
 	case types.T_bool:
 		return odkuFixedValuesEqual[bool](left, right)
 	case types.T_bit, types.T_uint64:

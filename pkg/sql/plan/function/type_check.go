@@ -3188,6 +3188,19 @@ func initFixed3() {
 			addFixedImplicitTypeCastRule(r.from, to.toType, to.preferLevel)
 		}
 	}
+	// bf16, float16, float8 and float4 have no function overloads of their own: they widen
+	// to float32 (exact), then float64, then follow float32's integer and string targets.
+	for _, from := range []types.T{types.T_bf16, types.T_float16, types.T_float8, types.T_float4} {
+		addFixedImplicitTypeCastRule(from, types.T_float32, 1)
+		addFixedImplicitTypeCastRule(from, types.T_float64, 2)
+		for _, to := range []types.T{
+			types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+			types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+			types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
+		} {
+			addFixedImplicitTypeCastRule(from, to, 3)
+		}
+	}
 }
 
 type tarTypes struct {

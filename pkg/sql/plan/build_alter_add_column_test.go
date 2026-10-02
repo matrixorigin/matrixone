@@ -202,3 +202,20 @@ func TestLowPrecisionFloatKeyParts(t *testing.T) {
 		require.NoError(t, err, typ)
 	}
 }
+
+// TestBuildColumnDomainExprLowPrecisionFloat checks that a column-domain rewrite over a
+// bf16/float16/float8/float4 column builds a disjunction of equalities, since these types
+// have no IN kernel.
+func TestBuildColumnDomainExprLowPrecisionFloat(t *testing.T) {
+	ctx := context.Background()
+	for _, id := range []types.T{types.T_bf16, types.T_float16, types.T_float8, types.T_float4} {
+		col := &plan.Expr{
+			Typ:  plan.Type{Id: int32(id)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0, Name: "f"}},
+		}
+		vals := []*plan.Expr{makePlan2Float32ConstExprWithType(0.5), makePlan2Float32ConstExprWithType(1.5)}
+		expr, err := buildColumnDomainExpr(ctx, col, vals)
+		require.NoError(t, err, id.String())
+		require.Equal(t, "or", expr.GetF().Func.ObjName, id.String())
+	}
+}
