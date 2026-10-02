@@ -49,13 +49,11 @@ func TestRestoreDDLContext(t *testing.T) {
 	require.ErrorContains(t, err, "missing historical ownership")
 }
 
-func TestPrepareRestoreOwnershipRebindsCurrentPrincipals(t *testing.T) {
-	const databaseQuery = "select datname, '', cast(creator as char), cast(owner as char) from mo_catalog.mo_database {MO_TS = 42} where account_id = 10 and datname = 'app'"
-	const tableQuery = "select reldatabase, relname, cast(creator as char), cast(owner as char) from mo_catalog.mo_tables {MO_TS = 42} where account_id = 10 and reldatabase = 'app' and relname = 't'"
-	const oldUsers = "select cast(user_id as char), user_name from mo_catalog.mo_user {MO_TS = 42}"
-	const currentUsers = "select cast(user_id as char), user_name from mo_catalog.mo_user"
-	const oldRoles = "select cast(role_id as char), role_name from mo_catalog.mo_role {MO_TS = 42}"
-	const currentRoles = "select cast(role_id as char), role_name from mo_catalog.mo_role"
+func TestPrepareRestoreOwnershipKeepsCurrentPrincipalIDs(t *testing.T) {
+	const databaseQuery = "select datname, '', cast(creator as char), cast(owner as char) from mo_catalog.mo_database {MO_TS = 42} where account_id = 20 and datname = 'app'"
+	const tableQuery = "select reldatabase, relname, cast(creator as char), cast(owner as char) from mo_catalog.mo_tables {MO_TS = 42} where account_id = 20 and reldatabase = 'app' and relname = 't'"
+	const currentUsers = "select cast(user_id as char) from mo_catalog.mo_user"
+	const currentRoles = "select cast(role_id as char) from mo_catalog.mo_role"
 
 	bh := &backgroundExecTest{}
 	bh.init()
@@ -64,20 +62,19 @@ func TestPrepareRestoreOwnershipRebindsCurrentPrincipals(t *testing.T) {
 	}
 	setRows(databaseQuery, []string{"database", "table", "creator", "owner"}, [][]interface{}{{"app", "", "1", "2"}})
 	setRows(tableQuery, []string{"database", "table", "creator", "owner"}, [][]interface{}{{"app", "t", "3", "4"}})
-	setRows(oldUsers, []string{"id", "name"}, [][]interface{}{{"1", "creator"}, {"3", "editor"}})
-	setRows(currentUsers, []string{"id", "name"}, [][]interface{}{{"11", "creator"}, {"33", "editor"}})
-	setRows(oldRoles, []string{"id", "name"}, [][]interface{}{{"2", "db_owner"}, {"4", "table_owner"}})
-	setRows(currentRoles, []string{"id", "name"}, [][]interface{}{{"22", "db_owner"}, {"44", "table_owner"}})
+	setRows(currentUsers, []string{"id"}, [][]interface{}{{"1"}, {"3"}})
+	setRows(currentRoles, []string{"id"}, [][]interface{}{{"2"}, {"4"}})
+	setRows("select cast(dat_id as char) from mo_catalog.mo_database where account_id = 20 and datname = 'app' for update", []string{"id"}, nil)
 
-	ctx, err := prepareRestoreOwnership(t.Context(), bh, 42, 10, 20, "app", "t")
+	ctx, err := prepareRestoreOwnership(t.Context(), bh, 42, 20, 20, "app", "t")
 	require.NoError(t, err)
 	for _, tc := range []struct {
 		table string
 		user  uint32
 		role  uint32
 	}{
-		{"", 11, 22},
-		{"t", 33, 44},
+		{"", 1, 2},
+		{"t", 3, 4},
 	} {
 		ownerCtx, err := restoreDDLContext(ctx, "app", tc.table)
 		require.NoError(t, err)
@@ -85,12 +82,12 @@ func TestPrepareRestoreOwnershipRebindsCurrentPrincipals(t *testing.T) {
 		require.Equal(t, tc.role, defines.GetRoleId(ownerCtx))
 	}
 
-	setRows(currentUsers, []string{"id", "name"}, [][]interface{}{{"11", "creator"}})
-	_, err = prepareRestoreOwnership(t.Context(), bh, 42, 10, 20, "app", "t")
+	setRows(currentUsers, []string{"id"}, [][]interface{}{{"1"}})
+	_, err = prepareRestoreOwnership(t.Context(), bh, 42, 20, 20, "app", "t")
 	require.ErrorContains(t, err, "creator no longer exists")
-	setRows(currentUsers, []string{"id", "name"}, [][]interface{}{{"11", "creator"}, {"33", "editor"}})
-	setRows(currentRoles, []string{"id", "name"}, [][]interface{}{{"22", "db_owner"}})
-	_, err = prepareRestoreOwnership(t.Context(), bh, 42, 10, 20, "app", "t")
+	setRows(currentUsers, []string{"id"}, [][]interface{}{{"1"}, {"3"}})
+	setRows(currentRoles, []string{"id"}, [][]interface{}{{"2"}})
+	_, err = prepareRestoreOwnership(t.Context(), bh, 42, 20, 20, "app", "t")
 	require.ErrorContains(t, err, "owner role no longer exists")
 }
 
@@ -179,16 +176,15 @@ func TestPartialRestorePropagatesCatalogReadFailures(t *testing.T) {
 	}
 }
 
-func TestRestorePrincipalMapDoesNotReuseMissingIdentity(t *testing.T) {
+func TestLoadRestorePrincipalIDs(t *testing.T) {
 	bh := &backgroundExecTest{}
 	bh.init()
-	const query = "select cast(role_id as char), role_name from mo_catalog.mo_role"
-	bh.sql2result[query+" {MO_TS = 42}"] = newMrsForRestoreStringRows([]string{"id", "name"}, [][]interface{}{{"3", "owner"}, {"4", "deleted"}})
-	bh.sql2result[query] = newMrsForRestoreStringRows([]string{"id", "name"}, [][]interface{}{{"30", "owner"}, {"4", "unrelated"}})
-	ids, err := restorePrincipalMap(t.Context(), bh, 42, 10, 20, "mo_role", "role_id", "role_name")
+	const query = "select cast(role_id as char) from mo_catalog.mo_role"
+	bh.sql2result[query] = newMrsForRestoreStringRows([]string{"id"}, [][]interface{}{{"3"}, {"40"}})
+	ids, err := loadRestorePrincipalIDs(t.Context(), bh, 10, "mo_role", "role_id")
 	require.NoError(t, err)
-	require.Equal(t, map[uint32]uint32{3: 30}, ids)
-	bh.sql2result[query] = newMrsForRestoreStringRows([]string{"id", "name"}, [][]interface{}{{"4294967296", "owner"}})
-	_, err = restorePrincipalMap(t.Context(), bh, 42, 10, 20, "mo_role", "role_id", "role_name")
+	require.Equal(t, map[uint32]struct{}{3: {}, 40: {}}, ids)
+	bh.sql2result[query] = newMrsForRestoreStringRows([]string{"id"}, [][]interface{}{{"4294967296"}})
+	_, err = loadRestorePrincipalIDs(t.Context(), bh, 10, "mo_role", "role_id")
 	require.Error(t, err)
 }

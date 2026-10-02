@@ -793,6 +793,7 @@ func Test_mce_selfhandle(t *testing.T) {
 			UserID:        rootID,
 			DefaultRoleID: moAdminRoleID,
 		})
+		mockAuthorizationUser(t, ses)
 		sysVarStubs := gostub.StubFunc(&ExeSqlInBgSes, nil, nil)
 		defer sysVarStubs.Reset()
 		_ = ses.InitSystemVariables(ctx, nil)
@@ -1162,7 +1163,7 @@ func TestShowGlobalVariablesRefreshesGlobalSysVarCache(t *testing.T) {
 	defer ctrl.Finish()
 
 	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
-	ses := newSes(nil, ctrl)
+	ses := newSes(ctrl)
 	ses.SetMysqlResultSet(&MysqlResultSet{})
 	ses.gSysVars.Set("long_query_time", float64(10))
 	require.NoError(t, ses.SetSessionSysVar(ctx, "interactive_timeout", int64(30100)))
@@ -1209,7 +1210,7 @@ func TestShowGlobalVariablesReturnsRefreshError(t *testing.T) {
 	defer ctrl.Finish()
 
 	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
-	ses := newSes(nil, ctrl)
+	ses := newSes(ctrl)
 	ses.SetMysqlResultSet(&MysqlResultSet{})
 
 	bh := &backgroundExecTest{}
@@ -1346,6 +1347,29 @@ func TestGetComputationWrapperKeepsSchedulingSQLPerStatement(t *testing.T) {
 	require.NotContains(t, first, "query_pool_strict")
 	require.Contains(t, second, "query_pool_strict=on")
 	require.NotContains(t, second, "query_max_workers")
+}
+
+func TestSQLRecordStatementBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		sql, mode string
+		want      []string
+	}{
+		{"select 1", "", []string{"select 1"}},
+		{"execute stmt1", "", []string{"execute stmt1"}},
+		{"create user u identified by 'secret'", "", []string{"create user u identified by '******'"}},
+		{"select ';'", "", []string{"select ';'"}},
+		{`select 'a\'; select 1`, "NO_BACKSLASH_ESCAPES", []string{`select 'a\'`, "select 1"}},
+		{"; select 1;; /* comment */; select 2", "", []string{"select 1", "select 2"}},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			records, err := sqlForRecordByStatementWithSQLMode(t.Context(), tc.sql, tc.mode)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, records)
+		})
+	}
+	records, err := sqlForRecordByStatementWithSQLMode(t.Context(), "select 'unterminated", "")
+	require.Error(t, err)
+	require.Nil(t, records)
 }
 
 func TestGetComputationWrapperKeepsExecutableCommentStatementWhole(t *testing.T) {
@@ -5956,6 +5980,57 @@ func Test_ExecRequestStmtExecuteErrorClearsPreparedParamState(t *testing.T) {
 	require.NotNil(t, resp)
 	require.Nil(t, prepareStmt.params)
 	require.Empty(t, prepareStmt.getFromSendLongData)
+}
+
+func TestBinaryExecuteRecordsGeneratedEnvelope(t *testing.T) {
+	for _, id := range []uint32{0, 1, math.MaxUint32} {
+		for _, cloud := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%d/cloud=%t", id, cloud), func(t *testing.T) {
+				ctx := t.Context()
+				ses := newTestSession(t, gomock.NewController(t))
+				defer ses.Close()
+				name := getPrepareStmtName(id)
+				st := tree.NewPrepareString(tree.Identifier(name), "select ?")
+				stmts, err := mysql.Parse(ctx, st.Sql, 1)
+				require.NoError(t, err)
+				p, err := buildPlan(ctx, nil, plan.NewEmptyCompilerContext(), st)
+				require.NoError(t, err)
+				prepared := &PrepareStmt{Name: name, Sql: st.Sql, PreparePlan: p, PrepareStmt: stmts[0], proc: ses.GetProc(), IsCloudNonuser: cloud, getFromSendLongData: make(map[int]struct{})}
+				if err = ses.SetPrepareStmt(ctx, name, prepared); err != nil {
+					prepared.Close()
+					t.Fatal(err)
+				}
+
+				const bound = "a'; /* cloud_nonuser */ identified by 'secret'; -- tail"
+				payload := make([]byte, 4)
+				binary.LittleEndian.PutUint32(payload, id)
+				payload = append(payload, 0, 0, 0, 0, 0, 0, 1, uint8(defines.MYSQL_TYPE_VAR_STRING), 0)
+				payload = append(payload, byte(len(bound)))
+				payload = append(payload, bound...)
+				stop := moerr.NewInternalError(ctx, "stop after recording")
+				var recorded string
+				var sanitizations int
+				sanitize := parsers.HandleSqlForRecord
+				stubs := gostub.Stub(&parsers.HandleSqlForRecord, func(sql string) []string {
+					sanitizations++
+					return sanitize(sql)
+				})
+				defer stubs.Reset()
+				stubs.Stub(&RecordStatement, func(ctx context.Context, _ *Session, _ *process.Process, _ ComputationWrapper, _ time.Time, sql, _ string, _ bool) (context.Context, error) {
+					recorded = sql
+					require.Zero(t, sanitizations, "the generated envelope needs no grammar or sanitizer pass")
+					require.Equal(t, bound, prepared.params.GetStringAt(0), "the real protocol decoder must keep bound values separate")
+					return ctx, stop
+				})
+				resp, err := ExecRequest(ses, &ExecCtx{ses: ses, reqCtx: ctx}, &Request{cmd: COM_STMT_EXECUTE, data: payload})
+				require.NoError(t, err)
+				require.Equal(t, "execute "+name, recorded)
+				require.NotNil(t, resp)
+				require.Equal(t, stop, resp.GetData())
+				require.Nil(t, prepared.params)
+			})
+		}
+	}
 }
 
 func Test_panic(t *testing.T) {

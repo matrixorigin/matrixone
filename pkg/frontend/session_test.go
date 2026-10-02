@@ -513,7 +513,7 @@ func TestSession_updateTimeZone(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	ses := newSes(nil, ctrl)
+	ses := newSes(ctrl)
 	ctx := context.Background()
 
 	// Test offset timezones
@@ -800,7 +800,7 @@ func TestSession_Migrate(t *testing.T) {
 func Test_connectionid(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
-	s := newSes(nil, ctrl)
+	s := newSes(ctrl)
 	s.SetConnectionID(10)
 	x := s.GetConnectionID()
 	assert.Equal(t, uint32(10), x)

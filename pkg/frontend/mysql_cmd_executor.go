@@ -56,6 +56,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
@@ -3583,14 +3585,12 @@ func incStatementErrorsCounter(tenant string, tenantId uint32, stmt tree.Stateme
 
 // authenticateUserCanExecuteStatement checks the user can execute the statement
 func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, stmt tree.Statement) (statistic.StatsArray, error) {
+	return authenticateStatementRequirement(reqCtx, ses, authorizationStatement(stmt), nil)
+}
+
+func authenticateStatementRequirement(reqCtx context.Context, ses *Session, stmt tree.Statement, priv *privilege) (statistic.StatsArray, error) {
 	var stats statistic.StatsArray
 	stats.Reset()
-
-	// Cache grants only within one statement. A session-local cache cannot
-	// observe REVOKE or RESTORE committed by another connection or another CN.
-	if cache := ses.GetPrivilegeCache(); cache != nil {
-		cache.invalidate()
-	}
 
 	reqCtx, span := trace.Debug(reqCtx, "authenticateUserCanExecuteStatement")
 	defer span.End()
@@ -3602,7 +3602,9 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 		return stats, nil
 	}
 	if ses.GetTenantInfo() != nil {
-		ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))
+		if priv == nil {
+			priv = determinePrivilegeSetOfStatement(stmt)
+		}
 		if !canCreateMongoDBTableMapping(stmt, ses.GetTenantInfo()) {
 			// The privilege model has no external-connection USAGE object yet.
 			// Fail closed instead of letting any ordinary CREATE TABLE holder use
@@ -3611,16 +3613,16 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 		}
 
 		// can or not execute in retricted status
-		if ses.getRoutine() != nil && ses.getRoutine().isRestricted() && !ses.GetPrivilege().canExecInRestricted {
+		if ses.getRoutine() != nil && ses.getRoutine().isRestricted() && !priv.canExecInRestricted {
 			return stats, moerr.NewInternalError(reqCtx, "do not have enough storage to execute the statement")
 		}
 
 		// can or not execute in password expired status
-		if ses.getRoutine() != nil && ses.getRoutine().isExpired() && !ses.GetPrivilege().canExecInPasswordExpired {
+		if ses.getRoutine() != nil && ses.getRoutine().isExpired() && !priv.canExecInPasswordExpired {
 			return stats, moerr.NewInternalError(reqCtx, "password has expired, please change the password")
 		}
 
-		havePrivilege, delta, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(reqCtx, ses, stmt)
+		havePrivilege, delta, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(reqCtx, ses, stmt, priv)
 		if err != nil {
 			return stats, err
 		}
@@ -3631,7 +3633,7 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 			return stats, err
 		}
 
-		havePrivilege, delta, err = authenticateUserCanExecuteStatementWithObjectTypeNone(reqCtx, ses, stmt)
+		havePrivilege, delta, err = authenticateUserCanExecuteStatementWithObjectTypeNone(reqCtx, ses, stmt, priv)
 		if err != nil {
 			return stats, err
 		}
@@ -3644,7 +3646,6 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 
 		//!!!note: clone table executed in the frontend.
 		//handle privilege check here for it
-		priv := ses.GetPrivilege()
 		if priv.objectType() == objectTypeTable {
 			if !checkProtectedDatabaseWriteByPrivilege(reqCtx, ses, priv) {
 				return stats, moerr.NewInternalError(reqCtx, "do not have privilege to execute the statement")
@@ -3664,11 +3665,15 @@ func canCreateMongoDBTableMapping(stmt tree.Statement, tenant *TenantInfo) bool 
 
 // authenticateCanExecuteStatementAndPlan checks the user can execute the statement and its plan
 func authenticateCanExecuteStatementAndPlan(reqCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) (statistic.StatsArray, error) {
+	return authenticateStatementAndPlan(reqCtx, ses, stmt, p, nil)
+}
+
+func authenticateStatementAndPlan(reqCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan, requirement *privilege) (statistic.StatsArray, error) {
 	var stats statistic.StatsArray
 	stats.Reset()
 
-	_, task := gotrace.NewTask(reqCtx, "frontend.authenticateCanExecuteStatementAndPlan")
-	defer task.End()
+	region := gotrace.StartRegion(reqCtx, "frontend.authenticateCanExecuteStatementAndPlan")
+	defer region.End()
 	if getPu(ses.GetService()).SV.SkipCheckPrivilege {
 		return stats, nil
 	}
@@ -3676,7 +3681,10 @@ func authenticateCanExecuteStatementAndPlan(reqCtx context.Context, ses *Session
 	if ses.skipAuthForSpecialUser() {
 		return stats, nil
 	}
-	yes, delta, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(reqCtx, ses, stmt, p)
+	if requirement == nil {
+		requirement = determinePrivilegeSetOfStatement(stmt)
+	}
+	yes, delta, err := authenticateStatementPlanPrivilege(reqCtx, ses, stmt, p, requirement)
 	if err != nil {
 		return stats, err
 	}
@@ -3690,28 +3698,43 @@ func authenticateCanExecuteStatementAndPlan(reqCtx context.Context, ses *Session
 
 // authenticatePrivilegeOfPrepareAndExecute checks the user can execute the Prepare or Execute statement
 func authenticateUserCanExecutePrepareOrExecute(reqCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) (statistic.StatsArray, error) {
+	return authenticatePreparedStatement(reqCtx, ses, stmt, p, nil)
+}
+
+func authenticatePreparedStatement(reqCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan, prepared *PrepareStmt) (statistic.StatsArray, error) {
 	var stats statistic.StatsArray
 	stats.Reset()
 
-	_, task := gotrace.NewTask(reqCtx, "frontend.authenticateUserCanExecutePrepareOrExecute")
-	defer task.End()
+	region := gotrace.StartRegion(reqCtx, "frontend.authenticateUserCanExecutePrepareOrExecute")
+	defer region.End()
 	if getPu(ses.GetService()).SV.SkipCheckPrivilege {
 		return stats, nil
 	}
-	for {
-		explainStmt, ok := stmt.(*tree.ExplainStmt)
-		if !ok {
-			break
-		}
-		stmt = explainStmt.Statement
+	if ses.skipAuthForSpecialUser() {
+		return stats, nil
 	}
-	delta, err := authenticateUserCanExecuteStatement(reqCtx, ses, stmt)
+	saved := prepared.authorizationRequirements(ses, stmt, p)
+	stmt = authorizationStatement(stmt)
+	var admission *privilege
+	if saved != nil {
+		admission = saved.admission
+	} else {
+		admission = determinePrivilegeSetOfStatement(stmt)
+	}
+	delta, err := authenticateStatementRequirement(reqCtx, ses, stmt, admission)
 	if err != nil {
 		return stats, err
 	}
 	stats.Add(&delta)
-
-	delta, err = authenticateCanExecuteStatementAndPlan(reqCtx, ses, stmt, p)
+	if saved != nil {
+		var yes bool
+		yes, delta, err = evaluatePlanAuthorization(reqCtx, ses, &saved.plan)
+		if err == nil && !yes {
+			err = moerr.NewInternalError(reqCtx, "do not have privilege to execute the statement")
+		}
+	} else {
+		delta, err = authenticateStatementAndPlan(reqCtx, ses, stmt, p, admission)
+	}
 	if err != nil {
 		return stats, err
 	}
@@ -4233,6 +4256,11 @@ func executeStmtWithIncrStmt(ses FeSession,
 	if err != nil || hasRecovered {
 		return err
 	}
+	if _, userSession := ses.(*Session); userSession && txnOp.Txn().Isolation == pbtxn.TxnIsolation_RC && execCtx.authorizationSnapshot.IsEmpty() {
+		// IncrStatementID has established this execution's RC visibility. An
+		// earlier protected native check may already own its independent view.
+		execCtx.authorizationSnapshot = txnOp.SnapshotTS()
+	}
 	stats := statistic.StatsInfoFromContext(newCtx)
 	stats.AddTxnIncrStatementS3Request(statistic.S3Request{
 		List:      crs.FileService.S3.List.Load(),
@@ -4726,7 +4754,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		}
 	}()
 	var sqlRecord []string
-	if !stagedSQLMode {
+	if !stagedSQLMode && !input.isBinaryProtExecute {
 		sqlRecord, err = sqlForRecordByStatementWithSQLMode(execCtx.reqCtx, input.getSql(), sessionSQLModeForParser(ses))
 		if err != nil {
 			return err
@@ -4751,6 +4779,10 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 			currentSQLRecord = stagedSQLRecords[i]
 			sqlType = currentInput.getSqlSourceType(0)
 			hasMoreStatements = hasStatement(stagedRemaining, sessionSQLModeForParser(ses))
+		} else if input.isBinaryProtExecute {
+			// parseStmtExecute generates only EXECUTE plus the numeric statement
+			// name. Its envelope contains neither client SQL nor parameter bytes.
+			currentSQLRecord = strings.TrimPrefix(input.getSql(), "/* cloud_nonuser */")
 		} else {
 			currentSQLRecord = sqlRecord[i]
 		}
@@ -4773,6 +4805,8 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// clear the previous statement's run result so a statement that does not
 		// set it (e.g. a status statement) does not inherit a stale AffectRows.
 		execCtx.runResult = nil
+		execCtx.authorizationSnapshot = timestamp.Timestamp{}
+		execCtx.prepareStmt = nil
 		resetDiagnosticsForStatement(ses, execCtx, currentInput, stmt)
 		removePrepareStmtForReplacement(ses, stmt)
 		var err2 error
@@ -4944,16 +4978,17 @@ func sqlForRecordByStatementWithSQLMode(ctx context.Context, sql string, sqlMode
 		isCmdObjectListSql(sql) || isCmdCheckSnapshotFlushedSql(sql) {
 		return parsers.HandleSqlForRecord(sql), nil
 	}
-	fragments, err := parsers.SplitSqlByStatementWithSQLMode(ctx, sql, sqlMode)
-	if err != nil {
-		return nil, err
-	}
 	records, err := parsers.HandleSqlForRecordByStatementWithSQLMode(ctx, sql, sqlMode)
 	if err != nil {
 		return nil, err
 	}
-	if len(fragments) == 1 {
+	// The record helper preserves one result per raw statement fragment.
+	if len(records) == 1 {
 		return records, nil
+	}
+	fragments, err := parsers.SplitSqlByStatementWithSQLMode(ctx, sql, sqlMode)
+	if err != nil {
+		return nil, err
 	}
 	byStatement := make([]string, 0, len(records))
 	for i, fragment := range fragments {

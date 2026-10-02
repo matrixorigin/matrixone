@@ -18,6 +18,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -25,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -117,8 +120,19 @@ func TestIssue29399AccountRestoreRollsBackInvalidPrivileges(t *testing.T) {
 				restoreSQL := func(snapshot string) string {
 					return "restore account " + source + " {snapshot = '" + snapshot + "'} to account " + destination
 				}
-				_, err := sysDB.ExecContext(ctx, restoreSQL(badSnapshot))
+				reader := openDB(destination + "#u1#reader")
+				persistent, err := reader.Conn(ctx)
+				require.NoError(t, err)
+				defer persistent.Close()
+				var warmedValue int
+				require.NoError(t, persistent.QueryRowContext(ctx, "select id from app.t").Scan(&warmedValue))
+				require.Equal(t, beforeValue, warmedValue)
+				_, err = sysDB.ExecContext(ctx, restoreSQL(badSnapshot))
 				require.ErrorContains(t, err, "nonzero table or view privilege has an invalid level")
+				// Both object recreation and the real grant DELETE occurred;
+				// actual server cancellation must still roll all of them back.
+				cancelRestoreAtGrantDeletion(t, ctx, sysDB, restoreSQL(goodSnapshot))
+
 				var afterID, afterGrant uint64
 				require.NoError(t, admin.QueryRowContext(ctx,
 					"select rel_logical_id from mo_catalog.mo_tables where reldatabase = 'app' and relname = 't'").Scan(&afterID))
@@ -127,10 +141,10 @@ func TestIssue29399AccountRestoreRollsBackInvalidPrivileges(t *testing.T) {
 				require.Equal(t, beforeID, afterID, "DDL was not rolled back")
 				require.Equal(t, beforeGrant, afterGrant, "grants were not rolled back")
 
-				// Fresh authenticated readers test durable state rather than cached plans.
-				reader := openDB(destination + "#u1#reader")
+				// Failed/canceled restore must preserve both durable state and the
+				// pre-existing authenticated identity.
 				var afterValue int
-				require.NoError(t, reader.QueryRowContext(ctx, "select id from app.t").Scan(&afterValue))
+				require.NoError(t, persistent.QueryRowContext(ctx, "select id from app.t").Scan(&afterValue))
 				require.Equal(t, beforeValue, afterValue)
 				_, err = reader.ExecContext(ctx, "delete from app.t")
 				require.ErrorContains(t, err, "do not have privilege")
@@ -280,5 +294,299 @@ func TestIssue29399AccountPITRRebindsPrivileges(t *testing.T) {
 		execSQLRequire(t, ctx, adminDB, "restore from pitr "+pitrName+" '"+restoreAt+"'")
 		_, err = prepared.ExecContext(ctx, -1)
 		require.ErrorContains(t, err, "do not have privilege", "account PITR left a stale prepared privilege")
+	})
+}
+
+func TestIssue29399AuthorizationScopeAndRevokedRole(t *testing.T) {
+	runAuthenticatedClusterTest(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
+		defer cancel()
+		cn0, err := c.GetCNService(0)
+		require.NoError(t, err)
+		cn1, err := c.GetCNService(1)
+		require.NoError(t, err)
+		open := func(user string, port int64) *sql.DB {
+			db, err := sql.Open("mysql", fmt.Sprintf("%s:111@tcp(127.0.0.1:%d)/", user, port))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, db.Close()) })
+			return db
+		}
+		sys := open("dump", cn0.GetServiceConfig().CN.Frontend.Port)
+		const account = "issue_29399_scope"
+		execSQLRequire(t, ctx, sys, "create account "+account+" admin_name 'admin' identified by '111'")
+		defer func() {
+			cleanup, done := context.WithTimeout(context.Background(), 30*time.Second)
+			defer done()
+			_, err := sys.ExecContext(cleanup, "drop account if exists "+account)
+			require.NoError(t, err)
+		}()
+		admin := open(account+"#admin", cn0.GetServiceConfig().CN.Frontend.Port)
+		for _, stmt := range []string{
+			"create database allowed", "create database denied",
+			"create table allowed.t(id int)", "create table denied.t(id int)",
+			"insert into allowed.t values(1)", "insert into denied.t values(2)",
+			"create role reader", "create user u identified by '111'",
+			"use allowed", "grant select on table * to reader", "grant reader to u",
+			"grant create table on database allowed to reader", "grant select on table allowed.t to reader with grant option", "create role delegate",
+		} {
+			execSQLRequire(t, ctx, admin, stmt)
+		}
+		user := open(account+"#u#reader", cn1.GetServiceConfig().CN.Frontend.Port)
+		conn, err := user.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		var count int
+		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from allowed.t").Scan(&count))
+		t.Run("database wildcard must not cover another database", func(t *testing.T) {
+			for _, query := range []string{
+				"select count(*) from allowed.t a join denied.t b on a.id = b.id",
+				"select count(*) from denied.t b join allowed.t a on a.id = b.id",
+			} {
+				err := conn.QueryRowContext(ctx, query).Scan(&count)
+				require.ErrorContains(t, err, "do not have privilege", query)
+			}
+		})
+		prepared, err := conn.PrepareContext(ctx, "select count(*) from allowed.t where id = ?")
+		require.NoError(t, err)
+		defer prepared.Close()
+		require.NoError(t, prepared.QueryRowContext(ctx, 1).Scan(&count))
+		_, err = conn.ExecContext(ctx, "create table allowed.owned(id int)")
+		require.NoError(t, err)
+		execSQLRequire(t, ctx, admin, "insert into allowed.owned values(7)")
+		_, err = conn.ExecContext(ctx, "prepare text_scope from 'select count(*) from allowed.t'")
+		require.NoError(t, err)
+		require.NoError(t, conn.QueryRowContext(ctx, "execute text_scope").Scan(&count))
+		_, err = conn.ExecContext(ctx, "begin")
+		require.NoError(t, err)
+		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from allowed.t").Scan(&count))
+		execSQLRequire(t, ctx, admin, "revoke reader from u")
+		t.Run("revoked primary role", func(t *testing.T) {
+			err := conn.QueryRowContext(ctx, "select count(*) from allowed.t").Scan(&count)
+			require.ErrorContains(t, err, "do not have privilege")
+		})
+		t.Run("revoked primary role binary prepared", func(t *testing.T) {
+			err := prepared.QueryRowContext(ctx, 1).Scan(&count)
+			require.ErrorContains(t, err, "do not have privilege")
+		})
+
+		for _, query := range []string{"execute text_scope", "drop table allowed.owned", "grant select on table allowed.t to delegate"} {
+			t.Run("revoked role: "+query, func(t *testing.T) {
+				_, err := conn.ExecContext(ctx, query)
+				require.ErrorContains(t, err, "do not have privilege")
+			})
+		}
+		_, err = conn.ExecContext(ctx, "rollback")
+		require.NoError(t, err)
+		_, err = conn.ExecContext(ctx, "set role reader")
+		require.ErrorContains(t, err, "has not be granted")
+		_, err = conn.ExecContext(ctx, "set role public")
+		require.NoError(t, err, "a revoked primary role must not block role recovery")
+		require.ErrorContains(t, prepared.QueryRowContext(ctx, 1).Scan(&count), "do not have privilege")
+		execSQLRequire(t, ctx, admin, "grant reader to u")
+		_, err = conn.ExecContext(ctx, "set role reader")
+		require.NoError(t, err)
+		require.NoError(t, prepared.QueryRowContext(ctx, 1).Scan(&count))
+		require.Equal(t, 1, count)
+		t.Run("account restore removes current membership", func(t *testing.T) {
+			const snapshot = "issue_29399_scope_membership"
+			execSQLRequire(t, ctx, admin, "revoke reader from u")
+			execSQLRequire(t, ctx, sys, "create snapshot "+snapshot+" for account "+account)
+			defer func() { _, err := sys.ExecContext(ctx, "drop snapshot if exists "+snapshot); require.NoError(t, err) }()
+			execSQLRequire(t, ctx, admin, "grant reader to u")
+			require.NoError(t, prepared.QueryRowContext(ctx, 1).Scan(&count))
+			execSQLRequire(t, ctx, sys, "restore account "+account+" {snapshot='"+snapshot+"'}")
+			require.ErrorContains(t, prepared.QueryRowContext(ctx, 1).Scan(&count), "do not have privilege")
+			execSQLRequire(t, ctx, admin, "grant reader to u")
+			require.NoError(t, prepared.QueryRowContext(ctx, 1).Scan(&count))
+		})
+		t.Run("dropped user cannot retain public privileges", func(t *testing.T) {
+			execSQLRequire(t, ctx, admin, "grant select on table allowed.t to public")
+			execSQLRequire(t, ctx, admin, "create user public_u identified by '111'")
+			public, err := open(account+"#public_u#public", cn1.GetServiceConfig().CN.Frontend.Port).Conn(ctx)
+			require.NoError(t, err)
+			defer public.Close()
+			require.NoError(t, public.QueryRowContext(ctx, "select id from allowed.t").Scan(&count))
+			execSQLRequire(t, ctx, admin, "drop user public_u")
+			require.ErrorContains(t, public.QueryRowContext(ctx, "select id from allowed.t").Scan(&count), "do not have privilege")
+		})
+		t.Run("cross account restore cannot reuse authenticated numeric identities", func(t *testing.T) {
+			const source, target, snapshot = "issue_29399_identity_source", "issue_29399_identity_target", "issue_29399_identity"
+			defer func() {
+				cleanup, done := context.WithTimeout(context.Background(), 30*time.Second)
+				defer done()
+				for _, q := range []string{"drop snapshot if exists " + snapshot, "drop account if exists " + target, "drop account if exists " + source} {
+					_, err := sys.ExecContext(cleanup, q)
+					require.NoError(t, err)
+				}
+			}()
+			var old []*sql.Conn
+			var oldAdmin *sql.Conn
+			cn2, err := c.GetCNService(2)
+			require.NoError(t, err)
+			var sourceUserID, targetUserID, sourceRoleID, targetRoleID uint32
+			for i, name := range []string{source, target} {
+				adminName, roleName, userName := "source_admin", "secret_reader", "source_user"
+				if i == 1 {
+					adminName, roleName, userName = "target_admin", "guest", "target_user"
+				}
+				execSQLRequire(t, ctx, sys, "create account "+name+" admin_name '"+adminName+"' identified by '111'")
+				a := open(name+"#"+adminName, cn0.GetServiceConfig().CN.Frontend.Port)
+				for _, q := range []string{"create database app", "create table app.secret(id int)", "create table app.visible(id int)", "insert into app.secret values(42)", "insert into app.visible values(1)", "create role " + roleName, "create user " + userName + " identified by '111'", "grant connect on account * to " + roleName, "grant " + roleName + " to " + userName, "grant select on table app.visible to " + roleName} {
+					execSQLRequire(t, ctx, a, q)
+				}
+				if i == 0 {
+					execSQLRequire(t, ctx, a, "grant select on table app.secret to "+roleName)
+					require.NoError(t, a.QueryRowContext(ctx, "select user_id from mo_catalog.mo_user where user_name = ?", userName).Scan(&sourceUserID))
+					require.NoError(t, a.QueryRowContext(ctx, "select role_id from mo_catalog.mo_role where role_name = ?", roleName).Scan(&sourceRoleID))
+				} else {
+					require.NoError(t, a.QueryRowContext(ctx, "select user_id from mo_catalog.mo_user where user_name = ?", userName).Scan(&targetUserID))
+					require.NoError(t, a.QueryRowContext(ctx, "select role_id from mo_catalog.mo_role where role_name = ?", roleName).Scan(&targetRoleID))
+					for _, port := range []int64{cn1.GetServiceConfig().CN.Frontend.Port, cn2.GetServiceConfig().CN.Frontend.Port} {
+						conn, err := open(name+"#"+userName+"#"+roleName, port).Conn(ctx)
+						require.NoError(t, err)
+						defer conn.Close()
+						old = append(old, conn)
+					}
+					oldAdmin, err = a.Conn(ctx)
+					require.NoError(t, err)
+					defer oldAdmin.Close()
+					require.NoError(t, oldAdmin.QueryRowContext(ctx, "select id from app.secret").Scan(&count))
+				}
+			}
+			require.Equal(t, sourceUserID, targetUserID, "the witness must collide numeric user identities")
+			require.Equal(t, sourceRoleID, targetRoleID, "the witness must collide numeric role identities")
+			var prepared []*sql.Stmt
+			for _, conn := range old {
+				require.ErrorContains(t, conn.QueryRowContext(ctx, "select id from app.secret").Scan(&count), "do not have privilege")
+				binary, err := conn.PrepareContext(ctx, "select id from app.visible")
+				require.NoError(t, err)
+				defer binary.Close()
+				prepared = append(prepared, binary)
+				require.NoError(t, binary.QueryRowContext(ctx).Scan(&count))
+				_, err = conn.ExecContext(ctx, "prepare identity_text from 'select id from app.visible'")
+				require.NoError(t, err)
+			}
+			execSQLRequire(t, ctx, sys, "create snapshot "+snapshot+" for account "+source)
+			restore := "restore account " + source + " {snapshot='" + snapshot + "'} to account " + target
+			cancelRestoreAtGrantDeletion(t, ctx, sys, restore)
+			for i, conn := range old {
+				require.NoError(t, prepared[i].QueryRowContext(ctx).Scan(&count))
+				require.NoError(t, conn.QueryRowContext(ctx, "execute identity_text").Scan(&count))
+				require.ErrorContains(t, conn.QueryRowContext(ctx, "select id from app.secret").Scan(&count), "do not have privilege")
+			}
+			_, err = oldAdmin.ExecContext(ctx, "grant select on table app.visible to guest")
+			require.NoError(t, err, "rollback invalidated the surviving administrator")
+			// These native statements use cached administrator/owner identity,
+			// rather than an ordinary table privilege. Rollback must retain it.
+			native := []string{
+				"create stage retained_admin_probe url='s3://bucket/'",
+				"alter stage retained_admin_probe set url='s3://bucket2/'",
+				"set global sql_mode=''",
+				"set @auth_native_probe=1, global sql_mode=''",
+				"alter database app set mysql_compatibility_mode='0.8.0'",
+				"set role accountadmin",
+			}
+			for _, q := range native {
+				_, err = oldAdmin.ExecContext(ctx, q)
+				require.NoError(t, err, "rollback invalidated native command: %s", q)
+			}
+			_, err = oldAdmin.ExecContext(ctx, "drop stage retained_admin_probe")
+			require.NoError(t, err)
+			native = append(native, "drop stage retained_admin_probe")
+			_, err = oldAdmin.ExecContext(ctx, "set @auth_native_probe=0")
+			require.NoError(t, err)
+			execSQLRequire(t, ctx, sys, restore)
+			for _, q := range native {
+				_, err = oldAdmin.ExecContext(ctx, q)
+				assert.ErrorContains(t, err, "do not have privilege", "replaced administrator ran native command: %s", q)
+			}
+			var localEffect int
+			require.NoError(t, oldAdmin.QueryRowContext(ctx, "select @auth_native_probe").Scan(&localEffect))
+			require.Zero(t, localEffect, "denied mixed SET partially executed its local assignment")
+			freshAdmin := open(target+"#source_admin#accountadmin", cn1.GetServiceConfig().CN.Frontend.Port)
+			require.NoError(t, freshAdmin.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_stages where stage_name='retained_admin_probe'").Scan(&count))
+			require.Zero(t, count, "denied CREATE STAGE mutated the restored catalog")
+			for i, conn := range old {
+				require.ErrorContains(t, conn.QueryRowContext(ctx, "select id from app.secret").Scan(&count), "do not have privilege")
+				require.ErrorContains(t, conn.QueryRowContext(ctx, "select id from app.visible").Scan(&count), "do not have privilege")
+				require.ErrorContains(t, prepared[i].QueryRowContext(ctx).Scan(&count), "do not have privilege")
+				require.ErrorContains(t, conn.QueryRowContext(ctx, "execute identity_text").Scan(&count), "do not have privilege")
+			}
+			require.ErrorContains(t, oldAdmin.QueryRowContext(ctx, "select id from app.secret").Scan(&count), "do not have privilege")
+			_, err = oldAdmin.ExecContext(ctx, "grant delete on table app.secret to secret_reader")
+			require.ErrorContains(t, err, "do not have privilege")
+			_, err = oldAdmin.ExecContext(ctx, "revoke select on table app.secret from secret_reader")
+			require.ErrorContains(t, err, "do not have privilege")
+			fresh := open(target+"#source_user#secret_reader", cn1.GetServiceConfig().CN.Frontend.Port)
+			require.NoError(t, fresh.QueryRowContext(ctx, "select id from app.secret").Scan(&count))
+			require.Equal(t, 42, count)
+		})
+		t.Run("recreated creator is not historical owner", func(t *testing.T) {
+			var err error
+			execSQLRequire(t, ctx, admin, "grant create database on account * to reader")
+			_, err = conn.ExecContext(ctx, "create database historical_parent")
+			require.NoError(t, err)
+			execSQLRequire(t, ctx, admin, "create table historical_parent.t(id int)")
+			execSQLRequire(t, ctx, admin, "insert into historical_parent.t values(9)")
+
+			// Bulk restore omits external tables: their missing creators cannot
+			// reject reconstruction of the eligible admin-owned objects.
+			execSQLRequire(t, ctx, admin, "create database external_parent")
+			execSQLRequire(t, ctx, admin, "grant create table on database external_parent to reader")
+			csv := filepath.Join(t.TempDir(), "external.csv")
+			require.NoError(t, os.WriteFile(csv, []byte("1\n"), 0600))
+			_, err = conn.ExecContext(ctx, "create external table external_parent.ext(id int) infile{'filepath'='"+csv+"'} fields terminated by ','")
+			require.NoError(t, err)
+			execSQLRequire(t, ctx, admin, "create table external_parent.t(id int)")
+			execSQLRequire(t, ctx, admin, "insert into external_parent.t values(9)")
+
+			const snapshot = "issue_29399_scope_owner"
+			execSQLRequire(t, ctx, admin, "create snapshot "+snapshot+" for account")
+			defer func() {
+				cleanup, done := context.WithTimeout(context.Background(), 30*time.Second)
+				defer done()
+				_, err := admin.ExecContext(cleanup, "drop snapshot if exists "+snapshot)
+				require.NoError(t, err)
+			}()
+
+			var owner, restoredOwner uint32
+			require.NoError(t, admin.QueryRowContext(ctx, "select owner from mo_catalog.mo_tables where reldatabase = 'allowed' and relname = 'owned'").Scan(&owner))
+			execSQLRequire(t, ctx, admin, "alter role reader rename to surviving_reader")
+			execSQLRequire(t, ctx, admin, "create role reader")
+			execSQLRequire(t, ctx, admin, "restore table allowed.owned {snapshot='"+snapshot+"'}")
+			require.NoError(t, admin.QueryRowContext(ctx, "select owner from mo_catalog.mo_tables where reldatabase = 'allowed' and relname = 'owned'").Scan(&restoredOwner))
+			require.Equal(t, owner, restoredOwner)
+			execSQLRequire(t, ctx, admin, "create user replacement identified by '111'")
+			execSQLRequire(t, ctx, admin, "grant reader to replacement")
+			namesake := open(account+"#replacement#reader", cn1.GetServiceConfig().CN.Frontend.Port)
+			_, err = namesake.ExecContext(ctx, "drop table allowed.owned")
+			require.ErrorContains(t, err, "do not have privilege")
+			execSQLRequire(t, ctx, admin, "drop user u")
+			require.ErrorContains(t, conn.QueryRowContext(ctx, "select count(*) from allowed.t").Scan(&count), "do not have privilege")
+			execSQLRequire(t, ctx, admin, "update external_parent.t set id = 12")
+			execSQLRequire(t, ctx, admin, "restore database external_parent {snapshot='"+snapshot+"'}")
+			require.NoError(t, admin.QueryRowContext(ctx, "select id from external_parent.t").Scan(&count))
+			require.Equal(t, 9, count)
+			require.NoError(t, admin.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase='external_parent' and relname='ext'").Scan(&count))
+			require.Zero(t, count)
+
+			// Only the table is reconstructed; an existing parent's deleted
+			// creator must not reject restoration of an admin-owned child.
+			execSQLRequire(t, ctx, admin, "update historical_parent.t set id = 12")
+			execSQLRequire(t, ctx, admin, "restore table historical_parent.t {snapshot='"+snapshot+"'}")
+			require.NoError(t, admin.QueryRowContext(ctx, "select id from historical_parent.t").Scan(&count))
+			require.Equal(t, 9, count)
+
+			execSQLRequire(t, ctx, admin, "create user u identified by '111'")
+			var original, current uint64
+			const identity = "select rel_logical_id from mo_catalog.mo_tables where reldatabase = 'allowed' and relname = 'owned'"
+			require.NoError(t, admin.QueryRowContext(ctx, identity).Scan(&original))
+			_, err = admin.ExecContext(ctx, "restore table allowed.owned {snapshot='"+snapshot+"'}")
+			require.ErrorContains(t, err, "creator no longer exists")
+			require.NoError(t, admin.QueryRowContext(ctx, identity).Scan(&current))
+			require.Equal(t, original, current)
+			require.NoError(t, admin.QueryRowContext(ctx, "select id from allowed.owned").Scan(&count))
+			require.Equal(t, 7, count)
+		})
 	})
 }

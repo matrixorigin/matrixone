@@ -72,6 +72,12 @@ type PartitionState struct {
 	// so it is not a physical applied watermark.
 	appliedTo types.TS
 
+	// Content changes are distinct from applied watermark advancement. These
+	// immutable publication fields let readers prove unchanged data without
+	// retaining a partition snapshot or invalidating on empty logtails.
+	contentRevision uint64
+	contentUpper    types.TS
+
 	// index
 
 	dataObjectsNameIndex      *btree.BTreeG[objectio.ObjectEntry]
@@ -93,6 +99,23 @@ type PartitionState struct {
 	// should have been in the Partition structure, but doing that requires much more codes changes
 	// so just put it here.
 	shared *sharedStates
+}
+
+// ContentVersion describes the latest potentially content-changing publication.
+// The publisher calls RecordContentChange on its private state before publishing.
+func (p *PartitionState) ContentVersion() (uint64, types.TS) {
+	return p.contentRevision, p.contentUpper
+}
+
+func (p *PartitionState) RecordContentChange(upper types.TS) {
+	// An unknown change boundary cannot certify an older snapshot's contents.
+	if upper.IsEmpty() {
+		upper = types.MaxTs()
+	}
+	p.contentRevision++
+	if upper.GT(&p.contentUpper) {
+		p.contentUpper = upper
+	}
 }
 
 func (p *PartitionState) GetStart() types.TS {
@@ -820,6 +843,8 @@ func (p *PartitionState) Copy() *PartitionState {
 		start:                     p.start,
 		end:                       p.end,
 		appliedTo:                 p.appliedTo,
+		contentRevision:           p.contentRevision,
+		contentUpper:              p.contentUpper,
 		prefetch:                  p.prefetch,
 	}
 	if len(p.checkpoints) > 0 {

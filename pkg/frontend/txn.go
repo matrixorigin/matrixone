@@ -458,6 +458,10 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 			txnclient.WithTxnIsolation(pbtxn.TxnIsolation_RC))
 	}
 
+	if backSes, ok := execCtx.ses.(*backSession); ok && !backSes.readSnapshot.IsEmpty() {
+		opts = append(opts, txnclient.WithReadOnlySnapshot(backSes.readSnapshot))
+	}
+
 	tempCtx, tempCancel := context.WithTimeoutCause(th.txnCtx, pu.SV.CreateTxnOpTimeout.Duration, moerr.CauseCreateTxnOpUnsafe)
 	defer tempCancel()
 

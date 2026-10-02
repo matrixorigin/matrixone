@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -33,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
@@ -838,7 +840,7 @@ func TestTxnManager1(t *testing.T) {
 	assert.Equal(t, expected, seqs)
 }
 
-func initTestContext(ctx context.Context, t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnManager, wal.Store) {
+func initTestContext(ctx context.Context, t *testing.T, dir string, clocks ...clock.Clock) (*catalog.Catalog, *txnbase.TxnManager, wal.Store) {
 	fs := objectio.TmpNewFileservice(ctx, path.Join(dir, "data"))
 	rt := dbutils.NewRuntime(
 		dbutils.WithRuntimeObjectFS(fs),
@@ -846,8 +848,12 @@ func initTestContext(ctx context.Context, t *testing.T, dir string) (*catalog.Ca
 	factory := tables.NewDataFactory(rt, dir)
 	c := catalog.MockCatalog(factory)
 	driver := wal.NewLocalHandle(dir, "store", nil)
+	var source clock.Clock = types.NewMockHLCClock(1)
+	if len(clocks) != 0 {
+		source = clocks[0]
+	}
 	mgr := txnbase.NewTxnManager(TxnStoreFactory(context.Background(), c, driver, rt),
-		TxnFactory(c), types.NewMockHLCClock(1))
+		TxnFactory(c), source)
 	rt.Now = mgr.Now
 	mgr.Start(context.Background())
 	return c, mgr, driver
@@ -1492,4 +1498,56 @@ func TestReplayAppendNodeCreateTS(t *testing.T) {
 	node.TxnMVCCNode.Txn = nil
 	node.TxnMVCCNode.End = types.TS{}
 	assert.Equal(t, prepareTS, replayAppendNodeCreateTS(node))
+}
+
+// The frontend certificate treats an applied prepare timestamp's successor as
+// a complete inclusive view. Real writers must not commit at that successor.
+func TestRealWritePrepareLeavesSnapshotSuccessor(t *testing.T) {
+	ctx := t.Context()
+	dir := testutils.InitTestEnv(ModuleName, t)
+	source := clock.NewHLCClock(func() int64 { return 100 }, 0)
+	source.SetNodeID(17)
+	c, mgr, driver := initTestContext(ctx, t, dir, source)
+	defer driver.Close()
+	defer c.Close()
+	defer mgr.Stop()
+	mgr.StopHeartbeat()
+	commit := func(tx txnif.AsyncTxn) {
+		before := mgr.Now()
+		require.NoError(t, tx.Commit(ctx))
+		successor := before.Next()
+		committed := tx.GetCommitTS()
+		require.True(t, committed.GT(&successor), "real mutation must skip %v; commit=%v", successor, committed)
+	}
+	// Database-only DDL still runs the real store's pre-prepare path.
+	ddl, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+	_, err = ddl.CreateDatabase("gap_db", "", "")
+	require.NoError(t, err)
+	commit(ddl)
+	insert, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+	db, err := insert.GetDatabase("gap_db")
+	require.NoError(t, err)
+	schema := catalog.MockSchema(2, 0)
+	schema.Name = "t"
+	relation, err := db.CreateRelation(schema)
+	require.NoError(t, err)
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+	require.NoError(t, relation.Append(ctx, bat))
+	commit(insert)
+	remove, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+	db, err = remove.GetDatabase("gap_db")
+	require.NoError(t, err)
+	relation, err = db.GetRelationByName("t")
+	require.NoError(t, err)
+	require.NoError(t, relation.DeleteByFilter(ctx, handle.NewEQFilter(bat.Vecs[0].Get(0))))
+	commit(remove)
+	drop, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+	_, err = drop.DropDatabase("gap_db")
+	require.NoError(t, err)
+	commit(drop)
 }

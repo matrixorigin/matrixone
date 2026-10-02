@@ -105,3 +105,8 @@ func (e *EntireEngine) GetMessageCenter() any {
 func (e *EntireEngine) GetService() string {
 	return e.Engine.GetService()
 }
+
+func (e *EntireEngine) ReadTableContentVersions(ctx context.Context, snapshot timestamp.Timestamp, dependencies []TableContentDependency, versions []TableContentVersion) bool {
+	reader, ok := e.Engine.(TableContentReader)
+	return ok && reader.ReadTableContentVersions(ctx, snapshot, dependencies, versions)
+}

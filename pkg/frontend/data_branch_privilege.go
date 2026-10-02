@@ -404,7 +404,8 @@ func determineBranchRequirement(
 	req branchPrivilegeRequirement,
 ) (bool, statistic.StatsArray, error) {
 	priv := branchRequirementToPrivilege(req)
-	return determineUserHasPrivilegeSet(ctx, ses, priv)
+	ok, stats, _, err := determineUserHasPrivilegeSet(ctx, ses, priv)
+	return ok, stats, err
 }
 
 func branchRequirementToPrivilege(req branchPrivilegeRequirement) *privilege {

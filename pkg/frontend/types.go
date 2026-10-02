@@ -293,6 +293,7 @@ func (ec *engineColumnInfo) GetType() types.T {
 }
 
 type PrepareStmt struct {
+	authorization   *preparedAuthorization
 	Name            string
 	Sql             string
 	PreparePlan     *plan.Plan
@@ -625,6 +626,7 @@ func execResultArrayHasData(arr []ExecResult) bool {
 type BackgroundExecOption struct {
 	fromRealUser       bool
 	forcePessimisticRC bool
+	readSnapshot       timestamp.Timestamp
 }
 
 // BackgroundExec executes the sql in background session without network output.
@@ -670,6 +672,7 @@ func getStatementType(stmt tree.Statement) tree.StatementType {
 //}
 
 func (prepareStmt *PrepareStmt) Close() {
+	prepareStmt.authorization = nil
 	if prepareStmt.params != nil {
 		prepareStmt.params.Free(prepareStmt.proc.Mp())
 	}
@@ -895,6 +898,8 @@ type ExecCtx struct {
 	reqCtx      context.Context
 	prepareStmt *PrepareStmt
 	runResult   *util.RunResult
+	// Authorization uses a statement view independently of an old user SI transaction.
+	authorizationSnapshot timestamp.Timestamp
 	// rootSQLOverride is the authoritative SQL for a statement planned
 	// recursively inside this request, such as the statement owned by PREPARE.
 	// A nil value falls back to the session SQL.
@@ -953,6 +958,7 @@ func (execCtx *ExecCtx) withRootSQL(rootSQL string, fn func() error) error {
 }
 
 func (execCtx *ExecCtx) Close() {
+	execCtx.authorizationSnapshot = timestamp.Timestamp{}
 	if execCtx.returning != nil {
 		_ = execCtx.returning.Close(execCtx)
 		execCtx.returning = nil

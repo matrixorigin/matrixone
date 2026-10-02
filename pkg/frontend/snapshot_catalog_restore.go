@@ -41,14 +41,6 @@ type catalogRestoreAccountPair struct {
 
 const rolePrivilegeRestoreInsertBatchSize = 256
 
-// restoreAccountPrivileges is the sole writer of restored mo_role_privs.
-// Call it in the restore transaction after all referenced objects exist.
-func restoreAccountPrivileges(ctx context.Context, bh BackgroundExec, snapshotTS int64, sourceAccount, targetAccount uint32) error {
-	return restoreRolePrivilegesAfterObjects(&systemCatalogRestoreContext{
-		ctx: ctx, bh: bh, snapshotTS: snapshotTS, sourceAccount: sourceAccount, targetAccount: targetAccount,
-	})
-}
-
 type catalogObjectName struct {
 	database   string
 	name       string
@@ -78,7 +70,10 @@ type rolePrivilegeRestoreRow struct {
 	withGrantOption bool
 }
 
-func restoreRolePrivilegesAfterObjects(restoreCtx *systemCatalogRestoreContext) error {
+// restoreAccountPrivileges is the sole writer of restored mo_role_privs.
+// Call it in the restore transaction after all referenced objects exist.
+func restoreAccountPrivileges(ctx context.Context, bh BackgroundExec, snapshotTS int64, sourceAccount, targetAccount uint32) error {
+	restoreCtx := &systemCatalogRestoreContext{ctx: ctx, bh: bh, snapshotTS: snapshotTS, sourceAccount: sourceAccount, targetAccount: targetAccount}
 	identityMap, err := loadCatalogRestoreIdentityMap(restoreCtx)
 	if err != nil {
 		return err

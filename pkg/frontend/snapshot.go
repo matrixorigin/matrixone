@@ -1397,7 +1397,7 @@ func restoreToSubDb(
 	}
 
 	targetCtx := defines.AttachAccountId(ctx, subDb.targetAccount)
-	targetCtx, err = prepareRestoreOwnership(targetCtx, bh, subDb.snapshotTs, subDb.sourceAccount, subDb.targetAccount, "", "")
+	targetCtx, err = prepareSubscriptionRestoreOwnership(targetCtx, bh, subDb.snapshotTs, subDb.sourceAccount, subDb.targetAccount, subDb.dbName)
 	if err != nil {
 		return err
 	}

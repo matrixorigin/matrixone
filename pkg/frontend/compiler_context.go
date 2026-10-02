@@ -133,6 +133,11 @@ func (tcc *TxnCompilerContext) InitExecuteStmtParam(execPlan *plan.Execute) (*pl
 		execPlan,
 		"",
 	)
+	if err == nil && !tcc.execCtx.ses.IsBackgroundSession() {
+		var authStats statistic.StatsArray
+		authStats, err = authenticateUserCanExecutePrepareOrExecute(tcc.execCtx.reqCtx, owner, st, p)
+		statistic.StatsInfoFromContext(tcc.execCtx.reqCtx).PermissionAuth.Add(&authStats)
+	}
 	if owned && st != nil {
 		st.Free()
 		st = nil

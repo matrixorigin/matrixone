@@ -41,6 +41,28 @@ import (
 	"go.uber.org/zap"
 )
 
+// TableContentDependency is a physical table resolved at a reader's snapshot.
+type TableContentDependency struct {
+	DatabaseID uint64
+	TableID    uint64
+}
+
+// TableContentVersion is usable only with the reader that captured it. It does
+// not retain a partition state, and an unavailable dependency is never a match.
+type TableContentVersion struct {
+	Replay       uint64
+	Subscription uint64
+	Revision     uint64
+	ChangeUpper  types.TS
+}
+
+// TableContentReader validates bounded metadata dependencies without subscribing,
+// creating partitions, loading checkpoints, or issuing I/O. The caller must
+// first establish the snapshot with the existing transaction visibility owner.
+type TableContentReader interface {
+	ReadTableContentVersions(context.Context, timestamp.Timestamp, []TableContentDependency, []TableContentVersion) bool
+}
+
 type Nodes []Node
 
 type Node struct {
