@@ -48,6 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	icebergio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
+	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -5371,6 +5372,9 @@ func (c *Compile) compileTableFunction(node *plan.Node, ss []*Scope) ([]*Scope, 
 			return c.compileSingleTableFunction(node)
 		}
 	}
+	if planplugin.TableFuncRequiresCoordinator(node.TableDef.TblFunc.Name) {
+		ss = []*Scope{c.newMergeScope(ss)}
+	}
 	for i := range ss {
 		op := constructTableFunction(node, c.pn.GetQuery())
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
@@ -7305,9 +7309,11 @@ func hasMultiScopeGroup(groups [][]*Scope) bool {
 }
 
 func (c *Compile) compileApply(node, right *plan.Node, rs []*Scope) []*Scope {
-	if right.GetTableDef().GetTblFunc().GetName() == "mo_view_columns" {
-		// Description owns an origin-session compiler context. Candidate scans
-		// may be distributed, but binding must run serially on the origin CN.
+	name := right.GetTableDef().GetTblFunc().GetName()
+	if name == "mo_view_columns" || planplugin.TableFuncRequiresCoordinator(name) {
+		// Session-bound functions and index writers must use the origin process:
+		// a remote mirror workspace cannot publish writes in its transaction.
+		// Gather inputs here without changing the source scans' placement.
 		rs = []*Scope{c.newMergeScope(rs)}
 	}
 
