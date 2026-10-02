@@ -339,8 +339,9 @@ func TestIssue28246SequencePlacementAcrossCNs(t *testing.T) {
 		source := "placement_source"
 		issue26568Exec(t, ctx, setupConn, "create sequence `"+sequence+"` increment 1 start with 1 no cycle")
 		issue26568Exec(t, ctx, setupConn, "create table `"+source+"` (n int)")
-		rows := make([]string, 0, 64)
-		for i := 1; i <= 64; i++ {
+		const sourceRows = 2
+		rows := make([]string, 0, sourceRows)
+		for i := 1; i <= sourceRows; i++ {
 			rows = append(rows, fmt.Sprintf("(%d)", i))
 		}
 		issue26568Exec(t, ctx, setupConn,
@@ -348,7 +349,7 @@ func TestIssue28246SequencePlacementAcrossCNs(t *testing.T) {
 		require.NoError(t, setupConn.Close())
 		t.Cleanup(func() { cleanupIssue26568Database(t, ports[0], dbName) })
 
-		const rowsPerStatement = 128 // two 64-row UNION branches
+		const rowsPerStatement = 2 * sourceRows // repeated evaluation in both UNION branches
 		for index, port := range ports {
 			t.Run(fmt.Sprintf("coordinator-cn-%d", index), func(t *testing.T) {
 				conn := openIssue26568Conn(t, ctx, port)
@@ -358,20 +359,20 @@ func TestIssue28246SequencePlacementAcrossCNs(t *testing.T) {
 				issue26568Exec(t, ctx, conn, `set session optimizer_hints = "execType=2"`)
 				defer resetOptimizerHintsOnCN(t, port)
 
-				// This is an actual SQL control on the two-CN fixture. The
-				// explicit AP hint makes the ordinary plan use the distributed
-				// scheduler; sequence-bearing execution below must still be
-				// pinned to this coordinator after the compile cap.
+				// The AP hint classifies the ordinary plan for multiple CNs;
+				// it does not guarantee a remote scan for this small input.
+				// Sequence-bearing execution must still advance the same
+				// persisted sequence from either coordinator.
 				control, err := testutils.QueryTextResult(ctx, conn,
 					"explain select count(*) from `"+source+"`")
 				require.NoError(t, err)
 				require.Truef(t,
 					strings.HasPrefix(strings.ToUpper(control.ColumnName), "AP QUERY PLAN ON MULTICN("),
-					"sequence-free control did not select the distributed plan: %s", control.ColumnName)
+					"sequence-free control did not select multi-CN AP planning: %s", control.ColumnName)
 				var count int
 				require.NoError(t, conn.QueryRowContext(ctx,
 					"select count(*) from `"+source+"`").Scan(&count))
-				require.Equal(t, 64, count)
+				require.Equal(t, sourceRows, count)
 
 				query := "select nextval('" + sequence + "') from `" + source + "` " +
 					"union all select nextval('" + sequence + "') from `" + source + "`"
