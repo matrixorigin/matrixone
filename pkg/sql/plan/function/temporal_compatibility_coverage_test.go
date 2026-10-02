@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
 )
 
@@ -223,10 +224,10 @@ func TestTemporalCompatibilityHelperDomains(t *testing.T) {
 	for _, unit := range []string{"microsecond", "second", "minute", "hour", "day", "week", "month", "quarter", "year"} {
 		require.Equal(t, unit == "microsecond" || unit == "second" || unit == "minute" || unit == "hour", extractUnitPrefersTime(unit))
 	}
-	_, overflow, err := doTimeAdd(tm, 1, types.Second)
+	_, overflow, err := doTimeInterval(tm, 1, types.Second, false)
 	require.NoError(t, err)
 	require.False(t, overflow)
-	_, overflow, err = doTimeAdd(tm, int64(types.MaxHourInTime+1), types.Hour)
+	_, overflow, err = doTimeInterval(tm, int64(types.MaxHourInTime+1), types.Hour, false)
 	require.NoError(t, err)
 	require.True(t, overflow)
 }
@@ -485,22 +486,22 @@ func TestTemporalCompatibilityErrorAndBoundaryHelpers(t *testing.T) {
 	tm := types.TimeFromClock(false, 12, 34, 56, 123456)
 
 	// Exercise the invalid and overflow branches used by DATE_SUB/SUBTIME.
-	_, err = doDateSub(types.ZeroDate, 1, types.Day)
+	_, err = doDateInterval(types.ZeroDate, 1, types.Day, true)
 	require.Error(t, err)
-	_, err = doDateSub(date, math.MaxInt64, types.Day)
+	_, err = doDateInterval(date, math.MaxInt64, types.Day, true)
 	require.Error(t, err)
-	_, err = doDateStringSub("12:34:56", 1, types.Day)
+	_, err = doDateStringInterval("12:34:56", 1, types.Day, true)
 	require.Error(t, err)
-	_, err = doDateStringSub("not-a-date", 1, types.Day)
+	_, err = doDateStringInterval("not-a-date", 1, types.Day, true)
 	require.Error(t, err)
-	_, err = doDatetimeSub(types.ZeroDatetime, 1, types.Day)
+	_, err = doCalendarInterval(types.ZeroDatetime, 1, types.Day, true)
 	require.Error(t, err)
-	_, err = doDatetimeSub(dt, math.MaxInt64, types.Day)
+	_, err = doCalendarInterval(dt, math.MaxInt64, types.Day, true)
 	require.Error(t, err)
-	_, overflow, err := doTimeSub(tm, math.MaxInt64, types.Second)
+	_, overflow, err := doTimeInterval(tm, math.MaxInt64, types.Second, true)
 	require.NoError(t, err)
 	require.True(t, overflow)
-	_, overflow, err = doTimeSub(types.TimeFromClock(false, 0, 0, 0, 0), int64(types.MaxHourInTime+1), types.Hour)
+	_, overflow, err = doTimeInterval(types.TimeFromClock(false, 0, 0, 0, 0), int64(types.MaxHourInTime+1), types.Hour, true)
 	require.NoError(t, err)
 	require.True(t, overflow)
 
@@ -1106,13 +1107,9 @@ func TestTimestampArithmeticUtcLowerBound(t *testing.T) {
 			if subtract {
 				delta = 1
 			}
-			fn := doTimestampAdd
-			if subtract {
-				fn = doTimestampSub
-			}
-			_, err := fn(zone, types.TimestampMinValue, delta, types.MicroSecond)
+			_, err := doTimestampInterval(zone, types.TimestampMinValue, delta, types.MicroSecond, subtract)
 			require.Equal(t, datetimeOverflowMaxError, err, zone.String())
-			got, err := fn(zone, types.TimestampMinValue+1, delta, types.MicroSecond)
+			got, err := doTimestampInterval(zone, types.TimestampMinValue+1, delta, types.MicroSecond, subtract)
 			require.NoError(t, err)
 			require.Equal(t, types.TimestampMinValue, got)
 		}
@@ -1215,6 +1212,49 @@ func TestPreparedTimeArithmeticTolerantInputs(t *testing.T) {
 			ok, info := c.Run()
 			require.True(t, ok, info)
 			require.Equal(t, []numericWarning{{code: moerr.ER_DATETIME_FUNCTION_OVERFLOW, msg: "Datetime function: time field overflow"}}, warnings.warnings)
+		})
+	}
+}
+
+func TestIntegerDateIntervalAdmission(t *testing.T) {
+	for _, subtract := range []bool{false, true} {
+		t.Run(fmt.Sprintf("subtract=%t", subtract), func(t *testing.T) {
+			proc := newTmpProcess(t)
+			warnings := &numericWarningSession{}
+			proc.WarningSink = warnings
+			counts := []int64{1, 1, 1, math.MaxInt64, math.MaxInt64, math.MaxInt64}
+			fn := fEvalFn(DateIntAdd)
+			if subtract {
+				fn = DateIntSub
+				for i := range counts {
+					counts[i] = -counts[i]
+				}
+			}
+			c := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_int32.ToType(), []int32{20240229, 20240230, 99991231, 20240229, 99991231, 20240229}, []bool{false, false, false, true, false, false}),
+				NewFunctionTestInput(types.T_int64.ToType(), counts, nil),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{int64(types.Day)}, nil),
+			}, NewFunctionTestResult(types.T_int32.ToType(), false, []int32{20240301, 0, 0, 0, 0, 0}, []bool{false, true, true, true, true, true}), fn)
+			t.Cleanup(func() {
+				for _, v := range c.parameters {
+					v.Free(proc.Mp())
+				}
+				c.result.Free()
+			})
+			c = c.WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, true, false, true}})
+			ok, info := c.Run()
+			require.True(t, ok, info)
+			require.Equal(t, []numericWarning{
+				{code: moerr.ER_DATETIME_FUNCTION_OVERFLOW, msg: "Datetime function: time field overflow"},
+				{code: moerr.ER_DATETIME_FUNCTION_OVERFLOW, msg: "Datetime function: time field overflow"},
+			}, warnings.warnings)
+			// Unit admission belongs to the integer-date adapter, even for an empty batch.
+			unit, err := vector.NewConstFixed(types.T_int64.ToType(), int64(types.Hour), 1, proc.Mp())
+			require.NoError(t, err)
+			defer unit.Free(proc.Mp())
+			err = fn([]*vector.Vector{nil, nil, unit}, nil, proc, 0, nil)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "cast to DATETIME first")
 		})
 	}
 }
