@@ -21,10 +21,10 @@ import (
 )
 
 func init() {
-	newVectorMatmulEngine = func(format, dim, nq int, queryCells []byte, cellBytes, maxRows int) (vectorMatmulEngine, error) {
+	newVectorMatmulEngine = func(format, dim, nq int, queryCells []byte, cellBytes, maxRows, topk int) (vectorMatmulEngine, error) {
 		if n, err := cuvs.GetGpuDeviceCount(); err != nil || n == 0 {
 			return nil, nil
 		}
-		return cuvs.NewBlockScaledMatmul(format, dim, nq, queryCells, cellBytes, maxRows)
+		return cuvs.NewBlockScaledMatmul(format, dim, nq, queryCells, cellBytes, maxRows, topk)
 	}
 }

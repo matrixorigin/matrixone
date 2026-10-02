@@ -23,6 +23,7 @@
 #include <cuda_fp4.h>
 #include <cuda_fp8.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -180,7 +181,105 @@ void check_plain(int format, uint32_t dim, size_t rows, uint32_t nq, uint64_t ma
     }
 }
 
+// check_topk compares run_topk with the full scores of run over tiles of rows cells: every
+// kept row carries its exact score, every row above the k-th score is kept, and a query
+// whose rows tied at the k-th score were not all kept is flagged with its full scores.
+void check_topk(int format, uint32_t dim, const std::vector<uint8_t>& queries,
+                const std::vector<uint8_t>& cells, size_t rows, uint32_t nq, uint32_t k,
+                uint64_t max_rows, bool expect_tied) {
+    const size_t cell_bytes = cells.size() / rows;
+    blockscaled_matmul e(0, format, dim, nq, queries.data(), max_rows, k);
+    const size_t kk = std::min<uint64_t>(k, e.max_rows());
+    bool saw_tied = false;
+    for (size_t off = 0; off < rows; off += e.max_rows()) {
+        const size_t n = std::min<size_t>(e.max_rows(), rows - off);
+        const uint8_t* tile = cells.data() + off * cell_bytes;
+        std::vector<float> scores(n * nq), top(nq * kk), full(nq * n, -1.0f);
+        std::vector<int32_t> top_rows(nq * kk);
+        std::vector<uint8_t> tied(nq);
+        e.run(tile, n, scores.data());
+        e.run_topk(tile, n, top.data(), top_rows.data(), full.data(), tied.data());
+        for (uint32_t q = 0; q < nq; q++) {
+            std::vector<float> col(n);
+            for (size_t r = 0; r < n; r++) {
+                col[r] = std::isnan(scores[r * nq + q]) ? -INFINITY : scores[r * nq + q];
+            }
+            std::vector<float> sorted = col;
+            std::sort(sorted.begin(), sorted.end(), std::greater<float>());
+            const size_t want = std::min(kk, n);
+            const float kth = sorted[want - 1];
+            std::vector<bool> kept(n, false);
+            size_t got = 0, kept_at_kth = 0;
+            for (size_t j = 0; j < kk; j++) {
+                const int32_t r = top_rows[q * kk + j];
+                if (r < 0) continue;
+                ASSERT_TRUE(size_t(r) < n);
+                ASSERT_TRUE(!kept[r]);
+                kept[r] = true;
+                got++;
+                ASSERT_TRUE(top[q * kk + j] == col[r]);
+                if (col[r] == kth) kept_at_kth++;
+            }
+            ASSERT_EQ(got, want);
+            size_t all_at_kth = 0;
+            for (size_t r = 0; r < n; r++) {
+                if (col[r] > kth) ASSERT_TRUE(kept[r]);
+                if (col[r] == kth) all_at_kth++;
+            }
+            ASSERT_EQ(tied[q] != 0, all_at_kth > kept_at_kth);
+            if (tied[q] != 0) {
+                saw_tied = true;
+                for (size_t r = 0; r < n; r++) ASSERT_TRUE(full[q * n + r] == col[r]);
+            }
+        }
+    }
+    ASSERT_EQ(saw_tied, expect_tied);
+}
+
+// small_int_cells builds n raw int8 or uint8 vectors with values in {0, 1, 2}, so scores tie.
+std::vector<uint8_t> small_int_cells(uint32_t dim, size_t n, std::mt19937& rng) {
+    std::vector<uint8_t> cells(n * dim);
+    for (auto& c : cells) c = uint8_t(rng() % 3);
+    return cells;
+}
+
 } // namespace
+
+TEST(BlockScaledMatmulTest, TopKMatchesFullScores) {
+    std::mt19937 rng(11);
+    std::vector<double> qv, rv;
+    for (int format : {GPU_BLOCKSCALED_MXFP8, GPU_BLOCKSCALED_NVFP4}) {
+        for (size_t rows : {size_t(5), size_t(300)}) {
+            std::vector<uint8_t> queries = make_cells(format, 96, 3, rng, qv);
+            std::vector<uint8_t> cells = make_cells(format, 96, rows, rng, rv);
+            check_topk(format, 96, queries, cells, rows, 3, 10, 256, false);
+        }
+    }
+    {
+        std::vector<uint8_t> queries(3 * 64 * 4), cells(300 * 64 * 4);
+        std::normal_distribution<float> nd(0.0f, 1.0f);
+        for (size_t i = 0; i < queries.size() / 4; i++) {
+            float v = nd(rng);
+            std::memcpy(&queries[i * 4], &v, 4);
+        }
+        for (size_t i = 0; i < cells.size() / 4; i++) {
+            float v = nd(rng);
+            std::memcpy(&cells[i * 4], &v, 4);
+        }
+        check_topk(GPU_BLOCKSCALED_F32, 64, queries, cells, 300, 3, 7, 128, false);
+    }
+    // values in {0, 1, 2} over 4 dimensions: many rows share the k-th score
+    for (int format : {GPU_BLOCKSCALED_I8, GPU_BLOCKSCALED_U8}) {
+        std::vector<uint8_t> queries = small_int_cells(4, 2, rng);
+        queries[0] = queries[4] = 1;
+        std::vector<uint8_t> cells = small_int_cells(4, 1000, rng);
+        check_topk(format, 4, queries, cells, 1000, 2, 5, 512, true);
+    }
+    // k larger than the tile keeps every row
+    std::vector<uint8_t> queries = small_int_cells(8, 1, rng);
+    std::vector<uint8_t> cells = small_int_cells(8, 50, rng);
+    check_topk(GPU_BLOCKSCALED_I8, 8, queries, cells, 50, 1, 500, 128, false);
+}
 
 TEST(BlockScaledMatmulTest, MXFP8MatchesReference) {
     for (uint32_t dim : {4u, 32u, 100u, 768u}) {
@@ -222,7 +321,7 @@ TEST(BlockScaledMatmulTest, CWrapper) {
     std::vector<uint8_t> cells = make_cells(GPU_BLOCKSCALED_MXFP8, 64, 5, rng, rv);
     char* err = nullptr;
     gpu_blockscaled_matmul_c e =
-        gpu_blockscaled_matmul_new(GPU_BLOCKSCALED_MXFP8, 64, 2, queries.data(), 10, &err);
+        gpu_blockscaled_matmul_new(GPU_BLOCKSCALED_MXFP8, 64, 2, queries.data(), 10, 3, &err);
     ASSERT_TRUE(e != nullptr);
     ASSERT_TRUE(err == nullptr);
     ASSERT_EQ(gpu_blockscaled_matmul_max_rows(e), uint64_t(128));
@@ -232,10 +331,26 @@ TEST(BlockScaledMatmulTest, CWrapper) {
     gpu_blockscaled_matmul_run(e, cells.data(), 129, scores.data(), &err);
     ASSERT_TRUE(err != nullptr);
     free(err);
+    err = nullptr;
+    std::vector<float> top(2 * 3), full(2 * 5);
+    std::vector<int32_t> rows(2 * 3);
+    std::vector<uint8_t> tied(2);
+    gpu_blockscaled_matmul_run_topk(e, cells.data(), 5, top.data(), rows.data(), full.data(),
+                                    tied.data(), &err);
+    ASSERT_TRUE(err == nullptr);
     gpu_blockscaled_matmul_destroy(e);
 
     err = nullptr;
-    ASSERT_TRUE(gpu_blockscaled_matmul_new(8, 64, 2, queries.data(), 10, &err) == nullptr);
+    e = gpu_blockscaled_matmul_new(GPU_BLOCKSCALED_MXFP8, 64, 2, queries.data(), 10, 0, &err);
+    ASSERT_TRUE(e != nullptr);
+    gpu_blockscaled_matmul_run_topk(e, cells.data(), 5, top.data(), rows.data(), full.data(),
+                                    tied.data(), &err);
+    ASSERT_TRUE(err != nullptr);
+    free(err);
+    gpu_blockscaled_matmul_destroy(e);
+
+    err = nullptr;
+    ASSERT_TRUE(gpu_blockscaled_matmul_new(8, 64, 2, queries.data(), 10, 0, &err) == nullptr);
     ASSERT_TRUE(err != nullptr);
     free(err);
 }

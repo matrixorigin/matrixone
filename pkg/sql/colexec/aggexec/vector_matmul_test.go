@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -747,4 +748,62 @@ func TestVectorMatmulPlainTypes(t *testing.T) {
 	}
 	_, err := makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{types.T_int64.ToType(), types.New(types.T_array_float64, dim, 0)})
 	require.Error(t, err)
+}
+
+// TestVectorMatmulConfigShared checks that executors holding the same configuration share
+// one parsed configuration, that the entry is dropped when the last executor is freed, and
+// that a configuration error is returned to every executor without being kept.
+func TestVectorMatmulConfigShared(t *testing.T) {
+	mp := mpool.MustNewZero()
+	cfg := vmConfig(3, [][]float32{{1, 0, 0, 0}, {0, 1, 0, 0}})
+	vt := vmVecType()
+	mk := func() *vectorMatmulExec {
+		exec, err := makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{types.T_int64.ToType(), vt})
+		require.NoError(t, err)
+		return exec.(*vectorMatmulExec)
+	}
+	execs := make([]*vectorMatmulExec, 8)
+	var wg sync.WaitGroup
+	for i := range execs {
+		execs[i] = mk()
+		wg.Add(1)
+		go func(e *vectorMatmulExec) {
+			defer wg.Done()
+			require.NoError(t, e.SetExtraInformation(cfg, 0))
+		}(execs[i])
+	}
+	wg.Wait()
+	for _, e := range execs[1:] {
+		require.Same(t, execs[0].cfg, e.cfg)
+	}
+	// setting the configuration again keeps one hold per executor
+	require.NoError(t, execs[0].SetExtraInformation(cfg, 0))
+	vectorMatmulConfigs.Lock()
+	require.Len(t, vectorMatmulConfigs.m, 1)
+	vectorMatmulConfigs.Unlock()
+
+	// another column type is another entry
+	other, err := makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{types.T_int64.ToType(), types.New(types.T_array_float4, vmDim, 0)})
+	require.NoError(t, err)
+	require.NoError(t, other.SetExtraInformation(cfg, 0))
+	require.NotSame(t, execs[0].cfg, other.(*vectorMatmulExec).cfg)
+	other.Free()
+
+	for _, e := range execs {
+		e.Free()
+	}
+	vectorMatmulConfigs.Lock()
+	require.Empty(t, vectorMatmulConfigs.m)
+	vectorMatmulConfigs.Unlock()
+
+	bad := vmConfig(0, [][]float32{{1, 0, 0, 0}})
+	for i := 0; i < 2; i++ {
+		e := mk()
+		require.Error(t, e.SetExtraInformation(bad, 0))
+		e.Free()
+	}
+	vectorMatmulConfigs.Lock()
+	require.Empty(t, vectorMatmulConfigs.m)
+	vectorMatmulConfigs.Unlock()
+	require.Zero(t, mp.CurrNB())
 }

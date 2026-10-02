@@ -46,12 +46,13 @@ typedef void* gpu_blockscaled_matmul_c;
  * @param nq Number of query cells.
  * @param query_cells nq cells packed back to back.
  * @param max_rows Tile row capacity.
+ * @param topk Hits per query kept by gpu_blockscaled_matmul_run_topk; 0 disables it.
  * @param errmsg Pointer to store an error message, if any.
  * @return The engine, or NULL with errmsg set.
  */
 gpu_blockscaled_matmul_c gpu_blockscaled_matmul_new(int format, uint32_t dim, uint32_t nq,
                                                     const uint8_t* query_cells, uint64_t max_rows,
-                                                    void* errmsg);
+                                                    uint32_t topk, void* errmsg);
 
 /** @brief Returns the tile row capacity (max_rows rounded up to 128). */
 uint64_t gpu_blockscaled_matmul_max_rows(gpu_blockscaled_matmul_c e);
@@ -64,6 +65,20 @@ uint64_t gpu_blockscaled_matmul_max_rows(gpu_blockscaled_matmul_c e);
  */
 void gpu_blockscaled_matmul_run(gpu_blockscaled_matmul_c e, const uint8_t* cells, uint64_t n,
                                 float* scores, void* errmsg);
+
+/**
+ * @brief Scores n cells like gpu_blockscaled_matmul_run and keeps the topk best rows per
+ * query on the device (NaN scores as -Inf).
+ *
+ * top_scores and top_rows receive nq * topk entries, query major: entry q * topk + j is a
+ * kept row of query q (an index into the n cells) and its score; unused slots hold row -1.
+ * When query q has more rows tied at its topk-th score than were kept, tied[q] is 1 and
+ * full_scores[q * n, (q + 1) * n) receives all n scores of query q; otherwise tied[q] is 0
+ * and that range of full_scores is not written.
+ */
+void gpu_blockscaled_matmul_run_topk(gpu_blockscaled_matmul_c e, const uint8_t* cells, uint64_t n,
+                                     float* top_scores, int32_t* top_rows, float* full_scores,
+                                     uint8_t* tied, void* errmsg);
 
 void gpu_blockscaled_matmul_destroy(gpu_blockscaled_matmul_c e);
 

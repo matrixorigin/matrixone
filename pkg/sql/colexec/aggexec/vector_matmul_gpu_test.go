@@ -49,13 +49,8 @@ func vmGPUParse(t *testing.T, out string) [][]vmGPUHit {
 
 // vmGPURun fills an executor with the rows split over groups, merging a second executor
 // that still holds rows in its tile, and returns the flushed JSON per group.
-func vmGPURun(t *testing.T, mp *mpool.MPool, format types.BlockScaledFormat, dim int, gpu bool,
+func vmGPURun(t *testing.T, mp *mpool.MPool, vt types.Type, toCell func([]float32) []byte, gpu bool,
 	queries [][]float32, topk, groups int, ids []int64, rows [][]float32) []string {
-	oid := types.T_array_float8
-	if format == types.BlockScaledNVFP4 {
-		oid = types.T_array_float4
-	}
-	vt := types.New(oid, int32(dim), 0)
 	q, _ := json.Marshal(queries)
 	cfg := EncodeVectorMatmulConfig(int64(topk), string(q), "", gpu)
 	mk := func() *vectorMatmulExec {
@@ -70,9 +65,7 @@ func vmGPURun(t *testing.T, mp *mpool.MPool, format types.BlockScaledFormat, dim
 		vv := vector.NewVec(vt)
 		for i := lo; i < hi; i++ {
 			require.NoError(t, vector.AppendFixed(idv, ids[i], false, mp))
-			cell, err := types.AppendBlockScaled(nil, format, rows[i])
-			require.NoError(t, err)
-			require.NoError(t, vector.AppendBytes(vv, cell, false, mp))
+			require.NoError(t, vector.AppendBytes(vv, toCell(rows[i]), false, mp))
 		}
 		return []*vector.Vector{idv, vv}
 	}
@@ -128,8 +121,20 @@ func TestVectorMatmulGPUMatchesCPU(t *testing.T) {
 	defer func() { require.Zero(t, mp.CurrNB()) }()
 	r := rand.New(rand.NewSource(20567))
 	for _, format := range []types.BlockScaledFormat{types.BlockScaledMXFP8, types.BlockScaledNVFP4} {
-		for _, dim := range []int{4, 100} {
-			const nrows, topk, groups = 5000, 7, 3
+		oid := types.T_array_float8
+		if format == types.BlockScaledNVFP4 {
+			oid = types.T_array_float4
+		}
+		toCell := func(v []float32) []byte {
+			cell, err := types.AppendBlockScaled(nil, format, v)
+			require.NoError(t, err)
+			return cell
+		}
+		// one group: tiles take the GPU top-k; three groups: tiles mix groups, full scores
+		for _, cs := range []struct{ dim, groups int }{{4, 1}, {4, 3}, {100, 1}, {100, 3}} {
+			dim, groups := cs.dim, cs.groups
+			vt := types.New(oid, int32(dim), 0)
+			const nrows, topk = 5000, 7
 			ids := make([]int64, nrows)
 			rows := make([][]float32, nrows)
 			for i := range rows {
@@ -146,8 +151,8 @@ func TestVectorMatmulGPUMatchesCPU(t *testing.T) {
 					queries[j][k] = float32(r.NormFloat64())
 				}
 			}
-			cpu := vmGPURun(t, mp, format, dim, false, queries, topk, groups, ids, rows)
-			gpu := vmGPURun(t, mp, format, dim, true, queries, topk, groups, ids, rows)
+			cpu := vmGPURun(t, mp, vt, toCell, false, queries, topk, groups, ids, rows)
+			gpu := vmGPURun(t, mp, vt, toCell, true, queries, topk, groups, ids, rows)
 			require.Len(t, gpu, groups)
 			for g := range cpu {
 				want, got := vmGPUParse(t, cpu[g]), vmGPUParse(t, gpu[g])
@@ -169,6 +174,40 @@ func TestVectorMatmulGPUMatchesCPU(t *testing.T) {
 					require.Equal(t, ws, gs, "%s dim %d group %d query %d", format, dim, g, q)
 				}
 			}
+		}
+	}
+}
+
+// TestVectorMatmulGPUPlainTypesMatchCPU runs the plain types over small integer values,
+// exact in every type with many tied scores, and requires the GPU result to equal the CPU
+// result byte for byte, with one group (GPU top-k with tie fallback) and three groups.
+func TestVectorMatmulGPUPlainTypesMatchCPU(t *testing.T) {
+	if n, err := cuvs.GetGpuDeviceCount(); err != nil || n == 0 {
+		t.Skip("no GPU")
+	}
+	saved := vectorMatmulTileBytes
+	vectorMatmulTileBytes = 16 << 10
+	defer func() { vectorMatmulTileBytes = saved }()
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	r := rand.New(rand.NewSource(29554))
+	const dim, nrows, topk = 8, 3000, 6
+	ids := make([]int64, nrows)
+	rows := make([][]float32, nrows)
+	for i := range rows {
+		ids[i] = int64(i)
+		rows[i] = make([]float32, dim)
+		for k := range rows[i] {
+			rows[i][k] = float32(r.Intn(3))
+		}
+	}
+	queries := [][]float32{{1, 2, 0, 1, 0, 0, 1, 2}, {1, 1, 1, 1, 1, 1, 1, 1}}
+	for _, c := range vmPlainCases() {
+		vt := types.New(c.oid, dim, 0)
+		for _, groups := range []int{1, 3} {
+			cpu := vmGPURun(t, mp, vt, c.toCell, false, queries, topk, groups, ids, rows)
+			gpu := vmGPURun(t, mp, vt, c.toCell, true, queries, topk, groups, ids, rows)
+			require.Equal(t, cpu, gpu, "%s groups %d", c.oid, groups)
 		}
 	}
 }

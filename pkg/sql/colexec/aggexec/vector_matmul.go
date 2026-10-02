@@ -16,12 +16,14 @@ package aggexec
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"io"
 	"math"
 	"slices"
 	"strconv"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -130,7 +132,8 @@ type vectorMatmulOptions struct {
 	TileBytes *int64  `json:"tile_bytes"`
 }
 
-// vectorMatmulConfig is the parsed configuration shared by all groups.
+// vectorMatmulConfig is the parsed configuration shared by all groups and, through
+// vectorMatmulConfigs, by the executors of a query; it is read only.
 type vectorMatmulConfig struct {
 	topk int
 	nq   int
@@ -144,6 +147,56 @@ type vectorMatmulConfig struct {
 	score func(cell []byte, out []float64) error
 	// gpu reports that the session allows the GPU.
 	gpu bool
+}
+
+// vectorMatmulConfigs shares a parsed configuration between the executors holding the same
+// configuration bytes for the same column type: a query's pipeline executors and the
+// executors that receive its partial states for the merge. An entry lives while an executor
+// holds it.
+var vectorMatmulConfigs = struct {
+	sync.Mutex
+	m map[vectorMatmulConfigKey]*vectorMatmulConfigEntry
+}{m: make(map[vectorMatmulConfigKey]*vectorMatmulConfigEntry)}
+
+type vectorMatmulConfigKey struct {
+	sum   [sha256.Size]byte
+	oid   types.T
+	width int32
+}
+
+type vectorMatmulConfigEntry struct {
+	once sync.Once
+	cfg  *vectorMatmulConfig
+	err  error
+	refs int
+}
+
+// acquireVectorMatmulConfig returns the parsed configuration of raw for vecType, parsing it
+// once for all executors holding it; release drops the executor's hold.
+func acquireVectorMatmulConfig(raw []byte, vecType types.Type) (cfg *vectorMatmulConfig, release func(), err error) {
+	key := vectorMatmulConfigKey{sum: sha256.Sum256(raw), oid: vecType.Oid, width: vecType.Width}
+	c := &vectorMatmulConfigs
+	c.Lock()
+	e := c.m[key]
+	if e == nil {
+		e = &vectorMatmulConfigEntry{}
+		c.m[key] = e
+	}
+	e.refs++
+	c.Unlock()
+	release = func() {
+		c.Lock()
+		if e.refs--; e.refs == 0 && c.m[key] == e {
+			delete(c.m, key)
+		}
+		c.Unlock()
+	}
+	e.once.Do(func() { e.cfg, e.err = parseVectorMatmulConfig(raw, vecType) })
+	if e.err != nil {
+		release()
+		return nil, nil, e.err
+	}
+	return e.cfg, release, nil
 }
 
 func parseVectorMatmulConfig(raw []byte, vecType types.Type) (*vectorMatmulConfig, error) {
@@ -238,13 +291,12 @@ func (cfg *vectorMatmulConfig) setBlockScaled(oid types.T, dim int, queries [][]
 			return err
 		}
 	}
-	var row metric.VecBlockOperand
 	cfg.score = func(cell []byte, out []float64) error {
 		c, err := types.ParseBlockScaledCell(cell)
 		if err != nil {
 			return err
 		}
-		row.Cell = c
+		row := metric.VecBlockOperand{Cell: c}
 		for j := range ops {
 			// the inner product distance is -dot; an overflow NaN is +Inf, which ranks last
 			dist, err := metric.VecBlockInnerProduct(&row, &ops[j])
@@ -484,6 +536,24 @@ func (s *vectorMatmulState) offer(scores []float64, id []byte) error {
 		}
 		s.insert(j, vectorMatmulEntry{score: score, off: off, n: uint32(len(id))})
 	}
+	return nil
+}
+
+// offerHit offers one row's score for query j. off caches the row's arena offset across
+// queries, -1 until the id is stored; the caller reserves the arena space beforehand, so no
+// compaction moves a cached offset.
+func (s *vectorMatmulState) offerHit(j int, score float64, id []byte, off *int64) error {
+	if !s.admits(j, score, id) {
+		return nil
+	}
+	if *off < 0 {
+		o, err := s.appendID(id)
+		if err != nil {
+			return err
+		}
+		*off = int64(o)
+	}
+	s.insert(j, vectorMatmulEntry{score: score, off: uint32(*off), n: uint32(len(id))})
 	return nil
 }
 
@@ -728,23 +798,33 @@ type vectorMatmulEngine interface {
 	MaxRows() int
 	CellBytes() int
 	Run(cells []byte, scores []float32) error
+	// TopK and RunTopK: see cuvs.BlockScaledMatmul.
+	TopK() int
+	RunTopK(cells []byte, topScores []float32, topRows []int32, full []float32, tied []uint8) error
 	Close()
 }
 
 // newVectorMatmulEngine creates a GPU engine. It is nil in builds without GPU support and
 // returns a nil engine when no device is visible.
-var newVectorMatmulEngine func(format, dim, nq int, queryCells []byte, cellBytes, maxRows int) (vectorMatmulEngine, error)
+var newVectorMatmulEngine func(format, dim, nq int, queryCells []byte, cellBytes, maxRows, topk int) (vectorMatmulEngine, error)
 
 // vectorMatmulTileBytes bounds the host tile: cells plus scores.
 var vectorMatmulTileBytes = 64 << 20
 
 // vectorMatmulTile holds rows waiting for the GPU: their cells back to back, groups and ids.
+// A tile whose rows all belong to one group is scored with the GPU top-k (top, rows, tied,
+// scores for tied queries); a tile of several groups with the full scores.
 type vectorMatmulTile struct {
 	cells  []byte
 	groups []uint64
+	mixed  bool
 	idEnds []int
 	ids    []byte
 	scores []float32
+	top    []float32
+	rows   []int32
+	tied   []uint8
+	offs   []int64
 }
 
 var _ GroupAggFuncExec = (*vectorMatmulExec)(nil)
@@ -755,6 +835,9 @@ type vectorMatmulExec struct {
 
 	scores []float64
 	idBuf  []byte
+
+	// releaseCfg drops the hold on cfg in vectorMatmulConfigs.
+	releaseCfg func()
 
 	engine      vectorMatmulEngine
 	engineTried bool
@@ -812,11 +895,14 @@ func (exec *vectorMatmulExec) SetExtraInformation(partialResult any, _ int) erro
 	if !ok {
 		return moerr.NewInternalErrorNoCtxf("vector_matmul: unexpected configuration %T", partialResult)
 	}
-	cfg, err := parseVectorMatmulConfig(raw, exec.argTypes[1])
+	cfg, release, err := acquireVectorMatmulConfig(raw, exec.argTypes[1])
 	if err != nil {
 		return err
 	}
-	exec.cfg = cfg
+	if exec.releaseCfg != nil {
+		exec.releaseCfg()
+	}
+	exec.cfg, exec.releaseCfg = cfg, release
 	exec.scores = make([]float64, cfg.nq)
 	return nil
 }
@@ -913,7 +999,7 @@ func (exec *vectorMatmulExec) ensureEngine() error {
 	nq := exec.cfg.nq
 	cellBytes := exec.cfg.cellBytes
 	rows := max(1, min(65536, vectorMatmulTileBytes/(cellBytes+4*nq)))
-	engine, err := newVectorMatmulEngine(exec.cfg.engineFormat, dim, nq, exec.cfg.queryCells, cellBytes, rows)
+	engine, err := newVectorMatmulEngine(exec.cfg.engineFormat, dim, nq, exec.cfg.queryCells, cellBytes, rows, exec.cfg.topk)
 	if err != nil || engine == nil {
 		return err
 	}
@@ -924,6 +1010,12 @@ func (exec *vectorMatmulExec) ensureEngine() error {
 		groups: make([]uint64, 0, n),
 		idEnds: make([]int, 0, n),
 		scores: make([]float32, n*nq),
+	}
+	if k := engine.TopK(); k == exec.cfg.topk {
+		exec.tile.top = make([]float32, nq*k)
+		exec.tile.rows = make([]int32, nq*k)
+		exec.tile.tied = make([]uint8, nq)
+		exec.tile.offs = make([]int64, n)
 	}
 	return nil
 }
@@ -940,6 +1032,9 @@ func (exec *vectorMatmulExec) enqueue(group uint64, cell []byte, ids *vector.Vec
 	s.pending += len(t.ids) - before
 	t.idEnds = append(t.idEnds, len(t.ids))
 	t.cells = append(t.cells, cell...)
+	if len(t.groups) > 0 && t.groups[0] != group {
+		t.mixed = true
+	}
 	t.groups = append(t.groups, group)
 	if len(t.groups) == exec.engine.MaxRows() {
 		return exec.drain()
@@ -955,6 +1050,13 @@ func (exec *vectorMatmulExec) drain() error {
 		return nil
 	}
 	nq := exec.cfg.nq
+	if !t.mixed && t.top != nil {
+		if err := exec.drainTopK(); err != nil {
+			return err
+		}
+		t.cells, t.groups, t.idEnds, t.ids = t.cells[:0], t.groups[:0], t.idEnds[:0], t.ids[:0]
+		return nil
+	}
 	if err := exec.engine.Run(t.cells, t.scores[:n*nq]); err != nil {
 		return err
 	}
@@ -979,7 +1081,55 @@ func (exec *vectorMatmulExec) drain() error {
 			return err
 		}
 	}
-	t.cells, t.groups, t.idEnds, t.ids = t.cells[:0], t.groups[:0], t.idEnds[:0], t.ids[:0]
+	t.cells, t.groups, t.idEnds, t.ids, t.mixed = t.cells[:0], t.groups[:0], t.idEnds[:0], t.ids[:0], false
+	return nil
+}
+
+// drainTopK scores a one-group tile with the GPU top-k and offers the kept rows of each
+// query, or every row of a query with rows tied at its k-th score left out.
+func (exec *vectorMatmulExec) drainTopK() error {
+	t := &exec.tile
+	n, nq, k := len(t.groups), exec.cfg.nq, exec.engine.TopK()
+	if err := exec.engine.RunTopK(t.cells, t.top, t.rows, t.scores[:n*nq], t.tied); err != nil {
+		return err
+	}
+	s, err := exec.stateAt(t.groups[0])
+	if err != nil {
+		return err
+	}
+	s.pending -= len(t.ids)
+	if err := s.reserve(len(t.ids)); err != nil {
+		return err
+	}
+	offs := t.offs[:n]
+	for i := range offs {
+		offs[i] = -1
+	}
+	id := func(r int) []byte {
+		if r == 0 {
+			return t.ids[:t.idEnds[0]]
+		}
+		return t.ids[t.idEnds[r-1]:t.idEnds[r]]
+	}
+	for j := 0; j < nq; j++ {
+		if t.tied[j] != 0 {
+			for r, score := range t.scores[j*n : (j+1)*n] {
+				if err := s.offerHit(j, float64(score), id(r), &offs[r]); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		for i := j * k; i < (j+1)*k; i++ {
+			r := int(t.rows[i])
+			if r < 0 {
+				continue
+			}
+			if err := s.offerHit(j, float64(t.top[i]), id(r), &offs[r]); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 
@@ -1249,4 +1399,8 @@ func (exec *vectorMatmulExec) Free() {
 	exec.tile = vectorMatmulTile{}
 	exec.aggExec.Free()
 	exec.state = nil
+	if exec.releaseCfg != nil {
+		exec.releaseCfg()
+		exec.releaseCfg = nil
+	}
 }

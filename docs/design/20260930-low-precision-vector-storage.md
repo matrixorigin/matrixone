@@ -141,7 +141,8 @@ original fp32 vectors because the storage is quantized. `vecf8` is the quality f
 The engine computes one thing: the fp32 **dot-product matrix** `S = D × Qᵀ` of a packed
 dataset tile `D` and packed queries `Q`, with `cublasLtMatmul`: a block-scaled matmul for
 `vecf8`/`vecf4`, a plain matmul for `vecf32`, `vecf16`, `vecbf16`, `vecint8` and
-`vecuint8`. It has no metric, filter or top-k logic.
+`vecuint8`. It has no metric or filter logic; per tile it can also keep the `k` best rows
+of each query on the device (`run_topk`, below).
 
 | Column type | Engine format | Element type | Compute | Output |
 |-------------|---------------|--------------|---------|--------|
@@ -159,13 +160,25 @@ on the host (`x ^ 0x80` = x − 128), the row and query sums of the shifted valu
 and the int32 result is corrected as `x·q = x′·q′ + 128 (Σx′ + Σq′) + 128² · dim` in int64.
 Integer dot products are exact; they are rounded once to fp32 when written out.
 
+Two ways to read a tile's scores:
+
+- `run` copies the whole score matrix to the host and applies the global scales and the
+  uint8 correction there: `n × nq` fp32 values per tile.
+- `run_topk` keeps the result on the device. A fix-up kernel applies the global scales
+  (in double, rounded once, as `run` does), the uint8 correction and int32 → fp32, and
+  writes −Inf for NaN and for the padding rows. `cuvs::selection::select_k` then keeps
+  the `k` best rows per query, and `nq × k` scores and row indices are copied back. A
+  second kernel counts, per query, the rows equal to the `k`-th score. When more rows tie
+  there than `select_k` kept, that query's whole score column is copied back as well, so
+  the host applies the `id` tie-break exactly as on the CPU.
+
 Code layout — the engine lives with the other GPU code in `cgo/cuvs` + `pkg/cuvs`:
 
 - `cgo/cuvs/blockscaled_matmul.hpp` — the engine class (header only, C++): packs cells
   into padded element rows and tiled scales, owns the device buffers, CUDA stream and
   cuBLASLt handle, and runs the matmul.
 - `cgo/cuvs/blockscaled_matmul_c.h` / `blockscaled_matmul_c.cpp` — the C API
-  (`gpu_blockscaled_matmul_new/_run/_max_rows/_destroy`), compiled into libmo with the
+  (`gpu_blockscaled_matmul_new/_run/_run_topk/_max_rows/_destroy`), compiled into libmo with the
   other `*_c.cpp` objects.
 - `cgo/cuvs/test/blockscaled_matmul_test.cu` — the standalone `test_blockscaled_matmul`
   executable; `cgo/cuvs/test/narrow_float_golden_gen.cu` — the Float8/Float4 golden-data
@@ -223,6 +236,16 @@ configuration. An executor uses the engine when `gpu_mode` is on and the build h
 visible device; otherwise it scores on the CPU. Rows are buffered in a tile of at most
 64 MiB (cells plus scores, up to 65,536 rows), scored when the tile is full, and the tile
 is drained before the states are read (final result, merge, intermediate result, spill).
+A tile whose rows all belong to one group (always the case without `GROUP BY`) is scored
+with `run_topk`; a tile mixing groups is scored with `run`, since a per-query top-k over
+several groups would let one group crowd out another. `topk` above the tile's row
+capacity also uses `run`.
+
+The configuration (query vectors converted to the column type) is parsed once per query:
+executors holding the same configuration bytes for the same column type share one parsed
+copy, reference-counted and dropped when the last executor is freed. Without it each
+executor decodes the query JSON again, including every executor that receives a partial
+state for the merge, one after another.
 
 Build integration:
 
@@ -394,8 +417,8 @@ provided by these functions.
   to the element packing is a storage-format change and bumps the header version.
 - Every stored vector is independent (no cross-vector or global state); `INSERT`/`UPDATE`
   needs no column-wide statistics.
-- The engine returns dot products only; metric, filtering and top-k live in the SQL
-  functions.
+- The engine returns dot products, or per tile the `k` best per query with every row tied
+  at the `k`-th score; metric, filtering and the final top-k live in the aggregate.
 - Merging partial states is order-independent: the final result does not depend on how
   rows were split across pipelines and CNs (ties are broken by `id`).
 
@@ -424,8 +447,10 @@ summation-order tolerance.
   orders against a brute-force reference; intermediate-result round trip; accounted fill
   and merge under an allocation account (preflight, in-place arena compaction, no leaked
   bytes); state codec including malformed input; id text of every supported id type;
-  configuration errors. Binder and compile tests cover the constant-argument rule and the
-  configuration encoding.
+  configuration errors; executors share one parsed configuration (parsed once under
+  concurrent first use, dropped after the last executor is freed, errors not kept).
+  Binder and compile tests cover the constant-argument rule and the configuration
+  encoding.
 - **BVT** (`vector/vector_matmul.sql`): both formats; `WHERE`, `GROUP BY`, empty input,
   string and `uuid` ids, the relational form, prepared parameters, the error cases; and a
   400,000-row table scanned by parallel pipelines (partial states merged by `merge group`),
@@ -442,14 +467,19 @@ summation-order tolerance.
   dimensions 4–768 (K padding), 1 to 300 rows (row padding, a 1-row tile, tile reuse), 1
   and 3 queries, non-unit vecf4 global scales; the five plain formats against a
   double-precision reference (integer formats exact), dimensions 4, 33, 768, 1 to 300
-  rows, 1 and 3 queries; the C API and its errors.
+  rows, 1 and 3 queries; `run_topk` against the full scores of `run` for MXFP8, NVFP4,
+  F32, int8 and uint8 (exact kept scores, every row above the `k`-th score kept, ties at
+  the `k`-th score flagged with the full column, `k` above the tile size); the C API and
+  its errors.
 - **GPU binding** (`pkg/cuvs/blockscaled_matmul_test.go`): engine scores equal the CPU
   kernel (`VecBlockDot`) over the same cells for both formats, dimensions 4–768, 1 and 5
-  queries.
+  queries; `RunTopK` against `Run` for MXFP8, NVFP4, int8 and uint8, including tied
+  queries; buffer and argument errors.
 - **GPU aggregate** (`aggexec/vector_matmul_gpu_test.go`): the executor with `gpu_mode`
-  on and off over the same rows — several groups, tiles drained mid-batch, a merge from an
-  executor whose rows are still in its tile, an intermediate-result round trip — returns
-  the same top-k.
+  on and off over the same rows — one group (GPU top-k) and three groups (full scores),
+  tiles drained mid-batch, a merge from an executor whose rows are still in its tile, an
+  intermediate-result round trip — returns the same top-k; for the plain types over small
+  integer values (many tied scores) the GPU JSON equals the CPU JSON byte for byte.
 - **GPU BVT** (`gpu_cases/vector/vector_matmul_gpu.sql`): the same queries under
   `gpu_mode = 1` and `0` return identical JSON (values exact in both formats); the
   400,000-row vecf8 table, scored in GPU tiles by parallel pipelines, equals the reference;
@@ -460,7 +490,8 @@ summation-order tolerance.
   where they run on the GPU.
 
 Performance — 50,000 × 768 rows, top 10, single CN (8 pipelines), RTX 5070 Laptop;
-`gpu_mode = 1` against `0`, the same top-10 ids in every case:
+`gpu_mode = 1` against `0`, the same top-10 ids in every case; measured with `run` (full
+scores to the host), before `run_topk`:
 
 | Queries | vecf8 GPU | vecf8 CPU | vecf4 GPU | vecf4 CPU |
 |---------|-----------|-----------|-----------|-----------|
@@ -473,24 +504,30 @@ Performance — 50,000 × 768 rows, top 10, single CN (8 pipelines), RTX 5070 La
 CPU time grows with the query count (about 14 ms per query over 50,000 rows); the GPU is
 3.8–4.5× faster at 16 queries and about 21× at 1,024. A single query is faster on the CPU:
 each pipeline pays the engine setup (cuBLASLt handle, tile and workspace allocation,
-query upload). At large batches the host-side top-k over the copied scores dominates the
-GPU time.
+query upload). At large batches the host-side top-k over the copied scores dominated the
+GPU time, which `run_topk` removes (below).
 
 Performance and recall — `wiki_all` 1M × 768, rows unit-normalized (`normalize_l2` over a
 `vecf32` table, cast to each type), 1,000 queries in one `vector_matmul`, top 10,
 `gpu_mode = 1`, single CN, RTX 5070 Laptop. Recall@10 is against the exact top 10 over the
 normalized vectors, and against the dataset's L2 ground truth over the raw vectors:
 
-| Type | Bytes/row | Runs (3 passes) | Recall@10, normalized exact | Recall@10, raw L2 ground truth |
-|------|-----------|-----------------|-----------------------------|--------------------------------|
-| `vecf32` | 3,072 | 14.91 / 5.73 / 5.04 s | 0.9999 | 0.701 |
-| `vecbf16` | 1,536 | 4.20 / 3.99 / 4.17 s | 0.9976 | 0.701 |
-| `vecf8` | 804 | 2.98 / 4.19 / 3.92 s | 0.964 | 0.700 |
-| `vecf4` | 444 | 3.75 / 3.65 / 3.72 s | 0.893 | 0.687 |
+| Type | Bytes/row | `run`, per-executor parse: runs | `run_topk`, shared parse: runs | Recall@10, normalized exact | Recall@10, raw L2 ground truth |
+|------|-----------|---------------------------------|--------------------------------|-----------------------------|--------------------------------|
+| `vecf32` | 3,072 | 14.91 / 5.73 / 5.04 s | 2.91 / 3.06 / 2.85 s | 0.9999 | 0.701 |
+| `vecbf16` | 1,536 | 4.20 / 3.99 / 4.17 s | 1.87 / 1.79 / 1.75 s | 0.9976 | 0.701 |
+| `vecf8` | 804 | 2.98 / 4.19 / 3.92 s | 1.44 / 1.43 / 1.29 s | 0.964 | 0.700 |
+| `vecf4` | 444 | 3.75 / 3.65 / 3.72 s | 1.35 / 1.09 / 1.00 s | 0.893 | 0.687 |
 
-Warm runs take about 4 s for every type: the 10⁹ scores are copied to the host and pass
-through the per-query top-k heaps, which dominate the time. The raw-L2 column is about
-0.70 for every type; normalization changes the ranking, independent of the format.
+Recall is the same in both columns. With `run`, warm runs took about 4 s for every type:
+the 10⁹ scores were copied to the host and passed through the per-query heaps (for
+`vecf4`, 39 s of heap time summed over the pipelines), and each executor that received a
+partial state for the merge parsed the 16 MB query JSON again, one after another
+(about 1.1 s). With `run_topk` and the shared configuration, `vecf4` takes about 1.1 s:
+about 0.5 s parsing the SQL text of 1,000 inline query vectors (a user variable avoids
+most of it), 0.15 s converting the queries, and 0.5 s of scan, matmul and top-k. For
+`vecf32` the scan of 3 GB of vectors dominates. The raw-L2 column is about 0.70 for every
+type; normalization changes the ranking, independent of the format.
 
 ## Decisions
 
@@ -504,6 +541,11 @@ through the per-query top-k heaps, which dominate the time. The raw-L2 column is
 - `vector_matmul` also takes `vecf32`, `vecf16`, `vecbf16`, `vecint8` and `vecuint8`,
   through the same engine with plain formats; `vecf64` is rejected (the engine has no fp64
   format). `vecuint8` runs on the int8 path with the shift correction.
+- The per-tile top-k runs on the GPU (`select_k`) for one-group tiles; mixed-group tiles
+  copy the full scores. Rows tied at the `k`-th score beyond the kept ones bring back their
+  query's full column, so GPU and CPU results are identical.
+- The parsed configuration is shared by the executors of a query and reference-counted;
+  the configuration bytes and their encoding are unchanged.
 - v1 is a function call per tile with no index, residency or dataset cache; the cuVS
   brute-force index is unchanged.
 - SQL surface = one aggregate, `vector_matmul`; partials per pipeline and the cross-CN

@@ -24,11 +24,12 @@ extern "C" {
 
 gpu_blockscaled_matmul_c gpu_blockscaled_matmul_new(int format, uint32_t dim, uint32_t nq,
                                                     const uint8_t* query_cells, uint64_t max_rows,
-                                                    void* errmsg) {
+                                                    uint32_t topk, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         int device_id = matrixone::get_next_device_id();
-        return new matrixone::blockscaled_matmul(device_id, format, dim, nq, query_cells, max_rows);
+        return new matrixone::blockscaled_matmul(device_id, format, dim, nq, query_cells, max_rows,
+                                                 topk);
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_blockscaled_matmul_new", e.what());
     } catch (...) {
@@ -50,6 +51,21 @@ void gpu_blockscaled_matmul_run(gpu_blockscaled_matmul_c e, const uint8_t* cells
         matrixone::set_errmsg(errmsg, "Error in gpu_blockscaled_matmul_run", ex.what());
     } catch (...) {
         matrixone::set_errmsg(errmsg, "Error in gpu_blockscaled_matmul_run", "unknown C++ exception");
+    }
+}
+
+void gpu_blockscaled_matmul_run_topk(gpu_blockscaled_matmul_c e, const uint8_t* cells, uint64_t n,
+                                     float* top_scores, int32_t* top_rows, float* full_scores,
+                                     uint8_t* tied, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        static_cast<matrixone::blockscaled_matmul*>(e)->run_topk(cells, n, top_scores, top_rows,
+                                                                  full_scores, tied);
+    } catch (const std::exception& ex) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_blockscaled_matmul_run_topk", ex.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_blockscaled_matmul_run_topk",
+                              "unknown C++ exception");
     }
 }
 
