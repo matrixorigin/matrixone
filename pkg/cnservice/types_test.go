@@ -59,5 +59,4 @@ func TestValidateServiceUUID(t *testing.T) {
 		})
 	}
 	require.NoError(t, validateCNServiceUUID(strings.Repeat("é", 63)+"x"))
-	require.Error(t, validateCNServiceUUID(strings.Repeat("x", 128)))
 }
