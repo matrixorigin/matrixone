@@ -16,7 +16,6 @@ package tokenizer
 
 import (
 	"iter"
-	"strings"
 	"unicode"
 	"unicode/utf8"
 
@@ -177,25 +176,39 @@ func TruncateLatinToken(bs []byte) []byte {
 	return bs[:MAX_TOKEN_SIZE-n]
 }
 
-// NormalizeLatinToken reproduces, for a raw Latin run, the exact token bytes
-// SimpleTokenizer.outputLatin stores: cap the run at MAX_TOKEN_SIZE on the byte-boundary
-// rule, lowercase it, then RE-CAP the folded bytes. Case folding can EXPAND a Latin run --
-// U+023A is 2 bytes, its lowercase U+2C65 is 3 -- so the lowered form can exceed
-// MAX_TOKEN_SIZE even when the original bytes fit; without the re-cap a quoted BOOLEAN
-// phrase of 8x U+023A folded to 24 bytes and panicked when a reader sliced the 24-byte
-// value from the fixed buffer (#29271 P2). A query token built OUTSIDE the tokenizer
-// (fulltext2's ngramPhraseSlots -> NL / BM25 / quoted-boolean) MUST call this, or it looks
-// up a token the index never stored (#29276).
-func NormalizeLatinToken(raw []byte) []byte {
+// normalizeLatinTokenInto writes raw's normalized token into dst (which must hold at least
+// MAX_TOKEN_SIZE bytes) and returns its length, allocating nothing. It is byte-identical to
+// TruncateLatinToken([]byte(strings.ToLower(string(TruncateLatinToken(raw))))): cap raw, lowercase
+// into a stack scratch (folding can EXPAND, e.g. U+023A -> U+2C65, so the folded form can exceed
+// MAX_TOKEN_SIZE), then re-cap with the exact TruncateLatinToken byte-boundary rule. The writer passes
+// its fixed TokenBytes buffer and a query passes a stack buffer, so neither path allocates per token.
+// unicode.ToLower per rune matches strings.ToLower for the valid runes a Latin run holds; the scratch
+// is sized for the maximum fold expansion of a MAX_TOKEN_SIZE run.
+func normalizeLatinTokenInto(dst, raw []byte) int {
 	bs := TruncateLatinToken(raw)
-	return TruncateLatinToken([]byte(strings.ToLower(string(bs))))
+	var folded [4 * MAX_TOKEN_SIZE]byte
+	m := 0
+	for _, r := range string(bs) {
+		m += utf8.EncodeRune(folded[m:], unicode.ToLower(r))
+	}
+	return copy(dst, TruncateLatinToken(folded[:m]))
+}
+
+// NormalizeLatinToken returns raw's normalized token as a new slice. Tokenizer-internal callers use
+// normalizeLatinTokenInto to avoid the allocation; this serves callers that need a standalone slice
+// (fulltext2's ngramPhraseSlots).
+func NormalizeLatinToken(raw []byte) []byte {
+	var buf [MAX_TOKEN_SIZE]byte
+	n := normalizeLatinTokenInto(buf[:], raw)
+	out := make([]byte, n)
+	copy(out, buf[:n])
+	return out
 }
 
 func outputLatin(st *simpleState, pos int, yield func(Token, error) bool) {
-	ls := NormalizeLatinToken(st.input[st.begin:pos])
 	token := Token{}
-	token.TokenBytes[0] = byte(len(ls))
-	copy(token.TokenBytes[1:], ls)
+	n := normalizeLatinTokenInto(token.TokenBytes[1:], st.input[st.begin:pos])
+	token.TokenBytes[0] = byte(n)
 	token.TokenPos = st.currTokenPos
 	token.BytePos = int32(st.begin)
 	token.OrigLen = int32(pos - st.begin)
