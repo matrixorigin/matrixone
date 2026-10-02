@@ -53,7 +53,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -303,7 +302,8 @@ type Config struct {
 		// is less than PKDedupCount when txn commits. Default value is 0 , which means don't do deduplication.
 		PkDedupCount int `toml:"pk-dedup-count"`
 
-		// Trace trace
+		// Trace is retained for stopped-version rollback configuration.
+		// The transaction data collector is retired; every field is inert.
 		Trace struct {
 			BufferSize    int           `toml:"buffer-size"`
 			FlushBytes    toml.ByteSize `toml:"flush-bytes"`
@@ -821,7 +821,6 @@ type service struct {
 	// beforeBootstrapClose is a deterministic test barrier.
 	beforeBootstrapClose func()
 	incrservice          incrservice.AutoIncrementService
-	txnTraceService      trace.Service
 	siriusRuntime        *compile.SiriusRuntime
 
 	stopper                         *stopper.Stopper
@@ -878,7 +877,6 @@ type service struct {
 
 	options struct {
 		bootstrapOptions []bootstrap.Option
-		traceDataPath    string
 		siriusLeases     *substrait.LeaseManager
 		siriusAuditor    substrait.ResolveAuditRecorder
 	}

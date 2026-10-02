@@ -26,8 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -108,38 +106,16 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 }
 
 func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
-	var e error
 	start := time.Now()
-	txnOp := proc.GetTxnOperator()
-	seq := uint64(0)
-	if txnOp != nil {
-		seq = txnOp.NextSequence()
-	}
-
-	trace.GetService(proc.GetService()).AddTxnDurationAction(
-		txnOp,
-		client.TableScanEvent,
-		seq,
-		tableScan.TableID,
-		0,
-		nil)
 
 	analyzer := tableScan.OpAnalyzer
 	defer func() {
 		cost := time.Since(start)
 
-		trace.GetService(proc.GetService()).AddTxnDurationAction(
-			txnOp,
-			client.TableScanEvent,
-			seq,
-			tableScan.TableID,
-			cost,
-			e)
 		v2.TxnStatementScanDurationHistogram.Observe(cost.Seconds())
 	}()
 
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		e = err
 		return vm.CancelResult, err
 	}
 
@@ -166,7 +142,6 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 		isEnd, err := tableScan.readBatch(newCtx, proc)
 		if err != nil {
-			e = err
 			return vm.CancelResult, err
 		}
 		colexec.CollectReaderExplainDiagnostics(tableScan.Reader, analyzer)
@@ -181,7 +156,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 				v2.TxnS3ReadSizeHistogram.Observe(float64(opStats.S3ReadSize))
 				v2.TxnDiskReadSizeHistogram.Observe(float64(opStats.DiskReadSize))
 			}
-			e = err
+
 			return vm.CancelResult, err
 		}
 
@@ -193,13 +168,11 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 			if tableScan.ctr.filterLateMaterialized {
-				tableScan.traceRead(proc, tableScan.ctr.buf)
 			}
 		} else {
 			if tableScan.ctr.buf.IsEmpty() {
 				continue
 			}
-			tableScan.traceRead(proc, tableScan.ctr.buf)
 
 			// record storage I/O metrics before filtering
 			analyzer.InputBlock()
@@ -211,7 +184,6 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 			// inline filter evaluation: filter rows before returning to caller
 			if len(tableScan.ctr.allFilterExecutors) > 0 {
 				if _, err = tableScan.evalFilter(proc, tableScan.ctr.buf, nil); err != nil {
-					e = err
 					return vm.CancelResult, err
 				}
 				if tableScan.ctr.buf.IsEmpty() {
@@ -222,7 +194,6 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 
 		if tableScan.ctr.padCharToFullLength {
 			if err = padCharColumnsToFullLength(tableScan.ctr.buf, proc); err != nil {
-				e = err
 				return vm.CancelResult, err
 			}
 		}
@@ -275,16 +246,6 @@ func padCharColumnsToFullLength(bat *batch.Batch, proc *process.Process) error {
 		}
 	}
 	return nil
-}
-
-func (tableScan *TableScan) traceRead(proc *process.Process, bat *batch.Batch) {
-	trace.GetService(proc.GetService()).TxnRead(
-		proc.GetTxnOperator(),
-		proc.GetTxnOperator().Txn().SnapshotTS,
-		tableScan.TableID,
-		tableScan.Attrs,
-		bat,
-	)
 }
 
 // shrinkPopulatedVecs applies the surviving-row selection to every vector the reader

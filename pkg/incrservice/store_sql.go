@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
@@ -182,7 +181,7 @@ func (s *sqlStore) Allocate(
 					if err != nil {
 						return err
 					}
-					trace.GetService(s.ls.GetConfig().ServiceID).Sync()
+
 					if ctxDone() {
 						return ctx.Err()
 					}
@@ -236,7 +235,7 @@ func (s *sqlStore) Allocate(
 					if err != nil {
 						return err
 					}
-					trace.GetService(s.ls.GetConfig().ServiceID).Sync()
+
 					getLogger(s.ls.GetConfig().ServiceID).Error("pre lock released by lock table changed",
 						zap.String("update-sql", sql),
 						zap.Any("account", accountID),

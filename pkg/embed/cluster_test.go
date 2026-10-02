@@ -273,7 +273,7 @@ func TestClusterLifecycleAndCNExpansion(t *testing.T) {
 	cn, err = c.GetCNService(3)
 	require.NoError(t, err)
 	require.False(t, cn.GetServiceConfig().CN.AutomaticUpgrade)
-	require.Equal(t, 1024, cn.GetServiceConfig().CN.Txn.Trace.BufferSize)
+	require.Equal(t, 0, cn.GetServiceConfig().CN.Txn.Trace.BufferSize)
 }
 
 func TestSharedBaseClusterCanWorkWithConcurrentCluster(t *testing.T) {
@@ -639,7 +639,7 @@ func TestWithTestingBoundsHeartbeatRecoveryInsideStoreLiveness(t *testing.T) {
 			cfg.HAKeeperClient.BackendReadTimeout.Duration)
 		switch svc.ServiceType() {
 		case metadata.ServiceType_CN:
-			require.Equal(t, 1024, cfg.CN.Txn.Trace.BufferSize)
+			require.Equal(t, 0, cfg.CN.Txn.Trace.BufferSize)
 			require.Equal(t, testHAKeeperHeartbeatTimeout,
 				cfg.CN.HAKeeper.HeatbeatTimeout.Duration)
 			require.Less(t, cfg.CN.HAKeeper.HeatbeatTimeout.Duration,
@@ -663,7 +663,6 @@ func TestWithTestingBoundsHeartbeatRecoveryInsideStoreLiveness(t *testing.T) {
 func TestTestingServiceDefaultsPreserveOverrides(t *testing.T) {
 	cfg := newServiceConfig()
 	cfg.CN.Txn.Trace.BufferSize = 4096
-	applyTestingTxnTraceBuffer(&cfg)
 	require.Equal(t, 4096, cfg.CN.Txn.Trace.BufferSize)
 	for _, testingMode := range []bool{false, true} {
 		t.Run(fmt.Sprintf("testing=%t", testingMode), func(t *testing.T) {
@@ -691,9 +690,6 @@ func TestTestingServiceDefaultsPreserveOverrides(t *testing.T) {
 					return
 				}
 				want := 0
-				if testingMode {
-					want = 1024
-				}
 				require.Equal(t, want, svc.GetServiceConfig().CN.Txn.Trace.BufferSize)
 				svc.Adjust(func(cfg *ServiceConfig) { cfg.CN.Txn.Trace.BufferSize = 8192 })
 			}))
