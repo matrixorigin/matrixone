@@ -603,7 +603,7 @@ func collectCloneDatabaseSource(
 	}
 	mergeFkDeps(fkDeps, schemaFkDeps)
 	sortedFkTbls, hasFkCycle := cloneFkTableOrder(fkDeps)
-	fkTableMap, err := getTableInfoMap(ctx, ses.GetService(), bh, snapshot, srcDBName, "", sortedFkTbls)
+	fkTableMap, err := getTableInfoMap(ctx, ses.GetService(), bh, snapshot, srcDBName, "", sortedFkTbls, nil)
 	if err != nil {
 		return source, err
 	}
