@@ -81,7 +81,7 @@ func TestJsonDepthTextAndTypedJSON(t *testing.T) {
 				[]FunctionTestInput{NewFunctionTestInput(typ, texts, nil)},
 				NewFunctionTestResult(types.T_int64.ToType(), false, want, nil),
 				JsonDepth)
-			succeed, info := fc.Run()
+			succeed, info := fc.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -94,14 +94,14 @@ func TestJsonDepthTextAndTypedJSON(t *testing.T) {
 		[]FunctionTestInput{NewFunctionTestInput(types.T_json.ToType(), encoded, nil)},
 		NewFunctionTestResult(types.T_int64.ToType(), false, want, nil),
 		JsonDepth)
-	succeed, info := fc.Run()
+	succeed, info := fc.RunAndFree()
 	require.True(t, succeed, info)
 
 	fc = NewFunctionTestCase(proc,
 		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{"", `1`}, []bool{true, false})},
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 1}, []bool{true, false}),
 		JsonDepth)
-	succeed, info = fc.Run()
+	succeed, info = fc.RunAndFree()
 	require.True(t, succeed, info)
 }
 
@@ -117,7 +117,7 @@ func TestJsonDepthRejectsMalformedTypeAndBinaryDomain(t *testing.T) {
 			[]FunctionTestInput{input},
 			NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil),
 			JsonDepth)
-		succeed, info := fc.Run()
+		succeed, info := fc.RunAndFree()
 		require.True(t, succeed, info)
 	}
 
@@ -125,7 +125,7 @@ func TestJsonDepthRejectsMalformedTypeAndBinaryDomain(t *testing.T) {
 		[]FunctionTestInput{NewFunctionTestInput(types.NewWithCharset(types.T_varchar, 16, 0, types.CharsetBinary), []string{`1`}, nil)},
 		NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil),
 		JsonDepth)
-	succeed, info := fc.Run()
+	succeed, info := fc.RunAndFree()
 	require.True(t, succeed, info)
 
 	input := vector.NewVec(types.T_varchar.ToType())
@@ -222,14 +222,14 @@ func TestJsonDepthLimitAndErrorRecovery(t *testing.T) {
 		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{atLimit}, nil)},
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{int64(limit + 1)}, nil),
 		JsonDepth)
-	succeed, info := fc.Run()
+	succeed, info := fc.RunAndFree()
 	require.True(t, succeed, info)
 
 	fc = NewFunctionTestCase(proc,
 		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{tooDeep}, nil)},
 		NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil),
 		JsonDepth)
-	succeed, info = fc.Run()
+	succeed, info = fc.RunAndFree()
 	require.True(t, succeed, info)
 
 	input := vector.NewVec(types.T_varchar.ToType())

@@ -46,6 +46,7 @@ func runAssignmentIgnoreStringCastWithSelection(t *testing.T, sourceType, target
 		NewFunctionTestResult(targetType, false, nil, nil),
 		NewAssignIgnoreCast,
 	)
+	t.Cleanup(tc.Free)
 	tc.parameters[0].SetIsBin(binary)
 	if err := tc.result.PreExtendAndReset(tc.fnLength); err != nil {
 		return nil, session, err
