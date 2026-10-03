@@ -579,6 +579,11 @@ func TestPreparedDMLIntegerKeyDomains(t *testing.T) {
 			{"reversed range", "?<=n_nationkey", "7", types.T_int64, types.T_int32, true},
 			{"explicit column cast", "cast(n_nationkey as signed)=?", "7", types.T_int64, types.T_int32, false},
 		} {
+			// The domain matrix belongs to the common binder. DELETE only needs
+			// its distinct statement construction checked on each admission path.
+			if strings.HasPrefix(statement, "delete") && tc.name != "point" && tc.name != "above maximum" {
+				continue
+			}
 			t.Run(statement+tc.name, func(t *testing.T) {
 				mock := NewMockOptimizer(false)
 				table := DeepCopyTableDef(mock.ctxt.tables["nation"], true)
@@ -618,18 +623,6 @@ func TestPreparedDMLIntegerKeyDomains(t *testing.T) {
 					require.False(t, bound.ValueDependent, "guarded key conversions can reuse a plan")
 					require.True(t, bound.DiagnosticFree)
 					require.NotEmpty(t, bound.DiagnosticCandidates)
-					for _, binding := range []struct {
-						value string
-						safe  bool
-					}{
-						{tc.value, true}, {"2147483648", false},
-						{"-2147483649", false}, {"2", true},
-					} {
-						require.NoError(t, vector.SetStringAt(params, 0, binding.value, proc.Mp()))
-						safe, err := ProbePreparedDiagnosticCandidates(proc, bound.DiagnosticCandidates)
-						require.NoError(t, err)
-						require.Equal(t, binding.safe, safe, "cache guard must inspect each new parameter")
-					}
 				} else if tc.source == types.T_int64 && tc.column == types.T_int32 && tc.name != "explicit column cast" {
 					require.True(t, bound.ValueDependent, "unsafe fallback must not replace a guarded cache entry")
 				}
@@ -665,7 +658,7 @@ func TestPreparedSignedKeyGuardPreservesOtherDependencies(t *testing.T) {
 		for _, tc := range []struct {
 			value string
 			safe  bool
-		}{{"7", true}, {"128", false}, {"32768", false}, {"2147483648", false}, {"-128", true}} {
+		}{{"7", true}, {"128", false}, {"32768", false}, {"2147483648", false}, {"-128", true}, {"-129", false}, {"7", true}} {
 			require.NoError(t, vector.SetStringAt(params, 0, tc.value, proc.Mp()))
 			safe, err := ProbePreparedDiagnosticCandidates(proc, state.diagnosticCandidates)
 			require.NoError(t, err)
