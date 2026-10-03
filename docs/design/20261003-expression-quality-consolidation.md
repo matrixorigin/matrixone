@@ -188,3 +188,82 @@ cache completed the same checks in 68s. MO-specific lint has no incremental
 finding: its two unsafe diagnostics exactly match prior accepted evidence in
 unchanged files. Formatting and patch checks pass. No new BVT is required for
 this fixture-only change; existing production/public-path evidence is unchanged.
+
+
+## Regexp evaluation-ownership checkpoint (2026-10-03)
+
+Refs #29249; continuous audit and dependency-clock work remain open.
+This checkpoint retains the formal `regexp2 v1.10.0` dependency and changes
+only evaluation cleanup plus its existing resource/offset contract test.
+Actual `gpt-6.1-sol`/`xhigh` review approves this non-final checkpoint only.
+The formal results below were gathered on parent `0a73284e92`; a subsequent
+rebase onto updated main requires fresh owning-package/public-path evidence.
+
+Cached matcher roots own metadata; each admitted subject evaluation owns its
+executable regexp, runner storage and subject-byte lease. Releasing the
+matcher clears the executable pointer and releases the lease exactly once.
+The two nil-input searches, previously executed after matching and during
+release, are removed: they perform another regexp evaluation despite the
+runner already belonging to an evaluation that is being discarded. The
+existing mutex, admission limits, outer deadline and error conversion remain.
+No replacement cleanup worker, cache or state machine is introduced.
+
+`TestRegexp2ResourceAndOffsetContracts` retains its named-group lookup,
+Unicode offsets (1 and 5), repeated input/matcher cleanup and failed-admission
+accounting oracles. The same fixture now scans one seven-rune subject twice,
+asserting literal byte spans `[5,7]` and `[8,10]`, retained first-match and
+named-capture values, metadata-only cache roots, cleared executable/lease
+pointers and exact restoration of the pre-admission subject-byte baseline.
+No old case or independent oracle is deleted; test delta is +20/-3 lines,
+production delta +2/-12. No new fixture, timer or correctness population is
+introduced.
+
+| Formal unchanged dependency, current cleanup source | Terminal result |
+|---|---|
+| Complete function package, normal | PASS, 9.872s |
+| Complete function package, race | PASS, 15.010s |
+| Existing public frontend fixture, 21 exact SQL statements | PASS, 15.518s |
+| Configured incremental golangci-lint | PASS, 0 issues |
+| Incremental go vet | PASS |
+| MO-specific lint | Same two baseline diagnostics; no incremental finding |
+
+SQL replay covers existing literal ICU/RE2 results and errors plus mixed-engine
+physical rows, NULL subject/pattern, an invalid-pattern error, and a following
+masked query that excludes the invalid row. One existing embedded-cluster
+fixture owns setup and teardown; terminal evidence confirms resource release.
+This is public-path evidence, not a claim that all CI BVTs passed.
+
+Isolated cleanup measurements with the same private single-mutex clock and
+three alternating full-package pairs showed wall -0.13%, CPU -3.06%, and RSS
++7.25%; no package memory or universal timing benefit is claimed. Compatibility
+measurements retained the grapheme reduction of 272 bytes/four allocations.
+The separate clock design was reopened after a material per-worker-engine
+regression; the revised warm path uses fresh monotonic deadlines and existing
+atomic epoch publication. It remains private: MatrixOne full normal/race and
+21 public SQL statements pass, but the dependency race suite still fails its
+100-microsecond deadline timing and 2ms stop assertions. Neither passing
+MatrixOne tests nor a non-final cleanup checkpoint closes those failed gates.
+Superseded canonical/v1.11.5 candidates are not delivery artifacts. No public
+fork or dependency pin has been published by this checkpoint.
+
+
+### Rebased checkpoint validation after PR #29574 merged
+
+PR #29574 merged at `822687b667`; its final remote head merged main without
+changing this checkpoint's regexp source/tests, fixture or dependency. The
+reviewed cleanup was rebased onto `6249e488b5`. Its implementation and test
+hunks are unchanged from the actual `gpt-6.1-sol`/`xhigh` approval above.
+Changed transaction/frontend/bootstrap inputs required fresh validation:
+
+| Dependency on rebased main | Function normal / race | Same 21 public SQL statements |
+|---|---|---|
+| Formal v1.10.0 | PASS 9.861s / 15.022s | PASS 12.598s |
+| Private revised warm clock | PASS 9.766s / 14.925s | PASS 19.224s |
+
+Each function run includes every one of the 62 tests declared in regexp/regular
+test files. Both frontend runs release service, admission and port leases.
+Configured incremental lint and vet pass; MO lint matches the two baseline
+diagnostics byte for byte. These are validation timings, not performance deltas.
+The legacy dependency race failures remain recorded; replacement-oracle and
+immutable-artifact review continue privately. No formal dependency change is
+included, and the follow-up checkpoint does not complete #29249.
