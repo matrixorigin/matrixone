@@ -188,3 +188,39 @@ cache completed the same checks in 68s. MO-specific lint has no incremental
 finding: its two unsafe diagnostics exactly match prior accepted evidence in
 unchanged files. Formatting and patch checks pass. No new BVT is required for
 this fixture-only change; existing production/public-path evidence is unchanged.
+
+## Decimal256 scalar cast oracle consolidation (Refs #29249)
+
+The dispatcher test now owns 21 original numeric/string destination routes and
+five rejection cases. Eight former NULL-only evaluations share the corresponding
+positive evaluations, with exact NULL publication assertions. Seven helper smoke
+calls are absorbed into these real dispatch routes; a separate `(76,0) → (65,0)`
+case preserves the helper parsing path, distinct from `(76,0) → (76,0)` copying.
+Thus 41 evaluations become 27; no measured speedup is claimed for this closure.
+
+Independent typed coefficient/value literals replace ignored errors and unchecked
+results. Binary padding is checked byte for byte. Successful results retain full
+destination metadata and source metadata; rejected casts assert error classes,
+diagnostics and no NULL publication; binary width rejection also checks empty
+variable output. Fixed result length is preallocated, so it is not an error
+publication oracle. Both pool accounts must return to baseline after
+each child, including early assertion failure. Existing FunctionTestCase owns
+construction, result comparison and cleanup; one existing Process constructor
+supplies context and memory without unnecessary file or SQL services.
+
+Public CAST scale normalization, fractional assignment, precision rejection,
+rounding, YEAR SQL modes and Datalink validation remain in their existing tests.
+The bare numeric Datalink route is not a public validation claim. The current YEAR
+route was absent from the old matrix and is outside this bounded consolidation.
+Production code, shared framework and dependencies are unchanged; BVT is not
+applicable to this test-only scalar fixture closure. Focused normal/race runs
+pass all 27 children; 11 related public CAST tests pass. Vet and configured
+incremental lint pass; two unchanged baseline MO lint diagnostics remain.
+Six task-private producer mutations survive the old tests and are rejected by
+the strengthened assertions, with both accounts restored. A forced FailNow
+restores both accounts; omitting cleanup retains 32 heap bytes and is detected.
+The initial diagnostic classifier incorrectly demanded simultaneous native and
+heap leakage; the existing runtime logs were reclassified without rerunning.
+Full function race remains failed under #29592 and unwaived; #29593 and #29594
+remain unresolved. This local checkpoint cannot clear those gates; #29249 stays
+open.
