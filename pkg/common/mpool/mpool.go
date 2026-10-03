@@ -58,6 +58,29 @@ type MPoolStats struct {
 	xpoolFree map[string]detailInfo
 }
 
+// onHeapOwnership survives pool deletion through live pointer metadata. Keep
+// it separate from MPool so late frees do not retain the pool's diagnostic maps.
+type onHeapOwnership struct {
+	id             int64 // Immutable identity; never retains the MPool.
+	bytes, objects atomic.Int64
+}
+
+func (s *onHeapOwnership) recordAlloc(sz int64) {
+	s.bytes.Add(sz)
+	s.objects.Add(1)
+}
+
+func (s *onHeapOwnership) recordFree(sz, objects int64) {
+	if sz < 0 || objects < 0 {
+		panic(moerr.NewInternalErrorNoCtx("mpool on-heap ownership freed a negative value"))
+	}
+	bytes := s.bytes.Add(-sz)
+	count := s.objects.Add(-objects)
+	if bytes < 0 || count < 0 {
+		panic(moerr.NewInternalErrorNoCtx("mpool freed more on-heap ownership than allocated"))
+	}
+}
+
 // OnHeapOwnershipStats tracks the minimum logical-ownership facts needed to
 // detect an on-heap allocation whose owner has not called Free. It is smaller
 // than MPoolStats because on-heap ownership does not participate in admission
@@ -422,7 +445,7 @@ type MPool struct {
 	resource resourceMemoryStats
 	epoch    atomic.Pointer[ResourcePeakEpoch]
 	details  *mpoolDetails
-	onHeap   OnHeapOwnershipStats
+	onHeap   *onHeapOwnership
 
 	noLock bool
 	ptrs   map[unsafe.Pointer]memHdr
@@ -472,10 +495,7 @@ const (
 
 func (mp *MPool) recordPtrHdr(ptr unsafe.Pointer, pHdr memHdr) error {
 	if !mp.noLock {
-		if !pHdr.isOffHeap() {
-			return gRecordOnHeapPtr(ptr, pHdr, mp)
-		}
-		return gRecordPtr(ptr, pHdr)
+		return gRecordPtr(ptr, pHdr, mp.onHeap)
 	}
 	if _, ok := mp.ptrs[ptr]; ok {
 		return moerr.NewInternalErrorNoCtx("ptr already recorded")
@@ -554,6 +574,9 @@ func (mp *MPool) removePtrMetadata(
 	}
 	if hdr, ok := mp.ptrs[ptr]; ok {
 		delete(mp.ptrs, ptr)
+		if !hdr.isOffHeap() {
+			mp.onHeap.recordFree(int64(hdr.allocSz), 1)
+		}
 		return hdr, true
 	}
 	metadata, ok := mp.accountedPtrs[ptr]
@@ -670,6 +693,7 @@ func NewMPool(tag string, cap int64, flag int) (*MPool, error) {
 	mp.tag = tag
 	mp.cap = cap
 	mp.noLock = noLock
+	mp.onHeap = &onHeapOwnership{id: id}
 
 	mp.stats.Init()
 	mp.ptrs = make(map[unsafe.Pointer]memHdr)
@@ -738,10 +762,10 @@ func (mp *MPool) OnHeapCurrNB() int64 {
 // transitions maintain the counters, so diagnostics do not scan the global
 // pointer registry.
 func (mp *MPool) OnHeapOutstanding() (bytes, objects int64) {
-	if mp == nil {
+	if mp == nil || mp.onHeap == nil {
 		return 0, 0
 	}
-	return mp.onHeap.NumCurrBytes.Load(), mp.onHeap.NumCurrObjects.Load()
+	return mp.onHeap.bytes.Load(), mp.onHeap.objects.Load()
 }
 
 // ResourcePeakLiveBytes returns the peak observed by token.  Ended tokens
@@ -862,9 +886,23 @@ var globalPools sync.Map
 // Sharded pointer map to reduce lock contention
 const numPtrShards = 128
 
+// registeredPtr is Go-only registry metadata; memHdr's physical layout stays
+// unchanged. The compact owner identity replaces memHdr's poolId slot, so
+// ordinary registry values stay 16 bytes without retaining the whole MPool.
+type registeredPtr struct {
+	owner   *onHeapOwnership
+	allocSz int32
+	guard   [3]uint8
+	kind    uint8
+}
+
+func (p registeredPtr) header() memHdr {
+	return memHdr{poolId: p.owner.id, allocSz: p.allocSz, guard: p.guard, kind: p.kind}
+}
+
 type ptrShard struct {
 	mu        sync.Mutex
-	m         map[unsafe.Pointer]memHdr
+	m         map[unsafe.Pointer]registeredPtr
 	accounted map[unsafe.Pointer]accountedPtrMetadata
 }
 
@@ -1290,7 +1328,6 @@ func (mp *MPool) freePtrInternal(
 		}
 		sz := int64(hdr.allocSz)
 		globalOnHeapStats.recordFree(sz, 1)
-		mp.onHeap.recordFree(sz, 1)
 		if mp.details != nil {
 			mp.details.recordOnHeapFree(detailk, sz)
 		}
@@ -1738,29 +1775,12 @@ var simpleCAllocator = sync.OnceValue(func() *malloc.SimpleCAllocator {
 func init() {
 	globalStats.Init()
 	for i := 0; i < numPtrShards; i++ {
-		globalPtrShards[i].m = make(map[unsafe.Pointer]memHdr)
+		globalPtrShards[i].m = make(map[unsafe.Pointer]registeredPtr)
 	}
 }
 
-func gRecordPtr(
-	ptr unsafe.Pointer,
-	hdr memHdr,
-) error {
-	shardIndex := getPtrShardIndex(ptr)
-	return gRecordPtrInShard(ptr, hdr, shardIndex)
-}
-
-func gRecordOnHeapPtr(ptr unsafe.Pointer, hdr memHdr, owner *MPool) error {
-	shardIndex := getPtrShardIndex(ptr)
-	if err := gRecordPtrInShard(ptr, hdr, shardIndex); err != nil {
-		return err
-	}
-	owner.onHeap.recordAlloc(int64(hdr.allocSz))
-	return nil
-}
-
-func gRecordPtrInShard(ptr unsafe.Pointer, hdr memHdr, shardIndex int) error {
-	shard := &globalPtrShards[shardIndex]
+func gRecordPtr(ptr unsafe.Pointer, hdr memHdr, owner *onHeapOwnership) error {
+	shard := getPtrShard(ptr)
 	shard.mu.Lock()
 	defer shard.mu.Unlock()
 	if _, ok := shard.m[ptr]; ok {
@@ -1769,7 +1789,10 @@ func gRecordPtrInShard(ptr unsafe.Pointer, hdr memHdr, shardIndex int) error {
 	if _, ok := shard.accounted[ptr]; ok {
 		return moerr.NewInternalErrorNoCtx("ptr already recorded")
 	}
-	shard.m[ptr] = hdr
+	shard.m[ptr] = registeredPtr{owner: owner, allocSz: hdr.allocSz, guard: hdr.guard, kind: hdr.kind}
+	if !hdr.isOffHeap() {
+		owner.recordAlloc(int64(hdr.allocSz))
+	}
 	return nil
 }
 
@@ -1798,8 +1821,8 @@ func gGetPtr(ptr unsafe.Pointer) (memHdr, bool) {
 	shard := getPtrShard(ptr)
 	shard.mu.Lock()
 	defer shard.mu.Unlock()
-	if hdr, ok := shard.m[ptr]; ok {
-		return hdr, true
+	if metadata, ok := shard.m[ptr]; ok {
+		return metadata.header(), true
 	}
 	metadata, ok := shard.accounted[ptr]
 	return metadata.hdr, ok
@@ -1812,8 +1835,8 @@ func gGetPtrMetadata(
 	shard := getPtrShard(ptr)
 	shard.mu.Lock()
 	defer shard.mu.Unlock()
-	if hdr, ok := shard.m[ptr]; ok {
-		return hdr, true
+	if metadata, ok := shard.m[ptr]; ok {
+		return metadata.header(), true
 	}
 	metadata, ok := shard.accounted[ptr]
 	if !ok {
@@ -1830,9 +1853,12 @@ func gRemovePtrMetadata(
 	shard := getPtrShard(ptr)
 	shard.mu.Lock()
 	defer shard.mu.Unlock()
-	if hdr, ok := shard.m[ptr]; ok {
+	if metadata, ok := shard.m[ptr]; ok {
 		delete(shard.m, ptr)
-		return hdr, true
+		if metadata.kind == memKindOnHeap {
+			metadata.owner.recordFree(int64(metadata.allocSz), 1)
+		}
+		return metadata.header(), true
 	}
 	metadata, ok := shard.accounted[ptr]
 	if !ok {
