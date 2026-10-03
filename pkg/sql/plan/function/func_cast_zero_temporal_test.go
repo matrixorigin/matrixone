@@ -849,9 +849,10 @@ func TestDateNameFunctionsHonorLocale(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		input FunctionTestInput
-		fn    fEvalFn
+		fn    executeLogicOfOverload
 		want  string
 	}{
+		{name: "year-zero string day", input: NewFunctionTestInput(types.T_varchar.ToType(), []string{"0000-01-01"}, nil), fn: DateStringToDayName, want: "dimanche"},
 		{name: "date day", input: NewFunctionTestInput(types.T_date.ToType(), []types.Date{date}, nil), fn: DateToDayName, want: "mercredi"},
 		{name: "datetime day", input: NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{datetime}, nil), fn: DatetimeToDayName, want: "mercredi"},
 		{name: "timestamp day", input: NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{ts}, nil), fn: TimestampToDayName, want: "mercredi"},
@@ -861,9 +862,54 @@ func TestDateNameFunctionsHonorLocale(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			caseTest := NewFunctionTestCase(proc, []FunctionTestInput{tc.input}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, nil), tc.fn)
-			succeed, info := caseTest.Run()
+			succeed, info := caseTest.RunAndFree()
 			require.True(t, succeed, info)
 		})
+	}
+}
+
+func TestTimestampCastDSTGapPolicy(t *testing.T) {
+	zone, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	ordinary := types.DatetimeFromClock(2024, 3, 10, 1, 30, 0, 123456)
+	gap := types.DatetimeFromClock(2024, 3, 10, 2, 30, 0, 123456)
+	boundary := time.Date(2024, 3, 10, 3, 0, 0, 123456000, zone)
+	for _, source := range []string{"datetime", "string"} {
+		for _, policy := range []string{"strict", "nonstrict", "ignore"} {
+			t.Run(source+"/"+policy, func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				proc.GetSessionInfo().TimeZone = zone
+				proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+					if name == "sql_mode" && policy != "nonstrict" {
+						return "STRICT_TRANS_TABLES", nil
+					}
+					return "", nil
+				})
+				warnings := &numericWarningSession{}
+				proc.WarningSink = warnings
+				input := NewFunctionTestInput(types.T_datetime.ToTypeWithScale(6), []types.Datetime{ordinary, gap, 0}, []bool{false, false, true})
+				if source == "string" {
+					input = NewFunctionTestInput(types.T_varchar.ToType(), []string{"2024-03-10 01:30:00.123456", "2024-03-10 02:30:00.123456", "invalid"}, []bool{false, false, true})
+				}
+				fn := NewAssignCast
+				if policy == "ignore" {
+					fn = NewAssignIgnoreCast
+					proc.SetStmtProfile(&process.StmtProfile{})
+					proc.GetStmtProfile().SetStatementRuntimeProfile("Insert", "DML", true)
+				}
+				c := NewFunctionTestCase(proc, []FunctionTestInput{input,
+					NewFunctionTestInput(types.T_timestamp.ToTypeWithScale(6), []types.Timestamp{}, nil)},
+					NewFunctionTestResult(types.T_timestamp.ToTypeWithScale(6), policy == "strict",
+						[]types.Timestamp{ordinary.ToTimestamp(zone), types.UnixMicroToTimestamp(boundary.UnixMicro()), 0}, []bool{false, false, true}), fn)
+				ok, info := c.RunAndFree()
+				require.True(t, ok, info)
+				if policy == "strict" {
+					require.Empty(t, warnings.warnings)
+				} else {
+					require.Len(t, warnings.warnings, 1)
+				}
+			})
+		}
 	}
 }
 

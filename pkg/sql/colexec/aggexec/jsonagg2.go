@@ -496,18 +496,6 @@ func jsonAggregateValueSize(vec *vector.Vector, row uint64, locations ...*time.L
 	case types.T_decimal256:
 		value := vector.MustFixedColNoTypeCheck[types.Decimal256](vec)[row].Format(typ.Scale)
 		return jsonAggregateDecimalSize(value), nil
-	case types.T_date:
-		length := len(vector.MustFixedColNoTypeCheck[types.Date](vec)[row].String())
-		return 1 + jsonUvarintSize(uint64(length)) + length, nil
-	case types.T_time:
-		length := len(vector.MustFixedColNoTypeCheck[types.Time](vec)[row].String())
-		return 1 + jsonUvarintSize(uint64(length)) + length, nil
-	case types.T_datetime:
-		length := len(vector.MustFixedColNoTypeCheck[types.Datetime](vec)[row].String())
-		return 1 + jsonUvarintSize(uint64(length)) + length, nil
-	case types.T_timestamp:
-		length := len(vector.MustFixedColNoTypeCheck[types.Timestamp](vec)[row].String())
-		return 1 + jsonUvarintSize(uint64(length)) + length, nil
 	case types.T_char, types.T_varchar, types.T_text:
 		length := len(vec.GetBytesAt(int(row)))
 		return 1 + jsonUvarintSize(uint64(length)) + length, nil
@@ -679,22 +667,6 @@ func appendJSONAggregateValue(
 	case types.T_decimal256:
 		value := vector.MustFixedColNoTypeCheck[types.Decimal256](vec)[row].Format(typ.Scale)
 		return appendJSONAggregateDecimal(dst, value), nil
-	case types.T_date:
-		value := vector.MustFixedColNoTypeCheck[types.Date](vec)[row].String()
-		dst = append(dst, bytejson.TpCodeString)
-		return appendJSONBinaryString(dst, []byte(value)), nil
-	case types.T_time:
-		value := vector.MustFixedColNoTypeCheck[types.Time](vec)[row].String()
-		dst = append(dst, bytejson.TpCodeString)
-		return appendJSONBinaryString(dst, []byte(value)), nil
-	case types.T_datetime:
-		value := vector.MustFixedColNoTypeCheck[types.Datetime](vec)[row].String()
-		dst = append(dst, bytejson.TpCodeString)
-		return appendJSONBinaryString(dst, []byte(value)), nil
-	case types.T_timestamp:
-		value := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)[row].String()
-		dst = append(dst, bytejson.TpCodeString)
-		return appendJSONBinaryString(dst, []byte(value)), nil
 	case types.T_char, types.T_varchar, types.T_text:
 		dst = append(dst, bytejson.TpCodeString)
 		return appendJSONBinaryString(dst, vec.GetBytesAt(int(row))), nil
@@ -1109,30 +1081,13 @@ func (exec *jsonObjectAggExec) flushAccounted() (_ []*vector.Vector, retErr erro
 	return vecs, nil
 }
 
-func buildValueByteJson(vec *vector.Vector, row uint64) (bytejson.ByteJson, error) {
-	// Keep this private legacy helper's wire representation stable for callers
-	// that do not carry a session timezone. Aggregate execution uses the
-	// location-aware helper below, which preserves typed temporal values.
-	switch vec.GetType().Oid {
-	case types.T_date:
-		return bytejson.CreateByteJSONWithCheck(vector.MustFixedColNoTypeCheck[types.Date](vec)[int(row)].String())
-	case types.T_time:
-		return bytejson.CreateByteJSONWithCheck(vector.MustFixedColNoTypeCheck[types.Time](vec)[int(row)].String())
-	case types.T_datetime:
-		return bytejson.CreateByteJSONWithCheck(vector.MustFixedColNoTypeCheck[types.Datetime](vec)[int(row)].String())
-	case types.T_timestamp:
-		return bytejson.CreateByteJSONWithCheck(vector.MustFixedColNoTypeCheck[types.Timestamp](vec)[int(row)].String())
-	}
-	return buildValueByteJsonWithLocation(vec, row, nil)
-}
-
 func buildValueByteJsonWithLocation(vec *vector.Vector, row uint64, loc *time.Location) (bytejson.ByteJson, error) {
 	if vec.GetType().Oid == types.T_date {
 		// DATE has no session-dependent rendering; retain the aggregate's
 		// historical string representation.
 		return bytejson.CreateByteJSONWithCheck(vector.MustFixedColNoTypeCheck[types.Date](vec)[int(row)].String())
 	}
-	if vec.GetType().Oid == types.T_date || vec.GetType().Oid == types.T_time ||
+	if vec.GetType().Oid == types.T_time ||
 		vec.GetType().Oid == types.T_datetime || vec.GetType().Oid == types.T_timestamp ||
 		vec.GetType().Oid == types.T_year {
 		value, err := jsonvalue.FromVector(context.Background(), vec, int(row), loc, 0, nil)
@@ -1177,18 +1132,6 @@ func buildValueByteJsonWithLocation(vec *vector.Vector, row uint64, loc *time.Lo
 	case types.T_decimal256:
 		val := vector.MustFixedColNoTypeCheck[types.Decimal256](vec)[int(row)]
 		return jsonAggregateDecimal(val.Format(typ.Scale)), nil
-	case types.T_date:
-		val := vector.MustFixedColNoTypeCheck[types.Date](vec)[int(row)]
-		return bytejson.CreateByteJSONWithCheck(val.String())
-	case types.T_time:
-		val := vector.MustFixedColNoTypeCheck[types.Time](vec)[int(row)]
-		return bytejson.CreateByteJSONWithCheck(val.String())
-	case types.T_datetime:
-		val := vector.MustFixedColNoTypeCheck[types.Datetime](vec)[int(row)]
-		return bytejson.CreateByteJSONWithCheck(val.String())
-	case types.T_timestamp:
-		val := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)[int(row)]
-		return bytejson.CreateByteJSONWithCheck(val.String())
 	case types.T_char, types.T_varchar, types.T_text:
 		val := vector.GenerateFunctionStrParameter(vec)
 		data, _ := val.GetStrValue(row)
@@ -1269,16 +1212,7 @@ func buildJSONArrayValueByteJson(vec *vector.Vector, row uint64, locations ...*t
 	if len(locations) > 0 {
 		loc = locations[0]
 	}
-	if !isSharedJSONArrayValueType(vec.GetType().Oid) {
-		return buildValueByteJson(vec, row)
-	}
-	// TIME, DATETIME, TIMESTAMP and YEAR enter this path. None needs opaque JSON
-	// admission; use the fail-closed protocol value if that set is expanded.
-	value, err := jsonvalue.FromVector(context.Background(), vec, int(row), loc, 0, nil)
-	if err != nil {
-		return bytejson.ByteJson{}, err
-	}
-	return bytejson.CreateByteJSONWithCheck(value)
+	return buildValueByteJsonWithLocation(vec, row, loc)
 }
 
 func isSharedJSONArrayValueType(oid types.T) bool {

@@ -4773,13 +4773,13 @@ func datetimeToTimestamp(
 				return err
 			}
 		} else {
-			if v.IsNonexistentLocalTime(zone) {
+			result, nonexistent := v.ToTimestampWithLocalTimeStatus(zone)
+			if nonexistent {
 				if isStrictSqlMode(proc) && !statementIgnore(proc) {
 					return moerr.NewInvalidInputNoCtxf("nonexistent local time: %s", v.String2(6))
 				}
 				appendTemporalAssignmentConversionWarning(proc, "timestamp", v.String2(6))
 			}
-			result := v.ToTimestamp(zone)
 			// Truncate to target scale if needed
 			if targetScale < 6 {
 				if truncate {
@@ -9101,13 +9101,13 @@ func strToTimestamp(proc *process.Process,
 			if truncateFractional {
 				parsed = parsed.TruncateToScaleWithoutRounding(totype.Scale)
 			}
-			if parsed.IsNonexistentLocalTime(zone) {
+			val, nonexistent := parsed.ToTimestampWithLocalTimeStatus(zone)
+			if nonexistent {
 				if isStrictSqlMode(proc) && mode != castModeAssignmentIgnore && !statementIgnore(proc) {
 					return moerr.NewInvalidInputNoCtxf("nonexistent local time: %s", s)
 				}
 				appendTemporalAssignmentConversionWarning(proc, "timestamp", s)
 			}
-			val := parsed.ToTimestamp(zone)
 			if val == types.ZeroTimestamp && !assignmentCast {
 				if !modeChecked {
 					nullifyZero, err = explicitZeroTemporalCastReturnsNull(proc)

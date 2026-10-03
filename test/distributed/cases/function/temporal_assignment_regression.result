@@ -123,18 +123,18 @@ SELECT n, CURRVAL('duplicate_rhs') AS consumed FROM joined_update WHERE id = 1;
 ➤ n[4,32,0]  ¦  consumed[12,65535,0]  𝄀
 7  ¦  7
 SET lc_time_names = 'en_US';
-PREPARE locale_query FROM 'SELECT CONCAT(DAYNAME("2024-01-07"), "/", DATE_FORMAT("2024-12-01", "%M")) AS names';
+PREPARE locale_query FROM 'SELECT CONCAT(DAYNAME("2024-01-07"), "/", DATE_FORMAT("2024-12-01", "%M"), "/", DATE_FORMAT("2024-06-01", "%b"), "/", DATE_FORMAT("2024-07-01", "%b"), "/", DAYNAME("0000-01-01")) AS names';
 EXECUTE locale_query;
 ➤ names[-1,16383,0]  𝄀
-Sunday/December
+Sunday/December/Jun/Jul/Sunday
 SET lc_time_names = 'fr_FR';
 EXECUTE locale_query;
 ➤ names[-1,16383,0]  𝄀
-dimanche/décembre
+dimanche/décembre/jun/jui/dimanche
 SET lc_time_names = 'en_US';
 EXECUTE locale_query;
 ➤ names[-1,16383,0]  𝄀
-Sunday/December
+Sunday/December/Jun/Jul/Sunday
 DEALLOCATE PREPARE locale_query;
 SET sql_mode = '';
 PREPARE fractional_query FROM 'SELECT CAST("2024-01-02 03:04:05.9999999" AS DATETIME(6)), CAST("12:34:56.9999999" AS TIME(6))';

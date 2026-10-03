@@ -801,16 +801,36 @@ func TestAddIntervalMicrosecond(t *testing.T) {
 }
 
 func TestDatetimeDSTGapUsesFirstRepresentableWallTime(t *testing.T) {
-	loc, err := time.LoadLocation("America/New_York")
-	require.NoError(t, err)
-	dt, err := ParseDatetime("2024-03-10 02:30:00.123456", 6)
-	require.NoError(t, err)
-	require.True(t, dt.IsNonexistentLocalTime(loc))
-
-	normalized := dt.ConvertToGoTime(loc)
-	require.Equal(t, "2024-03-10 03:00:00.123456", normalized.Format("2006-01-02 15:04:05.000000"))
-	want := time.Date(2024, 3, 10, 3, 0, 0, 123456000, loc).UnixMicro() + unixEpochMicroSecs
-	require.Equal(t, Timestamp(want), dt.ToTimestamp(loc))
+	for _, tc := range []struct {
+		zone, input, want string
+		gap               bool
+	}{
+		{"America/New_York", "2024-03-10 02:30:00.123456", "2024-03-10 03:00:00.123456", true},
+		{"America/New_York", "2024-03-10 01:59:59.999999", "2024-03-10 01:59:59.999999", false},
+		{"America/New_York", "2024-03-10 03:00:00.123456", "2024-03-10 03:00:00.123456", false},
+		{"America/New_York", "2024-11-03 01:30:00.123456", "2024-11-03 01:30:00.123456", false},
+		{"Australia/Lord_Howe", "2024-10-06 02:15:00.123456", "2024-10-06 02:30:00.123456", true},
+		{"Pacific/Apia", "2011-12-30 12:00:00.123456", "2011-12-31 00:00:00.123456", true},
+		{"UTC", "2024-03-10 02:30:00.123456", "2024-03-10 02:30:00.123456", false},
+	} {
+		t.Run(tc.zone+"/"+tc.input, func(t *testing.T) {
+			loc, err := time.LoadLocation(tc.zone)
+			require.NoError(t, err)
+			dt, err := ParseDatetime(tc.input, 6)
+			require.NoError(t, err)
+			value, gap := dt.ToTimestampWithLocalTimeStatus(loc)
+			require.Equal(t, tc.gap, gap)
+			require.Equal(t, gap, dt.IsNonexistentLocalTime(loc))
+			require.Equal(t, tc.want, dt.ConvertToGoTime(loc).Format("2006-01-02 15:04:05.000000"))
+			require.Equal(t, dt.ToTimestamp(loc), value)
+			if !gap {
+				require.Equal(t, dt, value.ToDatetime(loc))
+			}
+		})
+	}
+	value, gap := ZeroDatetime.ToTimestampWithLocalTimeStatus(nil)
+	require.Equal(t, ZeroTimestamp, value)
+	require.False(t, gap)
 }
 
 // DATE and DATETIME share calendar spelling; clock fields never wrap into

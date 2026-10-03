@@ -298,12 +298,16 @@ func TestTimestampTemporalResultPaths(t *testing.T) {
 	require.NoError(t, err)
 	unit, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("MICROSECOND"), 1, proc.Mp())
 	require.NoError(t, err)
+	defer unit.Free(proc.Mp())
 	interval, err := vector.NewConstFixed(types.T_int64.ToType(), int64(1), 1, proc.Mp())
 	require.NoError(t, err)
+	defer interval.Free(proc.Mp())
 	timestamp, err := vector.NewConstFixed(types.T_timestamp.ToTypeWithScale(6), ts, 1, proc.Mp())
 	require.NoError(t, err)
+	defer timestamp.Free(proc.Mp())
 	resultType := types.T_datetime.ToTypeWithScale(6)
 	result := vector.NewFunctionResultWrapper(resultType, proc.Mp())
+	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(1))
 	require.NoError(t, TimestampAddTimestamp([]*vector.Vector{unit, interval, timestamp}, result, proc, 1, nil))
 	got := vector.GenerateFunctionFixedTypeParameter[types.Datetime](result.GetResultVector())
@@ -313,11 +317,15 @@ func TestTimestampTemporalResultPaths(t *testing.T) {
 
 	date, err := vector.NewConstFixed(types.T_datetime.ToTypeWithScale(6), types.DatetimeFromClock(2024, 1, 2, 3, 4, 5, 123456), 1, proc.Mp())
 	require.NoError(t, err)
+	defer date.Free(proc.Mp())
 	from, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("UTC"), 1, proc.Mp())
 	require.NoError(t, err)
+	defer from.Free(proc.Mp())
 	to, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("+08:00"), 1, proc.Mp())
 	require.NoError(t, err)
+	defer to.Free(proc.Mp())
 	convertResult := vector.NewFunctionResultWrapper(resultType, proc.Mp())
+	defer convertResult.Free()
 	require.NoError(t, convertResult.PreExtendAndReset(1))
 	require.NoError(t, ConvertTz([]*vector.Vector{date, from, to}, convertResult, proc, 1, nil))
 	converted := vector.GenerateFunctionFixedTypeParameter[types.Datetime](convertResult.GetResultVector())
@@ -333,18 +341,16 @@ func TestTemporalDatetimeResultBranches(t *testing.T) {
 	require.NoError(t, err)
 
 	timestampVec := vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	defer timestampVec.Free(proc.Mp())
 	intervalVec := vector.NewVec(types.T_int64.ToType())
+	defer intervalVec.Free(proc.Mp())
 	unitVec, err := vector.NewConstFixed(types.T_int64.ToType(), int64(types.Day), 3, proc.Mp())
 	require.NoError(t, err)
+	defer unitVec.Free(proc.Mp())
 	require.NoError(t, vector.AppendFixedList(timestampVec, []types.Timestamp{ts, ts, ts}, []bool{false, true, false}, proc.Mp()))
 	require.NoError(t, vector.AppendFixedList(intervalVec, []int64{1, 1, math.MaxInt64}, nil, proc.Mp()))
 	result := vector.NewFunctionResultWrapper(types.T_datetime.ToTypeWithScale(6), proc.Mp())
-	t.Cleanup(func() {
-		timestampVec.Free(proc.Mp())
-		intervalVec.Free(proc.Mp())
-		unitVec.Free(proc.Mp())
-		result.Free()
-	})
+	defer result.Free()
 
 	require.NoError(t, result.PreExtendAndReset(3))
 	require.NoError(t, TimestampAdd([]*vector.Vector{timestampVec, intervalVec, unitVec}, result, proc, 3, nil))
@@ -369,19 +375,17 @@ func TestTemporalDatetimeResultBranches(t *testing.T) {
 	require.Equal(t, types.DatetimeFromClock(2024, 1, 1, 3, 4, 5, 123456), value)
 
 	dateVec := vector.NewVec(types.T_datetime.ToTypeWithScale(6))
+	defer dateVec.Free(proc.Mp())
 	fromVec := vector.NewVec(types.T_varchar.ToType())
+	defer fromVec.Free(proc.Mp())
 	toVec := vector.NewVec(types.T_varchar.ToType())
+	defer toVec.Free(proc.Mp())
 	require.NoError(t, vector.AppendFixedList(dateVec,
 		[]types.Datetime{types.DatetimeFromClock(2024, 1, 2, 3, 4, 5, 123456), types.ZeroDatetime, types.DatetimeFromClock(2024, 1, 2, 3, 4, 5, 123456)}, nil, proc.Mp()))
 	require.NoError(t, vector.AppendStringList(fromVec, []string{"UTC", "UTC", "not-a-timezone"}, nil, proc.Mp()))
 	require.NoError(t, vector.AppendStringList(toVec, []string{"+08:00", "+08:00", "+08:00"}, nil, proc.Mp()))
 	convertResult := vector.NewFunctionResultWrapper(types.T_datetime.ToTypeWithScale(6), proc.Mp())
-	t.Cleanup(func() {
-		dateVec.Free(proc.Mp())
-		fromVec.Free(proc.Mp())
-		toVec.Free(proc.Mp())
-		convertResult.Free()
-	})
+	defer convertResult.Free()
 	require.NoError(t, convertResult.PreExtendAndReset(3))
 	require.NoError(t, ConvertTz([]*vector.Vector{dateVec, fromVec, toVec}, convertResult, proc, 3, nil))
 	converted := vector.GenerateFunctionFixedTypeParameter[types.Datetime](convertResult.GetResultVector())
@@ -398,16 +402,14 @@ func TestTimestampAddSubTimeDatetimeResultBranches(t *testing.T) {
 	ts, err := types.ParseTimestamp(time.UTC, "2024-01-02 03:04:05.123456", 6)
 	require.NoError(t, err)
 	timestamps := vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	defer timestamps.Free(proc.Mp())
 	times := vector.NewVec(types.T_varchar.ToType())
+	defer times.Free(proc.Mp())
 	require.NoError(t, vector.AppendFixedList(timestamps,
 		[]types.Timestamp{ts, ts, types.ZeroTimestamp, ts},
 		[]bool{false, true, false, false}, proc.Mp()))
 	require.NoError(t, vector.AppendStringList(times,
 		[]string{"01:02:03.000001", "01:02:03", "01:02:03", "not-a-time"}, nil, proc.Mp()))
-	t.Cleanup(func() {
-		timestamps.Free(proc.Mp())
-		times.Free(proc.Mp())
-	})
 
 	selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true, true}}
 	for _, tc := range []struct {
@@ -442,12 +444,12 @@ func TestDateFormatUsesTemporalLocaleForGenericPatterns(t *testing.T) {
 	datetime := types.DatetimeFromClock(2024, 12, 25, 1, 2, 3, 0)
 	caseTest := NewFunctionTestCase(proc,
 		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{datetime}, nil),
-			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"%M %W"}, nil),
+			NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{datetime, types.DatetimeFromClock(2024, 6, 1, 0, 0, 0, 0), types.DatetimeFromClock(2024, 7, 1, 0, 0, 0, 0)}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"%M %W", "%b", "%b"}, nil),
 		},
-		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"décembre mercredi"}, nil),
+		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"décembre mercredi", "jun", "jui"}, nil),
 		DateFormat)
-	succeeded, info := caseTest.Run()
+	succeeded, info := caseTest.RunAndFree()
 	require.True(t, succeeded, info)
 }
 

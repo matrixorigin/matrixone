@@ -28,36 +28,41 @@ type temporalLocale struct {
 	weekdays      [7]string // Sunday .. Saturday
 	weekdayAbbrev [7]string
 	months        [12]string
+	monthAbbrev   [12]string
 }
 
-var temporalLocales = map[string]temporalLocale{
+var temporalLocales = map[string]*temporalLocale{
 	"en_US": {
 		name:          "en_US",
 		weekdays:      [7]string{"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"},
 		weekdayAbbrev: [7]string{"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"},
 		months:        [12]string{"January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"},
+		monthAbbrev:   [12]string{"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"},
 	},
 	"fr_FR": {
 		name:          "fr_FR",
 		weekdays:      [7]string{"dimanche", "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi"},
 		weekdayAbbrev: [7]string{"dim", "lun", "mar", "mer", "jeu", "ven", "sam"},
 		months:        [12]string{"janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"},
+		monthAbbrev:   [12]string{"jan", "fév", "mar", "avr", "mai", "jun", "jui", "aoû", "sep", "oct", "nov", "déc"},
 	},
 	"de_DE": {
 		name:          "de_DE",
 		weekdays:      [7]string{"Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag"},
 		weekdayAbbrev: [7]string{"So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"},
 		months:        [12]string{"Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"},
+		monthAbbrev:   [12]string{"Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"},
 	},
 	"ja_JP": {
 		name:          "ja_JP",
 		weekdays:      [7]string{"日曜日", "月曜日", "火曜日", "水曜日", "木曜日", "金曜日", "土曜日"},
 		weekdayAbbrev: [7]string{"日", "月", "火", "水", "木", "金", "土"},
 		months:        [12]string{"1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"},
+		monthAbbrev:   [12]string{"1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"},
 	},
 }
 
-func temporalLocaleForProcess(proc *process.Process) temporalLocale {
+func temporalLocaleForProcess(proc *process.Process) *temporalLocale {
 	name := "en_US"
 	resolved := false
 	if proc != nil && proc.GetResolveVariableFunc() != nil {
@@ -77,43 +82,30 @@ func temporalLocaleForProcess(proc *process.Process) temporalLocale {
 	return temporalLocales["en_US"]
 }
 
-func localizedWeekday(proc *process.Process, weekday int) string {
-	locale := temporalLocaleForProcess(proc)
+func (locale *temporalLocale) localizedWeekday(weekday int) string {
 	if weekday < 0 || weekday >= len(locale.weekdays) {
 		return ""
 	}
 	return locale.weekdays[weekday]
 }
 
-func localizedWeekdayAbbrev(proc *process.Process, weekday int) string {
-	locale := temporalLocaleForProcess(proc)
+func (locale *temporalLocale) localizedWeekdayAbbrev(weekday int) string {
 	if weekday < 0 || weekday >= len(locale.weekdayAbbrev) {
 		return ""
 	}
 	return locale.weekdayAbbrev[weekday]
 }
 
-func localizedMonth(proc *process.Process, month int) string {
-	locale := temporalLocaleForProcess(proc)
+func (locale *temporalLocale) localizedMonth(month int) string {
 	if month < 1 || month > len(locale.months) {
 		return ""
 	}
 	return locale.months[month-1]
 }
 
-func localizedMonthAbbrev(proc *process.Process, month int) string {
-	value := localizedMonth(proc, month)
-	if value == "" {
+func (locale *temporalLocale) localizedMonthAbbrev(month int) string {
+	if month < 1 || month > len(locale.monthAbbrev) {
 		return ""
 	}
-	// MySQL's Japanese month abbreviation is the full numeric month name;
-	// other supported locales use the first three Unicode characters.
-	if temporalLocaleForProcess(proc).name == "ja_JP" {
-		return value
-	}
-	runes := []rune(value)
-	if len(runes) > 3 {
-		runes = runes[:3]
-	}
-	return string(runes)
+	return locale.monthAbbrev[month-1]
 }

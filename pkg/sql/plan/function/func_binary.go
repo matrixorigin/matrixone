@@ -4727,6 +4727,7 @@ func dateFormatOperator(format string) DateFormatFunc {
 
 func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	locale := temporalLocaleForProcess(proc)
 
 	dates := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
 	formats := vector.GenerateFunctionStrParameter(ivecs[1])
@@ -4734,20 +4735,13 @@ func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	var constFmt string
 	var constNull bool
 	var constOperator DateFormatFunc
-	genericDateFormat := false
 	if constantFormat {
 		fmtBytes, null := formats.GetStrValue(0)
 		constFmt = functionUtil.QuickBytesToStr(fmtBytes)
 		constNull = null || len(constFmt) == 0
 		if !constNull {
 			constOperator = dateFormatOperator(constFmt)
-			// Locale-aware formatting is needed for textual directives. The
-			// locale formatter also handles numeric directives, so keeping this
-			// flag conservative avoids comparing function values in Go.
-			genericDateFormat = true
 		}
-	} else {
-		genericDateFormat = true
 	}
 
 	var buf bytes.Buffer
@@ -4778,8 +4772,8 @@ func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 			if !constantFormat {
 				operator = dateFormatOperator(fmt)
 			}
-			if temporalLocaleForProcess(proc).name != "en_US" && genericDateFormat {
-				isNull, err = datetimeFormatWithLocale(proc, proc.Ctx, d, fmt, &buf)
+			if locale.name != "en_US" {
+				isNull, err = datetimeFormatWithLocale(locale, proc.Ctx, d, fmt, &buf)
 			} else {
 				isNull, err = operator(proc.Ctx, d, fmt, &buf)
 			}
@@ -5021,14 +5015,14 @@ func date_format_combine_pattern7(_ context.Context, t types.Datetime, format st
 
 // datetimeFormat: format the datetime value according to the format string.
 func datetimeFormat(ctx context.Context, datetime types.Datetime, format string, buf *bytes.Buffer) (bool, error) {
-	return datetimeFormatWithLocale(nil, ctx, datetime, format, buf)
+	return datetimeFormatWithLocale(temporalLocales["en_US"], ctx, datetime, format, buf)
 }
 
-func datetimeFormatWithLocale(proc *process.Process, ctx context.Context, datetime types.Datetime, format string, buf *bytes.Buffer) (bool, error) {
+func datetimeFormatWithLocale(locale *temporalLocale, ctx context.Context, datetime types.Datetime, format string, buf *bytes.Buffer) (bool, error) {
 	inPatternMatch := false
 	for _, b := range format {
 		if inPatternMatch {
-			isNull, err := makeDateFormatWithLocale(proc, ctx, datetime, b, buf)
+			isNull, err := makeDateFormatWithLocale(locale, ctx, datetime, b, buf)
 			if err != nil {
 				return false, err
 			}
@@ -5082,45 +5076,26 @@ var (
 		"November",
 		"December",
 	}
-
-	// AbbrevWeekdayName lists Abbreviation of week names, which are used int builtin function 'date_format'
-	AbbrevWeekdayName = []string{
-		"Sun",
-		"Mon",
-		"Tue",
-		"Wed",
-		"Thu",
-		"Fri",
-		"Sat",
-	}
 )
 
 func makeDateFormat(ctx context.Context, t types.Datetime, b rune, buf *bytes.Buffer) (bool, error) {
-	return makeDateFormatWithLocale(nil, ctx, t, b, buf)
+	return makeDateFormatWithLocale(temporalLocales["en_US"], ctx, t, b, buf)
 }
 
-func makeDateFormatWithLocale(proc *process.Process, _ context.Context, t types.Datetime, b rune, buf *bytes.Buffer) (bool, error) {
+func makeDateFormatWithLocale(locale *temporalLocale, _ context.Context, t types.Datetime, b rune, buf *bytes.Buffer) (bool, error) {
 	switch b {
 	case 'b':
 		m := t.Month()
 		if m == 0 || m > 12 {
 			return true, nil
 		}
-		if proc == nil {
-			buf.WriteString(MonthNames[m-1][:3])
-		} else {
-			buf.WriteString(localizedMonthAbbrev(proc, int(m)))
-		}
+		buf.WriteString(locale.localizedMonthAbbrev(int(m)))
 	case 'M':
 		m := t.Month()
 		if m == 0 || m > 12 {
 			return true, nil
 		}
-		if proc == nil {
-			buf.WriteString(MonthNames[m-1])
-		} else {
-			buf.WriteString(localizedMonth(proc, int(m)))
-		}
+		buf.WriteString(locale.localizedMonth(int(m)))
 	case 'm':
 		FormatInt2BufByWidth(int(t.Month()), 2, buf)
 		//buf.WriteString(FormatIntByWidth(int(t.Month()), 2))
@@ -5216,20 +5191,12 @@ func makeDateFormatWithLocale(proc *process.Process, _ context.Context, t types.
 			return true, nil
 		}
 		weekday := t.DayOfWeek()
-		if proc == nil {
-			buf.WriteString(AbbrevWeekdayName[weekday])
-		} else {
-			buf.WriteString(localizedWeekdayAbbrev(proc, int(weekday)))
-		}
+		buf.WriteString(locale.localizedWeekdayAbbrev(int(weekday)))
 	case 'W':
 		if t.Year() == 0 && t.Month() == 0 {
 			return true, nil
 		}
-		if proc == nil {
-			buf.WriteString(t.DayOfWeek().String())
-		} else {
-			buf.WriteString(localizedWeekday(proc, int(t.DayOfWeek())))
-		}
+		buf.WriteString(locale.localizedWeekday(int(t.DayOfWeek())))
 	case 'w':
 		if t.Year() == 0 && t.Month() == 0 {
 			return true, nil

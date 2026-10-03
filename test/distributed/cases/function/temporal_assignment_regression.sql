@@ -79,7 +79,7 @@ UPDATE joined_update t JOIN joined_source s ON t.id = 1 SET t.n = NEXTVAL('dupli
 SELECT n, CURRVAL('duplicate_rhs') AS consumed FROM joined_update WHERE id = 1;
 -- Reuse the same prepared handles through session state A -> B -> A.
 SET lc_time_names = 'en_US';
-PREPARE locale_query FROM 'SELECT CONCAT(DAYNAME("2024-01-07"), "/", DATE_FORMAT("2024-12-01", "%M")) AS names';
+PREPARE locale_query FROM 'SELECT CONCAT(DAYNAME("2024-01-07"), "/", DATE_FORMAT("2024-12-01", "%M"), "/", DATE_FORMAT("2024-06-01", "%b"), "/", DATE_FORMAT("2024-07-01", "%b"), "/", DAYNAME("0000-01-01")) AS names';
 EXECUTE locale_query;
 SET lc_time_names = 'fr_FR';
 EXECUTE locale_query;

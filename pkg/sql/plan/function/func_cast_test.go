@@ -94,7 +94,7 @@ func TestTemporalCastsHonorTimeTruncateFractional(t *testing.T) {
 				output = []types.Timestamp{}
 			}
 			caseTest := NewFunctionTestCase(proc, []FunctionTestInput{tc.input, NewFunctionTestInput(tc.output, output, nil)}, NewFunctionTestResult(tc.output, false, tc.value, nil), NewCast)
-			succeed, info := caseTest.Run()
+			succeed, info := caseTest.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -138,7 +138,7 @@ func TestTemporalCastsTruncateFractionalAcrossSources(t *testing.T) {
 				empty = []types.Time{}
 			}
 			caseTest := NewFunctionTestCase(proc, []FunctionTestInput{tc.input, NewFunctionTestInput(tc.out, empty, nil)}, NewFunctionTestResult(tc.out, false, tc.value, nil), NewCast)
-			succeed, info := caseTest.Run()
+			succeed, info := caseTest.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}

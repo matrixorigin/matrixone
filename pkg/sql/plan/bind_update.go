@@ -106,7 +106,7 @@ func (builder *QueryBuilder) makeUpdateChangedRowsExpr(
 	if proc == nil || !proc.Base.SessionInfo.CountUpdateChangedRows {
 		return nil, nil
 	}
-	return builder.makeUpdateChangedRowsPredicate(alias, selectNode, selectNodeTag, oldColName2Idx, newColName2Idx, true)
+	return builder.makeUpdateChangedRowsPredicate(alias, selectNode, selectNodeTag, oldColName2Idx, newColName2Idx)
 }
 
 // makeUpdateChangedRowsPredicate is also used to guard automatic ON UPDATE
@@ -119,7 +119,6 @@ func (builder *QueryBuilder) makeUpdateChangedRowsPredicate(
 	selectNodeTag int32,
 	oldColName2Idx map[string]int32,
 	newColName2Idx map[string]int32,
-	useProjectionSlots bool,
 ) (*plan.Expr, error) {
 
 	updatedCols := make([]string, 0)
@@ -146,34 +145,19 @@ func (builder *QueryBuilder) makeUpdateChangedRowsPredicate(
 		}
 		oldTyp := selectNode.ProjectList[oldPos].Typ
 		var err error
-		var oldExpr *plan.Expr
-		if useProjectionSlots {
-			oldExpr = &plan.Expr{
-				Typ: oldTyp,
-				Expr: &plan.Expr_Col{Col: &plan.ColRef{
-					RelPos: selectNodeTag,
-					ColPos: oldPos,
-				}},
-			}
-		} else {
-			oldExpr = replaceColRefs(DeepCopyExpr(selectNode.ProjectList[oldPos]), selectNodeTag, selectNode.ProjectList)
-			oldExpr.Typ = oldTyp
+		oldExpr := &plan.Expr{
+			Typ: oldTyp,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: selectNodeTag,
+				ColPos: oldPos,
+			}},
 		}
-		var newExpr *plan.Expr
-		if useProjectionSlots {
-			newExpr = &plan.Expr{
-				Typ: oldTyp,
-				Expr: &plan.Expr_Col{Col: &plan.ColRef{
-					RelPos: selectNodeTag,
-					ColPos: newPos,
-				}},
-			}
-		} else {
-			newExpr = replaceColRefs(DeepCopyExpr(selectNode.ProjectList[newPos]), selectNodeTag, selectNode.ProjectList)
-			newExpr, err = builder.forceAssignmentCastExpr(newExpr, oldTyp, false)
-			if err != nil {
-				return nil, err
-			}
+		newExpr := &plan.Expr{
+			Typ: oldTyp,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: selectNodeTag,
+				ColPos: newPos,
+			}},
 		}
 		if oldExpr.Typ.Id == int32(types.T_char) {
 			oldExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "rtrim", []*plan.Expr{oldExpr})
@@ -809,7 +793,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			}
 			needsAutomaticConsumer = true
 			predicate, predicateErr := builder.makeUpdateChangedRowsPredicate(
-				alias, selectNode, selectNodeTag, changedRowsOldColName2Idx, changedRowsNewColName2Idx, true)
+				alias, selectNode, selectNodeTag, changedRowsOldColName2Idx, changedRowsNewColName2Idx)
 			if predicateErr != nil {
 				return 0, predicateErr
 			}

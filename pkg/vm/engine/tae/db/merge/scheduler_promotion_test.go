@@ -94,7 +94,16 @@ func TestPromotionSettingsDomains(t *testing.T) {
 	require.Len(t, s.L0MaxCountDecayControl, 5)
 	_, err = s.ToMMsgTaskTrigger()
 	require.NoError(t, err)
-	_, err = decode(t, s).toPromotionTrigger()
+	decoded := decode(t, s)
+	require.Equal(t, s.L0MaxCountDecayControl, decoded.L0MaxCountDecayControl)
+	extraTrigger, err := decoded.ToMMsgTaskTrigger()
+	require.NoError(t, err)
+	prefix := decoded.Clone()
+	prefix.L0MaxCountDecayControl = prefix.L0MaxCountDecayControl[:4]
+	prefixTrigger, err := prefix.ToMMsgTaskTrigger()
+	require.NoError(t, err)
+	require.Equal(t, prefixTrigger.String(), extraTrigger.String())
+	_, err = decoded.toPromotionTrigger()
 	require.NoError(t, err)
 }
 

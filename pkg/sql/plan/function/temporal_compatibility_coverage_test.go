@@ -1107,7 +1107,7 @@ func TestTimestampDatetimeResultDiagnostics(t *testing.T) {
 					NewFunctionTestInput(types.T_int64.ToType(), counts, nil),
 					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{int64(types.Second)}, nil),
 				}, NewFunctionTestResult(types.T_datetime.ToType(), false, []types.Datetime{want, 0, 0, 0, 0}, wantNulls), fn).WithSelectList(mask)
-				ok, info := c.Run()
+				ok, info := c.RunAndFree()
 				require.True(t, ok, info)
 				if allMasked {
 					require.Empty(t, warnings.warnings)
@@ -1121,7 +1121,7 @@ func TestTimestampDatetimeResultDiagnostics(t *testing.T) {
 }
 
 func TestTimestampAddSubTimeBoundPrecisionAndMask(t *testing.T) {
-	for name, fn := range map[string]fEvalFn{"add": AddTime, "sub": SubTime} {
+	for name, fn := range map[string]executeLogicOfOverload{"add": AddTime, "sub": SubTime} {
 		for _, allMasked := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/all_masked=%t", name, allMasked), func(t *testing.T) {
 				proc := newTmpProcess(t)
@@ -1145,6 +1145,7 @@ func TestTimestampAddSubTimeBoundPrecisionAndMask(t *testing.T) {
 					NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{ts, maximum, maximum, ts}, nil),
 					NewFunctionTestInput(types.T_varchar.ToType(), []string{fraction, overflow, overflow, "2024-01-02 00:00:01"}, nil),
 				}, NewFunctionTestResult(resultType, false, []types.Datetime{types.DatetimeFromClock(2024, 1, 2, 3, 4, 5, 1), 0, 0, 0}, []bool{allMasked, true, true, true}), fn).WithSelectList(mask)
+				defer c.Free()
 				ok, info := c.Run()
 				require.True(t, ok, info)
 				require.Equal(t, resultType.Scale, c.GetResultVectorDirectly().GetType().Scale)
@@ -1179,7 +1180,7 @@ func TestTemporalFractionTokenAndIgnoreRecovery(t *testing.T) {
 					NewFunctionTestInput(types.T_varchar.ToType(), []string{input}, nil),
 					NewFunctionTestInput(types.T_datetime.ToTypeWithScale(6), []types.Datetime{}, nil),
 				}, NewFunctionTestResult(types.T_datetime.ToTypeWithScale(6), false, []types.Datetime{want}, nil), NewAssignCast)
-				ok, info := c.Run()
+				ok, info := c.RunAndFree()
 				require.True(t, ok, info)
 			})
 		}
@@ -1194,7 +1195,7 @@ func TestTemporalFractionTokenAndIgnoreRecovery(t *testing.T) {
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{"12:34:56.9999999junk"}, nil),
 				NewFunctionTestInput(types.T_time.ToType(), []types.Time{}, nil),
 			}, NewFunctionTestResult(types.T_time.ToType(), false, []types.Time{want}, nil), NewAssignIgnoreCast)
-			ok, info := c.Run()
+			ok, info := c.RunAndFree()
 			require.True(t, ok, info)
 			require.Len(t, warnings.warnings, 1)
 			require.Equal(t, uint16(moerr.WARN_DATA_TRUNCATED), warnings.warnings[0].code)
@@ -1244,7 +1245,7 @@ func TestTemporalFractionNumericSources(t *testing.T) {
 					c := NewFunctionTestCase(proc, []FunctionTestInput{source,
 						NewFunctionTestInput(types.T_time.ToTypeWithScale(3), []types.Time{}, nil)},
 						NewFunctionTestResult(types.T_time.ToTypeWithScale(3), false, []types.Time{want, -want, carry}, nil), NewAssignCast)
-					ok, info := c.Run()
+					ok, info := c.RunAndFree()
 					require.True(t, ok, info)
 				}
 			})
@@ -1271,7 +1272,7 @@ func TestTemporalFractionNumericSources(t *testing.T) {
 						NewFunctionTestInput(oid.ToTypeWithScale(6), empty, nil),
 					}, NewFunctionTestResult(oid.ToTypeWithScale(6), false, values, []bool{allSkipped, true, true}), NewAssignCast).
 						WithSelectList(&FunctionSelectList{AnyNull: true, AllNull: allSkipped, SelectList: []bool{true, false, true}})
-					ok, info := c.Run()
+					ok, info := c.RunAndFree()
 					require.True(t, ok, info, "unselected invalid calendar values must not reach the numeric parser")
 				})
 			}

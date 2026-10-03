@@ -30,9 +30,11 @@ func TestTemporalLocaleResolution(t *testing.T) {
 		return "", nil
 	})
 
-	require.Equal(t, "dimanche", localizedWeekday(proc, 0))
-	require.Equal(t, "décembre", localizedMonth(proc, 12))
-	require.Equal(t, "déc", localizedMonthAbbrev(proc, 12))
+	require.Equal(t, "dimanche", temporalLocaleForProcess(proc).localizedWeekday(0))
+	require.Equal(t, "décembre", temporalLocaleForProcess(proc).localizedMonth(12))
+	require.Equal(t, "déc", temporalLocaleForProcess(proc).localizedMonthAbbrev(12))
+	require.Equal(t, "jun", temporalLocaleForProcess(proc).localizedMonthAbbrev(6))
+	require.Equal(t, "jui", temporalLocaleForProcess(proc).localizedMonthAbbrev(7))
 }
 
 func TestTemporalLocaleResolutionFromRemoteSessionSnapshot(t *testing.T) {
@@ -40,12 +42,12 @@ func TestTemporalLocaleResolutionFromRemoteSessionSnapshot(t *testing.T) {
 	proc.SetResolveVariableFunc(nil)
 	proc.GetSessionInfo().LCTimeNames = "fr_FR"
 
-	require.Equal(t, "dimanche", localizedWeekday(proc, 0))
-	require.Equal(t, "décembre", localizedMonth(proc, 12))
+	require.Equal(t, "dimanche", temporalLocaleForProcess(proc).localizedWeekday(0))
+	require.Equal(t, "décembre", temporalLocaleForProcess(proc).localizedMonth(12))
 }
 
 func TestTemporalLocaleFallbackAndBounds(t *testing.T) {
-	require.Equal(t, "Sunday", localizedWeekday(nil, 0))
-	require.Equal(t, "", localizedWeekday(nil, -1))
-	require.Equal(t, "", localizedMonth(nil, 13))
+	require.Equal(t, "Sunday", temporalLocaleForProcess(nil).localizedWeekday(0))
+	require.Equal(t, "", temporalLocaleForProcess(nil).localizedWeekday(-1))
+	require.Equal(t, "", temporalLocaleForProcess(nil).localizedMonth(13))
 }
