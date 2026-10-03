@@ -62,7 +62,11 @@ const (
 )
 
 type IndexQuery struct{}
-type StateQuery struct{}
+type StateQuery struct {
+	// StateOnly omits the cluster snapshot for assertions that only consume State.
+	// The zero value retains the complete independent checker snapshot.
+	StateOnly bool
+}
 type ScheduleCommandQuery struct{ UUID string }
 type CommandDeliveryStateQuery struct{}
 type ClusterDetailsQuery struct{ Cfg Config }
@@ -1920,7 +1924,10 @@ func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 		}
 		return &result, nil
 	}
-	if _, ok := query.(*StateQuery); ok {
+	if q, ok := query.(*StateQuery); ok {
+		if q != nil && q.StateOnly {
+			return &pb.CheckerState{State: s.state.State}, nil
+		}
 		return s.handleStateQuery(), nil
 	} else if q, ok := query.(*ScheduleCommandQuery); ok {
 		return s.handleScheduleCommandQuery(q.UUID), nil

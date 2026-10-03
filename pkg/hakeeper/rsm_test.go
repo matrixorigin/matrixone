@@ -2541,6 +2541,27 @@ func TestCheckerStateConfigurationSnapshotsAreIndependent(t *testing.T) {
 	require.Equal(t, uint64(9), second.NextIDByKey["key"])
 	first.NextIDByKey["key"] = 100
 	require.Equal(t, uint64(9), sm.state.NextIDByKey["key"])
+	// Typed-nil queries previously selected the full snapshot as well.
+	value, err := sm.Lookup((*StateQuery)(nil))
+	require.NoError(t, err)
+	require.Equal(t, lookup(), value)
+	for _, state := range []pb.HAKeeperState{
+		pb.HAKeeperCreated, pb.HAKeeperBootstrapping,
+		pb.HAKeeperBootstrapCommandsReceived, pb.HAKeeperBootstrapFailed,
+		pb.HAKeeperRunning,
+	} {
+		sm.state.State = state
+		value, err := sm.Lookup(&StateQuery{StateOnly: true})
+		require.NoError(t, err)
+		projected := value.(*pb.CheckerState)
+		require.Equal(t, &pb.CheckerState{State: state}, projected)
+		// The result is neither cached nor an alias of live state.
+		projected.State = pb.HAKeeperState(-1)
+		require.Equal(t, state, lookup().State)
+		fresh, err := sm.Lookup(&StateQuery{StateOnly: true})
+		require.NoError(t, err)
+		require.Equal(t, &pb.CheckerState{State: state}, fresh)
+	}
 }
 
 func TestHeartbeatCheckHintTracksAcceptedReadiness(t *testing.T) {

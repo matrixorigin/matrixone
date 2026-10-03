@@ -612,14 +612,6 @@ func recreateTableFromTS(
 		return
 	}
 
-	if !isRestoreByCloneSql.MatchString(restoreTableDataByTsFmt) {
-		// create table
-		getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to create table: %v, create table sql: %s", restoreAccount, snapshotTs, tblInfo.tblName, tblInfo.createSql))
-		if err = bh.Exec(ctx, tblInfo.createSql); err != nil {
-			return
-		}
-	}
-
 	insertIntoSql := restoreTableDataByTsSQL(tblInfo.dbName, tblInfo.tblName, snapshotTs)
 	beginTime := time.Now()
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to insert select table: %v, insert sql: %s", restoreAccount, snapshotTs, tblInfo.tblName, insertIntoSql))
@@ -658,9 +650,12 @@ func restoreSystemDatabaseFromTS(
 		}
 
 		getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to restore system table: %v.%v", restoreAccount, snapshotTs, moCatalog, tblInfo.tblName))
-		tblInfo.createSql, err = getCreateTableSqlFromTS(ctx, bh, dbName, tblInfo.tblName, snapshotTs, restoreAccount, toAccountId)
-		if err != nil {
-			return err
+		// Sequences use their CREATE definition; table schemas belong to CLONE.
+		if isSequence(tblInfo) {
+			tblInfo.createSql, err = getCreateTableSqlFromTS(ctx, bh, dbName, tblInfo.tblName, snapshotTs, restoreAccount, toAccountId)
+			if err != nil {
+				return err
+			}
 		}
 
 		// checks if the given context has been canceled.
