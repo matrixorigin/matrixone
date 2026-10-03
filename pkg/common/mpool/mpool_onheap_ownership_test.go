@@ -28,7 +28,7 @@ func scanGlobalOnHeapOutstanding(poolID int64) (bytes, objects int64) {
 		shard := &globalPtrShards[shardIndex]
 		shard.mu.Lock()
 		for _, hdr := range shard.m {
-			if hdr.poolId == poolID && !hdr.isOffHeap() {
+			if hdr.owner.id == poolID && hdr.kind == memKindOnHeap {
 				bytes += int64(hdr.allocSz)
 				objects++
 			}
@@ -108,162 +108,192 @@ func TestOnHeapOwnershipMatchesRegistryAcrossOwnershipTransitions(t *testing.T) 
 }
 
 func TestOnHeapOwnershipFailedRegistrationDoesNotCount(t *testing.T) {
-	mp := MustNew("onheap-ownership-registration-failure")
-	defer DeleteMPool(mp)
-
-	buffer := make([]byte, 64)
-	ptr := unsafe.Pointer(unsafe.SliceData(buffer))
-	hdr := memHdr{poolId: mp.id, allocSz: 64}
-	hdr.SetGuard()
-
-	require.NoError(t, mp.recordPtrHdr(ptr, hdr))
-	globalOnHeapStats.recordAlloc(64)
-	require.Equal(t, int64(64), mp.OnHeapCurrNB())
-
-	require.Error(t, mp.recordPtrHdr(ptr, hdr))
-	require.Equal(t, int64(64), mp.OnHeapCurrNB())
-
-	mp.Free(buffer)
-	require.Zero(t, mp.OnHeapCurrNB())
+	for _, noLock := range []bool{false, true} {
+		t.Run(fmt.Sprint(noLock), func(t *testing.T) {
+			flags := NoFixed
+			if noLock {
+				flags |= NoLock
+			}
+			mp, err := NewMPool("onheap-ownership-registration-failure", 0, flags)
+			require.NoError(t, err)
+			t.Cleanup(func() { DeleteMPool(mp) })
+			buffer, err := mp.Alloc(64, false)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				if buffer != nil {
+					mp.Free(buffer)
+				}
+			})
+			ptr := unsafe.Pointer(unsafe.SliceData(buffer))
+			hdr, ok := mp.getPtrHdr(ptr)
+			require.True(t, ok)
+			require.Error(t, mp.recordPtrHdr(ptr, hdr))
+			bytes, objects := mp.OnHeapOutstanding()
+			require.Equal(t, int64(64), bytes)
+			require.Equal(t, int64(1), objects)
+			mp.Free(buffer)
+			freed := buffer
+			buffer = nil
+			require.Panics(t, func() { mp.Free(freed) })
+			bytes, objects = mp.OnHeapOutstanding()
+			require.Zero(t, bytes)
+			require.Zero(t, objects)
+		})
+	}
 }
 
 func TestOnHeapOwnershipReallocTransitions(t *testing.T) {
-	t.Run("grow", func(t *testing.T) {
-		mp := MustNew("onheap-ownership-grow")
-		defer DeleteMPool(mp)
-
-		buffer, err := mp.Alloc(64, false)
-		require.NoError(t, err)
-		grown, err := mp.Grow(buffer, 128, false)
-		require.NoError(t, err)
-		require.Equal(t, int64(128), mp.OnHeapCurrNB())
-		requireOnHeapOwnershipMatchesRegistry(t, mp)
-
-		mp.Free(grown)
-		require.Zero(t, mp.OnHeapCurrNB())
-	})
-
-	t.Run("realloc-zero", func(t *testing.T) {
-		mp := MustNew("onheap-ownership-realloc-zero")
-		defer DeleteMPool(mp)
-
-		buffer, err := mp.Alloc(64, false)
-		require.NoError(t, err)
-		reallocated, err := mp.ReallocZero(buffer, 128, false)
-		require.NoError(t, err)
-		require.Equal(t, int64(128), mp.OnHeapCurrNB())
-		requireOnHeapOwnershipMatchesRegistry(t, mp)
-
-		mp.Free(reallocated)
-		require.Zero(t, mp.OnHeapCurrNB())
-	})
-
-	t.Run("on-heap-to-off-heap", func(t *testing.T) {
-		mp := MustNew("onheap-ownership-provenance-transition")
-		defer DeleteMPool(mp)
-
-		buffer, err := mp.Alloc(64, false)
-		require.NoError(t, err)
-		reallocated, err := mp.ReallocZero(buffer, 256, true)
-		require.NoError(t, err)
-		require.Zero(t, mp.OnHeapCurrNB())
-		require.Equal(t, int64(256), mp.CurrNB())
-
-		mp.Free(reallocated)
-		require.Zero(t, mp.CurrNB())
-	})
+	for _, tc := range []struct {
+		name                                          string
+		sourceOffHeap, targetOffHeap, crossPool, grow bool
+		size                                          int
+	}{
+		{name: "grow", size: 128, grow: true},
+		{name: "realloc-zero", size: 128},
+		{name: "on-heap-to-off-heap", size: 128, targetOffHeap: true},
+		{name: "off-heap-to-on-heap", size: 128, sourceOffHeap: true},
+		{name: "cross-pool", size: 128, crossPool: true},
+		{name: "within-capacity-keeps-owner", size: 32, crossPool: true, targetOffHeap: true},
+		{name: "rejected-replacement", size: int(MaxAllocationSize()) + 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			owner := MustNew("onheap-realloc-owner")
+			other := MustNew("onheap-realloc-other")
+			t.Cleanup(func() { DeleteMPool(owner); DeleteMPool(other) })
+			buffer, err := owner.Alloc(64, tc.sourceOffHeap)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				if buffer != nil {
+					owner.Free(buffer)
+				}
+			})
+			for i := range buffer {
+				buffer[i] = byte(i)
+			}
+			target := owner
+			if tc.crossPool {
+				target = other
+			}
+			var replacement []byte
+			if tc.grow {
+				replacement, err = target.Grow(buffer, tc.size, tc.targetOffHeap)
+			} else {
+				replacement, err = target.ReallocZero(buffer, tc.size, tc.targetOffHeap)
+			}
+			wantOwner, wantOther := int64(0), int64(0)
+			if tc.size > int(MaxAllocationSize()) {
+				require.Error(t, err)
+				require.Nil(t, replacement)
+				wantOwner = 64
+			} else {
+				require.NoError(t, err)
+				if tc.size <= 64 {
+					require.True(t, unsafe.SliceData(buffer) == unsafe.SliceData(replacement), "within-capacity resize keeps the allocation")
+					wantOwner = 64
+				} else if !tc.targetOffHeap {
+					if tc.crossPool {
+						wantOther = int64(tc.size)
+					} else {
+						wantOwner = int64(tc.size)
+					}
+				}
+				buffer = replacement
+			}
+			for i := range min(len(buffer), 64) {
+				require.Equal(t, byte(i), buffer[i])
+			}
+			if !tc.grow && len(buffer) > 64 {
+				require.Equal(t, make([]byte, len(buffer)-64), buffer[64:])
+			}
+			require.Equal(t, wantOwner, owner.OnHeapCurrNB())
+			require.Equal(t, wantOther, other.OnHeapCurrNB())
+			requireOnHeapOwnershipMatchesRegistry(t, owner)
+			requireOnHeapOwnershipMatchesRegistry(t, other)
+			owner.Free(buffer)
+			buffer = nil
+			requireOnHeapOwnershipMatchesRegistry(t, owner)
+			requireOnHeapOwnershipMatchesRegistry(t, other)
+			require.Zero(t, owner.CurrNB())
+			require.Zero(t, other.CurrNB())
+		})
+	}
 }
 
 func TestOnHeapOwnershipTeardown(t *testing.T) {
-	t.Run("locking-pool-outstanding-and-late-free", func(t *testing.T) {
-		owner := MustNew("onheap-ownership-teardown-owner")
-		other := MustNew("onheap-ownership-late-free-owner")
-		defer DeleteMPool(other)
-
-		globalBefore := GlobalOnHeapStats().NumCurrBytes.Load()
-		buffer, err := owner.Alloc(64, false)
-		require.NoError(t, err)
-		require.Equal(t, int64(64), owner.OnHeapCurrNB())
-
-		DeleteMPool(owner)
-		require.Equal(t, globalBefore+64, GlobalOnHeapStats().NumCurrBytes.Load())
-
-		other.Free(buffer)
-		require.Equal(t, globalBefore, GlobalOnHeapStats().NumCurrBytes.Load())
-	})
-
-	t.Run("no-lock-on-heap", func(t *testing.T) {
+	for _, crossPool := range []bool{false, true} {
+		t.Run(fmt.Sprintf("late-free/cross-pool=%t", crossPool), func(t *testing.T) {
+			owner := MustNew("onheap-ownership-teardown-owner")
+			other := MustNew("onheap-ownership-late-free-owner")
+			deleted := false
+			t.Cleanup(func() {
+				if !deleted {
+					DeleteMPool(owner)
+				}
+				DeleteMPool(other)
+			})
+			globalBytes := GlobalOnHeapStats().NumCurrBytes.Load()
+			globalObjects := GlobalOnHeapStats().NumCurrObjects.Load()
+			buffer, err := owner.Alloc(64, false)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				if buffer != nil {
+					owner.Free(buffer)
+				}
+			})
+			DeleteMPool(owner)
+			deleted = true
+			requireOnHeapOwnershipMatchesRegistry(t, owner)
+			require.Equal(t, globalBytes+64, GlobalOnHeapStats().NumCurrBytes.Load())
+			freeing := owner
+			if crossPool {
+				freeing = other
+			}
+			freeing.Free(buffer)
+			buffer = nil
+			requireOnHeapOwnershipMatchesRegistry(t, owner)
+			bytes, objects := owner.OnHeapOutstanding()
+			require.Zero(t, bytes)
+			require.Zero(t, objects)
+			require.Equal(t, globalBytes, GlobalOnHeapStats().NumCurrBytes.Load())
+			require.Equal(t, globalObjects, GlobalOnHeapStats().NumCurrObjects.Load())
+		})
+	}
+	t.Run("no-lock mixed terminal cleanup", func(t *testing.T) {
 		mp := MustNewNoLock("onheap-ownership-no-lock")
-		globalBefore := GlobalOnHeapStats().NumCurrBytes.Load()
-		buffer, err := mp.Alloc(64, false)
-		require.NoError(t, err)
-		require.NotEmpty(t, buffer)
+		t.Cleanup(func() { DeleteMPool(mp) })
+		onHeapBefore := GlobalOnHeapStats().NumCurrBytes.Load()
+		objectsBefore := GlobalOnHeapStats().NumCurrObjects.Load()
+		offHeapBefore := GlobalStats().NumCurrBytes.Load()
+		for _, offHeap := range []bool{false, true} {
+			buffer, err := mp.Alloc(64, offHeap)
+			require.NoError(t, err)
+			require.Len(t, buffer, 64)
+		}
 		bytes, objects := mp.OnHeapOutstanding()
 		require.Equal(t, int64(64), bytes)
 		require.Equal(t, int64(1), objects)
-
 		DeleteMPool(mp)
+		DeleteMPool(mp) // Repeated terminal cleanup must not release ownership twice.
 		require.Zero(t, mp.OnHeapCurrNB())
-		require.Equal(t, globalBefore, GlobalOnHeapStats().NumCurrBytes.Load())
-	})
-
-	t.Run("no-lock-off-heap", func(t *testing.T) {
-		mp := MustNewNoLock("onheap-ownership-no-lock-off-heap")
-		globalBefore := GlobalStats().NumCurrBytes.Load()
-		buffer, err := mp.Alloc(64, true)
-		require.NoError(t, err)
-		require.NotEmpty(t, buffer)
-		require.Zero(t, mp.OnHeapCurrNB())
-
-		DeleteMPool(mp)
-		require.Zero(t, mp.OnHeapCurrNB())
-		require.Equal(t, globalBefore, GlobalStats().NumCurrBytes.Load())
+		require.Zero(t, mp.CurrNB())
+		require.Nil(t, mp.ptrs)
+		require.Equal(t, onHeapBefore, GlobalOnHeapStats().NumCurrBytes.Load())
+		require.Equal(t, objectsBefore, GlobalOnHeapStats().NumCurrObjects.Load())
+		require.Equal(t, offHeapBefore, GlobalStats().NumCurrBytes.Load())
 	})
 }
 
 func TestOnHeapOwnershipConcurrentPublicationAndCrossPoolFree(t *testing.T) {
 	owner := MustNew("onheap-ownership-concurrent-owner")
-	freeingPool := MustNew("onheap-ownership-concurrent-free")
-	defer DeleteMPool(owner)
-	defer DeleteMPool(freeingPool)
-
-	const (
-		workers = 8
-		ops     = 64
-	)
-	buffers := make([][][]byte, workers)
-	defer func() {
-		for _, workerBuffers := range buffers {
-			for _, buffer := range workerBuffers {
-				if buffer != nil {
-					owner.Free(buffer)
-				}
-			}
-		}
-	}()
-
-	var wg sync.WaitGroup
-	for worker := range workers {
-		wg.Add(1)
-		go func(worker int) {
-			defer wg.Done()
-			for range ops {
-				buffer, err := owner.Alloc(64, false)
-				if err != nil {
-					t.Errorf("allocate: %v", err)
-					return
-				}
-				buffers[worker] = append(buffers[worker], buffer)
-			}
-		}(worker)
-	}
-	wg.Wait()
-	requireOnHeapOwnershipMatchesRegistry(t, owner)
-
-	stopReader := make(chan struct{})
-	wg.Add(1)
+	freeing := MustNew("onheap-ownership-concurrent-free")
+	t.Cleanup(func() { DeleteMPool(owner); DeleteMPool(freeing) })
+	const workers, ops = 8, 64
+	buffers := make(chan []byte, workers)
+	stopReader, readerDone, readerStarted := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	go func() {
-		defer wg.Done()
+		defer close(readerDone)
+		owner.OnHeapOutstanding()
+		close(readerStarted)
 		for {
 			select {
 			case <-stopReader:
@@ -273,21 +303,76 @@ func TestOnHeapOwnershipConcurrentPublicationAndCrossPoolFree(t *testing.T) {
 			}
 		}
 	}()
-	for worker := range workers {
-		wg.Add(1)
-		go func(worker int) {
-			defer wg.Done()
-			for i, buffer := range buffers[worker] {
-				freeingPool.Free(buffer)
-				buffers[worker][i] = nil
+	<-readerStarted
+	var producers, consumers sync.WaitGroup
+	for range workers {
+		producers.Add(1)
+		consumers.Add(1)
+		go func() {
+			defer producers.Done()
+			for range ops {
+				buffer, err := owner.Alloc(64, false)
+				if err != nil {
+					t.Errorf("allocate: %v", err)
+					return
+				}
+				buffers <- buffer
 			}
-		}(worker)
+		}()
+		go func() {
+			defer consumers.Done()
+			for buffer := range buffers {
+				freeing.Free(buffer)
+			}
+		}()
 	}
+	producers.Wait()
+	close(buffers)
+	consumers.Wait()
 	close(stopReader)
-	wg.Wait()
-
+	<-readerDone
 	requireOnHeapOwnershipMatchesRegistry(t, owner)
 	require.Zero(t, owner.OnHeapCurrNB())
+	require.Equal(t, int64(workers*ops), freeing.Stats().NumCrossPoolFree.Load())
+}
+
+func TestOnHeapOwnershipDeleteAndLateFree(t *testing.T) {
+	owner := MustNew("onheap-delete-concurrent-owner")
+	other := MustNew("onheap-delete-concurrent-free")
+	t.Cleanup(func() { DeleteMPool(owner); DeleteMPool(other) })
+	globalBytes := GlobalOnHeapStats().NumCurrBytes.Load()
+	globalObjects := GlobalOnHeapStats().NumCurrObjects.Load()
+	buffers := make([][]byte, 8)
+	t.Cleanup(func() {
+		for _, buffer := range buffers {
+			if buffer != nil {
+				owner.Free(buffer)
+			}
+		}
+	})
+	for i := range buffers {
+		var err error
+		buffers[i], err = owner.Alloc(64, false)
+		require.NoError(t, err)
+	}
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); <-start; DeleteMPool(owner) }()
+	go func() {
+		defer wg.Done()
+		<-start
+		for i, buffer := range buffers {
+			other.Free(buffer)
+			buffers[i] = nil
+		}
+	}()
+	close(start)
+	wg.Wait()
+	requireOnHeapOwnershipMatchesRegistry(t, owner)
+	require.Zero(t, owner.OnHeapCurrNB())
+	require.Equal(t, globalBytes, GlobalOnHeapStats().NumCurrBytes.Load())
+	require.Equal(t, globalObjects, GlobalOnHeapStats().NumCurrObjects.Load())
 }
 
 func BenchmarkMPoolDestroyWithUnrelatedRegistryEntries(b *testing.B) {
