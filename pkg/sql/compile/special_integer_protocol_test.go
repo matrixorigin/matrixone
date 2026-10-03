@@ -69,7 +69,7 @@ func TestSpecialIntegerProtocolPlacementAndSend(t *testing.T) {
 	_, err = encodeRemoteScope(scope, c.proc)
 	require.ErrorContains(t, err, "version 98")
 	require.Equal(t, client.calls, client.releases)
-	require.ErrorContains(t, validateIntegerArgumentDestination(c.proc, nil), "versioned remote destination")
+	require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, nil, planpb.RemoteExpressionFeatures{IntegerParameterCoercion: true}), "versioned remote destination")
 	p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion98-1)
