@@ -4516,6 +4516,22 @@ func packedDatetimeDecimal64(v types.Datetime, toType types.Type) (types.Decimal
 }
 
 func packedDatetimeDecimal128(v types.Datetime, toType types.Type) (types.Decimal128, error) {
+	if v >= types.ZeroDatetime && toType.Width > 0 && toType.Width <= 38 && toType.Scale >= 0 && toType.Scale <= 38 {
+		// The packed calendar value has at most 15 digits (Year returns uint16)
+		// and the fractional part has six, so this coefficient fits Decimal128.
+		// Unlike Decimal64's parser, Parse128 does not round these input digits.
+		// Scaling this exact coefficient therefore preserves its rounding.
+		coefficient, _ := (types.Decimal128{B0_63: uint64(packedDatetimeInt64(v))}).Mul128(
+			types.Decimal128{B0_63: types.MicroSecsPerSec})
+		coefficient, _ = coefficient.Add64(types.Decimal64(v.MicroSec()))
+		result, err := coefficient.Scale(toType.Scale - 6)
+		limit, _ := (types.Decimal128{B0_63: 1}).Scale(toType.Width)
+		if err == nil && result.Less(limit) {
+			return result, nil
+		}
+	}
+	// Preserve the parser's exact error, including the original value and
+	// width/scale handling, for overflow or unsupported internal inputs.
 	return types.ParseDecimal128(packedDatetimeDecimalString(v), toType.Width, toType.Scale)
 }
 
