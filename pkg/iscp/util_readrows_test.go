@@ -16,6 +16,7 @@ package iscp
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
@@ -80,6 +82,11 @@ func TestReadSingleTaskRunner(t *testing.T) {
 }
 
 func TestGetTaskRunnerQueriesMOTaskWithSystemAccount(t *testing.T) {
+	previousReporter := errutil.GetReportErrorFunc()
+	var reports atomic.Int32
+	errutil.SetErrorReporter(func(context.Context, error, int) { reports.Add(1) })
+	t.Cleanup(func() { errutil.SetErrorReporter(previousReporter) })
+
 	oldExecWithResult := ExecWithResult
 	defer func() {
 		ExecWithResult = oldExecWithResult
@@ -105,6 +112,7 @@ func TestGetTaskRunnerQueriesMOTaskWithSystemAccount(t *testing.T) {
 	runner, err := GetTaskRunner(tenantCtx, "cn0", nil)
 	require.NoError(t, err)
 	require.Equal(t, "cn1", runner)
+	require.Zero(t, reports.Load())
 }
 
 func newTaskRunnerResult(t *testing.T, batches [][]string) (executor.Result, *mpool.MPool) {

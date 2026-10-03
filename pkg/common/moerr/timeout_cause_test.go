@@ -47,11 +47,13 @@ func TestISCPTimeoutCausesDoNotReportOnContextCreation(t *testing.T) {
 	}
 	for _, cause := range causes {
 		ctx, cancel := context.WithTimeoutCause(context.Background(), time.Hour, cause)
+		t.Cleanup(cancel)
 		require.NoError(t, ctx.Err())
 		require.Nil(t, context.Cause(ctx))
 		cancel()
 
 		ctx, cancel = context.WithTimeoutCause(context.Background(), time.Millisecond, cause)
+		t.Cleanup(cancel)
 		<-ctx.Done()
 		require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
 		require.Same(t, cause, context.Cause(ctx))
