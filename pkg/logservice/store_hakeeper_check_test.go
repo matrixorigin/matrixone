@@ -945,6 +945,8 @@ func TestSetInitialClusterInfo(t *testing.T) {
 		)
 		require.NoError(t, err)
 		assert.True(t, applied)
+		require.Len(t, store.hakeeperCheckWakeup, 1)
+		<-store.hakeeperCheckWakeup
 		state, err = store.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperBootstrapping, state.State)
@@ -961,6 +963,7 @@ func TestSetInitialClusterInfo(t *testing.T) {
 		)
 		require.NoError(t, err)
 		assert.False(t, applied)
+		require.Empty(t, store.hakeeperCheckWakeup)
 		state, err = store.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperBootstrapping, state.State)

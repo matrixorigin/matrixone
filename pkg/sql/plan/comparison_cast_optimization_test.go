@@ -86,16 +86,15 @@ func TestComparisonTypeCastOptimization(t *testing.T) {
 			expectedType:   types.T_int32,
 		},
 		// INT vs DECIMAL with zero fractional part - should optimize
-		// INT vs DECIMAL with zero fractional part - should NOT optimize
-		// We keep DECIMAL128 to preserve semantics
+		// Exact integral DECIMAL constants retain the native integer domain.
 		{
 			name:           "int32 = 9.0",
 			op:             "=",
 			colType:        types.T_int32,
 			constType:      types.T_decimal128,
 			constValue:     "9.0",
-			shouldOptimize: false,
-			expectedType:   types.T_decimal128,
+			shouldOptimize: true,
+			expectedType:   types.T_int32,
 		},
 		// INT vs DECIMAL with non-zero fractional part - should NOT optimize
 		{

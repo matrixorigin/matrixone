@@ -639,8 +639,21 @@ func TestCreateTenantInformationSchemaWaitsForAllProtocol100Peers(t *testing.T) 
 				ctrl := gomock.NewController(t)
 				bh := mock_frontend.NewMockBackgroundExec(ctrl)
 				var executed []string
+				tenantCtx := defines.AttachAccount(t.Context(), 42, 1, 2)
 				bh.EXPECT().ClearExecResultSet().AnyTimes()
-				bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+				bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(execCtx context.Context, sql string) error {
+					account, err := defines.GetAccountId(execCtx)
+					require.NoError(t, err)
+					if sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')" {
+						require.Equal(t, uint32(catalog.System_Account), account)
+						require.Equal(t, uint32(catalog.System_User), defines.GetUserId(execCtx))
+						require.Equal(t, uint32(catalog.System_Role), defines.GetRoleId(execCtx))
+					} else {
+						require.Equal(t, uint32(42), account)
+						require.Equal(t, uint32(1), defines.GetUserId(execCtx))
+						require.Equal(t, uint32(2), defines.GetRoleId(execCtx))
+					}
+					require.Equal(t, tenantCtx.Done(), execCtx.Done())
 					executed = append(executed, sql)
 					return nil
 				}).AnyTimes()
@@ -649,7 +662,7 @@ func TestCreateTenantInformationSchemaWaitsForAllProtocol100Peers(t *testing.T) 
 					rows = [][]interface{}{{tc.response}}
 				}
 				bh.EXPECT().GetExecResultSet().Return([]interface{}{newMrsForCheckTenant(rows)}).AnyTimes()
-				err := createTablesInInformationSchemaOfGeneralTenant(t.Context(), bh, "")
+				err := createTablesInInformationSchemaOfGeneralTenant(tenantCtx, bh, "")
 				if tc.wantError {
 					require.ErrorContains(t, err, "protocol version 100")
 					require.Equal(t, []string{"SELECT mo_ctl('cn', 'GetProtocolVersion', '')"}, executed)
@@ -7071,8 +7084,9 @@ func TestNamedWindowValidationDependencyRequiresSelectPrivilege(t *testing.T) {
 	require.NoError(t, err)
 	queryPlan, err := plan2.BuildPlan(plan2.NewMockCompilerContext(true), stmt, false)
 	require.NoError(t, err)
-	require.Len(t, queryPlan.GetQuery().GetCatalogDependencies(), 1)
-	require.Equal(t, region, queryPlan.GetQuery().GetCatalogDependencies()[0].GetObjName())
+	dependencies := queryPlan.GetQuery().GetCatalogDependencies()
+	require.Len(t, dependencies, 2)
+	require.ElementsMatch(t, []string{nation, region}, []string{dependencies[0].ObjName, dependencies[1].ObjName})
 
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -9440,6 +9454,24 @@ func TestGrantPrivilegeLocksObjectLifecycle(t *testing.T) {
 }
 
 func Test_doRevokePrivilege(t *testing.T) {
+	registerLockedObjects := func(ctx context.Context, bh *backgroundExecTest, database, relation string, isView bool) {
+		if database == "" {
+			return
+		}
+		dbSQL, err := getSqlForCheckDatabaseByAccount(ctx, database)
+		require.NoError(t, err)
+		bh.sql2result[strings.TrimSuffix(dbSQL, ";")+" for share;"] = newMrsForCheckDatabase([][]interface{}{{0}})
+		if relation != "" {
+			var sql string
+			if isView {
+				sql, err = getSqlForCheckDatabaseView(ctx, database, relation)
+			} else {
+				sql, err = getSqlForCheckDatabaseTable(ctx, database, relation)
+			}
+			require.NoError(t, err)
+			bh.sql2result[strings.TrimSuffix(sql, ";")+" for share;"] = bh.sql2result[sql]
+		}
+	}
 	convey.Convey("revoke account, role succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -9601,6 +9633,7 @@ func Test_doRevokePrivilege(t *testing.T) {
 				}
 			}
 
+			registerLockedObjects(ses.GetTxnHandler().GetTxnCtx(), bh, "d", "", false)
 			err = doRevokePrivilege(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, bh)
 			convey.So(err, convey.ShouldBeNil)
 		}
@@ -9745,6 +9778,7 @@ func Test_doRevokePrivilege(t *testing.T) {
 				}
 			}
 
+			registerLockedObjects(ctx, bh, dbName, tableName, false)
 			err = doRevokePrivilege(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, bh)
 			convey.So(err, convey.ShouldBeNil)
 		}
@@ -9889,6 +9923,7 @@ func Test_doRevokePrivilege(t *testing.T) {
 				}
 			}
 
+			registerLockedObjects(ctx, bh, dbName, tableName, true)
 			err = doRevokePrivilege(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, bh)
 			convey.So(err, convey.ShouldBeNil)
 		}

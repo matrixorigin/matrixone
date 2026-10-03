@@ -49,6 +49,25 @@ func TestEmbeddedMOReadReplacesCompleteScan(t *testing.T) {
 	require.Len(t, input.GetRead().BaseSchema.Struct.Types, 2)
 }
 
+func TestEmbeddedMOAdmissionPreservesReaderOrderingWithoutChangingFlight(t *testing.T) {
+	query := embeddedProjectedScanQuery()
+	query.Nodes[0].OrderBy = []*planpb.OrderBySpec{{Expr: col(0), Flag: planpb.OrderBySpec_ASC}}
+	_, err := Export(query)
+	require.ErrorContains(t, err, "sort semantics outside a SORT node")
+	candidate, err := ExportEmbeddedMO(query)
+	require.NoError(t, err)
+	_, err = candidate.Build(map[int32][]byte{0: {1}})
+	require.ErrorContains(t, err, "cannot be emitted as Flight")
+	wire, err := candidate.BuildEmbedded(map[int32]EmbeddedReadBinding{0: {BindingID: 1, Source: EmbeddedReadMO}})
+	require.NoError(t, err)
+	require.NotNil(t, embeddedPlan(t, wire).Relations[0].GetRoot().Input.GetRead())
+	require.Len(t, query.Nodes[0].OrderBy, 1, "the MO producer must still receive the original ordering hint")
+	query.Nodes = append(query.Nodes, &planpb.Node{NodeId: 1, NodeType: planpb.Node_PROJECT, Children: []int32{0}, ProjectList: []*planpb.Expr{col(0)}, OrderBy: query.Nodes[0].OrderBy})
+	query.Steps = []int32{1}
+	_, err = ExportEmbeddedMO(query)
+	require.ErrorContains(t, err, "sort semantics outside a SORT node", "only MO-owned scan annotations are admitted")
+}
+
 func TestEmbeddedMOReadIdentityFallsBackToTableDefinition(t *testing.T) {
 	query := embeddedProjectedScanQuery()
 	query.Nodes[0].ObjRef.DbName = ""

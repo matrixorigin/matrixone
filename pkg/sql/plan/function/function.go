@@ -129,6 +129,126 @@ func validFunctionOverloadID(fid, oIndex int32) bool {
 		oIndex >= 0 && int(oIndex) < len(allSupportedFunctions[fid].Overloads)
 }
 
+// IsConstant applies the existing folding policy, including prepare-time
+// parameter and statement-time handling, at the function semantic owner.
+func IsConstant(expr *plan.Expr, varAndParamIsConst bool) bool {
+	return isConstant(expr, varAndParamIsConst, varAndParamIsConst, constantForFolding)
+}
+
+// IsStatementConstant conservatively admits speculative evaluation and endpoint
+// CONST provenance. Parameters and variables must already be materialized.
+func IsStatementConstant(expr *plan.Expr) bool {
+	return isConstant(expr, false, true, constantForFolding)
+}
+
+// IsRuntimeConstant admits one row-independent value for a scan. Parameters
+// retain their runtime binding promise; lazy selectors stay unevaluated.
+func IsRuntimeConstant(expr *plan.Expr) bool {
+	return isConstant(expr, true, true, constantForRuntime)
+}
+
+type constantPurpose uint8
+
+const (
+	constantForFolding constantPurpose = iota
+	constantForRuntime
+)
+
+func isConstant(expr *plan.Expr, allowParameters, currentExecution bool, purpose constantPurpose) bool {
+	if expr == nil {
+		return false
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Lit, *plan.Expr_T, *plan.Expr_Vec:
+		return true
+	case *plan.Expr_Fold:
+		return e.Fold != nil && e.Fold.IsConst
+	case *plan.Expr_P, *plan.Expr_V:
+		return allowParameters
+	case *plan.Expr_List:
+		if e.List == nil {
+			return false
+		}
+		for _, arg := range e.List.List {
+			if !isConstant(arg, allowParameters, currentExecution, purpose) {
+				return false
+			}
+		}
+		return true
+	case *plan.Expr_F:
+		if e.F == nil || e.F.Func == nil {
+			return false
+		}
+		fid, _ := DecodeOverloadID(e.F.Func.GetObj())
+		if fid == CASE && purpose == constantForFolding {
+			return false
+		}
+		f, ok := GetFunctionByIdWithoutError(e.F.Func.GetObj())
+		if !ok || f.CannotFold() || (f.IsRealTimeRelated() && !currentExecution) {
+			return false
+		}
+		if purpose == constantForRuntime && (allSupportedFunctions[fid].isAggregate() || allSupportedFunctions[fid].isWindow()) {
+			return false
+		}
+		for _, arg := range e.F.Args {
+			if !isConstant(arg, allowParameters, currentExecution, purpose) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+// CanUseZoneMapComparison checks whether physical byte ordering represents the
+// bound SQL comparison domain. CHAR comparisons ignore trailing spaces, which
+// the persisted raw-byte min/max and bloom metadata do not represent.
+func CanUseZoneMapComparison(overloadID int64, args []*plan.Expr) bool {
+	fid, _ := DecodeOverloadID(overloadID)
+	switch fid {
+	case IN, NOT_IN:
+		if len(args) != 2 || args[1] == nil {
+			return false
+		}
+		// List execution uses its first item type; a folded tuple can retain
+		// the outer T_tuple declaration, so encoded vectors own their type.
+		switch tuple := args[1].Expr.(type) {
+		case *plan.Expr_List:
+			return tuple.List != nil && len(tuple.List.List) > 0 && tuple.List.List[0] != nil && types.T(tuple.List.List[0].Typ.Id) != types.T_char
+		case *plan.Expr_Vec:
+			// The actual consumer validates and decodes the carrier once. Its
+			// outer tuple declaration cannot prove physical membership order.
+			return tuple.Vec != nil
+		case *plan.Expr_Fold:
+			return tuple.Fold != nil && !tuple.Fold.IsConst
+		default:
+			return false
+		}
+	case EQUAL, NULL_SAFE_EQUAL, NOT_EQUAL, GREAT_THAN, GREAT_EQUAL, LESS_THAN, LESS_EQUAL, BETWEEN:
+		if len(args) == 0 {
+			return false
+		}
+		for _, arg := range args {
+			if arg == nil {
+				return false
+			}
+		}
+		// The registered comparison kernels dispatch on operand zero. A raw
+		// Sval literal uses the executor's canonical VARCHAR container even
+		// when the plan declares CHAR (notably the empty string).
+		if types.T(args[0].Typ.Id) == types.T_char {
+			lit := args[0].GetLit()
+			if lit == nil || lit.Isnull {
+				return false
+			}
+			_, varcharLiteral := lit.Value.(*plan.Literal_Sval)
+			return varcharLiteral
+		}
+	}
+	return true
+}
+
 func GetFunctionIsZonemappableById(ctx context.Context, overloadID int64) (bool, error) {
 	fid, oIndex := DecodeOverloadID(overloadID)
 	if !validFunctionOverloadID(fid, oIndex) {
@@ -427,7 +547,7 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 		if len(args) == 1 && types.T(args[0].Typ.Id).IsMySQLString() {
 			return false
 		}
-	case WEEK, WEEKOFYEAR, WEEKDAY, YEARWEEK, DAYOFWEEK, DAYOFYEAR, DAYNAME, MONTHNAME, FROM_DAYS:
+	case LAST_DAY, WEEK, WEEKOFYEAR, WEEKDAY, YEARWEEK, DAYOFWEEK, DAYOFYEAR, DAYNAME, MONTHNAME, FROM_DAYS:
 		// Calendar calculations reject zero dates; FROM_DAYS rejects values
 		// above the representable calendar even when the input is NOT NULL.
 		return false

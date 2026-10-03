@@ -2412,6 +2412,10 @@ func bindLegacyChecks(
 	}
 	defer stmt.Free()
 
+	if _, ok := stmt.(*tree.CloneTable); ok {
+		// CLONE stores provenance SQL; structured constraints are already persisted.
+		return nil, true, nil
+	}
 	createStmt, ok := stmt.(*tree.CreateTable)
 	if !ok {
 		return nil, true, moerr.NewInvalidInput(
@@ -2492,7 +2496,7 @@ func equalCheckDefs(left, right []*plan.CheckDef) bool {
 // silently choose between two valid but semantically different parses.
 func recoverLegacyChecks(ctx CompilerContext, tableDef *plan.TableDef) error {
 	if tableDef == nil || len(tableDef.Checks) > 0 || tableDef.Createsql == "" ||
-		tableDef.TableType == catalog.SystemExternalRel ||
+		(tableDef.TableType == catalog.SystemExternalRel || tableDef.TableType == catalog.SystemViewRel) ||
 		!strings.Contains(strings.ToUpper(tableDef.Createsql), "CHECK") {
 		return nil
 	}

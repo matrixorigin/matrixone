@@ -41,7 +41,9 @@ import (
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type admissionRevocationMOServer struct {
@@ -1437,6 +1439,20 @@ func TestCNViewMetadataAdmissionWaitsForAuthoritativeResponse(t *testing.T) {
 }
 
 func TestCNViewMetadataAdmissionDoesNotAckFailedCatalogFence(t *testing.T) {
+	rt := runtime.ServiceRuntime("")
+	for _, key := range []string{runtime.MOProtocolVersion, runtime.PersistedExpressionProtocolFloor, runtime.PersistedExpressionProtocolAuthoringFloor} {
+		old, present := rt.GetGlobalVariables(key)
+		t.Cleanup(func() {
+			if present {
+				rt.SetGlobalVariables(key, old)
+			} else if current, ok := rt.GetGlobalVariables(key); ok {
+				rt.CompareAndDeleteGlobalVariables(key, current)
+			}
+		})
+	}
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(runtime.PersistedExpressionProtocolFloor, int64(0))
+	rt.SetGlobalVariables(runtime.PersistedExpressionProtocolAuthoringFloor, int64(0))
 	fenceErr := errors.New("catalog fence failed")
 	s := &service{
 		cfg:                             &Config{},
@@ -1445,21 +1461,56 @@ func TestCNViewMetadataAdmissionDoesNotAckFailedCatalogFence(t *testing.T) {
 		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
 		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
 	}
-	s.sqlExecutor = executor.NewMemExecutor(func(string) (executor.Result, error) {
-		return executor.Result{}, fenceErr
+	t.Cleanup(s.viewMetadataEpochFence.Close)
+	var statements int
+	s.sqlExecutor = executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		statements++
+		if fenceErr != nil {
+			return executor.Result{}, fenceErr
+		}
+		if sql == catalog.ViewMetadataLifecycleGateSQL {
+			return viewMetadataLifecycleGateTestResult(), nil
+		}
+		return executor.Result{}, nil
 	})
 	s.viewMetadataCatalogFenceReady.Store(true)
 
-	err := s.applyViewMetadataAdmission(context.Background(),
-		&logservicepb.ViewMetadataAdmission{
-			Enabled:              true,
-			Epoch:                6,
-			RevalidationRequired: true,
-			Generation:           13,
-		})
+	snapshot := &logservicepb.ViewMetadataAdmission{
+		Preparing:            true,
+		Epoch:                6,
+		RevalidationRequired: true,
+		Generation:           13,
+		PersistedExpressionRequiredProtocolVersion: uint64(defines.MORPCLatestVersion),
+	}
+	err := s.applyViewMetadataAdmission(context.Background(), snapshot)
 	require.ErrorIs(t, err, fenceErr)
+	require.Equal(t, 1, statements)
 	require.Equal(t, uint64(6), s.viewMetadataEpochFence.Epoch())
 	require.Zero(t, s.viewMetadataCatalogFencedEpoch.Load())
+	proc := &process.Process{Base: &process.BaseProcess{}}
+	require.NoError(t, plan.RequirePersistedProtocolVersion(nil, proc, defines.MORPCVersion72), "durable read floor is independent of authoring")
+	err = plan.RequirePersistedProtocolVersionForAuthoring(nil, proc, defines.MORPCVersion72)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+	require.ErrorContains(t, err, fmt.Sprintf("local protocol=%d, authoring floor=0", defines.MORPCLatestVersion))
+
+	// Recover the dependency, without restarting or advancing the epoch. Local
+	// catalog repair alone must not bypass the global phase-two barrier.
+	fenceErr = nil
+	require.NoError(t, s.applyViewMetadataAdmission(context.Background(), snapshot))
+	require.Greater(t, statements, 1)
+	require.Equal(t, uint64(6), s.viewMetadataCatalogFencedEpoch.Load())
+	require.True(t, moerr.IsMoErrCode(plan.RequirePersistedProtocolVersionForAuthoring(nil, proc, defines.MORPCVersion72), moerr.ErrNotSupported))
+
+	snapshot.Preparing = false
+	snapshot.Enabled = true
+	snapshot.Admitted = true
+	snapshot.CatalogFencedEpoch = 6
+	before := statements
+	require.NoError(t, s.applyViewMetadataAdmission(context.Background(), snapshot))
+	require.Equal(t, before, statements, "the successful catalog fence is not executed twice")
+	require.False(t, snapshot.Ready, "authoring does not depend on public routing readiness")
+	require.NoError(t, plan.RequirePersistedProtocolVersionForAuthoring(nil, proc, defines.MORPCLatestVersion))
+	require.Equal(t, uint64(6), s.viewMetadataEpochFence.Epoch())
 }
 
 func TestCNCompletesSystemViewsAfterAdmissionBeforeIngress(t *testing.T) {

@@ -211,7 +211,7 @@ func TestIntegerArgumentProtocolPlacementAndSend(t *testing.T) {
 		client.version = version
 		c.execType = plan2.ExecTypeAP_MULTICN
 		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-		require.NoError(t, c.constrainIntegerArgumentWorkers(qry))
+		require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 	}
 	place(defines.MORPCVersion84)
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
@@ -226,10 +226,10 @@ func TestIntegerArgumentProtocolPlacementAndSend(t *testing.T) {
 	client.version = defines.MORPCVersion84
 	_, err = encodeRemoteScope(scope, c.proc)
 	require.ErrorContains(t, err, "remote destination")
-	require.Error(t, validateIntegerArgumentDestination(c.proc, nil))
+	require.Error(t, validateRemoteExpressionDestination(c.proc, nil, planpb.RemoteExpressionFeatures{IntegerParameterCoercion: true}))
 	require.Equal(t, client.calls, client.releases)
 	ctx, cancel := context.WithCancel(c.proc.Ctx)
 	cancel()
 	c.proc.Ctx = ctx
-	require.ErrorIs(t, validateIntegerArgumentDestination(c.proc, &pipeline.Pipeline{Node: &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"}}), context.Canceled)
+	require.ErrorIs(t, validateRemoteExpressionDestination(c.proc, &pipeline.Pipeline{Node: &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"}}, planpb.RemoteExpressionFeatures{IntegerParameterCoercion: true}), context.Canceled)
 }

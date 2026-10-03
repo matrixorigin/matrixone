@@ -76,6 +76,19 @@ func TestPreparedNumericPredicateFiltering(t *testing.T) {
 		{"nested boolean", "(c=abs(?) or c=abs(?)) and c>=abs(?)", []string{"54321", "54322", "54320"}, true, false},
 		{"mixed unsafe in", "c in (?,?)", []string{"54321", "0.104"}, false, false},
 		{"mixed unsafe between", "c between ? and ?", []string{"54321", "54322.104"}, false, false},
+		{"decimal exact", "c=cast(? as decimal(38,0))", []string{"9007199254740993"}, true, true},
+		{"decimal wide transport", "c=cast(? as decimal(65,0))", []string{"9007199254740993"}, true, true},
+		{"abs decimal", "c=abs(cast(? as decimal(38,0)))", []string{"-9007199254740993"}, true, true},
+		{"decimal rounded input", "c=cast(? as decimal(38,0))", []string{"9007199254740993.5"}, true, true},
+		{"decimal fraction", "c=cast(? as decimal(38,1))", []string{"9007199254740993.5"}, false, true},
+		{"decimal signed maximum", "c=cast(? as decimal(38,0))", []string{"9223372036854775807"}, true, true},
+		{"decimal signed minimum", "c=cast(? as decimal(38,0))", []string{"-9223372036854775808"}, true, true},
+		{"abs signed overflow", "c=abs(cast(? as decimal(38,0)))", []string{"-9223372036854775808"}, false, true},
+		{"decimal reversed", "cast(? as decimal(38,0))>=c", []string{"9007199254740993"}, true, true},
+		{"decimal in", "c in (cast(? as decimal(38,0)),cast(? as decimal(38,0)))", []string{"9007199254740993", "9007199254740994"}, true, true},
+		{"decimal between", "c between cast(? as decimal(38,0)) and cast(? as decimal(38,0))", []string{"9007199254740993", "9007199254740994"}, true, true},
+		{"decimal arithmetic", "c=cast(? as decimal(38,0))+1", []string{"9007199254740993"}, true, true},
+		{"decimal invalid input", "c=cast(? as decimal(38,0))", []string{"not-a-number"}, false, true},
 		{"round default precision", "c=round(?)", []string{"54321.0"}, true, true},
 		{"truncate default precision", "c=truncate(?)", []string{"54321.0"}, true, true},
 		{"round scalar default", "c=round((select ?))", []string{"54321.0"}, true, true},
@@ -84,13 +97,13 @@ func TestPreparedNumericPredicateFiltering(t *testing.T) {
 		{"truncate scalar strict upper", "c<truncate((select ?))", []string{"54321.0"}, true, true},
 		{"truncate scalar inclusive upper", "c<=truncate((select ?),0)", []string{"54321.0"}, true, true},
 		{"round scalar reversed range", "round((select ?))>c", []string{"54321.0"}, true, true},
-		{"round scalar fractional fallback", "c>=round((select ?))", []string{"54321.5"}, false, true},
+		{"round scalar fractional result", "c>=round((select ?))", []string{"54321.5"}, true, true},
 		{"round scalar collision fallback", "c>=round((select ?))", []string{"9007199254740992"}, false, true},
 		{"round zero precision", "c=round(?,?)", []string{"54321.0", "0"}, true, true},
 		{"truncate zero precision", "c=truncate(?,?)", []string{"54321.0", "0"}, true, true},
 		{"explicit precision cast", "c=round(?,cast(? as signed))", []string{"54321.0", "0"}, true, true},
-		{"round nonzero precision", "c=round(?,?)", []string{"54321.0", "1"}, false, true},
-		{"round negative precision", "c=round(?,?)", []string{"54321.0", "-1"}, false, true},
+		{"round nonzero precision", "c=round(?,?)", []string{"54321.0", "1"}, true, true},
+		{"round negative precision", "c=round(?,?)", []string{"54321.0", "-1"}, true, true},
 		{"explicit column cast", "cast(c as decimal(5,0))=round(?,0)", []string{"54321.0"}, false, true},
 		{"explicit value cast", "c=cast(round(?,0) as decimal(4,0))", []string{"54321.0"}, false, true},
 	} {
@@ -122,6 +135,33 @@ func TestPreparedNumericPredicateFiltering(t *testing.T) {
 				require.NoError(t, vector.AppendBytes(params, []byte(value), false, proc.Mp()))
 			}
 			proc.SetPrepareParams(params)
+			if tc.name == "decimal between" {
+				originalCtx := mock.ctxt.GetContext()
+				ctx := withPreparedSourceBindings(originalCtx, bindings, values)
+				preparedBindingState(ctx).selectStatement = true
+				mock.ctxt.SetContext(ctx)
+				b := NewQueryBuilder(planpb.Query_SELECT, &mock.ctxt, false, false)
+				column := GetColExpr(makeSimplePlan2Type(types.T_int64), 0, 0)
+				domain := makeSimplePlan2Type(types.T_decimal128)
+				domain.Width = 38
+				promoted, err := appendCastBeforeExpr(ctx, column, domain)
+				require.NoError(t, err)
+				args := []*Expr{promoted}
+				for pos := range 2 {
+					peer, err := appendCastBeforeExpr(ctx, &Expr{Typ: makeSimplePlan2Type(types.T_varchar), Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: int32(pos)}}}, domain)
+					require.NoError(t, err)
+					args = append(args, peer)
+				}
+				b.qry.Nodes = []*planpb.Node{{NodeType: planpb.Node_JOIN, OnList: []*Expr{{Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: "between"}, Args: args}}}}}}
+				refs := make(map[[2]int32]int)
+				b.countColRefs(0, refs)
+				require.Equal(t, 1, refs[[2]int32{0, 0}])
+				require.NoError(t, b.rewriteNumericDomainFilters(0, planpb.Node_JOIN))
+				clear(refs)
+				b.countColRefs(0, refs)
+				require.Equal(t, 2, refs[[2]int32{0, 0}], "lowered bounds both reference the key")
+				mock.ctxt.SetContext(originalCtx)
+			}
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
 				"select c from numeric_filters where "+tc.predicate, 1)
 			require.NoError(t, err)
@@ -871,4 +911,191 @@ func TestPreparedExecutionRegexpDomainModes(t *testing.T) {
 	defer stmt.Free()
 	_, err = BuildPreparedExecutionPlan(&mock.ctxt, stmt, nil, nil)
 	require.NoError(t, err, "untyped NULL literal has no string domain")
+}
+
+func TestPreparedExplainSelectClassification(t *testing.T) {
+	for _, tc := range []struct {
+		sql  string
+		want bool
+	}{
+		{"select 1", true}, {"explain select 1", true}, {"explain analyze select 1", true}, {"explain phyplan select 1", true},
+		{"insert into t select 1", false}, {"update t set n=1", false}, {"explain update t set n=1", false}, {"explain analyze delete from t", false},
+	} {
+		stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, tc.sql, 1)
+		require.NoError(t, err, tc.sql)
+		require.Equal(t, tc.want, preparedUnderlyingSelect(stmts[0]), tc.sql)
+		for _, stmt := range stmts {
+			stmt.Free()
+		}
+	}
+	require.False(t, preparedUnderlyingSelect(nil))
+}
+
+func TestPreparedIntegerComparisonProofDiagnostics(t *testing.T) {
+	for _, tc := range []struct {
+		name, expression, value string
+		null, dependent         bool
+	}{
+		{"warning", "cast(? as double)", "12tail", false, true},
+		{"invalid", "cast(? as decimal(38,0))", "invalid", false, true},
+		{"null", "cast(? as decimal(38,0))", "", true, true},
+		{"volatile", "cast(? as decimal(38,0))+rand()", "12", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			proc := mock.ctxt.GetProcess()
+			params := vector.NewVec(types.T_text.ToType())
+			defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+			require.NoError(t, vector.AppendBytes(params, []byte(tc.value), tc.null, proc.Mp()))
+			proc.SetPrepareParams(params)
+			sink := &loadAssignmentWarningSink{}
+			proc.WarningSink = sink
+			ctx := withPreparedSourceBindings(mock.ctxt.GetContext(), []PreparedSourceBinding{{Position: 0, Type: types.T_varchar.ToType()}}, []any{tc.value})
+			state := preparedBindingState(ctx)
+			state.selectStatement = true
+			mock.ctxt.SetContext(ctx)
+			p, err := runOneStmt(mock, t, "select "+tc.expression)
+			require.NoError(t, err)
+			peer := p.GetQuery().Nodes[p.GetQuery().Steps[0]].ProjectList[0]
+			column := &Expr{Typ: makeSimplePlan2Type(types.T_int64), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}}}
+			original, err := BindFuncExprImplByPlanExpr(ctx, "=", []*Expr{column, peer})
+			require.NoError(t, err)
+			state.valueDependent = false
+			builder := NewQueryBuilder(planpb.Query_SELECT, &mock.ctxt, false, false)
+			rewritten, err := builder.rewritePreparedIntegerComparison(nil, original)
+			require.NoError(t, err)
+			require.Same(t, original, rewritten, "diagnostics, NULL and volatility retain their execution owner")
+			require.Equal(t, tc.dependent, state.valueDependent)
+			require.Empty(t, sink.codes, "a proof must not publish warnings")
+			if tc.name == "warning" {
+				input := batch.NewWithSize(1)
+				input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+				defer input.Clean(proc.Mp())
+				require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(12), false, proc.Mp()))
+				input.SetRowCount(1)
+				vec, free, err := colexec.GetReadonlyResultFromExpression(proc, rewritten, []*batch.Batch{input})
+				require.NoError(t, err)
+				defer free()
+				require.True(t, vector.GetFixedAtNoTypeCheck[bool](vec, 0))
+				require.Len(t, sink.codes, 1, "runtime still owns the original warning")
+			}
+		})
+	}
+}
+
+func TestPreparedSingletonJoinIntegerComparison(t *testing.T) {
+	for _, tc := range []struct {
+		name, peer, value, query string
+		native                   bool
+	}{
+		{name: "round", peer: "round(x.v,0)", value: "12345.0", native: true},
+		{name: "rounded fraction", peer: "round(x.v,0)", value: "12345.5", native: true},
+		{name: "negative round", peer: "round(x.v,0)", value: "-12345.5", native: true},
+		{name: "decimal", peer: "cast(x.v as decimal(38,0))", value: "9007199254740993", native: true},
+		{name: "abs decimal", peer: "abs(cast(x.v as decimal(38,0)))", value: "-9007199254740993", native: true},
+		{name: "fraction", peer: "cast(x.v as decimal(38,1))", value: "12345.5", native: false},
+		{name: "overflow", peer: "cast(x.v as decimal(38,0))", value: "9223372036854775808", native: false},
+		{name: "double collision", peer: "cast(x.v as double)", value: "9007199254740992", native: false},
+		{name: "volatile", peer: "cast(x.v as decimal(38,0))+rand()", value: "12", native: false},
+		{name: "projected cast", value: "9007199254740993", native: true, query: "select k.c from numeric_join k join (select cast(? as decimal(38,0)) as v) x on k.c=x.v"},
+		{name: "nested alias", value: "9007199254740993", native: true, query: "select k.c from numeric_join k join (select v from (select cast(? as decimal(38,0)) as v) y) x on k.c=x.v"},
+		{name: "nested arithmetic", value: "9007199254740993", native: true, query: "select k.c from numeric_join k join (select v+0 as v from (select cast(? as decimal(38,0)) as v) y) x on k.c=x.v"},
+		{name: "nested abs", value: "-9007199254740993", native: true, query: "select k.c from numeric_join k join (select abs(v) as v from (select cast(? as decimal(38,0)) as v) y) x on k.c=x.v"},
+		{name: "CTE", value: "9007199254740993", native: true, query: "with y as (select cast(? as decimal(38,0)) as v), x as (select v+0 as v from y) select k.c from numeric_join k join x on k.c=x.v"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			table := makeExprOptCompositeSortKeyTableDef()
+			table.Name, table.TblId = "numeric_join", 99004
+			table.Cols[2].Typ = makeSimplePlan2Type(types.T_int64)
+			mock.ctxt.tables[table.Name] = table
+			mock.ctxt.objects[table.Name] = &ObjectRef{ObjName: table.Name, Obj: int64(table.TblId)}
+			proc := mock.ctxt.GetProcess()
+			params := vector.NewVec(types.T_text.ToType())
+			defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+			require.NoError(t, vector.AppendBytes(params, []byte(tc.value), false, proc.Mp()))
+			proc.SetPrepareParams(params)
+			query := tc.query
+			if query == "" {
+				query = "select k.c from numeric_join k join (select ? as v) x on k.c=" + tc.peer
+			}
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, query, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, []PreparedSourceBinding{{Position: 0, Type: types.T_varchar.ToType()}}, []any{ParamValue{Value: tc.value, IsBinaryProtocol: true}})
+			require.NoError(t, err)
+			found, native, projected := false, false, false
+			for _, node := range bound.Plan.GetQuery().Nodes {
+				predicates := node.OnList
+				if node.NodeType == planpb.Node_FILTER {
+					// Volatile residuals can remain above a cross JOIN.
+					predicates = node.FilterList
+				} else if node.NodeType != planpb.Node_JOIN {
+					continue
+				}
+				for _, on := range predicates {
+					fn := on.GetF()
+					if fn == nil || len(fn.Args) != 2 {
+						continue
+					}
+					found = true
+					for _, arg := range fn.Args {
+						if col := arg.GetCol(); col != nil && col.RelPos == 0 && arg.Typ.Id == int32(types.T_int64) {
+							native = true
+						}
+					}
+					require.NoError(t, planpb.VisitExprTree(on, func(e *Expr) error {
+						if col := e.GetCol(); col != nil && (col.Name == "v" || strings.HasSuffix(col.Name, ".v")) {
+							projected = true
+						}
+						return nil
+					}))
+				}
+			}
+			require.True(t, found, bound.Plan.String())
+			require.Equal(t, tc.native, native, bound.Plan.String())
+			require.True(t, projected, "proof must retain executable projected column")
+			if tc.native {
+				require.True(t, bound.ValueDependent)
+			}
+		})
+	}
+}
+
+func TestSingletonProjectedPeerAdmission(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		reject func(*planpb.Node, *planpb.Node, *Expr)
+	}{
+		{"singleton", nil},
+		{"multirow", func(p, v *planpb.Node, e *Expr) { v.RowsetData = &planpb.RowsetData{} }},
+		{"table", func(p, v *planpb.Node, e *Expr) { v.TableDef = &TableDef{} }},
+		{"project limit", func(p, v *planpb.Node, e *Expr) { p.Limit = DeepCopyExpr(e) }},
+		{"project offset", func(p, v *planpb.Node, e *Expr) { p.Offset = DeepCopyExpr(e) }},
+		{"project filter", func(p, v *planpb.Node, e *Expr) { p.FilterList = []*Expr{DeepCopyExpr(e)} }},
+		{"input filter", func(p, v *planpb.Node, e *Expr) { v.FilterList = []*Expr{DeepCopyExpr(e)} }},
+		{"wrong tag", func(p, v *planpb.Node, e *Expr) { p.BindingTags[0]++ }},
+		{"wrong position", func(p, v *planpb.Node, e *Expr) { e.GetCol().ColPos = -1 }},
+		{"scale mismatch", func(p, v *planpb.Node, e *Expr) { p.ProjectList[0].Typ.Scale++ }},
+		{"padding mismatch", func(p, v *planpb.Node, e *Expr) { p.ProjectList[0].Typ.PadSpace = !e.Typ.PadSpace }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			builder := NewQueryBuilder(planpb.Query_SELECT, &mock.ctxt, false, false)
+			typ := makeSimplePlan2Type(types.T_int64)
+			project := &planpb.Node{NodeType: planpb.Node_PROJECT, BindingTags: []int32{7}, Children: []int32{1}, ProjectList: []*Expr{{Typ: typ, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}}}
+			input := &planpb.Node{NodeType: planpb.Node_VALUE_SCAN}
+			peer := &Expr{Typ: typ, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 7, ColPos: 0}}}
+			if tc.reject != nil {
+				tc.reject(project, input, peer)
+			}
+			builder.qry.Nodes = []*planpb.Node{project, input}
+			resolved, ok := builder.singletonProjectedPeerExpression(&planpb.Node{NodeType: planpb.Node_JOIN, Children: []int32{0}}, peer)
+			require.Equal(t, tc.reject == nil, ok)
+			if ok {
+				require.NotNil(t, resolved.GetP())
+				require.NotNil(t, peer.GetCol(), "proof must not mutate execution tree")
+			}
+		})
+	}
 }
