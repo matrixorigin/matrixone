@@ -353,8 +353,6 @@ func TestFormSql(t *testing.T) {
 		convey.So(sql, convey.ShouldEqual, fmt.Sprintf(checkTenantFormat, "a"))
 		sql, _ = getSqlForPasswordOfUser(context.TODO(), "u")
 		convey.So(sql, convey.ShouldEqual, fmt.Sprintf(getPasswordOfUserFormat, "u"))
-		sql, _ = getSqlForCheckRoleExists(context.TODO(), 0, "r")
-		convey.So(sql, convey.ShouldEqual, fmt.Sprintf(checkRoleExistsFormat, 0, "r"))
 		sql, _ = getSqlForRoleIdOfRole(context.TODO(), "r")
 		convey.So(sql, convey.ShouldEqual, fmt.Sprintf(roleIdOfRoleFormat, "r"))
 		sql, _ = getSqlForRoleOfUser(context.TODO(), 0, "r")
@@ -6660,7 +6658,7 @@ func Test_determineDML(t *testing.T) {
 
 			for _, roleId := range roleIds {
 				for _, entry := range priv.entries {
-					sql, _ := getSqlForCheckRoleHasTableLevelPrivilege(context.TODO(), int64(roleId), entry.privilegeId, entry.databaseName, entry.tableName)
+					sql, _ := getSqlForCheckRoleHasTableLevelPrivilegeWithObjType(context.TODO(), objectTypeTable, int64(roleId), entry.privilegeId, entry.databaseName, entry.tableName)
 					sql2result[sql] = newMrsForWithGrantOptionPrivilege([][]interface{}{
 						{entry.privilegeId, true},
 					})
@@ -15413,18 +15411,6 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedCoverageEdges(t *testing.T) {
 		require.Equal(t, 0, roleSet.Len())
 	})
 
-	t.Run("table ownership uses object scoped ownership query", func(t *testing.T) {
-		bh := &backgroundExecTest{}
-		bh.init()
-		sql := getSqlForCheckRoleHasPrivilegeWGOWithObj(int64(PrivilegeTypeTableOwnership), objectTypeTable, 10001)
-		bh.sql2result[sql] = newMrsForPrivilegeWGO([][]interface{}{{roleID}})
-
-		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObj(
-			ctx, bh, PrivilegeTypeTableOwnership, objectTypeTable, 10001)
-		require.NoError(t, err)
-		require.True(t, roleSet.Contains(roleID))
-	})
-
 	t.Run("table ownership uses object type scoped ownership query", func(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
@@ -15433,18 +15419,6 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedCoverageEdges(t *testing.T) {
 
 		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObjType(
 			ctx, bh, PrivilegeTypeTableOwnership, objectTypeView)
-		require.NoError(t, err)
-		require.True(t, roleSet.Contains(roleID))
-	})
-
-	t.Run("unsupported scoped privilege falls back to unscoped WGO sql", func(t *testing.T) {
-		bh := &backgroundExecTest{}
-		bh.init()
-		sql := getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(PrivilegeTypeCreateDatabase)
-		bh.sql2result[sql] = newMrsForPrivilegeWGO([][]interface{}{{roleID}})
-
-		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObj(
-			ctx, bh, PrivilegeTypeCreateDatabase, objectTypeTable, objectIDAll)
 		require.NoError(t, err)
 		require.True(t, roleSet.Contains(roleID))
 	})
@@ -15459,30 +15433,6 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedCoverageEdges(t *testing.T) {
 			ctx, bh, PrivilegeTypeCreateDatabase, objectTypeView)
 		require.NoError(t, err)
 		require.True(t, roleSet.Contains(roleID))
-	})
-
-	t.Run("object scoped exec error is returned", func(t *testing.T) {
-		bh := &backgroundExecTest{}
-		bh.init()
-		sql := getSqlForCheckRoleHasPrivilegeWGOWithObj(int64(PrivilegeTypeTableOwnership), objectTypeTable, 10001)
-		bh.sql2err[sql] = moerr.NewInternalError(ctx, "object scoped WGO failed")
-
-		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObj(
-			ctx, bh, PrivilegeTypeTableOwnership, objectTypeTable, 10001)
-		require.Error(t, err)
-		require.Nil(t, roleSet)
-	})
-
-	t.Run("object scoped row decode error is returned", func(t *testing.T) {
-		bh := &backgroundExecTest{}
-		bh.init()
-		sql := getSqlForCheckRoleHasPrivilegeWGOWithObj(int64(PrivilegeTypeTableOwnership), objectTypeTable, 10001)
-		bh.sql2result[sql] = newMrsForPrivilegeWGO([][]interface{}{{"bad-role-id"}})
-
-		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObj(
-			ctx, bh, PrivilegeTypeTableOwnership, objectTypeTable, 10001)
-		require.Error(t, err)
-		require.Nil(t, roleSet)
 	})
 
 	t.Run("object type scoped exec error is returned", func(t *testing.T) {

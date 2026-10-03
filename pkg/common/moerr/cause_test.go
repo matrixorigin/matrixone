@@ -216,21 +216,6 @@ var causeArray = []error{
 	CauseSaveLog,
 	CauseNewCatalogHandler,
 
-	CauseWatch,
-	CauseUpdateState,
-	CauseAddTableFilter,
-	CauseClearTableFilters,
-	CauseRefreshTableFilters,
-	CauseWriteToMO,
-	CauseWriteToS3,
-	CauseAddStatementFilter,
-	CauseClearStatementFilters,
-	CauseRefreshStatementFilters,
-	CauseAddTxnFilter,
-	CauseClearTxnFilters,
-	CauseRefreshTxnFilters,
-	CauseDoAddTxnError,
-
 	CauseAddressFunc,
 
 	CauseWriteRowRecords,
