@@ -151,9 +151,9 @@ func (s *MergeSettings) String() string {
 }
 
 func (s *MergeSettings) ToMMsgTaskTrigger() (*MMsgTaskTrigger, error) {
-	if len(s.L0MaxCountDecayControl) != 4 {
+	if len(s.L0MaxCountDecayControl) < 4 {
 		return nil, moerr.NewInternalErrorNoCtxf(
-			"merge settings l0 decay control needs 4 points, got %d",
+			"merge settings l0 decay control needs at least 4 points, got %d",
 			len(s.L0MaxCountDecayControl))
 	}
 	l0MaxCountDecayDuration, err := time.ParseDuration(s.L0MaxCountDecayDuration)

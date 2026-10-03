@@ -2200,16 +2200,16 @@ func datetimeToOthers(proc *process.Process,
 			zone = proc.GetSessionInfo().TimeZone
 		}
 		rs := vector.MustFunctionResult[types.Timestamp](result)
-		return datetimeToTimestamp(source, rs, length, zone, toType.Scale)
+		return datetimeToTimestamp(proc, source, rs, length, zone, toType.Scale)
 	case types.T_date:
 		rs := vector.MustFunctionResult[types.Date](result)
 		return datetimeToDate(source, rs, length, selectList)
 	case types.T_datetime:
 		rs := vector.MustFunctionResult[types.Datetime](result)
-		return datetimeToDatetime(proc.Ctx, source, rs, length, toType.Scale)
+		return datetimeToDatetime(proc, source, rs, length, toType.Scale)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
-		return datetimeToTime(source, rs, length, selectList)
+		return datetimeToTime(proc, source, rs, length, selectList)
 	case types.T_year:
 		rs := vector.MustFunctionResult[types.MoYear](result)
 		return datetimeToYear(source, rs, length, selectList)
@@ -2247,13 +2247,13 @@ func timestampToOthers(proc *process.Process,
 		return timestampToDate(proc.Ctx, source, rs, length, zone)
 	case types.T_datetime:
 		rs := vector.MustFunctionResult[types.Datetime](result)
-		return timestampToDatetime(proc.Ctx, source, rs, length, zone)
+		return timestampToDatetime(proc, source, rs, length, zone)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
-		return timestampToTime(source, rs, length, zone)
+		return timestampToTime(proc, source, rs, length, zone)
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
-		return timestampToTimestamp(proc.Ctx, source, rs, length, toType.Scale)
+		return timestampToTimestamp(proc, source, rs, length, toType.Scale)
 	case types.T_year:
 		rs := vector.MustFunctionResult[types.MoYear](result)
 		return timestampToYear(source, rs, length, zone, selectList)
@@ -4324,6 +4324,10 @@ func integerToTime[T constraints.Integer](
 	from vector.FunctionParameterWrapper[T],
 	to *vector.FunctionResult[types.Time], length int, selectList *FunctionSelectList, mode castMode) error {
 	ctx := proc.Ctx
+	truncate, err := process.ResolveTimeTruncateFractional(proc)
+	if err != nil {
+		return err
+	}
 	var i uint64
 	l := uint64(length)
 	var dft types.Time
@@ -4350,9 +4354,16 @@ func integerToTime[T constraints.Integer](
 				}
 				return moerr.NewOutOfRangef(ctx, "time", "value %d", v)
 			}
-			result, err := types.ParseInt64ToTime(vI64, toType.Scale)
+			parseScale := toType.Scale
+			if truncate && parseScale < 6 {
+				parseScale = 6
+			}
+			result, err := types.ParseInt64ToTime(vI64, parseScale)
 			if err != nil {
 				return err
+			}
+			if truncate {
+				result = result.TruncateToScaleWithoutRounding(toType.Scale)
 			}
 			result, err = mysqlTimeForCast(ctx, proc, result, mode, toType.Scale, i)
 			if err != nil {
@@ -4556,11 +4567,16 @@ func dateToTime(
 }
 
 func datetimeToTime(
+	proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Datetime],
 	to *vector.FunctionResult[types.Time], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	totype := to.GetType()
+	truncate, err := process.ResolveTimeTruncateFractional(proc)
+	if err != nil {
+		return err
+	}
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -4568,7 +4584,11 @@ func datetimeToTime(
 				return err
 			}
 		} else {
-			if err := to.Append(v.ToTime(totype.Scale), false); err != nil {
+			value := v.ToTime(totype.Scale)
+			if truncate {
+				value = v.ToTime(6).TruncateToScaleWithoutRounding(totype.Scale)
+			}
+			if err := to.Append(value, false); err != nil {
 				return err
 			}
 		}
@@ -4577,17 +4597,30 @@ func datetimeToTime(
 }
 
 func timestampToTime(
+	proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Timestamp],
 	to *vector.FunctionResult[types.Time], length int, zone *time.Location) error {
 	var i uint64
 	l := uint64(length)
 	totype := to.GetType()
+	truncate, err := process.ResolveTimeTruncateFractional(proc)
+	if err != nil {
+		return err
+	}
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
 			to.AppendMustNull()
 		} else {
-			to.AppendMustValue(timestampToSessionClockTime(v, zone, totype.Scale))
+			value := timestampToSessionClockTime(v, zone, totype.Scale)
+			if truncate {
+				dtValue := v.ToDatetime(zone)
+				if dtValue != types.ZeroDatetime {
+					timeOfDay := int64(dtValue) - int64(dtValue.ToDate().ToDatetime())
+					value = types.Time(timeOfDay).TruncateToScaleWithoutRounding(totype.Scale)
+				}
+			}
+			to.AppendMustValue(value)
 		}
 	}
 	return nil
@@ -4722,12 +4755,17 @@ func datetimeToDecimal128(
 }
 
 func datetimeToTimestamp(
+	proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Datetime],
 	to *vector.FunctionResult[types.Timestamp], length int,
 	zone *time.Location,
 	targetScale int32) error {
 	var i uint64
 	l := uint64(length)
+	truncate, err := process.ResolveTimeTruncateFractional(proc)
+	if err != nil {
+		return err
+	}
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -4735,10 +4773,20 @@ func datetimeToTimestamp(
 				return err
 			}
 		} else {
+			if v.IsNonexistentLocalTime(zone) {
+				if isStrictSqlMode(proc) && !statementIgnore(proc) {
+					return moerr.NewInvalidInputNoCtxf("nonexistent local time: %s", v.String2(6))
+				}
+				appendTemporalAssignmentConversionWarning(proc, "timestamp", v.String2(6))
+			}
 			result := v.ToTimestamp(zone)
 			// Truncate to target scale if needed
 			if targetScale < 6 {
-				result = result.TruncateToScale(targetScale)
+				if truncate {
+					result = result.TruncateToScaleWithoutRounding(targetScale)
+				} else {
+					result = result.TruncateToScale(targetScale)
+				}
 			}
 			if err := to.Append(result, false); err != nil {
 				return err
@@ -4769,12 +4817,16 @@ func dateToDatetime(
 }
 
 func timestampToTimestamp(
-	ctx context.Context,
+	proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Timestamp],
 	to *vector.FunctionResult[types.Timestamp], length int,
 	targetScale int32) error {
 	var i uint64
 	l := uint64(length)
+	truncate, err := process.ResolveTimeTruncateFractional(proc)
+	if err != nil {
+		return err
+	}
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -4785,7 +4837,11 @@ func timestampToTimestamp(
 			result := v
 			// Truncate to target scale if needed
 			if targetScale < 6 {
-				result = result.TruncateToScale(targetScale)
+				if truncate {
+					result = result.TruncateToScaleWithoutRounding(targetScale)
+				} else {
+					result = result.TruncateToScale(targetScale)
+				}
 			}
 			if err := to.Append(result, false); err != nil {
 				return err
@@ -4801,6 +4857,10 @@ func timeToTime(
 	to *vector.FunctionResult[types.Time], length int,
 	targetScale int32, mode castMode) error {
 	ctx := proc.Ctx
+	truncate, err := process.ResolveTimeTruncateFractional(proc)
+	if err != nil {
+		return err
+	}
 	var i uint64
 	l := uint64(length)
 	for i = 0; i < l; i++ {
@@ -4813,7 +4873,11 @@ func timeToTime(
 			result := v
 			// Truncate to target scale if needed
 			if targetScale < 6 {
-				result = result.TruncateToScale(targetScale)
+				if truncate {
+					result = result.TruncateToScaleWithoutRounding(targetScale)
+				} else {
+					result = result.TruncateToScale(targetScale)
+				}
 			}
 			result, err := mysqlTimeForCast(ctx, proc, result, mode, targetScale, i)
 			if err != nil {
@@ -4892,12 +4956,16 @@ func mysqlInvalidTimeForCast(
 }
 
 func datetimeToDatetime(
-	ctx context.Context,
+	proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Datetime],
 	to *vector.FunctionResult[types.Datetime], length int,
 	targetScale int32) error {
 	var i uint64
 	l := uint64(length)
+	truncate, err := process.ResolveTimeTruncateFractional(proc)
+	if err != nil {
+		return err
+	}
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -4908,7 +4976,11 @@ func datetimeToDatetime(
 			result := v
 			// Truncate to target scale if needed
 			if targetScale < 6 {
-				result = result.TruncateToScale(targetScale)
+				if truncate {
+					result = result.TruncateToScaleWithoutRounding(targetScale)
+				} else {
+					result = result.TruncateToScale(targetScale)
+				}
 			}
 			if err := to.Append(result, false); err != nil {
 				return err
@@ -4919,13 +4991,17 @@ func datetimeToDatetime(
 }
 
 func timestampToDatetime(
-	ctx context.Context,
+	proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Timestamp],
 	to *vector.FunctionResult[types.Datetime], length int,
 	zone *time.Location) error {
 	var i uint64
 	l := uint64(length)
 	targetScale := to.GetType().Scale
+	truncate, err := process.ResolveTimeTruncateFractional(proc)
+	if err != nil {
+		return err
+	}
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -4936,7 +5012,11 @@ func timestampToDatetime(
 			result := v.ToDatetime(zone)
 			// Truncate to target scale if needed
 			if targetScale < 6 {
-				result = result.TruncateToScale(targetScale)
+				if truncate {
+					result = result.TruncateToScaleWithoutRounding(targetScale)
+				} else {
+					result = result.TruncateToScale(targetScale)
+				}
 			}
 			if err := to.Append(result, false); err != nil {
 				return err
@@ -8739,6 +8819,30 @@ func strToDate(proc *process.Process,
 	return nil
 }
 
+// truncateTemporalFractionForParse removes digits beyond the engine's
+// microsecond representation before parsing. Invalid syntax is returned
+// unchanged so the shared temporal parser remains the owner of grammar and
+// assignment/IGNORE diagnostics. Trimming here preserves ParseDatetime's
+// accepted trailing whitespace while still preventing scale-6 rounding.
+func truncateTemporalFractionForParse(s string) string {
+	s = strings.TrimSpace(s)
+	dot := strings.IndexByte(s, '.')
+	if dot < 0 {
+		return s
+	}
+	end := dot + 1
+	for end < len(s) && s[end] >= '0' && s[end] <= '9' {
+		end++
+	}
+	if end == dot+1 || end != len(s) {
+		return s
+	}
+	if end-dot-1 <= 6 {
+		return s
+	}
+	return s[:dot+1+6]
+}
+
 func strToTime(
 	proc *process.Process, from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Time], length int, selectList *FunctionSelectList, mode castMode) error {
@@ -8748,6 +8852,10 @@ func strToTime(
 	var l = uint64(length)
 	var dft types.Time
 	totype := to.GetType()
+	truncateFractional, err := process.ResolveTimeTruncateFractional(proc)
+	if err != nil {
+		return err
+	}
 	for i = 0; i < l; i++ {
 		if functionRowSkipped(selectList, i) {
 			if err := to.Append(dft, true); err != nil {
@@ -8776,7 +8884,14 @@ func strToTime(
 			}
 		} else {
 			s := convertByteSliceToString(v)
-			val, err := types.ParseTime(s, totype.Scale)
+			parseScale := totype.Scale
+			if truncateFractional {
+				if parseScale < 6 {
+					parseScale = 6
+				}
+				s = truncateTemporalFractionForParse(s)
+			}
+			val, err := types.ParseTime(s, parseScale)
 			if err != nil {
 				if mode.isAssignment() {
 					if isCompactTimeText(s) {
@@ -8825,6 +8940,9 @@ func strToTime(
 					continue
 				}
 				return err
+			}
+			if truncateFractional {
+				val = val.TruncateToScaleWithoutRounding(totype.Scale)
 			}
 			val, err = mysqlTimeForCast(ctx, proc, val, mode, totype.Scale, i)
 			if err != nil {
@@ -8887,6 +9005,10 @@ func strToDatetime(proc *process.Process,
 	isBinary := from.GetSourceVector().GetIsBin()
 	assignmentCast := mode == castModeStrictStringWidth || mode == castModeAssignmentIgnore
 	totype := to.GetType()
+	truncateFractional, err := process.ResolveTimeTruncateFractional(proc)
+	if err != nil {
+		return err
+	}
 	modeChecked := false
 	nullifyZero := false
 	for i = 0; i < l; i++ {
@@ -8912,7 +9034,14 @@ func strToDatetime(proc *process.Process,
 			}
 		} else {
 			s := convertByteSliceToString(v)
-			val, err := types.ParseDatetime(s, totype.Scale)
+			parseScale := totype.Scale
+			if truncateFractional {
+				if parseScale < 6 {
+					parseScale = 6
+				}
+				s = truncateTemporalFractionForParse(s)
+			}
+			val, err := types.ParseDatetime(s, parseScale)
 			if err != nil {
 				if mode == castModeAssignmentIgnore && !isBinary && isTemporalLexicalConversionError(err) {
 					appendTemporalAssignmentConversionWarning(proc, "datetime", s)
@@ -8922,6 +9051,9 @@ func strToDatetime(proc *process.Process,
 					continue
 				}
 				return err
+			}
+			if truncateFractional {
+				val = val.TruncateToScaleWithoutRounding(totype.Scale)
 			}
 			if val == types.ZeroDatetime && !assignmentCast {
 				if !modeChecked {
@@ -8956,6 +9088,10 @@ func strToTimestamp(proc *process.Process,
 	isBinary := from.GetSourceVector().GetIsBin()
 	assignmentCast := mode == castModeStrictStringWidth || mode == castModeAssignmentIgnore
 	totype := to.GetType()
+	truncateFractional, err := process.ResolveTimeTruncateFractional(proc)
+	if err != nil {
+		return err
+	}
 	modeChecked := false
 	nullifyZero := false
 	for i = 0; i < l; i++ {
@@ -8981,7 +9117,14 @@ func strToTimestamp(proc *process.Process,
 			}
 		} else {
 			s := convertByteSliceToString(v)
-			val, err := types.ParseTimestamp(zone, s, totype.Scale)
+			parseScale := totype.Scale
+			if truncateFractional {
+				if parseScale < 6 {
+					parseScale = 6
+				}
+				s = truncateTemporalFractionForParse(s)
+			}
+			parsed, err := types.ParseDatetime(s, parseScale)
 			if err != nil {
 				if mode == castModeAssignmentIgnore && !isBinary && isTemporalLexicalConversionError(err) {
 					appendTemporalAssignmentConversionWarning(proc, "timestamp", s)
@@ -8992,6 +9135,16 @@ func strToTimestamp(proc *process.Process,
 				}
 				return err
 			}
+			if truncateFractional {
+				parsed = parsed.TruncateToScaleWithoutRounding(totype.Scale)
+			}
+			if parsed.IsNonexistentLocalTime(zone) {
+				if isStrictSqlMode(proc) && mode != castModeAssignmentIgnore && !statementIgnore(proc) {
+					return moerr.NewInvalidInputNoCtxf("nonexistent local time: %s", s)
+				}
+				appendTemporalAssignmentConversionWarning(proc, "timestamp", s)
+			}
+			val := parsed.ToTimestamp(zone)
 			if val == types.ZeroTimestamp && !assignmentCast {
 				if !modeChecked {
 					nullifyZero, err = explicitZeroTemporalCastReturnsNull(proc)

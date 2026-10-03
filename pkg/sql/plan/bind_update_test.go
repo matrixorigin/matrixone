@@ -24,9 +24,38 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	statspb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
+
+func TestUpdateChangedRowsPredicateCastsMixedNumericRHS(t *testing.T) {
+	ctx := NewMockOptimizer(false).CurrentContext()
+	stmts, err := mysql.Parse(ctx.GetContext(),
+		"UPDATE constraint_test.t_on_update_gen SET val = CASE WHEN id = 1 THEN 111 ELSE val END WHERE id IN (1,2)",
+		1)
+	require.NoError(t, err)
+	plan, err := BuildPlan(ctx, stmts[0], false)
+	require.NoError(t, err)
+
+	found := false
+	for _, node := range plan.GetQuery().Nodes {
+		for _, project := range node.ProjectList {
+			require.NoError(t, planpb.VisitExprTree(project, func(expr *planpb.Expr) error {
+				fn := expr.GetF()
+				if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "<=>" || len(fn.Args) != 2 {
+					return nil
+				}
+				if fn.Args[0].Typ.Id == int32(types.T_int32) &&
+					fn.Args[1].Typ.Id == int32(types.T_int32) {
+					found = found || exprContainsFunc(fn.Args[1], "cast")
+				}
+				return nil
+			}))
+		}
+	}
+	require.True(t, found, "mixed numeric RHS must be cast before changed-row comparison")
+}
 
 func TestIrregularIndexAffectedByUpdate(t *testing.T) {
 	tableDef := &TableDef{
