@@ -606,6 +606,7 @@ func TestEvaluateFilterByZoneMapRoundOverflowCleanup(t *testing.T) {
 			}
 		}
 	})
+	heapBaseline := proc.Mp().OnHeapCurrNB()
 	for i, value := range []int64{4999999999999999999, 5000000000000000000, 4999999999999999999} {
 		zm := index.NewZM(types.T_int64, 0)
 		index.UpdateZM(zm, types.EncodeInt64(&value))
@@ -619,6 +620,10 @@ func TestEvaluateFilterByZoneMapRoundOverflowCleanup(t *testing.T) {
 		require.Nil(t, escaped, "metadata failure must defer to row execution; native bytes=%d", proc.Mp().CurrNB())
 		require.Equal(t, i == 1, selected)
 		require.Zero(t, proc.Mp().CurrNB(), "speculative result and operand vectors must be freed")
+		require.Equal(t, heapBaseline, proc.Mp().OnHeapCurrNB(), "Go-heap operand ownership must also be released")
+		for slot, vec := range vecs {
+			require.Nil(t, vec, "scratch slot %d must be cleared before return", slot)
+		}
 	}
 }
 
@@ -1448,6 +1453,7 @@ func TestEvaluateFilterByZoneMapScalarOverflowCleanup(t *testing.T) {
 				}
 			}()
 			baseline := proc.Mp().CurrNB()
+			heapBaseline := proc.Mp().OnHeapCurrNB()
 			for _, tc := range []struct {
 				vmin, vmax, wmin, wmax uint64
 				selected               bool
@@ -1475,6 +1481,10 @@ func TestEvaluateFilterByZoneMapScalarOverflowCleanup(t *testing.T) {
 					t.Errorf("metadata scalar panic escaped: %v", panicked)
 				}
 				require.Equal(t, baseline, proc.Mp().CurrNB(), "temporary result must be released on every exit")
+				require.Equal(t, heapBaseline, proc.Mp().OnHeapCurrNB(), "Go-heap operand ownership must also be released")
+				for slot, vec := range vecs {
+					require.Nil(t, vec, "scratch slot %d must be cleared before return", slot)
+				}
 				require.Equal(t, tc.selected, selected)
 				require.Equal(t, tc.unknown, !zms[rounded.AuxId].IsInited(), "only the invalid endpoint loses its proof")
 			}
