@@ -190,29 +190,41 @@ func TestAccountedFixedCrossDomainConstBroadcastUsesPhysicalMetadata(t *testing.
 
 func TestAccountedLiteralConstructorReleasesPayloadOnDomainDenial(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	defer proc.Free()
+	t.Cleanup(proc.Free)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
 	require.NoError(t, err)
 	// One inline varlen cell and its NULL bitmap fit; the text-domain bitmap does not.
 	account, err := registry.Open(types.VarlenaSize + 16)
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		snapshot := account.Seal()
+		_, err := registry.Finalize(account)
+		if snapshot.Used != 0 {
+			t.Errorf("account retains %d bytes after cleanup", snapshot.Used)
+		}
+		if err != nil {
+			t.Errorf("finalize account: %v", err)
+		}
+	})
 	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
 	require.NoError(t, err)
-	payload, err := vector.NewConstBytesWithAllocation(types.T_varbinary.ToType(), []byte("selected"), 1, proc.Mp(), selection)
-	require.NoError(t, err, "payload allocation must succeed before domain admission")
-	require.Positive(t, account.Snapshot().Used)
-	payload.Free(proc.Mp())
+	func() {
+		payload, err := vector.NewConstBytesWithAllocation(types.T_varbinary.ToType(), []byte("selected"), 1, proc.Mp(), selection)
+		defer payload.Free(proc.Mp())
+		require.NoError(t, err, "payload allocation must succeed before domain admission")
+		require.Positive(t, account.Snapshot().Used)
+	}()
 	executor, err := NewExpressionExecutorWithAllocation(proc, &plan.Expr{
 		Typ: plan.Type{Id: int32(types.T_varbinary)},
 		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
 			Value: &plan.Literal_Sval{Sval: "selected"}, LiteralForm: plan.StringLiteralForm_STRING_LITERAL_TEXT,
 		}},
 	}, selection)
+	if executor != nil {
+		t.Cleanup(executor.Free)
+	}
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 	require.Nil(t, executor)
 	require.Zero(t, account.Snapshot().Used, "constructor must release the already materialized payload")
 	require.Zero(t, registry.LiveAllocationMetadata())
-	require.Zero(t, account.Seal().Used)
-	_, err = registry.Finalize(account)
-	require.NoError(t, err)
 }

@@ -398,14 +398,19 @@ func TestLiteralExecutorRejectsInvalidSourceWithoutAllocation(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	for _, isNull := range []bool{false, true} {
-		literal := &plan.Literal{Isnull: isNull, Value: &plan.Literal_Sval{Sval: "value"}, StringSource: 257}
-		before := proc.Mp().CurrNB()
-		executor, err := NewExpressionExecutor(proc, &plan.Expr{
-			Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: literal},
-		})
-		require.ErrorContains(t, err, "invalid literal string source")
-		require.Nil(t, executor)
-		require.Equal(t, before, proc.Mp().CurrNB())
+		func() {
+			literal := &plan.Literal{Isnull: isNull, Value: &plan.Literal_Sval{Sval: "value"}, StringSource: 257}
+			before := proc.Mp().CurrNB()
+			executor, err := NewExpressionExecutor(proc, &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: literal},
+			})
+			if executor != nil {
+				defer executor.Free()
+			}
+			require.ErrorContains(t, err, "invalid literal string source")
+			require.Nil(t, executor)
+			require.Equal(t, before, proc.Mp().CurrNB())
+		}()
 	}
 }
 

@@ -13689,31 +13689,31 @@ func TestTemporalMicrosecondBoundaryOverflowIsNull(t *testing.T) {
 	timestampInputs := func(t *testing.T, dateAddSyntax bool) (*process.Process, []*vector.Vector, vector.FunctionResultWrapper) {
 		t.Helper()
 		proc := testutil.NewProcess(t)
+		t.Cleanup(proc.Free)
 		proc.GetSessionInfo().TimeZone = time.UTC
 		timestampVec := vector.NewVec(types.New(types.T_timestamp, 0, 6))
+		t.Cleanup(func() { timestampVec.Free(proc.Mp()) })
 		require.NoError(t, vector.AppendFixedList(timestampVec,
 			[]types.Timestamp{maxTimestamp, ordinaryTimestamp, ordinaryTimestamp}, []bool{false, false, true}, proc.Mp()))
 		intervalVec := vector.NewVec(types.T_int64.ToType())
+		t.Cleanup(func() { intervalVec.Free(proc.Mp()) })
 		require.NoError(t, vector.AppendFixedList(intervalVec, []int64{1, 1, 1}, nil, proc.Mp()))
 
 		var parameters []*vector.Vector
 		if dateAddSyntax {
 			unitVec, makeErr := vector.NewConstFixed(types.T_int64.ToType(), int64(types.MicroSecond), 3, proc.Mp())
+			t.Cleanup(func() { unitVec.Free(proc.Mp()) })
 			require.NoError(t, makeErr)
 			parameters = []*vector.Vector{timestampVec, intervalVec, unitVec}
 		} else {
 			unitVec, makeErr := vector.NewConstBytes(types.T_varchar.ToType(), []byte("MICROSECOND"), 3, proc.Mp())
+			t.Cleanup(func() { unitVec.Free(proc.Mp()) })
 			require.NoError(t, makeErr)
 			parameters = []*vector.Vector{unitVec, intervalVec, timestampVec}
 		}
 		result := vector.NewFunctionResultWrapper(types.T_timestamp.ToType(), proc.Mp())
+		t.Cleanup(result.Free)
 		require.NoError(t, result.PreExtendAndReset(3))
-		t.Cleanup(func() {
-			for _, parameter := range parameters {
-				parameter.Free(proc.Mp())
-			}
-			result.Free()
-		})
 		return proc, parameters, result
 	}
 
@@ -13748,7 +13748,9 @@ func TestTemporalMicrosecondBoundaryOverflowIsNull(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
+			t.Cleanup(proc.Free)
 			stringVec := vector.NewVec(types.T_varchar.ToType())
+			t.Cleanup(func() { stringVec.Free(proc.Mp()) })
 			require.NoError(t, vector.AppendStringList(stringVec, []string{
 				"0001-01-01 00:00:00.000000",
 				"0001-01-01 00:00:00.000000",
@@ -13756,26 +13758,24 @@ func TestTemporalMicrosecondBoundaryOverflowIsNull(t *testing.T) {
 				"2024-01-01 00:00:00.000000",
 			}, []bool{false, false, false, true}, proc.Mp()))
 			intervalVec := vector.NewVec(types.T_int64.ToType())
+			t.Cleanup(func() { intervalVec.Free(proc.Mp()) })
 			require.NoError(t, vector.AppendFixedList(intervalVec, []int64{-1, -2, 0, 1}, nil, proc.Mp()))
 
 			var parameters []*vector.Vector
 			if test.dateAddSyntax {
 				unitVec, makeErr := vector.NewConstFixed(types.T_int64.ToType(), int64(types.MicroSecond), 4, proc.Mp())
+				t.Cleanup(func() { unitVec.Free(proc.Mp()) })
 				require.NoError(t, makeErr)
 				parameters = []*vector.Vector{stringVec, intervalVec, unitVec}
 			} else {
 				unitVec, makeErr := vector.NewConstBytes(types.T_varchar.ToType(), []byte("MICROSECOND"), 4, proc.Mp())
+				t.Cleanup(func() { unitVec.Free(proc.Mp()) })
 				require.NoError(t, makeErr)
 				parameters = []*vector.Vector{unitVec, intervalVec, stringVec}
 			}
 			result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+			t.Cleanup(result.Free)
 			require.NoError(t, result.PreExtendAndReset(4))
-			t.Cleanup(func() {
-				for _, parameter := range parameters {
-					parameter.Free(proc.Mp())
-				}
-				result.Free()
-			})
 
 			require.NoError(t, test.fn(parameters, result, proc, 4, nil))
 			resultNulls := result.GetResultVector().GetNulls()
@@ -14850,10 +14850,12 @@ func TestTimestampAddDateMetadataAndWrapperReuse(t *testing.T) {
 						units, err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.units[0]), 2, proc.Mp())
 					} else {
 						units = vector.NewVec(types.T_varchar.ToType())
-						err = vector.AppendStringList(units, tc.units, []bool{tc.nullFirst, false}, proc.Mp())
 					}
-					require.NoError(t, err)
 					defer units.Free(proc.Mp())
+					require.NoError(t, err)
+					if !tc.constant {
+						require.NoError(t, vector.AppendStringList(units, tc.units, []bool{tc.nullFirst, false}, proc.Mp()))
+					}
 					intervals := vector.NewVec(types.T_int64.ToType())
 					defer intervals.Free(proc.Mp())
 					counts := []int64{1, 2}
@@ -16982,6 +16984,7 @@ func TestDecimalPrecisionCallerBoundaries(t *testing.T) {
 // NULLs, and warning suppression belong to TestCalendarIntervalDiagnosticsAndSelection.
 func TestDateStringInterval(t *testing.T) {
 	proc := newTmpProcess(t)
+	t.Cleanup(proc.Free)
 	warnings := &numericWarningSession{}
 	proc.WarningSink = warnings
 	for _, tc := range []struct {
@@ -17040,10 +17043,10 @@ func TestDateStringInterval(t *testing.T) {
 				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{int64(tc.unit)}, nil),
 			}, NewFunctionTestResult(tc.typ.ToType(), false, []string{tc.want}, []bool{tc.null}), fEvalFn(op.newOp()))
 			t.Cleanup(func() {
+				c.result.Free()
 				for _, v := range c.parameters {
 					v.Free(proc.Mp())
 				}
-				c.result.Free()
 			})
 			ok, info := c.Run()
 			require.True(t, ok, info)
@@ -17059,6 +17062,7 @@ func TestDateStringInterval(t *testing.T) {
 // Integer-count overflow is independent of calendar parsing and formatting.
 func TestDateStringIntervalCountOverflow(t *testing.T) {
 	proc := newTmpProcess(t)
+	t.Cleanup(proc.Free)
 	for _, tc := range []struct {
 		unit   types.IntervalType
 		counts []int64
@@ -17081,10 +17085,10 @@ func TestDateStringIntervalCountOverflow(t *testing.T) {
 				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{int64(tc.unit)}, nil),
 			}, NewFunctionTestResult(types.T_varchar.ToType(), false, outputs, nulls), DateStringAdd)
 			t.Cleanup(func() {
+				c.result.Free()
 				for _, v := range c.parameters {
 					v.Free(proc.Mp())
 				}
-				c.result.Free()
 			})
 			ok, info := c.Run()
 			require.True(t, ok, info)
@@ -17096,37 +17100,46 @@ func TestTimestampAddDateDeniedTypeGrowth(t *testing.T) {
 	for _, constant := range []bool{false, true} {
 		t.Run(fmt.Sprintf("constant=%t", constant), func(t *testing.T) {
 			proc := newTmpProcess(t)
+			t.Cleanup(proc.Free)
 			registry, err := mpool.NewAllocationAccountRegistry(1, 4)
 			require.NoError(t, err)
 			account, err := registry.Open(528)
 			require.NoError(t, err)
+			t.Cleanup(func() {
+				snapshot := account.Seal()
+				_, err := registry.Finalize(account)
+				if snapshot.Used != 0 {
+					t.Errorf("account retains %d bytes after cleanup", snapshot.Used)
+				}
+				if err != nil {
+					t.Errorf("finalize account: %v", err)
+				}
+			})
 			selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
 			require.NoError(t, err)
 			result, err := vector.NewFunctionResultWrapperWithAllocation(types.T_date.ToType(), proc.Mp(), selection)
 			require.NoError(t, err)
-			t.Cleanup(func() {
-				result.Free()
-				require.Zero(t, account.Seal().Used)
-				_, err := registry.Finalize(account)
-				require.NoError(t, err)
-			})
+			t.Cleanup(result.Free)
 			require.NoError(t, result.PreExtendAndReset(128))
 			date, err := vector.NewConstFixed(types.T_date.ToType(), types.DateFromCalendar(2024, 2, 29), 128, proc.Mp())
+			t.Cleanup(func() { date.Free(proc.Mp()) })
 			require.NoError(t, err)
-			defer date.Free(proc.Mp())
 			count, err := vector.NewConstFixed(types.T_int64.ToType(), int64(1), 128, proc.Mp())
+			t.Cleanup(func() { count.Free(proc.Mp()) })
 			require.NoError(t, err)
-			defer count.Free(proc.Mp())
-			unit, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("SECOND"), 128, proc.Mp())
+			var unit *vector.Vector
+			if constant {
+				unit, err = vector.NewConstBytes(types.T_varchar.ToType(), []byte("SECOND"), 128, proc.Mp())
+			} else {
+				unit = vector.NewVec(types.T_varchar.ToType())
+			}
+			t.Cleanup(func() { unit.Free(proc.Mp()) })
 			require.NoError(t, err)
 			if !constant {
-				unit.Free(proc.Mp())
-				unit = vector.NewVec(types.T_varchar.ToType())
 				for i := 0; i < 128; i++ {
 					require.NoError(t, vector.AppendBytes(unit, []byte("SECOND"), false, proc.Mp()))
 				}
 			}
-			defer unit.Free(proc.Mp())
 			require.NotPanics(t, func() {
 				err = TimestampAddDate([]*vector.Vector{unit, count, date}, result, proc, 128, nil)
 			})
@@ -17144,25 +17157,29 @@ func TestTimestampAddDateWarningsPerSelectedRow(t *testing.T) {
 		for _, constant := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/constant=%t", unitText, constant), func(t *testing.T) {
 				proc := testutil.NewProcess(t)
-				defer proc.Free()
+				t.Cleanup(proc.Free)
 				warnings := &numericWarningSession{}
 				proc.WarningSink = warnings
-				unit, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte(unitText), 3, proc.Mp())
+				var unit *vector.Vector
+				var err error
+				if constant {
+					unit, err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(unitText), 3, proc.Mp())
+				} else {
+					unit = vector.NewVec(types.T_varchar.ToType())
+				}
+				t.Cleanup(func() { unit.Free(proc.Mp()) })
 				require.NoError(t, err)
 				if !constant {
-					unit.Free(proc.Mp())
-					unit = vector.NewVec(types.T_varchar.ToType())
 					require.NoError(t, vector.AppendStringList(unit, []string{unitText, unitText, unitText}, nil, proc.Mp()))
 				}
-				defer unit.Free(proc.Mp())
 				count, err := vector.NewConstFixed(types.T_int64.ToType(), int64(math.MaxInt64), 3, proc.Mp())
+				t.Cleanup(func() { count.Free(proc.Mp()) })
 				require.NoError(t, err)
-				defer count.Free(proc.Mp())
 				date, err := vector.NewConstFixed(types.T_date.ToType(), types.DateFromCalendar(2024, 2, 29), 3, proc.Mp())
+				t.Cleanup(func() { date.Free(proc.Mp()) })
 				require.NoError(t, err)
-				defer date.Free(proc.Mp())
 				result := vector.NewFunctionResultWrapper(types.T_date.ToType(), proc.Mp())
-				defer result.Free()
+				t.Cleanup(result.Free)
 				require.NoError(t, result.PreExtendAndReset(3))
 				require.NoError(t, TimestampAddDate([]*vector.Vector{unit, count, date}, result, proc, 3, &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}}))
 				require.Equal(t, 3, result.GetResultVector().GetNulls().Count())

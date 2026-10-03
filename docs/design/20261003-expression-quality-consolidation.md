@@ -1,4 +1,4 @@
-# Expression quality consolidation — revision 1
+# Expression quality consolidation — revision 2
 
 Continuation of #29249 and PR #29574; baseline9078a8bd, temporal closure commit95f58ac1d37. Broader audit covers342 recently changed production files. Candidate counts are discovery evidence, never deletion authority.
 
@@ -19,3 +19,87 @@ Record named coverage mappings and pre/post checks for each retired capability. 
 ## Performance refinement
 
 Same-process baseline/head experiments reproduced a small CPU regression from retaining batch-mode and output-kind decisions in the common loop. Select the four combinations once per batch without restoring initial-wrapper branches, a callback per row, generic method dictionaries, or a parsed-unit cache. Keep the existing unit-admission and vector-conversion owners. The normal NULL helper must inline; the shared error helper runs only after arithmetic failure. Validate baseline recovery and unchanged allocations together with metadata, selection, diagnostics, caller reuse and denied growth. The benchmark represents expression CPU, not an overall query-performance claim.
+
+## Stage coverage and fixture ownership audit
+
+Refs #29249 remains an ongoing task. This stage covers the complete PR range from `9078a8bd` through `e37f9795` plus the local fixture correction; it preserves the 72-line retirement in `e37f9795`. It does not claim that all 342 recently changed files or all repository tests have been audited.
+
+The binder owns SQL result metadata; registered adapters own masks, NULL and per-evaluated-row diagnostics; checked calendar/time helpers own arithmetic. Constant construction owns allocations until successful executor transfer. Schema admission, index prefix matching, scoped authorization and the local Iceberg coordinator keep their existing owners. No new production state, scheduling, fixture framework or compatibility branch is introduced.
+
+### Removed top-level tests to retained contracts
+
+Every removed top-level test in the 14 changed test files is listed below. A retired implementation-only capability is explicitly marked as retired rather than represented as equivalent live coverage. Changed subcases and forwarding calls are mapped separately afterward.
+
+| Removed test | Retained test or retirement | Independent value |
+| --- | --- | --- |
+| `TestDateStringAddOverflow` | TestDateStringInterval | upper year; NULL and warning identity where applicable |
+| `TestDateStringAddNegativeYearOverflow` | TestDateStringInterval | lower year; NULL and warning identity where applicable |
+| `TestDateStringAddOverflowNegativeMonth` | TestDateStringInterval | lower month; NULL and warning identity where applicable |
+| `TestDateStringAddOverflowNegativeQuarter` | TestDateStringInterval | lower quarter; NULL and warning identity where applicable |
+| `TestDateStringAddMicrosecondPrecision` | TestDateStringInterval | add microsecond; NULL and warning identity where applicable |
+| `TestDateStringAddNonMicrosecondInterval` | TestDateStringInterval | fraction second/minute/hour/day; NULL and warning identity where applicable |
+| `TestDateStringAddPadsFractionalSeconds` | TestDateStringInterval | pad four/three/one digits; six digits rollover; NULL and warning identity where applicable |
+| `TestDateStringAddReturnTypeCompatibility` | TestDateStringInterval | varchar, char and text return OIDs plus exact formatted values; NULL and warning identity where applicable |
+| `TestDateStringAddDateFormatOutput` | TestDateStringInterval | add day/month/year/week/quarter/second/minute/hour; NULL and warning identity where applicable |
+| `TestDateStringSubMicrosecondPrecision` | TestDateStringInterval/sub microsecond | Exact subtraction and six fractional digits |
+| `TestDateStringSubDateFormatOutput` | TestDateStringInterval/sub day/month/year/week/quarter/second/minute/hour | Exact date-only versus clock formatting |
+| `TestDateStringAddVeryLargeInterval` | TestDateStringIntervalCountOverflow | Both signs of near-MaxInt64 SECOND/MINUTE/HOUR; row-local NULL |
+| `TestDateStringAddInvalidInterval` | TestDateStringIntervalCountOverflow | MaxInt64 sentinel for YEAR_MONTH/DAY/WEEK/SECOND. Old intervalStr labels were never passed to a parser; actual parser syntax/overflow is independently owned by TestNormalizeIntervalDistinguishesOverflowFromInvalidSyntax in pkg/container/types. |
+| `TestDoDatetimeAddComprehensive` | TestCalendarIntervalArithmetic | All 22 named cells retained: exact units/composite YEAR_MONTH, overflow marker, upper/lower calendar bounds and large signed counts; exact error sentinel |
+| `TestDoDateStringAddComprehensive` | TestCalendarIntervalArithmetic; TestDateStringIntervalParsing | Shared arithmetic cells plus independently rejected duration/malformed strings and exact valid pre-epoch result; do not duplicate the arithmetic fixture for string parsing |
+| `TestIsDateOverflowMaxError` | TestIsDatetimeOverflowMaxError | Retired duplicate date sentinel; retained canonical sentinel and unrelated-error negative control |
+| `TestTimestampAddDateWithConstantDateUnitAndDateResultType` | TestTimestampAddDateMetadataAndWrapperReuse | Corresponding constant/dynamic DATE/clock/NULL-unit row under each initial wrapper; exact values, NULL bits, result OID and scale; one wrapper reused sequentially |
+| `TestTimestampAddDateWithConstantDateUnitAndDatetimeResultType` | TestTimestampAddDateMetadataAndWrapperReuse | Corresponding constant/dynamic DATE/clock/NULL-unit row under each initial wrapper; exact values, NULL bits, result OID and scale; one wrapper reused sequentially |
+| `TestTimestampAddDateWithConstantTimeUnitAndDatetimeResultType` | TestTimestampAddDateMetadataAndWrapperReuse | Corresponding constant/dynamic DATE/clock/NULL-unit row under each initial wrapper; exact values, NULL bits, result OID and scale; one wrapper reused sequentially |
+| `TestTimestampAddDateNonConstantTimeUnitWithDateResultType` | TestTimestampAddDateMetadataAndWrapperReuse | Corresponding constant/dynamic DATE/clock/NULL-unit row under each initial wrapper; exact values, NULL bits, result OID and scale; one wrapper reused sequentially |
+| `TestTimestampAddDateNonConstantTimeUnitWithDatetimeResultType` | TestTimestampAddDateMetadataAndWrapperReuse | Corresponding constant/dynamic DATE/clock/NULL-unit row under each initial wrapper; exact values, NULL bits, result OID and scale; one wrapper reused sequentially |
+| `TestTimestampAddDateNonConstantDateUnitWithDateResultType` | TestTimestampAddDateMetadataAndWrapperReuse | Corresponding constant/dynamic DATE/clock/NULL-unit row under each initial wrapper; exact values, NULL bits, result OID and scale; one wrapper reused sequentially |
+| `TestTimestampAddDateNonConstantDateUnitWithDatetimeResultType` | TestTimestampAddDateMetadataAndWrapperReuse | Corresponding constant/dynamic DATE/clock/NULL-unit row under each initial wrapper; exact values, NULL bits, result OID and scale; one wrapper reused sequentially |
+| `TestTimestampAddDateNonConstantUnitWithNullUnit` | TestTimestampAddDateMetadataAndWrapperReuse | Corresponding constant/dynamic DATE/clock/NULL-unit row under each initial wrapper; exact values, NULL bits, result OID and scale; one wrapper reused sequentially |
+| `TestDoDatetimeAddWithDefaultCaseInSwitch` | TestCalendarIntervalArithmetic/Normal add 1 day | Exact next-day value replaces nonzero assertion; no claim of reaching an obsolete default branch |
+| `TestDoDatetimeAddWithNumsZero` | TestCalendarIntervalArithmetic/Normal add 1 day/week/hour/minute/second/microsecond | Exact results replace six repeated nonzero assertions about a removed implementation branch |
+| `TestDoTimestampAddWithAddIntervalFailure` | TestTemporalMicrosecondBoundaryOverflowIsNull; TestTimestampAddTimestampWithMaxInt64Interval; Test_doTimestampSub_Edge | Required overflow errors and NULL/valid-neighbor outcomes replace optional if-error assertions; retained UTC/timezone lower-bound cases remain distinct |
+| `TestDataBranchSchemaEquivalentRequiresCompleteLogicalTypes` | TestCheckSchemaCompatibility_RejectsDifferentTypeAttributes; TestCheckSchemaCompatibility_Identical | Five named attribute negatives (width, scale, enum, type nullability, auto increment), each with an equal-schema control, now call real schema admission |
+| `TestTryMatchMoreLeadingFiltersRequiresContiguousPrefix` | TestRegularIndexOnlyMatchRequiresContiguousPrefix | Missing second/third parts and complete prefix assert exact active-owner filter positions |
+| `TestBindTimestampAddReturnType` | TestBindTimestampAddFSPByUnit | DATE calendar/clock units, DATETIME/TIMESTAMP FSP, CHAR and unknown-unit fallback; assert bound OID/scale/width and actual result-column metadata |
+| `TestEvaluateFilterByZoneMapNullableInListIsConservative` | TestNullableMembershipPruningAndResidual/list match | Exact prune decision plus actual folded residual true/false/NULL values; pre-fallback allocation baseline. Added vector-miss cell covers the distinct wire-vector representation. |
+| `TestEvaluateFilterByZoneMapNullableInVecIsConservative` | TestNullableMembershipPruningAndResidual/vector match | Exact prune decision plus actual folded residual true/false/NULL values; pre-fallback allocation baseline. Added vector-miss cell covers the distinct wire-vector representation. |
+| `TestEvaluateFilterByZoneMapNullableInListWithoutMatchPrunes` | TestNullableMembershipPruningAndResidual/list miss | Exact prune decision plus actual folded residual true/false/NULL values; pre-fallback allocation baseline. Added vector-miss cell covers the distinct wire-vector representation. |
+| `TestEvaluateFilterByZoneMapNullableNotInListPrunes` | TestNullableMembershipPruningAndResidual/not in miss | Exact prune decision plus actual folded residual true/false/NULL values; pre-fallback allocation baseline. Added vector-miss cell covers the distinct wire-vector representation. |
+| `TestFoldedNullableInExprKeepsMatchAndNullsMiss` | TestNullableMembershipPruningAndResidual/list match; vector match | Exact prune decision plus actual folded residual true/false/NULL values; pre-fallback allocation baseline. Added vector-miss cell covers the distinct wire-vector representation. |
+| `TestFoldedNullableNotInExprNullsMiss` | TestNullableMembershipPruningAndResidual/not in match; not in miss | Exact prune decision plus actual folded residual true/false/NULL values; pre-fallback allocation baseline. Added vector-miss cell covers the distinct wire-vector representation. |
+| `TestEvaluateFilterByZoneMapNotEqualBareNullPrunes` | TestEvaluateFilterByZoneMapNullComparisonsPrune/!= and <> | Same bare-NULL comparisons already belong to the retained seven-operator matrix |
+| `TestCompileExternScanIcebergFileFanout` | TestCompileExternScanIcebergCoordinator | One local scope/address/Mcpu; original input immutability; runtime data/delete tasks, columns, snapshot and hidden-column wiring |
+| `TestSplitIcebergDataFileShardsBalancesFiles` | Retired with unused splitter | Base already emitted one local scope; shard load balancing was not a live execution contract |
+| `TestIcebergRemoteFanoutPolicyBlocksObjectRefEvenWithRemoteSigning` | Retired with unused remote-policy helper | No remote consumer retained. Live access/local credential behavior remains in TestCompileIcebergScanPassesAccessContextToPlanner and TestCompileIcebergScanKeepsCredentialScopedTasksOnCurrentCN; these do not simulate retired remote authorization. |
+| `TestIcebergRemoteFanoutPolicyBlocksObjectRefWhenRemoteSigningDisabled` | Retired with unused remote-policy helper | No remote consumer retained. Live access/local credential behavior remains in TestCompileIcebergScanPassesAccessContextToPlanner and TestCompileIcebergScanKeepsCredentialScopedTasksOnCurrentCN; these do not simulate retired remote authorization. |
+| `TestIcebergRemoteFanoutPolicyBlocksObjectRefEvenWithProtectedCNToCN` | Retired with unused remote-policy helper | No remote consumer retained. Live access/local credential behavior remains in TestCompileIcebergScanPassesAccessContextToPlanner and TestCompileIcebergScanKeepsCredentialScopedTasksOnCurrentCN; these do not simulate retired remote authorization. |
+| `TestIcebergRemoteFanoutPolicyBlocksCredentialScopeEvenWithRemoteSigning` | Retired with unused remote-policy helper | No remote consumer retained. Live access/local credential behavior remains in TestCompileIcebergScanPassesAccessContextToPlanner and TestCompileIcebergScanKeepsCredentialScopedTasksOnCurrentCN; these do not simulate retired remote authorization. |
+
+### Forwarding calls and changed subcases
+
+| Retired path | Active owner / retained tests | Contract |
+| --- | --- | --- |
+| `buildExecuteUserParams` forwarding | `buildExecuteUserParamsWithMemberOfPositions`; `TestInitExecuteStmtParamFreesParamsOnResolveError`, `TestBuildExecuteUserParamsPreservesBoundConcreteTypes`, `TestBuildExecuteUserParamsRejectsBoundTypeKindMismatch`, `TestBuildExecuteUserParamsHonorsStoredProcedureScope`, `TestBuildExecuteUserParamsPreservesExplicitTextOverride` | Resolution failure releases parameters; concrete types/kinds, procedure/session scope and text override remain independent |
+| `currentTxnSnapshotTS` session forwarding | `currentTxnSnapshotTSForProcess`; `TestCurrentTxnSnapshotTS`, `TestInitExecuteStmtParamUsesTxnSnapshotAfterRebuild` | Actual process snapshot, including rebuilt execution |
+| `initExecuteStmtParamWithResolver` and `createPrepareStmt` forwarding | Existing `InSession` owners; `TestInitExecuteStmtParamReusesStableSubscriptionSelect`, `TestCreatePrepareStmtRestoresCurrentExecCtx` | Active session/compiler context and stable compile reuse; benchmark continues to call the real owner |
+| Old role SQL wrappers and unscoped object-WGO helper | `Test_determineDML`, `TestGetRoleSetThatPrivilegeGrantedToWGOScopedCoverageEdges` | Explicit object/type/level scoping; retained ownership/fallback positives and exec/get-result/row-decode negatives. Removed object-only mock subcases belong to a retired helper, not a new authorization policy. |
+| Flat-ring geometry helper chain | `TestGeometryDistanceHelpersRejectMalformedSlices` calls active line/polygon geometry owners; retained SQL distance/holes/SRID/mask cases | Malformed inputs and holes-aware geometry remain distinct; no claim that obsolete flat-ring behavior remains supported |
+
+### Independent QA and fixture failure boundaries
+
+The retained public SQL BVT case and actual binder/executor reuse cover real consumers. External renamed baseline-function comparisons are supplementary differential evidence, not simulated consumers or substitutes for literal oracles. They are not shipped as a default Cartesian test matrix.
+
+`TestTimestampAddDateMetadataAndWrapperReuse` additionally distinguishes a masked MICROSECOND from a NULL-date MICROSECOND, validates late units even after precision reaches six, and checks malformed-unit admission before an earlier row's overflow warnings or result-type changes. `TestTimestampAddDateDeniedTypeGrowth` proves the account-capacity error before backing access and keeps the original DATE vector/length/data/account usage. `TestTimestampAddDateWarningsPerSelectedRow` covers four actual loop modes and exactly two evaluated warnings, not one scalar callback. `TestIntegerDateIntervalAdmission` keeps integer-date conversion, NULL/masks, overflow diagnostics and empty-batch clock-unit rejection at its own adapter. `TestCalendarIntervalDiagnosticsAndSelection` retains independent direction, mask/NULL ordering and warning suppression.
+
+Fixture cleanup is registered immediately after each acquisition. Raw vectors are protected before Append; plain constant constructors return an owned vector even on allocation error, so their cleanup precedes the error assertion. Allocation-aware constructors instead release on failure. Returning helper fixtures use `t.Cleanup` so inputs outlive the helper. Process cleanup is registered first; result/input cleanup and account Seal/Finalize run before it. Account finalization is registered before selection/result setup and both teardown operations execute before nonfatal reporting. Payload controls use a lexical defer and are released before the constructor-under-test; unexpected executors also have cleanup. Exact account-use, metadata and CurrNB assertions remain before fallback cleanup, which cannot hide a constructor leak. Dynamic-unit fixtures construct the selected representation directly, eliminating the temporary constant-vector allocation/free.
+
+No sleeps, retries, random scheduling, bigger data, global-helper changes, added production hooks, or new cluster fixtures are needed. Existing sequential subtests share a process only under identical configuration and reset warning state; caller-owned result-wrapper reuse remains explicit.
+
+### Evidence, cost and limits
+
+The complete function/colexec packages and the nine affected named tests are validated normally; the affected named tests also run with race. Incremental configured static checks cover both owning packages. Other production/consumer inputs are unchanged, so the accepted binder/executor, 56-statement SQL replay, arithmetic differential and expression benchmarks remain applicable. Historical full race/SCA/two multi-CN BVT evidence at `53fd9e19` supports unchanged closures; pending checks at later heads are not passing evidence. Dedicated Iceberg E2E was skipped.
+
+Cost observations from the completed SQL replay separate the mechanisms: cluster construction 100.193ms; admission wait 78.88us; service start 11.570s; scenario body 2.034s; test total 13.71s; package total 14.331s. Prior full function package 14.982s included external QA; current-stage owning-package times are reported separately in the PR. Those observations have no same-condition original-test-suite control and therefore establish no CI/test-runtime saving. Whole-CI CPU/memory remain unmeasured. Source/fixture reduction is recorded separately from measured expression CPU; seven-row SECOND and masked/NULL limits remain disclosed in the PR.
+
+Original author mutation reports detected direction, mask, metadata, denied-growth and constructor-cleanup changes. The outer zonemap scratch-cleanup mutation survived its selected probes, so those probes do not establish sensitivity to every outer cleanup leak. Do not count the surviving mutation as effective coverage or weaken the pre-fallback allocation oracle. This limitation, skipped Iceberg E2E and unmeasured system-wide cost remain explicit follow-up boundaries of #29249.

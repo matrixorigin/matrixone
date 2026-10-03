@@ -1220,6 +1220,7 @@ func TestIntegerDateIntervalAdmission(t *testing.T) {
 	for _, subtract := range []bool{false, true} {
 		t.Run(fmt.Sprintf("subtract=%t", subtract), func(t *testing.T) {
 			proc := newTmpProcess(t)
+			t.Cleanup(proc.Free)
 			warnings := &numericWarningSession{}
 			proc.WarningSink = warnings
 			counts := []int64{1, 1, 1, math.MaxInt64, math.MaxInt64, math.MaxInt64}
@@ -1236,10 +1237,10 @@ func TestIntegerDateIntervalAdmission(t *testing.T) {
 				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{int64(types.Day)}, nil),
 			}, NewFunctionTestResult(types.T_int32.ToType(), false, []int32{20240301, 0, 0, 0, 0, 0}, []bool{false, true, true, true, true, true}), fn)
 			t.Cleanup(func() {
+				c.result.Free()
 				for _, v := range c.parameters {
 					v.Free(proc.Mp())
 				}
-				c.result.Free()
 			})
 			c = c.WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, true, false, true}})
 			ok, info := c.Run()
@@ -1250,8 +1251,8 @@ func TestIntegerDateIntervalAdmission(t *testing.T) {
 			}, warnings.warnings)
 			// Unit admission belongs to the integer-date adapter, even for an empty batch.
 			unit, err := vector.NewConstFixed(types.T_int64.ToType(), int64(types.Hour), 1, proc.Mp())
-			require.NoError(t, err)
 			defer unit.Free(proc.Mp())
+			require.NoError(t, err)
 			err = fn([]*vector.Vector{nil, nil, unit}, nil, proc, 0, nil)
 			require.Error(t, err)
 			require.Contains(t, err.Error(), "cast to DATETIME first")
