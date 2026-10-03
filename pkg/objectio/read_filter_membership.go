@@ -51,19 +51,44 @@ func (s *ReadFilterMembership) search(vectors []vector.Vector, sorted bool) []in
 		if len(selected) == 0 {
 			return selected
 		}
-	} else {
-		selected = allReadFilterRows(rowCount, false)
 	}
 	memberVector := &vectors[0]
 	if len(vectors) > 1 && vectors[1].Length() != 0 {
 		if vectors[1].Length() != rowCount {
+			if s.pk == nil {
+				return allReadFilterRows(rowCount, false)
+			}
 			return selected // same fail-open contract as the owned-vector path
 		}
 		memberVector = &vectors[1]
 	}
 	hits := s.member.TestVector(memberVector, nil)
 	if len(hits) != rowCount {
+		if s.pk == nil {
+			return allReadFilterRows(rowCount, false)
+		}
 		return selected
+	}
+	if s.pk == nil {
+		// Allocate only actual matches, not an entire block of offsets even
+		// when membership has no hits. Count first to avoid repeated growth
+		// for dense hits; the descriptor owns no reusable mutable buffer.
+		count := 0
+		for _, hit := range hits {
+			if hit != 0 {
+				count++
+			}
+		}
+		if count == 0 {
+			return nil
+		}
+		matched := make([]int64, 0, count)
+		for row, hit := range hits {
+			if hit != 0 {
+				matched = append(matched, int64(row))
+			}
+		}
+		return matched
 	}
 	matched := selected[:0]
 	for _, row := range selected {

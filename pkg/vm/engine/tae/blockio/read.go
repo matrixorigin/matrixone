@@ -585,7 +585,11 @@ func blockDataReadWithExactMembershipTopK(
 		distances []float64
 		err       error
 	)
-	if cachedMembership != nil {
+	// Only varlen filter columns benefit from skipping a cache snapshot.
+	// Fixed-width membership-only reads already avoid that copy and reuse
+	// reader-owned offsets in searchFunc; keep them on that existing path.
+	// Inspect the actual filter types, not the (varlen) Top-K output column.
+	if cachedMembership != nil && slices.ContainsFunc(filterTypes, func(typ types.Type) bool { return typ.IsVarlen() }) {
 		topRows, distances, _, err = objectio.ReadBlockByMembershipAndTopN(
 			ctx, filterColumns, filterTypes, materializeColumns, materializeTypes,
 			materializeDestinations, columns[topColumnPos], colTypes[topColumnPos],

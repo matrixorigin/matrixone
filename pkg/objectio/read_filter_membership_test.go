@@ -150,61 +150,76 @@ func TestReadBlockByMembershipAndTopN(t *testing.T) {
 	fs := &membershipProbeFS{FileService: storage}
 	for _, kind := range []string{"bitmap", "sorted", "roaring"} {
 		t.Run(kind, func(t *testing.T) {
-			member := newMembershipTestFilter(t, mp, kind, []int64{1, 2, 3, 4})
 			for _, tc := range []struct {
 				name   string
 				pk     *ReadFilterSearch
+				ids    []int64
 				rows   []int64
 				dists  []float64
 				input  []int64
 				err    error
 				cancel bool
-				sorted bool
 			}{
-				{name: "dense excludes null", rows: []int64{1, 3}, dists: []float64{1, 4}, input: []int64{0, 1, 3}},
-				{name: "prefix intersection", pk: NewReadFilterPrefixSearch(types.T_varchar, [][]byte{[]byte("a")}), rows: []int64{0, 1}, dists: []float64{16, 1}, input: []int64{0, 1}},
-				{name: "sparse", pk: NewReadFilterSearch(types.T_varchar, [][]byte{[]byte("b1")}), rows: []int64{3}, dists: []float64{4}, input: []int64{3}},
-				{name: "empty", pk: NewReadFilterSearch(types.T_varchar, [][]byte{[]byte("missing")}), rows: []int64{}, dists: []float64{}, input: []int64{}},
-				{name: "sorted dense excludes null", sorted: true, rows: []int64{1, 3}, dists: []float64{1, 4}, input: []int64{0, 1, 3}},
-				{name: "sorted prefix intersection", sorted: true, pk: NewReadFilterPrefixSearch(types.T_varchar, [][]byte{[]byte("a")}), rows: []int64{0, 1}, dists: []float64{16, 1}, input: []int64{0, 1}},
-				{name: "sorted sparse", sorted: true, pk: NewReadFilterSearch(types.T_varchar, [][]byte{[]byte("b1")}), rows: []int64{3}, dists: []float64{4}, input: []int64{3}},
-				{name: "sorted empty", sorted: true, pk: NewReadFilterSearch(types.T_varchar, [][]byte{[]byte("missing")}), rows: []int64{}, dists: []float64{}, input: []int64{}},
-				{name: "finalize error", input: []int64{0, 1, 3}, err: errors.New("tombstone failure")},
-				{name: "cancel after filter", input: []int64{0, 1, 3}, cancel: true},
+				{name: "dense excludes null", ids: []int64{1, 2, 3, 4}, rows: []int64{1, 3}, dists: []float64{1, 4}, input: []int64{0, 1, 3}},
+				{name: "prefix intersection", pk: NewReadFilterPrefixSearch(types.T_varchar, [][]byte{[]byte("a")}), ids: []int64{1, 2, 3, 4}, rows: []int64{0, 1}, dists: []float64{16, 1}, input: []int64{0, 1}},
+				// PK hits {0,1}; membership hits {1,3}. Neither predicate alone
+				// can produce the expected intersection {1}.
+				{name: "partial intersection", pk: NewReadFilterPrefixSearch(types.T_varchar, [][]byte{[]byte("a")}), ids: []int64{2, 3, 4}, rows: []int64{1}, dists: []float64{1}, input: []int64{1}},
+				// Both predicates match rows, but their intersection is empty.
+				{name: "disjoint intersection", pk: NewReadFilterPrefixSearch(types.T_varchar, [][]byte{[]byte("a")}), ids: []int64{3, 4}, rows: []int64{}, dists: []float64{}, input: []int64{}},
+				{name: "sparse", pk: NewReadFilterSearch(types.T_varchar, [][]byte{[]byte("b1")}), ids: []int64{1, 2, 3, 4}, rows: []int64{3}, dists: []float64{4}, input: []int64{3}},
+				{name: "empty pk", pk: NewReadFilterSearch(types.T_varchar, [][]byte{[]byte("missing")}), ids: []int64{1, 2, 3, 4}, rows: []int64{}, dists: []float64{}, input: []int64{}},
+				// Out-of-fixture IDs keep each filter at two or more entries,
+				// as required by the bitmap builder, without adding result hits.
+				{name: "membership only no hit", ids: []int64{8, 9}, rows: []int64{}, dists: []float64{}, input: []int64{}},
+				{name: "membership only single hit", ids: []int64{4, 5}, rows: []int64{3}, dists: []float64{4}, input: []int64{3}},
+				{name: "membership only null", ids: []int64{3, 5}, rows: []int64{}, dists: []float64{}, input: []int64{}},
+				{name: "finalize error", ids: []int64{1, 2, 3, 4}, input: []int64{0, 1, 3}, err: errors.New("tombstone failure")},
+				{name: "cancel after filter", ids: []int64{1, 2, 3, 4}, input: []int64{0, 1, 3}, cancel: true},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
-					ctx, cancel := context.WithCancel(t.Context())
-					defer cancel()
-					out := vector.NewVec(types.T_varchar.ToType())
-					defer out.Free(mp)
-					rows, distances, _, err := ReadBlockByMembershipAndTopN(
-						ctx, []uint16{0, 1}, []types.Type{types.T_varchar.ToType(), types.T_int64.ToType()},
-						[]uint16{0}, []types.Type{types.T_varchar.ToType()}, []*vector.Vector{out},
-						2, types.T_array_float32.ToType(), NewReadFilterMembership(tc.pk, member), tc.sorted,
-						func(rows []int64, input int) ([]int64, error) {
-							require.Equal(t, 4, input)
-							require.Equal(t, tc.input, rows)
-							if tc.cancel {
-								cancel()
-								return nil, ctx.Err()
+					member := newMembershipTestFilter(t, mp, kind, tc.ids)
+					for _, sorted := range []bool{false, true} {
+						t.Run(fmt.Sprintf("sorted=%t", sorted), func(t *testing.T) {
+							ctx, cancel := context.WithCancel(t.Context())
+							defer cancel()
+							out := vector.NewVec(types.T_varchar.ToType())
+							defer out.Free(mp)
+							rows, distances, _, err := ReadBlockByMembershipAndTopN(
+								ctx, []uint16{0, 1}, []types.Type{types.T_varchar.ToType(), types.T_int64.ToType()},
+								[]uint16{0}, []types.Type{types.T_varchar.ToType()}, []*vector.Vector{out},
+								2, types.T_array_float32.ToType(), NewReadFilterMembership(tc.pk, member), sorted,
+								func(rows []int64, input int) ([]int64, error) {
+									require.Equal(t, 4, input)
+									require.Equal(t, tc.input, rows)
+									if tc.cancel {
+										cancel()
+										return nil, ctx.Err()
+									}
+									return rows, tc.err
+								}, newTopNTestOp(2), fs, location, mp, fileservice.SkipFullFilePreloads,
+							)
+							if tc.err != nil || tc.cancel {
+								if tc.cancel {
+									require.ErrorIs(t, err, context.Canceled)
+								} else {
+									require.ErrorIs(t, err, tc.err)
+								}
+								require.Empty(t, rows)
+								require.Zero(t, out.Length())
+							} else {
+								require.NoError(t, err)
+								require.Equal(t, tc.rows, rows)
+								require.Equal(t, tc.dists, distances)
+								require.Equal(t, len(rows), out.Length())
+								for i, row := range rows {
+									require.Equal(t, []string{"a0", "a1", "b0", "b1"}[row], out.GetStringAt(i))
+								}
 							}
-							return rows, tc.err
-						}, newTopNTestOp(2), fs, location, mp, fileservice.SkipFullFilePreloads,
-					)
-					if tc.err != nil || tc.cancel {
-						require.Error(t, err)
-						require.Empty(t, rows)
-						require.Zero(t, out.Length())
-					} else {
-						require.NoError(t, err)
-						require.Equal(t, tc.rows, rows)
-						require.Equal(t, tc.dists, distances)
-						for i, row := range rows {
-							require.Equal(t, []string{"a0", "a1", "b0", "b1"}[row], out.GetStringAt(i))
-						}
+							fs.assertReleased(t, 0)
+							require.True(t, member.Valid(), "the reader, not the block read, owns the membership filter")
+						})
 					}
-					fs.assertReleased(t, 0)
-					require.True(t, member.Valid(), "the reader, not the block read, owns the membership filter")
 				})
 			}
 		})
@@ -243,7 +258,7 @@ func TestReadFilterMembershipConcurrent(t *testing.T) {
 	mp := newTopNTestMP(t)
 	storage := newBlockTopNTestFS(t)
 	location := persistMembershipTest(t, storage, mp)
-	member := newMembershipTestFilter(t, mp, "bitmap", []int64{1, 2, 3, 4})
+	member := newMembershipTestFilter(t, mp, "bitmap", []int64{2, 4})
 	search := NewReadFilterMembership(NewReadFilterPrefixSearch(types.T_varchar, [][]byte{[]byte("a")}), member)
 	fs := &membershipProbeFS{FileService: storage}
 	var wg sync.WaitGroup
@@ -258,7 +273,7 @@ func TestReadFilterMembershipConcurrent(t *testing.T) {
 				func(rows []int64, _ int) ([]int64, error) { return rows, nil },
 				newTopNTestOp(2), fs, location, mp, fileservice.SkipFullFilePreloads,
 			)
-			if err != nil || out.Length() != 2 || out.GetStringAt(0) != "a0" || len(rows) != 2 || len(distances) != 2 {
+			if err != nil || out.Length() != 1 || out.GetStringAt(0) != "a1" || len(rows) != 1 || rows[0] != 1 || len(distances) != 1 || distances[0] != 1 {
 				t.Errorf("concurrent membership: rows=%v distances=%v err=%v", rows, distances, err)
 			}
 		})
@@ -279,7 +294,37 @@ func TestReadFilterMembershipRejectsForeignImplementation(t *testing.T) {
 	require.ErrorContains(t, err, "nil exact membership")
 }
 
+func TestReadFilterMembershipSecondaryLengthMismatch(t *testing.T) {
+	mp := newTopNTestMP(t)
+	pk := vector.NewVec(types.T_varchar.ToType())
+	defer pk.Free(mp)
+	require.NoError(t, vector.AppendBytes(pk, []byte("a"), false, mp))
+	require.NoError(t, vector.AppendBytes(pk, []byte("b"), false, mp))
+	ids := vector.NewVec(types.T_int64.ToType())
+	defer ids.Free(mp)
+	require.NoError(t, vector.AppendFixed(ids, int64(1), false, mp))
+	// Both IDs are outside the fixture; two entries satisfy the bitmap builder.
+	member := newMembershipTestFilter(t, mp, "bitmap", []int64{98, 99})
+	for _, tc := range []struct {
+		name string
+		pk   *ReadFilterSearch
+		rows []int64
+	}{
+		{name: "membership only retains all rows", rows: []int64{0, 1}},
+		{name: "pk predicate retains only its matches", pk: NewReadFilterSearch(types.T_varchar, [][]byte{[]byte("a")}), rows: []int64{0}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			search := NewReadFilterMembership(tc.pk, member)
+			// A mismatched secondary column must not be probed as though it
+			// described the PK rows, nor silently turn a fail-open into no hits.
+			require.Equal(t, tc.rows, search.search([]vector.Vector{*pk, *ids}, false))
+		})
+	}
+}
+
 func BenchmarkReadFilterMembershipBinding(b *testing.B) {
+	// Both arms use the same membership search. This measures binding cost only,
+	// not the end-to-end difference between legacy and scoped block consumers.
 	mp := newTopNTestMP(b)
 	pk := vector.NewVec(types.T_varchar.ToType())
 	ids := vector.NewVec(types.T_int64.ToType())
