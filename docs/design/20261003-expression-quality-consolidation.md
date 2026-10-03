@@ -111,3 +111,28 @@ The original scratch-cleanup mutation survived because `CurrNB()` observes nativ
 A task-private Go overlay removing only the outer cleanup still passes the old scalar-overflow and materialized-tuple probes. With the strengthened assertions it fails the retained round and signed/unsigned scalar scenarios on live Go-heap bytes (32 bytes for scalar operands). This closes the previously recorded sensitivity gap for that exact mutation; it does not establish arbitrary leak coverage or a suite-cost improvement.
 
 A second overlay that frees vectors but retains scratch pointers is rejected independently by the nil-slot assertions after the heap-ownership baseline passes. The normal complete colexec package passes (0.150s); both existing cleanup tests pass with race (1.147s), count1. The two mutants fail in the test body before fallback teardown.
+
+### Follow-up: DATE_FORMAT fixture compression and measured cost
+
+`DateFormat` remains the production owner. The six `initFormatTestCase1`–`initFormatTestCase6` fixtures repeated 24 literal date/result pairs over 600 cases and 4,915,200 rows. A single DateFormat-specific adapter now serves UT `(1 case, 4 rows)` and the unchanged benchmark population `(100 cases, 8192 rows)`. Independent input/result backing arrays remain separate. No production change, cluster fixture, timer or generic test framework is introduced.
+
+| Retired fixture / scenario | Retained exact scenario | Prior distinct date/result rows retained |
+| --- | --- | --- |
+| `initFormatTestCase1` and duplicate `TestFormat` / `initFormatTestCase` | `TestDateFormat/all_tokens` | all four; year 0001, week/year fields and five-digit fraction padding retained |
+| `initFormatTestCase2` | `TestDateFormat/comma_datetime` | all four, including year 2021 |
+| `initFormatTestCase3` | `TestDateFormat/dash_date` | all four |
+| `initFormatTestCase4` | `TestDateFormat/slash_date` | all four |
+| `initFormatTestCase5` | `TestDateFormat/dash_datetime` | all four |
+| `initFormatTestCase6` | `TestDateFormat/slash_datetime` | all four |
+
+All 24 original datetime/expected string tuples and format literals were compared against `c161ffc580` and preserved byte for byte. `TestDateFormatUsesPerRowFormat` and `TestDateFormatZeroDatetimeMatchesMySQL` retain their existing selection, NULL and zero-date oracles, with cleanup-only changes. Every case releases its result wrapper and parameters before its process; native and Go-heap ownership are checked after case cleanup. Six benchmark names and assignments remain, including the existing per-case `BenchMarkRun()` then `Run()` sequence; benchmark iteration/timing policy is unchanged.
+
+Controlled Go 1.26.4/Linux amd64, GOMAXPROCS=2/GOMEMLIMIT=2GiB: frozen pre-compression `c161ffc580` and candidate binaries each ran the complete function package three times in alternating serial order. Compilation was separate and excluded from runtime measurements. All six runs terminated PASS; current focused normal and race selection also passed, including all six format scenarios and both unchanged edge suites.
+
+| Complete function package, three samples | Before compression | After compression | Median change |
+| --- | --- | --- | --- |
+| Wall time | 13.573–13.697s; median 13.625s | 11.825–11.850s; median 11.846s | −13.1% |
+| Process CPU, user + system | 4.428–4.643s; median 4.431s | 2.407–2.620s; median 2.618s | −40.9% |
+| Peak process RSS | 478.9–491.4 MiB; median 487.2 MiB | 200.4–215.7 MiB; median 208.5 MiB | −57.2% |
+
+Wall time uses a monotonic process interval; CPU and peak RSS use the terminated child's `wait4` resource usage. This measures the owning package on the shared host, not whole-CI or production-query performance. The previous baseline-to-pre-compression measurements established no package gain; these reductions come from eliminating repeated correctness work and releasing fixture resources. Source-derived UT input/result/bool backing-array population falls from 121.875 MiB to 624 bytes, excluding vectors, strings and allocator overhead. Lock-cleanup waits remain a separate lifecycle investigation.

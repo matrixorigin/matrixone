@@ -3581,95 +3581,108 @@ func TestParseBaseIntegerPrefixEdgeCases(t *testing.T) {
 	})
 }
 
-func initFormatTestCase() []tcTemp {
-	format := `%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U %u %V %v %a %W %w %X %x %Y %y %%`
-
-	d1, _ := types.ParseDatetime("2010-01-07 23:12:34.12345", 6)
-	r1 := `Jan January 01 1 7th 07 7 007 23 11 12 PM 11:12:34 PM 23:12:34 34 123450 01 01 01 01 Thu Thursday 4 2010 2010 2010 10 %`
-
-	d2, _ := types.ParseDatetime("2012-12-21 23:12:34.123456", 6)
-	r2 := "Dec December 12 12 21st 21 21 356 23 11 12 PM 11:12:34 PM 23:12:34 34 123456 51 51 51 51 Fri Friday 5 2012 2012 2012 12 %"
-
-	d3, _ := types.ParseDatetime("0001-01-01 00:00:00.123456", 6)
-	r3 := `Jan January 01 1 1st 01 1 001 0 12 00 AM 12:00:00 AM 00:00:00 00 123456 00 00 53 01 Mon Monday 1 0000 0001 0001 01 %`
-
-	d4, _ := types.ParseDatetime("2016-09-3 00:59:59.123456", 6)
-	r4 := `Sep September 09 9 3rd 03 3 247 0 12 59 AM 12:59:59 AM 00:59:59 59 123456 35 35 35 35 Sat Saturday 6 2016 2016 2016 16 %`
-
-	return []tcTemp{
-		{
-			info: "test format",
-			typ:  types.T_datetime,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_datetime.ToType(),
-					[]types.Datetime{d1},
-					[]bool{false}),
-				NewFunctionTestConstInput(types.T_varchar.ToType(),
-					[]string{format},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{r1},
-				[]bool{false}),
-		},
-		{
-			info: "test format",
-			typ:  types.T_datetime,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_datetime.ToType(),
-					[]types.Datetime{d2},
-					[]bool{false}),
-				NewFunctionTestConstInput(types.T_varchar.ToType(),
-					[]string{format},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{r2},
-				[]bool{false}),
-		},
-		{
-			info: "test format",
-			typ:  types.T_datetime,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_datetime.ToType(),
-					[]types.Datetime{d3},
-					[]bool{false}),
-				NewFunctionTestConstInput(types.T_varchar.ToType(),
-					[]string{format},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{r3},
-				[]bool{false}),
-		},
-		{
-			info: "test format",
-			typ:  types.T_datetime,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_datetime.ToType(),
-					[]types.Datetime{d4},
-					[]bool{false}),
-				NewFunctionTestConstInput(types.T_varchar.ToType(),
-					[]string{format},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{r4},
-				[]bool{false}),
-		},
-	}
+type dateFormatPair struct {
+	datetime, expected string
 }
 
-func TestFormat(t *testing.T) {
-	testCases := initFormatTestCase()
+type dateFormatScenario struct {
+	name, format string
+	pairs        [4]dateFormatPair
+}
 
-	// do the test work.
+var dateFormatScenarios = []dateFormatScenario{
+	{name: "all_tokens", format: `%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U %u %V %v %a %W %w %X %x %Y %y %%`, pairs: [4]dateFormatPair{
+		{"2010-01-07 23:12:34.12345", `Jan January 01 1 7th 07 7 007 23 11 12 PM 11:12:34 PM 23:12:34 34 123450 01 01 01 01 Thu Thursday 4 2010 2010 2010 10 %`},
+		{"2012-12-21 23:12:34.123456", "Dec December 12 12 21st 21 21 356 23 11 12 PM 11:12:34 PM 23:12:34 34 123456 51 51 51 51 Fri Friday 5 2012 2012 2012 12 %"},
+		{"0001-01-01 00:00:00.123456", `Jan January 01 1 1st 01 1 001 0 12 00 AM 12:00:00 AM 00:00:00 00 123456 00 00 53 01 Mon Monday 1 0000 0001 0001 01 %`},
+		{"2016-09-3 00:59:59.123456", `Sep September 09 9 3rd 03 3 247 0 12 59 AM 12:59:59 AM 00:59:59 59 123456 35 35 35 35 Sat Saturday 6 2016 2016 2016 16 %`},
+	}},
+	{name: "comma_datetime", format: `%Y,%m,%d %H:%i:%s`, pairs: [4]dateFormatPair{
+		{"2010-01-07 23:12:34.12345", `2010,01,07 23:12:34`},
+		{"2012-12-21 23:12:34.123456", "2012,12,21 23:12:34"},
+		{"2021-01-01 00:00:00.123456", `2021,01,01 00:00:00`},
+		{"2016-09-3 00:59:59.123456", `2016,09,03 00:59:59`},
+	}},
+	{name: "dash_date", format: `%Y-%m-%d`, pairs: [4]dateFormatPair{
+		{"2010-01-07 23:12:34.12345", `2010-01-07`},
+		{"2012-12-21 23:12:34.123456", "2012-12-21"},
+		{"2021-01-01 00:00:00.123456", `2021-01-01`},
+		{"2016-09-3 00:59:59.123456", `2016-09-03`},
+	}},
+	{name: "slash_date", format: `%Y/%m/%d`, pairs: [4]dateFormatPair{
+		{"2010-01-07 23:12:34.12345", `2010/01/07`},
+		{"2012-12-21 23:12:34.123456", "2012/12/21"},
+		{"2021-01-01 00:00:00.123456", `2021/01/01`},
+		{"2016-09-3 00:59:59.123456", `2016/09/03`},
+	}},
+	{name: "dash_datetime", format: `%Y-%m-%d %H:%i:%s`, pairs: [4]dateFormatPair{
+		{"2010-01-07 23:12:34.12345", `2010-01-07 23:12:34`},
+		{"2012-12-21 23:12:34.123456", "2012-12-21 23:12:34"},
+		{"2021-01-01 00:00:00.123456", `2021-01-01 00:00:00`},
+		{"2016-09-3 00:59:59.123456", `2016-09-03 00:59:59`},
+	}},
+	{name: "slash_datetime", format: `%Y/%m/%d %H:%i:%s`, pairs: [4]dateFormatPair{
+		{"2010-01-07 23:12:34.12345", `2010/01/07 23:12:34`},
+		{"2012-12-21 23:12:34.123456", "2012/12/21 23:12:34"},
+		{"2021-01-01 00:00:00.123456", `2021/01/01 00:00:00`},
+		{"2016-09-3 00:59:59.123456", `2016/09/03 00:59:59`},
+	}},
+}
+
+// UTs need each literal pair once; benchmarks retain their original population.
+func initDateFormatTestCases(tb testing.TB, scenario dateFormatScenario, caseCount, rowCount int) []tcTemp {
+	tb.Helper()
+	dates := make([]types.Datetime, len(scenario.pairs))
+	for i, pair := range scenario.pairs {
+		var err error
+		dates[i], err = types.ParseDatetime(pair.datetime, 6)
+		require.NoError(tb, err)
+	}
+	cases := make([]tcTemp, caseCount)
+	for i := range cases {
+		values := make([]types.Datetime, rowCount)
+		nulls := make([]bool, rowCount)
+		results := make([]string, rowCount)
+		resultNulls := make([]bool, rowCount)
+		for row := range values {
+			pair := row % len(scenario.pairs)
+			values[row] = dates[pair]
+			results[row] = scenario.pairs[pair].expected
+		}
+		cases[i] = tcTemp{
+			info: scenario.name,
+			typ:  types.T_datetime,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(), values, nulls),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{scenario.format}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, results, resultNulls),
+		}
+	}
+	return cases
+}
+
+func TestDateFormat(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	for _, tc := range testCases {
-		fcTC := NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, DateFormat)
-		s, info := fcTC.Run()
-		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	t.Cleanup(func() {
+		native, heap := proc.Mp().CurrNB(), proc.Mp().OnHeapCurrNB()
+		proc.Free()
+		require.Zero(t, native, "DateFormat fixture retains native allocations")
+		require.Zero(t, heap, "DateFormat fixture retains Go-heap ownership")
+	})
+	for _, scenario := range dateFormatScenarios {
+		t.Run(scenario.name, func(t *testing.T) {
+			tc := initDateFormatTestCases(t, scenario, 1, 4)[0]
+			testCase := NewFunctionTestCase(proc, tc.inputs, tc.expect, DateFormat)
+			t.Cleanup(func() {
+				testCase.result.Free()
+				for _, parameter := range testCase.parameters {
+					parameter.Free(proc.Mp())
+				}
+			})
+			ok, info := testCase.Run()
+			require.True(t, ok, info)
+		})
 	}
 }
 
@@ -3682,6 +3695,12 @@ func TestDateFormatUsesPerRowFormat(t *testing.T) {
 	}
 
 	proc := testutil.NewProcess(t)
+	t.Cleanup(func() {
+		native, heap := proc.Mp().CurrNB(), proc.Mp().OnHeapCurrNB()
+		proc.Free()
+		require.Zero(t, native, "DateFormat fixture retains native allocations")
+		require.Zero(t, heap, "DateFormat fixture retains Go-heap ownership")
+	})
 	caseWithRows := NewFunctionTestCase(proc,
 		[]FunctionTestInput{
 			NewFunctionTestInput(types.T_datetime.ToType(), dates, nil),
@@ -3690,6 +3709,12 @@ func TestDateFormatUsesPerRowFormat(t *testing.T) {
 		NewFunctionTestResult(types.T_varchar.ToType(), false,
 			[]string{"2020", "02", "2022-03-04"}, nil),
 		DateFormat)
+	t.Cleanup(func() {
+		caseWithRows.result.Free()
+		for _, parameter := range caseWithRows.parameters {
+			parameter.Free(proc.Mp())
+		}
+	})
 	ok, info := caseWithRows.Run()
 	require.True(t, ok, info)
 
@@ -3701,6 +3726,12 @@ func TestDateFormatUsesPerRowFormat(t *testing.T) {
 		NewFunctionTestResult(types.T_varchar.ToType(), false,
 			[]string{"2020", "", "04"}, []bool{false, true, false}),
 		DateFormat)
+	t.Cleanup(func() {
+		caseWithNullFormat.result.Free()
+		for _, parameter := range caseWithNullFormat.parameters {
+			parameter.Free(proc.Mp())
+		}
+	})
 	ok, info = caseWithNullFormat.Run()
 	require.True(t, ok, info)
 
@@ -3712,6 +3743,12 @@ func TestDateFormatUsesPerRowFormat(t *testing.T) {
 		NewFunctionTestResult(types.T_varchar.ToType(), false,
 			[]string{"2020", "", "04"}, []bool{false, true, false}),
 		DateFormat).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}})
+	t.Cleanup(func() {
+		caseWithSelection.result.Free()
+		for _, parameter := range caseWithSelection.parameters {
+			parameter.Free(proc.Mp())
+		}
+	})
 	ok, info = caseWithSelection.Run()
 	require.True(t, ok, info)
 }
@@ -3720,6 +3757,12 @@ func TestDateFormatZeroDatetimeMatchesMySQL(t *testing.T) {
 	valid, err := types.ParseDatetime("2024-01-01 00:00:00", 0)
 	require.NoError(t, err)
 	proc := testutil.NewProcess(t)
+	t.Cleanup(func() {
+		native, heap := proc.Mp().CurrNB(), proc.Mp().OnHeapCurrNB()
+		proc.Free()
+		require.Zero(t, native, "DateFormat fixture retains native allocations")
+		require.Zero(t, heap, "DateFormat fixture retains Go-heap ownership")
+	})
 
 	for _, tc := range []struct {
 		name       string
@@ -3809,6 +3852,12 @@ func TestDateFormatZeroDatetimeMatchesMySQL(t *testing.T) {
 				NewFunctionTestResult(types.T_varchar.ToType(), false, tc.expected, tc.expectNull),
 				DateFormat,
 			)
+			t.Cleanup(func() {
+				testCase.result.Free()
+				for _, parameter := range testCase.parameters {
+					parameter.Free(proc.Mp())
+				}
+			})
 			succeed, info := testCase.Run()
 			require.True(t, succeed, info)
 		})
