@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -669,6 +670,97 @@ func TestCompilerContextResolveVariableDelegatesToAttachedSession(t *testing.T) 
 	declared, err = selfAttached.ResolveVariableType("fraction", false, false)
 	require.NoError(t, err)
 	require.Equal(t, plan.Type{}, declared)
+}
+
+func TestInternalCompilerPlanConsumesScopedDOP(t *testing.T) {
+	ctx := defines.AttachAccountId(t.Context(), 0)
+	proc := testutil.NewProcess(t)
+	compiler := &compilerContext{ctx: ctx, proc: proc}
+	build := func(c plan.CompilerContext, sql string) *plan.Plan {
+		stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		result, err := plan.BuildPlan(c, stmt, false)
+		require.NoError(t, err)
+		return result
+	}
+	for _, tc := range []struct {
+		value interface{}
+		want  int64
+	}{
+		{int64(1), 1}, {int64(3), 3}, {int64(0), 0}, {int(1), 0}, {nil, 0},
+	} {
+		if tc.value == nil {
+			proc.SetResolveVariableFunc(nil)
+		} else {
+			proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+				if system && !global && strings.EqualFold(name, "max_dop") {
+					return tc.value, nil
+				}
+				return nil, nil
+			})
+		}
+		require.Equal(t, tc.want, build(compiler, "select 1").GetQuery().MaxDop)
+	}
+	// Precision continues to shape real expression binding alongside DOP.
+	var seen []string
+	proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+		seen = append(seen, name)
+		if strings.EqualFold(name, "max_dop") {
+			return int64(1), nil
+		}
+		if strings.EqualFold(name, "div_precision_increment") {
+			return int64(10), nil
+		}
+		return nil, errors.New("unexpected variable")
+	})
+	query := build(compiler, "select cast(1.23 as decimal(10,2)) / cast(3.45 as decimal(10,2))").GetQuery()
+	require.Equal(t, int64(1), query.MaxDop)
+	require.Equal(t, int32(12), query.Nodes[query.Steps[0]].ProjectList[0].Typ.Scale)
+	for _, name := range []string{"MAX_DOP", "DIV_PRECISION_INCREMENT"} {
+		_, err := compiler.ResolveVariable(name, true, false)
+		require.NoError(t, err)
+	}
+	seen = nil
+	for _, tc := range []struct {
+		name           string
+		system, global bool
+	}{
+		{"max_dop", false, false}, {"max_dop", true, true},
+		{"div_precision_increment", false, false}, {"div_precision_increment", true, true},
+		{"foreign_key_checks", true, false},
+	} {
+		v, err := compiler.ResolveVariable(tc.name, tc.system, tc.global)
+		require.NoError(t, err)
+		require.Nil(t, v)
+	}
+	require.Empty(t, seen)
+	empty := &compilerContext{ctx: ctx}
+	v, err := empty.ResolveVariable("max_dop", true, false)
+	require.NoError(t, err)
+	require.Nil(t, v)
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return nil, errors.New("resolver failed") })
+	_, err = compiler.ResolveVariable("max_dop", true, false)
+	require.ErrorContains(t, err, "resolver failed")
+	// An attached frontend delegate controls replay even when the process disagrees.
+	delegate := plan.NewMockCompilerContext(false)
+	delegate.ResolveVariableFunc = func(name string, system, global bool) (interface{}, error) {
+		if name == "max_dop" {
+			return int64(2), nil
+		}
+		return nil, nil
+	}
+	compiler.ctx = attachInternalExecutorCompilerContext(ctx, delegate)
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		t.Fatal("process resolver must not override frontend delegate")
+		return nil, nil
+	})
+	require.Equal(t, int64(2), build(compiler, "select 1").GetQuery().MaxDop)
+	delegate.ResolveVariableFunc = func(string, bool, bool) (interface{}, error) { return nil, nil }
+	require.Equal(t, int64(0), build(compiler, "select 1").GetQuery().MaxDop)
+	delegate.ResolveVariableFunc = func(string, bool, bool) (interface{}, error) { return nil, errors.New("delegate failed") }
+	_, err = compiler.ResolveVariable("max_dop", true, false)
+	require.ErrorContains(t, err, "delegate failed")
 }
 
 func TestInternalCompilerStatsCacheObservations(t *testing.T) {

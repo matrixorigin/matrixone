@@ -176,6 +176,7 @@ func (l *store) setInitialClusterInfoWithRecoveryResult(
 		l.runtime.Logger().Error("initial cluster info already set")
 		return false, nil
 	}
+	l.notifyHAKeeperCheck()
 	return true, nil
 }
 
