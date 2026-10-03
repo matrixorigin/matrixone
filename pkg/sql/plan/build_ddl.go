@@ -3373,6 +3373,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	// definition, even when that column has an explicit NULL, DEFAULT, or
 	// ON UPDATE clause. Do not consume the exception only after synthesis.
 	legacyTimestampFirstSeen := false
+	legacyTimestampDefaults := legacyImplicitTimestampDefaults(ctx)
 	for _, item := range stmt.Defs {
 		switch def := item.(type) {
 		case *tree.ColumnTableDef:
@@ -3533,7 +3534,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 						!hasExplicitNullableAttribute(def) &&
 						!hasExplicitDefaultAttribute(def) &&
 						!explicitOnUpdate &&
-						legacyImplicitTimestampDefaults(ctx)
+						legacyTimestampDefaults
 					if legacyImplicit {
 						defaultValue, err = buildImplicitCurrentTimestampDefault(colType, ctx.GetProcess())
 						if err != nil {
@@ -3545,7 +3546,23 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 						}
 						onUpdateExpr = &plan.OnUpdate{Expr: implicitExpr, OriginString: "CURRENT_TIMESTAMP()"}
 					} else {
-						defaultValue, err = buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), def, colType, ctx.GetProcess(), allColDefs)
+						defaultDef := def
+						if colType.Id == int32(types.T_timestamp) && legacyTimestampDefaults && !hasExplicitNullableAttribute(def) {
+							// Nullability applies to every legacy TIMESTAMP, independently
+							// of first-column automation. Do not mutate the parser's AST.
+							copy := *def
+							copy.Attributes = append([]tree.ColumnAttribute(nil), def.Attributes...)
+							if getColumnNullAbility(def) {
+								copy.Attributes = append(copy.Attributes, &tree.AttributeNull{Is: false})
+							}
+							if !hasExplicitDefaultAttribute(def) {
+								copy.Attributes = append(copy.Attributes, &tree.AttributeDefault{
+									Expr: tree.NewNumVal("0000-00-00 00:00:00", "0000-00-00 00:00:00", false, tree.P_char),
+								})
+							}
+							defaultDef = &copy
+						}
+						defaultValue, err = buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), defaultDef, colType, ctx.GetProcess(), allColDefs)
 					}
 				}
 				if err != nil {

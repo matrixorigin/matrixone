@@ -700,14 +700,11 @@ func hasExplicitDefaultAttribute(col *tree.ColumnTableDef) bool {
 	return false
 }
 
-func currentTimestampAST() tree.Expr {
-	return &tree.FuncExpr{
-		Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName("current_timestamp")),
-	}
-}
-
 func buildImplicitCurrentTimestampExpr(typ plan.Type, proc *process.Process) (*plan.Expr, error) {
-	ast := currentTimestampAST()
+	ast := &tree.FuncExpr{
+		Func:  tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName("current_timestamp")),
+		Exprs: tree.Exprs{tree.NewNumVal(int64(typ.Scale), fmt.Sprint(typ.Scale), false, tree.P_int64)},
+	}
 	binder := NewDefaultBinder(proc.Ctx, nil, nil, typ, nil)
 	bound, err := binder.BindExpr(ast, 0, false)
 	if err != nil {
@@ -748,13 +745,23 @@ func buildLegacyTimestampNullAssignment(ctx CompilerContext, col *plan.ColDef) (
 
 // wrapLegacyTimestampAssignment applies the same rule to runtime NULLs (for
 // example a source-column or prepared parameter), which cannot be recognized
-// from the AST. The expression is evaluated once by the IF and then passed
-// through the ordinary assignment cast.
-func wrapLegacyTimestampAssignment(ctx CompilerContext, col *plan.ColDef, expr *plan.Expr) (*plan.Expr, error) {
+// from the AST. Repeated volatile operands share the existing expression-local
+// memo owner; deterministic column/literal operands need no additional state.
+func (builder *QueryBuilder) wrapLegacyTimestampAssignment(col *plan.ColDef, expr *plan.Expr) (*plan.Expr, error) {
+	ctx := builder.compCtx
 	if !isLegacyImplicitTimestampColumn(ctx, col) || expr == nil {
 		return expr, nil
 	}
-	nullExpr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "isnull", []*plan.Expr{DeepCopyExpr(expr)})
+	source := DeepCopyExpr(expr)
+	if containsVolatileFunction(source) {
+		binder := &baseBinder{builder: builder, sysCtx: ctx.GetContext()}
+		memoID, err := binder.allocateVolatileExprMemoID()
+		if err != nil {
+			return nil, err
+		}
+		source.AuxId = memoID
+	}
+	nullExpr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "isnull", []*plan.Expr{DeepCopyExpr(source)})
 	if err != nil {
 		return nil, err
 	}
@@ -763,7 +770,7 @@ func wrapLegacyTimestampAssignment(ctx CompilerContext, col *plan.ColDef, expr *
 		return nil, err
 	}
 	return BindFuncExprImplByPlanExpr(ctx.GetContext(), "if", []*plan.Expr{
-		nullExpr, currentExpr, DeepCopyExpr(expr),
+		nullExpr, currentExpr, source,
 	})
 }
 
@@ -861,6 +868,19 @@ func buildDefaultExprWithColumns(
 	newExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(defaultExpr), proc, false, true)
 	if err != nil {
 		return nil, mapDDLAssignmentCastError(bindCtx, typ, colNameOrigin, err)
+	}
+	if typ.Id == int32(types.T_timestamp) && newExpr.GetLit() != nil &&
+		!newExpr.GetLit().Isnull && newExpr.GetLit().GetTimestampval() == int64(types.ZeroTimestamp) {
+		var mode interface{} = proc.GetSessionInfo().SqlMode
+		if resolve := proc.GetResolveVariableFunc(); resolve != nil {
+			mode, err = resolve("sql_mode", true, false)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if process.IsStrictNoZeroDateMode(mode) {
+			return nil, moerr.NewErrInvalidDefault(bindCtx, colNameOrigin)
+		}
 	}
 
 	if lit := newExpr.GetLit(); lit != nil && exprContainsHexOverload(defaultExpr, 0) {

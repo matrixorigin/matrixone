@@ -2478,7 +2478,7 @@ func timestampAddTimestampAsDatetime(ivecs []*vector.Vector, result vector.Funct
 		loc = time.Local
 	}
 	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && selectList.Contains(i) {
+		if functionRowSkipped(selectList, i) {
 			if err := rs.Append(types.ZeroDatetime, true); err != nil {
 				return err
 			}
@@ -2486,7 +2486,7 @@ func timestampAddTimestampAsDatetime(ivecs []*vector.Vector, result vector.Funct
 		}
 		ts, null1 := p1.GetValue(i)
 		interval, null2 := p2.GetValue(i)
-		if null1 || null2 || interval == math.MaxInt64 {
+		if null1 || null2 {
 			if err := rs.Append(types.ZeroDatetime, true); err != nil {
 				return err
 			}
@@ -2497,7 +2497,7 @@ func timestampAddTimestampAsDatetime(ivecs []*vector.Vector, result vector.Funct
 		// TIMESTAMP epoch bound.
 		value, err := doCalendarInterval(ts.ToDatetime(loc), interval, iTyp, subtract)
 		if err != nil {
-			if isDatetimeOverflowMaxError(err) {
+			if handleTemporalArithmeticError(proc, err) {
 				if err := rs.Append(types.ZeroDatetime, true); err != nil {
 					return err
 				}
@@ -4134,6 +4134,12 @@ func addTimeToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrap
 		timestamps := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[0])
 		time2Param := vector.GenerateFunctionStrParameter(ivecs[1])
 		for i := uint64(0); i < uint64(length); i++ {
+			if functionRowSkipped(selectList, i) {
+				if err := rs.Append(types.ZeroDatetime, true); err != nil {
+					return err
+				}
+				continue
+			}
 			ts, null1 := timestamps.GetValue(i)
 			time2Str, null2 := time2Param.GetStrValue(i)
 			if null1 || null2 || ts == types.ZeroTimestamp {
@@ -4542,6 +4548,12 @@ func subTimeFromTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWr
 		timestamps := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[0])
 		time2Param := vector.GenerateFunctionStrParameter(ivecs[1])
 		for i := uint64(0); i < uint64(length); i++ {
+			if functionRowSkipped(selectList, i) {
+				if err := rs.Append(types.ZeroDatetime, true); err != nil {
+					return err
+				}
+				continue
+			}
 			ts, null1 := timestamps.GetValue(i)
 			time2Str, null2 := time2Param.GetStrValue(i)
 			if null1 || null2 || ts == types.ZeroTimestamp {
@@ -9018,91 +9030,6 @@ func MakeDateString(
 		}
 	}
 	return nil
-}
-
-// MakeDate evaluates MAKEDATE into the native DATE domain. Exact numeric
-// arguments arrive here through the VARCHAR compatibility overload, so use
-// rational arithmetic for MySQL's half-up integer conversion instead of a
-// float64 conversion that silently truncates DECIMAL values.
-func MakeDate(
-	ivecs []*vector.Vector,
-	result vector.FunctionResultWrapper,
-	_ *process.Process,
-	length int,
-	selectList *FunctionSelectList,
-) error {
-	years := vector.GenerateFunctionStrParameter(ivecs[0])
-	days := vector.GenerateFunctionStrParameter(ivecs[1])
-	rs := vector.MustFunctionResult[types.Date](result)
-	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && selectList.Contains(i) {
-			if err := rs.Append(types.ZeroDate, true); err != nil {
-				return err
-			}
-			continue
-		}
-		yearText, nullYear := years.GetStrValue(i)
-		dayText, nullDay := days.GetStrValue(i)
-		if nullYear || nullDay {
-			if err := rs.Append(types.ZeroDate, true); err != nil {
-				return err
-			}
-			continue
-		}
-		year, ok := makeDateRoundedInteger(functionUtil.QuickBytesToStr(yearText))
-		if !ok {
-			year = castBinaryArrayToInt(yearText)
-		}
-		day, ok := makeDateRoundedInteger(functionUtil.QuickBytesToStr(dayText))
-		if !ok {
-			day = castBinaryArrayToInt(dayText)
-		}
-		if day <= 0 || year < 0 || year > 9999 {
-			if err := rs.Append(types.ZeroDate, true); err != nil {
-				return err
-			}
-			continue
-		}
-		if year < 70 {
-			year += 2000
-		} else if year < 100 {
-			year += 1900
-		}
-		date := types.MakeDate(int32(year), 1, int32(day))
-		if date <= types.ZeroDate || date.Year() > types.MaxDatetimeYear {
-			if err := rs.Append(types.ZeroDate, true); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := rs.Append(date, false); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func makeDateRoundedInteger(value string) (int64, bool) {
-	rational, ok := new(big.Rat).SetString(strings.TrimSpace(value))
-	if !ok || rational.Denom().Sign() == 0 {
-		return 0, false
-	}
-	quotient, remainder := new(big.Int), new(big.Int)
-	quotient.QuoRem(rational.Num(), rational.Denom(), remainder)
-	if remainder.Sign() != 0 {
-		doubled := new(big.Int).Lsh(new(big.Int).Abs(remainder), 1)
-		if doubled.Cmp(rational.Denom()) >= 0 {
-			if rational.Num().Sign() >= 0 {
-				quotient.Add(quotient, big.NewInt(1))
-			} else {
-				quotient.Sub(quotient, big.NewInt(1))
-			}
-		}
-	}
-	if !quotient.IsInt64() {
-		return 0, false
-	}
-	return quotient.Int64(), true
 }
 
 func makeTimeIntegerSecond(value int64, null bool) (int64, uint32, bool) {

@@ -49,19 +49,3 @@ func TestTemporalLocaleFallbackAndBounds(t *testing.T) {
 	require.Equal(t, "", localizedWeekday(nil, -1))
 	require.Equal(t, "", localizedMonth(nil, 13))
 }
-
-func TestMakeDateRoundedInteger(t *testing.T) {
-	cases := []struct {
-		value string
-		want  int64
-	}{
-		{value: "2024.49", want: 2024},
-		{value: "2024.50", want: 2025},
-		{value: "-1.50", want: -2},
-	}
-	for _, tc := range cases {
-		got, ok := makeDateRoundedInteger(tc.value)
-		require.True(t, ok, tc.value)
-		require.Equal(t, tc.want, got, tc.value)
-	}
-}

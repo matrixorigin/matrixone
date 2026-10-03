@@ -515,10 +515,10 @@ func TestYearAssignmentCastHonorsSQLMode(t *testing.T) {
 
 func TestParseTimePrefixPreservesInvalidFields(t *testing.T) {
 	for _, value := range []string{"12:99:00", "12:99:00tail", "12:34:99", "12:34:99tail", "12:34:56:99"} {
-		_, ok := parseTimePrefix(value, 0)
+		_, ok := parseTimePrefix(value, 0, false)
 		require.False(t, ok, value)
 	}
-	parsed, ok := parseTimePrefix("12:34:56tail", 0)
+	parsed, ok := parseTimePrefix("12:34:56tail", 0, false)
 	require.True(t, ok)
 	require.Equal(t, "12:34:56", parsed.String())
 }

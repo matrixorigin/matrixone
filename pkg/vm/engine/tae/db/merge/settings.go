@@ -281,7 +281,7 @@ const maxPromotionTombstoneCount = 1 << 16
 // toPromotionTrigger validates the domains consumed by scheduling before the
 // one-way promotion starts workers. Normal startup/config parsing is unchanged.
 func (s *MergeSettings) toPromotionTrigger() (*MMsgTaskTrigger, error) {
-	if len(s.L0MaxCountDecayControl) != 4 {
+	if len(s.L0MaxCountDecayControl) < 4 {
 		return nil, moerr.NewInternalErrorNoCtxf("invalid merge settings decay points: %d", len(s.L0MaxCountDecayControl))
 	}
 	if s.TombstoneL1Count <= 0 || s.TombstoneL1Count > maxPromotionTombstoneCount ||

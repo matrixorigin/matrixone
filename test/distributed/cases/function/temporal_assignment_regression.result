@@ -1,0 +1,174 @@
+SET @old_sql_mode = @@sql_mode;
+SET @old_time_zone = @@time_zone;
+SET @old_explicit_defaults = @@explicit_defaults_for_timestamp;
+SET @old_lc_time_names = @@lc_time_names;
+DROP DATABASE IF EXISTS temporal_28932;
+CREATE DATABASE temporal_28932;
+USE temporal_28932;
+SET time_zone = '+00:00';
+SET timestamp = 1704164645.123456;
+SET explicit_defaults_for_timestamp = OFF;
+CREATE TABLE legacy_ts (id INT PRIMARY KEY, ts TIMESTAMP(6) NOT NULL DEFAULT '2000-01-01 00:00:00');
+INSERT INTO legacy_ts VALUES (1, NULL), (2, '2000-01-01 00:00:00');
+SELECT id, ts FROM legacy_ts ORDER BY id;
+➤ id[4,32,0]  ¦  ts[93,26,0]  𝄀
+1  ¦  2024-01-02 03:04:05.123456000  𝄀
+2  ¦  2000-01-01 00:00:00
+SET @p = NULL;
+PREPARE ts_update FROM 'UPDATE legacy_ts SET ts = ? WHERE id = 2';
+EXECUTE ts_update USING @p;
+SELECT ts FROM legacy_ts WHERE id = 2;
+➤ ts[93,26,0]  𝄀
+2024-01-02 03:04:05.123456000
+SET @p = '2001-02-03 04:05:06.654321';
+EXECUTE ts_update USING @p;
+SELECT ts FROM legacy_ts WHERE id = 2;
+➤ ts[93,26,0]  𝄀
+2001-02-03 04:05:06.654321000
+SET @p = NULL;
+EXECUTE ts_update USING @p;
+SELECT ts FROM legacy_ts WHERE id = 2;
+➤ ts[93,26,0]  𝄀
+2024-01-02 03:04:05.123456000
+SET explicit_defaults_for_timestamp = ON;
+EXECUTE ts_update USING @p;
+constraint violation: Column 'ts' cannot be null
+SET explicit_defaults_for_timestamp = OFF;
+EXECUTE ts_update USING @p;
+SELECT ts FROM legacy_ts WHERE id = 2;
+➤ ts[93,26,0]  𝄀
+2024-01-02 03:04:05.123456000
+DEALLOCATE PREPARE ts_update;
+INSERT INTO legacy_ts SELECT 3, NULL;
+INSERT INTO legacy_ts VALUES (1, NULL) ON DUPLICATE KEY UPDATE ts = NULL;
+SELECT id, ts FROM legacy_ts ORDER BY id;
+➤ id[4,32,0]  ¦  ts[93,26,0]  𝄀
+1  ¦  2024-01-02 03:04:05.123456000  𝄀
+2  ¦  2024-01-02 03:04:05.123456000  𝄀
+3  ¦  2024-01-02 03:04:05.123456000
+CREATE SEQUENCE rhs_once START WITH 1;
+CREATE TABLE update_once (id INT PRIMARY KEY, n BIGINT, ts TIMESTAMP(6) NOT NULL DEFAULT '2000-01-01 00:00:00' ON UPDATE CURRENT_TIMESTAMP(6));
+INSERT INTO update_once VALUES (1, 1, '2000-01-01 00:00:00');
+UPDATE update_once SET n = NEXTVAL('rhs_once') WHERE id = 1;
+SELECT n, ts, CURRVAL('rhs_once') AS consumed FROM update_once;
+➤ n[-5,64,0]  ¦  ts[93,26,0]  ¦  consumed[12,65535,0]  𝄀
+1  ¦  2000-01-01 00:00:00  ¦  1
+UPDATE update_once SET id = id, n = NEXTVAL('rhs_once') WHERE id = 1;
+SELECT n, ts, CURRVAL('rhs_once') AS consumed FROM update_once;
+➤ n[-5,64,0]  ¦  ts[93,26,0]  ¦  consumed[12,65535,0]  𝄀
+2  ¦  2024-01-02 03:04:05.123456000  ¦  2
+CREATE SEQUENCE ts_once START WITH 1;
+UPDATE legacy_ts SET ts = FROM_UNIXTIME(1700000000 + NEXTVAL('ts_once')) WHERE id = 1;
+SELECT ts, CURRVAL('ts_once') AS consumed FROM legacy_ts WHERE id = 1;
+➤ ts[93,26,0]  ¦  consumed[12,65535,0]  𝄀
+2023-11-14 22:13:21  ¦  1
+CREATE TABLE typed_ts (ts TIMESTAMP(0));
+INSERT INTO typed_ts VALUES ('1970-01-01 00:00:01'), ('2024-01-02 03:04:05');
+SELECT ts, ADDTIME(ts, '00:00:00.000001'), SUBTIME(ts, '-00:00:00.000001'), DATE_SUB(ts, INTERVAL 2 SECOND) FROM typed_ts ORDER BY ts;
+➤ ts[93,19,0]  ¦  ADDTIME(ts, 00:00:00.000001)[93,26,0]  ¦  SUBTIME(ts, -00:00:00.000001)[93,26,0]  ¦  DATE_SUB(ts, INTERVAL 2 second)[93,19,0]  𝄀
+1970-01-01 00:00:01  ¦  1970-01-01 00:00:01.000001000  ¦  1970-01-01 00:00:01.000001000  ¦  1969-12-31 23:59:59  𝄀
+2024-01-02 03:04:05  ¦  2024-01-02 03:04:05.000001000  ¦  2024-01-02 03:04:05.000001000  ¦  2024-01-02 03:04:03
+SET sql_mode = 'STRICT_TRANS_TABLES,TIME_TRUNCATE_FRACTIONAL';
+SELECT CAST('2024.01.02 03:04:05.9999999' AS DATETIME(6));
+➤ cast(2024.01.02 03:04:05.9999999 as datetime(6))[93,26,0]  𝄀
+2024-01-02 03:04:05.999999000
+CREATE TABLE duration (v TIME);
+INSERT IGNORE INTO duration VALUES ('12:34:56.9999999junk');
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1265  ¦  Data truncated for TIME value: '12:34:56.9999999junk'
+SELECT v FROM duration;
+➤ v[92,10,0]  𝄀
+12:34:56
+SET sql_mode = 'STRICT_TRANS_TABLES';
+SELECT CAST('2024.01.02 03:04:05.9999999' AS DATETIME(6));
+➤ cast(2024.01.02 03:04:05.9999999 as datetime(6))[93,26,0]  𝄀
+2024-01-02 03:04:06
+CREATE SEQUENCE dml_once START WITH 1;
+INSERT INTO legacy_ts VALUES (4, FROM_UNIXTIME(1700000000 + NEXTVAL('dml_once')));
+SELECT ts, CURRVAL('dml_once') AS consumed FROM legacy_ts WHERE id = 4;
+➤ ts[93,26,0]  ¦  consumed[12,65535,0]  𝄀
+2023-11-14 22:13:21  ¦  1
+INSERT INTO legacy_ts VALUES (4, NULL) ON DUPLICATE KEY UPDATE ts = FROM_UNIXTIME(1700000000 + NEXTVAL('dml_once'));
+SELECT ts, CURRVAL('dml_once') AS consumed FROM legacy_ts WHERE id = 4;
+➤ ts[93,26,0]  ¦  consumed[12,65535,0]  𝄀
+2023-11-14 22:13:22  ¦  2
+CREATE TABLE joined_update (id INT PRIMARY KEY, n INT DEFAULT 7, a INT, b INT, ts TIMESTAMP(6) NOT NULL DEFAULT '2000-01-01 00:00:00' ON UPDATE CURRENT_TIMESTAMP(6));
+CREATE TABLE joined_source (id INT PRIMARY KEY, a INT);
+INSERT INTO joined_update VALUES (1, 7, 1, 2, '2000-01-01 00:00:00'), (2, 7, 3, 4, '2000-01-01 00:00:00');
+INSERT INTO joined_source VALUES (1, 0);
+UPDATE joined_update t JOIN joined_source s ON t.id = s.id SET t.n = DEFAULT;
+SELECT n, ts FROM joined_update ORDER BY id;
+➤ n[4,32,0]  ¦  ts[93,26,0]  𝄀
+7  ¦  2000-01-01 00:00:00  𝄀
+7  ¦  2000-01-01 00:00:00
+CREATE SEQUENCE joined_rhs START WITH 7;
+UPDATE joined_update t JOIN joined_source s ON t.id = s.id SET t.n = NEXTVAL('joined_rhs');
+SELECT n, ts, CURRVAL('joined_rhs') AS consumed FROM joined_update WHERE id = 1;
+➤ n[4,32,0]  ¦  ts[93,26,0]  ¦  consumed[12,65535,0]  𝄀
+7  ¦  2000-01-01 00:00:00  ¦  7
+UPDATE joined_update t JOIN joined_source s ON t.id = s.id SET t.a = t.b, t.b = t.a;
+SELECT a, b FROM joined_update WHERE id = 1;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+2  ¦  1
+CREATE SEQUENCE inactive_rhs START WITH 1;
+UPDATE joined_update t LEFT JOIN joined_source s ON t.id = s.id SET t.a = t.a, s.a = NEXTVAL('inactive_rhs');
+SELECT a, CURRVAL('inactive_rhs') AS consumed FROM joined_source;
+➤ a[4,32,0]  ¦  consumed[12,65535,0]  𝄀
+1  ¦  1
+INSERT INTO joined_source VALUES (2, 0);
+CREATE SEQUENCE duplicate_rhs START WITH 7;
+UPDATE joined_update t JOIN joined_source s ON t.id = 1 SET t.n = NEXTVAL('duplicate_rhs'), s.a = s.a;
+SELECT n, CURRVAL('duplicate_rhs') AS consumed FROM joined_update WHERE id = 1;
+➤ n[4,32,0]  ¦  consumed[12,65535,0]  𝄀
+7  ¦  7
+SET lc_time_names = 'en_US';
+PREPARE locale_query FROM 'SELECT CONCAT(DAYNAME("2024-01-07"), "/", DATE_FORMAT("2024-12-01", "%M")) AS names';
+EXECUTE locale_query;
+➤ names[-1,16383,0]  𝄀
+Sunday/December
+SET lc_time_names = 'fr_FR';
+EXECUTE locale_query;
+➤ names[-1,16383,0]  𝄀
+dimanche/décembre
+SET lc_time_names = 'en_US';
+EXECUTE locale_query;
+➤ names[-1,16383,0]  𝄀
+Sunday/December
+DEALLOCATE PREPARE locale_query;
+SET sql_mode = '';
+PREPARE fractional_query FROM 'SELECT CAST("2024-01-02 03:04:05.9999999" AS DATETIME(6)), CAST("12:34:56.9999999" AS TIME(6))';
+EXECUTE fractional_query;
+➤ cast(2024-01-02 03:04:05.9999999 as datetime(6))[93,26,0]  ¦  cast(12:34:56.9999999 as time(6))[92,17,0]  𝄀
+2024-01-02 03:04:06  ¦  12:34:57
+SET sql_mode = 'TIME_TRUNCATE_FRACTIONAL';
+EXECUTE fractional_query;
+➤ cast(2024-01-02 03:04:05.9999999 as datetime(6))[93,26,0]  ¦  cast(12:34:56.9999999 as time(6))[92,17,0]  𝄀
+2024-01-02 03:04:05.999999000  ¦  12:34:56.999999000
+SELECT CAST(123456.987654 AS TIME(3)), CAST(-123456.987654 AS TIME(3)), CAST(20240102030405.9999999 AS DATETIME(6)), CAST(20240102030405.987654 AS TIMESTAMP(3));
+➤ cast(123456.987654 as time(3))[92,14,0]  ¦  cast(-123456.987654 as time(3))[92,14,0]  ¦  cast(20240102030405.9999999 as datetime(6))[93,26,0]  ¦  cast(20240102030405.987654 as timestamp(3))[93,23,0]  𝄀
+12:34:56.987000000  ¦  -12:34:56.987000000  ¦  2024-01-02 03:04:05.999999000  ¦  2024-01-02 03:04:05.987000000
+CREATE TABLE legacy_definition (first_ts TIMESTAMP(6) DEFAULT '2000-01-01 00:00:00', later_ts TIMESTAMP(6), nullable_ts TIMESTAMP(6) NULL);
+INSERT INTO legacy_definition VALUES (NULL, NULL, NULL);
+SELECT first_ts, later_ts, nullable_ts FROM legacy_definition;
+➤ first_ts[93,26,0]  ¦  later_ts[93,26,0]  ¦  nullable_ts[93,26,0]  𝄀
+2024-01-02 03:04:05.123456000  ¦  2024-01-02 03:04:05.123456000  ¦  null
+INSERT INTO legacy_definition () VALUES ();
+SELECT CAST(first_ts AS VARCHAR), CAST(later_ts AS VARCHAR), nullable_ts FROM legacy_definition ORDER BY first_ts;
+➤ cast(first_ts as varchar)[12,65535,0]  ¦  cast(later_ts as varchar)[12,65535,0]  ¦  nullable_ts[93,26,0]  𝄀
+2000-01-01 00:00:00.000000  ¦  0000-00-00 00:00:00.000000  ¦  null  𝄀
+2024-01-02 03:04:05.123456  ¦  2024-01-02 03:04:05.123456  ¦  null
+SET sql_mode = '';
+EXECUTE fractional_query;
+➤ cast(2024-01-02 03:04:05.9999999 as datetime(6))[93,26,0]  ¦  cast(12:34:56.9999999 as time(6))[92,17,0]  𝄀
+2024-01-02 03:04:06  ¦  12:34:57
+DEALLOCATE PREPARE fractional_query;
+SELECT MAKEDATE(24.5, 32), MAKEDATE(69, 1), MAKEDATE(70, 1), MAKEDATE(2024, 0);
+➤ MAKEDATE(24.5, 32)[91,10,0]  ¦  MAKEDATE(69, 1)[91,10,0]  ¦  MAKEDATE(70, 1)[91,10,0]  ¦  MAKEDATE(2024, 0)[91,10,0]  𝄀
+2025-02-01  ¦  2069-01-01  ¦  1970-01-01  ¦  null
+DROP DATABASE temporal_28932;
+SET explicit_defaults_for_timestamp = @old_explicit_defaults;
+SET sql_mode = @old_sql_mode;
+SET time_zone = @old_time_zone;
+SET lc_time_names = @old_lc_time_names;
+SET timestamp = 0;

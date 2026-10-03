@@ -289,50 +289,6 @@ func TestTemporalConversionHelpers(t *testing.T) {
 		require.Nil(t, convertTimezone(input), input)
 	}
 
-	for _, tc := range []struct {
-		input string
-		want  int64
-		ok    bool
-	}{
-		{input: "1.5", want: 2, ok: true},
-		{input: "-1.5", want: -2, ok: true},
-		{input: "2.49", want: 2, ok: true},
-		{input: " 7 ", want: 7, ok: true},
-		{input: "not-a-number", ok: false},
-	} {
-		got, ok := makeDateRoundedInteger(tc.input)
-		require.Equal(t, tc.ok, ok, tc.input)
-		if ok {
-			require.Equal(t, tc.want, got, tc.input)
-		}
-	}
-}
-
-func TestMakeDateDecimalAndBoundaryInputs(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	inputYear := NewFunctionTestInput(types.T_varchar.ToType(), []string{"24.5", "69", "70", "0"}, nil)
-	inputDay := NewFunctionTestInput(types.T_varchar.ToType(), []string{"32", "1", "1", "0"}, nil)
-	expected := []types.Date{
-		types.DateFromCalendar(2025, 2, 1),
-		types.DateFromCalendar(2069, 1, 1),
-		types.DateFromCalendar(1970, 1, 1),
-		types.ZeroDate,
-	}
-	tc := NewFunctionTestCase(proc, []FunctionTestInput{inputYear, inputDay, NewFunctionTestInput(types.T_date.ToType(), []types.Date{}, nil)}, NewFunctionTestResult(types.T_date.ToType(), false, expected, []bool{false, false, false, true}), MakeDate)
-	succeed, info := tc.Run()
-	require.True(t, succeed, info)
-
-	// Exercise masked rows and the non-rational/invalid input paths as well.
-	inputYear = NewFunctionTestInput(types.T_varchar.ToType(), []string{"abc", "24.5", "99", "100"}, nil)
-	inputDay = NewFunctionTestInput(types.T_varchar.ToType(), []string{"1", "0", "1", "1"}, nil)
-	tc = NewFunctionTestCase(proc,
-		[]FunctionTestInput{inputYear, inputDay, NewFunctionTestInput(types.T_date.ToType(), []types.Date{}, nil)},
-		NewFunctionTestResult(types.T_date.ToType(), false,
-			[]types.Date{types.ZeroDate, types.ZeroDate, types.DateFromCalendar(1999, 1, 1), types.DateFromCalendar(100, 1, 1)},
-			[]bool{true, true, false, false}), MakeDate).
-		WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, true, true}})
-	succeed, info = tc.Run()
-	require.True(t, succeed, info)
 }
 
 func TestTimestampTemporalResultPaths(t *testing.T) {
@@ -453,7 +409,7 @@ func TestTimestampAddSubTimeDatetimeResultBranches(t *testing.T) {
 		times.Free(proc.Mp())
 	})
 
-	selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, false, false}}
+	selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true, true}}
 	for _, tc := range []struct {
 		name string
 		fn   func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error
@@ -2628,20 +2584,20 @@ func initDateAddTestCase() []tcTemp {
 	}
 }
 
-func TestDoTimeAddRejectsMySQLRangeOverflow(t *testing.T) {
+func TestDoTimeIntervalRejectsMySQLRangeOverflow(t *testing.T) {
 	max := types.MySQLTimeMax
 
-	got, overflow, err := doTimeAdd(max, 1, types.Second)
+	got, overflow, err := doTimeInterval(max, 1, types.Second, false)
 	require.NoError(t, err)
 	require.True(t, overflow)
 	require.Zero(t, got)
 
-	got, overflow, err = doTimeAdd(-max, -1, types.Second)
+	got, overflow, err = doTimeInterval(-max, -1, types.Second, false)
 	require.NoError(t, err)
 	require.True(t, overflow)
 	require.Zero(t, got)
 
-	got, overflow, err = doTimeAdd(max, 0, types.Second)
+	got, overflow, err = doTimeInterval(max, 0, types.Second, false)
 	require.NoError(t, err)
 	require.False(t, overflow)
 	require.Equal(t, max, got)

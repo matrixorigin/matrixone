@@ -2765,7 +2765,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				continue
 			}
 
-			updateExpr, err = wrapLegacyTimestampAssignment(builder.compCtx, colDef, updateExpr)
+			updateExpr, err = builder.wrapLegacyTimestampAssignment(colDef, updateExpr)
 			if err != nil {
 				return 0, err
 			}
@@ -4749,7 +4749,7 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 // projections of MySQL special types.
 func (builder *QueryBuilder) castInsertSourceColumn(projExpr, sourceExpr *plan.Expr, colDef *plan.ColDef) (*plan.Expr, error) {
 	var err error
-	projExpr, err = wrapLegacyTimestampAssignment(builder.compCtx, colDef, projExpr)
+	projExpr, err = builder.wrapLegacyTimestampAssignment(colDef, projExpr)
 	if err != nil {
 		return nil, err
 	}
@@ -5607,7 +5607,7 @@ func (builder *QueryBuilder) buildValueScan(
 						}
 					}
 				}
-				defExpr, err = wrapLegacyTimestampAssignment(builder.compCtx, col, defExpr)
+				defExpr, err = builder.wrapLegacyTimestampAssignment(col, defExpr)
 				if err != nil {
 					return 0, nil, err
 				}
