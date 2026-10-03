@@ -12401,7 +12401,7 @@ func fillDetachedUserLevelLockCleanupAdmissionForTest(
 func TestFailedAttemptCleanupWaitsForBacklogAdmissionAndTransfersOwnership(t *testing.T) {
 	runUserLevelLockTest(t, func(services []lockservice.LockService) {
 		service := services[0].(*userLevelLockTestService)
-		service.blockUnlock.Store(true)
+		service.unlockErrOnce.Store(true)
 		key := detachedUserLevelLockCleanupKey{
 			serviceID: service.GetServiceID(),
 			owner:     "owner-failed-attempt-backlog",
@@ -12424,36 +12424,61 @@ func TestFailedAttemptCleanupWaitsForBacklogAdmissionAndTransfersOwnership(t *te
 		}
 		detachedUserLevelLockCleanups.Unlock()
 
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		done := make(chan error, 1)
+		ctx, cancel := context.WithCancel(context.Background())
+		probe := &admissionProbeContext{Context: ctx, doneCalled: make(chan struct{})}
+		finished := make(chan struct{})
+		var cleanupErr error
+		defer func() {
+			cancel()
+			<-finished
+		}()
 		go func() {
-			done <- cleanupFailedUserLevelLockTxn(ctx, service, key, txnID)
+			defer close(finished)
+			cleanupErr = cleanupFailedUserLevelLockTxn(probe, service, key, txnID)
 		}()
 
+		// Only the full-backlog wait evaluates this caller context's Done.
 		select {
-		case err := <-done:
-			require.Failf(t, "cleanup returned before backlog admission", "err=%v", err)
-		case <-time.After(50 * time.Millisecond):
+		case <-probe.doneCalled:
+		case <-finished:
+			require.Failf(t, "cleanup returned before backlog admission", "err=%v", cleanupErr)
+		}
+		select {
+		case <-finished:
+			require.Failf(t, "cleanup returned while backlog remained full", "err=%v", cleanupErr)
+		default:
 		}
 
 		detachedUserLevelLockCleanups.Lock()
-		<-detachedUserLevelLockCleanups.backlog
+		capacity, count := cap(detachedUserLevelLockCleanups.backlog), len(detachedUserLevelLockCleanups.backlog)
+		released := false
+		select {
+		case <-detachedUserLevelLockCleanups.backlog:
+			released = true
+		default:
+		}
 		detachedUserLevelLockCleanups.Unlock()
+		require.Equal(t, userLevelLockDetachedCleanupBacklog, capacity)
+		require.Equal(t, capacity, count)
+		require.True(t, released)
 
-		require.NoError(t, <-done)
+		<-finished
+		require.NoError(t, cleanupErr)
 		detachedUserLevelLockCleanups.Lock()
 		backlogCountBeforeDrain := len(detachedUserLevelLockCleanups.backlog)
-		found := false
+		targetCount := 0
+		var transferredService lockservice.LockService
 		for len(detachedUserLevelLockCleanups.backlog) > 0 {
 			req := <-detachedUserLevelLockCleanups.backlog
-			if req.key == key && bytes.Equal(req.txnIDs[0], txnID) {
-				found = true
+			if req.key == key && len(req.txnIDs) == 1 && bytes.Equal(req.txnIDs[0], txnID) {
+				targetCount++
+				transferredService = req.ls
 			}
 		}
 		detachedUserLevelLockCleanups.Unlock()
 		require.Equal(t, userLevelLockDetachedCleanupBacklog, backlogCountBeforeDrain)
-		require.True(t, found)
+		require.Equal(t, 1, targetCount)
+		require.Same(t, service, transferredService)
 	})
 }
 

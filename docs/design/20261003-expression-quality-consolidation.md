@@ -292,3 +292,39 @@ behavior and production consumers are unchanged, so this closure adds no BVT.
 Validation artifacts are in the task's lock-snapshot evidence ledger. Focused
 adaptive race stress passes for all ten exact test names (nine × 100, one × 28).
 Actual gpt-6.1-sol xhigh delivery review: APPROVE, no verified blockers. Refs #29249; broader consolidation remains open.
+
+
+### 2026-10-03: backlog admission oracle and cost
+
+The failed-unlock cleanup owner first tries an unlock using an independent
+background context. The old test blocked that attempt for its one-second budget,
+then freed backlog capacity after 50ms; it never required actual full-capacity
+handoff. A private mutation returning false on a full backlog still passed.
+
+The existing test now uses the fixture's atomic one-shot unlock error and the
+existing Context probe (renamed for its two function-package consumers). The
+probe observes evaluation of Done only after this call's capacity rejection;
+it proves entry to that branch, not that the goroutine is physically parked.
+One slot is released only afterward. Original bound and payload oracles remain,
+with exact service identity, single transaction, and one matching request.
+A deferred cancel and actor join run before fixture reset on every assertion
+failure. No production budget, fixture, helper implementation, or data boundary
+changes. The behavioral test grows from 58 to 83 lines for phase observation,
+failure-safe joining, guarded release, and precise transfer checks.
+
+The nonblocking handoff mutant now fails before admission; a phantom-success
+mutant fails on final length (63 versus 64). Forced assertion failure after
+branch observation terminates in 0.048s with cleanup complete. Focused normal
+and race tests pass, including both existing sequence-probe consumers. All three exact adaptive race selections pass 100 repetitions each. The complete
+function package passes normal (10.757s) and race (16.141s); configured incremental
+lint reports zero issues, vet passes, and MO lint is byte-identical to its two
+baseline diagnostics. The global fixture justifies the owning-package race run;
+public SQL/clock inputs are unchanged and their prior evidence is reused.
+
+Three serial alternating pairs of frozen Go 1.26.4 normal-test binaries exclude
+compilation, with GOMAXPROCS=2 and GOMEMLIMIT=2GiB. For this exact single-test
+process, median wall time falls from 1.056s to 0.059s and CPU from 0.114s to 0.059s.
+Logged body time falls from 1.01s to 0.02s; peak RSS is nearly unchanged
+(79.77 versus 79.32 MiB). Shared-host samples establish no whole-package/CI or
+production-query gain. Actual gpt-6.1-sol xhigh final review: APPROVE; no source or gate blockers for
+this closure. Refs #29249 remains open.
