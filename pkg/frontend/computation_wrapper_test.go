@@ -3566,6 +3566,170 @@ func TestPreparedArithmeticDMLReusesStableRuntimeCategory(t *testing.T) {
 	require.NotNil(t, cw.runtimeCachePlan)
 }
 
+func TestPreparedSignedNarrowingDMLCacheGuard(t *testing.T) {
+	for _, tc := range []struct {
+		name, sql string
+		values    []string
+		keys      []int
+	}{
+		{"update", "update nation set n_regionkey = ? where n_nationkey = ?", []string{"1", "7"}, []int{1}},
+		{"delete", "delete from nation where n_nationkey = ?", []string{"7"}, []int{0}},
+		{"multiple predicates", "update nation set n_name = 'updated' where n_nationkey = ? and n_regionkey = ?", []string{"7", "1"}, []int{0, 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			optimizer := plan2.NewMockOptimizer(false)
+			ses, prepared, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(
+				t, 231, tc.sql, optimizer.CurrentContext())
+			t.Cleanup(func() {
+				cw.proc.SetPrepareParams(nil)
+				cw.releaseRuntimeCacheRetiredCompiles()
+				prepared.Close()
+			})
+			compiler := &preparedTestCompiler{CompilerContext: optimizer.CurrentContext(), proc: cw.proc}
+			bind := func(values []string, nullAt, longAt int) {
+				t.Helper()
+				cw.proc.SetPrepareParams(nil)
+				if prepared.params != nil {
+					prepared.params.Free(cw.proc.Mp())
+				}
+				prepared.params = vector.NewVec(types.T_text.ToType())
+				prepared.ParamTypes = nil
+				for i, value := range values {
+					require.NoError(t, vector.AppendBytes(prepared.params, []byte(value), i == nullAt, cw.proc.Mp()))
+					mysqlType := defines.MYSQL_TYPE_LONGLONG
+					if i == longAt {
+						mysqlType = defines.MYSQL_TYPE_LONG
+					}
+					prepared.ParamTypes = append(prepared.ParamTypes, byte(mysqlType), 0)
+				}
+			}
+			execute := func() (*compile.Compile, *plan.Plan) {
+				t.Helper()
+				// Match the real Compile entry when reusing this test wrapper.
+				cw.discardRuntimeCacheCandidate()
+				comp, p, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(
+					execCtx, ses, ses, cw, nil, prepared.Name, compiler.Resolve, compiler)
+				if owned && stmt != nil {
+					stmt.Free()
+				}
+				require.NoError(t, err)
+				return comp, p
+			}
+			bind(tc.values, -1, -1)
+			comp, narrowPlan := execute()
+			require.Nil(t, comp)
+			require.Same(t, narrowPlan, cw.runtimeCachePlan,
+				"a proven key domain must remain cacheable, not replan each value")
+			guards := make(map[int32]bool)
+			for _, candidate := range cw.runtimeCacheDiagnostics {
+				fn := candidate.GetF()
+				if fn == nil || len(fn.Args) != 2 || candidate.Typ.Id != int32(types.T_int32) {
+					continue
+				}
+				id, _ := function.DecodeOverloadID(fn.Func.Obj)
+				if id == function.CAST && fn.Args[0].GetP() != nil && fn.Args[0].Typ.Id == int32(types.T_int64) {
+					guards[fn.Args[0].GetP().Pos] = true
+				}
+			}
+			for _, pos := range tc.keys {
+				require.True(t, guards[int32(pos)], "parameter %d needs its complete narrowing guard", pos)
+			}
+			cached := compile.NewCompile("", "", prepared.Sql, "", "", nil,
+				cw.proc, prepared.PrepareStmt, false, nil, time.Now())
+			installed := false
+			t.Cleanup(func() {
+				if !installed {
+					cached.FreeOperator()
+					cached.Release()
+				}
+			})
+			installed = cw.installRuntimeCacheCandidate(cached)
+			require.True(t, installed)
+			assertReused := func() {
+				t.Helper()
+				gotCompile, gotPlan := execute()
+				require.Same(t, cached, gotCompile)
+				require.Same(t, narrowPlan, gotPlan)
+				require.Nil(t, cw.runtimeCacheTarget)
+			}
+			for _, pos := range tc.keys {
+				// Planner tests own the limits. Here every ordinal must observe
+				// a new safe packet and recover after a guard miss.
+				values := append([]string(nil), tc.values...)
+				values[pos] = "8"
+				bind(values, -1, -1)
+				assertReused()
+				values[pos] = "2147483648"
+				bind(values, -1, -1)
+				gotCompile, fallback := execute()
+				require.Nil(t, gotCompile, "out-of-domain keys cannot reuse a narrow compile")
+				require.NotSame(t, narrowPlan, fallback)
+				require.Nil(t, cw.runtimeCacheTarget, "a value-dependent fallback must not replace the good cache")
+				require.Same(t, narrowPlan, prepared.runtimePlan)
+				require.Same(t, cached, prepared.runtimeCompile)
+				bind(tc.values, -1, -1)
+				assertReused()
+			}
+			if tc.name == "update" {
+				// The preceding recovery established a safe cache hit. Cover
+				// negative overflow once at the cached admission boundary.
+				values := append([]string(nil), tc.values...)
+				values[tc.keys[0]] = "-2147483649"
+				bind(values, -1, -1)
+				gotCompile, fallback := execute()
+				require.Nil(t, gotCompile, "negative overflow cannot reuse a narrow compile")
+				require.NotSame(t, narrowPlan, fallback)
+				require.Nil(t, cw.runtimeCacheTarget, "a value-dependent fallback must not replace the good cache")
+				require.Same(t, narrowPlan, prepared.runtimePlan)
+				require.Same(t, cached, prepared.runtimeCompile)
+				bind(tc.values, -1, -1)
+				assertReused()
+
+				// NULL and a different binary source width are different categories.
+				// A category miss must not evict the live plan before compile succeeds.
+				for _, nullBinding := range []bool{true, false} {
+					nullAt, longAt := -1, tc.keys[0]
+					if nullBinding {
+						nullAt, longAt = tc.keys[0], -1
+					}
+					bind(tc.values, nullAt, longAt)
+					gotCompile, other := execute()
+					require.Nil(t, gotCompile)
+					require.NotSame(t, narrowPlan, other)
+					require.Same(t, narrowPlan, prepared.runtimePlan)
+					bind(tc.values, -1, -1)
+					assertReused()
+				}
+				// The key guard must not erase the independent assignment cast.
+				// Public protocol tests own the error, unchanged data and recovery.
+				bind([]string{"2147483648", "7"}, -1, -1)
+				assertReused()
+				var assignment *plan.Expr
+				require.NoError(t, plan.VisitExpressionsInOwner(narrowPlan, func(expr *plan.Expr) error {
+					return plan.VisitExprTree(expr, func(candidate *plan.Expr) error {
+						fn := candidate.GetF()
+						if assignment != nil || fn == nil || len(fn.Args) != 2 || candidate.Typ.Id != int32(types.T_int32) {
+							return nil
+						}
+						id, _ := function.DecodeOverloadID(fn.Func.Obj)
+						if id != function.CAST_ASSIGN || !function.IsStatementConstantInput(fn.Args[0]) {
+							return nil
+						}
+						_ = plan.VisitExprTree(candidate, func(child *plan.Expr) error {
+							if param := child.GetP(); param != nil && param.Pos == 0 {
+								assignment = candidate
+							}
+							return nil
+						})
+						return nil
+					})
+				}))
+				require.NotNil(t, assignment, "assignment plan: %s", narrowPlan.GetQuery().String())
+			}
+		})
+	}
+}
+
 func BenchmarkInitExecuteStmtParamRepeatedTPCCArithmeticUpdate(b *testing.B) {
 	optimizer := plan2.NewMockOptimizer(false)
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(
@@ -3614,6 +3778,62 @@ func BenchmarkInitExecuteStmtParamRepeatedTPCCArithmeticUpdate(b *testing.B) {
 		if currentOwned && currentStmt != nil {
 			currentStmt.Free()
 		}
+	}
+}
+
+func BenchmarkPreparedNarrowingCacheAdmission(b *testing.B) {
+	for _, tc := range []struct {
+		name      string
+		mysqlType defines.MysqlType
+	}{
+		{"same_width", defines.MYSQL_TYPE_LONG},
+		{"guarded_narrowing", defines.MYSQL_TYPE_LONGLONG},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			optimizer := plan2.NewMockOptimizer(false)
+			ses, prepared, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(
+				b, 232, "update nation set n_regionkey=1 where n_nationkey=?", optimizer.CurrentContext())
+			b.Cleanup(func() {
+				cw.proc.SetPrepareParams(nil)
+				prepared.Close()
+			})
+			prepared.params = vector.NewVec(types.T_text.ToType())
+			require.NoError(b, vector.AppendBytes(prepared.params, []byte("7"), false, cw.proc.Mp()))
+			prepared.ParamTypes = []byte{byte(tc.mysqlType), 0}
+			compiler := &preparedTestCompiler{CompilerContext: optimizer.CurrentContext(), proc: cw.proc}
+			execute := func() (*compile.Compile, *plan.Plan) {
+				comp, p, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(
+					execCtx, ses, ses, cw, nil, prepared.Name, compiler.Resolve, compiler)
+				if owned && stmt != nil {
+					stmt.Free()
+				}
+				if err != nil {
+					b.Fatal(err)
+				}
+				return comp, p
+			}
+			_, first := execute()
+			cached := compile.NewCompile("", "", prepared.Sql, "", "", nil,
+				cw.proc, prepared.PrepareStmt, false, nil, time.Now())
+			installed := false
+			b.Cleanup(func() {
+				if !installed {
+					cached.FreeOperator()
+					cached.Release()
+				}
+			})
+			installed = cw.installRuntimeCacheCandidate(cached)
+			require.True(b, installed)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				comp, p := execute()
+				if comp != cached || p != first {
+					b.Fatal("same-domain execution did not reuse its cached plan")
+				}
+			}
+			b.ReportMetric(float64(len(prepared.runtimeDiagnosticCandidates)), "guards")
+		})
 	}
 }
 

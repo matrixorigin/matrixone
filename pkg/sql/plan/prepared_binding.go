@@ -387,17 +387,27 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 				continue
 			}
 		}
+		// Binary clients can transmit an INT key as BIGINT. For a direct signed
+		// column of at most 32 bits, a guarded narrowing preserves its comparison
+		// domain and lets non-SELECT predicates use the existing storage PK filter.
+		guardedIntegerKey := !state.selectStatement && len(args) == 2 &&
+			args[1-i] != nil && args[1-i].GetCol() != nil &&
+			binding.Type.Oid.IsSignedInt() && types.T(args[1-i].Typ.Id).IsSignedInt() &&
+			types.T(args[1-i].Typ.Id).TypeLen() <= 4 &&
+			binding.Type.Oid.TypeLen() > types.T(args[1-i].Typ.Id).TypeLen()
 		if len(args) == 2 && isPreparedNumericComparisonContext(name) && args[1-i] != nil &&
 			(types.T(args[1-i].Typ.Id).IsInteger() || args[1-i].Typ.Id == int32(types.T_bit)) &&
 			(binding.Type.Oid.IsMySQLString() ||
 				(binding.Type.Oid.IsFloat() && types.T(args[1-i].Typ.Id).IsSignedInt()) ||
-				(state.selectStatement && binding.Type.Oid.IsInteger() &&
+				((state.selectStatement || guardedIntegerKey) && binding.Type.Oid.IsInteger() &&
 					(binding.Type.Oid.TypeLen() > types.T(args[1-i].Typ.Id).TypeLen() ||
 						binding.Type.Oid.IsSignedInt() != types.T(args[1-i].Typ.Id).IsSignedInt()))) {
 			// A proven integral value can compare in the peer's integer domain
 			// without casting the indexed column to a wider domain.
-			// The proof depends on this execution's value, so the existing
-			// binding state keeps the resulting plan out of the type-only cache.
+			// Most such proofs are value-dependent. The narrow signed-key case
+			// can reuse a plan only while its full cast passes the per-EXECUTE
+			// diagnostic guard; overflow falls back to the original wide domain.
+			wasValueDependent := state.valueDependent
 			if value, present := preparedConfigurationValue(ctx, source); present && value != nil {
 				spelling := preparedNumericValueSpelling(value)
 				_, exact, proofErr := preparedComparisonExactIntegerExpr(ctx, spelling, args[1-i].Typ)
@@ -436,6 +446,12 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 						return nil, castErr
 					}
 					args[i] = converted
+					if guardedIntegerKey {
+						// Keep the guard even if optimization removes the predicate.
+						// Do not clear dependencies belonging to other consumers.
+						state.diagnosticCandidates = append(state.diagnosticCandidates, DeepCopyExpr(converted))
+						state.valueDependent = wasValueDependent
+					}
 					continue
 				}
 			}
