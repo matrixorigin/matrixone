@@ -7402,6 +7402,14 @@ func bindFuncExprImplByPlanExpr(
 	if name == "convert" {
 		returnType = function.ConvertReturnTypeForBinder(argsType)
 	}
+	if name == "convert_tz" && len(argsType) > 0 {
+		// CONVERT_TZ preserves the source temporal precision.  The overload
+		// lookup may use the implicit DATETIME cast target (whose default scale
+		// is zero), so restore the source scale for view/CTAS metadata.
+		returnType.Oid = types.T_datetime
+		returnType.Scale = argsType[0].Scale
+		returnType.Width = argsType[0].Width
+	}
 	adjustControlFlowMetadata(name, args, argsType, &returnType, argsCastType)
 	adjustDateFormatMetadata(name, args, &returnType)
 
@@ -7668,6 +7676,9 @@ func bindFuncExprImplByPlanExpr(
 			}
 			returnType.Scale = fsp
 		}
+		// CTAS and view materialization use Width as the persisted temporal
+		// precision marker. Keep the string TIMEDIFF overload's FSP visible.
+		returnType.Width = returnType.Scale
 
 	case "time":
 		if len(args) == 1 {
@@ -7803,7 +7814,10 @@ func bindFuncExprImplByPlanExpr(
 					if inputType.Oid == types.T_date {
 						returnType = types.T_datetime.ToTypeWithScale(6)
 					} else {
-						returnType.Oid = inputType.Oid
+						// MySQL's temporal arithmetic returns DATETIME for a
+						// TIMESTAMP operand. Keep the wall-clock result domain
+						// independent from the source's timezone-aware storage type.
+						returnType.Oid = types.T_datetime
 						returnType.Scale = inputType.Scale
 						if returnType.Scale < 6 {
 							returnType.Scale = 6
@@ -7822,7 +7836,7 @@ func bindFuncExprImplByPlanExpr(
 						}
 					}
 				} else {
-					returnType.Oid = inputType.Oid
+					returnType.Oid = types.T_datetime
 					returnType.Scale = inputType.Scale
 					if unit == types.MicroSecond && returnType.Scale < 6 {
 						returnType.Scale = 6
@@ -7837,6 +7851,9 @@ func bindFuncExprImplByPlanExpr(
 			switch inputType.Oid {
 			case types.T_datetime, types.T_timestamp, types.T_time:
 				returnType.Oid, returnType.Scale, returnType.Width = inputType.Oid, inputType.Scale, inputType.Width
+				if inputType.Oid == types.T_timestamp {
+					returnType.Oid = types.T_datetime
+				}
 				unit, known := dateFunctionUnitFromPlanExpr(args[2])
 				if !known || unit == types.MicroSecond ||
 					(inputType.Oid == types.T_time && argsType[1].Oid != types.T_int64 && unit != types.Hour_Minute) {

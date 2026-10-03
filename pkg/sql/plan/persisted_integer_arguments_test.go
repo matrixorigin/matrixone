@@ -31,6 +31,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func persistedIntegerResultString(result *vector.Vector, row int) string {
+	if result.GetType().Oid == types.T_date {
+		return vector.GetFixedAtWithTypeCheck[types.Date](result, row).String()
+	}
+	return result.GetStringAt(row)
+}
+
 func TestPersistedIntegerArgumentGeneratedAndCheck(t *testing.T) {
 	ctx := NewMockCompilerContext(false)
 	proc := testutil.NewProcess(t)
@@ -143,7 +150,7 @@ func TestPersistedIntegerArgumentGeneratedAndCheck(t *testing.T) {
 						if candidate.check {
 							require.True(t, vector.GetFixedAtWithTypeCheck[bool](result, i))
 						} else {
-							require.Equal(t, want, result.GetStringAt(i))
+							require.Equal(t, want, persistedIntegerResultString(result, i))
 						}
 					}
 				})
