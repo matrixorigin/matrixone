@@ -42,7 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -683,16 +682,6 @@ func doLock(
 		tc.GetBeforeLockFunc()(txnOp.Txn().ID, tableID)
 	}
 
-	seq := txnOp.NextSequence()
-	startAt := time.Now()
-	trace.GetService(proc.GetService()).AddTxnDurationAction(
-		txnOp,
-		client.LockEvent,
-		seq,
-		tableID,
-		0,
-		nil)
-
 	// in this case:
 	// create table t1 (a int primary key, b int ,c int, unique key(b,c));
 	// insert into t1 values (1,1,null);
@@ -834,34 +823,6 @@ func doLock(
 		tc.GetAdjustLockResultFunc()(txn.ID, tableID, &result)
 	}
 
-	if len(result.ConflictKey) > 0 {
-		trace.GetService(proc.GetService()).AddTxnActionInfo(
-			txnOp,
-			client.LockEvent,
-			seq,
-			tableID,
-			func(writer trace.Writer) {
-				writer.WriteHex(result.ConflictKey)
-				writer.WriteString(":")
-				writer.WriteHex(result.ConflictTxn)
-				writer.WriteString("/")
-				writer.WriteUint(uint64(result.Waiters))
-				if len(result.PrevWaiter) > 0 {
-					writer.WriteString("/")
-					writer.WriteHex(result.PrevWaiter)
-				}
-			},
-		)
-	}
-
-	trace.GetService(proc.GetService()).AddTxnDurationAction(
-		txnOp,
-		client.LockEvent,
-		seq,
-		tableID,
-		time.Since(startAt),
-		nil)
-
 	// An admission grant needs a real binding, including the forwarding path.
 	if opts.admissionOnly && (!result.LockedOn.Valid || result.LockedOn.Table != tableID || result.LockedOn.Group != opts.group) {
 		return false, false, timestamp.Timestamp{}, moerr.NewLockTableBindChangedNoCtx()
@@ -963,11 +924,6 @@ func doLock(
 		}
 
 		if changed {
-			trace.GetService(proc.GetService()).TxnNoConflictChanged(
-				proc.GetTxnOperator(),
-				tableID,
-				lockedTS,
-				newSnapshotTS)
 			if err := txnOp.UpdateSnapshot(ctx, newSnapshotTS); err != nil {
 				return false, false, timestamp.Timestamp{}, err
 			}
@@ -1026,10 +982,6 @@ func doLock(
 		}
 
 		if changed {
-			trace.GetService(proc.GetService()).TxnConflictChanged(
-				proc.GetTxnOperator(),
-				tableID,
-				newSnapshotTS)
 			if err := txnOp.UpdateSnapshot(ctx, newSnapshotTS); err != nil {
 				return false, false, timestamp.Timestamp{}, err
 			}
@@ -1071,10 +1023,6 @@ func doLock(
 	}
 
 	if changed {
-		trace.GetService(proc.GetService()).TxnConflictChanged(
-			proc.GetTxnOperator(),
-			tableID,
-			newSnapshotTS)
 		if err := txnOp.UpdateSnapshot(ctx, newSnapshotTS); err != nil {
 			return false, false, timestamp.Timestamp{}, err
 		}
@@ -1083,10 +1031,7 @@ func doLock(
 
 	// Target rows were NOT modified, forward snapshot and continue
 	newTS := result.Timestamp.Next()
-	trace.GetService(proc.GetService()).TxnConflictChanged(
-		proc.GetTxnOperator(),
-		tableID,
-		newTS)
+
 	if err := txnOp.UpdateSnapshot(ctx, newTS); err != nil {
 		return false, false, timestamp.Timestamp{}, err
 	}

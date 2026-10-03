@@ -228,7 +228,7 @@ func TestSiriusPublicationBackPressureStopsTableScan(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
-	txnOp.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
 	proc.Base.TxnOperator = txnOp
 	c := allocateNewCompile(proc)
 	t.Cleanup(c.Release)
@@ -309,7 +309,7 @@ func TestEmbeddedSiriusReaderReusesScanFilterProjectionAndFetch(t *testing.T) {
 	tx.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 	tx.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 	tx.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
-	tx.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
 	proc.Base.TxnOperator = tx
 	intType := planpb.Type{Id: int32(types.T_int64)}
 	filter, err := plan2.BindFuncExprImplByPlanExpr(t.Context(), ">", []*planpb.Expr{plan2.GetColExpr(intType, 0, 0), plan2.MakePlan2Int64ConstExprWithType(0)})
@@ -345,7 +345,7 @@ func TestEmbeddedSiriusReaderPreservesParallelScanAndCleanup(t *testing.T) {
 			tx.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 			tx.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 			tx.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
-			tx.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
 			proc.Base.TxnOperator = tx
 			intType := planpb.Type{Id: int32(types.T_int64)}
 			definition := &planpb.TableDef{TblId: 7, Version: 3, Name: "t", Cols: []*planpb.ColDef{{Name: "n", Typ: intType}}}

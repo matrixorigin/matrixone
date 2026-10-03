@@ -305,11 +305,6 @@ func (opts StatementOption) IgnoreForeignKey() bool {
 	return opts.ignoreForeignKey
 }
 
-func (opts Options) WithDisableTrace() Options {
-	opts.txnOpts = append(opts.txnOpts, client.WithDisableTrace(true))
-	return opts
-}
-
 func (opts Options) WithDisableWaitPaused() Options {
 	opts.txnOpts = append(opts.txnOpts, client.WithDisableWaitPaused())
 	return opts
@@ -389,15 +384,6 @@ func (opts Options) HasLockWaitTimeout() bool {
 // check HasLockWaitTimeout before treating a zero value as an explicit budget.
 func (opts Options) LockWaitTimeout() time.Duration {
 	return opts.lockWaitTimeout
-}
-
-func (opts Options) WithEnableTrace() Options {
-	opts.enableTrace = true
-	return opts
-}
-
-func (opts Options) EnableTrace() bool {
-	return opts.enableTrace
 }
 
 func (opts Options) WithLowerCaseTableNames(lower *int64) Options {

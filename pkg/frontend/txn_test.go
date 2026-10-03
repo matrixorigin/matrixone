@@ -1902,10 +1902,6 @@ func (txnop *testTxnOp) Debug(ctx context.Context, ops []txn.TxnRequest) (*rpc.S
 	panic("implement me")
 }
 
-func (txnop *testTxnOp) NextSequence() uint64 {
-	return 0
-}
-
 func (txnop *testTxnOp) EnterRunSqlWithTokenAndSQL(_ context.CancelFunc, _ string) uint64 {
 	return 1
 }

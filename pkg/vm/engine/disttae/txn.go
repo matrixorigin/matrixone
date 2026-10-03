@@ -43,7 +43,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
@@ -313,24 +312,6 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 	if err := txn.requireAutoIncrEpochFenceCommit(autoIncrEpoch, autoIncrEpochKnown); err != nil {
 		return nil, err
 	}
-	start := time.Now()
-	seq := txn.op.NextSequence()
-	trace.GetService(txn.proc.GetService()).AddTxnDurationAction(
-		txn.op,
-		client.WorkspaceWriteEvent,
-		seq,
-		tableId,
-		0,
-		nil)
-	defer func() {
-		trace.GetService(txn.proc.GetService()).AddTxnDurationAction(
-			txn.op,
-			client.WorkspaceWriteEvent,
-			seq,
-			tableId,
-			time.Since(start),
-			nil)
-	}()
 
 	txn.readOnly.Store(false)
 
@@ -464,7 +445,6 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 	txn.appendWorkspaceEntryLocked(e)
 	txn.pkCount += bat.RowCount()
 
-	trace.GetService(txn.proc.GetService()).TxnWrite(txn.op, tableId, typesNames[typ], bat)
 	return
 }
 
@@ -1857,27 +1837,6 @@ func (txn *Transaction) deleteBatch(
 	bat *batch.Batch,
 	databaseId, tableId uint64,
 ) *batch.Batch {
-	start := time.Now()
-	seq := txn.op.NextSequence()
-	trace.GetService(txn.proc.GetService()).AddTxnDurationAction(
-		txn.op,
-		client.WorkspaceWriteEvent,
-		seq,
-		tableId,
-		0,
-		nil)
-	defer func() {
-		trace.GetService(txn.proc.GetService()).AddTxnDurationAction(
-			txn.op,
-			client.WorkspaceWriteEvent,
-			seq,
-			tableId,
-			time.Since(start),
-			nil)
-	}()
-
-	trace.GetService(txn.proc.GetService()).TxnWrite(txn.op, tableId, typesNames[DELETE], bat)
-
 	var (
 		mp             = make(map[types.Rowid]uint8)
 		deleteBlkId    = make(map[types.Blockid]bool)
@@ -2782,8 +2741,6 @@ func (txn *Transaction) Commit(ctx context.Context) (reqs []txn.TxnRequest, err 
 		}
 		return nil, moerr.NewInternalError(ctx, msg)
 	}
-
-	txn.traceWorkspaceLocked(true)
 
 	if txn.workspaceSize > 10*mpool.MB {
 		logutil.Info(

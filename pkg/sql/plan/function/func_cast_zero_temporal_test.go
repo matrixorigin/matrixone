@@ -680,15 +680,15 @@ func TestZeroTemporalIntervalAndDayNumberFunctionsReturnNull(t *testing.T) {
 		{
 			name: "date add",
 			fn: func() error {
-				_, err := doDateAdd(types.ZeroDate, 1, types.Day)
+				_, err := doDateInterval(types.ZeroDate, 1, types.Day, false)
 				return err
 			},
-			isError: isDateOverflowMaxError,
+			isError: isDatetimeOverflowMaxError,
 		},
 		{
 			name: "datetime add",
 			fn: func() error {
-				_, err := doDatetimeAdd(types.ZeroDatetime, 1, types.Day)
+				_, err := doCalendarInterval(types.ZeroDatetime, 1, types.Day, false)
 				return err
 			},
 			isError: isDatetimeOverflowMaxError,
@@ -696,7 +696,7 @@ func TestZeroTemporalIntervalAndDayNumberFunctionsReturnNull(t *testing.T) {
 		{
 			name: "timestamp add",
 			fn: func() error {
-				_, err := doTimestampAdd(time.UTC, types.ZeroTimestamp, 1, types.Day)
+				_, err := doTimestampInterval(time.UTC, types.ZeroTimestamp, 1, types.Day, false)
 				return err
 			},
 			isError: isDatetimeOverflowMaxError,
@@ -704,7 +704,7 @@ func TestZeroTemporalIntervalAndDayNumberFunctionsReturnNull(t *testing.T) {
 		{
 			name: "date sub",
 			fn: func() error {
-				_, err := doDateSub(types.ZeroDate, 1, types.Day)
+				_, err := doDateInterval(types.ZeroDate, 1, types.Day, true)
 				return err
 			},
 			isError: isDatetimeOverflowMaxError,
@@ -712,7 +712,7 @@ func TestZeroTemporalIntervalAndDayNumberFunctionsReturnNull(t *testing.T) {
 		{
 			name: "datetime sub",
 			fn: func() error {
-				_, err := doDatetimeSub(types.ZeroDatetime, 1, types.Day)
+				_, err := doCalendarInterval(types.ZeroDatetime, 1, types.Day, true)
 				return err
 			},
 			isError: isDatetimeOverflowMaxError,
@@ -720,7 +720,7 @@ func TestZeroTemporalIntervalAndDayNumberFunctionsReturnNull(t *testing.T) {
 		{
 			name: "timestamp sub",
 			fn: func() error {
-				_, err := doTimestampSub(time.UTC, types.ZeroTimestamp, 1, types.Day)
+				_, err := doTimestampInterval(time.UTC, types.ZeroTimestamp, 1, types.Day, true)
 				return err
 			},
 			isError: isDatetimeOverflowMaxError,
