@@ -54,7 +54,7 @@ func TestIntegerArgumentTemporalCast(t *testing.T) {
 		{input: NewFunctionTestInput(types.T_varchar.ToType(), []string{"9223372036854775808"}, nil), wantErr: true},
 	} {
 		test := NewFunctionTestCase(proc, []FunctionTestInput{tc.input, NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil)}, NewFunctionTestResult(types.T_int64.ToType(), tc.wantErr, tc.want, tc.nulls), NewTemporalIntegerArgumentCast).WithSelectList(tc.mask)
-		ok, info := test.Run()
+		ok, info := test.RunAndFree()
 		require.True(t, ok, info)
 	}
 	ts, err := types.ParseTimestamp(time.UTC, "2024-01-01 23:59:59.5", 6)
@@ -67,13 +67,13 @@ func TestIntegerArgumentTemporalCast(t *testing.T) {
 	} {
 		proc.GetSessionInfo().TimeZone = tc.zone
 		test := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_timestamp.ToTypeWithScale(6), []types.Timestamp{ts}, nil), NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil)}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{tc.want}, nil), NewTemporalIntegerArgumentCast)
-		ok, info := test.Run()
+		ok, info := test.RunAndFree()
 		require.True(t, ok, info)
 	}
 	// Permission is in the execution identity, not inferred from a runtime value.
-	for _, kernel := range []fEvalFn{NewIntegerArgumentCast, NewTruncatedIntegerArgumentCast} {
+	for _, kernel := range []executeLogicOfOverload{NewIntegerArgumentCast, NewTruncatedIntegerArgumentCast} {
 		test := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_time.ToType(), []types.Time{1500000}, nil), NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil)}, NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil), kernel)
-		ok, info := test.Run()
+		ok, info := test.RunAndFree()
 		require.True(t, ok, info)
 	}
 }

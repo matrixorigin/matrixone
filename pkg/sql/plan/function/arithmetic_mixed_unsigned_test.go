@@ -61,7 +61,7 @@ func TestMixedUnsignedArithmeticDomainChecks(t *testing.T) {
 
 	for _, test := range []struct {
 		name     string
-		fn       fEvalFn
+		fn       executeLogicOfOverload
 		left     types.Decimal128
 		right    types.Decimal128
 		mode     string
@@ -93,10 +93,7 @@ func TestMixedUnsignedArithmeticDomainChecks(t *testing.T) {
 				NewFunctionTestResult(resultType, false, nil, nil),
 				test.fn,
 			)
-			defer caseUnderTest.result.Free()
-			for _, parameter := range caseUnderTest.parameters {
-				defer parameter.Free(proc.Mp())
-			}
+			defer caseUnderTest.Free()
 			require.NoError(t, caseUnderTest.result.PreExtendAndReset(1))
 			err := caseUnderTest.fn(
 				caseUnderTest.parameters, caseUnderTest.result, proc, 1, nil)
@@ -129,10 +126,7 @@ func TestMixedUnsignedArithmeticSkipsMaskedRows(t *testing.T) {
 		NewFunctionTestResult(types.T_uint64.ToType(), false, nil, nil),
 		mixedUnsignedPlusFn,
 	)
-	defer caseUnderTest.result.Free()
-	for _, parameter := range caseUnderTest.parameters {
-		defer parameter.Free(proc.Mp())
-	}
+	defer caseUnderTest.Free()
 	require.NoError(t, caseUnderTest.result.PreExtendAndReset(2))
 	selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}
 	require.NoError(t, caseUnderTest.fn(

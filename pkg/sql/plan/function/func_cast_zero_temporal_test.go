@@ -33,7 +33,7 @@ func TestEmptyTimeConversionPreservesReleaseContract(t *testing.T) {
 	for _, sqlMode := range []string{"", "STRICT_TRANS_TABLES"} {
 		for _, source := range []types.T{types.T_varchar, types.T_varbinary} {
 			for _, binary := range []bool{false, true} {
-				for name, fn := range map[string]fEvalFn{"expression": NewCast, "explicit": NewExplicitCast, "assignment": NewAssignCast} {
+				for name, fn := range map[string]executeLogicOfOverload{"expression": NewCast, "explicit": NewExplicitCast, "assignment": NewAssignCast} {
 					t.Run(fmt.Sprintf("%s/%s/bin=%t/%s", sqlMode, source, binary, name), func(t *testing.T) {
 						proc := testutil.NewProcess(t)
 						proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return sqlMode, nil })
@@ -47,6 +47,7 @@ func TestEmptyTimeConversionPreservesReleaseContract(t *testing.T) {
 							[]types.Time{0, 0, 15 * types.MicroSecsPerSec, 0, 0}, []bool{true, false, false, true, true})
 						tc := NewFunctionTestCase(proc, inputs, expect, fn).
 							WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, true, false}})
+						defer tc.Free()
 						tc.parameters[0].SetIsBin(binary)
 						ok, info := tc.Run()
 						require.True(t, ok, info)
@@ -96,7 +97,7 @@ func TestCastZeroTemporalToNumericUsesZero(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, NewCast)
-			succeed, info := fcTC.Run()
+			succeed, info := fcTC.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -146,7 +147,7 @@ func TestCastZeroTemporalStringsProducesNonNullSentinels(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, NewCast)
-			succeed, info := fcTC.Run()
+			succeed, info := fcTC.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -404,7 +405,7 @@ type temporalCastResult struct {
 func runStringTemporalCast(
 	t *testing.T,
 	proc *process.Process,
-	fn fEvalFn,
+	fn executeLogicOfOverload,
 	input string,
 	target types.Type,
 	selectList *FunctionSelectList,
@@ -452,7 +453,7 @@ func TestUnixTimestampZeroValueReturnsNull(t *testing.T) {
 		name   string
 		inputs []FunctionTestInput
 		expect FunctionTestResult
-		fn     fEvalFn
+		fn     executeLogicOfOverload
 	}{
 		{
 			name: "typed timestamp",
@@ -491,7 +492,7 @@ func TestUnixTimestampZeroValueReturnsNull(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, tc.fn)
-			succeed, info := fcTC.Run()
+			succeed, info := fcTC.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -522,7 +523,7 @@ func TestUnixTimestampInvalidPreEpochAndNull(t *testing.T) {
 		name   string
 		inputs []FunctionTestInput
 		expect FunctionTestResult
-		fn     fEvalFn
+		fn     executeLogicOfOverload
 	}{
 		{
 			name: "typed integer",
@@ -568,7 +569,7 @@ func TestUnixTimestampInvalidPreEpochAndNull(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fcTC := NewFunctionTestCase(proc, test.inputs, test.expect, test.fn)
-			ok, info := fcTC.Run()
+			ok, info := fcTC.RunAndFree()
 			require.True(t, ok, info)
 		})
 	}
@@ -583,7 +584,7 @@ func TestUnixTimestampPreEpochWholeSecondIsNonNullZero(t *testing.T) {
 		[]FunctionTestInput{NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{preEpoch}, []bool{false})},
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{false}),
 		builtInUnixTimestamp)
-	ok, info := fcTC.Run()
+	ok, info := fcTC.RunAndFree()
 	require.True(t, ok, info)
 }
 
@@ -608,7 +609,7 @@ func TestUnixTimestampTypedTimestampPreservesFraction(t *testing.T) {
 		),
 		builtInUnixTimestamp,
 	)
-	succeed, info := fcTC.Run()
+	succeed, info := fcTC.RunAndFree()
 	require.True(t, succeed, info)
 
 	fcTC = NewFunctionTestCase(
@@ -619,7 +620,7 @@ func TestUnixTimestampTypedTimestampPreservesFraction(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1709251199}, []bool{false}),
 		builtInUnixTimestamp,
 	)
-	succeed, info = fcTC.Run()
+	succeed, info = fcTC.RunAndFree()
 	require.True(t, succeed, info)
 }
 
@@ -647,7 +648,7 @@ func TestUnixTimestampTypedTimestampDecimalNulls(t *testing.T) {
 		),
 		builtInUnixTimestamp,
 	)
-	succeed, info := fcTC.Run()
+	succeed, info := fcTC.RunAndFree()
 	require.True(t, succeed, info)
 }
 
@@ -733,7 +734,7 @@ func TestZeroTemporalIntervalAndDayNumberFunctionsReturnNull(t *testing.T) {
 
 	for _, tc := range []struct {
 		name string
-		fn   fEvalFn
+		fn   executeLogicOfOverload
 	}{
 		{name: "to days", fn: builtInToDays},
 		{name: "to seconds", fn: builtInToSeconds},
@@ -747,7 +748,7 @@ func TestZeroTemporalIntervalAndDayNumberFunctionsReturnNull(t *testing.T) {
 				NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
 				tc.fn,
 			)
-			succeed, info := fcTC.Run()
+			succeed, info := fcTC.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -762,7 +763,7 @@ func TestZeroTemporalIntervalOperatorsReturnNull(t *testing.T) {
 		name   string
 		inputs []FunctionTestInput
 		expect FunctionTestResult
-		fn     fEvalFn
+		fn     executeLogicOfOverload
 	}{
 		{
 			name: "date sub",
@@ -787,7 +788,7 @@ func TestZeroTemporalIntervalOperatorsReturnNull(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, tc.fn)
-			succeed, info := fcTC.Run()
+			succeed, info := fcTC.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -801,7 +802,7 @@ func TestCompleteDateFunctionsReturnNullForZeroTemporal(t *testing.T) {
 		name   string
 		input  FunctionTestInput
 		expect FunctionTestResult
-		fn     fEvalFn
+		fn     executeLogicOfOverload
 	}{
 		{name: "dayofyear date", input: NewFunctionTestInput(types.T_date.ToType(), []types.Date{types.ZeroDate}, nil), expect: NewFunctionTestResult(types.T_uint16.ToType(), false, []uint16{0}, []bool{true}), fn: DayOfYear},
 		{name: "week date", input: NewFunctionTestInput(types.T_date.ToType(), []types.Date{types.ZeroDate}, nil), expect: NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{0}, []bool{true}), fn: DateToWeek},
@@ -827,7 +828,7 @@ func TestCompleteDateFunctionsReturnNullForZeroTemporal(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fcTC := NewFunctionTestCase(proc, []FunctionTestInput{tc.input}, tc.expect, tc.fn)
-			succeed, info := fcTC.Run()
+			succeed, info := fcTC.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -840,7 +841,7 @@ func TestPartialDateFunctionsKeepZeroForZeroTemporal(t *testing.T) {
 		name   string
 		input  FunctionTestInput
 		expect FunctionTestResult
-		fn     fEvalFn
+		fn     executeLogicOfOverload
 	}{
 		{name: "dayofmonth date", input: NewFunctionTestInput(types.T_date.ToType(), []types.Date{types.ZeroDate}, nil), expect: NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{0}, nil), fn: DateToDay},
 		{name: "dayofmonth datetime", input: NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{types.ZeroDatetime}, nil), expect: NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{0}, nil), fn: DatetimeToDay},
@@ -853,7 +854,7 @@ func TestPartialDateFunctionsKeepZeroForZeroTemporal(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fcTC := NewFunctionTestCase(proc, []FunctionTestInput{tc.input}, tc.expect, tc.fn)
-			succeed, info := fcTC.Run()
+			succeed, info := fcTC.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -871,7 +872,7 @@ func TestDateDiffZeroTemporalReturnsNull(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 0}, []bool{true, true}),
 		builtInDateDiff,
 	)
-	succeed, info := fcTC.Run()
+	succeed, info := fcTC.RunAndFree()
 	require.True(t, succeed, info)
 }
 
@@ -887,7 +888,7 @@ func TestTimestampDiffZeroTemporalReturnsNull(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		inputs []FunctionTestInput
-		fn     fEvalFn
+		fn     executeLogicOfOverload
 	}{
 		{
 			name: "datetime",
@@ -964,7 +965,7 @@ func TestTimestampDiffZeroTemporalReturnsNull(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fcTC := NewFunctionTestCase(proc, tc.inputs, expect, tc.fn)
-			succeed, info := fcTC.Run()
+			succeed, info := fcTC.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}

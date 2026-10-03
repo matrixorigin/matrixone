@@ -10454,7 +10454,7 @@ func StBufferQS(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 }
 
 // overlayBinary builds an eval function for a polygon Boolean operation.
-func overlayBinary(functionName string, op geo.BoolOp) fEvalFn {
+func overlayBinary(functionName string, op geo.BoolOp) executeLogicOfOverload {
 	return func(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 		emptyBatch, err := checkBinaryGeometryTypeSRID(functionName, ivecs, length, selectList)
 		if err != nil {
@@ -11069,7 +11069,7 @@ func bboxOverlaps(a, b geo.BBox) bool {
 	return !bboxCovers(a, b) && !bboxCovers(b, a)
 }
 
-func mbrBinary(name string, pred func(a, b geo.BBox) bool) fEvalFn {
+func mbrBinary(name string, pred func(a, b geo.BBox) bool) executeLogicOfOverload {
 	return func(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 		emptyBatch, err := checkBinaryGeometryTypeSRID(name, ivecs, length, selectList)
 		if err != nil {

@@ -1809,7 +1809,7 @@ func geomFromWKBSubtype(payload []byte, maxPoints int64, want string) ([]byte, e
 	return geo.WriteWKB(g), nil
 }
 
-func stFromWKBSubtype(want string) fEvalFn {
+func stFromWKBSubtype(want string) executeLogicOfOverload {
 	return func(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 		maxPoints := maxPointsInGeometryLimit(proc)
 		return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {

@@ -62,7 +62,7 @@ func TestDecimalCastChecksNarrowedPrecision(t *testing.T) {
 			target := NewFunctionTestInput(test.target, test.values, nil)
 			testCase := NewFunctionTestCase(proc, []FunctionTestInput{input, target},
 				NewFunctionTestResult(test.target, true, nil, nil), NewCast)
-			succeed, info := testCase.Run()
+			succeed, info := testCase.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -105,7 +105,7 @@ func TestDecimalCastChecksScaleGrowthAgainstTargetPrecision(t *testing.T) {
 					NewFunctionTestInput(test.target, test.values, nil),
 				},
 				NewFunctionTestResult(test.target, true, nil, nil), NewCast)
-			succeed, info := testCase.Run()
+			succeed, info := testCase.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -140,7 +140,7 @@ func TestDecimalCastChecksScaleGrowthAgainstTargetPrecision(t *testing.T) {
 			testCase := NewFunctionTestCase(proc,
 				[]FunctionTestInput{test.source, NewFunctionTestInput(test.target, test.zero, nil)},
 				NewFunctionTestResult(test.target, true, nil, nil), NewCast)
-			succeed, info := testCase.Run()
+			succeed, info := testCase.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -152,7 +152,7 @@ func TestDecimalCastChecksScaleGrowthAgainstTargetPrecision(t *testing.T) {
 		},
 		NewFunctionTestResult(types.New(types.T_decimal64, 5, 4), false,
 			[]types.Decimal64{99900, 0}, []bool{false, true}), NewCast)
-	succeed, info := legal.Run()
+	succeed, info := legal.RunAndFree()
 	require.True(t, succeed, info)
 }
 
@@ -180,7 +180,7 @@ func TestDecimalCastSafeScaleGrowth(t *testing.T) {
 				NewFunctionTestInput(tc.source, tc.values, []bool{false, false, false, true}),
 				NewFunctionTestInput(tc.target, tc.want, nil),
 			}, NewFunctionTestResult(tc.target, false, tc.want, []bool{false, false, false, true}), NewCast)
-			succeed, info := testCase.Run()
+			succeed, info := testCase.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -238,7 +238,7 @@ func TestDecimalCastCrossWidthSafeScaleGrowth(t *testing.T) {
 				NewFunctionTestInput(tc.source, tc.values, []bool{false, false, false, true}),
 				NewFunctionTestInput(tc.target, tc.want, nil),
 			}, NewFunctionTestResult(tc.target, false, tc.want, []bool{false, false, false, true}), NewCast)
-			ok, info := fc.Run()
+			ok, info := fc.RunAndFree()
 			require.True(t, ok, info)
 		})
 	}
@@ -263,7 +263,7 @@ func TestDecimalCastCrossWidthSafeScaleGrowth(t *testing.T) {
 			NewFunctionTestConstInput(types.New(types.T_decimal64, 18, 2), []types.Decimal64{value}, nil),
 			NewFunctionTestInput(types.New(types.T_decimal128, 20, 4), []types.Decimal128{want}, nil),
 		}, NewFunctionTestResult(types.New(types.T_decimal128, 20, 4), false, []types.Decimal128{want}, nil), NewCast)
-		ok, info := fc.Run()
+		ok, info := fc.RunAndFree()
 		require.True(t, ok, info)
 	}
 }
@@ -297,6 +297,7 @@ func BenchmarkDecimalSafeScaleGrowth(b *testing.B) {
 				NewFunctionTestInput(tc.source, tc.values, nil),
 				NewFunctionTestInput(tc.target, tc.targetValues, nil),
 			}, NewFunctionTestResult(tc.target, false, nil, nil), NewCast)
+			defer fc.Free()
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
@@ -347,7 +348,7 @@ func TestDecimalScaleReductionRoundsOnce(t *testing.T) {
 				NewFunctionTestInput(tc.source, tc.values, nil),
 				NewFunctionTestInput(tc.target, tc.want, nil),
 			}, NewFunctionTestResult(tc.target, false, tc.want, nil), NewCast)
-			succeed, info := caseRun.Run()
+			succeed, info := caseRun.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -365,6 +366,7 @@ func TestDecimal128WideningCastDoesNotRetypeSource(t *testing.T) {
 			NewFunctionTestInput(targetType, []types.Decimal128{}, nil),
 		},
 		NewFunctionTestResult(targetType, false, []types.Decimal128{value, {}}, []bool{false, true}), NewCast)
+	defer testCase.Free()
 	require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
 	result, err := testCase.DebugRun()
 	require.NoError(t, err)
