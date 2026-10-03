@@ -38,6 +38,28 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
+func TestShouldCheckPlainClonePrivileges(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		tenant *TenantInfo
+		want   bool
+	}{
+		{"internal", nil, false},
+		{"sys administrator", &TenantInfo{Tenant: "sys", User: "root", DefaultRole: "moadmin"}, false},
+		{"tenant administrator", &TenantInfo{Tenant: "app", User: "root", DefaultRole: "accountadmin"}, false},
+		{"sys ordinary role", &TenantInfo{Tenant: "sys", User: "reader", DefaultRole: "reader"}, true},
+		{"tenant ordinary role", &TenantInfo{Tenant: "app", User: "reader", DefaultRole: "reader"}, true},
+		{"non-sys moadmin name", &TenantInfo{Tenant: "app", User: "reader", DefaultRole: "moadmin"}, true},
+		{"sys accountadmin name", &TenantInfo{Tenant: "sys", User: "reader", DefaultRole: "accountadmin"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ses := newValidateSession(t)
+			ses.SetTenantInfo(tc.tenant)
+			require.Equal(t, tc.want, shouldCheckPlainClonePrivileges(ses))
+		})
+	}
+}
+
 func TestWithCloneLockContext(t *testing.T) {
 	proc := newValidateSession(t).proc
 	oldCtx, cancel := context.WithCancel(context.Background())
@@ -396,11 +418,16 @@ func TestLockNamedDataBranchCloneSnapshot(t *testing.T) {
 	t.Run("matching snapshot is locked", func(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
+		sourceCtx := defines.AttachAccountId(ctx, 47)
 		bh.sql2result[lockSQL] = newMrsForSnapshotRecord(
 			"id", "snap", 42, "table", "acc", "db", "tbl", 7,
 		)
-		require.NoError(t, lockNamedDataBranchCloneSnapshot(ctx, bh, snapshot))
+		require.NoError(t, lockNamedDataBranchCloneSnapshot(sourceCtx, bh, snapshot))
 		require.Equal(t, []string{lockSQL}, bh.executedSQLs)
+		require.Equal(t, []uint32{47}, bh.executionAccountIDs)
+		accountID, err := defines.GetAccountId(sourceCtx)
+		require.NoError(t, err)
+		require.Equal(t, uint32(47), accountID)
 	})
 
 	for _, tc := range []struct {
@@ -909,9 +936,10 @@ func TestHandleCloneDatabaseWithSourceAuthorizesTargetBeforeIfNotExistsCheck(t *
 			},
 		},
 		&cloneDatabaseSource{
-			opAccountId: 1,
-			toAccountId: 2,
-			snapshot:    &plan.Snapshot{},
+			opAccountId:     1,
+			toAccountId:     2,
+			snapshot:        &plan.Snapshot{},
+			requestSnapshot: &plan.Snapshot{},
 		},
 	)
 	require.EqualError(t, err, "internal error: only sys can clone table to another account")

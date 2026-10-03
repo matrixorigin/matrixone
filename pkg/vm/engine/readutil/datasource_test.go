@@ -17,9 +17,15 @@ package readutil
 import (
 	"context"
 	"fmt"
+	rt "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"math/rand"
 	"slices"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
@@ -238,6 +244,64 @@ func TestFastApplyDeletesByRowIds(t *testing.T) {
 
 	idx := slices.Index(leftRows, 6305)
 	require.Equal(t, -1, idx)
+}
+
+func TestFastApplyDeletesByRowIdsSortedSingleton(t *testing.T) {
+	objectID := types.NewObjectid()
+	blockID := types.NewBlockidWithObjectID(&objectID, 1)
+	otherBlockID := types.NewBlockidWithObjectID(&objectID, 2)
+	deletes := make([]types.Rowid, 0, 1026)
+	for offset := uint32(0); offset < 1024; offset++ {
+		deletes = append(deletes, types.NewRowid(&blockID, offset*2))
+	}
+	deletes = append(deletes, types.NewRowid(&blockID, 2046))
+	deletes = append(deletes, types.NewRowid(&otherBlockID, 1))
+
+	for _, tc := range []struct {
+		name   string
+		offset int64
+		want   []int64
+	}{
+		{name: "first", offset: 0},
+		{name: "middle", offset: 1024},
+		{name: "last and duplicate", offset: 2046},
+		{name: "gap", offset: 1025, want: []int64{1025}},
+		{name: "after last", offset: 2047, want: []int64{2047}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rows := []int64{tc.offset}
+			FastApplyDeletesByRowIds(&blockID, &rows, nil, deletes, true)
+			if len(tc.want) == 0 {
+				require.Empty(t, rows)
+			} else {
+				require.Equal(t, tc.want, rows)
+			}
+		})
+	}
+
+	rows := []int64{1}
+	FastApplyDeletesByRowIds(&otherBlockID, &rows, nil, deletes, true)
+	require.Empty(t, rows)
+}
+
+func BenchmarkFastApplyDeletesByRowIdsSortedSingleton(b *testing.B) {
+	objectID := types.NewObjectid()
+	blockID := types.NewBlockidWithObjectID(&objectID, 1)
+	for _, size := range []int{8, 1024} {
+		deletes := make([]types.Rowid, size)
+		for i := range deletes {
+			deletes[i] = types.NewRowid(&blockID, uint32(i*2))
+		}
+		for _, offset := range []int64{0, int64(size - 1), int64(size * 2)} {
+			b.Run(fmt.Sprintf("size=%d/offset=%d", size, offset), func(b *testing.B) {
+				b.ReportAllocs()
+				for i := 0; i < b.N; i++ {
+					rows := []int64{offset}
+					FastApplyDeletesByRowIds(&blockID, &rows, nil, deletes, true)
+				}
+			})
+		}
+	}
 }
 
 func TestFastApplyDeletesByRowIds2(t *testing.T) {
@@ -472,4 +536,94 @@ func TestFastApplyDeletesByRowOffsets(t *testing.T) {
 	foo(100, 100)
 	foo(10, 300)
 	foo(300, 10)
+}
+
+// Count terminal calls after an explicit completion signal.
+type prefetchCountingFS struct {
+	fileservice.FileService
+	calls atomic.Int32
+	done  chan struct{}
+}
+
+func (fs *prefetchCountingFS) PrefetchFile(context.Context, string) error {
+	fs.calls.Add(1)
+	fs.done <- struct{}{}
+	return nil
+}
+
+type prefetchCountingTombstones struct {
+	engine.Tombstoner
+	calls  int
+	blocks []objectio.Blockid
+}
+
+func (ts *prefetchCountingTombstones) PrefetchTombstones(_ context.Context, _ string, _ fileservice.FileService, bids []objectio.Blockid) {
+	ts.calls++
+	ts.blocks = append(ts.blocks, bids...)
+}
+func TestRemoteDataSourceFilteredPrefetchRetainsTombstones(t *testing.T) {
+	proc := testutil.NewProc(t)
+	t.Cleanup(proc.Free)
+	for _, skip := range []bool{false, true} {
+		t.Run(fmt.Sprint(skip), func(t *testing.T) {
+			fs := &prefetchCountingFS{done: make(chan struct{}, 4)}
+			tombstones := &prefetchCountingTombstones{}
+			data := NewBlockListRelationData(0)
+			for i := 0; i < 4; i++ {
+				loc := objectio.NewRandomLocation(uint16(i), 1)
+				block := objectio.BlockInfo{BlockID: types.NewBlockidWithObjectID(new(types.Objectid), uint16(i)), MetaLoc: objectio.ObjectLocation(loc)}
+				data.AppendBlockInfo(&block)
+			}
+			require.NoError(t, data.AttachTombstones(tombstones))
+			ds := &RemoteDataSource{ctx: proc.Ctx, proc: proc, fs: fs, data: data}
+			ctx := proc.Ctx
+			if skip {
+				ctx = fileservice.WithFileServicePolicy(ctx, fileservice.SkipFullFilePreloads)
+			}
+			rt.SetupServiceBasedRuntime(t.Name(), rt.DefaultRuntime())
+			proc.Base.LockService = &prefetchTestLockService{id: t.Name()}
+			t.Cleanup(func() { proc.Base.LockService = nil })
+			if !skip {
+				ioutil.Start(proc.GetService())
+				t.Cleanup(func() { ioutil.Stop(proc.GetService()) })
+			}
+			for i := 0; i < 4; i++ {
+				blk, state, err := ds.Next(ctx, nil, nil, nil, 0, nil, nil, nil)
+				require.NoError(t, err)
+				require.Equal(t, engine.Persisted, state)
+				require.Equal(t, data.GetBlockInfo(i).BlockID, blk.BlockID)
+			}
+			_, state, err := ds.Next(ctx, nil, nil, nil, 0, nil, nil, nil)
+			require.NoError(t, err)
+			require.Equal(t, engine.End, state)
+			if !skip {
+				select {
+				case <-fs.done:
+				case <-time.After(5 * time.Second):
+					t.Fatal("data prefetch did not execute")
+				}
+			}
+			if !skip {
+				ioutil.Stop(proc.GetService())
+			}
+			expected := int32(1)
+			if skip {
+				expected = 0
+			}
+			require.Equal(t, expected, fs.calls.Load())
+			require.Equal(t, 1, tombstones.calls)
+			require.Len(t, tombstones.blocks, 4)
+			require.Equal(t, 4, ds.batchPrefetchCursor)
+		})
+	}
+}
+
+// A filtered scan must not submit data prefetch: this service intentionally has no IO pipeline.
+type prefetchTestLockService struct {
+	lockservice.LockService
+	id string
+}
+
+func (ls *prefetchTestLockService) GetConfig() lockservice.Config {
+	return lockservice.Config{ServiceID: ls.id}
 }

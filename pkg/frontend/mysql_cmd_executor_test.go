@@ -6244,6 +6244,9 @@ func Test_statement_type(t *testing.T) {
 		kases := []kase{
 			{&tree.CreateTable{}},
 			{&tree.CreateTable{IsAsSelect: true}},
+			{&tree.RenameTable{}},
+			{&tree.PrepareStmt{Stmt: &tree.RenameTable{}}},
+			{&tree.PrepareString{Sql: "rename table old_name to new_name"}},
 			{&tree.Insert{}},
 			{&tree.BeginTransaction{}},
 			{&tree.ShowTables{}},
@@ -6264,6 +6267,15 @@ func Test_statement_type(t *testing.T) {
 
 		convey.So(IsDDL(&tree.CreateTable{}), convey.ShouldBeTrue)
 		convey.So(isImplicitCommitStatement(&tree.TruncateTable{}), convey.ShouldBeTrue)
+		convey.So(isImplicitCommitStatement(&tree.RenameTable{}), convey.ShouldBeTrue)
+		convey.So(isImplicitCommitStatement(&tree.PrepareStmt{Stmt: &tree.RenameTable{}}), convey.ShouldBeFalse)
+		convey.So(isImplicitCommitStatement(&tree.AlterTable{}), convey.ShouldBeFalse)
+		convey.So(needToFinishTransactionAtStatementEnd(&ExecCtx{
+			ses: &backSession{}, stmt: &tree.RenameTable{},
+		}), convey.ShouldBeFalse)
+		convey.So(needToFinishTransactionAtStatementEnd(&ExecCtx{
+			stmt: &tree.RenameTable{}, txnOpt: FeTxnOption{implicitCommitBefore: true},
+		}), convey.ShouldBeTrue)
 		convey.So(isImplicitCommitStatement(&tree.CreateTable{}), convey.ShouldBeFalse)
 		convey.So(IsDropStatement(&tree.DropTable{}), convey.ShouldBeTrue)
 		convey.So(IsAdministrativeStatement(&tree.CreateAccount{}), convey.ShouldBeTrue)
@@ -7006,7 +7018,7 @@ func TestCreatePrepareStmtRestoresCurrentExecCtx(t *testing.T) {
 		return nil, moerr.NewInternalError(ctx, "stop after context check")
 	}
 
-	_, err := createPrepareStmt(currentExecCtx, ses, "select 1",
+	_, err := createPrepareStmtInSession(currentExecCtx, ses, ses, "select 1",
 		tree.NewPrepareStmt("s", &tree.Select{}), &tree.Select{})
 	require.Error(t, err)
 	require.True(t, checked)
@@ -7231,7 +7243,7 @@ func TestExecuteAnalyzeDerivedQueryRestoresResponderOnSuccess(t *testing.T) {
 	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 	txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0), nil).AnyTimes()
 	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).AnyTimes()
-	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 	ses.txnHandler.storage = eng
@@ -7308,7 +7320,7 @@ func TestExecuteAnalyzeDerivedQueryPreservesResponderProperties(t *testing.T) {
 		return 0, nil
 	}).AnyTimes()
 	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).AnyTimes()
-	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 	ses.txnHandler.storage = eng
@@ -7493,7 +7505,7 @@ func newAnalyzeHandlerTestSession(t *testing.T, ctrl *gomock.Controller) (*Sessi
 	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 	txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
 	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).AnyTimes()
-	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 	ses.txnHandler.storage = eng
@@ -7648,6 +7660,26 @@ func TestPreparedSetExpressionRetryKeepsGlobalParserOrdinal(t *testing.T) {
 	require.Equal(t, 2, secondParam.Offset)
 }
 
+func TestPreparedQueryRetryKeepsPrunedParserOrdinal(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	ses := newTestSession(t, gomock.NewController(t))
+	defer ses.Close()
+	ses.SetSql("execute p")
+	for _, sql := range []string{
+		"select b from (select ? a, ? b) d",
+		"with d as (select ? a, ? b) select b from d",
+	} {
+		func() {
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			retryPlan, err := buildPlanForCompileRetry(ctx, ses, plan.NewEmptyCompilerContext(), stmt, false, nil)
+			require.NoError(t, err)
+			require.Equal(t, []int32{1}, queryParamPositions(retryPlan.GetQuery()))
+		}()
+	}
+}
+
 func TestBuildPlanForCompileRetryReappliesPreparedRuntimeSpecialization(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select coalesce(?, ?) from dual", 1)
@@ -7665,7 +7697,7 @@ func TestBuildPlanForCompileRetryReappliesPreparedRuntimeSpecialization(t *testi
 			PrepareParamKind:    vector.PrepareParamDecimal,
 			EnableNumericPrefix: true,
 		},
-	}, true)
+	})
 	retryPlan, err := buildPlanForCompileRetry(
 		ctx, nil, plan.NewEmptyCompilerContext(), stmt, true, retry)
 	require.NoError(t, err)
@@ -7710,7 +7742,11 @@ func TestBuildPlanForCompileRetryReprovesPreparedJoin(t *testing.T) {
 	}
 	retry := newPreparedExecutionRetry([]any{
 		plan.ParamValue{Value: "01:00:00"}, plan.ParamValue{Value: int64(1)},
-	}, false, false, true)
+	})
+	retry.bindings = []plan.PreparedSourceBinding{
+		{Position: 0, Type: types.T_text.ToType()},
+		{Position: 1, Type: types.T_int64.ToType()},
+	}
 	safe, err := buildPlanForCompileRetry(ctx, ses, compilerCtx, stmt, false, retry)
 	require.NoError(t, err)
 	require.NotNil(t, safe.GetQuery())
@@ -7730,9 +7766,10 @@ func TestBuildPlanForCompileRetryReprovesPreparedJoin(t *testing.T) {
 	require.Positive(t, scanFilters(again.GetQuery()), "the earlier unsafe retry must not retain its barrier")
 
 	previousCtx := compilerCtx.GetContext()
-	_, err = withPreparedJoinDiagnosticFreeContext(ctx, compilerCtx, func() (*plan.Plan, error) {
-		return nil, moerr.NewInternalErrorNoCtx("injected local replan failure")
-	})
+	invalid, err := parsers.ParseOne(ctx, dialect.MYSQL, "select missing_column", 1)
+	require.NoError(t, err)
+	defer invalid.Free()
+	_, err = buildPreparedBoundQuery(ctx, ses, compilerCtx, invalid, nil, nil)
 	require.Error(t, err)
 	require.Same(t, previousCtx, compilerCtx.GetContext())
 }
@@ -7749,7 +7786,7 @@ func TestBuildPlanForPreparedExpressionRetryPreservesBinaryRuntimeType(t *testin
 			IsBinaryProtocol: true,
 			RuntimeType:      types.T_int64.ToType(),
 			HasRuntimeType:   true,
-		}}, true))
+		}}))
 	require.NoError(t, err)
 	require.Empty(t, queryParamPositions(retryPlan.GetQuery()), retryPlan.String())
 	root := retryPlan.GetQuery().Nodes[retryPlan.GetQuery().Steps[len(retryPlan.GetQuery().Steps)-1]]
@@ -9859,7 +9896,7 @@ func TestExecRequestStmtPrepareAcceptsExplainAndSetVariable(t *testing.T) {
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
-	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
 	txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
 	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 	txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
@@ -11006,6 +11043,16 @@ func Test_checkModify(t *testing.T) {
 	}
 }
 
+func TestCheckModifyRebindsViewMetadataUdf(t *testing.T) {
+	queryPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{ViewMetadataDependsOnUdf: true}}}
+	changed, err := checkModify(queryPlan, func(string, string, *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+		t.Fatal("UDF-backed SHOW must rebind without relying on a table schema change")
+		return nil, nil, nil
+	})
+	require.NoError(t, err)
+	require.True(t, changed)
+}
+
 func TestCheckModifyValidatesCatalogDependencies(t *testing.T) {
 	snapshot := &plan.Snapshot{
 		TS: &timestamp.Timestamp{PhysicalTime: 42, LogicalTime: 7},
@@ -11488,4 +11535,77 @@ func TestPreparedGroupConcatFloorCapturedWithoutPhysicalCompile(t *testing.T) {
 		require.Equal(t, uint64(1024), prepared.groupConcatMaxLenFloor, "the logical prepared owner retains its original floor")
 		return nil
 	})
+}
+
+type statsAdmissionStopResponse struct {
+	Responser
+	err error
+}
+
+func (r *statsAdmissionStopResponse) RespPreMeta(*ExecCtx, any) error { return r.err }
+
+func TestOrdinaryCacheStatsAdmissionUsesGenerationBaseline(t *testing.T) {
+	for _, tc := range []struct {
+		name, sql string
+		rows      float64
+		rebuild   bool
+	}{
+		{"minor point growth", "select n_name from nation where n_nationkey=1", 129, false},
+		{"material point growth", "select n_name from nation where n_nationkey=1", 256, true},
+		{"stable range", "select n_name from nation where n_nationkey>=1", 128, false},
+		{"minor range growth", "select n_name from nation where n_nationkey>=1", 129, false},
+		{"material range growth", "select n_name from nation where n_nationkey>=1", 256, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := plan.NewMockCompilerContext(false)
+			ctx := &preparedStatsTestCompiler{preparedTestCompiler: &preparedTestCompiler{CompilerContext: base, proc: base.GetProcess()}, stats: &pbstats.StatsInfo{TableCnt: 128}}
+			ses, prepared, initialCW, ec := newPreparedExecuteEnvForSQLWithCompilerContext(t, 229, tc.sql, ctx)
+			defer prepared.Close()
+			defer initialCW.Free()
+			ses.SetDatabaseName("tpch")
+			ses.GetTxnCompileCtx().SetDatabase("tpch")
+			defer ses.GetTxnCompileCtx().Close()
+			stop := fmt.Errorf("stop after compile before result execution")
+			ec.resper = &statsAdmissionStopResponse{Responser: ses.GetResponser(), err: stop}
+			_, table, err := base.Resolve("tpch", "nation", nil)
+			require.NoError(t, err)
+			installStatsAdmissionStorage(t, ses, table, func() *pbstats.StatsInfo { return ctx.stats })
+			stmts, err := mysql.Parse(ec.reqCtx, tc.sql, 1)
+			require.NoError(t, err)
+			cached, err := plan.BuildPlan(ctx, stmts[0], false)
+			require.NoError(t, err)
+			// Supply a real captured stats count, rather than relying on the TPCH
+			// mock's default estimate, and keep the schema/snapshot checks active.
+			for _, node := range cached.GetQuery().Nodes {
+				if node.NodeType == plan0.Node_TABLE_SCAN {
+					node.Stats.TableCnt = 128
+				}
+			}
+			input := &UserInput{sql: tc.sql}
+			input.genHash()
+			ses.cachePlan(input.getHash(), stmts, []*plan0.Plan{cached})
+			defer ses.cleanCache()
+			ec.input = input
+			cws, err := GetComputationWrapper(ec, "tpch", "root", nil, ses.GetProc(), ses)
+			require.NoError(t, err)
+			require.Len(t, cws, 1)
+			cw := cws[0].(*TxnComputationWrapper)
+			defer cw.Free()
+			require.Same(t, cached, cw.Plan())
+			require.True(t, cw.planGenerationReused)
+			ec.cw, ec.cws, ec.stmt = cw, cws, cw.GetAst()
+			ctx.stats.TableCnt = tc.rows
+			err = dispatchStmt(ses, statistic.NewStatsArray(), ec)
+			require.ErrorIs(t, err, stop)
+			if tc.rebuild {
+				require.NotSame(t, cached, cw.Plan())
+				require.False(t, cw.planGenerationReused)
+				require.False(t, ses.isCached(input.getHash()))
+			} else {
+				require.Same(t, cached, cw.Plan())
+				require.True(t, cw.planGenerationReused)
+				require.True(t, ses.isCached(input.getHash()))
+			}
+		})
+	}
 }

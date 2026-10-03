@@ -351,8 +351,8 @@ type PrepareStmt struct {
 	// protocolVersion is the cluster protocol used to build PreparePlan.
 	// A version change can alter internal function IDs in generated DML plans.
 	protocolVersion int64
-	// needsRebuild is set when execution-time retry discovers that the cached
-	// prepared plan generation is stale before frontend metadata catches up.
+	// needsRebuild marks a stale prepared plan after execution-time retry or
+	// a session planning setting changes. EXECUTE owns the actual rebuild.
 	needsRebuild bool
 	// compileNeedsRebuild remembers that this statement had an eligible cached
 	// topology before it was invalidated, even after that topology is released.
@@ -361,15 +361,12 @@ type PrepareStmt struct {
 	// ordinary COM_STMT executions never scan or copy the cached plan. Direct
 	// result positions identify parameters whose binary runtime type is also the
 	// visible result-column type.
-	// numericPrefixConsumer belongs to numericPrefixConsumerPlan. Prepared plans
-	// are immutable within one generation; replacing the plan invalidates this
-	// cached capability and refreshes it once before execution.
-	numericPrefixConsumerPlan     *plan.Plan
-	numericPrefixConsumer         bool
-	joinDiagnosticCandidatePlan   *plan.Plan
-	joinDiagnosticCandidate       bool
-	directResultParamPositions    []int32
-	directResultParamPositionsSet bool
+	// Percentile configuration is fixed by a value during compilation. Cache
+	// this static trait with the conservative generation rather than walking
+	// the plan on every EXECUTE.
+	percentileParamPlan        *plan.Plan
+	hasPercentileParams        bool
+	directResultParamPositions []int32
 	// fixedIntegerParamPositions identifies parameters with a fixed unsigned-
 	// integer contract (LIMIT/OFFSET and LAG/LEAD offsets). It is installed
 	// with each prepared-plan generation so binary EXECUTE never walks the plan
@@ -386,12 +383,6 @@ type PrepareStmt struct {
 	jsonComparisonParamPositions []int32
 	jsonMemberOfParamPositions   []int32
 	paramConcreteTypes           []types.T
-	// geometrySRID*ParamPositions are computed once per prepared-plan
-	// generation. EXECUTE only encodes the values at these positions; it must
-	// not rediscover geometry dependencies by walking the whole plan.
-	geometrySRIDParamPositions       []int32
-	geometrySRIDSourceParamPositions []int32
-	geometrySRIDPositionsPlan        *plan.Plan
 	// numericOverloadParamPositions is computed from explicit plan metadata
 	// once per prepared-plan generation.  It identifies ABS arguments whose
 	// runtime integer/decimal domain may require overload rebinding without
@@ -401,9 +392,6 @@ type PrepareStmt struct {
 	// GENERATE_SERIES endpoint positions. Only these markers retain a temporal
 	// COM_STMT_EXECUTE packet domain instead of generic text transport.
 	temporalRuntimeParamPositions []int32
-	// A parameterized GENERATE_SERIES can derive DATETIME scale from text
-	// values or an interval step, even when protocol parameter types are stable.
-	parameterizedGenerateSeries bool
 	// bitCountOverloadParamPositions owns BIT_COUNT's asymmetric prepared
 	// contract. Each marker starts with the binary-string default; after an
 	// actual numeric value reparses the statement, later text/BLOB values keep
@@ -426,25 +414,15 @@ type PrepareStmt struct {
 	// stable parameter semantic category. The cached runtime plan retains
 	// ParamRefs, so equivalent values reuse the compile without embedding the
 	// preceding execution's literal.
-	runtimeSpecializationKey string
-	runtimePlan              *plan.Plan
-	runtimeCompile           *compile.Compile
+	runtimeSpecializationKey    string
+	runtimePlan                 *plan.Plan
+	runtimeDiagnosticCandidates []*plan.Expr
+	runtimeCompile              *compile.Compile
 
 	// schedulingSQLMode freezes the lexical mode used when Sql was prepared.
 	// EXECUTE must not reinterpret optimizer comments after session sql_mode
 	// changes.
 	schedulingSQLMode string
-
-	// runtimeSpecializationPlan records the plan for which the static
-	// execute-time specialization decision was made. Most prepared DML only
-	// needs parameter values and can reuse the prepare-time compile; keeping the
-	// decision with the plan avoids copying and walking the whole plan on every
-	// EXECUTE.
-	runtimeSpecializationPlan   *plan.Plan
-	runtimeSpecializationNeeded bool
-	// runtimeIntegerAssignmentParams belongs to the same plan generation. These
-	// markers alone do not force specialization for ordinary integer packets.
-	runtimeIntegerAssignmentParams []int32
 }
 
 // preparedStmtCursor is the server-side result retained between
@@ -849,6 +827,7 @@ func (prepareStmt *PrepareStmt) installRuntimeSpecializationCache(
 	key string,
 	runtimePlan *plan.Plan,
 	runtimeCompile *compile.Compile,
+	diagnosticCandidates []*plan.Expr,
 ) *compile.Compile {
 	oldRuntimeCompile := prepareStmt.runtimeCompile
 	// AP scopes contain execution-specific placement and scan state. Cache only
@@ -861,6 +840,7 @@ func (prepareStmt *PrepareStmt) installRuntimeSpecializationCache(
 	}
 	prepareStmt.runtimeSpecializationKey = key
 	prepareStmt.runtimePlan = runtimePlan
+	prepareStmt.runtimeDiagnosticCandidates = diagnosticCandidates
 	prepareStmt.runtimeCompile = runtimeCompile
 	if oldRuntimeCompile == runtimeCompile {
 		return nil
@@ -875,6 +855,7 @@ func (prepareStmt *PrepareStmt) clearRuntimeSpecializationCache() {
 	oldRuntimeCompile := prepareStmt.runtimeCompile
 	prepareStmt.runtimeSpecializationKey = ""
 	prepareStmt.runtimePlan = nil
+	prepareStmt.runtimeDiagnosticCandidates = nil
 	prepareStmt.runtimeCompile = nil
 	prepareStmt.releaseRuntimeCompile(oldRuntimeCompile)
 }
@@ -910,7 +891,7 @@ func (prepareStmt *PrepareStmt) Close() {
 		prepareStmt.ColDefData = nil
 	}
 	prepareStmt.directResultParamPositions = nil
-	prepareStmt.directResultParamPositionsSet = false
+	prepareStmt.percentileParamPlan = nil
 	prepareStmt.remapDb = nil
 	prepareStmt.getFromSendLongData = nil
 }
@@ -1102,7 +1083,6 @@ type FeSession interface {
 	SendRows() int64
 	SetTStmt(stmt *motrace.StatementInfo)
 	GetUUIDString() string
-	DisableTrace() bool
 	Close()
 	Clear()
 	getCachedPlan(sql string) *cachedPlan
@@ -1366,7 +1346,6 @@ type feSessionImpl struct {
 	sqlCount     uint64
 	uuid         uuid.UUID
 	debugStr     string
-	disableTrace bool
 	respr        Responser
 	runSQLTokens []uint64
 	//refreshed once
@@ -1510,10 +1489,6 @@ func (ses *feSessionImpl) GetDatabaseName() string {
 
 func (ses *feSessionImpl) GetUserName() string {
 	return ses.respr.GetStr(USERNAME)
-}
-
-func (ses *feSessionImpl) DisableTrace() bool {
-	return ses.disableTrace
 }
 
 func (ses *feSessionImpl) SetMemPool(mp *mpool.MPool) {
@@ -1915,6 +1890,20 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 		return
 	}
 
+	// Both defaults affect the physical vector plan. Compare normalized values
+	// so equivalent SET spellings preserve warm plans.
+	vectorModeVariable := name == "enable_vector_auto_mode_by_default" || name == "enable_vector_prefilter_by_default"
+	oldVectorMode := false
+	if vectorModeVariable {
+		var oldValue interface{}
+		if oldValue, err = ses.GetSessionSysVar(name); err != nil {
+			return err
+		}
+		if oldVectorMode, err = valueIsBoolTrue(oldValue); err != nil {
+			return err
+		}
+	}
+
 	var txnIsolation pbtxn.TxnIsolation
 	setTxnIsolation := isTransactionIsolationSystemVariable(name)
 	if setTxnIsolation {
@@ -1960,6 +1949,19 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	if err == nil && name == "div_precision_increment" {
 		if increment, ok := val.(int64); ok && increment != oldDivPrecisionIncrement {
 			ses.cleanCache()
+		}
+	}
+	if err == nil && vectorModeVariable {
+		// val has already passed the BOOL variable conversion.
+		if (val.(int8) != 0) != oldVectorMode {
+			ses.cleanCache()
+			// Preserve prepared handles and runtime buffers; EXECUTE owns rebuilding
+			// their existing plan through the established needsRebuild path.
+			ses.mu.Lock()
+			for _, prepared := range ses.prepareStmts {
+				prepared.needsRebuild = true
+			}
+			ses.mu.Unlock()
 		}
 	}
 	if err == nil && setTxnIsolation {

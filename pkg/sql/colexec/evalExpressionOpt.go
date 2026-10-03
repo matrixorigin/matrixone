@@ -64,8 +64,12 @@ func getReadonlyResultFromExpression(
 	if executor, err = NewExpressionExecutor(proc, planExpr); err != nil {
 		return nil, nil, err
 	}
+	defer func() {
+		if freeMethod == nil {
+			executor.Free()
+		}
+	}()
 	if vec, err = executor.Eval(proc, data, nil); err != nil {
-		executor.Free()
 		return nil, nil, err
 	}
 
@@ -79,12 +83,12 @@ func GetWritableResultFromExpression(
 
 	var executor ExpressionExecutor
 	if executor, err = NewExpressionExecutor(proc, planExpr); err == nil {
+		defer executor.Free()
 		if vec, err = executor.Eval(proc, data, nil); err == nil {
 			if !modifyResultOwnerToOuter(executor) {
 				vec, err = vec.Dup(proc.Mp())
 			}
 		}
-		executor.Free()
 	}
 	return vec, err
 }

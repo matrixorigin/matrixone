@@ -163,11 +163,14 @@ func TestDirectCentroidLoadFeedsRankAndProbeSearch(t *testing.T) {
 	idxcfg.Ivfflat.VectorType = int32(types.T_array_float32)
 	tblcfg := vectorindex.IndexTableConfig{DbName: "db", IndexTable: "centroids"}
 	idx := &IvfflatSearchIndex[float32]{}
+	require.NoError(t, idx.LoadIndex(sqlproc, idxcfg, tblcfg, 1))
+	idx.Destroy()
+	idx = &IvfflatSearchIndex[float32]{forceCPURoute: true}
 
 	require.NoError(t, idx.LoadIndex(sqlproc, idxcfg, tblcfg, 1))
 	t.Cleanup(idx.Destroy)
 	require.Equal(t, int64(7), idx.Version)
-	require.NotNil(t, idx.Centroids)
+	require.IsType(t, (*brute_force.GoBruteForceIndex[float32, float32])(nil), idx.Centroids)
 	ranked, err := idx.rankCentroids(sqlproc, []float32{0, 0}, idxcfg)
 	require.NoError(t, err)
 	require.Equal(t, []int64{0}, ranked)

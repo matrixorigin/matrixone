@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
@@ -150,6 +151,35 @@ func TestIssue28909DirectFunctionWireMetadata(t *testing.T) {
 		require.NoError(t, metadata.Close())
 		require.Equal(t, 6, count)
 		rows, err = db.QueryContext(ctx, "select pos,cmp,id from "+schema+".stored order by id")
+		require.NoError(t, err)
+		defer rows.Close()
+		check(rows, []string{"INT", "INT", "INT"}, want)
+		require.NoError(t, rows.Err())
+
+		// Diagnostic-only fault injection: keep the naturally negotiated floor,
+		// but lower the local runtime protocol. Heartbeats do not rewrite this
+		// value, unlike the authoring floor. This is not a cluster-convergence
+		// reproduction; it verifies the public error and DDL rejection atomicity.
+		func() {
+			rt := moruntime.ServiceRuntime(cn.GetServiceConfig().CN.UUID)
+			old, present := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+			require.True(t, present)
+			defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, old)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(71))
+			_, err := db.ExecContext(ctx, "create view "+schema+".rejected as "+projection)
+			var mysqlErr *mysql.MySQLError
+			require.ErrorAs(t, err, &mysqlErr)
+			require.Equal(t, uint16(20105), mysqlErr.Number)
+			require.Contains(t, mysqlErr.Message, fmt.Sprintf("CN %q: local protocol=71, authoring floor=", cn.GetServiceConfig().CN.UUID))
+			var count int
+			require.NoError(t, db.QueryRowContext(ctx, "select count(*) from information_schema.tables where table_schema=? and table_name='rejected'", schema).Scan(&count))
+			require.Zero(t, count)
+			require.NoError(t, db.QueryRowContext(ctx, "select count(*) from "+schema+".src").Scan(&count))
+			require.Equal(t, 4, count, "rejection does not affect existing data or ordinary SQL")
+		}()
+		// The same name is usable after recovery, without dropping a ghost object.
+		execSQLRequire(t, ctx, db, "create view "+schema+".rejected as "+projection)
+		rows, err = db.QueryContext(ctx, "select pos,cmp,id from "+schema+".rejected order by id")
 		require.NoError(t, err)
 		defer rows.Close()
 		check(rows, []string{"INT", "INT", "INT"}, want)

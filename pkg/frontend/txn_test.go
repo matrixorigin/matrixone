@@ -1131,6 +1131,13 @@ func TestLineageOwnerLifecycleValidationCoversEveryTerminalCommitPath(t *testing
 	}
 	paths := []terminalCommitPath{
 		{
+			name: "implicit commit before rename",
+			run: func(th *TxnHandler, execCtx *ExecCtx) error {
+				execCtx.stmt = &tree.RenameTable{}
+				return th.commitBeforeStatement(execCtx)
+			},
+		},
+		{
 			name: "explicit commit",
 			run: func(th *TxnHandler, execCtx *ExecCtx) error {
 				execCtx.txnOpt.byCommit = true
@@ -1893,10 +1900,6 @@ func (txnop *testTxnOp) AppendEventCallback(event client.EventType, callbacks ..
 func (txnop *testTxnOp) Debug(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error) {
 	//TODO implement me
 	panic("implement me")
-}
-
-func (txnop *testTxnOp) NextSequence() uint64 {
-	return 0
 }
 
 func (txnop *testTxnOp) EnterRunSqlWithTokenAndSQL(_ context.CancelFunc, _ string) uint64 {

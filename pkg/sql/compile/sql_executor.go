@@ -277,8 +277,7 @@ func (s *sqlExecutor) adjustOptions(
 				opts.AccountID(),
 				"",
 				"sql-executor",
-				0),
-			client.WithDisableTrace(!opts.EnableTrace()))
+				0))
 		txnOp, err := s.txnClient.New(
 			ctx,
 			opts.MinCommittedTS(),
@@ -522,6 +521,7 @@ func (exec *txnExecutor) Exec(
 		return cc
 	}
 	compileContext := newCompileContext(exec.ctx)
+	proc.Base.SessionInfo.CompilerContext = compileContext
 	buildPlan := func(ctx *compilerContext, prepared bool) (*plan.Plan, error) {
 		pn, err := plan.BuildPlan(ctx, stmts[0], prepared)
 		if err == nil && statementOption.AllowMoColumnsUpdate() {

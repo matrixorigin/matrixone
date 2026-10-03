@@ -233,6 +233,7 @@ func genViewTableDef(
 ) (*plan.TableDef, error) {
 	var tableDef plan.TableDef
 	dependencyCapture := newViewDependencyCaptureContext(ctx)
+	dependencyCapture.metadataBudget = !forAuthoring
 	ctx = dependencyCapture
 	// The optimizer may constant-fold a protocol-sensitive function out of a
 	// persisted view. Keep the requirement observed on the bound plan so the
@@ -2411,6 +2412,10 @@ func bindLegacyChecks(
 	}
 	defer stmt.Free()
 
+	if _, ok := stmt.(*tree.CloneTable); ok {
+		// CLONE stores provenance SQL; structured constraints are already persisted.
+		return nil, true, nil
+	}
 	createStmt, ok := stmt.(*tree.CreateTable)
 	if !ok {
 		return nil, true, moerr.NewInvalidInput(
@@ -2491,7 +2496,7 @@ func equalCheckDefs(left, right []*plan.CheckDef) bool {
 // silently choose between two valid but semantically different parses.
 func recoverLegacyChecks(ctx CompilerContext, tableDef *plan.TableDef) error {
 	if tableDef == nil || len(tableDef.Checks) > 0 || tableDef.Createsql == "" ||
-		tableDef.TableType == catalog.SystemExternalRel ||
+		(tableDef.TableType == catalog.SystemExternalRel || tableDef.TableType == catalog.SystemViewRel) ||
 		!strings.Contains(strings.ToUpper(tableDef.Createsql), "CHECK") {
 		return nil
 	}
@@ -5775,12 +5780,6 @@ func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*Plan, err
 		IfExists: stmt.IfExists,
 		Database: string(stmt.Name),
 	}
-	if publishing, err := ctx.IsPublishing(dropDB.Database); err != nil {
-		return nil, err
-	} else if publishing {
-		return nil, moerr.NewInternalErrorf(ctx.GetContext(), "can not drop database '%v' which is publishing", dropDB.Database)
-	}
-
 	if ctx.DatabaseExists(string(stmt.Name), nil) {
 		databaseId, err := ctx.GetDatabaseId(string(stmt.Name), nil)
 		if err != nil {

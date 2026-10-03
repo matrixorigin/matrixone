@@ -39,7 +39,6 @@ import (
 // A cluster restore replaces cluster-wide catalog tables. Keep this regression
 // in the isolated package so a failed restore cannot poison shared issue tests.
 func TestIssue26640ClusterRestoreRebindsSubscriptionPrivileges(t *testing.T) {
-	releaseSharedSingleCNCluster(t)
 	cluster, err := embed.StartTestCluster(
 		embed.WithCNCount(2),
 		embed.WithPreStart(func(service embed.ServiceOperator) {
@@ -286,6 +285,14 @@ func runIssue28742CanceledRestoreWithMetadataProbe(
 	}
 
 	cancelRestore()
+	// Keep the barrier installed until the server has observed cancellation.
+	// Releasing it immediately can let restore create an account before its
+	// request context is canceled, even though ExecContext already returned.
+	require.Eventually(t, func() bool {
+		waiters, _, exists := fault.TriggerFault(restoreGateWaiters)
+		return exists && waiters == 0
+	}, 30*time.Second, 10*time.Millisecond,
+		"canceled restore did not leave the lifecycle barrier")
 	_, err = fault.RemoveFaultPoint(parent, restoreGate)
 	require.NoError(t, err)
 	select {

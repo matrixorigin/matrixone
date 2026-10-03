@@ -6036,7 +6036,12 @@ func getSqlForCheckHasDBRefersTo(db string) string {
 	sb := strings.Builder{}
 	sb.WriteString("select count(*) > 0 from `mo_catalog`.`mo_foreign_keys` ")
 	dbLit := quoteSQLStringLiteral(db)
-	sb.WriteString(fmt.Sprintf("where refer_db_name = %s and db_name != %s;", dbLit, dbLit))
+	// A deferred FK name is not a live reference until its parent table exists.
+	// A view with that name cannot be an FK parent.
+	sb.WriteString(fmt.Sprintf("where refer_db_name = %s and db_name != %s "+
+		"and refer_table_name in (select relname from `mo_catalog`.`mo_tables` "+
+		"where account_id = current_account_id() and reldatabase = %s and relkind != '%s');",
+		dbLit, dbLit, dbLit, catalog.SystemViewRel))
 	return sb.String()
 }
 
@@ -6051,7 +6056,9 @@ var fkBannedDatabase = map[string]bool{
 	catalog.MOTaskDB:           true,
 	sysview.InformationDBConst: true,
 	sysview.MysqlDBConst:       true,
-	trace.DebugDB:              true,
+	// Retired trace catalog remains protected while its rollback declarations exist.
+	// Remove with pkg/txn/trace after its rollback gate closes.
+	trace.DebugDB: true,
 }
 
 // IsFkBannedDatabase denotes the database should not have any

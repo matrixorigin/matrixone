@@ -132,6 +132,9 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 		requiredVersion < defines.MORPCVersion98 {
 		requiredVersion = defines.MORPCVersion98
 	}
+	if features.JSONInputContracts || features.YearBitCast {
+		requiredVersion = defines.MORPCVersion101
+	}
 	return requiredVersion, nil
 }
 
@@ -198,10 +201,35 @@ func RequirePersistedProtocolVersionForAuthoring(
 	if requiredVersion <= 0 {
 		return nil
 	}
+	service := ""
+	var protocol, authoringFloor any = "unavailable", "unavailable"
 	if proc != nil {
-		if rt := moruntime.ServiceRuntime(proc.GetService()); rt != nil {
-			if persistedProtocolAuthoringRuntimeAllows(rt, requiredVersion) {
+		service = proc.GetService()
+		if rt := moruntime.ServiceRuntime(service); rt != nil {
+			protocolValue, protocolPresent := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+			version, protocolValid := protocolValue.(int64)
+			floorValue, floorPresent := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor)
+			floor, floorValid := floorValue.(int64)
+			if protocolPresent && protocolValid && version >= requiredVersion &&
+				(!floorPresent || floorValid && floor >= requiredVersion) {
+				// Production CN initialization installs the floor key. Retain the
+				// missing-key fallback for standalone/unit-test runtimes.
 				return nil
+			}
+			// Describe exactly the observations used above, not a second read
+			// that could show a newer floor after concurrent admission recovery.
+			protocol, authoringFloor = "missing", "missing"
+			if protocolPresent {
+				protocol = "invalid"
+				if protocolValid {
+					protocol = version
+				}
+			}
+			if floorPresent {
+				authoringFloor = "invalid"
+				if floorValid {
+					authoringFloor = floor
+				}
 			}
 		}
 	}
@@ -210,8 +238,8 @@ func RequirePersistedProtocolVersionForAuthoring(
 	}
 	return moerr.NewNotSupportedf(
 		ctx,
-		"persisted expression semantics require the local catalog admission protocol version %d",
-		requiredVersion)
+		"persisted expression semantics require the local catalog admission protocol version %d (CN %q: local protocol=%v, authoring floor=%v)",
+		requiredVersion, service, protocol, authoringFloor)
 }
 
 // RequirePersistedProtocolVersionForService is the process-independent form
@@ -251,22 +279,6 @@ func persistedProtocolRuntimeAllows(rt moruntime.Runtime, requiredVersion int64)
 	}
 	floorValue, floorPresent := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor)
 	if !floorPresent {
-		return true
-	}
-	floor, valid := floorValue.(int64)
-	return valid && floor >= requiredVersion
-}
-
-func persistedProtocolAuthoringRuntimeAllows(rt moruntime.Runtime, requiredVersion int64) bool {
-	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	version, valid := value.(int64)
-	if !ok || !valid || version < requiredVersion {
-		return false
-	}
-	floorValue, floorPresent := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor)
-	if !floorPresent {
-		// Production CN initialization always installs this key; the fallback
-		// preserves historical standalone/unit-test runtime setup.
 		return true
 	}
 	floor, valid := floorValue.(int64)

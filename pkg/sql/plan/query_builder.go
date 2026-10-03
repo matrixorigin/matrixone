@@ -1070,8 +1070,27 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 	}
 
 	switch node.NodeType {
-	case plan.Node_ADAPTIVE_TOP:
-		if len(node.Children) < 2 || len(node.BindingTags) > 1 {
+	case plan.Node_ADAPTIVE_TOP, plan.Node_VECTOR_QUERY_TOP:
+		resultChildren := node.Children
+		outputChild := int32(0)
+		if node.NodeType == plan.Node_VECTOR_QUERY_TOP {
+			// Child 0 is control input, not the result schema. Keep the logical
+			// producer reference explicit for prepared type refresh and metadata.
+			outputChild = 1
+			if len(node.Children) != 3 {
+				return nil, moerr.NewInternalError(builder.GetContext(), "invalid scalar vector query topology")
+			}
+			provider := builder.qry.Nodes[node.Children[0]]
+			if len(provider.BindingTags) != 1 || len(provider.ProjectList) != 1 {
+				return nil, moerr.NewInternalError(builder.GetContext(), "invalid scalar vector provider projection")
+			}
+			colRefCnt[[2]int32{provider.BindingTags[0], 0}]++
+			if _, err := builder.remapAllColRefs(provider.NodeId, step, colRefCnt, colRefBool, sinkColRef); err != nil {
+				return nil, err
+			}
+			resultChildren = node.Children[1:]
+		}
+		if len(resultChildren) < 2 || len(node.BindingTags) > 1 {
 			return nil, moerr.NewInternalError(builder.GetContext(), "invalid adaptive top remapping topology")
 		}
 		needed := make([]int, 0, len(node.ProjectList))
@@ -1093,7 +1112,7 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			needed = append(needed, 0)
 		}
 		var first *ColRefRemapping
-		for _, childID := range node.Children {
+		for _, childID := range resultChildren {
 			for _, pos := range needed {
 				increaseRefCnt(node.ProjectList[pos], 1, colRefCnt)
 			}
@@ -1131,8 +1150,8 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			node.ProjectList = make([]*plan.Expr, len(first.localToGlobal))
 			for i, globalRef := range first.localToGlobal {
 				node.ProjectList[i] = &plan.Expr{
-					Typ:  builder.qry.Nodes[node.Children[0]].ProjectList[i].Typ,
-					Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: int32(i)}},
+					Typ:  builder.qry.Nodes[resultChildren[0]].ProjectList[i].Typ,
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: outputChild, ColPos: int32(i)}},
 				}
 				remapping.addColRef(globalRef)
 			}
@@ -1145,12 +1164,12 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			remapping.addColRef(globalRef)
 			newProjectList = append(newProjectList, &plan.Expr{
 				Typ:  node.ProjectList[pos].Typ,
-				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: int32(len(newProjectList))}},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: outputChild, ColPos: int32(len(newProjectList))}},
 			})
 		}
 		node.ProjectList = newProjectList
 
-	case plan.Node_FUNCTION_SCAN, plan.Node_VECTOR_INDEX_SCAN:
+	case plan.Node_FUNCTION_SCAN, plan.Node_VECTOR_INDEX_SCAN, plan.Node_VECTOR_QUERY_SOURCE:
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
@@ -1258,8 +1277,19 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
 
-		for _, expr := range node.BlockFilterList {
-			increaseRefCnt(expr, 1, colRefCnt)
+		var blockColRefs map[[2]int32]int
+		if node.NodeType == plan.Node_TABLE_SCAN && len(node.BlockFilterList) > 0 {
+			// Block filters inspect relation metadata; they do not consume row
+			// vectors. Keep their columns out of the scan reader unless another
+			// expression also needs those columns as row data.
+			blockColRefs = make(map[[2]int32]int)
+			for _, expr := range node.BlockFilterList {
+				increaseRefCnt(expr, 1, blockColRefs)
+			}
+		} else {
+			for _, expr := range node.BlockFilterList {
+				increaseRefCnt(expr, 1, colRefCnt)
+			}
 		}
 
 		for _, rfSpec := range node.RuntimeFilterProbeList {
@@ -1284,6 +1314,7 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 		}
 
 		colTag := node.BindingTags[0]
+		originalCols := node.TableDef.Cols
 		newTableDef := CloneTableDefForPlan(node.TableDef, false)
 
 		// An external scan that reports parse errors must read the whole
@@ -1326,6 +1357,26 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 		for localIdx, global := range internalRemapping.localToGlobal {
 			colMap[[2]int32{0, int32(localIdx)}] = global
 		}
+		blockColMap := colMap
+		if blockColRefs != nil {
+			blockColMap = maps.Clone(colMap)
+			// Share positions with row columns. Give omitted metadata columns
+			// separate slots so combined runtime and block filters cannot map
+			// the same ColPos to different physical columns.
+			nextPos := int32(len(internalRemapping.localToGlobal))
+			for i := range originalCols {
+				globalRef := [2]int32{colTag, int32(i)}
+				if blockColRefs[globalRef] == 0 {
+					continue
+				}
+				if _, ok := blockColMap[globalRef]; ok {
+					continue
+				}
+				blockColMap[globalRef] = [2]int32{0, nextPos}
+				blockColMap[[2]int32{0, nextPos}] = globalRef
+				nextPos++
+			}
+		}
 
 		remapInfo.tip = "FilterList"
 		remapInfo.interRemapping = internalRemapping
@@ -1340,9 +1391,11 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 
 		remapInfo.tip = "BlockFilterList"
 		for idx, expr := range node.BlockFilterList {
-			increaseRefCnt(expr, -1, colRefCnt)
+			if blockColRefs == nil {
+				increaseRefCnt(expr, -1, colRefCnt)
+			}
 			remapInfo.srcExprIdx = idx
-			err := builder.remapColRefForExpr(expr, colMap, &remapInfo)
+			err := builder.remapColRefForExpr(expr, blockColMap, &remapInfo)
 			if err != nil {
 				return nil, err
 			}
@@ -3953,6 +4006,9 @@ func (builder *QueryBuilder) removeUnnecessaryProjections(nodeID int32) int32 {
 }
 
 func (builder *QueryBuilder) createQuery() (*Query, error) {
+	if err := builder.bindPreparedPredicateDiagnostics(); err != nil {
+		return nil, err
+	}
 	if builder.hadPendingExistentials {
 		if err := builder.checkPendingExistentials(); err != nil {
 			return nil, err
@@ -3979,7 +4035,10 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.skipStats = builder.canSkipStats()
 		builder.rewriteDistinctToAGG(rootID)
 		rootID = builder.rewriteEffectlessAggToProject(rootID)
-		rootID = builder.optimizeFilters(rootID)
+		rootID, err = builder.optimizeFilters(rootID)
+		if err != nil {
+			return nil, err
+		}
 		// WHERE predicates are initially represented by a Filter between AGG
 		// and TABLE_SCAN.  Revisit the proof after filter pushdown so a unique
 		// grouped scan can be eliminated without moving LIMIT below HAVING.
@@ -4001,12 +4060,13 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		colRefCnt := make(map[[2]int32]int)
 		builder.countColRefs(rootID, colRefCnt)
 		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, colRefCnt)
-		var fusedScalarAggs bool
-		rootID, fusedScalarAggs = builder.fuseScalarAggregates(rootID)
-		if fusedScalarAggs {
-			colRefCnt = make(map[[2]int32]int)
-			builder.countColRefs(rootID, colRefCnt)
+		// Safe derived aliases now expose the existing singleton proof shape.
+		if err = builder.rewriteNumericDomainFilters(rootID, plan.Node_JOIN); err != nil {
+			return nil, err
 		}
+		rootID, _ = builder.fuseScalarAggregates(rootID)
+		clear(colRefCnt)
+		builder.countColRefs(rootID, colRefCnt)
 		// Removing a proof-eliminated aggregate can expose a direct Project ->
 		// TableScan edge only after the first limit-pushdown pass. Re-run the
 		// idempotent rule so the newly streaming path can honor source demand.
@@ -4175,6 +4235,16 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		}
 		scan.NodeId = int32(len(builder.qry.Nodes))
 		builder.qry.Nodes = append(builder.qry.Nodes, scan)
+	}
+	// Empty BlockFilterList can mean either a stats choice or an explicit
+	// blockFilter=2 hint. Preserve the latter in the prepared plan so physical
+	// compilation cannot backfill a block predicate for a later binding.
+	if builder.optimizerHints != nil && builder.optimizerHints.blockFilter == 2 {
+		for _, node := range builder.qry.Nodes {
+			if node.NodeType == plan.Node_TABLE_SCAN && node.ExtraOptions == "" {
+				node.ExtraOptions = PreparedBlockFilterDisabledScanOption
+			}
+		}
 	}
 	return builder.qry, nil
 }
@@ -5092,7 +5162,12 @@ func (builder *QueryBuilder) bindNoRecursiveCte(
 	table string) (nodeID int32, err error) {
 	subCtx := NewBindContext(builder, cteRef.declarationCtx)
 	subCtx.cteName = table
-	subCtx.snapshot = cteRef.snapshot
+	// The CTE body is bound at its use site. A snapshot on the enclosing
+	// View/query must reach its catalog reads, not just the CTE scan itself.
+	subCtx.snapshot = ctx.snapshot
+	if cteRef.snapshot != nil {
+		subCtx.snapshot = cteRef.snapshot
+	}
 	if targets := ctx.numericTableProjectionTypes[strings.ToLower(table)]; len(targets) > 0 {
 		subCtx.numericProjectionTypes = targets
 	}
@@ -8371,6 +8446,13 @@ func (builder *QueryBuilder) bindSelectClause(
 	boundHavingList []*plan.Expr,
 	err error,
 ) {
+	// The catalog-only shortcut belongs to this SELECT, not to its siblings
+	// or its nested View/CTE bodies. In particular, an inner LIMIT 0 must not
+	// let a later ordinary SELECT bypass semantic binding.
+	previousSkipResolve := builder.isSkipResolveTableDef
+	builder.isSkipResolveTableDef = false
+	defer func() { builder.isSkipResolveTableDef = previousSkipResolve }()
+
 	if ctx.bindingRecurStmt() && clause.Distinct {
 		err = moerr.NewParseError(builder.GetContext(), "not support DISTINCT in recursive cte")
 		return
@@ -8423,6 +8505,11 @@ func (builder *QueryBuilder) bindSelectClause(
 	// unfold stars and generate headings
 	if selectList, err = appendSelectList(builder, ctx, selectList, clause.Exprs...); err != nil {
 		return
+	}
+	if capture, metadataBinding := builder.compCtx.(viewDependencyScope); metadataBinding {
+		if err = capture.chargeViewColumns(len(selectList)); err != nil {
+			return
+		}
 	}
 	if len(selectList) == 0 {
 		err = moerr.NewParseError(builder.GetContext(), "No tables used")
@@ -10192,7 +10279,9 @@ func (builder *QueryBuilder) bindValues(
 		for j := 0; j < rowCount; j++ {
 			var planExpr *plan.Expr
 			if i < len(ctx.numericProjectionTypes) &&
-				isNumericAssignmentTarget(ctx.numericProjectionTypes[i]) {
+				isNumericAssignmentTarget(ctx.numericProjectionTypes[i]) &&
+				!(types.T(ctx.numericProjectionTypes[i].Id) == types.T_bit &&
+					isPreparedAssignmentParam(builder, valuesClause.Rows[j][i])) {
 				target := ctx.numericProjectionTypes[i]
 				planExpr, err = valuesBinder.bindNumericExprWithContext(valuesClause.Rows[j][i], 0, &target)
 			} else {
@@ -11166,7 +11255,11 @@ func appendSelectListWithGroupingOrder(
 			}
 		case *tree.NumVal:
 			if expr.ValType == tree.P_null {
-				expr.ValType = tree.P_nulltext
+				// Result transport uses TEXT, but the reusable source AST still
+				// denotes untyped NULL (including SET's synthetic SELECT).
+				copy := *expr
+				copy.ValType = tree.P_nulltext
+				expr = &copy
 			}
 
 			if selectExpr.As != nil && !selectExpr.As.Empty() {
@@ -11713,6 +11806,11 @@ func (builder *QueryBuilder) bindView(
 		}
 	}
 
+	viewData.Stmt, err = builder.historicalViewColumnsSQL(schema, table, viewData.Stmt, snapshot)
+	if err != nil {
+		return 0, err
+	}
+
 	parserSQLMode := legacyViewParserSQLMode
 	if viewData.SQLMode != nil {
 		parserSQLMode = *viewData.SQLMode
@@ -11818,7 +11916,9 @@ func (builder *QueryBuilder) bindView(
 	defer builder.compCtx.SetContext(previousWarningContext)
 
 	if capture, ok := builder.compCtx.(viewDependencyScope); ok {
-		capture.enterNestedView()
+		if err := capture.enterNestedView(); err != nil {
+			return 0, err
+		}
 		defer capture.leaveNestedView()
 	}
 	if isSubscriptionStatistics {
@@ -11848,7 +11948,7 @@ func (builder *QueryBuilder) bindView(
 	if isSubscriptionStatistics {
 		rewriteSubscriptionStatisticsOutput(builder, nodeID, viewCtx, metadataSubscription.Meta.SubName)
 	}
-	viewCtx.markViewCTASDefaultBoundary(tableDef.Cols)
+	viewCtx.markViewCTASDefaultBoundary()
 	if len(viewStmt.ColNames) > 0 {
 		if len(viewStmt.ColNames) != len(viewCtx.headings) {
 			return 0, moerr.NewViewWrongList(builder.GetContext())
@@ -12337,23 +12437,30 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 
 		var subMeta *SubscriptionMeta
 		subMeta, err = builder.compCtx.GetSubscriptionMeta(schema, snapshot)
-		if err == nil && builder.isSkipResolveTableDef && snapshot == nil && subMeta == nil {
+		if err == nil && builder.isSkipResolveTableDef && ctx.directView == "" && snapshot == nil && subMeta == nil {
 			var tableDef *TableDef
 			tableDef, err = builder.compCtx.BuildTableDefByMoColumns(schema, table)
 			if err != nil {
 				return 0, err
 			}
 
-			nodeID = builder.appendNode(&plan.Node{
-				NodeType:     plan.Node_TABLE_SCAN,
-				Stats:        nil,
-				ObjRef:       &plan.ObjectRef{DbName: schema, SchemaName: table},
-				TableDef:     tableDef,
-				BindingTags:  []int32{builder.genNewBindTag()},
-				ScanSnapshot: snapshot,
-			}, ctx)
-
-			return
+			// Both frontend and internal compiler contexts must identify Views.
+			// Their persisted columns are not an output schema, even for no rows.
+			if tableDef != nil && tableDef.TableType != catalog.SystemViewRel && tableDef.ViewSql == nil {
+				object := &plan.ObjectRef{DbName: schema, SchemaName: schema, ObjName: table,
+					Db: int64(tableDef.DbId), Obj: int64(tableDef.TblId)}
+				builder.qry.CatalogDependencies = appendPrepareSchemas(
+					builder.qry.CatalogDependencies, prepareSchemaRef(object, tableDef))
+				nodeID = builder.appendNode(&plan.Node{
+					NodeType:     plan.Node_TABLE_SCAN,
+					Stats:        nil,
+					ObjRef:       object,
+					TableDef:     tableDef,
+					BindingTags:  []int32{builder.genNewBindTag()},
+					ScanSnapshot: snapshot,
+				}, ctx)
+				return
+			}
 		}
 
 		// TODO
@@ -12370,6 +12477,12 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		if err != nil {
 			return 0, err
 		}
+
+		// Empty-result rewrites can remove scans, not semantic dependencies.
+		// Capture evidence before optimization, including intermediate Views,
+		// snapshots, and ordinary tables that may later be replaced by Views.
+		builder.qry.CatalogDependencies = appendPrepareSchemas(
+			builder.qry.CatalogDependencies, prepareSchemaRefWithSnapshot(obj, tableDef, snapshot))
 
 		// Compiler contexts return immutable catalog metadata. Own the planner
 		// shell and column slice, which are replaced locally, without copying the
@@ -13403,6 +13516,8 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 			nodeId, err = builder.buildCurrentRoles(tbl, ctx, exprs, nil)
 		case subscriptionTablesFunctionName:
 			nodeId, err = builder.buildSubscriptionTables(tbl, ctx, exprs, nil)
+		case ViewColumnsFunctionName, SubscriptionViewColumnsFunctionName:
+			nodeId, err = builder.buildViewColumns(tbl, ctx, exprs, nil)
 		case subscriptionColumnsFunctionName:
 			nodeId, err = builder.buildSubscriptionColumns(tbl, ctx, exprs, nil)
 		case "fulltext_index_scan":

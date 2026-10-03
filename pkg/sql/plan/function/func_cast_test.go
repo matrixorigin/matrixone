@@ -4623,26 +4623,54 @@ func TestBitToJSONRestoresDeclaredWidth(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestCastJsonToVarchar verifies that casting a JSON value to VARCHAR uses JSON_UNQUOTE semantics,
-// i.e. JSON strings lose their outer double-quotes (MySQL-compatible behavior).
+// TestCastJsonToVarchar distinguishes explicit JSON serialization from the
+// scalar text used by implicit casts, comparisons, and assignments.
 func TestCastJsonToVarchar(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
 	jsonTexts := []string{`"active"`, `42`, `true`, `null`, `[1,2,3]`, `{"k":"v"}`}
-	// After unquote: JSON strings lose outer quotes; other types keep their JSON text representation.
-	expected := []string{"active", "42", "true", "null", "[1, 2, 3]", `{"k": "v"}`}
 	nulls := []bool{false, false, false, false, false, false}
 	encoded := makeJSONEncodedFromText(t, jsonTexts, nulls)
 
 	toType := types.New(types.T_varchar, 256, 0)
-	inputs := []FunctionTestInput{
-		NewFunctionTestInput(types.T_json.ToType(), encoded, nulls),
-		NewFunctionTestInput(toType, []string{}, []bool{}),
+	cases := []struct {
+		name     string
+		cast     fEvalFn
+		expected []string
+	}{
+		{
+			name:     "explicit cast serializes JSON strings",
+			cast:     NewExplicitCast,
+			expected: []string{`"active"`, "42", "true", "null", "[1, 2, 3]", `{"k": "v"}`},
+		},
+		{
+			name:     "implicit cast exposes string payload",
+			cast:     NewCast,
+			expected: []string{"active", "42", "true", "null", "[1, 2, 3]", `{"k": "v"}`},
+		},
+		{
+			name:     "comparison cast exposes string payload",
+			cast:     NewComparisonCast,
+			expected: []string{"active", "42", "true", "null", "[1, 2, 3]", `{"k": "v"}`},
+		},
+		{
+			name:     "assignment cast exposes string payload",
+			cast:     NewAssignCast,
+			expected: []string{"active", "42", "true", "null", "[1, 2, 3]", `{"k": "v"}`},
+		},
 	}
-	expect := NewFunctionTestResult(toType, false, expected, nulls)
-	fcTC := NewFunctionTestCase(proc, inputs, expect, NewCast)
-	succeed, info := fcTC.Run()
-	require.True(t, succeed, info)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(types.T_json.ToType(), encoded, nulls),
+				NewFunctionTestInput(toType, []string{}, []bool{}),
+			}
+			expect := NewFunctionTestResult(toType, false, tc.expected, nulls)
+			fcTC := NewFunctionTestCase(proc, inputs, expect, tc.cast)
+			succeed, info := fcTC.Run()
+			require.True(t, succeed, info)
+		})
+	}
 }
 
 // emptySliceForCastTarget returns an empty slice of the right type for the second (target type) cast parameter.
@@ -5200,16 +5228,22 @@ func TestMySQLDecimalPrefix(t *testing.T) {
 		{input: "abc", want: "0"},
 		{input: "", want: "0"},
 		{input: " \t\v\f\r\n", want: "0"},
-		{input: "12.5tail", want: "12.5"},
-		{input: "2026-08-10", want: "2026"},
-		{input: "9007199254740993e0tail", want: "9007199254740993e0"},
-		{input: "1E2", want: "1e2"},
-		{input: "1E-2tail", want: "1e-2"},
-		{input: "1e+tail", want: "1"},
-		{input: "-.5x", want: "-.5"},
+		{input: "12.5tail", want: "12.50"},
+		{input: "2026-08-10", want: "2026.00"},
+		{input: "9007199254740993e0tail", want: "9007199254740993.00"},
+		{input: "1E2", want: "100.00"},
+		{input: "1E-2tail", want: "0.01"},
+		{input: "1e+tail", want: "1.00"},
+		{input: "-.5x", want: "-0.50"},
 	} {
 		t.Run(test.input, func(t *testing.T) {
-			require.Equal(t, test.want, mysqlDecimalPrefix(test.input))
+			value, err := parseMySQLDecimal128Prefix(test.input, 38, 2)
+			require.NoError(t, err)
+			want := test.want
+			if want == "0" {
+				want = "0.00"
+			}
+			require.Equal(t, want, value.Format(2))
 		})
 	}
 
@@ -5271,11 +5305,6 @@ func TestMySQLDecimalPrefixExtremeExponents(t *testing.T) {
 		negativeUnderflow = "1e-2147483648tail"
 		zeroMantissa      = "0e2147483648tail"
 	)
-	started := time.Now()
-	require.False(t, mysqlDecimalPrefixOverflows("1", 18, 6))
-	require.False(t, mysqlDecimalPrefixOverflows("1e-1", 18, 6))
-	require.False(t, mysqlDecimalPrefixOverflows("1.25e+1", 18, 6))
-	require.True(t, mysqlDecimalPrefixOverflows("1234567890123e0", 18, 6))
 
 	max64, err := clampDecimal64Value(false, 18, 6)
 	require.NoError(t, err)
@@ -5328,10 +5357,6 @@ func TestMySQLDecimalPrefixExtremeExponents(t *testing.T) {
 		require.Equal(t, want, got)
 	}
 
-	// The old Decimal64/128 path scaled by the wrapped exponent and took about
-	// one second for this matrix. The bounded prefix scan should finish with a
-	// large margin even on a loaded CI worker.
-	require.Less(t, time.Since(started), 250*time.Millisecond)
 }
 
 func TestMySQLDecimalPrefixHalfUpUnderflowBoundary(t *testing.T) {

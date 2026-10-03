@@ -897,7 +897,7 @@ func TestRestoreExternalTableSnapshotAndFromTS(t *testing.T) {
 			newMrsForRestoreStringRows([]string{"Table", "Create Table"}, [][]interface{}{{"hive_ext", "create external table hive_ext (id int)"}})
 		bh.sql2result[fmt.Sprintf(checkTableIsMasterFormat, quoteSQLStringLiteral(dbName), quoteSQLStringLiteral("base_t"))] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
 
-		err := restoreToDatabaseOrTable(ctx, "", bh, snapshotName, dbName, "", uint32(sysAccountID), map[string]*tableInfo{}, map[string]*tableInfo{}, snapshotTs, uint32(sysAccountID), false, nil)
+		err := restoreToDatabaseOrTable(ctx, "", bh, snapshotName, dbName, "", uint32(sysAccountID), map[string]*tableInfo{}, map[string]*tableInfo{}, snapshotTs, uint32(sysAccountID), false, nil, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(restoreTestExecutedSQLContains(bh, restoreTableDataByTsSQL(dbName, "base_t", snapshotTs)), convey.ShouldBeTrue)
 		convey.So(restoreTestExecutedSQLContains(bh, "hive_ext` clone"), convey.ShouldBeFalse)
@@ -921,7 +921,7 @@ func TestRestoreExternalTableSnapshotAndFromTS(t *testing.T) {
 		bh.sql2result[fmt.Sprintf("show create table `%s`.`%s` {MO_TS = %d}", dbName, tblName, snapshotTs)] =
 			newMrsForRestoreStringRows([]string{"Table", "Create Table"}, [][]interface{}{{tblName, "create external table hive_ext (id int)"}})
 
-		err := restoreToDatabaseOrTable(ctx, "", bh, snapshotName, dbName, tblName, uint32(sysAccountID), map[string]*tableInfo{}, map[string]*tableInfo{}, snapshotTs, uint32(sysAccountID), false, nil)
+		err := restoreToDatabaseOrTable(ctx, "", bh, snapshotName, dbName, tblName, uint32(sysAccountID), map[string]*tableInfo{}, map[string]*tableInfo{}, snapshotTs, uint32(sysAccountID), false, nil, nil)
 		convey.So(err, convey.ShouldNotBeNil)
 		convey.So(err.Error(), convey.ShouldContainSubstring, "external table db1.hive_ext cannot be restored from snapshot")
 		convey.So(restoreTestExecutedSQLContains(bh, "hive_ext` clone"), convey.ShouldBeFalse)
@@ -986,7 +986,7 @@ func TestRestorePitrExternalTable(t *testing.T) {
 		bh.sql2result[fmt.Sprintf(checkTableIsMasterFormat, quoteSQLStringLiteral(dbName), quoteSQLStringLiteral("base_t"))] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
 		bh.sql2result[getPubInfoWithPitr(ts, uint32(sysAccountID), dbName)] = newMrsForRestoreStringRows([]string{"account_id"}, nil)
 
-		err := restoreToDatabaseOrTableWithPitr(ctx, "", bh, pitrName, ts, dbName, "", map[string]*tableInfo{}, map[string]*tableInfo{}, uint32(sysAccountID))
+		err := restoreToDatabaseOrTableWithPitr(ctx, "", bh, pitrName, ts, dbName, "", map[string]*tableInfo{}, map[string]*tableInfo{}, uint32(sysAccountID), nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(restoreTestExecutedSQLContains(bh, restoreTableDataByTsSQL(dbName, "base_t", ts)), convey.ShouldBeTrue)
 		convey.So(restoreTestExecutedSQLContains(bh, "hive_ext` clone"), convey.ShouldBeFalse)
@@ -1010,7 +1010,7 @@ func TestRestorePitrExternalTable(t *testing.T) {
 		bh.sql2result[fmt.Sprintf("show create table `%s`.`%s` {MO_TS = %d}", dbName, tblName, ts)] =
 			newMrsForRestoreStringRows([]string{"Table", "Create Table"}, [][]interface{}{{tblName, "create external table hive_ext (id int)"}})
 
-		err := restoreToDatabaseOrTableWithPitr(ctx, "", bh, pitrName, ts, dbName, tblName, map[string]*tableInfo{}, map[string]*tableInfo{}, uint32(sysAccountID))
+		err := restoreToDatabaseOrTableWithPitr(ctx, "", bh, pitrName, ts, dbName, tblName, map[string]*tableInfo{}, map[string]*tableInfo{}, uint32(sysAccountID), nil)
 		convey.So(err, convey.ShouldNotBeNil)
 		convey.So(err.Error(), convey.ShouldContainSubstring, "external table db1.hive_ext cannot be restored from pitr")
 		convey.So(restoreTestExecutedSQLContains(bh, "hive_ext` clone"), convey.ShouldBeFalse)
@@ -1042,7 +1042,7 @@ func TestMarkedDatabaseRestoreRejectsBeforeDestructiveWorkBelowCapability(t *tes
 				return restoreToDatabaseOrTable(
 					ctx, "", bh, snapshotName, dbName, "", uint32(sysAccountID),
 					map[string]*tableInfo{}, map[string]*tableInfo{}, ts,
-					uint32(sysAccountID), false, nil,
+					uint32(sysAccountID), false, nil, nil,
 				)
 			},
 		},
@@ -1068,7 +1068,7 @@ func TestMarkedDatabaseRestoreRejectsBeforeDestructiveWorkBelowCapability(t *tes
 			run: func(bh BackgroundExec) error {
 				return restoreToDatabaseOrTableWithPitr(
 					ctx, "", bh, pitrName, ts, dbName, "",
-					map[string]*tableInfo{}, map[string]*tableInfo{}, uint32(sysAccountID),
+					map[string]*tableInfo{}, map[string]*tableInfo{}, uint32(sysAccountID), nil,
 				)
 			},
 		},
@@ -1292,7 +1292,7 @@ func TestMarkedDatabaseRestorePreservesIdentityAtCapability(t *testing.T) {
 				return restoreToDatabaseOrTable(
 					ctx, "", bh, snapshotName, dbName, "", uint32(sysAccountID),
 					map[string]*tableInfo{}, map[string]*tableInfo{}, ts,
-					uint32(sysAccountID), false, nil,
+					uint32(sysAccountID), false, nil, nil,
 				)
 			},
 		},
@@ -1324,7 +1324,7 @@ func TestMarkedDatabaseRestorePreservesIdentityAtCapability(t *testing.T) {
 			run: func(bh BackgroundExec) error {
 				return restoreToDatabaseOrTableWithPitr(
 					ctx, "", bh, pitrName, ts, dbName, "",
-					map[string]*tableInfo{}, map[string]*tableInfo{}, uint32(sysAccountID),
+					map[string]*tableInfo{}, map[string]*tableInfo{}, uint32(sysAccountID), nil,
 				)
 			},
 		},
@@ -2939,6 +2939,46 @@ func Test_getAccountFromPublication(t *testing.T) {
 	})
 }
 
+func TestLockedPublicationRejectsRetiredSubscriber(t *testing.T) {
+	const (
+		liveSQL = "select account_id from mo_catalog.mo_account where account_name = 'subscriber'"
+		pubSQL  = "SELECT account_id, account_name, pub_name, database_name, database_id, table_list, account_list \n" +
+			"\t\t\tFROM mo_catalog.mo_pubs \n" +
+			"\t\t\tWHERE account_name = 'publisher' AND pub_name = 'pub' for update"
+	)
+	for _, test := range []struct {
+		name       string
+		liveID     uint64
+		liveExists bool
+		wantError  bool
+	}{
+		{name: "same generation", liveID: 27, liveExists: true},
+		{name: "recreated name", liveID: 28, liveExists: true, wantError: true},
+		{name: "dropped name", wantError: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			if test.liveExists {
+				bh.sql2result[liveSQL] = newMrsForCheckTenant([][]interface{}{{test.liveID, "subscriber", "open", 0}})
+			} else {
+				bh.sql2result[liveSQL] = newMrsForCheckTenant(nil)
+			}
+			bh.sql2result[pubSQL] = newMrsForPublicationInfo(100, "publisher", "pub", "db", 1, "*", "all")
+			publisherID, _, err := lockAccountFromPublication(t.Context(), bh, "publisher", "pub", "subscriber", 27)
+			if test.wantError {
+				require.ErrorContains(t, err, "session is no longer active")
+				require.Equal(t, []string{liveSQL}, bh.executedSQLs)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, uint64(100), publisherID)
+				require.Equal(t, []string{liveSQL, pubSQL}, bh.executedSQLs)
+			}
+			require.Equal(t, uint32(sysAccountID), bh.executionAccountIDs[0])
+		})
+	}
+}
+
 // newMrsForMoIndexes creates a MysqlResultSet for mo_indexes query
 // columns: table_id, name, algo_table_type, index_table_name
 func newMrsForMoIndexes(records [][]interface{}) *MysqlResultSet {
@@ -3164,7 +3204,6 @@ func Test_handleInternalGetDdl_GoodPath(t *testing.T) {
 		mockTxnOp.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		mockTxnOp.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		mockTxnOp.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
-		mockTxnOp.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 
 		// Setup TxnHandler with mock engine and txn
 		txnHandler := InitTxnHandler("", mockEng, ctx, mockTxnOp)

@@ -302,6 +302,7 @@ func (s *Scope) resetForReuse(c *Compile) (err error) {
 
 	if s.DataSource != nil && !s.DataSource.isConst {
 		s.DataSource.R = nil
+		s.DataSource.remoteBlockFilters = nil
 	}
 
 	// The previous execution's cleanup delivered terminal signals into this
@@ -1132,13 +1133,14 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		readers[i].SetIndexParam(s.DataSource.IndexReaderParam)
 
 		ss[i].DataSource = &Source{
-			R:            readers[i],
-			SchemaName:   s.DataSource.SchemaName,
-			RelationName: s.DataSource.RelationName,
-			Attributes:   s.DataSource.Attributes,
-			AccountId:    s.DataSource.AccountId,
-			node:         s.DataSource.node,
-			RecvMsgList:  recvMsgList,
+			R:                  readers[i],
+			SchemaName:         s.DataSource.SchemaName,
+			RelationName:       s.DataSource.RelationName,
+			Attributes:         s.DataSource.Attributes,
+			AccountId:          s.DataSource.AccountId,
+			node:               s.DataSource.node,
+			remoteBlockFilters: s.DataSource.remoteBlockFilters,
+			RecvMsgList:        recvMsgList,
 		}
 	}
 	if err := c.attachRuntimeAllocationOwners([]*Scope{ms}); err != nil {
@@ -1741,57 +1743,19 @@ func (s *Scope) sendNotifyMessageWithFactoryAndWait(
 
 func sendRemoteNotifyCleanupTerminal(proc *process.Process, reg *process.WaitRegister, err error) bool {
 	terminalSignal := process.BuildCleanupSignal(false, err)
-	signalCtx, signalCancel := context.WithTimeout(context.TODO(), process.PipelineSignalSendTimeout)
-	defer signalCancel()
-
-	if process.SendPipelineSignalWithContext(signalCtx, reg, terminalSignal) {
+	if _, ok := reg.PublishTerminal(terminalSignal); ok {
 		return true
 	}
-	logRemoteNotifyCleanupSendFailure(
-		proc,
-		reg,
-		terminalSignal,
-		"remote_notify_cleanup_send_terminal_signal",
-		"remote notify cleanup timed out sending terminal %s signal: timeout=%s channel_len=%d channel_cap=%d err=%v",
-		err)
-
-	if terminalSignal.EventType != process.EventEnd {
-		return false
-	}
-
-	fallbackErr := process.ErrPipelineEndSignalDeliveryFailed
-	fallbackSignal := process.NewAbortSignal(fallbackErr)
-	if process.SendPipelineSignalWithContext(signalCtx, reg, fallbackSignal) {
-		return false
-	}
-	logRemoteNotifyCleanupSendFailure(
-		proc,
-		reg,
-		fallbackSignal,
-		"remote_notify_cleanup_send_fallback_abort_signal",
-		"remote notify cleanup timed out sending fallback %s signal after end delivery failure: timeout=%s channel_len=%d channel_cap=%d err=%v",
-		fallbackErr)
-	return false
-}
-
-func logRemoteNotifyCleanupSendFailure(
-	proc *process.Process,
-	reg *process.WaitRegister,
-	signal process.PipelineSignal,
-	key string,
-	format string,
-	err error,
-) {
 	chLen, chCap := process.WaitRegisterChannelState(reg)
 	process.WarnPipelineCleanupf(
 		proc,
-		key,
-		format,
-		signal.EventType.String(),
-		process.PipelineSignalSendTimeout,
+		"remote_notify_cleanup_send_terminal_signal",
+		"remote notify cleanup could not publish terminal %s signal: channel_len=%d channel_cap=%d err=%v",
+		terminalSignal.EventType.String(),
 		chLen,
 		chCap,
 		err)
+	return false
 }
 
 func receiveMsgAndForward(sender *messageSenderOnClient, forwardReg *process.WaitRegister) error {

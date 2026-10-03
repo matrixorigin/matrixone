@@ -3811,6 +3811,11 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("transaction_operator_open_log"),
 		Default:           int64(0),
 	},
+	// Inert setting retained for stopped-version rollback; transaction tracing is retired.
+	// SET/SHOW use generic variable storage only; there is no tracing consumer.
+	// TODO(retire-txn-trace, #29249): remove this declaration and its inert-setting
+	// tests once the rollback window excludes collector-bearing versions and
+	// client/session initialization no longer sends this setting.
 	"disable_txn_trace": {
 		Name:              "disable_txn_trace",
 		Scope:             ScopeSession,
@@ -4592,7 +4597,7 @@ func inferUserDefinedVarType(value interface{}) planpb.Type {
 	case []int8:
 		return planpb.Type{Id: int32(types.T_array_int8), Width: int32(len(v))}
 	case nil:
-		oid = types.T_text
+		oid = types.T_any
 	default:
 		oid = types.T_text
 	}

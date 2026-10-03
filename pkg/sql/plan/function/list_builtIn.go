@@ -1863,6 +1863,28 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `json_agg_to_double` — internal MySQL warning-conversion
+	// boundary for SUM/AVG/VAR_*/STDDEV_* over JSON operands.
+	{
+		functionId: JSON_AGG_TO_DOUBLE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_json},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return JsonAggToDouble
+				},
+			},
+		},
+	},
+
 	// function `json_keys`
 	{
 		functionId: JSON_KEYS,
@@ -3021,6 +3043,26 @@ var supportedStringBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return jsonLength
+				},
+			},
+		},
+	},
+
+	// function `json_depth`
+	{
+		functionId: JSON_DEPTH,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    jsonDepthCheckFn,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return JsonDepth
 				},
 			},
 		},
@@ -13034,14 +13076,14 @@ var supportedControlBuiltIns = []FuncNew{
 		functionId: LAST_DAY,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    lastDayTypeMatch,
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return types.T_date.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return LastDay
@@ -13051,12 +13093,18 @@ var supportedControlBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return types.T_date.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return LastDay
 				},
 			},
+			{overloadId: 2, args: []types.T{types.T_date},
+				retType: func([]types.Type) types.Type { return types.T_date.ToType() },
+				newOp:   func() executeLogicOfOverload { return LastDay }},
+			{overloadId: 3, args: []types.T{types.T_datetime},
+				retType: func([]types.Type) types.Type { return types.T_date.ToType() },
+				newOp:   func() executeLogicOfOverload { return LastDay }},
 		},
 	},
 
@@ -16486,16 +16534,7 @@ var supportedOthersBuiltIns = []FuncNew{
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			if len(inputs) != 1 {
-				return newCheckResultWithFailure(failedFunctionParametersWrong)
-			}
-			switch inputs[0].Oid {
-			case types.T_any:
-				return newCheckResultWithCast(0, []types.Type{types.T_varbinary.ToType()})
-			case types.T_binary, types.T_varbinary, types.T_blob:
-				return newCheckResultWithSuccess(0)
-			}
-			return newCheckResultWithFailure(failedFunctionParametersWrong)
+			return opaqueStateTypeCheck(inputs, failedFunctionParametersWrong)
 		},
 
 		Overloads: []overload{

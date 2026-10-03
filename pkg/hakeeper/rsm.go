@@ -62,7 +62,11 @@ const (
 )
 
 type IndexQuery struct{}
-type StateQuery struct{}
+type StateQuery struct {
+	// StateOnly omits the cluster snapshot for assertions that only consume State.
+	// The zero value retains the complete independent checker snapshot.
+	StateOnly bool
+}
 type ScheduleCommandQuery struct{ UUID string }
 type CommandDeliveryStateQuery struct{}
 type ClusterDetailsQuery struct{ Cfg Config }
@@ -1008,16 +1012,40 @@ func (s *stateMachine) bootstrapReplicaCommandStatus(
 	}
 }
 
-func (s *stateMachine) handleCNHeartbeat(cmd []byte) sm.Result {
+// HeartbeatCheckNeeded is a local proposal result hint, never a wire field or
+// durable state. Older stores ignore it and periodic checks remain the fallback.
+const HeartbeatCheckNeeded uint64 = 1
+
+func (s *stateMachine) handleCNHeartbeat(cmd []byte) (result sm.Result) {
 	data := parseHeartbeatCmd(cmd)
 	var hb pb.CNStoreHeartbeat
 	if err := hb.Unmarshal(data); err != nil {
 		panic(err)
 	}
+	previous, registered := s.state.CNState.Stores[hb.UUID]
+	deliveryReady := s.state.CommandDeliveryCNReady[hb.UUID]
+	admissionReady := s.state.ViewMetadataAdmissionCNReady[hb.UUID]
+	defer func() {
+		current := s.state.CNState.Stores[hb.UUID]
+		// Compare accepted state, including withdrawal by an obsolete heartbeat.
+		// Tick, load, configuration and ordinary receipts are not readiness events.
+		if !registered ||
+			deliveryReady != s.state.CommandDeliveryCNReady[hb.UUID] ||
+			admissionReady != s.state.ViewMetadataAdmissionCNReady[hb.UUID] ||
+			previous.CommandDeliveryAckSupported != current.CommandDeliveryAckSupported ||
+			previous.ViewMetadataAdmissionSupported != current.ViewMetadataAdmissionSupported ||
+			previous.ViewMetadataAdmissionGeneration != current.ViewMetadataAdmissionGeneration ||
+			previous.ViewMetadataObservedEpoch != current.ViewMetadataObservedEpoch ||
+			previous.ViewMetadataCatalogFencedEpoch != current.ViewMetadataCatalogFencedEpoch ||
+			previous.ViewMetadataAdmissionReady != current.ViewMetadataAdmissionReady ||
+			previous.ViewMetadataIngressReady != current.ViewMetadataIngressReady ||
+			previous.PersistedExpressionProtocolVersion != current.PersistedExpressionProtocolVersion {
+			result.Value = HeartbeatCheckNeeded
+		}
+	}()
 	if !s.updateCNViewMetadataAdmission(hb) {
 		return s.attachViewMetadataAdmission(sm.Result{}, hb.UUID, false)
 	}
-	var result sm.Result
 	if s.state.CommandDeliveryPreparing {
 		if s.state.CommandDeliveryCNReady == nil {
 			s.state.CommandDeliveryCNReady = make(map[string]bool)
@@ -1041,13 +1069,23 @@ func (s *stateMachine) handleCNHeartbeat(cmd []byte) sm.Result {
 	return s.attachViewMetadataAdmission(result, hb.UUID, false)
 }
 
-func (s *stateMachine) handleTNHeartbeat(cmd []byte) sm.Result {
+func (s *stateMachine) handleTNHeartbeat(cmd []byte) (result sm.Result) {
 	data := parseHeartbeatCmd(cmd)
 	var hb pb.TNStoreHeartbeat
 	if err := hb.Unmarshal(data); err != nil {
 		panic(err)
 	}
+	previous, registered := s.state.TNState.Stores[hb.UUID]
+	deliveryReady := s.state.CommandDeliveryTNReady[hb.UUID]
 	s.state.TNState.Update(hb, s.state.Tick)
+	defer func() {
+		if !registered ||
+			deliveryReady != s.state.CommandDeliveryTNReady[hb.UUID] ||
+			(len(previous.Shards) > 0) != (len(hb.Shards) > 0) ||
+			previous.CommandDeliveryAckSupported != hb.CommandDeliveryAckSupported {
+			result.Value = HeartbeatCheckNeeded
+		}
+	}()
 	if s.state.CommandDeliveryPreparing {
 		if s.state.CommandDeliveryTNReady == nil {
 			s.state.CommandDeliveryTNReady = make(map[string]bool)
@@ -1066,13 +1104,27 @@ func (s *stateMachine) handleTNHeartbeat(cmd []byte) sm.Result {
 	return s.getCommandBatch(hb.UUID)
 }
 
-func (s *stateMachine) handleLogHeartbeat(cmd []byte) sm.Result {
+func (s *stateMachine) handleLogHeartbeat(cmd []byte) (result sm.Result) {
 	data := parseHeartbeatCmd(cmd)
 	var hb pb.LogStoreHeartbeat
 	if err := hb.Unmarshal(data); err != nil {
 		panic(err)
 	}
+	previous, registered := s.state.LogState.Stores[hb.UUID]
+	deliveryReady := s.state.CommandDeliveryReady[hb.UUID]
+	admissionReady := s.state.ViewMetadataAdmissionLogReady[hb.UUID]
 	s.state.LogState.Update(hb, s.state.Tick)
+	defer func() {
+		if !registered ||
+			deliveryReady != s.state.CommandDeliveryReady[hb.UUID] ||
+			admissionReady != s.state.ViewMetadataAdmissionLogReady[hb.UUID] ||
+			len(previous.Replicas) != len(hb.Replicas) ||
+			previous.CommandDeliverySupported != hb.CommandDeliverySupported ||
+			previous.ViewMetadataAdmissionSupported != hb.ViewMetadataAdmissionSupported ||
+			previous.ViewMetadataAdmissionProtocolV3Supported != hb.ViewMetadataAdmissionProtocolV3Supported {
+			result.Value = HeartbeatCheckNeeded
+		}
+	}()
 	s.observeCatalogStartResult(hb)
 	if s.state.ViewMetadataAdmissionPreparing {
 		if s.state.ViewMetadataAdmissionLogReady == nil {
@@ -1872,7 +1924,10 @@ func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 		}
 		return &result, nil
 	}
-	if _, ok := query.(*StateQuery); ok {
+	if q, ok := query.(*StateQuery); ok {
+		if q != nil && q.StateOnly {
+			return &pb.CheckerState{State: s.state.State}, nil
+		}
 		return s.handleStateQuery(), nil
 	} else if q, ok := query.(*ScheduleCommandQuery); ok {
 		return s.handleScheduleCommandQuery(q.UUID), nil
