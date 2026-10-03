@@ -19,10 +19,68 @@ import (
 	"math"
 	"math/big"
 	"math/rand"
+	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDecimalPrecisionCheckedOwner(t *testing.T) {
+	for _, tc := range []struct {
+		x, ceil, floor, round int64
+	}{
+		{105, 110, 100, 110}, {-105, -100, -110, -110},
+		{100, 100, 100, 100}, {-100, -100, -100, -100}, {0, 0, 0, 0},
+	} {
+		for _, constantScale := range []bool{false, true} {
+			divisor := int64(1)
+			if constantScale {
+				divisor = 10
+			}
+			x64 := Decimal64(uint64(tc.x))
+			x128 := Decimal128FromInt64(tc.x)
+			require.Equal(t, Decimal64(uint64(tc.ceil/divisor)), x64.Ceil(2, 1, constantScale))
+			require.Equal(t, Decimal64(uint64(tc.floor/divisor)), x64.Floor(2, 1, constantScale))
+			require.Equal(t, Decimal64(uint64(tc.round/divisor)), x64.Round(2, 1, constantScale))
+			require.Equal(t, Decimal128FromInt64(tc.ceil/divisor), x128.Ceil(2, 1, constantScale))
+			require.Equal(t, Decimal128FromInt64(tc.floor/divisor), x128.Floor(2, 1, constantScale))
+			require.Equal(t, Decimal128FromInt64(tc.round/divisor), x128.Round(2, 1, constantScale))
+		}
+	}
+	for _, constantScale := range []bool{false, true} {
+		for _, x := range []Decimal64{Decimal64Min, Decimal64Max} {
+			require.Equal(t, x, x.Ceil(0, 0, constantScale))
+			require.Equal(t, x, x.Floor(0, 0, constantScale))
+			require.Equal(t, x, x.Round(0, 0, constantScale))
+		}
+		for _, x := range []Decimal128{Decimal128Min, Decimal128Max} {
+			require.Equal(t, x, x.Ceil(0, 0, constantScale))
+			require.Equal(t, x, x.Floor(0, 0, constantScale))
+			require.Equal(t, x, x.Round(0, 0, constantScale))
+		}
+		for _, operation := range []func(){
+			func() { Decimal64Min.Ceil(0, -1, constantScale) },
+			func() { Decimal64Min.Floor(0, -1, constantScale) },
+			func() { Decimal128Min.Ceil(0, -1, constantScale) },
+			func() { Decimal128Min.Floor(0, -1, constantScale) },
+			func() { Decimal64Max.Round(0, -1, constantScale) },
+			func() { Decimal64Max.Minus().Round(0, -1, constantScale) },
+			func() { Decimal128Max.Round(0, -1, constantScale) },
+			func() { Decimal128Max.Minus().Round(0, -1, constantScale) },
+			func() { Decimal64Max.Ceil(0, -1, constantScale) },
+			func() { Decimal64Max.Minus().Floor(0, -1, constantScale) },
+			func() { Decimal128Max.Ceil(0, -1, constantScale) },
+			func() { Decimal128Max.Minus().Floor(0, -1, constantScale) },
+		} {
+			var failure any
+			func() { defer func() { failure = recover() }(); operation() }()
+			err, ok := failure.(error)
+			require.True(t, ok, "quantizer must reject a nonrepresentable result")
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange))
+		}
+	}
+}
 
 func TestParseDecimalRejectsBothPrecisionEndpoints(t *testing.T) {
 	for _, test := range []struct {
@@ -1298,4 +1356,71 @@ func TestDecimalScaleLoopOverflow(t *testing.T) {
 			t.Fatal("expected overflow")
 		}
 	})
+}
+
+func TestDecimal64MulCappedScale(t *testing.T) {
+	for _, tc := range []struct{ input, want Decimal64 }{
+		{100000000, 10000},
+		{Decimal64(100000000).Minus(), Decimal64(10000).Minus()},
+		{Decimal64(1) << 63, Decimal64(922337203685478).Minus()},
+	} {
+		got, scale, err := tc.input.Mul(1, 8, 8)
+		require.NoError(t, err)
+		require.Equal(t, int32(12), scale)
+		require.Equal(t, tc.want, got)
+	}
+	minimum := Decimal64(1) << 63
+	got, _, err := minimum.Mul(1, 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, minimum, got)
+	_, _, err = minimum.Mul(Decimal64(1).Minus(), 0, 0)
+	require.Error(t, err)
+}
+
+func TestDecimalScientificExponentBoundaries(t *testing.T) {
+	for _, spelling := range []string{"1E-2", "1e-2", "1E+2", "0E2147483647", "1E-2147483647"} {
+		d64, e64 := ParseDecimal64(spelling, 18, 2)
+		d128, e128 := ParseDecimal128(spelling, 38, 2)
+		d256, e256 := ParseDecimal256(spelling, 65, 2)
+		require.NoError(t, e64, spelling)
+		require.NoError(t, e128, spelling)
+		require.NoError(t, e256, spelling)
+		require.Equal(t, d64.Format(2), d128.Format(2), spelling)
+		require.Equal(t, d64.Format(2), d256.Format(2), spelling)
+	}
+	for _, spelling := range []string{"1E4294967296", "1E-4294967296", "1E2147483647"} {
+		_, e64 := ParseDecimal64(spelling, 18, 2)
+		_, e128 := ParseDecimal128(spelling, 38, 2)
+		_, e256 := ParseDecimal256(spelling, 65, 2)
+		require.Error(t, e64)
+		require.Error(t, e128)
+		require.Error(t, e256)
+	}
+}
+
+func TestDecimalFromCoefficient(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		width int
+		parse func([]byte) (string, error)
+	}{
+		{"64", 18, func(d []byte) (string, error) { v, e := Decimal64FromCoefficient(d); return v.Format(0), e }},
+		{"128", 38, func(d []byte) (string, error) { v, e := Decimal128FromCoefficient(d); return v.Format(0), e }},
+		{"256", 76, func(d []byte) (string, error) { v, e := Decimal256FromCoefficient(d); return v.Format(0), e }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, digits := range []string{"", "0", "1234567", strings.Repeat("9", tc.width)} {
+				got, err := tc.parse([]byte(digits))
+				require.NoError(t, err)
+				if digits == "" {
+					digits = "0"
+				}
+				require.Equal(t, digits, got)
+			}
+			for _, digits := range []string{"-1", "1.2", "1e2", "a", strings.Repeat("9", tc.width+1)} {
+				_, err := tc.parse([]byte(digits))
+				require.Error(t, err, digits)
+			}
+		})
+	}
 }

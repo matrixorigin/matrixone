@@ -372,7 +372,10 @@ const (
 // result type. Legacy plans remain executable by v97 receivers.
 // JSONInputContracts and YearBitCast require MORPC v101 for their new
 // execution contracts.
+// JSONScalarLiteralContracts requires MORPC v104 because older executors
+// decode JSON-typed Sval literals as VARCHAR rather than encoded JSON.
 type RemoteExpressionFeatures struct {
+	JSONScalarLiteralContracts      bool
 	JSONInputContracts              bool
 	YearBitCast                     bool
 	NumericPrefix                   bool
@@ -405,7 +408,7 @@ type RemoteExpressionFeatures struct {
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
-	return features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
+	return features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
 		features.FormatNumericArguments ||
@@ -849,6 +852,10 @@ func isExpressionResultMetadataContract(expr *Expr) bool {
 func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatures, err error) {
 	err = walkExpressionsInOwner(owner, func(expr *Expr) error {
 		return VisitExprTree(expr, func(current *Expr) error {
+			if literal := current.GetLit(); literal != nil && !literal.Isnull && current.Typ.Id == planJSONTypeID {
+				_, encodedJSON := literal.Value.(*Literal_Sval)
+				features.JSONScalarLiteralContracts = features.JSONScalarLiteralContracts || encodedJSON
+			}
 			if !features.DecimalLiteralSemantics {
 				if literal := current.GetLit(); literal != nil {
 					features.DecimalLiteralSemantics = literal.DecimalLiteralRequiresV82
@@ -1562,14 +1569,17 @@ func walkExpressionsInOwner(owner any, visitor func(*Expr) error) error {
 		switch value.Kind() {
 		case reflect.Struct:
 			for field := 0; field < value.NumField(); field++ {
-				if value.Type().Field(field).PkgPath == "" {
-					if err := walk(value.Field(field)); err != nil {
+				child := value.Field(field)
+				// Only exported containers can hold expression roots. Checking
+				// the value avoids copying field metadata for every plan column.
+				if child.CanInterface() && expressionOwnerContainer(child.Kind()) {
+					if err := walk(child); err != nil {
 						return err
 					}
 				}
 			}
 		case reflect.Slice, reflect.Array:
-			if value.Type().Elem().Kind() == reflect.Uint8 {
+			if !expressionOwnerContainer(value.Type().Elem().Kind()) {
 				return nil
 			}
 			for item := 0; item < value.Len(); item++ {
@@ -1578,6 +1588,9 @@ func walkExpressionsInOwner(owner any, visitor func(*Expr) error) error {
 				}
 			}
 		case reflect.Map:
+			if !expressionOwnerContainer(value.Type().Elem().Kind()) {
+				return nil
+			}
 			iterator := value.MapRange()
 			for iterator.Next() {
 				if err := walk(iterator.Value()); err != nil {
@@ -1588,4 +1601,15 @@ func walkExpressionsInOwner(owner any, visitor func(*Expr) error) error {
 		return nil
 	}
 	return walk(reflect.ValueOf(owner))
+}
+
+// Scalar payloads cannot contain an expression root, irrespective of their
+// size. Interfaces and every container kind remain open to new owner shapes.
+func expressionOwnerContainer(kind reflect.Kind) bool {
+	switch kind {
+	case reflect.Interface, reflect.Pointer, reflect.Struct, reflect.Slice, reflect.Array, reflect.Map:
+		return true
+	default:
+		return false
+	}
 }

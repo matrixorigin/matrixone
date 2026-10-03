@@ -262,7 +262,7 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 	for i, vertex := range vertices {
 		// TODO handle cycles in the "dimension -> fact" DAG
 		if vertex.parent == -1 {
-			builder.buildSubJoinTree(vertices, int32(i))
+			conds = builder.buildSubJoinTree(vertices, int32(i), conds)
 			subTrees = append(subTrees, vertex.node)
 		}
 	}
@@ -331,12 +331,7 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 			if builder.isIndexTableWithoutFilters(children[1]) {
 				children[0], children[1] = children[1], children[0]
 			}
-			nodeID = builder.appendNode(&plan.Node{
-				NodeType: plan.Node_JOIN,
-				Children: children,
-				JoinType: plan.Node_INNER,
-				SpillMem: builder.joinSpillMem,
-			}, nil)
+			nodeID, conds = builder.appendOrderedJoin(children, conds)
 
 			for i, adj := range adjMat[nextSibling*nLeaf : (nextSibling+1)*nLeaf] {
 				eligible[i] = eligible[i] || adj
@@ -349,12 +344,7 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 				if builder.isIndexTableWithoutFilters(children[1]) {
 					children[0], children[1] = children[1], children[0]
 				}
-				nodeID = builder.appendNode(&plan.Node{
-					NodeType: plan.Node_JOIN,
-					Children: children,
-					JoinType: plan.Node_INNER,
-					SpillMem: builder.joinSpillMem,
-				}, nil)
+				nodeID, conds = builder.appendOrderedJoin(children, conds)
 			}
 		}
 	} else {
@@ -366,12 +356,7 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 			if builder.isIndexTableWithoutFilters(children[1]) {
 				children[0], children[1] = children[1], children[0]
 			}
-			nodeID = builder.appendNode(&plan.Node{
-				NodeType: plan.Node_JOIN,
-				Children: children,
-				JoinType: plan.Node_INNER,
-				SpillMem: builder.joinSpillMem,
-			}, nil)
+			nodeID, conds = builder.appendOrderedJoin(children, conds)
 		}
 	}
 
@@ -644,13 +629,37 @@ func shouldChangeParent(self, currentParent, nextParent int32, vertices []*joinV
 	return compareStats(nextParentStats, currentParentStats) < 0
 }
 
-// buildSubJoinTree build sub- join tree for a fact table and all its dimension tables
-func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32) {
+// appendOrderedJoin transfers applicable predicates before appendNode computes
+// statistics. A temporarily detached predicate must not make a connected
+// subtree look Cartesian to the join-order comparator.
+func (builder *QueryBuilder) appendOrderedJoin(children []int32, pending []*plan.Expr) (int32, []*plan.Expr) {
+	left, right, available := make(map[int32]bool), make(map[int32]bool), make(map[int32]bool)
+	for _, tag := range builder.enumerateTags(children[0]) {
+		left[tag], available[tag] = true, true
+	}
+	for _, tag := range builder.enumerateTags(children[1]) {
+		right[tag], available[tag] = true, true
+	}
+	var onList []*plan.Expr
+	remaining := pending[:0]
+	for _, cond := range pending {
+		if containsOnlyTags(cond, available) && getJoinSideWithOuterScope(cond, left, right, -1) == JoinSideBoth && !builder.filterPushdownBarrier(cond) {
+			onList = append(onList, cond)
+		} else {
+			remaining = append(remaining, cond)
+		}
+	}
+	id := builder.appendNode(&plan.Node{NodeType: plan.Node_JOIN, Children: children, JoinType: plan.Node_INNER, SpillMem: builder.joinSpillMem, OnList: onList}, nil)
+	return id, remaining
+}
+
+// buildSubJoinTree builds a fact table and its dimension subtrees with their predicates.
+func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32, conds []*plan.Expr) []*plan.Expr {
 	vertex := vertices[vid]
 	vertex.joined = true
 
 	if len(vertex.children) == 0 {
-		return
+		return conds
 	}
 
 	dimensions := make([]*joinVertex, 0, len(vertex.children))
@@ -658,7 +667,7 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 		if vertices[child].joined {
 			continue
 		}
-		builder.buildSubJoinTree(vertices, child)
+		conds = builder.buildSubJoinTree(vertices, child, conds)
 		dimensions = append(dimensions, vertices[child])
 	}
 	slices.SortFunc(dimensions, compareJoinVertexStats)
@@ -666,15 +675,12 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 	for _, child := range dimensions {
 
 		children := []int32{vertex.node.NodeId, child.node.NodeId}
-		nodeID := builder.appendNode(&plan.Node{
-			NodeType: plan.Node_JOIN,
-			Children: children,
-			JoinType: plan.Node_INNER,
-			SpillMem: builder.joinSpillMem,
-		}, nil)
+		var nodeID int32
+		nodeID, conds = builder.appendOrderedJoin(children, conds)
 
 		vertex.node = builder.qry.Nodes[nodeID]
 	}
+	return conds
 }
 
 func (builder *QueryBuilder) setSelectivityOnParent(

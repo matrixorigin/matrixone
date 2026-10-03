@@ -7429,6 +7429,10 @@ func bindFuncExprImplByPlanExpr(
 						return integerDomainFits(otherOid, colOid)
 					}
 
+					if colOid.IsInteger() && otherOid.IsDecimal() {
+						return exactDecimalIntegerFits(otherExpr, colOid)
+					}
+
 					// For float types, check if conversion is safe
 					if (colOid == types.T_float32 || colOid == types.T_float64) &&
 						(otherOid == types.T_float32 || otherOid == types.T_float64 || otherOid.IsDecimal() || otherOid.IsInteger()) {

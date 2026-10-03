@@ -4016,10 +4016,8 @@ func preparedComparisonExactIntegerExpr(
 		return nil, false, nil
 	}
 	if signed {
-		value, err := strconv.ParseInt(integerText, 10, bits)
-		if err != nil || value < -(1<<53)+1 || value > (1<<53)-1 {
-			// BIGINT values at and above 2^53 can collide when the original
-			// comparison converts the column to DOUBLE.
+		_, err := strconv.ParseInt(integerText, 10, bits)
+		if err != nil {
 			return nil, false, nil
 		}
 		expr, err := preparedRuntimeParamExpr(ctx, integerText, false, targetType)
@@ -4035,126 +4033,8 @@ func preparedComparisonExactIntegerExpr(
 	return expr, err == nil, err
 }
 
-// preparedBoundedExactIntegerPrefix normalizes a decimal/scientific prefix to
-// an integer string of at most 20 digits without constructing an arbitrary-
-// precision number. The scan is linear in the supplied text and allocates only
-// the bounded result, so inputs such as 1e1000000 cannot amplify memory.
 func preparedBoundedExactIntegerPrefix(prefix string) (string, bool) {
-	if prefix == "" {
-		return "", false
-	}
-	i := 0
-	negative := false
-	if prefix[i] == '+' || prefix[i] == '-' {
-		negative = prefix[i] == '-'
-		i++
-		if i == len(prefix) {
-			return "", false
-		}
-	}
-	mantissaEnd := len(prefix)
-	for j := i; j < len(prefix); j++ {
-		if prefix[j] == 'e' || prefix[j] == 'E' {
-			mantissaEnd = j
-			break
-		}
-	}
-	digitCount, fractionalDigits := 0, 0
-	firstNonZero, lastNonZero := -1, -1
-	seenDot := false
-	for j := i; j < mantissaEnd; j++ {
-		switch c := prefix[j]; {
-		case c >= '0' && c <= '9':
-			if c != '0' {
-				if firstNonZero < 0 {
-					firstNonZero = digitCount
-				}
-				lastNonZero = digitCount
-			}
-			digitCount++
-			if seenDot {
-				fractionalDigits++
-			}
-		case c == '.' && !seenDot:
-			seenDot = true
-		default:
-			return "", false
-		}
-	}
-	if digitCount == 0 {
-		return "", false
-	}
-	if firstNonZero < 0 {
-		return "0", true
-	}
-
-	exponent := 0
-	if mantissaEnd < len(prefix) {
-		j := mantissaEnd + 1
-		exponentNegative := false
-		if j < len(prefix) && (prefix[j] == '+' || prefix[j] == '-') {
-			exponentNegative = prefix[j] == '-'
-			j++
-		}
-		if j == len(prefix) {
-			return "", false
-		}
-		capValue := len(prefix) + 64
-		for ; j < len(prefix); j++ {
-			c := prefix[j]
-			if c < '0' || c > '9' {
-				return "", false
-			}
-			if exponent < capValue {
-				digit := int(c - '0')
-				if exponent > (capValue-digit)/10 {
-					exponent = capValue
-				} else {
-					exponent = exponent*10 + digit
-				}
-			}
-		}
-		if exponentNegative {
-			exponent = -exponent
-		}
-	}
-
-	scale := fractionalDigits - exponent
-	endDigit := digitCount
-	appendZeros := 0
-	if scale > 0 {
-		if scale > digitCount-1-lastNonZero {
-			return "", false
-		}
-		endDigit -= scale
-	} else if scale < 0 {
-		appendZeros = -scale
-	}
-	resultDigits := endDigit - firstNonZero + appendZeros
-	if resultDigits <= 0 || resultDigits > 20 {
-		return "", false
-	}
-
-	var normalized strings.Builder
-	normalized.Grow(resultDigits + 1)
-	if negative {
-		normalized.WriteByte('-')
-	}
-	digitIndex := 0
-	for j := i; j < mantissaEnd && digitIndex < endDigit; j++ {
-		c := prefix[j]
-		if c == '.' {
-			continue
-		}
-		if digitIndex >= firstNonZero {
-			normalized.WriteByte(c)
-		}
-		digitIndex++
-	}
-	for range appendZeros {
-		normalized.WriteByte('0')
-	}
-	return normalized.String(), true
+	return planfunction.NormalizeExactIntegerString(prefix)
 }
 
 func preparedComparisonTextNeedsDoubleFallback(value string, target plan.Type) bool {
@@ -5602,6 +5482,14 @@ func (restore restorePreparedRuntimeParamRefRule) ApplyExpr(expr *Expr) (*Expr, 
 			// as an explicit cast in the reusable specialized plan.
 			restored.Typ = plan.Type{Id: int32(types.T_text)}
 			target := types.New(types.T(candidate.Typ.Id), candidate.Typ.Width, candidate.Typ.Scale)
+			if target.Oid.IsInteger() && types.T(lit.Src.Typ.Id).IsMySQLString() {
+				decimal := types.New(types.T_decimal128, 38, 0)
+				var err error
+				restored, err = makePlan2CastExpr(restore.ctx, restored, makePlan2Type(&decimal))
+				if err != nil {
+					return err
+				}
+			}
 			cast, err := makePlan2CastExpr(restore.ctx, restored, makePlan2Type(&target))
 			if err != nil {
 				return err

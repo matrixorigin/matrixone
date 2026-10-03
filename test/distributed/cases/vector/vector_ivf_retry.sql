@@ -256,6 +256,7 @@ set enable_vector_auto_mode_by_default = 1;
 -- Test 6.1: Default auto mode (should trigger fallback/retry internally)
 -- Even though no mode is specified in SQL, it SHOULD return 999 because auto mode is default
 select id from t_phase6 where filter_col = 1 order by l2_distance(vec, '[0,0,0]') limit 1;
+select id from t_phase6 where filter_col = 1 order by l2_distance(vec, '[0,0,0]') limit 1;
 
 -- Test 6.2: Override session default with explicit mode
 -- Explicit 'post' should return empty despite session default being 'auto'
@@ -264,6 +265,21 @@ select id from t_phase6 where filter_col = 1 order by l2_distance(vec, '[0,0,0]'
 set enable_vector_auto_mode_by_default = 0;
 -- Test 6.3: Back to default (post)
 select id from t_phase6 where filter_col = 1 order by l2_distance(vec, '[0,0,0]') limit 1;
+select id from t_phase6 where filter_col = 1 order by l2_distance(vec, '[0,0,0]') limit 1;
+
+-- The same parameterized handle must follow successful mode changes as well.
+set @vector_filter = 1;
+set enable_vector_auto_mode_by_default = 1;
+prepare vector_default_modes from 'select id from t_phase6 where filter_col = ? order by l2_distance(vec, ''[0,0,0]'') limit 1';
+execute vector_default_modes using @vector_filter;
+execute vector_default_modes using @vector_filter;
+set enable_vector_auto_mode_by_default = 0;
+execute vector_default_modes using @vector_filter;
+execute vector_default_modes using @vector_filter;
+set enable_vector_auto_mode_by_default = 1;
+execute vector_default_modes using @vector_filter;
+deallocate prepare vector_default_modes;
+set enable_vector_auto_mode_by_default = 0;
 
 -- =============================================================================
 -- Phase 7: BIT primary-key membership and AUTO correctness retry

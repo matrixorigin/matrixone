@@ -17,6 +17,7 @@ package cnservice
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -511,6 +512,43 @@ func TestServiceStartRequiresQuerySnapshot(t *testing.T) {
 				require.Equal(t, int32(1), frontend.stops.Load())
 				require.Equal(t, int32(1), pipeline.closes.Load())
 			}
+		})
+	}
+}
+
+func TestClusterSelfReadinessUsesAdmissionNotification(t *testing.T) {
+	for _, queryReady := range []bool{false, true} {
+		t.Run(fmt.Sprintf("query-ready=%t", queryReady), func(t *testing.T) {
+			const address = "127.0.0.1:6002"
+			cluster := &readinessCluster{
+				snapshots: [][]metadata.CNService{nil, {{
+					ServiceID: t.Name(), PipelineServiceAddress: "127.0.0.1:5002",
+					CommitID: version.CommitID, ViewMetadataAdmissionGeneration: 6,
+				}}, {{
+					ServiceID: t.Name(), PipelineServiceAddress: address,
+					CommitID: version.CommitID, ViewMetadataAdmissionGeneration: 7,
+				}}},
+			}
+			connected := make(chan struct{})
+			close(connected)
+			s := &service{
+				cfg:    &Config{UUID: t.Name(), ServiceAddress: address},
+				logger: zap.NewNop(), moCluster: cluster, hakeeperConnected: connected,
+				viewMetadataAdmissionGeneration: 7,
+				viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
+			}
+			// Publish while the first refresh still reports absence. The notification
+			// must survive until the wait is armed; it cannot itself authorize startup.
+			cluster.refreshHook = func(_ context.Context, call int) error {
+				if call < 3 {
+					s.notifyViewMetadataAdmissionUpdated()
+				}
+				return nil
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			require.NoError(t, s.waitForClusterSelfReadyWithContext(ctx, time.Hour, queryReady))
+			require.Equal(t, 3, cluster.calls())
 		})
 	}
 }

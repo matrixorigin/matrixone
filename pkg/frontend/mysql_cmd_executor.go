@@ -3601,7 +3601,7 @@ func handleGrantPrivilege(ses FeSession, execCtx *ExecCtx, gp *tree.GrantPrivile
 // handleRevokePrivilege revokes the privilege from the user or role
 func handleRevokePrivilege(ses FeSession, execCtx *ExecCtx, rp *tree.RevokePrivilege) (err error) {
 	ctx := execCtx.reqCtx
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
 	// put it into the single transaction
@@ -4899,6 +4899,12 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 	var stats statistic.StatsArray
 	stats.Reset()
 
+	// Cache grants only within one statement. A session-local cache cannot
+	// observe REVOKE or RESTORE committed by another connection or another CN.
+	if cache := ses.GetPrivilegeCache(); cache != nil {
+		cache.invalidate()
+	}
+
 	reqCtx, span := trace.Debug(reqCtx, "authenticateUserCanExecuteStatement")
 	defer span.End()
 	if getPu(ses.GetService()).SV.SkipCheckPrivilege {
@@ -5671,11 +5677,18 @@ func dispatchStmt(ses FeSession,
 	execCtx *ExecCtx) (err error) {
 	ses.EnterFPrint(FPDispatchStmt)
 	defer ses.ExitFPrint(FPDispatchStmt)
+	ses.GetTxnCompileCtx().tcw = execCtx.cw
 	//5. check plan within txn
 	if !execCtx.input.isBinaryProtExecute && execCtx.cw.Plan() != nil {
 		flag, err := checkModify(execCtx.cw.Plan(), ses.GetTxnCompileCtx().Resolve)
 		if err != nil {
 			return err
+		}
+		if reused, ok := execCtx.cw.(*TxnComputationWrapper); ok && reused.planGenerationReused && !flag {
+			flag, err = plan2.CachedPlanStatsChanged(execCtx.cw.Plan(), ses.GetTxnCompileCtx())
+			if err != nil {
+				return err
+			}
 		}
 		if flag {
 			if err = rebuildStaleCachedStatements(ses, execCtx); err != nil {
@@ -5700,8 +5713,6 @@ func executeStmt(ses *Session,
 ) (err error) {
 	ses.EnterFPrint(FPExecStmt)
 	defer ses.ExitFPrint(FPExecStmt)
-	ses.GetTxnCompileCtx().tcw = execCtx.cw
-
 	var cmpBegin time.Time
 	var ret interface{}
 

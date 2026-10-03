@@ -73,6 +73,7 @@ func ReadDataByFilter(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 	stats *objectio.IndexReaderTopStats,
+	policy fileservice.Policy,
 ) (sels []int64, err error) {
 	if cachedSearch != nil {
 		cacheVectors.Free(mp)
@@ -90,7 +91,7 @@ func ReadDataByFilter(
 			cachedSearchSorted,
 			visibilityTS,
 			mp,
-			fileservice.Policy(0),
+			policy,
 		)
 		if err != nil {
 			return
@@ -106,7 +107,7 @@ func ReadDataByFilter(
 			-1,
 			info,
 			ts,
-			fileservice.Policy(0),
+			policy,
 			cacheVectors,
 			mp,
 			fs,
@@ -422,6 +423,7 @@ func blockDataRead(
 			mp,
 			fs,
 			topStats,
+			policy,
 		); err != nil {
 			return err
 		}
