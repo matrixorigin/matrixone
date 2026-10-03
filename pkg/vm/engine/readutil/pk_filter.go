@@ -70,10 +70,10 @@ func ConstructBlockPKFilter(
 		HasFakePK:       isFakePK,
 		ExactMembership: bf != nil && bf.Exact(),
 	}
-	// The scoped cache search must preserve the exact routing contract of the
-	// existing callbacks. Fake PK columns are not physically sorted even when
-	// the block carries the sorted flag, and membership filters may use a
-	// second key column. Keep both cases on the legacy owned-vector path.
+	// CachedSearch only handles the primary-key predicate, not membership on
+	// a second key column. Exact membership uses the separate closed descriptor
+	// below. Fake PK columns are not physically sorted even when the block carries
+	// the sorted flag, so they remain on the legacy owned-vector path.
 	if !isFakePK && bf == nil {
 		readFilter.CachedSearch = buildCachedPKSearch(basePKFilter)
 	}
