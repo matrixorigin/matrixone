@@ -83,6 +83,12 @@ var (
 	CauseIcebergCredential = NewInternalError(context.Background(), "iceberg credential")
 	CauseIcebergResidency  = NewInternalError(context.Background(), "iceberg residency")
 	CauseIcebergInternal   = NewInternalError(context.Background(), "iceberg internal")
+	//pkg/iscp
+	CauseISCPIterationTimeout                  = NewInternalError(context.Background(), "iscp iteration timeout")
+	CauseISCPFlushJobStatusTimeout             = NewInternalError(context.Background(), "iscp flush job status timeout")
+	CauseISCPFlushPermanentErrorMessageTimeout = NewInternalError(context.Background(), "iscp flush permanent error message timeout")
+	CauseISCPTransactionFinishTimeout          = NewInternalError(context.Background(), "iscp transaction finish timeout")
+	CauseISCPGetTaskRunnerTimeout              = NewInternalError(context.Background(), "iscp get task runner timeout")
 	//pkg/vm/engine/disttae
 	CauseWorkspaceRSSCacheEvict = NewInternalError(context.Background(), "workspace rss cache evict")
 	//pkg/frontend

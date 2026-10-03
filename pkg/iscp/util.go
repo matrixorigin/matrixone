@@ -454,7 +454,7 @@ func finishISCPTransaction(ctx context.Context, txnOp client.TxnOperator, err er
 	cleanupCtx, cancel := context.WithTimeoutCause(
 		context.WithoutCancel(ctx),
 		time.Minute*5,
-		moerr.NewInternalErrorNoCtx("iscp transaction finish timeout"),
+		moerr.CauseISCPTransactionFinishTimeout,
 	)
 	defer cancel()
 	if err != nil {
@@ -570,7 +570,7 @@ func GetTaskRunner(
 	txn client.TxnOperator,
 ) (string, error) {
 	ctxWithSysAccount := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	ctxWithTimeout, cancel := context.WithTimeoutCause(ctxWithSysAccount, time.Minute*5, moerr.NewInternalErrorNoCtx("iscp get task runner timeout"))
+	ctxWithTimeout, cancel := context.WithTimeoutCause(ctxWithSysAccount, time.Minute*5, moerr.CauseISCPGetTaskRunnerTimeout)
 	defer cancel()
 
 	sql := `select task_runner from mo_task.sys_daemon_task where task_type = "ISCP" and task_runner is not null`

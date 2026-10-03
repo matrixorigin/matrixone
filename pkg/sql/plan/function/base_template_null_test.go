@@ -59,7 +59,7 @@ func TestTernaryStrFixedStrToFixedPreservesNullAndSelectionSemantics(t *testing.
 			NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{6}, []bool{false}),
 			eval,
 		)
-		succeed, info := caseData.Run()
+		succeed, info := caseData.RunAndFree()
 		require.True(t, succeed, info)
 	})
 
@@ -74,7 +74,7 @@ func TestTernaryStrFixedStrToFixedPreservesNullAndSelectionSemantics(t *testing.
 			NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{0, 0, 0}, []bool{true, true, true}),
 			eval,
 		)
-		succeed, info := caseData.Run()
+		succeed, info := caseData.RunAndFree()
 		require.True(t, succeed, info)
 	})
 
@@ -89,7 +89,7 @@ func TestTernaryStrFixedStrToFixedPreservesNullAndSelectionSemantics(t *testing.
 			NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{4, 0, 6}, []bool{false, true, false}),
 			eval,
 		).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}})
-		succeed, info := caseData.Run()
+		succeed, info := caseData.RunAndFree()
 		require.True(t, succeed, info)
 	})
 
@@ -104,7 +104,7 @@ func TestTernaryStrFixedStrToFixedPreservesNullAndSelectionSemantics(t *testing.
 			NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{0, 0}, []bool{true, true}),
 			eval,
 		).WithSelectList(&FunctionSelectList{AllNull: true})
-		succeed, info := caseData.Run()
+		succeed, info := caseData.RunAndFree()
 		require.True(t, succeed, info)
 	})
 
@@ -119,7 +119,7 @@ func TestTernaryStrFixedStrToFixedPreservesNullAndSelectionSemantics(t *testing.
 			NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{0, 0}, []bool{true, true}),
 			eval,
 		)
-		succeed, info := caseData.Run()
+		succeed, info := caseData.RunAndFree()
 		require.True(t, succeed, info)
 	})
 }
@@ -143,6 +143,7 @@ func TestUnaryFixedToStrConstNullPreservesResultCardinality(t *testing.T) {
 		),
 		InetNtoa,
 	)
+	defer testCase.Free()
 
 	succeed, info := testCase.Run()
 	require.True(t, succeed, info)
@@ -220,7 +221,7 @@ func TestBinaryStrFixedToStrMixedNullPreservesRowPositions(t *testing.T) {
 				},
 			)
 
-			succeed, info := testCase.Run()
+			succeed, info := testCase.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -237,7 +238,7 @@ func TestVarlenaConstResultsShareNonInlinePayload(t *testing.T) {
 	tests := []struct {
 		name   string
 		inputs []FunctionTestInput
-		fn     fEvalFn
+		fn     executeLogicOfOverload
 	}{
 		{
 			name:   "binary string fixed to string",
@@ -345,6 +346,7 @@ func TestVarlenaConstResultsShareNonInlinePayload(t *testing.T) {
 				NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil),
 				test.fn,
 			)
+			defer testCase.Free()
 			require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
 			require.NoError(t, test.fn(
 				testCase.parameters,
@@ -388,7 +390,7 @@ func TestVarlenaConstNullTemplatesPreserveResultCardinality(t *testing.T) {
 		name       string
 		inputs     []FunctionTestInput
 		resultType types.Type
-		fn         fEvalFn
+		fn         executeLogicOfOverload
 	}{
 		{
 			name:   "binary string fixed both constant",
@@ -533,7 +535,7 @@ func TestVarlenaConstNullTemplatesPreserveResultCardinality(t *testing.T) {
 				test.fn,
 			)
 
-			succeed, info := testCase.Run()
+			succeed, info := testCase.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -571,7 +573,7 @@ func TestVarlenaTemplatesIgnoreAllRowsPreserveResultCardinality(t *testing.T) {
 		name       string
 		inputs     []FunctionTestInput
 		resultType types.Type
-		fn         fEvalFn
+		fn         executeLogicOfOverload
 	}{
 		{
 			name:   "binary string fixed to string",
@@ -678,6 +680,7 @@ func TestVarlenaTemplatesIgnoreAllRowsPreserveResultCardinality(t *testing.T) {
 				NewFunctionTestResult(resultType, false, nil, nil),
 				test.fn,
 			)
+			defer testCase.Free()
 			require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
 			require.NoError(t, test.fn(
 				testCase.parameters,
@@ -702,7 +705,7 @@ func TestVarlenaConstErrorAndInvalidInputsPreserveResultCardinality(t *testing.T
 		name       string
 		input      FunctionTestInput
 		resultType types.Type
-		fn         fEvalFn
+		fn         executeLogicOfOverload
 	}{
 		{
 			name:  "null on error template",
@@ -743,7 +746,7 @@ func TestVarlenaConstErrorAndInvalidInputsPreserveResultCardinality(t *testing.T
 				test.fn,
 			)
 
-			succeed, info := testCase.Run()
+			succeed, info := testCase.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -768,6 +771,7 @@ func TestMoTupleExprMixedNullPreservesRowPositions(t *testing.T) {
 		),
 		MoTupleExpr,
 	)
+	defer testCase.Free()
 
 	succeed, info := testCase.Run()
 	require.True(t, succeed, info)
@@ -806,6 +810,7 @@ func TestMoTupleExprConstNonInlineResultSharesPayload(t *testing.T) {
 		NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil),
 		MoTupleExpr,
 	)
+	defer testCase.Free()
 	require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
 	require.NoError(t, MoTupleExpr(
 		testCase.parameters,

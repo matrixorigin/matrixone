@@ -37,7 +37,7 @@ func TestRegexp2FunctionEntryPointsPreserveMaskAndNullSemantics(t *testing.T) {
 
 	for _, tc := range []struct {
 		name string
-		fn   fEvalFn
+		fn   executeLogicOfOverload
 		want []bool
 	}{
 		{name: "regexp", fn: newOpBuiltInRegexp().builtInRegMatch, want: []bool{true, false, false, false}},
@@ -50,7 +50,7 @@ func TestRegexp2FunctionEntryPointsPreserveMaskAndNullSemantics(t *testing.T) {
 				NewFunctionTestResult(types.T_bool.ToType(), false, tc.want, []bool{false, false, true, true}),
 				tc.fn,
 			).WithSelectList(selectList)
-			succeed, info := caseRun.Run()
+			succeed, info := caseRun.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -63,7 +63,7 @@ func TestRegexp2FunctionEntryPointsPreserveMaskAndNullSemantics(t *testing.T) {
 		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false, false, false}, []bool{false, false, true, true}),
 		newOpBuiltInRegexp().builtInRegexpLike,
 	).WithSelectList(selectList)
-	succeed, info := like.Run()
+	succeed, info := like.RunAndFree()
 	require.True(t, succeed, info)
 }
 
@@ -73,7 +73,7 @@ func TestRegexp2FunctionEntryPointsValidateICUPatternBeforeNull(t *testing.T) {
 	// A NULL subject does not suppress validation of a present ICU pattern.
 	for _, tc := range []struct {
 		name string
-		fn   fEvalFn
+		fn   executeLogicOfOverload
 		want types.Type
 	}{
 		{name: "instr", fn: newOpBuiltInRegexp().builtInRegexpInstr, want: types.T_int64.ToType()},
@@ -89,7 +89,7 @@ func TestRegexp2FunctionEntryPointsValidateICUPatternBeforeNull(t *testing.T) {
 				NewFunctionTestResult(tc.want, true, nil, nil),
 				tc.fn,
 			)
-			succeed, info := caseRun.Run()
+			succeed, info := caseRun.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -113,7 +113,7 @@ func TestRegexp2SearchAndReplaceEntryPoints(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{2, 0, 0}, []bool{false, false, true}),
 		newOpBuiltInRegexp().builtInRegexpInstr,
 	).WithSelectList(mask)
-	succeed, info := instr.Run()
+	succeed, info := instr.RunAndFree()
 	require.True(t, succeed, info)
 
 	substr := NewFunctionTestCase(
@@ -128,7 +128,7 @@ func TestRegexp2SearchAndReplaceEntryPoints(t *testing.T) {
 		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"a", "", ""}, []bool{false, true, true}),
 		newOpBuiltInRegexp().builtInRegexpSubstr,
 	).WithSelectList(mask)
-	succeed, info = substr.Run()
+	succeed, info = substr.RunAndFree()
 	require.True(t, succeed, info)
 
 	replace := NewFunctionTestCase(
@@ -144,7 +144,7 @@ func TestRegexp2SearchAndReplaceEntryPoints(t *testing.T) {
 		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"<aa>", "ba", ""}, []bool{false, false, true}),
 		newOpBuiltInRegexp().builtInRegexpReplace,
 	).WithSelectList(mask)
-	succeed, info = replace.Run()
+	succeed, info = replace.RunAndFree()
 	require.True(t, succeed, info)
 }
 
