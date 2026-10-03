@@ -7188,13 +7188,20 @@ func bindFuncExprImplByPlanExpr(
 					orExprList = append(orExprList, rightVal)
 					continue
 				}
-				if partitionIn || exactIntegerList || checkNoNeedCast(ctx, makeTypeByPlan2Expr(rightVal), typLeft, rightVal) {
-					inExpr := rightVal
+				inExpr, guardedInteger := rightVal, false
+				if !partitionIn && len(rightList.List) > 1 && !exactIntegerList &&
+					!checkNoNeedCast(ctx, makeTypeByPlan2Expr(rightVal), typLeft, rightVal) {
+					inExpr, guardedInteger, err = bindPreparedIntegerInValue(ctx, args[0], rightVal)
+					if err != nil {
+						return nil, err
+					}
+				}
+				if partitionIn || exactIntegerList || guardedInteger || checkNoNeedCast(ctx, makeTypeByPlan2Expr(rightVal), typLeft, rightVal) {
 					// Keep the partition-IN coercion path unchanged. Ordinary IN can
 					// retain an already same-typed constant cast; casting UUID to UUID
 					// is both redundant and unsupported.
-					if partitionIn || !makeTypeByPlan2Expr(rightVal).Eq(typLeft) {
-						inExpr, err = appendCastBeforeExpr(ctx, rightVal, args[0].Typ)
+					if partitionIn || !makeTypeByPlan2Expr(inExpr).Eq(typLeft) {
+						inExpr, err = appendCastBeforeExpr(ctx, inExpr, args[0].Typ)
 						if err != nil {
 							return nil, err
 						}

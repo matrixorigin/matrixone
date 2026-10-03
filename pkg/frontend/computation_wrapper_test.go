@@ -3566,7 +3566,7 @@ func TestPreparedArithmeticDMLReusesStableRuntimeCategory(t *testing.T) {
 	require.NotNil(t, cw.runtimeCachePlan)
 }
 
-func TestPreparedSignedNarrowingDMLCacheGuard(t *testing.T) {
+func TestPreparedSignedNarrowingCacheGuard(t *testing.T) {
 	for _, tc := range []struct {
 		name, sql string
 		values    []string
@@ -3575,6 +3575,12 @@ func TestPreparedSignedNarrowingDMLCacheGuard(t *testing.T) {
 		{"update", "update nation set n_regionkey = ? where n_nationkey = ?", []string{"1", "7"}, []int{1}},
 		{"delete", "delete from nation where n_nationkey = ?", []string{"7"}, []int{0}},
 		{"multiple predicates", "update nation set n_name = 'updated' where n_nationkey = ? and n_regionkey = ?", []string{"7", "1"}, []int{0, 1}},
+		{"IN", "select n_name from nation where n_nationkey in (?,?)", []string{"127", "1"}, []int{0, 1}},
+		{"NOT IN", "select n_name from nation where n_nationkey not in (?,?)", []string{"127", "1"}, []int{0, 1}},
+		{"no narrowing", "select ?", []string{"127"}, nil},
+		{"unrelated projection", "select ?, n_name from nation where n_nationkey in (?,?)", []string{"127", "7", "8"}, []int{1, 2}},
+		{"projected IN", "select n_nationkey in (?,?) from nation", []string{"127", "1"}, []int{0, 1}},
+		{"unused projection", "select n_name from (select n_name, n_nationkey in (?,?) as unused from nation) derived", []string{"127", "1"}, []int{0, 1}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			optimizer := plan2.NewMockOptimizer(false)
@@ -3634,6 +3640,17 @@ func TestPreparedSignedNarrowingDMLCacheGuard(t *testing.T) {
 			for _, pos := range tc.keys {
 				require.True(t, guards[int32(pos)], "parameter %d needs its complete narrowing guard", pos)
 			}
+			if tc.name == "unused projection" {
+				q := narrowPlan.GetQuery()
+				pending := append([]int32(nil), q.Steps...)
+				for len(pending) > 0 {
+					node := q.Nodes[pending[0]]
+					pending = append(pending[1:], node.Children...)
+					for _, expr := range append(append([]*plan.Expr(nil), node.FilterList...), node.ProjectList...) {
+						require.False(t, function.ContainsParameter(expr), "unused IN consumer must be removed")
+					}
+				}
+			}
 			cached := compile.NewCompile("", "", prepared.Sql, "", "", nil,
 				cw.proc, prepared.PrepareStmt, false, nil, time.Now())
 			installed := false
@@ -3656,9 +3673,11 @@ func TestPreparedSignedNarrowingDMLCacheGuard(t *testing.T) {
 				// Planner tests own the limits. Here every ordinal must observe
 				// a new safe packet and recover after a guard miss.
 				values := append([]string(nil), tc.values...)
-				values[pos] = "8"
-				bind(values, -1, -1)
-				assertReused()
+				for _, value := range []string{"128", "32768", "2147483647"} {
+					values[pos] = value
+					bind(values, -1, -1)
+					assertReused()
+				}
 				values[pos] = "2147483648"
 				bind(values, -1, -1)
 				gotCompile, fallback := execute()
@@ -3667,6 +3686,22 @@ func TestPreparedSignedNarrowingDMLCacheGuard(t *testing.T) {
 				require.Nil(t, cw.runtimeCacheTarget, "a value-dependent fallback must not replace the good cache")
 				require.Same(t, narrowPlan, prepared.runtimePlan)
 				require.Same(t, cached, prepared.runtimeCompile)
+				bind(tc.values, -1, -1)
+				assertReused()
+			}
+			if tc.name == "unrelated projection" || tc.name == "no narrowing" {
+				values := append([]string(nil), tc.values...)
+				values[0] = "2147483648"
+				bind(values, -1, -1)
+				assertReused()
+			}
+			if tc.name == "IN" {
+				bind(tc.values, -1, -1)
+				prepared.ParamTypes[1] = 0x80
+				gotCompile, other := execute()
+				require.Nil(t, gotCompile, "signedness changes the semantic cache category")
+				require.NotSame(t, narrowPlan, other)
+				require.Same(t, narrowPlan, prepared.runtimePlan)
 				bind(tc.values, -1, -1)
 				assertReused()
 			}
@@ -3783,23 +3818,27 @@ func BenchmarkInitExecuteStmtParamRepeatedTPCCArithmeticUpdate(b *testing.B) {
 
 func BenchmarkPreparedNarrowingCacheAdmission(b *testing.B) {
 	for _, tc := range []struct {
-		name      string
+		name, sql string
 		mysqlType defines.MysqlType
 	}{
-		{"same_width", defines.MYSQL_TYPE_LONG},
-		{"guarded_narrowing", defines.MYSQL_TYPE_LONGLONG},
+		{"same_width", "update nation set n_regionkey=1 where n_nationkey=?", defines.MYSQL_TYPE_LONG},
+		{"guarded_narrowing", "update nation set n_regionkey=1 where n_nationkey=?", defines.MYSQL_TYPE_LONGLONG},
+		{"IN_same_width", "select n_name from nation where n_nationkey in (?,?)", defines.MYSQL_TYPE_LONG},
+		{"IN_guarded_narrowing", "select n_name from nation where n_nationkey in (?,?)", defines.MYSQL_TYPE_LONGLONG},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			optimizer := plan2.NewMockOptimizer(false)
 			ses, prepared, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(
-				b, 232, "update nation set n_regionkey=1 where n_nationkey=?", optimizer.CurrentContext())
+				b, 232, tc.sql, optimizer.CurrentContext())
 			b.Cleanup(func() {
 				cw.proc.SetPrepareParams(nil)
 				prepared.Close()
 			})
 			prepared.params = vector.NewVec(types.T_text.ToType())
-			require.NoError(b, vector.AppendBytes(prepared.params, []byte("7"), false, cw.proc.Mp()))
-			prepared.ParamTypes = []byte{byte(tc.mysqlType), 0}
+			for range strings.Count(tc.sql, "?") {
+				require.NoError(b, vector.AppendBytes(prepared.params, []byte("7"), false, cw.proc.Mp()))
+				prepared.ParamTypes = append(prepared.ParamTypes, byte(tc.mysqlType), 0)
+			}
 			compiler := &preparedTestCompiler{CompilerContext: optimizer.CurrentContext(), proc: cw.proc}
 			execute := func() (*compile.Compile, *plan.Plan) {
 				comp, p, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(
@@ -4128,20 +4167,25 @@ func TestRuntimeSpecializationReplacementCommitsOnlyAfterCompileSuccess(t *testi
 	oldCompile := compile.NewCompile(
 		"", "", prepareStmt.Sql, "", "", nil,
 		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
-	prepareStmt.installRuntimeSpecializationCache("old", oldPlan, oldCompile, nil, false)
-	require.Nil(t, prepareStmt.installRuntimeSpecializationCache("old", oldPlan, oldCompile, nil, false),
+	oldDiagnostics := []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_int32)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}}
+	prepareStmt.installRuntimeSpecializationCache("old", oldPlan, oldCompile, oldDiagnostics)
+	require.Nil(t, prepareStmt.installRuntimeSpecializationCache("old", oldPlan, oldCompile, oldDiagnostics),
 		"reinstalling the live compile must not retire it")
 
-	failedPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{StmtType: plan.Query_SELECT}}}
-	cw.runtimeCacheTarget = prepareStmt
-	cw.runtimeCacheKey = "failed"
-	cw.runtimeCachePlan = failedPlan
-	require.False(t, cw.completeRuntimeCacheCandidate(nil, assert.AnError))
-	require.Equal(t, "old", prepareStmt.runtimeSpecializationKey)
-	require.Same(t, oldPlan, prepareStmt.runtimePlan)
-	require.Same(t, oldCompile, prepareStmt.runtimeCompile)
-	require.Nil(t, cw.runtimeCacheTarget)
-	require.Nil(t, cw.runtimeCachePlan)
+	for _, compileErr := range []error{assert.AnError, context.Canceled} {
+		failedPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{StmtType: plan.Query_SELECT}}}
+		cw.runtimeCacheTarget = prepareStmt
+		cw.runtimeCacheKey = "failed"
+		cw.runtimeCachePlan = failedPlan
+		require.False(t, cw.completeRuntimeCacheCandidate(nil, compileErr))
+		require.Equal(t, "old", prepareStmt.runtimeSpecializationKey)
+		require.Same(t, oldPlan, prepareStmt.runtimePlan)
+		require.Same(t, oldCompile, prepareStmt.runtimeCompile)
+		require.Same(t, oldDiagnostics[0], prepareStmt.runtimeDiagnosticCandidates[0])
+		require.Nil(t, cw.runtimeCacheTarget)
+		require.Nil(t, cw.runtimeCachePlan)
+
+	}
 
 	newPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{StmtType: plan.Query_SELECT}}}
 	newCompile := compile.NewCompile(

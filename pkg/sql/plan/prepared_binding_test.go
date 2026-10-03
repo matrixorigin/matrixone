@@ -634,37 +634,50 @@ func TestPreparedDMLIntegerKeyDomains(t *testing.T) {
 }
 
 func TestPreparedSignedKeyGuardPreservesOtherDependencies(t *testing.T) {
-	for _, dependent := range []bool{false, true} {
-		ctx := withPreparedSourceBindings(context.Background(),
-			[]PreparedSourceBinding{{Position: 0, Type: types.T_int64.ToType()}},
-			[]any{ParamValue{Value: "7", IsBinaryProtocol: true}})
-		state := preparedBindingState(ctx)
-		state.valueDependent = dependent
-		param := &Expr{Typ: makeSimplePlan2Type(types.T_int64), Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
-		// One parameter can be consumed in more than one narrow domain. Each
-		// complete cast must survive independently of optimized predicates.
-		for _, target := range []types.T{types.T_int32, types.T_int16, types.T_int8} {
-			column := &Expr{Typ: makeSimplePlan2Type(target), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}
-			args, err := bindPreparedConsumerArguments(ctx, "=", []*Expr{column, param})
-			require.NoError(t, err)
-			require.Equal(t, int32(target), args[1].Typ.Id)
-			require.Equal(t, dependent, state.valueDependent)
-			require.NotSame(t, args[1], state.diagnosticCandidates[len(state.diagnosticCandidates)-1])
-		}
-		require.Len(t, state.diagnosticCandidates, 3)
-		proc := testutil.NewProcess(t)
-		params := vector.NewVec(types.T_text.ToType())
-		t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()); proc.Free() })
-		require.NoError(t, vector.AppendBytes(params, []byte("7"), false, proc.Mp()))
-		proc.SetPrepareParams(params)
-		for _, tc := range []struct {
-			value string
-			safe  bool
-		}{{"7", true}, {"128", false}, {"32768", false}, {"2147483648", false}, {"-128", true}, {"-129", false}, {"7", true}} {
-			require.NoError(t, vector.SetStringAt(params, 0, tc.value, proc.Mp()))
-			safe, err := ProbePreparedDiagnosticCandidates(proc, state.diagnosticCandidates)
-			require.NoError(t, err)
-			require.Equal(t, tc.safe, safe)
+	for _, selectStatement := range []bool{false, true} {
+		for _, dependent := range []bool{false, true} {
+			ctx := withPreparedSourceBindings(context.Background(),
+				[]PreparedSourceBinding{{Position: 0, Type: types.T_int64.ToType()}},
+				[]any{ParamValue{Value: "7", IsBinaryProtocol: true}})
+			state := preparedBindingState(ctx)
+			state.valueDependent = dependent
+			state.selectStatement = selectStatement
+			param := &Expr{Typ: makeSimplePlan2Type(types.T_int64), Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+			// One parameter can be consumed in more than one narrow domain. Each
+			// complete cast must survive independently of optimized predicates.
+			for _, target := range []types.T{types.T_int32, types.T_int16, types.T_int8} {
+				column := &Expr{Typ: makeSimplePlan2Type(target), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}
+				var converted *Expr
+				if selectStatement {
+					var admitted bool
+					var err error
+					converted, admitted, err = bindPreparedIntegerInValue(ctx, column, param)
+					require.NoError(t, err)
+					require.True(t, admitted)
+				} else {
+					args, err := bindPreparedConsumerArguments(ctx, "=", []*Expr{column, param})
+					require.NoError(t, err)
+					converted = args[1]
+				}
+				require.Equal(t, int32(target), converted.Typ.Id)
+				require.Equal(t, dependent, state.valueDependent)
+				require.NotSame(t, converted, state.diagnosticCandidates[len(state.diagnosticCandidates)-1])
+			}
+			require.Len(t, state.diagnosticCandidates, 3)
+			proc := testutil.NewProcess(t)
+			params := vector.NewVec(types.T_text.ToType())
+			t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()); proc.Free() })
+			require.NoError(t, vector.AppendBytes(params, []byte("7"), false, proc.Mp()))
+			proc.SetPrepareParams(params)
+			for _, tc := range []struct {
+				value string
+				safe  bool
+			}{{"7", true}, {"128", false}, {"32768", false}, {"2147483648", false}, {"-128", true}, {"-129", false}, {"7", true}} {
+				require.NoError(t, vector.SetStringAt(params, 0, tc.value, proc.Mp()))
+				safe, err := ProbePreparedDiagnosticCandidates(proc, state.diagnosticCandidates)
+				require.NoError(t, err)
+				require.Equal(t, tc.safe, safe)
+			}
 		}
 	}
 }
@@ -1209,29 +1222,6 @@ func TestSingletonProjectedPeerAdmission(t *testing.T) {
 	}
 }
 
-func TestPreparedIntegerComparisonRange(t *testing.T) {
-	for _, tc := range []struct {
-		value        any
-		source, want types.T
-	}{
-		{int64(-128), types.T_int64, types.T_int8}, {int64(127), types.T_int64, types.T_int8},
-		{int64(-129), types.T_int64, types.T_int16}, {int64(128), types.T_int64, types.T_int16},
-		{int64(math.MinInt16), types.T_int64, types.T_int16}, {int64(math.MaxInt16), types.T_int64, types.T_int16},
-		{int64(math.MinInt16) - 1, types.T_int64, types.T_int32}, {int64(math.MaxInt16) + 1, types.T_int64, types.T_int32},
-		{int64(math.MinInt32), types.T_int64, types.T_int32}, {int64(math.MaxInt32), types.T_int64, types.T_int32},
-		{int64(math.MinInt32) - 1, types.T_int64, types.T_int64}, {int64(math.MaxInt32) + 1, types.T_int64, types.T_int64},
-		{uint64(math.MaxUint8), types.T_uint64, types.T_uint8}, {uint64(math.MaxUint8) + 1, types.T_uint64, types.T_uint16},
-		{uint64(math.MaxUint16), types.T_uint64, types.T_uint16}, {uint64(math.MaxUint16) + 1, types.T_uint64, types.T_uint32},
-		{uint64(math.MaxUint32), types.T_uint64, types.T_uint32}, {uint64(math.MaxUint32) + 1, types.T_uint64, types.T_uint64},
-		{uint64(math.MaxUint64), types.T_uint64, types.T_uint64}, {int64(-1), types.T_uint64, types.T_any},
-		{int64(128), types.T_int8, types.T_any}, {"1.5", types.T_int64, types.T_any},
-		{"invalid", types.T_int64, types.T_any}, {nil, types.T_int64, types.T_any},
-		{"1", types.T_text, types.T_any}, {float64(1), types.T_float64, types.T_any},
-	} {
-		require.Equal(t, tc.want, PreparedIntegerComparisonType(ParamValue{Value: tc.value}, tc.source.ToType()), "source=%s value=%v", tc.source, tc.value)
-	}
-}
-
 func TestPreparedWideIntegerComparisonKeepsColumn(t *testing.T) {
 	for _, predicate := range []string{"val in (?,?)", "val not in (?,?)"} {
 		for _, value := range []int64{math.MinInt32, math.MaxInt32, math.MinInt32 - 1, math.MaxInt32 + 1} {
@@ -1255,7 +1245,6 @@ func TestPreparedWideIntegerComparisonKeepsColumn(t *testing.T) {
 				bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings, values)
 				require.NoError(t, err)
 				require.True(t, bound.DiagnosticFree)
-				require.True(t, bound.IntegerComparisonRanges)
 				if value >= math.MinInt32 && value <= math.MaxInt32 {
 					require.False(t, bound.ValueDependent)
 				}

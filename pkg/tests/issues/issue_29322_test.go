@@ -67,12 +67,15 @@ func TestIssue29322PreparedWideIntegerRebinding(t *testing.T) {
 				defer stmt.Close()
 				// Cross each narrowing boundary and return to the original range on the
 				// same server statement. NULL/fractional bindings cannot inherit its proof.
-				for _, value := range []any{int64(42), int64(128), int64(2147483647), int64(2147483648), int64(-2147483649), int64(-2147483648), nil, float64(42.5), int64(42)} {
+				for _, value := range []any{int64(42), int64(128), int64(2147483647), int64(2147483648), int64(-2147483649), int64(-2147483648), nil, float64(42.5), uint64(42), int64(42)} {
 					func() {
 						count := strings.Count(predicate, "?")
 						args := make([]any, count)
 						for i := range args {
 							args[i] = value
+						}
+						if count > 1 && value != nil {
+							args[count-1] = int64(42) // One guard misses while the other remains valid.
 						}
 						rows, err := stmt.QueryContext(ctx, args...)
 						require.NoError(t, err)
@@ -83,11 +86,15 @@ func TestIssue29322PreparedWideIntegerRebinding(t *testing.T) {
 						var warnings int
 						require.NoError(t, conn.QueryRowContext(ctx, "show count(*) warnings").Scan(&warnings))
 						require.Zero(t, warnings)
-						literal := "null"
-						if value != nil {
-							literal = fmt.Sprint(value)
+						reference := query
+						for _, arg := range args {
+							literal := "null"
+							if arg != nil {
+								literal = fmt.Sprint(arg)
+							}
+							reference = strings.Replace(reference, "?", literal, 1)
 						}
-						rows, err = conn.QueryContext(ctx, strings.ReplaceAll(query, "?", literal))
+						rows, err = conn.QueryContext(ctx, reference)
 						require.NoError(t, err)
 						defer rows.Close()
 						want := read(rows)

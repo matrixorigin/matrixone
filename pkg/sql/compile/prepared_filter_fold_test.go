@@ -128,71 +128,50 @@ func TestFilterScanStorageExprsUsesPreparedDiagnosticProof(t *testing.T) {
 			require.Zero(t, warnings.count, "probing must not publish diagnostics")
 		})
 	}
-}
+	t.Run("index prefix IN", func(t *testing.T) {
+		require.NoError(t, vector.SetStringAt(params, 0, "7", proc.Mp()))
+		serial, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "serial", []*planpb.Expr{cast})
+		require.NoError(t, err)
+		filter, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "prefix_in", []*planpb.Expr{
+			{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{Name: "__mo_index_idx_col"}}},
+			{Typ: serial.Typ, Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{serial}}}},
+		})
+		require.NoError(t, err)
+		require.True(t, plan2.ContainsStatementInvariantFilterDiagnostic(proc, filter))
+		prepared := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{Nodes: []*planpb.Node{
+			{NodeType: planpb.Node_TABLE_SCAN, FilterList: []*planpb.Expr{filter}},
+		}}}}
+		candidates := plan2.PreparedPlanDiagnosticCandidates(prepared)
+		require.NotEmpty(t, candidates)
+		proven, err := plan2.ProbePreparedDiagnosticCandidates(proc, candidates)
+		require.NoError(t, err)
+		storageFilters := filterScanStorageExprs(proc, []*planpb.Expr{filter}, proven)
+		require.Len(t, storageFilters, 1,
+			"a warning-free current parameter must retain the secondary index filter")
+		require.Zero(t, warnings.count)
 
-func TestPreparedIndexPrefixInKeepsDiagnosticFreeStorageFilter(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	t.Cleanup(func() { proc.Free() })
-	warnings := &filterFoldWarningCounter{}
-	proc.WarningSink = warnings
-	params := vector.NewVec(types.T_text.ToType())
-	require.NoError(t, vector.AppendBytes(params, []byte("7"), false, proc.Mp()))
-	proc.SetPrepareParams(params)
-	t.Cleanup(func() {
+		require.NoError(t, vector.SetStringAt(params, 0, "not-an-int", proc.Mp()))
+		proven, err = plan2.ProbePreparedDiagnosticCandidates(proc, candidates)
+		require.NoError(t, err)
+		storageFilters = filterScanStorageExprs(proc, []*planpb.Expr{filter}, proven)
+		require.Empty(t, storageFilters,
+			"a diagnostic-bearing parameter must keep its row-level owner")
+		require.Zero(t, warnings.count, "the probe must not publish the SQL diagnostic")
+
+		require.NoError(t, vector.SetStringAt(params, 0, "8", proc.Mp()))
+		proven, err = plan2.ProbePreparedDiagnosticCandidates(proc, candidates)
+		require.NoError(t, err)
+		storageFilters = filterScanStorageExprs(proc, []*planpb.Expr{filter}, proven)
+		require.Len(t, storageFilters, 1, "the next execution must recheck its parameter")
+
 		proc.SetPrepareParams(nil)
-		params.Free(proc.Mp())
+		proven, err = plan2.ProbePreparedDiagnosticCandidates(proc, candidates)
+		require.Error(t, err, "an unbound parameter must reject execution-local proof")
+		require.False(t, proven)
+		storageFilters = filterScanStorageExprs(proc, []*planpb.Expr{filter}, proven)
+		require.Empty(t, storageFilters, "an unbound plan has no execution-local proof")
+
 	})
-
-	param := &planpb.Expr{
-		Typ:  planpb.Type{Id: int32(types.T_text)},
-		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
-	}
-	intType := &planpb.Expr{
-		Typ:  planpb.Type{Id: int32(types.T_int32)},
-		Expr: &planpb.Expr_T{T: &planpb.TargetType{}},
-	}
-	cast, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "cast", []*planpb.Expr{param, intType})
-	require.NoError(t, err)
-	serial, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "serial", []*planpb.Expr{cast})
-	require.NoError(t, err)
-	filter, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "prefix_in", []*planpb.Expr{
-		{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{Name: "__mo_index_idx_col"}}},
-		{Typ: serial.Typ, Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{serial}}}},
-	})
-	require.NoError(t, err)
-	require.True(t, plan2.ContainsStatementInvariantFilterDiagnostic(proc, filter))
-	prepared := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{Nodes: []*planpb.Node{
-		{NodeType: planpb.Node_TABLE_SCAN, FilterList: []*planpb.Expr{filter}},
-	}}}}
-	candidates := plan2.PreparedPlanDiagnosticCandidates(prepared)
-	require.NotEmpty(t, candidates)
-	proven, err := plan2.ProbePreparedDiagnosticCandidates(proc, candidates)
-	require.NoError(t, err)
-	storageFilters := filterScanStorageExprs(proc, []*planpb.Expr{filter}, proven)
-	require.Len(t, storageFilters, 1,
-		"a warning-free current parameter must retain the secondary index filter")
-	require.Zero(t, warnings.count)
-
-	require.NoError(t, vector.SetStringAt(params, 0, "not-an-int", proc.Mp()))
-	proven, err = plan2.ProbePreparedDiagnosticCandidates(proc, candidates)
-	require.NoError(t, err)
-	storageFilters = filterScanStorageExprs(proc, []*planpb.Expr{filter}, proven)
-	require.Empty(t, storageFilters,
-		"a diagnostic-bearing parameter must keep its row-level owner")
-	require.Zero(t, warnings.count, "the probe must not publish the SQL diagnostic")
-
-	require.NoError(t, vector.SetStringAt(params, 0, "8", proc.Mp()))
-	proven, err = plan2.ProbePreparedDiagnosticCandidates(proc, candidates)
-	require.NoError(t, err)
-	storageFilters = filterScanStorageExprs(proc, []*planpb.Expr{filter}, proven)
-	require.Len(t, storageFilters, 1, "the next execution must recheck its parameter")
-
-	proc.SetPrepareParams(nil)
-	proven, err = plan2.ProbePreparedDiagnosticCandidates(proc, candidates)
-	require.Error(t, err, "an unbound parameter must reject execution-local proof")
-	require.False(t, proven)
-	storageFilters = filterScanStorageExprs(proc, []*planpb.Expr{filter}, proven)
-	require.Empty(t, storageFilters, "an unbound plan has no execution-local proof")
 }
 
 func TestBuildFoldedFilterExprsRollsBackAndCanRetry(t *testing.T) {

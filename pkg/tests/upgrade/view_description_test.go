@@ -678,10 +678,7 @@ func TestViewDescriptionSubscription(t *testing.T) {
 		exec("alter table view_description_pub.src modify column x varchar(7)")
 		_, err = subscriber.ExecContext(ctx, "create snapshot view_description_legacy_columns for account")
 		require.NoError(t, err)
-		defer func() {
-			_, err := subscriber.ExecContext(ctx, "drop snapshot view_description_legacy_columns")
-			require.NoError(t, err)
-		}()
+		defer cleanup(subscriber, "drop snapshot view_description_legacy_columns")
 		exec("alter table view_description_pub.src modify column x varchar(5)")
 		// Compare the historical projection with the new one on the same CN.
 		// Publisher View, subscription table and subscription View must all
