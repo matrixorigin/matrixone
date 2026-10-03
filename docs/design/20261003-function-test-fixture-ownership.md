@@ -100,6 +100,17 @@ PreExtendAndReset before each real evaluation. B.Loop replaces the fixed 100000
 loop; no error is ignored. DateFormat's 100 identical cases become one batch,
 retaining every value, NULL, constant and expected field. The unused multi-case
 builder and old benchmark helper are retired with their callers.
+DebugRun now admits/reset results through the same vector owner and forwards
+its existing selection. Its 26 callers and the helper's masked execution branch
+no longer prepare or dispatch separately; raw evaluator errors still return the
+borrowed partial vector. The helper alone returns nil on error. Existing reuse
+and quota scenarios prove fresh masked execution, mask reset and rejection
+before evaluator entry. Six decimal benchmarks now check literal coefficient
+123400 and full source/result types, with no unused target-vector payload.
+The DebugRun increment passed full-package normal tests, all 29 affected UTs
+under race, six decimal benchmarks, vet and incremental lint. Independent
+gpt-6.1-sol xhigh review approved this local closure; the full-package race gate
+remains failed under #29592.
 Normal package tests and all 176 benchmarks passed at 1x; the four affected UTs
 and all 176 benchmarks passed under race at 2x. Native/heap-baseline and B.N+1
 real-entry probes passed; both post-admission Cast input mutants failed timed

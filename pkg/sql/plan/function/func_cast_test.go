@@ -390,7 +390,6 @@ func TestInsertIgnoreCastsSpecialValues(t *testing.T) {
 				[]FunctionTestInput{input, NewFunctionTestInput(year, []types.MoYear{}, nil)},
 				NewFunctionTestResult(year, false, []types.MoYear{0}, nil), NewCast)
 			defer tcc.Free()
-			require.NoError(t, tcc.result.PreExtendAndReset(1))
 			result, err := tcc.DebugRun()
 			require.NoError(t, err)
 			got, isNull := vector.GenerateFunctionFixedTypeParameter[types.MoYear](result).GetValue(0)
@@ -441,7 +440,6 @@ func TestYearAssignmentCastHonorsSQLMode(t *testing.T) {
 			cast,
 		)
 		defer tcc.Free()
-		require.NoError(t, tcc.result.PreExtendAndReset(1))
 		result, err := tcc.DebugRun()
 		if err != nil {
 			return 0, false, err
@@ -552,7 +550,6 @@ func TestTimeAssignmentCastHonorsMySQLRange(t *testing.T) {
 				owned.Free()
 			}
 		}()
-		require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
 		_, err := tc.DebugRun()
 		owned = nil
 		return tc, err
@@ -745,7 +742,6 @@ func TestTimeAssignmentCastHonorsMySQLRange(t *testing.T) {
 			[]FunctionTestInput{input, NewFunctionTestInput(target, []types.Time{}, nil)},
 			NewFunctionTestResult(target, false, nil, nil), NewAssignCast)
 		defer tc.Free()
-		require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
 		_, err := tc.DebugRun()
 		require.Error(t, err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)

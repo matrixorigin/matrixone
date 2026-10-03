@@ -7505,7 +7505,6 @@ func TestVecFromBase64InvalidInputClass(t *testing.T) {
 			[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{input}, nil)},
 			NewFunctionTestResult(resultType, true, nil, nil), decode)
 		defer fc.Free()
-		require.NoError(t, fc.result.PreExtendAndReset(fc.fnLength))
 		_, err := fc.DebugRun()
 		return err
 	}
