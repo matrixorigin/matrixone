@@ -254,7 +254,6 @@ func Test_handleGetObject_WithMockCheckers(t *testing.T) {
 		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
-		txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 
 		// Mock txn client
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
@@ -647,7 +646,6 @@ func Test_handleInternalGetObject_GoodPath(t *testing.T) {
 		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
-		txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 
 		// Mock txn client
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)

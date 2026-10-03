@@ -1083,7 +1083,6 @@ type FeSession interface {
 	SendRows() int64
 	SetTStmt(stmt *motrace.StatementInfo)
 	GetUUIDString() string
-	DisableTrace() bool
 	Close()
 	Clear()
 	getCachedPlan(sql string) *cachedPlan
@@ -1347,7 +1346,6 @@ type feSessionImpl struct {
 	sqlCount     uint64
 	uuid         uuid.UUID
 	debugStr     string
-	disableTrace bool
 	respr        Responser
 	runSQLTokens []uint64
 	//refreshed once
@@ -1491,10 +1489,6 @@ func (ses *feSessionImpl) GetDatabaseName() string {
 
 func (ses *feSessionImpl) GetUserName() string {
 	return ses.respr.GetStr(USERNAME)
-}
-
-func (ses *feSessionImpl) DisableTrace() bool {
-	return ses.disableTrace
 }
 
 func (ses *feSessionImpl) SetMemPool(mp *mpool.MPool) {

@@ -7018,7 +7018,7 @@ func TestCreatePrepareStmtRestoresCurrentExecCtx(t *testing.T) {
 		return nil, moerr.NewInternalError(ctx, "stop after context check")
 	}
 
-	_, err := createPrepareStmt(currentExecCtx, ses, "select 1",
+	_, err := createPrepareStmtInSession(currentExecCtx, ses, ses, "select 1",
 		tree.NewPrepareStmt("s", &tree.Select{}), &tree.Select{})
 	require.Error(t, err)
 	require.True(t, checked)
@@ -7243,7 +7243,7 @@ func TestExecuteAnalyzeDerivedQueryRestoresResponderOnSuccess(t *testing.T) {
 	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 	txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0), nil).AnyTimes()
 	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).AnyTimes()
-	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 	ses.txnHandler.storage = eng
@@ -7320,7 +7320,7 @@ func TestExecuteAnalyzeDerivedQueryPreservesResponderProperties(t *testing.T) {
 		return 0, nil
 	}).AnyTimes()
 	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).AnyTimes()
-	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 	ses.txnHandler.storage = eng
@@ -7505,7 +7505,7 @@ func newAnalyzeHandlerTestSession(t *testing.T, ctrl *gomock.Controller) (*Sessi
 	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 	txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
 	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).AnyTimes()
-	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 	ses.txnHandler.storage = eng
@@ -9896,7 +9896,7 @@ func TestExecRequestStmtPrepareAcceptsExplainAndSetVariable(t *testing.T) {
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
-	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
 	txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
 	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 	txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()

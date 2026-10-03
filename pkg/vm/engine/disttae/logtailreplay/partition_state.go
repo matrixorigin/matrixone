@@ -40,7 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -601,7 +600,6 @@ func (p *PartitionState) HandleLogtailEntry(
 	packer *types.Packer,
 	pool *mpool.MPool,
 ) {
-	txnTrace.GetService(p.service).ApplyLogtail(entry, 1)
 	switch entry.EntryType {
 	case api.Entry_Insert:
 		if IsDataObjectList(entry.TableName) {

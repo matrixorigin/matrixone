@@ -2915,7 +2915,7 @@ func TestTryIndexOnlyScanRejectsBroadEncodedEquality(t *testing.T) {
 	scanID := builder.appendNode(node, ctx)
 	builder.qry.Nodes[scanID].Stats = &planpb.Stats{TableCnt: 800_000, Outcnt: 720_000, Selectivity: 0.9, Cost: 800_000}
 	builder.qry.Nodes[scanID].FilterList[0].Selectivity = 0.9
-	leadingPos, _ := findLeadingFilter(idxDef, builder.qry.Nodes[scanID])
+	leadingPos := []int32{0}
 	require.True(t, builder.shouldSkipEncodedIndexOnlyScan(idxDef, builder.qry.Nodes[scanID], map[[2]int32]int{{bindTag, 1}: 1, {bindTag, 2}: 1}, leadingPos, false))
 
 	idxNodeID := builder.tryIndexOnlyScan(
@@ -3362,7 +3362,7 @@ func TestEncodedIndexCostBoundaryControls(t *testing.T) {
 				builder, scanID, idxDef, colRefCnt := newBroadCase(t, 800_000)
 				node := builder.qry.Nodes[scanID]
 				test.mutate(node)
-				leadingPos, _ := findLeadingFilter(idxDef, node)
+				leadingPos := []int32{0}
 				require.False(t, builder.shouldSkipEncodedIndexOnlyScan(idxDef, node, colRefCnt, leadingPos, false))
 			})
 		}
@@ -7210,29 +7210,31 @@ func TestApplyIndicesForProjectSkipsOrderedLimitForOffsetOrRank(t *testing.T) {
 		})
 	}
 }
-func TestTryMatchMoreLeadingFiltersRequiresContiguousPrefix(t *testing.T) {
-	idxDef := &IndexDef{
-		Parts: []string{"uid", "typ", "flag", "__mo_alias_id"},
-	}
-	node := &planpb.Node{
-		TableDef: &planpb.TableDef{
-			Name2ColIndex: map[string]int32{
-				"uid":  1,
-				"typ":  2,
-				"flag": 3,
-				"id":   0,
-			},
-		},
-		// Filters only on uid and flag, missing typ.
-		FilterList: []*planpb.Expr{
-			makeEqFilterExpr(1),
-			makeEqFilterExpr(3),
-		},
-	}
-
-	leadingPos := tryMatchMoreLeadingFilters(idxDef, node, 0)
-	if !reflect.DeepEqual([]int32{0}, leadingPos) {
-		t.Fatalf("unexpected leading positions, got=%v, want=%v", leadingPos, []int32{0})
+func TestRegularIndexOnlyMatchRequiresContiguousPrefix(t *testing.T) {
+	builder, scanID, idxDef, refs := newEncodedIndexCostTestCase(t,
+		[]string{"tenant_id", "event_id", "category", "event_time", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+		[]*planpb.Expr{makeParamEqFilterExpr(0, 0, 0), makeParamEqFilterExpr(0, 3, 1)},
+		&planpb.Stats{TableCnt: 800000, Outcnt: 1, Selectivity: 0.000001, Cost: 800000},
+		map[int32]int{0: 1, 3: 1}, true)
+	node := builder.qry.Nodes[scanID]
+	for _, tc := range []struct {
+		name string
+		add  []*planpb.Expr
+		want []int32
+	}{
+		{"missing second part", nil, []int32{0}},
+		{"missing third part", []*planpb.Expr{makeParamEqFilterExpr(0, 1, 2)}, []int32{0, 2}},
+		{"complete prefix", []*planpb.Expr{makeParamEqFilterExpr(0, 1, 2), makeStringEqFilterExpr(0, 2, "HOT")}, []int32{0, 2, 3, 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			node.FilterList = append([]*planpb.Expr{makeParamEqFilterExpr(0, 0, 0), makeParamEqFilterExpr(0, 3, 1)}, tc.add...)
+			for _, expr := range node.FilterList {
+				expr.GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+			}
+			match, ok := builder.matchRegularIndexOnlyScan(idxDef, node, builder.newEncodedRegularIndexCostContext(node, refs))
+			require.True(t, ok)
+			require.Equal(t, tc.want, match.filterIdx)
+		})
 	}
 }
 

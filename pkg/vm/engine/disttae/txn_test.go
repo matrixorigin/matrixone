@@ -1284,7 +1284,7 @@ func newTxnOperatorForTestWithWorkspace(
 	ctrl := gomock.NewController(t)
 	op := mock_frontend.NewMockTxnOperator(ctrl)
 	op.EXPECT().Txn().Return(txnpb.TxnMeta{ID: []byte("txn-test")}).AnyTimes()
-	op.EXPECT().NextSequence().Return(uint64(1)).AnyTimes()
+
 	op.EXPECT().Status().Return(txnpb.TxnStatus_Active).AnyTimes()
 	op.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
 	return op
