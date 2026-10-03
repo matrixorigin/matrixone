@@ -50,7 +50,7 @@ func TestCosineSimilarityIsConstnessIndependent(t *testing.T) {
 			c := NewFunctionTestCase(proc, tc.input,
 				NewFunctionTestResult(types.T_float64.ToType(), false, []float64{want}, []bool{false}),
 				CosineSimilarityArray[float32])
-			ok, info := c.Run()
+			ok, info := c.RunAndFree()
 			require.True(t, ok, info)
 		})
 	}
@@ -63,7 +63,7 @@ func TestCosineSimilarityIsConstnessIndependent(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_float64.ToType(), true, []float64{0, 0}, []bool{false, false}),
 		CosineSimilarityArray[float32])
-	s, info := constZero.Run()
+	s, info := constZero.RunAndFree()
 	require.True(t, s, info)
 
 	// Ordinary vectors still answer.
@@ -74,7 +74,7 @@ func TestCosineSimilarityIsConstnessIndependent(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{1, 1}, []bool{false, false}),
 		CosineSimilarityArray[float32])
-	s, info = constOk.Run()
+	s, info = constOk.RunAndFree()
 	require.True(t, s, info)
 }
 
@@ -92,7 +92,7 @@ func TestL2DistanceBatchRejectsSquaredOverflowLikeScalar(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_float64.ToType(), true, []float64{}, []bool{}),
 		L2DistanceArray[float32])
-	s, info := batch.Run()
+	s, info := batch.RunAndFree()
 	require.True(t, s, info)
 
 	perRow := NewFunctionTestCase(proc,
@@ -102,7 +102,7 @@ func TestL2DistanceBatchRejectsSquaredOverflowLikeScalar(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_float64.ToType(), true, []float64{}, []bool{}),
 		L2DistanceArray[float32])
-	s, info = perRow.Run()
+	s, info = perRow.RunAndFree()
 	require.True(t, s, info)
 
 	// An ordinary pair takes the batch path and both forms answer identically.
@@ -123,7 +123,7 @@ func TestL2DistanceBatchRejectsSquaredOverflowLikeScalar(t *testing.T) {
 			c := NewFunctionTestCase(proc, tc.input,
 				NewFunctionTestResult(types.T_float64.ToType(), false, []float64{5}, []bool{false}),
 				L2DistanceArray[float32])
-			ok, info := c.Run()
+			ok, info := c.RunAndFree()
 			require.True(t, ok, info)
 		})
 	}
@@ -143,7 +143,7 @@ func TestNormalizeL2RejectsInsteadOfEmittingStaleBuffer(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_array_float64.ToType(), true, [][]float64{}, []bool{}),
 		NormalizeL2Array[float64])
-	s, info := f64.Run()
+	s, info := f64.RunAndFree()
 	require.True(t, s, info)
 
 	// Underflow is rejected the same way. Only float64 reaches either bound: the norm accumulates
@@ -155,7 +155,7 @@ func TestNormalizeL2RejectsInsteadOfEmittingStaleBuffer(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_array_float64.ToType(), true, [][]float64{}, []bool{}),
 		NormalizeL2Array[float64])
-	s, info = under.Run()
+	s, info = under.RunAndFree()
 	require.True(t, s, info)
 
 	// Ordinary rows still normalize, and a null row stays null.
@@ -167,6 +167,6 @@ func TestNormalizeL2RejectsInsteadOfEmittingStaleBuffer(t *testing.T) {
 		NewFunctionTestResult(types.T_array_float32.ToType(), false,
 			[][]float32{{0.6, 0.8}, {}, {0, 0}}, []bool{false, true, false}),
 		NormalizeL2Array[float32])
-	s, info = ok.Run()
+	s, info = ok.RunAndFree()
 	require.True(t, s, info)
 }

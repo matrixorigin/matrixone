@@ -222,7 +222,7 @@ func TestCastTemporalNumericUsesMysqlPackedValue(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.info, func(t *testing.T) {
 			fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, NewCast)
-			succeed, info := fcTC.Run()
+			succeed, info := fcTC.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -235,7 +235,7 @@ func TestCastYearToBitRejectsOverflow(t *testing.T) {
 		NewFunctionTestInput(types.T_year.ToType(), []types.MoYear{2024}, nil),
 		NewFunctionTestInput(bit10, []uint64{}, nil),
 	}, NewFunctionTestResult(bit10, true, nil, nil), NewCast)
-	ok, info := tc.Run()
+	ok, info := tc.RunAndFree()
 	require.True(t, ok, info)
 }
 
@@ -263,7 +263,7 @@ func TestTimeNumericArithmeticPreservesFractionAndMetadata(t *testing.T) {
 		NewFunctionTestResult(decimal64Type, false, []types.Decimal64{wantSmall, wantLarge}, nil),
 		NewCast,
 	)
-	succeed, info := castCase.Run()
+	succeed, info := castCase.RunAndFree()
 	require.True(t, succeed, info)
 
 	for _, tc := range []struct {
@@ -310,7 +310,7 @@ func TestTimeNumericArithmeticPreservesFractionAndMetadata(t *testing.T) {
 			[]types.Decimal128{wantMultiplySmall, wantMultiplyLarge}, nil),
 		multiFn,
 	)
-	succeed, info = multiplyCase.Run()
+	succeed, info = multiplyCase.RunAndFree()
 	require.True(t, succeed, info)
 
 	wantDivideSmall, err := types.ParseDecimal128("0.0001000", 21, 7)
@@ -326,7 +326,7 @@ func TestTimeNumericArithmeticPreservesFractionAndMetadata(t *testing.T) {
 			[]types.Decimal128{wantDivideSmall, wantDivideLarge}, nil),
 		divFn,
 	)
-	succeed, info = divideCase.Run()
+	succeed, info = divideCase.RunAndFree()
 	require.True(t, succeed, info)
 
 	wantModuloSmall, err := types.ParseDecimal64("0.001", 18, 3)
@@ -342,7 +342,7 @@ func TestTimeNumericArithmeticPreservesFractionAndMetadata(t *testing.T) {
 			[]types.Decimal64{wantModuloSmall, wantModuloLarge}, nil),
 		modFn,
 	)
-	succeed, info = moduloCase.Run()
+	succeed, info = moduloCase.RunAndFree()
 	require.True(t, succeed, info)
 }
 
@@ -469,7 +469,7 @@ func TestCastDecimalPackedDatetimeToDatetime(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, NewCast)
-			succeed, info := fcTC.Run()
+			succeed, info := fcTC.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -512,7 +512,7 @@ func TestCastDecimalPackedDatetimeToTimestamp(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, NewCast)
-			succeed, info := fcTC.Run()
+			succeed, info := fcTC.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -536,7 +536,7 @@ func TestTimestampNumericCastUsesSessionTimeZone(t *testing.T) {
 		NewFunctionTestResult(types.New(types.T_decimal128, 20, 6), false, []types.Decimal128{expected}, nil),
 		NewCast,
 	)
-	succeed, info := tc.Run()
+	succeed, info := tc.RunAndFree()
 	require.True(t, succeed, info)
 }
 
@@ -564,7 +564,7 @@ func TestTimestampToTimeCastUsesSessionTimeZone(t *testing.T) {
 		NewFunctionTestResult(types.T_time.ToTypeWithScale(6), false, []types.Time{expectedTime, 0}, []bool{false, true}),
 		NewCast,
 	)
-	succeed, info := tc.Run()
+	succeed, info := tc.RunAndFree()
 	require.True(t, succeed, info)
 }
 
@@ -586,7 +586,7 @@ func TestTimestampToTimeCastUsesTargetScale(t *testing.T) {
 		NewFunctionTestResult(types.T_time.ToTypeWithScale(3), false, []types.Time{expectedTime}, nil),
 		NewCast,
 	)
-	succeed, info := tc.Run()
+	succeed, info := tc.RunAndFree()
 	require.True(t, succeed, info)
 }
 
@@ -636,7 +636,7 @@ func TestTimestampToTimeCastUsesCivilClockForTomorrow(t *testing.T) {
 				NewFunctionTestResult(types.T_time.ToTypeWithScale(6), false, []types.Time{tc.want}, nil),
 				NewCast,
 			)
-			succeed, info := testCase.Run()
+			succeed, info := testCase.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -654,7 +654,7 @@ func TestTimestampToTimeCastZeroTimestamp(t *testing.T) {
 		NewFunctionTestResult(types.T_time.ToTypeWithScale(6), false, []types.Time{0}, nil),
 		NewCast,
 	)
-	succeed, info := tc.Run()
+	succeed, info := tc.RunAndFree()
 	require.True(t, succeed, info)
 }
 
@@ -688,7 +688,7 @@ func TestTemporalNumericCastRejectsPackedValueOutsideInt32(t *testing.T) {
 				NewFunctionTestResult(types.T_int32.ToType(), true, nil, nil),
 				NewCast,
 			)
-			succeed, info := fcTC.Run()
+			succeed, info := fcTC.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -850,7 +850,7 @@ func TestTemporalNumericCastDecimalAndNulls(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, NewCast)
-			succeed, info := fcTC.Run()
+			succeed, info := fcTC.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
