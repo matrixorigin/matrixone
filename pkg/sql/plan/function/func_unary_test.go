@@ -10350,12 +10350,18 @@ func (s *userLevelLockTestService) CloseRemoteLockTable(group uint32, tableID, v
 func runUserLevelLockTest(t *testing.T, fn func([]lockservice.LockService)) {
 	t.Helper()
 	resetUserLevelLocksForTest(t)
-	defer resetUserLevelLocksForTest(t)
 	state := &userLevelLockTestState{locks: make(map[string]string)}
-	fn([]lockservice.LockService{
+	services := []lockservice.LockService{
 		&userLevelLockTestService{id: "user-level-lock-1", state: state},
 		&userLevelLockTestService{id: "user-level-lock-2", state: state},
-	})
+	}
+	defer func() {
+		for _, service := range services {
+			service.(*userLevelLockTestService).blockUnlock.Store(false)
+		}
+		resetUserLevelLocksForTest(t)
+	}()
+	fn(services)
 }
 
 func requireUserLevelLockTxnRegistered(t *testing.T, state *userLevelLockTestState, txnID []byte, want bool) {

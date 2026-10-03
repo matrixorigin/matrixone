@@ -1215,7 +1215,7 @@ func newTestTxnClientAndOpWithModeIsolation(
 	txnOperator.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
 	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{Mode: mode, Isolation: isolation}).AnyTimes()
 	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
-	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
 	txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
 	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 	txnOperator.EXPECT().CheckLockTableBinds(gomock.Any()).Return(nil).AnyTimes()
@@ -1705,7 +1705,7 @@ func newTestTxnClientAndOpWithPessimistic(ctrl *gomock.Controller) (client.TxnCl
 		Mode: txn.TxnMode_Pessimistic,
 	}).AnyTimes()
 	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
-	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
 	txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
 	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 	txnOperator.EXPECT().CheckLockTableBinds(gomock.Any()).Return(nil).AnyTimes()

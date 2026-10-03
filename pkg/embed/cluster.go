@@ -528,9 +528,6 @@ func (c *cluster) createServiceOperators(from int) error {
 		if c.options.testing {
 			adjustTestingClusterStartup(s)
 			s.Adjust(applyTestingHAKeeperBackendReadTimeout)
-			if s.serviceType == metadata.ServiceType_CN {
-				s.Adjust(applyTestingTxnTraceBuffer)
-			}
 		}
 
 		if c.options.preStart != nil {
@@ -539,15 +536,6 @@ func (c *cluster) createServiceOperators(from int) error {
 		c.services = append(c.services, s)
 	}
 	return nil
-}
-
-// Keep tracing functional in embedded tests without reserving four million
-// events per CN before tracing is enabled. Scenario callbacks run afterwards
-// and can override this test-only default.
-func applyTestingTxnTraceBuffer(cfg *ServiceConfig) {
-	if cfg.CN.Txn.Trace.BufferSize == 0 {
-		cfg.CN.Txn.Trace.BufferSize = 1024
-	}
 }
 
 func applyTestingHAKeeperBackendReadTimeout(cfg *ServiceConfig) {

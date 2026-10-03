@@ -913,17 +913,6 @@ type preparedSchemaResolver func(
 	snapshot *plan.Snapshot,
 ) (*plan.ObjectRef, *plan.TableDef, error)
 
-func initExecuteStmtParamWithResolver(
-	execCtx *ExecCtx,
-	ses *Session,
-	cwft *TxnComputationWrapper,
-	execPlan *plan.Execute,
-	stmtName string,
-	resolve preparedSchemaResolver,
-) (*compile.Compile, *plan.Plan, tree.Statement, string, bool, error) {
-	return initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cwft, execPlan, stmtName, resolve, ses.GetTxnCompileCtx())
-}
-
 func binaryProtocolPrepareParamKind(
 	mysqlType defines.MysqlType,
 	isUnsigned bool,
@@ -1951,13 +1940,6 @@ func prepareSchemaAccountID(currentAccountID uint32, obj *plan.ObjectRef) uint32
 	return currentAccountID
 }
 
-func currentTxnSnapshotTS(ses *Session) timestamp.Timestamp {
-	if ses == nil || ses.GetProc() == nil {
-		return timestamp.Timestamp{}
-	}
-	return currentTxnSnapshotTSForProcess(ses.GetProc())
-}
-
 func currentTxnSnapshotTSForProcess(proc *process.Process) timestamp.Timestamp {
 	if proc == nil {
 		return timestamp.Timestamp{}
@@ -2419,22 +2401,6 @@ func untypedUserParamKindForType(typ types.T) (vector.PrepareParamKind, bool) {
 	default:
 		return vector.PrepareParamNone, false
 	}
-}
-
-func buildExecuteUserParams(
-	proc *process.Process,
-	args []*plan.Expr,
-	typedPositions []int32,
-) (
-	*vector.Vector,
-	[]any,
-	[]bool,
-	[]bool,
-	[]vector.PrepareParamKind,
-	[]types.T,
-	error,
-) {
-	return buildExecuteUserParamsWithMemberOfPositions(proc, args, typedPositions, nil)
 }
 
 func buildExecuteUserParamsWithMemberOfPositions(

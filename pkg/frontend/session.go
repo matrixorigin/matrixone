@@ -404,8 +404,6 @@ type Session struct {
 	clientAddr string
 	proxyAddr  string
 
-	disableTrace bool
-
 	// disableAgg co-operate with RecordStatement
 	// more can see Benchmark_RecordStatement_IsTrue()
 	disableAgg bool

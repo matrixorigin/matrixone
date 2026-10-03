@@ -1637,26 +1637,6 @@ func diffOnBase(
 	return
 }
 
-func isSchemaEquivalent(leftDef, rightDef *plan.TableDef) bool {
-	if len(leftDef.Cols) != len(rightDef.Cols) {
-		return false
-	}
-	for i := range leftDef.Cols {
-		if leftDef.Cols[i].ColId != rightDef.Cols[i].ColId ||
-			!isDataBranchLogicalTypeEquivalent(leftDef.Cols[i].Typ, rightDef.Cols[i].Typ) ||
-			leftDef.Cols[i].ClusterBy != rightDef.Cols[i].ClusterBy ||
-			leftDef.Cols[i].Primary != rightDef.Cols[i].Primary ||
-			leftDef.Cols[i].Seqnum != rightDef.Cols[i].Seqnum ||
-			leftDef.Cols[i].NotNull != rightDef.Cols[i].NotNull ||
-			!dataBranchGeneratedColumnsEqual(
-				leftDef.Cols[i].GeneratedCol, rightDef.Cols[i].GeneratedCol,
-			) {
-			return false
-		}
-	}
-	return true
-}
-
 func dataBranchPrimaryKeyColumns(tblDef *plan.TableDef) (kind int, names []string) {
 	if tblDef == nil || tblDef.Pkey == nil {
 		return -1, nil
