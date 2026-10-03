@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -77,6 +78,9 @@ func (s *service) initDistributedTAE(
 
 		disttae.WithCNTransferTxnLifespanThreshold(
 			s.cfg.Engine.CNTransferTxnLifespanThreshold,
+		),
+		disttae.WithMemoryReclamationMode(
+			rscthrottler.ReclamationMode(s.cfg.Engine.MemoryReclamationMode),
 		),
 		disttae.WithPrefetchOnSubscribed(
 			s.cfg.Engine.PrefetchOnSubscribed,

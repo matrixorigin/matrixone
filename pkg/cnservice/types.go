@@ -167,6 +167,12 @@ type Config struct {
 	Engine struct {
 		Type EngineType `toml:"type"`
 
+		// MemoryReclamationMode controls only active pressure reclamation. Both
+		// modes retain cgroup sampling, reservation accounting, and admission
+		// protection. The empty value uses the production default and may be
+		// overridden by MO_MEMORY_POLICY for controlled benchmark runs.
+		MemoryReclamationMode rscthrottler.ReclamationMode `toml:"memory-reclamation-mode"`
+
 		// only prefetch the matched dbname.tablename
 		//	'^mo_catalog\.mo_tables$',
 		//	'^mysql\..*$',
@@ -417,6 +423,11 @@ func (c *Config) Validate() error {
 	}
 	if c.Engine.Type != EngineDistributedTAE {
 		return moerr.NewBadConfigNoCtx("unsupported CN engine: " + string(c.Engine.Type))
+	}
+	if mode, err := rscthrottler.ResolveReclamationMode(string(c.Engine.MemoryReclamationMode)); err != nil {
+		return moerr.NewBadConfigNoCtx(err.Error())
+	} else {
+		c.Engine.MemoryReclamationMode = mode
 	}
 	if c.Cluster.RefreshInterval.Duration == 0 {
 		c.Cluster.RefreshInterval.Duration = time.Second * 10
