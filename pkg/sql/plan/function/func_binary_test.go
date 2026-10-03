@@ -1926,181 +1926,69 @@ func TestTimestampAddStringPerformance(t *testing.T) {
 	})
 }
 
-// TestTimestampAddErrorHandling tests error handling for TIMESTAMPADD function
-// This test verifies that invalid inputs are handled correctly
 func TestTimestampAddErrorHandling(t *testing.T) {
 	proc := testutil.NewProcess(t)
-
-	// Test case 1: Invalid unit string
-	t.Run("Invalid unit string", func(t *testing.T) {
-		unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte("INVALID_UNIT"), 1, proc.Mp())
-		intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), int64(5), 1, proc.Mp())
-		dateVec, _ := vector.NewConstFixed(types.T_date.ToType(), types.Date(0), 1, proc.Mp())
-
-		parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
-		result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
-
-		fnLength := dateVec.Length()
-		err := result.PreExtendAndReset(fnLength)
-		require.NoError(t, err)
-
-		err = TimestampAddDate(parameters, result, proc, fnLength, nil)
-		require.Error(t, err, "Should return error for invalid unit")
-		require.Contains(t, err.Error(), "invalid", "Error message should mention invalid unit")
+	t.Cleanup(proc.Free)
+	native, heap := proc.Mp().CurrNB(), proc.Mp().OnHeapCurrNB()
+	t.Cleanup(func() {
+		require.Equal(t, native, proc.Mp().CurrNB())
+		require.Equal(t, heap, proc.Mp().OnHeapCurrNB())
 	})
-
-	// Test case 2: Invalid date string format
-	t.Run("Invalid date string format", func(t *testing.T) {
-		unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte("DAY"), 1, proc.Mp())
-		intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), int64(5), 1, proc.Mp())
-		inputVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte("invalid-date"), 1, proc.Mp())
-
-		parameters := []*vector.Vector{unitVec, intervalVec, inputVec}
-		result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
-
-		fnLength := inputVec.Length()
-		err := result.PreExtendAndReset(fnLength)
-		require.NoError(t, err)
-
-		err = TimestampAddString(parameters, result, proc, fnLength, nil)
-		require.NoError(t, err)
-		require.True(t, result.GetResultVector().GetNulls().Contains(0))
-	})
-
-	// Test case 3: Empty unit string
-	t.Run("Empty unit string", func(t *testing.T) {
-		unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte(""), 1, proc.Mp())
-		intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), int64(5), 1, proc.Mp())
-		dateVec, _ := vector.NewConstFixed(types.T_date.ToType(), types.Date(0), 1, proc.Mp())
-
-		parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
-		result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
-
-		fnLength := dateVec.Length()
-		err := result.PreExtendAndReset(fnLength)
-		require.NoError(t, err)
-
-		err = TimestampAddDate(parameters, result, proc, fnLength, nil)
-		require.Error(t, err, "Should return error for empty unit")
-	})
-
-	// Test case 4: NULL unit (should be handled by NULL check, but test for completeness)
-	t.Run("NULL unit handling", func(t *testing.T) {
-		// Note: This test verifies that NULL unit is handled correctly
-		// In practice, NULL unit should be caught earlier in the execution pipeline
-		unitVec := vector.NewConstNull(types.T_varchar.ToType(), 1, proc.Mp())
-		intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), int64(5), 1, proc.Mp())
-		dateVec, _ := vector.NewConstFixed(types.T_date.ToType(), types.Date(0), 1, proc.Mp())
-
-		parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
-		result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
-
-		fnLength := dateVec.Length()
-		err := result.PreExtendAndReset(fnLength)
-		require.NoError(t, err)
-
-		// NULL unit should cause error when trying to parse
-		err = TimestampAddDate(parameters, result, proc, fnLength, nil)
-		// This may return error or handle NULL gracefully depending on implementation
-		// The important thing is it doesn't panic
-		_ = err // Accept either error or success, just ensure no panic
-	})
-
-	// Test case 5: Very large interval (potential overflow)
-	// Note: This test verifies that the function handles large intervals appropriately
-	// Large intervals may cause overflow, which should be caught and handled
-	t.Run("Very large interval", func(t *testing.T) {
-		d1, _ := types.ParseDateCast("2024-12-20")
-		unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte("DAY"), 1, proc.Mp())
-		// Use a large but reasonable interval (10000 days ~ 27 years)
-		intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), int64(10000), 1, proc.Mp())
-		dateVec, _ := vector.NewConstFixed(types.T_date.ToType(), d1, 1, proc.Mp())
-
-		parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
-		result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
-
-		fnLength := dateVec.Length()
-		err := result.PreExtendAndReset(fnLength)
-		require.NoError(t, err)
-
-		err = TimestampAddDate(parameters, result, proc, fnLength, nil)
-		// Large but reasonable intervals should work
-		require.NoError(t, err, "Should handle large but reasonable intervals")
-
-		v := result.GetResultVector()
-		require.Equal(t, fnLength, v.Length())
-		// Verify the result is reasonable
-		dateParam := vector.GenerateFunctionFixedTypeParameter[types.Date](v)
-		resultDate, null := dateParam.GetValue(0)
-		require.False(t, null)
-		// Result should be approximately 2024-12-20 + 10000 days
-		require.Greater(t, int64(resultDate), int64(d1), "Result should be greater than input")
-	})
-
-	// Test case 6: Invalid date string with time unit
-	t.Run("Invalid date string with time unit", func(t *testing.T) {
-		unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte("HOUR"), 1, proc.Mp())
-		intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), int64(2), 1, proc.Mp())
-		inputVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte("not-a-date"), 1, proc.Mp())
-
-		parameters := []*vector.Vector{unitVec, intervalVec, inputVec}
-		result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
-
-		fnLength := inputVec.Length()
-		err := result.PreExtendAndReset(fnLength)
-		require.NoError(t, err)
-
-		err = TimestampAddString(parameters, result, proc, fnLength, nil)
-		require.NoError(t, err)
-		require.True(t, result.GetResultVector().GetNulls().Contains(0))
-	})
-
-	// Test case 7: Malformed datetime string
-	t.Run("Malformed datetime string", func(t *testing.T) {
-		unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte("DAY"), 1, proc.Mp())
-		intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), int64(5), 1, proc.Mp())
-		// Malformed datetime: missing time part separator
-		inputVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte("2024-12-2010:30:45"), 1, proc.Mp())
-
-		parameters := []*vector.Vector{unitVec, intervalVec, inputVec}
-		result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
-
-		fnLength := inputVec.Length()
-		err := result.PreExtendAndReset(fnLength)
-		require.NoError(t, err)
-
-		err = TimestampAddString(parameters, result, proc, fnLength, nil)
-		// This may or may not error depending on parsing logic
-		// The important thing is it doesn't panic
-		_ = err
-	})
-
-	// Test case 8: Case sensitivity for unit (should be case-insensitive)
-	t.Run("Case insensitive unit", func(t *testing.T) {
-		d1, _ := types.ParseDateCast("2024-12-20")
-		expectedDate, _ := types.ParseDateCast("2024-12-25")
-
-		// Test lowercase unit
-		unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte("day"), 1, proc.Mp())
-		intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), int64(5), 1, proc.Mp())
-		dateVec, _ := vector.NewConstFixed(types.T_date.ToType(), d1, 1, proc.Mp())
-
-		parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
-		result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
-
-		fnLength := dateVec.Length()
-		err := result.PreExtendAndReset(fnLength)
-		require.NoError(t, err)
-
-		err = TimestampAddDate(parameters, result, proc, fnLength, nil)
-		require.NoError(t, err, "Should accept lowercase unit")
-
-		v := result.GetResultVector()
-		dateParam := vector.GenerateFunctionFixedTypeParameter[types.Date](v)
-		resultDate, null := dateParam.GetValue(0)
-		require.False(t, null)
-		require.Equal(t, expectedDate, resultDate)
-	})
+	for _, tc := range []struct {
+		name, unit, input, want, wantErr string
+		interval                         int64
+		stringInput, nullUnit            bool
+	}{
+		{name: "Invalid unit string", unit: "INVALID_UNIT", interval: 5, wantErr: "invalid interval type 'INVALID_UNIT'"},
+		{name: "Invalid date string format", unit: "DAY", input: "invalid-date", interval: 5, stringInput: true},
+		{name: "Empty unit string", interval: 5, wantErr: "invalid interval type ''"},
+		{name: "NULL unit handling", interval: 5, nullUnit: true, wantErr: "invalid interval type ''"},
+		{name: "Very large interval", unit: "DAY", input: "2024-12-20", interval: 10000, want: "2052-05-07"},
+		{name: "Invalid date string with time unit", unit: "HOUR", input: "not-a-date", interval: 2, stringInput: true},
+		{name: "Malformed datetime string", unit: "DAY", input: "2024-12-2010:30:45", interval: 5, stringInput: true},
+		{name: "Case insensitive unit", unit: "day", input: "2024-12-20", interval: 5, want: "2024-12-25"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inputs := []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{tc.unit}, []bool{tc.nullUnit}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{tc.interval}, nil),
+			}
+			fn := TimestampAddDate
+			admission := types.T_datetime.ToType()
+			if tc.stringInput {
+				inputs = append(inputs, NewFunctionTestConstInput(types.T_varchar.ToType(), []string{tc.input}, nil))
+				fn, admission = TimestampAddString, types.T_varchar.ToType()
+			} else {
+				date := types.Date(0)
+				if tc.input != "" {
+					var err error
+					date, err = types.ParseDateCast(tc.input)
+					require.NoError(t, err)
+				}
+				inputs = append(inputs, NewFunctionTestConstInput(types.T_date.ToType(), []types.Date{date}, nil))
+			}
+			fc := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(admission, false, nil, nil), fn)
+			t.Cleanup(fc.Free)
+			result, err := fc.DebugRun()
+			if tc.wantErr != "" {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+				require.EqualError(t, err, "invalid input: "+tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, 1, result.Length())
+			if tc.stringInput {
+				require.Equal(t, types.T_varchar, result.GetType().Oid)
+				require.True(t, result.GetNulls().Contains(0))
+			} else {
+				require.Equal(t, types.T_date, result.GetType().Oid)
+				require.False(t, result.GetNulls().Contains(0))
+				require.Equal(t, tc.want, vector.MustFixedColWithTypeCheck[types.Date](result)[0].String())
+			}
+		})
+		require.Equal(t, native, proc.Mp().CurrNB())
+		require.Equal(t, heap, proc.Mp().OnHeapCurrNB())
+	}
 }
 
 // TestTimestampAddNonConstantUnit tests TIMESTAMPADD with non-constant unit parameter
