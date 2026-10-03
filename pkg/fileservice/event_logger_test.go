@@ -22,31 +22,42 @@ import (
 )
 
 func TestEventLogger(t *testing.T) {
-	ctx := context.Background()
-	ctx = WithEventLogger(ctx)
-	LogEvent(ctx, str_to_cache_data_begin, 1)
-	LogEvent(ctx, str_to_cache_data_end, 2, 3)
-	LogSlowEvent(ctx, time.Nanosecond)
-}
-
-func TestEventLoggerPoolCleanup(t *testing.T) {
 	for _, threshold := range []time.Duration{time.Hour, 0} {
 		t.Run(threshold.String(), func(t *testing.T) {
-			held := new([1024]byte)
 			ctx := WithEventLogger(context.Background())
 			logger := ctx.Value(EventLoggerKey).(*eventLogger)
-			LogEvent(ctx, str_to_cache_data_begin, held)
-			LogEvent(ctx, str_to_cache_data_end, held)
-			// Inspect the actual nonempty active backing, without relying on a pool
-			// returning the same object or ranging over its reset zero length.
+			t.Cleanup(func() {
+				if !logger.closed {
+					LogSlowEvent(ctx, time.Hour)
+				}
+			})
+			held := new([1024]byte)
+			args := []any{nil, held, int64(3), true, time.Second, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, "last"}
+			cases := [][]any{nil, {held}, args[:2], args[:3], args}
+			// Cross the original capacity with both inline and overflow arguments.
+			for i := 0; i < 33; i++ {
+				LogEvent(ctx, str_to_cache_data_begin, cases[i%len(cases)]...)
+			}
 			events := *logger.events
-			if len(events) == 0 || events[0].args == nil {
-				t.Fatal("no recorded arguments to check")
+			if len(events) != 33 {
+				t.Fatalf("got %d events, want 33", len(events))
+			}
+			for i, ev := range events {
+				expected := cases[i%len(cases)]
+				if len(ev.args) != len(expected) {
+					t.Fatalf("event %d lost arguments", i)
+				}
+				for j, got := range ev.args {
+					if got != expected[j] {
+						t.Errorf("event %d argument %d: %v != %v", i, j, got, expected[j])
+					}
+				}
 			}
 			LogSlowEvent(ctx, threshold)
 			if !logger.closed || logger.events != nil {
 				t.Fatal("logger did not release event ownership")
 			}
+			// Check the actual active backing, rather than a reset pool slice.
 			for i, ev := range events {
 				if ev.args != nil {
 					t.Errorf("event[%d].args retained arguments", i)
@@ -62,43 +73,6 @@ func TestEventLoggerPoolCleanup(t *testing.T) {
 				t.Fatal("closed logger accepted new event")
 			}
 		})
-	}
-}
-
-func TestEventLoggerPreservesArgumentsAcrossGrowth(t *testing.T) {
-	ctx := WithEventLogger(context.Background())
-	logger := ctx.Value(EventLoggerKey).(*eventLogger)
-	t.Cleanup(func() {
-		events := *logger.events
-		LogSlowEvent(ctx, time.Hour)
-		for i, ev := range events {
-			if ev.args != nil {
-				t.Errorf("grown event %d retained arguments", i)
-			}
-			for j, arg := range ev._args {
-				if arg != nil {
-					t.Errorf("grown event %d inline argument %d retained", i, j)
-				}
-			}
-		}
-	})
-	args := []any{nil, "second", int64(3), true, time.Second, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, "last"}
-	// Cross the original pool capacity, preserving both inline and overflow
-	// parameters in every event even when the event array moves.
-	for i := 0; i < 33; i++ {
-		count := []int{0, 1, 2, 3, len(args)}[i%5]
-		LogEvent(ctx, str_to_cache_data_begin, args[:count]...)
-	}
-	for i, ev := range *logger.events {
-		expected := args[:[]int{0, 1, 2, 3, len(args)}[i%5]]
-		if len(ev.args) != len(expected) {
-			t.Fatalf("event %d lost arguments: %d != %d", i, len(ev.args), len(expected))
-		}
-		for j, got := range ev.args {
-			if got != expected[j] {
-				t.Errorf("event %d argument %d: %v != %v", i, j, got, expected[j])
-			}
-		}
 	}
 }
 

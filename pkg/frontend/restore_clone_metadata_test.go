@@ -104,27 +104,6 @@ func TestCatalogRestoreMetadataOwnership(t *testing.T) {
 	}
 }
 
-func TestClusterTableCleanupPreservesSpecialDeleteFailure(t *testing.T) {
-	for _, tableName := range []string{catalog.MO_VIEW_DEPENDENCIES, catalog.MO_VIEW_REFRESH} {
-		t.Run(tableName, func(t *testing.T) {
-			ctx := defines.AttachAccountId(context.Background(), 0)
-			bh := &backgroundExecTest{}
-			bh.init()
-			list := buildTableInfoListSQL(moCatalog, "", 0, 0)
-			bh.sql2result[list] = newMrsForRestoreStringRows([]string{"name", "type", "kind", "view"}, [][]interface{}{
-				{"mo_user", "BASE TABLE", catalog.SystemOrdinaryRel, ""},
-				{tableName, "CLUSTER TABLE", catalog.SystemClusterRel, ""},
-				{"later_cluster", "CLUSTER TABLE", catalog.SystemClusterRel, ""},
-			})
-			deletion := fmt.Sprintf("delete from %s.%s", moCatalog, tableName)
-			failure := moerr.NewNoSuchTableNoCtx(moCatalog, tableName)
-			bh.sql2err[deletion] = failure
-			require.ErrorIs(t, dropClusterTable(ctx, "", bh, "snap", 0), failure)
-			require.Equal(t, []string{list, deletion}, bh.executedSQLs)
-		})
-	}
-}
-
 func TestSnapshotUserDependencyToleranceIsPreserved(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), 42)
 	bh := &backgroundExecTest{}
@@ -135,28 +114,43 @@ func TestSnapshotUserDependencyToleranceIsPreserved(t *testing.T) {
 	require.NoError(t, recreateTable(ctx, "", bh, "snap", &tableInfo{dbName: "user_db", tblName: "child"}, 42, 123, false))
 }
 
-func TestClusterTableCleanupUsesOnlyNameAndKind(t *testing.T) {
-	for _, account := range []uint32{0, 42} {
-		t.Run(fmt.Sprint(account), func(t *testing.T) {
-			ctx := defines.AttachAccountId(context.Background(), account)
+func TestClusterTableCleanup(t *testing.T) {
+	deps := fmt.Sprintf("delete from %s.%s", moCatalog, catalog.MO_VIEW_DEPENDENCIES)
+	refresh := fmt.Sprintf("delete from %s.%s", moCatalog, catalog.MO_VIEW_REFRESH)
+	for _, tc := range []struct {
+		name      string
+		account   uint32
+		failTable string
+		mutations []string
+	}{
+		{"system", 0, "", []string{deps, refresh, dropTableIfExistsSQL(moCatalog, "custom_cluster")}},
+		{"ordinary account", 42, "", nil},
+		{"dependency delete failure", 0, catalog.MO_VIEW_DEPENDENCIES, []string{deps}},
+		{"refresh delete failure", 0, catalog.MO_VIEW_REFRESH, []string{deps, refresh}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := defines.AttachAccountId(context.Background(), tc.account)
 			bh := &backgroundExecTest{}
 			bh.init()
-			list := buildTableInfoListSQL(moCatalog, "", 0, account)
+			list := buildTableInfoListSQL(moCatalog, "", 0, tc.account)
 			bh.sql2result[list] = newMrsForRestoreStringRows([]string{"name", "type", "kind", "view"}, [][]interface{}{
 				{"mo_user", "BASE TABLE", catalog.SystemOrdinaryRel, ""},
 				{catalog.MO_VIEW_DEPENDENCIES, "CLUSTER TABLE", catalog.SystemClusterRel, ""},
 				{catalog.MO_VIEW_REFRESH, "CLUSTER TABLE", catalog.SystemClusterRel, ""},
 				{"custom_cluster", "CLUSTER TABLE", catalog.SystemClusterRel, ""},
 			})
-			require.NoError(t, dropClusterTable(ctx, "", bh, "snap", account))
-			expected := []string{list}
-			if account == 0 {
-				expected = append(expected,
-					fmt.Sprintf("delete from %s.%s", moCatalog, catalog.MO_VIEW_DEPENDENCIES),
-					fmt.Sprintf("delete from %s.%s", moCatalog, catalog.MO_VIEW_REFRESH),
-					dropTableIfExistsSQL(moCatalog, "custom_cluster"))
+			var failure error
+			if tc.failTable != "" {
+				failure = moerr.NewNoSuchTableNoCtx(moCatalog, tc.failTable)
+				bh.sql2err[tc.mutations[len(tc.mutations)-1]] = failure
 			}
-			require.Equal(t, expected, bh.executedSQLs)
+			err := dropClusterTable(ctx, "", bh, "snap", tc.account)
+			if failure != nil {
+				require.ErrorIs(t, err, failure)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, append([]string{list}, tc.mutations...), bh.executedSQLs)
 		})
 	}
 }

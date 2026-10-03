@@ -84,13 +84,10 @@ func FuzzObjectListNameClassification(f *testing.F) {
 func BenchmarkObjectListNameClassification(b *testing.B) {
 	for _, name := range []string{"mo_tables", "_123_data_meta", "_123_tombstone_meta", "prefix_00_data_meta_suffix", "_" + strings.Repeat("9", 100) + "_data_meta", "_x_data_meta_2_data_meta", "_data_meta_data_meta"} {
 		b.Run(name, func(b *testing.B) {
-			want := IsMetaEntry(name)
 			b.ReportAllocs()
 			b.ResetTimer()
-			for range b.N {
-				if IsMetaEntry(name) != want {
-					b.Fatal("classification changed")
-				}
+			for b.Loop() {
+				IsMetaEntry(name)
 			}
 		})
 	}
