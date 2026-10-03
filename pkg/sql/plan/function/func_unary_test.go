@@ -10723,8 +10723,9 @@ func TestUserLevelLockLivenessTracksFailedAndSuccessfulCleanup(t *testing.T) {
 		require.NoError(t, err)
 		requireUserLevelLockTxnRegistered(t, state, holderTxnID, true)
 		state.Lock()
-		require.Len(t, state.externalTxns, 1)
+		registrationCount := len(state.externalTxns)
 		state.Unlock()
+		require.Equal(t, 1, registrationCount)
 
 		// A failed unlock must keep liveness registered so orphan recovery
 		// cannot release a lock whose cleanup is still being retried.
@@ -10748,8 +10749,9 @@ func TestUserLevelLockLivenessTracksFailedAndSuccessfulCleanup(t *testing.T) {
 		_, err = isUserLevelLockFree("liveness_free", holder)
 		require.NoError(t, err)
 		state.Lock()
-		require.Empty(t, state.externalTxns)
+		registrationCount = len(state.externalTxns)
 		state.Unlock()
+		require.Zero(t, registrationCount)
 	})
 }
 
@@ -10762,9 +10764,10 @@ func TestUserLevelLockLivenessFailedAcquisitionCleanup(t *testing.T) {
 		_, err := getUserLevelLock("liveness_failed_get", 0, proc)
 		require.Error(t, err)
 		service.state.Lock()
-		require.Empty(t, service.state.externalTxns)
-		require.Empty(t, service.state.locks)
+		registrationCount, lockCount := len(service.state.externalTxns), len(service.state.locks)
 		service.state.Unlock()
+		require.Zero(t, registrationCount)
+		require.Zero(t, lockCount)
 	})
 }
 
@@ -11724,10 +11727,11 @@ func TestReleaseUserLevelLocksOnSessionCloseTimeoutDetachesLocalState(t *testing
 		}
 
 		userLevelLocks.Lock()
-		require.Empty(t, userLevelLocks.counts)
-		require.Empty(t, userLevelLocks.byOwner)
-		require.Empty(t, userLevelLocks.ownerSessions)
+		remainingLockCount, remainingOwnerCount, remainingSessionCount := len(userLevelLocks.counts), len(userLevelLocks.byOwner), len(userLevelLocks.ownerSessions)
 		userLevelLocks.Unlock()
+		require.Zero(t, remainingLockCount)
+		require.Zero(t, remainingOwnerCount)
+		require.Zero(t, remainingSessionCount)
 		require.Equal(t, 3, detachedUserLevelLockCleanupCount())
 	})
 }
@@ -12085,17 +12089,21 @@ func TestSessionCloseCleanupAdmissionRollbackOnLaterChunkFailure(t *testing.T) {
 			backoff: userLevelLockDetachedCleanupInitialBackoff,
 		}
 	}
-	require.Equal(t, userLevelLockDetachedCleanupMaxEntries, len(detachedUserLevelLockCleanups.entries))
+	entryCount := len(detachedUserLevelLockCleanups.entries)
 	targetOverflowKey := detachedUserLevelLockOverflowCleanupKey(firstKey, targetShard)
-	require.Nil(t, detachedUserLevelLockCleanups.entries[targetOverflowKey])
+	overflowEntry := detachedUserLevelLockCleanups.entries[targetOverflowKey]
 	detachedUserLevelLockCleanups.Unlock()
+	require.Equal(t, userLevelLockDetachedCleanupMaxEntries, entryCount)
+	require.Nil(t, overflowEntry)
 
 	require.False(t, enqueueDetachedUserLevelLockCleanups(service, []string{owner}, connID, states))
 
 	detachedUserLevelLockCleanups.Lock()
-	require.Equal(t, userLevelLockDetachedCleanupMaxEntries, len(detachedUserLevelLockCleanups.entries))
-	require.Nil(t, detachedUserLevelLockCleanups.entries[targetOverflowKey])
+	entryCount = len(detachedUserLevelLockCleanups.entries)
+	overflowEntry = detachedUserLevelLockCleanups.entries[targetOverflowKey]
 	detachedUserLevelLockCleanups.Unlock()
+	require.Equal(t, userLevelLockDetachedCleanupMaxEntries, entryCount)
+	require.Nil(t, overflowEntry)
 }
 
 func TestDetachedUserLevelLockCleanupPreservesConcurrentTxnIDs(t *testing.T) {
@@ -12215,19 +12223,23 @@ func TestDetachedUserLevelLockCleanupReschedulesAfterSuccessfulDrain(t *testing.
 
 	require.True(t, enqueueDetachedUserLevelLockTxnCleanup(service, blockedKey, [][]byte{[]byte("txn-blocked")}))
 	detachedUserLevelLockCleanups.Lock()
-	require.NotNil(t, detachedUserLevelLockCleanups.entries[blockedKey])
-	require.False(t, detachedUserLevelLockCleanups.entries[blockedKey].queued)
-	require.Len(t, detachedUserLevelLockCleanups.queue, userLevelLockDetachedCleanupMaxEntries)
+	blockedEntry := detachedUserLevelLockCleanups.entries[blockedKey]
+	blockedQueued := blockedEntry != nil && blockedEntry.queued
+	queueCount := len(detachedUserLevelLockCleanups.queue)
 	detachedUserLevelLockCleanups.Unlock()
+	require.NotNil(t, blockedEntry)
+	require.False(t, blockedQueued)
+	require.Equal(t, userLevelLockDetachedCleanupMaxEntries, queueCount)
 
 	require.Equal(t, scheduledKey, <-detachedUserLevelLockCleanups.queue)
 	runDetachedUserLevelLockCleanupAttempt(scheduledKey)
 
 	detachedUserLevelLockCleanups.Lock()
 	entry := detachedUserLevelLockCleanups.entries[blockedKey]
-	require.NotNil(t, entry)
-	require.True(t, entry.queued)
+	queued := entry != nil && entry.queued
 	detachedUserLevelLockCleanups.Unlock()
+	require.NotNil(t, entry)
+	require.True(t, queued)
 }
 
 func TestDetachedUserLevelLockCleanupQueueIsBoundedAndDeduped(t *testing.T) {
@@ -12389,7 +12401,7 @@ func fillDetachedUserLevelLockCleanupAdmissionForTest(
 func TestFailedAttemptCleanupWaitsForBacklogAdmissionAndTransfersOwnership(t *testing.T) {
 	runUserLevelLockTest(t, func(services []lockservice.LockService) {
 		service := services[0].(*userLevelLockTestService)
-		service.blockUnlock.Store(true)
+		service.unlockErrOnce.Store(true)
 		key := detachedUserLevelLockCleanupKey{
 			serviceID: service.GetServiceID(),
 			owner:     "owner-failed-attempt-backlog",
@@ -12412,35 +12424,61 @@ func TestFailedAttemptCleanupWaitsForBacklogAdmissionAndTransfersOwnership(t *te
 		}
 		detachedUserLevelLockCleanups.Unlock()
 
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		done := make(chan error, 1)
+		ctx, cancel := context.WithCancel(context.Background())
+		probe := &admissionProbeContext{Context: ctx, doneCalled: make(chan struct{})}
+		finished := make(chan struct{})
+		var cleanupErr error
+		defer func() {
+			cancel()
+			<-finished
+		}()
 		go func() {
-			done <- cleanupFailedUserLevelLockTxn(ctx, service, key, txnID)
+			defer close(finished)
+			cleanupErr = cleanupFailedUserLevelLockTxn(probe, service, key, txnID)
 		}()
 
+		// Only the full-backlog wait evaluates this caller context's Done.
 		select {
-		case err := <-done:
-			require.Failf(t, "cleanup returned before backlog admission", "err=%v", err)
-		case <-time.After(50 * time.Millisecond):
+		case <-probe.doneCalled:
+		case <-finished:
+			require.Failf(t, "cleanup returned before backlog admission", "err=%v", cleanupErr)
+		}
+		select {
+		case <-finished:
+			require.Failf(t, "cleanup returned while backlog remained full", "err=%v", cleanupErr)
+		default:
 		}
 
 		detachedUserLevelLockCleanups.Lock()
-		<-detachedUserLevelLockCleanups.backlog
+		capacity, count := cap(detachedUserLevelLockCleanups.backlog), len(detachedUserLevelLockCleanups.backlog)
+		released := false
+		select {
+		case <-detachedUserLevelLockCleanups.backlog:
+			released = true
+		default:
+		}
 		detachedUserLevelLockCleanups.Unlock()
+		require.Equal(t, userLevelLockDetachedCleanupBacklog, capacity)
+		require.Equal(t, capacity, count)
+		require.True(t, released)
 
-		require.NoError(t, <-done)
+		<-finished
+		require.NoError(t, cleanupErr)
 		detachedUserLevelLockCleanups.Lock()
-		require.Len(t, detachedUserLevelLockCleanups.backlog, userLevelLockDetachedCleanupBacklog)
-		found := false
+		backlogCountBeforeDrain := len(detachedUserLevelLockCleanups.backlog)
+		targetCount := 0
+		var transferredService lockservice.LockService
 		for len(detachedUserLevelLockCleanups.backlog) > 0 {
 			req := <-detachedUserLevelLockCleanups.backlog
-			if req.key == key && bytes.Equal(req.txnIDs[0], txnID) {
-				found = true
+			if req.key == key && len(req.txnIDs) == 1 && bytes.Equal(req.txnIDs[0], txnID) {
+				targetCount++
+				transferredService = req.ls
 			}
 		}
 		detachedUserLevelLockCleanups.Unlock()
-		require.True(t, found)
+		require.Equal(t, userLevelLockDetachedCleanupBacklog, backlogCountBeforeDrain)
+		require.Equal(t, 1, targetCount)
+		require.Same(t, service, transferredService)
 	})
 }
 
@@ -12633,8 +12671,9 @@ func TestRetainedCleanupAdmissionIsBounded(t *testing.T) {
 		}
 		require.False(t, retainDetachedUserLevelLockTxnCleanup(service, key, [][]byte{[]byte("txn-overflow")}))
 		userLevelLocks.Lock()
-		require.Len(t, userLevelLocks.pendingCleanups, userLevelLockRetainedCleanupMaxEntries)
+		pendingCount := len(userLevelLocks.pendingCleanups)
 		userLevelLocks.Unlock()
+		require.Equal(t, userLevelLockRetainedCleanupMaxEntries, pendingCount)
 	})
 }
 
@@ -12785,8 +12824,9 @@ func TestActiveUserLevelLockOwnersBoundRetainedCloseCleanupGrowth(t *testing.T) 
 		require.Error(t, err)
 		require.Equal(t, int64(0), v)
 		service.state.Lock()
-		require.Empty(t, service.state.locks[string(userLevelLockRow(proc, "active_close_cap_rejected"))])
+		rejectedHolder := service.state.locks[string(userLevelLockRow(proc, "active_close_cap_rejected"))]
 		service.state.Unlock()
+		require.Empty(t, rejectedHolder)
 
 		require.True(t, retainUserLevelLockCloseCleanup(
 			service,
@@ -12850,8 +12890,9 @@ func TestDetachedUserLevelLockCleanupBacklogBatchAdmissionIsAtomic(t *testing.T)
 		require.False(t, handoffDetachedUserLevelLockBacklogCleanups(ctx, requests))
 
 		detachedUserLevelLockCleanups.Lock()
-		require.Equal(t, before, len(detachedUserLevelLockCleanups.backlog))
+		backlogCount := len(detachedUserLevelLockCleanups.backlog)
 		detachedUserLevelLockCleanups.Unlock()
+		require.Equal(t, before, backlogCount)
 	})
 }
 
@@ -12912,8 +12953,9 @@ func TestReleaseAndIsFreeProbeUnlocksHonorCancellationAndCleanupAfterRecovery(t 
 				requireUserLevelLockCleanupOwned(t, cleanupKey)
 
 				state.Lock()
-				require.NotEmpty(t, state.locks[string(userLevelLockRow(proc, lockName))])
+				holderBeforeRecovery := state.locks[string(userLevelLockRow(proc, lockName))]
 				state.Unlock()
+				require.NotEmpty(t, holderBeforeRecovery)
 
 				service.blockUnlock.Store(false)
 				require.Eventually(t, func() bool {
@@ -12926,8 +12968,9 @@ func TestReleaseAndIsFreeProbeUnlocksHonorCancellationAndCleanupAfterRecovery(t 
 					return held == ""
 				}, 3*time.Second, 10*time.Millisecond)
 				state.Lock()
-				require.Empty(t, state.locks[string(userLevelLockRow(proc, lockName))])
+				holderAfterRecovery := state.locks[string(userLevelLockRow(proc, lockName))]
 				state.Unlock()
+				require.Empty(t, holderAfterRecovery)
 			})
 		})
 	}
