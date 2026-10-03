@@ -868,7 +868,7 @@ func getMetaInfo(
 	tombstoneInfo map[uint64]*tableinfo,
 	tombstone map[string]struct{},
 ) (res *ObjectInfoJson, err error) {
-	tableinfos := make([]*tableinfo, 0)
+	tableinfos := make([]*tableinfo, 0, len(files))
 	objectCount := uint64(0)
 	addCount := uint64(0)
 	deleteCount := uint64(0)
@@ -895,7 +895,7 @@ func getMetaInfo(
 			tableJsons = append(tableJsons, tablejson)
 		}
 	}
-	tableinfos2 := make([]*tableinfo, 0)
+	tableinfos2 := make([]*tableinfo, 0, len(tombstoneInfo))
 	objectCount2 := uint64(0)
 	addCount2 := uint64(0)
 	for _, count := range tombstoneInfo {

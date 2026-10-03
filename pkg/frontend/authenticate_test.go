@@ -278,7 +278,7 @@ func TestViewMetadataSQLAcceptsQuotedIdentifiers(t *testing.T) {
 	require.Contains(t, snapshotSQL, "relname = "+escapeSQLString(viewName))
 	require.Contains(t, snapshotSQL, "reldatabase = "+escapeSQLString(dbName))
 
-	queries := []string{checkSQL, metaSQL, snapshotSQL}
+	queries := append(make([]string, 0, 9), checkSQL, metaSQL, snapshotSQL)
 	for _, build := range []func() (string, error){
 		func() (string, error) { return getSqlForCheckDatabase(ctx, dbName) },
 		func() (string, error) { return getSqlForCheckDatabaseByAccount(ctx, dbName) },
@@ -6258,8 +6258,9 @@ func TestExtractPrivilegeTipsFromPlanKeepsUserDedupJoinSources(t *testing.T) {
 		typ   PrivilegeType
 		table string
 	}
-	got := make([]tipKey, 0)
-	for _, tip := range extractPrivilegeTipsFromPlan(p) {
+	tips := extractPrivilegeTipsFromPlan(p)
+	got := make([]tipKey, 0, len(tips))
+	for _, tip := range tips {
 		got = append(got, tipKey{typ: tip.typ, table: tip.tableName})
 	}
 	require.ElementsMatch(t, []tipKey{

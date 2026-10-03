@@ -135,7 +135,7 @@ func writeSpillAllocationTestRecords(
 	batches ...*batch.Batch,
 ) *os.File {
 	t.Helper()
-	payload := make([]byte, 0)
+	payload := make([]byte, 0, len(batches))
 	for _, bat := range batches {
 		payload = append(payload, marshalTestSpillRecord(bat)...)
 	}

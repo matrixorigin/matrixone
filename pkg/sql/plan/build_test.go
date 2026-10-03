@@ -3588,28 +3588,29 @@ const clusterGeneratedInsertTable = "cluster_generated_insert"
 func addClusterGeneratedInsertTableForTest(mock *MockOptimizer) {
 	intType := plan.Type{Id: int32(types.T_int32)}
 	accountType := plan.Type{Id: int32(types.T_uint32), NotNullable: true}
-	cols := []*plan.ColDef{
-		{ColId: 0, Name: "id", OriginName: "id", Typ: intType, NotNull: true,
+	cols := make([]*plan.ColDef, 0, 7)
+	cols = append(cols,
+		&plan.ColDef{ColId: 0, Name: "id", OriginName: "id", Typ: intType, NotNull: true,
 			Default: &plan.Default{NullAbility: false}},
-		{ColId: 1, Name: "base_value", OriginName: "base_value", Typ: intType,
+		&plan.ColDef{ColId: 1, Name: "base_value", OriginName: "base_value", Typ: intType,
 			Default: &plan.Default{NullAbility: true}},
-		{ColId: 2, Name: "stored_value", OriginName: "stored_value", Typ: intType,
+		&plan.ColDef{ColId: 2, Name: "stored_value", OriginName: "stored_value", Typ: intType,
 			Default: &plan.Default{NullAbility: true}, GeneratedCol: &plan.GeneratedCol{
 				Expr: &plan.Expr{Typ: intType, Expr: &plan.Expr_Col{Col: &plan.ColRef{
 					RelPos: 0, ColPos: 1, Name: "base_value",
 				}}},
 				IsStored: true,
 			}},
-		{ColId: 3, Name: "virtual_value", OriginName: "virtual_value", Typ: intType,
+		&plan.ColDef{ColId: 3, Name: "virtual_value", OriginName: "virtual_value", Typ: intType,
 			Default: &plan.Default{NullAbility: true}, GeneratedCol: &plan.GeneratedCol{
 				Expr: &plan.Expr{Typ: intType, Expr: &plan.Expr_Col{Col: &plan.ColRef{
 					RelPos: 0, ColPos: 1, Name: "base_value",
 				}}},
 				IsStored: false,
 			}},
-		{ColId: 4, Name: "account_id", OriginName: "account_id", Typ: accountType, NotNull: true,
+		&plan.ColDef{ColId: 4, Name: "account_id", OriginName: "account_id", Typ: accountType, NotNull: true,
 			Default: &plan.Default{NullAbility: false, Expr: makePlan2Uint32ConstExprWithType(catalog.System_Account)}},
-	}
+	)
 	compPkey := MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
 	compPkey.ColId = 5
 	compPkey.OriginName = catalog.CPrimaryKeyColName

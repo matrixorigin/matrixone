@@ -86,7 +86,7 @@ func TestPreparedAPRuntimeCacheWorkspaceTransition(t *testing.T) {
 					// The existing test hook selects AP with two committed rows.
 					// Never force fixture DDL, transaction writes, or cleanup to AP.
 					plan.SetForceScanOnMultiCN(true)
-					stmt, err := tx.PrepareContext(ctx, "select sum(id + abs(?)) from src")
+					stmt, err := tx.PrepareContext(ctx, "select sum(id + abs(?)) from src") //nolint:sqlclosecheck // stmt closed via outer defer; not tracked across t.Run subtest closures
 					plan.SetForceScanOnMultiCN(false)
 					require.NoError(t, err)
 					defer stmt.Close()

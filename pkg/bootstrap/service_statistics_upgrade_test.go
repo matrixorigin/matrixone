@@ -104,7 +104,7 @@ func TestDoCheckUpgradeQueuesStatisticsRefresh(t *testing.T) {
 					if test.via407 {
 						hops = append([]versions.Version{v4_0_7.Handler.Metadata()}, hops...)
 					}
-					var expected []string
+					expected := make([]string, 0, len(hops))
 					from := test.version
 					for order, hop := range hops {
 						expected = append(expected, versions.GetVersionUpgradeSQL(versions.VersionUpgrade{

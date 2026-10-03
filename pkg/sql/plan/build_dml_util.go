@@ -750,7 +750,7 @@ func appendRecursiveCascadeLockNode(
 	} else {
 		rowProject = getProjectionByLastNode(builder, sourceNodeID)
 	}
-	lockProject := slices.Clone(rowProject)
+	lockProject := slices.Clone(rowProject) //nolint:govet // inline: cannot inline generic call (type-param inference unsupported)
 	lockTargets := []*plan.LockTarget{{
 		TableId: delCtx.tableDef.TblId, ObjRef: delCtx.objRef,
 		PrimaryColIdxInBat: int32(pkPos), PrimaryColRelPos: lockTag,
@@ -927,7 +927,7 @@ func appendRecursiveCascadeLockNode(
 		}
 		lockedNodeID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_PROJECT, Children: []int32{lockedNodeID},
-			ProjectList: slices.Clone(lockedProject[:len(rowProject)]), BindingTags: func() []int32 {
+			ProjectList: slices.Clone(lockedProject[:len(rowProject)]), BindingTags: func() []int32 { //nolint:govet // inline: cannot inline generic call (type-param inference unsupported)
 				if lockTag == 0 {
 					return nil
 				}
@@ -3101,7 +3101,7 @@ func makeOneDeletePlan(
 
 		// For the hidden table of the secondary index, there will be no null situation, only unique key hidden table need this filter
 		if isUK {
-			inputTags := slices.Clone(builder.qry.Nodes[lastNodeId].BindingTags)
+			inputTags := slices.Clone(builder.qry.Nodes[lastNodeId].BindingTags) //nolint:govet // inline: cannot inline generic call (type-param inference unsupported)
 			// append filter
 			rowIdTyp := types.T_Rowid.ToType()
 			rowIDRelPos := int32(0)
@@ -3126,7 +3126,7 @@ func makeOneDeletePlan(
 				Children:    []int32{lastNodeId},
 				FilterList:  []*plan.Expr{filterExpr},
 				ProjectList: getProjectionByLastNode(builder, lastNodeId),
-				BindingTags: slices.Clone(inputTags),
+				BindingTags: slices.Clone(inputTags), //nolint:govet // inline: cannot inline generic call (type-param inference unsupported)
 			}
 			lastNodeId = builder.appendNode(filterNode, bindCtx)
 			if delNodeInfo.preserveProjection {
@@ -5488,7 +5488,7 @@ func reduceSinkSinkScanNodes(qry *Query) {
 		for key := range stepMaps {
 			keys = append(keys, key)
 		}
-		slices.Sort(keys)
+		slices.Sort(keys) //nolint:govet // inline: cannot inline generic call (type-param inference unsupported)
 		for _, key := range keys {
 			nodeId := stepMaps[key]
 			newStepIdx := len(newSteps)
@@ -7187,7 +7187,7 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 	crossapply := builder.qry.Nodes[lastNodeId]
 
 	// fulltext index projection = (fulltext_index_tokenize output(doc_id, pos, word), __mo_fake_pk_col)
-	project := make([]*plan.Expr, len(ftcols))
+	project := make([]*plan.Expr, len(ftcols), len(ftcols)+1)
 	for i := range ftcols {
 		project[i] = &plan.Expr{
 			Typ: ftcols[i].Typ,

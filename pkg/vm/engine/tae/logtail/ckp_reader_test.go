@@ -62,7 +62,7 @@ func TestDeleteUnpublishedObjectsUsesBoundedBatches(t *testing.T) {
 	require.NoError(t, err)
 	trackingFS := &trackingDeleteFileService{FileService: fs}
 
-	files := make([]string, 1001)
+	files := make([]string, 1001, 1003)
 	for i := range files {
 		files[i] = fmt.Sprintf("unpublished-%d", i)
 	}

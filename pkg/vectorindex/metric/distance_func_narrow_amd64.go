@@ -1,4 +1,4 @@
-//go:build amd64 && go1.26 && goexperiment.simd
+//go:build amd64 && go1.27 && goexperiment.simd
 
 // Copyright 2023 Matrix Origin
 //
@@ -76,8 +76,8 @@ func l2sqBF16SIMD(a, b []types.BF16) (float64, error) {
 	acc0, acc1 := archsimd.Float32x16{}, archsimd.Float32x16{}
 	np, j := len(au), 0
 	for ; j <= np-16; j += 16 {
-		ua := archsimd.LoadUint32x16Slice(au[j : j+16])
-		ub := archsimd.LoadUint32x16Slice(bu[j : j+16])
+		ua := archsimd.LoadUint32x16(au[j : j+16])
+		ub := archsimd.LoadUint32x16(bu[j : j+16])
 		dE := ua.ShiftAllLeft(16).AsFloat32x16().Sub(ub.ShiftAllLeft(16).AsFloat32x16())
 		dO := ua.And(hi).AsFloat32x16().Sub(ub.And(hi).AsFloat32x16())
 		acc0 = dE.MulAdd(dE, acc0)
@@ -101,8 +101,8 @@ func innerProductBF16SIMD(a, b []types.BF16) (float64, error) {
 	acc0, acc1 := archsimd.Float32x16{}, archsimd.Float32x16{}
 	np, j := len(au), 0
 	for ; j <= np-16; j += 16 {
-		ua := archsimd.LoadUint32x16Slice(au[j : j+16])
-		ub := archsimd.LoadUint32x16Slice(bu[j : j+16])
+		ua := archsimd.LoadUint32x16(au[j : j+16])
+		ub := archsimd.LoadUint32x16(bu[j : j+16])
 		acc0 = ua.ShiftAllLeft(16).AsFloat32x16().MulAdd(ub.ShiftAllLeft(16).AsFloat32x16(), acc0)
 		acc1 = ua.And(hi).AsFloat32x16().MulAdd(ub.And(hi).AsFloat32x16(), acc1)
 	}
@@ -110,7 +110,7 @@ func innerProductBF16SIMD(a, b []types.BF16) (float64, error) {
 	for i := j * 2; i < n; i++ {
 		sum += a[i].ToFloat32() * b[i].ToFloat32()
 	}
-	return float64(-sum), nil
+	return recoverInnerProductBF16(float64(-sum), a, b)
 }
 
 func l1DistanceBF16SIMD(a, b []types.BF16) (float64, error) {
@@ -124,8 +124,8 @@ func l1DistanceBF16SIMD(a, b []types.BF16) (float64, error) {
 	acc0, acc1 := archsimd.Float32x16{}, archsimd.Float32x16{}
 	np, j := len(au), 0
 	for ; j <= np-16; j += 16 {
-		ua := archsimd.LoadUint32x16Slice(au[j : j+16])
-		ub := archsimd.LoadUint32x16Slice(bu[j : j+16])
+		ua := archsimd.LoadUint32x16(au[j : j+16])
+		ub := archsimd.LoadUint32x16(bu[j : j+16])
 		dE := ua.ShiftAllLeft(16).AsFloat32x16().Sub(ub.ShiftAllLeft(16).AsFloat32x16())
 		dO := ua.And(hi).AsFloat32x16().Sub(ub.And(hi).AsFloat32x16())
 		acc0 = acc0.Add(dE.AsUint32x16().And(absMask).AsFloat32x16())
@@ -157,8 +157,8 @@ func cosineDistanceBF16SIMD(a, b []types.BF16) (float64, error) {
 	nb0, nb1 := archsimd.Float32x16{}, archsimd.Float32x16{}
 	np, j := len(au), 0
 	for ; j <= np-16; j += 16 {
-		ua := archsimd.LoadUint32x16Slice(au[j : j+16])
-		ub := archsimd.LoadUint32x16Slice(bu[j : j+16])
+		ua := archsimd.LoadUint32x16(au[j : j+16])
+		ub := archsimd.LoadUint32x16(bu[j : j+16])
 		aE := ua.ShiftAllLeft(16).AsFloat32x16()
 		aO := ua.And(hi).AsFloat32x16()
 		bE := ub.ShiftAllLeft(16).AsFloat32x16()

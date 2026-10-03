@@ -1333,24 +1333,26 @@ func writeResponseWithDeadline(
 		if extraFields != nil {
 			extra = extraFields()
 		}
-		fields := []zap.Field{
+		fields := make([]zap.Field, 0, 5+len(extra))
+		fields = append(fields,
 			zap.Error(err),
 			zap.Uint64("request-id", requestID),
 			zap.String("method", method),
 			zap.String("remote", remote),
 			zap.String("response", detail),
-		}
+		)
 		fields = append(fields, extra...)
 		logger.Error("write response failed", fields...)
 		// A dropped response leaves the peer's Future waiting unless the
 		// session is closed and the client-side backend fails pending futures.
 		if closeErr := cs.Close(); closeErr != nil {
-			closeFields := []zap.Field{
+			closeFields := make([]zap.Field, 0, 4+len(extra))
+			closeFields = append(closeFields,
 				zap.Error(closeErr),
 				zap.Uint64("request-id", requestID),
 				zap.String("method", method),
 				zap.String("remote", remote),
-			}
+			)
 			closeFields = append(closeFields, extra...)
 			logger.Error("close client session after write response failed", closeFields...)
 		}
