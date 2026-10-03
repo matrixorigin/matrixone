@@ -192,7 +192,28 @@ func TestParse256(t *testing.T) {
 	}
 }
 
-func TestDecimal256ModScaleAlignmentOverflow(t *testing.T) {
+func TestDecimalModScaleAlignmentOverflow(t *testing.T) {
+	max64 := Decimal64(^uint64(0) >> 1)
+	max128 := Decimal128{B0_63: ^uint64(0), B64_127: 0x7FFFFFFFFFFFFFFF}
+	max256 := Decimal256{B0_63: ^uint64(0), B64_127: ^uint64(0), B128_191: ^uint64(0), B192_255: 0x7FFFFFFFFFFFFFFF}
+	// Each signed maximum is 2^odd-1: multiplying by 10^18 leaves remainder 1 modulo 3.
+	for _, tc := range []struct{ divisor, want uint64 }{{1, 0}, {3, 1}} {
+		t.Run(fmt.Sprintf("wide_coefficient_divisor_%d", tc.divisor), func(t *testing.T) {
+			got64, scale, err := max64.Mod(Decimal64(tc.divisor), 0, 18)
+			require.NoError(t, err)
+			require.Equal(t, int32(18), scale)
+			require.Equal(t, Decimal64(tc.want), got64)
+			got128, scale, err := max128.Mod(Decimal128{B0_63: tc.divisor}, 0, 18)
+			require.NoError(t, err)
+			require.Equal(t, int32(18), scale)
+			require.Equal(t, Decimal128{B0_63: tc.want}, got128)
+			got256, scale, err := max256.Mod(Decimal256{B0_63: tc.divisor}, 0, 18)
+			require.NoError(t, err)
+			require.Equal(t, int32(18), scale)
+			require.Equal(t, Decimal256{B0_63: tc.want}, got256)
+		})
+	}
+
 	maxCoefficient := new(big.Int).Sub(
 		new(big.Int).Exp(big.NewInt(10), big.NewInt(65), nil), big.NewInt(1))
 	maximum, err := ParseDecimal256(maxCoefficient.String(), 65, 0)
@@ -1276,76 +1297,31 @@ func TestDecimalScaleOverflowErrors(t *testing.T) {
 	})
 }
 
-// TestDecimalArithOverflowErrors exercises the arithmetic overflow error paths
-// where error messages were reformatted.
 func TestDecimalArithOverflowErrors(t *testing.T) {
-	maxD64 := Decimal64(^uint64(0) >> 1)
-	maxD128 := Decimal128{B0_63: ^uint64(0), B64_127: 0x7FFFFFFFFFFFFFFF}
-	maxD256 := Decimal256{B0_63: ^uint64(0), B64_127: ^uint64(0), B128_191: ^uint64(0), B192_255: 0x7FFFFFFFFFFFFFFF}
-
-	// D64 Mul overflow (enters D128 fallback, result too big for D64).
-	t.Run("d64_mul_overflow", func(t *testing.T) {
-		_, _, err := maxD64.Mul(maxD64, 0, 0)
-		if err == nil {
-			t.Fatal("expected overflow")
-		}
-	})
-
-	// D128 Mul overflow (enters D256 fallback, result too big for D128).
-	t.Run("d128_mul_overflow", func(t *testing.T) {
-		_, _, err := maxD128.Mul(maxD128, 0, 0)
-		if err == nil {
-			t.Fatal("expected overflow")
-		}
-	})
-
-	// D64 Div overflow (scale overflow in fallback).
-	t.Run("d64_div_scale_overflow", func(t *testing.T) {
-		_, _, err := maxD64.Div(Decimal64(1), 0, 0)
-		_ = err // exercises the path
-	})
-
-	// D128 Div overflow (scale overflow).
-	t.Run("d128_div_scale_overflow", func(t *testing.T) {
-		_, _, err := maxD128.Div(Decimal128{B0_63: 1}, 0, 0)
-		_ = err
-	})
-
-	// D64 Mod overflow.
-	t.Run("d64_mod_overflow", func(t *testing.T) {
-		_, _, err := maxD64.Mod(Decimal64(1), 0, 18)
-		_ = err
-	})
-
-	// D128 Mod overflow.
-	t.Run("d128_mod_overflow", func(t *testing.T) {
-		_, _, err := maxD128.Mod(Decimal128{B0_63: 1}, 0, 18)
-		_ = err
-	})
-
-	// D256 Div overflow.
-	t.Run("d256_div_scale_overflow", func(t *testing.T) {
-		_, _, err := maxD256.Div(Decimal256{B0_63: 1}, 0, 0)
-		_ = err
-	})
-
-	// D256 Mod overflow.
-	t.Run("d256_mod_overflow", func(t *testing.T) {
-		_, _, err := maxD256.Mod(Decimal256{B0_63: 1}, 0, 18)
-		_ = err
-	})
-
-	// D64 Sub error path.
-	t.Run("d64_sub_scale_overflow", func(t *testing.T) {
-		_, _, err := maxD64.Sub(Decimal64(1), 0, 18)
-		_ = err
-	})
-
-	// D128 Sub error path.
-	t.Run("d128_sub_scale_overflow", func(t *testing.T) {
-		_, _, err := maxD128.Sub(Decimal128{B0_63: 1}, 0, 18)
-		_ = err
-	})
+	max64 := Decimal64(^uint64(0) >> 1)
+	max128 := Decimal128{B0_63: ^uint64(0), B64_127: 0x7FFFFFFFFFFFFFFF}
+	max256 := Decimal256{B0_63: ^uint64(0), B64_127: ^uint64(0), B128_191: ^uint64(0), B192_255: 0x7FFFFFFFFFFFFFFF}
+	const coefficient64 = "9223372036854775807"
+	const coefficient128 = "170141183460469231731687303715884105727"
+	const coefficient256 = "57896044618658097711785492504343953926634992332820282019728792003956564819967"
+	for _, tc := range []struct {
+		name, want string
+		run        func() error
+	}{
+		{"d64_mul", "Decimal64 Mul overflow: " + coefficient64 + "*" + coefficient64, func() error { _, _, err := max64.Mul(max64, 0, 0); return err }},
+		{"d128_mul", "Decimal128 Mul overflow: " + coefficient128 + "*" + coefficient128, func() error { _, _, err := max128.Mul(max128, 0, 0); return err }},
+		{"d64_div", "Decimal64 Div overflow: " + coefficient64 + "/1", func() error { _, _, err := max64.Div(1, 0, 0); return err }},
+		{"d128_div", "Decimal128 Div overflow: " + coefficient128 + "/1", func() error { _, _, err := max128.Div(Decimal128{B0_63: 1}, 0, 0); return err }},
+		{"d256_div", "Decimal256 Div overflow: " + coefficient256 + "/1", func() error { _, _, err := max256.Div(Decimal256{B0_63: 1}, 0, 0); return err }},
+		{"d64_sub", "Decimal64 Sub overflow: " + coefficient64 + "-0.000000000000000001", func() error { _, _, err := max64.Sub(1, 0, 18); return err }},
+		{"d128_sub", "Decimal128 Sub overflow: " + coefficient128 + "-0.000000000000000001", func() error { _, _, err := max128.Sub(Decimal128{B0_63: 1}, 0, 18); return err }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.run()
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+			require.EqualError(t, err, "invalid input: "+tc.want)
+		})
+	}
 }
 
 func TestDecimal64MulCappedScale(t *testing.T) {
