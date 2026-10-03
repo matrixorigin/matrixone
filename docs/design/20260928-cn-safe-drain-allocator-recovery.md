@@ -61,10 +61,10 @@ fields extend the existing keepalive request without changing old field
 numbers. An older allocator ignores them; an older CN cannot satisfy a new
 allocator's pending re-handshake after state loss, so normal eviction remains
 blocked rather than silently falling back to the UUID/boolean restart RPC.
-Availability in mixed binaries must be verified before deployment. The
-intended order is: verify and deploy compatible CN/TN lock-service binaries,
-then enable the matching Operator client. A successful deployment workflow is
-not a safe-eviction proof.
+This release uses a coordinated downtime upgrade: stop the CN/TN services,
+deploy compatible CN/TN lock-service binaries, restart them, then enable the
+matching Operator client. Mixed-version and rolling upgrades are outside the
+acceptance scope. A successful deployment workflow is not a safe-eviction proof.
 
 ## Validation ownership and remaining gates
 
@@ -75,8 +75,9 @@ not a safe-eviction proof.
   Pod incarnation, preserve protection on timeout or mismatch, and recheck
   identity before deletion or upgrade.
 - Cloud control plane and QA: prove normal CNClaim, no-CNClaim, and Idle paths
-  do not bypass PreDelete; validate actual mixed binaries, controlled eviction,
-  timeout behavior, and the running main container in an isolated environment.
+  do not bypass PreDelete; validate the coordinated downtime upgrade, controlled
+  eviction, timeout behavior, and the running main container in an isolated
+  environment.
 
 The deterministic kernel test models allocator state loss inside one test
 topology; it does not replace a real process restart, Kruise lifecycle test,
