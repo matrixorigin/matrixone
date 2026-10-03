@@ -269,7 +269,7 @@ func runPreparedAuthorizationCompile(
 	t.Helper()
 	cw, execCtx := newPreparedAuthorizationWrapper(ses, prepareStmt, innerPlan, binary)
 	configurePreparedAuthorizationSession(t, ses, execCtx)
-	query, err := getSqlForCheckRoleHasTableLevelPrivilege(execCtx.reqCtx, 3, PrivilegeTypeSelect, "db1", "t1")
+	query, err := getSqlForCheckRoleHasTableLevelPrivilegeWithObjType(execCtx.reqCtx, objectTypeTable, 3, PrivilegeTypeSelect, "db1", "t1")
 	require.NoError(t, err)
 	var rows [][]interface{}
 	if allowed {
