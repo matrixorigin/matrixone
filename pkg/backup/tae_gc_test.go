@@ -104,6 +104,16 @@ func writeGCMetadata(
 	start, end types.TS,
 	stats ...objectio.ObjectStats,
 ) string {
+	return writeGCMetadataWithProof(t, ctx, fs, start, end, false, stats...)
+}
+
+func writeScannedGCMetadata(t *testing.T, ctx context.Context, fs fileservice.FileService,
+	start, end types.TS, stats ...objectio.ObjectStats) string {
+	return writeGCMetadataWithProof(t, ctx, fs, start, end, true, stats...)
+}
+
+func writeGCMetadataWithProof(t *testing.T, ctx context.Context, fs fileservice.FileService,
+	start, end types.TS, proven bool, stats ...objectio.ObjectStats) string {
 	bat := batch.NewWithSchema(false, gc.ObjectTableMetaAttrs, gc.ObjectTableMetaTypes)
 	defer bat.Clean(common.DebugAllocator)
 	for _, stat := range stats {
@@ -115,6 +125,14 @@ func writeGCMetadata(
 	require.NoError(t, err)
 	_, err = writer.WriteWithoutSeqnum(bat)
 	require.NoError(t, err)
+	if proven {
+		bat.CleanOnlyData()
+		payload := append([]byte("GCS1"), start[:]...)
+		payload = append(payload, end[:]...)
+		require.NoError(t, vector.AppendBytes(bat.Vecs[0], payload, false, common.DebugAllocator))
+		_, err = writer.WriteWithoutSeqnum(bat)
+		require.NoError(t, err)
+	}
 	_, err = writer.WriteEnd(ctx)
 	require.NoError(t, err)
 	return name
