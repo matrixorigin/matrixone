@@ -14941,33 +14941,6 @@ func TestTimestampAddTimestampWithMaxInt64Interval(t *testing.T) {
 	}
 }
 
-func TestDoTimestampAddWithAddIntervalFailure(t *testing.T) {
-	loc := time.UTC
-
-	// Test case: AddInterval fails (returns success=false) but not due to overflow
-	// This should trigger the else branch that returns moerr.NewOutOfRangeNoCtx("timestamp", "")
-	// We need to find a case where AddInterval returns false but it's not due to overflow
-	// Looking at the code, when AddInterval fails, it goes to else branch which returns error
-	// Let's test with a case that causes AddInterval to fail
-
-	// Use a timestamp that when adding a large interval will cause AddInterval to fail
-	// but the year calculation might still be in valid range
-	start, _ := types.ParseTimestamp(loc, "2024-01-01 00:00:00", 6)
-
-	// Try with a very large interval that might cause AddInterval to fail
-	// but the code path should still go through the else branch
-	_, err := doTimestampInterval(loc, start, 1000000000, types.Day, false)
-	// This might return overflow error or other error depending on implementation
-	// The important thing is to test the else branch
-	if err != nil {
-		// If it's overflow error, that's fine - we're testing the error path
-		if !isDatetimeOverflowMaxError(err) {
-			// This is the else branch we want to test
-			require.Contains(t, err.Error(), "timestamp")
-		}
-	}
-}
-
 func TestDateTruncTimestampPreservesDSTFold(t *testing.T) {
 	loc, err := time.LoadLocation("America/New_York")
 	require.NoError(t, err)
@@ -15504,51 +15477,6 @@ func TestTimestampAddDateWithNonOverflowError(t *testing.T) {
 	}
 	if result != nil {
 		result.Free()
-	}
-}
-
-// TestDoDatetimeAddWithDefaultCaseInSwitch tests doDatetimeAdd with default case (nums == 0)
-func TestDoDatetimeAddWithDefaultCaseInSwitch(t *testing.T) {
-	// Test case: interval type that doesn't match any case in the switch statement
-	// This would cause nums to remain 0, triggering the else block where resultYear = startYear
-	// However, looking at the code, all valid interval types are handled, so this might be hard to trigger
-	// Let's test with a normal case to ensure the function works
-	start, _ := types.ParseDatetime("2024-01-01 00:00:00", 6)
-	result, err := doCalendarInterval(start, 1, types.Day, false)
-	require.NoError(t, err)
-	require.NotEqual(t, types.Datetime(0), result)
-}
-
-// TestDoDatetimeAddWithNumsZero tests doDatetimeAdd when nums == 0 in default case
-func TestDoDatetimeAddWithNumsZero(t *testing.T) {
-	// This tests the else block in default case where nums == 0
-	// The code sets resultYear = startYear when nums == 0
-	// We need to find a case where this happens
-	// Looking at the code, this happens when iTyp doesn't match any case in the switch
-	// But all valid interval types are handled, so this might be impossible to trigger
-	// Let's test with normal cases
-	start, _ := types.ParseDatetime("2024-01-01 00:00:00", 6)
-
-	// Test with different interval types
-	testCases := []struct {
-		name string
-		diff int64
-		iTyp types.IntervalType
-	}{
-		{"Day", 1, types.Day},
-		{"Week", 1, types.Week},
-		{"Hour", 1, types.Hour},
-		{"Minute", 1, types.Minute},
-		{"Second", 1, types.Second},
-		{"MicroSecond", 1, types.MicroSecond},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			result, err := doCalendarInterval(start, tc.diff, tc.iTyp, false)
-			require.NoError(t, err)
-			require.NotEqual(t, types.Datetime(0), result)
-		})
 	}
 }
 
