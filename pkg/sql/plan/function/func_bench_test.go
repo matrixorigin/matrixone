@@ -20,17 +20,12 @@ import (
 )
 
 func benchmarkDateFormat(b *testing.B, scenario dateFormatScenario) {
-	cases := initDateFormatTestCases(b, scenario, 100, 8192)
+	tc := newDateFormatTestCase(b, scenario, 8192)
 	proc := testutil.NewProcess(b)
 	defer proc.Free()
-	for _, tc := range cases {
-		func() {
-			testCase := NewFunctionTestCase(proc, tc.inputs, tc.expect, DateFormat)
-			defer testCase.Free()
-			testCase.BenchMarkRun()
-			_, _ = testCase.Run()
-		}()
-	}
+	fc := NewFunctionTestCase(proc, tc.inputs, tc.expect, DateFormat)
+	defer fc.Free()
+	fc.Benchmark(b)
 }
 
 func BenchmarkDateFormat1(b *testing.B) { benchmarkDateFormat(b, dateFormatScenarios[0]) }

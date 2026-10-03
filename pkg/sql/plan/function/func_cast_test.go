@@ -3186,19 +3186,15 @@ func TestCast(t *testing.T) {
 }
 
 func BenchmarkCast(b *testing.B) {
-	testCases := initCastTestCase()
 	proc := testutil.NewProcess(b)
-
-	b.StartTimer()
-	for _, tc := range testCases {
-		func() {
-			fcTC := NewFunctionTestCase(proc,
-				tc.inputs, tc.expect, NewCast)
-			defer fcTC.Free()
-			_ = fcTC.BenchMarkRun()
-		}()
+	defer proc.Free()
+	for _, tc := range initCastTestCase() {
+		b.Run(tc.info, func(b *testing.B) {
+			fc := NewFunctionTestCase(proc, tc.inputs, tc.expect, NewCast)
+			defer fc.Free()
+			fc.Benchmark(b)
+		})
 	}
-	b.StopTimer()
 }
 
 func Test_strToSigned_Binary(t *testing.T) {

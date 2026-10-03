@@ -484,20 +484,25 @@ func (fc *FunctionTestCase) DebugRun() (*vector.Vector, error) {
 	return fc.result.GetResultVector(), err
 }
 
-// BenchMarkRun will run the function case N times without correctness check for result.
-func (fc *FunctionTestCase) BenchMarkRun() error {
-	num := 100000
-	for num > 0 {
-		num--
-		err := fc.fn(fc.parameters, fc.result, fc.proc, fc.fnLength, nil)
-		// XXX maybe free is unnecessary.
-		typ := fc.result.GetResultVector().GetType()
-		fc.result.GetResultVector().Reset(*typ)
-		if err != nil {
-			return err
+// Benchmark checks the case once before timing and measures one evaluation per iteration.
+func (fc *FunctionTestCase) Benchmark(b *testing.B) {
+	b.Helper()
+	if ok, info := fc.Run(); !ok {
+		b.Fatal(info)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := fc.result.PreExtendAndReset(fc.fnLength); err != nil {
+			b.Fatal(err)
+		}
+		err := fc.fn(fc.parameters, fc.result, fc.proc, fc.fnLength, fc.selectList)
+		if err != nil && !fc.expected.wantErr {
+			b.Fatal(err)
+		}
+		if err == nil && fc.expected.wantErr {
+			b.Fatal("expected to run failed, but run succeed with no error")
 		}
 	}
-	return nil
 }
 
 func newVectorByType(mp *mpool.MPool, typ types.Type, val any, nsp *nulls.Nulls) *vector.Vector {

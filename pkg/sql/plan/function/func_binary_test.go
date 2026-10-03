@@ -3806,8 +3806,8 @@ var dateFormatScenarios = []dateFormatScenario{
 	}},
 }
 
-// UTs need each literal pair once; benchmarks retain their original population.
-func initDateFormatTestCases(tb testing.TB, scenario dateFormatScenario, caseCount, rowCount int) []tcTemp {
+// UTs need each literal pair once; benchmarks retain their original row batch.
+func newDateFormatTestCase(tb testing.TB, scenario dateFormatScenario, rowCount int) tcTemp {
 	tb.Helper()
 	dates := make([]types.Datetime, len(scenario.pairs))
 	for i, pair := range scenario.pairs {
@@ -3815,28 +3815,24 @@ func initDateFormatTestCases(tb testing.TB, scenario dateFormatScenario, caseCou
 		dates[i], err = types.ParseDatetime(pair.datetime, 6)
 		require.NoError(tb, err)
 	}
-	cases := make([]tcTemp, caseCount)
-	for i := range cases {
-		values := make([]types.Datetime, rowCount)
-		nulls := make([]bool, rowCount)
-		results := make([]string, rowCount)
-		resultNulls := make([]bool, rowCount)
-		for row := range values {
-			pair := row % len(scenario.pairs)
-			values[row] = dates[pair]
-			results[row] = scenario.pairs[pair].expected
-		}
-		cases[i] = tcTemp{
-			info: scenario.name,
-			typ:  types.T_datetime,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_datetime.ToType(), values, nulls),
-				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{scenario.format}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, results, resultNulls),
-		}
+	values := make([]types.Datetime, rowCount)
+	nulls := make([]bool, rowCount)
+	results := make([]string, rowCount)
+	resultNulls := make([]bool, rowCount)
+	for row := range values {
+		pair := row % len(scenario.pairs)
+		values[row] = dates[pair]
+		results[row] = scenario.pairs[pair].expected
 	}
-	return cases
+	return tcTemp{
+		info: scenario.name,
+		typ:  types.T_datetime,
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_datetime.ToType(), values, nulls),
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{scenario.format}, []bool{false}),
+		},
+		expect: NewFunctionTestResult(types.T_varchar.ToType(), false, results, resultNulls),
+	}
 }
 
 func TestDateFormat(t *testing.T) {
@@ -3849,7 +3845,7 @@ func TestDateFormat(t *testing.T) {
 	})
 	for _, scenario := range dateFormatScenarios {
 		t.Run(scenario.name, func(t *testing.T) {
-			tc := initDateFormatTestCases(t, scenario, 1, 4)[0]
+			tc := newDateFormatTestCase(t, scenario, 4)
 			testCase := NewFunctionTestCase(proc, tc.inputs, tc.expect, DateFormat)
 			defer testCase.Free()
 			ok, info := testCase.Run()
