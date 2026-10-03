@@ -1688,242 +1688,52 @@ func TestTimestampAddComprehensiveFromExpectResult(t *testing.T) {
 	})
 }
 
-// TestTimestampAddStringPerformance tests performance optimization for TimestampAddString
-// This test verifies that the optimized single-pass implementation produces correct results
-// for large vectors and mixed DATE/DATETIME format inputs
-func TestTimestampAddStringPerformance(t *testing.T) {
+func TestTimestampAddStringFormats(t *testing.T) {
 	proc := testutil.NewProcess(t)
-
-	// Test case 1: Large vector with all DATE format inputs (should use optimized path)
-	t.Run("Large vector with DATE format inputs", func(t *testing.T) {
-		const vectorSize = 10000
-		unit := "DAY"
-		interval := int64(5)
-
-		// Create large vectors
-		unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte(unit), vectorSize, proc.Mp())
-		intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), interval, vectorSize, proc.Mp())
-
-		// Create DATE format string vector
-		dateStrs := make([]string, vectorSize)
-		for i := 0; i < vectorSize; i++ {
-			dateStrs[i] = "2024-12-20"
-		}
-		inputVec := vector.NewVec(types.T_varchar.ToType())
-		vector.AppendStringList(inputVec, dateStrs, nil, proc.Mp())
-
-		parameters := []*vector.Vector{unitVec, intervalVec, inputVec}
-		result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
-
-		fnLength := inputVec.Length()
-		err := result.PreExtendAndReset(fnLength)
-		require.NoError(t, err)
-
-		err = TimestampAddString(parameters, result, proc, fnLength, nil)
-		require.NoError(t, err)
-
-		v := result.GetResultVector()
-		require.Equal(t, fnLength, v.Length())
-		require.Equal(t, types.T_varchar, v.GetType().Oid)
-
-		// Verify first and last elements
-		strParam := vector.GenerateFunctionStrParameter(v)
-		resultBytes, null := strParam.GetStrValue(0)
-		require.False(t, null)
-		require.Equal(t, "2024-12-25", string(resultBytes))
-
-		resultBytes, null = strParam.GetStrValue(uint64(vectorSize - 1))
-		require.False(t, null)
-		require.Equal(t, "2024-12-25", string(resultBytes))
+	t.Cleanup(proc.Free)
+	native, heap := proc.Mp().CurrNB(), proc.Mp().OnHeapCurrNB()
+	t.Cleanup(func() {
+		require.Equal(t, native, proc.Mp().CurrNB())
+		require.Equal(t, heap, proc.Mp().OnHeapCurrNB())
 	})
-
-	// Test case 2: Large vector with mixed DATE and DATETIME format inputs
-	t.Run("Large vector with mixed DATE/DATETIME format inputs", func(t *testing.T) {
-		const vectorSize = 10000
-		unit := "DAY"
-		interval := int64(5)
-
-		unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte(unit), vectorSize, proc.Mp())
-		intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), interval, vectorSize, proc.Mp())
-
-		// Create mixed format string vector: first half DATE, second half DATETIME
-		dateStrs := make([]string, vectorSize)
-		for i := 0; i < vectorSize/2; i++ {
-			dateStrs[i] = "2024-12-20"
-		}
-		for i := vectorSize / 2; i < vectorSize; i++ {
-			dateStrs[i] = "2024-12-20 10:30:45"
-		}
-		inputVec := vector.NewVec(types.T_varchar.ToType())
-		vector.AppendStringList(inputVec, dateStrs, nil, proc.Mp())
-
-		parameters := []*vector.Vector{unitVec, intervalVec, inputVec}
-		result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
-
-		fnLength := inputVec.Length()
-		err := result.PreExtendAndReset(fnLength)
-		require.NoError(t, err)
-
-		err = TimestampAddString(parameters, result, proc, fnLength, nil)
-		require.NoError(t, err)
-
-		v := result.GetResultVector()
-		require.Equal(t, fnLength, v.Length())
-
-		// Verify DATE format inputs produce DATE format output
-		strParam := vector.GenerateFunctionStrParameter(v)
-		resultBytes, null := strParam.GetStrValue(0)
-		require.False(t, null)
-		require.Equal(t, "2024-12-25", string(resultBytes))
-
-		// Verify DATETIME format inputs produce DATETIME format output
-		resultBytes, null = strParam.GetStrValue(uint64(vectorSize - 1))
-		require.False(t, null)
-		require.Equal(t, "2024-12-25 10:30:45", string(resultBytes))
-	})
-
-	// Test case 3: Small vector with single DATE format input (edge case)
-	t.Run("Single DATE format input", func(t *testing.T) {
-		unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte("DAY"), 1, proc.Mp())
-		intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), int64(5), 1, proc.Mp())
-		inputVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte("2024-12-20"), 1, proc.Mp())
-
-		parameters := []*vector.Vector{unitVec, intervalVec, inputVec}
-		result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
-
-		fnLength := inputVec.Length()
-		err := result.PreExtendAndReset(fnLength)
-		require.NoError(t, err)
-
-		err = TimestampAddString(parameters, result, proc, fnLength, nil)
-		require.NoError(t, err)
-
-		v := result.GetResultVector()
-		require.Equal(t, fnLength, v.Length())
-
-		strParam := vector.GenerateFunctionStrParameter(v)
-		resultBytes, null := strParam.GetStrValue(0)
-		require.False(t, null)
-		require.Equal(t, "2024-12-25", string(resultBytes))
-	})
-
-	// Test case 4: Large vector with time units (should always return DATETIME format)
-	t.Run("Large vector with time units", func(t *testing.T) {
-		const vectorSize = 10000
-		unit := "HOUR"
-		interval := int64(2)
-
-		unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte(unit), vectorSize, proc.Mp())
-		intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), interval, vectorSize, proc.Mp())
-
-		dateStrs := make([]string, vectorSize)
-		for i := 0; i < vectorSize; i++ {
-			dateStrs[i] = "2024-12-20"
-		}
-		inputVec := vector.NewVec(types.T_varchar.ToType())
-		vector.AppendStringList(inputVec, dateStrs, nil, proc.Mp())
-
-		parameters := []*vector.Vector{unitVec, intervalVec, inputVec}
-		result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
-
-		fnLength := inputVec.Length()
-		err := result.PreExtendAndReset(fnLength)
-		require.NoError(t, err)
-
-		err = TimestampAddString(parameters, result, proc, fnLength, nil)
-		require.NoError(t, err)
-
-		v := result.GetResultVector()
-		require.Equal(t, fnLength, v.Length())
-
-		strParam := vector.GenerateFunctionStrParameter(v)
-		resultBytes, null := strParam.GetStrValue(0)
-		require.False(t, null)
-		// Time unit should return DATETIME format
-		require.Equal(t, "2024-12-20 02:00:00", string(resultBytes))
-	})
-
-	// Test case 5: ISO 8601 format support
-	t.Run("ISO 8601 format support", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-
-		testCases := []struct {
-			name     string
-			unit     string
-			interval int64
-			input    string
-			expected string
-		}{
-			{
-				name:     "ISO format with DAY unit",
-				unit:     "DAY",
-				interval: 5,
-				input:    "2024-12-20T10:30:45",
-				expected: "2024-12-25 10:30:45",
-			},
-			{
-				name:     "ISO format with HOUR unit",
-				unit:     "HOUR",
-				interval: 2,
-				input:    "2024-12-20T10:30:45",
-				expected: "2024-12-20 12:30:45",
-			},
-			{
-				name:     "ISO format with MINUTE unit",
-				unit:     "MINUTE",
-				interval: 30,
-				input:    "2024-12-20T10:30:45",
-				expected: "2024-12-20 11:00:45",
-			},
-			{
-				name:     "ISO format with SECOND unit",
-				unit:     "SECOND",
-				interval: 60,
-				input:    "2024-12-20T10:30:45",
-				expected: "2024-12-20 10:31:45",
-			},
-			{
-				name:     "ISO format with microseconds",
-				unit:     "MICROSECOND",
-				interval: 123456,
-				input:    "2024-12-20T10:30:45.000000",
-				expected: "2024-12-20 10:30:45.123456",
-			},
-			{
-				name:     "ISO format with MONTH unit",
-				unit:     "MONTH",
-				interval: 1,
-				input:    "2024-12-20T10:30:45",
-				expected: "2025-01-20 10:30:45",
-			},
-		}
-
-		for _, tc := range testCases {
-			t.Run(tc.name, func(t *testing.T) {
-				unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.unit), 1, proc.Mp())
-				intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), tc.interval, 1, proc.Mp())
-				inputVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.input), 1, proc.Mp())
-
-				parameters := []*vector.Vector{unitVec, intervalVec, inputVec}
-				result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
-
-				fnLength := inputVec.Length()
-				err := result.PreExtendAndReset(fnLength)
-				require.NoError(t, err)
-
-				err = TimestampAddString(parameters, result, proc, fnLength, nil)
-				require.NoError(t, err)
-
-				v := result.GetResultVector()
-				require.Equal(t, fnLength, v.Length())
-
-				strParam := vector.GenerateFunctionStrParameter(v)
-				resultBytes, null := strParam.GetStrValue(0)
-				require.False(t, null)
-				require.Equal(t, tc.expected, string(resultBytes))
-			})
-		}
-	})
+	for _, tc := range []struct {
+		name, unit   string
+		interval     int64
+		inputs, want []string
+		constant     bool
+	}{
+		{"DATE vector", "DAY", 5, []string{"2024-12-20", "2024-12-21"}, []string{"2024-12-25", "2024-12-26"}, false},
+		{"Mixed DATE/DATETIME vector", "DAY", 5, []string{"2024-12-20", "2024-12-20 10:30:45"}, []string{"2024-12-25", "2024-12-25 10:30:45"}, false},
+		{"Single DATE constant", "DAY", 5, []string{"2024-12-20"}, []string{"2024-12-25"}, true},
+		{"Time unit vector", "HOUR", 2, []string{"2024-12-20", "2024-12-21"}, []string{"2024-12-20 02:00:00", "2024-12-21 02:00:00"}, false},
+		{"ISO DAY", "DAY", 5, []string{"2024-12-20T10:30:45"}, []string{"2024-12-25 10:30:45"}, true},
+		{"ISO HOUR", "HOUR", 2, []string{"2024-12-20T10:30:45"}, []string{"2024-12-20 12:30:45"}, true},
+		{"ISO MINUTE", "MINUTE", 30, []string{"2024-12-20T10:30:45"}, []string{"2024-12-20 11:00:45"}, true},
+		{"ISO SECOND", "SECOND", 60, []string{"2024-12-20T10:30:45"}, []string{"2024-12-20 10:31:45"}, true},
+		{"ISO MICROSECOND", "MICROSECOND", 123456, []string{"2024-12-20T10:30:45.000000"}, []string{"2024-12-20 10:30:45.123456"}, true},
+		{"ISO MONTH", "MONTH", 1, []string{"2024-12-20T10:30:45"}, []string{"2025-01-20 10:30:45"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Keep the scalar parameters' logical batch length and const class.
+			units, intervals := make([]string, len(tc.inputs)), make([]int64, len(tc.inputs))
+			for i := range units {
+				units[i], intervals[i] = tc.unit, tc.interval
+			}
+			input := NewFunctionTestInput(types.T_varchar.ToType(), tc.inputs, nil)
+			input.isConst = tc.constant
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), units, nil),
+				NewFunctionTestConstInput(types.T_int64.ToType(), intervals, nil),
+				input,
+			}, NewFunctionTestResult(types.T_varchar.ToType(), false, tc.want, nil), TimestampAddString)
+			t.Cleanup(fc.Free)
+			require.Equal(t, len(tc.inputs), fc.fnLength)
+			success, info := fc.Run()
+			require.True(t, success, info)
+		})
+		require.Equal(t, native, proc.Mp().CurrNB())
+		require.Equal(t, heap, proc.Mp().OnHeapCurrNB())
+	}
 }
 
 func TestTimestampAddErrorHandling(t *testing.T) {
