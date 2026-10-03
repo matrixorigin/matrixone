@@ -141,6 +141,18 @@ MatrixOne (OLTP + OLAP + 全文检索 + 向量检索)
   <img alt="MatrixOne" height="450" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/architecture/architeture241113_en.png?raw=true">
 </p>
 
+### 🤖 **使用 OrcaRouter 作为 LLM 网关**
+
+[OrcaRouter](https://www.orcarouter.ai) 是一个 OpenAI 兼容的模型网关，通过单一端点把聊天请求路由到可用的最优模型。它在同一端点上还为 AI agents 提供网关级、零信任的安全防护——在默认拒绝的基础上审查每一次 prompt/response 并对每一次工具调用进行管控，无需任何应用代码改动。
+
+MatrixOne 内置的 `llm_chat` 函数支持将 `orcarouter` 作为命名 server。设置 `ORCAROUTER_API_KEY` 环境变量后即可通过网关路由聊天查询：
+
+```sql
+-- 通过 OrcaRouter 智能路由模型发起聊天
+SELECT llm_chat('orcarouter', '', 'orcarouter/auto', '{"temperature": 0.1}',
+  '[{"role": "user", "content": "What is MatrixOne?"}]');
+```
+
 ## ⚡️ 60秒快速上手
 
 ### 1️⃣ 启动 MatrixOne
