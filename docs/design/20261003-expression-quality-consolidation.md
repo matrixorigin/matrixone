@@ -267,3 +267,28 @@ diagnostics byte for byte. These are validation timings, not performance deltas.
 The legacy dependency race failures remain recorded; replacement-oracle and
 immutable-artifact review continue privately. No formal dependency change is
 included, and the follow-up checkpoint does not complete #29249.
+
+
+### 2026-10-03: lock-test assertion cleanup closure
+
+The existing user-lock fixture resets global ownership maps during deferred
+cleanup. A fatal assertion while holding one of those mutexes can therefore
+prevent the same test from terminating: cleanup reacquires the held mutex.
+A forced capacity mismatch reproduces that deadlock in the old test. With the
+snapshot correction, the same mismatch fails and terminates (0.428s).
+
+Fourteen critical sections in ten existing tests contained 22 fatal assertions.
+They now capture exact lengths, holder values, nil presence, and mutable queued
+flags while locked, unlock, then apply the original checks. No production code,
+fixture, helper, capacity, cancellation budget, or ownership rule changes.
+Map/channel emptiness is checked by exact zero length; backlog length is captured
+before draining. Existing helpers with deferred unlock remain unchanged.
+
+The complete function package passes normal (11.585s) and race (14.991s).
+Incremental configured lint reports no new issues; vet passes. The two molint
+findings are byte-identical to the verified baseline. These are test-lifecycle
+proofs, not evidence of query throughput or CI duration improvement. Public SQL
+behavior and production consumers are unchanged, so this closure adds no BVT.
+Validation artifacts are in the task's lock-snapshot evidence ledger. Focused
+adaptive race stress passes for all ten exact test names (nine × 100, one × 28).
+Actual gpt-6.1-sol xhigh delivery review: APPROVE, no verified blockers. Refs #29249; broader consolidation remains open.
