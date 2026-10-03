@@ -114,6 +114,33 @@ execute field_max_stmt using @field_subject, @field_candidate;
 1
 deallocate prepare field_max_stmt;
 set @field_control = null;
+set @field_subject = 'A';
+set @field_candidate = 'a';
+prepare field_text_values_stmt from 'select field(nullif(?, ''''), ?) as nullif_text, field(greatest(?, ''@''), ?) as greatest_text, field(coalesce(?, ''fallback''), ?) as coalesce_text, field(if(true, ?, ''B''), ?) as if_text';
+execute field_text_values_stmt using @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate;
+➤ nullif_text[-5,64,0]  ¦  greatest_text[-5,64,0]  ¦  coalesce_text[-5,64,0]  ¦  if_text[-5,64,0]  𝄀
+1  ¦  1  ¦  1  ¦  1
+set @field_candidate = 'z';
+execute field_text_values_stmt using @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate;
+➤ nullif_text[-5,64,0]  ¦  greatest_text[-5,64,0]  ¦  coalesce_text[-5,64,0]  ¦  if_text[-5,64,0]  𝄀
+0  ¦  0  ¦  0  ¦  0
+deallocate prepare field_text_values_stmt;
+set @field_candidate = 'a';
+prepare field_null_values_stmt from 'select field(coalesce(?, null), ?) as coalesce_null, field(case when true then ? else null end, ?) as case_null, field(if(true, ?, null), ?) as if_null';
+execute field_null_values_stmt using @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate;
+➤ coalesce_null[-5,64,0]  ¦  case_null[-5,64,0]  ¦  if_null[-5,64,0]  𝄀
+0  ¦  0  ¦  0
+set @field_subject = X'41';
+set @field_candidate = X'61';
+execute field_null_values_stmt using @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate;
+➤ coalesce_null[-5,64,0]  ¦  case_null[-5,64,0]  ¦  if_null[-5,64,0]  𝄀
+0  ¦  0  ¦  0
+deallocate prepare field_null_values_stmt;
+prepare field_window_stmt from 'select field(x, ?) as window_field from (select max(?) over() as x, min(?) over() as y) d';
+execute field_window_stmt using @field_candidate, @field_subject, @field_subject;
+➤ window_field[-5,64,0]  𝄀
+1
+deallocate prepare field_window_stmt;
 set @field_subject = _binary 'a';
 prepare field_binary_stmt from 'select field(cast(? as binary), ''A'', ''a'', X''FE'', X''FF'') as prepared_field';
 execute field_binary_stmt using @field_subject;

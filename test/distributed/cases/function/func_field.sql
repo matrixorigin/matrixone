@@ -90,6 +90,25 @@ execute field_max_stmt using @field_subject, @field_candidate;
 deallocate prepare field_max_stmt;
 set @field_control = null;
 
+-- Nonempty text must survive its comparison cast; a NULL-only selector keeps byte comparison.
+set @field_subject = 'A';
+set @field_candidate = 'a';
+prepare field_text_values_stmt from 'select field(nullif(?, ''''), ?) as nullif_text, field(greatest(?, ''@''), ?) as greatest_text, field(coalesce(?, ''fallback''), ?) as coalesce_text, field(if(true, ?, ''B''), ?) as if_text';
+execute field_text_values_stmt using @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate;
+set @field_candidate = 'z';
+execute field_text_values_stmt using @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate;
+deallocate prepare field_text_values_stmt;
+set @field_candidate = 'a';
+prepare field_null_values_stmt from 'select field(coalesce(?, null), ?) as coalesce_null, field(case when true then ? else null end, ?) as case_null, field(if(true, ?, null), ?) as if_null';
+execute field_null_values_stmt using @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate;
+set @field_subject = X'41';
+set @field_candidate = X'61';
+execute field_null_values_stmt using @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate;
+deallocate prepare field_null_values_stmt;
+prepare field_window_stmt from 'select field(x, ?) as window_field from (select max(?) over() as x, min(?) over() as y) d';
+execute field_window_stmt using @field_candidate, @field_subject, @field_subject;
+deallocate prepare field_window_stmt;
+
 -- Explicit binary subjects retain byte equality across prepared executions.
 set @field_subject = _binary 'a';
 prepare field_binary_stmt from 'select field(cast(? as binary), ''A'', ''a'', X''FE'', X''FF'') as prepared_field';

@@ -5865,6 +5865,25 @@ func (b *baseBinder) annotateStringDomainSource(
 			if node == nil || col.ColPos < 0 {
 				return
 			}
+			// Windows in one query block share an output tag. The tag map
+			// points at the last WINDOW, not necessarily this column's owner.
+			for hops := 0; hops < len(b.builder.qry.Nodes) &&
+				(node.NodeType == plan.Node_WINDOW || node.NodeType == plan.Node_PARTITION); hops++ {
+				if node.NodeType == plan.Node_WINDOW && node.WindowIdx == col.ColPos && len(node.WinSpecList) > 0 {
+					source = node.WinSpecList[0].GetW().GetWindowFunc()
+					break
+				}
+				if len(node.Children) != 1 || node.Children[0] < 0 || int(node.Children[0]) >= len(b.builder.qry.Nodes) {
+					return
+				}
+				node = b.builder.qry.Nodes[node.Children[0]]
+				if node == nil {
+					return
+				}
+			}
+			if source == nil && (node.NodeType == plan.Node_WINDOW || node.NodeType == plan.Node_PARTITION) {
+				return // malformed or cyclic lineage is not a parameter source
+			}
 			outputs := node.ProjectList
 			if node.NodeType == plan.Node_AGG && len(node.BindingTags) > 0 {
 				if col.RelPos == node.BindingTags[0] {
@@ -5873,10 +5892,12 @@ func (b *baseBinder) annotateStringDomainSource(
 					outputs = node.AggList
 				}
 			}
-			if int(col.ColPos) >= len(outputs) {
-				return
+			if source == nil {
+				if int(col.ColPos) >= len(outputs) {
+					return
+				}
+				source = outputs[col.ColPos]
 			}
-			source = outputs[col.ColPos]
 		}
 		key := [2]int32{col.RelPos, col.ColPos}
 		if witness, ok := memo[key]; ok {

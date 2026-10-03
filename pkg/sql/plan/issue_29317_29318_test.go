@@ -19,11 +19,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -288,6 +291,15 @@ func TestPreparedVariadicRuntimeSourceDomains(t *testing.T) {
 			want: []types.T{types.T_text, types.T_text},
 		},
 		{
+			name: "field WINDOW marker projection", sql: "prepare p from 'select field(x, ?) from (select max(?) over() as x, min(?) over() as y) d'", fn: "field",
+			values: []ParamValue{
+				{Value: "a", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+				{Value: "A", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+				{Value: "A", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+			},
+			want: []types.T{types.T_text, types.T_text},
+		},
+		{
 			name: "field NULLIF marker context", sql: "prepare p from 'select field(nullif(?, ''''), ?)'", fn: "field",
 			values: []ParamValue{
 				{Value: "A", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
@@ -429,6 +441,50 @@ func TestPreparedVariadicRuntimeSourceDomains(t *testing.T) {
 				require.EqualValues(t, 1, overload, "comparison domain must survive execution-time constant folding")
 			}
 		})
+	}
+}
+
+// Execute the consumer as well as inspecting its type: a negative-width
+// VARCHAR cast can have the expected domain while truncating every value.
+func TestPreparedFieldComparisonExecution(t *testing.T) {
+	for _, source := range []types.T{types.T_varchar, types.T_varbinary} {
+		for _, tc := range []struct {
+			name, operand string
+			want          int64
+		}{
+			{"nullif", "nullif(?, '')", 1},
+			{"greatest", "greatest(?, '@')", 1},
+			{"coalesce text", "coalesce(?, 'fallback')", 1},
+			{"if text", "if(true, ?, 'B')", 1},
+			{"nonmatching text", "nullif(?, '')", 0},
+			{"coalesce NULL", "coalesce(?, null)", 0},
+			{"case NULL", "case when true then ? else null end", 0},
+			{"if NULL", "if(true, ?, null)", 0},
+		} {
+			t.Run(source.String()+"/"+tc.name, func(t *testing.T) {
+				query := "select field(" + tc.operand + ", ?)"
+				prepared, err := runOneStmt(NewMockOptimizer(false), t,
+					"prepare p from '"+strings.ReplaceAll(query, "'", "''")+"'")
+				require.NoError(t, err)
+				template := prepared.GetDcl().GetPrepare().Plan
+				before := template.String()
+				filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), template, []any{
+					ParamValue{Value: "A", SourceType: source.ToType(), HasSourceType: true},
+					ParamValue{Value: map[bool]string{true: "z", false: "a"}[tc.name == "nonmatching text"], SourceType: source.ToType(), HasSourceType: true},
+				})
+				require.NoError(t, err)
+				require.Equal(t, before, template.String(), "cached PREPARE template changed")
+				consumer := findPlanFunctionExpr(filled, "field")
+				require.NotNil(t, consumer)
+				proc := testutil.NewProcess(t)
+				executor, err := colexec.NewExpressionExecutor(proc, consumer)
+				require.NoError(t, err)
+				defer executor.Free()
+				out, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+				require.NoError(t, err)
+				require.Equal(t, tc.want, vector.GetFixedAtWithTypeCheck[int64](out, 0), consumer.String())
+			})
+		}
 	}
 }
 
