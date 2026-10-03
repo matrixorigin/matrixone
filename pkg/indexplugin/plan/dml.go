@@ -18,12 +18,15 @@ import planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 // DMLMaintenanceNoOpHook is an optional capability for indexes whose hidden
 // state is a pure function of every stored input in the base-table row. The
-// returned columns form a conservative proof: SQL NULL-safe equality for every
-// returned column, including row identity/doc identity when it is an input,
-// must imply byte-for-byte-equivalent hidden-index input between the old and
-// final row images. Implementations must return supported=false when type
-// comparison rules, external state, or any other dependency can change the
-// generated entries despite that equality result.
+// returned columns form a conservative proof: the planner compares the
+// stored-value identity of every returned column (including row identity/doc
+// identity when it is an input), and that comparison must imply
+// byte-for-byte-equivalent hidden-index input between the old and final row
+// images. The comparison is deliberately distinct from SQL collation
+// equality: a case-insensitive or PAD SPACE equality is not proof that the
+// tokenizer received the same bytes. Implementations must return supported=false
+// when type comparison rules, external state, or any other dependency can
+// change the generated entries despite that equality result.
 type DMLMaintenanceNoOpHook interface {
 	DMLMaintenanceNoOpColumns(tableDef *planpb.TableDef, indexDef *planpb.IndexDef) (columns []string, supported bool, err error)
 }
