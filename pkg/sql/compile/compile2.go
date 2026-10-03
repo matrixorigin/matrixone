@@ -132,6 +132,9 @@ func (c *Compile) Compile(
 	execTopContext context.Context,
 	queryPlan *plan.Plan,
 	resultWriteBack func(batch *batch.Batch, crs *perfcounter.CounterSet) error) (err error) {
+	if err = plan.RequireLegacyCollations(queryPlan); err != nil {
+		return err
+	}
 	if err = validateOctStringProtocol(c.proc, queryPlan); err != nil {
 		return err
 	}

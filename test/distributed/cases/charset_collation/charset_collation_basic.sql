@@ -82,9 +82,20 @@ SHOW CREATE TABLE t_default;
 -- UTF8 charset table
 CREATE TABLE t_utf8 (
     id INT PRIMARY KEY,
-    name VARCHAR(100)
+    name VARCHAR(100),
+    name_mb3 VARCHAR(1) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci
 ) CHARACTER SET utf8;
 SHOW CREATE TABLE t_utf8;
+
+-- utf8/utf8mb3 兼容声明仍接收四字节字符，不启用三字节限制。
+INSERT INTO t_utf8 VALUES (1, '😀', '😀');
+SELECT HEX(name), HEX(name_mb3), LENGTH(name_mb3), CHAR_LENGTH(name_mb3) FROM t_utf8;
+ALTER TABLE t_utf8 MODIFY name_mb3 VARCHAR(1) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
+SELECT HEX(name_mb3), LENGTH(name_mb3), CHAR_LENGTH(name_mb3) FROM t_utf8;
+SELECT column_name, character_set_name, collation_name FROM information_schema.columns
+WHERE table_schema = 'charset_test' AND table_name = 't_utf8' AND column_name <> 'id'
+ORDER BY ordinal_position;
+SELECT HEX(CONVERT('😀' USING utf8)), HEX(CONVERT('😀' USING utf8mb3));
 
 -- UTF8MB4 with different collations
 CREATE TABLE t_utf8mb4_bin (

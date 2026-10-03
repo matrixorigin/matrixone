@@ -2606,7 +2606,8 @@ func executeArgumentSourceType(typ plan.Type) types.Type {
 			sourceOID = types.T_blob
 		}
 	}
-	return types.NewWithCharset(sourceOID, typ.Width, typ.Scale, uint8(typ.Charset))
+	typ.Id = int32(sourceOID)
+	return types.MustTypeFromPlan(typ)
 }
 
 func shouldCachePrepareCompile(p *plan.Plan) bool {

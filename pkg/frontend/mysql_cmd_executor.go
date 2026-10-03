@@ -1586,6 +1586,9 @@ func doSetVar(
 				}
 			}
 		}
+		if err := validateCharsetAssignment(assign, value); err != nil {
+			return evaluatedAssignment{}, err
+		}
 		return evaluatedAssignment{
 			assign:                  assign,
 			value:                   value,

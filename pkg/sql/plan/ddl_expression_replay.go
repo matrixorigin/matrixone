@@ -110,7 +110,7 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 			oldCol.Typ.Width == newCol.Typ.Width && oldCol.Typ.Scale == newCol.Typ.Scale &&
 			oldCol.Typ.AutoIncr == newCol.Typ.AutoIncr &&
 			oldCol.Typ.Enumvalues == newCol.Typ.Enumvalues &&
-			oldCol.Typ.Charset == newCol.Typ.Charset &&
+			oldCol.Typ.SameCollation(newCol.Typ) &&
 			oldCol.Typ.PadSpace == newCol.Typ.PadSpace
 	}
 	copyExpr := func(expr *planpb.Expr, positions map[int32]int32) *planpb.Expr {

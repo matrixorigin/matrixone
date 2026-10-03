@@ -126,7 +126,7 @@ done
 
 # The gogo generator has no hook for validating preserved unknown enum values.
 # Install the plan Expr owner-boundary check deterministically after generation.
-go run ./proto/postprocess/plan_string_literal_form ./pkg/pb/plan/plan.pb.go
+go run ./proto/postprocess/plan_string_literal_form ./pkg/pb/plan/plan.pb.go ./pkg/pb/api/api.pb.go
 
 
 # Generate pb file for each package's own

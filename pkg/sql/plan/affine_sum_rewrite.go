@@ -624,7 +624,7 @@ func sameAffineResultType(left, right *planpb.Expr) bool {
 	return l.Id == r.Id && l.NotNullable == r.NotNullable &&
 		l.AutoIncr == r.AutoIncr && l.Width == r.Width && l.Scale == r.Scale &&
 		l.Table == r.Table && l.Enumvalues == r.Enumvalues &&
-		l.Charset == r.Charset && l.PadSpace == r.PadSpace
+		l.SameCollation(r) && l.PadSpace == r.PadSpace
 }
 
 func cloneAndRewriteAffineAggregateRefs(
