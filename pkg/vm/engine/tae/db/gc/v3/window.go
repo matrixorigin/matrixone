@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -75,17 +76,52 @@ func NewGCWindow(
 	return &window
 }
 
+const gcScanProofMagic = "GCS1"
+
+// gcScanRange certifies one contiguous interval actually read from incremental
+// checkpoints. Unlike tsRange, this proof must not advance during restore.
+type gcScanRange struct{ start, end types.TS }
+
+func (r *gcScanRange) merge(other gcScanRange) {
+	if other.end.IsEmpty() || other.start.GT(&other.end) {
+		return
+	}
+	if r.end.IsEmpty() {
+		*r = other
+		return
+	}
+	if other.start.LT(&r.start) {
+		*r, other = other, *r
+	}
+	next := r.end.Next()
+	if other.start.GT(&next) {
+		// Keep a proven suffix, never bridge a hole.
+		*r = other
+		return
+	}
+	if other.end.GT(&r.end) {
+		r.end = other.end
+	}
+}
+
 type GCWindow struct {
 	dir string
 	mp  *mpool.MPool
 	fs  fileservice.FileService
 
-	files []objectio.ObjectStats
+	files     []objectio.ObjectStats
+	scanRange gcScanRange
 
 	tsRange struct {
 		start types.TS
 		end   types.TS
 	}
+}
+
+// ScannedRange is the persisted absence proof; an empty end means unknown.
+// Legacy metadata remains readable but its recovery watermark is not a census.
+func (w *GCWindow) ScannedRange() (types.TS, types.TS) {
+	return w.scanRange.start, w.scanRange.end
 }
 
 func (w *GCWindow) GetObjectStats() []objectio.ObjectStats {
@@ -224,6 +260,19 @@ func (w *GCWindow) ScanCheckpoints(
 	}
 	start := checkpointEntries[0].GetStart()
 	end := checkpointEntries[len(checkpointEntries)-1].GetEnd()
+	var scanned gcScanRange
+	var previousEnd types.TS
+	for i, entry := range checkpointEntries {
+		entryStart, entryEnd := entry.GetStart(), entry.GetEnd()
+		if entryStart.GT(&entryEnd) || (i > 0 && entryEnd.LT(&previousEnd)) {
+			return "", moerr.NewInternalError(ctx, "invalid GC checkpoint scan order")
+		}
+		previousEnd = entryEnd
+		// Global and compacted checkpoints filter history and cannot prove absence.
+		if entry.IsIncremental() {
+			scanned.merge(gcScanRange{entryStart, entryEnd})
+		}
+	}
 	getOneBatch := func(cxt context.Context, bat *batch.Batch, mp *mpool.MPool) (bool, error) {
 		select {
 		case <-cxt.Done():
@@ -243,7 +292,9 @@ func (w *GCWindow) ScanCheckpoints(
 			}
 		}
 		objects := make(map[string]map[uint64]*ObjectEntry)
-		collectObjectsFromCheckpointData(ctx, ckpReader, objects)
+		if err := collectObjectsFromCheckpointData(ctx, ckpReader, objects); err != nil {
+			return false, err
+		}
 		if err = collectMapData(objects, bat, mp); err != nil {
 			return false, err
 		}
@@ -277,14 +328,14 @@ func (w *GCWindow) ScanCheckpoints(
 		return
 	}
 
-	w.tsRange.start = start
-	w.tsRange.end = end
+	next := *w
+	next.tsRange.start, next.tsRange.end = start, end
+	next.scanRange = scanned
 	newFiles, _ := sinker.GetResult()
-	if metaFile, err = w.writeMetaForRemainings(
-		ctx, newFiles,
-	); err != nil {
+	if metaFile, err = next.writeMetaForRemainings(ctx, newFiles); err != nil {
 		return
 	}
+	*w = next
 	w.files = append(w.files, newFiles...)
 	return metaFile, nil
 }
@@ -337,6 +388,20 @@ func (w *GCWindow) writeMetaForRemainings(
 	if _, err := writer.WriteWithoutSeqnum(ret); err != nil {
 		return "", err
 	}
+	// Block zero stays the original stats schema. Old readers consume only it.
+	// The optional second block commits the proof with the same object write,
+	// including empty censuses, and survives CopyGCDir's byte-for-byte rename.
+	if !w.scanRange.end.IsEmpty() {
+		ret.CleanOnlyData()
+		payload := append([]byte(gcScanProofMagic), w.scanRange.start[:]...)
+		payload = append(payload, w.scanRange.end[:]...)
+		if err := vector.AppendBytes(ret.GetVector(0), payload, false, w.mp); err != nil {
+			return "", err
+		}
+		if _, err := writer.WriteWithoutSeqnum(ret); err != nil {
+			return "", err
+		}
+	}
 	_, err = writer.WriteEnd(ctx)
 	return name, err
 }
@@ -346,6 +411,7 @@ func (w *GCWindow) Merge(o *GCWindow) {
 		return
 	}
 	w.files = append(w.files, o.files...)
+	w.scanRange.merge(o.scanRange)
 	if w.tsRange.start.IsEmpty() && w.tsRange.end.IsEmpty() {
 		w.tsRange.start = o.tsRange.start
 		w.tsRange.end = o.tsRange.end
@@ -360,8 +426,8 @@ func (w *GCWindow) Merge(o *GCWindow) {
 	}
 }
 
-func collectObjectsFromCheckpointData(ctx context.Context, ckpReader *logtail.CKPReader, objects map[string]map[uint64]*ObjectEntry) {
-	ckpReader.ForEachRow(
+func collectObjectsFromCheckpointData(ctx context.Context, ckpReader *logtail.CKPReader, objects map[string]map[uint64]*ObjectEntry) error {
+	return ckpReader.ForEachRow(
 		ctx,
 		func(
 			account uint32,
@@ -390,6 +456,7 @@ func collectObjectsFromCheckpointData(ctx context.Context, ckpReader *logtail.CK
 
 func (w *GCWindow) Close() {
 	w.files = nil
+	w.scanRange = gcScanRange{}
 }
 
 // collectData collects data from memory that can be written to s3
@@ -502,6 +569,7 @@ func (w *GCWindow) replayData(
 
 // ReadTable reads an s3 file and replays a GCWindow in memory
 func (w *GCWindow) ReadTable(ctx context.Context, name string, fs fileservice.FileService) error {
+	w.scanRange = gcScanRange{}
 	select {
 	case <-ctx.Done():
 		return context.Cause(ctx)
@@ -526,11 +594,36 @@ func (w *GCWindow) ReadTable(ctx context.Context, name string, fs fileservice.Fi
 	if err != nil {
 		return err
 	}
+	if len(bs) < 1 || len(bs) > 2 {
+		return moerr.NewInternalError(ctx, fmt.Sprintf("invalid GC metadata block count: %d", len(bs)))
+	}
+	var scanned gcScanRange
+	if len(bs) == 2 {
+		proof, release, err := reader.LoadColumns(ctx, []uint16{0}, nil, bs[1].GetID(), w.mp)
+		if err != nil {
+			return err
+		}
+		defer release()
+		if len(proof.Vecs) != 1 || proof.Vecs[0].Length() != 1 || proof.Vecs[0].GetType().Oid != types.T_varchar || proof.Vecs[0].IsNull(0) {
+			return moerr.NewInternalError(ctx, "invalid GC scan proof")
+		}
+		raw := proof.Vecs[0].GetBytesAt(0)
+		size := len(scanned.start)
+		if len(raw) != 4+2*size || string(raw[:4]) != gcScanProofMagic {
+			return moerr.NewInternalError(ctx, "invalid GC scan proof encoding")
+		}
+		copy(scanned.start[:], raw[4:4+size])
+		copy(scanned.end[:], raw[4+size:])
+		if scanned.end.IsEmpty() || scanned.start.GT(&scanned.end) || scanned.end.GT(&w.tsRange.end) {
+			return moerr.NewInternalError(ctx, "invalid GC scan proof range")
+		}
+	}
 	buffer, release1, err = w.replayData(ctx, bs, reader)
 	if err != nil {
 		return err
 	}
 	w.rebuildTable(buffer)
+	w.scanRange = scanned
 	return nil
 }
 

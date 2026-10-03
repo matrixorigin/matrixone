@@ -35,6 +35,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -320,9 +321,9 @@ func execBackup(
 	backupTime := names[0]
 	trimString := names[1]
 	names = names[1:]
-	files := make(map[string]*objectio.BackupObject, 0)
+	var files map[string]*objectio.BackupObject
 	gcFileMap := make(map[string]string)
-	softDeletes := make(map[string]bool)
+	var err error
 	var loadDuration, copyDuration, reWriteDuration time.Duration
 	var oNames []*objectio.BackupObject
 	parallelNum := getParallelCount(count)
@@ -337,12 +338,37 @@ func execBackup(
 			common.AnyField("copy file cost", copyDuration),
 			common.AnyField("rewrite checkpoint cost", reWriteDuration))
 	}()
+	// The special checkpoint is rewritten to its start timestamp. Objects
+	// dropped before that timestamp may already have been collected by GC,
+	// unless retained for historical reads. Objects dropped at or after it
+	// remain live after the rewrite and must still be copied.
+	var cnLoc, mergeStart, mergeEnd string
+	var end, start types.TS
+	var version uint64
+	if trimString != "" {
+		ckpStr := strings.Split(trimString, ":")
+		if len(ckpStr) != 5 {
+			return moerr.NewInternalError(ctx, fmt.Sprintf("invalid checkpoint string: %v", ckpStr))
+		}
+		cnLoc = ckpStr[0]
+		mergeEnd = ckpStr[2]
+		// tnLoc = ckpStr[3]
+		mergeStart = ckpStr[4]
+		end = types.StringToTS(mergeEnd)
+		start = types.StringToTS(mergeStart)
+		version, err = strconv.ParseUint(ckpStr[1], 10, 32)
+		if err != nil {
+			return err
+		}
+	}
+
 	startTime := time.Now()
 	baseTS := ts
 	// When rewriting the checkpoint and trimming the aobject,
 	// you need to collect the atombstone in the last checkpoint
 	// Before this, only the last special checkpoint needs to be collected
 	var lastData *logtail.CKPReader
+	checkpointObjects := make(map[string][]*objectio.BackupObject)
 	for i, name := range names {
 		if len(name) == 0 {
 			continue
@@ -362,15 +388,19 @@ func execBackup(
 		}
 		var oneNames []*objectio.BackupObject
 		var data *logtail.CKPReader
-		if i == 0 {
-			oneNames, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, sid, srcFs, key, uint32(version), nil, &baseTS)
-		} else {
-			oneNames, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, sid, srcFs, key, uint32(version), &softDeletes, &baseTS)
-		}
+		oneNames, data, err = logtail.LoadCheckpointEntriesFromKey(
+			ctx,
+			sid,
+			srcFs,
+			key,
+			uint32(version),
+			&baseTS,
+		)
 		if err != nil {
 			return err
 		}
 		oNames = append(oNames, oneNames...)
+		checkpointObjects[metaLoc] = oneNames
 		if i == len(names)-1 {
 			lastData = data
 		}
@@ -393,42 +423,6 @@ func execBackup(
 		}
 	}
 	startTime = time.Now()
-	for _, oName := range oNames {
-		objName := oName.Location.Name().String()
-		// Check if file already exists in current backup directory
-		if dstHave[objName] {
-			oName.NeedCopy = false
-		}
-		// Check if file exists in global index (already backed up in previous backups)
-		if globalIndex != nil && globalIndex.Has(objName) {
-			oName.NeedCopy = false
-		}
-		if files[objName] == nil {
-			files[objName] = oName
-		}
-	}
-
-	// trim checkpoint and block
-	var cnLoc, mergeStart, mergeEnd string
-	var end, start types.TS
-	var version uint64
-	if trimString != "" {
-		var err error
-		ckpStr := strings.Split(trimString, ":")
-		if len(ckpStr) != 5 {
-			return moerr.NewInternalError(ctx, fmt.Sprintf("invalid checkpoint string: %v", ckpStr))
-		}
-		cnLoc = ckpStr[0]
-		mergeEnd = ckpStr[2]
-		// tnLoc = ckpStr[3]
-		mergeStart = ckpStr[4]
-		end = types.StringToTS(mergeEnd)
-		start = types.StringToTS(mergeStart)
-		version, err = strconv.ParseUint(ckpStr[1], 10, 32)
-		if err != nil {
-			return err
-		}
-	}
 
 	// Set protectedTS to the backup time point
 	// This is the timestamp that should be protected from GC
@@ -445,6 +439,11 @@ func execBackup(
 	if !protectedTS.IsEmpty() && protectionMgr != nil {
 		protectionMgr.start(protectedTS)
 	}
+	retention, err := loadBackupObjectRetention(ctx, sid, srcFs, start, checkpointObjects)
+	if err != nil {
+		return err
+	}
+	files = selectBackupObjects(oNames, start, dstHave, globalIndex, retention)
 
 	// copy data
 	taeFileList, err := parallelCopyData(ctx, srcFs, dstFs, files, parallelNum, gcFileMap)
@@ -521,6 +520,194 @@ func execBackup(
 		*filesList = append(*filesList, taeFileList...)
 	}
 	return err
+}
+
+type backupObjectKey struct {
+	tableID    uint64
+	objectType int8
+	name       objectio.ObjectNameShort
+	createTS   types.TS
+}
+
+type backupObjectRetention struct {
+	start, end types.TS
+	retained   map[objectio.ObjectNameShort]struct{}
+}
+
+// Only the GC window's persisted scan proof can authorize absence. Its filename
+// is a recovery watermark, which CopyGCDir may advance without scanning objects.
+// Compacted checkpoint references remain required for historical reads.
+func loadBackupObjectRetention(
+	ctx context.Context,
+	sid string,
+	fs fileservice.FileService,
+	restoreTS types.TS,
+	checkpointObjects map[string][]*objectio.BackupObject,
+) (*backupObjectRetention, error) {
+	ret := &backupObjectRetention{retained: make(map[objectio.ObjectNameShort]struct{})}
+	gcFiles, err := ioutil.ListTSRangeFilesInGCDir(ctx, fs)
+	if err != nil {
+		return nil, err
+	}
+	var selectedWindow *gc.GCWindow
+	defer func() {
+		if selectedWindow != nil {
+			selectedWindow.Close()
+		}
+	}()
+	for i := range gcFiles {
+		f := &gcFiles[i]
+		if (!f.IsCKPFile() && !f.IsFullGCExt()) || f.GetEnd().IsEmpty() || f.GetEnd().GT(&restoreTS) {
+			continue
+		}
+		window := gc.NewGCWindow(common.DebugAllocator, fs)
+		if err := window.ReadTable(ctx, f.GetGCFullName(), fs); err != nil {
+			window.Close()
+			return nil, err
+		}
+		start, end := window.ScannedRange()
+		// Prefer broad older coverage; a scan-only suffix must not displace it.
+		// Read remaining rows only for the selected, independently proven census.
+		if end.IsEmpty() || (selectedWindow != nil && !(start.LT(&ret.start) || (start.EQ(&ret.start) && ret.end.LT(&end)))) {
+			window.Close()
+			continue
+		}
+		if selectedWindow != nil {
+			selectedWindow.Close()
+		}
+		selectedWindow = window
+		ret.start, ret.end = start, end
+	}
+	if selectedWindow != nil {
+		data := batch.NewWithSchema(false, gc.ObjectTableAttrs, gc.ObjectTableTypes)
+		defer data.Clean(common.DebugAllocator)
+		reader := selectedWindow.MakeFilesReader(ctx, fs)
+		defer reader.Close()
+		for {
+			data.CleanOnlyData()
+			done, err := reader.Read(ctx, gc.ObjectTableAttrs, nil, common.DebugAllocator, data)
+			if err != nil {
+				return nil, err
+			}
+			if done {
+				break
+			}
+			for i := 0; i < data.RowCount(); i++ {
+				stats := objectio.ObjectStats(data.Vecs[0].GetBytesAt(i))
+				ret.retained[*stats.ObjectName().Short()] = struct{}{}
+			}
+		}
+	}
+
+	metaFiles, err := ioutil.ListTSRangeFiles(ctx, "ckp", fs)
+	if err != nil {
+		return nil, err
+	}
+	var selected *ioutil.TSRangeFile
+	for i := range metaFiles {
+		meta := &metaFiles[i]
+		if !meta.IsCompactExt() || meta.GetEnd().GT(&restoreTS) {
+			continue
+		}
+		if selected == nil || selected.GetEnd().LT(meta.GetEnd()) {
+			selected = meta
+		}
+	}
+	if selected != nil {
+		entries, err := checkpoint.ListSnapshotCheckpoint(ctx, sid, fs, restoreTS,
+			map[string]struct{}{selected.GetName(): {}})
+		if err != nil {
+			return nil, err
+		}
+		if len(entries) == 0 {
+			return nil, moerr.NewInternalError(ctx, "compacted checkpoint metadata has no backup entry")
+		}
+		for _, entry := range entries {
+			objects, ok := checkpointObjects[entry.GetLocation().String()]
+			if !ok {
+				return nil, moerr.NewInternalError(ctx, "compacted checkpoint absent from backup checkpoint response")
+			}
+			for _, obj := range objects {
+				ret.retained[*obj.Location.Name().Short()] = struct{}{}
+			}
+		}
+	}
+	return ret, nil
+}
+
+func backupObjectIdentity(obj *objectio.BackupObject) backupObjectKey {
+	return backupObjectKey{
+		tableID:    obj.TableID,
+		objectType: obj.ObjectType,
+		name:       *obj.Location.Name().Short(),
+		createTS:   obj.CrateTS,
+	}
+}
+
+func selectBackupObjects(
+	oNames []*objectio.BackupObject,
+	restoreTS types.TS,
+	dstHave map[string]bool,
+	globalIndex *GlobalFileIndex,
+	retention *backupObjectRetention,
+) map[string]*objectio.BackupObject {
+	// Incremental checkpoints can contain separate create/delete rows for one
+	// lifecycle. Resolve those before physical-file deduplication: another table
+	// (e.g. a clone) may still own a live reference to the same physical file.
+	var dropTSByObject map[backupObjectKey]types.TS
+	if !restoreTS.IsEmpty() {
+		for _, obj := range oNames {
+			if obj.TableID == 0 || obj.DropTS.IsEmpty() {
+				continue
+			}
+			if dropTSByObject == nil {
+				dropTSByObject = make(map[backupObjectKey]types.TS)
+			}
+			key := backupObjectIdentity(obj)
+			dropTS, exists := dropTSByObject[key]
+			// Keep the later timestamp if duplicated records disagree, so an
+			// earlier record cannot discard an object still needed at restoreTS.
+			if !exists || dropTS.LT(&obj.DropTS) {
+				dropTSByObject[key] = obj.DropTS
+			}
+		}
+	}
+
+	files := make(map[string]*objectio.BackupObject, len(oNames))
+	for _, oName := range oNames {
+		objName := oName.Location.Name().String()
+		// A DropTS alone does not prove that an object is absent from the
+		// snapshot being restored. The special checkpoint rewrite makes objects
+		// dropped at or after restoreTS live again, so only an earlier DropTS is
+		// potentially safe to omit. Historical retention must also be excluded.
+		dropTS := oName.DropTS
+		if !restoreTS.IsEmpty() && oName.TableID != 0 {
+			dropTS = dropTSByObject[backupObjectIdentity(oName)]
+		}
+		if !restoreTS.IsEmpty() && !dropTS.IsEmpty() && dropTS.LT(&restoreTS) &&
+			retention != nil && !retention.end.IsEmpty() &&
+			oName.CrateTS.GT(&retention.start) && dropTS.LE(&retention.end) {
+			if _, retained := retention.retained[*oName.Location.Name().Short()]; !retained {
+				continue
+			}
+		}
+		// Check if file already exists in current backup directory
+		if dstHave[objName] {
+			oName.NeedCopy = false
+		}
+		// Check if file exists in global index (already backed up in previous backups)
+		if globalIndex != nil && globalIndex.Has(objName) {
+			oName.NeedCopy = false
+		}
+		if files[objName] == nil {
+			files[objName] = oName
+		} else {
+			// Any retained reference requiring a copy must override an older
+			// reference marked reusable by the incremental-backup watermark.
+			files[objName].NeedCopy = files[objName].NeedCopy || oName.NeedCopy
+		}
+	}
+	return files
 }
 
 // CopyCheckpointDir copy checkpoint dir from srcFs to dstFs
