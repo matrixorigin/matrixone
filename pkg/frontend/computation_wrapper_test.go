@@ -3670,9 +3670,23 @@ func TestPreparedSignedNarrowingDMLCacheGuard(t *testing.T) {
 				bind(tc.values, -1, -1)
 				assertReused()
 			}
-			// NULL and a different binary source width are different categories.
-			// A category miss must not evict the live plan before compile succeeds.
 			if tc.name == "update" {
+				// The preceding recovery established a safe cache hit. Cover
+				// negative overflow once at the cached admission boundary.
+				values := append([]string(nil), tc.values...)
+				values[tc.keys[0]] = "-2147483649"
+				bind(values, -1, -1)
+				gotCompile, fallback := execute()
+				require.Nil(t, gotCompile, "negative overflow cannot reuse a narrow compile")
+				require.NotSame(t, narrowPlan, fallback)
+				require.Nil(t, cw.runtimeCacheTarget, "a value-dependent fallback must not replace the good cache")
+				require.Same(t, narrowPlan, prepared.runtimePlan)
+				require.Same(t, cached, prepared.runtimeCompile)
+				bind(tc.values, -1, -1)
+				assertReused()
+
+				// NULL and a different binary source width are different categories.
+				// A category miss must not evict the live plan before compile succeeds.
 				for _, nullBinding := range []bool{true, false} {
 					nullAt, longAt := -1, tc.keys[0]
 					if nullBinding {
