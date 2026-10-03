@@ -4151,6 +4151,8 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		}
 	}
 	isIfNull := name == "ifnull"
+	isNullIf := name == "nullif"
+	var nullIfDomainPeer *Expr
 
 	// rewrite some ast Exprs before binding
 	switch name {
@@ -4158,6 +4160,15 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		// rewrite 'nullif(expr1, expr2)' to 'case when expr1=expr2 then null else expr1'
 		if len(astArgs) != 2 {
 			return nil, moerr.NewInvalidArg(b.GetContext(), "nullif need two args", len(astArgs))
+		}
+		// Capture the peer before comparison binding installs provisional
+		// collation casts inherited from this execution's first operand.
+		if b.builder != nil && (b.builder.isPrepareStatement || preparedSourceBindings(b.GetContext()) != nil) {
+			var err error
+			nullIfDomainPeer, err = b.impl.BindExpr(astArgs[1], depth, false)
+			if err != nil {
+				return nil, err
+			}
 		}
 		elseExpr := astArgs[0]
 		thenExpr := tree.NewNumVal("", "", false, tree.P_null)
@@ -4673,6 +4684,20 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 					return nil, err
 				}
 				ensurePreparedNumericMetadata(e).IfnullCommonValue = true
+			}
+			if isNullIf && len(args) == 3 && types.T(e.Typ.Id).IsMySQLString() &&
+				(b.builder.isPrepareStatement || preparedSourceBindings(b.GetContext()) != nil) {
+				if nullIfDomainPeer != nil {
+					// Preserve NULLIF's comparison-domain operands before its CASE
+					// shape becomes indistinguishable from a user-written CASE.
+					// This witness is metadata only; CASE remains the executable.
+					ensurePreparedNumericMetadata(e).StringDomainSource = &Expr{
+						Typ: e.Typ, Expr: &plan.Expr_F{F: &plan.Function{
+							Func: &plan.ObjectRef{ObjName: "coalesce"},
+							Args: []*Expr{DeepCopyExpr(args[2]), DeepCopyExpr(nullIfDomainPeer)},
+						}},
+					}
+				}
 			}
 			b.markPreparedResultCastsProvisional(
 				b.GetContext(), name, astArgs, preparedPeerSources, e, preparedNumericProvenance)
@@ -6067,6 +6092,20 @@ func (b *baseBinder) markPreparedStringDomainSubquerySource(
 func stringDomainSourceWitness(source *Expr, domains uint8) *Expr {
 	if source == nil || domains == 0 {
 		return nil
+	}
+	if provenance := source.GetPreparedNumeric().GetStringDomainSource(); provenance != nil {
+		return stringDomainSourceWitness(provenance, domains)
+	}
+	if preparedFieldOnlyMarkerAndNull(source) {
+		// Preserve NULL-selector semantics without copying a projection graph.
+		// The compact marker set plus one NULL is sufficient for this contract;
+		// an invented TEXT leaf would change FIELD's comparison domain.
+		collector := stringDomainWitnessCollector{seen: make(map[string]struct{})}
+		collector.collect(source, make(map[*Expr]struct{}))
+		args := append(collector.args, makePlan2NullConstExprWithType())
+		return &Expr{Typ: source.Typ, Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: "coalesce"}, Args: args,
+		}}}
 	}
 	if _, marker := preparedParamPosition(source); marker {
 		// A scalar or derived projection of one marker keeps PARAM_ITEM

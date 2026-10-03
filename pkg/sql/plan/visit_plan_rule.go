@@ -5117,7 +5117,7 @@ func preparedFieldOperandComparisonType(ctx context.Context, expr *Expr, lookup 
 	// A provisional common-type cast may have widened a fixed binary literal
 	// to TEXT. Recover its literal domain only in this private type probe.
 	if err := plan.VisitExprTree(probe, func(value *Expr) error {
-		if value.GetCol() != nil || value.GetSub() != nil {
+		if !isExplicitPreparedCast(value) {
 			if source := value.GetPreparedNumeric().GetStringDomainSource(); source != nil {
 				*value = *DeepCopyExpr(source)
 			}
@@ -5172,13 +5172,9 @@ func preparedFieldOperandComparisonType(ctx context.Context, expr *Expr, lookup 
 		return types.Type{}, false, nil
 	}
 	typ, _, _, err := preparedExecutionExprType(ctx, probe, markerLookup)
-	if err == nil && preparedFieldOnlyMarkerAndNull(expr) {
+	if err == nil && preparedFieldOnlyMarkerAndNull(probe) {
 		// An untyped NULL branch does not contribute a text charset.
 		typ.Charset = types.CharsetBinary
-	} else if err == nil && preparedFieldNullifMarkerValue(expr) {
-		// NULLIF's CASE rewrite compares the marker in its predicate; its
-		// returning ELSE marker keeps the SQL TEXT comparison context.
-		typ.Charset = types.CharsetUTF8
 	}
 	// This is a comparison-domain conversion, not a width/DDL boundary.
 	// Width-zero BLOB and negative-width TEXT are unbounded cast envelopes;
@@ -5189,16 +5185,6 @@ func preparedFieldOperandComparisonType(ctx context.Context, expr *Expr, lookup 
 		typ.Oid, typ.Width = types.T_text, -1
 	}
 	return typ, err == nil && hasSQLStringMarker && types.StaticStringDomain(typ) != types.StringDomainNone, err
-}
-
-func preparedFieldNullifMarkerValue(expr *Expr) bool {
-	fn := expr.GetF()
-	if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.ObjName, "case") || len(fn.Args) != 3 {
-		return false
-	}
-	_, marker := preparedParamPosition(fn.Args[2])
-	_, nullValue, other := preparedFieldMarkerNullValues(fn.Args[1])
-	return marker && nullValue && !other && preparedExprContainsParam(fn.Args[0])
 }
 
 // preparedFieldOnlyMarkerAndNull recognizes selectors whose only value
@@ -5213,6 +5199,9 @@ func preparedFieldMarkerNullValues(expr *Expr) (marker, nullValue, other bool) {
 	if expr == nil || isExplicitPreparedCast(expr) {
 		return false, false, true
 	}
+	if source := expr.GetPreparedNumeric().GetStringDomainSource(); source != nil {
+		return preparedFieldMarkerNullValues(source)
+	}
 	if expr.GetP() != nil {
 		return true, false, false
 	}
@@ -5224,7 +5213,7 @@ func preparedFieldMarkerNullValues(expr *Expr) (marker, nullValue, other bool) {
 		return false, false, true
 	}
 	name := strings.ToLower(fn.Func.ObjName)
-	if name == "cast" && len(fn.Args) > 0 {
+	if (name == "cast" || name == "max" || name == "min" || name == "any_value") && len(fn.Args) > 0 {
 		return preparedFieldMarkerNullValues(fn.Args[0])
 	}
 	if name != "coalesce" && name != "ifnull" && name != "if" && name != "iff" && name != "case" {
@@ -5233,11 +5222,7 @@ func preparedFieldMarkerNullValues(expr *Expr) (marker, nullValue, other bool) {
 	for index, arg := range fn.Args {
 		if (name == "if" || name == "iff") && index == 0 ||
 			name == "case" && !numericFunctionArgKeepsContext(name, index, len(fn.Args)) {
-			// A marker-bearing predicate means NULLIF or another comparison
-			// controls the value; it cannot be classified as NULL-only.
-			if preparedExprContainsParam(arg) {
-				other = true
-			}
+			// Conditions never contribute to a selector's returned value domain.
 			continue
 		}
 		m, n, o := preparedFieldMarkerNullValues(arg)

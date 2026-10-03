@@ -291,6 +291,27 @@ func TestPreparedVariadicRuntimeSourceDomains(t *testing.T) {
 			want: []types.T{types.T_text, types.T_text},
 		},
 		{
+			name: "field derived NULL selector", sql: "prepare p from 'select field(x, ?) from (select coalesce(?, null) as x limit 1) d'", fn: "field",
+			values: []ParamValue{
+				{Value: "a", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+				{Value: "A", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+			}, want: []types.T{types.T_blob, types.T_text},
+		},
+		{
+			name: "field scalar NULL selector", sql: "prepare p from 'select field((select coalesce(?, null) from (select 1 as x) d limit 1), ?)'", fn: "field",
+			values: []ParamValue{
+				{Value: "A", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+				{Value: "a", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+			}, want: []types.T{types.T_blob, types.T_text},
+		},
+		{
+			name: "field WINDOW NULL selector", sql: "prepare p from 'select field(x, ?) from (select max(coalesce(?, null)) over() as x) d'", fn: "field",
+			values: []ParamValue{
+				{Value: "a", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+				{Value: "A", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+			}, want: []types.T{types.T_blob, types.T_text},
+		},
+		{
 			name: "field WINDOW marker projection", sql: "prepare p from 'select field(x, ?) from (select max(?) over() as x, min(?) over() as y) d'", fn: "field",
 			values: []ParamValue{
 				{Value: "a", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
@@ -453,6 +474,8 @@ func TestPreparedFieldComparisonExecution(t *testing.T) {
 			want          int64
 		}{
 			{"nullif", "nullif(?, '')", 1},
+			{"wrapped nullif", "nullif(coalesce(?, 'A'), '')", 1},
+			{"binary nullif peer", "nullif(?, _binary '')", 0},
 			{"greatest", "greatest(?, '@')", 1},
 			{"coalesce text", "coalesce(?, 'fallback')", 1},
 			{"if text", "if(true, ?, 'B')", 1},
@@ -486,6 +509,56 @@ func TestPreparedFieldComparisonExecution(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestPreparedFieldParameterCaseComparison(t *testing.T) {
+	for _, sql := range []string{
+		"prepare p from 'select field(case when ? then null else ? end, ?)'",
+		"prepare p from 'select field(nullif(coalesce(?,?), ''''), ?)'",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+				sql)
+			require.NoError(t, err)
+			first := ParamValue{Value: int64(0), SourceType: types.T_int64.ToType(), HasSourceType: true}
+			want := int64(0)
+			if strings.Contains(sql, "nullif") {
+				first = ParamValue{Value: "A", SourceType: types.T_varbinary.ToType(), HasSourceType: true}
+				want = 1
+			}
+			filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), prepared.GetDcl().GetPrepare().Plan, []any{
+				first,
+				ParamValue{Value: "A", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+				ParamValue{Value: "a", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+			})
+			require.NoError(t, err)
+			proc := testutil.NewProcess(t)
+			executor, err := colexec.NewExpressionExecutor(proc, findPlanFunctionExpr(filled, "field"))
+			require.NoError(t, err)
+			defer executor.Free()
+			out, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			require.NoError(t, err)
+			require.EqualValues(t, want, vector.GetFixedAtWithTypeCheck[int64](out, 0))
+		})
+	}
+}
+
+func TestPreparedFieldNullifSourceBinding(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	binary := types.T_varbinary.ToType()
+	values := []any{
+		ParamValue{Value: "A", SourceType: binary, HasSourceType: true},
+		ParamValue{Value: "A", SourceType: binary, HasSourceType: true},
+		ParamValue{Value: "a", SourceType: binary, HasSourceType: true},
+	}
+	mock.ctxt.SetContext(withPreparedSourceBindings(context.Background(), []PreparedSourceBinding{
+		{Position: 0, Type: binary}, {Position: 1, Type: binary}, {Position: 2, Type: binary},
+	}, values))
+	p, err := runOneStmt(mock, t, "select field(nullif(coalesce(?,?), ''), ?)")
+	require.NoError(t, err)
+	consumer := findPlanFunctionExpr(p, "field")
+	require.NotNil(t, consumer)
+	require.Equal(t, types.StringDomainText, types.StaticStringDomain(makeTypeByPlan2Expr(consumer.GetF().Args[0])), consumer.String())
 }
 
 func TestPreparedCommonValueStringMarkerWithFixedDecimalPeer(t *testing.T) {

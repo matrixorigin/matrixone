@@ -109,6 +109,32 @@ prepare field_window_stmt from 'select field(x, ?) as window_field from (select 
 execute field_window_stmt using @field_candidate, @field_subject, @field_subject;
 deallocate prepare field_window_stmt;
 
+-- NULLIF retains original operands, not a guessed CASE shape.
+set @field_subject = X'41';
+set @field_candidate = X'61';
+set @field_condition = 0;
+prepare field_wrapped_nullif from 'select field(nullif(coalesce(?,?), ''''), ?) as wrapped_nullif';
+execute field_wrapped_nullif using @field_subject, @field_subject, @field_candidate;
+deallocate prepare field_wrapped_nullif;
+prepare field_binary_nullif from 'select field(nullif(?, _binary ''''), ?) as binary_nullif';
+execute field_binary_nullif using @field_subject, @field_candidate;
+deallocate prepare field_binary_nullif;
+prepare field_case_condition from 'select field(case when ? then null else ? end, ?) as parameter_case';
+execute field_case_condition using @field_condition, @field_subject, @field_candidate;
+deallocate prepare field_case_condition;
+
+-- NULL-selector semantics survive every relational materialization boundary.
+prepare field_null_derived from 'select field(x, ?) as null_derived from (select coalesce(?, null) as x limit 1) d';
+execute field_null_derived using @field_candidate, @field_subject;
+deallocate prepare field_null_derived;
+prepare field_null_scalar from 'select field((select coalesce(?, null) from (select 1 as x) d limit 1), ?) as null_scalar';
+execute field_null_scalar using @field_subject, @field_candidate;
+deallocate prepare field_null_scalar;
+prepare field_null_window from 'select field(x, ?) as null_window from (select max(coalesce(?,null)) over() as x) d';
+execute field_null_window using @field_candidate, @field_subject;
+deallocate prepare field_null_window;
+set @field_condition = null;
+
 -- Explicit binary subjects retain byte equality across prepared executions.
 set @field_subject = _binary 'a';
 prepare field_binary_stmt from 'select field(cast(? as binary), ''A'', ''a'', X''FE'', X''FF'') as prepared_field';
