@@ -48,7 +48,7 @@ BVT is introduced. Measure cost with frozen alternating runs before claiming it.
 
 Known independent boundaries remain: weak wantErr oracles, DebugRun selection
 and double execution, detached-worker shutdown, formal clock publication, the
-342-file audit, and retained NTT-size coverage before any optional input shrink.
+342-file audit, and benchmark iteration accounting.
 
 ## Consumer coverage and ownership map
 
@@ -78,13 +78,30 @@ fail exact account baselines. Fatal JSON probes are expected failures, not green
 tests. Forcing NOW/SYSDATE precision to zero fails all twelve positive-precision
 cases while retaining zero/invalid-precision controls.
 
-Full owning-package normal/race, production-only compile and configured
-incremental lint have passed at recorded intermediate snapshots. Subsequent
-consumer edits require final source reconciliation and validation before push.
+Final owning-package normal (6.327s), race (11.071s), vet and incremental lint
+passed with all 221 Go source hashes unchanged. Actual gpt-6.1-sol/xhigh
+implementation review approved; equality and NULL-skip mutations were rejected.
+Production-only compilation remains valid from the ownership checkpoint.
+Rebase or subsequent edits require evidence reconciliation before delivery.
 The seven no-marker candidates were inspected: one missing destructor was fixed;
 the others transfer to explicit consumers or guarded callers. This inventory
 is not proof of the entire repository audit or of every destructor's correctness.
 
-No package/CI CPU, RSS or wall-time reduction is claimed without matched runs.
+The retained Sleep inputs run under virtual time with exact duration oracles;
+payload admission covers the last slot, duplicate and first overflow in bounded
+batches. XML still reaches the exact work limit; LIKE retains forced budget
+exhaustion, an NTT block boundary, and positive/negative search offsets. Private
+production mutations are rejected by each corresponding oracle.
+
+Twenty-three exact fixed-type comparisons share the existing vector wrapper
+path. Float64 retains epsilon and paired-NaN semantics; float32 stays exact.
+The existing reuse fixture checks literal first/last-row diagnostics, both NULL
+mismatch polarities, both-NULL continuation, mask reset and double cleanup.
+
+Matched three-pair package runs before comparison deduplication measured wall
+9.079s to 6.281s and CPU 2.397s to 2.132s; RSS 168544 to 170472 KiB did not
+improve. These are serial local measurements, not CI savings or proof of the
+repository-wide objective. The formal regexp2 stale-clock dependency remains
+unresolved despite a deterministic private reproducer and private fix.
 Moving the fixture to test compilation does not count as a source reduction.
 Keep #29249 open; the broader audit and final review/delivery gates remain active.

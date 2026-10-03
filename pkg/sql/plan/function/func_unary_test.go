@@ -29,6 +29,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/RoaringBitmap/roaring/v2"
@@ -9917,15 +9918,6 @@ func TestSleep(t *testing.T) {
 		},
 	}
 
-	// do the test work.
-	proc := testutil.NewProcess(t)
-	for _, tc := range testCases {
-		fcTC := NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, Sleep[uint64])
-		s, info := fcTC.RunAndFree()
-		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
-	}
-
 	testCases2 := []tcTemp{
 		{
 			info: "sleep float64",
@@ -9950,11 +9942,25 @@ func TestSleep(t *testing.T) {
 		},
 	}
 
-	for _, tc := range testCases2 {
-		fcTC := NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, Sleep[float64])
-		s, info := fcTC.RunAndFree()
-		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	durations := []time.Duration{time.Second, time.Second, 300 * time.Millisecond, 100 * time.Millisecond, 100 * time.Millisecond}
+	for i, tc := range append(testCases, testCases2...) {
+		fn := Sleep[float64]
+		if tc.inputs[0].typ.Oid == types.T_uint64 {
+			fn = Sleep[uint64]
+		}
+		synctest.Test(t, func(t *testing.T) {
+			previousContext := proc.Ctx
+			proc.Ctx = context.WithoutCancel(previousContext)
+			defer func() { proc.Ctx = previousContext }()
+			fc := NewFunctionTestCase(proc, tc.inputs, tc.expect, fn)
+			defer fc.Free()
+			start := time.Now()
+			s, info := fc.Run()
+			require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+			require.Equal(t, durations[i], time.Since(start), tc.info)
+		})
 	}
 }
 
@@ -12831,10 +12837,16 @@ func TestDetachedUserLevelLockCleanupBacklogBatchAdmissionIsAtomic(t *testing.T)
 
 func TestDetachedUserLevelLockCleanupEntryPayloadIsBounded(t *testing.T) {
 	entry := &detachedUserLevelLockCleanupEntry{}
-	for i := 0; i < userLevelLockDetachedCleanupMaxTxnIDsPerEntry; i++ {
-		require.True(t, mergeDetachedUserLevelLockTxnIDs(entry, [][]byte{[]byte(fmt.Sprintf("txn-%d", i))}))
+	txnIDs := make([][]byte, userLevelLockDetachedCleanupMaxTxnIDsPerEntry)
+	for i := range txnIDs {
+		txnIDs[i] = []byte(fmt.Sprintf("txn-%d", i))
 	}
-	require.Len(t, entry.txnIDs, userLevelLockDetachedCleanupMaxTxnIDsPerEntry)
+	require.True(t, mergeDetachedUserLevelLockTxnIDs(entry, txnIDs[:len(txnIDs)-1]))
+	require.Equal(t, txnIDs[:len(txnIDs)-1], entry.txnIDs)
+	require.True(t, mergeDetachedUserLevelLockTxnIDs(entry, txnIDs[len(txnIDs)-1:]))
+	require.Equal(t, txnIDs, entry.txnIDs)
+	require.True(t, mergeDetachedUserLevelLockTxnIDs(entry, txnIDs[:1]))
+	require.Equal(t, txnIDs, entry.txnIDs)
 	require.False(t, mergeDetachedUserLevelLockTxnIDs(entry, [][]byte{[]byte("txn-overflow")}))
 	require.Len(t, entry.txnIDs, userLevelLockDetachedCleanupMaxTxnIDsPerEntry)
 }

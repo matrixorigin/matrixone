@@ -17,6 +17,7 @@ package function
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"runtime"
 	"strings"
 	"testing"
@@ -252,236 +253,27 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 	var i uint64
 	switch v.GetType().Oid {
 	case types.T_bool:
-		r := vector.GenerateFunctionFixedTypeParameter[bool](v)
-		s := vector.GenerateFunctionFixedTypeParameter[bool](vExpected)
-		for i = 0; i < uint64(fc.fnLength); i++ {
-			want, null1 := s.GetValue(i)
-			get, null2 := r.GetValue(i)
-			if null1 {
-				if null2 {
-					continue
-				} else {
-					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
-				}
-			}
-			if null2 {
-				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
-			}
-			if want != get {
-				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
-					i+1, want, get)
-			}
-		}
+		return compareFunctionFixedResult[bool](v, vExpected, fc.fnLength)
 	case types.T_bit:
-		r := vector.GenerateFunctionFixedTypeParameter[uint64](v)
-		s := vector.GenerateFunctionFixedTypeParameter[uint64](vExpected)
-		for i = 0; i < uint64(fc.fnLength); i++ {
-			want, null1 := s.GetValue(i)
-			get, null2 := r.GetValue(i)
-			if null1 {
-				if null2 {
-					continue
-				} else {
-					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
-				}
-			}
-			if null2 {
-				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
-			}
-			if want != get {
-				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
-					i+1, want, get)
-			}
-		}
+		return compareFunctionFixedResult[uint64](v, vExpected, fc.fnLength)
 	case types.T_int8:
-		r := vector.GenerateFunctionFixedTypeParameter[int8](v)
-		s := vector.GenerateFunctionFixedTypeParameter[int8](vExpected)
-		for i = 0; i < uint64(fc.fnLength); i++ {
-			want, null1 := s.GetValue(i)
-			get, null2 := r.GetValue(i)
-			if null1 {
-				if null2 {
-					continue
-				} else {
-					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
-				}
-			}
-			if null2 {
-				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
-			}
-			if want != get {
-				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
-					i+1, want, get)
-			}
-		}
+		return compareFunctionFixedResult[int8](v, vExpected, fc.fnLength)
 	case types.T_int16:
-		r := vector.GenerateFunctionFixedTypeParameter[int16](v)
-		s := vector.GenerateFunctionFixedTypeParameter[int16](vExpected)
-		for i = 0; i < uint64(fc.fnLength); i++ {
-			want, null1 := s.GetValue(i)
-			get, null2 := r.GetValue(i)
-			if null1 {
-				if null2 {
-					continue
-				} else {
-					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
-				}
-			}
-			if null2 {
-				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
-			}
-			if want != get {
-				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
-					i+1, want, get)
-			}
-		}
+		return compareFunctionFixedResult[int16](v, vExpected, fc.fnLength)
 	case types.T_int32:
-		r := vector.GenerateFunctionFixedTypeParameter[int32](v)
-		s := vector.GenerateFunctionFixedTypeParameter[int32](vExpected)
-		for i = 0; i < uint64(fc.fnLength); i++ {
-			want, null1 := s.GetValue(i)
-			get, null2 := r.GetValue(i)
-			if null1 {
-				if null2 {
-					continue
-				} else {
-					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
-				}
-			}
-			if null2 {
-				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
-			}
-			if want != get {
-				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
-					i+1, want, get)
-			}
-		}
+		return compareFunctionFixedResult[int32](v, vExpected, fc.fnLength)
 	case types.T_int64:
-		r := vector.GenerateFunctionFixedTypeParameter[int64](v)
-		s := vector.GenerateFunctionFixedTypeParameter[int64](vExpected)
-		for i = 0; i < uint64(fc.fnLength); i++ {
-			want, null1 := s.GetValue(i)
-			get, null2 := r.GetValue(i)
-			if null1 {
-				if null2 {
-					continue
-				} else {
-					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
-				}
-			}
-			if null2 {
-				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
-			}
-			if want != get {
-				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
-					i+1, want, get)
-			}
-		}
+		return compareFunctionFixedResult[int64](v, vExpected, fc.fnLength)
 	case types.T_uint8:
-		r := vector.GenerateFunctionFixedTypeParameter[uint8](v)
-		s := vector.GenerateFunctionFixedTypeParameter[uint8](vExpected)
-		for i = 0; i < uint64(fc.fnLength); i++ {
-			want, null1 := s.GetValue(i)
-			get, null2 := r.GetValue(i)
-			if null1 {
-				if null2 {
-					continue
-				} else {
-					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
-				}
-			}
-			if null2 {
-				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
-			}
-			if want != get {
-				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
-					i+1, want, get)
-			}
-		}
+		return compareFunctionFixedResult[uint8](v, vExpected, fc.fnLength)
 	case types.T_uint16:
-		r := vector.GenerateFunctionFixedTypeParameter[uint16](v)
-		s := vector.GenerateFunctionFixedTypeParameter[uint16](vExpected)
-		for i = 0; i < uint64(fc.fnLength); i++ {
-			want, null1 := s.GetValue(i)
-			get, null2 := r.GetValue(i)
-			if null1 {
-				if null2 {
-					continue
-				} else {
-					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
-				}
-			}
-			if null2 {
-				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
-			}
-			if want != get {
-				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
-					i+1, want, get)
-			}
-		}
+		return compareFunctionFixedResult[uint16](v, vExpected, fc.fnLength)
 	case types.T_uint32:
-		r := vector.GenerateFunctionFixedTypeParameter[uint32](v)
-		s := vector.GenerateFunctionFixedTypeParameter[uint32](vExpected)
-		for i = 0; i < uint64(fc.fnLength); i++ {
-			want, null1 := s.GetValue(i)
-			get, null2 := r.GetValue(i)
-			if null1 {
-				if null2 {
-					continue
-				} else {
-					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
-				}
-			}
-			if null2 {
-				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
-			}
-			if want != get {
-				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
-					i+1, want, get)
-			}
-		}
+		return compareFunctionFixedResult[uint32](v, vExpected, fc.fnLength)
 	case types.T_uint64:
-		r := vector.GenerateFunctionFixedTypeParameter[uint64](v)
-		s := vector.GenerateFunctionFixedTypeParameter[uint64](vExpected)
-		for i = 0; i < uint64(fc.fnLength); i++ {
-			want, null1 := s.GetValue(i)
-			get, null2 := r.GetValue(i)
-			if null1 {
-				if null2 {
-					continue
-				} else {
-					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
-				}
-			}
-			if null2 {
-				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
-			}
-			if want != get {
-				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
-					i+1, want, get)
-			}
-		}
+		return compareFunctionFixedResult[uint64](v, vExpected, fc.fnLength)
 	case types.T_float32:
-		r := vector.GenerateFunctionFixedTypeParameter[float32](v)
-		s := vector.GenerateFunctionFixedTypeParameter[float32](vExpected)
-		for i = 0; i < uint64(fc.fnLength); i++ {
-			want, null1 := s.GetValue(i)
-			get, null2 := r.GetValue(i)
-			if null1 {
-				if null2 {
-					continue
-				} else {
-					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
-				}
-			}
-			if null2 {
-				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
-			}
-			if want != get {
-				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
-					i+1, want, get)
-			}
-		}
+		return compareFunctionFixedResult[float32](v, vExpected, fc.fnLength)
 	case types.T_float64:
 		r := vector.GenerateFunctionFixedTypeParameter[float64](v)
 		s := vector.GenerateFunctionFixedTypeParameter[float64](vExpected)
@@ -504,173 +296,21 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 			}
 		}
 	case types.T_decimal64:
-		r := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](v)
-		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](vExpected)
-		for i = 0; i < uint64(fc.fnLength); i++ {
-			want, null1 := s.GetValue(i)
-			get, null2 := r.GetValue(i)
-			if null1 {
-				if null2 {
-					continue
-				} else {
-					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
-				}
-			}
-			if null2 {
-				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
-			}
-			if want != get {
-				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
-					i+1, want, get)
-			}
-		}
+		return compareFunctionFixedResult[types.Decimal64](v, vExpected, fc.fnLength)
 	case types.T_decimal128:
-		r := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](v)
-		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](vExpected)
-		for i = 0; i < uint64(fc.fnLength); i++ {
-			want, null1 := s.GetValue(i)
-			get, null2 := r.GetValue(i)
-			if null1 {
-				if null2 {
-					continue
-				} else {
-					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
-				}
-			}
-			if null2 {
-				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
-			}
-			if want != get {
-				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
-					i+1, want, get)
-			}
-		}
+		return compareFunctionFixedResult[types.Decimal128](v, vExpected, fc.fnLength)
 	case types.T_decimal256:
-		r := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](v)
-		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](vExpected)
-		for i := uint64(0); i < uint64(fc.fnLength); i++ {
-			want, null1 := s.GetValue(i)
-			get, null2 := r.GetValue(i)
-			if null1 {
-				if null2 {
-					continue
-				} else {
-					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
-				}
-			}
-			if null2 {
-				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
-			}
-			if want != get {
-				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
-					i+1, want, get)
-			}
-		}
+		return compareFunctionFixedResult[types.Decimal256](v, vExpected, fc.fnLength)
 	case types.T_date:
-		r := vector.GenerateFunctionFixedTypeParameter[types.Date](v)
-		s := vector.GenerateFunctionFixedTypeParameter[types.Date](vExpected)
-		for i = 0; i < uint64(fc.fnLength); i++ {
-			want, null1 := s.GetValue(i)
-			get, null2 := r.GetValue(i)
-			if null1 {
-				if null2 {
-					continue
-				} else {
-					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
-				}
-			}
-			if null2 {
-				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
-			}
-			if want != get {
-				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
-					i+1, want, get)
-			}
-		}
+		return compareFunctionFixedResult[types.Date](v, vExpected, fc.fnLength)
 	case types.T_datetime:
-		r := vector.GenerateFunctionFixedTypeParameter[types.Datetime](v)
-		s := vector.GenerateFunctionFixedTypeParameter[types.Datetime](vExpected)
-		for i = 0; i < uint64(fc.fnLength); i++ {
-			want, null1 := s.GetValue(i)
-			get, null2 := r.GetValue(i)
-			if null1 {
-				if null2 {
-					continue
-				} else {
-					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
-				}
-			}
-			if null2 {
-				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
-			}
-			if want != get {
-				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
-					i+1, want, get)
-			}
-		}
+		return compareFunctionFixedResult[types.Datetime](v, vExpected, fc.fnLength)
 	case types.T_time:
-		r := vector.GenerateFunctionFixedTypeParameter[types.Time](v)
-		s := vector.GenerateFunctionFixedTypeParameter[types.Time](vExpected)
-		for i = 0; i < uint64(fc.fnLength); i++ {
-			want, null1 := s.GetValue(i)
-			get, null2 := r.GetValue(i)
-			if null1 {
-				if null2 {
-					continue
-				} else {
-					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
-				}
-			}
-			if null2 {
-				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
-			}
-			if want != get {
-				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
-					i+1, want, get)
-			}
-		}
+		return compareFunctionFixedResult[types.Time](v, vExpected, fc.fnLength)
 	case types.T_timestamp:
-		r := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](v)
-		s := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](vExpected)
-		for i = 0; i < uint64(fc.fnLength); i++ {
-			want, null1 := s.GetValue(i)
-			get, null2 := r.GetValue(i)
-			if null1 {
-				if null2 {
-					continue
-				} else {
-					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
-				}
-			}
-			if null2 {
-				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
-			}
-			if want != get {
-				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
-					i+1, want, get)
-			}
-		}
+		return compareFunctionFixedResult[types.Timestamp](v, vExpected, fc.fnLength)
 	case types.T_enum:
-		r := vector.GenerateFunctionFixedTypeParameter[types.Enum](v)
-		s := vector.GenerateFunctionFixedTypeParameter[types.Enum](vExpected)
-		for i = 0; i < uint64(fc.fnLength); i++ {
-			want, null1 := s.GetValue(i)
-			get, null2 := r.GetValue(i)
-			if null1 {
-				if null2 {
-					continue
-				} else {
-					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
-				}
-			}
-			if null2 {
-				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
-			}
-			if want != get {
-				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
-					i+1, want, get)
-			}
-		}
+		return compareFunctionFixedResult[types.Enum](v, vExpected, fc.fnLength)
 	case types.T_geometry, types.T_geometry32:
 		// Geometry values are stored as WKB; expectations are written as WKT.
 		// Canonicalize both sides to WKT before comparing.
@@ -782,89 +422,13 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 			}
 		}
 	case types.T_uuid:
-		r := vector.GenerateFunctionFixedTypeParameter[types.Uuid](v)
-		s := vector.GenerateFunctionFixedTypeParameter[types.Uuid](vExpected)
-		for i = 0; i < uint64(fc.fnLength); i++ {
-			want, null1 := s.GetValue(i)
-			get, null2 := r.GetValue(i)
-			if null1 {
-				if null2 {
-					continue
-				} else {
-					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
-				}
-			}
-			if null2 {
-				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
-			}
-			if want != get {
-				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
-					i+1, want, get)
-			}
-		}
+		return compareFunctionFixedResult[types.Uuid](v, vExpected, fc.fnLength)
 	case types.T_TS:
-		r := vector.GenerateFunctionFixedTypeParameter[types.TS](v)
-		s := vector.GenerateFunctionFixedTypeParameter[types.TS](vExpected)
-		for i = 0; i < uint64(fc.fnLength); i++ {
-			want, null1 := s.GetValue(i)
-			get, null2 := r.GetValue(i)
-			if null1 {
-				if null2 {
-					continue
-				} else {
-					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
-				}
-			}
-			if null2 {
-				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
-			}
-			if want != get {
-				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
-					i+1, want, get)
-			}
-		}
+		return compareFunctionFixedResult[types.TS](v, vExpected, fc.fnLength)
 	case types.T_Rowid:
-		r := vector.GenerateFunctionFixedTypeParameter[types.Rowid](v)
-		s := vector.GenerateFunctionFixedTypeParameter[types.Rowid](vExpected)
-		for i = 0; i < uint64(fc.fnLength); i++ {
-			want, null1 := s.GetValue(i)
-			get, null2 := r.GetValue(i)
-			if null1 {
-				if null2 {
-					continue
-				} else {
-					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
-				}
-			}
-			if null2 {
-				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
-			}
-			if want != get {
-				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
-					i+1, want, get)
-			}
-		}
+		return compareFunctionFixedResult[types.Rowid](v, vExpected, fc.fnLength)
 	case types.T_Blockid:
-		r := vector.GenerateFunctionFixedTypeParameter[types.Blockid](v)
-		s := vector.GenerateFunctionFixedTypeParameter[types.Blockid](vExpected)
-		for i = 0; i < uint64(fc.fnLength); i++ {
-			want, null1 := s.GetValue(i)
-			get, null2 := r.GetValue(i)
-			if null1 {
-				if null2 {
-					continue
-				} else {
-					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
-				}
-			}
-			if null2 {
-				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
-			}
-			if want != get {
-				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
-					i+1, want, get)
-			}
-		}
+		return compareFunctionFixedResult[types.Blockid](v, vExpected, fc.fnLength)
 	case types.T_json:
 		r := vector.GenerateFunctionStrParameter(v)
 		s := vector.GenerateFunctionStrParameter(vExpected)
@@ -888,6 +452,28 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 		}
 	default:
 		panic(fmt.Sprintf("unsupported result type %s for function ut framework", v.GetType()))
+	}
+	return true, ""
+}
+
+func compareFunctionFixedResult[T types.FixedSizeTExceptStrType](actual, expected *vector.Vector, rows int) (bool, string) {
+	r := vector.GenerateFunctionFixedTypeParameter[T](actual)
+	s := vector.GenerateFunctionFixedTypeParameter[T](expected)
+	for i := uint64(0); i < uint64(rows); i++ {
+		want, null1 := s.GetValue(i)
+		get, null2 := r.GetValue(i)
+		if null1 {
+			if null2 {
+				continue
+			}
+			return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
+		}
+		if null2 {
+			return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
+		}
+		if want != get {
+			return false, fmt.Sprintf("the %dth row expected %v, but get %v", i+1, want, get)
+		}
 	}
 	return true, ""
 }
@@ -1080,21 +666,61 @@ func TestFunctionTestCaseOwnership(t *testing.T) {
 		assertReleased(t)
 	})
 	t.Run("borrow and reuse", func(t *testing.T) {
-		fc := NewFunctionTestCase(proc, []FunctionTestInput{
-			NewFunctionTestInput(types.T_int64.ToType(), []int64{-7}, nil),
-		}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{7}, nil), AbsInt64)
+		fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_int64.ToType(), []int64{-7, -8}, nil)}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{7, 8}, nil), AbsInt64)
 		defer fc.Free()
-		succeeded, info := fc.Run()
-		require.True(t, succeeded, info)
-		require.Equal(t, []int64{7}, vector.MustFixedColNoTypeCheck[int64](fc.GetResultVectorDirectly()))
+		ok, info := fc.Run()
+		require.True(t, ok, info)
+		fc.expected.wanted = []int64{7, 9}
+		ok, info = fc.Run()
+		require.False(t, ok)
+		require.Equal(t, "the 2th row expected 9, but get 8", info)
+		fc.expected.wanted = []int64{7, 8}
+		fc.expected.nullList = []bool{true, false}
+		ok, info = fc.Run()
+		require.False(t, ok)
+		require.Equal(t, "the 1th row expected NULL, but get not null", info)
+		fc.parameters[0].GetNulls().Add(0)
+		fc.expected.nullList = nil
+		ok, info = fc.Run()
+		require.False(t, ok)
+		require.Equal(t, "the 1th row expected 7, but get NULL", info)
+		fc.expected.nullList = []bool{true, false}
+		fc.expected.wanted = []int64{999, 9}
+		ok, info = fc.Run()
+		require.False(t, ok)
+		require.Equal(t, "the 2th row expected 9, but get 8", info)
+		fc.expected.wanted = []int64{999, 8}
+		ok, info = fc.Run()
+		require.True(t, ok, info)
+		fc.expected.nullList = nil
+		fc.parameters[0].GetNulls().Reset()
 		vector.MustFixedColNoTypeCheck[int64](fc.parameters[0])[0] = -9
-		fc.expected.wanted = []int64{9}
-		succeeded, info = fc.Run()
-		require.True(t, succeeded, info)
-		require.Equal(t, []int64{9}, vector.MustFixedColNoTypeCheck[int64](fc.GetResultVectorDirectly()))
+		fc.expected.wanted = []int64{9, 8}
+		ok, info = fc.Run()
+		require.True(t, ok, info)
+		require.Equal(t, []int64{9, 8}, vector.MustFixedColNoTypeCheck[int64](fc.GetResultVectorDirectly()))
 		fc.Free()
 		fc.Free()
 		assertReleased(t)
+
+		f64 := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_float64.ToType(), []float64{1.0000000005, math.NaN()}, nil)}, NewFunctionTestResult(types.T_float64.ToType(), false, []float64{1, math.NaN()}, nil), AbsFloat64)
+		defer f64.Free()
+		ok, info = f64.Run()
+		require.True(t, ok, info)
+		f64.expected.wanted = []float64{1.000000002, math.NaN()}
+		ok, info = f64.Run()
+		require.False(t, ok)
+		require.Equal(t, "the 1th row expected 1.000000002, but get 1.0000000005", info)
+		f64.Free()
+		assertReleased(t)
+		f32 := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_float32.ToType(), []float32{1e-10}, nil), NewFunctionTestInput(types.T_float32.ToType(), []float32{}, nil)}, NewFunctionTestResult(types.T_float32.ToType(), false, []float32{0}, nil), NewCast)
+		defer f32.Free()
+		ok, info = f32.Run()
+		require.False(t, ok)
+		require.Equal(t, "the 1th row expected 0, but get 1e-10", info)
+		f32.Free()
+		assertReleased(t)
+
 	})
 	t.Run("terminal comparison panic", func(t *testing.T) {
 		fc := NewFunctionTestCase(proc, []FunctionTestInput{

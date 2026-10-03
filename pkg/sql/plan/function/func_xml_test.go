@@ -329,11 +329,12 @@ func TestXMLLimitsAndCancellation(t *testing.T) {
 }
 
 func TestXMLRepeatedPredicatesConsumeWork(t *testing.T) {
-	// Every filter retains the candidate set, so the bounded evaluator must
-	// stop before 30 million predicate checks.
-	p, err := compileXMLXPath(context.Background(), "//b"+strings.Repeat("[position()>=1]", 1000))
+	// Every filter retains the candidate set. Exceed the work budget with
+	// a bounded candidate count for these 1000 predicates.
+	const predicates = 1000
+	p, err := compileXMLXPath(context.Background(), "//b"+strings.Repeat("[position()>=1]", predicates))
 	require.NoError(t, err)
-	d, err := parseXMLFragment(context.Background(), strings.Repeat("<a><b/></a>", 30000))
+	d, err := parseXMLFragment(context.Background(), strings.Repeat("<a><b/></a>", xmlWorkLimit/predicates+1))
 	require.NoError(t, err)
 	_, err = d.evaluate(p)
 	require.ErrorContains(t, err, "resource limit")
