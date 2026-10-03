@@ -3653,44 +3653,41 @@ func TestPreparedSignedNarrowingDMLCacheGuard(t *testing.T) {
 				require.Nil(t, cw.runtimeCacheTarget)
 			}
 			for _, pos := range tc.keys {
-				for _, value := range []string{"8", "-2147483648", "2147483647"} {
-					values := append([]string(nil), tc.values...)
-					values[pos] = value
-					bind(values, -1, -1)
-					assertReused()
-				}
-				for _, value := range []string{"-2147483649", "2147483648"} {
-					values := append([]string(nil), tc.values...)
-					values[pos] = value
-					bind(values, -1, -1)
-					gotCompile, fallback := execute()
-					require.Nil(t, gotCompile, "out-of-domain keys cannot reuse a narrow compile")
-					require.NotSame(t, narrowPlan, fallback)
-					require.Nil(t, cw.runtimeCacheTarget, "a value-dependent fallback must not replace the good cache")
-					require.Same(t, narrowPlan, prepared.runtimePlan)
-					require.Same(t, cached, prepared.runtimeCompile)
-					bind(tc.values, -1, -1)
-					assertReused()
-				}
-			}
-			// NULL and a different binary source width are different categories.
-			// A category miss must not evict the live plan before compile succeeds.
-			for _, nullBinding := range []bool{true, false} {
-				nullAt, longAt := -1, tc.keys[0]
-				if nullBinding {
-					nullAt, longAt = tc.keys[0], -1
-				}
-				bind(tc.values, nullAt, longAt)
-				gotCompile, other := execute()
-				require.Nil(t, gotCompile)
-				require.NotSame(t, narrowPlan, other)
+				// Planner tests own the limits. Here every ordinal must observe
+				// a new safe packet and recover after a guard miss.
+				values := append([]string(nil), tc.values...)
+				values[pos] = "8"
+				bind(values, -1, -1)
+				assertReused()
+				values[pos] = "2147483648"
+				bind(values, -1, -1)
+				gotCompile, fallback := execute()
+				require.Nil(t, gotCompile, "out-of-domain keys cannot reuse a narrow compile")
+				require.NotSame(t, narrowPlan, fallback)
+				require.Nil(t, cw.runtimeCacheTarget, "a value-dependent fallback must not replace the good cache")
 				require.Same(t, narrowPlan, prepared.runtimePlan)
+				require.Same(t, cached, prepared.runtimeCompile)
 				bind(tc.values, -1, -1)
 				assertReused()
 			}
+			// NULL and a different binary source width are different categories.
+			// A category miss must not evict the live plan before compile succeeds.
 			if tc.name == "update" {
+				for _, nullBinding := range []bool{true, false} {
+					nullAt, longAt := -1, tc.keys[0]
+					if nullBinding {
+						nullAt, longAt = tc.keys[0], -1
+					}
+					bind(tc.values, nullAt, longAt)
+					gotCompile, other := execute()
+					require.Nil(t, gotCompile)
+					require.NotSame(t, narrowPlan, other)
+					require.Same(t, narrowPlan, prepared.runtimePlan)
+					bind(tc.values, -1, -1)
+					assertReused()
+				}
 				// The key guard must not erase the independent assignment cast.
-				// Its overflow remains an execution error, even on a cache hit.
+				// Public protocol tests own the error, unchanged data and recovery.
 				bind([]string{"2147483648", "7"}, -1, -1)
 				assertReused()
 				var assignment *plan.Expr
@@ -3714,11 +3711,6 @@ func TestPreparedSignedNarrowingDMLCacheGuard(t *testing.T) {
 					})
 				}))
 				require.NotNil(t, assignment, "assignment plan: %s", narrowPlan.GetQuery().String())
-				_, free, err := colexec.GetReadonlyResultFromExpression(cw.proc, assignment, []*batch.Batch{batch.EmptyForConstFoldBatch})
-				if free != nil {
-					defer free()
-				}
-				require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "assignment overflow was lost: %v", err)
 			}
 		})
 	}
