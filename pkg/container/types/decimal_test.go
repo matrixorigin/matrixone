@@ -552,26 +552,34 @@ func TestCompare256(t *testing.T) {
 	}
 }
 
-func TestDecimal64Float(t *testing.T) {
-	x := Decimal64(rand.Int())
-	y := Decimal64ToFloat64(x, 15)
-	z, _ := Decimal64FromFloat64(y, 18, 5)
-	x, _ = x.Scale(-10)
-	if x != z {
-		panic("DecimalFloat wrong")
+func TestDecimalToFloat64(t *testing.T) {
+	// Binary floating point is lossy; forward conversion is not a reversible quantizer.
+	for _, tc := range []struct {
+		name      string
+		value     Decimal128
+		scale     int32
+		want      uint64
+		decimal64 bool
+	}{
+		{"zero", Decimal128{}, 15, 0, true},
+		{"positive fraction", Decimal128{125000000000000, 0}, 15, 0x3fc0000000000000, true},
+		{"negative fraction", Decimal128{18446619073709551616, 0xffffffffffffffff}, 15, 0xbfc0000000000000, true},
+		{"negative scale", Decimal128{125, 0}, -1, 0x4093880000000000, true},
+		{"integer tie", Decimal128{9007199254740993, 0}, 0, 0x4340000000000000, true},
+		{"high word", Decimal128{0, 1}, 0, 0x43f0000000000000, false},
+		{"scale chunk boundary", Decimal128{10000000000000000000, 0}, 19, 0x3ff0000000000000, false},
+		{"scale chunk continuation", Decimal128{7766279631452241920, 5}, 20, 0x3ff0000000000000, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, math.Float64bits(Decimal128ToFloat64(tc.value, tc.scale)))
+			if tc.decimal64 {
+				require.Equal(t, tc.want, math.Float64bits(Decimal64ToFloat64(Decimal64(tc.value.B0_63), tc.scale)))
+			}
+		})
 	}
-}
-func TestDecimal128Float(t *testing.T) {
-	// This test is flaky, so skip it for now.
-	t.Skip()
-
-	x := Decimal128{uint64(rand.Int()), uint64(rand.Int())}
-	y := Decimal128ToFloat64(x, 30)
-	z, _ := Decimal128FromFloat64(y, 38, 7)
-	x, _ = x.Scale(-23)
-	if x != z {
-		panic("DecimalFloat wrong")
-	}
+	converted, err := Decimal64FromFloat64(0.125, 18, 5)
+	require.NoError(t, err)
+	require.Equal(t, Decimal64(12500), converted)
 }
 
 func TestDecimal128FromFloat64PreservesScaledIntegerPrecision(t *testing.T) {
@@ -1218,6 +1226,8 @@ func TestDecimalScaleOverflowErrors(t *testing.T) {
 		{"minimum downscale", math.MinInt64, -1, -922337203685477581, false},
 		{"minimum coarse rounding", math.MinInt64, -19, -1, false},
 		{"maximum coarse rounding", math.MaxInt64, -19, 1, false},
+		{"maximum scale18 rounding", math.MaxInt64, -18, 9, false},
+		{"exact chunk downscale", 125000000000000, -10, 12500, false},
 		{"unsigned overflow", math.MaxInt64, 18, 0, true},
 		{"extreme positive", 1, math.MaxInt32, 0, true},
 		{"extreme negative", math.MinInt64, math.MinInt32, 0, false},
