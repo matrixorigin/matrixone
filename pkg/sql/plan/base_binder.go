@@ -201,6 +201,29 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		} else {
 			expr, err = appendSyntaxExplicitCastBeforeExpr(b.GetContext(), expr, typ)
 		}
+		if err == nil && types.T(typ.Id) == types.T_binary && typ.Width < 0 &&
+			preparedBindingState(b.GetContext()) == nil {
+			if variable, ok := unwrapParenExpr(exprImpl.Expr).(*tree.VarExpr); ok && !variable.System {
+				sourceType, resolved := b.resolveUserVariableType(variable)
+				stringResult := false
+				if resolved && types.T(sourceType.Id) == types.T_any && b.builder != nil {
+					if resolver, ok := b.builder.compCtx.(UserVariableRegexpCastResolver); ok {
+						stringResult, err = resolver.ResolveVariableRegexpStringResult(variable.Name)
+						if err != nil {
+							return
+						}
+					}
+				}
+				if resolved && types.T(sourceType.Id) == types.T_any && !stringResult {
+					// Binding normally envelopes a NULL variable in TEXT. Preserve
+					// its zero-bound CAST classification before that envelope can
+					// falsely confer the unbounded string-variable exemption.
+					ensurePreparedNumericMetadata(expr).StringDomainSource = &Expr{
+						Typ: typ, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
+					}
+				}
+			}
+		}
 
 	case *tree.BitCastExpr:
 		expr, err = b.bindFuncExprImplByAstExpr("bit_cast", []tree.Expr{astExpr}, depth)
@@ -5952,6 +5975,31 @@ func (b *baseBinder) annotateStringDomainSource(
 	}
 	if sub := expr.GetSub(); sub != nil {
 		b.annotateStringDomainSource(sub.Child, visited, memo)
+		if !types.T(expr.Typ.Id).IsMySQLString() || sub.Typ != plan.SubqueryRef_SCALAR ||
+			b.builder == nil || b.builder.qry == nil || sub.NodeId < 0 || int(sub.NodeId) >= len(b.builder.qry.Nodes) {
+			return
+		}
+		key := [2]int32{sub.NodeId, -1}
+		if _, seen := visited[key]; seen {
+			return
+		}
+		visited[key] = struct{}{}
+		defer delete(visited, key)
+		node := b.builder.qry.Nodes[sub.NodeId]
+		if node == nil || len(node.ProjectList) == 0 {
+			return
+		}
+		source := node.ProjectList[0]
+		b.annotateStringDomainSource(source, visited, memo)
+		if (source.GetCol() != nil || source.GetSub() != nil) &&
+			source.GetPreparedNumeric().GetStringDomainSource() == nil {
+			return // A physical field, including a nested scalar projection, stays compatible.
+		}
+		if domains := possibleStringDomainsForExpr(source); domains != 0 {
+			// Keep static CAST provenance too: it must be checked even before
+			// PREPARE or constant folding, rather than deferred until EXECUTE.
+			ensurePreparedNumericMetadata(expr).StringDomainSource = stringDomainSourceWitness(source, domains)
+		}
 	}
 }
 
@@ -6188,15 +6236,37 @@ func compactStringDomainWitnessArg(arg *Expr) *Expr {
 	if arg.GetLit() != nil {
 		return DeepCopyExpr(arg)
 	}
-	// The witness is never evaluated. A typed literal is enough for function
-	// overload resolution and avoids retaining an unrelated expression graph.
+	if value, signed, ok := regexpConstantInteger(arg); ok {
+		var constant *Expr
+		if signed {
+			constant = makePlan2Int64ConstExprWithType(int64(value))
+		} else {
+			constant = makePlan2Uint64ConstExprWithType(value)
+		}
+		constant.Typ = arg.Typ
+		return constant
+	}
+	// The witness is never evaluated. NULL marks an unknown value: a synthetic
+	// zero would falsely prove a constant SUBSTRING/LEFT/RIGHT length.
 	placeholder := makePlan2Int64ConstExprWithType(0)
 	placeholder.Typ = arg.Typ
+	placeholder.GetLit().Isnull = true
 	return placeholder
 }
 
 func stringDomainWitnessType(source *Expr, domains uint8) plan.Type {
 	typ := source.Typ
+	declared := regexpDeclaredStringType(source)
+	if declared.Oid.IsMySQLString() {
+		// Retain the logical length class too, not just the current value's
+		// domain. Variable/function BLOB declarations must survive projection.
+		typ = makePlan2Type(&declared)
+		if declared.Oid == types.T_varbinary && types.T(source.Typ.Id) == types.T_binary {
+			// T_binary expression literals are the compact CAST ownership tag;
+			// ordinary specialized VARBINARY parameter literals are not CASTs.
+			typ.Id = int32(types.T_binary)
+		}
+	}
 	if domains == possibleStringDomainText &&
 		types.StaticStringDomain(makeTypeByPlan2Expr(source)) == types.StringDomainBinary {
 		typ.Id = int32(types.T_varchar)
@@ -6393,8 +6463,10 @@ func preparedExprStringDomainDependsOnRuntime(expr *plan.Expr) bool {
 	if expr == nil || isExplicitPreparedCast(expr) {
 		return false
 	}
+	if source := expr.GetPreparedNumeric().GetStringDomainSource(); source != nil {
+		return preparedExprStringDomainDependsOnRuntime(source)
+	}
 	return expr.GetP() != nil || expr.GetV() != nil ||
-		expr.GetPreparedNumeric().GetStringDomainSource() != nil ||
 		preparedFunctionStringDomainDependsOnRuntimeParam(expr)
 }
 
@@ -6422,8 +6494,8 @@ func preparedFunctionStringDomainDependsOnRuntimeParam(expr *plan.Expr) bool {
 	if expr == nil {
 		return false
 	}
-	if expr.GetPreparedNumeric().GetStringDomainSource() != nil {
-		return true
+	if source := expr.GetPreparedNumeric().GetStringDomainSource(); source != nil {
+		return preparedExprStringDomainDependsOnRuntime(source)
 	}
 	fn := expr.GetF()
 	if fn == nil || fn.Func == nil || len(fn.Args) == 0 {
@@ -7346,6 +7418,24 @@ func bindFuncExprImplByPlanExpr(
 			}
 		} else {
 			stringDomainModes = preparedRegexpStringDomainCheckModes(name, args)
+		}
+	}
+	for i := 0; i < preparedRegexpCompatibilityStringOperandCount(name, len(args)); i++ {
+		if !regexpOwnsBinaryCast(args[i]) || (i < len(stringDomainModes) &&
+			stringDomainModes[i] == function.StringDomainCheckParamMarker) {
+			continue
+		}
+		declared := regexpDeclaredStringType(args[i])
+		if declared.Oid != types.T_varbinary && declared.Oid != types.T_blob {
+			continue
+		}
+		// A fixed result declaration dominates runtime branch/value provenance.
+		if stringDomainModes == nil {
+			stringDomainModes = make([]function.StringDomainCheckMode, len(args))
+		}
+		stringDomainModes[i] = function.StringDomainCheckBinaryCast
+		if declared.Oid == types.T_blob {
+			stringDomainModes[i] = function.StringDomainCheckBinaryBlob
 		}
 	}
 	if stringDomainModes != nil {

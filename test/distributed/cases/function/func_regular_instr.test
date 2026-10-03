@@ -147,10 +147,10 @@ DROP DATABASE IF EXISTS regexp_utf8_test;
 CREATE DATABASE regexp_utf8_test;
 USE regexp_utf8_test;
 DROP TABLE IF EXISTS t_regexp_utf8;
-CREATE TABLE t_regexp_utf8(id INT PRIMARY KEY, s VARCHAR(40), vb VARBINARY(6), bl BLOB);
+CREATE TABLE t_regexp_utf8(id INT PRIMARY KEY, s VARCHAR(40), vb VARBINARY(6), bl BLOB, b BINARY(6));
 INSERT INTO t_regexp_utf8 VALUES
-    (1, '甲😀乙😀丙', _binary'中中', _binary'中中'),
-    (2, 'ASCII', _binary'ASCII', _binary'ASCII');
+    (1, '甲😀乙😀丙', _binary'中中', _binary'中中', _binary'中中'),
+    (2, 'ASCII', _binary'ASCII', _binary'ASCII', _binary'ASCII');
 SELECT id, REGEXP_INSTR(s, '😀', 3, 1, 0) AS pos FROM t_regexp_utf8 ORDER BY id;
 SELECT id, REGEXP_REPLACE(s, '😀', 'X', 3, 0) AS replaced FROM t_regexp_utf8 ORDER BY id;
 SELECT ORD(vb) AS vb_ord, ORD(bl) AS blob_ord,
@@ -160,11 +160,185 @@ SELECT ORD(vb) AS vb_ord, ORD(bl) AS blob_ord,
        HEX(REGEXP_REPLACE(bl, CAST(_binary'中' AS BINARY(3)), _binary'X', 2, 1)) AS blob_replace
 FROM t_regexp_utf8 WHERE id = 1;
 
-# BINARY and BLOB select byte matching but, unlike VARBINARY, do not trigger
-# MySQL error 3995 when paired with a text operand.
+# Physical BINARY and BLOB columns remain compatible with text. An explicit
+# binary cast instead owns a static binary VARCHAR domain and triggers 3995.
 SELECT REGEXP_INSTR(bl, '中', 2) AS blob_text_pos,
-       REGEXP_INSTR(CAST(_binary'中中' AS BINARY(6)), '中', 2) AS binary_text_pos
+       REGEXP_INSTR(b, '中', 2) AS binary_text_pos
 FROM t_regexp_utf8 WHERE id = 1;
+SELECT REGEXP_INSTR(CAST(b AS BINARY(6)), '中', 2) FROM t_regexp_utf8 WHERE id = 1;
+
+# Static incompatibility is checked before NULL propagation or implicit casts.
+SELECT CAST(NULL AS BINARY) REGEXP 'a';
+SELECT 'abc' NOT REGEXP CAST(NULL AS BINARY(1));
+SELECT REGEXP_LIKE(CAST(NULL AS BINARY), 'a');
+SELECT REGEXP_INSTR('abc', CAST(NULL AS BINARY));
+SELECT REGEXP_SUBSTR(CAST(NULL AS BINARY), 'a');
+SELECT REGEXP_REPLACE('abc', 'a', CAST(NULL AS BINARY));
+SELECT CAST('abc' AS BINARY) REGEXP 'a';
+SELECT 'abc' REGEXP CAST('a' AS BINARY(1));
+SELECT REGEXP_LIKE(CAST('abc' AS BINARY(3)), 'a');
+SELECT REGEXP_INSTR('abc', CAST('b' AS BINARY));
+SELECT REGEXP_SUBSTR(CAST('abc' AS BINARY), 'a');
+SELECT REGEXP_REPLACE(CAST('abc' AS BINARY), 'a', 'X');
+
+# Ordinary NULL and homogeneous binary operands retain their existing behavior.
+SELECT NULL REGEXP 'a' AS untyped_null,
+       CAST(NULL AS BINARY) REGEXP _binary'a' AS typed_binary_null,
+       CAST('abc' AS BINARY(3)) REGEXP _binary'a' AS binary_match,
+       HEX(REGEXP_SUBSTR(CAST('你好' AS BINARY), _binary'.')) AS binary_first_byte,
+       HEX(REGEXP_SUBSTR('你好', '.')) AS text_first_character;
+
+# Unbounded user-variable casts have a BLOB-compatible domain. An explicit
+# length, including zero, instead owns a static binary VARCHAR domain.
+SET @regexp_cast_numeric = 123;
+SELECT REGEXP_LIKE(CAST(@regexp_cast_numeric AS BINARY), '1');
+SET @regexp_cast_null = NULL;
+SELECT REGEXP_LIKE(CAST(@regexp_cast_null AS BINARY), 'a');
+SELECT REGEXP_LIKE((SELECT CAST(@regexp_cast_null AS BINARY)), 'a');
+SET @regexp_cast_variable = 'abc';
+SELECT REGEXP_LIKE(CAST(@regexp_cast_variable AS BINARY), 'a') AS variable_match;
+SELECT REGEXP_LIKE(CAST(@regexp_cast_variable AS BINARY(3)), 'a');
+SELECT REGEXP_LIKE(CAST(@regexp_cast_variable AS BINARY(0)), 'a');
+SELECT REGEXP_LIKE((SELECT CAST(@regexp_cast_variable AS BINARY)), 'a') AS scalar_variable_match;
+SELECT REGEXP_LIKE(v, 'a') AS derived_variable_match FROM (SELECT CAST(@regexp_cast_variable AS BINARY) v) s;
+SELECT REGEXP_LIKE(v, 'a') FROM (SELECT CAST(@regexp_cast_variable AS BINARY(3)) v) s;
+SELECT REGEXP_LIKE(CAST(v AS BINARY(3)), 'a') FROM (SELECT CAST(@regexp_cast_variable AS BINARY) v) s;
+
+# Control-flow results use every declared value branch, including typed NULL.
+SELECT REGEXP_LIKE(IF(TRUE, CAST('abc' AS BINARY(3)), CAST('abc' AS BINARY(3))), 'a');
+SELECT REGEXP_LIKE(IF(FALSE, CAST('abc' AS BINARY(3)), CAST('abc' AS BINARY(3))), 'a');
+SELECT REGEXP_LIKE(IF(FALSE, CAST('abc' AS BINARY(3)), 'abc'), 'a');
+SELECT REGEXP_LIKE(IF(TRUE, CAST(NULL AS BINARY(3)), CAST(NULL AS BINARY(3))), 'a');
+SELECT REGEXP_LIKE(COALESCE(CAST('abc' AS BINARY(3)), CAST('abc' AS BINARY(3))), 'a');
+SELECT REGEXP_LIKE(COALESCE(CAST(NULL AS BINARY(3)), CAST(NULL AS BINARY(3))), 'a');
+SELECT REGEXP_LIKE(IF(TRUE, CAST(@regexp_cast_variable AS BINARY(3)), CAST(@regexp_cast_variable AS BINARY(3))), 'a');
+SELECT REGEXP_LIKE((SELECT IF(TRUE, CAST(NULL AS BINARY(3)), CAST(NULL AS BINARY(3)))), 'a');
+SELECT REGEXP_LIKE(v, 'a') FROM (SELECT COALESCE(CAST(NULL AS BINARY(3)), CAST(NULL AS BINARY(3))) v) s;
+SELECT REGEXP_LIKE(IF(TRUE, CAST('abc' AS BINARY(3)), CAST('abc' AS BINARY(3))), _binary'a') AS control_binary_match;
+PREPARE regexp_if_cast_rejected FROM 'SELECT REGEXP_LIKE(IF(TRUE, CAST(@regexp_cast_variable AS BINARY(3)), CAST(@regexp_cast_variable AS BINARY(3))), ''a'')';
+PREPARE regexp_coalesce_cast_rejected FROM 'SELECT REGEXP_LIKE(COALESCE(CAST(? AS BINARY(3)), CAST(? AS BINARY(3))), ''a'')';
+
+# BLOB-compatible length classes propagate through expressions and projections.
+SELECT REGEXP_LIKE(CAST(CONCAT(@regexp_cast_variable, '') AS BINARY), 'a') AS concat_variable_match;
+SELECT REGEXP_LIKE(CAST(LOWER(@regexp_cast_variable) AS BINARY), 'a') AS lower_variable_match;
+SELECT REGEXP_LIKE(CAST(v AS BINARY), 'a') AS cast_derived_variable_match FROM (SELECT @regexp_cast_variable v) s;
+SELECT REGEXP_LIKE(v, 'a') AS derived_concat_match FROM (SELECT CAST(CONCAT(@regexp_cast_variable, '') AS BINARY) v) s;
+SELECT REGEXP_LIKE((SELECT CAST(LOWER(@regexp_cast_variable) AS BINARY)), 'a') AS scalar_lower_match;
+SELECT REGEXP_LIKE(CAST(SUBSTRING(@regexp_cast_variable, 1, 3) AS BINARY), 'a');
+# Finite declarations survive scalar projection and constant integer CASTs.
+SELECT REGEXP_LIKE(CAST((SELECT SUBSTRING(@regexp_cast_variable, 1, 3)) AS BINARY), 'a');
+SELECT REGEXP_LIKE(CAST(SUBSTRING(@regexp_cast_variable, 1, CAST(3 AS SIGNED)) AS BINARY), 'a');
+SELECT REGEXP_LIKE(CAST(SUBSTRING(@regexp_cast_variable, 1, CAST('3' AS SIGNED)) AS BINARY), 'a');
+SELECT REGEXP_LIKE(CAST(SUBSTRING(@regexp_cast_variable, 1, CAST(3.5 AS SIGNED)) AS BINARY), 'a');
+
+-- Static TEXT declarations retain finite lengths across query boundaries.
+CREATE TABLE regexp_static_text_source(v TEXT);
+INSERT INTO regexp_static_text_source VALUES ('abc');
+SELECT REGEXP_LIKE(CAST((SELECT SUBSTRING(v, 1, 3) FROM regexp_static_text_source) AS BINARY), 'a');
+SELECT REGEXP_LIKE(CAST(v AS BINARY), 'a') FROM (SELECT LEFT(v, 3) v FROM regexp_static_text_source) s;
+DROP TABLE regexp_static_text_source;
+
+-- Overflow during integer-argument conversion must not become a PREPARE charset error.
+PREPARE regexp_unsigned_length FROM 'SELECT REGEXP_LIKE(CAST(SUBSTRING(@regexp_cast_variable, 1, CAST(9223372036854775808 AS UNSIGNED)) AS BINARY), ''a'')';
+DEALLOCATE PREPARE regexp_unsigned_length;
+SELECT REGEXP_LIKE(CAST(v AS BINARY), 'a') FROM (SELECT SUBSTRING(@regexp_cast_variable, 1, CAST(3 AS SIGNED)) v) s;
+# A parameter witness is unknown, not a constant zero-length declaration.
+PREPARE regexp_dynamic_length FROM 'SELECT REGEXP_LIKE(CAST(v AS BINARY), ''a'') AS dynamic_match FROM (SELECT SUBSTRING(@regexp_cast_variable, 1, ?) v) s';
+SET @regexp_length = 3;
+EXECUTE regexp_dynamic_length USING @regexp_length;
+SET @regexp_length = 0;
+EXECUTE regexp_dynamic_length USING @regexp_length;
+SET @regexp_length = NULL;
+EXECUTE regexp_dynamic_length USING @regexp_length;
+SET @regexp_length = 3;
+EXECUTE regexp_dynamic_length USING @regexp_length;
+DEALLOCATE PREPARE regexp_dynamic_length;
+SELECT REGEXP_LIKE(CAST(LOWER(@regexp_cast_variable) AS BINARY(3)), 'a');
+SELECT REGEXP_LIKE(IF(TRUE, CAST(@regexp_cast_variable AS BINARY), CAST('abc' AS BINARY(3))), 'a') AS blob_branch_match;
+SELECT REGEXP_LIKE(IF(FALSE, CAST(@regexp_cast_variable AS BINARY), CAST('abc' AS BINARY(3))), 'a') AS fixed_branch_match;
+SELECT REGEXP_LIKE(COALESCE(CAST(@regexp_cast_variable AS BINARY), CAST('abc' AS BINARY(3))), 'a') AS coalesce_blob_match;
+
+# Assignment history distinguishes unassigned, fresh NULL, and numeric NULL.
+SELECT REGEXP_LIKE(CAST(@regexp_cast_never_assigned AS BINARY), 'a');
+PREPARE regexp_unassigned_cast_rejected FROM 'SELECT REGEXP_LIKE(CAST(@regexp_cast_never_assigned AS BINARY), ''a'')';
+PREPARE regexp_fresh_null_cast FROM 'SELECT REGEXP_LIKE(CAST(@regexp_cast_null AS BINARY), ''a'') AS fresh_null_match';
+EXECUTE regexp_fresh_null_cast;
+DEALLOCATE PREPARE regexp_fresh_null_cast;
+SET @regexp_cast_numeric = NULL;
+SELECT REGEXP_LIKE(CAST(@regexp_cast_numeric AS BINARY), '1');
+PREPARE regexp_numeric_null_cast_rejected FROM 'SELECT REGEXP_LIKE(CAST(@regexp_cast_numeric AS BINARY), ''1'')';
+PREPARE regexp_expression_cast_rebind FROM 'SELECT REGEXP_LIKE(CAST(CONCAT(@regexp_cast_variable, '''') AS BINARY), ''a'') AS concat_match, REGEXP_LIKE(CAST(LOWER(@regexp_cast_variable) AS BINARY), ''a'') AS lower_match, REGEXP_LIKE(CAST(v AS BINARY), ''a'') AS derived_match FROM (SELECT @regexp_cast_variable v) s';
+EXECUTE regexp_expression_cast_rebind;
+SET @regexp_cast_variable = _binary'abc';
+EXECUTE regexp_expression_cast_rebind;
+SET @regexp_cast_variable = NULL;
+EXECUTE regexp_expression_cast_rebind;
+SET @regexp_cast_variable = 'abc';
+EXECUTE regexp_expression_cast_rebind;
+DEALLOCATE PREPARE regexp_expression_cast_rebind;
+
+# NULL regexp history must not change SQL EXECUTE numeric conversions.
+SET @regexp_null_parameter = 1;
+SET @regexp_null_parameter = NULL;
+PREPARE regexp_null_conversion FROM 'SELECT SUBSTRING_INDEX(''a.b'', ''.'', COALESCE(?, 1.5)) AS null_conversion';
+EXECUTE regexp_null_conversion USING @regexp_null_parameter;
+SET @regexp_fresh_null_parameter = NULL;
+EXECUTE regexp_null_conversion USING @regexp_fresh_null_parameter;
+SET @regexp_text_null_parameter = 'abc';
+SET @regexp_text_null_parameter = NULL;
+EXECUTE regexp_null_conversion USING @regexp_text_null_parameter;
+DEALLOCATE PREPARE regexp_null_conversion;
+CREATE TABLE regexp_null_conversion_result(v VARCHAR(8));
+PREPARE regexp_null_insert FROM 'INSERT INTO regexp_null_conversion_result SELECT SUBSTRING_INDEX(''a.b'', ''.'', COALESCE(?, 1.5))';
+EXECUTE regexp_null_insert USING @regexp_null_parameter;
+EXECUTE regexp_null_insert USING @regexp_fresh_null_parameter;
+EXECUTE regexp_null_insert USING @regexp_text_null_parameter;
+SELECT v FROM regexp_null_conversion_result;
+DEALLOCATE PREPARE regexp_null_insert;
+DROP TABLE regexp_null_conversion_result;
+
+# Query boundaries and constant folding must retain expression-owned casts,
+# including typed NULL. Physical BINARY/BLOB projections retain their exemption.
+SELECT REGEXP_LIKE((SELECT CAST('a' AS BINARY)), 'a');
+SELECT REGEXP_LIKE(v, 'a') FROM (SELECT CAST('a' AS BINARY) v) s;
+SELECT REGEXP_LIKE(v, 'a') FROM (SELECT v FROM (SELECT CAST('a' AS BINARY) v) s) t;
+SELECT REGEXP_LIKE((SELECT CAST(NULL AS BINARY)), 'a');
+SELECT REGEXP_LIKE(v, 'a') FROM (SELECT CAST(NULL AS BINARY) v) s;
+SELECT REGEXP_INSTR('abc', (SELECT CAST('a' AS BINARY)));
+SELECT REGEXP_REPLACE('abc', 'a', (SELECT CAST(NULL AS BINARY)));
+SELECT REGEXP_LIKE((SELECT b FROM t_regexp_utf8 WHERE id = 2), 'A') AS physical_binary_match,
+       REGEXP_LIKE((SELECT bl FROM t_regexp_utf8 WHERE id = 2), 'A') AS physical_blob_match,
+       REGEXP_LIKE((SELECT (SELECT b FROM t_regexp_utf8 WHERE id = 2)), 'A') AS nested_physical_binary_match;
+SELECT REGEXP_LIKE(v, 'A') AS derived_physical_match FROM (SELECT b v FROM t_regexp_utf8 WHERE id = 2) s;
+SELECT REGEXP_LIKE((SELECT CAST('a' AS BINARY)), _binary'a') AS scalar_binary_match;
+SELECT REGEXP_LIKE(v, _binary'a') AS derived_binary_match FROM (SELECT CAST('a' AS BINARY) v) s;
+PREPARE regexp_scalar_cast_rejected FROM 'SELECT REGEXP_LIKE((SELECT CAST(''a'' AS BINARY)), ''a'')';
+PREPARE regexp_scalar_null_cast_rejected FROM 'SELECT REGEXP_LIKE((SELECT CAST(NULL AS BINARY)), ''a'')';
+PREPARE regexp_scalar_param_cast_rejected FROM 'SELECT REGEXP_LIKE((SELECT CAST(? AS BINARY)), ''a'')';
+PREPARE regexp_derived_param_cast_rejected FROM 'SELECT REGEXP_LIKE(v, ''a'') FROM (SELECT CAST(? AS BINARY) v) s';
+PREPARE regexp_variable_cast_rebind FROM
+    'SELECT REGEXP_LIKE(CAST(@regexp_cast_variable AS BINARY), ''a'') AS variable_match, REGEXP_LIKE((SELECT CAST(@regexp_cast_variable AS BINARY)), ''a'') AS scalar_variable_match, REGEXP_LIKE(v, ''a'') AS derived_variable_match FROM (SELECT CAST(@regexp_cast_variable AS BINARY) v) s';
+EXECUTE regexp_variable_cast_rebind;
+SET @regexp_cast_variable = _binary'abc';
+EXECUTE regexp_variable_cast_rebind;
+SET @regexp_cast_variable = NULL;
+EXECUTE regexp_variable_cast_rebind;
+SET @regexp_cast_variable = 'abc';
+EXECUTE regexp_variable_cast_rebind;
+DEALLOCATE PREPARE regexp_variable_cast_rebind;
+
+# Explicit casts own the domain even when their input is a parameter marker.
+PREPARE regexp_binary_cast_rejected FROM 'SELECT REGEXP_INSTR(CAST(? AS BINARY), ''a'')';
+PREPARE regexp_binary_cast_rebind FROM 'SELECT HEX(REGEXP_SUBSTR(CAST(? AS BINARY), _binary''.'')) AS first_byte';
+SET @regexp_binary_cast_subject = _binary'你好';
+EXECUTE regexp_binary_cast_rebind USING @regexp_binary_cast_subject;
+SET @regexp_binary_cast_subject = '你好';
+EXECUTE regexp_binary_cast_rebind USING @regexp_binary_cast_subject;
+SET @regexp_binary_cast_subject = NULL;
+EXECUTE regexp_binary_cast_rebind USING @regexp_binary_cast_subject;
+SET @regexp_binary_cast_subject = _binary'abc';
+EXECUTE regexp_binary_cast_rebind USING @regexp_binary_cast_subject;
+DEALLOCATE PREPARE regexp_binary_cast_rebind;
 
 # SQL prepared parameters must be rebound from their current string domain on
 # every execution; binary -> text -> binary must not retain stale metadata.

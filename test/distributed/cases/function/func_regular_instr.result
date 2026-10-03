@@ -1,24 +1,24 @@
 SELECT REGEXP_LIKE('', '^$') AS like_control;
-like_control
+➤ like_control[-7,1,0]  𝄀
 1
 SELECT REGEXP_INSTR('', '^$') AS default_pos_match;
-default_pos_match
+➤ default_pos_match[-5,64,0]  𝄀
 1
 SELECT REGEXP_INSTR('', 'x') AS default_pos_no_match;
-default_pos_no_match
+➤ default_pos_no_match[-5,64,0]  𝄀
 0
 SELECT REGEXP_INSTR('', '^$', 1) AS explicit_pos_match;
-explicit_pos_match
+➤ explicit_pos_match[-5,64,0]  𝄀
 1
 SELECT REGEXP_INSTR('', 'x', 1) AS explicit_pos_no_match;
-explicit_pos_no_match
+➤ explicit_pos_no_match[-5,64,0]  𝄀
 0
 SELECT REGEXP_INSTR('', '^$', 5) AS empty_subject_late_anchor,
 REGEXP_INSTR('', '.', 5) AS empty_subject_late_no_match,
 REGEXP_INSTR('', '^$', 5, 2) AS empty_subject_second_occurrence,
 REGEXP_INSTR(CAST(_binary'' AS VARBINARY(1)), CAST(_binary'^$' AS VARBINARY(2)), 5, 1, 1) AS empty_binary_late_anchor;
-empty_subject_late_anchor    empty_subject_late_no_match    empty_subject_second_occurrence    empty_binary_late_anchor
-5    0    0    5
+➤ empty_subject_late_anchor[-5,64,0]  ¦  empty_subject_late_no_match[-5,64,0]  ¦  empty_subject_second_occurrence[-5,64,0]  ¦  empty_binary_late_anchor[-5,64,0]  𝄀
+5  ¦  0  ¦  0  ¦  5
 SELECT REGEXP_INSTR(NULL, '');
 Illegal argument to a regular expression.
 SELECT REGEXP_INSTR('abc', '', 0);
@@ -26,67 +26,67 @@ Illegal argument to a regular expression.
 SELECT REGEXP_INSTR(NULL, '*');
 invalid argument regexp_instr have invalid regexp pattern arg, bad value [*]
 SELECT REGEXP_INSTR('Cat', 'at') Result;
-result
+➤ Result[-5,64,0]  𝄀
 2
 SELECT REGEXP_INSTR('Cat', '^at') Result;
-result
+➤ Result[-5,64,0]  𝄀
 0
 SELECT REGEXP_INSTR('at', '^at') Result;
-result
+➤ Result[-5,64,0]  𝄀
 1
 SELECT REGEXP_INSTR('Cat Cat', 'Cat', 2) Result;
-result
+➤ Result[-5,64,0]  𝄀
 5
 SELECT REGEXP_INSTR('Cat Cat', 'Cat', 2) AS 'Pos2';
-Pos2
+➤ Pos2[-5,64,0]  𝄀
 5
 SELECT REGEXP_INSTR('Cat Cat', 'Cat', 3) AS 'Pos3';
-Pos3
+➤ Pos3[-5,64,0]  𝄀
 5
 SELECT REGEXP_INSTR('Cat Cat', 'Cat', 5) AS 'Pos5';
-Pos5
+➤ Pos5[-5,64,0]  𝄀
 5
 SELECT REGEXP_INSTR('Cat City is SO Cute!', 'C.t', 1) 'Pos1';
-Pos1
+➤ Pos1[-5,64,0]  𝄀
 1
 SELECT REGEXP_INSTR('Cat City is SO Cute!', 'C.t', 2) 'Pos2';
-Pos2
+➤ Pos2[-5,64,0]  𝄀
 5
 SELECT REGEXP_INSTR('Cat City is SO Cute!', 'C.t', 6) 'Pos6';
-Pos6
+➤ Pos6[-5,64,0]  𝄀
 16
 SELECT REGEXP_INSTR('Cat City is SO Cute!', 'C.t', 1, 1) 'Occurrence1';
-Occurrence1
+➤ Occurrence1[-5,64,0]  𝄀
 1
 SELECT REGEXP_INSTR('Cat City is SO Cute!', 'C.t', 1, 2) 'Occurrence2';
-Occurrence2
+➤ Occurrence2[-5,64,0]  𝄀
 5
 SELECT REGEXP_INSTR('Cat City is SO Cute!', 'C.t', 1, 3) 'Occurrence3';
-Occurrence3
+➤ Occurrence3[-5,64,0]  𝄀
 16
 SELECT REGEXP_INSTR('Cat City is SO Cute!', 'C.t', 2, 1) 'Occurrence1';
-Occurrence1
+➤ Occurrence1[-5,64,0]  𝄀
 5
 SELECT REGEXP_INSTR('Cat City is SO Cute!', 'C.t', 2, 2) 'Occurrence2';
-Occurrence2
+➤ Occurrence2[-5,64,0]  𝄀
 16
 SELECT REGEXP_INSTR('Cat City is SO Cute!', 'C.t', 2, 3) 'Occurrence3';
-Occurrence3
+➤ Occurrence3[-5,64,0]  𝄀
 0
 SELECT REGEXP_INSTR('Cat City is SO Cute!', 'C.t', 1, 1, 0) 'Option0';
-Option0
+➤ Option0[-5,64,0]  𝄀
 1
 SELECT REGEXP_INSTR('Cat City is SO Cute!', 'C.t', 1, 1, 1) 'Option1';
-Option1
+➤ Option1[-5,64,0]  𝄀
 4
 SELECT REGEXP_INSTR('Cat', null) Result;
-result
-NULL
+➤ Result[-5,64,0]  𝄀
+null
 SELECT REGEXP_INSTR(null, 'C.t') Result;
-result
-NULL
+➤ Result[-5,64,0]  𝄀
+null
 SELECT REGEXP_INSTR(null,  null) Result;
-result
+➤ Result[-5,64,0]  𝄀
 null
 create table t1(a int, b varchar(100));
 insert into t1 values(1 , "PowerSlave");
@@ -98,15 +98,15 @@ insert into t1 values( 6 , "Epicloud");
 insert into t1 values(7 , "Somewhere in Time");
 insert into t1 values(8 , "Piece of Mind");
 SELECT a, REGEXP_INSTR(b, '^P') from t1;
-a    regexp_instr(b, ^P)
-1    1
-2    1
-3    0
-4    0
-5    0
-6    0
-7    0
-8    1
+➤ a[4,32,0]  ¦  REGEXP_INSTR(b, ^P)[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  0  𝄀
+4  ¦  0  𝄀
+5  ¦  0  𝄀
+6  ¦  0  𝄀
+7  ¦  0  𝄀
+8  ¦  1
 drop table t1;
 create table t1(a int, b varchar(100));
 insert into t1 values(1 , "PowerSlave");
@@ -118,10 +118,10 @@ insert into t1 values( 6 , "Epicloud");
 insert into t1 values(7 , "Somewhere in Time");
 insert into t1 values(8 , "Piece of Mind");
 SELECT a, b from t1 WHERE REGEXP_INSTR(b, '^P') = 1;
-a    b
-1    PowerSlave
-2    Powerage
-8    Piece of Mind
+➤ a[4,32,0]  ¦  b[12,100,0]  𝄀
+1  ¦  PowerSlave  𝄀
+2  ¦  Powerage  𝄀
+8  ¦  Piece of Mind
 drop table t1;
 create table t1(a int, b varchar(100));
 insert into t1 values(1 , "PowerSlave");
@@ -133,15 +133,15 @@ insert into t1 values( 6 , "Epicloud");
 insert into t1 values(7 , "Somewhere in Time");
 insert into t1 values(8 , "Piece of Mind");
 SELECT a, REGEXP_INSTR(b, 'i', 3) from t1;
-a    regexp_instr(b, i, 3)
-1    0
-2    0
-3    5
-4    6
-5    8
-6    3
-7    11
-8    11
+➤ a[4,32,0]  ¦  REGEXP_INSTR(b, i, 3)[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  0  𝄀
+3  ¦  5  𝄀
+4  ¦  6  𝄀
+5  ¦  8  𝄀
+6  ¦  3  𝄀
+7  ¦  11  𝄀
+8  ¦  11
 drop table t1;
 create table t1(a int, b varchar(100));
 insert into t1 values(1 , "PowerSlave");
@@ -153,15 +153,15 @@ insert into t1 values( 6 , "Epicloud");
 insert into t1 values(7 , "Somewhere in Time");
 insert into t1 values(8 , "Piece of Mind");
 SELECT a, REGEXP_INSTR(b, 'i', 2, 2) from t1;
-a    regexp_instr(b, i, 2, 2)
-1    0
-2    0
-3    5
-4    6
-5    0
-6    0
-7    15
-8    11
+➤ a[4,32,0]  ¦  REGEXP_INSTR(b, i, 2, 2)[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  0  𝄀
+3  ¦  5  𝄀
+4  ¦  6  𝄀
+5  ¦  0  𝄀
+6  ¦  0  𝄀
+7  ¦  15  𝄀
+8  ¦  11
 drop table t1;
 create table t1(a int, b varchar(100));
 insert into t1 values(1 , "PowerSlave");
@@ -173,15 +173,15 @@ insert into t1 values( 6 , "Epicloud");
 insert into t1 values(7 , "Somewhere in Time");
 insert into t1 values(8 , "Piece of Mind");
 SELECT a, REGEXP_INSTR(b, 'i', 2, 2, 1) from t1;
-a    regexp_instr(b, i, 2, 2, 1)
-1    0
-2    0
-3    6
-4    7
-5    0
-6    0
-7    16
-8    12
+➤ a[4,32,0]  ¦  REGEXP_INSTR(b, i, 2, 2, 1)[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  0  𝄀
+3  ¦  6  𝄀
+4  ¦  7  𝄀
+5  ¦  0  𝄀
+6  ¦  0  𝄀
+7  ¦  16  𝄀
+8  ¦  12
 drop table t1;
 DROP TABLE IF EXISTS t;
 CREATE TABLE t(str1 VARCHAR(20), str2 CHAR(20));
@@ -196,107 +196,391 @@ create table table_basic_for_load_100M(col1 varchar(100));
 insert into table_basic_for_load_100M values(',GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy');
 insert into table_basic_for_load_100M values('a');
 select col1 from table_basic_for_load_100M;
-col1
-,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy
+➤ col1[12,100,0]  𝄀
+,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy  𝄀
 a
 select REGEXP_INSTR(',GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy', ',',1);
-regexp_instr(,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy, ,, 1)
+➤ REGEXP_INSTR(,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy, ,, 1)[-5,64,0]  𝄀
 1
 select REGEXP_INSTR(',GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy', 'a',1);
-regexp_instr(,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy, a, 1)
+➤ REGEXP_INSTR(,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy, a, 1)[-5,64,0]  𝄀
 31
 select REGEXP_INSTR(col1,',',1) from big_data_test.table_basic_for_load_100M;
-regexp_instr(col1, ,, 1)
-1
+➤ REGEXP_INSTR(col1, ,, 1)[-5,64,0]  𝄀
+1  𝄀
 0
 select REGEXP_INSTR(col1,'a',1) from big_data_test.table_basic_for_load_100M;
-regexp_instr(col1, a, 1)
-31
+➤ REGEXP_INSTR(col1, a, 1)[-5,64,0]  𝄀
+31  𝄀
 1
 select REGEXP_REPLACE(',GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy', ',','b',1);
-regexp_replace(,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy, ,, b, 1)
+➤ REGEXP_REPLACE(,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy, ,, b, 1)[12,111,0]  𝄀
 bGHIbG;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy
 select REGEXP_REPLACE(',GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy', 'a','b',1);
-regexp_replace(,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy, a, b, 1)
+➤ REGEXP_REPLACE(,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy, a, b, 1)[12,111,0]  𝄀
 ,GHI,G;KL/MN?OPQR.STU-_+=VWXYZbbcdefghigklmnopqrstuvwxy
 select REGEXP_REPLACE(col1,',','b',1) from big_data_test.table_basic_for_load_100M;
-regexp_replace(col1, ,, b, 1)
-bGHIbG;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy
+➤ REGEXP_REPLACE(col1, ,, b, 1)[12,201,0]  𝄀
+bGHIbG;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy  𝄀
 a
 select REGEXP_REPLACE(col1,'a','b',1) from big_data_test.table_basic_for_load_100M;
-regexp_replace(col1, a, b, 1)
-,GHI,G;KL/MN?OPQR.STU-_+=VWXYZbbcdefghigklmnopqrstuvwxy
+➤ REGEXP_REPLACE(col1, a, b, 1)[12,201,0]  𝄀
+,GHI,G;KL/MN?OPQR.STU-_+=VWXYZbbcdefghigklmnopqrstuvwxy  𝄀
 b
 select REGEXP_SUBSTR(',GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy', ',',1);
-regexp_substr(,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy, ,, 1)
+➤ REGEXP_SUBSTR(,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy, ,, 1)[12,55,0]  𝄀
 ,
 select REGEXP_SUBSTR(',GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy', 'a',1);
-regexp_substr(,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy, a, 1)
+➤ REGEXP_SUBSTR(,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy, a, 1)[12,55,0]  𝄀
 a
 select REGEXP_SUBSTR(col1,',',1) from big_data_test.table_basic_for_load_100M;
-regexp_substr(col1, ,, 1)
-,
+➤ REGEXP_SUBSTR(col1, ,, 1)[12,100,0]  𝄀
+,  𝄀
 null
 select REGEXP_SUBSTR(col1,'a',1) from big_data_test.table_basic_for_load_100M;
-regexp_substr(col1, a, 1)
-a
+➤ REGEXP_SUBSTR(col1, a, 1)[12,100,0]  𝄀
+a  𝄀
 a
 drop database big_data_test;
 SELECT REGEXP_INSTR('甲😀乙😀丙', '😀') AS first_start,
 REGEXP_INSTR('甲😀乙😀丙', '😀', 1, 2, 0) AS second_start,
 REGEXP_INSTR('甲😀乙😀丙', '😀', 1, 2, 1) AS second_end,
 REGEXP_INSTR('甲😀乙😀丙', '😀', 3, 1, 0) AS from_third;
-first_start    second_start    second_end    from_third
-2    4    5    4
+➤ first_start[-5,64,0]  ¦  second_start[-5,64,0]  ¦  second_end[-5,64,0]  ¦  from_third[-5,64,0]  𝄀
+2  ¦  4  ¦  5  ¦  4
 SELECT REGEXP_SUBSTR('甲😀乙😀丙', '😀', 3, 1) AS second_emoji,
 REGEXP_REPLACE('甲😀乙😀丙', '😀', 'X', 3, 1) AS replace_one,
 REGEXP_REPLACE('甲😀乙😀丙', '😀', 'X', 3, 0) AS replace_all_from_pos;
-second_emoji    replace_one    replace_all_from_pos
-😀    甲😀乙X丙    甲😀乙X丙
+➤ second_emoji[12,5,0]  ¦  replace_one[12,11,0]  ¦  replace_all_from_pos[12,11,0]  𝄀
+😀  ¦  甲😀乙X丙  ¦  甲😀乙X丙
 SELECT REGEXP_INSTR('abc', '^', 2) AS instr_beginning,
 REGEXP_INSTR('abc', '(?m)^b', 2) AS instr_multiline_beginning,
 REGEXP_INSTR(CAST(_binary'中' AS VARBINARY(3)), CAST(_binary'^.' AS VARBINARY(2)), 2) AS binary_beginning;
-instr_beginning    instr_multiline_beginning    binary_beginning
-2    2    2
+➤ instr_beginning[-5,64,0]  ¦  instr_multiline_beginning[-5,64,0]  ¦  binary_beginning[-5,64,0]  𝄀
+2  ¦  2  ¦  2
 SELECT REGEXP_SUBSTR('abc', '^', 2) IS NULL AS substr_original_anchor,
 REGEXP_REPLACE('abc', '^', 'X', 2) AS replace_original_anchor;
-substr_original_anchor    replace_original_anchor
-1    abc
+➤ substr_original_anchor[-7,1,0]  ¦  replace_original_anchor[12,7,0]  𝄀
+1  ¦  abc
 DROP DATABASE IF EXISTS regexp_utf8_test;
 CREATE DATABASE regexp_utf8_test;
 USE regexp_utf8_test;
 DROP TABLE IF EXISTS t_regexp_utf8;
-CREATE TABLE t_regexp_utf8(id INT PRIMARY KEY, s VARCHAR(40), vb VARBINARY(6), bl BLOB);
+CREATE TABLE t_regexp_utf8(id INT PRIMARY KEY, s VARCHAR(40), vb VARBINARY(6), bl BLOB, b BINARY(6));
 INSERT INTO t_regexp_utf8 VALUES
-(1, '甲😀乙😀丙', _binary'中中', _binary'中中'),
-(2, 'ASCII', _binary'ASCII', _binary'ASCII');
+(1, '甲😀乙😀丙', _binary'中中', _binary'中中', _binary'中中'),
+(2, 'ASCII', _binary'ASCII', _binary'ASCII', _binary'ASCII');
 SELECT id, REGEXP_INSTR(s, '😀', 3, 1, 0) AS pos FROM t_regexp_utf8 ORDER BY id;
-id    pos
-1    4
-2    0
+➤ id[4,32,0]  ¦  pos[-5,64,0]  𝄀
+1  ¦  4  𝄀
+2  ¦  0
 SELECT id, REGEXP_REPLACE(s, '😀', 'X', 3, 0) AS replaced FROM t_regexp_utf8 ORDER BY id;
-id    replaced
-1    甲😀乙X丙
-2    ASCII
+➤ id[4,32,0]  ¦  replaced[12,81,0]  𝄀
+1  ¦  甲😀乙X丙  𝄀
+2  ¦  ASCII
 SELECT ORD(vb) AS vb_ord, ORD(bl) AS blob_ord,
 REGEXP_INSTR(vb, CAST(_binary'中' AS VARBINARY(3)), 2) AS vb_pos,
 REGEXP_INSTR(bl, CAST(_binary'中' AS BINARY(3)), 2) AS blob_pos,
 HEX(REGEXP_SUBSTR(bl, CAST(_binary'中' AS BINARY(3)), 2)) AS blob_substr,
 HEX(REGEXP_REPLACE(bl, CAST(_binary'中' AS BINARY(3)), _binary'X', 2, 1)) AS blob_replace
 FROM t_regexp_utf8 WHERE id = 1;
-vb_ord    blob_ord    vb_pos    blob_pos    blob_substr    blob_replace
-228    228    4    4    E4B8AD    E4B8AD58
+➤ vb_ord[-5,64,0]  ¦  blob_ord[-5,64,0]  ¦  vb_pos[-5,64,0]  ¦  blob_pos[-5,64,0]  ¦  blob_substr[-1,16383,0]  ¦  blob_replace[-1,16383,0]  𝄀
+228  ¦  228  ¦  4  ¦  4  ¦  E4B8AD  ¦  E4B8AD58
 SELECT REGEXP_INSTR(bl, '中', 2) AS blob_text_pos,
-REGEXP_INSTR(CAST(_binary'中中' AS BINARY(6)), '中', 2) AS binary_text_pos
+REGEXP_INSTR(b, '中', 2) AS binary_text_pos
 FROM t_regexp_utf8 WHERE id = 1;
-blob_text_pos    binary_text_pos
-4    4
+➤ blob_text_pos[-5,64,0]  ¦  binary_text_pos[-5,64,0]  𝄀
+4  ¦  4
+SELECT REGEXP_INSTR(CAST(b AS BINARY(6)), '中', 2) FROM t_regexp_utf8 WHERE id = 1;
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_instr.
+SELECT CAST(NULL AS BINARY) REGEXP 'a';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to reg_match.
+SELECT 'abc' NOT REGEXP CAST(NULL AS BINARY(1));
+Character set 'utf8mb4_general_ci' cannot be used in conjunction with 'binary' in call to not_reg_match.
+SELECT REGEXP_LIKE(CAST(NULL AS BINARY), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_INSTR('abc', CAST(NULL AS BINARY));
+Character set 'utf8mb4_general_ci' cannot be used in conjunction with 'binary' in call to regexp_instr.
+SELECT REGEXP_SUBSTR(CAST(NULL AS BINARY), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_substr.
+SELECT REGEXP_REPLACE('abc', 'a', CAST(NULL AS BINARY));
+Character set 'utf8mb4_general_ci' cannot be used in conjunction with 'binary' in call to regexp_replace.
+SELECT CAST('abc' AS BINARY) REGEXP 'a';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to reg_match.
+SELECT 'abc' REGEXP CAST('a' AS BINARY(1));
+Character set 'utf8mb4_general_ci' cannot be used in conjunction with 'binary' in call to reg_match.
+SELECT REGEXP_LIKE(CAST('abc' AS BINARY(3)), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_INSTR('abc', CAST('b' AS BINARY));
+Character set 'utf8mb4_general_ci' cannot be used in conjunction with 'binary' in call to regexp_instr.
+SELECT REGEXP_SUBSTR(CAST('abc' AS BINARY), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_substr.
+SELECT REGEXP_REPLACE(CAST('abc' AS BINARY), 'a', 'X');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_replace.
+SELECT NULL REGEXP 'a' AS untyped_null,
+CAST(NULL AS BINARY) REGEXP _binary'a' AS typed_binary_null,
+CAST('abc' AS BINARY(3)) REGEXP _binary'a' AS binary_match,
+HEX(REGEXP_SUBSTR(CAST('你好' AS BINARY), _binary'.')) AS binary_first_byte,
+HEX(REGEXP_SUBSTR('你好', '.')) AS text_first_character;
+➤ untyped_null[-7,1,0]  ¦  typed_binary_null[-7,1,0]  ¦  binary_match[-7,1,0]  ¦  binary_first_byte[-1,16383,0]  ¦  text_first_character[12,16,0]  𝄀
+null  ¦  null  ¦  1  ¦  E4  ¦  E4BDA0
+SET @regexp_cast_numeric = 123;
+SELECT REGEXP_LIKE(CAST(@regexp_cast_numeric AS BINARY), '1');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SET @regexp_cast_null = NULL;
+SELECT REGEXP_LIKE(CAST(@regexp_cast_null AS BINARY), 'a');
+➤ REGEXP_LIKE(cast(@regexp_cast_null as binary), a)[-7,1,0]  𝄀
+null
+SELECT REGEXP_LIKE((SELECT CAST(@regexp_cast_null AS BINARY)), 'a');
+➤ REGEXP_LIKE((select cast(@regexp_cast_null as binary)), a)[-7,1,0]  𝄀
+null
+SET @regexp_cast_variable = 'abc';
+SELECT REGEXP_LIKE(CAST(@regexp_cast_variable AS BINARY), 'a') AS variable_match;
+➤ variable_match[-7,1,0]  𝄀
+1
+SELECT REGEXP_LIKE(CAST(@regexp_cast_variable AS BINARY(3)), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(CAST(@regexp_cast_variable AS BINARY(0)), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE((SELECT CAST(@regexp_cast_variable AS BINARY)), 'a') AS scalar_variable_match;
+➤ scalar_variable_match[-7,1,0]  𝄀
+1
+SELECT REGEXP_LIKE(v, 'a') AS derived_variable_match FROM (SELECT CAST(@regexp_cast_variable AS BINARY) v) s;
+➤ derived_variable_match[-7,1,0]  𝄀
+1
+SELECT REGEXP_LIKE(v, 'a') FROM (SELECT CAST(@regexp_cast_variable AS BINARY(3)) v) s;
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(CAST(v AS BINARY(3)), 'a') FROM (SELECT CAST(@regexp_cast_variable AS BINARY) v) s;
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(IF(TRUE, CAST('abc' AS BINARY(3)), CAST('abc' AS BINARY(3))), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(IF(FALSE, CAST('abc' AS BINARY(3)), CAST('abc' AS BINARY(3))), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(IF(FALSE, CAST('abc' AS BINARY(3)), 'abc'), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(IF(TRUE, CAST(NULL AS BINARY(3)), CAST(NULL AS BINARY(3))), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(COALESCE(CAST('abc' AS BINARY(3)), CAST('abc' AS BINARY(3))), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(COALESCE(CAST(NULL AS BINARY(3)), CAST(NULL AS BINARY(3))), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(IF(TRUE, CAST(@regexp_cast_variable AS BINARY(3)), CAST(@regexp_cast_variable AS BINARY(3))), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE((SELECT IF(TRUE, CAST(NULL AS BINARY(3)), CAST(NULL AS BINARY(3)))), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(v, 'a') FROM (SELECT COALESCE(CAST(NULL AS BINARY(3)), CAST(NULL AS BINARY(3))) v) s;
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(IF(TRUE, CAST('abc' AS BINARY(3)), CAST('abc' AS BINARY(3))), _binary'a') AS control_binary_match;
+➤ control_binary_match[-7,1,0]  𝄀
+1
+PREPARE regexp_if_cast_rejected FROM 'SELECT REGEXP_LIKE(IF(TRUE, CAST(@regexp_cast_variable AS BINARY(3)), CAST(@regexp_cast_variable AS BINARY(3))), ''a'')';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+PREPARE regexp_coalesce_cast_rejected FROM 'SELECT REGEXP_LIKE(COALESCE(CAST(? AS BINARY(3)), CAST(? AS BINARY(3))), ''a'')';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(CAST(CONCAT(@regexp_cast_variable, '') AS BINARY), 'a') AS concat_variable_match;
+➤ concat_variable_match[-7,1,0]  𝄀
+1
+SELECT REGEXP_LIKE(CAST(LOWER(@regexp_cast_variable) AS BINARY), 'a') AS lower_variable_match;
+➤ lower_variable_match[-7,1,0]  𝄀
+1
+SELECT REGEXP_LIKE(CAST(v AS BINARY), 'a') AS cast_derived_variable_match FROM (SELECT @regexp_cast_variable v) s;
+➤ cast_derived_variable_match[-7,1,0]  𝄀
+1
+SELECT REGEXP_LIKE(v, 'a') AS derived_concat_match FROM (SELECT CAST(CONCAT(@regexp_cast_variable, '') AS BINARY) v) s;
+➤ derived_concat_match[-7,1,0]  𝄀
+1
+SELECT REGEXP_LIKE((SELECT CAST(LOWER(@regexp_cast_variable) AS BINARY)), 'a') AS scalar_lower_match;
+➤ scalar_lower_match[-7,1,0]  𝄀
+1
+SELECT REGEXP_LIKE(CAST(SUBSTRING(@regexp_cast_variable, 1, 3) AS BINARY), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(CAST((SELECT SUBSTRING(@regexp_cast_variable, 1, 3)) AS BINARY), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(CAST(SUBSTRING(@regexp_cast_variable, 1, CAST(3 AS SIGNED)) AS BINARY), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(CAST(SUBSTRING(@regexp_cast_variable, 1, CAST('3' AS SIGNED)) AS BINARY), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(CAST(SUBSTRING(@regexp_cast_variable, 1, CAST(3.5 AS SIGNED)) AS BINARY), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+CREATE TABLE regexp_static_text_source(v TEXT);
+INSERT INTO regexp_static_text_source VALUES ('abc');
+SELECT REGEXP_LIKE(CAST((SELECT SUBSTRING(v, 1, 3) FROM regexp_static_text_source) AS BINARY), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(CAST(v AS BINARY), 'a') FROM (SELECT LEFT(v, 3) v FROM regexp_static_text_source) s;
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+DROP TABLE regexp_static_text_source;
+PREPARE regexp_unsigned_length FROM 'SELECT REGEXP_LIKE(CAST(SUBSTRING(@regexp_cast_variable, 1, CAST(9223372036854775808 AS UNSIGNED)) AS BINARY), ''a'')';
+DEALLOCATE PREPARE regexp_unsigned_length;
+SELECT REGEXP_LIKE(CAST(v AS BINARY), 'a') FROM (SELECT SUBSTRING(@regexp_cast_variable, 1, CAST(3 AS SIGNED)) v) s;
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+PREPARE regexp_dynamic_length FROM 'SELECT REGEXP_LIKE(CAST(v AS BINARY), ''a'') AS dynamic_match FROM (SELECT SUBSTRING(@regexp_cast_variable, 1, ?) v) s';
+SET @regexp_length = 3;
+EXECUTE regexp_dynamic_length USING @regexp_length;
+➤ dynamic_match[-7,1,0]  𝄀
+1
+SET @regexp_length = 0;
+EXECUTE regexp_dynamic_length USING @regexp_length;
+➤ dynamic_match[-7,1,0]  𝄀
+0
+SET @regexp_length = NULL;
+EXECUTE regexp_dynamic_length USING @regexp_length;
+➤ dynamic_match[-7,1,0]  𝄀
+null
+SET @regexp_length = 3;
+EXECUTE regexp_dynamic_length USING @regexp_length;
+➤ dynamic_match[-7,1,0]  𝄀
+1
+DEALLOCATE PREPARE regexp_dynamic_length;
+SELECT REGEXP_LIKE(CAST(LOWER(@regexp_cast_variable) AS BINARY(3)), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(IF(TRUE, CAST(@regexp_cast_variable AS BINARY), CAST('abc' AS BINARY(3))), 'a') AS blob_branch_match;
+➤ blob_branch_match[-7,1,0]  𝄀
+1
+SELECT REGEXP_LIKE(IF(FALSE, CAST(@regexp_cast_variable AS BINARY), CAST('abc' AS BINARY(3))), 'a') AS fixed_branch_match;
+➤ fixed_branch_match[-7,1,0]  𝄀
+1
+SELECT REGEXP_LIKE(COALESCE(CAST(@regexp_cast_variable AS BINARY), CAST('abc' AS BINARY(3))), 'a') AS coalesce_blob_match;
+➤ coalesce_blob_match[-7,1,0]  𝄀
+1
+SELECT REGEXP_LIKE(CAST(@regexp_cast_never_assigned AS BINARY), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+PREPARE regexp_unassigned_cast_rejected FROM 'SELECT REGEXP_LIKE(CAST(@regexp_cast_never_assigned AS BINARY), ''a'')';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+PREPARE regexp_fresh_null_cast FROM 'SELECT REGEXP_LIKE(CAST(@regexp_cast_null AS BINARY), ''a'') AS fresh_null_match';
+EXECUTE regexp_fresh_null_cast;
+➤ fresh_null_match[-7,1,0]  𝄀
+null
+DEALLOCATE PREPARE regexp_fresh_null_cast;
+SET @regexp_cast_numeric = NULL;
+SELECT REGEXP_LIKE(CAST(@regexp_cast_numeric AS BINARY), '1');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+PREPARE regexp_numeric_null_cast_rejected FROM 'SELECT REGEXP_LIKE(CAST(@regexp_cast_numeric AS BINARY), ''1'')';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+PREPARE regexp_expression_cast_rebind FROM 'SELECT REGEXP_LIKE(CAST(CONCAT(@regexp_cast_variable, '''') AS BINARY), ''a'') AS concat_match, REGEXP_LIKE(CAST(LOWER(@regexp_cast_variable) AS BINARY), ''a'') AS lower_match, REGEXP_LIKE(CAST(v AS BINARY), ''a'') AS derived_match FROM (SELECT @regexp_cast_variable v) s';
+EXECUTE regexp_expression_cast_rebind;
+➤ concat_match[-7,1,0]  ¦  lower_match[-7,1,0]  ¦  derived_match[-7,1,0]  𝄀
+1  ¦  1  ¦  1
+SET @regexp_cast_variable = _binary'abc';
+EXECUTE regexp_expression_cast_rebind;
+➤ concat_match[-7,1,0]  ¦  lower_match[-7,1,0]  ¦  derived_match[-7,1,0]  𝄀
+1  ¦  1  ¦  1
+SET @regexp_cast_variable = NULL;
+EXECUTE regexp_expression_cast_rebind;
+➤ concat_match[-7,1,0]  ¦  lower_match[-7,1,0]  ¦  derived_match[-7,1,0]  𝄀
+null  ¦  null  ¦  null
+SET @regexp_cast_variable = 'abc';
+EXECUTE regexp_expression_cast_rebind;
+➤ concat_match[-7,1,0]  ¦  lower_match[-7,1,0]  ¦  derived_match[-7,1,0]  𝄀
+1  ¦  1  ¦  1
+DEALLOCATE PREPARE regexp_expression_cast_rebind;
+SET @regexp_null_parameter = 1;
+SET @regexp_null_parameter = NULL;
+PREPARE regexp_null_conversion FROM 'SELECT SUBSTRING_INDEX(''a.b'', ''.'', COALESCE(?, 1.5)) AS null_conversion';
+EXECUTE regexp_null_conversion USING @regexp_null_parameter;
+➤ null_conversion[12,3,0]  𝄀
+a.b
+SET @regexp_fresh_null_parameter = NULL;
+EXECUTE regexp_null_conversion USING @regexp_fresh_null_parameter;
+➤ null_conversion[12,3,0]  𝄀
+a.b
+SET @regexp_text_null_parameter = 'abc';
+SET @regexp_text_null_parameter = NULL;
+EXECUTE regexp_null_conversion USING @regexp_text_null_parameter;
+➤ null_conversion[12,3,0]  𝄀
+a.b
+DEALLOCATE PREPARE regexp_null_conversion;
+CREATE TABLE regexp_null_conversion_result(v VARCHAR(8));
+PREPARE regexp_null_insert FROM 'INSERT INTO regexp_null_conversion_result SELECT SUBSTRING_INDEX(''a.b'', ''.'', COALESCE(?, 1.5))';
+EXECUTE regexp_null_insert USING @regexp_null_parameter;
+EXECUTE regexp_null_insert USING @regexp_fresh_null_parameter;
+EXECUTE regexp_null_insert USING @regexp_text_null_parameter;
+SELECT v FROM regexp_null_conversion_result;
+➤ v[12,8,0]  𝄀
+a.b  𝄀
+a.b  𝄀
+a.b
+DEALLOCATE PREPARE regexp_null_insert;
+DROP TABLE regexp_null_conversion_result;
+SELECT REGEXP_LIKE((SELECT CAST('a' AS BINARY)), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(v, 'a') FROM (SELECT CAST('a' AS BINARY) v) s;
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(v, 'a') FROM (SELECT v FROM (SELECT CAST('a' AS BINARY) v) s) t;
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE((SELECT CAST(NULL AS BINARY)), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(v, 'a') FROM (SELECT CAST(NULL AS BINARY) v) s;
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_INSTR('abc', (SELECT CAST('a' AS BINARY)));
+Character set 'utf8mb4_general_ci' cannot be used in conjunction with 'binary' in call to regexp_instr.
+SELECT REGEXP_REPLACE('abc', 'a', (SELECT CAST(NULL AS BINARY)));
+Character set 'utf8mb4_general_ci' cannot be used in conjunction with 'binary' in call to regexp_replace.
+SELECT REGEXP_LIKE((SELECT b FROM t_regexp_utf8 WHERE id = 2), 'A') AS physical_binary_match,
+REGEXP_LIKE((SELECT bl FROM t_regexp_utf8 WHERE id = 2), 'A') AS physical_blob_match,
+REGEXP_LIKE((SELECT (SELECT b FROM t_regexp_utf8 WHERE id = 2)), 'A') AS nested_physical_binary_match;
+➤ physical_binary_match[-7,1,0]  ¦  physical_blob_match[-7,1,0]  ¦  nested_physical_binary_match[-7,1,0]  𝄀
+1  ¦  1  ¦  1
+SELECT REGEXP_LIKE(v, 'A') AS derived_physical_match FROM (SELECT b v FROM t_regexp_utf8 WHERE id = 2) s;
+➤ derived_physical_match[-7,1,0]  𝄀
+1
+SELECT REGEXP_LIKE((SELECT CAST('a' AS BINARY)), _binary'a') AS scalar_binary_match;
+➤ scalar_binary_match[-7,1,0]  𝄀
+1
+SELECT REGEXP_LIKE(v, _binary'a') AS derived_binary_match FROM (SELECT CAST('a' AS BINARY) v) s;
+➤ derived_binary_match[-7,1,0]  𝄀
+1
+PREPARE regexp_scalar_cast_rejected FROM 'SELECT REGEXP_LIKE((SELECT CAST(''a'' AS BINARY)), ''a'')';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+PREPARE regexp_scalar_null_cast_rejected FROM 'SELECT REGEXP_LIKE((SELECT CAST(NULL AS BINARY)), ''a'')';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+PREPARE regexp_scalar_param_cast_rejected FROM 'SELECT REGEXP_LIKE((SELECT CAST(? AS BINARY)), ''a'')';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+PREPARE regexp_derived_param_cast_rejected FROM 'SELECT REGEXP_LIKE(v, ''a'') FROM (SELECT CAST(? AS BINARY) v) s';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+PREPARE regexp_variable_cast_rebind FROM
+'SELECT REGEXP_LIKE(CAST(@regexp_cast_variable AS BINARY), ''a'') AS variable_match, REGEXP_LIKE((SELECT CAST(@regexp_cast_variable AS BINARY)), ''a'') AS scalar_variable_match, REGEXP_LIKE(v, ''a'') AS derived_variable_match FROM (SELECT CAST(@regexp_cast_variable AS BINARY) v) s';
+EXECUTE regexp_variable_cast_rebind;
+➤ variable_match[-7,1,0]  ¦  scalar_variable_match[-7,1,0]  ¦  derived_variable_match[-7,1,0]  𝄀
+1  ¦  1  ¦  1
+SET @regexp_cast_variable = _binary'abc';
+EXECUTE regexp_variable_cast_rebind;
+➤ variable_match[-7,1,0]  ¦  scalar_variable_match[-7,1,0]  ¦  derived_variable_match[-7,1,0]  𝄀
+1  ¦  1  ¦  1
+SET @regexp_cast_variable = NULL;
+EXECUTE regexp_variable_cast_rebind;
+➤ variable_match[-7,1,0]  ¦  scalar_variable_match[-7,1,0]  ¦  derived_variable_match[-7,1,0]  𝄀
+null  ¦  null  ¦  null
+SET @regexp_cast_variable = 'abc';
+EXECUTE regexp_variable_cast_rebind;
+➤ variable_match[-7,1,0]  ¦  scalar_variable_match[-7,1,0]  ¦  derived_variable_match[-7,1,0]  𝄀
+1  ¦  1  ¦  1
+DEALLOCATE PREPARE regexp_variable_cast_rebind;
+PREPARE regexp_binary_cast_rejected FROM 'SELECT REGEXP_INSTR(CAST(? AS BINARY), ''a'')';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_instr.
+PREPARE regexp_binary_cast_rebind FROM 'SELECT HEX(REGEXP_SUBSTR(CAST(? AS BINARY), _binary''.'')) AS first_byte';
+SET @regexp_binary_cast_subject = _binary'你好';
+EXECUTE regexp_binary_cast_rebind USING @regexp_binary_cast_subject;
+➤ first_byte[-1,16383,0]  𝄀
+E4
+SET @regexp_binary_cast_subject = '你好';
+EXECUTE regexp_binary_cast_rebind USING @regexp_binary_cast_subject;
+➤ first_byte[-1,16383,0]  𝄀
+E4
+SET @regexp_binary_cast_subject = NULL;
+EXECUTE regexp_binary_cast_rebind USING @regexp_binary_cast_subject;
+➤ first_byte[-1,16383,0]  𝄀
+null
+SET @regexp_binary_cast_subject = _binary'abc';
+EXECUTE regexp_binary_cast_rebind USING @regexp_binary_cast_subject;
+➤ first_byte[-1,16383,0]  𝄀
+61
+DEALLOCATE PREPARE regexp_binary_cast_rebind;
 PREPARE regexp_domain_rebind FROM
 'SELECT ORD(?), REGEXP_INSTR(?, CAST(_binary''中'' AS VARBINARY(3)), 2), ORD(REGEXP_SUBSTR(?, CAST(_binary''中'' AS VARBINARY(3)), 2))';
 SET @regexp_subject = CAST(_binary'中中' AS VARBINARY(6));
 EXECUTE regexp_domain_rebind USING @regexp_subject, @regexp_subject, @regexp_subject;
-ord(?)    regexp_instr(?, cast(_binary'中' as varbinary(3)), 2)    ord(regexp_substr(?, cast(_binary'中' as varbinary(3)), 2))
-228    4    228
+➤ ORD(?)[-5,64,0]  ¦  REGEXP_INSTR(?, cast(中 as varbinary(3)), 2)[-5,64,0]  ¦  ORD(REGEXP_SUBSTR(?, cast(中 as varbinary(3)), 2))[-5,64,0]  𝄀
+228  ¦  4  ¦  228
 SET @regexp_subject = '中中';
 EXECUTE regexp_domain_rebind USING @regexp_subject, @regexp_subject, @regexp_subject;
 Character set 'utf8mb4_general_ci' cannot be used in conjunction with 'binary' in call to regexp_instr.
@@ -305,18 +589,18 @@ EXECUTE regexp_domain_rebind USING @regexp_subject, @regexp_subject, @regexp_sub
 Character set 'utf8mb4_general_ci' cannot be used in conjunction with 'binary' in call to regexp_instr.
 SET @regexp_subject = CAST(_binary'中中' AS BLOB);
 EXECUTE regexp_domain_rebind USING @regexp_subject, @regexp_subject, @regexp_subject;
-ord(?)    regexp_instr(?, cast(_binary'中' as varbinary(3)), 2)    ord(regexp_substr(?, cast(_binary'中' as varbinary(3)), 2))
-228    4    228
+➤ ORD(?)[-5,64,0]  ¦  REGEXP_INSTR(?, cast(中 as varbinary(3)), 2)[-5,64,0]  ¦  ORD(REGEXP_SUBSTR(?, cast(中 as varbinary(3)), 2))[-5,64,0]  𝄀
+228  ¦  4  ¦  228
 DEALLOCATE PREPARE regexp_domain_rebind;
 PREPARE regexp_marker_static_text FROM
 'SELECT REGEXP_INSTR(?, ''b'') AS marker_static_text';
 SET @regexp_marker_subject = CAST(_binary'abc' AS VARBINARY(3));
 EXECUTE regexp_marker_static_text USING @regexp_marker_subject;
-marker_static_text
+➤ marker_static_text[-5,64,0]  𝄀
 2
 SET @regexp_marker_subject = 'abc';
 EXECUTE regexp_marker_static_text USING @regexp_marker_subject;
-marker_static_text
+➤ marker_static_text[-5,64,0]  𝄀
 2
 DEALLOCATE PREPARE regexp_marker_static_text;
 PREPARE regexp_scalar_domain_rebind FROM
@@ -324,20 +608,20 @@ PREPARE regexp_scalar_domain_rebind FROM
 SET @regexp_scalar_subject = CAST(_binary'中中' AS VARBINARY(6));
 SET @regexp_scalar_pattern = CAST(_binary'中' AS VARBINARY(3));
 EXECUTE regexp_scalar_domain_rebind USING @regexp_scalar_subject, @regexp_scalar_pattern;
-scalar_pos
+➤ scalar_pos[-5,64,0]  𝄀
 4
 SET @regexp_scalar_subject = '中中';
 SET @regexp_scalar_pattern = '中';
 EXECUTE regexp_scalar_domain_rebind USING @regexp_scalar_subject, @regexp_scalar_pattern;
-scalar_pos
+➤ scalar_pos[-5,64,0]  𝄀
 2
 SET @regexp_scalar_subject = CAST(_binary'中中' AS BLOB);
 EXECUTE regexp_scalar_domain_rebind USING @regexp_scalar_subject, @regexp_scalar_pattern;
-scalar_pos
+➤ scalar_pos[-5,64,0]  𝄀
 4
 SET @regexp_scalar_subject = CAST(_binary'中中' AS VARBINARY(6));
 EXECUTE regexp_scalar_domain_rebind USING @regexp_scalar_subject, @regexp_scalar_pattern;
-scalar_pos
+➤ scalar_pos[-5,64,0]  𝄀
 4
 DEALLOCATE PREPARE regexp_scalar_domain_rebind;
 PREPARE regexp_derived_scalar_domain_rebind FROM
@@ -345,20 +629,20 @@ PREPARE regexp_derived_scalar_domain_rebind FROM
 SET @regexp_derived_subject = CAST(_binary'中中' AS VARBINARY(6));
 SET @regexp_derived_pattern = CAST(_binary'中' AS VARBINARY(3));
 EXECUTE regexp_derived_scalar_domain_rebind USING @regexp_derived_subject, @regexp_derived_pattern;
-derived_scalar_pos
+➤ derived_scalar_pos[-5,64,0]  𝄀
 4
 SET @regexp_derived_subject = '中中';
 SET @regexp_derived_pattern = '中';
 EXECUTE regexp_derived_scalar_domain_rebind USING @regexp_derived_subject, @regexp_derived_pattern;
-derived_scalar_pos
+➤ derived_scalar_pos[-5,64,0]  𝄀
 2
 SET @regexp_derived_subject = CAST(_binary'中中' AS VARBINARY(6));
 EXECUTE regexp_derived_scalar_domain_rebind USING @regexp_derived_subject, @regexp_derived_pattern;
-derived_scalar_pos
+➤ derived_scalar_pos[-5,64,0]  𝄀
 4
 SET @regexp_derived_pattern = CAST(_binary'中' AS VARBINARY(3));
 EXECUTE regexp_derived_scalar_domain_rebind USING @regexp_derived_subject, @regexp_derived_pattern;
-derived_scalar_pos
+➤ derived_scalar_pos[-5,64,0]  𝄀
 4
 DEALLOCATE PREPARE regexp_derived_scalar_domain_rebind;
 PREPARE regexp_nested_domain_rebind FROM
@@ -366,8 +650,8 @@ PREPARE regexp_nested_domain_rebind FROM
 SET @regexp_nested_subject = CAST(_binary'中中' AS VARBINARY(6));
 SET @regexp_nested_pattern = CAST(_binary'中' AS VARBINARY(3));
 EXECUTE regexp_nested_domain_rebind USING @regexp_nested_subject, @regexp_nested_pattern, @regexp_nested_subject, @regexp_nested_pattern;
-ord(regexp_substr(?, ?))    regexp_instr(regexp_substr(?, ?), cast(_binary'.' as varbinary(1)), 1)
-228    1
+➤ ORD(REGEXP_SUBSTR(?, ?))[-5,64,0]  ¦  REGEXP_INSTR(REGEXP_SUBSTR(?, ?), cast(. as varbinary(1)), 1)[-5,64,0]  𝄀
+228  ¦  1
 SET @regexp_nested_subject = '中中';
 SET @regexp_nested_pattern = '中';
 EXECUTE regexp_nested_domain_rebind USING @regexp_nested_subject, @regexp_nested_pattern, @regexp_nested_subject, @regexp_nested_pattern;
@@ -379,8 +663,8 @@ Character set 'utf8mb4_general_ci' cannot be used in conjunction with 'binary' i
 SET @regexp_nested_subject = CAST(_binary'中中' AS BLOB);
 SET @regexp_nested_pattern = CAST(_binary'中' AS BLOB);
 EXECUTE regexp_nested_domain_rebind USING @regexp_nested_subject, @regexp_nested_pattern, @regexp_nested_subject, @regexp_nested_pattern;
-ord(regexp_substr(?, ?))    regexp_instr(regexp_substr(?, ?), cast(_binary'.' as varbinary(1)), 1)
-228    1
+➤ ORD(REGEXP_SUBSTR(?, ?))[-5,64,0]  ¦  REGEXP_INSTR(REGEXP_SUBSTR(?, ?), cast(. as varbinary(1)), 1)[-5,64,0]  𝄀
+228  ¦  1
 DEALLOCATE PREPARE regexp_nested_domain_rebind;
 PREPARE regexp_nested_replacement_static_mismatch FROM
 'SELECT REGEXP_INSTR(REGEXP_REPLACE(''a'', ''a'', ?), CAST(_binary''a'' AS VARBINARY(1)), 1)';
@@ -390,27 +674,27 @@ DROP DATABASE regexp_utf8_test;
 SELECT REGEXP_INSTR(CAST(_binary'中中' AS BINARY(6)), CAST(_binary'中' AS BINARY(3)), 2) AS binary_pos,
 REGEXP_INSTR(CAST(_binary'中中' AS VARBINARY(6)), CAST(_binary'中' AS VARBINARY(3)), 2) AS varbinary_pos,
 REGEXP_INSTR(CAST(_binary'中中' AS VARBINARY(6)), CAST(_binary'中' AS VARBINARY(3)), 2, 1, 1) AS varbinary_end;
-binary_pos    varbinary_pos    varbinary_end
-4    4    7
+➤ binary_pos[-5,64,0]  ¦  varbinary_pos[-5,64,0]  ¦  varbinary_end[-5,64,0]  𝄀
+4  ¦  4  ¦  7
 SELECT REGEXP_INSTR(CAST(X'FF' AS BINARY(1)), CAST(X'5C784646' AS BINARY(4))) AS hex_escape,
 REGEXP_INSTR(CAST(X'FF' AS BINARY(1)), CAST(X'5B5C7838302D5C7846465D' AS BINARY(11))) AS byte_range;
-hex_escape    byte_range
-1    1
+➤ hex_escape[-5,64,0]  ¦  byte_range[-5,64,0]  𝄀
+1  ¦  1
 SELECT REGEXP_INSTR('Abc abc', 'abc', 1, 1, 0, 'i') AS insensitive,
 REGEXP_INSTR('Abc abc', 'abc', 1, 1, 0, 'c') AS sensitive,
 REGEXP_INSTR('Abc abc', 'abc', 1, 1, 0, 'ic') AS rightmost_c,
 REGEXP_INSTR('Abc abc', 'abc', 1, 1, 0, 'ci') AS rightmost_i;
-insensitive    sensitive    rightmost_c    rightmost_i
-1    5    5    1
+➤ insensitive[-5,64,0]  ¦  sensitive[-5,64,0]  ¦  rightmost_c[-5,64,0]  ¦  rightmost_i[-5,64,0]  𝄀
+1  ¦  5  ¦  5  ¦  1
 SELECT REGEXP_INSTR('a\nb', '^b', 1, 1, 0, 'mu') AS unix_lf,
 REGEXP_INSTR('a\rb', '^b', 1, 1, 0, 'mu') AS unix_cr;
-unix_lf    unix_cr
-3    0
+➤ unix_lf[-5,64,0]  ¦  unix_cr[-5,64,0]  𝄀
+3  ¦  0
 SELECT REGEXP_INSTR(CAST(X'78C9' AS BINARY(2)), CAST(X'E9' AS BINARY(1)), 1, 1, 0, 'i') AS binary_i,
 REGEXP_INSTR(CAST(X'78C9' AS VARBINARY(2)), CAST(X'E9' AS VARBINARY(1)), 1, 1, 0, 'i') AS varbinary_i;
-binary_i    varbinary_i
-2    2
+➤ binary_i[-5,64,0]  ¦  varbinary_i[-5,64,0]  𝄀
+2  ¦  2
 SELECT REGEXP_INSTR(CAST(_binary'中中' AS BINARY(6)), CAST(_binary'中' AS BINARY(3)), 2, 1, 0, 'i') AS binary_byte_pos,
 REGEXP_INSTR(CAST(_binary'中中' AS VARBINARY(6)), CAST(_binary'中' AS VARBINARY(3)), 2, 1, 0, 'i') AS varbinary_byte_pos;
-binary_byte_pos    varbinary_byte_pos
-4    4
+➤ binary_byte_pos[-5,64,0]  ¦  varbinary_byte_pos[-5,64,0]  𝄀
+4  ¦  4
