@@ -793,17 +793,22 @@ func TestDecimal128FromFloat64RejectsSpecialValuesAndInvalidTypes(t *testing.T) 
 }
 
 func TestDecimal64AddSub(t *testing.T) {
-	x := Decimal64(rand.Int() >> 1)
-	z := x
-	err := error(nil)
-	y := Decimal64(rand.Int() >> 1)
-	x, _, err = x.Add(y, 0, 0)
-	if err == nil {
-		x, _, err = x.Sub(y, 0, 0)
-	}
-	if err != nil || x != z {
-		panic("Decimal64AddSub wrong")
-	}
+	result, scale, err := Decimal64(2305843009213693952).Add(1152921504606846976, 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, Decimal64(3458764513820540928), result)
+	require.Equal(t, int32(0), scale)
+	result, scale, err = Decimal64(3458764513820540928).Sub(1152921504606846976, 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, Decimal64(2305843009213693952), result)
+	require.Equal(t, int32(0), scale)
+
+	_, _, err = Decimal64(9223372036854775807).Add(1, 0, 0)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.EqualError(t, err, "invalid input: Decimal64 Add overflow: 9223372036854775807+1")
+	result, scale, err = Decimal64(0).Sub(9223372036854775807, 0, 10)
+	require.NoError(t, err)
+	require.Equal(t, Decimal64(9223372036854775809), result) // -(2^63-1) in two's complement.
+	require.Equal(t, int32(10), scale)
 }
 func TestDecimal128AddSub(t *testing.T) {
 	left := Decimal128{B0_63: 0x4000000000000000, B64_127: 0x2000000000000000}
@@ -1188,20 +1193,6 @@ func TestDecimal256AddErrorFormat(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected overflow error")
 	}
-}
-
-// TestDecimal64AddSubErrorFormat exercises the Decimal64.Add/Sub error paths.
-func TestDecimal64AddSubErrorFormat(t *testing.T) {
-	maxD64 := Decimal64(^uint64(0) >> 1) // max positive Decimal64
-	one := Decimal64(1)
-
-	_, _, err := maxD64.Add(one, 0, 0)
-	if err == nil {
-		t.Fatal("expected overflow from Add")
-	}
-	_, _, err = Decimal64(0).Sub(maxD64, 0, 10)
-	// This may or may not overflow depending on scale; we just exercise the path.
-	_ = err
 }
 
 // TestDecimal128AddSubErrorFormat exercises Decimal128.Add/Sub with origX/origY.
