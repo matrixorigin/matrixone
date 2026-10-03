@@ -1205,8 +1205,6 @@ func TestDecimal128AddSubErrorFormat(t *testing.T) {
 	require.EqualError(t, err, "invalid input: Decimal128 Sub overflow: 170141183460469231731687303715884105727--1")
 }
 
-// TestDecimalScaleOverflowErrors exercises the error formatting in Scale
-// functions where we changed the error messages.
 func TestDecimalScaleOverflowErrors(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -1229,6 +1227,7 @@ func TestDecimalScaleOverflowErrors(t *testing.T) {
 		{"maximum scale18 rounding", math.MaxInt64, -18, 9, false},
 		{"exact chunk downscale", 125000000000000, -10, 12500, false},
 		{"unsigned overflow", math.MaxInt64, 18, 0, true},
+		{"unsigned coarse overflow", math.MaxInt64, 38, 0, true},
 		{"extreme positive", 1, math.MaxInt32, 0, true},
 		{"extreme negative", math.MinInt64, math.MinInt32, 0, false},
 		{"zero", 0, math.MaxInt32, 0, false},
@@ -1239,6 +1238,7 @@ func TestDecimalScaleOverflowErrors(t *testing.T) {
 			if tc.overflow {
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "result %d, error %v", int64(got), err)
 				require.Equal(t, x, got, "failed alignment must preserve input for widening consumers")
+				require.EqualError(t, err, fmt.Sprintf("invalid input: Decimal64 scale overflow: coefficient %d, target scale=%d", tc.x, tc.n))
 			} else {
 				require.NoError(t, err)
 				require.Equal(t, tc.want, int64(got))
@@ -1246,52 +1246,33 @@ func TestDecimalScaleOverflowErrors(t *testing.T) {
 		})
 	}
 
-	// Decimal128.ScaleInplace: large D128 scaling up.
 	maxD128 := Decimal128{B0_63: ^uint64(0), B64_127: 0x7FFFFFFFFFFFFFFF}
-	t.Run("d128_scaleinplace_up", func(t *testing.T) {
-		x := maxD128
-		err := x.ScaleInplace(18)
-		if err == nil {
-			t.Fatal("expected overflow")
+	maxD256 := Decimal256{B0_63: ^uint64(0), B64_127: ^uint64(0), B128_191: ^uint64(0), B192_255: 0x7FFFFFFFFFFFFFFF}
+	const d128Error = "Decimal128 scale overflow: coefficient 170141183460469231731687303715884105727, target scale="
+	const d256Error = "Decimal256 scale overflow: coefficient 57896044618658097711785492504343953926634992332820282019728792003956564819967, target scale="
+	for _, tc := range []struct {
+		name, want string
+		scale      func(int32) error
+	}{
+		{"d128_inplace", d128Error, func(n int32) error { x := maxD128; return x.ScaleInplace(n) }},
+		{"d128", d128Error, func(n int32) error { _, err := maxD128.Scale(n); return err }},
+		{"d128_truncate", d128Error, func(n int32) error { _, err := maxD128.ScaleTruncate(n); return err }},
+		{"d256", "Decimal256 scale overflow: target scale=", func(n int32) error { _, err := maxD256.Scale(n); return err }},
+		{"d256_truncate", d256Error, func(n int32) error { _, err := maxD256.ScaleTruncate(n); return err }},
+	} {
+		// 18 exercises the final multiply; 38 overflows in the first 19-digit chunk.
+		for _, n := range []int32{18, 38} {
+			t.Run(fmt.Sprintf("%s/%d", tc.name, n), func(t *testing.T) {
+				err := tc.scale(n)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+				require.EqualError(t, err, fmt.Sprintf("invalid input: %s%d", tc.want, n))
+			})
 		}
-	})
+	}
 	t.Run("d128_scaleinplace_down", func(t *testing.T) {
 		x := maxD128
-		err := x.ScaleInplace(-38) // scale down by a lot
-		_ = err
-	})
-
-	// Decimal128.Scale (non-inplace).
-	t.Run("d128_scale_up", func(t *testing.T) {
-		_, err := maxD128.Scale(18)
-		if err == nil {
-			t.Fatal("expected overflow")
-		}
-	})
-
-	// Decimal128.ScaleTruncate.
-	t.Run("d128_scaletrunc_up", func(t *testing.T) {
-		_, err := maxD128.ScaleTruncate(18)
-		if err == nil {
-			t.Fatal("expected overflow")
-		}
-	})
-
-	// Decimal256.Scale: large D256 scaling up.
-	maxD256 := Decimal256{B0_63: ^uint64(0), B64_127: ^uint64(0), B128_191: ^uint64(0), B192_255: 0x7FFFFFFFFFFFFFFF}
-	t.Run("d256_scale_up", func(t *testing.T) {
-		_, err := maxD256.Scale(18)
-		if err == nil {
-			t.Fatal("expected overflow")
-		}
-	})
-
-	// Decimal256.ScaleTruncate.
-	t.Run("d256_scaletrunc_up", func(t *testing.T) {
-		_, err := maxD256.ScaleTruncate(18)
-		if err == nil {
-			t.Fatal("expected overflow")
-		}
+		require.NoError(t, x.ScaleInplace(-38))
+		require.Equal(t, Decimal128{B0_63: 2}, x)
 	})
 }
 
@@ -1364,53 +1345,6 @@ func TestDecimalArithOverflowErrors(t *testing.T) {
 	t.Run("d128_sub_scale_overflow", func(t *testing.T) {
 		_, _, err := maxD128.Sub(Decimal128{B0_63: 1}, 0, 18)
 		_ = err
-	})
-}
-
-// TestDecimalScaleLoopOverflow exercises the for-loop body in Scale functions
-// where n > 19. These are the modified error-message lines inside the loop.
-func TestDecimalScaleLoopOverflow(t *testing.T) {
-	maxD64 := Decimal64(^uint64(0) >> 1)
-	maxD128 := Decimal128{B0_63: ^uint64(0), B64_127: 0x7FFFFFFFFFFFFFFF}
-	maxD256 := Decimal256{B0_63: ^uint64(0), B64_127: ^uint64(0), B128_191: ^uint64(0), B192_255: 0x7FFFFFFFFFFFFFFF}
-
-	// Scale by 38 triggers the loop (38-0 > 19).
-	t.Run("d64_loop", func(t *testing.T) {
-		_, err := maxD64.Scale(38)
-		if err == nil {
-			t.Fatal("expected overflow")
-		}
-	})
-	t.Run("d128_scaleinplace_loop", func(t *testing.T) {
-		x := maxD128
-		err := x.ScaleInplace(38)
-		if err == nil {
-			t.Fatal("expected overflow")
-		}
-	})
-	t.Run("d128_scale_loop", func(t *testing.T) {
-		_, err := maxD128.Scale(38)
-		if err == nil {
-			t.Fatal("expected overflow")
-		}
-	})
-	t.Run("d128_scaletrunc_loop", func(t *testing.T) {
-		_, err := maxD128.ScaleTruncate(38)
-		if err == nil {
-			t.Fatal("expected overflow")
-		}
-	})
-	t.Run("d256_scale_loop", func(t *testing.T) {
-		_, err := maxD256.Scale(38)
-		if err == nil {
-			t.Fatal("expected overflow")
-		}
-	})
-	t.Run("d256_scaletrunc_loop", func(t *testing.T) {
-		_, err := maxD256.ScaleTruncate(38)
-		if err == nil {
-			t.Fatal("expected overflow")
-		}
 	})
 }
 
