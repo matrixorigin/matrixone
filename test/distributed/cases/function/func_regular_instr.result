@@ -398,6 +398,19 @@ SELECT REGEXP_LIKE(CAST((SELECT SUBSTRING(@regexp_cast_variable, 1, 3)) AS BINAR
 Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
 SELECT REGEXP_LIKE(CAST(SUBSTRING(@regexp_cast_variable, 1, CAST(3 AS SIGNED)) AS BINARY), 'a');
 Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(CAST(SUBSTRING(@regexp_cast_variable, 1, CAST('3' AS SIGNED)) AS BINARY), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(CAST(SUBSTRING(@regexp_cast_variable, 1, CAST(3.5 AS SIGNED)) AS BINARY), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+CREATE TABLE regexp_static_text_source(v TEXT);
+INSERT INTO regexp_static_text_source VALUES ('abc');
+SELECT REGEXP_LIKE(CAST((SELECT SUBSTRING(v, 1, 3) FROM regexp_static_text_source) AS BINARY), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(CAST(v AS BINARY), 'a') FROM (SELECT LEFT(v, 3) v FROM regexp_static_text_source) s;
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+DROP TABLE regexp_static_text_source;
+PREPARE regexp_unsigned_length FROM 'SELECT REGEXP_LIKE(CAST(SUBSTRING(@regexp_cast_variable, 1, CAST(9223372036854775808 AS UNSIGNED)) AS BINARY), ''a'')';
+DEALLOCATE PREPARE regexp_unsigned_length;
 SELECT REGEXP_LIKE(CAST(v AS BINARY), 'a') FROM (SELECT SUBSTRING(@regexp_cast_variable, 1, CAST(3 AS SIGNED)) v) s;
 Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
 PREPARE regexp_dynamic_length FROM 'SELECT REGEXP_LIKE(CAST(v AS BINARY), ''a'') AS dynamic_match FROM (SELECT SUBSTRING(@regexp_cast_variable, 1, ?) v) s';
@@ -466,12 +479,25 @@ PREPARE regexp_null_conversion FROM 'SELECT SUBSTRING_INDEX(''a.b'', ''.'', COAL
 EXECUTE regexp_null_conversion USING @regexp_null_parameter;
 ➤ null_conversion[12,3,0]  𝄀
 a.b
+SET @regexp_fresh_null_parameter = NULL;
+EXECUTE regexp_null_conversion USING @regexp_fresh_null_parameter;
+➤ null_conversion[12,3,0]  𝄀
+a.b
+SET @regexp_text_null_parameter = 'abc';
+SET @regexp_text_null_parameter = NULL;
+EXECUTE regexp_null_conversion USING @regexp_text_null_parameter;
+➤ null_conversion[12,3,0]  𝄀
+a.b
 DEALLOCATE PREPARE regexp_null_conversion;
 CREATE TABLE regexp_null_conversion_result(v VARCHAR(8));
 PREPARE regexp_null_insert FROM 'INSERT INTO regexp_null_conversion_result SELECT SUBSTRING_INDEX(''a.b'', ''.'', COALESCE(?, 1.5))';
 EXECUTE regexp_null_insert USING @regexp_null_parameter;
+EXECUTE regexp_null_insert USING @regexp_fresh_null_parameter;
+EXECUTE regexp_null_insert USING @regexp_text_null_parameter;
 SELECT v FROM regexp_null_conversion_result;
 ➤ v[12,8,0]  𝄀
+a.b  𝄀
+a.b  𝄀
 a.b
 DEALLOCATE PREPARE regexp_null_insert;
 DROP TABLE regexp_null_conversion_result;

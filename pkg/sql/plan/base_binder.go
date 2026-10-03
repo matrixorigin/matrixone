@@ -204,8 +204,17 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		if err == nil && types.T(typ.Id) == types.T_binary && typ.Width < 0 &&
 			preparedBindingState(b.GetContext()) == nil {
 			if variable, ok := unwrapParenExpr(exprImpl.Expr).(*tree.VarExpr); ok && !variable.System {
-				if sourceType, resolved := b.resolveUserVariableType(variable); resolved &&
-					types.T(sourceType.Id) == types.T_any {
+				sourceType, resolved := b.resolveUserVariableType(variable)
+				stringResult := false
+				if resolved && types.T(sourceType.Id) == types.T_any && b.builder != nil {
+					if resolver, ok := b.builder.compCtx.(UserVariableRegexpCastResolver); ok {
+						stringResult, err = resolver.ResolveVariableRegexpStringResult(variable.Name)
+						if err != nil {
+							return
+						}
+					}
+				}
+				if resolved && types.T(sourceType.Id) == types.T_any && !stringResult {
 					// Binding normally envelopes a NULL variable in TEXT. Preserve
 					// its zero-bound CAST classification before that envelope can
 					// falsely confer the unbounded string-variable exemption.
@@ -5962,10 +5971,6 @@ func (b *baseBinder) annotateStringDomainSource(
 		}
 		source := node.ProjectList[0]
 		b.annotateStringDomainSource(source, visited, memo)
-		if types.StaticStringDomain(makeTypeByPlan2Expr(expr)) == types.StringDomainText &&
-			!preparedExprStringDomainDependsOnRuntime(source) {
-			return // Static text already carries its declaration; do not defer its charset check.
-		}
 		if (source.GetCol() != nil || source.GetSub() != nil) &&
 			source.GetPreparedNumeric().GetStringDomainSource() == nil {
 			return // A physical field, including a nested scalar projection, stays compatible.
@@ -6232,8 +6237,7 @@ func compactStringDomainWitnessArg(arg *Expr) *Expr {
 func stringDomainWitnessType(source *Expr, domains uint8) plan.Type {
 	typ := source.Typ
 	declared := regexpDeclaredStringType(source)
-	if declared.Oid.IsMySQLString() &&
-		(types.T(source.Typ.Id) == types.T_binary || source.GetV() != nil) {
+	if declared.Oid.IsMySQLString() {
 		// Retain the logical length class too, not just the current value's
 		// domain. Variable/function BLOB declarations must survive projection.
 		typ = makePlan2Type(&declared)
@@ -6439,8 +6443,10 @@ func preparedExprStringDomainDependsOnRuntime(expr *plan.Expr) bool {
 	if expr == nil || isExplicitPreparedCast(expr) {
 		return false
 	}
+	if source := expr.GetPreparedNumeric().GetStringDomainSource(); source != nil {
+		return preparedExprStringDomainDependsOnRuntime(source)
+	}
 	return expr.GetP() != nil || expr.GetV() != nil ||
-		expr.GetPreparedNumeric().GetStringDomainSource() != nil ||
 		preparedFunctionStringDomainDependsOnRuntimeParam(expr)
 }
 
@@ -6468,8 +6474,8 @@ func preparedFunctionStringDomainDependsOnRuntimeParam(expr *plan.Expr) bool {
 	if expr == nil {
 		return false
 	}
-	if expr.GetPreparedNumeric().GetStringDomainSource() != nil {
-		return true
+	if source := expr.GetPreparedNumeric().GetStringDomainSource(); source != nil {
+		return preparedExprStringDomainDependsOnRuntime(source)
 	}
 	fn := expr.GetF()
 	if fn == nil || fn.Func == nil || len(fn.Args) == 0 {

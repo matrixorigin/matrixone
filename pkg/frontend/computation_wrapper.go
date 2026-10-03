@@ -2600,14 +2600,6 @@ func buildExecuteUserParamsWithMemberOfPositions(
 			paramValue.SourceType = executeArgumentSourceType(sourceType)
 			paramValue.HasSourceType = true
 		}
-		if param == nil && paramValue.SourceType.IsNumeric() {
-			// A NULL numeric binding takes its conversion type from the prepared
-			// marker, not the variable's retained numeric history. Otherwise
-			// COALESCE(?, 1.5) can be narrowed to an old integer assignment.
-			// Keep text/binary source domains for legacy migration and regexp.
-			paramValue.SourceType = types.Type{}
-			paramValue.HasSourceType = false
-		}
 		paramVals[i] = paramValue
 	}
 	if err = params.SetRuntimeStringDomainsWithMP(effectiveParamDomains, proc.Mp()); err != nil {

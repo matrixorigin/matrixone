@@ -4526,12 +4526,24 @@ type UserDefinedVar struct {
 	// compatibility, but MySQL fixes their effective type at statement start.
 	// Keeping the assignment type here prevents a numeric sibling operand from
 	// silently narrowing a decimal or floating-point variable.
-	Type                planpb.Type
+	Type planpb.Type
+	// RegexpStringResult retains only the assignment result-category history
+	// needed by unsized binary CAST compatibility. It never supplies the
+	// ordinary SQL or prepared-parameter conversion type of a NULL value.
+	RegexpStringResult  bool
 	PrepareParamKind    vector.PrepareParamKind
 	RuntimeStringDomain types.RuntimeStringDomain
 	// Replayable is true only when the proxy can replay the assignment as a
 	// captured raw COM_QUERY SET statement during legacy migration.
 	Replayable bool
+}
+
+// userVariableRegexpStringResult models MySQL's user-variable result category,
+// not its physical SQL type. JSON and temporal values are string results too;
+// numeric, Boolean, BIT and YEAR values are not.
+func userVariableRegexpStringResult(typ planpb.Type) bool {
+	oid := types.T(typ.Id)
+	return oid != types.T_any && oid != types.T_bool && oid != types.T_year && !oid.ToType().IsNumeric()
 }
 
 // inferUserDefinedVarType supplies a conservative type for callers which set

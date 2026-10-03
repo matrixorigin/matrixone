@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"math"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -152,8 +154,8 @@ func regexpDeclaredStringType(expr *Expr) types.Type {
 }
 
 // regexpConstantInteger recognizes values, not witness payloads or current
-// parameter bindings. CAST preserves integer bits and signedness; unsupported
-// conversions stay unknown rather than being evaluated speculatively.
+// parameter bindings. Recognized CASTs use SQL integer-prefix conversion and
+// decimal rounding; unsupported conversions remain unknown.
 func regexpConstantInteger(expr *Expr) (value uint64, signed, known bool) {
 	if expr == nil || expr.GetP() != nil || expr.GetV() != nil ||
 		expr.GetPreparedNumeric().GetStringDomainSource() != nil {
@@ -175,14 +177,54 @@ func regexpConstantInteger(expr *Expr) (value uint64, signed, known bool) {
 			return uint64(number.I64Val), true, true
 		case *planpb.Literal_U64Val:
 			return number.U64Val, false, true
+		case *planpb.Literal_Sval:
+			integer, err := function.ParsePreparedStringToInt64(number.Sval)
+			return uint64(integer), true, err == nil
+		case *planpb.Literal_Decimal64Val:
+			decimal := types.Decimal64(number.Decimal64Val.A)
+			rounded, err := decimal.Scale(-expr.Typ.Scale)
+			return uint64(rounded), true, err == nil
+		case *planpb.Literal_Decimal128Val:
+			decimal := types.Decimal128{B0_63: uint64(number.Decimal128Val.A), B64_127: uint64(number.Decimal128Val.B)}
+			rounded, err := decimal.Scale(-expr.Typ.Scale)
+			if err != nil {
+				return 0, false, false
+			}
+			integer, err := strconv.ParseInt(rounded.Format(0), 10, 64)
+			return uint64(integer), true, err == nil
 		}
 		return 0, false, false
 	}
 	if fn := expr.GetF(); fn != nil && fn.Func != nil &&
 		strings.EqualFold(fn.Func.ObjName, "cast") && len(fn.Args) > 0 {
-		value, _, known = regexpConstantInteger(fn.Args[0])
+		if types.T(expr.Typ.Id).IsDecimal() {
+			if literal := fn.Args[0].GetLit(); literal != nil && !literal.Isnull && literal.Src == nil &&
+				(types.StringSource(literal.StringSource) == types.StringSourceExpression ||
+					types.StringSource(literal.StringSource) == types.StringSourceLiteral) {
+				if text, ok := literal.Value.(*planpb.Literal_Sval); ok {
+					decimal, err := types.ParseDecimal128(text.Sval, expr.Typ.Width, expr.Typ.Scale)
+					if err != nil {
+						return 0, false, false
+					}
+					rounded, err := decimal.Scale(-expr.Typ.Scale)
+					if err != nil {
+						return 0, false, false
+					}
+					integer, err := strconv.ParseInt(rounded.Format(0), 10, 64)
+					return uint64(integer), true, err == nil
+				}
+			}
+			return 0, false, false
+		}
+		value, signed, known = regexpConstantInteger(fn.Args[0])
+		_, overload := function.DecodeOverloadID(fn.Func.GetObj())
 		switch types.T(expr.Typ.Id) {
 		case types.T_int64:
+			if known && !signed && value > math.MaxInt64 && overload != 1 && !fn.GetSyntaxExplicitCast() {
+				// An implicit narrowing cast can fail at execution. It cannot
+				// prove a negative/zero declaration length at PREPARE time.
+				return 0, false, false
+			}
 			return value, true, known
 		case types.T_uint64:
 			return value, false, known

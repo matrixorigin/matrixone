@@ -395,6 +395,13 @@ func TestRegexpBinaryCastAcrossQueryBoundaries(t *testing.T) {
 		{"select regexp_like(cast((select substring(@v, 1, 3)) as binary), 'a')", true},
 		{"select regexp_like(cast(substring(@v, 1, cast(3 as signed)) as binary), 'a')", true},
 		{"select regexp_like(cast(substring(@v, 1, cast(cast(3 as unsigned) as signed)) as binary), 'a')", true},
+		{"select regexp_like(cast(substring(@v, 1, cast('3' as signed)) as binary), 'a')", true},
+		{"select regexp_like(cast(substring(@v, 1, cast(3.0 as signed)) as binary), 'a')", true},
+		{"select regexp_like(cast((select substring(rel_createsql, 1, 3) from mo_catalog.mo_tables limit 1) as binary), 'a')", true},
+		{"select regexp_like(cast(v as binary), 'a') from (select left(rel_createsql, 3) v from mo_catalog.mo_tables) s", true},
+		{"select regexp_like(cast(substring(@v, 1, cast(9223372036854775808 as unsigned)) as binary), 'a')", false},
+		{"select regexp_like(cast(substring(@v, 1, cast(18446744073709551615 as unsigned)) as binary), 'a')", false},
+		{"select regexp_like(cast(substring(@v, 1, cast(9223372036854775808 as signed)) as binary), 'a')", true},
 		{"select regexp_like(cast(concat(@v, '') as binary), 'a')", false},
 		{"select regexp_like(cast(lower(@v) as binary), 'a')", false},
 		{"select regexp_like(cast(v as binary), 'a') from (select @v v) s", false},
@@ -454,6 +461,32 @@ func TestRegexpLengthWitnessDistinguishesUnknownFromZero(t *testing.T) {
 		require.True(t, known)
 		require.False(t, signed)
 		require.Equal(t, value, actual)
+	}
+	for _, tc := range []struct {
+		name  string
+		scale int32
+		lit   *planpb.Literal
+		want  int64
+		known bool
+	}{
+		{"decimal64 positive half", 1, &planpb.Literal{Value: &planpb.Literal_Decimal64Val{Decimal64Val: &planpb.Decimal64{A: 35}}}, 4, true},
+		{"decimal64 negative half", 1, &planpb.Literal{Value: &planpb.Literal_Decimal64Val{Decimal64Val: &planpb.Decimal64{A: -35}}}, -4, true},
+		{"decimal128 positive half", 1, &planpb.Literal{Value: &planpb.Literal_Decimal128Val{Decimal128Val: &planpb.Decimal128{A: 35}}}, 4, true},
+		{"decimal128 out of signed range", 0, &planpb.Literal{Value: &planpb.Literal_Decimal128Val{Decimal128Val: &planpb.Decimal128{A: -9223372036854775808}}}, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			typ := planpb.Type{Id: int32(types.T_decimal128), Width: 38, Scale: tc.scale}
+			if tc.lit.GetDecimal64Val() != nil {
+				typ.Id, typ.Width = int32(types.T_decimal64), 18
+			}
+			expr := &Expr{Typ: typ, Expr: &planpb.Expr_Lit{Lit: tc.lit}}
+			actual, signed, known := regexpConstantInteger(expr)
+			require.Equal(t, tc.known, known)
+			if known {
+				require.True(t, signed)
+				require.Equal(t, tc.want, int64(actual))
+			}
+		})
 	}
 	parameter := &Expr{Typ: makeSimplePlan2Type(types.T_int64),
 		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}

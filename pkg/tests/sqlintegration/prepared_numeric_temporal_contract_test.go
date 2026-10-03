@@ -57,16 +57,39 @@ func TestPreparedNumericTemporalContracts(t *testing.T) {
 			return s
 		}
 		t.Run("NULL assignment history does not change SQL EXECUTE conversion", func(t *testing.T) {
-			exec(t, "set @null_history=1")
-			exec(t, "set @null_history=NULL")
-			exec(t, "prepare null_history_select from 'select substring_index(\"a.b\",\".\",coalesce(?,1.5))'")
-			defer exec(t, "deallocate prepare null_history_select")
-			require.Equal(t, "a.b", scalar(t, "execute null_history_select using @null_history"))
 			exec(t, "create table null_history_result(v varchar(8))")
-			exec(t, "prepare null_history_insert from 'insert into null_history_result select substring_index(\"a.b\",\".\",coalesce(?,1.5))'")
-			defer exec(t, "deallocate prepare null_history_insert")
-			exec(t, "execute null_history_insert using @null_history")
-			require.Equal(t, "a.b", scalar(t, "select v from null_history_result"))
+			for _, history := range []struct {
+				name, variable, assignment string
+			}{
+				{"fresh", "@null_history_fresh", ""},
+				{"text", "@null_history_text", "'abc'"},
+				{"numeric", "@null_history_numeric", "1"},
+				{"json", "@null_history_json", "cast(null as json)"},
+				{"date", "@null_history_date", "cast(null as date)"},
+			} {
+				t.Run(history.name, func(t *testing.T) {
+					if history.assignment != "" {
+						exec(t, "set "+history.variable+"="+history.assignment)
+					}
+					exec(t, "set "+history.variable+"=NULL")
+					var matched sql.NullBool
+					err := conn.QueryRowContext(ctx, "select regexp_like(cast("+history.variable+" as binary),'a')").Scan(&matched)
+					if history.name == "numeric" {
+						require.ErrorContains(t, err, "Character set 'binary'")
+					} else {
+						require.NoError(t, err)
+						require.False(t, matched.Valid)
+					}
+					exec(t, "prepare null_history_select from 'select substring_index(\"a.b\",\".\",coalesce(?,1.5))'")
+					defer exec(t, "deallocate prepare null_history_select")
+					require.Equal(t, "a.b", scalar(t, "execute null_history_select using "+history.variable))
+					exec(t, "delete from null_history_result")
+					exec(t, "prepare null_history_insert from 'insert into null_history_result select substring_index(\"a.b\",\".\",coalesce(?,1.5))'")
+					defer exec(t, "deallocate prepare null_history_insert")
+					exec(t, "execute null_history_insert using "+history.variable)
+					require.Equal(t, "a.b", scalar(t, "select v from null_history_result"))
+				})
+			}
 		})
 		t.Run("decimal scientific values and persistence", func(t *testing.T) {
 			exec(t, "create table source(v varchar(128))")

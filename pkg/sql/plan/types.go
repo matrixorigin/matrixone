@@ -344,6 +344,12 @@ type UserVariableTypeResolver interface {
 	ResolveVariableType(varName string, isSystemVar, isGlobalVar bool) (Type, error)
 }
 
+// UserVariableRegexpCastResolver provides assignment result-category history
+// exclusively for binary CAST declaration compatibility, not execution types.
+type UserVariableRegexpCastResolver interface {
+	ResolveVariableRegexpStringResult(varName string) (bool, error)
+}
+
 // UserVariableStringDomainResolver exposes the assigned value's domain override
 // at binding time. A variable expression captures that domain in its VarRef,
 // independently of its static Type. It does not rewrite the session value or

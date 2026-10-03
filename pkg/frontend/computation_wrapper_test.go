@@ -1194,19 +1194,29 @@ func TestBuildPlanRegexpUserVariableNullHistory(t *testing.T) {
 			resolver := &TxnCompilerContext{execCtx: &ExecCtx{reqCtx: ctx, ses: ses}}
 			compiler := plan2.NewEmptyCompilerContext()
 			compiler.ResolveVariableTypeFunc = resolver.ResolveVariableType
-			for _, prepare := range []bool{false, true} {
-				statements, err := mysql.Parse(ctx, "select regexp_like(cast(@history as binary), 'a')", 1)
-				require.NoError(t, err)
-				var stmt tree.Statement = statements[0]
-				if prepare {
-					stmt = tree.NewPrepareString(tree.Identifier("history_cast"), "select regexp_like(cast(@history as binary), 'a')")
-				}
-				_, err = buildPlan(ctx, nil, compiler, stmt)
-				statements[0].Free()
-				if tc.wantErr {
-					require.True(t, moerr.IsMoErrCode(err, moerr.ErrCharacterSetMismatch), err)
-				} else {
+			compiler.ResolveVariableRegexpStringResultFunc = resolver.ResolveVariableRegexpStringResult
+			for migration := 0; migration < 2; migration++ {
+				if migration != 0 {
+					snapshot, err := ses.snapshotUserDefinedVars(ctx)
 					require.NoError(t, err)
+					restored, err := decodeUserDefinedVars(ctx, snapshot, false)
+					require.NoError(t, err)
+					ses.installUserDefinedVars(restored)
+				}
+				for _, prepare := range []bool{false, true} {
+					statements, err := mysql.Parse(ctx, "select regexp_like(cast(@history as binary), 'a')", 1)
+					require.NoError(t, err)
+					var stmt tree.Statement = statements[0]
+					if prepare {
+						stmt = tree.NewPrepareString(tree.Identifier("history_cast"), "select regexp_like(cast(@history as binary), 'a')")
+					}
+					_, err = buildPlan(ctx, nil, compiler, stmt)
+					statements[0].Free()
+					if tc.wantErr {
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrCharacterSetMismatch), err)
+					} else {
+						require.NoError(t, err)
+					}
 				}
 			}
 		})
@@ -1228,11 +1238,7 @@ func TestUserVariableNullTypeDoesNotLeakHistoryToExecuteParams(t *testing.T) {
 			defer params.Free(cw.proc.Mp())
 			value := values[0].(plan2.ParamValue)
 			require.Nil(t, value.Value)
-			if _, numeric := previous.(int64); numeric {
-				require.False(t, value.HasSourceType, "NULL must not force the historical numeric conversion")
-			} else {
-				require.True(t, value.HasSourceType, "preserve legacy text NULL source domains")
-			}
+			require.False(t, value.HasSourceType, "literal NULL has no current conversion type, regardless of history")
 			require.Equal(t, vector.PrepareParamNone, value.PrepareParamKind)
 		}()
 	}
