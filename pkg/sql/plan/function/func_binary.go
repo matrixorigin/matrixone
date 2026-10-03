@@ -5778,6 +5778,7 @@ func FieldNumber[T number](ivecs []*vector.Vector, result vector.FunctionResultW
 
 func FieldString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[uint64](result)
+	uniformBinary, perRow := stringDomainMode(ivecs[0])
 
 	fs := make([]vector.FunctionParameterWrapper[types.Varlena], len(ivecs))
 	for i := range ivecs {
@@ -5797,7 +5798,12 @@ func FieldString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ 
 				continue
 			}
 
-			if strings.EqualFold(functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v2)) {
+			// Like LOCATE/INSTR, the subject controls byte versus text semantics.
+			if binaryStringAt(ivecs[0], int(i), uniformBinary, perRow) {
+				if bytes.Equal(v1, v2) {
+					nums[i] = uint64(j)
+				}
+			} else if strings.EqualFold(functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v2)) {
 				nums[i] = uint64(j)
 			}
 

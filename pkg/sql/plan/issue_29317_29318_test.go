@@ -19,10 +19,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -213,7 +217,132 @@ func TestPreparedVariadicRuntimeSourceDomains(t *testing.T) {
 				{Value: []byte{0, 'b'}, SourceType: types.T_varbinary.ToType(), HasSourceType: true, IsBinaryString: true},
 				{Value: []byte{'b'}, SourceType: types.T_varbinary.ToType(), HasSourceType: true, IsBinaryString: true},
 			},
-			want: []types.T{types.T_varbinary, types.T_varbinary},
+			want: []types.T{types.T_text, types.T_text},
+		},
+		{
+			name: "field coalesce marker text context", sql: "prepare p from 'select field(coalesce(?, ?), ?)'", fn: "field",
+			values: []ParamValue{
+				{Value: "A", SourceType: types.T_varbinary.ToType(), HasSourceType: true, IsBinaryString: true},
+				{Value: nil, SourceType: types.T_varbinary.ToType(), HasSourceType: true, IsBinaryString: true},
+				{Value: "a", SourceType: types.T_varbinary.ToType(), HasSourceType: true, IsBinaryString: true},
+			},
+			want: []types.T{types.T_text, types.T_text},
+		},
+		{
+			name: "field substring marker text context", sql: "prepare p from 'select field(substring(?, 1), ?)'", fn: "field",
+			values: []ParamValue{
+				{Value: "A", SourceType: types.T_varbinary.ToType(), HasSourceType: true, IsBinaryString: true},
+				{Value: "a", SourceType: types.T_varbinary.ToType(), HasSourceType: true, IsBinaryString: true},
+			},
+			want: []types.T{types.T_text, types.T_text},
+		},
+		{
+			name: "field substring numeric control", sql: "prepare p from 'select field(substring(?, ?), ?)'", fn: "field",
+			values: []ParamValue{
+				{Value: "A", SourceType: types.T_varbinary.ToType(), HasSourceType: true, IsBinaryString: true},
+				{Value: int64(1), SourceType: types.T_int64.ToType(), HasSourceType: true},
+				{Value: "a", SourceType: types.T_varbinary.ToType(), HasSourceType: true, IsBinaryString: true},
+			},
+			want: []types.T{types.T_text, types.T_text},
+		},
+		{
+			name: "field IF numeric condition", sql: "prepare p from 'select field(if(?, ?, ?), ?)'", fn: "field",
+			values: []ParamValue{
+				{Value: int64(1), SourceType: types.T_int64.ToType(), HasSourceType: true},
+				{Value: "A", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+				{Value: "B", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+				{Value: "a", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+			},
+			want: []types.T{types.T_text, types.T_text},
+		},
+		{
+			name: "field IF nested substring numeric control", sql: "prepare p from 'select field(if(?, substring(?, ?), ?), ?)'", fn: "field",
+			values: []ParamValue{
+				{Value: int64(1), SourceType: types.T_int64.ToType(), HasSourceType: true},
+				{Value: "A", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+				{Value: int64(1), SourceType: types.T_int64.ToType(), HasSourceType: true},
+				{Value: "B", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+				{Value: "a", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+			},
+			want: []types.T{types.T_text, types.T_text},
+		},
+		{
+			name: "field derived marker projection", sql: "prepare p from 'select field(x, ?) from (select ? as x limit 1) d'", fn: "field",
+			values: []ParamValue{
+				{Value: "a", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+				{Value: "A", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+			},
+			want: []types.T{types.T_text, types.T_text},
+		},
+		{
+			name: "field scalar marker projection", sql: "prepare p from 'select field((select ? from (select 1 as x) d limit 1), ?)'", fn: "field",
+			values: []ParamValue{
+				{Value: "A", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+				{Value: "a", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+			},
+			want: []types.T{types.T_text, types.T_text},
+		},
+		{
+			name: "field MAX marker projection", sql: "prepare p from 'select field(max(?), ?)'", fn: "field",
+			values: []ParamValue{
+				{Value: "A", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+				{Value: "a", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+			},
+			want: []types.T{types.T_text, types.T_text},
+		},
+		{
+			name: "field derived NULL selector", sql: "prepare p from 'select field(x, ?) from (select coalesce(?, null) as x limit 1) d'", fn: "field",
+			values: []ParamValue{
+				{Value: "a", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+				{Value: "A", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+			}, want: []types.T{types.T_blob, types.T_text},
+		},
+		{
+			name: "field scalar NULL selector", sql: "prepare p from 'select field((select coalesce(?, null) from (select 1 as x) d limit 1), ?)'", fn: "field",
+			values: []ParamValue{
+				{Value: "A", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+				{Value: "a", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+			}, want: []types.T{types.T_blob, types.T_text},
+		},
+		{
+			name: "field WINDOW NULL selector", sql: "prepare p from 'select field(x, ?) from (select max(coalesce(?, null)) over() as x) d'", fn: "field",
+			values: []ParamValue{
+				{Value: "a", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+				{Value: "A", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+			}, want: []types.T{types.T_blob, types.T_text},
+		},
+		{
+			name: "field WINDOW marker projection", sql: "prepare p from 'select field(x, ?) from (select max(?) over() as x, min(?) over() as y) d'", fn: "field",
+			values: []ParamValue{
+				{Value: "a", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+				{Value: "A", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+				{Value: "A", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+			},
+			want: []types.T{types.T_text, types.T_text},
+		},
+		{
+			name: "field NULLIF marker context", sql: "prepare p from 'select field(nullif(?, ''''), ?)'", fn: "field",
+			values: []ParamValue{
+				{Value: "A", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+				{Value: "a", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+			},
+			want: []types.T{types.T_text, types.T_text},
+		},
+		{
+			name: "field explicit binary cast boundary", sql: "prepare p from 'select field(cast(? as binary), ?)'", fn: "field",
+			values: []ParamValue{
+				{Value: "A", SourceType: types.T_varbinary.ToType(), HasSourceType: true, IsBinaryString: true},
+				{Value: "a", SourceType: types.T_varbinary.ToType(), HasSourceType: true, IsBinaryString: true},
+			},
+			want: []types.T{types.T_binary, types.T_text},
+		},
+		{
+			name: "field fixed binary contributor boundary", sql: "prepare p from 'select field(coalesce(?, cast(''A'' as binary)), ?)'", fn: "field",
+			values: []ParamValue{
+				{Value: "A", SourceType: types.T_varbinary.ToType(), HasSourceType: true, IsBinaryString: true},
+				{Value: "a", SourceType: types.T_varbinary.ToType(), HasSourceType: true, IsBinaryString: true},
+			},
+			want: []types.T{types.T_blob, types.T_text},
 		},
 	}
 	// Each relational owner keeps a different binding tag or physical output.
@@ -316,8 +445,120 @@ func TestPreparedVariadicRuntimeSourceDomains(t *testing.T) {
 			for i, want := range tc.want {
 				require.Equal(t, want, types.T(fn.GetF().Args[i].Typ.Id), fn.String())
 			}
+			if tc.name == "field coalesce marker text context" || tc.name == "field substring marker text context" ||
+				tc.name == "field substring numeric control" || tc.name == "field IF numeric condition" ||
+				tc.name == "field IF nested substring numeric control" || tc.name == "field derived marker projection" ||
+				tc.name == "field scalar marker projection" || tc.name == "field MAX marker projection" ||
+				tc.name == "field NULLIF marker context" ||
+				tc.name == "field fixed binary contributor boundary" {
+				comparison := fn.GetF().Args[0]
+				wantDomain, wantWidth := types.StringDomainText, -1
+				if tc.name == "field fixed binary contributor boundary" {
+					wantDomain, wantWidth = types.StringDomainBinary, 0
+				}
+				require.Equal(t, wantDomain, types.StaticStringDomain(makeTypeByPlan2Expr(comparison)))
+				require.EqualValues(t, wantWidth, comparison.Typ.Width, "comparison must preserve the complete payload")
+				_, overload := planfunction.DecodeOverloadID(comparison.GetF().Func.Obj)
+				require.EqualValues(t, 1, overload, "comparison domain must survive execution-time constant folding")
+			}
 		})
 	}
+}
+
+// Execute the consumer as well as inspecting its type: a negative-width
+// VARCHAR cast can have the expected domain while truncating every value.
+func TestPreparedFieldComparisonExecution(t *testing.T) {
+	for _, source := range []types.T{types.T_varchar, types.T_varbinary} {
+		for _, tc := range []struct {
+			name, operand string
+			want          int64
+		}{
+			{"nullif", "nullif(?, '')", 1},
+			{"wrapped nullif", "nullif(coalesce(?, 'A'), '')", 1},
+			{"binary nullif peer", "nullif(?, _binary '')", 0},
+			{"greatest", "greatest(?, '@')", 1},
+			{"coalesce text", "coalesce(?, 'fallback')", 1},
+			{"if text", "if(true, ?, 'B')", 1},
+			{"nonmatching text", "nullif(?, '')", 0},
+			{"coalesce NULL", "coalesce(?, null)", 0},
+			{"case NULL", "case when true then ? else null end", 0},
+			{"if NULL", "if(true, ?, null)", 0},
+		} {
+			t.Run(source.String()+"/"+tc.name, func(t *testing.T) {
+				query := "select field(" + tc.operand + ", ?)"
+				prepared, err := runOneStmt(NewMockOptimizer(false), t,
+					"prepare p from '"+strings.ReplaceAll(query, "'", "''")+"'")
+				require.NoError(t, err)
+				template := prepared.GetDcl().GetPrepare().Plan
+				before := template.String()
+				filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), template, []any{
+					ParamValue{Value: "A", SourceType: source.ToType(), HasSourceType: true},
+					ParamValue{Value: map[bool]string{true: "z", false: "a"}[tc.name == "nonmatching text"], SourceType: source.ToType(), HasSourceType: true},
+				})
+				require.NoError(t, err)
+				require.Equal(t, before, template.String(), "cached PREPARE template changed")
+				consumer := findPlanFunctionExpr(filled, "field")
+				require.NotNil(t, consumer)
+				proc := testutil.NewProcess(t)
+				executor, err := colexec.NewExpressionExecutor(proc, consumer)
+				require.NoError(t, err)
+				defer executor.Free()
+				out, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+				require.NoError(t, err)
+				require.Equal(t, tc.want, vector.GetFixedAtWithTypeCheck[int64](out, 0), consumer.String())
+			})
+		}
+	}
+}
+
+func TestPreparedFieldParameterCaseComparison(t *testing.T) {
+	for _, sql := range []string{
+		"prepare p from 'select field(case when ? then null else ? end, ?)'",
+		"prepare p from 'select field(nullif(coalesce(?,?), ''''), ?)'",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+				sql)
+			require.NoError(t, err)
+			first := ParamValue{Value: int64(0), SourceType: types.T_int64.ToType(), HasSourceType: true}
+			want := int64(0)
+			if strings.Contains(sql, "nullif") {
+				first = ParamValue{Value: "A", SourceType: types.T_varbinary.ToType(), HasSourceType: true}
+				want = 1
+			}
+			filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), prepared.GetDcl().GetPrepare().Plan, []any{
+				first,
+				ParamValue{Value: "A", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+				ParamValue{Value: "a", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+			})
+			require.NoError(t, err)
+			proc := testutil.NewProcess(t)
+			executor, err := colexec.NewExpressionExecutor(proc, findPlanFunctionExpr(filled, "field"))
+			require.NoError(t, err)
+			defer executor.Free()
+			out, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			require.NoError(t, err)
+			require.EqualValues(t, want, vector.GetFixedAtWithTypeCheck[int64](out, 0))
+		})
+	}
+}
+
+func TestPreparedFieldNullifSourceBinding(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	binary := types.T_varbinary.ToType()
+	values := []any{
+		ParamValue{Value: "A", SourceType: binary, HasSourceType: true},
+		ParamValue{Value: "A", SourceType: binary, HasSourceType: true},
+		ParamValue{Value: "a", SourceType: binary, HasSourceType: true},
+	}
+	mock.ctxt.SetContext(withPreparedSourceBindings(context.Background(), []PreparedSourceBinding{
+		{Position: 0, Type: binary}, {Position: 1, Type: binary}, {Position: 2, Type: binary},
+	}, values))
+	p, err := runOneStmt(mock, t, "select field(nullif(coalesce(?,?), ''), ?)")
+	require.NoError(t, err)
+	consumer := findPlanFunctionExpr(p, "field")
+	require.NotNil(t, consumer)
+	require.Equal(t, types.StringDomainText, types.StaticStringDomain(makeTypeByPlan2Expr(consumer.GetF().Args[0])), consumer.String())
 }
 
 func TestPreparedCommonValueStringMarkerWithFixedDecimalPeer(t *testing.T) {

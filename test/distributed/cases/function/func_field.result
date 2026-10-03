@@ -1,3 +1,199 @@
+select field(_binary 'a', _binary 'A', _binary 'a') as binary_case,
+field(_binary X'FF', _binary X'FE', _binary X'FF') as invalid_bytes,
+field(cast('a' as binary), cast('A' as binary), cast('a' as binary)) as cast_binary;
+➤ binary_case[-5,64,0]  ¦  invalid_bytes[-5,64,0]  ¦  cast_binary[-5,64,0]  𝄀
+2  ¦  2  ¦  2
+select field(_binary 'a', 'A', 'a') as binary_subject,
+field('a', _binary 'A', _binary 'a') as text_subject,
+field('a', 'A', 'a') as text_control;
+➤ binary_subject[-5,64,0]  ¦  text_subject[-5,64,0]  ¦  text_control[-5,64,0]  𝄀
+2  ¦  1  ¦  1
+select field(_binary X'610062', X'610063', X'610062', X'610062') as embedded_nul,
+field(_binary '', null, _binary '') as empty_value,
+field(cast(null as binary), X'00', null) as null_subject,
+field(X'FF', X'FE', null) as no_match;
+➤ embedded_nul[-5,64,0]  ¦  empty_value[-5,64,0]  ¦  null_subject[-5,64,0]  ¦  no_match[-5,64,0]  𝄀
+2  ¦  2  ¦  0  ¦  0
+drop table if exists field_binary_subjects;
+create table field_binary_subjects (id int primary key, b blob, vb varbinary(8));
+insert into field_binary_subjects values (1, X'61', X'61'), (2, X'FF', X'FF'), (3, null, null);
+select id, field(b, X'41', X'FE', X'61', X'FF') as blob_field,
+field(vb, X'41', X'FE', X'61', X'FF') as varbinary_field
+from field_binary_subjects order by id;
+➤ id[4,32,0]  ¦  blob_field[-5,64,0]  ¦  varbinary_field[-5,64,0]  𝄀
+1  ¦  3  ¦  3  𝄀
+2  ¦  4  ¦  4  𝄀
+3  ¦  0  ¦  0
+drop table field_binary_subjects;
+set @field_subject = X'41';
+set @field_candidate = X'61';
+prepare field_context_stmt from 'select field(?, ?) as bare_field, field(cast(? as binary), ?) as binary_field';
+execute field_context_stmt using @field_subject, @field_candidate, @field_subject, @field_candidate;
+➤ bare_field[-5,64,0]  ¦  binary_field[-5,64,0]  𝄀
+1  ¦  0
+set @field_subject = _binary 'a';
+set @field_candidate = _binary 'A';
+execute field_context_stmt using @field_subject, @field_candidate, @field_subject, @field_candidate;
+➤ bare_field[-5,64,0]  ¦  binary_field[-5,64,0]  𝄀
+1  ¦  0
+set @field_subject = 'a';
+set @field_candidate = 'a';
+execute field_context_stmt using @field_subject, @field_candidate, @field_subject, @field_candidate;
+➤ bare_field[-5,64,0]  ¦  binary_field[-5,64,0]  𝄀
+1  ¦  1
+set @field_subject = null;
+execute field_context_stmt using @field_subject, @field_candidate, @field_subject, @field_candidate;
+➤ bare_field[-5,64,0]  ¦  binary_field[-5,64,0]  𝄀
+0  ¦  0
+set @field_subject = X'41';
+set @field_candidate = X'61';
+execute field_context_stmt using @field_subject, @field_candidate, @field_subject, @field_candidate;
+➤ bare_field[-5,64,0]  ¦  binary_field[-5,64,0]  𝄀
+1  ¦  0
+deallocate prepare field_context_stmt;
+set @field_candidate = null;
+set @field_subject = X'41';
+set @field_candidate = X'61';
+prepare field_nested_stmt from 'select field(coalesce(?, ?), ?) as coalesce_field, field(substring(?, 1), ?) as substring_field, field(coalesce(?, cast(''A'' as binary)), ?) as fixed_binary_field';
+execute field_nested_stmt using @field_subject, @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate;
+➤ coalesce_field[-5,64,0]  ¦  substring_field[-5,64,0]  ¦  fixed_binary_field[-5,64,0]  𝄀
+1  ¦  1  ¦  0
+set @field_subject = null;
+execute field_nested_stmt using @field_subject, @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate;
+➤ coalesce_field[-5,64,0]  ¦  substring_field[-5,64,0]  ¦  fixed_binary_field[-5,64,0]  𝄀
+0  ¦  0  ¦  0
+set @field_subject = X'41';
+execute field_nested_stmt using @field_subject, @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate;
+➤ coalesce_field[-5,64,0]  ¦  substring_field[-5,64,0]  ¦  fixed_binary_field[-5,64,0]  𝄀
+1  ¦  1  ¦  0
+set @field_subject = repeat(_binary 'A', 70000);
+set @field_candidate = @field_subject;
+execute field_nested_stmt using @field_subject, @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate;
+➤ coalesce_field[-5,64,0]  ¦  substring_field[-5,64,0]  ¦  fixed_binary_field[-5,64,0]  𝄀
+1  ¦  1  ¦  1
+deallocate prepare field_nested_stmt;
+set @field_candidate = null;
+set @field_subject = X'41';
+set @field_candidate = X'61';
+set @field_control = 1;
+prepare field_control_stmt from 'select field(if(?, substring(?, ?), ?), ?) as if_control';
+execute field_control_stmt using @field_control, @field_subject, @field_control, @field_subject, @field_candidate;
+➤ if_control[-5,64,0]  𝄀
+1
+deallocate prepare field_control_stmt;
+prepare field_nullif_stmt from 'select field(nullif(?, ''''), ?) as nullif_field';
+execute field_nullif_stmt using @field_subject, @field_candidate;
+➤ nullif_field[-5,64,0]  𝄀
+1
+set @field_subject = '';
+execute field_nullif_stmt using @field_subject, @field_candidate;
+➤ nullif_field[-5,64,0]  𝄀
+0
+set @field_subject = null;
+execute field_nullif_stmt using @field_subject, @field_candidate;
+➤ nullif_field[-5,64,0]  𝄀
+0
+set @field_subject = X'41';
+execute field_nullif_stmt using @field_subject, @field_candidate;
+➤ nullif_field[-5,64,0]  𝄀
+1
+deallocate prepare field_nullif_stmt;
+prepare field_derived_stmt from 'select field(x, ?) as derived_field, field(cast(x as binary), ?) as binary_control from (select ? as x limit 1) d';
+execute field_derived_stmt using @field_candidate, @field_candidate, @field_subject;
+➤ derived_field[-5,64,0]  ¦  binary_control[-5,64,0]  𝄀
+1  ¦  0
+deallocate prepare field_derived_stmt;
+prepare field_scalar_stmt from 'select field((select ? from (select 1 as x) d limit 1), ?) as scalar_field';
+execute field_scalar_stmt using @field_subject, @field_candidate;
+➤ scalar_field[-5,64,0]  𝄀
+1
+deallocate prepare field_scalar_stmt;
+prepare field_max_stmt from 'select field(max(?), ?) as max_field';
+execute field_max_stmt using @field_subject, @field_candidate;
+➤ max_field[-5,64,0]  𝄀
+1
+deallocate prepare field_max_stmt;
+set @field_control = null;
+set @field_subject = 'A';
+set @field_candidate = 'a';
+prepare field_text_values_stmt from 'select field(nullif(?, ''''), ?) as nullif_text, field(greatest(?, ''@''), ?) as greatest_text, field(coalesce(?, ''fallback''), ?) as coalesce_text, field(if(true, ?, ''B''), ?) as if_text';
+execute field_text_values_stmt using @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate;
+➤ nullif_text[-5,64,0]  ¦  greatest_text[-5,64,0]  ¦  coalesce_text[-5,64,0]  ¦  if_text[-5,64,0]  𝄀
+1  ¦  1  ¦  1  ¦  1
+set @field_candidate = 'z';
+execute field_text_values_stmt using @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate;
+➤ nullif_text[-5,64,0]  ¦  greatest_text[-5,64,0]  ¦  coalesce_text[-5,64,0]  ¦  if_text[-5,64,0]  𝄀
+0  ¦  0  ¦  0  ¦  0
+deallocate prepare field_text_values_stmt;
+set @field_candidate = 'a';
+prepare field_null_values_stmt from 'select field(coalesce(?, null), ?) as coalesce_null, field(case when true then ? else null end, ?) as case_null, field(if(true, ?, null), ?) as if_null';
+execute field_null_values_stmt using @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate;
+➤ coalesce_null[-5,64,0]  ¦  case_null[-5,64,0]  ¦  if_null[-5,64,0]  𝄀
+0  ¦  0  ¦  0
+set @field_subject = X'41';
+set @field_candidate = X'61';
+execute field_null_values_stmt using @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate;
+➤ coalesce_null[-5,64,0]  ¦  case_null[-5,64,0]  ¦  if_null[-5,64,0]  𝄀
+0  ¦  0  ¦  0
+deallocate prepare field_null_values_stmt;
+prepare field_window_stmt from 'select field(x, ?) as window_field from (select max(?) over() as x, min(?) over() as y) d';
+execute field_window_stmt using @field_candidate, @field_subject, @field_subject;
+➤ window_field[-5,64,0]  𝄀
+1
+deallocate prepare field_window_stmt;
+set @field_subject = X'41';
+set @field_candidate = X'61';
+set @field_condition = 0;
+prepare field_wrapped_nullif from 'select field(nullif(coalesce(?,?), ''''), ?) as wrapped_nullif';
+execute field_wrapped_nullif using @field_subject, @field_subject, @field_candidate;
+➤ wrapped_nullif[-5,64,0]  𝄀
+1
+deallocate prepare field_wrapped_nullif;
+prepare field_binary_nullif from 'select field(nullif(?, _binary ''''), ?) as binary_nullif';
+execute field_binary_nullif using @field_subject, @field_candidate;
+➤ binary_nullif[-5,64,0]  𝄀
+0
+deallocate prepare field_binary_nullif;
+prepare field_case_condition from 'select field(case when ? then null else ? end, ?) as parameter_case';
+execute field_case_condition using @field_condition, @field_subject, @field_candidate;
+➤ parameter_case[-5,64,0]  𝄀
+0
+deallocate prepare field_case_condition;
+prepare field_null_derived from 'select field(x, ?) as null_derived from (select coalesce(?, null) as x limit 1) d';
+execute field_null_derived using @field_candidate, @field_subject;
+➤ null_derived[-5,64,0]  𝄀
+0
+deallocate prepare field_null_derived;
+prepare field_null_scalar from 'select field((select coalesce(?, null) from (select 1 as x) d limit 1), ?) as null_scalar';
+execute field_null_scalar using @field_subject, @field_candidate;
+➤ null_scalar[-5,64,0]  𝄀
+0
+deallocate prepare field_null_scalar;
+prepare field_null_window from 'select field(x, ?) as null_window from (select max(coalesce(?,null)) over() as x) d';
+execute field_null_window using @field_candidate, @field_subject;
+➤ null_window[-5,64,0]  𝄀
+0
+deallocate prepare field_null_window;
+set @field_condition = null;
+set @field_subject = _binary 'a';
+prepare field_binary_stmt from 'select field(cast(? as binary), ''A'', ''a'', X''FE'', X''FF'') as prepared_field';
+execute field_binary_stmt using @field_subject;
+➤ prepared_field[-5,64,0]  𝄀
+2
+set @field_subject = X'FF';
+execute field_binary_stmt using @field_subject;
+➤ prepared_field[-5,64,0]  𝄀
+4
+set @field_subject = null;
+execute field_binary_stmt using @field_subject;
+➤ prepared_field[-5,64,0]  𝄀
+0
+set @field_subject = 'a';
+execute field_binary_stmt using @field_subject;
+➤ prepared_field[-5,64,0]  𝄀
+2
+deallocate prepare field_binary_stmt;
+set @field_subject = null;
 select field('Bb', 'Aa', 'Bb', 'Cc', 'Dd', 'Ff');
 ➤ field(Bb, Aa, Bb, Cc, Dd, Ff)[-5,64,0]  𝄀
 2

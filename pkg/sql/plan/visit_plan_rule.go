@@ -3308,6 +3308,18 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					compareArgTypes = true
 					rule.specialized = true
 				}
+			} else if functionName == "field" && !hasParamPos {
+				target, comparisonContext, typeErr := preparedFieldOperandComparisonType(rule.ctx, originalArgs[i], rule.stringDomainParamLookup)
+				if typeErr != nil {
+					return nil, typeErr
+				}
+				if comparisonContext && types.T(rewrittenArg.Typ.Id).IsMySQLString() {
+					rewrittenArg, err = appendExplicitCastBeforeExpr(rule.ctx, rewrittenArg, makePlan2Type(&target))
+					if err != nil {
+						return nil, err
+					}
+					needResetFunction, compareArgTypes, rule.specialized = true, true, true
+				}
 			}
 			if geometrySRIDParamPos >= 0 && i == len(exprImpl.F.Args)-1 &&
 				hasParamPos && paramPos == geometrySRIDParamPos {
@@ -5051,7 +5063,7 @@ func preparedStringMarkerType(expr *plan.Expr) types.Type {
 }
 
 // preparedSQLExecuteTextFunctionParamType identifies only bare SQL EXECUTE
-// markers passed to SOUNDEX/QUOTE whose user-variable source is binary. MySQL
+// markers passed to SOUNDEX/QUOTE/FIELD whose user-variable source is binary. MySQL
 // prepares these markers in a text context; preserve the payload and apply that
 // context at this consumer rather than changing the variable's domain globally.
 func (rule *ResetParamRefRule) preparedSQLExecuteTextFunctionParamType(functionName string, expr *plan.Expr) (types.Type, bool) {
@@ -5068,7 +5080,7 @@ func (rule *ResetParamRefRule) preparedSQLExecuteTextFunctionParamType(functionN
 
 func preparedSQLExecuteTextConsumerType(functionName string, expr *Expr, param ParamValue) (types.Type, bool) {
 	switch strings.ToLower(functionName) {
-	case "soundex", "quote":
+	case "soundex", "quote", "field":
 	default:
 		return types.Type{}, false
 	}
@@ -5084,9 +5096,203 @@ func preparedSQLExecuteTextConsumerType(functionName string, expr *Expr, param P
 	return preparedStringMarkerType(expr), true
 }
 
+// preparedFieldOperandComparisonType follows SQL markers' prepared text
+// context through domain-preserving expressions. Fixed binary contributors
+// retain a binary comparison context; explicit casts already own their domain.
+func preparedFieldOperandComparisonType(ctx context.Context, expr *Expr, lookup preparedStringDomainParamLookup) (types.Type, bool, error) {
+	if expr == nil || !types.T(expr.Typ.Id).IsMySQLString() || isExplicitPreparedCast(expr) {
+		return types.Type{}, false, nil
+	}
+	if !preparedExprContainsParam(expr) && !preparedExprStringDomainDependsOnRuntime(expr) {
+		return types.Type{}, false, nil
+	}
+	// Keep the full value expression, including typed NULLs and CASE branches.
+	// A compact domain union is a provenance witness, not an equivalent AST.
+	probe := DeepCopyExpr(expr)
+	hasSQLStringMarker := false
+	// The compact string witness intentionally omits numeric-only leaves.
+	// Inspect value roles on the original tree as well, including typed NULLs.
+	hasNumericSourceMarker := preparedFieldHasNumericValueMarker(expr, lookup)
+	markerLookup := func(pos int) (any, types.Type, bool) {
+		value, fallback, found := lookup(pos)
+		if param, ok := value.(ParamValue); ok && !param.IsBinaryProtocol &&
+			((param.HasSourceType && param.SourceType.Oid.IsMySQLString()) ||
+				param.IsBinaryString || param.IsBin || param.RuntimeStringDomain != types.RuntimeStringInherit) {
+			hasSQLStringMarker = true
+			// This lookup is type-only: a non-NULL placeholder avoids inheriting
+			// a source-bound binary marker type from a currently NULL value.
+			return "", types.T_text.ToType(), found
+		}
+		return value, fallback, found
+	}
+	// A provisional common-type cast may have widened a fixed binary literal
+	// to TEXT. Recover its literal domain only in this private type probe.
+	if err := plan.VisitExprTree(probe, func(value *Expr) error {
+		if !isExplicitPreparedCast(value) {
+			if source := value.GetPreparedNumeric().GetStringDomainSource(); source != nil {
+				*value = *DeepCopyExpr(source)
+			}
+		}
+		// Common-type casts around an entire expression are just as
+		// provisional as casts around a bare marker. Keep explicit boundaries.
+		for {
+			cast := value.GetF()
+			if cast == nil || cast.Func == nil || cast.Func.ObjName != "cast" ||
+				len(cast.Args) == 0 || isExplicitPreparedCast(value) ||
+				!types.T(value.Typ.Id).IsMySQLString() || !types.T(cast.Args[0].Typ.Id).IsMySQLString() {
+				break
+			}
+			*value = *cast.Args[0]
+		}
+		if param := value.GetP(); param != nil {
+			markerValue, markerType, found := markerLookup(int(param.Pos))
+			if _, textMarker := markerValue.(string); found && textMarker && markerType.Oid == types.T_text {
+				// The registry's dynamic-domain classifier probes one child at a
+				// time. Instantiate all SQL marker contexts before it classifies
+				// a function with several jointly bound binary-source markers.
+				value.Typ = makePlan2Type(&markerType)
+			}
+		}
+		// The ordinary conditional checker selects TEXT for mixed physical
+		// text/binary families. Probe binary contributors in its text envelope
+		// so their comparison charset, rather than that envelope, survives.
+		switch types.T(value.Typ.Id) {
+		case types.T_binary:
+			value.Typ.Id, value.Typ.Charset = int32(types.T_char), uint32(types.CharsetBinary)
+		case types.T_varbinary:
+			value.Typ.Id, value.Typ.Charset = int32(types.T_varchar), uint32(types.CharsetBinary)
+		case types.T_blob:
+			value.Typ.Id, value.Typ.Charset = int32(types.T_text), uint32(types.CharsetBinary)
+		}
+		literal := value.GetLit()
+		if literal != nil && !preparedExprContainsParam(value) &&
+			types.T(value.Typ.Id).IsMySQLString() &&
+			(literal.GetLiteralForm() == plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER ||
+				literal.GetLiteralForm() == plan.StringLiteralForm_STRING_LITERAL_HEX ||
+				literal.GetLiteralForm() == plan.StringLiteralForm_STRING_LITERAL_BIT) {
+			value.Typ.Charset = uint32(types.CharsetBinary)
+		}
+		return nil
+	}); err != nil {
+		return types.Type{}, false, err
+	}
+	if fn := probe.GetF(); hasNumericSourceMarker && fn != nil && fn.Func != nil &&
+		preparedNumericResultPolymorphicFunction(fn.Func.ObjName) {
+		// Common-value numeric tuples, including typed NULL sources, already
+		// own a comparison domain. Do not erase it with a string-boundary cast.
+		return types.Type{}, false, nil
+	}
+	typ, _, _, err := preparedExecutionExprType(ctx, probe, markerLookup)
+	if err == nil && preparedFieldOnlyMarkerAndNull(probe) {
+		// An untyped NULL branch does not contribute a text charset.
+		typ.Charset = types.CharsetBinary
+	}
+	// This is a comparison-domain conversion, not a width/DDL boundary.
+	// Width-zero BLOB and negative-width TEXT are unbounded cast envelopes;
+	// VARBINARY does not support a negative-width destination.
+	if types.StaticStringDomain(typ) == types.StringDomainBinary {
+		typ.Oid, typ.Width = types.T_blob, 0
+	} else {
+		typ.Oid, typ.Width = types.T_text, -1
+	}
+	return typ, err == nil && hasSQLStringMarker && types.StaticStringDomain(typ) != types.StringDomainNone, err
+}
+
+// preparedFieldOnlyMarkerAndNull recognizes selectors whose only value
+// contributors are one marker and untyped NULL. Casts inserted by the binder
+// around NULL do not create an actual string contributor.
+func preparedFieldOnlyMarkerAndNull(expr *Expr) bool {
+	markers, nulls, other := preparedFieldMarkerNullValues(expr)
+	return markers && nulls && !other
+}
+
+func preparedFieldMarkerNullValues(expr *Expr) (marker, nullValue, other bool) {
+	if expr == nil || isExplicitPreparedCast(expr) {
+		return false, false, true
+	}
+	if source := expr.GetPreparedNumeric().GetStringDomainSource(); source != nil {
+		return preparedFieldMarkerNullValues(source)
+	}
+	if expr.GetP() != nil {
+		return true, false, false
+	}
+	if lit := expr.GetLit(); lit != nil {
+		return false, lit.GetIsnull(), !lit.GetIsnull()
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false, false, true
+	}
+	name := strings.ToLower(fn.Func.ObjName)
+	if (name == "cast" || name == "max" || name == "min" || name == "any_value") && len(fn.Args) > 0 {
+		return preparedFieldMarkerNullValues(fn.Args[0])
+	}
+	if name != "coalesce" && name != "ifnull" && name != "if" && name != "iff" && name != "case" {
+		return false, false, true
+	}
+	for index, arg := range fn.Args {
+		if (name == "if" || name == "iff") && index == 0 ||
+			name == "case" && !numericFunctionArgKeepsContext(name, index, len(fn.Args)) {
+			// Conditions never contribute to a selector's returned value domain.
+			continue
+		}
+		m, n, o := preparedFieldMarkerNullValues(arg)
+		marker, nullValue, other = marker || m, nullValue || n, other || o
+	}
+	return
+}
+
+// preparedFieldHasNumericValueMarker follows returned values, not conditions
+// or string-function controls. String-producing functions own the conversion
+// boundary even when their source marker is numeric.
+func preparedFieldHasNumericValueMarker(expr *Expr, lookup preparedStringDomainParamLookup) bool {
+	if expr == nil || isExplicitPreparedCast(expr) {
+		return false
+	}
+	if param := expr.GetP(); param != nil {
+		value, _, found := lookup(int(param.Pos))
+		p, ok := value.(ParamValue)
+		return found && ok && p.HasSourceType && p.SourceType.IsNumeric()
+	}
+	if source := expr.GetPreparedNumeric().GetStringDomainSource(); source != nil {
+		return preparedFieldHasNumericValueMarker(source, lookup)
+	}
+	if lit := expr.GetLit(); lit != nil {
+		return preparedFieldHasNumericValueMarker(lit.Src, lookup)
+	}
+	if sub := expr.GetSub(); sub != nil {
+		return preparedFieldHasNumericValueMarker(sub.Child, lookup)
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	name := strings.ToLower(fn.Func.ObjName)
+	if preparedStringDomainSourceIndex(name, len(fn.Args)) >= 0 {
+		return false
+	}
+	if indexes, ok := numericFunctionResultArgs(name, len(fn.Args)); ok {
+		for _, index := range indexes {
+			if index >= 0 && index < len(fn.Args) && preparedFieldHasNumericValueMarker(fn.Args[index], lookup) {
+				return true
+			}
+		}
+		return false
+	}
+	for index, arg := range fn.Args {
+		if name == "case" && !numericFunctionArgKeepsContext(name, index, len(fn.Args)) {
+			continue
+		}
+		if preparedFieldHasNumericValueMarker(arg, lookup) {
+			return true
+		}
+	}
+	return false
+}
+
 // preparedSQLExecuteTextFunctionArg performs a byte-preserving cast into the
 // marker's prepared text type. Unlike a global parameter-domain change, the
-// cast is local to the SOUNDEX/QUOTE occurrence and leaves explicit binary
+// cast is local to the SOUNDEX/QUOTE/FIELD occurrence and leaves explicit binary
 // casts and unrelated uses of the same SQL variable untouched.
 func (rule *ResetParamRefRule) preparedSQLExecuteTextFunctionArg(
 	pos int,

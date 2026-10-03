@@ -4,6 +4,150 @@
 -- @desc:test for FIELD() function
 -- @label:bvt
 
+-- Binary subjects compare bytes, including invalid UTF-8 and embedded NULs.
+select field(_binary 'a', _binary 'A', _binary 'a') as binary_case,
+       field(_binary X'FF', _binary X'FE', _binary X'FF') as invalid_bytes,
+       field(cast('a' as binary), cast('A' as binary), cast('a' as binary)) as cast_binary;
+select field(_binary 'a', 'A', 'a') as binary_subject,
+       field('a', _binary 'A', _binary 'a') as text_subject,
+       field('a', 'A', 'a') as text_control;
+select field(_binary X'610062', X'610063', X'610062', X'610062') as embedded_nul,
+       field(_binary '', null, _binary '') as empty_value,
+       field(cast(null as binary), X'00', null) as null_subject,
+       field(X'FF', X'FE', null) as no_match;
+
+drop table if exists field_binary_subjects;
+create table field_binary_subjects (id int primary key, b blob, vb varbinary(8));
+insert into field_binary_subjects values (1, X'61', X'61'), (2, X'FF', X'FF'), (3, null, null);
+select id, field(b, X'41', X'FE', X'61', X'FF') as blob_field,
+       field(vb, X'41', X'FE', X'61', X'FF') as varbinary_field
+from field_binary_subjects order by id;
+drop table field_binary_subjects;
+
+-- A bare SQL marker keeps its text comparison context; an explicit cast does not.
+set @field_subject = X'41';
+set @field_candidate = X'61';
+prepare field_context_stmt from 'select field(?, ?) as bare_field, field(cast(? as binary), ?) as binary_field';
+execute field_context_stmt using @field_subject, @field_candidate, @field_subject, @field_candidate;
+set @field_subject = _binary 'a';
+set @field_candidate = _binary 'A';
+execute field_context_stmt using @field_subject, @field_candidate, @field_subject, @field_candidate;
+set @field_subject = 'a';
+set @field_candidate = 'a';
+execute field_context_stmt using @field_subject, @field_candidate, @field_subject, @field_candidate;
+set @field_subject = null;
+execute field_context_stmt using @field_subject, @field_candidate, @field_subject, @field_candidate;
+set @field_subject = X'41';
+set @field_candidate = X'61';
+execute field_context_stmt using @field_subject, @field_candidate, @field_subject, @field_candidate;
+deallocate prepare field_context_stmt;
+set @field_candidate = null;
+
+-- Marker text context also survives domain-preserving wrappers, but not a fixed binary value.
+set @field_subject = X'41';
+set @field_candidate = X'61';
+prepare field_nested_stmt from 'select field(coalesce(?, ?), ?) as coalesce_field, field(substring(?, 1), ?) as substring_field, field(coalesce(?, cast(''A'' as binary)), ?) as fixed_binary_field';
+execute field_nested_stmt using @field_subject, @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate;
+set @field_subject = null;
+execute field_nested_stmt using @field_subject, @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate;
+set @field_subject = X'41';
+execute field_nested_stmt using @field_subject, @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate;
+-- Comparison context must not truncate a payload beyond the prepared envelope.
+set @field_subject = repeat(_binary 'A', 70000);
+set @field_candidate = @field_subject;
+execute field_nested_stmt using @field_subject, @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate;
+deallocate prepare field_nested_stmt;
+set @field_candidate = null;
+
+-- Numeric control arguments do not own the returned string comparison domain.
+set @field_subject = X'41';
+set @field_candidate = X'61';
+set @field_control = 1;
+prepare field_control_stmt from 'select field(if(?, substring(?, ?), ?), ?) as if_control';
+execute field_control_stmt using @field_control, @field_subject, @field_control, @field_subject, @field_candidate;
+deallocate prepare field_control_stmt;
+
+-- NULLIF keeps the marker domain across its CASE rewrite and cached reuse.
+prepare field_nullif_stmt from 'select field(nullif(?, ''''), ?) as nullif_field';
+execute field_nullif_stmt using @field_subject, @field_candidate;
+set @field_subject = '';
+execute field_nullif_stmt using @field_subject, @field_candidate;
+set @field_subject = null;
+execute field_nullif_stmt using @field_subject, @field_candidate;
+set @field_subject = X'41';
+execute field_nullif_stmt using @field_subject, @field_candidate;
+deallocate prepare field_nullif_stmt;
+
+-- Projection lineage preserves SQL marker context, not explicit binary casts.
+prepare field_derived_stmt from 'select field(x, ?) as derived_field, field(cast(x as binary), ?) as binary_control from (select ? as x limit 1) d';
+execute field_derived_stmt using @field_candidate, @field_candidate, @field_subject;
+deallocate prepare field_derived_stmt;
+prepare field_scalar_stmt from 'select field((select ? from (select 1 as x) d limit 1), ?) as scalar_field';
+execute field_scalar_stmt using @field_subject, @field_candidate;
+deallocate prepare field_scalar_stmt;
+prepare field_max_stmt from 'select field(max(?), ?) as max_field';
+execute field_max_stmt using @field_subject, @field_candidate;
+deallocate prepare field_max_stmt;
+set @field_control = null;
+
+-- Nonempty text must survive its comparison cast; a NULL-only selector keeps byte comparison.
+set @field_subject = 'A';
+set @field_candidate = 'a';
+prepare field_text_values_stmt from 'select field(nullif(?, ''''), ?) as nullif_text, field(greatest(?, ''@''), ?) as greatest_text, field(coalesce(?, ''fallback''), ?) as coalesce_text, field(if(true, ?, ''B''), ?) as if_text';
+execute field_text_values_stmt using @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate;
+set @field_candidate = 'z';
+execute field_text_values_stmt using @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate;
+deallocate prepare field_text_values_stmt;
+set @field_candidate = 'a';
+prepare field_null_values_stmt from 'select field(coalesce(?, null), ?) as coalesce_null, field(case when true then ? else null end, ?) as case_null, field(if(true, ?, null), ?) as if_null';
+execute field_null_values_stmt using @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate;
+set @field_subject = X'41';
+set @field_candidate = X'61';
+execute field_null_values_stmt using @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate;
+deallocate prepare field_null_values_stmt;
+prepare field_window_stmt from 'select field(x, ?) as window_field from (select max(?) over() as x, min(?) over() as y) d';
+execute field_window_stmt using @field_candidate, @field_subject, @field_subject;
+deallocate prepare field_window_stmt;
+
+-- NULLIF retains original operands, not a guessed CASE shape.
+set @field_subject = X'41';
+set @field_candidate = X'61';
+set @field_condition = 0;
+prepare field_wrapped_nullif from 'select field(nullif(coalesce(?,?), ''''), ?) as wrapped_nullif';
+execute field_wrapped_nullif using @field_subject, @field_subject, @field_candidate;
+deallocate prepare field_wrapped_nullif;
+prepare field_binary_nullif from 'select field(nullif(?, _binary ''''), ?) as binary_nullif';
+execute field_binary_nullif using @field_subject, @field_candidate;
+deallocate prepare field_binary_nullif;
+prepare field_case_condition from 'select field(case when ? then null else ? end, ?) as parameter_case';
+execute field_case_condition using @field_condition, @field_subject, @field_candidate;
+deallocate prepare field_case_condition;
+
+-- NULL-selector semantics survive every relational materialization boundary.
+prepare field_null_derived from 'select field(x, ?) as null_derived from (select coalesce(?, null) as x limit 1) d';
+execute field_null_derived using @field_candidate, @field_subject;
+deallocate prepare field_null_derived;
+prepare field_null_scalar from 'select field((select coalesce(?, null) from (select 1 as x) d limit 1), ?) as null_scalar';
+execute field_null_scalar using @field_subject, @field_candidate;
+deallocate prepare field_null_scalar;
+prepare field_null_window from 'select field(x, ?) as null_window from (select max(coalesce(?,null)) over() as x) d';
+execute field_null_window using @field_candidate, @field_subject;
+deallocate prepare field_null_window;
+set @field_condition = null;
+
+-- Explicit binary subjects retain byte equality across prepared executions.
+set @field_subject = _binary 'a';
+prepare field_binary_stmt from 'select field(cast(? as binary), ''A'', ''a'', X''FE'', X''FF'') as prepared_field';
+execute field_binary_stmt using @field_subject;
+set @field_subject = X'FF';
+execute field_binary_stmt using @field_subject;
+set @field_subject = null;
+execute field_binary_stmt using @field_subject;
+set @field_subject = 'a';
+execute field_binary_stmt using @field_subject;
+deallocate prepare field_binary_stmt;
+set @field_subject = null;
+
 select field('Bb', 'Aa', 'Bb', 'Cc', 'Dd', 'Ff');
 select field('Gg', 'Aa', 'Bb', 'Cc', 'Dd', 'Ff');
 select field('aa', 'AA', 'BB','Aa', 'aA');
