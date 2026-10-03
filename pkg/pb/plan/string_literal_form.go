@@ -1569,14 +1569,17 @@ func walkExpressionsInOwner(owner any, visitor func(*Expr) error) error {
 		switch value.Kind() {
 		case reflect.Struct:
 			for field := 0; field < value.NumField(); field++ {
-				if value.Type().Field(field).PkgPath == "" {
-					if err := walk(value.Field(field)); err != nil {
+				child := value.Field(field)
+				// Only exported containers can hold expression roots. Checking
+				// the value avoids copying field metadata for every plan column.
+				if child.CanInterface() && expressionOwnerContainer(child.Kind()) {
+					if err := walk(child); err != nil {
 						return err
 					}
 				}
 			}
 		case reflect.Slice, reflect.Array:
-			if value.Type().Elem().Kind() == reflect.Uint8 {
+			if !expressionOwnerContainer(value.Type().Elem().Kind()) {
 				return nil
 			}
 			for item := 0; item < value.Len(); item++ {
@@ -1585,6 +1588,9 @@ func walkExpressionsInOwner(owner any, visitor func(*Expr) error) error {
 				}
 			}
 		case reflect.Map:
+			if !expressionOwnerContainer(value.Type().Elem().Kind()) {
+				return nil
+			}
 			iterator := value.MapRange()
 			for iterator.Next() {
 				if err := walk(iterator.Value()); err != nil {
@@ -1595,4 +1601,15 @@ func walkExpressionsInOwner(owner any, visitor func(*Expr) error) error {
 		return nil
 	}
 	return walk(reflect.ValueOf(owner))
+}
+
+// Scalar payloads cannot contain an expression root, irrespective of their
+// size. Interfaces and every container kind remain open to new owner shapes.
+func expressionOwnerContainer(kind reflect.Kind) bool {
+	switch kind {
+	case reflect.Interface, reflect.Pointer, reflect.Struct, reflect.Slice, reflect.Array, reflect.Map:
+		return true
+	default:
+		return false
+	}
 }

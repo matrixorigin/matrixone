@@ -287,6 +287,9 @@ func NewService(
 			morpc.WithCodecMaxBodySize(int(cfg.RPC.MaxMessageSize)),
 		),
 		morpc.WithServerLogger(srv.logger),
+		morpc.WithServerMessageReleaseFunc(func(message morpc.Message) {
+			srv.releaseMessage(message.(*pipeline.Message))
+		}),
 		morpc.WithServerGoettyOptions(
 			goetty.WithSessionRWBUfferSize(cfg.ReadBufferSize, cfg.WriteBufferSize),
 			goetty.WithSessionReleaseMsgFunc(func(v any) {

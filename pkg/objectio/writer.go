@@ -294,7 +294,7 @@ func describeObjectHelper(w *objectWriterV1, colmeta []ColumnMeta, idx DataMetaT
 	SetObjectStatsBlkCnt(ss, uint32(len(w.blocks[idx])))
 
 	if len(colmeta) > int(w.sortKeySeqnum) {
-		SetObjectStatsSortKeyZoneMap(ss, colmeta[w.sortKeySeqnum].ZoneMap())
+		SetObjectStatsSortKeyZoneMap(ss, colmeta[w.sortKeySeqnum].rawZoneMap())
 	}
 	SetObjectStatsSize(ss, w.size)
 	SetObjectStatsOriginSize(ss, w.originSize)
@@ -561,7 +561,7 @@ func (w *objectWriterV1) prepareZoneMapArea(blocks []blockData, blockCount uint3
 	buf.Write(zoneMapAreaIndex)
 	for _, block := range blocks {
 		for seqnum := uint16(0); seqnum < block.meta.GetMetaColumnCount(); seqnum++ {
-			buf.Write(block.meta.ColumnMeta(seqnum).ZoneMap())
+			buf.Write(block.meta.ColumnMeta(seqnum).rawZoneMap())
 		}
 	}
 	return w.WriteWithCompress(offset, buf.Bytes())

@@ -94,11 +94,11 @@ Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: group_concat(keys64.id ORDER BY keys64.id ASC SEPARATOR ',')  𝄀
         ->  Table Scan on issue_29506_filters.keys64  𝄀
-              Filter Cond: (cast(keys64.id AS DOUBLE) = cast(cast('9007199254740992' AS DOUBLE) AS DOUBLE))
-              -- HINT: Cast expression may prevent index usage
+              Filter Cond: (keys64.id = 9007199254740992)  𝄀
+              Block Filter Cond: (keys64.id = 9007199254740992)
 execute large_key using @key;
 ➤ group_concat(keys64.id order by id separator ,)[-1,536870911,0]  𝄀
-9007199254740992,9007199254740993
+9007199254740992
 set @key = '9007199254740991';
 explain force execute large_key using @key;
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
@@ -106,9 +106,48 @@ Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: group_concat(keys64.id ORDER BY keys64.id ASC SEPARATOR ',')  𝄀
         ->  Table Scan on issue_29506_filters.keys64  𝄀
-              Filter Cond: (keys64.id = 9007199254740991)
+              Filter Cond: (keys64.id = 9007199254740991)  𝄀
+              Block Filter Cond: (keys64.id = 9007199254740991)
 execute large_key using @key;
 ➤ group_concat(keys64.id order by id separator ,)[-1,536870911,0]  𝄀
 9007199254740991
+set @key = '9007199254740993';
+execute large_key using @key;
+➤ group_concat(keys64.id order by id separator ,)[-1,536870911,0]  𝄀
+9007199254740993
+set @key = '9007199254740992.5';
+execute large_key using @key;
+➤ group_concat(keys64.id order by id separator ,)[-1,536870911,0]  𝄀
+9007199254740992,9007199254740993
 deallocate prepare large_key;
+prepare derived_key from 'select group_concat(id order by id) from keys64 where id=abs(cast(? as decimal(38,0)))';
+set @key = '-9007199254740993';
+explain force execute derived_key using @key;
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: group_concat(keys64.id ORDER BY keys64.id ASC SEPARATOR ',')  𝄀
+        ->  Table Scan on issue_29506_filters.keys64  𝄀
+              Filter Cond: (keys64.id = cast(abs(cast('-9007199254740993' AS DECIMAL128(38, 0))) AS BIGINT))  𝄀
+              Block Filter Cond: (keys64.id = cast(abs(cast('-9007199254740993' AS DECIMAL128(38, 0))) AS BIGINT))
+execute derived_key using @key;
+➤ group_concat(keys64.id order by id separator ,)[-1,536870911,0]  𝄀
+9007199254740993
+set @key = '9007199254740992.5';
+execute derived_key using @key;
+➤ group_concat(keys64.id order by id separator ,)[-1,536870911,0]  𝄀
+9007199254740993
+set @key = null;
+execute derived_key using @key;
+➤ group_concat(keys64.id order by id separator ,)[-1,536870911,0]  𝄀
+NULL
+set @key = '9223372036854775808';
+execute derived_key using @key;
+➤ group_concat(keys64.id order by id separator ,)[-1,536870911,0]  𝄀
+NULL
+set @key = '9007199254740993';
+execute derived_key using @key;
+➤ group_concat(keys64.id order by id separator ,)[-1,536870911,0]  𝄀
+9007199254740993
+deallocate prepare derived_key;
 drop database issue_29506_filters;

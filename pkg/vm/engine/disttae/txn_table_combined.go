@@ -330,13 +330,51 @@ func (t *combinedTxnTable) Stats(
 	}
 
 	value := splan.NewStatsInfo()
+	complete := len(tables) > 0
+	sizeComplete := true
 	for _, rel := range tables {
 		v, err := rel.Stats(ctx, sync)
 		if err != nil {
 			return nil, err
 		}
 
+		if !splan.StatsInfoUsable(v) {
+			value.TableCnt = float64(^uint64(0))
+			complete = false
+			sizeComplete = false
+			continue
+		}
+		complete = complete && splan.StatsInfoUsableForCache(v)
+		// A positive child must cover the same columns as previous positive
+		// children. Merge's union and unchecked additions cannot prove byte coverage.
+		if v.TableCnt > 0 && sizeComplete {
+			if value.TableCnt > 0 {
+				sizeComplete = len(value.SizeMap) == len(v.SizeMap)
+				for name, size := range v.SizeMap {
+					previous, exists := value.SizeMap[name]
+					if !exists || ^uint64(0)-previous < size {
+						sizeComplete = false
+						break
+					}
+				}
+			} else {
+				sizeComplete = len(v.SizeMap) > 0
+			}
+		}
+		sizes := value.SizeMap
 		value.Merge(v)
+		if v.TableCnt == 0 {
+			// An observed empty child contributes metadata, but no column bytes.
+			value.SizeMap = sizes
+		}
+	}
+	if !sizeComplete {
+		// Invalidate after all merges so a later child cannot restore partial totals.
+		value.SizeMap = nil
+	}
+	value.TableCnt = min(value.TableCnt, float64(^uint64(0)))
+	if complete {
+		value.TableName = tables[0].GetTableName()
 	}
 	return value, nil
 }

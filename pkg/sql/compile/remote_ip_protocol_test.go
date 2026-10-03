@@ -226,7 +226,7 @@ func TestIPFunctionDestinationProtocolValidation(t *testing.T) {
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 	client.version = defines.MORPCVersion70
-	require.NoError(t, c.constrainIPFunctionWorkers(qry))
+	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
 	require.ErrorContains(t, err, "remote destination")
@@ -234,13 +234,13 @@ func TestIPFunctionDestinationProtocolValidation(t *testing.T) {
 	client.version = defines.MORPCVersion71
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-	require.NoError(t, c.constrainIPFunctionWorkers(qry))
+	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 
 	client.version = defines.MORPCVersion72
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-	require.NoError(t, c.constrainIPFunctionWorkers(qry))
+	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 	require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
 	data, err := encodeRemoteScope(scope, c.proc)
 	require.NoError(t, err)
@@ -255,11 +255,13 @@ func TestExpressionResultContractDestinationProtocolValidation(t *testing.T) {
 	remotePipeline := remoteIPProtocolPipelineWithType(function.TO_BASE64, 3, 61)
 	remotePipeline.Node = &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"}
 	client.version = defines.MORPCVersion85
-	err := validateIPFunctionDestination(c.proc, remotePipeline)
+	features, err := planpb.RequiredRemoteExpressionFeatures(remotePipeline)
+	require.NoError(t, err)
+	err = validateRemoteExpressionDestination(c.proc, remotePipeline, features)
 	require.ErrorContains(t, err, "MORPC version 86")
 
 	client.version = defines.MORPCVersion86
-	require.NoError(t, validateIPFunctionDestination(c.proc, remotePipeline))
+	require.NoError(t, validateRemoteExpressionDestination(c.proc, remotePipeline, features))
 
 	t.Run("mixed temporal conditional", func(t *testing.T) {
 		expr, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "if", []*planpb.Expr{
@@ -330,7 +332,7 @@ func TestVersion101ExpressionContractsProtocolBoundaries(t *testing.T) {
 				client.version = version
 				c.execType = plan2.ExecTypeAP_MULTICN
 				c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-				require.NoError(t, c.constrainIPFunctionWorkers(qry))
+				require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 			}
 			place(defines.MORPCVersion100)
 			require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
