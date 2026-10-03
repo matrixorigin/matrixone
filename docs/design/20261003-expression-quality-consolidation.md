@@ -136,3 +136,55 @@ Controlled Go 1.26.4/Linux amd64, GOMAXPROCS=2/GOMEMLIMIT=2GiB: frozen pre-compr
 | Peak process RSS | 478.9–491.4 MiB; median 487.2 MiB | 200.4–215.7 MiB; median 208.5 MiB | −57.2% |
 
 Wall time uses a monotonic process interval; CPU and peak RSS use the terminated child's `wait4` resource usage. This measures the owning package on the shared host, not whole-CI or production-query performance. The previous baseline-to-pre-compression measurements established no package gain; these reductions come from eliminating repeated correctness work and releasing fixture resources. Source-derived UT input/result/bool backing-array population falls from 121.875 MiB to 624 bytes, excluding vectors, strings and allocator overhead. Lock-cleanup waits remain a separate lifecycle investigation.
+
+
+## Lock-fixture checkpoint review (2026-10-03)
+
+Refs #29249; this checkpoint does not close the continuous quality audit.
+Actual read-only reviewer: `gpt-6.1-sol`, reasoning effort `xhigh`.
+Decision: **APPROVE for the explicitly requested non-final checkpoint commit/push**;
+**overall PR readiness remains blocked by the failed full-function race gate**.
+
+Reviewed source delta against `0fa3777831f72beb466cb03481490fa0b225947a`:
+`func_unary_test.go`, +9/-3, SHA-256
+`b5749a179a9f450536817ce78bee9588df60cfad645e8be9ff7a80e0902915a6`.
+The shared fixture releases its two atomic simulated unlock blockers after the
+callback, then invokes the existing reset owner. Scenario assertions, deadlines,
+production code and dependencies are unchanged. Reset still invalidates the
+generation, joins the retained worker, and replaces detached queues. Cleanup
+also executes on same-goroutine `FailNow` and panic. Current consumers do not
+replace the captured services; caller-owned channels are untouched.
+
+| Evidence | Terminal result |
+|---|---|
+| Related lock tests, normal | 74/74 PASS; package PASS |
+| Related lock cases within full race run | 74/74 PASS; enclosing package FAIL |
+| Two directly benefited tests, individually under race | 100 repetitions each PASS |
+| Full function normal measurements | Six runs PASS; three alternating serial pairs |
+| Full function race | FAIL: admitted regexp control returned `regexp match timed out` |
+| Verified clean baseline, full function race | PASS in 17.063s |
+
+Compiled binaries were measured serially with the same pinned dependency,
+`GOMAXPROCS=2` and `GOMEMLIMIT=2GiB`; build time was excluded. On the shared host,
+median wall time was **11.750s -> 9.869s (-16.0%)**, CPU **2.081s -> 2.451s
+(+17.8%)**, and peak RSS **209.7MiB -> 199.9MiB (-4.7%)**. This establishes no
+CPU reduction or whole-CI improvement.
+
+Independent deterministic probes expose idle and concurrent deadline defects in
+regexp2; canonical complete clock controls pass the corresponding failing
+counterexamples. They do **not** establish causality for the complete MatrixOne
+race failure or prove absence of a fixture-induced regression. The dependency
+fix, compatible artifact provenance, and final race closure remain follow-up work.
+The proposed v1.11.5 upgrade was withdrawn after the concurrent counterexample.
+
+Existing broader fixture limits remain: an assertion holding a mutex can prevent
+reset, and detached receivers/backlog retries lack complete generation teardown.
+This change releases simulated blockers; it does not claim universal teardown.
+Unchanged closures reuse the preceding 27-file reviews and validation evidence.
+
+Configured incremental golangci-lint: **PASS, 0 issues**, terminal exit 0. The
+first attempt was interrupted while trimming the shared lint cache; a task-local
+cache completed the same checks in 68s. MO-specific lint has no incremental
+finding: its two unsafe diagnostics exactly match prior accepted evidence in
+unchanged files. Formatting and patch checks pass. No new BVT is required for
+this fixture-only change; existing production/public-path evidence is unchanged.
