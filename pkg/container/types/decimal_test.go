@@ -1344,23 +1344,30 @@ func TestDecimal64MulCappedScale(t *testing.T) {
 }
 
 func TestDecimalScientificExponentBoundaries(t *testing.T) {
-	for _, spelling := range []string{"1E-2", "1e-2", "1E+2", "0E2147483647", "1E-2147483647"} {
-		d64, e64 := ParseDecimal64(spelling, 18, 2)
-		d128, e128 := ParseDecimal128(spelling, 38, 2)
-		d256, e256 := ParseDecimal256(spelling, 65, 2)
-		require.NoError(t, e64, spelling)
-		require.NoError(t, e128, spelling)
-		require.NoError(t, e256, spelling)
-		require.Equal(t, d64.Format(2), d128.Format(2), spelling)
-		require.Equal(t, d64.Format(2), d256.Format(2), spelling)
+	for _, tc := range []struct {
+		spelling    string
+		coefficient uint64
+	}{
+		{"1E-2", 1}, {"1e-2", 1}, {"1E+2", 10000},
+		{"0E2147483647", 0}, {"1E-2147483647", 0},
+	} {
+		d64, e64 := ParseDecimal64(tc.spelling, 18, 2)
+		d128, e128 := ParseDecimal128(tc.spelling, 38, 2)
+		d256, e256 := ParseDecimal256(tc.spelling, 65, 2)
+		require.NoError(t, e64, tc.spelling)
+		require.NoError(t, e128, tc.spelling)
+		require.NoError(t, e256, tc.spelling)
+		require.Equal(t, Decimal64(tc.coefficient), d64, tc.spelling)
+		require.Equal(t, Decimal128{B0_63: tc.coefficient}, d128, tc.spelling)
+		require.Equal(t, Decimal256{B0_63: tc.coefficient}, d256, tc.spelling)
 	}
 	for _, spelling := range []string{"1E4294967296", "1E-4294967296", "1E2147483647"} {
 		_, e64 := ParseDecimal64(spelling, 18, 2)
 		_, e128 := ParseDecimal128(spelling, 38, 2)
 		_, e256 := ParseDecimal256(spelling, 65, 2)
-		require.Error(t, e64)
-		require.Error(t, e128)
-		require.Error(t, e256)
+		require.True(t, moerr.IsMoErrCode(e64, moerr.ErrInvalidInput), spelling)
+		require.True(t, moerr.IsMoErrCode(e128, moerr.ErrInvalidInput), spelling)
+		require.True(t, moerr.IsMoErrCode(e256, moerr.ErrInvalidInput), spelling)
 	}
 }
 
