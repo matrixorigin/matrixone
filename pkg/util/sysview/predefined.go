@@ -697,7 +697,7 @@ var (
 		"`tbl`.`reldatabase` AS `INDEX_SCHEMA`,"+
 		"`idx`.`name` AS `INDEX_NAME`,"+
 		"`idx`.`ordinal_position` AS `SEQ_IN_INDEX`,"+
-		"`idx`.`column_name` AS `COLUMN_NAME`,"+
+		"if(`tcl`.`att_is_hidden` = 1 and `tcl`.`attr_has_generated` = 1, NULL, `idx`.`column_name`) AS `COLUMN_NAME`,"+
 		"'A' AS `COLLATION`,"+
 		"0 AS `CARDINALITY`,"+
 		"NULL AS `SUB_PART`,"+
@@ -707,7 +707,7 @@ var (
 		"if(((`idx`.`type` = 'PRIMARY') or (`idx`.`type` = 'UNIQUE')),'','') AS `COMMENT`,"+
 		"`idx`.`comment` AS `INDEX_COMMENT`,"+
 		"if(`idx`.`is_visible`,'YES','NO') AS `IS_VISIBLE`,"+
-		"NULL AS `EXPRESSION` "+
+		"if(`tcl`.`att_is_hidden` = 1 and `tcl`.`attr_has_generated` = 1, mo_show_visible_bin(`tcl`.`attr_generated`, 5), NULL) AS `EXPRESSION` "+
 		"from (`mo_catalog`.`mo_indexes` `idx` "+
 		"join `__mo_visible_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)) "+
 		"join `mo_catalog`.`mo_columns` `tcl` on (`idx`.`table_id` = `tcl`.`att_relname_id` and `idx`.`column_name` = `tcl`.`attname` "+
@@ -715,7 +715,7 @@ var (
 		"where `tbl`.`account_id` = current_account_id() and not startswith(`tbl`.`relname`, '%s') and %s "+
 		"group by `tbl`.`reldatabase`, `tbl`.`relname`, `idx`.`type`, `idx`.`name`, "+
 		"`idx`.`ordinal_position`, `idx`.`column_name`, `tcl`.`attnotnull`, `idx`.`algo`, "+
-		"`idx`.`comment`, `idx`.`is_visible`",
+		"`idx`.`comment`, `idx`.`is_visible`, `tcl`.`att_is_hidden`, `tcl`.`attr_has_generated`, `tcl`.`attr_generated`",
 		catalog.IndexTableNamePrefix, catalog.NonTemporaryTableSQLPredicate("tbl"))
 
 	InformationSchemaReferentialConstraintsDDL = "CREATE VIEW information_schema.REFERENTIAL_CONSTRAINTS AS " +

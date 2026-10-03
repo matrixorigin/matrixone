@@ -359,6 +359,30 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			}
 		case *tree.AlterOptionDrop:
 			switch option.Typ {
+			case tree.AlterTableDropIndex, tree.AlterTableDropKey:
+				found := false
+				for i, index := range copyTableDef.Indexes {
+					if !IndexNamesEqual(index.IndexName, string(option.Name)) {
+						continue
+					}
+					cols := functionalIndexColumns(copyTableDef, index)
+					if len(cols) == 0 {
+						return nil, moerr.NewNotSupported(ctx, "combined COPY DROP INDEX requires a functional index")
+					}
+					copyTableDef.Indexes = append(copyTableDef.Indexes[:i], copyTableDef.Indexes[i+1:]...)
+					for _, col := range cols {
+						if err = handleDropColumnPosition(ctx, copyTableDef, col); err != nil {
+							return nil, err
+						}
+						delete(alterTableCtx.alterColMap, col.Name)
+						delete(alterTableCtx.changColDefMap, col.ColId)
+					}
+					found = true
+					break
+				}
+				if !found {
+					return nil, moerr.NewErrCantDropFieldOrKey(ctx, string(option.Name))
+				}
 			case tree.AlterTableDropColumn:
 				pkAffected, err = DropColumn(cctx, alterTablePlan, string(option.Name), alterTableCtx)
 				affectedCols = append(affectedCols, string(option.Name))
@@ -767,6 +791,14 @@ func buildAlterCopyAddIndex(
 		}
 
 	case *tree.Index:
+		lowered, err := lowerFunctionalIndex(ctx, copyTableDef, index)
+		if err != nil {
+			return nil, "", err
+		}
+		index = lowered
+		for _, col := range copyTableDef.Cols {
+			colMap[col.Name] = col
+		}
 		if err := checkIndexKeypartSupportability(ctx.GetContext(), index.KeyParts); err != nil {
 			return nil, "", err
 		}
@@ -1432,6 +1464,31 @@ func ResolveAlterTableAlgorithm(
 	tableDef *TableDef,
 ) (algorithm plan.AlterTable_AlgorithmType, err error) {
 	algorithm = plan.AlterTable_COPY
+	functionalCopy := false
+	for _, spec := range validAlterSpecs {
+		switch spec.(type) {
+		case *tree.AlterTableModifyColumnClause, *tree.AlterTableChangeColumnClause, *tree.AlterTableRenameColumnClause:
+			// Even an in-place source widening changes the functional key's
+			// inferred type. Rebind and rebuild it together with the base rows.
+			for _, index := range tableDef.Indexes {
+				if functionalIndexColumn(tableDef, index) != nil {
+					functionalCopy = true
+				}
+			}
+		}
+		if add, ok := spec.(*tree.AlterOptionAdd); ok {
+			if index, ok := add.Def.(*tree.Index); ok && hasFunctionalKey(index.KeyParts) {
+				functionalCopy = true
+			}
+		}
+		if drop, ok := spec.(*tree.AlterOptionDrop); ok && (drop.Typ == tree.AlterTableDropIndex || drop.Typ == tree.AlterTableDropKey) {
+			for _, index := range tableDef.Indexes {
+				if IndexNamesEqual(index.IndexName, string(drop.Name)) && functionalIndexColumn(tableDef, index) != nil {
+					functionalCopy = true
+				}
+			}
+		}
+	}
 
 	// First pass: resolve algorithm based on operations, skipping ALGORITHM/LOCK hints.
 Loop:
@@ -1523,6 +1580,9 @@ Loop:
 		}
 	}
 
+	if functionalCopy {
+		algorithm = plan.AlterTable_COPY
+	}
 	requiredAlgorithm := algorithm // stable baseline for hint validation; algorithm is mutated below
 
 	// Second pass: apply ALGORITHM hint (takes precedence over operation-based resolution).

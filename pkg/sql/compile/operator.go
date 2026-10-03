@@ -879,7 +879,9 @@ func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, 
 	//var attrs []string
 	attrs := make([]string, 0)
 	for _, col := range preCtx.TableDef.Cols {
-		if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
+		// Hidden generated values (functional index backing columns) have
+		// already been materialized in the input, unlike synthesized keys.
+		if col.Hidden && col.GeneratedCol == nil && col.Name != catalog.FakePrimaryKeyColName {
 			continue
 		}
 		attrs = append(attrs, col.GetOriginCaseName())

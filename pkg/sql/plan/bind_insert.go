@@ -2150,13 +2150,13 @@ func (builder *QueryBuilder) insertIgnoreAutoIncrementReorderable(
 	if !hasOtherUnique || builder.canSkipDedup(tableDef) {
 		return 0, false
 	}
-	visibleWidth := 0
+	materializedWidth := 0
 	for _, col := range tableDef.Cols {
-		if col != nil && (!col.Hidden || col.Name == catalog.FakePrimaryKeyColName) {
-			visibleWidth++
+		if col != nil && (!col.Hidden || col.GeneratedCol != nil || col.Name == catalog.FakePrimaryKeyColName) {
+			materializedWidth++
 		}
 	}
-	return int32(visibleWidth), true
+	return int32(materializedWidth), true
 }
 
 func hasAutoIncrementDependentConstraint(tableDef *plan.TableDef, autoColPos int32) bool {
@@ -4463,6 +4463,9 @@ func (builder *QueryBuilder) getInsertColsFromStmt(astCols tree.IdentifierList, 
 			if !ok {
 				return nil, moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
 			}
+			if isFunctionalColumn(tableDef.Cols[idx]) {
+				return nil, moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
+			}
 			if tableDef.Cols[idx].GeneratedCol != nil {
 				return nil, moerr.NewInvalidInputf(builder.GetContext(), "the value specified for generated column '%s' in table '%s' is not allowed", colName, tableDef.Name)
 			}
@@ -4544,6 +4547,9 @@ func (builder *QueryBuilder) stripGeneratedDefaultCols(astCols tree.IdentifierLi
 	for i, col := range astCols {
 		colName := strings.ToLower(string(col))
 		if idx, ok := tableDef.Name2ColIndex[colName]; ok {
+			if isFunctionalColumn(tableDef.Cols[idx]) {
+				return nil, nil, moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
+			}
 			if tableDef.Cols[idx].GeneratedCol != nil {
 				genPositions[i] = true
 				generatedColumnCount++

@@ -67,6 +67,29 @@ func TestCloneTableDefForPlan(t *testing.T) {
 	require.Same(t, pkey, withoutCols.Pkey)
 }
 
+func TestDeepCopyTableDefOwnsName2ColIndex(t *testing.T) {
+	source := &planpb.TableDef{
+		Cols:          []*planpb.ColDef{{Name: "a"}},
+		Name2ColIndex: map[string]int32{"a": 0},
+	}
+
+	for _, withCols := range []bool{true, false} {
+		cloned := DeepCopyTableDef(source, withCols)
+		require.Equal(t, source.Name2ColIndex, cloned.Name2ColIndex)
+		cloned.Name2ColIndex["a"] = 1
+		cloned.Name2ColIndex["new"] = 2
+		require.Equal(t, map[string]int32{"a": 0}, source.Name2ColIndex)
+		if withCols {
+			require.Len(t, cloned.Cols, 1)
+		} else {
+			require.Nil(t, cloned.Cols)
+		}
+	}
+
+	withoutMap := DeepCopyTableDef(&planpb.TableDef{}, true)
+	require.Nil(t, withoutMap.Name2ColIndex)
+}
+
 func TestDeepCopyColDefPreservesOriginTable(t *testing.T) {
 	source := &planpb.ColDef{
 		Name:          "display_name",
