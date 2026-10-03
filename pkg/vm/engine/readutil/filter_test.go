@@ -38,12 +38,106 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func TestRawDecimal256FiltersKeepBlocksWithoutZoneMaps(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	value := types.Decimal256{B192_255: 1}
+	typ := plan.Type{Id: int32(types.T_decimal256), Width: 65}
+	bound := &plan.Expr{Typ: typ, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{
+		IsConst: true, Data: types.EncodeDecimal256(&value),
+	}}}
+	flag := &plan.Expr{Typ: plan.Type{Id: int32(types.T_uint8)}, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{
+		IsConst: true, Data: []byte{0},
+	}}}
+	for _, primary := range []bool{false, true} {
+		t.Run(fmt.Sprintf("primary=%t", primary), func(t *testing.T) {
+			table := &plan.TableDef{
+				Name2ColIndex: map[string]int32{"a": 0, "b": 1},
+				Cols: []*plan.ColDef{
+					{Name: "a", Primary: primary, Typ: typ},
+					{Name: "b", Seqnum: 1, Typ: plan.Type{Id: int32(types.T_int64)}},
+				},
+			}
+			meta := objectio.BuildMetaData(1, 2)
+			block := meta.GetBlockMeta(0)
+			block.BlockHeader().SetRows(2)
+			zm := index.NewZM(types.T_decimal256, 0)
+			index.UpdateZM(zm, types.EncodeDecimal256(&value))
+			require.False(t, zm.IsInited(), "raw DECIMAL256 has no persisted min/max")
+			block.MustGetColumn(0).SetZoneMap(zm)
+			bZM := index.NewZM(types.T_int64, 0)
+			index.UpdateZMAny(bZM, int64(1))
+			block.MustGetColumn(1).SetZoneMap(bZM)
+			column := MakeColExprForTest(0, types.T_decimal256, "a")
+			column.Typ = typ
+			bFilter := MakeFunctionExprForTest("=", []*plan.Expr{
+				MakeColExprForTest(1, types.T_int64, "b"), plan2.MakePlan2Int64ConstExprWithType(2),
+			})
+			foldExpressionForTest(t, proc, bFilter)
+			for _, op := range []string{"=", "<", "<=", ">", ">=", "between", "in_range", "in"} {
+				t.Run(op, func(t *testing.T) {
+					args := []*plan.Expr{column, bound}
+					if op == "between" || op == "in_range" {
+						args = append(args, bound)
+					}
+					if op == "in_range" {
+						args = append(args, flag)
+					}
+					var expr *plan.Expr
+					if op == "in" {
+						expr = MakeInExprForTest(column, []types.Decimal256{value}, types.T_decimal256, proc.Mp())
+					} else {
+						expr = MakeFunctionExprForTest(op, args)
+					}
+					_, _, _, filter, seek, canCompile, _ := CompileFilterExpr(expr, table, nil)
+					require.True(t, canCompile)
+					require.NotNil(t, filter)
+					stop, selected, err := filter(0, block, nil)
+					require.NoError(t, err)
+					require.False(t, stop)
+					require.True(t, selected, "absent statistics cannot prove that no row matches")
+					if seek != nil {
+						require.Zero(t, seek(meta), "absent statistics cannot skip the first block")
+					}
+					// The unknown decimal branch must not drop an OR match, or
+					// prevent a supported integer branch from pruning an AND.
+					for _, logic := range []string{"and", "or"} {
+						combined := MakeFunctionExprForTest(logic, []*plan.Expr{expr, bFilter})
+						_, _, _, combinedFilter, _, compiled, _ := CompileFilterExpr(combined, table, nil)
+						require.True(t, compiled)
+						_, selected, err := combinedFilter(0, block, nil)
+						require.NoError(t, err)
+						require.Equal(t, logic == "or", selected)
+					}
+				})
+			}
+			for _, nullCount := range []uint32{0, 2} {
+				block.MustGetColumn(0).SetNullCnt(nullCount)
+				for _, op := range []string{"isnull", "isnotnull"} {
+					expr := MakeFunctionExprForTest(op, []*plan.Expr{column})
+					_, _, _, filter, _, canCompile, _ := CompileFilterExpr(expr, table, nil)
+					if !canCompile {
+						// NULL predicates may remain on the exact row path;
+						// an uncompiled predicate must not expose a pruning op.
+						require.Nil(t, filter)
+						continue
+					}
+					_, selected, err := filter(0, block, nil)
+					require.NoError(t, err)
+					require.Equal(t, (op == "isnull") == (nullCount == 2), selected)
+				}
+			}
+		})
+	}
+}
 
 func TestCompileTemporalFilterExprUsesSessionTimezone(t *testing.T) {
 	zone := time.FixedZone("UTC+08", 8*3600)
@@ -3951,6 +4045,144 @@ func TestCompileFilterExpr_PrefixInRangeAllFlags(t *testing.T) {
 	}
 }
 
+func TestCompositeLeadingRangeExcludesObjectsBeforeMetadataLoad(t *testing.T) {
+	makeObject := func(id byte) objectio.ObjectStats {
+		objID := types.Objectid{id}
+		stats := objectio.NewObjectStatsWithObjectID(&objID, false, true, true)
+		require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 2))
+		require.NoError(t, objectio.SetObjectStatsRowCnt(stats, objectio.BlockMaxRows+1))
+		return *stats
+	}
+	encode := func(first, second int64) []byte {
+		packer := types.NewPacker()
+		defer packer.Close()
+		packer.EncodeInt64(first)
+		packer.EncodeInt64(second)
+		return append([]byte(nil), packer.GetBuf()...)
+	}
+	bound := func(value int64) *plan.Expr {
+		packer := types.NewPacker()
+		defer packer.Close()
+		packer.EncodeInt64(value)
+		return plan2.MakePlan2StringConstExprWithType(string(packer.GetBuf()), true)
+	}
+	table := &plan.TableDef{
+		Name2ColIndex: map[string]int32{"a": 0, "__mo_cpkey": 1},
+		Pkey:          &plan.PrimaryKeyDef{PkeyColName: "__mo_cpkey", Names: []string{"a", "b"}},
+		Cols: []*plan.ColDef{
+			{Name: "a", Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "__mo_cpkey", Seqnum: 1, Primary: true, Typ: plan.Type{Id: int32(types.T_varchar)}},
+		},
+	}
+	expr := MakeFunctionExprForTest("prefix_in_range", []*plan.Expr{
+		MakeColExprForTest(1, types.T_varchar, "__mo_cpkey"),
+		bound(10), bound(20), plan2.MakePlan2Uint8ConstExprWithType(2),
+	})
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	var exes []colexec.ExpressionExecutor
+	defer func() {
+		for _, exe := range exes {
+			exe.Free()
+		}
+	}()
+	_, err := plan2.ReplaceFoldExpr(proc, expr, &exes)
+	require.NoError(t, err)
+	require.NoError(t, plan2.EvalFoldExpr(proc, expr, &exes))
+	fast, load, _, _, _, canCompile, _ := CompileFilterExpr(expr, table, nil)
+	require.True(t, canCompile)
+	require.NotNil(t, fast)
+	require.NotNil(t, load)
+	var objects []objectio.ObjectStats
+	for i, tc := range []struct {
+		name     string
+		first    int64
+		expected bool
+	}{
+		{"below", 9, false}, {"lower", 10, true}, {"inside", 15, true},
+		{"upper-open", 20, false}, {"above", 21, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stats := makeObject(byte(i + 1))
+			zm := index.NewZM(types.T_varchar, 0)
+			index.UpdateZM(zm, encode(tc.first, 1))
+			index.UpdateZM(zm, encode(tc.first, 2))
+			require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(&stats, zm))
+			selected, err := fast(&stats)
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, selected)
+			objects = append(objects, stats)
+		})
+	}
+	nullFirst := makeObject(6)
+	packer := types.NewPacker()
+	packer.EncodeNull()
+	packer.EncodeInt64(1)
+	nullZM := index.NewZM(types.T_varchar, 0)
+	index.UpdateZM(nullZM, packer.GetBuf())
+	packer.Close()
+	require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(&nullFirst, nullZM))
+	objects = append(objects, nullFirst)
+	loads := 0
+	countLoad := func(_ context.Context, _ *objectio.ObjectStats, meta objectio.ObjectMeta, bf objectio.BloomFilter) (objectio.ObjectMeta, objectio.BloomFilter, error) {
+		loads++
+		return meta, bf, nil
+	}
+	var blocks objectio.BlockInfoSlice
+	_, loadHit, _, _, _, _, fastTotal, fastHit, err := FilterObjects(
+		context.Background(), engine.RangesParam{}, fast, countLoad, nil, nil, nil,
+		nil, objects, nil, &blocks, false, nil, nil,
+	)
+	require.NoError(t, err)
+	require.Equal(t, len(objects), fastTotal)
+	require.Equal(t, 4, fastHit)
+	require.Equal(t, 2, loadHit)
+	require.Equal(t, loadHit, loads)
+	for _, tc := range []struct {
+		name     string
+		lower    *plan.Expr
+		upper    *plan.Expr
+		flag     uint8
+		selected []bool
+	}{
+		{"less", nil, bound(10), 2, []bool{true, false, false, false, false, true}},
+		{"less-or-equal", nil, bound(10), 0, []bool{true, true, false, false, false, true}},
+		{"greater", bound(20), nil, 1, []bool{false, false, false, false, true, false}},
+		{"greater-or-equal", bound(20), nil, 0, []bool{false, false, false, true, true, false}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			empty := plan2.MakePlan2StringConstExprWithType("", true)
+			empty.Typ.Id = int32(types.T_varchar)
+			if tc.lower == nil {
+				tc.lower = empty
+			}
+			if tc.upper == nil {
+				tc.upper = empty
+			}
+			expr := MakeFunctionExprForTest("prefix_in_range", []*plan.Expr{
+				MakeColExprForTest(1, types.T_varchar, "__mo_cpkey"),
+				tc.lower, tc.upper, plan2.MakePlan2Uint8ConstExprWithType(tc.flag),
+			})
+			var folded []colexec.ExpressionExecutor
+			defer func() {
+				for _, exe := range folded {
+					exe.Free()
+				}
+			}()
+			_, err := plan2.ReplaceFoldExpr(proc, expr, &folded)
+			require.NoError(t, err)
+			require.NoError(t, plan2.EvalFoldExpr(proc, expr, &folded))
+			oneSidedFast, _, _, _, _, compiled, _ := CompileFilterExpr(expr, table, nil)
+			require.True(t, compiled)
+			for i := range objects {
+				selected, err := oneSidedFast(&objects[i])
+				require.NoError(t, err)
+				require.Equal(t, tc.selected[i], selected)
+			}
+		})
+	}
+}
+
 func TestCompileFilterExprsPreservesSupportedConjuncts(t *testing.T) {
 	tableDef := &plan.TableDef{
 		Name:          "test_tbl",
@@ -4219,5 +4451,89 @@ func TestCompileFilterExpr_PrefixSortedSeekOps(t *testing.T) {
 			require.NotNil(t, blockFilterOp)
 			require.NotNil(t, seekOp, "seekOp should be set for sorted %s", name)
 		})
+	}
+}
+
+func TestDecimal256PrefixRangeNeverDropsQualifyingObjects(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	values := []types.Decimal256{}
+	for _, text := range []string{"-" + strings.Repeat("9", 65), "-18446744073709551616", "-1", "0", "1", "18446744073709551616", strings.Repeat("9", 65)} {
+		v, err := types.ParseDecimal256(text, 65, 0)
+		require.NoError(t, err)
+		values = append(values, v)
+	}
+	table := &plan.TableDef{
+		Name2ColIndex: map[string]int32{"a": 0, "key.part": 1},
+		Pkey:          &plan.PrimaryKeyDef{PkeyColName: "key.part", Names: []string{"a", "b"}},
+		Cols: []*plan.ColDef{
+			{Name: "a", Seqnum: 0, Typ: plan.Type{Id: int32(types.T_decimal256)}},
+			{Name: "key.part", Seqnum: 1, Primary: true, Typ: plan.Type{Id: int32(types.T_varchar)}},
+		},
+	}
+	packer := types.NewPacker()
+	defer packer.Close()
+	encode := func(v types.Decimal256, compound bool) []byte {
+		packer.Reset()
+		packer.EncodeDecimal256(v)
+		if compound {
+			packer.EncodeInt64(1)
+		}
+		return append([]byte(nil), packer.GetBuf()...)
+	}
+	objects := make([]objectio.ObjectStats, len(values))
+	for i, v := range values {
+		id := types.Objectid{byte(i + 1)}
+		objects[i] = *objectio.NewObjectStatsWithObjectID(&id, false, true, true)
+		zm := index.NewZM(types.T_varchar, 0)
+		index.UpdateZM(zm, encode(v, true))
+		require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(&objects[i], zm))
+	}
+	for _, bound := range values {
+		for _, op := range []string{"<", "<=", ">", ">="} {
+			func() {
+				lower, upper := "", ""
+				flag := uint8(0)
+				if op[0] == '<' {
+					upper = string(encode(bound, false))
+					if op == "<" {
+						flag = 2
+					}
+				} else {
+					lower = string(encode(bound, false))
+					if op == ">" {
+						flag = 1
+					}
+				}
+				col := MakeColExprForTest(2, types.T_varchar, "x.y.key.part")
+				col.GetCol().TblName = "x.y"
+				lb, ub := plan2.MakePlan2StringConstExprWithType(lower, true), plan2.MakePlan2StringConstExprWithType(upper, true)
+				lb.Typ.Id, ub.Typ.Id = int32(types.T_varchar), int32(types.T_varchar)
+				expr := MakeFunctionExprForTest("prefix_in_range", []*plan.Expr{
+					col, lb, ub, plan2.MakePlan2Uint8ConstExprWithType(flag),
+				})
+				var exes []colexec.ExpressionExecutor
+				defer func() {
+					for _, exe := range exes {
+						exe.Free()
+					}
+				}()
+				_, err := plan2.ReplaceFoldExpr(proc, expr, &exes)
+				require.NoError(t, err)
+				require.NoError(t, plan2.EvalFoldExpr(proc, expr, &exes))
+				fast, _, _, _, _, compiled, _ := CompileFilterExpr(expr, table, nil)
+				require.True(t, compiled)
+				require.NotNil(t, fast)
+				for i, v := range values {
+					selected, err := fast(&objects[i])
+					require.NoError(t, err)
+					cmp := v.Compare(bound)
+					qualifies := op == "<" && cmp < 0 || op == "<=" && cmp <= 0 || op == ">" && cmp > 0 || op == ">=" && cmp >= 0
+					if qualifies {
+						require.True(t, selected, "%s %s %s; long tuple zonemaps must be conservative", v.Format(0), op, bound.Format(0))
+					}
+				}
+			}()
+		}
 	}
 }

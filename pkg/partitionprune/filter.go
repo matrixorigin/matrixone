@@ -17,6 +17,7 @@ package partitionprune
 import (
 	"context"
 	"sort"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 
@@ -154,7 +155,7 @@ func hashFilterExpr(
 			if !ok {
 				return nil, false, nil
 			}
-			if left.Col.ColPos != colPosition {
+			if !matchesPartitionColumn(left.Col, colPosition, metadata.Partitions[0].Expr) {
 				return nil, false, nil
 			}
 			for i := range exprs {
@@ -269,7 +270,7 @@ func rangeFilterExpr(
 			if !ok {
 				return nil, false, nil
 			}
-			if left.Col.ColPos != colPosition {
+			if !matchesPartitionColumn(left.Col, colPosition, metadata.Partitions[0].Expr) {
 				return nil, false, nil
 			}
 			for i := range exprs {
@@ -445,6 +446,58 @@ func mustGetColPosition(expr *plan.Expr) int32 {
 	return -1
 }
 
+// Scan column positions are compacted independently of the stored partition
+// expression. Use column identity when the scan supplies a name; retain the
+// positional fallback for older nameless expressions.
+func matchesPartitionColumn(col *plan.ColRef, position int32, partitionExpr *plan.Expr) bool {
+	if col.Name != "" {
+		partitionName, consistent := partitionExpressionColumnName(partitionExpr)
+		scanName, unambiguous := scanColumnName(col.Name)
+		if col.TblName != "" {
+			scanName, unambiguous = p.ColRefColumnName(col), true
+		}
+		return consistent && unambiguous && partitionName != "" &&
+			strings.EqualFold(scanName, partitionName)
+	}
+	return col.ColPos == position
+}
+
+// A predicate on one column cannot prune a partition expression that depends
+// on a different column or on several columns.
+func partitionExpressionColumnName(expr *plan.Expr) (string, bool) {
+	if expr == nil {
+		return "", true
+	}
+	if col := expr.GetCol(); col != nil {
+		return col.Name, col.Name != ""
+	}
+	if fn := expr.GetF(); fn != nil {
+		var name string
+		for _, arg := range fn.Args {
+			other, ok := partitionExpressionColumnName(arg)
+			if !ok || (name != "" && other != "" && !strings.EqualFold(name, other)) {
+				return "", false
+			}
+			if other != "" {
+				name = other
+			}
+		}
+		return name, true
+	}
+	return "", true
+}
+
+// The planner emits alias.column. More than one dot is ambiguous because the
+// quoted alias or the physical column name may itself contain a dot. In that
+// case partition pruning must leave the filter to the row reader.
+func scanColumnName(name string) (string, bool) {
+	if idx := strings.IndexByte(name, '.'); idx >= 0 {
+		column := name[idx+1:]
+		return column, !strings.ContainsRune(column, '.')
+	}
+	return name, true
+}
+
 // listFilter handles partition pruning for list-based partitioning.
 // It evaluates the filters against list partition expressions and returns matching partition positions.
 func listFilter(
@@ -607,7 +660,7 @@ func listFilterExprNormalized(
 			if !ok {
 				return nil, false, nil
 			}
-			if left.Col.ColPos != colPosition {
+			if !matchesPartitionColumn(left.Col, colPosition, metadata.Partitions[0].Expr) {
 				return nil, false, nil
 			}
 			left.Col.ColPos = 0

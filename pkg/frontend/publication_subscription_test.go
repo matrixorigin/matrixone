@@ -243,7 +243,7 @@ func Test_doAlterPublication(t *testing.T) {
 			UserID:        rootID,
 			DefaultRoleID: moAdminRoleID,
 		}
-		ses := newSes(nil, ctrl)
+		ses := newSes(ctrl)
 		ses.tenant = tenant
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
@@ -348,7 +348,7 @@ func Test_doAlterPublication2(t *testing.T) {
 			UserID:        rootID,
 			DefaultRoleID: moAdminRoleID,
 		}
-		ses := newSes(nil, ctrl)
+		ses := newSes(ctrl)
 		ses.tenant = tenant
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
@@ -545,7 +545,7 @@ func Test_doShowSubscriptions(t *testing.T) {
 			UserID:        rootID,
 			DefaultRoleID: moAdminRoleID,
 		}
-		ses := newSes(nil, ctrl)
+		ses := newSes(ctrl)
 		ses.tenant = tenant
 		// ss
 		stmts, err := mysql.Parse(ctx, "show subscriptions all", 1)
@@ -771,7 +771,7 @@ func Test_doDropCcprSubscription(t *testing.T) {
 			UserID:        rootID,
 			DefaultRoleID: moAdminRoleID,
 		}
-		ses := newSes(nil, ctrl)
+		ses := newSes(ctrl)
 		ses.tenant = tenant
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
@@ -821,7 +821,7 @@ func Test_doDropCcprSubscription(t *testing.T) {
 			UserID:        rootID,
 			DefaultRoleID: moAdminRoleID,
 		}
-		ses := newSes(nil, ctrl)
+		ses := newSes(ctrl)
 		ses.tenant = tenant
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
@@ -869,7 +869,7 @@ func Test_doDropCcprSubscription(t *testing.T) {
 			UserID:        rootID,
 			DefaultRoleID: moAdminRoleID,
 		}
-		ses := newSes(nil, ctrl)
+		ses := newSes(ctrl)
 		ses.tenant = tenant
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
@@ -919,7 +919,7 @@ func Test_doResumeCcprSubscription(t *testing.T) {
 			UserID:        rootID,
 			DefaultRoleID: moAdminRoleID,
 		}
-		ses := newSes(nil, ctrl)
+		ses := newSes(ctrl)
 		ses.tenant = tenant
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
@@ -969,7 +969,7 @@ func Test_doResumeCcprSubscription(t *testing.T) {
 			UserID:        rootID,
 			DefaultRoleID: moAdminRoleID,
 		}
-		ses := newSes(nil, ctrl)
+		ses := newSes(ctrl)
 		ses.tenant = tenant
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
@@ -1019,7 +1019,7 @@ func Test_doPauseCcprSubscription(t *testing.T) {
 			UserID:        rootID,
 			DefaultRoleID: moAdminRoleID,
 		}
-		ses := newSes(nil, ctrl)
+		ses := newSes(ctrl)
 		ses.tenant = tenant
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
@@ -1069,7 +1069,7 @@ func Test_doPauseCcprSubscription(t *testing.T) {
 			UserID:        rootID,
 			DefaultRoleID: moAdminRoleID,
 		}
-		ses := newSes(nil, ctrl)
+		ses := newSes(ctrl)
 		ses.tenant = tenant
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
@@ -1205,7 +1205,7 @@ func Test_doShowCcprSubscriptions(t *testing.T) {
 			UserID:        rootID,
 			DefaultRoleID: moAdminRoleID,
 		}
-		ses := newSes(nil, ctrl)
+		ses := newSes(ctrl)
 		ses.tenant = tenant
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
@@ -1270,7 +1270,7 @@ func Test_doShowPublicationCoverage(t *testing.T) {
 			UserID:        rootID,
 			DefaultRoleID: moAdminRoleID,
 		}
-		ses := newSes(nil, ctrl)
+		ses := newSes(ctrl)
 		ses.tenant = tenant
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
@@ -1515,7 +1515,7 @@ func Test_doCreateSubscription_NotAdmin(t *testing.T) {
 			UserID:        1,
 			DefaultRoleID: 1,
 		}
-		ses := newSes(nil, ctrl)
+		ses := newSes(ctrl)
 		ses.tenant = tenant
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
@@ -1551,7 +1551,7 @@ func Test_doCreateSubscription_InvalidUri(t *testing.T) {
 			UserID:        rootID,
 			DefaultRoleID: moAdminRoleID,
 		}
-		ses := newSes(nil, ctrl)
+		ses := newSes(ctrl)
 		ses.tenant = tenant
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
@@ -1590,7 +1590,7 @@ func Test_doCreateSubscription_TableLevelMissingDbName(t *testing.T) {
 			UserID:        rootID,
 			DefaultRoleID: moAdminRoleID,
 		}
-		ses := newSes(nil, ctrl)
+		ses := newSes(ctrl)
 		ses.tenant = tenant
 		ses.SetDatabaseName("") // No current database
 
@@ -1648,7 +1648,7 @@ func Test_doCreateSubscription_TableLevelMissingTableName(t *testing.T) {
 			UserID:        rootID,
 			DefaultRoleID: moAdminRoleID,
 		}
-		ses := newSes(nil, ctrl)
+		ses := newSes(ctrl)
 		ses.tenant = tenant
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
@@ -1705,7 +1705,7 @@ func Test_doCreateSubscription_NoDataKey(t *testing.T) {
 			UserID:        rootID,
 			DefaultRoleID: moAdminRoleID,
 		}
-		ses := newSes(nil, ctrl)
+		ses := newSes(ctrl)
 		ses.tenant = tenant
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
@@ -2111,7 +2111,7 @@ func Test_getSubscriptionMeta_ErrorPropagation(t *testing.T) {
 	mockTxn := mock_frontend.NewMockTxnOperator(ctrl)
 	mockBh := mock_frontend.NewMockBackgroundExec(ctrl)
 
-	ses := newSes(nil, ctrl)
+	ses := newSes(ctrl)
 
 	// Override StorageEngine after newSes (which sets its own pu with nil engine)
 	pu := getPu(ses.GetService())

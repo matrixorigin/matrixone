@@ -718,15 +718,16 @@ type MultiTableIndex struct {
 }
 
 type RemapInfo struct {
-	step           int32
-	node           *plan.Node
-	tip            string
-	colRefCnt      map[[2]int32]int
-	colRefBool     map[[2]int32]bool
-	sinkColRef     map[[2]int32]int
-	remapping      *ColRefRemapping
-	interRemapping *ColRefRemapping
-	srcExprIdx     int
+	originalScanCols []*plan.ColDef
+	step             int32
+	node             *plan.Node
+	tip              string
+	colRefCnt        map[[2]int32]int
+	colRefBool       map[[2]int32]bool
+	sinkColRef       map[[2]int32]int
+	remapping        *ColRefRemapping
+	interRemapping   *ColRefRemapping
+	srcExprIdx       int
 }
 
 func (info *RemapInfo) String() string {

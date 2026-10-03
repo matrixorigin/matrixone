@@ -108,7 +108,7 @@ var (
 		"mo_role":                     0,
 		"mo_user_grant":               0,
 		"mo_role_grant":               0,
-		"mo_role_privs":               0,
+		"mo_role_privs":               1, // Rebound after objects by restoreAccountPrivileges.
 		"mo_role_rule":                0,
 		"mo_user_defined_function":    0,
 		"mo_stored_procedure":         0,
@@ -212,18 +212,20 @@ type accountRecord struct {
 }
 
 type subDbRestoreRecord struct {
-	dbName     string
-	Account    uint32
-	createSql  string
-	snapshotTs int64
+	dbName        string
+	sourceAccount uint32
+	targetAccount uint32
+	createSql     string
+	snapshotTs    int64
 }
 
-func NewSubDbRestoreRecord(dbName string, account uint32, createSql string, spTs int64) *subDbRestoreRecord {
+func NewSubDbRestoreRecord(dbName string, sourceAccount, targetAccount uint32, createSql string, spTs int64) *subDbRestoreRecord {
 	return &subDbRestoreRecord{
-		dbName:     dbName,
-		Account:    account,
-		createSql:  createSql,
-		snapshotTs: spTs,
+		dbName:        dbName,
+		sourceAccount: sourceAccount,
+		targetAccount: targetAccount,
+		createSql:     createSql,
+		snapshotTs:    spTs,
 	}
 }
 
@@ -679,20 +681,8 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	if stmt.Level == tree.RESTORELEVELCLUSTER {
 		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelCluster)
 
-		// restore cluster
-		subDbToRestore := make(map[string]*subDbRestoreRecord)
-		if err = restoreToCluster(ctx, ses, bh, snapshotName, snapshot.ts, subDbToRestore, &retiredMongoDBAccountIDs); err != nil {
+		if err = restoreToCluster(ctx, ses, bh, snapshotName, snapshot.ts, &retiredMongoDBAccountIDs); err != nil {
 			return
-		}
-
-		if err = restorePubsWithSnapshotName(ctx, ses.GetService(), bh, snapshotName, snapshot.ts); err != nil {
-			return
-		}
-
-		for _, subDb := range subDbToRestore {
-			if err = restoreToSubDb(ctx, ses.GetService(), bh, snapshotName, subDb); err != nil {
-				return
-			}
 		}
 		getLogger(ses.GetService()).Debug(fmt.Sprintf("[%s]restore cluster success", snapshotName))
 		return
@@ -708,6 +698,19 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		}
 		markMongoDBAccountForRetirement(&retiredMongoDBAccountIDs, toAccountId)
 		return
+	}
+
+	ownershipCtx, err := prepareRestoreOwnership(ctx, bh, snapshot.ts, restoreAccount, toAccountId, dbName, tblName)
+	if err != nil {
+		return stats, err
+	}
+	ctx = ownershipCtx
+	var partialPrivileges *partialRestorePrivileges
+	if stmt.Level == tree.RESTORELEVELDATABASE || stmt.Level == tree.RESTORELEVELTABLE {
+		partialPrivileges, err = capturePartialRestorePrivileges(ctx, bh, toAccountId, dbName, tblName)
+		if err != nil {
+			return stats, err
+		}
 	}
 
 	// drop foreign key related tables first
@@ -820,6 +823,17 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 			ctx, ses, bh, snapshotName, viewMap, toAccountId, sortedView, false,
 		); err != nil {
 			return
+		}
+	}
+
+	if stmt.Level == tree.RESTORELEVELACCOUNT {
+		if err = restoreAccountPrivileges(ctx, bh, snapshot.ts, restoreAccount, toAccountId); err != nil {
+			return stats, err
+		}
+	}
+	if partialPrivileges != nil {
+		if err = partialPrivileges.rebind(ctx, bh); err != nil {
+			return stats, err
 		}
 	}
 
@@ -1188,7 +1202,7 @@ func restoreToDatabaseOrTable(
 		// if restore to cluster, and the db is sub, append the sub db to restore list
 		getLogger(sid).Debug(fmt.Sprintf("[%s] append sub db to restore list: %v, at restore cluster account %d", snapshotName, dbName, toAccountId))
 		key := genKey(fmt.Sprint(restoreAccount), dbName)
-		subDbToRestore[key] = NewSubDbRestoreRecord(dbName, restoreAccount, createDbSql, snapshotTs)
+		subDbToRestore[key] = NewSubDbRestoreRecord(dbName, restoreAccount, toAccountId, createDbSql, snapshotTs)
 		return
 	}
 
@@ -1226,7 +1240,10 @@ func restoreToDatabaseOrTable(
 		// else skip restore the db
 
 		var isPubExist bool
-		isPubExist, _ = checkPubExistOrNot(toCtx, sid, bh, snapshotName, dbName, snapshotTs)
+		isPubExist, err = checkPubExistOrNot(toCtx, sid, bh, snapshotName, dbName, snapshotTs)
+		if err != nil {
+			return err
+		}
 		if !isPubExist {
 			getLogger(sid).Debug(fmt.Sprintf("[%s] skip restore db: %v, no publication", snapshotName, dbName))
 			return
@@ -1234,7 +1251,7 @@ func restoreToDatabaseOrTable(
 
 		// create db with publication
 		getLogger(sid).Debug(fmt.Sprintf("[%s] start to create db with pub: %v, create db sql: %s", snapshotName, dbName, createDbSql))
-		if err = bh.Exec(toCtx, createDbSql); err != nil {
+		if err = execRestoreCreateDatabase(toCtx, bh, dbName, createDbSql); err != nil {
 			return
 		}
 
@@ -1243,7 +1260,7 @@ func restoreToDatabaseOrTable(
 		createDbSql = createDatabaseIfNotExistsSQL(dbName)
 		// create db
 		getLogger(sid).Debug(fmt.Sprintf("[%s] start to create db: %v, create db sql: %s", snapshotName, dbName, createDbSql))
-		if err = bh.Exec(toCtx, createDbSql); err != nil {
+		if err = execRestoreCreateDatabase(toCtx, bh, dbName, createDbSql); err != nil {
 			return
 		}
 	}
@@ -1362,17 +1379,30 @@ func restoreToSubDb(
 	subDb *subDbRestoreRecord) (err error) {
 	getLogger(sid).Debug(fmt.Sprintf("[%s] start to restore sub db: %v", snapshotName, subDb.dbName))
 
-	toCtx := defines.AttachAccountId(ctx, subDb.Account)
-
+	// Subscription metadata at the restore timestamp belongs to the source
+	// account, while CREATE DATABASE must run in the (possibly re-created)
+	// target account. Keeping both identities avoids assuming account IDs survive
+	// a cluster restore.
+	sourceCtx := defines.AttachAccountId(ctx, subDb.sourceAccount)
 	var isPubExist bool
-	isPubExist, _ = checkPubExistOrNot(toCtx, sid, bh, snapshotName, subDb.dbName, subDb.snapshotTs)
+	isPubExist, err = checkPubExistOrNot(sourceCtx, sid, bh, snapshotName, subDb.dbName, subDb.snapshotTs)
+	if err != nil {
+		return err
+	}
 	if !isPubExist {
+		// A snapshot can contain a subscription whose publication was already
+		// deleted. Preserve the existing skip policy, but never discard query errors.
 		getLogger(sid).Debug(fmt.Sprintf("[%s] skip restore db: %v, no publication", snapshotName, subDb.dbName))
-		return
+		return nil
 	}
 
-	getLogger(sid).Debug(fmt.Sprintf("[%s] account %d start to create sub db: %v, create db sql: %s", snapshotName, subDb.Account, subDb.dbName, subDb.createSql))
-	if err = bh.Exec(toCtx, subDb.createSql); err != nil {
+	targetCtx := defines.AttachAccountId(ctx, subDb.targetAccount)
+	targetCtx, err = prepareSubscriptionRestoreOwnership(targetCtx, bh, subDb.snapshotTs, subDb.sourceAccount, subDb.targetAccount, subDb.dbName)
+	if err != nil {
+		return err
+	}
+	getLogger(sid).Debug(fmt.Sprintf("[%s] account %d start to create sub db: %v, create db sql: %s", snapshotName, subDb.targetAccount, subDb.dbName, subDb.createSql))
+	if err = execRestoreCreateDatabase(targetCtx, bh, subDb.dbName, subDb.createSql); err != nil {
 		return
 	}
 
@@ -1609,6 +1639,10 @@ func recreateTable(
 		// skip restore the table which is master table
 		getLogger(sid).Debug(fmt.Sprintf("[%s] skip restore master table: %v.%v", snapshotName, tblInfo.dbName, tblInfo.tblName))
 		return
+	}
+	ctx, err = restoreDDLContext(ctx, tblInfo.dbName, tblInfo.tblName)
+	if err != nil {
+		return err
 	}
 
 	if err = bh.Exec(ctx, useDatabaseSQL(tblInfo.dbName)); err != nil {
@@ -2171,6 +2205,10 @@ func parseViewCreateSQLForRestore(ctx context.Context, tblInfo *tableInfo, lower
 }
 
 func executeViewCreateSQLForRestore(ctx context.Context, bh BackgroundExec, tblInfo *tableInfo) error {
+	ctx, err := restoreDDLContext(ctx, tblInfo.dbName, tblInfo.tblName)
+	if err != nil {
+		return err
+	}
 	parserSQLMode, err := viewParserSQLModeForRestore(tblInfo.viewDef)
 	if err != nil {
 		return err
@@ -2595,11 +2633,12 @@ func restoreToCluster(ctx context.Context,
 	bh BackgroundExec,
 	snapshotName string,
 	snapshotTs int64,
-	subDbToRestore map[string]*subDbRestoreRecord,
 	retiredMongoDBAccountIDs *[]uint32,
 ) (err error) {
 	getLogger(ses.GetService()).Debug(fmt.Sprintf("[%s] start to restore cluster, restore timestamp: %d", snapshotName, snapshotTs))
 
+	subDbToRestore := make(map[string]*subDbRestoreRecord)
+	catalogRestores := make([]catalogRestoreAccountPair, 0)
 	var isRestoreToCluster bool
 	var isNeedToCleanToDatabase bool
 	// drop account which not in snapshot
@@ -2671,6 +2710,10 @@ func restoreToCluster(ctx context.Context,
 		if err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, account, uint64(newAccountId), subDbToRestore, isRestoreToCluster, isNeedToCleanToDatabase); err != nil {
 			return err
 		}
+		catalogRestores = append(catalogRestores, catalogRestoreAccountPair{
+			sourceAccount: uint32(account.accountId),
+			targetAccount: newAccountId,
+		})
 		markMongoDBAccountForRetirement(retiredMongoDBAccountIDs, newAccountId)
 
 		getLogger(ses.GetService()).Debug(fmt.Sprintf("[%s] restore account: %v, account id: %d success", snapshotName, account.accountName, account.accountId))
@@ -2704,9 +2747,37 @@ func restoreToCluster(ctx context.Context,
 		if err != nil {
 			return err
 		}
+		catalogRestores = append(catalogRestores, catalogRestoreAccountPair{
+			sourceAccount: uint32(account.accountId),
+			targetAccount: newAccountId,
+		})
 	}
 
-	return err
+	// Publications and subscription databases form a cluster-wide dependency
+	// phase: a subscription can only be created after its publication exists.
+	// Identity-bearing catalogs must run after this phase so their source object
+	// IDs can be rebound to every restored target object, including subscriptions.
+	if err = restorePubsWithSnapshotName(ctx, ses.GetService(), bh, snapshotName, snapshotTs); err != nil {
+		return err
+	}
+	for _, subDb := range subDbToRestore {
+		if err = restoreToSubDb(ctx, ses.GetService(), bh, snapshotName, subDb); err != nil {
+			return err
+		}
+	}
+	for _, account := range catalogRestores {
+		if err = restoreAccountPrivileges(
+			ctx,
+			bh,
+			snapshotTs,
+			account.sourceAccount,
+			account.targetAccount,
+		); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func restoreToAccountUsingCluster(
@@ -2859,6 +2930,11 @@ func restoreAccountUsingClusterSnapshotToNew(ctx context.Context,
 
 	getLogger(ses.GetService()).Debug(fmt.Sprintf("[%s] start to restore dropped account: %v, account id: %d to new account id: %d, restore timestamp: %d", snapshotName, account.accountName, account.accountId, toAccountId, snapshotTs))
 	fromAccount := account.accountId
+	ownershipCtx, err := prepareRestoreOwnership(ctx, bh, snapshotTs, uint32(fromAccount), uint32(toAccountId), "", "")
+	if err != nil {
+		return err
+	}
+	ctx = ownershipCtx
 
 	// drop foreign key related tables first
 	if isNeedToCleanToDatabase {
@@ -2952,6 +3028,18 @@ func restoreAccountUsingClusterSnapshotToNew(ctx context.Context,
 			uint32(toAccountId),
 			viewMap,
 			account.accountName); err != nil {
+			return err
+		}
+	}
+
+	if !isRestoreCluster {
+		if err = restoreAccountPrivileges(
+			ctx,
+			bh,
+			snapshotTs,
+			uint32(fromAccount),
+			uint32(toAccountId),
+		); err != nil {
 			return err
 		}
 	}
@@ -3195,23 +3283,33 @@ func createPubs(
 	snapshotName string,
 	pubInfos []*pubsub.PubInfo,
 ) (err error) {
-	// restore pub to toAccount
-	var ast []tree.Statement
-	defer func() {
-		for _, s := range ast {
-			s.Free()
-		}
-	}()
+	if len(pubInfos) == 0 {
+		return nil
+	}
+	_, targetAccounts, err := getAccounts(ctx, bh, false)
+	if err != nil {
+		return err
+	}
 
 	for _, pubInfo := range pubInfos {
-		toCtx := defines.AttachAccount(ctx, pubInfo.PubAccountId, pubInfo.Owner, pubInfo.Creator)
+		targetAccount := targetAccounts[pubInfo.PubAccountName]
+		if targetAccount == nil || targetAccount.Id < 0 {
+			return moerr.NewInternalErrorf(ctx, "cannot restore publication %s: target account %s does not exist",
+				pubInfo.PubName, pubInfo.PubAccountName)
+		}
+		// Account IDs change on recreation. User and role IDs are retained by
+		// this branch's account catalog clone, unlike the account identity.
+		toCtx := defines.AttachAccount(ctx, uint32(targetAccount.Id), pubInfo.Creator, pubInfo.Owner)
 		getLogger(sid).Debug(fmt.Sprintf("[%s] create pub: create pub sql: %s", snapshotName, pubInfo.GetCreateSql()))
-		ast, err = mysql.Parse(toCtx, pubInfo.GetCreateSql(), 1)
+		var stmt tree.Statement
+		stmt, err = mysql.ParseOne(toCtx, pubInfo.GetCreateSql(), 1)
 		if err != nil {
 			return
 		}
 
-		if err = createPublication(toCtx, bh, ast[0].(*tree.CreatePublication)); err != nil {
+		err = createPublication(toCtx, bh, stmt.(*tree.CreatePublication))
+		stmt.Free()
+		if err != nil {
 			return
 		}
 	}
@@ -3333,8 +3431,7 @@ func checkPubValid(
 	}
 
 	if !execResultArrayHasData(erArray) {
-		err = moerr.NewInternalErrorf(newCtx, "there is no publication account %s", pubAccountName)
-		return
+		return false, nil
 	}
 	if accId, err = erArray[0].GetInt64(newCtx, 0, 0); err != nil {
 		return
@@ -3347,8 +3444,7 @@ func checkPubValid(
 		return
 	}
 	if pubInfo == nil {
-		err = moerr.NewInternalErrorf(newCtx, "there is no publication %s", pubName)
-		return
+		return false, nil
 	}
 
 	return true, nil

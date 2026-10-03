@@ -69,7 +69,7 @@ func handleCreateSQLTask(ctx context.Context, ses *Session, stmt *tree.CreateSQL
 	store := ts.GetStorage()
 	existing, err := store.QuerySQLTask(ctx,
 		taskservice.WithTaskName(taskservice.EQ, string(stmt.Name)),
-		taskservice.WithAccountID(taskservice.EQ, ses.GetAccountId()),
+		taskservice.WithAccountID(taskservice.EQ, ses.GetTenantInfo().GetTenantID()),
 	)
 	if err != nil {
 		return err
@@ -103,7 +103,7 @@ func handleAlterSQLTask(ctx context.Context, ses *Session, stmt *tree.AlterSQLTa
 		return err
 	}
 	store := ts.GetStorage()
-	sqlTask, err := getSQLTaskByName(ctx, store, string(stmt.Name), ses.GetAccountId())
+	sqlTask, err := getSQLTaskByName(ctx, store, string(stmt.Name), ses.GetTenantInfo().GetTenantID())
 	if err != nil {
 		return err
 	}
@@ -156,7 +156,7 @@ func handleDropSQLTask(ctx context.Context, ses *Session, stmt *tree.DropSQLTask
 	store := ts.GetStorage()
 	tasks, err := store.QuerySQLTask(ctx,
 		taskservice.WithTaskName(taskservice.EQ, string(stmt.Name)),
-		taskservice.WithAccountID(taskservice.EQ, ses.GetAccountId()),
+		taskservice.WithAccountID(taskservice.EQ, ses.GetTenantInfo().GetTenantID()),
 	)
 	if err != nil {
 		return err
@@ -180,7 +180,7 @@ func handleExecuteSQLTask(ctx context.Context, ses *Session, stmt *tree.ExecuteS
 	if err != nil {
 		return err
 	}
-	sqlTask, err := getSQLTaskByName(ctx, ts.GetStorage(), string(stmt.Name), ses.GetAccountId())
+	sqlTask, err := getSQLTaskByName(ctx, ts.GetStorage(), string(stmt.Name), ses.GetTenantInfo().GetTenantID())
 	if err != nil {
 		return err
 	}
@@ -218,7 +218,7 @@ func handleShowSQLTasks(ctx context.Context, ses *Session, _ *ExecCtx, _ *tree.S
 		return err
 	}
 	store := ts.GetStorage()
-	tasks, err := store.QuerySQLTask(ctx, taskservice.WithAccountID(taskservice.EQ, ses.GetAccountId()))
+	tasks, err := store.QuerySQLTask(ctx, taskservice.WithAccountID(taskservice.EQ, ses.GetTenantInfo().GetTenantID()))
 	if err != nil {
 		return err
 	}
@@ -226,7 +226,7 @@ func handleShowSQLTasks(ctx context.Context, ses *Session, _ *ExecCtx, _ *tree.S
 	for _, sqlTask := range tasks {
 		taskIDs = append(taskIDs, sqlTask.TaskID)
 	}
-	runs, err := store.QueryLatestSQLTaskRun(ctx, ses.GetAccountId(), taskIDs)
+	runs, err := store.QueryLatestSQLTaskRun(ctx, ses.GetTenantInfo().GetTenantID(), taskIDs)
 	if err != nil {
 		return err
 	}
@@ -266,7 +266,7 @@ func handleShowSQLTaskRuns(ctx context.Context, ses *Session, _ *ExecCtx, stmt *
 		return err
 	}
 	conds := []taskservice.Condition{
-		taskservice.WithAccountID(taskservice.EQ, ses.GetAccountId()),
+		taskservice.WithAccountID(taskservice.EQ, ses.GetTenantInfo().GetTenantID()),
 	}
 	if stmt.HasTask {
 		conds = append(conds, taskservice.WithTaskName(taskservice.EQ, string(stmt.TaskName)))
@@ -313,7 +313,7 @@ func buildSQLTaskFromStmt(ses *Session, stmt *tree.CreateSQLTask, timeoutSeconds
 	}
 	sqlTask := taskservice.SQLTask{
 		TaskName:       string(stmt.Name),
-		AccountID:      ses.GetAccountId(),
+		AccountID:      tenant.GetTenantID(),
 		DatabaseName:   ses.GetDatabaseName(),
 		CronExpr:       stmt.CronExpr,
 		Timezone:       timezone,

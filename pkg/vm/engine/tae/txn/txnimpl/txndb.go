@@ -524,6 +524,11 @@ func (db *txnDB) approxSize() int {
 	return size
 }
 
+// PrePrepare allocates TN timestamps before the serial pre-WAL owner binds the
+// transaction's prepare timestamp. Even database-only changes therefore leave
+// a gap after the previous published prepare time: frontend authorization relies
+// on its successor being a complete inclusive read view, with no later catalog
+// mutation at that successor. Preserve that ordering if these clock reads change.
 func (db *txnDB) PrePrepare(ctx context.Context) (err error) {
 	for _, table := range db.tables {
 		if err = table.PrePreareTransfer(

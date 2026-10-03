@@ -171,6 +171,17 @@ func WithTxnCacheWrite() TxnOption {
 	}
 }
 
+// WithReadOnlySnapshot creates an independent internal read view fixed at ts.
+// Unlike WithSnapshotTS, creation waits for visibility without replacing ts.
+func WithReadOnlySnapshot(ts timestamp.Timestamp) TxnOption {
+	return func(tc *txnOperator) {
+		tc.reset.fixedSnapshot = true
+		tc.mu.txn.SnapshotTS = ts
+		tc.mu.txn.Isolation = txn.TxnIsolation_SI
+		tc.opts.options = tc.opts.options.WithReadOnly()
+	}
+}
+
 // WithSnapshotTS use a spec snapshot timestamp to build TxnOperator.
 func WithSnapshotTS(ts timestamp.Timestamp) TxnOption {
 	return func(tc *txnOperator) {
@@ -286,6 +297,7 @@ type txnOperator struct {
 	}
 
 	reset struct {
+		fixedSnapshot                      bool
 		txnID                              []byte
 		parent                             atomic.Pointer[txnOperator]
 		waiter                             *activeTxnWaiter
@@ -726,6 +738,7 @@ func (tc *txnOperator) initWithRunSQLGate(
 }
 
 func (tc *txnOperator) initReset(sealRunSQL bool) {
+	tc.reset.fixedSnapshot = false
 	tc.reset.txnID = nil
 	tc.reset.parent.Store(nil)
 	tc.reset.waiter = nil
@@ -979,6 +992,12 @@ func (tc *txnOperator) updateSnapshot(
 		return err
 	}
 
+	if tc.reset.fixedSnapshot {
+		if tc.mu.txn.SnapshotTS.IsEmpty() || !tc.opts.options.ReadOnly() || tc.opts.options.UserTxn() || tc.mu.txn.Isolation != txn.TxnIsolation_SI {
+			return moerr.NewInvalidStateNoCtx("fixed snapshot requires an independent read-only SI transaction")
+		}
+		ts = tc.mu.txn.SnapshotTS.Prev()
+	}
 	// ony push model support RC isolation
 	if tc.timestampWaiter == nil {
 		return nil
@@ -1001,7 +1020,9 @@ func (tc *txnOperator) updateSnapshot(
 			if err != nil {
 				return err
 			}
-			tc.mu.txn.SnapshotTS = next
+			if !tc.reset.fixedSnapshot {
+				tc.mu.txn.SnapshotTS = next
+			}
 			return nil
 		},
 		true)

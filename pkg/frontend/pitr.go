@@ -1104,6 +1104,21 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		return stats, moerr.NewInternalErrorf(ctx, "account `%s` does not exists at timestamp: %v", tenantInfo.GetTenant(), nanoTimeFormat(ts))
 	}
 
+	var partialPrivileges *partialRestorePrivileges
+	if restoreLevel != tree.RESTORELEVELCLUSTER {
+		ownershipCtx, ownershipErr := prepareRestoreOwnership(ctx, bh, ts, tenantInfo.TenantID, tenantInfo.TenantID, dbName, tblName)
+		if ownershipErr != nil {
+			return stats, ownershipErr
+		}
+		ctx = ownershipCtx
+		if restoreLevel == tree.RESTORELEVELDATABASE || restoreLevel == tree.RESTORELEVELTABLE {
+			partialPrivileges, err = capturePartialRestorePrivileges(ctx, bh, tenantInfo.TenantID, dbName, tblName)
+			if err != nil {
+				return stats, err
+			}
+		}
+	}
+
 	//drop foreign key related tables first
 	if err = deleteCurFkTableInPitrRestore(ctx, ses.GetService(), bh, pitrName, dbName, tblName); err != nil {
 		return
@@ -1142,18 +1157,8 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 	switch restoreLevel {
 	case tree.RESTORELEVELCLUSTER:
 		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelCluster)
-		subDbToRestore := make(map[string]*subDbRestoreRecord)
-		if err = restoreToCluster(ctx, ses, bh, pitrName, ts, subDbToRestore, &retiredMongoDBAccountIDs); err != nil {
+		if err = restoreToCluster(ctx, ses, bh, pitrName, ts, &retiredMongoDBAccountIDs); err != nil {
 			return
-		}
-		if err = restorePubsWithSnapshotName(ctx, ses.GetService(), bh, pitrName, ts); err != nil {
-			return
-		}
-
-		for _, subDb := range subDbToRestore {
-			if err = restoreToSubDb(ctx, ses.GetService(), bh, pitrName, subDb); err != nil {
-				return
-			}
 		}
 		return
 	case tree.RESTORELEVELACCOUNT:
@@ -1186,6 +1191,28 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 	if len(viewMap) > 0 {
 		if err = restoreViewsWithPitr(ctx, ses, bh, pitrName, ts, viewMap, tenantInfo.GetTenant(), tenantInfo.GetTenantID()); err != nil {
 			return
+		}
+	}
+
+	if restoreLevel == tree.RESTORELEVELACCOUNT {
+		// Account PITR recreates databases and relations just like snapshot
+		// restore. Run the same catalog-owner phase only after FK tables and
+		// views exist, so every physical or logical source ID has a final target
+		// identity to bind to. Partial restores only rebind current scoped grants.
+		if err = restoreAccountPrivileges(
+			ctx,
+			bh,
+			ts,
+			tenantInfo.GetTenantID(),
+			tenantInfo.GetTenantID(),
+		); err != nil {
+			return
+		}
+	}
+
+	if partialPrivileges != nil {
+		if err = partialPrivileges.rebind(ctx, bh); err != nil {
+			return stats, err
 		}
 	}
 
@@ -1403,7 +1430,10 @@ func restoreToDatabaseOrTableWithPitr(
 		// else skip restore the db
 
 		var isPubExist bool
-		isPubExist, _ = checkPubExistOrNot(ctx, sid, bh, pitrName, dbName, ts)
+		isPubExist, err = checkPubExistOrNot(ctx, sid, bh, pitrName, dbName, ts)
+		if err != nil {
+			return err
+		}
 		if !isPubExist {
 			getLogger(sid).Info(fmt.Sprintf("[%s] skip restore db: %v, no publication", pitrName, dbName))
 			return
@@ -1411,7 +1441,7 @@ func restoreToDatabaseOrTableWithPitr(
 
 		// create db with publication
 		getLogger(sid).Info(fmt.Sprintf("[%s] start to create db with pub: %v, create db sql: %s", pitrName, dbName, createDbSql))
-		if err = bh.Exec(ctx, createDbSql); err != nil {
+		if err = execRestoreCreateDatabase(ctx, bh, dbName, createDbSql); err != nil {
 			return
 		}
 
@@ -1420,7 +1450,7 @@ func restoreToDatabaseOrTableWithPitr(
 		createDbSql = createDatabaseIfNotExistsSQL(dbName)
 		// create db
 		getLogger(sid).Info(fmt.Sprintf("[%s] start to create db: %v, create db sql: %s", pitrName, dbName, createDbSql))
-		if err = bh.Exec(ctx, createDbSql); err != nil {
+		if err = execRestoreCreateDatabase(ctx, bh, dbName, createDbSql); err != nil {
 			return
 		}
 	}
@@ -1499,6 +1529,10 @@ func reCreateTableWithPitr(
 	}
 
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore table: '%v' at timestamp %d", pitrName, tblInfo.tblName, ts))
+	ctx, err = restoreDDLContext(ctx, tblInfo.dbName, tblInfo.tblName)
+	if err != nil {
+		return err
+	}
 
 	var isMasterTable bool
 	isMasterTable, err = checkTableIsMaster(ctx, sid, bh, pitrName, tblInfo.dbName, tblInfo.tblName)

@@ -704,7 +704,7 @@ func handleCloneTable(
 		bh.(*backExec).backSes.SetDatabaseName(oldDefault)
 	}()
 
-	if stmt.CreateTable.Table.SchemaName == moCatalog {
+	if isBannedDatabase(strings.ToLower(stmt.CreateTable.Table.SchemaName.String())) {
 		err = moerr.NewInternalErrorNoCtxf("cannot clone data into system database")
 		return
 	}
@@ -712,6 +712,14 @@ func handleCloneTable(
 	if opAccountId != sysAccountID && opAccountId != toAccountId {
 		err = moerr.NewInternalErrorNoCtxf("only sys can clone table to another account")
 		return
+	}
+	if resolvedAccounts == nil && !skipDataBranchPrivilegeCheck(ses) {
+		_, err = authenticateDataBranchCreateTable(reqCtx, ses, &tree.DataBranchCreateTable{
+			SrcTable: stmt.SrcTable, CreateTable: stmt.CreateTable, ToAccountOpt: stmt.ToAccountOpt,
+		})
+		if err != nil {
+			return
+		}
 	}
 	if err = lockNamedDataBranchCloneSnapshot(
 		defines.AttachAccountId(reqCtx, fromAccountId), bh, snapshot,
@@ -879,6 +887,19 @@ func handleCloneDatabaseWithSource(
 		source = *resolvedSource
 	} else {
 		if source, err = collectCloneDatabaseSource(reqCtx, ses, bh, stmt); err != nil {
+			return
+		}
+		if _, systemDB := sysDatabases[strings.ToLower(source.srcResolveDBName)]; systemDB && source.opAccountId != sysAccountID {
+			err = moerr.NewInternalErrorNoCtxf("non-sys account cannot clone data from system database")
+			return
+		}
+		// Plain CLONE and DATA BRANCH authorize the same resolved source set.
+		if !skipDataBranchPrivilegeCheck(ses) {
+			if _, err = authenticateDataBranchCreateDatabase(reqCtx, ses, &tree.DataBranchCreateDatabase{CloneDatabase: *stmt}); err != nil {
+				return
+			}
+		}
+		if _, err = authenticateDataBranchCreateDatabaseSourceTables(reqCtx, ses, &tree.DataBranchCreateDatabase{CloneDatabase: *stmt}, source); err != nil {
 			return
 		}
 	}

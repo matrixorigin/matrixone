@@ -15,6 +15,7 @@
 package function
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 	"strings"
@@ -2572,6 +2573,161 @@ func TestBuiltInUUIDSwapFlagStringStrictCoercion(t *testing.T) {
 			tcc := NewFunctionTestCase(proc, ftc.inputs, ftc.expect, builtInBinToUUID)
 			succeed, info := tcc.Run()
 			require.True(t, succeed, ftc.info, info)
+		})
+	}
+}
+
+func TestSerialDecimal256(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	values := []types.Decimal256{
+		{B192_255: 1 << 63},
+		(types.Decimal256{B192_255: 1}).Minus(),
+		(types.Decimal256{B0_63: 1}).Minus(), {}, {B0_63: 1},
+		{B128_191: 1}, {B192_255: 1},
+		{B0_63: math.MaxUint64, B64_127: math.MaxUint64, B128_191: math.MaxUint64, B192_255: math.MaxInt64},
+	}
+	for _, full := range []bool{false, true} {
+		t.Run(fmt.Sprint(full), func(t *testing.T) {
+			op := newOpSerial()
+			defer op.Close()
+			fn := op.BuiltInSerial
+			if full {
+				fn = op.BuiltInSerialFull
+			}
+			v := vector.NewVec(types.T_decimal256.ToType())
+			defer v.Free(proc.Mp())
+			for _, value := range values {
+				require.NoError(t, vector.AppendFixed(v, value, false, proc.Mp()))
+			}
+			require.NoError(t, vector.AppendFixed(v, types.Decimal256{}, true, proc.Mp()))
+			rs := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+			defer rs.Free()
+			require.NoError(t, rs.PreExtendAndReset(v.Length()))
+			require.NoError(t, fn([]*vector.Vector{v}, rs, proc, v.Length(), nil))
+			out := rs.GetResultVector()
+			for i, value := range values {
+				tuple, err := types.Unpack(out.GetBytesAt(i))
+				require.NoError(t, err)
+				require.Equal(t, value, tuple[0])
+				require.Len(t, out.GetBytesAt(i), 33)
+				if i > 0 {
+					require.Less(t, values[i-1].Compare(value), 0)
+					require.Less(t, bytes.Compare(out.GetBytesAt(i-1), out.GetBytesAt(i)), 0)
+				}
+			}
+			if full {
+				tuple, err := types.Unpack(out.GetBytesAt(len(values)))
+				require.NoError(t, err)
+				require.Equal(t, types.Tuple{nil}, tuple)
+			} else {
+				require.True(t, out.IsNull(uint64(len(values))))
+			}
+			// Index materialization must use the same component bytes and NULL contract.
+			packers := types.NewPackerArray(v.Length())
+			defer func() {
+				for _, p := range packers {
+					p.Close()
+				}
+			}()
+			bitmap := new(nulls.Nulls)
+			SerialHelper(v, bitmap, packers, full)
+			for i := range values {
+				require.Equal(t, out.GetBytesAt(i), packers[i].GetBuf())
+			}
+			if full {
+				require.Equal(t, out.GetBytesAt(len(values)), packers[len(values)].GetBuf())
+			} else {
+				require.True(t, bitmap.Contains(uint64(len(values))))
+			}
+			// Exercise both serial_extract's constant-index and vector-index branches.
+			for _, constant := range []bool{false, true} {
+				func() {
+					idx := vector.NewVec(types.T_int64.ToType())
+					defer idx.Free(proc.Mp())
+					for range v.Length() {
+						require.NoError(t, vector.AppendFixed(idx, int64(0), false, proc.Mp()))
+					}
+					if constant {
+						idx.SetClass(vector.CONSTANT)
+					}
+					extracted := vector.NewFunctionResultWrapper(types.T_decimal256.ToType(), proc.Mp())
+					defer extracted.Free()
+					require.NoError(t, extracted.PreExtendAndReset(v.Length()))
+					require.NoError(t, builtInSerialExtract([]*vector.Vector{out, idx, v}, extracted, proc, v.Length(), nil))
+					for i, value := range values {
+						require.Equal(t, value, vector.GetFixedAtWithTypeCheck[types.Decimal256](extracted.GetResultVector(), i))
+					}
+					require.True(t, extracted.GetResultVector().IsNull(uint64(len(values))))
+				}()
+			}
+		})
+	}
+}
+
+func TestSerialFullDecimal256ReuseAfterNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	op := newOpSerial()
+	defer op.Close()
+	for _, isNull := range []bool{true, false, true, false} {
+		func() {
+			v, err := vector.NewConstFixed(types.T_decimal256.ToType(), types.Decimal256{B128_191: 1}, 1, proc.Mp())
+			require.NoError(t, err)
+			defer v.Free(proc.Mp())
+			if isNull {
+				v.GetNulls().Add(0)
+			}
+			rs := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+			defer rs.Free()
+			require.NoError(t, rs.PreExtendAndReset(1))
+			require.NoError(t, op.BuiltInSerialFull([]*vector.Vector{v}, rs, proc, 1, nil))
+			tuple, err := types.Unpack(rs.GetResultVector().GetBytesAt(0))
+			require.NoError(t, err)
+			if isNull {
+				require.Nil(t, tuple[0])
+			} else {
+				require.Equal(t, types.Decimal256{B128_191: 1}, tuple[0])
+			}
+			require.NoError(t, op.Reset())
+		}()
+	}
+}
+
+func TestSerialExtractRejectsInvalidIndex(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	for _, oid := range []types.T{types.T_decimal256, types.T_varchar} {
+		t.Run(oid.String(), func(t *testing.T) {
+			packer := types.NewPacker()
+			defer packer.Close()
+			if oid == types.T_decimal256 {
+				packer.EncodeDecimal256(types.Decimal256{B128_191: 1})
+			} else {
+				packer.EncodeStringType([]byte("value"))
+			}
+			input := vector.NewVec(types.T_varchar.ToType())
+			defer input.Free(proc.Mp())
+			require.NoError(t, vector.AppendBytes(input, packer.GetBuf(), false, proc.Mp()))
+			resultType := vector.NewVec(oid.ToType())
+			defer resultType.Free(proc.Mp())
+			for _, constant := range []bool{false, true} {
+				for _, index := range []int64{-1, 1, math.MaxInt64} {
+					t.Run(fmt.Sprintf("constant=%t/index=%d", constant, index), func(t *testing.T) {
+						idx := vector.NewVec(types.T_int64.ToType())
+						defer idx.Free(proc.Mp())
+						require.NoError(t, vector.AppendFixed(idx, index, false, proc.Mp()))
+						if constant {
+							idx.SetClass(vector.CONSTANT)
+						}
+						rs := vector.NewFunctionResultWrapper(oid.ToType(), proc.Mp())
+						defer rs.Free()
+						require.NoError(t, rs.PreExtendAndReset(1))
+						err := builtInSerialExtract([]*vector.Vector{input, idx, resultType}, rs, proc, 1, nil)
+						require.ErrorContains(t, err, "index out of range")
+					})
+				}
+			}
 		})
 	}
 }

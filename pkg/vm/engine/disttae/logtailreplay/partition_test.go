@@ -17,6 +17,9 @@ package logtailreplay
 import (
 	"context"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/stretchr/testify/require"
 )
 
 func BenchmarkPartitonConsumeCheckpoint(b *testing.B) {
@@ -60,4 +63,49 @@ func BenchmarkConcurrentPartitionConsumeCheckpoint(b *testing.B) {
 		}
 	})
 
+}
+
+func TestPartitionContentPublication(t *testing.T) {
+	p := NewPartition("", nil, 0, 0, 42, nil)
+	original := p.Snapshot()
+	state, publish := p.MutateState()
+	state.UpdateAppliedTo(types.BuildTS(10, 0))
+	publish()
+	version, upper := p.Snapshot().ContentVersion()
+	require.Zero(t, version, "an empty logtail must not invalidate reusable reads")
+	require.True(t, upper.IsEmpty())
+
+	state, publish = p.MutateState()
+	state.RecordContentChange(types.BuildTS(10, 0))
+	publish()
+	version, upper = p.Snapshot().ContentVersion()
+	require.Equal(t, uint64(1), version)
+	require.Equal(t, types.BuildTS(10, 0), upper)
+	oldVersion, oldUpper := original.ContentVersion()
+	require.Zero(t, oldVersion, "publication must not relabel an older read")
+	require.True(t, oldUpper.IsEmpty())
+
+	// Lazy checkpoint completion publishes its own content change. Failure
+	// must not expose a partially filled state or a new usable version.
+	state, publish = p.MutateState()
+	state.AppendCheckpoint("checkpoint", p)
+	publish()
+	before := p.Snapshot()
+	failure := context.Canceled
+	err := p.ConsumeCheckpoints(context.Background(), func(_ string, state *PartitionState) error {
+		state.RecordContentChange(types.BuildTS(20, 0))
+		return failure
+	})
+	require.ErrorIs(t, err, failure)
+	require.Same(t, before, p.Snapshot())
+	require.NoError(t, p.ConsumeCheckpoints(context.Background(), func(_ string, _ *PartitionState) error { return nil }))
+	version, upper = p.Snapshot().ContentVersion()
+	require.Equal(t, uint64(2), version)
+	require.Equal(t, types.BuildTS(10, 0), upper)
+	before = p.Snapshot()
+	require.NoError(t, p.ConsumeCheckpoints(context.Background(), func(_ string, _ *PartitionState) error {
+		t.Fatal("completed checkpoints must not load again")
+		return nil
+	}))
+	require.Same(t, before, p.Snapshot())
 }

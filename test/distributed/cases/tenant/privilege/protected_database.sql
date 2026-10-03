@@ -179,7 +179,8 @@ set global lower_case_table_names = 0;
 set global protected_databases = 'ProtectedCaseDB';
 -- @session
 
--- @session:id=3&user=protected_bvt_acc:protected_bvt_user:protected_bvt_writer&password=111
+-- Reuse the live tenant session; session 3 belongs to the deleted SYS user.
+-- @session:id=2&user=protected_bvt_acc:protected_bvt_user:protected_bvt_writer&password=111
 set enable_privilege_cache = off;
 select @@lower_case_table_names;
 create database `protectedcasedb`;

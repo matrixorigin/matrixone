@@ -15,6 +15,7 @@
 package issues
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -55,6 +56,7 @@ func TestAuthenticatedTestsReuseBaseCluster(t *testing.T) {
 		switch svc.ServiceType() {
 		case metadata.ServiceType_CN:
 			cnCount++
+			require.Equal(t, fmt.Sprintf("127.0.0.1:%d", cfg.CN.Frontend.Port), cfg.CN.SQLAddress)
 			require.False(t, cfg.CN.Frontend.SkipCheckUser)
 			require.Equal(t, authenticatedClusterHeartbeatTimeout,
 				cfg.CN.HAKeeper.HeatbeatTimeout.Duration)

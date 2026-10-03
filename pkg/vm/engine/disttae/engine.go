@@ -1223,7 +1223,11 @@ func (e *Engine) setPushClientStatus(ready bool) {
 		e.cli.Pause()
 	}
 
-	e.pClient.receivedLogTailTime.ready.Store(ready)
+	if ready {
+		e.pClient.receivedLogTailTime.ready.Store(true)
+	} else {
+		e.pClient.invalidateReadContinuity()
+	}
 	if e.pClient.subscriber != nil {
 		if ready {
 			e.pClient.subscriber.setReady()
@@ -1333,4 +1337,40 @@ func (e *Engine) gcPartitionState(ctx context.Context) {
 		return
 	}
 	e.pClient.doGCPartitionState(ctx, e)
+}
+
+// ReadTableContentVersions uses one existing subscription read-lock section for
+// all dependencies. No state is retained or created by this read-only probe.
+func (e *Engine) ReadTableContentVersions(ctx context.Context, snapshot timestamp.Timestamp, dependencies []engine.TableContentDependency, versions []engine.TableContentVersion) bool {
+	c := &e.pClient
+	if ctx.Err() != nil || snapshot.IsEmpty() || len(dependencies) == 0 || len(dependencies) != len(versions) || !c.receivedLogTailTime.ready.Load() {
+		return false
+	}
+	replay := c.replayVersion.Load()
+	if replay == 0 {
+		return false
+	}
+	s := &c.subscribed
+	s.rw.RLock()
+	defer s.rw.RUnlock()
+	visible := types.TimestampToTS(snapshot.Prev())
+	now := time.Now().UnixNano()
+	for i, dependency := range dependencies {
+		ent := s.m[dependency.TableID]
+		if ent == nil || ent.dbID != dependency.DatabaseID || ent.state != Subscribed || ent.incarnation == 0 || ent.partition == nil {
+			return false
+		}
+		pending := ent.pendingTo.Load() != nil
+		state := ent.partition.Snapshot()
+		canServe, _ := canServeTableSnapshotWithPending(state, snapshot, pending)
+		revision, upper := state.ContentVersion()
+		if !canServe || upper.GT(&visible) {
+			return false
+		}
+		if now-ent.lastTs.Load() > int64(time.Minute) {
+			ent.lastTs.Store(now)
+		}
+		versions[i] = engine.TableContentVersion{Replay: replay, Subscription: ent.incarnation, Revision: revision, ChangeUpper: upper}
+	}
+	return ctx.Err() == nil && c.receivedLogTailTime.ready.Load() && c.replayVersion.Load() == replay
 }

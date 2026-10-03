@@ -341,7 +341,7 @@ func Test_checkTenantExistsOrNot(t *testing.T) {
 			DefaultRoleID: moAdminRoleID,
 		}
 
-		ses := newSes(nil, ctrl)
+		ses := newSes(ctrl)
 		ses.tenant = tenant
 
 		err = InitGeneralTenant(ctx, bh, ses, &createAccount{
@@ -531,7 +531,7 @@ func Test_initUser(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		ses := newSes(nil, ctrl)
+		ses := newSes(ctrl)
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
@@ -683,8 +683,8 @@ func Test_determinePrivilege(t *testing.T) {
 		{stmt: &tree.ShowVariables{}},
 		{stmt: &tree.ShowStatus{}},
 		{stmt: &tree.ExplainFor{}},
-		{stmt: &tree.ExplainAnalyze{}},
-		{stmt: &tree.ExplainStmt{}},
+		{stmt: tree.NewExplainAnalyze(&tree.Select{}, "text")},
+		{stmt: tree.NewExplainStmt(&tree.Select{}, "text")},
 		{stmt: &tree.BeginTransaction{}},
 		{stmt: &tree.CommitTransaction{}},
 		{stmt: &tree.RollbackTransaction{}},
@@ -720,7 +720,7 @@ func Test_determineCreateAccount(t *testing.T) {
 
 		stmt := &tree.CreateAccount{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -739,7 +739,7 @@ func Test_determineCreateAccount(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -750,7 +750,7 @@ func Test_determineCreateAccount(t *testing.T) {
 
 		stmt := &tree.CreateAccount{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		ses.SetTenantInfo(&TenantInfo{
 			Tenant:        sysAccountName,
 			User:          "mocadmin",
@@ -761,6 +761,7 @@ func Test_determineCreateAccount(t *testing.T) {
 		})
 
 		sql2result := map[string]ExecResult{
+			getSqlForActiveRolesForAuthorization(&TenantInfo{User: "mocadmin", UserID: 2, DefaultRoleID: 2}, false): newMrsForRoleIdOfUserId([][]interface{}{{2, false}}),
 			getSqlForRoleIdOfUserId(2): newMrsForRoleIdOfUserId([][]interface{}{
 				{2, false},
 			}),
@@ -774,7 +775,7 @@ func Test_determineCreateAccount(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -785,7 +786,7 @@ func Test_determineCreateAccount(t *testing.T) {
 
 		stmt := &tree.AlterAccount{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		ses.SetTenantInfo(&TenantInfo{
 			Tenant:        sysAccountName,
 			User:          "mocadmin",
@@ -796,6 +797,7 @@ func Test_determineCreateAccount(t *testing.T) {
 		})
 
 		sql2result := map[string]ExecResult{
+			getSqlForActiveRolesForAuthorization(&TenantInfo{User: "mocadmin", UserID: 2, DefaultRoleID: 2}, false): newMrsForRoleIdOfUserId([][]interface{}{{2, false}}),
 			getSqlForRoleIdOfUserId(2): newMrsForRoleIdOfUserId([][]interface{}{
 				{2, false},
 			}),
@@ -809,7 +811,7 @@ func Test_determineCreateAccount(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -820,7 +822,7 @@ func Test_determineCreateAccount(t *testing.T) {
 
 		stmt := &tree.CreateAccount{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		ses.SetTenantInfo(&TenantInfo{
 			Tenant:        "acc1",
 			User:          "admin",
@@ -831,6 +833,7 @@ func Test_determineCreateAccount(t *testing.T) {
 		})
 
 		sql2result := map[string]ExecResult{
+			getSqlForActiveRolesForAuthorization(&TenantInfo{User: "admin", UserID: 2, DefaultRoleID: 2}, true): newMrsForRoleIdOfUserId([][]interface{}{{2, false}}),
 			getSqlForRoleIdOfUserId(2): newMrsForRoleIdOfUserId([][]interface{}{
 				{accountAdminRoleID, false},
 			}),
@@ -843,7 +846,7 @@ func Test_determineCreateAccount(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -854,7 +857,7 @@ func Test_determineCreateAccount(t *testing.T) {
 
 		stmt := &tree.AlterAccount{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		ses.SetTenantInfo(&TenantInfo{
 			Tenant:        "acc1",
 			User:          "admin",
@@ -865,6 +868,7 @@ func Test_determineCreateAccount(t *testing.T) {
 		})
 
 		sql2result := map[string]ExecResult{
+			getSqlForActiveRolesForAuthorization(&TenantInfo{User: "admin", UserID: 2, DefaultRoleID: 2}, true): newMrsForRoleIdOfUserId([][]interface{}{{2, false}}),
 			getSqlForRoleIdOfUserId(2): newMrsForRoleIdOfUserId([][]interface{}{
 				{accountAdminRoleID, false},
 			}),
@@ -877,7 +881,7 @@ func Test_determineCreateAccount(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -888,7 +892,7 @@ func Test_determineCreateAccount(t *testing.T) {
 
 		stmt := &tree.DropAccount{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		ses.SetTenantInfo(&TenantInfo{
 			Tenant:        "acc1",
 			User:          "admin",
@@ -899,6 +903,7 @@ func Test_determineCreateAccount(t *testing.T) {
 		})
 
 		sql2result := map[string]ExecResult{
+			getSqlForActiveRolesForAuthorization(&TenantInfo{User: "admin", UserID: 2, DefaultRoleID: 2}, true): newMrsForRoleIdOfUserId([][]interface{}{{2, false}}),
 			getSqlForRoleIdOfUserId(2): newMrsForRoleIdOfUserId([][]interface{}{
 				{accountAdminRoleID, false},
 			}),
@@ -911,7 +916,7 @@ func Test_determineCreateAccount(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -922,7 +927,7 @@ func Test_determineCreateAccount(t *testing.T) {
 
 		stmt := &tree.DropAccount{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		ses.SetTenantInfo(&TenantInfo{
 			Tenant:        sysAccountName,
 			User:          "mocadmin",
@@ -933,6 +938,7 @@ func Test_determineCreateAccount(t *testing.T) {
 		})
 
 		sql2result := map[string]ExecResult{
+			getSqlForActiveRolesForAuthorization(&TenantInfo{User: "mocadmin", UserID: 2, DefaultRoleID: 2}, false): newMrsForRoleIdOfUserId([][]interface{}{{2, false}}),
 			getSqlForRoleIdOfUserId(2): newMrsForRoleIdOfUserId([][]interface{}{
 				{2, false},
 			}),
@@ -946,7 +952,7 @@ func Test_determineCreateAccount(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -959,7 +965,7 @@ func Test_determineCreateAccount(t *testing.T) {
 			Target: &tree.Target{AccountName: "acc1"},
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		ses.SetTenantInfo(&TenantInfo{
 			Tenant:        sysAccountName,
 			User:          "mocadmin",
@@ -970,6 +976,7 @@ func Test_determineCreateAccount(t *testing.T) {
 		})
 
 		sql2result := map[string]ExecResult{
+			getSqlForActiveRolesForAuthorization(&TenantInfo{User: "mocadmin", UserID: 2, DefaultRoleID: 2}, false): newMrsForRoleIdOfUserId([][]interface{}{{2, false}}),
 			getSqlForRoleIdOfUserId(2): newMrsForRoleIdOfUserId([][]interface{}{
 				{2, false},
 			}),
@@ -983,7 +990,7 @@ func Test_determineCreateAccount(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -996,7 +1003,7 @@ func Test_determineCreateAccount(t *testing.T) {
 			Target: &tree.Target{IsALLAccount: true},
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		ses.SetTenantInfo(&TenantInfo{
 			Tenant:        sysAccountName,
 			User:          "mocadmin",
@@ -1006,7 +1013,7 @@ func Test_determineCreateAccount(t *testing.T) {
 			DefaultRoleID: 2,
 		})
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -1019,7 +1026,7 @@ func Test_determineCreateAccount(t *testing.T) {
 			Target: &tree.Target{AccountName: "acc1"},
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		ses.SetTenantInfo(&TenantInfo{
 			Tenant:        "acc1",
 			User:          "admin",
@@ -1030,6 +1037,7 @@ func Test_determineCreateAccount(t *testing.T) {
 		})
 
 		sql2result := map[string]ExecResult{
+			getSqlForActiveRolesForAuthorization(&TenantInfo{User: "admin", UserID: 2, DefaultRoleID: 2}, true): newMrsForRoleIdOfUserId([][]interface{}{{2, false}}),
 			getSqlForRoleIdOfUserId(2): newMrsForRoleIdOfUserId([][]interface{}{
 				{accountAdminRoleID, false},
 			}),
@@ -1042,7 +1050,7 @@ func Test_determineCreateAccount(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -1053,7 +1061,7 @@ func Test_determineCreateAccount(t *testing.T) {
 
 		stmt := &tree.CreateAccount{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -1076,7 +1084,7 @@ func Test_determineCreateAccount(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -1089,7 +1097,7 @@ func Test_determineCreateUser(t *testing.T) {
 
 		stmt := &tree.CreateUser{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -1113,7 +1121,7 @@ func Test_determineCreateUser(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -1123,7 +1131,7 @@ func Test_determineCreateUser(t *testing.T) {
 
 		stmt := &tree.CreateUser{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -1158,7 +1166,7 @@ func Test_determineCreateUser(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -1168,7 +1176,7 @@ func Test_determineCreateUser(t *testing.T) {
 
 		stmt := &tree.CreateUser{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -1210,7 +1218,7 @@ func Test_determineCreateUser(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -1223,7 +1231,7 @@ func Test_determineDropUser(t *testing.T) {
 
 		stmt := &tree.DropUser{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -1248,7 +1256,7 @@ func Test_determineDropUser(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -1258,7 +1266,7 @@ func Test_determineDropUser(t *testing.T) {
 
 		stmt := &tree.DropUser{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -1293,7 +1301,7 @@ func Test_determineDropUser(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -1303,7 +1311,7 @@ func Test_determineDropUser(t *testing.T) {
 
 		stmt := &tree.DropUser{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -1345,7 +1353,7 @@ func Test_determineDropUser(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -1358,7 +1366,7 @@ func Test_determineCreateRole(t *testing.T) {
 
 		stmt := &tree.CreateRole{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -1382,7 +1390,7 @@ func Test_determineCreateRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -1392,7 +1400,7 @@ func Test_determineCreateRole(t *testing.T) {
 
 		stmt := &tree.CreateRole{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -1427,7 +1435,7 @@ func Test_determineCreateRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -1437,7 +1445,7 @@ func Test_determineCreateRole(t *testing.T) {
 
 		stmt := &tree.CreateRole{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -1479,7 +1487,7 @@ func Test_determineCreateRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -1492,7 +1500,7 @@ func Test_determineDropRole(t *testing.T) {
 
 		stmt := &tree.DropRole{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -1516,7 +1524,7 @@ func Test_determineDropRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -1526,7 +1534,7 @@ func Test_determineDropRole(t *testing.T) {
 
 		stmt := &tree.DropRole{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -1561,7 +1569,7 @@ func Test_determineDropRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -1571,7 +1579,7 @@ func Test_determineDropRole(t *testing.T) {
 
 		stmt := &tree.DropRole{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -1613,7 +1621,7 @@ func Test_determineDropRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -1626,7 +1634,7 @@ func Test_determineGrantRole(t *testing.T) {
 
 		stmt := &tree.GrantRole{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -1652,7 +1660,7 @@ func Test_determineGrantRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -1663,7 +1671,7 @@ func Test_determineGrantRole(t *testing.T) {
 
 		stmt := &tree.GrantRole{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -1699,7 +1707,7 @@ func Test_determineGrantRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -1722,7 +1730,7 @@ func Test_determineGrantRole(t *testing.T) {
 			gr.Roles = append(gr.Roles, &tree.Role{UserName: name})
 		}
 		priv := determinePrivilegeSetOfStatement(g)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -1801,7 +1809,7 @@ func Test_determineGrantRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, g)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, g, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -1824,7 +1832,7 @@ func Test_determineGrantRole(t *testing.T) {
 			gr.Roles = append(gr.Roles, &tree.Role{UserName: name})
 		}
 		priv := determinePrivilegeSetOfStatement(g)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -1903,7 +1911,7 @@ func Test_determineGrantRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, g)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, g, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -1926,7 +1934,7 @@ func Test_determineGrantRole(t *testing.T) {
 			gr.Roles = append(gr.Roles, &tree.Role{UserName: name})
 		}
 		priv := determinePrivilegeSetOfStatement(g)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -2002,7 +2010,7 @@ func Test_determineGrantRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, g)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, g, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -2025,7 +2033,7 @@ func Test_determineGrantRole(t *testing.T) {
 			gr.Roles = append(gr.Roles, &tree.Role{UserName: name})
 		}
 		priv := determinePrivilegeSetOfStatement(g)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -2102,7 +2110,7 @@ func Test_determineGrantRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, g)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, g, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -2115,7 +2123,7 @@ func Test_determineRevokeRole(t *testing.T) {
 
 		stmt := &tree.RevokeRole{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -2139,7 +2147,7 @@ func Test_determineRevokeRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -2150,7 +2158,7 @@ func Test_determineRevokeRole(t *testing.T) {
 
 		stmt := &tree.RevokeRole{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -2185,7 +2193,7 @@ func Test_determineRevokeRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -2196,7 +2204,7 @@ func Test_determineRevokeRole(t *testing.T) {
 
 		stmt := &tree.RevokeRole{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -2238,7 +2246,7 @@ func Test_determineRevokeRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -2280,11 +2288,11 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 
 		for _, stmt := range stmts {
-			priv := determinePrivilegeSetOfStatement(stmt)
-			ses := newSes(priv, ctrl)
+			ses := newSes(ctrl)
 			ses.SetDatabaseName("db")
+			mockAuthorizationUser(t, ses)
 
-			ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+			ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, determinePrivilegeSetOfStatement(stmt))
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(ok, convey.ShouldBeTrue)
 		}
@@ -2358,8 +2366,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 
 		for _, stmt := range stmts {
-			priv := determinePrivilegeSetOfStatement(stmt)
-			ses := newSes(priv, ctrl)
+			ses := newSes(ctrl)
 			ses.tenant = &TenantInfo{
 				Tenant:        "xxx",
 				User:          "xxx",
@@ -2371,6 +2378,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			ses.SetDatabaseName("db")
 			//TODO: make sql2result
 			bh.init()
+			makeRowsOfMoUserGrant(bh.sql2result, 1001, [][]interface{}{{1001, false}}, "xxx")
 
 			// Mock getDatabaseOrTableId for scoped levels.
 			if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_STAR ||
@@ -2461,7 +2469,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				}
 			}
 
-			ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+			ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, determinePrivilegeSetOfStatement(stmt))
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(ok, convey.ShouldBeTrue)
 		}
@@ -2535,8 +2543,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 
 		for _, stmt := range stmts {
-			priv := determinePrivilegeSetOfStatement(stmt)
-			ses := newSes(priv, ctrl)
+			ses := newSes(ctrl)
 			ses.tenant = &TenantInfo{
 				Tenant:        "xxx",
 				User:          "xxx",
@@ -2548,6 +2555,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			ses.SetDatabaseName("db")
 			//TODO: make sql2result
 			bh.init()
+			makeRowsOfMoUserGrant(bh.sql2result, 1001, [][]interface{}{{1001, false}}, "xxx")
 
 			// Mock getDatabaseOrTableId for scoped levels.
 			if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_STAR ||
@@ -2658,7 +2666,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				}
 			}
 
-			ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+			ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, determinePrivilegeSetOfStatement(stmt))
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(ok, convey.ShouldBeFalse)
 		}
@@ -2686,7 +2694,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		ses.tenant = &TenantInfo{
 			Tenant:        "xxx",
 			User:          "xxx",
@@ -2696,6 +2704,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			DefaultRoleID: 1001,
 		}
 		bh.init()
+		makeRowsOfMoUserGrant(bh.sql2result, 1001, [][]interface{}{{1001, false}}, "xxx")
 
 		checkSql, err := getSqlForCheckDatabase(ses.GetTxnHandler().GetTxnCtx(), "db")
 		convey.So(err, convey.ShouldBeNil)
@@ -2714,7 +2723,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			{ses.GetTenantInfo().GetDefaultRoleID()},
 		})
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -2742,7 +2751,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		ses.tenant = &TenantInfo{
 			Tenant:        "xxx",
 			User:          "xxx",
@@ -2753,6 +2762,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
+		makeRowsOfMoUserGrant(bh.sql2result, 1001, [][]interface{}{{1001, false}}, "xxx")
 
 		checkTableSql, err := getSqlForCheckDatabaseTable(ctx, "db", "t1")
 		convey.So(err, convey.ShouldBeNil)
@@ -2778,7 +2788,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			{ses.GetTenantInfo().GetDefaultRoleID()},
 		})
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -2804,7 +2814,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		ses.tenant = &TenantInfo{
 			Tenant:        "xxx",
 			User:          "xxx",
@@ -2815,6 +2825,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
+		makeRowsOfMoUserGrant(bh.sql2result, 1001, [][]interface{}{{1001, false}}, "xxx")
 
 		privType, err := convertAstPrivilegeTypeToPrivilegeType(context.TODO(), stmt.Privileges[0].Type, stmt.ObjType)
 		convey.So(err, convey.ShouldBeNil)
@@ -2832,7 +2843,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			{ses.GetTenantInfo().GetDefaultRoleID()},
 		})
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -2858,7 +2869,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		ses.tenant = &TenantInfo{
 			Tenant:        "xxx",
 			User:          "xxx",
@@ -2869,6 +2880,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
+		makeRowsOfMoUserGrant(bh.sql2result, 1001, [][]interface{}{{1001, false}}, "xxx")
 
 		privType, err := convertAstPrivilegeTypeToPrivilegeType(context.TODO(), stmt.Privileges[0].Type, stmt.ObjType)
 		convey.So(err, convey.ShouldBeNil)
@@ -2886,7 +2898,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			{ses.GetTenantInfo().GetDefaultRoleID()},
 		})
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -2913,7 +2925,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		ses.tenant = &TenantInfo{
 			Tenant:        "xxx",
 			User:          "xxx",
@@ -2923,6 +2935,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			DefaultRoleID: 1001,
 		}
 		bh.init()
+		makeRowsOfMoUserGrant(bh.sql2result, 1001, [][]interface{}{{1001, false}}, "xxx")
 
 		checkSql, err := getSqlForCheckDatabase(ses.GetTxnHandler().GetTxnCtx(), "db1")
 		convey.So(err, convey.ShouldBeNil)
@@ -2945,7 +2958,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			{ses.GetTenantInfo().GetDefaultRoleID()},
 		})
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -2973,7 +2986,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		ses.tenant = &TenantInfo{
 			Tenant:        "xxx",
 			User:          "xxx",
@@ -2984,6 +2997,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
+		makeRowsOfMoUserGrant(bh.sql2result, 1001, [][]interface{}{{1001, false}}, "xxx")
 
 		checkTableSql, err := getSqlForCheckDatabaseTable(ctx, "db1", "t1")
 		convey.So(err, convey.ShouldBeNil)
@@ -3013,7 +3027,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			{ses.GetTenantInfo().GetDefaultRoleID()},
 		})
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -3041,7 +3055,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		ses.tenant = &TenantInfo{
 			Tenant:        "xxx",
 			User:          "xxx",
@@ -3052,6 +3066,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
+		makeRowsOfMoUserGrant(bh.sql2result, 1001, [][]interface{}{{1001, false}}, "xxx")
 
 		checkViewSql, err := getSqlForCheckDatabaseView(ctx, "db", "v1")
 		convey.So(err, convey.ShouldBeNil)
@@ -3089,7 +3104,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			objectTypeTable, 10001, privilegeLevelDatabaseStar)
 		bh.sql2result[legacyDbScopedSql] = newMrsForPrivilegeWGO([][]interface{}{})
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -3117,7 +3132,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		ses.tenant = &TenantInfo{
 			Tenant:        "xxx",
 			User:          "xxx",
@@ -3128,6 +3143,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
+		makeRowsOfMoUserGrant(bh.sql2result, 1001, [][]interface{}{{1001, false}}, "xxx")
 
 		checkViewSql, err := getSqlForCheckDatabaseView(ctx, "db", "v2")
 		require.NoError(t, err)
@@ -3165,7 +3181,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			objectTypeTable, 10001, privilegeLevelDatabaseStar)
 		bh.sql2result[legacyDbScopedSql] = newMrsForPrivilegeWGO([][]interface{}{})
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt, priv)
 		require.NoError(t, err)
 		require.True(t, ok)
 	})
@@ -3193,7 +3209,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		ses.tenant = &TenantInfo{
 			Tenant:        "xxx",
 			User:          "xxx",
@@ -3204,6 +3220,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
+		makeRowsOfMoUserGrant(bh.sql2result, 1001, [][]interface{}{{1001, false}}, "xxx")
 
 		checkViewSql, err := getSqlForCheckDatabaseView(ctx, "db", "v3")
 		require.NoError(t, err)
@@ -3241,7 +3258,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			{ses.GetTenantInfo().GetDefaultRoleID()},
 		})
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt, priv)
 		require.NoError(t, err)
 		require.False(t, ok)
 	})
@@ -3267,7 +3284,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		ses.tenant = &TenantInfo{
 			Tenant:        "xxx",
 			User:          "xxx",
@@ -3278,6 +3295,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
+		makeRowsOfMoUserGrant(bh.sql2result, 1001, [][]interface{}{{1001, false}}, "xxx")
 
 		privType, err := convertAstPrivilegeTypeToPrivilegeType(context.TODO(), stmt.Privileges[0].Type, stmt.ObjType)
 		require.NoError(t, err)
@@ -3292,7 +3310,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			{ses.GetTenantInfo().GetDefaultRoleID()},
 		})
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt, priv)
 		require.NoError(t, err)
 		require.False(t, ok)
 	})
@@ -3320,7 +3338,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		ses.tenant = &TenantInfo{
 			Tenant:        "xxx",
 			User:          "xxx",
@@ -3331,6 +3349,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
+		makeRowsOfMoUserGrant(bh.sql2result, 1001, [][]interface{}{{1001, false}}, "xxx")
 
 		checkViewSql, err := getSqlForCheckDatabaseView(ctx, "db", "v1")
 		convey.So(err, convey.ShouldBeNil)
@@ -3366,7 +3385,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			objectTypeTable, 10001, privilegeLevelDatabaseStar)
 		bh.sql2result[legacyDbSql] = newMrsForPrivilegeWGO([][]interface{}{})
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -3394,7 +3413,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		ses.tenant = &TenantInfo{
 			Tenant:        "xxx",
 			User:          "xxx",
@@ -3405,6 +3424,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
+		makeRowsOfMoUserGrant(bh.sql2result, 1001, [][]interface{}{{1001, false}}, "xxx")
 
 		checkViewSql, err := getSqlForCheckDatabaseView(ctx, "db", "v1")
 		convey.So(err, convey.ShouldBeNil)
@@ -3452,7 +3472,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			{ses.GetTenantInfo().GetDefaultRoleID()},
 		})
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -3480,7 +3500,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		ses.tenant = &TenantInfo{
 			Tenant:        "xxx",
 			User:          "xxx",
@@ -3491,6 +3511,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
+		makeRowsOfMoUserGrant(bh.sql2result, 1001, [][]interface{}{{1001, false}}, "xxx")
 
 		checkTableSql, err := getSqlForCheckDatabaseTable(ctx, "db", "missing_t")
 		convey.So(err, convey.ShouldBeNil)
@@ -3515,7 +3536,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			objectTypeTable, 10002, privilegeLevelDatabaseStar)
 		bh.sql2result[dbScopedSql] = newMrsForPrivilegeWGO([][]interface{}{})
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -3543,7 +3564,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		ses.tenant = &TenantInfo{
 			Tenant:        "xxx",
 			User:          "xxx",
@@ -3554,6 +3575,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
+		makeRowsOfMoUserGrant(bh.sql2result, 1001, [][]interface{}{{1001, false}}, "xxx")
 
 		checkTableSql, err := getSqlForCheckDatabaseTable(ctx, "db", "missing_t")
 		convey.So(err, convey.ShouldBeNil)
@@ -3584,7 +3606,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			{ses.GetTenantInfo().GetDefaultRoleID()},
 		})
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 		convey.So(strings.Join(bh.executedSQLs, "\n"), convey.ShouldNotContainSubstring, objTypeScopedSql)
@@ -3613,7 +3635,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		ses.tenant = &TenantInfo{
 			Tenant:        "xxx",
 			User:          "xxx",
@@ -3624,6 +3646,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
+		makeRowsOfMoUserGrant(bh.sql2result, 1001, [][]interface{}{{1001, false}}, "xxx")
 
 		checkSql, err := getSqlForCheckDatabaseView(ctx, "db", "v1")
 		convey.So(err, convey.ShouldBeNil)
@@ -3661,7 +3684,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			objectTypeTable, 10001, privilegeLevelDatabaseStar)
 		bh.sql2result[legacyDbScopedSql] = newMrsForPrivilegeWGO([][]interface{}{})
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -3688,7 +3711,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		ses.tenant = &TenantInfo{
 			Tenant:        "xxx",
 			User:          "xxx",
@@ -3699,6 +3722,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
+		makeRowsOfMoUserGrant(bh.sql2result, 1001, [][]interface{}{{1001, false}}, "xxx")
 
 		checkDbSql, err := getSqlForCheckDatabase(ctx, "db1")
 		convey.So(err, convey.ShouldBeNil)
@@ -3719,7 +3743,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			objectTypeDatabase, objectIDAll, privilegeLevelStarStar)
 		bh.sql2result[globalStarStarSql] = newMrsForPrivilegeWGO([][]interface{}{})
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -3746,7 +3770,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		ses.tenant = &TenantInfo{
 			Tenant:        "xxx",
 			User:          "xxx",
@@ -3757,6 +3781,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
+		makeRowsOfMoUserGrant(bh.sql2result, 1001, [][]interface{}{{1001, false}}, "xxx")
 
 		checkDbSql, err := getSqlForCheckDatabase(ctx, "db1")
 		convey.So(err, convey.ShouldBeNil)
@@ -3785,7 +3810,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			{ses.GetTenantInfo().GetDefaultRoleID()},
 		})
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 		convey.So(strings.Join(bh.executedSQLs, "\n"), convey.ShouldNotContainSubstring, otherDbScopedSql)
@@ -3813,7 +3838,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		ses.tenant = &TenantInfo{
 			Tenant:        "xxx",
 			User:          "xxx",
@@ -3824,6 +3849,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
+		makeRowsOfMoUserGrant(bh.sql2result, 1001, [][]interface{}{{1001, false}}, "xxx")
 
 		globalSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjAndExactLevel(
 			int64(PrivilegeTypeDropTable), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership),
@@ -3838,7 +3864,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		unscopedSql := getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(PrivilegeTypeDropTable)
 		bh.sql2result[unscopedSql] = newMrsForPrivilegeWGO([][]interface{}{})
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 		convey.So(strings.Join(bh.executedSQLs, "\n"), convey.ShouldContainSubstring, globalSql)
@@ -3867,7 +3893,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		internRoleID := int64(1001)
 		devRoleID := int64(1002)
 		testRoleID := int64(1003)
@@ -3881,6 +3907,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
+		makeRowsOfMoUserGrant(bh.sql2result, 1001, [][]interface{}{{1001, false}}, "xxx")
 
 		globalSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjAndExactLevel(
 			int64(PrivilegeTypeDropTable), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership),
@@ -3902,7 +3929,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 
 		roleGrantWGOSql := getSqlForCheckRoleGrantWGO(testRoleID)
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 		convey.So(strings.Join(bh.executedSQLs, "\n"), convey.ShouldNotContainSubstring, roleGrantWGOSql)
@@ -3931,7 +3958,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		internRoleID := int64(1001)
 		devRoleID := int64(1002)
 		testRoleID := int64(1003)
@@ -3945,6 +3972,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
+		makeRowsOfMoUserGrant(bh.sql2result, 1001, [][]interface{}{{1001, false}}, "xxx")
 
 		checkTableSql, err := getSqlForCheckDatabaseTable(ctx, "db", "t1")
 		convey.So(err, convey.ShouldBeNil)
@@ -3977,7 +4005,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 
 		roleGrantWGOSql := getSqlForCheckRoleGrantWGO(testRoleID)
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 		convey.So(strings.Join(bh.executedSQLs, "\n"), convey.ShouldNotContainSubstring, roleGrantWGOSql)
@@ -4006,7 +4034,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		internRoleID := int64(1001)
 		devRoleID := int64(1002)
 		testRoleID := int64(1003)
@@ -4020,6 +4048,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
+		makeRowsOfMoUserGrant(bh.sql2result, 1001, [][]interface{}{{1001, false}}, "xxx")
 
 		checkViewSql, err := getSqlForCheckDatabaseView(ctx, "db", "v1")
 		convey.So(err, convey.ShouldBeNil)
@@ -4064,7 +4093,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 
 		roleGrantWGOSql := getSqlForCheckRoleGrantWGO(testRoleID)
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 		convey.So(strings.Join(bh.executedSQLs, "\n"), convey.ShouldNotContainSubstring, roleGrantWGOSql)
@@ -4091,7 +4120,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		internRoleID := int64(1001)
 		devRoleID := int64(1002)
 		ses.tenant = &TenantInfo{
@@ -4104,6 +4133,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
+		makeRowsOfMoUserGrant(bh.sql2result, 1001, [][]interface{}{{1001, false}}, "xxx")
 
 		wgoSql := getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(PrivilegeTypeDropDatabase)
 		bh.sql2result[wgoSql] = newMrsForPrivilegeWGO([][]interface{}{
@@ -4116,7 +4146,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			{devRoleID, false},
 		})
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 		convey.So(strings.Join(bh.executedSQLs, "\n"), convey.ShouldNotContainSubstring, inheritedSql)
@@ -4167,8 +4197,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 
 		var privType PrivilegeType
 		for _, stmt := range stmts {
-			priv := determinePrivilegeSetOfStatement(stmt)
-			ses := newSes(priv, ctrl)
+			ses := newSes(ctrl)
 			ses.tenant = &TenantInfo{
 				Tenant:        "xxx",
 				User:          "xxx",
@@ -4180,6 +4209,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			ses.SetDatabaseName("db")
 			//TODO: make sql2result
 			bh.init()
+			makeRowsOfMoUserGrant(bh.sql2result, 1001, [][]interface{}{{1001, false}}, "xxx")
 			for _, p := range stmt.Privileges {
 				sql, err := formSqlFromGrantPrivilege(context.TODO(), ses, stmt, p)
 				convey.So(err, convey.ShouldBeNil)
@@ -4198,7 +4228,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				bh.sql2result[sql] = newMrsForPrivilegeWGO(rows)
 			}
 
-			ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+			ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, determinePrivilegeSetOfStatement(stmt))
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(ok, convey.ShouldBeTrue)
 		}
@@ -4248,8 +4278,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 
 		for _, stmt := range stmts {
-			priv := determinePrivilegeSetOfStatement(stmt)
-			ses := newSes(priv, ctrl)
+			ses := newSes(ctrl)
 			ses.tenant = &TenantInfo{
 				Tenant:        "xxx",
 				User:          "xxx",
@@ -4261,6 +4290,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			ses.SetDatabaseName("db")
 			//TODO: make sql2result
 			bh.init()
+			makeRowsOfMoUserGrant(bh.sql2result, 1001, [][]interface{}{{1001, false}}, "xxx")
 			for i, p := range stmt.Privileges {
 				sql, err := formSqlFromGrantPrivilege(context.TODO(), ses, stmt, p)
 				convey.So(err, convey.ShouldBeNil)
@@ -4290,7 +4320,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				bh.sql2result[sql] = newMrsForPrivilegeWGO(rows)
 			}
 
-			ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+			ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, determinePrivilegeSetOfStatement(stmt))
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(ok, convey.ShouldBeFalse)
 		}
@@ -4320,8 +4350,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 
 		for _, stmt := range stmts {
-			priv := determinePrivilegeSetOfStatement(stmt)
-			ses := newSes(priv, ctrl)
+			ses := newSes(ctrl)
 			ses.tenant = &TenantInfo{
 				Tenant:        "xxx",
 				User:          "xxx",
@@ -4333,6 +4362,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			ses.SetDatabaseName("db")
 			//TODO: make sql2result
 			bh.init()
+			makeRowsOfMoUserGrant(bh.sql2result, 1001, [][]interface{}{{1001, false}}, "xxx")
 			for _, p := range stmt.Privileges {
 				sql, err := formSqlFromGrantPrivilege(context.TODO(), ses, stmt, p)
 				convey.So(err, convey.ShouldBeNil)
@@ -4351,7 +4381,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				bh.sql2result[sql] = newMrsForPrivilegeWGO(rows)
 			}
 
-			ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+			ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, determinePrivilegeSetOfStatement(stmt))
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(ok, convey.ShouldBeTrue)
 		}
@@ -4381,8 +4411,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		}
 
 		for _, stmt := range stmts {
-			priv := determinePrivilegeSetOfStatement(stmt)
-			ses := newSes(priv, ctrl)
+			ses := newSes(ctrl)
 			ses.tenant = &TenantInfo{
 				Tenant:        "xxx",
 				User:          "xxx",
@@ -4394,6 +4423,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			ses.SetDatabaseName("db")
 			//TODO: make sql2result
 			bh.init()
+			makeRowsOfMoUserGrant(bh.sql2result, 1001, [][]interface{}{{1001, false}}, "xxx")
 			for i, p := range stmt.Privileges {
 				sql, err := formSqlFromGrantPrivilege(context.TODO(), ses, stmt, p)
 				convey.So(err, convey.ShouldBeNil)
@@ -4423,7 +4453,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				bh.sql2result[sql] = newMrsForPrivilegeWGO(rows)
 			}
 
-			ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+			ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, determinePrivilegeSetOfStatement(stmt))
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(ok, convey.ShouldBeFalse)
 		}
@@ -4440,9 +4470,9 @@ func Test_determineRevokePrivilege(t *testing.T) {
 		// we are looping over nil.
 		// for _, stmt := range stmts {
 		// 	priv := determinePrivilegeSetOfStatement(stmt)
-		//	ses := newSes(priv, ctrl)
+		//	ses := newSes(ctrl)
 
-		//	ok, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		//	ok, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, priv)
 		//	convey.So(err, convey.ShouldBeNil)
 		//	convey.So(ok, convey.ShouldBeTrue)
 		// }
@@ -4456,7 +4486,7 @@ func Test_determineRevokePrivilege(t *testing.T) {
 		// we are looping over nil.
 		// for _, stmt := range stmts {
 		// 	priv := determinePrivilegeSetOfStatement(stmt)
-		// 	ses := newSes(priv, ctrl)
+		// 	ses := newSes(ctrl)
 		// 	ses.tenant = &TenantInfo{
 		// 		Tenant:        "xxx",
 		// 		User:          "xxx",
@@ -4466,7 +4496,7 @@ func Test_determineRevokePrivilege(t *testing.T) {
 		// 		DefaultRoleID: 1001,
 		// 	}
 
-		// 	ok, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		// 	ok, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, priv)
 		// 	convey.So(err, convey.ShouldBeNil)
 		// 	convey.So(ok, convey.ShouldBeFalse)
 		// }
@@ -4479,7 +4509,7 @@ func TestBackUpStatementPrivilege(t *testing.T) {
 		defer ctrl.Finish()
 		stmt := &tree.BackupStart{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		tenant := &TenantInfo{
 			Tenant:        sysAccountName,
 			User:          rootName,
@@ -4489,8 +4519,9 @@ func TestBackUpStatementPrivilege(t *testing.T) {
 			DefaultRoleID: moAdminRoleID,
 		}
 		ses.SetTenantInfo(tenant)
+		mockAuthorizationUser(t, ses)
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -4500,7 +4531,7 @@ func TestBackUpStatementPrivilege(t *testing.T) {
 		defer ctrl.Finish()
 		stmt := &tree.BackupStart{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		tenant := &TenantInfo{
 			Tenant:        "test_account",
 			User:          "test_user",
@@ -4511,7 +4542,7 @@ func TestBackUpStatementPrivilege(t *testing.T) {
 		}
 		ses.SetTenantInfo(tenant)
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -4524,7 +4555,7 @@ func Test_determineCreateDatabase(t *testing.T) {
 
 		stmt := &tree.CreateDatabase{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -4548,7 +4579,7 @@ func Test_determineCreateDatabase(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -4558,7 +4589,7 @@ func Test_determineCreateDatabase(t *testing.T) {
 
 		stmt := &tree.CreateDatabase{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -4593,7 +4624,7 @@ func Test_determineCreateDatabase(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -4603,7 +4634,7 @@ func Test_determineCreateDatabase(t *testing.T) {
 
 		stmt := &tree.CreateDatabase{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -4645,7 +4676,7 @@ func Test_determineCreateDatabase(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -4658,7 +4689,7 @@ func TestCreateDatabaseOwnerRoleFollowsActiveInheritedRoleRoot(t *testing.T) {
 
 		stmt := &tree.CreateDatabase{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		ses.GetTenantInfo().SetDefaultRoleID(5)
 
 		rowsOfMoUserGrant := [][]interface{}{
@@ -4701,7 +4732,7 @@ func TestCreateDatabaseOwnerRoleFollowsActiveInheritedRoleRoot(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 		convey.So(ses.GetDDLOwnerRoleID(), convey.ShouldEqual, uint32(5))
@@ -4715,7 +4746,7 @@ func Test_determineDropDatabase(t *testing.T) {
 
 		stmt := &tree.DropDatabase{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -4740,7 +4771,7 @@ func Test_determineDropDatabase(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -4750,7 +4781,7 @@ func Test_determineDropDatabase(t *testing.T) {
 
 		stmt := &tree.DropDatabase{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -4784,7 +4815,7 @@ func Test_determineDropDatabase(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -4794,7 +4825,7 @@ func Test_determineDropDatabase(t *testing.T) {
 
 		stmt := &tree.DropDatabase{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -4835,7 +4866,7 @@ func Test_determineDropDatabase(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -4848,7 +4879,7 @@ func Test_determineShowDatabase(t *testing.T) {
 
 		stmt := &tree.ShowDatabases{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -4873,7 +4904,7 @@ func Test_determineShowDatabase(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -4883,7 +4914,7 @@ func Test_determineShowDatabase(t *testing.T) {
 
 		stmt := &tree.ShowDatabases{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -4918,7 +4949,7 @@ func Test_determineShowDatabase(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -4928,7 +4959,7 @@ func Test_determineShowDatabase(t *testing.T) {
 
 		stmt := &tree.ShowDatabases{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -4970,7 +5001,7 @@ func Test_determineShowDatabase(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -4985,7 +5016,7 @@ func Test_determineUseDatabase(t *testing.T) {
 			Name: tree.NewCStr("db", 1),
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -5010,7 +5041,7 @@ func Test_determineUseDatabase(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -5022,7 +5053,7 @@ func Test_determineUseDatabase(t *testing.T) {
 			Name: tree.NewCStr("db", 1),
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -5057,7 +5088,7 @@ func Test_determineUseDatabase(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -5069,7 +5100,7 @@ func Test_determineUseDatabase(t *testing.T) {
 			Name: tree.NewCStr("db", 1),
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -5111,7 +5142,7 @@ func Test_determineUseDatabase(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -5124,7 +5155,7 @@ func Test_determineCreateTable(t *testing.T) {
 
 		stmt := &tree.CreateTable{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -5172,7 +5203,7 @@ func Test_determineCreateTable(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -5183,7 +5214,7 @@ func Test_determineCreateTable(t *testing.T) {
 
 		stmt := &tree.CreateTable{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -5246,7 +5277,7 @@ func Test_determineCreateTable(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -5257,7 +5288,7 @@ func Test_determineCreateTable(t *testing.T) {
 
 		stmt := &tree.CreateTable{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -5325,7 +5356,7 @@ func Test_determineCreateTable(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -5338,7 +5369,7 @@ func TestCreateTableOwnerRoleFollowsPrivilegeRole(t *testing.T) {
 
 		stmt := &tree.CreateTable{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		ses.GetTenantInfo().SetDefaultRoleID(5)
 		ses.GetTenantInfo().SetUseSecondaryRole(true)
 
@@ -5382,7 +5413,7 @@ func TestCreateTableOwnerRoleFollowsPrivilegeRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 		convey.So(ses.GetDDLOwnerRoleID(), convey.ShouldEqual, uint32(7))
@@ -5394,7 +5425,7 @@ func TestCreateTableOwnerRoleFollowsPrivilegeRole(t *testing.T) {
 
 		stmt := &tree.CreateTable{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		ses.GetTenantInfo().SetDefaultRoleID(5)
 		ses.GetTenantInfo().SetUseSecondaryRole(true)
 
@@ -5438,7 +5469,7 @@ func TestCreateTableOwnerRoleFollowsPrivilegeRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 		convey.So(ses.GetDDLOwnerRoleID(), convey.ShouldEqual, uint32(5))
@@ -5450,7 +5481,7 @@ func TestCreateTableOwnerRoleFollowsPrivilegeRole(t *testing.T) {
 
 		stmt := &tree.CreateTable{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		ses.GetTenantInfo().SetDefaultRoleID(5)
 
 		rowsOfMoUserGrant := [][]interface{}{
@@ -5495,7 +5526,7 @@ func TestCreateTableOwnerRoleFollowsPrivilegeRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 		convey.So(ses.GetDDLOwnerRoleID(), convey.ShouldEqual, uint32(5))
@@ -5509,7 +5540,7 @@ func Test_determineDropTable(t *testing.T) {
 
 		stmt := &tree.DropTable{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -5557,7 +5588,7 @@ func Test_determineDropTable(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -5568,7 +5599,7 @@ func Test_determineDropTable(t *testing.T) {
 
 		stmt := &tree.DropTable{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -5631,7 +5662,7 @@ func Test_determineDropTable(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -5642,7 +5673,7 @@ func Test_determineDropTable(t *testing.T) {
 
 		stmt := &tree.DropTable{}
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		rowsOfMoUserGrant := [][]interface{}{
 			{0, false},
@@ -5710,7 +5741,7 @@ func Test_determineDropTable(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -5842,7 +5873,7 @@ func Test_determineDML(t *testing.T) {
 
 		for _, a := range args {
 			priv := determinePrivilegeSetOfStatement(a.stmt)
-			ses := newSes(priv, ctrl)
+			ses := newSes(ctrl)
 
 			rowsOfMoUserGrant := [][]interface{}{
 				{0, false},
@@ -5920,7 +5951,7 @@ func Test_determineDML(t *testing.T) {
 
 		for _, a := range args {
 			priv := determinePrivilegeSetOfStatement(a.stmt)
-			ses := newSes(priv, ctrl)
+			ses := newSes(ctrl)
 
 			rowsOfMoUserGrant := [][]interface{}{
 				{0, false},
@@ -6017,7 +6048,7 @@ func Test_determineDML(t *testing.T) {
 
 		for _, a := range args {
 			priv := determinePrivilegeSetOfStatement(a.stmt)
-			ses := newSes(priv, ctrl)
+			ses := newSes(ctrl)
 
 			rowsOfMoUserGrant := [][]interface{}{
 				{0, false},
@@ -6113,8 +6144,8 @@ func TestReplacePrivilegeRequiresDeleteForConflictingTargets(t *testing.T) {
 		defer ctrl.Finish()
 
 		stmt := &tree.Replace{}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		sql2result := makeSql2ExecResult2(0, [][]interface{}{{0, false}}, nil, nil, nil, nil, nil, nil, nil)
 		addTablePrivilegeResultsForRole(t, sql2result, 0, dbName, tableName, map[PrivilegeType]bool{
@@ -6136,6 +6167,15 @@ func TestReplacePrivilegeRequiresDeleteForConflictingTargets(t *testing.T) {
 		)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
+		// Call the plan owner directly: wrapper admission must not be the only
+		// protection, and REPLACE still needs DELETE after unwrapping.
+		for _, wrapped := range []tree.Statement{tree.NewExplainStmt(stmt, "text"), tree.NewExplainAnalyze(stmt, "text"), tree.NewExplainPhyPlan(stmt, "text")} {
+			allowed, _, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ses.GetTxnHandler().GetTxnCtx(), ses, wrapped, makeReplacePrivilegePlan(dbName, tableName, false, false))
+			require.NoError(t, err)
+			require.False(t, allowed)
+			wrapped.Free()
+		}
+
 	})
 
 	convey.Convey("replace on fake pk table without unique indexes remains insert only", t, func() {
@@ -6143,8 +6183,8 @@ func TestReplacePrivilegeRequiresDeleteForConflictingTargets(t *testing.T) {
 		defer ctrl.Finish()
 
 		stmt := &tree.Replace{}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		sql2result := makeSql2ExecResult2(0, [][]interface{}{{0, false}}, nil, nil, nil, nil, nil, nil, nil)
 		addTablePrivilegeResultsForRole(t, sql2result, 0, dbName, tableName, map[PrivilegeType]bool{
@@ -6173,8 +6213,8 @@ func TestReplacePrivilegeRequiresDeleteForConflictingTargets(t *testing.T) {
 		defer ctrl.Finish()
 
 		stmt := &tree.Replace{}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		sql2result := makeSql2ExecResult2(0, [][]interface{}{{0, false}}, nil, nil, nil, nil, nil, nil, nil)
 		addTablePrivilegeResultsForRole(t, sql2result, 0, dbName, tableName, map[PrivilegeType]bool{
@@ -6203,8 +6243,8 @@ func TestReplacePrivilegeRequiresDeleteForConflictingTargets(t *testing.T) {
 		defer ctrl.Finish()
 
 		stmt := &tree.Replace{}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		sql2result := makeSql2ExecResult2(0, [][]interface{}{{0, false}}, nil, nil, nil, nil, nil, nil, nil)
 		addTablePrivilegeResultsForRole(t, sql2result, 0, dbName, tableName, map[PrivilegeType]bool{
@@ -6639,8 +6679,8 @@ func Test_doGrantRole(t *testing.T) {
 				{Username: "r6"},
 			},
 		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -6708,8 +6748,8 @@ func Test_doGrantRole(t *testing.T) {
 				{Username: "u6"},
 			},
 		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -6788,8 +6828,8 @@ func Test_doGrantRole(t *testing.T) {
 				{Username: "u6"},
 			},
 		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -6894,8 +6934,8 @@ func Test_doGrantRole(t *testing.T) {
 				{Username: "u6"},
 			},
 		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -7004,8 +7044,8 @@ func Test_doGrantRole(t *testing.T) {
 			},
 			GrantOption: true,
 		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -7114,8 +7154,8 @@ func Test_doGrantRole(t *testing.T) {
 				{Username: "r1"},
 			},
 		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -7184,8 +7224,8 @@ func Test_doGrantRole(t *testing.T) {
 			},
 			GrantOption: true,
 		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -7299,8 +7339,8 @@ func Test_doGrantRole(t *testing.T) {
 				{Username: "r6"},
 			},
 		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -7366,8 +7406,8 @@ func Test_doGrantRole(t *testing.T) {
 				{Username: "u6"},
 			},
 		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -7443,8 +7483,8 @@ func Test_doRevokeRole(t *testing.T) {
 				{Username: "r6"},
 			},
 		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -7506,8 +7546,8 @@ func Test_doRevokeRole(t *testing.T) {
 				{Username: "r6"},
 			},
 		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -7569,8 +7609,8 @@ func Test_doRevokeRole(t *testing.T) {
 				{Username: "r6"},
 			},
 		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -7637,8 +7677,8 @@ func Test_doRevokeRole(t *testing.T) {
 				{Username: "u3"},
 			},
 		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -7709,8 +7749,8 @@ func Test_doRevokeRole(t *testing.T) {
 				{Username: "u6"},
 			},
 		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -7776,8 +7816,8 @@ func Test_doGrantPrivilege(t *testing.T) {
 				{UserName: "r1"},
 			},
 		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -7870,8 +7910,8 @@ func Test_doGrantPrivilege(t *testing.T) {
 		}
 
 		for _, stmt := range stmts {
-			priv := determinePrivilegeSetOfStatement(stmt)
-			ses := newSes(priv, ctrl)
+
+			ses := newSes(ctrl)
 
 			//no result set
 			bh.sql2result["begin;"] = nil
@@ -8003,8 +8043,8 @@ func Test_doGrantPrivilege(t *testing.T) {
 		ctx := context.WithValue(context.TODO(), defines.TenantIDKey{}, uint32(sysAccountID))
 
 		for _, stmt := range stmts {
-			priv := determinePrivilegeSetOfStatement(stmt)
-			ses := newSes(priv, ctrl)
+
+			ses := newSes(ctrl)
 			ses.SetDatabaseName("d")
 
 			//no result set
@@ -8147,8 +8187,8 @@ func Test_doGrantPrivilege(t *testing.T) {
 		ctx := context.WithValue(context.TODO(), defines.TenantIDKey{}, uint32(sysAccountID))
 
 		for _, stmt := range stmts {
-			priv := determinePrivilegeSetOfStatement(stmt)
-			ses := newSes(priv, ctrl)
+
+			ses := newSes(ctrl)
 			ses.SetDatabaseName("d")
 
 			//no result set
@@ -8232,8 +8272,8 @@ func Test_doRevokePrivilege(t *testing.T) {
 				{UserName: "r1"},
 			},
 		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -8326,8 +8366,8 @@ func Test_doRevokePrivilege(t *testing.T) {
 		}
 
 		for _, stmt := range stmts {
-			priv := determinePrivilegeSetOfStatement(stmt)
-			ses := newSes(priv, ctrl)
+
+			ses := newSes(ctrl)
 
 			//no result set
 			bh.sql2result["begin;"] = nil
@@ -8459,8 +8499,8 @@ func Test_doRevokePrivilege(t *testing.T) {
 		ctx := context.WithValue(context.TODO(), defines.TenantIDKey{}, uint32(sysAccountID))
 
 		for _, stmt := range stmts {
-			priv := determinePrivilegeSetOfStatement(stmt)
-			ses := newSes(priv, ctrl)
+
+			ses := newSes(ctrl)
 			ses.SetDatabaseName("d")
 
 			//no result set
@@ -8603,8 +8643,8 @@ func Test_doRevokePrivilege(t *testing.T) {
 		ctx := context.WithValue(context.TODO(), defines.TenantIDKey{}, uint32(sysAccountID))
 
 		for _, stmt := range stmts {
-			priv := determinePrivilegeSetOfStatement(stmt)
-			ses := newSes(priv, ctrl)
+
+			ses := newSes(ctrl)
 			ses.SetDatabaseName("d")
 
 			//no result set
@@ -8745,7 +8785,7 @@ func Test_doDropFunctionIfExists(t *testing.T) {
 	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 	defer bhStub.Reset()
 
-	ses := newSes(nil, ctrl)
+	ses := newSes(ctrl)
 	ctx := ses.GetTxnHandler().GetTxnCtx()
 	checkDBSQL, err := getSqlForCheckDatabaseByAccount(ctx, "db")
 	require.NoError(t, err)
@@ -8798,7 +8838,7 @@ func Test_doDropFunctionIfExistsWithDifferentOverload(t *testing.T) {
 			bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 			defer bhStub.Reset()
 
-			ses := newSes(nil, ctrl)
+			ses := newSes(ctrl)
 			ctx := ses.GetTxnHandler().GetTxnCtx()
 			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, test.sql, 1)
 			require.NoError(t, err)
@@ -8852,8 +8892,8 @@ func Test_doDropRole(t *testing.T) {
 				{UserName: "r3"},
 			},
 		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -8897,8 +8937,8 @@ func Test_doDropRole(t *testing.T) {
 				{UserName: "r3"},
 			},
 		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -8948,8 +8988,8 @@ func Test_doDropRole(t *testing.T) {
 				{UserName: "r3"},
 			},
 		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -9001,8 +9041,8 @@ func Test_doDropUser(t *testing.T) {
 				{Username: "u3"},
 			},
 		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -9050,8 +9090,8 @@ func Test_doDropUser(t *testing.T) {
 				{Username: "u3"},
 			},
 		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -9105,8 +9145,8 @@ func Test_doDropUser(t *testing.T) {
 				{Username: "u3"},
 			},
 		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -9152,7 +9192,7 @@ func Test_doInterpretCall(t *testing.T) {
 		call := &tree.CallStmt{
 			Name: tree.NewProcedureName("test_without_database", tree.ObjectNamePrefix{}),
 		}
-		ses := newSes(determinePrivilegeSetOfStatement(call), ctrl)
+		ses := newSes(ctrl)
 
 		_, err := doInterpretCall(context.Background(), ses, call, false, 0, new(int64))
 		convey.So(err, convey.ShouldNotBeNil)
@@ -9171,8 +9211,7 @@ func Test_doInterpretCall(t *testing.T) {
 			Name: tree.NewProcedureName("test_if_hit_elseif_first_elseif", tree.ObjectNamePrefix{}),
 		}
 
-		priv := determinePrivilegeSetOfStatement(call)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		proc := testutil.NewProcess(t)
 		proc.Base.FileService = getPu(ses.GetService()).FileService
 		proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
@@ -9214,8 +9253,7 @@ func Test_doInterpretCall(t *testing.T) {
 			Name: tree.NewProcedureName("test_if_hit_elseif_first_elseif", tree.ObjectNamePrefix{}),
 		}
 
-		priv := determinePrivilegeSetOfStatement(call)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		proc := testutil.NewProcess(t)
 		proc.Base.FileService = getPu(ses.GetService()).FileService
 		proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
@@ -9267,8 +9305,7 @@ func Test_doInterpretCall(t *testing.T) {
 			Name: tree.NewProcedureName("test_if_hit_elseif_first_elseif", tree.ObjectNamePrefix{}),
 		}
 
-		priv := determinePrivilegeSetOfStatement(call)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		proc := testutil.NewProcess(t)
 		proc.Base.FileService = getPu(ses.GetService()).FileService
 		proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
@@ -9392,7 +9429,7 @@ func TestInitProcedurePersistsCreationSQLMode(t *testing.T) {
 		Lang: "sql",
 		Body: "begin select 'a'||'b' as c; end",
 	}
-	ses := newSes(determinePrivilegeSetOfStatement(cp), ctrl)
+	ses := newSes(ctrl)
 	ses.SetDatabaseName("test_procedure")
 	require.NoError(t, ses.SetSessionSysVar(context.Background(), "sql_mode", "PIPES_AS_CONCAT"))
 
@@ -9431,7 +9468,7 @@ func TestInitProcedurePersistsDeclaredArgumentType(t *testing.T) {
 	cp, ok := stmt.(*tree.CreateProcedure)
 	require.True(t, ok)
 
-	ses := newSes(determinePrivilegeSetOfStatement(cp), ctrl)
+	ses := newSes(ctrl)
 	ses.SetDatabaseName("test_procedure")
 	bh.sql2result[getSqlForCheckProcedureExistence(string(cp.Name.Name.ObjectName), ses.GetDatabaseName())] =
 		newMrsForPasswordOfUser([][]interface{}{})
@@ -9468,8 +9505,7 @@ func Test_initProcedure(t *testing.T) {
 			Body: "'begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end'",
 		}
 
-		priv := determinePrivilegeSetOfStatement(cp)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -9495,8 +9531,7 @@ func Test_initProcedure(t *testing.T) {
 			Body: "'begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end'",
 		}
 
-		priv := determinePrivilegeSetOfStatement(cp)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		ses.SetDatabaseName("test_procedure")
 
 		//no result set
@@ -9513,92 +9548,6 @@ func Test_initProcedure(t *testing.T) {
 	})
 }
 
-func TestDoSetSecondaryRoleAll(t *testing.T) {
-	convey.Convey("do set secondary role succ", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		bh := &backgroundExecTest{}
-		bh.init()
-
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		stmt := &tree.SetRole{
-			SecondaryRole: false,
-		}
-
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
-		tenant := &TenantInfo{
-			Tenant:        "test_account",
-			User:          "test_user",
-			DefaultRole:   "role1",
-			TenantID:      3001,
-			UserID:        3,
-			DefaultRoleID: 5,
-		}
-		ses.SetTenantInfo(tenant)
-
-		//no result set
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-
-		sql := getSqlForgetUserRolesExpectPublicRole(publicRoleID, ses.GetTenantInfo().UserID)
-		mrs := newMrsForPasswordOfUser([][]interface{}{
-			{"6", "role5"},
-		})
-		bh.sql2result[sql] = mrs
-
-		err := doSetSecondaryRoleAll(ses.GetTxnHandler().GetTxnCtx(), ses)
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(tenant.GetDefaultRoleID(), convey.ShouldEqual, uint32(5))
-		convey.So(tenant.GetDefaultRole(), convey.ShouldEqual, "role1")
-	})
-
-	convey.Convey("do set secondary role succ", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		bh := &backgroundExecTest{}
-		bh.init()
-
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		stmt := &tree.SetRole{
-			SecondaryRole: false,
-		}
-
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
-		tenant := &TenantInfo{
-			Tenant:        "test_account",
-			User:          "test_user",
-			DefaultRole:   "role1",
-			TenantID:      3001,
-			UserID:        3,
-			DefaultRoleID: 5,
-		}
-		ses.SetTenantInfo(tenant)
-
-		//no result set
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-
-		sql := getSqlForgetUserRolesExpectPublicRole(publicRoleID, ses.GetTenantInfo().UserID)
-		mrs := newMrsForPasswordOfUser([][]interface{}{})
-		bh.sql2result[sql] = mrs
-
-		err := doSetSecondaryRoleAll(ses.GetTxnHandler().GetTxnCtx(), ses)
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(tenant.GetDefaultRoleID(), convey.ShouldEqual, uint32(5))
-		convey.So(tenant.GetDefaultRole(), convey.ShouldEqual, "role1")
-	})
-}
-
 func TestDoSwitchRoleSecondaryRoleAllInvalidatesRuleCache(t *testing.T) {
 	convey.Convey("set secondary role all invalidates rule cache", t, func() {
 		ctrl := gomock.NewController(t)
@@ -9610,7 +9559,7 @@ func TestDoSwitchRoleSecondaryRoleAllInvalidatesRuleCache(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ses := newSes(&privilege{}, ctrl)
+		ses := newSes(ctrl)
 		tenant := &TenantInfo{
 			Tenant:        "test_account",
 			User:          "test_user",
@@ -9625,9 +9574,7 @@ func TestDoSwitchRoleSecondaryRoleAllInvalidatesRuleCache(t *testing.T) {
 		bh.sql2result["begin;"] = nil
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
-		bh.sql2result[getSqlForgetUserRolesExpectPublicRole(publicRoleID, tenant.UserID)] = newMrsForPasswordOfUser([][]interface{}{
-			{"6", "role5"},
-		})
+		bh.sql2result[getSqlForAuthorizationUser(tenant)] = newMrsForRoleIdOfUserId([][]interface{}{{int64(tenant.UserID)}})
 
 		err := doSwitchRole(ses.GetTxnHandler().GetTxnCtx(), ses, &tree.SetRole{
 			SecondaryRole:     true,
@@ -9654,7 +9601,7 @@ func TestDoSwitchRoleSecondaryRoleAllInvalidatesRuleCache(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ses := newSes(&privilege{}, ctrl)
+		ses := newSes(ctrl)
 		tenant := &TenantInfo{
 			Tenant:        "test_account",
 			User:          "test_user",
@@ -9668,7 +9615,7 @@ func TestDoSwitchRoleSecondaryRoleAllInvalidatesRuleCache(t *testing.T) {
 		bh.sql2result["begin;"] = nil
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
-		bh.sql2err[getSqlForgetUserRolesExpectPublicRole(publicRoleID, tenant.UserID)] = fmt.Errorf("load roles failed")
+		bh.sql2err[getSqlForAuthorizationUser(tenant)] = fmt.Errorf("identity read failed")
 
 		err := doSwitchRole(ses.GetTxnHandler().GetTxnCtx(), ses, &tree.SetRole{
 			SecondaryRole:     true,
@@ -9684,7 +9631,7 @@ func TestDoSwitchRoleSecondaryRoleNoneInvalidatesRuleCache(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		ses := newSes(&privilege{}, ctrl)
+		ses := newSes(ctrl)
 		tenant := &TenantInfo{
 			Tenant:        "test_account",
 			User:          "test_user",
@@ -9695,6 +9642,11 @@ func TestDoSwitchRoleSecondaryRoleNoneInvalidatesRuleCache(t *testing.T) {
 		}
 		tenant.SetUseSecondaryRole(true)
 		ses.SetTenantInfo(tenant)
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[getSqlForAuthorizationUser(tenant)] = newMrsForRoleIdOfUserId([][]interface{}{{int64(tenant.UserID)}})
+		stub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer stub.Reset()
 		ses.ruleCache = map[string]string{"db1.t1": "select a from db1.t1"}
 
 		err := doSwitchRole(ses.GetTxnHandler().GetTxnCtx(), ses, &tree.SetRole{
@@ -9722,7 +9674,7 @@ func TestDoSwitchRolePrimaryRoleInvalidatesRuleCache(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		ses := newSes(&privilege{}, ctrl)
+		ses := newSes(ctrl)
 		tenant := &TenantInfo{
 			Tenant:        "test_account",
 			User:          "test_user",
@@ -9735,6 +9687,7 @@ func TestDoSwitchRolePrimaryRoleInvalidatesRuleCache(t *testing.T) {
 		ses.SetTenantInfo(tenant)
 		ses.ruleCache = map[string]string{"db1.t1": "select a from db1.t1"}
 
+		bh.sql2result[getSqlForAuthorizationUser(tenant)] = newMrsForRoleIdOfUserId([][]interface{}{{int64(tenant.UserID)}})
 		bh.sql2result["begin;"] = nil
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
@@ -9777,7 +9730,7 @@ func TestGetSessionSysVar(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		ses := newSes(nil, ctrl)
+		ses := newSes(ctrl)
 
 		value, err := ses.GetSessionSysVar("port")
 		convey.So(err, convey.ShouldBeNil)
@@ -9811,7 +9764,7 @@ func TestGetSessionSysVar_MapMissFallsBackToDefault(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		ses := newSes(nil, ctrl)
+		ses := newSes(ctrl)
 
 		// Force the map-miss scenario: empty per-session map. The
 		// var IS registered in gSysVarsDefs (default int64(0)) but
@@ -9844,8 +9797,8 @@ func TestSetSessionSysVar(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		ses0 := newSes(nil, ctrl)
-		ses1 := newSes(nil, ctrl)
+		ses0 := newSes(ctrl)
+		ses1 := newSes(ctrl)
 
 		// set ScopeGlobal var, err
 		err := ses0.SetSessionSysVar(context.TODO(), "port", 6002)
@@ -9870,7 +9823,7 @@ func TestSetSessionSysVar(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(value, convey.ShouldEqual, 1)
 		// do not affect new session
-		ses2 := newSes(nil, ctrl)
+		ses2 := newSes(ctrl)
 		value, err = ses2.GetSessionSysVar("autocommit")
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(value, convey.ShouldEqual, 1)
@@ -9896,7 +9849,7 @@ func TestGetGlobalSysVar(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		ses := newSes(nil, ctrl)
+		ses := newSes(ctrl)
 
 		value, err := ses.GetGlobalSysVar("port")
 		convey.So(err, convey.ShouldBeNil)
@@ -9930,8 +9883,8 @@ func TestSetGlobalSysVar(t *testing.T) {
 		sql = getSqlForInsertSysVarWithAccount(sysAccountID, "sys", "autocommit", "0")
 		bh.sql2result[sql] = nil
 
-		ses0 := newSes(nil, ctrl)
-		ses1 := newSes(nil, ctrl)
+		ses0 := newSes(ctrl)
+		ses1 := newSes(ctrl)
 
 		// set ScopeSession var, err
 		err := ses0.SetGlobalSysVar(context.TODO(), "rand_seed1", 1)
@@ -9972,7 +9925,7 @@ func TestSetGlobalSysVar(t *testing.T) {
 		convey.So(value, convey.ShouldEqual, 0)
 
 		// new session, both GetSession/GlobalSysVar equal 0
-		ses2 := newSes(nil, ctrl)
+		ses2 := newSes(ctrl)
 		ses2.sesSysVars.mp["autocommit"] = 0
 		ses2.gSysVars.mp["autocommit"] = 0
 		value, err = ses2.GetSessionSysVar("autocommit")
@@ -10033,8 +9986,8 @@ func Test_doAlterUser(t *testing.T) {
 			},
 			MiscOpt: tree.NewUserMiscOptionAccountLock(),
 		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
@@ -10091,8 +10044,8 @@ func Test_doAlterUser(t *testing.T) {
 				{Username: "u1", Hostname: "%", AuthOption: &tree.AccountIdentified{Typ: tree.AccountIdentifiedByPassword, Str: boxExprStr("123456")}},
 			},
 		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
@@ -10153,8 +10106,8 @@ func Test_doAlterUser(t *testing.T) {
 				{Username: "u3", Hostname: "%", AuthOption: &tree.AccountIdentified{Typ: tree.AccountIdentifiedByPassword, Str: boxExprStr("123456")}},
 			},
 		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
@@ -10205,8 +10158,8 @@ func Test_doAlterUser(t *testing.T) {
 				{Username: "u1", Hostname: "%", AuthOption: &tree.AccountIdentified{Typ: tree.AccountIdentifiedByPassword, Str: boxExprStr("123456")}},
 			},
 		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
@@ -10280,8 +10233,8 @@ func Test_doAlterAccount(t *testing.T) {
 				},
 			},
 		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
@@ -10335,8 +10288,8 @@ func Test_doAlterAccount(t *testing.T) {
 				},
 			},
 		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
@@ -10390,8 +10343,8 @@ func Test_doAlterAccount(t *testing.T) {
 				},
 			},
 		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
@@ -10441,8 +10394,8 @@ func Test_doAlterAccount(t *testing.T) {
 				},
 			},
 		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
@@ -10493,8 +10446,8 @@ func Test_doAlterAccount(t *testing.T) {
 				},
 			},
 		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
@@ -10541,8 +10494,8 @@ func Test_doAlterAccount(t *testing.T) {
 			IfExists: true,
 			Name:     boxExprStr("acc"),
 		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
@@ -10596,8 +10549,8 @@ func Test_doAlterAccount(t *testing.T) {
 				Option: tree.AccountStatusOpen,
 			},
 		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
@@ -10641,8 +10594,8 @@ func Test_doAlterAccount(t *testing.T) {
 				Comment: "new account",
 			},
 		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
@@ -10690,8 +10643,8 @@ func Test_doAlterAccount(t *testing.T) {
 				Option: tree.AccountStatusSuspend,
 			},
 		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
@@ -10739,8 +10692,8 @@ func Test_doAlterAccount(t *testing.T) {
 				Option: tree.AccountStatusSuspend,
 			},
 		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
@@ -10813,8 +10766,8 @@ func Test_doDropAccount(t *testing.T) {
 		stmt := &tree.DropAccount{
 			Name: boxExprStr("acc"),
 		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
@@ -10879,8 +10832,8 @@ func Test_doDropAccount(t *testing.T) {
 			IfExists: true,
 			Name:     boxExprStr("acc"),
 		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
@@ -10926,8 +10879,8 @@ func Test_doDropAccount(t *testing.T) {
 		stmt := &tree.DropAccount{
 			Name: boxExprStr("acc"),
 		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+
+		ses := newSes(ctrl)
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
@@ -10973,8 +10926,7 @@ func Test_doDropAccount_InTransaction(t *testing.T) {
 			stmt := &tree.DropAccount{
 				Name: boxExprStr("test_acc"),
 			}
-			priv := determinePrivilegeSetOfStatement(stmt)
-			ses := newSes(priv, ctrl)
+			ses := newSes(ctrl)
 
 			pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 			pu.SV.SetDefaultValues()
@@ -11043,8 +10995,7 @@ func Test_doDropAccount_InTransaction(t *testing.T) {
 			stmt := &tree.DropAccount{
 				Name: boxExprStr("test_acc"),
 			}
-			priv := determinePrivilegeSetOfStatement(stmt)
-			ses := newSes(priv, ctrl)
+			ses := newSes(ctrl)
 
 			pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 			pu.SV.SetDefaultValues()
@@ -11365,7 +11316,7 @@ func TestGetObjectOwnerRoleNameReturnsExistingOwnerRole(t *testing.T) {
 	require.Equal(t, "r1", roleName)
 }
 
-func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
+func newSes(ctrl *gomock.Controller) *Session {
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 	pu.SV.SetDefaultValues()
 	pu.SV.KillRountinesInterval = 0
@@ -11391,7 +11342,6 @@ func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
 		DefaultRoleID: moAdminRoleID,
 	}
 	ses.SetTenantInfo(tenant)
-	ses.priv = priv
 
 	stubs := gostub.StubFunc(&ExeSqlInBgSes, nil, nil)
 	defer stubs.Reset()
@@ -12229,8 +12179,30 @@ func makeRowsOfMoRole(sql2result map[string]ExecResult, roleNames []string, rows
 	}
 }
 
-func makeRowsOfMoUserGrant(sql2result map[string]ExecResult, userId int, rows [][]interface{}) {
+func makeRowsOfMoUserGrant(sql2result map[string]ExecResult, userId int, rows [][]interface{}, userNames ...string) {
 	sql2result[getSqlForRoleIdOfUserId(userId)] = newMrsForRoleIdOfUserId(rows)
+	name := rootName
+	if len(userNames) != 0 {
+		name = userNames[0]
+	}
+	account := &TenantInfo{Tenant: sysAccountName, User: name, UserID: uint32(userId)}
+	account.SetUseSecondaryRole(true)
+	sql2result[getSqlForActiveRolesForAuthorization(account, false)] = newMrsForRoleIdOfUserId(rows)
+	account.SetUseSecondaryRole(false)
+	for _, row := range rows {
+		role := uint32(row[0].(int))
+		account.SetDefaultRoleID(role)
+		trusted := role == moAdminRoleID || role == publicRoleID
+		result := [][]interface{}{row}
+		if trusted {
+			result = [][]interface{}{{userId}}
+		}
+		sql2result[getSqlForActiveRolesForAuthorization(account, trusted)] = newMrsForRoleIdOfUserId(result)
+	}
+	// The base fixture's authenticated root exists even if its current
+	// membership list is empty; builtin roles still require this identity.
+	account.SetDefaultRoleID(moAdminRoleID)
+	sql2result[getSqlForActiveRolesForAuthorization(account, true)] = newMrsForRoleIdOfUserId([][]interface{}{{userId}})
 }
 
 func makeRowsOfMoRolePrivs(sql2result map[string]ExecResult, roleIds []int, entries []privilegeEntry, rowsOfMoRolePrivs [][]interface{}) {
@@ -13438,7 +13410,7 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedCoverageEdges(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		ses := newSes(nil, ctrl)
+		ses := newSes(ctrl)
 		ses.SetDatabaseName("db")
 
 		bh := &backgroundExecTest{}
@@ -13486,7 +13458,7 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedCoverageEdges(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		ses := newSes(nil, ctrl)
+		ses := newSes(ctrl)
 		ses.SetDatabaseName("db")
 
 		bh := &backgroundExecTest{}
@@ -13537,7 +13509,7 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedCoverageEdges(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		ses := newSes(nil, ctrl)
+		ses := newSes(ctrl)
 		ses.SetDatabaseName("db")
 
 		bh := &backgroundExecTest{}
@@ -13580,7 +13552,7 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedCoverageEdges(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		ses := newSes(nil, ctrl)
+		ses := newSes(ctrl)
 		ses.SetDatabaseName("db")
 
 		bh := &backgroundExecTest{}
@@ -13613,7 +13585,7 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedCoverageEdges(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		ses := newSes(nil, ctrl)
+		ses := newSes(ctrl)
 		ses.SetDatabaseName("db")
 
 		bh := &backgroundExecTest{}
@@ -13649,7 +13621,7 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedCoverageEdges(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		ses := newSes(nil, ctrl)
+		ses := newSes(ctrl)
 		ses.SetDatabaseName("db")
 
 		bh := &backgroundExecTest{}
@@ -13701,7 +13673,7 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedCoverageEdges(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		ses := newSes(nil, ctrl)
+		ses := newSes(ctrl)
 		ses.SetDatabaseName("db")
 
 		bh := &backgroundExecTest{}
@@ -13736,7 +13708,7 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedCoverageEdges(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		ses := newSes(nil, ctrl)
+		ses := newSes(ctrl)
 		ses.SetDatabaseName("db")
 
 		bh := &backgroundExecTest{}
@@ -13775,7 +13747,7 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedCoverageEdges(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		ses := newSes(nil, ctrl)
+		ses := newSes(ctrl)
 		ses.SetDatabaseName("db")
 
 		bh := &backgroundExecTest{}
@@ -13818,7 +13790,7 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedCoverageEdges(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		ses := newSes(nil, ctrl)
+		ses := newSes(ctrl)
 		ses.SetDatabaseName("db")
 
 		bh := &backgroundExecTest{}
@@ -16381,8 +16353,8 @@ func Test_determineUserHasPrivilegeSet(t *testing.T) {
 		ses.SetTenantInfo(tenant)
 
 		priv := &privilege{}
-		ret, _, err := determineUserHasPrivilegeSet(ctx, ses, priv)
-		convey.ShouldBeFalse(ret, false)
+		ret, _, _, err := determineUserHasPrivilegeSet(ctx, ses, priv)
+		convey.So(ret, convey.ShouldBeFalse)
 		convey.So(err, convey.ShouldBeNil)
 	})
 
@@ -16417,79 +16389,34 @@ func Test_determineUserHasPrivilegeSet(t *testing.T) {
 		ses.SetTenantInfo(tenant)
 
 		priv := determinePrivilegeSetOfStatement(&tree.ShowDatabases{})
-		_, _, err := determineUserHasPrivilegeSet(ctx, ses, priv)
+		_, _, _, err := determineUserHasPrivilegeSet(ctx, ses, priv)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 
-	convey.Convey("determineUserHasPrivilegeSet error test", t, func() {
+	t.Run("unsealed cache cannot grant", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
-
 		ses := newTestSession(t, ctrl)
 		defer ses.Close()
-
-		privStub := gostub.Stub(&checkPrivilegeInCache, func(ctx context.Context, ses *Session, priv *privilege, enableCache bool) (bool, error) {
-			return false, moerr.NewInternalErrorNoCtx("")
-		})
-		defer privStub.Reset()
-
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
-		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx, "")
-		ses.rm = rm
-
-		tenant := &TenantInfo{
-			Tenant:        sysAccountName,
-			User:          rootName,
-			DefaultRole:   moAdminRoleName,
-			TenantID:      sysAccountID,
-			UserID:        rootID,
-			DefaultRoleID: moAdminRoleID,
-		}
-		ses.SetTenantInfo(tenant)
-
-		priv := determinePrivilegeSetOfStatement(&tree.CreateTable{})
-		_, _, err := determineUserHasPrivilegeSet(ctx, ses, priv)
-		convey.So(err, convey.ShouldNotBeNil)
-	})
-
-	convey.Convey("determineUserHasPrivilegeSet error test", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		ses := newTestSession(t, ctrl)
-		defer ses.Close()
-
-		privStub := gostub.Stub(&checkPrivilegeInCache, func(ctx context.Context, ses *Session, priv *privilege, enableCache bool) (bool, error) {
+		ctx := defines.AttachAccountId(context.WithValue(context.Background(), config.ParameterUnitKey, pu), sysAccountID)
+		ses.SetTenantInfo(&TenantInfo{Tenant: sysAccountName, User: rootName, DefaultRole: moAdminRoleName, TenantID: sysAccountID, UserID: rootID, DefaultRoleID: moAdminRoleID})
+		bh := &backgroundExecTest{}
+		bh.init()
+		stub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer stub.Reset()
+		// No identity row exists, even though the old cache claims success.
+		cacheStub := gostub.Stub(&checkPrivilegeInCache, func(context.Context, *Session, *privilege, bool) (bool, error) {
+			t.Fatal("an unsealed cache must not be consulted")
 			return true, nil
 		})
-		defer privStub.Reset()
-
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-		pu.SV.SetDefaultValues()
-		pu.SV.KillRountinesInterval = 0
-		setPu("", pu)
-		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx, "")
-		ses.rm = rm
-
-		tenant := &TenantInfo{
-			Tenant:        sysAccountName,
-			User:          rootName,
-			DefaultRole:   moAdminRoleName,
-			TenantID:      sysAccountID,
-			UserID:        rootID,
-			DefaultRoleID: moAdminRoleID,
-		}
-		ses.SetTenantInfo(tenant)
-
-		priv := determinePrivilegeSetOfStatement(&tree.ShowDatabases{})
-		ret, _, err := determineUserHasPrivilegeSet(ctx, ses, priv)
-		convey.ShouldBeFalse(ret, false)
-		convey.So(err, convey.ShouldBeNil)
+		defer cacheStub.Reset()
+		ret, _, _, err := determineUserHasPrivilegeSet(ctx, ses, determinePrivilegeSetOfStatement(&tree.ShowDatabases{}))
+		require.False(t, ret)
+		require.Error(t, err)
+		require.Contains(t, bh.executedSQLs, getSqlForActiveRolesForAuthorization(ses.GetTenantInfo(), true))
 	})
 }
 
@@ -16509,7 +16436,7 @@ func Test_determineUserCanGrantRolesToOthers(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		lasStub := gostub.Stub(&loadAllSecondaryRoles, func(ctx context.Context, bh BackgroundExec, account *TenantInfo, roleSetOfCurrentUser *btree.Set[int64]) error {
+		lasStub := gostub.Stub(&loadActiveRolesForAuthorization, func(ctx context.Context, bh BackgroundExec, ses *Session, roleSetOfCurrentUser *btree.Set[int64]) error {
 			return moerr.NewInternalErrorNoCtx("")
 		})
 		defer lasStub.Reset()
@@ -16557,10 +16484,11 @@ func Test_authenticateUserCanExecuteStatementWithObjectTypeNone(t *testing.T) {
 		}
 
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		ses.SetDatabaseName("db")
+		mockAuthorizationUser(t, ses)
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -16572,10 +16500,11 @@ func Test_authenticateUserCanExecuteStatementWithObjectTypeNone(t *testing.T) {
 		stmt := &tree.ShowAccounts{}
 
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		ses.SetDatabaseName("db")
+		mockAuthorizationUser(t, ses)
 
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 
@@ -16588,9 +16517,10 @@ func Test_authenticateUserCanExecuteStatementWithObjectTypeNone(t *testing.T) {
 		stmt := &tree.ShowAccountUpgrade{}
 
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		ses.SetDatabaseName("db")
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		mockAuthorizationUser(t, ses)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -16602,9 +16532,10 @@ func Test_authenticateUserCanExecuteStatementWithObjectTypeNone(t *testing.T) {
 		stmt := &tree.ShowLogserviceReplicas{}
 
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		ses.SetDatabaseName("db")
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		mockAuthorizationUser(t, ses)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -16616,9 +16547,10 @@ func Test_authenticateUserCanExecuteStatementWithObjectTypeNone(t *testing.T) {
 		stmt := &tree.UpgradeStatement{}
 
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		ses.SetDatabaseName("db")
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		mockAuthorizationUser(t, ses)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -16634,9 +16566,10 @@ func Test_authenticateUserCanExecuteStatementWithObjectTypeNone(t *testing.T) {
 		}
 
 		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
+		ses := newSes(ctrl)
 		ses.SetDatabaseName("db")
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		mockAuthorizationUser(t, ses)
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, priv)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})

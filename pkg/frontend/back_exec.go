@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -68,6 +69,10 @@ func (back *backExec) init(ses FeSession, txnOp TxnOperator, db string, callBack
 	} else {
 		back.statsArray = statistic.NewStatsArray()
 	}
+}
+
+func (back *backExec) GetTxnOperator() TxnOperator {
+	return back.backSes.GetTxnHandler().GetTxn()
 }
 
 func (back *backExec) Service() string {
@@ -1040,6 +1045,7 @@ type backSession struct {
 	effectiveMatrixOneNativeMode    bool
 	hasEffectiveMatrixOneNativeMode bool
 	forcePessimisticRC              bool
+	readSnapshot                    timestamp.Timestamp
 	// lastAffectedRows carries the previous statement's ROW_COUNT() value into
 	// the next process created by this background executor.
 	lastAffectedRows int64

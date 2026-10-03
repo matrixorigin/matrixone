@@ -1,0 +1,90 @@
+-- Composite leading-range pruning must preserve SQL decimal comparisons and column identity.
+drop database if exists composite_range_decimal;
+create database composite_range_decimal;
+use composite_range_decimal;
+create table d(a decimal(65,0), b int) cluster by(a,b);
+insert into d values(-99999999999999999999999999999999999999999999999999999999999999999,1),(-1,2),(0,3),(1,4),(99999999999999999999999999999999999999999999999999999999999999999,5),(null,6);
+select b from d where a > cast(0 as decimal(65,0)) order by b;
+select b from d as `x.y` where a > cast(0 as decimal(65,0)) order by b;
+select b from d where a between cast(-1 as decimal(65,0)) and cast(1 as decimal(65,0)) order by b;
+set @decimal_bound = 0;
+select b from d where a > cast(@decimal_bound as decimal(65,0)) order by b;
+select b,serial_extract(serial_full(a,b),0 as decimal(65,0)) as decoded from d order by b;
+select b,serial(a) is null as is_null,length(serial(a)) as encoded_bytes from d order by b;
+-- Persist the compound VARCHAR zonemap, whose bounds truncate long decimal keys.
+select mo_ctl('dn','flush','composite_range_decimal.d');
+select b from d as `x.y` where a > cast(0 as decimal(65,0)) order by b;
+select b from d where a <= cast(0 as decimal(65,0)) order by b;
+prepare decimal_range from 'select b from d where a > cast(? as decimal(65,0)) order by b';
+set @decimal_bound = null;
+execute decimal_range using @decimal_bound;
+set @decimal_bound = 0;
+execute decimal_range using @decimal_bound;
+set @decimal_bound = -1;
+execute decimal_range using @decimal_bound;
+deallocate prepare decimal_range;
+-- The same serial_full executor must survive NULL -> value -> NULL -> value.
+prepare decimal_serial from 'select length(serial_full(cast(? as decimal(65,0)))) as encoded_bytes';
+set @decimal_bound = null;
+execute decimal_serial using @decimal_bound;
+set @decimal_bound = 1;
+execute decimal_serial using @decimal_bound;
+set @decimal_bound = null;
+execute decimal_serial using @decimal_bound;
+set @decimal_bound = -1;
+execute decimal_serial using @decimal_bound;
+deallocate prepare decimal_serial;
+create table index_probe(id int primary key, a decimal(65,0), b int, index ab(a,b));
+insert into index_probe values(1,1000000000000000000000000000000000000000,1),(2,-1000000000000000000000000000000000000000,1),(3,null,1);
+select id from index_probe force index(ab) where a = cast(1000000000000000000000000000000000000000 as decimal(65,0)) and b = 1 order by id;
+update index_probe set a=2 where id=1;
+select id from index_probe force index(ab) where a = cast(2 as decimal(65,0)) and b = 1 order by id;
+delete from index_probe where id=1;
+select id from index_probe force index(ab) where a = cast(2 as decimal(65,0)) and b = 1 order by id;
+select id from index_probe ignore index(ab) where a is null order by id;
+-- A foreign key reaches the legacy index materialization owners.
+create table load_parent(id int primary key);
+insert into load_parent values(1),(2),(3),(4);
+create table load_probe(id int primary key,a decimal(65,0),b int,index ab(a,b),foreign key(id) references load_parent(id));
+load data infile {'filepath'='$resources/optimizer/composite_range_decimal.parq','format'='parquet'} into table load_probe;
+select id from load_probe force index(ab) where a=cast(1000000000000000000000000000000000000000 as decimal(65,0)) and b=1 order by id;
+select id from load_probe ignore index(ab) where a=cast(1000000000000000000000000000000000000000 as decimal(65,0)) and b=1 order by id;
+-- Exercise the rebuild DDL; old-writer upgrade evidence is recorded separately.
+alter table load_probe drop index ab;
+create index ab on load_probe(a,b);
+select id from load_probe force index(ab) where a=cast(1000000000000000000000000000000000000000 as decimal(65,0)) and b=1 order by id;
+update load_probe set a=3 where id=1;
+select id from load_probe force index(ab) where a=cast(3 as decimal(65,0)) and b=1 order by id;
+delete from load_probe where id=1;
+select id from load_probe force index(ab) where a=cast(3 as decimal(65,0)) and b=1 order by id;
+-- Legacy unique-key compaction preserves NULL filtering and primary-key alignment.
+create table load_multi_uk(id int primary key,a decimal(65,0),b int,unique key ab(a,b),foreign key(id) references load_parent(id));
+load data infile {'filepath'='$resources/optimizer/composite_range_decimal.parq','format'='parquet'} into table load_multi_uk;
+select id from load_multi_uk force index(ab) where a=cast(2000000000000000000000000000000000000000 as decimal(65,0)) and b=1 order by id;
+select id from load_multi_uk ignore index(ab) where a=cast(2000000000000000000000000000000000000000 as decimal(65,0)) and b=1 order by id;
+insert into load_multi_uk values(4,2000000000000000000000000000000000000000,1);
+create table load_single_uk(id int primary key,a decimal(65,0),b int,unique key ai(a),foreign key(id) references load_parent(id));
+load data infile {'filepath'='$resources/optimizer/composite_range_decimal.parq','format'='parquet'} into table load_single_uk;
+select id from load_single_uk force index(ai) where a=cast(2000000000000000000000000000000000000000 as decimal(65,0)) order by id;
+select id from load_single_uk ignore index(ai) where a=cast(2000000000000000000000000000000000000000 as decimal(65,0)) order by id;
+select id from load_single_uk where a is null order by id;
+create table load_decimal_pk(id int,a decimal(65,0) primary key,b int,unique key bi(b),foreign key(id) references load_parent(id));
+load data infile {'filepath'='$resources/optimizer/composite_range_decimal_pk.parq','format'='parquet'} into table load_decimal_pk;
+select id from load_decimal_pk force index(bi) where b=3 order by id;
+select id from load_decimal_pk ignore index(bi) where b=3 order by id;
+-- Runtime IN on the raw DECIMAL256 PK must remain correct after persistence.
+select mo_ctl('dn','flush','composite_range_decimal.load_decimal_pk');
+select id from load_decimal_pk force index(bi) where b=3 order by id;
+select id from load_decimal_pk ignore index(bi) where b=3 order by id;
+select id from load_decimal_pk where b is null order by id;
+-- Supported smaller decimals and bare integer bounds remain eligible controls.
+create table controls(i bigint,d64 decimal(18,2),d128 decimal(38,2),b int) cluster by(i,b);
+insert into controls values(-1,-1.25,-1.25,1),(0,0,0,2),(1,1.25,1.25,3);
+select b from controls as `x.y` where i>0 order by b;
+select b from controls where d64>cast(0 as decimal(18,2)) and d128>cast(0 as decimal(38,2)) order by b;
+-- Dynamic invalid extraction indices return the same error as constant indices.
+create table invalid_index(i bigint);
+insert into invalid_index values(-1);
+select serial_extract(serial_full(cast(1 as decimal(65,0))),i as decimal(65,0)) from invalid_index;
+select serial_extract(serial_full(cast(1 as decimal(65,0))),-1 as decimal(65,0));
+drop database composite_range_decimal;

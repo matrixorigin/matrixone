@@ -1036,9 +1036,11 @@ func DeepCopyExpr(expr *Expr) *Expr {
 	case *plan.Expr_Col:
 		newExpr.Expr = &plan.Expr_Col{
 			Col: &plan.ColRef{
-				RelPos: item.Col.GetRelPos(),
-				ColPos: item.Col.GetColPos(),
-				Name:   item.Col.GetName(),
+				RelPos:  item.Col.GetRelPos(),
+				ColPos:  item.Col.GetColPos(),
+				Name:    item.Col.GetName(),
+				TblName: item.Col.GetTblName(),
+				DbName:  item.Col.GetDbName(),
 			},
 		}
 

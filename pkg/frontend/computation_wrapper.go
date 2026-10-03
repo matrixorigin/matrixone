@@ -365,7 +365,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				cwft.stmtBorrowed = false
 			}
 			if !cwft.ses.IsBackgroundSession() {
-				authStats, err := authenticatePreparedDDLOwnerStatement(execCtx.reqCtx, owner, stmt, plan)
+				authStats, err := authenticatePreparedStatement(execCtx.reqCtx, owner, stmt, plan, execCtx.prepareStmt)
 				if err != nil {
 					return nil, err
 				}
@@ -398,8 +398,8 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				cwft.stmtBorrowed = false
 			}
 			if !cwft.ses.IsBackgroundSession() {
-				authStats, err := authenticatePreparedDDLOwnerStatement(
-					execCtx.reqCtx, owner, stmt, cwft.plan)
+				authStats, err := authenticatePreparedStatement(
+					execCtx.reqCtx, owner, stmt, cwft.plan, execCtx.prepareStmt)
 				if err != nil {
 					return nil, err
 				}
@@ -453,19 +453,12 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			// the outer EXECUTE fragment, which cannot contain the inner hint.
 			retComp.SetQuerySchedulingIntent(cwft.querySchedulingIntentForPreparedStatement(originSQL))
 			retComp.SetSchedulingTraceRecorder(&cwft.schedulingTrace)
-			if err = retComp.Reset(cwft.proc, getStatementStartAt(execCtx.reqCtx), fill, cwft.ses.GetSql()); err != nil {
+			if err = retComp.Reset(cwft.proc, getStatementStartAt(execCtx.reqCtx), compileOutputCallback(cwft.stmt, fill), cwft.ses.GetSql()); err != nil {
 				return nil, err
 			}
 			cwft.compile = retComp
 		}
 
-		//check privilege
-		/* prepare not need check privilege
-		   err = authenticateUserCanExecutePrepareOrExecute(requestCtx, cwft.ses, prepareStmt.PrepareStmt, newPlan)
-		   if err != nil {
-		   	return nil, err
-		   }
-		*/
 	} else {
 		cwft.compile, err = createCompile(
 			execCtx,
@@ -486,17 +479,6 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 	}
 
 	return cwft.compile, err
-}
-
-func authenticatePreparedDDLOwnerStatement(reqCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) (statistic.StatsArray, error) {
-	var stats statistic.StatsArray
-	stats.Reset()
-	switch stmt.(type) {
-	case *tree.CreateDatabase, *tree.CreateTable:
-		return authenticateUserCanExecutePrepareOrExecute(reqCtx, ses, stmt, p)
-	default:
-		return stats, nil
-	}
 }
 
 func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context, phyPlan *models.PhyPlan) error {
@@ -718,6 +700,7 @@ func initExecuteStmtParamWithResolverInSession(
 	if err != nil {
 		return nil, nil, nil, "", false, err
 	}
+	execCtx.prepareStmt = prepareStmt
 	originSQL := prepareStmt.Sql
 	preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()
 	currentNativeMode := owner.sqlModeHasMatrixOneNative()
@@ -824,6 +807,7 @@ func initExecuteStmtParamWithResolverInSession(
 
 		preparePlan = newPreparePlan
 		prepareStmt.PreparePlan = newPlan
+		prepareStmt.authorization = nil
 		prepareStmt.ColDefData = newColDefData
 		if execCtx.input != nil && execCtx.input.isBinaryProtExecute {
 			execCtx.prepareColDef = newColDefData
@@ -1240,20 +1224,23 @@ func createCompile(
 			ctx, ses, ses.GetTxnCompileCtx(), stmt, forcePrepare)
 	})
 
-	if _, ok := stmt.(*tree.ExplainAnalyze); ok {
-		fill = func(bat *batch.Batch, crs *perfcounter.CounterSet) error { return nil }
-	}
-
-	if _, ok := stmt.(*tree.ExplainPhyPlan); ok {
-		fill = func(bat *batch.Batch, crs *perfcounter.CounterSet) error { return nil }
-	}
-
-	err = retCompile.Compile(execCtx.reqCtx, plan, fill)
+	err = retCompile.Compile(execCtx.reqCtx, plan, compileOutputCallback(stmt, fill))
 	if err != nil {
 		return
 	}
 	retCompile.SetOriginSQL(originSQL)
 	return
+}
+
+// Executing EXPLAIN produces its own result after the pipeline finishes. Keep
+// underlying rows suppressed both when compiling and when resetting a saved compile.
+func compileOutputCallback(stmt tree.Statement, fill func(*batch.Batch, *perfcounter.CounterSet) error) func(*batch.Batch, *perfcounter.CounterSet) error {
+	switch stmt.(type) {
+	case *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
+		return func(*batch.Batch, *perfcounter.CounterSet) error { return nil }
+	default:
+		return fill
+	}
 }
 
 func buildPlanForCompileRetry(
