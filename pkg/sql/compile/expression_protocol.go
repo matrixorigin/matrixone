@@ -94,6 +94,29 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 	return required
 }
 
+func requiredExpressionContractProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
+	if features.JSONScalarLiteralContracts {
+		return defines.MORPCVersion104
+	}
+	if features.JSONInputContracts || features.YearBitCast {
+		return defines.MORPCVersion101
+	}
+	if features.ExpressionResultMetadataContracts || features.TOBase64ResultContracts || features.IPFunctionResultContracts {
+		return defines.MORPCVersion86
+	}
+	if features.IPFunctionSemantics {
+		return defines.MORPCVersion72
+	}
+	return 0
+}
+
+func temporalExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
+	if features.TemporalResultContracts || features.NormalizedIntervalUnits || features.WeekSessionDefault {
+		return defines.MORPCVersion98
+	}
+	return 0
+}
+
 // A timeout cause must not report an error when a probe succeeds.
 var errRemoteCapabilityProbeTimeout = moerr.NewInternalError(
 	moerr.NoReportContext(), "remote capability probe timed out")
@@ -118,55 +141,63 @@ func remoteWorkersSupportProtocol(proc *process.Process, workers engine.Nodes, m
 	ctx, cancel := context.WithTimeoutCause(parent, 5*time.Second, errRemoteCapabilityProbeTimeout)
 	defer cancel()
 	for _, worker := range workers {
-		if worker.Addr == "" || proc.GetQueryClient() == nil {
-			return false, nil
-		}
-		cluster, err := clusterservice.GetMOClusterWithContext(ctx, proc.GetService())
+		version, known, err := remoteWorkerProtocolVersion(ctx, proc, worker)
 		if err != nil {
 			return false, parent.Err()
 		}
-		var addr string
-		var workerID string
-		selector := clusterservice.NewSelector()
-		if worker.Id != "" {
-			selector = clusterservice.NewServiceIDSelector(worker.Id)
-		}
-		err = clusterservice.GetCNServiceWithoutWorkingStateWithContext(ctx, cluster,
-			selector, func(cn metadata.CNService) bool {
-				if cn.PipelineServiceAddress == worker.Addr && (worker.Id == "" || cn.ServiceID == worker.Id) {
-					addr = cn.QueryAddress
-					workerID = cn.ServiceID
-					return false
-				}
-				return true
-			})
-		if err != nil {
-			return false, parent.Err()
-		}
-		if addr == "" {
-			return false, nil
-		}
-		if workerID != "" && workerID == proc.GetService() {
-			continue
-		}
-		client := proc.GetQueryClient()
-		req := client.NewRequest(querypb.CmdMethod_GetProtocolVersion)
-		req.GetProtocolVersion = &querypb.GetProtocolVersionRequest{}
-		resp, err := client.SendMessage(ctx, addr, req)
-		if err != nil {
-			if resp != nil {
-				client.Release(resp)
-			}
-			return false, parent.Err()
-		}
-		if resp == nil {
-			return false, nil
-		}
-		supported := resp.GetProtocolVersion != nil && resp.GetProtocolVersion.Version >= minimum
-		client.Release(resp)
-		if !supported {
+		if !known || version < minimum {
 			return false, nil
 		}
 	}
 	return true, nil
+}
+
+// remoteWorkerProtocolVersion resolves the actual pipeline endpoint and owns
+// the response lifetime. Callers keep their coordinator floor, timeout, and
+// transient-error policy; the observed worker version is local to one boundary.
+func remoteWorkerProtocolVersion(ctx context.Context, proc *process.Process, worker engine.Node) (int64, bool, error) {
+	if worker.Addr == "" || proc.GetQueryClient() == nil {
+		return 0, false, nil
+	}
+	cluster, err := clusterservice.GetMOClusterWithContext(ctx, proc.GetService())
+	if err != nil {
+		return 0, false, err
+	}
+	var addr, workerID string
+	selector := clusterservice.NewSelector()
+	if worker.Id != "" {
+		selector = clusterservice.NewServiceIDSelector(worker.Id)
+	}
+	err = clusterservice.GetCNServiceWithoutWorkingStateWithContext(ctx, cluster,
+		selector, func(cn metadata.CNService) bool {
+			if cn.PipelineServiceAddress == worker.Addr && (worker.Id == "" || cn.ServiceID == worker.Id) {
+				addr, workerID = cn.QueryAddress, cn.ServiceID
+				return false
+			}
+			return true
+		})
+	if err != nil {
+		return 0, false, err
+	}
+	if addr == "" {
+		return 0, false, nil
+	}
+	if workerID != "" && workerID == proc.GetService() {
+		version, known := remoteMORPCProtocolVersion(proc.GetService())
+		return version, known, nil
+	}
+	client := proc.GetQueryClient()
+	req := client.NewRequest(querypb.CmdMethod_GetProtocolVersion)
+	req.GetProtocolVersion = &querypb.GetProtocolVersionRequest{}
+	resp, err := client.SendMessage(ctx, addr, req)
+	if resp != nil {
+		defer client.Release(resp)
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	if resp == nil || resp.GetProtocolVersion == nil {
+		return 0, false, nil
+	}
+	return resp.GetProtocolVersion.Version, true, nil
 }

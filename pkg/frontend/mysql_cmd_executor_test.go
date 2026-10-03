@@ -7018,7 +7018,7 @@ func TestCreatePrepareStmtRestoresCurrentExecCtx(t *testing.T) {
 		return nil, moerr.NewInternalError(ctx, "stop after context check")
 	}
 
-	_, err := createPrepareStmt(currentExecCtx, ses, "select 1",
+	_, err := createPrepareStmtInSession(currentExecCtx, ses, ses, "select 1",
 		tree.NewPrepareStmt("s", &tree.Select{}), &tree.Select{})
 	require.Error(t, err)
 	require.True(t, checked)
