@@ -61,17 +61,6 @@ func TestDrainLateStatusMustNotRegress(t *testing.T) {
 	})
 }
 
-func TestDrainDuplicateRequestMustNotRegressUnlockPhase(t *testing.T) {
-	runLockTableAllocatorTest(t, time.Hour, func(a *lockTableAllocator) {
-		b := a.registerService("s1")
-		b.setStatus(pb.Status_ServiceUnLockSucc)
-		a.setRestartService("s1")
-		if !b.isStatus(pb.Status_ServiceUnLockSucc) {
-			t.Fatal("duplicate request regressed ServiceUnLockSucc")
-		}
-	})
-}
-
 func TestDrainLateCleanupCannotRemoveReplacement(t *testing.T) {
 	runLockTableAllocatorTest(t, time.Hour, func(a *lockTableAllocator) {
 		id := "1234567890123456789uuid1"

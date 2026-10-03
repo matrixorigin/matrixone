@@ -54,6 +54,22 @@ An unobserved or stopped CN cannot manufacture step 4. A late A heartbeat
 cannot echo B's epoch. If B itself restarts before step 5, the process repeats
 with a new epoch; no prior allocator proof is reused.
 
+## Recovery after negative timeout retirement
+
+A transient validation connection failure can remove the bind without proving
+safe completion. A later `BeginDrain` for the exact live incarnation discards
+that negative retirement metadata and creates the same pending, non-admitting
+`Waiting` bind used after allocator loss. It does not clear inactive-service or
+commit fences. A positive retirement proof remains closed and idempotent.
+
+With the same allocator, an epoch echo does not prove post-timeout freshness.
+An earlier `Enable` or `Waiting` heartbeat can confirm observation but cannot
+reopen admission or authorize completion. An authentic terminal heartbeat from
+the same incarnation represents irreversible local drain completion; active
+transactions in a terminal report remain rejected. The allocator lock publishes
+the replacement bind atomically, and old-generation timeout cleanup cannot
+retire that replacement. No new state machine, worker, or retry loop is added.
+
 ## Compatibility and rollout
 
 The two new drain RPC methods are gated at MORPC v105. The two optional epoch

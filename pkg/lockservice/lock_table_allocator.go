@@ -457,12 +457,17 @@ func (l *lockTableAllocator) beginDrain(req pb.BeginDrainRequest) pb.BeginDrainR
 	if b == nil {
 		// The first BeginDrain response may have been lost. A completed,
 		// exact retirement remains idempotent for its accepted attempt;
-		// an unsafe or unknown retirement is never a new admission.
-		resp.OK = l.retiredServices[req.ServiceID] &&
-			l.retiredDrainAttempts[req.ServiceID] == req.AttemptID
-		if _, retired := l.retiredServices[req.ServiceID]; retired {
+		// negative or unknown retirement still requires the pending handshake.
+		if l.retiredServices[req.ServiceID] {
+			resp.OK = l.retiredDrainAttempts[req.ServiceID] == req.AttemptID
 			return resp
 		}
+		// Negative retirement cannot authorize completion, but must not block
+		// the live incarnation from re-handshaking in non-admitting Waiting.
+		// Discard only obsolete drain proof, not inactive/commit fences.
+		delete(l.retiredServices, req.ServiceID)
+		delete(l.retiredDrainAttempts, req.ServiceID)
+		delete(l.retiredAt, req.ServiceID)
 		// A CN that has never requested GetBind has no allocator bind yet.
 		// Create a pending, non-admitting bind, but do not accept the drain
 		// until this exact instance acknowledges this allocator epoch in a

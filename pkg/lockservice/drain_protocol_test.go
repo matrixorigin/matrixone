@@ -119,122 +119,223 @@ func TestInstanceBoundDrainColdCNNeedsFreshHeartbeat(t *testing.T) {
 	})
 }
 
-func TestInstanceBoundDrainResumesAfterAllocatorLoss(t *testing.T) {
-	runLockTableAllocatorTest(t, time.Hour, func(a *lockTableAllocator) {
-		const id = "1234567890123456789restarting-cn"
-		const attempt = "new-allocator-attempt"
-		// The CN reached Waiting against the previous allocator. A replacement
-		// allocator has no bind record, while the CN must not reopen admission.
-		begin := a.beginDrain(pb.BeginDrainRequest{ServiceID: id, AttemptID: attempt})
-		if begin.OK {
-			t.Fatal("unknown service was accepted without a heartbeat")
+func TestInstanceBoundDrainRecoveryHandshake(t *testing.T) {
+	for _, negativeRetirement := range []bool{false, true} {
+		name := "unknown-allocator-state"
+		if negativeRetirement {
+			name = "negative-retirement"
 		}
-		client, err := NewClient("", morpc.Config{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer client.Close()
-		sendHeartbeat := func(status pb.Status, observed bool, txnIDs ...[]byte) pb.KeepLockTableBindResponse {
-			req := acquireRequest()
-			defer releaseRequest(req)
-			req.Method = pb.Method_KeepLockTableBind
-			req.KeepLockTableBind.ServiceID = id
-			req.KeepLockTableBind.Status = status
-			req.KeepLockTableBind.TxnIDs = txnIDs
-			if observed {
-				req.KeepLockTableBind.ObservedAllocatorID = a.allocatorID
-				req.KeepLockTableBind.ObservedAllocatorVersion = a.version
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			resp, err := client.Send(ctx, req)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer releaseResponse(resp)
-			return resp.KeepLockTableBind
-		}
-		if sendHeartbeat(pb.Status_ServiceLockWaiting, false).OK ||
-			a.beginDrain(pb.BeginDrainRequest{ServiceID: id, AttemptID: attempt}).OK {
-			t.Fatal("old allocator heartbeat adopted the pending drain")
-		}
-		if !sendHeartbeat(pb.Status_ServiceLockWaiting, true, []byte("remote-txn")).OK {
-			t.Fatal("live draining CN could not re-handshake with the new allocator")
-		}
-		if !a.beginDrain(pb.BeginDrainRequest{ServiceID: id, AttemptID: attempt}).OK {
-			t.Fatal("fresh attempt did not become accepted")
-		}
-		query := pb.QueryDrainRequest{ServiceID: id, AttemptID: attempt,
-			AllocatorID: a.allocatorID, AllocatorVersion: a.version}
-		if a.queryDrain(query).Safe || a.canGetBind(id) ||
-			a.Get(id, 0, 1, 0, pb.Sharding_None).Valid {
-			t.Fatal("remote transaction or pending drain allowed unsafe exit or bind")
-		}
-		if completed := sendHeartbeat(pb.Status_ServiceUnLockSucc, true, []byte("remote-txn")); completed.OK || a.queryDrain(query).Safe {
-			t.Fatal("terminal phase with a remote transaction was accepted")
-		}
-		if completed := sendHeartbeat(pb.Status_ServiceUnLockSucc, true); !completed.OK ||
-			completed.Status != pb.Status_ServiceCanRestart || !a.queryDrain(query).Safe {
-			t.Fatal("drained CN was not confirmed after remote transaction release")
-		}
-	})
+		t.Run(name, func(t *testing.T) {
+			runLockTableAllocatorTest(t, time.Hour, func(a *lockTableAllocator) {
+				const id = "1234567890123456789restarting-cn"
+				const attempt = "new-allocator-attempt"
+				var retiredBind *serviceBinds
+				var originalCtl *commitCtl
+				var originalRecoveryEpoch uint64
+				if negativeRetirement {
+					retiredBind = a.registerService(id)
+					retiredBind.requestRestart()
+					originalCtl = a.getCtl(id)
+					originalRecoveryEpoch = originalCtl.currentRecoveryEpoch()
+					require.Empty(t, a.AddCannotCommit([]pb.OrphanTxn{
+						{Service: id, Txn: [][]byte{[]byte("old-cannot-commit")}},
+						{Service: id, Txn: [][]byte{[]byte("persistent-fence")}, Persist: true,
+							ExpireAtUnixNano: time.Now().Add(time.Hour).UnixNano(), CommitSequence: 1},
+					}))
+					require.True(t, a.disableTableBindsAtGeneration(retiredBind, 0, originalCtl, originalRecoveryEpoch))
+					require.True(t, a.HasInvalidService(id))
+				}
+				// A previously draining CN has no live allocator bind after state loss
+				// or timeout retirement. Recovery must not reopen normal admission.
+				begin := a.beginDrain(pb.BeginDrainRequest{ServiceID: id, AttemptID: attempt})
+				if begin.OK {
+					t.Fatal("unknown service was accepted without a heartbeat")
+				}
+				pending := a.getServiceBinds(id)
+				require.NotNil(t, pending)
+				require.Equal(t, pb.Status_ServiceLockWaiting, pending.getStatus())
+				if negativeRetirement {
+					a.mu.RLock()
+					_, retired := a.retiredServices[id]
+					_, retiredAttempt := a.retiredDrainAttempts[id]
+					_, retiredTime := a.retiredAt[id]
+					a.mu.RUnlock()
+					require.False(t, retired)
+					require.False(t, retiredAttempt)
+					require.False(t, retiredTime)
+					a.disableTableBinds(retiredBind)
+					require.Same(t, pending, a.getServiceBinds(id), "old cleanup retired the replacement")
+					require.True(t, a.HasInvalidService(id), "re-handshake removed commit admission fence")
+					current, exists := a.ctl.Load(id)
+					require.True(t, exists)
+					require.Same(t, originalCtl, current)
+					require.Equal(t, originalRecoveryEpoch, originalCtl.currentRecoveryEpoch())
+					state, exists := originalCtl.getCtlState("old-cannot-commit")
+					require.True(t, exists)
+					require.Equal(t, cannotCommitState, state)
+					require.Equal(t, cannotCommitState, originalCtl.beginCommit("persistent-probe", CommitRequestMeta{Sequence: 1}))
+					_, err := a.Valid(id, []byte("fenced-txn"), nil)
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrCannotCommitOnInvalidCN))
+				}
+				client, err := NewClient("", morpc.Config{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer client.Close()
+				sendHeartbeat := func(status pb.Status, observed bool, txnIDs ...[]byte) pb.KeepLockTableBindResponse {
+					req := acquireRequest()
+					defer releaseRequest(req)
+					req.Method = pb.Method_KeepLockTableBind
+					req.KeepLockTableBind.ServiceID = id
+					req.KeepLockTableBind.Status = status
+					req.KeepLockTableBind.TxnIDs = txnIDs
+					if observed {
+						req.KeepLockTableBind.ObservedAllocatorID = a.allocatorID
+						req.KeepLockTableBind.ObservedAllocatorVersion = a.version
+					}
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					resp, err := client.Send(ctx, req)
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer releaseResponse(resp)
+					return resp.KeepLockTableBind
+				}
+				if sendHeartbeat(pb.Status_ServiceLockWaiting, false).OK ||
+					a.beginDrain(pb.BeginDrainRequest{ServiceID: id, AttemptID: attempt}).OK {
+					t.Fatal("old allocator heartbeat adopted the pending drain")
+				}
+				require.False(t, sendHeartbeat(pb.Status_ServiceLockEnable, false).OK)
+				observed := sendHeartbeat(pb.Status_ServiceLockEnable, true)
+				require.True(t, observed.OK)
+				require.Equal(t, pb.Status_ServiceLockWaiting, observed.Status, "delayed Enable reopened admission")
+				if !sendHeartbeat(pb.Status_ServiceLockWaiting, true, []byte("remote-txn")).OK {
+					t.Fatal("live draining CN could not re-handshake with the new allocator")
+				}
+				if !a.beginDrain(pb.BeginDrainRequest{ServiceID: id, AttemptID: attempt}).OK {
+					t.Fatal("fresh attempt did not become accepted")
+				}
+				query := pb.QueryDrainRequest{ServiceID: id, AttemptID: attempt,
+					AllocatorID: a.allocatorID, AllocatorVersion: a.version}
+				if a.queryDrain(query).Safe || a.canGetBind(id) ||
+					a.Get(id, 0, 1, 0, pb.Sharding_None).Valid {
+					t.Fatal("remote transaction or pending drain allowed unsafe exit or bind")
+				}
+				if completed := sendHeartbeat(pb.Status_ServiceUnLockSucc, true, []byte("remote-txn")); completed.OK || a.queryDrain(query).Safe {
+					t.Fatal("terminal phase with a remote transaction was accepted")
+				}
+				if completed := sendHeartbeat(pb.Status_ServiceUnLockSucc, true); !completed.OK ||
+					completed.Status != pb.Status_ServiceCanRestart || !a.queryDrain(query).Safe {
+					t.Fatal("drained CN was not confirmed after remote transaction release")
+				}
+				if negativeRetirement {
+					require.True(t, a.HasInvalidService(id), "completion removed independent commit fence")
+					_, err := a.Valid(id, []byte("after-drain"), nil)
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrCannotCommitOnInvalidCN))
+					state, exists := originalCtl.getCtlState("old-cannot-commit")
+					require.True(t, exists)
+					require.Equal(t, cannotCommitState, state)
+					require.Equal(t, cannotCommitState, originalCtl.beginCommit("persistent-probe", CommitRequestMeta{Sequence: 1}))
+					require.Equal(t, originalRecoveryEpoch, originalCtl.currentRecoveryEpoch())
+				}
+				a.disableTableBinds(pending)
+				require.True(t, a.queryDrain(query).Safe, "recovered positive retirement lost its proof")
+				require.True(t, a.beginDrain(pb.BeginDrainRequest{ServiceID: id, AttemptID: attempt}).OK)
+			})
+		})
+	}
 }
 
-func TestLiveRemoteLockDrainResumesAfterAllocatorLoss(t *testing.T) {
-	runLockServiceTests(t, []string{"owner", "remote"},
-		func(a *lockTableAllocator, services []*service) {
-			owner, remote := services[0], services[1]
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			const table = uint64(51801)
-			ownerTxn, remoteTxn := newTestTxnID(1), newTestTxnID(2)
-			rows, opts := newTestRows(1), newTestRowExclusiveOptions()
-			_, err := owner.Lock(ctx, table, rows, ownerTxn, opts)
-			require.NoError(t, err)
-			require.NoError(t, owner.Unlock(ctx, ownerTxn, timestamp.Timestamp{}))
-			_, err = remote.Lock(ctx, table, rows, remoteTxn, opts)
-			require.NoError(t, err)
-			require.Equal(t, owner.serviceID, remote.tableGroups.get(0, table).getBind().ServiceID)
-			require.False(t, owner.activeTxnHolder.empty())
-
-			const attempt = "recover-drain"
-			require.True(t, a.beginDrain(pb.BeginDrainRequest{
-				ServiceID: owner.serviceID, AttemptID: attempt}).OK)
-			owner.remote.keeper.(*lockTableKeeper).doKeepLockTableBind(ctx)
-			// The keeper dispatches this transition asynchronously in production.
-			// Invoke the same idempotent transition here as the synchronization
-			// point before replacing the allocator.
-			owner.checkCanMoveGroupTables()
-			require.Equal(t, pb.Status_ServiceLockWaiting, owner.getStatus())
-
-			// The old allocator's volatile state disappears while the remote
-			// transaction is still holding a lock on this CN.
-			a.mu.Lock()
-			a.mu.services = make(map[string]*serviceBinds)
-			a.mu.lockTables = make(map[uint32]map[uint64]pb.LockTable)
-			a.allocatorID = "replacement-allocator"
-			a.version++
-			a.mu.Unlock()
-			begin := a.beginDrain(pb.BeginDrainRequest{
-				ServiceID: owner.serviceID, AttemptID: attempt})
-			require.False(t, begin.OK)
-			query := pb.QueryDrainRequest{ServiceID: owner.serviceID, AttemptID: attempt,
-				AllocatorID: begin.AllocatorID, AllocatorVersion: begin.AllocatorVersion}
-			owner.remote.keeper.(*lockTableKeeper).doKeepLockTableBind(ctx)
-			require.Equal(t, begin.AllocatorID, owner.allocatorStateSnapshot().id)
-			require.False(t, a.beginDrain(pb.BeginDrainRequest{
-				ServiceID: owner.serviceID, AttemptID: attempt}).OK)
-			require.False(t, a.queryDrain(query).Safe)
-			owner.remote.keeper.(*lockTableKeeper).doKeepLockTableBind(ctx)
-			require.True(t, a.beginDrain(pb.BeginDrainRequest{
-				ServiceID: owner.serviceID, AttemptID: attempt}).OK)
-			require.False(t, a.queryDrain(query).Safe)
-			require.Equal(t, pb.Status_ServiceLockWaiting, owner.getStatus())
-
-			require.NoError(t, remote.Unlock(ctx, remoteTxn, timestamp.Timestamp{}))
-			owner.remote.keeper.(*lockTableKeeper).doKeepLockTableBind(ctx)
-			require.True(t, a.queryDrain(query).Safe)
+func TestLiveRemoteLockDrainRecovers(t *testing.T) {
+	for _, failure := range []string{"allocator-loss", "negative-retirement"} {
+		t.Run(failure, func(t *testing.T) {
+			runLockServiceTestsWithAdjustConfig(t, []string{"owner", "remote"}, time.Hour,
+				func(a *lockTableAllocator, services []*service) {
+					// Join allocator background readers before controlled failure injection;
+					// the RPC server/client stay live and CN keeper steps are driven explicitly.
+					a.stopper.Stop()
+					owner, remote := services[0], services[1]
+					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					defer cancel()
+					const table = uint64(51801)
+					ownerTxn, remoteTxn := newTestTxnID(1), newTestTxnID(2)
+					rows, opts := newTestRows(1), newTestRowExclusiveOptions()
+					_, err := owner.Lock(ctx, table, rows, ownerTxn, opts)
+					require.NoError(t, err)
+					require.NoError(t, owner.Unlock(ctx, ownerTxn, timestamp.Timestamp{}))
+					_, err = remote.Lock(ctx, table, rows, remoteTxn, opts)
+					require.NoError(t, err)
+					defer func() {
+						cleanup, stop := context.WithTimeout(context.Background(), 5*time.Second)
+						defer stop()
+						require.NoError(t, remote.Unlock(cleanup, remoteTxn, timestamp.Timestamp{}))
+					}()
+					require.Equal(t, owner.serviceID, remote.tableGroups.get(0, table).getBind().ServiceID)
+					require.False(t, owner.activeTxnHolder.empty())
+					const attempt = "recover-drain"
+					original := a.beginDrain(pb.BeginDrainRequest{ServiceID: owner.serviceID, AttemptID: attempt})
+					require.True(t, original.OK)
+					keeper := owner.remote.keeper.(*lockTableKeeper)
+					keeper.doKeepLockTableBind(ctx)
+					owner.checkCanMoveGroupTables()
+					require.Equal(t, pb.Status_ServiceLockWaiting, owner.getStatus())
+					switch failure {
+					case "allocator-loss":
+						a.mu.Lock()
+						a.mu.services = make(map[string]*serviceBinds)
+						a.mu.lockTables = make(map[uint32]map[uint64]pb.LockTable)
+						a.allocatorID = "replacement-allocator"
+						a.version++
+						a.mu.Unlock()
+					case "negative-retirement":
+						previousClient := a.client
+						func() {
+							a.client = &bindResponseClient{Client: previousClient,
+								send: func(context.Context, *pb.Request) (*pb.Response, error) {
+									return nil, moerr.NewBackendCannotConnectNoCtx("temporary validation connection failure")
+								}}
+							defer func() { a.client = previousClient }()
+							var selected []timedOutServiceBinds
+							for _, timeout := range a.getTimeoutBinds(time.Now().Add(3 * time.Hour)) {
+								if timeout.binds.serviceID == owner.serviceID {
+									selected = append(selected, timeout)
+								}
+							}
+							require.Len(t, selected, 1)
+							require.True(t, a.validateTimeoutBinds(ctx, selected))
+						}()
+						require.Nil(t, a.getServiceBinds(owner.serviceID))
+						require.True(t, a.HasInvalidService(owner.serviceID))
+						keeper.doKeepLockTableBind(ctx)
+					}
+					begin := a.beginDrain(pb.BeginDrainRequest{ServiceID: owner.serviceID, AttemptID: attempt})
+					require.False(t, begin.OK)
+					query := pb.QueryDrainRequest{ServiceID: owner.serviceID, AttemptID: attempt,
+						AllocatorID: begin.AllocatorID, AllocatorVersion: begin.AllocatorVersion}
+					if failure == "allocator-loss" {
+						// Reject the old epoch before the live CN observes the replacement.
+						keeper.doKeepLockTableBind(ctx)
+						require.Equal(t, begin.AllocatorID, owner.allocatorStateSnapshot().id)
+						require.False(t, a.beginDrain(pb.BeginDrainRequest{
+							ServiceID: owner.serviceID, AttemptID: attempt}).OK)
+						require.False(t, a.queryDrain(query).Safe)
+					}
+					keeper.doKeepLockTableBind(ctx)
+					require.True(t, a.beginDrain(pb.BeginDrainRequest{
+						ServiceID: owner.serviceID, AttemptID: attempt}).OK)
+					require.False(t, a.queryDrain(query).Safe)
+					require.False(t, a.canGetBind(owner.serviceID))
+					require.Equal(t, pb.Status_ServiceLockWaiting, owner.getStatus())
+					require.NoError(t, remote.Unlock(ctx, remoteTxn, timestamp.Timestamp{}))
+					keeper.doKeepLockTableBind(ctx)
+					require.True(t, a.queryDrain(query).Safe)
+				}, func(cfg *Config) {
+					cfg.KeepBindDuration.Duration = time.Hour
+					cfg.KeepRemoteLockDuration.Duration = time.Hour
+				})
 		})
+	}
 }
 
 func TestInstanceBoundDrainTerminalRehandshake(t *testing.T) {
