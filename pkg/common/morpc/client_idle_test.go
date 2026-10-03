@@ -31,7 +31,7 @@ import (
 // A slow unary response is live work even when business activity is old. Use
 // the real socket and heartbeat; age only the idle timestamp, not the request.
 func TestIdleGCPreservesPendingUnary(t *testing.T) {
-	for _, scenario := range []string{"no_gc", "response", "cancel", "deadline", "draining", "cleanup_full"} {
+	for _, scenario := range []string{"no_gc", "response", "cancel", "deadline", "draining", "cleanup_full", "other_pending"} {
 		t.Run(scenario, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			t.Cleanup(cancel)
@@ -114,6 +114,21 @@ func TestIdleGCPreservesPendingUnary(t *testing.T) {
 			ping.Close()
 			require.NoError(t, err, "healthy peer must answer heartbeat")
 			require.Equal(t, aged, rb.LastActiveTime(), "heartbeat is not business activity")
+			var other *Future
+			var otherRequest receivedRequest
+			if scenario == "other_pending" {
+				other, err = cli.Send(requestCtx, addr, newTestMessage(2))
+				require.NoError(t, err)
+				t.Cleanup(other.Close)
+				select {
+				case otherRequest = <-received:
+				case <-ctx.Done():
+					t.Fatal("server did not receive second request")
+				}
+				if otherRequest.cancel != nil {
+					t.Cleanup(otherRequest.cancel)
+				}
+			}
 			if scenario == "draining" {
 				rb.atomic.draining.Store(true)
 			}
@@ -139,6 +154,18 @@ func TestIdleGCPreservesPendingUnary(t *testing.T) {
 			f = nil
 			if scenario != "cancel" && scenario != "deadline" {
 				if scenario != "draining" {
+					rb.atomic.lastActiveTime.Store(aged)
+				}
+				if other != nil {
+					require.Zero(t, c.closeIdleBackends(), "completing one request must preserve another live request")
+					writeMu.Lock()
+					err = otherRequest.conn.Write(RPCMessage{Ctx: ctx, Message: newTestMessage(otherRequest.id)}, goetty.WriteOptions{Flush: true})
+					writeMu.Unlock()
+					require.NoError(t, err)
+					response, err := other.Get()
+					require.NoError(t, err)
+					require.Equal(t, otherRequest.id, response.GetID())
+					// Response removal, before Future.Close, ends occupancy.
 					rb.atomic.lastActiveTime.Store(aged)
 				}
 				if scenario == "cleanup_full" {
