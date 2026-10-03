@@ -1213,6 +1213,31 @@ func TestBuildPlanRegexpUserVariableNullHistory(t *testing.T) {
 	}
 }
 
+func TestUserVariableNullTypeDoesNotLeakHistoryToExecuteParams(t *testing.T) {
+	ses, prepareStmt, cw, _ := newPreparedExecuteEnv(t, 106)
+	defer prepareStmt.Close()
+	for _, previous := range []any{int64(1), "abc", nil} {
+		if previous != nil {
+			require.NoError(t, ses.SetUserDefinedVar("parameter", previous, ""))
+		}
+		require.NoError(t, ses.SetUserDefinedVar("parameter", nil, ""))
+		func() {
+			params, values, _, _, _, _, err := buildExecuteUserParams(cw.proc,
+				[]*plan.Expr{{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "parameter"}}}}, nil)
+			require.NoError(t, err)
+			defer params.Free(cw.proc.Mp())
+			value := values[0].(plan2.ParamValue)
+			require.Nil(t, value.Value)
+			if _, numeric := previous.(int64); numeric {
+				require.False(t, value.HasSourceType, "NULL must not force the historical numeric conversion")
+			} else {
+				require.True(t, value.HasSourceType, "preserve legacy text NULL source domains")
+			}
+			require.Equal(t, vector.PrepareParamNone, value.PrepareParamKind)
+		}()
+	}
+}
+
 func TestBuildPlanRegexpDefersOnlyRuntimeStringDomains(t *testing.T) {
 	ctx := defines.AttachAccount(context.Background(), sysAccountID, rootID, moAdminRoleID)
 	for _, sql := range []string{

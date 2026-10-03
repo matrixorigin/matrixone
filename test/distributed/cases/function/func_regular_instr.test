@@ -225,6 +225,21 @@ SELECT REGEXP_LIKE(CAST(v AS BINARY), 'a') AS cast_derived_variable_match FROM (
 SELECT REGEXP_LIKE(v, 'a') AS derived_concat_match FROM (SELECT CAST(CONCAT(@regexp_cast_variable, '') AS BINARY) v) s;
 SELECT REGEXP_LIKE((SELECT CAST(LOWER(@regexp_cast_variable) AS BINARY)), 'a') AS scalar_lower_match;
 SELECT REGEXP_LIKE(CAST(SUBSTRING(@regexp_cast_variable, 1, 3) AS BINARY), 'a');
+# Finite declarations survive scalar projection and constant integer CASTs.
+SELECT REGEXP_LIKE(CAST((SELECT SUBSTRING(@regexp_cast_variable, 1, 3)) AS BINARY), 'a');
+SELECT REGEXP_LIKE(CAST(SUBSTRING(@regexp_cast_variable, 1, CAST(3 AS SIGNED)) AS BINARY), 'a');
+SELECT REGEXP_LIKE(CAST(v AS BINARY), 'a') FROM (SELECT SUBSTRING(@regexp_cast_variable, 1, CAST(3 AS SIGNED)) v) s;
+# A parameter witness is unknown, not a constant zero-length declaration.
+PREPARE regexp_dynamic_length FROM 'SELECT REGEXP_LIKE(CAST(v AS BINARY), ''a'') AS dynamic_match FROM (SELECT SUBSTRING(@regexp_cast_variable, 1, ?) v) s';
+SET @regexp_length = 3;
+EXECUTE regexp_dynamic_length USING @regexp_length;
+SET @regexp_length = 0;
+EXECUTE regexp_dynamic_length USING @regexp_length;
+SET @regexp_length = NULL;
+EXECUTE regexp_dynamic_length USING @regexp_length;
+SET @regexp_length = 3;
+EXECUTE regexp_dynamic_length USING @regexp_length;
+DEALLOCATE PREPARE regexp_dynamic_length;
 SELECT REGEXP_LIKE(CAST(LOWER(@regexp_cast_variable) AS BINARY(3)), 'a');
 SELECT REGEXP_LIKE(IF(TRUE, CAST(@regexp_cast_variable AS BINARY), CAST('abc' AS BINARY(3))), 'a') AS blob_branch_match;
 SELECT REGEXP_LIKE(IF(FALSE, CAST(@regexp_cast_variable AS BINARY), CAST('abc' AS BINARY(3))), 'a') AS fixed_branch_match;
@@ -248,6 +263,19 @@ EXECUTE regexp_expression_cast_rebind;
 SET @regexp_cast_variable = 'abc';
 EXECUTE regexp_expression_cast_rebind;
 DEALLOCATE PREPARE regexp_expression_cast_rebind;
+
+# NULL regexp history must not change SQL EXECUTE numeric conversions.
+SET @regexp_null_parameter = 1;
+SET @regexp_null_parameter = NULL;
+PREPARE regexp_null_conversion FROM 'SELECT SUBSTRING_INDEX(''a.b'', ''.'', COALESCE(?, 1.5)) AS null_conversion';
+EXECUTE regexp_null_conversion USING @regexp_null_parameter;
+DEALLOCATE PREPARE regexp_null_conversion;
+CREATE TABLE regexp_null_conversion_result(v VARCHAR(8));
+PREPARE regexp_null_insert FROM 'INSERT INTO regexp_null_conversion_result SELECT SUBSTRING_INDEX(''a.b'', ''.'', COALESCE(?, 1.5))';
+EXECUTE regexp_null_insert USING @regexp_null_parameter;
+SELECT v FROM regexp_null_conversion_result;
+DEALLOCATE PREPARE regexp_null_insert;
+DROP TABLE regexp_null_conversion_result;
 
 # Query boundaries and constant folding must retain expression-owned casts,
 # including typed NULL. Physical BINARY/BLOB projections retain their exemption.

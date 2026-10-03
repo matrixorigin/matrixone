@@ -5946,7 +5946,7 @@ func (b *baseBinder) annotateStringDomainSource(
 	}
 	if sub := expr.GetSub(); sub != nil {
 		b.annotateStringDomainSource(sub.Child, visited, memo)
-		if types.T(expr.Typ.Id) != types.T_binary || sub.Typ != plan.SubqueryRef_SCALAR ||
+		if !types.T(expr.Typ.Id).IsMySQLString() || sub.Typ != plan.SubqueryRef_SCALAR ||
 			b.builder == nil || b.builder.qry == nil || sub.NodeId < 0 || int(sub.NodeId) >= len(b.builder.qry.Nodes) {
 			return
 		}
@@ -5962,6 +5962,10 @@ func (b *baseBinder) annotateStringDomainSource(
 		}
 		source := node.ProjectList[0]
 		b.annotateStringDomainSource(source, visited, memo)
+		if types.StaticStringDomain(makeTypeByPlan2Expr(expr)) == types.StringDomainText &&
+			!preparedExprStringDomainDependsOnRuntime(source) {
+			return // Static text already carries its declaration; do not defer its charset check.
+		}
 		if (source.GetCol() != nil || source.GetSub() != nil) &&
 			source.GetPreparedNumeric().GetStringDomainSource() == nil {
 			return // A physical field, including a nested scalar projection, stays compatible.
@@ -6207,10 +6211,21 @@ func compactStringDomainWitnessArg(arg *Expr) *Expr {
 	if arg.GetLit() != nil {
 		return DeepCopyExpr(arg)
 	}
-	// The witness is never evaluated. A typed literal is enough for function
-	// overload resolution and avoids retaining an unrelated expression graph.
+	if value, signed, ok := regexpConstantInteger(arg); ok {
+		var constant *Expr
+		if signed {
+			constant = makePlan2Int64ConstExprWithType(int64(value))
+		} else {
+			constant = makePlan2Uint64ConstExprWithType(value)
+		}
+		constant.Typ = arg.Typ
+		return constant
+	}
+	// The witness is never evaluated. NULL marks an unknown value: a synthetic
+	// zero would falsely prove a constant SUBSTRING/LEFT/RIGHT length.
 	placeholder := makePlan2Int64ConstExprWithType(0)
 	placeholder.Typ = arg.Typ
+	placeholder.GetLit().Isnull = true
 	return placeholder
 }
 

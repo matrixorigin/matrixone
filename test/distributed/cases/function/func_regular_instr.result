@@ -394,6 +394,30 @@ SELECT REGEXP_LIKE((SELECT CAST(LOWER(@regexp_cast_variable) AS BINARY)), 'a') A
 1
 SELECT REGEXP_LIKE(CAST(SUBSTRING(@regexp_cast_variable, 1, 3) AS BINARY), 'a');
 Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(CAST((SELECT SUBSTRING(@regexp_cast_variable, 1, 3)) AS BINARY), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(CAST(SUBSTRING(@regexp_cast_variable, 1, CAST(3 AS SIGNED)) AS BINARY), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(CAST(v AS BINARY), 'a') FROM (SELECT SUBSTRING(@regexp_cast_variable, 1, CAST(3 AS SIGNED)) v) s;
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+PREPARE regexp_dynamic_length FROM 'SELECT REGEXP_LIKE(CAST(v AS BINARY), ''a'') AS dynamic_match FROM (SELECT SUBSTRING(@regexp_cast_variable, 1, ?) v) s';
+SET @regexp_length = 3;
+EXECUTE regexp_dynamic_length USING @regexp_length;
+➤ dynamic_match[-7,1,0]  𝄀
+1
+SET @regexp_length = 0;
+EXECUTE regexp_dynamic_length USING @regexp_length;
+➤ dynamic_match[-7,1,0]  𝄀
+0
+SET @regexp_length = NULL;
+EXECUTE regexp_dynamic_length USING @regexp_length;
+➤ dynamic_match[-7,1,0]  𝄀
+null
+SET @regexp_length = 3;
+EXECUTE regexp_dynamic_length USING @regexp_length;
+➤ dynamic_match[-7,1,0]  𝄀
+1
+DEALLOCATE PREPARE regexp_dynamic_length;
 SELECT REGEXP_LIKE(CAST(LOWER(@regexp_cast_variable) AS BINARY(3)), 'a');
 Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
 SELECT REGEXP_LIKE(IF(TRUE, CAST(@regexp_cast_variable AS BINARY), CAST('abc' AS BINARY(3))), 'a') AS blob_branch_match;
@@ -436,6 +460,21 @@ EXECUTE regexp_expression_cast_rebind;
 ➤ concat_match[-7,1,0]  ¦  lower_match[-7,1,0]  ¦  derived_match[-7,1,0]  𝄀
 1  ¦  1  ¦  1
 DEALLOCATE PREPARE regexp_expression_cast_rebind;
+SET @regexp_null_parameter = 1;
+SET @regexp_null_parameter = NULL;
+PREPARE regexp_null_conversion FROM 'SELECT SUBSTRING_INDEX(''a.b'', ''.'', COALESCE(?, 1.5)) AS null_conversion';
+EXECUTE regexp_null_conversion USING @regexp_null_parameter;
+➤ null_conversion[12,3,0]  𝄀
+a.b
+DEALLOCATE PREPARE regexp_null_conversion;
+CREATE TABLE regexp_null_conversion_result(v VARCHAR(8));
+PREPARE regexp_null_insert FROM 'INSERT INTO regexp_null_conversion_result SELECT SUBSTRING_INDEX(''a.b'', ''.'', COALESCE(?, 1.5))';
+EXECUTE regexp_null_insert USING @regexp_null_parameter;
+SELECT v FROM regexp_null_conversion_result;
+➤ v[12,8,0]  𝄀
+a.b
+DEALLOCATE PREPARE regexp_null_insert;
+DROP TABLE regexp_null_conversion_result;
 SELECT REGEXP_LIKE((SELECT CAST('a' AS BINARY)), 'a');
 Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
 SELECT REGEXP_LIKE(v, 'a') FROM (SELECT CAST('a' AS BINARY) v) s;

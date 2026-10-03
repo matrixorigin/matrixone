@@ -56,6 +56,18 @@ func TestPreparedNumericTemporalContracts(t *testing.T) {
 			require.NoError(t, conn.QueryRowContext(ctx, q, args...).Scan(&s), q)
 			return s
 		}
+		t.Run("NULL assignment history does not change SQL EXECUTE conversion", func(t *testing.T) {
+			exec(t, "set @null_history=1")
+			exec(t, "set @null_history=NULL")
+			exec(t, "prepare null_history_select from 'select substring_index(\"a.b\",\".\",coalesce(?,1.5))'")
+			defer exec(t, "deallocate prepare null_history_select")
+			require.Equal(t, "a.b", scalar(t, "execute null_history_select using @null_history"))
+			exec(t, "create table null_history_result(v varchar(8))")
+			exec(t, "prepare null_history_insert from 'insert into null_history_result select substring_index(\"a.b\",\".\",coalesce(?,1.5))'")
+			defer exec(t, "deallocate prepare null_history_insert")
+			exec(t, "execute null_history_insert using @null_history")
+			require.Equal(t, "a.b", scalar(t, "select v from null_history_result"))
+		})
 		t.Run("decimal scientific values and persistence", func(t *testing.T) {
 			exec(t, "create table source(v varchar(128))")
 			exec(t, "insert into source values ('1E-2'),('-1E-2'),('0E2')")

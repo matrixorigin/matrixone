@@ -392,6 +392,9 @@ func TestRegexpBinaryCastAcrossQueryBoundaries(t *testing.T) {
 		{"select regexp_like(coalesce(cast(null as binary(3)), cast(null as binary(3))), 'a')", true},
 		{"select regexp_like(if(true, cast(@v as binary(3)), cast(@v as binary(3))), 'a')", true},
 		{"select regexp_like(cast(substring(@v, 1, 3) as binary), 'a')", true},
+		{"select regexp_like(cast((select substring(@v, 1, 3)) as binary), 'a')", true},
+		{"select regexp_like(cast(substring(@v, 1, cast(3 as signed)) as binary), 'a')", true},
+		{"select regexp_like(cast(substring(@v, 1, cast(cast(3 as unsigned) as signed)) as binary), 'a')", true},
 		{"select regexp_like(cast(concat(@v, '') as binary), 'a')", false},
 		{"select regexp_like(cast(lower(@v) as binary), 'a')", false},
 		{"select regexp_like(cast(v as binary), 'a') from (select @v v) s", false},
@@ -440,6 +443,48 @@ func TestRegexpBinaryCastAcrossQueryBoundaries(t *testing.T) {
 		t.Run(sql, func(t *testing.T) {
 			_, err := runOneStmt(NewMockOptimizer(false), t, sql)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrCharacterSetMismatch), err)
+		})
+	}
+}
+
+func TestRegexpLengthWitnessDistinguishesUnknownFromZero(t *testing.T) {
+	for _, value := range []uint64{0, 3, ^uint64(0)} {
+		expr := makePlan2Uint64ConstExprWithType(value)
+		actual, signed, known := regexpConstantInteger(expr)
+		require.True(t, known)
+		require.False(t, signed)
+		require.Equal(t, value, actual)
+	}
+	parameter := &Expr{Typ: makeSimplePlan2Type(types.T_int64),
+		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+	witness := compactStringDomainWitnessArg(parameter)
+	_, _, known := regexpConstantInteger(witness)
+	require.False(t, known)
+	zero := makePlan2Int64ConstExprWithType(0)
+	_, _, known = regexpConstantInteger(zero)
+	require.True(t, known)
+	zero.GetLit().Src = parameter
+	_, _, known = regexpConstantInteger(zero)
+	require.False(t, known, "a bound parameter payload is not a declaration constant")
+}
+
+func TestRegexpBinaryCastDynamicSubstringLength(t *testing.T) {
+	for _, source := range []string{
+		"substring(@str_var,1,?)",
+		"substring(@str_var,1,cast(? as signed))",
+	} {
+		query := "select regexp_like(cast(v as binary),'a') from (select " + source + " v) s"
+		t.Run(source, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+				"prepare dynamic_length from '"+strings.ReplaceAll(query, "'", "''")+"'")
+			require.NoError(t, err, "a witness placeholder must not become a zero length")
+			cached := proto.Clone(prepared.GetDcl().GetPrepare().Plan).(*planpb.Plan)
+			for _, length := range []any{int64(3), int64(0), nil, int64(3)} {
+				_, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(),
+					prepared.GetDcl().GetPrepare().Plan, []any{length})
+				require.NoError(t, err, "execution must retain the nonconstant length declaration")
+				require.True(t, proto.Equal(cached, prepared.GetDcl().GetPrepare().Plan))
+			}
 		})
 	}
 }

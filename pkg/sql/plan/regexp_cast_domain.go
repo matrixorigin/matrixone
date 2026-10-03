@@ -136,18 +136,11 @@ func regexpDeclaredStringType(expr *Expr) types.Type {
 		}
 	}
 	if lengthIndex >= 0 {
-		if lit := fn.Args[lengthIndex].GetLit(); lit != nil && !lit.Isnull {
-			var length uint64
-			known := true
-			switch value := lit.Value.(type) {
-			case *planpb.Literal_I64Val:
-				length = uint64(max(value.I64Val, 0))
-			case *planpb.Literal_U64Val:
-				length = value.U64Val
-			default:
-				known = false
+		if length, signed, known := regexpConstantInteger(fn.Args[lengthIndex]); known {
+			if signed && int64(length) < 0 {
+				length = 0
 			}
-			if known && length <= uint64(types.MaxVarcharLen) {
+			if length <= uint64(types.MaxVarcharLen) {
 				if types.StaticStringDomain(typ) == types.StringDomainBinary {
 					return regexpBinaryTypeForBound(length, true)
 				}
@@ -156,6 +149,46 @@ func regexpDeclaredStringType(expr *Expr) types.Type {
 		}
 	}
 	return typ
+}
+
+// regexpConstantInteger recognizes values, not witness payloads or current
+// parameter bindings. CAST preserves integer bits and signedness; unsupported
+// conversions stay unknown rather than being evaluated speculatively.
+func regexpConstantInteger(expr *Expr) (value uint64, signed, known bool) {
+	if expr == nil || expr.GetP() != nil || expr.GetV() != nil ||
+		expr.GetPreparedNumeric().GetStringDomainSource() != nil {
+		return 0, false, false
+	}
+	if lit := expr.GetLit(); lit != nil {
+		if lit.Isnull {
+			return 0, false, false
+		}
+		if lit.Src != nil {
+			return regexpConstantInteger(lit.Src)
+		}
+		if source := types.StringSource(lit.StringSource); source != types.StringSourceExpression &&
+			source != types.StringSourceLiteral {
+			return 0, false, false
+		}
+		switch number := lit.Value.(type) {
+		case *planpb.Literal_I64Val:
+			return uint64(number.I64Val), true, true
+		case *planpb.Literal_U64Val:
+			return number.U64Val, false, true
+		}
+		return 0, false, false
+	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil &&
+		strings.EqualFold(fn.Func.ObjName, "cast") && len(fn.Args) > 0 {
+		value, _, known = regexpConstantInteger(fn.Args[0])
+		switch types.T(expr.Typ.Id) {
+		case types.T_int64:
+			return value, true, known
+		case types.T_uint64:
+			return value, false, known
+		}
+	}
+	return 0, false, false
 }
 
 func regexpExpressionByteBound(expr *Expr) (uint64, bool) {
