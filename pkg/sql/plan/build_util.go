@@ -509,10 +509,10 @@ func charsetForName(name string) (uint32, bool) {
 	switch strings.ToLower(name) {
 	case "binary":
 		return uint32(types.CharsetBinary), true
-	case "utf8", "utf8mb3", "utf8mb4", "latin1", "ascii":
-		// MatrixOne stores text as UTF-8. Accept MySQL's single-byte charset
-		// spellings for DDL compatibility and normalize them to the supported
-		// general-ci text identity rather than pretending to preserve encoding.
+	case "utf8", "utf8mb3", "utf8mb4", "latin1", "ascii", "utf32":
+		// MatrixOne stores text as UTF-8. Accept MySQL charset spellings for DDL
+		// compatibility and normalize them to the supported text identity rather
+		// than pretending to preserve an encoding that MatrixOne does not store.
 		return uint32(types.CharsetUTF8), true
 	default:
 		return 0, false
@@ -523,13 +523,14 @@ func collationForName(name string) (uint32, bool) {
 	switch strings.ToLower(name) {
 	case "binary":
 		return uint32(types.CharsetBinary), true
-	case "utf8_bin", "utf8mb3_bin", "utf8mb4_bin":
+	case "utf8_bin", "utf8mb3_bin", "utf8mb4_bin", "utf32_bin":
 		return uint32(types.CharsetUTF8MB4Bin), true
 	case "utf8_general_ci", "utf8mb3_general_ci", "utf8mb4_general_ci", "utf8mb4_0900_ai_ci",
-		"latin1_swedish_ci", "ascii_general_ci":
+		"latin1_swedish_ci", "ascii_general_ci", "utf32_general_ci":
 		// MySQL 8 uses utf8mb4_0900_ai_ci by default. Accept that exact spelling
-		// as a DDL compatibility alias, but normalize it to MatrixOne's existing
-		// general-ci identity instead of claiming native UCA 9.0 semantics.
+		// as a DDL compatibility alias. The utf32 spellings are handled the same
+		// way: normalize to MatrixOne's existing identity instead of claiming
+		// native UCA or UTF-32 storage semantics.
 		return uint32(types.CharsetUTF8), true
 	default:
 		// Do not silently alias other advertised UCA/0900 collations to either

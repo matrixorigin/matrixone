@@ -478,6 +478,49 @@ func TestBuildCreateTableAcceptsMySQL8DefaultCollationCompatibilityAlias(t *test
 	require.Contains(t, showSQL, "COLLATE utf8mb4_bin")
 }
 
+func TestBuildCreateTableAcceptsUTF32CompatibilityAliases(t *testing.T) {
+	testCases := []struct {
+		name      string
+		sql       string
+		wantTable uint32
+	}{
+		{
+			name:      "JeecgBoot column declaration",
+			sql:       "create table t_charset_alias (name varchar(20) character set utf32 collate utf32_general_ci)",
+			wantTable: uint32(types.CharsetUTF8),
+		},
+		{
+			name:      "table default",
+			sql:       "create table t_charset_alias (name varchar(20)) default character set utf32",
+			wantTable: uint32(types.CharsetUTF8),
+		},
+		{
+			name:      "binary collation",
+			sql:       "create table t_charset_alias (name varchar(20)) character set utf32 collate utf32_bin",
+			wantTable: uint32(types.CharsetUTF8MB4Bin),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			ctx := NewMockCompilerContext(false)
+			p, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			tableDef := p.GetDdl().GetCreateTable().GetTableDef()
+			require.Equal(t, tc.wantTable, tableDef.DefaultCharset)
+			require.Equal(t, tc.wantTable, tableDef.Cols[0].Typ.Charset)
+
+			showSQL, _, err := ConstructCreateTableSQL(ctx, tableDef, nil, false, nil)
+			require.NoError(t, err)
+			require.NotContains(t, strings.ToLower(showSQL), "utf32")
+		})
+	}
+}
+
 func TestUnsupportedLegacyCollationExplainsDumpReplacement(t *testing.T) {
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
 		"create table t(v varchar(8)) collate utf8mb4_unicode_ci", 1)
