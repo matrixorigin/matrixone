@@ -16,6 +16,8 @@ package function
 
 import (
 	"context"
+	"fmt"
+	"math/rand"
 	"testing"
 	"time"
 
@@ -23,6 +25,105 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPackedDatetimeDecimal128MatchesParser(t *testing.T) {
+	// Keep the old text conversion as an independent oracle for width, scale,
+	// rounding, overflow, zero values, and the exact public error text.
+	values := []types.Datetime{types.ZeroDatetime, types.DatetimeEpoch, types.Datetime(-2)}
+	for _, input := range []string{
+		"0001-01-01 00:00:00.000001",
+		"1000-01-01 00:59:05.000000",
+		"2024-01-02 03:04:05.000001",
+		"2024-01-02 03:04:05.123456",
+		"2024-01-02 03:04:05.499949",
+		"2024-01-02 03:04:05.499950",
+		"2024-01-02 03:04:05.499999",
+		"2024-01-02 03:04:05.500000",
+		"2024-01-02 03:04:05.999999",
+		"9999-12-31 23:59:59.999999",
+	} {
+		value, err := types.ParseDatetime(input, 6)
+		require.NoError(t, err)
+		values = append(values, value)
+	}
+	// Deterministic calendar samples exercise every fractional scale without a
+	// large fixture or dependence on the current date/time zone.
+	rng := rand.New(rand.NewSource(1))
+	for range 64 {
+		values = append(values, types.DatetimeFromClock(int32(rng.Intn(9999)+1),
+			uint8(rng.Intn(12)+1), uint8(rng.Intn(28)+1),
+			uint8(rng.Intn(24)), uint8(rng.Intn(60)), uint8(rng.Intn(60)), uint32(rng.Intn(1000000))))
+	}
+	for _, value := range values {
+		text := fmt.Sprintf("%d.%06d", packedDatetimeInt64(value), value.MicroSec())
+		for _, width := range []int32{0, 1, 11, 13, 14, 18, 20, 26, 38, 40} {
+			for scale := int32(-1); scale <= 39; scale++ {
+				typ := types.New(types.T_decimal128, width, scale)
+				want, wantErr := types.ParseDecimal128(text, width, scale)
+				got, gotErr := packedDatetimeDecimal128(value, typ)
+				if wantErr != nil {
+					require.EqualError(t, gotErr, wantErr.Error(), "value=%s width=%d scale=%d", text, width, scale)
+				} else {
+					require.NoError(t, gotErr, "value=%s width=%d scale=%d", text, width, scale)
+					require.Equal(t, want, got, "value=%s width=%d scale=%d", text, width, scale)
+				}
+			}
+		}
+	}
+}
+
+func TestPackedDatetimeDecimalRoundingControls(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		scale int32
+		want  string
+	}{
+		{"2024-01-02 03:04:05.499950", 0, "20240102030405"},
+		{"2024-01-02 03:04:05.500000", 0, "20240102030406"},
+		{"2024-01-02 03:04:05.123456", 4, "20240102030405.1235"},
+		{"9999-12-31 23:59:59.999999", 0, "99991231235960"},
+	} {
+		value, err := types.ParseDatetime(tc.input, 6)
+		require.NoError(t, err)
+		got, err := packedDatetimeDecimal128(value, types.New(types.T_decimal128, 38, tc.scale))
+		require.NoError(t, err)
+		require.Equal(t, tc.want, got.Format(tc.scale))
+	}
+	// Decimal64 parses only 18 significant digits before target-scale rounding.
+	// Its existing double-rounding behavior must not be changed by this fast path.
+	value, err := types.ParseDatetime("2024-01-02 03:04:05.499950", 6)
+	require.NoError(t, err)
+	got, err := packedDatetimeDecimal64(value, types.New(types.T_decimal64, 18, 0))
+	require.NoError(t, err)
+	require.Equal(t, "20240102030406", got.Format(0))
+}
+
+func BenchmarkPackedDatetimeDecimal128(b *testing.B) {
+	value, err := types.ParseDatetime("2024-01-02 03:04:05.123456", 6)
+	require.NoError(b, err)
+	for _, scale := range []int32{0, 4, 6, 18} {
+		typ := types.New(types.T_decimal128, 38, scale)
+		for _, impl := range []struct {
+			name string
+			cast func(types.Datetime, types.Type) (types.Decimal128, error)
+		}{
+			{"arithmetic", packedDatetimeDecimal128},
+			{"text_parser", func(v types.Datetime, toType types.Type) (types.Decimal128, error) {
+				return types.ParseDecimal128(fmt.Sprintf("%d.%06d", packedDatetimeInt64(v), v.MicroSec()), toType.Width, toType.Scale)
+			}},
+		} {
+			b.Run(fmt.Sprintf("scale_%d/%s", scale, impl.name), func(b *testing.B) {
+				b.ReportAllocs()
+				for b.Loop() {
+					_, err := impl.cast(value, typ)
+					if err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		}
+	}
+}
 
 func TestCastTemporalNumericUsesMysqlPackedValue(t *testing.T) {
 	proc := testutil.NewProcess(t)
