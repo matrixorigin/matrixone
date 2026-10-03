@@ -84,6 +84,79 @@ func TestPreparedCommonValueAggregatesPeerDomains(t *testing.T) {
 	}
 }
 
+func TestPreparedCommonValueRootStringBoundary(t *testing.T) {
+	for _, name := range []string{"least", "greatest"} {
+		for _, child := range []string{"coalesce(?,?)", "ifnull(?,?)", "coalesce(?,coalesce(?,?))", "coalesce(?,?),coalesce(?,?)"} {
+			for _, binary := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s/binary=%t", name, child, binary), func(t *testing.T) {
+					mock := NewMockOptimizer(false)
+					proc := mock.ctxt.GetProcess()
+					expression := name + "(cast(1 as decimal(38,0)),?," + child + ")"
+					count := strings.Count(expression, "?")
+					params := vector.NewVec(types.T_text.ToType())
+					defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+					bindings := make([]PreparedSourceBinding, count)
+					for i := range bindings {
+						bindings[i] = PreparedSourceBinding{Position: int32(i), Type: types.T_varchar.ToType()}
+						require.NoError(t, vector.AppendBytes(params, []byte("0002"), false, proc.Mp()))
+					}
+					proc.SetPrepareParams(params)
+					stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select "+expression, 1)
+					require.NoError(t, err)
+					defer stmt.Free()
+					for _, root := range []string{"abc", "!", "", "0xx", "abc"} {
+						for _, spelling := range []string{"0002", strings.Repeat("9", 77)} {
+							func() {
+								values := make([]any, count)
+								for i := range values {
+									value := spelling
+									if i == 0 {
+										value = root
+									}
+									require.NoError(t, vector.SetStringAt(params, i, value, proc.Mp()))
+									values[i] = ParamValue{Value: value, SourceType: types.T_varchar.ToType(),
+										HasSourceType: true, EnableNumericPrefix: true, IsBinaryProtocol: binary}
+								}
+								bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings, values)
+								numeric := binary || root == "0xx"
+								if numeric && len(spelling) == 77 {
+									require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "%v", err)
+									return
+								}
+								require.NoError(t, err)
+								require.True(t, bound.ValueDependent)
+								q := bound.Plan.GetQuery()
+								expr := q.Nodes[q.Steps[0]].ProjectList[0]
+								require.Equal(t, !numeric, types.T(expr.Typ.Id).IsMySQLString())
+								text := types.T_varchar.ToType()
+								display, err := makePlan2CastExpr(proc.Ctx, expr, makePlan2Type(&text))
+								require.NoError(t, err)
+								result, free, err := colexec.GetReadonlyResultFromExpression(proc, display, []*batch.Batch{batch.EmptyForConstFoldBatch})
+								if free != nil {
+									defer free()
+								}
+								require.NoError(t, err)
+								var want string
+								if numeric {
+									want = "0"
+									if name == "greatest" {
+										want = "2"
+									}
+								} else if name == "least" {
+									want = min("1", root, spelling)
+								} else {
+									want = max("1", root, spelling)
+								}
+								require.Equal(t, want, result.GetStringAt(0))
+							}()
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestPreparedCommonValueJointMarkerDomains(t *testing.T) {
 	for _, tc := range []struct {
 		name, expression string

@@ -254,6 +254,83 @@ func TestIssue26879PreparedJointMarkerDomains(t *testing.T) {
 	})
 }
 
+func TestIssue26879PreparedRootStringBoundary(t *testing.T) {
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?interpolateParams=false", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		for _, name := range []string{"least", "greatest"} {
+			for _, child := range []string{"?,?", "coalesce(?,?)", "ifnull(?,?)", "coalesce(?,coalesce(?,?))", "coalesce(?,?),coalesce(?,?)"} {
+				for _, protocol := range []string{"sql", "binary"} {
+					t.Run(name+"/"+child+"/"+protocol, func(t *testing.T) {
+						query := "select " + name + "(cast(1 as decimal(38,0)),?," + child + ")"
+						var stmt *sql.Stmt
+						if protocol == "sql" {
+							mustExec(t, ctx, conn, "prepare root_boundary from '"+query+"'")
+							defer mustExec(t, ctx, conn, "deallocate prepare root_boundary")
+						} else {
+							stmt, err = conn.PrepareContext(ctx, query)
+							require.NoError(t, err)
+							defer stmt.Close()
+						}
+						for _, root := range []string{"abc", "!", "", "0xx", "abc"} {
+							for _, spelling := range []string{"0002", strings.Repeat("9", 77)} {
+								count := strings.Count(query, "?")
+								values := make([]any, count)
+								variables := make([]string, count)
+								for i := range values {
+									value := spelling
+									if i == 0 {
+										value = root
+									}
+									values[i] = value
+									variables[i] = fmt.Sprintf("@root_boundary_%d", i)
+									if protocol == "sql" {
+										mustExec(t, ctx, conn, "set "+variables[i]+"='"+value+"'")
+									}
+								}
+								var got string
+								if protocol == "sql" {
+									err = conn.QueryRowContext(ctx, "execute root_boundary using "+strings.Join(variables, ",")).Scan(&got)
+								} else {
+									err = stmt.QueryRowContext(ctx, values...).Scan(&got)
+								}
+								numeric := protocol == "binary" || root == "0xx"
+								if numeric && len(spelling) == 77 {
+									var sqlError *mysql.MySQLError
+									require.ErrorAs(t, err, &sqlError)
+									require.Equal(t, uint16(1690), sqlError.Number)
+									continue
+								}
+								require.NoError(t, err)
+								var want string
+								if numeric {
+									want = "0"
+									if name == "greatest" {
+										want = "2"
+									}
+								} else if name == "least" {
+									want = min("1", root, spelling)
+								} else {
+									want = max("1", root, spelling)
+								}
+								require.Equal(t, want, got)
+							}
+						}
+					})
+				}
+			}
+		}
+	})
+}
+
 func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)

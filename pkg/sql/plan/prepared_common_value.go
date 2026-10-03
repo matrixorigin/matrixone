@@ -158,11 +158,23 @@ func preparedCommonValueMarkers(ctx context.Context, args []*Expr) ([]*Expr, boo
 // marker scales may be rounded by the existing policy, unlike fixed peer scales.
 // Only executable casts are inherited; witnesses never become extra operands.
 func bindPreparedCommonValueResultArguments(ctx context.Context, args []*Expr, inherited map[int32]*Expr) ([]*Expr, error) {
-	if preparedBindingState(ctx) == nil {
+	state := preparedBindingState(ctx)
+	if state == nil {
 		return args, nil
 	}
 	applyMarkers := inherited != nil
 	if inherited == nil {
+		// A root operand's concrete string spelling owns the entire region.
+		// Check before inferring any child: leaving only the root unconverted
+		// would still erase child spellings or raise a speculative overflow.
+		for _, arg := range args {
+			source := preparedCommonValueSource(arg)
+			if source != nil && source.GetP() != nil &&
+				preparedConcreteStringCommonValueBoundary(int(source.GetP().Pos), state.values) {
+				preparedConfigurationValue(ctx, source)
+				return args, nil
+			}
+		}
 		peers, allowed := preparedCommonValueDomain(ctx, args)
 		if !allowed {
 			return args, nil
