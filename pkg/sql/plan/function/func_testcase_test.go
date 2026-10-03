@@ -17,15 +17,20 @@ package function
 import (
 	"bytes"
 	"fmt"
+	"runtime"
 	"strings"
+	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/assertx"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/geo"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/stretchr/testify/require"
 )
 
 // geometryComparisonWKT normalizes a geometry payload (WKB or legacy WKT/EWKT
@@ -55,14 +60,12 @@ func geometryComparisonWKT(b []byte) string {
 	return geo.WriteWKT(g)
 }
 
-type fEvalFn func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error
-
 type FunctionTestCase struct {
 	proc       *process.Process
 	parameters []*vector.Vector
 	result     vector.FunctionResultWrapper
 	expected   FunctionTestResult
-	fn         fEvalFn
+	fn         executeLogicOfOverload
 	fnLength   int
 	selectList *FunctionSelectList
 }
@@ -123,8 +126,14 @@ func NewFunctionTestCase(
 	proc *process.Process,
 	inputs []FunctionTestInput,
 	wanted FunctionTestResult,
-	fn fEvalFn) FunctionTestCase {
+	fn executeLogicOfOverload) FunctionTestCase {
 	f := FunctionTestCase{proc: proc}
+	owned := &f
+	defer func() {
+		if owned != nil {
+			owned.Free()
+		}
+	}()
 	mp := proc.Mp()
 	// allocate vector for function parameters
 	f.parameters = make([]*vector.Vector, len(inputs))
@@ -155,6 +164,7 @@ func NewFunctionTestCase(
 	}
 	f.expected = wanted
 	f.fn = fn
+	owned = nil
 	return f
 }
 
@@ -165,6 +175,32 @@ func NewFunctionTestCase(
 func (fc FunctionTestCase) WithSelectList(selectList *FunctionSelectList) FunctionTestCase {
 	fc.selectList = selectList
 	return fc
+}
+
+// Free releases the case's input and result vectors. The process and evaluator
+// remain caller-owned. A borrowed result is valid only until reset or Free.
+func (fc *FunctionTestCase) Free() {
+	if fc == nil {
+		return
+	}
+	if fc.result != nil {
+		fc.result.Free()
+	}
+	if fc.proc != nil {
+		for _, parameter := range fc.parameters {
+			if parameter != nil {
+				parameter.Free(fc.proc.Mp())
+			}
+		}
+	}
+	*fc = FunctionTestCase{}
+}
+
+// RunAndFree consumes a terminal case while preserving Run's comparison path.
+// Callers that inspect or reuse the result must retain Run and free afterward.
+func (fc *FunctionTestCase) RunAndFree() (bool, string) {
+	defer fc.Free()
+	return fc.Run()
 }
 
 func (fc *FunctionTestCase) GetResultVectorDirectly() *vector.Vector {
@@ -227,9 +263,6 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 				} else {
 					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
 				}
-			}
-			if null2 {
-				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
 			}
 			if null2 {
 				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
@@ -883,97 +916,104 @@ func (fc *FunctionTestCase) BenchMarkRun() error {
 
 func newVectorByType(mp *mpool.MPool, typ types.Type, val any, nsp *nulls.Nulls) *vector.Vector {
 	vec := vector.NewVec(typ)
+	owned := vec
+	defer func() {
+		if owned != nil {
+			owned.Free(mp)
+		}
+	}()
+	var err error
 	switch typ.Oid {
 	case types.T_bool:
 		values := val.([]bool)
-		vector.AppendFixedList(vec, values, nil, mp)
+		err = vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_bit:
 		values := val.([]uint64)
-		vector.AppendFixedList(vec, values, nil, mp)
+		err = vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_int8:
 		values := val.([]int8)
-		vector.AppendFixedList(vec, values, nil, mp)
+		err = vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_int16:
 		values := val.([]int16)
-		vector.AppendFixedList(vec, values, nil, mp)
+		err = vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_int32:
 		values := val.([]int32)
-		vector.AppendFixedList(vec, values, nil, mp)
+		err = vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_int64:
 		values := val.([]int64)
-		vector.AppendFixedList(vec, values, nil, mp)
+		err = vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_uint8:
 		values := val.([]uint8)
-		vector.AppendFixedList(vec, values, nil, mp)
+		err = vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_uint16:
 		values := val.([]uint16)
-		vector.AppendFixedList(vec, values, nil, mp)
+		err = vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_uint32:
 		values := val.([]uint32)
-		vector.AppendFixedList(vec, values, nil, mp)
+		err = vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_uint64:
 		values := val.([]uint64)
-		vector.AppendFixedList(vec, values, nil, mp)
+		err = vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_float32:
 		values := val.([]float32)
-		vector.AppendFixedList(vec, values, nil, mp)
+		err = vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_float64:
 		values := val.([]float64)
-		vector.AppendFixedList(vec, values, nil, mp)
+		err = vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_decimal64:
 		values := val.([]types.Decimal64)
-		vector.AppendFixedList(vec, values, nil, mp)
+		err = vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_decimal128:
 		values := val.([]types.Decimal128)
-		vector.AppendFixedList(vec, values, nil, mp)
+		err = vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_decimal256:
 		values := val.([]types.Decimal256)
-		vector.AppendFixedList(vec, values, nil, mp)
+		err = vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_date:
 		values := val.([]types.Date)
-		vector.AppendFixedList(vec, values, nil, mp)
+		err = vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_datetime:
 		values := val.([]types.Datetime)
-		vector.AppendFixedList(vec, values, nil, mp)
+		err = vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_time:
 		values := val.([]types.Time)
-		vector.AppendFixedList(vec, values, nil, mp)
+		err = vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_timestamp:
 		values := val.([]types.Timestamp)
-		vector.AppendFixedList(vec, values, nil, mp)
+		err = vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
 		values := val.([]string)
-		vector.AppendStringList(vec, values, nil, mp)
+		err = vector.AppendStringList(vec, values, nil, mp)
 	case types.T_array_float32:
 		values := val.([][]float32)
-		vector.AppendArrayList[float32](vec, values, nil, mp)
+		err = vector.AppendArrayList[float32](vec, values, nil, mp)
 	case types.T_array_float64:
 		values := val.([][]float64)
-		vector.AppendArrayList[float64](vec, values, nil, mp)
+		err = vector.AppendArrayList[float64](vec, values, nil, mp)
 	case types.T_array_bf16:
 		values := val.([][]types.BF16)
-		vector.AppendArrayList[types.BF16](vec, values, nil, mp)
+		err = vector.AppendArrayList[types.BF16](vec, values, nil, mp)
 	case types.T_array_float16:
 		values := val.([][]types.Float16)
-		vector.AppendArrayList[types.Float16](vec, values, nil, mp)
+		err = vector.AppendArrayList[types.Float16](vec, values, nil, mp)
 	case types.T_array_int8:
 		values := val.([][]int8)
-		vector.AppendArrayList[int8](vec, values, nil, mp)
+		err = vector.AppendArrayList[int8](vec, values, nil, mp)
 	case types.T_array_uint8:
 		values := val.([][]uint8)
-		vector.AppendArrayList[uint8](vec, values, nil, mp)
+		err = vector.AppendArrayList[uint8](vec, values, nil, mp)
 	case types.T_uuid:
 		values := val.([]types.Uuid)
-		vector.AppendFixedList(vec, values, nil, mp)
+		err = vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_TS:
 		values := val.([]types.TS)
-		vector.AppendFixedList(vec, values, nil, mp)
+		err = vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_Rowid:
 		values := val.([]types.Rowid)
-		vector.AppendFixedList(vec, values, nil, mp)
+		err = vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_Blockid:
 		values := val.([]types.Blockid)
-		vector.AppendFixedList(vec, values, nil, mp)
+		err = vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_json:
 		values := val.([]string)
 		for i, value := range values {
@@ -986,13 +1026,137 @@ func newVectorByType(mp *mpool.MPool, typ types.Type, val any, nsp *nulls.Nulls)
 		}
 	case types.T_enum:
 		values := val.([]types.Enum)
-		vector.AppendFixedList(vec, values, nil, mp)
+		err = vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_year:
 		values := val.([]types.MoYear)
-		vector.AppendFixedList(vec, values, nil, mp)
+		err = vector.AppendFixedList(vec, values, nil, mp)
 	default:
 		panic(fmt.Sprintf("function test framework do not support typ %s", typ))
 	}
+	if err != nil {
+		panic(err)
+	}
 	vec.SetNulls(nsp)
+	owned = nil
 	return vec
+}
+
+func TestFunctionTestCaseOwnership(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	mp := proc.Mp()
+	nativeBefore, heapBefore := mp.CurrNB(), mp.OnHeapCurrNB()
+	assertReleased := func(t *testing.T) {
+		t.Helper()
+		require.Equal(t, nativeBefore, mp.CurrNB())
+		require.Equal(t, heapBefore, mp.OnHeapCurrNB())
+	}
+	t.Run("constructor rollback", func(t *testing.T) {
+		require.PanicsWithValue(t, "function test framework do not support typ ANY", func() {
+			_ = NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{7}, nil),
+				NewFunctionTestInput(types.T_any.ToType(), []int64{0}, nil),
+			}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{7}, nil), AbsInt64)
+		})
+		assertReleased(t)
+	})
+	t.Run("current vector rollback", func(t *testing.T) {
+		value, err := types.ParseStringToByteJson(`{"v":"01234567890123456789012345678901"}`)
+		require.NoError(t, err)
+		encoded, err := types.EncodeJson(value)
+		require.NoError(t, err)
+		var recovered any
+		func() {
+			defer func() { recovered = recover() }()
+			_ = NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{7}, nil),
+				NewFunctionTestInput(types.T_json.ToType(), []string{string(encoded), ""}, nil),
+			}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{7}, nil), AbsInt64)
+		}()
+		err, ok := recovered.(error)
+		require.True(t, ok)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+		require.Equal(t, "invalid input: invalid JSON vector payload", err.Error())
+		assertReleased(t)
+	})
+	t.Run("borrow and reuse", func(t *testing.T) {
+		fc := NewFunctionTestCase(proc, []FunctionTestInput{
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{-7}, nil),
+		}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{7}, nil), AbsInt64)
+		defer fc.Free()
+		succeeded, info := fc.Run()
+		require.True(t, succeeded, info)
+		require.Equal(t, []int64{7}, vector.MustFixedColNoTypeCheck[int64](fc.GetResultVectorDirectly()))
+		vector.MustFixedColNoTypeCheck[int64](fc.parameters[0])[0] = -9
+		fc.expected.wanted = []int64{9}
+		succeeded, info = fc.Run()
+		require.True(t, succeeded, info)
+		require.Equal(t, []int64{9}, vector.MustFixedColNoTypeCheck[int64](fc.GetResultVectorDirectly()))
+		fc.Free()
+		fc.Free()
+		assertReleased(t)
+	})
+	t.Run("terminal comparison panic", func(t *testing.T) {
+		fc := NewFunctionTestCase(proc, []FunctionTestInput{
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{-7}, nil),
+		}, NewFunctionTestResult(types.T_int64.ToType(), false, []string{"7"}, nil), AbsInt64)
+		defer fc.Free()
+		var recovered any
+		func() {
+			defer func() { recovered = recover() }()
+			_, _ = fc.RunAndFree()
+		}()
+		require.IsType(t, &runtime.TypeAssertionError{}, recovered)
+		assertReleased(t)
+	})
+	t.Run("JSON borrowed subtest lifetime", func(t *testing.T) {
+		t.Run("evaluate", func(t *testing.T) {
+			vec := runJsonFunctionWithSelectList(t, proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"a":1}`}, nil),
+			}, types.T_json.ToType(), JsonKeys, nil)
+			require.Equal(t, `["a"]`, jsonVectorRowString(t, vec, 0))
+		})
+		assertReleased(t)
+	})
+	t.Run("result admission denial", func(t *testing.T) {
+		registry, err := mpool.NewAllocationAccountRegistry(1, 4)
+		require.NoError(t, err)
+		account, err := registry.Open(1)
+		require.NoError(t, err)
+		defer func() {
+			snapshot := account.Seal()
+			_, err := registry.Finalize(account)
+			require.Zero(t, snapshot.Used)
+			require.NoError(t, err)
+		}()
+		previousContext := proc.Ctx
+		probe := &admissionProbeContext{Context: previousContext, doneCalled: make(chan struct{})}
+		proc.Ctx = probe
+		defer func() { proc.Ctx = previousContext }()
+		fc := NewFunctionTestCase(proc, []FunctionTestInput{
+			NewFunctionTestInput(types.T_uint64.ToType(), []uint64{0, 0}, nil),
+		}, NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{0, 0}, nil), Sleep[uint64])
+		defer fc.Free()
+		selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+		require.NoError(t, err)
+		result, err := vector.NewFunctionResultWrapperWithAllocation(types.T_uint8.ToType(), mp, selection)
+		require.NoError(t, err)
+		fc.result.Free()
+		fc.result = result
+		var recovered any
+		func() {
+			defer func() { recovered = recover() }()
+			_, _ = fc.RunAndFree()
+		}()
+		err, ok := recovered.(error)
+		require.True(t, ok)
+		require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+		select {
+		case <-probe.doneCalled:
+			t.Fatal("result admission denial reached the evaluator")
+		default:
+		}
+		require.Zero(t, account.Snapshot().Used)
+		assertReleased(t)
+	})
 }

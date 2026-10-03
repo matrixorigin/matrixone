@@ -27,16 +27,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func cleanupXMLFunctionTestCase(t *testing.T, fc *FunctionTestCase) {
-	t.Helper()
-	t.Cleanup(func() {
-		for _, input := range fc.parameters {
-			input.Free(fc.proc.Mp())
-		}
-		fc.result.Free()
-	})
-}
-
 func TestXMLExtractionOracle(t *testing.T) {
 	for _, tc := range []struct{ xml, path, want string }{
 		{`<a><b>1</b></a>`, `/a/b`, `1`},
@@ -201,8 +191,7 @@ func TestXMLScalarPublicEntrypoints(t *testing.T) {
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.xml}, nil),
 				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{tc.path}, nil),
 			}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, nil), ExtractValue)
-			cleanupXMLFunctionTestCase(t, &fc)
-			ok, info := fc.Run()
+			ok, info := fc.RunAndFree()
 			require.True(t, ok, info)
 		})
 	}
@@ -239,8 +228,7 @@ func TestXMLUpdateOracle(t *testing.T) {
 				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{tc.path}, nil),
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.replacement}, nil),
 			}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, nil), UpdateXML)
-			cleanupXMLFunctionTestCase(t, &fc)
-			ok, info := fc.Run()
+			ok, info := fc.RunAndFree()
 			require.True(t, ok, info)
 		})
 	}
@@ -273,20 +261,19 @@ func TestXMLUpdateTextTargets(t *testing.T) {
 				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{tc.path}, nil),
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{"q"}, nil),
 			}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, nil), UpdateXML)
-			cleanupXMLFunctionTestCase(t, &fc)
-			ok, info := fc.Run()
+			ok, info := fc.RunAndFree()
 			require.True(t, ok, info)
 		})
 	}
 	doc := vector.NewConstNull(types.T_varchar.ToType(), 1, proc.Mp())
+	defer doc.Free(proc.Mp())
 	xpath, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("/a/text()"), 1, proc.Mp())
-	replacement := vector.NewConstNull(types.T_varchar.ToType(), 1, proc.Mp())
 	require.NoError(t, err)
-	t.Cleanup(func() { doc.Free(proc.Mp()) })
-	t.Cleanup(func() { xpath.Free(proc.Mp()) })
-	t.Cleanup(func() { replacement.Free(proc.Mp()) })
+	defer xpath.Free(proc.Mp())
+	replacement := vector.NewConstNull(types.T_varchar.ToType(), 1, proc.Mp())
+	defer replacement.Free(proc.Mp())
 	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
-	t.Cleanup(result.Free)
+	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(1))
 	err = UpdateXML([]*vector.Vector{doc, xpath, replacement}, result, proc, 1, nil)
 	require.NoError(t, err)

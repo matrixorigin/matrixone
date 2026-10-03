@@ -180,6 +180,7 @@ func TestDecimalDivisionExecutionUsesBoundResultScale(t *testing.T) {
 				NewFunctionTestResult(test.typ, false, []types.Decimal128{test.want}, nil),
 				divFn,
 			)
+			defer caseUnderTest.Free()
 			passed, info := caseUnderTest.Run()
 			require.True(t, passed, info)
 			require.Equal(t, test.typ, *caseUnderTest.GetResultVectorDirectly().GetType())
@@ -207,7 +208,7 @@ func TestDecimal256DivisionExecutionUsesBoundResultScale(t *testing.T) {
 		NewFunctionTestResult(resultType, false, []types.Decimal256{want}, nil),
 		divFn,
 	)
-	passed, info := caseUnderTest.Run()
+	passed, info := caseUnderTest.RunAndFree()
 	require.True(t, passed, info)
 }
 
@@ -241,7 +242,7 @@ func TestDecimal256DivisionAvoidsScaledNumeratorOverflow(t *testing.T) {
 		NewFunctionTestResult(resultType, false, []types.Decimal256{wantOne, wantThird}, nil),
 		divFn,
 	)
-	passed, info := caseUnderTest.Run()
+	passed, info := caseUnderTest.RunAndFree()
 	require.True(t, passed, info)
 }
 
@@ -267,7 +268,7 @@ func TestDecimalDivisionScaleCapBelowInputScale(t *testing.T) {
 			NewFunctionTestResult(resultType, false, []types.Decimal128{want}, nil),
 			divFn,
 		)
-		passed, info := caseUnderTest.Run()
+		passed, info := caseUnderTest.RunAndFree()
 		require.True(t, passed, info)
 	})
 
@@ -290,7 +291,7 @@ func TestDecimalDivisionScaleCapBelowInputScale(t *testing.T) {
 			NewFunctionTestResult(resultType, false, []types.Decimal256{want}, nil),
 			divFn,
 		)
-		passed, info := caseUnderTest.Run()
+		passed, info := caseUnderTest.RunAndFree()
 		require.True(t, passed, info)
 	})
 }
@@ -453,7 +454,7 @@ func TestDecimal256DivisionDeclaredPrecision(t *testing.T) {
 		[]FunctionTestInput{NewFunctionTestInput(leftType, []types.Decimal256{left}, nil),
 			NewFunctionTestInput(rightType, []types.Decimal256{right}, nil)},
 		NewFunctionTestResult(resultType, true, nil, nil), divFn)
-	passed, info := test.Run()
+	passed, info := test.RunAndFree()
 	require.True(t, passed, info)
 
 	// A true half-up carry across the bound can be made at this typed physical
@@ -467,7 +468,7 @@ func TestDecimal256DivisionDeclaredPrecision(t *testing.T) {
 		[]FunctionTestInput{NewFunctionTestInput(physicalLeft, []types.Decimal256{carry}, nil),
 			NewFunctionTestInput(physicalLeft, []types.Decimal256{{B0_63: 2}}, nil)},
 		NewFunctionTestResult(resultType, true, nil, nil), divFn)
-	passed, info = test.Run()
+	passed, info = test.RunAndFree()
 	require.True(t, passed, info)
 }
 

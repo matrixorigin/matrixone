@@ -1,0 +1,90 @@
+# Function test fixture ownership — v2
+
+Refs #29249; anchored to c638482643. Actual gpt-6.1-sol/xhigh design v2
+approved on 2026-10-03. This is a continuation, not closure of the wider audit.
+
+## Contract and existing owners
+
+- `newVectorByType` owns one vector until append and NULL installation succeed.
+  Check append errors; an unfinished return frees that vector and preserves the
+  original panic/error identity.
+- `NewFunctionTestCase` owns admitted inputs and its result until successful
+  return. Roll back partial construction through the same destructor.
+- `FunctionTestCase.Free` owns input/result destruction. It never destroys the
+  caller's process, file service, or evaluator. Repeated cleanup is harmless.
+- `Run` retains comparison and reuse semantics. Its result is borrowed through
+  inspection, until reset or Free. `RunAndFree` wraps the same Run with deferred
+  destruction for genuinely terminal consumers.
+
+## Migration and retirement
+
+Audit every caller by lifetime: terminal evaluation, setup that can fail,
+borrowed result, rebinding/reuse, escaped case, and benchmark lifetime. Release
+nonterminal loop cases before the next iteration; register rollback immediately
+in helpers that evaluate before returning. Do not double-run to inspect errors.
+
+Reuse `executeLogicOfOverload`; remove the duplicate evaluator type including
+three production factories. Move the remaining fixture declarations to test
+compilation. Moving a file is not source reduction. Retire copied timestamp
+construction and XML/bitwise/AES cleanup facades with their reverse callers.
+Preserve values, rows, NULLs, masks, errors, warnings, metadata, and raw WKB
+assertions through the final borrowed inspection.
+
+## QA and evidence
+
+Ordinary constructor inputs use Go-heap backing, so off-heap pool capacity
+cannot deny that admission. Cover actual unsupported-input and partial-JSON
+failures; verify quota rejection at the existing result-admission account.
+Use two zero uint64 rows with real Sleep, uint8 output, a one-byte account, and
+the existing Done observer to prove no evaluator entry. Assert original panic
+identity, exact native/Go-heap/account baselines before fallback cleanup.
+
+Exercise real successful evaluation, rebinding/reuse, terminal panic cleanup,
+and benchmark-then-Run lifetime. Mutations must detect omission of constructor
+rollback, helper rollback, input release, or result release. Run nonempty focused
+selection, owning package normal, mapped race evidence, incremental SCA, and
+production compilation with verified native artifacts. No new SQL behavior or
+BVT is introduced. Measure cost with frozen alternating runs before claiming it.
+
+Known independent boundaries remain: weak wantErr oracles, DebugRun selection
+and double execution, detached-worker shutdown, formal clock publication, the
+342-file audit, and retained NTT-size coverage before any optional input shrink.
+
+## Consumer coverage and ownership map
+
+| Consumers | Release boundary | Preserved independent coverage |
+|---|---|---|
+| Immediate, sequential and switch-selected terminal cases | Same Run comparison, followed by deferred Free | All original inputs, expected values, rows, NULLs, types and branch selection |
+| Arithmetic, casts, temporal and spatial readers | Lexical Free after final inspection; release old case before overwrite | Precision/scale, raw WKB/WKT, input immutability, masks, typed errors and warnings |
+| JSON, JQ, LOAD_FILE and assignment-ignore borrowed helpers | Existing bounded child-test cleanup registered before admission/evaluation | JSON literals, prepared provenance, depth/errors, I/O and NULL/mask oracles |
+| Masked DIV and timestamp-pair helper callers | Return copied scalar/type; Free before helper return | Seven DIV values/NULL masks; thirteen timestamp-pair full type inspections plus original value comparisons |
+| TIME assignment helper | Guard before ownership transfer; caller Free after assertions, per-iteration loop scope | Strict/non-strict/ignore values, error codes, warning rows/messages and scale boundaries |
+| AES/XML/BIT and reusable regex/template cases | Canonical destructor; reusable cases remain live through last borrow | Fixed ciphertext, typed errors, cancellation, rebinding, shuffle and payload assertions |
+| SERIAL/SERIAL_FULL | Per-scenario case Free before operator Close | Exact decoded tuple/UUID/NULL/geometry plus explicit execution, cardinality and type assertions |
+| NOW/SYSDATE precision | One execution per existing boundary, child-test Free | All 18 boundaries; exact type/scale, NULL, precision quantum and typed errors |
+| UTC timestamp precision | Existing registered UTC tests, immediate input/output cleanup | All nine retired cases mapped to exact values/metadata and typed errors; existing non-constant admission tests retained |
+| Benchmarks | Canonical release outside timed work or per existing iteration | Original work/count and result controls retained; compile alone is not performance evidence |
+
+Geodetic geometry32 cases now select encoded inputs and result type before their
+sole construction. The discarded construction was never evaluated; invalid-unit
+and unsupported-SRID scenarios remain for both algorithms and representations.
+
+## Validation status and limits
+
+The six ownership scenarios cover real constructor rollback, partial JSON
+failure, reuse, comparison panic, borrowed child lifetime and result quota
+rejection. Private mutations omitting constructor/input/result/helper release
+fail exact account baselines. Fatal JSON probes are expected failures, not green
+tests. Forcing NOW/SYSDATE precision to zero fails all twelve positive-precision
+cases while retaining zero/invalid-precision controls.
+
+Full owning-package normal/race, production-only compile and configured
+incremental lint have passed at recorded intermediate snapshots. Subsequent
+consumer edits require final source reconciliation and validation before push.
+The seven no-marker candidates were inspected: one missing destructor was fixed;
+the others transfer to explicit consumers or guarded callers. This inventory
+is not proof of the entire repository audit or of every destructor's correctness.
+
+No package/CI CPU, RSS or wall-time reduction is claimed without matched runs.
+Moving the fixture to test compilation does not count as a source reduction.
+Keep #29249 open; the broader audit and final review/delivery gates remain active.

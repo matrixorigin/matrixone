@@ -56,20 +56,20 @@ func TestDecimalUnsignedAssignmentRounding(t *testing.T) {
 					}
 					expected := NewFunctionTestResult(tc.target.ToType(), false, tc.want, []bool{false, false, true})
 					testCase := NewFunctionTestCase(proc, inputs, expected, NewAssignCast)
-					ok, info := testCase.Run()
+					ok, info := testCase.RunAndFree()
 					require.True(t, ok, info)
 					testCase = NewFunctionTestCase(proc, inputs, expected, NewAssignIgnoreCast)
-					ok, info = testCase.Run()
+					ok, info = testCase.RunAndFree()
 					require.True(t, ok, info)
 					expected = NewFunctionTestResult(tc.target.ToType(), false, tc.ordinary, []bool{false, false, true})
 					testCase = NewFunctionTestCase(proc, inputs, expected, NewCast)
-					ok, info = testCase.Run()
+					ok, info = testCase.RunAndFree()
 					require.True(t, ok, info)
 				})
 			}
 			inputs := []FunctionTestInput{NewFunctionTestInput(typ, overflow, nil), NewFunctionTestInput(types.T_uint8.ToType(), []uint8{}, nil)}
 			testCase := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(types.T_uint8.ToType(), true, []uint8{0}, nil), NewAssignCast)
-			ok, info := testCase.Run()
+			ok, info := testCase.RunAndFree()
 			require.True(t, ok, info)
 		})
 	}
@@ -94,10 +94,10 @@ func TestFloatIntegerAssignmentRounding(t *testing.T) {
 				inputs := []FunctionTestInput{src, NewFunctionTestInput(tc.target.ToType(), tc.want, nil)}
 				expected := NewFunctionTestResult(tc.target.ToType(), false, tc.want, []bool{false, false, true})
 				testCase := NewFunctionTestCase(proc, inputs, expected, NewAssignCast)
-				ok, info := testCase.Run()
+				ok, info := testCase.RunAndFree()
 				require.True(t, ok, info)
 				testCase = NewFunctionTestCase(proc, inputs, expected, NewAssignIgnoreCast)
-				ok, info = testCase.Run()
+				ok, info = testCase.RunAndFree()
 				require.True(t, ok, info)
 			}
 		})
@@ -133,7 +133,7 @@ func TestFloatIntegerAssignmentBounds(t *testing.T) {
 			}
 			expected := NewFunctionTestResult(tc.target.ToType(), tc.fails, tc.want, nil)
 			testCase := NewFunctionTestCase(proc, inputs, expected, NewAssignCast)
-			ok, info := testCase.Run()
+			ok, info := testCase.RunAndFree()
 			require.True(t, ok, info)
 		})
 	}
