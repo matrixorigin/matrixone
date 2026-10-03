@@ -616,14 +616,11 @@ func TestLockResultWithNoConflictOnRemote(t *testing.T) {
 
 			// txn1 hold lock row1 on l1
 			mustAddTestLock(t, ctx, l1, 1, txn1, [][]byte{row1}, pb.Granularity_Row)
-			c := make(chan struct{})
-			go func() {
-				// txn2 try lock row1 on l2
-				res := mustAddTestLock(t, ctx, l2, 1, txn2, [][]byte{row2}, pb.Granularity_Row)
-				require.False(t, res.Timestamp.IsEmpty())
-				close(c)
-			}()
-			<-c
+			res := mustAddTestLock(t, ctx, l2, 1, txn2, [][]byte{row2}, pb.Granularity_Row)
+			require.False(t, res.Timestamp.IsEmpty())
+			require.False(t, res.HasConflict)
+			require.False(t, res.HasPrevCommit)
+			require.True(t, res.NewLockAdd)
 		},
 	)
 }
@@ -650,7 +647,8 @@ func TestLockResultWithConflictAndTxnCommittedOnRemote(t *testing.T) {
 			}
 
 			// txn1 hold lock row1 on l1
-			mustAddTestLock(t, ctx, l1, tableID, txn1, [][]byte{row1}, pb.Granularity_Row)
+			held := mustAddTestLock(t, ctx, l1, tableID, txn1, [][]byte{row1}, pb.Granularity_Row)
+			commitTS := held.Timestamp.Next()
 			c := make(chan struct{})
 			go func() {
 				defer close(c)
@@ -663,15 +661,16 @@ func TestLockResultWithConflictAndTxnCommittedOnRemote(t *testing.T) {
 					txn2,
 					option)
 				require.NoError(t, err)
-				assert.True(
-					t,
-					!res.Timestamp.IsEmpty())
+				assert.Equal(t, commitTS, res.Timestamp)
+				assert.True(t, res.HasConflict)
+				assert.True(t, res.HasPrevCommit)
+				assert.True(t, res.NewLockAdd)
 			}()
 			waitWaiters(t, l1, tableID, row1, 1)
 			require.NoError(t, l1.Unlock(
 				ctx,
 				txn1,
-				timestamp.Timestamp{PhysicalTime: 1}))
+				commitTS))
 			<-c
 		},
 	)
@@ -699,7 +698,7 @@ func TestLockResultWithConflictAndTxnAbortedOnRemote(t *testing.T) {
 			}
 
 			// txn1 hold lock row1 on l1
-			mustAddTestLock(t, ctx, l1, tableID, txn1, [][]byte{row1}, pb.Granularity_Row)
+			held := mustAddTestLock(t, ctx, l1, tableID, txn1, [][]byte{row1}, pb.Granularity_Row)
 			c := make(chan struct{})
 			go func() {
 				defer close(c)
@@ -712,7 +711,11 @@ func TestLockResultWithConflictAndTxnAbortedOnRemote(t *testing.T) {
 					txn2,
 					option)
 				require.NoError(t, err)
-				assert.False(t, res.Timestamp.IsEmpty())
+				// Aborting the holder preserves the lock table's committed watermark.
+				assert.Equal(t, held.Timestamp, res.Timestamp)
+				assert.True(t, res.HasConflict)
+				assert.True(t, res.HasPrevCommit)
+				assert.True(t, res.NewLockAdd)
 			}()
 			waitWaiters(t, l1, tableID, row1, 1)
 			require.NoError(t, l1.Unlock(ctx, txn1, timestamp.Timestamp{}))

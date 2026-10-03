@@ -481,9 +481,6 @@ func (c *ServiceConfig) getCNServiceConfig() cnservice.Config {
 	cfg := c.CN
 	cfg.HAKeeper.ClientConfig = c.HAKeeperClient
 	cfg.Frontend.SetLogAndVersion(&c.Log, version.Version)
-	if cfg.Txn.Trace.Dir == "" {
-		cfg.Txn.Trace.Dir = "trace"
-	}
 	return cfg
 }
 

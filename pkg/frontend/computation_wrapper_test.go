@@ -4343,7 +4343,7 @@ func TestInitExecuteStmtParamFreesParamsOnResolveError(t *testing.T) {
 			{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "second"}}},
 		},
 	}
-	params, _, _, _, _, _, err := buildExecuteUserParams(cw.proc, execPlan.Args, nil)
+	params, _, _, _, _, _, err := buildExecuteUserParamsWithMemberOfPositions(cw.proc, execPlan.Args, nil, nil)
 	require.ErrorIs(t, err, assert.AnError)
 	require.Zero(t, params.Length())
 	require.Nil(t, params.GetData())
@@ -4490,8 +4490,8 @@ func TestBuildExecuteUserParamsPreservesBoundConcreteTypes(t *testing.T) {
 		wantTypes = append(wantTypes, test.typ)
 	}
 
-	params, _, _, _, paramKinds, paramTypes, err := buildExecuteUserParams(
-		cw.proc, args, typedPositions)
+	params, _, _, _, paramKinds, paramTypes, err := buildExecuteUserParamsWithMemberOfPositions(
+		cw.proc, args, typedPositions, nil)
 	require.NoError(t, err)
 	defer params.Free(cw.proc.Mp())
 	require.Equal(t, wantTypes, paramTypes)
@@ -4511,10 +4511,10 @@ func TestBuildExecuteUserParamsRejectsBoundTypeKindMismatch(t *testing.T) {
 	require.NoError(t, ses.setUserDefinedVarWithKind(
 		"mismatched", int8(1), "", false, vector.PrepareParamFloat))
 
-	params, _, _, _, _, _, err := buildExecuteUserParams(cw.proc, []*plan.Expr{{
+	params, _, _, _, _, _, err := buildExecuteUserParamsWithMemberOfPositions(cw.proc, []*plan.Expr{{
 		Typ:  plan.Type{Id: int32(types.T_int8)},
 		Expr: &plan.Expr_V{V: &plan.VarRef{Name: "mismatched"}},
-	}}, []int32{0})
+	}}, []int32{0}, nil)
 	require.ErrorContains(t, err, "EXECUTE parameter type TINYINT does not match kind")
 	require.Zero(t, params.Length())
 	require.Nil(t, params.GetData())
@@ -4611,8 +4611,8 @@ func TestBuildExecuteUserParamsHonorsStoredProcedureScope(t *testing.T) {
 		{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "local_shadow"}}},
 		{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "session_only"}}},
 	}
-	params, paramVals, paramIsBin, _, paramKinds, paramTypes, err := buildExecuteUserParams(
-		cw.proc, args, []int32{0, 1, 2})
+	params, paramVals, paramIsBin, _, paramKinds, paramTypes, err := buildExecuteUserParamsWithMemberOfPositions(
+		cw.proc, args, []int32{0, 1, 2}, nil)
 	require.NoError(t, err)
 	defer params.Free(cw.proc.Mp())
 
@@ -4994,7 +4994,7 @@ func TestCurrentTxnSnapshotTS(t *testing.T) {
 	txnOperator.EXPECT().SnapshotTS().Return(snapshot)
 	ses.proc.Base.TxnOperator = txnOperator
 
-	require.Equal(t, snapshot, currentTxnSnapshotTS(ses))
+	require.Equal(t, snapshot, currentTxnSnapshotTSForProcess(ses.GetProc()))
 }
 
 func TestInitExecuteStmtParamUsesTxnSnapshotAfterRebuild(t *testing.T) {
@@ -5005,7 +5005,7 @@ func TestInitExecuteStmtParamUsesTxnSnapshotAfterRebuild(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOperator.EXPECT().SnapshotTS().Return(snapshot)
-	txnOperator.EXPECT().NextSequence().Return(uint64(1)).AnyTimes()
+
 	ses.proc.Base.TxnOperator = txnOperator
 	ses.advanceDDLVersion()
 
@@ -5175,16 +5175,15 @@ func TestInitExecuteStmtParamReusesStableSubscriptionSelect(t *testing.T) {
 		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
 	prepareStmt.compile = sentinel
 
-	retComp, _, _, _, _, err := initExecuteStmtParamWithResolver(
-		execCtx, ses, cw, nil, prepareStmt.Name,
+	retComp, _, _, _, _, err := initExecuteStmtParamWithResolverInSession(
+		execCtx, ses, ses, cw, nil, prepareStmt.Name,
 		func(string, string, *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
 			return &plan.ObjectRef{
 					Obj: 3, SchemaName: "publisher_db", ObjName: "src",
 					SubscriptionName: "sub", PubInfo: &plan.PubInfo{TenantId: 11},
 				},
 				&plan.TableDef{DbId: 2, TblId: 3, Version: 4}, nil
-		},
-	)
+		}, ses.GetTxnCompileCtx())
 	require.NoError(t, err)
 	require.Same(t, sentinel, retComp)
 	require.Same(t, sentinel, prepareStmt.compile)
@@ -5209,8 +5208,8 @@ func BenchmarkInitExecuteStmtParamReusesStableSubscriptionSelect(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		_, _, _, _, _, err := initExecuteStmtParamWithResolver(
-			execCtx, ses, cw, nil, prepareStmt.Name, resolve)
+		_, _, _, _, _, err := initExecuteStmtParamWithResolverInSession(
+			execCtx, ses, ses, cw, nil, prepareStmt.Name, resolve, ses.GetTxnCompileCtx())
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -6505,9 +6504,9 @@ func TestBuildExecuteUserParamsPreservesExplicitTextOverride(t *testing.T) {
 	domain, err := ses.txnCompileCtx.ResolveVariableStringDomain("text_override", false, false)
 	require.NoError(t, err)
 	require.Equal(t, types.RuntimeStringText, domain)
-	params, values, _, binary, _, _, err := buildExecuteUserParams(cw.proc, []*plan.Expr{{
+	params, values, _, binary, _, _, err := buildExecuteUserParamsWithMemberOfPositions(cw.proc, []*plan.Expr{{
 		Typ: binaryType, Expr: &plan.Expr_V{V: &plan.VarRef{Name: "text_override"}},
-	}}, nil)
+	}}, nil, nil)
 	require.NoError(t, err)
 	defer params.Free(cw.proc.Mp())
 	require.Equal(t, types.RuntimeStringText, params.GetRuntimeStringDomainAt(0))
