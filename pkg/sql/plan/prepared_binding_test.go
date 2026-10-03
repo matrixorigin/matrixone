@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
@@ -1204,5 +1206,73 @@ func TestSingletonProjectedPeerAdmission(t *testing.T) {
 				require.NotNil(t, peer.GetCol(), "proof must not mutate execution tree")
 			}
 		})
+	}
+}
+
+func TestPreparedIntegerComparisonRange(t *testing.T) {
+	for _, tc := range []struct {
+		value        any
+		source, want types.T
+	}{
+		{int64(-128), types.T_int64, types.T_int8}, {int64(127), types.T_int64, types.T_int8},
+		{int64(-129), types.T_int64, types.T_int16}, {int64(128), types.T_int64, types.T_int16},
+		{int64(math.MinInt16), types.T_int64, types.T_int16}, {int64(math.MaxInt16), types.T_int64, types.T_int16},
+		{int64(math.MinInt16) - 1, types.T_int64, types.T_int32}, {int64(math.MaxInt16) + 1, types.T_int64, types.T_int32},
+		{int64(math.MinInt32), types.T_int64, types.T_int32}, {int64(math.MaxInt32), types.T_int64, types.T_int32},
+		{int64(math.MinInt32) - 1, types.T_int64, types.T_int64}, {int64(math.MaxInt32) + 1, types.T_int64, types.T_int64},
+		{uint64(math.MaxUint8), types.T_uint64, types.T_uint8}, {uint64(math.MaxUint8) + 1, types.T_uint64, types.T_uint16},
+		{uint64(math.MaxUint16), types.T_uint64, types.T_uint16}, {uint64(math.MaxUint16) + 1, types.T_uint64, types.T_uint32},
+		{uint64(math.MaxUint32), types.T_uint64, types.T_uint32}, {uint64(math.MaxUint32) + 1, types.T_uint64, types.T_uint64},
+		{uint64(math.MaxUint64), types.T_uint64, types.T_uint64}, {int64(-1), types.T_uint64, types.T_any},
+		{int64(128), types.T_int8, types.T_any}, {"1.5", types.T_int64, types.T_any},
+		{"invalid", types.T_int64, types.T_any}, {nil, types.T_int64, types.T_any},
+		{"1", types.T_text, types.T_any}, {float64(1), types.T_float64, types.T_any},
+	} {
+		require.Equal(t, tc.want, PreparedIntegerComparisonType(ParamValue{Value: tc.value}, tc.source.ToType()), "source=%s value=%v", tc.source, tc.value)
+	}
+}
+
+func TestPreparedWideIntegerComparisonKeepsColumn(t *testing.T) {
+	for _, predicate := range []string{"val in (?,?)", "val not in (?,?)"} {
+		for _, value := range []int64{math.MinInt32, math.MaxInt32, math.MinInt32 - 1, math.MaxInt32 + 1} {
+			t.Run(fmt.Sprintf("%s/%d", predicate, value), func(t *testing.T) {
+				mock := NewMockOptimizer(true)
+				proc := mock.ctxt.GetProcess()
+				stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select id from single_idx_t where "+predicate, 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				count := tree.ParameterCount(stmt)
+				params := vector.NewVec(types.T_text.ToType())
+				defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+				bindings := make([]PreparedSourceBinding, count)
+				values := make([]any, count)
+				for i := range bindings {
+					bindings[i] = PreparedSourceBinding{Position: int32(i), Type: types.T_int64.ToType()}
+					values[i] = ParamValue{Value: value, IsBinaryProtocol: true}
+					require.NoError(t, vector.AppendBytes(params, []byte(fmt.Sprint(value)), false, proc.Mp()))
+				}
+				proc.SetPrepareParams(params)
+				bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings, values)
+				require.NoError(t, err)
+				require.True(t, bound.DiagnosticFree)
+				require.True(t, bound.IntegerComparisonRanges)
+				if value >= math.MinInt32 && value <= math.MaxInt32 {
+					require.False(t, bound.ValueDependent)
+				}
+				columnCast := false
+				require.NoError(t, planpb.VisitExpressionsInOwner(bound.Plan, func(root *Expr) error {
+					return planpb.VisitExprTree(root, func(e *Expr) error {
+						if f := e.GetF(); f != nil && f.Func.ObjName == "cast" && len(f.Args) > 0 && f.Args[0].GetCol() != nil {
+							columnCast = true
+						}
+						return nil
+					})
+				}))
+				require.Equal(t, value < math.MinInt32 || value > math.MaxInt32, columnCast)
+				if strings.Contains(predicate, "in") && value >= math.MinInt32 && value <= math.MaxInt32 {
+					require.NotNil(t, findPlanFunctionExpr(bound.Plan, map[bool]string{true: "not_in", false: "in"}[strings.Contains(predicate, "not")]), "safe list keeps one typed IN predicate")
+				}
+			})
+		}
 	}
 }

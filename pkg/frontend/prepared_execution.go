@@ -81,9 +81,10 @@ func preparedExecutionBindings(ctx context.Context, values []any, protocolTypes 
 }
 
 // Only metadata observed by binding belongs to cache identity. Consumers that
-// inspect spelling mark their plan value-dependent instead of extending this
-// key with value hashes or parser-specific categories.
-func preparedExecutionBindingKey(bindings []plan2.PreparedSourceBinding, values []any) string {
+// inspect spelling mark their plan value-dependent. Integer comparisons also
+// observe the exact range needed by the current binding; keeping that range in
+// the key prevents a later out-of-range value from reusing a narrowing cast.
+func preparedExecutionBindingKey(bindings []plan2.PreparedSourceBinding, values []any, integerComparisonRanges bool) string {
 	var key strings.Builder
 	writeType := func(typ types.Type) {
 		fmt.Fprintf(&key, "%d:%d:%d:%d;", typ.Oid, typ.Charset, typ.Width, typ.Scale)
@@ -93,6 +94,9 @@ func preparedExecutionBindingKey(bindings []plan2.PreparedSourceBinding, values 
 		writeType(binding.Type)
 		writeType(binding.NumericType)
 		writeType(binding.BitCountType)
+		if integerComparisonRanges {
+			fmt.Fprintf(&key, "%d;", plan2.PreparedIntegerComparisonType(values[i], binding.Type))
+		}
 		if param, ok := values[i].(plan2.ParamValue); ok {
 			fmt.Fprintf(&key, "%d:%t:%t:%t:%d:%t:%t;", param.PrepareParamKind,
 				param.IsBinaryProtocol, param.IsBin, param.IsBinaryString,

@@ -91,11 +91,12 @@ type TxnComputationWrapper struct {
 	// specialization outside the live PrepareStmt cache. The candidate is
 	// installed only after its Compile succeeds, so a failed replacement leaves
 	// the preceding category and Compile intact.
-	runtimeCacheTarget          *PrepareStmt
-	runtimeCacheKey             string
-	runtimeCachePlan            *plan.Plan
-	runtimeCacheDiagnostics     []*plan.Expr
-	runtimeCacheRetiredCompiles []retiredRuntimeCompile
+	runtimeCacheTarget                  *PrepareStmt
+	runtimeCacheKey                     string
+	runtimeCachePlan                    *plan.Plan
+	runtimeCacheDiagnostics             []*plan.Expr
+	runtimeCacheIntegerComparisonRanges bool
+	runtimeCacheRetiredCompiles         []retiredRuntimeCompile
 
 	explainBuffer *bytes.Buffer
 	binaryPrepare bool
@@ -1712,7 +1713,7 @@ func initExecuteStmtParamWithResolverInSession(
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
-		key := preparedExecutionBindingKey(cwft.paramBindings, cwft.paramVals)
+		key := preparedExecutionBindingKey(cwft.paramBindings, cwft.paramVals, prepareStmt.runtimeIntegerComparisonRanges)
 		var proof func(*plan.Expr) bool
 		if binaryExecute {
 			proof = func(expr *plan.Expr) bool { return preparedBinaryIntegerCastDiagnosticFree(prepareStmt, expr, true) }
@@ -1748,6 +1749,7 @@ func initExecuteStmtParamWithResolverInSession(
 				return nil, nil, nil, originSQL, false, err
 			}
 			executionPlan = bound.Plan
+			key = preparedExecutionBindingKey(cwft.paramBindings, cwft.paramVals, bound.IntegerComparisonRanges)
 			runtimePlanApplied = true
 			cwft.preparedJoinDiagnosticFree = bound.DiagnosticFree
 			cacheable := bound.DiagnosticFree && !bound.ValueDependent && !prepareStmt.hasPaginationParams && !prepareStmt.hasPercentileParams
@@ -1758,6 +1760,7 @@ func initExecuteStmtParamWithResolverInSession(
 			if cacheable {
 				cwft.runtimeCacheTarget, cwft.runtimeCacheKey, cwft.runtimeCachePlan = prepareStmt, key, executionPlan
 				cwft.runtimeCacheDiagnostics = bound.DiagnosticCandidates
+				cwft.runtimeCacheIntegerComparisonRanges = bound.IntegerComparisonRanges
 			}
 		}
 	} else if numParams > 0 && (executionPlan.GetDdl().GetQuery() != nil || executionPlan.GetDcl().GetSetVariables() != nil) {
@@ -1844,6 +1847,7 @@ func (cwft *TxnComputationWrapper) discardRuntimeCacheCandidate() {
 	cwft.runtimeCacheKey = ""
 	cwft.runtimeCachePlan = nil
 	cwft.runtimeCacheDiagnostics = nil
+	cwft.runtimeCacheIntegerComparisonRanges = false
 }
 
 func (cwft *TxnComputationWrapper) completeRuntimeCacheCandidate(
@@ -1863,7 +1867,7 @@ func (cwft *TxnComputationWrapper) installRuntimeCacheCandidate(runtimeCompile *
 		return false
 	}
 	retiredCompile := cwft.runtimeCacheTarget.installRuntimeSpecializationCache(
-		cwft.runtimeCacheKey, cwft.runtimeCachePlan, runtimeCompile, cwft.runtimeCacheDiagnostics)
+		cwft.runtimeCacheKey, cwft.runtimeCachePlan, runtimeCompile, cwft.runtimeCacheDiagnostics, cwft.runtimeCacheIntegerComparisonRanges)
 	if retiredCompile != nil {
 		// NewCompile has already installed runtimeCompile's execution state on the
 		// shared session Process. Releasing the displaced compile here would call

@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -85,12 +86,13 @@ func preparedUserVariable(ctx context.Context, name string) (preparedUserVariabl
 // value to determine schema/configuration mark the result value-dependent;
 // such a plan must not enter the type-only cache.
 type preparedSourceBindingState struct {
-	bindings             []PreparedSourceBinding
-	values               []any
-	valueDependent       bool
-	selectStatement      bool
-	diagnosticCandidates []*Expr
-	diagnosticFree       bool
+	bindings                []PreparedSourceBinding
+	values                  []any
+	valueDependent          bool
+	integerComparisonRanges bool
+	selectStatement         bool
+	diagnosticCandidates    []*Expr
+	diagnosticFree          bool
 }
 
 func withPreparedSourceBindings(ctx context.Context, bindings []PreparedSourceBinding, values ...[]any) context.Context {
@@ -216,6 +218,85 @@ func integerDomainFits(source, target types.T) bool {
 		return source.TypeLen() <= target.TypeLen()
 	}
 	return source.IsUnsignedInt() && !target.IsUnsignedInt() && source.TypeLen() < target.TypeLen()
+}
+
+// PreparedIntegerComparisonType describes the exact range needed by this
+// binding without changing its SQL source type. The frontend includes this
+// range in its specialization key before reusing a plan with a narrower
+// comparison cast. NULL and non-integer sources provide no narrowing proof.
+func PreparedIntegerComparisonType(value any, source types.Type) types.T {
+	if !source.Oid.IsInteger() {
+		return types.T_any
+	}
+	if param, ok := value.(ParamValue); ok {
+		value = param.Value
+		if param.MaterializedValue != "" {
+			value = param.MaterializedValue
+		}
+	}
+	if value == nil {
+		return types.T_any
+	}
+	spelling, ok := value.(string)
+	if !ok {
+		spelling = fmt.Sprint(value)
+	}
+	var result types.T
+	if source.Oid.IsUnsignedInt() {
+		v, err := strconv.ParseUint(spelling, 10, 64)
+		if err != nil {
+			return types.T_any
+		}
+		switch {
+		case v <= math.MaxUint8:
+			result = types.T_uint8
+		case v <= math.MaxUint16:
+			result = types.T_uint16
+		case v <= math.MaxUint32:
+			result = types.T_uint32
+		default:
+			result = types.T_uint64
+		}
+	} else {
+		v, err := strconv.ParseInt(spelling, 10, 64)
+		if err != nil {
+			return types.T_any
+		}
+		switch {
+		case v >= math.MinInt8 && v <= math.MaxInt8:
+			result = types.T_int8
+		case v >= math.MinInt16 && v <= math.MaxInt16:
+			result = types.T_int16
+		case v >= math.MinInt32 && v <= math.MaxInt32:
+			result = types.T_int32
+		default:
+			result = types.T_int64
+		}
+	}
+	if !integerDomainFits(result, source.Oid) {
+		return types.T_any
+	}
+	return result
+}
+
+func preparedIntegerParameterFits(ctx context.Context, expr *Expr, target types.T) bool {
+	state := preparedBindingState(ctx)
+	if state == nil || expr == nil || expr.GetP() == nil || !target.IsInteger() {
+		return false
+	}
+	position := expr.GetP().Pos
+	if position < 0 || int(position) >= len(state.values) {
+		return false
+	}
+	binding, ok := state.bindingForPosition(position)
+	if !ok {
+		return false
+	}
+	// Record the opportunity even when this value cannot be narrowed. A later
+	// in-range binding must not reuse the wider plan merely because its source
+	// type stayed the same.
+	state.integerComparisonRanges = true
+	return integerDomainFits(PreparedIntegerComparisonType(state.values[position], binding.Type), target)
 }
 
 // Capture before relational rewrites can remove or duplicate a predicate.
@@ -634,10 +715,11 @@ func preparedCharSourceCast(ctx context.Context, source *Expr, value string) (*E
 // PreparedExecutionPlan carries the immutable logical plan and the original
 // predicate candidates that must be proved again for every cache hit.
 type PreparedExecutionPlan struct {
-	Plan                 *Plan
-	DiagnosticCandidates []*Expr
-	DiagnosticFree       bool
-	ValueDependent       bool
+	Plan                    *Plan
+	DiagnosticCandidates    []*Expr
+	DiagnosticFree          bool
+	ValueDependent          bool
+	IntegerComparisonRanges bool
 }
 
 // EXPLAIN must profile the same binding semantics as its underlying statement.
@@ -682,7 +764,8 @@ func BuildPreparedExecutionPlan(ctx CompilerContext, stmt tree.Statement,
 	}
 	state := preparedBindingState(planning)
 	return &PreparedExecutionPlan{Plan: p, DiagnosticCandidates: state.diagnosticCandidates,
-		DiagnosticFree: state.diagnosticFree, ValueDependent: state.valueDependent}, nil
+		DiagnosticFree: state.diagnosticFree, ValueDependent: state.valueDependent,
+		IntegerComparisonRanges: state.integerComparisonRanges}, nil
 }
 
 func (state *preparedSourceBindingState) stringDomainParamLookup(pos int) (any, types.Type, bool) {

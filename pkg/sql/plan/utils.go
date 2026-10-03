@@ -2443,7 +2443,8 @@ func checkNoNeedCast(ctx context.Context, constT, columnT types.Type, constExpr 
 		// A resolved execution marker must satisfy the same source-domain
 		// constraint as any other non-literal expression.
 		return isUnresolvedPreparedParam(ctx, constExpr) || constT.Eq(columnT) ||
-			integerDomainFits(constT.Oid, columnT.Oid)
+			integerDomainFits(constT.Oid, columnT.Oid) ||
+			(constT.Oid.IsInteger() && preparedIntegerParameterFits(ctx, constExpr, columnT.Oid))
 	}
 	// Runtime specialization materializes prepared values as typed constant
 	// casts. When their domain already equals the IN left side, they are safe to
