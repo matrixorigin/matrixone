@@ -777,16 +777,31 @@ func TestDecimal64AddSub(t *testing.T) {
 	}
 }
 func TestDecimal128AddSub(t *testing.T) {
-	x := Decimal128{uint64(rand.Int()), uint64(rand.Int()) >> 1}
-	z := x
-	err := error(nil)
-	y := Decimal128{uint64(rand.Int()), uint64(rand.Int()) >> 1}
-	x, _, err = x.Add(y, 0, 0)
-	if err == nil {
-		x, _, err = x.Sub(y, 0, 0)
-	}
-	if err != nil || x != z {
-		panic("Decimal128AddSub wrong")
+	left := Decimal128{B0_63: 0x4000000000000000, B64_127: 0x2000000000000000}
+	right := Decimal128{B0_63: 0x2000000000000000, B64_127: 0x1000000000000000}
+	sum := Decimal128{B0_63: 0x6000000000000000, B64_127: 0x3000000000000000}
+	for _, test := range []struct {
+		name                  string
+		fn                    func(Decimal128, Decimal128, int32, int32) (Decimal128, int32, error)
+		left, right, want     Decimal128
+		leftScale, rightScale int32
+		wantScale             int32
+	}{
+		{"wide add", Decimal128.Add, left, right, sum, 0, 0, 0},
+		{"wide subtract", Decimal128.Sub, sum, right, left, 0, 0, 0},
+		{"carry", Decimal128.Add, Decimal128{B0_63: ^uint64(0), B64_127: 1}, Decimal128{B0_63: 1}, Decimal128{B64_127: 2}, 0, 0, 0},
+		{"borrow", Decimal128.Sub, Decimal128{B64_127: 2}, Decimal128{B0_63: 1}, Decimal128{B0_63: ^uint64(0), B64_127: 1}, 0, 0, 0},
+		{"add zero right", Decimal128.Add, Decimal128{B0_63: 1}, Decimal128{}, Decimal128{B0_63: 1}, 2, 2, 2},
+		{"add zero left", Decimal128.Add, Decimal128{}, Decimal128{B0_63: 1}, Decimal128{B0_63: 1}, 2, 2, 2},
+		{"align fractional zero", Decimal128.Add, Decimal128{B0_63: 1}, Decimal128{}, Decimal128{B0_63: 10}, 1, 2, 2},
+		{"subtract zero", Decimal128.Sub, Decimal128{B0_63: 1}, Decimal128{}, Decimal128{B0_63: 1}, 2, 2, 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result, scale, err := test.fn(test.left, test.right, test.leftScale, test.rightScale)
+			require.NoError(t, err)
+			require.Equal(t, test.want, result)
+			require.Equal(t, test.wantScale, scale)
+		})
 	}
 }
 
@@ -1163,14 +1178,23 @@ func TestDecimal64AddSubErrorFormat(t *testing.T) {
 // TestDecimal128AddSubErrorFormat exercises Decimal128.Add/Sub with origX/origY.
 func TestDecimal128AddSubErrorFormat(t *testing.T) {
 	maxD128 := Decimal128{B0_63: ^uint64(0), B64_127: 0x7FFFFFFFFFFFFFFF}
-	one := Decimal128{B0_63: 1, B64_127: 0}
+	one := Decimal128{B0_63: 1}
 
-	_, _, err := maxD128.Add(one, 0, 0)
-	if err == nil {
-		t.Fatal("expected overflow from Add")
-	}
-	_, _, err = maxD128.Sub(Decimal128{B0_63: ^uint64(0), B64_127: ^uint64(0)}, 0, 0) // sub a negative = add
-	_ = err
+	result, scale, err := maxD128.Add(Decimal128{}, 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, maxD128, result)
+	require.Equal(t, int32(0), scale)
+	_, _, err = maxD128.Add(one, 0, 0)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.EqualError(t, err, "invalid input: Decimal128 Add overflow: 170141183460469231731687303715884105727+1")
+
+	result, scale, err = maxD128.Sub(Decimal128{}, 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, maxD128, result)
+	require.Equal(t, int32(0), scale)
+	_, _, err = maxD128.Sub(Decimal128{B0_63: ^uint64(0), B64_127: ^uint64(0)}, 0, 0)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.EqualError(t, err, "invalid input: Decimal128 Sub overflow: 170141183460469231731687303715884105727--1")
 }
 
 // TestDecimalScaleOverflowErrors exercises the error formatting in Scale
