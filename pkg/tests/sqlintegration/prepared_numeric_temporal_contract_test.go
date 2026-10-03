@@ -127,7 +127,9 @@ func TestPreparedNumericTemporalContracts(t *testing.T) {
 									if update {
 										args = []any{int64(7), key}
 									}
-									result, err := tx.StmtContext(ctx, stmt).ExecContext(ctx, args...)
+									bound := tx.StmtContext(ctx, stmt)
+									defer bound.Close()
+									result, err := bound.ExecContext(ctx, args...)
 									require.NoError(t, err)
 									affected, err := result.RowsAffected()
 									require.NoError(t, err)
@@ -153,7 +155,9 @@ func TestPreparedNumericTemporalContracts(t *testing.T) {
 									tx, err := conn.BeginTx(ctx, nil)
 									require.NoError(t, err)
 									defer tx.Rollback()
-									_, err = tx.StmtContext(ctx, stmt).ExecContext(ctx, int64(2147483648), int64(1))
+									bound := tx.StmtContext(ctx, stmt)
+									defer bound.Close()
+									_, err = bound.ExecContext(ctx, int64(2147483648), int64(1))
 									var sqlErr *mysql.MySQLError
 									require.ErrorAs(t, err, &sqlErr)
 									require.Equal(t, uint16(1690), sqlErr.Number)
@@ -163,7 +167,9 @@ func TestPreparedNumericTemporalContracts(t *testing.T) {
 									require.NoError(t, err)
 									defer tx.Rollback()
 									state(tx, "1:0,1001:0,2001:0")
-									_, err = tx.StmtContext(ctx, stmt).ExecContext(ctx, int64(9), int64(1001))
+									bound := tx.StmtContext(ctx, stmt)
+									defer bound.Close()
+									_, err = bound.ExecContext(ctx, int64(9), int64(1001))
 									require.NoError(t, err)
 									state(tx, "1:0,1001:9,2001:0")
 								}()
@@ -186,7 +192,9 @@ func TestPreparedNumericTemporalContracts(t *testing.T) {
 								if strings.Contains(predicate, "?") {
 									args = []any{int64(1)}
 								}
-								rows, queryErr := tx.StmtContext(ctx, stmt).QueryContext(ctx, args...)
+								bound := tx.StmtContext(ctx, stmt)
+								defer bound.Close()
+								rows, queryErr := bound.QueryContext(ctx, args...)
 								text := readPreparedExplainRows(t, rows, queryErr)
 								require.Contains(t, text, "Table Scan on "+target)
 								metrics := scanMetrics.FindAllStringSubmatch(text, -1)
