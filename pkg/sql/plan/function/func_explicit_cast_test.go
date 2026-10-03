@@ -763,20 +763,20 @@ func TestExplicitCastOverflowHelperBoundaries(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(-128), value)
 
-	decimal64, err := clampDecimal64CastString("0xFFFFFF", 6, 2)
+	decimal64, err := ParseExplicitDecimal64CastString("0xFFFFFF", 6, 2)
 	require.NoError(t, err)
 	require.Equal(t, types.Decimal64(999999), decimal64)
-	_, err = clampDecimal64CastString("0xGG", 6, 2)
+	_, err = ParseExplicitDecimal64CastString("0xGG", 6, 2)
 	require.Error(t, err)
-	_, err = clampDecimal64CastString("1", 0, 0)
+	_, err = ParseExplicitDecimal64CastString("1", 0, 0)
 	require.Error(t, err)
 
-	decimal128, err := clampDecimal128CastString("999", 2, 2)
+	decimal128, err := ParseExplicitDecimal128CastString("999", 2, 2)
 	require.NoError(t, err)
 	want, err := types.ParseDecimal128("0.99", 2, 2)
 	require.NoError(t, err)
 	require.Equal(t, want, decimal128)
-	_, err = clampDecimal128CastString("1", 2, 3)
+	_, err = ParseExplicitDecimal128CastString("1", 2, 3)
 	require.Error(t, err)
 }
 
@@ -805,7 +805,7 @@ func TestOrdinaryCastOverflowRemainsStrict(t *testing.T) {
 	require.Error(t, err)
 	_, err = parseUnsignedExplicitCastString("not-a-number", 64)
 	require.Error(t, err)
-	_, err = clampDecimal64CastString("not-a-number", 6, 2)
+	_, err = ParseExplicitDecimal64CastString("not-a-number", 6, 2)
 	require.Error(t, err)
 }
 

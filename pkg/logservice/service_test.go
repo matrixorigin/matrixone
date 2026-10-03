@@ -365,6 +365,12 @@ func TestServiceHandleLogHeartbeat(t *testing.T) {
 			s.store.addScheduleCommands(ctx, 1, []pb.ScheduleCommand{sc1, sc2, sc3}))
 		resp := s.handleLogHeartbeat(ctx, req)
 		require.Equal(t, []pb.ScheduleCommand{sc1, sc3}, resp.CommandBatch.Commands)
+		require.Len(t, s.store.hakeeperCheckWakeup, 1)
+		<-s.store.hakeeperCheckWakeup
+		resp = s.handleLogHeartbeat(ctx, req)
+		require.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		require.Empty(t, resp.CommandBatch.Commands)
+		require.Empty(t, s.store.hakeeperCheckWakeup)
 	}
 	runServiceTest(t, true, true, fn)
 }
@@ -383,6 +389,12 @@ func TestServiceHandleCNHeartbeat(t *testing.T) {
 		resp := s.handleCNHeartbeat(ctx, req)
 		assert.Equal(t, &pb.CommandBatch{}, resp.CommandBatch)
 		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		require.Len(t, s.store.hakeeperCheckWakeup, 1)
+		<-s.store.hakeeperCheckWakeup
+		resp = s.handleCNHeartbeat(ctx, req)
+		require.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		require.Empty(t, resp.CommandBatch.Commands)
+		require.Empty(t, s.store.hakeeperCheckWakeup)
 	}
 	runServiceTest(t, true, true, fn)
 }
@@ -426,6 +438,12 @@ func TestServiceHandleTNHeartbeat(t *testing.T) {
 			s.store.addScheduleCommands(ctx, 1, []pb.ScheduleCommand{sc1, sc2, sc3}))
 		resp := s.handleTNHeartbeat(ctx, req)
 		require.Equal(t, []pb.ScheduleCommand{sc1, sc3}, resp.CommandBatch.Commands)
+		require.Len(t, s.store.hakeeperCheckWakeup, 1)
+		<-s.store.hakeeperCheckWakeup
+		resp = s.handleTNHeartbeat(ctx, req)
+		require.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		require.Empty(t, resp.CommandBatch.Commands)
+		require.Empty(t, s.store.hakeeperCheckWakeup)
 	}
 	runServiceTest(t, true, true, fn)
 }

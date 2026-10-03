@@ -330,8 +330,14 @@ schema and native-MO results. Also validate streams=1 and a higher-stream
 stress configuration. Passing at one stream alone is insufficient.
 Agreed floating-point tolerance never excuses decimal/type corruption.
 
-Publish Q1-Q22 and a sum for MO native, Flight+TAE, Flight+MO and embedded+MO.
-Flight+TAE is a retained comparison baseline, not an embedded route. Use
+Publish complete Q1-Q22 tables and sums for MO native and embedded+MO.
+Native MO is the all-22 correctness oracle. Flight's existing exporter declines
+14 canonical queries; exact numeric support remains embedded-only. The owner
+selected native-oracle cutover on 2026-10-01 rather than extending Flight.
+Publish Flight+TAE and Flight+MO comparisons only where equivalent execution is
+supported, explicitly marking unsupported or unavailable coverage. Never call
+a partial sum a full-suite total. Flight+TAE is a retained comparison baseline,
+not an embedded route. Use
 identical data/semantics, matching hardware/memory configuration and exact
 recorded source/artifact revisions. Distinguish cold/warm runs.
 
@@ -341,9 +347,12 @@ their sum, plus raw runs and the separately labelled median full-suite time.
 Repeat Q9 ten times for its concurrency sensitivity. CPU samples are not wall
 time and are not additive stage latencies.
 
-Embedded MO-reader Q9 and full-suite median must not regress against their
-controlled Flight+MO baselines. Report their ratios to Flight+TAE for context;
-that route uses a different reader and is not an embedded acceptance gate.
+Compare embedded MO-reader performance with controlled Flight+MO only on the
+same supported queries and report the common coverage. An unavailable exact
+Q9/full-suite Flight baseline is not fabricated or obtained through narrowing,
+SQL rewrites or fallback. Report ratios to Flight+TAE for context; that route
+uses a different reader and is not an embedded acceptance gate. Complete native
+MO/embedded timings and the reviewed numeric performance gates remain required.
 Historical 34.16s/15.50s observations are not fresh evidence.
 
 #28968 must inventory current-main numeric failures and provide separately

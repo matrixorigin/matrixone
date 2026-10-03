@@ -926,21 +926,7 @@ func TestConstantTranspose(t *testing.T) {
 					},
 				},
 			},
-			expect: &plan.Expr{
-				Typ: plan2.MakePlan2Type(&boolType),
-				Expr: &plan.Expr_F{
-					F: &plan.Function{
-						Func: &plan.ObjectRef{ObjName: "=", Obj: fid},
-						Args: []*plan.Expr{
-							colExpr,
-							makeSubExpr(
-								makeConstExpr(42),
-								makeConstExpr(10),
-							),
-						},
-					},
-				},
-			},
+			expect: nil,
 		},
 		{
 			name: "only-swap-already-simple",
@@ -995,30 +981,7 @@ func TestConstantTranspose(t *testing.T) {
 					},
 				},
 			},
-			expect: &plan.Expr{
-				Typ: plan2.MakePlan2Type(&boolType),
-				Expr: &plan.Expr_F{
-					F: &plan.Function{
-						Func: &plan.ObjectRef{ObjName: "=", Obj: fid},
-						Args: []*plan.Expr{
-							colExpr,
-							makeSubExpr(
-								makeSubExpr(
-									makeSubExpr(
-										makeConstExpr(-1),
-										makeConstExpr(5),
-									),
-									makeConstExpr(-1),
-								),
-								makeAddExpr(
-									makeConstExpr(-8),
-									makeConstExpr(2),
-								),
-							),
-						},
-					},
-				},
-			},
+			expect: nil,
 		},
 		{
 			name: "multiple-constants-in-both-sides",
@@ -1040,24 +1003,7 @@ func TestConstantTranspose(t *testing.T) {
 					},
 				},
 			},
-			expect: &plan.Expr{
-				Typ: plan2.MakePlan2Type(&boolType),
-				Expr: &plan.Expr_F{
-					F: &plan.Function{
-						Func: &plan.ObjectRef{ObjName: "=", Obj: fid},
-						Args: []*plan.Expr{
-							colExpr,
-							makeSubExpr(
-								makeAddExpr(
-									makeConstExpr(5),
-									makeConstExpr(5),
-								),
-								makeConstExpr(10),
-							),
-						},
-					},
-				},
-			},
+			expect: nil,
 		},
 		{
 			name: "nested-expressions",
@@ -1079,24 +1025,7 @@ func TestConstantTranspose(t *testing.T) {
 					},
 				},
 			},
-			expect: &plan.Expr{
-				Typ: plan2.MakePlan2Type(&boolType),
-				Expr: &plan.Expr_F{
-					F: &plan.Function{
-						Func: &plan.ObjectRef{ObjName: "=", Obj: fid},
-						Args: []*plan.Expr{
-							colExpr,
-							makeSubExpr(
-								makeSubExpr(
-									makeConstExpr(200),
-									makeConstExpr(50),
-								),
-								makeConstExpr(100),
-							),
-						},
-					},
-				},
-			},
+			expect: nil,
 		},
 		{
 			name: "unsupported-expression",
@@ -1149,39 +1078,7 @@ func TestConstantTranspose(t *testing.T) {
 					},
 				},
 			},
-			expect: &plan.Expr{
-				Typ: plan2.MakePlan2Type(&boolType),
-				Expr: &plan.Expr_F{
-					F: &plan.Function{
-						Func: &plan.ObjectRef{ObjName: "=", Obj: fid},
-						Args: []*plan.Expr{
-							colExpr,
-							makeSubExpr(
-								makeAddExpr(
-									makeSubExpr(
-										makeConstExpr(2),
-										makeConstExpr(5),
-									),
-									makeConstExpr(1),
-								),
-								makeAddExpr(
-									makeAddExpr(
-										makeSubExpr(
-											makeAddExpr(
-												makeConstExpr(-9),
-												makeConstExpr(8),
-											),
-											makeConstExpr(7),
-										),
-										makeConstExpr(6),
-									),
-									makeConstExpr(2),
-								),
-							),
-						},
-					},
-				},
-			},
+			expect: nil,
 		},
 	}
 
@@ -1251,6 +1148,21 @@ func TestConstantTranspose(t *testing.T) {
 		result, err := plan2.ConstantTranspose(input, proc)
 		require.NoError(t, err)
 		require.Equal(t, bind(t, ">=", colExpr, peer), result, "peer domain must stay executable")
+	}
+
+	// Equality direction must preserve typed NULL and executable parameter/cast domains.
+	nullPeer := makeConstExpr(0)
+	nullPeer.GetLit().Isnull = true
+	for _, peer := range []*plan.Expr{param, nullPeer, bind(t, "cast", wideParam, target)} {
+		input := bind(t, "=", peer, colExpr)
+		before := plan2.DeepCopyExpr(input)
+		result, err := plan2.ConstantTranspose(input, proc)
+		require.NoError(t, err)
+		require.Equal(t, bind(t, "=", colExpr, peer), result)
+		require.Equal(t, before, input)
+		again, err := plan2.ConstantTranspose(result, proc)
+		require.NoError(t, err)
+		require.Same(t, result, again)
 	}
 	volatile := bind(t, "cast", bind(t, "rand"), target)
 	wrappedCol := bind(t, "cast", colExpr, &plan.Expr{Typ: wideParam.Typ, Expr: &plan.Expr_T{T: &plan.TargetType{}}})

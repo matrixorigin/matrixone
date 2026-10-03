@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	pbstats "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -668,4 +670,155 @@ func TestCompilerContextResolveVariableDelegatesToAttachedSession(t *testing.T) 
 	declared, err = selfAttached.ResolveVariableType("fraction", false, false)
 	require.NoError(t, err)
 	require.Equal(t, plan.Type{}, declared)
+}
+
+func TestInternalCompilerPlanConsumesScopedDOP(t *testing.T) {
+	ctx := defines.AttachAccountId(t.Context(), 0)
+	proc := testutil.NewProcess(t)
+	compiler := &compilerContext{ctx: ctx, proc: proc}
+	build := func(c plan.CompilerContext, sql string) *plan.Plan {
+		stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		result, err := plan.BuildPlan(c, stmt, false)
+		require.NoError(t, err)
+		return result
+	}
+	for _, tc := range []struct {
+		value interface{}
+		want  int64
+	}{
+		{int64(1), 1}, {int64(3), 3}, {int64(0), 0}, {int(1), 0}, {nil, 0},
+	} {
+		if tc.value == nil {
+			proc.SetResolveVariableFunc(nil)
+		} else {
+			proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+				if system && !global && strings.EqualFold(name, "max_dop") {
+					return tc.value, nil
+				}
+				return nil, nil
+			})
+		}
+		require.Equal(t, tc.want, build(compiler, "select 1").GetQuery().MaxDop)
+	}
+	// Precision continues to shape real expression binding alongside DOP.
+	var seen []string
+	proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+		seen = append(seen, name)
+		if strings.EqualFold(name, "max_dop") {
+			return int64(1), nil
+		}
+		if strings.EqualFold(name, "div_precision_increment") {
+			return int64(10), nil
+		}
+		return nil, errors.New("unexpected variable")
+	})
+	query := build(compiler, "select cast(1.23 as decimal(10,2)) / cast(3.45 as decimal(10,2))").GetQuery()
+	require.Equal(t, int64(1), query.MaxDop)
+	require.Equal(t, int32(12), query.Nodes[query.Steps[0]].ProjectList[0].Typ.Scale)
+	for _, name := range []string{"MAX_DOP", "DIV_PRECISION_INCREMENT"} {
+		_, err := compiler.ResolveVariable(name, true, false)
+		require.NoError(t, err)
+	}
+	seen = nil
+	for _, tc := range []struct {
+		name           string
+		system, global bool
+	}{
+		{"max_dop", false, false}, {"max_dop", true, true},
+		{"div_precision_increment", false, false}, {"div_precision_increment", true, true},
+		{"foreign_key_checks", true, false},
+	} {
+		v, err := compiler.ResolveVariable(tc.name, tc.system, tc.global)
+		require.NoError(t, err)
+		require.Nil(t, v)
+	}
+	require.Empty(t, seen)
+	empty := &compilerContext{ctx: ctx}
+	v, err := empty.ResolveVariable("max_dop", true, false)
+	require.NoError(t, err)
+	require.Nil(t, v)
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return nil, errors.New("resolver failed") })
+	_, err = compiler.ResolveVariable("max_dop", true, false)
+	require.ErrorContains(t, err, "resolver failed")
+	// An attached frontend delegate controls replay even when the process disagrees.
+	delegate := plan.NewMockCompilerContext(false)
+	delegate.ResolveVariableFunc = func(name string, system, global bool) (interface{}, error) {
+		if name == "max_dop" {
+			return int64(2), nil
+		}
+		return nil, nil
+	}
+	compiler.ctx = attachInternalExecutorCompilerContext(ctx, delegate)
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		t.Fatal("process resolver must not override frontend delegate")
+		return nil, nil
+	})
+	require.Equal(t, int64(2), build(compiler, "select 1").GetQuery().MaxDop)
+	delegate.ResolveVariableFunc = func(string, bool, bool) (interface{}, error) { return nil, nil }
+	require.Equal(t, int64(0), build(compiler, "select 1").GetQuery().MaxDop)
+	delegate.ResolveVariableFunc = func(string, bool, bool) (interface{}, error) { return nil, errors.New("delegate failed") }
+	_, err = compiler.ResolveVariable("max_dop", true, false)
+	require.ErrorContains(t, err, "delegate failed")
+}
+
+func TestInternalCompilerStatsCacheObservations(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProcess(t)
+	op := mock_frontend.NewMockTxnOperator(ctrl)
+	proc.Base.TxnOperator = op
+	readonly := true
+	ws := mock_frontend.NewMockWorkspace(ctrl)
+	ws.EXPECT().Readonly().DoAndReturn(func() bool { return readonly }).AnyTimes()
+	op.EXPECT().GetWorkspace().Return(ws).AnyTimes()
+	op.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	eng := mock_frontend.NewMockEngine(ctrl)
+	db := mock_frontend.NewMockDatabase(ctrl)
+	rel := mock_frontend.NewMockRelation(ctrl)
+	eng.EXPECT().Database(gomock.Any(), "d", op).Return(db, nil).AnyTimes()
+	db.EXPECT().Relation(gomock.Any(), "t", nil).Return(rel, nil).AnyTimes()
+	current := &pbstats.StatsInfo{TableName: "t", TableCnt: 5, NdvMap: map[string]float64{"v": 5}}
+	observed := current
+	calls := 0
+	rel.EXPECT().Stats(gomock.Any(), true).DoAndReturn(func(context.Context, bool) (*pbstats.StatsInfo, error) {
+		calls++
+		return observed, nil
+	}).AnyTimes()
+	ctx := &compilerContext{ctx: context.Background(), proc: proc, engine: eng, statsCache: plan.NewStatsCache()}
+	obj := &plan.ObjectRef{Obj: 42, SchemaName: "d", ObjName: "t"}
+	tableDef := &plan.TableDef{Version: 7}
+	got, err := ctx.StatsWithTableDef(obj, tableDef, nil)
+	require.NoError(t, err)
+	require.Same(t, current, got)
+	_, err = ctx.StatsWithTableDef(obj, tableDef, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, calls, "completed readonly observation is reused")
+	snapshot := &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 1}}
+	for _, count := range []float64{2, 0} {
+		observed = &pbstats.StatsInfo{TableName: "t", TableCnt: count, NdvMap: map[string]float64{"v": count}}
+		got, err = ctx.StatsWithTableDef(obj, tableDef, snapshot)
+		require.NoError(t, err)
+		require.Same(t, observed, got)
+		wrapper := ctx.GetStatsCache().Get(42)
+		require.Equal(t, observed.NdvMap, wrapper.GetStats().NdvMap)
+		require.Empty(t, wrapper.GetStats().TableName)
+		require.Equal(t, "t", observed.TableName)
+		observed = current
+		before := calls
+		got, err = ctx.StatsWithTableDef(obj, tableDef, nil)
+		require.NoError(t, err)
+		require.Same(t, current, got)
+		require.Equal(t, before+1, calls, "historical maps cannot serve the current fast cache")
+	}
+	readonly = false
+	observed = &pbstats.StatsInfo{TableCnt: 10, AccurateObjectNumber: 1}
+	got, err = ctx.StatsWithTableDef(obj, tableDef, nil)
+	require.NoError(t, err)
+	require.Same(t, observed, got)
+	readonly = true
+	before := calls
+	_, err = ctx.StatsWithTableDef(obj, tableDef, nil)
+	require.NoError(t, err)
+	require.Equal(t, before+1, calls, "anonymous overlays cannot retain the 3s fast hit")
 }

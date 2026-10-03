@@ -31,9 +31,13 @@ import (
 )
 
 var (
-	planExprPtrType   = reflect.TypeOf((*plan.Expr)(nil))
-	operatorBaseType  = reflect.TypeOf(vm.OperatorBase{})
-	operatorBasePType = reflect.TypeOf((*vm.OperatorBase)(nil))
+	planExprPtrType      = reflect.TypeOf((*plan.Expr)(nil))
+	operatorBaseType     = reflect.TypeOf(vm.OperatorBase{})
+	operatorBasePType    = reflect.TypeOf((*vm.OperatorBase)(nil))
+	argGetterType        = reflect.TypeFor[argExpressionsGetter]()
+	argRewriterType      = reflect.TypeFor[argExpressionsRewriter]()
+	lockRowsGetterType   = reflect.TypeFor[lockRowsExpressionsGetter]()
+	lockRowsRewriterType = reflect.TypeFor[lockRowsExpressionsRewriter]()
 )
 
 type argExpressionsGetter interface {
@@ -518,17 +522,20 @@ func foldVarExprsInValue(v reflect.Value, seen map[uintptr]struct{}, proc *proce
 	return folded, nil
 }
 
+// Check method ownership before Interface: boxing an unrelated struct copies
+// even its private mutable runtime fields, which expression traversal must not read.
 func foldVarExprsInHiddenExpressions(v reflect.Value, proc *process.Process) (bool, error) {
 	if !v.IsValid() {
 		return false, nil
 	}
-	if v.CanInterface() {
+	if v.CanInterface() && (v.Type().Implements(argRewriterType) || v.Type().Implements(lockRowsRewriterType)) {
 		folded, err := foldVarExprsInExpressionGetters(v.Interface(), proc)
 		if err != nil || folded {
 			return folded, err
 		}
 	}
-	if v.Kind() != reflect.Pointer && v.CanAddr() && v.Addr().CanInterface() {
+	if v.Kind() != reflect.Pointer && v.CanAddr() && v.Addr().CanInterface() &&
+		(v.Addr().Type().Implements(argRewriterType) || v.Addr().Type().Implements(lockRowsRewriterType)) {
 		return foldVarExprsInExpressionGetters(v.Addr().Interface(), proc)
 	}
 	return false, nil
@@ -561,12 +568,13 @@ func containsVarExprInHiddenExpressions(v reflect.Value) bool {
 	if !v.IsValid() {
 		return false
 	}
-	if v.CanInterface() {
+	if v.CanInterface() && (v.Type().Implements(argGetterType) || v.Type().Implements(lockRowsGetterType)) {
 		if containsVarExprInExpressionGetters(v.Interface()) {
 			return true
 		}
 	}
-	if v.Kind() != reflect.Pointer && v.CanAddr() && v.Addr().CanInterface() {
+	if v.Kind() != reflect.Pointer && v.CanAddr() && v.Addr().CanInterface() &&
+		(v.Addr().Type().Implements(argGetterType) || v.Addr().Type().Implements(lockRowsGetterType)) {
 		if containsVarExprInExpressionGetters(v.Addr().Interface()) {
 			return true
 		}

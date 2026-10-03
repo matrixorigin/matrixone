@@ -131,6 +131,16 @@ func (s *service) waitForClusterSelfReadyWithContext(
 			if err != nil {
 				return err
 			}
+		case <-s.viewMetadataAdmissionUpdated:
+			// A committed heartbeat snapshot can make this incarnation visible
+			// before the normal retry. Reuse the admission owner's notification;
+			// only a fresh authoritative inventory may satisfy the readiness gate.
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
 		case <-timer.C:
 		}
 	}

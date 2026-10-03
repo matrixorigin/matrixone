@@ -1379,6 +1379,20 @@ func initExecuteStmtParamWithResolverInSession(
 	needRebuild := prepareStmt.needsRebuild ||
 		preparePlanNeedsRebuild(change, modeMismatch, protocolMismatch) || rebuildEveryExecute ||
 		!reusablePlanGenerationSupported(cwft.proc)
+	if !needRebuild {
+		// Compare against the installed specialization that may actually be
+		// reused, including its captured counts and executable join strategy.
+		candidate := executionPlan
+		if executionPlan.GetQuery() != nil && len(preparePlan.ParamTypes) > 0 && prepareStmt.runtimePlan != nil {
+			candidate = prepareStmt.runtimePlan
+		}
+		statsChanged, err := plan2.CachedPlanStatsChanged(candidate, planningContext)
+		if err != nil {
+			prepareStmt.needsRebuild = true
+			return nil, nil, nil, "", false, err
+		}
+		needRebuild = statsChanged
+	}
 	cwft.planGenerationReused = !needRebuild
 	var pendingGroupConcatColDefData [][]byte
 	pendingGroupConcatColDefDataSet := false

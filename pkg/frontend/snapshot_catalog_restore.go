@@ -250,17 +250,17 @@ func restoreRolePrivilegesAfterObjects(restoreCtx *systemCatalogRestoreContext) 
 	if err = restoreCtx.bh.Exec(targetCtx, "delete from mo_catalog.mo_role_privs"); err != nil {
 		return err
 	}
-	if len(kept) == 0 {
-		return nil
-	}
+	return insertRolePrivilegeRestoreRows(targetCtx, restoreCtx.bh, kept)
+}
 
+func insertRolePrivilegeRestoreRows(ctx context.Context, bh BackgroundExec, rows []rolePrivilegeRestoreRow) error {
 	insertPrefix := "insert into mo_catalog.mo_role_privs(" +
 		"role_id,role_name,obj_type,obj_id,privilege_id,privilege_name," +
 		"privilege_level,operation_user_id,granted_time,with_grant_option) values "
-	for start := 0; start < len(kept); start += rolePrivilegeRestoreInsertBatchSize {
-		end := min(start+rolePrivilegeRestoreInsertBatchSize, len(kept))
+	for start := 0; start < len(rows); start += rolePrivilegeRestoreInsertBatchSize {
+		end := min(start+rolePrivilegeRestoreInsertBatchSize, len(rows))
 		values := make([]string, 0, end-start)
-		for _, row := range kept[start:end] {
+		for _, row := range rows[start:end] {
 			values = append(values, fmt.Sprintf(
 				"(%d,%s,%s,%d,%d,%s,%s,%d,%s,%t)",
 				row.roleID,
@@ -275,7 +275,7 @@ func restoreRolePrivilegesAfterObjects(restoreCtx *systemCatalogRestoreContext) 
 				row.withGrantOption,
 			))
 		}
-		if err = restoreCtx.bh.Exec(targetCtx, insertPrefix+strings.Join(values, ",")); err != nil {
+		if err := bh.Exec(ctx, insertPrefix+strings.Join(values, ",")); err != nil {
 			return err
 		}
 	}
@@ -556,13 +556,15 @@ func parseCatalogObjectIdentity(row []string) (catalogObjectIdentity, error) {
 	}, nil
 }
 
+const rolePrivilegeRestoreSelectSQL = "select cast(role_id as char), role_name, obj_type, cast(obj_id as char), " +
+	"cast(privilege_id as char), privilege_name, privilege_level, " +
+	"cast(coalesce(operation_user_id, 0) as char), cast(granted_time as char), " +
+	"cast(with_grant_option as char) from mo_catalog.mo_role_privs"
+
 func loadRolePrivilegesAtSnapshot(restoreCtx *systemCatalogRestoreContext) ([]rolePrivilegeRestoreRow, error) {
 	sourceCtx := defines.AttachAccountId(restoreCtx.ctx, restoreCtx.sourceAccount)
 	sql := fmt.Sprintf(
-		"select cast(role_id as char), role_name, obj_type, cast(obj_id as char), "+
-			"cast(privilege_id as char), privilege_name, privilege_level, "+
-			"cast(coalesce(operation_user_id, 0) as char), cast(granted_time as char), "+
-			"cast(with_grant_option as char) from mo_catalog.mo_role_privs {MO_TS = %d} "+
+		rolePrivilegeRestoreSelectSQL+" {MO_TS = %d} "+
 			"order by role_id, obj_type, obj_id, privilege_id, privilege_level",
 		restoreCtx.snapshotTS,
 	)
@@ -574,10 +576,14 @@ func loadRolePrivilegesAtSnapshot(restoreCtx *systemCatalogRestoreContext) ([]ro
 		return nil, err
 	}
 
+	return parseRolePrivilegeRestoreRows(restoreCtx.ctx, cols)
+}
+
+func parseRolePrivilegeRestoreRows(ctx context.Context, cols [][]string) ([]rolePrivilegeRestoreRow, error) {
 	rows := make([]rolePrivilegeRestoreRow, 0, len(cols))
 	for _, col := range cols {
 		if len(col) != 10 {
-			return nil, moerr.NewInternalError(restoreCtx.ctx, "invalid mo_role_privs restore row")
+			return nil, moerr.NewInternalError(ctx, "invalid mo_role_privs restore row")
 		}
 		roleID, err := strconv.ParseInt(col[0], 10, 64)
 		if err != nil {
