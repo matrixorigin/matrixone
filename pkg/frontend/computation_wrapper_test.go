@@ -4791,7 +4791,7 @@ func TestInitExecuteStmtParamUsesTxnSnapshotAfterRebuild(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOperator.EXPECT().SnapshotTS().Return(snapshot)
-	txnOperator.EXPECT().NextSequence().Return(uint64(1)).AnyTimes()
+
 	ses.proc.Base.TxnOperator = txnOperator
 	ses.advanceDDLVersion()
 

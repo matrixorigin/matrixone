@@ -62,7 +62,6 @@ type Options struct {
 	timeZone                *time.Location
 	statementOptions        StatementOption
 	txnOpts                 []client.TxnOption
-	enableTrace             bool
 	lower                   *int64
 	streaming               bool
 	stream_chan             chan Result

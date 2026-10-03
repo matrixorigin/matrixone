@@ -233,7 +233,6 @@ func TestServiceStartDoesNotBootstrapBeforeClusterSelfReady(t *testing.T) {
 		}
 		cfg.HAKeeper.DiscoveryTimeout.Duration = time.Second
 		cfg.HAKeeper.HeatbeatInterval.Duration = time.Millisecond
-		cfg.Txn.Trace.BufferSize = 1
 		heartbeatReady := make(chan struct{})
 		close(heartbeatReady)
 		s := &service{
@@ -248,7 +247,6 @@ func TestServiceStartDoesNotBootstrapBeforeClusterSelfReady(t *testing.T) {
 			moCluster:          cluster,
 			hakeeperConnected:  heartbeatReady,
 		}
-		s.options.traceDataPath = t.TempDir()
 
 		startDone := make(chan error, 1)
 		go func() {

@@ -18,13 +18,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"go.uber.org/zap"
 
@@ -154,7 +155,6 @@ func newViewMetadataAdmissionStartService(
 	runtime.SetupServiceBasedRuntime(serviceID, runtime.DefaultRuntime())
 	cfg := &Config{UUID: serviceID, AutomaticUpgrade: true}
 	cfg.HAKeeper.DiscoveryTimeout.Duration = discoveryTimeout
-	cfg.Txn.Trace.BufferSize = 1
 	s := &service{
 		cfg:                             cfg,
 		logger:                          zap.NewNop(),
@@ -170,7 +170,6 @@ func newViewMetadataAdmissionStartService(
 		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
 		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
 	}
-	s.options.traceDataPath = t.TempDir()
 	s.viewMetadataAdmission.Store(&logservicepb.ViewMetadataAdmission{
 		Enabled:              true,
 		Epoch:                5,
