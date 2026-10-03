@@ -2102,7 +2102,6 @@ func generateConstExpressionExecutor(
 				constStringType := constSType
 				constStringType.Charset = typ.Charset
 				constStringType.CollationVersion = typ.CollationVersion
-				constStringType.CollationVersion = typ.CollationVersion
 				vec, err = newExpressionConstBytes(constStringType, []byte(sval), 1, proc.Mp(), selection)
 			} else {
 				vec, err = newExpressionConstBytes(constSType, []byte(sval), 1, proc.Mp(), selection)
@@ -3199,9 +3198,11 @@ func GetExprZoneMap(
 								zms[expr.AuxId].Reset()
 								return
 							}
+							declaredType := types.MustTypeFromPlan(arg.Typ)
 							argType := *vecs[arg.AuxId].GetType()
-							argType.Width = arg.Typ.Width
-							argType.Charset = uint8(arg.Typ.Charset)
+							argType.Width = declaredType.Width
+							argType.Charset = declaredType.Charset
+							argType.CollationVersion = declaredType.CollationVersion
 							vecs[arg.AuxId].SetType(argType)
 							// Class is provenance, not a property of a point column ZM.
 							if constant && isSingleValueZoneMap(zms[arg.AuxId]) {

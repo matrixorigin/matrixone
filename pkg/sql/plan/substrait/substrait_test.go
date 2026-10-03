@@ -48,11 +48,11 @@ import (
 
 func TestCollationMetadataSubstraitBoundaries(t *testing.T) {
 	for _, mutate := range []func(*planpb.TableDef){
+		func(table *planpb.TableDef) { table.KeyFormat = 1 },
+		func(table *planpb.TableDef) { table.Indexes = []*planpb.IndexDef{{KeyFormat: 1}} },
 		func(table *planpb.TableDef) {
 			table.Cols[0].Typ = planpb.Type{Id: int32(types.T_varchar), Width: 32, Charset: 3, CollationVersion: 1}
 		},
-		func(table *planpb.TableDef) { table.KeyFormat = 1 },
-		func(table *planpb.TableDef) { table.Indexes = []*planpb.IndexDef{{KeyFormat: 1}} },
 	} {
 		q := scanQuery()
 		candidate, err := Export(q)
@@ -66,6 +66,26 @@ func TestCollationMetadataSubstraitBoundaries(t *testing.T) {
 		require.ErrorContains(t, err, "unsupported collation metadata")
 		_, err = CanonicalSchema(table)
 		require.ErrorContains(t, err, "unsupported collation metadata")
+
+		q = embeddedProjectedScanQuery()
+		embedded, err := ExportEmbeddedMO(q)
+		require.NoError(t, err)
+		reads, err := embedded.EmbeddedMOReads()
+		require.NoError(t, err)
+		require.Len(t, reads, 1)
+		bindings := map[int32]EmbeddedReadBinding{0: {BindingID: 1, Source: EmbeddedReadMO}}
+		wire, err := embedded.BuildEmbedded(bindings)
+		require.NoError(t, err)
+		require.NotEmpty(t, wire)
+		mutate(q.Nodes[0].TableDef)
+		_, err = ExportEmbeddedMO(q)
+		require.ErrorContains(t, err, "unsupported collation metadata")
+		reads, err = embedded.EmbeddedMOReads()
+		require.ErrorContains(t, err, "unsupported collation metadata")
+		require.Nil(t, reads)
+		wire, err = embedded.BuildEmbedded(bindings)
+		require.ErrorContains(t, err, "unsupported collation metadata")
+		require.Nil(t, wire)
 	}
 }
 
