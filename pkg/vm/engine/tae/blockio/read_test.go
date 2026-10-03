@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -450,6 +451,35 @@ func TestBlockDataReadInnerPersistedVectorTopN(t *testing.T) {
 		require.Equal(t, uint64(5), top.Stats.StorageFilterInputRows)
 		require.Equal(t, uint64(2), top.Stats.StorageFilterOutputRows)
 		output.Clean(queryMP)
+	})
+	t.Run("scoped membership fused before topk", func(t *testing.T) {
+		memberIDs := vector.NewVec(types.T_int32.ToType())
+		defer memberIDs.Free(queryMP)
+		require.NoError(t, vector.AppendFixedList(memberIDs, []int32{100, 102, 104}, nil, queryMP))
+		data, err := docfilter.Build(memberIDs)
+		require.NoError(t, err)
+		member, err := docfilter.New(data)
+		require.NoError(t, err)
+		defer member.Free()
+		output := newOutput()
+		defer output.Clean(queryMP)
+		top := newTop()
+		top.Stats = new(objectio.IndexReaderTopStats)
+		filter := objectio.BlockReadFilter{
+			Valid: true, ExactMembership: true,
+			CachedMembership: objectio.NewReadFilterMembership(nil, member),
+			UnSortedSearchFunc: func(containers.Vectors) []int64 {
+				t.Fatal("supported membership must not expose cached vectors to the legacy callback")
+				return nil
+			},
+		}
+		require.NotNil(t, filter.CachedMembership)
+		require.NoError(t, BlockDataRead(ctx, &info, &blockReadTestDataSource{deleted: []uint64{2}},
+			columns, columnTypes, 1, timestamp.Timestamp{}, []uint16{0}, []types.Type{typesByColumn[0]},
+			filter, top, 0, "entries", output, containers.NewVectors(len(columns)+1), queryMP, fs))
+		assertOutput(t, output, []int64{0, 4}, []float64{100, 9})
+		require.Equal(t, uint64(5), top.Stats.StorageFilterInputRows)
+		require.Equal(t, uint64(2), top.Stats.StorageFilterOutputRows)
 	})
 	t.Run("exact membership all tombstoned", func(t *testing.T) {
 		output := newOutput()

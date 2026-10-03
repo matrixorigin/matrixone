@@ -19,6 +19,7 @@ import (
 	stdcmp "cmp"
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -75,6 +76,17 @@ func ConstructBlockPKFilter(
 	// second key column. Keep both cases on the legacy owned-vector path.
 	if !isFakePK && bf == nil {
 		readFilter.CachedSearch = buildCachedPKSearch(basePKFilter)
+	}
+	if !isFakePK && readFilter.ExactMembership {
+		var pkSearch *objectio.ReadFilterSearch
+		if basePKFilter.Valid {
+			pkSearch = buildCachedPKSearch(basePKFilter)
+		}
+		if !basePKFilter.Valid || pkSearch != nil {
+			if member, ok := bf.(docfilter.MembershipFilter); ok {
+				readFilter.CachedMembership = objectio.NewReadFilterMembership(pkSearch, member)
+			}
+		}
 	}
 	if basePKFilter.cleanup != nil {
 		readFilter.Cleanup = basePKFilter.cleanup.run
