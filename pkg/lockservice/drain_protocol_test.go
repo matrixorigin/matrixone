@@ -598,17 +598,19 @@ func TestInstanceBoundDrainCanonicalClient(t *testing.T) {
 			require.NoError(t, err)
 			return resp
 		}
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion99)
-		for _, method := range []pb.Method{pb.Method_BeginDrain, pb.Method_QueryDrain} {
-			req := acquireRequest()
-			req.Method = method
-			resp, err := client.Send(ctx, req)
-			releaseRequest(req)
-			require.Nil(t, resp)
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+		for _, version := range []int64{defines.MORPCVersion99, defines.MORPCVersion100, defines.MORPCVersion101, defines.MORPCVersion102, defines.MORPCVersion103, defines.MORPCVersion104} {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+			for _, method := range []pb.Method{pb.Method_BeginDrain, pb.Method_QueryDrain} {
+				req := acquireRequest()
+				req.Method = method
+				resp, err := client.Send(ctx, req)
+				releaseRequest(req)
+				require.Nil(t, resp)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+			}
 		}
 		require.Zero(t, calls.Load(), "unsupported methods reached transport")
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion100)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion105)
 		const id = "1234567890123456789canonical"
 		a.registerService(id)
 		resp := send(pb.Method_BeginDrain, func(req *pb.Request) {
