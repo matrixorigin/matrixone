@@ -840,30 +840,27 @@ func TestDecimal128AddSub(t *testing.T) {
 }
 
 func TestDecimal64MulDiv(t *testing.T) {
-	x := Decimal64(rand.Int() >> 32)
-	z := x
-	err := error(nil)
-	y := Decimal64(rand.Int() >> 32)
-	x, _, err = x.Mul(y, 0, 0)
-	if err == nil {
-		x, _, err = x.Div(y, 12, 0)
-	}
-	if err != nil || x != z {
-		panic("Decimal64MulDiv wrong")
-	}
+	result, scale, err := Decimal64(1073741823).Mul(1073741821, 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, Decimal64(1152921500311879683), result)
+	require.Equal(t, int32(0), scale)
+	result, scale, err = Decimal64(1152921500311879683).Div(1073741821, 12, 0)
+	require.NoError(t, err)
+	require.Equal(t, Decimal64(1073741823), result)
+	require.Equal(t, int32(12), scale)
 }
 func TestDecimal128MulDiv(t *testing.T) {
-	x := Decimal128{uint64(rand.Int()) >> 8, 0}
-	z := x
-	err := error(nil)
-	y := Decimal128{uint64(rand.Int()), uint64(rand.Int() & 255)}
-	x, _, err = x.Mul(y, 0, 0)
-	if err == nil {
-		x, _, err = x.Div(y, 12, 0)
-	}
-	if err != nil || x != z {
-		panic("Decimal128MulDiv wrong")
-	}
+	left := Decimal128{B0_63: 18014398509481983}
+	right := Decimal128{B0_63: 1, B64_127: 64}
+	product := Decimal128{B0_63: 18014398509481983, B64_127: 1152921504606846912}
+	result, scale, err := left.Mul(right, 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, product, result)
+	require.Equal(t, int32(0), scale)
+	result, scale, err = product.Div(right, 12, 0)
+	require.NoError(t, err)
+	require.Equal(t, left, result)
+	require.Equal(t, int32(12), scale)
 }
 
 func TestDecimal128OverDiv(t *testing.T) {
