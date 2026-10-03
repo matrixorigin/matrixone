@@ -4364,6 +4364,26 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			args[idx] = expr
 		}
 	}
+	if preparedBindingState(b.GetContext()) != nil {
+		var err error
+		if isIfNull && len(args) == 3 {
+			results := []*Expr{args[2], args[1]}
+			results, err = bindPreparedCommonValueResultArguments(b.GetContext(), results, nil)
+			if err == nil {
+				// CASE lowering must not hide IFNULL's fixed result peer from
+				// the existing common-value parameter conversion contract.
+				results, err = bindPreparedConsumerArguments(b.GetContext(), "coalesce", results)
+			}
+			if err == nil {
+				args = []*Expr{args[0], results[1], results[0]}
+			}
+		} else if isPreparedCommonValueFunction(name) {
+			args, err = bindPreparedCommonValueResultArguments(b.GetContext(), args, nil)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
 	preparedNumericPeer := false
 	preparedNumericProvenance := false
 	if b.builder != nil && b.builder.isPrepareStatement &&
@@ -7407,6 +7427,10 @@ func bindFuncExprImplByPlanExpr(
 							return checkNoNeedCast(ctx, otherType, colType, otherExpr)
 						}
 						return integerDomainFits(otherOid, colOid)
+					}
+
+					if colOid.IsInteger() && otherOid.IsDecimal() {
+						return exactDecimalIntegerFits(otherExpr, colOid)
 					}
 
 					// For float types, check if conversion is safe

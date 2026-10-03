@@ -2029,10 +2029,6 @@ func (n *noopTxnOperator) Debug(ctx context.Context, ops []txnpb.TxnRequest) (*r
 	return nil, nil
 }
 
-func (n *noopTxnOperator) NextSequence() uint64 {
-	return 0
-}
-
 func (n *noopTxnOperator) EnterRunSqlWithTokenAndSQL(_ context.CancelFunc, _ string) uint64 {
 	return 1
 }

@@ -48,6 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	icebergio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
+	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -98,7 +99,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -1440,44 +1440,17 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		v2.TxnStatementCompileQueryHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	c.execType = sequenceExecType(
-		plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare), qry)
+	c.execType = vectorQueryExecType(sequenceExecType(
+		plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare), qry), qry)
 
 	c.cnList, err = c.scheduleQueryWorkers()
 	if err != nil {
 		return nil, err
 	}
-	if err = c.constrainIntegerDomainWorkers(qry); err != nil {
+	if err = c.constrainRequiredIVFWorkers(qry); err != nil {
 		return nil, err
 	}
-	if err = c.constrainConvBasesWorkers(qry); err != nil {
-		return nil, err
-	}
-	if err = c.constrainIntegerArgumentWorkers(qry); err != nil {
-		return nil, err
-	}
-	if err = c.constrainPreparedPrecisionWorkers(qry); err != nil {
-		return nil, err
-	}
-	if err = c.constrainDecimalDivisionWorkers(qry); err != nil {
-		return nil, err
-	}
-	if err = c.constrainTemporalResultWorkers(qry); err != nil {
-		return nil, err
-	}
-	if err = c.constrainIPFunctionWorkers(qry); err != nil {
-		return nil, err
-	}
-	if err = c.constrainStringNumericResultWorkers(qry); err != nil {
-		return nil, err
-	}
-	if err = c.constrainBoundedConditionalStringWorkers(qry); err != nil {
-		return nil, err
-	}
-	if err = c.constrainSpatialDistanceWorkers(qry); err != nil {
-		return nil, err
-	}
-	if err = c.constrainDecimalLiteralWorkers(qry); err != nil {
+	if err = c.constrainRemoteExpressionWorkers(qry); err != nil {
 		return nil, err
 	}
 	if err = c.constrainStrictWriteWorkers(); err != nil {
@@ -1905,7 +1878,11 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		return c.compileLimit(node, []*Scope{rs}), nil
 	}
 
-	if nodeHasLocalRuntimeFilter(node) {
+	qualifiedIVFIndex := false
+	if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_INDEX {
+		_, _, _, qualifiedIVFIndex = plan2.RequiredIVFPlacement(c.pn.GetQuery())
+	}
+	if nodeHasLocalRuntimeFilter(node) || qualifiedIVFIndex {
 		// This is deliberately after the literal LIMIT 0 shortcut. The flat
 		// logical plan retains pruned descendants, while topology validation must
 		// cover only local-filter nodes whose physical subtree was constructed.
@@ -2138,6 +2115,10 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileSort(node, ss)
 		return ss, nil
+	case plan.Node_VECTOR_QUERY_TOP:
+		return c.compileVectorQueryTop(step, node, nodes, curNodeIdx)
+	case plan.Node_VECTOR_QUERY_SOURCE:
+		return c.compileVectorQuerySource(node)
 	case plan.Node_ADAPTIVE_TOP:
 		if len(node.Children) < 2 || len(node.Children) > 3 || node.Limit == nil {
 			return nil, moerr.NewInternalErrorNoCtx("invalid adaptive top plan")
@@ -3985,13 +3966,6 @@ func (c *Compile) compileExternScanArrowRecordBatchFanout(
 	return scopes, nil
 }
 
-type icebergDataFileScopeShard struct {
-	node      engine.Node
-	fileList  []string
-	fileSize  []int64
-	dataTasks []*pipeline.IcebergDataFileTask
-}
-
 type icebergExternalScanRuntime struct {
 	dataTasks            []*pipeline.IcebergDataFileTask
 	deleteTasks          []*pipeline.IcebergDeleteFileTask
@@ -4174,7 +4148,7 @@ func s3ParamOptions(option []string, s3 *tree.S3Parameter) []string {
 	return out
 }
 
-func (c *Compile) compileExternScanIcebergFileFanout(
+func (c *Compile) compileExternScanIcebergCoordinator(
 	node *plan.Node,
 	param *tree.ExternParam,
 	runtime icebergExternalScanRuntime,
@@ -4185,35 +4159,21 @@ func (c *Compile) compileExternScanIcebergFileFanout(
 	shardParam := new(tree.ExternParam)
 	*shardParam = *param
 	shardParam.Parallel = false
-	return c.compileExternScanIcebergShard(node, shardParam, runtime, icebergDataFileScopeShard{
-		node:      engine.Node{Addr: c.addr, Mcpu: 1},
-		fileList:  fileList,
-		fileSize:  fileSize,
-		dataTasks: runtime.dataTasks,
-	}, strictSqlMode)
-}
 
-func (c *Compile) compileExternScanIcebergShard(
-	node *plan.Node,
-	param *tree.ExternParam,
-	runtime icebergExternalScanRuntime,
-	shard icebergDataFileScopeShard,
-	strictSqlMode bool,
-) ([]*Scope, error) {
 	ss := make([]*Scope, 1)
-	ss[0] = c.constructScopeForExternal(shard.node.Addr, param.Parallel)
+	ss[0] = c.constructScopeForExternal(c.addr, shardParam.Parallel)
 	ss[0].NodeInfo.Mcpu = 1
 	ss[0].IsLoad = true
 
 	currentFirstFlag := c.anal.isFirst
 	op := constructExternal(
-		node, param, c.proc.Ctx,
-		shard.fileList, shard.fileSize,
-		makeWholeFileOffsets(len(shard.fileList)),
+		node, shardParam, c.proc.Ctx,
+		fileList, fileSize,
+		makeWholeFileOffsets(len(fileList)),
 		strictSqlMode,
-		c.arrowExecutionScope(node, param),
+		c.arrowExecutionScope(node, shardParam),
 	)
-	if err := attachIcebergRuntimeToExternal(c.proc.Ctx, op, runtime, shard.dataTasks); err != nil {
+	if err := attachIcebergRuntimeToExternal(c.proc.Ctx, op, runtime, runtime.dataTasks); err != nil {
 		return nil, err
 	}
 	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
@@ -4595,58 +4555,6 @@ func splitHiveFileShards(fileList []string, fileSize []int64, nodes []engine.Nod
 	return nonEmpty
 }
 
-func splitIcebergDataFileShards(tasks []*pipeline.IcebergDataFileTask, nodes []engine.Node) []icebergDataFileScopeShard {
-	if len(tasks) == 0 || len(nodes) == 0 {
-		return nil
-	}
-	shardCount := len(nodes)
-	if shardCount > len(tasks) {
-		shardCount = len(tasks)
-	}
-	shards := make([]icebergDataFileScopeShard, shardCount)
-	loads := make([]int64, shardCount)
-	for i := range shards {
-		shards[i].node = nodes[i]
-	}
-
-	indices := make([]int, len(tasks))
-	for i := range indices {
-		indices[i] = i
-	}
-	slices.SortStableFunc(indices, func(leftIdx, rightIdx int) int {
-		left := icebergDataTaskLoad(tasks[leftIdx])
-		right := icebergDataTaskLoad(tasks[rightIdx])
-		if left != right {
-			return cmp.Compare(right, left)
-		}
-		return cmp.Compare(tasks[leftIdx].FilePath, tasks[rightIdx].FilePath)
-	})
-
-	for _, taskIdx := range indices {
-		shardIdx := 0
-		for i := 1; i < shardCount; i++ {
-			if loads[i] < loads[shardIdx] ||
-				(loads[i] == loads[shardIdx] && len(shards[i].dataTasks) < len(shards[shardIdx].dataTasks)) {
-				shardIdx = i
-			}
-		}
-		task := tasks[taskIdx]
-		shards[shardIdx].dataTasks = append(shards[shardIdx].dataTasks, task)
-		shards[shardIdx].fileList = append(shards[shardIdx].fileList, task.FilePath)
-		size := task.FileSize
-		shards[shardIdx].fileSize = append(shards[shardIdx].fileSize, size)
-		loads[shardIdx] += icebergDataTaskLoad(task)
-	}
-
-	nonEmpty := shards[:0]
-	for _, shard := range shards {
-		if len(shard.dataTasks) > 0 {
-			nonEmpty = append(nonEmpty, shard)
-		}
-	}
-	return nonEmpty
-}
-
 func compactIcebergDataTasks(tasks []*pipeline.IcebergDataFileTask) []*pipeline.IcebergDataFileTask {
 	if len(tasks) == 0 {
 		return nil
@@ -4658,19 +4566,6 @@ func compactIcebergDataTasks(tasks []*pipeline.IcebergDataFileTask) []*pipeline.
 		}
 	}
 	return out
-}
-
-func icebergDataTaskLoad(task *pipeline.IcebergDataFileTask) int64 {
-	if task == nil {
-		return 1
-	}
-	if task.FileSize > 0 {
-		return task.FileSize
-	}
-	if task.RecordCount > 0 {
-		return task.RecordCount
-	}
-	return 1
 }
 
 func icebergDataTaskFiles(tasks []*pipeline.IcebergDataFileTask) ([]string, []int64) {
@@ -5390,6 +5285,9 @@ func (c *Compile) compileTableFunction(node *plan.Node, ss []*Scope) ([]*Scope, 
 			return c.compileSingleTableFunction(node)
 		}
 	}
+	if planplugin.TableFuncRequiresCoordinator(node.TableDef.TblFunc.Name) {
+		ss = []*Scope{c.newMergeScope(ss)}
+	}
 	for i := range ss {
 		op := constructTableFunction(node, c.pn.GetQuery())
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
@@ -5473,9 +5371,12 @@ func (c *Compile) compileVectorIndexScan(node *plan.Node) ([]*Scope, error) {
 	if txnOp := c.proc.GetTxnOperator(); txnOp != nil {
 		workspace = txnOp.GetWorkspace()
 	}
+	vectorID, _, _, qualified := plan2.RequiredIVFPlacement(c.pn.GetQuery())
+	required := requiredVectorMembership(node)
+	distributedPRE := required && qualified && vectorID == node.NodeId
 	if c.execType == plan2.ExecTypeAP_MULTICN && len(c.cnList) > 1 &&
 		(workspace == nil || workspace.Readonly()) &&
-		(node.Stats == nil || !node.Stats.ForceOneCN) && !requiredVectorMembership(node) {
+		((node.Stats == nil || !node.Stats.ForceOneCN) && !required || distributedPRE) {
 		nodes = make(engine.Nodes, len(c.cnList))
 		for i := range c.cnList {
 			nodes[i] = engine.Node{
@@ -5486,9 +5387,16 @@ func (c *Compile) compileVectorIndexScan(node *plan.Node) ([]*Scope, error) {
 				CNIDX: int32(i),
 			}
 		}
-		stable, err := remoteWorkersSupportProtocol(c.proc, nodes, defines.MORPCVersion96)
+		version := defines.MORPCVersion96
+		if distributedPRE {
+			version = defines.MORPCVersion103
+		}
+		stable, err := remoteWorkersSupportProtocol(c.proc, nodes, version)
 		if err != nil {
 			return nil, err
+		}
+		if distributedPRE && !stable {
+			return nil, moerr.NewNotSupportedNoCtx("required IVF worker capability changed after placement")
 		}
 		if stable {
 			// Keep the query's coordinator-first list intact for other scans.
@@ -6330,8 +6238,11 @@ func (c *Compile) compileTpMinusAndIntersect(node *plan.Node, left []*Scope, rig
 }
 
 func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
-	if nodeType == plan.Node_MINUS_ALL {
-		// Multiplicity subtraction needs one owner of every occurrence from both
+	if c.IsSingleScope(left) && c.IsSingleScope(right) {
+		return c.compileTpMinusAndIntersect(node, left, right, nodeType)
+	}
+	if nodeType == plan.Node_MINUS_ALL || nodeType == plan.Node_INTERSECT_ALL {
+		// Multiset operations need one owner of every occurrence from both
 		// inputs. The existing parallel set-op path broadcasts rows to workers;
 		// using it here would multiply the result cardinality.
 		return c.compileTpMinusAndIntersect(
@@ -6340,9 +6251,6 @@ func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right
 			[]*Scope{c.newMergeScope(right)},
 			nodeType,
 		)
-	}
-	if c.IsSingleScope(left) && c.IsSingleScope(right) {
-		return c.compileTpMinusAndIntersect(node, left, right, nodeType)
 	}
 	rs := c.newScopeListOnSingleWorkerStage(2, int(node.Stats.Dop))
 	rs = c.newScopeListForMinusAndIntersect(rs, left, right, node)
@@ -6372,23 +6280,8 @@ func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right
 			rs[i].setRootOperator(arg)
 			arg.AppendChild(merge1)
 		}
-	case plan.Node_INTERSECT_ALL:
-		for i := range rs {
-			merge0 := rs[i].RootOp.(*merge.Merge)
-			merge0.WithPartial(0, 1)
-			merge1 := merge.NewArgument().WithPartial(1, 2)
-			arg := intersectall.NewArgument()
-			arg.KeyExprs = node.PhysicalEqualityKeyList
-			arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-			rs[i].setRootOperator(arg)
-			arg.AppendChild(merge1)
-		}
 	}
-	if nodeType != plan.Node_INTERSECT_ALL {
-		return c.mergeDistinctSetScopes(node, rs, currentFirstFlag)
-	}
-	c.anal.isFirst = false
-	return rs
+	return c.mergeDistinctSetScopes(node, rs, currentFirstFlag)
 }
 
 func (c *Compile) compileAdaptiveTop(node *plan.Node, candidates [][]*Scope) []*Scope {
@@ -7329,9 +7222,11 @@ func hasMultiScopeGroup(groups [][]*Scope) bool {
 }
 
 func (c *Compile) compileApply(node, right *plan.Node, rs []*Scope) []*Scope {
-	if right.GetTableDef().GetTblFunc().GetName() == "mo_view_columns" {
-		// Description owns an origin-session compiler context. Candidate scans
-		// may be distributed, but binding must run serially on the origin CN.
+	name := right.GetTableDef().GetTblFunc().GetName()
+	if name == "mo_view_columns" || planplugin.TableFuncRequiresCoordinator(name) {
+		// Session-bound functions and index writers must use the origin process:
+		// a remote mirror workspace cannot publish writes in its transaction.
+		// Gather inputs here without changing the source scans' placement.
 		rs = []*Scope{c.newMergeScope(rs)}
 	}
 
@@ -8951,7 +8846,7 @@ func (c *Compile) appendPrescopes(parents, children []*Scope, stageNodes engine.
 func (c *Compile) compilePreInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
-		preInsertArg, err := constructPreInsert(nodes, node, c.e, c.proc)
+		preInsertArg, err := constructPreInsert(c.anal.qry.Nodes, node, c.e, c.proc)
 		if err != nil {
 			return nil, err
 		}
@@ -11006,8 +10901,6 @@ func (c *Compile) fatalLog(retry int, err error) {
 			moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) {
 		return
 	}
-
-	txnTrace.GetService(c.proc.GetService()).TxnError(c.proc.GetTxnOperator(), err)
 
 	v, ok := moruntime.ServiceRuntime(c.proc.GetService()).
 		GetGlobalVariables(moruntime.EnableCheckInvalidRCErrors)

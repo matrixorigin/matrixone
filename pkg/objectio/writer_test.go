@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -615,4 +616,56 @@ func TestWriterUsesExactSerializedSize(t *testing.T) {
 	require.Equal(t, expected.Bytes(), arena.serialBuf.Bytes())
 	require.Equal(t, expected.Len(), arena.serialPeak)
 	require.Less(t, arena.serialBuf.Cap(), vec.Size())
+}
+
+func TestBoolZoneMapPersistence(t *testing.T) {
+	ctx := context.Background()
+	service, err := fileservice.NewFileService(ctx, fileservice.Config{Name: defines.LocalFileServiceName, Backend: "DISK", DataDir: t.TempDir(), Cache: fileservice.DisabledCacheConfig}, nil)
+	require.NoError(t, err)
+	defer service.Close(ctx)
+	mp := mpool.MustNewZero()
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_bool.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int8.ToType())
+	defer bat.Clean(mp)
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []bool{false, true}, nil, mp))
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []int8{0, 1}, nil, mp))
+	bat.SetRowCount(2)
+	writer, err := NewObjectWriterSpecial(WriterNormal, "bool.blk", service)
+	require.NoError(t, err)
+	writer.SetSortKeySeqnum(0)
+	for _, legacy := range []bool{true, false} {
+		block, err := writer.Write(bat)
+		require.NoError(t, err)
+		zm := index.NewZM(types.T_bool, 0)
+		if legacy {
+			index.UpdateZM(zm, []byte{0})
+		} else {
+			require.NoError(t, index.BatchUpdateZM(zm, bat.Vecs[0]))
+		}
+		require.Equal(t, !legacy, types.DecodeBool(zm.GetMaxBuf()))
+		block.ColumnMeta(0).SetZoneMap(zm)
+	}
+	_, err = writer.WriteEnd(ctx, WriteOptions{Type: WriteTS, Val: time.Now()})
+	require.NoError(t, err)
+	reader, err := NewObjectReaderWithStr("bool.blk", service)
+	require.NoError(t, err)
+	loaded, err := reader.ReadAllMeta(ctx, mp)
+	require.NoError(t, err)
+	meta, ok := loaded.DataMeta()
+	require.True(t, ok)
+	for i := uint32(0); i < 2; i++ {
+		col := meta.GetBlockMeta(i).MustGetColumn(0)
+		require.Equal(t, i == 1, types.DecodeBool(col.rawZoneMap().GetMaxBuf()), "writer must preserve physical bounds")
+		require.True(t, types.DecodeBool(col.ZoneMap().GetMaxBuf()), "reader must protect legacy bounds")
+	}
+	raw, err := reader.ReadExtent(ctx, meta.BlockHeader().ZoneMapArea())
+	require.NoError(t, err)
+	area := ZoneMapArea(raw)
+	// The existing area API exposes the block's metadata length from each index.
+	first := area.GetZoneMap(0, 0)
+	require.Len(t, first, 2*ZoneMapSize)
+	require.True(t, types.DecodeBool(first.GetMaxBuf()))
+	offset, _ := BlockIndex(raw).BlockMetaPos(0)
+	require.False(t, types.DecodeBool(ZoneMap(raw[offset:offset+ZoneMapSize]).GetMaxBuf()))
 }

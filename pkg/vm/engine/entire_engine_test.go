@@ -483,10 +483,6 @@ func (o *testOperator) TxnOptions() txn.TxnOptions {
 	panic("should not call")
 }
 
-func (o *testOperator) NextSequence() uint64 {
-	panic("should not call")
-}
-
 func (o *testOperator) EnterRunSqlWithTokenAndSQL(_ context.CancelFunc, _ string) uint64 {
 	return 1
 }

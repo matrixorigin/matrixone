@@ -28,10 +28,12 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/stage"
@@ -3262,4 +3264,128 @@ func TestGetRowSizeFromTableDefLongTextDoesNotOverflow(t *testing.T) {
 	got := GetRowSizeFromTableDef(tableDef, true)
 	require.Equal(t, float64(math.MaxInt32), got)
 	require.GreaterOrEqual(t, got, float64(0))
+}
+
+func TestNodeHasMoCtrl(t *testing.T) {
+	moCtl := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: "mo_ctl"}}}}
+	other := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: "="}}}}
+
+	require.False(t, NodeHasMoCtrl(nil))
+	require.False(t, NodeHasMoCtrl(&plan.Node{ProjectList: []*plan.Expr{other}}))
+
+	// mo_ctl in every executable position must be detected, not just ProjectList.
+	require.True(t, NodeHasMoCtrl(&plan.Node{ProjectList: []*plan.Expr{moCtl}}))
+	require.True(t, NodeHasMoCtrl(&plan.Node{FilterList: []*plan.Expr{moCtl}}))
+	require.True(t, NodeHasMoCtrl(&plan.Node{OnList: []*plan.Expr{moCtl}}))
+	require.True(t, NodeHasMoCtrl(&plan.Node{GroupBy: []*plan.Expr{moCtl}}))
+	require.True(t, NodeHasMoCtrl(&plan.Node{AggList: []*plan.Expr{moCtl}}))
+	require.True(t, NodeHasMoCtrl(&plan.Node{TblFuncExprList: []*plan.Expr{moCtl}}))
+	require.True(t, NodeHasMoCtrl(&plan.Node{Limit: moCtl}))
+	require.True(t, NodeHasMoCtrl(&plan.Node{OrderBy: []*plan.OrderBySpec{{Expr: moCtl}}}))
+	require.True(t, NodeHasMoCtrl(&plan.Node{RowsetData: &plan.RowsetData{
+		Cols: []*plan.ColData{{Data: []*plan.RowsetExpr{{Expr: moCtl}}}},
+	}}))
+	// nested inside a function argument (e.g. mo_ctl(...) IS NOT NULL)
+	require.True(t, NodeHasMoCtrl(&plan.Node{FilterList: []*plan.Expr{
+		{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: "is_not_null"}, Args: []*plan.Expr{moCtl}}}},
+	}}))
+
+	// A window entry hides the call inside an Expr_W (WinSpecList), where the pre-Expr_W traversal
+	// never looked: MAX(mo_ctl(...)) OVER () or mo_ctl(...) OVER (...) must still be detected.
+	winWith := func(spec *plan.WindowSpec) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_W{W: spec}}
+	}
+	require.True(t, NodeHasMoCtrl(&plan.Node{WinSpecList: []*plan.Expr{
+		winWith(&plan.WindowSpec{WindowFunc: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: "max"}, Args: []*plan.Expr{moCtl}}}}}),
+	}}))
+	require.True(t, NodeHasMoCtrl(&plan.Node{WinSpecList: []*plan.Expr{
+		winWith(&plan.WindowSpec{PartitionBy: []*plan.Expr{moCtl}}),
+	}}))
+	require.True(t, NodeHasMoCtrl(&plan.Node{WinSpecList: []*plan.Expr{
+		winWith(&plan.WindowSpec{OrderBy: []*plan.OrderBySpec{{Expr: moCtl}}}),
+	}}))
+	// a window with no mo_ctl, and a nil spec, must be safe and false.
+	require.False(t, NodeHasMoCtrl(&plan.Node{WinSpecList: []*plan.Expr{
+		winWith(&plan.WindowSpec{WindowFunc: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: "row_number"}}}}}),
+	}}))
+	require.False(t, HasMoCtrl(&plan.Expr{Expr: &plan.Expr_W{W: nil}}))
+}
+
+func TestExprIsZonemappableComparisonDomain(t *testing.T) {
+	for _, oid := range []types.T{types.T_char, types.T_varchar} {
+		left := &plan.Expr{Typ: plan.Type{Id: int32(oid)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+		right := &plan.Expr{Typ: left.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}}
+		expr, err := BindFuncExprImplByPlanExpr(context.Background(), "=", []*plan.Expr{left, right})
+		require.NoError(t, err)
+		require.Equal(t, oid != types.T_char, ExprIsZonemappable(context.Background(), expr))
+	}
+}
+
+func TestConstantTransposeArithmeticSemantics(t *testing.T) {
+	for _, tc := range []struct {
+		name, op                                 string
+		constantLeft, equalityReversed, overflow bool
+	}{
+		{name: "absorbed addition", op: "+"},
+		{name: "absorbed subtraction", op: "-"},
+		{name: "constant minus column", op: "-", constantLeft: true},
+		{name: "reversed equality", op: "+", equalityReversed: true},
+		{name: "integer overflow", op: "+", overflow: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cc := NewMockCompilerContext(false)
+			proc := cc.GetProcess()
+			typ := types.T_float64.ToType()
+			literal := MakePlan2Float64ConstExprWithType(1)
+			target := MakePlan2Float64ConstExprWithType(1)
+			if tc.op == "-" && !tc.constantLeft {
+				target = MakePlan2Float64ConstExprWithType(-1)
+			}
+			if tc.overflow {
+				typ = types.T_int64.ToType()
+				literal = MakePlan2Int64ConstExprWithType(1)
+				target = MakePlan2Int64ConstExprWithType(math.MaxInt64)
+			}
+			col := &plan.Expr{Typ: makePlan2Type(&typ), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+			operands := []*plan.Expr{col, literal}
+			if tc.constantLeft {
+				operands[0], operands[1] = operands[1], operands[0]
+			}
+			arithmetic, err := BindFuncExprImplByPlanExpr(proc.Ctx, tc.op, operands)
+			require.NoError(t, err)
+			operands = []*plan.Expr{arithmetic, target}
+			if tc.equalityReversed {
+				operands[0], operands[1] = operands[1], operands[0]
+			}
+			source, err := BindFuncExprImplByPlanExpr(proc.Ctx, "=", operands)
+			require.NoError(t, err)
+			normalized, err := ConstantTranspose(DeepCopyExpr(source), proc)
+			require.NoError(t, err)
+			input := batch.NewWithSize(1)
+			input.Vecs[0] = vector.NewVec(typ)
+			defer input.Clean(proc.Mp())
+			if tc.overflow {
+				require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(math.MaxInt64), false, proc.Mp()))
+				input.SetRowCount(1)
+			} else {
+				require.NoError(t, vector.AppendFixedList(input.Vecs[0], []float64{-1e-17, 0, 1e-17, 0}, []bool{false, false, false, true}, proc.Mp()))
+				input.SetRowCount(4)
+			}
+			for _, expr := range []*plan.Expr{source, normalized} {
+				executor, err := colexec.NewExpressionExecutor(proc, expr)
+				require.NoError(t, err)
+				defer executor.Free()
+				result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+				if tc.overflow {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "%v", err)
+					continue
+				}
+				require.NoError(t, err)
+				for i := 0; i < 3; i++ {
+					require.True(t, vector.GetFixedAtWithTypeCheck[bool](result, i), "row %d", i)
+				}
+				require.True(t, result.IsNull(3))
+			}
+		})
+	}
 }

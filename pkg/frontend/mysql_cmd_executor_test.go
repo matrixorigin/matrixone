@@ -7018,7 +7018,7 @@ func TestCreatePrepareStmtRestoresCurrentExecCtx(t *testing.T) {
 		return nil, moerr.NewInternalError(ctx, "stop after context check")
 	}
 
-	_, err := createPrepareStmt(currentExecCtx, ses, "select 1",
+	_, err := createPrepareStmtInSession(currentExecCtx, ses, ses, "select 1",
 		tree.NewPrepareStmt("s", &tree.Select{}), &tree.Select{})
 	require.Error(t, err)
 	require.True(t, checked)
@@ -7243,7 +7243,7 @@ func TestExecuteAnalyzeDerivedQueryRestoresResponderOnSuccess(t *testing.T) {
 	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 	txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0), nil).AnyTimes()
 	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).AnyTimes()
-	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 	ses.txnHandler.storage = eng
@@ -7320,7 +7320,7 @@ func TestExecuteAnalyzeDerivedQueryPreservesResponderProperties(t *testing.T) {
 		return 0, nil
 	}).AnyTimes()
 	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).AnyTimes()
-	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 	ses.txnHandler.storage = eng
@@ -7505,7 +7505,7 @@ func newAnalyzeHandlerTestSession(t *testing.T, ctrl *gomock.Controller) (*Sessi
 	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 	txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
 	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).AnyTimes()
-	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 	ses.txnHandler.storage = eng
@@ -9896,7 +9896,7 @@ func TestExecRequestStmtPrepareAcceptsExplainAndSetVariable(t *testing.T) {
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
-	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
 	txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
 	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 	txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
@@ -11535,4 +11535,77 @@ func TestPreparedGroupConcatFloorCapturedWithoutPhysicalCompile(t *testing.T) {
 		require.Equal(t, uint64(1024), prepared.groupConcatMaxLenFloor, "the logical prepared owner retains its original floor")
 		return nil
 	})
+}
+
+type statsAdmissionStopResponse struct {
+	Responser
+	err error
+}
+
+func (r *statsAdmissionStopResponse) RespPreMeta(*ExecCtx, any) error { return r.err }
+
+func TestOrdinaryCacheStatsAdmissionUsesGenerationBaseline(t *testing.T) {
+	for _, tc := range []struct {
+		name, sql string
+		rows      float64
+		rebuild   bool
+	}{
+		{"minor point growth", "select n_name from nation where n_nationkey=1", 129, false},
+		{"material point growth", "select n_name from nation where n_nationkey=1", 256, true},
+		{"stable range", "select n_name from nation where n_nationkey>=1", 128, false},
+		{"minor range growth", "select n_name from nation where n_nationkey>=1", 129, false},
+		{"material range growth", "select n_name from nation where n_nationkey>=1", 256, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := plan.NewMockCompilerContext(false)
+			ctx := &preparedStatsTestCompiler{preparedTestCompiler: &preparedTestCompiler{CompilerContext: base, proc: base.GetProcess()}, stats: &pbstats.StatsInfo{TableCnt: 128}}
+			ses, prepared, initialCW, ec := newPreparedExecuteEnvForSQLWithCompilerContext(t, 229, tc.sql, ctx)
+			defer prepared.Close()
+			defer initialCW.Free()
+			ses.SetDatabaseName("tpch")
+			ses.GetTxnCompileCtx().SetDatabase("tpch")
+			defer ses.GetTxnCompileCtx().Close()
+			stop := fmt.Errorf("stop after compile before result execution")
+			ec.resper = &statsAdmissionStopResponse{Responser: ses.GetResponser(), err: stop}
+			_, table, err := base.Resolve("tpch", "nation", nil)
+			require.NoError(t, err)
+			installStatsAdmissionStorage(t, ses, table, func() *pbstats.StatsInfo { return ctx.stats })
+			stmts, err := mysql.Parse(ec.reqCtx, tc.sql, 1)
+			require.NoError(t, err)
+			cached, err := plan.BuildPlan(ctx, stmts[0], false)
+			require.NoError(t, err)
+			// Supply a real captured stats count, rather than relying on the TPCH
+			// mock's default estimate, and keep the schema/snapshot checks active.
+			for _, node := range cached.GetQuery().Nodes {
+				if node.NodeType == plan0.Node_TABLE_SCAN {
+					node.Stats.TableCnt = 128
+				}
+			}
+			input := &UserInput{sql: tc.sql}
+			input.genHash()
+			ses.cachePlan(input.getHash(), stmts, []*plan0.Plan{cached})
+			defer ses.cleanCache()
+			ec.input = input
+			cws, err := GetComputationWrapper(ec, "tpch", "root", nil, ses.GetProc(), ses)
+			require.NoError(t, err)
+			require.Len(t, cws, 1)
+			cw := cws[0].(*TxnComputationWrapper)
+			defer cw.Free()
+			require.Same(t, cached, cw.Plan())
+			require.True(t, cw.planGenerationReused)
+			ec.cw, ec.cws, ec.stmt = cw, cws, cw.GetAst()
+			ctx.stats.TableCnt = tc.rows
+			err = dispatchStmt(ses, statistic.NewStatsArray(), ec)
+			require.ErrorIs(t, err, stop)
+			if tc.rebuild {
+				require.NotSame(t, cached, cw.Plan())
+				require.False(t, cw.planGenerationReused)
+				require.False(t, ses.isCached(input.getHash()))
+			} else {
+				require.Same(t, cached, cw.Plan())
+				require.True(t, cw.planGenerationReused)
+				require.True(t, ses.isCached(input.getHash()))
+			}
+		})
+	}
 }

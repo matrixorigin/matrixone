@@ -41,6 +41,14 @@ RESTORE ACCOUNT account_name FROM SNAPSHOT snapshot_name;
 DROP SNAPSHOT snapshot_name;
 ```
 
+## 部分恢复的主体身份边界
+
+数据库/表的 Snapshot 和 PITR 部分恢复保留历史创建者与所有者的身份。角色改名不会改变身份；删除后重建用户或角色、重用旧名称，不会继承历史对象的所有权。所需主体已不存在时，恢复在删除当前对象之前失败。表级恢复保留已有数据库的当前所有权。
+
+全量账户恢复会重建主体目录，并可能回拨普通主体的自增 ID。因此，从目录重建之前的快照或 PITR 时间点部分恢复普通主体拥有的对象会被拒绝，即使全量恢复正确重建了该主体，或当前主体的 ID、名称与历史值相同。错误为 `principal catalog was rebuilt; identity continuity cannot be established`，当前对象及数据保留。可使用当前目录代际内的新快照/时间点，或按需要进行全量恢复。
+
+固定身份受保护的内置角色和初始管理员有经过校验的跨代际例外；其他管理员不享有该例外。部分恢复保留当前对象授权，不复活已撤销的历史授权；全量/跨账户恢复继续使用其主体目录重建流程。
+
 ## Backup 包（`pkg/backup/`）
 
 - `BackupType` — 备份类型

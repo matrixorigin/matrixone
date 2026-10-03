@@ -20,7 +20,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -783,6 +782,16 @@ type cloneAccountResolution struct {
 	snapshot    *plan2.Snapshot
 }
 
+func shouldCheckPlainClonePrivileges(ses *Session) bool {
+	if skipDataBranchPrivilegeCheck(ses) {
+		return false
+	}
+	// Built-in administrators can clone the resolved historical source without
+	// planning a SELECT against its possibly deleted current database or UDFs.
+	// Account, system-database, and snapshot validation still belongs to CLONE.
+	return !ses.GetTenantInfo().IsAdminRole()
+}
+
 // create table x.y clone r.s {MO_TS, SNAPSHOT}
 // create table x.y clone r.s {MO_TS, SNAPSHOT} to account t
 func handleCloneTable(
@@ -925,7 +934,7 @@ func handleCloneTable(
 		bh.(*backExec).backSes.SetDatabaseName(oldDefault)
 	}()
 
-	if stmt.CreateTable.Table.SchemaName == moCatalog {
+	if isBannedDatabase(strings.ToLower(stmt.CreateTable.Table.SchemaName.String())) {
 		err = moerr.NewInternalErrorNoCtxf("cannot clone data into system database")
 		return
 	}
@@ -933,6 +942,14 @@ func handleCloneTable(
 	if opAccountId != sysAccountID && opAccountId != toAccountId {
 		err = moerr.NewInternalErrorNoCtxf("only sys can clone table to another account")
 		return
+	}
+	if resolvedAccounts == nil && shouldCheckPlainClonePrivileges(ses) {
+		_, err = authenticateDataBranchCreateTable(reqCtx, ses, &tree.DataBranchCreateTable{
+			SrcTable: stmt.SrcTable, CreateTable: stmt.CreateTable, ToAccountOpt: stmt.ToAccountOpt,
+		})
+		if err != nil {
+			return
+		}
 	}
 	if admission != nil {
 		var dag databranchutils.BranchReclaimDag
@@ -1215,6 +1232,23 @@ func handleCloneDatabaseWithSource(
 	} else if sourceErr != nil {
 		err = sourceErr
 		return
+	}
+	if resolvedSource == nil {
+		if _, systemDB := sysDatabases[strings.ToLower(source.srcResolveDBName)]; systemDB && source.opAccountId != sysAccountID {
+			err = moerr.NewInternalErrorNoCtxf("non-sys account cannot clone data from system database")
+			return
+		}
+		// Plain CLONE and DATA BRANCH authorize the same resolved source set.
+		if !skipDataBranchPrivilegeCheck(ses) {
+			if _, err = authenticateDataBranchCreateDatabase(reqCtx, ses, &tree.DataBranchCreateDatabase{CloneDatabase: *stmt}); err != nil {
+				return
+			}
+		}
+		if shouldCheckPlainClonePrivileges(ses) {
+			if _, err = authenticateDataBranchCreateDatabaseSourceTables(reqCtx, ses, &tree.DataBranchCreateDatabase{CloneDatabase: *stmt}, source); err != nil {
+				return
+			}
+		}
 	}
 	fromAccountID := source.opAccountId
 	if source.snapshot != nil && source.snapshot.Tenant != nil {
@@ -1658,24 +1692,7 @@ func tryToIncreaseTxnPhysicalTS(
 		return curTxnPhysicalTS, nil
 	}
 
-	// a slight increase added to the physical to make sure
-	// the updated ts is greater than the old txn timestamp (physical + logic)
-	curTxnPhysicalTS += int64(time.Microsecond)
-	if err = txnOp.UpdateSnapshot(ctx, timestamp.Timestamp{
-		PhysicalTime: curTxnPhysicalTS,
-	}); err != nil {
-		return
-	}
-
-	updatedPhysical = txnOp.SnapshotTS().PhysicalTime
-	if updatedPhysical <= curTxnPhysicalTS {
-		return 0, moerr.NewInternalErrorNoCtxf("try to update the snapshot ts failed in clone database")
-	}
-
-	// return a nanosecond precision
-	updatedPhysical -= int64(time.Nanosecond)
-
-	return updatedPhysical, nil
+	return databranchutils.AdvanceLineageSnapshot(ctx, txnOp)
 }
 
 func updateBranchMetaTable(

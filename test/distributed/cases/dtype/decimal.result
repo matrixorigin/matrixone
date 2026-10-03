@@ -1368,7 +1368,7 @@ SELECT CAST(NULL AS decimal(6));
 ➤ cast(null as decimal(6))[3,7,0]  𝄀
 null
 SELECT 10.0 + CAST('aaa' AS decimal(38,0));
-invalid input: aaa beyond the range, can't be converted to Decimal128(38,0).
+invalid input: "aaa" is invalid decimal string
 SELECT CAST('101010101001' AS decimal(38,0));
 ➤ cast(101010101001 as decimal(38))[3,39,0]  𝄀
 101010101001
@@ -1481,7 +1481,7 @@ INSERT INTO decimal_opt_test VALUES
 (2, 199.99, 23.45678, 200),
 (3, 299.99, 34.56789, 300);
 EXPLAIN SELECT * FROM decimal_opt_test WHERE price = 99.990000000;
-➤ TP QUERY PLAN[12,0,0]  𝄀
+➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Join  𝄀
         Join Type: INDEX  𝄀
@@ -1491,7 +1491,8 @@ Project  𝄀
               Filter Cond: (decimal_opt_test.price = 99.99)  𝄀
               Runtime Filter Probe: decimal_opt_test.id  𝄀
         ->  Index Table Scan on decimal_opt_test.idx_price [ForceOneCN]  𝄀
-              Filter Cond: prefix_eq(__mo_index_idx_col)
+              Filter Cond: prefix_eq(__mo_index_idx_col)  𝄀
+              Block Filter Cond: prefix_eq(__mo_index_idx_col)
 SELECT * FROM decimal_opt_test WHERE price = 99.990000000;
 ➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,19,0]  𝄀
 1  ¦  99.99  ¦  12.34567  ¦  100
@@ -1503,7 +1504,7 @@ Project  𝄀
 SELECT * FROM decimal_opt_test WHERE price = 99.991234567;
 ➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,19,0]
 EXPLAIN SELECT * FROM decimal_opt_test WHERE price = 99.99;
-➤ TP QUERY PLAN[12,0,0]  𝄀
+➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Join  𝄀
         Join Type: INDEX  𝄀
@@ -1513,12 +1514,13 @@ Project  𝄀
               Filter Cond: (decimal_opt_test.price = 99.99)  𝄀
               Runtime Filter Probe: decimal_opt_test.id  𝄀
         ->  Index Table Scan on decimal_opt_test.idx_price [ForceOneCN]  𝄀
-              Filter Cond: prefix_eq(__mo_index_idx_col)
+              Filter Cond: prefix_eq(__mo_index_idx_col)  𝄀
+              Block Filter Cond: prefix_eq(__mo_index_idx_col)
 SELECT * FROM decimal_opt_test WHERE price = 99.99;
 ➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,19,0]  𝄀
 1  ¦  99.99  ¦  12.34567  ¦  100
 EXPLAIN SELECT * FROM decimal_opt_test WHERE quantity = 100.000000000;
-➤ TP QUERY PLAN[12,0,0]  𝄀
+➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Join  𝄀
         Join Type: INDEX  𝄀
@@ -1528,7 +1530,8 @@ Project  𝄀
               Filter Cond: (decimal_opt_test.quantity = 100)  𝄀
               Runtime Filter Probe: decimal_opt_test.id  𝄀
         ->  Index Table Scan on decimal_opt_test.idx_quantity [ForceOneCN]  𝄀
-              Filter Cond: prefix_eq(__mo_index_idx_col)
+              Filter Cond: prefix_eq(__mo_index_idx_col)  𝄀
+              Block Filter Cond: prefix_eq(__mo_index_idx_col)
 SELECT * FROM decimal_opt_test WHERE quantity = 100.000000000;
 ➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,19,0]  𝄀
 1  ¦  99.99  ¦  12.34567  ¦  100
@@ -1551,7 +1554,7 @@ SELECT * FROM decimal_opt_test WHERE price BETWEEN 99.990000 AND 299.990000 ORDE
 2  ¦  199.99  ¦  23.45678  ¦  200  𝄀
 3  ¦  299.99  ¦  34.56789  ¦  300
 EXPLAIN SELECT * FROM decimal_opt_test WHERE price IN (99.990000, 199.990000, 299.990000);
-➤ TP QUERY PLAN[12,0,0]  𝄀
+➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Join  𝄀
         Join Type: INDEX  𝄀
@@ -1561,14 +1564,15 @@ Project  𝄀
               Filter Cond: decimal_opt_test.price in ([9999 19999 29999])  𝄀
               Runtime Filter Probe: decimal_opt_test.id  𝄀
         ->  Index Table Scan on decimal_opt_test.idx_price [ForceOneCN]  𝄀
-              Filter Cond: prefix_in(__mo_index_idx_col)
+              Filter Cond: prefix_in(__mo_index_idx_col)  𝄀
+              Block Filter Cond: prefix_in(__mo_index_idx_col)
 SELECT * FROM decimal_opt_test WHERE price IN (99.990000, 199.990000, 299.990000) ORDER BY id;
 ➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,19,0]  𝄀
 1  ¦  99.99  ¦  12.34567  ¦  100  𝄀
 2  ¦  199.99  ¦  23.45678  ¦  200  𝄀
 3  ¦  299.99  ¦  34.56789  ¦  300
 EXPLAIN SELECT * FROM decimal_opt_test WHERE amount = 12.34;
-➤ TP QUERY PLAN[12,0,0]  𝄀
+➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Join  𝄀
         Join Type: INDEX  𝄀
@@ -1578,7 +1582,8 @@ Project  𝄀
               Filter Cond: (decimal_opt_test.amount = 12.34000)  𝄀
               Runtime Filter Probe: decimal_opt_test.id  𝄀
         ->  Index Table Scan on decimal_opt_test.idx_amount [ForceOneCN]  𝄀
-              Filter Cond: prefix_eq(__mo_index_idx_col)
+              Filter Cond: prefix_eq(__mo_index_idx_col)  𝄀
+              Block Filter Cond: prefix_eq(__mo_index_idx_col)
 SELECT * FROM decimal_opt_test WHERE amount = 12.34;
 ➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,19,0]
 DELETE FROM decimal_opt_test WHERE price = 99.990000000;

@@ -18,11 +18,9 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -69,7 +67,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
@@ -87,7 +84,6 @@ const (
 	rssCacheAdmissionPressureTTL = 2 * time.Minute
 	rssCachePressureTargetOwner  = "cn-rss"
 	bootstrapRetryInterval       = 100 * time.Millisecond
-	txnTraceDirectoryKeyPrefix   = "cn-"
 )
 
 var (
@@ -300,6 +296,9 @@ func NewService(
 			morpc.WithCodecMaxBodySize(int(cfg.RPC.MaxMessageSize)),
 		),
 		morpc.WithServerLogger(srv.logger),
+		morpc.WithServerMessageReleaseFunc(func(message morpc.Message) {
+			srv.releaseMessage(message.(*pipeline.Message))
+		}),
 		morpc.WithServerGoettyOptions(
 			goetty.WithSessionRWBUfferSize(cfg.ReadBufferSize, cfg.WriteBufferSize),
 			goetty.WithSessionReleaseMsgFunc(func(v any) {
@@ -459,7 +458,7 @@ func (s *service) Start() (err error) {
 		s.lifecycle = serviceStarted
 	}()
 
-	if err = s.waitForClusterSelfReady(); err != nil {
+	if err = s.waitForClusterSelfReady(false); err != nil {
 		return err
 	}
 	if err = s.bootstrap(); err != nil {
@@ -501,26 +500,33 @@ func (s *service) Start() (err error) {
 
 	s.initSqlWriterFactory()
 
-	if err = s.startFrontendUnlessViewMetadataGenerationRevoked(); err != nil {
-		return err
-	}
 	if err = s.startUnlessViewMetadataGenerationRevoked(s.server.Start); err != nil {
 		return err
 	}
 
 	// Admission authorizes local initialization; it does not make this CN
-	// routable. Revalidate after every remote entry point is listening, then
+	// routable. SQL sockets are bound but do not yet accept connections.
+	// Revalidate after the internal remote entry points are listening, then
 	// linearize authoritative snapshot validation and ingress publication with
 	// heartbeat snapshot storage. Keep the automatic upgrade owner alive until
 	// this final handoff closes.
 	if err = s.waitForViewMetadataIngressAdmission(); err != nil {
 		return err
 	}
-	s.completeBootstrapUpgradeStartupWait()
 	if err = s.checkViewMetadataGenerationRevoked(); err != nil {
 		return err
 	}
 	s.notifyHeartbeat()
+	// Ingress advertisement needs a heartbeat and a local inventory refresh
+	// before query scheduling can use this CN. Keep SQL acceptance closed until
+	// the authoritative admission-aware snapshot contains this incarnation.
+	if err = s.waitForClusterSelfReady(true); err != nil {
+		return err
+	}
+	if err = s.startFrontendUnlessViewMetadataGenerationRevoked(); err != nil {
+		return err
+	}
+	s.completeBootstrapUpgradeStartupWait()
 
 	if err = s.checkViewMetadataGenerationRevoked(); err != nil {
 		return err
@@ -567,7 +573,7 @@ func (s *service) closeService() error {
 			s.server.Close,
 			// Pipeline handlers and the auto-increment cleanup worker can issue
 			// transactions. Drain both before closing their transaction and RPC
-			// dependencies, while keeping the trace consumer alive for final events.
+			// dependencies.
 			s.waitPipelineHandlers,
 			s.closeIncrService,
 			// Cancel and join pipeline users before retiring execution runtimes;
@@ -581,7 +587,6 @@ func (s *service) closeService() error {
 		withdrawErr := s.withdrawViewMetadataAdmission()
 		localErr := closeCNServiceSteps(
 			s.stopRPCs,
-			s.closeTxnTraceService,
 			func() error {
 				// stop I/O pipeline
 				ioutil.Stop(s.cfg.UUID)
@@ -690,17 +695,6 @@ func (s *service) closeBootstrapService() error {
 	service := s.bootstrapService
 	s.bootstrapService = nil
 	return service.Close()
-}
-
-func (s *service) closeTxnTraceService() error {
-	if s.txnTraceService == nil {
-		return nil
-	}
-	service := s.txnTraceService
-	s.txnTraceService = nil
-	service.Close()
-	runtime.ServiceRuntime(s.cfg.UUID).CompareAndDeleteGlobalVariables(runtime.TxnTraceService, service)
-	return nil
 }
 
 func (s *service) closeIncrService() error {
@@ -1109,15 +1103,9 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 		if s.cfg.Txn.PkDedupCount > 0 {
 			opts = append(opts, client.WithCheckDup())
 		}
-		traceService := trace.GetService(s.cfg.UUID)
 		opts = append(opts,
 			client.WithLockService(s.lockService),
 			client.WithNormalStateNoWait(s.cfg.Txn.NormalStateNoWait),
-			client.WithTxnOpenedCallback([]func(op client.TxnOperator){
-				func(op client.TxnOperator) {
-					traceService.TxnCreated(op)
-				},
-			}),
 		)
 		c = client.NewTxnClient(
 			s.cfg.UUID,
@@ -1389,7 +1377,6 @@ func acquireIncrLogtailReadBarrier(ctx context.Context, eng any) (timestamp.Time
 
 func (s *service) bootstrap() error {
 	s.initIncrService()
-	s.initTxnTraceService()
 
 	rt := runtime.ServiceRuntime(s.cfg.UUID)
 	s.bootstrapMu.Lock()
@@ -1415,8 +1402,6 @@ func (s *service) bootstrap() error {
 	if err := s.bootstrapService.Bootstrap(ctx); err != nil {
 		return handleBootstrapErr(ctx, err)
 	}
-
-	trace.GetService(s.cfg.UUID).EnableFlush()
 
 	if s.cfg.AutomaticUpgrade {
 		s.bootstrapUpgradeResult = make(chan error, 1)
@@ -1480,48 +1465,6 @@ func (s *service) completeBootstrapUpgradeStartupWait() {
 // service before it returns the error.
 func handleBootstrapErr(ctx context.Context, err error) error {
 	return moerr.AttachCause(ctx, err)
-}
-
-func resolveTxnTraceDataPath(rootDir, serviceID string) (string, error) {
-	if err := validateCNServiceUUID(serviceID); err != nil {
-		return "", err
-	}
-	if rootDir == "" {
-		return "", nil
-	}
-	return filepath.Join(rootDir, txnTraceDirectoryKey(serviceID)), nil
-}
-
-func txnTraceDirectoryKey(serviceID string) string {
-	// A fixed-length lowercase hash keeps the directory component below common
-	// filesystem limits while remaining stable for the same CN service ID.
-	digest := sha256.Sum256([]byte(serviceID))
-	return txnTraceDirectoryKeyPrefix + hex.EncodeToString(digest[:])
-}
-
-func (s *service) initTxnTraceService() {
-	traceDataPath, err := resolveTxnTraceDataPath(s.options.traceDataPath, s.cfg.UUID)
-	if err != nil {
-		panic(err)
-	}
-	rt := runtime.ServiceRuntime(s.cfg.UUID)
-	ts, err := trace.NewService(
-		traceDataPath,
-		s.cfg.UUID,
-		s._txnClient,
-		rt.Clock(),
-		s.sqlExecutor,
-		trace.WithEnable(s.cfg.Txn.Trace.Enable, s.cfg.Txn.Trace.Tables),
-		trace.WithBufferSize(s.cfg.Txn.Trace.BufferSize),
-		trace.WithFlushBytes(int(s.cfg.Txn.Trace.FlushBytes)),
-		trace.WithFlushDuration(s.cfg.Txn.Trace.FlushDuration.Duration),
-		trace.WithLoadToS3(!s.cfg.Txn.Trace.LoadToMO, s.etlFS),
-	)
-	if err != nil {
-		panic(err)
-	}
-	s.txnTraceService = ts
-	rt.SetGlobalVariables(runtime.TxnTraceService, s.txnTraceService)
 }
 
 // SaveProfile saves profile into etl fs

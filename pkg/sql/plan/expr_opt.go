@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"hash/fnv"
+	"math"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -117,36 +118,85 @@ func (builder *QueryBuilder) decimalFloatPeerValue(expr *plan.Expr) (float64, bo
 	return decimalFloatComparisonConstant(folded)
 }
 
-func (builder *QueryBuilder) singletonProjectedFloatValue(node *plan.Node, expr *plan.Expr) (float64, bool) {
-	column := expr.GetCol()
-	if column == nil {
-		return 0, false
+// Resolve only actual expressions from the executor's one-row dummy input.
+// The returned copy is a proof witness; callers retain the executable peer.
+func (builder *QueryBuilder) singletonProjectedPeerExpression(node *plan.Node, peer *plan.Expr) (*plan.Expr, bool) {
+	if node == nil || node.NodeType != plan.Node_JOIN {
+		return nil, false
 	}
+	projections := make(map[[2]int32]*plan.Expr)
 	for _, childID := range node.Children {
 		project := builder.qry.Nodes[childID]
-		if project.NodeType != plan.Node_PROJECT || len(project.BindingTags) != 1 ||
-			project.BindingTags[0] != column.RelPos || len(project.Children) != 1 ||
-			column.ColPos < 0 || int(column.ColPos) >= len(project.ProjectList) {
+		_, expanded := DecodeGroupingSetExpandOption(project.ExtraOptions)
+		if project.NodeType != plan.Node_PROJECT || len(project.BindingTags) != 1 || len(project.Children) != 1 ||
+			project.Limit != nil || project.Offset != nil || project.RankOption != nil || len(project.FilterList) != 0 || expanded {
 			continue
 		}
 		input := builder.qry.Nodes[project.Children[0]]
-		if input.NodeType == plan.Node_VALUE_SCAN && input.TableDef == nil &&
-			input.Limit == nil && input.Offset == nil && input.RankOption == nil {
-			candidate := project.ProjectList[column.ColPos]
-			if value, ok := builder.decimalFloatPeerValue(candidate); ok {
-				return value, true
-			}
-			if !rule.IsConstant(candidate, false) {
-				return 0, false
-			}
-			folded, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(candidate),
-				builder.compCtx.GetProcess(), false, true)
-			if err == nil {
-				return decimalFloatComparisonConstant(folded)
-			}
+		if input.NodeType != plan.Node_VALUE_SCAN || input.TableDef != nil || input.RowsetData != nil || len(input.Children) != 0 ||
+			input.Limit != nil || input.Offset != nil || input.RankOption != nil || len(input.FilterList) != 0 {
+			continue
+		}
+		for position, candidate := range project.ProjectList {
+			projections[[2]int32{project.BindingTags[0], int32(position)}] = candidate
 		}
 	}
-	return 0, false
+	var compatible func(*plan.Expr) bool
+	compatible = func(current *plan.Expr) bool {
+		if current == nil {
+			return false
+		}
+		if column := current.GetCol(); column != nil {
+			candidate := projections[[2]int32{column.RelPos, column.ColPos}]
+			return candidate != nil && isSameColumnType(current.Typ, candidate.Typ) && current.Typ.PadSpace == candidate.Typ.PadSpace
+		}
+		if fn := current.GetF(); fn != nil {
+			for _, arg := range fn.Args {
+				if !compatible(arg) {
+					return false
+				}
+			}
+		}
+		if list := current.GetList(); list != nil {
+			for _, item := range list.List {
+				if !compatible(item) {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	if !compatible(peer) {
+		return nil, false
+	}
+	resolved := replaceColumnsForExpr(DeepCopyExpr(peer), projections)
+	return resolved, function.IsStatementConstantInput(resolved)
+}
+
+func (builder *QueryBuilder) singletonProjectedFloatValue(node *plan.Node, expr *plan.Expr) (float64, bool) {
+	candidate, ok := builder.singletonProjectedPeerExpression(node, expr)
+	if !ok {
+		return 0, false
+	}
+	if value, ok := builder.decimalFloatPeerValue(candidate); ok {
+		return value, true
+	}
+	if !rule.IsConstant(candidate, false) {
+		return 0, false
+	}
+	folded, err := ConstantFold(batch.EmptyForConstFoldBatch, candidate, builder.compCtx.GetProcess(), false, true)
+	if err != nil {
+		return 0, false
+	}
+	return decimalFloatComparisonConstant(folded)
+}
+
+func (builder *QueryBuilder) preparedIntegerPeerWitness(node *plan.Node, peer *plan.Expr) (*plan.Expr, bool) {
+	if function.ContainsParameter(peer) && function.IsStatementConstantInput(peer) {
+		return peer, true
+	}
+	resolved, ok := builder.singletonProjectedPeerExpression(node, peer)
+	return resolved, ok && function.ContainsParameter(resolved)
 }
 
 func (builder *QueryBuilder) rewriteUniqueDecimalFloatComparison(node *plan.Node, expr *plan.Expr) *plan.Expr {
@@ -218,66 +268,335 @@ func (builder *QueryBuilder) rewriteUniqueDecimalFloatComparison(node *plan.Node
 	return expr
 }
 
-// Scalar subqueries can expose constants only after filter pushdown. Rewrite
-// proven numeric domains before scan statistics choose block filters.
-func (builder *QueryBuilder) rewriteNumericDomainFilters(nodeID int32) {
-	state := preparedBindingState(builder.GetContext())
-	roundEnabled := state != nil && state.selectStatement && state.hasRoundingFunction
-	var visit func(int32)
-	visit = func(id int32) {
-		node := builder.qry.Nodes[id]
-		for _, child := range node.Children {
-			visit(child)
-		}
-		if node.NodeType == plan.Node_JOIN {
-			for _, condition := range node.OnList {
-				_ = plan.VisitExprTree(condition, func(current *plan.Expr) error {
-					if rewritten := builder.rewriteUniqueDecimalFloatComparison(node, current); rewritten != current {
-						*current = *rewritten
-					}
-					return nil
-				})
-			}
-		}
-		if node.NodeType != plan.Node_TABLE_SCAN {
-			return
-		}
-		for _, filter := range node.FilterList {
-			_ = plan.VisitExprTree(filter, func(current *plan.Expr) error {
-				if rewritten := builder.rewriteUniqueDecimalFloatComparison(node, current); rewritten != current {
-					*current = *rewritten
-				}
-				if !roundEnabled {
-					return nil
-				}
-				fn := current.GetF()
-				if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "=" || len(fn.Args) != 2 {
-					return nil
-				}
-				for side := range fn.Args {
-					if isExplicitPreparedCast(fn.Args[side]) || isExplicitPreparedCast(fn.Args[1-side]) {
-						continue
-					}
-					column := comparisonCastSource(fn.Args[side])
-					value := comparisonCastSource(fn.Args[1-side])
-					if column == nil || column.GetCol() == nil || !types.T(column.Typ.Id).IsSignedInt() || value == nil {
-						continue
-					}
-					castValue, ok, err := preparedSafeRoundIntegerComparison(builder.GetContext(), DeepCopyExpr(value), column.Typ)
-					if err != nil || !ok {
-						continue
-					}
-					rewritten, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{DeepCopyExpr(column), castValue})
-					if err == nil {
-						*current = *rewritten
-					}
-					break
-				}
-				return nil
-			})
+// A small peer alone cannot authorize removing a lossy conversion of the column.
+func implicitIntegerPromotionIsExact(expr *plan.Expr) bool {
+	column := comparisonCastSource(expr)
+	if column == nil || column.GetCol() == nil || !types.T(column.Typ.Id).IsInteger() || expr.GetF().GetSyntaxExplicitCast() {
+		return false
+	}
+	castID, overload := function.DecodeOverloadID(expr.GetF().Func.Obj)
+	if castID != function.CAST || overload != 0 {
+		return false
+	}
+	target := expr.GetF().Args[1]
+	if target.GetT() == nil || target.Typ.Id != expr.Typ.Id || target.Typ.Width != expr.Typ.Width || target.Typ.Scale != expr.Typ.Scale {
+		return false
+	}
+	sourceID, targetID := types.T(column.Typ.Id), types.T(expr.Typ.Id)
+	if targetID.IsInteger() {
+		return integerDomainFits(sourceID, targetID)
+	}
+	if !targetID.IsDecimal() {
+		return false
+	}
+	precision := expr.Typ.Width
+	capacity := targetID.ToType().Width
+	if precision == 0 {
+		// Integer-to-decimal execution scales into the physical carrier. Width=0
+		// does not imply safety; the entire scaled source domain must still fit.
+		precision = capacity
+	}
+	return precision > 0 && precision <= capacity && expr.Typ.Scale >= 0 &&
+		integerDecimalDigits(sourceID) <= precision-expr.Typ.Scale
+}
+
+// Folded literals can retain their executable source in Src. Do not use an
+// execution-specific value or unresolved prepared provenance as a static proof.
+func staticIntegerComparisonPeer(expr *plan.Expr) bool {
+	if expr == nil || expr.PreparedNumeric != nil {
+		return false
+	}
+	if lit := expr.GetLit(); lit != nil {
+		return !lit.Isnull && (lit.Src == nil || staticIntegerComparisonPeer(lit.Src))
+	}
+	if expr.GetT() != nil {
+		return true
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	f, ok := function.GetFunctionByIdWithoutError(fn.Func.Obj)
+	if !ok || f.CannotFold() || f.IsRealTimeRelated() || f.IsAgg() || f.IsWin() {
+		return false
+	}
+	for _, arg := range fn.Args {
+		if !staticIntegerComparisonPeer(arg) {
+			return false
 		}
 	}
-	visit(nodeID)
+	return true
+}
+
+func (builder *QueryBuilder) rewriteNativeIntegerComparison(expr *plan.Expr) *plan.Expr {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return expr
+	}
+	name := fn.Func.ObjName
+	isList := (name == "in" || name == "not_in") && len(fn.Args) == 2 && fn.Args[1].GetList() != nil
+	isBetween := name == "between" && len(fn.Args) == 3
+	if !isList && !isBetween && (!isDecimalComparisonOperator(name) || len(fn.Args) != 2) {
+		return expr
+	}
+	for side, castColumn := range fn.Args {
+		if (isList || isBetween) && side != 0 {
+			break
+		}
+		if !implicitIntegerPromotionIsExact(castColumn) {
+			continue
+		}
+		column := comparisonCastSource(castColumn)
+		peers := []*plan.Expr{fn.Args[1-side]}
+		if isList {
+			peers = fn.Args[1].GetList().List
+		} else if isBetween {
+			peers = fn.Args[1:]
+		}
+		if len(peers) == 0 {
+			return expr
+		}
+		converted := make([]*plan.Expr, len(peers))
+		for i, peer := range peers {
+			peerID := types.T(peer.Typ.Id)
+			if !staticIntegerComparisonPeer(peer) || (!peerID.IsInteger() && !peerID.IsDecimal()) ||
+				!checkNoNeedCast(builder.GetContext(), makeTypeByPlan2Expr(peer), makeTypeByPlan2Expr(column), peer) {
+				break
+			}
+			var err error
+			converted[i], err = makePlan2CastExpr(builder.GetContext(), DeepCopyExpr(peer), column.Typ)
+			if err != nil {
+				break
+			}
+		}
+		if converted[len(converted)-1] == nil {
+			continue
+		}
+		args := make([]*plan.Expr, len(fn.Args))
+		for i, arg := range fn.Args {
+			args[i] = DeepCopyExpr(arg)
+		}
+		args[side] = DeepCopyExpr(column)
+		if isList {
+			args[1].Typ = column.Typ
+			args[1].GetList().List = converted
+		} else if isBetween {
+			copy(args[1:], converted)
+		} else {
+			args[1-side] = converted[0]
+			name = canonicalRangeOp(&plan.Function{Func: fn.Func, Args: args})
+			args = []*plan.Expr{args[side], args[1-side]}
+		}
+		rewritten, err := BindFuncExprImplByPlanExpr(builder.GetContext(), name, args)
+		if err == nil {
+			rewritten.PreparedNumeric = copyPreparedNumericMetadata(expr.PreparedNumeric)
+			return rewritten
+		}
+	}
+	return expr
+}
+
+// Rewrite scan domains after filter pushdown, before choosing block filters.
+// Rewrite JOIN domains after simple projections expose singleton peers.
+func (builder *QueryBuilder) rewriteNumericDomainFilters(nodeID int32, target plan.Node_NodeType) error {
+	var visit func(int32) error
+	visit = func(id int32) error {
+		if err := builder.checkPlanningCanceled(); err != nil {
+			return err
+		}
+		node := builder.qry.Nodes[id]
+		for _, child := range node.Children {
+			if err := visit(child); err != nil {
+				return err
+			}
+		}
+		if node.NodeType != target {
+			return nil
+		}
+		filters := node.FilterList
+		if target == plan.Node_JOIN {
+			filters = node.OnList
+		}
+		for _, filter := range filters {
+			changed := false
+			if err := plan.VisitExprTree(filter, func(current *plan.Expr) error {
+				if rewritten := builder.rewriteNativeIntegerComparison(current); rewritten != current {
+					*current = *rewritten
+					changed = true
+				}
+				if rewritten := builder.rewriteUniqueDecimalFloatComparison(node, current); rewritten != current {
+					*current = *rewritten
+					changed = true
+				}
+				rewritten, err := builder.rewritePreparedIntegerComparison(node, current)
+				if err != nil {
+					return err
+				}
+				if rewritten != current {
+					*current = *rewritten
+					changed = true
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
+			if changed && target == plan.Node_JOIN {
+				// Logical parents may still carry estimates from the old domain.
+				if err := plan.VisitExprTree(filter, func(current *plan.Expr) error {
+					current.Ndv, current.Selectivity = 0, 0
+					return nil
+				}); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	return visit(nodeID)
+}
+
+// A derived expression is proved through its actual executor result, not its
+// marker spelling. Keep that expression executable and use the vector only as
+// a witness; value-dependent planning remains owned by prepared binding.
+func (builder *QueryBuilder) rewritePreparedIntegerComparison(node *plan.Node, expr *plan.Expr) (*plan.Expr, error) {
+	state := preparedBindingState(builder.GetContext())
+	fn := expr.GetF()
+	if state != nil && state.selectStatement && fn != nil && fn.Func != nil && fn.Func.ObjName == "between" && len(fn.Args) == 3 {
+		column := comparisonCastSource(fn.Args[0])
+		_, lowerOK := builder.preparedIntegerPeerWitness(node, fn.Args[1])
+		_, upperOK := builder.preparedIntegerPeerWitness(node, fn.Args[2])
+		if column != nil && column.GetCol() != nil && types.T(column.Typ.Id).IsInteger() && !isExplicitPreparedCast(fn.Args[0]) &&
+			lowerOK && upperOK {
+			// BETWEEN may survive folding as one function. Reuse its existing
+			// comparison lowering so each bound has the same domain proof.
+			lowered, err := bindBetweenAsComparisons(builder.GetContext(), []*plan.Expr{DeepCopyExpr(fn.Args[0]), DeepCopyExpr(fn.Args[1]), DeepCopyExpr(fn.Args[2])})
+			if err != nil {
+				return expr, err
+			}
+			if err := plan.VisitExprTree(lowered, func(current *plan.Expr) error {
+				rewritten, err := builder.rewritePreparedIntegerComparison(node, current)
+				if err == nil && rewritten != current {
+					*current = *rewritten
+				}
+				return err
+			}); err != nil {
+				return expr, err
+			}
+			return lowered, nil
+		}
+	}
+	if state == nil || !state.selectStatement || fn == nil || fn.Func == nil ||
+		!isPreparedNumericComparison(fn.Func.GetObjName()) || len(fn.Args) != 2 {
+		return expr, nil
+	}
+	proc := builder.compCtx.GetProcess()
+	if proc == nil || proc.GetPrepareParams() == nil {
+		return expr, nil
+	}
+	for side, castColumn := range fn.Args {
+		column := comparisonCastSource(castColumn)
+		peer := fn.Args[1-side]
+		witness, admitted := builder.preparedIntegerPeerWitness(node, peer)
+		if isExplicitPreparedCast(castColumn) || column == nil || column.GetCol() == nil ||
+			!types.T(column.Typ.Id).IsInteger() || !makeTypeByPlan2Expr(peer).IsNumeric() ||
+			!admitted {
+			continue
+		}
+		state.valueDependent = true
+		vec, free, warned, err := rule.EvaluateConstantExpression(proc, witness, batch.EmptyForConstFoldBatch)
+		if err != nil {
+			if free != nil {
+				free()
+			}
+			if isStatementConversionError(err) {
+				continue
+			}
+			return expr, err
+		}
+		// The evaluator owns the witness even when admission fails.
+		converted, ok, err := func() (*plan.Expr, bool, error) {
+			defer free()
+			if warned || vec == nil || vec.Length() == 0 || vec.IsConstNull() || vec.GetNulls().Contains(0) {
+				return nil, false, nil
+			}
+			spelling, ok := numericComparisonWitness(vec)
+			if !ok || !integerComparisonMappingIsExact(makeTypeByPlan2Expr(column), makeTypeByPlan2Expr(castColumn), spelling) {
+				return nil, false, nil
+			}
+			_, exact, err := preparedComparisonExactIntegerExpr(builder.GetContext(), spelling, column.Typ)
+			if err != nil || !exact {
+				return nil, false, err
+			}
+			converted, err := makePlan2CastExpr(builder.GetContext(), DeepCopyExpr(peer), column.Typ)
+			return converted, err == nil, err
+		}()
+		if err != nil {
+			return expr, err
+		}
+		if !ok {
+			continue
+		}
+		args := make([]*plan.Expr, 2)
+		args[side], args[1-side] = DeepCopyExpr(column), converted
+		name := canonicalRangeOp(&plan.Function{Func: fn.Func, Args: args})
+		rewritten, err := BindFuncExprImplByPlanExpr(builder.GetContext(), name, []*plan.Expr{args[side], args[1-side]})
+		return rewritten, err
+	}
+	return expr, nil
+}
+
+// The comparison conversion must preserve the column domain independently of
+// whether this execution's peer happens to produce an integer.
+func integerComparisonMappingIsExact(column, domain types.Type, spelling string) bool {
+	switch {
+	case domain.Oid.IsInteger():
+		return integerDomainFits(column.Oid, domain.Oid)
+	case domain.Oid.IsDecimal():
+		required, ok := function.InferNumericParameterType([]types.Type{column, domain}, nil)
+		return ok && domain.Width >= required.Width && domain.Scale == required.Scale && domain.Oid.TypeLen() >= required.Oid.TypeLen()
+	case domain.Oid.IsFloat():
+		value, err := strconv.ParseFloat(spelling, 64)
+		limit := float64((1 << 53) - 1)
+		if domain.Oid == types.T_float32 {
+			limit = (1 << 24) - 1
+		}
+		return err == nil && !math.IsNaN(value) && !math.IsInf(value, 0) && math.Trunc(value) == value && value >= -limit && value <= limit
+	default:
+		return false
+	}
+}
+
+func numericComparisonWitness(vec *vector.Vector) (string, bool) {
+	switch vec.GetType().Oid {
+	case types.T_int8:
+		return strconv.FormatInt(int64(vector.GetFixedAtNoTypeCheck[int8](vec, 0)), 10), true
+	case types.T_int16:
+		return strconv.FormatInt(int64(vector.GetFixedAtNoTypeCheck[int16](vec, 0)), 10), true
+	case types.T_int32:
+		return strconv.FormatInt(int64(vector.GetFixedAtNoTypeCheck[int32](vec, 0)), 10), true
+	case types.T_int64:
+		return strconv.FormatInt(vector.GetFixedAtNoTypeCheck[int64](vec, 0), 10), true
+	case types.T_uint8:
+		return strconv.FormatUint(uint64(vector.GetFixedAtNoTypeCheck[uint8](vec, 0)), 10), true
+	case types.T_uint16:
+		return strconv.FormatUint(uint64(vector.GetFixedAtNoTypeCheck[uint16](vec, 0)), 10), true
+	case types.T_uint32:
+		return strconv.FormatUint(uint64(vector.GetFixedAtNoTypeCheck[uint32](vec, 0)), 10), true
+	case types.T_uint64:
+		return strconv.FormatUint(vector.GetFixedAtNoTypeCheck[uint64](vec, 0), 10), true
+	case types.T_float32:
+		return strconv.FormatFloat(float64(vector.GetFixedAtNoTypeCheck[float32](vec, 0)), 'g', -1, 32), true
+	case types.T_float64:
+		return strconv.FormatFloat(vector.GetFixedAtNoTypeCheck[float64](vec, 0), 'g', -1, 64), true
+	case types.T_decimal64:
+		return vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, 0).Format(vec.GetType().Scale), true
+	case types.T_decimal128:
+		return vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, 0).Format(vec.GetType().Scale), true
+	case types.T_decimal256:
+		return vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, 0).Format(vec.GetType().Scale), true
+	default:
+		return "", false
+	}
 }
 
 // collectCompositePartBlockFilters preserves zonemappable predicates on the

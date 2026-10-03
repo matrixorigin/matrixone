@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"math/big"
 	"strconv"
 	"strings"
 	"testing"
@@ -34,6 +35,74 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func TestIntegerCeilFloorCheckedBoundaries(t *testing.T) {
+	// big.Int supplies an independent mathematical result, including values
+	// outside the registered integer return type.
+	oracle := func(x *big.Int, digits int64, ceil bool) *big.Int {
+		if digits >= 0 {
+			return new(big.Int).Set(x)
+		}
+		exponent := int64(21)
+		if digits > -21 {
+			exponent = -digits
+		}
+		scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(exponent), nil)
+		q, r := new(big.Int), new(big.Int)
+		q.QuoRem(x, scale, r)
+		if ceil && r.Sign() > 0 {
+			q.Add(q, big.NewInt(1))
+		} else if !ceil && r.Sign() < 0 {
+			q.Sub(q, big.NewInt(1))
+		}
+		return q.Mul(q, scale)
+	}
+	digits := []int64{math.MinInt64, -20, -19, -18, -1, 0, math.MaxInt64}
+	for _, x := range []int64{math.MinInt64, math.MinInt64 + 10, -20, -11, -10, -1, 0, 1, 10, 11, 20, math.MaxInt64 - 10, math.MaxInt64} {
+		for _, d := range digits {
+			for _, ceil := range []bool{false, true} {
+				want := oracle(big.NewInt(x), d, ceil)
+				var got int64
+				var failure any
+				func() {
+					defer func() { failure = recover() }()
+					if ceil {
+						got = ceilInt64(x, d)
+					} else {
+						got = floorInt64(x, d)
+					}
+				}()
+				if want.IsInt64() {
+					require.Nil(t, failure, "x=%d digits=%d ceil=%v", x, d, ceil)
+					require.Equal(t, want.Int64(), got)
+				} else {
+					err, ok := failure.(error)
+					require.True(t, ok)
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange))
+				}
+			}
+		}
+	}
+	for _, x := range []uint64{0, 1, 10, 11, 10000000000000000000, math.MaxUint64 - 10, math.MaxUint64} {
+		for _, d := range digits {
+			want := oracle(new(big.Int).SetUint64(x), d, true)
+			var got uint64
+			var failure any
+			func() {
+				defer func() { failure = recover() }()
+				got = ceilUint64(x, d)
+			}()
+			if want.IsUint64() {
+				require.Nil(t, failure, "x=%d digits=%d", x, d)
+				require.Equal(t, want.Uint64(), got)
+			} else {
+				err, ok := failure.(error)
+				require.True(t, ok)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange))
+			}
+		}
+	}
+}
 
 func TestTimestampWindowBoundarySequenceSteps(t *testing.T) {
 	zone, err := time.LoadLocation("America/New_York")
@@ -2536,161 +2605,6 @@ func TestDateAddNormal(t *testing.T) {
 	}
 }
 
-// TestDateStringAddOverflow tests that DateStringAdd throws error when overflow occurs
-// This is the actual path used by SQL: date_add('2000-01-01', interval 8000 year)
-func TestDateStringAddOverflow(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	// Test case: date_add with string input and large year interval that causes overflow
-	// date_add('2000-01-01', interval 8000 year) should throw error
-	startDateStr := "2000-01-01"
-	largeInterval := int64(8000) // 8000 years, will cause overflow
-
-	// Create input vectors
-	ivecs := make([]*vector.Vector, 3)
-	var err error
-	ivecs[0], err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(startDateStr), 1, proc.Mp())
-	require.NoError(t, err)
-	ivecs[1], err = vector.NewConstFixed(types.T_int64.ToType(), largeInterval, 1, proc.Mp())
-	require.NoError(t, err)
-	ivecs[2], err = vector.NewConstFixed(types.T_int64.ToType(), int64(types.Year), 1, proc.Mp())
-	require.NoError(t, err)
-
-	// Create result vector - should be VARCHAR type (string)
-	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
-
-	// Initialize result vector before calling DateStringAdd
-	err = result.PreExtendAndReset(1)
-	require.NoError(t, err)
-
-	// Call DateStringAdd - should return NULL (MySQL behavior: overflow returns NULL)
-	err = DateStringAdd(ivecs, result, proc, 1, nil)
-	require.NoError(t, err, "DateStringAdd with overflow should return NULL, not error")
-
-	// Verify result is NULL
-	v := result.GetResultVector()
-	strParam := vector.GenerateFunctionStrParameter(v)
-	_, null := strParam.GetStrValue(0)
-	require.True(t, null, "Result should be NULL for overflow")
-
-	// Cleanup
-	for _, v := range ivecs {
-		if v != nil {
-			v.Free(proc.Mp())
-		}
-	}
-	if result != nil {
-		result.Free()
-	}
-}
-
-// TestDateStringAddNegativeYearOverflow tests that date_add with negative YEAR interval causing year < 1 returns NULL
-func TestDateStringAddNegativeYearOverflow(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	// Test case: date_add("1997-12-31 23:59:59",INTERVAL -100000 YEAR) should return NULL
-	startDateStr := "1997-12-31 23:59:59"
-	largeNegativeInterval := int64(-100000) // -100000 years, will cause year < 1
-
-	// Create input vectors
-	ivecs := make([]*vector.Vector, 3)
-	var err error
-	ivecs[0], err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(startDateStr), 1, proc.Mp())
-	require.NoError(t, err)
-	ivecs[1], err = vector.NewConstFixed(types.T_int64.ToType(), largeNegativeInterval, 1, proc.Mp())
-	require.NoError(t, err)
-	ivecs[2], err = vector.NewConstFixed(types.T_int64.ToType(), int64(types.Year), 1, proc.Mp())
-	require.NoError(t, err)
-
-	// Create result vector
-	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
-
-	// Initialize result vector
-	err = result.PreExtendAndReset(1)
-	require.NoError(t, err)
-
-	// Call DateStringAdd - should return NULL (MySQL behavior)
-	err = DateStringAdd(ivecs, result, proc, 1, nil)
-	require.NoError(t, err, "DateStringAdd with negative YEAR causing year < 1 should return NULL")
-
-	// Verify result is NULL
-	v := result.GetResultVector()
-	strParam := vector.GenerateFunctionStrParameter(v)
-	_, null := strParam.GetStrValue(0)
-	require.True(t, null, "Result should be NULL for year < 1")
-
-	// Cleanup
-	for _, v := range ivecs {
-		if v != nil {
-			v.Free(proc.Mp())
-		}
-	}
-	if result != nil {
-		result.Free()
-	}
-}
-
-// TestDateStringAddVeryLargeInterval tests that date_add with very large interval values returns NULL
-func TestDateStringAddVeryLargeInterval(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	testCases := []struct {
-		name     string
-		interval int64
-		unit     types.IntervalType
-	}{
-		{"Very large SECOND", 9223372036854775806, types.Second},
-		{"Very large MINUTE", 9223372036854775806, types.Minute},
-		{"Very large HOUR", 9223372036854775806, types.Hour},
-		{"Very large negative SECOND", -9223372036854775806, types.Second},
-		{"Very large negative MINUTE", -9223372036854775806, types.Minute},
-		{"Very large negative HOUR", -9223372036854775806, types.Hour},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			startDateStr := "1995-01-05"
-
-			// Create input vectors
-			ivecs := make([]*vector.Vector, 3)
-			var err error
-			ivecs[0], err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(startDateStr), 1, proc.Mp())
-			require.NoError(t, err)
-			ivecs[1], err = vector.NewConstFixed(types.T_int64.ToType(), tc.interval, 1, proc.Mp())
-			require.NoError(t, err)
-			ivecs[2], err = vector.NewConstFixed(types.T_int64.ToType(), int64(tc.unit), 1, proc.Mp())
-			require.NoError(t, err)
-
-			// Create result vector
-			result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
-
-			// Initialize result vector
-			err = result.PreExtendAndReset(1)
-			require.NoError(t, err)
-
-			// Call DateStringAdd - should return NULL (MySQL behavior: very large interval returns NULL)
-			err = DateStringAdd(ivecs, result, proc, 1, nil)
-			require.NoError(t, err, "DateStringAdd with very large interval should return NULL, not error")
-
-			// Verify result is NULL
-			v := result.GetResultVector()
-			strParam := vector.GenerateFunctionStrParameter(v)
-			_, null := strParam.GetStrValue(0)
-			require.True(t, null, "Result should be NULL for very large interval")
-
-			// Cleanup
-			for _, v := range ivecs {
-				if v != nil {
-					v.Free(proc.Mp())
-				}
-			}
-			if result != nil {
-				result.Free()
-			}
-		})
-	}
-}
-
 // TestTimestampAddOverflowReturnsNull tests that TIMESTAMPADD returns NULL when overflow occurs
 // This matches MySQL behavior where TIMESTAMPADD overflow returns NULL (different from date_add)
 func TestTimestampAddOverflowReturnsNull(t *testing.T) {
@@ -2727,102 +2641,6 @@ func TestTimestampAddOverflowReturnsNull(t *testing.T) {
 	// Check result is NULL
 	resultVec := result.GetResultVector()
 	require.True(t, resultVec.GetNulls().Contains(0), "TimestampAddString overflow should return NULL")
-
-	// Cleanup
-	for _, v := range ivecs {
-		if v != nil {
-			v.Free(proc.Mp())
-		}
-	}
-	if result != nil {
-		result.Free()
-	}
-}
-
-// TestDateStringAddOverflowNegativeMonth tests that DateStringAdd throws error when MONTH interval causes year out of range
-func TestDateStringAddOverflowNegativeMonth(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	// Test case: date_add with string input and large negative MONTH interval that causes year < 1
-	// date_add('1997-12-31', INTERVAL -120000 MONTH) should throw error
-	// Calculation: 1997 + (-120000)/12 = 1997 - 10000 = -8003 < 1
-	startDateStr := "1997-12-31 23:59:59"
-	largeNegativeInterval := int64(-120000) // -120000 months, will cause year < 1
-
-	// Create input vectors
-	ivecs := make([]*vector.Vector, 3)
-	var err error
-	ivecs[0], err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(startDateStr), 1, proc.Mp())
-	require.NoError(t, err)
-	ivecs[1], err = vector.NewConstFixed(types.T_int64.ToType(), largeNegativeInterval, 1, proc.Mp())
-	require.NoError(t, err)
-	ivecs[2], err = vector.NewConstFixed(types.T_int64.ToType(), int64(types.Month), 1, proc.Mp())
-	require.NoError(t, err)
-
-	// Create result vector - should be VARCHAR type (string)
-	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
-
-	// Initialize result vector before calling DateStringAdd
-	err = result.PreExtendAndReset(1)
-	require.NoError(t, err)
-
-	// Call DateStringAdd - should return NULL (MySQL behavior: year < 1 returns NULL)
-	err = DateStringAdd(ivecs, result, proc, 1, nil)
-	require.NoError(t, err, "DateStringAdd with negative MONTH causing year < 1 should return NULL")
-
-	// Verify result is NULL
-	v := result.GetResultVector()
-	strParam := vector.GenerateFunctionStrParameter(v)
-	_, null := strParam.GetStrValue(0)
-	require.True(t, null, "Result should be NULL for year < 1")
-
-	// Cleanup
-	for _, v := range ivecs {
-		if v != nil {
-			v.Free(proc.Mp())
-		}
-	}
-	if result != nil {
-		result.Free()
-	}
-}
-
-// TestDateStringAddOverflowNegativeQuarter tests that DateStringAdd throws error when QUARTER interval causes year out of range
-func TestDateStringAddOverflowNegativeQuarter(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	// Test case: date_add with string input and large negative QUARTER interval that causes year < 1
-	// date_add('1997-12-31', INTERVAL -40000 QUARTER) should throw error
-	// Calculation: 1997 + (-40000*3)/12 = 1997 - 10000 = -8003 < 1
-	startDateStr := "1997-12-31 23:59:59"
-	largeNegativeInterval := int64(-40000) // -40000 quarters, will cause year < 1
-
-	// Create input vectors
-	ivecs := make([]*vector.Vector, 3)
-	var err error
-	ivecs[0], err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(startDateStr), 1, proc.Mp())
-	require.NoError(t, err)
-	ivecs[1], err = vector.NewConstFixed(types.T_int64.ToType(), largeNegativeInterval, 1, proc.Mp())
-	require.NoError(t, err)
-	ivecs[2], err = vector.NewConstFixed(types.T_int64.ToType(), int64(types.Quarter), 1, proc.Mp())
-	require.NoError(t, err)
-
-	// Create result vector - should be VARCHAR type (string)
-	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
-
-	// Initialize result vector before calling DateStringAdd
-	err = result.PreExtendAndReset(1)
-	require.NoError(t, err)
-
-	// Call DateStringAdd - should return NULL (MySQL behavior: year < 1 returns NULL)
-	err = DateStringAdd(ivecs, result, proc, 1, nil)
-	require.NoError(t, err, "DateStringAdd with negative QUARTER causing year < 1 should return NULL")
-
-	// Verify result is NULL
-	v := result.GetResultVector()
-	strParam := vector.GenerateFunctionStrParameter(v)
-	_, null := strParam.GetStrValue(0)
-	require.True(t, null, "Result should be NULL for year < 1")
 
 	// Cleanup
 	for _, v := range ivecs {
@@ -3763,95 +3581,108 @@ func TestParseBaseIntegerPrefixEdgeCases(t *testing.T) {
 	})
 }
 
-func initFormatTestCase() []tcTemp {
-	format := `%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U %u %V %v %a %W %w %X %x %Y %y %%`
-
-	d1, _ := types.ParseDatetime("2010-01-07 23:12:34.12345", 6)
-	r1 := `Jan January 01 1 7th 07 7 007 23 11 12 PM 11:12:34 PM 23:12:34 34 123450 01 01 01 01 Thu Thursday 4 2010 2010 2010 10 %`
-
-	d2, _ := types.ParseDatetime("2012-12-21 23:12:34.123456", 6)
-	r2 := "Dec December 12 12 21st 21 21 356 23 11 12 PM 11:12:34 PM 23:12:34 34 123456 51 51 51 51 Fri Friday 5 2012 2012 2012 12 %"
-
-	d3, _ := types.ParseDatetime("0001-01-01 00:00:00.123456", 6)
-	r3 := `Jan January 01 1 1st 01 1 001 0 12 00 AM 12:00:00 AM 00:00:00 00 123456 00 00 53 01 Mon Monday 1 0000 0001 0001 01 %`
-
-	d4, _ := types.ParseDatetime("2016-09-3 00:59:59.123456", 6)
-	r4 := `Sep September 09 9 3rd 03 3 247 0 12 59 AM 12:59:59 AM 00:59:59 59 123456 35 35 35 35 Sat Saturday 6 2016 2016 2016 16 %`
-
-	return []tcTemp{
-		{
-			info: "test format",
-			typ:  types.T_datetime,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_datetime.ToType(),
-					[]types.Datetime{d1},
-					[]bool{false}),
-				NewFunctionTestConstInput(types.T_varchar.ToType(),
-					[]string{format},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{r1},
-				[]bool{false}),
-		},
-		{
-			info: "test format",
-			typ:  types.T_datetime,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_datetime.ToType(),
-					[]types.Datetime{d2},
-					[]bool{false}),
-				NewFunctionTestConstInput(types.T_varchar.ToType(),
-					[]string{format},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{r2},
-				[]bool{false}),
-		},
-		{
-			info: "test format",
-			typ:  types.T_datetime,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_datetime.ToType(),
-					[]types.Datetime{d3},
-					[]bool{false}),
-				NewFunctionTestConstInput(types.T_varchar.ToType(),
-					[]string{format},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{r3},
-				[]bool{false}),
-		},
-		{
-			info: "test format",
-			typ:  types.T_datetime,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_datetime.ToType(),
-					[]types.Datetime{d4},
-					[]bool{false}),
-				NewFunctionTestConstInput(types.T_varchar.ToType(),
-					[]string{format},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{r4},
-				[]bool{false}),
-		},
-	}
+type dateFormatPair struct {
+	datetime, expected string
 }
 
-func TestFormat(t *testing.T) {
-	testCases := initFormatTestCase()
+type dateFormatScenario struct {
+	name, format string
+	pairs        [4]dateFormatPair
+}
 
-	// do the test work.
+var dateFormatScenarios = []dateFormatScenario{
+	{name: "all_tokens", format: `%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U %u %V %v %a %W %w %X %x %Y %y %%`, pairs: [4]dateFormatPair{
+		{"2010-01-07 23:12:34.12345", `Jan January 01 1 7th 07 7 007 23 11 12 PM 11:12:34 PM 23:12:34 34 123450 01 01 01 01 Thu Thursday 4 2010 2010 2010 10 %`},
+		{"2012-12-21 23:12:34.123456", "Dec December 12 12 21st 21 21 356 23 11 12 PM 11:12:34 PM 23:12:34 34 123456 51 51 51 51 Fri Friday 5 2012 2012 2012 12 %"},
+		{"0001-01-01 00:00:00.123456", `Jan January 01 1 1st 01 1 001 0 12 00 AM 12:00:00 AM 00:00:00 00 123456 00 00 53 01 Mon Monday 1 0000 0001 0001 01 %`},
+		{"2016-09-3 00:59:59.123456", `Sep September 09 9 3rd 03 3 247 0 12 59 AM 12:59:59 AM 00:59:59 59 123456 35 35 35 35 Sat Saturday 6 2016 2016 2016 16 %`},
+	}},
+	{name: "comma_datetime", format: `%Y,%m,%d %H:%i:%s`, pairs: [4]dateFormatPair{
+		{"2010-01-07 23:12:34.12345", `2010,01,07 23:12:34`},
+		{"2012-12-21 23:12:34.123456", "2012,12,21 23:12:34"},
+		{"2021-01-01 00:00:00.123456", `2021,01,01 00:00:00`},
+		{"2016-09-3 00:59:59.123456", `2016,09,03 00:59:59`},
+	}},
+	{name: "dash_date", format: `%Y-%m-%d`, pairs: [4]dateFormatPair{
+		{"2010-01-07 23:12:34.12345", `2010-01-07`},
+		{"2012-12-21 23:12:34.123456", "2012-12-21"},
+		{"2021-01-01 00:00:00.123456", `2021-01-01`},
+		{"2016-09-3 00:59:59.123456", `2016-09-03`},
+	}},
+	{name: "slash_date", format: `%Y/%m/%d`, pairs: [4]dateFormatPair{
+		{"2010-01-07 23:12:34.12345", `2010/01/07`},
+		{"2012-12-21 23:12:34.123456", "2012/12/21"},
+		{"2021-01-01 00:00:00.123456", `2021/01/01`},
+		{"2016-09-3 00:59:59.123456", `2016/09/03`},
+	}},
+	{name: "dash_datetime", format: `%Y-%m-%d %H:%i:%s`, pairs: [4]dateFormatPair{
+		{"2010-01-07 23:12:34.12345", `2010-01-07 23:12:34`},
+		{"2012-12-21 23:12:34.123456", "2012-12-21 23:12:34"},
+		{"2021-01-01 00:00:00.123456", `2021-01-01 00:00:00`},
+		{"2016-09-3 00:59:59.123456", `2016-09-03 00:59:59`},
+	}},
+	{name: "slash_datetime", format: `%Y/%m/%d %H:%i:%s`, pairs: [4]dateFormatPair{
+		{"2010-01-07 23:12:34.12345", `2010/01/07 23:12:34`},
+		{"2012-12-21 23:12:34.123456", "2012/12/21 23:12:34"},
+		{"2021-01-01 00:00:00.123456", `2021/01/01 00:00:00`},
+		{"2016-09-3 00:59:59.123456", `2016/09/03 00:59:59`},
+	}},
+}
+
+// UTs need each literal pair once; benchmarks retain their original population.
+func initDateFormatTestCases(tb testing.TB, scenario dateFormatScenario, caseCount, rowCount int) []tcTemp {
+	tb.Helper()
+	dates := make([]types.Datetime, len(scenario.pairs))
+	for i, pair := range scenario.pairs {
+		var err error
+		dates[i], err = types.ParseDatetime(pair.datetime, 6)
+		require.NoError(tb, err)
+	}
+	cases := make([]tcTemp, caseCount)
+	for i := range cases {
+		values := make([]types.Datetime, rowCount)
+		nulls := make([]bool, rowCount)
+		results := make([]string, rowCount)
+		resultNulls := make([]bool, rowCount)
+		for row := range values {
+			pair := row % len(scenario.pairs)
+			values[row] = dates[pair]
+			results[row] = scenario.pairs[pair].expected
+		}
+		cases[i] = tcTemp{
+			info: scenario.name,
+			typ:  types.T_datetime,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(), values, nulls),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{scenario.format}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, results, resultNulls),
+		}
+	}
+	return cases
+}
+
+func TestDateFormat(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	for _, tc := range testCases {
-		fcTC := NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, DateFormat)
-		s, info := fcTC.Run()
-		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	t.Cleanup(func() {
+		native, heap := proc.Mp().CurrNB(), proc.Mp().OnHeapCurrNB()
+		proc.Free()
+		require.Zero(t, native, "DateFormat fixture retains native allocations")
+		require.Zero(t, heap, "DateFormat fixture retains Go-heap ownership")
+	})
+	for _, scenario := range dateFormatScenarios {
+		t.Run(scenario.name, func(t *testing.T) {
+			tc := initDateFormatTestCases(t, scenario, 1, 4)[0]
+			testCase := NewFunctionTestCase(proc, tc.inputs, tc.expect, DateFormat)
+			t.Cleanup(func() {
+				testCase.result.Free()
+				for _, parameter := range testCase.parameters {
+					parameter.Free(proc.Mp())
+				}
+			})
+			ok, info := testCase.Run()
+			require.True(t, ok, info)
+		})
 	}
 }
 
@@ -3864,6 +3695,12 @@ func TestDateFormatUsesPerRowFormat(t *testing.T) {
 	}
 
 	proc := testutil.NewProcess(t)
+	t.Cleanup(func() {
+		native, heap := proc.Mp().CurrNB(), proc.Mp().OnHeapCurrNB()
+		proc.Free()
+		require.Zero(t, native, "DateFormat fixture retains native allocations")
+		require.Zero(t, heap, "DateFormat fixture retains Go-heap ownership")
+	})
 	caseWithRows := NewFunctionTestCase(proc,
 		[]FunctionTestInput{
 			NewFunctionTestInput(types.T_datetime.ToType(), dates, nil),
@@ -3872,6 +3709,12 @@ func TestDateFormatUsesPerRowFormat(t *testing.T) {
 		NewFunctionTestResult(types.T_varchar.ToType(), false,
 			[]string{"2020", "02", "2022-03-04"}, nil),
 		DateFormat)
+	t.Cleanup(func() {
+		caseWithRows.result.Free()
+		for _, parameter := range caseWithRows.parameters {
+			parameter.Free(proc.Mp())
+		}
+	})
 	ok, info := caseWithRows.Run()
 	require.True(t, ok, info)
 
@@ -3883,6 +3726,12 @@ func TestDateFormatUsesPerRowFormat(t *testing.T) {
 		NewFunctionTestResult(types.T_varchar.ToType(), false,
 			[]string{"2020", "", "04"}, []bool{false, true, false}),
 		DateFormat)
+	t.Cleanup(func() {
+		caseWithNullFormat.result.Free()
+		for _, parameter := range caseWithNullFormat.parameters {
+			parameter.Free(proc.Mp())
+		}
+	})
 	ok, info = caseWithNullFormat.Run()
 	require.True(t, ok, info)
 
@@ -3894,6 +3743,12 @@ func TestDateFormatUsesPerRowFormat(t *testing.T) {
 		NewFunctionTestResult(types.T_varchar.ToType(), false,
 			[]string{"2020", "", "04"}, []bool{false, true, false}),
 		DateFormat).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}})
+	t.Cleanup(func() {
+		caseWithSelection.result.Free()
+		for _, parameter := range caseWithSelection.parameters {
+			parameter.Free(proc.Mp())
+		}
+	})
 	ok, info = caseWithSelection.Run()
 	require.True(t, ok, info)
 }
@@ -3902,6 +3757,12 @@ func TestDateFormatZeroDatetimeMatchesMySQL(t *testing.T) {
 	valid, err := types.ParseDatetime("2024-01-01 00:00:00", 0)
 	require.NoError(t, err)
 	proc := testutil.NewProcess(t)
+	t.Cleanup(func() {
+		native, heap := proc.Mp().CurrNB(), proc.Mp().OnHeapCurrNB()
+		proc.Free()
+		require.Zero(t, native, "DateFormat fixture retains native allocations")
+		require.Zero(t, heap, "DateFormat fixture retains Go-heap ownership")
+	})
 
 	for _, tc := range []struct {
 		name       string
@@ -3991,6 +3852,12 @@ func TestDateFormatZeroDatetimeMatchesMySQL(t *testing.T) {
 				NewFunctionTestResult(types.T_varchar.ToType(), false, tc.expected, tc.expectNull),
 				DateFormat,
 			)
+			t.Cleanup(func() {
+				testCase.result.Free()
+				for _, parameter := range testCase.parameters {
+					parameter.Free(proc.Mp())
+				}
+			})
 			succeed, info := testCase.Run()
 			require.True(t, succeed, info)
 		})
@@ -11426,16 +11293,16 @@ func TestGeometryDistanceHelpersRejectMalformedSlices(t *testing.T) {
 		{
 			name: "point to polygon requires three points",
 			run: func() error {
-				_, err := pointDistanceToPolygon(geometryPoint2D{x: 0, y: 0}, []geometryPoint2D{{x: 0, y: 0}, {x: 1, y: 1}})
+				_, err := pointDistanceToPolygonGeometry(geometryPoint2D{x: 0, y: 0}, geometryPolygon2D{outer: []geometryPoint2D{{x: 0, y: 0}, {x: 1, y: 1}}})
 				return err
 			},
 		},
 		{
 			name: "linestring to polygon validates both sides",
 			run: func() error {
-				_, err := lineStringDistanceToPolygon(
+				_, err := lineStringDistanceToPolygonGeometry(
 					[]geometryPoint2D{{x: 0, y: 0}},
-					[]geometryPoint2D{{x: 0, y: 0}, {x: 1, y: 0}, {x: 0, y: 1}},
+					geometryPolygon2D{outer: []geometryPoint2D{{x: 0, y: 0}, {x: 1, y: 0}, {x: 0, y: 1}}},
 				)
 				return err
 			},
@@ -11443,9 +11310,9 @@ func TestGeometryDistanceHelpersRejectMalformedSlices(t *testing.T) {
 		{
 			name: "polygon to polygon requires three points each",
 			run: func() error {
-				_, err := polygonDistanceToPolygon(
-					[]geometryPoint2D{{x: 0, y: 0}, {x: 1, y: 0}, {x: 0, y: 1}},
-					[]geometryPoint2D{{x: 0, y: 0}, {x: 1, y: 1}},
+				_, err := polygonDistanceToPolygonGeometry(
+					geometryPolygon2D{outer: []geometryPoint2D{{x: 0, y: 0}, {x: 1, y: 0}, {x: 0, y: 1}}},
+					geometryPolygon2D{outer: []geometryPoint2D{{x: 0, y: 0}, {x: 1, y: 1}}},
 				)
 				return err
 			},
@@ -13522,497 +13389,6 @@ func TestTimestampDiffDateTimestamp(t *testing.T) {
 	})
 }
 
-// TestDateStringAddMicrosecondPrecision tests that DateStringAdd returns 6-digit precision for MICROSECOND interval
-// and returns string type (varchar) matching the input type
-func TestDateStringAddMicrosecondPrecision(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	// Test case: date_add('2022-07-01 10:20:30.123456', interval 1 microsecond)
-	// Expected: '2022-07-01 10:20:30.123457' (6 digits, not 9)
-	startDateStr := "2022-07-01 10:20:30.123456"
-	interval := int64(1) // 1 microsecond
-
-	// Create input vectors
-	ivecs := make([]*vector.Vector, 3)
-	var err error
-	ivecs[0], err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(startDateStr), 1, proc.Mp())
-	require.NoError(t, err)
-	ivecs[1], err = vector.NewConstFixed(types.T_int64.ToType(), interval, 1, proc.Mp())
-	require.NoError(t, err)
-	ivecs[2], err = vector.NewConstFixed(types.T_int64.ToType(), int64(types.MicroSecond), 1, proc.Mp())
-	require.NoError(t, err)
-
-	// Create result vector - should be VARCHAR type (string)
-	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
-
-	// Initialize result vector
-	err = result.PreExtendAndReset(1)
-	require.NoError(t, err)
-
-	// Call DateStringAdd
-	err = DateStringAdd(ivecs, result, proc, 1, nil)
-	require.NoError(t, err)
-
-	// Verify result type is VARCHAR
-	v := result.GetResultVector()
-	require.Equal(t, types.T_varchar, v.GetType().Oid, "Result type should be VARCHAR")
-
-	// Verify result value
-	strParam := vector.GenerateFunctionStrParameter(v)
-	resultStr, null := strParam.GetStrValue(0)
-	require.False(t, null, "Result should not be null")
-	require.Equal(t, "2022-07-01 10:20:30.123457", string(resultStr), "Result should have 6-digit precision, not 9")
-
-	// Cleanup
-	for _, v := range ivecs {
-		if v != nil {
-			v.Free(proc.Mp())
-		}
-	}
-	if result != nil {
-		result.Free()
-	}
-}
-
-// TestDateStringSubMicrosecondPrecision tests that DateStringSub returns 6-digit precision for MICROSECOND interval
-// and returns string type (varchar) matching the input type
-func TestDateStringSubMicrosecondPrecision(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	// Test case: date_sub('2022-07-01 10:20:30.123456', interval 1 microsecond)
-	// Expected: '2022-07-01 10:20:30.123455' (6 digits, not 9)
-	startDateStr := "2022-07-01 10:20:30.123456"
-	interval := int64(1) // 1 microsecond
-
-	// Create input vectors
-	ivecs := make([]*vector.Vector, 3)
-	var err error
-	ivecs[0], err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(startDateStr), 1, proc.Mp())
-	require.NoError(t, err)
-	ivecs[1], err = vector.NewConstFixed(types.T_int64.ToType(), interval, 1, proc.Mp())
-	require.NoError(t, err)
-	ivecs[2], err = vector.NewConstFixed(types.T_int64.ToType(), int64(types.MicroSecond), 1, proc.Mp())
-	require.NoError(t, err)
-
-	// Create result vector - should be VARCHAR type (string)
-	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
-
-	// Initialize result vector
-	err = result.PreExtendAndReset(1)
-	require.NoError(t, err)
-
-	// Call DateStringSub
-	err = DateStringSub(ivecs, result, proc, 1, nil)
-	require.NoError(t, err)
-
-	// Verify result type is VARCHAR
-	v := result.GetResultVector()
-	require.Equal(t, types.T_varchar, v.GetType().Oid, "Result type should be VARCHAR")
-
-	// Verify result value
-	strParam := vector.GenerateFunctionStrParameter(v)
-	resultStr, null := strParam.GetStrValue(0)
-	require.False(t, null, "Result should not be null")
-	require.Equal(t, "2022-07-01 10:20:30.123455", string(resultStr), "Result should have 6-digit precision, not 9")
-
-	// Cleanup
-	for _, v := range ivecs {
-		if v != nil {
-			v.Free(proc.Mp())
-		}
-	}
-	if result != nil {
-		result.Free()
-	}
-}
-
-// TestDateStringAddReturnTypeCompatibility tests that DateStringAdd returns string type matching input type
-func TestDateStringAddReturnTypeCompatibility(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	testCases := []struct {
-		name         string
-		inputType    types.T
-		expectedType types.T
-	}{
-		{"VARCHAR input returns VARCHAR", types.T_varchar, types.T_varchar},
-		{"CHAR input returns CHAR", types.T_char, types.T_char},
-		{"TEXT input returns TEXT", types.T_text, types.T_text},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			startDateStr := "2022-07-01 10:20:30.123456"
-			interval := int64(1)
-
-			// Create input vectors
-			ivecs := make([]*vector.Vector, 3)
-			var err error
-			ivecs[0], err = vector.NewConstBytes(tc.inputType.ToType(), []byte(startDateStr), 1, proc.Mp())
-			require.NoError(t, err)
-			ivecs[1], err = vector.NewConstFixed(types.T_int64.ToType(), interval, 1, proc.Mp())
-			require.NoError(t, err)
-			ivecs[2], err = vector.NewConstFixed(types.T_int64.ToType(), int64(types.MicroSecond), 1, proc.Mp())
-			require.NoError(t, err)
-
-			// Create result vector with expected return type
-			result := vector.NewFunctionResultWrapper(tc.expectedType.ToType(), proc.Mp())
-
-			// Initialize result vector
-			err = result.PreExtendAndReset(1)
-			require.NoError(t, err)
-
-			// Call DateStringAdd
-			err = DateStringAdd(ivecs, result, proc, 1, nil)
-			require.NoError(t, err)
-
-			// Verify result type matches expected type
-			v := result.GetResultVector()
-			require.Equal(t, tc.expectedType, v.GetType().Oid, "Result type should match input type")
-
-			// Cleanup
-			for _, vec := range ivecs {
-				if vec != nil {
-					vec.Free(proc.Mp())
-				}
-			}
-			if result != nil {
-				result.Free()
-			}
-		})
-	}
-}
-
-// TestDateStringAddNonMicrosecondInterval tests that DateStringAdd pads fractional seconds to 6 digits
-// MySQL behavior: DATE_ADD with string input that has fractional seconds pads zeros to 6 digits
-// (e.g., '.9999' -> '.999900', '.123456' -> '.123456')
-func TestDateStringAddNonMicrosecondInterval(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	testCases := []struct {
-		name         string
-		interval     int64
-		intervalType types.IntervalType
-		expected     string
-	}{
-		{"SECOND interval", 1, types.Second, "2022-07-01 10:20:31.123456"},
-		{"MINUTE interval", 1, types.Minute, "2022-07-01 10:21:30.123456"},
-		{"HOUR interval", 1, types.Hour, "2022-07-01 11:20:30.123456"},
-		{"DAY interval", 1, types.Day, "2022-07-02 10:20:30.123456"},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			startDateStr := "2022-07-01 10:20:30.123456"
-
-			// Create input vectors
-			ivecs := make([]*vector.Vector, 3)
-			var err error
-			ivecs[0], err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(startDateStr), 1, proc.Mp())
-			require.NoError(t, err)
-			ivecs[1], err = vector.NewConstFixed(types.T_int64.ToType(), tc.interval, 1, proc.Mp())
-			require.NoError(t, err)
-			ivecs[2], err = vector.NewConstFixed(types.T_int64.ToType(), int64(tc.intervalType), 1, proc.Mp())
-			require.NoError(t, err)
-
-			// Create result vector
-			result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
-
-			// Initialize result vector
-			err = result.PreExtendAndReset(1)
-			require.NoError(t, err)
-
-			// Call DateStringAdd
-			err = DateStringAdd(ivecs, result, proc, 1, nil)
-			require.NoError(t, err)
-
-			// Verify result
-			v := result.GetResultVector()
-			strParam := vector.GenerateFunctionStrParameter(v)
-			resultStr, null := strParam.GetStrValue(0)
-			require.False(t, null)
-			require.Equal(t, tc.expected, string(resultStr))
-
-			// Cleanup
-			for _, vec := range ivecs {
-				if vec != nil {
-					vec.Free(proc.Mp())
-				}
-			}
-			if result != nil {
-				result.Free()
-			}
-		})
-	}
-}
-
-// TestDateStringAddPadsFractionalSeconds tests that DATE_ADD pads fractional seconds to 6 digits
-// MySQL behavior: DATE_ADD('2022-02-28 23:59:59.9999', INTERVAL 1 WEEK) -> '2022-03-07 23:59:59.999900'
-func TestDateStringAddPadsFractionalSeconds(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	testCases := []struct {
-		name         string
-		input        string
-		interval     int64
-		intervalType types.IntervalType
-		expected     string
-	}{
-		{
-			name:         "4-digit fractional seconds padded to 6",
-			input:        "2022-02-28 23:59:59.9999",
-			interval:     7, // 1 week
-			intervalType: types.Day,
-			expected:     "2022-03-07 23:59:59.999900",
-		},
-		{
-			name:         "3-digit fractional seconds padded to 6",
-			input:        "2022-02-28 23:59:59.123",
-			interval:     1,
-			intervalType: types.Hour,
-			expected:     "2022-03-01 00:59:59.123000",
-		},
-		{
-			name:         "1-digit fractional seconds padded to 6",
-			input:        "2022-02-28 23:59:59.5",
-			interval:     1,
-			intervalType: types.Minute,
-			expected:     "2022-03-01 00:00:59.500000",
-		},
-		{
-			name:         "6-digit fractional seconds (no padding needed)",
-			input:        "2022-02-28 23:59:59.123456",
-			interval:     1,
-			intervalType: types.Hour,
-			expected:     "2022-03-01 00:59:59.123456",
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			// Create input vectors
-			ivecs := make([]*vector.Vector, 3)
-			var err error
-			ivecs[0], err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.input), 1, proc.Mp())
-			require.NoError(t, err)
-			ivecs[1], err = vector.NewConstFixed(types.T_int64.ToType(), tc.interval, 1, proc.Mp())
-			require.NoError(t, err)
-			ivecs[2], err = vector.NewConstFixed(types.T_int64.ToType(), int64(tc.intervalType), 1, proc.Mp())
-			require.NoError(t, err)
-
-			// Create result vector
-			result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
-
-			// Initialize result vector
-			err = result.PreExtendAndReset(1)
-			require.NoError(t, err)
-
-			// Call DateStringAdd
-			err = DateStringAdd(ivecs, result, proc, 1, nil)
-			require.NoError(t, err)
-
-			// Verify result
-			v := result.GetResultVector()
-			strParam := vector.GenerateFunctionStrParameter(v)
-			resultStr, null := strParam.GetStrValue(0)
-			require.False(t, null)
-			require.Equal(t, tc.expected, string(resultStr), "Fractional seconds should be padded to 6 digits")
-
-			// Cleanup
-			for _, vec := range ivecs {
-				if vec != nil {
-					vec.Free(proc.Mp())
-				}
-			}
-			if result != nil {
-				result.Free()
-			}
-		})
-	}
-}
-
-// TestDateStringAddDateFormatOutput tests that date_add with date-only string input
-// returns date-only format when interval doesn't affect time part
-func TestDateStringAddDateFormatOutput(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	testCases := []struct {
-		name         string
-		interval     int64
-		intervalType types.IntervalType
-		expected     string
-	}{
-		{"DAY interval", 1, types.Day, "2022-01-02"},
-		{"MONTH interval", 1, types.Month, "2022-02-01"},
-		{"YEAR interval", 1, types.Year, "2023-01-01"},
-		{"WEEK interval", 1, types.Week, "2022-01-08"},
-		{"QUARTER interval", 1, types.Quarter, "2022-04-01"},
-		{"SECOND interval", 1, types.Second, "2022-01-01 00:00:01"},
-		{"MINUTE interval", 1, types.Minute, "2022-01-01 00:01:00"},
-		{"HOUR interval", 1, types.Hour, "2022-01-01 01:00:00"},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			startDateStr := "2022-01-01" // Date-only format
-
-			// Create input vectors
-			ivecs := make([]*vector.Vector, 3)
-			var err error
-			ivecs[0], err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(startDateStr), 1, proc.Mp())
-			require.NoError(t, err)
-			ivecs[1], err = vector.NewConstFixed(types.T_int64.ToType(), tc.interval, 1, proc.Mp())
-			require.NoError(t, err)
-			ivecs[2], err = vector.NewConstFixed(types.T_int64.ToType(), int64(tc.intervalType), 1, proc.Mp())
-			require.NoError(t, err)
-
-			// Create result vector
-			result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
-
-			// Initialize result vector
-			err = result.PreExtendAndReset(1)
-			require.NoError(t, err)
-
-			// Call DateStringAdd
-			err = DateStringAdd(ivecs, result, proc, 1, nil)
-			require.NoError(t, err)
-
-			// Verify result
-			v := result.GetResultVector()
-			strParam := vector.GenerateFunctionStrParameter(v)
-			resultStr, null := strParam.GetStrValue(0)
-			require.False(t, null)
-			require.Equal(t, tc.expected, string(resultStr), "Output format should match MySQL behavior")
-
-			// Cleanup
-			for _, vec := range ivecs {
-				if vec != nil {
-					vec.Free(proc.Mp())
-				}
-			}
-			if result != nil {
-				result.Free()
-			}
-		})
-	}
-}
-
-// TestDateStringSubDateFormatOutput tests that date_sub with date-only string input
-// returns date-only format when interval doesn't affect time part
-func TestDateStringSubDateFormatOutput(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	testCases := []struct {
-		name         string
-		interval     int64
-		intervalType types.IntervalType
-		expected     string
-	}{
-		{"DAY interval", 1, types.Day, "2021-12-31"},
-		{"MONTH interval", 1, types.Month, "2021-12-01"},
-		{"YEAR interval", 1, types.Year, "2021-01-01"},
-		{"WEEK interval", 1, types.Week, "2021-12-25"},
-		{"QUARTER interval", 1, types.Quarter, "2021-10-01"},
-		{"SECOND interval", 1, types.Second, "2021-12-31 23:59:59"},
-		{"MINUTE interval", 1, types.Minute, "2021-12-31 23:59:00"},
-		{"HOUR interval", 1, types.Hour, "2021-12-31 23:00:00"},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			startDateStr := "2022-01-01" // Date-only format
-
-			// Create input vectors
-			ivecs := make([]*vector.Vector, 3)
-			var err error
-			ivecs[0], err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(startDateStr), 1, proc.Mp())
-			require.NoError(t, err)
-			ivecs[1], err = vector.NewConstFixed(types.T_int64.ToType(), tc.interval, 1, proc.Mp())
-			require.NoError(t, err)
-			ivecs[2], err = vector.NewConstFixed(types.T_int64.ToType(), int64(tc.intervalType), 1, proc.Mp())
-			require.NoError(t, err)
-
-			// Create result vector
-			result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
-
-			// Initialize result vector
-			err = result.PreExtendAndReset(1)
-			require.NoError(t, err)
-
-			// Call DateStringSub
-			err = DateStringSub(ivecs, result, proc, 1, nil)
-			require.NoError(t, err)
-
-			// Verify result
-			v := result.GetResultVector()
-			strParam := vector.GenerateFunctionStrParameter(v)
-			resultStr, null := strParam.GetStrValue(0)
-			require.False(t, null)
-			require.Equal(t, tc.expected, string(resultStr), "Output format should match MySQL behavior")
-
-			// Cleanup
-			for _, vec := range ivecs {
-				if vec != nil {
-					vec.Free(proc.Mp())
-				}
-			}
-			if result != nil {
-				result.Free()
-			}
-		})
-	}
-}
-
-// TestDateStringAddInvalidInterval tests that invalid interval strings return NULL
-func TestDateStringAddInvalidInterval(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	testCases := []struct {
-		name         string
-		intervalStr  string
-		intervalType types.IntervalType
-		dateStr      string
-	}{
-		{"Invalid YEAR_MONTH format", "9223372036854775807-02", types.Year_Month, "1995-01-05"},
-		{"Invalid YEAR_MONTH format 2", "9223372036854775808-02", types.Year_Month, "1995-01-05"},
-		{"Invalid DAY format", "9223372036854775808-02", types.Day, "1995-01-05"},
-		{"Invalid WEEK format", "9223372036854775808-02", types.Week, "1995-01-05"},
-		{"Invalid SECOND format", "9223372036854775808-02", types.Second, "1995-01-05"},
-		{"Invalid YEAR_MONTH format 3", "9223372036854775700-02", types.Year_Month, "1995-01-05"},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			// Create input vectors with invalid interval string
-			// The interval value will be math.MaxInt64 (marker for invalid parse)
-			ivecs := make([]*vector.Vector, 3)
-			var err error
-			ivecs[0], err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.dateStr), 1, proc.Mp())
-			require.NoError(t, err)
-			// Use math.MaxInt64 as marker for invalid interval
-			ivecs[1], err = vector.NewConstFixed(types.T_int64.ToType(), int64(math.MaxInt64), 1, proc.Mp())
-			require.NoError(t, err)
-			ivecs[2], err = vector.NewConstFixed(types.T_int64.ToType(), int64(tc.intervalType), 1, proc.Mp())
-			require.NoError(t, err)
-
-			// Create result vector
-			result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
-
-			// Initialize result vector
-			err = result.PreExtendAndReset(1)
-			require.NoError(t, err)
-
-			// Call DateStringAdd
-			err = DateStringAdd(ivecs, result, proc, 1, nil)
-			require.NoError(t, err)
-
-			// Verify result is NULL
-			resultVec := result.GetResultVector()
-			require.True(t, resultVec.GetNulls().Contains(0), "Result should be NULL for invalid interval")
-		})
-	}
-}
-
 // TestDatetimeAddInvalidInterval tests that invalid interval strings return NULL for DatetimeAdd
 func TestDatetimeAddInvalidInterval(t *testing.T) {
 	proc := testutil.NewProcess(t)
@@ -14279,225 +13655,52 @@ func TestDateSubWithDecimalInterval(t *testing.T) {
 	}
 }
 
-// TestDoDatetimeAddComprehensive tests doDatetimeAdd with comprehensive test cases
-func TestDoDatetimeAddComprehensive(t *testing.T) {
-	testCases := []struct {
-		name          string
-		start         types.Datetime
-		diff          int64
-		iTyp          types.IntervalType
-		expectError   bool
-		expectZero    bool
-		expectedValue types.Datetime
-		errorContains string
-	}{
-		// Test invalid interval marker
-		{
-			name:        "Invalid interval marker (math.MaxInt64)",
-			start:       types.Datetime(0),
-			diff:        math.MaxInt64,
-			iTyp:        types.Day,
-			expectError: true,
-		},
-		// Test normal success cases
-		{
-			name:          "Normal add 1 day",
-			start:         types.Datetime(0), // 1970-01-01 00:00:00
-			diff:          1,
-			iTyp:          types.Day,
-			expectError:   false,
-			expectedValue: types.Datetime(86400 * 1000000), // 1970-01-02 00:00:00
-		},
-		{
-			name:          "Normal add 1 month",
-			start:         types.Datetime(0),
-			diff:          1,
-			iTyp:          types.Month,
-			expectError:   false,
-			expectedValue: types.Datetime(2678400 * 1000000), // 1970-02-01 00:00:00
-		},
-		{
-			name:          "Normal add 1 year",
-			start:         types.Datetime(0),
-			diff:          1,
-			iTyp:          types.Year,
-			expectError:   false,
-			expectedValue: types.Datetime(31536000 * 1000000), // 1971-01-01 00:00:00
-		},
-		// Test overflow cases (diff > 0)
-		{
-			name:        "Overflow beyond maximum (diff > 0)",
-			start:       func() types.Datetime { dt, _ := types.ParseDatetime("9999-12-31 23:59:59", 6); return dt }(),
-			diff:        1,
-			iTyp:        types.Day,
-			expectError: true,
-		},
-		// Test underflow cases (diff < 0) - Year type
-		{
-			name:        "Underflow with Year type, year out of range (< MinDatetimeYear)",
-			start:       types.Datetime(0), // 1970-01-01
-			diff:        -2000,             // 1970 - 2000 = -30, out of range
-			iTyp:        types.Year,
-			expectError: true,
-		},
-		// Note: For underflow cases where year is in valid range but AddInterval fails,
-		// we need dates that are close to the minimum valid datetime (0001-01-01)
-		// but subtracting would cause underflow. However, if the year calculation
-		// stays in valid range, it should return ZeroDatetime.
-		// These cases are hard to trigger because AddInterval typically succeeds
-		// for dates within valid range. Let's test the logic paths that are reachable.
-		// Test underflow cases - Month type
-		{
-			name:        "Underflow with Month type, year out of range",
-			start:       types.Datetime(0),
-			diff:        -24000, // -24000 months = -2000 years, out of range
-			iTyp:        types.Month,
-			expectError: true,
-		},
-		// Test underflow cases - Quarter type
-		{
-			name:        "Underflow with Quarter type, year out of range",
-			start:       types.Datetime(0),
-			diff:        -8000, // -8000 quarters = -2000 years, out of range
-			iTyp:        types.Quarter,
-			expectError: true,
-		},
-		// Test large interval values that cause date overflow (should return NULL, not panic)
-		// This tests the fix for the Calendar array bounds check bug
-		{
-			name:        "Large interval value causing date overflow (1 trillion days)",
-			start:       types.Datetime(0),
-			diff:        1000000000000, // 1 trillion days ≈ 27 billion years, causes Calendar array bounds issue
-			iTyp:        types.Day,
-			expectError: true, // Should return datetimeOverflowMaxError (NULL in MySQL)
-		},
-		{
-			name:        "Large negative interval value causing date underflow",
-			start:       types.Datetime(0),
-			diff:        -1000000000000, // Very large negative number
-			iTyp:        types.Day,
-			expectError: true, // Should return datetimeOverflowMaxError (NULL in MySQL)
-		},
-		// Test time units (Hour, Minute, Second, MicroSecond) with negative intervals
-		{
-			name:        "Large negative Hour interval causing date underflow",
-			start:       types.Datetime(0),
-			diff:        -1000000000000, // Very large negative number
-			iTyp:        types.Hour,
-			expectError: true, // Should return datetimeOverflowMaxError (NULL in MySQL)
-		},
-		{
-			name:        "Large negative Minute interval causing date underflow",
-			start:       types.Datetime(0),
-			diff:        -1000000000000, // Very large negative number
-			iTyp:        types.Minute,
-			expectError: true, // Should return datetimeOverflowMaxError (NULL in MySQL)
-		},
-		{
-			name:        "Large negative Second interval causing date underflow",
-			start:       types.Datetime(0),
-			diff:        -1000000000000, // Very large negative number
-			iTyp:        types.Second,
-			expectError: true, // Should return datetimeOverflowMaxError (NULL in MySQL)
-		},
-		// Note: MicroSecond type in AddInterval directly returns without ValidDatetime check,
-		// so even large negative values will return success=true. However, our implementation
-		// checks the year after AddInterval, so large negative values that result in year < 1
-		// will return NULL.
-		{
-			name:        "Large negative MicroSecond interval causing year < 1",
-			start:       types.Datetime(0),
-			diff:        -1000000000000, // Very large negative number, will cause year < 1
-			iTyp:        types.MicroSecond,
-			expectError: true, // Should return datetimeOverflowMaxError (NULL) because year < 1
-		},
-		// Test time units with normal values
-		{
-			name:          "Normal add 1 hour",
-			start:         func() types.Datetime { dt, _ := types.ParseDatetime("2022-01-01 00:00:00", 6); return dt }(),
-			diff:          1,
-			iTyp:          types.Hour,
-			expectError:   false,
-			expectedValue: func() types.Datetime { dt, _ := types.ParseDatetime("2022-01-01 01:00:00", 6); return dt }(),
-		},
-		{
-			name:          "Normal add 1 minute",
-			start:         func() types.Datetime { dt, _ := types.ParseDatetime("2022-01-01 00:00:00", 6); return dt }(),
-			diff:          1,
-			iTyp:          types.Minute,
-			expectError:   false,
-			expectedValue: func() types.Datetime { dt, _ := types.ParseDatetime("2022-01-01 00:01:00", 6); return dt }(),
-		},
-		{
-			name:          "Normal add 1 second",
-			start:         func() types.Datetime { dt, _ := types.ParseDatetime("2022-01-01 00:00:00", 6); return dt }(),
-			diff:          1,
-			iTyp:          types.Second,
-			expectError:   false,
-			expectedValue: func() types.Datetime { dt, _ := types.ParseDatetime("2022-01-01 00:00:01", 6); return dt }(),
-		},
-		{
-			name:          "Normal add 1 microsecond",
-			start:         func() types.Datetime { dt, _ := types.ParseDatetime("2022-01-01 00:00:00", 6); return dt }(),
-			diff:          1,
-			iTyp:          types.MicroSecond,
-			expectError:   false,
-			expectedValue: func() types.Datetime { dt, _ := types.ParseDatetime("2022-01-01 00:00:00.000001", 6); return dt }(),
-		},
-		// Test Week type
-		{
-			name:          "Normal add 1 week",
-			start:         func() types.Datetime { dt, _ := types.ParseDatetime("2022-01-01 00:00:00", 6); return dt }(),
-			diff:          1,
-			iTyp:          types.Week,
-			expectError:   false,
-			expectedValue: func() types.Datetime { dt, _ := types.ParseDatetime("2022-01-08 00:00:00", 6); return dt }(),
-		},
-		{
-			name:        "Large negative Week interval causing date underflow",
-			start:       types.Datetime(0),
-			diff:        -1000000000000, // Very large negative number
-			iTyp:        types.Week,
-			expectError: true, // Should return datetimeOverflowMaxError (NULL in MySQL)
-		},
-		// Test Year_Month type (should be treated as Month)
-		{
-			name:          "Year_Month type: add 13 months (1 year 1 month)",
-			start:         func() types.Datetime { dt, _ := types.ParseDatetime("2000-01-01 00:00:00", 6); return dt }(),
-			diff:          13, // 1 year 1 month = 13 months
-			iTyp:          types.Year_Month,
-			expectError:   false,
-			expectedValue: func() types.Datetime { dt, _ := types.ParseDatetime("2001-02-01 00:00:00", 6); return dt }(),
-		},
-		{
-			name:        "Year_Month type: large negative causing year out of range",
-			start:       func() types.Datetime { dt, _ := types.ParseDatetime("2000-01-01 00:00:00", 6); return dt }(),
-			diff:        -24000, // -24000 months = -2000 years, out of range
-			iTyp:        types.Year_Month,
-			expectError: true, // Should return datetimeOverflowMaxError (NULL in MySQL)
-		},
+func TestCalendarIntervalArithmetic(t *testing.T) {
+	parse := func(text string) types.Datetime {
+		dt, err := types.ParseDatetime(text, 6)
+		require.NoError(t, err)
+		return dt
 	}
-
-	for _, tc := range testCases {
+	tests := []struct {
+		name     string
+		start    types.Datetime
+		diff     int64
+		unit     types.IntervalType
+		want     types.Datetime
+		overflow bool
+	}{
+		{"Invalid interval marker (math.MaxInt64)", types.Datetime(0), math.MaxInt64, types.Day, 0, true},
+		{"Normal add 1 day", types.Datetime(0), 1, types.Day, types.Datetime(86400 * 1000000), false},
+		{"Normal add 1 month", types.Datetime(0), 1, types.Month, types.Datetime(2678400 * 1000000), false},
+		{"Normal add 1 year", types.Datetime(0), 1, types.Year, types.Datetime(31536000 * 1000000), false},
+		{"Overflow beyond maximum (diff > 0)", parse("9999-12-31 23:59:59"), 1, types.Day, 0, true},
+		{"Underflow with Year type, year out of range (< MinDatetimeYear)", types.Datetime(0), -2000, types.Year, 0, true},
+		{"Underflow with Month type, year out of range", types.Datetime(0), -24000, types.Month, 0, true},
+		{"Underflow with Quarter type, year out of range", types.Datetime(0), -8000, types.Quarter, 0, true},
+		{"Large interval value causing date overflow (1 trillion days)", types.Datetime(0), 1000000000000, types.Day, 0, true},
+		{"Large negative interval value causing date underflow", types.Datetime(0), -1000000000000, types.Day, 0, true},
+		{"Large negative Hour interval causing date underflow", types.Datetime(0), -1000000000000, types.Hour, 0, true},
+		{"Large negative Minute interval causing date underflow", types.Datetime(0), -1000000000000, types.Minute, 0, true},
+		{"Large negative Second interval causing date underflow", types.Datetime(0), -1000000000000, types.Second, 0, true},
+		{"Large negative MicroSecond interval causing year < 1", types.Datetime(0), -1000000000000, types.MicroSecond, 0, true},
+		{"Normal add 1 hour", parse("2022-01-01 00:00:00"), 1, types.Hour, parse("2022-01-01 01:00:00"), false},
+		{"Normal add 1 minute", parse("2022-01-01 00:00:00"), 1, types.Minute, parse("2022-01-01 00:01:00"), false},
+		{"Normal add 1 second", parse("2022-01-01 00:00:00"), 1, types.Second, parse("2022-01-01 00:00:01"), false},
+		{"Normal add 1 microsecond", parse("2022-01-01 00:00:00"), 1, types.MicroSecond, parse("2022-01-01 00:00:00.000001"), false},
+		{"Normal add 1 week", parse("2022-01-01 00:00:00"), 1, types.Week, parse("2022-01-08 00:00:00"), false},
+		{"Large negative Week interval causing date underflow", types.Datetime(0), -1000000000000, types.Week, 0, true},
+		{"Year_Month type: add 13 months (1 year 1 month)", parse("2000-01-01 00:00:00"), 13, types.Year_Month, parse("2001-02-01 00:00:00"), false},
+		{"Year_Month type: large negative causing year out of range", parse("2000-01-01 00:00:00"), -24000, types.Year_Month, 0, true},
+	}
+	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			result, err := doDatetimeAdd(tc.start, tc.diff, tc.iTyp)
-
-			if tc.expectError {
-				require.Error(t, err)
-				if tc.errorContains != "" {
-					require.Contains(t, err.Error(), tc.errorContains)
-				}
-				// Check if it's the overflow error
-				require.True(t, isDatetimeOverflowMaxError(err), "Should return datetimeOverflowMaxError")
+			got, err := doCalendarInterval(tc.start, tc.diff, tc.unit, false)
+			if tc.overflow {
+				require.Equal(t, datetimeOverflowMaxError, err)
 				return
 			}
-
 			require.NoError(t, err)
-			if tc.expectZero {
-				require.Equal(t, types.ZeroDatetime, result, "Should return zero datetime")
-			} else {
-				require.Equal(t, tc.expectedValue, result, "Result should match expected value")
-			}
+			require.Equal(t, tc.want, got)
 		})
 	}
 }
@@ -14514,52 +13717,52 @@ func TestTemporalMicrosecondBoundaryOverflowIsNull(t *testing.T) {
 
 	t.Run("helpers preserve rejected domain", func(t *testing.T) {
 		for _, delta := range []int64{-1, -2} {
-			_, err = doDatetimeAdd(minDatetime, delta, types.MicroSecond)
+			_, err = doCalendarInterval(minDatetime, delta, types.MicroSecond, false)
 			require.True(t, isDatetimeOverflowMaxError(err))
 
-			_, err = doDateStringAdd("0001-01-01 00:00:00.000000", delta, types.MicroSecond)
+			_, err = doDateStringInterval("0001-01-01 00:00:00.000000", delta, types.MicroSecond, false)
 			require.True(t, isDatetimeOverflowMaxError(err))
 		}
 
-		got, err := doDatetimeAdd(minDatetime, 0, types.MicroSecond)
+		got, err := doCalendarInterval(minDatetime, 0, types.MicroSecond, false)
 		require.NoError(t, err)
 		require.Equal(t, minDatetime, got)
-		got, err = doDateStringAdd("0001-01-01 00:00:00.000000", 0, types.MicroSecond)
+		got, err = doDateStringInterval("0001-01-01 00:00:00.000000", 0, types.MicroSecond, false)
 		require.NoError(t, err)
 		require.Equal(t, minDatetime, got)
 
-		_, err = doTimestampAdd(time.UTC, maxTimestamp, 1, types.MicroSecond)
+		_, err = doTimestampInterval(time.UTC, maxTimestamp, 1, types.MicroSecond, false)
 		require.True(t, isDatetimeOverflowMaxError(err))
 	})
 
 	timestampInputs := func(t *testing.T, dateAddSyntax bool) (*process.Process, []*vector.Vector, vector.FunctionResultWrapper) {
 		t.Helper()
 		proc := testutil.NewProcess(t)
+		t.Cleanup(proc.Free)
 		proc.GetSessionInfo().TimeZone = time.UTC
 		timestampVec := vector.NewVec(types.New(types.T_timestamp, 0, 6))
+		t.Cleanup(func() { timestampVec.Free(proc.Mp()) })
 		require.NoError(t, vector.AppendFixedList(timestampVec,
 			[]types.Timestamp{maxTimestamp, ordinaryTimestamp, ordinaryTimestamp}, []bool{false, false, true}, proc.Mp()))
 		intervalVec := vector.NewVec(types.T_int64.ToType())
+		t.Cleanup(func() { intervalVec.Free(proc.Mp()) })
 		require.NoError(t, vector.AppendFixedList(intervalVec, []int64{1, 1, 1}, nil, proc.Mp()))
 
 		var parameters []*vector.Vector
 		if dateAddSyntax {
 			unitVec, makeErr := vector.NewConstFixed(types.T_int64.ToType(), int64(types.MicroSecond), 3, proc.Mp())
+			t.Cleanup(func() { unitVec.Free(proc.Mp()) })
 			require.NoError(t, makeErr)
 			parameters = []*vector.Vector{timestampVec, intervalVec, unitVec}
 		} else {
 			unitVec, makeErr := vector.NewConstBytes(types.T_varchar.ToType(), []byte("MICROSECOND"), 3, proc.Mp())
+			t.Cleanup(func() { unitVec.Free(proc.Mp()) })
 			require.NoError(t, makeErr)
 			parameters = []*vector.Vector{unitVec, intervalVec, timestampVec}
 		}
 		result := vector.NewFunctionResultWrapper(types.T_timestamp.ToType(), proc.Mp())
+		t.Cleanup(result.Free)
 		require.NoError(t, result.PreExtendAndReset(3))
-		t.Cleanup(func() {
-			for _, parameter := range parameters {
-				parameter.Free(proc.Mp())
-			}
-			result.Free()
-		})
 		return proc, parameters, result
 	}
 
@@ -14594,7 +13797,9 @@ func TestTemporalMicrosecondBoundaryOverflowIsNull(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
+			t.Cleanup(proc.Free)
 			stringVec := vector.NewVec(types.T_varchar.ToType())
+			t.Cleanup(func() { stringVec.Free(proc.Mp()) })
 			require.NoError(t, vector.AppendStringList(stringVec, []string{
 				"0001-01-01 00:00:00.000000",
 				"0001-01-01 00:00:00.000000",
@@ -14602,26 +13807,24 @@ func TestTemporalMicrosecondBoundaryOverflowIsNull(t *testing.T) {
 				"2024-01-01 00:00:00.000000",
 			}, []bool{false, false, false, true}, proc.Mp()))
 			intervalVec := vector.NewVec(types.T_int64.ToType())
+			t.Cleanup(func() { intervalVec.Free(proc.Mp()) })
 			require.NoError(t, vector.AppendFixedList(intervalVec, []int64{-1, -2, 0, 1}, nil, proc.Mp()))
 
 			var parameters []*vector.Vector
 			if test.dateAddSyntax {
 				unitVec, makeErr := vector.NewConstFixed(types.T_int64.ToType(), int64(types.MicroSecond), 4, proc.Mp())
+				t.Cleanup(func() { unitVec.Free(proc.Mp()) })
 				require.NoError(t, makeErr)
 				parameters = []*vector.Vector{stringVec, intervalVec, unitVec}
 			} else {
 				unitVec, makeErr := vector.NewConstBytes(types.T_varchar.ToType(), []byte("MICROSECOND"), 4, proc.Mp())
+				t.Cleanup(func() { unitVec.Free(proc.Mp()) })
 				require.NoError(t, makeErr)
 				parameters = []*vector.Vector{unitVec, intervalVec, stringVec}
 			}
 			result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+			t.Cleanup(result.Free)
 			require.NoError(t, result.PreExtendAndReset(4))
-			t.Cleanup(func() {
-				for _, parameter := range parameters {
-					parameter.Free(proc.Mp())
-				}
-				result.Free()
-			})
 
 			require.NoError(t, test.fn(parameters, result, proc, 4, nil))
 			resultNulls := result.GetResultVector().GetNulls()
@@ -14633,239 +13836,20 @@ func TestTemporalMicrosecondBoundaryOverflowIsNull(t *testing.T) {
 	}
 }
 
-// TestDoDateStringAddComprehensive tests doDateStringAdd with comprehensive test cases
-func TestDoDateStringAddComprehensive(t *testing.T) {
-	testCases := []struct {
-		name          string
-		startStr      string
-		diff          int64
-		iTyp          types.IntervalType
-		expectError   bool
-		expectZero    bool
-		expectedValue types.Datetime
-		errorContains string
-	}{
-		// Test invalid interval marker
-		{
-			name:        "Invalid interval marker (math.MaxInt64)",
-			startStr:    "2022-01-01",
-			diff:        math.MaxInt64,
-			iTyp:        types.Day,
-			expectError: true,
-		},
-		// Test normal success cases
-		{
-			name:          "Normal add 1 day",
-			startStr:      "2022-01-01 00:00:00",
-			diff:          1,
-			iTyp:          types.Day,
-			expectError:   false,
-			expectedValue: func() types.Datetime { dt, _ := types.ParseDatetime("2022-01-02 00:00:00", 6); return dt }(),
-		},
-		{
-			name:          "Normal add 1 month",
-			startStr:      "2022-01-01 00:00:00",
-			diff:          1,
-			iTyp:          types.Month,
-			expectError:   false,
-			expectedValue: func() types.Datetime { dt, _ := types.ParseDatetime("2022-02-01 00:00:00", 6); return dt }(),
-		},
-		// Test ParseDatetime failure - TIME format
-		{
-			name:        "TIME format string (should return NULL)",
-			startStr:    "12:34:56",
-			diff:        1,
-			iTyp:        types.Day,
-			expectError: true,
-		},
-		// Test ParseDatetime failure - invalid string
-		{
-			name:        "Invalid string format",
-			startStr:    "invalid-date",
-			diff:        1,
-			iTyp:        types.Day,
-			expectError: true,
-		},
-		// Test overflow cases (diff > 0)
-		{
-			name:        "Overflow beyond maximum (diff > 0)",
-			startStr:    "9999-12-31 23:59:59",
-			diff:        1,
-			iTyp:        types.Day,
-			expectError: true,
-		},
-		// Test underflow cases (diff < 0) - Year type
-		{
-			name:        "Underflow with Year type, year out of range",
-			startStr:    "2000-01-01 00:00:00",
-			diff:        -2000, // 2000 - 2000 = 0, out of range
-			iTyp:        types.Year,
-			expectError: true,
-		},
-		// Test underflow cases - Month type
-		{
-			name:        "Underflow with Month type, year out of range",
-			startStr:    "2000-01-01 00:00:00",
-			diff:        -24000, // -24000 months = -2000 years, out of range
-			iTyp:        types.Month,
-			expectError: true,
-		},
-		// Test underflow cases - Quarter type
-		{
-			name:        "Underflow with Quarter type, year out of range",
-			startStr:    "2000-01-01 00:00:00",
-			diff:        -8000, // -8000 quarters = -2000 years, out of range
-			iTyp:        types.Quarter,
-			expectError: true,
-		},
-		// Test large interval values that cause date overflow (should return NULL, not panic)
-		// This tests the fix for the Calendar array bounds check bug
-		{
-			name:        "Large interval value causing date overflow (1 trillion days)",
-			startStr:    "1970-01-01 00:00:00",
-			diff:        1000000000000, // 1 trillion days ≈ 27 billion years, causes Calendar array bounds issue
-			iTyp:        types.Day,
-			expectError: true, // Should return datetimeOverflowMaxError (NULL in MySQL)
-		},
-		{
-			name:        "Large negative interval value causing date underflow",
-			startStr:    "2022-01-01 00:00:00",
-			diff:        -1000000000000, // Very large negative number
-			iTyp:        types.Day,
-			expectError: true, // Should return datetimeOverflowMaxError (NULL in MySQL)
-		},
-		// Test time units (Hour, Minute, Second, MicroSecond) with negative intervals
-		{
-			name:        "Large negative Hour interval causing date underflow",
-			startStr:    "1970-01-01 00:00:00",
-			diff:        -1000000000000, // Very large negative number
-			iTyp:        types.Hour,
-			expectError: true, // Should return datetimeOverflowMaxError (NULL in MySQL)
-		},
-		{
-			name:        "Large negative Minute interval causing date underflow",
-			startStr:    "1970-01-01 00:00:00",
-			diff:        -1000000000000, // Very large negative number
-			iTyp:        types.Minute,
-			expectError: true, // Should return datetimeOverflowMaxError (NULL in MySQL)
-		},
-		{
-			name:        "Large negative Second interval causing date underflow",
-			startStr:    "1970-01-01 00:00:00",
-			diff:        -1000000000000, // Very large negative number
-			iTyp:        types.Second,
-			expectError: true, // Should return datetimeOverflowMaxError (NULL in MySQL)
-		},
-		// Note: MicroSecond type in AddInterval directly returns without ValidDatetime check,
-		// so even large negative values will return success=true. The result may be invalid
-		// but AddInterval won't catch it. We test with a smaller value that would cause underflow.
-		{
-			name:        "Large negative MicroSecond interval (AddInterval succeeds, but result may be invalid)",
-			startStr:    "1970-01-01 00:00:00",
-			diff:        -1000000000000, // Very large negative number
-			iTyp:        types.MicroSecond,
-			expectError: false, // AddInterval returns success=true for MicroSecond
-			expectedValue: func() types.Datetime {
-				start, _ := types.ParseDatetime("1970-01-01 00:00:00", 6)
-				// Calculate expected: start + diff (in microseconds)
-				return start + types.Datetime(-1000000000000)
-			}(),
-		},
-		// Test time units with normal values
-		{
-			name:          "Normal add 1 hour",
-			startStr:      "2022-01-01 00:00:00",
-			diff:          1,
-			iTyp:          types.Hour,
-			expectError:   false,
-			expectedValue: func() types.Datetime { dt, _ := types.ParseDatetime("2022-01-01 01:00:00", 6); return dt }(),
-		},
-		{
-			name:          "Normal add 1 minute",
-			startStr:      "2022-01-01 00:00:00",
-			diff:          1,
-			iTyp:          types.Minute,
-			expectError:   false,
-			expectedValue: func() types.Datetime { dt, _ := types.ParseDatetime("2022-01-01 00:01:00", 6); return dt }(),
-		},
-		{
-			name:          "Normal add 1 second",
-			startStr:      "2022-01-01 00:00:00",
-			diff:          1,
-			iTyp:          types.Second,
-			expectError:   false,
-			expectedValue: func() types.Datetime { dt, _ := types.ParseDatetime("2022-01-01 00:00:01", 6); return dt }(),
-		},
-		{
-			name:          "Normal add 1 microsecond",
-			startStr:      "2022-01-01 00:00:00",
-			diff:          1,
-			iTyp:          types.MicroSecond,
-			expectError:   false,
-			expectedValue: func() types.Datetime { dt, _ := types.ParseDatetime("2022-01-01 00:00:00.000001", 6); return dt }(),
-		},
-		// Test Week type
-		{
-			name:          "Normal add 1 week",
-			startStr:      "2022-01-01 00:00:00",
-			diff:          1,
-			iTyp:          types.Week,
-			expectError:   false,
-			expectedValue: func() types.Datetime { dt, _ := types.ParseDatetime("2022-01-08 00:00:00", 6); return dt }(),
-		},
-		{
-			name:        "Large negative Week interval causing date underflow",
-			startStr:    "1970-01-01 00:00:00",
-			diff:        -1000000000000, // Very large negative number
-			iTyp:        types.Week,
-			expectError: true, // Should return datetimeOverflowMaxError (NULL in MySQL)
-		},
-		// Test Year_Month type (should be treated as Month)
-		{
-			name:          "Year_Month type: add 13 months (1 year 1 month)",
-			startStr:      "2000-01-01 00:00:00",
-			diff:          13, // 1 year 1 month = 13 months
-			iTyp:          types.Year_Month,
-			expectError:   false,
-			expectedValue: func() types.Datetime { dt, _ := types.ParseDatetime("2001-02-01 00:00:00", 6); return dt }(),
-		},
-		{
-			name:        "Year_Month type: large negative causing year out of range",
-			startStr:    "2000-01-01 00:00:00",
-			diff:        -24000, // -24000 months = -2000 years, out of range
-			iTyp:        types.Year_Month,
-			expectError: true, // Should return datetimeOverflowMaxError (NULL in MySQL)
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			result, err := doDateStringAdd(tc.startStr, tc.diff, tc.iTyp)
-
-			if tc.expectError {
-				require.Error(t, err)
-				if tc.errorContains != "" {
-					require.Contains(t, err.Error(), tc.errorContains)
-				}
-				// Check if it's the overflow error (except for invalid string format)
-				if tc.name != "Invalid string format" {
-					require.True(t, isDatetimeOverflowMaxError(err), "Should return datetimeOverflowMaxError")
-				}
-				return
-			}
-
-			require.NoError(t, err)
-			if tc.expectZero {
-				require.Equal(t, types.ZeroDatetime, result, "Should return zero datetime")
-			} else {
-				require.Equal(t, tc.expectedValue, result, "Result should match expected value")
-			}
+func TestDateStringIntervalParsing(t *testing.T) {
+	for _, input := range []string{"12:34:56", "invalid-date"} {
+		t.Run(input, func(t *testing.T) {
+			_, err := doDateStringInterval(input, 1, types.Day, false)
+			require.Equal(t, invalidTemporalArithmeticInput, err)
 		})
 	}
+	// Parsing admits a valid pre-epoch result; range checks belong to calendar arithmetic.
+	got, err := doDateStringInterval("1970-01-01 00:00:00", -1000000000000, types.MicroSecond, false)
+	require.NoError(t, err)
+	want, err := types.ParseDatetime("1969-12-20 10:13:20", 6)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
 }
-
-// TestTimestampAddDateWithTChar tests TimestampAddDate with T_char type (overloadId: 4)
-// args: [types.T_char, types.T_int64, types.T_date]
 func TestTimestampAddDateWithTChar(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
@@ -15863,18 +14847,6 @@ func TestDateAddYearZeroBoundary(t *testing.T) {
 	}
 }
 
-// TestIsDateOverflowMaxError tests the isDateOverflowMaxError function
-func TestIsDateOverflowMaxError(t *testing.T) {
-	// Test with nil error
-	require.False(t, isDateOverflowMaxError(nil))
-
-	// Test with dateOverflowMaxError
-	require.True(t, isDateOverflowMaxError(datetimeOverflowMaxError))
-
-	// Test with different error
-	require.False(t, isDateOverflowMaxError(moerr.NewInvalidArgNoCtx("test", "different error")))
-}
-
 // TestIsDatetimeOverflowMaxError tests the isDatetimeOverflowMaxError function
 func TestIsDatetimeOverflowMaxError(t *testing.T) {
 	// Test with nil error
@@ -15887,101 +14859,103 @@ func TestIsDatetimeOverflowMaxError(t *testing.T) {
 	require.False(t, isDatetimeOverflowMaxError(moerr.NewInvalidArgNoCtx("test", "different error")))
 }
 
-// TestTimestampAddDateWithConstantDateUnitAndDateResultType tests TimestampAddDate with constant date unit and DATE result type
-func TestTimestampAddDateWithConstantDateUnitAndDateResultType(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte("DAY"), 1, proc.Mp())
-	intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), int64(1), 1, proc.Mp())
-	dateVec, _ := vector.NewConstFixed(types.T_date.ToType(), types.Date(0), 1, proc.Mp())
-
-	parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
-	result := vector.NewFunctionResultWrapper(types.T_date.ToType(), proc.Mp())
-
-	err := result.PreExtendAndReset(1)
-	require.NoError(t, err)
-
-	err = TimestampAddDate(parameters, result, proc, 1, nil)
-	require.NoError(t, err)
-
-	v := result.GetResultVector()
-	require.Equal(t, types.T_date, v.GetType().Oid)
-
-	// Cleanup
-	for _, v := range parameters {
-		if v != nil {
-			v.Free(proc.Mp())
-		}
-	}
-	if result != nil {
-		result.Free()
+func TestTimestampAddDateMetadataAndWrapperReuse(t *testing.T) {
+	for _, initial := range []types.T{types.T_date, types.T_datetime} {
+		t.Run(initial.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			result := vector.NewFunctionResultWrapper(initial.ToType(), proc.Mp())
+			defer result.Free()
+			for _, tc := range []struct {
+				name                 string
+				units                []string
+				constant, nullFirst  bool
+				wantType             types.T
+				scale                int32
+				want                 []string
+				selected             []bool
+				nullDates, wantError bool
+			}{
+				{"constant day", []string{"DAY"}, true, false, types.T_date, 0, []string{"2024-01-02", "2024-01-04"}, nil, false, false},
+				{"constant hour", []string{"HOUR"}, true, false, types.T_datetime, 0, []string{"2024-01-01 01:00:00", "2024-01-02 02:00:00"}, nil, false, false},
+				{"dynamic hour minute", []string{"HOUR", "MINUTE"}, false, false, types.T_datetime, 0, []string{"2024-01-01 01:00:00", "2024-01-02 00:02:00"}, nil, false, false},
+				{"dynamic hour second", []string{"HOUR", "SECOND"}, false, false, types.T_datetime, 0, []string{"2024-01-01 01:00:00", "2024-01-02 00:00:02"}, nil, false, false},
+				{"dynamic day week", []string{"DAY", "WEEK"}, false, false, types.T_date, 0, []string{"2024-01-02", "2024-01-16"}, nil, false, false},
+				{"dynamic day month", []string{"DAY", "MONTH"}, false, false, types.T_date, 0, []string{"2024-01-02", "2024-03-02"}, nil, false, false},
+				{"dynamic null day", []string{"", "DAY"}, false, true, types.T_date, 0, []string{"", "2024-01-04"}, nil, false, false},
+				{"dynamic microsecond", []string{"MICROSECOND", "DAY"}, false, false, types.T_datetime, 6, []string{"2024-01-01 00:00:00.000001", "2024-01-04 00:00:00.000000"}, nil, false, false},
+				{"dynamic day hour", []string{"DAY", "HOUR"}, false, false, types.T_datetime, 0, []string{"2024-01-02 00:00:00", "2024-01-02 02:00:00"}, nil, false, false},
+				{"masked microsecond", []string{"DAY", "MICROSECOND"}, false, false, types.T_date, 0, []string{"2024-01-02", ""}, []bool{true, false}, false, false},
+				{"NULL dates retain microsecond metadata", []string{"DAY", "MICROSECOND"}, false, false, types.T_datetime, 6, []string{"", ""}, nil, true, false},
+				{"masked invalid unit", []string{"DAY", "INVALID"}, false, false, types.T_date, 0, []string{"2024-01-02", ""}, []bool{true, false}, false, false},
+				{"invalid unit before NULL dates", []string{"DAY", "INVALID"}, false, false, types.T_date, 0, nil, nil, true, true},
+				{"invalid unit after overflowing microsecond", []string{"MICROSECOND", "INVALID"}, false, false, types.T_date, 0, nil, nil, false, true},
+				{"constant invalid unit before NULL dates", []string{"INVALID"}, true, false, types.T_date, 0, nil, nil, true, true},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					var units *vector.Vector
+					var err error
+					if tc.constant {
+						units, err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.units[0]), 2, proc.Mp())
+					} else {
+						units = vector.NewVec(types.T_varchar.ToType())
+					}
+					defer units.Free(proc.Mp())
+					require.NoError(t, err)
+					if !tc.constant {
+						require.NoError(t, vector.AppendStringList(units, tc.units, []bool{tc.nullFirst, false}, proc.Mp()))
+					}
+					intervals := vector.NewVec(types.T_int64.ToType())
+					defer intervals.Free(proc.Mp())
+					counts := []int64{1, 2}
+					if tc.wantError {
+						counts[0] = math.MaxInt64
+					}
+					require.NoError(t, vector.AppendFixedList(intervals, counts, nil, proc.Mp()))
+					dates := vector.NewVec(types.T_date.ToType())
+					defer dates.Free(proc.Mp())
+					first, err := types.ParseDateCast("2024-01-01")
+					require.NoError(t, err)
+					second, err := types.ParseDateCast("2024-01-02")
+					require.NoError(t, err)
+					require.NoError(t, vector.AppendFixedList(dates, []types.Date{first, second}, []bool{tc.nullDates, tc.nullDates}, proc.Mp()))
+					require.NoError(t, result.PreExtendAndReset(2))
+					var selected *FunctionSelectList
+					if tc.selected != nil {
+						selected = &FunctionSelectList{AnyNull: true, SelectList: tc.selected}
+					}
+					beforeType := *result.GetResultVector().GetType()
+					warnings := &numericWarningSession{}
+					proc.WarningSink = warnings
+					err = TimestampAddDate([]*vector.Vector{units, intervals, dates}, result, proc, 2, selected)
+					if tc.wantError {
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+						require.Empty(t, warnings.warnings, "unit admission must finish before row evaluation")
+						require.Equal(t, beforeType, *result.GetResultVector().GetType())
+						return
+					}
+					require.NoError(t, err)
+					vec := result.GetResultVector()
+					require.Equal(t, tc.wantType, vec.GetType().Oid)
+					require.Equal(t, tc.scale, vec.GetType().Scale)
+					require.Equal(t, 2, vec.Length())
+					for i, want := range tc.want {
+						require.Equal(t, want == "", vec.GetNulls().Contains(uint64(i)))
+						if want == "" {
+							continue
+						}
+						if tc.wantType == types.T_date {
+							require.Equal(t, want, vector.MustFixedColNoTypeCheck[types.Date](vec)[i].String())
+						} else {
+							require.Equal(t, want, vector.MustFixedColNoTypeCheck[types.Datetime](vec)[i].String2(tc.scale))
+						}
+					}
+				})
+			}
+		})
 	}
 }
 
-// TestTimestampAddDateWithConstantDateUnitAndDatetimeResultType tests TimestampAddDate with constant date unit and DATETIME result type
-func TestTimestampAddDateWithConstantDateUnitAndDatetimeResultType(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte("DAY"), 1, proc.Mp())
-	intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), int64(1), 1, proc.Mp())
-	dateVec, _ := vector.NewConstFixed(types.T_date.ToType(), types.Date(0), 1, proc.Mp())
-
-	parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
-	result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
-
-	err := result.PreExtendAndReset(1)
-	require.NoError(t, err)
-
-	err = TimestampAddDate(parameters, result, proc, 1, nil)
-	require.NoError(t, err)
-
-	v := result.GetResultVector()
-	require.Equal(t, types.T_date, v.GetType().Oid) // Should be converted to DATE
-
-	// Cleanup
-	for _, v := range parameters {
-		if v != nil {
-			v.Free(proc.Mp())
-		}
-	}
-	if result != nil {
-		result.Free()
-	}
-}
-
-// TestTimestampAddDateWithConstantTimeUnitAndDatetimeResultType tests TimestampAddDate with constant time unit and DATETIME result type
-func TestTimestampAddDateWithConstantTimeUnitAndDatetimeResultType(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte("HOUR"), 1, proc.Mp())
-	intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), int64(1), 1, proc.Mp())
-	dateVec, _ := vector.NewConstFixed(types.T_date.ToType(), types.Date(0), 1, proc.Mp())
-
-	parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
-	result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
-
-	err := result.PreExtendAndReset(1)
-	require.NoError(t, err)
-
-	err = TimestampAddDate(parameters, result, proc, 1, nil)
-	require.NoError(t, err)
-
-	v := result.GetResultVector()
-	require.Equal(t, types.T_datetime, v.GetType().Oid)
-
-	// Cleanup
-	for _, v := range parameters {
-		if v != nil {
-			v.Free(proc.Mp())
-		}
-	}
-	if result != nil {
-		result.Free()
-	}
-}
-
-// TestTimestampAddTimestampWithMaxInt64Interval tests TimestampAddTimestamp with math.MaxInt64 interval
-// Note: math.MaxInt64 is used as a marker for invalid interval, so it should return NULL
 func TestTimestampAddTimestampWithMaxInt64Interval(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
@@ -16015,284 +14989,6 @@ func TestTimestampAddTimestampWithMaxInt64Interval(t *testing.T) {
 	}
 	if result != nil {
 		result.Free()
-	}
-}
-
-// TestTimestampAddDateNonConstantTimeUnitWithDateResultType tests TimestampAddDate with non-constant time unit and DATE result type
-func TestTimestampAddDateNonConstantTimeUnitWithDateResultType(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	// Create non-constant unit vector with time units
-	unitVec := vector.NewVec(types.T_varchar.ToType())
-	err := vector.AppendStringList(unitVec, []string{"HOUR", "MINUTE"}, nil, proc.Mp())
-	require.NoError(t, err)
-	unitVec.SetLength(2)
-
-	// Create interval vector
-	intervalVec := vector.NewVec(types.T_int64.ToType())
-	err = vector.AppendFixedList(intervalVec, []int64{1, 2}, nil, proc.Mp())
-	require.NoError(t, err)
-	intervalVec.SetLength(2)
-
-	// Create date vector
-	dateVec := vector.NewVec(types.T_date.ToType())
-	d1, _ := types.ParseDateCast("2024-01-01")
-	d2, _ := types.ParseDateCast("2024-01-02")
-	err = vector.AppendFixedList(dateVec, []types.Date{d1, d2}, nil, proc.Mp())
-	require.NoError(t, err)
-	dateVec.SetLength(2)
-
-	parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
-	// Result type is DATE, but should be converted to DATETIME for time units
-	result := vector.NewFunctionResultWrapper(types.T_date.ToType(), proc.Mp())
-
-	fnLength := dateVec.Length()
-	err = result.PreExtendAndReset(fnLength)
-	require.NoError(t, err)
-
-	err = TimestampAddDate(parameters, result, proc, fnLength, nil)
-	require.NoError(t, err)
-
-	v := result.GetResultVector()
-	require.Equal(t, fnLength, v.Length())
-	require.Equal(t, types.T_datetime, v.GetType().Oid) // Should be converted to DATETIME
-
-	// Cleanup
-	for _, v := range parameters {
-		if v != nil {
-			v.Free(proc.Mp())
-		}
-	}
-	if result != nil {
-		result.Free()
-	}
-}
-
-// TestTimestampAddDateNonConstantTimeUnitWithDatetimeResultType tests TimestampAddDate with non-constant time unit and DATETIME result type
-func TestTimestampAddDateNonConstantTimeUnitWithDatetimeResultType(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	// Create non-constant unit vector with time units
-	unitVec := vector.NewVec(types.T_varchar.ToType())
-	err := vector.AppendStringList(unitVec, []string{"HOUR", "SECOND"}, nil, proc.Mp())
-	require.NoError(t, err)
-	unitVec.SetLength(2)
-
-	// Create interval vector
-	intervalVec := vector.NewVec(types.T_int64.ToType())
-	err = vector.AppendFixedList(intervalVec, []int64{1, 2}, nil, proc.Mp())
-	require.NoError(t, err)
-	intervalVec.SetLength(2)
-
-	// Create date vector
-	dateVec := vector.NewVec(types.T_date.ToType())
-	d1, _ := types.ParseDateCast("2024-01-01")
-	d2, _ := types.ParseDateCast("2024-01-02")
-	err = vector.AppendFixedList(dateVec, []types.Date{d1, d2}, nil, proc.Mp())
-	require.NoError(t, err)
-	dateVec.SetLength(2)
-
-	parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
-	// Result type is DATETIME
-	result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
-
-	fnLength := dateVec.Length()
-	err = result.PreExtendAndReset(fnLength)
-	require.NoError(t, err)
-
-	err = TimestampAddDate(parameters, result, proc, fnLength, nil)
-	require.NoError(t, err)
-
-	v := result.GetResultVector()
-	require.Equal(t, fnLength, v.Length())
-	require.Equal(t, types.T_datetime, v.GetType().Oid)
-
-	// Cleanup
-	for _, v := range parameters {
-		if v != nil {
-			v.Free(proc.Mp())
-		}
-	}
-	if result != nil {
-		result.Free()
-	}
-}
-
-// TestTimestampAddDateNonConstantDateUnitWithDateResultType tests TimestampAddDate with non-constant date unit and DATE result type
-func TestTimestampAddDateNonConstantDateUnitWithDateResultType(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	// Create non-constant unit vector with date units
-	unitVec := vector.NewVec(types.T_varchar.ToType())
-	err := vector.AppendStringList(unitVec, []string{"DAY", "WEEK"}, nil, proc.Mp())
-	require.NoError(t, err)
-	unitVec.SetLength(2)
-
-	// Create interval vector
-	intervalVec := vector.NewVec(types.T_int64.ToType())
-	err = vector.AppendFixedList(intervalVec, []int64{1, 2}, nil, proc.Mp())
-	require.NoError(t, err)
-	intervalVec.SetLength(2)
-
-	// Create date vector
-	dateVec := vector.NewVec(types.T_date.ToType())
-	d1, _ := types.ParseDateCast("2024-01-01")
-	d2, _ := types.ParseDateCast("2024-01-02")
-	err = vector.AppendFixedList(dateVec, []types.Date{d1, d2}, nil, proc.Mp())
-	require.NoError(t, err)
-	dateVec.SetLength(2)
-
-	parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
-	// Result type is DATE
-	result := vector.NewFunctionResultWrapper(types.T_date.ToType(), proc.Mp())
-
-	fnLength := dateVec.Length()
-	err = result.PreExtendAndReset(fnLength)
-	require.NoError(t, err)
-
-	err = TimestampAddDate(parameters, result, proc, fnLength, nil)
-	require.NoError(t, err)
-
-	v := result.GetResultVector()
-	require.Equal(t, fnLength, v.Length())
-	require.Equal(t, types.T_date, v.GetType().Oid)
-
-	// Cleanup
-	for _, v := range parameters {
-		if v != nil {
-			v.Free(proc.Mp())
-		}
-	}
-	if result != nil {
-		result.Free()
-	}
-}
-
-// TestTimestampAddDateNonConstantDateUnitWithDatetimeResultType tests TimestampAddDate with non-constant date unit and DATETIME result type
-func TestTimestampAddDateNonConstantDateUnitWithDatetimeResultType(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	// Create non-constant unit vector with date units
-	unitVec := vector.NewVec(types.T_varchar.ToType())
-	err := vector.AppendStringList(unitVec, []string{"DAY", "MONTH"}, nil, proc.Mp())
-	require.NoError(t, err)
-	unitVec.SetLength(2)
-
-	// Create interval vector
-	intervalVec := vector.NewVec(types.T_int64.ToType())
-	err = vector.AppendFixedList(intervalVec, []int64{1, 2}, nil, proc.Mp())
-	require.NoError(t, err)
-	intervalVec.SetLength(2)
-
-	// Create date vector
-	dateVec := vector.NewVec(types.T_date.ToType())
-	d1, _ := types.ParseDateCast("2024-01-01")
-	d2, _ := types.ParseDateCast("2024-01-02")
-	err = vector.AppendFixedList(dateVec, []types.Date{d1, d2}, nil, proc.Mp())
-	require.NoError(t, err)
-	dateVec.SetLength(2)
-
-	parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
-	// Result type is DATETIME, but should be converted to DATE for date units
-	result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
-
-	fnLength := dateVec.Length()
-	err = result.PreExtendAndReset(fnLength)
-	require.NoError(t, err)
-
-	err = TimestampAddDate(parameters, result, proc, fnLength, nil)
-	require.NoError(t, err)
-
-	v := result.GetResultVector()
-	require.Equal(t, fnLength, v.Length())
-	require.Equal(t, types.T_date, v.GetType().Oid) // Should be converted to DATE
-
-	// Cleanup
-	for _, v := range parameters {
-		if v != nil {
-			v.Free(proc.Mp())
-		}
-	}
-	if result != nil {
-		result.Free()
-	}
-}
-
-// TestTimestampAddDateNonConstantUnitWithNullUnit tests TimestampAddDate with non-constant unit containing NULL
-func TestTimestampAddDateNonConstantUnitWithNullUnit(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	// Create non-constant unit vector with NULL
-	unitVec := vector.NewVec(types.T_varchar.ToType())
-	isNulls := []bool{true, false} // First unit is NULL
-	err := vector.AppendStringList(unitVec, []string{"", "DAY"}, isNulls, proc.Mp())
-	require.NoError(t, err)
-	unitVec.SetLength(2)
-
-	// Create interval vector
-	intervalVec := vector.NewVec(types.T_int64.ToType())
-	err = vector.AppendFixedList(intervalVec, []int64{1, 2}, nil, proc.Mp())
-	require.NoError(t, err)
-	intervalVec.SetLength(2)
-
-	// Create date vector
-	dateVec := vector.NewVec(types.T_date.ToType())
-	d1, _ := types.ParseDateCast("2024-01-01")
-	d2, _ := types.ParseDateCast("2024-01-02")
-	err = vector.AppendFixedList(dateVec, []types.Date{d1, d2}, nil, proc.Mp())
-	require.NoError(t, err)
-	dateVec.SetLength(2)
-
-	parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
-	result := vector.NewFunctionResultWrapper(types.T_date.ToType(), proc.Mp())
-
-	fnLength := dateVec.Length()
-	err = result.PreExtendAndReset(fnLength)
-	require.NoError(t, err)
-
-	err = TimestampAddDate(parameters, result, proc, fnLength, nil)
-	require.NoError(t, err)
-
-	v := result.GetResultVector()
-	require.Equal(t, fnLength, v.Length())
-	require.True(t, v.GetNulls().Contains(0)) // First result should be NULL
-
-	// Cleanup
-	for _, v := range parameters {
-		if v != nil {
-			v.Free(proc.Mp())
-		}
-	}
-	if result != nil {
-		result.Free()
-	}
-}
-
-// TestDoTimestampAddWithAddIntervalFailure tests doTimestampAdd when AddInterval fails (else branch)
-func TestDoTimestampAddWithAddIntervalFailure(t *testing.T) {
-	loc := time.UTC
-
-	// Test case: AddInterval fails (returns success=false) but not due to overflow
-	// This should trigger the else branch that returns moerr.NewOutOfRangeNoCtx("timestamp", "")
-	// We need to find a case where AddInterval returns false but it's not due to overflow
-	// Looking at the code, when AddInterval fails, it goes to else branch which returns error
-	// Let's test with a case that causes AddInterval to fail
-
-	// Use a timestamp that when adding a large interval will cause AddInterval to fail
-	// but the year calculation might still be in valid range
-	start, _ := types.ParseTimestamp(loc, "2024-01-01 00:00:00", 6)
-
-	// Try with a very large interval that might cause AddInterval to fail
-	// but the code path should still go through the else branch
-	_, err := doTimestampAdd(loc, start, 1000000000, types.Day)
-	// This might return overflow error or other error depending on implementation
-	// The important thing is to test the else branch
-	if err != nil {
-		// If it's overflow error, that's fine - we're testing the error path
-		if !isDatetimeOverflowMaxError(err) {
-			// This is the else branch we want to test
-			require.Contains(t, err.Error(), "timestamp")
-		}
 	}
 }
 
@@ -16835,51 +15531,6 @@ func TestTimestampAddDateWithNonOverflowError(t *testing.T) {
 	}
 }
 
-// TestDoDatetimeAddWithDefaultCaseInSwitch tests doDatetimeAdd with default case (nums == 0)
-func TestDoDatetimeAddWithDefaultCaseInSwitch(t *testing.T) {
-	// Test case: interval type that doesn't match any case in the switch statement
-	// This would cause nums to remain 0, triggering the else block where resultYear = startYear
-	// However, looking at the code, all valid interval types are handled, so this might be hard to trigger
-	// Let's test with a normal case to ensure the function works
-	start, _ := types.ParseDatetime("2024-01-01 00:00:00", 6)
-	result, err := doDatetimeAdd(start, 1, types.Day)
-	require.NoError(t, err)
-	require.NotEqual(t, types.Datetime(0), result)
-}
-
-// TestDoDatetimeAddWithNumsZero tests doDatetimeAdd when nums == 0 in default case
-func TestDoDatetimeAddWithNumsZero(t *testing.T) {
-	// This tests the else block in default case where nums == 0
-	// The code sets resultYear = startYear when nums == 0
-	// We need to find a case where this happens
-	// Looking at the code, this happens when iTyp doesn't match any case in the switch
-	// But all valid interval types are handled, so this might be impossible to trigger
-	// Let's test with normal cases
-	start, _ := types.ParseDatetime("2024-01-01 00:00:00", 6)
-
-	// Test with different interval types
-	testCases := []struct {
-		name string
-		diff int64
-		iTyp types.IntervalType
-	}{
-		{"Day", 1, types.Day},
-		{"Week", 1, types.Week},
-		{"Hour", 1, types.Hour},
-		{"Minute", 1, types.Minute},
-		{"Second", 1, types.Second},
-		{"MicroSecond", 1, types.MicroSecond},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			result, err := doDatetimeAdd(start, tc.diff, tc.iTyp)
-			require.NoError(t, err)
-			require.NotEqual(t, types.Datetime(0), result)
-		})
-	}
-}
-
 // TestTimestampAddDatetimeWithMicrosecondScale tests TimestampAddDatetime with MicroSecond unit (scale=6)
 func TestTimestampAddDatetimeWithMicrosecondScale(t *testing.T) {
 	proc := testutil.NewProcess(t)
@@ -17108,43 +15759,43 @@ func TestTimestampDiffStringWithTCharErrorHandling(t *testing.T) {
 
 func Test_doTimestampSub_Edge(t *testing.T) {
 	// diff == math.MaxInt64
-	_, err := doTimestampSub(nil, types.Timestamp(0), math.MaxInt64, types.Year)
+	_, err := doTimestampInterval(nil, types.Timestamp(0), math.MaxInt64, types.Year, true)
 	require.Error(t, err)
 
 	// diff == IntervalNumMAX+1
-	_, err = doTimestampSub(nil, types.Timestamp(0), int64(types.IntervalNumMAX)+1, types.Year)
+	_, err = doTimestampInterval(nil, types.Timestamp(0), int64(types.IntervalNumMAX)+1, types.Year, true)
 	require.Error(t, err)
 
 	// !success
 	// This can occur if you start from a large timestamp near the upper boundary (e.g. 9999-12-31 23:59:59) and "add" (i.e. -diff > 0) a positive interval.
 	// For example:
 	maxTS, _ := types.ParseTimestamp(time.UTC, "9999-12-31 23:59:59", 0)
-	_, err = doTimestampSub(time.UTC, maxTS, -1, types.Day) // -diff > 0, so actually doing maxTS + 1 day (overflow)
+	_, err = doTimestampInterval(time.UTC, maxTS, -1, types.Day, true) // -diff > 0, so actually doing maxTS + 1 day (overflow)
 	require.Error(t, err)
 }
 
 func Test_doDatetimeSub_Edge(t *testing.T) {
 	// diff == math.MaxInt64
-	_, err := doDatetimeSub(types.Datetime(0), math.MaxInt64, types.Year)
+	_, err := doCalendarInterval(types.Datetime(0), math.MaxInt64, types.Year, true)
 	require.Error(t, err)
 
 	// diff == IntervalNumMAX+1
-	_, err = doDatetimeSub(types.Datetime(0), int64(types.IntervalNumMAX)+1, types.Year)
+	_, err = doCalendarInterval(types.Datetime(0), int64(types.IntervalNumMAX)+1, types.Year, true)
 	require.Error(t, err)
 
 	// !success
 	maxDT, _ := types.ParseDatetime("9999-12-31 23:59:59", 6)
-	_, err = doDatetimeSub(maxDT, -1, types.Day) // -diff > 0, so actually doing maxDT + 1 day (overflow)
+	_, err = doCalendarInterval(maxDT, -1, types.Day, true) // -diff > 0, so actually doing maxDT + 1 day (overflow)
 	require.Error(t, err)
 }
 
 func Test_doDateStringSub_Edge(t *testing.T) {
 	// diff == math.MaxInt64
-	_, err := doDateStringSub("2024-01-01 00:00:00", math.MaxInt64, types.Year)
+	_, err := doDateStringInterval("2024-01-01 00:00:00", math.MaxInt64, types.Year, true)
 	require.Error(t, err)
 
 	// diff == IntervalNumMAX+1
-	_, err = doDateStringSub("2024-01-01 00:00:00", int64(types.IntervalNumMAX)+1, types.Year)
+	_, err = doDateStringInterval("2024-01-01 00:00:00", int64(types.IntervalNumMAX)+1, types.Year, true)
 	require.Error(t, err)
 }
 
@@ -18229,4 +16880,433 @@ func TestValidateGeometryCollectionNestingDepthContract(t *testing.T) {
 		buildNestedCollection(maxGeometryCollectionNestingDepth + 1))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "geometry collection nesting depth exceeds")
+}
+
+func TestDecimalPrecisionKernelSelection(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(func() { require.Zero(t, proc.Mp().CurrNB()); proc.Free() })
+	for _, oid := range []types.T{types.T_decimal64, types.T_decimal128} {
+		width := int32(18)
+		if oid == types.T_decimal128 {
+			width = 38
+		}
+		for _, name := range []string{"ceil", "floor", "round"} {
+			t.Run(oid.String()+"/"+name, func(t *testing.T) {
+				typ := types.New(oid, width, 0)
+				resolved, err := GetFunctionByName(proc.Ctx, name, []types.Type{typ, types.T_int64.ToType()})
+				require.NoError(t, err)
+				overload, err := GetFunctionById(proc.Ctx, resolved.GetEncodedOverloadID())
+				require.NoError(t, err)
+				kernel, _, cleanup, _ := overload.GetExecuteMethod()
+				if cleanup != nil {
+					defer func() { require.NoError(t, cleanup()) }()
+				}
+				// A legal fractional carry must preserve both existing result-scale forms.
+				for _, outputScale := range []int32{0, 2} {
+					func() {
+						input := vector.NewVec(types.New(oid, width, 2))
+						defer input.Free(proc.Mp())
+						var value any = types.Decimal64(999)
+						if oid == types.T_decimal128 {
+							value = types.Decimal128{B0_63: 999}
+						}
+						require.NoError(t, vector.AppendAny(input, value, false, proc.Mp()))
+						digits, err := vector.NewConstFixed(types.T_int64.ToType(), int64(0), 1, proc.Mp())
+						require.NoError(t, err)
+						defer digits.Free(proc.Mp())
+						result := vector.NewFunctionResultWrapper(types.New(oid, width, outputScale), proc.Mp())
+						defer result.Free()
+						require.NoError(t, result.PreExtendAndReset(1))
+						require.NoError(t, kernel([]*vector.Vector{input, digits}, result, proc, 1, nil))
+						expected := uint64(10)
+						if name == "floor" {
+							expected = 9
+						}
+						if outputScale == 2 {
+							expected *= 100
+						}
+						if oid == types.T_decimal64 {
+							require.Equal(t, types.Decimal64(expected), vector.MustFixedColNoTypeCheck[types.Decimal64](result.GetResultVector())[0])
+						} else {
+							require.Equal(t, types.Decimal128{B0_63: expected}, vector.MustFixedColNoTypeCheck[types.Decimal128](result.GetResultVector())[0])
+						}
+					}()
+				}
+				for _, mode := range []string{"selected", "null", "masked"} {
+					func() {
+						input := vector.NewVec(typ)
+						defer input.Free(proc.Mp())
+						var good, bad any = types.Decimal64(10), types.Decimal64Max
+						if name == "floor" {
+							bad = types.Decimal64Min
+						}
+						if oid == types.T_decimal128 {
+							good = types.Decimal128{B0_63: 10}
+							bad = types.Decimal128Max
+							if name == "floor" {
+								bad = types.Decimal128Min
+							}
+						}
+						require.NoError(t, vector.AppendAny(input, good, false, proc.Mp()))
+						require.NoError(t, vector.AppendAny(input, bad, false, proc.Mp()))
+						if mode == "null" {
+							input.GetNulls().Add(1)
+						}
+						digits, err := vector.NewConstFixed(types.T_int64.ToType(), int64(-1), 2, proc.Mp())
+						require.NoError(t, err)
+						defer digits.Free(proc.Mp())
+						result := vector.NewFunctionResultWrapper(resolved.GetReturnType(), proc.Mp())
+						defer result.Free()
+						require.NoError(t, result.PreExtendAndReset(2))
+						var selection *FunctionSelectList
+						if mode == "masked" {
+							selection = &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}
+						}
+						invoke := func() error { return kernel([]*vector.Vector{input, digits}, result, proc, 2, selection) }
+						if mode == "selected" {
+							var caught any
+							var diagnostic error
+							func() { defer func() { caught = recover() }(); diagnostic = invoke() }()
+							if caught != nil {
+								var ok bool
+								diagnostic, ok = caught.(error)
+								require.True(t, ok, "panic must carry a typed error")
+							}
+							require.True(t, moerr.IsMoErrCode(diagnostic, moerr.ErrOutOfRange))
+						} else {
+							var kernelErr error
+							require.NotPanics(t, func() { kernelErr = invoke() })
+							require.NoError(t, kernelErr)
+							require.True(t, result.GetResultVector().GetNulls().Contains(1))
+							if oid == types.T_decimal64 {
+								require.Equal(t, types.Decimal64(10), vector.MustFixedColNoTypeCheck[types.Decimal64](result.GetResultVector())[0])
+							} else {
+								require.Equal(t, types.Decimal128{B0_63: 10}, vector.MustFixedColNoTypeCheck[types.Decimal128](result.GetResultVector())[0])
+							}
+						}
+					}()
+				}
+			})
+		}
+	}
+}
+
+func TestDecimalPrecisionCallerBoundaries(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(func() { require.Zero(t, proc.Mp().CurrNB()); proc.Free() })
+	// Scale-zero conversion is an identity even at physical storage boundaries.
+	require.NotPanics(t, func() {
+		count, err := bitCountFromDecimal128(types.Decimal128Min, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(1), count)
+	})
+	require.NotPanics(t, func() {
+		_, err := bitCountFromDecimal128(types.Decimal128Max, 0)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	})
+	for _, tc := range []struct {
+		name     string
+		typ      types.Type
+		values   any
+		expected FunctionTestResult
+		fn       fEvalFn
+	}{
+		{"hex64 identity", types.New(types.T_decimal64, 18, 0), []types.Decimal64{types.Decimal64Min, types.Decimal64Max, 0}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"8000000000000000", "7FFFFFFFFFFFFFFF", ""}, []bool{false, false, true}), HexDecimal64},
+		{"hex64 fractional", types.New(types.T_decimal64, 18, 1), []types.Decimal64{95, 0, 0}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"A", "0", ""}, []bool{false, false, true}), HexDecimal64},
+		{"bitcount128 fractional", types.New(types.T_decimal128, 38, 1), []types.Decimal128{{B0_63: 15}, {B0_63: 25}, {}}, NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{1, 2, 0}, []bool{false, false, true}), BitCountDecimal128},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(tc.typ, tc.values, []bool{false, false, true})}, tc.expected, tc.fn)
+			defer func() {
+				for _, v := range fc.parameters {
+					v.Free(proc.Mp())
+				}
+				fc.result.Free()
+			}()
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
+// Each row covers a distinct unit/format or failure boundary. Selection, input
+// NULLs, and warning suppression belong to TestCalendarIntervalDiagnosticsAndSelection.
+func TestDateStringInterval(t *testing.T) {
+	proc := newTmpProcess(t)
+	t.Cleanup(proc.Free)
+	warnings := &numericWarningSession{}
+	proc.WarningSink = warnings
+	for _, tc := range []struct {
+		name  string
+		op    string
+		typ   types.T
+		input string
+		diff  int64
+		unit  types.IntervalType
+		want  string
+		null  bool
+	}{
+		{"upper year", "date_add", types.T_varchar, "2000-01-01", 8000, types.Year, "", true},
+		{"lower year", "date_add", types.T_varchar, "1997-12-31 23:59:59", -100000, types.Year, "", true},
+		{"lower month", "date_add", types.T_varchar, "1997-12-31 23:59:59", -120000, types.Month, "", true},
+		{"lower quarter", "date_add", types.T_varchar, "1997-12-31 23:59:59", -40000, types.Quarter, "", true},
+		{"add microsecond", "date_add", types.T_varchar, "2022-07-01 10:20:30.123456", 1, types.MicroSecond, "2022-07-01 10:20:30.123457", false},
+		{"sub microsecond", "date_sub", types.T_varchar, "2022-07-01 10:20:30.123456", 1, types.MicroSecond, "2022-07-01 10:20:30.123455", false},
+		{"char", "date_add", types.T_char, "2022-07-01 10:20:30.123456", 1, types.MicroSecond, "2022-07-01 10:20:30.123457", false},
+		{"text", "date_add", types.T_text, "2022-07-01 10:20:30.123456", 1, types.MicroSecond, "2022-07-01 10:20:30.123457", false},
+		{"fraction second", "date_add", types.T_varchar, "2022-07-01 10:20:30.123456", 1, types.Second, "2022-07-01 10:20:31.123456", false},
+		{"fraction minute", "date_add", types.T_varchar, "2022-07-01 10:20:30.123456", 1, types.Minute, "2022-07-01 10:21:30.123456", false},
+		{"fraction hour", "date_add", types.T_varchar, "2022-07-01 10:20:30.123456", 1, types.Hour, "2022-07-01 11:20:30.123456", false},
+		{"fraction day", "date_add", types.T_varchar, "2022-07-01 10:20:30.123456", 1, types.Day, "2022-07-02 10:20:30.123456", false},
+		{"pad four digits", "date_add", types.T_varchar, "2022-02-28 23:59:59.9999", 7, types.Day, "2022-03-07 23:59:59.999900", false},
+		{"pad three digits", "date_add", types.T_varchar, "2022-02-28 23:59:59.123", 1, types.Hour, "2022-03-01 00:59:59.123000", false},
+		{"pad one digit", "date_add", types.T_varchar, "2022-02-28 23:59:59.5", 1, types.Minute, "2022-03-01 00:00:59.500000", false},
+		{"six digits rollover", "date_add", types.T_varchar, "2022-02-28 23:59:59.123456", 1, types.Hour, "2022-03-01 00:59:59.123456", false},
+		{"add day", "date_add", types.T_varchar, "2022-01-01", 1, types.Day, "2022-01-02", false},
+		{"add month", "date_add", types.T_varchar, "2022-01-01", 1, types.Month, "2022-02-01", false},
+		{"add year", "date_add", types.T_varchar, "2022-01-01", 1, types.Year, "2023-01-01", false},
+		{"add week", "date_add", types.T_varchar, "2022-01-01", 1, types.Week, "2022-01-08", false},
+		{"add quarter", "date_add", types.T_varchar, "2022-01-01", 1, types.Quarter, "2022-04-01", false},
+		{"add second", "date_add", types.T_varchar, "2022-01-01", 1, types.Second, "2022-01-01 00:00:01", false},
+		{"add minute", "date_add", types.T_varchar, "2022-01-01", 1, types.Minute, "2022-01-01 00:01:00", false},
+		{"add hour", "date_add", types.T_varchar, "2022-01-01", 1, types.Hour, "2022-01-01 01:00:00", false},
+		{"sub day", "date_sub", types.T_varchar, "2022-01-01", 1, types.Day, "2021-12-31", false},
+		{"sub month", "date_sub", types.T_varchar, "2022-01-01", 1, types.Month, "2021-12-01", false},
+		{"sub year", "date_sub", types.T_varchar, "2022-01-01", 1, types.Year, "2021-01-01", false},
+		{"sub week", "date_sub", types.T_varchar, "2022-01-01", 1, types.Week, "2021-12-25", false},
+		{"sub quarter", "date_sub", types.T_varchar, "2022-01-01", 1, types.Quarter, "2021-10-01", false},
+		{"sub second", "date_sub", types.T_varchar, "2022-01-01", 1, types.Second, "2021-12-31 23:59:59", false},
+		{"sub minute", "date_sub", types.T_varchar, "2022-01-01", 1, types.Minute, "2021-12-31 23:59:00", false},
+		{"sub hour", "date_sub", types.T_varchar, "2022-01-01", 1, types.Hour, "2021-12-31 23:00:00", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			warnings.warnings = nil
+			bound, err := GetFunctionByName(proc.Ctx, tc.op, []types.Type{tc.typ.ToType(), types.T_int64.ToType(), types.T_int64.ToType()})
+			require.NoError(t, err)
+			require.Equal(t, tc.typ, bound.GetReturnType().Oid)
+			op, err := GetFunctionById(proc.Ctx, bound.GetEncodedOverloadID())
+			require.NoError(t, err)
+			c := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestConstInput(tc.typ.ToType(), []string{tc.input}, nil),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{tc.diff}, nil),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{int64(tc.unit)}, nil),
+			}, NewFunctionTestResult(tc.typ.ToType(), false, []string{tc.want}, []bool{tc.null}), fEvalFn(op.newOp()))
+			t.Cleanup(func() {
+				c.result.Free()
+				for _, v := range c.parameters {
+					v.Free(proc.Mp())
+				}
+			})
+			ok, info := c.Run()
+			require.True(t, ok, info)
+			if tc.null {
+				require.Equal(t, []numericWarning{{code: moerr.ER_DATETIME_FUNCTION_OVERFLOW, msg: "Datetime function: time field overflow"}}, warnings.warnings)
+			} else {
+				require.Empty(t, warnings.warnings)
+			}
+		})
+	}
+}
+
+// Integer-count overflow is independent of calendar parsing and formatting.
+func TestDateStringIntervalCountOverflow(t *testing.T) {
+	proc := newTmpProcess(t)
+	t.Cleanup(proc.Free)
+	for _, tc := range []struct {
+		unit   types.IntervalType
+		counts []int64
+	}{
+		{types.Second, []int64{math.MaxInt64 - 1, -math.MaxInt64 + 1, math.MaxInt64}},
+		{types.Minute, []int64{math.MaxInt64 - 1, -math.MaxInt64 + 1}},
+		{types.Hour, []int64{math.MaxInt64 - 1, -math.MaxInt64 + 1}},
+		{types.Year_Month, []int64{math.MaxInt64}},
+		{types.Day, []int64{math.MaxInt64}},
+		{types.Week, []int64{math.MaxInt64}},
+	} {
+		t.Run(tc.unit.String(), func(t *testing.T) {
+			inputs, outputs, nulls := make([]string, len(tc.counts)), make([]string, len(tc.counts)), make([]bool, len(tc.counts))
+			for i := range inputs {
+				inputs[i], nulls[i] = "1995-01-05", true
+			}
+			c := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), inputs, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), tc.counts, nil),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{int64(tc.unit)}, nil),
+			}, NewFunctionTestResult(types.T_varchar.ToType(), false, outputs, nulls), DateStringAdd)
+			t.Cleanup(func() {
+				c.result.Free()
+				for _, v := range c.parameters {
+					v.Free(proc.Mp())
+				}
+			})
+			ok, info := c.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
+func TestTimestampAddDateDeniedTypeGrowth(t *testing.T) {
+	for _, constant := range []bool{false, true} {
+		t.Run(fmt.Sprintf("constant=%t", constant), func(t *testing.T) {
+			proc := newTmpProcess(t)
+			t.Cleanup(proc.Free)
+			registry, err := mpool.NewAllocationAccountRegistry(1, 4)
+			require.NoError(t, err)
+			account, err := registry.Open(528)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				snapshot := account.Seal()
+				_, err := registry.Finalize(account)
+				if snapshot.Used != 0 {
+					t.Errorf("account retains %d bytes after cleanup", snapshot.Used)
+				}
+				if err != nil {
+					t.Errorf("finalize account: %v", err)
+				}
+			})
+			selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+			require.NoError(t, err)
+			result, err := vector.NewFunctionResultWrapperWithAllocation(types.T_date.ToType(), proc.Mp(), selection)
+			require.NoError(t, err)
+			t.Cleanup(result.Free)
+			require.NoError(t, result.PreExtendAndReset(128))
+			date, err := vector.NewConstFixed(types.T_date.ToType(), types.DateFromCalendar(2024, 2, 29), 128, proc.Mp())
+			t.Cleanup(func() { date.Free(proc.Mp()) })
+			require.NoError(t, err)
+			count, err := vector.NewConstFixed(types.T_int64.ToType(), int64(1), 128, proc.Mp())
+			t.Cleanup(func() { count.Free(proc.Mp()) })
+			require.NoError(t, err)
+			var unit *vector.Vector
+			if constant {
+				unit, err = vector.NewConstBytes(types.T_varchar.ToType(), []byte("SECOND"), 128, proc.Mp())
+			} else {
+				unit = vector.NewVec(types.T_varchar.ToType())
+			}
+			t.Cleanup(func() { unit.Free(proc.Mp()) })
+			require.NoError(t, err)
+			if !constant {
+				for i := 0; i < 128; i++ {
+					require.NoError(t, vector.AppendBytes(unit, []byte("SECOND"), false, proc.Mp()))
+				}
+			}
+			require.NotPanics(t, func() {
+				err = TimestampAddDate([]*vector.Vector{unit, count, date}, result, proc, 128, nil)
+			})
+			require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+			require.Equal(t, types.T_date, result.GetResultVector().GetType().Oid)
+			require.Equal(t, 128, result.GetResultVector().Length())
+			require.Equal(t, uint64(528), account.Snapshot().Used)
+			require.Equal(t, make([]types.Date, 128), vector.MustFixedColNoTypeCheck[types.Date](result.GetResultVector()))
+		})
+	}
+}
+
+func TestTimestampAddDateWarningsPerSelectedRow(t *testing.T) {
+	for _, unitText := range []string{"DAY", "HOUR"} {
+		for _, constant := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/constant=%t", unitText, constant), func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				t.Cleanup(proc.Free)
+				warnings := &numericWarningSession{}
+				proc.WarningSink = warnings
+				var unit *vector.Vector
+				var err error
+				if constant {
+					unit, err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(unitText), 3, proc.Mp())
+				} else {
+					unit = vector.NewVec(types.T_varchar.ToType())
+				}
+				t.Cleanup(func() { unit.Free(proc.Mp()) })
+				require.NoError(t, err)
+				if !constant {
+					require.NoError(t, vector.AppendStringList(unit, []string{unitText, unitText, unitText}, nil, proc.Mp()))
+				}
+				count, err := vector.NewConstFixed(types.T_int64.ToType(), int64(math.MaxInt64), 3, proc.Mp())
+				t.Cleanup(func() { count.Free(proc.Mp()) })
+				require.NoError(t, err)
+				date, err := vector.NewConstFixed(types.T_date.ToType(), types.DateFromCalendar(2024, 2, 29), 3, proc.Mp())
+				t.Cleanup(func() { date.Free(proc.Mp()) })
+				require.NoError(t, err)
+				result := vector.NewFunctionResultWrapper(types.T_date.ToType(), proc.Mp())
+				t.Cleanup(result.Free)
+				require.NoError(t, result.PreExtendAndReset(3))
+				require.NoError(t, TimestampAddDate([]*vector.Vector{unit, count, date}, result, proc, 3, &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}}))
+				require.Equal(t, 3, result.GetResultVector().GetNulls().Count())
+				require.Len(t, warnings.warnings, 2, "each evaluated overflowing row emits one warning; masked rows emit none")
+			})
+		}
+	}
+}
+
+func BenchmarkTimestampAddDate(b *testing.B) {
+	const size = 2048
+	for _, tc := range []struct {
+		name     string
+		units    []string
+		constant bool
+		output   types.T
+		scale    int32
+	}{
+		{"fixed/day", []string{"DAY"}, true, types.T_date, 0},
+		{"fixed/second", []string{"SECOND"}, true, types.T_datetime, 0},
+		{"fixed/microsecond", []string{"MICROSECOND"}, true, types.T_datetime, 6},
+		{"fixed/month", []string{"MONTH"}, true, types.T_date, 0},
+		{"dynamic/date", []string{"DAY", "MONTH"}, false, types.T_date, 0},
+		{"dynamic/clock", []string{"DAY", "HOUR"}, false, types.T_datetime, 0},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			proc := testutil.NewProcess(b)
+			defer proc.Free()
+			dates := vector.NewVec(types.T_date.ToType())
+			defer dates.Free(proc.Mp())
+			var units *vector.Vector
+			var err error
+			if tc.constant {
+				units, err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.units[0]), size, proc.Mp())
+			} else {
+				units = vector.NewVec(types.T_varchar.ToType())
+			}
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer units.Free(proc.Mp())
+			for i := 0; i < size; i++ {
+				if err = vector.AppendFixed(dates, types.DateFromCalendar(2024, 1, 31), false, proc.Mp()); err != nil {
+					b.Fatal(err)
+				}
+				if !tc.constant {
+					if err = vector.AppendBytes(units, []byte(tc.units[i%len(tc.units)]), false, proc.Mp()); err != nil {
+						b.Fatal(err)
+					}
+				}
+			}
+			counts, err := vector.NewConstFixed(types.T_int64.ToType(), int64(1), size, proc.Mp())
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer counts.Free(proc.Mp())
+			typ := tc.output.ToTypeWithScale(tc.scale)
+			result := vector.NewFunctionResultWrapper(typ, proc.Mp())
+			defer result.Free()
+			inputs := []*vector.Vector{units, counts, dates}
+			if err = result.PreExtendAndReset(size); err != nil {
+				b.Fatal(err)
+			}
+			if err = TimestampAddDate(inputs, result, proc, size, nil); err != nil {
+				b.Fatal(err)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				// Match the executor's bound-type reset before reusing its result.
+				result.GetResultVector().SetType(typ)
+				if err = result.PreExtendAndReset(size); err != nil {
+					b.Fatal(err)
+				}
+				if err = TimestampAddDate(inputs, result, proc, size, nil); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
 }

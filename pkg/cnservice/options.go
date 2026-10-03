@@ -59,14 +59,6 @@ func WithBootstrapOptions(options ...bootstrap.Option) Option {
 	}
 }
 
-// WithTxnTraceData sets the root directory for transaction trace data. Each CN
-// stores its trace data in a child directory keyed by its service UUID.
-func WithTxnTraceData(traceDataPath string) Option {
-	return func(s *service) {
-		s.options.traceDataPath = traceDataPath
-	}
-}
-
 // WithSiriusReadDependencies supplies the storage-owned, GC-protected lease
 // authority and its durable resolve auditor. CN startup still constructs and
 // owns both mTLS endpoints. Keeping these dependencies explicit prevents an

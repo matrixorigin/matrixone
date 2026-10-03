@@ -225,21 +225,6 @@ var (
 	//pkg/txn/storage/mem
 	CauseSaveLog           = NewInternalError(context.Background(), "saveLog")
 	CauseNewCatalogHandler = NewInternalError(context.Background(), "NewCatalogHandler")
-	//pkg/txn/trace
-	CauseWatch                   = NewInternalError(context.Background(), "txn trace Watch")
-	CauseUpdateState             = NewInternalError(context.Background(), "txn trace UpdateState")
-	CauseAddTableFilter          = NewInternalError(context.Background(), "txn trace AddTableFilter")
-	CauseClearTableFilters       = NewInternalError(context.Background(), "txn trace ClearTableFilters")
-	CauseRefreshTableFilters     = NewInternalError(context.Background(), "txn trace RefreshTableFilters")
-	CauseWriteToMO               = NewInternalError(context.Background(), "txn trace WriteToMO")
-	CauseWriteToS3               = NewInternalError(context.Background(), "txn trace WriteToS3")
-	CauseAddStatementFilter      = NewInternalError(context.Background(), "AddStatementFilter")
-	CauseClearStatementFilters   = NewInternalError(context.Background(), "ClearStatementFilters")
-	CauseRefreshStatementFilters = NewInternalError(context.Background(), "RefreshStatementFilters")
-	CauseAddTxnFilter            = NewInternalError(context.Background(), "AddTxnFilter")
-	CauseClearTxnFilters         = NewInternalError(context.Background(), "ClearTxnFilters")
-	CauseRefreshTxnFilters       = NewInternalError(context.Background(), "RefreshTxnFilters")
-	CauseDoAddTxnError           = NewInternalError(context.Background(), "DoAddTxnError")
 	//pkg/util
 	CauseAddressFunc = NewInternalError(context.Background(), "AddressFunc")
 	//pkg/util/export/etl/db

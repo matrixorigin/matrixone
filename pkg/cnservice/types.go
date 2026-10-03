@@ -53,7 +53,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -108,7 +107,11 @@ type SiriusConfig struct {
 	Enabled bool `toml:"enabled"`
 	// Backend defaults to Flight during migration. Embedded selection remains
 	// fail-closed until the native backend and its build capability are present.
-	Backend string `toml:"backend"`
+	Backend           string `toml:"backend"`
+	InputMode         string `toml:"input-mode"`
+	NativeConfigPath  string `toml:"native-config-path"`
+	GPUStreams        uint32 `toml:"gpu-streams"`
+	MaxWaitingQueries uint32 `toml:"max-waiting-queries"`
 	// BenchmarkNoGC enables the one-to-one CN/sidecar benchmark adapter. It
 	// must only be used together with TN GCCfg.DisableGC=true; normal Sirius
 	// startup keeps requiring durable GC-protected lease dependencies.
@@ -305,7 +308,11 @@ type Config struct {
 		// is less than PKDedupCount when txn commits. Default value is 0 , which means don't do deduplication.
 		PkDedupCount int `toml:"pk-dedup-count"`
 
-		// Trace trace
+		// Trace is retained for stopped-version rollback configuration.
+		// The transaction data collector is retired; every field is inert.
+		// TODO(retire-txn-trace, #29249): remove this block and its parsing tests
+		// after the rollback window excludes collector-bearing versions and
+		// deployed service TOMLs no longer contain these keys. Do not add readers.
 		Trace struct {
 			BufferSize    int           `toml:"buffer-size"`
 			FlushBytes    toml.ByteSize `toml:"flush-bytes"`
@@ -567,6 +574,9 @@ func (c *SiriusConfig) validate() error {
 		c.RequestTimeout.Duration > time.Duration(1<<63-1)-c.CleanupTimeout.Duration {
 		return moerr.NewBadConfigNoCtx("invalid Sirius transport limits")
 	}
+	if c.Backend == "embedded" {
+		return validateSiriusEmbeddedConfig(c)
+	}
 	minimumLeaseTTL := c.RequestTimeout.Duration + c.CleanupTimeout.Duration
 	if c.LeaseTTL.Duration == 0 {
 		c.LeaseTTL.Duration = minimumLeaseTTL
@@ -595,7 +605,7 @@ func (c *SiriusConfig) validateBackend() error {
 		c.Backend = "flight"
 	case "flight":
 	case "embedded":
-		return moerr.NewBadConfigNoCtx("Sirius embedded backend is not available in this build")
+		return validateSiriusEmbeddedBuild()
 	default:
 		return moerr.NewBadConfigNoCtx("invalid Sirius backend: expected flight or embedded")
 	}
@@ -825,7 +835,6 @@ type service struct {
 	// beforeBootstrapClose is a deterministic test barrier.
 	beforeBootstrapClose func()
 	incrservice          incrservice.AutoIncrementService
-	txnTraceService      trace.Service
 	siriusRuntime        *compile.SiriusRuntime
 
 	stopper                         *stopper.Stopper
@@ -882,7 +891,6 @@ type service struct {
 
 	options struct {
 		bootstrapOptions []bootstrap.Option
-		traceDataPath    string
 		siriusLeases     *substrait.LeaseManager
 		siriusAuditor    substrait.ResolveAuditRecorder
 	}

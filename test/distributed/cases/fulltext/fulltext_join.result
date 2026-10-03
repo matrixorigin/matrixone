@@ -55,15 +55,17 @@ where match(f.title, f.body) against('hello');
 Project  𝄀
   ->  Join  𝄀
         Join Type: INNER  𝄀
-        Join Cond: (f.base_id = b.id)  𝄀
+        Join Cond: (b.id = f.base_id)  𝄀
+        Runtime Filter Build: #[-1,0]  𝄀
+        ->  Table Scan on ft_join_test.base  𝄀
+              Runtime Filter Probe: b.id  𝄀
         ->  Join  𝄀
               Join Type: INNER  𝄀
               Join Cond: (f.id = mo_fulltext_alias_0.doc_id)  𝄀
               Runtime Filter Build: #[-1,0]  𝄀
               ->  Table Scan on ft_join_test.ft  𝄀
                     Runtime Filter Probe: f.id  𝄀
-              ->  Table Function on fulltext_index_scan  𝄀
-        ->  Table Scan on ft_join_test.base
+              ->  Table Function on fulltext_index_scan
 select f.id, b.name
 from ft f join base b on b.id = f.base_id
 where match(f.title, f.body) against('hello')
