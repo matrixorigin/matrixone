@@ -53,11 +53,11 @@ func TestBackupRetentionUsesPersistedGCRemainingObjects(t *testing.T) {
 	require.NoError(t, err)
 	_, _, err = writer.Sync(ctx)
 	require.NoError(t, err)
-	writeGCMetadata(t, ctx, fs, start, end, writer.GetObjectStats())
+	writeScannedGCMetadata(t, ctx, fs, start, end, writer.GetObjectStats())
 	// A newer partial scan must not displace the cumulative GC window.
-	writeGCMetadata(t, ctx, fs, types.BuildTS(25, 0), types.BuildTS(29, 0))
+	writeScannedGCMetadata(t, ctx, fs, types.BuildTS(25, 0), types.BuildTS(29, 0))
 	// A newer window beyond the backup point cannot authorize omissions.
-	writeGCMetadata(t, ctx, fs, start, types.BuildTS(40, 0))
+	writeScannedGCMetadata(t, ctx, fs, start, types.BuildTS(40, 0))
 	retention, err := loadBackupObjectRetention(ctx, "retention-test", fs, restore, nil)
 	require.NoError(t, err)
 	require.Equal(t, start, retention.start)
@@ -98,7 +98,7 @@ func TestBackupRetentionRejectsUnreadableGCWindow(t *testing.T) {
 		objectio.BuildLocation(name, objectio.NewExtent(0, 0, 1, 1), 1, 0)))
 	require.NoError(t, objectio.SetObjectStatsRowCnt(stats, 1))
 	require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 1))
-	writeGCMetadata(t, t.Context(), fs, types.BuildTS(1, 0), types.BuildTS(20, 0), *stats)
+	writeScannedGCMetadata(t, t.Context(), fs, types.BuildTS(1, 0), types.BuildTS(20, 0), *stats)
 	retention, err := loadBackupObjectRetention(t.Context(), "retention-test", fs, types.BuildTS(30, 0), nil)
 	require.Error(t, err)
 	require.Nil(t, retention)

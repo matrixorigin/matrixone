@@ -158,7 +158,6 @@ func TestExecBackupKeepsObjectDeletedAfterRestoreTimestamp(t *testing.T) {
 		src,
 		checkpointLocation,
 		logtail.CheckpointCurrentVersion,
-		nil,
 		&types.TS{},
 	)
 	require.NoError(t, err)
@@ -212,6 +211,21 @@ func TestExecBackupKeepsObjectDeletedAfterRestoreTimestamp(t *testing.T) {
 	require.NoError(t, err)
 }
 
+type checkpointReadFailureFS struct {
+	fileservice.FileService
+	failPath string
+	failure  error
+	hits     int
+}
+
+func (f *checkpointReadFailureFS) Read(ctx context.Context, v *fileservice.IOVector) error {
+	if v.FilePath == f.failPath {
+		f.hits++
+		return f.failure
+	}
+	return f.FileService.Read(ctx, v)
+}
+
 func TestSelectBackupObjectsFromIncrementalCheckpointOmitsHistoricalObject(t *testing.T) {
 	for _, appendable := range []bool{false, true} {
 		name := "nonappendable"
@@ -254,9 +268,30 @@ func TestSelectBackupObjectsFromIncrementalCheckpointOmitsHistoricalObject(t *te
 			require.NoError(t, err)
 			objects, _, err := logtail.LoadCheckpointEntriesFromKey(
 				ctx, "backup-test", src, checkpointLocation,
-				logtail.CheckpointCurrentVersion, nil, &types.TS{},
+				logtail.CheckpointCurrentVersion, &types.TS{},
 			)
 			require.NoError(t, err)
+
+			if !appendable {
+				t.Run("partial checkpoint read cannot publish backup", func(t *testing.T) {
+					reader, err := logtail.GetCheckpointReader(ctx, "", src, checkpointLocation, logtail.CheckpointCurrentVersion)
+					require.NoError(t, err)
+					require.NotEmpty(t, reader.GetLocations())
+					failure := fmt.Errorf("checkpoint row read failed")
+					broken := &checkpointReadFailureFS{FileService: src, failPath: reader.GetLocations()[0].Name().String(), failure: failure}
+					objects, loaded, err := logtail.LoadCheckpointEntriesFromKey(ctx, "", broken, checkpointLocation, logtail.CheckpointCurrentVersion, &types.TS{})
+					require.Positive(t, broken.hits)
+					require.ErrorIs(t, err, failure)
+					require.Nil(t, objects)
+					require.Nil(t, loaded)
+					names := []string{"2026-10-03 00:00:00", fmt.Sprintf("%s:%d:30-0:%s:20-1", checkpointLocation, logtail.CheckpointCurrentVersion, checkpointLocation)}
+					require.ErrorIs(t, execBackup(ctx, "", broken, dst, names, 1, types.TS{}, "full", nil, nil, nil), failure)
+					for _, name := range []string{taeList, taeSum} {
+						_, err := dst.StatFile(ctx, name)
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), err)
+					}
+				})
+			}
 
 			var creationRows, deletionRows int
 			for _, object := range objects {
@@ -283,7 +318,7 @@ func TestSelectBackupObjectsFromIncrementalCheckpointOmitsHistoricalObject(t *te
 			// The object file is deliberately absent; only checkpoint files may be copied.
 			_, err = src.StatFile(ctx, objectName.String())
 			require.Error(t, err)
-			writeGCMetadata(t, ctx, src, types.BuildTS(1, 0), restoreTS)
+			writeScannedGCMetadata(t, ctx, src, types.BuildTS(1, 0), restoreTS)
 			retention, err := loadBackupObjectRetention(ctx, "backup-test", src, restoreTS, nil)
 			require.NoError(t, err)
 			require.Equal(t, restoreTS, retention.end)
@@ -316,6 +351,41 @@ func newBackupLocalFS(t *testing.T, name string) fileservice.FileService {
 	require.NoError(t, err)
 	t.Cleanup(func() { fs.Close(context.Background()) })
 	return fs
+}
+
+func writeBackupCheckpointMetadata(t *testing.T, fs fileservice.FileService, start, end types.TS, location objectio.Location, kind checkpoint.EntryType) {
+	t.Helper()
+	ctx := t.Context()
+	meta := batch.NewWithSchema(false, checkpoint.CheckpointSchema.Attrs(), checkpoint.CheckpointSchema.Types())
+	defer meta.Clean(common.CheckpointAllocator)
+	for _, value := range []struct {
+		index int
+		value types.TS
+	}{
+		{checkpoint.CheckpointAttr_StartTSIdx, start},
+		{checkpoint.CheckpointAttr_EndTSIdx, end},
+	} {
+		require.NoError(t, vector.AppendFixed(meta.Vecs[value.index], value.value, false, common.CheckpointAllocator))
+	}
+	for _, index := range []int{checkpoint.CheckpointAttr_MetaLocationIdx, checkpoint.CheckpointAttr_AllLocationsIdx} {
+		require.NoError(t, vector.AppendBytes(meta.Vecs[index], location, false, common.CheckpointAllocator))
+	}
+	require.NoError(t, vector.AppendFixed(meta.Vecs[checkpoint.CheckpointAttr_EntryTypeIdx], kind == checkpoint.ET_Incremental, false, common.CheckpointAllocator))
+	require.NoError(t, vector.AppendFixed(meta.Vecs[checkpoint.CheckpointAttr_VersionIdx], logtail.CheckpointCurrentVersion, false, common.CheckpointAllocator))
+	require.NoError(t, vector.AppendFixed(meta.Vecs[checkpoint.CheckpointAttr_CheckpointLSNIdx], uint64(0), false, common.CheckpointAllocator))
+	require.NoError(t, vector.AppendFixed(meta.Vecs[checkpoint.CheckpointAttr_TruncateLSNIdx], uint64(0), false, common.CheckpointAllocator))
+	require.NoError(t, vector.AppendFixed(meta.Vecs[checkpoint.CheckpointAttr_TypeIdx], int8(kind), false, common.CheckpointAllocator))
+	require.NoError(t, vector.AppendBytes(meta.Vecs[checkpoint.CheckpointAttr_TableIDLocationIdx], nil, false, common.CheckpointAllocator))
+	meta.SetRowCount(1)
+	metaWriter, err := objectio.NewObjectWriterSpecial(
+		objectio.WriterCheckpoint,
+		ioutil.EncodeCKPMetadataFullName(start, end), fs,
+	)
+	require.NoError(t, err)
+	_, err = metaWriter.Write(meta)
+	require.NoError(t, err)
+	_, err = metaWriter.WriteEnd(ctx)
+	require.NoError(t, err)
 }
 
 func TestExecBackupKeepsSnapshotRetainedObjectFromCompactedCheckpoint(t *testing.T) {
@@ -365,7 +435,7 @@ func TestExecBackupKeepsSnapshotRetainedObjectFromCompactedCheckpoint(t *testing
 	incrementalLocation, _, err := incremental.Sync(ctx, src)
 	require.NoError(t, err)
 	_, incrementalReader, err := logtail.LoadCheckpointEntriesFromKey(
-		ctx, "backup-test", src, incrementalLocation, logtail.CheckpointCurrentVersion, nil, &types.TS{},
+		ctx, "backup-test", src, incrementalLocation, logtail.CheckpointCurrentVersion, &types.TS{},
 	)
 	require.NoError(t, err)
 	incrementalRows, err := incrementalReader.GetCheckpointData(ctx)
@@ -411,7 +481,7 @@ func TestExecBackupKeepsSnapshotRetainedObjectFromCompactedCheckpoint(t *testing
 	require.Equal(t, checkpoint.ET_Compacted, compactedEntry.GetType())
 	require.Len(t, metaRecorder.files, 1)
 	compactedObjects, _, err := logtail.LoadCheckpointEntriesFromKey(
-		ctx, "backup-test", src, compactedEntry.GetLocation(), compactedEntry.GetVersion(), nil, &types.TS{},
+		ctx, "backup-test", src, compactedEntry.GetLocation(), compactedEntry.GetVersion(), &types.TS{},
 	)
 	require.NoError(t, err)
 	var retained bool
@@ -428,42 +498,13 @@ func TestExecBackupKeepsSnapshotRetainedObjectFromCompactedCheckpoint(t *testing
 	specialLocation, _, err := special.Sync(ctx, src)
 	require.NoError(t, err)
 	specialObjects, _, err := logtail.LoadCheckpointEntriesFromKey(
-		ctx, "backup-test", src, specialLocation, logtail.CheckpointCurrentVersion, nil, &types.TS{},
+		ctx, "backup-test", src, specialLocation, logtail.CheckpointCurrentVersion, &types.TS{},
 	)
 	require.NoError(t, err)
 	for _, object := range specialObjects {
 		require.NotEqual(t, objectName.String(), object.Location.Name().String())
 	}
-	meta := batch.NewWithSchema(false, checkpoint.CheckpointSchema.Attrs(), checkpoint.CheckpointSchema.Types())
-	defer meta.Clean(common.CheckpointAllocator)
-	for _, value := range []struct {
-		index int
-		value types.TS
-	}{
-		{checkpoint.CheckpointAttr_StartTSIdx, checkpointStart},
-		{checkpoint.CheckpointAttr_EndTSIdx, checkpointEnd},
-	} {
-		require.NoError(t, vector.AppendFixed(meta.Vecs[value.index], value.value, false, common.CheckpointAllocator))
-	}
-	for _, index := range []int{checkpoint.CheckpointAttr_MetaLocationIdx, checkpoint.CheckpointAttr_AllLocationsIdx} {
-		require.NoError(t, vector.AppendBytes(meta.Vecs[index], incrementalLocation, false, common.CheckpointAllocator))
-	}
-	require.NoError(t, vector.AppendFixed(meta.Vecs[checkpoint.CheckpointAttr_EntryTypeIdx], true, false, common.CheckpointAllocator))
-	require.NoError(t, vector.AppendFixed(meta.Vecs[checkpoint.CheckpointAttr_VersionIdx], logtail.CheckpointCurrentVersion, false, common.CheckpointAllocator))
-	require.NoError(t, vector.AppendFixed(meta.Vecs[checkpoint.CheckpointAttr_CheckpointLSNIdx], uint64(0), false, common.CheckpointAllocator))
-	require.NoError(t, vector.AppendFixed(meta.Vecs[checkpoint.CheckpointAttr_TruncateLSNIdx], uint64(0), false, common.CheckpointAllocator))
-	require.NoError(t, vector.AppendFixed(meta.Vecs[checkpoint.CheckpointAttr_TypeIdx], int8(checkpoint.ET_Incremental), false, common.CheckpointAllocator))
-	require.NoError(t, vector.AppendBytes(meta.Vecs[checkpoint.CheckpointAttr_TableIDLocationIdx], nil, false, common.CheckpointAllocator))
-	meta.SetRowCount(1)
-	metaWriter, err := objectio.NewObjectWriterSpecial(
-		objectio.WriterCheckpoint,
-		ioutil.EncodeCKPMetadataFullName(checkpointStart, checkpointEnd), src,
-	)
-	require.NoError(t, err)
-	_, err = metaWriter.Write(meta)
-	require.NoError(t, err)
-	_, err = metaWriter.WriteEnd(ctx)
-	require.NoError(t, err)
+	writeBackupCheckpointMetadata(t, src, checkpointStart, checkpointEnd, incrementalLocation, checkpoint.ET_Incremental)
 	compactedMetaName := ioutil.EncodeCompactCKPMetadataFullName(checkpointStart, checkpointEnd)
 	_, err = src.StatFile(ctx, compactedMetaName)
 	require.NoError(t, err)
@@ -472,7 +513,7 @@ func TestExecBackupKeepsSnapshotRetainedObjectFromCompactedCheckpoint(t *testing
 	)
 	require.NoError(t, err)
 	require.NotEmpty(t, sourceSnapshotEntries)
-	writeGCMetadata(t, ctx, src, checkpointStart, restoreTS)
+	writeScannedGCMetadata(t, ctx, src, checkpointStart, restoreTS)
 	retention, err := loadBackupObjectRetention(ctx, "backup-test", src, restoreTS,
 		map[string][]*objectio.BackupObject{compactedEntry.GetLocation().String(): compactedObjects})
 	require.NoError(t, err)

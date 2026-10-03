@@ -394,7 +394,6 @@ func execBackup(
 			srcFs,
 			key,
 			uint32(version),
-			nil,
 			&baseTS,
 		)
 		if err != nil {
@@ -535,10 +534,9 @@ type backupObjectRetention struct {
 	retained   map[objectio.ObjectNameShort]struct{}
 }
 
-// The persisted GC window is an existing census of objects not yet collected,
-// including snapshot/PITR references. Absence is meaningful only for lifecycles
-// entirely inside its scanned range. Compacted checkpoints are also preserved:
-// their historical references remain part of the backup's snapshot read path.
+// Only the GC window's persisted scan proof can authorize absence. Its filename
+// is a recovery watermark, which CopyGCDir may advance without scanning objects.
+// Compacted checkpoint references remain required for historical reads.
 func loadBackupObjectRetention(
 	ctx context.Context,
 	sid string,
@@ -551,29 +549,39 @@ func loadBackupObjectRetention(
 	if err != nil {
 		return nil, err
 	}
-	var selected *ioutil.TSRangeFile
+	var selectedWindow *gc.GCWindow
+	defer func() {
+		if selectedWindow != nil {
+			selectedWindow.Close()
+		}
+	}()
 	for i := range gcFiles {
 		f := &gcFiles[i]
 		if (!f.IsCKPFile() && !f.IsFullGCExt()) || f.GetEnd().IsEmpty() || f.GetEnd().GT(&restoreTS) {
 			continue
 		}
-		// A newer scan-only window can cover just a recent suffix. Prefer the
-		// cumulative window; otherwise old, already-collected objects would
-		// lose their omission evidence merely because scanning advanced.
-		if selected == nil || f.GetStart().LT(selected.GetStart()) ||
-			(selected.GetStart().EQ(f.GetStart()) && selected.GetEnd().LT(f.GetEnd())) {
-			selected = f
-		}
-	}
-	if selected != nil {
 		window := gc.NewGCWindow(common.DebugAllocator, fs)
-		defer window.Close()
-		if err := window.ReadTable(ctx, selected.GetGCFullName(), fs); err != nil {
+		if err := window.ReadTable(ctx, f.GetGCFullName(), fs); err != nil {
+			window.Close()
 			return nil, err
 		}
+		start, end := window.ScannedRange()
+		// Prefer broad older coverage; a scan-only suffix must not displace it.
+		// Read remaining rows only for the selected, independently proven census.
+		if end.IsEmpty() || (selectedWindow != nil && !(start.LT(&ret.start) || (start.EQ(&ret.start) && ret.end.LT(&end)))) {
+			window.Close()
+			continue
+		}
+		if selectedWindow != nil {
+			selectedWindow.Close()
+		}
+		selectedWindow = window
+		ret.start, ret.end = start, end
+	}
+	if selectedWindow != nil {
 		data := batch.NewWithSchema(false, gc.ObjectTableAttrs, gc.ObjectTableTypes)
 		defer data.Clean(common.DebugAllocator)
-		reader := window.MakeFilesReader(ctx, fs)
+		reader := selectedWindow.MakeFilesReader(ctx, fs)
 		defer reader.Close()
 		for {
 			data.CleanOnlyData()
@@ -589,14 +597,13 @@ func loadBackupObjectRetention(
 				ret.retained[*stats.ObjectName().Short()] = struct{}{}
 			}
 		}
-		ret.start, ret.end = *selected.GetStart(), *selected.GetEnd()
 	}
 
 	metaFiles, err := ioutil.ListTSRangeFiles(ctx, "ckp", fs)
 	if err != nil {
 		return nil, err
 	}
-	selected = nil
+	var selected *ioutil.TSRangeFile
 	for i := range metaFiles {
 		meta := &metaFiles[i]
 		if !meta.IsCompactExt() || meta.GetEnd().GT(&restoreTS) {

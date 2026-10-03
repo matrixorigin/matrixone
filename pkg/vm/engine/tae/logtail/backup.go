@@ -667,7 +667,6 @@ func LoadCheckpointEntriesFromKey(
 	fs fileservice.FileService,
 	location objectio.Location,
 	version uint32,
-	softDeletes *map[string]bool,
 	baseTS *types.TS,
 ) ([]*objectio.BackupObject, *CKPReader, error) {
 	locations := make([]*objectio.BackupObject, 0)
@@ -688,7 +687,7 @@ func LoadCheckpointEntriesFromKey(
 		})
 	}
 
-	ckpReader.ForEachRow(
+	err = ckpReader.ForEachRow(
 		ctx,
 		func(
 			account uint32,
@@ -725,16 +724,12 @@ func LoadCheckpointEntriesFromKey(
 				bo.NeedCopy = true
 			}
 			locations = append(locations, bo)
-			if !deletedAt.IsEmpty() {
-				if softDeletes != nil {
-					if !(*softDeletes)[objectStats.ObjectName().String()] {
-						(*softDeletes)[objectStats.ObjectName().String()] = true
-					}
-				}
-			}
 			return nil
 		},
 	)
+	if err != nil {
+		return nil, nil, err
+	}
 	return locations, ckpReader, nil
 }
 
