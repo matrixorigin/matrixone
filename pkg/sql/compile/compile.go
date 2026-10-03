@@ -99,7 +99,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -3967,13 +3966,6 @@ func (c *Compile) compileExternScanArrowRecordBatchFanout(
 	return scopes, nil
 }
 
-type icebergDataFileScopeShard struct {
-	node      engine.Node
-	fileList  []string
-	fileSize  []int64
-	dataTasks []*pipeline.IcebergDataFileTask
-}
-
 type icebergExternalScanRuntime struct {
 	dataTasks            []*pipeline.IcebergDataFileTask
 	deleteTasks          []*pipeline.IcebergDeleteFileTask
@@ -4156,7 +4148,7 @@ func s3ParamOptions(option []string, s3 *tree.S3Parameter) []string {
 	return out
 }
 
-func (c *Compile) compileExternScanIcebergFileFanout(
+func (c *Compile) compileExternScanIcebergCoordinator(
 	node *plan.Node,
 	param *tree.ExternParam,
 	runtime icebergExternalScanRuntime,
@@ -4167,35 +4159,21 @@ func (c *Compile) compileExternScanIcebergFileFanout(
 	shardParam := new(tree.ExternParam)
 	*shardParam = *param
 	shardParam.Parallel = false
-	return c.compileExternScanIcebergShard(node, shardParam, runtime, icebergDataFileScopeShard{
-		node:      engine.Node{Addr: c.addr, Mcpu: 1},
-		fileList:  fileList,
-		fileSize:  fileSize,
-		dataTasks: runtime.dataTasks,
-	}, strictSqlMode)
-}
 
-func (c *Compile) compileExternScanIcebergShard(
-	node *plan.Node,
-	param *tree.ExternParam,
-	runtime icebergExternalScanRuntime,
-	shard icebergDataFileScopeShard,
-	strictSqlMode bool,
-) ([]*Scope, error) {
 	ss := make([]*Scope, 1)
-	ss[0] = c.constructScopeForExternal(shard.node.Addr, param.Parallel)
+	ss[0] = c.constructScopeForExternal(c.addr, shardParam.Parallel)
 	ss[0].NodeInfo.Mcpu = 1
 	ss[0].IsLoad = true
 
 	currentFirstFlag := c.anal.isFirst
 	op := constructExternal(
-		node, param, c.proc.Ctx,
-		shard.fileList, shard.fileSize,
-		makeWholeFileOffsets(len(shard.fileList)),
+		node, shardParam, c.proc.Ctx,
+		fileList, fileSize,
+		makeWholeFileOffsets(len(fileList)),
 		strictSqlMode,
-		c.arrowExecutionScope(node, param),
+		c.arrowExecutionScope(node, shardParam),
 	)
-	if err := attachIcebergRuntimeToExternal(c.proc.Ctx, op, runtime, shard.dataTasks); err != nil {
+	if err := attachIcebergRuntimeToExternal(c.proc.Ctx, op, runtime, runtime.dataTasks); err != nil {
 		return nil, err
 	}
 	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
@@ -4577,58 +4555,6 @@ func splitHiveFileShards(fileList []string, fileSize []int64, nodes []engine.Nod
 	return nonEmpty
 }
 
-func splitIcebergDataFileShards(tasks []*pipeline.IcebergDataFileTask, nodes []engine.Node) []icebergDataFileScopeShard {
-	if len(tasks) == 0 || len(nodes) == 0 {
-		return nil
-	}
-	shardCount := len(nodes)
-	if shardCount > len(tasks) {
-		shardCount = len(tasks)
-	}
-	shards := make([]icebergDataFileScopeShard, shardCount)
-	loads := make([]int64, shardCount)
-	for i := range shards {
-		shards[i].node = nodes[i]
-	}
-
-	indices := make([]int, len(tasks))
-	for i := range indices {
-		indices[i] = i
-	}
-	slices.SortStableFunc(indices, func(leftIdx, rightIdx int) int {
-		left := icebergDataTaskLoad(tasks[leftIdx])
-		right := icebergDataTaskLoad(tasks[rightIdx])
-		if left != right {
-			return cmp.Compare(right, left)
-		}
-		return cmp.Compare(tasks[leftIdx].FilePath, tasks[rightIdx].FilePath)
-	})
-
-	for _, taskIdx := range indices {
-		shardIdx := 0
-		for i := 1; i < shardCount; i++ {
-			if loads[i] < loads[shardIdx] ||
-				(loads[i] == loads[shardIdx] && len(shards[i].dataTasks) < len(shards[shardIdx].dataTasks)) {
-				shardIdx = i
-			}
-		}
-		task := tasks[taskIdx]
-		shards[shardIdx].dataTasks = append(shards[shardIdx].dataTasks, task)
-		shards[shardIdx].fileList = append(shards[shardIdx].fileList, task.FilePath)
-		size := task.FileSize
-		shards[shardIdx].fileSize = append(shards[shardIdx].fileSize, size)
-		loads[shardIdx] += icebergDataTaskLoad(task)
-	}
-
-	nonEmpty := shards[:0]
-	for _, shard := range shards {
-		if len(shard.dataTasks) > 0 {
-			nonEmpty = append(nonEmpty, shard)
-		}
-	}
-	return nonEmpty
-}
-
 func compactIcebergDataTasks(tasks []*pipeline.IcebergDataFileTask) []*pipeline.IcebergDataFileTask {
 	if len(tasks) == 0 {
 		return nil
@@ -4640,19 +4566,6 @@ func compactIcebergDataTasks(tasks []*pipeline.IcebergDataFileTask) []*pipeline.
 		}
 	}
 	return out
-}
-
-func icebergDataTaskLoad(task *pipeline.IcebergDataFileTask) int64 {
-	if task == nil {
-		return 1
-	}
-	if task.FileSize > 0 {
-		return task.FileSize
-	}
-	if task.RecordCount > 0 {
-		return task.RecordCount
-	}
-	return 1
 }
 
 func icebergDataTaskFiles(tasks []*pipeline.IcebergDataFileTask) ([]string, []int64) {
@@ -10988,8 +10901,6 @@ func (c *Compile) fatalLog(retry int, err error) {
 			moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) {
 		return
 	}
-
-	txnTrace.GetService(c.proc.GetService()).TxnError(c.proc.GetTxnOperator(), err)
 
 	v, ok := moruntime.ServiceRuntime(c.proc.GetService()).
 		GetGlobalVariables(moruntime.EnableCheckInvalidRCErrors)

@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -208,11 +207,6 @@ func (tableScan *TableScan) applyReaderFilter(
 	defer func() {
 		tableScan.ctr.filterActiveDuration += time.Since(start)
 	}()
-	if loadedColumns == nil {
-		// Eager fallbacks still have a complete pre-filter batch, so preserve the
-		// existing transaction data-trace boundary.
-		tableScan.traceRead(proc, bat)
-	}
 	tableScan.recordFilterInput(bat, loadedColumns)
 	tableScan.ctr.filterLateMaterialized = loadedColumns != nil
 	return tableScan.evalFilter(proc, bat, loadedColumns)
@@ -223,12 +217,9 @@ func (tableScan *TableScan) readBatch(
 	proc *process.Process,
 ) (bool, error) {
 	lateReader, ok := tableScan.Reader.(engine.LateMaterializationReader)
-	// Data tracing records complete pre-filter rows. Preserve that diagnostic
-	// contract by using the eager path while the feature is enabled. Reader
-	// summaries have the same pre-filter diagnostic contract.
-	traceDataEnabled := trace.GetService(proc.GetService()).Enabled(trace.FeatureTraceData)
+	// Reader summaries require the complete pre-filter batch.
 	readerSummaryEnabled := ctx.Value(defines.ReaderSummaryKey{}) != nil
-	if !ok || tableScan.ctr.readerFilter == nil || traceDataEnabled || readerSummaryEnabled {
+	if !ok || tableScan.ctr.readerFilter == nil || readerSummaryEnabled {
 		return process.MeasureFilesystemWait(tableScan.OpAnalyzer, func() (bool, error) {
 			return tableScan.Reader.Read(
 				ctx,

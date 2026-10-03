@@ -796,23 +796,6 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 			txnclient.WithUserTxn())
 	}
 
-	if execCtx.ses.IsBackgroundSession() ||
-		execCtx.ses.DisableTrace() {
-		opts = append(opts, txnclient.WithDisableTrace(true))
-	} else {
-		varVal, err := execCtx.ses.GetSessionSysVar("disable_txn_trace")
-		if err != nil {
-			return err
-		}
-		if def, ok := gSysVarsDefs["disable_txn_trace"]; ok {
-			if boolType, ok := def.GetType().(SystemVariableBoolType); ok {
-				if boolType.IsTrue(varVal) {
-					opts = append(opts, txnclient.WithDisableTrace(true))
-				}
-			}
-		}
-	}
-
 	// Attach session-level lock_wait_timeout to the txn so the lock service
 	// uses it instead of the global config.
 	if varVal, err := execCtx.ses.GetSessionSysVar("lock_wait_timeout"); err == nil {

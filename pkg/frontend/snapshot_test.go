@@ -3204,7 +3204,6 @@ func Test_handleInternalGetDdl_GoodPath(t *testing.T) {
 		mockTxnOp.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		mockTxnOp.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		mockTxnOp.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
-		mockTxnOp.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 
 		// Setup TxnHandler with mock engine and txn
 		txnHandler := InitTxnHandler("", mockEng, ctx, mockTxnOp)
