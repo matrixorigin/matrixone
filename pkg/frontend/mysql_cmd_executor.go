@@ -4394,6 +4394,7 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 		execCtx.rewriteEnabled = ses.rewriteEnabled.Load()
 	}
 	parserSQLMode := sessionSQLModeForParser(ses)
+	internalSource := execCtx.input.isInternalSQLSource(ses)
 	// Reset the per-statement database remap; it is (re)populated below only when
 	// the rewrite feature is enabled and a remapdb is configured.
 	execCtx.remapDb = nil
@@ -4416,7 +4417,7 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 	} else if cached := cachedPlanForInput(ses, execCtx.input); cached != nil {
 		var remapErr error
 		statementSchedulingSQL, sources, schedulingErr := schedulingSQLByStatementWithSQLMode(
-			execCtx.reqCtx, execCtx.input.getSql(), parserSQLMode)
+			execCtx.reqCtx, execCtx.input.getSql(), parserSQLMode, internalSource)
 		if schedulingErr != nil {
 			return nil, schedulingErr
 		}
@@ -4564,10 +4565,14 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 	var sources []string
 	if execCtx.input.getStmt() != nil {
 		statementSchedulingSQL = []string{execCtx.input.getSql()}
-		sources = []string{statementSQLSource(execCtx.input.getSql(), parserSQLMode)}
+		source := constant.InternalSql
+		if !internalSource {
+			source = statementSQLSource(execCtx.input.getSql(), parserSQLMode)
+		}
+		sources = []string{source}
 	} else {
 		statementSchedulingSQL, sources, err = schedulingSQLByStatementWithSQLMode(
-			execCtx.reqCtx, execCtx.input.getSql(), parserSQLMode)
+			execCtx.reqCtx, execCtx.input.getSql(), parserSQLMode, internalSource)
 		if err != nil {
 			return nil, err
 		}
@@ -6471,12 +6476,16 @@ func sqlForRecordByStatementWithSQLMode(ctx context.Context, sql string, sqlMode
 // schedulingSQLByStatementWithSQLMode keeps raw statement text (including
 // optimizer comments) aligned with the parser's AST list. Unlike sqlForRecord,
 // this text is control-plane input and must never be sanitized first.
-func schedulingSQLByStatementWithSQLMode(ctx context.Context, sql string, sqlMode string) ([]string, []string, error) {
+func schedulingSQLByStatementWithSQLMode(ctx context.Context, sql string, sqlMode string, internalSource bool) ([]string, []string, error) {
 	if isCmdFieldListSql(sql) || isCmdGetSnapshotTsSql(sql) ||
 		isCmdGetDatabasesSql(sql) || isCmdGetMoIndexesSql(sql) ||
 		isCmdGetDdlSql(sql) || isCmdGetObjectSql(sql) ||
 		isCmdObjectListSql(sql) || isCmdCheckSnapshotFlushedSql(sql) {
-		return []string{sql}, []string{statementSQLSource(sql, sqlMode)}, nil
+		source := constant.InternalSql
+		if !internalSource {
+			source = statementSQLSource(sql, sqlMode)
+		}
+		return []string{sql}, []string{source}, nil
 	}
 	fragments, err := parsers.SplitSqlByStatementWithSQLMode(ctx, sql, sqlMode)
 	if err != nil {
@@ -6484,12 +6493,12 @@ func schedulingSQLByStatementWithSQLMode(ctx context.Context, sql string, sqlMod
 	}
 	// Rewriting only prepends optimizer hints and retains original SQL. Ordinary
 	// source markers therefore have identical meaning before and after rewrite.
-	sources, err := sqlSourcesByFragment(ctx, sql, sqlMode, fragments)
+	sources, err := sqlSourcesByFragment(ctx, sql, sqlMode, fragments, internalSource)
 	if err != nil {
 		return nil, nil, err
 	}
 	byStatement := make([]string, 0, len(fragments))
-	bySource := make([]string, 0, len(fragments))
+	bySource := sources[:0]
 	for i, fragment := range fragments {
 		if parsers.FragmentHasStatement(fragment) {
 			byStatement = append(byStatement, fragment)
@@ -6497,7 +6506,11 @@ func schedulingSQLByStatementWithSQLMode(ctx context.Context, sql string, sqlMod
 		}
 	}
 	if len(byStatement) == 0 {
-		return []string{sql}, []string{constant.ExternSql}, nil
+		source := constant.ExternSql
+		if internalSource {
+			source = constant.InternalSql
+		}
+		return []string{sql}, []string{source}, nil
 	}
 	return byStatement, bySource, nil
 }

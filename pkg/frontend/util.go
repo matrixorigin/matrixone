@@ -2389,19 +2389,30 @@ func (ui *UserInput) canUsePlanCache() bool {
 }
 
 func (ui *UserInput) genSqlSourceType(ses FeSession) {
-	ui.setSqlSourceTypes(ses, []string{statementSQLSource(ui.getSql(), sessionSQLModeForParser(ses))})
+	source := constant.InternalSql
+	if !ui.isInternalSQLSource(ses) {
+		source = constant.ExternSql
+		if hasSQLSourceTag(ui.getSql()) {
+			source = statementSQLSource(ui.getSql(), sessionSQLModeForParser(ses))
+		}
+	}
+	ui.setSqlSourceTypes(ses, []string{source})
 }
 
-// setSqlSourceTypes publishes a complete statement-aligned vector. Internal
-// provenance is authoritative for every slot, not only the first statement.
-func (ui *UserInput) setSqlSourceTypes(ses FeSession, sources []string) {
+func (ui *UserInput) isInternalSQLSource(ses FeSession) bool {
 	tenant := ses.GetTenantInfo()
 	internal := ui.isInternal() || tenant == nil || strings.HasPrefix(ui.getSql(), cmdFieldListSql)
 	if tenant != nil {
 		special, _, _ := isSpecialUser(tenant.GetUser())
 		internal = internal || special || tenant.GetTenant() == sysAccountName && tenant.GetUser() == "internal"
 	}
-	if internal {
+	return internal
+}
+
+// setSqlSourceTypes publishes a complete statement-aligned vector. Internal
+// provenance is authoritative for every slot, not only the first statement.
+func (ui *UserInput) setSqlSourceTypes(ses FeSession, sources []string) {
+	if ui.isInternalSQLSource(ses) {
 		for i := range sources {
 			sources[i] = constant.InternalSql
 		}
@@ -2424,7 +2435,15 @@ func sourceWithComment(source, comment string) string {
 	return source
 }
 
+// Absence excludes source markers; presence still requires lexical validation.
+func hasSQLSourceTag(sql string) bool {
+	return strings.Contains(sql, cloudUserTag) || strings.Contains(sql, cloudNoUserTag) || strings.Contains(sql, saveResultTag)
+}
+
 func statementSQLSource(sql, sqlMode string) string {
+	if !hasSQLSourceTag(sql) {
+		return constant.ExternSql
+	}
 	scanner := mysql.NewScannerWithSQLMode(dialect.MYSQL, sql, mysql.ParseSQLModeFlags(sqlMode))
 	defer mysql.PutScanner(scanner)
 	source := constant.ExternSql
@@ -2442,12 +2461,19 @@ func statementSQLSource(sql, sqlMode string) string {
 // sqlSourcesByFragment scans the whole lexical stream: a grammar fragment can
 // start inside a MySQL executable comment. Unfiltered fragments are ordered
 // trimmed slices of sql, so recovering their ends needs no second SQL parser.
-func sqlSourcesByFragment(ctx context.Context, sql, sqlMode string, fragments []string) ([]string, error) {
-	ends := make([]int, len(fragments))
+func sqlSourcesByFragment(ctx context.Context, sql, sqlMode string, fragments []string, internalSource bool) ([]string, error) {
+	scanSources := !internalSource && hasSQLSourceTag(sql)
+	var ends []int
+	if scanSources {
+		ends = make([]int, len(fragments))
+	}
 	sources := make([]string, len(fragments))
 	cursor := 0
 	for i, fragment := range fragments {
 		sources[i] = constant.ExternSql
+		if internalSource {
+			sources[i] = constant.InternalSql
+		}
 		if fragment != "" {
 			offset := strings.Index(sql[cursor:], fragment)
 			if offset < 0 {
@@ -2455,7 +2481,12 @@ func sqlSourcesByFragment(ctx context.Context, sql, sqlMode string, fragments []
 			}
 			cursor += offset + len(fragment)
 		}
-		ends[i] = cursor
+		if scanSources {
+			ends[i] = cursor
+		}
+	}
+	if !scanSources {
+		return sources, nil
 	}
 	scanner := mysql.NewScannerWithSQLMode(dialect.MYSQL, sql, mysql.ParseSQLModeFlags(sqlMode))
 	defer mysql.PutScanner(scanner)

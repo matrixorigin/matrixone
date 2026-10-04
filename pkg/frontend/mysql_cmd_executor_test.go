@@ -3932,6 +3932,14 @@ func TestGetComputationWrapperKeepsSchedulingSQLPerStatement(t *testing.T) {
 	require.NotContains(t, first, "query_pool_strict")
 	require.Contains(t, second, "query_pool_strict=on")
 	require.NotContains(t, second, "query_max_workers")
+	require.Equal(t, []string{constant.ExternSql, constant.ExternSql}, execCtx.input.sqlSourceType)
+	execCtx.input.isInternalInput = true
+	internalWrappers, err := GetComputationWrapper(execCtx, "", "root", nil, proc, ses)
+	require.NoError(t, err)
+	for _, cw := range internalWrappers {
+		cw.Free()
+	}
+	require.Equal(t, []string{constant.InternalSql, constant.InternalSql}, execCtx.input.sqlSourceType)
 }
 
 func TestGetComputationWrapperKeepsExecutableCommentStatementWhole(t *testing.T) {
@@ -4229,6 +4237,13 @@ func TestGetComputationWrapperRestoresStatementRemapOnPlanCacheHit(t *testing.T)
 		require.True(t, ok)
 		require.Equal(t, want, carrier.GetRemapDb()["src"], "wrapper %d", i)
 	}
+	input.isInternalInput = true
+	internalWrappers, err := GetComputationWrapper(execCtx, "src", "root", nil, proc, ses)
+	require.NoError(t, err)
+	for _, cw := range internalWrappers {
+		cw.Free()
+	}
+	require.Equal(t, []string{constant.InternalSql, constant.InternalSql}, input.sqlSourceType)
 }
 
 func TestRebuildStaleCachedStatementsTransfersOwnership(t *testing.T) {
@@ -4788,6 +4803,7 @@ func Test_HandlePrepareStmt(t *testing.T) {
 		{"sibling does not taint", "prepare stmt1 from select 1, 2", constant.ExternSql, false},
 		{"outer nonuser", "prepare stmt1 from select 1", constant.CloudNoUserSql, true},
 		{"decoded body nonuser", "prepare stmt1 from '/* cloud_nonuser */ select 1'", constant.ExternSql, true},
+		{"escaped decoded tag", `prepare stmt1 from '/* cloud_non\user */ select 1'`, constant.ExternSql, true},
 		{"literal is data", "prepare stmt1 from select '/* cloud_nonuser */'", constant.ExternSql, false},
 		{"outer protects string", "prepare stmt1 from 'select 1'", constant.CloudNoUserSql, true},
 	} {
@@ -9016,6 +9032,9 @@ func Test_getSqlType(t *testing.T) {
 			want []string
 		}{
 			{"select 1; /* save_result */ select 2", []string{constant.ExternSql, constant.CloudUserSql}},
+			{"/*\tcloud_user\n*/ select 1; /*\nsave_result\t*/ select 2; /*\tcloud_nonuser\n*/ select 3", []string{constant.CloudUserSql, constant.CloudUserSql, constant.CloudNoUserSql}},
+			{"/* SAVE_RESULT */ select 'cloud_nonuser'; /* ordinary */ select 2", []string{constant.ExternSql, constant.ExternSql}},
+			{"/* benign */; select 1; ; select 2", []string{constant.ExternSql, constant.ExternSql}},
 			{"/* benign */ /* save_result */ select 1; /* cloud_nonuser */ select 2", []string{constant.CloudUserSql, constant.CloudNoUserSql}},
 			{"select '/* save_result */', `cloud_nonuser`; select 2 /* cloud_user */", []string{constant.ExternSql, constant.CloudUserSql}},
 			{"-- /* save_result */\nselect 1; select /* save_result */ 2", []string{constant.ExternSql, constant.CloudUserSql}},
@@ -9030,12 +9049,19 @@ func Test_getSqlType(t *testing.T) {
 			{wrapNativePrepareSQL("s", "/* cloud_nonuser */ select 1"), []string{constant.CloudNoUserSql}},
 		} {
 			t.Run(tc.sql, func(t *testing.T) {
-				fragments, sources, err := schedulingSQLByStatementWithSQLMode(context.Background(), tc.sql, "")
+				fragments, sources, err := schedulingSQLByStatementWithSQLMode(context.Background(), tc.sql, "", false)
 				require.NoError(t, err)
 				require.Len(t, fragments, len(tc.want))
 				require.Equal(t, tc.want, sources)
 			})
 		}
+		const specialUser = "source-classification-special-user"
+		SetSpecialUser(specialUser, nil)
+		t.Cleanup(func() {
+			specialUsers.Lock()
+			delete(specialUsers.users, specialUser)
+			specialUsers.Unlock()
+		})
 		for _, tc := range []struct {
 			name     string
 			tenant   *TenantInfo
@@ -9045,14 +9071,34 @@ func Test_getSqlType(t *testing.T) {
 			{name: "internal input", tenant: &TenantInfo{User: "dump"}, internal: true},
 			{name: "absent tenant"},
 			{name: "internal account", tenant: &TenantInfo{Tenant: "sys", User: "internal"}},
+			{name: "special user", tenant: &TenantInfo{User: specialUser}},
 			{name: "field list", tenant: &TenantInfo{User: "dump"}, sql: cmdFieldListSql},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				ses.SetTenantInfo(tc.tenant)
 				input := &UserInput{sql: tc.sql, isInternalInput: tc.internal}
+				require.True(t, input.isInternalSQLSource(ses))
+				_, sources, err := schedulingSQLByStatementWithSQLMode(context.Background(), "/* save_result */ select 1; /* cloud_nonuser */ select 2", "", input.isInternalSQLSource(ses))
+				require.NoError(t, err)
+				require.Equal(t, []string{constant.InternalSql, constant.InternalSql}, sources)
+				input.genSqlSourceType(ses)
+				require.Equal(t, []string{constant.InternalSql}, input.sqlSourceType)
 				input.setSqlSourceTypes(ses, []string{constant.CloudUserSql, constant.ExternSql})
 				require.Equal(t, []string{constant.InternalSql, constant.InternalSql}, input.sqlSourceType)
 			})
+		}
+	})
+	t.Run("fragment validation survives fast paths", func(t *testing.T) {
+		for _, internal := range []bool{false, true} {
+			_, err := sqlSourcesByFragment(context.Background(), "select 1", "", []string{"select 2"}, internal)
+			require.ErrorContains(t, err, "SQL fragment is not in its input")
+			_, sources, err := schedulingSQLByStatementWithSQLMode(context.Background(), "/* benign */;", "", internal)
+			require.NoError(t, err)
+			want := constant.ExternSql
+			if internal {
+				want = constant.InternalSql
+			}
+			require.Equal(t, []string{want}, sources)
 		}
 	})
 	convey.Convey("call genSqlSourceType func", t, func() {
