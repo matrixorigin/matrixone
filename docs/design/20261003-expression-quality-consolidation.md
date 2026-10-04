@@ -838,3 +838,83 @@ semantic cell and exact assertions have a disclosed cost; consolidate the
 remaining duplicate D256 owners before claiming an overall improvement. No
 server/BVT is needed for unused internal argument retirement and UT-only work;
 prior SQL repairs retain their separate open BVT gate. #29249 remains active.
+
+
+## Current goal: historical bug families and independent repair challenges
+
+The user changed the priority: group previous bugs by shared ownership and
+failure mechanism, reorganize their unit tests, independently challenge the
+repairs, identify new problems, file issues, repair the common owner, validate,
+and add minimal independent regressions. Test consolidation and cost reduction
+support this lifecycle. A stage is not completion of #29249. The unit of test
+redesign is a class of behavior, rather than a test per issue.
+
+The active decimal family spans signed values versus unsigned coefficients,
+scale admission, rounded/truncated division and remainder, narrowing bounds,
+and vector NULL/zero/error policy. Existing D64/D128 consolidation and scale
+cleanup are earlier parts of this family; D256 dispatch consolidation remains
+open and requires a renewed old-to-retained map after the upstream changes.
+
+## Latest-main D256 rounded consumer checkpoint
+
+With the explicitly permitted Git fetch, rebase the seven unpublished commits
+onto main c3fbe9ce744aa877ec944c86258916fc5e45b63b. Preserve the upstream
+quotient/remainder owner and its floor, modulo, format and high-magnitude tests.
+Do not reapply the saved alternate pre-rebase algorithm: latest main already
+fixes the old DIV/modulo counterexamples. A pre-rebase failure is not evidence
+of an outstanding current-main defect.
+
+A separate current-baseline native assertion proves that unsigned rounded
+Div256 returns zero for 3*10^76 / 10^64 instead of 3*10^12. Rounded division
+still duplicates the former doubled-dividend/signed-comparison algorithm.
+Ordinary SQL division previously protected this domain with an allocation-heavy
+headroom fallback, so this primitive failure does not establish wrong SQL
+results for that protected adapter. Reuse the existing div256TruncQuoRem owner
+byte-for-byte. Compare the remainder with floor(divisor/2) using unsigned borrow
+and divisor parity, then propagate quotient carry with unsigned addition. No
+new division algorithm, state or helper is introduced. Rounding cannot overflow
+the unsigned quotient: divisor one has remainder zero; larger divisors leave at
+least one quotient bit of capacity.
+
+Remove the private truncate forwarding wrapper with its sole caller. The SQL
+adapter now admits all fixed-width scale-adjusted magnitudes; retain its signed
+quotient range check and the bounded BigInt path for actual scale overflow.
+Trace the other rounded consumers (Decimal128 wide fallback, Decimal256.Div,
+AVG finalization, linear interpolation and CU accounting); their sign/scale
+responsibilities remain at their existing callers.
+
+Seven distinct rounding boundary cells plus exact zero-error/result assertions
+extend the existing unsigned owner rather than introducing a new test root or
+repeating its floor matrix. One scan-expression row reuses the binder/executor
+fixture for two values and NULL, output type/width/scale and operand scales.
+Existing cases are retained. Production changes add 35/delete 50 lines (net -15),
+unit/public tests add 35 lines, and documentation is accounted separately.
+
+All seven validation steps finish with zero exits and unchanged source hashes:
+independent 2,048 full-width pairs, vet, molint, incremental lint, full normal
+(types/function/plan), full race (types/function), and public-expression race.
+Normal tests select 219/2,044/3,490 roots; race selects 219/2,043 roots (one
+existing race-mode exclusion). Existing AVG, interpolation and accounting
+consumer tests also pass. Half-parity and top-word carry mutants fail real
+assertions in the new boundaries, without build failure or panic.
+
+Six alternating samples per mode in the same binary measure the primitive and
+adapter separately. Median one-word rounding is 12.351 to 9.317 ns; wide
+rounding is 3,171.099 to 287.595 ns. Truncation/below-divisor controls differ by
+less than 1%, with zero allocations for every primitive sample. Two adapter
+controls change 565.583 to 184.713 ns (432 B/15 allocations to zero) and 578.264
+to 233.388 ns (448 B/17 allocations to zero). These fixed-input microbenchmarks
+exclude build/fixture/queueing cost; no end-to-end SQL, CI savings or broad
+workload claim follows. Evidence, current-main issue draft and new-family
+inventory live in `29249-d256-intdiv-20261004/canonical/latest-main`.
+
+The real-service BVT gate for earlier SQL-visible repairs remains open. The new
+rounded-owner checkpoint preserves protected ordinary SQL results while
+removing the allocation-heavy fallback; its exact primitive and real expression
+consumer evidence do not substitute for the separate earlier BVT obligation.
+Independent gpt-6.1-sol xhigh stage review approves this checkpoint with no
+blockers after checking the final source hashes, independent models/mutations,
+shared owner, callers, test purpose and cost limits. Family consolidation and
+the earlier real-service BVT obligation remain open. Publication awaits
+clarification of the existing network restriction; no new GitHub issue/PR has
+been created by this checkpoint.

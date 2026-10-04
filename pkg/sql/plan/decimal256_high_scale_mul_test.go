@@ -53,6 +53,7 @@ func TestDecimal256ScaleAlignmentPublicPath(t *testing.T) {
 		scale, leftScale, rightScale int32
 		want                         any
 	}{
+		{"div_scaled_magnitude_sign_threshold", "select (cast('3e60' as decimal(65,0)) + cast(n_nationkey - 1 as decimal(65,0))) / cast('1e48' as decimal(65,12)) from nation", 4, 0, 12, []types.Decimal256{{B0_63: 30000000000000000}, {B0_63: 30000000000000000}}},
 		{"intdiv_minimum_divisor", "select (cast('170141183460469231731687303715884105727' as decimal(65,0)) - cast(n_nationkey - 1 as decimal(65,0))) div cast('-170141183460469231731687303715884105728' as decimal(65,0)) from nation", 0, 0, 0, []int64{0, 0}},
 		{"div_minimum_divisor", "select cast(n_nationkey as decimal(65,0)) / cast('-170141183460469231731687303715884105728' as decimal(65,0)) from nation", 4, 0, 0, []types.Decimal256{{}, {}}},
 

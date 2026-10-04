@@ -1145,46 +1145,33 @@ func (x Decimal128) Div128Trunc(y Decimal128) (Decimal128, error) {
 	return x.div128Trunc(y)
 }
 
+// Div256 rounds unsigned coefficient magnitudes half up using the shared owner.
 func (x Decimal256) Div256(y Decimal256) (Decimal256, error) {
-	if y.B128_191 == 0 && y.B192_255 == 0 && y.B64_127 == 0 {
-		if y.B0_63 == 0 {
-			return x, moerr.NewInvalidInputNoCtx("Decimal256 Div by Zero")
-		}
-		x = x.Left(1)
-		z := Decimal256{0, 0, 0, 0}
-		z.B192_255, z.B128_191 = bits.Div64(0, x.B192_255, y.B0_63)
-		z.B128_191, z.B64_127 = bits.Div64(z.B128_191, x.B128_191, y.B0_63)
-		z.B64_127, z.B0_63 = bits.Div64(z.B64_127, x.B64_127, y.B0_63)
-		z.B0_63, _ = bits.Div64(z.B0_63, x.B0_63, y.B0_63)
-		if z.B0_63&1 == 0 {
-			z = z.Right(1)
-		} else {
-			z, _ = z.Right(1).Add256(Decimal256{1, 0, 0, 0})
-		}
-		return z, nil
-	} else {
-		x = x.Left(1)
-		w := Decimal256{1, 0, 0, 0}
-		z := Decimal256{0, 0, 0, 0}
-		for y.Compare(x) <= 0 {
-			y = y.Left(1)
-			w = w.Left(1)
-		}
-		for y.B0_63 != 0 || y.B64_127 != 0 || y.B128_191 != 0 || y.B192_255 != 0 {
-			y = y.Right(1)
-			w = w.Right(1)
-			if y.Compare(x) <= 0 {
-				z, _ = z.Add256(w)
-				x, _ = x.Sub256(y)
-			}
-		}
-		if z.B0_63&1 == 0 {
-			z = z.Right(1)
-		} else {
-			z, _ = z.Right(1).Add256(Decimal256{1, 0, 0, 0})
-		}
-		return z, nil
+	quotient, remainder, err := x.div256TruncQuoRem(y)
+	if err != nil {
+		return quotient, err
 	}
+	// Compare with floor(y/2); an odd divisor has no exact integer half.
+	// Doubling the dividend or remainder would lose the top magnitude bit.
+	half := Decimal256{
+		B0_63:    y.B0_63>>1 | y.B64_127<<63,
+		B64_127:  y.B64_127>>1 | y.B128_191<<63,
+		B128_191: y.B128_191>>1 | y.B192_255<<63,
+		B192_255: y.B192_255 >> 1,
+	}
+	var borrow uint64
+	_, borrow = bits.Sub64(remainder.B0_63, half.B0_63, 0)
+	_, borrow = bits.Sub64(remainder.B64_127, half.B64_127, borrow)
+	_, borrow = bits.Sub64(remainder.B128_191, half.B128_191, borrow)
+	_, borrow = bits.Sub64(remainder.B192_255, half.B192_255, borrow)
+	if borrow == 0 && (remainder != half || y.B0_63&1 == 0) {
+		var carry uint64
+		quotient.B0_63, carry = bits.Add64(quotient.B0_63, 1, 0)
+		quotient.B64_127, carry = bits.Add64(quotient.B64_127, 0, carry)
+		quotient.B128_191, carry = bits.Add64(quotient.B128_191, 0, carry)
+		quotient.B192_255, _ = bits.Add64(quotient.B192_255, 0, carry)
+	}
+	return quotient, nil
 }
 
 // div256TruncQuoRem divides unsigned 256-bit magnitudes. Signed callers
@@ -1241,15 +1228,10 @@ func (x Decimal256) div256TruncQuoRem(y Decimal256) (Decimal256, Decimal256, err
 	return q, x, nil
 }
 
-func (x Decimal256) div256Trunc(y Decimal256) (Decimal256, error) {
-	q, _, err := x.div256TruncQuoRem(y)
-	return q, err
-}
-
-// Div256Trunc is the exported version of div256Trunc for integer division (DIV)
-// which truncates toward zero instead of rounding half-up.
+// Div256Trunc truncates the quotient of unsigned coefficient magnitudes.
 func (x Decimal256) Div256Trunc(y Decimal256) (Decimal256, error) {
-	return x.div256Trunc(y)
+	quotient, _, err := x.div256TruncQuoRem(y)
+	return quotient, err
 }
 
 func (x Decimal64) Mod64(y Decimal64) (Decimal64, error) {

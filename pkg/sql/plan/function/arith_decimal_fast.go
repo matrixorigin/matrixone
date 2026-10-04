@@ -3368,9 +3368,8 @@ func d256DivAtScale(v1, v2, rs []types.Decimal256, scale1, scale2, resultScale i
 }
 
 // d256DivAdjusted divides unsigned magnitudes with one final half-up rounding.
-// Div256 doubles the numerator and shifts the divisor using signed comparisons.
-// Keeping the scaled numerator below 2^253 leaves headroom for both operations;
-// values outside that domain use the bounded wide fallback.
+// The magnitude owner handles the full fixed-width domain; only an overflowing
+// scale adjustment needs the bounded wide fallback.
 func d256DivAdjusted(a, b types.Decimal256, scaleAdj int32, negative bool, dst *types.Decimal256) error {
 	scaledA, scaledB := a, b
 	fits := true
@@ -3379,10 +3378,14 @@ func d256DivAdjusted(a, b types.Decimal256, scaleAdj int32, negative bool, dst *
 	} else if scaleAdj < 0 {
 		fits = d256MulPow10(&scaledB, -scaleAdj)
 	}
-	if fits && scaledA.B192_255>>61 == 0 && scaledB.B192_255>>63 == 0 {
+	if fits {
 		quotient, err := scaledA.Div256(scaledB)
 		if err != nil {
 			return err
+		}
+		// Preserve the signed result range also enforced by d256DivBig.
+		if quotient.B192_255>>63 != 0 {
+			return moerr.NewOutOfRangeNoCtx("DECIMAL256", "")
 		}
 		if negative {
 			quotient = quotient.Minus()
