@@ -4860,12 +4860,6 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 	var stats statistic.StatsArray
 	stats.Reset()
 
-	// Cache grants only within one statement. A session-local cache cannot
-	// observe REVOKE or RESTORE committed by another connection or another CN.
-	if cache := ses.GetPrivilegeCache(); cache != nil {
-		cache.invalidate()
-	}
-
 	reqCtx, span := trace.Debug(reqCtx, "authenticateUserCanExecuteStatement")
 	defer span.End()
 	if getPu(ses.GetService()).SV.SkipCheckPrivilege {
@@ -4874,6 +4868,16 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 
 	if ses.skipAuthForSpecialUser() {
 		return stats, nil
+	}
+	switch stmt.(type) {
+	case *tree.Execute, *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
+		// Transaction control consumes no grants. EXECUTE authorizes the bound
+		// statement in authenticateUserCanExecutePrepareOrExecute; checking its
+		// wrapper too would acquire two freshness snapshots for every execution.
+	default:
+		if err := ses.refreshPrivilegeCache(reqCtx); err != nil {
+			return stats, err
+		}
 	}
 	if ses.GetTenantInfo() != nil {
 		ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))

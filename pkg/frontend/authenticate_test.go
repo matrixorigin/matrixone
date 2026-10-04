@@ -13952,97 +13952,38 @@ func Test_graph(t *testing.T) {
 	})
 }
 
-func Test_cache(t *testing.T) {
-	type arg struct {
-		db    string
-		table string
+func TestPrivilegeCacheScopes(t *testing.T) {
+	cache := &privilegeCache{}
+	for _, scope := range []struct {
+		object objectType
+		level  privilegeLevelType
+	}{
+		{objectTypeTable, privilegeLevelStarStar},
+		{objectTypeTable, privilegeLevelDatabaseStar},
+		{objectTypeTable, privilegeLevelDatabaseTable},
+		{objectTypeView, privilegeLevelDatabaseTable},
+		{objectTypeDatabase, privilegeLevelDatabase},
+		{objectTypeAccount, privilegeLevelStar},
+	} {
+		require.False(t, cache.has(scope.object, scope.level, "db", "t", PrivilegeTypeSelect))
+		cache.add(scope.object, scope.level, "db", "t", PrivilegeTypeSelect)
+		require.True(t, cache.has(scope.object, scope.level, "db", "t", PrivilegeTypeSelect))
+		require.False(t, cache.has(scope.object, scope.level, "db", "t", PrivilegeTypeUpdate))
+		cache.invalidate()
+		require.False(t, cache.has(scope.object, scope.level, "db", "t", PrivilegeTypeSelect))
 	}
-	cnt := 10
-	args := make([]arg, 10)
-	for i := 0; i < cnt; i++ {
-		args[i].db = fmt.Sprintf("db%d", i)
-		args[i].table = fmt.Sprintf("table%d", i)
+	for i := range maxPrivilegeCacheScopes + 1 {
+		name := fmt.Sprint(i)
+		require.False(t, cache.has(objectTypeTable, privilegeLevelTable, name, "t", PrivilegeTypeSelect))
 	}
-
-	cache1 := &privilegeCache{}
-	convey.Convey("has", t, func() {
-		for _, a := range args {
-			ret := cache1.has(objectTypeTable, privilegeLevelStar, a.db, a.table, PrivilegeTypeCreateAccount)
-			convey.So(ret, convey.ShouldBeFalse)
-		}
-	})
-
-	//add some privilege
-	for _, a := range args {
-		for i := PrivilegeTypeCreateAccount; i < PrivilegeTypeCreateObject; i++ {
-			cache1.add(objectTypeTable, privilegeLevelStar, a.db, a.table, i)
-		}
+	require.Zero(t, cache.cachedScopes)
+	require.Zero(t, cache.storeForTable3.Len(), "cache misses must not retain empty scopes")
+	for i := range maxPrivilegeCacheScopes + 1 {
+		cache.add(objectTypeTable, privilegeLevelTable, "db", fmt.Sprint(i), PrivilegeTypeSelect)
 	}
-
-	convey.Convey("has2", t, func() {
-		for _, a := range args {
-			ret := cache1.has(objectTypeTable, privilegeLevelStar, a.db, a.table, PrivilegeTypeCreateAccount)
-			convey.So(ret, convey.ShouldBeTrue)
-			ret = cache1.has(objectTypeTable, privilegeLevelStar, a.db, a.table, PrivilegeTypeCreateObject)
-			convey.So(ret, convey.ShouldBeFalse)
-		}
-	})
-
-	for _, a := range args {
-		for i := PrivilegeTypeCreateObject; i < PrivilegeTypeExecute; i++ {
-			cache1.add(objectTypeTable, privilegeLevelStar, a.db, a.table, i)
-		}
-	}
-
-	convey.Convey("has3", t, func() {
-		for _, a := range args {
-			ret := cache1.has(objectTypeTable, privilegeLevelStar, a.db, a.table, PrivilegeTypeCreateAccount)
-			convey.So(ret, convey.ShouldBeTrue)
-			ret = cache1.has(objectTypeTable, privilegeLevelStar, a.db, a.table, PrivilegeTypeCreateObject)
-			convey.So(ret, convey.ShouldBeTrue)
-		}
-	})
-
-	//set
-	for _, a := range args {
-		for i := PrivilegeTypeCreateObject; i < PrivilegeTypeExecute; i++ {
-			cache1.set(objectTypeTable, privilegeLevelStar, a.db, a.table)
-		}
-	}
-
-	convey.Convey("has4", t, func() {
-		for _, a := range args {
-			ret := cache1.has(objectTypeTable, privilegeLevelStar, a.db, a.table, PrivilegeTypeCreateAccount)
-			convey.So(ret, convey.ShouldBeFalse)
-			ret = cache1.has(objectTypeTable, privilegeLevelStar, a.db, a.table, PrivilegeTypeCreateObject)
-			convey.So(ret, convey.ShouldBeFalse)
-		}
-	})
-
-	for _, a := range args {
-		for i := PrivilegeTypeCreateAccount; i < PrivilegeTypeExecute; i++ {
-			cache1.add(objectTypeTable, privilegeLevelStarStar, a.db, a.table, i)
-		}
-	}
-
-	convey.Convey("has4", t, func() {
-		for _, a := range args {
-			ret := cache1.has(objectTypeTable, privilegeLevelStar, a.db, a.table, PrivilegeTypeCreateAccount)
-			convey.So(ret, convey.ShouldBeFalse)
-			ret = cache1.has(objectTypeTable, privilegeLevelStarStar, a.db, a.table, PrivilegeTypeCreateObject)
-			convey.So(ret, convey.ShouldBeTrue)
-		}
-	})
-
-	cache1.invalidate()
-	convey.Convey("has4", t, func() {
-		for _, a := range args {
-			ret := cache1.has(objectTypeTable, privilegeLevelStar, a.db, a.table, PrivilegeTypeCreateAccount)
-			convey.So(ret, convey.ShouldBeFalse)
-			ret = cache1.has(objectTypeTable, privilegeLevelStar, a.db, a.table, PrivilegeTypeCreateObject)
-			convey.So(ret, convey.ShouldBeFalse)
-		}
-	})
+	require.LessOrEqual(t, cache.cachedScopes, maxPrivilegeCacheScopes)
+	require.True(t, cache.has(objectTypeTable, privilegeLevelTable, "db", fmt.Sprint(maxPrivilegeCacheScopes), PrivilegeTypeSelect))
+	require.False(t, cache.has(objectTypeTable, privilegeLevelTable, "db", "0", PrivilegeTypeSelect))
 }
 
 func TestActiveRoleGrantCacheLifecycle(t *testing.T) {
