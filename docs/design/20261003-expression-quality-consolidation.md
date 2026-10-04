@@ -324,3 +324,38 @@ Root-body measurements include child test-harness work and verbose output.
 An initial unequal-filter run and a subsequent equal-filter run are uncredited:
 Go 1.26.4 testdeps caches one regex, so alternating run/skip patterns recompiles
 regexes and distorts test-body cost. The final comparison has no skip filter.
+
+### Decimal64 multiplication — validated local checkpoint
+
+`d64Mul` owns scale/shape dispatch through `d64MulScaled` and `d64MulInline`.
+Six test owners consolidate into the existing `TestD64Mul`: 20 old scenarios map
+to 24 cases, with 3,712 rows reduced to 78. Five duplicate owners and orphan
+comments retire. All 164 other function bodies, including benchmarks, remain
+identical. Test delta: -143 lines/-2,715 bytes; production delta: zero.
+
+The old `LargeValues_SlowPath` actually stayed inside signed-int32 admission.
+Independent literal coefficients now cover real wide scaling, both admission
+operands, late-wide-row rejection, signed endpoints/high limbs, half rounding,
+NULL-prefix continuation, scalar broadcasting and scale-policy boundaries.
+Review found that wide fast-path quotients must be preserved separately in VV,
+SV and VS loops; each now has positive and negative results exceeding int32.
+A left-int32/right-wide case independently verifies the right admission gate.
+No artificial overflow-error matrix is added: signed D64 products fit D128.
+
+All 24 controls pass. Six private wrong implementations are rejected by 12 new
+runtime assertions; two original broadcast tests also reject narrowed quotients,
+proving those obligations were retained. Selected old NoError-only groups miss
+NULL/rounding faults; all six old owners miss the admission faults. Both controls
+pass for every variant. This is scoped sensitivity evidence, not exhaustive QA.
+
+Three alternating same-binary pairs use untouched kernels: root-body medians
+wall 1.562ms -> 0.355ms, process CPU 1.665ms -> 0.431ms, Go TotalAlloc 276,312 ->
+68,512 bytes and allocations 4,761 -> 954. Child harness/verbose output are
+included; build/link/init/queue and native memory/RSS are excluded. These are
+mapped test costs, not whole-CI or query gains. Current go vet and incremental
+lint pass; molint exits zero with the same two recorded unsafe-import diagnostics.
+The gpt-6.1-sol xhigh follow-up review closes both findings without additional
+concrete defects. Current focused race exits zero with all 24 cases passing and no skipped cases.
+The earlier superseded race build was cancelled after the review findings, not
+counted as passed. Four scale-39 failures and full-function
+race #29592 remain unchanged and unwaived; #29249 remains unfinished.

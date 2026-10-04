@@ -472,87 +472,182 @@ func TestD64Sub(t *testing.T) {
 }
 
 func TestD64Mul(t *testing.T) {
-	t.Run("VecVec", func(t *testing.T) {
-		rng := rand.New(rand.NewSource(1))
-		v1 := make([]types.Decimal64, testBatchSize)
-		v2 := make([]types.Decimal64, testBatchSize)
-		rs := make([]types.Decimal128, testBatchSize)
-		for i := range v1 {
-			v1[i] = randD64(rng)
-			v2[i] = randD64(rng)
-		}
-		nul := nulls.NewWithSize(testBatchSize)
-		err := d64Mul(v1, v2, rs, 2, 3, nul)
-		require.NoError(t, err)
-		for i := range v1 {
-			x := functionUtil.ConvertD64ToD128(v1[i])
-			y := functionUtil.ConvertD64ToD128(v2[i])
-			want, _, err := x.Mul(y, 2, 3)
-			require.NoError(t, err)
-			require.Equal(t, want, rs[i], "d64Mul[%d]", i)
-		}
-	})
-
-	t.Run("ScalarVec", func(t *testing.T) {
-		rng := rand.New(rand.NewSource(32))
-		vec := make([]types.Decimal64, testBatchSize)
-		for i := range vec {
-			vec[i] = randD64(rng)
-		}
-		scalar := []types.Decimal64{randD64(rng)}
-
-		rs := make([]types.Decimal128, testBatchSize)
-		nul := nulls.NewWithSize(testBatchSize)
-		require.NoError(t, d64Mul(scalar, vec, rs, 2, 2, nul))
-		for i := range vec {
-			x := functionUtil.ConvertD64ToD128(scalar[0])
-			y := functionUtil.ConvertD64ToD128(vec[i])
-			want, _, err := x.Mul(y, 2, 2)
-			require.NoError(t, err)
-			require.Equal(t, want, rs[i], "const-vec mul[%d]", i)
-		}
-	})
-
-	t.Run("VecScalar", func(t *testing.T) {
-		rng := rand.New(rand.NewSource(32))
-		vec := make([]types.Decimal64, testBatchSize)
-		for i := range vec {
-			vec[i] = randD64(rng)
-		}
-		scalar := []types.Decimal64{randD64(rng)}
-
-		rs := make([]types.Decimal128, testBatchSize)
-		nul := nulls.NewWithSize(testBatchSize)
-		require.NoError(t, d64Mul(vec, scalar, rs, 2, 2, nul))
-		for i := range vec {
-			x := functionUtil.ConvertD64ToD128(vec[i])
-			y := functionUtil.ConvertD64ToD128(scalar[0])
-			want, _, err := x.Mul(y, 2, 2)
-			require.NoError(t, err)
-			require.Equal(t, want, rs[i], "vec-const mul[%d]", i)
-		}
-	})
-
-	t.Run("Scaled", func(t *testing.T) {
-		rng := rand.New(rand.NewSource(20))
-		v1 := make([]types.Decimal64, testBatchSize)
-		v2 := make([]types.Decimal64, testBatchSize)
-		rs := make([]types.Decimal128, testBatchSize)
-		for i := range v1 {
-			v1[i] = types.Decimal64(rng.Int63n(10000) - 5000)
-			v2[i] = types.Decimal64(rng.Int63n(10000) - 5000)
-		}
-		nul := nulls.NewWithSize(testBatchSize)
-		err := d64Mul(v1, v2, rs, 8, 8, nul)
-		require.NoError(t, err)
-		for i := range v1 {
-			x := functionUtil.ConvertD64ToD128(v1[i])
-			y := functionUtil.ConvertD64ToD128(v2[i])
-			want, _, err := x.Mul(y, 8, 8)
-			require.NoError(t, err)
-			require.Equal(t, want, rs[i], "d64MulScaled[%d]", i)
-		}
-	})
+	// Literal coefficients use exact signed multiplication and half-away-from-zero rounding.
+	const allBits = ^uint64(0)
+	const maxCoefficient = types.Decimal64(1<<63 - 1)
+	const minCoefficient = types.Decimal64(1 << 63)
+	for _, tc := range []struct {
+		name                  string
+		left, right           []types.Decimal64
+		leftScale, rightScale int32
+		nullRows              []uint64
+		want                  []types.Decimal128
+	}{
+		{
+			"unscaled_vv_values",
+			[]types.Decimal64{maxCoefficient, minCoefficient, minCoefficient, 0}, []types.Decimal64{maxCoefficient, minCoefficient, 0xffffffffffffffff, minCoefficient},
+			2, 3, nil,
+			[]types.Decimal128{{B0_63: 1, B64_127: 0x3fffffffffffffff}, {B64_127: 0x4000000000000000}, {B0_63: 0x8000000000000000}, {}},
+		},
+		{
+			"unscaled_sv_values",
+			[]types.Decimal64{minCoefficient}, []types.Decimal64{0xffffffffffffffff, 1, 0},
+			2, 2, nil,
+			[]types.Decimal128{{B0_63: 0x8000000000000000}, {B0_63: 0x8000000000000000, B64_127: allBits}, {}},
+		},
+		{
+			"unscaled_vs_values",
+			[]types.Decimal64{0xffffffffffffffff, 1, 0}, []types.Decimal64{minCoefficient},
+			2, 2, nil,
+			[]types.Decimal128{{B0_63: 0x8000000000000000}, {B0_63: 0x8000000000000000, B64_127: allBits}, {}},
+		},
+		{
+			"unscaled_vv_null_prefix",
+			[]types.Decimal64{maxCoefficient, minCoefficient, 0xfffffffffffffff9}, []types.Decimal64{maxCoefficient, 0xffffffffffffffff, 3},
+			2, 3, []uint64{0},
+			[]types.Decimal128{{}, {B0_63: 0x8000000000000000}, {B0_63: 0xffffffffffffffeb, B64_127: allBits}},
+		},
+		{
+			"unscaled_sv_null_prefix",
+			[]types.Decimal64{0xfffffffffffffff9}, []types.Decimal64{13, 3, 0xfffffffffffffffd},
+			2, 2, []uint64{0},
+			[]types.Decimal128{{}, {B0_63: 0xffffffffffffffeb, B64_127: allBits}, {B0_63: 21}},
+		},
+		{
+			"unscaled_vs_null_prefix",
+			[]types.Decimal64{13, 3, 0xfffffffffffffffd}, []types.Decimal64{0xfffffffffffffff9},
+			2, 2, []uint64{0},
+			[]types.Decimal128{{}, {B0_63: 0xffffffffffffffeb, B64_127: allBits}, {B0_63: 21}},
+		},
+		{
+			"scaled_int32_vv_values",
+			[]types.Decimal64{4999, 5000, 5001, 0xffffffffffffec78, 2147483647, 0xffffffff80000000}, []types.Decimal64{1, 1, 1, 1, 2147483647, 2147483647},
+			8, 8, nil,
+			[]types.Decimal128{{}, {B0_63: 1}, {B0_63: 1}, {B0_63: 0xffffffffffffffff, B64_127: allBits}, {B0_63: 0x1a36e2eab367a}, {B0_63: 0xfffe5c91d15182aa, B64_127: allBits}},
+		},
+		{
+			"scaled_int32_sv_values",
+			[]types.Decimal64{1000000001}, []types.Decimal64{49999999, 50000000, 50000001, 0xfffffffffd050f80, 2000000000, 0xffffffff88ca6c00},
+			10, 10, nil,
+			[]types.Decimal128{{B0_63: 0x1dcd64f6}, {B0_63: 0x1dcd6501}, {B0_63: 0x1dcd650b}, {B0_63: 0xffffffffe2329aff, B64_127: allBits}, {B0_63: 0x4a817c814}, {B0_63: 0xfffffffb57e837ec, B64_127: allBits}},
+		},
+		{
+			"scaled_int32_vs_values",
+			[]types.Decimal64{2147483647, 0xffffffff80000000, 0}, []types.Decimal64{3000},
+			7, 8, nil,
+			[]types.Decimal128{{B0_63: 0x17ffffffd}, {B0_63: 0xfffffffe80000000, B64_127: allBits}, {}},
+		},
+		{
+			"scaled_int32_vv_null_prefix",
+			[]types.Decimal64{5000, 0xffffffffffffec78, 5001}, []types.Decimal64{1, 1, 1},
+			8, 8, []uint64{0},
+			[]types.Decimal128{{}, {B0_63: 0xffffffffffffffff, B64_127: allBits}, {B0_63: 1}},
+		},
+		{
+			"scaled_int32_sv_null_prefix",
+			[]types.Decimal64{5000}, []types.Decimal64{1, 0xffffffffffffffff, 3},
+			8, 8, []uint64{0},
+			[]types.Decimal128{{}, {B0_63: 0xffffffffffffffff, B64_127: allBits}, {B0_63: 2}},
+		},
+		{
+			"scaled_int32_vs_null_prefix",
+			[]types.Decimal64{1, 0xffffffffffffffff, 3}, []types.Decimal64{5000},
+			8, 8, []uint64{0},
+			[]types.Decimal128{{}, {B0_63: 0xffffffffffffffff, B64_127: allBits}, {B0_63: 2}},
+		},
+		{
+			"scaled_wide_vv_values",
+			[]types.Decimal64{1, 1099511627776, 0xffffff0000000000}, []types.Decimal64{1, 1099511627776, 1099511627776},
+			10, 10, nil,
+			[]types.Decimal128{{}, {B0_63: 0x2af31dc4611874}, {B0_63: 0xffd50ce23b9ee78c, B64_127: allBits}},
+		},
+		{
+			"scaled_wide_sv_values",
+			[]types.Decimal64{2147483647}, []types.Decimal64{1, minCoefficient, maxCoefficient},
+			7, 8, nil,
+			[]types.Decimal128{{B0_63: 0x20c49c}, {B0_63: 0x2d2f1a9fbe76c8b4, B64_127: 0xffffffffffef9db2}, {B0_63: 0xd2d0e560416872b0, B64_127: 0x10624d}},
+		},
+		{
+			"scaled_wide_vs_values",
+			[]types.Decimal64{minCoefficient, 1, 0xffffffffffffffff}, []types.Decimal64{minCoefficient},
+			8, 8, nil,
+			[]types.Decimal128{{B0_63: 0xca57a786c226809d, B64_127: 0x1a36e2eb1c432}, {B0_63: 0xfffcb923a29c779a, B64_127: allBits}, {B0_63: 0x346dc5d638866}},
+		},
+		{
+			"scaled_wide_vv_null_prefix",
+			[]types.Decimal64{maxCoefficient, minCoefficient, 1}, []types.Decimal64{maxCoefficient, minCoefficient, 1},
+			10, 10, []uint64{0},
+			[]types.Decimal128{{}, {B0_63: 0x461cefcfdc20d2b3, B64_127: 0xabcc77118}, {}},
+		},
+		{
+			"scaled_wide_sv_null_prefix",
+			[]types.Decimal64{maxCoefficient}, []types.Decimal64{maxCoefficient, minCoefficient, 0xffffffffffffffff},
+			7, 8, []uint64{0},
+			[]types.Decimal128{{}, {B0_63: 0x18b4395810624dd3, B64_127: 0xffef9db22d0e5604}, {B0_63: 0xffdf3b645a1cac08, B64_127: allBits}},
+		},
+		{
+			"scaled_wide_vs_null_prefix",
+			[]types.Decimal64{maxCoefficient, minCoefficient, 0xffffffffffffffff}, []types.Decimal64{maxCoefficient},
+			8, 8, []uint64{0},
+			[]types.Decimal128{{}, {B0_63: 0x35ab9f559b3d07c8, B64_127: 0xfffe5c91d14e3bcd}, {B0_63: 0xfffcb923a29c779a, B64_127: allBits}},
+		},
+		{
+			"const_broadcast_unscaled",
+			[]types.Decimal64{minCoefficient}, []types.Decimal64{0xffffffffffffffff},
+			2, 2, []uint64{0},
+			[]types.Decimal128{{}, {B0_63: 0x8000000000000000}},
+		},
+		{
+			"const_broadcast_scaled",
+			[]types.Decimal64{1500}, []types.Decimal64{1},
+			7, 8, []uint64{0},
+			[]types.Decimal128{{}, {B0_63: 2}},
+		},
+		{
+			"left_scale_dominates",
+			[]types.Decimal64{149, 150, 151, 0xffffffffffffff6a}, []types.Decimal64{1, 1, 1, 1},
+			18, 2, nil,
+			[]types.Decimal128{{B0_63: 1}, {B0_63: 2}, {B0_63: 2}, {B0_63: 0xfffffffffffffffe, B64_127: allBits}},
+		},
+		{
+			"right_scale_dominates",
+			[]types.Decimal64{149, 150, 151, 0xffffffffffffff6a}, []types.Decimal64{1, 1, 1, 1},
+			2, 18, nil,
+			[]types.Decimal128{{B0_63: 1}, {B0_63: 2}, {B0_63: 2}, {B0_63: 0xfffffffffffffffe, B64_127: allBits}},
+		},
+		{
+			"maximum_reduction18",
+			[]types.Decimal64{0xffffffff80000000, 0xffffffff80000000}, []types.Decimal64{0xffffffff80000000, 1},
+			18, 18, nil,
+			[]types.Decimal128{{B0_63: 5}, {}},
+		},
+		{
+			"wide_admission_boundary",
+			[]types.Decimal64{2147483647, 2147483648, 0xffffffff7fffffff}, []types.Decimal64{1, 1, 1},
+			7, 8, nil,
+			[]types.Decimal128{{B0_63: 0x20c49c}, {B0_63: 0x20c49c}, {B0_63: 0xffffffffffdf3b64, B64_127: allBits}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := make([]types.Decimal128, len(tc.want))
+			n := nulls.NewWithSize(len(result))
+			for _, row := range tc.nullRows {
+				n.Add(row)
+			}
+			require.NoError(t, d64Mul(tc.left, tc.right, result, tc.leftScale, tc.rightScale, n))
+			require.Equal(t, len(tc.nullRows), n.Count())
+			for i := range result {
+				masked := false
+				for _, row := range tc.nullRows {
+					masked = masked || row == uint64(i)
+				}
+				require.Equal(t, masked, n.Contains(uint64(i)), "NULL row %d", i)
+				if !masked {
+					require.Equal(t, tc.want[i], result[i], "row %d", i)
+				}
+			}
+		})
+	}
 }
 
 func TestD64Div(t *testing.T) {
@@ -4792,91 +4887,6 @@ func TestD256IntDivScaleAlignmentOverflow(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange))
 }
 
-// ---- D64MulScaled (Mul with scale-down) tests ----
-
-func TestD64MulScaled(t *testing.T) {
-	t.Run("VecVec", func(t *testing.T) {
-		rng := rand.New(rand.NewSource(601))
-		v1 := make([]types.Decimal64, testBatchSize)
-		v2 := make([]types.Decimal64, testBatchSize)
-		rs := make([]types.Decimal128, testBatchSize)
-		for i := range v1 {
-			v1[i] = randD64(rng)
-			v2[i] = randD64(rng)
-		}
-		nul := nulls.NewWithSize(testBatchSize)
-		err := d64Mul(v1, v2, rs, 10, 10, nul)
-		require.NoError(t, err)
-		for i := range v1 {
-			x := functionUtil.ConvertD64ToD128(v1[i])
-			y := functionUtil.ConvertD64ToD128(v2[i])
-			want, _, err := x.Mul(y, 10, 10)
-			require.NoError(t, err)
-			require.Equal(t, want, rs[i], "d64MulScaled[%d]", i)
-		}
-	})
-
-	t.Run("ScalarVec", func(t *testing.T) {
-		rng := rand.New(rand.NewSource(602))
-		vec := make([]types.Decimal64, testBatchSize)
-		for i := range vec {
-			vec[i] = randD64(rng)
-		}
-		scalar := []types.Decimal64{randD64(rng)}
-		rs := make([]types.Decimal128, testBatchSize)
-		nul := nulls.NewWithSize(testBatchSize)
-		err := d64Mul(scalar, vec, rs, 10, 10, nul)
-		require.NoError(t, err)
-		for i := range vec {
-			x := functionUtil.ConvertD64ToD128(scalar[0])
-			y := functionUtil.ConvertD64ToD128(vec[i])
-			want, _, err := x.Mul(y, 10, 10)
-			require.NoError(t, err)
-			require.Equal(t, want, rs[i], "d64MulScaled const-vec[%d]", i)
-		}
-	})
-
-	t.Run("VecScalar", func(t *testing.T) {
-		rng := rand.New(rand.NewSource(603))
-		vec := make([]types.Decimal64, testBatchSize)
-		for i := range vec {
-			vec[i] = randD64(rng)
-		}
-		scalar := []types.Decimal64{randD64(rng)}
-		rs := make([]types.Decimal128, testBatchSize)
-		nul := nulls.NewWithSize(testBatchSize)
-		err := d64Mul(vec, scalar, rs, 10, 10, nul)
-		require.NoError(t, err)
-		for i := range vec {
-			x := functionUtil.ConvertD64ToD128(vec[i])
-			y := functionUtil.ConvertD64ToD128(scalar[0])
-			want, _, err := x.Mul(y, 10, 10)
-			require.NoError(t, err)
-			require.Equal(t, want, rs[i], "d64MulScaled vec-const[%d]", i)
-		}
-	})
-
-	t.Run("LargeValues_SlowPath", func(t *testing.T) {
-		v1 := make([]types.Decimal64, testBatchSize)
-		v2 := make([]types.Decimal64, testBatchSize)
-		rs := make([]types.Decimal128, testBatchSize)
-		for i := range v1 {
-			v1[i] = types.Decimal64(int64(1_000_000_000) + int64(i))
-			v2[i] = types.Decimal64(int64(1_000_000_000) + int64(i))
-		}
-		nul := nulls.NewWithSize(testBatchSize)
-		err := d64Mul(v1, v2, rs, 10, 10, nul)
-		require.NoError(t, err)
-		for i := range v1 {
-			x := functionUtil.ConvertD64ToD128(v1[i])
-			y := functionUtil.ConvertD64ToD128(v2[i])
-			want, _, err := x.Mul(y, 10, 10)
-			require.NoError(t, err)
-			require.Equal(t, want, rs[i], "d64MulScaled large[%d]", i)
-		}
-	})
-}
-
 // ---- D128/D256 Mod with diff-scale (additional coverage) ----
 
 func TestD128Mod_DiffScale(t *testing.T) {
@@ -5610,32 +5620,6 @@ func TestD128Mod_NullPaths(t *testing.T) {
 	})
 }
 
-func TestD64Mul_NullPaths(t *testing.T) {
-	rng := rand.New(rand.NewSource(9108))
-
-	t.Run("ConstLeft_VecRight_Nulls", func(t *testing.T) {
-		scalar := []types.Decimal64{types.Decimal64(rng.Int63n(999) + 1)}
-		vec := make([]types.Decimal64, testBatchSize)
-		rs := make([]types.Decimal128, testBatchSize)
-		for i := range vec {
-			vec[i] = types.Decimal64(rng.Int63n(999) + 1)
-		}
-		nul := makeNulls(testBatchSize)
-		require.NoError(t, d64Mul(scalar, vec, rs, 2, 2, nul))
-	})
-
-	t.Run("VecLeft_ConstRight_Nulls", func(t *testing.T) {
-		vec := make([]types.Decimal64, testBatchSize)
-		scalar := []types.Decimal64{types.Decimal64(rng.Int63n(999) + 1)}
-		rs := make([]types.Decimal128, testBatchSize)
-		for i := range vec {
-			vec[i] = types.Decimal64(rng.Int63n(999) + 1)
-		}
-		nul := makeNulls(testBatchSize)
-		require.NoError(t, d64Mul(vec, scalar, rs, 2, 2, nul))
-	})
-}
-
 func TestD64Div_NullPaths(t *testing.T) {
 	rng := rand.New(rand.NewSource(9109))
 
@@ -5777,56 +5761,6 @@ func TestD128IntDiv_LargeValues(t *testing.T) {
 		}
 		nul := nulls.NewWithSize(32)
 		require.NoError(t, d128IntDiv(v1, v2, rs, 6, 2, nul, false))
-	})
-}
-
-func TestD64MulScaled_Coverage(t *testing.T) {
-	rng := rand.New(rand.NewSource(9213))
-
-	t.Run("ConstLeft_ScaleAdj", func(t *testing.T) {
-		scalar := []types.Decimal64{types.Decimal64(rng.Int63n(999) + 1)}
-		vec := make([]types.Decimal64, testBatchSize)
-		rs := make([]types.Decimal128, testBatchSize)
-		for i := range vec {
-			vec[i] = types.Decimal64(rng.Int63n(999) + 1)
-		}
-		nul := nulls.NewWithSize(testBatchSize)
-		require.NoError(t, d64Mul(scalar, vec, rs, 8, 8, nul))
-	})
-
-	t.Run("ConstRight_ScaleAdj", func(t *testing.T) {
-		vec := make([]types.Decimal64, testBatchSize)
-		scalar := []types.Decimal64{types.Decimal64(rng.Int63n(999) + 1)}
-		rs := make([]types.Decimal128, testBatchSize)
-		for i := range vec {
-			vec[i] = types.Decimal64(rng.Int63n(999) + 1)
-		}
-		nul := nulls.NewWithSize(testBatchSize)
-		require.NoError(t, d64Mul(vec, scalar, rs, 8, 8, nul))
-	})
-
-	t.Run("VecVec_ScaleAdj", func(t *testing.T) {
-		v1 := make([]types.Decimal64, testBatchSize)
-		v2 := make([]types.Decimal64, testBatchSize)
-		rs := make([]types.Decimal128, testBatchSize)
-		for i := range v1 {
-			v1[i] = types.Decimal64(rng.Int63n(999) + 1)
-			v2[i] = types.Decimal64(rng.Int63n(999) + 1)
-		}
-		nul := nulls.NewWithSize(testBatchSize)
-		require.NoError(t, d64Mul(v1, v2, rs, 8, 8, nul))
-	})
-
-	t.Run("VecVec_ScaleAdj_Nulls", func(t *testing.T) {
-		v1 := make([]types.Decimal64, testBatchSize)
-		v2 := make([]types.Decimal64, testBatchSize)
-		rs := make([]types.Decimal128, testBatchSize)
-		for i := range v1 {
-			v1[i] = types.Decimal64(rng.Int63n(999) + 1)
-			v2[i] = types.Decimal64(rng.Int63n(999) + 1)
-		}
-		nul := makeNulls(testBatchSize)
-		require.NoError(t, d64Mul(v1, v2, rs, 8, 8, nul))
 	})
 }
 
@@ -6209,34 +6143,6 @@ func TestD128IntDiv_SameScale_AllDispatches(t *testing.T) {
 		}
 		nul := makeNulls(32)
 		require.NoError(t, d128IntDiv(v1, v2, rs, 4, 4, nul, false))
-	})
-}
-
-// ---- Coverage for d64MulScaled null paths ----
-
-func TestD64Mul_ScaleAdj_Nulls(t *testing.T) {
-	rng := rand.New(rand.NewSource(9308))
-
-	t.Run("ConstLeft_Nulls", func(t *testing.T) {
-		scalar := []types.Decimal64{types.Decimal64(rng.Int63n(999) + 1)}
-		vec := make([]types.Decimal64, 32)
-		rs := make([]types.Decimal128, 32)
-		for i := range vec {
-			vec[i] = types.Decimal64(rng.Int63n(999) + 1)
-		}
-		nul := makeNulls(32)
-		require.NoError(t, d64Mul(scalar, vec, rs, 8, 8, nul))
-	})
-
-	t.Run("ConstRight_Nulls", func(t *testing.T) {
-		vec := make([]types.Decimal64, 32)
-		scalar := []types.Decimal64{types.Decimal64(rng.Int63n(999) + 1)}
-		rs := make([]types.Decimal128, 32)
-		for i := range vec {
-			vec[i] = types.Decimal64(rng.Int63n(999) + 1)
-		}
-		nul := makeNulls(32)
-		require.NoError(t, d64Mul(vec, scalar, rs, 8, 8, nul))
 	})
 }
 
@@ -8353,55 +8259,6 @@ func TestD256DivViaD128_ConstPaths(t *testing.T) {
 		rs := make([]types.Decimal256, 16)
 		nul := makeNulls(16)
 		require.NoError(t, d256DivViaD128(v1, v2, rs, 6, nul, false, 4, 4, !nul.IsEmpty(), nul.GetBitmap()))
-	})
-}
-
-// TestD64MulScaled_ConstPaths covers d64MulScaled const dispatch paths.
-func TestD64MulScaled_ConstPaths(t *testing.T) {
-	rng := rand.New(rand.NewSource(42))
-
-	t.Run("ConstVec_NoNull", func(t *testing.T) {
-		v1 := []types.Decimal64{randD64(rng)}
-		v2 := make([]types.Decimal64, 16)
-		for i := range v2 {
-			v2[i] = randD64(rng)
-		}
-		rs := make([]types.Decimal128, 16)
-		nul := &nulls.Nulls{}
-		require.NoError(t, d64MulScaled(v1, v2, rs, -3, nul))
-	})
-
-	t.Run("ConstVec_WithNull", func(t *testing.T) {
-		v1 := []types.Decimal64{randD64(rng)}
-		v2 := make([]types.Decimal64, 16)
-		for i := range v2 {
-			v2[i] = randD64(rng)
-		}
-		rs := make([]types.Decimal128, 16)
-		nul := makeNulls(16)
-		require.NoError(t, d64MulScaled(v1, v2, rs, -3, nul))
-	})
-
-	t.Run("VecConst_NoNull", func(t *testing.T) {
-		v1 := make([]types.Decimal64, 16)
-		for i := range v1 {
-			v1[i] = randD64(rng)
-		}
-		v2 := []types.Decimal64{randD64(rng)}
-		rs := make([]types.Decimal128, 16)
-		nul := &nulls.Nulls{}
-		require.NoError(t, d64MulScaled(v1, v2, rs, -3, nul))
-	})
-
-	t.Run("VecConst_WithNull", func(t *testing.T) {
-		v1 := make([]types.Decimal64, 16)
-		for i := range v1 {
-			v1[i] = randD64(rng)
-		}
-		v2 := []types.Decimal64{randD64(rng)}
-		rs := make([]types.Decimal128, 16)
-		nul := makeNulls(16)
-		require.NoError(t, d64MulScaled(v1, v2, rs, -3, nul))
 	})
 }
 
