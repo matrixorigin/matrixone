@@ -63,4 +63,20 @@ select count(*) from floating where f = abs(cast(16777217 as signed));
 select count(*) from floating where bounded_f = 1.25e0;
 select count(*) from floating where bounded_d between 1.25e0 and 1.25e0;
 
+
+-- Safe bounded constants retain native filtering without accepting rounded peers.
+insert into floating values (null, 1, 1), (null, 0.5, 0.5), (null, -0.5, -0.5);
+select count(*) from floating where bounded_f = 1;
+select count(*) from floating where bounded_f in (1, 5e-1, -5e-1);
+select count(*) from floating where bounded_f not in (1, 5e-1, -5e-1);
+select count(*) from floating where bounded_f between -5e-1 and 5e-1;
+select count(*) from floating where bounded_f > 1000;
+select count(*) from floating where bounded_f = 1.2999999523162842e0;
+prepare p from 'select count(*) from floating where bounded_f = cast(? as double)';
+set @v = 5e-1;
+execute p using @v;
+set @v = 1.25e0;
+execute p using @v;
+deallocate prepare p;
+
 drop database issue_29510_decimal_float;

@@ -1741,10 +1741,23 @@ func TestDecimalFloatOptimizedFilterResults(t *testing.T) {
 		{"collision", "9007199254740993", "9.007199254740992e15", types.New(types.T_decimal128, 20, 0), true, false, false},
 		{"off grid", "0.10", "1.04e-1", types.New(types.T_decimal128, 20, 2), false, true, false},
 		{"cast rounding", "0.00000000000000000003", "2.9999999999999997e-20", types.New(types.T_decimal128, 20, 20), false, false, false},
+		{"float explicit double", "0.8", "cast(0.8 as double)", types.T_float32.ToType(), false, false, false},
+		{"float decimal literal", "0.8", "0.8", types.T_float32.ToType(), true, false, true},
+		{"float decimal cast", "9", "cast(9.0 as decimal)", types.T_float32.ToType(), true, false, true},
+		{"float integer expression", "9", "abs(-9)", types.T_float32.ToType(), true, false, true},
+		{"bounded decimal exact", "0.5", "0.5", types.New(types.T_float32, 4, 1), true, false, true},
 		{"float32 rounding", "0.1", "1e-1", types.T_float32.ToType(), false, false, false},
 		{"float32 expression", "16777216", "abs(cast(16777217 as signed))", types.T_float32.ToType(), false, true, false},
 		{"bounded float", "1.3", "1.25e0", types.New(types.T_float32, 4, 1), false, false, false},
 		{"bounded double", "1.3", "1.25e0", types.New(types.T_float64, 4, 1), false, false, true},
+		{"bounded integer", "1", "1", types.New(types.T_float32, 4, 1), true, false, true},
+		{"bounded exact", "0.5", "5e-1", types.New(types.T_float32, 4, 1), true, false, true},
+		{"bounded negative exact", "-0.5", "-5e-1", types.New(types.T_float32, 4, 1), true, false, true},
+		{"bounded source scale", "1.3", "1.2999999523162842e0", types.New(types.T_float32, 4, 1), false, false, false},
+		{"bounded negative source scale", "-1.3", "-1.2999999523162842e0", types.New(types.T_float32, 4, 1), false, true, false},
+		{"bounded width overflow", "999", "1000", types.New(types.T_float32, 4, 1), false, true, false},
+		{"bounded negative width overflow", "-999", "-1000", types.New(types.T_float32, 4, 1), false, false, false},
+		{"bounded double exact", "0.5", "5e-1", types.New(types.T_float64, 4, 1), true, false, true},
 		{"float32 exact", "0.5", "5e-1", types.T_float32.ToType(), true, false, true},
 		{"safe native", "0.10", "1e-1", types.New(types.T_decimal64, 12, 2), true, false, true},
 	} {
@@ -1757,6 +1770,7 @@ func TestDecimalFloatOptimizedFilterResults(t *testing.T) {
 			{tc.peer + " < c", !tc.less && !tc.equal},
 			{"c <= " + tc.peer, tc.less || tc.equal},
 			{"c in (" + tc.peer + ", -9e20)", tc.equal},
+			{"c in (" + tc.peer + ", -5e-1)", tc.equal || tc.row == "-0.5"},
 			{"c between " + tc.peer + " and " + tc.peer, tc.equal},
 		} {
 			t.Run(tc.name+"/"+predicate.sql, func(t *testing.T) {
@@ -1793,7 +1807,7 @@ func TestDecimalFloatOptimizedFilterResults(t *testing.T) {
 					require.NoError(t, vector.AppendFixed(input.Vecs[0], value, false, proc.Mp()))
 				}
 				input.SetRowCount(1)
-				found, got, columnCast := false, true, false
+				found, got, columnCast, nativeMembership := false, true, false, false
 				for _, node := range query.Nodes {
 					if node.NodeType != plan.Node_TABLE_SCAN {
 						continue
@@ -1804,6 +1818,9 @@ func TestDecimalFloatOptimizedFilterResults(t *testing.T) {
 						require.NoError(t, plan.VisitExprTree(expr, func(e *Expr) error {
 							if fn := e.GetF(); fn != nil && fn.Func.ObjName == "cast" && fn.Args[0].GetCol() != nil {
 								columnCast = true
+							}
+							if fn := e.GetF(); fn != nil && fn.Func.ObjName == "in" && fn.Args[0].GetCol() != nil {
+								nativeMembership = true
 							}
 							if col := e.GetCol(); col != nil {
 								col.RelPos, col.ColPos = 0, 0
@@ -1820,6 +1837,11 @@ func TestDecimalFloatOptimizedFilterResults(t *testing.T) {
 				require.Equal(t, predicate.want, got, query.String())
 				if predicate.sql == "c = "+tc.peer {
 					require.Equal(t, !tc.native, columnCast)
+				}
+				if tc.column.Oid == types.T_float32 && tc.column.Width > 0 && tc.native && tc.row != "-0.5" &&
+					predicate.sql == "c in ("+tc.peer+", -5e-1)" {
+					require.False(t, columnCast)
+					require.True(t, nativeMembership, query.String())
 				}
 			})
 		}

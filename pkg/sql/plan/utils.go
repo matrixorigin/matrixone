@@ -2434,6 +2434,59 @@ func unwrapCast(expr *plan.Expr) *plan.Expr {
 	return expr
 }
 
+// decimalComparisonLiteralFloat uses the same decimal text conversion as CAST,
+// including its target floating range check. Unknown expressions are not proofs.
+func decimalComparisonLiteralFloat(expr *plan.Expr, bits int) (float64, bool) {
+	literal := expr.GetLit()
+	if literal == nil || literal.Isnull || !staticIntegerComparisonPeer(expr) {
+		return 0, false
+	}
+	var text string
+	switch value := literal.Value.(type) {
+	case *plan.Literal_Decimal64Val:
+		text = types.Decimal64(value.Decimal64Val.A).Format(expr.Typ.Scale)
+	case *plan.Literal_Decimal128Val:
+		text = (types.Decimal128{B0_63: uint64(value.Decimal128Val.A), B64_127: uint64(value.Decimal128Val.B)}).Format(expr.Typ.Scale)
+	default:
+		return 0, false
+	}
+	value, err := strconv.ParseFloat(text, bits)
+	return value, err == nil
+}
+
+// boundedFloatComparisonPreservesValue is an additional storage-metadata proof,
+// not a replacement for the source-domain checks in checkNoNeedCast.
+func boundedFloatComparisonPreservesValue(columnT types.Type, expr *plan.Expr) bool {
+	value, known := floatingComparisonConstant(expr)
+	if !known {
+		value, known = decimalComparisonLiteralFloat(expr, 64)
+	}
+	if literal := expr.GetLit(); !known && literal != nil && !literal.Isnull {
+		switch v := literal.Value.(type) {
+		case *plan.Literal_I64Val:
+			value, known = float64(v.I64Val), true
+		case *plan.Literal_U64Val:
+			value, known = float64(v.U64Val), true
+		}
+	}
+	if !known || math.IsNaN(value) || math.IsInf(value, 0) {
+		return false
+	}
+	if columnT.Oid == types.T_float32 && float64(float32(value)) != value {
+		return false
+	}
+	factor := math.Pow10(int(columnT.Scale))
+	maximum := math.Pow10(int(columnT.Width-columnT.Scale)) - 1/factor
+	rounded, outOfRange := function.ConvertToFixedFloat(value, factor, maximum)
+	if outOfRange || rounded != value {
+		return false
+	}
+	// A bounded FLOAT's promotion to DOUBLE uses the same CAST arithmetic.
+	// Keep its native comparison normalization invariant as well.
+	return columnT.Oid != types.T_float32 ||
+		types.NewFloat32ScaleNormalizer(columnT.Scale).Normalize(float32(value)) == float32(value)
+}
+
 func checkNoNeedCast(ctx context.Context, constT, columnT types.Type, constExpr *plan.Expr) bool {
 	if columnT.Oid.IsInteger() && constT.Oid.IsDecimal() {
 		return exactDecimalIntegerFits(constExpr, columnT.Oid)
@@ -2453,9 +2506,10 @@ func checkNoNeedCast(ctx context.Context, constT, columnT types.Type, constExpr 
 		return true
 	}
 
-	// FLOAT(M,D)/DOUBLE(M,D) also round and range-check the peer during
-	// CAST. A binary precision proof alone cannot justify that conversion.
-	if (columnT.Oid == types.T_float32 || columnT.Oid == types.T_float64) && columnT.Width > 0 && columnT.Scale >= 0 {
+	// Bounded floating CASTs must preserve the peer before the ordinary
+	// numeric-domain proof can justify keeping the column's native type.
+	if (columnT.Oid == types.T_float32 || columnT.Oid == types.T_float64) && columnT.Width > 0 && columnT.Scale >= 0 &&
+		!boundedFloatComparisonPreservesValue(columnT, constExpr) {
 		return false
 	}
 
@@ -2594,13 +2648,17 @@ func checkNoNeedCast(ctx context.Context, constT, columnT types.Type, constExpr 
 
 			return false
 		}
-		// Allow casting decimal constants to float columns only if precision is acceptable
-		// For FLOAT32: only allow if value has <= 7 significant digits
-		// For FLOAT64: only allow if value has <= 15 significant digits
+		// Preserve the established DECIMAL-constant coercion into a floating
+		// column's domain. This is distinct from narrowing an explicit DOUBLE
+		// peer, which must pass the exactness proof above. Bounded metadata
+		// has already passed its additional value-preservation check.
 		if columnT.Oid == types.T_float32 || columnT.Oid == types.T_float64 {
-			// TODO: Add precision check based on decimal value
-			// For now, conservatively return false to avoid precision loss
-			return false
+			bits := 64
+			if columnT.Oid == types.T_float32 {
+				bits = 32
+			}
+			_, ok := decimalComparisonLiteralFloat(constExpr, bits)
+			return ok
 		}
 		return false
 

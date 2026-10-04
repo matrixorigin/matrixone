@@ -5408,6 +5408,7 @@ func bindFuncExprAndConstFoldInternal(
 	allowInternalFunctionArgs bool,
 	observer func(*plan.Expr) error,
 ) (*plan.Expr, error) {
+	foldFloatComparisonConstants(proc, name, args)
 	if err := foldDecimalStringComparisonConstants(ctx, proc, name, args); err != nil {
 		return nil, err
 	}
@@ -9542,6 +9543,46 @@ func decimalFloatComparisonHasUniqueValue(value float64, column types.Type) bool
 		return err == nil && decimalComparisonFloat64(next, column.Scale) != value
 	default:
 		return false
+	}
+}
+
+// foldFloatComparisonConstants lets the shared admission check inspect numeric
+// constants without treating arbitrary expressions as safe narrowing conversions.
+// Reuse the executor-backed folder; prepared and volatile sources stay intact.
+func foldFloatComparisonConstants(proc *process.Process, name string, args []*Expr) {
+	if proc == nil {
+		return
+	}
+	fold := func(column, candidate *Expr) *Expr {
+		if column.GetCol() == nil ||
+			(types.T(column.Typ.Id) != types.T_float32 && types.T(column.Typ.Id) != types.T_float64) ||
+			candidate.GetLit() != nil {
+			return candidate
+		}
+		oid := types.T(candidate.Typ.Id)
+		if (!oid.IsInteger() && oid != types.T_decimal64 && oid != types.T_decimal128) ||
+			!staticIntegerComparisonPeer(candidate) {
+			return candidate
+		}
+		folded, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(candidate), proc, false, true)
+		if err == nil && folded != nil && folded.Typ.Id == candidate.Typ.Id &&
+			folded.GetLit() != nil && !folded.GetLit().Isnull {
+			return folded
+		}
+		return candidate
+	}
+	if isDecimalComparisonOperator(name) && len(args) == 2 {
+		args[1] = fold(args[0], args[1])
+		args[0] = fold(args[1], args[0])
+	} else if (name == "in" || name == "not_in") && len(args) == 2 {
+		if list := args[1].GetList(); list != nil {
+			for i, item := range list.List {
+				list.List[i] = fold(args[0], item)
+			}
+		}
+	} else if (name == "between" && len(args) == 3) || (name == "in_range" && len(args) == 4) {
+		args[1] = fold(args[0], args[1])
+		args[2] = fold(args[0], args[2])
 	}
 }
 
