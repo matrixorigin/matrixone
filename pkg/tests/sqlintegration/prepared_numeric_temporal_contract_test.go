@@ -74,6 +74,7 @@ func TestPreparedNumericTemporalContracts(t *testing.T) {
 					q := fmt.Sprintf("select %s from %s where %s between ? and ? or %s between ? and ? order by id", path.projection, path.table, path.column, path.column)
 					explained, err := conn.QueryContext(ctx, "explain "+q, int64(0), int64(1), int64(8), int64(8))
 					require.NoError(t, err)
+					defer explained.Close()
 					var planText strings.Builder
 					for explained.Next() {
 						var line string
@@ -82,7 +83,6 @@ func TestPreparedNumericTemporalContracts(t *testing.T) {
 						planText.WriteByte('\n')
 					}
 					require.NoError(t, explained.Err())
-					require.NoError(t, explained.Close())
 					if strings.Contains(path.table, "force index") {
 						require.Contains(t, planText.String(), "Index Table Scan")
 						if path.name == "backfill" {
@@ -133,19 +133,21 @@ func TestPreparedNumericTemporalContracts(t *testing.T) {
 				{"inactive warning", "case when false then k between ? and ? else false end", []int64{}, false},
 				{"empty warning", "id<0 and k between ? and ?", []int64{}, false},
 			} {
-				p, err := conn.PrepareContext(ctx, "select id from range_keys where "+tc.predicate+" order by id")
-				require.NoError(t, err)
-				got, err := readPreparedContractIDs(p.QueryContext(ctx, "1tail", int64(2)))
-				require.NoError(t, err, tc.name)
-				require.Equal(t, tc.want, got, tc.name)
-				count, err := strconv.Atoi(scalar(t, "select @@warning_count"))
-				require.NoError(t, err)
-				wantWarnings := 0
-				if tc.warn {
-					wantWarnings = 1
-				}
-				require.Equal(t, wantWarnings, count, tc.name)
-				require.NoError(t, p.Close())
+				t.Run(tc.name, func(t *testing.T) {
+					p, err := conn.PrepareContext(ctx, "select id from range_keys where "+tc.predicate+" order by id")
+					require.NoError(t, err)
+					defer p.Close()
+					got, err := readPreparedContractIDs(p.QueryContext(ctx, "1tail", int64(2)))
+					require.NoError(t, err, tc.name)
+					require.Equal(t, tc.want, got, tc.name)
+					count, err := strconv.Atoi(scalar(t, "select @@warning_count"))
+					require.NoError(t, err)
+					wantWarnings := 0
+					if tc.warn {
+						wantWarnings = 1
+					}
+					require.Equal(t, wantWarnings, count, tc.name)
+				})
 			}
 		})
 		t.Run("persisted signed DML read budget", func(t *testing.T) {
