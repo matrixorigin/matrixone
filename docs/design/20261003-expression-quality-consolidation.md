@@ -1108,3 +1108,49 @@ GC preparation are excluded from those test-body comparisons.
 The final holder kills a private mutant that parses the reduced D128→D64
 coefficient using target scale: both the original reduction cell and positive
 carry rejection fail their exact assertions. Permanent source remains unchanged.
+
+## Widening batch row-domain contracts (2026-10-04)
+
+Rebase the existing local series onto freshly fetched main `a3aece1894` before
+this stage. The pre-fix D64→D128 batch owner is byte-identical to that main revision.
+A registered ColumnRef CAST on a zero-row batch reaches both same-scale BCE
+paths and reads index -1. A physically empty normal vector reproduces it too. Separately, a stored
+constant coefficient 10000000000 at (18,2), narrowed to (10,2), reports precision
+failure even when no row is requested. Both NULL shapes and the constant error
+were demonstrated before the fix; these are batch/expression API findings, not
+a claimed server SQL reproducer.
+
+Return immediately for zero length at `decimal64ToDecimal128Array`. This keeps
+positive-length BCE and constant replication, while existing result reset owns
+length/NULL cleanup. Do not add generic executor/CAST short-circuit policy or
+another validation/storage path. Remove the adjacent obsolete comments claiming
+D128 scale is below 18 and its now-optimized conversion is temporary/too slow.
+Physically empty constants can fail in the parameter wrapper before this owner;
+that distinct representation contract is explicitly outside this checkpoint.
+
+Map all six old vector calls into the existing precision holder (now 42 cells),
+retaining their metadata, inputs and NULL maps, including the old misleadingly
+named negative case that actually has no NULL. Replace four verbose constant
+cases with literal-limb three-row replication cases, adding one empty narrowing
+failure-boundary control. A real registered consumer checks both NULL shapes,
+0→2→0→2 reuse, complete metadata, fresh payload after NULL reset, and pool cleanup.
+Full bitmap emptiness subsumes per-row non-NULL checks; comparable whole-Type
+checks retain every metadata field without reflection. No extra fixture framework
+is introduced. Test code falls by 77 lines; implementation grows by two net lines.
+
+Evidence is under `29249-empty-cast-20261004`: fresh-main replay, complete ten-call
+retirement ledger, before/after logs and source-bound validation terminals. Seven
+initial gates pass, including full function/plan/colexec normal, full function
+race and public consumer race. The subsequent assertion-only cleanup changes no
+production or consumer byte; five focused normal/race and incremental static
+gates bind the final test source. Reuse the broader gates under that explicit
+semantic freshness argument. Two pre-existing plan skips are not executed
+coverage; lint has zero new issues and molint diagnoses only unchanged files.
+
+Eight alternating paired same-binary samples include all function-family
+coverage and exclude the new colexec consumer, build/link and GC preparation.
+Final medians observe wall +4.3%, CPU +5.7%, allocated bytes +15.5% and allocations
++3.3% versus the old family. This stage does not claim a resource reduction;
+the newly verified empty/error and metadata contracts justify the measured cost.
+The issue draft is preserved; GitHub creation returned 403 (integration access),
+so no published issue is claimed. Current-head service BVT remains open.

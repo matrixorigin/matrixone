@@ -6087,6 +6087,10 @@ func decimal64ToDecimal64(
 func decimal64ToDecimal128Array(
 	from vector.FunctionParameterWrapper[types.Decimal64],
 	to *vector.FunctionResult[types.Decimal128], length int, selectList *FunctionSelectList) error {
+	if length == 0 {
+		return nil
+	}
+
 	fromtype := from.GetType()
 	totype := to.GetType()
 	safeGrowth := canWidenDecimalScale(fromtype, totype)
@@ -6289,8 +6293,6 @@ func decimal64ToDecimal256Array(
 	return nil
 }
 
-// the scale of decimal128 is guaranteed to be less than 18
-// this cast function is too slow, and therefore only temporary, rewrite needed
 func decimal128ToDecimal64(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Decimal128],

@@ -4046,3 +4046,51 @@ func TestDecimalCastSelectionAndErrorReuse(t *testing.T) {
 	})
 	require.Zero(t, proc.Mp().CurrNB())
 }
+
+func TestDecimalWideningEmptyBatchReuse(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	for _, nullable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("nullable=%v", nullable), func(t *testing.T) {
+			sourceType := types.New(types.T_decimal64, 18, 2)
+			targetType := types.New(types.T_decimal128, 38, 2)
+			input := batch.NewWithSize(1)
+			input.Vecs[0] = vector.NewVec(sourceType)
+			defer input.Clean(proc.Mp())
+			require.NoError(t, vector.AppendFixedList(input.Vecs[0], []types.Decimal64{149, 200}, []bool{false, nullable}, proc.Mp()))
+			fn, err := function.GetFunctionByName(proc.Ctx, "cast", []types.Type{sourceType, targetType})
+			require.NoError(t, err)
+			expr := &plan.Expr{Typ: plan.Type{Id: int32(targetType.Oid), Width: targetType.Width, Scale: targetType.Scale}, Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{Obj: fn.GetEncodedOverloadID(), ObjName: "cast"}, Args: []*plan.Expr{
+					{Typ: plan.Type{Id: int32(sourceType.Oid), Width: sourceType.Width, Scale: sourceType.Scale}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}}},
+					{Typ: plan.Type{Id: int32(targetType.Oid), Width: targetType.Width, Scale: targetType.Scale}, Expr: &plan.Expr_T{T: &plan.TargetType{}}},
+				}}}}
+			executor, err := NewExpressionExecutor(proc, expr)
+			require.NoError(t, err)
+			defer executor.Free()
+			for i, size := range []int{0, 2, 0, 2} {
+				if i == 3 {
+					input.Vecs[0].GetNulls().Reset()
+					require.NoError(t, vector.SetFixedAtWithTypeCheck(input.Vecs[0], 1, types.Decimal64(200)))
+				}
+				input.SetRowCount(size)
+				result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+				require.NoError(t, err)
+				require.Equal(t, size, result.Length())
+				require.Equal(t, targetType, *result.GetType())
+				require.Equal(t, sourceType, *input.Vecs[0].GetType())
+				if size == 0 {
+					require.True(t, result.GetNulls().IsEmpty())
+					continue
+				}
+				require.Equal(t, types.Decimal128{B0_63: 149}, vector.GetFixedAtNoTypeCheck[types.Decimal128](result, 0))
+				require.False(t, result.IsNull(0))
+				require.Equal(t, nullable && i == 1, result.IsNull(1))
+				if !result.IsNull(1) {
+					require.Equal(t, types.Decimal128{B0_63: 200}, vector.GetFixedAtNoTypeCheck[types.Decimal128](result, 1))
+				}
+			}
+		})
+		require.Zero(t, proc.Mp().CurrNB())
+	}
+}

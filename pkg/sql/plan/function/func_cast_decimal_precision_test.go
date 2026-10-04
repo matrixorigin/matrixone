@@ -216,6 +216,25 @@ func TestDecimalCastPrecisionContract(t *testing.T) {
 			values:   []types.Decimal64{types.Decimal64(1234).Minus()},
 			want:     []types.Decimal128{{B0_63: ^uint64(123399), B64_127: ^uint64(0)}},
 			constant: true},
+
+		{name: "widen64_same_nullable", source: types.New(types.T_decimal64, 18, 2), target: types.New(types.T_decimal128, 38, 2),
+			values: []types.Decimal64{100, 200, 300, 400}, want: []types.Decimal128{{B0_63: 100}, {}, {B0_63: 300}, {}}, nulls: []bool{false, true, false, true}},
+		{name: "widen64_same_signed", source: types.New(types.T_decimal64, 18, 4), target: types.New(types.T_decimal128, 38, 4),
+			values: []types.Decimal64{types.Decimal64(^uint64(99)), 50}, want: []types.Decimal128{{B0_63: ^uint64(99), B64_127: ^uint64(0)}, {B0_63: 50}}, nulls: []bool{false, false}},
+		{name: "widen64_growth_nonnull", source: types.New(types.T_decimal64, 18, 2), target: types.New(types.T_decimal128, 38, 4),
+			values: []types.Decimal64{12345}, want: []types.Decimal128{{B0_63: 1234500}}},
+		{name: "widen64_growth_nullable", source: types.New(types.T_decimal64, 18, 2), target: types.New(types.T_decimal128, 38, 4),
+			values: []types.Decimal64{12345, 67890}, want: []types.Decimal128{{}, {B0_63: 6789000}}, nulls: []bool{true, false}},
+		{name: "widen64_narrow_nonnull", source: types.New(types.T_decimal64, 18, 4), target: types.New(types.T_decimal128, 10, 4),
+			values: []types.Decimal64{123456789}, want: []types.Decimal128{{B0_63: 123456789}}},
+		{name: "widen64_narrow_nullable", source: types.New(types.T_decimal64, 18, 4), target: types.New(types.T_decimal128, 10, 4),
+			values: []types.Decimal64{123456789, 987654321}, want: []types.Decimal128{{B0_63: 123456789}, {}}, nulls: []bool{false, true}},
+		{name: "widen64_empty_same", source: types.New(types.T_decimal64, 18, 2), target: types.New(types.T_decimal128, 38, 2),
+			values: []types.Decimal64{}, want: []types.Decimal128{}},
+		{name: "widen64_empty_growth", source: types.New(types.T_decimal64, 18, 2), target: types.New(types.T_decimal128, 38, 4),
+			values: []types.Decimal64{}, want: []types.Decimal128{}},
+		{name: "widen64_empty_narrow", source: types.New(types.T_decimal64, 18, 2), target: types.New(types.T_decimal128, 10, 2),
+			values: []types.Decimal64{}, want: []types.Decimal128{}},
 		{name: "round_carry_neighbor",
 			source: types.New(types.T_decimal256, 4, 3),
 			target: types.New(types.T_decimal256, 3, 2),
@@ -260,8 +279,8 @@ func TestDecimalCastPrecisionContract(t *testing.T) {
 				ok, info := fc.Run()
 				require.True(t, ok, info)
 			}
-			require.Equal(t, tc.source, *fc.parameters[0].GetType())
-			require.Equal(t, tc.target, *fc.GetResultVectorDirectly().GetType())
+			require.True(t, tc.source == *fc.parameters[0].GetType(), "source metadata changed")
+			require.True(t, tc.target == *fc.GetResultVectorDirectly().GetType(), "target metadata changed")
 		})
 	}
 }
@@ -353,4 +372,52 @@ func TestDecimal128WideningCastDoesNotRetypeSource(t *testing.T) {
 	require.Equal(t, sourceType, *testCase.parameters[0].GetType())
 	require.Equal(t, targetType, *result.GetType())
 	require.Equal(t, []types.Decimal128{value, {}}, vector.MustFixedColWithTypeCheck[types.Decimal128](result))
+}
+
+func TestDecimalWideningConstBatch(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	sourceType := types.New(types.T_decimal64, 18, 2)
+	for _, tc := range []struct {
+		name    string
+		target  types.Type
+		value   types.Decimal64
+		want    types.Decimal128
+		wantErr bool
+	}{
+		{"same scale positive", types.New(types.T_decimal128, 38, 2), 800, types.Decimal128{B0_63: 800}, false},
+		{"same scale negative", types.New(types.T_decimal128, 38, 2), types.Decimal64(^uint64(799)), types.Decimal128{B0_63: ^uint64(799), B64_127: ^uint64(0)}, false},
+		{"different scale", types.New(types.T_decimal128, 38, 4), 800, types.Decimal128{B0_63: 80000}, false},
+		{"narrower width", types.New(types.T_decimal128, 10, 2), 800, types.Decimal128{B0_63: 800}, false},
+		{"empty skips narrowing overflow", types.New(types.T_decimal128, 10, 2), 10000000000, types.Decimal128{}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input, err := vector.NewConstFixed(sourceType, tc.value, 3, proc.Mp())
+			require.NoError(t, err)
+			defer input.Free(proc.Mp())
+			require.True(t, input.IsConst())
+			require.Len(t, vector.MustFixedColWithTypeCheck[types.Decimal64](input), 1)
+			result := vector.NewFunctionResultWrapper(tc.target, proc.Mp()).(*vector.FunctionResult[types.Decimal128])
+			defer result.Free()
+			source := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](input)
+			for _, size := range []int{0, 3, 0} {
+				require.NoError(t, result.PreExtendAndReset(size))
+				err = decimal64ToDecimal128Array(source, result, size, nil)
+				if size > 0 && tc.wantErr {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
+					require.ErrorContains(t, err, "Decimal128(10,2)")
+				} else {
+					require.NoError(t, err)
+					require.Equal(t, size, result.GetResultVector().Length())
+					if size > 0 {
+						require.Equal(t, []types.Decimal128{tc.want, tc.want, tc.want}, vector.MustFixedColWithTypeCheck[types.Decimal128](result.GetResultVector()))
+					}
+					require.True(t, result.GetResultVector().GetNulls().IsEmpty())
+				}
+				require.True(t, sourceType == *input.GetType(), "source metadata changed")
+				require.True(t, tc.target == *result.GetResultVector().GetType(), "target metadata changed")
+			}
+		})
+		require.Zero(t, proc.Mp().CurrNB())
+	}
 }
