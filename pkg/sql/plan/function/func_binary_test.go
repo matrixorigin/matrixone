@@ -4563,6 +4563,7 @@ func TestTemporalSubResultScaleMetadata(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_timestamp.ToTypeWithScale(6), false, []types.Timestamp{previous}, []bool{false}),
 		TimestampSub)
+	timestampCase.expected.typ.Width = 6
 	ok, info := timestampCase.RunAndFree()
 	require.True(t, ok, info)
 
@@ -4578,6 +4579,7 @@ func TestTemporalSubResultScaleMetadata(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_time.ToTypeWithScale(6), false, []types.Time{expected}, []bool{false}),
 		TimeSub)
+	timeCase.expected.typ.Width = 6
 	ok, info = timeCase.RunAndFree()
 	require.True(t, ok, info)
 }

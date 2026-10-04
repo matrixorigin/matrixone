@@ -231,9 +231,9 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 	if fc.fnLength != v.Length() {
 		return false, fmt.Sprintf("expected %d rows but get %d rows", fc.fnLength, v.Length())
 	}
-	// check type (it's stupid, haha
-	if v.GetType().Oid != fc.expected.typ.Oid {
-		return false, fmt.Sprintf("expected result type %s but get type %s", fc.expected.typ,
+	// Check complete metadata before decoding the result values.
+	if *v.GetType() != fc.expected.typ {
+		return false, fmt.Sprintf("expected result type %#v but get type %#v", fc.expected.typ,
 			v.GetType())
 	}
 	// generate the expected nsp
@@ -824,4 +824,58 @@ func TestFunctionTestCaseOwnership(t *testing.T) {
 		require.Zero(t, account.Snapshot().Used)
 		assertReleased(t)
 	})
+}
+
+func TestFunctionResultMetadataContract(t *testing.T) {
+	proc := testutil.NewProcess(nil)
+	t.Cleanup(func() { proc.GetFileService().Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	for _, tc := range []struct {
+		name   string
+		length int
+		null   bool
+		mutate func(*types.Type)
+	}{
+		{name: "correct", length: 1},
+		{name: "oid", length: 1, mutate: func(t *types.Type) { t.Oid = types.T_float64 }},
+		{name: "size", length: 1, mutate: func(t *types.Type) { t.Size++ }},
+		{name: "width", length: 1, mutate: func(t *types.Type) { t.Width-- }},
+		{name: "scale", length: 1, mutate: func(t *types.Type) { t.Scale++ }},
+		{name: "charset", length: 1, mutate: func(t *types.Type) { t.Charset++ }},
+		{name: "not null", length: 1, mutate: func(t *types.Type) { t.SetNotNull(true) }},
+		{name: "empty width", length: 0, mutate: func(t *types.Type) { t.Width-- }},
+		{name: "null scale", length: 1, null: true, mutate: func(t *types.Type) { t.Scale++ }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			typ := types.New(types.T_decimal64, 18, 2)
+			values := make([]types.Decimal64, tc.length)
+			mask := make([]bool, tc.length)
+			if tc.length > 0 {
+				values[0] = 123
+				mask[0] = tc.null
+			}
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(typ, values, mask)}, NewFunctionTestResult(typ, false, values, mask),
+				func(_ []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, _ *FunctionSelectList) error {
+					v := result.GetResultVector()
+					if length > 0 {
+						if err := vector.SetFixedAtWithTypeCheck(v, 0, types.Decimal64(123)); err != nil {
+							return err
+						}
+						if tc.null {
+							v.GetNulls().Add(0)
+						}
+					}
+					if tc.mutate != nil {
+						tc.mutate(v.GetType())
+					}
+					return nil
+				})
+			ok, info := fc.RunAndFree()
+			require.Equal(t, tc.mutate == nil, ok, info)
+			if tc.mutate != nil {
+				require.Contains(t, info, "expected result type")
+				require.Contains(t, info, "types.Type")
+			}
+			require.Zero(t, proc.Mp().CurrNB())
+		})
+	}
 }

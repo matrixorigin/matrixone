@@ -1238,3 +1238,30 @@ allocations 6,178.5 to 5,012 (-18.9%). Inputs, oracles and reuse order remain
 unchanged. Evidence is in 29249-rounding-binary-fixture-20261004. Final focused
 normal/race, vet and incremental lint passed. Molint exits zero with two unsafe
 import diagnostics at unchanged main source sites; no zero-diagnostic claim.
+
+
+## Shared result metadata oracle (2026-10-04)
+
+FunctionTestCase.Run previously compared only OID, accepting an exact coefficient
+with a corrupted decimal scale. Compare the complete Type after row-count checks
+and before value decoding; diagnostics use %#v to expose field differences.
+NewFunctionTestResult already provides an explicit Type, without a wildcard
+contract. No new option or alternative comparator is introduced.
+
+Four existing retyping roots (six function calls) preserve their original result
+initialization and independently declare the final expected metadata after case
+construction: temporal subtraction and raw intervals publish width=scale; string
+add/sub publishes scale 6; LEAST/GREATEST retains the initial Time(64,0) challenge
+and expects Time(64,2). Values, NULL, warnings, errors and reuse behavior remain.
+Production retyping is unchanged.
+
+One shared lightweight fixture verifies a correct result and isolated OID, Size,
+Width, Scale, Charset and notNull corruptions, plus empty-row and all-NULL
+metadata errors. A literal coefficient is written at an existing row before
+metadata mutation, avoiding row-count interference. RunAndFree releases every
+case, with pool zero asserted per cell. The owning function package full normal
+suite passed, as did full race, vet and incremental lint. Molint exits zero with
+existing unsafe-import source diagnostics. The old OID-only guard mutation passes
+the correct/OID controls but fails seven remaining metadata cells. Final source
+hashes and actual test selection are bound in 29249-function-oracle-20261004. This test-only change requires no
+service BVT and makes no production performance claim.
