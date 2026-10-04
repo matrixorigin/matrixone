@@ -393,20 +393,48 @@ Require actual normal/race/static terminal results, independent QA rejection and
 matched body-cost measurements. No query-speed or whole-CI gain is claimed.
 This proposal does not resolve scale-39 or #29592, and does not complete #29249.
 
-Independent gpt-6.1-sol xhigh review requests two concrete closures: final-overflow
-assertions after inline rejection in all six D128 shape/NULL loops, and a named
-replacement ledger before deleting scenarios. Use adjustment 10 and
-`X = floor((2^127-1)/10^10)+1`: divisor `10^10` returns exactly X, while divisor 1
-must return `ErrInvalidInput`, with the failing row unmasked. The review accepts
-the D64 dead-branch proof. Both the reviewed requirements and remaining mapping
-work are explicit; the proposal is not yet approved for full consolidation.
+Independent gpt-6.1-sol xhigh review required typed final-overflow assertions
+in all six D128 inline-fallback loops and named deletion mappings. These design
+conditions are now closed: three D64 no-NULL destinations were corrected, and
+two D128 masked generic scenarios also map to existing high-limb continuation
+oracles. All 130 original scenarios, three benchmarks and eight direct helper
+calls have named dispositions; mixed siblings and strong independent owners stay.
 
-Phase A is now implemented locally: all 137 call expressions use explicit scales,
-and the seven unused definitions are removed. An inverse replacement check proves
-all original test data/assertions and benchmark workloads unchanged; only obsolete
-owner comments are also updated. No scenarios or live fallback branches have been
-deleted. All 37 selected migration controls pass with no skips. Current vet and incremental
-lint pass; molint exits zero with two unchanged baseline diagnostics. The independent
-gpt-6.1-sol xhigh review accepts this nonfinal mechanical checkpoint only. Separately, all 12 raw
-D128 inline-fallback success/error witnesses pass on the baseline, covering the six
-shape/NULL loops. That is control evidence, not mutation sensitivity or delivery.
+Phase A was committed as `1494ca5612`: 137 explicit-scale caller migrations and
+seven unused definitions removed. All 37 controls, vet and incremental lint pass;
+molint has two unchanged baseline diagnostics. Its review accepted that mechanical
+checkpoint only.
+
+Phase B is applied locally. The three concrete division tables have 157 cases;
+18 selected test roots pass with no skips, including retained independent owners
+and strengthened metadata/constant-publication consumers. Six private mutations,
+each swallowing one D128 fallback error, are rejected by the corresponding typed
+assertion; both real and unmutated-clone controls pass all 80 D128 cases. The D64
+change removes only six proven-unreachable fallbacks and corrects their obsolete
+scale-policy comment. Other scale paths and all D128 fallbacks remain.
+
+The fast-test consolidation removes 470 lines while adding about 8.1 KB of
+literal data and exact assertions; 138 other function bodies, including benchmarks,
+are byte-identical. Line reduction alone is not a cost claim. Public precision
+checks now cover the nearest accepted bound, exact bound, rounding carry and the
+original legal-input overflow with typed errors and immediate fixture cleanup;
+all four cases pass with no skips. The 19 selected roots pass with race. After
+moving four constant-constructor cleanup registrations before error assertions,
+both affected consumer roots pass with race again. Vet, molint and incremental
+lint also pass after that cleanup at the current source hashes. The independent implementation
+review accepts this nonfinal checkpoint. Its maintenance suggestions are applied:
+wide literal rows are split by field, the K boundary formula is documented, and
+the unused D256 error field/branch is removed. Its 41 cases pass with race again. Molint retains only its two baseline diagnostics. No push or whole-goal completion
+is approved; scale-39 and full-function race #29592 remain failed and unwaived.
+
+
+Three alternating same-binary profile pairs compare 27 original owners against
+the three canonical tables plus the retained mixed Mod child. Both groups use
+the same current producers and pass. Median summed test-body wall time is
+5.706 ms versus 1.979 ms, CPU 6.170 ms versus 2.477 ms, Go allocation 919,816 B
+versus 481,312 B, and allocation count 18,750 versus 6,496. These counters exclude
+compile/link/init, between-root framework costs and public precision/metadata
+additions. They establish a local test-body improvement, not query or whole-CI
+speedup. Two additional private mutations independently omit the left/right
+D256 admission predicate; each is rejected in VV/SV/VS, while both 41-case
+real/cloned controls pass.

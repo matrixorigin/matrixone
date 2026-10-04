@@ -4723,10 +4723,9 @@ func d64DivAtScale(v1, v2 []types.Decimal64, rs []types.Decimal128, scale1, scal
 	bmp := rsnull.GetBitmap()
 	scaleAdj := resultScale - scale1 + scale2
 
-	// D64 division always uses the inline fast path:
-	// scaleAdj is always ≤ 19 (max scale1=18, so scaleAdj ≤ 18+18=36? no..
-	// Actually scale = min(12, scale1+6, max(scale1)) and scaleAdj = scale - scale1 + scale2.
-	// Worst case: scale2=18, scale1=0 → scaleAdj=12+18=30. So may exceed 19.
+	// At adjustments 0..19, even abs(MinInt64)*10^19 fits in D128,
+	// so d128DivInline cannot reject the scaled numerator. Other adjustments
+	// retain the general division path below.
 	var scaleFactor uint64
 	canInline := scaleAdj >= 0 && scaleAdj <= 19
 	if canInline {
@@ -4755,11 +4754,7 @@ func d64DivAtScale(v1, v2 []types.Decimal64, rs []types.Decimal128, scale1, scal
 					signyBit := uint64(v2[i]) >> 63
 					absY64 := (uint64(v2[i]) ^ (-signyBit)) + signyBit
 					x := d64toD128(v1[i])
-					if !d128DivInline(x, absY64, signyBit, scaleFactor, &rs[i]) {
-						if err := d128DivOne(x, d64toD128(v2[i]), &rs[i], scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
-							return err
-						}
-					}
+					d128DivInline(x, absY64, signyBit, scaleFactor, &rs[i])
 				}
 			} else {
 				for i := 0; i < len1; i++ {
@@ -4776,11 +4771,7 @@ func d64DivAtScale(v1, v2 []types.Decimal64, rs []types.Decimal128, scale1, scal
 					signyBit := uint64(v2[i]) >> 63
 					absY64 := (uint64(v2[i]) ^ (-signyBit)) + signyBit
 					x := d64toD128(v1[i])
-					if !d128DivInline(x, absY64, signyBit, scaleFactor, &rs[i]) {
-						if err := d128DivOne(x, d64toD128(v2[i]), &rs[i], scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
-							return err
-						}
-					}
+					d128DivInline(x, absY64, signyBit, scaleFactor, &rs[i])
 				}
 			}
 		} else {
@@ -4820,11 +4811,7 @@ func d64DivAtScale(v1, v2 []types.Decimal64, rs []types.Decimal128, scale1, scal
 					}
 					signyBit := uint64(v2[i]) >> 63
 					absY64 := (uint64(v2[i]) ^ (-signyBit)) + signyBit
-					if !d128DivInline(x, absY64, signyBit, scaleFactor, &rs[i]) {
-						if err := d128DivOne(x, d64toD128(v2[i]), &rs[i], scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
-							return err
-						}
-					}
+					d128DivInline(x, absY64, signyBit, scaleFactor, &rs[i])
 				}
 			} else {
 				for i := 0; i < len2; i++ {
@@ -4840,11 +4827,7 @@ func d64DivAtScale(v1, v2 []types.Decimal64, rs []types.Decimal128, scale1, scal
 					}
 					signyBit := uint64(v2[i]) >> 63
 					absY64 := (uint64(v2[i]) ^ (-signyBit)) + signyBit
-					if !d128DivInline(x, absY64, signyBit, scaleFactor, &rs[i]) {
-						if err := d128DivOne(x, d64toD128(v2[i]), &rs[i], scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
-							return err
-						}
-					}
+					d128DivInline(x, absY64, signyBit, scaleFactor, &rs[i])
 				}
 			}
 		} else {
@@ -4889,11 +4872,7 @@ func d64DivAtScale(v1, v2 []types.Decimal64, rs []types.Decimal128, scale1, scal
 			if rsnull.IsEmpty() {
 				for i := 0; i < len1; i++ {
 					x := d64toD128(v1[i])
-					if !d128DivInline(x, absY64, signyU, scaleFactor, &rs[i]) {
-						if err := d128DivOne(x, y, &rs[i], scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
-							return err
-						}
-					}
+					d128DivInline(x, absY64, signyU, scaleFactor, &rs[i])
 				}
 			} else {
 				for i := 0; i < len1; i++ {
@@ -4901,11 +4880,7 @@ func d64DivAtScale(v1, v2 []types.Decimal64, rs []types.Decimal128, scale1, scal
 						continue
 					}
 					x := d64toD128(v1[i])
-					if !d128DivInline(x, absY64, signyU, scaleFactor, &rs[i]) {
-						if err := d128DivOne(x, y, &rs[i], scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
-							return err
-						}
-					}
+					d128DivInline(x, absY64, signyU, scaleFactor, &rs[i])
 				}
 			}
 			return nil
