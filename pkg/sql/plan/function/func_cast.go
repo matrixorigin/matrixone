@@ -3458,6 +3458,15 @@ func integerToFixFloat[T1, T2 constraints.Integer | constraints.Float](
 	return nil
 }
 
+// ConvertToFixedFloat applies the bounded floating CAST's rounding and range
+// check. Callers prepare the scale factor and maximum once per vector; the
+// planner also uses this primitive to prove that a constant CAST is harmless.
+func ConvertToFixedFloat(value, factor, maxValue float64) (rounded float64, outOfRange bool) {
+	floor := math.Floor(value)
+	rounded = floor + math.Round((value-floor)*factor)/factor
+	return rounded, rounded < -maxValue || rounded > maxValue
+}
+
 func floatToFixFloat[T1, T2 constraints.Float](
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[T1], to *vector.FunctionResult[T2], length int, selectList *FunctionSelectList) error {
@@ -3474,10 +3483,8 @@ func floatToFixFloat[T1, T2 constraints.Float](
 				return err
 			}
 		} else {
-			v2 := float64(v)
-			tmp := math.Round((v2-math.Floor(v2))*pow) / pow
-			v2 = math.Floor(v2) + tmp
-			if v2 < -max_value || v2 > max_value {
+			v2, outOfRange := ConvertToFixedFloat(float64(v), pow, max_value)
+			if outOfRange {
 				return moerr.NewOutOfRangef(ctx, "float", "value '%v'", v)
 			}
 			if err := to.Append(T2(v2), false); err != nil {
@@ -3495,9 +3502,8 @@ func floatNumToFixFloat[T1 constraints.Float](
 	max_value := math.Pow10(int(to.GetType().Width - to.GetType().Scale))
 	max_value -= 1.0 / pow
 
-	tmp := math.Round((from-math.Floor(from))*pow) / pow
-	v := math.Floor(from) + tmp
-	if v < -max_value || v > max_value {
+	v, outOfRange := ConvertToFixedFloat(from, pow, max_value)
+	if outOfRange {
 		if originStr == "" {
 			return 0, moerr.NewOutOfRangef(ctx, "float", "value '%v'", from)
 		} else {

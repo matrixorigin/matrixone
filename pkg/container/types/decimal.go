@@ -369,40 +369,24 @@ func (x Decimal64) Scale(n int32) (Decimal64, error) {
 	if signx {
 		x1 = x1.Minus()
 	}
-	err := error(nil)
-	m := int32(0)
-	for n-m > 19 || n-m < -19 {
-		if n > 0 {
-			m += 19
-			x1, err = x1.Mul64(Decimal64(Pow10[19]))
-		} else {
-			m -= 19
-			x1, err = x1.Div64(Decimal64(Pow10[19]))
-		}
-		if err != nil {
-			err = moerr.NewInvalidInputNoCtxf("Decimal64 scale overflow: coefficient %s, target scale=%d", x.Format(0), n)
-			return x, err
-		}
-	}
-	if n == m {
+	if n > 0 {
+		// Even 1 * 10^19 exceeds the signed coefficient range. Check before
+		// multiplication; Mul64 deliberately accepts unsigned magnitudes.
+		limit := Decimal64Max
 		if signx {
-			x1 = x1.Minus()
+			limit = Decimal64Min
 		}
-		return x1, nil
-	}
-	if n-m > 0 {
-		x1, err = x1.Mul64(Decimal64(Pow10[n-m]))
+		if n >= 19 || x1 > limit/Decimal64(Pow10[n]) {
+			return x, moerr.NewInvalidInputNoCtxf("Decimal64 scale overflow: coefficient %s, target scale=%d", x.Format(0), n)
+		}
+		x1 *= Decimal64(Pow10[n])
 	} else {
-		x1, err = x1.Div64(Decimal64(Pow10[m-n]))
-	}
-	if err != nil {
-		err = moerr.NewInvalidInputNoCtxf("Decimal64 scale overflow: coefficient %s, target scale=%d", x.Format(0), n)
-		return x, err
+		x1, _ = x1.Div64(Decimal64(Pow10[-n]))
 	}
 	if signx {
 		x1 = x1.Minus()
 	}
-	return x1, err
+	return x1, nil
 }
 
 func (x *Decimal128) ScaleInplace(n int32) error {
@@ -1055,7 +1039,8 @@ func (x Decimal64) Div64(y Decimal64) (Decimal64, error) {
 		return x, moerr.NewInvalidInputNoCtxf("Decimal64 Div by Zero: %s/%s", x.Format(0), y.Format(0))
 	}
 	z := x / y
-	if (x-z*y)*2 >= y {
+	// Compare with the half divisor without overflowing a doubled remainder.
+	if x-z*y >= y/2+y%2 {
 		z++
 	}
 	return z, nil
@@ -1556,13 +1541,21 @@ func (x Decimal64) Div(y Decimal64, scale1, scale2 int32) (z Decimal64, scale in
 			return
 		}
 		x2, err = x2.Div128(y2)
-		if err != nil || x2.B64_127 != 0 || x2.B0_63>>63 != 0 {
+		if err != nil || x2.B64_127 != 0 {
 			err = moerr.NewInvalidInputNoCtxf("Decimal64 Div overflow: %s/%s", x.Format(scale1), y.Format(scale2))
+			return
 		}
 		z = Decimal64(x2.B0_63)
+	} else {
+		z, err = z.Div64(y1)
+	}
+	if err != nil {
 		return
 	}
-	z, err = z.Div64(y1)
+	if z.Sign() && (signx == signy || z != Decimal64Min) {
+		err = moerr.NewInvalidInputNoCtxf("Decimal64 Div overflow: %s/%s", x.Format(scale1), y.Format(scale2))
+		return
+	}
 	if signx != signy {
 		z = z.Minus()
 	}

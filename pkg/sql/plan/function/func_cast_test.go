@@ -2594,6 +2594,22 @@ func initCastTestCase() []tcTemp {
 		},
 	}
 	castFloat64ToOthers := []tcTemp{
+		{
+			info: "float64 to bounded float preserves rounding and nulls",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(), []float64{1.25, -1.25, 999.9, 0}, []bool{false, false, false, true}),
+				NewFunctionTestInput(types.New(types.T_float32, 4, 1), []float32{}, nil),
+			},
+			expect: NewFunctionTestResult(types.New(types.T_float32, 4, 1), false, []float32{1.3, -1.2, 999.9, 0}, []bool{false, false, false, true}),
+		},
+		{
+			info: "float64 to bounded double scale zero",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(), []float64{1.5, -1.5}, nil),
+				NewFunctionTestInput(types.New(types.T_float64, 3, 0), []float64{}, nil),
+			},
+			expect: NewFunctionTestResult(types.New(types.T_float64, 3, 0), false, []float64{2, -1}, nil),
+		},
 		// test cast float64 to others.
 		{
 			info: "float64 to int8",
