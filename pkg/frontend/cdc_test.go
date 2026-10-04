@@ -6027,50 +6027,6 @@ func (m *mockChangeReader) GetTableInfo() *cdc.DbTableInfo {
 	return m.info
 }
 
-type mockSinker struct{}
-
-func (m mockSinker) Run(ctx context.Context, ar *cdc.ActiveRoutine) {}
-
-func (m mockSinker) Sink(ctx context.Context, data *cdc.DecoderOutput) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (m mockSinker) SendBegin() {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (m mockSinker) SendCommit() {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (m mockSinker) SendRollback() {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (m mockSinker) SendDummy() {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (m mockSinker) Error() error {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (m mockSinker) Reset() {
-	// No-op for mock
-}
-
-func (m mockSinker) Close() {
-	// No-op for mock - Close() is called during cleanup
-}
-
-func (m mockSinker) ClearError() {}
-
 func TestCdcTask_checkPitr(t *testing.T) {
 	pts := &cdc.PatternTuples{
 		Pts: []*cdc.PatternTuple{
