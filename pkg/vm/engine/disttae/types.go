@@ -45,7 +45,6 @@ import (
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -442,8 +441,6 @@ type Transaction struct {
 	startStatementCalled bool
 	incrStatementCalled  bool
 	pkCount              int
-
-	adjustCount int
 
 	haveDDL             atomic.Bool
 	isCloneTxn          bool
@@ -910,25 +907,6 @@ func (txn *Transaction) WriteOffset() uint64 {
 
 // Adjust adjust writes order after the current statement finished.
 func (txn *Transaction) Adjust(writeOffset uint64) error {
-	start := time.Now()
-	seq := txn.op.NextSequence()
-	trace.GetService(txn.proc.GetService()).AddTxnDurationAction(
-		txn.op,
-		client.WorkspaceAdjustEvent,
-		seq,
-		0,
-		0,
-		nil)
-	defer func() {
-		trace.GetService(txn.proc.GetService()).AddTxnDurationAction(
-			txn.op,
-			client.WorkspaceAdjustEvent,
-			seq,
-			0,
-			time.Since(start),
-			nil)
-	}()
-
 	txn.Lock()
 	defer txn.Unlock()
 	if err := txn.adjustUpdateOrderLocked(writeOffset); err != nil {
@@ -941,28 +919,7 @@ func (txn *Transaction) Adjust(writeOffset uint64) error {
 	// 	return err
 	// }
 
-	txn.traceWorkspaceLocked(false)
 	return nil
-}
-
-func (txn *Transaction) traceWorkspaceLocked(commit bool) {
-	index := txn.adjustCount
-	if commit {
-		index = -1
-	}
-	idx := 0
-	trace.GetService(txn.proc.GetService()).TxnAdjustWorkspace(
-		txn.op,
-		index,
-		func() (tableID uint64, typ string, bat *batch.Batch, more bool) {
-			if idx == len(txn.writes) {
-				return 0, "", nil, false
-			}
-			e := txn.writes[idx]
-			idx++
-			return e.tableId, typesNames[e.typ], e.bat, true
-		})
-	txn.adjustCount++
 }
 
 // The current implementation, update's delete and insert are executed concurrently, inside workspace it
@@ -1297,9 +1254,6 @@ func (txn *Transaction) advanceSnapshot(
 // including the first statement in an explicit transaction.
 func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) (bool, error) {
 	if !commit {
-		trace.GetService(txn.proc.GetService()).TxnUpdateSnapshot(
-			txn.op, 0, "before execute")
-
 		return true, txn.advanceSnapshot(ctx, timestamp.Timestamp{})
 	}
 

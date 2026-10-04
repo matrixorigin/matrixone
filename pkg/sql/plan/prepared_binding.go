@@ -218,6 +218,43 @@ func integerDomainFits(source, target types.T) bool {
 	return source.IsUnsignedInt() && !target.IsUnsignedInt() && source.TypeLen() < target.TypeLen()
 }
 
+// IN owns this admission; scalar comparisons and DML keep their source-domain
+// rules. Save the full cast before rewrites can remove the consumer, including
+// an IN used only in a projection. The existing per-EXECUTE probe owns reuse.
+func bindPreparedIntegerInValue(ctx context.Context, column, source *Expr) (*Expr, bool, error) {
+	state := preparedBindingState(ctx)
+	if state == nil || !state.selectStatement || column.GetCol() == nil || source.GetP() == nil {
+		return source, false, nil
+	}
+	target := types.T(column.Typ.Id)
+	// A signed source remains a signed marker here. Reject unsupported domains
+	// before the linear lookup; the binding still owns positive admission.
+	if !types.T(source.Typ.Id).IsSignedInt() || !target.IsSignedInt() || target.TypeLen() > 4 {
+		return source, false, nil
+	}
+	binding, ok := state.bindingForPosition(source.GetP().Pos)
+	if !ok || !binding.Type.Oid.IsSignedInt() || binding.Type.Oid.TypeLen() <= target.TypeLen() {
+		return source, false, nil
+	}
+	wasValueDependent := state.valueDependent
+	value, present := preparedConfigurationValue(ctx, source)
+	if !present || value == nil {
+		return source, false, nil
+	}
+	_, exact, err := preparedComparisonExactIntegerExpr(ctx, preparedNumericValueSpelling(value), column.Typ)
+	if err != nil || !exact {
+		// Unsafe fallbacks must not replace a valid cached narrowing plan.
+		return source, false, err
+	}
+	converted, err := makePlan2CastExpr(ctx, source, column.Typ)
+	if err != nil {
+		return nil, false, err
+	}
+	state.diagnosticCandidates = append(state.diagnosticCandidates, DeepCopyExpr(converted))
+	state.valueDependent = wasValueDependent
+	return converted, true, nil
+}
+
 // Capture before relational rewrites can remove or duplicate a predicate.
 // Each builder owns its proof: a safe child must not authorize an unprobed
 // parent. Only immutable expression copies escape into the eventual cache.
@@ -387,17 +424,27 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 				continue
 			}
 		}
+		// Binary clients can transmit an INT key as BIGINT. For a direct signed
+		// column of at most 32 bits, a guarded narrowing preserves its comparison
+		// domain and lets non-SELECT predicates use the existing storage PK filter.
+		guardedIntegerKey := !state.selectStatement && len(args) == 2 &&
+			args[1-i] != nil && args[1-i].GetCol() != nil &&
+			binding.Type.Oid.IsSignedInt() && types.T(args[1-i].Typ.Id).IsSignedInt() &&
+			types.T(args[1-i].Typ.Id).TypeLen() <= 4 &&
+			binding.Type.Oid.TypeLen() > types.T(args[1-i].Typ.Id).TypeLen()
 		if len(args) == 2 && isPreparedNumericComparisonContext(name) && args[1-i] != nil &&
 			(types.T(args[1-i].Typ.Id).IsInteger() || args[1-i].Typ.Id == int32(types.T_bit)) &&
 			(binding.Type.Oid.IsMySQLString() ||
 				(binding.Type.Oid.IsFloat() && types.T(args[1-i].Typ.Id).IsSignedInt()) ||
-				(state.selectStatement && binding.Type.Oid.IsInteger() &&
+				((state.selectStatement || guardedIntegerKey) && binding.Type.Oid.IsInteger() &&
 					(binding.Type.Oid.TypeLen() > types.T(args[1-i].Typ.Id).TypeLen() ||
 						binding.Type.Oid.IsSignedInt() != types.T(args[1-i].Typ.Id).IsSignedInt()))) {
 			// A proven integral value can compare in the peer's integer domain
 			// without casting the indexed column to a wider domain.
-			// The proof depends on this execution's value, so the existing
-			// binding state keeps the resulting plan out of the type-only cache.
+			// Most such proofs are value-dependent. The narrow signed-key case
+			// can reuse a plan only while its full cast passes the per-EXECUTE
+			// diagnostic guard; overflow falls back to the original wide domain.
+			wasValueDependent := state.valueDependent
 			if value, present := preparedConfigurationValue(ctx, source); present && value != nil {
 				spelling := preparedNumericValueSpelling(value)
 				_, exact, proofErr := preparedComparisonExactIntegerExpr(ctx, spelling, args[1-i].Typ)
@@ -436,6 +483,12 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 						return nil, castErr
 					}
 					args[i] = converted
+					if guardedIntegerKey {
+						// Keep the guard even if optimization removes the predicate.
+						// Do not clear dependencies belonging to other consumers.
+						state.diagnosticCandidates = append(state.diagnosticCandidates, DeepCopyExpr(converted))
+						state.valueDependent = wasValueDependent
+					}
 					continue
 				}
 			}

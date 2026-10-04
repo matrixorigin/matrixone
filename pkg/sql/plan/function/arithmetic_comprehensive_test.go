@@ -43,7 +43,7 @@ func Test_PlusFn_DecimalZero(t *testing.T) {
 				[]types.Decimal64{1}, []bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -61,7 +61,7 @@ func Test_PlusFn_DecimalZero(t *testing.T) {
 				[]types.Decimal64{1}, []bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -88,7 +88,7 @@ func Test_MinusFn_DecimalZero(t *testing.T) {
 				[]types.Decimal64{expected}, []bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, minusFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -125,7 +125,7 @@ func Test_DivFn_DecimalZero(t *testing.T) {
 				[]types.Decimal128{{B0_63: 0, B64_127: 0}}, []bool{true}), // NULL result
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, divFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -151,7 +151,7 @@ func Test_Decimal64_Multiply_Zero(t *testing.T) {
 				[]bool{false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, multiFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -171,7 +171,7 @@ func Test_Decimal64_Multiply_Zero(t *testing.T) {
 				[]bool{false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, multiFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -193,7 +193,7 @@ func Test_Decimal64_Multiply_Zero(t *testing.T) {
 				[]bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, multiFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -223,7 +223,7 @@ func Test_Decimal_Plus_Float(t *testing.T) {
 				[]bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -247,7 +247,7 @@ func Test_Decimal_Plus_Float(t *testing.T) {
 				[]bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -399,7 +399,7 @@ func Test_Decimal_Plus_Float_MySQL_Behavior(t *testing.T) {
 				[]float64{3728196.141593}, []bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -425,7 +425,7 @@ func Test_Decimal_Plus_Float32_MySQL_Behavior(t *testing.T) {
 				[]float64{3728196.141593}, []bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }

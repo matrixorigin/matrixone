@@ -1809,7 +1809,7 @@ func geomFromWKBSubtype(payload []byte, maxPoints int64, want string) ([]byte, e
 	return geo.WriteWKB(g), nil
 }
 
-func stFromWKBSubtype(want string) fEvalFn {
+func stFromWKBSubtype(want string) executeLogicOfOverload {
 	return func(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 		maxPoints := maxPointsInGeometryLimit(proc)
 		return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
@@ -11047,30 +11047,33 @@ func TimestampToDayOfWeek(ivecs []*vector.Vector, result vector.FunctionResultWr
 
 // DateToDayName returns the weekday name for date (e.g., "Sunday", "Monday", ...)
 func DateToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	locale := temporalLocaleForProcess(proc)
 	return opUnaryFixedToStrWithNullOnError[types.Date](ivecs, result, proc, length, func(v types.Date) (string, error) {
 		if v == types.ZeroDate {
 			return "", moerr.NewInvalidInputNoCtx("zero date")
 		}
 		// DayOfWeek() returns 0=Sunday, 1=Monday, ..., 6=Saturday
 		// Use String() method to get the weekday name
-		return v.DayOfWeek().String(), nil
+		return locale.localizedWeekday(int(v.DayOfWeek())), nil
 	}, selectList)
 }
 
 // DatetimeToDayName returns the weekday name for datetime (e.g., "Sunday", "Monday", ...)
 func DatetimeToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	locale := temporalLocaleForProcess(proc)
 	return opUnaryFixedToStrWithNullOnError[types.Datetime](ivecs, result, proc, length, func(v types.Datetime) (string, error) {
 		if v == types.ZeroDatetime {
 			return "", moerr.NewInvalidInputNoCtx("zero datetime")
 		}
 		// DayOfWeek() returns 0=Sunday, 1=Monday, ..., 6=Saturday
 		// Use String() method to get the weekday name
-		return v.DayOfWeek().String(), nil
+		return locale.localizedWeekday(int(v.DayOfWeek())), nil
 	}, selectList)
 }
 
 // TimestampToDayName returns the weekday name for timestamp (e.g., "Sunday", "Monday", ...)
 func TimestampToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	locale := temporalLocaleForProcess(proc)
 	return opUnaryFixedToStrWithNullOnError[types.Timestamp](ivecs, result, proc, length, func(v types.Timestamp) (string, error) {
 		if v == types.ZeroTimestamp {
 			return "", moerr.NewInvalidInputNoCtx("zero timestamp")
@@ -11082,24 +11085,26 @@ func TimestampToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrap
 		dt := v.ToDatetime(loc)
 		// DayOfWeek() returns 0=Sunday, 1=Monday, ..., 6=Saturday
 		// Use String() method to get the weekday name
-		return dt.DayOfWeek().String(), nil
+		return locale.localizedWeekday(int(dt.DayOfWeek())), nil
 	}, selectList)
 }
 
 func DateStringToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	locale := temporalLocaleForProcess(proc)
 	return dateStringToStringWithNullOnError(ivecs, result, proc, length, selectList, func(parts dateExtractParts) (string, bool) {
 		if !parts.valid {
 			return "", false
 		}
 		if parts.year == 0 {
-			return types.DayOfWeekFromCalendar(parts.year, parts.month, parts.day).String(), true
+			return locale.localizedWeekday(int(types.DayOfWeekFromCalendar(parts.year, parts.month, parts.day))), true
 		}
-		return parts.date.DayOfWeek().String(), true
+		return locale.localizedWeekday(int(parts.date.DayOfWeek())), true
 	})
 }
 
 // DateToMonthName returns the month name for date (e.g., "January", "February", ...)
 func DateToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	locale := temporalLocaleForProcess(proc)
 	return opUnaryFixedToStrWithNullOnError[types.Date](ivecs, result, proc, length, func(v types.Date) (string, error) {
 		if v == types.ZeroDate {
 			return "", moerr.NewInvalidInputNoCtx("zero date")
@@ -11107,7 +11112,7 @@ func DateToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 		// Month() returns 1-12
 		month := v.Month()
 		if month >= 1 && month <= 12 {
-			return MonthNames[month-1], nil
+			return locale.localizedMonth(int(month)), nil
 		}
 		return "", nil
 	}, selectList)
@@ -11115,6 +11120,7 @@ func DateToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 
 // DatetimeToMonthName returns the month name for datetime (e.g., "January", "February", ...)
 func DatetimeToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	locale := temporalLocaleForProcess(proc)
 	return opUnaryFixedToStrWithNullOnError[types.Datetime](ivecs, result, proc, length, func(v types.Datetime) (string, error) {
 		if v == types.ZeroDatetime {
 			return "", moerr.NewInvalidInputNoCtx("zero datetime")
@@ -11122,7 +11128,7 @@ func DatetimeToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWra
 		// Month() returns 1-12
 		month := v.Month()
 		if month >= 1 && month <= 12 {
-			return MonthNames[month-1], nil
+			return locale.localizedMonth(int(month)), nil
 		}
 		return "", nil
 	}, selectList)
@@ -11130,6 +11136,7 @@ func DatetimeToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWra
 
 // TimestampToMonthName returns the month name for timestamp (e.g., "January", "February", ...)
 func TimestampToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	locale := temporalLocaleForProcess(proc)
 	return opUnaryFixedToStrWithNullOnError[types.Timestamp](ivecs, result, proc, length, func(v types.Timestamp) (string, error) {
 		if v == types.ZeroTimestamp {
 			return "", moerr.NewInvalidInputNoCtx("zero timestamp")
@@ -11142,19 +11149,20 @@ func TimestampToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWr
 		// Month() returns 1-12
 		month := dt.Month()
 		if month >= 1 && month <= 12 {
-			return MonthNames[month-1], nil
+			return locale.localizedMonth(int(month)), nil
 		}
 		return "", nil
 	}, selectList)
 }
 
 func DateStringToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	locale := temporalLocaleForProcess(proc)
 	return dateStringToStringWithNullOnError(ivecs, result, proc, length, selectList, func(parts dateExtractParts) (string, bool) {
 		month := parts.month
 		if month < 1 || month > 12 {
 			return "", false
 		}
-		return MonthNames[month-1], true
+		return locale.localizedMonth(int(month)), true
 	})
 }
 

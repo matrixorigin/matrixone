@@ -1265,7 +1265,7 @@ var (
 				owner,
 				default_role
     		) values("%s", "%s", "%s", "%s", "%s", %s, '%s', "%s",%d, %d, %d);`
-	initMoRolePrivFormat = `insert into mo_catalog.mo_role_privs(
+	initMoRolePrivPrefix = `insert into mo_catalog.mo_role_privs(
 				role_id,
 				role_name,
 				obj_type,
@@ -1276,8 +1276,10 @@ var (
 				operation_user_id,
 				granted_time,
 				with_grant_option
-			) values(%d,"%s","%s",%d,%d,"%s","%s",%d,"%s",%v);`
-	initMoUserGrantFormat = `insert into mo_catalog.mo_user_grant(
+			) values`
+	initMoRolePrivValueFormat = `(%d,"%s","%s",%d,%d,"%s","%s",%d,"%s",%v)`
+	initMoRolePrivFormat      = initMoRolePrivPrefix + initMoRolePrivValueFormat + ";"
+	initMoUserGrantFormat     = `insert into mo_catalog.mo_user_grant(
             	role_id,
 				user_id,
 				granted_time,
@@ -1323,8 +1325,6 @@ const (
 	updateStatusLockOfUserFormat = `update mo_catalog.mo_user set status = "%s", login_attempts = login_attempts + 1, lock_time = utc_timestamp() where user_name = "%s";`
 
 	updateStatusLockOfUserForeverFormat = `update mo_catalog.mo_user set status = "%s" where user_name = "%s";`
-
-	checkRoleExistsFormat = `select role_id from mo_catalog.mo_role where role_id = %d and role_name = "%s";`
 
 	roleNameOfRoleIdFormat = `select role_name from mo_catalog.mo_role where role_id = %d;`
 
@@ -1379,7 +1379,6 @@ const (
 	checkRoleHasPrivilegeWGOWithObjFormat         = `select role_id from mo_catalog.mo_role_privs where with_grant_option = true and privilege_id = %d and obj_type = "%s" and obj_id = %d;`
 	checkRoleHasPrivilegeWGOWithObjAndLevelFormat = `select role_id from mo_catalog.mo_role_privs where with_grant_option = true and privilege_id = %d and obj_type = "%s" and obj_id = %d and privilege_level in (%s);`
 
-	checkRoleHasPrivilegeWGOOrWithOwnershipWithObjFormat         = `select distinct role_id from mo_catalog.mo_role_privs where ((with_grant_option = true and (privilege_id = %d or privilege_id = %d)) or privilege_id = %d) and obj_type = "%s" and obj_id = %d;`
 	checkRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevelFormat = `select distinct role_id from mo_catalog.mo_role_privs where ((with_grant_option = true and (privilege_id = %d or privilege_id = %d)) or privilege_id = %d) and obj_type = "%s" and obj_id = %d and privilege_level in (%s);`
 
 	// obj_type-only WGO check: for wildcard grants (*.*) that still need table vs view distinction.
@@ -1841,14 +1840,6 @@ func getSqlForUpdateStatusLockOfUserForever(status string, user string) string {
 	return fmt.Sprintf(updateStatusLockOfUserForeverFormat, status, user)
 }
 
-func getSqlForCheckRoleExists(ctx context.Context, roleID int, roleName string) (string, error) {
-	err := inputNameIsInvalid(ctx, roleName)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(checkRoleExistsFormat, roleID, roleName), nil
-}
-
 func getSqlForRoleNameOfRoleId(roleId int64) string {
 	return fmt.Sprintf(roleNameOfRoleIdFormat, roleId)
 }
@@ -1976,10 +1967,6 @@ func getSqlForCheckRoleHasPrivilegeWGOWithObjAndExactLevel(privilegeId int64, ob
 	return fmt.Sprintf(checkRoleHasPrivilegeWGOWithObjAndLevelFormat, privilegeId, objType, objId, exactGrantOptionPrivilegeLevelSQL(privilegeLevel))
 }
 
-func getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObj(privilegeId, allPrivId, ownershipPrivId int64, objType objectType, objId int64) string {
-	return fmt.Sprintf(checkRoleHasPrivilegeWGOOrWithOwnershipWithObjFormat, privilegeId, allPrivId, ownershipPrivId, objType, objId)
-}
-
 func getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevel(privilegeId, allPrivId, ownershipPrivId int64, objType objectType, objId int64, privilegeLevel privilegeLevelType) string {
 	return fmt.Sprintf(checkRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevelFormat, privilegeId, allPrivId, ownershipPrivId, objType, objId, scopedGrantOptionPrivilegeLevelsSQL(privilegeLevel))
 }
@@ -2056,10 +2043,6 @@ func getSqlForCheckRoleHasTableLevelPrivilegeWithObjType(_ context.Context, objT
 	return fmt.Sprintf(checkRoleHasTableLevelPrivilegeFormat, objType, roleId, privId,
 		privilegeLevelDatabaseTable, privilegeLevelTable,
 		escapeSQLString(dbName), escapeSQLString(tableName)), nil
-}
-
-func getSqlForCheckRoleHasTableLevelPrivilege(ctx context.Context, roleId int64, privId PrivilegeType, dbName string, tableName string) (string, error) {
-	return getSqlForCheckRoleHasTableLevelPrivilegeWithObjType(ctx, objectTypeTable, roleId, privId, dbName, tableName)
 }
 
 func getSqlForCheckRoleHasTableLevelForDatabaseStarWithObjType(_ context.Context, objType objectType, roleId int64, privId PrivilegeType, dbName string) (string, error) {
@@ -2633,6 +2616,28 @@ var (
 		PrivilegeTypeConnect,
 	}
 )
+
+// initialRolePrivilegesSQL batches one role's fixed bootstrap privileges. The
+// caller retains ownership of execution and the surrounding initialization txn.
+func initialRolePrivilegesSQL(roleID uint32, roleName string, userID uint32, privileges []PrivilegeType) string {
+	if len(privileges) == 0 {
+		return ""
+	}
+	var sql strings.Builder
+	sql.WriteString(initMoRolePrivPrefix)
+	for index, privilege := range privileges {
+		if index > 0 {
+			sql.WriteByte(',')
+		}
+		entry := privilegeEntriesMap[privilege]
+		fmt.Fprintf(&sql, initMoRolePrivValueFormat,
+			roleID, roleName, entry.objType, entry.objId,
+			entry.privilegeId, entry.privilegeId.String(), entry.privilegeLevel,
+			userID, types.CurrentTimestamp().String2(time.UTC, 0), entry.withGrantOption)
+	}
+	sql.WriteByte(';')
+	return sql.String()
+}
 
 type verifiedRoleType int
 
@@ -9840,48 +9845,6 @@ func mergeRoleSets(dst, src *btree.Set[int64]) {
 	}
 }
 
-func getRoleSetThatPrivilegeGrantedToWGOWithObj(
-	ctx context.Context,
-	bh BackgroundExec,
-	privType PrivilegeType,
-	objType objectType,
-	objId int64,
-) (*btree.Set[int64], error) {
-	var sql string
-	switch privType {
-	case PrivilegeTypeSelect, PrivilegeTypeInsert, PrivilegeTypeUpdate,
-		PrivilegeTypeTruncate, PrivilegeTypeDelete, PrivilegeTypeReference,
-		PrivilegeTypeIndex, PrivilegeTypeValues, PrivilegeTypeTableAll:
-		sql = getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObj(
-			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership), objType, objId)
-	case PrivilegeTypeTableOwnership:
-		sql = getSqlForCheckRoleHasPrivilegeWGOWithObj(int64(privType), objType, objId)
-	default:
-		sql = getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType)
-	}
-
-	rset := &btree.Set[int64]{}
-	bh.ClearExecResultSet()
-	err := bh.Exec(ctx, sql)
-	if err != nil {
-		return nil, err
-	}
-	erArray, err := getResultSet(ctx, bh)
-	if err != nil {
-		return nil, err
-	}
-	if execResultArrayHasData(erArray) {
-		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-			id, err := erArray[0].GetInt64(ctx, i, 0)
-			if err != nil {
-				return nil, err
-			}
-			rset.Insert(id)
-		}
-	}
-	return rset, err
-}
-
 func getRoleSetThatDatabasePrivilegeGrantedToWGOWithObjAndLevel(
 	ctx context.Context,
 	bh BackgroundExec,
@@ -10976,30 +10939,11 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 		newTenant.GetUserID(), newTenant.GetDefaultRoleID(), accountAdminRoleID)
 	addSqlIntoSet(initMoUser1)
 
-	// step4: add new entries to the mo_role_privs
-	// accountadmin role
-	for _, t := range entriesOfAccountAdminForMoRolePrivsFor {
-		entry := privilegeEntriesMap[t]
-		initMoRolePriv := fmt.Sprintf(initMoRolePrivFormat,
-			accountAdminRoleID, accountAdminRoleName,
-			entry.objType, entry.objId,
-			entry.privilegeId, entry.privilegeId.String(), entry.privilegeLevel,
-			newTenant.GetUserID(), types.CurrentTimestamp().String2(time.UTC, 0),
-			entry.withGrantOption)
-		addSqlIntoSet(initMoRolePriv)
-	}
-
-	// public role
-	for _, t := range entriesOfPublicForMoRolePrivsFor {
-		entry := privilegeEntriesMap[t]
-		initMoRolePriv := fmt.Sprintf(initMoRolePrivFormat,
-			publicRoleID, publicRoleName,
-			entry.objType, entry.objId,
-			entry.privilegeId, entry.privilegeId.String(), entry.privilegeLevel,
-			newTenant.GetUserID(), types.CurrentTimestamp().String2(time.UTC, 0),
-			entry.withGrantOption)
-		addSqlIntoSet(initMoRolePriv)
-	}
+	// Initialize each role in one statement within the existing account transaction.
+	addSqlIntoSet(initialRolePrivilegesSQL(accountAdminRoleID, accountAdminRoleName,
+		newTenant.GetUserID(), entriesOfAccountAdminForMoRolePrivsFor))
+	addSqlIntoSet(initialRolePrivilegesSQL(publicRoleID, publicRoleName,
+		newTenant.GetUserID(), entriesOfPublicForMoRolePrivsFor))
 
 	// step5: add new entries to the mo_user_grant
 	initMoUserGrant1 := fmt.Sprintf(initMoUserGrantFormat, accountAdminRoleID, newTenant.GetUserID(), types.CurrentTimestamp().String2(time.UTC, 0), true)

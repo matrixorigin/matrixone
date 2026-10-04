@@ -48,7 +48,7 @@ func (ses *Session) hasUnreplayableMigrationUserVars() bool {
 			return true
 		}
 		if variable.Value == nil && types.T(variable.Type.Id) == types.T_any &&
-			(!variable.RegexpStringResult || currentProtocolVersion(ses.proc) < defines.MORPCVersion105) {
+			(!variable.RegexpStringResult || currentProtocolVersion(ses.proc) < defines.MORPCVersion106) {
 			return true // Legacy replay cannot preserve this result-category state.
 		}
 	}
@@ -98,11 +98,11 @@ func (ses *Session) snapshotUserDefinedVars(ctx context.Context) ([]*query.Migra
 			return nil, err
 		}
 		if variable.Value == nil && types.T(variable.Type.Id) == types.T_any && variable.RegexpStringResult {
-			if currentProtocolVersion(ses.proc) < defines.MORPCVersion105 {
+			if currentProtocolVersion(ses.proc) < defines.MORPCVersion106 {
 				// Older decoders accept typed NULL but drop this category on a
 				// subsequent snapshot. Do not silently lose history during upgrade.
 				return nil, moerr.NewNotSupportedf(ctx,
-					"user-variable NULL regexp history requires MORPC protocol version %d", defines.MORPCVersion105)
+					"user-variable NULL regexp history requires MORPC protocol version %d", defines.MORPCVersion106)
 			}
 			// The value and ordinary assignment type are separate wire fields.
 			// A typed NULL value preserves regexp STRING_RESULT history while

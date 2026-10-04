@@ -140,8 +140,9 @@ const (
 	MORPCVersion102    int64 = 102 // sys-admin vector-index cache freshness-interval, cache-info, evict, and list-keys ctl
 	MORPCVersion103    int64 = 103 // distributed required IVF PRE domains and CPU centroid routing
 	MORPCVersion104    int64 = 104 // preserve typed JSON scalar literals across CNs
-	MORPCVersion105    int64 = 105 // isolated user-variable NULL regexp history in connection migration
-	MORPCLatestVersion       = MORPCVersion105
+	MORPCVersion105    int64 = 105 // instance-bound lock-service drain confirmation
+	MORPCVersion106    int64 = 106 // isolated user-variable NULL regexp history in connection migration
+	MORPCLatestVersion       = MORPCVersion106
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

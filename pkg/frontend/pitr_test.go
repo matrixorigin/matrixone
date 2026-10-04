@@ -2539,8 +2539,13 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 		})
 		bh.sql2result[sql] = mrs
 
+		// CLONE owns the historical schema lookup; inject its failure rather
+		// than relying on an absent result for a redundant SHOW CREATE.
+		cloneSQL := restoreTableDataByTsSQL(moCatalog, "mo_user", resovleTs)
+		cloneFailure := moerr.NewInternalErrorNoCtx("catalog clone failed")
+		bh.sql2err[cloneSQL] = cloneFailure
 		err = restoreSystemDatabaseWithPitr(ctx, "", bh, "pitr01", resovleTs, 0)
-		assert.Error(t, err)
+		assert.ErrorIs(t, err, cloneFailure)
 
 		sql = buildTableInfoListSQL(moCatalog, "", resovleTs, uint32(sysAccountID))
 		mrs = newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind", "viewdef"}, [][]interface{}{

@@ -70,8 +70,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
@@ -2997,15 +2995,6 @@ func handlePrepareString(ses FeSession, execCtx *ExecCtx, st *tree.PrepareString
 	return doPrepareString(ses.(*Session), execCtx, st)
 }
 
-func createPrepareStmt(
-	execCtx *ExecCtx,
-	ses *Session,
-	originSQL string,
-	stmt tree.Statement,
-	saveStmt tree.Statement) (*PrepareStmt, error) {
-	return createPrepareStmtInSession(execCtx, ses, ses, originSQL, stmt, saveStmt)
-}
-
 func createPrepareStmtInSession(
 	execCtx *ExecCtx,
 	owner *Session,
@@ -4157,38 +4146,10 @@ func buildPlanWithPrepareMode(
 // planning. Parameter binding changes the planner entry, not its trace lifetime.
 func buildPlanWithStats(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 	build func() (*plan2.Plan, error)) (ret *plan2.Plan, err error) {
-	// A later statement in a multi-statement packet can reuse a compiler
-	// context whose process has already been released.  Planning does not
-	// require a transaction operator, so keep the tracing setup optional
-	// instead of dereferencing the missing process.
-	var txnOp client.TxnOperator
-	if proc := ctx.GetProcess(); proc != nil {
-		txnOp = proc.GetTxnOperator()
-	}
 	start := time.Now()
-	seq := uint64(0)
-	if txnOp != nil {
-		seq = txnOp.NextSequence()
-		txnTrace.GetService(ses.GetService()).AddTxnDurationAction(
-			txnOp,
-			client.BuildPlanEvent,
-			seq,
-			0,
-			0,
-			err)
-	}
 
 	defer func() {
 		cost := time.Since(start)
-		if txnOp != nil {
-			txnTrace.GetService(ses.GetService()).AddTxnDurationAction(
-				txnOp,
-				client.BuildPlanEvent,
-				seq,
-				0,
-				cost,
-				err)
-		}
 		v2.TxnStatementBuildPlanDurationHistogram.Observe(cost.Seconds())
 	}()
 
@@ -6316,8 +6277,26 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 			}
 		}
 
-		// update UnixTime for new query, which is used for now() / CURRENT_TIMESTAMP
+		// Update UnixTime for the new query, which is used for NOW() /
+		// CURRENT_TIMESTAMP. MySQL's session timestamp override freezes these
+		// expressions for deterministic replay; zero restores the wall clock.
 		proc.Base.UnixTime = time.Now().UnixNano()
+		if override, overrideErr := ses.GetSessionSysVar("timestamp"); overrideErr == nil {
+			var seconds float64
+			switch value := override.(type) {
+			case float64:
+				seconds = value
+			case float32:
+				seconds = float64(value)
+			case int64:
+				seconds = float64(value)
+			case uint64:
+				seconds = float64(value)
+			}
+			if seconds > 0 {
+				proc.Base.UnixTime = int64(seconds * float64(time.Second))
+			}
+		}
 		if ses.proc != nil {
 			ses.proc.Base.UnixTime = proc.Base.UnixTime
 		}

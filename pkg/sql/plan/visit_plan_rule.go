@@ -813,7 +813,7 @@ func preparedCommonValueFixedDecimalPeer[P any](name string, args []*plan.Expr, 
 	if !isPreparedCommonValueFunction(name) || len(positions) == 0 {
 		return false
 	}
-	hasParam, hasDecimalPeer := false, false
+	hasParam, hasDecimalPeer, hasConcretePeer := false, false, false
 	for _, arg := range args {
 		if pos, ok := preparedParamPosition(arg); ok && preparedParamCastAllowsNumericPrefix(arg) {
 			if preparedConcreteStringCommonValueBoundary(pos, paramValues) {
@@ -842,12 +842,23 @@ func preparedCommonValueFixedDecimalPeer[P any](name string, args []*plan.Expr, 
 		if fn := source.GetF(); fn != nil && fn.Func != nil &&
 			preparedCommonValueFixedDecimalPeer(fn.Func.GetObjName(), fn.Args, positions, paramValues) {
 			hasDecimalPeer = true
+			hasConcretePeer = true
 			continue
 		}
 		oid := types.T(source.Typ.Id)
+		if literal := source.GetLit(); literal != nil && literal.Isnull && oid == types.T_any {
+			// MySQL infers markers from the first non-marker operand. A
+			// plain NULL before any concrete peer cannot inherit a later
+			// DECIMAL domain; typed NULLs retain their explicit domain.
+			if !hasConcretePeer {
+				return false
+			}
+			continue
+		}
 		if oid.IsFloat() || !preparedNumericCommonOperandType(oid) {
 			return false
 		}
+		hasConcretePeer = true
 		hasDecimalPeer = hasDecimalPeer || oid.IsDecimal() &&
 			(!preparedExprContainsParam(arg) || isExplicitPreparedCast(source) ||
 				preparedExprHasFixedDecimalSource(source))

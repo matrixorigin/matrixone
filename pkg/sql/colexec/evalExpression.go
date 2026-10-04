@@ -2016,6 +2016,17 @@ func generateConstExpressionExecutor(
 	con *plan.Literal,
 	selection *vector.AllocationAccountSelection,
 ) (vec *vector.Vector, err error) {
+	source, err := DecodeLiteralStringSource(con)
+	if err != nil {
+		return nil, err
+	}
+	// Allocation belongs to this constructor until a successful return transfers it.
+	defer func() {
+		if err != nil && vec != nil {
+			vec.Free(proc.Mp())
+			vec = nil
+		}
+	}()
 	if con.GetIsnull() {
 		vec, err = newExpressionConstNull(typ, 1, selection)
 	} else {
@@ -2131,15 +2142,6 @@ func generateConstExpressionExecutor(
 			return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("const expression %v", con.GetValue()))
 		}
 		if err == nil {
-			source, sourceErr := DecodeLiteralStringSource(con)
-			if sourceErr != nil {
-				vec.Free(proc.Mp())
-				return nil, sourceErr
-			}
-			if err = vec.SetStringSource(source); err != nil {
-				vec.Free(proc.Mp())
-				return nil, err
-			}
 			vec.SetIsBin(con.IsBin)
 			if typ.Oid.IsMySQLString() {
 				domain := types.RuntimeStringInherit
@@ -2160,18 +2162,13 @@ func generateConstExpressionExecutor(
 					}
 				}
 				if err = vec.SetRuntimeStringDomainWithMP(domain, proc.Mp()); err != nil {
-					vec.Free(proc.Mp())
-					return nil, err
+					return vec, err
 				}
 			}
 		}
 	}
-	if err == nil && con.GetIsnull() {
-		var source types.StringSource
-		source, err = DecodeLiteralStringSource(con)
-		if err == nil {
-			err = vec.SetStringSource(source)
-		}
+	if err == nil {
+		err = vec.SetStringSource(source)
 	}
 	return vec, err
 }

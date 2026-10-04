@@ -55,6 +55,7 @@ func TestPromotionSettingsDomains(t *testing.T) {
 		{"L1 integer maximum", func(s *MergeSettings) { s.TombstoneL1Count = math.MaxInt }, true},
 		{"L2 integer maximum", func(s *MergeSettings) { s.TombstoneL2Count = math.MaxInt }, true},
 		{"negative overlap depth", func(s *MergeSettings) { s.LNMinPointDepthPerCluster = -1 }, false},
+		{"too few decay points", func(s *MergeSettings) { s.L0MaxCountDecayControl = []float64{0.1, 0.2, 0.3} }, true},
 		{"zero overlap depth", func(s *MergeSettings) { s.LNMinPointDepthPerCluster = 0 }, false},
 		{"zero vacuum duration", func(s *MergeSettings) { s.VacuumScoreDecayDuration = "0s" }, false},
 		{"negative vacuum duration", func(s *MergeSettings) { s.VacuumScoreDecayDuration = "-1s" }, false},
@@ -86,6 +87,24 @@ func TestPromotionSettingsDomains(t *testing.T) {
 	trigger, err = decode(t, s).toPromotionTrigger()
 	require.NoError(t, err)
 	require.Empty(t, GatherTombstoneTasks(t.Context(), IterStats(nil), trigger.tomb, 0))
+
+	// Configuration accepts extra control points; persisted settings must
+	// retain the same domain when replay becomes the writer.
+	s.L0MaxCountDecayControl = append(s.L0MaxCountDecayControl, 0.5)
+	require.Len(t, s.L0MaxCountDecayControl, 5)
+	_, err = s.ToMMsgTaskTrigger()
+	require.NoError(t, err)
+	decoded := decode(t, s)
+	require.Equal(t, s.L0MaxCountDecayControl, decoded.L0MaxCountDecayControl)
+	extraTrigger, err := decoded.ToMMsgTaskTrigger()
+	require.NoError(t, err)
+	prefix := decoded.Clone()
+	prefix.L0MaxCountDecayControl = prefix.L0MaxCountDecayControl[:4]
+	prefixTrigger, err := prefix.ToMMsgTaskTrigger()
+	require.NoError(t, err)
+	require.Equal(t, prefixTrigger.String(), extraTrigger.String())
+	_, err = decoded.toPromotionTrigger()
+	require.NoError(t, err)
 }
 
 func TestPreparePromotionReconcilesStoppedScheduler(t *testing.T) {
@@ -141,7 +160,7 @@ func TestPromotionPreflightRejectsQueuedOrPreviouslyRunScheduler(t *testing.T) {
 	sched := NewMergeScheduler(time.Hour,
 		&dummyCatalogSource{initTables: []catalog.MergeTable{table}},
 		&dummyExecutor{}, NewStdClock())
-	require.NoError(t, sched.SendConfig(table.ID(), DefaultMergeSettings, types.TS{}))
+	require.NoError(t, sched.SendConfig(table.ID(), DefaultMergeSettings, types.BuildTS(100, 0)))
 	require.ErrorContains(t, sched.CheckPromotionReady(), "queued messages")
 	require.Len(t, sched.msgChan, 1)
 

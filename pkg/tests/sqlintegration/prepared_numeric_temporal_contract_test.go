@@ -18,10 +18,14 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/stretchr/testify/require"
 )
@@ -88,6 +92,166 @@ func TestPreparedNumericTemporalContracts(t *testing.T) {
 					defer exec(t, "deallocate prepare null_history_insert")
 					exec(t, "execute null_history_insert using "+history.variable)
 					require.Equal(t, "a.b", scalar(t, "select v from null_history_result"))
+				})
+			}
+		})
+		t.Run("persisted signed DML read budget", func(t *testing.T) {
+			// Same fixture, connection and tiny layout for public results and
+			// fresh-execution work. EXPLAIN does not prove cached reader work.
+			for pass := range 2 {
+				t.Run(fmt.Sprintf("reuse-%d", pass), func(t *testing.T) {
+					const table = "narrow_keys"
+					exec(t, "create table "+table+"(id int primary key, v int)")
+					defer func() {
+						cleanup, stop := context.WithTimeout(context.Background(), 10*time.Second)
+						defer stop()
+						_, err := conn.ExecContext(cleanup, "drop table "+table)
+						require.NoError(t, err)
+						var count int
+						require.NoError(t, conn.QueryRowContext(cleanup, "select count(*) from mo_catalog.mo_tables where reldatabase=? and relname=?", schema, table).Scan(&count))
+						require.Zero(t, count, "teardown must not be hidden by the next pass")
+					}()
+					inspect := func(qctx context.Context, command string) string {
+						t.Helper()
+						var response string
+						require.NoError(t, conn.QueryRowContext(qctx, "select mo_ctl('dn','inspect',?)", command).Scan(&response))
+						require.NotContains(t, response, "run err:")
+						return response
+					}
+					target := schema + "." + table
+					require.Contains(t, inspect(ctx, "merge show -t "+target), "auto merge: true")
+					defer func() {
+						cleanup, stop := context.WithTimeout(context.Background(), 10*time.Second)
+						defer stop()
+						require.Contains(t, inspect(cleanup, "merge switch on -t "+target), "merge enabled for table")
+						require.Contains(t, inspect(cleanup, "merge show -t "+target), "auto merge: true")
+					}()
+					require.Contains(t, inspect(ctx, "merge switch off -t "+target), "merge disabled for table")
+					paused := inspect(ctx, "merge show -t "+target)
+					require.Contains(t, paused, "auto merge: false")
+					require.Contains(t, paused, "merge tasks in queue: 0")
+					for _, key := range []int{1, 1001, 2001} {
+						exec(t, fmt.Sprintf("insert into %s values (%d,0)", table, key))
+						exec(t, "select mo_ctl('dn','flush','"+target+"')")
+						service := cn.RawService().(cnservice.Service)
+						frontier, _ := service.GetClock().Now()
+						_, err := service.GetTxnClient().WaitLogTailAppliedAt(ctx, frontier)
+						require.NoError(t, err)
+					}
+					var rows, blocks, objects int64
+					require.NoError(t, conn.QueryRowContext(ctx, "select table_cnt,block_number,accurate_object_number from table_stats('"+target+"','refresh','full') g").Scan(&rows, &blocks, &objects))
+					require.Equal(t, []int64{3, 3, 3}, []int64{rows, blocks, objects})
+					state := func(tx *sql.Tx, expected string) {
+						t.Helper()
+						var actual string
+						require.NoError(t, tx.QueryRowContext(ctx, "select group_concat(concat(id,':',v) order by id) from "+table).Scan(&actual))
+						require.Equal(t, expected, actual)
+					}
+					for _, statement := range []string{"update narrow_keys set v=? where id=?", "delete from narrow_keys where id=?"} {
+						func() {
+							stmt, err := conn.PrepareContext(ctx, statement)
+							require.NoError(t, err)
+							defer stmt.Close()
+							update := strings.HasPrefix(statement, "update")
+							for _, key := range []any{int64(1), int64(1001), int64(2147483648), int64(2001), nil, int64(1)} {
+								func() {
+									tx, err := conn.BeginTx(ctx, nil)
+									require.NoError(t, err)
+									defer tx.Rollback()
+									args := []any{key}
+									if update {
+										args = []any{int64(7), key}
+									}
+									bound := tx.StmtContext(ctx, stmt)
+									defer bound.Close()
+									result, err := bound.ExecContext(ctx, args...)
+									require.NoError(t, err)
+									affected, err := result.RowsAffected()
+									require.NoError(t, err)
+									want := []string{"1:0", "1001:0", "2001:0"}
+									var matched int64
+									for i, id := range []int64{1, 1001, 2001} {
+										if key == id {
+											matched = 1
+											if update {
+												want[i] = fmt.Sprintf("%d:7", id)
+											} else {
+												want = append(want[:i], want[i+1:]...)
+											}
+											break
+										}
+									}
+									require.Equal(t, matched, affected)
+									state(tx, strings.Join(want, ","))
+								}()
+							}
+							if update {
+								func() {
+									tx, err := conn.BeginTx(ctx, nil)
+									require.NoError(t, err)
+									defer tx.Rollback()
+									bound := tx.StmtContext(ctx, stmt)
+									defer bound.Close()
+									_, err = bound.ExecContext(ctx, int64(2147483648), int64(1))
+									var sqlErr *mysql.MySQLError
+									require.ErrorAs(t, err, &sqlErr)
+									require.Equal(t, uint16(1690), sqlErr.Number)
+								}()
+								func() {
+									tx, err := conn.BeginTx(ctx, nil)
+									require.NoError(t, err)
+									defer tx.Rollback()
+									state(tx, "1:0,1001:0,2001:0")
+									bound := tx.StmtContext(ctx, stmt)
+									defer bound.Close()
+									_, err = bound.ExecContext(ctx, int64(9), int64(1001))
+									require.NoError(t, err)
+									state(tx, "1:0,1001:9,2001:0")
+								}()
+							}
+						}()
+					}
+					// These binary prepared EXPLAIN executions intentionally do not
+					// use the runtime cache. Compare logical input, never wall time.
+					scanMetrics := regexp.MustCompile(`inputBlocks=(\d+) inputRows=(\d+)`)
+					for _, write := range []string{"update narrow_keys set v=7", "delete from narrow_keys"} {
+						for _, predicate := range []string{"id=1", "id=?", "cast(id as signed)=?"} {
+							func() {
+								stmt, err := conn.PrepareContext(ctx, "explain analyze "+write+" where "+predicate)
+								require.NoError(t, err)
+								defer stmt.Close()
+								tx, err := conn.BeginTx(ctx, nil)
+								require.NoError(t, err)
+								defer tx.Rollback()
+								var args []any
+								if strings.Contains(predicate, "?") {
+									args = []any{int64(1)}
+								}
+								bound := tx.StmtContext(ctx, stmt)
+								defer bound.Close()
+								rows, queryErr := bound.QueryContext(ctx, args...)
+								text := readPreparedExplainRows(t, rows, queryErr)
+								require.Contains(t, text, "Table Scan on "+target)
+								metrics := scanMetrics.FindAllStringSubmatch(text, -1)
+								require.Len(t, metrics, 1, text)
+								inputBlocks, err := strconv.ParseInt(metrics[0][1], 10, 64)
+								require.NoError(t, err)
+								inputRows, err := strconv.ParseInt(metrics[0][2], 10, 64)
+								require.NoError(t, err)
+								t.Logf("write=%s predicate=%s blocks=%d rows=%d", write, predicate, inputBlocks, inputRows)
+								want := int64(1)
+								if strings.HasPrefix(predicate, "cast") {
+									want = 3
+								}
+								require.Equal(t, []int64{want, want}, []int64{inputBlocks, inputRows}, text)
+								if strings.HasPrefix(write, "update") {
+									state(tx, "1:7,1001:0,2001:0")
+								} else {
+									state(tx, "1001:0,2001:0")
+								}
+							}()
+						}
+					}
 				})
 			}
 		})
@@ -358,6 +522,14 @@ func checkPreparedLastDay(t *testing.T, rows *sql.Rows, err error) {
 
 func readPreparedExplain(t *testing.T, rows *sql.Rows, err error) string {
 	t.Helper()
+	text := readPreparedExplainRows(t, rows, err)
+	require.NotContains(t, strings.ToLower(text), "cast(explain_t.id as bigint)")
+	require.NotContains(t, text, "Cast expression may prevent index usage")
+	return text
+}
+
+func readPreparedExplainRows(t *testing.T, rows *sql.Rows, err error) string {
+	t.Helper()
 	require.NoError(t, err)
 	defer rows.Close()
 	var lines []string
@@ -368,8 +540,5 @@ func readPreparedExplain(t *testing.T, rows *sql.Rows, err error) string {
 	}
 	require.NoError(t, rows.Err())
 	require.NotEmpty(t, lines)
-	text := strings.Join(lines, "\n")
-	require.NotContains(t, strings.ToLower(text), "cast(explain_t.id as bigint)")
-	require.NotContains(t, text, "Cast expression may prevent index usage")
-	return text
+	return strings.Join(lines, "\n")
 }

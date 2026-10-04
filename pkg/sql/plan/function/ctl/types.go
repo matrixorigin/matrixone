@@ -57,7 +57,6 @@ var (
 	RemoveRemoteLockTable                 = strings.ToUpper("RemoveRemoteLockTable")
 	GetLatestBind                         = strings.ToUpper("GetLatestBind")
 	UnsubscribeTable                      = "UNSUBSCRIBE_TABLE"
-	HandleTxnTrace                        = strings.ToUpper("txn-trace")
 	ReloadAutoIncrementCache              = strings.ToUpper("reload-auto-increment-cache")
 	CtlReaderMethod                       = strings.ToUpper("reader")
 	GetTableShards                        = strings.ToUpper("get-table-shards")
@@ -107,7 +106,6 @@ var (
 		RemoveRemoteLockTable:                 handleRemoveRemoteLockTable,
 		GetLatestBind:                         handleGetLatestBind,
 		UnsubscribeTable:                      handleUnsubscribeTable,
-		HandleTxnTrace:                        handleTxnTrace,
 		ReloadAutoIncrementCache:              handleReloadAutoIncrementCache,
 		CtlReaderMethod:                       handleCtlReader,
 		GetTableShards:                        handleGetTableShards,
