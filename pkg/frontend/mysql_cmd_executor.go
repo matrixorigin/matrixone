@@ -1769,14 +1769,6 @@ func doSetVar(
 					if cache != nil {
 						cache.invalidate()
 					}
-					// Clearing the cache is also the explicit synchronization point
-					// for externally changed role membership. Refresh it now, outside
-					// the caller's transaction snapshot, instead of allowing the next
-					// authorization check to repopulate the cache from stale state.
-					_, _, err = validateActiveRoleGrantForAuthorization(execCtx.reqCtx, ses)
-					if err != nil {
-						return err
-					}
 				}
 				err = setVarFunc(assign.System, assign.Global, name, value, sql)
 				if err != nil {
@@ -4878,12 +4870,6 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 	var stats statistic.StatsArray
 	stats.Reset()
 
-	// Cache grants only within one statement. A session-local cache cannot
-	// observe REVOKE or RESTORE committed by another connection or another CN.
-	if cache := ses.GetPrivilegeCache(); cache != nil {
-		cache.invalidate()
-	}
-
 	reqCtx, span := trace.Debug(reqCtx, "authenticateUserCanExecuteStatement")
 	defer span.End()
 	if getPu(ses.GetService()).SV.SkipCheckPrivilege {
@@ -4910,6 +4896,33 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 		// can or not execute in password expired status
 		if ses.getRoutine() != nil && ses.getRoutine().isExpired() && !ses.GetPrivilege().canExecInPasswordExpired {
 			return stats, moerr.NewInternalError(reqCtx, "password has expired, please change the password")
+		}
+		if call, isCall := stmt.(*tree.CallStmt); isCall {
+			if isCDCTargetGuardCapabilityCall(call) {
+				return stats, nil
+			}
+			dbName, tableName, isGuard, parseErr := parseCDCTargetGuardCall(reqCtx, call)
+			if parseErr != nil {
+				return stats, parseErr
+			}
+			if isGuard {
+				guardPriv := &privilege{kind: privilegeKindGeneral, objType: objectTypeTable}
+				tips := privilegeTipsArray{{typ: PrivilegeTypeInsert, objType: objectTypeTable,
+					databaseName: dbName, tableName: tableName}}
+				if !checkProtectedDatabaseWriteByPrivilegeTips(reqCtx, ses, tips) {
+					return stats, moerr.NewInternalError(reqCtx, "do not have privilege to execute the statement")
+				}
+				convertPrivilegeTipsToPrivilege(guardPriv, tips)
+				allowed, delta, authErr := determineUserHasPrivilegeSet(reqCtx, ses, guardPriv)
+				stats.Add(&delta)
+				if authErr != nil {
+					return stats, authErr
+				}
+				if !allowed {
+					return stats, moerr.NewInternalError(reqCtx, "do not have privilege to execute the statement")
+				}
+				return stats, nil
+			}
 		}
 
 		havePrivilege, delta, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(reqCtx, ses, stmt)
@@ -4968,6 +4981,7 @@ func authenticateCanExecuteStatementAndPlan(reqCtx context.Context, ses *Session
 	if ses.skipAuthForSpecialUser() {
 		return stats, nil
 	}
+	stmt = unwrapExecutableExplainStatement(stmt)
 	yes, delta, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(reqCtx, ses, stmt, p)
 	if err != nil {
 		return stats, err

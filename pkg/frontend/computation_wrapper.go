@@ -1331,6 +1331,13 @@ func initExecuteStmtParamWithResolverInSession(
 	if validateNamedSnapshots {
 		change = true
 	}
+	// A prepared EXPLAIN EXECUTE embeds another mutable prepared handle. Its
+	// cached query alone cannot prove the current AST/plan binding or grants.
+	if inner := unwrapExecutableExplainStatement(prepareStmt.PrepareStmt); inner != prepareStmt.PrepareStmt {
+		if _, execute := inner.(*tree.Execute); execute {
+			change = true
+		}
+	}
 	rebuildEveryExecute := shouldRebuildPreparePlan(false, executionPlan)
 	schemaChanged, schemasValidated, err := validateCapturedPrepareSchemas(
 		owner.GetAccountId(), preparePlan.GetSchemas(), resolve, catalogCache,

@@ -391,6 +391,9 @@ type Compile struct {
 
 	lockMeta   *LockMeta
 	lockTables map[uint64]*plan.LockTarget
+	// prePipelineLockTableID requests normal table-lock admission for one newly
+	// created target of an internal INSERT. It is not a proof of a held lock.
+	prePipelineLockTableID uint64
 	// loadUniqueIndexPromotion is coordinator-local execution state shared only
 	// with physical retry compiles. It is never serialized into a remote scope or
 	// written back into the canonical logical plan.
