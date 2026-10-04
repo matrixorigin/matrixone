@@ -1060,3 +1060,51 @@ its terminal is zero, and no new diagnostic is introduced. Plan normal has
 two existing skipped children, which are not claimed as executed coverage.
 6.1-sol xhigh approved the design and delivered code; final evidence selection
 and source binding are retained separately from broader uncompleted QA/BVT.
+
+## Decimal CAST contracts and rescale ownership (2026-10-04)
+
+Ordinary/implicit decimal CAST precision and rescaling form one contract family;
+issue numbers and individual adapter names do not define separate fixtures.
+Six D128/D256 reduction adapters now reuse the source carrier's existing `Scale`
+owner, then format the reduced coefficient and use the existing target precision
+parser at scale zero. Remove the sole six-caller BigInt rounding helper and four
+discarded formats. Growth, target precision/error categories and explicit SQL
+CAST's separate clamp entry remain unchanged. Selection remains owned by the
+expression executor; no second masking implementation is introduced.
+
+Five repeated test roots (27 calls) become one 33-cell holder with shared process
+cleanup and per-child vector cleanup. The retirement ledger preserves every old
+input, metadata, oracle, constant shape and NULL contract. Seven old reduction
+cells also cover exact half/below-half, negative and NULL rows, including 19-digit
+chunk boundaries; six added cells cover carry/nearest-valid and negative precision
+rejection previously hidden behind the first error. Admission's 13 exact Boolean
+assertions and the independent source-retyping root retain separate ownership;
+the growth benchmark body is unchanged. Expected coefficients are exact literals
+or raw limbs, not computed by the production scaling owner.
+
+One registered colexec consumer covers selected overflow suppression, NULL,
+unmasked precision error, shrinking-batch reuse, complete metadata and zero
+remaining pool bytes. It exercises the real ordinary CAST; no fake evaluator,
+service, sleep or new test framework is required.
+
+Evidence: `29249-cast-contract-20261004` retains the 27-call retirement ledger,
+33-cell selection audit, original source snapshots, independent discovery probes,
+seven-gate terminal/hash binding and same-condition measurements. All seven
+serial gates passed: focused tests, vet, molint, incremental lint, full function/
+plan/colexec normal tests, full function race, and public consumer race. Lint has
+zero new issues; molint diagnostics are in seven unchanged base source files.
+Two pre-existing plan skips are excluded from coverage claims.
+
+Six alternating paired microbenchmark samples use actual `NewCast`, prebuilt
+256-row vectors and scale delta 30. Median adapter time falls 90.3–98.7%; each
+batch now uses 96 bytes/one allocation instead of 77–373 KB/2,561–17,921 allocations.
+This is not SQL-throughput, explicit-CAST or short-delta evidence. In the same
+binary, eight alternating old/new test-family samples include all added function-family coverage, excluding the
+new colexec consumer:
+wall time falls 11.0%, CPU 8.4%, but allocated bytes rise 13.9% and allocations
+10.4%. The extra precision/error coverage has a measured cost; fixture sharing
+alone is not claimed to reduce all resource dimensions. Build/link/startup and
+GC preparation are excluded from those test-body comparisons.
+The final holder kills a private mutant that parses the reduced D128→D64
+coefficient using target scale: both the original reduction cell and positive
+carry rejection fail their exact assertions. Permanent source remains unchanged.
