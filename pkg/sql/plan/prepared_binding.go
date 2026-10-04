@@ -218,6 +218,43 @@ func integerDomainFits(source, target types.T) bool {
 	return source.IsUnsignedInt() && !target.IsUnsignedInt() && source.TypeLen() < target.TypeLen()
 }
 
+// IN owns this admission; scalar comparisons and DML keep their source-domain
+// rules. Save the full cast before rewrites can remove the consumer, including
+// an IN used only in a projection. The existing per-EXECUTE probe owns reuse.
+func bindPreparedIntegerInValue(ctx context.Context, column, source *Expr) (*Expr, bool, error) {
+	state := preparedBindingState(ctx)
+	if state == nil || !state.selectStatement || column.GetCol() == nil || source.GetP() == nil {
+		return source, false, nil
+	}
+	target := types.T(column.Typ.Id)
+	// A signed source remains a signed marker here. Reject unsupported domains
+	// before the linear lookup; the binding still owns positive admission.
+	if !types.T(source.Typ.Id).IsSignedInt() || !target.IsSignedInt() || target.TypeLen() > 4 {
+		return source, false, nil
+	}
+	binding, ok := state.bindingForPosition(source.GetP().Pos)
+	if !ok || !binding.Type.Oid.IsSignedInt() || binding.Type.Oid.TypeLen() <= target.TypeLen() {
+		return source, false, nil
+	}
+	wasValueDependent := state.valueDependent
+	value, present := preparedConfigurationValue(ctx, source)
+	if !present || value == nil {
+		return source, false, nil
+	}
+	_, exact, err := preparedComparisonExactIntegerExpr(ctx, preparedNumericValueSpelling(value), column.Typ)
+	if err != nil || !exact {
+		// Unsafe fallbacks must not replace a valid cached narrowing plan.
+		return source, false, err
+	}
+	converted, err := makePlan2CastExpr(ctx, source, column.Typ)
+	if err != nil {
+		return nil, false, err
+	}
+	state.diagnosticCandidates = append(state.diagnosticCandidates, DeepCopyExpr(converted))
+	state.valueDependent = wasValueDependent
+	return converted, true, nil
+}
+
 // Capture before relational rewrites can remove or duplicate a predicate.
 // Each builder owns its proof: a safe child must not authorize an unprobed
 // parent. Only immutable expression copies escape into the eventual cache.
