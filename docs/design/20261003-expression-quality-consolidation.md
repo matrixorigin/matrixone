@@ -915,6 +915,67 @@ consumer evidence do not substitute for the separate earlier BVT obligation.
 Independent gpt-6.1-sol xhigh stage review approves this checkpoint with no
 blockers after checking the final source hashes, independent models/mutations,
 shared owner, callers, test purpose and cost limits. Family consolidation and
-the earlier real-service BVT obligation remain open. Publication awaits
-clarification of the existing network restriction; no new GitHub issue/PR has
-been created by this checkpoint.
+the earlier real-service BVT obligation remain open. Publication was pending at this checkpoint. The subsequent explicit user
+permission to file sufficiently proven issues authorizes issue creation; the
+verified primitive defect is now recorded in issue #29614. Push/PR publication
+remains unperformed.
+
+
+## D256 integer division family consolidation
+
+Review the class, not one issue at a time. Fresh current-baseline observation
+maps 45 actual D256 calls/1,261 processed rows before deleting any owner. Six
+weak or duplicate roots become the existing TestD256IntDiv contract table with
+42 named calls/109 rows. All nine earlier exact dispatch rows remain, along
+with real narrow/generic VV/SV/VS admission, sign/truncation, two-limb divisors,
+positive/negative scale adjustments, late generic pre-scan, combined initial
+masks and new zero NULLs, and strict error categories. The initially large
+random fixture actually selected narrow dispatch; the replacement names and
+coefficients state the path they exercise. Fifteen synthetic direct narrow
+calls with adjustment six but source scales 4/4 become real batch calls with
+source scales 0/6, preserving their mechanism without bypassing admission.
+
+Six neighboring inline-rejection cells distinguish a representable negative
+MinInt64 quotient from its unrepresentable positive counterpart for all three
+shapes. The independently derived coefficient is ceil(2^127/10); scaling it by
+ten yields 2^127+2, rejected by the signed128 inline admission. Division by
+MaxUint64 truncates to 2^63. Add generic masks and strict vector masked-zero
+versus scalar-zero all-masked rejection as separate policies. Expected values
+are literals, not calls to a decimal producer. Cardinality plus all expected
+NULL members proves the bitmap; initial masked outputs keep their sentinels.
+Do not demand rollback of scratch results when an error is returned.
+
+HighMagnitude (including its D128 widening consumer) and ScaleAlignmentOverflow
+remain byte-identical, as do all fifty benchmark bodies. Retire refD256IntDiv,
+its sole reference-owner helper and hugeD256 with their only callers. The final
+Go test delta is +101/-415 lines (net -314); no production code changes in this
+stage. Documentation additions and private evidence are accounted separately.
+The named retirement ledger explains each old call, independent retained
+contract, metadata correction and strengthened oracle before removal.
+
+All nine serial gates are terminal with unchanged source hashes: independent
+math/big observer, matched family costs, truncation-to-rounding and masked-write
+mutants, incremental vet/molint/lint, full function normal and race. The full
+D256 subset now exercises 53 calls/128 rows and independently checks 80 success
+results, of which the central table supplies 64. Full normal selects 2,039
+roots/8,250 children; race selects 2,038/8,250. Both mutants fail actual final
+assertions, without build failure or panic. Their failure proves retained
+contracts, not that the complete old suite would let both mutations survive.
+An initial focused compile exposed the now-unused slices import; cleanup and
+successful rerun supersede that build failure, whose evidence is retained.
+
+Eight alternating samples in one binary compare the six frozen old owner
+bodies and their helpers with the retained class, under the same production
+implementation. Medians: wall 838.255 to 467.225 microseconds (-44.3%); process
+CPU 963 to 588 microseconds (-38.9%); bytes 164,560 to 124,144 (-24.6%);
+allocations 2,708 to 1,502.5 (-44.5%). Measurements include owner children,
+fixtures, assertions and consolidation of the six former root invocations;
+they exclude build/init/queueing, outer measurement groups and GC preconditioning.
+They support a test-family cost reduction, not whole-package/CI or SQL speedup.
+
+Independent gpt-6.1-sol xhigh review APPROVE confirms the map, exact boundary
+arithmetic, protected owners/benchmarks, caller retirement, source hashes,
+mutants and cost provenance. Issue #29614 covers the prior production repair;
+this test-only consolidation needs no separate product-bug issue or extra
+server BVT. Existing SQL repairs still retain their distinct real-service BVT
+gate. The broader historical-bug-family challenge remains active.

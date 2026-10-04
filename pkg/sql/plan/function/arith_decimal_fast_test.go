@@ -18,7 +18,6 @@ import (
 	"math/big"
 	"math/bits"
 	"math/rand"
-	"slices"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -5502,144 +5501,111 @@ func TestD128IntDiv(t *testing.T) {
 	}
 }
 
-// refD256IntDiv computes the reference result for D256 integer division.
-func refD256IntDiv(x, y types.Decimal256, scale1, scale2 int32) (int64, error) {
-	signx := x.Sign()
-	signy := y.Sign()
-	if signx {
-		x = x.Minus()
-	}
-	if signy {
-		y = y.Minus()
-	}
-	return refD256IntDivUnsigned(x, y, signx != signy, scale1, scale2)
-}
-
-func refD256IntDivUnsigned(x, y types.Decimal256, neg bool, scale1, scale2 int32) (int64, error) {
-	scaleAdj := scale2 - scale1
-	var err error
-	if scaleAdj > 0 {
-		x, err = x.Scale(scaleAdj)
-	} else if scaleAdj < 0 {
-		y, err = y.Scale(-scaleAdj)
-	}
-	if err != nil {
-		return 0, err
-	}
-	r, err := x.Div256Trunc(y)
-	if err != nil {
-		return 0, err
-	}
-	if neg {
-		r = r.Minus()
-	}
-	return decimal256ToInt64(r)
-}
-
 func TestD256IntDiv(t *testing.T) {
-	t.Run("VecVec", func(t *testing.T) {
-		rng := rand.New(rand.NewSource(301))
-		v1 := make([]types.Decimal256, testBatchSize)
-		v2 := make([]types.Decimal256, testBatchSize)
-		rs := make([]int64, testBatchSize)
-		for i := range v1 {
-			v1[i] = randD256Small(rng)
-			v2[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
-		}
-		nul := nulls.NewWithSize(testBatchSize)
-		err := d256IntDiv(v1, v2, rs, 2, 2, nul, true)
-		require.NoError(t, err)
-		for i := range v1 {
-			want, err := refD256IntDiv(v1[i], v2[i], 2, 2)
-			require.NoError(t, err)
-			require.Equal(t, want, rs[i], "d256IntDiv[%d]", i)
-		}
-	})
-
-	t.Run("GenericPathTruncates", func(t *testing.T) {
-		x := types.Decimal256{B128_191: 5}
-		y := types.Decimal256{B128_191: 2}
-		v1 := []types.Decimal256{x, x.Minus()}
-		v2 := []types.Decimal256{y, y}
-		rs := make([]int64, len(v1))
-		nul := nulls.NewWithSize(len(v1))
-
-		require.NoError(t, d256IntDiv(v1, v2, rs, 0, 0, nul, true))
-		require.Equal(t, []int64{2, -2}, rs)
-	})
-
-	t.Run("ScalarVec", func(t *testing.T) {
-		rng := rand.New(rand.NewSource(302))
-		vec := make([]types.Decimal256, testBatchSize)
-		for i := range vec {
-			vec[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
-		}
-		scalar := []types.Decimal256{randD256Small(rng)}
-
-		rs := make([]int64, testBatchSize)
-		nul := nulls.NewWithSize(testBatchSize)
-		require.NoError(t, d256IntDiv(scalar, vec, rs, 2, 2, nul, true))
-		for i := range vec {
-			want, err := refD256IntDiv(scalar[0], vec[i], 2, 2)
-			require.NoError(t, err)
-			require.Equal(t, want, rs[i], "d256 const-vec intdiv[%d]", i)
-		}
-	})
-
-	t.Run("VecScalar", func(t *testing.T) {
-		rng := rand.New(rand.NewSource(303))
-		vec := make([]types.Decimal256, testBatchSize)
-		for i := range vec {
-			vec[i] = randD256Small(rng)
-		}
-		scalar := []types.Decimal256{{B0_63: uint64(rng.Int63n(999) + 1)}}
-
-		rs := make([]int64, testBatchSize)
-		nul := nulls.NewWithSize(testBatchSize)
-		require.NoError(t, d256IntDiv(vec, scalar, rs, 2, 2, nul, true))
-		for i := range vec {
-			want, err := refD256IntDiv(vec[i], scalar[0], 2, 2)
-			require.NoError(t, err)
-			require.Equal(t, want, rs[i], "d256 vec-const intdiv[%d]", i)
-		}
-	})
-
-	t.Run("DivByZero_Null", func(t *testing.T) {
-		v1 := []types.Decimal256{{B0_63: 100}}
-		v2 := []types.Decimal256{{B0_63: 0}}
-		rs := make([]int64, 1)
-		nul := nulls.NewWithSize(1)
-		err := d256IntDiv(v1, v2, rs, 2, 2, nul, false)
-		require.NoError(t, err)
-		require.True(t, nul.Contains(0))
-	})
-
-	t.Run("LargeValues", func(t *testing.T) {
-		rng := rand.New(rand.NewSource(304))
-		v1 := make([]types.Decimal256, testBatchSize)
-		v2 := make([]types.Decimal256, testBatchSize)
-		rs := make([]int64, testBatchSize)
-		for i := range v1 {
-			v1[i] = randD256(rng)
-			v2[i] = randD256(rng)
-			if v2[i].B0_63 == 0 && v2[i].B64_127 == 0 {
-				v2[i].B0_63 = 1
+	type decimal = types.Decimal256
+	d := types.Decimal256FromInt64
+	x := []decimal{d(25), d(-25), d(11)}
+	y := []decimal{d(4), d(4), d(2)}
+	sx, sy := []decimal{d(25)}, []decimal{d(4)}
+	signedY := []decimal{d(4), d(-4), d(2)}
+	scaledX := []decimal{d(250000), d(-250000), d(110000)}
+	wideScale := decimal{B0_63: 7766279631452241920, B64_127: 5} // 10^20
+	wideX, wideY := decimal{B128_191: 5}, decimal{B128_191: 2}
+	gx, gy := []decimal{wideX, wideX.Minus(), wideX}, []decimal{wideY, wideY, wideY.Minus()}
+	// This coefficient times ten exceeds signed128, but its negative quotient
+	// by MaxUint64 is exactly MinInt64. Both operands still select D128 dispatch.
+	rejected := decimal{B0_63: 0xcccccccccccccccd, B64_127: 0x0ccccccccccccccc}
+	divisor := decimal{B0_63: ^uint64(0)}
+	rx, ry := []decimal{rejected, rejected}, []decimal{divisor, divisor}
+	nx := []decimal{rejected.Minus(), rejected.Minus()}
+	for _, tc := range []struct {
+		name               string
+		x, y               []decimal
+		s1, s2             int32
+		initial, wantNulls []uint64
+		strict             bool
+		want               []int64
+		errorCode          uint16
+	}{
+		{"VecVec_NoNull", x, y, 4, 4, nil, nil, false, []int64{6, -6, 5}, 0},
+		{"VecVec_Nulls", x, y, 4, 4, []uint64{1}, []uint64{1}, false, []int64{6, 9001, 5}, 0},
+		{"ConstLeft_NoNull", sx, signedY, 4, 4, nil, nil, false, []int64{6, -6, 12}, 0},
+		{"ConstLeft_Nulls", sx, signedY, 4, 4, []uint64{1}, []uint64{1}, false, []int64{6, 9001, 12}, 0},
+		{"ConstRight_NoNull", x, sy, 4, 4, nil, nil, false, []int64{6, -6, 2}, 0},
+		{"ConstRight_Nulls", x, sy, 4, 4, []uint64{1}, []uint64{1}, false, []int64{6, 9001, 2}, 0},
+		{"DiffScale_VecVec_NoNull", scaledX, y, 6, 2, nil, nil, false, []int64{6, -6, 5}, 0},
+		{"DiffScale_VecVec_Nulls", scaledX, y, 6, 2, []uint64{1}, []uint64{1}, false, []int64{6, 9001, 5}, 0},
+		{"PositiveAdjustmentGeneral", []decimal{d(3), d(-3), d(11)}, []decimal{wideScale, wideScale, wideScale}, 0, 20, nil, nil, false, []int64{3, -3, 11}, 0},
+		{"GenericTruncationSigns", gx, gy, 0, 0, nil, nil, true, []int64{2, -2, -2}, 0},
+		{"GenericSmall_VV", []decimal{d(25), d(-25)}, []decimal{wideY, wideY}, 2, 2, nil, nil, false, []int64{0, 0}, 0},
+		{"GenericSmall_SV", sx, []decimal{wideY, wideY.Minus()}, 2, 2, nil, nil, false, []int64{0, 0}, 0},
+		{"GenericSmall_VS", []decimal{d(25), d(-25)}, []decimal{wideY}, 2, 2, nil, nil, false, []int64{0, 0}, 0},
+		{"GenericConstLeftMasked", []decimal{wideX}, []decimal{wideY, wideY.Minus(), wideY}, 0, 0, []uint64{1}, []uint64{1}, false, []int64{2, 9001, 2}, 0},
+		{"GenericConstRightMasked", gx, []decimal{wideY}, 0, 0, []uint64{1}, []uint64{1}, false, []int64{2, 9001, 2}, 0},
+		{"LateGenericPrescan", []decimal{d(25), wideX}, []decimal{d(4), wideY}, 0, 0, nil, nil, false, []int64{6, 2}, 0},
+		{"NarrowTwoLimbDivisor", []decimal{wideScale, wideScale.Minus()}, []decimal{wideScale, wideScale}, 0, 0, nil, nil, false, []int64{1, -1}, 0},
+		{"SingleZeroNull", []decimal{d(100)}, []decimal{{}}, 2, 2, nil, []uint64{0}, false, []int64{0}, 0},
+		{"ScaleZero_VV", x, []decimal{d(4), {}, d(2)}, 0, 6, nil, []uint64{1}, false, []int64{6250000, 0, 5500000}, 0},
+		{"ScaleZero_SV", sx, []decimal{{}, d(4), {}}, 0, 6, nil, []uint64{0, 2}, false, []int64{0, 6250000, 0}, 0},
+		{"ScaleZeroMasked_SV", sx, []decimal{{}, d(4), {}}, 0, 6, []uint64{0}, []uint64{0, 2}, false, []int64{9000, 6250000, 0}, 0},
+		{"ScaleZero_VS", x, []decimal{{}}, 0, 6, nil, []uint64{0, 1, 2}, false, []int64{0, 0, 0}, 0},
+		{"GenericZero_VS", gx, []decimal{{}}, 0, 0, nil, []uint64{0, 1, 2}, false, []int64{0, 0, 0}, 0},
+		{"Scale_SV", sx, signedY, 0, 6, nil, nil, false, []int64{6250000, -6250000, 12500000}, 0},
+		{"ScaleMasked_SV", sx, signedY, 0, 6, []uint64{1}, []uint64{1}, false, []int64{6250000, 9001, 12500000}, 0},
+		{"Scale_VS", x, sy, 0, 6, nil, nil, false, []int64{6250000, -6250000, 2750000}, 0},
+		{"ScaleMasked_VS", x, sy, 0, 6, []uint64{1}, []uint64{1}, false, []int64{6250000, 9001, 2750000}, 0},
+		{"StrictZero_VV", x, []decimal{{}, d(4), d(2)}, 0, 6, nil, nil, true, nil, moerr.ErrDivByZero},
+		{"StrictZero_SV", sx, []decimal{{}, d(4), d(2)}, 0, 6, nil, nil, true, nil, moerr.ErrDivByZero},
+		{"StrictZero_VS", x, []decimal{{}}, 0, 6, nil, nil, true, nil, moerr.ErrDivByZero},
+		{"StrictMaskedZero_VV", x, []decimal{d(4), {}, d(2)}, 0, 6, []uint64{1}, []uint64{1}, true, []int64{6250000, 9001, 5500000}, 0},
+		{"StrictAllMaskedZero_SV", sx, []decimal{{}, {}}, 0, 6, []uint64{0, 1}, []uint64{0, 1}, true, []int64{9000, 9001}, 0},
+		{"StrictAllMaskedZero_VS", []decimal{d(25), d(-25)}, []decimal{{}}, 0, 6, []uint64{0, 1}, []uint64{0, 1}, true, nil, moerr.ErrDivByZero},
+		{"GenericStrictAllMaskedZero_VS", []decimal{wideX, wideX.Minus()}, []decimal{{}}, 0, 0, []uint64{0, 1}, []uint64{0, 1}, true, nil, moerr.ErrDivByZero},
+		{"GenericStrictMaskedZero_VV", gx, []decimal{wideY, {}, wideY}, 0, 0, []uint64{1}, []uint64{1}, true, []int64{2, 9001, 2}, 0},
+		{"GenericStrictZero_SV", []decimal{wideX}, []decimal{{}, wideY}, 0, 0, nil, nil, true, nil, moerr.ErrDivByZero},
+		{"InlineRejectNegative_VV", nx, ry, 0, 1, nil, nil, true, []int64{-9223372036854775808, -9223372036854775808}, 0},
+		{"InlineRejectNegative_SV", nx[:1], ry, 0, 1, nil, nil, true, []int64{-9223372036854775808, -9223372036854775808}, 0},
+		{"InlineRejectNegative_VS", nx, ry[:1], 0, 1, nil, nil, true, []int64{-9223372036854775808, -9223372036854775808}, 0},
+		{"InlineRejectPositive_VV", rx, ry, 0, 1, nil, nil, true, nil, moerr.ErrOutOfRange},
+		{"InlineRejectPositive_SV", rx[:1], ry, 0, 1, nil, nil, true, nil, moerr.ErrOutOfRange},
+		{"InlineRejectPositive_VS", rx, ry[:1], 0, 1, nil, nil, true, nil, moerr.ErrOutOfRange},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n := max(len(tc.x), len(tc.y))
+			rs := make([]int64, n)
+			for i := range rs {
+				rs[i] = 9000 + int64(i)
 			}
-		}
-		nul := nulls.NewWithSize(testBatchSize)
-		err := d256IntDiv(v1, v2, rs, 2, 2, nul, false)
-		require.NoError(t, err)
-		for i := range v1 {
-			if nul.Contains(uint64(i)) {
-				continue
+			nul := nulls.NewWithSize(n)
+			for _, i := range tc.initial {
+				nul.Add(i)
 			}
-			want, err := refD256IntDiv(v1[i], v2[i], 2, 2)
-			if err != nil {
-				continue
+			err := d256IntDiv(tc.x, tc.y, rs, tc.s1, tc.s2, nul, tc.strict)
+			if tc.errorCode != 0 {
+				require.True(t, moerr.IsMoErrCode(err, tc.errorCode), "got %v", err)
+			} else {
+				require.NoError(t, err)
 			}
-			require.Equal(t, want, rs[i], "d256IntDiv large[%d]", i)
-		}
-	})
+			require.Equal(t, len(tc.wantNulls), nul.Count())
+			for _, i := range tc.wantNulls {
+				require.True(t, nul.Contains(i), "NULL row %d", i)
+			}
+			// Scratch results are not rolled back on errors. Initial masked rows are
+			// never evaluated, including when a later row fails.
+			for _, i := range tc.initial {
+				require.Equal(t, 9000+int64(i), rs[i], "masked row %d", i)
+			}
+			if tc.errorCode != 0 {
+				return
+			}
+			require.Len(t, tc.want, n)
+			for i, want := range tc.want {
+				if !nul.Contains(uint64(i)) {
+					require.Equal(t, want, rs[i], "row %d", i)
+				}
+			}
+		})
+	}
 }
 
 func TestD256IntDivScaleAlignmentOverflow(t *testing.T) {
@@ -6023,113 +5989,6 @@ func TestD128ModDiffScaleXPow10_Coverage(t *testing.T) {
 	})
 }
 
-// ---- Coverage for d256Mul generic (non-allFitInt64) with scale adjustment ----
-
-func hugeD256(rng *rand.Rand) types.Decimal256 {
-	return types.Decimal256{
-		B0_63:    uint64(rng.Int63()),
-		B64_127:  uint64(rng.Int63()),
-		B128_191: uint64(rng.Int63n(100)) + 1,
-		B192_255: 0,
-	}
-}
-
-func TestD256IntDiv_GenericSlowPath(t *testing.T) {
-	rng := rand.New(rand.NewSource(9402))
-
-	t.Run("VecVec_Huge", func(t *testing.T) {
-		v1 := make([]types.Decimal256, 8)
-		v2 := make([]types.Decimal256, 8)
-		rs := make([]int64, 8)
-		for i := range v1 {
-			v1[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
-			v2[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1), B64_127: 0, B128_191: uint64(rng.Int63n(10) + 1)}
-		}
-		nul := nulls.NewWithSize(8)
-		_ = d256IntDiv(v1, v2, rs, 2, 2, nul, false)
-	})
-
-	t.Run("ConstRight_Huge", func(t *testing.T) {
-		vec := make([]types.Decimal256, 8)
-		scalar := []types.Decimal256{{B0_63: uint64(rng.Int63n(999) + 1), B64_127: 0, B128_191: uint64(rng.Int63n(10) + 1)}}
-		rs := make([]int64, 8)
-		for i := range vec {
-			vec[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
-		}
-		nul := nulls.NewWithSize(8)
-		_ = d256IntDiv(vec, scalar, rs, 2, 2, nul, false)
-	})
-
-	t.Run("ConstLeft_Huge", func(t *testing.T) {
-		scalar := []types.Decimal256{{B0_63: uint64(rng.Int63n(999) + 1)}}
-		vec := make([]types.Decimal256, 8)
-		rs := make([]int64, 8)
-		for i := range vec {
-			vec[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1), B64_127: 0, B128_191: uint64(rng.Int63n(10) + 1)}
-		}
-		nul := nulls.NewWithSize(8)
-		_ = d256IntDiv(scalar, vec, rs, 2, 2, nul, false)
-	})
-}
-
-// D256 narrowing preserves truncation, dispatch shape and initial NULL masks.
-func TestD256IntDivViaD128_AllPaths(t *testing.T) {
-	positive := types.Decimal256FromInt64(25)
-	negative := types.Decimal256FromInt64(-25)
-	eleven := types.Decimal256FromInt64(11)
-	four := types.Decimal256FromInt64(4)
-	minusFour := types.Decimal256FromInt64(-4)
-	two := types.Decimal256FromInt64(2)
-	// 10^20 exceeds the one-limb divisor admission and the inline scale limit.
-	wide := types.Decimal256{B0_63: 7766279631452241920, B64_127: 5}
-	// The kernels read the inputs by value; only result and NULL state vary per case.
-	x := []types.Decimal256{positive, negative, eleven}
-	y := []types.Decimal256{four, four, two}
-	scalarX := []types.Decimal256{positive}
-	scalarY := []types.Decimal256{four}
-	signedY := []types.Decimal256{four, minusFour, two}
-	scaledX := []types.Decimal256{types.Decimal256FromInt64(250000), types.Decimal256FromInt64(-250000), types.Decimal256FromInt64(110000)}
-	for _, tc := range []struct {
-		name   string
-		x, y   []types.Decimal256
-		s1, s2 int32
-		masked bool
-		want   []int64
-	}{
-		{"VecVec_NoNull", x, y, 4, 4, false, []int64{6, -6, 5}},
-		{"VecVec_Nulls", x, y, 4, 4, true, []int64{6, 9001, 5}},
-		{"ConstLeft_NoNull", scalarX, signedY, 4, 4, false, []int64{6, -6, 12}},
-		{"ConstLeft_Nulls", scalarX, signedY, 4, 4, true, []int64{6, 9001, 12}},
-		{"ConstRight_NoNull", x, scalarY, 4, 4, false, []int64{6, -6, 2}},
-		{"ConstRight_Nulls", x, scalarY, 4, 4, true, []int64{6, 9001, 2}},
-		{"DiffScale_VecVec_NoNull", scaledX, y, 6, 2, false, []int64{6, -6, 5}},
-		{"DiffScale_VecVec_Nulls", scaledX, y, 6, 2, true, []int64{6, 9001, 5}},
-		{"PositiveAdjustmentGeneral", []types.Decimal256{types.Decimal256FromInt64(3), types.Decimal256FromInt64(-3), eleven}, []types.Decimal256{wide, wide, wide}, 0, 20, false, []int64{3, -3, 11}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			rs := []int64{9000, 9001, 9002}
-			nul := nulls.NewWithSize(3)
-			if tc.masked {
-				nul.Add(1)
-			}
-			if err := d256IntDiv(tc.x, tc.y, rs, tc.s1, tc.s2, nul, false); err != nil {
-				t.Fatal(err)
-			}
-			if !slices.Equal(tc.want, rs) {
-				t.Fatalf("quotient: got %v, want %v", rs, tc.want)
-			}
-			wantNulls := 0
-			if tc.masked {
-				wantNulls = 1
-			}
-			// Cardinality plus the sole expected member proves the whole bitmap.
-			if nul.Count() != wantNulls || (tc.masked && !nul.Contains(1)) {
-				t.Fatalf("NULL bitmap: got %v, want masked row 1: %v", nul, tc.masked)
-			}
-		})
-	}
-}
-
 // TestMiscEdgePaths retains strict constant-zero IntDiv errors for both widths.
 func TestMiscEdgePaths(t *testing.T) {
 	rng := rand.New(rand.NewSource(9600))
@@ -6430,119 +6289,6 @@ func TestD256Mod_DivByZeroPaths(t *testing.T) {
 }
 
 // TestD256IntDiv_DivByZeroPaths covers D256 integer division div-by-zero paths.
-func TestD256IntDiv_DivByZeroPaths(t *testing.T) {
-	rng := rand.New(rand.NewSource(42))
-
-	makeVecWithZeros := func(n int) []types.Decimal256 {
-		v := make([]types.Decimal256, n)
-		for i := range v {
-			if i%3 == 1 {
-				v[i] = types.Decimal256{}
-			} else {
-				v[i] = randD256Small(rng)
-			}
-		}
-		return v
-	}
-
-	t.Run("ViaD128_VecVec_DivByZero", func(t *testing.T) {
-		v1 := make([]types.Decimal256, 16)
-		for i := range v1 {
-			v1[i] = randD256Small(rng)
-		}
-		v2 := makeVecWithZeros(16)
-		rs := make([]int64, 16)
-		nul := &nulls.Nulls{}
-		require.NoError(t, d256IntDivViaD128(v1, v2, rs, 6, nul, false, 4, 4, !nul.IsEmpty(), nul.GetBitmap()))
-	})
-
-	t.Run("ViaD128_ConstVec_DivByZero", func(t *testing.T) {
-		v1 := []types.Decimal256{randD256Small(rng)}
-		v2 := makeVecWithZeros(16)
-		rs := make([]int64, 16)
-		nul := &nulls.Nulls{}
-		require.NoError(t, d256IntDivViaD128(v1, v2, rs, 6, nul, false, 4, 4, !nul.IsEmpty(), nul.GetBitmap()))
-	})
-
-	t.Run("ViaD128_ConstVec_DivByZero_WithNull", func(t *testing.T) {
-		v1 := []types.Decimal256{randD256Small(rng)}
-		v2 := makeVecWithZeros(16)
-		rs := make([]int64, 16)
-		nul := makeNulls(16)
-		require.NoError(t, d256IntDivViaD128(v1, v2, rs, 6, nul, false, 4, 4, !nul.IsEmpty(), nul.GetBitmap()))
-	})
-
-	t.Run("ViaD128_VecConst_ZeroDivisor", func(t *testing.T) {
-		v1 := make([]types.Decimal256, 16)
-		for i := range v1 {
-			v1[i] = randD256Small(rng)
-		}
-		v2 := []types.Decimal256{{}}
-		rs := make([]int64, 16)
-		nul := &nulls.Nulls{}
-		require.NoError(t, d256IntDivViaD128(v1, v2, rs, 6, nul, false, 4, 4, !nul.IsEmpty(), nul.GetBitmap()))
-	})
-
-	t.Run("Generic_VecConst_ZeroDivisor", func(t *testing.T) {
-		v1 := make([]types.Decimal256, 16)
-		for i := range v1 {
-			v1[i] = hugeD256(rng)
-		}
-		v2 := []types.Decimal256{{}}
-		rs := make([]int64, 16)
-		nul := &nulls.Nulls{}
-		require.NoError(t, d256IntDiv(v1, v2, rs, 4, 4, nul, false))
-	})
-}
-
-// TestD256IntDivViaD128_ConstAndNullPaths covers D256 intdiv const dispatch variants.
-func TestD256IntDivViaD128_ConstAndNullPaths(t *testing.T) {
-	rng := rand.New(rand.NewSource(42))
-
-	t.Run("ConstVec_NoNull", func(t *testing.T) {
-		v1 := []types.Decimal256{randD256Small(rng)}
-		v2 := make([]types.Decimal256, 16)
-		for i := range v2 {
-			v2[i] = randD256Small(rng)
-		}
-		rs := make([]int64, 16)
-		nul := &nulls.Nulls{}
-		require.NoError(t, d256IntDivViaD128(v1, v2, rs, 6, nul, false, 4, 4, !nul.IsEmpty(), nul.GetBitmap()))
-	})
-
-	t.Run("ConstVec_WithNull", func(t *testing.T) {
-		v1 := []types.Decimal256{randD256Small(rng)}
-		v2 := make([]types.Decimal256, 16)
-		for i := range v2 {
-			v2[i] = randD256Small(rng)
-		}
-		rs := make([]int64, 16)
-		nul := makeNulls(16)
-		require.NoError(t, d256IntDivViaD128(v1, v2, rs, 6, nul, false, 4, 4, !nul.IsEmpty(), nul.GetBitmap()))
-	})
-
-	t.Run("VecConst_NoNull", func(t *testing.T) {
-		v1 := make([]types.Decimal256, 16)
-		for i := range v1 {
-			v1[i] = randD256Small(rng)
-		}
-		v2 := []types.Decimal256{randD256Small(rng)}
-		rs := make([]int64, 16)
-		nul := &nulls.Nulls{}
-		require.NoError(t, d256IntDivViaD128(v1, v2, rs, 6, nul, false, 4, 4, !nul.IsEmpty(), nul.GetBitmap()))
-	})
-
-	t.Run("VecConst_WithNull", func(t *testing.T) {
-		v1 := make([]types.Decimal256, 16)
-		for i := range v1 {
-			v1[i] = randD256Small(rng)
-		}
-		v2 := []types.Decimal256{randD256Small(rng)}
-		rs := make([]int64, 16)
-		nul := makeNulls(16)
-		require.NoError(t, d256IntDivViaD128(v1, v2, rs, 6, nul, false, 4, 4, !nul.IsEmpty(), nul.GetBitmap()))
-	})
-}
 
 // TestD64ScaleIntoRs_ConstPaths covers d64ScaleIntoRs with null and no-null paths.
 func TestD64ScaleIntoRs_ConstPaths(t *testing.T) {
@@ -6585,66 +6331,6 @@ func TestD64ScaleIntoRs_ConstPaths(t *testing.T) {
 			}
 		})
 	}
-}
-
-// TestD256IntDivViaD128_ShouldErrorPaths covers d256IntDivViaD128 shouldError=true paths.
-func TestD256IntDivViaD128_ShouldErrorPaths(t *testing.T) {
-	mkD256 := func(v int64) types.Decimal256 {
-		return types.Decimal256{B0_63: uint64(v), B64_127: uint64(v >> 63)}
-	}
-	zero := types.Decimal256{}
-
-	t.Run("VecVec_DivZero_Error", func(t *testing.T) {
-		v1 := []types.Decimal256{mkD256(100), mkD256(200)}
-		v2 := []types.Decimal256{zero, mkD256(3)}
-		rs := make([]int64, 2)
-		nul := &nulls.Nulls{}
-		require.Error(t, d256IntDivViaD128(v1, v2, rs, 6, nul, true, 4, 4, false, nil))
-	})
-	t.Run("ConstVec_DivZero_Error", func(t *testing.T) {
-		v1 := []types.Decimal256{mkD256(100)}
-		v2 := []types.Decimal256{zero, mkD256(3)}
-		rs := make([]int64, 2)
-		nul := &nulls.Nulls{}
-		require.Error(t, d256IntDivViaD128(v1, v2, rs, 6, nul, true, 4, 4, false, nil))
-	})
-	t.Run("VecConst_Zero_Error", func(t *testing.T) {
-		v1 := []types.Decimal256{mkD256(100), mkD256(200)}
-		v2 := []types.Decimal256{zero}
-		rs := make([]int64, 2)
-		nul := &nulls.Nulls{}
-		require.Error(t, d256IntDivViaD128(v1, v2, rs, 6, nul, true, 4, 4, false, nil))
-	})
-	t.Run("ConstVec_DivZero_Nullify", func(t *testing.T) {
-		v1 := []types.Decimal256{mkD256(100)}
-		v2 := []types.Decimal256{zero, mkD256(3), zero, mkD256(7)}
-		rs := make([]int64, 4)
-		nul := &nulls.Nulls{}
-		require.NoError(t, d256IntDivViaD128(v1, v2, rs, 6, nul, false, 4, 4, false, nil))
-	})
-	t.Run("VecConst_Zero_Nullify", func(t *testing.T) {
-		v1 := []types.Decimal256{mkD256(100), mkD256(200)}
-		v2 := []types.Decimal256{zero}
-		rs := make([]int64, 2)
-		nul := &nulls.Nulls{}
-		require.NoError(t, d256IntDivViaD128(v1, v2, rs, 6, nul, false, 4, 4, false, nil))
-	})
-	t.Run("ConstVec_WithNull", func(t *testing.T) {
-		v1 := []types.Decimal256{mkD256(100)}
-		v2 := []types.Decimal256{mkD256(3), mkD256(7), mkD256(11), mkD256(13)}
-		rs := make([]int64, 4)
-		nul := makeNulls(4)
-		bmp := nul.GetBitmap()
-		require.NoError(t, d256IntDivViaD128(v1, v2, rs, 6, nul, false, 4, 4, true, bmp))
-	})
-	t.Run("VecConst_WithNull", func(t *testing.T) {
-		v1 := []types.Decimal256{mkD256(100), mkD256(200), mkD256(300), mkD256(400)}
-		v2 := []types.Decimal256{mkD256(7)}
-		rs := make([]int64, 4)
-		nul := makeNulls(4)
-		bmp := nul.GetBitmap()
-		require.NoError(t, d256IntDivViaD128(v1, v2, rs, 6, nul, false, 4, 4, true, bmp))
-	})
 }
 
 // TestD128DivOneDispatch_Paths covers d128DivOneDispatch, d128DivOne, and
