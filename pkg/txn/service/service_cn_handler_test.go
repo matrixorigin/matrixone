@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/mem"
+	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	"github.com/stretchr/testify/require"
 )
 
@@ -130,6 +131,63 @@ func TestSingleTNRollback(t *testing.T) {
 
 	storage := txnService.(*service).storage.(*mem.KVTxnStorage)
 	require.Nil(t, storage.GetUncommittedTxn(meta.ID))
+}
+
+func TestRollbackRejectsStaleContext(t *testing.T) {
+	for _, reused := range []bool{false, true} {
+		name := "reset"
+		if reused {
+			name = "reused"
+		}
+		t.Run(name, func(t *testing.T) {
+			oldMeta := NewTestTxn(1, 1, 1)
+			current := NewTestTxn(2, 1, 1)
+			s := &service{logger: util.GetLogger(""), shard: oldMeta.TNShards[0]}
+			c := &txnContext{logger: s.logger}
+			c.init(oldMeta, acquireNotifier())
+			c.mu.Lock()
+			c.resetLocked()
+			c.mu.Unlock()
+			t.Cleanup(func() {
+				s.transactions.Delete(string(oldMeta.ID))
+				s.transactions.Delete(string(current.ID))
+				if c.nt != nil {
+					s.releaseTxnContext(c)
+				}
+			})
+			w := acquireWaiter()
+			t.Cleanup(w.close)
+			if reused {
+				c.init(current, acquireNotifier())
+				s.transactions.Store(string(current.ID), c)
+				require.True(t, c.addWaiter(current.ID, w, txn.TxnStatus_Committed))
+			}
+			nt := c.nt
+			// Inject the post-lookup stale-pointer boundary: an old request
+			// retained c before retirement, and now acquires it after reset/reuse.
+			// The alias avoids a scheduler-dependent pause inside Rollback.
+			s.transactions.Store(string(oldMeta.ID), c)
+			request := NewTestRollbackRequest(oldMeta)
+			response := &txn.TxnResponse{}
+			require.NotPanics(t, func() {
+				require.NoError(t, s.Rollback(t.Context(), &request, response))
+			})
+			require.NotNil(t, response.TxnError)
+			require.True(t, moerr.IsMoErrCode(response.TxnError.UnwrapError(), moerr.ErrTxnNotFound))
+			require.Same(t, nt, c.nt)
+			if reused {
+				require.Equal(t, current.ID, c.getTxn().ID)
+				require.Same(t, c, s.getTxnContext(current.ID))
+			} else {
+				require.Empty(t, c.getTxn().ID)
+			}
+			select {
+			case <-w.c:
+				t.Fatal("stale rollback notified another generation's waiter")
+			default:
+			}
+		})
+	}
 }
 
 func TestMultiTNCleanupWithoutTxnContext(t *testing.T) {

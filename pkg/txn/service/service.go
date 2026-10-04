@@ -221,6 +221,14 @@ func (s *service) acquireTxnContext() *txnContext {
 }
 
 func (s *service) releaseTxnContext(txnCtx *txnContext) {
+	// Pooling does not invalidate pointers retained by old requests.
+	txnCtx.mu.Lock()
+	defer txnCtx.mu.Unlock()
+	s.releaseTxnContextLocked(txnCtx)
+}
+
+// releaseTxnContextLocked requires the caller to hold txnCtx.mu exclusively.
+func (s *service) releaseTxnContextLocked(txnCtx *txnContext) {
 	txnCtx.resetLocked()
 	s.pool.Put(txnCtx)
 }
