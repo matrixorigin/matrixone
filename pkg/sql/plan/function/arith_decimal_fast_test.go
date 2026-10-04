@@ -1984,21 +1984,14 @@ func TestD64SameScaleAliasOverflowChecks(t *testing.T) {
 // TestD128MulPow10Carry verifies that d128MulPow10 correctly detects overflow
 // when the cross-product carry overflows uint64 (hi + crossLo > 2^64).
 func TestD128MulPow10Carry(t *testing.T) {
-	// x = {B0_63: MaxUint64, B64_127: 1} = 2^65 - 1 ≈ 3.69e19.
-	// x * 10^19 ≈ 3.69e38 > 2^127 ≈ 1.70e38 → must overflow.
+	// (2^65-1)*10^19 exceeds the positive D128 range.
 	x := types.Decimal128{B0_63: ^uint64(0), B64_127: 1}
-	require.False(t, d128MulPow10(&x, 19), "d128MulPow10 should detect carry overflow")
+	require.False(t, d128MulPow10(&x, 19))
 
-	// x = {B0_63: MaxUint64, B64_127: 1}, n=1: x * 10 = 10*(2^65-1) ≈ 3.69e20.
-	// Fits in 128-bit unsigned (< 2^127), should succeed.
+	// (2^65-1)*10 = 20*2^64-10: low limb 2^64-10, high limb 19.
 	x = types.Decimal128{B0_63: ^uint64(0), B64_127: 1}
-	require.True(t, d128MulPow10(&x, 1), "d128MulPow10 should succeed for small factor")
-	// Verify: 10 * (2^65-1) = 10*2^65 - 10 = 20*2^64 - 10.
-	// B0_63 = lo64(MaxUint64 * 10), B64_127 = hi64(MaxUint64 * 10) + 10.
-	hi, lo := bits.Mul64(^uint64(0), 10)
-	hi += 10 // cross product: 1 * 10
-	require.Equal(t, lo, x.B0_63)
-	require.Equal(t, hi, x.B64_127)
+	require.True(t, d128MulPow10(&x, 1))
+	require.Equal(t, types.Decimal128{B0_63: 18446744073709551606, B64_127: 19}, x)
 }
 
 func TestD128Mul(t *testing.T) {
@@ -5939,19 +5932,22 @@ func TestD128ScaleIntoRs_Coverage(t *testing.T) {
 }
 
 func TestD128DivPow10_Coverage(t *testing.T) {
-	t.Run("SmallN", func(t *testing.T) {
-		x := types.Decimal128{B0_63: 123456789, B64_127: 0}
-		d128DivPow10(&x, 3)
-		// 123456789 / 1000 ≈ 123457 (round half up)
-		require.Equal(t, uint64(123457), x.B0_63)
-	})
-
-	t.Run("LargeN_TwoStep", func(t *testing.T) {
-		// n > 19 triggers two-step division
-		x := types.Decimal128{B0_63: 0, B64_127: 1} // 2^64
-		d128DivPow10(&x, 20)
-		// Should not panic
-	})
+	for _, tc := range []struct {
+		name        string
+		input, want types.Decimal128
+		scale       int32
+	}{
+		{"single_chunk_rounds", types.Decimal128{B0_63: 123456789}, types.Decimal128{B0_63: 123457}, 3},
+		{"last_single_chunk", types.Decimal128{B64_127: 1}, types.Decimal128{B0_63: 2}, 19},
+		{"first_two_chunk", types.Decimal128{B64_127: 1}, types.Decimal128{}, 20},
+		{"largest_two_chunk", types.Decimal128{B0_63: ^uint64(0), B64_127: 1<<63 - 1}, types.Decimal128{B0_63: 2}, 38},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.input
+			d128DivPow10(&got, tc.scale)
+			require.Equal(t, tc.want, got)
+		})
+	}
 }
 
 func TestDecimalScaleDownMultiStepRounding(t *testing.T) {
