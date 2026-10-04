@@ -1768,14 +1768,6 @@ func doSetVar(
 					if cache != nil {
 						cache.invalidate()
 					}
-					// Clearing the cache is also the explicit synchronization point
-					// for externally changed role membership. Refresh it now, outside
-					// the caller's transaction snapshot, instead of allowing the next
-					// authorization check to repopulate the cache from stale state.
-					_, _, err = validateActiveRoleGrantForAuthorization(execCtx.reqCtx, ses)
-					if err != nil {
-						return err
-					}
 				}
 				err = setVarFunc(assign.System, assign.Global, name, value, sql)
 				if err != nil {
@@ -4860,12 +4852,6 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 	var stats statistic.StatsArray
 	stats.Reset()
 
-	// Cache grants only within one statement. A session-local cache cannot
-	// observe REVOKE or RESTORE committed by another connection or another CN.
-	if cache := ses.GetPrivilegeCache(); cache != nil {
-		cache.invalidate()
-	}
-
 	reqCtx, span := trace.Debug(reqCtx, "authenticateUserCanExecuteStatement")
 	defer span.End()
 	if getPu(ses.GetService()).SV.SkipCheckPrivilege {
@@ -4950,6 +4936,7 @@ func authenticateCanExecuteStatementAndPlan(reqCtx context.Context, ses *Session
 	if ses.skipAuthForSpecialUser() {
 		return stats, nil
 	}
+	stmt = unwrapExecutableExplainStatement(stmt)
 	yes, delta, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(reqCtx, ses, stmt, p)
 	if err != nil {
 		return stats, err
