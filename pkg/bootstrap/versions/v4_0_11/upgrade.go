@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v4_0_9
+package v4_0_11
 
 import (
 	"context"
@@ -25,12 +25,12 @@ import (
 )
 
 var Handler = &versionHandle{metadata: versions.Version{
-	Version:                 "4.0.9",
-	MinUpgradeVersion:       "4.0.8",
+	Version:                 "4.0.11",
+	MinUpgradeVersion:       "4.0.10",
 	UpgradeCluster:          versions.Yes,
 	UpgradeTenant:           versions.No,
 	VersionOffset:           uint32(len(clusterUpgEntries)),
-	RequiredProtocolVersion: defines.MORPCVersion97,
+	RequiredProtocolVersion: defines.MORPCVersion106,
 }}
 
 type versionHandle struct{ metadata versions.Version }
