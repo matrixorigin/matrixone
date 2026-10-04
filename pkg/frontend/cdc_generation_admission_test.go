@@ -18,11 +18,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	gomysql "github.com/go-sql-driver/mysql"
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -37,6 +39,7 @@ type futureCDCAdmissionCatalog struct {
 	owner, source uint64
 	watermark     string
 	statements    []string
+	errMsg        string
 }
 
 type futureCDCTargetStateResult struct{ *claimLossWatermarkResult }
@@ -65,10 +68,16 @@ func (*cdcSourceKeyCatalog) ApplySessionOverride(ie.SessionOverrideOptions) {}
 
 func (c *futureCDCAdmissionCatalog) Exec(_ context.Context, sql string, _ ie.SessionOverrideOptions) error {
 	c.statements = append(c.statements, sql)
+	if match := regexp.MustCompile(`'([^']*)' AS err_msg`).FindStringSubmatch(sql); match != nil {
+		c.errMsg = match[1]
+	}
 	return nil
 }
 
 func (c *futureCDCAdmissionCatalog) Query(_ context.Context, sql string, _ ie.SessionOverrideOptions) ie.InternalExecResult {
+	if strings.Contains(sql, "SELECT err_msg") {
+		return &claimLossWatermarkResult{rows: [][]string{{c.errMsg}}}
+	}
 	if strings.HasPrefix(sql, "SELECT owner_generation, source_table_id, pending_source_table_id, target_identity") {
 		identity := ""
 		if c.source != 0 {
@@ -178,10 +187,12 @@ func TestCDCEndTsFirstAdmissionChecksHistoricalGenerationBeforeTarget(t *testing
 	for _, tc := range []struct {
 		name, watermark                string
 		noFull, explicitStart, visible bool
+		cause                          error
 	}{
-		{"initial full absent", "0-0", false, false, false},
-		{"NoFull absent", "10-0", true, false, false},
-		{"explicit start absent", "10-0", false, true, false},
+		{"initial full absent", "0-0", false, false, false, nil},
+		{"NoFull absent", "10-0", true, false, false, nil},
+		{"explicit start absent", "10-0", false, true, false, nil},
+		{"transient historical read", "0-0", false, false, false, moerr.NewRPCTimeoutNoCtx()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fence := cdc.NewOwnerFenceForGeneration(time.Unix(102, 0), func(context.Context) error { return nil })
@@ -198,7 +209,9 @@ func TestCDCEndTsFirstAdmissionChecksHistoricalGenerationBeforeTarget(t *testing
 			client.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(historical, nil)
 			storage := frontendmock.NewMockEngine(ctrl)
 			storage.EXPECT().New(gomock.Any(), historical).Return(nil)
-			if tc.visible {
+			if tc.cause != nil {
+				storage.EXPECT().GetRelationById(gomock.Any(), historical, uint64(10)).Return("", "", nil, tc.cause)
+			} else if tc.visible {
 				relation := frontendmock.NewMockRelation(ctrl)
 				relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(10))
 				storage.EXPECT().GetRelationById(gomock.Any(), historical, uint64(10)).Return("db", "src", relation, nil)
@@ -218,7 +231,11 @@ func TestCDCEndTsFirstAdmissionChecksHistoricalGenerationBeforeTarget(t *testing
 			}
 			key := &cdc.WatermarkKey{AccountId: 1, TaskId: "t", DBName: "db", TableName: "src"}
 			state, err := executor.prepareGenerationAdmission(context.Background(), key, 10, "db", "dst", current, fence)
-			if tc.visible {
+			if tc.cause != nil {
+				require.ErrorIs(t, err, tc.cause)
+				retryable, _ := cdc.ClassifyRetryableError(err)
+				require.True(t, retryable)
+			} else if tc.visible {
 				require.NoError(t, err)
 			} else {
 				require.ErrorContains(t, err, "was absent at EndTs")
@@ -298,6 +315,11 @@ func TestCDCSourceGuardRetryContract(t *testing.T) {
 	}{
 		{"snapshot advanced", moerr.NewTxnNeedRetryNoCtx(), true},
 		{"definition changed", moerr.NewTxnNeedRetryWithDefChangedNoCtx(), true},
+		{"rpc timeout", moerr.NewRPCTimeoutNoCtx(), true},
+		{"target wire timeout", &gomysql.MySQLError{Number: 1159, Message: "communication timeout"}, true},
+		{"deadline", context.DeadlineExceeded, true},
+		{"service unavailable", moerr.NewServiceUnavailableNoCtx("temporary"), true},
+		{"unknown", errors.New("unclassified failure"), false},
 		{"unsupported", moerr.NewNotSupportedNoCtx("guard unavailable"), false},
 		{"cancelled", context.Canceled, false},
 	} {
@@ -312,6 +334,27 @@ func TestCDCSourceGuardRetryContract(t *testing.T) {
 			})
 			require.ErrorIs(t, err, tc.cause)
 			require.Equal(t, tc.retry, cdc.IsRetryableSnapshotEpochError(err))
+			if errors.Is(err, context.Canceled) {
+				return // Caller cancellation is filtered before persistence.
+			}
+			// Follow the admission error through the real owned watermark writer
+			// and the next callback's catalog consumer, without a live cluster.
+			catalog := &futureCDCAdmissionCatalog{}
+			updater := cdc.NewCDCWatermarkUpdater(t.Name(), catalog)
+			updater.Start()
+			defer updater.Stop()
+			fence := cdc.NewOwnerFenceForGeneration(time.UnixMicro(123), func(context.Context) error { return nil })
+			key := &cdc.WatermarkKey{AccountId: 1, TaskId: "task", DBName: "db", TableName: "t"}
+			retryable, _ := cdc.ClassifyRetryableError(err)
+			require.NoError(t, updater.UpdateWatermarkErrMsg(
+				cdc.WithWatermarkOwnerFence(context.Background(), fence, 0), key,
+				err.Error(), &cdc.ErrorContext{IsRetryable: retryable}))
+			require.NotEmpty(t, catalog.errMsg)
+			require.Len(t, catalog.statements, 1)
+			require.Contains(t, catalog.statements[0], "w.owner_generation = v.owner_generation")
+			hasError, readErr := GetTableErrMsg(context.Background(), 1, catalog, "task", &cdc.DbTableInfo{SourceDbName: "db", SourceTblName: "t"})
+			require.NoError(t, readErr)
+			require.Equal(t, !tc.retry, hasError, "a transient admission failure must allow the next callback")
 		})
 	}
 }

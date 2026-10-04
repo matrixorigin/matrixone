@@ -870,9 +870,7 @@ func (exec *CDCTaskExecutor) prepareGenerationAdmission(
 	if !exec.endTs.IsEmpty() && currentSnapshot.GT(&exec.endTs) {
 		visible, visibilityErr := exec.sourceGenerationVisibleAt(ctx, sourceTableID, exec.endTs)
 		if visibilityErr != nil {
-			return state, moerr.NewInternalErrorf(ctx,
-				"CDC cannot establish whether source generation %d existed at EndTs %s for %s: %v",
-				sourceTableID, exec.endTs.ToString(), key.String(), visibilityErr)
+			return state, visibilityErr
 		}
 		if !visible {
 			return state, moerr.NewInternalErrorf(ctx,
@@ -3144,12 +3142,8 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 					DBName:    newTableInfo.SourceDbName,
 					TableName: newTableInfo.SourceTblName,
 				}
-				errorCtx := &cdc.ErrorContext{
-					IsRetryable: cdc.IsRetryableSnapshotEpochError(err) ||
-						cdc.IsRetryableOwnerFenceError(err) ||
-						cdc.IsRetryableTargetLockError(err) ||
-						cdc.IsRetryableConnectionError(err),
-				}
+				retryable, _ := cdc.ClassifyRetryableError(err)
+				errorCtx := &cdc.ErrorContext{IsRetryable: retryable}
 				errorUpdateCtx := cdc.WithWatermarkOwnerFence(
 					ctx, pipelineOwnerFence, newTableInfo.SourceTblId)
 				if updateErr := exec.watermarkUpdater.UpdateWatermarkErrMsg(
@@ -3564,9 +3558,7 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 	if admission.completeAfterCheck {
 		priorDef, readErr := exec.sourceTableDefAt(ctx, admission.previousGeneration, exec.endTs)
 		if readErr != nil {
-			return moerr.NewInternalErrorf(ctx,
-				"CDC cannot verify prior source generation %d at EndTs %s: %v",
-				admission.previousGeneration, exec.endTs.ToString(), readErr)
+			return readErr
 		}
 		priorInfo := info.Clone()
 		priorInfo.SourceTblId = admission.previousGeneration

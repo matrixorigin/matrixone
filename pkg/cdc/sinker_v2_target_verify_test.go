@@ -45,6 +45,10 @@ func TestCDCTargetGuardSQLRetryClassification(t *testing.T) {
 		{"cancelled", context.Canceled, false},
 		{"wrapped MO definition changed", fmt.Errorf("source guard: %w", moerr.NewTxnNeedRetryWithDefChangedNoCtx()), true},
 		{"unsupported with retry keyword", moerr.NewNotSupportedNoCtx("server UUID is unavailable"), false},
+		{"wrapped RPC timeout", fmt.Errorf("backend: %w", moerr.NewRPCTimeoutNoCtx()), true},
+		{"wrapped service unavailable", fmt.Errorf("backend: %w", moerr.NewServiceUnavailableNoCtx("temporary")), true},
+		{"unknown", errors.New("unclassified failure"), false},
+		{"wrapped cancellation", fmt.Errorf("backend: %w", context.Canceled), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			classified := classifyCDCTargetSQLError(tc.err)
@@ -53,6 +57,34 @@ func TestCDCTargetGuardSQLRetryClassification(t *testing.T) {
 			require.Equal(t, tc.retryable, (&TableChangeStream{}).determineRetryable(classified))
 		})
 	}
+}
+
+func TestCDCBackendTransportEquivalence(t *testing.T) {
+	ctx := context.Background()
+	for _, cause := range []*moerr.Error{
+		moerr.NewRPCTimeoutNoCtx(), moerr.NewServiceUnavailableNoCtx("temporary"),
+		moerr.NewConnectionReset(ctx), moerr.NewBackendClosed(ctx),
+		moerr.NewNoAvailableBackend(ctx), moerr.NewBackendCannotConnect(ctx),
+		moerr.NewTNShardNotFound(ctx, "shard", 1), moerr.NewRpcError(ctx, "temporary"),
+		moerr.NewTxnNeedRetryNoCtx(), moerr.NewTxnNeedRetryWithDefChangedNoCtx(),
+		moerr.NewClientClosed(ctx), moerr.NewStreamClosed(ctx),
+	} {
+		t.Run(fmt.Sprint(cause.ErrorCode()), func(t *testing.T) {
+			want := cause.ErrorCode() != moerr.ErrClientClosed && cause.ErrorCode() != moerr.ErrStreamClosed
+			for _, err := range []error{cause, &gomysql.MySQLError{Number: cause.ErrorCode()}} {
+				err = fmt.Errorf("backend: %w", err)
+				retryable, classified := ClassifyRetryableError(err)
+				require.True(t, classified)
+				require.Equal(t, want, retryable)
+				require.Equal(t, want, (&TableChangeStream{}).determineRetryable(err))
+			}
+		})
+	}
+	unknown := &gomysql.MySQLError{Number: 999, Message: "legacy runtime timeout"}
+	retryable, classified := ClassifyRetryableError(unknown)
+	require.False(t, retryable)
+	require.False(t, classified)
+	require.True(t, (&TableChangeStream{}).determineRetryable(unknown))
 }
 
 func TestCDCTargetIdentityAdmissionAndGuard(t *testing.T) {
@@ -94,7 +126,7 @@ func TestCDCTargetIdentityAdmissionAndGuard(t *testing.T) {
 			want  string
 		}{
 			{name: "non innodb", rows: sqlmock.NewRows([]string{"engine"}).AddRow("MyISAM"), want: "InnoDB"},
-			{name: "probe unavailable", rows: sqlmock.NewRows([]string{"engine"}).AddRow("InnoDB"), query: driver.ErrBadConn, want: "unavailable"},
+			{name: "probe unavailable", rows: sqlmock.NewRows([]string{"engine"}).AddRow("InnoDB"), query: driver.ErrBadConn},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				db, mock, err := sqlmock.New()
@@ -108,7 +140,13 @@ func TestCDCTargetIdentityAdmissionAndGuard(t *testing.T) {
 					mock.ExpectQuery(regexp.QuoteMeta("SELECT TABLE_ID FROM information_schema.INNODB_TABLES WHERE NAME = ?")).
 						WithArgs("__mo_cdc_capability_probe__/__absent__").WillReturnError(tc.query)
 				}
-				require.ErrorContains(t, checkMySQLTargetIdentityCapability(ctx, conn, "db", "t", true), tc.want)
+				got := checkMySQLTargetIdentityCapability(ctx, conn, "db", "t", true)
+				if tc.query != nil {
+					require.ErrorIs(t, got, tc.query)
+					require.True(t, IsRetryableConnectionError(got))
+				} else {
+					require.ErrorContains(t, got, tc.want)
+				}
 				require.NoError(t, mock.ExpectationsWereMet())
 			})
 		}
@@ -559,7 +597,7 @@ func TestNormalizeCDCTargetColumnTypeFromMOAndMySQL(t *testing.T) {
 
 func TestCDCTargetIdentityRetryContract(t *testing.T) {
 	for _, point := range []string{"capability", "guard_metadata", "guard_lock_control"} {
-		for _, code := range []uint16{2013, 1205, 1142, 1227} {
+		for _, code := range []uint16{2013, 1205, 1159, 1161, moerr.ErrRPCTimeout, moerr.ErrServiceUnavailable, 1044, 1045, 1142, 1143, 1227, moerr.ErrNotSupported} {
 			t.Run(fmt.Sprintf("%s_%d", point, code), func(t *testing.T) {
 				ctx := context.Background()
 				db, mock, err := sqlmock.New()
@@ -593,31 +631,9 @@ func TestCDCTargetIdentityRetryContract(t *testing.T) {
 				// Same retry contract as the actual admission consumer. A transient
 				// target failure must not become permanent watermark error metadata.
 				require.ErrorIs(t, got, transient)
-				require.Equal(t, code == 2013 || code == 1205, IsRetryableConnectionError(got), "retry classification must survive the query boundary")
-				require.Equal(t, code == 2013 || code == 1205, (&TableChangeStream{}).determineRetryable(got))
+				require.Equal(t, code == 2013 || code == 1205 || code == 1159 || code == 1161 || code == moerr.ErrRPCTimeout || code == moerr.ErrServiceUnavailable, IsRetryableConnectionError(got), "retry classification must survive the query boundary")
+				require.Equal(t, code == 2013 || code == 1205 || code == 1159 || code == 1161 || code == moerr.ErrRPCTimeout || code == moerr.ErrServiceUnavailable, (&TableChangeStream{}).determineRetryable(got))
 			})
 		}
-	}
-}
-
-func TestCDCStreamSQLClassificationFallback(t *testing.T) {
-	for _, tc := range []struct {
-		code      uint16
-		message   string
-		retryable bool
-	}{
-		{1159, "Got timeout reading communication packets", true},
-		{1161, "Got timeout writing communication packets", true},
-		{moerr.ErrRPCTimeout, "rpc timeout", true},
-		{moerr.ErrServiceUnavailable, "service unavailable", true},
-		{1044, "permission on relation unavailable_timeout", false},
-		{1045, "permission on relation unavailable_timeout", false},
-		{1143, "permission on relation unavailable_timeout", false},
-		{moerr.ErrNotSupported, "unsupported relation unavailable_timeout", false},
-	} {
-		t.Run(fmt.Sprint(tc.code), func(t *testing.T) {
-			err := fmt.Errorf("target guard: %w", &gomysql.MySQLError{Number: tc.code, Message: tc.message})
-			require.Equal(t, tc.retryable, (&TableChangeStream{}).determineRetryable(err))
-		})
 	}
 }

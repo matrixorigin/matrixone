@@ -16,8 +16,6 @@ package frontend
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -38,12 +36,7 @@ func (exec *CDCTaskExecutor) withCDCSourceGenerationGuard(
 	expectedID uint64, acknowledge func() error,
 ) (err error) {
 	defer func() {
-		if err == nil {
-			return
-		}
-		var cause *moerr.Error
-		if errors.As(err, &cause) && (moerr.IsMoErrCode(cause, moerr.ErrTxnNeedRetry) ||
-			moerr.IsMoErrCode(cause, moerr.ErrTxnNeedRetryWithDefChanged)) {
+		if retryable, _ := cdc.ClassifyRetryableError(err); retryable {
 			err = cdc.NewRetryableSnapshotEpochError(err)
 		}
 	}()
@@ -86,20 +79,20 @@ func (exec *CDCTaskExecutor) withCDCSourceGenerationGuard(
 			return relErr
 		}
 		if err = lockCDCCatalogName(proc, tenantCtx, exec.cnEngine, rel, accountID, target.parts...); err != nil {
-			return fmt.Errorf("CDC source guard lock %s: %w", target.name, err)
+			return err
 		}
 	}
 	now, _ := moruntime.ServiceRuntime(exec.cnUUID).Clock().Now()
 	if err = op.GetWorkspace().AdvanceSnapshot(tenantCtx, now); err != nil {
-		return fmt.Errorf("CDC source guard advance snapshot: %w", err)
+		return err
 	}
 	db, err := exec.cnEngine.Database(tenantCtx, databaseName, op)
 	if err != nil {
-		return fmt.Errorf("CDC source guard resolve database: %w", err)
+		return err
 	}
 	rel, err := db.Relation(tenantCtx, tableName, nil)
 	if err != nil {
-		return fmt.Errorf("CDC source guard resolve table: %w", err)
+		return err
 	}
 	if actual := rel.GetTableID(tenantCtx); actual != expectedID {
 		return moerr.NewInternalErrorf(ctx,

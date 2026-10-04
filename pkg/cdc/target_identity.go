@@ -17,13 +17,10 @@ package cdc
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"regexp"
 	"strings"
 
-	gomysql "github.com/go-sql-driver/mysql"
-	"github.com/matrixorigin/matrixone/pkg/cdc/retry"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
@@ -31,25 +28,8 @@ const absentCDCTargetIdentity = "absent"
 
 var mysqlInnoDBIdentityName = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
 
-var cdcTargetSQLRetryClassifier = retry.MultiClassifier{
-	retry.DefaultClassifier{}, retry.MySQLErrorClassifier{},
-}
-
 func classifyCDCTargetSQLError(err error) error {
-	if err == nil {
-		return nil
-	}
-	var moErr *moerr.Error
-	if errors.As(err, &moErr) && (moerr.IsMoErrCode(moErr, moerr.ErrTxnNeedRetry) ||
-		moerr.IsMoErrCode(moErr, moerr.ErrTxnNeedRetryWithDefChanged)) {
-		return newRetryableConnectionError(err)
-	}
-	var mysqlErr *gomysql.MySQLError
-	if errors.As(err, &mysqlErr) && (mysqlErr.Number == moerr.ErrTxnNeedRetry ||
-		mysqlErr.Number == moerr.ErrTxnNeedRetryWithDefChanged) {
-		return newRetryableConnectionError(err)
-	}
-	if cdcTargetSQLRetryClassifier.IsRetryable(err) {
+	if retryable, _ := ClassifyRetryableError(err); retryable && !IsRetryableConnectionError(err) {
 		return newRetryableConnectionError(err)
 	}
 	return err
@@ -72,7 +52,7 @@ func checkMySQLTargetIdentityCapability(ctx context.Context, conn *sql.Conn, db,
 	rows, err := conn.QueryContext(ctx,
 		"SELECT TABLE_ID FROM information_schema.INNODB_TABLES WHERE NAME = ?", "__mo_cdc_capability_probe__/__absent__")
 	if err != nil {
-		return fmt.Errorf("CDC target InnoDB table identity is unavailable (PROCESS privilege required): %w", err)
+		return err
 	}
 	defer func() {
 		if closeErr := rows.Close(); err == nil {
@@ -156,7 +136,7 @@ func guardedCDCTargetIdentity(ctx context.Context, tx *sql.Tx, sinkType, db, tab
 			"SELECT @@server_uuid, TABLE_ID FROM information_schema.INNODB_TABLES WHERE NAME = ?",
 			db+"/"+table)
 		if err != nil {
-			return "", fmt.Errorf("CDC target InnoDB table identity is unavailable (PROCESS privilege required): %w", err)
+			return "", err
 		}
 		defer rows.Close()
 		var uuid string

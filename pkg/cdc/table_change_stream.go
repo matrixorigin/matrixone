@@ -23,9 +23,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	gomysql "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -1114,57 +1112,13 @@ func (s *TableChangeStream) isAuxiliaryError(err error, errType string) bool {
 
 // determineRetryable determines if an error is retryable based on error type and context
 func (s *TableChangeStream) determineRetryable(err error) bool {
-	if err == nil {
-		return false
+	if retryable, classified := ClassifyRetryableError(err); classified {
+		return retryable
 	}
-	if IsRetryableOwnerFenceError(err) {
-		return true
-	}
-	if IsRetryableTargetLockError(err) {
-		return true
-	}
-	if IsRetryableConnectionError(err) {
-		return true
-	}
-	if IsOwnerFenceLostError(err) {
-		return false
-	}
-
 	errMsg := err.Error()
-
-	// Control signals (pause/cancel) are not retryable
 	if IsPauseOrCancelError(errMsg) {
 		return false
 	}
-
-	// Known permission/unsupported errors must not become retryable because
-	// identifiers or diagnostics contain retry keywords. A negative result
-	// from the transient classifier means unknown, not necessarily permanent.
-	var mysqlErr *gomysql.MySQLError
-	if errors.As(err, &mysqlErr) {
-		switch mysqlErr.Number {
-		case 1044, 1045, 1142, 1143, 1227, moerr.ErrNotSupported:
-			return false
-		}
-		if IsRetryableConnectionError(classifyCDCTargetSQLError(err)) {
-			return true
-		}
-	}
-	var moErr *moerr.Error
-	if errors.As(err, &moErr) && moerr.IsMoErrCode(moErr, moerr.ErrNotSupported) {
-		return false
-	}
-
-	// Check for MatrixOne system/network errors first (before string matching)
-	// Use morpc.GetStatusCategory for unified error classification
-	status := morpc.GetStatusCategory(err)
-	if status == morpc.StatusTransient || status == morpc.StatusUnavailable {
-		return true
-	}
-	if status == morpc.StatusCancelled {
-		return false // Client closing/closed should not retry
-	}
-	// StatusUnknown: continue to check other error types below
 
 	// StaleRead/FileNotFound errors are retryable if recovery is possible
 	if moerr.IsMoErrCode(err, moerr.ErrStaleRead) || moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
