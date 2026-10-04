@@ -1223,7 +1223,7 @@ func hasWindowFrameParamInOrderBy(orderBy tree.OrderBy) bool {
 }
 
 func (b *baseBinder) bindPreparedWindowFrameBound(expr tree.Expr, typ *plan.Type) (*plan.Expr, error) {
-	if b.builder == nil || !b.builder.isPrepareStatement {
+	if b.builder == nil || !b.builder.isReusablePlan() {
 		return nil, moerr.NewInvalidInput(b.GetContext(), "only prepare statement can use ? expr")
 	}
 	if typ == nil {
@@ -1258,6 +1258,15 @@ func makeWindowFrameConstValue(
 	e, err := baseBindExpr(expr, 0, true)
 	if err != nil {
 		return nil, err
+	}
+	// A window frame bound is evaluated HERE, at bind time -- before the frontend's mo_ctl
+	// sys-admin gate runs on the built plan, and the evaluated bound is then replaced by a
+	// constant so the gate's plan scan can never see it. A control function (mo_ctl / fault_inject)
+	// is never a legitimate frame offset, so reject it outright rather than let its cluster-wide
+	// side effect fire unauthenticated (#28985). The ctl execution-entry backstop also blocks it,
+	// but this gives a precise error and refuses it for every account, including sys-admin.
+	if HasMoCtrl(e) {
+		return nil, moerr.NewNotSupported(bindCtx, "mo_ctl or fault_inject is not allowed in a window frame bound")
 	}
 	if e.Typ.Id == int32(types.T_interval) {
 		return resetWindowIntervalExpr(bindCtx, proc, e)

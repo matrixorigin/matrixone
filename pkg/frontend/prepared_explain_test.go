@@ -43,6 +43,7 @@ func TestPreparedExplainUsesBinaryParameterValues(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 104, "explain select ?")
 	defer prepareStmt.Close()
 
+	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_VAR_STRING), 0}
 	prepareStmt.params = vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("42"), false, cw.proc.Mp()))
 
@@ -263,14 +264,19 @@ func runPreparedAuthorizationCompile(
 	innerPlan *planPb.Plan,
 	binary bool,
 	allowed bool,
+	bh *preparedAuthorizationBackgroundExec,
 ) error {
 	t.Helper()
 	cw, execCtx := newPreparedAuthorizationWrapper(ses, prepareStmt, innerPlan, binary)
 	configurePreparedAuthorizationSession(t, ses, execCtx)
+	query, err := getSqlForCheckRoleHasTableLevelPrivilegeWithObjType(execCtx.reqCtx, objectTypeTable, 3, PrivilegeTypeSelect, "db1", "t1")
+	require.NoError(t, err)
+	var rows [][]interface{}
 	if allowed {
-		ses.cache.add(objectTypeTable, privilegeLevelTable, "db1", "t1", PrivilegeTypeSelect)
+		rows = [][]interface{}{{int64(3), false}}
 	}
-	_, err := cw.Compile(execCtx, nil)
+	bh.sql2result[query] = newMrsForCheckRoleHasPrivilege(rows)
+	_, err = cw.Compile(execCtx, nil)
 	return err
 }
 
@@ -300,19 +306,18 @@ func TestPreparedExplainAuthorizationRechecksExecutionPrivilege(t *testing.T) {
 			bh.sql2result[getSqlForCheckUserGrantForAuthorization(3, 2)] = newMrsForCheckUserGrant(
 				[][]interface{}{{int64(3), int64(2), false}})
 
-			err := runPreparedAuthorizationCompile(t, ses, prepareStmt, innerPlan, tc.binary, true)
+			err := runPreparedAuthorizationCompile(t, ses, prepareStmt, innerPlan, tc.binary, true, bh)
 			require.NoError(t, err, "a granted prepared statement must reach the compile path")
 
-			// Revoke the table privilege and clear the session cache.  A fresh
+			// Revoke the table privilege without clearing the session cache. A fresh
 			// wrapper models a second EXECUTE/COM_STMT_EXECUTE using the same
 			// prepared handle after the revoke.
-			ses.InvalidatePrivilegeCache()
-			err = runPreparedAuthorizationCompile(t, ses, prepareStmt, innerPlan, tc.binary, false)
+			err = runPreparedAuthorizationCompile(t, ses, prepareStmt, innerPlan, tc.binary, false, bh)
 			require.Error(t, err, "a revoked prepared statement must be rejected")
 
 			// Re-granting the table privilege makes the same prepared handle
-			// executable again after the cache is repopulated.
-			err = runPreparedAuthorizationCompile(t, ses, prepareStmt, innerPlan, tc.binary, true)
+			// executable again after rereading committed catalog grants.
+			err = runPreparedAuthorizationCompile(t, ses, prepareStmt, innerPlan, tc.binary, true, bh)
 			require.NoError(t, err, "a re-granted prepared statement must be executable again")
 		})
 	}
@@ -347,22 +352,20 @@ func TestPreparedAuthorizationRejectsRevokedActiveRole(t *testing.T) {
 
 			roleGrantSQL := getSqlForCheckUserGrantForAuthorization(3, 2)
 			bh.sql2result[roleGrantSQL] = newMrsForCheckUserGrant([][]interface{}{{int64(3), int64(2), false}})
-			require.NoError(t, runPreparedAuthorizationCompile(t, ses, prepareStmt, innerPlan, tc.binary, true))
+			require.NoError(t, runPreparedAuthorizationCompile(t, ses, prepareStmt, innerPlan, tc.binary, true, bh))
 			require.True(t, forcedPessimisticRC)
 
 			// Revoking the active role leaves the role's table privilege intact. The
-			// same prepared handle must still be rejected after the session cache is
-			// cleared because the user no longer owns the active role.
+			// same prepared handle must be rejected even with a warm session cache
+			// because the user no longer owns the active role.
 			bh.sql2result[roleGrantSQL] = newMrsForCheckUserGrant(nil)
-			ses.InvalidatePrivilegeCache()
-			err := runPreparedAuthorizationCompile(t, ses, prepareStmt, innerPlan, tc.binary, true)
+			err := runPreparedAuthorizationCompile(t, ses, prepareStmt, innerPlan, tc.binary, true, bh)
 			require.Error(t, err)
 
-			// A committed re-grant plus another cache refresh restores the same
+			// A committed re-grant restores the same
 			// session and prepared handle.
 			bh.sql2result[roleGrantSQL] = newMrsForCheckUserGrant([][]interface{}{{int64(3), int64(2), false}})
-			ses.InvalidatePrivilegeCache()
-			require.NoError(t, runPreparedAuthorizationCompile(t, ses, prepareStmt, innerPlan, tc.binary, true))
+			require.NoError(t, runPreparedAuthorizationCompile(t, ses, prepareStmt, innerPlan, tc.binary, true, bh))
 		})
 	}
 }
@@ -382,14 +385,14 @@ func TestPreparedAuthorizationActiveRoleGrantCacheBoundaries(t *testing.T) {
 		roleGrantSQL := getSqlForCheckUserGrantForAuthorization(3, 2)
 		catalogErr := errors.New("role grant catalog unavailable")
 		bh.sql2err[roleGrantSQL] = catalogErr
-		err := runPreparedAuthorizationCompile(t, ses, prepareStmt, innerPlan, false, true)
+		err := runPreparedAuthorizationCompile(t, ses, prepareStmt, innerPlan, false, true, bh)
 		require.ErrorIs(t, err, catalogErr)
 		_, cached := ses.GetPrivilegeCache().getActiveRoleGrant(2, 3)
 		require.False(t, cached)
 
 		delete(bh.sql2err, roleGrantSQL)
 		bh.sql2result[roleGrantSQL] = newMrsForCheckUserGrant([][]interface{}{{int64(3), int64(2), false}})
-		require.NoError(t, runPreparedAuthorizationCompile(t, ses, prepareStmt, innerPlan, false, true))
+		require.NoError(t, runPreparedAuthorizationCompile(t, ses, prepareStmt, innerPlan, false, true, bh))
 	})
 
 	t.Run("disabled cache rechecks every execution", func(t *testing.T) {
@@ -409,10 +412,10 @@ func TestPreparedAuthorizationActiveRoleGrantCacheBoundaries(t *testing.T) {
 			objectTypeTable, 3, PrivilegeTypeSelect)
 		bh.sql2result[tablePrivilegeSQL] = newMrsForCheckRoleHasPrivilege(
 			[][]interface{}{{int64(3), false}})
-		require.NoError(t, runPreparedAuthorizationCompile(t, ses, prepareStmt, innerPlan, false, true))
+		require.NoError(t, runPreparedAuthorizationCompile(t, ses, prepareStmt, innerPlan, false, true, bh))
 
 		bh.sql2result[roleGrantSQL] = newMrsForCheckUserGrant(nil)
-		require.Error(t, runPreparedAuthorizationCompile(t, ses, prepareStmt, innerPlan, false, true))
+		require.Error(t, runPreparedAuthorizationCompile(t, ses, prepareStmt, innerPlan, false, true, bh))
 
 		var roleGrantChecks int
 		for _, sql := range bh.executedSQLs {
@@ -428,6 +431,7 @@ func TestHandlePreparedExplainDoesNotRebuildUnderlyingStatement(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 106, "explain select ?")
 	defer prepareStmt.Close()
 
+	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_VAR_STRING), 0}
 	prepareStmt.params = vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("42"), false, cw.proc.Mp()))
 	_, queryPlan, savedStmt, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)

@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -24,9 +25,78 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	statspb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
+
+func TestUpdateChangedRowsPredicateCastsMixedNumericRHS(t *testing.T) {
+	ctx := NewMockOptimizer(false).CurrentContext()
+	stmts, err := mysql.Parse(ctx.GetContext(),
+		"UPDATE constraint_test.t_on_update_gen SET val = CASE WHEN id = 1 THEN 111 ELSE val END WHERE id IN (1,2)",
+		1)
+	require.NoError(t, err)
+	plan, err := BuildPlan(ctx, stmts[0], false)
+	require.NoError(t, err)
+
+	found := false
+	foundCast := false
+	for _, node := range plan.GetQuery().Nodes {
+		for _, project := range node.ProjectList {
+			require.NoError(t, planpb.VisitExprTree(project, func(expr *planpb.Expr) error {
+				fn := expr.GetF()
+				if fn != nil && fn.Func.GetObjName() == "cast" && expr.Typ.Id == int32(types.T_int32) && exprContainsFunc(expr, "case") {
+					foundCast = true
+				}
+				if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "<=>" || len(fn.Args) != 2 {
+					return nil
+				}
+				if fn.Args[0].Typ.Id == int32(types.T_int32) &&
+					fn.Args[1].Typ.Id == int32(types.T_int32) {
+					found = true
+				}
+				return nil
+			}))
+		}
+	}
+	require.True(t, found, "changed-row comparison must consume target-typed values")
+	require.True(t, foundCast, "mixed numeric RHS must be cast in its producer before changed-row comparison")
+}
+
+func TestOnUpdateReusesFinalVolatileAssignment(t *testing.T) {
+	for _, assignments := range []string{
+		"val = IF(RAND() < 0.5, 0, 1)",
+		"id = id, val = IF(RAND() < 0.5, 0, 1)",
+		"val = IF(RAND() < 0.5, 0, 1), id = id",
+		"t.val = IF(RAND() < 0.5, 0, 1)",
+		"t.id = t.id, t.val = IF(RAND() < 0.5, 0, 1)",
+	} {
+		t.Run(assignments, func(t *testing.T) {
+			ctx := NewMockOptimizer(false).CurrentContext()
+			target := "constraint_test.t_on_update_gen"
+			if strings.Contains(assignments, "t.") {
+				target += " AS t JOIN constraint_test.t_on_update_gen AS u ON t.id = u.id"
+			}
+			stmts, err := mysql.Parse(ctx.GetContext(), "UPDATE "+target+" SET "+assignments, 1)
+			require.NoError(t, err)
+			defer stmts[0].Free()
+			p, err := BuildPlan(ctx, stmts[0], false)
+			require.NoError(t, err)
+			calls := 0
+			for _, node := range p.GetQuery().Nodes {
+				for _, expr := range node.ProjectList {
+					require.NoError(t, planpb.VisitExprTree(expr, func(e *planpb.Expr) error {
+						if f := e.GetF(); f != nil && f.Func.GetObjName() == "rand" {
+							calls++
+						}
+						return nil
+					}))
+				}
+			}
+			require.Equal(t, 1, calls, "storage, generated columns and ON UPDATE must consume one materialized RHS")
+		})
+	}
+}
 
 func TestIrregularIndexAffectedByUpdate(t *testing.T) {
 	tableDef := &TableDef{

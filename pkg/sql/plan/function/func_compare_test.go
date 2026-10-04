@@ -47,6 +47,7 @@ func TestJsonComparisonParamPreservesPreparedScalarType(t *testing.T) {
 	expect := NewFunctionTestResult(types.T_json.ToType(), false,
 		[]string{encode(true), encode(false), encode(int64(7)), encode(1.25), ""}, []bool{false, false, false, false, true})
 	testCase := NewFunctionTestCase(proc, inputs, expect, normalizeJsonComparisonParam)
+	defer testCase.Free()
 	testCase.parameters[0].SetPrepareParamKinds([]vector.PrepareParamKind{
 		vector.PrepareParamBoolean,
 		vector.PrepareParamBoolean,
@@ -73,6 +74,7 @@ func TestJsonComparisonParamPreservesPreparedScalarType(t *testing.T) {
 		invalid := NewFunctionTestCase(proc,
 			[]FunctionTestInput{NewFunctionTestInput(types.T_text.ToType(), []string{"not-an-integer"}, nil)},
 			NewFunctionTestResult(types.T_json.ToType(), true, nil, nil), normalizeJsonComparisonParam)
+		defer invalid.Free()
 		invalid.parameters[0].SetPrepareParamKinds([]vector.PrepareParamKind{vector.PrepareParamInteger})
 		ok, info := invalid.Run()
 		require.True(t, ok, info)
@@ -193,7 +195,7 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 			t.Run(orientation.name, func(t *testing.T) {
 				for _, operator := range []struct {
 					name          string
-					fn            fEvalFn
+					fn            executeLogicOfOverload
 					expected      []bool
 					expectedNulls []bool
 				}{
@@ -845,7 +847,7 @@ func TestCharEqualityIgnoresRepresentationPadding(t *testing.T) {
 	}
 	for _, test := range []struct {
 		name string
-		fn   fEvalFn
+		fn   executeLogicOfOverload
 		want []bool
 	}{
 		{name: "equal", fn: equalFn, want: []bool{true, false}},
@@ -859,7 +861,7 @@ func TestCharEqualityIgnoresRepresentationPadding(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			expect := NewFunctionTestResult(types.T_bool.ToType(), false, test.want, nil)
 			testCase := NewFunctionTestCase(proc, inputs, expect, test.fn)
-			ok, info := testCase.Run()
+			ok, info := testCase.RunAndFree()
 			require.True(t, ok, info)
 		})
 	}
@@ -880,7 +882,7 @@ func TestDatetimeTimestampComparisonPreservesInstantSemantics(t *testing.T) {
 
 	tests := []struct {
 		name string
-		fn   fEvalFn
+		fn   executeLogicOfOverload
 		want bool
 	}{
 		{name: "equal", fn: equalFn, want: datetimeAsTimestamp == secondFoldTimestamp},
@@ -898,7 +900,7 @@ func TestDatetimeTimestampComparisonPreservesInstantSemantics(t *testing.T) {
 			}
 			expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{test.want, false}, []bool{false, true})
 			testCase := NewFunctionTestCase(proc, inputs, expect, test.fn)
-			ok, info := testCase.Run()
+			ok, info := testCase.RunAndFree()
 			require.True(t, ok, info)
 		})
 	}
@@ -911,7 +913,7 @@ func TestDatetimeTimestampComparisonPreservesInstantSemantics(t *testing.T) {
 		expect := NewFunctionTestResult(types.T_bool.ToType(), false,
 			[]bool{secondFoldTimestamp > datetimeAsTimestamp}, []bool{false})
 		testCase := NewFunctionTestCase(proc, inputs, expect, greatThanFn)
-		ok, info := testCase.Run()
+		ok, info := testCase.RunAndFree()
 		require.True(t, ok, info)
 	})
 
@@ -925,7 +927,7 @@ func TestDatetimeTimestampComparisonPreservesInstantSemantics(t *testing.T) {
 		}
 		expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true}, nil)
 		testCase := NewFunctionTestCase(proc, inputs, expect, equalFn)
-		ok, info := testCase.Run()
+		ok, info := testCase.RunAndFree()
 		require.True(t, ok, info)
 	})
 }
@@ -942,7 +944,7 @@ func TestJsonOrderingOperatorsUseExactComparison(t *testing.T) {
 
 	tests := []struct {
 		name  string
-		fn    fEvalFn
+		fn    executeLogicOfOverload
 		left  string
 		right string
 		want  bool
@@ -963,7 +965,7 @@ func TestJsonOrderingOperatorsUseExactComparison(t *testing.T) {
 			}
 			expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{test.want}, []bool{false})
 			testCase := NewFunctionTestCase(proc, inputs, expect, test.fn)
-			ok, info := testCase.Run()
+			ok, info := testCase.RunAndFree()
 			require.True(t, ok, info)
 		})
 	}
@@ -975,7 +977,7 @@ func TestJsonOrderingOperatorsUseExactComparison(t *testing.T) {
 		}
 		expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{true})
 		testCase := NewFunctionTestCase(proc, inputs, expect, lessThanFn)
-		ok, info := testCase.Run()
+		ok, info := testCase.RunAndFree()
 		require.True(t, ok, info)
 	})
 }
@@ -990,7 +992,7 @@ func TestJSONBinaryEqualityUsesSubtypeAndRawPayload(t *testing.T) {
 		require.NoError(t, err)
 		return string(encoded)
 	}
-	run := func(t *testing.T, fn fEvalFn, left, right bytejson.ByteJson, want bool) {
+	run := func(t *testing.T, fn executeLogicOfOverload, left, right bytejson.ByteJson, want bool) {
 		t.Helper()
 		inputs := []FunctionTestInput{
 			NewFunctionTestInput(types.T_json.ToType(), []string{encode(t, left)}, []bool{false}),
@@ -998,7 +1000,7 @@ func TestJSONBinaryEqualityUsesSubtypeAndRawPayload(t *testing.T) {
 		}
 		expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{want}, []bool{false})
 		testCase := NewFunctionTestCase(proc, inputs, expect, fn)
-		ok, info := testCase.Run()
+		ok, info := testCase.RunAndFree()
 		require.True(t, ok, info)
 	}
 
@@ -1040,7 +1042,7 @@ func TestVecF32EqualityDoesNotDependOnVarlenaStorage(t *testing.T) {
 			}
 			for _, fn := range []struct {
 				name string
-				eval fEvalFn
+				eval executeLogicOfOverload
 				want bool
 			}{
 				{name: "equal", eval: equalFn, want: test.want},
@@ -1050,7 +1052,7 @@ func TestVecF32EqualityDoesNotDependOnVarlenaStorage(t *testing.T) {
 				t.Run(fn.name, func(t *testing.T) {
 					expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{fn.want}, []bool{false})
 					testCase := NewFunctionTestCase(proc, inputs, expect, fn.eval)
-					ok, info := testCase.Run()
+					ok, info := testCase.RunAndFree()
 					require.True(t, ok, info)
 				})
 			}
@@ -1084,7 +1086,7 @@ func TestVecF64EqualityDoesNotDependOnVarlenaStorage(t *testing.T) {
 			}
 			for _, fn := range []struct {
 				name string
-				eval fEvalFn
+				eval executeLogicOfOverload
 				want bool
 			}{
 				{name: "equal", eval: equalFn, want: test.want},
@@ -1094,7 +1096,7 @@ func TestVecF64EqualityDoesNotDependOnVarlenaStorage(t *testing.T) {
 				t.Run(fn.name, func(t *testing.T) {
 					expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{fn.want}, []bool{false})
 					testCase := NewFunctionTestCase(proc, inputs, expect, fn.eval)
-					ok, info := testCase.Run()
+					ok, info := testCase.RunAndFree()
 					require.True(t, ok, info)
 				})
 			}
@@ -1112,7 +1114,7 @@ func TestNarrowFloatArrayEqualityUsesElementSemantics(t *testing.T) {
 		t.Helper()
 		for _, fn := range []struct {
 			name string
-			eval fEvalFn
+			eval executeLogicOfOverload
 			want bool
 		}{
 			{name: "equal", eval: equalFn, want: want},
@@ -1122,7 +1124,7 @@ func TestNarrowFloatArrayEqualityUsesElementSemantics(t *testing.T) {
 			t.Run(fn.name, func(t *testing.T) {
 				expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{fn.want}, []bool{false})
 				testCase := NewFunctionTestCase(proc, inputs, expect, fn.eval)
-				ok, info := testCase.Run()
+				ok, info := testCase.RunAndFree()
 				require.True(t, ok, info)
 			})
 		}
@@ -1175,7 +1177,7 @@ func TestOperatorOpBitAndUint64Fn(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	fcTC := NewFunctionTestCase(proc,
 		tc.inputs, tc.expect, operatorOpBitAndUint64Fn)
-	s, info := fcTC.Run()
+	s, info := fcTC.RunAndFree()
 	require.True(t, s, info, tc.info)
 }
 
@@ -1198,7 +1200,7 @@ func TestOperatorOpBitOrUint64Fn(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	fcTC := NewFunctionTestCase(proc,
 		tc.inputs, tc.expect, operatorOpBitOrUint64Fn)
-	s, info := fcTC.Run()
+	s, info := fcTC.RunAndFree()
 	require.True(t, s, info, tc.info)
 }
 
@@ -1221,7 +1223,7 @@ func TestOperatorOpBitXorUint64Fn(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	fcTC := NewFunctionTestCase(proc,
 		tc.inputs, tc.expect, operatorOpBitXorUint64Fn)
-	s, info := fcTC.Run()
+	s, info := fcTC.RunAndFree()
 	require.True(t, s, info, tc.info)
 }
 
@@ -1245,7 +1247,7 @@ func TestOperatorOpBitRightShiftUint64Fn(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	fcTC := NewFunctionTestCase(proc,
 		tc.inputs, tc.expect, operatorOpBitShiftRightUint64Fn)
-	s, info := fcTC.Run()
+	s, info := fcTC.RunAndFree()
 	require.True(t, s, info, tc.info)
 }
 
@@ -1269,7 +1271,7 @@ func TestOperatorOpBitLeftShiftUint64Fn(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	fcTC := NewFunctionTestCase(proc,
 		tc.inputs, tc.expect, operatorOpBitShiftLeftUint64Fn)
-	s, info := fcTC.Run()
+	s, info := fcTC.RunAndFree()
 	require.True(t, s, info, tc.info)
 }
 
@@ -1294,7 +1296,7 @@ func TestNullSafeEqualFn(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	fcTCInt64 := NewFunctionTestCase(proc,
 		tcInt64.inputs, tcInt64.expect, nullSafeEqualFn)
-	s, info := fcTCInt64.Run()
+	s, info := fcTCInt64.RunAndFree()
 	require.True(t, s, info, tcInt64.info)
 
 	// Float64 Test
@@ -1311,7 +1313,7 @@ func TestNullSafeEqualFn(t *testing.T) {
 	}
 	fcTCFloat := NewFunctionTestCase(proc,
 		tcFloat.inputs, tcFloat.expect, nullSafeEqualFn)
-	s, info = fcTCFloat.Run()
+	s, info = fcTCFloat.RunAndFree()
 	require.True(t, s, info, tcFloat.info)
 
 	// Varchar Test
@@ -1328,7 +1330,7 @@ func TestNullSafeEqualFn(t *testing.T) {
 	}
 	fcTCStr := NewFunctionTestCase(proc,
 		tcStr.inputs, tcStr.expect, nullSafeEqualFn)
-	s, info = fcTCStr.Run()
+	s, info = fcTCStr.RunAndFree()
 	require.True(t, s, info, tcStr.info)
 
 	// Bool Test
@@ -1345,7 +1347,7 @@ func TestNullSafeEqualFn(t *testing.T) {
 	}
 	fcTCBool := NewFunctionTestCase(proc,
 		tcBool.inputs, tcBool.expect, nullSafeEqualFn)
-	s, info = fcTCBool.Run()
+	s, info = fcTCBool.RunAndFree()
 	require.True(t, s, info, tcBool.info)
 
 	// Date Test
@@ -1362,7 +1364,7 @@ func TestNullSafeEqualFn(t *testing.T) {
 	}
 	fcTCDate := NewFunctionTestCase(proc,
 		tcDate.inputs, tcDate.expect, nullSafeEqualFn)
-	s, info = fcTCDate.Run()
+	s, info = fcTCDate.RunAndFree()
 	require.True(t, s, info, tcDate.info)
 
 	// Time Test
@@ -1379,7 +1381,7 @@ func TestNullSafeEqualFn(t *testing.T) {
 	}
 	fcTCTime := NewFunctionTestCase(proc,
 		tcTime.inputs, tcTime.expect, nullSafeEqualFn)
-	s, info = fcTCTime.Run()
+	s, info = fcTCTime.RunAndFree()
 	require.True(t, s, info, tcTime.info)
 
 	// Timestamp Test
@@ -1396,7 +1398,7 @@ func TestNullSafeEqualFn(t *testing.T) {
 	}
 	fcTCTimestamp := NewFunctionTestCase(proc,
 		tcTimestamp.inputs, tcTimestamp.expect, nullSafeEqualFn)
-	s, info = fcTCTimestamp.Run()
+	s, info = fcTCTimestamp.RunAndFree()
 	require.True(t, s, info, tcTimestamp.info)
 
 	// Decimal64 Test
@@ -1413,7 +1415,7 @@ func TestNullSafeEqualFn(t *testing.T) {
 	}
 	fcTCDecimal64 := NewFunctionTestCase(proc,
 		tcDecimal64.inputs, tcDecimal64.expect, nullSafeEqualFn)
-	s, info = fcTCDecimal64.Run()
+	s, info = fcTCDecimal64.RunAndFree()
 	require.True(t, s, info, tcDecimal64.info)
 
 	// Decimal128 Test
@@ -1430,7 +1432,7 @@ func TestNullSafeEqualFn(t *testing.T) {
 	}
 	fcTCDecimal128 := NewFunctionTestCase(proc,
 		tcDecimal128.inputs, tcDecimal128.expect, nullSafeEqualFn)
-	s, info = fcTCDecimal128.Run()
+	s, info = fcTCDecimal128.RunAndFree()
 	require.True(t, s, info, tcDecimal128.info)
 
 	// UUID Test
@@ -1447,7 +1449,7 @@ func TestNullSafeEqualFn(t *testing.T) {
 	}
 	fcTCUuid := NewFunctionTestCase(proc,
 		tcUuid.inputs, tcUuid.expect, nullSafeEqualFn)
-	s, info = fcTCUuid.Run()
+	s, info = fcTCUuid.RunAndFree()
 	require.True(t, s, info, tcUuid.info)
 
 	// Int8 Test
@@ -1461,7 +1463,7 @@ func TestNullSafeEqualFn(t *testing.T) {
 			[]bool{true, false, false, false, true}, []bool{false, false, false, false, false}),
 	}
 	fcTCInt8 := NewFunctionTestCase(proc, tcInt8.inputs, tcInt8.expect, nullSafeEqualFn)
-	s, info = fcTCInt8.Run()
+	s, info = fcTCInt8.RunAndFree()
 	require.True(t, s, info, tcInt8.info)
 
 	// Int16 Test
@@ -1475,7 +1477,7 @@ func TestNullSafeEqualFn(t *testing.T) {
 			[]bool{true, false, false, false, true}, []bool{false, false, false, false, false}),
 	}
 	fcTCInt16 := NewFunctionTestCase(proc, tcInt16.inputs, tcInt16.expect, nullSafeEqualFn)
-	s, info = fcTCInt16.Run()
+	s, info = fcTCInt16.RunAndFree()
 	require.True(t, s, info, tcInt16.info)
 
 	// Int32 Test
@@ -1489,7 +1491,7 @@ func TestNullSafeEqualFn(t *testing.T) {
 			[]bool{true, false, false, false, true}, []bool{false, false, false, false, false}),
 	}
 	fcTCInt32 := NewFunctionTestCase(proc, tcInt32.inputs, tcInt32.expect, nullSafeEqualFn)
-	s, info = fcTCInt32.Run()
+	s, info = fcTCInt32.RunAndFree()
 	require.True(t, s, info, tcInt32.info)
 
 	// Uint8 Test
@@ -1503,7 +1505,7 @@ func TestNullSafeEqualFn(t *testing.T) {
 			[]bool{true, false, false, false, true}, []bool{false, false, false, false, false}),
 	}
 	fcTCUint8 := NewFunctionTestCase(proc, tcUint8.inputs, tcUint8.expect, nullSafeEqualFn)
-	s, info = fcTCUint8.Run()
+	s, info = fcTCUint8.RunAndFree()
 	require.True(t, s, info, tcUint8.info)
 
 	// Uint16 Test
@@ -1517,7 +1519,7 @@ func TestNullSafeEqualFn(t *testing.T) {
 			[]bool{true, false, false, false, true}, []bool{false, false, false, false, false}),
 	}
 	fcTCUint16 := NewFunctionTestCase(proc, tcUint16.inputs, tcUint16.expect, nullSafeEqualFn)
-	s, info = fcTCUint16.Run()
+	s, info = fcTCUint16.RunAndFree()
 	require.True(t, s, info, tcUint16.info)
 
 	// Uint32 Test
@@ -1531,7 +1533,7 @@ func TestNullSafeEqualFn(t *testing.T) {
 			[]bool{true, false, false, false, true}, []bool{false, false, false, false, false}),
 	}
 	fcTCUint32 := NewFunctionTestCase(proc, tcUint32.inputs, tcUint32.expect, nullSafeEqualFn)
-	s, info = fcTCUint32.Run()
+	s, info = fcTCUint32.RunAndFree()
 	require.True(t, s, info, tcUint32.info)
 
 	// Uint64 Test
@@ -1545,7 +1547,7 @@ func TestNullSafeEqualFn(t *testing.T) {
 			[]bool{true, false, false, false, true}, []bool{false, false, false, false, false}),
 	}
 	fcTCUint64 := NewFunctionTestCase(proc, tcUint64.inputs, tcUint64.expect, nullSafeEqualFn)
-	s, info = fcTCUint64.Run()
+	s, info = fcTCUint64.RunAndFree()
 	require.True(t, s, info, tcUint64.info)
 
 	// Float32 Test
@@ -1559,7 +1561,7 @@ func TestNullSafeEqualFn(t *testing.T) {
 			[]bool{true, false, false, true}, []bool{false, false, false, false}),
 	}
 	fcTCFloat32 := NewFunctionTestCase(proc, tcFloat32.inputs, tcFloat32.expect, nullSafeEqualFn)
-	s, info = fcTCFloat32.Run()
+	s, info = fcTCFloat32.RunAndFree()
 	require.True(t, s, info, tcFloat32.info)
 
 	// Enum Test
@@ -1573,7 +1575,7 @@ func TestNullSafeEqualFn(t *testing.T) {
 			[]bool{true, false, false, false, true}, []bool{false, false, false, false, false}),
 	}
 	fcTCEnum := NewFunctionTestCase(proc, tcEnum.inputs, tcEnum.expect, nullSafeEqualFn)
-	s, info = fcTCEnum.Run()
+	s, info = fcTCEnum.RunAndFree()
 	require.True(t, s, info, tcEnum.info)
 
 	// Datetime Test
@@ -1589,7 +1591,7 @@ func TestNullSafeEqualFn(t *testing.T) {
 			[]bool{true, false, false, true}, []bool{false, false, false, false}),
 	}
 	fcTCDatetime := NewFunctionTestCase(proc, tcDatetime.inputs, tcDatetime.expect, nullSafeEqualFn)
-	s, info = fcTCDatetime.Run()
+	s, info = fcTCDatetime.RunAndFree()
 	require.True(t, s, info, tcDatetime.info)
 
 	// Year Test
@@ -1605,7 +1607,7 @@ func TestNullSafeEqualFn(t *testing.T) {
 			[]bool{true, false, false, true}, []bool{false, false, false, false}),
 	}
 	fcTCYear := NewFunctionTestCase(proc, tcYear.inputs, tcYear.expect, nullSafeEqualFn)
-	s, info = fcTCYear.Run()
+	s, info = fcTCYear.RunAndFree()
 	require.True(t, s, info, tcYear.info)
 
 	// Float32 with Scale Test
@@ -1621,7 +1623,7 @@ func TestNullSafeEqualFn(t *testing.T) {
 			[]bool{true, true, true}, []bool{false, false, false}),
 	}
 	fcTCFloat32Scale := NewFunctionTestCase(proc, tcFloat32Scale.inputs, tcFloat32Scale.expect, nullSafeEqualFn)
-	s, info = fcTCFloat32Scale.Run()
+	s, info = fcTCFloat32Scale.RunAndFree()
 	require.True(t, s, info, tcFloat32Scale.info)
 
 	// JSON Test
@@ -1635,7 +1637,7 @@ func TestNullSafeEqualFn(t *testing.T) {
 			[]bool{true, true}, []bool{false, false}),
 	}
 	fcTCJson := NewFunctionTestCase(proc, tcJson.inputs, tcJson.expect, nullSafeEqualFn)
-	s, info = fcTCJson.Run()
+	s, info = fcTCJson.RunAndFree()
 	require.True(t, s, info, tcJson.info)
 
 	// Bit Test
@@ -1649,7 +1651,7 @@ func TestNullSafeEqualFn(t *testing.T) {
 			[]bool{true, false, false, false, true}, []bool{false, false, false, false, false}),
 	}
 	fcTCBit := NewFunctionTestCase(proc, tcBit.inputs, tcBit.expect, nullSafeEqualFn)
-	s, info = fcTCBit.Run()
+	s, info = fcTCBit.RunAndFree()
 	require.True(t, s, info, tcBit.info)
 
 	// Rowid Test
@@ -1665,7 +1667,7 @@ func TestNullSafeEqualFn(t *testing.T) {
 			[]bool{true, false, false, true}, []bool{false, false, false, false}),
 	}
 	fcTCRowid := NewFunctionTestCase(proc, tcRowid.inputs, tcRowid.expect, nullSafeEqualFn)
-	s, info = fcTCRowid.Run()
+	s, info = fcTCRowid.RunAndFree()
 	require.True(t, s, info, tcRowid.info)
 
 	// Array Float32 Test
@@ -1681,7 +1683,7 @@ func TestNullSafeEqualFn(t *testing.T) {
 			[]bool{true, false, false, true}, []bool{false, false, false, false}),
 	}
 	fcTCArrF32 := NewFunctionTestCase(proc, tcArrF32.inputs, tcArrF32.expect, nullSafeEqualFn)
-	s, info = fcTCArrF32.Run()
+	s, info = fcTCArrF32.RunAndFree()
 	require.True(t, s, info, tcArrF32.info)
 
 	// Array Float64 Test
@@ -1697,7 +1699,7 @@ func TestNullSafeEqualFn(t *testing.T) {
 			[]bool{true, false, false, true}, []bool{false, false, false, false}),
 	}
 	fcTCArrF64 := NewFunctionTestCase(proc, tcArrF64.inputs, tcArrF64.expect, nullSafeEqualFn)
-	s, info = fcTCArrF64.Run()
+	s, info = fcTCArrF64.RunAndFree()
 	require.True(t, s, info, tcArrF64.info)
 
 	// Narrow array types (bf16/f16/int8/uint8) — same <=> equality pattern.
@@ -1714,7 +1716,7 @@ func TestNullSafeEqualFn(t *testing.T) {
 				[]bool{true, false, false, true}, []bool{false, false, false, false}),
 		}
 		fc := NewFunctionTestCase(proc, tc.inputs, tc.expect, nullSafeEqualFn)
-		s, info = fc.Run()
+		s, info = fc.RunAndFree()
 		require.True(t, s, info, tc.info)
 	}
 	{
@@ -1730,7 +1732,7 @@ func TestNullSafeEqualFn(t *testing.T) {
 				[]bool{true, false, false, true}, []bool{false, false, false, false}),
 		}
 		fc := NewFunctionTestCase(proc, tc.inputs, tc.expect, nullSafeEqualFn)
-		s, info = fc.Run()
+		s, info = fc.RunAndFree()
 		require.True(t, s, info, tc.info)
 	}
 	{
@@ -1746,7 +1748,7 @@ func TestNullSafeEqualFn(t *testing.T) {
 				[]bool{true, false, false, true}, []bool{false, false, false, false}),
 		}
 		fc := NewFunctionTestCase(proc, tc.inputs, tc.expect, nullSafeEqualFn)
-		s, info = fc.Run()
+		s, info = fc.RunAndFree()
 		require.True(t, s, info, tc.info)
 	}
 	{
@@ -1762,7 +1764,7 @@ func TestNullSafeEqualFn(t *testing.T) {
 				[]bool{true, false, false, true}, []bool{false, false, false, false}),
 		}
 		fc := NewFunctionTestCase(proc, tc.inputs, tc.expect, nullSafeEqualFn)
-		s, info = fc.Run()
+		s, info = fc.RunAndFree()
 		require.True(t, s, info, tc.info)
 	}
 }

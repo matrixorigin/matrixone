@@ -39,6 +39,7 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	pbstats "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -471,7 +472,13 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		table.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{}).AnyTimes()
 		table.EXPECT().CopyTableDef(gomock.Any()).Return(&plan.TableDef{}).AnyTimes()
-		table.EXPECT().Stats(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+		var observedStats *pbstats.StatsInfo
+		statsCalls := 0
+		table.EXPECT().Stats(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(context.Context, bool) (*pbstats.StatsInfo, error) {
+				statsCalls++
+				return observedStats, nil
+			}).AnyTimes()
 		table.EXPECT().TableColumns(gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().GetTableID(gomock.Any()).Return(uint64(10)).AnyTimes()
 		table.EXPECT().GetEngineType().Return(engine.Disttae).AnyTimes()
@@ -513,6 +520,53 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		stats, err := tcc.Stats(&plan2.ObjectRef{SchemaName: "abc", ObjName: "t1"}, &plan2.Snapshot{TS: ts})
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(stats, convey.ShouldBeNil)
+
+		workspace := newTestWorkspace()
+		txnOperator.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
+		ses.proc.Base.TxnOperator = txnOperator
+		tcc.execCtx.proc = ses.proc
+		obj := &plan.ObjectRef{Obj: 10, SchemaName: "abc", ObjName: "t1"}
+		tableDef := &plan.TableDef{Version: 7}
+		current := &pbstats.StatsInfo{TableName: "t1", TableCnt: 5,
+			NdvMap: map[string]float64{"v": 5}, NullCntMap: map[string]uint64{"v": 1}}
+		observedStats = current
+		got, err := tcc.StatsWithTableDef(obj, tableDef, nil)
+		require.NoError(t, err)
+		require.Same(t, current, got)
+		before := statsCalls
+		got, err = tcc.StatsWithTableDef(obj, tableDef, nil)
+		require.NoError(t, err)
+		require.Same(t, current, got)
+		require.Equal(t, before, statsCalls, "completed readonly stats retain the 3s fast path")
+		snapshot := &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 1}}
+		for _, count := range []float64{2, 0} {
+			historical := &pbstats.StatsInfo{TableName: "t1", TableCnt: count,
+				NdvMap: map[string]float64{"v": count}, NullCntMap: map[string]uint64{"v": 0}}
+			observedStats = historical
+			got, err = tcc.StatsWithTableDef(obj, tableDef, snapshot)
+			require.NoError(t, err)
+			require.Same(t, historical, got, "snapshot named empty keeps its completed marker")
+			wrapper := ses.GetStatsCache().Get(10)
+			require.Equal(t, historical.NdvMap, wrapper.GetStats().NdvMap, "NDV consumers use this planning pass's snapshot maps")
+			require.Empty(t, wrapper.GetStats().TableName)
+			require.Equal(t, "t1", historical.TableName, "published input is immutable")
+			observedStats = current
+			before = statsCalls
+			got, err = tcc.StatsWithTableDef(obj, tableDef, nil)
+			require.NoError(t, err)
+			require.Same(t, current, got)
+			require.Equal(t, before+1, statsCalls, "snapshot wrapper cannot serve the current 3s fast hit")
+		}
+		workspace.readonly = false
+		observedStats = &pbstats.StatsInfo{TableCnt: 10, AccurateObjectNumber: 1}
+		got, err = tcc.StatsWithTableDef(obj, tableDef, nil)
+		require.NoError(t, err)
+		require.Same(t, observedStats, got, "own writes bypass old completed stats")
+		workspace.readonly = true
+		before = statsCalls
+		_, err = tcc.StatsWithTableDef(obj, tableDef, nil)
+		require.NoError(t, err)
+		require.Equal(t, before+1, statsCalls, "anonymous overlay is not cache-complete even with accurate objects")
 	})
 }
 
@@ -701,7 +755,7 @@ func TestSession_Migrate(t *testing.T) {
 			txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 			txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 			txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
-			txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
 			txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 			txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 			txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()

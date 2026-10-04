@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -451,6 +452,63 @@ func TestBlockDataReadInnerPersistedVectorTopN(t *testing.T) {
 		require.Equal(t, uint64(2), top.Stats.StorageFilterOutputRows)
 		output.Clean(queryMP)
 	})
+	for _, tc := range []struct {
+		name    string
+		columns []uint16
+		types   []types.Type
+		scoped  bool
+	}{
+		{
+			name:    "fixed membership retains legacy callback",
+			columns: []uint16{0},
+			types:   []types.Type{typesByColumn[0]},
+		},
+		{
+			name:    "varlen membership uses scoped binding",
+			columns: []uint16{2, 0},
+			types:   []types.Type{typesByColumn[2], typesByColumn[0]},
+			scoped:  true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			memberIDs := vector.NewVec(types.T_int32.ToType())
+			defer memberIDs.Free(queryMP)
+			require.NoError(t, vector.AppendFixedList(memberIDs, []int32{100, 102, 104}, nil, queryMP))
+			data, err := docfilter.Build(memberIDs)
+			require.NoError(t, err)
+			member, err := docfilter.New(data)
+			require.NoError(t, err)
+			defer member.Free()
+			output := newOutput()
+			defer output.Clean(queryMP)
+			top := newTop()
+			top.Stats = new(objectio.IndexReaderTopStats)
+			callbackCalls := 0
+			filter := objectio.BlockReadFilter{
+				Valid: true, ExactMembership: true,
+				CachedMembership: objectio.NewReadFilterMembership(nil, member),
+				UnSortedSearchFunc: func(vectors containers.Vectors) []int64 {
+					require.False(t, tc.scoped, "varlen membership must not use the snapshot callback")
+					callbackCalls++
+					require.Equal(t, []int32{100, 101, 102, 103, 104},
+						vector.MustFixedColWithTypeCheck[int32](&vectors[0]))
+					return []int64{0, 2, 4}
+				},
+			}
+			require.NotNil(t, filter.CachedMembership)
+			require.NoError(t, BlockDataRead(ctx, &info, &blockReadTestDataSource{deleted: []uint64{2}},
+				columns, columnTypes, 1, timestamp.Timestamp{}, tc.columns, tc.types,
+				filter, top, 0, "entries", output, containers.NewVectors(len(columns)+1), queryMP, fs))
+			assertOutput(t, output, []int64{0, 4}, []float64{100, 9})
+			require.Equal(t, uint64(5), top.Stats.StorageFilterInputRows)
+			require.Equal(t, uint64(2), top.Stats.StorageFilterOutputRows)
+			if tc.scoped {
+				require.Zero(t, callbackCalls)
+			} else {
+				require.Equal(t, 1, callbackCalls)
+			}
+		})
+	}
 	t.Run("exact membership all tombstoned", func(t *testing.T) {
 		output := newOutput()
 		filter := objectio.BlockReadFilter{
@@ -975,6 +1033,8 @@ func TestBlockDataReadInnerAppendableVisibility(t *testing.T) {
 	require.True(t, usable)
 	require.True(t, matched)
 
+	observed := &filterPolicyFS{FileService: fs}
+	filterPolicy := fileservice.Policy(fileservice.SkipFullFilePreloads | fileservice.SkipDiskCacheWrites)
 	pointSearch := objectio.NewReadFilterSearch(types.T_varchar, [][]byte{
 		[]byte("k1"), []byte("k2"), []byte("k3"),
 	})
@@ -991,9 +1051,13 @@ func TestBlockDataReadInnerAppendableVisibility(t *testing.T) {
 		false,
 		cacheVectors,
 		queryMP,
-		fs,
+		observed,
 		nil,
+		filterPolicy,
 	)
+
+	require.Contains(t, observed.policies, filterPolicy)
+	observed.policies = nil
 	require.NoError(t, err)
 	require.Equal(t, []int64{2}, sels)
 
@@ -1013,9 +1077,13 @@ func TestBlockDataReadInnerAppendableVisibility(t *testing.T) {
 		false,
 		cacheVectors,
 		queryMP,
-		fs,
+		observed,
 		prefixStats,
+		filterPolicy,
 	)
+
+	require.Contains(t, observed.policies, filterPolicy)
+	observed.policies = nil
 	require.NoError(t, err)
 	require.Equal(t, []int64{0, 2, 3, 4}, prefixSels)
 	require.Equal(t, uint64(5), prefixStats.StorageFilterInputRows)
@@ -1035,9 +1103,13 @@ func TestBlockDataReadInnerAppendableVisibility(t *testing.T) {
 		false,
 		cacheVectors,
 		queryMP,
-		fs,
+		observed,
 		noMatchStats,
+		filterPolicy,
 	)
+
+	require.Contains(t, observed.policies, filterPolicy)
+	observed.policies = nil
 	require.NoError(t, err)
 	require.Empty(t, noMatchSels)
 	require.Equal(t, uint64(5), noMatchStats.StorageFilterInputRows)
@@ -1060,9 +1132,13 @@ func TestBlockDataReadInnerAppendableVisibility(t *testing.T) {
 		false,
 		cacheVectors,
 		queryMP,
-		fs,
+		observed,
 		topStats,
+		filterPolicy,
 	)
+
+	require.Contains(t, observed.policies, filterPolicy)
+	observed.policies = nil
 	require.NoError(t, err)
 	require.Equal(t, []int64{0, 2}, statsSels)
 	require.Equal(t, uint64(5), topStats.StorageFilterInputRows)
@@ -1819,4 +1895,14 @@ func TestHandleOrderByLimitOnSelectRows_Narrow(t *testing.T) {
 		require.Equalf(t, int64(1), resSels[0], "%s closest", c.name)
 		require.Equalf(t, int64(2), resSels[1], "%s next", c.name)
 	}
+}
+
+type filterPolicyFS struct {
+	fileservice.FileService
+	policies []fileservice.Policy
+}
+
+func (fs *filterPolicyFS) Read(ctx context.Context, v *fileservice.IOVector) error {
+	fs.policies = append(fs.policies, v.Policy)
+	return fs.FileService.Read(ctx, v)
 }

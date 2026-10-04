@@ -44,6 +44,7 @@ type cloneDatabaseSource struct {
 	fkTableMap         map[string]*tableInfo
 	hasFkCycle         bool
 	snapshot           *plan.Snapshot
+	requestSnapshot    *plan.Snapshot
 	opAccountId        uint32
 	toAccountId        uint32
 }
@@ -550,7 +551,10 @@ func collectCloneDatabaseSource(
 	if err := validateCloneDatabaseAccounts(ctx, accounts); err != nil {
 		return source, err
 	}
+	// A subscription uses the publisher account to read physical objects, but
+	// the caller's snapshot still names the subscriber's logical database.
 	snapshot := accounts.snapshot
+	requestSnapshot := snapshot
 
 	srcDBName := stmt.SrcDatabase.String()
 	subMeta, err := ses.GetTxnCompileCtx().GetSubscriptionMeta(srcDBName, snapshot)
@@ -560,6 +564,8 @@ func collectCloneDatabaseSource(
 	if subMeta != nil {
 		srcDBName = subMeta.DbName
 		if snapshot != nil {
+			copy := *snapshot
+			snapshot = &copy
 			snapshot.Tenant = &plan.SnapshotTenant{TenantID: uint32(subMeta.AccountId)}
 		} else {
 			snapshot = &plan.Snapshot{
@@ -597,7 +603,7 @@ func collectCloneDatabaseSource(
 	}
 	mergeFkDeps(fkDeps, schemaFkDeps)
 	sortedFkTbls, hasFkCycle := cloneFkTableOrder(fkDeps)
-	fkTableMap, err := getTableInfoMap(ctx, ses.GetService(), bh, snapshot, srcDBName, "", sortedFkTbls)
+	fkTableMap, err := getTableInfoMap(ctx, ses.GetService(), bh, snapshot, srcDBName, "", sortedFkTbls, nil)
 	if err != nil {
 		return source, err
 	}
@@ -616,6 +622,7 @@ func collectCloneDatabaseSource(
 	source.fkTableMap = fkTableMap
 	source.hasFkCycle = hasFkCycle
 	source.snapshot = snapshot
+	source.requestSnapshot = requestSnapshot
 	source.opAccountId = accounts.opAccountId
 	source.toAccountId = accounts.toAccountId
 	return source, nil

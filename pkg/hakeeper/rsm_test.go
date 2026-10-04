@@ -1792,7 +1792,7 @@ func TestAcknowledgedCommandDeliverySurvivesLostResponse(t *testing.T) {
 
 	// The proposal commits and returns the command, but model a lost response by
 	// deliberately ignoring it. The durable batch must remain pollable.
-	_ = heartbeat(0, true)
+	require.Equal(t, HeartbeatCheckNeeded, heartbeat(0, true).Value)
 	value, err := rsm.Lookup(&ScheduleCommandQuery{UUID: first.UUID})
 	require.NoError(t, err)
 	pending := value.(*pb.CommandBatch)
@@ -2500,4 +2500,204 @@ func TestHandleLogShardUpdate(t *testing.T) {
 	shards := tsm1.state.LogState.Shards
 	_, ok := shards[10]
 	assert.True(t, ok)
+}
+
+func TestCheckerStateConfigurationSnapshotsAreIndependent(t *testing.T) {
+	sm := NewStateMachine(DefaultHAKeeperShardID, 1).(*stateMachine)
+	config := &pb.ConfigData{Content: map[string]*pb.ConfigItem{
+		"setting": {Name: "setting", CurrentValue: "before"},
+	}}
+	sm.state.CNState.Stores["cn"] = pb.CNStoreInfo{ConfigData: config}
+	sm.state.TNState.Stores["tn"] = pb.TNStoreInfo{ConfigData: config}
+	sm.state.LogState.Stores["log"] = pb.LogStoreInfo{ConfigData: config}
+	sm.state.ProxyState.Stores["proxy"] = pb.ProxyStore{ConfigData: config}
+	sm.state.NextIDByKey["key"] = 7
+	sm.state.Tick = 11
+	lookup := func() *pb.CheckerState {
+		t.Helper()
+		value, err := sm.Lookup(&StateQuery{})
+		require.NoError(t, err)
+		return value.(*pb.CheckerState)
+	}
+	first := lookup()
+	require.Equal(t, uint64(11), first.Tick)
+	require.Equal(t, uint64(7), first.NextIDByKey["key"])
+	// Updating live state must not mutate any earlier snapshot, including
+	// configuration nested inside map values for every service kind.
+	config.Content["setting"].CurrentValue = "after"
+	sm.state.NextIDByKey["key"] = 9
+	second := lookup()
+	for _, pair := range [][2]*pb.ConfigData{
+		{first.CNState.Stores["cn"].ConfigData, second.CNState.Stores["cn"].ConfigData},
+		{first.TNState.Stores["tn"].ConfigData, second.TNState.Stores["tn"].ConfigData},
+		{first.LogState.Stores["log"].ConfigData, second.LogState.Stores["log"].ConfigData},
+		{first.ProxyState.Stores["proxy"].ConfigData, second.ProxyState.Stores["proxy"].ConfigData},
+	} {
+		require.Equal(t, "before", pair[0].Content["setting"].CurrentValue)
+		require.Equal(t, "after", pair[1].Content["setting"].CurrentValue)
+		pair[0].Content["setting"].CurrentValue = "snapshot-only"
+	}
+	require.Equal(t, "after", config.Content["setting"].CurrentValue)
+	require.Equal(t, uint64(9), second.NextIDByKey["key"])
+	first.NextIDByKey["key"] = 100
+	require.Equal(t, uint64(9), sm.state.NextIDByKey["key"])
+	// Typed-nil queries previously selected the full snapshot as well.
+	value, err := sm.Lookup((*StateQuery)(nil))
+	require.NoError(t, err)
+	require.Equal(t, lookup(), value)
+	for _, state := range []pb.HAKeeperState{
+		pb.HAKeeperCreated, pb.HAKeeperBootstrapping,
+		pb.HAKeeperBootstrapCommandsReceived, pb.HAKeeperBootstrapFailed,
+		pb.HAKeeperRunning,
+	} {
+		sm.state.State = state
+		value, err := sm.Lookup(&StateQuery{StateOnly: true})
+		require.NoError(t, err)
+		projected := value.(*pb.CheckerState)
+		require.Equal(t, &pb.CheckerState{State: state}, projected)
+		// The result is neither cached nor an alias of live state.
+		projected.State = pb.HAKeeperState(-1)
+		require.Equal(t, state, lookup().State)
+		fresh, err := sm.Lookup(&StateQuery{StateOnly: true})
+		require.NoError(t, err)
+		require.Equal(t, &pb.CheckerState{State: state}, fresh)
+	}
+}
+
+func TestHeartbeatCheckHintTracksAcceptedReadiness(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	logHB := pb.LogStoreHeartbeat{UUID: "log", Replicas: []pb.LogReplicaInfo{{LogShardInfo: pb.LogShardInfo{ShardID: 0}}}}
+	applyLog := func(want uint64) {
+		t.Helper()
+		data, err := logHB.Marshal()
+		require.NoError(t, err)
+		result, err := rsm.Update(sm.Entry{Index: rsm.state.Index + 1, Cmd: GetLogStoreHeartbeatCmd(data)})
+		require.NoError(t, err)
+		require.Equal(t, want, result.Value)
+	}
+	applyLog(HeartbeatCheckNeeded)
+	applyLog(0)
+	logHB.Replicas = append(logHB.Replicas, pb.LogReplicaInfo{LogShardInfo: pb.LogShardInfo{ShardID: 1}})
+	applyLog(HeartbeatCheckNeeded)
+	logHB.ServiceAddress = "changed-address"
+	logHB.Replicas[1].Term++
+	rsm.state.Tick++
+	applyLog(0)
+	for _, change := range []func(){
+		func() { logHB.CommandDeliverySupported = true },
+		func() { logHB.ViewMetadataAdmissionSupported = true },
+		func() { logHB.ViewMetadataAdmissionProtocolV3Supported = true },
+	} {
+		change()
+		applyLog(HeartbeatCheckNeeded)
+		applyLog(0)
+	}
+	rsm.state.CommandDeliveryPreparing = true
+	rsm.state.ViewMetadataAdmissionPreparing = true
+	// A newly committed barrier must re-observe stable capability heartbeats.
+	applyLog(HeartbeatCheckNeeded)
+	applyLog(0)
+	rsm.state.CommandDeliveryPreparing = false
+	rsm.state.ViewMetadataAdmissionPreparing = false
+
+	tn := pb.TNStoreHeartbeat{UUID: "tn"}
+	applyTN := func(want uint64) {
+		t.Helper()
+		data, err := tn.Marshal()
+		require.NoError(t, err)
+		result, err := rsm.Update(sm.Entry{Index: rsm.state.Index + 1, Cmd: GetTNStoreHeartbeatCmd(data)})
+		require.NoError(t, err)
+		require.Equal(t, want, result.Value)
+	}
+	applyTN(HeartbeatCheckNeeded)
+	applyTN(0)
+	tn.Shards = []pb.TNShardInfo{{}}
+	applyTN(HeartbeatCheckNeeded)
+	rsm.state.Tick++
+	tn.ServiceAddress = "changed-address"
+	tn.Shards[0].ReplicaID++
+	applyTN(0)
+	tn.Shards = nil
+	applyTN(HeartbeatCheckNeeded)
+	applyTN(0)
+	tn.CommandDeliveryAckSupported = true
+	applyTN(HeartbeatCheckNeeded)
+	applyTN(0)
+	rsm.state.CommandDeliveryPreparing = true
+	applyTN(HeartbeatCheckNeeded)
+	applyTN(0)
+	rsm.state.CommandDeliveryPreparing = false
+
+	cn := pb.CNStoreHeartbeat{UUID: "cn", ViewMetadataAdmissionGeneration: 3}
+	applyCN := func(want uint64) {
+		t.Helper()
+		data, err := cn.Marshal()
+		require.NoError(t, err)
+		result, err := rsm.Update(sm.Entry{Index: rsm.state.Index + 1, Cmd: GetCNStoreHeartbeatCmd(data)})
+		require.NoError(t, err)
+		require.Equal(t, want, result.Value)
+	}
+	applyCN(HeartbeatCheckNeeded)
+	rsm.state.Tick++
+	cn.ServiceAddress = "changed-address"
+	cn.Resource.CPUTotal++
+	applyCN(0)
+	for _, change := range []func(){
+		func() { cn.CommandDeliveryAckSupported = true },
+		func() { cn.ViewMetadataAdmissionSupported = true },
+		func() { cn.ViewMetadataObservedEpoch++ },
+		func() { cn.ViewMetadataCatalogFencedEpoch++ },
+		func() { cn.ViewMetadataIngressReady = true },
+	} {
+		change()
+		applyCN(HeartbeatCheckNeeded)
+		applyCN(0)
+	}
+	rsm.state.CommandDeliveryPreparing = true
+	applyCN(HeartbeatCheckNeeded)
+	applyCN(0)
+	rsm.state.CommandDeliveryPreparing = false
+	// Before admission activation, an older generation remains accepted.
+	cn.ViewMetadataAdmissionGeneration = 2
+	applyCN(HeartbeatCheckNeeded)
+	require.Equal(t, uint64(2), rsm.state.CNState.Stores[cn.UUID].ViewMetadataAdmissionGeneration)
+	cn.ViewMetadataAdmissionGeneration = 3
+	cn.PersistedExpressionProtocolVersion = 2
+	applyCN(HeartbeatCheckNeeded)
+	rsm.state.ViewMetadataAdmissionEnabled = true
+	rsm.state.PersistedExpressionRequiredProtocolVersion = 2
+	info := rsm.state.CNState.Stores[cn.UUID]
+	info.ViewMetadataAdmissionReady = true
+	rsm.state.CNState.Stores[cn.UUID] = info
+	cn.ViewMetadataAdmissionGeneration = 2
+	applyCN(0)
+	require.True(t, rsm.state.CNState.Stores[cn.UUID].ViewMetadataAdmissionReady)
+	// Rejection can still revoke authoritative readiness on protocol downgrade.
+	cn.PersistedExpressionProtocolVersion = 1
+	applyCN(HeartbeatCheckNeeded)
+	require.False(t, rsm.state.CNState.Stores[cn.UUID].ViewMetadataAdmissionReady)
+	require.Equal(t, uint64(3), rsm.state.CNState.Stores[cn.UUID].ViewMetadataAdmissionGeneration)
+	applyCN(0)
+}
+
+func TestCNHeartbeatReobservesAdmissionBarrier(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	data, err := (&pb.CNStoreHeartbeat{
+		UUID: "cn", ViewMetadataAdmissionSupported: true, ViewMetadataAdmissionGeneration: 1,
+	}).Marshal()
+	require.NoError(t, err)
+	apply := func(want uint64) {
+		t.Helper()
+		result, err := rsm.Update(sm.Entry{Index: rsm.state.Index + 1, Cmd: GetCNStoreHeartbeatCmd(data)})
+		require.NoError(t, err)
+		require.Equal(t, want, result.Value)
+	}
+	apply(HeartbeatCheckNeeded)
+	apply(0)
+	before := rsm.state.CNState.Stores["cn"]
+	rsm.state.ViewMetadataAdmissionPreparing = true
+	apply(HeartbeatCheckNeeded)
+	require.True(t, rsm.state.ViewMetadataAdmissionCNReady["cn"])
+	require.Equal(t, before, rsm.state.CNState.Stores["cn"], "only the barrier observation changed")
+	apply(0)
 }

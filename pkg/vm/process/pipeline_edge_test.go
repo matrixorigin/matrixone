@@ -20,12 +20,74 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
+
+func TestPipelineEdgePublishTerminal(t *testing.T) {
+	first := moerr.NewInternalErrorNoCtx("first failure")
+	second := moerr.NewInternalErrorNoCtx("later failure")
+	for _, fatal := range []PipelineSignal{NewErrorSignal(first), NewAbortSignal(first)} {
+		t.Run(fatal.EventType.String(), func(t *testing.T) {
+			for _, full := range []bool{false, true} {
+				edge := NewPipelineEdge(1, 3)
+				end, ok := edge.PublishTerminal(NewEndSignal())
+				require.True(t, ok)
+				require.Equal(t, EventEnd, end.EventType)
+				if !full {
+					<-edge.Ch2
+				}
+				select {
+				case <-edge.Done():
+					t.Fatal("one End must not complete a three-sender edge")
+				default:
+				}
+				for _, requested := range []PipelineSignal{fatal, NewEndSignal(), NewErrorSignal(second), NewAbortSignal(second)} {
+					effective, ok := edge.PublishTerminal(requested)
+					require.True(t, ok)
+					require.Equal(t, fatal.EventType, effective.EventType)
+					require.Same(t, first, effective.TerminalErr())
+				}
+				require.Equal(t, 1, edge.endRecorded)
+				require.Equal(t, 2, edge.fatalRemaining)
+				<-edge.Done()
+				receiver := InitPipelineSignalReceiver(context.Background(), []*WaitRegister{edge})
+				got, err := receiver.GetNextBatch(nil)
+				require.Nil(t, got)
+				require.ErrorIs(t, err, first)
+			}
+		})
+	}
+	t.Run("graceful and reuse", func(t *testing.T) {
+		edge := NewPipelineEdge(1, 1)
+		for _, requested := range []PipelineSignal{NewEndSignal(), NewEndSignal(), NewErrorSignal(first)} {
+			effective, ok := edge.PublishTerminal(requested)
+			require.True(t, ok)
+			require.Equal(t, EventEnd, effective.EventType)
+			require.NoError(t, effective.TerminalErr())
+		}
+		require.Equal(t, 1, edge.endRecorded)
+		edge.ResetForReuse(1, 1)
+		effective, ok := edge.PublishTerminal(NewErrorSignal(second))
+		require.True(t, ok)
+		require.Same(t, second, effective.TerminalErr())
+	})
+	t.Run("unavailable", func(t *testing.T) {
+		for _, edge := range []*PipelineEdge{nil, {}} {
+			_, ok := edge.PublishTerminal(NewEndSignal())
+			require.False(t, ok)
+		}
+		edge := NewPipelineEdge(1, 1)
+		_, ok := edge.PublishTerminal(NewPipelineSignalToDirectly(batch.EmptyBatch, nil, nil))
+		require.False(t, ok)
+		require.Zero(t, edge.endRecorded)
+	})
+}
 
 // TestPipelineEdgeSendEndIsIdempotent verifies that calling SendEnd
 // multiple times is safe and that Done() is closed exactly once.

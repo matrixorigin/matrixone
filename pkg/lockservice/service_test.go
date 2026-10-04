@@ -1242,6 +1242,49 @@ func TestDeadLockWith2Txn(t *testing.T) {
 	}
 }
 
+func TestNewWaitSubmitsDeadlockCheckBeforeLazyTick(t *testing.T) {
+	previous := defaultLazyCheckDuration.Load().(time.Duration)
+	defer defaultLazyCheckDuration.Store(previous)
+
+	runLockServiceTestsWithAdjustConfig(t, []string{"s1", "s2"}, 10*time.Second, func(_ *lockTableAllocator, services []*service) {
+		require.Equal(t, 30*time.Second, defaultLazyCheckDuration.Load())
+		s := services[0]
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		const tableID = uint64(29457)
+		row := [][]byte{{1}}
+		holder, waiting := []byte("holder"), []byte("waiting")
+		mustAddTestLock(t, ctx, s, tableID, holder, row, pb.Granularity_Row)
+
+		checked := make(chan struct{}, 1)
+		s.deadlockDetector.mu.Lock()
+		s.deadlockDetector.mu.preCheckFunc = func(_ []byte, txn pb.WaitTxn) error {
+			if string(txn.TxnID) == string(waiting) {
+				select {
+				case checked <- struct{}{}:
+				default:
+				}
+			}
+			return nil
+		}
+		s.deadlockDetector.mu.Unlock()
+
+		result := make(chan error, 1)
+		go func() {
+			_, err := s.Lock(ctx, tableID, row, waiting, newTestRowExclusiveOptions())
+			result <- err
+		}()
+		select {
+		case <-checked:
+		case <-ctx.Done():
+			t.Fatal("new wait did not submit a deadlock check before the lazy tick")
+		}
+		require.NoError(t, s.Unlock(ctx, holder, timestamp.Timestamp{}))
+		require.NoError(t, <-result)
+		require.NoError(t, s.Unlock(ctx, waiting, timestamp.Timestamp{}))
+	}, func(*Config) { defaultLazyCheckDuration.Store(30 * time.Second) })
+}
+
 func TestDeadLockWithIndirectDependsOn(t *testing.T) {
 	for name, runner := range runners {
 		if name == "local" {
@@ -2855,7 +2898,8 @@ func TestRestartInRollingRestartCN(t *testing.T) {
 		[]string{"s1"},
 		func(alloc *lockTableAllocator, s []*service) {
 			alloc.setRestartService("s1")
-			require.Equal(t, true, alloc.canRestartService("s1"))
+			require.Equal(t, false, alloc.canRestartService("s1"),
+				"SetRestart must wait for the CN to confirm drain completion")
 		},
 	)
 }
@@ -6829,7 +6873,13 @@ func TestDrainPinsAsyncRemoteWaiterIntent(t *testing.T) {
 			case <-ctx.Done():
 				t.Fatal("remote waiter did not acquire after holder unlock")
 			}
+			require.False(t, owner.isStatus(pb.Status_ServiceUnLockSucc),
+				"a remote lock holder must keep the owner in drain-waiting")
 			require.NoError(t, caller.Unlock(ctx, waiterTxn, timestamp.Timestamp{}))
+			require.Eventually(t, func() bool {
+				return owner.isStatus(pb.Status_ServiceUnLockSucc)
+			}, time.Second, time.Millisecond,
+				"owner must advertise restart only after the remote waiter releases")
 		})
 }
 

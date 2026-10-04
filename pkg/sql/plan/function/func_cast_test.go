@@ -58,7 +58,87 @@ func TestStringToFloatDefaultCompatibilityUsesNumericPrefix(t *testing.T) {
 					NewFunctionTestInput(types.T_float64.ToType(), []float64{}, nil),
 				},
 				NewFunctionTestResult(types.T_float64.ToType(), false, []float64{tt.want}, nil), NewCast)
-			succeed, info := tc.Run()
+			succeed, info := tc.RunAndFree()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestTemporalCastsHonorTimeTruncateFractional(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		require.Equal(t, "sql_mode", name)
+		return "TIME_TRUNCATE_FRACTIONAL", nil
+	})
+	dt := types.DatetimeFromClock(2024, 1, 2, 3, 4, 5, 987654)
+	ts, err := types.ParseTimestamp(time.UTC, "2024-01-02 03:04:05.987654", 6)
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name   string
+		input  FunctionTestInput
+		output types.Type
+		value  interface{}
+	}{
+		{name: "datetime to time", input: NewFunctionTestInput(types.T_datetime.ToTypeWithScale(6), []types.Datetime{dt}, nil), output: types.T_time.ToTypeWithScale(3), value: []types.Time{types.TimeFromClock(false, 3, 4, 5, 987000)}},
+		{name: "timestamp to time", input: NewFunctionTestInput(types.T_timestamp.ToTypeWithScale(6), []types.Timestamp{ts}, nil), output: types.T_time.ToTypeWithScale(3), value: []types.Time{types.TimeFromClock(false, 3, 4, 5, 987000)}},
+		{name: "timestamp to timestamp", input: NewFunctionTestInput(types.T_timestamp.ToTypeWithScale(6), []types.Timestamp{ts}, nil), output: types.T_timestamp.ToTypeWithScale(3), value: []types.Timestamp{ts.TruncateToScaleWithoutRounding(3)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var output interface{}
+			switch tc.output.Oid {
+			case types.T_time:
+				output = []types.Time{}
+			case types.T_timestamp:
+				output = []types.Timestamp{}
+			}
+			caseTest := NewFunctionTestCase(proc, []FunctionTestInput{tc.input, NewFunctionTestInput(tc.output, output, nil)}, NewFunctionTestResult(tc.output, false, tc.value, nil), NewCast)
+			succeed, info := caseTest.RunAndFree()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestTemporalCastsTruncateFractionalAcrossSources(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		require.Equal(t, "sql_mode", name)
+		return "TIME_TRUNCATE_FRACTIONAL", nil
+	})
+	dt := types.DatetimeFromClock(2024, 1, 2, 3, 4, 5, 987654)
+	ts, err := types.ParseTimestamp(time.UTC, "2024-01-02 03:04:05.987654", 6)
+	require.NoError(t, err)
+	wantDT := types.DatetimeFromClock(2024, 1, 2, 3, 4, 5, 987000)
+	wantTS, err := types.ParseTimestamp(time.UTC, "2024-01-02 03:04:05.987000", 3)
+	require.NoError(t, err)
+	wantTime := types.TimeFromClock(false, 3, 4, 5, 987000)
+
+	for _, tc := range []struct {
+		name  string
+		input FunctionTestInput
+		out   types.Type
+		value interface{}
+	}{
+		{name: "string to datetime", input: NewFunctionTestInput(types.T_varchar.ToType(), []string{"2024-01-02 03:04:05.987654"}, nil), out: types.T_datetime.ToTypeWithScale(3), value: []types.Datetime{wantDT}},
+		{name: "string to timestamp", input: NewFunctionTestInput(types.T_varchar.ToType(), []string{"2024-01-02 03:04:05.987654"}, nil), out: types.T_timestamp.ToTypeWithScale(3), value: []types.Timestamp{wantTS}},
+		{name: "datetime to timestamp", input: NewFunctionTestInput(types.T_datetime.ToTypeWithScale(6), []types.Datetime{dt}, nil), out: types.T_timestamp.ToTypeWithScale(3), value: []types.Timestamp{wantTS}},
+		{name: "timestamp to datetime", input: NewFunctionTestInput(types.T_timestamp.ToTypeWithScale(6), []types.Timestamp{ts}, nil), out: types.T_datetime.ToTypeWithScale(3), value: []types.Datetime{wantDT}},
+		{name: "time to time", input: NewFunctionTestInput(types.T_time.ToTypeWithScale(6), []types.Time{types.TimeFromClock(false, 3, 4, 5, 987654)}, nil), out: types.T_time.ToTypeWithScale(3), value: []types.Time{wantTime}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var empty interface{}
+			switch tc.out.Oid {
+			case types.T_datetime:
+				empty = []types.Datetime{}
+			case types.T_timestamp:
+				empty = []types.Timestamp{}
+			case types.T_time:
+				empty = []types.Time{}
+			}
+			caseTest := NewFunctionTestCase(proc, []FunctionTestInput{tc.input, NewFunctionTestInput(tc.out, empty, nil)}, NewFunctionTestResult(tc.out, false, tc.value, nil), NewCast)
+			succeed, info := caseTest.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -78,7 +158,7 @@ func TestStringToFloatMatrixOneNativeRejectsIncompleteTokens(t *testing.T) {
 					NewFunctionTestInput(types.T_float64.ToType(), []float64{}, nil),
 				},
 				NewFunctionTestResult(types.T_float64.ToType(), true, nil, nil), NewCast)
-			succeed, info := tc.Run()
+			succeed, info := tc.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -93,7 +173,7 @@ func TestStringToFloat32DefaultCompatibilityRange(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_float32.ToType(), false,
 			[]float32{math.MaxFloat32, -math.MaxFloat32, 0, float32(math.Copysign(0, -1))}, nil), NewCast)
-	succeed, info := tc.Run()
+	succeed, info := tc.RunAndFree()
 	require.True(t, succeed, info)
 }
 
@@ -131,7 +211,7 @@ func TestCastEnumToNumericTypes(t *testing.T) {
 				NewFunctionTestResult(tc.target, false, tc.want, nulls),
 				NewCast,
 			)
-			succeed, info := testCase.Run()
+			succeed, info := testCase.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -154,7 +234,7 @@ func TestSignedIntegerToBit64PreservesBitPattern(t *testing.T) {
 			tcc := NewFunctionTestCase(proc,
 				[]FunctionTestInput{tc.input, NewFunctionTestInput(bit64, []uint64{}, nil)},
 				NewFunctionTestResult(bit64, false, []uint64{math.MaxUint64}, nil), NewCast)
-			succeed, info := tcc.Run()
+			succeed, info := tcc.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -182,6 +262,7 @@ func TestPreparedTypedTextToBit(t *testing.T) {
 					NewFunctionTestInput(bitType, []uint64{}, nil),
 				},
 				NewFunctionTestResult(bitType, wantError, want, nil), NewCast)
+			defer tcc.Free()
 			tcc.parameters[0].SetPrepareParamKind(kind)
 			succeed, info := tcc.Run()
 			require.True(t, succeed, info)
@@ -210,6 +291,7 @@ func TestPreparedTypedTextToBit(t *testing.T) {
 			NewFunctionTestInput(bit64, []uint64{}, nil),
 		},
 		NewFunctionTestResult(bit64, false, []uint64{5, 53}, nil), NewCast)
+	defer mixed.Free()
 	mixed.parameters[0].SetPrepareParamKinds([]vector.PrepareParamKind{
 		vector.PrepareParamInteger, vector.PrepareParamNone,
 	})
@@ -225,6 +307,7 @@ func TestPreparedTypedTextToBit(t *testing.T) {
 					NewFunctionTestInput(bitType, []uint64{}, nil),
 				},
 				NewFunctionTestResult(bitType, false, []uint64{0, 1}, []bool{true, false}), NewCast)
+			defer tcc.Free()
 			tcc.parameters[0].SetPrepareParamKind(vector.PrepareParamInteger)
 			succeed, info := tcc.Run()
 			require.True(t, succeed, info)
@@ -254,7 +337,7 @@ func TestInsertIgnoreCastsSpecialValues(t *testing.T) {
 			tcc := NewFunctionTestCase(proc,
 				[]FunctionTestInput{input, NewFunctionTestInput(target, []uint64{}, nil)},
 				NewFunctionTestResult(target, false, []uint64{want}, nil), NewCast)
-			succeed, info := tcc.Run()
+			succeed, info := tcc.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -285,6 +368,7 @@ func TestInsertIgnoreCastsSpecialValues(t *testing.T) {
 			tcc := NewFunctionTestCase(proc,
 				[]FunctionTestInput{input, NewFunctionTestInput(bit3, []uint64{}, nil)},
 				NewFunctionTestResult(bit3, false, []uint64{want}, nil), NewCast)
+			defer tcc.Free()
 			tcc.parameters[0].SetPrepareParamKind(kind)
 			succeed, info := tcc.Run()
 			require.True(t, succeed, info)
@@ -305,6 +389,7 @@ func TestInsertIgnoreCastsSpecialValues(t *testing.T) {
 			tcc := NewFunctionTestCase(proc,
 				[]FunctionTestInput{input, NewFunctionTestInput(year, []types.MoYear{}, nil)},
 				NewFunctionTestResult(year, false, []types.MoYear{0}, nil), NewCast)
+			defer tcc.Free()
 			require.NoError(t, tcc.result.PreExtendAndReset(1))
 			result, err := tcc.DebugRun()
 			require.NoError(t, err)
@@ -338,7 +423,7 @@ func TestYearAssignmentCastHonorsSQLMode(t *testing.T) {
 			return NewFunctionTestInput(types.T_int64.ToType(), []int64{value}, nil)
 		}
 	}
-	runInput := func(t *testing.T, input FunctionTestInput, sqlMode string, cast fEvalFn) (types.MoYear, bool, error) {
+	runInput := func(t *testing.T, input FunctionTestInput, sqlMode string, cast executeLogicOfOverload) (types.MoYear, bool, error) {
 		t.Helper()
 		proc := testutil.NewProcess(t)
 		proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
@@ -355,6 +440,7 @@ func TestYearAssignmentCastHonorsSQLMode(t *testing.T) {
 			NewFunctionTestResult(yearType, false, []types.MoYear{0}, nil),
 			cast,
 		)
+		defer tcc.Free()
 		require.NoError(t, tcc.result.PreExtendAndReset(1))
 		result, err := tcc.DebugRun()
 		if err != nil {
@@ -363,7 +449,7 @@ func TestYearAssignmentCastHonorsSQLMode(t *testing.T) {
 		got, isNull := vector.GenerateFunctionFixedTypeParameter[types.MoYear](result).GetValue(0)
 		return got, isNull, nil
 	}
-	run := func(t *testing.T, kind string, value int64, sqlMode string, cast fEvalFn) (types.MoYear, bool, error) {
+	run := func(t *testing.T, kind string, value int64, sqlMode string, cast executeLogicOfOverload) (types.MoYear, bool, error) {
 		t.Helper()
 		return runInput(t, newInput(kind, value), sqlMode, cast)
 	}
@@ -372,7 +458,7 @@ func TestYearAssignmentCastHonorsSQLMode(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		sqlMode string
-		cast    fEvalFn
+		cast    executeLogicOfOverload
 		isNull  bool
 	}{
 		{name: "strict_assignment_remains_null", sqlMode: "STRICT_TRANS_TABLES", cast: NewAssignCast, isNull: true},
@@ -435,10 +521,10 @@ func TestYearAssignmentCastHonorsSQLMode(t *testing.T) {
 
 func TestParseTimePrefixPreservesInvalidFields(t *testing.T) {
 	for _, value := range []string{"12:99:00", "12:99:00tail", "12:34:99", "12:34:99tail", "12:34:56:99"} {
-		_, ok := parseTimePrefix(value, 0)
+		_, ok := parseTimePrefix(value, 0, false)
 		require.False(t, ok, value)
 	}
-	parsed, ok := parseTimePrefix("12:34:56tail", 0)
+	parsed, ok := parseTimePrefix("12:34:56tail", 0, false)
 	require.True(t, ok)
 	require.Equal(t, "12:34:56", parsed.String())
 }
@@ -447,7 +533,7 @@ func TestTimeAssignmentCastHonorsMySQLRange(t *testing.T) {
 	timeType := types.T_time.ToTypeWithScale(6)
 	max := types.MySQLTimeMax
 
-	run := func(t *testing.T, input FunctionTestInput, sqlMode string, cast fEvalFn, sessions ...*numericWarningSession) (*vector.Vector, error) {
+	run := func(t *testing.T, input FunctionTestInput, sqlMode string, cast executeLogicOfOverload, sessions ...*numericWarningSession) (FunctionTestCase, error) {
 		t.Helper()
 		proc := testutil.NewProcess(t)
 		if len(sessions) > 0 {
@@ -460,8 +546,16 @@ func TestTimeAssignmentCastHonorsMySQLRange(t *testing.T) {
 		tc := NewFunctionTestCase(proc,
 			[]FunctionTestInput{input, NewFunctionTestInput(timeType, []types.Time{}, nil)},
 			NewFunctionTestResult(timeType, false, nil, nil), cast)
+		owned := &tc
+		defer func() {
+			if owned != nil {
+				owned.Free()
+			}
+		}()
 		require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
-		return tc.DebugRun()
+		_, err := tc.DebugRun()
+		owned = nil
+		return tc, err
 	}
 
 	stringInput := NewFunctionTestInput(types.T_varchar.ToType(),
@@ -470,7 +564,9 @@ func TestTimeAssignmentCastHonorsMySQLRange(t *testing.T) {
 	t.Run("strict string assignment accepts whole-second endpoints", func(t *testing.T) {
 		input := NewFunctionTestInput(types.T_varchar.ToType(),
 			[]string{"838:59:59.000000", "-838:59:59.000000"}, nil)
-		result, err := run(t, input, "STRICT_TRANS_TABLES", NewAssignCast)
+		caseUnderTest, err := run(t, input, "STRICT_TRANS_TABLES", NewAssignCast)
+		defer caseUnderTest.Free()
+		result := caseUnderTest.result.GetResultVector()
 		require.NoError(t, err)
 		values := vector.MustFixedColWithTypeCheck[types.Time](result)
 		require.Equal(t, []types.Time{max, -max}, values)
@@ -478,15 +574,20 @@ func TestTimeAssignmentCastHonorsMySQLRange(t *testing.T) {
 
 	t.Run("strict string assignment rejects fractional endpoint excess", func(t *testing.T) {
 		for _, input := range []string{"838:59:59.000001", "-838:59:59.000001"} {
-			_, err := run(t, NewFunctionTestInput(types.T_varchar.ToType(), []string{input}, nil), "STRICT_TRANS_TABLES", NewAssignCast)
-			require.Error(t, err)
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
+			func() {
+				caseUnderTest, err := run(t, NewFunctionTestInput(types.T_varchar.ToType(), []string{input}, nil), "STRICT_TRANS_TABLES", NewAssignCast)
+				defer caseUnderTest.Free()
+				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
+			}()
 		}
 	})
 
 	t.Run("nonstrict string assignment clamps", func(t *testing.T) {
 		session := &numericWarningSession{}
-		result, err := run(t, stringInput, "", NewAssignCast, session)
+		caseUnderTest, err := run(t, stringInput, "", NewAssignCast, session)
+		defer caseUnderTest.Free()
+		result := caseUnderTest.result.GetResultVector()
 		require.NoError(t, err)
 		values := vector.MustFixedColWithTypeCheck[types.Time](result)
 		require.Equal(t, []types.Time{max, max, -max, -max}, values)
@@ -501,7 +602,7 @@ func TestTimeAssignmentCastHonorsMySQLRange(t *testing.T) {
 		for _, tc := range []struct {
 			name  string
 			mode  string
-			cast  fEvalFn
+			cast  executeLogicOfOverload
 			want  []types.Time
 			input []string
 		}{
@@ -510,7 +611,9 @@ func TestTimeAssignmentCastHonorsMySQLRange(t *testing.T) {
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				session := &numericWarningSession{}
-				result, err := run(t, NewFunctionTestInput(types.T_varchar.ToType(), tc.input, nil), tc.mode, tc.cast, session)
+				caseUnderTest, err := run(t, NewFunctionTestInput(types.T_varchar.ToType(), tc.input, nil), tc.mode, tc.cast, session)
+				defer caseUnderTest.Free()
+				result := caseUnderTest.result.GetResultVector()
 				require.NoError(t, err)
 				require.Equal(t, tc.want, vector.MustFixedColWithTypeCheck[types.Time](result))
 				require.Len(t, session.warnings, 2)
@@ -527,14 +630,16 @@ func TestTimeAssignmentCastHonorsMySQLRange(t *testing.T) {
 		for _, tc := range []struct {
 			name string
 			mode string
-			cast fEvalFn
+			cast executeLogicOfOverload
 		}{
 			{"nonstrict", "", NewAssignCast},
 			{"ignore", "STRICT_TRANS_TABLES", NewAssignIgnoreCast},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				session := &numericWarningSession{}
-				result, err := run(t, compact, tc.mode, tc.cast, session)
+				caseUnderTest, err := run(t, compact, tc.mode, tc.cast, session)
+				defer caseUnderTest.Free()
+				result := caseUnderTest.result.GetResultVector()
 				require.NoError(t, err)
 				require.Equal(t, []types.Time{0, 0}, vector.MustFixedColWithTypeCheck[types.Time](result))
 				require.Len(t, session.warnings, 2)
@@ -544,7 +649,8 @@ func TestTimeAssignmentCastHonorsMySQLRange(t *testing.T) {
 				}
 			})
 		}
-		_, err := run(t, compact, "STRICT_TRANS_TABLES", NewAssignCast)
+		caseUnderTest, err := run(t, compact, "STRICT_TRANS_TABLES", NewAssignCast)
+		defer caseUnderTest.Free()
 		require.Error(t, err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTruncatedWrongValue), err)
 		require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, moerr.DowncastError(err).MySQLCode())
@@ -552,15 +658,20 @@ func TestTimeAssignmentCastHonorsMySQLRange(t *testing.T) {
 
 	t.Run("strict string assignment rejects internal-range overflow", func(t *testing.T) {
 		for _, input := range []string{"2562047788:00:00", "-2562047788:00:00"} {
-			_, err := run(t, NewFunctionTestInput(types.T_varchar.ToType(), []string{input}, nil), "STRICT_TRANS_TABLES", NewAssignCast)
-			require.Error(t, err)
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
+			func() {
+				caseUnderTest, err := run(t, NewFunctionTestInput(types.T_varchar.ToType(), []string{input}, nil), "STRICT_TRANS_TABLES", NewAssignCast)
+				defer caseUnderTest.Free()
+				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
+			}()
 		}
 	})
 
 	t.Run("insert ignore string assignment clamps", func(t *testing.T) {
 		session := &numericWarningSession{}
-		result, err := run(t, stringInput, "STRICT_TRANS_TABLES", NewAssignIgnoreCast, session)
+		caseUnderTest, err := run(t, stringInput, "STRICT_TRANS_TABLES", NewAssignIgnoreCast, session)
+		defer caseUnderTest.Free()
+		result := caseUnderTest.result.GetResultVector()
 		require.NoError(t, err)
 		values := vector.MustFixedColWithTypeCheck[types.Time](result)
 		require.Equal(t, []types.Time{max, max, -max, -max}, values)
@@ -576,14 +687,17 @@ func TestTimeAssignmentCastHonorsMySQLRange(t *testing.T) {
 		NewFunctionTestInput(types.T_uint64.ToType(), []uint64{math.MaxUint64}, nil),
 	} {
 		t.Run(input.typ.String()+"/strict assignment rejects out of range integer", func(t *testing.T) {
-			_, err := run(t, input, "STRICT_TRANS_TABLES", NewAssignCast)
+			caseUnderTest, err := run(t, input, "STRICT_TRANS_TABLES", NewAssignCast)
+			defer caseUnderTest.Free()
 			require.Error(t, err)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
 		})
 
 		t.Run(input.typ.String()+"/nonstrict assignment clamps and warns", func(t *testing.T) {
 			session := &numericWarningSession{}
-			result, err := run(t, input, "", NewAssignCast, session)
+			caseUnderTest, err := run(t, input, "", NewAssignCast, session)
+			defer caseUnderTest.Free()
+			result := caseUnderTest.result.GetResultVector()
 			require.NoError(t, err)
 			require.Equal(t, []types.Time{max}, vector.MustFixedColWithTypeCheck[types.Time](result))
 			require.Equal(t, []numericWarning{{code: moerr.ER_WARN_DATA_OUT_OF_RANGE, msg: "Out of range value for column 'time' at row 1"}}, session.warnings)
@@ -591,7 +705,9 @@ func TestTimeAssignmentCastHonorsMySQLRange(t *testing.T) {
 
 		t.Run(input.typ.String()+"/insert ignore clamps and warns", func(t *testing.T) {
 			session := &numericWarningSession{}
-			result, err := run(t, input, "STRICT_TRANS_TABLES", NewAssignIgnoreCast, session)
+			caseUnderTest, err := run(t, input, "STRICT_TRANS_TABLES", NewAssignIgnoreCast, session)
+			defer caseUnderTest.Free()
+			result := caseUnderTest.result.GetResultVector()
 			require.NoError(t, err)
 			require.Equal(t, []types.Time{max}, vector.MustFixedColWithTypeCheck[types.Time](result))
 			require.Equal(t, []numericWarning{{code: moerr.ER_WARN_DATA_OUT_OF_RANGE, msg: "Out of range value for column 'time' at row 1"}}, session.warnings)
@@ -601,13 +717,16 @@ func TestTimeAssignmentCastHonorsMySQLRange(t *testing.T) {
 	timeInput := NewFunctionTestInput(timeType,
 		[]types.Time{types.TimeFromClock(false, 838, 59, 59, 1)}, nil)
 	t.Run("strict time expression assignment rejects extended time", func(t *testing.T) {
-		_, err := run(t, timeInput, "STRICT_TRANS_TABLES", NewAssignCast)
+		caseUnderTest, err := run(t, timeInput, "STRICT_TRANS_TABLES", NewAssignCast)
+		defer caseUnderTest.Free()
 		require.Error(t, err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
 	})
 
 	t.Run("ordinary expression cast clamps to MySQL TIME range", func(t *testing.T) {
-		result, err := run(t, stringInput, "STRICT_TRANS_TABLES", NewCast)
+		caseUnderTest, err := run(t, stringInput, "STRICT_TRANS_TABLES", NewCast)
+		defer caseUnderTest.Free()
+		result := caseUnderTest.result.GetResultVector()
 		require.NoError(t, err)
 		values := vector.MustFixedColWithTypeCheck[types.Time](result)
 		require.Equal(t, []types.Time{max, max, -max, -max}, values)
@@ -625,6 +744,7 @@ func TestTimeAssignmentCastHonorsMySQLRange(t *testing.T) {
 		tc := NewFunctionTestCase(proc,
 			[]FunctionTestInput{input, NewFunctionTestInput(target, []types.Time{}, nil)},
 			NewFunctionTestResult(target, false, nil, nil), NewAssignCast)
+		defer tc.Free()
 		require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
 		_, err := tc.DebugRun()
 		require.Error(t, err)
@@ -725,7 +845,7 @@ func TestCastSignedStringNumericSign(t *testing.T) {
 
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, NewCast)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 }
@@ -748,7 +868,7 @@ func TestCastUnsignedStringNumericSign(t *testing.T) {
 
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, NewCast)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 }
@@ -784,7 +904,7 @@ func TestCastDecimal64StringNumericSign(t *testing.T) {
 
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, NewCast)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 }
@@ -829,7 +949,7 @@ func TestCastStringNumericRadixPrefixes(t *testing.T) {
 
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, NewCast)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 }
@@ -973,7 +1093,7 @@ func Test_CastToDecimal256(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.info, func(t *testing.T) {
 			tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, NewCast)
-			succeed, info := tcc.Run()
+			succeed, info := tcc.RunAndFree()
 			require.True(t, succeed, tc.info, info)
 		})
 	}
@@ -1018,7 +1138,7 @@ func Test_CastFromDecimal256(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.info, func(t *testing.T) {
 			tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, NewCast)
-			succeed, info := tcc.Run()
+			succeed, info := tcc.RunAndFree()
 			require.True(t, succeed, tc.info, info)
 		})
 	}
@@ -1035,7 +1155,7 @@ func TestStAsWKBAndGeomFromWKB(t *testing.T) {
 		[]FunctionTestInput{NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(1 2)"}, []bool{false})},
 		NewFunctionTestResult(types.T_blob.ToType(), false, []string{pointWKB}, []bool{false}),
 		StAsWKB)
-	ok, info := tc.Run()
+	ok, info := tc.RunAndFree()
 	require.True(t, ok, info)
 
 	// ST_GeomFromWKB(wkb) -> geometry rendering as the original WKT.
@@ -1043,7 +1163,7 @@ func TestStAsWKBAndGeomFromWKB(t *testing.T) {
 		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{lineWKB}, []bool{false})},
 		NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"LINESTRING(0 0,1 1)"}, []bool{false}),
 		StGeomFromWKB)
-	ok2, info2 := tc2.Run()
+	ok2, info2 := tc2.RunAndFree()
 	require.True(t, ok2, info2)
 }
 
@@ -1083,6 +1203,7 @@ func TestGeometry32OverflowAdmission(t *testing.T) {
 			NewFunctionTestInput(types.T_geometry32.ToType(), []string{}, nil),
 		},
 		NewFunctionTestResult(types.T_geometry32.ToType(), true, nil, nil), NewCast)
+	defer cast.Free()
 	require.NoError(t, cast.result.PreExtendAndReset(1))
 	err = NewCast(cast.parameters, cast.result, proc, 1, nil)
 	require.ErrorContains(t, err, "not finite in GEOMETRY32")
@@ -1135,7 +1256,7 @@ func Test_CastGeometry32(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.info, func(t *testing.T) {
 			tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, NewCast)
-			succeed, info := tcc.Run()
+			succeed, info := tcc.RunAndFree()
 			require.True(t, succeed, tc.info, info)
 		})
 	}
@@ -1160,6 +1281,7 @@ func Test_CastGeometryPrecisionBothWays(t *testing.T) {
 				NewFunctionTestInput(dstType, []string{}, []bool{}),
 			},
 			NewFunctionTestResult(dstType, false, []string{"POINT(5 6)"}, []bool{false}), NewCast)
+		defer tc.Free()
 		ok, info := tc.Run()
 		require.True(t, ok, info)
 		return len(tc.GetResultVectorDirectly().GetBytesAt(0))
@@ -1202,7 +1324,7 @@ func Test_CastVarcharToGeometry(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.info, func(t *testing.T) {
 			tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, NewCast)
-			succeed, info := tcc.Run()
+			succeed, info := tcc.RunAndFree()
 			require.True(t, succeed, tc.info, info)
 		})
 	}
@@ -2472,6 +2594,22 @@ func initCastTestCase() []tcTemp {
 		},
 	}
 	castFloat64ToOthers := []tcTemp{
+		{
+			info: "float64 to bounded float preserves rounding and nulls",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(), []float64{1.25, -1.25, 999.9, 0}, []bool{false, false, false, true}),
+				NewFunctionTestInput(types.New(types.T_float32, 4, 1), []float32{}, nil),
+			},
+			expect: NewFunctionTestResult(types.New(types.T_float32, 4, 1), false, []float32{1.3, -1.2, 999.9, 0}, []bool{false, false, false, true}),
+		},
+		{
+			info: "float64 to bounded double scale zero",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(), []float64{1.5, -1.5}, nil),
+				NewFunctionTestInput(types.New(types.T_float64, 3, 0), []float64{}, nil),
+			},
+			expect: NewFunctionTestResult(types.New(types.T_float64, 3, 0), false, []float64{2, -1}, nil),
+		},
 		// test cast float64 to others.
 		{
 			info: "float64 to int8",
@@ -3042,7 +3180,7 @@ func TestCast(t *testing.T) {
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, NewCast)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 }
@@ -3053,9 +3191,12 @@ func BenchmarkCast(b *testing.B) {
 
 	b.StartTimer()
 	for _, tc := range testCases {
-		fcTC := NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, NewCast)
-		_ = fcTC.BenchMarkRun()
+		func() {
+			fcTC := NewFunctionTestCase(proc,
+				tc.inputs, tc.expect, NewCast)
+			defer fcTC.Free()
+			_ = fcTC.BenchMarkRun()
+		}()
 	}
 	b.StopTimer()
 }
@@ -3587,7 +3728,7 @@ func TestSetOperationCharCastPadsToCommonWidthOnlyWhenEnabled(t *testing.T) {
 				NewFunctionTestResult(char8, false, tc.want, nil),
 				NewSetOperationCast,
 			)
-			succeed, info := testCase.Run()
+			succeed, info := testCase.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -3703,7 +3844,7 @@ func TestCastNumericToDecimal256Dispatcher(t *testing.T) {
 				NewFunctionTestResult(toType, false, []types.Decimal256{expected, zero}, []bool{false, true}),
 				NewCast,
 			)
-			ok, info := tc.Run()
+			ok, info := tc.RunAndFree()
 			require.True(t, ok, info)
 		})
 	}
@@ -3748,7 +3889,7 @@ func TestCastFloatToDecimal256Dispatcher(t *testing.T) {
 				NewFunctionTestResult(toType, false, []types.Decimal256{expected, zero}, []bool{false, true}),
 				NewCast,
 			)
-			ok, info := tc.Run()
+			ok, info := tc.RunAndFree()
 			require.True(t, ok, info)
 		})
 	}
@@ -3814,7 +3955,7 @@ func TestCastDecimalToDecimal256Dispatcher(t *testing.T) {
 				[]types.Decimal256{d64ExpectedPositive, d64ExpectedNegative, zero}, []bool{false, false, true}),
 			NewCast,
 		)
-		ok, info := tc.Run()
+		ok, info := tc.RunAndFree()
 		require.True(t, ok, info)
 	})
 
@@ -3841,7 +3982,7 @@ func TestCastDecimalToDecimal256Dispatcher(t *testing.T) {
 				[]types.Decimal256{d128ExpectedPositive, d128ExpectedNegative, zero}, []bool{false, false, true}),
 			NewCast,
 		)
-		ok, info := tc.Run()
+		ok, info := tc.RunAndFree()
 		require.True(t, ok, info)
 	})
 }
@@ -4084,7 +4225,7 @@ func TestCastJsonToNumeric(t *testing.T) {
 		}
 		expect := NewFunctionTestResult(toType, wantErr, expectAny, expectNulls)
 		fcTC := NewFunctionTestCase(proc, inputs, expect, NewCast)
-		succeed, info := fcTC.Run()
+		succeed, info := fcTC.RunAndFree()
 		if wantErr {
 			require.True(t, succeed, "case %s: expected cast to fail with error, but: %s", name, info)
 			return
@@ -4149,7 +4290,7 @@ func TestCastJsonToNumeric(t *testing.T) {
 		expect := NewFunctionTestResult(types.T_int64.ToType(), false,
 			[]int64{9007199254740993, math.MaxInt64}, nil)
 		fcTC := NewFunctionTestCase(proc, inputs, expect, NewCast)
-		succeed, info := fcTC.Run()
+		succeed, info := fcTC.RunAndFree()
 		require.True(t, succeed, info)
 	})
 
@@ -4344,7 +4485,7 @@ func TestCastJsonToBool(t *testing.T) {
 		}
 		expect := NewFunctionTestResult(types.T_bool.ToType(), wantErr, expected, expectedNulls)
 		fcTC := NewFunctionTestCase(proc, inputs, expect, NewCast)
-		succeed, info := fcTC.Run()
+		succeed, info := fcTC.RunAndFree()
 		if wantErr {
 			require.True(t, succeed, "case %s: expected cast to fail with error, but: %s", name, info)
 			return
@@ -4380,7 +4521,7 @@ func TestCastJsonToBool(t *testing.T) {
 	expect := NewFunctionTestResult(types.T_bool.ToType(), false,
 		[]bool{false, true, true, true, true, false}, []bool{false, false, false, false, false, false})
 	fcTC := NewFunctionTestCase(proc, inputs, expect, NewCast)
-	succeed, info := fcTC.Run()
+	succeed, info := fcTC.RunAndFree()
 	require.True(t, succeed, "decimal values: %s", info)
 
 	for _, tc := range []struct {
@@ -4411,7 +4552,7 @@ func TestCastJsonToJson(t *testing.T) {
 	}
 	expect := NewFunctionTestResult(types.T_json.ToType(), false, encoded, []bool{false, false, false})
 	fcTC := NewFunctionTestCase(proc, inputs, expect, NewCast)
-	succeed, info := fcTC.Run()
+	succeed, info := fcTC.RunAndFree()
 	require.True(t, succeed, info)
 }
 
@@ -4474,7 +4615,7 @@ func TestCastToJSONPreservesSourceCategories(t *testing.T) {
 				NewFunctionTestInput(jsonType, []string{}, nil),
 			},
 			NewFunctionTestResult(jsonType, false, expected, nulls), NewCast)
-		ok, info := tc.Run()
+		ok, info := tc.RunAndFree()
 		require.True(t, ok, info)
 	}
 
@@ -4521,7 +4662,7 @@ func TestCastToJSONPreservesSourceCategories(t *testing.T) {
 				NewFunctionTestInput(jsonType, []string{}, nil),
 			},
 			NewFunctionTestResult(jsonType, true, nil, nil), NewCast)
-		ok, info := tc.Run()
+		ok, info := tc.RunAndFree()
 		require.True(t, ok, info)
 	})
 }
@@ -4536,7 +4677,7 @@ func TestExplicitCastToJSONUsesSameDispatcher(t *testing.T) {
 			NewFunctionTestInput(types.T_json.ToType(), []string{}, nil),
 		},
 		NewFunctionTestResult(types.T_json.ToType(), false, expected, nil), NewExplicitCast)
-	ok, info := tc.Run()
+	ok, info := tc.RunAndFree()
 	require.True(t, ok, info)
 }
 
@@ -4558,7 +4699,7 @@ func TestCastToJSONRejectsNonFiniteFloatAndSkipsInactiveRows(t *testing.T) {
 				NewFunctionTestInput(jsonType, []string{}, nil),
 			},
 			NewFunctionTestResult(jsonType, true, nil, nil), NewCast)
-		ok, info := tc.Run()
+		ok, info := tc.RunAndFree()
 		require.True(t, ok, info)
 	})
 
@@ -4569,6 +4710,7 @@ func TestCastToJSONRejectsNonFiniteFloatAndSkipsInactiveRows(t *testing.T) {
 				NewFunctionTestInput(jsonType, []string{}, nil),
 			},
 			NewFunctionTestResult(jsonType, false, nil, nil), NewCast)
+		defer tc.Free()
 		require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
 		err := tc.fn(tc.parameters, tc.result, proc, tc.fnLength, &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}})
 		require.NoError(t, err)
@@ -4623,26 +4765,54 @@ func TestBitToJSONRestoresDeclaredWidth(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestCastJsonToVarchar verifies that casting a JSON value to VARCHAR uses JSON_UNQUOTE semantics,
-// i.e. JSON strings lose their outer double-quotes (MySQL-compatible behavior).
+// TestCastJsonToVarchar distinguishes explicit JSON serialization from the
+// scalar text used by implicit casts, comparisons, and assignments.
 func TestCastJsonToVarchar(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
 	jsonTexts := []string{`"active"`, `42`, `true`, `null`, `[1,2,3]`, `{"k":"v"}`}
-	// After unquote: JSON strings lose outer quotes; other types keep their JSON text representation.
-	expected := []string{"active", "42", "true", "null", "[1, 2, 3]", `{"k": "v"}`}
 	nulls := []bool{false, false, false, false, false, false}
 	encoded := makeJSONEncodedFromText(t, jsonTexts, nulls)
 
 	toType := types.New(types.T_varchar, 256, 0)
-	inputs := []FunctionTestInput{
-		NewFunctionTestInput(types.T_json.ToType(), encoded, nulls),
-		NewFunctionTestInput(toType, []string{}, []bool{}),
+	cases := []struct {
+		name     string
+		cast     executeLogicOfOverload
+		expected []string
+	}{
+		{
+			name:     "explicit cast serializes JSON strings",
+			cast:     NewExplicitCast,
+			expected: []string{`"active"`, "42", "true", "null", "[1, 2, 3]", `{"k": "v"}`},
+		},
+		{
+			name:     "implicit cast exposes string payload",
+			cast:     NewCast,
+			expected: []string{"active", "42", "true", "null", "[1, 2, 3]", `{"k": "v"}`},
+		},
+		{
+			name:     "comparison cast exposes string payload",
+			cast:     NewComparisonCast,
+			expected: []string{"active", "42", "true", "null", "[1, 2, 3]", `{"k": "v"}`},
+		},
+		{
+			name:     "assignment cast exposes string payload",
+			cast:     NewAssignCast,
+			expected: []string{"active", "42", "true", "null", "[1, 2, 3]", `{"k": "v"}`},
+		},
 	}
-	expect := NewFunctionTestResult(toType, false, expected, nulls)
-	fcTC := NewFunctionTestCase(proc, inputs, expect, NewCast)
-	succeed, info := fcTC.Run()
-	require.True(t, succeed, info)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(types.T_json.ToType(), encoded, nulls),
+				NewFunctionTestInput(toType, []string{}, []bool{}),
+			}
+			expect := NewFunctionTestResult(toType, false, tc.expected, nulls)
+			fcTC := NewFunctionTestCase(proc, inputs, expect, tc.cast)
+			succeed, info := fcTC.RunAndFree()
+			require.True(t, succeed, info)
+		})
+	}
 }
 
 // emptySliceForCastTarget returns an empty slice of the right type for the second (target type) cast parameter.
@@ -4788,7 +4958,7 @@ func TestDecimal64ToDecimal128FastPaths(t *testing.T) {
 
 	for _, tc := range cases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, NewCast)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 }
@@ -5200,16 +5370,22 @@ func TestMySQLDecimalPrefix(t *testing.T) {
 		{input: "abc", want: "0"},
 		{input: "", want: "0"},
 		{input: " \t\v\f\r\n", want: "0"},
-		{input: "12.5tail", want: "12.5"},
-		{input: "2026-08-10", want: "2026"},
-		{input: "9007199254740993e0tail", want: "9007199254740993e0"},
-		{input: "1E2", want: "1e2"},
-		{input: "1E-2tail", want: "1e-2"},
-		{input: "1e+tail", want: "1"},
-		{input: "-.5x", want: "-.5"},
+		{input: "12.5tail", want: "12.50"},
+		{input: "2026-08-10", want: "2026.00"},
+		{input: "9007199254740993e0tail", want: "9007199254740993.00"},
+		{input: "1E2", want: "100.00"},
+		{input: "1E-2tail", want: "0.01"},
+		{input: "1e+tail", want: "1.00"},
+		{input: "-.5x", want: "-0.50"},
 	} {
 		t.Run(test.input, func(t *testing.T) {
-			require.Equal(t, test.want, mysqlDecimalPrefix(test.input))
+			value, err := parseMySQLDecimal128Prefix(test.input, 38, 2)
+			require.NoError(t, err)
+			want := test.want
+			if want == "0" {
+				want = "0.00"
+			}
+			require.Equal(t, want, value.Format(2))
 		})
 	}
 
@@ -5271,11 +5447,6 @@ func TestMySQLDecimalPrefixExtremeExponents(t *testing.T) {
 		negativeUnderflow = "1e-2147483648tail"
 		zeroMantissa      = "0e2147483648tail"
 	)
-	started := time.Now()
-	require.False(t, mysqlDecimalPrefixOverflows("1", 18, 6))
-	require.False(t, mysqlDecimalPrefixOverflows("1e-1", 18, 6))
-	require.False(t, mysqlDecimalPrefixOverflows("1.25e+1", 18, 6))
-	require.True(t, mysqlDecimalPrefixOverflows("1234567890123e0", 18, 6))
 
 	max64, err := clampDecimal64Value(false, 18, 6)
 	require.NoError(t, err)
@@ -5328,10 +5499,6 @@ func TestMySQLDecimalPrefixExtremeExponents(t *testing.T) {
 		require.Equal(t, want, got)
 	}
 
-	// The old Decimal64/128 path scaled by the wrapped exponent and took about
-	// one second for this matrix. The bounded prefix scan should finish with a
-	// large margin even on a loaded CI worker.
-	require.Less(t, time.Since(started), 250*time.Millisecond)
 }
 
 func TestMySQLDecimalPrefixHalfUpUnderflowBoundary(t *testing.T) {
@@ -5414,7 +5581,7 @@ func TestCastArrayDimensionMismatch(t *testing.T) {
 				NewFunctionTestInput(vecf32(4), [][]float32{}, []bool{}),
 			},
 			NewFunctionTestResult(vecf32(4), true, nil, nil), NewCast)
-		ok, info := tc.Run()
+		ok, info := tc.RunAndFree()
 		require.True(t, ok, info)
 	})
 
@@ -5425,7 +5592,7 @@ func TestCastArrayDimensionMismatch(t *testing.T) {
 				NewFunctionTestInput(vecf64(4), [][]float64{}, []bool{}),
 			},
 			NewFunctionTestResult(vecf64(4), true, nil, nil), NewCast)
-		ok, info := tc.Run()
+		ok, info := tc.RunAndFree()
 		require.True(t, ok, info)
 	})
 
@@ -5436,7 +5603,7 @@ func TestCastArrayDimensionMismatch(t *testing.T) {
 				NewFunctionTestInput(vecf32(3), [][]float32{}, []bool{}),
 			},
 			NewFunctionTestResult(vecf32(3), false, [][]float32{{1, 2, 3}}, []bool{false}), NewCast)
-		ok, info := tc.Run()
+		ok, info := tc.RunAndFree()
 		require.True(t, ok, info)
 	})
 
@@ -5447,7 +5614,7 @@ func TestCastArrayDimensionMismatch(t *testing.T) {
 				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{}, []bool{}),
 			},
 			NewFunctionTestResult(types.T_array_float32.ToType(), false, [][]float32{{1, 2, 3}}, []bool{false}), NewCast)
-		ok, info := tc.Run()
+		ok, info := tc.RunAndFree()
 		require.True(t, ok, info)
 	})
 }

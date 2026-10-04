@@ -24,6 +24,7 @@ import (
 	"math"
 	"math/bits"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -73,6 +74,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 )
 
 type TenantInfo struct {
@@ -1264,7 +1266,7 @@ var (
 				owner,
 				default_role
     		) values("%s", "%s", "%s", "%s", "%s", %s, '%s', "%s",%d, %d, %d);`
-	initMoRolePrivFormat = `insert into mo_catalog.mo_role_privs(
+	initMoRolePrivPrefix = `insert into mo_catalog.mo_role_privs(
 				role_id,
 				role_name,
 				obj_type,
@@ -1275,8 +1277,10 @@ var (
 				operation_user_id,
 				granted_time,
 				with_grant_option
-			) values(%d,"%s","%s",%d,%d,"%s","%s",%d,"%s",%v);`
-	initMoUserGrantFormat = `insert into mo_catalog.mo_user_grant(
+			) values`
+	initMoRolePrivValueFormat = `(%d,"%s","%s",%d,%d,"%s","%s",%d,"%s",%v)`
+	initMoRolePrivFormat      = initMoRolePrivPrefix + initMoRolePrivValueFormat + ";"
+	initMoUserGrantFormat     = `insert into mo_catalog.mo_user_grant(
             	role_id,
 				user_id,
 				granted_time,
@@ -1322,8 +1326,6 @@ const (
 	updateStatusLockOfUserFormat = `update mo_catalog.mo_user set status = "%s", login_attempts = login_attempts + 1, lock_time = utc_timestamp() where user_name = "%s";`
 
 	updateStatusLockOfUserForeverFormat = `update mo_catalog.mo_user set status = "%s" where user_name = "%s";`
-
-	checkRoleExistsFormat = `select role_id from mo_catalog.mo_role where role_id = %d and role_name = "%s";`
 
 	roleNameOfRoleIdFormat = `select role_name from mo_catalog.mo_role where role_id = %d;`
 
@@ -1378,7 +1380,6 @@ const (
 	checkRoleHasPrivilegeWGOWithObjFormat         = `select role_id from mo_catalog.mo_role_privs where with_grant_option = true and privilege_id = %d and obj_type = "%s" and obj_id = %d;`
 	checkRoleHasPrivilegeWGOWithObjAndLevelFormat = `select role_id from mo_catalog.mo_role_privs where with_grant_option = true and privilege_id = %d and obj_type = "%s" and obj_id = %d and privilege_level in (%s);`
 
-	checkRoleHasPrivilegeWGOOrWithOwnershipWithObjFormat         = `select distinct role_id from mo_catalog.mo_role_privs where ((with_grant_option = true and (privilege_id = %d or privilege_id = %d)) or privilege_id = %d) and obj_type = "%s" and obj_id = %d;`
 	checkRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevelFormat = `select distinct role_id from mo_catalog.mo_role_privs where ((with_grant_option = true and (privilege_id = %d or privilege_id = %d)) or privilege_id = %d) and obj_type = "%s" and obj_id = %d and privilege_level in (%s);`
 
 	// obj_type-only WGO check: for wildcard grants (*.*) that still need table vs view distinction.
@@ -1636,7 +1637,7 @@ const (
 
 	fetchSqlOfSpFormat = `select lang, body, args, sql_mode from mo_catalog.mo_stored_procedure where name = '%s' and db = '%s' order by proc_id;`
 
-	getTableColumnDefFormat = `select attname, atttyp, attnum, attnotnull, att_default, att_is_auto_increment, att_is_hidden from mo_catalog.mo_columns where account_id = %d and att_database = '%s' and att_relname = '%s' order by attnum;`
+	getTableColumnDefFormat = `select col.attname, col.atttyp, col.attnum, col.attnotnull, col.att_default, col.att_is_auto_increment, col.att_is_hidden, tbl.relkind, tbl.rel_id, tbl.rel_version, tbl.reldatabase_id from mo_catalog.mo_columns col join mo_catalog.mo_tables tbl on col.account_id = tbl.account_id and col.att_relname_id = tbl.rel_id where col.account_id = %d and col.att_database = %s and col.att_relname = %s order by col.attnum;`
 )
 
 var (
@@ -1840,14 +1841,6 @@ func getSqlForUpdateStatusLockOfUserForever(status string, user string) string {
 	return fmt.Sprintf(updateStatusLockOfUserForeverFormat, status, user)
 }
 
-func getSqlForCheckRoleExists(ctx context.Context, roleID int, roleName string) (string, error) {
-	err := inputNameIsInvalid(ctx, roleName)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(checkRoleExistsFormat, roleID, roleName), nil
-}
-
 func getSqlForRoleNameOfRoleId(roleId int64) string {
 	return fmt.Sprintf(roleNameOfRoleIdFormat, roleId)
 }
@@ -1975,10 +1968,6 @@ func getSqlForCheckRoleHasPrivilegeWGOWithObjAndExactLevel(privilegeId int64, ob
 	return fmt.Sprintf(checkRoleHasPrivilegeWGOWithObjAndLevelFormat, privilegeId, objType, objId, exactGrantOptionPrivilegeLevelSQL(privilegeLevel))
 }
 
-func getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObj(privilegeId, allPrivId, ownershipPrivId int64, objType objectType, objId int64) string {
-	return fmt.Sprintf(checkRoleHasPrivilegeWGOOrWithOwnershipWithObjFormat, privilegeId, allPrivId, ownershipPrivId, objType, objId)
-}
-
 func getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevel(privilegeId, allPrivId, ownershipPrivId int64, objType objectType, objId int64, privilegeLevel privilegeLevelType) string {
 	return fmt.Sprintf(checkRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevelFormat, privilegeId, allPrivId, ownershipPrivId, objType, objId, scopedGrantOptionPrivilegeLevelsSQL(privilegeLevel))
 }
@@ -2057,10 +2046,6 @@ func getSqlForCheckRoleHasTableLevelPrivilegeWithObjType(_ context.Context, objT
 		escapeSQLString(dbName), escapeSQLString(tableName)), nil
 }
 
-func getSqlForCheckRoleHasTableLevelPrivilege(ctx context.Context, roleId int64, privId PrivilegeType, dbName string, tableName string) (string, error) {
-	return getSqlForCheckRoleHasTableLevelPrivilegeWithObjType(ctx, objectTypeTable, roleId, privId, dbName, tableName)
-}
-
 func getSqlForCheckRoleHasTableLevelForDatabaseStarWithObjType(_ context.Context, objType objectType, roleId int64, privId PrivilegeType, dbName string) (string, error) {
 	return fmt.Sprintf(checkRoleHasTableLevelForDatabaseStarFormat, objType, roleId, privId,
 		privilegeLevelDatabaseStar, privilegeLevelStar, escapeSQLString(dbName)), nil
@@ -2119,7 +2104,7 @@ func privilegeTypeListSQL(objTyp objectType, privId PrivilegeType, includeSysSco
 }
 
 func getTableColumnDefSql(accountId uint64, dbName, tableName string) (string, error) {
-	return fmt.Sprintf(getTableColumnDefFormat, accountId, dbName, tableName), nil
+	return fmt.Sprintf(getTableColumnDefFormat, accountId, escapeSQLString(dbName), escapeSQLString(tableName)), nil
 }
 
 func getSqlForCheckDatabase(_ context.Context, dbName string) (string, error) {
@@ -2633,6 +2618,28 @@ var (
 	}
 )
 
+// initialRolePrivilegesSQL batches one role's fixed bootstrap privileges. The
+// caller retains ownership of execution and the surrounding initialization txn.
+func initialRolePrivilegesSQL(roleID uint32, roleName string, userID uint32, privileges []PrivilegeType) string {
+	if len(privileges) == 0 {
+		return ""
+	}
+	var sql strings.Builder
+	sql.WriteString(initMoRolePrivPrefix)
+	for index, privilege := range privileges {
+		if index > 0 {
+			sql.WriteByte(',')
+		}
+		entry := privilegeEntriesMap[privilege]
+		fmt.Fprintf(&sql, initMoRolePrivValueFormat,
+			roleID, roleName, entry.objType, entry.objId,
+			entry.privilegeId, entry.privilegeId.String(), entry.privilegeLevel,
+			userID, types.CurrentTimestamp().String2(time.UTC, 0), entry.withGrantOption)
+	}
+	sql.WriteByte(';')
+	return sql.String()
+}
+
 type verifiedRoleType int
 
 const (
@@ -2642,6 +2649,8 @@ const (
 
 // privilegeCache cache privileges on table
 type privilegeCache struct {
+	catalogVersion disttae.PrivilegeCacheVersion
+	cachedScopes   int
 	// For objectType table
 	// For objectType table *, *.*
 	storeForTable [int(privilegeLevelEnd)]btree.Set[PrivilegeType]
@@ -2663,8 +2672,6 @@ type privilegeCache struct {
 	storeForDatabase2 btree.Map[string, *btree.Set[PrivilegeType]]
 	// For objectType account *
 	storeForAccount [int(privilegeLevelEnd)]btree.Set[PrivilegeType]
-	total           atomic.Uint64
-	hit             atomic.Uint64
 
 	// The active primary role is session state, while its grant to the user is
 	// catalog state. Keep the validation in the same cache generation as the
@@ -2732,12 +2739,10 @@ func (pc *privilegeCache) setActiveRoleGrantForGeneration(
 
 // has checks the cache has privilege on a table
 func (pc *privilegeCache) has(objTyp objectType, plt privilegeLevelType, dbName, tableName string, priv PrivilegeType) bool {
-	pc.total.Add(1)
-	privSet := pc.getPrivilegeSet(objTyp, plt, dbName, tableName)
+	privSet := pc.getPrivilegeSet(objTyp, plt, dbName, tableName, false)
 	if privSet != nil {
 		for _, p := range privilegeTypeWithCoveringPrivileges(objTyp, priv) {
 			if privSet.Contains(p) {
-				pc.hit.Add(1)
 				return true
 			}
 		}
@@ -2745,57 +2750,27 @@ func (pc *privilegeCache) has(objTyp objectType, plt privilegeLevelType, dbName,
 	return false
 }
 
-func (pc *privilegeCache) getPrivilegeSet(objTyp objectType, plt privilegeLevelType, dbName, tableName string) *btree.Set[PrivilegeType] {
+// Only successful grants allocate a scoped entry. Negative lookups are read-only.
+// Bound the retained scope count independently of catalog/connection lifetime.
+const maxPrivilegeCacheScopes = 1024
+
+func (pc *privilegeCache) getPrivilegeSet(objTyp objectType, plt privilegeLevelType, dbName, tableName string, create bool) *btree.Set[PrivilegeType] {
+	var databases *btree.Map[string, *btree.Set[PrivilegeType]]
+	var relations *btree.Map[string, *btree.Map[string, *btree.Set[PrivilegeType]]]
 	switch objTyp {
-	case objectTypeTable:
-		switch plt {
-		case privilegeLevelStarStar, privilegeLevelStar:
-			return &pc.storeForTable[plt]
-		case privilegeLevelDatabaseStar:
-			dbStore, ok1 := pc.storeForTable2.Get(dbName)
-			if !ok1 {
-				dbStore = &btree.Set[PrivilegeType]{}
-				pc.storeForTable2.Set(dbName, dbStore)
-			}
-			return dbStore
-		case privilegeLevelDatabaseTable, privilegeLevelTable:
-			tableStore, ok1 := pc.storeForTable3.Get(dbName)
-			if !ok1 {
-				tableStore = &btree.Map[string, *btree.Set[PrivilegeType]]{}
-				pc.storeForTable3.Set(dbName, tableStore)
-			}
-			privSet, ok2 := tableStore.Get(tableName)
-			if !ok2 {
-				privSet = &btree.Set[PrivilegeType]{}
-				tableStore.Set(tableName, privSet)
-			}
-			return privSet
-		default:
-			return nil
+	case objectTypeTable, objectTypeView:
+		levels := &pc.storeForTable
+		databases, relations = &pc.storeForTable2, &pc.storeForTable3
+		if objTyp == objectTypeView {
+			levels = &pc.storeForView
+			databases, relations = &pc.storeForView2, &pc.storeForView3
 		}
-	case objectTypeView:
 		switch plt {
 		case privilegeLevelStarStar, privilegeLevelStar:
-			return &pc.storeForView[plt]
+			return &levels[plt]
 		case privilegeLevelDatabaseStar:
-			dbStore, ok1 := pc.storeForView2.Get(dbName)
-			if !ok1 {
-				dbStore = &btree.Set[PrivilegeType]{}
-				pc.storeForView2.Set(dbName, dbStore)
-			}
-			return dbStore
+			relations = nil
 		case privilegeLevelDatabaseTable, privilegeLevelTable:
-			viewStore, ok1 := pc.storeForView3.Get(dbName)
-			if !ok1 {
-				viewStore = &btree.Map[string, *btree.Set[PrivilegeType]]{}
-				pc.storeForView3.Set(dbName, viewStore)
-			}
-			privSet, ok2 := viewStore.Get(tableName)
-			if !ok2 {
-				privSet = &btree.Set[PrivilegeType]{}
-				viewStore.Set(tableName, privSet)
-			}
-			return privSet
 		default:
 			return nil
 		}
@@ -2804,12 +2779,7 @@ func (pc *privilegeCache) getPrivilegeSet(objTyp objectType, plt privilegeLevelT
 		case privilegeLevelStar, privilegeLevelStarStar:
 			return &pc.storeForDatabase[plt]
 		case privilegeLevelDatabase:
-			dbStore, ok1 := pc.storeForDatabase2.Get(dbName)
-			if !ok1 {
-				dbStore = &btree.Set[PrivilegeType]{}
-				pc.storeForDatabase2.Set(dbName, dbStore)
-			}
-			return dbStore
+			databases = &pc.storeForDatabase2
 		default:
 			return nil
 		}
@@ -2818,23 +2788,38 @@ func (pc *privilegeCache) getPrivilegeSet(objTyp objectType, plt privilegeLevelT
 	default:
 		return nil
 	}
-
-}
-
-// set replaces the privileges by new ones
-func (pc *privilegeCache) set(objTyp objectType, plt privilegeLevelType, dbName, tableName string, priv ...PrivilegeType) {
-	privSet := pc.getPrivilegeSet(objTyp, plt, dbName, tableName)
-	if privSet != nil {
-		privSet.Clear()
-		for _, p := range priv {
-			privSet.Insert(p)
-		}
+	if create && pc.cachedScopes >= maxPrivilegeCacheScopes {
+		pc.invalidate()
 	}
+	if relations == nil {
+		set, found := databases.Get(dbName)
+		if !found && create {
+			set = &btree.Set[PrivilegeType]{}
+			databases.Set(dbName, set)
+			pc.cachedScopes++
+		}
+		return set
+	}
+	tables, found := relations.Get(dbName)
+	if !found {
+		if !create {
+			return nil
+		}
+		tables = &btree.Map[string, *btree.Set[PrivilegeType]]{}
+		relations.Set(dbName, tables)
+	}
+	set, found := tables.Get(tableName)
+	if !found && create {
+		set = &btree.Set[PrivilegeType]{}
+		tables.Set(tableName, set)
+		pc.cachedScopes++
+	}
+	return set
 }
 
 // add puts the privileges without replacing existed ones
 func (pc *privilegeCache) add(objTyp objectType, plt privilegeLevelType, dbName, tableName string, priv ...PrivilegeType) {
-	privSet := pc.getPrivilegeSet(objTyp, plt, dbName, tableName)
+	privSet := pc.getPrivilegeSet(objTyp, plt, dbName, tableName, true)
 	if privSet != nil {
 		for _, p := range priv {
 			privSet.Insert(p)
@@ -2847,11 +2832,11 @@ func (pc *privilegeCache) invalidate() {
 	if pc == nil {
 		return
 	}
+	pc.catalogVersion = disttae.PrivilegeCacheVersion{}
+	pc.cachedScopes = 0
 	// Advance first so a validation that started in the old generation can
 	// never become visible even if its atomic Store races with the clear below.
 	pc.activeRoleGrantGeneration.Add(1)
-	// total := pc.total.Swap(0)
-	// hit := pc.hit.Swap(0)
 	for i := privilegeLevelStar; i < privilegeLevelEnd; i++ {
 		pc.storeForTable[i].Clear()
 		pc.storeForView[i].Clear()
@@ -2864,13 +2849,6 @@ func (pc *privilegeCache) invalidate() {
 	pc.storeForView3.Clear()
 	pc.storeForDatabase2.Clear()
 	pc.activeRoleGrant.Store(nil)
-	// ratio := float64(0)
-	// if total == 0 {
-	//	ratio = 0
-	// } else {
-	//	ratio = float64(hit) / float64(total)
-	// }
-	// logutil.Debugf("-->hit %d total %d ratio %f", hit, total, ratio)
 }
 
 // verifiedRole holds the role info that has been checked
@@ -4643,7 +4621,8 @@ func doDropUser(ctx context.Context, ses *Session, du *tree.DropUser) (err error
 		return err
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
+	// Retain creator-row locks held by partial restore through recreation.
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
 	// put it into the single transaction
@@ -4727,7 +4706,8 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error
 		return err
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
+	// Honor grant-row locks retained by catalog restore through replay.
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
 	// put it into the single transaction
@@ -5269,7 +5249,7 @@ func doRevokePrivilege(ctx context.Context, ses FeSession, rp *tree.RevokePrivil
 	}
 
 	// step 2: decide the object type , the object id and the privilege_level
-	privLevel, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevel(ctx, ses, bh, rp.ObjType, *rp.Level)
+	privLevel, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevelWithLock(ctx, ses, bh, rp.ObjType, *rp.Level, true)
 	if err != nil {
 		return err
 	}
@@ -5791,7 +5771,7 @@ func checkPrivilegeObjectTypeAndPrivilegeLevelWithLock(
 	getRelationID := func(dbName, relationName string, isView bool) (int64, error) {
 		if lockObject {
 			// Match DROP's database-before-relation lock order. Both catalog row
-			// locks remain owned by the GRANT transaction through publication.
+			// locks remain owned through the privilege mutation.
 			if _, err := getDatabaseID(dbName); err != nil {
 				return 0, err
 			}
@@ -7902,6 +7882,11 @@ func verifyPrivilegeEntryInMultiPrivilegeLevels(
 	if len(dbName) == 0 {
 		dbName = ses.GetDatabaseName()
 	}
+	// Duplicate levels can generate the same complete predicate. Remember only
+	// successful misses in this invocation, retaining ordered cache/error checks
+	// and the early wildcard hit without allocating a collection.
+	var missedSQLStorage [int(privilegeLevelEnd)]string
+	missedSQL := missedSQLStorage[:0]
 	for _, pl := range pls {
 		if cache != nil && enableCache {
 			yes = cache.has(entry.objType, pl, dbName, entry.tableName, entry.privilegeId)
@@ -7912,6 +7897,10 @@ func verifyPrivilegeEntryInMultiPrivilegeLevels(
 		sql, err = getSqlForPrivilege2(ctx, ses, roleId, entry, pl)
 		if err != nil {
 			return false, err
+		}
+
+		if slices.Contains(missedSQL, sql) {
+			continue
 		}
 
 		bh.ClearExecResultSet()
@@ -7931,6 +7920,7 @@ func verifyPrivilegeEntryInMultiPrivilegeLevels(
 			}
 			return true, nil
 		}
+		missedSQL = append(missedSQL, sql)
 	}
 	return false, nil
 }
@@ -8184,6 +8174,11 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 	// check privilege cache first
 	if len(priv.entries) == 0 {
 		return false, stats, nil
+	}
+
+	// Freshness belongs to authorization consumption, including nested plans.
+	if err = ses.refreshPrivilegeCache(ctx); err != nil {
+		return false, stats, err
 	}
 
 	enableCache, err = privilegeCacheIsEnabled(ctx, ses)
@@ -8487,6 +8482,11 @@ func validateActiveRoleGrantForAuthorization(
 	tenant := ses.GetTenantInfo()
 	if !activeRoleGrantNeedsCheck(tenant) {
 		return true, stats, nil
+	}
+
+	// Freshness belongs to authorization consumption, including nested plans.
+	if err = ses.refreshPrivilegeCache(ctx); err != nil {
+		return false, stats, err
 	}
 
 	enableCache, err := privilegeCacheIsEnabled(ctx, ses)
@@ -9208,13 +9208,14 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 	}
 
 	priv := determinePrivilegeSetOfStatement(stmt)
+	// Only the sys account moadmin role may run mo_ctrl / fault_inject, wherever it appears in the
+	// plan. Check it BEFORE the object-type branch: a statement can carry the call in an expression
+	// with no table object (e.g. SELECT 1 WHERE mo_ctl(...) IS NOT NULL), which would otherwise skip
+	// this gate entirely.
+	if hasMoCtrl(p) && !verifyAccountCanExecMoCtrl(ses.GetTenantInfo()) {
+		return false, stats, moerr.NewInternalError(ctx, "do not have privilege to execute the statement")
+	}
 	if priv.objectType() == objectTypeTable {
-		// only sys account, moadmin role can exec mo_ctrl
-		if hasMoCtrl(p) {
-			if !verifyAccountCanExecMoCtrl(ses.GetTenantInfo()) {
-				return false, stats, moerr.NewInternalError(ctx, "do not have privilege to execute the statement")
-			}
-		}
 		if isTargetSysWhiteList(p) && verifyAccountCanExecMoCtrl(ses.GetTenantInfo()) {
 			return true, stats, nil
 		}
@@ -9824,48 +9825,6 @@ func mergeRoleSets(dst, src *btree.Set[int64]) {
 	for _, id := range src.Keys() {
 		dst.Insert(id)
 	}
-}
-
-func getRoleSetThatPrivilegeGrantedToWGOWithObj(
-	ctx context.Context,
-	bh BackgroundExec,
-	privType PrivilegeType,
-	objType objectType,
-	objId int64,
-) (*btree.Set[int64], error) {
-	var sql string
-	switch privType {
-	case PrivilegeTypeSelect, PrivilegeTypeInsert, PrivilegeTypeUpdate,
-		PrivilegeTypeTruncate, PrivilegeTypeDelete, PrivilegeTypeReference,
-		PrivilegeTypeIndex, PrivilegeTypeValues, PrivilegeTypeTableAll:
-		sql = getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObj(
-			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership), objType, objId)
-	case PrivilegeTypeTableOwnership:
-		sql = getSqlForCheckRoleHasPrivilegeWGOWithObj(int64(privType), objType, objId)
-	default:
-		sql = getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType)
-	}
-
-	rset := &btree.Set[int64]{}
-	bh.ClearExecResultSet()
-	err := bh.Exec(ctx, sql)
-	if err != nil {
-		return nil, err
-	}
-	erArray, err := getResultSet(ctx, bh)
-	if err != nil {
-		return nil, err
-	}
-	if execResultArrayHasData(erArray) {
-		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-			id, err := erArray[0].GetInt64(ctx, i, 0)
-			if err != nil {
-				return nil, err
-			}
-			rset.Insert(id)
-		}
-	}
-	return rset, err
 }
 
 func getRoleSetThatDatabasePrivilegeGrantedToWGOWithObjAndLevel(
@@ -10962,30 +10921,11 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 		newTenant.GetUserID(), newTenant.GetDefaultRoleID(), accountAdminRoleID)
 	addSqlIntoSet(initMoUser1)
 
-	// step4: add new entries to the mo_role_privs
-	// accountadmin role
-	for _, t := range entriesOfAccountAdminForMoRolePrivsFor {
-		entry := privilegeEntriesMap[t]
-		initMoRolePriv := fmt.Sprintf(initMoRolePrivFormat,
-			accountAdminRoleID, accountAdminRoleName,
-			entry.objType, entry.objId,
-			entry.privilegeId, entry.privilegeId.String(), entry.privilegeLevel,
-			newTenant.GetUserID(), types.CurrentTimestamp().String2(time.UTC, 0),
-			entry.withGrantOption)
-		addSqlIntoSet(initMoRolePriv)
-	}
-
-	// public role
-	for _, t := range entriesOfPublicForMoRolePrivsFor {
-		entry := privilegeEntriesMap[t]
-		initMoRolePriv := fmt.Sprintf(initMoRolePrivFormat,
-			publicRoleID, publicRoleName,
-			entry.objType, entry.objId,
-			entry.privilegeId, entry.privilegeId.String(), entry.privilegeLevel,
-			newTenant.GetUserID(), types.CurrentTimestamp().String2(time.UTC, 0),
-			entry.withGrantOption)
-		addSqlIntoSet(initMoRolePriv)
-	}
+	// Initialize each role in one statement within the existing account transaction.
+	addSqlIntoSet(initialRolePrivilegesSQL(accountAdminRoleID, accountAdminRoleName,
+		newTenant.GetUserID(), entriesOfAccountAdminForMoRolePrivsFor))
+	addSqlIntoSet(initialRolePrivilegesSQL(publicRoleID, publicRoleName,
+		newTenant.GetUserID(), entriesOfPublicForMoRolePrivsFor))
 
 	// step5: add new entries to the mo_user_grant
 	initMoUserGrant1 := fmt.Sprintf(initMoUserGrantFormat, accountAdminRoleID, newTenant.GetUserID(), types.CurrentTimestamp().String2(time.UTC, 0), true)
@@ -11081,7 +11021,9 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 
 func requireCommonViewColumnsProtocol(ctx context.Context, bh BackgroundExec) error {
 	bh.ClearExecResultSet()
-	if err := bh.Exec(ctx, "SELECT mo_ctl('cn', 'GetProtocolVersion', '')"); err != nil {
+	// This fixed cluster probe is system-authored; subsequent tenant DDL keeps its original identity.
+	probeCtx := defines.AttachAccount(ctx, catalog.System_Account, catalog.System_User, catalog.System_Role)
+	if err := bh.Exec(probeCtx, "SELECT mo_ctl('cn', 'GetProtocolVersion', '')"); err != nil {
 		return err
 	}
 	results, err := getResultSet(ctx, bh)
@@ -12277,6 +12219,9 @@ func doInterpretCall(
 	callerAffectedRows int64,
 	affectedRows *int64,
 ) ([]ExecResult, error) {
+	if result, ok, err := executeCDCTargetGuardCall(ctx, ses, call); ok || err != nil {
+		return result, err
+	}
 	if parsed, ok, err := parseIcebergBuiltinCall(ctx, call); ok || err != nil {
 		if err != nil {
 			return nil, err

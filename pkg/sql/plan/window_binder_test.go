@@ -870,9 +870,9 @@ func TestNamedWindowValidationRetainsDependencies(t *testing.T) {
 	t.Run("ordinary plan", func(t *testing.T) {
 		queryPlan, err := buildNamedWindowPlan(t, sql)
 		require.NoError(t, err)
-		require.Len(t, queryPlan.GetQuery().GetCatalogDependencies(), 1)
-		dependency := queryPlan.GetQuery().GetCatalogDependencies()[0]
-		require.Equal(t, "region", dependency.GetObjName())
+		dependencies := queryPlan.GetQuery().GetCatalogDependencies()
+		require.Len(t, dependencies, 2)
+		require.ElementsMatch(t, []string{"nation", "region"}, []string{dependencies[0].ObjName, dependencies[1].ObjName})
 		require.False(t, queryHasReachableTable(queryPlan.GetQuery(), "region"))
 	})
 
@@ -880,8 +880,9 @@ func TestNamedWindowValidationRetainsDependencies(t *testing.T) {
 		queryPlan, err := buildNamedWindowPlan(t,
 			"select sum(n_nationkey) over unused_w from nation window unused_w as (order by (select r_name from region limit 1))")
 		require.NoError(t, err)
-		require.Len(t, queryPlan.GetQuery().GetCatalogDependencies(), 1)
-		require.Equal(t, "region", queryPlan.GetQuery().GetCatalogDependencies()[0].GetObjName())
+		dependencies := queryPlan.GetQuery().GetCatalogDependencies()
+		require.Len(t, dependencies, 2)
+		require.ElementsMatch(t, []string{"nation", "region"}, []string{dependencies[0].ObjName, dependencies[1].ObjName})
 	})
 
 	t.Run("prepare schema invalidation", func(t *testing.T) {

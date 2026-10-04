@@ -70,8 +70,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
@@ -426,6 +424,7 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 	}
 	if len(envStmt) > 0 {
 		for i, sql := range envStmt {
+			sqlType = constant.ExternSql
 			if i < len(sqlTypes) {
 				sqlType = sqlTypes[i]
 			}
@@ -1770,14 +1769,6 @@ func doSetVar(
 					if cache != nil {
 						cache.invalidate()
 					}
-					// Clearing the cache is also the explicit synchronization point
-					// for externally changed role membership. Refresh it now, outside
-					// the caller's transaction snapshot, instead of allowing the next
-					// authorization check to repopulate the cache from stale state.
-					_, _, err = validateActiveRoleGrantForAuthorization(execCtx.reqCtx, ses)
-					if err != nil {
-						return err
-					}
 				}
 				err = setVarFunc(assign.System, assign.Global, name, value, sql)
 				if err != nil {
@@ -2908,6 +2899,8 @@ func doPrepareString(ses *Session, execCtx *ExecCtx, st *tree.PrepareString) (*P
 }
 
 func doPrepareStringInSession(owner *Session, executionSes FeSession, execCtx *ExecCtx, st *tree.PrepareString) (*PrepareStmt, error) {
+	nonuser := executionSes.GetStmtProfile().GetSqlSourceType() == constant.CloudNoUserSql ||
+		statementSQLSource(st.Sql, sessionSQLModeForParser(owner)) == constant.CloudNoUserSql
 	rewritten, innerStmt, remapDb, err := prepareStringStatement(execCtx, owner, st.Sql)
 	if err != nil {
 		return nil, err
@@ -2927,6 +2920,7 @@ func doPrepareStringInSession(owner *Session, executionSes FeSession, execCtx *E
 		innerStmt.Free()
 		return nil, err
 	}
+	prepareStmt.IsCloudNonuser = nonuser
 
 	if err = owner.SetPrepareStmt(execCtx.reqCtx, prepareStmt.Name, prepareStmt); err != nil {
 		prepareStmt.Close()
@@ -3000,15 +2994,6 @@ func handlePrepareString(ses FeSession, execCtx *ExecCtx, st *tree.PrepareString
 	return doPrepareString(ses.(*Session), execCtx, st)
 }
 
-func createPrepareStmt(
-	execCtx *ExecCtx,
-	ses *Session,
-	originSQL string,
-	stmt tree.Statement,
-	saveStmt tree.Statement) (*PrepareStmt, error) {
-	return createPrepareStmtInSession(execCtx, ses, ses, originSQL, stmt, saveStmt)
-}
-
 func createPrepareStmtInSession(
 	execCtx *ExecCtx,
 	owner *Session,
@@ -3016,6 +3001,9 @@ func createPrepareStmtInSession(
 	originSQL string,
 	stmt tree.Statement,
 	saveStmt tree.Statement) (*PrepareStmt, error) {
+	// Nested planning may change the session's current statement. Capture the
+	// owner statement now; neighboring statements in the request are irrelevant.
+	nonuser := executionSes.GetStmtProfile().GetSqlSourceType() == constant.CloudNoUserSql
 	// A preceding statement may have run nested/background SQL and left the
 	// compiler context pointing at a temporary ExecCtx that has already been
 	// closed. PREPARE plans synchronously against the current request context.
@@ -3055,7 +3043,7 @@ func createPrepareStmtInSession(
 	prepareControl := preparePlan.GetDcl().GetPrepare()
 	_, isQueryPlan := prepareControl.Plan.Plan.(*plan.Plan_Query)
 	if !executionSes.IsBackgroundSession() &&
-		isQueryPlan &&
+		isQueryPlan && len(prepareControl.ParamTypes) == 0 &&
 		shouldCachePrepareCompile(prepareControl.Plan) &&
 		(!prepareSchedulingIntent.Explicit ||
 			schedule.ValidateSchedulingIntent(prepareSchedulingIntent) != "") {
@@ -3124,7 +3112,6 @@ func createPrepareStmtInSession(
 			prepareControl.Plan),
 		directResultParamPositions: plan2.PreparedPlanDirectResultParamPositions(
 			prepareControl.Plan),
-		directResultParamPositionsSet: true,
 		jsonComparisonParamPositions: plan2.PreparedJSONComparisonParamPositions(
 			prepareControl.Plan),
 		jsonMemberOfParamPositions: plan2.PreparedJSONMemberOfParamPositions(
@@ -3135,12 +3122,7 @@ func createPrepareStmtInSession(
 		getFromSendLongData:        make(map[int]struct{}),
 		schedulingSQLMode:          schedulingSQLMode,
 	}
-	prepareStmt.refreshNumericPrefixConsumer(
-		prepareControl.Plan, len(prepareControl.ParamTypes))
 	prepareStmt.refreshGenerateSeriesParamMetadata(prepareControl.Plan)
-	prepareStmt.refreshGeometrySRIDParamPositions(prepareControl.Plan)
-	prepareStmt.directResultParamPositions = plan2.PreparedPlanDirectResultParamPositions(prepareControl.Plan)
-	prepareStmt.directResultParamPositionsSet = true
 
 	_, ok := preparePlan.GetDcl().Control.(*plan.DataControl_Prepare)
 	if ok {
@@ -3153,10 +3135,7 @@ func createPrepareStmtInSession(
 			logutil.Errorf("Error make column def data for prepare statement: %v", err)
 		}
 	}
-	if execCtx.input != nil {
-		sqlSourceTypes := execCtx.input.getSqlSourceTypes()
-		prepareStmt.IsCloudNonuser = slices.Contains(sqlSourceTypes, constant.CloudNoUserSql)
-	}
+	prepareStmt.IsCloudNonuser = nonuser
 	prepareStmt.Ts = prepareTs
 	return prepareStmt, nil
 }
@@ -3610,7 +3589,7 @@ func handleGrantPrivilege(ses FeSession, execCtx *ExecCtx, gp *tree.GrantPrivile
 // handleRevokePrivilege revokes the privilege from the user or role
 func handleRevokePrivilege(ses FeSession, execCtx *ExecCtx, rp *tree.RevokePrivilege) (err error) {
 	ctx := execCtx.reqCtx
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
 	// put it into the single transaction
@@ -4143,41 +4122,75 @@ func buildPlanWithPrepareMode(
 	stmt tree.Statement,
 	forcePrepare bool,
 ) (*plan2.Plan, error) {
-	var ret *plan2.Plan
-	var err error
+	return buildPlanWithStats(reqCtx, ses, ctx, func() (*plan2.Plan, error) {
+		var ret *plan2.Plan
+		var err error
 
-	// A later statement in a multi-statement packet can reuse a compiler
-	// context whose process has already been released.  Planning does not
-	// require a transaction operator, so keep the tracing setup optional
-	// instead of dereferencing the missing process.
-	var txnOp client.TxnOperator
-	if proc := ctx.GetProcess(); proc != nil {
-		txnOp = proc.GetTxnOperator()
-	}
+		isPrepareStmt := forcePrepare
+		if ses != nil {
+			if len(ses.GetSql()) > 8 {
+				prefix := strings.ToLower(ses.GetSql()[:8])
+				isPrepareStmt = isPrepareStmt || prefix == "execute " || prefix == "prepare "
+			}
+		}
+		// Handle specific statement types
+		if s, ok := stmt.(*tree.Insert); ok {
+			if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
+				ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+
+		if ret != nil {
+			ret.IsPrepare = isPrepareStmt
+			if forcePrepare {
+				err = plan2.NormalizePrepareParamRefs(reqCtx, ret)
+			}
+			return ret, err
+		}
+
+		// Default handling of various statements
+		switch stmt := stmt.(type) {
+		case *tree.Select, *tree.ParenSelect, *tree.ValuesStatement,
+			*tree.Update, *tree.Delete, *tree.Insert, *tree.MultiInsert,
+			*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns, *tree.ShowColumnNumber,
+			*tree.ShowTableNumber, *tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex,
+			*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
+			opt := plan2.NewBaseOptimizer(ctx)
+			optimized, err := opt.Optimize(stmt, isPrepareStmt)
+			if err != nil {
+				return nil, err
+			}
+
+			ret = &plan2.Plan{
+				Plan: &plan2.Plan_Query{
+					Query: optimized,
+				},
+			}
+		default:
+			ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt)
+		}
+
+		if ret != nil {
+			ret.IsPrepare = isPrepareStmt
+			if forcePrepare && err == nil {
+				err = plan2.NormalizePrepareParamRefs(reqCtx, ret)
+			}
+		}
+		return ret, err
+	})
+}
+
+// Share request accounting and context ownership across ordinary and prepared
+// planning. Parameter binding changes the planner entry, not its trace lifetime.
+func buildPlanWithStats(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
+	build func() (*plan2.Plan, error)) (ret *plan2.Plan, err error) {
 	start := time.Now()
-	seq := uint64(0)
-	if txnOp != nil {
-		seq = txnOp.NextSequence()
-		txnTrace.GetService(ses.GetService()).AddTxnDurationAction(
-			txnOp,
-			client.BuildPlanEvent,
-			seq,
-			0,
-			0,
-			err)
-	}
 
 	defer func() {
 		cost := time.Since(start)
-		if txnOp != nil {
-			txnTrace.GetService(ses.GetService()).AddTxnDurationAction(
-				txnOp,
-				client.BuildPlanEvent,
-				seq,
-				0,
-				cost,
-				err)
-		}
 		v2.TxnStatementBuildPlanDurationHistogram.Observe(cost.Seconds())
 	}()
 
@@ -4220,66 +4233,14 @@ func buildPlanWithPrepareMode(
 		stats.PlanEnd()
 	}()
 
-	isPrepareStmt := forcePrepare
 	if ses != nil {
-		accId, err := defines.GetAccountId(reqCtx)
-		if err != nil {
-			return nil, err
+		accId, accountErr := defines.GetAccountId(reqCtx)
+		if accountErr != nil {
+			return nil, accountErr
 		}
 		ses.SetAccountId(accId)
-
-		if len(ses.GetSql()) > 8 {
-			prefix := strings.ToLower(ses.GetSql()[:8])
-			isPrepareStmt = isPrepareStmt || prefix == "execute " || prefix == "prepare "
-		}
 	}
-	// Handle specific statement types
-	if s, ok := stmt.(*tree.Insert); ok {
-		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
-			ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt)
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	if ret != nil {
-		ret.IsPrepare = isPrepareStmt
-		if forcePrepare {
-			err = plan2.NormalizePrepareParamRefs(reqCtx, ret)
-		}
-		return ret, err
-	}
-
-	// Default handling of various statements
-	switch stmt := stmt.(type) {
-	case *tree.Select, *tree.ParenSelect, *tree.ValuesStatement,
-		*tree.Update, *tree.Delete, *tree.Insert, *tree.MultiInsert,
-		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns, *tree.ShowColumnNumber,
-		*tree.ShowTableNumber, *tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex,
-		*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
-		opt := plan2.NewBaseOptimizer(ctx)
-		optimized, err := opt.Optimize(stmt, isPrepareStmt)
-		if err != nil {
-			return nil, err
-		}
-
-		ret = &plan2.Plan{
-			Plan: &plan2.Plan_Query{
-				Query: optimized,
-			},
-		}
-	default:
-		ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt)
-	}
-
-	if ret != nil {
-		ret.IsPrepare = isPrepareStmt
-		if forcePrepare && err == nil {
-			err = plan2.NormalizePrepareParamRefs(reqCtx, ret)
-		}
-	}
-	return ret, err
+	return build()
 }
 
 // buildPlanWithAuthorization wraps the buildPlan function to perform permission checks
@@ -4311,33 +4272,65 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 		return true, nil
 	}
 
+	// Scan nodes and binding-time dependencies often describe the same object.
+	// Resolve each identity/snapshot once per validation, while checking every
+	// captured version against that result. Nothing is retained across requests.
+	type lookupKey struct{ database, table, snapshot string }
+	type resolvedObject struct {
+		ref *plan2.ObjectRef
+		def *plan2.TableDef
+	}
+	resolved := make(map[lookupKey]resolvedObject)
 	checkCatalogObject := func(
 		ref *plan.ObjectRef,
 		name string,
 		snapshot *plan2.Snapshot,
 		version int64,
 		tableID int64,
+		databaseID uint64,
 	) (bool, error) {
 		if ref == nil {
 			return true, nil
 		}
-		_, tableDef, err := resolveFn(plan2.DbNameOfObjRef(ref), name, snapshot)
-		if err != nil {
-			return true, err
+		// An isolated SHOW binder can capture an unpublished publisher source.
+		// A name-only resolver in the subscriber cannot validate it. Rebind the
+		// description rather than resolving a same-named subscriber object.
+		if ref.PubInfo != nil && ref.SubscriptionName == "" {
+			return true, nil
 		}
+		key := lookupKey{database: plan2.DbNameOfObjRef(ref), table: name}
+		if snapshot != nil {
+			key.snapshot = snapshot.String()
+		}
+		object, exists := resolved[key]
+		if !exists {
+			var err error
+			object.ref, object.def, err = resolveFn(key.database, name, snapshot)
+			if err != nil {
+				return true, err
+			}
+			resolved[key] = object
+		}
+		current, tableDef := object.ref, object.def
 		if tableDef == nil {
 			return true, nil
 		}
-		if int64(tableDef.Version) != version || int64(tableDef.TblId) != tableID {
+		if int64(tableDef.Version) != version || int64(tableDef.TblId) != tableID ||
+			(databaseID != 0 && tableDef.DbId != databaseID) {
+			return true, nil
+		}
+		if (ref.PubInfo == nil) != (current.GetPubInfo() == nil) ||
+			(ref.PubInfo != nil && (current.PubInfo.TenantId != ref.PubInfo.TenantId ||
+				current.SubscriptionName != ref.SubscriptionName || current.SchemaName != ref.SchemaName)) {
 			return true, nil
 		}
 		return false, nil
 	}
-	checkFn := func(ref *plan.ObjectRef, def *plan.TableDef) (bool, error) {
+	checkFn := func(ref *plan.ObjectRef, def *plan.TableDef, snapshot *plan2.Snapshot) (bool, error) {
 		if ref == nil || def == nil {
 			return true, nil
 		}
-		return checkCatalogObject(ref, def.Name, nil, int64(def.Version), int64(def.TblId))
+		return checkCatalogObject(ref, def.Name, snapshot, int64(def.Version), int64(def.TblId), def.DbId)
 	}
 	switch p := plan0.Plan.(type) {
 	case *plan.Plan_Query:
@@ -4346,25 +4339,25 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 		}
 		for i := range p.Query.Nodes {
 			if def := p.Query.Nodes[i].TableDef; def != nil {
-				flag, err := checkFn(p.Query.Nodes[i].ObjRef, def)
+				flag, err := checkFn(p.Query.Nodes[i].ObjRef, def, p.Query.Nodes[i].ScanSnapshot)
 				if err != nil || flag {
 					return true, err
 				}
 			}
 			if ctx := p.Query.Nodes[i].InsertCtx; ctx != nil {
-				flag, err := checkFn(ctx.Ref, ctx.TableDef)
+				flag, err := checkFn(ctx.Ref, ctx.TableDef, nil)
 				if err != nil || flag {
 					return true, err
 				}
 			}
 			if ctx := p.Query.Nodes[i].DeleteCtx; ctx != nil {
-				flag, err := checkFn(ctx.Ref, ctx.TableDef)
+				flag, err := checkFn(ctx.Ref, ctx.TableDef, nil)
 				if err != nil || flag {
 					return true, err
 				}
 			}
 			if ctx := p.Query.Nodes[i].PreInsertCtx; ctx != nil {
-				flag, err := checkFn(ctx.Ref, ctx.TableDef)
+				flag, err := checkFn(ctx.Ref, ctx.TableDef, nil)
 				if err != nil || flag {
 					return true, err
 				}
@@ -4377,6 +4370,7 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 				dependency.GetSnapshot(),
 				dependency.GetServer(),
 				dependency.GetObj(),
+				uint64(dependency.GetDb()),
 			)
 			if err != nil || flag {
 				return true, err
@@ -4437,12 +4431,14 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 		execCtx.rewriteEnabled = ses.rewriteEnabled.Load()
 	}
 	parserSQLMode := sessionSQLModeForParser(ses)
+	internalSource := execCtx.input.isInternalSQLSource(ses)
 	// Reset the per-statement database remap; it is (re)populated below only when
 	// the rewrite feature is enabled and a remapdb is configured.
 	execCtx.remapDb = nil
 	var cws []ComputationWrapper = nil
 	var statementRemaps []map[string]string
 	if preparePlan := execCtx.input.getPreparePlan(); preparePlan != nil {
+		execCtx.input.genSqlSourceType(ses)
 		tcw := InitTxnComputationWrapper(ses, execCtx.input.stmt, proc)
 		tcw.plan = preparePlan.GetDcl().GetPrepare().Plan
 		tcw.binaryPrepare = execCtx.input.isBinaryProtExecute
@@ -4457,12 +4453,12 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 		return cws, nil
 	} else if cached := cachedPlanForInput(ses, execCtx.input); cached != nil {
 		var remapErr error
-		statementSchedulingSQL, schedulingErr := schedulingSQLByStatementWithSQLMode(
-			execCtx.reqCtx, execCtx.input.getSql(), parserSQLMode)
+		statementSchedulingSQL, sources, schedulingErr := schedulingSQLByStatementWithSQLMode(
+			execCtx.reqCtx, execCtx.input.getSql(), parserSQLMode, internalSource)
 		if schedulingErr != nil {
 			return nil, schedulingErr
 		}
-		if len(statementSchedulingSQL) != len(cached.stmts) {
+		if len(statementSchedulingSQL) != len(cached.stmts) || len(sources) != len(cached.stmts) {
 			return nil, moerr.NewInternalError(execCtx.reqCtx, "the count of scheduling policies is not equal to cached statements")
 		}
 		statementRemaps, remapErr = extractRemapDbByStatementWithSQLMode(execCtx.reqCtx, execCtx.input.getSql(), parserSQLMode)
@@ -4472,6 +4468,7 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 		if len(statementRemaps) != len(cached.stmts) {
 			return nil, moerr.NewInternalError(execCtx.reqCtx, "the count of remapdb policies is not equal to cached statements")
 		}
+		execCtx.input.setSqlSourceTypes(ses, sources)
 		for i, stmt := range cached.stmts {
 			tcw := InitTxnComputationWrapper(ses, stmt, proc)
 			// The cache owns its ASTs until eviction. Wrappers only borrow them;
@@ -4602,18 +4599,25 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 	}
 
 	var statementSchedulingSQL []string
+	var sources []string
 	if execCtx.input.getStmt() != nil {
 		statementSchedulingSQL = []string{execCtx.input.getSql()}
+		source := constant.InternalSql
+		if !internalSource {
+			source = statementSQLSource(execCtx.input.getSql(), parserSQLMode)
+		}
+		sources = []string{source}
 	} else {
-		statementSchedulingSQL, err = schedulingSQLByStatementWithSQLMode(
-			execCtx.reqCtx, execCtx.input.getSql(), parserSQLMode)
+		statementSchedulingSQL, sources, err = schedulingSQLByStatementWithSQLMode(
+			execCtx.reqCtx, execCtx.input.getSql(), parserSQLMode, internalSource)
 		if err != nil {
 			return nil, err
 		}
 	}
-	if len(statementSchedulingSQL) != len(stmts) {
+	if len(statementSchedulingSQL) != len(stmts) || len(sources) != len(stmts) {
 		return nil, moerr.NewInternalError(execCtx.reqCtx, "the count of scheduling policies is not equal to statements")
 	}
+	execCtx.input.setSqlSourceTypes(ses, sources)
 	for i, stmt := range stmts {
 		tcw := InitTxnComputationWrapper(ses, stmt, proc)
 		tcw.SetSchedulingSQL(statementSchedulingSQL[i])
@@ -4837,16 +4841,15 @@ func nextSQLModeStatementInput(
 		return nil, sql, err
 	}
 	stmt.Free()
-	return newSQLStatementInput(input, ses, sql[:end]), sql[end:], nil
+	return newSQLStatementInput(input, sql[:end]), sql[end:], nil
 }
 
-func newSQLStatementInput(input *UserInput, ses FeSession, sql string) *UserInput {
+func newSQLStatementInput(input *UserInput, sql string) *UserInput {
 	statementInput := *input
 	statementInput.sql = sql
 	statementInput.hashedSql = ""
 	statementInput.sqlSourceType = nil
 	statementInput.genHash()
-	statementInput.genSqlSourceType(ses)
 	return &statementInput
 }
 
@@ -4861,7 +4864,12 @@ func rewriteSQLStatementInput(ctx context.Context, ses *Session, input *UserInpu
 	if rewritten == input.getSql() {
 		return input, nil
 	}
-	return newSQLStatementInput(input, ses, rewritten), nil
+	// Policy materialization changes execution text, not statement provenance.
+	// Source entries are read-only; reclassification replaces the entire slice.
+	rewrittenInput := *input
+	rewrittenInput.sql = rewritten
+	rewrittenInput.genHash()
+	return &rewrittenInput, nil
 }
 
 func sqlForRecord(sql string) string {
@@ -4934,6 +4942,33 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 		if ses.getRoutine() != nil && ses.getRoutine().isExpired() && !ses.GetPrivilege().canExecInPasswordExpired {
 			return stats, moerr.NewInternalError(reqCtx, "password has expired, please change the password")
 		}
+		if call, isCall := stmt.(*tree.CallStmt); isCall {
+			if isCDCTargetGuardCapabilityCall(call) {
+				return stats, nil
+			}
+			dbName, tableName, isGuard, parseErr := parseCDCTargetGuardCall(reqCtx, call)
+			if parseErr != nil {
+				return stats, parseErr
+			}
+			if isGuard {
+				guardPriv := &privilege{kind: privilegeKindGeneral, objType: objectTypeTable}
+				tips := privilegeTipsArray{{typ: PrivilegeTypeInsert, objType: objectTypeTable,
+					databaseName: dbName, tableName: tableName}}
+				if !checkProtectedDatabaseWriteByPrivilegeTips(reqCtx, ses, tips) {
+					return stats, moerr.NewInternalError(reqCtx, "do not have privilege to execute the statement")
+				}
+				convertPrivilegeTipsToPrivilege(guardPriv, tips)
+				allowed, delta, authErr := determineUserHasPrivilegeSet(reqCtx, ses, guardPriv)
+				stats.Add(&delta)
+				if authErr != nil {
+					return stats, authErr
+				}
+				if !allowed {
+					return stats, moerr.NewInternalError(reqCtx, "do not have privilege to execute the statement")
+				}
+				return stats, nil
+			}
+		}
 
 		havePrivilege, delta, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(reqCtx, ses, stmt)
 		if err != nil {
@@ -4991,6 +5026,7 @@ func authenticateCanExecuteStatementAndPlan(reqCtx context.Context, ses *Session
 	if ses.skipAuthForSpecialUser() {
 		return stats, nil
 	}
+	stmt = unwrapExecutableExplainStatement(stmt)
 	yes, delta, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(reqCtx, ses, stmt, p)
 	if err != nil {
 		return stats, err
@@ -5679,11 +5715,18 @@ func dispatchStmt(ses FeSession,
 	execCtx *ExecCtx) (err error) {
 	ses.EnterFPrint(FPDispatchStmt)
 	defer ses.ExitFPrint(FPDispatchStmt)
+	ses.GetTxnCompileCtx().tcw = execCtx.cw
 	//5. check plan within txn
 	if !execCtx.input.isBinaryProtExecute && execCtx.cw.Plan() != nil {
 		flag, err := checkModify(execCtx.cw.Plan(), ses.GetTxnCompileCtx().Resolve)
 		if err != nil {
 			return err
+		}
+		if reused, ok := execCtx.cw.(*TxnComputationWrapper); ok && reused.planGenerationReused && !flag {
+			flag, err = plan2.CachedPlanStatsChanged(execCtx.cw.Plan(), ses.GetTxnCompileCtx())
+			if err != nil {
+				return err
+			}
 		}
 		if flag {
 			if err = rebuildStaleCachedStatements(ses, execCtx); err != nil {
@@ -5708,8 +5751,6 @@ func executeStmt(ses *Session,
 ) (err error) {
 	ses.EnterFPrint(FPExecStmt)
 	defer ses.ExitFPrint(FPExecStmt)
-	ses.GetTxnCompileCtx().tcw = execCtx.cw
-
 	var cmpBegin time.Time
 	var ret interface{}
 
@@ -5907,7 +5948,6 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	beginInstant := time.Now()
 	execCtx.reqCtx = appendStatementAt(execCtx.reqCtx, beginInstant)
 	execCtx.reqCtx = defines.AttachDDLOwnerRoleIDProvider(execCtx.reqCtx, ses)
-	input.genSqlSourceType(ses)
 	ses.SetShowStmtType(NotShowStatement)
 	resper := ses.GetResponser()
 	ses.SetSql(input.getSql())
@@ -6043,7 +6083,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		} else if staged {
 			stagedSQLMode = true
 			stagedRemaining = remaining
-			executionInput = newSQLStatementInput(input, ses, first)
+			executionInput = newSQLStatementInput(input, first)
 		}
 	}
 	if err == nil {
@@ -6071,14 +6111,15 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		resetDiagnosticsForStatement(ses, execCtx, errorInput, nil)
 		statsInfo.ParseStage.ParseDuration = time.Since(beginInstant)
 		diagnosticErr := redactStatementErrorForLogging(parseErr, errorInput.getSql())
+		records, sources := errorInput.parseErrorRecords(ses)
 		var recordErr error
 		execCtx.reqCtx, recordErr = RecordParseErrorStatement(
 			execCtx.reqCtx,
 			ses,
 			proc,
 			beginInstant,
-			parsers.HandleSqlForRecord(errorInput.getSql()),
-			errorInput.getSqlSourceTypes(),
+			records,
+			sources,
 			diagnosticErr,
 		)
 		if recordErr != nil {
@@ -6170,7 +6211,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// binary PREPARE metadata captured before doComQuery.
 		execCtx.beginStatementGeneration(currentInput)
 		// Keep the transaction origin available to compile-time lineage admission.
-		// TRUNCATE commits the old transaction before its plan is built, so the
+		// Implicit-commit DDL commits the old transaction before planning, so the
 		// fresh transaction alone cannot tell whether the client was already in an
 		// explicit transaction.  Reset the marker for every statement generation;
 		// otherwise a later statement in the same request could inherit it.
@@ -6260,7 +6301,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		}
 		// Commit only after the current statement has passed local admission and
 		// has a current statement identity. Authorization and plan construction
-		// still run after this boundary, matching TRUNCATE's implicit-commit
+		// still run after this boundary, matching the DDL implicit-commit
 		// contract while keeping instrumentation failures side-effect free.
 		if execCtx.implicitCommitBefore {
 			if err = ses.GetTxnHandler().commitBeforeStatement(execCtx); err != nil {
@@ -6313,8 +6354,26 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 			}
 		}
 
-		// update UnixTime for new query, which is used for now() / CURRENT_TIMESTAMP
+		// Update UnixTime for the new query, which is used for NOW() /
+		// CURRENT_TIMESTAMP. MySQL's session timestamp override freezes these
+		// expressions for deterministic replay; zero restores the wall clock.
 		proc.Base.UnixTime = time.Now().UnixNano()
+		if override, overrideErr := ses.GetSessionSysVar("timestamp"); overrideErr == nil {
+			var seconds float64
+			switch value := override.(type) {
+			case float64:
+				seconds = value
+			case float32:
+				seconds = float64(value)
+			case int64:
+				seconds = float64(value)
+			case uint64:
+				seconds = float64(value)
+			}
+			if seconds > 0 {
+				proc.Base.UnixTime = int64(seconds * float64(time.Second))
+			}
+		}
 		if ses.proc != nil {
 			ses.proc.Base.UnixTime = proc.Base.UnixTime
 		}
@@ -6355,7 +6414,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 				stagedRemaining,
 			)
 			if nextErr != nil {
-				return recordParseError(newSQLStatementInput(input, ses, stagedRemaining), nextErr)
+				return recordParseError(newSQLStatementInput(input, stagedRemaining), nextErr)
 			}
 			nextInput, nextErr = rewriteSQLStatementInput(execCtx.reqCtx, ses, nextInput)
 			if nextErr != nil {
@@ -6476,27 +6535,43 @@ func sqlForRecordByStatementWithSQLMode(ctx context.Context, sql string, sqlMode
 // schedulingSQLByStatementWithSQLMode keeps raw statement text (including
 // optimizer comments) aligned with the parser's AST list. Unlike sqlForRecord,
 // this text is control-plane input and must never be sanitized first.
-func schedulingSQLByStatementWithSQLMode(ctx context.Context, sql string, sqlMode string) ([]string, error) {
+func schedulingSQLByStatementWithSQLMode(ctx context.Context, sql string, sqlMode string, internalSource bool) ([]string, []string, error) {
 	if isCmdFieldListSql(sql) || isCmdGetSnapshotTsSql(sql) ||
 		isCmdGetDatabasesSql(sql) || isCmdGetMoIndexesSql(sql) ||
 		isCmdGetDdlSql(sql) || isCmdGetObjectSql(sql) ||
 		isCmdObjectListSql(sql) || isCmdCheckSnapshotFlushedSql(sql) {
-		return []string{sql}, nil
+		source := constant.InternalSql
+		if !internalSource {
+			source = statementSQLSource(sql, sqlMode)
+		}
+		return []string{sql}, []string{source}, nil
 	}
 	fragments, err := parsers.SplitSqlByStatementWithSQLMode(ctx, sql, sqlMode)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	// Rewriting only prepends optimizer hints and retains original SQL. Ordinary
+	// source markers therefore have identical meaning before and after rewrite.
+	sources, err := sqlSourcesByFragment(ctx, sql, sqlMode, fragments, internalSource)
+	if err != nil {
+		return nil, nil, err
 	}
 	byStatement := make([]string, 0, len(fragments))
-	for _, fragment := range fragments {
+	bySource := sources[:0]
+	for i, fragment := range fragments {
 		if parsers.FragmentHasStatement(fragment) {
 			byStatement = append(byStatement, fragment)
+			bySource = append(bySource, sources[i])
 		}
 	}
 	if len(byStatement) == 0 {
-		return []string{sql}, nil
+		source := constant.ExternSql
+		if internalSource {
+			source = constant.InternalSql
+		}
+		return []string{sql}, []string{source}, nil
 	}
-	return byStatement, nil
+	return byStatement, bySource, nil
 }
 
 func checkNodeCanCache(p *plan2.Plan) bool {

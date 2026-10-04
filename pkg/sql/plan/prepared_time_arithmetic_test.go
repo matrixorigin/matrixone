@@ -94,7 +94,8 @@ func TestPreparedTimeArithmeticKeepsBoundaries(t *testing.T) {
 	}{
 		{name: "time zero scale", time: types.T_time, scale: 0, want: true},
 		{name: "time microsecond scale", time: types.T_time, scale: 6, want: true},
-		{name: "date remains unsupported", time: types.T_date, scale: 0, want: false},
+		{name: "date numeric arithmetic", time: types.T_date, scale: 0, want: true},
+		{name: "geometry remains unsupported", time: types.T_geometry, want: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := NewMockOptimizer(false)
@@ -142,9 +143,21 @@ func TestPreparedTimeArithmeticRespectsExplicitStringCast(t *testing.T) {
 	mock.ctxt.tables["nation"].Cols[0].Typ = planpb.Type{
 		Id: int32(types.T_time), Width: 6, Scale: 3,
 	}
-	_, err := runOneStmt(mock, t,
+	p, err := runOneStmt(mock, t,
 		"prepare stmt_char from 'select n_nationkey * cast(? as char) from nation'")
-	require.Error(t, err)
+	require.NoError(t, err)
+	multiply := findPlanFunctionExpr(p.GetDcl().GetPrepare().Plan, "*")
+	require.NotNil(t, multiply)
+	require.Equal(t, int32(types.T_float64), multiply.Typ.Id)
+	found := false
+	require.NoError(t, planpb.VisitExprTree(multiply, func(expr *Expr) error {
+		if fn := expr.GetF(); fn != nil && (fn.SyntaxExplicitCast || isCastOverload(expr, 1)) {
+			found = true
+			require.True(t, types.T(expr.Typ.Id).IsMySQLString())
+		}
+		return nil
+	}))
+	require.True(t, found, "numeric coercion must retain the explicit character boundary")
 }
 
 func TestPreparedTimeArithmeticFillsAndExecutes(t *testing.T) {

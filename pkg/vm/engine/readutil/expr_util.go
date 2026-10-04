@@ -130,12 +130,15 @@ func getColDefByName(expr *plan.Expr, name string, colPos int32, tableDef *plan.
 		pos = tableDef.Name2ColIndex[name]
 	}
 	common.DoIfDebugEnabled(func() {
-		if name != tableDef.Cols[colPos].Name {
+		// ColPos is local to the scan (and can be a metadata-only slot),
+		// while tableDef is the full relation schema. Validate the name used
+		// for resolution instead of indexing this schema with ColPos.
+		if int(pos) >= len(tableDef.Cols) || tableDef.Cols[pos].Name != name[strings.LastIndexByte(name, '.')+1:] {
 			logutil.Error(
 				"Bad-ColExpr",
 				zap.String("col-name", name),
-				zap.Int32("col-actual-pos", colPos),
-				zap.Int32("col-expected-pos", pos),
+				zap.Int32("scan-col-pos", colPos),
+				zap.Int32("relation-col-pos", pos),
 				zap.String("col-expr", plan2.FormatExpr(expr, plan2.FormatOption{})),
 			)
 		}

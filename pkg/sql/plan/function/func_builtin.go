@@ -1194,7 +1194,7 @@ func builtInConcatCheck(_ []overload, inputs []types.Type) checkResult {
 
 		ret := make([]types.Type, len(inputs))
 		for i, source := range inputs {
-			if !source.Oid.IsMySQLString() {
+			if !source.Oid.IsMySQLString() && source.Oid != types.T_json {
 				c, _ := tryToMatch([]types.Type{source}, []types.T{types.T_varchar})
 				if c == matchFailed {
 					return newCheckResultWithFailure(failedFunctionParametersWrong)
@@ -1215,6 +1215,15 @@ func builtInConcatCheck(_ []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
 }
 
+// JSON stores an encoded value; concatenation consumes its JSON text, including
+// quotes around JSON strings. Keep assignment CAST's unquoting contract separate.
+func concatStringValue(source types.T, value []byte) ([]byte, error) {
+	if source != types.T_json {
+		return value, nil
+	}
+	return types.DecodeJson(value).MarshalJSON()
+}
+
 func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	ps := make([]vector.FunctionParameterWrapper[types.Varlena], len(parameters))
@@ -1232,7 +1241,7 @@ func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrap
 		var vs string
 		apv := true
 
-		for _, p := range ps {
+		for j, p := range ps {
 			v, null := p.GetStrValue(i)
 			if null {
 				if err := rs.AppendBytes(nil, true); err != nil {
@@ -1241,6 +1250,10 @@ func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrap
 				apv = false
 				break
 			} else {
+				v, err := concatStringValue(parameters[j].GetType().Oid, v)
+				if err != nil {
+					return err
+				}
 				vs += string(v)
 			}
 		}
@@ -2823,13 +2836,17 @@ func unswapUUIDTimeParts(u types.Uuid) types.Uuid {
 	}
 }
 
-func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	if len(parameters) == 0 {
 		rs := vector.MustFunctionResult[int64](result)
-		val := types.CurrentTimestamp().Unix()
+		// The executor stores the query timestamp here, including the session
+		// timestamp override. Do not read the wall clock again.
+		// The no-argument form is integer seconds. Fractional precision belongs
+		// to the timestamp argument overload.
+		val := proc.GetUnixTime() / int64(time.Second)
 		for i := uint64(0); i < uint64(length); i++ {
 			if err := rs.Append(val, false); err != nil {
-				return nil
+				return err
 			}
 		}
 		return nil

@@ -34,10 +34,7 @@ func TestConvRowDependentBases(t *testing.T) {
 		NewFunctionTestInput(types.T_int64.ToType(), []int64{10, 16, -16, 10, 10, 10, 10}, nil),
 	}
 	fc := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), Conv)
-	defer fc.result.Free()
-	for _, v := range fc.parameters {
-		defer v.Free(proc.Mp())
-	}
+	defer fc.Free()
 	require.NoError(t, fc.result.PreExtendAndReset(7))
 	require.NoError(t, Conv(fc.parameters, fc.result, proc, 7, nil))
 	got := fc.result.GetResultVector()
@@ -86,10 +83,7 @@ func TestConvDynamicBasesPreserveTypedInputs(t *testing.T) {
 				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{2, 10, 16, 1, 2, 2}, nil),
 				NewFunctionTestInput(types.T_int64.ToType(), []int64{10, 16, 10, 10, 10, 37}, []bool{false, false, false, false, true, false})},
 				NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), Conv)
-			defer fc.result.Free()
-			for _, v := range fc.parameters {
-				defer v.Free(proc.Mp())
-			}
+			defer fc.Free()
 			require.NoError(t, fc.result.PreExtendAndReset(6))
 			require.NoError(t, Conv(fc.parameters, fc.result, proc, 6, nil))
 			for i, want := range tc.want {
@@ -152,10 +146,7 @@ func BenchmarkConvConstantBases(b *testing.B) {
 		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10}, nil),
 		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, nil),
 	}, NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), Conv)
-	defer fc.result.Free()
-	for _, v := range fc.parameters {
-		defer v.Free(proc.Mp())
-	}
+	defer fc.Free()
 	require.NoError(b, fc.result.PreExtendAndReset(rows))
 	require.NoError(b, Conv(fc.parameters, fc.result, proc, rows, nil))
 	b.ReportAllocs()
