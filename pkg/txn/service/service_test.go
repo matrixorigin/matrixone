@@ -21,10 +21,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/mem"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -54,21 +56,28 @@ func TestTxnServiceDoesNotCloseBorrowedSender(t *testing.T) {
 
 func TestZombieGCUsesTransactionCreationSnapshot(t *testing.T) {
 	sender := NewTestSender()
-	txnService := NewTestTxnServiceWithLogAndZombie(t, 1, sender, NewTestClock(0), nil, 250*time.Millisecond)
-	require.NoError(t, txnService.Start())
+	t.Cleanup(func() { assert.NoError(t, sender.Close()) })
+	txnService := NewTestTxnServiceWithLogAndZombie(t, 1, sender, NewTestClock(0), nil, 10*time.Millisecond)
 	s := txnService.(*service)
 	expired := NewTestTxn(1, 1, 1)
 	current := NewTestTxn(2, 2, 1)
 	t.Cleanup(func() {
+		s.stopper.Stop()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
 		for _, meta := range []txn.TxnMeta{expired, current} {
 			if s.getTxnContext(meta.ID) != nil {
 				request := NewTestRollbackRequest(meta)
-				_ = s.Rollback(context.Background(), &request, &txn.TxnResponse{})
+				response := txn.TxnResponse{}
+				assert.NoError(t, s.Rollback(ctx, &request, &response))
+				assert.Nil(t, response.TxnError)
 			}
 		}
-		require.NoError(t, txnService.Close(false))
-		require.NoError(t, sender.Close())
+		assert.NoError(t, txnService.Close(false))
 	})
+	// The constructor starts GC; join it before admitting fixture writes.
+	s.stopper.Stop()
+	require.NoError(t, txnService.Start())
 	sender.AddTxnService(txnService)
 	for _, meta := range []txn.TxnMeta{expired, current} {
 		result, err := sender.Send(t.Context(), []txn.TxnRequest{NewTestWriteRequest(meta.ID[0], meta, 1)})
@@ -77,6 +86,7 @@ func TestZombieGCUsesTransactionCreationSnapshot(t *testing.T) {
 		require.Nil(t, result.Responses[0].TxnError)
 	}
 
+	storage := s.storage.(*mem.KVTxnStorage)
 	for _, tc := range []struct {
 		meta      txn.TxnMeta
 		createdAt time.Time
@@ -86,15 +96,18 @@ func TestZombieGCUsesTransactionCreationSnapshot(t *testing.T) {
 	} {
 		ctx := s.getTxnContext(tc.meta.ID)
 		require.NotNil(t, ctx)
+		require.NotNil(t, storage.GetUncommittedTxn(tc.meta.ID))
 		ctx.mu.Lock()
 		ctx.createAt = tc.createdAt
 		ctx.mu.Unlock()
 	}
+	// Start the real collector only after both transaction ages are prepared.
+	s.stopper = stopper.NewStopper(t.Name(), stopper.WithLogger(s.logger.RawLogger()))
+	require.NoError(t, s.stopper.RunTask(s.gcZombieTxn))
 
 	require.Eventually(t, func() bool {
 		return s.getTxnContext(expired.ID) == nil
 	}, 5*time.Second, 5*time.Millisecond, "GC must roll back the expired coordinator")
-	storage := s.storage.(*mem.KVTxnStorage)
 	require.Nil(t, storage.GetUncommittedTxn(expired.ID))
 	require.NotNil(t, s.getTxnContext(current.ID))
 	require.NotNil(t, storage.GetUncommittedTxn(current.ID))
