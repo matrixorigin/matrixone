@@ -589,3 +589,15 @@ This proves the local test-consolidation checkpoint. The SQL-visible repair stil
 requires live BVT and production-performance evidence; external review and
 publication remain constrained by the user's local-only instruction. The full
 #29249 objective is not complete.
+
+
+The local production benchmark checkpoint uses unchanged existing D256 modulo
+same-scale/different-scale bodies and the unchanged D128 control, each over 8,192
+rows. Before/after/after/before ordering supplies six measurements per mode/name.
+Median D256 same-scale batch time changes from 61,759.5 to 61,261.5 ns (-0.8%);
+different-scale changes from 61,563 to 61,708 ns (+0.2%). The unchanged D128
+control changes from 40,352 to 40,101 ns (-0.6%). All samples report zero bytes
+and allocations per batch. This small shared-host experiment shows no material
+common-path regression in those workloads; it does not establish a query/TPCC
+speedup. Live SQL BVT and requested external review remain unperformed under the
+local-only instruction. No new PR, PR update or push has been made for this repair.
