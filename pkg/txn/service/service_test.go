@@ -159,43 +159,80 @@ func TestMaybeAddTxnPublishesInitializedContext(t *testing.T) {
 			require.Empty(t, loser.mu.txn.ID)
 		}()
 	})
-	t.Run("recycled_loser", func(t *testing.T) {
-		s := &service{logger: util.GetLogger("")}
-		oldMeta := NewTestTxn(1, 1, 1)
-		meta := NewTestTxn(2, 1, 1)
-		recycled := &txnContext{logger: s.logger}
-		recycled.init(oldMeta, acquireNotifier())
-		oldReference := recycled
-		s.releaseTxnContext(recycled)
-
-		winner := &txnContext{logger: s.logger}
-		winner.init(meta, acquireNotifier())
-		t.Cleanup(func() {
-			s.transactions.Delete(string(meta.ID))
-			s.releaseTxnContext(winner)
+	for _, tc := range []struct {
+		name   string
+		sameID bool
+		win    bool
+	}{
+		{"recycled_same_id_winner", true, true},
+		{"recycled_same_id_loser", true, false},
+		{"recycled_different_id_loser", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &service{logger: util.GetLogger("")}
+			oldMeta := NewTestTxn(1, 1, 1)
+			meta := NewTestTxn(2, 1, 1)
+			if tc.sameID {
+				meta = oldMeta
+			}
+			recycled := &txnContext{logger: s.logger}
+			contexts := []*txnContext{recycled}
+			winner := recycled
+			if !tc.win {
+				winner = &txnContext{logger: s.logger}
+				contexts = append(contexts, winner)
+				winner.mu.Lock()
+				winner.initLocked(meta, acquireNotifier())
+				winner.mu.Unlock()
+			}
+			t.Cleanup(func() {
+				s.transactions.Delete(string(meta.ID))
+				for _, c := range contexts {
+					c.mu.Lock()
+					if c.nt != nil {
+						s.releaseTxnContextLocked(c)
+					}
+					c.mu.Unlock()
+				}
+			})
+			recycled.mu.Lock()
+			recycled.initLocked(oldMeta, acquireNotifier())
+			s.releaseTxnContextLocked(recycled)
+			recycled.mu.Unlock()
+			// Force reuse and, for losers, a competing publication after Load
+			// misses. Pool.Get alone cannot select a particular cached object.
+			s.pool = sync.Pool{New: func() any {
+				if !tc.win {
+					s.transactions.Store(string(meta.ID), winner)
+				}
+				return recycled
+			}}
+			result, added := s.maybeAddTxn(meta)
+			require.Equal(t, tc.win, added)
+			for _, c := range contexts {
+				unlocked := c.mu.TryLock()
+				// No workers remain in this fixture; on failure the creation
+				// call retained the lock. Release it before any fatal assertion.
+				c.mu.Unlock()
+				require.True(t, unlocked, "creation must release both outcome locks")
+			}
+			require.Same(t, winner, result)
+			require.Same(t, winner, s.getTxnContext(meta.ID))
+			require.Equal(t, meta.ID, winner.getTxn().ID)
+			require.NotNil(t, winner.nt)
+			require.False(t, winner.createAt.IsZero())
+			if !tc.win {
+				require.Empty(t, recycled.getTxn().ID)
+				require.Nil(t, recycled.nt)
+				w := acquireWaiter()
+				t.Cleanup(w.close)
+				require.False(t, recycled.addWaiter(oldMeta.ID, w, txn.TxnStatus_Committed))
+			}
 		})
-		// Force reuse and a competing publication after the initial Load misses.
-		// Pool.Get alone cannot guarantee which cached object will be selected.
-		s.pool = sync.Pool{New: func() any {
-			s.transactions.Store(string(meta.ID), winner)
-			return recycled
-		}}
-		result, added := s.maybeAddTxn(meta)
-		require.False(t, added)
-		require.Same(t, winner, result)
-		require.Same(t, winner, s.getTxnContext(meta.ID))
-		require.Equal(t, meta.ID, winner.getTxn().ID)
-		require.NotNil(t, winner.nt)
-		require.False(t, winner.createAt.IsZero())
-		require.Empty(t, oldReference.getTxn().ID)
-		require.Nil(t, oldReference.nt)
-		w := acquireWaiter()
-		t.Cleanup(w.close)
-		require.False(t, oldReference.addWaiter(oldMeta.ID, w, txn.TxnStatus_Committed))
-	})
+	}
 }
 
-func TestReleaseTxnContextExcludesStaleReaders(t *testing.T) {
+func TestTxnContextOwnershipExcludesStaleRequests(t *testing.T) {
 	for _, recycled := range []bool{false, true} {
 		name := "fresh"
 		if recycled {
@@ -205,18 +242,49 @@ func TestReleaseTxnContextExcludesStaleReaders(t *testing.T) {
 			s := &service{logger: util.GetLogger("")}
 			c := &txnContext{logger: s.logger}
 			oldReference := c
+			meta := NewTestTxn(1, 1, 1)
 			if recycled {
-				c.init(NewTestTxn(1, 1, 1), acquireNotifier())
-				s.releaseTxnContext(c)
-				s.pool = sync.Pool{New: func() any { return oldReference }}
-				c = s.acquireTxnContext()
+				c.mu.Lock()
+				c.initLocked(meta, acquireNotifier())
+				s.releaseTxnContextLocked(c)
+				c.mu.Unlock()
 			}
-			c.init(NewTestTxn(2, 1, 1), acquireNotifier())
+			s.pool = sync.Pool{New: func() any { return oldReference }}
+			c = s.acquireTxnContext()
+			readable := oldReference.mu.TryRLock()
+			if readable {
+				oldReference.mu.RUnlock()
+			}
+			writable := oldReference.mu.TryLock()
+			// Either acquisition or a successful write probe owns the lock.
+			// Keep teardown safe even when testing an unlocked acquisition.
+			owned := true
 			t.Cleanup(func() {
+				if owned {
+					c.mu.Unlock()
+				}
+				c.mu.Lock()
+				defer c.mu.Unlock()
 				if c.nt != nil {
-					s.releaseTxnContext(c)
+					s.releaseTxnContextLocked(c)
 				}
 			})
+			require.False(t, readable, "acquisition must exclude stale readers")
+			require.False(t, writable, "acquisition must exclude stale Rollback")
+			assertExcluded := func() {
+				readable := oldReference.mu.TryRLock()
+				if readable {
+					oldReference.mu.RUnlock()
+				}
+				writable := oldReference.mu.TryLock()
+				if writable {
+					oldReference.mu.Unlock()
+				}
+				require.False(t, readable)
+				require.False(t, writable)
+			}
+			c.initLocked(meta, acquireNotifier())
+			assertExcluded()
 			first, last := acquireWaiter(), acquireWaiter()
 			t.Cleanup(first.close)
 			t.Cleanup(last.close)
@@ -230,9 +298,11 @@ func TestReleaseTxnContextExcludesStaleReaders(t *testing.T) {
 				unblock()
 				<-done
 			})
+			owned = false // Transfer the locked cleanup phase to the worker.
 			go func() {
 				defer close(done)
-				s.releaseTxnContext(c)
+				defer c.mu.Unlock()
+				s.releaseTxnContextLocked(c)
 			}()
 			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 			defer cancel()
@@ -241,11 +311,7 @@ func TestReleaseTxnContextExcludesStaleReaders(t *testing.T) {
 			status, err := first.wait(ctx)
 			require.NoError(t, err)
 			require.Equal(t, txn.TxnStatus_Active, status)
-			readable := oldReference.mu.TryRLock()
-			if readable {
-				oldReference.mu.RUnlock()
-			}
-			require.False(t, readable, "reset must exclude readers retaining an old pointer")
+			assertExcluded()
 			unblock()
 			select {
 			case <-done:

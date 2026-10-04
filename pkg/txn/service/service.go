@@ -174,13 +174,16 @@ func (s *service) maybeAddTxn(meta txn.TxnMeta) (*txnContext, bool) {
 	}
 
 	txnCtx := s.acquireTxnContext()
-	// A context must be fully initialized before it is published. Readers of
-	// transactions assume that every context in the map is ready for use.
-	txnCtx.init(meta, acquireNotifier())
+	// Old requests may retain this pooled pointer, including requests with the
+	// same transaction ID. Keep ownership until publication or loser cleanup.
+	txnCtx.initLocked(meta, acquireNotifier())
 
 	v, loaded := s.transactions.LoadOrStore(id, txnCtx)
 	if loaded {
-		s.releaseTxnContext(txnCtx)
+		s.releaseTxnContextLocked(txnCtx)
+	}
+	txnCtx.mu.Unlock()
+	if loaded {
 		return v.(*txnContext), false
 	}
 
@@ -214,17 +217,13 @@ func (s *service) validTNShard(tn metadata.TNShard) bool {
 	return true
 }
 
+// acquireTxnContext returns a context with mu exclusively locked. The caller
+// must publish or retire it before unlocking, even when reusing the same ID.
 func (s *service) acquireTxnContext() *txnContext {
 	txn := s.pool.Get().(*txnContext)
+	txn.mu.Lock()
 	txn.logger = s.logger
 	return txn
-}
-
-func (s *service) releaseTxnContext(txnCtx *txnContext) {
-	// Pooling does not invalidate pointers retained by old requests.
-	txnCtx.mu.Lock()
-	defer txnCtx.mu.Unlock()
-	s.releaseTxnContextLocked(txnCtx)
 }
 
 // releaseTxnContextLocked requires the caller to hold txnCtx.mu exclusively.
@@ -257,10 +256,8 @@ func (c *txnContext) addWaiter(txnID []byte, w *waiter, waitStatus txn.TxnStatus
 	return true
 }
 
-func (c *txnContext) init(txn txn.TxnMeta, nt *notifier) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
+// initLocked requires the caller to hold c.mu exclusively.
+func (c *txnContext) initLocked(txn txn.TxnMeta, nt *notifier) {
 	c.mu.txn = txn
 	c.nt = nt
 	c.createAt = time.Now()
