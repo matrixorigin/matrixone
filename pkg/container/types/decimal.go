@@ -1105,15 +1105,16 @@ func (x Decimal128) Div128(y Decimal128) (Decimal128, error) {
 		}
 
 		// Round half-up iff remainder >= ceil(y/2), without forming 2*remainder.
-		threshold := y.Right(1)
+		threshold := Decimal128{B0_63: y.B0_63>>1 | y.B64_127<<63, B64_127: y.B64_127 >> 1}
 		if y.B0_63&1 != 0 {
 			var carry uint64
 			threshold.B0_63, carry = bits.Add64(threshold.B0_63, 1, 0)
 			threshold.B64_127 += carry
 		}
-		if remainder.Compare(threshold) >= 0 {
-			// Here y >= 2^64 and x < 2^127, so the rounded quotient fits in B0_63.
-			q.B0_63++
+		if remainder.B64_127 > threshold.B64_127 || remainder.B64_127 == threshold.B64_127 && remainder.B0_63 >= threshold.B0_63 {
+			var carry uint64
+			q.B0_63, carry = bits.Add64(q.B0_63, 1, 0)
+			q.B64_127 += carry
 		}
 		return q, nil
 	}
@@ -1125,10 +1126,9 @@ func (x Decimal128) div128Trunc(y Decimal128) (Decimal128, error) {
 	return q, err
 }
 
-// div128TruncQuoRem returns an exact quotient and remainder for positive
-// operands. The normalized high-limb estimate can be one too large because
-// normalization discards low divisor bits; correct it before multiplying so
-// an otherwise representable quotient is not mistaken for overflow.
+// div128TruncQuoRem operates on unsigned magnitudes, including the absolute
+// value of the signed minimum. Its normalized quotient estimate can exceed the
+// exact quotient by one because normalization discards low divisor bits.
 func (x Decimal128) div128TruncQuoRem(y Decimal128) (Decimal128, Decimal128, error) {
 	if y.B0_63 == 0 && y.B64_127 == 0 {
 		return x, Decimal128{}, moerr.NewInvalidInputNoCtxf("Decimal128 Div by Zero: %s/%s", x.Format(0), y.Format(0))
@@ -1138,37 +1138,39 @@ func (x Decimal128) div128TruncQuoRem(y Decimal128) (Decimal128, Decimal128, err
 		qLo, remainder := bits.Div64(remainderHi, x.B0_63, y.B0_63)
 		return Decimal128{B0_63: qLo, B64_127: qHi}, Decimal128{B0_63: remainder}, nil
 	}
-	if x.Less(y) {
+	if x.B64_127 < y.B64_127 || x.B64_127 == y.B64_127 && x.B0_63 < y.B0_63 {
 		return Decimal128{}, x, nil
 	}
 
 	n := bits.LeadingZeros64(y.B64_127)
-	v, _ := bits.Div64(x.B64_127, x.B0_63, y.Right(64-n).B0_63)
-	v >>= 63 - n
-	q := Decimal128{B0_63: v >> 1}
-	product, mulErr := y.Mul128(q)
-	if mulErr != nil || product.Compare(x) > 0 {
-		var err error
-		q, err = q.Sub128(Decimal128{B0_63: 1})
-		if err != nil {
-			return Decimal128{}, Decimal128{}, err
-		}
-		product, err = y.Mul128(q)
-		if err != nil {
-			return Decimal128{}, Decimal128{}, err
-		}
-		if product.Compare(x) > 0 {
+	// Halve the dividend logically before estimation so bits.Div64's high
+	// limb is below the normalized divisor even when magnitude bit 127 is set.
+	denominator := y.B64_127<<n | y.B0_63>>(64-n)
+	v, _ := bits.Div64(x.B64_127>>1, x.B0_63>>1|x.B64_127<<63, denominator)
+	q := Decimal128{B0_63: v >> (63 - n)}
+	// The wide divisor makes the quotient one limb. Keep its product unsigned;
+	// signed Mul128 would reject a valid product equal to 2^127.
+	productHi, productLo := bits.Mul64(y.B0_63, q.B0_63)
+	overflow, cross := bits.Mul64(y.B64_127, q.B0_63)
+	var carry uint64
+	productHi, carry = bits.Add64(productHi, cross, 0)
+	overflow += carry
+	if overflow != 0 || productHi > x.B64_127 || productHi == x.B64_127 && productLo > x.B0_63 {
+		q.B0_63--
+		var borrow uint64
+		productLo, borrow = bits.Sub64(productLo, y.B0_63, 0)
+		productHi, borrow = bits.Sub64(productHi, y.B64_127, borrow)
+		overflow -= borrow
+		if overflow != 0 || productHi > x.B64_127 || productHi == x.B64_127 && productLo > x.B0_63 {
 			return Decimal128{}, Decimal128{}, moerr.NewInternalErrorNoCtx("Decimal128 division quotient correction failed")
 		}
 	}
 
-	remainder, err := x.Sub128(product)
-	if err != nil {
-		return Decimal128{}, Decimal128{}, err
-	}
-	// The normalized divisor is rounded down, so the quotient estimate cannot
-	// undershoot. After the optional decrement above, remainder must be < y.
-	if remainder.Compare(y) >= 0 {
+	var remainder Decimal128
+	var borrow uint64
+	remainder.B0_63, borrow = bits.Sub64(x.B0_63, productLo, 0)
+	remainder.B64_127, _ = bits.Sub64(x.B64_127, productHi, borrow)
+	if remainder.B64_127 > y.B64_127 || remainder.B64_127 == y.B64_127 && remainder.B0_63 >= y.B0_63 {
 		return Decimal128{}, Decimal128{}, moerr.NewInternalErrorNoCtx("Decimal128 division quotient correction failed")
 	}
 	return q, remainder, nil

@@ -904,8 +904,8 @@ func TestDecimal128OverDiv(t *testing.T) {
 func TestDecimal128Div128HalfUpLargeDivisor(t *testing.T) {
 	fromBig := func(value *big.Int) Decimal128 {
 		t.Helper()
-		if value.Sign() < 0 || value.BitLen() > 127 {
-			t.Fatalf("value does not fit a positive Decimal128: %s", value)
+		if value.Sign() < 0 || value.BitLen() > 128 {
+			t.Fatalf("value does not fit an unsigned Decimal128 magnitude: %s", value)
 		}
 		hi := new(big.Int).Rsh(new(big.Int).Set(value), 64).Uint64()
 		return Decimal128{B0_63: value.Uint64(), B64_127: hi}
@@ -947,6 +947,34 @@ func TestDecimal128Div128HalfUpLargeDivisor(t *testing.T) {
 				})
 			}
 		}
+	}
+
+	magnitudeLimit := new(big.Int).Lsh(big.NewInt(1), 127)
+	for _, tc := range []struct {
+		name string
+		x, y *big.Int
+	}{
+		{"minimum_magnitudes_equal", magnitudeLimit, magnitudeLimit},
+		{"below_minimum_divisor", new(big.Int).Sub(new(big.Int).Set(magnitudeLimit), big.NewInt(1)), magnitudeLimit},
+		{"minimum_dividend_wide_divisor", magnitudeLimit, new(big.Int).Add(new(big.Int).Lsh(big.NewInt(1), 64), big.NewInt(3))},
+		{"unsigned_rounded_quotient_carry", new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 128), big.NewInt(1)), new(big.Int).Lsh(big.NewInt(1), 64)},
+		{"minimum_divisor_below_half", new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 126), big.NewInt(1)), magnitudeLimit},
+		{"minimum_divisor_at_half", new(big.Int).Lsh(big.NewInt(1), 126), magnitudeLimit},
+		{"minimum_divisor_above_half", new(big.Int).Add(new(big.Int).Lsh(big.NewInt(1), 126), big.NewInt(1)), magnitudeLimit},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			want, remainder := new(big.Int), new(big.Int)
+			want.QuoRem(tc.x, tc.y, remainder)
+			got, err := fromBig(tc.x).Div128Trunc(fromBig(tc.y))
+			require.NoError(t, err)
+			require.Equal(t, want, toBig(got))
+			if new(big.Int).Lsh(remainder, 1).Cmp(tc.y) >= 0 {
+				want.Add(want, big.NewInt(1))
+			}
+			got, err = fromBig(tc.x).Div128(fromBig(tc.y))
+			require.NoError(t, err)
+			require.Equal(t, want, toBig(got))
+		})
 	}
 
 	t.Run("odd half threshold carries into high limb", func(t *testing.T) {

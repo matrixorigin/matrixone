@@ -601,3 +601,71 @@ and allocations per batch. This small shared-host experiment shows no material
 common-path regression in those workloads; it does not establish a query/TPCC
 speedup. Live SQL BVT and requested external review remain unperformed under the
 local-only instruction. No new PR, PR update or push has been made for this repair.
+
+
+## IntDiv inventory and unsigned division owner correction
+
+The next batch inventory finds 14 D64/D128 IntDiv roots, 75 children and 912
+function-span lines. All 75 kernel calls pass unchanged. An independent integer
+oracle agrees with 3,108 representable result rows, but no retained input rejects
+checked dividend scaling. Several names incorrectly claim inline rejection or
+non-inline execution. This is an inventory checkpoint, not permission to delete
+those owners; their complete retirement mapping and cost comparison remain open.
+
+The boundary challenge additionally proves a public DECIMAL(65) DIV failure:
+positive 2^127-1 and 2^127-2 divided by negative 2^127 return an internal quotient
+correction error rather than zero. The narrowed D128 quotient/remainder owner
+uses signed comparisons on unsigned absolute magnitudes. Direct equal 2^127
+magnitudes also panic in the original normalized estimator. The ordinary `/`
+zero-result SQL control passes before repair; no SQL-visible panic is claimed.
+
+The correction stays in `div128TruncQuoRem` and `Div128`'s half-up decision.
+Comparison, normalization, product and remainder consistently use unsigned
+limbs. A logical half dividend keeps bits.Div64's high limb below its normalized
+divisor. This produces the same quotient estimate because the original
+normalized effective divisor is even. The wide divisor bounds the truncated
+quotient to one limb. Its full product retains an overflow limb; a high estimate
+is corrected by subtracting the divisor once, rather than repeating signed
+multiplication. Remainder must still be below the divisor. The rounding threshold
+uses ceil(y/2) without signed shifts or doubling, and carries into the quotient's
+high limb. Zero error behavior and the existing small-divisor path are preserved.
+No new kernel, fallback, conversion owner or runtime allocation is introduced.
+The historical IntDiv diagnostic compatibility owner remains live and unchanged.
+
+Seven boundary rows extend the existing independent math/big half-up owner,
+covering the magnitude minimum, half-threshold neighbors, wide-divisor correction
+and rounded quotient carry. Two literal SQL result rows extend the existing
+planner/executor table rather than adding another fixture owner. That table now
+checks both int64 and Decimal256 results with exact values, type/scale/width and
+NULL membership. Cleanup is registered immediately for the process, input and
+executor. A private 4,096-sample full-width probe independently checks quotient,
+remainder and rounding; it is evidence, not a new delivery test suite.
+
+This correction does not complete IntDiv consolidation or the full #29249 goal.
+The local issue draft and terminal evidence live under
+`/home/xupeng/matrixone-qa-evidence/29249-intdiv-owners-20261004`.
+Live-server BVT, external review and publication remain unperformed under the
+user's local-only instruction.
+
+
+The repaired production owner passes complete types/function/plan normal tests
+and complete types/function race tests. The final shared SQL table separately
+passes normal and race validation (two roots, 17 children); final source hashes
+remain unchanged across those checks. The broader normal plan suite has two
+unrelated pre-existing skipped children; neither is counted as coverage. Vet,
+molint and configured incremental lint pass for all three affected packages,
+with the final plan test adjustment checked again. Two partial-fix mutations
+(signed half threshold and signed remainder guard) survive the previous
+independent boundary table but are rejected by the extended table's actual
+runtime assertions. No build failure or panic is used for those mutation results.
+
+A private same-native-binary microbenchmark alternates before/after order with
+six samples per mode for each fixed operand pair, checking exact quotient and
+remainder before timing. Median small-divisor cost is 4.397 → 4.398 ns; ordinary
+wide-divisor cost is 13.825 → 5.052 ns; below-divisor cost is 2.898 → 1.812 ns.
+The high-estimate correction sample falls from 3,752 → 6.221 ns and from 1,096
+bytes/47 allocations to zero: signed overflow diagnostics are no longer created
+while correcting an otherwise valid unsigned product. Other samples allocate
+zero bytes in both modes. This shared-host primitive measurement excludes
+build/link/init and establishes no SQL, package or CI speedup. All 50 existing
+batch benchmarks and the 14 inventoried IntDiv test owners remain byte-identical.
