@@ -7967,22 +7967,11 @@ func strToDecimal64(
 	var dft types.Decimal64
 	totype := to.GetType()
 	isb := from.GetSourceVector().GetIsBin()
-	if totype.Charset == 255 && from.GetSourceVector().IsConst() {
-		v, null := from.GetStrValue(0)
-		var result types.Decimal64
-		var err error
-		if !null {
-			result, err = parseMySQLDecimal64Prefix(convertByteSliceToString(v), totype.Width, totype.Scale)
-			if err != nil {
-				return err
-			}
-		}
-		for i = 0; i < l; i++ {
-			if err = to.Append(result, null); err != nil {
-				return err
-			}
-		}
-		return nil
+	if totype.Charset == 255 && (!isb || from.GetSourceVector().IsConst()) {
+		return opUnaryStrToFixedWithErrorCheck([]*vector.Vector{from.GetSourceVector()}, to, proc, length,
+			func(s string) (types.Decimal64, error) {
+				return parseMySQLDecimal64Prefix(s, totype.Width, totype.Scale)
+			}, selectList)
 	}
 	for i = 0; i < l; i++ {
 		if functionRowSkipped(selectList, i) {
@@ -8002,9 +7991,7 @@ func strToDecimal64(
 				isExplicit := mode == castModeExplicit
 				var result types.Decimal64
 				var err error
-				if totype.Charset == 255 {
-					result, err = parseMySQLDecimal64Prefix(s, totype.Width, totype.Scale)
-				} else if isExplicit {
+				if isExplicit {
 					result, err = ParseExplicitDecimal64CastString(s, totype.Width, totype.Scale)
 				} else {
 					result, err = parseDecimal64CastString(s, totype.Width, totype.Scale)
@@ -8299,22 +8286,11 @@ func strToDecimal128(
 	var dft types.Decimal128
 	totype := to.GetType()
 	isb := from.GetSourceVector().GetIsBin()
-	if totype.Charset == 255 && from.GetSourceVector().IsConst() {
-		v, null := from.GetStrValue(0)
-		var result types.Decimal128
-		var err error
-		if !null {
-			result, err = parseMySQLDecimal128Prefix(convertByteSliceToString(v), totype.Width, totype.Scale)
-			if err != nil {
-				return err
-			}
-		}
-		for i = 0; i < l; i++ {
-			if err = to.Append(result, null); err != nil {
-				return err
-			}
-		}
-		return nil
+	if totype.Charset == 255 && (!isb || from.GetSourceVector().IsConst()) {
+		return opUnaryStrToFixedWithErrorCheck([]*vector.Vector{from.GetSourceVector()}, to, proc, length,
+			func(s string) (types.Decimal128, error) {
+				return parseMySQLDecimal128Prefix(s, totype.Width, totype.Scale)
+			}, selectList)
 	}
 	for i = 0; i < l; i++ {
 		if functionRowSkipped(selectList, i) {
@@ -8334,9 +8310,7 @@ func strToDecimal128(
 				isExplicit := mode == castModeExplicit
 				var result types.Decimal128
 				var err error
-				if totype.Charset == 255 {
-					result, err = parseMySQLDecimal128Prefix(s, totype.Width, totype.Scale)
-				} else if isExplicit {
+				if isExplicit {
 					result, err = ParseExplicitDecimal128CastString(s, totype.Width, totype.Scale)
 				} else {
 					result, err = parseDecimal128CastString(s, totype.Width, totype.Scale)
@@ -8404,22 +8378,11 @@ func strToDecimal256(
 	var dft types.Decimal256
 	totype := to.GetType()
 	isb := from.GetSourceVector().GetIsBin()
-	if totype.Charset == 255 && from.GetSourceVector().IsConst() {
-		v, null := from.GetStrValue(0)
-		var result types.Decimal256
-		var err error
-		if !null {
-			result, err = parseMySQLDecimal256Prefix(convertByteSliceToString(v), totype.Width, totype.Scale)
-			if err != nil {
-				return err
-			}
-		}
-		for i = 0; i < l; i++ {
-			if err = to.Append(result, null); err != nil {
-				return err
-			}
-		}
-		return nil
+	if totype.Charset == 255 && (!isb || from.GetSourceVector().IsConst()) {
+		return opUnaryStrToFixedWithErrorCheck([]*vector.Vector{from.GetSourceVector()}, to, proc, length,
+			func(s string) (types.Decimal256, error) {
+				return parseMySQLDecimal256Prefix(s, totype.Width, totype.Scale)
+			}, selectList)
 	}
 	for i = 0; i < l; i++ {
 		if functionRowSkipped(selectList, i) {
@@ -8439,9 +8402,7 @@ func strToDecimal256(
 				isExplicit := mode == castModeExplicit
 				var result types.Decimal256
 				var err error
-				if totype.Charset == 255 {
-					result, err = parseMySQLDecimal256Prefix(s, totype.Width, totype.Scale)
-				} else if isExplicit {
+				if isExplicit {
 					result, err = ParseExplicitDecimal256CastString(s, totype.Width, totype.Scale)
 				} else {
 					result, err = parseDecimal256CastString(s, totype.Width, totype.Scale)

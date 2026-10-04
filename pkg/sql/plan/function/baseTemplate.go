@@ -3910,6 +3910,9 @@ func opUnaryFixedToFixedWithNullCheck[
 func opUnaryBytesToFixedWithErrorCheck[
 	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v []byte) (Tr, error), selectList *FunctionSelectList) error {
+	if length == 0 {
+		return nil
+	}
 	result.UseOptFunctionParamFrame(1)
 	rs := vector.MustFunctionResult[Tr](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0])
@@ -3927,10 +3930,18 @@ func opUnaryBytesToFixedWithErrorCheck[
 		}
 		if !selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
+			skipped := 0
 			for i := range selectList.SelectList {
+				if i >= length {
+					break
+				}
 				if selectList.Contains(uint64(i)) {
 					rsNull.Add(uint64(i))
+					skipped++
 				}
+			}
+			if skipped == length {
+				return nil
 			}
 		}
 	}
@@ -3983,6 +3994,9 @@ func opUnaryBytesToFixedWithErrorCheck[
 func opUnaryStrToFixedWithErrorCheck[
 	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v string) (Tr, error), selectList *FunctionSelectList) error {
+	if length == 0 {
+		return nil
+	}
 	result.UseOptFunctionParamFrame(1)
 	rs := vector.MustFunctionResult[Tr](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0])
@@ -4000,10 +4014,18 @@ func opUnaryStrToFixedWithErrorCheck[
 		}
 		if !selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
+			skipped := 0
 			for i := range selectList.SelectList {
+				if i >= length {
+					break
+				}
 				if selectList.Contains(uint64(i)) {
 					rsNull.Add(uint64(i))
+					skipped++
 				}
+			}
+			if skipped == length {
+				return nil
 			}
 		}
 	}

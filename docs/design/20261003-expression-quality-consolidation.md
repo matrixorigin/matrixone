@@ -1369,3 +1369,38 @@ is removal of disk setup and stricter shared ownership/oracles, not source-size
 reduction. Evidence is in `29249-assignment-ignore-family-20261004`.
 This stage changes no production behavior and needs no service BVT; earlier
 production-stage BVT obligations remain pending.
+
+### Inactive unary conversion and decimal-prefix execution ownership
+
+The existing string/bytes-to-fixed error-check templates now return before reading
+or converting input for zero rows, and recognize a fully inactive bitmap within
+the existing bounded mask scan. AllNull remains owned by its original early return.
+Partial constant evaluation still invokes its conversion once; selected NULLs are
+published by the common execution owner. No new execution template or callback
+adapter is introduced. Three duplicated decimal-prefix constant branches and their
+row-loop prefix dispatches are retired in favor of the existing string template.
+The admission condition preserves the prior binary decoder distinction; binary
+constant/flat conversion inconsistency is not silently changed by this patch.
+
+Two regression roots cover literal prefix parsing, all three physical decimal
+widths, constant/flat input, mask flags and bitmaps, NULL, empty batches, binary
+controls with legal precision, and same-wrapper shape/payload reuse. The shared
+owner tests inject a failing conversion, proving zero calls for inactive rows and
+one original error for active constants. Long and short masks challenge the actual
+row domain. Private parser-entry instrumentation additionally verifies empty and
+fully masked prefix constants do no parsing. Old-owner overlays fail the new
+literal NULL/error assertions; no parser counter or product test hook is added.
+
+Production code decreases 17 lines. New regression code is reviewed separately;
+its value is the common callback and real CAST contracts, not its size. Eight
+alternating same-binary pairs at 1,024 rows and 500 evaluations measure only the
+selected healthy kernels, with setup/warmup outside timing and resets inside.
+DECIMAL128 constant wall/CPU decrease 70.4%/69.6%; flat decrease 5.0%/4.9%.
+Existing unary-string flat costs are within 0.4%, treated as unchanged. Both old
+and new loops have median zero measured allocations; four samples contain one
+48–80-byte allocation. No CI or SQL throughput claim follows.
+Evidence: `29249-prefix-constant-selection-20261004`.
+Planner production sites create Charset=255 targets, but an externally visible
+SQL reproduction and service BVT remain unverified; internal NewCast and shared
+kernel behavior are the proved scope. The issue report is drafted locally, with
+publication unavailable due to the known integration403.
