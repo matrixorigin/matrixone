@@ -979,3 +979,34 @@ mutants and cost provenance. Issue #29614 covers the prior production repair;
 this test-only consolidation needs no separate product-bug issue or extra
 server BVT. Existing SQL repairs still retain their distinct real-service BVT
 gate. The broader historical-bug-family challenge remains active.
+
+
+## Historical decimal repair class: SQL consumers and precision policy
+
+Independent native SQL-expression challenges cover 18 constant/scan cases from
+previous decimal division/scale-reduction failure mechanisms: narrow widening,
+wide control, D128/D256 source widths, positive/negative half-neighbors, ROUND
+and CAST, two scan values and NULL. Results are decoded from coefficient words
+with independent math/big rational arithmetic; no production Format or decimal
+producer computes the oracle. All corrected cases pass. Three initial failures
+were invalid historical expectations: current default div_precision_increment
+is four, so scale-zero division already rounds to 0.1235 before outer CAST(65,6).
+Retain that control; never report this policy change as a fresh arithmetic bug.
+
+Source scale three makes division scale seven and adjustment 22; the numerator
+then exceeds signed128. Private route observation proves d128DivOneToD256 runs
+for both constant and scan variants, while the actual wide control does not use
+that route. The intermediate coefficient 1234568 reduces once more on the
+explicit outer CAST, yielding 123457 at scale six. The minimum missing consumer
+contract is added as one row to the existing scan-expression owner, retaining
+values, outer scale/type, inner scale, target operand metadata and NULL. Do not
+deliver all 18 discovery cases as overlapping new test roots. Existing signed,
+half-boundary and Scale owners retain their distinct primitive contracts.
+
+Six validation gates finish with zero exits and unchanged relevant hashes:
+focused consumer, vet/molint/incremental lint, full plan normal and focused
+public-path race. gpt-6.1-sol xhigh independently approves the corrected
+historical oracle, actual widening path, one-row regression and evidence.
+Production delta is zero, test delta is one table row; report additions are
+separate. Two existing unrelated skipped plan subcases are not claimed as
+executed coverage. This remains in-process SQL evidence, not server BVT.
