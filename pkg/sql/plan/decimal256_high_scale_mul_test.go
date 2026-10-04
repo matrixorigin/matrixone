@@ -17,6 +17,7 @@ package plan
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -135,4 +136,24 @@ func TestDecimal256ScaleAlignmentPublicPath(t *testing.T) {
 			require.True(t, result.IsNull(2))
 		})
 	}
+}
+
+// Legal inputs must not publish a physical carrier coefficient under a SQL
+// precision that cannot represent it, including the minimum signed coefficient.
+func TestDecimal256ArithmeticPrecisionPublicPath(t *testing.T) {
+	stmt, err := runOneExprStmt(NewMockOptimizer(false), t,
+		"select cast('-57896044618658097711785492504343953926634992332820282019728792003' as decimal(65,0)) + cast('-0.956564819968' as decimal(65,12))")
+	require.NoError(t, err)
+	expr := stmt.GetQuery().Nodes[1].ProjectList[0]
+	require.Equal(t, int32(types.T_decimal256), expr.Typ.Id)
+	require.Equal(t, int32(65), expr.Typ.Width)
+	require.Equal(t, int32(12), expr.Typ.Scale)
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	executor, err := colexec.NewExpressionExecutor(proc, expr)
+	require.NoError(t, err)
+	defer executor.Free()
+	_, err = executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "error: %v", err)
+	require.ErrorContains(t, err, "exceeds DECIMAL(65,12)")
 }

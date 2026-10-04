@@ -1010,3 +1010,53 @@ historical oracle, actual widening path, one-row regression and evidence.
 Production delta is zero, test delta is one table row; report additions are
 separate. Two existing unrelated skipped plan subcases are not claimed as
 executed coverage. This remains in-process SQL evidence, not server BVT.
+
+
+## Shared declared-precision boundary: signed minimum (2026-10-04)
+
+This stage follows the amended historical-bug-family goal: organize tests by
+shared ownership and failure mechanism, challenge the fixes, file proven new
+issues, repair their common owner, and retain minimal independent regressions.
+
+- Current-main baseline `c3fbe9ce744aa877ec944c86258916fc5e45b63b` reproduces
+  [#29615](https://github.com/matrixorigin/matrixone/issues/29615): two legal
+  operands produce `MinInt256` under `DECIMAL(65,12)`, leaking a 77-digit
+  coefficient. The nearest negative coefficient and positive counterpart reject.
+- `decimal256BatchArith` owns post-kernel precision enforcement for addition,
+  subtraction, multiplication and division. The absolute magnitude of the
+  minimum signed coefficient retains its high bit; signed `Less` mistakenly
+  treats it as smaller than a positive precision limit. After normalization,
+  reject a remaining sign bit before the existing comparison. Constrained
+  widths 1..75 have positive limits below 2^255; internal width-76 bypass stays.
+  No new state, helper, allocation, per-kernel check or execution path is added.
+- Replace the existing multiplication-only precision holder with one shared
+  arithmetic precision holder. Preserve its exact 65-digit product and 66-digit
+  overflow oracles; add signed precision boundaries, legal minimum outputs
+  through VV/SV/VS, NULL/filtered rows, and a raw four-limb width-76 compatibility
+  control. The four division precision cases remain: their scale and rounding
+  contracts are distinct. One public binder/executor regression proves SQL
+  reachability; the discovery matrix is not copied wholesale into delivery.
+- The final holder uses 11 cells with at most two rows, existing function
+  fixtures, per-child vector cleanup, and one shared process with cleanup. Exact
+  literal outputs, metadata, NULL bits and `ErrOutOfRange` are checked. No sleep,
+  random scheduling, server or extra framework is needed. Before the production
+  fix, the three minimum-output shape cells failed with a missing error while
+  all seven original/new controls passed. This is direct sensitivity evidence.
+- D128 add/sub/multiply SQL coercion widens from original operand domains before
+  choosing its kernel when the aligned result exceeds precision 38; a legal
+  SQL result reaching the physical signed minimum does not remain in that
+  carrier. This does not claim unrelated D128 paths have been fully audited.
+- Evidence is retained under `canonical/latest-main/logical-range`: baseline
+  SQL terminal/log, `precision-family-map.json`, before/after regression logs,
+  and `regression-validation-terminal.json`. Whole-thread server BVT and broader
+  historical-family closure remain separate open requirements.
+
+Final stage validation: all seven serial checks terminated with exit 0 and
+unchanged source hashes: focused family/public tests, incremental vet, molint,
+incremental lint, full function/plan normal tests, full function race, and
+public-path race. Lint reports zero new issues. Molint has six existing
+diagnostics in five source files unchanged from the verified main base;
+its terminal is zero, and no new diagnostic is introduced. Plan normal has
+two existing skipped children, which are not claimed as executed coverage.
+6.1-sol xhigh approved the design and delivered code; final evidence selection
+and source binding are retained separately from broader uncompleted QA/BVT.
