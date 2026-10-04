@@ -233,6 +233,19 @@ func (opts StatementOption) AlterCopyDedupOpt() *plan.AlterCopyOpt {
 	return opts.alterCopyOpt
 }
 
+// WithPrePipelineLockTable requests an Exclusive table-range lock before an
+// internal INSERT starts. The caller must own the newly created physical target
+// in the same transaction. This requests normal lock acquisition; it does not
+// assert that the lock is already held or disable locking. Zero means no request.
+func (opts StatementOption) WithPrePipelineLockTable(tableID uint64) StatementOption {
+	opts.prePipelineLockTableID = tableID
+	return opts
+}
+
+func (opts StatementOption) PrePipelineLockTable() uint64 {
+	return opts.prePipelineLockTableID
+}
+
 func (opts StatementOption) AccountID() uint32 {
 	return opts.accountId
 }
