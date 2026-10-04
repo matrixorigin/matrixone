@@ -1265,3 +1265,34 @@ existing unsafe-import source diagnostics. The old OID-only guard mutation passe
 the correct/OID controls but fails seven remaining metadata cells. Final source
 hashes and actual test selection are bound in 29249-function-oracle-20261004. This test-only change requires no
 service BVT and makes no production performance claim.
+
+### Fixed-result literal expectations
+
+The shared `FunctionTestCase.Run` oracle now compares all 24 supported fixed
+OID branches directly against their literal Go slices and NULL flags. The
+existing generic comparator covers 23 OID branches (22 Go types); float64 keeps
+its epsilon/NaN policy, while float32 remains exact. Complete result metadata
+and row count are checked before value decoding. Actual constants still use the
+production parameter wrapper; expected slices do not broadcast.
+
+Expected NULL is checked before indexing its payload. A short NULL mask implies
+non-NULL for remaining rows; a NULL row may have no payload. A missing non-NULL
+payload still panics, and wrong Go expectation types still raise a type assertion
+error, including empty results. The existing ownership suite retains mismatch,
+reuse, float, filtering, allocation rejection, and cleanup checks. Five extent
+cells cover typed empty, short masks, trailing NULL without payload, all NULL
+without payload, and non-NULL bounds failure using that same fixture.
+
+Only the redundant fixed expected vector and bitmap construction are removed.
+Variable encodings retain their existing vector comparison path; fixed vector
+constructors remain necessary for actual input construction. No SQL behavior or
+production implementation changes.
+
+A private same-binary comparison used six real CAST cases and eight alternating
+pairs of 3,000 evaluations, with case setup outside timing and expected-vector
+cleanup inside the old path. Median wall/CPU fell 66.6%, allocated bytes 74.5%,
+and allocations 61.5%. These are measurements of the selected fixed-result
+oracle workload, not whole-package, CI, or production throughput gains. Evidence:
+`29249-fixed-result-oracle-20261004/cost-summary.json`. The retained variable
+encoding paths are checked by the owning function package, not included in that
+performance estimate.

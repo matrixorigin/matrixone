@@ -236,49 +236,38 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 		return false, fmt.Sprintf("expected result type %#v but get type %#v", fc.expected.typ,
 			v.GetType())
 	}
-	// generate the expected nsp
-	var expectedNsp *nulls.Nulls = nil
-	if fc.expected.nullList != nil {
-		expectedNsp = nulls.NewWithSize(len(fc.expected.nullList))
-		for i, b := range fc.expected.nullList {
-			if b {
-				expectedNsp.Add(uint64(i))
-			}
-		}
-	}
-	// check the value
-	col := fc.expected.wanted
-	vExpected := newVectorByType(fc.proc.Mp(), fc.expected.typ, col, expectedNsp)
-	defer vExpected.Free(fc.proc.Mp())
-	var i uint64
 	switch v.GetType().Oid {
 	case types.T_bool:
-		return compareFunctionFixedResult[bool](v, vExpected, fc.fnLength)
+		return compareFunctionFixedResult[bool](v, fc.expected, fc.fnLength)
 	case types.T_bit:
-		return compareFunctionFixedResult[uint64](v, vExpected, fc.fnLength)
+		return compareFunctionFixedResult[uint64](v, fc.expected, fc.fnLength)
 	case types.T_int8:
-		return compareFunctionFixedResult[int8](v, vExpected, fc.fnLength)
+		return compareFunctionFixedResult[int8](v, fc.expected, fc.fnLength)
 	case types.T_int16:
-		return compareFunctionFixedResult[int16](v, vExpected, fc.fnLength)
+		return compareFunctionFixedResult[int16](v, fc.expected, fc.fnLength)
 	case types.T_int32:
-		return compareFunctionFixedResult[int32](v, vExpected, fc.fnLength)
+		return compareFunctionFixedResult[int32](v, fc.expected, fc.fnLength)
 	case types.T_int64:
-		return compareFunctionFixedResult[int64](v, vExpected, fc.fnLength)
+		return compareFunctionFixedResult[int64](v, fc.expected, fc.fnLength)
 	case types.T_uint8:
-		return compareFunctionFixedResult[uint8](v, vExpected, fc.fnLength)
+		return compareFunctionFixedResult[uint8](v, fc.expected, fc.fnLength)
 	case types.T_uint16:
-		return compareFunctionFixedResult[uint16](v, vExpected, fc.fnLength)
+		return compareFunctionFixedResult[uint16](v, fc.expected, fc.fnLength)
 	case types.T_uint32:
-		return compareFunctionFixedResult[uint32](v, vExpected, fc.fnLength)
+		return compareFunctionFixedResult[uint32](v, fc.expected, fc.fnLength)
 	case types.T_uint64:
-		return compareFunctionFixedResult[uint64](v, vExpected, fc.fnLength)
+		return compareFunctionFixedResult[uint64](v, fc.expected, fc.fnLength)
 	case types.T_float32:
-		return compareFunctionFixedResult[float32](v, vExpected, fc.fnLength)
+		return compareFunctionFixedResult[float32](v, fc.expected, fc.fnLength)
 	case types.T_float64:
+		wanted := fc.expected.wanted.([]float64)
 		r := vector.GenerateFunctionFixedTypeParameter[float64](v)
-		s := vector.GenerateFunctionFixedTypeParameter[float64](vExpected)
-		for i = 0; i < uint64(fc.fnLength); i++ {
-			want, null1 := s.GetValue(i)
+		for i := uint64(0); i < uint64(fc.fnLength); i++ {
+			null1 := i < uint64(len(fc.expected.nullList)) && fc.expected.nullList[i]
+			var want float64
+			if !null1 {
+				want = wanted[i]
+			}
 			get, null2 := r.GetValue(i)
 			if null1 {
 				if null2 {
@@ -295,22 +284,48 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 					i+1, want, get)
 			}
 		}
+		return true, ""
 	case types.T_decimal64:
-		return compareFunctionFixedResult[types.Decimal64](v, vExpected, fc.fnLength)
+		return compareFunctionFixedResult[types.Decimal64](v, fc.expected, fc.fnLength)
 	case types.T_decimal128:
-		return compareFunctionFixedResult[types.Decimal128](v, vExpected, fc.fnLength)
+		return compareFunctionFixedResult[types.Decimal128](v, fc.expected, fc.fnLength)
 	case types.T_decimal256:
-		return compareFunctionFixedResult[types.Decimal256](v, vExpected, fc.fnLength)
+		return compareFunctionFixedResult[types.Decimal256](v, fc.expected, fc.fnLength)
 	case types.T_date:
-		return compareFunctionFixedResult[types.Date](v, vExpected, fc.fnLength)
+		return compareFunctionFixedResult[types.Date](v, fc.expected, fc.fnLength)
 	case types.T_datetime:
-		return compareFunctionFixedResult[types.Datetime](v, vExpected, fc.fnLength)
+		return compareFunctionFixedResult[types.Datetime](v, fc.expected, fc.fnLength)
 	case types.T_time:
-		return compareFunctionFixedResult[types.Time](v, vExpected, fc.fnLength)
+		return compareFunctionFixedResult[types.Time](v, fc.expected, fc.fnLength)
 	case types.T_timestamp:
-		return compareFunctionFixedResult[types.Timestamp](v, vExpected, fc.fnLength)
+		return compareFunctionFixedResult[types.Timestamp](v, fc.expected, fc.fnLength)
 	case types.T_enum:
-		return compareFunctionFixedResult[types.Enum](v, vExpected, fc.fnLength)
+		return compareFunctionFixedResult[types.Enum](v, fc.expected, fc.fnLength)
+	case types.T_uuid:
+		return compareFunctionFixedResult[types.Uuid](v, fc.expected, fc.fnLength)
+	case types.T_TS:
+		return compareFunctionFixedResult[types.TS](v, fc.expected, fc.fnLength)
+	case types.T_Rowid:
+		return compareFunctionFixedResult[types.Rowid](v, fc.expected, fc.fnLength)
+	case types.T_Blockid:
+		return compareFunctionFixedResult[types.Blockid](v, fc.expected, fc.fnLength)
+	}
+	// generate the expected nsp
+	var expectedNsp *nulls.Nulls = nil
+	if fc.expected.nullList != nil {
+		expectedNsp = nulls.NewWithSize(len(fc.expected.nullList))
+		for i, b := range fc.expected.nullList {
+			if b {
+				expectedNsp.Add(uint64(i))
+			}
+		}
+	}
+	// check the value
+	col := fc.expected.wanted
+	vExpected := newVectorByType(fc.proc.Mp(), fc.expected.typ, col, expectedNsp)
+	defer vExpected.Free(fc.proc.Mp())
+	var i uint64
+	switch v.GetType().Oid {
 	case types.T_geometry, types.T_geometry32:
 		// Geometry values are stored as WKB; expectations are written as WKT.
 		// Canonicalize both sides to WKT before comparing.
@@ -421,14 +436,6 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 				return false, fmt.Sprintf("the %dth row expected %v, but get %v", i+1, want, get)
 			}
 		}
-	case types.T_uuid:
-		return compareFunctionFixedResult[types.Uuid](v, vExpected, fc.fnLength)
-	case types.T_TS:
-		return compareFunctionFixedResult[types.TS](v, vExpected, fc.fnLength)
-	case types.T_Rowid:
-		return compareFunctionFixedResult[types.Rowid](v, vExpected, fc.fnLength)
-	case types.T_Blockid:
-		return compareFunctionFixedResult[types.Blockid](v, vExpected, fc.fnLength)
 	case types.T_json:
 		r := vector.GenerateFunctionStrParameter(v)
 		s := vector.GenerateFunctionStrParameter(vExpected)
@@ -456,11 +463,15 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 	return true, ""
 }
 
-func compareFunctionFixedResult[T types.FixedSizeTExceptStrType](actual, expected *vector.Vector, rows int) (bool, string) {
+func compareFunctionFixedResult[T types.FixedSizeTExceptStrType](actual *vector.Vector, expected FunctionTestResult, rows int) (bool, string) {
+	wanted := expected.wanted.([]T)
 	r := vector.GenerateFunctionFixedTypeParameter[T](actual)
-	s := vector.GenerateFunctionFixedTypeParameter[T](expected)
 	for i := uint64(0); i < uint64(rows); i++ {
-		want, null1 := s.GetValue(i)
+		null1 := i < uint64(len(expected.nullList)) && expected.nullList[i]
+		var want T
+		if !null1 {
+			want = wanted[i]
+		}
 		get, null2 := r.GetValue(i)
 		if null1 {
 			if null2 {
@@ -756,6 +767,40 @@ func TestFunctionTestCaseOwnership(t *testing.T) {
 		debug.Free()
 		assertReleased(t)
 
+	})
+	t.Run("literal expectation extent", func(t *testing.T) {
+		for _, tc := range []struct {
+			name           string
+			values, wanted []int64
+			nulls          []bool
+			wantPanic      bool
+		}{
+			{"empty", []int64{}, []int64{}, nil, false},
+			{"short NULL mask", []int64{-7, -8}, []int64{7, 8}, []bool{false}, false},
+			{"NULL beyond payload", []int64{-7, 0}, []int64{7}, []bool{false, true}, false},
+			{"all NULL without payload", []int64{0, 0}, []int64{}, []bool{true, true}, false},
+			{"non NULL missing payload", []int64{-7, -8}, []int64{7}, nil, true},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				fc := NewFunctionTestCase(proc, []FunctionTestInput{
+					NewFunctionTestInput(types.T_int64.ToType(), tc.values, tc.nulls),
+				}, NewFunctionTestResult(types.T_int64.ToType(), false, tc.wanted, tc.nulls), AbsInt64)
+				defer fc.Free()
+				var recovered any
+				func() {
+					defer func() { recovered = recover() }()
+					ok, info := fc.RunAndFree()
+					require.True(t, ok, info)
+				}()
+				if tc.wantPanic {
+					require.Implements(t, (*runtime.Error)(nil), recovered)
+					require.Contains(t, recovered.(error).Error(), "index out of range")
+				} else {
+					require.Nil(t, recovered)
+				}
+				assertReleased(t)
+			})
+		}
 	})
 	t.Run("terminal comparison panic", func(t *testing.T) {
 		fc := NewFunctionTestCase(proc, []FunctionTestInput{
