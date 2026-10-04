@@ -1579,6 +1579,69 @@ func TestIndexJoinBuildsVersionedSerializedRuntimeFilter(t *testing.T) {
 	require.Equal(t, buildSpec.Tag, indexScan.RuntimeFilterProbeList[0].Tag)
 }
 
+func TestIndexJoinBackfillRuntimeFilterUsesBasePrimaryKey(t *testing.T) {
+	for _, pkName := range []string{"id", catalog.FakePrimaryKeyColName} {
+		t.Run(pkName, func(t *testing.T) {
+			builder, _, scanID, tableDef := makeIndexHintJoinBuilder(t)
+			scan := builder.qry.Nodes[scanID]
+			if pkName == catalog.FakePrimaryKeyColName {
+				tableDef.Cols = append(tableDef.Cols, &planpb.ColDef{
+					Name: pkName, Typ: planpb.Type{Id: int32(types.T_uint64)},
+				})
+				tableDef.Name2ColIndex[pkName] = int32(len(tableDef.Cols) - 1)
+				tableDef.Pkey = &planpb.PrimaryKeyDef{PkeyColName: pkName, Names: []string{pkName}}
+			}
+			indexDef := tableDef.Indexes[0]
+			indexDef.Parts = []string{"a"}
+			indexTable := builder.compCtx.(*fullTextJoinMockCompilerContext).tables["idx_join_a_table"]
+			indexTable.Cols[1].Typ = tableDef.Cols[tableDef.Name2ColIndex[pkName]].Typ
+			scan.FilterList = []*planpb.Expr{ftjMakeEqExpr(t,
+				ftjColExpr(tableDef, scan.BindingTags[0], tableDef.Name2ColIndex["a"]),
+				makePlan2Int32ConstExprWithType(7))}
+
+			joinID, indexScanID := builder.applyIndexJoin(
+				indexDef, scan, EqualIndexCondition, []int32{0}, nil)
+			require.NotEqual(t, scanID, joinID)
+			indexScan := builder.qry.Nodes[indexScanID]
+			require.Equal(t, catalog.IndexTableIndexColName,
+				indexScan.FilterList[0].GetF().Args[0].GetCol().Name)
+			join := builder.qry.Nodes[joinID]
+			join.Stats = &planpb.Stats{HashmapStats: &planpb.HashMapStats{HashmapSize: 1, HashOnPK: true}}
+			builder.generateRuntimeFilters(joinID)
+
+			require.Len(t, scan.RuntimeFilterProbeList, 1)
+			probe := scan.RuntimeFilterProbeList[0]
+			require.False(t, probe.NotOnPk)
+			require.Equal(t, pkName, probe.Expr.GetCol().Name)
+		})
+	}
+}
+
+func TestNoPKIndexJoinPrefixInNamesIndexTablePrimaryKey(t *testing.T) {
+	builder, _, scanID, tableDef := makeIndexHintJoinBuilder(t)
+	scan := builder.qry.Nodes[scanID]
+	tableDef.Cols = append(tableDef.Cols, &planpb.ColDef{
+		Name: catalog.FakePrimaryKeyColName, Typ: planpb.Type{Id: int32(types.T_uint64)},
+	})
+	tableDef.Name2ColIndex[catalog.FakePrimaryKeyColName] = int32(len(tableDef.Cols) - 1)
+	tableDef.Pkey = &planpb.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName}
+	idxDef := tableDef.Indexes[0]
+	idxDef.Parts = []string{"a", catalog.FakePrimaryKeyColName}
+	indexTable := builder.compCtx.(*fullTextJoinMockCompilerContext).tables["idx_join_a_table"]
+	indexTable.Pkey = &planpb.PrimaryKeyDef{PkeyColName: catalog.IndexTableIndexColName}
+	scan.FilterList = []*planpb.Expr{makeParamInFilterExpr(
+		scan.BindingTags[0], tableDef.Name2ColIndex["a"], 10)}
+
+	joinID, indexScanID := builder.applyIndexJoin(
+		idxDef, scan, NonEqualIndexCondition, []int32{0}, nil)
+	require.NotEqual(t, scanID, joinID)
+	indexScan := builder.qry.Nodes[indexScanID]
+	require.Equal(t, "prefix_in", indexScan.FilterList[0].GetF().Func.ObjName)
+	probeCol := indexScan.FilterList[0].GetF().Args[0].GetCol()
+	require.Equal(t, int32(0), probeCol.ColPos)
+	require.Equal(t, indexScan.TableDef.Pkey.PkeyColName, probeCol.Name)
+}
+
 func TestEnumIndexJoinsRemainEligible(t *testing.T) {
 	rt := moruntime.ServiceRuntime("")
 	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -7694,6 +7757,7 @@ func TestReplaceEqualConditionTruncatesPrefixIndexLookupPart(t *testing.T) {
 
 	require.NotNil(t, expr.GetF())
 	require.Equal(t, "prefix_eq", expr.GetF().Func.ObjName)
+	require.Equal(t, catalog.IndexTableIndexColName, expr.GetF().Args[0].GetCol().Name)
 	require.True(t, exprContainsFuncName(expr, "substring"))
 	serialFn := expr.GetF().Args[1].GetF()
 	require.NotNil(t, serialFn)
@@ -7729,6 +7793,7 @@ func TestReplaceEqualConditionTruncatesSinglePartPrefixIndexLookup(t *testing.T)
 
 	require.NotNil(t, expr.GetF())
 	require.Equal(t, "=", expr.GetF().Func.ObjName)
+	require.Equal(t, catalog.IndexTableIndexColName, expr.GetF().Args[0].GetCol().Name)
 	require.True(t, exprContainsFuncName(expr.GetF().Args[1], "substring"))
 }
 
@@ -8685,6 +8750,7 @@ func TestReplaceRangePairCondition_UsesPrefixBetweenForSecondaryIndex(t *testing
 	require.NoError(t, err)
 	require.NotNil(t, expr.GetF())
 	require.Equal(t, "prefix_between", expr.GetF().Func.ObjName)
+	require.Equal(t, catalog.IndexTableIndexColName, expr.GetF().Args[0].GetCol().Name)
 	assert.Equal(t, "serial", wrappedSerialFuncName(t, expr.GetF().Args[1]))
 	assert.Equal(t, "serial", wrappedSerialFuncName(t, expr.GetF().Args[2]))
 	require.InDelta(t, 0.12, expr.Selectivity, 1e-9)

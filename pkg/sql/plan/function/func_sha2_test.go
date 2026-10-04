@@ -82,7 +82,7 @@ func TestSHA2PreservesWideStringInputs(t *testing.T) {
 				),
 				SHA2Func,
 			)
-			succeeded, info := testCase.Run()
+			succeeded, info := testCase.RunAndFree()
 			require.True(t, succeeded, info)
 		})
 	}
@@ -164,7 +164,7 @@ func TestSHA2StringLengthUsesMySQLIntegerConversion(t *testing.T) {
 		),
 		SHA2StringLengthFunc,
 	)
-	succeeded, info := testCase.Run()
+	succeeded, info := testCase.RunAndFree()
 	require.True(t, succeeded, info)
 }
 
@@ -194,7 +194,7 @@ func TestSHA2StringLengthPreservesBinaryOperands(t *testing.T) {
 			[]string{sha2TestDigest(value, 256)}, []bool{false}),
 		SHA2StringLengthFunc,
 	)
-	succeeded, info := testCase.Run()
+	succeeded, info := testCase.RunAndFree()
 	require.True(t, succeeded, info)
 }
 
@@ -236,7 +236,7 @@ func TestSHA2StringLengthHonorsSelectList(t *testing.T) {
 			[]string{"", sha2TestDigest("hello", 256)}, []bool{true, false}),
 		SHA2StringLengthFunc,
 	).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
-	succeeded, info := testCase.Run()
+	succeeded, info := testCase.RunAndFree()
 	require.True(t, succeeded, info)
 }
 

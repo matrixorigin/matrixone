@@ -1265,7 +1265,7 @@ var (
 				owner,
 				default_role
     		) values("%s", "%s", "%s", "%s", "%s", %s, '%s', "%s",%d, %d, %d);`
-	initMoRolePrivFormat = `insert into mo_catalog.mo_role_privs(
+	initMoRolePrivPrefix = `insert into mo_catalog.mo_role_privs(
 				role_id,
 				role_name,
 				obj_type,
@@ -1276,8 +1276,10 @@ var (
 				operation_user_id,
 				granted_time,
 				with_grant_option
-			) values(%d,"%s","%s",%d,%d,"%s","%s",%d,"%s",%v);`
-	initMoUserGrantFormat = `insert into mo_catalog.mo_user_grant(
+			) values`
+	initMoRolePrivValueFormat = `(%d,"%s","%s",%d,%d,"%s","%s",%d,"%s",%v)`
+	initMoRolePrivFormat      = initMoRolePrivPrefix + initMoRolePrivValueFormat + ";"
+	initMoUserGrantFormat     = `insert into mo_catalog.mo_user_grant(
             	role_id,
 				user_id,
 				granted_time,
@@ -2614,6 +2616,28 @@ var (
 		PrivilegeTypeConnect,
 	}
 )
+
+// initialRolePrivilegesSQL batches one role's fixed bootstrap privileges. The
+// caller retains ownership of execution and the surrounding initialization txn.
+func initialRolePrivilegesSQL(roleID uint32, roleName string, userID uint32, privileges []PrivilegeType) string {
+	if len(privileges) == 0 {
+		return ""
+	}
+	var sql strings.Builder
+	sql.WriteString(initMoRolePrivPrefix)
+	for index, privilege := range privileges {
+		if index > 0 {
+			sql.WriteByte(',')
+		}
+		entry := privilegeEntriesMap[privilege]
+		fmt.Fprintf(&sql, initMoRolePrivValueFormat,
+			roleID, roleName, entry.objType, entry.objId,
+			entry.privilegeId, entry.privilegeId.String(), entry.privilegeLevel,
+			userID, types.CurrentTimestamp().String2(time.UTC, 0), entry.withGrantOption)
+	}
+	sql.WriteByte(';')
+	return sql.String()
+}
 
 type verifiedRoleType int
 
@@ -10915,30 +10939,11 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 		newTenant.GetUserID(), newTenant.GetDefaultRoleID(), accountAdminRoleID)
 	addSqlIntoSet(initMoUser1)
 
-	// step4: add new entries to the mo_role_privs
-	// accountadmin role
-	for _, t := range entriesOfAccountAdminForMoRolePrivsFor {
-		entry := privilegeEntriesMap[t]
-		initMoRolePriv := fmt.Sprintf(initMoRolePrivFormat,
-			accountAdminRoleID, accountAdminRoleName,
-			entry.objType, entry.objId,
-			entry.privilegeId, entry.privilegeId.String(), entry.privilegeLevel,
-			newTenant.GetUserID(), types.CurrentTimestamp().String2(time.UTC, 0),
-			entry.withGrantOption)
-		addSqlIntoSet(initMoRolePriv)
-	}
-
-	// public role
-	for _, t := range entriesOfPublicForMoRolePrivsFor {
-		entry := privilegeEntriesMap[t]
-		initMoRolePriv := fmt.Sprintf(initMoRolePrivFormat,
-			publicRoleID, publicRoleName,
-			entry.objType, entry.objId,
-			entry.privilegeId, entry.privilegeId.String(), entry.privilegeLevel,
-			newTenant.GetUserID(), types.CurrentTimestamp().String2(time.UTC, 0),
-			entry.withGrantOption)
-		addSqlIntoSet(initMoRolePriv)
-	}
+	// Initialize each role in one statement within the existing account transaction.
+	addSqlIntoSet(initialRolePrivilegesSQL(accountAdminRoleID, accountAdminRoleName,
+		newTenant.GetUserID(), entriesOfAccountAdminForMoRolePrivsFor))
+	addSqlIntoSet(initialRolePrivilegesSQL(publicRoleID, publicRoleName,
+		newTenant.GetUserID(), entriesOfPublicForMoRolePrivsFor))
 
 	// step5: add new entries to the mo_user_grant
 	initMoUserGrant1 := fmt.Sprintf(initMoUserGrantFormat, accountAdminRoleID, newTenant.GetUserID(), types.CurrentTimestamp().String2(time.UTC, 0), true)

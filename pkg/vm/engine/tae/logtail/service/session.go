@@ -270,8 +270,14 @@ func (s *morpcStream) write(
 		seg.MessageSize = int32(size)
 		seg.Sequence = int32(index + 1)
 		seg.MaxSequence = int32(len(chunks))
-		n := copy(seg.Payload, chunk)
-		seg.Payload = seg.Payload[:n]
+		if cap(seg.Payload) < len(chunk) {
+			// Grow only for actual payloads, without copying overwritten bytes.
+			// Retained capacity stays within the existing segment limit.
+			capacity := min(s.limit, max(len(chunk), 2*cap(seg.Payload)))
+			seg.Payload = make([]byte, capacity)
+		}
+		seg.Payload = seg.Payload[:len(chunk)]
+		copy(seg.Payload, chunk)
 
 		s.logger.Debug("real segment proto size", zap.Int("ProtoSize", seg.ProtoSize()))
 

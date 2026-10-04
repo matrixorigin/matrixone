@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
@@ -647,6 +649,173 @@ func TestPreparedSourceBindingPreservesUpdateDomains(t *testing.T) {
 	require.NotNil(t, findPlanFunctionExpr(p, "serial"))
 }
 
+func TestPreparedDMLIntegerKeyDomains(t *testing.T) {
+	// Sysbench 1.1 normalizes its Lua INT bindings to BIGINT on the wire.
+	// A safe value must not widen the indexed INT column. An unsafe value must
+	// retain the old comparison, not raise a new narrowing-cast error.
+	for _, statement := range []string{
+		"update nation set n_comment='updated' where ",
+		"delete from nation where ",
+	} {
+		for _, tc := range []struct {
+			name, predicate, value string
+			source, column         types.T
+			native                 bool
+		}{
+			{"point", "n_nationkey=?", "54321", types.T_int64, types.T_int32, true},
+			{"maximum", "n_nationkey=?", "2147483647", types.T_int64, types.T_int32, true},
+			{"minimum", "n_nationkey=?", "-2147483648", types.T_int64, types.T_int32, true},
+			{"above maximum", "n_nationkey=?", "2147483648", types.T_int64, types.T_int32, false},
+			{"below minimum", "n_nationkey=?", "-2147483649", types.T_int64, types.T_int32, false},
+			{"unsigned source", "n_nationkey=?", "54321", types.T_uint64, types.T_int32, false},
+			{"unsigned source overflow", "n_nationkey=?", "18446744073709551615", types.T_uint64, types.T_int32, false},
+			{"unsigned column", "n_nationkey=?", "4294967295", types.T_int64, types.T_uint32, false},
+			{"negative unsigned", "n_nationkey=?", "-1", types.T_int64, types.T_uint32, false},
+			{"double collision", "n_nationkey=?", "9007199254740992", types.T_uint64, types.T_int64, false},
+			{"strict range", "n_nationkey>?", "7", types.T_int64, types.T_int32, true},
+			{"reversed range", "?<=n_nationkey", "7", types.T_int64, types.T_int32, true},
+			{"explicit column cast", "cast(n_nationkey as signed)=?", "7", types.T_int64, types.T_int32, false},
+		} {
+			// The domain matrix belongs to the common binder. DELETE only needs
+			// its distinct statement construction checked on each admission path.
+			if strings.HasPrefix(statement, "delete") && tc.name != "point" && tc.name != "above maximum" {
+				continue
+			}
+			t.Run(statement+tc.name, func(t *testing.T) {
+				mock := NewMockOptimizer(false)
+				table := DeepCopyTableDef(mock.ctxt.tables["nation"], true)
+				table.Cols[0].Typ = makeSimplePlan2Type(tc.column)
+				mock.ctxt.tables["nation"] = table
+				proc := mock.ctxt.GetProcess()
+				params := vector.NewVec(types.T_text.ToType())
+				t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) })
+				require.NoError(t, vector.AppendBytes(params, []byte(tc.value), false, proc.Mp()))
+				proc.SetPrepareParams(params)
+				stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, statement+tc.predicate, 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
+					[]PreparedSourceBinding{{Position: 0, Type: tc.source.ToType()}},
+					[]any{ParamValue{Value: tc.value, IsBinaryProtocol: true}})
+				require.NoError(t, err)
+				found, columnCast := false, false
+				for _, node := range bound.Plan.GetQuery().Nodes {
+					if node.NodeType != planpb.Node_TABLE_SCAN || node.TableDef.Name != "nation" {
+						continue
+					}
+					found = true
+					for _, filter := range node.FilterList {
+						require.True(t, function.ContainsParameter(filter), "proof may not freeze this execution's value")
+						require.NoError(t, planpb.VisitExprTree(filter, func(expr *Expr) error {
+							if fn := expr.GetF(); fn != nil && fn.Func.ObjName == "cast" && len(fn.Args) == 2 && fn.Args[0].GetCol() != nil {
+								columnCast = true
+							}
+							return nil
+						}))
+					}
+				}
+				require.True(t, found)
+				require.Equal(t, !tc.native, columnCast, bound.Plan.String())
+				if tc.native {
+					require.False(t, bound.ValueDependent, "guarded key conversions can reuse a plan")
+					require.True(t, bound.DiagnosticFree)
+					require.NotEmpty(t, bound.DiagnosticCandidates)
+				} else if tc.source == types.T_int64 && tc.column == types.T_int32 && tc.name != "explicit column cast" {
+					require.True(t, bound.ValueDependent, "unsafe fallback must not replace a guarded cache entry")
+				}
+			})
+		}
+	}
+}
+
+func TestPreparedSignedKeyGuardPreservesOtherDependencies(t *testing.T) {
+	for _, selectStatement := range []bool{false, true} {
+		for _, dependent := range []bool{false, true} {
+			ctx := withPreparedSourceBindings(context.Background(),
+				[]PreparedSourceBinding{{Position: 0, Type: types.T_int64.ToType()}},
+				[]any{ParamValue{Value: "7", IsBinaryProtocol: true}})
+			state := preparedBindingState(ctx)
+			state.valueDependent = dependent
+			state.selectStatement = selectStatement
+			param := &Expr{Typ: makeSimplePlan2Type(types.T_int64), Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+			// One parameter can be consumed in more than one narrow domain. Each
+			// complete cast must survive independently of optimized predicates.
+			for _, target := range []types.T{types.T_int32, types.T_int16, types.T_int8} {
+				column := &Expr{Typ: makeSimplePlan2Type(target), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}
+				var converted *Expr
+				if selectStatement {
+					var admitted bool
+					var err error
+					converted, admitted, err = bindPreparedIntegerInValue(ctx, column, param)
+					require.NoError(t, err)
+					require.True(t, admitted)
+				} else {
+					args, err := bindPreparedConsumerArguments(ctx, "=", []*Expr{column, param})
+					require.NoError(t, err)
+					converted = args[1]
+				}
+				require.Equal(t, int32(target), converted.Typ.Id)
+				require.Equal(t, dependent, state.valueDependent)
+				require.NotSame(t, converted, state.diagnosticCandidates[len(state.diagnosticCandidates)-1])
+			}
+			require.Len(t, state.diagnosticCandidates, 3)
+			proc := testutil.NewProcess(t)
+			params := vector.NewVec(types.T_text.ToType())
+			t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()); proc.Free() })
+			require.NoError(t, vector.AppendBytes(params, []byte("7"), false, proc.Mp()))
+			proc.SetPrepareParams(params)
+			for _, tc := range []struct {
+				value string
+				safe  bool
+			}{{"7", true}, {"128", false}, {"32768", false}, {"2147483648", false}, {"-128", true}, {"-129", false}, {"7", true}} {
+				require.NoError(t, vector.SetStringAt(params, 0, tc.value, proc.Mp()))
+				safe, err := ProbePreparedDiagnosticCandidates(proc, state.diagnosticCandidates)
+				require.NoError(t, err)
+				require.Equal(t, tc.safe, safe)
+			}
+		}
+	}
+}
+
+func TestPreparedIntegerInAdmissionRejectsUnsupportedDomains(t *testing.T) {
+	for _, tc := range []struct {
+		source, binding, target types.T
+		position                int32
+	}{
+		{types.T_text, types.T_text, types.T_int32, 0},
+		{types.T_float64, types.T_float64, types.T_int32, 0},
+		{types.T_uint64, types.T_uint64, types.T_int32, 0},
+		{types.T_any, types.T_any, types.T_int32, 0},
+		{types.T_int64, types.T_int64, types.T_int64, 0},
+		{types.T_int64, types.T_int64, types.T_uint32, 0},
+		{types.T_int64, types.T_int64, types.T_float64, 0},
+		// A signed expression cannot authorize a different source binding.
+		{types.T_int64, types.T_uint64, types.T_int32, 0},
+		{types.T_int64, types.T_int32, types.T_int32, 0},
+		{types.T_int64, types.T_int64, types.T_int32, 1},
+	} {
+		t.Run(fmt.Sprintf("%s/%s/%s/pos%d", tc.source, tc.binding, tc.target, tc.position), func(t *testing.T) {
+			ctx := withPreparedSourceBindings(context.Background(),
+				[]PreparedSourceBinding{{Position: 0, Type: tc.binding.ToType()}}, []any{int64(7)})
+			state := preparedBindingState(ctx)
+			state.selectStatement, state.valueDependent = true, true
+			param, err := bindPreparedSource(ctx, 1)
+			require.NoError(t, err)
+			if tc.source != tc.binding {
+				param.Typ = makeSimplePlan2Type(tc.source)
+			}
+			param.GetP().Pos = tc.position
+			column := &Expr{Typ: makeSimplePlan2Type(tc.target), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}
+			result, admitted, err := bindPreparedIntegerInValue(ctx, column, param)
+			require.NoError(t, err)
+			require.False(t, admitted)
+			require.Same(t, param, result)
+			require.True(t, state.valueDependent)
+			require.Empty(t, state.diagnosticCandidates)
+		})
+	}
+}
+
 func TestPreparedSourceBindingConfigurationConsumers(t *testing.T) {
 	t.Run("geometry SRID", func(t *testing.T) {
 		mock := NewMockOptimizer(false)
@@ -1184,5 +1353,49 @@ func TestSingletonProjectedPeerAdmission(t *testing.T) {
 				require.NotNil(t, peer.GetCol(), "proof must not mutate execution tree")
 			}
 		})
+	}
+}
+
+func TestPreparedWideIntegerComparisonKeepsColumn(t *testing.T) {
+	for _, predicate := range []string{"val in (?,?)", "val not in (?,?)"} {
+		for _, value := range []int64{math.MinInt32, math.MaxInt32, math.MinInt32 - 1, math.MaxInt32 + 1} {
+			t.Run(fmt.Sprintf("%s/%d", predicate, value), func(t *testing.T) {
+				mock := NewMockOptimizer(true)
+				proc := mock.ctxt.GetProcess()
+				stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select id from single_idx_t where "+predicate, 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				count := tree.ParameterCount(stmt)
+				params := vector.NewVec(types.T_text.ToType())
+				defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+				bindings := make([]PreparedSourceBinding, count)
+				values := make([]any, count)
+				for i := range bindings {
+					bindings[i] = PreparedSourceBinding{Position: int32(i), Type: types.T_int64.ToType()}
+					values[i] = ParamValue{Value: value, IsBinaryProtocol: true}
+					require.NoError(t, vector.AppendBytes(params, []byte(fmt.Sprint(value)), false, proc.Mp()))
+				}
+				proc.SetPrepareParams(params)
+				bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings, values)
+				require.NoError(t, err)
+				require.True(t, bound.DiagnosticFree)
+				if value >= math.MinInt32 && value <= math.MaxInt32 {
+					require.False(t, bound.ValueDependent)
+				}
+				columnCast := false
+				require.NoError(t, planpb.VisitExpressionsInOwner(bound.Plan, func(root *Expr) error {
+					return planpb.VisitExprTree(root, func(e *Expr) error {
+						if f := e.GetF(); f != nil && f.Func.ObjName == "cast" && len(f.Args) > 0 && f.Args[0].GetCol() != nil {
+							columnCast = true
+						}
+						return nil
+					})
+				}))
+				require.Equal(t, value < math.MinInt32 || value > math.MaxInt32, columnCast)
+				if strings.Contains(predicate, "in") && value >= math.MinInt32 && value <= math.MaxInt32 {
+					require.NotNil(t, findPlanFunctionExpr(bound.Plan, map[bool]string{true: "not_in", false: "in"}[strings.Contains(predicate, "not")]), "safe list keeps one typed IN predicate")
+				}
+			})
+		}
 	}
 }

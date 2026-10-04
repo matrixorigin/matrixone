@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"slices"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -691,6 +692,15 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 	}
 	objMeta, extent, err := w.WriteWithCompress(start, buf.Bytes())
 	objectHeader.SetExtent(extent)
+
+	// Reserve entries from the prepared object rather than a fixed column budget.
+	entryCount := 3 + 2*len(bloomFilterDatas) // header, metadata, footer and schema indexes
+	for _, blocks := range w.blocks {
+		for _, block := range blocks {
+			entryCount += min(len(block.data), int(block.meta.BlockHeader().ColumnCount()))
+		}
+	}
+	w.buffer.vector.Entries = slices.Grow(w.buffer.vector.Entries, entryCount)
 
 	// begin write
 

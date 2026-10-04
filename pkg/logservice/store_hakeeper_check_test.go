@@ -1047,6 +1047,17 @@ func TestHAKeeperBootstrapErrorUsesConfiguredCadence(t *testing.T) {
 		actual, err := s.getCheckerState()
 		require.NoError(t, err)
 		require.Equal(t, pb.HAKeeperBootstrapCommandsReceived, actual.State)
+		projected, err := s.readCheckerState(ctx, &hakeeper.StateQuery{StateOnly: true})
+		require.NoError(t, err)
+		require.Equal(t, &pb.CheckerState{State: actual.State}, projected)
+		// A canceled authoritative read must still fail in either mode.
+		canceled, stop := context.WithTimeout(context.Background(), testIOTimeout)
+		stop()
+		_, fullErr := s.getCheckerStateWithContext(canceled)
+		projected, projectedErr := s.readCheckerState(canceled, &hakeeper.StateQuery{StateOnly: true})
+		require.Error(t, fullErr)
+		require.ErrorIs(t, projectedErr, fullErr)
+		require.Equal(t, &pb.CheckerState{}, projected)
 	})
 }
 

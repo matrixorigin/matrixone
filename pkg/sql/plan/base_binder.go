@@ -4375,6 +4375,26 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			args[idx] = expr
 		}
 	}
+	if preparedBindingState(b.GetContext()) != nil {
+		var err error
+		if isIfNull && len(args) == 3 {
+			results := []*Expr{args[2], args[1]}
+			results, err = bindPreparedCommonValueResultArguments(b.GetContext(), results, nil)
+			if err == nil {
+				// CASE lowering must not hide IFNULL's fixed result peer from
+				// the existing common-value parameter conversion contract.
+				results, err = bindPreparedConsumerArguments(b.GetContext(), "coalesce", results)
+			}
+			if err == nil {
+				args = []*Expr{args[0], results[1], results[0]}
+			}
+		} else if isPreparedCommonValueFunction(name) {
+			args, err = bindPreparedCommonValueResultArguments(b.GetContext(), args, nil)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
 	preparedNumericPeer := false
 	preparedNumericProvenance := false
 	if b.builder != nil && b.builder.isPrepareStatement &&
@@ -7236,13 +7256,20 @@ func bindFuncExprImplByPlanExpr(
 					orExprList = append(orExprList, rightVal)
 					continue
 				}
-				if partitionIn || exactIntegerList || checkNoNeedCast(ctx, makeTypeByPlan2Expr(rightVal), typLeft, rightVal) {
-					inExpr := rightVal
+				inExpr, guardedInteger := rightVal, false
+				if !partitionIn && len(rightList.List) > 1 && !exactIntegerList &&
+					!checkNoNeedCast(ctx, makeTypeByPlan2Expr(rightVal), typLeft, rightVal) {
+					inExpr, guardedInteger, err = bindPreparedIntegerInValue(ctx, args[0], rightVal)
+					if err != nil {
+						return nil, err
+					}
+				}
+				if partitionIn || exactIntegerList || guardedInteger || checkNoNeedCast(ctx, makeTypeByPlan2Expr(rightVal), typLeft, rightVal) {
 					// Keep the partition-IN coercion path unchanged. Ordinary IN can
 					// retain an already same-typed constant cast; casting UUID to UUID
 					// is both redundant and unsupported.
-					if partitionIn || !makeTypeByPlan2Expr(rightVal).Eq(typLeft) {
-						inExpr, err = appendCastBeforeExpr(ctx, rightVal, args[0].Typ)
+					if partitionIn || !makeTypeByPlan2Expr(inExpr).Eq(typLeft) {
+						inExpr, err = appendCastBeforeExpr(ctx, inExpr, args[0].Typ)
 						if err != nil {
 							return nil, err
 						}
@@ -7449,6 +7476,14 @@ func bindFuncExprImplByPlanExpr(
 	// VARCHAR(65535) and spuriously promoted to BLOB.
 	if name == "convert" {
 		returnType = function.ConvertReturnTypeForBinder(argsType)
+	}
+	if name == "convert_tz" && len(argsType) > 0 {
+		// CONVERT_TZ preserves the source temporal precision.  The overload
+		// lookup may use the implicit DATETIME cast target (whose default scale
+		// is zero), so restore the source scale for view/CTAS metadata.
+		returnType.Oid = types.T_datetime
+		returnType.Scale = argsType[0].Scale
+		returnType.Width = argsType[0].Width
 	}
 	adjustControlFlowMetadata(name, args, argsType, &returnType, argsCastType)
 	adjustDateFormatMetadata(name, args, &returnType)
@@ -7716,6 +7751,9 @@ func bindFuncExprImplByPlanExpr(
 			}
 			returnType.Scale = fsp
 		}
+		// CTAS and view materialization use Width as the persisted temporal
+		// precision marker. Keep the string TIMEDIFF overload's FSP visible.
+		returnType.Width = returnType.Scale
 
 	case "time":
 		if len(args) == 1 {
@@ -7851,7 +7889,10 @@ func bindFuncExprImplByPlanExpr(
 					if inputType.Oid == types.T_date {
 						returnType = types.T_datetime.ToTypeWithScale(6)
 					} else {
-						returnType.Oid = inputType.Oid
+						// MySQL's temporal arithmetic returns DATETIME for a
+						// TIMESTAMP operand. Keep the wall-clock result domain
+						// independent from the source's timezone-aware storage type.
+						returnType.Oid = types.T_datetime
 						returnType.Scale = inputType.Scale
 						if returnType.Scale < 6 {
 							returnType.Scale = 6
@@ -7870,7 +7911,7 @@ func bindFuncExprImplByPlanExpr(
 						}
 					}
 				} else {
-					returnType.Oid = inputType.Oid
+					returnType.Oid = types.T_datetime
 					returnType.Scale = inputType.Scale
 					if unit == types.MicroSecond && returnType.Scale < 6 {
 						returnType.Scale = 6
@@ -7885,6 +7926,9 @@ func bindFuncExprImplByPlanExpr(
 			switch inputType.Oid {
 			case types.T_datetime, types.T_timestamp, types.T_time:
 				returnType.Oid, returnType.Scale, returnType.Width = inputType.Oid, inputType.Scale, inputType.Width
+				if inputType.Oid == types.T_timestamp {
+					returnType.Oid = types.T_datetime
+				}
 				unit, known := dateFunctionUnitFromPlanExpr(args[2])
 				if !known || unit == types.MicroSecond ||
 					(inputType.Oid == types.T_time && argsType[1].Oid != types.T_int64 && unit != types.Hour_Minute) {

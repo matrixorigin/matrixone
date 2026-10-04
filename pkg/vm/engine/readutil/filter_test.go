@@ -30,14 +30,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -3609,8 +3613,80 @@ func TestConstructBlockPKFilterMarksOnlyExactMembership(t *testing.T) {
 			})
 			require.NoError(t, err)
 			require.Equal(t, test.exact, filter.ExactMembership)
+			require.Nil(t, filter.CachedMembership, "unknown implementations must keep snapshot isolation")
 		})
 	}
+}
+
+func TestConstructBlockPKFilterScopedMembership(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	vec := vector.NewVec(types.T_int64.ToType())
+	defer vec.Free(mp)
+	require.NoError(t, vector.AppendFixedList(vec, []int64{1, 2, 3}, nil, mp))
+	data, err := docfilter.Build(vec)
+	require.NoError(t, err)
+	member, err := docfilter.New(data)
+	require.NoError(t, err)
+	defer member.Free()
+	fs := testutil.NewSharedFS()
+	t.Cleanup(func() { fs.Close(context.Background()) })
+	input := batch.NewWithSize(3)
+	input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	input.Vecs[1], err = vec.Dup(mp)
+	require.NoError(t, err)
+	input.Vecs[2] = vector.NewVec(types.T_array_float32.ToType())
+	defer input.Clean(mp)
+	for i, key := range []string{"a0", "b0", "b1"} {
+		require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte(key), false, mp))
+		require.NoError(t, vector.AppendArray(input.Vecs[2], []float32{float32(i), 0}, false, mp))
+	}
+	input.SetRowCount(3)
+	id := objectio.NewObjectid()
+	name := objectio.BuildObjectNameWithObjectID(&id)
+	writer, err := objectio.NewObjectWriter(name, fs, 0, []uint16{0, 1, 2}, nil)
+	require.NoError(t, err)
+	_, err = writer.Write(input)
+	require.NoError(t, err)
+	blocks, err := writer.WriteEnd(t.Context())
+	require.NoError(t, err)
+	location := objectio.BuildLocation(name, blocks[0].GetExtent(), 3, 0)
+	for _, tc := range []struct {
+		name string
+		fake bool
+		base BasePKFilter
+		want bool
+		rows []int64
+	}{
+		{name: "membership only", want: true, rows: []int64{0, 1, 2}},
+		{name: "invalid varchar base must not become empty equality", base: BasePKFilter{Oid: types.T_varchar}, want: true, rows: []int64{0, 1, 2}},
+		{name: "compound prefix", base: BasePKFilter{Valid: true, Op: function.PREFIX_EQ, Oid: types.T_varchar, LB: []byte("a")}, want: true, rows: []int64{0}},
+		{name: "fixed PK stays owned", base: BasePKFilter{Valid: true, Op: function.EQUAL, Oid: types.T_int64, LB: types.EncodeFixed(int64(1))}},
+		{name: "fake PK stays owned", fake: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			filter, err := ConstructBlockPKFilter(tc.fake, tc.base, member)
+			require.NoError(t, err)
+			if filter.Cleanup != nil {
+				defer filter.Cleanup()
+			}
+			require.Equal(t, tc.want, filter.CachedMembership != nil)
+			require.True(t, filter.ExactMembership)
+			if filter.CachedMembership != nil {
+				top := &objectio.IndexReaderTopOp{Typ: types.T_array_float32,
+					NumVec: types.ArrayToBytes([]float32{0, 0}), Limit: 3,
+					MetricType: metric.Metric_L2Distance, DistHeap: make(objectio.Float64Heap, 0, 3)}
+				rows, _, _, err := objectio.ReadBlockByMembershipAndTopN(t.Context(),
+					[]uint16{0, 1}, []types.Type{types.T_varchar.ToType(), types.T_int64.ToType()},
+					nil, nil, nil, 2, types.T_array_float32.ToType(), filter.CachedMembership, false,
+					func(rows []int64, _ int) ([]int64, error) { return rows, nil },
+					top, fs, location, mp, fileservice.SkipFullFilePreloads)
+				require.NoError(t, err)
+				require.Equal(t, tc.rows, rows)
+			}
+		})
+	}
+	require.True(t, member.Valid())
 }
 
 func TestConstructBlockPKFilterIntersectsPrimaryKeyAndBloomFilter(t *testing.T) {

@@ -456,7 +456,7 @@ func TestJSONNumericAggSelectionAndArity(t *testing.T) {
 		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0, 2}, []bool{true, false}),
 		JsonAggToDouble,
 	).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}})
-	ok, info := selected.Run()
+	ok, info := selected.RunAndFree()
 	require.True(t, ok, info)
 
 	allNull := NewFunctionTestCase(
@@ -467,7 +467,7 @@ func TestJSONNumericAggSelectionAndArity(t *testing.T) {
 		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0, 0}, []bool{true, true}),
 		JsonAggToDouble,
 	).WithSelectList(&FunctionSelectList{AllNull: true, SelectList: []bool{false, false}})
-	ok, info = allNull.Run()
+	ok, info = allNull.RunAndFree()
 	require.True(t, ok, info)
 
 	err := JsonAggToDouble(nil, nil, proc, 0, nil)
