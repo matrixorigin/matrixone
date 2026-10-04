@@ -53,6 +53,10 @@ func TestDecimal256ScaleAlignmentPublicPath(t *testing.T) {
 		scale, leftScale, rightScale int32
 		want                         []types.Decimal256
 	}{
+		{"mod_minimum128", "select (cast('-170141183460469231731687303715884105728' as decimal(65,0)) + cast(n_nationkey - 1 as decimal(65,0))) % cast('18446744073709551616' as decimal(65,0)) from nation", 0, 0, 0, []types.Decimal256{{}, {B0_63: 1, B64_127: ^uint64(0), B128_191: ^uint64(0), B192_255: ^uint64(0)}}},
+		{"mod_minimum128_correction", "select (cast('-170141183460469231731687303715884105728' as decimal(65,0)) + cast(n_nationkey - 1 as decimal(65,0))) % cast('85070591730234615865843651857942052865' as decimal(65,0)) from nation", 0, 0, 0, []types.Decimal256{{B0_63: 1, B64_127: 0xc000000000000000, B128_191: ^uint64(0), B192_255: ^uint64(0)}, {B0_63: 2, B64_127: 0xc000000000000000, B128_191: ^uint64(0), B192_255: ^uint64(0)}}},
+		{"mod_negative_power_divisor", "select cast(n_nationkey as decimal(65,0)) % cast('-18446744073709551616' as decimal(65,0)) from nation", 0, 0, 0, []types.Decimal256{{B0_63: 1}, {B0_63: 2}}},
+
 		{"add_38_left", "select cast(n_nationkey as decimal(20,0)) + cast('3e-38' as decimal(65,38)) from nation", 38, 0, 38, []types.Decimal256{{B0_63: 0x98a224000000003, B64_127: 0x4b3b4ca85a86c47a}, {B0_63: 0x1314448000000003, B64_127: 0x96769950b50d88f4}}},
 		{"add_38_right", "select cast('3e-38' as decimal(65,38)) + cast(n_nationkey as decimal(20,0)) from nation", 38, 38, 0, []types.Decimal256{{B0_63: 0x98a224000000003, B64_127: 0x4b3b4ca85a86c47a}, {B0_63: 0x1314448000000003, B64_127: 0x96769950b50d88f4}}},
 		{"sub_38_left", "select cast(n_nationkey as decimal(20,0)) - cast('3e-38' as decimal(65,38)) from nation", 38, 0, 38, []types.Decimal256{{B0_63: 0x98a223ffffffffd, B64_127: 0x4b3b4ca85a86c47a}, {B0_63: 0x1314447ffffffffd, B64_127: 0x96769950b50d88f4}}},

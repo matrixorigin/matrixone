@@ -1294,6 +1294,8 @@ func (x Decimal64) Mod64(y Decimal64) (Decimal64, error) {
 	return x % y, nil
 }
 
+// Mod128 computes the remainder of unsigned coefficient magnitudes.
+// Signed callers take absolute values and restore the dividend's sign.
 func (x Decimal128) Mod128(y Decimal128) (Decimal128, error) {
 	if y.B0_63 == 0 && y.B64_127 == 0 {
 		return x, moerr.NewInvalidInputNoCtxf("Decimal128 Mod by Zero: %s%%%s", x.Format(0), y.Format(0))
@@ -1303,14 +1305,17 @@ func (x Decimal128) Mod128(y Decimal128) (Decimal128, error) {
 		_, x.B0_63 = bits.Div64(x.B64_127, x.B0_63, y.B0_63)
 		x.B64_127 = 0
 	} else {
-		if !x.Less(y) {
+		if x.B64_127 > y.B64_127 || (x.B64_127 == y.B64_127 && x.B0_63 >= y.B0_63) {
 			n := bits.LeadingZeros64(y.B64_127)
-			x1 := x.Right(1)
-			v, _ := bits.Div64(x1.B64_127, x1.B0_63, y.Right(64-n).B0_63)
+			// These are magnitudes, so normalization must use logical shifts.
+			// Right applies signed decimal semantics, including at bit 127.
+			x1 := Decimal128{B0_63: x.B0_63>>1 | x.B64_127<<63, B64_127: x.B64_127 >> 1}
+			y1 := y.B0_63>>(64-n) | y.B64_127<<n
+			v, _ := bits.Div64(x1.B64_127, x1.B0_63, y1)
 			v >>= 63 - n
 			x1, _ = y.Mul128(Decimal128{v - 1, 0})
 			x, _ = x.Sub128(x1)
-			if !x.Less(y) {
+			if x.B64_127 > y.B64_127 || (x.B64_127 == y.B64_127 && x.B0_63 >= y.B0_63) {
 				x, _ = x.Sub128(y)
 			}
 		}

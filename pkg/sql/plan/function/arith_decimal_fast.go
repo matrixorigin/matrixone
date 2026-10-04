@@ -3712,14 +3712,7 @@ func d256ModViaD128(v1, v2, rs []types.Decimal256, scale1, scale2 int32,
 
 	// Prescan: when y is not scaled up (scaleX scales x, or same-scale scales by 1),
 	// check if all |v2| narrowed to D128 fit in 64 bits for inline fast 64-bit mod.
-	canInline64 := false
-	if scaleX || scaleDiff == 0 {
-		var acc uint64
-		for i := 0; i < len2; i++ {
-			acc |= v2[i].B64_127 + 1
-		}
-		canInline64 = acc <= 1
-	}
+	canInline64 := (scaleX || scaleDiff == 0) && d256NarrowAllAbsFit64(v2)
 
 	if len1 == len2 {
 		if canInline64 {

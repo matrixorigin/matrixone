@@ -4751,6 +4751,25 @@ func TestD256Mod(t *testing.T) {
 		masked     []uint64
 	}{
 		{
+			name: "negative_power_divisor_VS",
+			x:    []decimal{{B0_63: 17}, {B0_63: 19}},
+			y:    []decimal{{B64_127: ^uint64(0), B128_191: ^uint64(0), B192_255: ^uint64(0)}},
+			want: []decimal{{B0_63: 17}, {B0_63: 19}},
+		},
+		{
+			name: "negative_power_divisor_late_VV",
+			x:    []decimal{{B0_63: 17}, {B0_63: 19}},
+			y:    []decimal{{B0_63: 5}, {B64_127: ^uint64(0), B128_191: ^uint64(0), B192_255: ^uint64(0)}},
+			want: []decimal{{B0_63: 2}, {B0_63: 19}},
+		},
+		{
+			name: "negative_power_divisor_late_SV",
+			x:    []decimal{{B0_63: 17}},
+			y:    []decimal{{B0_63: 5}, {B64_127: ^uint64(0), B128_191: ^uint64(0), B192_255: ^uint64(0)}},
+			want: []decimal{{B0_63: 2}, {B0_63: 17}},
+		},
+
+		{
 			name: "narrow_VV",
 			x:    []decimal{{B0_63: 100}, {B0_63: 18446744073709551516, B64_127: ^uint64(0), B128_191: ^uint64(0), B192_255: ^uint64(0)}},
 			y:    []decimal{{B0_63: 3}, {B0_63: 18446744073709551613, B64_127: ^uint64(0), B128_191: ^uint64(0), B192_255: ^uint64(0)}},
@@ -6217,7 +6236,7 @@ func TestD128ModOne_Coverage(t *testing.T) {
 		x := types.Decimal128{B0_63: 17}
 		y := types.Decimal128{B0_63: 5}
 		r := d128ModOne(x, y)
-		require.Equal(t, uint64(2), r.B0_63)
+		require.Equal(t, types.Decimal128{B0_63: 2}, r)
 	})
 
 	t.Run("NegativeDividend", func(t *testing.T) {
@@ -6233,8 +6252,23 @@ func TestD128ModOne_Coverage(t *testing.T) {
 		x := types.Decimal128{B0_63: 100, B64_127: 1}
 		y := types.Decimal128{B0_63: 7, B64_127: 1}
 		r := d128ModOne(x, y)
-		_ = r // just exercise the large-divisor Mod128 path
+		require.Equal(t, types.Decimal128{B0_63: 93}, r)
 	})
+	// The absolute value of minimum D128 has bit 127 set. Both comparisons
+	// in the unsigned remainder owner must handle that magnitude.
+	for _, tc := range []struct {
+		name       string
+		x, y, want types.Decimal128
+	}{
+		{"MinimumWideDivisor", types.Decimal128{B64_127: 0x8000000000000000}, types.Decimal128{B64_127: 1}, types.Decimal128{}},
+		{"MinimumCorrection", types.Decimal128{B64_127: 0x8000000000000000}, types.Decimal128{B0_63: 1, B64_127: 0x4000000000000000}, types.Decimal128{B0_63: 1, B64_127: 0xc000000000000000}},
+		{"MinimumDivisor", types.Decimal128{B0_63: ^uint64(0), B64_127: 0x7fffffffffffffff}, types.Decimal128{B64_127: 0x8000000000000000}, types.Decimal128{B0_63: ^uint64(0), B64_127: 0x7fffffffffffffff}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, d128ModOne(tc.x, tc.y))
+		})
+	}
+
 }
 
 func TestD128ModDiffScaleXPow10_Coverage(t *testing.T) {
@@ -6244,7 +6278,7 @@ func TestD128ModDiffScaleXPow10_Coverage(t *testing.T) {
 		r, ok := d128ModDiffScaleXPow10(x, y, types.Pow10[1], false, 0) // scale x up by 10
 		require.True(t, ok)
 		// 170 % 50 = 20
-		require.Equal(t, uint64(20), r.B0_63)
+		require.Equal(t, types.Decimal128{B0_63: 20}, r)
 	})
 
 	t.Run("TwoStep", func(t *testing.T) {
@@ -6252,7 +6286,7 @@ func TestD128ModDiffScaleXPow10_Coverage(t *testing.T) {
 		y := types.Decimal128{B0_63: 7}
 		r, ok := d128ModDiffScaleXPow10(x, y, types.Pow10[10], true, types.Pow10[5])
 		require.True(t, ok)
-		_ = r
+		require.Equal(t, types.Decimal128{B0_63: 6}, r)
 	})
 
 	t.Run("Overflow", func(t *testing.T) {
