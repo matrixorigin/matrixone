@@ -1296,3 +1296,31 @@ oracle workload, not whole-package, CI, or production throughput gains. Evidence
 `29249-fixed-result-oracle-20261004/cost-summary.json`. The retained variable
 encoding paths are checked by the owning function package, not included in that
 performance estimate.
+
+### Integer assignment test family
+
+Three former roots now share one existing lightweight Process under
+`TestIntegerAssignmentContracts`. The groups have identical session/configuration
+and run serially; numeric assignment reads SQL mode but does not modify it.
+Vectors remain case-owned, each group checks pool zero, and the outer root closes
+its MemoryFS and Process. Target-only subtest layers had no independent fixture
+and are replaced with typed rows carrying source/target/operation diagnostics.
+
+All 83 old calls map to retained or enhanced coverage: 79 remain, while three
+decimal overflow calls and the float64 uint8 upper tie move to batches containing
+the same source type, scale, destination and offending literal. Errors now require
+`ErrOutOfRange`. Five physical source types cover overflow, partial mask, source
+NULL and valid reuse; the common all-mask/uint8 reset owner uses a float64 control.
+These are 22 state executions, not 22 subtests. Error checks inspect only the
+written first row, without claiming rollback or a shortened result domain.
+Successful comparisons retain complete metadata, length, literal values and NULL.
+
+The final family executes 101 calls with 12 errors versus the old 83/10.
+Same-binary measurements use eight alternating pairs with setup and cleanup
+included; old cleanup is normalized to the same explicit resource release.
+Median wall/CPU fell 48.4%/47.5%, allocated bytes 13.5%, and allocations 11.8%.
+The earlier extra-subtest candidates increased allocations and were rejected.
+These are test-family costs, not CI or production throughput estimates. Coverage,
+mutation and validation evidence is in
+`29249-integer-assignment-family-20261004/final-main-37ba071`.
+No production implementation or SQL contract changes in this stage.
