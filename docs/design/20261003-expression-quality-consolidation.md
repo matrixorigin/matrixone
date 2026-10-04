@@ -669,3 +669,92 @@ while correcting an otherwise valid unsigned product. Other samples allocate
 zero bytes in both modes. This shared-host primitive measurement excludes
 build/link/init and establishes no SQL, package or CI speedup. All 50 existing
 batch benchmarks and the 14 inventoried IntDiv test owners remain byte-identical.
+
+
+## IntDiv typed contract consolidation
+
+The complete map below precedes retirement of the 14 inventoried owners (75
+children). The existing D64/D128 roots retain literal, signed int64 quotients,
+exact error categories, exact NULL count/membership and masked-output sentinels.
+Raw kernels own the selected arithmetic/mask/zero contracts; SQL metadata,
+selection, diagnostics and memory lifecycle remain with the existing public
+owners in `div_issue_test.go` and the planner/executor table. D256, direct helper
+and mixed IntDiv owners remain unchanged. The private `refD128IntDiv` oracle is
+retired with all its callers; the shared D256 reference and benchmark input
+conversions remain live and unchanged.
+
+Rows use S for equal scales, X for dividend scaling, Y for divisor scaling,
+W for wide divisors and H for wide dividends with one-limb divisors. VV/SV/VS
+name the physical input shapes; N/P/M/E/Z distinguish ordinary values,
+permissive zero, initial masks, strict errors and scalar zero admission. Numeric
+suffixes record the actual scale difference. Previous inaccurate branch labels
+are replaced by actual runtime route/range evidence, not preserved as truth.
+
+Nearest checked-scaling controls use K=floor((2^127-1)/10^18): -K scales inline,
+-(K+1) rejects scaling and still returns -2^63 after the D256 fallback with
+divisor 2^64-1. VV, SV and VS all exercise that real fallback, including masking
+an otherwise overflowing row. Other independent gaps cover late wide-divisor
+admission, signed minimum coefficients, BIGINT overflow, positive non-inline
+scale adjustment and strict masked-zero versus scalar-zero admission. No row
+uses production arithmetic to derive its expected quotient. Error paths do not
+assert rollback of scratch results. Existing mask and newly admitted NULLs are
+combined in the same permissive rows so bitmap interaction is observable.
+
+`64:` and `128:` below refer to children of the retained typed roots. Multiple
+destinations preserve different outcomes formerly present within one route.
+
+| Old owner | Old children → retained children |
+| --- | --- |
+| `TestD64IntDiv` | `VecVec` → `64:S_VV_N`, `64:S_VV_E`; `ScalarVec` → `64:S_SV_N`, `64:S_SV_E`; `VecScalar` → `64:S_VS_N`, `64:S_VS_E`; `DivByZero_Null` → `64:S_VV_P`; `DiffScale` → `64:Y2_VV_N` |
+| `TestD128IntDiv` | `VecVec` → `128:S_VV_N`, `128:S_VV_E`; `ScalarVec` → `128:S_SV_N`, `128:S_SV_E`; `VecScalar` → `128:S_VS_N`, `128:S_VS_E`; `DivByZero_Null` → `128:S_VV_P`, `128:H_VV_N`; `DiffScale` → `128:Y2_VV_N`; `LargeValues_Fallback` → `128:W_VV_P` |
+| `TestD128IntDiv_LargeValues` | `VecVec_Large` → `128:W_VV_P`; `ConstDiv_Large` → `128:W_VS_N`; `ConstDividend_Large` → `128:W_SV_P`; `DiffScale_Large` → `128:Y4W_VV_N`, `128:Y16W_VV_N` |
+| `TestD64IntDiv_NotCanInline` | `VecVec_NoNull` → `64:X14_VV_N`; `VecVec_Nulls` → `64:X14_VV_M`; `ConstLeft_NoNull` → `64:X14_SV_N`; `ConstLeft_Nulls` → `64:X14_SV_M`; `ConstRight_NoNull` → `64:X14_VS_N`; `ConstRight_Nulls` → `64:X14_VS_M` |
+| `TestD128IntDiv_SameScale_AllDispatches` | `VecVec_NoNull` → `128:S_VV_P`, `128:H_VV_N`; `ConstDividend_Large` → `128:W_SV_P`; `ConstDividend_NoNull` → `128:S_SV_P`, `128:H_SV_N`; `VecVec_Nulls` → `128:S_VV_M`; `VecVec_Large_Nulls` → `128:W_VV_M` |
+| `TestD128IntDiv_AllDispatches_Extra` | `SameScale_ConstLeft_NoNull` → `128:S_SV_P`, `128:H_SV_N`; `DiffScale_ConstLeft_NoNull` → `128:Y4_SV_N`; `DiffScale_ConstLeft_Nulls` → `128:Y4_SV_M`; `DiffScale_ConstRight_NoNull` → `128:Y4_VS_N`; `DiffScale_ConstRight_Nulls` → `128:Y4_VS_M`; `DiffScale_VecVec_Nulls` → `128:Y4_VV_M`; `SameScale_ConstLeft_Nulls` → `128:S_SV_M` |
+| `TestD64IntDiv_ConstPaths` | `ConstLeft_NoNull` → `64:S_SV_P`; `ConstLeft_Nulls` → `64:S_SV_M`, `64:S_SV_P`; `ConstRight_Nulls` → `64:S_VS_M`; `VecVec_Nulls` → `64:S_VV_M`, `64:S_VV_P` |
+| `TestD128IntDiv_DivByZeroPaths` | `VecVec_DivByZero` → `128:W_VV_P`; `ConstVec_DivByZero` → `128:W_SV_P`; `HighScale_ScaleLtScale1` → `128:Y4W_VV_N`, `128:Y16W_VV_N`; `ConstVec_DivByZero_WithNull` → `128:W_SV_M`; `VecConst_ZeroDivisor` → `128:S_VS_Z`, `128:H_VS_N` |
+| `TestD64IntDiv_DivByZeroPaths` | `VecVec_DivByZero` → `64:S_VV_P`; `ConstVec_DivByZero` → `64:S_SV_P`; `ConstVec_DivByZero_WithNull` → `64:S_SV_M`, `64:S_SV_P`; `VecVec_DivByZero_WithNull` → `64:S_VV_M`, `64:S_VV_P`; `VecConst_ZeroDivisor` → `64:S_VS_Z`; `HighScale_ScaleLtScale1` → `64:Y16_VV_N`, `64:Y8_VV_N` |
+| `TestD64IntDiv_InlineFallbackPaths` | `VecVec_LargeValues` → `64:Y16_VV_N`, `64:Y8_VV_N`; `ConstVec_LargeValues` → `64:Y8_SV_N`, `64:Y4_SV_N`; `VecConst_LargeValues` → `64:Y8_VS_N`, `64:Y4_VS_N`, `64:Y4_VS_Z` |
+| `TestD128IntDiv_InlineFallbackPaths` | `VecVec_NoNull` → `128:S_VV_P`, `128:H_VV_N`; `ConstVec_NoNull` → `128:S_SV_P`, `128:H_SV_N`; `VecConst_NoNull` → `128:S_VS_Z`, `128:H_VS_N`; `VecConst_WithNull` → `128:H_VS_M` |
+| `TestD128IntDiv_ShouldErrorAndConst` | `SameScale_VecVec_DivZero_Error` → `128:S_VV_N`, `128:S_VV_E`; `SameScale_ConstVec_DivZero_Error` → `128:S_SV_N`, `128:S_SV_E`; `SameScale_VecConst_Zero_Error` → `128:S_VS_N`, `128:S_VS_E`; `DiffScale_ConstVec_NoNull` → `128:Y4_SV_N`; `DiffScale_ConstVec_WithNull` → `128:Y4_SV_M`; `DiffScale_VecConst_NoNull` → `128:Y4_VS_N`; `DiffScale_DivZero_ConstVec_Error` → `128:Y4_SV_E`; `DiffScale_DivZero_VecConst_Error` → `128:Y4_VS_E` |
+| `TestD64IntDiv_ShouldErrorPaths` | `VecVec_DivZero_Error` → `64:S_VV_N`, `64:S_VV_E`; `ConstVec_DivZero_Error` → `64:S_SV_N`, `64:S_SV_E`; `VecConst_Zero_Error` → `64:S_VS_N`, `64:S_VS_E` |
+| `TestD64IntDiv_ConstDivZeroShouldError` | `ConstVec_DivZero_Error` → `64:S_SV_N`, `64:S_SV_E`; `ConstVec_DivZero_Nullify` → `64:S_SV_P`; `VecConst_Zero_Nullify` → `64:S_VS_Z`; `DiffScale_ConstVec_NoNull` → `64:Y8_SV_N`, `64:Y4_SV_N`; `DiffScale_VecConst_NoNull` → `64:Y8_VS_N`, `64:Y4_VS_N`, `64:Y4_VS_Z`; `DiffScale_VecConst_Zero_Nullify` → `64:Y8_VS_N`, `64:Y4_VS_N`, `64:Y4_VS_Z`; `DiffScale_ConstVec_DivZero_Error` → `64:Y4_SV_E`; `DiffScale_VecConst_Zero_Error` → `64:Y4_VS_E`; `DiffScale_ConstVec_WithNull` → `64:Y4_SV_M` |
+
+
+The candidate contains 36 D64 and 46 D128 calls over 241 result rows, replacing
+75 calls over 3,288 rows. The seven additional calls close genuine gaps above;
+they are not a claim of reduced batch invocation count. Both retained function
+bodies total 176 lines, replacing 925 owner/helper lines. All 50 benchmark
+bodies and every non-inventoried surviving function body remain byte-identical. The
+now-unused `largeD128` fixture retires with its complete caller set; it adds six
+retired lines to the 925 owner/helper lines above. Validation
+and matched test-body cost evidence are required before claiming this stage.
+
+
+Validation passes the full function package normal and race suites before the
+final fixture retirement/masked-input adjustment. The final affected typed
+owners separately pass normal and race (two roots, 82 children), with unchanged
+other function bodies verified for evidence reuse. Final function-package vet,
+molint and configured incremental lint exit zero. A private independent integer
+probe agrees with all 163 evaluated representable quotient rows and identifies
+six actual checked-scaling rejection rows, replacing zero in the old inventory.
+The final source hashes remain unchanged across validation and mutation runs.
+
+Three real producer mutations—masked output clobber, incorrect strict-zero
+error category and false inline success after rejected scaling—each pass all
+14 old mapped owners and fail the new table's intended runtime assertions.
+There are no build failures or panics in that matrix. The false-inline mutation
+is already rejected by existing direct-helper tests; the new batch coverage
+adds the missing end-to-end arithmetic/result-conversion contract, rather than
+claiming the whole old test suite missed the helper status error.
+
+Eight alternately ordered samples per mode run in one native binary using
+identical production code. Median summed test-body wall time falls from 2.275
+to 0.889 ms (60.9%); process CPU within measured bodies from 2,525 to 1,124 us
+(55.5%); allocated bytes from 330,112 to 232,944 (29.4%); allocations from 5,930
+to 2,945 (50.3%). The measured bodies include child assertions/harness and all
+new gaps; outer root/sample harness, GC preconditioning, build/link/init and
+queue time are excluded. This proves improvement for the mapped test bodies,
+not whole-package or CI speedup. Production/SQL bodies are unchanged at this
+checkpoint, so their still-valid preceding evidence is reused; no new BVT or
+external publication is claimed. The broader #29249 goal remains incomplete.
