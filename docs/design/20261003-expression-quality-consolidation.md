@@ -758,3 +758,45 @@ queue time are excluded. This proves improvement for the mapped test bodies,
 not whole-package or CI speedup. Production/SQL bodies are unchanged at this
 checkpoint, so their still-valid preceding evidence is reused; no new BVT or
 external publication is claimed. The broader #29249 goal remains incomplete.
+
+
+## Scale owner cleanup and bounded zero coefficient work
+
+`Div128InPlace` has one repository caller: `Decimal128.ScaleInplace`, passing
+only a temporary one-limb power of ten after chunk reduction (exponent 1..19).
+The divisor's scratch mutation cannot escape that temporary; its wide-divisor
+branch has no repository consumer. ScaleInplace now uses the existing rounded
+`Div128` owner and the duplicated exported method is removed. This removes a
+kernel API with no surviving repository callers, not a SQL/protocol API; no
+compatibility claim is made for unknown external Go consumers.
+
+The value `Scale` owners already treat zero as an identity for every exponent.
+That existing invariant now also applies at entry to D128 ScaleInplace and
+D128/D256 ScaleTruncate. Zero does not enter the multiplier chunk loop. All
+nonzero paths, result rounding and error-state rules remain unchanged. Existing
+multi-chunk rounding, minimum coefficient and typed overflow owners remain
+intact. Two signed exponent extremes extend the existing boundary owner with
+exact zero coefficients for the three formerly inconsistent entry points;
+redundant ordinary zero exponent permutations are omitted. A private 50-input
+old/new comparison checks in-place result/error state and D128 truncation;
+independent integer half-up checks cover the successful scale-down results.
+
+Full types/function/plan normal tests and full types/function race tests pass.
+The full run has the same two unrelated skipped plan children, not counted as
+coverage. All three affected packages pass incremental vet, molint and lint.
+The final two-extreme boundary table is checked separately after trimming the
+ordinary zero duplicates. This internal identity/owner cleanup changes no SQL
+result, error or metadata contract, so an additional live BVT would repeat the
+internal claim; earlier SQL-visible repairs still have their own open BVT gate.
+
+A private same-binary, alternately ordered microbenchmark provides six samples
+per mode with exact final result assertions and zero allocations throughout.
+Median nonzero in-place scale-down changes 10.265 → 10.360 ns (+0.9%); nonzero
+D128 truncation 9.628 → 9.453 ns (-1.8%); D256 truncation 17.460 → 17.365 ns
+(-0.5%). No material common-path change is established by these small samples.
+For bounded positive exponents 190 and 190,000, zero in-place work changes
+34.015 → 3.374 ns and 28,969 → 3.469 ns. At 190,000, zero D128/D256 truncation
+changes 30,526.5 → 5.465 ns and 69,918.5 → 3.264 ns. These deliberately bounded
+internal-API controls demonstrate removal of exponent-proportional zero work;
+they are not SQL, query or CI performance claims. No production benchmark or
+server fixture is added to the delivered tests.

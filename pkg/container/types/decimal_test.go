@@ -352,6 +352,20 @@ func TestDecimal128ScaleMinimumAndExtremeNegativeScale(t *testing.T) {
 	inplace := Decimal128Min
 	require.NoError(t, inplace.ScaleInplace(math.MinInt32))
 	require.Equal(t, Decimal128{}, inplace)
+	for _, n := range []int32{math.MinInt32, math.MaxInt32} {
+		t.Run(fmt.Sprintf("zero/%d", n), func(t *testing.T) {
+			inplace := Decimal128{}
+			require.NoError(t, inplace.ScaleInplace(n))
+			require.Equal(t, Decimal128{}, inplace)
+			truncated, err := (Decimal128{}).ScaleTruncate(n)
+			require.NoError(t, err)
+			require.Equal(t, Decimal128{}, truncated)
+			wide, err := (Decimal256{}).ScaleTruncate(n)
+			require.NoError(t, err)
+			require.Equal(t, Decimal256{}, wide)
+		})
+	}
+
 }
 
 func TestDecimal256ScaleMultiStepRoundingAndMinimum(t *testing.T) {

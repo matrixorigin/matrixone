@@ -390,7 +390,7 @@ func (x Decimal64) Scale(n int32) (Decimal64, error) {
 }
 
 func (x *Decimal128) ScaleInplace(n int32) error {
-	if n == 0 {
+	if n == 0 || (x.B0_63 == 0 && x.B64_127 == 0) {
 		return nil
 	}
 	if n < -38 {
@@ -425,7 +425,7 @@ func (x *Decimal128) ScaleInplace(n int32) error {
 	if n-m > 0 {
 		err = x.Mul64InPlace(Decimal64(Pow10[n-m]))
 	} else {
-		err = x.Div128InPlace(&Decimal128{Pow10[m-n], 0})
+		*x, err = x.Div128(Decimal128{Pow10[m-n], 0})
 	}
 	if err != nil {
 		err = moerr.NewInvalidInputNoCtxf("Decimal128 scale overflow: coefficient %s, target scale=%d", x.Format(0), n)
@@ -486,7 +486,7 @@ func (x Decimal128) Scale(n int32) (Decimal128, error) {
 }
 
 func (x Decimal128) ScaleTruncate(n int32) (Decimal128, error) {
-	if n == 0 {
+	if n == 0 || (x.B0_63 == 0 && x.B64_127 == 0) {
 		return x, nil
 	}
 	if n < -38 {
@@ -599,7 +599,7 @@ func (x Decimal256) Scale(n int32) (Decimal256, error) {
 }
 
 func (x Decimal256) ScaleTruncate(n int32) (Decimal256, error) {
-	if n == 0 {
+	if n == 0 || (x.B0_63 == 0 && x.B64_127 == 0 && x.B128_191 == 0 && x.B192_255 == 0) {
 		return x, nil
 	}
 	if n < -77 {
@@ -1044,43 +1044,6 @@ func (x Decimal64) Div64(y Decimal64) (Decimal64, error) {
 		z++
 	}
 	return z, nil
-}
-
-func (x *Decimal128) Div128InPlace(y *Decimal128) error {
-	if y.B0_63 == 0 && y.B64_127 == 0 {
-		return moerr.NewInvalidInputNoCtxf("Decimal128 Div by Zero: %s/%s", x.Format(0), y.Format(0))
-	}
-	if y.B64_127 == 0 {
-		x.B64_127, y.B64_127 = bits.Div64(0, x.B64_127, y.B0_63)
-		x.B0_63, y.B64_127 = bits.Div64(y.B64_127, x.B0_63, y.B0_63)
-		if y.B64_127*2 >= y.B0_63 || y.B64_127>>63 != 0 {
-			x.B0_63++
-			if x.B0_63 == 0 {
-				x.B64_127++
-			}
-		}
-	} else {
-		if x.Less(*y) {
-			x.B64_127 = 0
-			x.B0_63 = 0
-		} else {
-			n := bits.LeadingZeros64(y.B64_127)
-			v, _ := bits.Div64(x.B64_127, x.B0_63, y.Right(64-n).B0_63)
-			v >>= 63 - n
-			if v&1 == 0 {
-				x.B0_63 = v >> 1
-			} else {
-				z, _ := y.Mul128(Decimal128{v, 0})
-				if x.Left(1).Less(z) {
-					x.B0_63 = v >> 1
-				} else {
-					x.B0_63 = (v >> 1) + 1
-				}
-			}
-			x.B64_127 = 0
-		}
-	}
-	return nil
 }
 
 func (x Decimal128) Div128(y Decimal128) (Decimal128, error) {
