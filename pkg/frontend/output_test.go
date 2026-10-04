@@ -489,7 +489,7 @@ func TestColumnSlicesGetDatetime(t *testing.T) {
 
 				return colSlices, bat, 0
 			},
-			expectedStr: "2024-01-15 10:20:30", // Should format without fractional part when MicroSec == 0
+			expectedStr: "2024-01-15 10:20:30.000000",
 			expectError: false,
 		},
 		{
@@ -579,4 +579,46 @@ func TestColumnSlicesGetDatetime(t *testing.T) {
 			}
 		})
 	}
+
+	for _, tc := range []struct {
+		scale int32
+		want  string
+	}{
+		{scale: 1, want: "2024-01-15 10:20:30.0"},
+		{scale: 3, want: "2024-01-15 10:20:30.000"},
+	} {
+		t.Run(tc.want, func(t *testing.T) {
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, tc.scale))
+			t.Cleanup(func() { bat.Clean(mp) })
+			dt, err := types.ParseDatetime("2024-01-15 10:20:30", tc.scale)
+			require.NoError(t, err)
+			require.NoError(t, vector.AppendFixed(bat.Vecs[0], dt, false, mp))
+			bat.SetRowCount(1)
+			colSlices := &ColumnSlices{
+				ctx: ctx, dataSet: bat, colIdx2SliceIdx: []int{0},
+				arrDatetime: [][]types.Datetime{vector.ToSliceNoTypeCheck2[types.Datetime](bat.Vecs[0])},
+			}
+			t.Cleanup(colSlices.Close)
+			got, err := colSlices.GetDatetime(0, 0)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+
+	t.Run("zero datetime caps corrupt scale", func(t *testing.T) {
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, 1000))
+		t.Cleanup(func() { bat.Clean(mp) })
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.ZeroDatetime, false, mp))
+		bat.SetRowCount(1)
+		colSlices := &ColumnSlices{
+			ctx: ctx, dataSet: bat, colIdx2SliceIdx: []int{0},
+			arrDatetime: [][]types.Datetime{vector.ToSliceNoTypeCheck2[types.Datetime](bat.Vecs[0])},
+		}
+		t.Cleanup(colSlices.Close)
+		got, err := colSlices.GetDatetime(0, 0)
+		require.NoError(t, err)
+		require.Equal(t, "0000-00-00 00:00:00.000000000", got)
+	})
 }

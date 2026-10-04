@@ -1080,6 +1080,206 @@ func TestCalendarIntervalDiagnosticsAndSelection(t *testing.T) {
 	}
 }
 
+func TestTimestampDatetimeResultDiagnostics(t *testing.T) {
+	for _, subtract := range []bool{false, true} {
+		for _, allMasked := range []bool{false, true} {
+			t.Run(fmt.Sprintf("subtract=%t/all_masked=%t", subtract, allMasked), func(t *testing.T) {
+				proc := newTmpProcess(t)
+				proc.GetSessionInfo().TimeZone = time.UTC
+				warnings := &numericWarningSession{}
+				proc.WarningSink = warnings
+				epoch, err := types.ParseTimestamp(time.UTC, "1970-01-01 00:00:01", 0)
+				require.NoError(t, err)
+				counts := []int64{-2, math.MaxInt64, math.MaxInt64, math.MaxInt64, math.MaxInt64}
+				fn := TimestampAdd
+				if subtract {
+					counts[0] = 2
+					fn = TimestampSub
+				}
+				mask := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, false, true, true}}
+				if allMasked {
+					mask = &FunctionSelectList{AllNull: true}
+				}
+				wantNulls := []bool{allMasked, true, true, true, true}
+				want := types.DatetimeFromClock(1969, 12, 31, 23, 59, 59, 0)
+				c := NewFunctionTestCase(proc, []FunctionTestInput{
+					NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{epoch, epoch, epoch, types.ZeroTimestamp, epoch}, []bool{false, false, false, false, true}),
+					NewFunctionTestInput(types.T_int64.ToType(), counts, nil),
+					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{int64(types.Second)}, nil),
+				}, NewFunctionTestResult(types.T_datetime.ToType(), false, []types.Datetime{want, 0, 0, 0, 0}, wantNulls), fn).WithSelectList(mask)
+				ok, info := c.RunAndFree()
+				require.True(t, ok, info)
+				if allMasked {
+					require.Empty(t, warnings.warnings)
+				} else {
+					require.Len(t, warnings.warnings, 1, "only the evaluated non-NULL overflow may warn")
+					require.Equal(t, uint16(moerr.ER_DATETIME_FUNCTION_OVERFLOW), warnings.warnings[0].code)
+				}
+			})
+		}
+	}
+}
+
+func TestTimestampAddSubTimeBoundPrecisionAndMask(t *testing.T) {
+	for name, fn := range map[string]executeLogicOfOverload{"add": AddTime, "sub": SubTime} {
+		for _, allMasked := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/all_masked=%t", name, allMasked), func(t *testing.T) {
+				proc := newTmpProcess(t)
+				proc.GetSessionInfo().TimeZone = time.UTC
+				warnings := &numericWarningSession{}
+				proc.WarningSink = warnings
+				ts, err := types.ParseTimestamp(time.UTC, "2024-01-02 03:04:05", 0)
+				require.NoError(t, err)
+				maximum, err := types.ParseTimestamp(time.UTC, "9999-12-31 23:59:59", 0)
+				require.NoError(t, err)
+				fraction, overflow := "00:00:00.000001", "00:00:01"
+				if name == "sub" {
+					fraction, overflow = "-00:00:00.000001", "-00:00:01"
+				}
+				mask := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, false, true}}
+				if allMasked {
+					mask = &FunctionSelectList{AllNull: true}
+				}
+				resultType := types.T_datetime.ToTypeWithScale(6)
+				c := NewFunctionTestCase(proc, []FunctionTestInput{
+					NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{ts, maximum, maximum, ts}, nil),
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{fraction, overflow, overflow, "2024-01-02 00:00:01"}, nil),
+				}, NewFunctionTestResult(resultType, false, []types.Datetime{types.DatetimeFromClock(2024, 1, 2, 3, 4, 5, 1), 0, 0, 0}, []bool{allMasked, true, true, true}), fn).WithSelectList(mask)
+				defer c.Free()
+				ok, info := c.Run()
+				require.True(t, ok, info)
+				require.Equal(t, resultType.Scale, c.GetResultVectorDirectly().GetType().Scale)
+				if allMasked {
+					require.Empty(t, warnings.warnings)
+				} else {
+					require.Len(t, warnings.warnings, 1)
+					require.Equal(t, uint16(moerr.ER_DATETIME_FUNCTION_OVERFLOW), warnings.warnings[0].code)
+				}
+			})
+		}
+	}
+}
+
+func TestTemporalFractionTokenAndIgnoreRecovery(t *testing.T) {
+	for _, truncate := range []bool{false, true} {
+		proc := newTmpProcess(t)
+		proc.GetSessionInfo().TimeZone = time.UTC
+		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+			if truncate {
+				return "STRICT_TRANS_TABLES,TIME_TRUNCATE_FRACTIONAL", nil
+			}
+			return "STRICT_TRANS_TABLES", nil
+		})
+		for _, input := range []string{"2024-01-02 03:04:05.9999999 ", "2024.01.02 03:04:05.9999999", "20240102030405.9999999"} {
+			t.Run(fmt.Sprintf("%s/truncate=%t", input, truncate), func(t *testing.T) {
+				want := types.DatetimeFromClock(2024, 1, 2, 3, 4, 6, 0)
+				if truncate {
+					want = types.DatetimeFromClock(2024, 1, 2, 3, 4, 5, 999999)
+				}
+				c := NewFunctionTestCase(proc, []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{input}, nil),
+					NewFunctionTestInput(types.T_datetime.ToTypeWithScale(6), []types.Datetime{}, nil),
+				}, NewFunctionTestResult(types.T_datetime.ToTypeWithScale(6), false, []types.Datetime{want}, nil), NewAssignCast)
+				ok, info := c.RunAndFree()
+				require.True(t, ok, info)
+			})
+		}
+		t.Run(fmt.Sprintf("TIME_IGNORE/truncate=%t", truncate), func(t *testing.T) {
+			warnings := &numericWarningSession{}
+			proc.WarningSink = warnings
+			want := types.TimeFromClock(false, 12, 34, 57, 0)
+			if truncate {
+				want = types.TimeFromClock(false, 12, 34, 56, 0)
+			}
+			c := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"12:34:56.9999999junk"}, nil),
+				NewFunctionTestInput(types.T_time.ToType(), []types.Time{}, nil),
+			}, NewFunctionTestResult(types.T_time.ToType(), false, []types.Time{want}, nil), NewAssignIgnoreCast)
+			ok, info := c.RunAndFree()
+			require.True(t, ok, info)
+			require.Len(t, warnings.warnings, 1)
+			require.Equal(t, uint16(moerr.WARN_DATA_TRUNCATED), warnings.warnings[0].code)
+		})
+	}
+}
+
+func TestTemporalFractionNumericSources(t *testing.T) {
+	for _, truncate := range []bool{false, true} {
+		proc := newTmpProcess(t)
+		proc.GetSessionInfo().TimeZone = time.UTC
+		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+			if truncate {
+				return "TIME_TRUNCATE_FRACTIONAL", nil
+			}
+			return "", nil
+		})
+		for _, decimalWidth := range []int32{18, 30} {
+			t.Run(fmt.Sprintf("TIME/decimal%d/truncate=%t", decimalWidth, truncate), func(t *testing.T) {
+				var input FunctionTestInput
+				values := []string{"123456.987654", "-123456.987654", "123456.999999"}
+				if decimalWidth == 18 {
+					decimals := make([]types.Decimal64, len(values))
+					for i, value := range values {
+						var err error
+						decimals[i], err = types.ParseDecimal64(value, decimalWidth, 6)
+						require.NoError(t, err)
+					}
+					input = NewFunctionTestInput(types.New(types.T_decimal64, decimalWidth, 6), decimals, nil)
+				} else {
+					decimals := make([]types.Decimal128, len(values))
+					for i, value := range values {
+						var err error
+						decimals[i], err = types.ParseDecimal128(value, decimalWidth, 6)
+						require.NoError(t, err)
+					}
+					input = NewFunctionTestInput(types.New(types.T_decimal128, decimalWidth, 6), decimals, nil)
+				}
+				fraction := uint32(988000)
+				carry := types.TimeFromClock(false, 12, 34, 57, 0)
+				if truncate {
+					fraction = 987000
+					carry = types.TimeFromClock(false, 12, 34, 56, 999000)
+				}
+				want := types.TimeFromClock(false, 12, 34, 56, fraction)
+				for _, source := range []FunctionTestInput{input, NewFunctionTestInput(types.T_varchar.ToType(), values, nil)} {
+					c := NewFunctionTestCase(proc, []FunctionTestInput{source,
+						NewFunctionTestInput(types.T_time.ToTypeWithScale(3), []types.Time{}, nil)},
+						NewFunctionTestResult(types.T_time.ToTypeWithScale(3), false, []types.Time{want, -want, carry}, nil), NewAssignCast)
+					ok, info := c.RunAndFree()
+					require.True(t, ok, info)
+				}
+			})
+		}
+		for _, oid := range []types.T{types.T_datetime, types.T_timestamp} {
+			for _, allSkipped := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/truncate=%t/allSkipped=%t", oid, truncate, allSkipped), func(t *testing.T) {
+					valid, err := types.ParseDecimal128("20240102030405.9999999", 30, 7)
+					require.NoError(t, err)
+					invalid, err := types.ParseDecimal128("20240230030405.9999999", 30, 7)
+					require.NoError(t, err)
+					dt := types.DatetimeFromClock(2024, 1, 2, 3, 4, 6, 0)
+					if truncate {
+						dt = types.DatetimeFromClock(2024, 1, 2, 3, 4, 5, 999999)
+					}
+					var empty, values interface{}
+					if oid == types.T_datetime {
+						empty, values = []types.Datetime{}, []types.Datetime{dt, 0, 0}
+					} else {
+						empty, values = []types.Timestamp{}, []types.Timestamp{dt.ToTimestamp(time.UTC), 0, 0}
+					}
+					c := NewFunctionTestCase(proc, []FunctionTestInput{
+						NewFunctionTestInput(types.New(types.T_decimal128, 30, 7), []types.Decimal128{valid, invalid, valid}, []bool{false, false, true}),
+						NewFunctionTestInput(oid.ToTypeWithScale(6), empty, nil),
+					}, NewFunctionTestResult(oid.ToTypeWithScale(6), false, values, []bool{allSkipped, true, true}), NewAssignCast).
+						WithSelectList(&FunctionSelectList{AnyNull: true, AllNull: allSkipped, SelectList: []bool{true, false, true}})
+					ok, info := c.RunAndFree()
+					require.True(t, ok, info, "unselected invalid calendar values must not reach the numeric parser")
+				})
+			}
+		}
+	}
+}
+
 func TestExtractRawFieldsModeAndInvalidText(t *testing.T) {
 	for _, rejectZero := range []bool{false, true} {
 		for _, tc := range []struct {
