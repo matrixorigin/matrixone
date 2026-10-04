@@ -4962,6 +4962,9 @@ func TestD256Mod(t *testing.T) {
 		{name: "scale_39_VV_right", x: []decimal{{B0_63: 0x3}, {B0_63: 0x7}}, y: []decimal{{B0_63: 0x1}, {B0_63: 0xffffffffffffffff, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, want: []decimal{{B0_63: 0x3}, {B0_63: 0x7}}, s1: 39, s2: 0},
 		{name: "scale_65_alignment_recovery", x: []decimal{{B0_63: 0x6}, {B0_63: 0xfffffffffffffffe, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, y: []decimal{{B0_63: 0x7}}, want: []decimal{{B0_63: 0x2}, {B0_63: 0xfffffffffffffffd, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, s1: 0, s2: 65},
 		{name: "scale_76_alignment_recovery", x: []decimal{{B0_63: 0x6}, {B0_63: 0xfffffffffffffffe, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, y: []decimal{{B0_63: 0x7}}, want: []decimal{{B0_63: 0x3}, {B0_63: 0xffffffffffffffff, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, s1: 0, s2: 76},
+		{name: "high_bits_VV", x: []decimal{{B0_63: 2000000000000000000}, {B0_63: 4000000000000000000}}, y: []decimal{{B64_127: 1 << 62}, {B64_127: 1 << 62}}, want: []decimal{{B64_127: 0x2eeb4be2e32a2000}, {B64_127: 0x1dd697c5c6544000}}, s1: 0, s2: 58},
+		{name: "high_bits_SV", x: []decimal{{B0_63: 2000000000000000000}}, y: []decimal{{}, {B64_127: 1 << 62}}, want: []decimal{{}, {B64_127: 0x2eeb4be2e32a2000}}, s1: 0, s2: 58, masked: []uint64{0}},
+		{name: "high_bits_VS", x: []decimal{{}, {B0_63: 2000000000000000000}, {B0_63: 4000000000000000000}}, y: []decimal{{B64_127: 1 << 62}}, want: []decimal{{}, {B64_127: 0x2eeb4be2e32a2000}, {B64_127: 0x1dd697c5c6544000}}, s1: 0, s2: 58, masked: []uint64{0}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			nul := nulls.NewWithSize(len(tc.want))
@@ -4969,6 +4972,9 @@ func TestD256Mod(t *testing.T) {
 				nul.Add(i)
 			}
 			got := make([]decimal, len(tc.want))
+			for i := range got {
+				got[i] = decimal{B0_63: 99}
+			}
 			var err error
 			if tc.name == "narrow_VV" {
 				err = d256ModKernel(true)(tc.x, tc.y, got, tc.s1, tc.s2, nul)
@@ -4985,6 +4991,8 @@ func TestD256Mod(t *testing.T) {
 				require.Equal(t, expectedNull[uint64(i)], nul.Contains(uint64(i)), "NULL row %d", i)
 				if !expectedNull[uint64(i)] {
 					require.Equal(t, tc.want[i], got[i], "coefficient row %d", i)
+				} else {
+					require.Equal(t, decimal{B0_63: 99}, got[i], "masked output row %d", i)
 				}
 			}
 		})
@@ -5002,6 +5010,57 @@ func TestD256Mod_LargeValues(t *testing.T) {
 	require.NoError(t, d256Mod(x, y, got, 0, 0, nul, true))
 	require.Equal(t, 0, nul.Count())
 	require.Equal(t, want, got)
+}
+
+func TestD256ModHighBitsZeroPolicy(t *testing.T) {
+	values := []types.Decimal256{{B0_63: 2000000000000000000}, {}, {B0_63: 4000000000000000000}}
+	divisors := []types.Decimal256{{}, {}, {B64_127: 1 << 62}}
+	for _, strict := range []bool{false, true} {
+		masked := nulls.NewWithSize(3)
+		masked.Add(1)
+		sentinel := types.Decimal256FromInt64(99)
+		got := []types.Decimal256{sentinel, sentinel, sentinel}
+		err := d256Mod(values, divisors, got, 0, 58, masked, strict)
+		if strict {
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrDivByZero), "%v", err)
+			require.Equal(t, []types.Decimal256{sentinel, sentinel, sentinel}, got)
+			continue
+		}
+		require.NoError(t, err)
+		require.Equal(t, 2, masked.Count())
+		require.True(t, masked.Contains(0))
+		require.True(t, masked.Contains(1))
+		require.False(t, masked.Contains(2))
+		require.Equal(t, sentinel, got[0])
+		require.Equal(t, sentinel, got[1])
+		require.Equal(t, types.Decimal256{B64_127: 0x1dd697c5c6544000}, got[2])
+	}
+}
+
+func TestD256IntDivHighMagnitude(t *testing.T) {
+	// 2^254 / (2^253+1) truncates to one. The numerator cannot be doubled.
+	x := types.Decimal256{B192_255: 1 << 62}
+	y := types.Decimal256{B0_63: 1, B192_255: 1 << 61}
+	for _, tc := range []struct {
+		x, y types.Decimal256
+		want int64
+	}{
+		{x, y, 1}, {x.Minus(), y, -1}, {x, y.Minus(), -1}, {x.Minus(), y.Minus(), 1},
+		{types.Decimal256{B192_255: 1 << 63}, x, -2},
+	} {
+		got := make([]int64, 1)
+		require.NoError(t, d256IntDiv([]types.Decimal256{tc.x}, []types.Decimal256{tc.y}, got, 0, 0, nulls.NewWithSize(1), true))
+		require.Equal(t, tc.want, got[0])
+	}
+	got := make([]int64, 1)
+	err := d256IntDiv([]types.Decimal256{x}, []types.Decimal256{types.Decimal256FromInt64(1)}, got, 0, 0, nulls.NewWithSize(1), true)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "%v", err)
+	// Decimal128's widening consumer must also terminate and reject a quotient
+	// outside Decimal128, rather than hang in the widened primitive.
+	var widened types.Decimal128
+	err = d128IntDivOne(types.Decimal128{B0_63: 2000000000000000000}, types.Decimal128{B64_127: 1 << 62}, &widened, 58, nulls.NewWithSize(1), 0, true, 0, 58)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
+	require.Contains(t, err.Error(), "Decimal128 IntDiv overflow")
 }
 
 func TestD256ModScaleAlignmentOverflow(t *testing.T) {
@@ -5930,19 +5989,18 @@ func TestD128MulInline_Coverage(t *testing.T) {
 
 func TestD128ScaleIntoRs_Coverage(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		input     []types.Decimal128
-		scale     int32
-		nullRows  []uint64
-		want      []types.Decimal128
-		wantError uint16
+		name     string
+		input    []types.Decimal128
+		scale    int32
+		nullRows []uint64
+		want     []types.Decimal128
 	}{
-		{"AllFitInt64_NoNull", []types.Decimal128{{B0_63: 0x1}, {B0_63: 0xffffffffffffffff, B64_127: 0xffffffffffffffff}}, 5, nil, []types.Decimal128{{B0_63: 0x186a0}, {B0_63: 0xfffffffffffe7960, B64_127: 0xffffffffffffffff}}, 0},
-		{"AllFitInt64_WithNull", []types.Decimal128{{B0_63: 0x1}, {}, {B0_63: 0xffffffffffffffff, B64_127: 0xffffffffffffffff}}, 5, []uint64{1}, []types.Decimal128{{B0_63: 0x186a0}, {}, {B0_63: 0xfffffffffffe7960, B64_127: 0xffffffffffffffff}}, 0},
-		{"LargeValues_NoNull", []types.Decimal128{{B0_63: 0x1, B64_127: 0x1}, {B0_63: 0xffffffffffffffff, B64_127: 0xfffffffffffffffe}}, 5, nil, []types.Decimal128{{B0_63: 0x186a0, B64_127: 0x186a0}, {B0_63: 0xfffffffffffe7960, B64_127: 0xfffffffffffe795f}}, 0},
-		{"LargeValues_WithNull", []types.Decimal128{{B0_63: 0x1, B64_127: 0x1}, {}, {B0_63: 0xffffffffffffffff, B64_127: 0xfffffffffffffffe}}, 5, []uint64{1}, []types.Decimal128{{B0_63: 0x186a0, B64_127: 0x186a0}, {}, {B0_63: 0xfffffffffffe7960, B64_127: 0xfffffffffffe795f}}, 0},
-		{"NineteenDigitFactor", []types.Decimal128{{B0_63: 0x1}, {B0_63: 0xffffffffffffffff, B64_127: 0xffffffffffffffff}}, 19, nil, []types.Decimal128{{B0_63: 0x8ac7230489e80000}, {B0_63: 0x7538dcfb76180000, B64_127: 0xffffffffffffffff}}, 0},
-		{"TwoStepThirtyEight", []types.Decimal128{{B0_63: 0x1}, {B0_63: 0xffffffffffffffff, B64_127: 0xffffffffffffffff}}, 38, nil, []types.Decimal128{{B0_63: 0x98a224000000000, B64_127: 0x4b3b4ca85a86c47a}, {B0_63: 0xf675ddc000000000, B64_127: 0xb4c4b357a5793b85}}, 0},
+		{"AllFitInt64_NoNull", []types.Decimal128{{B0_63: 0x1}, {B0_63: 0xffffffffffffffff, B64_127: 0xffffffffffffffff}}, 5, nil, []types.Decimal128{{B0_63: 0x186a0}, {B0_63: 0xfffffffffffe7960, B64_127: 0xffffffffffffffff}}},
+		{"AllFitInt64_WithNull", []types.Decimal128{{B0_63: 0x1}, {}, {B0_63: 0xffffffffffffffff, B64_127: 0xffffffffffffffff}}, 5, []uint64{1}, []types.Decimal128{{B0_63: 0x186a0}, {}, {B0_63: 0xfffffffffffe7960, B64_127: 0xffffffffffffffff}}},
+		{"LargeValues_NoNull", []types.Decimal128{{B0_63: 0x1, B64_127: 0x1}, {B0_63: 0xffffffffffffffff, B64_127: 0xfffffffffffffffe}}, 5, nil, []types.Decimal128{{B0_63: 0x186a0, B64_127: 0x186a0}, {B0_63: 0xfffffffffffe7960, B64_127: 0xfffffffffffe795f}}},
+		{"LargeValues_WithNull", []types.Decimal128{{B0_63: 0x1, B64_127: 0x1}, {}, {B0_63: 0xffffffffffffffff, B64_127: 0xfffffffffffffffe}}, 5, []uint64{1}, []types.Decimal128{{B0_63: 0x186a0, B64_127: 0x186a0}, {}, {B0_63: 0xfffffffffffe7960, B64_127: 0xfffffffffffe795f}}},
+		{"NineteenDigitFactor", []types.Decimal128{{B0_63: 0x1}, {B0_63: 0xffffffffffffffff, B64_127: 0xffffffffffffffff}}, 19, nil, []types.Decimal128{{B0_63: 0x8ac7230489e80000}, {B0_63: 0x7538dcfb76180000, B64_127: 0xffffffffffffffff}}},
+		{"TwoStepThirtyEight", []types.Decimal128{{B0_63: 0x1}, {B0_63: 0xffffffffffffffff, B64_127: 0xffffffffffffffff}}, 38, nil, []types.Decimal128{{B0_63: 0x98a224000000000, B64_127: 0x4b3b4ca85a86c47a}, {B0_63: 0xf675ddc000000000, B64_127: 0xb4c4b357a5793b85}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			n := nulls.NewWithSize(len(tc.input))
@@ -5951,11 +6009,7 @@ func TestD128ScaleIntoRs_Coverage(t *testing.T) {
 			}
 			got := make([]types.Decimal128, len(tc.input))
 			err := d128ScaleIntoRs(tc.input, got, len(got), tc.scale, n)
-			if tc.wantError != 0 {
-				require.True(t, moerr.IsMoErrCode(err, tc.wantError), "error: %v", err)
-			} else {
-				require.NoError(t, err)
-			}
+			require.NoError(t, err)
 			require.Equal(t, len(tc.nullRows), n.Count())
 			for i := range got {
 				masked := false
@@ -5963,7 +6017,7 @@ func TestD128ScaleIntoRs_Coverage(t *testing.T) {
 					masked = masked || row == uint64(i)
 				}
 				require.Equal(t, masked, n.Contains(uint64(i)))
-				if !masked && tc.wantError == 0 {
+				if !masked {
 					require.Equal(t, tc.want[i], got[i], "row %d", i)
 				}
 			}

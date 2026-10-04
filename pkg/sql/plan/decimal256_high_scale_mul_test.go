@@ -65,6 +65,7 @@ func TestDecimal256ScaleAlignmentPublicPath(t *testing.T) {
 		{"sub_39_right", "select cast('3e-39' as decimal(65,39)) - cast(n_nationkey as decimal(20,0)) from nation", 39, 39, 0, []types.Decimal256{{B0_63: 0xa09aa98000000003, B64_127: 0xfaf016c76bc533b, B128_191: 0xfffffffffffffffd, B192_255: 0xffffffffffffffff}, {B0_63: 0x4135530000000003, B64_127: 0x1f5e02d8ed78a677, B128_191: 0xfffffffffffffffa, B192_255: 0xffffffffffffffff}}},
 		{"mod_39_left", "select cast(n_nationkey as decimal(20,0)) % cast('3e-39' as decimal(65,39)) from nation", 39, 0, 39, []types.Decimal256{{B0_63: 0x1}, {B0_63: 0x2}}},
 		{"mod_39_right", "select cast('3e-39' as decimal(65,39)) % cast(n_nationkey as decimal(20,0)) from nation", 39, 39, 0, []types.Decimal256{{B0_63: 0x3}, {B0_63: 0x3}}},
+		{"mod_high_bits", "select cast((cast(n_nationkey as decimal(20,0)) * cast('2000000000000000000' as decimal(20,0))) as decimal(65,0)) % cast('85070591730234615865843651857942052864e-58' as decimal(65,58)) from nation", 58, 0, 58, []types.Decimal256{{B64_127: 0x2eeb4be2e32a2000}, {B64_127: 0x1dd697c5c6544000}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stmt, err := runOneExprStmt(NewMockOptimizer(false), t, tc.sql)

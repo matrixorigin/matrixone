@@ -88,3 +88,22 @@ select count(*) as rows_after_error from decimal_scale_alignment_t;
 drop table decimal_scale_alignment_t;
 -- @metacmp(true)
 select count(*) as remaining_alignment_tables from information_schema.tables where table_schema=database() and table_name='decimal_scale_alignment_t';
+
+-- Successful scale alignment can use the top signed bits even when both
+-- original coefficients fit Decimal128. Modulo must remain exact and bounded.
+drop table if exists decimal_high_bit_mod_t;
+create table decimal_high_bit_mod_t (id int primary key, x decimal(65,0), y decimal(65,58));
+insert into decimal_high_bit_mod_t values
+(1, 2000000000000000000, cast('85070591730234615865843651857942052864e-58' as decimal(65,58))),
+(2, 4000000000000000000, cast('-85070591730234615865843651857942052864e-58' as decimal(65,58))),
+(3, -2000000000000000000, cast('85070591730234615865843651857942052864e-58' as decimal(65,58))),
+(4, NULL, 0), (5, 4000000000000000000, 0);
+-- @metacmp(true)
+select id, x % y as remainder from decimal_high_bit_mod_t order by id;
+-- @metacmp(true)
+select id, x % cast('85070591730234615865843651857942052864e-58' as decimal(65,58)) as remainder from decimal_high_bit_mod_t order by id;
+-- @metacmp(true)
+select id, cast('2000000000000000000' as decimal(65,0)) % y as remainder from decimal_high_bit_mod_t order by id;
+select count(*) as rows_after_zero from decimal_high_bit_mod_t;
+drop table decimal_high_bit_mod_t;
+select count(*) as remaining_mod_tables from information_schema.tables where table_schema=database() and table_name='decimal_high_bit_mod_t';

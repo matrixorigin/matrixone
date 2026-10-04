@@ -989,6 +989,135 @@ func TestDecimal128Div128HalfUpLargeDivisor(t *testing.T) {
 	})
 }
 
+// Raw division consumes unsigned magnitudes, including the high sign bit.
+func TestDecimal256UnsignedDivision(t *testing.T) {
+	fromBig := func(v *big.Int) Decimal256 {
+		words := new(big.Int).Set(v)
+		var d Decimal256
+		d.B0_63 = words.Uint64()
+		d.B64_127 = words.Rsh(words, 64).Uint64()
+		d.B128_191 = words.Rsh(words, 64).Uint64()
+		d.B192_255 = words.Rsh(words, 64).Uint64()
+		return d
+	}
+	toBig := func(d Decimal256) *big.Int {
+		v := new(big.Int).SetUint64(d.B192_255)
+		for _, limb := range []uint64{d.B128_191, d.B64_127, d.B0_63} {
+			v.Lsh(v, 64).Or(v, new(big.Int).SetUint64(limb))
+		}
+		return v
+	}
+	values := []*big.Int{big.NewInt(0), big.NewInt(1), big.NewInt(2), big.NewInt(10)}
+	for _, bit := range []uint{63, 64, 65, 127, 128, 129, 191, 192, 193, 253, 254, 255, 256} {
+		power := new(big.Int).Lsh(big.NewInt(1), bit)
+		values = append(values, new(big.Int).Sub(power, big.NewInt(1)))
+		if bit < 256 {
+			values = append(values, new(big.Int).Set(power), new(big.Int).Add(power, big.NewInt(1)))
+		}
+	}
+	check := func(x, y *big.Int) {
+		t.Helper()
+		dx, dy := fromBig(x), fromBig(y)
+		q, err := dx.Div256Trunc(dy)
+		r, modErr := dx.Mod256(dy)
+		if y.Sign() == 0 {
+			for _, e := range []error{err, modErr} {
+				require.True(t, moerr.IsMoErrCode(e, moerr.ErrInvalidInput), "%v", e)
+				require.Equal(t, "invalid input: Decimal256 Div by Zero", e.Error())
+			}
+			require.Equal(t, dx, q)
+			require.Equal(t, dx, r)
+			return
+		}
+		require.NoError(t, err)
+		require.NoError(t, modErr)
+		wantQ, wantR := new(big.Int), new(big.Int)
+		wantQ.QuoRem(x, y, wantR)
+		require.Equal(t, wantQ.String(), toBig(q).String(), "quotient %s / %s", x, y)
+		require.Equal(t, wantR.String(), toBig(r).String(), "remainder %s %% %s", x, y)
+		require.Equal(t, x.String(), new(big.Int).Add(new(big.Int).Mul(toBig(q), y), toBig(r)).String())
+		require.Less(t, toBig(r).Cmp(y), 0)
+	}
+	for _, x := range values {
+		for _, y := range values {
+			check(x, y)
+		}
+	}
+	// Exercise every cross-limb alignment and the largest wide-divisor distance.
+	y := new(big.Int).Add(new(big.Int).Lsh(big.NewInt(1), 64), big.NewInt(3))
+	for _, shift := range []uint{0, 1, 63, 64, 65, 127, 128, 191} {
+		x := new(big.Int).Lsh(new(big.Int).Set(y), shift)
+		x.Add(x, big.NewInt(1))
+		check(x, y)
+	}
+	rng := rand.New(rand.NewSource(256))
+	limit := new(big.Int).Lsh(big.NewInt(1), 256)
+	for range 200 {
+		check(new(big.Int).Rand(rng, limit), new(big.Int).Rand(rng, limit))
+	}
+}
+
+func TestDecimal256ModHighMagnitude(t *testing.T) {
+	toSignedBig := func(v Decimal256) *big.Int {
+		result := new(big.Int).SetUint64(v.B192_255)
+		for _, limb := range []uint64{v.B128_191, v.B64_127, v.B0_63} {
+			result.Lsh(result, 64).Or(result, new(big.Int).SetUint64(limb))
+		}
+		if v.B192_255>>63 != 0 {
+			result.Sub(result, new(big.Int).Lsh(big.NewInt(1), 256))
+		}
+		return result
+	}
+	min := Decimal256{B192_255: 1 << 63}
+	for _, tc := range []struct {
+		x, y   Decimal256
+		s1, s2 int32
+	}{
+		{Decimal256FromInt64(2000000000000000000), Decimal256{B64_127: 1 << 62}, 0, 58},
+		{Decimal256FromInt64(4000000000000000000), Decimal256{B64_127: 1 << 62}, 0, 58},
+		{min, Decimal256FromInt64(7), 0, 0},
+		{Decimal256FromInt64(7), min, 0, 0},
+		{min, min, 0, 0},
+	} {
+		for _, negateX := range []bool{false, true} {
+			for _, negateY := range []bool{false, true} {
+				x, y := tc.x, tc.y
+				if negateX {
+					x = x.Minus()
+				}
+				if negateY {
+					y = y.Minus()
+				}
+				xBig, yBig := toSignedBig(x), toSignedBig(y)
+				scale := max(tc.s1, tc.s2)
+				xBig.Mul(xBig, new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scale-tc.s1)), nil))
+				yBig.Mul(yBig, new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scale-tc.s2)), nil))
+				want := new(big.Int).Rem(xBig, yBig)
+				got, gotScale, err := x.Mod(y, tc.s1, tc.s2)
+				require.NoError(t, err)
+				require.Equal(t, scale, gotScale)
+				require.Equal(t, want.String(), toSignedBig(got).String())
+			}
+		}
+	}
+}
+
+func TestDecimal256FormatSignedLimits(t *testing.T) {
+	min := new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 255))
+	max := new(big.Int).Sub(new(big.Int).Neg(new(big.Int).Set(min)), big.NewInt(1))
+	for _, tc := range []struct {
+		value Decimal256
+		want  *big.Int
+	}{
+		{Decimal256{B192_255: 1 << 63}, min},
+		{Decimal256{B0_63: ^uint64(0), B64_127: ^uint64(0), B128_191: ^uint64(0), B192_255: 1<<63 - 1}, max},
+	} {
+		require.Equal(t, tc.want.String(), tc.value.Format(0))
+		text := tc.want.String()
+		require.Equal(t, text[:len(text)-2]+"."+text[len(text)-2:], tc.value.Format(2))
+	}
+}
+
 func TestDecimal128Div128TruncByZero(t *testing.T) {
 	_, err := (Decimal128{B0_63: 1}).Div128Trunc(Decimal128{})
 	require.Error(t, err)
@@ -1459,4 +1588,32 @@ func TestDecimal64Div64MagnitudeRounding(t *testing.T) {
 	}
 	_, err := Decimal64(1).Div64(0)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+}
+
+var decimal256DivisionSink Decimal256
+
+func BenchmarkDecimal256UnsignedDivision(b *testing.B) {
+	for _, tc := range []struct {
+		name string
+		x, y Decimal256
+	}{
+		{"small", Decimal256{B0_63: 1234567890123456789}, Decimal256{B0_63: 10}},
+		{"small_divisor", Decimal256{B0_63: 1234567890123456789, B128_191: 123456}, Decimal256{B0_63: 1000000000000000000}},
+		{"wide_divisor", Decimal256{B0_63: 1234567890123456789, B128_191: 123456}, Decimal256{B0_63: 123, B64_127: 1 << 40}},
+		{"wide_small_quotient", Decimal256{B0_63: 1, B192_255: 1 << 62}, Decimal256{B0_63: 3, B192_255: 1 << 61}},
+		{"wide_max_quotient", Decimal256{B0_63: ^uint64(0), B64_127: ^uint64(0), B128_191: ^uint64(0), B192_255: ^uint64(0)}, Decimal256{B0_63: 3, B64_127: 1}},
+	} {
+		b.Run(tc.name+"/trunc", func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				decimal256DivisionSink, _ = tc.x.Div256Trunc(tc.y)
+			}
+		})
+		b.Run(tc.name+"/mod", func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				decimal256DivisionSink, _ = tc.x.Mod256(tc.y)
+			}
+		})
+	}
 }

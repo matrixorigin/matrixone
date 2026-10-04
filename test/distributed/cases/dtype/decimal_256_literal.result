@@ -106,3 +106,38 @@ drop table decimal_scale_alignment_t;
 select count(*) as remaining_alignment_tables from information_schema.tables where table_schema=database() and table_name='decimal_scale_alignment_t';
 ➤ remaining_alignment_tables[-5,64,0]  𝄀
 0
+drop table if exists decimal_high_bit_mod_t;
+create table decimal_high_bit_mod_t (id int primary key, x decimal(65,0), y decimal(65,58));
+insert into decimal_high_bit_mod_t values
+(1, 2000000000000000000, cast('85070591730234615865843651857942052864e-58' as decimal(65,58))),
+(2, 4000000000000000000, cast('-85070591730234615865843651857942052864e-58' as decimal(65,58))),
+(3, -2000000000000000000, cast('85070591730234615865843651857942052864e-58' as decimal(65,58))),
+(4, NULL, 0), (5, 4000000000000000000, 0);
+select id, x % y as remainder from decimal_high_bit_mod_t order by id;
+➤ id[4,32,0]  ¦  remainder[3,65,58]  𝄀
+1  ¦  6.2366216724450839974898480449551597568E-21  𝄀
+2  ¦  3.9661841718667064083953309041161142272E-21  𝄀
+3  ¦  -6.2366216724450839974898480449551597568E-21  𝄀
+4  ¦  null  𝄀
+5  ¦  null
+select id, x % cast('85070591730234615865843651857942052864e-58' as decimal(65,58)) as remainder from decimal_high_bit_mod_t order by id;
+➤ id[4,32,0]  ¦  remainder[3,65,58]  𝄀
+1  ¦  6.2366216724450839974898480449551597568E-21  𝄀
+2  ¦  3.9661841718667064083953309041161142272E-21  𝄀
+3  ¦  -6.2366216724450839974898480449551597568E-21  𝄀
+4  ¦  null  𝄀
+5  ¦  3.9661841718667064083953309041161142272E-21
+select id, cast('2000000000000000000' as decimal(65,0)) % y as remainder from decimal_high_bit_mod_t order by id;
+➤ id[4,32,0]  ¦  remainder[3,65,58]  𝄀
+1  ¦  6.2366216724450839974898480449551597568E-21  𝄀
+2  ¦  6.2366216724450839974898480449551597568E-21  𝄀
+3  ¦  6.2366216724450839974898480449551597568E-21  𝄀
+4  ¦  null  𝄀
+5  ¦  null
+select count(*) as rows_after_zero from decimal_high_bit_mod_t;
+➤ rows_after_zero[-5,64,0]  𝄀
+5
+drop table decimal_high_bit_mod_t;
+select count(*) as remaining_mod_tables from information_schema.tables where table_schema=database() and table_name='decimal_high_bit_mod_t';
+➤ remaining_mod_tables[-5,64,0]  𝄀
+0
