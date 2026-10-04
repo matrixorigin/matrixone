@@ -1324,3 +1324,26 @@ These are test-family costs, not CI or production throughput estimates. Coverage
 mutation and validation evidence is in
 `29249-integer-assignment-family-20261004/final-main-37ba071`.
 No production implementation or SQL contract changes in this stage.
+
+### String and JSON width-owner test family
+
+`TestCastStringWidthContracts` replaces two roots and their single-use helpers.
+All eight string and nine JSON rows retain their source representation, literals,
+VARCHAR(3) target, strict flag and trailing-space policy. The actual `strToStr`
+and `jsonToStr` owners receive the original flags; no production path changes.
+The shared lightweight Process has no mutable configuration in this family.
+Each case immediately registers vector release and pool-baseline verification;
+the root closes its MemoryFS and Process and verifies pool zero.
+
+Six failures require their exact `ErrInternal` or `ErrCastWidthExceeded` category.
+Eleven successes additionally check complete Type, length one and non-NULL output.
+The old string oracle accepted any error; no production defect is claimed from
+that test weakness. Existing pure width-bound and UTF8/trailing-space tests remain
+separate because they prove different contracts. No target cross-product is added.
+
+Eight alternating same-binary pairs include encoding, fixture and cleanup; old
+resource release is normalized. Median wall/CPU decrease 86.2%/84.4%, allocated
+bytes 62.3%, allocations 63.2%. These are costs of the selected 17-case family,
+not package, CI or production performance. Mapping and terminal evidence live in
+`29249-width-family-20261004`. This test-only stage does not require a service BVT;
+earlier production-stage BVT obligations remain open.
