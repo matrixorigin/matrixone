@@ -17,7 +17,6 @@ package embed
 import (
 	"context"
 	"errors"
-	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -616,7 +615,8 @@ func waitBasicClusterTaskServices(ctx context.Context, c Cluster, cnCount int) e
 				"CN %s does not expose its task service", svc.ServiceID())
 		}
 		if err := waitTaskServiceReady(ctx, getter, basicClusterServiceStartupRetryInterval); err != nil {
-			return fmt.Errorf("CN %s task service did not become ready: %w", svc.ServiceID(), err)
+			return errors.Join(moerr.NewInternalErrorNoCtxf(
+				"CN %s task service did not become ready", svc.ServiceID()), err)
 		}
 	}
 	return nil
