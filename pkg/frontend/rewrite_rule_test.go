@@ -636,10 +636,18 @@ func TestRewriteSQLMaterializesPolicyPerStatement(t *testing.T) {
 		require.NoError(t, err)
 		input := &UserInput{sql: "/* save_result */ select * from db.t; /* cloud_nonuser */ select * from db.t", rewritePolicy: policy}
 		input.genHash()
-		input.genSqlSourceType(ses)
 		got, err := rewriteSQLStatementInput(ctx, ses, input)
 		require.NoError(t, err)
-		require.Equal(t, input.sqlSourceType, got.sqlSourceType)
+		ec := newTestExecCtx(ctx, gomock.NewController(t))
+		ec.ses, ec.input = ses, got
+		cws, err := GetComputationWrapper(ec, "db", "dump", nil, ses.GetProc(), ses)
+		require.NoError(t, err)
+		defer func() {
+			for _, cw := range cws {
+				cw.Free()
+			}
+		}()
+		require.Nil(t, input.sqlSourceType)
 		require.Equal(t, constant.CloudUserSql, got.getSqlSourceType(0))
 		require.Equal(t, constant.CloudNoUserSql, got.getSqlSourceType(1))
 		fragments := parsers.SplitSqlBySemicolon(got.sql)

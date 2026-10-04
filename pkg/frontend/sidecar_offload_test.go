@@ -91,7 +91,7 @@ func TestSidecarSelectorIsScopedToOneStatement(t *testing.T) {
 			stmts, err := parsers.Parse(ctx, dialect.MYSQL, tc.sql, 1)
 			require.NoError(t, err)
 			defer freeStatements(stmts)
-			fragments, err := schedulingSQLByStatementWithSQLMode(ctx, tc.sql, "")
+			fragments, _, err := schedulingSQLByStatementWithSQLMode(ctx, tc.sql, "")
 			require.NoError(t, err)
 			require.Len(t, fragments, len(stmts))
 			require.Len(t, stmts, len(tc.want))
