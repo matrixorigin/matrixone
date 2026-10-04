@@ -5478,11 +5478,14 @@ func bindFuncExprAndConstFoldInternal(
 			}
 		}
 
-		rangeCheckFn, _ := BindFuncExprImplByPlanExpr(ctx, "<=", []*plan.Expr{arg1, arg2})
-		rangeCheckRes, _ := ConstantFold(batch.EmptyForConstFoldBatch, rangeCheckFn, proc, false, true)
-		rangeCheckVal := rangeCheckRes.GetLit()
-		if rangeCheckVal == nil || !rangeCheckVal.GetBval() {
-			if !containsDynamicParam(arg1) && !containsDynamicParam(arg2) {
+		// Only static bounds can establish their order at bind time. A
+		// throwaway comparison of markers cannot fold and must not add a
+		// value dependency to an otherwise reusable closed range.
+		if !containsDynamicParam(arg1) && !containsDynamicParam(arg2) {
+			rangeCheckFn, _ := BindFuncExprImplByPlanExpr(ctx, "<=", []*plan.Expr{arg1, arg2})
+			rangeCheckRes, _ := ConstantFold(batch.EmptyForConstFoldBatch, rangeCheckFn, proc, false, true)
+			rangeCheckVal := rangeCheckRes.GetLit()
+			if rangeCheckVal == nil || !rangeCheckVal.GetBval() {
 				goto between_fallback
 			}
 		}
@@ -7192,9 +7195,11 @@ func bindFuncExprImplByPlanExpr(
 				inExpr, guardedInteger := rightVal, false
 				if !partitionIn && len(rightList.List) > 1 && !exactIntegerList &&
 					!checkNoNeedCast(ctx, makeTypeByPlan2Expr(rightVal), typLeft, rightVal) {
-					inExpr, guardedInteger, err = bindPreparedIntegerInValue(ctx, args[0], rightVal)
-					if err != nil {
-						return nil, err
+					if state := preparedBindingState(ctx); state != nil && state.selectStatement {
+						inExpr, guardedInteger, err = bindPreparedIntegerValue(ctx, args[0], rightVal)
+						if err != nil {
+							return nil, err
+						}
 					}
 				}
 				if partitionIn || exactIntegerList || guardedInteger || checkNoNeedCast(ctx, makeTypeByPlan2Expr(rightVal), typLeft, rightVal) {

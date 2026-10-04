@@ -639,7 +639,7 @@ func TestPreparedSignedKeyGuardPreservesOtherDependencies(t *testing.T) {
 		for _, dependent := range []bool{false, true} {
 			ctx := withPreparedSourceBindings(context.Background(),
 				[]PreparedSourceBinding{{Position: 0, Type: types.T_int64.ToType()}},
-				[]any{ParamValue{Value: "7", IsBinaryProtocol: true}})
+				[]any{ParamValue{Value: "7", IsBinaryProtocol: true, PrepareParamKind: vector.PrepareParamInteger}})
 			state := preparedBindingState(ctx)
 			state.valueDependent = dependent
 			state.selectStatement = selectStatement
@@ -652,7 +652,7 @@ func TestPreparedSignedKeyGuardPreservesOtherDependencies(t *testing.T) {
 				if selectStatement {
 					var admitted bool
 					var err error
-					converted, admitted, err = bindPreparedIntegerInValue(ctx, column, param)
+					converted, admitted, err = bindPreparedIntegerValue(ctx, column, param)
 					require.NoError(t, err)
 					require.True(t, admitted)
 				} else {
@@ -661,10 +661,26 @@ func TestPreparedSignedKeyGuardPreservesOtherDependencies(t *testing.T) {
 					converted = args[1]
 				}
 				require.Equal(t, int32(target), converted.Typ.Id)
+				require.NotNil(t, converted.GetP(), "admitted consumer uses one transport conversion")
+				require.Equal(t, int32(types.T_int64), param.Typ.Id, "source/sibling domain stays unchanged")
+				require.Equal(t, types.T_int64, state.bindings[0].Type.Oid)
+				require.NotSame(t, param, converted, "sibling source occurrence remains immutable")
+				guard := state.diagnosticCandidates[len(state.diagnosticCandidates)-1]
+				require.Equal(t, int32(types.T_int64), guard.GetF().Args[0].Typ.Id)
 				require.Equal(t, dependent, state.valueDependent)
 				require.NotSame(t, converted, state.diagnosticCandidates[len(state.diagnosticCandidates)-1])
 			}
 			require.Len(t, state.diagnosticCandidates, 3)
+			// Revisiting a consumer-local marker must retain the full original
+			// source proof as well as another consumer's narrower domain.
+			firstGuard := state.diagnosticCandidates[0]
+			native := DeepCopyExpr(param)
+			native.Typ = makeSimplePlan2Type(types.T_int32)
+			column := &Expr{Typ: native.Typ, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}
+			_, _, err := bindPreparedIntegerValue(ctx, column, native)
+			require.NoError(t, err)
+			require.Same(t, firstGuard, state.diagnosticCandidates[0])
+			require.Equal(t, int32(types.T_int64), firstGuard.GetF().Args[0].Typ.Id)
 			proc := testutil.NewProcess(t)
 			params := vector.NewVec(types.T_text.ToType())
 			t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()); proc.Free() })
@@ -683,7 +699,64 @@ func TestPreparedSignedKeyGuardPreservesOtherDependencies(t *testing.T) {
 	}
 }
 
-func TestPreparedIntegerInAdmissionRejectsUnsupportedDomains(t *testing.T) {
+func TestPreparedIntegerConsumerLoweringProvenance(t *testing.T) {
+	for _, value := range []ParamValue{
+		{Value: "7", PrepareParamKind: vector.PrepareParamInteger},
+		{Value: "7", IsBinaryProtocol: true},
+		{Value: "7", IsBinaryProtocol: true, IsBin: true, PrepareParamKind: vector.PrepareParamInteger},
+		{Value: "7", IsBinaryProtocol: true, IsBinaryString: true, PrepareParamKind: vector.PrepareParamInteger},
+	} {
+		ctx := withPreparedSourceBindings(context.Background(), []PreparedSourceBinding{{Position: 0, Type: types.T_int64.ToType()}}, []any{value})
+		param := &Expr{Typ: makeSimplePlan2Type(types.T_int64), Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+		column := &Expr{Typ: makeSimplePlan2Type(types.T_int32), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}
+		converted, admitted, err := bindPreparedIntegerValue(ctx, column, param)
+		require.NoError(t, err)
+		require.True(t, admitted)
+		require.NotNil(t, converted.GetF(), "SQL/opaque/unclassified transport retains the source conversion")
+		require.Equal(t, int32(types.T_int64), converted.GetF().Args[0].Typ.Id)
+	}
+}
+
+// Failure on either side must not publish half a narrow range or discard a
+// diagnostic/dependency owned by a different consumer in the same statement.
+func TestPreparedIntegerBetweenAtomicAdmission(t *testing.T) {
+	for _, bounds := range [][]any{{int64(7), int64(2147483648)}, {int64(-2147483649), int64(7)}, {int64(7), int64(8)}} {
+		for _, dependent := range []bool{false, true} {
+			ctx := withPreparedSourceBindings(context.Background(), []PreparedSourceBinding{
+				{Position: 0, Type: types.T_int64.ToType()}, {Position: 1, Type: types.T_int64.ToType()},
+			}, bounds)
+			state := preparedBindingState(ctx)
+			state.selectStatement, state.valueDependent = true, dependent
+			prior := &Expr{Typ: makeSimplePlan2Type(types.T_int64), Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+			state.diagnosticCandidates = []*Expr{prior}
+			lower, err := bindPreparedSource(ctx, 1)
+			require.NoError(t, err)
+			upper, err := bindPreparedSource(ctx, 2)
+			require.NoError(t, err)
+			column := &Expr{Typ: makeSimplePlan2Type(types.T_int32), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}
+			args := []*Expr{column, lower, upper}
+			got, admitted, err := bindPreparedIntegerBetween(ctx, args)
+			require.NoError(t, err)
+			require.Same(t, prior, state.diagnosticCandidates[0])
+			if bounds[1] == int64(8) {
+				require.True(t, admitted)
+				require.Len(t, state.diagnosticCandidates, 3)
+				require.Equal(t, dependent, state.valueDependent)
+				require.Equal(t, int32(types.T_int32), got[1].Typ.Id)
+				require.Equal(t, int32(types.T_int32), got[2].Typ.Id)
+			} else {
+				require.False(t, admitted)
+				require.Len(t, state.diagnosticCandidates, 1)
+				require.True(t, state.valueDependent)
+				for i := range args {
+					require.Same(t, args[i], got[i])
+				}
+			}
+		}
+	}
+}
+
+func TestPreparedIntegerAdmissionRejectsUnsupportedDomains(t *testing.T) {
 	for _, tc := range []struct {
 		source, binding, target types.T
 		position                int32
@@ -712,7 +785,7 @@ func TestPreparedIntegerInAdmissionRejectsUnsupportedDomains(t *testing.T) {
 			}
 			param.GetP().Pos = tc.position
 			column := &Expr{Typ: makeSimplePlan2Type(tc.target), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}
-			result, admitted, err := bindPreparedIntegerInValue(ctx, column, param)
+			result, admitted, err := bindPreparedIntegerValue(ctx, column, param)
 			require.NoError(t, err)
 			require.False(t, admitted)
 			require.Same(t, param, result)
@@ -1263,7 +1336,7 @@ func TestSingletonProjectedPeerAdmission(t *testing.T) {
 }
 
 func TestPreparedWideIntegerComparisonKeepsColumn(t *testing.T) {
-	for _, predicate := range []string{"val in (?,?)", "val not in (?,?)"} {
+	for _, predicate := range []string{"val in (?,?)", "val not in (?,?)", "val=?", "?<=val", "val between ? and ?", "val between ? and ? or val between ? and ?"} {
 		for _, value := range []int64{math.MinInt32, math.MaxInt32, math.MinInt32 - 1, math.MaxInt32 + 1} {
 			t.Run(fmt.Sprintf("%s/%d", predicate, value), func(t *testing.T) {
 				mock := NewMockOptimizer(true)
@@ -1298,7 +1371,10 @@ func TestPreparedWideIntegerComparisonKeepsColumn(t *testing.T) {
 					})
 				}))
 				require.Equal(t, value < math.MinInt32 || value > math.MaxInt32, columnCast)
-				if strings.Contains(predicate, "in") && value >= math.MinInt32 && value <= math.MaxInt32 {
+				if value >= math.MinInt32 && value <= math.MaxInt32 && strings.Contains(predicate, "between") {
+					require.NotNil(t, findPlanFunctionExpr(bound.Plan, "between"), "safe closed range keeps its native expression")
+				}
+				if strings.Contains(predicate, "in") && !strings.Contains(predicate, "between") && value >= math.MinInt32 && value <= math.MaxInt32 {
 					require.NotNil(t, findPlanFunctionExpr(bound.Plan, map[bool]string{true: "not_in", false: "in"}[strings.Contains(predicate, "not")]), "safe list keeps one typed IN predicate")
 				}
 			})
