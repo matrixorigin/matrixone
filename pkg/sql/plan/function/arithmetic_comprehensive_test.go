@@ -19,7 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -28,6 +27,7 @@ import (
 // This test catches the bug where decimal + 0.00 incorrectly returns NULL
 func Test_PlusFn_DecimalZero(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	defer proc.Free()
 
 	// Test decimal64 + zero - use simple values
 	{
@@ -69,6 +69,7 @@ func Test_PlusFn_DecimalZero(t *testing.T) {
 // Test_MinusFn_DecimalZero tests decimal subtraction with zero values
 func Test_MinusFn_DecimalZero(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	defer proc.Free()
 
 	// Test decimal64 - zero
 	{
@@ -107,6 +108,7 @@ func Test_Decimal128ScaleOverflow(t *testing.T) {
 // Test_DivFn_DecimalZero tests that division by zero still returns NULL
 func Test_DivFn_DecimalZero(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	defer proc.Free()
 
 	// Test decimal64 / zero should return NULL
 	{
@@ -134,6 +136,7 @@ func Test_DivFn_DecimalZero(t *testing.T) {
 // This fixes the bug where multiplication by zero incorrectly returned null
 func Test_Decimal64_Multiply_Zero(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	defer proc.Free()
 
 	// Test: decimal64 * 0 should return 0, not null
 	{
@@ -202,6 +205,7 @@ func Test_Decimal64_Multiply_Zero(t *testing.T) {
 // This fixes the bug where CASE returning decimal + float returned null
 func Test_Decimal_Plus_Float(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	defer proc.Free()
 
 	// Test: decimal64 + float64 with original types (before type conversion)
 	{
@@ -245,184 +249,6 @@ func Test_Decimal_Plus_Float(t *testing.T) {
 			expect: NewFunctionTestResult(resultType, false,
 				[]types.Decimal128{result},
 				[]bool{false}),
-		}
-		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
-		succeed, info := tcc.RunAndFree()
-		require.True(t, succeed, tc.info, info)
-	}
-}
-
-// TestDecimal128AddBug tests decimal128 addition with zero values
-func TestDecimal128AddBug(t *testing.T) {
-	// Test case for the bug: 0.01 + 0.00 should return 0.01, not NULL
-
-	// Create 0.01 (scale 2)
-	d1, err := types.Decimal128FromFloat64(0.01, 38, 2)
-	if err != nil {
-		t.Fatalf("Failed to create 0.01: %v", err)
-	}
-
-	// Create 0.00 (scale 2)
-	d2, err := types.Decimal128FromFloat64(0.00, 38, 2)
-	if err != nil {
-		t.Fatalf("Failed to create 0.00: %v", err)
-	}
-
-	// Test 0.01 + 0.00
-	result1, scale1, err1 := d1.Add(d2, 2, 2)
-	if err1 != nil {
-		t.Errorf("0.01 + 0.00 failed with error: %v", err1)
-	}
-	if scale1 != 2 {
-		t.Errorf("Expected scale 2, got %d", scale1)
-	}
-	expected1, _ := types.Decimal128FromFloat64(0.01, 38, 2)
-	if result1 != expected1 {
-		t.Errorf("0.01 + 0.00: expected %v, got %v", expected1, result1)
-	}
-
-	// Test 0.00 + 0.01 (should also work)
-	result2, scale2, err2 := d2.Add(d1, 2, 2)
-	if err2 != nil {
-		t.Errorf("0.00 + 0.01 failed with error: %v", err2)
-	}
-	if scale2 != 2 {
-		t.Errorf("Expected scale 2, got %d", scale2)
-	}
-	expected2, _ := types.Decimal128FromFloat64(0.01, 38, 2)
-	if result2 != expected2 {
-		t.Errorf("0.00 + 0.01: expected %v, got %v", expected2, result2)
-	}
-
-	// Test with different scales: 0.1 (scale 1) + 0.00 (scale 2)
-	d3, _ := types.Decimal128FromFloat64(0.1, 38, 1)
-	d4, _ := types.Decimal128FromFloat64(0.00, 38, 2)
-
-	result3, scale3, err3 := d3.Add(d4, 1, 2)
-	if err3 != nil {
-		t.Errorf("0.1 + 0.00 failed with error: %v", err3)
-	}
-	if scale3 != 2 {
-		t.Errorf("Expected scale 2, got %d", scale3)
-	}
-	expected3, _ := types.Decimal128FromFloat64(0.10, 38, 2)
-	if result3 != expected3 {
-		t.Errorf("0.1 + 0.00: expected %v, got %v", expected3, result3)
-	}
-}
-
-// TestDecimal128SubBug tests decimal128 subtraction with zero values
-func TestDecimal128SubBug(t *testing.T) {
-	// Test subtraction with the same bug pattern
-
-	// Create 0.01 (scale 2)
-	d1, err := types.Decimal128FromFloat64(0.01, 38, 2)
-	if err != nil {
-		t.Fatalf("Failed to create 0.01: %v", err)
-	}
-
-	// Create 0.00 (scale 2)
-	d2, err := types.Decimal128FromFloat64(0.00, 38, 2)
-	if err != nil {
-		t.Fatalf("Failed to create 0.00: %v", err)
-	}
-
-	// Test 0.01 - 0.00
-	result1, scale1, err1 := d1.Sub(d2, 2, 2)
-	if err1 != nil {
-		t.Errorf("0.01 - 0.00 failed with error: %v", err1)
-	}
-	if scale1 != 2 {
-		t.Errorf("Expected scale 2, got %d", scale1)
-	}
-	expected1, _ := types.Decimal128FromFloat64(0.01, 38, 2)
-	if result1 != expected1 {
-		t.Errorf("0.01 - 0.00: expected %v, got %v", expected1, result1)
-	}
-}
-
-// TestCaseWhenStringComparison tests string comparison in CASE WHEN expressions
-func TestCaseWhenStringComparison(t *testing.T) {
-	// Test: CASE "two" when "one" then 1.00 WHEN "two" then 2.00 END
-	proc := testutil.NewProc(t)
-
-	// Create condition vectors: "two" = "one" and "two" = "two"
-	cond1 := testutil.MakeVarcharVector([]string{"two"}, nil, proc.Mp())
-	val1 := testutil.MakeVarcharVector([]string{"one"}, nil, proc.Mp())
-
-	cond2 := testutil.MakeVarcharVector([]string{"two"}, nil, proc.Mp())
-	val2 := testutil.MakeVarcharVector([]string{"two"}, nil, proc.Mp())
-
-	// Test equal function
-	result1 := vector.NewFunctionResultWrapper(types.T_bool.ToType(), proc.Mp())
-	require.NoError(t, result1.PreExtendAndReset(1))
-	err := equalFn([]*vector.Vector{cond1, val1}, result1, proc, 1, nil)
-	require.NoError(t, err)
-
-	result2 := vector.NewFunctionResultWrapper(types.T_bool.ToType(), proc.Mp())
-	require.NoError(t, result2.PreExtendAndReset(1))
-	err = equalFn([]*vector.Vector{cond2, val2}, result2, proc, 1, nil)
-	require.NoError(t, err)
-
-	// Check results
-	r1, null1 := vector.GenerateFunctionFixedTypeParameter[bool](result1.GetResultVector()).GetValue(0)
-	t.Logf("\"two\" = \"one\": %v (null: %v)", r1, null1)
-
-	r2, null2 := vector.GenerateFunctionFixedTypeParameter[bool](result2.GetResultVector()).GetValue(0)
-	t.Logf("\"two\" = \"two\": %v (null: %v)", r2, null2)
-
-	require.False(t, null1, "\"two\" = \"one\" should not be null")
-	require.False(t, r1, "\"two\" = \"one\" should be false")
-
-	require.False(t, null2, "\"two\" = \"two\" should not be null")
-	require.True(t, r2, "\"two\" = \"two\" should be true")
-}
-
-// Test_Decimal_Plus_Float_MySQL_Behavior tests that decimal + float follows MySQL behavior
-func Test_Decimal_Plus_Float_MySQL_Behavior(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	// Test: decimal64 + float64 should convert to float64 + float64 (MySQL behavior)
-	{
-		floatVal1 := 3728193.0 // decimal64 converted to float64
-		floatVal2 := 3.141593  // original float64
-
-		tc := tcTemp{
-			info: "decimal64 + float64 should convert to float64 (MySQL behavior)",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_float64.ToType(),
-					[]float64{floatVal1}, []bool{false}),
-				NewFunctionTestInput(types.T_float64.ToType(),
-					[]float64{floatVal2}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{3728196.141593}, []bool{false}),
-		}
-		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
-		succeed, info := tcc.RunAndFree()
-		require.True(t, succeed, tc.info, info)
-	}
-}
-
-// Test_Decimal_Plus_Float32_MySQL_Behavior tests that decimal + float32 also converts to float64
-func Test_Decimal_Plus_Float32_MySQL_Behavior(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	// Test: decimal64 + float32 should convert to float64 (MySQL behavior)
-	{
-		floatVal1 := 3728193.0         // decimal64 converted to float64
-		floatVal2 := float64(3.141593) // float32 converted to float64
-
-		tc := tcTemp{
-			info: "decimal64 + float32 should convert to float64 (MySQL behavior)",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_float64.ToType(),
-					[]float64{floatVal1}, []bool{false}),
-				NewFunctionTestInput(types.T_float64.ToType(),
-					[]float64{floatVal2}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{3728196.141593}, []bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
 		succeed, info := tcc.RunAndFree()

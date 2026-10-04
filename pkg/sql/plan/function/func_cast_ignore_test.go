@@ -36,6 +36,7 @@ func runAssignmentIgnoreStringCastWithSelection(t *testing.T, sourceType, target
 	t.Helper()
 	session := &numericWarningSession{}
 	proc := testutil.NewProcess(t)
+	t.Cleanup(proc.Free)
 	proc.Session = session
 	tc := NewFunctionTestCase(
 		proc,
@@ -45,20 +46,14 @@ func runAssignmentIgnoreStringCastWithSelection(t *testing.T, sourceType, target
 		},
 		NewFunctionTestResult(targetType, false, nil, nil),
 		NewAssignIgnoreCast,
-	)
+	).WithSelectList(selectList)
 	t.Cleanup(tc.Free)
 	tc.parameters[0].SetIsBin(binary)
-	if err := tc.result.PreExtendAndReset(tc.fnLength); err != nil {
+	result, err := tc.DebugRun()
+	if err != nil {
 		return nil, session, err
 	}
-	if selectList == nil {
-		result, err := tc.DebugRun()
-		return result, session, err
-	}
-	if err := tc.fn(tc.parameters, tc.result, proc, tc.fnLength, selectList); err != nil {
-		return nil, session, err
-	}
-	return tc.GetResultVectorDirectly(), session, nil
+	return result, session, nil
 }
 
 func emptyCastTargetValues(typ types.Type) any {

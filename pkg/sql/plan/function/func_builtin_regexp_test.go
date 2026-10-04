@@ -1772,7 +1772,6 @@ func Test_BuiltIn_RegexpValueFunctionsRejectEmptyPattern(t *testing.T) {
 			tcc := NewFunctionTestCase(
 				proc, tc.inputs, NewFunctionTestResult(tc.resultType, true, nil, nil), tc.fn)
 			defer tcc.Free()
-			require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
 			_, err := tcc.DebugRun()
 			require.Error(t, err)
 			var moErr *moerr.Error
@@ -1836,7 +1835,6 @@ func Test_BuiltIn_RegexpValidatesPresentArgumentsBeforeNullableResult(t *testing
 			tcc := NewFunctionTestCase(
 				proc, tc.inputs, NewFunctionTestResult(tc.resultType, true, nil, nil), tc.fn)
 			defer tcc.Free()
-			require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
 			_, err := tcc.DebugRun()
 			require.Error(t, err)
 		})
@@ -1937,7 +1935,6 @@ func Test_BuiltIn_RegexpLikeRejectsEmptyPattern(t *testing.T) {
 			)
 			defer tcc.Free()
 
-			require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
 			_, err := tcc.DebugRun()
 			require.Error(t, err)
 
@@ -1972,7 +1969,6 @@ func Test_BuiltIn_RegMatchRejectsEmptyPattern(t *testing.T) {
 			)
 			defer tcc.Free()
 
-			require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
 			_, err := tcc.DebugRun()
 			require.Error(t, err)
 
