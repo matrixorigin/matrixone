@@ -30,6 +30,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -547,6 +548,62 @@ func TestRewriteSQLPropagatesRuleCacheLoadError(t *testing.T) {
 	require.Equal(t, sql, rewritten)
 }
 
+func TestRewriteSQLStatementInputPreservesSource(t *testing.T) {
+	ses := newTestSession(t, gomock.NewController(t))
+	defer ses.Close()
+	ctx := context.Background()
+	role := &rewritePolicySnapshot{enabled: true, lowerCaseTableNames: 1,
+		roleRules: map[string]string{"db.t": "select id from db.t where id = 1"}}
+	tests := []struct {
+		name, sql                                  string
+		policy                                     *rewritePolicySnapshot
+		internal, materialized, changed, wantError bool
+	}{
+		{name: "mandatory role", sql: "/* save_result */ select * from db.t", policy: role, changed: true},
+		{name: "cloud user", sql: "/* cloud_user */ select * from db.t", policy: role, changed: true},
+		{name: "cloud nonuser", sql: "/* cloud_nonuser */ select * from db.t", policy: role, changed: true},
+		{name: "external", sql: "select * from db.t", policy: role, changed: true},
+		{name: "internal", sql: "/* save_result */ select * from db.t", policy: role, internal: true, changed: true},
+		{name: "session rule", sql: "/* save_result */ select * from db.t", changed: true,
+			policy: &rewritePolicySnapshot{enabled: true, sessionEnabled: true, lowerCaseTableNames: 1,
+				sessionRules: map[string]string{"db.t": "select * from db.t where id = 1"}}},
+		{name: "remap", sql: "/* save_result */ select * from db.t", changed: true,
+			policy: &rewritePolicySnapshot{enabled: true, sessionEnabled: true, lowerCaseTableNames: 1,
+				sessionRemapDb: map[string]string{"db": "target"}}},
+		{name: "no policy", sql: "/* save_result */ select 1"},
+		{name: "disabled", sql: "/* save_result */ select 1", policy: &rewritePolicySnapshot{}},
+		{name: "empty", sql: "/* save_result */ select 1", policy: &rewritePolicySnapshot{enabled: true}},
+		{name: "materialized", sql: "/* save_result */ select 1", policy: role, materialized: true},
+		{name: "parse error", sql: "/* save_result */ select '", policy: role, wantError: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			input := &UserInput{sql: tc.sql, rewritePolicy: tc.policy,
+				isInternalInput: tc.internal, rewritePolicyMaterialized: tc.materialized}
+			input.genHash()
+			input.genSqlSourceType(ses)
+			before := *input
+			wantSources := append([]string(nil), input.sqlSourceType...)
+			got, err := rewriteSQLStatementInput(ctx, ses, input)
+			if tc.wantError {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, before, *input, "rewriting must not mutate the request")
+			require.Equal(t, wantSources, got.sqlSourceType)
+			if tc.changed {
+				require.NotSame(t, input, got)
+				require.NotEqual(t, input.sql, got.sql)
+				require.Equal(t, hashString(got.sql), got.getHash())
+				require.NotEqual(t, input.getHash(), got.getHash())
+			} else {
+				require.Same(t, input, got)
+			}
+		})
+	}
+}
+
 func TestRewriteSQLMaterializesPolicyPerStatement(t *testing.T) {
 	ctx := context.Background()
 	newSession := func(t *testing.T, roleRule, sessionRule string) *Session {
@@ -572,6 +629,25 @@ func TestRewriteSQLMaterializesPolicyPerStatement(t *testing.T) {
 		require.NoError(t, err)
 		return chains["db.t"]
 	}
+	t.Run("source indexes survive materialization", func(t *testing.T) {
+		ses := newSession(t, "select id from db.t where id = 1", "")
+		defer ses.Close()
+		policy, err := captureRewritePolicy(ctx, ses)
+		require.NoError(t, err)
+		input := &UserInput{sql: "/* save_result */ select * from db.t; /* cloud_nonuser */ select * from db.t", rewritePolicy: policy}
+		input.genHash()
+		input.genSqlSourceType(ses)
+		got, err := rewriteSQLStatementInput(ctx, ses, input)
+		require.NoError(t, err)
+		require.Equal(t, input.sqlSourceType, got.sqlSourceType)
+		require.Equal(t, constant.CloudUserSql, got.getSqlSourceType(0))
+		require.Equal(t, constant.CloudNoUserSql, got.getSqlSourceType(1))
+		fragments := parsers.SplitSqlBySemicolon(got.sql)
+		require.Len(t, fragments, 2)
+		for _, fragment := range fragments {
+			require.Equal(t, []string{"select id from db.t where id = 1"}, decodeChain(t, fragment))
+		}
+	})
 
 	t.Run("parser boundary errors keep parse classification", func(t *testing.T) {
 		ses := newSession(t, "", "")

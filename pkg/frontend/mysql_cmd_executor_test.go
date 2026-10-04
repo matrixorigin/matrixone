@@ -5439,6 +5439,8 @@ func TestSQLModeStagingDefersRewriteWithRequestSnapshot(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
 	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	defer ses.Close()
+	ses.SetTenantInfo(&TenantInfo{Tenant: "sys", User: "dump"})
 	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", ""))
 	require.NoError(t, ses.SetSessionSysVar(ctx, "remap_rewrites", `{"remapdb":{"src":"dst"}}`))
 	ses.rewriteEnabled.Store(true)
@@ -5447,14 +5449,17 @@ func TestSQLModeStagingDefersRewriteWithRequestSnapshot(t *testing.T) {
 	policy, err := captureRewritePolicy(ctx, ses)
 	require.NoError(t, err)
 	input := &UserInput{
-		sql:           `set sql_mode='NO_BACKSLASH_ESCAPES'; select 'a\'; select * from src.t`,
+		sql:           `set sql_mode='NO_BACKSLASH_ESCAPES'; /* save_result */ select 'a\'; /* cloud_nonuser */ select * from src.t`,
 		rewritePolicy: policy,
 	}
+	input.genSqlSourceType(ses)
+	originalSources := append([]string(nil), input.sqlSourceType...)
 	first, remaining, staged, err := prepareSQLModeStagedExecution(ctx, ses, ses.GetMySQLParser(), input.sql)
 	require.NoError(t, err)
 	require.True(t, staged)
-	_, err = rewriteSQLStatementInput(ctx, ses, newSQLStatementInput(input, ses, first))
+	firstInput, err := rewriteSQLStatementInput(ctx, ses, newSQLStatementInput(input, ses, first))
 	require.NoError(t, err)
+	require.Equal(t, constant.ExternSql, firstInput.getSqlSourceType(0))
 
 	// Simulate earlier staged statements changing both the SQL mode and rewrite
 	// state. Parsing follows the new mode; materialization follows the request
@@ -5468,6 +5473,7 @@ func TestSQLModeStagingDefersRewriteWithRequestSnapshot(t *testing.T) {
 	second, err = rewriteSQLStatementInput(ctx, ses, second)
 	require.NoError(t, err)
 	assertMaterializedRemap(t, ctx, second.sql, map[string]string{"src": "dst"})
+	require.Equal(t, constant.CloudUserSql, second.getSqlSourceType(0))
 
 	third, remaining, err := nextSQLModeStatementInput(ctx, ses, ses.GetMySQLParser(), input, remaining)
 	require.NoError(t, err)
@@ -5475,6 +5481,8 @@ func TestSQLModeStagingDefersRewriteWithRequestSnapshot(t *testing.T) {
 	third, err = rewriteSQLStatementInput(ctx, ses, third)
 	require.NoError(t, err)
 	assertMaterializedRemap(t, ctx, third.sql, map[string]string{"src": "dst"})
+	require.Equal(t, constant.CloudNoUserSql, third.getSqlSourceType(0))
+	require.Equal(t, originalSources, input.sqlSourceType)
 }
 
 func assertMaterializedRemap(t *testing.T, ctx context.Context, sql string, want map[string]string) {

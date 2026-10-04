@@ -4814,7 +4814,12 @@ func rewriteSQLStatementInput(ctx context.Context, ses *Session, input *UserInpu
 	if rewritten == input.getSql() {
 		return input, nil
 	}
-	return newSQLStatementInput(input, ses, rewritten), nil
+	// Policy materialization changes execution text, not statement provenance.
+	// Source entries are read-only; reclassification replaces the entire slice.
+	rewrittenInput := *input
+	rewrittenInput.sql = rewritten
+	rewrittenInput.genHash()
+	return &rewrittenInput, nil
 }
 
 func sqlForRecord(sql string) string {
