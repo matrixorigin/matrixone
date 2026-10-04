@@ -135,6 +135,46 @@ execute field_null_window using @field_candidate, @field_subject;
 deallocate prepare field_null_window;
 set @field_condition = null;
 
+-- A prepared CASE predicate preserves the charset of NULL-only value markers.
+set @field_subject = 'A';
+set @field_candidate = 'a';
+set @field_condition = 0;
+prepare field_text_case from 'select field(case when ? then null else ? end, ?) as text_case';
+execute field_text_case using @field_condition, @field_subject, @field_candidate;
+set @field_condition = 1;
+execute field_text_case using @field_condition, @field_subject, @field_candidate;
+set @field_condition = 0;
+execute field_text_case using @field_condition, @field_subject, @field_candidate;
+deallocate prepare field_text_case;
+prepare field_text_scalar from 'select field((select coalesce(?,null) from (select 1 as id) d limit 1), ?) as text_scalar';
+execute field_text_scalar using @field_subject, @field_candidate;
+deallocate prepare field_text_scalar;
+prepare field_text_window from 'select field(x, ?) as text_window from (select max(coalesce(?,null)) over() as x) d';
+execute field_text_window using @field_candidate, @field_subject;
+deallocate prepare field_text_window;
+prepare field_scalar_case from 'select field((select case when ? then null else ? end limit 1), ?) as scalar_case';
+execute field_scalar_case using @field_condition, @field_subject, @field_candidate;
+deallocate prepare field_scalar_case;
+prepare field_window_case from 'select field(x, ?) as window_case from (select max(case when ? then null else ? end) over() as x) d';
+execute field_window_case using @field_candidate, @field_condition, @field_subject;
+deallocate prepare field_window_case;
+
+-- A scalar marker peer supplies context; a fixed binary returned value owns its domain.
+set @field_subject = X'41';
+set @field_candidate = X'61';
+set @field_peer = X'42';
+prepare field_nullif_scalar_peer from 'select field(nullif(?, (select ? limit 1)), ?) as scalar_peer';
+execute field_nullif_scalar_peer using @field_subject, @field_peer, @field_candidate;
+deallocate prepare field_nullif_scalar_peer;
+prepare field_nullif_binary_value from 'select field(nullif(coalesce(?, cast(''A'' as binary)), ''''), ?) as fixed_binary_value';
+execute field_nullif_binary_value using @field_subject, @field_candidate;
+deallocate prepare field_nullif_binary_value;
+prepare field_nullif_fixed_value from 'select field(nullif(_binary ''A'', ?), ?) as fixed_binary_literal';
+execute field_nullif_fixed_value using @field_peer, @field_candidate;
+deallocate prepare field_nullif_fixed_value;
+set @field_condition = null;
+set @field_peer = null;
+
 -- Explicit binary subjects retain byte equality across prepared executions.
 set @field_subject = _binary 'a';
 prepare field_binary_stmt from 'select field(cast(? as binary), ''A'', ''a'', X''FE'', X''FF'') as prepared_field';

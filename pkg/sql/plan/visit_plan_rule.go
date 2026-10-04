@@ -5106,9 +5106,14 @@ func preparedFieldOperandComparisonType(ctx context.Context, expr *Expr, lookup 
 	if !preparedExprContainsParam(expr) && !preparedExprStringDomainDependsOnRuntime(expr) {
 		return types.Type{}, false, nil
 	}
-	// Keep the full value expression, including typed NULLs and CASE branches.
-	// A compact domain union is a provenance witness, not an equivalent AST.
-	probe := DeepCopyExpr(expr)
+	// Keep the full value expression unless a binder-owned witness already
+	// retains this boundary's comparison contract. Do not copy NULLIF's entire
+	// duplicated CASE executable just to replace it with its compact witness.
+	probeSource := expr
+	if source := expr.GetPreparedNumeric().GetStringDomainSource(); source != nil {
+		probeSource = source
+	}
+	probe := DeepCopyExpr(probeSource)
 	hasSQLStringMarker := false
 	// The compact string witness intentionally omits numeric-only leaves.
 	// Inspect value roles on the original tree as well, including typed NULLs.
@@ -5184,8 +5189,24 @@ func preparedFieldOperandComparisonType(ctx context.Context, expr *Expr, lookup 
 	}
 	typ, _, _, err := preparedExecutionExprType(ctx, probe, markerLookup)
 	if err == nil && preparedFieldOnlyMarkerAndNull(probe) {
-		// An untyped NULL branch does not contribute a text charset.
 		typ.Charset = types.CharsetBinary
+		if preparedFieldNullCaseHasDynamicCondition(probe) {
+			// Unlike fixed-predicate CASE and COALESCE/IF, a prepared CASE
+			// predicate leaves the NULL-only value type unresolved. Its value
+			// markers keep their bound charset, not FIELD's synthetic TEXT.
+			collector := stringDomainWitnessCollector{seen: make(map[string]struct{})}
+			preparedFieldMarkerNullValues(probe, &collector)
+			typ.Charset = types.CharsetUTF8
+			for _, marker := range collector.args {
+				origin, _, _, typeErr := preparedExecutionParamType(ctx, marker, int(marker.GetP().Pos), lookup)
+				if typeErr != nil {
+					return types.Type{}, false, typeErr
+				}
+				if types.StaticStringDomain(origin) == types.StringDomainBinary {
+					typ.Charset = types.CharsetBinary
+				}
+			}
+		}
 	}
 	// This is a comparison-domain conversion, not a width/DDL boundary.
 	// Width-zero BLOB and negative-width TEXT are unbounded cast envelopes;
@@ -5206,14 +5227,44 @@ func preparedFieldOnlyMarkerAndNull(expr *Expr) bool {
 	return markers && nulls && !other
 }
 
-func preparedFieldMarkerNullValues(expr *Expr) (marker, nullValue, other bool) {
+func preparedFieldNullCaseHasDynamicCondition(expr *Expr) bool {
+	for expr != nil {
+		if source := expr.GetPreparedNumeric().GetStringDomainSource(); source != nil {
+			expr = source
+			continue
+		}
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil {
+			return false
+		}
+		if fn.Func.ObjName == "cast" && !isExplicitPreparedCast(expr) && len(fn.Args) > 0 {
+			expr = fn.Args[0]
+			continue
+		}
+		if fn.Func.ObjName != "case" {
+			return false
+		}
+		for i := 0; i+1 < len(fn.Args); i += 2 {
+			if preparedExprContainsParam(fn.Args[i]) {
+				return true
+			}
+		}
+		return false
+	}
+	return false
+}
+
+func preparedFieldMarkerNullValues(expr *Expr, collectors ...*stringDomainWitnessCollector) (marker, nullValue, other bool) {
 	if expr == nil || isExplicitPreparedCast(expr) {
 		return false, false, true
 	}
 	if source := expr.GetPreparedNumeric().GetStringDomainSource(); source != nil {
-		return preparedFieldMarkerNullValues(source)
+		return preparedFieldMarkerNullValues(source, collectors...)
 	}
 	if expr.GetP() != nil {
+		for _, collector := range collectors {
+			collector.addMarker(expr)
+		}
 		return true, false, false
 	}
 	if lit := expr.GetLit(); lit != nil {
@@ -5225,7 +5276,7 @@ func preparedFieldMarkerNullValues(expr *Expr) (marker, nullValue, other bool) {
 	}
 	name := strings.ToLower(fn.Func.ObjName)
 	if (name == "cast" || name == "max" || name == "min" || name == "any_value") && len(fn.Args) > 0 {
-		return preparedFieldMarkerNullValues(fn.Args[0])
+		return preparedFieldMarkerNullValues(fn.Args[0], collectors...)
 	}
 	if name != "coalesce" && name != "ifnull" && name != "if" && name != "iff" && name != "case" {
 		return false, false, true
@@ -5236,7 +5287,7 @@ func preparedFieldMarkerNullValues(expr *Expr) (marker, nullValue, other bool) {
 			// Conditions never contribute to a selector's returned value domain.
 			continue
 		}
-		m, n, o := preparedFieldMarkerNullValues(arg)
+		m, n, o := preparedFieldMarkerNullValues(arg, collectors...)
 		marker, nullValue, other = marker || m, nullValue || n, other || o
 	}
 	return

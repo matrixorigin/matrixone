@@ -16,12 +16,15 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -543,6 +546,135 @@ func TestPreparedFieldParameterCaseComparison(t *testing.T) {
 	}
 }
 
+func TestPreparedNullifDomainWitnessBudget(t *testing.T) {
+	for _, withField := range []bool{false, true} {
+		for _, right := range []bool{false, true} {
+			for _, depth := range []int{4, 8, 12} {
+				t.Run(fmt.Sprintf("field=%v/right=%v/depth=%d", withField, right, depth), func(t *testing.T) {
+					expr := "?"
+					for i := 0; i < depth; i++ {
+						if right {
+							expr = "nullif('A', " + expr + ")"
+						} else {
+							expr = "nullif(" + expr + ", '')"
+						}
+					}
+					if withField {
+						expr = "field(" + expr + ", ?)"
+					}
+					query := "prepare p from 'select " + strings.ReplaceAll(expr, "'", "''") + "'"
+					start := time.Now()
+					p, err := runOneStmt(NewMockOptimizer(false), t, query)
+					require.NoError(t, err)
+					t.Logf("depth=%d prepare=%s sqlBytes=%d", depth, time.Since(start), len("select "+expr))
+					require.NoError(t, planpb.VisitExpressionsInOwner(p.GetDcl().GetPrepare().Plan, func(root *Expr) error {
+						return planpb.VisitExprTree(root, func(value *Expr) error {
+							witness := value.GetPreparedNumeric().GetStringDomainSource()
+							if witness == nil {
+								return nil
+							}
+							nodes := 0
+							var visit func(*Expr) error
+							visit = func(expr *Expr) error {
+								nodes++
+								require.Nil(t, expr.GetPreparedNumeric(), "witness must not retain nested executable metadata")
+								return nil
+							}
+							require.NoError(t, planpb.VisitExprTree(witness, visit))
+							require.LessOrEqual(t, nodes, 16, "one unique marker and two static domains need a constant-size witness")
+							return nil
+						})
+					}))
+				})
+			}
+		}
+	}
+}
+
+func TestPreparedFieldTextCaseReuse(t *testing.T) {
+	p, err := runOneStmt(NewMockOptimizer(false), t, "prepare p from 'select field(case when ? then null else ? end, ?)'")
+	require.NoError(t, err)
+	template := p.GetDcl().GetPrepare().Plan
+	before := template.String()
+	for _, source := range []types.T{types.T_varchar, types.T_varbinary, types.T_varchar} {
+		for _, condition := range []int64{0, 1, 0} {
+			func() {
+				values := []any{
+					ParamValue{Value: condition, SourceType: types.T_int64.ToType(), HasSourceType: true},
+					ParamValue{Value: "A", SourceType: source.ToType(), HasSourceType: true},
+					ParamValue{Value: "a", SourceType: source.ToType(), HasSourceType: true},
+				}
+				filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), template, values)
+				require.NoError(t, err)
+				proc := testutil.NewProcess(t)
+				executor, err := colexec.NewExpressionExecutor(proc, findPlanFunctionExpr(filled, "field"))
+				require.NoError(t, err)
+				defer executor.Free()
+				out, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+				require.NoError(t, err)
+				want := int64(1 - condition)
+				if source == types.T_varbinary {
+					want = 0
+				}
+				require.Equal(t, want, vector.GetFixedAtWithTypeCheck[int64](out, 0))
+				mock := NewMockOptimizer(false)
+				mock.ctxt.SetContext(withPreparedSourceBindings(context.Background(), []PreparedSourceBinding{
+					{Position: 0, Type: types.T_int64.ToType()}, {Position: 1, Type: source.ToType()}, {Position: 2, Type: source.ToType()},
+				}, values))
+				bound, err := runOneStmt(mock, t, "select field(case when ? then null else ? end, ?)")
+				require.NoError(t, err)
+				bound, _, err = FillValuesOfParamsInPlanWithSpecialization(context.Background(), bound, values)
+				require.NoError(t, err)
+				boundExecutor, err := colexec.NewExpressionExecutor(proc, findPlanFunctionExpr(bound, "field"))
+				require.NoError(t, err)
+				defer boundExecutor.Free()
+				boundOut, err := boundExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+				require.NoError(t, err)
+				require.Equal(t, want, vector.GetFixedAtWithTypeCheck[int64](boundOut, 0))
+			}()
+		}
+	}
+	require.Equal(t, before, template.String())
+}
+
+func TestPreparedFieldTextNullSelectorSourceBinding(t *testing.T) {
+	for _, query := range []string{
+		"select field((select coalesce(?,null) from (select 1 as id) d limit 1), ?)",
+		"select field(x, ?) from (select max(coalesce(?,null)) over() as x) d",
+		"select field((select case when ? then null else ? end limit 1), ?)",
+		"select field(x, ?) from (select max(case when ? then null else ? end) over() as x) d",
+	} {
+		t.Run(query, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			text := types.T_varchar.ToType()
+			bindings := []PreparedSourceBinding{{Position: 0, Type: text}, {Position: 1, Type: text}}
+			values := []any{
+				ParamValue{Value: "A", SourceType: text, HasSourceType: true},
+				ParamValue{Value: "a", SourceType: text, HasSourceType: true},
+			}
+			want := types.StringDomainBinary
+			if strings.Contains(query, "case") {
+				want = types.StringDomainText
+				if strings.Contains(query, "max") {
+					bindings = append(bindings, PreparedSourceBinding{Position: 2, Type: text})
+					bindings[1].Type = types.T_int64.ToType()
+					values = []any{values[1], ParamValue{Value: int64(0), SourceType: types.T_int64.ToType(), HasSourceType: true}, values[0]}
+				} else {
+					bindings = append(bindings, PreparedSourceBinding{Position: 2, Type: text})
+					bindings[0].Type = types.T_int64.ToType()
+					values = append([]any{ParamValue{Value: int64(0), SourceType: types.T_int64.ToType(), HasSourceType: true}}, values...)
+				}
+			}
+			mock.ctxt.SetContext(withPreparedSourceBindings(context.Background(), bindings, values))
+			p, err := runOneStmt(mock, t, query)
+			require.NoError(t, err)
+			consumer := findPlanFunctionExpr(p, "field")
+			require.NotNil(t, consumer)
+			require.Equal(t, want, types.StaticStringDomain(makeTypeByPlan2Expr(consumer.GetF().Args[0])), consumer.String())
+		})
+	}
+}
+
 func TestPreparedFieldNullifSourceBinding(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	binary := types.T_varbinary.ToType()
@@ -554,11 +686,16 @@ func TestPreparedFieldNullifSourceBinding(t *testing.T) {
 	mock.ctxt.SetContext(withPreparedSourceBindings(context.Background(), []PreparedSourceBinding{
 		{Position: 0, Type: binary}, {Position: 1, Type: binary}, {Position: 2, Type: binary},
 	}, values))
-	p, err := runOneStmt(mock, t, "select field(nullif(coalesce(?,?), ''), ?)")
-	require.NoError(t, err)
-	consumer := findPlanFunctionExpr(p, "field")
-	require.NotNil(t, consumer)
-	require.Equal(t, types.StringDomainText, types.StaticStringDomain(makeTypeByPlan2Expr(consumer.GetF().Args[0])), consumer.String())
+	for _, query := range []string{
+		"select field(nullif(coalesce(?,?), ''), ?)",
+		"select field(nullif(?, (select ? limit 1)), ?)",
+	} {
+		p, err := runOneStmt(mock, t, query)
+		require.NoError(t, err)
+		consumer := findPlanFunctionExpr(p, "field")
+		require.NotNil(t, consumer)
+		require.Equal(t, types.StringDomainText, types.StaticStringDomain(makeTypeByPlan2Expr(consumer.GetF().Args[0])), consumer.String())
+	}
 }
 
 func TestPreparedCommonValueStringMarkerWithFixedDecimalPeer(t *testing.T) {

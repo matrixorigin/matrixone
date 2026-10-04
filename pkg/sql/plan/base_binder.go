@@ -4152,7 +4152,6 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	}
 	isIfNull := name == "ifnull"
 	isNullIf := name == "nullif"
-	var nullIfDomainPeer *Expr
 
 	// rewrite some ast Exprs before binding
 	switch name {
@@ -4160,15 +4159,6 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		// rewrite 'nullif(expr1, expr2)' to 'case when expr1=expr2 then null else expr1'
 		if len(astArgs) != 2 {
 			return nil, moerr.NewInvalidArg(b.GetContext(), "nullif need two args", len(astArgs))
-		}
-		// Capture the peer before comparison binding installs provisional
-		// collation casts inherited from this execution's first operand.
-		if b.builder != nil && (b.builder.isPrepareStatement || preparedSourceBindings(b.GetContext()) != nil) {
-			var err error
-			nullIfDomainPeer, err = b.impl.BindExpr(astArgs[1], depth, false)
-			if err != nil {
-				return nil, err
-			}
 		}
 		elseExpr := astArgs[0]
 		thenExpr := tree.NewNumVal("", "", false, tree.P_null)
@@ -4707,14 +4697,30 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			}
 			if isNullIf && len(args) == 3 && types.T(e.Typ.Id).IsMySQLString() &&
 				(b.builder.isPrepareStatement || preparedSourceBindings(b.GetContext()) != nil) {
-				if nullIfDomainPeer != nil {
+				comparison := args[0].GetF()
+				if comparison != nil && comparison.Func != nil && comparison.Func.ObjName == "=" && len(comparison.Args) == 2 {
+					peer := comparison.Args[1]
+					// Comparison casts are not SQL source boundaries. Recover the
+					// original peer without rebinding its AST (which would duplicate
+					// nested NULLIF work and scalar-subquery query nodes).
+					for {
+						cast := peer.GetF()
+						if cast == nil || cast.Func == nil || cast.Func.ObjName != "cast" || cast.SyntaxExplicitCast || len(cast.Args) == 0 {
+							break
+						}
+						peer = cast.Args[0]
+					}
+					b.markPreparedStringDomainSubquerySource(peer, make(map[[2]int32]struct{}))
 					// Preserve NULLIF's comparison-domain operands before its CASE
 					// shape becomes indistinguishable from a user-written CASE.
 					// This witness is metadata only; CASE remains the executable.
 					ensurePreparedNumericMetadata(e).StringDomainSource = &Expr{
 						Typ: e.Typ, Expr: &plan.Expr_F{F: &plan.Function{
 							Func: &plan.ObjectRef{ObjName: "coalesce"},
-							Args: []*Expr{DeepCopyExpr(args[2]), DeepCopyExpr(nullIfDomainPeer)},
+							Args: []*Expr{
+								preparedNullifDomainWitness(args[2]),
+								preparedNullifDomainWitness(peer),
+							},
 						}},
 					}
 				}
@@ -6027,7 +6033,7 @@ func (b *baseBinder) markPreparedStringDomainSubquerySource(
 		for _, arg := range fn.Args {
 			dynamic = b.markPreparedStringDomainSubquerySource(arg, visited) || dynamic
 		}
-		return dynamic && preparedFunctionStringDomainDependsOnRuntimeParam(expr)
+		return dynamic && (preparedFunctionStringDomainDependsOnRuntimeParam(expr) || preparedFieldOnlyMarkerAndNull(expr))
 	}
 	if list := expr.GetList(); list != nil {
 		dynamic := false
@@ -6109,6 +6115,15 @@ func (b *baseBinder) markPreparedStringDomainSubquerySource(
 // erase the function's implicit numeric/date-to-string conversion boundary.
 // Every expression returned here is metadata only; it is never executed as a
 // query expression.
+func preparedNullifDomainWitness(source *Expr) *Expr {
+	if witness := stringDomainSourceWitness(source, possibleStringDomainsForExpr(source)); witness != nil {
+		return witness
+	}
+	// Non-string peers contribute no charset. Keep their type/NULL boundary
+	// without retaining an executable subtree or an extra marker value role.
+	return &Expr{Typ: source.Typ, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}
+}
+
 func stringDomainSourceWitness(source *Expr, domains uint8) *Expr {
 	if source == nil || domains == 0 {
 		return nil
@@ -6117,15 +6132,56 @@ func stringDomainSourceWitness(source *Expr, domains uint8) *Expr {
 		return stringDomainSourceWitness(provenance, domains)
 	}
 	if preparedFieldOnlyMarkerAndNull(source) {
+		if fn := source.GetF(); fn != nil && fn.Func != nil && len(fn.Args) > 0 {
+			switch strings.ToLower(fn.Func.ObjName) {
+			case "cast", "max", "min", "any_value":
+				// These boundaries preserve the selector's value-domain contract,
+				// including CASE's unresolved predicate; don't summarize it away.
+				return stringDomainSourceWitness(fn.Args[0], domains)
+			}
+		}
 		// Preserve NULL-selector semantics without copying a projection graph.
 		// The compact marker set plus one NULL is sufficient for this contract;
 		// an invented TEXT leaf would change FIELD's comparison domain.
 		collector := stringDomainWitnessCollector{seen: make(map[string]struct{})}
-		collector.collect(source, make(map[*Expr]struct{}))
+		preparedFieldMarkerNullValues(source, &collector)
 		args := append(collector.args, makePlan2NullConstExprWithType())
-		return &Expr{Typ: source.Typ, Expr: &plan.Expr_F{F: &plan.Function{
+		witness := &Expr{Typ: source.Typ, Expr: &plan.Expr_F{F: &plan.Function{
 			Func: &plan.ObjectRef{ObjName: "coalesce"}, Args: args,
 		}}}
+		if preparedFieldNullCaseHasDynamicCondition(source) {
+			// CASE's unresolved predicate defers its NULL-only result domain to
+			// bound value markers. Preserve that contract, not the predicate AST.
+			fn := source.GetF()
+			controls := stringDomainWitnessCollector{seen: make(map[string]struct{})}
+			visited := make(map[*Expr]struct{})
+			var collectControl func(*Expr) error
+			collectControl = func(value *Expr) error {
+				if _, seen := visited[value]; seen {
+					return nil
+				}
+				visited[value] = struct{}{}
+				controls.addMarker(value)
+				if provenance := value.GetPreparedNumeric().GetStringDomainSource(); provenance != nil {
+					return plan.VisitExprTree(provenance, collectControl)
+				}
+				return nil
+			}
+			for i := 0; i+1 < len(fn.Args); i += 2 {
+				_ = plan.VisitExprTree(fn.Args[i], collectControl)
+			}
+			if len(controls.args) == 0 {
+				return witness
+			}
+			// The predicate's marker presence is the type contract. One marker
+			// is enough; its expression/value never participates in the result.
+			condition := controls.args[0]
+			witness = &Expr{Typ: source.Typ, Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: "case"},
+				Args: []*Expr{condition, makePlan2NullConstExprWithType(), witness},
+			}}}
+		}
+		return witness
 	}
 	if _, marker := preparedParamPosition(source); marker {
 		// A scalar or derived projection of one marker keeps PARAM_ITEM
