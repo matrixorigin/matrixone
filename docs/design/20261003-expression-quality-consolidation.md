@@ -478,3 +478,114 @@ establish whole-query, complete-package CPU or whole-CI improvements. Earlier
 failed race evidence is retained as historical evidence; its gate is closed by
 validation of the corrected dependency, rather than by repeating the old code.
 The wider #29249 task remains ongoing.
+
+
+## 2026-10-04: modulo owner consolidation and magnitude repair
+
+This is a local checkpoint. #29249 remains ongoing. User instructions restrict
+current work to local investigation, fixes and tests; no new external review,
+GitHub update or push is performed. The requested external model review was
+terminated, not approved. Live BVT and production performance remain open for
+the SQL-visible magnitude repair recorded locally in commit `08adf47b10`.
+
+### Ownership and independent contracts
+
+The separate repair keeps unsigned magnitude comparison and logical shift
+normalization inside `Decimal128.Mod128`. Signed arithmetic callers retain sign
+restoration. D256 modulo reuses existing `d256NarrowAllAbsFit64` admission, which
+rejects the negative power-of-two divisor whose absolute value exceeds uint64.
+No new predicate, execution path, state, allocation or fixture is introduced.
+The public planner/executor table now checks minimum-magnitude reduction, its
+second correction, negative-power divisors, metadata and NULL propagation.
+Normal types/function/plan and incremental vet/molint/lint passed this repair.
+A private independent integer oracle passed 90 selected magnitude boundaries.
+
+Batch modulo tests now live in existing `TestD64Mod` and `TestD128Mod` typed
+tables. Each named row makes one call. Only `Kernel` uses the live factory;
+other rows target the batch owner. Coefficients are reviewed literal limbs:
+production Mod/Scale/Minus/parse/format methods do not construct expectations.
+Each row owns fresh output and bitmap state. Assertions cover full coefficients,
+exact NULL count/membership and untouched initially masked output. New NULL
+payload is unspecified. Strict errors assert `ErrDivByZero` and the unchanged
+bitmap, without promising rollback of scratch results.
+
+`S` is same scale; `X`/`Y` scale dividend/divisor; `64`/`W` distinguish D128
+small/wide divisor admission. `N` starts with an empty bitmap, `M` proves strict
+masked success, `P` combines old masks and evaluated-zero continuation, `E`/`Z`
+prove strict/permissive zero. VV/SV/VS name the real physical loops. The raw
+strict scalar-zero precheck remains distinct from public all-masked admission.
+
+Original generated D128 alignment remained below 2^95, so it could not prove
+checked D128 overflow. Retained literal rows preserve successful one-factor
+alignment, signs, wide divisors and nonzero high remainders. Factor differences
+19/20/38, second-factor carry, signed-range rejection and fallback from original
+operands now have separate exact witnesses. Strict/permissive policies have
+identical nonzero arithmetic; their distinct zero outcomes are tested separately.
+All 50 benchmark bodies and shared generators remain byte-identical. The two
+mixed IntDiv children and preceding shared RNG consumption are unchanged.
+
+### Complete retirement map
+
+The following maps every old batch child before deletion. `64:` and `128:`
+refer to the retained typed owners above. The two direct helper owners remain
+separate, with strengthened complete-limb assertions; their argument/status
+contracts are not replaced by batch success assertions.
+
+| Old owner | Old children → retained named destinations |
+| --- | --- |
+| `TestModByZero_NullBehavior` | `(root)` → `128:S64_VV_N`, `64:S_VV_N` |
+| `TestNullHandling` | `D128Mod_WithNulls` → `128:X64_VV_M` |
+| `TestD64Mod` | `VecVec` → `64:S_VV_N`; `ScalarVec` → `64:S_SV_N`; `VecScalar` → `64:S_VS_N`; `Kernel` → `64:Kernel`; `DiffScale_VecVec` → `64:X_VV_N`; `DiffScale_ScalarVec` → `64:X_SV_N`; `DiffScale_VecScalar` → `64:Y_VS_N` |
+| `TestD128Mod` | `VecVec` → `128:S64_VV_N`; `ScalarVec` → `128:S64_SV_N`; `VecScalar` → `128:S64_VS_N`; `Kernel` → `128:Kernel`; `DiffScale_VecVec` → `128:X64_VV_N`; `DiffScale_ScalarVec` → `128:X64_SV_N`; `DiffScale_VecScalar` → `128:Y_VS_N` |
+| `TestD128Mod_DiffScale` | `VecVec_Scale1GT` → `128:Y_VV_N`; `VecVec_Scale1LT` → `128:X64_VV_N`; `ScalarVec` → `128:Y_SV_N`; `VecScalar` → `128:Y_VS_N` |
+| `TestD64Mod_DiffScale` | `VecVec_Scale1GT` → `64:Y_VV_N`; `VecVec_Scale1LT` → `64:X_VV_N`; `ScalarVec` → `64:Y_SV_N`; `VecScalar` → `64:Y_VS_N` |
+| `TestD128Mod_NullPaths` | `SameScale_VecVec_Nulls` → `128:S64_VV_M`; `SameScale_ConstDiv_Nulls` → `128:S64_VS_M`; `DiffScale_VecVec_Nulls` → `128:Y_VV_M`; `DiffScale_ConstDiv_Nulls` → `128:Y_VS_M`; `LargeDivisor_SameScale_Nulls` → `128:SW_VV_M` |
+| `TestD64Mod_ScaleXPath` | `VecVec_NoNull` → `64:X_VV_N`; `VecVec_Nulls` → `64:X_VV_M`; `ConstLeft_NoNull` → `64:X_SV_N`; `ConstLeft_Nulls` → `64:X_SV_M`; `ConstRight_NoNull` → `64:X_VS_N`; `ConstRight_Nulls` → `64:X_VS_M` |
+| `TestD128Mod_SameScale_LargeDivisors` | `VecVec_LargeBoth` → `128:SW_VV_N`; `ConstDiv_Large` → `128:SW_VS_N`; `ConstDividend_Large` → `128:SW_SV_N`; `VecVec_LargeBoth_Nulls` → `128:SW_VV_M` |
+| `TestD128Mod_DiffScale_AllDispatches` | `ConstDividend_DiffScale_Large` → `128:Y_SV_N`; `ConstDivisor_DiffScale_Large` → `128:YW_VS_N`; `VecVec_DiffScale_Large_Nulls` → `128:Y_VV_M` |
+| `TestD128Mod_AllDispatches_Extra` | `SameScale_ConstDividend_NoNull` → `128:S64_SV_N`; `SameScale_ConstDividend_Nulls` → `128:S64_SV_M`; `SameScale_ConstDivisor_NoNull` → `128:S64_VS_N`; `SameScale_VecVec_NoNull` → `128:S64_VV_N`; `DiffScale_ConstDividend_NoNull` → `128:Y_SV_N`; `DiffScale_ConstDividend_Nulls` → `128:Y_SV_M`; `DiffScale_ConstDivisor_NoNull` → `128:Y_VS_N` |
+| `TestD64Mod_SameScale_AllDispatches` | `ConstLeft_NoNull` → `64:S_SV_N`; `ConstLeft_Nulls` → `64:S_SV_M`; `ConstRight_NoNull` → `64:S_VS_N`; `ConstRight_Nulls` → `64:S_VS_M` |
+| `TestD64Mod_ConstPaths_Extra` | `ScaleX_ConstLeft_Nulls` → `64:X_SV_M`; `ScaleX_ConstRight_Nulls` → `64:X_VS_M`; `NotScaleX_ConstLeft_NoNull` → `64:Y_SV_N`; `NotScaleX_ConstLeft_Nulls` → `64:Y_SV_M`; `NotScaleX_ConstRight_Nulls` → `64:Y_VS_M`; `NotScaleX_VecVec_Nulls` → `64:Y_VV_M` |
+| `TestMiscEdgePaths` | `D128IntDiv_ZeroConst_ShouldError` → `retained unchanged`; `D256IntDiv_ZeroConst_ShouldError` → `retained unchanged`; `D64Mod_SameScale_VecVec_Nulls` → `64:S_VV_M` |
+| `TestD128Mod_DivByZeroPaths` | `VecVec_DiffScale_DivByZero` → `128:XW_VV_N`; `VecVec_DiffScale_DivByZero_WithNull` → `128:XW_VV_P`; `ConstVec_DiffScale_DivByZero` → `128:XW_SV_N`; `VecConst_ZeroDivisor` → `128:X64_VS_Z`; `VecConst_SameScale_ZeroDivisor` → `128:S64_VS_Z`; `VecVec_SameScale_DivByZero` → `128:SW_VV_N` |
+| `TestD64Mod_DivByZeroPaths` | `VecVec_SameScale_DivByZero` → `64:S_VV_N`; `VecVec_DiffScale_DivByZero` → `64:X_VV_N`; `VecVec_DiffScale_DivByZero_WithNull` → `64:X_VV_P`; `ConstVec_DivByZero` → `64:S_SV_N`; `VecConst_ZeroDivisor` → `64:S_VS_Z`; `ScaleX_DivByZero` → `64:X_VV_N`; `ScaleX_DivByZero_WithNull` → `64:X_VV_P` |
+| `TestD64Mod_ConstAndScalePaths` | `ConstVec_ScaleX` → `64:X_SV_N`; `VecConst_ScaleX` → `64:X_VS_N`; `ConstVec_DiffScale_NotScaleX` → `64:Y_SV_N`; `VecConst_DiffScale_NotScaleX` → `64:Y_VS_N`; `ConstVec_SameScale` → `64:S_SV_N` |
+| `TestD128Mod_ConstAndLargeScalePaths` | `ConstVec_DiffScale_ScaleX` → `128:XW_SV_N`; `VecConst_DiffScale_ScaleX` → `128:XW_VS_N`; `ConstVec_SameScale` → `128:SW_SV_N`; `VecConst_SameScale` → `128:SW_VS_N`; `VecConst_SameScale_Large` → `128:SW_VS_N` |
+| `TestD64Mod_ScaleXConstPaths` | `ScaleX_VecVec_NoNull` → `64:X_VV_N`; `ScaleX_ConstVec_NoNull` → `64:X_SV_N`; `ScaleX_ConstVec_WithNull` → `64:X_SV_M`; `ScaleX_VecConst_NoNull` → `64:X_VS_N`; `ScaleX_VecConst_WithNull` → `64:X_VS_M`; `ScaleX_VecVec_DivZero_Error` → `64:X_VV_E`; `ScaleX_ConstVec_DivZero_Nullify` → `64:X_SV_N`; `ScaleX_ConstVec_DivZero_Error` → `64:X_SV_E`; `ScaleX_VecConst_Zero_Nullify` → `64:X_VS_Z`; `ScaleX_VecConst_Zero_Error` → `64:X_VS_E`; `SameScale_VecVec_DivZero_Error` → `64:S_VV_E`; `SameScale_ConstVec_DivZero_Error` → `64:S_SV_E`; `SameScale_VecConst_Zero_Error` → `64:S_VS_E` |
+| `TestD64Mod_NonScaleXConstPaths` | `NonScaleX_VecVec_NoNull` → `64:Y_VV_N`; `NonScaleX_ConstVec_NoNull` → `64:Y_SV_N`; `NonScaleX_ConstVec_WithNull` → `64:Y_SV_M`; `NonScaleX_VecConst_NoNull` → `64:Y_VS_N`; `NonScaleX_VecConst_WithNull` → `64:Y_VS_M`; `NonScaleX_DivZero_ConstVec_Error` → `64:Y_SV_E`; `NonScaleX_DivZero_VecConst_Error` → `64:Y_VS_E`; `NonScaleX_DivZero_VecConst_Nullify` → `64:Y_VS_Z`; `NonScaleX_DivZero_ConstVec_Nullify` → `64:Y_SV_N`; `NonScaleX_DivZero_VecVec_Error` → `64:Y_VV_E` |
+| `TestD128Mod_ConstAndShouldError` | `SameScale_VecVec_DivZero_Error` → `128:S64_VV_E`; `SameScale_ConstVec_DivZero_Error` → `128:S64_SV_E`; `SameScale_VecConst_Zero_Error` → `128:S64_VS_E`; `DiffScale_ConstVec_NoNull` → `128:Y_SV_N`; `DiffScale_ConstVec_WithNull` → `128:Y_SV_M`; `DiffScale_VecConst_NoNull` → `128:Y_VS_N`; `DiffScale_VecConst_WithNull` → `128:Y_VS_M`; `DiffScale_DivZero_ConstVec_Error` → `128:Y_SV_E`; `DiffScale_DivZero_VecConst_Error` → `128:Y_VS_E`; `DiffScale_DivZero_VecConst_Nullify` → `128:Y_VS_Z`; `DiffScale_DivZero_ConstVec_Nullify` → `128:Y_SV_N`; `DiffScale_DivZero_VecVec_Error` → `128:Y_VV_E` |
+
+### Matched cost and validation scope
+
+In one native test binary with identical production/native inputs, eight samples
+per mode alternate old/new execution order. The scope includes the same unchanged
+mixed IntDiv and direct helper owners. Measurements sum owner function bodies,
+including their child assertions/harness; outer root/sample harness, GC
+preconditioning, build/link/init and queue time are excluded.
+
+| Median | Before | After | Reduction |
+| --- | ---: | ---: | ---: |
+| Test body wall time | 3.853 ms | 1.281 ms | 66.8% |
+| Process CPU within measured bodies | 4.338 ms | 1.606 ms | 63.0% |
+| Go allocated bytes | 638,072 | 344,176 | 46.1% |
+| Go allocations | 12,895.5 | 5,064.5 | 60.7% |
+
+Batch invocations decrease from 119 to 91 and output rows from 7,612 to 307,
+with stronger independent oracles. This shared-host measurement establishes the
+mapped test-body improvement, not whole-package, query or CI speedup. Final function-package normal validation passes 2,054 roots and 8,231 children.
+Complete types/function race passes 2,269 roots and 8,980 children; the public
+planner/executor race owner passes one root and 15 children. Final incremental
+vet, molint and configured lint all exit zero. Unchanged types/plan normal and
+static evidence from the isolated magnitude repair is reused.
+
+Three task-private producer mutations—masked output clobber, wrong strict-zero
+error class and dropped high remainder—each survive all 21 old owners. The new
+typed tables reject all three with the intended runtime assertions, without
+build failure or panic. Matched old/new controls also pass. The earlier direct
+helper oracle mutation evidence remains valid because those helper bodies,
+inputs and full-coefficient assertions are unchanged by this consolidation.
+
+This proves the local test-consolidation checkpoint. The SQL-visible repair still
+requires live BVT and production-performance evidence; external review and
+publication remain constrained by the user's local-only instruction. The full
+#29249 objective is not complete.
