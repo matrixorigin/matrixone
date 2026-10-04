@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/mem"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	"github.com/stretchr/testify/require"
 )
@@ -49,6 +50,59 @@ func TestTxnServiceDoesNotCloseBorrowedSender(t *testing.T) {
 	require.NoError(t, service.Start())
 	require.NoError(t, service.Close(false))
 	require.Zero(t, sender.closed.Load())
+}
+
+func TestZombieGCUsesTransactionCreationSnapshot(t *testing.T) {
+	sender := NewTestSender()
+	txnService := NewTestTxnServiceWithLogAndZombie(t, 1, sender, NewTestClock(0), nil, 250*time.Millisecond)
+	require.NoError(t, txnService.Start())
+	s := txnService.(*service)
+	expired := NewTestTxn(1, 1, 1)
+	current := NewTestTxn(2, 2, 1)
+	t.Cleanup(func() {
+		for _, meta := range []txn.TxnMeta{expired, current} {
+			if s.getTxnContext(meta.ID) != nil {
+				request := NewTestRollbackRequest(meta)
+				_ = s.Rollback(context.Background(), &request, &txn.TxnResponse{})
+			}
+		}
+		require.NoError(t, txnService.Close(false))
+		require.NoError(t, sender.Close())
+	})
+	sender.AddTxnService(txnService)
+	for _, meta := range []txn.TxnMeta{expired, current} {
+		result, err := sender.Send(t.Context(), []txn.TxnRequest{NewTestWriteRequest(meta.ID[0], meta, 1)})
+		require.NoError(t, err)
+		require.Len(t, result.Responses, 1)
+		require.Nil(t, result.Responses[0].TxnError)
+	}
+
+	for _, tc := range []struct {
+		meta      txn.TxnMeta
+		createdAt time.Time
+	}{
+		{expired, time.Now().Add(-time.Hour)},
+		{current, time.Now().Add(time.Hour)},
+	} {
+		ctx := s.getTxnContext(tc.meta.ID)
+		require.NotNil(t, ctx)
+		ctx.mu.Lock()
+		ctx.createAt = tc.createdAt
+		ctx.mu.Unlock()
+	}
+
+	require.Eventually(t, func() bool {
+		return s.getTxnContext(expired.ID) == nil
+	}, 5*time.Second, 5*time.Millisecond, "GC must roll back the expired coordinator")
+	storage := s.storage.(*mem.KVTxnStorage)
+	require.Nil(t, storage.GetUncommittedTxn(expired.ID))
+	require.NotNil(t, s.getTxnContext(current.ID))
+	require.NotNil(t, storage.GetUncommittedTxn(current.ID))
+
+	result, err := sender.Send(t.Context(), []txn.TxnRequest{NewTestRollbackRequest(current)})
+	require.NoError(t, err)
+	require.Len(t, result.Responses, 1)
+	require.Nil(t, result.Responses[0].TxnError)
 }
 
 func TestMaybeAddTxnPublishesInitializedContext(t *testing.T) {
