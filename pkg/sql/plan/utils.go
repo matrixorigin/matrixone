@@ -2453,6 +2453,22 @@ func checkNoNeedCast(ctx context.Context, constT, columnT types.Type, constExpr 
 		return true
 	}
 
+	// FLOAT(M,D)/DOUBLE(M,D) also round and range-check the peer during
+	// CAST. A binary precision proof alone cannot justify that conversion.
+	if (columnT.Oid == types.T_float32 || columnT.Oid == types.T_float64) && columnT.Width > 0 && columnT.Scale >= 0 {
+		return false
+	}
+
+	if columnT.Oid.IsDecimal() && (constT.Oid == types.T_float32 || constT.Oid == types.T_float64) {
+		value, ok := floatingComparisonConstant(constExpr)
+		return ok && decimalFloatComparisonHasUniqueValue(value, columnT)
+	}
+
+	if columnT.Oid == types.T_float32 && constT.Oid == types.T_float64 {
+		value, ok := floatingComparisonConstant(constExpr)
+		return ok && !math.IsNaN(value) && !math.IsInf(value, 0) && float64(float32(value)) == value
+	}
+
 	lit := constExpr.GetLit()
 	if lit == nil {
 		return false
@@ -2589,11 +2605,8 @@ func checkNoNeedCast(ctx context.Context, constT, columnT types.Type, constExpr 
 		return false
 
 	case types.T_float32, types.T_float64:
-		// Allow casting float constants to float/decimal columns
+		// Float-to-decimal narrowing was checked by the shared proof above.
 		if columnT.Oid == types.T_float32 || columnT.Oid == types.T_float64 {
-			return true
-		}
-		if columnT.Oid == types.T_decimal64 || columnT.Oid == types.T_decimal128 {
 			return true
 		}
 		return false

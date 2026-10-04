@@ -44,6 +44,7 @@ func TestPreparedDecimalFloatFilterUsesUniqueValueProof(t *testing.T) {
 		{"fractional", "0.1", types.New(types.T_decimal64, 12, 2), true},
 		{"between scale points", "0.104", types.New(types.T_decimal64, 12, 2), false},
 		{"float collision", "9007199254740992", types.New(types.T_decimal128, 20, 0), false},
+		{"executor rounding", "2.9999999999999997e-20", types.New(types.T_decimal128, 20, 20), false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ctx := withPreparedSourceBindings(context.Background(),

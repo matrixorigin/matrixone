@@ -1176,19 +1176,41 @@ func TestDecimal128AddSubErrorFormat(t *testing.T) {
 // TestDecimalScaleOverflowErrors exercises the error formatting in Scale
 // functions where we changed the error messages.
 func TestDecimalScaleOverflowErrors(t *testing.T) {
-	// Decimal64.Scale: need large d64 that overflows when scaled up.
-	maxD64 := Decimal64(^uint64(0) >> 1) // max positive
-
-	t.Run("d64_scale_up_overflow", func(t *testing.T) {
-		_, err := maxD64.Scale(18)
-		if err == nil {
-			t.Fatal("expected overflow")
-		}
-	})
-	t.Run("d64_scale_down_overflow", func(t *testing.T) {
-		_, err := maxD64.Scale(-18)
-		_ = err // may or may not error; exercises the path
-	})
+	for _, tc := range []struct {
+		name     string
+		x        int64
+		n        int32
+		want     int64
+		overflow bool
+	}{
+		{"largest scale", 1, 18, 1000000000000000000, false},
+		{"signed positive overflow", 1, 19, 0, true},
+		{"signed negative overflow", -1, 19, 0, true},
+		{"positive boundary", 922337203685477580, 1, 9223372036854775800, false},
+		{"positive beyond boundary", 922337203685477581, 1, 0, true},
+		{"negative boundary", -922337203685477580, 1, -9223372036854775800, false},
+		{"negative beyond boundary", -922337203685477581, 1, 0, true},
+		{"minimum unchanged", math.MinInt64, 0, math.MinInt64, false},
+		{"minimum downscale", math.MinInt64, -1, -922337203685477581, false},
+		{"minimum coarse rounding", math.MinInt64, -19, -1, false},
+		{"maximum coarse rounding", math.MaxInt64, -19, 1, false},
+		{"unsigned overflow", math.MaxInt64, 18, 0, true},
+		{"extreme positive", 1, math.MaxInt32, 0, true},
+		{"extreme negative", math.MinInt64, math.MinInt32, 0, false},
+		{"zero", 0, math.MaxInt32, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			x := Decimal64(uint64(tc.x))
+			got, err := x.Scale(tc.n)
+			if tc.overflow {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "result %d, error %v", int64(got), err)
+				require.Equal(t, x, got, "failed alignment must preserve input for widening consumers")
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, tc.want, int64(got))
+			}
+		})
+	}
 
 	// Decimal128.ScaleInplace: large D128 scaling up.
 	maxD128 := Decimal128{B0_63: ^uint64(0), B64_127: 0x7FFFFFFFFFFFFFFF}
@@ -1423,4 +1445,50 @@ func TestDecimalFromCoefficient(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDecimal64DivWidenedScale(t *testing.T) {
+	for _, x := range []int64{1, -1} {
+		for _, y := range []int64{10000000000000, -10000000000000} {
+			got, scale, err := Decimal64(uint64(x)).Div(Decimal64(uint64(y)), 0, 13)
+			require.NoError(t, err)
+			require.Equal(t, int32(6), scale)
+			want := int64(1000000)
+			if (x < 0) != (y < 0) {
+				want = -want
+			}
+			require.Equal(t, want, int64(got))
+		}
+	}
+	negative, _, err := Decimal64Min.Div(1, 12, 0)
+	require.NoError(t, err)
+	require.Equal(t, Decimal64Min, negative)
+	_, _, err = Decimal64Min.Div(Decimal64(1).Minus(), 12, 0)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+
+	got, _, err := Decimal64Min.Div(1000000, 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, Decimal64Min, got)
+	_, _, err = Decimal64Min.Div(Decimal64(1000000).Minus(), 0, 0)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+}
+
+func TestDecimal64Div64MagnitudeRounding(t *testing.T) {
+	// Div64 is an unsigned magnitude primitive, including the negative signed
+	// endpoint and widened intermediates. Use unbounded arithmetic as oracle.
+	for _, x := range []uint64{0, 1, 4, 5, 9, 1<<63 - 1, 1 << 63, math.MaxUint64} {
+		for _, y := range []uint64{1, 2, 3, 10, 1 << 63, 10000000000000000000, math.MaxUint64} {
+			quotient, remainder := new(big.Int), new(big.Int)
+			divisor := new(big.Int).SetUint64(y)
+			quotient.QuoRem(new(big.Int).SetUint64(x), divisor, remainder)
+			if remainder.Lsh(remainder, 1).Cmp(divisor) >= 0 {
+				quotient.Add(quotient, big.NewInt(1))
+			}
+			got, err := Decimal64(x).Div64(Decimal64(y))
+			require.NoError(t, err)
+			require.Equal(t, quotient.Uint64(), uint64(got), "%d/%d", x, y)
+		}
+	}
+	_, err := Decimal64(1).Div64(0)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 }

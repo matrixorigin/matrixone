@@ -20,9 +20,14 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/stretchr/testify/require"
 )
 
@@ -33,12 +38,24 @@ func TestDecimalFloatComparisonUniqueValue(t *testing.T) {
 	target.Scale = -1
 	cast, err := makePlan2CastExpr(context.Background(), decimal, target)
 	require.NoError(t, err)
-	value, ok := decimalFloatComparisonConstant(cast)
+	value, ok := floatingComparisonConstant(cast)
 	require.True(t, ok)
 	require.Equal(t, float64(12345), value)
 	cast.Typ.Width, cast.Typ.Scale = 3, 1
-	_, ok = decimalFloatComparisonConstant(cast)
+	_, ok = floatingComparisonConstant(cast)
 	require.False(t, ok, "DOUBLE(M,D) rounds before comparison")
+
+	precise, err := makePlan2DecimalExprWithType(context.Background(), "0.00000000000000000003")
+	require.NoError(t, err)
+	preciseCast, err := makePlan2CastExpr(context.Background(), precise, target)
+	require.NoError(t, err)
+	converted, ok := floatingComparisonConstant(preciseCast)
+	require.True(t, ok)
+	require.Equal(t, uint64(0x3be1b578c96db19b), math.Float64bits(converted))
+	for _, expr := range []*Expr{nil, {Typ: makeSimplePlan2Type(types.T_float64), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}, GetColExpr(makeSimplePlan2Type(types.T_float64), 0, 0)} {
+		_, ok := floatingComparisonConstant(expr)
+		require.False(t, ok, "only a known non-NULL constant can prove narrowing")
+	}
 
 	for _, test := range []struct {
 		name   string
@@ -53,6 +70,7 @@ func TestDecimalFloatComparisonUniqueValue(t *testing.T) {
 		{"outside width", 1e11, types.New(types.T_decimal64, 12, 2), false},
 		{"decimal128 collision", 9007199254740992, types.New(types.T_decimal128, 20, 0), false},
 		{"decimal128 ordinary", 54321, types.New(types.T_decimal128, 20, 2), true},
+		{"executor rounding mismatch", 2.9999999999999997e-20, types.New(types.T_decimal128, 20, 20), false},
 		{"infinity", math.Inf(1), types.New(types.T_decimal64, 12, 2), false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -128,7 +146,8 @@ func TestComparisonTypeCastOptimization(t *testing.T) {
 		},
 		// FLOAT vs FLOAT - should optimize
 		{
-			name:           "float32 = float64",
+			name:           "float32 = exactly representable float64",
+			constValue:     float64(0.5),
 			op:             "=",
 			colType:        types.T_float32,
 			constType:      types.T_float64,
@@ -172,6 +191,8 @@ func TestComparisonTypeCastOptimization(t *testing.T) {
 			// Set constant value based on type
 			if tt.constValue != nil {
 				switch v := tt.constValue.(type) {
+				case float64:
+					constExpr.Expr.(*plan.Expr_Lit).Lit.Value = &plan.Literal_Dval{Dval: v}
 				case int64:
 					constExpr.Expr.(*plan.Expr_Lit).Lit.Value = &plan.Literal_I64Val{I64Val: v}
 				case string:
@@ -1706,5 +1727,101 @@ func TestFloatPrecisionCheck(t *testing.T) {
 					tt.description, tt.constValue, tt.colType)
 			}
 		})
+	}
+}
+
+// Materialize the row only after binding. This exercises the actual optimized
+// filter and CAST overload, without folding the column into another literal.
+func TestDecimalFloatOptimizedFilterResults(t *testing.T) {
+	for _, tc := range []struct {
+		name, row, peer     string
+		column              types.Type
+		equal, less, native bool
+	}{
+		{"collision", "9007199254740993", "9.007199254740992e15", types.New(types.T_decimal128, 20, 0), true, false, false},
+		{"off grid", "0.10", "1.04e-1", types.New(types.T_decimal128, 20, 2), false, true, false},
+		{"cast rounding", "0.00000000000000000003", "2.9999999999999997e-20", types.New(types.T_decimal128, 20, 20), false, false, false},
+		{"float32 rounding", "0.1", "1e-1", types.T_float32.ToType(), false, false, false},
+		{"float32 expression", "16777216", "abs(cast(16777217 as signed))", types.T_float32.ToType(), false, true, false},
+		{"bounded float", "1.3", "1.25e0", types.New(types.T_float32, 4, 1), false, false, false},
+		{"bounded double", "1.3", "1.25e0", types.New(types.T_float64, 4, 1), false, false, true},
+		{"float32 exact", "0.5", "5e-1", types.T_float32.ToType(), true, false, true},
+		{"safe native", "0.10", "1e-1", types.New(types.T_decimal64, 12, 2), true, false, true},
+	} {
+		for _, predicate := range []struct {
+			sql  string
+			want bool
+		}{
+			{"c = " + tc.peer, tc.equal}, {"c <> " + tc.peer, !tc.equal},
+			{"c < " + tc.peer, tc.less}, {"c >= " + tc.peer, !tc.less},
+			{tc.peer + " < c", !tc.less && !tc.equal},
+			{"c <= " + tc.peer, tc.less || tc.equal},
+			{"c in (" + tc.peer + ", -9e20)", tc.equal},
+			{"c between " + tc.peer + " and " + tc.peer, tc.equal},
+		} {
+			t.Run(tc.name+"/"+predicate.sql, func(t *testing.T) {
+				mock := NewMockOptimizer(false)
+				table := makeExprOptCompositeSortKeyTableDef()
+				table.Name, table.TblId = "decimal_float_filter", 99193
+				table.Cols[2].Typ = makePlan2Type(&tc.column)
+				mock.ctxt.tables[table.Name] = table
+				mock.ctxt.objects[table.Name] = &ObjectRef{ObjName: table.Name, Obj: int64(table.TblId)}
+				stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select c from decimal_float_filter where "+predicate.sql, 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				query, err := mock.Optimize(stmt)
+				require.NoError(t, err)
+				proc := mock.ctxt.GetProcess()
+				input := batch.NewWithSize(1)
+				input.Vecs[0] = vector.NewVec(tc.column)
+				defer input.Clean(proc.Mp())
+				if tc.column.Oid == types.T_float32 {
+					value, err := strconv.ParseFloat(tc.row, 32)
+					require.NoError(t, err)
+					require.NoError(t, vector.AppendFixed(input.Vecs[0], float32(value), false, proc.Mp()))
+				} else if tc.column.Oid == types.T_float64 {
+					value, err := strconv.ParseFloat(tc.row, 64)
+					require.NoError(t, err)
+					require.NoError(t, vector.AppendFixed(input.Vecs[0], value, false, proc.Mp()))
+				} else if tc.column.Oid == types.T_decimal64 {
+					value, err := types.ParseDecimal64(tc.row, tc.column.Width, tc.column.Scale)
+					require.NoError(t, err)
+					require.NoError(t, vector.AppendFixed(input.Vecs[0], value, false, proc.Mp()))
+				} else {
+					value, err := types.ParseDecimal128(tc.row, tc.column.Width, tc.column.Scale)
+					require.NoError(t, err)
+					require.NoError(t, vector.AppendFixed(input.Vecs[0], value, false, proc.Mp()))
+				}
+				input.SetRowCount(1)
+				found, got, columnCast := false, true, false
+				for _, node := range query.Nodes {
+					if node.NodeType != plan.Node_TABLE_SCAN {
+						continue
+					}
+					for _, filter := range node.FilterList {
+						found = true
+						expr := DeepCopyExpr(filter)
+						require.NoError(t, plan.VisitExprTree(expr, func(e *Expr) error {
+							if fn := e.GetF(); fn != nil && fn.Func.ObjName == "cast" && fn.Args[0].GetCol() != nil {
+								columnCast = true
+							}
+							if col := e.GetCol(); col != nil {
+								col.RelPos, col.ColPos = 0, 0
+							}
+							return nil
+						}))
+						result, free, err := colexec.GetReadonlyResultFromExpression(proc, expr, []*batch.Batch{input})
+						require.NoError(t, err)
+						got = got && vector.GetFixedAtNoTypeCheck[bool](result, 0)
+						free()
+					}
+				}
+				require.True(t, found, query.String())
+				require.Equal(t, predicate.want, got, query.String())
+				if predicate.sql == "c = "+tc.peer {
+					require.Equal(t, !tc.native, columnCast)
+				}
+			})
+		}
 	}
 }
