@@ -17,6 +17,7 @@ package embed
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -615,8 +616,7 @@ func waitBasicClusterTaskServices(ctx context.Context, c Cluster, cnCount int) e
 				"CN %s does not expose its task service", svc.ServiceID())
 		}
 		if err := waitTaskServiceReady(ctx, getter, basicClusterServiceStartupRetryInterval); err != nil {
-			return moerr.NewInternalErrorf(
-				ctx, "CN %s task service did not become ready: %v", svc.ServiceID(), err)
+			return fmt.Errorf("CN %s task service did not become ready: %w", svc.ServiceID(), err)
 		}
 	}
 	return nil
@@ -628,8 +628,20 @@ func waitTaskServiceReady(
 	retryInterval time.Duration,
 ) error {
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if service, ok := getter.GetTaskService(); ok && service != nil {
-			return nil
+			// Holder publication does not imply backing storage availability.
+			// Ping also succeeds with no store; a bounded read observes the real
+			// boundary and requests refresh without retrying any business write.
+			_, err := service.QueryDaemonTask(ctx, taskservice.WithTaskIDCond(taskservice.EQ, 0))
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if err == nil || !errors.Is(err, taskservice.ErrNotReady) {
+				return err
+			}
 		}
 		if err := waitStartupRetry(ctx, retryInterval); err != nil {
 			return err
