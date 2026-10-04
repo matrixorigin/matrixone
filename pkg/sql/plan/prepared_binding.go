@@ -227,9 +227,13 @@ func bindPreparedIntegerInValue(ctx context.Context, column, source *Expr) (*Exp
 		return source, false, nil
 	}
 	target := types.T(column.Typ.Id)
+	// A signed source remains a signed marker here. Reject unsupported domains
+	// before the linear lookup; the binding still owns positive admission.
+	if !types.T(source.Typ.Id).IsSignedInt() || !target.IsSignedInt() || target.TypeLen() > 4 {
+		return source, false, nil
+	}
 	binding, ok := state.bindingForPosition(source.GetP().Pos)
-	if !ok || !target.IsSignedInt() || target.TypeLen() > 4 ||
-		!binding.Type.Oid.IsSignedInt() || binding.Type.Oid.TypeLen() <= target.TypeLen() {
+	if !ok || !binding.Type.Oid.IsSignedInt() || binding.Type.Oid.TypeLen() <= target.TypeLen() {
 		return source, false, nil
 	}
 	wasValueDependent := state.valueDependent

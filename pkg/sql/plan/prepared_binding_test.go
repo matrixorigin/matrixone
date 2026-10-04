@@ -682,6 +682,45 @@ func TestPreparedSignedKeyGuardPreservesOtherDependencies(t *testing.T) {
 	}
 }
 
+func TestPreparedIntegerInAdmissionRejectsUnsupportedDomains(t *testing.T) {
+	for _, tc := range []struct {
+		source, binding, target types.T
+		position                int32
+	}{
+		{types.T_text, types.T_text, types.T_int32, 0},
+		{types.T_float64, types.T_float64, types.T_int32, 0},
+		{types.T_uint64, types.T_uint64, types.T_int32, 0},
+		{types.T_any, types.T_any, types.T_int32, 0},
+		{types.T_int64, types.T_int64, types.T_int64, 0},
+		{types.T_int64, types.T_int64, types.T_uint32, 0},
+		{types.T_int64, types.T_int64, types.T_float64, 0},
+		// A signed expression cannot authorize a different source binding.
+		{types.T_int64, types.T_uint64, types.T_int32, 0},
+		{types.T_int64, types.T_int32, types.T_int32, 0},
+		{types.T_int64, types.T_int64, types.T_int32, 1},
+	} {
+		t.Run(fmt.Sprintf("%s/%s/%s/pos%d", tc.source, tc.binding, tc.target, tc.position), func(t *testing.T) {
+			ctx := withPreparedSourceBindings(context.Background(),
+				[]PreparedSourceBinding{{Position: 0, Type: tc.binding.ToType()}}, []any{int64(7)})
+			state := preparedBindingState(ctx)
+			state.selectStatement, state.valueDependent = true, true
+			param, err := bindPreparedSource(ctx, 1)
+			require.NoError(t, err)
+			if tc.source != tc.binding {
+				param.Typ = makeSimplePlan2Type(tc.source)
+			}
+			param.GetP().Pos = tc.position
+			column := &Expr{Typ: makeSimplePlan2Type(tc.target), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}
+			result, admitted, err := bindPreparedIntegerInValue(ctx, column, param)
+			require.NoError(t, err)
+			require.False(t, admitted)
+			require.Same(t, param, result)
+			require.True(t, state.valueDependent)
+			require.Empty(t, state.diagnosticCandidates)
+		})
+	}
+}
+
 func TestPreparedSourceBindingConfigurationConsumers(t *testing.T) {
 	t.Run("geometry SRID", func(t *testing.T) {
 		mock := NewMockOptimizer(false)
