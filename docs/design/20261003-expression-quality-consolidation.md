@@ -438,3 +438,43 @@ additions. They establish a local test-body improvement, not query or whole-CI
 speedup. Two additional private mutations independently omit the left/right
 D256 admission predicate; each is rejected in VV/SV/VS, while both 41-case
 real/cloned controls pass.
+
+## 2026-10-04: full-scale alignment and current-main validation
+
+The Decimal256 alignment defect found during consolidation is tracked in
+[#29607](https://github.com/matrixorigin/matrixone/issues/29607). All eight fused
+vector Add/Sub preparations now preserve the complete exponent and reuse checked
+chunked multiplication beyond 38. Modulo narrowing proves both coefficient fit
+and the bounded scale domain, retaining generic intermediate-overflow recovery.
+The common one/two-factor paths, NULL ordering, error contracts and scalar paths
+remain intact. The four previously failing scale39 result cases now pass.
+
+The fix retains 112 original arithmetic table rows with unchanged inputs and
+oracles. New cells cover signed wide alignment, the remaining vector branches,
+masked overflow, modulo shapes/zero continuation and late-chunk failure. The
+real planner/executor checks bound operand scales, exact coefficients, NULLs and
+metadata. SQL BVT shares three rows across grouped operator checks and includes
+precision65 success/error, continuation and table teardown. Four private wrong
+implementations are rejected by their intended tests.
+
+The branch was rebased onto main `3eab55f2ab`, including the merged #29595
+corrections for #29592–#29594. Decimal64 rebase conflicts preserve all 15 main
+boundary rows. Existing exact downscale and diagnostic oracles share the current
+scale table; failures additionally assert that the original operand is retained.
+The five separately reviewed alignment-fix files are byte-identical across rebase.
+
+On this rebased source, complete types/function/plan normal tests pass, as do
+complete types/function race tests, including the former #29592 failure. The
+exact SQL BVT passes twice on one ready, test-owned CN: 33 checks per run, zero
+ignored/abnormal checks, metadata comparison and zero-residue teardown. CN/TN
+memory caches are configured at 32MB; Java uses a 256MB heap ceiling. Final
+incremental static validation passes for the three changed Go package closures:
+vet, molint and configured incremental lint all exit zero.
+
+Pre-rebase matched measurements of the unchanged alignment owners cover 96
+Add/Sub and 32 modulo cases, three samples per implementation, with zero Go
+allocations and no material common-path regression. These measurements do not
+establish whole-query, complete-package CPU or whole-CI improvements. Earlier
+failed race evidence is retained as historical evidence; its gate is closed by
+validation of the corrected dependency, rather than by repeating the old code.
+The wider #29249 task remains ongoing.
