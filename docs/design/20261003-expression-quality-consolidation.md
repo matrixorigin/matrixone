@@ -271,3 +271,56 @@ initial broad selector accidentally included eight unmeasured wide tests; that
 pair is uncredited. Six corrected exact-scope runs reuse the same built binary.
 These focused results do not clear the failed/unwaived full function race gate
 under #29592. This checkpoint remains local; #29249 is an ongoing task.
+
+### Decimal Add/Sub consolidation — local work in progress
+
+Starting at `a7033da65d`, the six existing batch-kernel owners use independent
+literal coefficients, complete NULL bitmaps and required error codes. Alias
+bindings, helper indices, singleton decimal-minus-integer Format oracles and
+wrapper error translation retain separate owners. The six scalar Decimal64
+method cases move intact into the existing types owner. Thirteen duplicate
+batch-test owners, two mixed-owner children and their exclusive reference/data
+helpers retire. Shared helper and benchmark consumers remain.
+
+NULL witnesses preserve the intended scaling admission: fast-path masked
+coefficients stay within the prescan domain; separate checked-scaling cases
+verify suppressed overflow and continuation. Scaling helper tests now compare
+full signed coefficients. The error-mapping test registers cleanup immediately
+after each allocation and checks both memory accounts after release.
+
+The canonical tables contain 143 calls and 381 logical positions, excluding
+retained/helper owners. Cost measurement below covers the mapped fast-file owners.
+The normal candidate executes 139 passing cases and four separately failing
+scale-39 vector-upscaling cases. The latter are correct-result expectations,
+not expected-panic tests. Actual SQL parsing, planning and expression execution
+also reproduce this defect; this is not full-server BVT evidence.
+
+The promoted sources pass the types package and the function package excluding
+those four independently recorded failures. Focused race passes 14 owners and
+192 subtests, with the same four known failures excluded and recorded separately.
+Scoped vet and incremental lint pass (0 new lint issues); molint exits zero with
+two byte-identical baseline unsafe-import diagnostics. Comment cleanup changes
+no executable text. Three private producer variants (zeroed scaling result,
+wrong error class, first-row-only admission) survive the selected old tests;
+the strengthened tests reject all three with 14 runtime assertion failures.
+Both normal control groups pass for every variant. This evidence covers these
+three counterexamples, not exhaustive correctness. Final gpt-6.1-sol xhigh
+read-only review found no additional defects or checkpoint blockers and accepted
+only an explicitly known-red local checkpoint. The scale-39 production defect
+and full-function race gate #29592 are unresolved. This work is local and is
+neither a green delivery nor completion of #29249.
+
+Three alternating same-binary pairs measure 23 original versus 10 current
+fast-file owners, using untouched production arithmetic. Test-body median wall
+8.360ms -> 2.189ms, process CPU 8.856ms -> 2.679ms, Go TotalAlloc 1,217,176 ->
+516,360 bytes and allocations 29,157 -> 6,512. The mapped scope includes unchanged
+mixed NULL/downscale siblings on both sides; moved types rows, wrapper cleanup
+and unchanged alias/Format owners are outside this measurement. Four new known-red
+scale-39 literals are omitted only from the diagnostic snapshot; their formal
+regressions remain unchanged and failed. This is a passing-closure cost comparison,
+not evidence that all new tests pass. CPU includes background threads; allocation
+excludes native memory/RSS; build/link/init/queue are outside the measured bodies.
+Root-body measurements include child test-harness work and verbose output.
+An initial unequal-filter run and a subsequent equal-filter run are uncredited:
+Go 1.26.4 testdeps caches one regex, so alternating run/skip patterns recompiles
+regexes and distorts test-body cost. The final comparison has no skip filter.

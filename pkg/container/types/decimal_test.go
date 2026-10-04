@@ -809,6 +809,35 @@ func TestDecimal64AddSub(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, Decimal64(9223372036854775809), result) // -(2^63-1) in two's complement.
 	require.Equal(t, int32(10), scale)
+
+	tests := []struct {
+		name  string
+		x, y  Decimal64
+		isSub bool
+		want  Decimal64
+	}{
+		{"simple add", Decimal64(100), Decimal64(200), false, Decimal64(300)},
+		{"simple sub", Decimal64(300), Decimal64(100), true, Decimal64(200)},
+		{"add negative", Decimal64(100), Decimal64(^uint64(100) + 1), false, Decimal64(0)},
+		{"sub negative (add)", Decimal64(100), Decimal64(^uint64(100) + 1), true, Decimal64(200)},
+		{"zero + zero", Decimal64(0), Decimal64(0), false, Decimal64(0)},
+		{"large values", Decimal64(999999999999999), Decimal64(1), false, Decimal64(1000000000000000)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got Decimal64
+			var err error
+			if tt.isSub {
+				got, err = tt.x.Sub64(tt.y)
+			} else {
+				got, err = tt.x.Add64(tt.y)
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got, "d64 op(%d, %d, sub=%v)", tt.x, tt.y, tt.isSub)
+		})
+	}
+
 }
 func TestDecimal128AddSub(t *testing.T) {
 	left := Decimal128{B0_63: 0x4000000000000000, B64_127: 0x2000000000000000}
