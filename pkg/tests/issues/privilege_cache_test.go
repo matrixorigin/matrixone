@@ -59,21 +59,29 @@ func TestPrivilegeCacheTracksRemoteCatalogChanges(t *testing.T) {
 		} {
 			mustExec(t, ctx, owner, stmt)
 		}
-		reader := open(1, "auth_cache#learner#reader")
-		mustExec(t, ctx, reader, "set enable_privilege_cache=on")
-		mustExec(t, ctx, reader, "prepare cached_read from 'select id from app.t where id=1'")
-		prepared, err := reader.PrepareContext(ctx, "select id from app.t where id=?")
+		// Each protocol owns a distinct session cache: one query must not refresh
+		// another protocol's cache and hide a missing execution-time check.
+		readers := []*sql.Conn{open(1, "auth_cache#learner#reader"), open(1, "auth_cache#learner#reader"), open(1, "auth_cache#learner#reader")}
+		allReadersExec := func(stmt string) {
+			t.Helper()
+			for _, reader := range readers {
+				mustExec(t, ctx, reader, stmt)
+			}
+		}
+		allReadersExec("set enable_privilege_cache=on")
+		mustExec(t, ctx, readers[1], "prepare cached_read from 'select id from app.t where id=1'")
+		prepared, err := readers[2].PrepareContext(ctx, "select id from app.t where id=?")
 		require.NoError(t, err)
 		defer prepared.Close()
 		check := func(allowed bool) {
 			t.Helper()
 			var got int
-			for _, query := range []string{"select id from app.t where id=1", "execute cached_read", "binary"} {
+			for i, query := range []string{"select id from app.t where id=1", "execute cached_read", "binary"} {
 				var row *sql.Row
 				if query == "binary" {
 					row = prepared.QueryRowContext(ctx, 1)
 				} else {
-					row = reader.QueryRowContext(ctx, query)
+					row = readers[i].QueryRowContext(ctx, query)
 				}
 				err := row.Scan(&got)
 				if allowed {
@@ -104,20 +112,20 @@ func TestPrivilegeCacheTracksRemoteCatalogChanges(t *testing.T) {
 		current, _, err = eng.GetPrivilegeCacheVersion(canceled, account, timestamp.Timestamp{})
 		require.ErrorIs(t, err, context.Canceled)
 		require.True(t, current == (disttae.PrivilegeCacheVersion{}))
-		mustExec(t, ctx, reader, "begin")
+		allReadersExec("begin")
 		check(true)
 		mustExec(t, ctx, owner, "revoke select on table app.t from reader")
 		check(false)
-		mustExec(t, ctx, reader, "rollback")
+		allReadersExec("rollback")
 		mustExec(t, ctx, owner, "grant select on table app.t to reader")
 		check(true)
 		mustExec(t, ctx, owner, "revoke reader from learner")
 		check(false)
 		mustExec(t, ctx, owner, "grant reader to learner")
 		check(true)
-		mustExec(t, ctx, reader, "set role public")
+		allReadersExec("set role public")
 		check(false)
-		mustExec(t, ctx, reader, "set role reader")
+		allReadersExec("set role reader")
 		check(true)
 		mustExec(t, ctx, owner, "drop table app.t")
 		mustExec(t, ctx, owner, "create table app.t(id int primary key)")
@@ -126,7 +134,7 @@ func TestPrivilegeCacheTracksRemoteCatalogChanges(t *testing.T) {
 		mustExec(t, ctx, owner, "grant select on table app.t to reader")
 		check(true)
 		for _, setting := range []string{"set clear_privilege_cache=on", "set enable_privilege_cache=off", "set enable_privilege_cache=on"} {
-			mustExec(t, ctx, reader, setting)
+			allReadersExec(setting)
 			check(true)
 		}
 	})
