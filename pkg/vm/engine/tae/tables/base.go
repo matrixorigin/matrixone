@@ -161,9 +161,30 @@ func (obj *baseObject) buildMetalocation(bid uint16) (objectio.Location, error) 
 }
 
 func (obj *baseObject) LoadPersistedCommitTS(bid uint16) (vec containers.Vector, err error) {
-	if !obj.meta.Load().IsAppendable() {
-		panic("not support")
+	return obj.loadPersistedCommitTS(context.Background(), bid)
+}
+
+func (obj *baseObject) LoadPersistedMVCC(
+	bid uint16,
+) (commitTS, abort containers.Vector, err error) {
+	return obj.loadPersistedMVCC(context.Background(), bid)
+}
+
+func (obj *baseObject) loadPersistedCommitTS(
+	ctx context.Context,
+	bid uint16,
+) (vec containers.Vector, err error) {
+	vec, abort, err := obj.loadPersistedMVCC(ctx, bid)
+	if abort != nil {
+		abort.Close()
 	}
+	return vec, err
+}
+
+func (obj *baseObject) loadPersistedMVCC(
+	ctx context.Context,
+	bid uint16,
+) (commitTS, abort containers.Vector, err error) {
 	location, err := obj.buildMetalocation(bid)
 	if err != nil {
 		return
@@ -171,12 +192,14 @@ func (obj *baseObject) LoadPersistedCommitTS(bid uint16) (vec containers.Vector,
 	if location.IsEmpty() {
 		return
 	}
-	//Extend lifetime of vectors is without the function.
-	//need to copy. closeFunc will be nil.
+	// needCopy=true is the ownership boundary here: LoadColumns2 clones the
+	// column into the transient pool and releases the source IOVector (including
+	// its CachedData) before returning. The release callback is therefore nil;
+	// the caller owns and must close the returned vector.
 	vectors, _, err := ioutil.LoadColumns2(
-		context.Background(),
-		[]uint16{objectio.SEQNUM_COMMITTS},
-		nil,
+		ctx,
+		[]uint16{objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT},
+		[]types.Type{types.T_TS.ToType(), types.T_bool.ToType()},
 		obj.rt.Fs,
 		location,
 		fileservice.Policy(0),
@@ -186,11 +209,42 @@ func (obj *baseObject) LoadPersistedCommitTS(bid uint16) (vec containers.Vector,
 	if err != nil {
 		return
 	}
-	if vectors[0].GetType().Oid != types.T_TS {
-		panic(fmt.Sprintf("%s: bad commits layout", obj.meta.Load().ID().String()))
+	if len(vectors) != 2 ||
+		vectors[0] == nil || vectors[0].GetType().Oid != types.T_TS ||
+		vectors[1] == nil || vectors[1].GetType().Oid != types.T_bool ||
+		vectors[0].Length() != vectors[1].Length() {
+		for _, vec := range vectors {
+			if vec != nil {
+				vec.Close()
+			}
+		}
+		err = moerr.NewInternalErrorNoCtxf(
+			"invalid persisted MVCC columns for object %s",
+			obj.meta.Load().ID().String(),
+		)
+		return
 	}
-	vec = vectors[0]
-	return
+	return vectors[0], vectors[1], nil
+}
+
+func validatePersistedCommitTSVectors(
+	objectID string,
+	vectors []containers.Vector,
+) (containers.Vector, error) {
+	if len(vectors) == 1 &&
+		vectors[0] != nil &&
+		vectors[0].GetType().Oid == types.T_TS {
+		return vectors[0], nil
+	}
+	for _, vector := range vectors {
+		if vector != nil {
+			vector.Close()
+		}
+	}
+	return nil, moerr.NewInternalErrorNoCtxf(
+		"%s: bad commits layout",
+		objectID,
+	)
 }
 
 // func (obj *baseObject) LoadPersistedColumnData(
@@ -247,7 +301,7 @@ func (obj *baseObject) getDuplicateRowsWithLoad(
 	sels *nulls.Bitmap,
 	rowIDs containers.Vector,
 	blkOffset uint16,
-	isAblk bool,
+	filterByCommitTS bool,
 	from, to types.TS,
 	mp *mpool.MPool,
 ) (err error) {
@@ -267,14 +321,20 @@ func (obj *baseObject) getDuplicateRowsWithLoad(
 	defer data.Close()
 	blkID := objectio.NewBlockidWithObjectID(obj.meta.Load().ID(), blkOffset)
 	var dedupFn any
-	if isAblk {
+	if filterByCommitTS {
+		loader := &commitTSLoader{
+			load: func() (containers.Vector, containers.Vector, error) {
+				return obj.loadPersistedMVCC(ctx, blkOffset)
+			},
+		}
+		defer loader.close()
 		dedupFn = containers.MakeForeachVectorOp(
 			keys.GetType().Oid,
 			getRowIDAlkFunctions,
 			data.Vecs[0], //
 			rowIDs,
 			blkID,
-			obj.LoadPersistedCommitTS,
+			loader,
 			txn,
 			from, to,
 		)
@@ -324,7 +384,7 @@ func (obj *baseObject) containsWithLoad(
 	var dedupFn any
 	if isAblk {
 		dedupFn = containers.MakeForeachVectorOp(
-			keys.GetType().Oid, containsAlkFunctions, data.Vecs[0], keys, obj.LoadPersistedCommitTS, txn,
+			keys.GetType().Oid, containsAlkFunctions, data.Vecs[0], keys, obj.LoadPersistedMVCC, txn,
 			func(vrowID any, commitTS types.TS) (types.TS, error) {
 				rowID := vrowID.(types.Rowid)
 				blkID := rowID.BorrowBlockID()
@@ -381,7 +441,7 @@ func (obj *baseObject) persistedGetDuplicatedRows(
 	keys containers.Vector,
 	keysZM index.ZM,
 	rowIDs containers.Vector,
-	isAblk bool,
+	filterByCommitTS bool,
 	mp *mpool.MPool,
 ) (err error) {
 	pkIndex, err := MakeImmuIndex(
@@ -406,7 +466,7 @@ func (obj *baseObject) persistedGetDuplicatedRows(
 			continue
 		}
 		err = obj.getDuplicateRowsWithLoad(
-			ctx, txn, keys, sels, rowIDs, uint16(i), isAblk, from, to, mp)
+			ctx, txn, keys, sels, rowIDs, uint16(i), filterByCommitTS, from, to, mp)
 		if err != nil {
 			return err
 		}

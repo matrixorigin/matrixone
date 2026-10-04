@@ -96,6 +96,27 @@ func execInFrontendInBack(backSes *backSession,
 		if err = handleCallProcedure(backSes, execCtx, st, true); err != nil {
 			return
 		}
+	case *tree.PrepareStmt:
+		if backSes.upstream == nil {
+			return moerr.NewInternalError(execCtx.reqCtx, "prepare in background exec requires an upstream session")
+		}
+		execCtx.prepareStmt, err = doPrepareStmtInSession(
+			execCtx, backSes.upstream, backSes, st, execCtx.sqlOfStmt, execCtx.executeParamTypes)
+	case *tree.PrepareString:
+		if backSes.upstream == nil {
+			return moerr.NewInternalError(execCtx.reqCtx, "prepare in background exec requires an upstream session")
+		}
+		execCtx.prepareStmt, err = doPrepareStringInSession(backSes.upstream, backSes, execCtx, st)
+	case *tree.PrepareVar:
+		if backSes.upstream == nil {
+			return moerr.NewInternalError(execCtx.reqCtx, "prepare in background exec requires an upstream session")
+		}
+		execCtx.prepareStmt, err = doPrepareVarInSession(backSes.upstream, backSes, execCtx, st)
+	case *tree.Deallocate:
+		if backSes.upstream == nil {
+			return moerr.NewInternalError(execCtx.reqCtx, "deallocate in background exec requires an upstream session")
+		}
+		err = doDeallocateInSession(backSes.upstream, backSes, execCtx, st)
 	default:
 		return moerr.NewInternalErrorf(execCtx.reqCtx, "backExec does not support %s", execCtx.sqlOfStmt)
 	}

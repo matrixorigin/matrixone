@@ -9,8 +9,8 @@ select json_extract(@stats, '$[6]') val;
 select CAST(mo_cu(@stats, @duration) AS DECIMAL(32,6)) as cu, CAST(mo_cu(@stats, @duration, "total") AS DECIMAL(32,6)) cu_total, CAST(mo_cu(@stats, @duration, "cpu") AS DECIMAL(32,6)) cu_cpu, CAST(mo_cu(@stats, @duration, "mem") AS DECIMAL(32,6)) cu_mem, CAST(mo_cu(@stats, @duration, "ioin") AS DECIMAL(32,6)) cu_ioin, CAST(mo_cu(@stats, @duration, "ioout") AS DECIMAL(32,6)) cu_ioout, CAST(mo_cu(@stats, @duration, "network") AS DECIMAL(32,6)) cu_network;
 select CAST(JSON_UNQUOTE(JSON_EXTRACT(@stats, '$[1]')) * 3.45e-14 / 1.002678e-06  AS DECIMAL(32,6)) - CAST(mo_cu(@stats, @duration, "cpu") AS DECIMAL(32,6)) val;
 select CAST(JSON_UNQUOTE(JSON_EXTRACT(@stats, '$[2]')) * 4.56e-24 * @duration / 1.002678e-06 AS DECIMAL(32,6)) - CAST(mo_cu(@stats, @duration, "mem") AS DECIMAL(32,6)) val;
-select mo_cu('[1,1,2,3,4,5,0,0]', 0) val;
-select mo_cu('[3,1,2,3,4,5,0,0]', 0) val;
+select mo_cu('[1,1,2,3,4]', 0) val;
+select mo_cu('[3,1,2,3,4,5,0]', 0) val;
 -- old version, value: 0
 select mo_cu('[4,1,2,3,4,5,6,7,8]', 0, 'iodelete') val;
 select mo_cu('[4,1,2,3,4,5,6,7,8]', 0, 'iolist') val;
@@ -26,3 +26,11 @@ select CAST(mo_cu('[5,1,2,3,4,5,6,7,8,1,2]', 0, 'iodelete') AS DECIMAL(32,4)) va
 select CAST(mo_cu('[5,1,2,0.000122,4,5,6,7,8,1,2]', 0, 'ioin') AS DECIMAL(32,4)) val;
 select CAST(mo_cu('[5,1,2,0.000122,4,5,6,7,8,0,0]', 0, 'ioin') AS DECIMAL(32,4)) val;
 select CAST(mo_cu('[5,1,2,0.000244,4,5,6,7,8,0,0]', 0, 'ioin') AS DECIMAL(32,4)) val;
+
+-- v6 stores the terminal CU. Component pricing remains available only for a
+-- single statement; aggregated rows cannot be decomposed or repriced safely.
+set @stats_v6='[6,100,200,3,4,5,2,6,123.5,7,8,0,9,10,11,12,2]';
+set @stats_v5='[5,100,200,3,4,5,2,6,123.5,7,8]';
+select mo_cu(@stats_v6, 999) = 123.5 stored_total_ok, mo_cu(@stats_v6, 999, 'cpu') = mo_cu(@stats_v5, 999, 'cpu') component_ok, mo_cu_v1(@stats_v6, 999) = mo_cu_v1(@stats_v5, 999) repricing_ok;
+set @stats_v6_aggregated='[6,100,200,3,4,5,2,6,123.5,7,8,128,9,10,11,12,2]';
+select mo_cu(@stats_v6_aggregated, 999) = 123.5 stored_total_ok, mo_cu(@stats_v6_aggregated, 999, 'cpu') is null component_blocked, mo_cu_v1(@stats_v6_aggregated, 999) is null repricing_blocked;

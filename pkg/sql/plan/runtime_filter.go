@@ -16,8 +16,10 @@ package plan
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
@@ -79,7 +81,7 @@ func analyzeRuntimeFilterJoinPolicy(node *plan.Node) runtimeFilterJoinPolicy {
 	}
 
 	switch node.JoinType {
-	case plan.Node_LEFT, plan.Node_OUTER, plan.Node_MARK:
+	case plan.Node_LEFT, plan.Node_OUTER, plan.Node_MARK, plan.Node_ASOF, plan.Node_ASOF_LEFT:
 		return runtimeFilterJoinPolicy{}
 
 	case plan.Node_SINGLE:
@@ -125,7 +127,7 @@ func (builder *QueryBuilder) canSatisfyRuntimeFilterDelivery(node *plan.Node, po
 	return builder.optimizerHints == nil || builder.optimizerHints.forceOneCN == 0
 }
 
-func rightSingleLocalDeliveryIsSafe(node, build *plan.Node, upperLimit int32) bool {
+func (builder *QueryBuilder) rightSingleLocalDeliveryIsSafe(node, build *plan.Node, upperLimit int32) bool {
 	if node.JoinType != plan.Node_SINGLE {
 		return true
 	}
@@ -133,10 +135,17 @@ func rightSingleLocalDeliveryIsSafe(node, build *plan.Node, upperLimit int32) bo
 		return false
 	}
 	// DefaultStats is an unavailable-statistics sentinel, not evidence that the
-	// complete build contains 1,000 rows.  Treating it as an exact upper bound
-	// can serialize an arbitrarily large scan only for hashbuild to send PASS.
+	// complete build contains 1,000 rows.  It is still safe to let HashBuild
+	// decide IN versus PASS at runtime when the query would already execute on a
+	// single CN: local delivery then adds no placement downgrade, while the
+	// runtime upper limit bounds the optional exact-key collection.  Keep forced
+	// multi-CN diagnostics and naturally distributed plans on the old fallback.
 	if IsDefaultStats(build.Stats) {
-		return false
+		if builder == nil || builder.qry == nil ||
+			(builder.optimizerHints != nil && builder.optimizerHints.execType == 3) {
+			return false
+		}
+		return GetExecType(builder.qry, false, false) != ExecTypeAP_MULTICN
 	}
 	// LOCAL_COLOCATED applies to the whole preserved/build subtree. Phase 1
 	// accepts only a direct scan whose full table cardinality and filtered
@@ -147,12 +156,338 @@ func rightSingleLocalDeliveryIsSafe(node, build *plan.Node, upperLimit int32) bo
 	return build.Stats.Outcnt <= limit && build.Stats.TableCnt <= limit
 }
 
+func localProtocolEnablesVersionedExactKeyContract(sid string) bool {
+	// MOProtocolVersion is a service-local compatibility gate written by the
+	// deployment control plane. This helper does not discover peers or infer
+	// their capabilities. Deployment orchestration is responsible for raising
+	// participating services consistently after rollout, and for draining v8
+	// work before lowering the gate and reintroducing older participants.
+	rt := runtime.ServiceRuntime(sid)
+	if rt == nil {
+		return false
+	}
+	value, ok := rt.GetGlobalVariables(runtime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	version, ok := value.(int64)
+	return ok && version >= defines.MORPCVersion8
+}
+
+func localProtocolEnablesSortedMembershipFilter(sid string) bool {
+	rt := runtime.ServiceRuntime(sid)
+	if rt == nil {
+		return false
+	}
+	value, ok := rt.GetGlobalVariables(runtime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	version, ok := value.(int64)
+	return ok && version >= defines.MORPCVersion10
+}
+
+func (builder *QueryBuilder) exactRuntimeFilterPlanEncoding(
+	probeType, buildType types.Type,
+	matchPrefix bool,
+) (keycodec.ExactRuntimeFilterEncoding, bool) {
+	encoding := keycodec.ExactRuntimeFilterEncodingForPair(probeType, buildType)
+	if encoding == keycodec.ExactRuntimeFilterUnsupported {
+		return encoding, false
+	}
+	if (encoding != keycodec.ExactRuntimeFilterRaw ||
+		!keycodec.LegacyExactRawProducerSafe(buildType.Oid)) &&
+		!localProtocolEnablesVersionedExactKeyContract(
+			builder.compCtx.GetProcess().GetService(),
+		) {
+		// Only metadata-independent raw types can keep their exact filters below
+		// v8. Metadata-dependent contracts, new closures, and types without a
+		// legacy consumer executor remain disabled until rollout completes.
+		// Guarded BuildExpr still makes an unexpected older producer fail open.
+		return keycodec.ExactRuntimeFilterUnsupported, false
+	}
+	filterFunction := function.InFunctionName
+	if matchPrefix {
+		filterFunction = function.PrefixInFunctionName
+	}
+	if _, err := function.GetFunctionByName(
+		builder.GetContext(), filterFunction, []types.Type{probeType, probeType}); err != nil {
+		return keycodec.ExactRuntimeFilterUnsupported, false
+	}
+	return encoding, true
+}
+
+// makeExactRuntimeFilterPair is the single construction boundary for vector-
+// backed exact runtime filters. Both specs must be published together, and
+// unsupported contracts must leave no consumer dependency, placement
+// constraint, or optimistic selectivity behind.
+func (builder *QueryBuilder) makeExactRuntimeFilterPair(
+	tag int32,
+	matchPrefix bool,
+	upperLimit int32,
+	probeExpr, buildExpr *plan.Expr,
+	notOnPk bool,
+) (probeSpec, buildSpec *plan.RuntimeFilterSpec, ok bool) {
+	if probeExpr == nil || probeExpr.GetCol() == nil ||
+		buildExpr == nil || buildExpr.GetCol() == nil ||
+		buildExpr.GetCol().ColPos < 0 {
+		// Scan consumers require a column probe. Function/composite build
+		// payloads require a separate codec-and-component contract; validating
+		// only their final VARCHAR type would admit false negatives for decimal
+		// scale, floating signed zero, and other non-raw equality domains.
+		return nil, nil, false
+	}
+	encoding, ok := builder.exactRuntimeFilterPlanEncoding(
+		makeTypeByPlan2Expr(probeExpr),
+		makeTypeByPlan2Expr(buildExpr),
+		matchPrefix,
+	)
+	if !ok {
+		return nil, nil, false
+	}
+
+	probeSpec = MakeRuntimeFilter(
+		tag, matchPrefix, 0, DeepCopyExpr(probeExpr), notOnPk)
+	buildSpec = MakeRuntimeFilter(
+		tag, matchPrefix, upperLimit, DeepCopyExpr(buildExpr), notOnPk)
+	buildSpec.BuildExpr = DeepCopyExpr(buildSpec.Expr)
+	buildSpec.ProbeType = DeepCopyType(&probeExpr.Typ)
+	switch encoding {
+	case keycodec.ExactRuntimeFilterRaw:
+		// Metadata-independent RAW_V1 needs no producer-side transformation.
+		// Below v8, retain an identical legacy expression only for types whose
+		// old producer and consumer contracts are both safe. Once rollout
+		// completes, publish only BuildExpr so compatibility metadata does not
+		// permanently inflate every exact-filter plan.
+		if !keycodec.LegacyExactRawProducerSafe(
+			types.T(buildExpr.Typ.Id),
+		) || localProtocolEnablesVersionedExactKeyContract(
+			builder.compCtx.GetProcess().GetService(),
+		) {
+			buildSpec.Expr = nil
+		}
+		buildSpec.KeyEncoding = plan.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_RAW_V1
+	case keycodec.ExactRuntimeFilterFloatZeroClosed:
+		// An older producer cannot close signed zero. Hide the expression it
+		// understands so it publishes PASS rather than unsafe raw bytes.
+		buildSpec.Expr = nil
+		buildSpec.KeyEncoding = plan.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED_V1
+	default:
+		return nil, nil, false
+	}
+	return probeSpec, buildSpec, true
+}
+
+func (builder *QueryBuilder) exactRuntimeFilterPairContractValid(
+	probeSpec, buildSpec *plan.RuntimeFilterSpec,
+) bool {
+	if probeSpec == nil || buildSpec == nil ||
+		probeSpec.Expr == nil || probeSpec.BuildExpr != nil ||
+		buildSpec.BuildExpr == nil ||
+		buildSpec.ProbeType == nil ||
+		probeSpec.Tag != buildSpec.Tag ||
+		probeSpec.MatchPrefix != buildSpec.MatchPrefix ||
+		probeSpec.NotOnPk != buildSpec.NotOnPk ||
+		buildSpec.BuildExpr.GetCol() == nil ||
+		buildSpec.BuildExpr.GetCol().ColPos != 0 ||
+		len(buildSpec.KeyComponentProbeTypes) != 0 {
+		return false
+	}
+	probeExprType := makeTypeByPlan2Expr(probeSpec.Expr)
+	advertisedProbeType := makeTypeByPlan2Type(
+		*buildSpec.ProbeType)
+	if probeExprType != advertisedProbeType {
+		return false
+	}
+	encoding, ok := builder.exactRuntimeFilterPlanEncoding(
+		advertisedProbeType,
+		makeTypeByPlan2Expr(buildSpec.BuildExpr),
+		buildSpec.MatchPrefix,
+	)
+	if !ok {
+		return false
+	}
+	switch encoding {
+	case keycodec.ExactRuntimeFilterRaw:
+		if buildSpec.KeyEncoding !=
+			plan.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_RAW_V1 {
+			return false
+		}
+		if keycodec.LegacyExactRawProducerSafe(
+			types.T(buildSpec.BuildExpr.Typ.Id),
+		) {
+			if localProtocolEnablesVersionedExactKeyContract(
+				builder.compCtx.GetProcess().GetService(),
+			) {
+				return buildSpec.Expr == nil
+			}
+			return buildSpec.Expr != nil &&
+				exprStructuralEqual(buildSpec.Expr, buildSpec.BuildExpr)
+		}
+		return buildSpec.Expr == nil
+	case keycodec.ExactRuntimeFilterFloatZeroClosed:
+		return buildSpec.KeyEncoding ==
+			plan.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED_V1 &&
+			buildSpec.Expr == nil
+	default:
+		return false
+	}
+}
+
+// makeSerializedExactRuntimeFilterPair constructs the component contract for
+// an index tuple key. finalProbeExpr is the encoded index-table column;
+// componentProbeExprs are the original indexed columns in encoder order; and
+// buildExpr must be serial/serial_full over the corresponding build slots.
+//
+// A tuple encoder is safe only when every component is raw-compatible. Float
+// signed-zero closure cannot be expressed by adding one final tuple value
+// without a combinatorial expansion, so float components remain unsupported.
+func runtimeFilterIntegerWidth(oid types.T) (int, bool, bool) {
+	switch oid {
+	case types.T_int8:
+		return 8, true, true
+	case types.T_int16:
+		return 16, true, true
+	case types.T_int32:
+		return 32, true, true
+	case types.T_int64:
+		return 64, true, true
+	case types.T_uint8:
+		return 8, false, true
+	case types.T_uint16:
+		return 16, false, true
+	case types.T_uint32:
+		return 32, false, true
+	case types.T_uint64:
+		return 64, false, true
+	default:
+		return 0, false, false
+	}
+}
+
+func safeRuntimeFilterIntegerCast(source, target types.T, narrowing bool) bool {
+	sourceWidth, sourceSigned, sourceOK := runtimeFilterIntegerWidth(source)
+	targetWidth, targetSigned, targetOK := runtimeFilterIntegerWidth(target)
+	if !sourceOK || !targetOK || sourceSigned != targetSigned {
+		return false
+	}
+	if narrowing {
+		return targetWidth <= sourceWidth
+	}
+	return sourceWidth <= targetWidth
+}
+
+func serializedRuntimeFilterComponentCol(expr *plan.Expr) *plan.ColRef {
+	if expr == nil {
+		return nil
+	}
+	if col := expr.GetCol(); col != nil {
+		return col
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || len(fn.Args) != 2 || fn.Args[0] == nil {
+		return nil
+	}
+	return fn.Args[0].GetCol()
+}
+
+func (builder *QueryBuilder) makeSerializedExactRuntimeFilterPair(
+	tag int32,
+	matchPrefix bool,
+	upperLimit int32,
+	finalProbeExpr, buildExpr *plan.Expr,
+	componentProbeExprs []*plan.Expr,
+	notOnPk bool,
+) (probeSpec, buildSpec *plan.RuntimeFilterSpec, ok bool) {
+	if !localProtocolEnablesVersionedExactKeyContract(
+		builder.compCtx.GetProcess().GetService(),
+	) || finalProbeExpr == nil || finalProbeExpr.GetCol() == nil ||
+		buildExpr == nil || len(componentProbeExprs) == 0 ||
+		types.T(finalProbeExpr.Typ.Id) != types.T_varchar ||
+		types.T(buildExpr.Typ.Id) != types.T_varchar {
+		return nil, nil, false
+	}
+	fn := buildExpr.GetF()
+	if fn == nil || fn.Func == nil ||
+		len(fn.Args) != len(componentProbeExprs) {
+		return nil, nil, false
+	}
+	var encodingMarker plan.RuntimeFilterKeyEncoding
+	switch fn.Func.ObjName {
+	case function.SerialFunctionName:
+		if matchPrefix ||
+			fn.Func.Obj != function.SerialFunctionEncodeID {
+			return nil, nil, false
+		}
+		encodingMarker =
+			plan.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_SERIAL_V1
+	case function.SerialFullFunctionName:
+		if !matchPrefix ||
+			fn.Func.Obj != function.SerialFullFunctionEncodeID {
+			return nil, nil, false
+		}
+		encodingMarker =
+			plan.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_SERIAL_FULL_V1
+	default:
+		return nil, nil, false
+	}
+
+	finalEncoding, ok := builder.exactRuntimeFilterPlanEncoding(
+		makeTypeByPlan2Expr(finalProbeExpr),
+		makeTypeByPlan2Expr(buildExpr),
+		matchPrefix,
+	)
+	if !ok || finalEncoding != keycodec.ExactRuntimeFilterRaw {
+		return nil, nil, false
+	}
+
+	componentProbeTypes := make([]plan.Type, len(componentProbeExprs))
+	for i := range componentProbeExprs {
+		probeComponent := componentProbeExprs[i]
+		buildComponent := fn.Args[i]
+		probeCol := serializedRuntimeFilterComponentCol(probeComponent)
+		buildCol := serializedRuntimeFilterComponentCol(buildComponent)
+		if probeCol == nil || buildCol == nil || buildCol.ColPos < 0 ||
+			(buildComponent.GetF() != nil && !safeRuntimeFilterIntegerCast(
+				types.T(buildComponent.GetF().Args[0].Typ.Id), types.T(buildComponent.Typ.Id), true)) ||
+			!function.SerialTypeSupported(
+				types.T(probeComponent.Typ.Id),
+			) ||
+			!function.SerialTypeSupported(
+				types.T(buildComponent.Typ.Id),
+			) ||
+			keycodec.ExactRuntimeFilterEncodingForPair(
+				makeTypeByPlan2Expr(probeComponent),
+				makeTypeByPlan2Expr(buildComponent),
+			) != keycodec.ExactRuntimeFilterRaw {
+			return nil, nil, false
+		}
+		componentProbeTypes[i] = *DeepCopyType(&probeComponent.Typ)
+	}
+
+	probeSpec = MakeRuntimeFilter(
+		tag, matchPrefix, 0, DeepCopyExpr(finalProbeExpr), notOnPk)
+	buildSpec = MakeRuntimeFilter(
+		tag, matchPrefix, upperLimit, DeepCopyExpr(buildExpr), notOnPk)
+	buildSpec.BuildExpr = buildSpec.Expr
+	buildSpec.Expr = nil
+	buildSpec.ProbeType = DeepCopyType(&finalProbeExpr.Typ)
+	buildSpec.KeyComponentProbeTypes = componentProbeTypes
+	buildSpec.KeyEncoding = encodingMarker
+	return probeSpec, buildSpec, true
+}
+
 func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 	node := builder.qry.Nodes[nodeID]
 	sid := builder.compCtx.GetProcess().GetService()
 
 	for _, childID := range node.Children {
 		builder.generateRuntimeFilters(childID)
+	}
+
+	if node.NodeType == plan.Node_FUZZY_FILTER {
+		builder.finalizeFuzzyRuntimeFilter(node)
+		return
 	}
 
 	if builder.isMasterIndexInnerJoin(node) {
@@ -214,7 +549,8 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 	for _, expr := range node.OnList {
 		if isEquiCond(expr, leftTags, rightTags) {
 			args := expr.GetF().Args
-			if !ExprIsZonemappable(builder.GetContext(), args[0]) {
+			if !ExprIsZonemappable(builder.GetContext(), args[0]) &&
+				serializedRuntimeFilterComponentCol(args[0]) == nil {
 				return
 			}
 			probeExprs = append(probeExprs, args[0])
@@ -228,20 +564,105 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 		return
 	}
 
-	rfTag := builder.genNewMsgTag()
-
 	for i := range probeExprs {
-		exprType := makeTypeByPlan2Expr(probeExprs[i])
-		args := []types.Type{exprType, exprType}
-		_, err := function.GetFunctionByName(builder.GetContext(), "in", args)
-		if err != nil {
-			//don't support this type
+		probeType := makeTypeByPlan2Expr(probeExprs[i])
+		buildType := makeTypeByPlan2Expr(buildExprs[i])
+		// Exact runtime-filter payloads eventually reach consumers which compare
+		// physical bytes (notably persistent Bloom filters). Generate one only
+		// when the producer can close every SQL-equal physical representation
+		// for both operands.
+		if _, ok := builder.exactRuntimeFilterPlanEncoding(probeType, buildType, false); !ok {
 			return
 		}
 	}
 
+	if len(probeExprs) > 1 {
+		tableDef := leftChild.TableDef
+		if tableDef == nil || tableDef.Pkey == nil || len(leftChild.BindingTags) == 0 ||
+			tableDef.Pkey.PkeyColName != catalog.CPrimaryKeyColName ||
+			len(tableDef.Pkey.Names) != len(probeExprs) {
+			return
+		}
+		cpkeyPos, ok := tableDef.Name2ColIndex[catalog.CPrimaryKeyColName]
+		if !ok || cpkeyPos < 0 || int(cpkeyPos) >= len(tableDef.Cols) {
+			return
+		}
+
+		// HashBuild materializes equality keys in probeExprs/buildExprs order.
+		// Reorder those slots into the table's primary-key order before serializing
+		// so the payload uses the same tuple layout as the hidden composite key.
+		keySlots := make(map[int32]int, len(probeExprs))
+		probeComponents := make([]*plan.Expr, len(probeExprs))
+		for i, probeExpr := range probeExprs {
+			col := serializedRuntimeFilterComponentCol(probeExpr)
+			if col == nil || (probeExpr.GetF() != nil && !safeRuntimeFilterIntegerCast(
+				types.T(probeExpr.GetF().Args[0].Typ.Id), types.T(probeExpr.Typ.Id), false)) {
+				return
+			}
+			if col.ColPos < 0 || int(col.ColPos) >= len(tableDef.Cols) {
+				return
+			}
+			probeComponents[i] = GetColExpr(tableDef.Cols[col.ColPos].Typ, col.RelPos, col.ColPos)
+			probeComponents[i].GetCol().Name = col.Name
+			if col.RelPos != leftChild.BindingTags[0] {
+				return
+			}
+			if _, exists := keySlots[col.ColPos]; exists {
+				return
+			}
+			keySlots[col.ColPos] = i
+		}
+		serialArgs := make([]*plan.Expr, len(tableDef.Pkey.Names))
+		componentProbeExprs := make([]*plan.Expr, len(tableDef.Pkey.Names))
+		for i, name := range tableDef.Pkey.Names {
+			pkPos, exists := tableDef.Name2ColIndex[name]
+			if !exists {
+				return
+			}
+			slot, exists := keySlots[pkPos]
+			if !exists {
+				return
+			}
+			componentProbeExprs[i] = probeComponents[slot]
+			serialArg := &plan.Expr{
+				Typ:  buildExprs[slot].Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: -1, ColPos: int32(slot)}},
+			}
+			if makeTypeByPlan2Expr(serialArg) != makeTypeByPlan2Expr(componentProbeExprs[i]) {
+				var err error
+				serialArg, err = appendCastBeforeExpr(builder.GetContext(), serialArg, componentProbeExprs[i].Typ)
+				if err != nil {
+					return
+				}
+			}
+			serialArgs[i] = serialArg
+		}
+		buildExpr, err := BindFuncExprImplByPlanExpr(
+			builder.GetContext(), function.SerialFunctionName, serialArgs)
+		if err != nil {
+			return
+		}
+		probeExpr := GetColExpr(tableDef.Cols[cpkeyPos].Typ, leftChild.BindingTags[0], cpkeyPos)
+		probeExpr.GetCol().Name = catalog.CPrimaryKeyColName
+		inLimit := GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt)
+		if !builder.rightSingleLocalDeliveryIsSafe(node, rightChild, inLimit) {
+			return
+		}
+		rfTag := builder.genNewMsgTag()
+		probeSpec, buildSpec, ok := builder.makeSerializedExactRuntimeFilterPair(
+			rfTag, false, inLimit, probeExpr, buildExpr, componentProbeExprs, false)
+		if !ok {
+			return
+		}
+		leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, probeSpec)
+		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, buildSpec)
+		if node.JoinType != plan.Node_SINGLE {
+			recalcStatsByRuntimeFilter(leftChild, node, builder)
+		}
+		return
+	}
+
 	if len(probeExprs) == 1 {
-		convertToCPKey := false
 		tableDef := leftChild.TableDef
 		if tableDef == nil || tableDef.Pkey == nil {
 			return
@@ -251,6 +672,7 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 			return
 		}
 		sortOrder := GetSortOrder(tableDef, probeCol.ColPos)
+		componentFilter := false
 		// LOCAL_COLOCATED gives up multi-CN scan bandwidth.  In phase 1 only
 		// enable right-SINGLE on the leading PK/cluster key, where exact IN can
 		// prune ranges predictably.  A scattered non-key filter may still scan
@@ -272,8 +694,11 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 					return
 				}
 			} else {
-				if len(tableDef.Pkey.Names) > 1 && probeCol.Name != catalog.CPrimaryKeyColName {
-					convertToCPKey = true
+				componentFilter = len(tableDef.Pkey.Names) > 1 && probeCol.Name != catalog.CPrimaryKeyColName
+				// Newly admit component filtering only without a placement
+				// downgrade or suppressing fallible/volatile scan predicates.
+				if componentFilter && (policy.requiresLocalDelivery || !areTruncationSafePredicates(leftChild.FilterList)) {
+					return
 				}
 			}
 			//todo: need to fix this in the future
@@ -286,19 +711,28 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 			return
 		}
 
+		// A leading composite-key component can use its own zonemap and an
+		// ordinary column IN predicate. It is not the serialized full key:
+		// keep NotOnPk so the scan also applies exact row filtering, without
+		// routing this partial key through primary-key lookup or prefix IN.
 		notOnPk := probeCol.Name != tableDef.Pkey.PkeyColName
 		inLimit := GetInFilterCardLimit(sid)
-		if sortOrder == 0 {
+		if sortOrder == 0 && !componentFilter {
 			inLimit = GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt)
+		}
+		// Components need ordinary-column row filtering, not full-PK lookup.
+		// Keep its configured budget; a wrong low estimate still falls back to
+		// PASS when HashBuild observes more actual keys than this limit.
+		if componentFilter && node.Stats.HashmapStats.HashmapSize > float64(inLimit) {
+			return
 		}
 		// Placement is decided before hashbuild knows the actual number of
 		// unique keys.  If the planner already knows the build cannot fit in an
 		// exact IN, hashbuild would send PASS after both scans were forced onto
 		// one CN.  Reject that no-benefit topology up front for right-SINGLE.
-		if !rightSingleLocalDeliveryIsSafe(node, rightChild, inLimit) {
+		if !builder.rightSingleLocalDeliveryIsSafe(node, rightChild, inLimit) {
 			return
 		}
-
 		buildExpr := &plan.Expr{
 			Typ: buildExprs[0].Typ,
 			Expr: &plan.Expr_Col{
@@ -308,19 +742,11 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 				},
 			},
 		}
-		var probeSpec, buildSpec *plan.RuntimeFilterSpec
-		if convertToCPKey {
-			if _, ok := tableDef.Name2ColIndex[catalog.CPrimaryKeyColName]; !ok {
-				return
-			}
-			probeSpec = MakeCPKEYRuntimeFilter(rfTag, 0, DeepCopyExpr(probeExprs[0]), tableDef, notOnPk)
-			buildSpec = MakeSerialRuntimeFilter(builder.GetContext(), rfTag, false, inLimit, buildExpr, notOnPk)
-			if buildSpec.Expr == nil {
-				return
-			}
-		} else {
-			probeSpec = MakeRuntimeFilter(rfTag, false, 0, DeepCopyExpr(probeExprs[0]), notOnPk)
-			buildSpec = MakeRuntimeFilter(rfTag, false, inLimit, buildExpr, notOnPk)
+		rfTag := builder.genNewMsgTag()
+		probeSpec, buildSpec, ok := builder.makeExactRuntimeFilterPair(
+			rfTag, false, inLimit, probeExprs[0], buildExpr, notOnPk)
+		if !ok {
+			return
 		}
 		leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, probeSpec)
 		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, buildSpec)
@@ -332,93 +758,71 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 		}
 		return
 	}
+}
 
-	tableDef := leftChild.TableDef
-	if tableDef == nil || tableDef.Pkey == nil {
+// finalizeFuzzyRuntimeFilter makes build-side selection, delivery, and
+// selectivity one planner decision. The candidate is constructed with the
+// fuzzy node, but no stats or placement are changed until final costs are
+// available here. Compile treats a surviving versioned pair as the explicit
+// build-on-sink decision.
+func (builder *QueryBuilder) finalizeFuzzyRuntimeFilter(node *plan.Node) {
+	if node == nil ||
+		node.FuzzyBuildSide !=
+			plan.Node_FUZZY_BUILD_SIDE_UNSPECIFIED {
+		// The explicit decision is the idempotency boundary. DML planning can
+		// traverse the same step more than once, after the first traversal has
+		// already rewritten scan statistics.
 		return
 	}
-	if len(tableDef.Pkey.Names) < len(probeExprs) {
+	if len(node.RuntimeFilterBuildList) == 0 {
 		return
 	}
-
-	name2Pos := make(map[string]int)
-	for i, name := range tableDef.Pkey.Names {
-		name2Pos[name] = i
-	}
-
-	col2Probe := make([]int, len(tableDef.Pkey.Names))
-	for i := range col2Probe {
-		col2Probe[i] = -1
-	}
-
-	for i, expr := range probeExprs {
-		col := expr.GetCol()
-		if col == nil {
-			return
-		}
-		if pos, ok := name2Pos[tableDef.Cols[col.ColPos].Name]; ok {
-			col2Probe[pos] = i
+	clearPair := func(scan *plan.Node) {
+		node.RuntimeFilterBuildList = nil
+		if scan != nil {
+			scan.RuntimeFilterProbeList = nil
 		}
 	}
-
-	cnt := 0
-	for ; cnt < len(col2Probe); cnt++ {
-		if col2Probe[cnt] == -1 {
-			break
-		}
+	if len(node.Children) != 2 {
+		clearPair(nil)
+		return
 	}
-
-	if cnt != len(probeExprs) {
+	tableScan := builder.qry.Nodes[node.Children[0]]
+	sinkScan := builder.qry.Nodes[node.Children[1]]
+	if tableScan == nil || sinkScan == nil ||
+		tableScan.NodeType != plan.Node_TABLE_SCAN ||
+		tableScan.Stats == nil || sinkScan.Stats == nil ||
+		len(tableScan.RuntimeFilterProbeList) != 1 ||
+		len(node.RuntimeFilterBuildList) != 1 ||
+		!builder.exactRuntimeFilterPairContractValid(
+			tableScan.RuntimeFilterProbeList[0],
+			node.RuntimeFilterBuildList[0],
+		) {
+		clearPair(tableScan)
+		return
+	}
+	if !localProtocolEnablesVersionedExactKeyContract(
+		builder.compCtx.GetProcess().GetService(),
+	) {
+		// RuntimeFilterSpec is a new FuzzyFilter pipeline field. An older CN
+		// drops it entirely and therefore cannot publish terminal PASS. Remove
+		// both ends before any placement/stats side effect while such a peer may
+		// participate.
+		clearPair(tableScan)
 		return
 	}
 
-	pkIdx, ok := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
-	if !ok {
+	if safeRatio(tableScan.Stats.Cost, sinkScan.Stats.Cost, 1) < 0.3 {
+		// Build-on-table has no supported delivery direction. Leave the
+		// original scan statistics and multi-CN placement untouched.
+		node.FuzzyBuildSide = plan.Node_FUZZY_BUILD_SIDE_TABLE
+		clearPair(tableScan)
 		return
 	}
 
-	if builder.optimizerHints != nil && builder.optimizerHints.runtimeFilter != 0 && node.JoinType != plan.Node_INDEX {
-		return
-	}
-
-	probeExpr := &plan.Expr{
-		Typ: tableDef.Cols[pkIdx].Typ,
-		Expr: &plan.Expr_Col{
-			Col: &plan.ColRef{
-				RelPos: leftChild.BindingTags[0],
-				ColPos: pkIdx,
-			},
-		},
-	}
-	inLimit := GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt)
-	if !rightSingleLocalDeliveryIsSafe(node, rightChild, inLimit) {
-		return
-	}
-
-	buildArgs := make([]*plan.Expr, len(probeExprs))
-	for i := range probeExprs {
-		pos := col2Probe[i]
-		buildArgs[i] = &plan.Expr{
-			Typ: buildExprs[pos].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: -1,
-					ColPos: int32(pos),
-				},
-			},
-		}
-	}
-
-	buildExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", buildArgs)
-	if err != nil || buildExpr == nil {
-		return
-	}
-
-	leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, MakeRuntimeFilter(rfTag, cnt < len(tableDef.Pkey.Names), 0, probeExpr, false))
-	node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, MakeRuntimeFilter(rfTag, cnt < len(tableDef.Pkey.Names), inLimit, buildExpr, false))
-	if node.JoinType != plan.Node_SINGLE {
-		recalcStatsByRuntimeFilter(leftChild, node, builder)
-	}
+	node.FuzzyBuildSide = plan.Node_FUZZY_BUILD_SIDE_SINK
+	tableScan.Stats.ForceOneCN = true
+	recalcStatsByRuntimeFilter(tableScan, node, builder)
 }
 
 func (builder *QueryBuilder) isMasterIndexInnerJoin(node *plan.Node) bool {

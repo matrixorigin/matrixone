@@ -171,12 +171,28 @@ type RoleIDKey struct{}
 type DDLOwnerRoleIDKey struct{}
 type NodeIDKey struct{}
 type InternalExecutorKey struct{}
+type LockWriterFairKey struct{}
 
 func IsInternalExecutor(ctx context.Context) bool {
 	if v := ctx.Value(InternalExecutorKey{}); v != nil {
 		return v.(bool)
 	}
 	return false
+}
+
+// AttachLockWriterFair marks lock requests derived from ctx as writer-fair.
+// A writer-fair Shared row request waits behind an already queued Exclusive
+// request instead of extending the current Shared-holder generation.
+func AttachLockWriterFair(ctx context.Context) context.Context {
+	return context.WithValue(ctx, LockWriterFairKey{}, true)
+}
+
+func IsLockWriterFair(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	v, _ := ctx.Value(LockWriterFairKey{}).(bool)
+	return v
 }
 
 type DDLOwnerRoleIDProvider interface {
@@ -252,19 +268,24 @@ type DatTypKey struct{}
 type TableIDKey struct{}
 type LogicalIdKey struct{}
 
+// RelKindKey carries a mo_tables.relkind that a CREATE TABLE must adopt verbatim
+// instead of deriving one from the table name. Set by ALTER TABLE ... COPY so the
+// replica keeps the original table's kind.
+type RelKindKey struct{}
+
 // CarryOnCtxKeys defines keys needed to be serialized when pass context through net
 var CarryOnCtxKeys = []any{TenantIDKey{}, UserIDKey{}, RoleIDKey{}}
 
-// TemporaryTN use TemporaryTN to get temporary storage from Context
-type TemporaryTN struct{}
-
 type IsMoLogger struct{}
-
-type SourceScanResKey struct{}
 
 type IgnoreForeignKey struct{}
 
 type AlterCopyOpt struct{}
+
+// OptimizerHints carries a per-statement optimizer_hints string (same key=value
+// format as the global variable) set by the internal SQL executor via
+// StatementOption.WithOptimizerHints and applied by the planner's parseOptimizeHints.
+type OptimizerHints struct{}
 
 // Determine if now is a bg sql.
 type BgKey struct{}
@@ -272,12 +293,16 @@ type BgKey struct{}
 // Sp variable scope
 type VarScopeKey struct{}
 
+// Sp variable declared SQL type scope. It is kept parallel to VarScopeKey so
+// runtime values do not have to encode SQL type metadata such as DECIMAL scale.
+type VarScopeTypeKey struct{}
+
 // Determine if it is a stored procedure
 type InSp struct{}
 
 // IvfMembershipFilter carries doc_id membership-filter bytes (tagged docfilter
 // payload) for the ivf entries scan in the internal SQL executor.
-// This key is set on context when invoking internal SQL from ivf_search.
+// This key is used by the legacy IVF internal-SQL maintenance/search adapter.
 type IvfMembershipFilter struct{}
 
 // FulltextMembershipFilter carries doc_id membership-filter bytes (tagged
@@ -286,11 +311,18 @@ type IvfMembershipFilter struct{}
 type FulltextMembershipFilter struct{}
 
 // IvfReaderParam carries DistRange for ivf entries scan in internal SQL executor.
-// This key is set on context when invoking internal SQL from ivf_search.
+// This key is used by the legacy IVF internal-SQL maintenance/search adapter.
 type IvfReaderParam struct{}
 
 // RemoteRunContext marks a pipeline executing through remote-run RPC.
 type RemoteRunContext struct{}
+
+// ImplicitCommitFromExplicitTxn marks a statement whose MySQL implicit commit
+// boundary replaced a transaction that was explicitly active before the
+// statement started.  The marker is scoped to one frontend statement and is
+// consumed by data-branch lineage admission after the fresh transaction has
+// been created.
+type ImplicitCommitFromExplicitTxn struct{}
 
 // PkCheckByTN whether TN does primary key uniqueness check against transaction's workspace or not.
 type PkCheckByTN struct{}
@@ -298,6 +330,10 @@ type PkCheckByTN struct{}
 // SkipTransferKey is used to indicate that the delete operation should skip transfer processing.
 // Used by CCPR for cross-cluster tombstones.
 type SkipTransferKey struct{}
+
+// MoColumnsUpdateKey marks the internal upgrade path that is allowed to write
+// redundant fields in mo_catalog.mo_columns as ordinary table data.
+type MoColumnsUpdateKey struct{}
 
 // StartTS is the start timestamp of a statement.
 type StartTS struct{}

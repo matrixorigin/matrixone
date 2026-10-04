@@ -5,10 +5,7 @@ start transaction ;
 truncate table atomic_table_10;
 use transaction_enhance;
 select * from atomic_table_10;
-➤ c1[4,32,0]  ¦  c2[12,-1,0]  𝄀
-3  ¦  a  𝄀
-4  ¦  b  𝄀
-5  ¦  c
+➤ c1[4,32,0]  ¦  c2[12,-1,0]
 select * from atomic_table_10;
 ➤ c1[4,32,0]  ¦  c2[12,-1,0]
 commit;
@@ -21,18 +18,12 @@ start transaction ;
 truncate table atomic_table_10;
 use transaction_enhance;
 select * from atomic_table_10;
-➤ c1[4,32,0]  ¦  c2[12,-1,0]  𝄀
-3  ¦  a  𝄀
-4  ¦  b  𝄀
-5  ¦  c
+➤ c1[4,32,0]  ¦  c2[12,-1,0]
 select * from atomic_table_10;
 ➤ c1[4,32,0]  ¦  c2[12,-1,0]
 rollback;
 select * from atomic_table_10;
-➤ c1[4,32,0]  ¦  c2[12,-1,0]  𝄀
-3  ¦  a  𝄀
-4  ¦  b  𝄀
-5  ¦  c
+➤ c1[4,32,0]  ¦  c2[12,-1,0]
 drop table if exists atomic_table_10;
 create table atomic_table_10(c1 int,c2 varchar(25));
 insert into atomic_table_10 values (3,"a"),(4,"b"),(5,"c");
@@ -121,7 +112,7 @@ atomic_table_12  ¦  CREATE TABLE `atomic_table_12` (
 )
 show index from atomic_table_12;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-atomic_table_12  ¦  1  ¦  key1  ¦  1  ¦  c1  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  c1
+atomic_table_12  ¦  1  ¦  key1  ¦  1  ¦  c1  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  c1
 use transaction_enhance;
 drop table if exists atomic_table_12_1;
 create table atomic_table_12_1(c1 int,c2 varchar(25));

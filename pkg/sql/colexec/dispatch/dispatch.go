@@ -49,6 +49,12 @@ func (dispatch *Dispatch) Prepare(proc *process.Process) error {
 	ctr.localRegsCnt = len(dispatch.LocalRegs)
 	ctr.remoteRegsCnt = len(dispatch.RemoteRegs)
 	ctr.aliveRegCnt = ctr.localRegsCnt + ctr.remoteRegsCnt
+	if dispatch.MaterializedSource != nil {
+		if dispatch.FuncId != SendToAllLocalFunc || ctr.remoteRegsCnt != 0 {
+			return moerr.NewInternalError(proc.Ctx, "materialized dispatch must be local send-to-all")
+		}
+		return nil
+	}
 	ctr.sp = pSpool.InitMyPipelineSpool(proc.Mp(), uint32(len(dispatch.LocalRegs)))
 
 	switch dispatch.FuncId {
@@ -162,6 +168,22 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 		dispatch.ctr.hasData = true
 	}
 
+	if dispatch.MaterializedSource != nil {
+		// Last/End batches are pipeline control messages, not rows. Ordinary
+		// SINK_SCAN consumers discard them in merge.Call; a materialized source
+		// must do the same before persisting fanout data.
+		if whichToSend.Last() {
+			return result, nil
+		}
+		stats, err := dispatch.MaterializedSource.AppendWithStats(whichToSend)
+		analyzer.SetMemUsed(stats.RetainedBytes)
+		if stats.SpilledBytes > 0 {
+			analyzer.Spill(stats.SpilledBytes)
+			analyzer.SpillRows(stats.SpilledRows)
+		}
+		return result, err
+	}
+
 	// sending.
 	ok, err := dispatch.ctr.sendFunc(whichToSend, dispatch, proc)
 	if ok {
@@ -215,12 +237,14 @@ type RemoteReceiverRegistration struct {
 	ch       process.RemotePipelineInformationChannel
 	uuids    []uuid.UUID
 	server   *colexec.Server
+	terminal *colexec.RemoteReceiverTerminal
+	ctx      context.Context
 }
 
 // Cancel stops the process that owns this registration.
 func (r *RemoteReceiverRegistration) Cancel(err error) {
-	if r != nil && r.proc != nil && r.proc.Cancel != nil {
-		r.proc.Cancel(err)
+	if r != nil {
+		r.terminal.Cancel(err)
 	}
 }
 
@@ -230,6 +254,22 @@ func (r *RemoteReceiverRegistration) Cleanup() {
 	if r == nil {
 		return
 	}
+	// A registration rolled back before execution never reaches Reset. Fail
+	// closed, preserving its cancellation cause, rather than stranding an
+	// already-attached notify on an unpublished terminal result.
+	select {
+	case <-r.terminal.Done():
+	default:
+		var err error
+		if r.ctx != nil {
+			err = context.Cause(r.ctx)
+		}
+		if err == nil {
+			err = moerr.NewInternalErrorNoCtx("remote dispatch registration released before termination")
+		}
+		r.terminal.Finish(err)
+	}
+	r.server.CloseRemoteReceivers(r.uuids, r.ch)
 	r.server.RemoveUuidsOwned(r.uuids, r.ch)
 	if r.dispatch.ctr == r.ctr && r.ctr.remoteProc == r.proc && r.ctr.remoteInfo == r.ch {
 		r.ctr.remoteInfo = nil
@@ -274,6 +314,8 @@ func (dispatch *Dispatch) RegisterRemoteReceiversWithHandle(proc *process.Proces
 		ch:       dispatch.ctr.remoteInfo,
 		uuids:    uuids,
 		server:   dispatch.ctr.server,
+		terminal: dispatch.ctr.remoteTerminal,
+		ctx:      proc.Ctx,
 	}, nil
 }
 
@@ -295,6 +337,7 @@ func (dispatch *Dispatch) prepareRemote(proc *process.Process) error {
 	if needRegister {
 		dispatch.ctr.remoteInfo = make(chan *process.WrapCs)
 		dispatch.ctr.remoteProc = proc
+		dispatch.ctr.remoteTerminal = colexec.NewRemoteReceiverTerminal(proc.Cancel)
 	}
 	registered := make([]uuid.UUID, 0, len(dispatch.RemoteRegs))
 	for i, rr := range dispatch.RemoteRegs {
@@ -302,7 +345,8 @@ func (dispatch *Dispatch) prepareRemote(proc *process.Process) error {
 			dispatch.ctr.remoteToIdx[rr.Uuid] = dispatch.ShuffleRegIdxRemote[i]
 		}
 		if needRegister {
-			if err := server.PutProcIntoUuidMap(rr.Uuid, proc, dispatch.ctr.remoteInfo); err != nil {
+			if err := server.PutProcIntoUuidMapWithTerminal(rr.Uuid, proc, dispatch.ctr.remoteInfo, dispatch.ctr.remoteTerminal); err != nil {
+				dispatch.ctr.remoteTerminal.Finish(err)
 				if proc != nil && proc.Cancel != nil {
 					proc.Cancel(err)
 				}
@@ -322,6 +366,7 @@ func rollbackRemoteReceiverRegistrations(
 	registered []uuid.UUID,
 	ch process.RemotePipelineInformationChannel,
 ) {
+	server.CloseRemoteReceivers(registered, ch)
 	server.RemoveUuidsOwned(registered, ch)
 }
 

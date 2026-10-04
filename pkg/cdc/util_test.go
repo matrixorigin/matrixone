@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"errors"
 	"fmt"
 	"math"
 	"testing"
@@ -824,25 +825,80 @@ func Test_floatArrayToString(t *testing.T) {
 }
 
 func Test_openDbConn(t *testing.T) {
-	stub := gostub.Stub(&tryConn, func(_ *mysql.Config) (*sql.DB, error) {
+	deadlineSeen := false
+	stub := gostub.Stub(&tryConn, func(ctx context.Context, _ *mysql.Config) (*sql.DB, error) {
+		deadline, ok := ctx.Deadline()
+		remaining := time.Until(deadline)
+		deadlineSeen = ok && remaining > 0 && remaining <= openDbConnAttemptTimeout
 		return nil, nil
 	})
 	defer stub.Reset()
 
-	conn, err := OpenDbConn("user", "password", "host", 1234, CDCDefaultSendSqlTimeout)
+	conn, err := OpenDbConn(context.Background(), "user", "password", "host", 1234, CDCDefaultSendSqlTimeout)
 	assert.Nil(t, err)
 	assert.Nil(t, conn)
+	assert.True(t, deadlineSeen)
 }
 
 func Test_openDbConnFailed(t *testing.T) {
-	stub := gostub.Stub(&tryConn, func(_ *mysql.Config) (*sql.DB, error) {
+	stub := gostub.Stub(&tryConn, func(_ context.Context, _ *mysql.Config) (*sql.DB, error) {
 		return nil, moerr.NewInternalErrorNoCtx("")
 	})
 	defer stub.Reset()
 
-	conn, err := OpenDbConn("user", "password", "host", 1234, CDCDefaultSendSqlTimeout)
+	conn, err := OpenDbConn(context.Background(), "user", "password", "host", 1234, CDCDefaultSendSqlTimeout)
 	assert.Error(t, err)
+	assert.True(t, IsRetryableConnectionError(err))
 	assert.Nil(t, conn)
+}
+
+func TestOpenDbConnConfigurationErrorIsNotRetryable(t *testing.T) {
+	conn, err := OpenDbConn(context.Background(), "user", "password", "host", 1234, "invalid timeout")
+	require.Error(t, err)
+	require.False(t, IsRetryableConnectionError(err))
+	require.Nil(t, conn)
+}
+
+func TestOpenDbConnClosesSuccessfulConnectionAfterConcurrentCancellation(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	mock.ExpectClose()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	stub := gostub.Stub(&tryConn, func(_ context.Context, _ *mysql.Config) (*sql.DB, error) {
+		cancel()
+		return db, nil
+	})
+	defer stub.Reset()
+
+	conn, err := OpenDbConn(ctx, "user", "password", "host", 1234, CDCDefaultSendSqlTimeout)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, conn)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestOpenDbConnCancellationStopsRetryBackoff(t *testing.T) {
+	attempted := make(chan struct{})
+	stub := gostub.Stub(&tryConn, func(_ context.Context, _ *mysql.Config) (*sql.DB, error) {
+		close(attempted)
+		return nil, errors.New("connect failed")
+	})
+	defer stub.Reset()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := OpenDbConn(ctx, "user", "password", "host", 1234, CDCDefaultSendSqlTimeout)
+		done <- err
+	}()
+	<-attempted
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("connection retry did not observe caller cancellation")
+	}
 }
 
 func Test_makeMysqlConfig(t *testing.T) {
@@ -860,9 +916,10 @@ func Test_makeMysqlConfig(t *testing.T) {
 }
 
 func Test_tryConn(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
 	assert.NoError(t, err)
 	mock.ExpectPing()
+	mock.ExpectClose()
 
 	stub := gostub.Stub(&openDbWithConnector, func(_ driver.Connector) *sql.DB {
 		return db
@@ -871,9 +928,31 @@ func Test_tryConn(t *testing.T) {
 
 	cfg, err := makeMysqlConfig("user", "password", "host", 1234, CDCDefaultSendSqlTimeout)
 	require.NoError(t, err)
-	got, err := tryConn(cfg)
+	got, err := tryConn(context.Background(), cfg)
 	assert.NoError(t, err)
 	assert.Equal(t, db, got)
+	require.NoError(t, got.Close())
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestTryConnClosesDatabaseAfterPingFailure(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	require.NoError(t, err)
+	pingErr := errors.New("ping failed")
+	mock.ExpectPing().WillReturnError(pingErr)
+	mock.ExpectClose()
+
+	stub := gostub.Stub(&openDbWithConnector, func(_ driver.Connector) *sql.DB {
+		return db
+	})
+	defer stub.Reset()
+
+	cfg, err := makeMysqlConfig("user", "password", "host", 1234, CDCDefaultSendSqlTimeout)
+	require.NoError(t, err)
+	got, err := tryConn(context.Background(), cfg)
+	require.ErrorIs(t, err, pingErr)
+	require.Nil(t, got)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestGetTxnOp(t *testing.T) {
@@ -1052,5 +1131,49 @@ func TestParseFrequencyToDuration(t *testing.T) {
 	}
 	if got := parseFrequencyToDuration("30m"); got != 30*time.Minute {
 		t.Errorf("30m: got %v, want %v", got, 30*time.Minute)
+	}
+}
+
+// CDC enumerated only vecf32/vecf64 in BOTH halves of the pipeline, so a table
+// with a bf16/f16/int8/uint8 vector column failed permanently on its first row:
+// extractRowFromVector errored, and even past that convertColIntoSql errored
+// again. Test the pair together — fixing one alone still leaves CDC broken.
+func Test_narrowVectorCdcRoundTrip(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+	ctx := context.Background()
+
+	cases := []struct {
+		name    string
+		typ     types.Type
+		payload []byte
+		wantSQL string
+	}{
+		{"bf16", types.New(types.T_array_bf16, 3, 0),
+			types.ArrayToBytes[types.BF16](types.Float32ToBF16Slice([]float32{1, 2, 3})), "'[1, 2, 3]'"},
+		{"f16", types.New(types.T_array_float16, 3, 0),
+			types.ArrayToBytes[types.Float16](types.Float32ToFloat16Slice([]float32{1, 2, 3})), "'[1, 2, 3]'"},
+		{"int8", types.New(types.T_array_int8, 3, 0),
+			types.ArrayToBytes[int8]([]int8{-1, 0, 7}), "'[-1, 0, 7]'"},
+		{"uint8", types.New(types.T_array_uint8, 3, 0),
+			types.ArrayToBytes[uint8]([]uint8{1, 128, 255}), "'[1, 128, 255]'"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			vec := vector.NewVec(c.typ)
+			require.NoError(t, vector.AppendBytes(vec, c.payload, false, mp))
+			defer vec.Free(mp)
+
+			// half 1: extraction must not error and must yield a typed slice
+			row := make([]any, 1)
+			require.NoError(t, extractRowFromVector(ctx, vec, 0, row, 0))
+			require.NotNil(t, row[0], "extractRowFromVector produced no value")
+
+			// half 2: that same value must serialize to a quoted vector literal
+			buf, err := convertColIntoSql(ctx, row[0], &c.typ, []byte{})
+			require.NoError(t, err)
+			require.Equal(t, c.wantSQL, string(buf))
+		})
 	}
 }

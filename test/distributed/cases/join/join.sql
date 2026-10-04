@@ -173,7 +173,7 @@ drop table if exists t2;
 create table t1(a int, b int primary key);
 create table t2(a int, b int,primary key(a,b));
 insert into t1 select result%50,result from generate_series(1,10000,1) g;
-insert into t2 select result/100,result%100 from generate_series(1,10000,1) g;
+insert into t2 select result div 100,result%100 from generate_series(1,10000,1) g;
 select t1.a,t1.b from t1 join t2 on t1.b=t2.a and t1.b=t2.b order by t1.a desc limit 4;
 select t2.a,t2.b from t2 join t1 on t2.a=t1.b and t2.b=t1.a order by t2.a desc limit 4;
 drop table t1;
@@ -302,4 +302,49 @@ select a.id from j_dim a join j_dim b on b.id = (select max(id) from j_dim z whe
 -- uncorrelated subquery
 select a.id from j_dim a join j_dim b on b.id = (select max(id) from j_dim) order by a.id;
 drop table j_dim;
+
+-- issue #25973: subqueries in LEFT/RIGHT JOIN ON conditions must preserve
+-- unmatched rows instead of being lowered to a FILTER above the outer join.
+drop table if exists join_subquery_l;
+drop table if exists join_subquery_r;
+create table join_subquery_l (id int primary key, k int);
+create table join_subquery_r (id int primary key, k int);
+insert into join_subquery_l values (1, 1), (2, 2), (3, null);
+insert into join_subquery_r values (11, 1), (12, 1), (13, 3), (14, null);
+
+select l.id, r.id
+from join_subquery_l l left join join_subquery_r r
+on l.k = r.k
+and r.id = (select min(r2.id) from join_subquery_r r2 where r2.k = l.k)
+order by l.id, r.id;
+
+select l.id, r.id
+from join_subquery_l l right join join_subquery_r r
+on l.k = r.k
+and l.id = (select min(l2.id) from join_subquery_l l2 where l2.k = r.k)
+order by r.id, l.id;
+
+select l.id, r.id
+from join_subquery_l l left join join_subquery_r r
+on l.k = r.k
+and r.id = (select max(r2.id) from join_subquery_r r2)
+order by l.id, r.id;
+
+select l.id, r.id
+from join_subquery_l l left join join_subquery_r r
+on l.k = r.k
+and exists (
+select 1 from join_subquery_r r2
+where r2.k = l.k and r2.id = 11
+)
+order by l.id, r.id;
+
+select l.id, r.id
+from join_subquery_l l left join join_subquery_r r
+on l.k = r.k
+and exists (select 1 from join_subquery_r r2 where r2.id = 999)
+order by l.id, r.id;
+
+drop table join_subquery_l;
+drop table join_subquery_r;
 drop table if exists region;

@@ -15,6 +15,8 @@
 package function
 
 import (
+	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -33,9 +35,10 @@ type opOperatorFixedIn[T TGenericOfIn] struct {
 }
 
 type opOperatorStrIn struct {
-	ready   bool
-	hasNull bool
-	mp      map[string]bool
+	ready    bool
+	hasNull  bool
+	padSpace bool
+	mp       map[string]bool
 }
 
 func newOpOperatorFixedIn[T TGenericOfIn]() *opOperatorFixedIn[T] {
@@ -87,6 +90,7 @@ func (op *opOperatorFixedIn[T]) init(tuple *vector.Vector) {
 func (op *opOperatorStrIn) init(tuple *vector.Vector) {
 	op.ready = true
 	op.hasNull = false
+	op.padSpace = tuple.GetType().Oid == types.T_char
 
 	if tuple.IsConstNull() {
 		op.hasNull = true
@@ -103,7 +107,7 @@ func (op *opOperatorStrIn) init(tuple *vector.Vector) {
 			return
 		}
 		op.mp = make(map[string]bool, 1)
-		op.mp[string(v)] = true
+		op.mp[op.key(v)] = true
 		return
 	}
 
@@ -114,8 +118,15 @@ func (op *opOperatorStrIn) init(tuple *vector.Vector) {
 			op.hasNull = true
 			continue
 		}
-		op.mp[string(v)] = true
+		op.mp[op.key(v)] = true
 	}
+}
+
+func (op *opOperatorStrIn) key(value []byte) string {
+	if op.padSpace {
+		value = bytes.TrimRight(value, " ")
+	}
+	return string(value)
 }
 
 func (op *opOperatorFixedIn[T]) operatorIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -190,7 +201,7 @@ func (op *opOperatorStrIn) operatorIn(parameters []*vector.Vector, result vector
 				return err
 			}
 		} else {
-			_, ok := op.mp[string(v)]
+			_, ok := op.mp[op.key(v)]
 			if !ok && op.hasNull {
 				if err := rs.Append(false, true); err != nil {
 					return err
@@ -219,7 +230,7 @@ func (op *opOperatorStrIn) operatorNotIn(parameters []*vector.Vector, result vec
 				return err
 			}
 		} else {
-			_, ok := op.mp[string(v)]
+			_, ok := op.mp[op.key(v)]
 			if !ok && op.hasNull {
 				if err := rs.Append(false, true); err != nil {
 					return err

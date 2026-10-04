@@ -17,12 +17,41 @@ package plan
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
+	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
+
+// indexNameKey defines the comparison contract shared by index creation,
+// duplicate detection, lookup, and sequential ALTER state. It deliberately
+// uses the parser's identifier normalization instead of strings.EqualFold:
+// Unicode simple folding can equate distinct MySQL identifiers such as Greek
+// sigma (Σ) and final sigma (ς).
+func indexNameKey(name string) string {
+	return tree.NewCStr(name, 1).Compare()
+}
+
+// IndexNamesEqual compares index identifiers using the canonical parser
+// normalization shared by index creation, duplicate detection, and lookup.
+func IndexNamesEqual(left, right string) bool {
+	return indexNameKey(left) == indexNameKey(right)
+}
+
+// resolveIndexName matches index identifiers while returning the catalog
+// spelling for later execution and metadata updates.
+func resolveIndexName(indexes []*planpb.IndexDef, name string) (string, bool) {
+	key := indexNameKey(name)
+	for _, index := range indexes {
+		if index != nil && indexNameKey(index.IndexName) == key {
+			return index.IndexName, true
+		}
+	}
+	return "", false
+}
 
 // checkConstraintNames Check whether the name of the constraint(index,unqiue etc) is legal, and handle constraints without a name
 func checkConstraintNames(uniqueConstraints []*tree.UniqueIndex, indexConstraints []*tree.Index, ctx context.Context) error {
@@ -55,14 +84,14 @@ func checkDuplicateConstraint(namesMap map[string]bool, name string, foreign boo
 	if name == "" {
 		return nil
 	}
-	nameLower := strings.ToLower(name)
-	if namesMap[nameLower] {
+	nameKey := indexNameKey(name)
+	if namesMap[nameKey] {
 		if foreign {
 			return moerr.NewInvalidInputf(ctx, "Duplicate foreign key constraint name '%s'", name)
 		}
 		return moerr.NewDuplicateKey(ctx, name)
 	}
-	namesMap[nameLower] = true
+	namesMap[nameKey] = true
 	return nil
 }
 
@@ -72,17 +101,17 @@ func setEmptyUniqueIndexName(namesMap map[string]bool, indexConstr *tree.UniqueI
 		colName := indexConstr.KeyParts[0].ColName.ColName()
 		constrName := colName
 		i := 2
-		if strings.EqualFold(constrName, "PRIMARY") {
+		if IndexNamesEqual(constrName, "PRIMARY") {
 			constrName = fmt.Sprintf("%s_%d", constrName, 2)
 			i = 3
 		}
-		for namesMap[constrName] {
+		for namesMap[indexNameKey(constrName)] {
 			// loop forever until we find constrName that haven't been used.
 			constrName = fmt.Sprintf("%s_%d", colName, i)
 			i++
 		}
 		indexConstr.Name = constrName
-		namesMap[constrName] = true
+		namesMap[indexNameKey(constrName)] = true
 	}
 }
 
@@ -92,17 +121,17 @@ func setEmptyIndexName(namesMap map[string]bool, indexConstr *tree.Index) {
 		colName := indexConstr.KeyParts[0].ColName.ColName()
 		constrName := colName
 		i := 2
-		if strings.EqualFold(constrName, "PRIMARY") {
+		if IndexNamesEqual(constrName, "PRIMARY") {
 			constrName = fmt.Sprintf("%s_%d", constrName, 2)
 			i = 3
 		}
-		for namesMap[constrName] {
+		for namesMap[indexNameKey(constrName)] {
 			//  loop forever until we find constrName that haven't been used.
 			constrName = fmt.Sprintf("%s_%d", colName, i)
 			i++
 		}
 		indexConstr.Name = constrName
-		namesMap[constrName] = true
+		namesMap[indexNameKey(constrName)] = true
 	}
 }
 
@@ -112,17 +141,17 @@ func setEmptyFullTextIndexName(namesMap map[string]bool, indexConstr *tree.FullT
 		colName := indexConstr.KeyParts[0].ColName.ColName()
 		constrName := colName
 		i := 2
-		if strings.EqualFold(constrName, "PRIMARY") {
+		if IndexNamesEqual(constrName, "PRIMARY") {
 			constrName = fmt.Sprintf("%s_%d", constrName, 2)
 			i = 3
 		}
-		for namesMap[constrName] {
+		for namesMap[indexNameKey(constrName)] {
 			//  loop forever until we find constrName that haven't been used.
 			constrName = fmt.Sprintf("%s_%d", colName, i)
 			i++
 		}
 		indexConstr.Name = constrName
-		namesMap[constrName] = true
+		namesMap[indexNameKey(constrName)] = true
 	}
 }
 
@@ -157,6 +186,7 @@ func indexTableKeyTypeForSinglePart(col *ColDef, keyPart *tree.KeyPart) Type {
 		Width:      col.Typ.Width,
 		Scale:      col.Typ.Scale,
 		Enumvalues: col.Typ.Enumvalues,
+		Charset:    col.Typ.Charset,
 	}
 }
 
@@ -164,8 +194,9 @@ func indexTableKeyTypeForPrefix(colType Type) (Type, bool) {
 	switch colType.Id {
 	case int32(types.T_text):
 		return Type{
-			Id:    int32(types.T_varchar),
-			Width: types.MaxVarcharLen,
+			Id:      int32(types.T_varchar),
+			Width:   types.MaxVarcharLen,
+			Charset: colType.Charset,
 		}, true
 	case int32(types.T_blob):
 		return Type{
@@ -183,6 +214,10 @@ func indexColumnCheckKind(indexType tree.IndexType) string {
 		return "ivfflat"
 	case tree.INDEX_TYPE_HNSW:
 		return "hnsw"
+	case tree.INDEX_TYPE_CAGRA:
+		return "cagra"
+	case tree.INDEX_TYPE_IVFPQ:
+		return "ivfpq"
 	case tree.INDEX_TYPE_RTREE:
 		return "rtree"
 	default:
@@ -212,16 +247,22 @@ func checkIndexColumnSupportability(ctx context.Context, col *ColDef, keyPart *t
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("DATALINK column '%s' cannot be in index", colName))
 	case int32(types.T_json):
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("JSON column '%s' cannot be in index", colName))
-	case int32(types.T_array_float32), int32(types.T_array_float64):
-		if indexKind == "ivfflat" || indexKind == "hnsw" {
+	case int32(types.T_array_float32), int32(types.T_array_float64),
+		int32(types.T_array_float16), int32(types.T_array_bf16),
+		int32(types.T_array_int8), int32(types.T_array_uint8):
+		// A vector column is valid only as the key of a vector index, AND only if
+		// that algorithm supports this element type. Delegate to the plugin's
+		// catalog hook (SupportedVectorTypes) rather than hardcoding — each algo
+		// differs (ivfflat: f32/f64/f16/bf16/int8/uint8; cagra/ivfpq: f32/f16 only;
+		// hnsw: f32/f64). Non-vector index kinds (secondary/primary/unique/rtree)
+		// have no plugin, so the vector column is rejected.
+		if p, ok := indexplugin.Get(indexKind); ok &&
+			catalogplugin.SupportsVectorType(p.Catalog(), types.T(col.Typ.Id)) {
 			return nil
 		}
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("VECTOR column '%s' cannot be in index", colName))
 	}
 
-	if isEnumPlanType(&col.Typ) && indexKind == "primary" {
-		return moerr.NewNotSupported(ctx, fmt.Sprintf("ENUM column '%s' cannot be in primary key", colName))
-	}
 	if isSetPlanType(&col.Typ) {
 		switch indexKind {
 		case "primary":

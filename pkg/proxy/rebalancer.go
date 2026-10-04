@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
@@ -38,6 +39,9 @@ type rebalancer struct {
 	sid     string
 	stopper *stopper.Stopper
 	logger  *log.MOLogger
+	// diagnosticLogger aggregates repeated backend connection failures across
+	// all connections owned by this proxy.
+	diagnosticLogger *logutil.RateLimitedLogger
 	// mc is MO-Cluster instance, which is used to get CN servers.
 	mc clusterservice.MOCluster
 	// connManager is used to track the connections on the CN servers.
@@ -98,6 +102,11 @@ func newRebalancer(
 		connManager: newConnManager(),
 		mc:          mc,
 		queue:       make(chan *tunnel, defaultQueueSize),
+	}
+	if logger != nil {
+		r.diagnosticLogger = logutil.NewRateLimitedLogger(logger.RawLogger())
+	} else {
+		r.diagnosticLogger = logutil.NewRateLimitedLogger(logutil.GetGlobalLogger())
 	}
 	r.tunnelDeliver = newTunnelDeliver(r.queue, logger)
 	for _, opt := range opts {

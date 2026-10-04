@@ -115,20 +115,9 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 		return nil
 	}
 
-	cache.Cache.Remove(storageDef.IndexTableName)
+	cache.Cache.RemoveAllGenerations(storageDef.IndexTableName, "ddl")
 
-	// delete old data first
-	sqls, err := genDeleteSQL(indexDefs, ctx.QryDatabase())
-	if err != nil {
-		return err
-	}
-	for _, sql := range sqls {
-		if err = ctx.RunSql(sql); err != nil {
-			return err
-		}
-	}
-
-	async, err := catalog.IsIndexAsync(metaDef.IndexAlgoParams)
+	async, err := catalog.IndexParamAsync(metaDef.IndexAlgoParams)
 	if err != nil {
 		return err
 	}
@@ -143,6 +132,13 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 		// otherwise survive at its old watermark and replay historical
 		// events on top of the freshly built state. forceSync (ALTER
 		// REINDEX … FORCE_SYNC) takes this branch even for an async index.
+		//
+		// NOTE: the old-data DELETE is NOT issued here — the hnsw_create TVF
+		// owns clear+rebuild so it can read the pre-rebuild MAX(timestamp)
+		// BEFORE clearing and floor the new generation strictly above it
+		// (monotonic across a rebuild under a skewed/backward clock; see
+		// hnsw.BuildTimestamp / HnswSearch.IsStale). The TVF clears even when
+		// nothing is built, so a REBUILD to zero docs still empties the index.
 		sqls, err := genBuildSQL(ctx, indexDefs)
 		if err != nil {
 			return err
@@ -159,6 +155,18 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 			indexName, sinkerType, true, "", originalTableDef)
 	}
 
+	// async: the CDC job rebuilds from the full log, so clear the old index
+	// data here first (the sync branch above defers this to the TVF).
+	delsqls, err := genDeleteSQL(indexDefs, ctx.QryDatabase())
+	if err != nil {
+		return err
+	}
+	for _, sql := range delsqls {
+		if err = ctx.RunSql(sql); err != nil {
+			return err
+		}
+	}
+
 	// async: drop any existing CDC task, register a new one consuming the
 	// full log from the table's creation timestamp.
 	if err := ctx.DropIndexCdcTask(originalTableDef, ctx.QryDatabase(), originalTableDef.Name, indexName); err != nil {
@@ -171,7 +179,7 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 // HandleReindex: same code path as create, but honors forceSync so an
 // ALTER REINDEX … FORCE_SYNC (e.g. restore's RestoreTable) rebuilds an
 // always-async HNSW index synchronously instead of deferring to CDC.
-func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error {
+func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool, _ bool) error {
 	return h.handleCreate(ctx, indexDefs, forceSync)
 }
 
@@ -181,11 +189,24 @@ func (Hooks) RestoreInitSQL(ctx compileplugin.CompileContext, indexDefs map[stri
 	if !ok {
 		return false, "", moerr.NewInternalErrorNoCtx("hnsw_meta index definition not found")
 	}
-	return true, fmt.Sprintf("ALTER TABLE `%s`.`%s` ALTER REINDEX `%s` hnsw FORCE_SYNC",
-		ctx.QryDatabase(), ctx.OriginalTableDef().Name, metaDef.IndexName), nil
+	return true, fmt.Sprintf("ALTER TABLE %s ALTER REINDEX %s hnsw FORCE_SYNC",
+		sqlquote.QualifiedIdent(ctx.QryDatabase(), ctx.OriginalTableDef().Name),
+		sqlquote.Ident(metaDef.IndexName)), nil
+}
+
+// AlterCopyInitSQL — no InitSQL needed. RunHnsw (the ISCP consumer) rebuilds the whole graph
+// from the CDC ts=0 replay (it accumulates every snapshot+tail batch and Save()s the model with
+// build_ts=GetToTS), so the copy-alter replacement index converges without an explicit rebuild.
+// (Restore differs: it block-clones the hidden tables and REINDEXes, hence RestoreInitSQL. This is
+// the fulltext2 case's opposite -- fulltext2's consumer writes only a cdc_tail with no base.) #28837
+func (Hooks) AlterCopyInitSQL(_ compileplugin.CompileContext, _ map[string]*plan.IndexDef) (bool, string, error) {
+	return false, "", nil
 }
 
 func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.ReindexParamUpdate) (map[string]string, error) {
+	if err := compileplugin.RejectMerge(alter, "hnsw"); err != nil {
+		return nil, err
+	}
 	return compileplugin.MergeReindexParams(old, alter, "hnsw",
 		catalog.HnswM,
 		catalog.HnswEfConstruction,
@@ -200,7 +221,20 @@ func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.Re
 // not covered there.
 func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, defs map[string]*plan.IndexDef) error {
 	logutil.Infof("[plugin] hnsw HandleDropIndex: defs=%d", len(defs))
+	// Evict the cached search index so its resources are freed NOW, rather than
+	// lingering until the 5-min VectorIndexCacheTTL. Mirrors the create-side
+	// cache.Cache.RemoveAllGenerations(storageDef.IndexTableName, "ddl").
+	if storageDef, ok := defs[catalog.Hnsw_TblType_Storage]; ok {
+		cache.Cache.RemoveAllGenerations(storageDef.IndexTableName, "ddl")
+	}
 	return nil
+}
+
+func (Hooks) HiddenTableDropPriority(algoTableType string) int {
+	if catalog.ToLower(algoTableType) == catalog.Hnsw_TblType_Storage {
+		return 1
+	}
+	return 0
 }
 
 // IdxcronMetadata: HNSW has no idxcron action (SyncDescriptor().IdxcronAction=="").

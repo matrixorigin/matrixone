@@ -1,0 +1,132 @@
+-- DATA BRANCH MERGE and PICK must write lineage-equivalent columns by the
+-- destination endpoint name after a one-sided rename.
+drop database if exists branch_rename_apply;
+create database branch_rename_apply;
+use branch_rename_apply;
+
+-- MERGE: source endpoint renamed.
+create table merge_source_base(id int primary key, payload int);
+insert into merge_source_base values (1, 10), (2, 20);
+data branch create table merge_source_branch from merge_source_base;
+alter table merge_source_branch rename column payload to payload_new;
+update merge_source_branch set payload_new = 11 where id = 1;
+insert into merge_source_branch values (3, 30);
+data branch merge merge_source_branch into merge_source_base when conflict accept;
+select * from merge_source_base order by id;
+
+-- MERGE: destination endpoint renamed after the fork.
+create table merge_destination_base(id int primary key, payload int);
+insert into merge_destination_base values (1, 10), (2, 20);
+data branch create table merge_destination_branch from merge_destination_base;
+alter table merge_destination_base rename column payload to payload_new;
+update merge_destination_branch set payload = 11 where id = 1;
+insert into merge_destination_branch values (3, 30);
+data branch merge merge_destination_branch into merge_destination_base when conflict accept;
+select * from merge_destination_base order by id;
+
+-- PICK: source endpoint renamed. The unpicked row remains unchanged.
+create table pick_source_base(id int primary key, payload int);
+insert into pick_source_base values (1, 10), (2, 20);
+data branch create table pick_source_branch from pick_source_base;
+alter table pick_source_branch rename column payload to payload_new;
+update pick_source_branch set payload_new = 11 where id = 1;
+update pick_source_branch set payload_new = 22 where id = 2;
+insert into pick_source_branch values (3, 30);
+data branch pick pick_source_branch into pick_source_base keys(1, 3) when conflict accept;
+select * from pick_source_base order by id;
+
+-- PICK: destination endpoint renamed after the fork.
+create table pick_destination_base(id int primary key, payload int);
+insert into pick_destination_base values (1, 10), (2, 20);
+data branch create table pick_destination_branch from pick_destination_base;
+alter table pick_destination_base rename column payload to payload_new;
+update pick_destination_branch set payload = 11 where id = 1;
+update pick_destination_branch set payload = 22 where id = 2;
+insert into pick_destination_branch values (3, 30);
+data branch pick pick_destination_branch into pick_destination_base keys(1, 3) when conflict accept;
+select * from pick_destination_base order by id;
+
+-- MERGE: source primary key renamed.
+create table merge_source_pk_base(id int primary key, payload int);
+insert into merge_source_pk_base values (1, 10), (2, 20);
+data branch create table merge_source_pk_branch from merge_source_pk_base;
+alter table merge_source_pk_branch rename column id to id_new;
+update merge_source_pk_branch set payload = 11 where id_new = 1;
+insert into merge_source_pk_branch values (3, 30);
+data branch merge merge_source_pk_branch into merge_source_pk_base when conflict accept;
+select * from merge_source_pk_base order by id;
+
+-- MERGE: destination primary key renamed after the fork.
+create table merge_destination_pk_base(id int primary key, payload int);
+insert into merge_destination_pk_base values (1, 10), (2, 20);
+data branch create table merge_destination_pk_branch from merge_destination_pk_base;
+alter table merge_destination_pk_base rename column id to id_new;
+update merge_destination_pk_branch set payload = 11 where id = 1;
+insert into merge_destination_pk_branch values (3, 30);
+data branch merge merge_destination_pk_branch into merge_destination_pk_base when conflict accept;
+select * from merge_destination_pk_base order by id_new;
+
+-- PICK: source primary key renamed.
+create table pick_source_pk_base(id int primary key, payload int);
+insert into pick_source_pk_base values (1, 10), (2, 20);
+data branch create table pick_source_pk_branch from pick_source_pk_base;
+alter table pick_source_pk_branch rename column id to id_new;
+update pick_source_pk_branch set payload = 11 where id_new = 1;
+update pick_source_pk_branch set payload = 22 where id_new = 2;
+insert into pick_source_pk_branch values (3, 30);
+data branch pick pick_source_pk_branch into pick_source_pk_base keys(1, 3) when conflict accept;
+select * from pick_source_pk_base order by id;
+
+-- PICK: destination primary key renamed after the fork.
+create table pick_destination_pk_base(id int primary key, payload int);
+insert into pick_destination_pk_base values (1, 10), (2, 20);
+data branch create table pick_destination_pk_branch from pick_destination_pk_base;
+alter table pick_destination_pk_base rename column id to id_new;
+update pick_destination_pk_branch set payload = 11 where id = 1;
+update pick_destination_pk_branch set payload = 22 where id = 2;
+insert into pick_destination_pk_branch values (3, 30);
+data branch pick pick_destination_pk_branch into pick_destination_pk_base keys(1, 3) when conflict accept;
+select * from pick_destination_pk_base order by id_new;
+
+-- MERGE: one source-side composite primary key component renamed.
+create table merge_source_cpk_base(tenant int, id int, payload int, primary key(tenant, id));
+insert into merge_source_cpk_base values (1, 1, 10), (1, 2, 20);
+data branch create table merge_source_cpk_branch from merge_source_cpk_base;
+alter table merge_source_cpk_branch rename column id to id_new;
+update merge_source_cpk_branch set payload = 11 where tenant = 1 and id_new = 1;
+insert into merge_source_cpk_branch values (1, 3, 30);
+data branch merge merge_source_cpk_branch into merge_source_cpk_base when conflict accept;
+select * from merge_source_cpk_base order by tenant, id;
+
+-- MERGE: one destination-side composite primary key component renamed.
+create table merge_destination_cpk_base(tenant int, id int, payload int, primary key(tenant, id));
+insert into merge_destination_cpk_base values (1, 1, 10), (1, 2, 20);
+data branch create table merge_destination_cpk_branch from merge_destination_cpk_base;
+alter table merge_destination_cpk_base rename column id to id_new;
+update merge_destination_cpk_branch set payload = 11 where tenant = 1 and id = 1;
+insert into merge_destination_cpk_branch values (1, 3, 30);
+data branch merge merge_destination_cpk_branch into merge_destination_cpk_base when conflict accept;
+select * from merge_destination_cpk_base order by tenant, id_new;
+
+-- MERGE without an explicit primary key uses the direct insert path.
+create table merge_fake_pk_base(id int, payload int);
+insert into merge_fake_pk_base values (1, 10), (2, 20);
+data branch create table merge_fake_pk_branch from merge_fake_pk_base;
+alter table merge_fake_pk_branch rename column payload to payload_new;
+update merge_fake_pk_branch set payload_new = 11 where id = 1;
+insert into merge_fake_pk_branch values (3, 30);
+data branch merge merge_fake_pk_branch into merge_fake_pk_base when conflict accept;
+select * from merge_fake_pk_base order by id;
+
+-- A renamed common column remains writable when the source also adds a column.
+create table merge_evolved_base(id int primary key, payload int);
+insert into merge_evolved_base values (1, 10), (2, 20);
+data branch create table merge_evolved_branch from merge_evolved_base;
+alter table merge_evolved_branch rename column payload to payload_new;
+alter table merge_evolved_branch add column branch_only int default 0;
+update merge_evolved_branch set payload_new = 11, branch_only = 100 where id = 1;
+insert into merge_evolved_branch values (3, 30, 300);
+data branch merge merge_evolved_branch into merge_evolved_base when conflict accept;
+select * from merge_evolved_base order by id;
+
+drop database branch_rename_apply;

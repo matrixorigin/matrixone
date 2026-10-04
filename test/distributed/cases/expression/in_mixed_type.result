@@ -1,0 +1,36 @@
+drop table if exists in_mixed_type;
+create table in_mixed_type (s varchar(20));
+insert into in_mixed_type values ('9.50'), ('8'), ('7');
+select '9.50' in (7, '8', 9.5) as scalar_in;
+➤ scalar_in[-7,1,0]  𝄀
+1
+select '9.50' in (9.5, '8', 7) as scalar_in_reordered;
+➤ scalar_in_reordered[-7,1,0]  𝄀
+1
+select '9.50' not in (7, '8', 9.5) as scalar_not_in;
+➤ scalar_not_in[-7,1,0]  𝄀
+0
+select '9.50' = 9.5 as scalar_equal;
+➤ scalar_equal[-7,1,0]  𝄀
+1
+select s from in_mixed_type where s in (7, '8', 9.5) order by s;
+➤ s[12,-1,0]  𝄀
+7  𝄀
+8  𝄀
+9.50
+drop table in_mixed_type;
+drop table if exists in_mixed_numeric_precision;
+create table in_mixed_numeric_precision (i bigint, d decimal(40, 0));
+insert into in_mixed_numeric_precision values
+(9223372036854775807, 9999999999999999999999999999999999999999);
+select i in ('9223372036854775806') as bigint_adjacent,
+d in ('9999999999999999999999999999999999999998') as decimal_adjacent
+from in_mixed_numeric_precision;
+➤ bigint_adjacent[-7,1,0]  ¦  decimal_adjacent[-7,1,0]  𝄀
+0  ¦  0
+select i not in ('9223372036854775806') as bigint_not_adjacent,
+d not in ('9999999999999999999999999999999999999998') as decimal_not_adjacent
+from in_mixed_numeric_precision;
+➤ bigint_not_adjacent[-7,1,0]  ¦  decimal_not_adjacent[-7,1,0]  𝄀
+1  ¦  1
+drop table in_mixed_numeric_precision;

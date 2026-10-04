@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestFilterEntriesByTimestamp tests the filterEntriesByTimestamp function
@@ -189,6 +190,167 @@ func TestFilterSnapshotEntries(t *testing.T) {
 		assert.Equal(t, 2, len(result))
 		assert.Equal(t, ET_Global, result[0].entryType)
 		assert.Equal(t, ET_Incremental, result[1].entryType)
+	})
+
+	t.Run("GlobalAndCompactedMetadataOverlap", func(t *testing.T) {
+		entries := []*CheckpointEntry{
+			{
+				start:     types.TS{},
+				end:       types.BuildTS(200, 0),
+				entryType: ET_Global,
+			},
+			{
+				start:     types.BuildTS(100, 0),
+				end:       types.BuildTS(300, 0),
+				entryType: ET_Compacted,
+			},
+			{
+				start:     types.BuildTS(300, 0),
+				end:       types.BuildTS(400, 0),
+				entryType: ET_Incremental,
+			},
+		}
+
+		result := filterSnapshotEntries(entries, &types.TS{})
+		assert.Len(t, result, 3)
+		assert.Equal(t, ET_Global, result[0].entryType)
+		assert.Equal(t, ET_Compacted, result[1].entryType)
+		assert.Equal(t, ET_Incremental, result[2].entryType)
+	})
+
+	t.Run("IncrementalAndCompactedMetadataOverlap", func(t *testing.T) {
+		entries := []*CheckpointEntry{
+			{
+				start:     types.BuildTS(100, 0),
+				end:       types.BuildTS(200, 0),
+				entryType: ET_Incremental,
+			},
+			{
+				start:     types.BuildTS(100, 0),
+				end:       types.BuildTS(300, 0),
+				entryType: ET_Compacted,
+			},
+			{
+				start:     types.BuildTS(300, 0),
+				end:       types.BuildTS(400, 0),
+				entryType: ET_Incremental,
+			},
+		}
+
+		result := filterSnapshotEntries(entries, &types.TS{})
+		assert.Len(t, result, 3)
+		assert.Equal(t, ET_Incremental, result[0].entryType)
+		assert.Equal(t, ET_Compacted, result[1].entryType)
+		assert.Equal(t, ET_Incremental, result[2].entryType)
+	})
+
+	t.Run("TiedEndIncrementalPrecedesCompacted", func(t *testing.T) {
+		globalEnd := types.BuildTS(100, 0)
+		firstIncrementalEnd := types.BuildTS(200, 0)
+		compactedEnd := types.BuildTS(300, 0)
+		entries := []*CheckpointEntry{
+			// getSnapshotMetaFiles prepends compacted metadata, so exercise the
+			// producer's actual input order rather than an already-normalized one.
+			{
+				start:     types.TS{},
+				end:       compactedEnd,
+				entryType: ET_Compacted,
+			},
+			{
+				start:     types.TS{},
+				end:       globalEnd,
+				entryType: ET_Global,
+			},
+			{
+				start:     globalEnd,
+				end:       firstIncrementalEnd,
+				entryType: ET_Incremental,
+			},
+			{
+				start:     firstIncrementalEnd.Next(),
+				end:       compactedEnd,
+				entryType: ET_Incremental,
+			},
+			{
+				start:     compactedEnd.Next(),
+				end:       types.BuildTS(400, 0),
+				entryType: ET_Incremental,
+			},
+		}
+
+		result := filterSnapshotEntries(entries, &types.TS{})
+		require.Len(t, result, 5)
+		require.Equal(t, ET_Global, result[0].entryType)
+		require.Equal(t, ET_Incremental, result[1].entryType)
+		require.Equal(t, ET_Incremental, result[2].entryType)
+		require.Equal(t, compactedEnd, result[2].end)
+		require.Equal(t, ET_Compacted, result[3].entryType)
+		require.Equal(t, compactedEnd, result[3].end)
+		require.Equal(t, ET_Incremental, result[4].entryType)
+	})
+
+	t.Run("TiedPredecessorsBeforeGlobal", func(t *testing.T) {
+		predecessorEnd := types.BuildTS(300, 0)
+		globalEnd := predecessorEnd.Next()
+		entries := []*CheckpointEntry{
+			// Checkpoint GC publishes compacted metadata before removing the
+			// incremental metadata it replaces.
+			{
+				start:     types.TS{},
+				end:       predecessorEnd,
+				entryType: ET_Compacted,
+			},
+			{
+				start:     types.BuildTS(200, 0),
+				end:       predecessorEnd,
+				entryType: ET_Incremental,
+			},
+			{
+				start:     types.TS{},
+				end:       globalEnd,
+				entryType: ET_Global,
+			},
+			{
+				start:     globalEnd,
+				end:       types.BuildTS(400, 0),
+				entryType: ET_Incremental,
+			},
+		}
+
+		result := filterSnapshotEntries(entries, &types.TS{})
+		require.Len(t, result, 3)
+		require.Equal(t, ET_Incremental, result[0].entryType)
+		require.Equal(t, predecessorEnd, result[0].end)
+		require.Equal(t, ET_Global, result[1].entryType)
+		require.Equal(t, ET_Incremental, result[2].entryType)
+	})
+
+	t.Run("CompactedPredecessorBeforeGlobal", func(t *testing.T) {
+		predecessorEnd := types.BuildTS(300, 0)
+		globalEnd := predecessorEnd.Next()
+		entries := []*CheckpointEntry{
+			{
+				start:     types.TS{},
+				end:       predecessorEnd,
+				entryType: ET_Compacted,
+			},
+			{
+				start:     types.TS{},
+				end:       globalEnd,
+				entryType: ET_Global,
+			},
+			{
+				start:     globalEnd,
+				end:       types.BuildTS(400, 0),
+				entryType: ET_Incremental,
+			},
+		}
+
+		result := filterSnapshotEntries(entries, &types.TS{})
+		require.Len(t, result, 3)
+		require.Equal(t, ET_Compacted, result[0].entryType)
+		require.Equal(t, ET_Global, result[1].entryType)
+		require.Equal(t, ET_Incremental, result[2].entryType)
 	})
 }
 

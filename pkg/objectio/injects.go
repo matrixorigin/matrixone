@@ -30,12 +30,20 @@ const (
 	FJ_CommitDelete  = "fj/commit/delete"
 	FJ_CommitSlowLog = "fj/commit/slowlog"
 	FJ_CommitWait    = "fj/commit/wait"
-	FJ_TransferSlow  = "fj/transfer/slow"
-	FJ_FlushTimeout  = "fj/flush/timeout"
-	FJ_FlushEntry    = "fj/flush/entry"
+	// FJ_CommitWaitTargetTenant restricts FJ_CommitWait to one tenant in
+	// multi-tenant lifecycle tests. Without this selector, FJ_CommitWait keeps
+	// its original process-wide behavior.
+	FJ_CommitWaitTargetTenant     = "fj/commit/wait-target-tenant"
+	FJ_TransferSlow               = "fj/transfer/slow"
+	FJ_DataMergeAfterCollectTS    = "fj/merge/data/after-collect-ts"
+	FJ_TransferError              = "fj/transfer/error"
+	FJ_TransferErrorAfterTransfer = "fj/transfer/error-after-transfer"
+	FJ_FlushTimeout               = "fj/flush/timeout"
+	FJ_FlushEntry                 = "fj/flush/entry"
 
-	FJ_CheckpointSave = "fj/checkpoint/save"
-	FJ_GCKPWait1      = "fj/gckp/wait1"
+	FJ_CheckpointSave      = "fj/checkpoint/save"
+	FJ_GCKPWait1           = "fj/gckp/wait1"
+	FJ_GCKPWaitAfterIntent = "fj/gckp/wait-after-intent"
 
 	FJ_TraceRanges         = "fj/trace/ranges"
 	FJ_TracePartitionState = "fj/trace/partitionstate"
@@ -46,7 +54,6 @@ const (
 	FJ_CNRecvErr        = "fj/cn/recv/err"
 	FJ_CNSubSysErr      = "fj/cn/recv/subsyserr"
 	FJ_CNReplayCacheErr = "fj/cn/recv/rcacheerr"
-	FJ_CNGCDumpTable    = "fj/cn/gc/dumptable"
 
 	FJ_LogReader    = "fj/log/reader"
 	FJ_LogWorkspace = "fj/log/workspace"
@@ -54,8 +61,9 @@ const (
 	FJ_CronJobsOpen = "fj/cronjobs/open"
 	FJ_CDCRecordTxn = "fj/cdc/recordtxn"
 
-	FJ_CDCExecutor  = "fj/cdc/executor"
-	FJ_CDCScanTable = "fj/cdc/scantable"
+	FJ_CDCExecutor      = "fj/cdc/executor"
+	FJ_CDCScanTable     = "fj/cdc/scantable"
+	FJ_TableChangesRead = "fj/table-changes/read"
 
 	FJ_ISCPIndexSendError     = "fj/iscp/index/send/error"
 	FJ_ISCPIndexSendBlock     = "fj/iscp/index/send/block"
@@ -66,6 +74,21 @@ const (
 	FJ_ISCPIndexHnswSaveErr   = "fj/iscp/index/hnsw/save/error"
 	FJ_ISCPIndexCuvsAppendErr = "fj/iscp/index/cuvs/append/error"
 	FJ_ISCPIndexCuvsSaveErr   = "fj/iscp/index/cuvs/save/error"
+
+	FJ_ISCPCancelAfterSubmit           = "fj/iscp/cancel/after-submit"
+	FJ_ISCPCancelAfterRegisterConsumer = "fj/iscp/cancel/after-register-consumer"
+	FJ_ISCPCancelFanoutBeforeSend      = "fj/iscp/cancel/fanout-before-send"
+	FJ_ISCPCancelHnswBeforeSave        = "fj/iscp/cancel/hnsw-before-save"
+	FJ_ISCPCancelBeforeUpdateWatermark = "fj/iscp/cancel/before-update-watermark"
+	FJ_ISCPCancelLongBeforeSend        = "fj/iscp/cancel/long/before-send"
+	FJ_ISCPCancelLongBeforeExec        = "fj/iscp/cancel/long/before-exec"
+	FJ_ISCPCancelLongHnswBeforeUpdate  = "fj/iscp/cancel/long/hnsw-before-update"
+	FJ_ISCPCancelLongHnswBeforeSave    = "fj/iscp/cancel/long/hnsw-before-save"
+	FJ_ISCPCancelLongBeforeWatermark   = "fj/iscp/cancel/long/before-watermark"
+	FJ_ISCPCancelExecutorNotReady      = "fj/iscp/cancel/executor-not-ready"
+	FJ_ISCPCancelForceRemote           = "fj/iscp/cancel/force-remote"
+	FJ_ISCPCancelRemoveFenceError      = "fj/iscp/cancel/remove-fence-error"
+	FJ_ISCPCancelRollbackFenceTTL      = "fj/iscp/cancel/rollback-fence-ttl"
 
 	FJ_PublicationSnapshotFinished = "fj/publication/snapshot/finished"
 
@@ -100,6 +123,12 @@ const (
 	// lock is re-acquired, so a test can deterministically mutate the
 	// workspace from another goroutine while the window is open.
 	FJ_CNDumpResolveWindowWait = "fj/cn/dump_resolve_window_wait"
+
+	// FJ_ArrowLoadRolloutWait is a test-only post-admission/pre-publication
+	// barrier. Arrow's reader triggers it after a range has been admitted and
+	// converted, but before the batch is published to the LOAD pipeline, so a
+	// lifecycle test can hold a real statement without relying on observer timing.
+	FJ_ArrowLoadRolloutWait = "fj/arrow/load/rollout_wait"
 )
 
 const (
@@ -426,18 +455,22 @@ func PrintFlushEntryInjected() (string, bool) {
 	return sarg, injected
 }
 
-func CommitWaitInjected() (string, bool) {
+func CommitWaitInjected(tenantID uint32) (string, bool) {
+	if target, _, selected := fault.TriggerFault(FJ_CommitWaitTargetTenant); selected && uint32(target) != tenantID {
+		return "", false
+	}
 	_, sarg, injected := fault.TriggerFault(FJ_CommitWait)
 	return sarg, injected
 }
 
-func GCDumpTableInjected() (string, bool) {
-	_, sarg, injected := fault.TriggerFault(FJ_CNGCDumpTable)
-	return sarg, injected
+func WaitInjected(key string) bool {
+	_, _, injected := fault.TriggerFault(key)
+	return injected
 }
 
-func WaitInjected(key string) {
-	fault.TriggerFault(key)
+func WaitInjectedCtx(ctx context.Context, key string) bool {
+	_, _, injected := fault.TriggerFaultWithContext(ctx, key)
+	return injected
 }
 
 func NotifyInjected(key string) {
@@ -449,9 +482,26 @@ func ISCPExecutorInjected() (string, bool) {
 	return sarg, injected
 }
 
+// ISCPExecutorFaultWaitKey identifies the optional phase barrier for one
+// executor fault. Tests install the barrier before enabling the matching fault,
+// then observe its waiter to prove that the asynchronous worker reached the
+// intended failure point.
+func ISCPExecutorFaultWaitKey(msg string) string {
+	return FJ_CDCExecutor + ":" + msg
+}
+
+func WaitForISCPExecutorFault(ctx context.Context, msg string) {
+	WaitInjectedCtx(ctx, ISCPExecutorFaultWaitKey(msg))
+}
+
 func CDCScanTableInjected() (string, bool) {
 	_, sarg, injected := fault.TriggerFault(FJ_CDCScanTable)
 	return sarg, injected
+}
+
+func TableChangesReadInjected() (string, bool) {
+	_, point, injected := fault.TriggerFault(FJ_TableChangesRead)
+	return point, injected
 }
 
 func ISCPIndexSendErrorInjected() bool {
@@ -590,24 +640,6 @@ func InjectCommitWait(msg string) (rmFault func() (bool, error), err error) {
 	return
 }
 
-func InjectGCDumpTable(msg string) (rmFault func() (bool, error), err error) {
-	if err = fault.AddFaultPoint(
-		context.Background(),
-		FJ_CNGCDumpTable,
-		":::",
-		"echo",
-		0,
-		msg,
-		false,
-	); err != nil {
-		return
-	}
-	rmFault = func() (ok bool, err error) {
-		return fault.RemoveFaultPoint(context.Background(), FJ_CNGCDumpTable)
-	}
-	return
-}
-
 func InjectCDCExecutor(msg string) (rmFault func() (bool, error), err error) {
 	if err = fault.AddFaultPoint(
 		context.Background(),
@@ -640,6 +672,24 @@ func InjectCDCScanTable(msg string) (rmFault func() (bool, error), err error) {
 	}
 	rmFault = func() (ok bool, err error) {
 		return fault.RemoveFaultPoint(context.Background(), FJ_CDCScanTable)
+	}
+	return
+}
+
+func InjectTableChangesRead(point string) (rmFault func() (bool, error), err error) {
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		FJ_TableChangesRead,
+		":::",
+		"echo",
+		0,
+		point,
+		false,
+	); err != nil {
+		return
+	}
+	rmFault = func() (ok bool, err error) {
+		return fault.RemoveFaultPoint(context.Background(), FJ_TableChangesRead)
 	}
 	return
 }

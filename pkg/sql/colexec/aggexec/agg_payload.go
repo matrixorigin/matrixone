@@ -16,6 +16,9 @@ package aggexec
 
 import (
 	"fmt"
+	"io"
+	"strconv"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -46,6 +49,9 @@ func payloadFieldIterator(payload []byte, fieldCount int, fn func(i int, isNull 
 				return err
 			}
 			continue
+		}
+		if flag != 1 {
+			return moerr.NewInternalErrorNoCtx("invalid agg payload: invalid null flag")
 		}
 		if offset+4 > len(payload) {
 			return moerr.NewInternalErrorNoCtx("invalid agg payload: truncated size")
@@ -81,10 +87,30 @@ func encodeGroupConcatPayload(vectors []*vector.Vector, row int, argTypes []type
 	return payload, nil
 }
 
+func encodeGroupConcatPayloadWithNulls(
+	vectors []*vector.Vector,
+	row int,
+	argTypes []types.Type,
+) ([]byte, error) {
+	payload := make([]byte, 0, len(vectors)*8)
+	for i, vec := range vectors {
+		r := row
+		if vec.IsConst() {
+			r = 0
+		}
+		if vec.IsNull(uint64(r)) {
+			payload = appendPayloadField(payload, nil, true)
+			continue
+		}
+		payload = appendPayloadField(payload, groupConcatFieldBytes(vec, r, argTypes[i]), false)
+	}
+	return payload, nil
+}
+
 func groupConcatFieldBytes(vec *vector.Vector, row int, typ types.Type) []byte {
 	switch typ.Oid {
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_datalink,
-		types.T_varbinary, types.T_binary, types.T_json, types.T_enum,
+		types.T_varbinary, types.T_binary, types.T_json,
 		types.T_array_float32, types.T_array_float64:
 		return vec.GetBytesAt(row)
 	default:
@@ -92,62 +118,161 @@ func groupConcatFieldBytes(vec *vector.Vector, row int, typ types.Type) []byte {
 	}
 }
 
+type appendSliceWriter struct {
+	data []byte
+}
+
+func (w *appendSliceWriter) Write(value []byte) (int, error) {
+	w.data = append(w.data, value...)
+	return len(value), nil
+}
+
 func appendGroupConcatData(dst []byte, typ types.Type, data []byte) ([]byte, error) {
+	writer := appendSliceWriter{data: dst}
+	if err := writeGroupConcatData(&writer, typ, data, time.UTC); err != nil {
+		return nil, err
+	}
+	return writer.data, nil
+}
+
+func formatGroupConcatFloat(value float64, bitSize int) []byte {
+	if value >= 1e15 || (value > 0 && value < 1e-13) ||
+		(value < 0 && value > -1e-13) || value <= -1e15 {
+		return []byte(strconv.FormatFloat(value, 'E', -1, bitSize))
+	}
+	return []byte(strconv.FormatFloat(value, 'f', -1, bitSize))
+}
+
+func writeGroupConcatData(
+	writer io.Writer,
+	typ types.Type,
+	data []byte,
+	location *time.Location,
+) error {
+	if location == nil {
+		location = time.UTC
+	}
+	switch typ.Oid {
+	case types.T_bit, types.T_bool,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
+		types.T_date, types.T_datetime, types.T_timestamp, types.T_time, types.T_year,
+		types.T_uuid,
+		types.T_TS, types.T_Rowid, types.T_Blockid:
+		if len(data) != typ.TypeSize() {
+			return moerr.NewInternalErrorNoCtx(
+				"invalid group_concat fixed payload size")
+		}
+	case types.T_interval:
+		if len(data) != 1 {
+			return moerr.NewInternalErrorNoCtx(
+				"invalid group_concat fixed payload size")
+		}
+	}
+	writeValue := func(value any) error {
+		_, err := fmt.Fprint(writer, value)
+		return err
+	}
+	writeBytes := func(value []byte) error {
+		n, err := writer.Write(value)
+		if err == nil && n != len(value) {
+			err = io.ErrShortWrite
+		}
+		return err
+	}
 	switch typ.Oid {
 	case types.T_bit, types.T_uint64:
-		return fmt.Appendf(dst, "%v", *util.UnsafeFromBytes[uint64](data)), nil
+		return writeValue(*util.UnsafeFromBytes[uint64](data))
 	case types.T_bool:
-		return fmt.Appendf(dst, "%v", *util.UnsafeFromBytes[bool](data)), nil
+		if *util.UnsafeFromBytes[bool](data) {
+			return writeBytes([]byte("1"))
+		}
+		return writeBytes([]byte("0"))
 	case types.T_int8:
-		return fmt.Appendf(dst, "%v", *util.UnsafeFromBytes[int8](data)), nil
+		return writeValue(*util.UnsafeFromBytes[int8](data))
 	case types.T_int16:
-		return fmt.Appendf(dst, "%v", *util.UnsafeFromBytes[int16](data)), nil
+		return writeValue(*util.UnsafeFromBytes[int16](data))
 	case types.T_int32:
-		return fmt.Appendf(dst, "%v", *util.UnsafeFromBytes[int32](data)), nil
+		return writeValue(*util.UnsafeFromBytes[int32](data))
 	case types.T_int64:
-		return fmt.Appendf(dst, "%v", *util.UnsafeFromBytes[int64](data)), nil
+		return writeValue(*util.UnsafeFromBytes[int64](data))
 	case types.T_uint8:
-		return fmt.Appendf(dst, "%v", *util.UnsafeFromBytes[uint8](data)), nil
+		return writeValue(*util.UnsafeFromBytes[uint8](data))
 	case types.T_uint16:
-		return fmt.Appendf(dst, "%v", *util.UnsafeFromBytes[uint16](data)), nil
+		return writeValue(*util.UnsafeFromBytes[uint16](data))
 	case types.T_uint32:
-		return fmt.Appendf(dst, "%v", *util.UnsafeFromBytes[uint32](data)), nil
+		return writeValue(*util.UnsafeFromBytes[uint32](data))
 	case types.T_float32:
-		return fmt.Appendf(dst, "%v", *util.UnsafeFromBytes[float32](data)), nil
+		return writeBytes(formatGroupConcatFloat(
+			float64(*util.UnsafeFromBytes[float32](data)), 32))
 	case types.T_float64:
-		return fmt.Appendf(dst, "%v", *util.UnsafeFromBytes[float64](data)), nil
+		return writeBytes(formatGroupConcatFloat(
+			*util.UnsafeFromBytes[float64](data), 64))
 	case types.T_decimal64:
-		return fmt.Appendf(dst, "%v", types.DecodeDecimal64(data).Format(typ.Scale)), nil
+		return writeValue(types.DecodeDecimal64(data).Format(typ.Scale))
 	case types.T_decimal128:
-		return fmt.Appendf(dst, "%v", types.DecodeDecimal128(data).Format(typ.Scale)), nil
+		return writeValue(types.DecodeDecimal128(data).Format(typ.Scale))
+	case types.T_decimal256:
+		return writeValue(types.DecodeDecimal256(data).Format(typ.Scale))
 	case types.T_date:
-		return fmt.Appendf(dst, "%v", util.UnsafeFromBytes[types.Date](data).String()), nil
+		return writeValue(util.UnsafeFromBytes[types.Date](data).String())
 	case types.T_datetime:
-		return fmt.Appendf(dst, "%v", util.UnsafeFromBytes[types.Datetime](data).String()), nil
+		return writeValue(util.UnsafeFromBytes[types.Datetime](data).String2(typ.Scale))
 	case types.T_timestamp:
-		return fmt.Appendf(dst, "%v", util.UnsafeFromBytes[types.Timestamp](data).String()), nil
+		return writeValue(util.UnsafeFromBytes[types.Timestamp](data).String2(location, typ.Scale))
 	case types.T_time:
-		return fmt.Appendf(dst, "%v", util.UnsafeFromBytes[types.Time](data).String()), nil
+		return writeValue(util.UnsafeFromBytes[types.Time](data).String2(typ.Scale))
+	case types.T_year:
+		return writeValue(util.UnsafeFromBytes[types.MoYear](data).String())
+	case types.T_uuid:
+		return writeValue(types.DecodeUuid(data).String())
+	case types.T_array_float32, types.T_array_float64, types.T_array_bf16,
+		types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+		return writeGroupConcatArrayData(writer, typ, data)
 	case types.T_blob, types.T_text, types.T_datalink, types.T_varbinary, types.T_binary,
-		types.T_char, types.T_varchar, types.T_enum, types.T_array_float32, types.T_array_float64:
-		if err := isValidGroupConcatUnit(data); err != nil {
-			return nil, err
-		}
-		return append(dst, data...), nil
+		types.T_char, types.T_varchar, types.T_enum:
+		return writeBytes(data)
+	case types.T_geometry, types.T_geometry32:
+		return writeBytes(data)
 	case types.T_json:
-		if err := isValidGroupConcatUnit(data); err != nil {
-			return nil, err
-		}
-		return append(dst, types.DecodeJson(data).String()...), nil
+		return writeValue(types.DecodeJson(data).String())
 	case types.T_interval:
-		return fmt.Appendf(dst, "%v", *util.UnsafeFromBytes[types.IntervalType](data)), nil
+		return writeValue(*util.UnsafeFromBytes[types.IntervalType](data))
 	case types.T_TS:
-		return fmt.Appendf(dst, "%v", *util.UnsafeFromBytes[types.TS](data)), nil
+		return writeValue(*util.UnsafeFromBytes[types.TS](data))
 	case types.T_Rowid:
-		return fmt.Appendf(dst, "%v", *util.UnsafeFromBytes[types.Rowid](data)), nil
+		return writeValue(*util.UnsafeFromBytes[types.Rowid](data))
 	case types.T_Blockid:
-		return fmt.Appendf(dst, "%v", *util.UnsafeFromBytes[types.Blockid](data)), nil
+		return writeValue(*util.UnsafeFromBytes[types.Blockid](data))
 	default:
-		return nil, moerr.NewInternalErrorNoCtxf("unsupported type for group_concat payload: %s", typ.String())
+		return moerr.NewInternalErrorNoCtxf(
+			"unsupported type for group_concat payload: %s", typ.String())
+	}
+}
+
+func writeGroupConcatArrayData(writer io.Writer, typ types.Type, data []byte) error {
+	if !typ.Oid.IsArrayRelate() || len(data)%typ.GetArrayElementSize() != 0 {
+		return moerr.NewInternalErrorNoCtxf(
+			"invalid group_concat array payload size for %s", typ.String())
+	}
+
+	switch typ.Oid {
+	case types.T_array_float32:
+		return types.WriteArrayTo(writer, types.BytesToArray[float32](data))
+	case types.T_array_float64:
+		return types.WriteArrayTo(writer, types.BytesToArray[float64](data))
+	case types.T_array_bf16:
+		return types.WriteArrayTo(writer, types.BytesToArray[types.BF16](data))
+	case types.T_array_float16:
+		return types.WriteArrayTo(writer, types.BytesToArray[types.Float16](data))
+	case types.T_array_int8:
+		return types.WriteArrayTo(writer, types.BytesToArray[int8](data))
+	case types.T_array_uint8:
+		return types.WriteArrayTo(writer, types.BytesToArray[uint8](data))
+	default:
+		return moerr.NewInternalErrorNoCtxf(
+			"unsupported array type for group_concat payload: %s", typ.String())
 	}
 }

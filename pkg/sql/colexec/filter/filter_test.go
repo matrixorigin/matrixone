@@ -16,6 +16,7 @@ package filter
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -38,7 +39,7 @@ type filterTestCase struct {
 	getRowCount int
 }
 
-func makeTestCases(t *testing.T) []filterTestCase {
+func makeTestCases(t testing.TB) []filterTestCase {
 	boolType := types.T_bool.ToType()
 	int32Type := types.T_int32.ToType()
 
@@ -159,6 +160,72 @@ func makeTestCases(t *testing.T) []filterTestCase {
 	}
 }
 
+func BenchmarkCheckConstraintFilter(b *testing.B) {
+	for conditionCount := 1; conditionCount <= 2; conditionCount++ {
+		for _, assertFastPath := range []bool{false, true} {
+			mode := "filter_lowering"
+			if assertFastPath {
+				mode = "assert_fast_path"
+			}
+			b.Run(fmt.Sprintf("conditions_%d/%s", conditionCount, mode), func(b *testing.B) {
+				tcs := makeTestCases(b)
+				tc := tcs[conditionCount-1]
+				for idx := range tcs {
+					if idx != conditionCount-1 {
+						tcs[idx].proc.Free()
+					}
+				}
+				// Keep every row valid so the benchmark measures the successful
+				// assertion path rather than fail-fast error construction.
+				for idx, condition := range tc.arg.FilterExprs {
+					threshold := int32(0)
+					if idx == 1 {
+						threshold = 100
+					}
+					condition.GetF().Args[1].GetLit().Value = &plan.Literal_I32Val{I32Val: threshold}
+				}
+				tc.arg.FilterExprs = makeCheckConstraintAssertExprs(b, tc.arg.FilterExprs)
+				tc.arg.IsAssert = assertFastPath
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					resetChildren(tc.arg, tc.proc)
+					require.NoError(b, tc.arg.Prepare(tc.proc))
+					result, err := vm.Exec(tc.arg, tc.proc)
+					require.NoError(b, err)
+					require.NotNil(b, result.Batch)
+					tc.arg.Reset(tc.proc, false, nil)
+				}
+				b.StopTimer()
+				for _, child := range tc.arg.Children {
+					child.Free(tc.proc, false, nil)
+				}
+				tc.arg.Free(tc.proc, false, nil)
+				tc.proc.Free()
+				require.Zero(b, tc.proc.Mp().CurrNB())
+			})
+		}
+	}
+}
+
+func makeCheckConstraintAssertExprs(t testing.TB, conditions []*plan.Expr) []*plan.Expr {
+	t.Helper()
+	assertions := make([]*plan.Expr, len(conditions))
+	for i, condition := range conditions {
+		message := &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_varchar)},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_Sval{Sval: "check failed"},
+			}},
+		}
+		var err error
+		assertions[i], err = plan2.BindFuncExprImplByPlanExpr(
+			context.Background(), "_check_constraint_assert", []*plan.Expr{condition, message})
+		require.NoError(t, err)
+	}
+	return assertions
+}
+
 func TestFilter(t *testing.T) {
 	tcs := makeTestCases(t)
 	for _, tc := range tcs {
@@ -208,6 +275,96 @@ func TestFilter(t *testing.T) {
 		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
+}
+
+func TestAssertFilterFastPath(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	message := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_Sval{Sval: "check failed"},
+		}},
+	}
+	assertExpr, err := plan2.BindFuncExprImplByPlanExpr(
+		t.Context(),
+		"_check_constraint_assert",
+		[]*plan.Expr{plan2.MakePlan2BoolConstExprWithType(false), message},
+	)
+	require.NoError(t, err)
+
+	arg := &Filter{FilterExprs: []*plan.Expr{assertExpr}, IsAssert: true}
+	resetChildren(arg, proc)
+	require.NoError(t, arg.Prepare(proc))
+	_, err = vm.Exec(arg, proc)
+	require.ErrorContains(t, err, "check failed")
+
+	for _, child := range arg.Children {
+		child.Free(proc, true, err)
+	}
+	arg.Free(proc, true, err)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestFilterReturnsSelectionOnLaterExecutorError(t *testing.T) {
+	tcs := makeTestCases(t)
+	tc := tcs[0]
+	tcs[1].proc.Free()
+	message := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_Sval{Sval: "later check failed"},
+		}},
+	}
+	assertExpr, err := plan2.BindFuncExprImplByPlanExpr(
+		t.Context(),
+		"_check_constraint_assert",
+		[]*plan.Expr{plan2.MakePlan2BoolConstExprWithType(false), message},
+	)
+	require.NoError(t, err)
+	tc.arg.FilterExprs = append(tc.arg.FilterExprs, assertExpr)
+
+	for i := 0; i < 100; i++ {
+		resetChildren(tc.arg, tc.proc)
+		require.NoError(t, tc.arg.Prepare(tc.proc))
+		_, err = vm.Exec(tc.arg, tc.proc)
+		require.ErrorContains(t, err, "later check failed")
+		tc.arg.Reset(tc.proc, true, err)
+	}
+
+	for _, child := range tc.arg.Children {
+		child.Free(tc.proc, true, err)
+	}
+	tc.arg.Free(tc.proc, true, err)
+	tc.proc.Free()
+	require.Zero(t, tc.proc.Mp().CurrNB())
+}
+
+func TestAssertFilterStillAppliesRuntimeFilter(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	assertions := makeCheckConstraintAssertExprs(
+		t,
+		[]*plan.Expr{plan2.MakePlan2BoolConstExprWithType(true)},
+	)
+	arg := &Filter{
+		FilterExprs:        assertions,
+		RuntimeFilterExprs: []*plan.Expr{plan2.MakePlan2BoolConstExprWithType(false)},
+		IsAssert:           true,
+	}
+	resetChildren(arg, proc)
+	require.NoError(t, arg.Prepare(proc))
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Zero(t, result.Batch.RowCount(),
+		"runtime filters remain cardinality-changing on ASSERT operators")
+
+	for _, child := range arg.Children {
+		child.Free(proc, false, nil)
+	}
+	arg.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
 }
 
 func resetChildren(arg *Filter, proc *process.Process) {
@@ -769,21 +926,7 @@ func TestConstantTranspose(t *testing.T) {
 					},
 				},
 			},
-			expect: &plan.Expr{
-				Typ: plan2.MakePlan2Type(&boolType),
-				Expr: &plan.Expr_F{
-					F: &plan.Function{
-						Func: &plan.ObjectRef{ObjName: "=", Obj: fid},
-						Args: []*plan.Expr{
-							colExpr,
-							makeSubExpr(
-								makeConstExpr(42),
-								makeConstExpr(10),
-							),
-						},
-					},
-				},
-			},
+			expect: nil,
 		},
 		{
 			name: "only-swap-already-simple",
@@ -838,30 +981,7 @@ func TestConstantTranspose(t *testing.T) {
 					},
 				},
 			},
-			expect: &plan.Expr{
-				Typ: plan2.MakePlan2Type(&boolType),
-				Expr: &plan.Expr_F{
-					F: &plan.Function{
-						Func: &plan.ObjectRef{ObjName: "=", Obj: fid},
-						Args: []*plan.Expr{
-							colExpr,
-							makeSubExpr(
-								makeSubExpr(
-									makeSubExpr(
-										makeConstExpr(-1),
-										makeConstExpr(5),
-									),
-									makeConstExpr(-1),
-								),
-								makeAddExpr(
-									makeConstExpr(-8),
-									makeConstExpr(2),
-								),
-							),
-						},
-					},
-				},
-			},
+			expect: nil,
 		},
 		{
 			name: "multiple-constants-in-both-sides",
@@ -883,24 +1003,7 @@ func TestConstantTranspose(t *testing.T) {
 					},
 				},
 			},
-			expect: &plan.Expr{
-				Typ: plan2.MakePlan2Type(&boolType),
-				Expr: &plan.Expr_F{
-					F: &plan.Function{
-						Func: &plan.ObjectRef{ObjName: "=", Obj: fid},
-						Args: []*plan.Expr{
-							colExpr,
-							makeSubExpr(
-								makeAddExpr(
-									makeConstExpr(5),
-									makeConstExpr(5),
-								),
-								makeConstExpr(10),
-							),
-						},
-					},
-				},
-			},
+			expect: nil,
 		},
 		{
 			name: "nested-expressions",
@@ -922,24 +1025,7 @@ func TestConstantTranspose(t *testing.T) {
 					},
 				},
 			},
-			expect: &plan.Expr{
-				Typ: plan2.MakePlan2Type(&boolType),
-				Expr: &plan.Expr_F{
-					F: &plan.Function{
-						Func: &plan.ObjectRef{ObjName: "=", Obj: fid},
-						Args: []*plan.Expr{
-							colExpr,
-							makeSubExpr(
-								makeSubExpr(
-									makeConstExpr(200),
-									makeConstExpr(50),
-								),
-								makeConstExpr(100),
-							),
-						},
-					},
-				},
-			},
+			expect: nil,
 		},
 		{
 			name: "unsupported-expression",
@@ -992,40 +1078,98 @@ func TestConstantTranspose(t *testing.T) {
 					},
 				},
 			},
-			expect: &plan.Expr{
-				Typ: plan2.MakePlan2Type(&boolType),
-				Expr: &plan.Expr_F{
-					F: &plan.Function{
-						Func: &plan.ObjectRef{ObjName: "=", Obj: fid},
-						Args: []*plan.Expr{
-							colExpr,
-							makeSubExpr(
-								makeAddExpr(
-									makeSubExpr(
-										makeConstExpr(2),
-										makeConstExpr(5),
-									),
-									makeConstExpr(1),
-								),
-								makeAddExpr(
-									makeAddExpr(
-										makeSubExpr(
-											makeAddExpr(
-												makeConstExpr(-9),
-												makeConstExpr(8),
-											),
-											makeConstExpr(7),
-										),
-										makeConstExpr(6),
-									),
-									makeConstExpr(2),
-								),
-							),
-						},
-					},
-				},
-			},
+			expect: nil,
 		},
+	}
+
+	bind := func(t *testing.T, name string, args ...*plan.Expr) *plan.Expr {
+		t.Helper()
+		expr, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, name, args)
+		require.NoError(t, err)
+		return expr
+	}
+	param := &plan.Expr{Typ: colExpr.Typ, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+	for _, tc := range []struct{ op, inverse string }{{"<", ">"}, {"<=", ">="}, {">", "<"}, {">=", "<="}} {
+		t.Run("native_range_"+tc.op, func(t *testing.T) {
+			input := bind(t, tc.op, param, colExpr)
+			result, err := plan2.ConstantTranspose(input, proc)
+			require.NoError(t, err)
+			require.Equal(t, bind(t, tc.inverse, colExpr, param), result)
+			require.Equal(t, tc.op, input.GetF().Func.ObjName, "input must stay unchanged")
+			again, err := plan2.ConstantTranspose(result, proc)
+			require.NoError(t, err)
+			require.Same(t, result, again, "normal form needs no replacement")
+		})
+	}
+	t.Run("native_range_nested_boolean", func(t *testing.T) {
+		equality := bind(t, "=", colExpr, makeConstExpr(42))
+		input := bind(t, "or", equality, bind(t, "and", bind(t, "<=", param, colExpr), equality))
+		before := plan2.DeepCopyExpr(input)
+		result, err := plan2.ConstantTranspose(input, proc)
+		require.NoError(t, err)
+		require.Equal(t, bind(t, "or", equality, bind(t, "and", bind(t, ">=", colExpr, param), equality)), result)
+		require.Equal(t, before, input, "Boolean children may be shared")
+	})
+	t.Run("boolean_direction_preserves_float_arithmetic", func(t *testing.T) {
+		floatType := types.T_float64.ToType()
+		col := &plan.Expr{Typ: plan2.MakePlan2Type(&floatType), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+		one := plan2.MakePlan2Float64ConstExprWithType(1)
+		two := plan2.MakePlan2Float64ConstExprWithType(2)
+		input := bind(t, "or", bind(t, "=", bind(t, "+", col, one), one), bind(t, "<=", two, col))
+		before := plan2.DeepCopyExpr(input)
+		result, err := plan2.ConstantTranspose(input, proc)
+		require.NoError(t, err)
+		require.Equal(t, before, input)
+		require.Equal(t, ">=", result.GetF().Args[1].GetF().Func.ObjName)
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewVec(floatType)
+		defer bat.Clean(mp)
+		for i, value := range []float64{1e-17, 2, 0, 0} {
+			require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, i == 3, mp))
+		}
+		bat.SetRowCount(4)
+		for _, expr := range []*plan.Expr{before, result} {
+			func() {
+				executor, err := colexec.NewExpressionExecutor(proc, expr)
+				require.NoError(t, err)
+				defer executor.Free()
+				values, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
+				require.NoError(t, err)
+				require.Equal(t, []bool{true, true, true}, vector.MustFixedColWithTypeCheck[bool](values)[:3])
+				require.True(t, values.GetNulls().Contains(3))
+			}()
+		}
+	})
+	target := &plan.Expr{Typ: colExpr.Typ, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
+	wideParam := plan2.DeepCopyExpr(param)
+	wideParam.Typ.Id = int32(types.T_int64)
+	for _, peer := range []*plan.Expr{makeConstExpr(42), makeAddExpr(makeConstExpr(40), makeConstExpr(2)), bind(t, "cast", wideParam, target)} {
+		input := bind(t, "<=", peer, colExpr)
+		result, err := plan2.ConstantTranspose(input, proc)
+		require.NoError(t, err)
+		require.Equal(t, bind(t, ">=", colExpr, peer), result, "peer domain must stay executable")
+	}
+
+	// Equality direction must preserve typed NULL and executable parameter/cast domains.
+	nullPeer := makeConstExpr(0)
+	nullPeer.GetLit().Isnull = true
+	for _, peer := range []*plan.Expr{param, nullPeer, bind(t, "cast", wideParam, target)} {
+		input := bind(t, "=", peer, colExpr)
+		before := plan2.DeepCopyExpr(input)
+		result, err := plan2.ConstantTranspose(input, proc)
+		require.NoError(t, err)
+		require.Equal(t, bind(t, "=", colExpr, peer), result)
+		require.Equal(t, before, input)
+		again, err := plan2.ConstantTranspose(result, proc)
+		require.NoError(t, err)
+		require.Same(t, result, again)
+	}
+	volatile := bind(t, "cast", bind(t, "rand"), target)
+	wrappedCol := bind(t, "cast", colExpr, &plan.Expr{Typ: wideParam.Typ, Expr: &plan.Expr_T{T: &plan.TargetType{}}})
+	for _, input := range []*plan.Expr{bind(t, "<=", volatile, colExpr), bind(t, "<=", colExpr, colExpr), bind(t, "<=", wideParam, wrappedCol)} {
+		result, err := plan2.ConstantTranspose(input, proc)
+		require.NoError(t, err)
+		require.Same(t, input, result, "only scan-invariant peers beside bare columns qualify")
 	}
 
 	for _, tt := range tests {

@@ -47,11 +47,13 @@ import (
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	idxcronplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/idxcron"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
+	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 
 	ivfflatcompile "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/compile"
 	ivfflatidxcron "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/idxcron"
 	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	ivfflatruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/runtime"
+	ivfflatsearch "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/search"
 )
 
 // Plugin is the IVF-FLAT AlgoPlugin. Mirrors the IVF-PQ structure.
@@ -60,6 +62,7 @@ type Plugin struct {
 	compileHooks compileplugin.Hooks
 	planHooks    planplugin.Hooks
 	idxcronHooks idxcronplugin.Hooks
+	searchHooks  searchplugin.Hooks
 }
 
 func New() *Plugin {
@@ -68,6 +71,7 @@ func New() *Plugin {
 		compileHooks: ivfflatcompile.Hooks{},
 		planHooks:    ivfflatplan.Hooks{},
 		idxcronHooks: ivfflatidxcron.Hooks{},
+		searchHooks:  ivfflatsearch.Hooks{},
 	}
 }
 
@@ -76,11 +80,13 @@ func (p *Plugin) Catalog() catalogplugin.Hooks { return p.catalogHooks }
 func (p *Plugin) Compile() compileplugin.Hooks { return p.compileHooks }
 func (p *Plugin) Plan() planplugin.Hooks       { return p.planHooks }
 func (p *Plugin) Idxcron() idxcronplugin.Hooks { return p.idxcronHooks }
+func (p *Plugin) Search() searchplugin.Hooks   { return p.searchHooks }
 
 // Compile-time check that *Plugin satisfies the AlgoPlugin interface.
 // If a new method is added to AlgoPlugin and this plugin hasn't been
 // updated, this line stops the build.
 var _ plugin.AlgoPlugin = (*Plugin)(nil)
+var _ plugin.SearchPlugin = (*Plugin)(nil)
 
 // init registers IVF-FLAT with the global plugin registry. Compile
 // hooks are fully lifted (Phase 4c); plan hooks are still stubs (Phases

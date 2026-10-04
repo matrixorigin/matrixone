@@ -18,6 +18,7 @@ import (
 	"context"
 	gotrace "runtime/trace"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -51,21 +52,59 @@ func putCommitter(c *groupCommitter) {
 type groupCommitter struct {
 	sync.WaitGroup
 
-	client *wrappedClient
-	psn    uint64
-	writer *LogEntryWriter
+	client     *wrappedClient
+	psn        uint64
+	writer     *LogEntryWriter
+	errMu      sync.Mutex
+	err        error
+	doneC      chan struct{}
+	doneClosed atomic.Bool
 }
 
 func newGroupCommitter() *groupCommitter {
 	return &groupCommitter{
 		writer: NewLogEntryWriter(),
+		doneC:  make(chan struct{}),
 	}
 }
 
 func (a *groupCommitter) Reset() {
 	a.client = nil
 	a.psn = 0
+	a.errMu.Lock()
+	a.err = nil
+	a.errMu.Unlock()
+	a.doneC = make(chan struct{})
+	a.doneClosed.Store(false)
 	a.writer.Reset()
+}
+
+func (a *groupCommitter) startCommit() {
+	a.Add(1)
+}
+
+func (a *groupCommitter) finishCommit() {
+	a.Done()
+	if a.doneClosed.CompareAndSwap(false, true) {
+		close(a.doneC)
+	}
+}
+
+func (a *groupCommitter) waitCommit() {
+	<-a.doneC
+}
+
+func (a *groupCommitter) setError(err error) {
+	a.errMu.Lock()
+	a.err = err
+	a.errMu.Unlock()
+}
+
+func (a *groupCommitter) getError() error {
+	a.errMu.Lock()
+	err := a.err
+	a.errMu.Unlock()
+	return err
 }
 
 func (a *groupCommitter) AddIntent(e *entry.Entry) {
@@ -125,6 +164,13 @@ func (a *groupCommitter) PutbackClient() {
 
 func (a *groupCommitter) NotifyCommitted() {
 	a.writer.NotifyDone(nil)
+}
+
+// NotifyError completes every entry owned by the committer before the driver
+// escalates the append failure. LogEntryWriter makes this terminal transition
+// idempotent, so a later wait-loop cleanup cannot call Done twice.
+func (a *groupCommitter) NotifyError(err error) {
+	a.writer.NotifyDone(err)
 }
 
 func logSlowAppend(

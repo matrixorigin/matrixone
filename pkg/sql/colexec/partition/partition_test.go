@@ -16,6 +16,7 @@ package partition
 
 import (
 	"bytes"
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -80,6 +81,31 @@ func TestPartition(t *testing.T) {
 		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
+}
+
+func TestPartitionOutputHonorsCancellation(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	arg := &Partition{
+		OrderBySpecs: []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int32)}},
+	}
+	require.NoError(t, arg.Prepare(proc))
+
+	bat := colexec.MakeMockPartitionBatchs(1, proc.Mp())
+	arg.ctr.batchList = append(arg.ctr.batchList, bat)
+	require.NoError(t, arg.ctr.evaluateOrderColumn(proc, 0))
+	arg.ctr.indexList = []int64{0}
+	arg.ctr.status = eval
+
+	ctx, cancel := context.WithCancel(proc.Ctx)
+	proc.Ctx = ctx
+	cancel()
+
+	_, err := arg.Call(proc)
+	require.ErrorIs(t, err, context.Canceled)
+
+	arg.Free(proc, true, err)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
 func newExpression(pos int32, typeID types.T) *plan.Expr {

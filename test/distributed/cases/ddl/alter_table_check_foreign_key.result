@@ -152,6 +152,7 @@ sal    DECIMAL(7,2)    YES        null        雇员的基本工资
 comm    DECIMAL(7,2)    YES        null        奖金
 deptno    INT UNSIGNED(32)    YES    MUL    10        所在部门
 alter table emp ALTER COLUMN deptno SET INVISIBLE;
+not supported: invisible columns
 desc emp;
 Field    Type    Null    Key    Default    Extra    Comment
 empno    INT UNSIGNED(32)    NO    PRI    null    auto_increment    雇员编号

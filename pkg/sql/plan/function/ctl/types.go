@@ -18,6 +18,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -45,22 +46,26 @@ var (
 	TraceSpanMethod          = "TRACESPAN"
 	CoreDumpMethod           = "COREDUMP"
 	InterceptCommitMethod    = "INTERCEPTCOMMIT"
-	MergeObjectsMethod       = "MERGEOBJECTS"
 	DiskCleanerMethod        = "DISKCLEANER"
 	GetProtocolVersionMethod = "GETPROTOCOLVERSION"
 	SetProtocolVersionMethod = "SETPROTOCOLVERSION"
-	RemoveRemoteLockTable    = strings.ToUpper("RemoveRemoteLockTable")
-	GetLatestBind            = strings.ToUpper("GetLatestBind")
-	UnsubscribeTable         = "UNSUBSCRIBE_TABLE"
-	HandleTxnTrace           = strings.ToUpper("txn-trace")
-	ReloadAutoIncrementCache = strings.ToUpper("reload-auto-increment-cache")
-	CtlReaderMethod          = strings.ToUpper("reader")
-	GetTableShards           = strings.ToUpper("get-table-shards")
-	MoTableStats             = strings.ToUpper("MoTableStats")
-	WorkspaceThreshold       = strings.ToUpper("WorkspaceThreshold")
-	TableExtra               = strings.ToUpper("table-extra")
-	PrefetchOnSubscribed     = strings.ToUpper("prefetch-on-subscribed")
-	GCCatalogCacheMethod     = strings.ToUpper("GCCatalogCache")
+
+	SetVectorIndexFreshnessIntervalMethod = strings.ToUpper("SetVectorIndexFreshnessInterval")
+	GetVectorIndexCacheInfoMethod         = strings.ToUpper("GetVectorIndexCacheInfo")
+	EvictVectorIndexCacheMethod           = strings.ToUpper("EvictVectorIndexCache")
+	GetVectorIndexCacheKeysMethod         = strings.ToUpper("GetVectorIndexCacheKeys")
+	RemoveRemoteLockTable                 = strings.ToUpper("RemoveRemoteLockTable")
+	GetLatestBind                         = strings.ToUpper("GetLatestBind")
+	UnsubscribeTable                      = "UNSUBSCRIBE_TABLE"
+	ReloadAutoIncrementCache              = strings.ToUpper("reload-auto-increment-cache")
+	CtlReaderMethod                       = strings.ToUpper("reader")
+	GetTableShards                        = strings.ToUpper("get-table-shards")
+	MoTableStats                          = strings.ToUpper("MoTableStats")
+	WorkspaceThreshold                    = strings.ToUpper("WorkspaceThreshold")
+	TableExtra                            = strings.ToUpper("table-extra")
+	PrefetchOnSubscribed                  = strings.ToUpper("prefetch-on-subscribed")
+	GCCatalogCacheMethod                  = strings.ToUpper("GCCatalogCache")
+	RefreshViewMetadata                   = strings.ToUpper("RefreshViewMetadata")
 )
 
 var (
@@ -90,22 +95,26 @@ var (
 		TraceSpanMethod:          handleTraceSpan,
 		CoreDumpMethod:           handleCoreDump,
 		InterceptCommitMethod:    handleInterceptCommit(),
-		MergeObjectsMethod:       handleCNMerge,
 		DiskCleanerMethod:        handleDiskCleaner(),
 		GetProtocolVersionMethod: handleGetProtocolVersion,
 		SetProtocolVersionMethod: handleSetProtocolVersion,
-		RemoveRemoteLockTable:    handleRemoveRemoteLockTable,
-		GetLatestBind:            handleGetLatestBind,
-		UnsubscribeTable:         handleUnsubscribeTable,
-		HandleTxnTrace:           handleTxnTrace,
-		ReloadAutoIncrementCache: handleReloadAutoIncrementCache,
-		CtlReaderMethod:          handleCtlReader,
-		GetTableShards:           handleGetTableShards,
-		MoTableStats:             handleMoTableStats,
-		WorkspaceThreshold:       handleWorkspaceThreshold,
-		TableExtra:               handleTableExtra,
-		PrefetchOnSubscribed:     handlePrefetchOnSubscribed,
-		GCCatalogCacheMethod:     handleGCCatalogCache,
+
+		SetVectorIndexFreshnessIntervalMethod: handleSetVectorIndexFreshnessInterval,
+		GetVectorIndexCacheInfoMethod:         handleGetVectorIndexCacheInfo,
+		EvictVectorIndexCacheMethod:           handleEvictVectorIndexCache,
+		GetVectorIndexCacheKeysMethod:         handleGetVectorIndexCacheKeys,
+		RemoveRemoteLockTable:                 handleRemoveRemoteLockTable,
+		GetLatestBind:                         handleGetLatestBind,
+		UnsubscribeTable:                      handleUnsubscribeTable,
+		ReloadAutoIncrementCache:              handleReloadAutoIncrementCache,
+		CtlReaderMethod:                       handleCtlReader,
+		GetTableShards:                        handleGetTableShards,
+		MoTableStats:                          handleMoTableStats,
+		WorkspaceThreshold:                    handleWorkspaceThreshold,
+		TableExtra:                            handleTableExtra,
+		PrefetchOnSubscribed:                  handlePrefetchOnSubscribed,
+		GCCatalogCacheMethod:                  handleGCCatalogCache,
+		RefreshViewMetadata:                   handleRefreshViewMetadata,
 	}
 )
 
@@ -120,4 +129,17 @@ type handleFunc func(proc *process.Process,
 type Result struct {
 	Method string `json:"method"`
 	Data   any    `json:"result"`
+}
+
+// GetFirstTNResponse returns the first response for callers that require a TN target.
+// Commands for which an empty target set is valid should use Result.Data directly.
+func GetFirstTNResponse(ctx context.Context, result Result) (any, error) {
+	responses, ok := result.Data.([]any)
+	if !ok {
+		return nil, moerr.NewInternalErrorf(ctx, "invalid TN response data %T", result.Data)
+	}
+	if len(responses) == 0 {
+		return nil, moerr.NewNoAvailableBackend(ctx)
+	}
+	return responses[0], nil
 }

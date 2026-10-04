@@ -1,4 +1,5 @@
 drop table if exists t1;
+drop snapshot if exists pr27011_view_history;
 create table t1 (a int, b int);
 insert into t1 values (1, 11), (2, 22), (3, 33);
 insert into t2 values (1, "aa"), (2, "bb");
@@ -9,5 +10,119 @@ create view v1 as select * from t1 where a > 1;
 select * from v1;
 create or replace view v1 as select * from t1 where a > 1;
 select * from v1;
+
+create view if not exists v1 as select * from v1;
+select * from v1;
+create or replace view if not exists v1 as select * from t1 where a = 1;
+select * from v1;
+create or replace view if not exists v1 as select * from v1;
+select * from v1;
+
+create or replace view v1 as select * from v1;
+select * from v1;
+
+create view v2 as select * from v1;
+create or replace view v1 as select * from v2;
+select * from v1;
+drop view v2;
+
+drop database if exists replace_view_dep;
+create database replace_view_dep;
+create view replace_view_dep.v3 as select * from replace_view.v1;
+create or replace view replace_view.v1 as select * from replace_view_dep.v3;
+select * from v1;
+drop database replace_view_dep;
+
+set global lower_case_table_names = 0;
+-- @session
+
+-- @session:id=1&user=sys:root&password=111
+use replace_view;
+drop view if exists mode_i;
+drop view if exists MODE_V;
+drop view if exists mode_v;
+create view mode_v as select 1 as a;
+create view MODE_V as select 2 as a;
+create view mode_i as select * from MODE_V;
+set global lower_case_table_names = 2;
+-- @session
+
+-- @session:id=2&user=sys:root&password=111
+use replace_view;
+create or replace view mode_v as select * from mode_i;
+select * from mode_v;
+set global lower_case_table_names = 0;
+-- @session
+
+-- @session:id=3&user=sys:root&password=111
+use replace_view;
+drop view mode_i;
+drop view MODE_V;
+drop view mode_v;
+set global lower_case_table_names = 1;
+-- @session
+
+set global lower_case_table_names = 2;
+-- @session
+
+-- @session:id=4&user=sys:root&password=111
+use replace_view;
+drop database if exists replace_view_case_dep;
+drop view if exists case_v2;
+drop view if exists case_v;
+create view case_v as select * from t1 where a = 1;
+create or replace view Case_V as select * from case_v;
+select * from case_v;
+
+create view case_v2 as select * from case_v;
+create or replace view CASE_V as select * from case_v2;
+select * from case_v;
+
+create database replace_view_case_dep;
+create view replace_view_case_dep.case_v3 as select * from replace_view.case_v;
+create or replace view replace_view.Case_V as select * from replace_view_case_dep.case_v3;
+select * from case_v;
+
+alter view case_v as select * from case_v;
+select * from case_v;
+
+drop database replace_view_case_dep;
+drop view case_v2;
+drop view case_v;
+set global lower_case_table_names = 1;
+-- @session
+
+create table history_t (a int);
+insert into history_t values (11);
+create view history_v as select * from history_t;
+create snapshot pr27011_view_history for account;
+create or replace view history_v as select 22 as a;
+select * from history_v;
+create or replace view history_v as select * from history_v {snapshot = 'pr27011_view_history'};
+select * from history_v;
+
+create or replace view history_v as select 22 as a;
+alter view history_v as select * from history_v {snapshot = 'pr27011_view_history'};
+select * from history_v;
+
+create or replace view history_v as select 22 as a;
+set @pr27011_snapshot_ts = (select cast_nano_to_timestamp(ts) from mo_catalog.mo_snapshots where sname = 'pr27011_view_history');
+set @pr27011_replace_by_ts = concat('create or replace view history_v as select * from history_v {timestamp = ''', @pr27011_snapshot_ts, '''}');
+prepare pr27011_replace_stmt from @pr27011_replace_by_ts;
+execute pr27011_replace_stmt;
+deallocate prepare pr27011_replace_stmt;
+select * from history_v;
+
+create or replace view history_v as select 22 as a;
+create or replace view history_v as select * from history_v {timestamp = 9223372036854775807};
+select * from history_v;
+create or replace view history_v as select * from history_v {MO_TS = '9223372036854775807-0'};
+select * from history_v;
+create or replace view history_v as select * from history_v {as of timestamp '2262-04-11 23:47:16'};
+select * from history_v;
+
+drop view history_v;
+drop table history_t;
+drop snapshot pr27011_view_history;
 drop table t1;
 drop view v1;

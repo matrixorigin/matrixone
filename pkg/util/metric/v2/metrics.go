@@ -51,14 +51,21 @@ func init() {
 	initProxyMetrics()
 	initFrontendMetrics()
 	initPipelineMetrics()
+	initSQLMetrics()
+	initMongoDBMetrics()
 	initScheduleMetrics()
 	initLogServiceMetrics()
 	initShardingMetrics()
 	initGCMetrics()
 	initCCPRMetrics()
+	initExecutionResourceMetrics()
+	initHashBuildMetrics()
+	initArrowLoadMetrics()
 
 	registry.MustRegister(HeartbeatHistogram)
 	registry.MustRegister(HeartbeatFailureCounter)
+	registry.MustRegister(ScheduleCommandPollHistogram)
+	registry.MustRegister(ScheduleCommandPollFailureCounter)
 	registry.MustRegister(HeartbeatRecvHistogram)
 	registry.MustRegister(HeartbeatRecvFailureCounter)
 	registry.MustRegister(statsTriggerCounter)
@@ -67,10 +74,29 @@ func init() {
 	registry.MustRegister(StatsUpdateBlockCounter)
 }
 
+func initArrowLoadMetrics() {
+	registry.MustRegister(ArrowLoadObjectCounter)
+	registry.MustRegister(ArrowLoadShardCounter)
+	registry.MustRegister(ArrowLoadRecordCounter)
+	registry.MustRegister(ArrowLoadBatchCounter)
+	registry.MustRegister(ArrowLoadRowCounter)
+	registry.MustRegister(ArrowLoadPayloadBytesCounter)
+	registry.MustRegister(ArrowLoadCopyBytesCounter)
+	registry.MustRegister(ArrowLoadConversionColumnCounter)
+	registry.MustRegister(ArrowLoadFallbackCounter)
+	registry.MustRegister(ArrowLoadErrorCounter)
+	registry.MustRegister(ArrowLoadPhaseDurationHistogram)
+	registry.MustRegister(ArrowLoadPinnedBytesGauge)
+	registry.MustRegister(ArrowLoadPinnedBytesHighWaterGauge)
+}
+
 func initMemMetrics() {
 	registry.MustRegister(memMPoolAllocatedSizeGauge)
+	registry.MustRegister(MemObjectIOPooledSerialBytesGauge)
 	registry.MustRegister(MemTotalCrossPoolFreeCounter)
 	registry.MustRegister(memMPoolHighWaterMarkGauge)
+	registry.MustRegister(MemMPoolOnHeapOutstandingBytesGauge)
+	registry.MustRegister(MemMPoolOnHeapOutstandingObjectsGauge)
 	registry.MustRegister(MallocCounter)
 	registry.MustRegister(MallocGauge)
 	registry.MustRegister(OffHeapInuseGauge)
@@ -79,6 +105,7 @@ func initMemMetrics() {
 func initTaskMetrics() {
 	registry.MustRegister(taskShortDurationHistogram)
 	registry.MustRegister(taskLongDurationHistogram)
+	registry.MustRegister(taskCheckpointRetryCounter)
 
 	registry.MustRegister(taskDNMergeStuffCounter)
 	registry.MustRegister(taskDNMergeDurationHistogram)
@@ -100,7 +127,9 @@ func initTaskMetrics() {
 
 func initFileServiceMetrics() {
 	registry.MustRegister(fsReadCounter)
+	registry.MustRegister(sharedDecodeCounter, SharedDecodeActive, SharedDecodeReserved)
 	registry.MustRegister(fsCacheBytes)
+	registry.MustRegister(fsCacheAllocatorArenas)
 	registry.MustRegister(fsCachePressureCounter)
 	registry.MustRegister(fsCachePressureEvictDuration)
 
@@ -111,6 +140,7 @@ func initFileServiceMetrics() {
 	registry.MustRegister(ioMergerCounter)
 	registry.MustRegister(ioMergerDuration)
 	registry.MustRegister(fsReadWriteDuration)
+	registry.MustRegister(fsMultipartInitCounter)
 	registry.MustRegister(FSObjectStorageOperations)
 
 	registry.MustRegister(FSHTTPTraceCounter)
@@ -118,6 +148,8 @@ func initFileServiceMetrics() {
 
 	registry.MustRegister(FSDiskCacheEvictCounter)
 	registry.MustRegister(FSDiskCacheErrorCounter)
+	registry.MustRegister(FSDiskCacheAsyncUpdateDroppedCounter)
+	registry.MustRegister(FSDiskCacheAsyncCallbackPanicCounter)
 }
 
 func initLogtailMetrics() {
@@ -163,6 +195,7 @@ func initTxnMetrics() {
 	registry.MustRegister(TxnLifeCycleStatementsTotalHistogram)
 	registry.MustRegister(txnCreateDurationHistogram)
 	registry.MustRegister(txnStatementDurationHistogram)
+	registry.MustRegister(txnLoadLogtailReadBarrierDurationHistogram)
 	registry.MustRegister(txnLockDurationHistogram)
 	registry.MustRegister(txnUnlockDurationHistogram)
 	registry.MustRegister(TxnTableRangeDurationHistogram)
@@ -210,12 +243,15 @@ func initRPCMetrics() {
 	registry.MustRegister(rpcBackendClosedCounter)
 	registry.MustRegister(rpcBackendConnectCounter)
 	registry.MustRegister(rpcMessageCounter)
+	registry.MustRegister(rpcClientRequestStartedCounter)
+	registry.MustRegister(rpcClientRequestCompletedCounter)
 	registry.MustRegister(rpcNetworkBytesCounter)
 	registry.MustRegister(rpcGCChannelDropCounter)
 	registry.MustRegister(rpcGCIdleBackendsCleanedCounter)
 	registry.MustRegister(rpcGCInactiveProcessedCounter)
 	registry.MustRegister(rpcGCCreateProcessedCounter)
 	registry.MustRegister(rpcBackendAutoCreateTimeoutCounter)
+	registry.MustRegister(rpcBackendAutoCreateTimeoutEventCounter)
 	registry.MustRegister(rpcBackendUnavailableCounter)
 	registry.MustRegister(rpcCircuitBreakerStateGauge)
 	registry.MustRegister(rpcCircuitBreakerTripsCounter)
@@ -238,6 +274,7 @@ func initRPCMetrics() {
 	registry.MustRegister(rpcWriteDurationHistogram)
 	registry.MustRegister(rpcWriteLatencyDurationHistogram)
 	registry.MustRegister(rpcBackendDoneDurationHistogram)
+	registry.MustRegister(rpcClientRequestDurationHistogram)
 
 }
 
@@ -255,6 +292,7 @@ func initProxyMetrics() {
 	registry.MustRegister(ProxyCNHealthCounter)
 	registry.MustRegister(ProxyBackendHandshakeDurationHistogram)
 	registry.MustRegister(ProxyBackendHandshakeInflightGauge)
+	registry.MustRegister(ProxyBackendHandshakeEventCounter)
 }
 
 func initFrontendMetrics() {
@@ -281,6 +319,22 @@ func initPipelineMetrics() {
 	registry.MustRegister(PipelineStreamFinishDurationHistogram)
 	registry.MustRegister(PipelineRemoteReceiverWaitDurationHistogram)
 	registry.MustRegister(PipelineRemoteNotifyRetryCounter)
+}
+
+func initMongoDBMetrics() {
+	registry.MustRegister(MongoDBScanDocumentsCounter)
+	registry.MustRegister(MongoDBScanRawBytesCounter)
+	registry.MustRegister(MongoDBConversionErrorCounter)
+	registry.MustRegister(MongoDBCursorEventCounter)
+	registry.MustRegister(MongoDBPhaseDurationHistogram)
+	registry.MustRegister(MongoDBDriverCommandCounter)
+	registry.MustRegister(MongoDBDriverCommandDurationHistogram)
+	registry.MustRegister(MongoDBRetryableFindCounter)
+	registry.MustRegister(MongoDBPoolEventCounter)
+	registry.MustRegister(MongoDBPoolEventDurationHistogram)
+	registry.MustRegister(MongoDBPoolCheckedOutGauge)
+	registry.MustRegister(MongoDBSelectedServerRoleCounter)
+	registry.MustRegister(MongoDBServerHeartbeatDurationHistogram)
 }
 
 func initLogServiceMetrics() {

@@ -66,3 +66,23 @@ alter table t1 drop column name;
 show index from t1;
 select name, type, column_name from mo_catalog.mo_indexes mi where name="idx4";
 insert into t1 values(29);
+
+-- Ordered index action state: planner validation and final catalog materialization
+-- must consume the same sequence.
+drop table if exists seq_idx;
+create table seq_idx(a int primary key, b int);
+
+-- ADD -> DROP leaves no index.
+alter table seq_idx add index idx_seq(b), drop index idx_seq;
+show create table seq_idx;
+
+-- DROP -> ADD -> DROP also leaves no index.
+create index idx_seq on seq_idx(b);
+alter table seq_idx drop index idx_seq, add index idx_seq(b), drop index idx_seq;
+show create table seq_idx;
+
+-- Repeated DROP fails atomically and preserves the original index.
+create index idx_seq on seq_idx(b);
+alter table seq_idx drop index idx_seq, drop index idx_seq;
+show create table seq_idx;
+drop table seq_idx;

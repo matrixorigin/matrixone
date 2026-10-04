@@ -84,6 +84,35 @@ class TestCuvs(unittest.TestCase):
         self.assertEqual(neighbors.shape, (5, self.k))
         self.assertEqual(distances.shape, (5, self.k))
 
+    def test_cagra_f16_quantize(self):
+        # vecf16 BASE quantized to int8/uint8 via the native half-source quantizer
+        # (btype=F16). Exercises the f16 data path: dataset + query stay half.
+        ds = np.random.random((self.n_rows, self.dim)).astype(np.float16)
+        q = ds[:5]
+        for qt in (cuvs.Quantization.INT8, cuvs.Quantization.UINT8):
+            index = cuvs.CagraIndex.create(ds, btype=cuvs.Quantization.F16, qtype=qt)
+            index.start()
+            index.train_quantizer(ds)  # CAGRA from-dataset build does not auto-train the quantizer
+            index.build()
+            neighbors, distances = index.search(q, self.k)
+            self.assertEqual(neighbors.shape, (5, self.k))
+            self.assertTrue(np.all(neighbors >= 0))
+            self.assertTrue(np.all(neighbors < self.n_rows))
+
+    def test_ivf_pq_f16_quantize(self):
+        ds = np.random.random((self.n_rows, self.dim)).astype(np.float16)
+        q = ds[:5]
+        bp = cuvs.IvfPqBuildParams(n_lists=32, m=8, bits_per_code=8, add_data_on_build=True, kmeans_trainset_fraction=1.0)
+        for qt in (cuvs.Quantization.INT8, cuvs.Quantization.UINT8):
+            index = cuvs.IvfPqIndex.create(ds, build_params=bp, btype=cuvs.Quantization.F16, qtype=qt)
+            index.start()
+            index.train_quantizer(ds)
+            index.build()
+            neighbors, distances = index.search(q, self.k)
+            self.assertEqual(neighbors.shape, (5, self.k))
+            self.assertTrue(np.all(neighbors >= 0))
+            self.assertTrue(np.all(neighbors < self.n_rows))
+
     def test_kmeans(self):
         n_clusters = 5
         kmeans = cuvs.KMeans(n_clusters=n_clusters, dimension=self.dim)

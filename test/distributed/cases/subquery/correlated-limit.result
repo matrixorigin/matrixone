@@ -1,0 +1,190 @@
+drop database if exists correlated_limit;
+create database correlated_limit;
+use correlated_limit;
+create table parent_t (
+id int primary key,
+corr_key int,
+top_amount int
+);
+create table child_t (
+id int primary key,
+parent_id int,
+amount int
+);
+insert into parent_t values
+(1, 1, null),
+(2, 2, null),
+(3, 3, null),
+(4, 4, null),
+(5, null, null);
+insert into child_t values
+(1, 1, 10),
+(2, 1, 20),
+(3, 2, 30),
+(4, 2, 40),
+(5, 2, 40),
+(6, 3, null),
+(7, 3, 50),
+(8, 3, 60),
+(9, null, 70);
+select p.id,
+(select c.amount
+from child_t c
+where c.parent_id = p.corr_key
+order by c.amount desc, c.id desc
+limit 1) as top_amount,
+(select c.id
+from child_t c
+where c.parent_id = p.corr_key
+order by c.amount desc, c.id desc
+limit 1) as top_child_id
+from parent_t p
+order by p.id;
+➤ id[4,32,0]  ¦  top_amount[4,32,0]  ¦  top_child_id[4,32,0]  𝄀
+1  ¦  20  ¦  2  𝄀
+2  ¦  40  ¦  5  𝄀
+3  ¦  60  ¦  8  𝄀
+4  ¦  null  ¦  null  𝄀
+5  ¦  null  ¦  null
+select p.id,
+(select 1
+from child_t c
+where c.parent_id = p.corr_key
+limit 1) as has_child
+from parent_t p
+order by p.id;
+➤ id[4,32,0]  ¦  has_child[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  1  𝄀
+4  ¦  null  𝄀
+5  ¦  null
+select p.id,
+(select c.id
+from child_t c
+where c.parent_id = p.corr_key
+order by c.amount desc, c.id desc
+limit 1 offset 1) as second_child_id
+from parent_t p
+order by p.id;
+➤ id[4,32,0]  ¦  second_child_id[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  4  𝄀
+3  ¦  7  𝄀
+4  ¦  null  𝄀
+5  ¦  null
+select p.id,
+(select c.amount
+from child_t c
+where c.parent_id <=> p.corr_key
+order by c.amount desc, c.id desc
+limit 1) as top_amount
+from parent_t p
+order by p.id;
+➤ id[4,32,0]  ¦  top_amount[4,32,0]  𝄀
+1  ¦  20  𝄀
+2  ¦  40  𝄀
+3  ¦  60  𝄀
+4  ¦  null  𝄀
+5  ¦  70
+select p.id
+from parent_t p
+where exists (
+select 1 from child_t c where c.parent_id = p.corr_key limit 1)
+order by p.id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select p.id
+from parent_t p
+where not exists (
+select 1 from child_t c where c.parent_id = p.corr_key limit 1)
+order by p.id;
+➤ id[4,32,0]  𝄀
+4  𝄀
+5
+select p.id,
+coalesce((select c.amount
+from child_t c
+where c.parent_id = p.corr_key
+limit 0), -1) as limited_zero
+from parent_t p
+order by p.id;
+➤ id[4,32,0]  ¦  limited_zero[-5,64,0]  𝄀
+1  ¦  -1  𝄀
+2  ¦  -1  𝄀
+3  ¦  -1  𝄀
+4  ¦  -1  𝄀
+5  ¦  -1
+update parent_t p
+set p.top_amount = (select c.amount
+from child_t c
+where c.parent_id = p.corr_key
+order by c.amount desc, c.id desc
+limit 1)
+where p.id <= 4;
+select id, top_amount from parent_t where id <= 4 order by id;
+➤ id[4,32,0]  ¦  top_amount[4,32,0]  𝄀
+1  ¦  20  𝄀
+2  ¦  40  𝄀
+3  ¦  60  𝄀
+4  ¦  null
+start transaction;
+update parent_t p
+set p.top_amount = (select c.amount
+from child_t c
+where c.parent_id = p.corr_key
+order by c.amount desc, c.id desc
+limit 1 offset 1)
+where p.id <= 4;
+rollback;
+select id, top_amount from parent_t where id <= 4 order by id;
+➤ id[4,32,0]  ¦  top_amount[4,32,0]  𝄀
+1  ¦  20  𝄀
+2  ¦  40  𝄀
+3  ¦  60  𝄀
+4  ¦  null
+create table delete_exists_t (id int primary key);
+insert into delete_exists_t values (1), (2), (3), (4);
+delete from delete_exists_t d
+where exists (
+select 1 from child_t c where c.parent_id = d.id limit 1);
+select id from delete_exists_t order by id;
+➤ id[4,32,0]  𝄀
+4
+create table delete_not_exists_t (id int primary key);
+insert into delete_not_exists_t values (1), (2), (3), (4);
+delete from delete_not_exists_t d
+where not exists (
+select 1 from child_t c where c.parent_id = d.id limit 1);
+select id from delete_not_exists_t order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select p.id,
+(select max(c.amount) from child_t c where c.parent_id = p.corr_key) as max_amount
+from parent_t p
+where p.id <= 4
+order by p.id;
+➤ id[4,32,0]  ¦  max_amount[4,32,0]  𝄀
+1  ¦  20  𝄀
+2  ¦  40  𝄀
+3  ¦  60  𝄀
+4  ¦  null
+select p.id, r.amount as window_amount
+from parent_t p
+left join (
+select parent_id, amount,
+row_number() over (partition by parent_id order by amount desc, id desc) as rn
+from child_t) r
+on r.parent_id = p.corr_key and r.rn = 1
+where p.id <= 4
+order by p.id;
+➤ id[4,32,0]  ¦  window_amount[4,32,0]  𝄀
+1  ¦  20  𝄀
+2  ¦  40  𝄀
+3  ¦  60  𝄀
+4  ¦  null
+drop database correlated_limit;

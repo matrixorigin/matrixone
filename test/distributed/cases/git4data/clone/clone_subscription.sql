@@ -8,10 +8,12 @@ insert into sys_db1.t1 values(1),(2);
 create table sys_db1.t2(a int primary key, b int, foreign key (b) references sys_db1.t1(a));
 insert into sys_db1.t2 values(1,1),(2,2);
 
+create procedure sys_db1.secret_proc() 'begin select 99 as secret; end';
+
 drop account if exists acc1;
 create account acc1 admin_name "root1" identified by "111";
 
-create publication pub1 database sys_db1 account acc1;
+create publication pub1 database sys_db1 table t1,t2 account acc1;
 
 -- @session:id=2&user=acc1:root1&password=111
 create database sub1 from sys publication pub1;
@@ -20,6 +22,8 @@ show tables from sub1;
 create database test1 clone sub1;
 select * from test1.t1;
 select * from test1.t2;
+select count(*) from mo_catalog.mo_stored_procedure where db = 'test1' and name = 'secret_proc';
+call test1.secret_proc();
 
 create table test1.t3 clone sub1.t1;
 create table test1.t4 clone sub1.t2;

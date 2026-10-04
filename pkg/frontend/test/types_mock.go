@@ -264,6 +264,20 @@ func (mr *MockComputationWrapperMockRecorder) RecordCompoundStmt(ctx, statsBytes
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RecordCompoundStmt", reflect.TypeOf((*MockComputationWrapper)(nil).RecordCompoundStmt), ctx, statsBytes)
 }
 
+// StatsCompositeSubStmtResource mocks base method.
+func (m *MockComputationWrapper) StatsCompositeSubStmtResource(ctx context.Context) statistic.StatsArray {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "StatsCompositeSubStmtResource", ctx)
+	ret0, _ := ret[0].(statistic.StatsArray)
+	return ret0
+}
+
+// StatsCompositeSubStmtResource indicates an expected call of StatsCompositeSubStmtResource.
+func (mr *MockComputationWrapperMockRecorder) StatsCompositeSubStmtResource(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StatsCompositeSubStmtResource", reflect.TypeOf((*MockComputationWrapper)(nil).StatsCompositeSubStmtResource), ctx)
+}
+
 // RecordExecPlan mocks base method.
 func (m *MockComputationWrapper) RecordExecPlan(ctx context.Context, phyPlan *models.PhyPlan) error {
 	m.ctrl.T.Helper()
@@ -315,20 +329,6 @@ func (m *MockComputationWrapper) SetExplainBuffer(buf *bytes.Buffer) {
 func (mr *MockComputationWrapperMockRecorder) SetExplainBuffer(buf interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetExplainBuffer", reflect.TypeOf((*MockComputationWrapper)(nil).SetExplainBuffer), buf)
-}
-
-// StatsCompositeSubStmtResource mocks base method.
-func (m *MockComputationWrapper) StatsCompositeSubStmtResource(ctx context.Context) statistic.StatsArray {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "StatsCompositeSubStmtResource", ctx)
-	ret0, _ := ret[0].(statistic.StatsArray)
-	return ret0
-}
-
-// StatsCompositeSubStmtResource indicates an expected call of StatsCompositeSubStmtResource.
-func (mr *MockComputationWrapperMockRecorder) StatsCompositeSubStmtResource(ctx interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StatsCompositeSubStmtResource", reflect.TypeOf((*MockComputationWrapper)(nil).StatsCompositeSubStmtResource), ctx)
 }
 
 // MockColumnInfo is a mock of ColumnInfo interface.

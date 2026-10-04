@@ -17,13 +17,19 @@
 package cagra
 
 import (
+	"context"
 	"math"
+	"os"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/cachegen"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
@@ -31,19 +37,36 @@ import (
 // CagraSearch implements cache.VectorIndexSearchIf for GPU CAGRA indexes.
 // Unlike HnswSearch, there is no concurrency gate (Cond/Mutex) because CAGRA
 // manages GPU thread concurrency internally via its worker pool.
-type CagraSearch[T cuvs.VectorType] struct {
-	Idxcfg        vectorindex.IndexConfig
-	Tblcfg        vectorindex.IndexTableConfig
-	Indexes       []*CagraModel[T]
-	MultiIndex    *cuvs.MultiGpuCagra[T] // built once in Load; nil until indexes are loaded
-	Overflow      *cuvs.GpuBruteForce[T] // CDC insert overflow; nil when no overflow records exist
-	Devices       []int
-	ThreadsSearch int64
+type CagraSearch[B, Q cuvs.VectorType] struct {
+	Idxcfg     vectorindex.IndexConfig
+	Tblcfg     vectorindex.IndexTableConfig
+	Indexes    []*CagraModel[B, Q]
+	MultiIndex *cuvs.MultiGpuCagra[B, Q]  // built once in Load; nil until indexes are loaded
+	Overflow   cuvs.BruteForceOverflow[B] // CDC insert overflow; nil when no overflow records exist
+	// overflowRowsEstimate is the tail's row count read from its metadata rows at Preload, so
+	// admission can reserve the overflow's VRAM BEFORE Load allocates it. Superseded by the
+	// real count once Overflow exists.
+	overflowRowsEstimate int64
+	Devices              []int
+	ThreadsSearch        int64
+
+	// Generation captured at Load for the cross-CN cache freshness check (IsStale): a
+	// REBUILD/MERGE bumps MAX(metadata.timestamp); a CDC append bumps the (CdcTailId,tag=1)
+	// tail chunk_id. cnUUID/accountID re-query in the background. genValid=false ⇒ no-op.
+	cnUUID     string
+	accountID  uint32
+	loadedTs   int64
+	loadedTail int64
+	genValid   bool
+
+	// buildTS is MAX(metadata.build_ts) over the WHOLE metadata table (base generations +
+	// cdc_tail frames), captured at Preload. 0 = unknown. See BuildTS.
+	buildTS int64
 }
 
-func NewCagraSearch[T cuvs.VectorType](idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, devices []int) *CagraSearch[T] {
+func NewCagraSearch[B, Q cuvs.VectorType](idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, devices []int) *CagraSearch[B, Q] {
 	nthread := vectorindex.GetConcurrency(tblcfg.ThreadsSearch)
-	return &CagraSearch[T]{
+	return &CagraSearch[B, Q]{
 		Idxcfg:        idxcfg,
 		Tblcfg:        tblcfg,
 		Devices:       devices,
@@ -52,11 +75,7 @@ func NewCagraSearch[T cuvs.VectorType](idxcfg vectorindex.IndexConfig, tblcfg ve
 }
 
 // Search implements cache.VectorIndexSearchIf.
-func (s *CagraSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
-	query, ok := anyquery.([]float32)
-	if !ok {
-		return nil, nil, moerr.NewInternalErrorNoCtx("CagraSearch: query type mismatch")
-	}
+func (s *CagraSearch[B, Q]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 
 	if s.MultiIndex == nil {
 		return []int64{}, []float64{}, nil
@@ -84,10 +103,18 @@ func (s *CagraSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt ve
 		neighbors64 []int64
 		dists32     []float32
 	)
+	// Any base (f32 or vecf16) routes its native base-typed (B) query through the
+	// const-B* search_quantize path — cuVS converts B to storage Q on device (B==Q
+	// copy for a direct index, learned/cast quantizer for a compressed one). The
+	// query asserts to []B for both float32 (B==float) and Float16 (B==half) base.
+	qB, ok := anyquery.([]B)
+	if !ok {
+		return nil, nil, moerr.NewInternalErrorNoCtx("CagraSearch: query type mismatch")
+	}
 	if rt.FilterJSON != "" {
-		neighbors64, dists32, err = s.MultiIndex.SearchFloat32WithFilter(query, 1, dim, uint32(limit), sp, rt.FilterJSON)
+		neighbors64, dists32, err = s.MultiIndex.SearchQuantizeWithFilter(qB, 1, dim, uint32(limit), sp, rt.FilterJSON)
 	} else {
-		neighbors64, dists32, err = s.MultiIndex.SearchFloat32(query, 1, dim, uint32(limit), sp)
+		neighbors64, dists32, err = s.MultiIndex.SearchQuantize(qB, 1, dim, uint32(limit), sp)
 	}
 	if err != nil {
 		return nil, nil, err
@@ -109,12 +136,17 @@ func (s *CagraSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt ve
 		))
 	}
 
+	// Checked here, where the native result crosses into Go, so both entry points inherit it --
+	// SearchFloat32 is this function plus a copy.
+	if err := metric.CheckFiniteDists64(resdistances, "vector index search"); err != nil {
+		return nil, nil, err
+	}
 	return reskeys, resdistances, nil
 }
 
 // SearchFloat32 implements cache.VectorIndexSearchIf.
 // Writes results directly into caller-provided slices to avoid heap allocation.
-func (s *CagraSearch[T]) SearchFloat32(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
+func (s *CagraSearch[B, Q]) SearchFloat32(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
 	keys, dists, err := s.Search(proc, query, rt)
 	if err != nil {
 		return err
@@ -137,8 +169,8 @@ func (s *CagraSearch[T]) SearchFloat32(proc *sqlexec.SqlProcess, query any, rt v
 // into per-column data + null bitmap and feeds them to the brute-force index
 // in column order. Mirrors how the build path populates the cuvs main
 // index's FilterStore.
-func addOverflowFilterChunks[T cuvs.VectorType](
-	bf *cuvs.GpuBruteForce[T],
+func addOverflowFilterChunks[B, OB cuvs.VectorType](
+	bf *cuvs.GpuBruteForce[B, OB],
 	colMetaJSON string,
 	includeBytes []byte,
 	nrows uint64,
@@ -157,27 +189,88 @@ func addOverflowFilterChunks[T cuvs.VectorType](
 }
 
 // Load implements cache.VectorIndexSearchIf: loads metadata then index data from the database.
-func (s *CagraSearch[T]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
-	indexes, err := LoadMetadata[T](sqlproc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable)
+// Preload reads the metadata, fetches every sub-index artifact, and runs the device admission
+// gate -- everything up to the first deserialize. Afterwards GetIndexSize reports the arena split
+// cuvs.MeasureTar measured, so the cache can reclaim room for this index before Load claims it.
+//
+// The gate stays HERE, interleaved with the fetch loop, rather than moving to Load: the running
+// aggregate is re-checked after each tar so a CAGRA index that cannot fit is refused as soon as
+// the total says so, instead of after downloading the remaining gigabytes. That early abort is
+// worth more than letting the gate see the room the governor is about to free, and it keeps the
+// gate running exactly once.
+//
+// On refusal the deferred cleanup in admitIndexes removes the tars this call fetched. Past the
+// gate they are owned by s.Indexes, and Destroy removes them if the load is abandoned before or
+// during Load -- CagraModel[B, Q].Destroy releases the tar as well as the GPU handle.
+func (s *CagraSearch[B, Q]) Preload(sqlproc *sqlexec.SqlProcess) (err error) {
+	indexes, err := LoadMetadata[B, Q](sqlproc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable)
 	if err != nil {
 		return err
 	}
+	// LoadMetadata reads BASE rows only; the async freshness gate needs the whole table so the
+	// cdc_tail's fresher build_ts is included.
+	s.buildTS = sqlexec.MaxBuildTS(sqlproc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable, catalog.Cagra_TblCol_Metadata_Build_Ts)
+	// Size the CDC overflow from the tail's metadata rows, BEFORE anything is allocated. Without
+	// this a generation whose rows all arrived by CDC measures 0 at Preload, so admission
+	// reserves nothing and Load allocates its VRAM unreserved -- and no post-load pass can undo
+	// an allocation.
+	//
+	// A tail whose size cannot be read REFUSES the load, here, before a single tar is fetched.
+	// Carrying on with 0 reserves nothing and then allocates anyway, which is the outcome the
+	// estimate exists to prevent, and the refusal costs little: the sizing reads the same two
+	// tables loadCdcTail reads moments later, so a tail that cannot be counted is usually one
+	// that cannot be read either. Where the failure is transient instead, the query retries --
+	// against a reservation that exists, rather than against none.
+	rows, rerr := sqlexec.CdcTailRowsUpperBound(sqlproc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable,
+		s.Tblcfg.IndexTable, s.overflowVectorBytes())
+	if rerr != nil {
+		return rerr
+	}
+	s.overflowRowsEstimate = rows
 	if len(indexes) > 0 {
-		indexes, err = s.loadIndexes(sqlproc, indexes)
-		if err != nil {
+		// This algorithm's own fraction, not the governor default: IVF-PQ claims at
+		// 65% (ivf_pq_cost::kBudgetPercent), so a gate left on 75% would admit an
+		// index the very first deserialize then refuses.
+		if err = s.admitIndexes(sqlproc, indexes, cuvs.BudgetFor(s.Idxcfg.Type)); err != nil {
 			return err
 		}
 	}
+	// From here the artifacts are owned by s: Destroy is what releases them.
 	s.Indexes = indexes
-	// From here the GPU sub-indexes are owned by s. If a later step fails, the
-	// cache drops the entry WITHOUT calling Destroy (see VectorIndexCache.Search),
-	// and there is no finalizer, so release them here to avoid orphaning GPU
-	// memory on every failed load. Destroy is idempotent and safe on partial state.
+	return nil
+}
+
+func (s *CagraSearch[B, Q]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
+	// Preload normally ran already; a caller that skipped it still gets a correct load.
+	if s.Indexes == nil {
+		if err = s.Preload(sqlproc); err != nil {
+			return err
+		}
+	}
+	// If any step below fails, the cache drops the entry WITHOUT calling Destroy (see
+	// VectorIndexCache.Search), and there is no finalizer, so release the sub-indexes here to
+	// avoid orphaning GPU memory and fetched tars on every failed load. Destroy is idempotent
+	// and safe on partial state.
 	defer func() {
 		if err != nil {
 			s.Destroy()
 		}
 	}()
+
+	// Situational admission, HERE and not in Preload: this runs after the cache's makeRoom
+	// has evicted, so it sees the VRAM the governor just freed. Preload's gate is permanent
+	// only (can this ever fit on the hardware).
+	if err = s.deviceFitsFreeNow(cuvs.BudgetFor(s.Idxcfg.Type)); err != nil {
+		return err
+	}
+
+	// Deserialize onto the GPU. Past both gates, and past the cache's reclaim.
+	for _, idx := range s.Indexes {
+		idx.Devices = s.Devices
+		if err = idx.LoadIndex(sqlproc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch, true); err != nil {
+			return err
+		}
+	}
 	if err = s.loadCdcTail(sqlproc); err != nil {
 		return err
 	}
@@ -185,7 +278,117 @@ func (s *CagraSearch[T]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 		return err
 	}
 	s.MultiIndex, err = s.buildMultiIndex()
-	return err
+	if err != nil {
+		return err
+	}
+	// Capture the generation + durable handles for IsStale (same txn as the load). On capture
+	// failure genValid stays false and IsStale reports the entry as uncheckable-hence-stale
+	// (evict + reload to retry capture) rather than pinning it forever — see IsStale.
+	s.cnUUID = sqlproc.GetService()
+	if acc, e := sqlproc.GetAccountID(); e == nil {
+		if ts, tail, e2 := cachegen.LoadCdcGeneration(sqlproc, s.Tblcfg); e2 == nil {
+			s.accountID, s.loadedTs, s.loadedTail, s.genValid = acc, ts, tail, true
+		}
+	}
+	return nil
+}
+
+// GetIndexSize reports this CAGRA index's resident footprint split by arena, from the exact
+// quantities its load gate measured with cuvs.MeasureTar: DeviceComponentBytes is what was
+// deserialized onto the GPU, HostComponentBytes is what stayed in RAM (ids, INCLUDE blobs,
+// quantizer, bitset). The tar's FileSize is deliberately NOT used -- it conflates the two, and
+// charging it to either budget would be wrong for the same reason the load gate refuses it.
+// BuildTS reports the greatest source-table commit this loaded generation reflects
+// (MAX(metadata.build_ts) over base + cdc_tail), for the async-index freshness gate.
+func (s *CagraSearch[B, Q]) BuildTS() int64 {
+	return s.buildTS
+}
+
+func (s *CagraSearch[B, Q]) GetIndexSize() (hostBytes, deviceBytes int64) {
+	for _, idx := range s.Indexes {
+		if idx == nil {
+			continue
+		}
+		hostBytes += idx.HostComponentBytes
+		for _, sz := range idx.DeviceComponentBytes {
+			deviceBytes += sz
+		}
+	}
+	deviceBytes += s.overflowDeviceBytes()
+	return hostBytes, deviceBytes
+}
+
+// overflowDeviceBytes is the CDC overflow's device footprint: a cuVS brute-force index over
+// the tag=1 vectors, resident for the cache entry's whole lifetime like the built sub-indexes.
+// Omitting it charged 0/0 to an index whose rows all arrived by CDC, and an entry measuring 0
+// is skipped by snapshotResidents -- so it held VRAM the governor never saw and never
+// reclaimed. The element type mirrors buildOverflow: the index storage Q when cuVS brute
+// force can store it, else the base B.
+//
+// Charged from Preload, not only after Load. buildOverflow runs inside Load, so before it the
+// real count does not exist -- and a generation whose rows all arrived by CDC would measure 0,
+// admission would reserve nothing, and Load would allocate the VRAM unreserved. Post-load
+// enforcement cannot undo an allocation that already happened, so the estimate has to come
+// first: the tail's per-frame metadata rows carry nrow, which sums to the tail's record count
+// without reading the tail at all (see sqlexec.CdcTailRowsUpperBound). The estimate counts
+// deletes, which the overflow does not hold, so it is an upper bound -- the safe direction --
+// and the real count replaces it the moment Overflow exists.
+func (s *CagraSearch[B, Q]) overflowDeviceBytes() int64 {
+	rows := s.overflowRowsEstimate
+	if s.Overflow != nil {
+		// Built: the real count replaces the estimate, which counted deletes it does not hold.
+		rows = int64(s.Overflow.Len())
+	}
+	if rows <= 0 {
+		return 0
+	}
+	return rows * s.overflowVectorBytes()
+}
+
+// overflowVectorBytes is the device width of ONE overflow vector. The element type mirrors
+// buildOverflow: the index storage Q when cuVS brute force can store it, else the base B.
+func (s *CagraSearch[B, Q]) overflowVectorBytes() int64 {
+	elem := int64(util.UnsafeSizeOf[B]())
+	switch cuvs.GetQuantization[Q]() {
+	case cuvs.F32, cuvs.F16:
+		elem = int64(util.UnsafeSizeOf[Q]())
+	}
+	return int64(s.Idxcfg.CuvsCagra.Dimensions) * elem
+}
+
+// IsStale reports whether the loaded index has fallen behind the persisted one (REBUILD bumps
+// the metadata timestamp; a CDC append bumps the tag=1 tail chunk_id), for the VectorIndexCache
+// cross-CN freshness check. Runs on the housekeeping goroutine via a background auto-commit txn.
+// A query error ⇒ (true, err): the index was likely dropped/rebuilt, reclaim the dead entry.
+// No captured generation (capture failed at load, or no service to re-query) ⇒ (true, nil): the
+// entry cannot self-check freshness, so evict it to force a reload that retries capture, rather
+// than pinning a hot entry (whose TTL keeps sliding on every search) to serve stale data forever.
+func (s *CagraSearch[B, Q]) IsStale() (bool, error) {
+	if !s.genValid || s.cnUUID == "" {
+		return true, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	ts, tail, err := cachegen.QueryCdcGeneration(ctx, s.cnUUID, s.accountID, s.Tblcfg)
+	if err != nil {
+		return true, err
+	}
+	return ts != s.loadedTs || tail != s.loadedTail, nil
+}
+
+// EmptyGeneration reports a loaded generation with nothing to search: buildMultiIndex left
+// MultiIndex nil, which happens only when no sub-index was deserialized AND no CDC overflow was
+// built -- a freshly created index, or the async-build window before the first vectors are
+// committed. Search answers empty on exactly that state. The cache declines to retain it, so the
+// next query reloads and picks up the vectors once the build writes them under the same
+// generation, instead of pinning an empty generation until the IsStale sweep evicts it. The
+// Overflow term is redundant with MultiIndex (buildMultiIndex returns non-nil whenever Overflow
+// is set) and is kept so the predicate does not silently depend on that.
+//
+// A loaded sub-index makes the generation non-empty even if the CDC delete bitset has since
+// removed all of its rows: that is a live index, cached as any other.
+func (s *CagraSearch[B, Q]) EmptyGeneration() bool {
+	return s.MultiIndex == nil && s.Overflow == nil
 }
 
 // loadCdcTail loads the tag=1 event-log rows persisted by CDC under the
@@ -198,10 +401,12 @@ func (s *CagraSearch[T]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 //
 // includeBytesPerRow comes from the first sub-index that successfully
 // loaded; cdc_tail's INSERT records share the col-meta layout with the main
-// index by construction (CDC writer side is fed the same colMetaJSON). If
-// no sub-index loaded (empty index — never built, or built and dropped),
-// we have no col-meta and skip; cdc_tail data is moot without a main index.
-func (s *CagraSearch[T]) loadCdcTail(sqlproc *sqlexec.SqlProcess) error {
+// index by construction (CDC writer side is fed the same colMetaJSON). With
+// no sub-index loaded (never built, small-data-only, or a copy-alter
+// replacement) the layout is recovered from the first tag=1 chunk's frame
+// header instead, and the tail IS loaded: those rows become the brute-force
+// overflow, which is the whole index in that state.
+func (s *CagraSearch[B, Q]) loadCdcTail(sqlproc *sqlexec.SqlProcess) error {
 	var (
 		includeBytesPerRow int
 		colMetaJSON        string
@@ -219,7 +424,7 @@ func (s *CagraSearch[T]) loadCdcTail(sqlproc *sqlexec.SqlProcess) error {
 		}
 	}
 
-	stub := &CagraModel[T]{Id: vectorindex.CdcTailId}
+	stub := &CagraModel[B, Q]{Id: vectorindex.CdcTailId}
 	chunks, err := stub.loadCdcEventsFromDB(sqlproc, s.Tblcfg)
 	if err != nil {
 		return err
@@ -243,7 +448,7 @@ func (s *CagraSearch[T]) loadCdcTail(sqlproc *sqlexec.SqlProcess) error {
 	}
 
 	dim := int(s.Idxcfg.CuvsCagra.Dimensions)
-	delPkids, ovPkids, ovVecs, ovInc, err := replayEventChunks(chunks, dim, includeBytesPerRow)
+	delPkids, ovPkids, ovVecs, ovInc, err := replayEventChunks[B](chunks, dim, includeBytesPerRow)
 	if err != nil {
 		return err
 	}
@@ -256,10 +461,19 @@ func (s *CagraSearch[T]) loadCdcTail(sqlproc *sqlexec.SqlProcess) error {
 			if err = m.Index.DeleteIds(delPkids); err != nil {
 				return err
 			}
+			// The SHARED tail's deletes build the same id_to_index_ map as a model's own
+			// deletes would, for every row of the index, and it stays resident for the
+			// index's life. This is the path a base artifact with no per-model deletes
+			// takes, so charging only in LoadIndex left the map uncharged exactly when
+			// the shared tail is what materialises it. chargeIdMap is idempotent, so an
+			// index that already paid in LoadIndex is not charged twice.
+			if len(delPkids) > 0 {
+				m.chargeIdMap(m.Index.Len())
+			}
 		}
 	}
 
-	s.Indexes = append(s.Indexes, &CagraModel[T]{
+	s.Indexes = append(s.Indexes, &CagraModel[B, Q]{
 		Id:                   vectorindex.CdcTailId,
 		DeletedPkids:         delPkids,
 		OverflowPkids:        ovPkids,
@@ -278,7 +492,7 @@ func (s *CagraSearch[T]) loadCdcTail(sqlproc *sqlexec.SqlProcess) error {
 // When the underlying index has INCLUDE columns, the brute-force is set up
 // with the matching FilterStore so a filtered query can prefilter overflow
 // rows the same way the main cagra index does.
-func (s *CagraSearch[T]) buildOverflow() error {
+func (s *CagraSearch[B, Q]) buildOverflow() error {
 	total := uint64(0)
 	for _, m := range s.Indexes {
 		total += uint64(len(m.OverflowPkids))
@@ -299,14 +513,43 @@ func (s *CagraSearch[T]) buildOverflow() error {
 		device = s.Devices[0]
 	}
 
-	bf, err := cuvs.NewGpuBruteForceEmpty[T](
-		total, dim, cuvsMetric, uint32(s.ThreadsSearch), device)
+	// cuVS brute force can only store float/half. Pick the overflow storage type
+	// OB from the index storage Q: keep Q when it is float/half, else fall back to
+	// the base type B (which is always float/half) so the overflow is supported.
+	// The type-erased BruteForceOverflow[B] interface holds either concrete type.
+	var (
+		ov  cuvs.BruteForceOverflow[B]
+		err error
+	)
+	switch cuvs.GetQuantization[Q]() {
+	case cuvs.F32, cuvs.F16:
+		ov, err = buildOverflowBF[B, Q](s.Indexes, total, dim, cuvsMetric, device, uint32(s.ThreadsSearch))
+	default: // INT8/UINT8: brute force can't store these → store base B.
+		ov, err = buildOverflowBF[B, B](s.Indexes, total, dim, cuvsMetric, device, uint32(s.ThreadsSearch))
+	}
 	if err != nil {
 		return err
 	}
+	s.Overflow = ov
+	return nil
+}
+
+// buildOverflowBF builds a concrete *cuvs.GpuBruteForce[B, OB] from every loaded
+// model's CDC insert overflow and returns it behind the type-erased
+// BruteForceOverflow[B] interface. OB is the overflow storage type chosen by the
+// caller (Q when float/half, else B). Wires the FilterStore when the index has
+// INCLUDE columns.
+func buildOverflowBF[B, OB cuvs.VectorType, Q cuvs.VectorType](
+	indexes []*CagraModel[B, Q],
+	total uint64, dim uint32, cuvsMetric cuvs.DistanceType, device int, threads uint32,
+) (cuvs.BruteForceOverflow[B], error) {
+	bf, err := cuvs.NewGpuBruteForceEmpty[B, OB](total, dim, cuvsMetric, threads, device)
+	if err != nil {
+		return nil, err
+	}
 	if err = bf.Start(); err != nil {
 		bf.Destroy()
-		return err
+		return nil, err
 	}
 
 	// INCLUDE-column wiring — pull the col-meta JSON from the first loaded
@@ -318,7 +561,7 @@ func (s *CagraSearch[T]) buildOverflow() error {
 		colMetaJSON        string
 		includeBytesPerRow int
 	)
-	for _, m := range s.Indexes {
+	for _, m := range indexes {
 		if m.Index != nil {
 			colMetaJSON = m.Index.GetFilterColMetaJSON()
 			includeBytesPerRow = m.IncludeBytesPerRow
@@ -326,7 +569,7 @@ func (s *CagraSearch[T]) buildOverflow() error {
 		}
 	}
 	if colMetaJSON == "" {
-		for _, m := range s.Indexes {
+		for _, m := range indexes {
 			if m.OverflowColMetaJSON != "" {
 				colMetaJSON = m.OverflowColMetaJSON
 				includeBytesPerRow = m.IncludeBytesPerRow
@@ -337,32 +580,41 @@ func (s *CagraSearch[T]) buildOverflow() error {
 	if colMetaJSON != "" && includeBytesPerRow > 0 {
 		if err = bf.SetFilterColumns(colMetaJSON, total); err != nil {
 			bf.Destroy()
-			return err
+			return nil, err
 		}
 	}
 
-	for _, m := range s.Indexes {
+	for _, m := range indexes {
 		if len(m.OverflowPkids) == 0 {
 			continue
 		}
 		count := uint64(len(m.OverflowPkids))
-		if err = bf.AddChunkFloat(m.OverflowVecs, count, m.OverflowPkids); err != nil {
+		// Overflow vectors are base-typed (B); AddChunkQuantize converts B -> Q
+		// storage on the C++ side (native store when B==Q, f32->f16 cast otherwise).
+		if err = bf.AddChunkQuantize(m.OverflowVecs, count, m.OverflowPkids); err != nil {
 			bf.Destroy()
-			return err
+			return nil, err
 		}
 		if colMetaJSON != "" && includeBytesPerRow > 0 {
 			if err = addOverflowFilterChunks(bf, colMetaJSON, m.OverflowIncludeBytes, count, includeBytesPerRow); err != nil {
 				bf.Destroy()
-				return err
+				return nil, err
 			}
 		}
+		// The Go-side copies are dead once the rows are in the device index: every reader
+		// of them is in this loop. Release them here instead of holding
+		// rows * dim * sizeof(B) of heap for the cache entry's whole lifetime -- the model
+		// pointers live until Destroy, and GetIndexSize does not count these bytes, so they
+		// would be host memory the governor never sees. OverflowPkids is kept: it is
+		// 8 bytes/row against the vectors' dim * sizeof(B), and it names the rows in logs.
+		m.OverflowVecs = nil
+		m.OverflowIncludeBytes = nil
 	}
 	if err = bf.Build(); err != nil {
 		bf.Destroy()
-		return err
+		return nil, err
 	}
-	s.Overflow = bf
-	return nil
+	return bf, nil
 }
 
 // buildMultiIndex assembles a MultiGpuCagra from the loaded indexes.
@@ -372,14 +624,14 @@ func (s *CagraSearch[T]) buildOverflow() error {
 // which returns []int64{}, []float64{} on s.MultiIndex == nil — that's
 // the load-bearing path for "no main index + no brute-force → empty
 // result". Any future regression here will fail TestCagraSearchEmpty.
-func (s *CagraSearch[T]) buildMultiIndex() (*cuvs.MultiGpuCagra[T], error) {
+func (s *CagraSearch[B, Q]) buildMultiIndex() (*cuvs.MultiGpuCagra[B, Q], error) {
 	cuvsMetric, ok := metric.MetricTypeToCuvsMetric[metric.MetricType(s.Idxcfg.CuvsCagra.Metric)]
 	if !ok {
 		// Unsupported metric is a real error — surface it rather than returning a
 		// nil index, which Search would treat as an (empty) success.
 		return nil, moerr.NewInternalErrorNoCtxf("CagraSearch: unsupported metric type %v", s.Idxcfg.CuvsCagra.Metric)
 	}
-	gpuIndices := make([]*cuvs.GpuCagra[T], 0, len(s.Indexes))
+	gpuIndices := make([]*cuvs.GpuCagra[B, Q], 0, len(s.Indexes))
 	for _, model := range s.Indexes {
 		if model.Index != nil {
 			gpuIndices = append(gpuIndices, model.Index)
@@ -396,21 +648,149 @@ func (s *CagraSearch[T]) buildMultiIndex() (*cuvs.MultiGpuCagra[T], error) {
 
 // loadIndexes loads each model's index data from the database.
 // On any error it destroys all partially-loaded indexes and returns the error.
-func (s *CagraSearch[T]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*CagraModel[T]) ([]*CagraModel[T], error) {
-	for _, idx := range indexes {
-		idx.Devices = s.Devices
-		if err := idx.LoadIndex(sqlproc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch, true); err != nil {
-			for _, idx2 := range indexes {
-				idx2.Destroy()
+//
+// Auto-rotation at build time can commit N sub-indexes each sized to fit 60%
+// of build-time free VRAM. At search all N must be resident simultaneously
+// (fan-out reads every sub-index per query), so the sum can exceed the current
+// free VRAM even when each individual model fit at build.
+//
+// That is admitted here as an aggregate, BEFORE the first deserialize. Doing it
+// per sub-index instead admits the early ones, spends the budget on them, and
+// refuses a later one -- failing after most of the memory is already taken, and
+// naming one sub-index rather than the total. The per-sub-index claims in
+// cgo/cuvs/device_memory.hpp remain the authoritative admission; this is a
+// pre-flight, and takes no reservation of its own.
+//
+// The aggregate needs the tars local (SHARDED attribution reads the shard sizes
+// out of the archive), so the download is split out of LoadIndex into
+// FetchArtifact and run first -- but it is re-checked after EACH tar rather than
+// only after the last, so an index that cannot fit is refused as soon as the
+// running total says so instead of after the whole download.
+//
+// budget is the pair of admission bounds, passed in rather than reached for, so a
+// test can drive a refusal at a chosen sub-index and prove the loop actually stops
+// -- the short-circuit is the whole point of checking per tar, and a version that
+// fetched them all would otherwise still pass every assertion. Production passes
+// cuvs.BudgetFor, the same value the CREATE gate is given.
+func (s *CagraSearch[B, Q]) admitIndexes(sqlproc *sqlexec.SqlProcess, indexes []*CagraModel[B, Q],
+	budget memory.DeviceBudget) error {
+	// Fetch, admit, and only then load. Splitting the download from the load is
+	// what lets the gate see the SAME quantity CREATE checked: the device-resident
+	// components of each packed artifact, measured with cuvs.MeasureTar and reduced
+	// per physical device. Admitting metadata
+	// FileSize instead would charge the whole tar -- ids.bin, the INCLUDE blobs,
+	// the quantizer, the bitset -- none of which reach the GPU, and CREATE would
+	// then commit artifacts refused here at every free level.
+
+	// Tars this call fetched, and only those. Until Preload takes them over --
+	// it assigns s.Indexes only after this returns cleanly, and from there
+	// LoadIndex removes each one in view mode once Unpack has read it, while
+	// Destroy removes any that are left -- nothing else will: an early return
+	// from here happens before s.Indexes is assigned, so it is the end of the
+	// line. While the download lived inside LoadIndex its own defer covered
+	// this; now that it is hoisted out, a refusal from the aggregate gate would
+	// otherwise leak the whole multi-gigabyte download on every retried query.
+	var fetchedHere []*CagraModel[B, Q]
+	admitted := false
+	defer func() {
+		if admitted {
+			return
+		}
+		for _, idx := range fetchedHere {
+			if len(idx.Path) > 0 {
+				os.Remove(idx.Path)
+				idx.Path = ""
 			}
-			return nil, err
+		}
+	}()
+
+	comps := make([]map[string]int64, 0, len(indexes))
+	for _, idx := range indexes {
+		if len(idx.Path) == 0 {
+			fetched, ferr := idx.FetchArtifact(sqlproc, s.Tblcfg)
+			if ferr != nil {
+				return ferr
+			}
+			idx.Path = fetched
+			fetchedHere = append(fetchedHere, idx)
+		}
+		sizes, merr := cuvs.MeasureTar(idx.Path)
+		if merr != nil {
+			return merr
+		}
+		device := make(map[string]int64, len(sizes.Files))
+		for name, sz := range sizes.Files {
+			if !cuvs.IsHostResidentComponent(name) {
+				device[name] = sz
+			}
+		}
+		comps = append(comps, device)
+		// Stamp what the gate just measured onto the model, so the loaded sub-index can
+		// report its own footprint to the cache's byte governor. The build path stamps
+		// the same two fields in saveToFile; without this the load path would leave a
+		// model that knows its tar size but not how that tar splits across RAM and VRAM.
+		idx.DeviceComponentBytes = device
+		idx.HostComponentBytes = sizes.Host
+
+		// Re-check the RUNNING aggregate rather than waiting for the last tar.
+		// A sub-index only adds bytes to the device that holds it, so the peak is
+		// monotone: against this free reading the finished total can only be larger,
+		// and downloading the rest would cost minutes and gigabytes to reach the
+		// same refusal. Free is re-sampled per tar, so a transient dip can refuse
+		// where one late check would not have -- which is why the refusal says to
+		// retry, and is the same situational answer the single check gave at its
+		// own sample point. On the final pass measured == len(indexes), so this is
+		// also the complete gate; there is no separate check after the loop.
+		// Only the devices this index occupies: a SINGLE_GPU index loads onto
+		// devices[0] alone, so a busy or smaller second card must not veto it.
+		// PERMANENT gate only: can this index EVER fit on this hardware? A refusal here
+		// is final -- no amount of eviction creates VRAM the cards do not have -- so
+		// aborting mid-download is right, and it keeps the early-abort benefit that put
+		// the gate inside this loop.
+		//
+		// The SITUATIONAL free-VRAM gate is deliberately NOT here. It runs in Load, after
+		// the cache's makeRoom has had its chance to evict: asking "does it fit in free
+		// VRAM?" before eviction refuses loads that would have succeeded -- an old 6 GiB
+		// index resident, 5 GiB free, a new 6 GiB index that needs it, where evicting the
+		// old one leaves 11 GiB. See deviceFitsFreeNow.
+		participants := memory.DeviceParticipants(s.Devices,
+			s.Idxcfg.CuvsCagra.DistributionMode == uint16(vectorindex.DistributionMode_SINGLE_GPU))
+		if err := memory.DeviceAggregateFitsHardware(
+			memory.PerDeviceDemand(participants, comps), len(comps), budget,
+		); err != nil {
+			return err
 		}
 	}
-	return indexes, nil
+
+	// Past the gate the loads own the tars; the cleanup above must not race them.
+	admitted = true
+
+	return nil
+}
+
+// deviceFitsFreeNow is the situational half of admission: does this index fit in the VRAM that
+// is free RIGHT NOW. It runs at the top of Load -- after Preload measured and after the cache's
+// makeRoom evicted -- so it sees the room the governor just freed. admitIndexes keeps only the
+// permanent hardware gate, which no eviction can change.
+func (s *CagraSearch[B, Q]) deviceFitsFreeNow(budget memory.DeviceBudget) error {
+	comps := make([]map[string]int64, 0, len(s.Indexes))
+	for _, idx := range s.Indexes {
+		if idx == nil || len(idx.DeviceComponentBytes) == 0 {
+			continue
+		}
+		comps = append(comps, idx.DeviceComponentBytes)
+	}
+	if len(comps) == 0 {
+		return nil
+	}
+	participants := memory.DeviceParticipants(s.Devices,
+		s.Idxcfg.CuvsCagra.DistributionMode == uint16(vectorindex.DistributionMode_SINGLE_GPU))
+	return memory.DeviceAggregateFitsFree(
+		memory.PerDeviceDemand(participants, comps), len(comps), len(comps), budget)
 }
 
 // Destroy implements cache.VectorIndexSearchIf.
-func (s *CagraSearch[T]) Destroy() {
+func (s *CagraSearch[B, Q]) Destroy() {
 	s.MultiIndex = nil // does not own GPU resources; GpuCagra instances are owned by Indexes
 	if s.Overflow != nil {
 		s.Overflow.Destroy()
@@ -422,7 +802,36 @@ func (s *CagraSearch[T]) Destroy() {
 	s.Indexes = nil
 }
 
-// UpdateConfig implements cache.VectorIndexSearchIf.
-func (s *CagraSearch[T]) UpdateConfig(newalgo cache.VectorIndexSearchIf) error {
-	return nil
+// SearchInto is not yet implemented for this algo (box-free LIMIT path); it will migrate
+// from the []any Search per the SearchOutput plan. Mirrors fulltext2's SearchFloat32 stub.
+func (s *CagraSearch[B, Q]) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, _ *vectorindex.SearchOutput) error {
+	return moerr.NewInternalErrorNoCtx("SearchInto not supported")
+}
+
+// DeviceResidency reports this index's device bytes BY CARD, so the cache can bound the GPU it
+// actually occupies rather than a sum across every card. A SINGLE_GPU index lives on devices[0]
+// alone; sharded components land on the card their rank names. Implements the cache's
+// devicePlacement interface.
+func (s *CagraSearch[B, Q]) DeviceResidency() map[int]int64 {
+	if len(s.Devices) == 0 {
+		return nil
+	}
+	comps := make([]map[string]int64, 0, len(s.Indexes))
+	for _, idx := range s.Indexes {
+		if idx != nil && len(idx.DeviceComponentBytes) > 0 {
+			comps = append(comps, idx.DeviceComponentBytes)
+		}
+	}
+	participants := memory.DeviceParticipants(s.Devices,
+		s.Idxcfg.CuvsCagra.DistributionMode == uint16(vectorindex.DistributionMode_SINGLE_GPU))
+	perCard := memory.PerDeviceDemand(participants, comps)
+
+	// The overflow buffer lives with the index, on its first participating card.
+	if overflow := s.overflowDeviceBytes(); overflow > 0 && len(participants) > 0 {
+		if perCard == nil {
+			perCard = make(map[int]int64, 1)
+		}
+		perCard[participants[0]] += overflow
+	}
+	return perCard
 }

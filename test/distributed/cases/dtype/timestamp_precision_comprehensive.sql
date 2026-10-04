@@ -81,6 +81,30 @@ SELECT UNIX_TIMESTAMP('2024-01-15 12:34:56.123456') AS unix_ts;
 SELECT UNIX_TIMESTAMP('2024-01-15 12:34:56.000000') AS unix_ts_0,
        UNIX_TIMESTAMP('2024-01-15 12:34:56.500000') AS unix_ts_500000;
 
+-- UNIX_TIMESTAMP of typed temporal columns should preserve fractional seconds
+DROP TABLE IF EXISTS t_unix_timestamp_fraction;
+CREATE TABLE t_unix_timestamp_fraction (
+    id INT PRIMARY KEY,
+    ts6 TIMESTAMP(6),
+    dt6 DATETIME(6),
+    ts0 TIMESTAMP(0),
+    dt0 DATETIME(0)
+);
+INSERT INTO t_unix_timestamp_fraction VALUES (
+    1,
+    '2024-02-29 23:59:59.999999',
+    '2024-02-29 23:59:59.999999',
+    '2024-02-29 23:59:59',
+    '2024-02-29 23:59:59'
+);
+SELECT UNIX_TIMESTAMP(ts6) AS unix_ts6,
+       UNIX_TIMESTAMP(dt6) AS unix_dt6,
+       UNIX_TIMESTAMP(ts0) AS unix_ts0,
+       UNIX_TIMESTAMP(dt0) AS unix_dt0,
+       FROM_UNIXTIME(UNIX_TIMESTAMP(ts6)) AS roundtrip_ts6
+FROM t_unix_timestamp_fraction;
+DROP TABLE t_unix_timestamp_fraction;
+
 -- ============================================================================
 -- Test 5: CAST between TIMESTAMP and other types with precision
 -- ============================================================================
@@ -266,4 +290,3 @@ FROM t_timestamp_dateadd;
 DROP TABLE t_timestamp_dateadd;
 
 DROP DATABASE test_timestamp_precision;
-

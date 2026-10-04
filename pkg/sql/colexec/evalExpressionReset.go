@@ -50,6 +50,9 @@ type functionInformationForEval struct {
 	// whether the function is volatile or time-dependent.
 	// they were used to determine whether the function can be folded.
 	volatile, timeDependent bool
+	// stringToNumericCast is volatile for ordinary text parameters, but a
+	// prepared parameter with integer provenance can be folded safely.
+	stringToNumericCast bool
 
 	// the function's evalFn and freeFn.
 	evalFn func(
@@ -60,6 +63,10 @@ type functionInformationForEval struct {
 		selectList *function.FunctionSelectList) error
 	resetFn func() error
 	freeFn  func() error
+
+	// retainedBytesFn reports stateful function backing allocations which are
+	// not represented by the executor's owned vectors.
+	retainedBytesFn func() uint64
 }
 
 func (fI *functionInformationForEval) reset() {
@@ -80,7 +87,7 @@ func (fI *functionInformationForEval) reset() {
 	if fI.evalFn != nil {
 		// we can set the context nil here since this function will never return an error.
 		overload, _ := function.GetFunctionById(context.TODO(), fI.overloadID)
-		fI.evalFn, fI.resetFn, fI.freeFn = overload.GetExecuteMethod()
+		fI.evalFn, fI.resetFn, fI.freeFn, fI.retainedBytesFn = overload.GetExecuteMethod()
 	}
 }
 
@@ -89,6 +96,7 @@ func (expr *FunctionExpressionExecutor) ResetForNextQuery() {
 	expr.folded.reset(expr.m)
 	// reset the function information.
 	expr.functionInformationForEval.reset()
+	expr.freeIffNullResults()
 
 	// reset its parameters.
 	for i, param := range expr.parameterExecutor {
@@ -98,6 +106,15 @@ func (expr *FunctionExpressionExecutor) ResetForNextQuery() {
 
 		expr.parameterResults[i] = nil
 		param.ResetForNextQuery()
+	}
+}
+
+func (expr *FunctionExpressionExecutor) freeIffNullResults() {
+	for i, result := range expr.iffNullResults {
+		if result != nil {
+			result.Free(expr.m)
+			expr.iffNullResults[i] = nil
+		}
 	}
 }
 
@@ -149,19 +166,31 @@ func (expr *FunctionExpressionExecutor) tryFoldFlowControl(
 	proc *process.Process,
 	atRuntime bool,
 ) (bool, error) {
+	expr.resetFlowControlPrepareParamKind()
+	observeSelected := func(index int, folded bool, err error) (bool, error) {
+		if err == nil && folded {
+			expr.observeFlowControlPrepareParamKind(
+				expr.parameterResults[index], expr.parameterExecutor[index], []bool{true})
+		}
+		return folded, err
+	}
 	switch expr.fid {
 	case function.IFF:
 		folded, err := expr.tryFoldParameter(proc, atRuntime, 0)
 		if err != nil || !folded {
 			return folded, err
 		}
-		condition := vector.GenerateFunctionFixedTypeParameter[bool](expr.parameterResults[0])
-		value, isNull := condition.GetValue(0)
+		value, err := function.IffConditionTruthyAt(
+			expr.parameterResults[0], 0, function.CompatibilityModeFromProcess(proc))
+		if err != nil {
+			return false, err
+		}
 		selected := 2
-		if !isNull && value {
+		if value {
 			selected = 1
 		}
-		return expr.tryFoldParameter(proc, atRuntime, selected)
+		folded, err = expr.tryFoldParameter(proc, atRuntime, selected)
+		return observeSelected(selected, folded, err)
 
 	case function.CASE:
 		parameterCount := len(expr.parameterExecutor)
@@ -173,11 +202,15 @@ func (expr *FunctionExpressionExecutor) tryFoldFlowControl(
 			condition := vector.GenerateFunctionFixedTypeParameter[bool](expr.parameterResults[conditionIndex])
 			value, isNull := condition.GetValue(0)
 			if !isNull && value {
-				return expr.tryFoldParameter(proc, atRuntime, conditionIndex+1)
+				selected := conditionIndex + 1
+				folded, err = expr.tryFoldParameter(proc, atRuntime, selected)
+				return observeSelected(selected, folded, err)
 			}
 		}
 		if parameterCount%2 == 1 {
-			return expr.tryFoldParameter(proc, atRuntime, parameterCount-1)
+			selected := parameterCount - 1
+			folded, err := expr.tryFoldParameter(proc, atRuntime, selected)
+			return observeSelected(selected, folded, err)
 		}
 		return true, nil
 
@@ -188,6 +221,8 @@ func (expr *FunctionExpressionExecutor) tryFoldFlowControl(
 				return folded, err
 			}
 			if !expr.parameterResults[i].IsNull(0) {
+				expr.observeFlowControlPrepareParamKind(
+					expr.parameterResults[i], expr.parameterExecutor[i], []bool{true})
 				return true, nil
 			}
 		}
@@ -246,6 +281,18 @@ func (expr *FunctionExpressionExecutor) finishFolding(proc *process.Process, exe
 	if err := expr.evalFn(expr.parameterResults, expr.resultVector, proc, execLen, nil); err != nil {
 		return err
 	}
+	if expr.isImplicitCast() && len(expr.parameterResults) > 0 {
+		if err := applyTransparentStringSource(
+			expr.resultVector.GetResultVector(), expr.parameterResults[0], execLen, proc.Mp()); err != nil {
+			return err
+		}
+	}
+	if expr.fid == function.IFF || expr.fid == function.CASE || expr.fid == function.COALESCE {
+		if err := expr.applyFlowControlPrepareParamKinds(
+			expr.resultVector.GetResultVector(), execLen, proc.Mp()); err != nil {
+			return err
+		}
+	}
 	if execLen == 1 {
 		expr.resultVector.GetResultVector().ToConst()
 	}
@@ -284,7 +331,11 @@ func (expr *FunctionExpressionExecutor) doFold(proc *process.Process, atRuntime 
 			allParametersFolded = false
 		}
 	}
-	if !allParametersFolded || expr.volatile || (!atRuntime && expr.timeDependent) {
+	canFold := !expr.volatile
+	if expr.stringToNumericCast && expr.canFoldPreparedIntegerStringCast() {
+		canFold = true
+	}
+	if !allParametersFolded || !canFold || (!atRuntime && expr.timeDependent) {
 		return nil
 	}
 
@@ -301,6 +352,20 @@ func (expr *FunctionExpressionExecutor) doFold(proc *process.Process, atRuntime 
 	return expr.finishFolding(proc, execLen)
 }
 
+// canFoldPreparedIntegerStringCast reports whether the prepared parameter's
+// protocol metadata establishes an integer source. Prepared numeric values are
+// materialized in a TEXT vector for compatibility with the parameter path, so
+// the cast still looks like TEXT -> numeric to the expression executor. The
+// integer provenance means the value cannot contain the trailing text that
+// requires row-level coercion warnings, making scalar folding safe.
+func (expr *FunctionExpressionExecutor) canFoldPreparedIntegerStringCast() bool {
+	if !expr.stringToNumericCast || len(expr.parameterResults) == 0 {
+		return false
+	}
+	parameter := expr.parameterResults[0]
+	return parameter != nil && parameter.GetPrepareParamKind() == vector.PrepareParamInteger
+}
+
 func (expr *ParamExpressionExecutor) ResetForNextQuery() {
 	if expr.null != nil {
 		expr.null.CleanOnlyData()
@@ -309,6 +374,7 @@ func (expr *ParamExpressionExecutor) ResetForNextQuery() {
 		expr.vec.CleanOnlyData()
 	}
 	expr.folded = false
+	expr.foldedNull = false
 }
 
 func (expr *VarExpressionExecutor) ResetForNextQuery() {

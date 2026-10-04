@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // CompilerContext is re-exported so plugin schema builders can consult
@@ -46,6 +47,10 @@ import (
 // boundary.
 type CompilerContext interface {
 	GetContext() context.Context
+	// GetProcess reaches the service runtime, which carries the deployment's
+	// rollout gate (moruntime.MOProtocolVersion). Satisfied by
+	// pkg/sql/plan.CompilerContext, which already exposes it.
+	GetProcess() *process.Process
 	// ResolveVariable forwards to the session's system-variable resolver so
 	// plan-time plugin code (e.g. CreateIndexDef capturing build-time session
 	// vars like kmeans_train_percent) can read session/system variables.
@@ -77,8 +82,10 @@ type VectorSortContext struct {
 
 	// ProviderNodeID and VecArgExpr are populated only when the ORDER
 	// BY reaches the scan through a JOIN (today only HNSW consumes them).
-	ProviderNodeID int32
-	VecArgExpr     *plan.Expr
+	ProviderNodeID   int32
+	VecArgExpr       *plan.Expr
+	MembershipNodeID int32
+	HasMembership    bool
 }
 
 // MultiTableIndexRef is the plugin-facing view of plan.MultiTableIndex.
@@ -150,6 +157,35 @@ type Hooks interface {
 	// pkg/sql/plan/apply_indices_<algo>.go.
 	CanApply(pb PlanBuilder, vctx *VectorSortContext, mti *MultiTableIndexRef) (bool, error)
 	ApplyForSort(pb PlanBuilder, vctx *VectorSortContext, mti *MultiTableIndexRef, nodeID int32, opts ApplyForSortOpts) (int32, bool, error)
+
+	// ValidateViewDefinition vets the OPTIMIZED plan of a view's defining SELECT before
+	// CREATE / ALTER / CREATE OR REPLACE VIEW persists it, and returns an error to refuse
+	// the statement. Called for every registered algorithm, so a plugin must ignore plans
+	// that are not its business.
+	//
+	// It exists because view DDL is the one statement that STORES a query it never runs.
+	// Anything the algorithm cannot execute is therefore committed silently and only
+	// surfaces when someone selects from the view -- and for ALTER / REPLACE, the previous
+	// working definition is already gone by then. Refusing here is also what makes those
+	// two atomic: no DDL plan is emitted, so the existing view is left untouched.
+	//
+	// Implementations get the plan post-optimization, so the algorithm's own rewrite has
+	// already run and its decisions are visible. Use PlanCallsAnyFunc to inspect it, which
+	// walks only the nodes reachable from the query roots.
+	//
+	// Return nil when the algorithm is merely an optimization: a vector index that does
+	// not apply costs speed, not correctness, because the distance functions are real
+	// kernels and the query still runs as a brute-force scan and sort. The fulltext family
+	// is the exception -- its MATCH placeholder has no implementation at all, so a plan the
+	// index cannot serve is simply unrunnable.
+	ValidateViewDefinition(ctx CompilerContext, query *plan.Query) error
+}
+
+// LogicalSearchHooks is the optional migration capability for algorithms whose
+// ANN access path is safe to splice before global optimization. Algorithms
+// still backed by opaque table functions omit it and remain in the late pass.
+type LogicalSearchHooks interface {
+	BuildLogicalSearch(pb PlanBuilder, vctx *VectorSortContext, mti *MultiTableIndexRef, nodeID int32, opts ApplyForSortOpts) (int32, bool, error)
 }
 
 // Schema-build / tablefunc helper bodies live in pkg/sql/plan. They're

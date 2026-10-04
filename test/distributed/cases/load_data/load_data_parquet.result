@@ -19,6 +19,12 @@ select count(*) from pq_parallel_guard;
 ➤ count(*)[-5,64,0]  𝄀
 8
 drop table pq_parallel_guard;
+create table pq_parallel_opt_out(id bigint, name varchar);
+load data infile {'filepath'='$resources/load_data/simple.parq', 'format'='parquet'} into table pq_parallel_opt_out parallel 'false';
+select count(*) from pq_parallel_opt_out;
+➤ count(*)[-5,64,0]  𝄀
+8
+drop table pq_parallel_opt_out;
 create table pq_option_reject(id bigint, name varchar);
 load data infile {'filepath'='$resources/load_data/simple.parq', 'format'='parquet', 'compression'='gzip'} into table pq_option_reject;
 invalid configuration: LOAD DATA with format='parquet' does not support compression option
@@ -126,7 +132,7 @@ COUNT(*) as total_rows,
 SUM(CASE WHEN col_nullable_with_null IS NULL THEN 1 ELSE 0 END) as null_count_col1,
 SUM(CASE WHEN col_all_null IS NULL THEN 1 ELSE 0 END) as null_count_all_null
 FROM pq_nullable_test;
-➤ total_rows[-5,64,0]  ¦  null_count_col1[-5,64,0]  ¦  null_count_all_null[-5,64,0]  𝄀
+➤ total_rows[-5,64,0]  ¦  null_count_col1[3,38,0]  ¦  null_count_all_null[3,38,0]  𝄀
 5  ¦  2  ¦  5
 SELECT COUNT(*) FROM pq_nullable_test WHERE col_not_nullable IS NULL;
 ➤ COUNT(*)[-5,64,0]  𝄀
@@ -437,12 +443,12 @@ dec_p38_s38 DECIMAL(38, 38)
 );
 load data infile {'filepath'='$resources/parquet/decimal_boundary_test.parquet', 'format'='parquet'} into table pq_decimal_boundary;
 select * from pq_decimal_boundary;
-➤ dec_p9_s2[3,9,2]  ¦  dec_p18_s9[3,18,9]  ¦  dec_p38_s0[3,39,0]  ¦  dec_p38_s38[3,38,38]  𝄀
+➤ dec_p9_s2[3,9,2]  ¦  dec_p18_s9[3,18,9]  ¦  dec_p38_s0[3,38,0]  ¦  dec_p38_s38[3,38,38]  𝄀
 9999999.99  ¦  999999999.999999999  ¦  99999999999999999999999999999999999999  ¦  1E-38  𝄀
 -9999999.99  ¦  -999999999.999999999  ¦  -99999999999999999999999999999999999999  ¦  -1E-38  𝄀
 0.00  ¦  1.234567890  ¦  0  ¦  null
 select dec_p38_s0 from pq_decimal_boundary WHERE dec_p38_s0 > 0;
-➤ dec_p38_s0[3,39,0]  𝄀
+➤ dec_p38_s0[3,38,0]  𝄀
 99999999999999999999999999999999999999
 select dec_p38_s38 from pq_decimal_boundary WHERE dec_p38_s38 > 0;
 ➤ dec_p38_s38[3,38,38]  𝄀
@@ -499,15 +505,19 @@ select * from pq_date32_datetime;
 2024-06-15 00:00:00  ¦  200  𝄀
 1970-01-01 00:00:00  ¦  300  𝄀
 null  ¦  400
+set experimental_parquet_load_parallel = 1;
+set experimental_parquet_load_parallel_min_size = 1;
 drop table if exists pq_file_fanout_rollback;
 create table pq_file_fanout_rollback(id bigint, name varchar(100), value double, status bool);
 insert into pq_file_fanout_rollback values(-1, 'seed', 0.0, false);
-load data infile {'filepath'='$resources/parquet/test_*.parquet', 'format'='parquet'} into table pq_file_fanout_rollback parallel 'true';
+load data infile {'filepath'='$resources/parquet/test_*.parquet', 'format'='parquet'} into table pq_file_fanout_rollback;
 invalid input: column name not found
 select count(*), min(id), max(id), cast(round(sum(value), 2) as decimal(10,2)) from pq_file_fanout_rollback;
 ➤ count(*)[-5,64,0]  ¦  min(id)[-5,64,0]  ¦  max(id)[-5,64,0]  ¦  cast(round(sum(value), 2) as decimal(10, 2))[3,10,2]  𝄀
 1  ¦  -1  ¦  -1  ¦  0.00
 drop table pq_file_fanout_rollback;
+set experimental_parquet_load_parallel = 0;
+set experimental_parquet_load_parallel_min_size = default;
 drop table if exists pq_not_null_rollback;
 create table pq_not_null_rollback(
 id bigint not null primary key,

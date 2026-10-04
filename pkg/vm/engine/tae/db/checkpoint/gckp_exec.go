@@ -15,6 +15,7 @@
 package checkpoint
 
 import (
+	"errors"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -66,10 +67,23 @@ func (executor *checkpointExecutor) onGCKPEntries(items ...any) {
 		now              = time.Now()
 	)
 	defer func() {
+		for _, item := range items {
+			request := item.(*gckpContext)
+			if request.done != nil {
+				request.done <- err
+			}
+		}
+
 		var createdEntry string
+		var ctxStr string
+		if mergedCtx != nil {
+			ctxStr = mergedCtx.String()
+		}
 		logger := logutil.Debug
 		if err != nil {
-			logger = logutil.Error
+			if !errors.Is(err, ErrGCKPNeedsFreshICKP) {
+				logger = logutil.Error
+			}
 		} else {
 			toEntry := executor.runner.store.MaxGlobalCheckpoint()
 			if toEntry != nil {
@@ -82,7 +96,7 @@ func (executor *checkpointExecutor) onGCKPEntries(items ...any) {
 			logger(
 				"GCKP-Execute-End",
 				zap.Duration("cost", time.Since(now)),
-				zap.String("ctx", mergedCtx.String()),
+				zap.String("ctx", ctxStr),
 				zap.String("created", createdEntry),
 				zap.Error(err),
 			)
@@ -91,6 +105,9 @@ func (executor *checkpointExecutor) onGCKPEntries(items ...any) {
 
 	for _, item := range items {
 		oneCtx := item.(*gckpContext)
+		if oneCtx.histroyRetention == 0 {
+			oneCtx.histroyRetention = executor.cfg.GlobalHistoryDuration
+		}
 		if mergedCtx == nil {
 			mergedCtx = oneCtx
 		} else {
@@ -101,8 +118,18 @@ func (executor *checkpointExecutor) onGCKPEntries(items ...any) {
 		return
 	}
 
-	if mergedCtx.histroyRetention == 0 {
-		mergedCtx.histroyRetention = executor.cfg.GlobalHistoryDuration
+	if mergedCtx.force {
+		// A force request must produce a checkpoint with its requested retention.
+		// Rebase it on the latest finished ICKP so a concurrent GCKP cannot make
+		// the request look successful without actually executing it. A finished
+		// GCKP is only a synthetic successor boundary; the DB coordinator must
+		// flush a fresh ICKP before another GCKP can be built.
+		predecessor := executor.runner.store.MaxCheckpoint()
+		if predecessor == nil || !predecessor.IsIncremental() {
+			err = ErrGCKPNeedsFreshICKP
+			return
+		}
+		mergedCtx.rebase(predecessor)
 	}
 
 	fromEntry := executor.runner.store.MaxGlobalCheckpoint()
@@ -110,7 +137,7 @@ func (executor *checkpointExecutor) onGCKPEntries(items ...any) {
 		fromCheckpointed = fromEntry.GetEnd()
 	}
 
-	if mergedCtx.end.LE(&fromCheckpointed) {
+	if !mergedCtx.force && mergedCtx.end.LE(&fromCheckpointed) {
 		logutil.Info(
 			"GCKP-Execute-Skip",
 			zap.String("have", fromCheckpointed.ToString()),

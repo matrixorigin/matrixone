@@ -37,6 +37,12 @@ func (cfg *PipelineConfig) fill() {
 	if cfg.TimeOutForEachConnect <= 0 {
 		cfg.TimeOutForEachConnect = dfConnectTimeout
 	}
+	if cfg.ConnectAttemptTimeout <= 0 {
+		cfg.ConnectAttemptTimeout = dfConnectAttemptTimeout
+	}
+	if cfg.ConnectAttemptTimeout > cfg.TimeOutForEachConnect {
+		cfg.ConnectAttemptTimeout = cfg.TimeOutForEachConnect
+	}
 }
 
 func GetPipelineClient(
@@ -53,6 +59,19 @@ type pipelineClient struct {
 	localServiceAddress string
 	config              *PipelineConfig
 	client              morpc.RPCClient
+}
+
+func pipelineBackendCreateOptions(cfg *PipelineConfig) []morpc.ClientOption {
+	// A scheduled Pipeline scope is pinned to one remote CN. Bound both global
+	// factory admission and all connect/retry attempts for that fixed address so
+	// a stale cluster-service route fails the statement instead of inheriting a
+	// potentially day-long SQL context. The configured backend-connect budget
+	// bounds each of the two wait phases, so the total wait is finite and at most
+	// twice that value. It is always positive after cfg.fill().
+	return []morpc.ClientOption{
+		morpc.WithClientAutoCreateQueueWaitTimeout(cfg.TimeOutForEachConnect),
+		morpc.WithClientAutoCreateWaitTimeout(cfg.TimeOutForEachConnect),
+	}
 }
 
 func NewPipelineClient(
@@ -92,14 +111,19 @@ func NewPipelineClient(
 		),
 		morpc.WithBackendReadTimeout(defaultRPCTimeout),
 		morpc.WithBackendConnectTimeout(cfg.TimeOutForEachConnect),
+		morpc.WithBackendConnectAttemptTimeout(cfg.ConnectAttemptTimeout),
 		morpc.WithBackendLogger(logger),
 	)
 
+	clientOptions := []morpc.ClientOption{
+		morpc.WithClientMaxBackendPerHost(cfg.MaxSenderNumber),
+		morpc.WithClientLogger(logger),
+	}
+	clientOptions = append(clientOptions, pipelineBackendCreateOptions(cfg)...)
 	cli, err := morpc.NewClient(
 		"pipeline-client",
 		factory,
-		morpc.WithClientMaxBackendPerHost(cfg.MaxSenderNumber),
-		morpc.WithClientLogger(logger),
+		clientOptions...,
 	)
 	if err != nil {
 		return nil, err

@@ -30,13 +30,20 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/lni/goutils/leaktest"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/proxy"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 var testSlat = []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0}
@@ -136,9 +143,10 @@ type testCNServer struct {
 	started  bool
 	quit     chan interface{}
 
-	globalVars map[string]string
-	tlsCfg     tlsConfig
-	tlsConfig  *tls.Config
+	globalVarsMu sync.RWMutex
+	globalVars   map[string]string
+	tlsCfg       tlsConfig
+	tlsConfig    *tls.Config
 
 	beforeHandle func()
 	handle       func(*testHandler)
@@ -213,6 +221,23 @@ func startTestCNServer(t *testing.T, ctx context.Context, addr string, cfg *tlsC
 	return func() error {
 		return b.Stop()
 	}
+}
+
+func (s *testCNServer) setGlobalVar(name, value string) {
+	s.globalVarsMu.Lock()
+	defer s.globalVarsMu.Unlock()
+	s.globalVars[name] = value
+}
+
+func (s *testCNServer) globalVarsSnapshot() map[string]string {
+	s.globalVarsMu.RLock()
+	defer s.globalVarsMu.RUnlock()
+
+	vars := make(map[string]string, len(s.globalVars))
+	for name, value := range s.globalVars {
+		vars[name] = value
+	}
+	return vars
 }
 
 func (s *testCNServer) waitCNServerReady() bool {
@@ -322,7 +347,11 @@ func testHandle(h *testHandler) {
 	reader := bufio.NewReader(h.conn.RawConn())
 	_ = extraInfo.Decode(reader)
 	// server writes init handshake.
-	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeHandshakePayload())
+	handshake, err := h.mysqlProto.MakeHandshakePayload()
+	if err != nil {
+		return
+	}
+	_ = h.mysqlProto.WritePacket(handshake)
 	// server reads auth information from client.
 	_, _ = h.conn.Read(goetty.ReadOptions{})
 	// server writes ok packet.
@@ -375,7 +404,7 @@ func (h *testHandler) handleSetVar(packet *frontend.Packet) {
 }
 
 func (h *testHandler) handleKillConn() {
-	h.server.globalVars["killed"] = "yes"
+	h.server.setGlobalVar("killed", "yes")
 	h.mysqlProto.SetSequenceID(1)
 	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeOKPayload(0, uint64(h.connID), h.status, 0, ""))
 }
@@ -459,7 +488,7 @@ func (h *testHandler) handleShowGlobalVar() {
 		}
 	}
 	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeEOFPayload(0, h.status))
-	for k, v := range h.server.globalVars {
+	for k, v := range h.server.globalVarsSnapshot() {
 		row := make([]interface{}, 2)
 		row[0] = k
 		row[1] = v
@@ -535,6 +564,36 @@ func (s *testCNServer) Stop() error {
 	return nil
 }
 
+func TestCNServerGlobalVarsConcurrentAccess(t *testing.T) {
+	server := &testCNServer{globalVars: make(map[string]string)}
+	const workers = 8
+	const iterations = 16
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(workers * 2)
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer wg.Done()
+			<-start
+			for j := 0; j < iterations; j++ {
+				server.setGlobalVar("killed", "yes")
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			for j := 0; j < iterations; j++ {
+				_ = server.globalVarsSnapshot()
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	require.Equal(t, map[string]string{"killed": "yes"}, server.globalVarsSnapshot())
+}
+
 func TestServerConn_Create(t *testing.T) {
 	defer leaktest.AfterTest(t)
 
@@ -593,6 +652,35 @@ func TestServerConn_Connect(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestServerConn_HandleHandshakeClearsReadDeadline(t *testing.T) {
+	defer leaktest.AfterTest(t)
+
+	temp := os.TempDir()
+	addr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr))
+	cn := testMakeCNServer("cn-deadline", addr, 0, "", labelInfo{})
+	tp := newTestProxyHandler(t)
+	defer tp.closeFn()
+	stopFn := startTestCNServer(t, tp.ctx, addr, nil)
+	defer func() { require.NoError(t, stopFn()) }()
+
+	sc, err := newServerConn(cn, nil, tp.re, 0)
+	require.NoError(t, err)
+	impl := sc.(*serverConn)
+	defer impl.Close()
+
+	// Replace the transport in both serverConn and its frontend protocol so
+	// the test can observe the deadline left by the handshake reads.
+	tracked := &readDeadlineTrackingConn{Conn: impl.conn}
+	impl.conn = tracked
+	impl.mysqlProto.UseConn(tracked)
+
+	_, err = impl.HandleHandshake(&frontend.Packet{Payload: []byte{1}}, 3*time.Second)
+	require.NoError(t, err)
+	require.True(t, tracked.readDeadline().IsZero(),
+		"the frontend handshake deadline must not survive into the tunnel")
+}
+
 func TestCNServerConnectClosesSessionOnInvalidSalt(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -630,6 +718,136 @@ func TestCNServerConnectClosesSessionOnInvalidSalt(t *testing.T) {
 	n, readErr := backend.Read(make([]byte, 1))
 	require.Zero(t, n)
 	require.ErrorIs(t, readErr, io.EOF)
+}
+
+func TestServerConnExecStmtContextInterruptsSessionTimeout(t *testing.T) {
+	local, remote := net.Pipe()
+	defer remote.Close()
+	frontend.InitServerLevelVars("test")
+	fp := config.FrontendParameters{}
+	fp.SetDefaultValues()
+	pu := config.NewParameterUnit(&fp, nil, nil, nil)
+	allocator := frontend.NewLeakCheckAllocator()
+	ios, err := frontend.NewIOSessionWithOptions(
+		local,
+		pu,
+		"test",
+		frontend.WithIOSessionBufferSize(proxyIOSessionBufferSize),
+		frontend.WithIOSessionAllocator(allocator),
+	)
+	require.NoError(t, err)
+	sc := &serverConn{
+		conn:       local,
+		mysqlProto: frontend.NewMysqlClientProtocol("test", 1, ios, 0, &fp),
+	}
+	defer func() {
+		require.NoError(t, sc.Close())
+		require.True(t, allocator.CheckBalance())
+	}()
+
+	requestRead := make(chan error, 1)
+	go func() {
+		header := make([]byte, frontend.PacketHeaderLength)
+		if _, err := io.ReadFull(remote, header); err != nil {
+			requestRead <- err
+			return
+		}
+		length := int(uint32(header[0]) | uint32(header[1])<<8 | uint32(header[2])<<16)
+		_, err := io.ReadFull(remote, make([]byte, length))
+		requestRead <- err
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, err = sc.ExecStmtContext(ctx, internalStmt{cmdType: cmdQuery, s: "set transferred=1"}, nil)
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Less(t, time.Since(started), time.Second,
+		"context must override frontend's default 24-hour session read timeout")
+	require.NoError(t, <-requestRead)
+}
+
+func TestServerConnRejectsOversizedBackendPacket(t *testing.T) {
+	local, remote := net.Pipe()
+	defer remote.Close()
+	frontend.InitServerLevelVars("test")
+	fp := config.FrontendParameters{}
+	fp.SetDefaultValues()
+	pu := config.NewParameterUnit(&fp, nil, nil, nil)
+	allocator := frontend.NewLeakCheckAllocator()
+	ios, err := frontend.NewIOSessionWithOptions(
+		local,
+		pu,
+		"test",
+		frontend.WithIOSessionBufferSize(proxyIOSessionBufferSize),
+		frontend.WithIOSessionAllowedPacketSize(proxyBackendPacketLimit),
+		frontend.WithIOSessionAllocator(allocator),
+	)
+	require.NoError(t, err)
+	sc := &serverConn{
+		conn:       local,
+		mysqlProto: frontend.NewMysqlClientProtocol("test", 1, ios, 0, &fp),
+	}
+	defer func() {
+		require.NoError(t, sc.Close())
+		require.True(t, allocator.CheckBalance())
+	}()
+
+	peerDone := make(chan error, 1)
+	go func() {
+		header := []byte{
+			byte((proxyBackendPacketLimit + 1) & 0xff),
+			byte(((proxyBackendPacketLimit + 1) >> 8) & 0xff),
+			byte(((proxyBackendPacketLimit + 1) >> 16) & 0xff),
+			0,
+		}
+		packetPrefix := append(header, make([]byte, proxyIOSessionBufferSize-len(header))...)
+		if _, err := remote.Write(packetPrefix); err != nil {
+			peerDone <- err
+			return
+		}
+		peerDone <- nil
+	}()
+
+	_, err = sc.readPacket()
+	require.Error(t, err)
+	require.NoError(t, <-peerDone)
+}
+
+func TestInterruptConnectionOnDoneOwnershipHandoff(t *testing.T) {
+	t.Run("cancellation closes phase-owned transport", func(t *testing.T) {
+		local, remote := net.Pipe()
+		defer remote.Close()
+		ctx, cancel := context.WithCancel(context.Background())
+		join := interruptConnectionOnDone(ctx, local)
+		cancel()
+		join()
+		_, err := remote.Write([]byte{1})
+		require.Error(t, err)
+	})
+
+	t.Run("successful handoff stops late cancellation", func(t *testing.T) {
+		local, remote := net.Pipe()
+		defer local.Close()
+		defer remote.Close()
+		ctx, cancel := context.WithCancel(context.Background())
+		join := interruptConnectionOnDone(ctx, local)
+		join()
+		cancel()
+
+		writeDone := make(chan error, 1)
+		go func() {
+			_, err := remote.Write([]byte{1})
+			writeDone <- err
+		}()
+		require.NoError(t, local.SetReadDeadline(time.Now().Add(time.Second)))
+		buf := make([]byte, 1)
+		_, err := io.ReadFull(local, buf)
+		require.NoError(t, err)
+		require.Equal(t, byte(1), buf[0])
+		require.NoError(t, <-writeDone)
+	})
 }
 
 func TestServerConn_HandleHandshakeEarlyReadFailureIsNotTimeout(t *testing.T) {
@@ -703,6 +921,176 @@ func TestServerConn_HandleHandshakeEarlyReadFailureIsNotTimeout(t *testing.T) {
 	_, err = sc.HandleHandshake(&frontend.Packet{Payload: []byte{1}}, time.Second)
 	require.Error(t, err)
 	require.False(t, isTimeoutErr(err), "early backend close must not be reclassified as timeout/busy")
+}
+
+func TestServerConn_HandleHandshakeTimeoutStopsWorker(t *testing.T) {
+	local, remote := net.Pipe()
+	defer remote.Close()
+	frontend.InitServerLevelVars("test")
+	require.NoError(t, remote.SetWriteDeadline(time.Now().Add(time.Second)))
+	fp := config.FrontendParameters{}
+	fp.SetDefaultValues()
+	pu := config.NewParameterUnit(&fp, nil, nil, nil)
+	allocator := frontend.NewLeakCheckAllocator()
+	ios, err := frontend.NewIOSessionWithOptions(
+		local,
+		pu,
+		"test",
+		frontend.WithIOSessionBufferSize(proxyIOSessionBufferSize),
+		frontend.WithIOSessionAllowedPacketSize(proxyBackendPacketLimit),
+		frontend.WithIOSessionAllocator(allocator),
+	)
+	require.NoError(t, err)
+	sc := &serverConn{
+		cnServer: &CNServer{addr: "pipe"},
+		conn:     local,
+		connID:   1,
+		mysqlProto: frontend.NewMysqlClientProtocol(
+			"test", 1, ios, 0, &fp,
+		),
+	}
+	defer func() {
+		require.NoError(t, sc.Close())
+		require.True(t, allocator.CheckBalance())
+	}()
+
+	_, err = sc.HandleHandshake(
+		&frontend.Packet{Payload: []byte("auth")},
+		20*time.Millisecond,
+	)
+	require.Error(t, err)
+	require.True(t, isTimeoutErr(err))
+
+	// HandleHandshake may return only after its worker has stopped. Closing the
+	// transport is the termination edge that makes that guarantee observable.
+	_, err = remote.Write([]byte{1})
+	require.Error(t, err)
+}
+
+func TestServerConn_HandleHandshakeReadyResultAndCancelLogsTimeoutOnce(t *testing.T) {
+	core, logs := observer.New(zapcore.DebugLevel)
+	local, remote := net.Pipe()
+	defer remote.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	resultC := make(chan backendHandshakeResult, 1)
+	resultC <- backendHandshakeResult{err: net.ErrClosed}
+	var tracker backendHandshakeTracker
+	tracker.enter(backendHandshakeStageReadAuthResponse)
+	sc := &serverConn{
+		cnServer:         &CNServer{addr: "cn-a:6001"},
+		conn:             local,
+		connID:           42,
+		diagnosticLogger: logutil.NewRateLimitedLogger(zap.New(core)),
+	}
+
+	before := testutil.ToFloat64(
+		v2.ProxyBackendHandshakeEventCounter.WithLabelValues(
+			backendDiagnosticHandshakeCanceled,
+			backendHandshakeStageReadAuthResponse.String(),
+		),
+	)
+	_, err := sc.awaitBackendHandshake(
+		ctx,
+		local,
+		resultC,
+		func() {},
+		&tracker,
+		time.Second,
+	)
+	require.Error(t, err)
+	require.True(t, isTimeoutErr(err))
+	require.Len(t, logs.FilterMessage("backend handshake canceled").All(), 1)
+	fields := logs.FilterMessage("backend handshake canceled").All()[0].ContextMap()
+	require.Equal(t, "cn-a:6001", fields["cn"])
+	require.Equal(t, backendHandshakeStageReadAuthResponse.String(), fields["stage"])
+	require.Contains(t, fields, "stage_duration")
+	require.Equal(t, before+1, testutil.ToFloat64(
+		v2.ProxyBackendHandshakeEventCounter.WithLabelValues(
+			backendDiagnosticHandshakeCanceled,
+			backendHandshakeStageReadAuthResponse.String(),
+		),
+	))
+}
+
+func TestServerConn_BackendHandshakeDiagnosticsAreRateLimited(t *testing.T) {
+	core, logs := observer.New(zapcore.DebugLevel)
+	logger := logutil.NewRateLimitedLogger(zap.New(core))
+	var tracker backendHandshakeTracker
+	tracker.enter(backendHandshakeStageReadInitial)
+	sc := &serverConn{
+		cnServer:         &CNServer{addr: "cn-b:6001"},
+		connID:           7,
+		diagnosticLogger: logger,
+	}
+	counter := v2.ProxyBackendHandshakeEventCounter.WithLabelValues(
+		backendDiagnosticHandshakeFailure,
+		backendHandshakeStageReadInitial.String(),
+	)
+	before := testutil.ToFloat64(counter)
+
+	for range 100 {
+		sc.logBackendHandshakeEvent(
+			backendDiagnosticHandshakeFailure,
+			"backend handshake failed",
+			&tracker,
+			false,
+			zap.Error(io.EOF),
+		)
+	}
+
+	entries := logs.FilterMessage("backend handshake failed").All()
+	require.Len(t, entries, 4)
+	require.Equal(t, int64(100), entries[3].ContextMap()["occurrence"])
+	require.Equal(t, int64(96), entries[3].ContextMap()["suppressed"])
+	require.Equal(t, before+100, testutil.ToFloat64(counter))
+}
+
+func TestCNServer_ExtraInfoSlowDiagnosticsAreRateLimited(t *testing.T) {
+	core, logs := observer.New(zapcore.DebugLevel)
+	logger := logutil.NewRateLimitedLogger(zap.New(core))
+	cn := &CNServer{addr: "cn-c:6001"}
+	counter := v2.ProxyBackendHandshakeEventCounter.WithLabelValues(
+		backendDiagnosticExtraInfoSlow,
+		backendDiagnosticExtraInfoStage,
+	)
+	before := testutil.ToFloat64(counter)
+
+	for range 100 {
+		cn.logExtraInfoWriteEvent(
+			logger,
+			backendDiagnosticExtraInfoSlow,
+			"slow proxy extra info write",
+			nil,
+			zap.Duration("duration", slowBackendExtraInfoWriteThreshold),
+		)
+	}
+
+	entries := logs.FilterMessage("slow proxy extra info write").All()
+	require.Len(t, entries, 4)
+	require.Equal(t, int64(100), entries[3].ContextMap()["occurrence"])
+	require.Equal(t, int64(96), entries[3].ContextMap()["suppressed"])
+	require.Equal(t, before+100, testutil.ToFloat64(counter))
+}
+
+func TestBackendHandshakeTrackerSuccessPathAllocations(t *testing.T) {
+	var tracker backendHandshakeTracker
+	allocations := testing.AllocsPerRun(1000, func() {
+		tracker.enter(backendHandshakeStageReadInitial)
+		tracker.enter(backendHandshakeStageWriteAuth)
+		tracker.enter(backendHandshakeStageReadAuthResponse)
+	})
+	require.Zero(t, allocations)
+}
+
+func BenchmarkBackendHandshakeTrackerSuccessPath(b *testing.B) {
+	var tracker backendHandshakeTracker
+	b.ReportAllocs()
+	for range b.N {
+		tracker.enter(backendHandshakeStageReadInitial)
+		tracker.enter(backendHandshakeStageWriteAuth)
+		tracker.enter(backendHandshakeStageReadAuthResponse)
+	}
 }
 
 func TestFakeCNServer(t *testing.T) {
@@ -809,4 +1197,98 @@ func TestServerConnParseConnID(t *testing.T) {
 		err := s.parseConnID(p)
 		require.NoError(t, err)
 	})
+}
+
+func TestCachedServerConnRebindsManagerAcrossReuseGenerations(t *testing.T) {
+	manager := newConnManager()
+	rebalancer := &rebalancer{connManager: manager}
+	newTestTunnel := func() *tunnel {
+		tun := newTunnel(context.Background(), runtime.DefaultRuntime().Logger(), nil)
+		t.Cleanup(func() { require.NoError(t, tun.Close()) })
+		return tun
+	}
+	newTracked := func(id uint32, origin *tunnel) (*serverConn, *CNServer) {
+		cn := testMakeCNServer(
+			fmt.Sprintf("cn-%d", id),
+			fmt.Sprintf("backend-%d", id),
+			id,
+			LabelHash(fmt.Sprintf("tenant-%d", id)),
+			labelInfo{},
+		)
+		sc := &serverConn{
+			cnServer:   cn,
+			connID:     id,
+			rebalancer: rebalancer,
+		}
+		sc.tunnelOwner.tun = origin
+		manager.connect(cn, origin)
+		return sc, cn
+	}
+	contains := func(cn *CNServer, tun *tunnel) bool {
+		manager.Lock()
+		defer manager.Unlock()
+		return manager.cnTunnels[cn.uuid].exists(tun)
+	}
+
+	origin1 := newTestTunnel()
+	active1 := newTestTunnel()
+	sc1, cn1 := newTracked(1, origin1)
+	require.True(t, sc1.rebindTunnel(active1))
+	require.False(t, contains(cn1, origin1))
+	require.True(t, contains(cn1, active1))
+
+	// Replenish the cache while the first reused backend stays active, then pop
+	// that replacement too. Manager ownership must remain active-current plus
+	// cached-origin; prior origins must not accumulate with every reuse cycle.
+	origin2 := newTestTunnel()
+	active2 := newTestTunnel()
+	sc2, cn2 := newTracked(2, origin2)
+	require.True(t, contains(cn1, active1))
+	require.True(t, contains(cn2, origin2))
+	require.True(t, sc2.rebindTunnel(active2))
+	require.False(t, contains(cn2, origin2))
+	require.True(t, contains(cn2, active2))
+
+	origin3 := newTestTunnel()
+	sc3, cn3 := newTracked(3, origin3)
+	require.Equal(t, 3, manager.count())
+	require.True(t, contains(cn1, active1))
+	require.True(t, contains(cn2, active2))
+	require.True(t, contains(cn3, origin3))
+	require.False(t, contains(cn1, origin1))
+	require.False(t, contains(cn2, origin2))
+
+	require.NoError(t, sc1.Close())
+	require.False(t, sc1.rebindTunnel(origin1),
+		"a terminal backend generation must not be rebound")
+	require.False(t, contains(cn1, active1))
+	require.NoError(t, sc2.Close())
+	require.NoError(t, sc3.Close())
+
+	for i := uint32(0); i < 32; i++ {
+		origin := newTestTunnel()
+		next := newTestTunnel()
+		sc, cn := newTracked(100+i, origin)
+		start := make(chan struct{})
+		closeErr := make(chan error, 1)
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_ = sc.rebindTunnel(next)
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			closeErr <- sc.Close()
+		}()
+		close(start)
+		wg.Wait()
+		require.NoError(t, <-closeErr)
+		require.False(t, contains(cn, origin))
+		require.False(t, contains(cn, next),
+			"Close must remove whichever tunnel generation won publication")
+	}
+	require.Zero(t, manager.count())
 }

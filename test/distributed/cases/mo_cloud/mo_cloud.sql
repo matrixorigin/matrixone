@@ -187,7 +187,9 @@ UPDATE `mo_mo`.`wb` SET `updated_at`='2023-07-28 06:02:41.452' WHERE id = '9579c
 
 alter account `2ef38bf3_b821_4cab_879e_3b788f1e922f` admin_name 'admin' identified by 'abcd';
 delete from mo_mo.operation where created_at <= '2023-07-21 13:42:02';
+set mo_table_stats.force_update = yes;
 select distinct IF(relkind = 'v', 0, mo_table_rows('information_schema','character_sets')) as `rows` from mo_catalog.mo_tables where reldatabase='information_schema' and relname='character_sets';
+set mo_table_stats.force_update = no;
 select distinct IF(relkind = 'v', 0, mo_table_rows('mo_sample_data_tpch_sf1','customer')) as `rows` from mo_catalog.mo_tables where reldatabase='mo_sample_data_tpch_sf1' and relname='customer';
 select distinct IF(relkind = 'v', 0, mo_table_rows('mo_sample_data_tpch_sf1','lineitem')) as `rows` from mo_catalog.mo_tables where reldatabase='mo_sample_data_tpch_sf1' and relname='lineitem';
 select distinct IF(relkind = 'v', 0, mo_table_rows('mo_sample_data_tpch_sf1','nation')) as `rows` from mo_catalog.mo_tables where reldatabase='mo_sample_data_tpch_sf1' and relname='nation';

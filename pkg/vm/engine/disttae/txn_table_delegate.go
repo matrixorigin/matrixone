@@ -156,6 +156,41 @@ func (tbl *txnTableDelegate) CollectObjectList(ctx context.Context, from, to typ
 	return tbl.origin.CollectObjectList(ctx, from, to, bat, mp)
 }
 
+// VisitSnapshotObjects is the bounded sidecar-read path. The callback owns no
+// storage memory and may stop enumeration as soon as its wire-size budget is
+// exhausted.
+func (tbl *txnTableDelegate) VisitSnapshotObjects(
+	ctx context.Context,
+	to types.TS,
+	visit func(objectio.ObjectStats, bool) error,
+) error {
+	local, err := tbl.CanVisitSnapshotLocally()
+	if err != nil {
+		return err
+	}
+	if !local {
+		return moerr.NewInternalErrorNoCtx("delegated snapshot object visitation is unsupported")
+	}
+	return tbl.origin.visitSnapshotObjects(ctx, to, visit)
+}
+
+// HasSnapshotTombstones performs a presence-only probe over the same local TAE
+// relation used by VisitSnapshotObjects. Delegated shard reads fail closed.
+func (tbl *txnTableDelegate) HasSnapshotTombstones(
+	ctx context.Context,
+	txnOffset int,
+	snapshot types.TS,
+) (bool, error) {
+	local, err := tbl.CanVisitSnapshotLocally()
+	if err != nil {
+		return false, err
+	}
+	if !local {
+		return false, moerr.NewInternalErrorNoCtx("delegated snapshot tombstone probing is unsupported")
+	}
+	return tbl.origin.hasSnapshotTombstones(ctx, txnOffset, snapshot)
+}
+
 func (tbl *txnTableDelegate) Stats(
 	ctx context.Context,
 	sync bool,
@@ -174,6 +209,11 @@ func (tbl *txnTableDelegate) Stats(
 			ctx,
 			sync,
 		)
+	}
+
+	if tbl.origin.workspaceInsertRowEstimate() > 0 {
+		// The remote owner cannot observe this CN's uncommitted workspace.
+		return transientTableStats(nil, float64(^uint64(0))), nil
 	}
 
 	var stats pb.StatsInfo
@@ -200,8 +240,12 @@ func (tbl *txnTableDelegate) Stats(
 		return nil, err
 	}
 	if !has {
-		return nil, nil
+		return transientTableStats(nil, float64(^uint64(0))), nil
 	}
+	if stats.TableName == "" && stats.TableCnt > 0 {
+		return transientTableStats(&stats, float64(^uint64(0))), nil
+	}
+
 	return &stats, nil
 }
 
@@ -588,6 +632,12 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 	}
 
 	var rds []engine.Reader
+	completed := false
+	defer func() {
+		if !completed {
+			closeReaders(rds)
+		}
+	}()
 	proc := p.(*process.Process)
 
 	if plan2.IsFalseExpr(expr) {
@@ -701,6 +751,7 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 		rds = append(rds, srd)
 	}
 
+	completed = true
 	return rds, nil
 }
 
@@ -767,9 +818,37 @@ func (tbl *txnTableDelegate) PrimaryKeysMayBeModified(
 		},
 	)
 	if err != nil {
-		return false, err
+		return false, normalizePKCheckError(err)
 	}
 	return modify, nil
+}
+
+func normalizePKCheckError(err error) error {
+	if cause := findPKCheckRollingRestart(err); cause != nil {
+		// shardservice aggregates replica errors with errors.Join, while frontend
+		// classifies whole-txn rollback errors by their concrete moerr type.
+		return cause
+	}
+	return err
+}
+
+func findPKCheckRollingRestart(err error) *moerr.Error {
+	if cause, ok := err.(*moerr.Error); ok &&
+		cause.ErrorCode() == moerr.ErrRetryForCNRollingRestart {
+		return cause
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, child := range joined.Unwrap() {
+			if cause := findPKCheckRollingRestart(child); cause != nil {
+				return cause
+			}
+		}
+		return nil
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return findPKCheckRollingRestart(wrapped.Unwrap())
+	}
+	return nil
 }
 
 func (tbl *txnTableDelegate) PrimaryKeysMayBeUpserted(
@@ -835,90 +914,6 @@ func (tbl *txnTableDelegate) PrimaryKeysMayBeUpserted(
 		return false, err
 	}
 	return modify, nil
-}
-
-func (tbl *txnTableDelegate) MergeObjects(
-	ctx context.Context,
-	objstats []objectio.ObjectStats,
-	targetObjSize uint32,
-) (*api.MergeCommitEntry, error) {
-	if tbl.combined.is {
-		return tbl.combined.tbl.MergeObjects(
-			ctx,
-			objstats,
-			targetObjSize,
-		)
-	}
-
-	is, err := tbl.isLocal()
-	if err != nil {
-		return nil, err
-	}
-	if is {
-		return tbl.origin.MergeObjects(ctx, objstats, targetObjSize)
-	}
-
-	var entry api.MergeCommitEntry
-	err = tbl.forwardRead(
-		ctx,
-		shardservice.ReadMergeObjects,
-		func(param *shard.ReadParam) {
-			os := make([][]byte, len(objstats))
-			for i, o := range objstats {
-				os[i] = o.Marshal()
-			}
-			param.MergeObjectsParam.Objstats = os
-			param.MergeObjectsParam.TargetObjSize = targetObjSize
-		},
-		func(resp []byte) {
-			err := entry.Unmarshal(resp)
-			if err != nil {
-				panic(err)
-			}
-			// TODO: hash shard need to merge all shard in future
-		},
-	)
-	if err != nil {
-		return nil, err
-	}
-	return &entry, nil
-}
-
-func (tbl *txnTableDelegate) GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error) {
-	if tbl.combined.is {
-		return tbl.combined.tbl.GetNonAppendableObjectStats(ctx)
-	}
-
-	is, err := tbl.isLocal()
-	if err != nil {
-		return nil, err
-	}
-	if is {
-		return tbl.origin.GetNonAppendableObjectStats(
-			ctx,
-		)
-	}
-
-	var stats []objectio.ObjectStats
-	err = tbl.forwardRead(
-		ctx,
-		shardservice.ReadVisibleObjectStats,
-		func(param *shard.ReadParam) {},
-		func(resp []byte) {
-			if len(resp)%objectio.ObjectStatsLen != 0 {
-				panic("invalid resp")
-			}
-			size := len(resp) / objectio.ObjectStatsLen
-			stats = make([]objectio.ObjectStats, size)
-			for i := range size {
-				stats[i].UnMarshal(resp[i*objectio.ObjectStatsLen:])
-			}
-		},
-	)
-	if err != nil {
-		return nil, err
-	}
-	return stats, nil
 }
 
 func (tbl *txnTableDelegate) TableDefs(
@@ -1097,6 +1092,25 @@ func (tbl *txnTableDelegate) GetProcess() any {
 
 func (tbl *txnTableDelegate) GetExtraInfo() *api.SchemaExtra {
 	return tbl.origin.extraInfo
+}
+
+// IsPartitionedRelation reports whether reads are delegated across physical
+// partition or partition-index tables instead of one TAE relation.
+func (tbl *txnTableDelegate) IsPartitionedRelation() bool {
+	return tbl != nil && tbl.combined.is
+}
+
+// CanVisitSnapshotLocally is true only when one origin relation covers the
+// complete logical table. Hash-sharded and delegated partition reads require a
+// shard-wide manifest protocol and are rejected by the current sidecar format.
+func (tbl *txnTableDelegate) CanVisitSnapshotLocally() (bool, error) {
+	if tbl == nil || tbl.origin == nil || tbl.combined.is {
+		return false, nil
+	}
+	if !tbl.shard.is {
+		return true, nil
+	}
+	return tbl.shard.policy == shard.Policy_Partition && tbl.origin.tableId == tbl.shard.tableID, nil
 }
 
 func (tbl *txnTableDelegate) GetFlushTS(
@@ -1347,8 +1361,6 @@ func (tbl *txnTableDelegate) mockForwardRead(
 		shardservice.ReadBuildReader:              HandleShardingReadBuildReader,
 		shardservice.ReadPrimaryKeysMayBeModified: HandleShardingReadPrimaryKeysMayBeModified,
 		shardservice.ReadPrimaryKeysMayBeUpserted: HandleShardingReadPrimaryKeysMayBeUpserted,
-		shardservice.ReadMergeObjects:             HandleShardingReadMergeObjects,
-		shardservice.ReadVisibleObjectStats:       HandleShardingReadVisibleObjectStats,
 		shardservice.ReadClose:                    HandleShardingReadClose,
 		shardservice.ReadNext:                     HandleShardingReadNext,
 		shardservice.ReadCollectTombstones:        HandleShardingReadCollectTombstones,
@@ -1500,7 +1512,7 @@ func (r *shardingLocalReader) Read(
 					resp = resp[1:]
 					l := types.DecodeUint32(resp)
 					resp = resp[4:]
-					if err := bat.UnmarshalBinary(resp[:l]); err != nil {
+					if err := bat.UnmarshalBinaryWithAnyMp(resp[:l], mp); err != nil {
 						panic(err)
 					}
 				},

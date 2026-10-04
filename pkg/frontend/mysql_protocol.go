@@ -35,6 +35,7 @@ import (
 	"golang.org/x/exp/slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	util2 "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -45,7 +46,6 @@ import (
 	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/proxy"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -63,6 +63,7 @@ var DefaultCapability = CLIENT_LONG_PASSWORD |
 	CLIENT_SECURE_CONNECTION |
 	CLIENT_MULTI_STATEMENTS |
 	CLIENT_MULTI_RESULTS |
+	CLIENT_PS_MULTI_RESULTS |
 	CLIENT_PLUGIN_AUTH |
 	CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA |
 	CLIENT_DEPRECATE_EOF |
@@ -77,6 +78,8 @@ const defaultSaltReadTimeout = time.Millisecond * 200
 
 const charsetBinary = 0x3f
 const charsetVarchar = 0x21
+const utf8MaxBytesPerCharacter = 3
+const utf8mb4MaxBytesPerCharacter = 4
 const boolColumnLength = 1
 
 func init() {
@@ -367,7 +370,7 @@ func (mp *MysqlProtocolImpl) GetBool(id PropertyID) bool {
 }
 
 func (mp *MysqlProtocolImpl) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.Batch) error {
-	n := bat.Vecs[0].Length()
+	n := bat.RowCount()
 	//TODO: remove this MRS here
 	//Create a new temporary result set per pipeline thread.
 	mrs := MysqlResultSet{}
@@ -421,7 +424,7 @@ func (mp *MysqlProtocolImpl) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet
 			ses.AppendData(row2)
 		}
 	} else {
-		if err = mp.WriteResultSetRow2(&mrs, colSlices, uint64(n)); err != nil {
+		if err = mp.writeResultSetRow2(&mrs, colSlices, uint64(n), crs); err != nil {
 			execCtx.ses.Error(execCtx.reqCtx,
 				"Flush error",
 				zap.Error(err))
@@ -432,7 +435,10 @@ func (mp *MysqlProtocolImpl) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet
 }
 
 func (mp *MysqlProtocolImpl) WriteHandshake() error {
-	hsV10pkt := mp.makeHandshakeV10Payload()
+	hsV10pkt, err := mp.makeHandshakeV10Payload()
+	if err != nil {
+		return err
+	}
 	return mp.writePackets(hsV10pkt)
 }
 
@@ -461,6 +467,13 @@ func (mp *MysqlProtocolImpl) WriteEOFIFAndNoFlush(warnings uint16, status uint16
 
 func (mp *MysqlProtocolImpl) WriteEOFOrOK(warnings uint16, status uint16) error {
 	return mp.sendEOFOrOkPacket(warnings, status)
+}
+
+func (mp *MysqlProtocolImpl) WriteEOFOrOKWithAffectedRows(affectedRows uint64, warnings uint16, status uint16) error {
+	if mp.capability&CLIENT_DEPRECATE_EOF != 0 {
+		return mp.sendOKPacketWithEof(affectedRows, 0, status, warnings, "")
+	}
+	return mp.sendEOFPacket(warnings, status)
 }
 
 func (mp *MysqlProtocolImpl) WriteERR(errorCode uint16, sqlState, errorMessage string) error {
@@ -524,6 +537,14 @@ func (mp *MysqlProtocolImpl) GetCapability() uint32 {
 	return mp.capability
 }
 
+// GetCollationID returns the negotiated client collation. The value is part
+// of the immutable protocol shape of a cached backend connection.
+func (mp *MysqlProtocolImpl) GetCollationID() int {
+	mp.m.Lock()
+	defer mp.m.Unlock()
+	return mp.collationID
+}
+
 func (mp *MysqlProtocolImpl) SetCapability(cap uint32) {
 	mp.m.Lock()
 	defer mp.m.Unlock()
@@ -574,46 +595,15 @@ func (mp *MysqlProtocolImpl) SetUserName(s string) {
 	mp.username.Store(s)
 }
 
-const defaultTcp4PackageSize = 1<<14 - 66
-
-// CalculateOutTrafficBytes calculate the bytes of the last out traffic, the number of mysql packets
-// return 0 value, if the connection is closed.
-//
-// packet cnt has 3 part:
-// 1st part: flush op cnt.
-// 2nd part: upload part, calculation = payload / 16KiB
-//
-// 3rd part
-// [mo 2.0]
-// 3.1: response part, calculation = sendByte / (16KiB - 66B)
-//   - use net.Listener raw api.
-//   - discard ioCopyBufferSize logic.
-//
-// 3.2: output csv
-//   - fill with ExportDataDefaultFlushSize size, do once flush.
-//
-// [mo 1.2, 1.1.*]
-// 3rd part: response part, calculation = sendByte / 4KiB
-//   - ioCopyBufferSize currently is 4096 Byte, which is the option for goetty_buf.ByteBuf, set by goetty_buf.WithIOCopyBufferSize(...).
-//     goetty_buf.ByteBuf.WriteTo(...) will call by io.CopyBuffer(...) if do Conn.Flush().
-//   - If ioCopyBufferSize is changed, you should see the calling of goetty.NewApplicationWithListenAddress(...) in NewMOServer()
+// CalculateOutTrafficBytes returns bytes accepted by the connection writer and
+// completed MySQL protocol packets. It does not estimate TCP/TLS overhead.
 func (mp *MysqlProtocolImpl) CalculateOutTrafficBytes(reset bool) (bytes int64, packets int64) {
 	ses := mp.GetSession()
 	if ses == nil {
 		return 0, 0
 	}
-	// Case 1: send data as ResultSet
-	resultSetPart := int64(ses.GetOutputBytes())
-	// Case 2: send data as CSV
-	csvPart := ses.writeCsvBytes.Load()
-	bytes = resultSetPart + csvPart
-	tcpPkgCnt := ses.GetFlushPacketCnt()
-	packets = tcpPkgCnt /*1st part*/ +
-		int64(len(ses.sql)>>14) + int64(ses.payloadCounter>>14) + /*2nd part*/
-		resultSetPart/defaultTcp4PackageSize /*3rd part(3.1)*/
-	if csvPart > 0 {
-		packets += int64((csvPart >> 20) / getPu(ses.GetService()).SV.ExportDataDefaultFlushSize) /*3rd part (3.2)*/
-	}
+	bytes = int64(ses.GetOutputBytes())
+	packets = ses.GetFlushPacketCnt()
 	if reset {
 		ses.ResetPacketCounter()
 	}
@@ -683,6 +673,177 @@ type response320 struct {
 	isAskForTlsHeader bool
 }
 
+// changeUserRequest is the command-phase authentication payload described by
+// COM_CHANGE_USER. It is intentionally parsed from the negotiated capability
+// mask rather than accepting a handshake-response packet: the two layouts are
+// similar, but not interchangeable.
+type changeUserRequest struct {
+	username         string
+	authResponse     []byte
+	database         string
+	collationID      int
+	hasCollation     bool
+	clientPluginName string
+	connectAttrs     map[string]string
+}
+
+type mysqlProtocolSessionState struct {
+	session       *Session
+	username      string
+	database      string
+	authResponse  []byte
+	authString    []byte
+	collationID   int
+	collationName string
+	charset       string
+	connectAttrs  map[string]string
+}
+
+func cloneProtocolStringMap(src map[string]string) map[string]string {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]string, len(src))
+	for key, value := range src {
+		dst[key] = value
+	}
+	return dst
+}
+
+func (mp *MysqlProtocolImpl) snapshotSessionState() mysqlProtocolSessionState {
+	mp.m.Lock()
+	defer mp.m.Unlock()
+	return mysqlProtocolSessionState{
+		session:       mp.ses,
+		username:      mp.GetUserName(),
+		database:      mp.GetDatabaseName(),
+		authResponse:  append([]byte(nil), mp.authResponse...),
+		authString:    append([]byte(nil), mp.authString...),
+		collationID:   mp.collationID,
+		collationName: mp.collationName,
+		charset:       mp.charset,
+		connectAttrs:  cloneProtocolStringMap(mp.connectAttrs),
+	}
+}
+
+func (mp *MysqlProtocolImpl) setSessionState(state mysqlProtocolSessionState) {
+	mp.m.Lock()
+	defer mp.m.Unlock()
+	mp.ses = state.session
+	if mp.tcpConn != nil {
+		mp.tcpConn.SetSession(state.session)
+	}
+	mp.username.Store(state.username)
+	mp.database.Store(state.database)
+	mp.authResponse = append(mp.authResponse[:0], state.authResponse...)
+	mp.authString = append(mp.authString[:0], state.authString...)
+	mp.collationID = state.collationID
+	mp.collationName = state.collationName
+	mp.charset = state.charset
+	mp.connectAttrs = cloneProtocolStringMap(state.connectAttrs)
+}
+
+func (mp *MysqlProtocolImpl) setChangeUserState(ses *Session, req changeUserRequest) {
+	state := mysqlProtocolSessionState{
+		session:      ses,
+		username:     req.username,
+		database:     req.database,
+		authResponse: req.authResponse,
+		connectAttrs: req.connectAttrs,
+	}
+	if req.hasCollation {
+		collation := collationID2CharsetAndName[req.collationID]
+		state.collationID = req.collationID
+		state.collationName = collation.collationName
+		state.charset = collation.charset
+	} else {
+		current := mp.snapshotSessionState()
+		state.collationID = current.collationID
+		state.collationName = current.collationName
+		state.charset = current.charset
+	}
+	mp.setSessionState(state)
+}
+
+func (mp *MysqlProtocolImpl) parseChangeUserRequest(ctx context.Context, data []byte) (changeUserRequest, error) {
+	var req changeUserRequest
+	pos := 0
+	var ok bool
+	req.username, pos, ok = mp.readStringNUL(data, pos)
+	if !ok {
+		return req, moerr.NewInvalidInput(ctx, "malformed COM_CHANGE_USER username")
+	}
+
+	capability := mp.GetCapability()
+	if capability&CLIENT_SECURE_CONNECTION != 0 {
+		var authLength uint8
+		authLength, pos, ok = mp.io.ReadUint8(data, pos)
+		if !ok {
+			return req, moerr.NewInvalidInput(ctx, "malformed COM_CHANGE_USER auth-response length")
+		}
+		req.authResponse, pos, ok = mp.readCountOfBytes(data, pos, int(authLength))
+		if !ok {
+			return req, moerr.NewInvalidInput(ctx, "malformed COM_CHANGE_USER auth-response")
+		}
+	} else {
+		var auth string
+		auth, pos, ok = mp.readStringNUL(data, pos)
+		if !ok {
+			return req, moerr.NewInvalidInput(ctx, "malformed COM_CHANGE_USER auth-response")
+		}
+		req.authResponse = []byte(auth)
+	}
+
+	req.database, pos, ok = mp.readStringNUL(data, pos)
+	if !ok {
+		return req, moerr.NewInvalidInput(ctx, "malformed COM_CHANGE_USER database")
+	}
+	if pos < len(data) && capability&CLIENT_PROTOCOL_41 != 0 {
+		var collationID uint16
+		collationID, pos, ok = mp.io.ReadUint16(data, pos)
+		if !ok {
+			return req, moerr.NewInvalidInput(ctx, "malformed COM_CHANGE_USER character set")
+		}
+		req.collationID = int(collationID)
+		if _, exists := collationID2CharsetAndName[req.collationID]; !exists {
+			return req, moerr.NewInvalidInputf(ctx, "unsupported COM_CHANGE_USER character set %d", collationID)
+		}
+		req.hasCollation = true
+	}
+	if pos < len(data) && capability&CLIENT_PLUGIN_AUTH != 0 {
+		req.clientPluginName, pos, ok = mp.readStringNUL(data, pos)
+		if !ok {
+			return req, moerr.NewInvalidInput(ctx, "malformed COM_CHANGE_USER authentication plugin")
+		}
+	}
+	if pos < len(data) && capability&CLIENT_CONNECT_ATTRS != 0 {
+		var attrsLength uint64
+		attrsLength, pos, ok = mp.readIntLenEnc(data, pos)
+		if !ok || attrsLength > uint64(len(data)-pos) {
+			return req, moerr.NewInvalidInput(ctx, "malformed COM_CHANGE_USER connection attributes length")
+		}
+		end := pos + int(attrsLength)
+		req.connectAttrs = make(map[string]string)
+		for pos < end {
+			var key, value string
+			key, pos, ok = mp.readStringLenEnc(data[:end], pos)
+			if !ok {
+				return req, moerr.NewInvalidInput(ctx, "malformed COM_CHANGE_USER connection attribute key")
+			}
+			value, pos, ok = mp.readStringLenEnc(data[:end], pos)
+			if !ok {
+				return req, moerr.NewInvalidInput(ctx, "malformed COM_CHANGE_USER connection attribute value")
+			}
+			req.connectAttrs[key] = value
+		}
+	}
+	if pos != len(data) {
+		return req, moerr.NewInvalidInput(ctx, "malformed COM_CHANGE_USER trailing data")
+	}
+	req.authResponse = append([]byte(nil), req.authResponse...)
+	return req, nil
+}
+
 func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *PrepareStmt) error {
 	dcPrepare, ok := stmt.PreparePlan.GetDcl().Control.(*planPb.DataControl_Prepare)
 	if !ok {
@@ -694,7 +855,8 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 	}
 	paramTypes := dcPrepare.Prepare.ParamTypes
 	numParams := len(paramTypes)
-	columns := plan2.GetResultColumnsFromPlan(dcPrepare.Prepare.Plan)
+	columns := getPreparedResultColumns(stmt, sessionTxnHaveDDL(mp.GetSession()))
+	directIntegerLengths := directIntegerResultLengths(stmt.PrepareStmt, columns)
 	numColumns := len(columns)
 
 	var data []byte
@@ -723,6 +885,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 		if err != nil {
 			return err
 		}
+		setCharacter(column)
 
 		_, err = mp.SendColumnDefinitionPacket(ctx, column, cmd)
 		if err != nil {
@@ -741,6 +904,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 			if err != nil {
 				return err
 			}
+			applyDirectIntegerResultMetadata(column, directIntegerLengths, i)
 			colDefPacket, err := mp.SendColumnDefinitionPacket(ctx, column, cmd)
 			if err != nil {
 				return err
@@ -766,7 +930,6 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 }
 
 func (mp *MysqlProtocolImpl) ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
-	var err error
 	stmt.proc = proc
 	dcPrepare, ok := stmt.PreparePlan.GetDcl().Control.(*planPb.DataControl_Prepare)
 	if !ok {
@@ -783,37 +946,34 @@ func (mp *MysqlProtocolImpl) ParseSendLongData(ctx context.Context, proc *proces
 		return moerr.NewInternalErrorf(ctx, "get param index out of range. get %d, param length is %d", paramIdx, numParams)
 	}
 
-	if stmt.params == nil {
-		stmt.params = vector.NewVec(types.T_text.ToType())
-		for i := 0; i < numParams; i++ {
-			err = vector.AppendBytes(stmt.params, []byte{}, false, proc.GetMPool())
-			if err != nil {
-				return err
-			}
-		}
-	}
-
 	length := len(data) - pos
 	val, _, ok := mp.readCountOfBytes(data, pos, length)
 	if !ok {
 		return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 	}
-	if stmt.getFromSendLongData == nil {
-		stmt.getFromSendLongData = make(map[int]struct{})
-	}
-	if _, ok := stmt.getFromSendLongData[int(paramIdx)]; ok {
-		val = append(append([]byte(nil), stmt.params.GetBytesAt(int(paramIdx))...), val...)
-	}
-	if err = util.SetAnyToStringVector(proc, val, stmt.params, int(paramIdx)); err != nil {
+	allowed, err := mp.GetSession().GetSessionSysVar("max_allowed_packet")
+	if err != nil {
 		return err
 	}
-	stmt.getFromSendLongData[int(paramIdx)] = struct{}{}
-	return nil
+	limit, ok := allowed.(int64)
+	if !ok {
+		return moerr.NewInternalErrorf(ctx, "invalid max_allowed_packet value %T", allowed)
+	}
+	return stmt.appendLongData(ctx, proc, int(paramIdx), val, limit)
 }
 
 func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
 	var err error
+	// The fixed part after the statement id contains the cursor flag and the
+	// four-byte iteration count. Check it before changing statement state; a
+	// zero-parameter EXECUTE has no later reads to catch a truncated count.
+	if pos < 0 || pos > len(data) || len(data)-pos < 5 {
+		return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
+	}
 	stmt.proc = proc
+	if stmt.longDataErr != nil {
+		return stmt.longDataErr
+	}
 	dcPrepare, ok := stmt.PreparePlan.GetDcl().Control.(*planPb.DataControl_Prepare)
 	if !ok {
 		return moerr.NewInternalError(ctx, "can not get Prepare plan in prepareStmt")
@@ -836,8 +996,13 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 		return moerr.NewInternalError(ctx, "malform packet")
 
 	}
-	if flag != 0 {
-		// TODO only support CURSOR_TYPE_NO_CURSOR flag now
+	switch flag {
+	case 0: // CURSOR_TYPE_NO_CURSOR
+		stmt.cursorRequested = false
+	case 1: // CURSOR_TYPE_READ_ONLY
+		stmt.cursorRequested = true
+	default:
+		stmt.cursorRequested = false
 		return moerr.NewInvalidInputf(ctx, "unsupported Prepare flag '%v'", flag)
 	}
 
@@ -845,6 +1010,8 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 	pos += 4
 
 	if numParams > 0 {
+		paramTypes := stmt.ParamTypes
+		newParamTypes := false
 		var nullBitmaps []byte
 		nullBitmapLen := (numParams + 7) >> 3
 		nullBitmaps, pos, ok = mp.readCountOfBytes(data, pos, nullBitmapLen)
@@ -858,22 +1025,33 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 		if !ok {
 			return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 		}
-		if newParamBoundFlag == 1 {
-
-			// Just the first StmtExecute packet contain parameters type,
-			// we need save it for further use.
-			stmt.ParamTypes, pos, ok = mp.readCountOfBytes(data, pos, numParams<<1)
-
+		if newParamBoundFlag != 0 {
+			// MySQL treats every nonzero flag as a new type vector. Decode into
+			// local state first so a malformed packet cannot discard the types
+			// saved by the previous successful EXECUTE.
+			paramTypes, pos, ok = mp.readCountOfBytes(data, pos, numParams<<1)
 			if !ok {
 				return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 			}
+			newParamTypes = true
 		}
 
 		// get paramters and set value to session variables
 		for i := 0; i < numParams; i++ {
-			// if params had received via COM_STMT_SEND_LONG_DATA, use them directly(we set the params when deal with COM_STMT_SEND_LONG_DATA).
+			// Materialize each streamed parameter only once. Long data takes
+			// precedence over the execute NULL bitmap, including an empty chunk.
 			// ref https://dev.mysql.com/doc/internals/en/com-stmt-send-long-data.html
 			if _, ok := stmt.getFromSendLongData[i]; ok {
+				value := stmt.longDataBuffers[i]
+				if len(value) > types.VarlenaInlineSize &&
+					int64(len(stmt.params.GetArea()))+int64(len(value)) > mpool.MaxAllocationSize() {
+					return moerr.NewInvalidInput(ctx, "prepared parameter vector area exceeds allocation limit")
+				}
+				if err = vector.SetBytesAt(stmt.params, i, value, proc.Mp()); err != nil {
+					return err
+				}
+				stmt.params.GetNulls().Unset(uint64(i))
+				stmt.releaseLongDataBuffer(i)
 				continue
 			}
 
@@ -885,12 +1063,12 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 				continue
 			}
 
-			if (i<<1)+1 >= len(stmt.ParamTypes) {
+			if (i<<1)+1 >= len(paramTypes) {
 				return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 
 			}
-			tp := stmt.ParamTypes[i<<1]
-			isUnsigned := (stmt.ParamTypes[(i<<1)+1] & 0x80) > 0
+			tp := paramTypes[i<<1]
+			isUnsigned := (paramTypes[(i<<1)+1] & 0x80) > 0
 
 			switch defines.MysqlType(tp) {
 			case defines.MYSQL_TYPE_NULL:
@@ -1013,7 +1191,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 				var val string
 				switch length {
 				case 0:
-					val = "0d 00:00:00"
+					val = "00:00:00"
 				case 8, 12:
 					pos, val, ok = mp.readTime(data, pos, length)
 					if !ok {
@@ -1074,6 +1252,9 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 				return err
 			}
 		}
+		if newParamTypes {
+			stmt.ParamTypes = bytes.Clone(paramTypes)
+		}
 	}
 
 	return nil
@@ -1103,13 +1284,10 @@ func (mp *MysqlProtocolImpl) readTime(data []byte, pos int, length uint8) (int, 
 		return 0, "", false
 	}
 	pos = tmpPos
-	if day > 0 {
-		retStr += fmt.Sprintf("%dd ", day)
-	}
 	if pos+3 > len(data) { //nolint:typecheck
 		return 0, "", false
 	}
-	hour := data[pos]
+	hour := uint64(day)*24 + uint64(data[pos])
 	pos++
 	minute := data[pos]
 	pos++
@@ -1517,6 +1695,15 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 		//TO Check password
 		if CheckPassword(psw, mp.GetSalt(), authResponse) {
 			ses.Debugf(ctx, "check password succeeded")
+			// AuthenticateUser has finished its catalog transaction. Repair
+			// accounts missed by a rolling upgrade's finite account snapshot
+			// before allowing queries on this CN. Bootstrap special users have
+			// no catalog create_version and must not enter the upgrade path.
+			if createVersion := ses.GetCreateVersion(); createVersion != "" {
+				if err = ses.MaybeUpgradeTenant(ctx, createVersion, int64(ses.GetTenantInfo().GetTenantID())); err != nil {
+					return err
+				}
+			}
 			bh := ses.GetBackgroundExec(ctx)
 			defer bh.Close()
 			if err = ses.InitSystemVariables(ctx, bh); err != nil {
@@ -1653,7 +1840,18 @@ func (mp *MysqlProtocolImpl) Authenticate(ctx context.Context) error {
 
 // the server makes a handshake v10 packet
 // return handshake packet
-func (mp *MysqlProtocolImpl) makeHandshakeV10Payload() []byte {
+func (mp *MysqlProtocolImpl) makeHandshakeV10Payload() ([]byte, error) {
+	mp.m.Lock()
+	closed := mp.quit.Load()
+	salt := append([]byte(nil), mp.salt...)
+	mp.m.Unlock()
+	if closed {
+		return nil, moerr.NewInternalErrorNoCtx("connection closed before handshake")
+	}
+	if len(salt) != 20 {
+		return nil, moerr.NewInternalErrorNoCtxf("invalid handshake salt length: %d", len(salt))
+	}
+
 	var data = make([]byte, HeaderOffset+256)
 	var pos = HeaderOffset
 	//int<1> protocol version
@@ -1665,7 +1863,7 @@ func (mp *MysqlProtocolImpl) makeHandshakeV10Payload() []byte {
 	pos = mp.io.WriteUint32(data, pos, mp.ConnectionID())
 
 	//string[8] auth-plugin-data-part-1
-	pos = mp.writeCountOfBytes(data, pos, mp.GetSalt()[0:8])
+	pos = mp.writeCountOfBytes(data, pos, salt[:8])
 
 	//int<1> filler 0
 	pos = mp.io.WriteUint8(data, pos, 0)
@@ -1685,7 +1883,7 @@ func (mp *MysqlProtocolImpl) makeHandshakeV10Payload() []byte {
 	if (DefaultCapability & CLIENT_PLUGIN_AUTH) != 0 {
 		//int<1>              length of auth-plugin-data
 		//set 21 always
-		pos = mp.io.WriteUint8(data, pos, uint8(len(mp.GetSalt())+1))
+		pos = mp.io.WriteUint8(data, pos, uint8(len(salt)+1))
 	} else {
 		//int<1>              [00]
 		//set 0 always
@@ -1697,7 +1895,7 @@ func (mp *MysqlProtocolImpl) makeHandshakeV10Payload() []byte {
 
 	if (DefaultCapability & CLIENT_SECURE_CONNECTION) != 0 {
 		//string[$len]   auth-plugin-data-part-2 ($len=MAX(13, length of auth-plugin-data - 8))
-		pos = mp.writeCountOfBytes(data, pos, mp.GetSalt()[8:])
+		pos = mp.writeCountOfBytes(data, pos, salt[8:])
 		pos = mp.io.WriteUint8(data, pos, 0)
 	}
 
@@ -1706,7 +1904,7 @@ func (mp *MysqlProtocolImpl) makeHandshakeV10Payload() []byte {
 		pos = mp.writeStringNUL(data, pos, AuthNativePassword)
 	}
 
-	return data[:pos]
+	return data[:pos], nil
 }
 
 // the server analyses handshake response41 info from the client
@@ -2118,8 +2316,12 @@ Error information includes several elements: an error code, SQLSTATE value, and 
 */
 func (mp *MysqlProtocolImpl) sendErrPacket(errorCode uint16, sqlState, errorMessage string) error {
 	if mp.ses != nil {
-		mp.ses.GetErrInfo().push(errorCode, errorMessage)
+		mp.ses.appendErrorDiagnostic(errorCode, errorMessage)
 	}
+	return mp.sendErrPacketWithoutDiagnostic(errorCode, sqlState, errorMessage)
+}
+
+func (mp *MysqlProtocolImpl) sendErrPacketWithoutDiagnostic(errorCode uint16, sqlState, errorMessage string) error {
 	errPkt := mp.makeErrPayload(errorCode, sqlState, errorMessage)
 	return mp.writePackets(errPkt)
 }
@@ -2164,7 +2366,19 @@ func setColLength(column *MysqlColumn, width int32) {
 	column.length = column.columnType.GetLength(width)
 }
 
-func setColFlag(column *MysqlColumn) {
+func setColFlag(column *MysqlColumn, col *planPb.ColDef) {
+	if col == nil {
+		return
+	}
+	if col.NotNull || col.Typ.NotNullable {
+		column.flag |= uint16(defines.NOT_NULL_FLAG)
+	}
+	if col.Primary {
+		column.flag |= uint16(defines.PRI_KEY_FLAG)
+	}
+	if col.Unique {
+		column.flag |= uint16(defines.UNIQUE_KEY_FLAG)
+	}
 	if column.auto_incr {
 		column.flag |= uint16(defines.AUTO_INCREMENT_FLAG)
 	}
@@ -2252,7 +2466,7 @@ func (mp *MysqlProtocolImpl) makeColumnDefinition41Payload(column *MysqlColumn, 
 	return data[:pos]
 }
 
-func (mp *MysqlProtocolImpl) MakeColumnDefData(ctx context.Context, columns []*planPb.ColDef) ([][]byte, error) {
+func (mp *MysqlProtocolImpl) MakeColumnDefData(ctx context.Context, columns []*planPb.ColDef, directIntegerLengths ...uint32) ([][]byte, error) {
 	numColumns := len(columns)
 	colDefData := make([][]byte, 0, numColumns)
 	for i := 0; i < numColumns; i++ {
@@ -2260,6 +2474,7 @@ func (mp *MysqlProtocolImpl) MakeColumnDefData(ctx context.Context, columns []*p
 		if err != nil {
 			return nil, err
 		}
+		applyDirectIntegerResultMetadata(column, directIntegerLengths, i)
 		colDefPacket := mp.makeColumnDefinition41Payload(column, int(COM_STMT_PREPARE))
 		colDefData = append(colDefData, colDefPacket)
 	}
@@ -2440,6 +2655,19 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow(mrs *MysqlResultSet, rowId
 					return err
 				}
 			}
+		case defines.MYSQL_TYPE_BIT:
+			if value, err := mrs.GetUint64(mp.ctx, rowIdx, i); err != nil {
+				return err
+			} else {
+				bitLength := mysqlColumn.ColumnImpl.Length()
+				byteLength := (bitLength + 7) / 8
+				b := types.EncodeUint64(&value)[:byteLength]
+				slices.Reverse(b)
+				err = AppendCountOfBytesLenEnc(mp, b)
+				if err != nil {
+					return err
+				}
+			}
 		case defines.MYSQL_TYPE_FLOAT:
 			if value, err := mrs.GetValue(mp.ctx, rowIdx, i); err != nil {
 				return err
@@ -2477,9 +2705,11 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow(mrs *MysqlResultSet, rowId
 				}
 			}
 
-		// Binary/varbinary will be sent out as varchar type.
+		// Preserve raw bytes for binary values, including legacy vectors
+		// described as MYSQL_TYPE_VARCHAR.
 		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING,
-			defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_JSON, defines.MYSQL_TYPE_GEOMETRY:
+			defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_MEDIUM_BLOB, defines.MYSQL_TYPE_LONG_BLOB,
+			defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_JSON, defines.MYSQL_TYPE_GEOMETRY:
 			if value, err := mrs.GetValue(mp.ctx, rowIdx, i); err != nil {
 				return err
 			} else {
@@ -2738,9 +2968,11 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 					}
 				}
 			}
-		// Binary/varbinary will be sent out as varchar type.
+		// Preserve raw bytes for binary values, including legacy vectors
+		// described as MYSQL_TYPE_VARCHAR.
 		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING,
-			defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_JSON, defines.MYSQL_TYPE_GEOMETRY:
+			defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_MEDIUM_BLOB, defines.MYSQL_TYPE_LONG_BLOB,
+			defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_JSON, defines.MYSQL_TYPE_GEOMETRY:
 			if value, err2 := mrs.GetValue(mp.ctx, r, i); err2 != nil {
 				return err2
 			} else {
@@ -2999,7 +3231,8 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 			if err != nil {
 				return err
 			}
-		// Binary/varbinary will be sent out as varchar type.
+		// Preserve raw bytes for legacy binary vectors described as
+		// MYSQL_TYPE_VARCHAR.
 		case defines.MYSQL_TYPE_VARCHAR:
 			typ := colSlices.GetType(i)
 			switch typ.Oid {
@@ -3053,7 +3286,8 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 					return err
 				}
 			}
-		case defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_GEOMETRY:
+		case defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_MEDIUM_BLOB, defines.MYSQL_TYPE_LONG_BLOB,
+			defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_GEOMETRY:
 			value, err := GetBytesBased(colSlices, rowIdx, i)
 			if err != nil {
 				return err
@@ -3317,7 +3551,8 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 					return err
 				}
 			}
-		// Binary/varbinary will be sent out as varchar type.
+		// Preserve raw bytes for legacy binary vectors described as
+		// MYSQL_TYPE_VARCHAR.
 		case defines.MYSQL_TYPE_VARCHAR:
 			typ := colSlices.GetType(i)
 			switch typ.Oid {
@@ -3371,7 +3606,8 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 					return err
 				}
 			}
-		case defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_GEOMETRY:
+		case defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_MEDIUM_BLOB, defines.MYSQL_TYPE_LONG_BLOB,
+			defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_GEOMETRY:
 			value, err := GetBytesBased(colSlices, r, i)
 			if err != nil {
 				return err
@@ -3520,7 +3756,7 @@ func (mp *MysqlProtocolImpl) WriteResultSetRow(mrs *MysqlResultSet, cnt uint64) 
 	var err error = nil
 
 	// XXX now we known COM_QUERY will use textRow, COM_STMT_EXECUTE use binaryRow
-	useBinaryRow := cmd == COM_STMT_EXECUTE
+	useBinaryRow := cmd == COM_STMT_EXECUTE || cmd == COM_STMT_FETCH
 
 	//make rows into the batch
 	for i := uint64(0); i < cnt; i++ {
@@ -3544,6 +3780,15 @@ func (mp *MysqlProtocolImpl) WriteResultSetRow(mrs *MysqlResultSet, cnt uint64) 
 }
 
 func (mp *MysqlProtocolImpl) WriteResultSetRow2(mrs *MysqlResultSet, colSlices *ColumnSlices, cnt uint64) error {
+	return mp.writeResultSetRow2(mrs, colSlices, cnt, nil)
+}
+
+func (mp *MysqlProtocolImpl) writeResultSetRow2(
+	mrs *MysqlResultSet,
+	colSlices *ColumnSlices,
+	cnt uint64,
+	counter *perfcounter.CounterSet,
+) error {
 	if cnt == 0 {
 		return nil
 	}
@@ -3554,27 +3799,32 @@ func (mp *MysqlProtocolImpl) WriteResultSetRow2(mrs *MysqlResultSet, colSlices *
 	var err error = nil
 
 	// XXX now we known COM_QUERY will use textRow, COM_STMT_EXECUTE use binaryRow
-	useBinaryRow := cmd == COM_STMT_EXECUTE
+	useBinaryRow := cmd == COM_STMT_EXECUTE || cmd == COM_STMT_FETCH
 
-	//make rows into the batch
-	for i := uint64(0); i < cnt; i++ {
-		//begin1 := time.Now()
-		if useBinaryRow {
-			err = mp.appendResultSetBinaryRow2(mrs, colSlices, i)
-		} else {
-			err = mp.appendResultSetTextRow2(mrs, colSlices, i)
-		}
-		if err != nil {
-			//ERR_Packet in case of error
-			err1 := mp.sendErrPacket(moerr.ER_UNKNOWN_ERROR, DefaultMySQLState, err.Error())
-			if err1 != nil {
-				return err1
+	writeRows := func() error {
+		//make rows into the batch
+		for i := uint64(0); i < cnt; i++ {
+			//begin1 := time.Now()
+			if useBinaryRow {
+				err = mp.appendResultSetBinaryRow2(mrs, colSlices, i)
+			} else {
+				err = mp.appendResultSetTextRow2(mrs, colSlices, i)
 			}
-			return err
+			if err != nil {
+				//ERR_Packet in case of error
+				err1 := mp.sendErrPacket(moerr.ER_UNKNOWN_ERROR, DefaultMySQLState, err.Error())
+				if err1 != nil {
+					return err1
+				}
+				return err
+			}
 		}
+		return nil
 	}
-
-	return err
+	if counter != nil {
+		return mp.tcpConn.withOutputCounter(counter, writeRows)
+	}
+	return writeRows()
 }
 
 func (mp *MysqlProtocolImpl) WriteColumnDefBytes(payload []byte) error {
@@ -3583,6 +3833,10 @@ func (mp *MysqlProtocolImpl) WriteColumnDefBytes(payload []byte) error {
 
 func (mp *MysqlProtocolImpl) UseConn(conn net.Conn) {
 	mp.tcpConn.UseConn(conn)
+}
+
+func (mp *MysqlProtocolImpl) setResponseOutputWaitTracker(tracker *responseOutputWaitTracker) {
+	mp.tcpConn.setResponseOutputWaitTracker(tracker)
 }
 
 func (mp *MysqlProtocolImpl) beginPacket() error {
@@ -3624,6 +3878,9 @@ func (mp *MysqlProtocolImpl) flush() error {
 }
 
 func (mp *MysqlProtocolImpl) appendDatetime(dt types.Datetime) error {
+	if dt == types.ZeroDatetime {
+		return mp.append(0)
+	}
 	if dt.MicroSec() != 0 {
 		err := mp.append(11)
 		if err != nil {
@@ -3739,7 +3996,7 @@ func (mp *MysqlProtocolImpl) appendTime(t types.Time) error {
 }
 
 func (mp *MysqlProtocolImpl) appendDate(value types.Date) error {
-	if int32(value) == 0 {
+	if value == types.ZeroDate {
 		err := mp.append(0)
 		if err != nil {
 			return err
@@ -3784,6 +4041,16 @@ func (mp *MysqlProtocolImpl) sendResultSetTextRow(mrs *MysqlResultSet, r uint64)
 	return nil
 }
 
+func (mp *MysqlProtocolImpl) sendResultSetBinaryRow(mrs *MysqlResultSet, r uint64) error {
+	if err := mp.appendResultSetBinaryRow(mrs, r); err != nil {
+		if err1 := mp.sendErrPacket(moerr.ER_UNKNOWN_ERROR, DefaultMySQLState, err.Error()); err1 != nil {
+			return err1
+		}
+		return err
+	}
+	return nil
+}
+
 // the server send the result set of execution the client
 // the routine follows the article: https://dev.mysql.com/doc/internals/en/com-query-response.html
 func (mp *MysqlProtocolImpl) sendResultSet(ctx context.Context, set ResultSet, cmd int, warnings, status uint16) error {
@@ -3802,10 +4069,19 @@ func (mp *MysqlProtocolImpl) sendResultSet(ctx context.Context, set ResultSet, c
 		return err
 	}
 
-	//One or more ProtocolText::ResultsetRow packets, each containing column_count values
-	for i := uint64(0); i < mysqlRS.GetRowCount(); i++ {
-		if err = mp.sendResultSetTextRow(mysqlRS, i); err != nil {
-			return err
+	// COM_QUERY returns text rows, while COM_STMT_EXECUTE returns binary rows.
+	// Metadata and row encoding must describe the same command response.
+	if CommandType(cmd) == COM_STMT_EXECUTE || CommandType(cmd) == COM_STMT_FETCH {
+		for i := uint64(0); i < mysqlRS.GetRowCount(); i++ {
+			if err = mp.sendResultSetBinaryRow(mysqlRS, i); err != nil {
+				return err
+			}
+		}
+	} else {
+		for i := uint64(0); i < mysqlRS.GetRowCount(); i++ {
+			if err = mp.sendResultSetTextRow(mysqlRS, i); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -3835,7 +4111,7 @@ func (mp *MysqlProtocolImpl) writePackets(payload []byte) error {
 }
 
 // MakeHandshakePayload exposes (*MysqlProtocolImpl).makeHandshakeV10Payload() function.
-func (mp *MysqlProtocolImpl) MakeHandshakePayload() []byte {
+func (mp *MysqlProtocolImpl) MakeHandshakePayload() ([]byte, error) {
 	return mp.makeHandshakeV10Payload()
 }
 
@@ -3866,17 +4142,26 @@ func (mp *MysqlProtocolImpl) receiveExtraInfo(rs *Conn) {
 		mp.ses.Debugf(mp.ctx, "failed to set deadline for salt updating: %v", err)
 		return
 	}
+	defer func() {
+		if err := rs.RawConn().SetReadDeadline(time.Time{}); err != nil {
+			mp.ses.Debugf(mp.ctx, "failed to clear deadline for salt updating: %v", err)
+		}
+	}()
 	var i proxy.ExtraInfo
 	reader := bufio.NewReader(rs.RawConn())
 	if err := i.Decode(reader); err != nil {
 		// If the error is timeout, we treat it as normal case and do not update extra info.
 		if err, ok := err.(net.Error); ok && err.Timeout() {
-			mp.ses.Error(mp.ctx, "cannot get salt, maybe not use proxy",
+			mp.ses.Debug(mp.ctx, "cannot get salt, maybe not use proxy",
 				zap.Error(err))
 		} else {
 			mp.ses.Error(mp.ctx, "failed to get extra info",
 				zap.Error(err))
 		}
+		return
+	}
+	if len(i.Salt) != 20 {
+		mp.ses.Error(mp.ctx, "invalid proxy salt length", zap.Int("length", len(i.Salt)))
 		return
 	}
 
@@ -3975,14 +4260,10 @@ func GetPassWord(pwd string) ([]byte, error) {
 	return pwdByte, nil
 }
 
-// formatDateForMySQL formats a Date value for MySQL protocol, handling zero date (0000-00-00)
-// MySQL uses 0000-00-00 as zero date for minimum overflow cases (e.g., TIMESTAMPADD(DAY, -1, '0001-01-01'))
-// MatrixOne's Date(0) represents 0001-01-01, so we format it as "0000-00-00" for MySQL compatibility
+// formatDateForMySQL formats a Date value for MySQL protocol, including the
+// dedicated MySQL zero-date sentinel.
 func formatDateForMySQL(d types.Date) string {
-	// Check if this is a zero date (Date(0) = 0001-01-01)
-	// MySQL uses 0000-00-00 as zero date for minimum overflow cases
-	// For MySQL compatibility, format Date(0) as "0000-00-00"
-	if d == types.Date(0) {
+	if d == types.ZeroDate {
 		return "0000-00-00"
 	}
 	return d.String()

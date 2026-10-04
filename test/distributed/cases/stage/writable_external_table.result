@@ -14,7 +14,7 @@ show create table ext_csv;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 ext_csv  ¦  CREATE EXTERNAL TABLE `ext_csv` (
   `a` int DEFAULT NULL,
-  `b` varchar(20) DEFAULT NULL,
+  `b` varchar(20) COLLATE utf8mb4_general_ci DEFAULT NULL,
   `c` double DEFAULT NULL
 ) INFILE{'FILEPATH'='stage://wstage/wext_csv_*.csv','FORMAT'='csv','WRITE_FILE_PATTERN'='stage://wstage/wext_csv_%U.csv'} FIELDS TERMINATED BY ',' ENCLOSED BY ''
 insert into ext_csv select * from src;
@@ -64,6 +64,12 @@ select a, replace(b, '\n', '<NL>') as b from ext_tricky order by a;
 4  ¦  with\backslash
 drop table if exists big_src;
 create table big_src(a int, b varchar(30));
+select enable_fault_injection();
+➤ enable_fault_injection()[-7,1,0]  𝄀
+1
+select add_fault_point('fj/cn/flush_small_objs', ':::', 'echo', 40, 'wext.big_src');
+➤ add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, wext.big_src)[-7,1,0]  𝄀
+1
 insert into big_src select result, concat('row-', result) from generate_series(1, 100000) g;
 drop table if exists ext_big;
 create external table ext_big(a int, b varchar(30))
@@ -73,11 +79,8 @@ insert into ext_big select * from big_src;
 select count(*), min(a), max(a) from ext_big;
 ➤ count(*)[-5,64,0]  ¦  min(a)[4,32,0]  ¦  max(a)[4,32,0]  𝄀
 100000  ¦  1  ¦  100000
-drop table if exists remote_src;
-create table remote_src(a int, b varchar(30));
-insert into remote_src select result, concat('r-', result) from generate_series(1, 4400000) g;
-select mo_ctl('dn', 'flush', 'wext.remote_src');
-➤ mo_ctl(dn, flush, wext.remote_src)[12,-1,0]  𝄀
+select mo_ctl('dn', 'flush', 'wext.big_src');
+➤ mo_ctl(dn, flush, wext.big_src)[12,-1,0]  𝄀
 {
   "method": "Flush",
   "result": [
@@ -87,17 +90,30 @@ select mo_ctl('dn', 'flush', 'wext.remote_src');
   ]
 }
 
-select sleep(1);
-➤ sleep(1)[-6,8,0]  𝄀
-0
+select count(distinct object_name) > 1 as multiple_objects,
+sum(rows_cnt) = 100000 as all_rows_flushed
+from metadata_scan('wext.big_src', 'a') m;
+➤ multiple_objects[-7,1,0]  ¦  all_rows_flushed[-7,1,0]  𝄀
+1  ¦  1
+set @wext_remote_stats = '{"table_cnt":4400000,"block_number":560,"accurate_object_number":35,"approx_object_number":35,"ndv_map":{"a":4400000,"b":4400000}}';
+select table_cnt from table_stats('wext.big_src', 'patch', @wext_remote_stats) g;
+➤ table_cnt[8,53,31]  𝄀
+4400000.0
 drop table if exists ext_remote;
 create external table ext_remote(a int, b varchar(30))
 infile{'filepath'='stage://wstage/wext_remote_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_remote_%U.csv'}
 fields terminated by ',';
-insert into ext_remote select * from remote_src;
+explain insert into ext_remote select * from big_src;
+-- @regex("(?i)ap query plan on multicn", true)
+➤ AP QUERY PLAN ON MULTICN(16 core)[12,-1,0]  𝄀
+Multi Update
+insert into ext_remote select * from big_src;
 select count(*), min(a), max(a) from ext_remote;
 ➤ count(*)[-5,64,0]  ¦  min(a)[4,32,0]  ¦  max(a)[4,32,0]  𝄀
-4400000  ¦  1  ¦  4400000
+100000  ¦  1  ¦  100000
+select disable_fault_injection();
+➤ disable_fault_injection()[-7,1,0]  𝄀
+1
 drop table if exists ext_jl;
 create external table ext_jl(a int, b varchar(20), c double)
 infile{'filepath'='stage://wstage/wext_jl_*.jl', 'format'='jsonline', 'write_file_pattern'='stage://wstage/wext_jl_%U.jl', 'jsondata'='object'}
@@ -112,7 +128,7 @@ show create table ext_jl;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 ext_jl  ¦  CREATE EXTERNAL TABLE `ext_jl` (
   `a` int DEFAULT NULL,
-  `b` varchar(20) DEFAULT NULL,
+  `b` varchar(20) COLLATE utf8mb4_general_ci DEFAULT NULL,
   `c` double DEFAULT NULL
 ) INFILE{'FILEPATH'='stage://wstage/wext_jl_*.jl','FORMAT'='jsonline','JSONDATA'='object','WRITE_FILE_PATTERN'='stage://wstage/wext_jl_%U.jl'} FIELDS TERMINATED BY ',' ENCLOSED BY ''
 drop table ext_jl;
@@ -161,6 +177,13 @@ select * from ext_wide_jl order by c_i64;
 ➤ c_i8[-6,8,0]  ¦  c_i64[-5,64,0]  ¦  c_u32[4,32,0]  ¦  c_f32[7,24,0]  ¦  c_dec[3,10,2]  ¦  c_ch[1,4,0]  ¦  c_vc[12,-1,0]  ¦  c_txt[12,0,0]  ¦  c_dt[91,64,0]  ¦  c_bool[-7,1,0]  ¦  c_json[-1,2147483647,0]  𝄀
 null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
 -1  ¦  9223372036854775807  ¦  4000000000  ¦  1.5  ¦  123.45  ¦  ab  ¦  hi,there  ¦  long text  ¦  2026-06-08  ¦  1  ¦  {"k": 1}
+select c_txt, c_dec, c_bool, c_json from ext_wide_jl order by c_i64;
+➤ c_txt[12,0,0]  ¦  c_dec[3,10,2]  ¦  c_bool[-7,1,0]  ¦  c_json[-1,2147483647,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  𝄀
+long text  ¦  123.45  ¦  1  ¦  {"k": 1}
+select count(*) from ext_wide_jl;
+➤ count(*)[-5,64,0]  𝄀
+2
 drop table if exists hash_src;
 create table hash_src(a varchar(20), b varchar(20));
 insert into hash_src values ('#lead','x'), ('','') , ('plain','#also');
@@ -255,7 +278,7 @@ set time_zone = 'SYSTEM';
 load data infile '$resources/load_data/time_date_1.csv' into table ext_load fields terminated by ',';
 select * from ext_load order by col1;
 ➤ col1[91,64,0]  ¦  col2[93,64,0]  ¦  col3[93,64,0]  ¦  col4[-7,1,0]  𝄀
-1000-01-01  ¦  0001-01-01 00:00:00  ¦  1970-01-01 00:00:01  ¦  0  𝄀
+1000-01-01  ¦  0001-01-01 00:00:00  ¦  1970-01-02 00:00:01  ¦  0  𝄀
 9999-12-31  ¦  9999-12-31 00:00:00  ¦  2038-01-19 00:00:00  ¦  1
 drop table if exists ext_ro;
 create external table ext_ro(a int) infile 'stage://wstage/nonexist_*.csv';
@@ -323,7 +346,7 @@ infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'compression'='gzip'
 invalid configuration: writable external table does not support compression (effective 'gzip'); the writer emits uncompressed files
 create external table ext_bad15(a int)
 infile{'filepath'='stage://wstage/x_*.csv.gz', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%U.csv'};
-invalid configuration: writable external table does not support compression (effective 'gz'); the writer emits uncompressed files
+invalid configuration: writable external table does not support compression (effective 'gzip'); the writer emits uncompressed files
 create external table ext_bad16(a int)
 infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'format'='parquet', 'write_file_pattern'='stage://wstage/x_%U.csv'};
 invalid configuration: duplicate option key 'format'
@@ -368,7 +391,6 @@ drop table if exists tricky_src;
 drop table if exists ext_big;
 drop table if exists big_src;
 drop table if exists ext_remote;
-drop table if exists remote_src;
 drop table if exists ext_bit;
 drop table if exists bit_src;
 drop table if exists ext_sb;

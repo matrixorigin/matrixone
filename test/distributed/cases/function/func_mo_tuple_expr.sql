@@ -9,6 +9,13 @@ select mo_tuple_expr('invalid_bytes') as result;
 -- Test 3: Empty string
 select mo_tuple_expr('') as result;
 
+-- Mixed NULL/invalid/valid rows must preserve cardinality through ORDER BY
+drop table if exists tuple_null_order_probe;
+create table tuple_null_order_probe(id int, payload varchar(32));
+insert into tuple_null_order_probe values (1, NULL), (2, 'invalid_bytes'), (3, '');
+select mo_tuple_expr(payload) as decoded_tuple from tuple_null_order_probe order by id;
+drop table tuple_null_order_probe;
+
 -- Test 4: Create table with multiple composite indexes of different types
 drop database if exists test_tuple;
 create database test_tuple;

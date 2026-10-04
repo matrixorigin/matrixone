@@ -96,7 +96,7 @@ func TestPrefixEq(t *testing.T) {
 	for _, tc := range tcs {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, PrefixEq)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info, tc.info)
 	}
 }
@@ -158,13 +158,35 @@ func TestPrefixIn(t *testing.T) {
 			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
 				[]bool{true, false, true}, []bool{false, false, false}),
 		},
+		{
+			info: "& test prefix_in ignores null needles",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"aa12", "bb34", "cc56"}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"aa", "bb", ""}, []bool{true, false, true}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false, true, false}, nil),
+		},
+		{
+			info: "& test prefix_in with only null needles",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"aa12", "bb34"}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{""}, []bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false, false}, nil),
+		},
 	}
 
 	proc := testutil.NewProcess(t)
 	for _, tc := range tcs {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, newImplPrefixIn().doPrefixIn)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info, tc.info)
 	}
 }
@@ -242,7 +264,7 @@ func TestPrefixBetween(t *testing.T) {
 	for _, tc := range tcs {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, PrefixBetween)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info, tc.info)
 	}
 }
@@ -360,7 +382,7 @@ func TestPrefixInRange(t *testing.T) {
 	for _, tc := range tcs {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, PrefixInRange)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info, tc.info)
 	}
 }
@@ -384,7 +406,7 @@ func TestPrefixEqEmptyInput(t *testing.T) {
 	for _, tc := range tcs {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, PrefixEq)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info, tc.info)
 	}
 }
@@ -430,7 +452,7 @@ func TestPrefixInAdvanced(t *testing.T) {
 	for _, tc := range tcs {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, newImplPrefixIn().doPrefixIn)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info, tc.info)
 	}
 }
@@ -456,7 +478,7 @@ func TestPrefixBetweenReversed(t *testing.T) {
 	for _, tc := range tcs {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, PrefixBetween)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info, tc.info)
 	}
 }
@@ -514,7 +536,7 @@ func TestPrefixInRangeAdvanced(t *testing.T) {
 	for _, tc := range tcs {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, PrefixInRange)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info, tc.info)
 	}
 }

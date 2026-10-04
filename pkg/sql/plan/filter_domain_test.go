@@ -769,6 +769,52 @@ func stringConstValue(expr *planpb.Expr) (string, bool) {
 	return "", false
 }
 
+func markConstLiteralSerialized(t *testing.T, expr *planpb.Expr) {
+	t.Helper()
+
+	lit, _, ok := unwrapConstLiteral(expr)
+	require.True(t, ok)
+	lit.IsSerialized = true
+}
+
+func TestNormalizeColumnDomainIgnoresSerializedProvenance(t *testing.T) {
+	ctx, builder, _, colExpr := setupStringInDomainRewriteTest(t)
+
+	inExpr := makeStringInExpr(t, ctx, colExpr, "'", "other")
+	inValues := inExpr.GetF().Args[1].GetList().List
+	require.Len(t, inValues, 2)
+	markConstLiteralSerialized(t, inValues[0])
+
+	eqExpr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{
+		DeepCopyExpr(colExpr),
+		MakePlan2StringConstExprWithType("'"),
+	})
+	require.NoError(t, err)
+
+	filters := builder.normalizeColumnDomain([]*planpb.Expr{inExpr, eqExpr})
+	require.Len(t, filters, 1)
+	require.False(t, IsFalseExpr(filters[0]),
+		"diagnostic provenance changed an equal executable literal into an empty domain")
+	requireStringEqualValue(t, filters[0], "'")
+}
+
+func TestMergeInsInAndIgnoresSerializedProvenance(t *testing.T) {
+	ctx, builder, _, colExpr := setupStringInDomainRewriteTest(t)
+
+	left := makeStringInExpr(t, ctx, colExpr, "'", "left")
+	leftValues := left.GetF().Args[1].GetList().List
+	require.Len(t, leftValues, 2)
+	markConstLiteralSerialized(t, leftValues[0])
+	right := makeStringInExpr(t, ctx, colExpr, "'", "right")
+	andExpr := makeAndExpr(t, ctx, left, right)
+
+	merged, changed := builder.mergeInsInAnd(andExpr)
+	require.True(t, changed)
+	require.False(t, IsFalseExpr(merged),
+		"diagnostic provenance changed intersecting IN lists into an empty domain")
+	requireStringEqualValue(t, merged, "'")
+}
+
 func TestRewriteInDomainCastNotInUsesOuterStringDomain(t *testing.T) {
 	ctx, builder, tag, colExpr := setupStringInDomainRewriteTest(t)
 
@@ -893,6 +939,39 @@ func TestRewriteInDomainCastSkippedForAmbiguousStringIntegralDomain(t *testing.T
 	require.Len(t, builder.qry.Nodes[0].FilterList, 2)
 	require.Equal(t, "in", builder.qry.Nodes[0].FilterList[0].GetF().Func.ObjName)
 	require.Equal(t, "=", builder.qry.Nodes[0].FilterList[1].GetF().Func.ObjName)
+}
+
+func TestNormalizeColumnDomainInListExpressionFixpoint(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "issue reproducer",
+			sql: "select count(*) from mo_catalog.mo_snapshots where kind = 'branch' and sname in (" +
+				"concat('__mo_branch_', cast(288097 as char)), concat('__mo_branch_', cast(288098 as char)))",
+		},
+		{
+			name: "cast constants",
+			sql:  "select count(*) from nation where n_name = 'x' and n_comment in (cast(1 as char), cast(2 as char))",
+		},
+		{
+			name: "mixed constant and expression",
+			sql:  "select count(*) from nation where n_name = 'x' and n_comment in ('prefix-1', concat('prefix-', cast(2 as char)))",
+		},
+		{
+			name: "prepared concat parameters",
+			sql: "prepare stmt from 'select count(*) from nation where n_name = ''x'' and n_comment in (" +
+				"concat(''prefix-'', ?), concat(''prefix-'', ?))'",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+		})
+	}
 }
 
 // makeInt64InWithNullExpr builds an IN list containing a NULL literal. The

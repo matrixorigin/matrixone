@@ -1,0 +1,223 @@
+SET experimental_ivfpq_index = 1;
+SET ivfpq_threads_build = 6;
+SET kmeans_train_percent = 100;
+SET probe_limit = 16;
+drop database if exists ivfpq_topk_consumers;
+create database ivfpq_topk_consumers;
+use ivfpq_topk_consumers;
+create table t_ivfpq(id bigint primary key, v vecf32(4), tag int);
+insert into t_ivfpq values
+(1,'[1,1,1,1]',10),(2,'[3,3,3,3]',20),(3,'[5,5,5,5]',30),
+(4,'[50,50,50,50]',40),(5,'[52,52,52,52]',50),(6,'[54,54,54,54]',60);
+create index i_ivfpq using ivfpq on t_ivfpq(v) lists=2 op_type 'vector_l2_ops';
+create table t_ref(id bigint primary key, v vecf32(4), tag int);
+insert into t_ref select id, v, tag from t_ivfpq;
+create table meta(id bigint primary key, name varchar(20));
+insert into meta values (1,'a'),(2,'b'),(3,'c'),(4,'d'),(5,'e'),(6,'f');
+explain select id, round(l2_distance(v,'[1,1,1,1]'),4) as d from t_ivfpq order by l2_distance(v,'[1,1,1,1]') limit 3;
+-- @regex("Table Function on ivfpq_search", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_ivfpq_alias_0.score INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_ivfpq.id = mo_ivfpq_alias_0.pkid)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on ivfpq_topk_consumers.t_ivfpq  𝄀
+                    Runtime Filter Probe: t_ivfpq.id  𝄀
+              ->  Table Function on ivfpq_search  𝄀
+                    Limit: 3
+explain with knn as (
+select id, round(l2_distance(v,'[1,1,1,1]'),4) as d from t_ivfpq
+order by l2_distance(v,'[1,1,1,1]') limit 3
+) select id, d from knn order by d;
+-- @regex("Table Function on ivfpq_search", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: knn.d INTERNAL  𝄀
+        ->  Project  𝄀
+              ->  Sort  𝄀
+                    Sort Key: mo_ivfpq_alias_0.score INTERNAL  𝄀
+                    Limit: 3  𝄀
+                    ->  Join  𝄀
+                          Join Type: INNER  𝄀
+                          Join Cond: (t_ivfpq.id = mo_ivfpq_alias_0.pkid)  𝄀
+                          Runtime Filter Build: #[-1,0]  𝄀
+                          ->  Table Scan on ivfpq_topk_consumers.t_ivfpq  𝄀
+                                Runtime Filter Probe: t_ivfpq.id  𝄀
+                          ->  Table Function on ivfpq_search  𝄀
+                                Limit: 3
+with knn as (
+select id, round(l2_distance(v,'[1,1,1,1]'),4) as d from t_ivfpq
+order by l2_distance(v,'[1,1,1,1]') limit 3
+) select id, d from knn order by d;
+➤ id[-5,64,0]  ¦  d[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  4.0  𝄀
+3  ¦  8.0
+with knn as (
+select id, round(l2_distance(v,'[1,1,1,1]'),4) as d from t_ref
+order by l2_distance(v,'[1,1,1,1]') limit 3
+) select id, d from knn order by d;
+➤ id[-5,64,0]  ¦  d[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  4.0  𝄀
+3  ¦  8.0
+with knn as (
+select id, round(l2_distance(v,'[1,1,1,1]'),4) as d from t_ivfpq
+order by l2_distance(v,'[1,1,1,1]') limit 3
+) select id, d from knn order by d desc;
+➤ id[-5,64,0]  ¦  d[8,53,31]  𝄀
+3  ¦  8.0  𝄀
+2  ¦  4.0  𝄀
+1  ¦  0.0
+with knn as (
+select id, tag, round(l2_distance(v,'[1,1,1,1]'),4) as d from t_ivfpq
+order by l2_distance(v,'[1,1,1,1]') limit 3
+) select id, tag from knn order by tag desc;
+➤ id[-5,64,0]  ¦  tag[4,32,0]  𝄀
+3  ¦  30  𝄀
+2  ¦  20  𝄀
+1  ¦  10
+explain with knn as (
+select id, round(l2_distance(v,'[1,1,1,1]'),4) as d from t_ivfpq
+order by l2_distance(v,'[1,1,1,1]') limit 3
+) select k.id, m.name from knn k left join meta m on k.id = m.id;
+-- @regex("Table Function on ivfpq_search", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Join  𝄀
+        Join Type: RIGHT  𝄀
+        Join Cond: (m.id = t_ivfpq.id)  𝄀
+        Runtime Filter Build: #[-1,0]  𝄀
+        ->  Table Scan on ivfpq_topk_consumers.meta [ForceOneCN]  𝄀
+              Runtime Filter Probe: m.id  𝄀
+        ->  Sort  𝄀
+              Sort Key: mo_ivfpq_alias_0.score INTERNAL  𝄀
+              Limit: 3  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (t_ivfpq.id = mo_ivfpq_alias_0.pkid)  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on ivfpq_topk_consumers.t_ivfpq [ForceOneCN]  𝄀
+                          Runtime Filter Probe: t_ivfpq.id  𝄀
+                    ->  Table Function on ivfpq_search  𝄀
+                          Limit: 3
+with knn as (
+select id, round(l2_distance(v,'[1,1,1,1]'),4) as d from t_ivfpq
+order by l2_distance(v,'[1,1,1,1]') limit 3
+) select k.id, k.d, m.name from knn k left join meta m on k.id = m.id order by k.d;
+➤ id[-5,64,0]  ¦  d[8,53,31]  ¦  name[12,15,0]  𝄀
+1  ¦  0.0  ¦  a  𝄀
+2  ¦  4.0  ¦  b  𝄀
+3  ¦  8.0  ¦  c
+with knn as (
+select id, round(l2_distance(v,'[1,1,1,1]'),4) as d from t_ref
+order by l2_distance(v,'[1,1,1,1]') limit 3
+) select k.id, k.d, m.name from knn k left join meta m on k.id = m.id order by k.d;
+➤ id[-5,64,0]  ¦  d[8,53,31]  ¦  name[12,15,0]  𝄀
+1  ¦  0.0  ¦  a  𝄀
+2  ¦  4.0  ¦  b  𝄀
+3  ¦  8.0  ¦  c
+explain with knn as (
+select id, round(l2_distance(v,'[1,1,1,1]'),4) as d from t_ivfpq
+order by l2_distance(v,'[1,1,1,1]') limit 3
+) select k.id, m.name from knn k inner join meta m on k.id = m.id;
+-- @regex("Table Function on ivfpq_search", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Join  𝄀
+        Join Type: INNER  𝄀
+        Join Cond: (m.id = t_ivfpq.id)  𝄀
+        Runtime Filter Build: #[-1,0]  𝄀
+        ->  Table Scan on ivfpq_topk_consumers.meta  𝄀
+              Runtime Filter Probe: m.id  𝄀
+        ->  Sort  𝄀
+              Sort Key: mo_ivfpq_alias_0.score INTERNAL  𝄀
+              Limit: 3  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (t_ivfpq.id = mo_ivfpq_alias_0.pkid)  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on ivfpq_topk_consumers.t_ivfpq  𝄀
+                          Runtime Filter Probe: t_ivfpq.id  𝄀
+                    ->  Table Function on ivfpq_search  𝄀
+                          Limit: 3
+with knn as (
+select id, round(l2_distance(v,'[1,1,1,1]'),4) as d from t_ivfpq
+order by l2_distance(v,'[1,1,1,1]') limit 3
+) select k.id, m.name from knn k inner join meta m on k.id = m.id order by k.id;
+➤ id[-5,64,0]  ¦  name[12,15,0]  𝄀
+1  ¦  a  𝄀
+2  ¦  b  𝄀
+3  ¦  c
+select count(*) as n from (
+select id, round(l2_distance(v,'[1,1,1,1]'),4) as d from t_ivfpq
+order by l2_distance(v,'[1,1,1,1]') limit 3
+) t;
+➤ n[-5,64,0]  𝄀
+3
+select count(*) as n from (
+select id from t_ivfpq where tag >= 20
+order by l2_distance(v,'[1,1,1,1]') limit 3
+) t;
+➤ n[-5,64,0]  𝄀
+3
+explain with knn as (
+select id, round(l2_distance(v,'[1,1,1,1]'),4) as d from t_ivfpq
+order by l2_distance(v,'[1,1,1,1]') limit 3
+) select k.id, m.name from knn k left join meta m on k.id = m.id order by k.d desc;
+-- @regex("Table Function on ivfpq_search", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: round(l2_distance(t_ivfpq.v, ), 4) DESC  𝄀
+        ->  Join  𝄀
+              Join Type: RIGHT  𝄀
+              Join Cond: (m.id = t_ivfpq.id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on ivfpq_topk_consumers.meta [ForceOneCN]  𝄀
+                    Runtime Filter Probe: m.id  𝄀
+              ->  Sort  𝄀
+                    Sort Key: mo_ivfpq_alias_0.score INTERNAL  𝄀
+                    Limit: 3  𝄀
+                    ->  Join  𝄀
+                          Join Type: INNER  𝄀
+                          Join Cond: (t_ivfpq.id = mo_ivfpq_alias_0.pkid)  𝄀
+                          Runtime Filter Build: #[-1,0]  𝄀
+                          ->  Table Scan on ivfpq_topk_consumers.t_ivfpq [ForceOneCN]  𝄀
+                                Runtime Filter Probe: t_ivfpq.id  𝄀
+                          ->  Table Function on ivfpq_search  𝄀
+                                Limit: 3
+with knn as (
+select id, round(l2_distance(v,'[1,1,1,1]'),4) as d from t_ivfpq
+order by l2_distance(v,'[1,1,1,1]') limit 3
+) select k.id, m.name from knn k left join meta m on k.id = m.id order by k.d desc;
+➤ id[-5,64,0]  ¦  name[12,15,0]  𝄀
+3  ¦  c  𝄀
+2  ¦  b  𝄀
+1  ¦  a
+explain select l2_distance(v,'[1,1,1,1]') as d from t_ivfpq order by l2_distance(v,'[1,1,1,1]') limit 3;
+-- @regex("Table Function on ivfpq_search", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_ivfpq_alias_0.score INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_ivfpq.id = mo_ivfpq_alias_0.pkid)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on ivfpq_topk_consumers.t_ivfpq  𝄀
+                    Runtime Filter Probe: t_ivfpq.id  𝄀
+              ->  Table Function on ivfpq_search  𝄀
+                    Limit: 3
+select count(*) as n from (
+select l2_distance(v,'[1,1,1,1]') as d from t_ivfpq order by l2_distance(v,'[1,1,1,1]') limit 3
+) x;
+➤ n[-5,64,0]  𝄀
+3
+drop database ivfpq_topk_consumers;

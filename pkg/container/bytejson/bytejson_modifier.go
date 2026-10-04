@@ -16,6 +16,7 @@ package bytejson
 
 import (
 	"bytes"
+	"math"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -67,6 +68,67 @@ func (bm *bytejsonModifier) set(path *Path, newBj ByteJson) (ByteJson, error) {
 	}
 	// return bm.rebuild()
 	return Null, moerr.NewInvalidArgNoCtx("invalid path", path.String())
+}
+
+func (bm *bytejsonModifier) arrayAppend(path *Path, newBj ByteJson) (ByteJson, error) {
+	selected, exists := bm.bj.querySimpleExist(path, true)
+	if !exists {
+		return bm.bj, nil
+	}
+	arraySize := arrayAppendSize(selected, newBj)
+	if arraySize > math.MaxUint32 {
+		return Null, moerr.NewInvalidInputNoCtx("json array append result is too large")
+	}
+	documentSize := arrayAppendDocumentSize(bm.bj, selected, arraySize)
+	if documentSize > math.MaxUint32 {
+		return Null, moerr.NewInvalidInputNoCtx("json array append result is too large")
+	}
+
+	elemCnt := 1
+	if selected.Type == TpCodeArray {
+		elemCnt = selected.GetElemCnt()
+	}
+	elems := make([]ByteJson, 0, elemCnt+1)
+	if selected.Type == TpCodeArray {
+		for i := 0; i < elemCnt; i++ {
+			elems = append(elems, selected.getArrayElem(i))
+		}
+	} else {
+		elems = append(elems, selected)
+	}
+	elems = append(elems, newBj)
+
+	bm.modifyPtr = &selected.Data[0]
+	bm.modifyVal = buildBinaryJSONArray(elems)
+	result := bm.rebuild()
+	if err := ValidateJSONDocumentDepth(result); err != nil {
+		return Null, err
+	}
+	return result, nil
+}
+
+func arrayAppendSize(selected, appended ByteJson) uint64 {
+	size := uint64(headerSize + 2*valEntrySize)
+	if selected.Type == TpCodeArray {
+		size = uint64(len(selected.Data)) + uint64(valEntrySize)
+	} else if selected.Type != TpCodeLiteral {
+		size += uint64(len(selected.Data))
+	}
+	if appended.Type != TpCodeLiteral {
+		size += uint64(len(appended.Data))
+	}
+	return size
+}
+
+func arrayAppendDocumentSize(document, selected ByteJson, arraySize uint64) uint64 {
+	if &selected.Data[0] == &document.Data[0] {
+		return arraySize
+	}
+	size := uint64(len(document.Data)) + arraySize
+	if selected.Type != TpCodeLiteral {
+		size -= uint64(len(selected.Data))
+	}
+	return size
 }
 
 func (bm *bytejsonModifier) remove(path *Path) (ByteJson, error) {

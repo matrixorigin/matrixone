@@ -47,6 +47,8 @@ import (
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/substrait"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -91,14 +93,48 @@ type Service interface {
 type EngineType string
 
 const (
-	EngineDistributedTAE       EngineType = "distributed-tae"
-	EngineMemory               EngineType = "memory"
-	EngineNonDistributedMemory EngineType = "non-distributed-memory"
+	EngineDistributedTAE EngineType = "distributed-tae"
 	// ReservedTasks equals how many task must run background.
 	// 1 for metric StorageUsage
 	// 1 for trace ETLMerge
 	ReservedTasks = 2
 )
+
+// SiriusConfig enables the explicit /*+ SIDECAR */ Substrait/Flight path.
+// Certificate files are deliberately separate for the two mTLS directions:
+// CN -> Flight and sidecar -> CN read resolver.
+type SiriusConfig struct {
+	Enabled bool `toml:"enabled"`
+	// Backend defaults to Flight during migration. Embedded selection remains
+	// fail-closed until the native backend and its build capability are present.
+	Backend           string `toml:"backend"`
+	InputMode         string `toml:"input-mode"`
+	NativeConfigPath  string `toml:"native-config-path"`
+	GPUStreams        uint32 `toml:"gpu-streams"`
+	MaxWaitingQueries uint32 `toml:"max-waiting-queries"`
+	// BenchmarkNoGC enables the one-to-one CN/sidecar benchmark adapter. It
+	// must only be used together with TN GCCfg.DisableGC=true; normal Sirius
+	// startup keeps requiring durable GC-protected lease dependencies.
+	BenchmarkNoGC bool `toml:"benchmark-no-gc"`
+	// benchmarkGCDisabled is set by the top-level launcher after it verifies
+	// the paired TN configuration. It is intentionally not user-configurable.
+	benchmarkGCDisabled    bool
+	FlightAddress          string        `toml:"flight-address"`
+	FlightServerName       string        `toml:"flight-server-name"`
+	FlightClientCertPath   string        `toml:"flight-client-cert-path"`
+	FlightClientKeyPath    string        `toml:"flight-client-key-path"`
+	FlightServerCAPath     string        `toml:"flight-server-ca-path"`
+	ResolverAddress        string        `toml:"resolver-address"`
+	ResolverServerCertPath string        `toml:"resolver-server-cert-path"`
+	ResolverServerKeyPath  string        `toml:"resolver-server-key-path"`
+	ResolverClientCAPath   string        `toml:"resolver-client-ca-path"`
+	ResolverClientCertPath string        `toml:"resolver-client-cert-path"`
+	DataDir                string        `toml:"data-dir"`
+	MaxBatchBytes          uint64        `toml:"max-batch-bytes"`
+	RequestTimeout         toml.Duration `toml:"request-timeout"`
+	CleanupTimeout         toml.Duration `toml:"cleanup-timeout"`
+	LeaseTTL               toml.Duration `toml:"lease-ttl"`
+}
 
 // Config cn service
 type Config struct {
@@ -165,6 +201,8 @@ type Config struct {
 
 	// Frontend parameters for the frontend
 	Frontend config.FrontendParameters `toml:"frontend"`
+
+	Sirius SiriusConfig `toml:"sirius"`
 
 	// HAKeeper configuration
 	HAKeeper struct {
@@ -264,7 +302,11 @@ type Config struct {
 		// is less than PKDedupCount when txn commits. Default value is 0 , which means don't do deduplication.
 		PkDedupCount int `toml:"pk-dedup-count"`
 
-		// Trace trace
+		// Trace is retained for stopped-version rollback configuration.
+		// The transaction data collector is retired; every field is inert.
+		// TODO(retire-txn-trace, #29249): remove this block and its parsing tests
+		// after the rollback window excludes collector-bearing versions and
+		// deployed service TOMLs no longer contain these keys. Do not add readers.
 		Trace struct {
 			BufferSize    int           `toml:"buffer-size"`
 			FlushBytes    toml.ByteSize `toml:"flush-bytes"`
@@ -311,6 +353,9 @@ func (c *Config) Validate() error {
 	if c.UUID == "" {
 		panic("missing cn store UUID")
 	}
+	if err := validateCNServiceUUID(c.UUID); err != nil {
+		return err
+	}
 	if c.ListenAddress == "" {
 		c.ListenAddress = defaultListenAddress
 	}
@@ -330,6 +375,18 @@ func (c *Config) Validate() error {
 	}
 	if c.HAKeeper.HeatbeatTimeout.Duration == 0 {
 		c.HAKeeper.HeatbeatTimeout.Duration = time.Second * 3
+	}
+	if c.HAKeeper.HeatbeatInterval.Duration < 0 {
+		return moerr.NewBadConfigNoCtx("hakeeper heartbeat interval must be positive")
+	}
+	if c.HAKeeper.HeatbeatInterval.Duration > logservice.ScheduleCommandPollInterval {
+		return moerr.NewBadConfigNoCtxf(
+			"hakeeper heartbeat interval %s exceeds schedule-command progress budget %s",
+			c.HAKeeper.HeatbeatInterval.Duration,
+			logservice.ScheduleCommandPollInterval)
+	}
+	if c.HAKeeper.HeatbeatTimeout.Duration < 0 {
+		return moerr.NewBadConfigNoCtx("hakeeper heartbeat timeout must be positive")
 	}
 	if c.TaskRunner.Parallelism == 0 {
 		c.TaskRunner.Parallelism = runtime.NumCPU() / 16
@@ -357,6 +414,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Engine.Type == "" {
 		c.Engine.Type = EngineDistributedTAE
+	}
+	if c.Engine.Type != EngineDistributedTAE {
+		return moerr.NewBadConfigNoCtx("unsupported CN engine: " + string(c.Engine.Type))
 	}
 	if c.Cluster.RefreshInterval.Duration == 0 {
 		c.Cluster.RefreshInterval.Duration = time.Second * 10
@@ -447,6 +507,9 @@ func (c *Config) Validate() error {
 	if c.LogtailUpdateWorkerFactor == 0 {
 		c.LogtailUpdateWorkerFactor = 4
 	}
+	if err := c.Sirius.validate(); err != nil {
+		return err
+	}
 
 	if !metadata.ValidStateString(c.InitWorkState) {
 		c.InitWorkState = metadata.WorkState_Working.String()
@@ -461,6 +524,80 @@ func (c *Config) Validate() error {
 		moruntime.EnablePipelineStreamReuse,
 		!c.Pipeline.DisableStreamReuse,
 	)
+	return nil
+}
+
+func validateCNServiceUUID(serviceID string) error {
+	if serviceID == "" || serviceID == "." || serviceID == ".." || strings.ContainsAny(serviceID, `/\`) {
+		return moerr.NewBadConfigNoCtxf(
+			"CN service UUID %q must be a single path component",
+			serviceID,
+		)
+	}
+	return nil
+}
+
+func (c *SiriusConfig) validate() error {
+	if c == nil {
+		return nil
+	}
+	if c.BenchmarkNoGC && !c.Enabled {
+		return moerr.NewBadConfigNoCtx("Sirius benchmark-no-gc requires Sirius enabled")
+	}
+	if !c.Enabled {
+		return nil
+	}
+	if err := c.validateBackend(); err != nil {
+		return err
+	}
+	if c.MaxBatchBytes == 0 {
+		c.MaxBatchBytes = 64 << 20
+	}
+	if c.RequestTimeout.Duration == 0 {
+		c.RequestTimeout.Duration = 15 * time.Minute
+	}
+	if c.CleanupTimeout.Duration == 0 {
+		c.CleanupTimeout.Duration = 30 * time.Second
+	}
+	if c.MaxBatchBytes > 512<<20 || c.RequestTimeout.Duration <= 0 || c.CleanupTimeout.Duration <= 0 ||
+		c.RequestTimeout.Duration > time.Duration(1<<63-1)-c.CleanupTimeout.Duration {
+		return moerr.NewBadConfigNoCtx("invalid Sirius transport limits")
+	}
+	if c.Backend == "embedded" {
+		return validateSiriusEmbeddedConfig(c)
+	}
+	minimumLeaseTTL := c.RequestTimeout.Duration + c.CleanupTimeout.Duration
+	if c.LeaseTTL.Duration == 0 {
+		c.LeaseTTL.Duration = minimumLeaseTTL
+	}
+	if c.LeaseTTL.Duration < minimumLeaseTTL || c.LeaseTTL.Duration > substrait.MaxLeaseTTL {
+		return moerr.NewBadConfigNoCtx("invalid Sirius transport limits")
+	}
+	for _, setting := range []struct{ name, value string }{
+		{"flight-address", c.FlightAddress}, {"flight-server-name", c.FlightServerName},
+		{"flight-client-cert-path", c.FlightClientCertPath}, {"flight-client-key-path", c.FlightClientKeyPath},
+		{"flight-server-ca-path", c.FlightServerCAPath}, {"resolver-address", c.ResolverAddress},
+		{"resolver-server-cert-path", c.ResolverServerCertPath}, {"resolver-server-key-path", c.ResolverServerKeyPath},
+		{"resolver-client-ca-path", c.ResolverClientCAPath}, {"resolver-client-cert-path", c.ResolverClientCertPath},
+		{"data-dir", c.DataDir},
+	} {
+		if setting.value == "" {
+			return moerr.NewBadConfigNoCtx("missing Sirius " + setting.name)
+		}
+	}
+	return nil
+}
+
+func (c *SiriusConfig) validateBackend() error {
+	switch c.Backend {
+	case "":
+		c.Backend = "flight"
+	case "flight":
+	case "embedded":
+		return validateSiriusEmbeddedBuild()
+	default:
+		return moerr.NewBadConfigNoCtx("invalid Sirius backend: expected flight or embedded")
+	}
 	return nil
 }
 
@@ -618,6 +755,16 @@ func (s *service) getPartitionServiceConfig() partitionservice.Config {
 	return s.cfg.PartitionService
 }
 
+type serviceLifecycleState uint8
+
+const (
+	serviceInitialized serviceLifecycleState = iota
+	serviceStarting
+	serviceStarted
+	serviceClosing
+	serviceClosed
+)
+
 type service struct {
 	metadata       metadata.CNStore
 	cfg            *Config
@@ -664,20 +811,67 @@ type service struct {
 	queryService queryservice.QueryService
 	// queryClient is used to send query request to other CN services.
 	queryClient qclient.QueryClient
+	queryWork   queryWorkLifecycle
 	// udfService is used to handle non-sql udf
 	udfService       udf.Service
+	bootstrapMu      sync.RWMutex
 	bootstrapService bootstrap.Service
-	incrservice      incrservice.AutoIncrementService
 
-	stopper *stopper.Stopper
-	aicm    *defines.AutoIncrCacheManager
+	bootstrapUpgradeContext      context.Context
+	bootstrapUpgradeResult       chan error
+	bootstrapUpgradeStartupReady chan struct{}
+	bootstrapUpgradeReadyOnce    sync.Once
+	// beforeBootstrapClose is a deterministic test barrier.
+	beforeBootstrapClose func()
+	incrservice          incrservice.AutoIncrementService
+	siriusRuntime        *compile.SiriusRuntime
+
+	stopper                         *stopper.Stopper
+	heartbeatInFlight               atomic.Bool
+	commandPollNeeded               atomic.Bool
+	commandPollWakeup               chan struct{}
+	heartbeatWakeup                 chan struct{}
+	commandMu                       sync.Mutex
+	lastCommandBatchID              uint64
+	ackedCommandBatchID             atomic.Uint64
+	appliedCommandIDs               map[logservice.ScheduleCommandIdentity]struct{}
+	lastCommandHash                 [32]byte
+	legacyDedupeArmed               bool
+	catalogMetadataParticipant      logservicepb.CatalogMetadataParticipant
+	viewMetadataAdmissionGeneration uint64
+	viewMetadataAdmissionMu         sync.Mutex
+	viewMetadataAdmissionMuWaiters  atomic.Int32
+	viewMetadataAdmission           atomic.Pointer[logservicepb.ViewMetadataAdmission]
+	viewMetadataCatalogFencedEpoch  atomic.Uint64
+	viewMetadataEpochFence          *compile.ViewMetadataEpochFence
+	viewMetadataAdmissionUpdated    chan struct{}
+	viewMetadataCatalogFenceMu      sync.Mutex
+	viewMetadataCatalogFenceReady   atomic.Bool
+	viewMetadataIngressReady        atomic.Bool
+	viewMetadataGenerationRevoked   atomic.Bool
+	viewMetadataRevocationOnce      sync.Once
+
+	viewMetadataCatalogFenceStartupWaiting atomic.Bool
+	// beforeViewMetadataAdmissionHandoff is a deterministic test barrier.
+	beforeViewMetadataAdmissionHandoff func()
+	// viewMetadataCloseFn is a deterministic test hook for the asynchronous
+	// close request issued after synchronous ingress revocation.
+	viewMetadataCloseFn func() error
+	aicm                *defines.AutoIncrCacheManager
+	lifecycleMu         sync.Mutex
+	frontendLifecycleMu sync.Mutex
+	lifecycle           serviceLifecycleState
+	closeOnce           sync.Once
+	closeErr            error
+	closeComplete       bool
 
 	task struct {
 		sync.RWMutex
-		holder         taskservice.TaskServiceHolder
-		runner         taskservice.TaskRunner
-		runnerReady    atomic.Bool
-		storageFactory taskservice.TaskStorageFactory
+		holder            taskservice.TaskServiceHolder
+		runner            taskservice.TaskRunner
+		runnerReady       atomic.Bool
+		generationRevoked bool
+		storageFactory    taskservice.TaskStorageFactory
 	}
 
 	addressMgr address.AddressManager
@@ -686,7 +880,8 @@ type service struct {
 
 	options struct {
 		bootstrapOptions []bootstrap.Option
-		traceDataPath    string
+		siriusLeases     *substrait.LeaseManager
+		siriusAuditor    substrait.ResolveAuditRecorder
 	}
 
 	// pipelines record running pipelines in the service, used for monitoring.
@@ -695,6 +890,13 @@ type service struct {
 		// details are not recorded for simplicity as suggested by @nnsgmsone
 		counter atomic.Int64
 		client  cnclient.PipelineClient
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		closing bool
+		nextID  uint64
+		cancels map[uint64]context.CancelFunc
+
+		beforeAdmission func()
 	}
 
 	CNMemoryThrottler rscthrottler.RSCThrottler

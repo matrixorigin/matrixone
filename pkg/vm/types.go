@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -63,7 +64,7 @@ const (
 	Deletion
 	Insert
 	External
-	Source
+	_ // reserved: former Source opcode; keep later wire values stable
 	MultiUpdate
 	PartitionInsert
 	PartitionDelete
@@ -97,13 +98,33 @@ const (
 	LockOp
 
 	Shuffle
-	ShuffleV2
+	_ // reserved: former ShuffleV2 opcode; keep later wire values stable
 
 	Sample
 	ProductL2
 	Mock
 	Apply
 	PostDml
+	IcebergWrite
+	TableClone
+	MongoScan
+	// ShuffleStable is a wire-only capability marker. New decoders rebuild the
+	// ordinary Shuffle operator from it; older decoders reject the unknown
+	// opcode before execution instead of silently using legacy key ownership.
+	// Keep its numeric value stable and append future opcodes after it.
+	ShuffleStable
+	// PreInsertAutoIDCache is a wire-only marker for the opt-in table policy.
+	// Old decoders reject it rather than silently discarding AutoIdCache.
+	PreInsertAutoIDCache
+	// AdaptiveTop 只在协调节点执行，不允许作为远端指令编码。
+	AdaptiveTop
+	// MinusAll is appended to preserve all existing remote operator wire values.
+	MinusAll
+	// VectorQuery and its materialized source are coordinator-local only.
+	VectorQuery
+	// OpTypeEnd is the exclusive upper bound for executable operator types.
+	// New operator types must be added before it.
+	OpTypeEnd
 )
 
 var OperatorToStrMap map[OpType]string
@@ -131,6 +152,8 @@ func init() {
 		HashJoin:                "HashJoin",
 		LoopJoin:                "LoopJoin",
 		IndexJoin:               "IndexJoin",
+		DedupJoin:               "DedupJoin",
+		RightDedupJoin:          "RightDedupJoin",
 		IndexBuild:              "IndexBuild",
 		Merge:                   "Merge",
 		MergeTop:                "MergeTop",
@@ -144,7 +167,10 @@ func init() {
 		Deletion:                "Deletion",
 		Insert:                  "Insert",
 		External:                "External",
-		Source:                  "Source",
+		MultiUpdate:             "MultiUpdate",
+		PartitionInsert:         "PartitionInsert",
+		PartitionDelete:         "PartitionDelete",
+		PartitionMultiUpdate:    "PartitionMultiUpdate",
 		Minus:                   "Minus",
 		Intersect:               "Intersect",
 		IntersectAll:            "IntersectAll",
@@ -167,6 +193,14 @@ func init() {
 		Mock:                    "Mock",
 		Apply:                   "Apply",
 		PostDml:                 "PostDml",
+		IcebergWrite:            "IcebergWrite",
+		TableClone:              "TableClone",
+		MongoScan:               "MongoScan",
+		ShuffleStable:           "ShuffleStable",
+		PreInsertAutoIDCache:    "PreInsertAutoIDCache",
+		AdaptiveTop:             "AdaptiveTop",
+		VectorQuery:             "VectorQuery",
+		MinusAll:                "MinusAll",
 	}
 
 	// Initialize StrToOperatorMap
@@ -188,6 +222,7 @@ func init() {
 	MajorOpMap = map[string]bool{
 		OperatorToStrMap[TableScan]: true,
 		OperatorToStrMap[External]:  true,
+		OperatorToStrMap[MongoScan]: true,
 		OperatorToStrMap[Order]:     true,
 		OperatorToStrMap[Window]:    true,
 		OperatorToStrMap[Group]:     true,
@@ -270,6 +305,27 @@ func (o *OperatorBase) SetChildren(children []Operator) {
 
 func (o *OperatorBase) GetChildren(idx int) Operator {
 	return o.Children[idx]
+}
+
+// GetChild returns a child only when the operator tree contains the requested
+// edge. Remote pipeline recovery can reject an incomplete operator tree with a
+// normal execution error instead of letting a direct slice access panic.
+func GetChild(op Operator, idx int) (Operator, error) {
+	if op == nil {
+		return nil, moerr.NewInternalErrorNoCtx("cannot get a child from a nil operator")
+	}
+	base := op.GetOperatorBase()
+	if idx < 0 || idx >= base.NumChildren() {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"operator %v is missing child %d (has %d children)",
+			op.OpType(), idx, base.NumChildren())
+	}
+	child := base.GetChildren(idx)
+	if child == nil {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"operator %v has a nil child at index %d", op.OpType(), idx)
+	}
+	return child, nil
 }
 
 func (o *OperatorBase) GetCnAddr() string {
@@ -364,8 +420,8 @@ func Exec(op Operator, proc *process.Process) (CallResult, error) {
 
 func ChildrenCall(op Operator, proc *process.Process, anal process.Analyzer) (CallResult, error) {
 	beforeChildrenCall := time.Now()
+	defer anal.ChildrenCallStop(beforeChildrenCall)
 	result, err := Exec(op, proc)
-	anal.ChildrenCallStop(beforeChildrenCall)
 	if err == nil {
 		anal.Input(result.Batch)
 	}

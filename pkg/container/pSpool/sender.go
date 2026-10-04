@@ -251,6 +251,45 @@ func (ps *PipelineSpool) ForceCleanupAfterTerminalSignal() {
 	ps.cleanupOnce.Do(ps.forceCleanup)
 }
 
+// ReleaseReusableCacheAfterProducerQuiesced returns buffers from batches that
+// receivers have already released. The producer must have stopped, so no new
+// SendBatch call can race to reuse those buffers. Receivers may still return
+// current batches afterward; FinalizeAfterConsumersQuiesced performs the final
+// cache pass once those receivers have joined.
+func (ps *PipelineSpool) ReleaseReusableCacheAfterProducerQuiesced() {
+	if ps == nil {
+		return
+	}
+
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	ps.cache.free()
+}
+
+// FinalizeAfterConsumersQuiesced releases every batch still retained by the
+// transport. The caller must have joined all producer and consumer scopes, so
+// no goroutine can subsequently read a queued slot or use a current batch.
+//
+// A typed terminal signal bypasses the spool queue. Consequently a receiver
+// may stop with older GetFromSpool signals still queued even though its scope
+// has completed. Those slots are no longer observable and must be reclaimed
+// here before the statement allocation account can reach terminal zero.
+func (ps *PipelineSpool) FinalizeAfterConsumersQuiesced() {
+	if ps == nil {
+		return
+	}
+
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	for i := range ps.shardPool {
+		ps.cleanSlotLocked(uint32(i))
+	}
+	for i := range ps.rs {
+		ps.rs[i].flagLastPopRelease()
+	}
+	ps.cleanupOnce.Do(ps.forceCleanup)
+}
+
 // Abort terminates the spool without waiting for receiver acknowledgement.
 // Pending, not-yet-consumed slots are released immediately. Slots already handed
 // to receivers stay valid until their receiver calls ReleaseCurrent. The first

@@ -33,6 +33,7 @@ func builtInInternalAutoIncrement(parameters []*vector.Vector, result vector.Fun
 	rs := vector.MustFunctionResult[uint64](result)
 
 	eng := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
+	observationCtx := incrservice.WithAutoIDObservationScope(proc.Ctx)
 	for i := uint64(0); i < uint64(length); i++ {
 		s1, null1 := p1.GetStrValue(i)
 		s2, null2 := p2.GetStrValue(i)
@@ -58,8 +59,12 @@ func builtInInternalAutoIncrement(parameters []*vector.Vector, result vector.Fun
 		}
 		autoIncrCol := getTableAutoIncrCol(engineDefs)
 		if autoIncrCol != "" {
+			ctx := observationCtx
+			if extra := relation.GetExtraInfo(); extra != nil {
+				ctx = incrservice.WithAutoIDCachePolicy(ctx, tableId, extra.AutoIdCache)
+			}
 			autoIncrement, err := getCurrentValue(
-				proc.Ctx,
+				ctx,
 				proc.GetService(),
 				tableId,
 				autoIncrCol,

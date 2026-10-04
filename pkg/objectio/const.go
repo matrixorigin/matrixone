@@ -17,6 +17,7 @@ package objectio
 import (
 	"fmt"
 	"math"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
@@ -74,6 +75,75 @@ const (
 
 const HiddenColumnSelection_None HiddenColumnSelection = 0
 
+const InvalidSpecialColumnPosition = math.MaxUint16
+
+// SpecialColumnLayout describes the physical metadata positions of the
+// appendable-only columns. Object writers map special seqnums, in declaration
+// order, immediately after MaxSeqnum. PhysicalAddr may therefore appear before
+// or after CommitTS, depending on the writer. The positions are stable across
+// sparse user schemas and do not depend on the total column count.
+//
+// Old appendable objects contain only CommitTS. New appendable objects contain
+// CommitTS followed by Abort.
+type SpecialColumnLayout struct {
+	PhysicalAddr uint16
+	CommitTS     uint16
+	Abort        uint16
+}
+
+func (layout SpecialColumnLayout) Resolve(seqnum uint16) (uint16, bool) {
+	switch seqnum {
+	case SEQNUM_COMMITTS:
+		return layout.CommitTS, layout.CommitTS != InvalidSpecialColumnPosition
+	case SEQNUM_ABORT:
+		return layout.Abort, layout.Abort != InvalidSpecialColumnPosition
+	default:
+		return InvalidSpecialColumnPosition, false
+	}
+}
+
+// ResolveSpecialColumnLayout resolves appendable special columns by their
+// format-defined positions and validates their types. This keeps old
+// commitTS-only objects readable while preventing a user TS/bool column from
+// being mistaken for a hidden column.
+func ResolveSpecialColumnLayout(block BlockObject) SpecialColumnLayout {
+	layout := SpecialColumnLayout{
+		PhysicalAddr: InvalidSpecialColumnPosition,
+		CommitTS:     InvalidSpecialColumnPosition,
+		Abort:        InvalidSpecialColumnPosition,
+	}
+	metaColumnCount := block.GetMetaColumnCount()
+	if metaColumnCount == 0 {
+		return layout
+	}
+
+	pos := block.GetMaxSeqnum() + 1
+	if pos < metaColumnCount &&
+		block.ColumnMeta(pos).DataType() == uint8(types.T_Rowid) {
+		layout.PhysicalAddr = pos
+		pos++
+	}
+
+	commitPos := pos
+	if commitPos >= metaColumnCount ||
+		block.ColumnMeta(commitPos).DataType() != uint8(types.T_TS) {
+		return layout
+	}
+	layout.CommitTS = commitPos
+
+	abortPos := commitPos + 1
+	if abortPos < metaColumnCount &&
+		block.ColumnMeta(abortPos).DataType() == uint8(types.T_Rowid) {
+		layout.PhysicalAddr = abortPos
+		abortPos++
+	}
+	if abortPos < metaColumnCount &&
+		block.ColumnMeta(abortPos).DataType() == uint8(types.T_bool) {
+		layout.Abort = abortPos
+	}
+	return layout
+}
+
 var (
 	TombstoneSeqnums_CN_Created         = []uint16{0, 1}
 	TombstoneSeqnums_CN_Created_PhyAddr = []uint16{0, 1, SEQNUM_ROWID}
@@ -97,41 +167,53 @@ func IsPhysicalAddr(attr string) bool {
 	return attr == PhysicalAddr_Attr
 }
 
-func GetTombstoneAttrs(hidden HiddenColumnSelection) []string {
-	if hidden&HiddenColumnSelection_PhysicalAddr != 0 &&
-		hidden&HiddenColumnSelection_CommitTS != 0 {
-		return TombstoneAttrs_TN_Created_PhyAddr
+func normalizeTombstoneHiddenColumns(hidden HiddenColumnSelection) HiddenColumnSelection {
+	// Abort is part of appendable MVCC metadata and is never meaningful without
+	// the commit timestamp that defines the row's visibility interval.
+	if hidden&HiddenColumnSelection_Abort != 0 {
+		hidden |= HiddenColumnSelection_CommitTS
 	}
-	if hidden&HiddenColumnSelection_PhysicalAddr != 0 {
-		return TombstoneAttrs_CN_Created_PhyAddr
-	}
-	if hidden&HiddenColumnSelection_CommitTS != 0 {
-		return TombstoneAttrs_TN_Created
-	}
-	return TombstoneAttrs_CN_Created
+	return hidden
 }
 
-func GetTombstoneCommitTSAttrIdx(columnCnt uint16) uint16 {
-	if columnCnt == 3 {
-		return TombstoneAttr_NA_CommitTs_Idx
-	} else if columnCnt == 4 {
-		return TombstoneAttr_A_CommitTs_Idx
+func GetTombstoneAttrs(hidden HiddenColumnSelection) []string {
+	hidden = normalizeTombstoneHiddenColumns(hidden)
+	var attrs []string
+	if hidden&HiddenColumnSelection_PhysicalAddr != 0 &&
+		hidden&HiddenColumnSelection_CommitTS != 0 {
+		attrs = TombstoneAttrs_TN_Created_PhyAddr
+	} else if hidden&HiddenColumnSelection_PhysicalAddr != 0 {
+		attrs = TombstoneAttrs_CN_Created_PhyAddr
+	} else if hidden&HiddenColumnSelection_CommitTS != 0 {
+		attrs = TombstoneAttrs_TN_Created
+	} else {
+		attrs = TombstoneAttrs_CN_Created
 	}
-	panic(fmt.Sprintf("invalid tombstone column count %d", columnCnt))
+	attrs = slices.Clone(attrs)
+	if hidden&HiddenColumnSelection_Abort != 0 {
+		attrs = append(attrs, TombstoneAttr_Abort_Attr)
+	}
+	return attrs
 }
 
 func GetTombstoneSeqnums(hidden HiddenColumnSelection) []uint16 {
+	hidden = normalizeTombstoneHiddenColumns(hidden)
+	var seqnums []uint16
 	if hidden&HiddenColumnSelection_PhysicalAddr != 0 &&
 		hidden&HiddenColumnSelection_CommitTS != 0 {
-		return TombstoneSeqnums_DN_Created_PhyAddr
+		seqnums = TombstoneSeqnums_DN_Created_PhyAddr
+	} else if hidden&HiddenColumnSelection_PhysicalAddr != 0 {
+		seqnums = TombstoneSeqnums_CN_Created_PhyAddr
+	} else if hidden&HiddenColumnSelection_CommitTS != 0 {
+		seqnums = TombstoneSeqnums_DN_Created
+	} else {
+		seqnums = TombstoneSeqnums_CN_Created
 	}
-	if hidden&HiddenColumnSelection_PhysicalAddr != 0 {
-		return TombstoneSeqnums_CN_Created_PhyAddr
+	seqnums = slices.Clone(seqnums)
+	if hidden&HiddenColumnSelection_Abort != 0 {
+		seqnums = append(seqnums, SEQNUM_ABORT)
 	}
-	if hidden&HiddenColumnSelection_CommitTS != 0 {
-		return TombstoneSeqnums_DN_Created
-	}
-	return TombstoneSeqnums_CN_Created
+	return seqnums
 }
 
 func GetTombstoneSchema(
@@ -144,33 +226,38 @@ func GetTombstoneSchema(
 func GetTombstoneTypes(
 	pk types.Type, hidden HiddenColumnSelection,
 ) []types.Type {
+	hidden = normalizeTombstoneHiddenColumns(hidden)
+	var typs []types.Type
 	if hidden&HiddenColumnSelection_PhysicalAddr != 0 &&
 		hidden&HiddenColumnSelection_CommitTS != 0 {
-		return []types.Type{
+		typs = []types.Type{
 			RowidType,
 			pk,
 			TSType,
 			RowidType,
 		}
-	}
-	if hidden&HiddenColumnSelection_PhysicalAddr != 0 {
-		return []types.Type{
+	} else if hidden&HiddenColumnSelection_PhysicalAddr != 0 {
+		typs = []types.Type{
 			RowidType,
 			pk,
 			RowidType,
 		}
-	}
-	if hidden&HiddenColumnSelection_CommitTS != 0 {
-		return []types.Type{
+	} else if hidden&HiddenColumnSelection_CommitTS != 0 {
+		typs = []types.Type{
 			RowidType,
 			pk,
 			TSType,
 		}
+	} else {
+		typs = []types.Type{
+			RowidType,
+			pk,
+		}
 	}
-	return []types.Type{
-		RowidType,
-		pk,
+	if hidden&HiddenColumnSelection_Abort != 0 {
+		typs = append(typs, types.T_bool.ToType())
 	}
+	return typs
 }
 
 func MustGetPhysicalColumnPosition(seqnums []uint16, colTypes []types.Type) int {

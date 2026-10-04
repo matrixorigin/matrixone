@@ -14,7 +14,17 @@
 
 package databranchutils
 
-import "testing"
+import (
+	"os"
+	"os/exec"
+	"runtime/debug"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+)
 
 func TestDAGFunctionality(t *testing.T) {
 
@@ -194,4 +204,644 @@ func TestDAGFunctionality(t *testing.T) {
 			})
 		}
 	})
+}
+
+func TestPathFromRoot(t *testing.T) {
+	dag := NewDAG([]DataBranchMetadata{
+		{TableID: 2, PTableID: 1, CloneTS: 20},
+		{TableID: 3, PTableID: 2, CloneTS: 30},
+	})
+
+	ids, cloneTSs, ok := dag.PathFromRoot(3)
+	if !ok || len(ids) != 3 || ids[0] != 1 || ids[1] != 2 || ids[2] != 3 {
+		t.Fatalf("unexpected root path: ids=%v ok=%v", ids, ok)
+	}
+	if len(cloneTSs) != 3 || cloneTSs[0] != 0 || cloneTSs[1] != 20 || cloneTSs[2] != 30 {
+		t.Fatalf("unexpected clone timestamps: %v", cloneTSs)
+	}
+
+	_, _, ok = dag.PathFromRoot(99)
+	if ok {
+		t.Fatal("missing node unexpectedly had a root path")
+	}
+}
+
+func TestComputeAlterLineageCompactionPlan(t *testing.T) {
+	dag := NewBranchReclaimDag([]DataBranchMetadata{
+		{TableID: 2, PTableID: 1, CloneTS: 100, Level: "alter"},
+		{TableID: 3, PTableID: 2, CloneTS: 200, Level: "alter"},
+	})
+	edges := map[uint64]HistoricalLineageEdge{
+		2: {
+			ChildTableID:  2,
+			ParentTableID: 1,
+			CloneTS:       100,
+			AccountName:   "acc",
+			DatabaseName:  "db",
+			TableName:     "t",
+		},
+		3: {
+			ChildTableID:  3,
+			ParentTableID: 2,
+			CloneTS:       200,
+			AccountName:   "acc",
+			DatabaseName:  "db",
+			TableName:     "t",
+		},
+	}
+
+	require.Equal(t,
+		AlterLineageCompactionPlan{
+			TableIDs:      []uint64{2, 3},
+			SnapshotNames: []string{"__mo_branch_2", "__mo_branch_3"},
+		},
+		ComputeAlterLineageCompactionPlan(dag, edges, nil),
+	)
+
+	sources := []HistoricalSource{{
+		Level:        "table",
+		AccountName:  "acc",
+		DatabaseName: "db",
+		TableName:    "t",
+		OldestTS:     150,
+	}}
+	require.Equal(t,
+		AlterLineageCompactionPlan{
+			TableIDs:      []uint64{2},
+			SnapshotNames: []string{"__mo_branch_2"},
+		},
+		ComputeAlterLineageCompactionPlan(dag, edges, sources),
+	)
+}
+
+func TestComponentHasLiveLogicalBranch(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		start uint64
+		rows  []DataBranchMetadata
+		want  bool
+	}{
+		{
+			name:  "historical ALTER generations only",
+			start: 3,
+			rows: []DataBranchMetadata{
+				{TableID: 2, PTableID: 1, Level: AlterLineageLevel},
+				{TableID: 3, PTableID: 2, Level: AlterLineageLevel},
+			},
+		},
+		{
+			name:  "live logical branch",
+			start: 2,
+			rows: []DataBranchMetadata{
+				{TableID: 2, PTableID: 1, Level: "table"},
+			},
+			want: true,
+		},
+		{
+			name:  "logical ownership inherited through ALTER",
+			start: 3,
+			rows: []DataBranchMetadata{
+				{TableID: 2, PTableID: 1, Level: "table", TableDeleted: true},
+				{TableID: 3, PTableID: 2, Level: "alter:table"},
+			},
+			want: true,
+		},
+		{
+			name:  "live logical sibling across ancestor",
+			start: 3,
+			rows: []DataBranchMetadata{
+				{TableID: 2, PTableID: 1, Level: "table"},
+				{TableID: 3, PTableID: 1, Level: AlterLineageLevel},
+			},
+			want: true,
+		},
+		{
+			name:  "deleted logical sibling",
+			start: 3,
+			rows: []DataBranchMetadata{
+				{TableID: 2, PTableID: 1, Level: "table", TableDeleted: true},
+				{TableID: 3, PTableID: 1, Level: AlterLineageLevel},
+			},
+		},
+		{
+			name:  "historical ALTER cycle",
+			start: 1,
+			rows: []DataBranchMetadata{
+				{TableID: 1, PTableID: 2, Level: AlterLineageLevel},
+				{TableID: 2, PTableID: 1, Level: AlterLineageLevel},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dag := NewBranchReclaimDag(tc.rows)
+			require.Equal(t, tc.want, dag.ComponentHasLiveLogicalBranch(tc.start))
+		})
+	}
+}
+
+func TestComponentHasAlterLineageKeepsUnrelatedComponentsIndependent(t *testing.T) {
+	dag := NewBranchReclaimDag([]DataBranchMetadata{
+		{TableID: 1, Level: "table"},
+		{TableID: 2, PTableID: 1, Level: "table"},
+		{TableID: 3, PTableID: 1, Level: AlterLineageLevel},
+		{TableID: 10, Level: "table"},
+		{TableID: 11, PTableID: 10, Level: "table"},
+	})
+	require.True(t, dag.ComponentHasAlterLineage(2))
+	require.False(t, dag.ComponentHasAlterLineage(11))
+	require.False(t, dag.ComponentHasAlterLineage(99))
+	require.True(t, dag.ComponentsHaveAlterLineage([]uint64{10, 11, 2, 3}))
+	require.False(t, dag.ComponentsHaveAlterLineage([]uint64{10, 11}))
+	require.ElementsMatch(t, []uint64{1, 2, 3}, dag.ComponentIDs(2))
+	require.ElementsMatch(t, []uint64{10, 11}, dag.ComponentIDs(11))
+	require.ElementsMatch(t, []uint64{1, 2, 3, 10, 11}, dag.ComponentsIDs([]uint64{2, 3, 11}))
+}
+
+func TestComputeAlterLineageCompactionPlanReclaimsDeletedAlterGenerations(t *testing.T) {
+	rows := []DataBranchMetadata{
+		{TableID: 2, PTableID: 1, CloneTS: 100, Level: "alter", TableDeleted: true},
+		{TableID: 3, PTableID: 2, CloneTS: 200, Level: "alter"},
+	}
+	edges := map[uint64]HistoricalLineageEdge{
+		2: {ChildTableID: 2, ParentTableID: 1, CloneTS: 100},
+		3: {ChildTableID: 3, ParentTableID: 2, CloneTS: 200},
+	}
+
+	require.Equal(t,
+		AlterLineageCompactionPlan{
+			TableIDs:      []uint64{2, 3},
+			SnapshotNames: []string{"__mo_branch_2", "__mo_branch_3"},
+		},
+		ComputeAlterLineageCompactionPlan(NewBranchReclaimDag(rows), edges, nil),
+	)
+
+	// Plain DROP can reclaim both snapshots while a user snapshot still owns
+	// the history. After that owner disappears, the deleted metadata rows
+	// must remain reclaimable even though their matching edges are gone.
+	rows[1].TableDeleted = true
+	require.Equal(t,
+		AlterLineageCompactionPlan{
+			TableIDs:      []uint64{2, 3},
+			SnapshotNames: []string{"__mo_branch_2", "__mo_branch_3"},
+		},
+		ComputeAlterLineageCompactionPlan(NewBranchReclaimDag(rows), nil, nil),
+	)
+
+	covered := []HistoricalSource{{Level: "table", ObjectID: 1, OldestTS: 50}}
+	require.Empty(t,
+		ComputeAlterLineageCompactionPlan(NewBranchReclaimDag(rows), nil, covered).TableIDs,
+		"the dropped current table's historical owner must retain orphaned metadata until owner deletion",
+	)
+}
+
+func TestComputeAlterLineageCompactionPlanScopeAndOwners(t *testing.T) {
+	baseRows := []DataBranchMetadata{
+		{TableID: 2, PTableID: 1, CloneTS: 100, Level: "alter"},
+	}
+	edges := map[uint64]HistoricalLineageEdge{
+		2: {
+			ChildTableID:  2,
+			ParentTableID: 1,
+			CloneTS:       100,
+			AccountName:   "acc",
+			DatabaseName:  "db",
+			TableName:     "t",
+		},
+	}
+
+	for _, source := range []HistoricalSource{
+		{Level: "cluster", OldestTS: 100},
+		{Level: "account", AccountName: "acc", OldestTS: 100},
+		{Level: "database", AccountName: "acc", DatabaseName: "db", OldestTS: 100},
+		{Level: "table", AccountName: "acc", DatabaseName: "db", TableName: "t", OldestTS: 100},
+		{Level: "table", AccountName: "acc", DatabaseName: "db", TableName: "renamed", ObjectID: 1, OldestTS: 100},
+		{Level: "table", AccountName: "acc", DatabaseName: "db", TableName: "t", ObjectID: 999, OldestTS: 100},
+	} {
+		plan := ComputeAlterLineageCompactionPlan(
+			NewBranchReclaimDag(baseRows), edges, []HistoricalSource{source},
+		)
+		require.Empty(t, plan.TableIDs, "covering source %+v must retain the edge", source)
+	}
+
+	uncovered := []HistoricalSource{
+		{Level: "account", AccountName: "other", OldestTS: 0},
+		{Level: "database", AccountName: "acc", DatabaseName: "other", OldestTS: 0},
+		{Level: "table", AccountName: "acc", DatabaseName: "db", TableName: "t", OldestTS: 101},
+	}
+	plan := ComputeAlterLineageCompactionPlan(
+		NewBranchReclaimDag(baseRows), edges, uncovered,
+	)
+	require.Equal(t, []uint64{2}, plan.TableIDs)
+
+	withLiveLogicalSibling := NewBranchReclaimDag(append(baseRows,
+		DataBranchMetadata{TableID: 4, PTableID: 1, CloneTS: 90, Level: "table"},
+	))
+	plan = ComputeAlterLineageCompactionPlan(withLiveLogicalSibling, edges, nil)
+	require.Empty(t, plan.TableIDs)
+
+	withDeletedLogicalSibling := NewBranchReclaimDag(append(baseRows,
+		DataBranchMetadata{
+			TableID: 4, PTableID: 1, CloneTS: 90, Level: "table", TableDeleted: true,
+		},
+	))
+	plan = ComputeAlterLineageCompactionPlan(withDeletedLogicalSibling, edges, nil)
+	require.Equal(t, []uint64{2}, plan.TableIDs)
+
+	// ALTER preserves the logical owner's level after the prefix. Once the
+	// copy-and-swap drops the old physical table, this live alter:table row is
+	// the only remaining representation of the logical branch and must keep
+	// the lineage component alive.
+	withInheritedLogicalOwner := NewBranchReclaimDag([]DataBranchMetadata{
+		{TableID: 2, PTableID: 1, CloneTS: 100, Level: "table", TableDeleted: true},
+		{TableID: 3, PTableID: 2, CloneTS: 200, Level: "alter:table"},
+	})
+	inheritedEdges := map[uint64]HistoricalLineageEdge{
+		3: {
+			ChildTableID: 3, ParentTableID: 2, CloneTS: 200,
+			AccountName: "acc", DatabaseName: "db", TableName: "t",
+		},
+	}
+	plan = ComputeAlterLineageCompactionPlan(withInheritedLogicalOwner, inheritedEdges, nil)
+	require.Empty(t, plan.TableIDs)
+
+	plan = ComputeAlterLineageCompactionPlan(NewBranchReclaimDag(baseRows), nil, nil)
+	require.Empty(t, plan.TableIDs, "missing identity must be retained conservatively")
+}
+
+func TestComputeAlterLineageCompactionPlanTableOwnerSurvivesRename(t *testing.T) {
+	dag := NewBranchReclaimDag([]DataBranchMetadata{
+		{TableID: 2, PTableID: 1, CloneTS: 100, Level: "alter"},
+		{TableID: 3, PTableID: 2, CloneTS: 200, Level: "alter"},
+	})
+	edges := map[uint64]HistoricalLineageEdge{
+		2: {
+			ChildTableID: 2, ParentTableID: 1, CloneTS: 100,
+			AccountName: "acc", DatabaseName: "db", TableName: "before_rename",
+		},
+		3: {
+			ChildTableID: 3, ParentTableID: 2, CloneTS: 200,
+			AccountName: "acc", DatabaseName: "db", TableName: "after_rename",
+		},
+	}
+	source := HistoricalSource{
+		Level: "table", AccountName: "acc", DatabaseName: "db",
+		TableName: "before_rename", ObjectID: 1, OldestTS: 50,
+	}
+
+	plan := ComputeAlterLineageCompactionPlan(dag, edges, []HistoricalSource{source})
+	require.Empty(t, plan.TableIDs,
+		"the source object owns the component, including the newer edge across rename")
+}
+
+func TestComputeAlterLineageCompactionPlanCycleSafe(t *testing.T) {
+	dag := NewBranchReclaimDag([]DataBranchMetadata{
+		{TableID: 1, PTableID: 2, CloneTS: 100, Level: "alter"},
+		{TableID: 2, PTableID: 1, CloneTS: 200, Level: "alter"},
+	})
+	edges := map[uint64]HistoricalLineageEdge{
+		1: {ChildTableID: 1, ParentTableID: 2, CloneTS: 100},
+		2: {ChildTableID: 2, ParentTableID: 1, CloneTS: 200},
+	}
+
+	plan := ComputeAlterLineageCompactionPlan(dag, edges, nil)
+	require.Equal(t, []uint64{1, 2}, plan.TableIDs)
+	require.Equal(t, []string{"__mo_branch_1", "__mo_branch_2"}, plan.SnapshotNames)
+}
+
+func BenchmarkComputeAlterLineageCompactionPlan2049(b *testing.B) {
+	const rowCount = 2049
+	rows := make([]DataBranchMetadata, rowCount)
+	for i := range rows {
+		rows[i] = DataBranchMetadata{
+			TableID:      uint64(i + 1),
+			CloneTS:      1,
+			Creator:      uint64(catalog.System_Account),
+			Level:        AlterLineageLevel,
+			TableDeleted: true,
+		}
+	}
+	dag := NewBranchReclaimDag(rows)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		plan := ComputeAlterLineageCompactionPlan(dag, nil, nil)
+		if len(plan.TableIDs) != rowCount {
+			b.Fatalf("got %d compactable rows, want %d", len(plan.TableIDs), rowCount)
+		}
+	}
+}
+
+func TestPitrRetentionLowerBound(t *testing.T) {
+	now := time.Date(2026, time.July, 17, 12, 0, 0, 0, time.UTC)
+
+	for _, tc := range []struct {
+		length int
+		unit   string
+		want   time.Time
+	}{
+		{length: 2, unit: "h", want: now.Add(-2 * time.Hour)},
+		{length: 2, unit: "d", want: now.AddDate(0, 0, -2)},
+		{length: 2, unit: "mo", want: now.AddDate(0, -2, 0)},
+		{length: 2, unit: "y", want: now.AddDate(-2, 0, 0)},
+	} {
+		got, err := PitrRetentionLowerBound(now, tc.length, tc.unit)
+		require.NoError(t, err)
+		require.Equal(t, tc.want.UnixNano(), got)
+	}
+
+	_, err := PitrRetentionLowerBound(now, 1, "week")
+	require.Error(t, err)
+	_, err = PitrRetentionLowerBound(now, 0, "h")
+	require.Error(t, err)
+	_, err = PitrRetentionLowerBound(now, 101, "h")
+	require.Error(t, err)
+
+	for _, tc := range []struct {
+		name string
+		now  time.Time
+		want time.Time
+	}{
+		{
+			name: "May 31 clamps to April 30",
+			now:  time.Date(2025, time.May, 31, 12, 0, 0, 123456789, time.UTC),
+			want: time.Date(2025, time.April, 30, 12, 0, 0, 123456789, time.UTC),
+		},
+		{
+			name: "March 31 clamps to February 28",
+			now:  time.Date(2025, time.March, 31, 12, 0, 0, 0, time.UTC),
+			want: time.Date(2025, time.February, 28, 12, 0, 0, 0, time.UTC),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := PitrRetentionLowerBound(tc.now, 1, "mo")
+			require.NoError(t, err)
+			require.Equal(t, tc.want.UnixNano(), got)
+		})
+	}
+
+	leapDay := time.Date(2024, time.February, 29, 12, 0, 0, 0, time.UTC)
+	got, err := PitrRetentionLowerBound(leapDay, 1, "y")
+	require.NoError(t, err)
+	require.Equal(t, time.Date(2023, time.February, 28, 12, 0, 0, 0, time.UTC).UnixNano(), got)
+}
+
+func TestPitrRetentionRangeDoesNotExpand(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		currentLength int
+		currentUnit   string
+		nextLength    int
+		nextUnit      string
+		want          bool
+	}{
+		{name: "same unit equal", currentLength: 2, currentUnit: "h", nextLength: 2, nextUnit: "h", want: true},
+		{name: "same unit shrink", currentLength: 2, currentUnit: "h", nextLength: 1, nextUnit: "h", want: true},
+		{name: "same unit expand", currentLength: 1, currentUnit: "h", nextLength: 2, nextUnit: "h", want: false},
+		{name: "fixed units equal", currentLength: 1, currentUnit: "d", nextLength: 24, nextUnit: "h", want: true},
+		{name: "fixed units expand", currentLength: 23, currentUnit: "h", nextLength: 1, nextUnit: "d", want: false},
+		{name: "calendar units equal", currentLength: 1, currentUnit: "y", nextLength: 12, nextUnit: "mo", want: true},
+		{name: "calendar units shrink", currentLength: 13, currentUnit: "mo", nextLength: 1, nextUnit: "y", want: true},
+		{name: "calendar units expand", currentLength: 11, currentUnit: "mo", nextLength: 1, nextUnit: "y", want: false},
+		{name: "calendar to fixed always shrinks", currentLength: 1, currentUnit: "mo", nextLength: 28, nextUnit: "d", want: true},
+		{name: "calendar to fixed can expand in February", currentLength: 1, currentUnit: "mo", nextLength: 29, nextUnit: "d", want: false},
+		{name: "fixed to calendar can expand in leap year", currentLength: 100, currentUnit: "d", nextLength: 1, nextUnit: "y", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := PitrRetentionRangeDoesNotExpand(
+				tc.currentLength,
+				tc.currentUnit,
+				tc.nextLength,
+				tc.nextUnit,
+			)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+
+	for _, tc := range []struct {
+		currentLength int
+		currentUnit   string
+		nextLength    int
+		nextUnit      string
+	}{
+		{currentLength: 0, currentUnit: "h", nextLength: 1, nextUnit: "h"},
+		{currentLength: 1, currentUnit: "week", nextLength: 1, nextUnit: "h"},
+		{currentLength: 1, currentUnit: "h", nextLength: 101, nextUnit: "h"},
+		{currentLength: 1, currentUnit: "h", nextLength: 1, nextUnit: "week"},
+	} {
+		_, err := PitrRetentionRangeDoesNotExpand(
+			tc.currentLength,
+			tc.currentUnit,
+			tc.nextLength,
+			tc.nextUnit,
+		)
+		require.Error(t, err)
+	}
+}
+
+func TestMergePitrRetentionRanges(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		currentLength int
+		currentUnit   string
+		nextLength    int
+		nextUnit      string
+		wantLength    int
+		wantUnit      string
+	}{
+		{name: "preserve wider fixed range", currentLength: 2, currentUnit: "d", nextLength: 24, nextUnit: "h", wantLength: 2, wantUnit: "d"},
+		{name: "adopt wider calendar range", currentLength: 28, currentUnit: "d", nextLength: 1, nextUnit: "mo", wantLength: 1, wantUnit: "mo"},
+		{name: "month and thirty days need envelope", currentLength: 1, currentUnit: "mo", nextLength: 30, nextUnit: "d", wantLength: 31, wantUnit: "d"},
+		{name: "two months and sixty days need envelope", currentLength: 2, currentUnit: "mo", nextLength: 60, nextUnit: "d", wantLength: 62, wantUnit: "d"},
+		{name: "three months and ninety days need envelope", currentLength: 3, currentUnit: "mo", nextLength: 90, nextUnit: "d", wantLength: 93, wantUnit: "d"},
+		{name: "fixed range covers calendar maximum", currentLength: 100, currentUnit: "d", nextLength: 3, nextUnit: "mo", wantLength: 100, wantUnit: "d"},
+		{name: "year covers maximum fixed range", currentLength: 100, currentUnit: "d", nextLength: 1, nextUnit: "y", wantLength: 1, wantUnit: "y"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gotLength, gotUnit, err := MergePitrRetentionRanges(
+				tc.currentLength,
+				tc.currentUnit,
+				tc.nextLength,
+				tc.nextUnit,
+			)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantLength, gotLength)
+			require.Equal(t, tc.wantUnit, gotUnit)
+		})
+	}
+
+	_, _, err := MergePitrRetentionRanges(0, "d", 1, "d")
+	require.Error(t, err)
+	_, _, err = MergePitrRetentionRanges(1, "d", 1, "week")
+	require.Error(t, err)
+}
+
+func TestMergePitrRetentionRangesAlwaysCoversInputs(t *testing.T) {
+	units := []string{"h", "d", "mo", "y"}
+	for _, currentUnit := range units {
+		for currentLength := 1; currentLength <= 100; currentLength++ {
+			for _, nextUnit := range units {
+				for nextLength := 1; nextLength <= 100; nextLength++ {
+					mergedLength, mergedUnit, err := MergePitrRetentionRanges(
+						currentLength,
+						currentUnit,
+						nextLength,
+						nextUnit,
+					)
+					require.NoError(t, err)
+					require.GreaterOrEqual(t, mergedLength, 1)
+					require.LessOrEqual(t, mergedLength, 100)
+
+					coversCurrent, err := PitrRetentionRangeDoesNotExpand(
+						mergedLength,
+						mergedUnit,
+						currentLength,
+						currentUnit,
+					)
+					require.NoError(t, err)
+					coversNext, err := PitrRetentionRangeDoesNotExpand(
+						mergedLength,
+						mergedUnit,
+						nextLength,
+						nextUnit,
+					)
+					require.NoError(t, err)
+					if !coversCurrent || !coversNext {
+						t.Fatalf(
+							"merged %d%s does not cover %d%s and %d%s",
+							mergedLength,
+							mergedUnit,
+							currentLength,
+							currentUnit,
+							nextLength,
+							nextUnit,
+						)
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestMergePitrRetentionRangesCoversMonthEndPivots(t *testing.T) {
+	mergedLength, mergedUnit, err := MergePitrRetentionRanges(1, "mo", 30, "d")
+	require.NoError(t, err)
+	require.Equal(t, 31, mergedLength)
+	require.Equal(t, "d", mergedUnit)
+
+	for _, pivot := range []time.Time{
+		time.Date(2024, time.February, 29, 12, 0, 0, 0, time.UTC),
+		time.Date(2025, time.January, 31, 12, 0, 0, 0, time.UTC),
+		time.Date(2025, time.March, 28, 12, 0, 0, 0, time.UTC),
+		time.Date(2025, time.March, 31, 12, 0, 0, 0, time.UTC),
+		time.Date(2025, time.April, 30, 12, 0, 0, 0, time.UTC),
+	} {
+		mergedLower, err := PitrRetentionLowerBound(pivot, mergedLength, mergedUnit)
+		require.NoError(t, err)
+		monthLower, err := PitrRetentionLowerBound(pivot, 1, "mo")
+		require.NoError(t, err)
+		daysLower, err := PitrRetentionLowerBound(pivot, 30, "d")
+		require.NoError(t, err)
+		require.LessOrEqual(t, mergedLower, monthLower)
+		require.LessOrEqual(t, mergedLower, daysLower)
+	}
+}
+
+func TestBuildAlterLineageDeleteSQL(t *testing.T) {
+	require.Equal(t,
+		"delete from mo_catalog.mo_snapshots where kind = 'branch' and sname in ('__mo_branch_2','__mo_branch_3')",
+		BuildAlterLineageSnapshotDeleteSQL([]string{"__mo_branch_2", "__mo_branch_3"}),
+	)
+	require.Equal(t,
+		"delete from mo_catalog.mo_branch_metadata where table_id in (2,3) and (level = 'alter' or level like 'alter:%')",
+		BuildAlterLineageMetadataDeleteSQL([]uint64{2, 3}),
+	)
+	require.Empty(t, BuildAlterLineageSnapshotDeleteSQL(nil))
+	require.Empty(t, BuildAlterLineageMetadataDeleteSQL(nil))
+	require.Equal(t,
+		"delete from mo_catalog.mo_branch_metadata where table_id in (2,3) and table_deleted = true and (level != 'alter' and level not like 'alter:%')",
+		BuildBranchMetadataDeleteSQL([]uint64{2, 3}),
+	)
+	require.Empty(t, BuildBranchMetadataDeleteSQL(nil))
+}
+
+func TestComputeAccountBranchReclaimPlan(t *testing.T) {
+	// The source table 1 is not itself a branch metadata row. The branch
+	// chain is 1 -> 2 -> 3, where 2 belongs to account A and 3 belongs to
+	// account C. Dropping A must retain 2 while C is live.
+	rows := []DataBranchMetadata{
+		{TableID: 2, PTableID: 1, Creator: 10, Level: "table", TableDeleted: true},
+		{TableID: 3, PTableID: 2, Creator: 20, Level: "table", TableDeleted: false},
+		{TableID: 4, PTableID: 99, Creator: 10, Level: "table", TableDeleted: true},
+	}
+
+	plan := ComputeAccountBranchReclaimPlan(NewBranchReclaimDag(rows), 10)
+	require.Equal(t, []uint64{4}, plan.MetadataTableIDs)
+	require.Equal(t, []string{"__mo_branch_4"}, plan.SnapshotNames)
+
+	// Once C is dropped, its walk reaches the retained A edge. Both normal
+	// edges are now reclaimable, but the unrelated A row 4 is not selected.
+	rows[1].TableDeleted = true
+	plan = ComputeAccountBranchReclaimPlan(NewBranchReclaimDag(rows), 20)
+	require.Equal(t, []uint64{2, 3}, plan.MetadataTableIDs)
+	require.Equal(t, []string{"__mo_branch_2", "__mo_branch_3"}, plan.SnapshotNames)
+
+	// ALTER generations stay with the historical-lineage compactor even when
+	// the surrounding logical branch is reclaimable.
+	rows = []DataBranchMetadata{
+		{TableID: 2, PTableID: 1, Creator: 20, Level: "table", TableDeleted: true},
+		{TableID: 3, PTableID: 2, Creator: 20, Level: "alter", TableDeleted: true},
+	}
+	plan = ComputeAccountBranchReclaimPlan(NewBranchReclaimDag(rows), 20)
+	require.Equal(t, []uint64{2}, plan.MetadataTableIDs)
+	require.Equal(t, []string{"__mo_branch_2"}, plan.SnapshotNames)
+}
+
+func TestNewDAGCycle(t *testing.T) {
+	const childEnv = "MO_TEST_NEW_DAG_CYCLE_CHILD"
+	if os.Getenv(childEnv) == "" {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestNewDAGCycle$")
+		cmd.Env = append(os.Environ(), childEnv+"=1")
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("cyclic DAG construction failed: %v\n%s", err, output)
+		}
+	} else {
+		// Keep a regression from exhausting the machine's full process stack.
+		debug.SetMaxStack(256 << 10)
+	}
+
+	dag := NewDAG([]DataBranchMetadata{
+		{TableID: 1, PTableID: 2},
+		{TableID: 2, PTableID: 1},
+		{TableID: 3, PTableID: 1},
+	})
+	if dag.HasParent(1) || dag.HasParent(2) {
+		t.Fatal("nodes in a parent cycle must be detached from the cycle")
+	}
+	if !dag.HasParent(3) {
+		t.Fatal("a non-cyclic descendant must retain its parent")
+	}
+	if lca, _, _, ok := dag.FindLCA(3, 1); !ok || lca != 1 {
+		t.Fatalf("FindLCA(3, 1): got lca=%d ok=%v, want lca=1 ok=true", lca, ok)
+	}
+	if _, _, _, ok := dag.FindLCA(1, 2); ok {
+		t.Fatal("detached cycle nodes must not report a common ancestor")
+	}
+
+	selfCycle := NewDAG([]DataBranchMetadata{{TableID: 4, PTableID: 4}})
+	if selfCycle.HasParent(4) {
+		t.Fatal("a self-parent node must be detached from itself")
+	}
+
+	const chainLength = 4096
+	chain := make([]DataBranchMetadata, chainLength)
+	chain[0] = DataBranchMetadata{TableID: 1}
+	for i := 1; i < chainLength; i++ {
+		chain[i] = DataBranchMetadata{TableID: uint64(i + 1), PTableID: uint64(i)}
+	}
+	deepDAG := NewDAG(chain)
+	if lca, child, _, ok := deepDAG.FindLCA(1, chainLength); !ok || lca != 1 || child != 1 {
+		t.Fatalf("deep-chain LCA: got lca=%d child=%d ok=%v", lca, child, ok)
+	}
 }

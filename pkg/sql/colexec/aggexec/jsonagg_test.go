@@ -15,9 +15,13 @@
 package aggexec
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -25,6 +29,531 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
 )
+
+func TestAccountedJSONAggregatesLifecycleAndSpill(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, account, allocation := newTestAggregateAllocation(t)
+
+	jsonValue := func(value any) []byte {
+		t.Helper()
+		bj, err := bytejson.CreateByteJSONWithCheck(value)
+		require.NoError(t, err)
+		data, err := bj.Marshal()
+		require.NoError(t, err)
+		return data
+	}
+	values := vector.NewVec(types.T_json.ToType())
+	for _, value := range [][]byte{
+		jsonValue(int64(1)),
+		jsonValue("two"),
+		jsonValue(int64(1)),
+		jsonValue(nil),
+		jsonValue(nil),
+	} {
+		require.NoError(t, vector.AppendBytes(values, value, false, mp))
+	}
+	keys := buildVarlenVec(t, mp, types.T_varchar.ToType(),
+		[]string{"b", "a", "a", "c", "c"})
+	years := buildFixedVec(t, mp, types.T_year.ToType(), []types.MoYear{2024, 2025})
+	upper, err := types.ParseTimestamp(time.UTC, "9999-12-31 23:59:59.123456", 6)
+	require.NoError(t, err)
+	timestamps := buildFixedVec(t, mp, types.T_timestamp.ToTypeWithScale(6), []types.Timestamp{upper})
+	defer timestamps.Free(mp)
+	boundaryKey := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"v"})
+	defer boundaryKey.Free(mp)
+	defer values.Free(mp)
+	defer keys.Free(mp)
+	defer years.Free(mp)
+
+	for _, tc := range []struct {
+		name     string
+		id       int64
+		distinct bool
+		params   []types.Type
+		vectors  []*vector.Vector
+		want     string
+		zone     *time.Location
+	}{
+		{
+			name: "array-timestamp-zone-boundary", id: AggIdOfJsonArrayAgg,
+			params:  []types.Type{types.T_timestamp.ToTypeWithScale(6)},
+			vectors: []*vector.Vector{timestamps},
+			want:    `["10000-01-01 07:59:59.123456"]`, zone: time.FixedZone("session east", 8*60*60),
+		},
+		{
+			name: "object-timestamp-zone-boundary", id: AggIdOfJsonObjectAgg,
+			params:  []types.Type{types.T_varchar.ToType(), types.T_timestamp.ToTypeWithScale(6)},
+			vectors: []*vector.Vector{boundaryKey, timestamps},
+			want:    `{"v":"10000-01-01 07:59:59.123456"}`, zone: time.FixedZone("session east", 8*60*60),
+		},
+		{
+			name: "array-distinct", id: AggIdOfJsonArrayAgg, distinct: true,
+			params:  []types.Type{types.T_json.ToType()},
+			vectors: []*vector.Vector{values},
+			want:    `[1,"two",null,null]`,
+		},
+		{
+			name: "array-year", id: AggIdOfJsonArrayAgg,
+			params:  []types.Type{types.T_year.ToType()},
+			vectors: []*vector.Vector{years},
+			want:    `[2024,2025]`,
+		},
+		{
+			name: "object-last-wins", id: AggIdOfJsonObjectAgg,
+			params:  []types.Type{types.T_varchar.ToType(), types.T_json.ToType()},
+			vectors: []*vector.Vector{keys, values},
+			want:    `{"a":1,"b":1,"c":null}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			exec, err := MakeAgg(mp, tc.id, tc.distinct, tc.params...)
+			require.NoError(t, err)
+			ConfigureGroupConcatTimeZone(exec, tc.zone)
+			owner := exec.(AllocationAccountOwner)
+			defer func() {
+				exec.Free()
+				require.NoError(t, owner.ClearAllocationAccount(allocation))
+			}()
+			require.NoError(t, owner.SetAllocationAccount(allocation))
+			require.NoError(t, exec.GroupGrow(1))
+			groups := slices.Repeat([]uint64{1}, tc.vectors[0].Length())
+			preflight := exec.(BatchCapacityPreflight)
+			require.NoError(t, preflight.PreflightBatchFill(0, groups, tc.vectors))
+			peak := account.Snapshot().Peak
+			require.NoError(t, exec.BatchFill(0, groups, tc.vectors))
+			require.Equal(t, peak, account.Snapshot().Peak,
+				"mutation must reuse preflighted retained capacity")
+
+			var spill bytes.Buffer
+			require.NoError(t, exec.(SpillStateCodec).SaveSpillIntermediateRows(
+				0, []int32{0}, &spill))
+			restored, err := MakeAgg(mp, tc.id, tc.distinct, tc.params...)
+			require.NoError(t, err)
+			restoredOwner := restored.(AllocationAccountOwner)
+			defer func() {
+				restored.Free()
+				require.NoError(t, restoredOwner.ClearAllocationAccount(allocation))
+			}()
+			require.NoError(t, restoredOwner.SetAllocationAccount(allocation))
+			require.NoError(t, restored.(SpillStateCodec).UnmarshalSpillFromReader(
+				bytes.NewReader(spill.Bytes()), mp))
+			results, err := restored.Flush()
+			require.NoError(t, err)
+			defer results[0].Free(mp)
+			visible, err := types.DecodeJson(results[0].GetBytesAt(0)).MarshalJSON()
+			require.NoError(t, err)
+			require.JSONEq(t, tc.want, string(visible))
+		})
+	}
+
+	finishTestAggregateAllocation(t, registry, account)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestAccountedJSONPreflightOneByteShortDoesNotPublish(t *testing.T) {
+	value, err := bytejson.CreateByteJSONWithCheck(map[string]any{
+		"payload": strings.Repeat("x", 4096),
+	})
+	require.NoError(t, err)
+	raw, err := value.Marshal()
+	require.NoError(t, err)
+
+	tests := []struct {
+		name  string
+		typ   types.Type
+		build func(*mpool.MPool) *vector.Vector
+	}{
+		{
+			name: "json", typ: types.T_json.ToType(),
+			build: func(mp *mpool.MPool) *vector.Vector {
+				input := vector.NewVec(types.T_json.ToType())
+				require.NoError(t, vector.AppendBytes(input, raw, false, mp))
+				return input
+			},
+		},
+		{
+			name: "year", typ: types.T_year.ToType(),
+			build: func(mp *mpool.MPool) *vector.Vector {
+				values := slices.Repeat([]types.MoYear{2024}, 256)
+				return buildFixedVec(t, mp, types.T_year.ToType(), values)
+			},
+		},
+		{
+			name: "timestamp session-year boundary", typ: types.T_timestamp.ToTypeWithScale(6),
+			build: func(mp *mpool.MPool) *vector.Vector {
+				value, err := types.ParseTimestamp(time.UTC, "9999-12-31 23:59:59.123456", 6)
+				require.NoError(t, err)
+				return buildFixedVec(t, mp, types.T_timestamp.ToTypeWithScale(6), []types.Timestamp{value})
+			},
+		},
+	}
+
+	run := func(limit uint64, tc struct {
+		name  string
+		typ   types.Type
+		build func(*mpool.MPool) *vector.Vector
+	}) (uint64, uint32, error) {
+		mp := mpool.MustNewZero()
+		registry, err := mpool.NewAllocationAccountRegistry(1, 512)
+		require.NoError(t, err)
+		account, err := registry.Open(limit)
+		require.NoError(t, err)
+		allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{
+			VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4,
+			ArgumentCount: 5, ArgumentArena: 6,
+		})
+		require.NoError(t, err)
+		exec, err := MakeAgg(mp, AggIdOfJsonArrayAgg, false, tc.typ)
+		require.NoError(t, err)
+		ConfigureGroupConcatTimeZone(exec, time.FixedZone("session east", 8*60*60))
+		owner := exec.(AllocationAccountOwner)
+		require.NoError(t, owner.SetAllocationAccount(allocation))
+		require.NoError(t, exec.GroupGrow(1))
+		input := tc.build(mp)
+		groups := slices.Repeat([]uint64{1}, input.Length())
+		err = exec.(BatchCapacityPreflight).PreflightBatchFill(
+			0, groups, []*vector.Vector{input})
+		published := exec.(*jsonArrayAggExec).state[0].argCnt[0]
+		peak := account.Snapshot().Peak
+		input.Free(mp)
+		exec.Free()
+		require.NoError(t, owner.ClearAllocationAccount(allocation))
+		finishTestAggregateAllocation(t, registry, account)
+		require.Zero(t, mp.CurrNB())
+		return peak, published, err
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			peak, published, err := run(128<<20, tc)
+			require.NoError(t, err)
+			require.Zero(t, published)
+			_, published, err = run(peak-1, tc)
+			require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+			require.Zero(t, published)
+		})
+	}
+}
+
+func TestAccountedJSONAggregatePreservesLegacyValueSemantics(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	tests := []struct {
+		name string
+		vec  *vector.Vector
+	}{
+		{
+			name: "decimal64-integer",
+			vec:  buildFixedVec(t, mp, types.New(types.T_decimal64, 18, 0), []types.Decimal64{123}),
+		},
+		{
+			name: "decimal64-fraction",
+			vec:  buildFixedVec(t, mp, types.New(types.T_decimal64, 18, 2), []types.Decimal64{123}),
+		},
+		{
+			name: "decimal128",
+			vec: buildFixedVec(t, mp, types.New(types.T_decimal128, 38, 0),
+				[]types.Decimal128{{B0_63: 456}}),
+		},
+		{
+			name: "decimal256",
+			vec: buildFixedVec(t, mp, types.New(types.T_decimal256, 50, 10),
+				[]types.Decimal256{{B0_63: 456}}),
+		},
+		{
+			name: "date",
+			vec:  buildFixedVec(t, mp, types.T_date.ToType(), []types.Date{types.Date(1)}),
+		},
+		{
+			name: "time",
+			vec:  buildFixedVec(t, mp, types.T_time.ToType(), []types.Time{types.Time(1)}),
+		},
+		{
+			name: "datetime",
+			vec: buildFixedVec(t, mp, types.T_datetime.ToType(),
+				[]types.Datetime{types.Datetime(1)}),
+		},
+		{
+			name: "timestamp",
+			vec: buildFixedVec(t, mp, types.T_timestamp.ToType(),
+				[]types.Timestamp{types.Timestamp(1)}),
+		},
+		{
+			name: "array-float32",
+			vec: func() *vector.Vector {
+				vec, err := vector.NewConstArray(
+					types.T_array_float32.ToType(), []float32{1.5, -2.5}, 1, mp)
+				require.NoError(t, err)
+				return vec
+			}(),
+		},
+		{
+			name: "array-float64",
+			vec: func() *vector.Vector {
+				vec, err := vector.NewConstArray(
+					types.T_array_float64.ToType(), []float64{1.5, -2.5}, 1, mp)
+				require.NoError(t, err)
+				return vec
+			}(),
+		},
+		{
+			name: "array-bf16",
+			vec: func() *vector.Vector {
+				vec, err := vector.NewConstArray(
+					types.T_array_bf16.ToType(), []types.BF16{
+						types.BF16FromFloat32(1.5), types.BF16FromFloat32(-2.5)}, 1, mp)
+				require.NoError(t, err)
+				return vec
+			}(),
+		},
+		{
+			name: "array-float16",
+			vec: func() *vector.Vector {
+				vec, err := vector.NewConstArray(
+					types.T_array_float16.ToType(), []types.Float16{
+						types.Float16FromFloat32(1.5), types.Float16FromFloat32(-2.5)}, 1, mp)
+				require.NoError(t, err)
+				return vec
+			}(),
+		},
+		{
+			name: "array-int8",
+			vec: func() *vector.Vector {
+				vec, err := vector.NewConstArray(
+					types.T_array_int8.ToType(), []int8{-128, 127}, 1, mp)
+				require.NoError(t, err)
+				return vec
+			}(),
+		},
+		{
+			name: "array-uint8",
+			vec: func() *vector.Vector {
+				vec, err := vector.NewConstArray(
+					types.T_array_uint8.ToType(), []uint8{0, 255}, 1, mp)
+				require.NoError(t, err)
+				return vec
+			}(),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			defer test.vec.Free(mp)
+			legacy := runJSONArrayAggregate(t, mp, test.vec, nil)
+
+			registry, account, allocation := newTestAggregateAllocation(t)
+			accounted := runJSONArrayAggregate(t, mp, test.vec, allocation)
+			finishTestAggregateAllocation(t, registry, account)
+
+			require.Equal(t, legacy.Type, accounted.Type)
+			require.Equal(t, legacy.Data, accounted.Data)
+			legacyElement := legacy.GetArrayElem(0)
+			accountedElement := accounted.GetArrayElem(0)
+			require.Equal(t, legacyElement.TYPE(), accountedElement.TYPE())
+			require.Equal(t, legacyElement.Data, accountedElement.Data)
+		})
+	}
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestJSONAggregatesPreserveExactDecimals(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	d64, err := types.ParseDecimal64("0.12345678901234567", 18, 17)
+	require.NoError(t, err)
+	d128, err := types.ParseDecimal128("99999999999999999999999999999999999999", 38, 0)
+	require.NoError(t, err)
+	d256, err := types.ParseDecimal256("1234567890123456789012345678901234567890.1234567890", 50, 10)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name string
+		want string
+		vec  *vector.Vector
+	}{
+		{
+			name: "decimal64 fractional",
+			want: "0.12345678901234567",
+			vec:  buildFixedVec(t, mp, types.New(types.T_decimal64, 18, 17), []types.Decimal64{d64}),
+		},
+		{
+			name: "decimal128 adjacent-value boundary",
+			want: "99999999999999999999999999999999999999",
+			vec:  buildFixedVec(t, mp, types.New(types.T_decimal128, 38, 0), []types.Decimal128{d128}),
+		},
+		{
+			name: "decimal256",
+			want: "1234567890123456789012345678901234567890.1234567890",
+			vec:  buildFixedVec(t, mp, types.New(types.T_decimal256, 50, 10), []types.Decimal256{d256}),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			defer test.vec.Free(mp)
+
+			array := runJSONArrayAggregate(t, mp, test.vec, nil)
+			arrayJSON, err := array.MarshalJSON()
+			require.NoError(t, err)
+			require.Equal(t, "["+test.want+"]", string(arrayJSON))
+			require.Equal(t, "DECIMAL", array.GetArrayElem(0).TYPE())
+
+			object := runJSONObjectAggregate(t, mp, test.vec)
+			objectJSON, err := object.MarshalJSON()
+			require.NoError(t, err)
+			require.Equal(t, "{\"v\": "+test.want+"}", string(objectJSON))
+			require.Equal(t, []byte("v"), object.GetObjectKey(0))
+			require.Equal(t, "DECIMAL", object.GetObjectVal(0).TYPE())
+		})
+	}
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestJSONArrayAggregateSharedTemporalAndYearConversion(t *testing.T) {
+	mp := mpool.MustNewZero()
+	loc := time.FixedZone("aggregate test", 8*60*60)
+	timestamp6, err := types.ParseTimestamp(time.UTC, "2024-02-03 04:05:06.123456", 6)
+	require.NoError(t, err)
+	time0, err := types.ParseTime("04:05:06", 0)
+	require.NoError(t, err)
+	time6, err := types.ParseTime("04:05:06.123456", 6)
+	require.NoError(t, err)
+	datetime0, err := types.ParseDatetime("2024-02-03 04:05:06", 0)
+	require.NoError(t, err)
+	datetime6, err := types.ParseDatetime("2024-02-03 04:05:06.123456", 6)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name     string
+		vec      *vector.Vector
+		wantJSON string
+		wantType string
+	}{
+		{
+			name:     "timestamp session timezone",
+			vec:      buildFixedVec(t, mp, types.New(types.T_timestamp, 0, 6), []types.Timestamp{timestamp6}),
+			wantJSON: `["2024-02-03 12:05:06.123456"]`, wantType: "DATETIME",
+		},
+		{
+			name:     "date retains string identity",
+			vec:      buildFixedVec(t, mp, types.T_date.ToType(), []types.Date{types.DateFromCalendar(2024, 2, 3)}),
+			wantJSON: `["2024-02-03"]`, wantType: "STRING",
+		},
+		{
+			name: "time scale zero",
+			vec: buildFixedVec(t, mp, types.New(types.T_time, 0, 0),
+				[]types.Time{time0}),
+			wantJSON: `["04:05:06.000000"]`, wantType: "TIME",
+		},
+		{
+			name: "time scale six",
+			vec: buildFixedVec(t, mp, types.New(types.T_time, 0, 6),
+				[]types.Time{time6}),
+			wantJSON: `["04:05:06.123456"]`, wantType: "TIME",
+		},
+		{
+			name: "datetime scale zero",
+			vec: buildFixedVec(t, mp, types.New(types.T_datetime, 0, 0),
+				[]types.Datetime{datetime0}),
+			wantJSON: `["2024-02-03 04:05:06.000000"]`, wantType: "DATETIME",
+		},
+		{
+			name: "datetime scale six",
+			vec: buildFixedVec(t, mp, types.New(types.T_datetime, 0, 6),
+				[]types.Datetime{datetime6}),
+			wantJSON: `["2024-02-03 04:05:06.123456"]`, wantType: "DATETIME",
+		},
+		{
+			name:     "year",
+			vec:      buildFixedVec(t, mp, types.T_year.ToType(), []types.MoYear{2024}),
+			wantJSON: `[2024]`, wantType: "INTEGER",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			defer test.vec.Free(mp)
+			regular := runJSONArrayAggregate(t, mp, test.vec, nil, loc)
+
+			registry, account, allocation := newTestAggregateAllocation(t)
+			accounted := runJSONArrayAggregate(t, mp, test.vec, allocation, loc)
+			finishTestAggregateAllocation(t, registry, account)
+
+			require.Equal(t, regular.Type, accounted.Type)
+			require.Equal(t, regular.Data, accounted.Data)
+			require.JSONEq(t, test.wantJSON, regular.String())
+			require.Equal(t, test.wantType, regular.GetArrayElem(0).TYPE())
+
+			size, err := jsonArrayAggregateValueSize(test.vec, 0, loc)
+			require.NoError(t, err)
+			encoded, err := appendJSONArrayAggregateValue(make([]byte, 0, size), test.vec, 0, loc)
+			require.NoError(t, err)
+			require.Len(t, encoded, size)
+			require.Equal(t, regular.GetArrayElem(0), types.DecodeJson(encoded))
+		})
+	}
+	require.Zero(t, mp.CurrNB())
+}
+
+func runJSONArrayAggregate(
+	t *testing.T,
+	mp *mpool.MPool,
+	input *vector.Vector,
+	allocation *AllocationAccount,
+	locations ...*time.Location,
+) bytejson.ByteJson {
+	t.Helper()
+	exec, err := MakeAgg(mp, AggIdOfJsonArrayAgg, false, *input.GetType())
+	require.NoError(t, err)
+	if len(locations) > 0 {
+		ConfigureGroupConcatTimeZone(exec, locations[0])
+	}
+	var owner AllocationAccountOwner
+	if allocation != nil {
+		owner = exec.(AllocationAccountOwner)
+		require.NoError(t, owner.SetAllocationAccount(allocation))
+	}
+	require.NoError(t, exec.GroupGrow(1))
+	groups := []uint64{1}
+	if allocation != nil {
+		require.NoError(t, exec.(BatchCapacityPreflight).PreflightBatchFill(
+			0, groups, []*vector.Vector{input}))
+	}
+	require.NoError(t, exec.BatchFill(0, groups, []*vector.Vector{input}))
+	results, err := exec.Flush()
+	require.NoError(t, err)
+	data := append([]byte(nil), results[0].GetBytesAt(0)...)
+	result := types.DecodeJson(data)
+	results[0].Free(mp)
+	exec.Free()
+	if allocation != nil {
+		require.NoError(t, owner.ClearAllocationAccount(allocation))
+	}
+	return result
+}
+
+func runJSONObjectAggregate(t *testing.T, mp *mpool.MPool, input *vector.Vector) bytejson.ByteJson {
+	t.Helper()
+	exec, err := MakeAgg(
+		mp,
+		AggIdOfJsonObjectAgg,
+		false,
+		types.T_varchar.ToType(),
+		*input.GetType(),
+	)
+	require.NoError(t, err)
+	require.NoError(t, exec.GroupGrow(1))
+	keys := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"v"})
+	require.NoError(t, exec.BatchFill(0, []uint64{1}, []*vector.Vector{keys, input}))
+	results, err := exec.Flush()
+	require.NoError(t, err)
+	result := types.DecodeJson(append([]byte(nil), results[0].GetBytesAt(0)...))
+	results[0].Free(mp)
+	keys.Free(mp)
+	exec.Free()
+	return result
+}
 
 func buildFixedVec[T types.FixedSizeTExceptStrType](t *testing.T, mp *mpool.MPool, typ types.Type, vals []T) *vector.Vector {
 	t.Helper()
@@ -142,8 +671,8 @@ func TestJsonObjectAggPreAllocate(t *testing.T) {
 	}
 	exec := newJsonObjectAggExec(mg, info)
 	require.NoError(t, exec.PreAllocateGroups(2))
-	require.Len(t, exec.groups, 2)
 	require.NoError(t, exec.GroupGrow(1))
+	require.Equal(t, 1, exec.GetNumGroups())
 
 	keyVec := fromValueListToVector(mg, types.T_varchar.ToType(), []string{"k"}, nil)
 	valVec := fromValueListToVector(mg, types.T_varchar.ToType(), []string{"v"}, nil)
@@ -172,9 +701,9 @@ func TestBuildValueByteJsonCoversTypes(t *testing.T) {
 		{"decimal64", buildFixedVec(t, mg, types.T_decimal64.ToType(), []types.Decimal64{123}), 0, float64(123), ""},
 		{"decimal128", buildFixedVec(t, mg, types.T_decimal128.ToType(), []types.Decimal128{{B0_63: 456}}), 0, float64(456), ""},
 		{"date", buildFixedVec(t, mg, types.T_date.ToType(), []types.Date{types.Date(1)}), 0, "0001-01-02", ""},
-		{"time", buildFixedVec(t, mg, types.T_time.ToType(), []types.Time{types.Time(1)}), 0, "00:00:00", ""},
-		{"datetime", buildFixedVec(t, mg, types.T_datetime.ToType(), []types.Datetime{types.Datetime(1)}), 0, "0001-01-01 00:00:00", ""},
-		{"timestamp", buildFixedVec(t, mg, types.T_timestamp.ToType(), []types.Timestamp{types.Timestamp(1)}), 0, "0001-01-01 00:00:00.000001 UTC", ""},
+		{"time", buildFixedVec(t, mg, types.T_time.ToType(), []types.Time{types.Time(1)}), 0, "00:00:00.000001", ""},
+		{"datetime", buildFixedVec(t, mg, types.T_datetime.ToType(), []types.Datetime{types.Datetime(1)}), 0, "0001-01-01 00:00:00.000001", ""},
+		{"timestamp", buildFixedVec(t, mg, types.T_timestamp.ToType(), []types.Timestamp{types.Timestamp(1)}), 0, "0001-01-01 00:00:00.000001", ""},
 		{"string", buildVarlenVec(t, mg, types.T_varchar.ToType(), []string{"hi"}), 0, "hi", ""},
 		{"array-f32", func() *vector.Vector {
 			v := vector.NewVec(types.T_array_float32.ToType())
@@ -204,14 +733,43 @@ func TestBuildValueByteJsonCoversTypes(t *testing.T) {
 			require.NoError(t, vector.AppendBytes(v, raw, false, mg))
 			return v
 		}(), 0, map[string]any{"a": float64(1)}, ""},
+		// Narrow vector element types. json_arrayagg on such a column fell to
+		// the default arm and failed with "unsupported type for json aggregate"
+		// while the vecf32 column beside it worked. All four widen to JSON
+		// numbers, exactly as the vecf32 arm does — the point of the fixtures
+		// below is that a WRONG element type is visible in the value, not just
+		// in the rounding: -128/127 for int8 and 0/255 for uint8 alias the same
+		// two bytes, so a shared arm would swap them.
+		{"array_bf16", func() *vector.Vector {
+			v := vector.NewVec(types.T_array_bf16.ToType())
+			require.NoError(t, vector.AppendArrayList[types.BF16](v, [][]types.BF16{
+				{types.BF16FromFloat32(1.5), types.BF16FromFloat32(-2.5)}}, nil, mg))
+			return v
+		}(), 0, []any{1.5, -2.5}, ""},
+		{"array_float16", func() *vector.Vector {
+			v := vector.NewVec(types.T_array_float16.ToType())
+			require.NoError(t, vector.AppendArrayList[types.Float16](v, [][]types.Float16{
+				{types.Float16FromFloat32(1.5), types.Float16FromFloat32(-2.5)}}, nil, mg))
+			return v
+		}(), 0, []any{1.5, -2.5}, ""},
+		{"array_int8", func() *vector.Vector {
+			v := vector.NewVec(types.T_array_int8.ToType())
+			require.NoError(t, vector.AppendArrayList[int8](v, [][]int8{{-128, 127}}, nil, mg))
+			return v
+		}(), 0, []any{float64(-128), float64(127)}, ""},
+		{"array_uint8", func() *vector.Vector {
+			v := vector.NewVec(types.T_array_uint8.ToType())
+			require.NoError(t, vector.AppendArrayList[uint8](v, [][]uint8{{0, 255}}, nil, mg))
+			return v
+		}(), 0, []any{float64(0), float64(255)}, ""},
 		{"binary-error", buildVarlenVec(t, mg, types.T_binary.ToType(), []string{"a"}), 0, "", "binary data not supported"},
-		{"unsupported", buildFixedVec(t, mg, types.T_decimal256.ToType(), []types.Decimal256{{}}), 0, "", "unsupported type"},
+		{"decimal256", buildFixedVec(t, mg, types.T_decimal256.ToType(), []types.Decimal256{{}}), 0, float64(0), ""},
 	}
 
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
 			defer tt.vec.Free(mg)
-			res, err := buildValueByteJson(tt.vec, tt.row)
+			res, err := buildValueByteJsonWithLocation(tt.vec, tt.row, time.UTC)
 			if tt.wantErr != "" {
 				require.Error(t, err)
 				require.Contains(t, err.Error(), tt.wantErr)
@@ -227,12 +785,7 @@ func TestBuildValueByteJsonCoversTypes(t *testing.T) {
 	}
 }
 
-func TestJsonAggRegistersAndHelpers(t *testing.T) {
-	RegisterJsonArrayAgg(101)
-	RegisterJsonObjectAgg(202)
-	require.Equal(t, int64(101), AggIdOfJsonArrayAgg)
-	require.Equal(t, int64(202), AggIdOfJsonObjectAgg)
-
+func TestJsonAggHelpers(t *testing.T) {
 	exec := newJsonArrayAggExec(mpool.MustNewZero(), multiAggInfo{
 		aggID:     0,
 		distinct:  false,
@@ -241,7 +794,7 @@ func TestJsonAggRegistersAndHelpers(t *testing.T) {
 		emptyNull: true,
 	})
 	require.NoError(t, exec.GroupGrow(1))
-	require.Len(t, exec.groups, 1)
+	require.Equal(t, 1, exec.GetNumGroups())
 	exec.Free()
 }
 
@@ -372,7 +925,7 @@ func TestJsonAggNonDistinctWrapperPaths(t *testing.T) {
 	arrayInfo := multiAggInfo{
 		aggID:     48,
 		distinct:  false,
-		argTypes:  []types.Type{types.T_int64.ToType()},
+		argTypes:  []types.Type{types.T_year.ToType()},
 		retType:   types.T_json.ToType(),
 		emptyNull: true,
 	}
@@ -381,10 +934,14 @@ func TestJsonAggNonDistinctWrapperPaths(t *testing.T) {
 	require.NoError(t, leftArray.PreAllocateGroups(1))
 	require.NoError(t, leftArray.GroupGrow(1))
 	require.NoError(t, rightArray.GroupGrow(1))
-	ints := buildFixedVec(t, mg, types.T_int64.ToType(), []int64{1, 2})
-	require.NoError(t, leftArray.Fill(0, 0, []*vector.Vector{ints}))
-	require.NoError(t, rightArray.Fill(0, 1, []*vector.Vector{ints}))
+	years := buildFixedVec(t, mg, types.T_year.ToType(), []types.MoYear{2024, 2025})
+	require.NoError(t, leftArray.Fill(0, 0, []*vector.Vector{years}))
+	require.NoError(t, rightArray.Fill(0, 1, []*vector.Vector{years}))
 	require.NoError(t, leftArray.Merge(rightArray, 0, 0))
+	arrayResults, err := leftArray.Flush()
+	require.NoError(t, err)
+	require.JSONEq(t, `[2024,2025]`, types.DecodeJson(arrayResults[0].GetBytesAt(0)).String())
+	arrayResults[0].Free(mg)
 
 	objectInfo := multiAggInfo{
 		aggID:     49,
@@ -404,7 +961,7 @@ func TestJsonAggNonDistinctWrapperPaths(t *testing.T) {
 	require.NoError(t, rightObject.Fill(0, 1, []*vector.Vector{keys, vals}))
 	require.NoError(t, leftObject.Merge(rightObject, 0, 0))
 
-	ints.Free(mg)
+	years.Free(mg)
 	keys.Free(mg)
 	vals.Free(mg)
 	leftArray.Free()

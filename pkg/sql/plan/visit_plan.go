@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
@@ -111,6 +112,47 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 		}
 	}
 
+	if scan := node.VectorIndexScan; scan != nil {
+		if scan.QueryVector != nil {
+			scan.QueryVector, err = rule.ApplyExpr(scan.QueryVector)
+			if err != nil {
+				return err
+			}
+		}
+		if scan.CandidateLimit != nil {
+			scan.CandidateLimit, err = rule.ApplyExpr(scan.CandidateLimit)
+			if err != nil {
+				return err
+			}
+		}
+		if scan.FirstRoundLimit != nil {
+			scan.FirstRoundLimit, err = rule.ApplyExpr(scan.FirstRoundLimit)
+			if err != nil {
+				return err
+			}
+		}
+		for i := range scan.PreFilters {
+			scan.PreFilters[i], err = rule.ApplyExpr(scan.PreFilters[i])
+			if err != nil {
+				return err
+			}
+		}
+		if scan.DistanceRange != nil {
+			if scan.DistanceRange.LowerBound != nil {
+				scan.DistanceRange.LowerBound, err = rule.ApplyExpr(scan.DistanceRange.LowerBound)
+				if err != nil {
+					return err
+				}
+			}
+			if scan.DistanceRange.UpperBound != nil {
+				scan.DistanceRange.UpperBound, err = rule.ApplyExpr(scan.DistanceRange.UpperBound)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+
 	for i := range node.OnList {
 		node.OnList[i], err = rule.ApplyExpr(node.OnList[i])
 		if err != nil {
@@ -125,8 +167,50 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 		}
 	}
 
+	for i := range node.AggList {
+		node.AggList[i], err = rule.ApplyExpr(node.AggList[i])
+		if err != nil {
+			return err
+		}
+	}
+
+	for i := range node.GroupBy {
+		node.GroupBy[i], err = rule.ApplyExpr(node.GroupBy[i])
+		if err != nil {
+			return err
+		}
+	}
+
+	for i := range node.PhysicalEqualityKeyList {
+		node.PhysicalEqualityKeyList[i], err = rule.ApplyExpr(node.PhysicalEqualityKeyList[i])
+		if err != nil {
+			return err
+		}
+	}
+
 	for i := range node.OrderBy {
 		node.OrderBy[i].Expr, err = rule.ApplyExpr(node.OrderBy[i].Expr)
+		if err != nil {
+			return err
+		}
+	}
+
+	for i := range node.TimeWindowPartitionBy {
+		node.TimeWindowPartitionBy[i], err = rule.ApplyExpr(node.TimeWindowPartitionBy[i])
+		if err != nil {
+			return err
+		}
+	}
+
+	if node.GapFillStart != nil {
+		node.GapFillStart, err = rule.ApplyExpr(node.GapFillStart)
+		if err != nil {
+			return err
+		}
+	}
+
+	if node.GapFillEnd != nil {
+		node.GapFillEnd, err = rule.ApplyExpr(node.GapFillEnd)
 		if err != nil {
 			return err
 		}
@@ -136,6 +220,37 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 		node.BlockFilterList[i], err = rule.ApplyExpr(node.BlockFilterList[i])
 		if err != nil {
 			return err
+		}
+	}
+
+	// LockRows is evaluated by LOCK_OP before the writer consumes the row
+	// batch. Prepared DML predicates can place a parameter-derived primary-key
+	// expression here; it must receive the same execute-time coercion as the
+	// scan filter or the lock path can still run the stale strict cast.
+	for _, target := range node.LockTargets {
+		if target == nil {
+			continue
+		}
+		if normalizer, ok := rule.(interface {
+			NormalizePreparedLockRows(*Expr, plan.Type) (*Expr, error)
+		}); ok {
+			if target.LockRows != nil {
+				target.LockRows, err = rule.ApplyExpr(target.LockRows)
+				if err != nil {
+					return err
+				}
+				rewrittenLockRows := target.LockRows
+				target.LockRows, err = normalizer.NormalizePreparedLockRows(
+					rewrittenLockRows, target.PrimaryColTyp)
+				if err != nil {
+					return err
+				}
+			}
+		} else if target.LockRows != nil {
+			target.LockRows, err = rule.ApplyExpr(target.LockRows)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -153,6 +268,13 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 		}
 	}
 
+	for i := range node.WinSpecList {
+		node.WinSpecList[i], err = rule.ApplyExpr(node.WinSpecList[i])
+		if err != nil {
+			return err
+		}
+	}
+
 	typ := types.New(types.T_varchar, 65000, 0)
 	toTyp := makePlan2Type(&typ)
 	targetTyp := &plan.Expr{
@@ -163,10 +285,33 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 	}
 
 	applyAndResetType := func(e *Expr) (*Expr, error) {
+		preserveAssignmentCast := false
+		if preserver, ok := rule.(interface {
+			PreserveAssignmentCast(*Expr) bool
+		}); ok {
+			preserveAssignmentCast = preserver.PreserveAssignmentCast(e)
+		}
 		oldType := e.Typ
 		e, err = rule.ApplyExpr(e)
 		if err != nil {
 			return nil, err
+		}
+		// Some prepared DML expressions are the positional values consumed by
+		// the write operator.  A runtime specialization may replace nested
+		// parameters in those expressions, but it must not rebuild the outer
+		// assignment cast: that cast carries the target-column layout and SQL
+		// mode semantics for the write path.
+		if preserveAssignmentCast {
+			return e, nil
+		}
+		// This visitor owns type restoration, not assignment semantics.  A
+		// same-physical-type TIME or constrained TINYTEXT expression can still
+		// require an assignment cast at the writer boundary, but adding it to an
+		// unchanged intermediate projection breaks operators such as JOIN whose
+		// result list is a positional column mapping.  The binder already owns the
+		// real DML assignment cast; only restore a type changed by the visit rule.
+		if makeTypeByPlan2Expr(e).Eq(makeTypeByPlan2Type(oldType)) {
+			return e, nil
 		}
 		if (oldType.Id == int32(types.T_float32) || oldType.Id == int32(types.T_float64)) && (e.Typ.Id == int32(types.T_decimal64) || e.Typ.Id == int32(types.T_decimal128)) {
 			e, err = forceCastExpr2(ctx, e, typ, targetTyp)
@@ -235,5 +380,73 @@ func (vq *VisitPlan) Visit(ctx context.Context) error {
 
 	}
 
+	return nil
+}
+
+// visitMissingNodeExprs applies expression rules to node fields that VisitPlan
+// does not currently cover. Keeping this pass separate makes callers safe both
+// before and after those fields are added to the generic visitor: parameter
+// collection is map-backed, and ordinal normalization tracks seen ParamRefs.
+func visitMissingNodeExprs(
+	qry *Query,
+	roots []int32,
+	rules []VisitPlanRule,
+) error {
+	visited := make(map[int32]struct{})
+	var visitNode func(int32) error
+	visitNode = func(nodeID int32) error {
+		if _, ok := visited[nodeID]; ok {
+			return nil
+		}
+		if nodeID < 0 || int(nodeID) >= len(qry.Nodes) {
+			return moerr.NewInternalErrorNoCtx("invalid query node id")
+		}
+		visited[nodeID] = struct{}{}
+		node := qry.Nodes[nodeID]
+		for _, child := range node.Children {
+			if err := visitNode(child); err != nil {
+				return err
+			}
+		}
+		for _, rule := range rules {
+			if !rule.IsApplyExpr() {
+				continue
+			}
+			for i := range node.GroupBy {
+				var err error
+				node.GroupBy[i], err = rule.ApplyExpr(node.GroupBy[i])
+				if err != nil {
+					return err
+				}
+			}
+			for i := range node.PhysicalEqualityKeyList {
+				var err error
+				node.PhysicalEqualityKeyList[i], err = rule.ApplyExpr(node.PhysicalEqualityKeyList[i])
+				if err != nil {
+					return err
+				}
+			}
+			for i := range node.AggList {
+				var err error
+				node.AggList[i], err = rule.ApplyExpr(node.AggList[i])
+				if err != nil {
+					return err
+				}
+			}
+			for i := range node.WinSpecList {
+				var err error
+				node.WinSpecList[i], err = rule.ApplyExpr(node.WinSpecList[i])
+				if err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	for _, root := range roots {
+		if err := visitNode(root); err != nil {
+			return err
+		}
+	}
 	return nil
 }

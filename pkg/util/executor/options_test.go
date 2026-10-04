@@ -16,7 +16,10 @@ package executor
 
 import (
 	"testing"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/stretchr/testify/require"
 )
 
@@ -30,4 +33,70 @@ func TestOptionsStreaming(t *testing.T) {
 	require.True(t, ret == ch)
 	require.True(t, streaming)
 	require.True(t, err_chan == errors)
+}
+
+func TestOptionsLockWaitTimeout(t *testing.T) {
+	var opts Options
+	require.False(t, opts.HasLockWaitTimeout())
+
+	opts = opts.WithLockWaitTimeout(1500 * time.Millisecond)
+	require.True(t, opts.HasLockWaitTimeout())
+	require.Equal(t, 1500*time.Millisecond, opts.LockWaitTimeout())
+	require.Len(t, opts.ExtraTxnOptions(), 1)
+
+	opts = opts.WithLockWaitTimeout(0)
+	require.True(t, opts.HasLockWaitTimeout())
+	require.Zero(t, opts.LockWaitTimeout())
+	require.Len(t, opts.ExtraTxnOptions(), 2)
+}
+
+func TestOptionsTxnIsolation(t *testing.T) {
+	var opts Options
+	require.False(t, opts.HasTxnIsolation())
+
+	opts = opts.WithTxnIsolation(txn.TxnIsolation_SI)
+	require.True(t, opts.HasTxnIsolation())
+	require.Equal(t, txn.TxnIsolation_SI, opts.TxnIsolation())
+	require.Len(t, opts.ExtraTxnOptions(), 1)
+}
+
+func TestOptionsTxnMode(t *testing.T) {
+	var opts Options
+	require.False(t, opts.HasTxnMode())
+
+	opts = opts.WithTxnMode(txn.TxnMode_Pessimistic)
+	require.True(t, opts.HasTxnMode())
+	require.Equal(t, txn.TxnMode_Pessimistic, opts.TxnMode())
+	require.Len(t, opts.ExtraTxnOptions(), 1)
+}
+
+func TestStatementOptionParamsPreserveNulls(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := StatementOption{}.
+		WithParamsAndNulls([]string{"7", "", "value"}, []bool{false, true, false}).
+		Params(mp)
+	defer vec.Free(mp)
+
+	require.Equal(t, 3, vec.Length())
+	require.Equal(t, []byte("7"), vec.GetRawBytesAt(0))
+	require.True(t, vec.IsNull(1))
+	require.Equal(t, []byte("value"), vec.GetRawBytesAt(2))
+}
+
+// WithOptimizerHints carries a per-statement optimizer_hints string (same format as the global
+// variable). The internal SQL executor bridges it onto the execution context; the planner applies
+// it. Value semantics: With* returns a new option and never mutates the receiver.
+func TestStatementOptionOptimizerHints(t *testing.T) {
+	var base StatementOption
+	require.Equal(t, "", base.OptimizerHints(), "default is empty")
+
+	set := base.WithOptimizerHints("applyIndices=1")
+	require.Equal(t, "applyIndices=1", set.OptimizerHints())
+	require.Equal(t, "", base.OptimizerHints(), "receiver must not be mutated")
+
+	multi := base.WithOptimizerHints("applyIndices=1,aggPushDown=1")
+	require.Equal(t, "applyIndices=1,aggPushDown=1", multi.OptimizerHints())
+
+	// Overwriting replaces rather than appends.
+	require.Equal(t, "x=1", set.WithOptimizerHints("x=1").OptimizerHints())
 }

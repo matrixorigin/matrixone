@@ -16,12 +16,15 @@ package compile
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -33,18 +36,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
@@ -53,18 +61,111 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/timewin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/testutil/testengine"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func TestRefreshGroupConcatMaxLenForPreparedCompileReuse(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	sessionMaxLen := uint64(5)
+	proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+		require.Equal(t, "group_concat_max_len", name)
+		require.True(t, system)
+		require.False(t, global)
+		return sessionMaxLen, nil
+	})
+
+	newGroupConcatExpr := func(separator string) aggexec.AggFuncExecExpression {
+		return aggexec.MakeAggFunctionExpression(
+			aggexec.AggIdOfGroupConcat,
+			false,
+			nil,
+			aggexec.EncodeGroupConcatConfig(separator, 1024))
+	}
+	orderConfig := []byte{1, 2, 3}
+	newOrderedGroupConcatExpr := func() aggexec.AggFuncExecExpression {
+		return aggexec.MakeAggFunctionExpression(
+			aggexec.AggIdOfGroupConcat,
+			false,
+			nil,
+			aggexec.EncodeGroupConcatOrderedConfig(orderConfig, 1024),
+			plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER)
+	}
+	groupArg := group.NewArgument()
+	groupArg.Aggs = []aggexec.AggFuncExecExpression{
+		newGroupConcatExpr(""),
+		newOrderedGroupConcatExpr(),
+	}
+	mergeGroupArg := group.NewArgumentMergeGroup()
+	mergeGroupArg.Aggs = []aggexec.AggFuncExecExpression{newGroupConcatExpr("|")}
+	windowArg := window.NewArgument()
+	windowArg.Aggs = []aggexec.AggFuncExecExpression{newGroupConcatExpr(",")}
+	timeArg := timewin.NewArgument()
+	timeArg.Aggs = []aggexec.AggFuncExecExpression{newGroupConcatExpr(";")}
+	scopes := []*Scope{
+		{RootOp: groupArg},
+		{RootOp: timeArg},
+		{RootOp: mergeGroupArg},
+		{RootOp: windowArg},
+	}
+
+	require.NoError(t, refreshGroupConcatMaxLen(scopes, proc, 1024))
+	// The prepare-time 1024-byte value is a floor. Lowering the session value
+	// for EXECUTE must not make the prepared plan truncate at 5 bytes.
+	require.Equal(t, aggexec.EncodeGroupConcatConfig("", 1024), groupArg.Aggs[0].GetExtraConfig())
+	require.Equal(t, aggexec.EncodeGroupConcatOrderedConfig(orderConfig, 1024), groupArg.Aggs[1].GetExtraConfig())
+	require.Equal(t, aggexec.EncodeGroupConcatConfig("|", 1024), mergeGroupArg.Aggs[0].GetExtraConfig())
+	require.Equal(t, aggexec.EncodeGroupConcatConfig(",", 1024), windowArg.Aggs[0].GetExtraConfig())
+	require.Equal(t, aggexec.EncodeGroupConcatConfig(";", 1024), timeArg.Aggs[0].GetExtraConfig())
+
+	sessionMaxLen = 1024
+	require.NoError(t, refreshGroupConcatMaxLen(scopes, proc, 1024))
+	require.Equal(t, aggexec.EncodeGroupConcatConfig("", 1024), groupArg.Aggs[0].GetExtraConfig())
+	require.Equal(t, aggexec.EncodeGroupConcatOrderedConfig(orderConfig, 1024), groupArg.Aggs[1].GetExtraConfig())
+	require.Equal(t, aggexec.EncodeGroupConcatConfig("|", 1024), mergeGroupArg.Aggs[0].GetExtraConfig())
+	require.Equal(t, aggexec.EncodeGroupConcatConfig(",", 1024), windowArg.Aggs[0].GetExtraConfig())
+	require.Equal(t, aggexec.EncodeGroupConcatConfig(";", 1024), timeArg.Aggs[0].GetExtraConfig())
+
+	// A prepared plan with a smaller floor expands for a larger execution-time
+	// value, then returns to its original floor when the session value drops.
+	lowFloor := group.NewArgument()
+	lowFloor.Aggs = []aggexec.AggFuncExecExpression{
+		aggexec.MakeAggFunctionExpression(
+			aggexec.AggIdOfGroupConcat,
+			false,
+			nil,
+			aggexec.EncodeGroupConcatConfig("", 5)),
+	}
+	lowFloorScopes := []*Scope{{RootOp: lowFloor}}
+	sessionMaxLen = 1024
+	require.NoError(t, refreshGroupConcatMaxLen(lowFloorScopes, proc, 5))
+	require.Equal(t, aggexec.EncodeGroupConcatConfig("", 1024), lowFloor.Aggs[0].GetExtraConfig())
+	sessionMaxLen = 5
+	require.NoError(t, refreshGroupConcatMaxLen(lowFloorScopes, proc, 5))
+	require.Equal(t, aggexec.EncodeGroupConcatConfig("", 5), lowFloor.Aggs[0].GetExtraConfig())
+
+	groupArg.Release()
+	mergeGroupArg.Release()
+	windowArg.Release()
+	lowFloor.Release()
+	timeArg.Release()
+}
+
+func GetFilePath() string {
+	dir, _ := os.Getwd()
+	return dir
+}
 
 func checkSrcOpsWithDst(srcRoot vm.Operator, dstRoot vm.Operator) bool {
 	if srcRoot == nil && dstRoot == nil {
@@ -90,13 +191,208 @@ func checkSrcOpsWithDst(srcRoot vm.Operator, dstRoot vm.Operator) bool {
 	return true
 }
 
+func TestCompileProjectionUserLevelLockRunsOnCoordinator(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.addr = "cn1:6001"
+	testCompile.anal = &AnalyzeModule{curNodeIdx: 1, isFirst: true}
+
+	node := &plan.Node{
+		ProjectList: []*plan.Expr{makeUserLevelLockExpr(function.GET_LOCK)},
+	}
+	ss := []*Scope{
+		{Magic: Remote, Proc: testCompile.proc, NodeInfo: engine.Node{Addr: "cn2:6001", Mcpu: 1}, RootOp: table_scan.NewArgument()},
+		{Magic: Remote, Proc: testCompile.proc, NodeInfo: engine.Node{Addr: "cn3:6001", Mcpu: 1}, RootOp: table_scan.NewArgument()},
+	}
+
+	out := testCompile.compileProjection(node, ss)
+	require.Len(t, out, 1)
+	require.IsType(t, &projection.Projection{}, out[0].RootOp)
+	require.IsType(t, &merge.Merge{}, out[0].RootOp.GetOperatorBase().GetChildren(0))
+	for _, scanScope := range ss {
+		require.IsType(t, &connector.Connector{}, scanScope.RootOp)
+		require.Nil(t, scanScope.RootOp.GetOperatorBase().GetChildren(0).(*table_scan.TableScan).ProjectList)
+	}
+}
+
+func TestCompileProjectionFoundRowsRunsOnCoordinator(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.addr = "cn1:6001"
+	testCompile.anal = &AnalyzeModule{curNodeIdx: 1, isFirst: true}
+
+	node := &plan.Node{ProjectList: []*plan.Expr{{
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: int64(function.FOUND_ROWS) << 32},
+		}},
+	}}}
+	scanScope := &Scope{
+		Magic:    Remote,
+		Proc:     testCompile.proc,
+		NodeInfo: engine.Node{Addr: "cn2:6001", Mcpu: 1},
+		RootOp:   table_scan.NewArgument(),
+	}
+
+	out := testCompile.compileProjection(node, []*Scope{scanScope})
+	require.Len(t, out, 1)
+	require.IsType(t, &projection.Projection{}, out[0].RootOp)
+	require.IsType(t, &merge.Merge{}, out[0].RootOp.GetOperatorBase().GetChildren(0))
+	require.IsType(t, &connector.Connector{}, scanScope.RootOp)
+	require.Nil(t, scanScope.RootOp.GetOperatorBase().GetChildren(0).(*table_scan.TableScan).ProjectList)
+}
+
+func TestCompileRestrictUserLevelLockRunsOnCoordinator(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.addr = "cn1:6001"
+	testCompile.anal = &AnalyzeModule{curNodeIdx: 1, isFirst: true}
+
+	node := &plan.Node{
+		FilterList: []*plan.Expr{makeUserLevelLockExpr(function.GET_LOCK)},
+	}
+	ss := []*Scope{
+		{Magic: Remote, Proc: testCompile.proc, NodeInfo: engine.Node{Addr: "cn2:6001", Mcpu: 1}, RootOp: table_scan.NewArgument()},
+		{Magic: Remote, Proc: testCompile.proc, NodeInfo: engine.Node{Addr: "cn3:6001", Mcpu: 1}, RootOp: table_scan.NewArgument()},
+	}
+
+	out := testCompile.compileRestrict(node, ss)
+	require.Len(t, out, 1)
+	require.IsType(t, &filter.Filter{}, out[0].RootOp)
+	require.IsType(t, &merge.Merge{}, out[0].RootOp.GetOperatorBase().GetChildren(0))
+	for _, scanScope := range ss {
+		require.IsType(t, &connector.Connector{}, scanScope.RootOp)
+		require.Nil(t, scanScope.RootOp.GetOperatorBase().GetChildren(0).(*table_scan.TableScan).FilterExprs)
+	}
+}
+
+func TestUserLevelLockNodeExpressionScannerCoversSortAndWindow(t *testing.T) {
+	require.True(t, nodeHasUserLevelLockFunction(&plan.Node{
+		OrderBy: []*plan.OrderBySpec{{Expr: makeUserLevelLockExpr(function.GET_LOCK)}},
+	}))
+	require.True(t, nodeHasUserLevelLockFunction(&plan.Node{
+		WinSpecList: []*plan.Expr{{
+			Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				PartitionBy: []*plan.Expr{makeUserLevelLockExpr(function.GET_LOCK)},
+				Frame: &plan.FrameClause{
+					Start: &plan.FrameBound{Val: makeUserLevelLockExpr(function.GET_LOCK)},
+				},
+			}},
+		}},
+	}))
+}
+
+func TestCompileProjectionUserLevelLockSingleRemoteScopeMergesToCoordinator(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.addr = "cn1:6001"
+	testCompile.anal = &AnalyzeModule{curNodeIdx: 1, isFirst: true}
+
+	node := &plan.Node{
+		ProjectList: []*plan.Expr{{
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{Obj: int64(function.RELEASE_ALL_LOCKS) << 32},
+			}},
+		}},
+	}
+	scanScope := &Scope{
+		Magic:    Remote,
+		Proc:     testCompile.proc,
+		NodeInfo: engine.Node{Addr: "cn2:6001", Mcpu: 1},
+		RootOp:   table_scan.NewArgument(),
+	}
+
+	out := testCompile.compileProjection(node, []*Scope{scanScope})
+	require.Len(t, out, 1)
+	require.IsType(t, &projection.Projection{}, out[0].RootOp)
+	require.IsType(t, &merge.Merge{}, out[0].RootOp.GetOperatorBase().GetChildren(0))
+	require.IsType(t, &connector.Connector{}, scanScope.RootOp)
+	require.Nil(t, scanScope.RootOp.GetOperatorBase().GetChildren(0).(*table_scan.TableScan).ProjectList)
+}
+
+func TestCompileTableScanOrdinaryFilterIsInlineOnly(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.anal = &AnalyzeModule{curNodeIdx: 1, isFirst: true}
+	scope := generateScopeWithRootOperator(testCompile.proc, []vm.OpType{vm.TableScan})
+	node := makeOrdinaryTableScanFilterNode()
+
+	out := testCompile.compileTableScanFiltersAndProjection(node, []*Scope{scope})
+
+	require.Len(t, out, 1)
+	require.NoError(t, checkScopeWithExpectedList(out[0], []vm.OpType{vm.TableScan}))
+	ts := out[0].RootOp.(*table_scan.TableScan)
+	require.NotEmpty(t, ts.FilterExprs)
+	require.NotEmpty(t, ts.ProjectList)
+}
+
+func TestCompileTableScanOrdinaryFilterFallsBackWhenNotEmbedded(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.addr = "cn1:6001"
+	testCompile.anal = &AnalyzeModule{curNodeIdx: 1, isFirst: true}
+	scanScope := &Scope{
+		Magic:    Remote,
+		Proc:     testCompile.proc,
+		NodeInfo: engine.Node{Addr: "cn2:6001", Mcpu: 1},
+		RootOp:   table_scan.NewArgument(),
+	}
+	node := makeOrdinaryTableScanFilterNode()
+	node.ProjectList = []*plan.Expr{makeUserLevelLockExpr(function.GET_LOCK)}
+
+	out := testCompile.compileTableScanFiltersAndProjection(node, []*Scope{scanScope})
+
+	require.Len(t, out, 1)
+	require.IsType(t, &projection.Projection{}, out[0].RootOp)
+	require.IsType(t, &filter.Filter{}, out[0].RootOp.GetOperatorBase().GetChildren(0))
+	require.IsType(t, &merge.Merge{}, out[0].RootOp.GetOperatorBase().GetChildren(0).GetOperatorBase().GetChildren(0))
+	require.IsType(t, &connector.Connector{}, scanScope.RootOp)
+	require.Nil(t, scanScope.RootOp.GetOperatorBase().GetChildren(0).(*table_scan.TableScan).FilterExprs)
+}
+
+func BenchmarkCompileTableScanOrdinaryFilterInlineOnly(b *testing.B) {
+	proc := testutil.NewProcess(b)
+	node := makeOrdinaryTableScanFilterNode()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		c := &Compile{
+			proc: proc,
+			anal: &AnalyzeModule{curNodeIdx: 1, isFirst: true},
+		}
+		scope := generateScopeWithRootOperator(proc, []vm.OpType{vm.TableScan})
+		out := c.compileTableScanFiltersAndProjection(node, []*Scope{scope})
+		if len(out) != 1 {
+			b.Fatalf("expected one scope, got %d", len(out))
+		}
+		if _, ok := out[0].RootOp.(*table_scan.TableScan); !ok {
+			b.Fatalf("ordinary table scan filter should stay inline, got %T", out[0].RootOp)
+		}
+	}
+}
+
+func makeOrdinaryTableScanFilterNode() *plan.Node {
+	return &plan.Node{
+		FilterList: []*plan.Expr{{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_Bval{Bval: true},
+		}}}},
+		ProjectList: []*plan.Expr{{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}}}},
+	}
+}
+
+func makeUserLevelLockExpr(fid int64) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: int64(fid) << 32},
+			Args: []*plan.Expr{
+				{Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: "concat"},
+					Args: []*plan.Expr{{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}}}},
+				}}},
+				{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Dval{Dval: 0}}}},
+			},
+		}},
+	}
+}
+
 func TestScopeSerialization(t *testing.T) {
 	testCases := []string{
 		"select 1",
-		"select * from R",
-		//	"select count(*) from R",  todo, because MemRelationData.MarshalBinary() is not support now
-		"select * from R limit 2, 1",
-		"select * from R left join S on R.uid = S.uid",
+		"select * from nation",
+		"select * from nation limit 2, 1",
+		"select * from nation left join region on nation.n_regionkey = region.r_regionkey",
 	}
 
 	var sourceScopes = generateScopeCases(t, testCases)
@@ -124,50 +420,123 @@ func TestScopeSerialization(t *testing.T) {
 
 }
 
+func TestOrderedSetWindowStaysOffRemotePipelineWire(t *testing.T) {
+	rt := runtime.ServiceRuntime("")
+	originalVersion, hadVersion := rt.GetGlobalVariables(runtime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, originalVersion)
+		} else {
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+	// Version 16 predates remote ordered-set aggregate support. The window can
+	// still be planned because its aggregate executor never leaves this CN.
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion16)
+	source := generateScopeCases(t, []string{
+		"select percentile_disc(0.5) within group (order by n_nationkey desc) " +
+			"over (partition by n_regionkey) from nation",
+	})[0]
+	foundWindow := false
+	require.NoError(t, vm.HandleAllOp(source.RootOp, func(_ vm.Operator, op vm.Operator) error {
+		if _, ok := op.(*window.Window); ok {
+			foundWindow = true
+		}
+		return nil
+	}))
+	require.True(t, foundWindow, "the window must execute above the coordinator merge")
+	require.NotEmpty(t, source.PreScopes)
+
+	// Window has no pipeline protobuf representation. Rolling-version safety
+	// relies on compileWin retaining it on the coordinator while only the
+	// existing scan/merge inputs cross the wire.
+	for _, remoteInput := range source.PreScopes {
+		remoteInput.Proc.Base.TxnOperator = fakeTxnOperator{}
+		require.NoError(t, vm.HandleAllOp(remoteInput.RootOp, func(_ vm.Operator, op vm.Operator) error {
+			_, isWindow := op.(*window.Window)
+			require.False(t, isWindow, "window operators must not enter the remote pipeline wire")
+			return nil
+		}))
+		require.True(t, checkPipelineStandaloneExecutableAtRemote(remoteInput))
+	}
+}
+
 func TestCompileOrderByLimitOffsetUsesTopCandidateBudget(t *testing.T) {
 	catalog.SetupDefines("")
-	scope := generateScopeCases(t, []string{
-		"select uid from R order by uid limit 2 + 3 offset 0 + 2",
-	})[0]
+	tests := []struct {
+		name                 string
+		sql                  string
+		candidateLimit       uint64
+		offset               uint64
+		expectResidentGather bool
+	}{
+		{
+			name:                 "resident candidate prefix",
+			sql:                  "select n_regionkey from nation order by n_regionkey limit 2 + 3 offset 0 + 2",
+			candidateLimit:       7,
+			offset:               2,
+			expectResidentGather: true,
+		},
+		{
+			name:           "candidate prefix above resident threshold",
+			sql:            "select n_regionkey from nation order by n_regionkey limit 8193 offset 8192",
+			candidateLimit: mergeTopResidentPlanThreshold + 1,
+			offset:         8192,
+		},
+	}
 
-	var topLimits []uint64
-	var offsets []uint64
-	var opTypes []vm.OpType
-	var visitOperator func(vm.Operator)
-	visitOperator = func(operator vm.Operator) {
-		if operator == nil {
-			return
-		}
-		base := operator.GetOperatorBase()
-		for i := 0; i < base.NumChildren(); i++ {
-			visitOperator(base.GetChildren(i))
-		}
-		opTypes = append(opTypes, operator.OpType())
-		switch op := operator.(type) {
-		case *top.Top:
-			topLimits = append(topLimits, op.Limit.GetLit().GetU64Val())
-		case *mergetop.MergeTop:
-			topLimits = append(topLimits, op.Limit.GetLit().GetU64Val())
-		case *offset.Offset:
-			offsets = append(offsets, op.OffsetExpr.GetLit().GetU64Val())
-		}
-	}
-	var visitScope func(*Scope)
-	visitScope = func(current *Scope) {
-		visitOperator(current.RootOp)
-		for _, preScope := range current.PreScopes {
-			visitScope(preScope)
-		}
-	}
-	visitScope(scope)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			scope := generateScopeCases(t, []string{test.sql})[0]
+			var topLimits []uint64
+			var offsets []uint64
+			var opTypes []vm.OpType
+			var visitOperator func(vm.Operator)
+			visitOperator = func(operator vm.Operator) {
+				if operator == nil {
+					return
+				}
+				base := operator.GetOperatorBase()
+				for i := 0; i < base.NumChildren(); i++ {
+					visitOperator(base.GetChildren(i))
+				}
+				opTypes = append(opTypes, operator.OpType())
+				switch op := operator.(type) {
+				case *top.Top:
+					topLimits = append(topLimits, op.Limit.GetLit().GetU64Val())
+				case *mergetop.MergeTop:
+					topLimits = append(topLimits, op.Limit.GetLit().GetU64Val())
+				case *offset.Offset:
+					offsets = append(offsets, op.OffsetExpr.GetLit().GetU64Val())
+				}
+			}
+			var visitScope func(*Scope)
+			visitScope = func(current *Scope) {
+				visitOperator(current.RootOp)
+				for _, preScope := range current.PreScopes {
+					visitScope(preScope)
+				}
+			}
+			visitScope(scope)
 
-	require.NotEmpty(t, topLimits)
-	for _, candidateLimit := range topLimits {
-		require.Equal(t, uint64(7), candidateLimit)
+			if !test.expectResidentGather {
+				require.Empty(t, topLimits)
+				require.Contains(t, opTypes, vm.Order)
+				require.Contains(t, opTypes, vm.MergeOrder)
+				require.Contains(t, offsets, test.offset)
+				return
+			}
+			require.NotEmpty(t, topLimits)
+			for _, candidateLimit := range topLimits {
+				require.Equal(t, test.candidateLimit, candidateLimit)
+			}
+			require.Contains(t, offsets, test.offset)
+			require.NotContains(t, opTypes, vm.Order)
+			if test.expectResidentGather {
+				require.NotContains(t, opTypes, vm.MergeOrder)
+			}
+		})
 	}
-	require.Contains(t, offsets, uint64(2))
-	require.NotContains(t, opTypes, vm.Order)
-	require.NotContains(t, opTypes, vm.MergeOrder)
 }
 
 func checkScopeRoot(t *testing.T, s *Scope) {
@@ -190,6 +559,110 @@ func TestScopeResetKeepsReusableRelationHandle(t *testing.T) {
 	require.NoError(t, s.Reset(NewMockCompile(t)))
 	require.Nil(t, s.DataSource.R)
 	require.Same(t, rel, s.DataSource.Rel)
+}
+
+func TestPreparedScopeRunReleasesCompletedReader(t *testing.T) {
+	for _, outcome := range []string{"success", "read error", "read panic"} {
+		t.Run(outcome, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.BuildPipelineContext(context.Background())
+			reader := &mockReaderForParallelOrderBy{}
+			rel := &mockRelationForMembershipFilter{}
+			scan := table_scan.NewArgument()
+			scope := &Scope{
+				RootOp: scan,
+				Proc:   proc,
+				DataSource: &Source{
+					R:   reader,
+					Rel: rel,
+				},
+			}
+			reader.onRead = func() {
+				require.Same(t, reader, scope.DataSource.R, "reader must remain live during execution")
+				if outcome == "read panic" {
+					panic("read panic")
+				}
+			}
+			if outcome == "read error" {
+				reader.readErr = moerr.NewInternalErrorNoCtx("read error")
+			}
+			compile := &Compile{proc: proc, isPrepare: true}
+			err := scope.Run(compile)
+			if outcome == "success" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, outcome)
+			}
+			require.Equal(t, 1, reader.closeCalls)
+			require.Nil(t, scan.Reader)
+			require.Nil(t, scope.DataSource.R)
+			require.Same(t, rel, scope.DataSource.Rel)
+		})
+	}
+}
+
+func TestPreparedScopeRunReleasesBuiltReader(t *testing.T) {
+	for _, parallel := range []bool{false, true} {
+		name := "direct"
+		if parallel {
+			name = "parallel single reader"
+		}
+		t.Run(name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.BuildPipelineContext(context.Background())
+			reader := &mockReaderForParallelOrderBy{}
+			rel := &mockRelationForParallelOrderBy{readers: []engine.Reader{reader}}
+			scope := &Scope{
+				RootOp:   table_scan.NewArgument(),
+				Proc:     proc,
+				NodeInfo: engine.Node{Mcpu: 1},
+				DataSource: &Source{
+					Rel:        rel,
+					FilterList: []*plan.Expr{plan2.MakeFalseExpr()},
+				},
+			}
+			reader.onRead = func() {
+				require.Same(t, reader, scope.DataSource.R)
+			}
+			compile := &Compile{proc: proc, isPrepare: true}
+			var err error
+			if parallel {
+				err = scope.ParallelRun(compile)
+			} else {
+				err = scope.Run(compile)
+			}
+			require.NoError(t, err)
+			require.Equal(t, 1, reader.closeCalls)
+			require.Nil(t, scope.DataSource.R)
+			require.Same(t, rel, scope.DataSource.Rel)
+		})
+	}
+}
+
+func TestPreparedParallelWorkersReleaseBuiltReaders(t *testing.T) {
+	c := NewMockCompile(t)
+	c.isPrepare = true
+	readers := []*mockReaderForParallelOrderBy{{}, {}}
+	source := &Scope{
+		RootOp:   table_scan.NewArgument(),
+		Proc:     c.proc,
+		NodeInfo: engine.Node{Mcpu: 2},
+		DataSource: &Source{
+			Rel: &mockRelationForParallelOrderBy{readers: []engine.Reader{
+				readers[0], readers[1],
+			}},
+			FilterList: []*plan.Expr{plan2.MakeFalseExpr()},
+		},
+	}
+	parallel, err := buildScanParallelRun(source, c)
+	require.NoError(t, err)
+	require.Len(t, parallel.PreScopes, 2)
+	for i, worker := range parallel.PreScopes {
+		require.Same(t, readers[i], worker.DataSource.R)
+		require.NoError(t, worker.Run(c))
+		require.Equal(t, 1, readers[i].closeCalls)
+		require.Nil(t, worker.DataSource.R)
+	}
 }
 
 func TestLockMetaResetKeepsReusableRelationHandles(t *testing.T) {
@@ -260,7 +733,13 @@ func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 		txnCli, txnOp := newTestTxnClientAndOp(ctrl)
 		proc.Base.TxnClient = txnCli
 		proc.Base.TxnOperator = txnOp
-		e, _, compilerCtx := testengine.New(defines.AttachAccountId(context.Background(), catalog.System_Account))
+		e := newStubEngine()
+		db := newStubDatabase("tpch")
+		db.rels["nation"] = newStubRelation("nation")
+		db.rels["region"] = newStubRelation("region")
+		e.dbs["tpch"] = db
+		compilerCtx := plan2.NewMockCompilerContext(true)
+		compilerCtx.SetContext(defines.AttachAccountId(context.Background(), catalog.System_Account))
 		opt := plan2.NewBaseOptimizer(compilerCtx)
 		ctx := compilerCtx.GetContext()
 		stmts, err := mysql.Parse(ctx, sql, 1)
@@ -269,7 +748,7 @@ func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 		require.NoError(t1, err)
 		proc.Ctx = ctx
 		proc.ReplaceTopCtx(ctx)
-		c := NewCompile("test", "test", sql, "", "", e, proc, nil, false, nil, time.Now())
+		c := NewCompile("test", "tpch", sql, "", "", e, proc, nil, false, nil, time.Now())
 		qry.Nodes[0].Stats.Cost = 10000000 // to hint this is ap query for unit test
 		err = c.Compile(ctx, &plan.Plan{Plan: &plan.Plan_Query{Query: qry}}, func(batch *batch.Batch, crs *perfcounter.CounterSet) error {
 			return nil
@@ -486,12 +965,105 @@ func TestNewParallelScope(t *testing.T) {
 			[]vm.OpType{vm.HashJoin, vm.Shuffle, vm.Dispatch})
 
 		scopeToParallel.NodeInfo.Mcpu = 3
+		templateShuffle := scopeToParallel.RootOp.GetOperatorBase().GetChildren(0).(*shuffle.Shuffle)
+		templateShuffle.BucketNum = 3
 
 		_, ss := newParallelScope(scopeToParallel)
 		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.HashJoin, vm.Shuffle, vm.Dispatch}))
 		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.HashJoin, vm.Shuffle, vm.Dispatch}))
 		require.NoError(t, checkScopeWithExpectedList(ss[2], []vm.OpType{vm.HashJoin, vm.Shuffle, vm.Dispatch}))
+		firstPool := ss[0].RootOp.GetOperatorBase().GetChildren(0).(*shuffle.Shuffle).GetShufflePool()
+		require.Same(t, firstPool, ss[1].RootOp.GetOperatorBase().GetChildren(0).(*shuffle.Shuffle).GetShufflePool())
+		require.Same(t, firstPool, ss[2].RootOp.GetOperatorBase().GetChildren(0).(*shuffle.Shuffle).GetShufflePool())
+		require.Nil(t, templateShuffle.GetShufflePool())
+
+		_, nextGeneration := newParallelScope(scopeToParallel)
+		nextPool := nextGeneration[0].RootOp.GetOperatorBase().GetChildren(0).(*shuffle.Shuffle).GetShufflePool()
+		require.NotSame(t, firstPool, nextPool)
+		require.Nil(t, templateShuffle.GetShufflePool())
 	}
+}
+
+func TestNewParallelScopeConsolidatesOrderedTopStreams(t *testing.T) {
+	c := NewMockCompile(t)
+	external := process.NewPipelineEdge(1, 1)
+	external.OrderedStream = true
+	limitExpr := plan2.MakePlan2Uint64ConstExprWithType(100000)
+	orderBy := []*plan.OrderBySpec{{
+		Expr: &plan.Expr{
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+			Typ:  plan.Type{Id: int32(types.T_int64)},
+		},
+	}}
+	localTop := top.NewArgument().WithLimit(limitExpr).WithFs(orderBy).WithOrderedOutput()
+	localTop.AppendChild(table_scan.NewArgument())
+	out := connector.NewArgument().WithReg(external)
+	out.AppendChild(localTop)
+	s := &Scope{
+		Magic:    Normal,
+		NodeInfo: engine.Node{Mcpu: 4},
+		Proc:     c.proc,
+		RootOp:   out,
+	}
+
+	ordered, workers := newParallelScope(s)
+	require.Equal(t, Merge, ordered.Magic)
+	require.True(t, ordered.ConcurrentPreScopes)
+	require.Equal(t, 1, ordered.NodeInfo.Mcpu)
+	require.Len(t, workers, 4)
+	require.Len(t, ordered.PreScopes, 4)
+	require.Len(t, ordered.Proc.Reg.MergeReceivers, 4)
+
+	orderedOut, ok := ordered.RootOp.(*connector.Connector)
+	require.True(t, ok)
+	require.Same(t, external, orderedOut.Reg)
+	globalTop, ok := orderedOut.GetOperatorBase().GetChildren(0).(*mergetop.MergeTop)
+	require.True(t, ok)
+	require.True(t, globalTop.OrderedStreams)
+	require.Same(t, limitExpr, globalTop.Limit)
+	for i, worker := range workers {
+		workerOut, ok := worker.RootOp.(*connector.Connector)
+		require.True(t, ok)
+		require.Same(t, ordered.Proc.Reg.MergeReceivers[i], workerOut.Reg)
+		require.Equal(t, 1, workerOut.Reg.NilBatchCnt)
+		require.True(t, workerOut.Reg.OrderedStream)
+		_, ok = workerOut.GetOperatorBase().GetChildren(0).(*top.Top)
+		require.True(t, ok)
+	}
+
+	s.release()
+	c.proc.Free()
+}
+
+func TestParallelScopeGenerationsReleasedAtCompileResetBoundary(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.isPrepare = true
+	testCompile.proc.Reg.MergeReceivers = []*process.WaitRegister{{}}
+	scopeToParallel := generateScopeWithRootOperator(
+		testCompile.proc,
+		[]vm.OpType{vm.HashJoin, vm.Projection, vm.Limit, vm.Connector},
+	)
+	scopeToParallel.NodeInfo.Mcpu = 2
+
+	first, firstWorkers := newParallelScope(scopeToParallel)
+	require.Len(t, firstWorkers, 2)
+	require.Contains(t, scopeToParallel.PreScopes, first)
+	require.Equal(t, []*Scope{first}, scopeToParallel.parallelGenerations)
+
+	require.NoError(t, scopeToParallel.reset(testCompile, false))
+	require.NotContains(t, scopeToParallel.PreScopes, first)
+	require.Empty(t, scopeToParallel.parallelGenerations)
+
+	second, secondWorkers := newParallelScope(scopeToParallel)
+	require.Len(t, secondWorkers, 2)
+	require.Contains(t, scopeToParallel.PreScopes, second)
+	require.Equal(t, []*Scope{second}, scopeToParallel.parallelGenerations)
+	require.Len(t, scopeToParallel.PreScopes, 1,
+		"reused execution must retain only its current physical generation")
+
+	// The final generation remains attached for post-run physical-plan
+	// analysis and is released with the owning template.
+	scopeToParallel.release()
 }
 
 func TestCompileExternValueScan(t *testing.T) {
@@ -533,6 +1105,21 @@ func TestCompileExternScanParallelWrite(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, checkScopeWithExpectedList(rs[0], []vm.OpType{vm.Merge}))
 	require.NoError(t, checkScopeWithExpectedList(rs[0].PreScopes[0], []vm.OpType{vm.External, vm.Dispatch}))
+}
+
+func TestGetLoadWriteS3ParallelSizeCapsLoad(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.ncpu = 16
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+	n := &plan.Node{Stats: &plan.Stats{
+		Cost:    float64(colexec.WriteS3Threshold * 16),
+		Rowsize: 1,
+	}}
+
+	require.Equal(t, 16, testCompile.getLoadWriteS3ParallelSize(n, 16))
+
+	testCompile.anal.qry.LoadTag = true
+	require.Equal(t, loadWriteS3ParallelSizeLimit, testCompile.getLoadWriteS3ParallelSize(n, 16))
 }
 
 // TestCompileExternScanParallelWriteSourceScopeHasCorrectAddr verifies the
@@ -607,6 +1194,29 @@ func TestConstructLocalDispatchFromScopesRejectsRemoteTarget(t *testing.T) {
 	require.Equal(t, beforeNilBatchCnt, untouchedTarget.Proc.Reg.MergeReceivers[0].NilBatchCnt,
 		"validation failure must not partially mutate earlier targets")
 	require.Empty(t, remoteTarget.RemoteReceivRegInfos)
+}
+
+func TestNewMergeScopeLimitsLoadReceiverChannelBuffer(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+
+	normalScope := &Scope{
+		NodeInfo: engine.Node{Addr: "cn1:6001", Mcpu: 8},
+		Proc:     testCompile.proc.NewNoContextChildProc(0),
+	}
+	normalMerge := testCompile.newMergeScope([]*Scope{normalScope})
+	_, normalCap := process.WaitRegisterChannelState(normalMerge.Proc.Reg.MergeReceivers[0])
+	require.Equal(t, 8, normalCap)
+
+	loadProc := testCompile.proc.NewNoContextChildProc(0)
+	loadProc.Base.LoadTag = true
+	loadScope := &Scope{
+		NodeInfo: engine.Node{Addr: "cn1:6001", Mcpu: 8},
+		Proc:     loadProc,
+	}
+	loadMerge := testCompile.newMergeScope([]*Scope{loadScope})
+	_, loadCap := process.WaitRegisterChannelState(loadMerge.Proc.Reg.MergeReceivers[0])
+	require.Equal(t, loadMergeReceiverChannelBufferSize, loadCap)
 }
 
 func TestConstructLocalDispatchFromScopesRejectsInvalidInputs(t *testing.T) {
@@ -961,6 +1571,370 @@ func TestCompileExternScanParquetLoadFileFanout(t *testing.T) {
 	require.Equal(t, len(fileList), totalFiles)
 }
 
+func TestCompileExternScanParquetLoadDefaultAtThresholdUsesFileFanoutWithoutFooterReads(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.addr = "cn1:6001"
+	testCompile.ncpu = 2
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+	testCompile.proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		if varName == "sql_mode" {
+			return "", nil
+		}
+		return nil, nil
+	})
+
+	// This is the post-bind form of an omitted PARALLEL clause that crossed the
+	// admission threshold. The files are deliberately not Parquet: successful
+	// compilation proves the file-fanout branch does not open a footer before it
+	// creates the independently executable scopes.
+	dir := t.TempDir()
+	for _, name := range []string{"part-0.parquet", "part-1.parquet"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("not a parquet file"), 0o600))
+	}
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.INFILE,
+			Filepath: filepath.Join(dir, "part-*.parquet"),
+			Format:   tree.PARQUET,
+			FileSize: int64(plan2.LoadParallelMinSize),
+			Tail:     &tree.TailParameter{},
+		},
+		ExParam: tree.ExParam{
+			ExternType:            int32(plan.ExternType_LOAD),
+			Parallel:              true,
+			ParallelLoadRequested: true,
+		},
+	}
+	createSQL, err := json.Marshal(param)
+	require.NoError(t, err)
+	n := &plan.Node{
+		Stats:    &plan.Stats{Cost: float64(plan2.LoadParallelMinSize), Rowsize: 1},
+		TableDef: &plan.TableDef{Createsql: string(createSQL)},
+		ExternScan: &plan.ExternScan{
+			Type:           int32(plan.ExternType_LOAD),
+			TbColToDataCol: map[string]int32{},
+		},
+	}
+
+	ss, err := testCompile.compileExternScan(n)
+	require.NoError(t, err)
+	require.Len(t, ss, 2)
+	for _, scope := range ss {
+		require.NoError(t, checkScopeWithExpectedList(scope, []vm.OpType{vm.External}))
+		ext, ok := scope.RootOp.(*external.External)
+		require.True(t, ok)
+		require.False(t, ext.Es.Extern.Parallel)
+		require.True(t, ext.Es.Extern.ParallelLoadRequested)
+		require.True(t, ext.Es.ParquetWholeFileFanout)
+		require.Empty(t, ext.Es.ParquetRowGroupShards)
+		require.Len(t, ext.Es.FileList, 1)
+	}
+}
+
+// parquetFanoutCancellationProbe models an admitted file shard that has begun
+// execution and will only finish when the statement context is canceled.  The
+// test uses it after compileExternScan has constructed the real bounded
+// whole-file fanout shape; it deliberately has no timing dependency.
+type parquetFanoutCancellationProbe struct {
+	*colexec.MockOperator
+	started    chan<- struct{}
+	terminated *atomic.Int32
+}
+
+func (op *parquetFanoutCancellationProbe) Call(proc *process.Process) (vm.CallResult, error) {
+	op.started <- struct{}{}
+	<-proc.Ctx.Done()
+	op.terminated.Add(1)
+	return vm.CancelResult, proc.Ctx.Err()
+}
+
+func TestCompileExternScanParquetLoadDefaultFanoutContextCancellationTerminatesAllShards(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.addr = "cn1:6001"
+	testCompile.ncpu = 2
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+	testCompile.proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		if varName == "sql_mode" {
+			return "", nil
+		}
+		return nil, nil
+	})
+
+	// This is the admitted post-bind form of an omitted PARALLEL clause. The
+	// plan package owns the parser/binder/default transition; its focused tests
+	// prove that transition. Here two files fill DOP, so compilation must create
+	// two independently executable whole-file scopes without footer reads.
+	dir := t.TempDir()
+	for _, name := range []string{"part-0.parquet", "part-1.parquet"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("not a parquet file"), 0o600))
+	}
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.INFILE,
+			Filepath: filepath.Join(dir, "part-*.parquet"),
+			Format:   tree.PARQUET,
+			FileSize: int64(plan2.LoadParallelMinSize),
+			Tail:     &tree.TailParameter{},
+		},
+		ExParam: tree.ExParam{
+			ExternType:            int32(plan.ExternType_LOAD),
+			Parallel:              true,
+			ParallelLoadRequested: true,
+		},
+	}
+	createSQL, err := json.Marshal(param)
+	require.NoError(t, err)
+	n := &plan.Node{
+		Stats:    &plan.Stats{Cost: float64(plan2.LoadParallelMinSize), Rowsize: 1},
+		TableDef: &plan.TableDef{Createsql: string(createSQL)},
+		ExternScan: &plan.ExternScan{
+			Type:           int32(plan.ExternType_LOAD),
+			TbColToDataCol: map[string]int32{},
+		},
+	}
+
+	scopes, err := testCompile.compileExternScan(n)
+	require.NoError(t, err)
+	require.Len(t, scopes, 2)
+
+	queryCtx, cancelQuery := context.WithCancel(context.Background())
+	t.Cleanup(cancelQuery)
+	testCompile.proc.BuildPipelineContext(queryCtx)
+	started := make(chan struct{}, len(scopes))
+	var terminated atomic.Int32
+	for _, scope := range scopes {
+		ext, ok := scope.RootOp.(*external.External)
+		require.True(t, ok)
+		require.Len(t, ext.Es.FileList, 1)
+		scope.Proc = testCompile.proc.NewContextChildProc(0)
+		scope.RootOp = &parquetFanoutCancellationProbe{
+			MockOperator: colexec.NewMockOperator(),
+			started:      started,
+			terminated:   &terminated,
+		}
+	}
+	testCompile.scopes = scopes
+	testCompile.pn = &plan.Plan{}
+	testCompile.execType = plan2.ExecTypeAP_ONECN
+	testCompile.affectRows = &atomic.Uint64{}
+
+	runDone := make(chan error, 1)
+	go func() { runDone <- testCompile.runOnce() }()
+	for range scopes {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("admitted parquet fanout shard did not begin execution")
+		}
+	}
+
+	// The client/query context is canceled only after every shard is in flight.
+	// runOnce must return, and each independently admitted scope must observe
+	// that cancellation. Transactional zero-partial-row visibility remains
+	// asserted through the real LOAD rollback BVT.
+	cancelQuery()
+	select {
+	case err := <-runDone:
+		// Scope cancellation is normalized at this execution boundary; the
+		// frontend request context reports the client-visible cancellation.
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("client cancellation did not terminate admitted parquet fanout")
+	}
+	require.Equal(t, int32(len(scopes)), terminated.Load())
+	for _, scope := range scopes {
+		require.ErrorIs(t, scope.Proc.Ctx.Err(), context.Canceled)
+	}
+}
+
+func TestCompileExternScanIcebergCoordinator(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	enableProtectedIcebergCNToCNForTest(t, testCompile)
+	testCompile.cnList = engine.Nodes{{Addr: "cn1:6001", Mcpu: 2}, {Addr: "cn2:6001", Mcpu: 2}}
+	testCompile.addr = "cn1:6001"
+	testCompile.execType = plan2.ExecTypeAP_MULTICN
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.S3,
+			Filepath: "warehouse/iceberg/orders",
+			Format:   tree.PARQUET,
+			Tail:     &tree.TailParameter{},
+		},
+		ExParam: tree.ExParam{
+			ExternType: int32(plan.ExternType_ICEBERG_TB),
+			Parallel:   true,
+		},
+	}
+	n := &plan.Node{
+		TableDef: &plan.TableDef{},
+		ExternScan: &plan.ExternScan{
+			Type:           int32(plan.ExternType_ICEBERG_TB),
+			TbColToDataCol: map[string]int32{},
+		},
+	}
+	dataTasks := []*pipeline.IcebergDataFileTask{
+		{FilePath: "warehouse/iceberg/orders/part-0.parquet", FileSize: 100, RecordCount: 10, RowGroupStart: 0, RowGroupEnd: 1, HasResidualFilter: true, ResidualFilterHash: "filter_digest:part0"},
+		{FilePath: "warehouse/iceberg/orders/part-1.parquet", FileSize: 60, RecordCount: 6, RowGroupStart: 1, RowGroupEnd: 2, HasResidualFilter: true, ResidualFilterHash: "filter_digest:part1"},
+		{FilePath: "warehouse/iceberg/orders/part-2.parquet", FileSize: 40, RecordCount: 4, RowGroupStart: 2, RowGroupEnd: 3, HasResidualFilter: true, ResidualFilterHash: "filter_digest:part2"},
+	}
+	deleteTasks := []*pipeline.IcebergDeleteFileTask{
+		{DeleteType: "position", DeleteFilePath: "warehouse/iceberg/orders/delete-0.parquet", ReferencedDataFile: dataTasks[0].FilePath},
+		{DeleteType: "equality", DeleteFilePath: "warehouse/iceberg/orders/delete-all.parquet"},
+		{DeleteType: "position", DeleteFilePath: "warehouse/iceberg/orders/delete-other.parquet", ReferencedDataFile: "warehouse/iceberg/orders/other.parquet"},
+	}
+	columns := []*pipeline.IcebergColumnMapping{{MoColIndex: 0, IcebergFieldId: 1, CurrentFieldName: "order_id"}}
+	snapshot := &pipeline.IcebergSnapshotRuntime{SnapshotId: 42, SchemaId: 7}
+	runtime := icebergExternalScanRuntime{
+		dataTasks:      dataTasks,
+		deleteTasks:    deleteTasks,
+		columns:        columns,
+		snapshot:       snapshot,
+		objectIORef:    registerCompileTestObjectIO(t),
+		hiddenReadCols: []int32{3},
+		needRowOrdinal: true,
+	}
+
+	ss, err := testCompile.compileExternScanIcebergCoordinator(n, param, runtime, true)
+	require.NoError(t, err)
+	require.Len(t, ss, 1)
+	require.True(t, param.Parallel)
+
+	seen := make(map[string]bool)
+	for _, scope := range ss {
+		require.NoError(t, checkScopeWithExpectedList(scope, []vm.OpType{vm.External}))
+		require.Equal(t, "cn1:6001", scope.NodeInfo.Addr)
+		require.Equal(t, 1, scope.NodeInfo.Mcpu)
+		require.True(t, scope.IsLoad)
+		ext, ok := scope.RootOp.(*external.External)
+		require.True(t, ok)
+		require.False(t, ext.Es.Extern.Parallel)
+		require.Equal(t, int32(plan.ExternType_ICEBERG_TB), ext.Es.Extern.ExternType)
+		require.Len(t, ext.Es.FileList, len(ext.Es.IcebergDataTasks))
+		require.Len(t, ext.Es.FileSize, len(ext.Es.IcebergDataTasks))
+		require.Len(t, ext.Es.FileOffsetTotal, len(ext.Es.IcebergDataTasks))
+		require.Equal(t, columns, ext.Es.IcebergColumns)
+		require.Equal(t, snapshot, ext.Es.IcebergSnapshot)
+		require.Equal(t, runtime.objectIORef, ext.Es.IcebergObjectIORef)
+		require.Equal(t, []int32{3}, ext.Es.IcebergHiddenReadCols)
+		require.True(t, ext.Es.NeedRowOrdinal)
+		for i, task := range ext.Es.IcebergDataTasks {
+			require.Equal(t, task.FilePath, ext.Es.FileList[i])
+			require.Equal(t, task.FileSize, ext.Es.FileSize[i])
+			require.Equal(t, []int64{0, -1}, ext.Es.FileOffsetTotal[i].Offset)
+			require.True(t, task.HasResidualFilter)
+			require.NotEmpty(t, task.ResidualFilterHash)
+			require.Greater(t, task.RowGroupEnd, task.RowGroupStart)
+			seen[task.FilePath] = true
+		}
+		deletePaths := make(map[string]bool)
+		for _, task := range ext.Es.IcebergDeleteTasks {
+			deletePaths[task.DeleteFilePath] = true
+		}
+		require.True(t, deletePaths["warehouse/iceberg/orders/delete-all.parquet"])
+		require.True(t, deletePaths["warehouse/iceberg/orders/delete-0.parquet"])
+		require.False(t, deletePaths["warehouse/iceberg/orders/delete-other.parquet"])
+	}
+	require.Equal(t, map[string]bool{
+		"warehouse/iceberg/orders/part-0.parquet": true,
+		"warehouse/iceberg/orders/part-1.parquet": true,
+		"warehouse/iceberg/orders/part-2.parquet": true,
+	}, seen)
+}
+
+func TestIcebergProjectedAttrsKeepsMappedAndHiddenReadColumns(t *testing.T) {
+	attrs := []plan.ExternAttr{
+		{ColName: "id", ColIndex: 0},
+		{ColName: "__mo_iceberg_data_file_path", ColIndex: 1},
+		{ColName: "__mo_iceberg_row_ordinal", ColIndex: 2},
+		{ColName: "new_optional", ColIndex: 3},
+		{ColName: "__mo_iceberg_delete_key", ColIndex: 4},
+		{ColName: "unused", ColIndex: 5},
+	}
+	got := icebergProjectedAttrs(attrs, []*pipeline.IcebergColumnMapping{
+		{MoColIndex: 0, IcebergFieldId: 1, CurrentFieldName: "id"},
+		{MoColIndex: 3, IcebergFieldId: 5, CurrentFieldName: "new_optional", DefaultNullFill: true},
+	}, []int32{4})
+
+	require.Equal(t, []plan.ExternAttr{
+		{ColName: "id", ColIndex: 0},
+		{ColName: "__mo_iceberg_data_file_path", ColIndex: 1},
+		{ColName: "__mo_iceberg_row_ordinal", ColIndex: 2},
+		{ColName: "new_optional", ColIndex: 3},
+		{ColName: "__mo_iceberg_delete_key", ColIndex: 4},
+	}, got)
+}
+
+func TestEnsureIcebergHiddenReadColumnsAddsSyntheticScanInput(t *testing.T) {
+	param := &external.ExternalParam{
+		ExParamConst: external.ExParamConst{
+			Attrs: []plan.ExternAttr{
+				{ColName: "id", ColIndex: 0},
+				{ColName: "amount", ColIndex: 1},
+			},
+			Cols: []*plan.ColDef{
+				{Name: "id"},
+				{Name: "amount"},
+			},
+		},
+	}
+	ensureIcebergHiddenReadColumns(param, []*pipeline.IcebergColumnMapping{
+		{MoColIndex: 0, CurrentFieldName: "id"},
+		{MoColIndex: 2, CurrentFieldName: "hidden_key", IsHidden: true},
+		{MoColIndex: 1, CurrentFieldName: "amount"},
+	})
+
+	require.Len(t, param.Cols, 3)
+	require.Equal(t, "hidden_key", param.Cols[2].Name)
+	require.Equal(t, []plan.ExternAttr{
+		{ColName: "id", ColIndex: 0},
+		{ColName: "amount", ColIndex: 1},
+		{ColName: "hidden_key", ColIndex: 2},
+	}, param.Attrs)
+}
+
+func TestConstructExternalLegacyPathDoesNotSetIcebergRuntime(t *testing.T) {
+	node := &plan.Node{
+		TableDef: &plan.TableDef{},
+		ExternScan: &plan.ExternScan{
+			Type:           int32(plan.ExternType_EXTERNAL_TB),
+			TbColToDataCol: map[string]int32{},
+		},
+	}
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.S3,
+			Filepath: "warehouse/plain/*.parquet",
+			Format:   tree.PARQUET,
+			Tail:     &tree.TailParameter{},
+		},
+		ExParam: tree.ExParam{
+			ExternType: int32(plan.ExternType_EXTERNAL_TB),
+		},
+	}
+
+	op := constructExternal(
+		node, param, context.Background(),
+		[]string{"warehouse/plain/part-0.parquet"},
+		[]int64{128},
+		makeWholeFileOffsets(1),
+		true,
+		pipeline.ArrowExecutionScope_UnknownArrowExecutionScope,
+	)
+
+	require.Equal(t, int32(plan.ExternType_EXTERNAL_TB), op.Es.Extern.ExternType)
+	require.Nil(t, op.Es.IcebergDataTasks)
+	require.Nil(t, op.Es.IcebergDeleteTasks)
+	require.Nil(t, op.Es.IcebergColumns)
+	require.Nil(t, op.Es.IcebergSnapshot)
+	require.Empty(t, op.Es.IcebergObjectIORef)
+	require.Empty(t, op.Es.IcebergHiddenReadCols)
+	require.False(t, op.Es.NeedRowOrdinal)
+	require.Equal(t, []string{"warehouse/plain/part-0.parquet"}, op.Es.FileList)
+	require.Equal(t, []int64{128}, op.Es.FileSize)
+}
+
 func TestSplitParquetRowGroupShardsBalancesAndReindexesFiles(t *testing.T) {
 	fileList := []string{"warehouse/load/part-000.parquet", "warehouse/load/part-001.parquet"}
 	fileSize := []int64{190, 30}
@@ -1000,6 +1974,39 @@ func TestSplitParquetRowGroupShardsBalancesAndReindexesFiles(t *testing.T) {
 	}, seen)
 	require.Equal(t, int64(110), loads["cn1:6001"])
 	require.Equal(t, int64(110), loads["cn2:6001"])
+}
+
+func TestSplitParquetRowGroupShardsKeepsEachFileContiguous(t *testing.T) {
+	fileList := []string{"warehouse/load/many-groups.parquet"}
+	fileSize := []int64{800}
+	rowGroups := make([]parquetRowGroupMeta, 8)
+	for i := range rowGroups {
+		rowGroups[i] = parquetRowGroupMeta{
+			fileIndex:     0,
+			rowGroupIndex: int32(i),
+			numRows:       10,
+			bytes:         100,
+		}
+	}
+	nodes := engine.Nodes{{Addr: "cn1:6001", Mcpu: 1}, {Addr: "cn2:6001", Mcpu: 1}}
+
+	shards, err := splitParquetRowGroupShards(fileList, fileSize, rowGroups, nodes)
+	require.NoError(t, err)
+	require.Len(t, shards, 2)
+
+	ranges := make([][2]int32, 0, 2)
+	for _, shard := range shards {
+		require.Equal(t, fileList, shard.fileList)
+		require.Len(t, shard.rowGroupShards, 1)
+		ranges = append(ranges, [2]int32{
+			shard.rowGroupShards[0].RowGroupStart,
+			shard.rowGroupShards[0].RowGroupEnd,
+		})
+	}
+	slices.SortFunc(ranges, func(left, right [2]int32) int {
+		return cmp.Compare(left[0], right[0])
+	})
+	require.Equal(t, [][2]int32{{0, 4}, {4, 8}}, ranges)
 }
 
 func TestCompileExternScanParquetRowGroupFanout(t *testing.T) {
@@ -1110,6 +2117,62 @@ func TestReadLoadParquetRowGroupMetadataLocalFile(t *testing.T) {
 	}
 }
 
+type parquetMetadataIndexFixture struct {
+	Value int64 `parquet:"value"`
+}
+
+type parquetMetadataReadRange struct {
+	offset int64
+	length int
+}
+
+type parquetMetadataTrackingReaderAt struct {
+	reader *bytes.Reader
+	reads  []parquetMetadataReadRange
+}
+
+func (r *parquetMetadataTrackingReaderAt) ReadAt(p []byte, offset int64) (int, error) {
+	r.reads = append(r.reads, parquetMetadataReadRange{offset: offset, length: len(p)})
+	return r.reader.ReadAt(p, offset)
+}
+
+func (r *parquetMetadataTrackingReaderAt) readsOffset(offset int64) bool {
+	for _, read := range r.reads {
+		if read.offset <= offset && offset < read.offset+int64(read.length) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestReadLoadParquetRowGroupMetadataSkipsUnusedIndexSections(t *testing.T) {
+	var data bytes.Buffer
+	writer := parquet.NewGenericWriter[parquetMetadataIndexFixture](
+		&data,
+		parquet.MaxRowsPerRowGroup(1),
+		parquet.DataPageStatistics(true),
+		parquet.BloomFilters(parquet.SplitBlockFilter(10, "value")),
+	)
+	_, err := writer.Write([]parquetMetadataIndexFixture{{Value: 1}, {Value: 2}, {Value: 3}})
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	metadataFile, err := parquet.OpenFile(bytes.NewReader(data.Bytes()), int64(data.Len()))
+	require.NoError(t, err)
+	chunk := metadataFile.Metadata().RowGroups[0].Columns[0]
+	require.Positive(t, chunk.ColumnIndexOffset)
+	require.Positive(t, chunk.OffsetIndexOffset)
+	require.Positive(t, chunk.MetaData.BloomFilterOffset)
+
+	reader := &parquetMetadataTrackingReaderAt{reader: bytes.NewReader(data.Bytes())}
+	file, err := openParquetLoadMetadataFile(reader, int64(data.Len()))
+	require.NoError(t, err)
+	require.Len(t, file.RowGroups(), 3)
+	require.False(t, reader.readsOffset(chunk.ColumnIndexOffset))
+	require.False(t, reader.readsOffset(chunk.OffsetIndexOffset))
+	require.False(t, reader.readsOffset(chunk.MetaData.BloomFilterOffset))
+}
+
 func TestCompileExternScanParquetLoadUsesRowGroupMetadata(t *testing.T) {
 	testCompile := NewMockCompile(t)
 	testCompile.addr = "cn1:6001"
@@ -1134,8 +2197,9 @@ func TestCompileExternScanParquetLoadUsesRowGroupMetadata(t *testing.T) {
 			Tail:     &tree.TailParameter{},
 		},
 		ExParam: tree.ExParam{
-			ExternType: int32(plan.ExternType_LOAD),
-			Parallel:   true,
+			ExternType:            int32(plan.ExternType_LOAD),
+			Parallel:              true,
+			ParallelLoadRequested: true,
 		},
 	}
 	createSQL, err := json.Marshal(param)
@@ -1352,6 +2416,7 @@ func TestCompileExternScanParquetLoadUsesFileFanoutMainPath(t *testing.T) {
 		require.NoError(t, checkScopeWithExpectedList(scope, []vm.OpType{vm.External}))
 		ext := scope.RootOp.(*external.External)
 		require.False(t, ext.Es.Extern.Parallel)
+		require.True(t, ext.Es.ParquetWholeFileFanout)
 		require.Empty(t, ext.Es.ParquetRowGroupShards)
 		require.Len(t, ext.Es.FileList, 1)
 		require.Len(t, ext.Es.FileOffsetTotal, 1)
@@ -1457,6 +2522,72 @@ func TestCompileBuildSideForBroadcastJoinGroupsDuplicateCN(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, dispatchOp.LocalRegs, 1)
 	require.Empty(t, dispatchOp.RemoteRegs)
+}
+
+func TestBroadcastJoinMapReferencesCountProbeWorkers(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		probes engine.Nodes
+		want   map[string]int32
+	}{
+		{
+			name:   "single packed scope",
+			probes: engine.Nodes{{Addr: "cn1:6001", Mcpu: 4}},
+			want:   map[string]int32{"cn1:6001": 4},
+		},
+		{
+			name:   "one packed scope per CN",
+			probes: engine.Nodes{{Addr: "cn1:6001", Mcpu: 2}, {Addr: "cn2:6001", Mcpu: 3}},
+			want:   map[string]int32{"cn1:6001": 2, "cn2:6001": 3},
+		},
+		{
+			name:   "colocated single worker scopes",
+			probes: engine.Nodes{{Addr: "cn1:6001", Mcpu: 1}, {Addr: "cn1:6001", Mcpu: 1}},
+			want:   map[string]int32{"cn1:6001": 2},
+		},
+		{
+			name:   "colocated packed scopes",
+			probes: engine.Nodes{{Addr: "cn1:6001", Mcpu: 2}, {Addr: "cn1:6001", Mcpu: 3}},
+			want:   map[string]int32{"cn1:6001": 5},
+		},
+		{
+			name:   "mixed groups on multiple CNs",
+			probes: engine.Nodes{{Addr: "cn1:6001", Mcpu: 2}, {Addr: "cn1:6001", Mcpu: 1}, {Addr: "cn2:6001", Mcpu: 4}},
+			want:   map[string]int32{"cn1:6001": 3, "cn2:6001": 4},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewMockCompile(t)
+			c.cnList = engine.Nodes{{Addr: "cn1:6001", Mcpu: 4}, {Addr: "cn2:6001", Mcpu: 4}}
+			c.addr = "cn1:6001"
+			c.execType = plan2.ExecTypeAP_MULTICN
+			c.anal = &AnalyzeModule{qry: &plan.Query{}}
+			node := &plan.Node{Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{}}}
+			buildScope := generateScopeWithRootOperator(c.proc, []vm.OpType{vm.TableScan})
+			buildScope.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
+			probes := make([]*Scope, len(tc.probes))
+			for i, probe := range tc.probes {
+				probes[i] = generateScopeWithRootOperator(c.proc, []vm.OpType{vm.HashJoin})
+				probes[i].NodeInfo = probe
+			}
+
+			c.compileBuildSideForBroadcastJoin(node, probes, []*Scope{buildScope})
+			builds := make(map[string]*hashbuild.HashBuild)
+			for _, probe := range probes {
+				for _, pre := range probe.PreScopes {
+					if build, ok := pre.RootOp.(*hashbuild.HashBuild); ok {
+						require.NotContains(t, builds, pre.NodeInfo.Addr)
+						builds[pre.NodeInfo.Addr] = build
+					}
+				}
+			}
+			require.Len(t, builds, len(tc.want))
+			for addr, want := range tc.want {
+				require.Contains(t, builds, addr)
+				require.Equal(t, want, builds[addr].JoinMapRefCnt, addr)
+			}
+		})
+	}
 }
 
 func generateScopeWithRootOperator(proc *process.Process, operatorList []vm.OpType) *Scope {
@@ -1574,29 +2705,6 @@ func TestNotifyMessageClean(t *testing.T) {
 	require.Equal(t, 1, ff.number)
 }
 
-func TestSuppressRemoteRunCancelError(t *testing.T) {
-	t.Run("suppress query interrupted after proc cancel", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-		require.NoError(t, suppressRemoteRunCancelError(ctx, moerr.NewQueryInterrupted(ctx)))
-	})
-
-	t.Run("keep rpc timeout after proc cancel", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-		err := suppressRemoteRunCancelError(ctx, moerr.NewRPCTimeout(ctx))
-		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrRPCTimeout))
-	})
-
-	t.Run("keep query interrupted while proc still active", func(t *testing.T) {
-		ctx := context.Background()
-		err := suppressRemoteRunCancelError(ctx, moerr.NewQueryInterrupted(ctx))
-		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
-	})
-}
-
 func TestScopeHoldAnyCannotRemoteOperator(t *testing.T) {
 	s0 := &Scope{
 		RootOp: &dispatch.Dispatch{RecCTE: false},
@@ -1635,13 +2743,17 @@ func TestCleanPipelineWitchStartFail(t *testing.T) {
 
 func TestRemoteRunMalformedAddressTerminatesReceiver(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	proc.BuildPipelineContext(context.Background())
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	proc.Ctx = ctx
+	proc.BuildPipelineContext(ctx)
 	reg := process.NewPipelineEdge(1, 0)
+	dispatchOp := dispatch.NewArgument()
+	dispatchOp.LocalRegs = []*process.WaitRegister{reg}
 	s := &Scope{
 		Magic:    Remote,
 		NodeInfo: engine.Node{Addr: "malformed-remote-address"},
 		Proc:     proc,
-		RootOp:   connector.NewArgument().WithReg(reg),
+		RootOp:   dispatchOp,
 	}
 	c := &Compile{proc: proc, addr: "local:6001"}
 
@@ -1654,6 +2766,37 @@ func TestRemoteRunMalformedAddressTerminatesReceiver(t *testing.T) {
 		require.ErrorIs(t, signalErr, err)
 	case <-time.After(time.Second):
 		t.Fatal("malformed remote start failure did not terminate its receiver")
+	}
+}
+
+func TestRemoteRunNonStandalonePipelineFailsInsteadOfExecutingOnWrongCN(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	proc.Ctx = ctx
+	proc.BuildPipelineContext(ctx)
+	proc.Base.TxnOperator = fakeTxnOperator{}
+	reg := process.NewPipelineEdge(1, 0)
+	rootProc := proc.NewContextChildProc(1)
+	preProc := proc.NewContextChildProc(0)
+	preDispatch := dispatch.NewArgument()
+	preDispatch.LocalRegs = []*process.WaitRegister{reg}
+	pre := &Scope{Magic: Remote, NodeInfo: engine.Node{Addr: "remote:6001"}, Proc: preProc, RootOp: preDispatch}
+	s := &Scope{
+		Magic:     Remote,
+		NodeInfo:  engine.Node{Addr: "remote:6001"},
+		Proc:      rootProc,
+		RootOp:    dispatch.NewArgument(),
+		PreScopes: []*Scope{pre},
+	}
+	c := &Compile{proc: proc, addr: "local:6001"}
+
+	err := s.RemoteRun(c)
+	require.ErrorContains(t, err, "not standalone executable")
+	select {
+	case <-proc.Ctx.Done():
+		require.ErrorIs(t, context.Cause(proc.Ctx), err)
+	case <-time.After(time.Second):
+		t.Fatal("non-standalone remote start failure did not cancel sibling pipelines")
 	}
 }
 
@@ -1690,6 +2833,84 @@ func TestMergeRunReturnsWhenRemotePreScopeAddressIsMalformed(t *testing.T) {
 	}
 }
 
+func TestCollectMergeRunResultsPrefersProducerError(t *testing.T) {
+	cleanupErr := process.ErrPipelineEndSignalDeliveryFailed
+	producerErr := moerr.NewDuplicateEntryNoCtx("1000000", "")
+	notifyErr := moerr.NewInternalErrorNoCtx("remote producer failed")
+	internalCancelCtx, cancelInternal := context.WithCancelCause(context.Background())
+	cancelInternal(producerErr)
+	externalCancelCtx, cancelExternal := context.WithCancel(context.Background())
+	cancelExternal()
+
+	tests := []struct {
+		name     string
+		current  scopeRunResult
+		preScope []scopeRunResult
+		notify   []error
+		want     error
+	}{
+		{
+			name:     "producer error replaces cleanup fallback",
+			current:  scopeRunResult{err: cleanupErr},
+			preScope: []scopeRunResult{{err: context.Canceled}, {err: producerErr}},
+			want:     producerErr,
+		},
+		{
+			name:    "remote notifier error replaces cleanup fallback",
+			current: scopeRunResult{err: cleanupErr},
+			notify:  []error{notifyErr},
+			want:    notifyErr,
+		},
+		{
+			name:     "cleanup fallback does not replace producer error",
+			current:  scopeRunResult{err: producerErr},
+			preScope: []scopeRunResult{{err: cleanupErr}},
+			want:     producerErr,
+		},
+		{
+			name:     "internally canceled merge resolves to producer error",
+			current:  scopeRunResult{err: context.Canceled, ctx: internalCancelCtx},
+			preScope: []scopeRunResult{{err: producerErr}},
+			want:     producerErr,
+		},
+		{
+			name:     "internally interrupted merge resolves to producer error",
+			current:  scopeRunResult{err: moerr.NewQueryInterrupted(context.Background()), ctx: internalCancelCtx},
+			preScope: []scopeRunResult{{err: producerErr}},
+			want:     producerErr,
+		},
+		{
+			name:     "externally canceled merge remains canceled",
+			current:  scopeRunResult{err: context.Canceled, ctx: externalCancelCtx},
+			preScope: []scopeRunResult{{err: producerErr}},
+			want:     context.Canceled,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			preScopeResults := make(chan scopeRunResult, len(tt.preScope))
+			for _, result := range tt.preScope {
+				preScopeResults <- result
+			}
+			notifyResults := make(chan notifyMessageResult, len(tt.notify))
+			for _, err := range tt.notify {
+				notifyResults <- notifyMessageResult{err: err}
+			}
+
+			got := collectMergeRunResults(
+				testutil.NewProcess(t),
+				tt.current,
+				preScopeResults,
+				notifyResults)
+
+			require.Same(t, tt.want, got)
+			require.Empty(t, preScopeResults)
+			require.Empty(t, notifyResults)
+		})
+	}
+}
+
 func TestScopeGetRelDataError(t *testing.T) {
 	// Create a new scope
 	s := newScope(Normal)
@@ -1711,10 +2932,9 @@ func TestScopeGetRelDataError(t *testing.T) {
 
 	// Create a mock compile with engine
 	catalog.SetupDefines("")
-	e, _, _ := testengine.New(defines.AttachAccountId(context.Background(), catalog.System_Account))
 	c := NewMockCompile(t)
 	c.proc = s.Proc
-	c.e = e
+	c.e = newStubEngine()
 
 	// Test case: error when expanding ranges
 	err := s.getRelData(c, nil)
@@ -1745,14 +2965,21 @@ func (m *mockRelationForMembershipFilter) BuildReaders(
 type mockReaderForParallelOrderBy struct {
 	orderByCalls int
 	orderBy      []*plan.OrderBySpec
+	closeCalls   int
+	onRead       func()
+	readErr      error
 }
 
 func (m *mockReaderForParallelOrderBy) Close() error {
+	m.closeCalls++
 	return nil
 }
 
 func (m *mockReaderForParallelOrderBy) Read(context.Context, []string, *plan.Expr, *mpool.MPool, *batch.Batch) (bool, error) {
-	return true, nil
+	if m.onRead != nil {
+		m.onRead()
+	}
+	return true, m.readErr
 }
 
 func (m *mockReaderForParallelOrderBy) SetOrderBy(orderBy []*plan.OrderBySpec) {
@@ -1787,250 +3014,6 @@ func (m *mockRelationForParallelOrderBy) BuildReaders(
 	return m.readers, nil
 }
 
-func TestBuildReadersMembershipFilterHint(t *testing.T) {
-	t.Run("MembershipFilter set when node is IVFFLAT Entries and context has membership filter", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-		expectedMembershipFilter := []byte{1, 2, 3, 4, 5}
-		ctx := context.WithValue(proc.Ctx, defines.IvfMembershipFilter{}, expectedMembershipFilter)
-		proc.Ctx = ctx
-
-		mockRel := &mockRelationForMembershipFilter{}
-		s := &Scope{
-			Proc: proc,
-			DataSource: &Source{
-				Rel: mockRel,
-				node: &plan.Node{
-					TableDef: &plan.TableDef{
-						TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
-					},
-				},
-				FilterExpr: nil,
-			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
-			TxnOffset: 0,
-		}
-
-		c := NewMockCompile(t)
-		c.proc = proc
-		// Use MakeFalseExpr to make emptyScan = true, skipping getRelData
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
-		s.DataSource.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{}
-
-		readers, err := s.buildReaders(c)
-		require.NoError(t, err)
-		require.NotNil(t, readers)
-		require.Equal(t, expectedMembershipFilter, mockRel.capturedHint.MembershipFilterBytes)
-	})
-
-	t.Run("MembershipFilter not set when node is nil", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-		expectedMembershipFilter := []byte{1, 2, 3, 4, 5}
-		ctx := context.WithValue(proc.Ctx, defines.IvfMembershipFilter{}, expectedMembershipFilter)
-		proc.Ctx = ctx
-
-		mockRel := &mockRelationForMembershipFilter{}
-		s := &Scope{
-			Proc: proc,
-			DataSource: &Source{
-				Rel:                mockRel,
-				node:               nil, // node is nil
-				FilterExpr:         nil,
-				FilterList:         []*plan.Expr{},
-				RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
-			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
-			TxnOffset: 0,
-		}
-
-		c := NewMockCompile(t)
-		c.proc = proc
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
-
-		readers, err := s.buildReaders(c)
-		require.NoError(t, err)
-		require.NotNil(t, readers)
-		require.Nil(t, mockRel.capturedHint.MembershipFilterBytes)
-	})
-
-	t.Run("MembershipFilter not set when TableDef is nil", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-		expectedMembershipFilter := []byte{1, 2, 3, 4, 5}
-		ctx := context.WithValue(proc.Ctx, defines.IvfMembershipFilter{}, expectedMembershipFilter)
-		proc.Ctx = ctx
-
-		mockRel := &mockRelationForMembershipFilter{}
-		s := &Scope{
-			Proc: proc,
-			DataSource: &Source{
-				Rel: mockRel,
-				node: &plan.Node{
-					TableDef: nil, // TableDef is nil
-				},
-				FilterExpr:         nil,
-				FilterList:         []*plan.Expr{},
-				RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
-			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
-			TxnOffset: 0,
-		}
-
-		c := NewMockCompile(t)
-		c.proc = proc
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
-
-		readers, err := s.buildReaders(c)
-		require.NoError(t, err)
-		require.NotNil(t, readers)
-		require.Nil(t, mockRel.capturedHint.MembershipFilterBytes)
-	})
-
-	t.Run("MembershipFilter not set when TableType is not IVFFLAT Entries", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-		expectedMembershipFilter := []byte{1, 2, 3, 4, 5}
-		ctx := context.WithValue(proc.Ctx, defines.IvfMembershipFilter{}, expectedMembershipFilter)
-		proc.Ctx = ctx
-
-		mockRel := &mockRelationForMembershipFilter{}
-		s := &Scope{
-			Proc: proc,
-			DataSource: &Source{
-				Rel: mockRel,
-				node: &plan.Node{
-					TableDef: &plan.TableDef{
-						TableType: catalog.SystemSI_IVFFLAT_TblType_Metadata, // different type
-					},
-				},
-				FilterExpr:         nil,
-				FilterList:         []*plan.Expr{},
-				RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
-			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
-			TxnOffset: 0,
-		}
-
-		c := NewMockCompile(t)
-		c.proc = proc
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
-
-		readers, err := s.buildReaders(c)
-		require.NoError(t, err)
-		require.NotNil(t, readers)
-		require.Nil(t, mockRel.capturedHint.MembershipFilterBytes)
-	})
-
-	t.Run("MembershipFilter not set when context has no IvfMembershipFilter", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-		// No IvfMembershipFilter in context
-
-		mockRel := &mockRelationForMembershipFilter{}
-		s := &Scope{
-			Proc: proc,
-			DataSource: &Source{
-				Rel: mockRel,
-				node: &plan.Node{
-					TableDef: &plan.TableDef{
-						TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
-					},
-				},
-				FilterExpr:         nil,
-				FilterList:         []*plan.Expr{},
-				RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
-			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
-			TxnOffset: 0,
-		}
-
-		c := NewMockCompile(t)
-		c.proc = proc
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
-
-		readers, err := s.buildReaders(c)
-		require.NoError(t, err)
-		require.NotNil(t, readers)
-		require.Nil(t, mockRel.capturedHint.MembershipFilterBytes)
-	})
-
-	t.Run("MembershipFilter not set when context value is not []byte", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-		ctx := context.WithValue(proc.Ctx, defines.IvfMembershipFilter{}, "not a byte slice")
-		proc.Ctx = ctx
-
-		mockRel := &mockRelationForMembershipFilter{}
-		s := &Scope{
-			Proc: proc,
-			DataSource: &Source{
-				Rel: mockRel,
-				node: &plan.Node{
-					TableDef: &plan.TableDef{
-						TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
-					},
-				},
-				FilterExpr:         nil,
-				FilterList:         []*plan.Expr{},
-				RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
-			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
-			TxnOffset: 0,
-		}
-
-		c := NewMockCompile(t)
-		c.proc = proc
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
-
-		readers, err := s.buildReaders(c)
-		require.NoError(t, err)
-		require.NotNil(t, readers)
-		require.Nil(t, mockRel.capturedHint.MembershipFilterBytes)
-	})
-
-	t.Run("MembershipFilter not set when context value is empty []byte", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-		ctx := context.WithValue(proc.Ctx, defines.IvfMembershipFilter{}, []byte{}) // empty byte slice
-		proc.Ctx = ctx
-
-		mockRel := &mockRelationForMembershipFilter{}
-		s := &Scope{
-			Proc: proc,
-			DataSource: &Source{
-				Rel: mockRel,
-				node: &plan.Node{
-					TableDef: &plan.TableDef{
-						TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
-					},
-				},
-				FilterExpr:         nil,
-				FilterList:         []*plan.Expr{},
-				RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
-			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
-			TxnOffset: 0,
-		}
-
-		c := NewMockCompile(t)
-		c.proc = proc
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
-
-		readers, err := s.buildReaders(c)
-		require.NoError(t, err)
-		require.NotNil(t, readers)
-		require.Nil(t, mockRel.capturedHint.MembershipFilterBytes)
-	})
-}
-
 func TestBuildScanParallelRunSetsOrderByOnParallelReaders(t *testing.T) {
 	c := NewMockCompile(t)
 	scope := generateScopeWithRootOperator(c.proc, []vm.OpType{vm.Projection})
@@ -2057,22 +3040,6 @@ func TestBuildScanParallelRunSetsOrderByOnParallelReaders(t *testing.T) {
 		require.Equal(t, 1, reader.orderByCalls)
 		require.Equal(t, orderBy, reader.orderBy)
 	}
-}
-
-func TestLocalRangesPolicyForPartitionedIvfEntries(t *testing.T) {
-	ivfNode := &plan.Node{
-		NodeType: plan.Node_TABLE_SCAN,
-		TableDef: &plan.TableDef{TableType: catalog.SystemSI_IVFFLAT_TblType_Entries},
-		IndexReaderParam: &plan.IndexReaderParam{
-			Limit:        &plan.Expr{},
-			OrigFuncName: "l2_distance",
-		},
-	}
-	ordinaryNode := &plan.Node{NodeType: plan.Node_TABLE_SCAN, TableDef: &plan.TableDef{}}
-
-	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectAllData), localRangesPolicy(ivfNode, 0))
-	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectCommittedPersistedData), localRangesPolicy(ivfNode, 1))
-	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectAllData), localRangesPolicy(ordinaryNode, 1))
 }
 
 func TestRuntimeFilterResultKeepsItsOriginatingSpec(t *testing.T) {
@@ -2146,4 +3113,311 @@ func TestRuntimeFilterResultKeepsItsOriginatingSpec(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestWaitForRuntimeFiltersPreservesUniqueJoinKeyPayloadForVectorScan(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	board := message.NewMessageBoard()
+	defer board.Reset()
+	proc.SetMessageBoard(board)
+	spec := &plan.RuntimeFilterSpec{Tag: 109, UseMembershipFilter: true, MustApply: true,
+		Expr: plan2.GetColExpr(plan.Type{Id: int32(types.T_int64)}, 1, 0)}
+	scope := &Scope{
+		Proc: proc,
+		DataSource: &Source{
+			RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{spec},
+		},
+	}
+	keys := vector.NewVec(types.T_int64.ToType())
+	defer keys.Free(proc.Mp())
+	require.NoError(t, vector.AppendFixed(keys, int64(7), false, proc.Mp()))
+	payload, err := keys.MarshalBinary()
+	require.NoError(t, err)
+	message.SendMessage(message.RuntimeFilterMessage{
+		Tag:  spec.Tag,
+		Typ:  message.RuntimeFilter_UNIQUEJOINKEYS,
+		Data: payload,
+		Card: 1,
+	}, board)
+
+	filters, empty, err := scope.waitForRuntimeFilters(&Compile{proc: proc})
+	require.NoError(t, err)
+	require.False(t, empty)
+	require.Len(t, filters, 1)
+	require.Same(t, spec, filters[0].spec)
+	require.Nil(t, filters[0].expr)
+	require.Equal(t, payload, filters[0].data)
+}
+
+func TestWaitForRuntimeFiltersRejectsPassForRequiredFilter(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	board := message.NewMessageBoard()
+	defer board.Reset()
+	proc.SetMessageBoard(board)
+	spec := &plan.RuntimeFilterSpec{Tag: 110, UseMembershipFilter: true, MustApply: true}
+	scope := &Scope{
+		Proc: proc,
+		DataSource: &Source{
+			RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{spec},
+		},
+	}
+	message.SendMessage(message.RuntimeFilterMessage{
+		Tag: spec.Tag,
+		Typ: message.RuntimeFilter_PASS,
+	}, board)
+
+	filters, empty, err := scope.waitForRuntimeFilters(&Compile{proc: proc})
+	require.ErrorContains(t, err, "required runtime filter 110 is unavailable")
+	require.Nil(t, filters)
+	require.False(t, empty)
+}
+
+func TestRequiredVectorDomainRejectsMalformedPayload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		name    string
+		oid     types.T
+		null    bool
+		card    int32
+		corrupt bool
+	}{
+		{"valid", types.T_int64, false, 1, false},
+		{"wrong_type", types.T_int32, false, 1, false},
+		{"null", types.T_int64, true, 1, false},
+		{"overclaimed", types.T_int64, false, 2, false},
+		{"zero_card", types.T_int64, false, 0, false},
+		{"corrupt", types.T_int64, false, 1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := vector.NewVec(tc.oid.ToType())
+			defer v.Free(proc.Mp())
+			if tc.oid == types.T_int64 {
+				require.NoError(t, vector.AppendFixed(v, int64(9), tc.null, proc.Mp()))
+			} else {
+				require.NoError(t, vector.AppendFixed(v, int32(9), tc.null, proc.Mp()))
+			}
+			data, err := v.MarshalBinary()
+			require.NoError(t, err)
+			if tc.corrupt {
+				data = data[:3]
+			}
+			board := message.NewMessageBoard()
+			defer board.Reset()
+			proc.SetMessageBoard(board)
+			spec := &plan.RuntimeFilterSpec{Tag: 112, MustApply: true, UseMembershipFilter: true,
+				Expr: plan2.GetColExpr(plan.Type{Id: int32(types.T_int64)}, 1, 0)}
+			s := &Scope{Proc: proc, DataSource: &Source{RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{spec}}}
+			message.SendMessage(message.RuntimeFilterMessage{Tag: spec.Tag, Typ: message.RuntimeFilter_UNIQUEJOINKEYS, Data: data, Card: tc.card}, board)
+			filters, empty, err := s.waitForRuntimeFilters(&Compile{proc: proc})
+			require.False(t, empty)
+			if tc.name == "valid" {
+				require.NoError(t, err)
+				require.Len(t, filters, 1)
+			} else {
+				require.Error(t, err)
+				require.Nil(t, filters)
+			}
+		})
+	}
+}
+
+func TestWaitForRuntimeFiltersRejectsCanceledRequiredFilter(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	board := message.NewMessageBoard()
+	defer board.Reset()
+	proc.SetMessageBoard(board)
+	const tag int32 = 111
+	scope := &Scope{
+		Proc: proc,
+		DataSource: &Source{RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{{
+			Tag: tag, UseMembershipFilter: true, MustApply: true,
+		}}},
+	}
+	ctx, cancel := context.WithCancel(proc.Ctx)
+	cancel()
+	proc.Ctx = ctx
+
+	filters, empty, err := scope.waitForRuntimeFilters(&Compile{proc: proc})
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, filters)
+	require.False(t, empty)
+}
+
+func TestVectorScanMembershipFilterExtractsInPayload(t *testing.T) {
+	payload := []byte{2, 4, 6, 8}
+	spec := &plan.RuntimeFilterSpec{UseMembershipFilter: true, MustApply: true}
+	filter := receivedRuntimeFilter{
+		spec: spec,
+		expr: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
+			{},
+			{Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Data: payload}}},
+		}}}},
+	}
+
+	membership, hasMembership, required := vectorScanMembershipFilter([]receivedRuntimeFilter{filter})
+
+	require.True(t, hasMembership)
+	require.True(t, required)
+	require.Equal(t, payload, membership)
+}
+
+func TestBuildVectorIndexReadersRejectsIncompleteRuntimeState(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	newScopeFor := func(spec *plan.VectorIndexScan) *Scope {
+		return &Scope{
+			Proc: proc,
+			DataSource: &Source{node: &plan.Node{
+				NodeType:        plan.Node_VECTOR_INDEX_SCAN,
+				VectorIndexScan: spec,
+			}},
+		}
+	}
+
+	_, err := newScopeFor(nil).buildVectorIndexReaders(nil)
+	require.ErrorContains(t, err, "missing index metadata")
+	_, err = newScopeFor(&plan.VectorIndexScan{}).buildVectorIndexReaders(nil)
+	require.ErrorContains(t, err, "missing index metadata")
+
+	nullQuery := &plan.VectorIndexScan{
+		Index:       &plan.IndexDef{IndexAlgo: "ivfflat"},
+		QueryVector: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}},
+	}
+	readers, err := newScopeFor(nullQuery).buildVectorIndexReaders(nil)
+	require.NoError(t, err)
+	require.Len(t, readers, 1)
+
+	query := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_array_float32), Width: 2},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_VecVal{VecVal: string(types.ArrayToBytes([]float32{1, 2}))},
+		}},
+	}
+	nullLimit := &plan.VectorIndexScan{
+		Index:          &plan.IndexDef{IndexAlgo: "ivfflat"},
+		QueryVector:    query,
+		CandidateLimit: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}},
+	}
+	_, err = newScopeFor(nullLimit).buildVectorIndexReaders(nil)
+	require.ErrorContains(t, err, "result limit did not fold")
+
+	wrongLimitType := &plan.VectorIndexScan{
+		Index:          &plan.IndexDef{IndexAlgo: "ivfflat"},
+		QueryVector:    query,
+		CandidateLimit: plan2.MakePlan2Int64ConstExprWithType(1),
+	}
+	_, err = newScopeFor(wrongLimitType).buildVectorIndexReaders(nil)
+	require.ErrorContains(t, err, "result limit is not uint64")
+
+	noReaderPlugin := &plan.VectorIndexScan{
+		Index:          &plan.IndexDef{IndexAlgo: "hnsw"},
+		QueryVector:    query,
+		CandidateLimit: plan2.MakePlan2Uint64ConstExprWithType(1),
+	}
+	_, err = newScopeFor(noReaderPlugin).buildVectorIndexReaders(nil)
+	require.ErrorContains(t, err, "has no scan reader")
+
+	ivfflatPlugin := &plan.VectorIndexScan{
+		Index:          &plan.IndexDef{IndexAlgo: "ivfflat"},
+		QueryVector:    query,
+		CandidateLimit: plan2.MakePlan2Uint64ConstExprWithType(1),
+	}
+	_, err = newScopeFor(ivfflatPlugin).buildVectorIndexReaders(nil)
+	require.ErrorContains(t, err, "requires a process, transaction, and storage engine")
+
+	unknownPlugin := &plan.VectorIndexScan{
+		Index:          &plan.IndexDef{IndexAlgo: "missing"},
+		QueryVector:    query,
+		CandidateLimit: plan2.MakePlan2Uint64ConstExprWithType(1),
+	}
+	_, err = newScopeFor(unknownPlugin).buildVectorIndexReaders(nil)
+	require.ErrorContains(t, err, "is not registered")
+
+	membership, hasMembership, required := vectorScanMembershipFilter(nil)
+	require.Nil(t, membership)
+	require.False(t, hasMembership)
+	require.False(t, required)
+	membership, hasMembership, required = vectorScanMembershipFilter([]receivedRuntimeFilter{{
+		spec: &plan.RuntimeFilterSpec{UseMembershipFilter: true, MustApply: true},
+		expr: &plan.Expr{},
+	}})
+	require.Nil(t, membership)
+	require.True(t, hasMembership)
+	require.True(t, required)
+	membership, hasMembership, required = vectorScanMembershipFilter([]receivedRuntimeFilter{{
+		expr: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{}}},
+	}})
+	require.Nil(t, membership)
+	require.False(t, hasMembership)
+	require.False(t, required)
+	membership, hasMembership, required = vectorScanMembershipFilter([]receivedRuntimeFilter{{
+		expr: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
+			{}, {Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Data: []byte{9, 8, 7}}}},
+		}}}},
+	}})
+	require.Equal(t, []byte{9, 8, 7}, membership)
+	require.False(t, hasMembership)
+	require.False(t, required)
+}
+
+func TestShuffleJoinStageNodesDistributesReceiversAndKeepsSinkScanWorker(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "cn-local:6001"
+	c.cnList = engine.Nodes{
+		{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 8},
+		{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 8},
+	}
+
+	sinkMerge := merge.NewArgument().WithSinkScan(true)
+	root := projection.NewArgument()
+	root.AppendChild(sinkMerge)
+	sinkScope := &Scope{
+		RootOp:   root,
+		NodeInfo: engine.Node{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 1},
+	}
+
+	stageNodes, local := c.shuffleJoinStageNodes([]*Scope{sinkScope}, nil)
+	require.True(t, local)
+	require.Len(t, stageNodes, 2)
+	require.Equal(t, "cn-local:6001", stageNodes[0].Addr)
+	require.Equal(t, "cn-remote:6001", stageNodes[1].Addr)
+
+	normalScope := &Scope{RootOp: merge.NewArgument()}
+	stageNodes, local = c.shuffleJoinStageNodes([]*Scope{normalScope}, nil)
+	require.False(t, local)
+	require.Len(t, stageNodes, 2)
+
+	c.cnList = engine.Nodes{
+		{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 8},
+	}
+	stageNodes, local = c.shuffleJoinStageNodes([]*Scope{sinkScope}, nil)
+	require.True(t, local)
+	require.Len(t, stageNodes, 2)
+	require.Equal(t, "cn-remote:6001", stageNodes[0].Addr)
+	require.Equal(t, "cn-local:6001", stageNodes[1].Addr)
+
+	c.cnList = nil
+	stageNodes, local = c.shuffleJoinStageNodes([]*Scope{sinkScope}, nil)
+	require.True(t, local)
+	require.Len(t, stageNodes, 1)
+	require.Equal(t, "cn-local:6001", stageNodes[0].Addr)
+}
+
+func TestAttachShuffleDispatchSourceFallsBackToFirstReceiver(t *testing.T) {
+	receivers := []*Scope{
+		{NodeInfo: engine.Node{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 1}},
+		{NodeInfo: engine.Node{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 1}},
+	}
+	remoteSource := &Scope{NodeInfo: engine.Node{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 8}}
+
+	attachShuffleDispatchSource(receivers, remoteSource, true)
+	require.Equal(t, []*Scope{remoteSource}, receivers[0].PreScopes)
+	require.Empty(t, receivers[1].PreScopes)
+
+	localSource := &Scope{NodeInfo: engine.Node{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 8}}
+	attachShuffleDispatchSource(receivers[1:], localSource, false)
+	require.Equal(t, []*Scope{localSource}, receivers[1].PreScopes)
+
+	unmatched := []*Scope{{NodeInfo: engine.Node{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 1}}}
+	attachShuffleDispatchSource(unmatched, remoteSource, false)
+	require.Empty(t, unmatched[0].PreScopes)
 }

@@ -15,6 +15,7 @@
 package aggexec
 
 import (
+	"math"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -123,7 +124,7 @@ func (exec *countStarExec) BatchMerge(next AggFuncExec, offset int, groups []uin
 		x2 := int(g2 >> aggBatchSizeShift)
 		y2 := g2 & aggBatchSizeMask
 		vals1 := chunkArr[int64](exec.state[x1].vecs[0])
-		vals2 := chunkArr[int64](other.state[x2].vecs[0])
+		vals2 := chunkRows[int64](other.state[x2].vecs[0])
 		vals1[y1] += vals2[y2]
 	}
 	return nil
@@ -155,7 +156,8 @@ func (exec *countStarExec) Flush() ([]*vector.Vector, error) {
 
 type countColumnExec struct {
 	aggExec
-	extra int64
+	extra                 int64
+	distinctContributions []*vector.Vector
 }
 
 func (exec *countColumnExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
@@ -163,7 +165,13 @@ func (exec *countColumnExec) Fill(groupIndex int, row int, vectors []*vector.Vec
 }
 
 func (exec *countColumnExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
-	return exec.BatchFill(0, slices.Repeat([]uint64{uint64(groupIndex + 1)}, vectors[0].Length()), vectors)
+	if !exec.IsDistinct() {
+		return exec.BatchFill(
+			0,
+			slices.Repeat([]uint64{uint64(groupIndex + 1)}, vectors[0].Length()),
+			vectors)
+	}
+	return exec.bulkFillDistinctArgs(groupIndex, vectors)
 }
 
 func (exec *countColumnExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
@@ -262,7 +270,7 @@ func (exec *countColumnExec) BatchMerge(next AggFuncExec, offset int, groups []u
 		x2 := int(g2 >> aggBatchSizeShift)
 		y2 := g2 & aggBatchSizeMask
 		vals1 := chunkArr[int64](exec.state[x1].vecs[0])
-		vals2 := chunkArr[int64](other.state[x2].vecs[0])
+		vals2 := chunkRows[int64](other.state[x2].vecs[0])
 		vals1[y1] += vals2[y2]
 	}
 	return nil
@@ -290,7 +298,11 @@ func (exec *countColumnExec) Flush() (_ []*vector.Vector, retErr error) {
 		}
 
 		for i := range vecs {
-			vecs[i] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+			var err error
+			vecs[i], err = exec.allocation.newVector(types.T_int64.ToType())
+			if err != nil {
+				return nil, err
+			}
 			if err := vecs[i].PreExtend(int(exec.state[i].length), exec.mp); err != nil {
 				return nil, err
 			}
@@ -298,6 +310,16 @@ func (exec *countColumnExec) Flush() (_ []*vector.Vector, retErr error) {
 			vals := vector.MustFixedColNoTypeCheck[int64](vecs[i])
 			for j := range vals {
 				vals[j] += int64(exec.state[i].argCnt[j])
+				if i < len(exec.distinctContributions) &&
+					exec.distinctContributions[i] != nil {
+					contributions := vector.MustFixedColNoTypeCheck[int64](
+						exec.distinctContributions[i])
+					if contributions[j] > math.MaxInt64-vals[j] {
+						return nil, moerr.NewInternalErrorNoCtx(
+							"count distinct result overflow")
+					}
+					vals[j] += contributions[j]
+				}
 			}
 		}
 	} else {
@@ -315,6 +337,20 @@ func (exec *countColumnExec) Flush() (_ []*vector.Vector, retErr error) {
 		}
 	}
 	return vecs, nil
+}
+
+func (exec *countColumnExec) Free() {
+	if exec == nil {
+		return
+	}
+	for i := range exec.distinctContributions {
+		if exec.distinctContributions[i] != nil {
+			exec.distinctContributions[i].Free(exec.mp)
+			exec.distinctContributions[i] = nil
+		}
+	}
+	exec.distinctContributions = nil
+	exec.aggExec.Free()
 }
 
 func makeCount(

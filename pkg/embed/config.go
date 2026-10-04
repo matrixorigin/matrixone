@@ -79,6 +79,12 @@ type ServiceConfig struct {
 	FileServices []fileservice.Config `toml:"fileservice"`
 	// HAKeeperClient hakeeper client config
 	HAKeeperClient logservice.HAKeeperClientConfig `toml:"hakeeper-client"`
+	// HAKeeperRunningRetryInterval is the startup retry interval while a TN
+	// service waits for HAKeeper to enter the Running state.
+	HAKeeperRunningRetryInterval tomlutil.Duration `toml:"hakeeper-running-retry-interval"`
+	// TNShardReadyRetryInterval is the startup retry interval while a CN service
+	// waits for HAKeeper to report an available TN shard.
+	TNShardReadyRetryInterval tomlutil.Duration `toml:"tn-shard-ready-retry-interval"`
 	// TN tn service config
 	TN_please_use_getTNServiceConfig *tnservice.Config `toml:"tn"`
 	TNCompatible                     *tnservice.Config `toml:"dn"` // for old config files compatibility
@@ -97,10 +103,11 @@ type ServiceConfig struct {
 	Clock struct {
 		// Backend clock backend implementation. [LOCAL|HLC], default LOCAL.
 		Backend string `toml:"source"`
-		// MaxClockOffset max clock offset between two nodes. Default is 500ms.
-		// Only valid when enable-check-clock-offset is true
+		// MaxClockOffset is the maximum clock offset between two nodes and is
+		// part of the timestamp-ordering correctness contract. Default is 500ms.
 		MaxClockOffset tomlutil.Duration `toml:"max-clock-offset"`
-		// EnableCheckMaxClockOffset enable local clock offset checker
+		// EnableCheckMaxClockOffset enables the local clock-jump monitor. It does
+		// not disable the MaxClockOffset uncertainty bound when false.
 		EnableCheckMaxClockOffset bool `toml:"enable-check-clock-offset"`
 	}
 
@@ -135,15 +142,33 @@ func newServiceConfig() ServiceConfig {
 			AllocateIDBatch:  100,
 			EnableCompress:   false,
 		},
-		Observability: *config.NewObservabilityParameters(),
-		LogService:    logservice.DefaultConfig(),
+		HAKeeperRunningRetryInterval: tomlutil.Duration{Duration: time.Second},
+		TNShardReadyRetryInterval:    tomlutil.Duration{Duration: time.Second},
+		Observability:                *config.NewObservabilityParameters(),
+		LogService:                   logservice.DefaultConfig(),
 		CN: cnservice.Config{
 			AutomaticUpgrade: true,
 			Frontend: config.FrontendParameters{
 				KeyEncryptionKey: "JlxRbXjFGnCsvbsFQSJFvhMhDLaAXq5y",
+				MongoDB:          *config.NewMongoDBParameters(),
+				ArrowLoad:        *config.NewArrowLoadParameters(),
 			},
 		},
 	}
+}
+
+func (c *ServiceConfig) setStartupRetryIntervalsDefault() error {
+	if c.HAKeeperRunningRetryInterval.Duration == 0 {
+		c.HAKeeperRunningRetryInterval.Duration = time.Second
+	} else if c.HAKeeperRunningRetryInterval.Duration < 0 {
+		return moerr.NewBadConfigNoCtx("hakeeper-running-retry-interval must be positive")
+	}
+	if c.TNShardReadyRetryInterval.Duration == 0 {
+		c.TNShardReadyRetryInterval.Duration = time.Second
+	} else if c.TNShardReadyRetryInterval.Duration < 0 {
+		return moerr.NewBadConfigNoCtx("tn-shard-ready-retry-interval must be positive")
+	}
+	return nil
 }
 
 func parseConfigFromFile(
@@ -185,17 +210,14 @@ func (c *ServiceConfig) validate() error {
 	}
 
 	// clock
-	if c.Clock.MaxClockOffset.Duration == 0 {
-		c.Clock.MaxClockOffset.Duration = defaultMaxClockOffset
+	if err := c.validateClockConfiguration(); err != nil {
+		return err
 	}
-	if c.Clock.Backend == "" {
-		c.Clock.Backend = localClockBackend
+	if err := c.validateAuthenticationClockBudget(); err != nil {
+		return err
 	}
-	if _, ok := supportTxnClockBackends[strings.ToUpper(c.Clock.Backend)]; !ok {
-		return moerr.NewInternalErrorf(context.Background(), "%s clock backend not support", c.Clock.Backend)
-	}
-	if !c.Clock.EnableCheckMaxClockOffset {
-		c.Clock.MaxClockOffset.Duration = 0
+	if err := c.setStartupRetryIntervalsDefault(); err != nil {
+		return err
 	}
 
 	// file service
@@ -224,17 +246,11 @@ func (c *ServiceConfig) setDefaultValue() error {
 	}
 
 	// clock
-	if c.Clock.MaxClockOffset.Duration == 0 {
-		c.Clock.MaxClockOffset.Duration = defaultMaxClockOffset
+	if err := c.validateClockConfiguration(); err != nil {
+		return err
 	}
-	if c.Clock.Backend == "" {
-		c.Clock.Backend = localClockBackend
-	}
-	if _, ok := supportTxnClockBackends[strings.ToUpper(c.Clock.Backend)]; !ok {
-		return moerr.NewInternalErrorf(context.Background(), "%s clock backend not support", c.Clock.Backend)
-	}
-	if !c.Clock.EnableCheckMaxClockOffset {
-		c.Clock.MaxClockOffset.Duration = 0
+	if err := c.setStartupRetryIntervalsDefault(); err != nil {
+		return err
 	}
 
 	// file service
@@ -265,6 +281,9 @@ func (c *ServiceConfig) setDefaultValue() error {
 
 	// cn
 	c.CN.SetDefaultValue()
+	if err := c.validateAuthenticationClockBudget(); err != nil {
+		return err
+	}
 
 	//no default proxy config
 
@@ -274,6 +293,48 @@ func (c *ServiceConfig) setDefaultValue() error {
 	c.initMetaCache()
 
 	return nil
+}
+
+func (c *ServiceConfig) validateClockConfiguration() error {
+	if c.Clock.MaxClockOffset.Duration == 0 {
+		c.Clock.MaxClockOffset.Duration = defaultMaxClockOffset
+	}
+	if c.Clock.MaxClockOffset.Duration < 0 {
+		return moerr.NewBadConfigNoCtx("max-clock-offset must be positive")
+	}
+	if c.Clock.Backend == "" {
+		c.Clock.Backend = localClockBackend
+	}
+	if _, ok := supportTxnClockBackends[strings.ToUpper(c.Clock.Backend)]; !ok {
+		return moerr.NewInternalErrorf(context.Background(), "%s clock backend not support", c.Clock.Backend)
+	}
+	return nil
+}
+
+func (c *ServiceConfig) validateAuthenticationClockBudget() error {
+	if !strings.EqualFold(c.ServiceType, metadata.ServiceType_CN.String()) {
+		return nil
+	}
+	return c.validateAuthenticationClockBudgetFor(metadata.ServiceType_CN)
+}
+
+func (c *ServiceConfig) validateAuthenticationClockBudgetFor(
+	serviceType metadata.ServiceType,
+) error {
+	if serviceType != metadata.ServiceType_CN {
+		return nil
+	}
+	c.CN.Frontend.SetDefaultValues()
+	// skipCheckUser bypasses catalog authentication, so no authentication
+	// freshness fence can consume the connection deadline. General clock
+	// validation above remains mandatory for every service mode.
+	if c.CN.Frontend.SkipCheckUser {
+		return nil
+	}
+	return config.ValidateAuthenticationFreshnessBudget(
+		c.Clock.MaxClockOffset.Duration,
+		c.CN.Frontend.ConnectTimeout.Duration,
+	)
 }
 
 func (c *ServiceConfig) initMetaCache() {
@@ -298,7 +359,22 @@ func (c *ServiceConfig) createFileService(
 	}
 
 	services := make([]fileservice.FileService, 0, len(c.FileServices))
+	counterSetNames := make([]string, 0, len(c.FileServices)*2)
+	metricScope := fileservice.ServiceMetricScope(serviceType.String(), nodeUUID)
+	created := false
+	defer func() {
+		if created {
+			return
+		}
+		for _, service := range services {
+			service.Close(ctx)
+		}
+		for _, name := range counterSetNames {
+			perfcounter.Named.Delete(name)
+		}
+	}()
 	for _, config := range c.FileServices {
+		config.Cache.MetricScope = metricScope
 		counterSet := new(perfcounter.CounterSet)
 		service, err := fileservice.NewFileService(
 			ctx,
@@ -319,13 +395,13 @@ func (c *ServiceConfig) createFileService(
 			service.Name(),
 		)
 		perfcounter.Named.Store(counterSetName, counterSet)
+		counterSetNames = append(counterSetNames, counterSetName)
 
 		// set shared fs perf counter as node perf counter
 		if service.Name() == defines.SharedFileServiceName {
-			perfcounter.Named.Store(
-				perfcounter.NameForNode(serviceType.String(), nodeUUID),
-				counterSet,
-			)
+			nodeCounterSetName := perfcounter.NameForNode(serviceType.String(), nodeUUID)
+			perfcounter.Named.Store(nodeCounterSetName, counterSet)
+			counterSetNames = append(counterSetNames, nodeCounterSetName)
 		}
 	}
 
@@ -364,6 +440,7 @@ func (c *ServiceConfig) createFileService(
 		return nil, err
 	}
 
+	created = true
 	return fs, nil
 }
 
@@ -404,9 +481,6 @@ func (c *ServiceConfig) getCNServiceConfig() cnservice.Config {
 	cfg := c.CN
 	cfg.HAKeeper.ClientConfig = c.HAKeeperClient
 	cfg.Frontend.SetLogAndVersion(&c.Log, version.Version)
-	if cfg.Txn.Trace.Dir == "" {
-		cfg.Txn.Trace.Dir = "trace"
-	}
 	return cfg
 }
 
@@ -599,6 +673,7 @@ func (c *ServiceConfig) setFileserviceDefaultValues() {
 		c.FileServices = append(c.FileServices, fileservice.Config{
 			Name:    defines.TmpFileServiceName,
 			Backend: "DISK-TMP",
+			DataDir: c.defaultFileServiceDataDir(defines.TmpFileServiceName),
 		})
 	}
 }

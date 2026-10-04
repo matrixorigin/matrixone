@@ -1,3 +1,4 @@
+set session sql_mode = default;
 set ft_relevancy_algorithm="TF-IDF";
 drop database if exists test_fulltext;
 create database test_fulltext;
@@ -21,7 +22,7 @@ insert into fulltext01 VALUES('Rapier', 'Abigail','F',	'Human Resources',38);
 select * from fulltext01;
 
 create fulltext index ftidx on fulltext01 (LastName, FirstName);
-alter table fulltext01 add column newcolumn decimal after LastName;
+alter table fulltext01 add column newcolumn decimal(38,0) after LastName;
 show create table fulltext01;
 select * from fulltext01;
 truncate fulltext01;
@@ -254,7 +255,7 @@ col4 varchar(225) primary key
 );
 create fulltext index f05 on jsonline_t2(col3);
 load data infile{'filepath'='$resources/load_data/char_varchar_2.jl','format'='jsonline','jsondata'='object'}into table jsonline_t2;
-select * from jsonline_t2;
+select * from jsonline_t2 order by col4;
 drop table jsonline_t2;
 
 
@@ -268,7 +269,7 @@ create table t1(
     col4 date,
     col5 datetime,
     col6 timestamp,
-    col7 decimal,
+    col7 decimal(38,0),
     col8 float,
     col9 json,
     col10 text,

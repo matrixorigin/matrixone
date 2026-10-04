@@ -1,0 +1,189 @@
+drop database if exists issue26064_rebuild;
+create database issue26064_rebuild;
+use issue26064_rebuild;
+create table rebuild_base(id int primary key, existing_value int default 5, removable_value int);
+insert into rebuild_base values (1, 10, 100), (2, 20, 200);
+data branch create table rebuild_branch from rebuild_base;
+set @rebuild_before_truncate = (
+select rel_id from mo_catalog.mo_tables
+where reldatabase = 'issue26064_rebuild' and relname = 'rebuild_branch'
+);
+truncate table rebuild_branch;
+set @rebuild_after_truncate = (
+select rel_id from mo_catalog.mo_tables
+where reldatabase = 'issue26064_rebuild' and relname = 'rebuild_branch'
+);
+delete from rebuild_branch;
+set @rebuild_after_delete = (
+select rel_id from mo_catalog.mo_tables
+where reldatabase = 'issue26064_rebuild' and relname = 'rebuild_branch'
+);
+select @rebuild_before_truncate <> @rebuild_after_truncate
+and @rebuild_after_truncate <> @rebuild_after_delete
+as truncate_and_delete_replace_physical_tables;
+➤ truncate_and_delete_replace_physical_tables[-7,1,0]  𝄀
+1
+select count(*) as retired_rebuild_generations
+from mo_catalog.mo_branch_metadata
+where table_id in (@rebuild_before_truncate, @rebuild_after_truncate)
+and table_deleted;
+➤ retired_rebuild_generations[-5,64,0]  𝄀
+2
+select p_table_id = @rebuild_after_truncate
+and level = 'alter:table'
+and not table_deleted as active_rebuild_branch
+from mo_catalog.mo_branch_metadata
+where table_id = @rebuild_after_delete;
+➤ active_rebuild_branch[-7,1,0]  𝄀
+1
+select count(*) as rebuild_protection_snapshots
+from mo_catalog.mo_snapshots
+where kind = 'branch'
+and sname in (
+concat('__mo_branch_', cast(@rebuild_before_truncate as char)),
+concat('__mo_branch_', cast(@rebuild_after_truncate as char)),
+concat('__mo_branch_', cast(@rebuild_after_delete as char))
+);
+➤ rebuild_protection_snapshots[-5,64,0]  𝄀
+3
+data branch diff rebuild_branch against rebuild_base;
+➤ diff rebuild_branch against rebuild_base[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  existing_value[4,32,0]  ¦  removable_value[4,32,0]
+data branch delete table rebuild_branch;
+select count(*) as rebuild_snapshots_after_branch_delete
+from mo_catalog.mo_snapshots
+where kind = 'branch'
+and sname in (
+concat('__mo_branch_', cast(@rebuild_before_truncate as char)),
+concat('__mo_branch_', cast(@rebuild_after_truncate as char)),
+concat('__mo_branch_', cast(@rebuild_after_delete as char))
+);
+➤ rebuild_snapshots_after_branch_delete[-5,64,0]  𝄀
+0
+create table evolve_base(id int primary key, existing_value int default 5, removable_value int);
+insert into evolve_base values (1, 10, 100), (2, 20, 200);
+data branch create table evolve_branch from evolve_base;
+set @evolve_initial = (
+select rel_id from mo_catalog.mo_tables
+where reldatabase = 'issue26064_rebuild' and relname = 'evolve_branch'
+);
+alter table evolve_branch add column extra_value int default 0;
+set @evolve_after_add = (
+select rel_id from mo_catalog.mo_tables
+where reldatabase = 'issue26064_rebuild' and relname = 'evolve_branch'
+);
+data branch diff evolve_branch against evolve_base;
+➤ diff evolve_branch against evolve_base[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  existing_value[4,32,0]  ¦  removable_value[4,32,0]  ¦  extra_value[4,32,0]
+alter table evolve_branch alter column existing_value set default 7;
+set @evolve_after_set_default = (
+select rel_id from mo_catalog.mo_tables
+where reldatabase = 'issue26064_rebuild' and relname = 'evolve_branch'
+);
+alter table evolve_branch drop column removable_value;
+set @evolve_after_drop_column = (
+select rel_id from mo_catalog.mo_tables
+where reldatabase = 'issue26064_rebuild' and relname = 'evolve_branch'
+);
+alter table evolve_branch alter column existing_value drop default;
+set @evolve_after_drop_default = (
+select rel_id from mo_catalog.mo_tables
+where reldatabase = 'issue26064_rebuild' and relname = 'evolve_branch'
+);
+select @evolve_initial <> @evolve_after_add
+and @evolve_after_add <> @evolve_after_set_default
+and @evolve_after_set_default <> @evolve_after_drop_column
+and @evolve_after_drop_column <> @evolve_after_drop_default
+as each_alter_rebuild_replaces_physical_table;
+➤ each_alter_rebuild_replaces_physical_table[-7,1,0]  𝄀
+1
+select count(*) as retired_alter_generations
+from mo_catalog.mo_branch_metadata
+where table_id in (
+@evolve_initial, @evolve_after_add, @evolve_after_set_default, @evolve_after_drop_column
+) and table_deleted;
+➤ retired_alter_generations[-5,64,0]  𝄀
+4
+select p_table_id = @evolve_after_drop_column
+and level = 'alter:table'
+and not table_deleted as active_alter_branch
+from mo_catalog.mo_branch_metadata
+where table_id = @evolve_after_drop_default;
+➤ active_alter_branch[-7,1,0]  𝄀
+1
+select count(*) as alter_protection_snapshots
+from mo_catalog.mo_snapshots
+where kind = 'branch'
+and sname in (
+concat('__mo_branch_', cast(@evolve_initial as char)),
+concat('__mo_branch_', cast(@evolve_after_add as char)),
+concat('__mo_branch_', cast(@evolve_after_set_default as char)),
+concat('__mo_branch_', cast(@evolve_after_drop_column as char)),
+concat('__mo_branch_', cast(@evolve_after_drop_default as char))
+);
+➤ alter_protection_snapshots[-5,64,0]  𝄀
+5
+data branch delete table evolve_branch;
+select count(*) as alter_snapshots_after_branch_delete
+from mo_catalog.mo_snapshots
+where kind = 'branch'
+and sname in (
+concat('__mo_branch_', cast(@evolve_initial as char)),
+concat('__mo_branch_', cast(@evolve_after_add as char)),
+concat('__mo_branch_', cast(@evolve_after_set_default as char)),
+concat('__mo_branch_', cast(@evolve_after_drop_column as char)),
+concat('__mo_branch_', cast(@evolve_after_drop_default as char))
+);
+➤ alter_snapshots_after_branch_delete[-5,64,0]  𝄀
+0
+create table control_base(id int primary key, v int);
+insert into control_base values (1, 10), (2, 20);
+data branch create table control_branch from control_base;
+set @control_before_delete = (
+select rel_id from mo_catalog.mo_tables
+where reldatabase = 'issue26064_rebuild' and relname = 'control_branch'
+);
+delete from control_branch where true;
+set @control_after_delete = (
+select rel_id from mo_catalog.mo_tables
+where reldatabase = 'issue26064_rebuild' and relname = 'control_branch'
+);
+select @control_before_delete = @control_after_delete as predicate_delete_keeps_physical_table;
+➤ predicate_delete_keeps_physical_table[-7,1,0]  𝄀
+1
+select level = 'table' and not table_deleted as predicate_delete_keeps_active_branch
+from mo_catalog.mo_branch_metadata
+where table_id = @control_after_delete;
+➤ predicate_delete_keeps_active_branch[-7,1,0]  𝄀
+1
+select count(*) as predicate_delete_protection_snapshots
+from mo_catalog.mo_snapshots
+where kind = 'branch'
+and sname = concat('__mo_branch_', cast(@control_after_delete as char));
+➤ predicate_delete_protection_snapshots[-5,64,0]  𝄀
+1
+data branch delete table control_branch;
+create table txn_base(id int primary key, v int);
+insert into txn_base values (1, 10), (2, 20);
+data branch create table txn_branch from txn_base;
+set @txn_before_truncate = (
+select rel_id from mo_catalog.mo_tables
+where reldatabase = 'issue26064_rebuild' and relname = 'txn_branch'
+);
+begin;
+truncate table txn_branch;
+-- @regex("TRUNCATE on a data-branch lineage is not supported inside an explicit transaction", true)
+not supported: TRUNCATE on a data-branch lineage is not supported inside an explicit transaction
+rollback;
+set @txn_after_truncate = (
+select rel_id from mo_catalog.mo_tables
+where reldatabase = 'issue26064_rebuild' and relname = 'txn_branch'
+);
+select @txn_before_truncate = @txn_after_truncate as rejected_truncate_is_atomic;
+➤ rejected_truncate_is_atomic[-7,1,0]  𝄀
+1
+select level = 'table' and not table_deleted as rejected_truncate_keeps_active_branch
+from mo_catalog.mo_branch_metadata
+where table_id = @txn_after_truncate;
+➤ rejected_truncate_keeps_active_branch[-7,1,0]  𝄀
+1
+data branch delete table txn_branch;
+drop database issue26064_rebuild;

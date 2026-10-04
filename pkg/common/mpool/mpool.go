@@ -17,6 +17,7 @@ package mpool
 import (
 	"fmt"
 	"math"
+	"math/bits"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -29,7 +30,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/stack"
+	"go.uber.org/zap"
 )
 
 // debugPoisonOnFree, when enabled, fills freed memory with 0xDD bytes before
@@ -54,6 +57,105 @@ type MPoolStats struct {
 	// xpool frees are really bugs.  we always record them for debugging.
 	mu        sync.Mutex
 	xpoolFree map[string]detailInfo
+}
+
+// OnHeapOwnershipStats tracks the minimum logical-ownership facts needed to
+// detect an on-heap allocation whose owner has not called Free. It is smaller
+// than MPoolStats because on-heap ownership does not participate in admission
+// and does not need cumulative allocation traffic counters.
+type OnHeapOwnershipStats struct {
+	NumCurrBytes   atomic.Int64
+	NumCurrObjects atomic.Int64
+	HighWaterMark  atomic.Int64
+}
+
+func (s *OnHeapOwnershipStats) recordAlloc(sz int64) {
+	curr := s.NumCurrBytes.Add(sz)
+	s.NumCurrObjects.Add(1)
+	for {
+		peak := s.HighWaterMark.Load()
+		if curr <= peak || s.HighWaterMark.CompareAndSwap(peak, curr) {
+			return
+		}
+	}
+}
+
+func (s *OnHeapOwnershipStats) recordFree(sz, objects int64) {
+	if sz < 0 || objects < 0 {
+		panic(moerr.NewInternalErrorNoCtx("mpool on-heap ownership freed a negative value"))
+	}
+	bytes := s.NumCurrBytes.Add(-sz)
+	count := s.NumCurrObjects.Add(-objects)
+	if bytes < 0 || count < 0 {
+		panic(moerr.NewInternalErrorNoCtx("mpool freed more on-heap ownership than allocated"))
+	}
+}
+
+func (s *OnHeapOwnershipStats) ReportJson() string {
+	if s.HighWaterMark.Load() == 0 {
+		return ""
+	}
+	return fmt.Sprintf(
+		`{"currBytes": %d,"currObjects": %d,"highWaterMark": %d}`,
+		s.NumCurrBytes.Load(),
+		s.NumCurrObjects.Load(),
+		s.HighWaterMark.Load(),
+	)
+}
+
+// ResourcePeakEpoch is an opaque, statement-scoped observation token.  Its
+// peak remains readable after the epoch is ended, but allocations are only
+// published while the token is the pool's current epoch.
+type ResourcePeakEpoch struct {
+	owner *MPool
+	peak  atomic.Int64
+	ended atomic.Bool
+}
+
+// resourceMemoryStats observes successful off-heap allocation ownership only.
+// It is deliberately separate from MPoolStats: the latter preserves legacy
+// admission behavior and may temporarily record a reservation that is later
+// compensated when an allocation exceeds a cap.
+type resourceMemoryStats struct {
+	allocated     atomic.Int64
+	freed         atomic.Int64
+	live          atomic.Int64
+	peak          atomic.Int64
+	crossPoolFree atomic.Int64
+}
+
+func (s *resourceMemoryStats) recordAlloc(sz int64) int64 {
+	s.allocated.Add(sz)
+	curr := s.live.Add(sz)
+	for {
+		peak := s.peak.Load()
+		if curr <= peak || s.peak.CompareAndSwap(peak, curr) {
+			return curr
+		}
+	}
+}
+
+func (s *resourceMemoryStats) recordFree(sz int64) {
+	s.freed.Add(sz)
+	s.live.Add(-sz)
+}
+
+func (e *ResourcePeakEpoch) recordPeak(curr int64) {
+	if e == nil || curr < 0 || e.ended.Load() {
+		return
+	}
+	for {
+		peak := e.peak.Load()
+		if curr <= peak {
+			return
+		}
+		if e.ended.Load() {
+			return
+		}
+		if e.peak.CompareAndSwap(peak, curr) {
+			return
+		}
+	}
 }
 
 func (s *MPoolStats) Init() {
@@ -100,11 +202,14 @@ func (s *MPoolStats) RecordAlloc(tag string, sz int64) int64 {
 	s.NumAllocBytes.Add(sz)
 	curr := s.NumCurrBytes.Add(sz)
 	hwm := s.HighWaterMark.Load()
-	if curr > hwm {
-		swapped := s.HighWaterMark.CompareAndSwap(hwm, curr)
-		if swapped && curr/GB != hwm/GB {
-			logutil.Infof("MPool %s new high watermark\n%s", tag, s.Report("    "))
+	for curr > hwm {
+		if s.HighWaterMark.CompareAndSwap(hwm, curr) {
+			if curr/GB != hwm/GB {
+				logutil.Infof("MPool %s new high watermark\n%s", tag, s.Report("    "))
+			}
+			break
 		}
+		hwm = s.HighWaterMark.Load()
 	}
 	return curr
 }
@@ -169,13 +274,27 @@ type memHdr struct {
 	poolId  int64
 	allocSz int32
 	guard   [3]uint8
-	offHeap bool
+	kind    uint8
 }
+
+const (
+	memKindOnHeap uint8 = iota
+	memKindOffHeap
+	memKindAccountedOffHeap
+)
 
 func init() {
 	if unsafe.Sizeof(memHdr{}) != kMemHdrSz {
 		panic("memory header size assertion failed")
 	}
+}
+
+func (pHdr memHdr) isOffHeap() bool {
+	return pHdr.kind != memKindOnHeap
+}
+
+func (pHdr memHdr) isAccounted() bool {
+	return pHdr.kind == memKindAccountedOffHeap
 }
 
 func (pHdr *memHdr) SetGuard() {
@@ -193,15 +312,19 @@ type detailInfo struct {
 }
 
 type mpoolDetails struct {
-	mu    sync.Mutex
-	alloc map[string]detailInfo
-	free  map[string]detailInfo
+	mu          sync.Mutex
+	alloc       map[string]detailInfo
+	free        map[string]detailInfo
+	onHeapAlloc map[string]detailInfo
+	onHeapFree  map[string]detailInfo
 }
 
 func newMpoolDetails() *mpoolDetails {
 	mpd := mpoolDetails{}
 	mpd.alloc = make(map[string]detailInfo)
 	mpd.free = make(map[string]detailInfo)
+	mpd.onHeapAlloc = make(map[string]detailInfo)
+	mpd.onHeapFree = make(map[string]detailInfo)
 	return &mpd
 }
 
@@ -232,6 +355,30 @@ func (d *mpoolDetails) recordFree(k string, nb int64) {
 	d.free[k] = info
 }
 
+func (d *mpoolDetails) recordOnHeapAlloc(k string, nb int64) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	info := d.onHeapAlloc[k]
+	info.cnt++
+	info.bytes += nb
+	d.onHeapAlloc[k] = info
+}
+
+func (d *mpoolDetails) recordOnHeapFree(k string, nb int64) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	info := d.onHeapFree[k]
+	info.cnt++
+	info.bytes += nb
+	d.onHeapFree[k] = info
+}
+
 func (d *mpoolDetails) reportJson() string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -249,20 +396,77 @@ func (d *mpoolDetails) reportJson() string {
 		frees = append(frees, kvs)
 	}
 	ret += strings.Join(frees, ",")
+	ret += `}, "on_heap_alloc": {`
+	onHeapAllocs := make([]string, 0, len(d.onHeapAlloc))
+	for k, v := range d.onHeapAlloc {
+		kvs := fmt.Sprintf("\"%s\": [%d, %d]", k, v.cnt, v.bytes)
+		onHeapAllocs = append(onHeapAllocs, kvs)
+	}
+	ret += strings.Join(onHeapAllocs, ",")
+	ret += `}, "on_heap_free": {`
+	onHeapFrees := make([]string, 0, len(d.onHeapFree))
+	for k, v := range d.onHeapFree {
+		kvs := fmt.Sprintf("\"%s\": [%d, %d]", k, v.cnt, v.bytes)
+		onHeapFrees = append(onHeapFrees, kvs)
+	}
+	ret += strings.Join(onHeapFrees, ",")
 	ret += "}}"
 	return ret
 }
 
 // The memory pool.
 type MPool struct {
-	id      int64      // mpool generated, used to look up the MPool
-	tag     string     // user supplied, for debug/inspect
-	cap     int64      // pool capacity
-	stats   MPoolStats // stats
-	details *mpoolDetails
+	id       int64      // mpool generated, used to look up the MPool
+	tag      string     // user supplied, for debug/inspect
+	cap      int64      // pool capacity
+	stats    MPoolStats // stats
+	resource resourceMemoryStats
+	epoch    atomic.Pointer[ResourcePeakEpoch]
+	details  *mpoolDetails
+	// onHeapShardHints is a conservative set of global registry shards this
+	// pool has published on-heap pointers into. It only narrows destroy-time
+	// diagnostics; the pointer registry remains authoritative.
+	onHeapShardHints [(numPtrShards + 63) / 64]atomic.Uint64
 
 	noLock bool
 	ptrs   map[unsafe.Pointer]memHdr
+	// noLockAllocationAccount identifies the single account whose allocations
+	// may live in this noLock pool.  It is set once, before the pool starts
+	// allocating, so terminal diagnostics can reject unrelated active pools
+	// without touching their owner-only pointer maps.
+	noLockAllocationAccount atomic.Pointer[AllocationAccount]
+	// accountedPtrs keeps the physical header and its capacity lease in one
+	// entry.  Accounted allocations are not duplicated in ptrs: a dedicated
+	// map preserves the compact memHdr value for the much more common
+	// unaccounted pool while avoiding two map insertions/lookups per accounted
+	// allocation.
+	accountedPtrs map[unsafe.Pointer]accountedPtrMetadata
+}
+
+type accountedPtrMetadata struct {
+	hdr   memHdr
+	lease allocationLease
+}
+
+// BindAllocationAccount binds a noLock pool to one allocation account for its
+// lifetime.  The caller must establish the binding before the first physical
+// allocation and retain the noLock pool's single-owner contract.  Normal pools
+// keep their metadata in the synchronized global shards and need no binding.
+func (mp *MPool) BindAllocationAccount(account *AllocationAccount) error {
+	if mp == nil || account == nil || account.registry == nil || account.handle == 0 {
+		return ErrAllocationAccountInvalid
+	}
+	if !mp.noLock || len(mp.ptrs) != 0 || len(mp.accountedPtrs) != 0 ||
+		mp.stats.NumCurrBytes.Load() != 0 {
+		return ErrAllocationAccountInvariant
+	}
+	if mp.noLockAllocationAccount.CompareAndSwap(nil, account) {
+		return nil
+	}
+	if mp.noLockAllocationAccount.Load() == account {
+		return nil
+	}
+	return ErrAllocationAccountMismatch
 }
 
 const (
@@ -272,15 +476,44 @@ const (
 
 func (mp *MPool) recordPtrHdr(ptr unsafe.Pointer, pHdr memHdr) error {
 	if !mp.noLock {
-		return gRecordPtr(ptr, pHdr)
-	} else {
-		_, ok := mp.ptrs[ptr]
-		if ok {
-			return moerr.NewInternalErrorNoCtx("ptr already recorded")
+		if !pHdr.isOffHeap() {
+			return gRecordOnHeapPtr(ptr, pHdr, mp)
 		}
-		mp.ptrs[ptr] = pHdr
-		return nil
+		return gRecordPtr(ptr, pHdr)
 	}
+	if _, ok := mp.ptrs[ptr]; ok {
+		return moerr.NewInternalErrorNoCtx("ptr already recorded")
+	}
+	if _, ok := mp.accountedPtrs[ptr]; ok {
+		return moerr.NewInternalErrorNoCtx("ptr already recorded")
+	}
+	mp.ptrs[ptr] = pHdr
+	return nil
+}
+
+func (mp *MPool) recordAccountedPtrMetadata(
+	ptr unsafe.Pointer,
+	pHdr memHdr,
+	lease allocationLease,
+) error {
+	if !mp.noLock {
+		return gRecordAccountedPtrMetadata(
+			ptr,
+			pHdr,
+			lease,
+		)
+	}
+	if _, ok := mp.ptrs[ptr]; ok {
+		return moerr.NewInternalErrorNoCtx("ptr already recorded")
+	}
+	if _, ok := mp.accountedPtrs[ptr]; ok {
+		return moerr.NewInternalErrorNoCtx("ptr already recorded")
+	}
+	if mp.accountedPtrs == nil {
+		mp.accountedPtrs = make(map[unsafe.Pointer]accountedPtrMetadata)
+	}
+	mp.accountedPtrs[ptr] = accountedPtrMetadata{hdr: pHdr, lease: lease}
+	return nil
 }
 
 func (mp *MPool) getPtrHdr(ptr unsafe.Pointer) (memHdr, bool) {
@@ -288,28 +521,67 @@ func (mp *MPool) getPtrHdr(ptr unsafe.Pointer) (memHdr, bool) {
 		return gGetPtr(ptr)
 	}
 	hdr, ok := mp.ptrs[ptr]
-	return hdr, ok
+	if ok {
+		return hdr, true
+	}
+	metadata, ok := mp.accountedPtrs[ptr]
+	return metadata.hdr, ok
 }
 
-func (mp *MPool) removePtrHdr(ptr unsafe.Pointer) (memHdr, bool) {
+func (mp *MPool) getPtrMetadata(
+	ptr unsafe.Pointer,
+	lease *allocationLease,
+) (memHdr, bool) {
 	if !mp.noLock {
-		return gRemovePtr(ptr)
-	} else {
-		hdr, ok := mp.ptrs[ptr]
-		delete(mp.ptrs, ptr)
-		return hdr, ok
+		return gGetPtrMetadata(ptr, lease)
 	}
+	if hdr, ok := mp.ptrs[ptr]; ok {
+		return hdr, true
+	}
+	metadata, ok := mp.accountedPtrs[ptr]
+	if !ok {
+		return memHdr{}, false
+	}
+	*lease = metadata.lease
+	return metadata.hdr, true
+}
+
+func (mp *MPool) removePtrMetadata(
+	ptr unsafe.Pointer,
+	lease *allocationLease,
+) (memHdr, bool) {
+	if !mp.noLock {
+		return gRemovePtrMetadata(ptr, lease)
+	}
+	if hdr, ok := mp.ptrs[ptr]; ok {
+		delete(mp.ptrs, ptr)
+		return hdr, true
+	}
+	metadata, ok := mp.accountedPtrs[ptr]
+	if !ok {
+		return memHdr{}, false
+	}
+	delete(mp.accountedPtrs, ptr)
+	*lease = metadata.lease
+	return metadata.hdr, true
 }
 
 func (mp *MPool) deallocateAllPtrs() {
 	for ptr, hdr := range mp.ptrs {
-		if hdr.offHeap {
+		if hdr.isOffHeap() {
 			sz := int(hdr.allocSz)
 			profileRecordFree(uintptr(ptr), int64(sz))
 			simpleCAllocator().Deallocate(unsafe.Slice((*byte)(ptr), sz), uint64(sz))
 		}
 	}
+	for ptr, metadata := range mp.accountedPtrs {
+		sz := int(metadata.hdr.allocSz)
+		profileRecordAccountedFree(metadata.lease, int64(sz))
+		simpleCAllocator().Deallocate(unsafe.Slice((*byte)(ptr), sz), uint64(sz))
+		metadata.lease.release(uint64(sz))
+	}
 	mp.ptrs = nil
+	mp.accountedPtrs = nil
 }
 
 func (mp *MPool) EnableDetailRecording() {
@@ -342,33 +614,40 @@ func (mp *MPool) Cap() int64 {
 	return mp.cap
 }
 
-const (
-	xxxIWouldRatherUseAfterFreeCrashLaterThanLeak = true
-)
-
 func (mp *MPool) destroy() {
-	if mp.stats.NumAlloc.Load() < mp.stats.NumFree.Load() {
-		// this is a memory leak,
+	var onHeapBytes, onHeapObjects int64
+	if mp.noLock {
+		onHeapBytes, onHeapObjects = mp.OnHeapOutstanding()
+	} else {
+		onHeapBytes, onHeapObjects = mp.scanOnHeapOutstandingHinted()
+	}
+	if onHeapBytes != 0 {
+		logutil.Warn(
+			"mpool closed with outstanding on-heap ownership",
+			zap.Int64("pool-id", mp.id),
+			zap.String("pool-tag", mp.tag),
+			zap.Int64("bytes", onHeapBytes),
+			zap.Int64("objects", onHeapObjects),
+		)
+	}
+	liveBytes := mp.stats.NumCurrBytes.Load()
+	if liveBytes != 0 {
 		logutil.Errorf("mp error: %s", mp.stats.Report(""))
-
-		// here we MUST free all the memories allocated by this mpool.
-		// otherwise it is a memory leak.  Whoever still holds
-		// a pointer of this mpool is a bug (the cross pool case).
-		//
-		// We are so messed up because the cross pool free.
-		// If a pointer is handed out to someone else and we free here
-		// it will be a use after free.   We risk a crash or a leak.
-		// Eitherway we are screwed.
-		if xxxIWouldRatherUseAfterFreeCrashLaterThanLeak {
-			mp.deallocateAllPtrs()
+	}
+	if mp.noLock && (liveBytes != 0 || onHeapBytes != 0) {
+		// A noLock pool exclusively owns its local pointer metadata, so its
+		// teardown is the terminal release event for every remaining block.
+		mp.deallocateAllPtrs()
+		if liveBytes != 0 {
+			nfree := mp.stats.NumAlloc.Load() - mp.stats.NumFree.Load()
+			mp.stats.RecordManyFrees(mp.tag, nfree, liveBytes)
+			globalStats.RecordManyFrees(mp.tag, nfree, liveBytes)
+			mp.resource.recordFree(liveBytes)
+		}
+		if onHeapBytes != 0 {
+			globalOnHeapStats.recordFree(onHeapBytes, onHeapObjects)
 		}
 	}
-
-	// Here we just compensate whatever left over in mp.stats
-	// into globalStats.
-	globalStats.RecordManyFrees(mp.tag,
-		mp.stats.NumAlloc.Load()-mp.stats.NumFree.Load(),
-		mp.stats.NumCurrBytes.Load())
 }
 
 // New a MPool.   Tag is user supplied, used for debugging/diagnostics.
@@ -434,11 +713,14 @@ func MustNewZeroNoFixed() *MPool {
 func (mp *MPool) ReportJson() string {
 	ss := mp.stats.ReportJson()
 	if ss == "" {
-		return fmt.Sprintf("{\"%s\": \"\"}", mp.tag)
+		ss = `""`
 	}
 	ret := fmt.Sprintf("{\"%s\": %s", mp.tag, ss)
+	if bytes, objects := mp.OnHeapOutstanding(); objects != 0 {
+		ret += fmt.Sprintf(",\n \"on_heap\": {\"currBytes\": %d,\"currObjects\": %d}", bytes, objects)
+	}
 	if mp.details != nil {
-		ret += `,\n "detailed_alloc": `
+		ret += ",\n \"detailed_alloc\": "
 		ret += mp.details.reportJson()
 	}
 
@@ -447,6 +729,172 @@ func (mp *MPool) ReportJson() string {
 
 func (mp *MPool) CurrNB() int64 {
 	return mp.stats.NumCurrBytes.Load()
+}
+
+// OnHeapCurrNB returns the bytes whose Go-heap backing remains logically owned
+// by this MPool and has not yet passed through Free.
+func (mp *MPool) OnHeapCurrNB() int64 {
+	bytes, _ := mp.OnHeapOutstanding()
+	return bytes
+}
+
+// OnHeapOutstanding returns the live Go-heap-backed allocations whose
+// metadata still names this pool as owner. It scans the authoritative pointer
+// registry only at diagnostic boundaries; allocations do not update per-pool
+// counters on the hot path.
+func (mp *MPool) OnHeapOutstanding() (bytes, objects int64) {
+	if mp == nil {
+		return 0, 0
+	}
+	if mp.noLock {
+		for _, hdr := range mp.ptrs {
+			if !hdr.isOffHeap() {
+				bytes += int64(hdr.allocSz)
+				objects++
+			}
+		}
+		return bytes, objects
+	}
+	for i := range globalPtrShards {
+		shard := &globalPtrShards[i]
+		shard.mu.Lock()
+		for _, hdr := range shard.m {
+			if hdr.poolId == mp.id && !hdr.isOffHeap() {
+				bytes += int64(hdr.allocSz)
+				objects++
+			}
+		}
+		shard.mu.Unlock()
+	}
+	return bytes, objects
+}
+
+// scanOnHeapOutstandingHinted is used only at pool teardown. Allocation sets
+// a shard bit once, while frees leave it set, so every shard containing a
+// pointer owned by this pool is scanned and empty shards are merely false
+// positives. The pointer map remains authoritative for exact leak reporting.
+func (mp *MPool) scanOnHeapOutstandingHinted() (bytes, objects int64) {
+	for wordIndex := range mp.onHeapShardHints {
+		shards := mp.onHeapShardHints[wordIndex].Load()
+		for shards != 0 {
+			bit := bits.TrailingZeros64(shards)
+			shard := &globalPtrShards[wordIndex*64+bit]
+			shard.mu.Lock()
+			for _, hdr := range shard.m {
+				if hdr.poolId == mp.id && !hdr.isOffHeap() {
+					bytes += int64(hdr.allocSz)
+					objects++
+				}
+			}
+			shard.mu.Unlock()
+			shards &= shards - 1
+		}
+	}
+	return bytes, objects
+}
+
+func (mp *MPool) recordOnHeapShardHint(shardIndex int) {
+	word := &mp.onHeapShardHints[shardIndex/64]
+	mask := uint64(1) << (shardIndex % 64)
+	for current := word.Load(); current&mask == 0; current = word.Load() {
+		if word.CompareAndSwap(current, current|mask) {
+			return
+		}
+	}
+}
+
+// ResourcePeakLiveBytes returns the peak observed by token.  Ended tokens
+// remain readable so the owner can seal the statement after workers quiesce;
+// a token belonging to another open epoch is rejected.
+func (mp *MPool) ResourcePeakLiveBytes(token *ResourcePeakEpoch) (uint64, bool) {
+	if mp == nil || token == nil || token.owner != mp {
+		return 0, false
+	}
+	if !token.ended.Load() && mp.epoch.Load() != token {
+		return 0, false
+	}
+	peak := token.peak.Load()
+	if peak < 0 {
+		return 0, false
+	}
+	return uint64(peak), true
+}
+
+// ResourceSnapshot returns exact allocator-domain facts for a quiescent MPool
+// epoch. Negative counters are flagged instead of being converted to uint64.
+func (mp *MPool) ResourceSnapshot() (resource.MemoryDomainSummary, resource.QualityFlags) {
+	allocated := mp.resource.allocated.Load()
+	freed := mp.resource.freed.Load()
+	peak := mp.resource.peak.Load()
+	live := mp.resource.live.Load()
+	cross := mp.resource.crossPoolFree.Load()
+	if allocated < 0 || freed < 0 || peak < 0 || live < 0 || cross < 0 {
+		return resource.MemoryDomainSummary{}, resource.QualityInvariantFailure
+	}
+	summary := resource.MemoryDomainSummary{
+		AllocatedBytes:     uint64(allocated),
+		FreedBytes:         uint64(freed),
+		PeakLiveBytes:      uint64(peak),
+		LiveBytesAtSeal:    uint64(live),
+		CrossPoolFreeCount: uint64(cross),
+	}
+	return summary, summary.Validate()
+}
+
+// StartResourcePeakEpoch starts a peak-occupancy observation at the current
+// live-byte baseline. Only one observation may be open on a pool at a time.
+// The lifetime high-water mark is deliberately left untouched.
+func (mp *MPool) StartResourcePeakEpoch() *ResourcePeakEpoch {
+	if mp == nil {
+		return nil
+	}
+	if mp.resource.live.Load() < 0 {
+		return nil
+	}
+	token := &ResourcePeakEpoch{owner: mp}
+	if !mp.epoch.CompareAndSwap(nil, token) {
+		return nil
+	}
+	// Publish the baseline after claiming ownership. Allocations racing the
+	// claim update the token and recordPeak keeps the larger value.
+	token.recordPeak(mp.resource.live.Load())
+	return token
+}
+
+// EndResourcePeakEpoch closes exactly token and returns its final peak.  A
+// wrong, stale, or already-ended token cannot clear a newer epoch.
+func (mp *MPool) EndResourcePeakEpoch(token *ResourcePeakEpoch) (uint64, bool) {
+	if mp == nil || token == nil || token.owner != mp {
+		return 0, false
+	}
+	// Validate ownership before changing the token so passing a token to the
+	// wrong pool does not poison the epoch owned by its original pool.
+	if mp.epoch.Load() != token {
+		return 0, false
+	}
+	if !token.ended.CompareAndSwap(false, true) {
+		return 0, false
+	}
+	if !mp.epoch.CompareAndSwap(token, nil) {
+		// This should only be reachable for a malformed caller racing pool
+		// teardown. Preserve the token's ended state and report failure.
+		return 0, false
+	}
+	peak := token.peak.Load()
+	if peak < 0 {
+		return 0, false
+	}
+	return uint64(peak), true
+}
+
+func (mp *MPool) recordResourcePeak(curr int64) {
+	if mp == nil || curr < 0 {
+		return
+	}
+	token := mp.epoch.Load()
+	if token != nil {
+		token.recordPeak(curr)
+	}
 }
 
 func DeleteMPool(mp *MPool) {
@@ -467,19 +915,21 @@ func DeleteMPool(mp *MPool) {
 var nextPool int64
 var globalCap atomic.Int64
 var globalStats MPoolStats
+var globalOnHeapStats OnHeapOwnershipStats
 var globalPools sync.Map
 
 // Sharded pointer map to reduce lock contention
 const numPtrShards = 128
 
 type ptrShard struct {
-	mu sync.Mutex
-	m  map[unsafe.Pointer]memHdr
+	mu        sync.Mutex
+	m         map[unsafe.Pointer]memHdr
+	accounted map[unsafe.Pointer]accountedPtrMetadata
 }
 
 var globalPtrShards [numPtrShards]ptrShard
 
-func getPtrShard(ptr unsafe.Pointer) *ptrShard {
+func getPtrShardIndex(ptr unsafe.Pointer) int {
 	hash := uintptr(ptr) >> 4
 	// Better hash mixing to distribute load evenly
 	hash ^= hash >> 17
@@ -487,7 +937,11 @@ func getPtrShard(ptr unsafe.Pointer) *ptrShard {
 	hash ^= hash >> 13
 	hash *= 0xc2b2ae35
 	hash ^= hash >> 16
-	return &globalPtrShards[hash%numPtrShards]
+	return int(hash % numPtrShards)
+}
+
+func getPtrShard(ptr unsafe.Pointer) *ptrShard {
+	return &globalPtrShards[getPtrShardIndex(ptr)]
 }
 
 func InitCap(cap int64) {
@@ -502,6 +956,12 @@ func GlobalStats() *MPoolStats {
 	return &globalStats
 }
 
+// GlobalOnHeapStats reports logical ownership of all Go-heap-backed MPool
+// allocations. It is independent from the off-heap capacity controller.
+func GlobalOnHeapStats() *OnHeapOwnershipStats {
+	return &globalOnHeapStats
+}
+
 func GlobalCap() int64 {
 	n := globalCap.Load()
 	if n == 0 {
@@ -512,14 +972,66 @@ func GlobalCap() int64 {
 
 var CapLimit = math.MaxInt32 // 2GB - 1
 
+func maxAllocationSize() int64 {
+	return int64(CapLimit) - kMemHdrSz
+}
+
+// MaxAllocationSize returns the largest payload accepted by one MPool
+// allocation. Callers may use it to cap speculative growth before asking the
+// allocator; it is not a reservation and does not bypass account or pool
+// capacity admission.
+func MaxAllocationSize() int64 {
+	return maxAllocationSize()
+}
+
+// Alloc returns an MPool-owned block. The caller must eventually pass every
+// successful non-empty allocation to Free; DeleteMPool provides the terminal
+// release only for NoLock pools, whose allocations cannot outlive the pool.
 func (mp *MPool) Alloc(sz int, offHeap bool) ([]byte, error) {
 	detailk := mp.getDetailK()
 	return mp.allocWithDetailK(detailk, int64(sz), offHeap)
 }
 
+// AllocAccounted allocates off-heap memory owned by account. Owner and site
+// are bounded diagnostics; zero is invalid. Existing unaccounted callers keep
+// using Alloc.
+func (mp *MPool) AllocAccounted(
+	sz int,
+	account *AllocationAccount,
+	owner AllocationOwner,
+	site AllocationSite,
+) ([]byte, error) {
+	return mp.AllocAccountedWithCapacityClass(
+		sz,
+		account,
+		owner,
+		site,
+		AllocationCapacityClassDefault,
+	)
+}
+
+// AllocAccountedWithCapacityClass allocates with an execution-local capacity
+// controller while preserving the same physical allocation provenance.
+func (mp *MPool) AllocAccountedWithCapacityClass(
+	sz int,
+	account *AllocationAccount,
+	owner AllocationOwner,
+	site AllocationSite,
+	capacityClass AllocationCapacityClass,
+) ([]byte, error) {
+	detailk := mp.getDetailK()
+	request := allocationAccountRequest{
+		account:       account,
+		owner:         owner,
+		site:          site,
+		capacityClass: capacityClass,
+	}
+	return mp.allocAccountedWithDetailK(detailk, int64(sz), request)
+}
+
 func (mp *MPool) allocWithDetailK(detailk string, sz int64, offHeap bool) ([]byte, error) {
 	// reject unexpected alloc size.
-	if sz < 0 || sz+kMemHdrSz > int64(CapLimit) {
+	if sz < 0 || sz > maxAllocationSize() {
 		logutil.Errorf("mpool memory allocation exceed limit with requested size %d: %s", sz, string(debug.Stack()))
 		return nil, moerr.NewInternalErrorNoCtxf("mpool memory allocation exceed limit with requested size %d", sz)
 	}
@@ -529,47 +1041,232 @@ func (mp *MPool) allocWithDetailK(detailk string, sz int64, offHeap bool) ([]byt
 	return mp.alloc(detailk, sz, offHeap)
 }
 
-func (mp *MPool) alloc(detailk string, sz int64, offHeap bool) ([]byte, error) {
+func (mp *MPool) allocAccountedWithDetailK(
+	detailk string,
+	sz int64,
+	request allocationAccountRequest,
+) ([]byte, error) {
+	if err := request.validate(); err != nil {
+		return nil, allocationAccountSiteError(request, err)
+	}
+	// reject unexpected alloc size.
+	if sz < 0 || sz > maxAllocationSize() {
+		logutil.Errorf("mpool memory allocation exceed limit with requested size %d: %s", sz, string(debug.Stack()))
+		return nil, allocationAccountSiteError(request, wrapAllocationAccountError(
+			ErrAllocationAllocatorLimit,
+			"requested=%d maximum=%d",
+			sz,
+			maxAllocationSize(),
+		))
+	}
+	if sz == 0 {
+		return nil, nil
+	}
+	result, err := mp.allocAccounted(detailk, sz, request)
+	if err != nil {
+		return nil, allocationAccountSiteError(request, err)
+	}
+	return result, nil
+}
+
+func allocationAccountSiteError(
+	request allocationAccountRequest,
+	err error,
+) error {
+	if IsMPoolCapacityFailure(err) {
+		// Keep a direct MO error at the operator boundary: remote pipeline
+		// encoding preserves only direct *moerr.Error values. The ownership
+		// dimensions are folded into the serialized message instead.
+		return moerr.NewMPoolCapacityNoCtxf(
+			"allocation owner=%d site=%d owner-name=%s: %s",
+			request.owner,
+			request.site,
+			request.owner,
+			err.Error(),
+		)
+	}
+	return prefixAllocationAccountError(
+		err,
+		"allocation owner=%d site=%d owner-name=%s",
+		request.owner,
+		request.site,
+		request.owner,
+	)
+}
+
+func (mp *MPool) alloc(
+	detailk string,
+	sz int64,
+	offHeap bool,
+) ([]byte, error) {
 	var bs []byte
 	var err error
 
 	hdr := memHdr{
 		poolId:  mp.id,
 		allocSz: int32(sz),
-		offHeap: offHeap,
+	}
+	if offHeap {
+		hdr.kind = memKindOffHeap
 	}
 	hdr.SetGuard()
 
 	if offHeap {
 		gcurr := globalStats.RecordAlloc("global", sz)
 		if gcurr > GlobalCap() {
-			// compensate global
 			globalStats.RecordFree("global", sz)
-			return nil, moerr.NewOOMNoCtx()
+			return nil, moerr.NewMPoolCapacityNoCtxf(
+				"global cap exceeded while allocating %d bytes", sz)
 		}
 		mycurr := mp.stats.RecordAlloc(mp.tag, sz)
 		if mycurr > mp.Cap() {
-			// compensate both global and my
 			mp.stats.RecordFree(mp.tag, sz)
 			globalStats.RecordFree("global", sz)
-			return nil, moerr.NewInternalErrorNoCtxf("mpool out of space, alloc %d bytes, cap %d", sz, mp.cap)
+			return nil, moerr.NewMPoolCapacityNoCtxf(
+				"mpool out of space, alloc %d bytes, cap %d", sz, mp.cap)
 		}
 		bs, err = simpleCAllocator().Allocate(uint64(sz))
 		if err != nil {
-			panic(err)
-		}
-		if mp.details != nil {
-			mp.details.recordAlloc(detailk, sz)
+			mp.stats.RecordFree(mp.tag, sz)
+			globalStats.RecordFree("global", sz)
+			return nil, moerr.NewMPoolCapacityNoCtxf(
+				"physical allocator rejected %d bytes: %v", sz, err)
 		}
 	} else {
 		bs = make([]byte, sz)
 	}
 
-	// always record the ptr, offHeap or not.
-	mp.recordPtrHdr(unsafe.Pointer(&bs[0]), hdr)
-	if offHeap {
-		profileRecordAlloc(3, uintptr(unsafe.Pointer(&bs[0])), sz)
+	ptr := unsafe.Pointer(&bs[0])
+	if err = mp.recordPtrHdr(ptr, hdr); err != nil {
+		if offHeap {
+			simpleCAllocator().Deallocate(bs, uint64(sz))
+			mp.stats.RecordFree(mp.tag, sz)
+			globalStats.RecordFree("global", sz)
+		}
+		return nil, err
 	}
+	if !offHeap {
+		globalOnHeapStats.recordAlloc(sz)
+		if mp.details != nil {
+			mp.details.recordOnHeapAlloc(detailk, sz)
+		}
+	} else {
+		mp.recordResourcePeak(mp.resource.recordAlloc(sz))
+		if mp.details != nil {
+			mp.details.recordAlloc(detailk, sz)
+		}
+		profileRecordAlloc(3, uintptr(ptr), sz)
+	}
+	return bs, nil
+}
+
+func (mp *MPool) allocAccounted(
+	detailk string,
+	sz int64,
+	request allocationAccountRequest,
+) ([]byte, error) {
+	if mp.noLock {
+		bound := mp.noLockAllocationAccount.Load()
+		if bound == nil {
+			return nil, ErrAllocationAccountInvariant
+		}
+		if bound != request.account {
+			return nil, ErrAllocationAccountMismatch
+		}
+	}
+	var bs []byte
+	var err error
+	accountHeld := false
+	metadataHeld := false
+	globalHeld := false
+	poolHeld := false
+	physicalHeld := false
+	published := false
+	defer func() {
+		if published {
+			return
+		}
+		if physicalHeld {
+			simpleCAllocator().Deallocate(bs, uint64(sz))
+		}
+		if poolHeld {
+			mp.stats.RecordFree(mp.tag, sz)
+		}
+		if globalHeld {
+			globalStats.RecordFree("global", sz)
+		}
+		if metadataHeld {
+			request.account.registry.releaseMetadata()
+		}
+		if accountHeld {
+			request.account.releaseWithCapacityClass(
+				uint64(sz),
+				request.capacityClass,
+				request.owner,
+			)
+		}
+	}()
+
+	if err = request.account.acquireWithCapacityClass(
+		uint64(sz),
+		request.capacityClass,
+		request.owner,
+	); err != nil {
+		return nil, err
+	}
+	accountHeld = true
+	if err = request.account.registry.reserveMetadata(); err != nil {
+		return nil, err
+	}
+	metadataHeld = true
+
+	hdr := memHdr{
+		poolId:  mp.id,
+		allocSz: int32(sz),
+		kind:    memKindAccountedOffHeap,
+	}
+	hdr.SetGuard()
+	lease := allocationLease{
+		account:       request.account,
+		owner:         request.owner,
+		site:          request.site,
+		profiled:      ProfilingEnabled(),
+		capacityClass: request.capacityClass,
+	}
+
+	gcurr := globalStats.RecordAlloc("global", sz)
+	globalHeld = true
+	if gcurr > GlobalCap() {
+		return nil, moerr.NewMPoolCapacityNoCtxf(
+			"global cap exceeded while allocating %d bytes", sz)
+	}
+	mycurr := mp.stats.RecordAlloc(mp.tag, sz)
+	poolHeld = true
+	if mycurr > mp.Cap() {
+		return nil, moerr.NewMPoolCapacityNoCtxf(
+			"mpool out of space, alloc %d bytes, cap %d", sz, mp.cap)
+	}
+	bs, err = simpleCAllocator().Allocate(uint64(sz))
+	if err != nil {
+		return nil, moerr.NewMPoolCapacityNoCtxf(
+			"physical allocator rejected %d bytes: %v", sz, err)
+	}
+	physicalHeld = true
+
+	ptr := unsafe.Pointer(&bs[0])
+	if err = mp.recordAccountedPtrMetadata(
+		ptr,
+		hdr,
+		lease,
+	); err != nil {
+		return nil, err
+	}
+	published = true
+	mp.recordResourcePeak(mp.resource.recordAlloc(sz))
+	if mp.details != nil {
+		mp.details.recordAlloc(detailk, sz)
+	}
+	profileRecordAccountedAlloc(lease, sz)
 	return bs, nil
 }
 
@@ -588,7 +1285,8 @@ func (mp *MPool) freeWithDetailK(detailk string, bs []byte) {
 }
 
 func (mp *MPool) freePtr(detailk string, ptr unsafe.Pointer) {
-	hdr, ok := mp.removePtrHdr(ptr)
+	var lease allocationLease
+	hdr, ok := mp.removePtrMetadata(ptr, &lease)
 	if !ok {
 		// this is a double free.
 		panic(moerr.NewInternalErrorNoCtx("invalid ptr, double free"))
@@ -605,23 +1303,49 @@ func (mp *MPool) freePtr(detailk string, ptr unsafe.Pointer) {
 			// Call profileRecordFree and the full globalStats.RecordFree
 			// (not just NumCurrBytes.Add) so NumFree/NumFreeBytes stay
 			// consistent with freePtrInternal.
-			if hdr.offHeap {
+			if hdr.isOffHeap() {
 				sz := int64(hdr.allocSz)
-				profileRecordFree(uintptr(ptr), sz)
+				if hdr.isAccounted() {
+					profileRecordAccountedFree(lease, sz)
+				} else {
+					profileRecordFree(uintptr(ptr), sz)
+				}
 				globalStats.RecordFree("global", sz)
 				simpleCAllocator().Deallocate(unsafe.Slice((*byte)(ptr), sz), uint64(sz))
+				if hdr.isAccounted() {
+					lease.release(uint64(sz))
+				}
+			} else {
+				globalOnHeapStats.recordFree(int64(hdr.allocSz), 1)
 			}
 		} else {
-			(otherPool.(*MPool)).freePtrInternal(detailk, ptr, hdr)
+			owner := otherPool.(*MPool)
+			owner.resource.crossPoolFree.Add(1)
+			owner.freePtrInternal(detailk, ptr, hdr, lease)
 		}
 		return
 	}
 
-	mp.freePtrInternal(detailk, ptr, hdr)
+	mp.freePtrInternal(detailk, ptr, hdr, lease)
 }
 
-func (mp *MPool) freePtrInternal(detailk string, ptr unsafe.Pointer, hdr memHdr) {
-	if !hdr.offHeap {
+func (mp *MPool) freePtrInternal(
+	detailk string,
+	ptr unsafe.Pointer,
+	hdr memHdr,
+	lease allocationLease,
+) {
+	if !hdr.isOffHeap() {
+		if hdr.isAccounted() {
+			panic(moerr.NewInternalErrorNoCtx(
+				"accounted allocation is not off-heap",
+			))
+		}
+		sz := int64(hdr.allocSz)
+		globalOnHeapStats.recordFree(sz, 1)
+		if mp.details != nil {
+			mp.details.recordOnHeapFree(detailk, sz)
+		}
 		return
 	}
 	sz := int64(hdr.allocSz)
@@ -631,14 +1355,22 @@ func (mp *MPool) freePtrInternal(detailk string, ptr unsafe.Pointer, hdr memHdr)
 			bs[i] = 0xDD
 		}
 	}
-	profileRecordFree(uintptr(ptr), sz)
+	if hdr.isAccounted() {
+		profileRecordAccountedFree(lease, sz)
+	} else {
+		profileRecordFree(uintptr(ptr), sz)
+	}
 	mp.stats.RecordFree(mp.tag, sz)
 	globalStats.RecordFree("global", sz)
+	mp.resource.recordFree(sz)
 	if mp.details != nil {
 		mp.details.recordFree(detailk, sz)
 	}
 
 	simpleCAllocator().Deallocate(unsafe.Slice((*byte)(ptr), sz), uint64(sz))
+	if hdr.isAccounted() {
+		lease.release(uint64(sz))
+	}
 }
 
 func (mp *MPool) reAllocWithDetailK(detailk string, old []byte, sz int64, offHeap bool, bufferMore bool) ([]byte, error) {
@@ -648,10 +1380,43 @@ func (mp *MPool) reAllocWithDetailK(detailk string, old []byte, sz int64, offHea
 
 	newSz := sz
 	if bufferMore {
-		newSz = calculateNewCap(int64(cap(old)), sz)
+		var ok bool
+		newSz, ok = GrowCapacity(int64(cap(old)), sz)
+		if !ok {
+			return nil, moerr.NewInternalErrorNoCtxf("invalid mpool grow capacity, old %d, required %d", cap(old), sz)
+		}
 	}
 
-	ret, err := mp.allocWithDetailK(detailk, int64(newSz), offHeap)
+	var request *allocationAccountRequest
+	if ptr := unsafe.Pointer(unsafe.SliceData(old)); ptr != nil {
+		var lease allocationLease
+		hdr, ok := mp.getPtrMetadata(ptr, &lease)
+		if !ok {
+			return nil, moerr.NewInternalErrorNoCtx(
+				"invalid grow pointer: allocation metadata not found",
+			)
+		}
+		if hdr.isAccounted() {
+			if !offHeap {
+				return nil, ErrAllocationAccountMismatch
+			}
+			accounted := allocationAccountRequest{
+				account:       lease.account,
+				owner:         lease.owner,
+				site:          lease.site,
+				capacityClass: lease.capacityClass,
+			}
+			request = &accounted
+		}
+	}
+
+	var ret []byte
+	var err error
+	if request != nil {
+		ret, err = mp.allocAccountedWithDetailK(detailk, newSz, *request)
+	} else {
+		ret, err = mp.allocWithDetailK(detailk, newSz, offHeap)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -684,7 +1449,7 @@ func (mp *MPool) Grow2(old []byte, old2 []byte, sz int, offHeap bool) ([]byte, e
 // ReallocZero is like Realloc, but it clears the memory.
 func (mp *MPool) ReallocZero(old []byte, sz int, offHeap bool) ([]byte, error) {
 	detailk := mp.getDetailK()
-	if sz < 0 || sz > CapLimit-kMemHdrSz {
+	if int64(sz) < 0 || int64(sz) > maxAllocationSize() {
 		return nil, moerr.NewInternalErrorNoCtxf(
 			"mpool memory allocation exceed limit with requested size %d",
 			sz,
@@ -707,9 +1472,10 @@ func (mp *MPool) ReallocZero(old []byte, sz int, offHeap bool) ([]byte, error) {
 
 	oldptr := unsafe.Pointer(unsafe.SliceData(old))
 	var hdr memHdr
+	var lease allocationLease
 	var ok bool
 	if oldptr != nil {
-		hdr, ok = mp.getPtrHdr(oldptr)
+		hdr, ok = mp.getPtrMetadata(oldptr, &lease)
 	}
 	if !ok {
 		if len(old) != 0 || cap(old) != 0 {
@@ -750,10 +1516,34 @@ func (mp *MPool) ReallocZero(old []byte, sz int, offHeap bool) ([]byte, error) {
 		return resized, nil
 	}
 
+	if hdr.isAccounted() {
+		if !offHeap {
+			return nil, ErrAllocationAccountMismatch
+		}
+		request := allocationAccountRequest{
+			account:       lease.account,
+			owner:         lease.owner,
+			site:          lease.site,
+			capacityClass: lease.capacityClass,
+		}
+		replacement, err := mp.allocAccountedWithDetailK(
+			detailk,
+			int64(sz),
+			request,
+		)
+		if err != nil {
+			return nil, err
+		}
+		copy(replacement, fullAllocation[:oldLength])
+		clear(replacement[oldLength:])
+		mp.freeWithDetailK(detailk, fullAllocation)
+		return replacement, nil
+	}
+
 	// Only resize in place when the source and destination are off-heap and
 	// owned by this pool. Other provenance/ownership transitions use the normal
 	// allocate-copy-free path so accounting and cross-pool cleanup stay correct.
-	if !hdr.offHeap || !offHeap || hdr.poolId != mp.id {
+	if !hdr.isOffHeap() || !offHeap || hdr.poolId != mp.id {
 		return mp.reAllocWithDetailK(
 			detailk,
 			fullAllocation[:oldLength],
@@ -763,35 +1553,59 @@ func (mp *MPool) ReallocZero(old []byte, sz int, offHeap bool) ([]byte, error) {
 		)
 	}
 
+	// C realloc may allocate the replacement before releasing the old block.
+	// Admit the complete temporary peak before entering the allocator, then
+	// retain the new-size charge and release only the old-size charge on success.
+	if globalStats.RecordAlloc("global", int64(sz)) > GlobalCap() {
+		globalStats.RecordFree("global", int64(sz))
+		return nil, moerr.NewMPoolCapacityNoCtxf(
+			"global cap exceeded while reallocating %d bytes", sz)
+	}
+	if mp.stats.RecordAlloc(mp.tag, int64(sz)) > mp.Cap() {
+		mp.stats.RecordFree(mp.tag, int64(sz))
+		globalStats.RecordFree("global", int64(sz))
+		return nil, moerr.NewMPoolCapacityNoCtxf(
+			"mpool out of space, realloc %d bytes, cap %d", sz, mp.cap)
+	}
+
+	// Retire address-keyed state before realloc can release the address to
+	// another allocator thread. Failure leaves old live and restores its state.
+	var removedLease allocationLease
+	removedHdr, removed := mp.removePtrMetadata(oldptr, &removedLease)
+	if !removed || removedHdr != hdr || removedHdr.isAccounted() || removedLease.account != nil {
+		panic(moerr.NewInternalErrorNoCtx("allocation metadata changed during realloc"))
+	}
+	oldProfile := profileDetach(uintptr(oldptr))
 	newbs, err := simpleCAllocator().ReallocZero(
 		fullAllocation[:oldLength],
 		uint64(oldSize),
 		uint64(sz),
 	)
 	if err != nil {
-		return nil, err
+		profileRestore(uintptr(oldptr), oldProfile)
+		if restoreErr := mp.recordPtrHdr(oldptr, hdr); restoreErr != nil {
+			panic(restoreErr)
+		}
+		mp.stats.RecordFree(mp.tag, int64(sz))
+		globalStats.RecordFree("global", int64(sz))
+		return nil, moerr.NewMPoolCapacityNoCtxf(
+			"physical allocator rejected realloc to %d bytes: %v", sz, err)
 	}
 	newptr := unsafe.Pointer(&newbs[0])
-	removedHdr, removed := mp.removePtrHdr(oldptr)
-	if !removed || removedHdr != hdr {
-		panic(moerr.NewInternalErrorNoCtx(
-			"allocation metadata changed during realloc",
-		))
-	}
 	newHdr := memHdr{
 		poolId:  hdr.poolId,
 		allocSz: int32(sz),
-		offHeap: true,
+		kind:    memKindOffHeap,
 	}
 	newHdr.SetGuard()
 	if err := mp.recordPtrHdr(newptr, newHdr); err != nil {
 		panic(err)
 	}
-	profileRecordRealloc(3, uintptr(oldptr), uintptr(newptr), int64(oldSize), int64(sz))
+	profileRecordRealloc(3, oldProfile, uintptr(newptr), int64(oldSize), int64(sz))
 	globalStats.RecordFree("global", int64(oldSize))
 	mp.stats.RecordFree(mp.tag, int64(oldSize))
-	globalStats.RecordAlloc("global", int64(sz))
-	mp.stats.RecordAlloc(mp.tag, int64(sz))
+	mp.resource.recordFree(int64(oldSize))
+	mp.recordResourcePeak(mp.resource.recordAlloc(int64(sz)))
 	return newbs, nil
 }
 
@@ -813,6 +1627,70 @@ func MakeSlice[T any](n int, mp *MPool, offHeap bool) ([]T, error) {
 	return makeSliceWithCapWithDetailK[T](detailk, n, n, mp, offHeap)
 }
 
+// MakeSliceAccounted allocates an off-heap typed slice whose physical
+// allocation is owned by account. FreeSlice releases the resulting charge.
+func MakeSliceAccounted[T any](
+	n int,
+	mp *MPool,
+	account *AllocationAccount,
+	owner AllocationOwner,
+	site AllocationSite,
+) ([]T, error) {
+	return MakeSliceAccountedWithCapacityClass[T](
+		n,
+		mp,
+		account,
+		owner,
+		site,
+		AllocationCapacityClassDefault,
+	)
+}
+
+// MakeSliceAccountedWithCapacityClass is the typed-slice form of
+// AllocAccountedWithCapacityClass.
+func MakeSliceAccountedWithCapacityClass[T any](
+	n int,
+	mp *MPool,
+	account *AllocationAccount,
+	owner AllocationOwner,
+	site AllocationSite,
+	capacityClass AllocationCapacityClass,
+) ([]T, error) {
+	if n < 0 {
+		return nil, ErrAllocationAccountInvalid
+	}
+	if n == 0 {
+		return nil, nil
+	}
+	var value T
+	elementSize := unsafe.Sizeof(value)
+	maxSize := maxAllocationSize()
+	if elementSize == 0 ||
+		maxSize <= 0 ||
+		uint64(n) > uint64(maxSize)/uint64(elementSize) {
+		return nil, wrapAllocationAccountError(
+			ErrAllocationAllocatorLimit,
+			"elements=%d element-size=%d maximum=%d",
+			n,
+			elementSize,
+			maxSize,
+		)
+	}
+	size := int(uint64(n) * uint64(elementSize))
+	bs, err := mp.AllocAccountedWithCapacityClass(
+		size,
+		account,
+		owner,
+		site,
+		capacityClass,
+	)
+	if err != nil {
+		return nil, err
+	}
+	values := unsafe.Slice((*T)(unsafe.Pointer(&bs[0])), n)
+	return values[:n:n], nil
+}
+
 func MakeSliceArgs[T any](mp *MPool, offHeap bool, args ...T) ([]T, error) {
 	detailk := mp.getDetailK()
 	ret, err := makeSliceWithCapWithDetailK[T](detailk, len(args), len(args), mp, offHeap)
@@ -827,6 +1705,7 @@ func FreeSlice[T any](mp *MPool, bs []T) {
 	if cap(bs) == 0 {
 		return
 	}
+	bs = bs[:1]
 	detailk := mp.getDetailK()
 	mp.freePtr(detailk, unsafe.Pointer(&bs[0]))
 }
@@ -885,6 +1764,16 @@ var simpleCAllocator = sync.OnceValue(func() *malloc.SimpleCAllocator {
 		v2.MallocGauge.WithLabelValues("mpool-inuse-objects"),
 		v2.OffHeapInuseGauge.WithLabelValues("mpool"),
 	)
+	sca.EnableMmapCache(
+		func() uint64 {
+			// Cached mappings are reclaimable and short-lived, but keep their
+			// virtual address space bounded relative to the configured memory
+			// limit. One GiB covers the large hash-table working set without
+			// allowing libc-style unbounded arena retention.
+			return uint64(min(GlobalCap()/4, GB))
+		},
+		v2.OffHeapInuseGauge.WithLabelValues("mpool-cache"),
+	)
 	return sca
 })
 
@@ -895,15 +1784,54 @@ func init() {
 	}
 }
 
-func gRecordPtr(ptr unsafe.Pointer, hdr memHdr) error {
-	shard := getPtrShard(ptr)
+func gRecordPtr(
+	ptr unsafe.Pointer,
+	hdr memHdr,
+) error {
+	shardIndex := getPtrShardIndex(ptr)
+	return gRecordPtrInShard(ptr, hdr, shardIndex, nil)
+}
+
+func gRecordOnHeapPtr(ptr unsafe.Pointer, hdr memHdr, owner *MPool) error {
+	shardIndex := getPtrShardIndex(ptr)
+	return gRecordPtrInShard(ptr, hdr, shardIndex, owner)
+}
+
+func gRecordPtrInShard(ptr unsafe.Pointer, hdr memHdr, shardIndex int, owner *MPool) error {
+	shard := &globalPtrShards[shardIndex]
 	shard.mu.Lock()
 	defer shard.mu.Unlock()
-	_, ok := shard.m[ptr]
-	if ok {
+	if _, ok := shard.m[ptr]; ok {
+		return moerr.NewInternalErrorNoCtx("ptr already recorded")
+	}
+	if _, ok := shard.accounted[ptr]; ok {
 		return moerr.NewInternalErrorNoCtx("ptr already recorded")
 	}
 	shard.m[ptr] = hdr
+	if owner != nil {
+		owner.recordOnHeapShardHint(shardIndex)
+	}
+	return nil
+}
+
+func gRecordAccountedPtrMetadata(
+	ptr unsafe.Pointer,
+	hdr memHdr,
+	lease allocationLease,
+) error {
+	shard := getPtrShard(ptr)
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
+	if _, ok := shard.m[ptr]; ok {
+		return moerr.NewInternalErrorNoCtx("ptr already recorded")
+	}
+	if _, ok := shard.accounted[ptr]; ok {
+		return moerr.NewInternalErrorNoCtx("ptr already recorded")
+	}
+	if shard.accounted == nil {
+		shard.accounted = make(map[unsafe.Pointer]accountedPtrMetadata)
+	}
+	shard.accounted[ptr] = accountedPtrMetadata{hdr: hdr, lease: lease}
 	return nil
 }
 
@@ -911,17 +1839,49 @@ func gGetPtr(ptr unsafe.Pointer) (memHdr, bool) {
 	shard := getPtrShard(ptr)
 	shard.mu.Lock()
 	defer shard.mu.Unlock()
-	hdr, ok := shard.m[ptr]
-	return hdr, ok
+	if hdr, ok := shard.m[ptr]; ok {
+		return hdr, true
+	}
+	metadata, ok := shard.accounted[ptr]
+	return metadata.hdr, ok
 }
 
-func gRemovePtr(ptr unsafe.Pointer) (memHdr, bool) {
+func gGetPtrMetadata(
+	ptr unsafe.Pointer,
+	lease *allocationLease,
+) (memHdr, bool) {
 	shard := getPtrShard(ptr)
 	shard.mu.Lock()
 	defer shard.mu.Unlock()
-	hdr, ok := shard.m[ptr]
-	delete(shard.m, ptr)
-	return hdr, ok
+	if hdr, ok := shard.m[ptr]; ok {
+		return hdr, true
+	}
+	metadata, ok := shard.accounted[ptr]
+	if !ok {
+		return memHdr{}, false
+	}
+	*lease = metadata.lease
+	return metadata.hdr, true
+}
+
+func gRemovePtrMetadata(
+	ptr unsafe.Pointer,
+	lease *allocationLease,
+) (memHdr, bool) {
+	shard := getPtrShard(ptr)
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
+	if hdr, ok := shard.m[ptr]; ok {
+		delete(shard.m, ptr)
+		return hdr, true
+	}
+	metadata, ok := shard.accounted[ptr]
+	if !ok {
+		return memHdr{}, false
+	}
+	delete(shard.accounted, ptr)
+	*lease = metadata.lease
+	return metadata.hdr, true
 }
 
 // alignUp rounds n up to a multiple of a. a must be a power of 2.
@@ -952,9 +1912,23 @@ func roundupsize(size int64) int64 {
 }
 
 // copy-paste from go slice grow strategy.
-func calculateNewCap(oldCap int64, requiredSize int64) int64 {
+// GrowCapacity returns the capacity that Grow and Grow2 will allocate for a
+// request. Callers which must reserve memory before growing a slice use this
+// helper so admission and allocation share the same growth calculation.
+func GrowCapacity(oldCap int64, requiredSize int64) (int64, bool) {
+	maxCapacity := maxAllocationSize()
+	if oldCap < 0 || requiredSize < 0 ||
+		oldCap > maxCapacity || requiredSize > maxCapacity {
+		return 0, false
+	}
+	if requiredSize <= oldCap {
+		return oldCap, true
+	}
 	newcap := oldCap
 	doublecap := newcap + newcap
+	if doublecap < newcap {
+		doublecap = requiredSize
+	}
 	if requiredSize > doublecap {
 		newcap = requiredSize
 	} else {
@@ -972,8 +1946,11 @@ func calculateNewCap(oldCap int64, requiredSize int64) int64 {
 		}
 	}
 	newcap = roundupsize(newcap)
-	if newcap > int64(CapLimit) && requiredSize <= int64(CapLimit) {
-		newcap = int64(CapLimit)
+	if newcap < requiredSize {
+		return 0, false
 	}
-	return newcap
+	if newcap > maxCapacity {
+		newcap = maxCapacity
+	}
+	return newcap, true
 }

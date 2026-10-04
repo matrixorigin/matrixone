@@ -16,47 +16,351 @@ package lockservice
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/require"
 )
 
 func TestForwardLock(t *testing.T) {
-	runLockServiceTests(
+	for _, enableProxy := range []bool{false, true} {
+		t.Run(fmt.Sprintf("remote-local-proxy=%t", enableProxy), func(t *testing.T) {
+			runLockServiceTestsWithAdjustConfig(
+				t,
+				[]string{"s1", "s2"},
+				time.Second*10,
+				func(_ *lockTableAllocator, s []*service) {
+					tableID := uint64(10)
+
+					l1 := s[0]
+					l2 := s[1]
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+					defer cancel()
+
+					_, err := l2.getLockTableWithCreate(context.Background(), 0, tableID, nil, pb.Sharding_None)
+					require.NoError(t, err)
+
+					txn1 := []byte("txn1")
+					row1 := []byte{1}
+
+					_, err = l1.Lock(ctx, tableID, [][]byte{row1}, txn1, pb.LockOptions{
+						Granularity: pb.Granularity_Row,
+						Mode:        pb.LockMode_Exclusive,
+						Policy:      pb.WaitPolicy_Wait,
+						ForwardTo:   l2.serviceID,
+					})
+					require.NoError(t, err)
+
+					txn := l2.activeTxnHolder.getActiveTxn(txn1, false, "")
+					require.NotNil(t, txn)
+					require.Empty(t, txn.remoteService,
+						"ForwardTo owns the transaction's lock lifecycle")
+					holder, ok, err := l2.tableGroups.get(0, tableID).getLockHolder(ctx, row1)
+					require.NoError(t, err)
+					require.True(t, ok)
+					require.Equal(t, l2.serviceID, holder.CreatedOn,
+						"owner-side orphan detection must treat the forwarded lock as local")
+					_, proxied := l1.tableGroups.get(0, tableID).(*localLockTableProxy)
+					require.Equal(t, enableProxy, proxied,
+						"the proxy-enabled case must exercise the proxy route")
+					require.Empty(t, l1.collectRemoteLockBinds(nil),
+						"the mirror CN must not heartbeat a bind owned locally by ForwardTo")
+					require.NoError(t, l2.Unlock(ctx, txn1, timestamp.Timestamp{}))
+					require.False(t, l2.activeTxnHolder.hasActiveTxn(txn1))
+				},
+				func(cfg *Config) {
+					cfg.EnableRemoteLocalProxy = enableProxy
+				},
+			)
+		})
+	}
+}
+
+func TestForwardLockLetsForwardTargetHeartbeatThirdPartyOwner(t *testing.T) {
+	for _, enableProxy := range []bool{false, true} {
+		t.Run(fmt.Sprintf("remote-local-proxy=%t", enableProxy), func(t *testing.T) {
+			runLockServiceTestsWithAdjustConfig(
+				t,
+				[]string{"source", "target", "owner"},
+				time.Second*10,
+				func(_ *lockTableAllocator, services []*service) {
+					source := services[0]
+					target := services[1]
+					owner := services[2]
+					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					defer cancel()
+
+					const tableID = uint64(12)
+					_, err := owner.getLockTableWithCreate(ctx, 0, tableID, nil, pb.Sharding_None)
+					require.NoError(t, err)
+					_, err = target.getLockTableWithCreate(ctx, 0, tableID, nil, pb.Sharding_None)
+					require.NoError(t, err)
+					txnID := []byte("forwarded-through-target")
+					_, err = source.Lock(ctx, tableID, [][]byte{{1}}, txnID, pb.LockOptions{
+						Granularity: pb.Granularity_Row,
+						Mode:        pb.LockMode_Exclusive,
+						Policy:      pb.WaitPolicy_Wait,
+						ForwardTo:   target.serviceID,
+					})
+					require.NoError(t, err)
+
+					bind := owner.tableGroups.get(0, tableID).getBind()
+					targetBind := target.tableGroups.get(0, tableID).getBind()
+					require.Equal(t, bind, targetBind)
+					require.Empty(t, source.collectRemoteLockBinds(nil),
+						"the source did not send the lock RPC to the third-party owner")
+					require.Equal(t, []pb.LockTable{bind}, target.collectRemoteLockBinds(nil),
+						"the forwarding target owns the remote bind lifetime")
+					txn := target.activeTxnHolder.getActiveTxn(txnID, false, "")
+					require.NotNil(t, txn)
+					require.Empty(t, txn.remoteService)
+					remoteTxn := owner.activeTxnHolder.getActiveTxn(txnID, false, "")
+					require.NotNil(t, remoteTxn)
+					require.Equal(t, target.serviceID, remoteTxn.remoteService)
+					_, proxied := target.tableGroups.get(0, tableID).(*localLockTableProxy)
+					require.Equal(t, enableProxy, proxied,
+						"the proxy-enabled case must exercise ForwardTo's proxy route")
+
+					require.NoError(t, target.Unlock(ctx, txnID, timestamp.Timestamp{}))
+					require.Empty(t, target.collectRemoteLockBinds(nil))
+					require.False(t, owner.activeTxnHolder.hasActiveTxn(txnID),
+						"ForwardTo Unlock must release the third-party owner lock")
+				},
+				func(cfg *Config) {
+					cfg.EnableRemoteLocalProxy = enableProxy
+				},
+			)
+		})
+	}
+}
+
+func TestForwardLockBudgetAcrossRequests(t *testing.T) {
+	tests := []struct {
+		name string
+		mode pb.LockMode
+	}{
+		{name: "exclusive", mode: pb.LockMode_Exclusive},
+		{name: "shared", mode: pb.LockMode_Shared},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runLockServiceTestsWithAdjustConfig(
+				t,
+				[]string{"s1", "s2"},
+				time.Second*10,
+				func(_ *lockTableAllocator, services []*service) {
+					origin := services[0]
+					owner := services[1]
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+					defer cancel()
+
+					const tableID = uint64(26632)
+					_, err := owner.getLockTableWithCreate(
+						ctx, 0, tableID, nil, pb.Sharding_None)
+					require.NoError(t, err)
+
+					opts := newTestRowExclusiveOptions()
+					opts.Mode = tt.mode
+					opts.ForwardTo = owner.serviceID
+					txnID := []byte("forward-budget-txn")
+					for _, rows := range [][][]byte{
+						{{1}, {2}},
+						{{4}},
+						{{5}},
+					} {
+						_, err = origin.Lock(ctx, tableID, rows, txnID, opts)
+						require.NoError(t, err)
+					}
+
+					txn := owner.activeTxnHolder.getActiveTxn(txnID, false, "")
+					require.NotNil(t, txn)
+					txn.RLock()
+					lockCount := txn.lockHolders[0].tableKeys[tableID].mustGet().len()
+					txn.RUnlock()
+					expectedLockCount := 2
+					if tt.mode == pb.LockMode_Shared {
+						expectedLockCount = 4
+					}
+					require.Equal(t, expectedLockCount, lockCount)
+
+					lt := owner.tableGroups.get(0, tableID).(*localLockTable)
+					lt.mu.RLock()
+					start, hasStart := lt.mu.store.Get([]byte{1})
+					end, hasEnd := lt.mu.store.Get([]byte{5})
+					lt.mu.RUnlock()
+					require.True(t, hasStart)
+					require.True(t, hasEnd)
+					if tt.mode == pb.LockMode_Exclusive {
+						require.True(t, start.isLockRangeStart())
+						require.True(t, end.isLockRangeEnd())
+					} else {
+						require.True(t, start.isLockRow())
+						require.True(t, end.isLockRow())
+					}
+					require.NoError(t, owner.Unlock(ctx, txnID, timestamp.Timestamp{}))
+				},
+				func(c *Config) {
+					c.MaxLockRowCount = 3
+				})
+		})
+	}
+}
+
+func TestForwardMixedModeBudgetKeepsExactOwnership(t *testing.T) {
+	runLockServiceTestsWithAdjustConfig(
 		t,
 		[]string{"s1", "s2"},
-		func(alloc *lockTableAllocator, s []*service) {
-			tableID := uint64(10)
-
-			l1 := s[0]
-			l2 := s[1]
+		time.Second*10,
+		func(_ *lockTableAllocator, services []*service) {
+			origin, owner := services[0], services[1]
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
-
-			_, err := l2.getLockTableWithCreate(0, tableID, nil, pb.Sharding_None)
+			const table = uint64(26713)
+			_, err := owner.getLockTableWithCreate(ctx, 0, table, nil, pb.Sharding_None)
 			require.NoError(t, err)
 
-			txn1 := []byte("txn1")
-			row1 := []byte{1}
-
-			_, err = l1.Lock(ctx, tableID, [][]byte{row1}, txn1, pb.LockOptions{
-				Granularity: pb.Granularity_Row,
-				Mode:        pb.LockMode_Exclusive,
-				Policy:      pb.WaitPolicy_Wait,
-				ForwardTo:   "s2",
-			})
+			txnA := []byte("forward-mixed-a")
+			txnB := []byte("forward-mixed-b")
+			shared := newTestRowSharedOptions()
+			shared.ForwardTo = owner.serviceID
+			_, err = origin.Lock(ctx, table, newTestRows(1, 2), txnA, shared)
+			require.NoError(t, err)
+			_, err = origin.Lock(ctx, table, newTestRows(1), txnA, shared)
+			require.NoError(t, err)
+			_, err = owner.Lock(ctx, table, newTestRows(1), txnB, newTestRowSharedOptions())
 			require.NoError(t, err)
 
-			txn := l2.activeTxnHolder.getActiveTxn(txn1, false, "")
-			require.NotNil(t, txn)
-			require.Equal(t, l1.serviceID, txn.remoteService)
-			require.True(t, l2.activeTxnHolder.hasRemoteLockBind(l1.serviceID, l2.tableGroups.get(0, tableID).getBind(), time.Second))
+			exclusive := newTestRowExclusiveOptions()
+			exclusive.Policy = pb.WaitPolicy_FastFail
+			exclusive.ForwardTo = owner.serviceID
+			_, err = origin.Lock(ctx, table, newTestRows(3, 4), txnA, exclusive)
+			require.NoError(t, err)
+			_, err = origin.Lock(ctx, table, newTestRows(5), txnA, exclusive)
+			require.NoError(t, err)
+
+			requireExactTxnTableBookkeeping(t, owner, txnA, table, 5)
+			requireExactMixedModeLockStore(t, owner, table)
+			require.NoError(t, owner.Unlock(ctx, txnB, timestamp.Timestamp{}))
+			require.NoError(t, owner.Unlock(ctx, txnA, timestamp.Timestamp{}))
+		},
+		func(c *Config) {
+			c.MaxLockRowCount = 3
+			c.MaxFixedSliceSize = 8
 		},
 	)
+}
+
+func TestForwardLockUsesEffectiveLockDeadline(t *testing.T) {
+	holderTxn := []byte("holder")
+	waiterTxn := []byte("waiter")
+	runLockServiceTestsWithAdjustConfig(
+		t,
+		[]string{"s1", "s2"},
+		time.Second*10,
+		func(_ *lockTableAllocator, services []*service) {
+			origin := services[0]
+			owner := services[1]
+			const tableID = uint64(11)
+			_, err := owner.getLockTableWithCreate(context.Background(), 0, tableID, nil, pb.Sharding_None)
+			require.NoError(t, err)
+
+			options := newTestRowExclusiveOptions()
+			options.ForwardTo = owner.serviceID
+			// Forwarded txns are normally created by the frontend txn lifecycle on
+			// the origin CN. Register both here so owner-side orphan detection sees
+			// the same liveness state as production while the waiter is blocked.
+			origin.activeTxnHolder.getActiveTxn(holderTxn, true, "")
+			origin.activeTxnHolder.getActiveTxn(waiterTxn, true, "")
+
+			// A deadline-less background context previously reached morpc.Send
+			// unchanged and panicked. Service entry must inject and propagate the
+			// effective safety deadline to the forwarded RPC. Establish this
+			// uncontended holder separately from the one-second budget asserted by
+			// the waiter below: each Lock call owns an independent wait budget.
+			_, err = origin.Lock(context.Background(), tableID, [][]byte{{1}}, holderTxn, options)
+			require.NoError(t, err)
+
+			options.LockWaitTimeout = 1
+			start := time.Now()
+			_, err = origin.Lock(context.Background(), tableID, [][]byte{{1}}, waiterTxn, options)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockWaitTimeout), "unexpected error: %v", err)
+			require.GreaterOrEqual(t, time.Since(start), time.Second)
+			require.Less(t, time.Since(start), 3*time.Second)
+		},
+		func(c *Config) {
+			c.TxnIterFunc = newTestTxnIterFunc(holderTxn, waiterTxn)
+		},
+	)
+}
+
+func TestForwardLockDeadlineCancelsLockTableAllocationWait(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			const (
+				group   = uint32(0)
+				tableID = uint64(24917)
+			)
+			waitC := make(chan struct{})
+			s.mu.Lock()
+			if s.mu.allocating[group] == nil {
+				s.mu.allocating[group] = make(map[uint64]chan struct{})
+			}
+			s.mu.allocating[group][tableID] = waitC
+			s.mu.Unlock()
+			defer func() {
+				s.mu.Lock()
+				delete(s.mu.allocating[group], tableID)
+				s.mu.Unlock()
+				close(waitC)
+			}()
+
+			options := newTestRowExclusiveOptions()
+			options.LockWaitTimeout = 60
+			options.LockWaitDeadline = time.Now().Add(100 * time.Millisecond).UnixNano()
+			resultC := make(chan error, 1)
+			go func() {
+				_, err := s.forwardLock(
+					context.Background(),
+					tableID,
+					[][]byte{{1}},
+					[]byte("forward-bind-waiter"),
+					options)
+				resultC <- err
+			}()
+
+			select {
+			case err := <-resultC:
+				require.ErrorIs(t, err, ErrLockTimeout)
+			case <-time.After(2 * time.Second):
+				require.Fail(t, "forwarded lock budget did not cancel the allocation wait")
+			}
+		},
+	)
+}
+
+func TestNewLockRPCContextPreservesEarlierParentDeadline(t *testing.T) {
+	parent, cancelParent := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancelParent()
+	parentDeadline, ok := parent.Deadline()
+	require.True(t, ok)
+
+	rpcCtx, cancelRPC := newLockRPCContext(parent, pb.LockOptions{
+		LockWaitTimeout:  60,
+		LockWaitDeadline: time.Now().Add(time.Second).UnixNano(),
+	})
+	defer cancelRPC()
+	rpcDeadline, ok := rpcCtx.Deadline()
+	require.True(t, ok)
+	require.Equal(t, parentDeadline, rpcDeadline)
 }
 
 func TestDeadLockWithForward(t *testing.T) {
@@ -80,7 +384,7 @@ func TestDeadLockWithForward(t *testing.T) {
 				Granularity: pb.Granularity_Row,
 				Mode:        pb.LockMode_Exclusive,
 				Policy:      pb.WaitPolicy_Wait,
-				ForwardTo:   "s2",
+				ForwardTo:   l2.serviceID,
 			})
 			require.NoError(t, err)
 

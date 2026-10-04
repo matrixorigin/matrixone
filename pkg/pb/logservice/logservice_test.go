@@ -15,11 +15,87 @@
 package logservice
 
 import (
+	"bytes"
 	"testing"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/assert"
 )
+
+type legacyCNStoreHeartbeat struct {
+	UUID             string `protobuf:"bytes,1,opt,name=UUID,proto3"`
+	XXX_unrecognized []byte `json:"-"`
+}
+
+func (m *legacyCNStoreHeartbeat) Reset()         { *m = legacyCNStoreHeartbeat{} }
+func (m *legacyCNStoreHeartbeat) String() string { return proto.CompactTextString(m) }
+func (*legacyCNStoreHeartbeat) ProtoMessage()    {}
+
+func TestCatalogMetadataWireTagsAreAdditive(t *testing.T) {
+	capabilities := &CatalogMetadataCapabilities{HAKeeperBarrierProtocol: 1}
+	barrier := &CatalogMetadataBarrierState{
+		Phase:                          CATALOG_METADATA_BARRIER_PREPARING,
+		MembershipEpoch:                1,
+		RequiredGeneration:             1,
+		RequiredViewDependencyProtocol: 1,
+		RequiredRecoveryProtocol:       1,
+	}
+	tests := []struct {
+		name string
+		msg  interface{ Marshal() ([]byte, error) }
+		tag  []byte
+	}{
+		{name: "cn-heartbeat-26", msg: &CNStoreHeartbeat{CatalogMetadataCapabilities: capabilities}, tag: []byte{0xd2, 0x01}},
+		{name: "cn-info-28", msg: &CNStoreInfo{CatalogMetadataCapabilities: capabilities}, tag: []byte{0xe2, 0x01}},
+		{name: "log-heartbeat-14", msg: &LogStoreHeartbeat{CatalogMetadataCapabilities: capabilities}, tag: []byte{0x72}},
+		{name: "log-info-14", msg: &LogStoreInfo{CatalogMetadataCapabilities: capabilities}, tag: []byte{0x72}},
+		{name: "command-batch-6", msg: &CommandBatch{CatalogMetadataBarrier: &CatalogMetadataBarrier{MembershipEpoch: 1}}, tag: []byte{0x32}},
+		{name: "rsm-state-45", msg: &HAKeeperRSMState{CatalogMetadataBarrier: barrier}, tag: []byte{0xea, 0x02}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			data, err := test.msg.Marshal()
+			assert.NoError(t, err)
+			assert.True(t, bytes.Contains(data, test.tag), "wire data %x must contain tag %x", data, test.tag)
+		})
+	}
+}
+
+func TestCatalogMetadataHeartbeatIsUnknownFieldCompatible(t *testing.T) {
+	newHeartbeat := &CNStoreHeartbeat{
+		UUID: "cn-1",
+		CatalogMetadataCapabilities: &CatalogMetadataCapabilities{
+			ViewDependencyProtocol: 2,
+		},
+	}
+	data, err := newHeartbeat.Marshal()
+	assert.NoError(t, err)
+
+	var legacy legacyCNStoreHeartbeat
+	assert.NoError(t, proto.Unmarshal(data, &legacy))
+	assert.Equal(t, "cn-1", legacy.UUID)
+	assert.NotEmpty(t, legacy.XXX_unrecognized)
+
+	legacyData, err := proto.Marshal(&legacyCNStoreHeartbeat{UUID: "legacy-cn"})
+	assert.NoError(t, err)
+	var decoded CNStoreHeartbeat
+	assert.NoError(t, decoded.Unmarshal(legacyData))
+	assert.Equal(t, "legacy-cn", decoded.UUID)
+	assert.Nil(t, decoded.CatalogMetadataCapabilities)
+}
+
+func TestCatalogMetadataCapabilitiesFollowHeartbeats(t *testing.T) {
+	cn := NewCNState()
+	cnCapabilities := &CatalogMetadataCapabilities{ViewDependencyProtocol: 2}
+	cn.Update(CNStoreHeartbeat{UUID: "cn", CatalogMetadataCapabilities: cnCapabilities}, 1)
+	assert.Equal(t, cnCapabilities, cn.Stores["cn"].CatalogMetadataCapabilities)
+
+	log := NewLogState()
+	logCapabilities := &CatalogMetadataCapabilities{HAKeeperBarrierProtocol: 1}
+	log.Update(LogStoreHeartbeat{UUID: "log", CatalogMetadataCapabilities: logCapabilities}, 1)
+	assert.Equal(t, logCapabilities, log.Stores["log"].CatalogMetadataCapabilities)
+}
 
 func TestLogRecord(t *testing.T) {
 	r := LogRecord{
@@ -34,17 +110,23 @@ func TestLogRecord(t *testing.T) {
 func TestCNStateUpdate(t *testing.T) {
 	state := CNState{Stores: map[string]CNStoreInfo{}}
 
-	hb1 := CNStoreHeartbeat{UUID: "cn-a", ServiceAddress: "addr-a", Role: metadata.CNRole_AP}
+	hb1 := CNStoreHeartbeat{
+		UUID:                        "cn-a",
+		ServiceAddress:              "addr-a",
+		Role:                        metadata.CNRole_AP,
+		CommandDeliveryAckSupported: true,
+	}
 	tick1 := uint64(100)
 
 	state.Update(hb1, tick1)
 	assert.Equal(t, state.Stores[hb1.UUID], CNStoreInfo{
-		Tick:           tick1,
-		ServiceAddress: hb1.ServiceAddress,
-		Role:           metadata.CNRole_AP,
-		WorkState:      metadata.WorkState_Working,
-		Labels:         map[string]metadata.LabelList{},
-		UpTime:         state.Stores[hb1.UUID].UpTime,
+		Tick:                        tick1,
+		ServiceAddress:              hb1.ServiceAddress,
+		Role:                        metadata.CNRole_AP,
+		WorkState:                   metadata.WorkState_Working,
+		Labels:                      map[string]metadata.LabelList{},
+		UpTime:                      state.Stores[hb1.UUID].UpTime,
+		CommandDeliveryAckSupported: true,
 	})
 
 	hb2 := CNStoreHeartbeat{UUID: "cn-b", ServiceAddress: "addr-b", Role: metadata.CNRole_TP}
@@ -65,12 +147,13 @@ func TestCNStateUpdate(t *testing.T) {
 
 	state.Update(hb3, tick3)
 	assert.Equal(t, state.Stores[hb3.UUID], CNStoreInfo{
-		Tick:           tick3,
-		ServiceAddress: hb3.ServiceAddress,
-		Role:           metadata.CNRole_TP,
-		WorkState:      metadata.WorkState_Working,
-		Labels:         map[string]metadata.LabelList{},
-		UpTime:         state.Stores[hb3.UUID].UpTime,
+		Tick:                        tick3,
+		ServiceAddress:              hb3.ServiceAddress,
+		Role:                        metadata.CNRole_TP,
+		WorkState:                   metadata.WorkState_Working,
+		Labels:                      map[string]metadata.LabelList{},
+		UpTime:                      state.Stores[hb3.UUID].UpTime,
+		CommandDeliveryAckSupported: false,
 	})
 }
 
@@ -102,17 +185,36 @@ func TestTNStateUpdate(t *testing.T) {
 		Shards: []TNShardInfo{
 			{ShardID: 1, ReplicaID: 1},
 			{ShardID: 2, ReplicaID: 1}},
-		LogtailServerAddress: "addr-0",
+		LogtailServerAddress:        "addr-0",
+		AutoIncrEpochFenceSupported: true,
+		CommandDeliveryAckSupported: true,
 	}
 	tick2 := uint64(200)
 
 	state.Update(hb2, tick2)
 	assert.Equal(t, state.Stores[hb2.UUID], TNStoreInfo{
-		Tick:                 tick2,
-		ServiceAddress:       hb2.ServiceAddress,
-		Shards:               hb2.Shards,
-		LogtailServerAddress: "addr-0",
+		Tick:                        tick2,
+		ServiceAddress:              hb2.ServiceAddress,
+		Shards:                      hb2.Shards,
+		LogtailServerAddress:        "addr-0",
+		AutoIncrEpochFenceSupported: true,
+		CommandDeliveryAckSupported: true,
 	})
+
+	data, err := state.Marshal()
+	assert.NoError(t, err)
+	var restored TNState
+	assert.NoError(t, restored.Unmarshal(data))
+	assert.True(t, restored.Stores[hb2.UUID].AutoIncrEpochFenceSupported)
+	assert.True(t, restored.Stores[hb2.UUID].CommandDeliveryAckSupported)
+
+	// A heartbeat from a legacy TN must clear a capability previously
+	// advertised by a newer process using the same store UUID.
+	hb2.AutoIncrEpochFenceSupported = false
+	hb2.CommandDeliveryAckSupported = false
+	state.Update(hb2, tick2+1)
+	assert.False(t, state.Stores[hb2.UUID].AutoIncrEpochFenceSupported)
+	assert.False(t, state.Stores[hb2.UUID].CommandDeliveryAckSupported)
 }
 
 func TestLogStateUpdateStores(t *testing.T) {
@@ -128,10 +230,11 @@ func TestLogStateUpdateStores(t *testing.T) {
 	}
 
 	hb1 := LogStoreHeartbeat{
-		UUID:           "log-a",
-		RaftAddress:    "raft-a",
-		ServiceAddress: "addr-a",
-		GossipAddress:  "gossip-a",
+		UUID:                     "log-a",
+		RaftAddress:              "raft-a",
+		ServiceAddress:           "addr-a",
+		GossipAddress:            "gossip-a",
+		CommandDeliverySupported: true,
 		Replicas: []LogReplicaInfo{{
 			LogShardInfo: LogShardInfo{
 				ShardID:  1,
@@ -146,11 +249,12 @@ func TestLogStateUpdateStores(t *testing.T) {
 	tick1 := uint64(100)
 	state.Update(hb1, tick1)
 	assert.Equal(t, state.Stores[hb1.UUID], LogStoreInfo{
-		Tick:           tick1,
-		RaftAddress:    hb1.RaftAddress,
-		ServiceAddress: hb1.ServiceAddress,
-		GossipAddress:  hb1.GossipAddress,
-		Replicas:       hb1.Replicas,
+		Tick:                     tick1,
+		RaftAddress:              hb1.RaftAddress,
+		ServiceAddress:           hb1.ServiceAddress,
+		GossipAddress:            hb1.GossipAddress,
+		Replicas:                 hb1.Replicas,
+		CommandDeliverySupported: true,
 	})
 
 	hb2 := LogStoreHeartbeat{
@@ -171,6 +275,8 @@ func TestLogStateUpdateStores(t *testing.T) {
 	}
 	tick2 := uint64(200)
 	state.Update(hb2, tick2)
+	assert.False(t, state.Stores[hb2.UUID].CommandDeliverySupported,
+		"a legacy heartbeat must clear a capability cached for the same UUID")
 	assert.Equal(t, state.Stores[hb2.UUID], LogStoreInfo{
 		Tick:           tick2,
 		RaftAddress:    hb2.RaftAddress,
@@ -199,6 +305,81 @@ func TestLogStateUpdateStores(t *testing.T) {
 
 	// should panic()
 	state.Update(hb3, tick3)
+}
+
+func TestLogStateTracksReplicaStoreIncarnation(t *testing.T) {
+	state := NewLogState()
+	oldHeartbeat := LogStoreHeartbeat{
+		UUID:             "log-a",
+		StoreIncarnation: "disk-a",
+		Replicas: []LogReplicaInfo{{
+			LogShardInfo: LogShardInfo{
+				ShardID:           1,
+				Replicas:          map[uint64]string{1: "log-a", 2: "log-b"},
+				NonVotingReplicas: map[uint64]string{3: "log-c"},
+				Epoch:             1,
+			},
+			ReplicaID: 1,
+		}},
+	}
+	state.Update(oldHeartbeat, 1)
+	state.Update(LogStoreHeartbeat{
+		UUID:             "log-c",
+		StoreIncarnation: "disk-non-voting",
+		Replicas: []LogReplicaInfo{{
+			LogShardInfo: oldHeartbeat.Replicas[0].LogShardInfo,
+			ReplicaID:    3,
+		}},
+	}, 1)
+
+	assert.Equal(t, "disk-a", state.Stores["log-a"].StoreIncarnation)
+	assert.Equal(t, "disk-a", state.Shards[1].ReplicaStoreIncarnations[1])
+	assert.Equal(t, "disk-non-voting", state.Shards[1].ReplicaStoreIncarnations[3])
+
+	// A fresh data directory uses the same service UUID but reports no local
+	// replicas. Keep the old replica binding so the checker can fence it.
+	state.Update(LogStoreHeartbeat{
+		UUID:             "log-a",
+		StoreIncarnation: "disk-b",
+	}, 2)
+	assert.Equal(t, "disk-b", state.Stores["log-a"].StoreIncarnation)
+	assert.Equal(t, "disk-a", state.Shards[1].ReplicaStoreIncarnations[1])
+
+	// Legacy heartbeats must not erase a known incarnation during rolling
+	// upgrades.
+	state.Update(LogStoreHeartbeat{UUID: "log-a"}, 3)
+	assert.Equal(t, "disk-b", state.Stores["log-a"].StoreIncarnation)
+
+	// Once membership removes the old replica, its incarnation binding is
+	// pruned. A newly added replica records the replacement store generation.
+	state.Update(LogStoreHeartbeat{
+		UUID:             "log-b",
+		StoreIncarnation: "disk-c",
+		Replicas: []LogReplicaInfo{{
+			LogShardInfo: LogShardInfo{
+				ShardID:           1,
+				Replicas:          map[uint64]string{2: "log-b"},
+				NonVotingReplicas: map[uint64]string{3: "log-c"},
+				Epoch:             2,
+			},
+			ReplicaID: 2,
+		}},
+	}, 4)
+	assert.NotContains(t, state.Shards[1].ReplicaStoreIncarnations, uint64(1))
+	assert.Equal(t, "disk-c", state.Shards[1].ReplicaStoreIncarnations[2])
+	assert.Equal(t, "disk-non-voting", state.Shards[1].ReplicaStoreIncarnations[3])
+
+	// A delayed heartbeat from the removed replica must not recreate its
+	// incarnation binding after the membership epoch has advanced.
+	state.Update(oldHeartbeat, 5)
+	assert.NotContains(t, state.Shards[1].ReplicaStoreIncarnations, uint64(1))
+	assert.Equal(t, "disk-c", state.Shards[1].ReplicaStoreIncarnations[2])
+
+	data, err := state.Marshal()
+	assert.NoError(t, err)
+	var restored LogState
+	assert.NoError(t, restored.Unmarshal(data))
+	assert.Equal(t, state, restored)
 }
 
 func TestLogString(t *testing.T) {

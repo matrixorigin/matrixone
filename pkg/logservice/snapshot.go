@@ -155,11 +155,23 @@ func (ss *snapshotRecord) last() *snapshotItem {
 	return ss.items[l-1]
 }
 
+func (ss *snapshotRecord) release() {
+	for _, item := range ss.items {
+		putSnapshotItem(item)
+	}
+	ss.items = nil
+}
+
 func (ss *snapshotRecord) add(index snapshotIndex, dir string) error {
 	last := ss.last()
-	if last != nil && index < last.index {
-		return moerr.NewInternalErrorNoCtxf("snapshot with smaller index %d than current biggest one %d",
-			index, last.index)
+	if last != nil {
+		if index < last.index {
+			return moerr.NewInternalErrorNoCtxf("snapshot with smaller index %d than current biggest one %d",
+				index, last.index)
+		}
+		if index == last.index {
+			return nil
+		}
 	}
 	si := getSnapshotItem(snapshotItem{fs: ss.fs, index: index, dir: dir})
 	if !si.Exists() {
@@ -294,6 +306,9 @@ func (sm *snapshotManager) parse(dir string) (int, error) {
 
 // Init implements the ISnapshotManager interface.
 func (sm *snapshotManager) Init(shardID uint64, replicaID uint64) error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
 	path := sm.exportPath(shardID, replicaID)
 	if err := sm.prepareDir(path); err != nil {
 		return err
@@ -312,13 +327,17 @@ func (sm *snapshotManager) Init(shardID uint64, replicaID uint64) error {
 	}
 	// The snapshots in the manager must be sorted.
 	sort.Ints(indexes)
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
+	nid := nodeID{shardID: shardID, replicaID: replicaID}
+	snapshots := newNodeSnapshot(sm.cfg.FS, nid)
 	for _, idx := range indexes {
 		if idx > 0 {
-			_ = sm.addLocked(shardID, replicaID, uint64(idx))
+			_ = snapshots.add(snapshotIndex(idx), sm.snapshotPath(nid, snapshotIndex(idx)))
 		}
 	}
+	if current, ok := sm.snapshots[nid]; ok {
+		current.release()
+	}
+	sm.snapshots[nid] = snapshots
 	return nil
 }
 

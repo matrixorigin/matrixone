@@ -8,6 +8,37 @@ select cast('1e-3   ' as decimal(8,4));
 select cast('+0012' as unsigned) as r;
 select CAST('10x' as unsigned integer);
 
+
+# String-to-FLOAT/DOUBLE
+select cast('a' as double);
+select cast('abc123' as float);
+select cast('' as double);
+select cast('2020-01-01' as double);
+select cast('2020-01-01 12:34:56' as float);
+select cast('1abc' as double);
+select cast(X'' as double);
+select cast(_binary 'this-is-a-very-long-string' as double);
+
+# Explicit numeric casts clamp or wrap values that exceed the target range.
+select cast('999999999999999999999999' as signed);
+select cast('999999999999999999999999' as unsigned);
+select cast('9999999.99' as decimal(6,2));
+select cast(-1 as unsigned);
+select cast('-1' as unsigned);
+select cast(-1.0 as unsigned);
+select cast(cast(-1 as decimal(10,2)) as unsigned);
+select cast('999999999999999999999999999999999999999999999999999999999999999999999' as decimal(65,2));
+select cast(cast(18446744073709551615 as decimal(20,0)) as signed);
+select cast(cast('9.223372036854776e18' as double) as signed);
+select cast(cast('-1.8446744073709552e19' as double) as unsigned);
+select cast(cast(-1.4 as decimal(10,2)) as unsigned), cast(cast(-1.5 as decimal(10,2)) as unsigned), cast(cast(-1.6 as decimal(10,2)) as unsigned);
+select cast(cast(1.4 as decimal(10,2)) as signed), cast(cast(1.5 as decimal(10,2)) as signed), cast(cast(1.6 as decimal(10,2)) as signed);
+select cast(cast(10000 as signed) as decimal(6,2)), cast(cast(-10000 as signed) as decimal(6,2));
+select cast(cast(0.5 as double) as signed), cast(cast(1.5 as double) as signed), cast(cast(2.5 as double) as signed),
+       cast(cast(-0.5 as double) as signed), cast(cast(-1.5 as double) as signed), cast(cast(-2.5 as double) as signed);
+select cast('7e0' as signed), cast('7e+2' as signed), cast('1.5e0' as signed), cast('7e2' as unsigned);
+select cast('.5e0' as signed), cast('-.5e0' as signed), cast('+.5e+2' as signed);
+
 # String numeric cast with sign and radix prefixes.
 # 0b/0B is binary, 0o/0O is octal, 0x/0X is hexadecimal, and no prefix is decimal.
 # Leading zero without a radix prefix is still decimal.
@@ -137,7 +168,7 @@ select CAST(0xfffffffffffffffe as signed);
 select cast('-10a' as signed integer);
 select cast('a10' as unsigned integer);
 select 10+'a';
-select 10.0+cast('a' as decimal);
+select 10.0+cast('a' as decimal(38,0));
 select 10E+0+'a';
 
 # out-of-range cases
@@ -325,13 +356,27 @@ insert into t1 values ('2020-12-03 11:11:11');
 select cast(s1 as decimal(7,2)) from t1;
 drop table t1;
 
+set time_zone="+00:00";
+create table ts_cast_time(id int primary key, event_ts timestamp(6));
+insert into ts_cast_time values
+    (1, '2024-02-29 12:34:56.123456'),
+    (2, null),
+    (3, cast(date_add(cast(concat(cast(current_date() as char), ' 03:04:05.654321') as datetime(6)), interval 1 day) as timestamp(6))),
+    (4, cast(concat(cast(current_date() as char), ' 20:04:05.654321') as timestamp(6)));
+select id, cast(event_ts as time(6)) as event_time6, cast(event_ts as time(3)) as event_time3 from ts_cast_time order by id;
+set time_zone="+08:00";
+select id, cast(event_ts as time(6)) as event_time6, cast(event_ts as time(3)) as event_time3 from ts_cast_time order by id;
+select cast(cast('2024-02-29 12:34:56.123456' as timestamp(6)) as time(6)) as literal_time;
+drop table ts_cast_time;
+set time_zone='SYSTEM';
+
 #
 # Test for bug #11283: field conversion from varchar, and text types to decimal
 #
 
 CREATE TABLE t1 (v varchar(10), tt char(255), t char(255),mt char(255), lt char(255));
 INSERT INTO t1 VALUES ('1.01', '2.02', '3.03', '4.04', '5.05');
-SELECT CAST(v AS DECIMAL), CAST(tt AS DECIMAL), CAST(t AS DECIMAL), CAST(mt AS DECIMAL), CAST(lt AS DECIMAL) from t1;
+SELECT CAST(v AS DECIMAL(38,0)), CAST(tt AS DECIMAL(38,0)), CAST(t AS DECIMAL(38,0)), CAST(mt AS DECIMAL(38,0)), CAST(lt AS DECIMAL(38,0)) from t1;
 DROP TABLE t1;
 
 #

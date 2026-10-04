@@ -159,6 +159,14 @@ func TypeStringValue(t types.Type, v any, isNull bool, opts ...TypePrintOpt) str
 		return types.BytesToArrayToString[float32](v.([]byte))
 	case types.T_array_float64:
 		return types.BytesToArrayToString[float64](v.([]byte))
+	case types.T_array_bf16:
+		return types.BytesToArrayToString[types.BF16](v.([]byte))
+	case types.T_array_float16:
+		return types.BytesToArrayToString[types.Float16](v.([]byte))
+	case types.T_array_int8:
+		return types.BytesToArrayToString[int8](v.([]byte))
+	case types.T_array_uint8:
+		return types.BytesToArrayToString[uint8](v.([]byte))
 	case types.T_date:
 		val := v.(types.Date)
 		return val.String()

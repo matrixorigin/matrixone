@@ -23,6 +23,8 @@
 #pragma once
 
 #include "index_base.hpp"
+#include "device_memory.hpp"
+#include "index_cost.hpp"
 #include "dynamic_batching.hpp"
 #include <iostream>
 #include <numeric>
@@ -73,7 +75,22 @@ namespace matrixone {
 //
 // REPLICATED:
 //   replicated_indices_[rank] holds a full copy per rank (cast to ivf_flat_index*).
-//   replicated_datasets_[rank] holds the build dataset per rank (erased after extend).
+//   replicated_datasets_[rank] / dataset_device_ptr_ are no longer populated at build.
+//
+//   WHY: build() hands cuVS a raft::host_matrix_view instead of uploading the dataset,
+//   so there is no device copy to retain. IVF-Flat's lists own INTERLEAVED copies of
+//   the vectors -- the documented index footprint is
+//   n_vectors*dim*sizeof(T) + n_vectors*sizeof(idx) + ...
+//   (cuvs docs, neighbors/ivfflat.rst) -- so the build input was never referenced
+//   after build returned. Uploading it and then holding it meant carrying the dataset
+//   TWICE on the device for the index's lifetime: once in our rmm::device_uvector and
+//   once interleaved in the lists. cuVS streams host input through
+//   utils::batch_load_iterator (ivf_flat_build.cuh:208) at a batch size bounded by
+//   free workspace, so only one batch is transient.
+//
+//   This differs from CAGRA, where the index genuinely needs a resident dataset to
+//   search and only the OWNER changes; here the second copy was pure waste.
+//   The erase/reset calls on the extend paths are now no-ops, kept for symmetry.
 //   Searches can run on any GPU concurrently.
 //   Extends must replicate to all GPUs via submit_all_devices(); set_ids() is
 //   called once in extend() after all GPU work completes.
@@ -106,10 +123,10 @@ namespace matrixone {
 //   - Non-SHARDED: submit() (round-robin GPU assignment)
 //   - SHARDED: submit_all_devices_no_wait() → matrixone::cpu_topk_merge_sharded()
 //
-// search_float() is the same but accepts float32 queries and converts on the fly
+// search_quantize() is the same but accepts base-typed (B) queries and converts on the fly
 // (via quantizer for 1-byte T, via half conversion for T=half, direct for T=float).
 //
-// search_batchable_typed() / search_batchable_float() just submit the search to
+// search_batchable_typed() / search_batchable_quantize() just submit the search to
 // the worker; request-level batching, when enabled (batch_window() > 0),
 // happens inside search_internal via cuVS dynamic_batching (see dynamic_batching.hpp).
 //
@@ -139,15 +156,17 @@ struct ivf_flat_search_result_t {
 /**
  * @brief gpu_ivf_flat_t implements an IVF-Flat index that can run on a single GPU or sharded across multiple GPUs.
  */
-template <typename T>
-class gpu_ivf_flat_t : public gpu_index_base_t<T, ivf_flat_build_params_t, int64_t> {
+template <typename B, typename T>
+class gpu_ivf_flat_t : public gpu_index_base_t<B, T, ivf_flat_build_params_t, int64_t> {
 public:
+    using base_type    = B;
+    using storage_type = T;
     using ivf_flat_index = cuvs::neighbors::ivf_flat::index<T, int64_t>;
     using mg_index = cuvs::neighbors::mg_index<ivf_flat_index, T, int64_t>;
     using search_result_t = ivf_flat_search_result_t;
     // Inherited dependent type — bring into scope so search_internal can take a
     // const host_mask_bundle_t* parameter without `typename Base::...` everywhere.
-    using host_mask_bundle_t = typename gpu_index_base_t<T, ivf_flat_build_params_t, int64_t>::host_mask_bundle_t;
+    using host_mask_bundle_t = typename gpu_index_base_t<B, T, ivf_flat_build_params_t, int64_t>::host_mask_bundle_t;
 
     std::unique_ptr<ivf_flat_index> index_;
     std::string data_filename_;
@@ -180,13 +199,14 @@ public:
             worker_devices = {worker_devices[0]};
         }
         this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, mode);
+        this->cost_ = std::make_unique<matrixone::ivf_flat_cost>(
+            this->dimension, sizeof(T), bp.kmeans_trainset_fraction);
 
-        this->flattened_host_dataset.resize(this->count * this->dimension);
+        this->allocate_host_capacity("ivf_flat build", /*with_ids=*/true);
         if (dataset_data) {
             std::copy(dataset_data, dataset_data + (this->count * this->dimension), this->flattened_host_dataset.begin());
         }
 
-        this->host_ids.reserve(this->count);
         if (ids) {
             this->set_ids(ids, this->count);
         }
@@ -211,10 +231,10 @@ public:
             worker_devices = {worker_devices[0]};
         }
         this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, mode);
+        this->cost_ = std::make_unique<matrixone::ivf_flat_cost>(
+            this->dimension, sizeof(T), bp.kmeans_trainset_fraction);
 
-        this->flattened_host_dataset.resize(this->count * this->dimension);
-
-        this->host_ids.reserve(this->count);
+        this->allocate_host_capacity("ivf_flat build", /*with_ids=*/true);
         if (ids) {
             this->set_ids(ids, this->count);
         }
@@ -237,6 +257,8 @@ public:
             worker_devices = {worker_devices[0]};
         }
         this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, mode);
+        this->cost_ = std::make_unique<matrixone::ivf_flat_cost>(
+            this->dimension, sizeof(T), bp.kmeans_trainset_fraction);
 
         this->current_offset_ = 0;
     }
@@ -325,23 +347,29 @@ public:
 
         if (this->dist_mode == DistributionMode_REPLICATED) {
             auto res = handle.get_raft_resources();
-            // Pool-bypass training matrix — see matrixone::raw_device_mr() in cuvs_worker.hpp.
-            auto dataset_storage = std::make_shared<rmm::device_uvector<T>>(
-                static_cast<size_t>(this->count) * this->dimension,
-                raft::resource::get_cuda_stream(*res),
-                matrixone::raw_device_mr());
-            auto dataset_device = raft::make_device_matrix_view<T, int64_t>(
-                dataset_storage->data(), (int64_t)this->count, (int64_t)this->dimension);
-            raft::copy(*res, dataset_device, raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
-            raft::resource::sync_stream(*res);
+            auto dataset_host = raft::make_host_matrix_view<const T, int64_t>(
+                this->flattened_host_dataset.data(), (int64_t)this->count, (int64_t)this->dimension);
 
             // Serialize concurrent builds on the same physical device (cuVS kmeans
             // is not safe to run twice at once on one GPU — see device_build_mutex).
             std::unique_ptr<ivf_flat_index> local_idx;
             {
                 std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+                matrixone::device_memory_governor::reservation build_claim;
+                const size_t peak = this->build_peak_bytes(this->count);
+                if (peak > 0) {
+                    // max(kmeans trainset, list data): the two phases never
+                    // coexist. cuVS build() is stream-ordered -- it allocates and
+                    // enqueues, then returns -- so the claim ends with this scope,
+                    // BEFORE the sync that waits on the compute. The index body
+                    // comes from the plain cuda_memory_resource (see
+                    // cuvs_worker.hpp), i.e. cudaMalloc, so it is visible to
+                    // cudaMemGetInfo immediately and holding the claim longer
+                    // would count it twice.
+                    build_claim = matrixone::device_memory_governor::reserve(peak, "ivf_flat::build", this->budget_percent());
+                }
                 local_idx = std::make_unique<ivf_flat_index>(cuvs::neighbors::ivf_flat::build(
-                    *res, index_params, raft::make_const_mdspan(dataset_device)));
+                    *res, index_params, dataset_host));
             }
 
             handle.set_index_ptr(static_cast<const ivf_flat_index*>(local_idx.get()));
@@ -349,7 +377,6 @@ public:
             {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
                 this->replicated_indices_[handle.get_rank()] = std::shared_ptr<ivf_flat_index>(std::move(local_idx));
-                this->replicated_datasets_[handle.get_rank()] = std::move(dataset_storage);
             }
             handle.sync();
         } else if (this->dist_mode == DistributionMode_SHARDED) {
@@ -370,24 +397,40 @@ public:
 
             // std::cout << "[DEBUG] IVF-Flat build SHARDED: rank=" << rank << " start_row=" << start_row << " num_rows=" << num_rows << std::endl;
 
-            // Pool-bypass training shard — see REPLICATED branch.
-            auto dataset_storage = std::make_shared<rmm::device_uvector<T>>(
-                static_cast<size_t>(num_rows) * this->dimension,
-                raft::resource::get_cuda_stream(*res),
-                matrixone::raw_device_mr());
-            auto dataset_device = raft::make_device_matrix_view<T, int64_t>(
-                dataset_storage->data(), (int64_t)num_rows, (int64_t)this->dimension);
-            raft::copy(*res, dataset_device,
-                       raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data() + (start_row * this->dimension), num_rows, this->dimension));
-            raft::resource::sync_stream(*res);
+            // This rank's slice of the shared host buffer.
+            auto dataset_host = raft::make_host_matrix_view<const T, int64_t>(
+                this->flattened_host_dataset.data() + (start_row * this->dimension),
+                (int64_t)num_rows, (int64_t)this->dimension);
 
             // Serialize concurrent builds on the same physical device (cuVS kmeans
             // is not safe to run twice at once on one GPU — see device_build_mutex).
             std::unique_ptr<ivf_flat_index> local_idx;
             {
                 std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+                matrixone::device_memory_governor::reservation build_claim;
+                // SHARDED claims THIS SHARD, not the logical index. rows_fitting()
+                // returns min_rows * distinct_devices for SHARDED (index_cost.hpp), so
+                // this->count is the N-card total while this rank only ever builds its
+                // own num_rows slice. Claiming the total against one card's budget
+                // refuses every SHARDED build that is sized to fill the cards -- two
+                // 27 GiB shards make a 54 GiB count, and each rank asked its own 27 GiB
+                // budget to admit 54. Taken from the view so the claim cannot drift
+                // from what is actually built. REPLICATED and SINGLE_GPU keep
+                // this->count: they each hold the whole index.
+                const size_t peak = this->build_peak_bytes(dataset_host.extent(0));
+                if (peak > 0) {
+                    // max(kmeans trainset, list data): the two phases never
+                    // coexist. cuVS build() is stream-ordered -- it allocates and
+                    // enqueues, then returns -- so the claim ends with this scope,
+                    // BEFORE the sync that waits on the compute. The index body
+                    // comes from the plain cuda_memory_resource (see
+                    // cuvs_worker.hpp), i.e. cudaMalloc, so it is visible to
+                    // cudaMemGetInfo immediately and holding the claim longer
+                    // would count it twice.
+                    build_claim = matrixone::device_memory_governor::reserve(peak, "ivf_flat::build", this->budget_percent());
+                }
                 local_idx = std::make_unique<ivf_flat_index>(cuvs::neighbors::ivf_flat::build(
-                    *res, index_params, raft::make_const_mdspan(dataset_device)));
+                    *res, index_params, dataset_host));
             }
 
             handle.set_index_ptr(static_cast<const ivf_flat_index*>(local_idx.get()));
@@ -395,28 +438,33 @@ public:
             {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
                 this->replicated_indices_[handle.get_rank()] = std::shared_ptr<ivf_flat_index>(std::move(local_idx));
-                this->replicated_datasets_[handle.get_rank()] = std::move(dataset_storage);
             }
             handle.sync();
         } else {
             // Do all GPU work outside the lock — holding shared_mutex across GPU calls
             // would block concurrent readers for the entire build duration.
             auto res = handle.get_raft_resources();
-            // Pool-bypass training matrix — see REPLICATED branch.
-            auto dataset_storage = std::make_shared<rmm::device_uvector<T>>(
-                static_cast<size_t>(this->count) * this->dimension,
-                raft::resource::get_cuda_stream(*res),
-                matrixone::raw_device_mr());
-            auto dataset_device = raft::make_device_matrix_view<T, int64_t>(
-                dataset_storage->data(), (int64_t)this->count, (int64_t)this->dimension);
-            raft::copy(*res, dataset_device, raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
-            raft::resource::sync_stream(*res);
+            auto dataset_host = raft::make_host_matrix_view<const T, int64_t>(
+                this->flattened_host_dataset.data(), (int64_t)this->count, (int64_t)this->dimension);
 
             std::unique_ptr<ivf_flat_index> new_idx;
             {
                 std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+                matrixone::device_memory_governor::reservation build_claim;
+                const size_t peak = this->build_peak_bytes(this->count);
+                if (peak > 0) {
+                    // max(kmeans trainset, list data): the two phases never
+                    // coexist. cuVS build() is stream-ordered -- it allocates and
+                    // enqueues, then returns -- so the claim ends with this scope,
+                    // BEFORE the sync that waits on the compute. The index body
+                    // comes from the plain cuda_memory_resource (see
+                    // cuvs_worker.hpp), i.e. cudaMalloc, so it is visible to
+                    // cudaMemGetInfo immediately and holding the claim longer
+                    // would count it twice.
+                    build_claim = matrixone::device_memory_governor::reserve(peak, "ivf_flat::build", this->budget_percent());
+                }
                 new_idx = std::make_unique<ivf_flat_index>(cuvs::neighbors::ivf_flat::build(
-                    *res, index_params, raft::make_const_mdspan(dataset_device)));
+                    *res, index_params, dataset_host));
             }
 
             handle.sync();
@@ -425,7 +473,6 @@ public:
             {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
                 index_ = std::move(new_idx);
-                this->dataset_device_ptr_ = std::move(dataset_storage);
             }
         }
     }
@@ -611,8 +658,8 @@ public:
         return this->search_wait(job_id);
     }
 
-    // Async T-typed filtered search. Mirrors search_float_with_filter_async
-    // but uses search_internal (T) instead of search_float_internal (float).
+    // Async T-typed filtered search. Mirrors search_quantize_with_filter_async
+    // but uses search_internal (T) instead of search_quantize_internal (B).
     uint64_t search_with_filter_async(const T* queries_data, uint64_t num_queries,
                                       uint32_t query_dimension, uint32_t limit,
                                       const ivf_flat_search_params_t& sp,
@@ -715,27 +762,28 @@ public:
         return this->worker->submit(task);
     }
 
-    // Sync float entry — wraps search_float_async + search_wait.
-    search_result_t search_float(const float* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const ivf_flat_search_params_t& sp) {
-        uint64_t job_id = this->search_float_async(queries_data, num_queries, query_dimension, limit, sp);
+    // Sync quantize entry — wraps search_quantize_async + search_wait.
+    search_result_t search_quantize(const B* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const ivf_flat_search_params_t& sp) {
+        uint64_t job_id = this->search_quantize_async(queries_data, num_queries, query_dimension, limit, sp);
         return this->search_wait(job_id);
     }
 
-    // Sync float filtered entry — wraps search_float_with_filter_async + search_wait.
-    search_result_t search_float_with_filter(const float* queries_data, uint64_t num_queries,
+    // Sync quantize filtered entry — wraps search_quantize_with_filter_async + search_wait.
+    search_result_t search_quantize_with_filter(const B* queries_data, uint64_t num_queries,
                                              uint32_t query_dimension, uint32_t limit,
                                              const ivf_flat_search_params_t& sp,
                                              const std::string& preds_json) {
-        uint64_t job_id = this->search_float_with_filter_async(queries_data, num_queries, query_dimension, limit, sp, preds_json);
+        uint64_t job_id = this->search_quantize_with_filter_async(queries_data, num_queries, query_dimension, limit, sp, preds_json);
         return this->search_wait(job_id);
     }
 
-    // Async variant of search_float_with_filter. Builds the host mask bundle on
+    // Async variant of search_quantize_with_filter. Builds the host mask bundle on
     // the calling thread (off-worker), copies queries into a shared_ptr so they
     // outlive the Go caller, captures both in the worker lambda, and returns a
     // job_id that search_wait() can collect. Used by the multi-index filter
-    // path so per-shard searches run in parallel.
-    uint64_t search_float_with_filter_async(const float* queries_data, uint64_t num_queries,
+    // path so per-shard searches run in parallel. The query is the BASE type B
+    // (float or half); search_quantize_internal converts it to storage T.
+    uint64_t search_quantize_with_filter_async(const B* queries_data, uint64_t num_queries,
                                             uint32_t query_dimension, uint32_t limit,
                                             const ivf_flat_search_params_t& sp,
                                             const std::string& preds_json) {
@@ -748,7 +796,7 @@ public:
         }
         if (!this->worker) throw std::runtime_error("Worker not initialized");
 
-        auto queries_copy = std::make_shared<std::vector<float>>(queries_data, queries_data + num_queries * query_dimension);
+        auto queries_copy = std::make_shared<std::vector<B>>(queries_data, queries_data + num_queries * query_dimension);
 
         if (this->dist_mode == DistributionMode_SHARDED) {
             // Bitmap eval runs on the caller's (Go) thread; per-shard searches
@@ -757,7 +805,7 @@ public:
             auto shard_masks = this->build_filter_shard_masks(preds_json);
             auto shard_search_task = [this, num_queries, query_dimension, limit, sp, queries_copy, shard_masks](raft_handle_wrapper_t& gpu_handle) -> std::any {
                 int rank = gpu_handle.get_rank();
-                return this->search_float_internal(gpu_handle, queries_copy->data(), num_queries, query_dimension, limit, sp, /*preds_json=*/"", shard_masks[rank].get());
+                return this->search_quantize_internal(gpu_handle, queries_copy->data(), num_queries, query_dimension, limit, sp, /*preds_json=*/"", shard_masks[rank].get());
             };
             auto job_ids = this->worker->submit_all_devices_no_wait(shard_search_task);
             return this->worker->submit_composite_pending(std::move(job_ids), num_queries, limit);
@@ -769,12 +817,12 @@ public:
         // would force serialization through main_thread_ and lose batching.
         auto mask = this->build_filter_single_mask(preds_json);
         auto task = [this, num_queries, query_dimension, limit, sp, queries_copy, mask](raft_handle_wrapper_t& handle) -> std::any {
-            return this->search_float_internal(handle, queries_copy->data(), num_queries, query_dimension, limit, sp, /*preds_json=*/"", mask.get());
+            return this->search_quantize_internal(handle, queries_copy->data(), num_queries, query_dimension, limit, sp, /*preds_json=*/"", mask.get());
         };
         return this->worker->submit(task);
     }
 
-    uint64_t search_float_async(const float* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const ivf_flat_search_params_t& sp) {
+    uint64_t search_quantize_async(const B* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const ivf_flat_search_params_t& sp) {
         if (!queries_data) throw std::invalid_argument("search_async: queries_data is null");
         if (num_queries == 0) throw std::invalid_argument("search_async: num_queries is 0");
         if (this->dimension == 0) throw std::runtime_error("search_async: index dimension is 0");
@@ -783,13 +831,13 @@ public:
             if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) throw std::runtime_error("search_async: index not loaded");
         }
 
-        auto queries_copy = std::make_shared<std::vector<float>>(queries_data, queries_data + num_queries * query_dimension);
+        auto queries_copy = std::make_shared<std::vector<B>>(queries_data, queries_data + num_queries * query_dimension);
 
         if (this->dist_mode == DistributionMode_SHARDED) {
             // Same shape as search_async — fan out, hand back a composite id,
             // let search_wait() do the merge on the caller's thread.
             auto shard_search_task = [this, num_queries, query_dimension, limit, sp, queries_copy](raft_handle_wrapper_t& gpu_handle) -> std::any {
-                return this->search_float_internal(gpu_handle, queries_copy->data(), num_queries, query_dimension, limit, sp);
+                return this->search_quantize_internal(gpu_handle, queries_copy->data(), num_queries, query_dimension, limit, sp);
             };
             auto job_ids = this->worker->submit_all_devices_no_wait(shard_search_task);
             return this->worker->submit_composite_pending(std::move(job_ids), num_queries, limit);
@@ -797,16 +845,16 @@ public:
 
         // Single-GPU / replicated: the helper decides standalone vs fused; the
         // shared_ptr keeps the copied queries alive until the search runs.
-        return this->search_batchable_float(queries_copy, queries_copy->data(), num_queries, limit, sp);
+        return this->search_batchable_quantize(queries_copy, queries_copy->data(), num_queries, limit, sp);
     }
 
-    // float32-input search. Mirrors search_batchable_typed but calls
-    // search_float_internal; request-level batching (if enabled) happens inside it.
-    uint64_t search_batchable_float(std::shared_ptr<std::vector<float>> owner, const float* queries_data,
+    // Base-typed (B) quantize search. Mirrors search_batchable_typed but calls
+    // search_quantize_internal; request-level batching (if enabled) happens inside it.
+    uint64_t search_batchable_quantize(std::shared_ptr<std::vector<B>> owner, const B* queries_data,
                                     uint64_t num_queries, uint32_t limit, const ivf_flat_search_params_t& sp) {
         if (!this->worker) throw std::runtime_error("Worker not initialized");
         auto task = [this, owner, queries_data, num_queries, limit, sp](raft_handle_wrapper_t& handle) -> std::any {
-            return this->search_float_internal(handle, queries_data, num_queries, this->dimension, limit, sp);
+            return this->search_quantize_internal(handle, queries_data, num_queries, this->dimension, limit, sp);
         };
         return this->worker->submit(task);
     }
@@ -983,14 +1031,18 @@ public:
             }
         }
 
-        transform_distance(this->metric, search_res.distances);
+        transform_distance(this->metric, search_res.distances, this->quantized_l2_dequant_factor());
         return search_res;
     }
 
     // See search_internal() above for the prebuilt-bundle contract; identical
     // semantics here (off-worker CPU mask eval, skip queries-H2D sync_stream
     // when prebuilt is non-null).
-    search_result_t search_float_internal(raft_handle_wrapper_t& handle, const float* queries_data, uint64_t num_queries, uint32_t /*query_dimension*/, uint32_t limit, const ivf_flat_search_params_t& sp, const std::string& preds_json = "", const host_mask_bundle_t* prebuilt = nullptr) {
+    // Takes the query in the BASE element type B (float or half) and converts
+    // it to the storage type T on-device — see the cagra search_quantize_internal
+    // comment. B==T copies straight, sizeof(T)==1 quantizes B -> int8/uint8, and
+    // the (B=float, T=half) instantiation casts f32 -> f16 on the host.
+    search_result_t search_quantize_internal(raft_handle_wrapper_t& handle, const B* queries_data, uint64_t num_queries, uint32_t /*query_dimension*/, uint32_t limit, const ivf_flat_search_params_t& sp, const std::string& preds_json = "", const host_mask_bundle_t* prebuilt = nullptr) {
         // No top-level lock: see search_internal() above — pointer fetched
         // via per-handle cache / narrow inner shared_lock, GPU work runs
         // unlocked.
@@ -1002,26 +1054,28 @@ public:
         auto q_dev_t = raft::make_device_matrix_view<T, int64_t>(
             q_buf_t.data(), static_cast<int64_t>(num_queries), static_cast<int64_t>(this->dimension));
 
-        if constexpr (std::is_same_v<T, float>) {
-            raft::copy(*res, q_dev_t, raft::make_host_matrix_view<const float, int64_t>(queries_data, num_queries, this->dimension));
-        } else if constexpr (std::is_same_v<T, __half>) {
-            // Host-side fp32 → fp16 cast (F16C / AVX, IEEE round-to-nearest-even
-            // — bit-identical to mdspan_copy_kernel<__half>) into a pinned
-            // staging buffer, then a single half-sized H2D copy. Skips the
-            // q_dev_f device allocation and the mdspan_copy_kernel dispatch.
+        if constexpr (std::is_same_v<T, B>) {
+            // B == T (float->float or half->half): no conversion.
+            raft::copy(*res, q_dev_t, raft::make_host_matrix_view<const T, int64_t>(queries_data, num_queries, this->dimension));
+        } else if constexpr (sizeof(T) == 1) {
+            // sizeof(T) == 1: quantize the base-typed query B -> int8/uint8.
+            // Stage the B query on its own per-thread device workspace (distinct
+            // from q_buf_t — see q_dev_buf<U>), then transform B -> T on-device.
+            if (!this->quantizer_.is_trained()) throw std::runtime_error("Quantizer not trained");
+            auto& q_buf_b = handle.template q_dev_buf<B>(n_q_elems);
+            auto q_dev_b = raft::make_device_matrix_view<B, int64_t>(
+                q_buf_b.data(), static_cast<int64_t>(num_queries), static_cast<int64_t>(this->dimension));
+            raft::copy(*res, q_dev_b, raft::make_host_matrix_view<const B, int64_t>(queries_data, num_queries, this->dimension));
+            this->quantizer_.template transform<T>(*res, q_dev_b, q_buf_t.data(), true);
+        } else {
+            // B != T and sizeof(T) != 1: only (B=float, T=half). Host fp32 -> fp16
+            // cast (F16C / AVX, IEEE round-to-nearest-even — bit-identical to
+            // mdspan_copy_kernel<__half>) into a pinned staging buffer, then a
+            // single half-sized H2D copy.
             __half* host_h = handle.ensure_host_half_buf(n_q_elems);
             matrixone::cast_float_to_half_host(queries_data, host_h, n_q_elems);
             raft::copy(*res, q_dev_t,
                 raft::make_host_matrix_view<const __half, int64_t>(host_h, num_queries, this->dimension));
-        } else {
-            // sizeof(T) == 1: int8 quantizer needs the fp32 device matrix.
-            auto& q_buf_f = handle.q_dev_buf_float(n_q_elems);
-            auto q_dev_f = raft::make_device_matrix_view<float, int64_t>(
-                q_buf_f.data(), static_cast<int64_t>(num_queries), static_cast<int64_t>(this->dimension));
-            raft::copy(*res, q_dev_f, raft::make_host_matrix_view<const float, int64_t>(queries_data, num_queries, this->dimension));
-
-            if (!this->quantizer_.is_trained()) throw std::runtime_error("Quantizer not trained");
-            this->quantizer_.template transform<T>(*res, q_dev_f, q_buf_t.data(), true);
         }
         // Legacy path syncs so build_search_bitset's stack-local host bitmap can
         // drain on the same stream. Prebuilt path skips: bitset H2D queues
@@ -1175,7 +1229,7 @@ public:
             }
         }
 
-        transform_distance(this->metric, search_res.distances);
+        transform_distance(this->metric, search_res.distances, this->quantized_l2_dequant_factor());
         return search_res;
     }
 
@@ -1199,6 +1253,12 @@ public:
         auto task = [&](raft_handle_wrapper_t& handle) -> std::any {
             auto res = handle.get_raft_resources();
             auto local_idx = std::make_unique<ivf_flat_index>(*res);
+            // Claim the VRAM this load is about to materialise so a concurrent
+            // build or load on this device cannot spend the same free bytes. The
+            // claim holds no lock; it is dropped at scope exit, by which point the
+            // memory is resident and cudaMemGetInfo accounts for it.
+            const size_t load_bytes = matrixone::required_path_bytes(filename, "ivf_flat::load");
+            auto load_claim = matrixone::device_memory_governor::reserve(load_bytes, "ivf_flat::load", this->budget_percent());
             cuvs::neighbors::ivf_flat::deserialize(*res, filename, local_idx.get());
             // Drain `res`'s stream so any H2D copy committed by deserialize is
             // visible before any search thread reads the loaded index. Without
@@ -1321,6 +1381,11 @@ public:
 
     // Restore all index state from a directory previously written by save_dir().
     void load_dir(const std::string& dir, distribution_mode_t target_mode) {
+        // Held for the whole of load_dir: the host components are materialised
+        // by the deserialisation below, and the claim drops on return, once the
+        // availability reading has moved by the same bytes.
+        auto host_claim = this->claim_host_components(dir, "ivf_flat load");
+
         auto m = this->read_manifest(dir, "ivf_flat");
         if (this->dist_mode == DistributionMode_SHARDED && target_mode != DistributionMode_SHARDED)
             throw std::invalid_argument("cannot change dist_mode: index was built as SHARDED");
@@ -1349,6 +1414,12 @@ public:
             auto task = [&, full_path](raft_handle_wrapper_t& handle) -> std::any {
                 auto res = handle.get_raft_resources();
                 auto local_idx = std::make_unique<ivf_flat_index>(*res);
+                // Claim the VRAM this load is about to materialise so a concurrent
+                // build or load on this device cannot spend the same free bytes. The
+                // claim holds no lock; it is dropped at scope exit, by which point the
+                // memory is resident and cudaMemGetInfo accounts for it.
+                const size_t load_bytes = matrixone::required_path_bytes(full_path, "ivf_flat::load");
+                auto load_claim = matrixone::device_memory_governor::reserve(load_bytes, "ivf_flat::load", this->budget_percent());
                 cuvs::neighbors::ivf_flat::deserialize(*res, full_path, local_idx.get());
                 // Drain `res`'s stream so deserialize's H2D copy is committed
                 // before any search thread reads the loaded index. See the
@@ -1368,6 +1439,12 @@ public:
                 [&, full_path](raft_handle_wrapper_t& handle) -> std::any {
                     auto res = handle.get_raft_resources();
                     auto local_idx = std::make_unique<ivf_flat_index>(*res);
+                    // Claim the VRAM this load is about to materialise so a concurrent
+                    // build or load on this device cannot spend the same free bytes. The
+                    // claim holds no lock; it is dropped at scope exit, by which point the
+                    // memory is resident and cudaMemGetInfo accounts for it.
+                    const size_t load_bytes = matrixone::required_path_bytes(full_path, "ivf_flat::load");
+                    auto load_claim = matrixone::device_memory_governor::reserve(load_bytes, "ivf_flat::load", this->budget_percent());
                     cuvs::neighbors::ivf_flat::deserialize(*res, full_path, local_idx.get());
                     // See SINGLE_GPU branch above for the rationale.
                     raft::resource::sync_stream(*res);
@@ -1387,6 +1464,12 @@ public:
                     std::string shard_path = dir + "/" + shard_files[rank];
                     auto res = handle.get_raft_resources();
                     auto local_idx = std::make_unique<ivf_flat_index>(*res);
+                    // Claim the VRAM this load is about to materialise so a concurrent
+                    // build or load on this device cannot spend the same free bytes. The
+                    // claim holds no lock; it is dropped at scope exit, by which point the
+                    // memory is resident and cudaMemGetInfo accounts for it.
+                    const size_t load_bytes = matrixone::required_path_bytes(shard_path, "ivf_flat::load");
+                    auto load_claim = matrixone::device_memory_governor::reserve(load_bytes, "ivf_flat::load", this->budget_percent());
                     cuvs::neighbors::ivf_flat::deserialize(*res, shard_path, local_idx.get());
                     // See SINGLE_GPU branch above for the rationale.
                     raft::resource::sync_stream(*res);
@@ -1451,7 +1534,14 @@ public:
             auto centers_device_target = raft::make_device_matrix<T, int64_t>(*res, n_centers, dim);
             if constexpr (sizeof(T) == 1) {
                 auto centers_float_view = raft::make_device_matrix_view<const float, int64_t>(centers_view.data_handle(), n_centers, dim);
-                this->quantizer_.template transform<T>(*res, centers_float_view, centers_device_target.data_handle(), true);
+                if constexpr (std::is_same_v<B, float>) {
+                    this->quantizer_.template transform<T>(*res, centers_float_view, centers_device_target.data_handle(), true);
+                } else {
+                    // B == half: cast the float centers to B on-device, then quantize B -> T.
+                    auto centers_b = raft::make_device_matrix<B, int64_t>(*res, n_centers, dim);
+                    raft::copy(*res, centers_b.view(), centers_float_view);
+                    this->quantizer_.template transform<T>(*res, centers_b.view(), centers_device_target.data_handle(), true);
+                }
             } else {
                 raft::copy(*res, centers_device_target.view(), centers_view);
             }
@@ -1470,7 +1560,7 @@ public:
     }
 
     std::string info() const override {
-        std::string json = gpu_index_base_t<T, ivf_flat_build_params_t, int64_t>::info();
+        std::string json = gpu_index_base_t<B, T, ivf_flat_build_params_t, int64_t>::info();
         json += ", \"type\": \"IVF-Flat\", \"ivf_flat\": {";
         if (index_) json += "\"mode\": \"Single-GPU\", \"size\": " + std::to_string(index_->size());
         else if (!this->replicated_indices_.empty()) json += "\"mode\": \"Local-Indices\", \"ranks\": " + std::to_string(this->replicated_indices_.size());

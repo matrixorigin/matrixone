@@ -32,7 +32,7 @@ where table_id = (select rel_id from mo_catalog.mo_tables
 where relname='t' and reldatabase='cagra_q_f16')
 and name='ix' and algo_table_type='cagra_index';
 ➤ algo[12,-1,0]  ¦  algo_table_type[12,-1,0]  ¦  algo_params[12,-1,0]  𝄀
-cagra  ¦  cagra_index  ¦  {"distribution_mode":"single","graph_degree":"8","intermediate_graph_degree":"16","itopk_size":"32","op_type":"vector_l2_ops","quantization":"float16","session_vars":{"cfg":{"cagra_max_index_capacity":{"t":"I","v":99999},"cagra_threads_build":{"t":"I","v":7},"experimental_cagra_index":{"t":"I8","v":1},"lower_case_table_names":{"t":"I","v":1}}}}
+cagra  ¦  cagra_index  ¦  {"distribution_mode":"single","graph_degree":"8","intermediate_graph_degree":"16","itopk_size":"32","op_type":"vector_l2_ops","quantization":"float16","session_vars":{"cfg":{"cagra_threads_build":{"t":"I","v":7},"lower_case_table_names":{"t":"I","v":1}}}}
 select id from t order by l2_distance(v, '[1,1,1,1,1,1,1,1]') limit 1;
 ➤ id[-5,64,0]  𝄀
 1
@@ -77,7 +77,7 @@ where table_id = (select rel_id from mo_catalog.mo_tables
 where relname='t' and reldatabase='cagra_q_int8')
 and name='ix' and algo_table_type='cagra_index';
 ➤ algo[12,-1,0]  ¦  algo_table_type[12,-1,0]  ¦  algo_params[12,-1,0]  𝄀
-cagra  ¦  cagra_index  ¦  {"distribution_mode":"single","graph_degree":"8","intermediate_graph_degree":"16","itopk_size":"32","op_type":"vector_l2_ops","quantization":"int8","session_vars":{"cfg":{"cagra_max_index_capacity":{"t":"I","v":99999},"cagra_threads_build":{"t":"I","v":7},"experimental_cagra_index":{"t":"I8","v":1},"lower_case_table_names":{"t":"I","v":1}}}}
+cagra  ¦  cagra_index  ¦  {"distribution_mode":"single","graph_degree":"8","intermediate_graph_degree":"16","itopk_size":"32","op_type":"vector_l2_ops","quantization":"int8","session_vars":{"cfg":{"cagra_threads_build":{"t":"I","v":7},"lower_case_table_names":{"t":"I","v":1}}}}
 select id from t order by l2_distance(v, '[1,1,1,1,1,1,1,1]') limit 1;
 ➤ id[-5,64,0]  𝄀
 1
@@ -122,7 +122,7 @@ where table_id = (select rel_id from mo_catalog.mo_tables
 where relname='t' and reldatabase='cagra_q_uint8')
 and name='ix' and algo_table_type='cagra_index';
 ➤ algo[12,-1,0]  ¦  algo_table_type[12,-1,0]  ¦  algo_params[12,-1,0]  𝄀
-cagra  ¦  cagra_index  ¦  {"distribution_mode":"single","graph_degree":"8","intermediate_graph_degree":"16","itopk_size":"32","op_type":"vector_l2_ops","quantization":"uint8","session_vars":{"cfg":{"cagra_max_index_capacity":{"t":"I","v":99999},"cagra_threads_build":{"t":"I","v":7},"experimental_cagra_index":{"t":"I8","v":1},"lower_case_table_names":{"t":"I","v":1}}}}
+cagra  ¦  cagra_index  ¦  {"distribution_mode":"single","graph_degree":"8","intermediate_graph_degree":"16","itopk_size":"32","op_type":"vector_l2_ops","quantization":"uint8","session_vars":{"cfg":{"cagra_threads_build":{"t":"I","v":7},"lower_case_table_names":{"t":"I","v":1}}}}
 select id from t order by l2_distance(v, '[1,1,1,1,1,1,1,1]') limit 1;
 ➤ id[-5,64,0]  𝄀
 1

@@ -15,155 +15,246 @@
 package logutil
 
 import (
+	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
 
-// RateLimitedLogger wraps a zap.Logger with rate limiting to prevent log storms.
-// It limits log output by both count and time interval.
-type RateLimitedLogger struct {
-	logger *zap.Logger
-	// callerSkipLogger is used for logging with correct caller frame.
-	// It has CallerSkip(2) to account for the wrapper methods.
-	callerSkipLogger *zap.Logger
+const (
+	overflowEvent = "event-budget-overflow"
+	// maxEventNameBytes keeps the retained limiter key space bounded even when
+	// a caller mistakenly derives an Event name from untrusted input.
+	maxEventNameBytes = 128
 
-	mu struct {
-		sync.Mutex
-		states map[string]*rateLimitState
-	}
-}
+	FieldEvent             = "event"
+	FieldOccurrence        = "occurrence"
+	FieldSuppressed        = "suppressed"
+	FieldRateLimitOverflow = "event-budget-overflow"
+)
 
-// rateLimitState tracks the state of a particular log message for rate limiting.
-type rateLimitState struct {
-	count      int64     // total occurrences since last log
-	suppressed int64     // count of suppressed logs
-	lastLog    time.Time // last time this message was logged
-}
-
-// RateLimitConfig configures rate limiting behavior.
+// RateLimitConfig governs a single stable event population. Event APIs use a
+// strict time budget; SampleInterval is honored only by the legacy
+// RateLimitedLogger adapter for compatibility with its existing callers.
 type RateLimitConfig struct {
-	// Interval is the minimum time between log outputs for the same message.
-	// Default: 10 seconds
-	Interval time.Duration
-	// BurstCount is the number of logs allowed in burst before rate limiting kicks in.
-	// First N occurrences are always logged.
-	// Default: 3
-	BurstCount int
-	// SampleInterval is the count interval at which to log even when rate limited.
-	// e.g., 100 means log every 100th occurrence.
-	// Default: 100
+	Interval       time.Duration
+	BurstCount     int
 	SampleInterval int
 }
 
-var (
-	// DefaultRateLimitConfig is the default configuration for rate limiting.
-	DefaultRateLimitConfig = RateLimitConfig{
-		Interval:       10 * time.Second,
-		BurstCount:     3,
-		SampleInterval: 100,
+var DefaultRateLimitConfig = RateLimitConfig{
+	Interval:       10 * time.Second,
+	BurstCount:     3,
+	SampleInterval: 100,
+}
+
+// RateLimitedLoggerConfig bounds retained event state. Overflow events share
+// one state, so misuse of dynamic keys cannot grow process memory.
+type RateLimitedLoggerConfig struct {
+	MaxKeys int
+}
+
+var DefaultRateLimitedLoggerConfig = RateLimitedLoggerConfig{MaxKeys: 128}
+
+type rateLimitState struct {
+	count      int64
+	suppressed int64
+	lastLog    time.Time
+}
+
+// EventRateLimiter is shared by related loggers (With, Named, WithContext)
+// so derived loggers cannot evade the same event's storm budget.
+type EventRateLimiter struct {
+	mu struct {
+		sync.Mutex
+		states   map[string]*rateLimitState
+		overflow rateLimitState
 	}
-)
+	maxKeys     int
+	maxKeyBytes int
+	now         func() time.Time
+}
 
-// NewRateLimitedLogger creates a new rate-limited logger wrapper.
-// It automatically adds CallerSkip(2) to ensure correct caller information
-// is displayed in logs (accounting for Error/Warn -> logWithConfig call chain).
-func NewRateLimitedLogger(logger *zap.Logger) *RateLimitedLogger {
-	rl := &RateLimitedLogger{
-		logger:           logger,
-		callerSkipLogger: logger.WithOptions(zap.AddCallerSkip(2)),
+type RateLimitDecision struct {
+	Event      string
+	Occurrence int64
+	Suppressed int64
+	Overflow   bool
+}
+
+func NewEventRateLimiter(config RateLimitedLoggerConfig) *EventRateLimiter {
+	if config.MaxKeys <= 0 {
+		config.MaxKeys = DefaultRateLimitedLoggerConfig.MaxKeys
 	}
-	rl.mu.states = make(map[string]*rateLimitState)
-	return rl
+	limiter := &EventRateLimiter{
+		maxKeys:     config.MaxKeys,
+		maxKeyBytes: maxEventNameBytes,
+		now:         time.Now,
+	}
+	limiter.mu.states = make(map[string]*rateLimitState)
+	return limiter
 }
 
-// Error logs at error level with rate limiting.
-// The key parameter is used to identify unique log sources for rate limiting.
-func (l *RateLimitedLogger) Error(key string, msg string, fields ...zap.Field) {
-	l.logWithConfig(key, zap.ErrorLevel, msg, DefaultRateLimitConfig, fields...)
+func (l *EventRateLimiter) Allow(key string, config RateLimitConfig) (RateLimitDecision, bool) {
+	return l.allow(key, config, false)
 }
 
-// ErrorWithConfig logs at error level with custom rate limit configuration.
-func (l *RateLimitedLogger) ErrorWithConfig(key string, msg string, config RateLimitConfig, fields ...zap.Field) {
-	l.logWithConfig(key, zap.ErrorLevel, msg, config, fields...)
+func (l *EventRateLimiter) allowLegacy(key string, config RateLimitConfig) (RateLimitDecision, bool) {
+	return l.allow(key, config, true)
 }
 
-// Warn logs at warn level with rate limiting.
-func (l *RateLimitedLogger) Warn(key string, msg string, fields ...zap.Field) {
-	l.logWithConfig(key, zap.WarnLevel, msg, DefaultRateLimitConfig, fields...)
-}
-
-// WarnWithConfig logs at warn level with custom rate limit configuration.
-func (l *RateLimitedLogger) WarnWithConfig(key string, msg string, config RateLimitConfig, fields ...zap.Field) {
-	l.logWithConfig(key, zap.WarnLevel, msg, config, fields...)
-}
-
-func (l *RateLimitedLogger) logWithConfig(key string, level zapcore.Level, msg string, config RateLimitConfig, fields ...zap.Field) {
+func (l *EventRateLimiter) allow(key string, config RateLimitConfig, allowSampleInterval bool) (RateLimitDecision, bool) {
+	config = config.normalized()
+	if key == "" {
+		key = "unknown"
+	}
 	l.mu.Lock()
-	state, ok := l.mu.states[key]
-	if !ok {
-		state = &rateLimitState{}
-		l.mu.states[key] = state
-	}
-	l.mu.Unlock()
-
-	count := atomic.AddInt64(&state.count, 1)
-	now := time.Now()
-
-	shouldLog := false
-
-	// Always log the first N occurrences (burst)
-	if count <= int64(config.BurstCount) {
+	defer l.mu.Unlock()
+	state, overflow := l.stateLocked(key)
+	state.count++
+	now := l.now()
+	shouldLog := state.count <= int64(config.BurstCount) || now.Sub(state.lastLog) >= config.Interval
+	if allowSampleInterval && config.SampleInterval > 0 && state.count%int64(config.SampleInterval) == 0 {
 		shouldLog = true
-	} else if count%int64(config.SampleInterval) == 0 {
-		// Log every Nth occurrence when rate limited
-		shouldLog = true
-	} else {
-		// Check time-based rate limiting
-		l.mu.Lock()
-		if now.Sub(state.lastLog) >= config.Interval {
-			shouldLog = true
-		}
-		l.mu.Unlock()
 	}
-
-	if shouldLog {
-		l.mu.Lock()
-		suppressed := atomic.SwapInt64(&state.suppressed, 0)
-		state.lastLog = now
-		l.mu.Unlock()
-
-		if suppressed > 0 {
-			fields = append(fields, zap.Int64("suppressed", suppressed))
-		}
-		fields = append(fields, zap.Int64("occurrence", count))
-
-		if ce := l.callerSkipLogger.Check(level, msg); ce != nil {
-			ce.Write(fields...)
-		}
-	} else {
-		atomic.AddInt64(&state.suppressed, 1)
+	if !shouldLog {
+		state.suppressed++
+		return RateLimitDecision{}, false
 	}
+	decision := RateLimitDecision{
+		Event:      key,
+		Occurrence: state.count,
+		Suppressed: state.suppressed,
+		Overflow:   overflow,
+	}
+	if overflow {
+		decision.Event = overflowEvent
+	}
+	state.suppressed = 0
+	state.lastLog = now
+	return decision, true
 }
 
-// Reset resets the rate limiting state for a specific key.
-func (l *RateLimitedLogger) Reset(key string) {
+func (l *EventRateLimiter) stateLocked(key string) (*rateLimitState, bool) {
+	if len(key) > l.maxKeyBytes {
+		return &l.mu.overflow, true
+	}
+	if state := l.mu.states[key]; state != nil {
+		return state, false
+	}
+	if len(l.mu.states) >= l.maxKeys {
+		return &l.mu.overflow, true
+	}
+	state := &rateLimitState{}
+	// Copy before retaining. A short substring can otherwise keep a much
+	// larger caller-owned backing buffer alive for the lifetime of this state.
+	l.mu.states[strings.Clone(key)] = state
+	return state, false
+}
+
+func (l *EventRateLimiter) Reset(key string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.mu.states, key)
 }
 
-// ResetAll resets all rate limiting states.
-func (l *RateLimitedLogger) ResetAll() {
+func (l *EventRateLimiter) ResetAll() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.mu.states = make(map[string]*rateLimitState)
+	l.mu.overflow = rateLimitState{}
 }
 
-// Logger returns the underlying zap.Logger.
-func (l *RateLimitedLogger) Logger() *zap.Logger {
-	return l.logger
+func (l *EventRateLimiter) StateCount() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.mu.states)
 }
+
+func (config RateLimitConfig) normalized() RateLimitConfig {
+	if config.Interval <= 0 {
+		config.Interval = DefaultRateLimitConfig.Interval
+	}
+	if config.BurstCount <= 0 {
+		config.BurstCount = DefaultRateLimitConfig.BurstCount
+	}
+	return config
+}
+
+// RateLimitedLogger is the zap adapter for callers that do not have an
+// MOLogger. New repeated call sites should prefer Event or MOLogger Event APIs.
+type RateLimitedLogger struct {
+	logger           *zap.Logger
+	callerSkipLogger *zap.Logger
+	limiter          *EventRateLimiter
+}
+
+func NewRateLimitedLogger(logger *zap.Logger) *RateLimitedLogger {
+	return NewRateLimitedLoggerWithConfig(logger, DefaultRateLimitedLoggerConfig)
+}
+
+func NewRateLimitedLoggerWithConfig(logger *zap.Logger, config RateLimitedLoggerConfig) *RateLimitedLogger {
+	if logger == nil {
+		panic("rate limited logger is nil")
+	}
+	return &RateLimitedLogger{
+		logger:           logger,
+		callerSkipLogger: logger.WithOptions(zap.AddCallerSkip(2)),
+		limiter:          NewEventRateLimiter(config),
+	}
+}
+
+func (l *RateLimitedLogger) Error(key, msg string, fields ...zap.Field) {
+	l.log(key, zap.ErrorLevel, msg, DefaultRateLimitConfig, fields...)
+}
+func (l *RateLimitedLogger) ErrorWithConfig(key, msg string, config RateLimitConfig, fields ...zap.Field) {
+	l.log(key, zap.ErrorLevel, msg, config, fields...)
+}
+func (l *RateLimitedLogger) Warn(key, msg string, fields ...zap.Field) {
+	l.log(key, zap.WarnLevel, msg, DefaultRateLimitConfig, fields...)
+}
+func (l *RateLimitedLogger) WarnWithConfig(key, msg string, config RateLimitConfig, fields ...zap.Field) {
+	l.log(key, zap.WarnLevel, msg, config, fields...)
+}
+func (l *RateLimitedLogger) Info(key, msg string, fields ...zap.Field) {
+	l.log(key, zap.InfoLevel, msg, DefaultRateLimitConfig, fields...)
+}
+func (l *RateLimitedLogger) Debug(key, msg string, fields ...zap.Field) {
+	l.log(key, zap.DebugLevel, msg, DefaultRateLimitConfig, fields...)
+}
+
+func (l *RateLimitedLogger) log(key string, level zapcore.Level, msg string, config RateLimitConfig, fields ...zap.Field) {
+	if !l.callerSkipLogger.Core().Enabled(level) {
+		return
+	}
+	decision, ok := l.limiter.allowLegacy(key, config)
+	if !ok {
+		return
+	}
+	out := EventFieldsWithDecision(fields, decision)
+	if ce := l.callerSkipLogger.Check(level, msg); ce != nil {
+		ce.Write(out...)
+	}
+}
+
+// EventFieldsWithDecision appends the standard event, occurrence, suppression,
+// and overflow fields without mutating the caller's slice. It is used by
+// global Event, MOLogger, and RateLimitedLogger so their record shape matches.
+func EventFieldsWithDecision(fields []zap.Field, decision RateLimitDecision) []zap.Field {
+	out := append([]zap.Field(nil), fields...)
+	out = append(out, zap.String(FieldEvent, decision.Event), zap.Int64(FieldOccurrence, decision.Occurrence))
+	if decision.Suppressed > 0 {
+		out = append(out, zap.Int64(FieldSuppressed, decision.Suppressed))
+	}
+	if decision.Overflow {
+		out = append(out, zap.Bool(FieldRateLimitOverflow, true))
+	}
+	return out
+}
+
+func (l *RateLimitedLogger) Reset(key string)    { l.limiter.Reset(key) }
+func (l *RateLimitedLogger) ResetAll()           { l.limiter.ResetAll() }
+func (l *RateLimitedLogger) StateCount() int     { return l.limiter.StateCount() }
+func (l *RateLimitedLogger) Logger() *zap.Logger { return l.logger }

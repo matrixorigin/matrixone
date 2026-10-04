@@ -76,8 +76,8 @@ func makeProbeVec(tb testing.TB, mp *mpool.MPool, rows int) *vector.Vector {
 }
 
 // BenchmarkBuild compares building + serializing the doc_id filter structures
-// (bloom / dense cbitmap / C CRoaring) from the same N integer doc_ids. Reports
-// the serialized size too.
+// (bloom / dense cbitmap / Sorted64 / legacy C CRoaring) from the same N integer
+// doc_ids. Reports the serialized size too.
 func BenchmarkBuild(b *testing.B) {
 	mp := mpool.MustNewZero()
 	for _, n := range benchSizes {
@@ -113,6 +113,19 @@ func BenchmarkBuild(b *testing.B) {
 			b.ReportMetric(float64(sz), "bytes")
 		})
 
+		b.Run(fmt.Sprintf("sorted64/N=%d", n), func(b *testing.B) {
+			b.ReportAllocs()
+			var sz int
+			for i := 0; i < b.N; i++ {
+				out, err := BuildSorted64Bytes(keyvec)
+				if err != nil {
+					b.Fatal(err)
+				}
+				sz = len(out)
+			}
+			b.ReportMetric(float64(sz), "bytes")
+		})
+
 		// CRoaring (C roaring64): compact O(N) AND C-speed; reads the vector
 		// directly in C.
 		b.Run(fmt.Sprintf("croaring/N=%d", n), func(b *testing.B) {
@@ -133,7 +146,7 @@ func BenchmarkBuild(b *testing.B) {
 }
 
 // BenchmarkTestVector compares probing a block of doc_ids (50% hit) against the
-// prebuilt structures (bloom / cbitmap / C CRoaring).
+// prebuilt structures (bloom / cbitmap / Sorted64 / legacy C CRoaring).
 func BenchmarkTestVector(b *testing.B) {
 	mp := mpool.MustNewZero()
 	const probeRows = 8192
@@ -144,6 +157,10 @@ func BenchmarkTestVector(b *testing.B) {
 		bf := bloomfilter.NewCBloomFilterWithProbability(int64(n), benchFpProbability)
 		bf.AddVector(keyvec)
 		crf, err := NewCRoaringFilter(must(BuildCRoaringBytes(keyvec)))
+		if err != nil {
+			b.Fatal(err)
+		}
+		sf, err := NewSorted64Filter(must(BuildSorted64Bytes(keyvec)))
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -171,9 +188,16 @@ func BenchmarkTestVector(b *testing.B) {
 				crf.TestVector(probe, nil)
 			}
 		})
+		b.Run(fmt.Sprintf("sorted64/N=%d", n), func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				sf.TestVector(probe, nil)
+			}
+		})
 
 		bf.Free()
 		crf.Free()
+		sf.Free()
 		keyvec.Free(mp)
 		probe.Free(mp)
 	}
@@ -194,6 +218,10 @@ func BenchmarkTestSingle(b *testing.B) {
 		bf := bloomfilter.NewCBloomFilterWithProbability(int64(n), benchFpProbability)
 		bf.AddVector(keyvec)
 		crf, err := NewCRoaringFilter(must(BuildCRoaringBytes(keyvec)))
+		if err != nil {
+			b.Fatal(err)
+		}
+		sf, err := NewSorted64Filter(must(BuildSorted64Bytes(keyvec)))
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -224,12 +252,102 @@ func BenchmarkTestSingle(b *testing.B) {
 				}
 			}
 		})
+		b.Run(fmt.Sprintf("sorted64/N=%d", n), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				for _, r := range raws {
+					_ = sf.Test(r)
+				}
+			}
+		})
 
 		bf.Free()
 		crf.Free()
+		sf.Free()
 		keyvec.Free(mp)
 		probe.Free(mp)
 	}
+}
+
+// BenchmarkSparseExact compares the two exact sparse representations on a
+// high-entropy uint64 distribution (one value per high-32-bit shard). This is
+// the shape for which opaque roaring64 hierarchy growth is least predictable;
+// dense/range-shaped keys are intentionally covered by cbitmap benchmarks.
+func BenchmarkSparseExact(b *testing.B) {
+	const (
+		keys      = 100_000
+		probeRows = 8192
+	)
+	mp := mpool.MustNewZero()
+	keyvec := vector.NewVec(types.T_uint64.ToType())
+	for i := range keys {
+		value := uint64(i)<<32 | uint64(2*i+1)
+		if err := vector.AppendFixed(keyvec, value, false, mp); err != nil {
+			b.Fatal(err)
+		}
+	}
+	defer keyvec.Free(mp)
+
+	probe := vector.NewVec(types.T_uint64.ToType())
+	for i := range probeRows {
+		idx := i % keys
+		value := uint64(idx)<<32 | uint64(2*idx+1)
+		if i%2 == 0 {
+			value++
+		}
+		if err := vector.AppendFixed(probe, value, false, mp); err != nil {
+			b.Fatal(err)
+		}
+	}
+	defer probe.Free(mp)
+
+	b.Run("build/croaring", func(b *testing.B) {
+		b.ReportAllocs()
+		var size int
+		for i := 0; i < b.N; i++ {
+			payload, err := BuildCRoaringBytes(keyvec)
+			if err != nil {
+				b.Fatal(err)
+			}
+			size = len(payload)
+		}
+		b.ReportMetric(float64(size), "wire-B")
+	})
+	b.Run("build/sorted64", func(b *testing.B) {
+		b.ReportAllocs()
+		var size int
+		for i := 0; i < b.N; i++ {
+			payload, err := BuildSorted64Bytes(keyvec)
+			if err != nil {
+				b.Fatal(err)
+			}
+			size = len(payload)
+		}
+		b.ReportMetric(float64(size), "wire-B")
+	})
+
+	crf, err := NewCRoaringFilter(must(BuildCRoaringBytes(keyvec)))
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer crf.Free()
+	sf, err := NewSorted64Filter(must(BuildSorted64Bytes(keyvec)))
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer sf.Free()
+
+	b.Run("probe/croaring", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			crf.TestVector(probe, nil)
+		}
+	})
+	b.Run("probe/sorted64", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			sf.TestVector(probe, nil)
+		}
+	})
 }
 
 // makeClusteredVec builds `runs` consecutive ranges of runLen ids each (gap =

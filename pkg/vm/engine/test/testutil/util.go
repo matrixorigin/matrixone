@@ -146,7 +146,7 @@ func CreateEngines(
 func GetDefaultTNShard() metadata.TNShard {
 	return metadata.TNShard{
 		TNShardRecord: metadata.TNShardRecord{
-			ShardID:    0,
+			ShardID:    1,
 			LogShardID: 1,
 		},
 		ReplicaID: 0x2f,

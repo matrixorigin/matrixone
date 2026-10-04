@@ -18,20 +18,78 @@ package aggexec
 // Eliminates interface boxing, type switches, and per-add overflow checks.
 
 import (
-	"slices"
-
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
+// The public dispatcher sends SUM/AVG operations whose result requires
+// Decimal256 to newSumAvgDecExec. Keep the explicitly Decimal128 fast
+// executors internally self-consistent as well: their state and their SUM
+// result must both describe the Decimal128 values they physically store.
+// This also keeps direct fast-executor tests useful for the checked
+// Decimal128 overflow paths.
+func decimal128FastSumType(param, sumType types.Type) types.Type {
+	if sumType.Oid == types.T_decimal256 {
+		return types.New(types.T_decimal128, maxDecimal128Precision, param.Scale)
+	}
+	return sumType
+}
+
 // ---- Decimal64 SUM/AVG ----
 
 type sumDecimal64FastExec struct {
 	aggExec
-	isSum bool
+	isSum          bool
+	widenSumResult bool
+}
+
+func (*sumDecimal64FastExec) sourcePreservingMerge() {}
+
+func (exec *sumDecimal64FastExec) windowSlidingSupported() bool {
+	return !exec.IsDistinct()
+}
+
+func (exec *sumDecimal64FastExec) addWindowRow(row int, vectors []*vector.Vector) error {
+	vec := vectors[0]
+	if windowRowIsNull(vec, row) {
+		return nil
+	}
+	if vec.IsConst() {
+		row = 0
+	}
+	raw := vector.MustFixedColNoTypeCheck[types.Decimal64](vec)[row]
+	value := types.Decimal128{B0_63: uint64(raw), B64_127: uint64(int64(raw) >> 63)}
+	sums := chunkArr[types.Decimal128](exec.state[0].vecs[0])
+	sums[0] = sums[0].Add128Unchecked(value)
+	vector.MustFixedColNoTypeCheck[int64](exec.state[0].vecs[1])[0]++
+	return nil
+}
+
+func (exec *sumDecimal64FastExec) removeWindowRow(row int, vectors []*vector.Vector) error {
+	vec := vectors[0]
+	if windowRowIsNull(vec, row) {
+		return nil
+	}
+	if vec.IsConst() {
+		row = 0
+	}
+	cnts := vector.MustFixedColNoTypeCheck[int64](exec.state[0].vecs[1])
+	if cnts[0] <= 0 {
+		return moerr.NewInternalErrorNoCtx("sliding SUM/AVG state is empty")
+	}
+	raw := vector.MustFixedColNoTypeCheck[types.Decimal64](vec)[row]
+	value := types.Decimal128{B0_63: uint64(raw), B64_127: uint64(int64(raw) >> 63)}
+	sums := chunkArr[types.Decimal128](exec.state[0].vecs[0])
+	sums[0] = sums[0].Add128Unchecked(value.Minus())
+	cnts[0]--
+	if cnts[0] == 0 {
+		sums[0] = types.Decimal128{}
+	}
+	return nil
 }
 
 func newSumDecimal64FastExec(mp *mpool.MPool, isSum bool, aggID int64, isDistinct bool, param types.Type) AggFuncExec {
@@ -39,10 +97,11 @@ func newSumDecimal64FastExec(mp *mpool.MPool, isSum bool, aggID int64, isDistinc
 	exec.mp = mp
 	exec.isSum = isSum
 	sumTyp := SumReturnType([]types.Type{param})
+	fastSumTyp := decimal128FastSumType(param, sumTyp)
 	avgTyp := AvgReturnType([]types.Type{param})
 	var rt types.Type
 	if isSum {
-		rt = sumTyp
+		rt = fastSumTyp
 	} else {
 		rt = avgTyp
 	}
@@ -56,8 +115,23 @@ func newSumDecimal64FastExec(mp *mpool.MPool, isSum bool, aggID int64, isDistinc
 	}
 	// Always allocate sum + count. Count tracks group-has-data for SUM
 	// and row count for AVG division. This avoids per-row null checks on accumulator.
-	exec.aggInfo.stateTypes = []types.Type{sumTyp, types.T_int64.ToType()}
+	exec.aggInfo.stateTypes = []types.Type{fastSumTyp, types.T_int64.ToType()}
 	return &exec
+}
+
+// newSumDecimal64LegacyStateExec retains the pre-v65 two-vector partial state.
+// A new coordinator still requests the widened result, while a final Group
+// decoded from an old coordinator must preserve that coordinator's Decimal128
+// result contract.
+func newSumDecimal64LegacyStateExec(
+	mp *mpool.MPool, aggID int64, isDistinct bool, param types.Type, legacyResult bool,
+) AggFuncExec {
+	exec := newSumDecimal64FastExec(mp, true, aggID, isDistinct, param).(*sumDecimal64FastExec)
+	if !legacyResult {
+		exec.aggInfo.retType = SumReturnType([]types.Type{param})
+		exec.widenSumResult = true
+	}
+	return exec
 }
 
 func (exec *sumDecimal64FastExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
@@ -66,7 +140,7 @@ func (exec *sumDecimal64FastExec) Fill(groupIndex int, row int, vectors []*vecto
 
 func (exec *sumDecimal64FastExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
 	if exec.IsDistinct() {
-		return exec.BatchFill(0, slices.Repeat([]uint64{uint64(groupIndex + 1)}, vectors[0].Length()), vectors)
+		return exec.bulkFillDistinctArgs(groupIndex, vectors)
 	}
 	return exec.bulkFillSingleGroup(groupIndex, vectors)
 }
@@ -147,6 +221,9 @@ func (exec *sumDecimal64FastExec) batchFill(offset int, groups []uint64, vectors
 	for i := range slotOf {
 		slotOf[i] = 0xFF
 	}
+	fallbackLastX := -1
+	var fallbackSums *[AggBatchSize]types.Decimal128
+	var fallbackCnts []int64
 
 	for i, grp := range groups {
 		if grp == GroupNotMatched {
@@ -159,18 +236,25 @@ func (exec *sumDecimal64FastExec) batchFill(offset int, groups []uint64, vectors
 		g := grp - 1
 		raw := vals[idx&constMask]
 		val := types.Decimal128{B0_63: uint64(raw), B64_127: uint64(int64(raw) >> 63)}
+		// Once the local table is full, probing it can scan nearly all 256
+		// slots per row. Direct updates still compose with the deferred scatter
+		// below, including when the group already has a local entry.
+		if nSlots >= maxSlots {
+			x := int(g >> aggBatchSizeShift)
+			y := g & aggBatchSizeMask
+			if x != fallbackLastX {
+				fallbackLastX = x
+				fallbackSums = chunkArr[types.Decimal128](exec.state[x].vecs[0])
+				fallbackCnts = vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[1])
+			}
+			fallbackSums[y] = fallbackSums[y].Add128Unchecked(val)
+			fallbackCnts[y]++
+			continue
+		}
 
 		for h := uint8(g) ^ uint8(g>>8); ; h++ {
 			s := slotOf[h]
 			if s == 0xFF {
-				if nSlots >= maxSlots {
-					x := int(g >> aggBatchSizeShift)
-					y := g & aggBatchSizeMask
-					sums := chunkArr[types.Decimal128](exec.state[x].vecs[0])
-					sums[y] = sums[y].Add128Unchecked(val)
-					vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[1])[y]++
-					break
-				}
 				slotOf[h] = uint8(nSlots)
 				localGrps[nSlots] = g
 				localSums[nSlots] = val
@@ -214,17 +298,31 @@ func (exec *sumDecimal64FastExec) BatchMerge(next AggFuncExec, offset int, group
 		return exec.batchMergeArgs(&other.aggExec, offset, groups, true)
 	}
 
+	lastX1, lastX2 := -1, -1
+	var sums1 *[AggBatchSize]types.Decimal128
+	var sums2 []types.Decimal128
+	var cnts1, cnts2 []int64
 	for i, grp := range groups {
 		if grp == GroupNotMatched {
 			continue
 		}
 
-		x1, y1 := exec.getXY(grp - 1)
-		x2, y2 := other.getXY(uint64(offset + i))
-		sums1 := vector.MustFixedColNoTypeCheck[types.Decimal128](exec.state[x1].vecs[0])
-		sums2 := vector.MustFixedColNoTypeCheck[types.Decimal128](other.state[x2].vecs[0])
-		cnts1 := vector.MustFixedColNoTypeCheck[int64](exec.state[x1].vecs[1])
-		cnts2 := vector.MustFixedColNoTypeCheck[int64](other.state[x2].vecs[1])
+		g1 := grp - 1
+		g2 := uint64(offset + i)
+		x1 := int(g1 >> aggBatchSizeShift)
+		x2 := int(g2 >> aggBatchSizeShift)
+		if x1 != lastX1 {
+			lastX1 = x1
+			sums1 = chunkArr[types.Decimal128](exec.state[x1].vecs[0])
+			cnts1 = vector.MustFixedColNoTypeCheck[int64](exec.state[x1].vecs[1])
+		}
+		if x2 != lastX2 {
+			lastX2 = x2
+			sums2 = chunkRows[types.Decimal128](other.state[x2].vecs[0])
+			cnts2 = vector.MustFixedColNoTypeCheck[int64](other.state[x2].vecs[1])
+		}
+		y1 := g1 & aggBatchSizeMask
+		y2 := g2 & aggBatchSizeMask
 
 		sums1[y1] = sums1[y1].Add128Unchecked(sums2[y2])
 		cnts1[y1] += cnts2[y2]
@@ -251,7 +349,11 @@ func (exec *sumDecimal64FastExec) Flush() (_ []*vector.Vector, retErr error) {
 
 	if exec.IsDistinct() {
 		for i := range vecs {
-			vecs[i] = vector.NewOffHeapVecWithType(resultType)
+			var err error
+			vecs[i], err = exec.allocation.newVector(resultType)
+			if err != nil {
+				return nil, err
+			}
 			if err := vecs[i].PreExtend(int(exec.state[i].length), exec.mp); err != nil {
 				return nil, err
 			}
@@ -265,8 +367,8 @@ func (exec *sumDecimal64FastExec) Flush() (_ []*vector.Vector, retErr error) {
 					continue
 				}
 				var sum types.Decimal128
-				err := exec.state[i].iter(uint16(j), func(k []byte) error {
-					ptr := util.UnsafeFromBytes[types.Decimal64](k[kAggArgPrefixSz:])
+				err := exec.state[i].iterWithValue(uint16(j), func(k, stored []byte) error {
+					ptr := util.UnsafeFromBytes[types.Decimal64](aggPayloadFromKeyValue(&exec.aggInfo, k, stored))
 					raw := *ptr
 					hi := uint64(int64(raw) >> 63)
 					val := types.Decimal128{B0_63: uint64(raw), B64_127: hi}
@@ -277,12 +379,19 @@ func (exec *sumDecimal64FastExec) Flush() (_ []*vector.Vector, retErr error) {
 					return nil, err
 				}
 				if exec.isSum {
-					if err := vector.AppendFixed(vecs[i], sum, false, exec.mp); err != nil {
+					if exec.widenSumResult {
+						if err := vector.AppendFixed(vecs[i], types.Decimal256FromDecimal128(sum), false, exec.mp); err != nil {
+							return nil, err
+						}
+					} else if err := vector.AppendFixed(vecs[i], sum, false, exec.mp); err != nil {
 						return nil, err
 					}
 				} else {
 					cnt := int64(exec.state[i].argCnt[j])
-					avg := decAvg[types.Decimal128](sum, cnt, exec.aggInfo.argTypes[0].Scale, resultType.Scale)
+					avg, err := decAvg[types.Decimal128](sum, cnt, exec.aggInfo.argTypes[0].Scale, resultType)
+					if err != nil {
+						return nil, err
+					}
 					if err := vector.AppendFixed(vecs[i], avg, false, exec.mp); err != nil {
 						return nil, err
 					}
@@ -295,6 +404,34 @@ func (exec *sumDecimal64FastExec) Flush() (_ []*vector.Vector, retErr error) {
 			sums := vector.MustFixedColNoTypeCheck[types.Decimal128](sumVec)
 			cntVec := exec.state[i].vecs[1]
 			cnts := vector.MustFixedColNoTypeCheck[int64](cntVec)
+			if exec.isSum && exec.widenSumResult {
+				resultVec, err := exec.allocation.newVector(resultType)
+				if err != nil {
+					return nil, err
+				}
+				for j, sum := range sums {
+					if cnts[j] == 0 {
+						if err := vector.AppendNull(resultVec, exec.mp); err != nil {
+							resultVec.Free(exec.mp)
+							return nil, err
+						}
+					} else if err := vector.AppendFixed(resultVec, types.Decimal256FromDecimal128(sum), false, exec.mp); err != nil {
+						resultVec.Free(exec.mp)
+						return nil, err
+					}
+				}
+				sumVec.Free(exec.mp)
+				cntVec.Free(exec.mp)
+				exec.state[i].vecs[0] = nil
+				exec.state[i].vecs[1] = nil
+				exec.state[i].length = 0
+				exec.state[i].capacity = 0
+				vecs[i] = resultVec
+				continue
+			}
+			if err := preflightNullsForZeroCounts(sumVec, cnts, exec.mp); err != nil {
+				return nil, err
+			}
 
 			if exec.isSum {
 				for j, cnt := range cnts {
@@ -309,7 +446,10 @@ func (exec *sumDecimal64FastExec) Flush() (_ []*vector.Vector, retErr error) {
 					if cnt == 0 {
 						sumVec.SetNull(uint64(j))
 					} else {
-						avg := decAvg[types.Decimal128](sums[j], cnt, exec.aggInfo.argTypes[0].Scale, resultType.Scale)
+						avg, err := decAvg[types.Decimal128](sums[j], cnt, exec.aggInfo.argTypes[0].Scale, resultType)
+						if err != nil {
+							return nil, err
+						}
 						vector.SetFixedAtNoTypeCheck(sumVec, j, avg)
 					}
 				}
@@ -317,7 +457,7 @@ func (exec *sumDecimal64FastExec) Flush() (_ []*vector.Vector, retErr error) {
 			cntVec.Free(exec.mp)
 			exec.state[i].vecs[1] = nil
 
-			sumVec.GetType().Scale = resultType.Scale
+			*sumVec.GetType() = resultType
 			vecs[i] = sumVec
 			exec.state[i].vecs[0] = nil
 			exec.state[i].length = 0
@@ -331,9 +471,12 @@ func (exec *sumDecimal64FastExec) Flush() (_ []*vector.Vector, retErr error) {
 
 type sumDecimal128FastExec struct {
 	aggExec
-	isSum         bool
-	overflowCheck bool // true when input precision > 28 (SUM can overflow)
+	isSum          bool
+	overflowCheck  bool // true when input precision > 28 (SUM can overflow)
+	widenSumResult bool
 }
+
+func (*sumDecimal128FastExec) sourcePreservingMerge() {}
 
 func newSumDecimal128FastExec(mp *mpool.MPool, isSum bool, aggID int64, isDistinct bool, param types.Type) AggFuncExec {
 	var exec sumDecimal128FastExec
@@ -343,10 +486,11 @@ func newSumDecimal128FastExec(mp *mpool.MPool, isSum bool, aggID int64, isDistin
 	// Width > 28: overflow is reachable with fewer rows, so use checked Add128.
 	exec.overflowCheck = param.Width > 28
 	sumTyp := SumReturnType([]types.Type{param})
+	fastSumTyp := decimal128FastSumType(param, sumTyp)
 	avgTyp := AvgReturnType([]types.Type{param})
 	var rt types.Type
 	if isSum {
-		rt = sumTyp
+		rt = fastSumTyp
 	} else {
 		rt = avgTyp
 	}
@@ -360,8 +504,21 @@ func newSumDecimal128FastExec(mp *mpool.MPool, isSum bool, aggID int64, isDistin
 	}
 	// Always allocate sum + count. Count tracks group-has-data for SUM
 	// and row count for AVG division. This avoids per-row null checks on accumulator.
-	exec.aggInfo.stateTypes = []types.Type{sumTyp, types.T_int64.ToType()}
+	exec.aggInfo.stateTypes = []types.Type{fastSumTyp, types.T_int64.ToType()}
 	return &exec
+}
+
+// newSumDecimal128LegacyStateExec is the Decimal128-input counterpart of
+// newSumDecimal64LegacyStateExec.
+func newSumDecimal128LegacyStateExec(
+	mp *mpool.MPool, aggID int64, isDistinct bool, param types.Type, legacyResult bool,
+) AggFuncExec {
+	exec := newSumDecimal128FastExec(mp, true, aggID, isDistinct, param).(*sumDecimal128FastExec)
+	if !legacyResult {
+		exec.aggInfo.retType = SumReturnType([]types.Type{param})
+		exec.widenSumResult = true
+	}
+	return exec
 }
 
 func (exec *sumDecimal128FastExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
@@ -370,7 +527,7 @@ func (exec *sumDecimal128FastExec) Fill(groupIndex int, row int, vectors []*vect
 
 func (exec *sumDecimal128FastExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
 	if exec.IsDistinct() {
-		return exec.BatchFill(0, slices.Repeat([]uint64{uint64(groupIndex + 1)}, vectors[0].Length()), vectors)
+		return exec.bulkFillDistinctArgs(groupIndex, vectors)
 	}
 	return exec.bulkFillSingleGroup(groupIndex, vectors)
 }
@@ -598,7 +755,11 @@ func (exec *sumDecimal128FastExec) Flush() (_ []*vector.Vector, retErr error) {
 
 	if exec.IsDistinct() {
 		for i := range vecs {
-			vecs[i] = vector.NewOffHeapVecWithType(resultType)
+			var err error
+			vecs[i], err = exec.allocation.newVector(resultType)
+			if err != nil {
+				return nil, err
+			}
 			if err := vecs[i].PreExtend(int(exec.state[i].length), exec.mp); err != nil {
 				return nil, err
 			}
@@ -612,8 +773,8 @@ func (exec *sumDecimal128FastExec) Flush() (_ []*vector.Vector, retErr error) {
 					continue
 				}
 				var sum types.Decimal128
-				err := exec.state[i].iter(uint16(j), func(k []byte) error {
-					ptr := util.UnsafeFromBytes[types.Decimal128](k[kAggArgPrefixSz:])
+				err := exec.state[i].iterWithValue(uint16(j), func(k, stored []byte) error {
+					ptr := util.UnsafeFromBytes[types.Decimal128](aggPayloadFromKeyValue(&exec.aggInfo, k, stored))
 					if exec.overflowCheck {
 						var addErr error
 						sum, addErr = sum.Add128(*ptr)
@@ -629,12 +790,19 @@ func (exec *sumDecimal128FastExec) Flush() (_ []*vector.Vector, retErr error) {
 					return nil, err
 				}
 				if exec.isSum {
-					if err := vector.AppendFixed(vecs[i], sum, false, exec.mp); err != nil {
+					if exec.widenSumResult {
+						if err := vector.AppendFixed(vecs[i], types.Decimal256FromDecimal128(sum), false, exec.mp); err != nil {
+							return nil, err
+						}
+					} else if err := vector.AppendFixed(vecs[i], sum, false, exec.mp); err != nil {
 						return nil, err
 					}
 				} else {
 					cnt := int64(exec.state[i].argCnt[j])
-					avg := decAvg[types.Decimal128](sum, cnt, exec.aggInfo.argTypes[0].Scale, resultType.Scale)
+					avg, err := decAvg[types.Decimal128](sum, cnt, exec.aggInfo.argTypes[0].Scale, resultType)
+					if err != nil {
+						return nil, err
+					}
 					if err := vector.AppendFixed(vecs[i], avg, false, exec.mp); err != nil {
 						return nil, err
 					}
@@ -647,6 +815,34 @@ func (exec *sumDecimal128FastExec) Flush() (_ []*vector.Vector, retErr error) {
 			sums := vector.MustFixedColNoTypeCheck[types.Decimal128](sumVec)
 			cntVec := exec.state[i].vecs[1]
 			cnts := vector.MustFixedColNoTypeCheck[int64](cntVec)
+			if exec.isSum && exec.widenSumResult {
+				resultVec, err := exec.allocation.newVector(resultType)
+				if err != nil {
+					return nil, err
+				}
+				for j, sum := range sums {
+					if cnts[j] == 0 {
+						if err := vector.AppendNull(resultVec, exec.mp); err != nil {
+							resultVec.Free(exec.mp)
+							return nil, err
+						}
+					} else if err := vector.AppendFixed(resultVec, types.Decimal256FromDecimal128(sum), false, exec.mp); err != nil {
+						resultVec.Free(exec.mp)
+						return nil, err
+					}
+				}
+				sumVec.Free(exec.mp)
+				cntVec.Free(exec.mp)
+				exec.state[i].vecs[0] = nil
+				exec.state[i].vecs[1] = nil
+				exec.state[i].length = 0
+				exec.state[i].capacity = 0
+				vecs[i] = resultVec
+				continue
+			}
+			if err := preflightNullsForZeroCounts(sumVec, cnts, exec.mp); err != nil {
+				return nil, err
+			}
 
 			if exec.isSum {
 				for j, cnt := range cnts {
@@ -661,7 +857,10 @@ func (exec *sumDecimal128FastExec) Flush() (_ []*vector.Vector, retErr error) {
 					if cnt == 0 {
 						sumVec.SetNull(uint64(j))
 					} else {
-						avg := decAvg[types.Decimal128](sums[j], cnt, exec.aggInfo.argTypes[0].Scale, resultType.Scale)
+						avg, err := decAvg[types.Decimal128](sums[j], cnt, exec.aggInfo.argTypes[0].Scale, resultType)
+						if err != nil {
+							return nil, err
+						}
 						vector.SetFixedAtNoTypeCheck(sumVec, j, avg)
 					}
 				}
@@ -669,7 +868,7 @@ func (exec *sumDecimal128FastExec) Flush() (_ []*vector.Vector, retErr error) {
 			cntVec.Free(exec.mp)
 			exec.state[i].vecs[1] = nil
 
-			sumVec.GetType().Scale = resultType.Scale
+			*sumVec.GetType() = resultType
 			vecs[i] = sumVec
 			exec.state[i].vecs[0] = nil
 			exec.state[i].length = 0

@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -41,7 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -174,6 +175,63 @@ func callNonBlocking(
 	return result, nil
 }
 
+func mergeableLockTargets(left, right lockTarget) bool {
+	return left.mode == lock.LockMode_Shared && right.mode == lock.LockMode_Shared &&
+		left.tableID == right.tableID &&
+		left.primaryColumnType == right.primaryColumnType && left.filter == nil && right.filter == nil &&
+		!left.lockTable && !right.lockTable && left.lockRows == nil && right.lockRows == nil &&
+		left.changeDef == right.changeDef &&
+		left.partitionColumnIndexInBatch == right.partitionColumnIndexInBatch &&
+		left.refreshTimestampIndexInBatch == right.refreshTimestampIndexInBatch
+}
+
+// getHasNewVersionInRangeFunc returns the configured checker when one is
+// supplied, and otherwise uses the normal lock checker. The callback is
+// optional for lock operators created by the planner; merged targets must not
+// dereference a nil callback while checking each target's relation.
+func (lockOp *LockOp) getHasNewVersionInRangeFunc() hasNewVersionInRangeFunc {
+	if lockOp.ctr.hasNewVersionInRange != nil {
+		return lockOp.ctr.hasNewVersionInRange
+	}
+	return hasNewVersionInRange
+}
+
+func (lockOp *LockOp) hasNewVersionInRangeForTargets(group []int) hasNewVersionInRangeFunc {
+	return func(
+		proc *process.Process,
+		_ engine.Relation,
+		analyzer process.Analyzer,
+		tableID uint64,
+		eng engine.Engine,
+		bat *batch.Batch,
+		_ int32,
+		_ int32,
+		from timestamp.Timestamp,
+		to timestamp.Timestamp,
+	) (bool, error) {
+		hasNewVersionInRange := lockOp.getHasNewVersionInRangeFunc()
+		for _, groupIdx := range group {
+			groupTarget := lockOp.targets[groupIdx]
+			changed, err := hasNewVersionInRange(
+				proc,
+				lockOp.ctr.relations[groupIdx],
+				analyzer,
+				tableID,
+				eng,
+				bat,
+				groupTarget.primaryColumnIndexInBatch,
+				groupTarget.partitionColumnIndexInBatch,
+				from,
+				to,
+			)
+			if err != nil || changed {
+				return changed, err
+			}
+		}
+		return false, nil
+	}
+}
+
 // if input vec is not allnull and has null, return a copy vector without null value
 func getVec(proc *process.Process, vec *vector.Vector) (*vector.Vector, error) {
 	if vec.HasNull() {
@@ -204,12 +262,46 @@ func performLock(
 	targetIdx int,
 ) error {
 	needRetry := false
+	consumed := make([]bool, len(lockOp.targets))
 	for idx, target := range lockOp.targets {
+		if consumed[idx] {
+			continue
+		}
 		if targetIdx != -1 && targetIdx != idx {
 			continue
 		}
+		group := []int{idx}
+		// Shared targets must remain independent row locks. Combining them into
+		// a full range lock can require lockservice to merge ranges that are
+		// already held by multiple foreign-key validation transactions.
+		if targetIdx == -1 && target.mode != lock.LockMode_Shared &&
+			target.filter == nil && !target.lockTable && target.lockRows == nil {
+			for next := idx + 1; next < len(lockOp.targets); next++ {
+				candidate := lockOp.targets[next]
+				if !mergeableLockTargets(target, candidate) {
+					continue
+				}
+				group = append(group, next)
+				consumed[next] = true
+			}
+		}
+		primaryIdx := idx
+		if len(group) > 1 {
+			primaryIdx = -1
+			for _, groupIdx := range group {
+				vec := bat.GetVector(lockOp.targets[groupIdx].primaryColumnIndexInBatch)
+				if vec != nil && !vec.AllNull() {
+					primaryIdx = groupIdx
+					break
+				}
+			}
+			if primaryIdx == -1 {
+				continue
+			}
+		}
+		target = lockOp.targets[primaryIdx]
 		if proc.GetTxnOperator().LockSkipped(target.tableID, target.mode) {
-			return nil
+			continue
 		}
 		lockOp.logger.Debug("lock",
 			zap.Uint64("table", target.tableID),
@@ -236,11 +328,25 @@ func performLock(
 				}
 			}
 		} */
+		fetchRows := lockOp.ctr.fetchers[primaryIdx]
+		// Multiple targets in one physical lock namespace cannot be locked
+		// incrementally without making the result depend on target and input-batch
+		// order. Use one full-domain range lock for the group. This keeps the
+		// operator streaming and bounds memory independently of input size.
+		lockTable := target.lockTable || len(group) > 1
+		hasNewVersionInRangeFunc := lockOp.getHasNewVersionInRangeFunc()
+		if len(group) > 1 {
+			hasNewVersionInRangeFunc = lockOp.hasNewVersionInRangeForTargets(group)
+		}
+		// Keep the planner target row-scoped. fetchRows bounds an oversized batch,
+		// and lockservice additionally bounds the actual keys retained across calls
+		// for a transaction and physical lock table. A planner estimate cannot own
+		// that runtime budget and must not widen it to the full table domain.
 		locked, defChanged, refreshTS, err := doLock(
 			proc.Ctx,
 			lockOp.engine,
 			analyzer,
-			lockOp.ctr.relations[idx],
+			lockOp.ctr.relations[primaryIdx],
 			target.tableID,
 			proc,
 			bat,
@@ -248,12 +354,13 @@ func performLock(
 			target.primaryColumnType,
 			target.partitionColumnIndexInBatch,
 			DefaultLockOptions(lockOp.ctr.parker).
-				WithLockMode(lock.LockMode_Exclusive).
-				WithFetchLockRowsFunc(lockOp.ctr.fetchers[idx]).
+				WithLockMode(target.mode).
+				WithFetchLockRowsFunc(fetchRows).
 				WithMaxBytesPerLock(int(proc.GetLockService().GetConfig().MaxLockRowCount)).
 				WithFilterRows(target.filter, filterCols).
-				WithLockTable(target.lockTable, target.changeDef).
-				WithHasNewVersionInRangeFunc(lockOp.ctr.hasNewVersionInRange),
+				WithLockTable(lockTable, target.changeDef).
+				WithHasNewVersionInRangeFunc(hasNewVersionInRangeFunc),
+			0,
 		)
 		if lockOp.logger.Enabled(zap.DebugLevel) {
 			lockOp.logger.Debug("lock result",
@@ -270,8 +377,14 @@ func performLock(
 			continue
 		}
 
+		if defChanged && !lockOp.ctr.defChanged {
+			lockOp.ctr.defChanged = true
+		}
+
 		// refreshTS is last commit ts + 1, because we need see the committed data.
-		if proc.Base.TxnClient.RefreshExpressionEnabled() &&
+		// A definition change must rebuild the plan instead; forwarding only the
+		// refreshed row timestamp would keep the stale physical table ID.
+		if !defChanged && proc.Base.TxnClient.RefreshExpressionEnabled() &&
 			target.refreshTimestampIndexInBatch != -1 {
 			priVec := bat.GetVector(target.primaryColumnIndexInBatch)
 			vec := bat.GetVector(target.refreshTimestampIndexInBatch)
@@ -287,9 +400,6 @@ func performLock(
 		// the locks to avoid another conflict when retrying
 		if !needRetry && !refreshTS.IsEmpty() {
 			needRetry = true
-		}
-		if !lockOp.ctr.defChanged {
-			lockOp.ctr.defChanged = defChanged
 		}
 	}
 	// when a transaction needs to operate on many data, there may be multiple conflicts on the
@@ -313,6 +423,67 @@ func LockTable(
 	tableID uint64,
 	pkType types.Type,
 	changeDef bool) error {
+	return LockTableWithContext(proc.Ctx, eng, proc, tableID, pkType, changeDef)
+}
+
+// LockTableWithContext locks a table using the caller-owned statement context.
+// Self-handled statements do not build a pipeline, so proc.Ctx may still refer
+// to an already-finished pipeline from the preceding statement.
+func LockTableWithContext(
+	ctx context.Context,
+	eng engine.Engine,
+	proc *process.Process,
+	tableID uint64,
+	pkType types.Type,
+	changeDef bool) error {
+	return lockTableWithModeAndContext(
+		ctx, eng, proc, tableID, pkType, lock.LockMode_Exclusive, changeDef, true, false, 0)
+}
+
+// LockTableWithMode locks all rows in a table with the specified lock mode.
+func LockTableWithMode(
+	eng engine.Engine,
+	proc *process.Process,
+	tableID uint64,
+	pkType types.Type,
+	mode lock.LockMode,
+	changeDef bool) error {
+	return lockTableWithModeAndContext(proc.Ctx, eng, proc, tableID, pkType, mode, changeDef, true, false, 0)
+}
+
+// LockTableForSnapshotRefreshWithContext acquires a table lock and advances an
+// RC transaction's snapshot past the latest commit on that table without
+// turning the refresh into the ordinary retry signal. A fixed-snapshot
+// transaction instead rejects a newer table commit. Callers that need a global
+// frontier may install a stronger barrier afterward. Definition changes remain
+// retryable because a newer snapshot cannot validate a stale logical plan.
+func LockTableForSnapshotRefreshWithContext(
+	ctx context.Context,
+	eng engine.Engine,
+	proc *process.Process,
+	tableID uint64,
+	pkType types.Type,
+	mode lock.LockMode,
+	changeDef bool) error {
+	var deadline int64
+	if value, ok := ctx.Deadline(); ok {
+		deadline = value.UnixNano()
+	}
+	return lockTableWithModeAndContext(
+		ctx, eng, proc, tableID, pkType, mode, changeDef, false, true, deadline)
+}
+
+func lockTableWithModeAndContext(
+	ctx context.Context,
+	eng engine.Engine,
+	proc *process.Process,
+	tableID uint64,
+	pkType types.Type,
+	mode lock.LockMode,
+	changeDef bool,
+	retryOnRefresh bool,
+	refreshTableSnapshot bool,
+	lockWaitDeadline int64) error {
 	txnOp := proc.GetTxnOperator()
 	if !txnOp.Txn().IsPessimistic() {
 		return nil
@@ -320,7 +491,7 @@ func LockTable(
 	parker := types.NewPacker()
 	defer parker.Close()
 
-	stats := statistic.StatsInfoFromContext(proc.Ctx)
+	stats := statistic.StatsInfoFromContext(ctx)
 	analyzer := process.NewTempAnalyzer()
 	defer func() {
 		waitLockTime := analyzer.GetOpStats().GetMetricByKey(process.OpWaitLockTime)
@@ -336,10 +507,12 @@ func LockTable(
 	}()
 
 	opts := DefaultLockOptions(parker).
+		WithLockMode(mode).
 		WithLockTable(true, changeDef).
+		WithTableSnapshotRefresh(refreshTableSnapshot).
 		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
 	_, defChanged, refreshTS, err := doLock(
-		proc.Ctx,
+		ctx,
 		eng,
 		analyzer,
 		nil,
@@ -349,22 +522,34 @@ func LockTable(
 		0,
 		pkType,
 		-1,
-		opts)
+		opts,
+		lockWaitDeadline)
 	if err != nil {
 		return err
 	}
 
-	// If the returned timestamp is not empty, we should return a retry error,
-	if !refreshTS.IsEmpty() {
-		if !defChanged {
-			return retryError
-		}
+	return lockRefreshError(defChanged, refreshTS, retryOnRefresh)
+}
+
+func lockRefreshError(
+	defChanged bool,
+	refreshTS timestamp.Timestamp,
+	retryOnRefresh bool,
+) error {
+	if refreshTS.IsEmpty() {
+		return nil
+	}
+	if defChanged {
 		return retryWithDefChangedError
+	}
+	if retryOnRefresh {
+		return retryError
 	}
 	return nil
 }
 
-// LockRow lock rows in table, rows will be locked, and wait current txn closed.
+// LockRows locks rows until the current transaction closes. A successful RC
+// snapshot refresh asks the caller to replay stale input.
 func LockRows(
 	eng engine.Engine,
 	proc *process.Process,
@@ -376,6 +561,41 @@ func LockRows(
 	lockMode lock.LockMode,
 	sharding lock.Sharding,
 	group uint32,
+) error {
+	return lockRows(eng, proc, rel, tableID, bat, idx, pkType, lockMode, sharding, group, true)
+}
+
+// LockRowsForSnapshotRefresh admits caller-supplied rows before their values
+// are read. It accepts a successful RC refresh without asking the caller to
+// replay input, but still rejects definition changes and all lock failures.
+// Callers must verify the row's current value under the same transaction.
+func LockRowsForSnapshotRefresh(
+	eng engine.Engine,
+	proc *process.Process,
+	rel engine.Relation,
+	tableID uint64,
+	bat *batch.Batch,
+	idx int32,
+	pkType types.Type,
+	lockMode lock.LockMode,
+	sharding lock.Sharding,
+	group uint32,
+) error {
+	return lockRows(eng, proc, rel, tableID, bat, idx, pkType, lockMode, sharding, group, false)
+}
+
+func lockRows(
+	eng engine.Engine,
+	proc *process.Process,
+	rel engine.Relation,
+	tableID uint64,
+	bat *batch.Batch,
+	idx int32,
+	pkType types.Type,
+	lockMode lock.LockMode,
+	sharding lock.Sharding,
+	group uint32,
+	retryOnRefresh bool,
 ) error {
 	txnOp := proc.GetTxnOperator()
 	if !txnOp.Txn().IsPessimistic() {
@@ -423,18 +643,12 @@ func LockRows(
 		idx,
 		pkType,
 		-1,
-		opts)
+		opts,
+		0)
 	if err != nil {
 		return err
 	}
-	// If the returned timestamp is not empty, we should return a retry error,
-	if !refreshTS.IsEmpty() {
-		if !defChanged {
-			return retryError
-		}
-		return retryWithDefChangedError
-	}
-	return nil
+	return lockRefreshError(defChanged, refreshTS, retryOnRefresh)
 }
 
 // doLock locks a set of data so that no other transaction can modify it.
@@ -453,6 +667,7 @@ func doLock(
 	pkType types.Type,
 	partitionIdx int32,
 	opts LockOptions,
+	lockWaitDeadline int64,
 ) (bool, bool, timestamp.Timestamp, error) {
 	txnOp := proc.GetTxnOperator()
 	txnClient := proc.Base.TxnClient
@@ -466,16 +681,6 @@ func doLock(
 		tc := runtime.MustGetTestingContext(proc.GetService())
 		tc.GetBeforeLockFunc()(txnOp.Txn().ID, tableID)
 	}
-
-	seq := txnOp.NextSequence()
-	startAt := time.Now()
-	trace.GetService(proc.GetService()).AddTxnDurationAction(
-		txnOp,
-		client.LockEvent,
-		seq,
-		tableID,
-		0,
-		nil)
 
 	// in this case:
 	// create table t1 (a int primary key, b int ,c int, unique key(b,c));
@@ -505,16 +710,27 @@ func doLock(
 	if opts.maxCountPerLock == 0 {
 		opts.maxCountPerLock = int(lockService.GetConfig().MaxLockRowCount)
 	}
+	exactMutation := exactMutationRows(ctx)
+	if exactMutation && opts.lockTable {
+		return false, false, timestamp.Timestamp{}, moerr.NewLockNeedUpgradeNoCtx()
+	}
 	fetchFunc := opts.fetchFunc
 	if fetchFunc == nil {
 		fetchFunc = GetFetchRowsFunc(pkType)
+	}
+	fetchLimit := opts.maxCountPerLock
+	if (opts.mode == lock.LockMode_Shared || exactMutation) && !opts.lockTable && vec != nil {
+		// A runtime cardinality surprise must not widen a Shared target or an
+		// exact internal mutation. The latter fails on the fixed-bookkeeping
+		// ceiling instead of upgrading to a table lock.
+		fetchLimit = vec.Length()
 	}
 
 	has, rows, g := fetchFunc(
 		vec,
 		opts.parker,
 		pkType,
-		opts.maxCountPerLock,
+		fetchLimit,
 		opts.lockTable,
 		opts.filter,
 		opts.filterCols)
@@ -531,10 +747,18 @@ func doLock(
 		Granularity:     g,
 		Policy:          proc.GetWaitPolicy(),
 		Mode:            opts.mode,
+		WriterFair:      isWriterFairLockRequest(ctx),
+		KeepRows:        opts.admissionOnly || exactMutation,
 		TableDefChanged: opts.changeDef,
 		Sharding:        opts.sharding,
 		Group:           opts.group,
 		SnapShotTs:      txnOp.CreateTS(),
+	}
+	if opts.waitPolicy != nil {
+		options.Policy = *opts.waitPolicy
+	}
+	if err = setPlanSnapshotForLock(ctx, tableID, txn.IsRCIsolation(), proc, &options); err != nil {
+		return false, false, timestamp.Timestamp{}, err
 	}
 	if txn.Mirror {
 		options.ForwardTo = txn.LockService
@@ -548,10 +772,18 @@ func doLock(
 		}
 	}
 
-	// Attach the current statement/session lock_wait_timeout to the lock options.
-	if d := lockWaitTimeout(proc, txnOp); d > 0 {
-		options.LockWaitDeadline = time.Now().Add(d).UnixNano()
-		options, err = refreshLockWaitOptions(options)
+	// Attach the earliest caller-owned absolute deadline and the current
+	// statement/session lock_wait_timeout to every lock attempt. In particular,
+	// a multi-table promotion must not restart its wait budget at each remote
+	// lock owner.
+	lockTimeout := lockWaitTimeout(proc, txnOp)
+	if lockWaitDeadline > 0 || lockTimeout > 0 {
+		options, err = applyLockWaitDeadline(
+			options,
+			lockWaitDeadline,
+			lockTimeout,
+			time.Now(),
+		)
 		if err != nil {
 			return false, false, timestamp.Timestamp{}, err
 		}
@@ -591,42 +823,82 @@ func doLock(
 		tc.GetAdjustLockResultFunc()(txn.ID, tableID, &result)
 	}
 
-	if len(result.ConflictKey) > 0 {
-		trace.GetService(proc.GetService()).AddTxnActionInfo(
-			txnOp,
-			client.LockEvent,
-			seq,
-			tableID,
-			func(writer trace.Writer) {
-				writer.WriteHex(result.ConflictKey)
-				writer.WriteString(":")
-				writer.WriteHex(result.ConflictTxn)
-				writer.WriteString("/")
-				writer.WriteUint(uint64(result.Waiters))
-				if len(result.PrevWaiter) > 0 {
-					writer.WriteString("/")
-					writer.WriteHex(result.PrevWaiter)
-				}
-			},
-		)
+	// An admission grant needs a real binding, including the forwarding path.
+	if opts.admissionOnly && (!result.LockedOn.Valid || result.LockedOn.Table != tableID || result.LockedOn.Group != opts.group) {
+		return false, false, timestamp.Timestamp{}, moerr.NewLockTableBindChangedNoCtx()
 	}
-
-	trace.GetService(proc.GetService()).AddTxnDurationAction(
-		txnOp,
-		client.LockEvent,
-		seq,
-		tableID,
-		time.Since(startAt),
-		nil)
-
 	// add bind locks
 	if err = txnOp.AddLockTable(result.LockedOn); err != nil {
 		return false, false, timestamp.Timestamp{}, err
 	}
+	if opts.admissionOnly {
+		return false, false, result.Timestamp, nil
+	}
 
-	snapshotTS := txnOp.Txn().SnapshotTS
+	snapshotTS := txn.SnapshotTS
+	// The transaction snapshot is mutable under RC: an earlier target, batch,
+	// pre-pipeline lock, or remote fragment may already have advanced it. A DDL
+	// fence describes whether the plan generation is stale, so compare it with
+	// the immutable snapshot captured for that plan. Keep using the current
+	// transaction snapshot for ordinary row-version scans so their range stays
+	// minimal. Callers without a compiled plan retain the legacy fallback.
+	planSnapshotTS, hasPlanSnapshot := proc.GetPlanSnapshotTS()
+	if !hasPlanSnapshot {
+		planSnapshotTS = snapshotTS
+	}
 	// if has no conflict, lockedTS means the latest commit ts of this table
 	lockedTS := result.Timestamp
+
+	// A table-definition lock used to report the change only to transactions
+	// that were already waiting on that lock. Retain the last committed DDL
+	// timestamp in the lock table as well, so a late locker can detect that its
+	// statement was compiled against an older physical table generation.
+	definitionChanged := (result.TableDefChanged && result.HasPrevCommit) ||
+		(result.TableDefChangedAt != nil && planSnapshotTS.Less(*result.TableDefChangedAt))
+	if definitionChanged {
+		if !txnOp.Txn().IsRCIsolation() {
+			return false, false, timestamp.Timestamp{},
+				moerr.NewTxnWWConflict(ctx, tableID, "table definition changed")
+		}
+
+		start = time.Now()
+		newSnapshotTS, err := txnClient.WaitLogTailAppliedAt(ctx, lockedTS)
+		if err != nil {
+			return false, false, timestamp.Timestamp{}, err
+		}
+		analyzeLockWaitTime(analyzer, start)
+		if err := txnOp.UpdateSnapshot(ctx, newSnapshotTS); err != nil {
+			return false, false, timestamp.Timestamp{}, err
+		}
+		return true, true, newSnapshotTS, nil
+	}
+
+	// A direct table lock covers the complete keyspace and is acquired before
+	// its caller scans the table. Unlike a pipeline row lock, it has no input
+	// batch that hasNewVersionInRange can probe or invalidate. A table commit
+	// newer than the statement snapshot is therefore sufficient reason to
+	// refresh the RC snapshot in place, but not to retry work that has not run.
+	// A fixed SI snapshot cannot be advanced, so reject the stale validation.
+	//
+	// Use a strict comparison: a commit at the snapshot is already visible and
+	// must not cause an endless retry at the same table timestamp.
+	if opts.refreshTableSnapshot && opts.lockTable && bat == nil &&
+		snapshotTS.Less(lockedTS) {
+		if !txnOp.Txn().IsRCIsolation() {
+			return false, false, timestamp.Timestamp{},
+				moerr.NewTxnWWConflict(ctx, tableID, "table snapshot is stale")
+		}
+		start = time.Now()
+		newSnapshotTS, err := txnClient.WaitLogTailAppliedAt(ctx, lockedTS)
+		if err != nil {
+			return false, false, timestamp.Timestamp{}, err
+		}
+		analyzeLockWaitTime(analyzer, start)
+		if err := txnOp.UpdateSnapshot(ctx, newSnapshotTS); err != nil {
+			return false, false, timestamp.Timestamp{}, err
+		}
+		return false, false, timestamp.Timestamp{}, nil
+	}
 
 	// Normal path: NewLockAdd=true, no conflict - original check
 	if result.NewLockAdd &&
@@ -652,11 +924,6 @@ func doLock(
 		}
 
 		if changed {
-			trace.GetService(proc.GetService()).TxnNoConflictChanged(
-				proc.GetTxnOperator(),
-				tableID,
-				lockedTS,
-				newSnapshotTS)
 			if err := txnOp.UpdateSnapshot(ctx, newSnapshotTS); err != nil {
 				return false, false, timestamp.Timestamp{}, err
 			}
@@ -715,10 +982,6 @@ func doLock(
 		}
 
 		if changed {
-			trace.GetService(proc.GetService()).TxnConflictChanged(
-				proc.GetTxnOperator(),
-				tableID,
-				newSnapshotTS)
 			if err := txnOp.UpdateSnapshot(ctx, newSnapshotTS); err != nil {
 				return false, false, timestamp.Timestamp{}, err
 			}
@@ -760,10 +1023,6 @@ func doLock(
 	}
 
 	if changed {
-		trace.GetService(proc.GetService()).TxnConflictChanged(
-			proc.GetTxnOperator(),
-			tableID,
-			newSnapshotTS)
 		if err := txnOp.UpdateSnapshot(ctx, newSnapshotTS); err != nil {
 			return false, false, timestamp.Timestamp{}, err
 		}
@@ -772,14 +1031,64 @@ func doLock(
 
 	// Target rows were NOT modified, forward snapshot and continue
 	newTS := result.Timestamp.Next()
-	trace.GetService(proc.GetService()).TxnConflictChanged(
-		proc.GetTxnOperator(),
-		tableID,
-		newTS)
+
 	if err := txnOp.UpdateSnapshot(ctx, newTS); err != nil {
 		return false, false, timestamp.Timestamp{}, err
 	}
 	return true, result.TableDefChanged, newTS, nil
+}
+
+func isWriterFairLockRequest(ctx context.Context) bool {
+	return defines.IsLockWriterFair(ctx)
+}
+
+func setPlanSnapshotForLock(
+	ctx context.Context,
+	tableID uint64,
+	isRC bool,
+	proc *process.Process,
+	options *lock.LockOptions,
+) error {
+	options.PlanSnapshotTs = nil
+	planSnapshotTS := proc.PlanSnapshotTSForTransport()
+	// When the plan snapshot is at or after a non-empty transaction creation
+	// timestamp, CreateTS is an exact or conservative fallback and no extra wire
+	// field is needed. A mirror transaction has no local CreateTS; do not let its
+	// zero value bypass the wire/gate decision if placement changes in the future.
+	if planSnapshotTS == nil ||
+		(!options.SnapShotTs.IsEmpty() && !planSnapshotTS.Less(options.SnapShotTs)) {
+		return nil
+	}
+	if !planSnapshotWireSupported(proc) {
+		// The frontend rollout gate can change after a cached/prepared plan was
+		// admitted. Close that TOCTOU window at the final local boundary: rebuild
+		// the plan in the current transaction instead of sending a field that an
+		// old lock owner would silently ignore.
+		if proc.PlanGenerationReused() {
+			if !isRC {
+				return moerr.NewTxnWWConflict(ctx, tableID,
+					"table definition compatibility changed")
+			}
+			return retryWithDefChangedError
+		}
+		// With freshness sacrifice enabled, a freshly built plan can legitimately
+		// bind a snapshot older than CreateTS. Rebuilding it would bind the same
+		// snapshot forever. Preserve the legacy CreateTS fence during the rollout;
+		// only an actually reused generation requires the v32 field to be safe.
+		return nil
+	}
+	options.PlanSnapshotTs = planSnapshotTS
+	return nil
+}
+
+func planSnapshotWireSupported(proc *process.Process) bool {
+	value, ok := runtime.ServiceRuntime(proc.GetService()).GetGlobalVariables(
+		runtime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	version, ok := value.(int64)
+	return ok && version >= defines.MORPCVersion32
 }
 
 type lockRetryState struct {
@@ -788,6 +1097,24 @@ type lockRetryState struct {
 }
 
 func lockWaitTimeout(proc *process.Process, txnOp client.TxnOperator) time.Duration {
+	txnTimeout := client.LockWaitTimeoutFromTxn(txnOp)
+	var explicitProcessTimeout bool
+	// Background/internal execution may carry a per-execution value in the
+	// process or txn options while its resolver only exposes compiled global
+	// defaults. Prefer the caller-owned budget in that case. Frontend execution
+	// keeps resolver-first semantics so SET SESSION and statement overrides are
+	// observed even after a transaction has started.
+	if proc != nil && proc.Base != nil && !proc.Base.IsFrontend {
+		if proc.GetSessionInfo() != nil {
+			explicitProcessTimeout = proc.GetSessionInfo().LockWaitTimeoutSet
+			if seconds := proc.GetSessionInfo().LockWaitTimeout; seconds > 0 {
+				return time.Duration(seconds) * time.Second
+			}
+		}
+		if !explicitProcessTimeout && txnTimeout > 0 {
+			return txnTimeout
+		}
+	}
 	if proc != nil && proc.GetResolveVariableFunc() != nil {
 		if v, err := proc.GetResolveVariableFunc()("lock_wait_timeout", true, false); err == nil {
 			switch n := v.(type) {
@@ -811,7 +1138,14 @@ func lockWaitTimeout(proc *process.Process, txnOp client.TxnOperator) time.Durat
 			return time.Duration(seconds) * time.Second
 		}
 	}
-	return client.LockWaitTimeoutFromTxn(txnOp)
+	if explicitProcessTimeout {
+		// Explicit zero means "clear this execution's override", not
+		// "wait forever". Use the shared product fallback when no resolver is
+		// installed. This also matches the positive legacy value serialized for
+		// old pipeline peers that do not understand LockWaitTimeoutSet.
+		return time.Duration(defines.DefaultLockWaitTimeoutSeconds) * time.Second
+	}
+	return txnTimeout
 }
 
 func refreshLockWaitOptions(options lock.LockOptions) (lock.LockOptions, error) {
@@ -827,6 +1161,22 @@ func refreshLockWaitOptions(options lock.LockOptions) (lock.LockOptions, error) 
 		options.LockWaitTimeout = 1
 	}
 	return options, nil
+}
+
+func applyLockWaitDeadline(
+	options lock.LockOptions,
+	absoluteDeadline int64,
+	lockWaitTimeout time.Duration,
+	now time.Time,
+) (lock.LockOptions, error) {
+	options.LockWaitDeadline = absoluteDeadline
+	if lockWaitTimeout > 0 {
+		sessionDeadline := now.Add(lockWaitTimeout).UnixNano()
+		if options.LockWaitDeadline <= 0 || sessionDeadline < options.LockWaitDeadline {
+			options.LockWaitDeadline = sessionDeadline
+		}
+	}
+	return refreshLockWaitOptions(options)
 }
 
 func lockWithRetry(
@@ -846,21 +1196,27 @@ func lockWithRetry(
 	var err error
 	retryState := lockRetryState{}
 
-	options, err = refreshLockWaitOptions(options)
-	if err != nil {
-		return result, err
-	}
-	result, err = LockWithMayUpgrade(ctx, lockService, tableID, rows, txnID, options, fetchFunc, vec, opts, pkType)
-	if !canRetryLock(ctx, tableID, txnOp, err, &retryState) {
-		return result, getLockRetryExitError(ctx, err)
-	}
-
 	for {
 		options, err = refreshLockWaitOptions(options)
 		if err != nil {
 			return result, err
 		}
-		result, err = lockService.Lock(ctx, tableID, rows, txnID, options)
+		// A retryable bind/backend error can be returned by the table-level attempt
+		// after the row-level request already reported NeedUpgrade. Keep every
+		// attempt in one upgrade-aware state machine so retries cannot drift back to
+		// raw row locking and surface NeedUpgrade to the caller.
+		result, err = LockWithMayUpgrade(
+			ctx,
+			lockService,
+			tableID,
+			rows,
+			txnID,
+			options,
+			fetchFunc,
+			vec,
+			opts,
+			pkType,
+		)
 		if !canRetryLock(ctx, tableID, txnOp, err, &retryState) {
 			return result, getLockRetryExitError(ctx, err)
 		}
@@ -886,6 +1242,10 @@ func LockWithMayUpgrade(
 	}
 	result, err := lockService.Lock(ctx, tableID, rows, txnID, options)
 	if !moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade) {
+		return result, err
+	}
+	if (opts.admissionOnly || exactMutationRows(ctx)) && !opts.lockTable {
+		// Catalog name admission must not widen to unrelated catalog rows.
 		return result, err
 	}
 
@@ -1144,11 +1504,17 @@ func (opts LockOptions) WithLockTable(lockTable, changeDef bool) LockOptions {
 	return opts
 }
 
-// WithMaxBytesPerLock every lock operation, will add some lock rows into
-// lockservice. If very many rows of data are added at once, this can result
-// in an excessive memory footprint. This value limits the amount of lock memory
-// that can be allocated per lock operation, and if it is exceeded, it will be
-// converted to a range lock.
+// WithTableSnapshotRefresh advances an RC snapshot to the table lock's latest
+// commit before the caller reads the locked table.
+func (opts LockOptions) WithTableSnapshotRefresh(refresh bool) LockOptions {
+	opts.refreshTableSnapshot = refresh
+	return opts
+}
+
+// WithMaxBytesPerLock bounds row keys before an Exclusive lock request enters
+// lockservice. Shared row requests stay exact because silently converting them
+// to a range can introduce conflicts with compatible holders; their explicit
+// table fallback is chosen by the planner instead.
 func (opts LockOptions) WithMaxBytesPerLock(maxBytesPerLock int) LockOptions {
 	opts.maxCountPerLock = maxBytesPerLock
 	return opts
@@ -1498,25 +1864,20 @@ func hasNewVersionInRange(
 
 	crs := analyzer.GetOpCounterSet()
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-	defer func() {
-		if analyzer != nil {
-			analyzer.AddS3RequestCount(crs)
-			analyzer.AddFileServiceCacheInfo(crs)
-			analyzer.AddDiskIO(crs)
-		}
-	}()
 
 	fromTS := types.BuildTS(from.PhysicalTime, from.LogicalTime)
 	toTS := types.BuildTS(to.PhysicalTime, to.LogicalTime)
 
-	changed, err := rel.PrimaryKeysMayBeModified(newCtx, fromTS, toTS, bat, idx, partitionIdx)
+	changed, err := process.MeasureFilesystemWait(analyzer, func() (bool, error) {
+		return rel.PrimaryKeysMayBeModified(newCtx, fromTS, toTS, bat, idx, partitionIdx)
+	})
 
 	return changed, err
 }
 
 func analyzeLockWaitTime(analyzer process.Analyzer, start time.Time) {
 	if analyzer != nil {
-		analyzer.WaitStop(start)
+		process.StopAnalyzerWait(analyzer, start, resource.WaitLock)
 		analyzer.AddWaitLockTime(start)
 	}
 }
@@ -1540,7 +1901,8 @@ func lockTalbeIfLockCountIsZero(
 			if !target.lockTableAtTheEnd {
 				continue
 			}
-			err := LockTable(lockOp.engine, proc, target.tableID, target.primaryColumnType, false)
+			err := LockTableWithMode(
+				lockOp.engine, proc, target.tableID, target.primaryColumnType, target.mode, false)
 			if err != nil {
 				return err
 			}
@@ -1567,8 +1929,5 @@ func lockTargetWithRows(
 	bat.Vecs[target.primaryColumnIndexInBatch] = vec
 	bat.SetRowCount(vec.Length())
 
-	anal := lockOp.OpAnalyzer
-	anal.Start()
-	defer anal.Stop()
-	return performLock(bat, proc, lockOp, anal, idx)
+	return performLock(bat, proc, lockOp, lockOp.OpAnalyzer, idx)
 }

@@ -120,6 +120,7 @@ enum Method {
     ShardRead     = 4;
     PauseCN       = 5;
     GetCNReplicas = 6;
+    ShardReadV2   = 7;
 }
 
 message Request {

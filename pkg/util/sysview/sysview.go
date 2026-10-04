@@ -17,9 +17,11 @@ package sysview
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -48,12 +50,14 @@ var (
 		InformationSchemaUserPrivilegesDDL,
 		InformationSchemaSchemataDDL,
 		InformationSchemaCharacterSetsDDL,
+		InformationSchemaCharacterSetsData,
 		InformationSchemaTriggersDDL,
 		InformationSchemaTablesDDL,
 		InformationSchemaPartitionsDDL,
 		InformationSchemaViewsDDL,
 		InformationSchemaStatisticsDDL,
 		InformationSchemaReferentialConstraintsDDL,
+		InformationSchemaCheckConstraintsDDL,
 		InformationSchemaEnginesDDL,
 		InformationSchemaRoutinesDDL,
 		InformationSchemaParametersDDL,
@@ -62,12 +66,62 @@ var (
 		InformationSchemaTablePrivilegesDDL,
 		InformationSchemaColumnPrivilegesDDL,
 		InformationSchemaCollationsDDL,
+		InformationSchemaCollationsData,
+		InformationSchemaCollationCharacterSetApplicabilityDDL,
 		InformationSchemaTableConstraintsDDL,
 		InformationSchemaEventsDDL,
 		InformationSchemaFilesDDL,
 		informationSchemaKeywordsData,
 	}
 )
+
+func InitInformationSchemaSysTablesForProtocol(protocol int64) []string {
+	if protocol >= defines.MORPCVersion100 {
+		return InitInformationSchemaSysTables
+	}
+
+	includeCheckConstraints := protocol >= defines.MORPCVersion16
+	includeCurrentRoles := protocol >= defines.MORPCVersion41
+	sqls := make([]string, 0, len(InitInformationSchemaSysTables))
+	for _, sql := range InitInformationSchemaSysTables {
+		switch sql {
+		case InformationSchemaTablesDDL:
+			if protocol < defines.MORPCVersion46 {
+				sql = InformationSchemaTablesV41DDL
+			}
+		case InformationSchemaColumnsDDL:
+			if protocol >= defines.MORPCVersion58 {
+				sql = InformationSchemaColumnsV58DDL()
+			} else if protocol >= defines.MORPCVersion46 {
+				sql = InformationSchemaColumnsV46DDL
+			} else {
+				sql = InformationSchemaColumnsV41DDL
+			}
+		}
+		if !includeCheckConstraints {
+			switch sql {
+			case InformationSchemaCheckConstraintsDDL:
+				continue
+			case InformationSchemaTableConstraintsDDL:
+				sql = InformationSchemaTableConstraintsLegacyDDL
+			}
+		}
+		if !includeCurrentRoles {
+			sql = informationSchemaMetadataVisibilityCompatibilityDDL(sql)
+		}
+		sqls = append(sqls, sql)
+	}
+	return sqls
+}
+
+func informationSchemaMetadataVisibilityCompatibilityDDL(sql string) string {
+	return strings.Replace(
+		sql,
+		informationSchemaMetadataVisibilityCTE(),
+		informationSchemaMetadataVisibilityCompatibilityCTE(),
+		1,
+	)
+}
 
 func InitSchema(ctx context.Context, txn executor.TxnExecutor) error {
 	if err := initMysqlTables(ctx, txn); err != nil {

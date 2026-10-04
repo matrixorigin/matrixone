@@ -119,7 +119,7 @@ drop snapshot if exists `SELECT`;
 create snapshot `SELECT` for database sp_test02;
 -- @ignore:1
 show snapshots;
-select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots;
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where kind = 'user';
 drop snapshot `SELECT`;
 drop database sp_test02;
 
@@ -135,7 +135,7 @@ drop snapshot if exists AUTO_INCREMENT;
 create snapshot AUTO_INCREMENT for database sp_test03;
 -- @ignore:1
 show snapshots;
-select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots;
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where kind = 'user';
 drop snapshot AUTO_INCREMENT;
 drop database sp_test03;
 
@@ -191,8 +191,8 @@ create snapshot spsp02 for database db02;
 create snapshot spsp03 for table db02 table01;
 -- @ignore:1
 show snapshots;
-select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where level = 'database';
-select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where level = 'table';
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where kind = 'user' and level = 'database';
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where kind = 'user' and level = 'table';
 drop snapshot spsp02;
 drop snapshot spsp03;
 drop database db02;

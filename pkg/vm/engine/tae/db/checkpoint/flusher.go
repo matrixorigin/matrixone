@@ -42,9 +42,7 @@ import (
 
 var ErrFlusherStopped = moerr.NewInternalErrorNoCtx("flusher stopped")
 
-const (
-	stalledCheckpointFlushAge = checkpointIntentOldAge
-)
+const maxStalledCheckpointFlushAge = checkpointIntentOldAge
 
 type FlushCfg struct {
 	ForceFlushTimeout       time.Duration
@@ -102,6 +100,17 @@ func (mode flushScheduleMode) bypassFlushReady() bool {
 
 func (mode flushScheduleMode) resetFlushDeadline() bool {
 	return mode != flushScheduleCheckpointBounded
+}
+
+func (mode flushScheduleMode) objectScanLowerBound(lastCkp types.TS) types.TS {
+	// A checkpoint-bounded or forced flush must consider the same object set
+	// as IsTableTailFlushed: every active appendable object at or before the
+	// request end. Such an object can receive writes after it was created, so
+	// its creation timestamp cannot be used to exclude it from recovery.
+	if mode.bypassFlushReady() {
+		return types.TS{}
+	}
+	return lastCkp
 }
 
 type FlushRequest struct {
@@ -332,6 +341,7 @@ type flushImpl struct {
 	objMemSizeList []tableAndSize
 
 	stalledCheckpointPickBounded bool
+	stalledCheckpointFlushAge    time.Duration
 
 	// Log throttling for collectTableMemUsage
 	logThrottleMu   sync.Mutex
@@ -396,6 +406,9 @@ func (flusher *flushImpl) fillDefaults() {
 	if flusher.flushInterval <= 0 {
 		flusher.flushInterval = time.Minute
 	}
+	if flusher.stalledCheckpointFlushAge <= 0 {
+		flusher.stalledCheckpointFlushAge = deriveStalledCheckpointFlushAge(flusher.flushInterval)
+	}
 	// TODO: what is flushLag? Here just refactoring the original code.
 	if flusher.flushLag <= 0 {
 		if flusher.flushInterval < time.Second {
@@ -408,6 +421,17 @@ func (flusher *flushImpl) fillDefaults() {
 	if flusher.flushQueueSize <= 0 {
 		flusher.flushQueueSize = 1000
 	}
+}
+
+func deriveStalledCheckpointFlushAge(flushInterval time.Duration) time.Duration {
+	// Give normal flushing two opportunities before using the bounded
+	// recovery path. Cap the delay at the historical production threshold,
+	// while allowing intentionally fast flush configurations to recover at
+	// the same cadence.
+	if flushInterval <= 0 || flushInterval >= maxStalledCheckpointFlushAge/2 {
+		return maxStalledCheckpointFlushAge
+	}
+	return 2 * flushInterval
 }
 
 func (flusher *flushImpl) triggerJob(ctx context.Context) {
@@ -434,7 +458,7 @@ func (flusher *flushImpl) triggerJob(ctx context.Context) {
 }
 
 func (flusher *flushImpl) pickStalledCheckpointFlushEntry(intent *CheckpointEntry) bool {
-	if !shouldScheduleStalledCheckpointFlush(intent, stalledCheckpointFlushAge) {
+	if !shouldScheduleStalledCheckpointFlush(intent, flusher.stalledCheckpointFlushAge) {
 		flusher.stalledCheckpointPickBounded = false
 		return false
 	}
@@ -517,6 +541,7 @@ func (flusher *flushImpl) scheduleFlush(
 			lastCkp = ckp.GetStart().Prev()
 		}
 	}
+	lastCkp = mode.objectScanLowerBound(lastCkp)
 	pressure := flusher.collectTableMemUsage(entry, lastCkp)
 	flusher.checkFlushConditionAndFire(entry, mode, pressure, lastCkp)
 }
@@ -526,7 +551,7 @@ func (flusher *flushImpl) makeStalledCheckpointFlushEntry() *logtail.DirtyTreeEn
 		return nil
 	}
 	intent := flusher.checkpointSchduler.PendingIncrementalCheckpoint()
-	return makeStalledCheckpointFlushEntry(flusher.sourcer, intent, stalledCheckpointFlushAge)
+	return makeStalledCheckpointFlushEntry(flusher.sourcer, intent, flusher.stalledCheckpointFlushAge)
 }
 
 func makeStalledCheckpointFlushEntry(
@@ -570,39 +595,24 @@ func foreachAobjBefore(_ context.Context,
 	// 2. the ts is lagged, lowering the possibility of missing aobj. In contrast, we have to wait when checkpoint pending checkpoint tasks
 	// table.WaitDataObjectCommitted(ts)
 	// table.WaitTombstoneObjectCommitted(ts)
-	var ok bool
-	// some entries shared the same timestamp with end, so we need to seek to the next one
-	key := &catalog.ObjectEntry{EntryMVCCNode: catalog.EntryMVCCNode{DeletedAt: ts.Next()}}
-
 	data := table.MakeDataObjectIt()
 	defer data.Release()
-	if ok = data.Seek(key); !ok {
-		ok = data.Last()
-	}
-	for ; ok; ok = data.Prev() {
+	for ok := catalog.SeekObjectListGroup(&data, catalog.ObjectListGroupAppendableCreate, lastCkp); ok; ok = data.Next() {
 		item := data.Item()
-		// Any C entry created before the last checkpoint end time, break
-		if item.IsCEntry() && item.CreatedAt.LT(&lastCkp) {
+		if item.ObjectListGroup() != catalog.ObjectListGroupAppendableCreate || item.CreatedAt.GT(&ts) {
 			break
 		}
-		if item.IsAppendable() && item.IsCEntry() && !item.HasDCounterpart() && item.CreatedAt.LE(&ts) {
-			df(item)
-		}
+		df(item)
 	}
 
 	tomb := table.MakeTombstoneObjectIt()
 	defer tomb.Release()
-	if ok = tomb.Seek(key); !ok {
-		ok = tomb.Last()
-	}
-	for ; ok; ok = tomb.Prev() {
+	for ok := catalog.SeekObjectListGroup(&tomb, catalog.ObjectListGroupAppendableCreate, lastCkp); ok; ok = tomb.Next() {
 		item := tomb.Item()
-		if item.IsCEntry() && item.CreatedAt.LT(&lastCkp) {
+		if item.ObjectListGroup() != catalog.ObjectListGroupAppendableCreate || item.CreatedAt.GT(&ts) {
 			break
 		}
-		if item.IsAppendable() && item.IsCEntry() && !item.HasDCounterpart() && item.CreatedAt.LE(&ts) {
-			tf(item)
-		}
+		tf(item)
 	}
 }
 
@@ -999,6 +1009,7 @@ func (flusher *flushImpl) Start() {
 			zap.Duration("cron-period", flusher.cronPeriod),
 			zap.Duration("flush-interval", flusher.flushInterval),
 			zap.Duration("flush-lag", flusher.flushLag),
+			zap.Duration("stalled-checkpoint-flush-age", flusher.stalledCheckpointFlushAge),
 			zap.Duration("force-flush-timeout", cfg.ForceFlushTimeout),
 			zap.Duration("force-flush-check-interval", cfg.ForceFlushCheckInterval),
 		)

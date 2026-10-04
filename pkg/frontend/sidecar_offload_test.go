@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -74,6 +75,31 @@ func TestStripSidecarHint(t *testing.T) {
 	assert.Equal(t, "SELECT * FROM t", stripSidecarHint("/*+ SIDECAR GPU */ SELECT * FROM t"))
 	assert.Equal(t, "SELECT * FROM t", stripSidecarHint("  /*+ sidecar gpu */ SELECT * FROM t"))
 	assert.Equal(t, "SELECT * FROM t", stripSidecarHint("SELECT * FROM t"))
+}
+
+func TestSidecarSelectorIsScopedToOneStatement(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name string
+		sql  string
+		want []bool
+	}{
+		{name: "hinted select has unhinted sibling", sql: "/*+ SIDECAR */ SELECT 1; SELECT 2", want: []bool{true, false}},
+		{name: "perform remains local", sql: "/*+ SIDECAR */ PERFORM SELECT 1; SELECT 2", want: []bool{false, false}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmts, err := parsers.Parse(ctx, dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer freeStatements(stmts)
+			fragments, err := schedulingSQLByStatementWithSQLMode(ctx, tc.sql, "")
+			require.NoError(t, err)
+			require.Len(t, fragments, len(stmts))
+			require.Len(t, stmts, len(tc.want))
+			for i := range stmts {
+				require.Equal(t, tc.want[i], siriusStatementSelected(fragments[i], stmts[i]))
+			}
+		})
+	}
 }
 
 func TestWrapForGPUExecution(t *testing.T) {
@@ -205,6 +231,22 @@ func TestRewriteTableExpr_Subquery(t *testing.T) {
 	assert.Contains(t, result, "tae_scan('http://mo:6060/debug/tae/manifest?table=tpch.lineitem')")
 }
 
+func TestRewriteSelectStmtNamedWindowSubquery(t *testing.T) {
+	stmt, err := parsers.ParseOne(
+		context.Background(), dialect.MYSQL,
+		"select 1 from tpch.nation window w as (partition by (select l_orderkey from tpch.lineitem limit 1))",
+		1,
+	)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	selectStmt := stmt.(*tree.Select)
+	rewriteSelectStmt(selectStmt.Select, "default_db", "http://mo:6060", nil)
+	result := tree.String(selectStmt, dialect.MYSQL)
+	assert.Contains(t, result, "tae_scan('http://mo:6060/debug/tae/manifest?table=tpch.nation')")
+	assert.Contains(t, result, "tae_scan('http://mo:6060/debug/tae/manifest?table=tpch.lineitem')")
+}
+
 func TestRewriteTableExpr_WithAlias(t *testing.T) {
 	ctx := context.Background()
 	sql := "SELECT l.l_orderkey FROM tpch.lineitem AS l WHERE l.l_shipdate >= '1994-01-01'"
@@ -305,6 +347,30 @@ func TestBuildGPUResultSet(t *testing.T) {
 
 	col2, _ := mrs.GetColumn(nil, 1)
 	assert.Equal(t, "name", col2.Name())
+}
+
+func TestBuildGPUResultSetUsesBinaryBlobMetadata(t *testing.T) {
+	result := &sidecarResponse{
+		Meta: []sidecarColumn{
+			{Name: "blob_data", Type: "BLOB"},
+			{Name: "bytea_data", Type: "BYTEA"},
+			{Name: "text_data", Type: "VARCHAR"},
+		},
+	}
+
+	mrs := &MysqlResultSet{}
+	require.NoError(t, buildGPUResultSet(context.Background(), mrs, result))
+	require.Len(t, mrs.Columns, 3)
+
+	for _, resultColumn := range mrs.Columns[:2] {
+		col := resultColumn.(*MysqlColumn)
+		require.Equal(t, defines.MYSQL_TYPE_BLOB, col.ColumnType())
+		require.Equal(t, uint16(charsetBinary), col.Charset())
+		require.Equal(t, uint32(sidecarMaxResponseSize), col.Length())
+		require.Equal(t, uint16(defines.BLOB_FLAG|defines.BINARY_FLAG), col.Flag())
+	}
+	require.Equal(t, defines.MYSQL_TYPE_VARCHAR, mrs.Columns[2].ColumnType())
+	require.Zero(t, mrs.Columns[2].(*MysqlColumn).Flag()&uint16(defines.BLOB_FLAG|defines.BINARY_FLAG))
 }
 
 func TestGpuTypeToMysql(t *testing.T) {
@@ -633,22 +699,45 @@ func TestSendToSidecar_Success(t *testing.T) {
 }
 
 func TestSendToSidecar_ParentCancel(t *testing.T) {
-	// Verify that cancelling the parent context aborts the sidecar HTTP call.
-	// The server simulates a slow query; parent cancellation should abort before
-	// the server responds.
+	// Verify that cancelling the parent context aborts an in-flight sidecar call.
+	// The handler reports entry before waiting for the test to release it, so the
+	// cancellation assertion does not depend on a scheduler-sensitive delay.
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseHandler := func() { releaseOnce.Do(func() { close(release) }) }
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(2 * time.Second)
+		close(entered)
+		<-release
 		w.Write([]byte(`{"meta":[],"data":[],"rows":0}`))
 	}))
 	defer srv.Close()
 
 	parentCtx, parentCancel := context.WithCancel(context.Background())
 	defer parentCancel()
-	time.AfterFunc(100*time.Millisecond, parentCancel)
+	resultCh := make(chan error, 1)
+	go func() {
+		_, err := sendToSidecar(parentCtx, srv.URL, "SELECT 1")
+		resultCh <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		releaseHandler()
+		t.Fatal("timed out waiting for sidecar handler to enter")
+	}
+	parentCancel()
 
 	start := time.Now()
-	_, err := sendToSidecar(parentCtx, srv.URL, "SELECT 1")
+	var err error
+	select {
+	case err = <-resultCh:
+	case <-time.After(time.Second):
+		releaseHandler()
+		t.Fatal("cancelled sidecar request did not return within one second")
+	}
 	elapsed := time.Since(start)
+	releaseHandler()
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "sidecar request failed")

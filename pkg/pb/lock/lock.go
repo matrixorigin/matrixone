@@ -49,11 +49,13 @@ func (m *Request) DebugString() string {
 		buffer.WriteString(m.Lock.DebugString())
 	case Method_Unlock:
 		buffer.WriteString(m.Unlock.DebugString())
+	case Method_BatchUnlock:
+		buffer.WriteString(m.BatchUnlock.DebugString())
 	case Method_GetBind:
 		buffer.WriteString(m.GetBind.DebugString())
 	case Method_GetTxnLock:
 		buffer.WriteString(m.GetTxnLock.DebugString())
-	case Method_GetWaitingList:
+	case Method_GetWaitingList, Method_GetTxnWaitingListOnLockTable:
 		buffer.WriteString(m.GetWaitingList.DebugString())
 	case Method_KeepLockTableBind:
 		buffer.WriteString(m.KeepLockTableBind.DebugString())
@@ -86,11 +88,13 @@ func (m *Response) DebugString() string {
 		buffer.WriteString(m.Lock.DebugString())
 	case Method_Unlock:
 		buffer.WriteString(m.Unlock.DebugString())
+	case Method_BatchUnlock:
+		buffer.WriteString(m.BatchUnlock.DebugString())
 	case Method_GetBind:
 		buffer.WriteString(m.GetBind.DebugString())
 	case Method_GetTxnLock:
 		buffer.WriteString(m.GetTxnLock.DebugString())
-	case Method_GetWaitingList:
+	case Method_GetWaitingList, Method_GetTxnWaitingListOnLockTable:
 		buffer.WriteString(m.GetWaitingList.DebugString())
 	case Method_KeepLockTableBind:
 		buffer.WriteString(m.KeepLockTableBind.DebugString())
@@ -146,8 +150,8 @@ func (m LockOptions) WithWaitPolicy(policy WaitPolicy) LockOptions {
 	return m
 }
 
-// WithLockWaitTimeout sets the lock wait timeout in seconds. 0 disables
-// lock-wait-timeout enforcement and relies on the caller context instead.
+// WithLockWaitTimeout sets the caller lock wait timeout in seconds. A zero
+// value delegates to the caller context and the lockservice safety ceiling.
 func (m LockOptions) WithLockWaitTimeout(seconds int64) LockOptions {
 	m.LockWaitTimeout = seconds
 	return m
@@ -204,6 +208,14 @@ func (m *UnlockRequest) DebugString() string {
 }
 
 func (m *UnlockResponse) DebugString() string {
+	return ""
+}
+
+func (m *BatchUnlockRequest) DebugString() string {
+	return fmt.Sprintf("%s-%d", hex.EncodeToString(m.TxnID), len(m.LockTables))
+}
+
+func (m *BatchUnlockResponse) DebugString() string {
 	return ""
 }
 

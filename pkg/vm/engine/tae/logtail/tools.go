@@ -22,12 +22,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"go.uber.org/zap/zapcore"
 )
 
@@ -113,21 +115,28 @@ func DataChangeToLogtailBatch(src *containers.BatchWithVersion) *containers.Batc
 		panic("unmatched seqnums length")
 	}
 
+	filterAbortedLogtailRows(src)
+
 	// sort by seqnum
 	sort.Sort(src)
 
 	bat := containers.NewBatchWithCapacity(int(src.NextSeqnum) + 2)
-	if src.Deletes != nil {
-		bat.Deletes = src.Deletes
+	rowIDPos, commitTSPos := -1, -1
+	for i, seqnum := range src.Seqnums {
+		switch seqnum {
+		case objectio.SEQNUM_ROWID:
+			rowIDPos = i
+		case objectio.SEQNUM_COMMITTS:
+			commitTSPos = i
+		}
 	}
-
-	i := len(src.Seqnums) - 1
-	// move special column first, no abort column in logtail
-	if src.Seqnums[i] != objectio.SEQNUM_ROWID || src.Seqnums[i-1] != objectio.SEQNUM_COMMITTS {
-		panic(fmt.Sprintf("bad last seqnums %v", src.Seqnums))
+	// Abort is a storage-only column. Rolled-back rows were compacted above
+	// and are never emitted in logtail.
+	if rowIDPos == -1 || commitTSPos == -1 {
+		panic(fmt.Sprintf("missing required logtail seqnums in %v", src.Seqnums))
 	}
-	bat.AddVector(src.Attrs[i], src.Vecs[i])
-	bat.AddVector(src.Attrs[i-1], src.Vecs[i-1])
+	bat.AddVector(src.Attrs[rowIDPos], src.Vecs[rowIDPos])
+	bat.AddVector(src.Attrs[commitTSPos], src.Vecs[commitTSPos])
 
 	for i, seqnum := range seqnums {
 		if seqnum >= objectio.SEQNUM_UPPER {
@@ -147,22 +156,53 @@ func TombstoneChangeToLogtailBatch(src *containers.BatchWithVersion) *containers
 	if len(seqnums) != len(src.Vecs) {
 		panic("unmatched seqnums length")
 	}
-	if len(src.Vecs) != 4 {
-		panic(fmt.Sprintf("logic err, attr %v", src.Attrs))
-	}
+	filterAbortedLogtailRows(src)
 
 	bat := containers.NewBatchWithCapacity(3)
 
-	// move special column first, no abort column in logtail
-	if src.Seqnums[2] != objectio.SEQNUM_ROWID || src.Seqnums[3] != objectio.SEQNUM_COMMITTS {
-		panic(fmt.Sprintf("bad last seqnums %v", src.Seqnums))
+	for _, attr := range []string{
+		objectio.TombstoneAttr_Rowid_Attr,
+		objectio.TombstoneAttr_CommitTs_Attr,
+		objectio.TombstoneAttr_PK_Attr,
+		catalog.PhyAddrColumnName,
+	} {
+		vec := src.GetVectorByName(attr)
+		if vec == nil {
+			panic(fmt.Sprintf("missing tombstone logtail column %q in %v", attr, src.Attrs))
+		}
+		bat.AddVector(attr, vec)
 	}
-	bat.AddVector(src.Attrs[0], src.Vecs[0]) // rowid
-	bat.AddVector(src.Attrs[3], src.Vecs[3]) // committs
-	bat.AddVector(src.Attrs[1], src.Vecs[1]) // pk
-	bat.AddVector(src.Attrs[2], src.Vecs[2]) // PhyAddrColumn
 
 	return bat
+}
+
+func filterAbortedLogtailRows(src *containers.BatchWithVersion) {
+	abortPos, commitTSPos := -1, -1
+	for i, seqnum := range src.Seqnums {
+		switch seqnum {
+		case objectio.SEQNUM_ABORT:
+			abortPos = i
+		case objectio.SEQNUM_COMMITTS:
+			commitTSPos = i
+		}
+	}
+	var aborts []bool
+	if abortPos != -1 && !src.Vecs[abortPos].IsConstNull() {
+		aborts = vector.MustFixedColWithTypeCheck[bool](src.Vecs[abortPos].GetDownstreamVector())
+	}
+	var commitTSs []types.TS
+	if commitTSPos != -1 && !src.Vecs[commitTSPos].IsConstNull() {
+		commitTSs = vector.MustFixedColWithTypeCheck[types.TS](src.Vecs[commitTSPos].GetDownstreamVector())
+	}
+	for row := 0; row < src.Length(); row++ {
+		if (row < len(aborts) && aborts[row]) ||
+			(row < len(commitTSs) && commitTSs[row].Equal(&txnif.UncommitTS)) {
+			src.Delete(row)
+		}
+	}
+	if src.HasDelete() {
+		src.Compact()
+	}
 }
 
 func containersBatchToProtoBatch(bat *containers.Batch) (*api.Batch, error) {

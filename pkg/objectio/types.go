@@ -15,9 +15,13 @@
 package objectio
 
 import (
+	"bytes"
+	"cmp"
 	"context"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -45,11 +49,211 @@ type ColumnMetaFetcher interface {
 
 type ReadFilterSearchFuncType func(containers.Vectors) []int64
 
+type readFilterSearchKind uint8
+
+const readFilterLinearKeys = 8
+
+const (
+	readFilterSearchExact readFilterSearchKind = iota
+	readFilterSearchPrefix
+	readFilterSearchLess
+	readFilterSearchGreater
+	readFilterSearchBetween
+	readFilterSearchPrefixBetween
+)
+
+type readFilterSearchTerm struct {
+	kind   readFilterSearchKind
+	closed bool
+	hint   uint8
+	values [][]byte
+	lb     []byte
+	ub     []byte
+	// Optional secondary order/membership index; ordinary EQ terms keep the
+	// same size and allocation count.
+	exactTail *readFilterExactTail
+}
+
+type readFilterExactTail struct {
+	// Only these slice headers are copied; payloads belong to the term's values.
+	values [][]byte
+	// Only large groups of out-of-line keys need hashing. Short keys retain
+	// binary search so ordinary IN construction does not pay for a hash table.
+	// Keys alias the descriptor's owned, immutable payloads, never caller/cache
+	// buffers. Both this map and values are fully built before publication.
+	members map[string]struct{}
+}
+
+// ReadFilterSearch is an immutable search description for a single varlen
+// column. It lets ObjectIO execute supported PK predicates without exposing
+// its borrowed cache-backed Vector to a callback.
+type ReadFilterSearch struct {
+	oid   types.T
+	terms []readFilterSearchTerm
+}
+
+// NewReadFilterSearch creates an exact byte-membership search. It is used for
+// EQ/IN predicates and for exact tombstone PK checks.
+func NewReadFilterSearch(oid types.T, values [][]byte) *ReadFilterSearch {
+	switch oid {
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
+		types.T_json, types.T_blob, types.T_text, types.T_array_float32,
+		types.T_array_float64, types.T_datalink:
+	default:
+		return nil
+	}
+	return newReadFilterSearch(oid, readFilterSearchTerm{
+		kind:   readFilterSearchExact,
+		values: values,
+	})
+}
+
+// The remaining constructors are deliberately limited to varchar. MatrixOne's
+// hidden compound primary key is varchar; keeping this boundary avoids changing
+// predicate support for unrelated logical types.
+func NewReadFilterPrefixSearch(oid types.T, values [][]byte) *ReadFilterSearch {
+	if oid != types.T_varchar {
+		return nil
+	}
+	return newReadFilterSearch(oid, readFilterSearchTerm{
+		kind:   readFilterSearchPrefix,
+		values: values,
+	})
+}
+
+func NewReadFilterLessSearch(oid types.T, bound []byte, closed bool) *ReadFilterSearch {
+	if oid != types.T_varchar {
+		return nil
+	}
+	return newReadFilterSearch(oid, readFilterSearchTerm{
+		kind:   readFilterSearchLess,
+		ub:     bound,
+		closed: closed,
+	})
+}
+
+func NewReadFilterGreaterSearch(oid types.T, bound []byte, closed bool) *ReadFilterSearch {
+	if oid != types.T_varchar {
+		return nil
+	}
+	return newReadFilterSearch(oid, readFilterSearchTerm{
+		kind:   readFilterSearchGreater,
+		lb:     bound,
+		closed: closed,
+	})
+}
+
+func NewReadFilterBetweenSearch(oid types.T, lb, ub []byte, hint uint8) *ReadFilterSearch {
+	if oid != types.T_varchar || hint > 3 {
+		return nil
+	}
+	return newReadFilterSearch(oid, readFilterSearchTerm{
+		kind: readFilterSearchBetween,
+		lb:   lb,
+		ub:   ub,
+		hint: hint,
+	})
+}
+
+func NewReadFilterPrefixBetweenSearch(oid types.T, lb, ub []byte, hint uint8) *ReadFilterSearch {
+	if oid != types.T_varchar || hint > 3 {
+		return nil
+	}
+	return newReadFilterSearch(oid, readFilterSearchTerm{
+		kind: readFilterSearchPrefixBetween,
+		lb:   lb,
+		ub:   ub,
+		hint: hint,
+	})
+}
+
+func newReadFilterSearch(oid types.T, term readFilterSearchTerm) *ReadFilterSearch {
+	term.lb = bytes.Clone(term.lb)
+	term.ub = bytes.Clone(term.ub)
+	if term.values != nil {
+		copied := make([][]byte, len(term.values))
+		for i := range term.values {
+			copied[i] = bytes.Clone(term.values[i])
+		}
+		slices.SortFunc(copied, bytes.Compare)
+		term.values = copied
+		if term.kind == readFilterSearchExact && len(copied) > readFilterLinearKeys {
+			tail := copied[readFilterLinearKeys:]
+			// Equal-length keys are already in the required byte order. Avoid
+			// another allocation/sort unless the length order actually differs.
+			reorder := !slices.IsSortedFunc(tail, func(a, b []byte) int {
+				return cmp.Compare(len(a), len(b))
+			})
+			if reorder {
+				tail = slices.Clone(tail)
+				// The original byte order is already correct within each length.
+				// Stable length-only sorting preserves it without rereading long
+				// common prefixes while constructing the secondary order.
+				slices.SortStableFunc(tail, func(a, b []byte) int {
+					return cmp.Compare(len(a), len(b))
+				})
+			}
+			var indexed int
+			for start := 0; start < len(tail); {
+				end := start + 1
+				for end < len(tail) && len(tail[end]) == len(tail[start]) {
+					end++
+				}
+				if end-start > readFilterLinearKeys && len(tail[start]) > types.VarlenaInlineSize {
+					indexed += end - start
+				}
+				start = end
+			}
+			if indexed > 0 || reorder {
+				term.exactTail = &readFilterExactTail{values: tail}
+			}
+			if indexed > 0 {
+				term.exactTail.members = make(map[string]struct{}, indexed)
+				for start := 0; start < len(tail); {
+					end := start + 1
+					for end < len(tail) && len(tail[end]) == len(tail[start]) {
+						end++
+					}
+					if end-start > readFilterLinearKeys && len(tail[start]) > types.VarlenaInlineSize {
+						for _, value := range tail[start:end] {
+							// newReadFilterSearch cloned these Go-heap bytes above.
+							// No writer can mutate them after this descriptor is built.
+							term.exactTail.members[util.UnsafeBytesToString(value)] = struct{}{}
+						}
+					}
+					start = end
+				}
+			}
+		}
+	}
+	return &ReadFilterSearch{oid: oid, terms: []readFilterSearchTerm{term}}
+}
+
+// CombineReadFilterSearch combines disjunct terms. All inputs must target the
+// same physical OID; nil denotes an unsupported predicate and fails closed to
+// the legacy search path at construction time.
+func CombineReadFilterSearch(searches ...*ReadFilterSearch) *ReadFilterSearch {
+	if len(searches) == 0 || searches[0] == nil {
+		return nil
+	}
+	combined := &ReadFilterSearch{oid: searches[0].oid}
+	for _, search := range searches {
+		if search == nil || search.oid != combined.oid {
+			return nil
+		}
+		combined.terms = append(combined.terms, search.terms...)
+	}
+	return combined
+}
+
 type BlockReadFilter struct {
 	HasFakePK          bool
 	Valid              bool
+	ExactMembership    bool
 	SortedSearchFunc   ReadFilterSearchFuncType
 	UnSortedSearchFunc ReadFilterSearchFuncType
+	CachedSearch       *ReadFilterSearch
+	CachedMembership   *ReadFilterMembership
 	Cleanup            func() // Cleanup function to release resources (e.g., reusableTempVec)
 }
 
@@ -98,6 +302,24 @@ type IndexReaderTopOp struct {
 	UpperBound     float64
 
 	DistHeap Float64Heap
+	// Stats is an optional query-local EXPLAIN collector. Top-K readers borrow
+	// it synchronously and must not retain it beyond the owning engine reader.
+	Stats *IndexReaderTopStats
+}
+
+// IndexReaderTopStats records bounded storage work for one vector Top-K
+// reader. It is intentionally not synchronized: an engine reader is called
+// serially, and parallel readers own independent instances.
+type IndexReaderTopStats struct {
+	BlocksRead              uint64
+	StorageFilterInputRows  uint64
+	StorageFilterOutputRows uint64
+	VectorRowsScored        uint64
+	VectorChunksRead        uint64
+	VectorChunkCacheHits    uint64
+	VectorCompressedBytes   uint64
+	VectorDecodedBytes      uint64
+	TopKOutputRows          uint64
 }
 
 type WriteOptions struct {

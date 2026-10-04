@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -57,6 +58,13 @@ type DataRetriever interface {
 	GetDataType() int8
 	GetAccountID() uint32
 	GetTableID() uint64
+	// GetToTS is the upper bound of the change range this iteration carries -- the same
+	// value UpdateWatermark persists. It is the data version an index generation built from
+	// this data reflects, so a consumer can record it as the generation's build_ts.
+	//
+	// Deliberately NOT the consumer's own transaction SnapshotTS, which is >= this and would
+	// claim coverage of changes committed after the range was collected but not applied.
+	GetToTS() types.TS
 }
 
 // In an iteration, the table's data is propagated downstream.
@@ -89,6 +97,7 @@ type IterationContext struct {
 	jobNames  []string
 	jobIDs    []uint64
 	lsn       []uint64
+	stages    []int8
 	fromTS    types.TS
 	toTS      types.TS
 }
@@ -107,16 +116,23 @@ const (
 	JobStage_Running
 )
 
+// atomicInitLifecycleVersion marks job generations handled with the invariant
+// that InitSQL effects and the Init -> Running status transition share one
+// transaction. An absent/zero value means that invariant cannot be proven after
+// a restart; this includes legacy rows and fresh jobs not yet handled durably.
+const atomicInitLifecycleVersion uint64 = 1
+
 type JobStatus struct {
-	LSN       uint64
-	Stage     int8
-	TaskID    uint64
-	From      types.TS
-	To        types.TS
-	StartAt   types.TS
-	EndAt     types.TS
-	ErrorCode int
-	ErrorMsg  string
+	LSN              uint64
+	Stage            int8
+	LifecycleVersion uint64 `json:",omitempty"`
+	TaskID           uint64
+	From             types.TS
+	To               types.TS
+	StartAt          types.TS
+	EndAt            types.TS
+	ErrorCode        int
+	ErrorMsg         string
 }
 
 type InitWatermark struct {
@@ -137,6 +153,12 @@ type ISCPTaskExecutor struct {
 	cnUUID      string
 	txnEngine   engine.Engine
 	cnTxnClient client.TxnClient
+	// rootFS is the CN's root FileService (the one that resolves the LOCAL SSD
+	// sub-service). Set by ISCPTaskExecutorFactory before Start(). Index CDC
+	// consumers that spill to disk (e.g. fulltext2's tail) read it via
+	// GetExecutorRuntime(cnUUID) to route scratch onto the fast LOCAL mount
+	// instead of the OS temp dir. May be nil (tests / no LOCAL attached).
+	rootFS fileservice.FileService
 
 	iscpLogWm       types.TS
 	prevISCPTableID uint64
@@ -159,6 +181,31 @@ type ISCPTaskExecutor struct {
 
 	running   bool
 	runningMu sync.Mutex
+
+	runtimeMu        sync.Mutex
+	fencedJobs       map[JobRuntimeKey]JobFence
+	runningConsumers map[JobRuntimeKey]map[uint64]*RunningJobConsumer
+}
+
+type JobRuntimeKey struct {
+	AccountID uint32
+	TableID   uint64
+	JobName   string
+	JobID     uint64
+}
+
+type JobFence struct {
+	ExpireAt time.Time
+}
+
+type RunningJobConsumer struct {
+	key    JobRuntimeKey
+	jobID  uint64
+	iterID uint64
+
+	cancel          context.CancelFunc
+	cancelRetriever func(error)
+	done            chan struct{}
 }
 
 // Intra-System Change Propagation Job Entry
@@ -171,8 +218,12 @@ type JobEntry struct {
 	watermark          types.TS
 	persistedWatermark types.TS
 	state              int8
+	stage              int8
 	dropAt             types.Timestamp
 	currentLSN         uint64
+	// isIndexJob marks a ConsumerType_IndexSync job, whose watermark is flushed
+	// on IndexFlushWatermarkInterval rather than the general threshold.
+	isIndexJob bool
 }
 
 type JobKey struct {
@@ -264,7 +315,7 @@ const (
 
 type RowIterator interface {
 	Next() bool
-	Row(ctx context.Context, row []any) error
+	Row(ctx context.Context, row []any, repr ValueRepr) error
 	Close()
 }
 
@@ -386,13 +437,14 @@ func (iter *atomicBatchRowIter) Next() bool {
 	return iter.iter.Next()
 }
 
-func (iter *atomicBatchRowIter) Row(ctx context.Context, row []any) error {
+func (iter *atomicBatchRowIter) Row(ctx context.Context, row []any, repr ValueRepr) error {
 	batchRow := iter.iter.Item()
 	return extractRowFromEveryVector(
 		ctx,
 		batchRow.Src,
 		batchRow.Offset,
 		row,
+		repr,
 	)
 }
 

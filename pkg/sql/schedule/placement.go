@@ -20,20 +20,27 @@ import (
 )
 
 const (
-	ReasonLocalExecType            = "local-exec-type"
-	ReasonMultiCN                  = "multi-cn"
-	ReasonNoCandidateCN            = "no-candidate-cn"
-	ReasonRequiredCurrentCN        = "required-current-cn"
-	ReasonPreferredCurrentCN       = "preferred-current-cn"
-	ReasonExcludedCurrentCN        = "excluded-current-cn"
-	ReasonCurrentCNMissingIdentity = "current-cn-missing-identity"
-	ReasonCurrentCNDraining        = "current-cn-draining"
-	ReasonCurrentCNDrained         = "current-cn-drained"
-	ReasonInvalidCurrentCNPolicy   = "invalid-current-cn-policy"
-	ReasonDroppedUnroutableCN      = "unroutable-cn"
-	ReasonDroppedDrainingCN        = "draining-cn"
-	ReasonDroppedDrainedCN         = "drained-cn"
-	ReasonDroppedDuplicateCN       = "duplicate-cn"
+	ReasonLocalExecType               = "local-exec-type"
+	ReasonMultiCN                     = "multi-cn"
+	ReasonNoCandidateCN               = "no-candidate-cn"
+	ReasonRequiredCurrentCN           = "required-current-cn"
+	ReasonPreferredCurrentCN          = "preferred-current-cn"
+	ReasonExcludedCurrentCN           = "excluded-current-cn"
+	ReasonCurrentCNMissingIdentity    = "current-cn-missing-identity"
+	ReasonCurrentCNDraining           = "current-cn-draining"
+	ReasonCurrentCNDrained            = "current-cn-drained"
+	ReasonInvalidCurrentCNPolicy      = "invalid-current-cn-policy"
+	ReasonInvalidWorkerSetPolicy      = "invalid-worker-set-policy"
+	ReasonInvalidSchedulingIntent     = "invalid-scheduling-intent"
+	ReasonMissingSelectionKey         = "missing-selection-key"
+	ReasonUnsupportedSchedulingIntent = "unsupported-scheduling-intent"
+	ReasonStrictPoolFallback          = "strict-pool-fallback"
+	ReasonRequiredCurrentOutsidePool  = "required-current-cn-outside-pool"
+	ReasonIngressConstraintConflict   = "ingress-constraint-conflicts-current-cn-policy"
+	ReasonDroppedUnroutableCN         = "unroutable-cn"
+	ReasonDroppedDrainingCN           = "draining-cn"
+	ReasonDroppedDrainedCN            = "drained-cn"
+	ReasonDroppedDuplicateCN          = "duplicate-cn"
 )
 
 type QueryExecKind uint8
@@ -84,21 +91,37 @@ func (p CurrentCNPolicy) String() string {
 type QueryRequest struct {
 	ExecKind  QueryExecKind
 	CurrentCN Worker
+	// RequireCurrentCN and IngressOnly are internal execution invariants. They
+	// are derived from coordinator-owned state and must not be treated as
+	// user-selectable scheduling policy.
+	RequireCurrentCN bool
+	IngressOnly      bool
 	// Candidates contains workers after candidate discovery and pool/label
 	// resolution. Query placement only selects from this resolved set.
-	Candidates          Workers
-	CandidateResolution CandidateResolution
-	CurrentCNPolicy     CurrentCNPolicy
-	CurrentCNFirst      bool
+	Candidates           Workers
+	CandidateResolution  CandidateResolution
+	Intent               SchedulingIntent
+	ResolvedPool         ResolvedPool
+	CurrentCNPolicy      CurrentCNPolicy
+	CurrentCNOrdinalZero bool
 }
 
 type QueryDecision struct {
-	ExecKind               QueryExecKind
-	CurrentCN              Worker
+	ExecKind  QueryExecKind
+	CurrentCN Worker
+	// These fields preserve the internal execution invariants that constrained
+	// this decision. They are deliberately separate from SchedulingIntent so a
+	// caller cannot accidentally clear a coordinator-owned safety boundary by
+	// changing a product scheduling preference.
+	RequireCurrentCN       bool
+	IngressOnly            bool
 	Workers                Workers
 	Dropped                DroppedWorkers
 	Reason                 string
 	CandidateResolution    CandidateResolution
+	Intent                 SchedulingIntent
+	ResolvedPool           ResolvedPoolDecision
+	EligibleCount          int
 	ResolvedCandidateCount int
 	CurrentCNPolicy        CurrentCNPolicy
 	Satisfied              bool
@@ -122,6 +145,105 @@ const (
 	PoolResolutionTenantLabels      PoolResolution = "tenant-labels"
 )
 
+type PoolFallbackPolicy uint8
+
+const (
+	PoolFallbackLegacyCompatible PoolFallbackPolicy = iota
+	PoolFallbackStrict
+)
+
+func (p PoolFallbackPolicy) String() string {
+	switch p {
+	case PoolFallbackLegacyCompatible:
+		return "legacy-compatible"
+	case PoolFallbackStrict:
+		return "strict"
+	default:
+		return "invalid"
+	}
+}
+
+func (p PoolFallbackPolicy) Valid() bool {
+	return p == PoolFallbackLegacyCompatible || p == PoolFallbackStrict
+}
+
+type EmptyWorkerPolicy uint8
+
+const (
+	EmptyWorkerLocalFallback EmptyWorkerPolicy = iota
+	EmptyWorkerFail
+)
+
+func (p EmptyWorkerPolicy) String() string {
+	switch p {
+	case EmptyWorkerLocalFallback:
+		return "local-fallback"
+	case EmptyWorkerFail:
+		return "fail"
+	default:
+		return "invalid"
+	}
+}
+
+func (p EmptyWorkerPolicy) Valid() bool {
+	return p == EmptyWorkerLocalFallback || p == EmptyWorkerFail
+}
+
+type WorkerSetMode uint8
+
+const (
+	WorkerSetAll WorkerSetMode = iota
+	WorkerSetMax
+)
+
+func (m WorkerSetMode) String() string {
+	switch m {
+	case WorkerSetAll:
+		return "all"
+	case WorkerSetMax:
+		return "max-workers"
+	default:
+		return "invalid"
+	}
+}
+
+const WorkerSelectionAlgorithmV1 = "hrw-v1"
+
+type WorkerSetPolicy struct {
+	Mode             WorkerSetMode
+	MaxWorkers       int
+	SelectionKey     string
+	AlgorithmVersion string
+}
+
+type SchedulingIntent struct {
+	Explicit          bool
+	RequestedPool     string
+	PoolFallback      PoolFallbackPolicy
+	EmptyWorkerPolicy EmptyWorkerPolicy
+	CurrentCNPolicy   CurrentCNPolicy
+	WorkerSet         WorkerSetPolicy
+}
+
+// ResolvedPool is immutable input to worker selection. Pool resolution owns
+// fallback; selection may filter or rank this set but must never widen it.
+type ResolvedPool struct {
+	RequestedIdentity string
+	Identity          string
+	Resolution        PoolResolution
+	Fallback          bool
+	FallbackReason    string
+	Workers           Workers
+}
+
+type ResolvedPoolDecision struct {
+	RequestedIdentity string
+	Identity          string
+	Resolution        PoolResolution
+	Fallback          bool
+	FallbackReason    string
+}
+
 // CandidateResolution describes the boundary before worker selection. The
 // legacy engine adapter currently performs discovery and pool/label filtering
 // together; making that explicit prevents selection from depending directly on
@@ -136,45 +258,118 @@ func DecideQueryPlacement(req QueryRequest) QueryDecision {
 	if !req.CurrentCNPolicy.Valid() {
 		return queryDecision(req, nil, nil, ReasonInvalidCurrentCNPolicy, false)
 	}
+	if req.IngressOnly {
+		req.RequireCurrentCN = true
+	}
+	if req.RequireCurrentCN && req.CurrentCNPolicy == CurrentCNExcluded {
+		// The internal invariant is coordinator-owned, but it must not silently
+		// override an already materialized exclusion. Reject before discovery or
+		// any remote execution can occur.
+		return queryDecision(req, nil, nil, ReasonIngressConstraintConflict, false)
+	}
+	if req.RequireCurrentCN {
+		// A writable transaction workspace requires the ingress CN to
+		// participate so its uncommitted state remains visible. LOAD DATA LOCAL
+		// is stronger and is handled below as ingress-only execution.
+		req.CurrentCNPolicy = CurrentCNRequired
+	}
+	if reason := ValidateSchedulingIntent(req.Intent); reason != "" {
+		return queryDecision(req, nil, nil, reason, false)
+	}
+	if req.Intent.PoolFallback == PoolFallbackStrict && req.ResolvedPool.Fallback {
+		return queryDecision(req, nil, nil, ReasonStrictPoolFallback, false)
+	}
+	if req.IngressOnly {
+		return decideIngressOnlyPlacement(req)
+	}
 	if req.ExecKind == QueryExecTP || req.ExecKind == QueryExecAPOneCN {
+		// A max-worker policy is an upper bound, so a local query using one
+		// worker satisfies every positive cap. Strict pool intent has already
+		// rejected a compatibility fallback above. Treating either policy as
+		// unsupported here makes the session unusable after SET because even
+		// local control statements pass through query placement.
 		return decideLocalQueryPlacement(req)
 	}
 
-	workers, dropped := selectEligibleCandidateWorkers(req.Candidates)
+	resolved := resolvedWorkers(req)
 	currentRejectReason, currentRejected := rejectedCurrentWorkerReason(req.CurrentCN)
-	if currentRejected {
-		workers = removeCurrentWorker(workers, req.CurrentCN)
+	resolvedCurrentStateChecked := false
+	if req.CurrentCNPolicy == CurrentCNRequired && !currentRejected {
+		currentRejectReason, currentRejected = rejectedIngressWorkerReason(req.CurrentCN, resolved)
+		resolvedCurrentStateChecked = true
+	}
+	if req.RequireCurrentCN {
+		// Candidate de-duplication treats either a repeated service ID or a
+		// repeated address as the same endpoint. Put the exact ingress identity
+		// first so an address alias cannot make the result depend on discovery
+		// order and discard the authoritative service-ID match.
+		resolved = prioritizeIngressCandidate(resolved, req.CurrentCN)
+	}
+	workers, dropped := selectEligibleCandidateWorkers(resolved)
+	eligibleCount := len(workers)
+	makeDecision := func(decisionWorkers Workers, reason string, satisfied bool) QueryDecision {
+		decision := queryDecision(req, decisionWorkers, dropped, reason, satisfied)
+		decision.EligibleCount = eligibleCount
+		return decision
 	}
 	if req.CurrentCNPolicy == CurrentCNRequired && !hasWorkerIdentity(req.CurrentCN) {
-		return queryDecision(req, workers, dropped, ReasonCurrentCNMissingIdentity, false)
+		return makeDecision(workers, ReasonCurrentCNMissingIdentity, false)
 	}
 	if req.CurrentCNPolicy == CurrentCNRequired && currentRejected {
-		return queryDecision(req, workers, dropped, currentRejectReason, false)
+		return makeDecision(workers, currentRejectReason, false)
+	}
+	if req.RequireCurrentCN && hasAuthoritativeResolvedPool(req) {
+		// Internal ingress ownership requires positive membership proof from every
+		// authoritative resolution, including an explicitly empty result or one
+		// whose candidates were all filtered as runtime-ineligible.
+		var found bool
+		workers, dropped, found = canonicalizeIngressWorker(workers, dropped, req.CurrentCN)
+		eligibleCount = len(workers)
+		if !found {
+			return makeDecision(nil, ReasonRequiredCurrentOutsidePool, false)
+		}
+	}
+	if currentRejected {
+		workers = removeCurrentWorker(workers, req.CurrentCN)
+		eligibleCount = len(workers)
 	}
 	if req.CurrentCNPolicy == CurrentCNExcluded {
 		if !hasWorkerIdentity(req.CurrentCN) {
-			return queryDecision(req, workers, dropped, ReasonCurrentCNMissingIdentity, false)
+			return makeDecision(workers, ReasonCurrentCNMissingIdentity, false)
 		}
 		workers = removeCurrentWorker(workers, req.CurrentCN)
+		eligibleCount = len(workers)
 		if len(workers) == 0 {
-			return queryDecision(req, workers, dropped, ReasonExcludedCurrentCN, false)
+			return makeDecision(workers, ReasonExcludedCurrentCN, false)
 		}
-		return queryDecision(req, workers, dropped, ReasonExcludedCurrentCN, true)
+		selected, reason, ok := selectWorkerSubset(req.Intent.WorkerSet, workers, nil)
+		if !ok {
+			return makeDecision(nil, reason, false)
+		}
+		return makeDecision(selected, ReasonExcludedCurrentCN, true)
 	}
 
 	reason := ReasonMultiCN
 	if len(workers) == 0 {
+		if !currentRejected && !resolvedCurrentStateChecked {
+			currentRejectReason, currentRejected = rejectedIngressWorkerReason(req.CurrentCN, resolved)
+		}
 		if currentRejected {
-			return queryDecision(req, workers, dropped, currentRejectReason, false)
+			return makeDecision(workers, currentRejectReason, false)
+		}
+		if req.Intent.EmptyWorkerPolicy == EmptyWorkerFail {
+			return makeDecision(nil, ReasonNoCandidateCN, false)
 		}
 		workers = ensureCurrentWorker(workers, req.CurrentCN)
 		reason = ReasonNoCandidateCN
-		return queryDecision(req, workers, dropped, reason, len(workers) > 0)
+		return makeDecision(workers, reason, len(workers) > 0)
 	}
 
 	switch req.CurrentCNPolicy {
 	case CurrentCNRequired:
-		workers = ensureCurrentWorker(workers, req.CurrentCN)
+		if !containsWorker(workers, req.CurrentCN) {
+			return makeDecision(nil, ReasonRequiredCurrentOutsidePool, false)
+		}
 		reason = ReasonRequiredCurrentCN
 	case CurrentCNPreferred:
 		if !currentRejected {
@@ -186,7 +381,301 @@ func DecideQueryPlacement(req QueryRequest) QueryDecision {
 			reason = ReasonPreferredCurrentCN
 		}
 	}
-	return queryDecision(req, workers, dropped, reason, true)
+	var pinned *Worker
+	if req.CurrentCNPolicy == CurrentCNRequired {
+		pinned = &req.CurrentCN
+	}
+	selected, selectionReason, ok := selectWorkerSubset(req.Intent.WorkerSet, workers, pinned)
+	if !ok {
+		return makeDecision(nil, selectionReason, false)
+	}
+	if req.CurrentCNPolicy == CurrentCNRequired && !containsWorker(selected, req.CurrentCN) {
+		return makeDecision(nil, ReasonRequiredCurrentOutsidePool, false)
+	}
+	return makeDecision(selected, reason, true)
+}
+
+// decideIngressOnlyPlacement is the fail-closed path for execution whose
+// input stream belongs exclusively to the ingress CN. An authoritative pool
+// is never widened to make the request fit: it must prove ingress membership,
+// while the selected topology remains local-only.
+func decideIngressOnlyPlacement(req QueryRequest) QueryDecision {
+	if !hasWorkerIdentity(req.CurrentCN) {
+		return queryDecision(req, nil, nil, ReasonCurrentCNMissingIdentity, false)
+	}
+	if !hasAuthoritativeResolvedPool(req) {
+		if reason, rejected := rejectedCurrentWorkerReason(req.CurrentCN); rejected {
+			return queryDecision(req, nil, nil, reason, false)
+		}
+		return queryDecision(req, Workers{req.CurrentCN}, nil, ReasonRequiredCurrentCN, true)
+	}
+
+	resolved := prioritizeIngressCandidate(resolvedWorkers(req), req.CurrentCN)
+	currentRejectReason, currentRejected := rejectedIngressWorkerReason(req.CurrentCN, resolved)
+	workers, dropped := selectEligibleCandidateWorkers(resolved)
+	var found bool
+	workers, dropped, found = canonicalizeIngressWorker(workers, dropped, req.CurrentCN)
+	decision := func(selected Workers, reason string, satisfied bool) QueryDecision {
+		result := queryDecision(req, selected, dropped, reason, satisfied)
+		result.EligibleCount = len(workers)
+		return result
+	}
+	if currentRejected {
+		return decision(nil, currentRejectReason, false)
+	}
+	// Candidate discovery is intentionally skipped for the ordinary ingress
+	// path. An explicit resolved pool, however, is authoritative and must prove
+	// ingress membership before we return a local decision.
+	if len(workers) > 0 && found {
+		return decision(Workers{req.CurrentCN}, ReasonRequiredCurrentCN, true)
+	}
+	if len(workers) > 0 {
+		return decision(nil, ReasonRequiredCurrentOutsidePool, false)
+	}
+	return decision(nil, ReasonNoCandidateCN, false)
+}
+
+// prioritizeIngressCandidate makes service-ID-based ingress proof independent
+// of candidate order. It does not mutate the resolved pool, whose worker slice
+// is immutable input to placement.
+func prioritizeIngressCandidate(workers Workers, ingress Worker) Workers {
+	match := ingressCandidateIndex(workers, ingress)
+	if match <= 0 {
+		return workers
+	}
+	prioritized := make(Workers, 0, len(workers))
+	prioritized = append(prioritized, workers[match])
+	prioritized = append(prioritized, workers[:match]...)
+	prioritized = append(prioritized, workers[match+1:]...)
+	return prioritized
+}
+
+// canonicalizeIngressWorker proves internal ingress ownership with service ID
+// when both sides have one, falling back to address only for legacy identities.
+// It then replaces discovery aliases with the actual ingress route and drops
+// any duplicate alias so later subset selection cannot pin the wrong worker.
+func canonicalizeIngressWorker(
+	workers Workers,
+	dropped DroppedWorkers,
+	ingress Worker,
+) (Workers, DroppedWorkers, bool) {
+	match := ingressCandidateIndex(workers, ingress)
+	if match < 0 {
+		return workers, dropped, false
+	}
+
+	canonical := workers[match]
+	if ingress.ID != "" {
+		canonical.ID = ingress.ID
+	}
+	if ingress.Addr != "" {
+		canonical.Addr = ingress.Addr
+	}
+	canonical.Route = WorkerRouteLocal
+	workers[match] = canonical
+	next := 0
+	for i, worker := range workers {
+		if i != match && sameWorker(worker, canonical) {
+			dropped = append(dropped, DroppedWorker{
+				Worker: worker,
+				Reason: ReasonDroppedDuplicateCN,
+			})
+			continue
+		}
+		workers[next] = worker
+		next++
+	}
+	clear(workers[next:])
+	return workers[:next], dropped, true
+}
+
+func ingressCandidateIndex(workers Workers, ingress Worker) int {
+	if ingress.ID != "" {
+		for i := range workers {
+			if workers[i].ID == ingress.ID {
+				return i
+			}
+		}
+	}
+	if ingress.Addr == "" {
+		return -1
+	}
+	for i := range workers {
+		if (ingress.ID == "" || workers[i].ID == "") &&
+			workers[i].Addr == ingress.Addr {
+			return i
+		}
+	}
+	return -1
+}
+
+func hasAuthoritativeResolvedPool(req QueryRequest) bool {
+	// Candidates is already the output of the discovery+pool boundary. A
+	// non-nil empty slice is therefore an explicit empty resolution and must
+	// not be treated as "no resolution" (which would silently fall back local).
+	if req.Candidates != nil {
+		return true
+	}
+	if req.ResolvedPool.Workers != nil {
+		return true
+	}
+	resolution := req.ResolvedPool.Resolution
+	if resolution == "" {
+		resolution = req.CandidateResolution.PoolResolution
+	}
+	return resolution != "" &&
+		resolution != PoolResolutionUnspecified &&
+		resolution != PoolResolutionNotRequired
+}
+
+// ValidateSchedulingIntent checks the pure policy fields that do not require
+// candidate discovery or pool resolution. Callers may use it to fail invalid
+// requests before touching the cluster control plane.
+func ValidateSchedulingIntent(intent SchedulingIntent) string {
+	if !intent.CurrentCNPolicy.Valid() {
+		return ReasonInvalidCurrentCNPolicy
+	}
+	if !intent.PoolFallback.Valid() || !intent.EmptyWorkerPolicy.Valid() {
+		return ReasonInvalidSchedulingIntent
+	}
+	return validateWorkerSetPolicy(intent.WorkerSet, false)
+}
+
+func resolvedWorkers(req QueryRequest) Workers {
+	if req.ResolvedPool.Workers != nil {
+		return req.ResolvedPool.Workers
+	}
+	return req.Candidates
+}
+
+func selectWorkerSubset(policy WorkerSetPolicy, workers Workers, pinned *Worker) (Workers, string, bool) {
+	if reason := validateWorkerSetPolicy(policy, true); reason != "" {
+		return nil, reason, false
+	}
+	switch policy.Mode {
+	case WorkerSetAll:
+		return workers, "", true
+	case WorkerSetMax:
+		if policy.MaxWorkers >= len(workers) {
+			return workers, "", true
+		}
+		var pinnedWorker Worker
+		if pinned != nil {
+			for _, worker := range workers {
+				if sameWorker(worker, *pinned) {
+					pinnedWorker = worker
+					break
+				}
+			}
+		}
+		type rankedWorker struct {
+			index int
+			score uint64
+		}
+		ranked := make([]rankedWorker, 0, len(workers))
+		for i := range workers {
+			if pinned != nil && sameWorker(workers[i], *pinned) {
+				continue
+			}
+			ranked = append(ranked, rankedWorker{
+				index: i,
+				score: stableHRWWorkerScore(policy.SelectionKey, workers[i]),
+			})
+		}
+		slices.SortFunc(ranked, func(a, b rankedWorker) int {
+			if n := cmp.Compare(b.score, a.score); n != 0 {
+				return n
+			}
+			return compareWorkerIdentity(workers[a.index], workers[b.index])
+		})
+		selected := make(Workers, 0, policy.MaxWorkers)
+		if pinned != nil {
+			selected = append(selected, pinnedWorker)
+		}
+		for i := 0; len(selected) < policy.MaxWorkers; i++ {
+			selected = append(selected, workers[ranked[i].index])
+		}
+		return selected, "", true
+	default:
+		return nil, ReasonInvalidWorkerSetPolicy, false
+	}
+}
+
+func validateWorkerSetPolicy(policy WorkerSetPolicy, requireSelectionKey bool) string {
+	switch policy.Mode {
+	case WorkerSetAll:
+		if policy.MaxWorkers != 0 || policy.SelectionKey != "" || policy.AlgorithmVersion != "" {
+			return ReasonInvalidWorkerSetPolicy
+		}
+	case WorkerSetMax:
+		if policy.MaxWorkers <= 0 {
+			return ReasonInvalidWorkerSetPolicy
+		}
+		if requireSelectionKey && policy.SelectionKey == "" {
+			return ReasonMissingSelectionKey
+		}
+		if policy.AlgorithmVersion != "" && policy.AlgorithmVersion != WorkerSelectionAlgorithmV1 {
+			return ReasonInvalidWorkerSetPolicy
+		}
+	default:
+		return ReasonInvalidWorkerSetPolicy
+	}
+	return ""
+}
+
+// stableHRWScore is FNV-1a with length-delimited fields. Its byte-level
+// definition is deliberately local and versioned so Go hash seed changes can
+// never reshuffle a statement retry.
+func stableHRWScore(key, identity string) uint64 {
+	h := stableFNV64(14695981039346656037)
+	h.writeField(WorkerSelectionAlgorithmV1)
+	h.writeField(key)
+	h.writeField(identity)
+	return uint64(h)
+}
+
+func stableHRWWorkerScore(key string, worker Worker) uint64 {
+	h := stableFNV64(14695981039346656037)
+	h.writeField(WorkerSelectionAlgorithmV1)
+	h.writeField(key)
+	if worker.ID != "" {
+		h.writeCompositeField("id:", worker.ID)
+	} else {
+		h.writeCompositeField("addr:", worker.Addr)
+	}
+	return uint64(h)
+}
+
+type stableFNV64 uint64
+
+func (h *stableFNV64) writeField(value string) {
+	h.writeLength(len(value))
+	h.writeBytes(value)
+}
+
+func (h *stableFNV64) writeCompositeField(prefix, value string) {
+	h.writeLength(len(prefix) + len(value))
+	h.writeBytes(prefix)
+	h.writeBytes(value)
+}
+
+func (h *stableFNV64) writeLength(value int) {
+	length := uint64(value)
+	for i := 0; i < 8; i++ {
+		h.writeByte(byte(length))
+		length >>= 8
+	}
+}
+
+func (h *stableFNV64) writeBytes(value string) {
+	for i := 0; i < len(value); i++ {
+		h.writeByte(value[i])
+	}
+}
+
+func (h *stableFNV64) writeByte(value byte) {
+	*h ^= stableFNV64(value)
+	*h *= 1099511628211
 }
 
 func decideLocalQueryPlacement(req QueryRequest) QueryDecision {
@@ -222,22 +711,25 @@ func queryDecision(req QueryRequest, workers Workers, dropped DroppedWorkers, re
 	return QueryDecision{
 		ExecKind:               req.ExecKind,
 		CurrentCN:              req.CurrentCN,
+		RequireCurrentCN:       req.RequireCurrentCN,
+		IngressOnly:            req.IngressOnly,
 		Workers:                workers,
 		Dropped:                cloneDroppedWorkers(dropped),
 		Reason:                 reason,
 		CandidateResolution:    resolution,
-		ResolvedCandidateCount: len(req.Candidates),
+		Intent:                 req.Intent,
+		ResolvedPool:           resolvedPoolDecision(req),
+		ResolvedCandidateCount: len(resolvedWorkers(req)),
 		CurrentCNPolicy:        req.CurrentCNPolicy,
 		Satisfied:              satisfied,
 	}
 }
 
 func orderDecisionWorkers(req QueryRequest, workers Workers, reason string) Workers {
-	workers = cloneWorkers(workers)
 	if req.ExecKind != QueryExecAPMultiCN || len(workers) < 2 {
 		return workers
 	}
-	if reason == ReasonPreferredCurrentCN || (reason == ReasonRequiredCurrentCN && req.CurrentCNFirst) {
+	if reason == ReasonPreferredCurrentCN || (reason == ReasonRequiredCurrentCN && req.CurrentCNOrdinalZero) {
 		if currentFirst, ok := preferCurrentWorker(workers, req.CurrentCN); ok {
 			sortWorkersByAddr(currentFirst[1:])
 			return currentFirst
@@ -249,8 +741,44 @@ func orderDecisionWorkers(req QueryRequest, workers Workers, reason string) Work
 
 func sortWorkersByAddr(workers Workers) {
 	slices.SortFunc(workers, func(a, b Worker) int {
+		if n := compareWorkerIdentity(a, b); n != 0 {
+			return n
+		}
 		return cmp.Compare(a.Addr, b.Addr)
 	})
+}
+
+func compareWorkerIdentity(a, b Worker) int {
+	switch {
+	case a.ID == "" && b.ID != "":
+		return -1
+	case a.ID != "" && b.ID == "":
+		return 1
+	case a.ID != "":
+		return cmp.Compare(a.ID, b.ID)
+	default:
+		return cmp.Compare(a.Addr, b.Addr)
+	}
+}
+
+func resolvedPoolDecision(req QueryRequest) ResolvedPoolDecision {
+	pool := req.ResolvedPool
+	if pool.RequestedIdentity == "" {
+		pool.RequestedIdentity = req.Intent.RequestedPool
+	}
+	if pool.Resolution == "" {
+		pool.Resolution = req.CandidateResolution.PoolResolution
+		if pool.Resolution == "" {
+			pool.Resolution = PoolResolutionUnspecified
+		}
+	}
+	return ResolvedPoolDecision{
+		RequestedIdentity: pool.RequestedIdentity,
+		Identity:          pool.Identity,
+		Resolution:        pool.Resolution,
+		Fallback:          pool.Fallback,
+		FallbackReason:    pool.FallbackReason,
+	}
 }
 
 func ensureCurrentWorker(workers Workers, current Worker) Workers {
@@ -307,17 +835,38 @@ func selectEligibleCandidateWorkers(workers Workers) (Workers, DroppedWorkers) {
 		return nil, nil
 	}
 	selected := make(Workers, 0, len(workers))
+	var seenIDs, seenAddrs map[string]struct{}
+	if len(workers) >= 16 {
+		seenIDs = make(map[string]struct{}, len(workers))
+		seenAddrs = make(map[string]struct{}, len(workers))
+	}
 	var dropped DroppedWorkers
 	for _, worker := range workers {
 		if reason, ok := workerDropReason(worker); ok {
 			dropped = append(dropped, DroppedWorker{Worker: worker, Reason: reason})
 			continue
 		}
-		if containsWorker(selected, worker) {
+		duplicate := false
+		if seenIDs == nil {
+			duplicate = containsWorker(selected, worker)
+		} else {
+			_, duplicateID := seenIDs[worker.ID]
+			_, duplicateAddr := seenAddrs[worker.Addr]
+			duplicate = (worker.ID != "" && duplicateID) || (worker.Addr != "" && duplicateAddr)
+		}
+		if duplicate {
 			dropped = append(dropped, DroppedWorker{Worker: worker, Reason: ReasonDroppedDuplicateCN})
 			continue
 		}
 		selected = append(selected, worker)
+		if seenIDs != nil {
+			if worker.ID != "" {
+				seenIDs[worker.ID] = struct{}{}
+			}
+			if worker.Addr != "" {
+				seenAddrs[worker.Addr] = struct{}{}
+			}
+		}
 	}
 	return selected, dropped
 }
@@ -328,6 +877,9 @@ func workerDropReason(worker Worker) (string, bool) {
 		return ReasonDroppedDrainingCN, true
 	case WorkerStateDrained:
 		return ReasonDroppedDrainedCN, true
+	}
+	if !hasWorkerIdentity(worker) {
+		return ReasonDroppedUnroutableCN, true
 	}
 	if !hasWorkerRoute(worker) {
 		return ReasonDroppedUnroutableCN, true
@@ -346,6 +898,42 @@ func rejectedCurrentWorkerReason(worker Worker) (string, bool) {
 	}
 }
 
+// rejectedIngressWorkerReason combines the in-process view with the resolved
+// candidate snapshot. A caller that has not populated CurrentCN.State must not
+// be able to re-add an explicitly draining ingress through empty-worker
+// fallback after eligibility filtering removes it.
+func rejectedIngressWorkerReason(current Worker, resolved Workers) (string, bool) {
+	if reason, rejected := rejectedCurrentWorkerReason(current); rejected {
+		return reason, true
+	}
+	if current.ID != "" {
+		foundExact := false
+		for _, worker := range resolved {
+			if worker.ID != current.ID {
+				continue
+			}
+			foundExact = true
+			if reason, rejected := rejectedCurrentWorkerReason(worker); rejected {
+				return reason, true
+			}
+		}
+		if foundExact {
+			return "", false
+		}
+	}
+	if current.Addr == "" {
+		return "", false
+	}
+	for _, worker := range resolved {
+		if (current.ID == "" || worker.ID == "") && worker.Addr == current.Addr {
+			if reason, rejected := rejectedCurrentWorkerReason(worker); rejected {
+				return reason, true
+			}
+		}
+	}
+	return "", false
+}
+
 func containsWorker(workers Workers, target Worker) bool {
 	for _, worker := range workers {
 		if sameWorker(worker, target) {
@@ -360,7 +948,16 @@ func hasWorkerIdentity(worker Worker) bool {
 }
 
 func hasWorkerRoute(worker Worker) bool {
-	return worker.Addr != ""
+	switch worker.Route {
+	case WorkerRouteLocal:
+		return true
+	case WorkerRouteRemote:
+		return worker.Addr != ""
+	case WorkerRouteUnknown:
+		return worker.Addr != ""
+	default:
+		return false
+	}
 }
 
 func sameWorker(worker Worker, current Worker) bool {

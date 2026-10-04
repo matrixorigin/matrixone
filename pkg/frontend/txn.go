@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,6 +27,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	txnclient "github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -66,7 +69,9 @@ func rollbackTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) error {
 		logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, execErr)
 		return execErr
 	}
-	execCtx.txnOpt.byRollback = execCtx.txnOpt.byRollback || isErrorRollbackWholeTxn(execErr)
+	execCtx.txnOpt.byRollback = execCtx.txnOpt.byRollback ||
+		isErrorRollbackWholeTxn(execErr) ||
+		sessionRollsBackTxnOnError(ses, execErr)
 	txnErr := ses.GetTxnHandler().Rollback(execCtx)
 	if txnErr != nil {
 		logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, txnErr)
@@ -78,6 +83,60 @@ func rollbackTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) error {
 
 func isTxnCommitResultUnknown(err error) bool {
 	return moerr.IsMoErrCode(err, moerr.ErrTxnUnknown)
+}
+
+// requestContextErr reports cancellation of the request that owns the
+// statement.  A request can be cancelled when the client disconnects while
+// execution is still finishing.  In that case the statement may have
+// returned successfully, but committing it would make a cancelled DML
+// visible after the client has already received an error.
+func requestContextErr(execCtx *ExecCtx) error {
+	if execCtx == nil || execCtx.reqCtx == nil {
+		return nil
+	}
+	err := execCtx.reqCtx.Err()
+	if err == nil {
+		return nil
+	}
+	// KILL QUERY (and KILL CONNECTION) deliberately cancel the request
+	// context while keeping the connection available for the former.  Their
+	// existing protocol contract is to finish a read-only query without
+	// turning it into a transaction error.  A client disconnect first marks
+	// the routine as closing in beginClose, so a cancelled DML remains fenced.
+	if errors.Is(err, context.Canceled) && isReadOnlyTransaction(execCtx) {
+		if ses, ok := execCtx.ses.(*Session); ok {
+			if rt := ses.getRoutine(); rt != nil && !rt.closing.Load() {
+				return nil
+			}
+		}
+	}
+	return err
+}
+
+// isReadOnlyTransaction reports the write state that has actually reached the
+// transaction workspace.  The statement kind alone is insufficient: DQL
+// functions such as nextval and setval execute derived updates in the same
+// transaction.  Treat a missing transaction as read-only because there is no
+// transaction state that can be committed; fail closed for an active operator
+// with a missing workspace.
+func isReadOnlyTransaction(execCtx *ExecCtx) bool {
+	if execCtx == nil || execCtx.ses == nil {
+		return false
+	}
+	txnHandler := execCtx.ses.GetTxnHandler()
+	if txnHandler == nil {
+		return false
+	}
+	txnOp := txnHandler.GetTxn()
+	return isReadOnlyTxnOp(txnOp)
+}
+
+func isReadOnlyTxnOp(txnOp TxnOperator) bool {
+	if txnOp == nil {
+		return true
+	}
+	workspace := txnOp.GetWorkspace()
+	return workspace != nil && workspace.Readonly()
 }
 
 // execution succeeds during the transaction. commit the transaction
@@ -112,6 +171,12 @@ func finishTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) (err error) {
 	}
 
 	if execCtx.txnOpt.byCommit {
+		if execErr == nil {
+			execErr = requestContextErr(execCtx)
+		}
+		if execErr != nil {
+			return rollbackTxnFunc(ses, execErr, execCtx)
+		}
 		//commit the txn by the COMMIT statement
 		err = ses.GetTxnHandler().Commit(execCtx)
 		if err != nil {
@@ -128,13 +193,17 @@ func finishTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) (err error) {
 		v2.TxnUserRollbackCounter.Inc()
 	} else {
 		if execErr == nil {
-			err = commitTxnFunc(ses, execCtx)
-			if err == nil {
-				return err
+			if requestErr := requestContextErr(execCtx); requestErr != nil {
+				execErr = requestErr
+			} else {
+				err = commitTxnFunc(ses, execCtx)
+				if err == nil {
+					return err
+				}
+				// if commitTxnFunc failed, we will roll back the transaction.
+				// if commit panic, rollback below executed at the second time.
+				execErr = err
 			}
-			// if commitTxnFunc failed, we will roll back the transaction.
-			// if commit panic, rollback below executed at the second time.
-			execErr = err
 		}
 		return rollbackTxnFunc(ses, execErr, execCtx)
 	}
@@ -151,6 +220,23 @@ type FeTxnOption struct {
 	//byRollback denotes the txn rolled back by the ROLLBACK.
 	//or error types that need to roll back the whole txn.
 	byRollback bool
+	// activeTxnAtStart records whether the session already owned a transaction
+	// before the current statement entered TxnHandler.Create.  SET TRANSACTION
+	// uses it to distinguish an existing user transaction from the temporary
+	// transaction created to execute the SET statement itself.
+	activeTxnAtStart      bool
+	activeTxnAtStartKnown bool
+	// forcePessimisticObjectLifecycle marks lifecycle statements whose owning
+	// transaction must be both pessimistic and RC.
+	forcePessimisticObjectLifecycle bool
+	// forcePessimisticLifecycleMode marks fixed-snapshot-compatible lifecycle
+	// statements. They need real pessimistic locks but retain the transaction's
+	// selected isolation level (including an existing SI snapshot).
+	forcePessimisticLifecycleMode bool
+	// implicitCommitBefore marks a top-level implicit-commit DDL statement. Its old
+	// transaction has already been committed before authorization/planning;
+	// the transaction created for the statement must be finalized separately.
+	implicitCommitBefore bool
 }
 
 func (opt *FeTxnOption) Close() {
@@ -158,6 +244,11 @@ func (opt *FeTxnOption) Close() {
 	opt.autoCommit = true
 	opt.byCommit = false
 	opt.byRollback = false
+	opt.activeTxnAtStart = false
+	opt.activeTxnAtStartKnown = false
+	opt.forcePessimisticObjectLifecycle = false
+	opt.forcePessimisticLifecycleMode = false
+	opt.implicitCommitBefore = false
 }
 
 const (
@@ -199,9 +290,27 @@ type TxnHandler struct {
 
 	// footPrints for debugging, shared across all transactions in this session
 	footPrints txnclient.FootPrints
+
+	// Session isolation applies to every subsequently created transaction in
+	// this session. Next isolation, when present, overrides it for exactly one
+	// successfully created transaction generation.
+	sessionTxnIsolation    pbtxn.TxnIsolation
+	hasSessionTxnIsolation bool
+	nextTxnIsolation       pbtxn.TxnIsolation
+	hasNextTxnIsolation    bool
+
+	// lineageOwnerLifecycleValidation is set when an explicit user transaction
+	// mutates data-branch owner catalogs. Such a transaction cannot take the
+	// cluster-wide lifecycle row before doing its work: the client controls how
+	// long it remains open. Commit instead fast-fails on the row, performs the SI
+	// validation write, and immediately commits while holding the row.
+	lineageOwnerLifecycleValidation bool
 }
 
 func InitTxnHandler(service string, storage engine.Engine, connCtx context.Context, txnOp TxnOperator) *TxnHandler {
+	if connCtx == nil {
+		connCtx = context.Background()
+	}
 	ret := &TxnHandler{
 		service:      service,
 		storage:      &engine.EntireEngine{Engine: storage},
@@ -229,6 +338,175 @@ func (th *TxnHandler) Close() {
 	th.shareTxn = false
 	th.serverStatus = defaultServerStatus
 	th.optionBits = defaultOptionBits
+	th.hasSessionTxnIsolation = false
+	th.hasNextTxnIsolation = false
+	th.lineageOwnerLifecycleValidation = false
+}
+
+func txnIsolationFromSystemValue(ctx context.Context, value interface{}) (pbtxn.TxnIsolation, error) {
+	text, ok := value.(string)
+	if !ok {
+		return 0, moerr.NewInvalidInputf(ctx, "invalid transaction isolation level %v", value)
+	}
+
+	switch strings.ToUpper(text) {
+	case "READ-COMMITTED":
+		return pbtxn.TxnIsolation_RC, nil
+	case "REPEATABLE-READ":
+		return pbtxn.TxnIsolation_SI, nil
+	default:
+		return 0, moerr.NewNotSupportedf(ctx, "transaction isolation level %s is not supported", text)
+	}
+}
+
+func txnIsolationToSystemValue(isolation pbtxn.TxnIsolation) (string, bool) {
+	switch isolation {
+	case pbtxn.TxnIsolation_RC:
+		return "READ-COMMITTED", true
+	case pbtxn.TxnIsolation_SI:
+		return "REPEATABLE-READ", true
+	default:
+		return "", false
+	}
+}
+
+func serviceTxnIsolationSystemValue(service string) (string, bool) {
+	value, ok := moruntime.ServiceRuntime(service).GetGlobalVariables(moruntime.TxnIsolation)
+	if !ok {
+		return "", false
+	}
+	isolation, ok := value.(pbtxn.TxnIsolation)
+	if !ok {
+		return "", false
+	}
+	return txnIsolationToSystemValue(isolation)
+}
+
+// normalizeTxnIsolationSystemValue is the upgrade read boundary. Older
+// releases accepted READ-UNCOMMITTED and SERIALIZABLE in the compatibility
+// catalog even though the txn client can execute only RC and SI. Keep new
+// writes strict, but normalize those two legacy values to the service default
+// so account sessions remain available and report the isolation they execute.
+func normalizeTxnIsolationSystemValue(
+	ctx context.Context,
+	service string,
+	value interface{},
+) (string, pbtxn.TxnIsolation, error) {
+	if isolation, err := txnIsolationFromSystemValue(ctx, value); err == nil {
+		normalized, _ := txnIsolationToSystemValue(isolation)
+		return normalized, isolation, nil
+	}
+
+	text, ok := value.(string)
+	if !ok {
+		return "", 0, moerr.NewInvalidInputf(ctx, "invalid transaction isolation level %v", value)
+	}
+	switch strings.ToUpper(text) {
+	case "READ-UNCOMMITTED", "SERIALIZABLE":
+		if normalized, ok := serviceTxnIsolationSystemValue(service); ok {
+			isolation, _ := txnIsolationFromSystemValue(ctx, normalized)
+			return normalized, isolation, nil
+		}
+		return "REPEATABLE-READ", pbtxn.TxnIsolation_SI, nil
+	default:
+		return "", 0, moerr.NewNotSupportedf(ctx,
+			"transaction isolation level %s is not supported", text)
+	}
+}
+
+func transactionIsolationDefaultValue(
+	ctx context.Context,
+	ses *Session,
+	scope tree.TransactionScope,
+) (string, error) {
+	var value interface{}
+	var err error
+	switch scope {
+	case tree.TransactionScopeNext:
+		value, err = ses.GetSessionSysVar(transactionIsolationSystemVariable)
+	case tree.TransactionScopeSession:
+		value, err = ses.GetGlobalSysVar(transactionIsolationSystemVariable)
+	case tree.TransactionScopeGlobal:
+		if serviceValue, ok := serviceTxnIsolationSystemValue(ses.service); ok {
+			value = serviceValue
+		} else {
+			value = "REPEATABLE-READ"
+		}
+	default:
+		return "", moerr.NewInvalidInputf(ctx, "unsupported transaction scope %d", scope)
+	}
+	if err != nil {
+		return "", err
+	}
+	normalized, _, err := normalizeTxnIsolationSystemValue(ctx, ses.service, value)
+	return normalized, err
+}
+
+func transactionReadOnlyDefaultValue(
+	ctx context.Context,
+	ses *Session,
+	scope tree.TransactionScope,
+) (interface{}, error) {
+	switch scope {
+	case tree.TransactionScopeSession:
+		// SESSION/LOCAL DEFAULT inherits the account-global value, just like
+		// MySQL's transaction characteristics. It must not use the static
+		// declaration default when SET GLOBAL has changed the account value.
+		return ses.GetGlobalSysVar(transactionReadOnlySystemVariable)
+	case tree.TransactionScopeGlobal:
+		return gSysVarsDefs[transactionReadOnlySystemVariable].Default, nil
+	case tree.TransactionScopeNext:
+		return nil, moerr.NewNotSupported(ctx,
+			"transaction access mode is only supported for SESSION scope")
+	default:
+		return nil, moerr.NewInvalidInputf(ctx, "unsupported transaction scope %d", scope)
+	}
+}
+
+func (th *TxnHandler) setSessionTxnIsolation(isolation pbtxn.TxnIsolation) {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	th.sessionTxnIsolation = isolation
+	th.hasSessionTxnIsolation = true
+	th.nextTxnIsolation = 0
+	th.hasNextTxnIsolation = false
+}
+
+func (th *TxnHandler) setNextTxnIsolation(
+	ctx context.Context,
+	isolation pbtxn.TxnIsolation,
+	allowCurrentStatementTxn bool,
+) error {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	if th.inActiveTxnUnsafe() && !allowCurrentStatementTxn {
+		return moerr.NewCantChangeTxCharacteristics(ctx)
+	}
+	th.nextTxnIsolation = isolation
+	th.hasNextTxnIsolation = true
+	return nil
+}
+
+func (th *TxnHandler) nextTxnIsolationSnapshot() (pbtxn.TxnIsolation, bool) {
+	if th == nil {
+		return 0, false
+	}
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	return th.nextTxnIsolation, th.hasNextTxnIsolation
+}
+
+// txnIsolationUnsafe returns the isolation override for the transaction being
+// created and whether a next-transaction override must be consumed after New
+// successfully publishes an owned operator. The caller must hold th.mu.
+func (th *TxnHandler) txnIsolationUnsafe(allowNext bool) (pbtxn.TxnIsolation, bool, bool) {
+	if allowNext && th.hasNextTxnIsolation {
+		return th.nextTxnIsolation, true, true
+	}
+	if th.hasSessionTxnIsolation {
+		return th.sessionTxnIsolation, true, false
+	}
+	return 0, false, false
 }
 
 func (th *TxnHandler) GetConnCtx() context.Context {
@@ -248,10 +526,17 @@ func (th *TxnHandler) GetTxnCtx() context.Context {
 // since they are session-level settings that should persist across transactions.
 func (th *TxnHandler) invalidateTxnUnsafe() {
 	th.txnOp = nil
+	th.lineageOwnerLifecycleValidation = false
 	// Preserve SERVER_STATUS_AUTOCOMMIT flag, only clear SERVER_STATUS_IN_TRANS
 	clearBits(&th.serverStatus, uint32(SERVER_STATUS_IN_TRANS))
 	// Preserve autocommit option bits (OPTION_AUTOCOMMIT or OPTION_NOT_AUTOCOMMIT), only clear OPTION_BEGIN
 	clearBits(&th.optionBits, OPTION_BEGIN)
+}
+
+func (th *TxnHandler) requireLineageOwnerLifecycleValidation() {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	th.lineageOwnerLifecycleValidation = true
 }
 
 func (th *TxnHandler) InActiveTxn() bool {
@@ -276,8 +561,29 @@ func (th *TxnHandler) Create(execCtx *ExecCtx) error {
 	th.mu.Lock()
 	defer th.mu.Unlock()
 
-	// check BEGIN stmt
-	if execCtx.txnOpt.byBegin || !th.inActiveTxnUnsafe() {
+	if execCtx.txnOpt.forcePessimisticObjectLifecycle && th.inActiveTxnUnsafe() {
+		meta := th.txnOp.Txn()
+		if !meta.IsPessimistic() || meta.Isolation != pbtxn.TxnIsolation_RC {
+			return moerr.NewNotSupported(
+				execCtx.reqCtx,
+				"object lifecycle statements require an existing pessimistic RC transaction",
+			)
+		}
+	}
+	if execCtx.txnOpt.forcePessimisticLifecycleMode && th.inActiveTxnUnsafe() {
+		if !th.txnOp.Txn().IsPessimistic() {
+			return moerr.NewNotSupported(
+				execCtx.reqCtx,
+				"lifecycle statements require an existing pessimistic transaction",
+			)
+		}
+	}
+
+	// BEGIN and implicit-commit statements own a fresh transaction.  The latter
+	// has already committed any previous transaction at the statement boundary;
+	// keeping this condition here also makes the post-boundary transaction
+	// explicit and prevents TRUNCATE/RENAME from reusing a stale workspace.
+	if execCtx.txnOpt.byBegin || execCtx.txnOpt.implicitCommitBefore || !th.inActiveTxnUnsafe() {
 		//commit existed txn anyway
 		err = th.createUnsafe(execCtx)
 		if err != nil {
@@ -306,8 +612,7 @@ func (th *TxnHandler) Create(execCtx *ExecCtx) error {
 
 // starts a new txn.
 // if there is a txn existed, commit it before creating a new one.
-func (th *TxnHandler) createUnsafe(execCtx *ExecCtx) error {
-	var err error
+func (th *TxnHandler) createUnsafe(execCtx *ExecCtx) (err error) {
 	defer th.inActiveTxnUnsafe()
 	if th.shareTxn {
 		return moerr.NewInternalError(execCtx.reqCtx, "NewTxn: the share txn is not allowed to create new txn")
@@ -339,7 +644,38 @@ func (th *TxnHandler) createUnsafe(execCtx *ExecCtx) error {
 			incTransactionErrorsCounter(tenant, tenantId, metric.SQLTypeBegin)
 		}
 	}()
+	createdGeneration := false
+	defer func() {
+		panicValue := recover()
+		if !createdGeneration {
+			if panicValue != nil {
+				panic(panicValue)
+			}
+			return
+		}
+		// Create owns cleanup only for the generation it published during this
+		// call. Admission failures return before createUnsafe and therefore keep
+		// any pre-existing transaction untouched.
+		if panicValue != nil {
+			// Preserve the original panic even if rollback itself fails or panics.
+			// rollbackUnsafe invalidates the published generation on every terminal
+			// path; ExecuteFuncWithRecover prevents cleanup from replacing the cause.
+			_, _ = ExecuteFuncWithRecover(func() error {
+				return th.rollbackUnsafe(execCtx, nil)
+			})
+			if th.txnOp != nil {
+				th.invalidateTxnUnsafe()
+				execCtx.ses.SetTxnId(dumpUUID[:])
+			}
+			panic(panicValue)
+		}
+		if err != nil {
+			err = errors.Join(err, th.rollbackUnsafe(execCtx, nil))
+		}
+	}()
+
 	err = th.createTxnOpUnsafe(execCtx)
+	createdGeneration = th.txnOp != nil
 	if err != nil {
 		return err
 	}
@@ -366,7 +702,51 @@ func (th *TxnHandler) createUnsafe(execCtx *ExecCtx) error {
 	return err
 }
 
-// createTxnOpUnsafe creates a new txn operator using TxnClient. Should not be called outside txn
+func requiresPessimisticObjectLifecycleTxn(
+	ses FeSession,
+	stmt tree.Statement,
+	defaultDatabase string,
+) bool {
+	switch st := stmt.(type) {
+	case *tree.TruncateTable, *tree.CreatePitr, *tree.DropPitr, *tree.AlterPitr,
+		*tree.DropDatabase, *tree.DropView, *tree.DropSequence, *tree.AlterView,
+		*tree.AlterSequence, *tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase,
+		*tree.DataBranchDiff, *tree.DataBranchMerge, *tree.DataBranchPick:
+		return true
+	case *tree.DropTable:
+		// Ordinary DROP TABLE can resolve to a session temporary alias only after
+		// parsing. Classify every target before admission so temp-only statements
+		// do not inherit the persistent catalog protocol.
+		return len(capturePersistentDropTableTargets(ses, st, defaultDatabase)) > 0
+	case *tree.CreateView:
+		return st.Replace
+	default:
+		return false
+	}
+}
+
+// requiresPessimisticLifecycleModeTxn identifies lifecycle statements whose
+// fixed caller snapshot is part of their semantics. They must use pessimistic
+// mode so lifecycle barriers are physical locks, but forcing RC would change
+// existing SI behavior.
+func requiresPessimisticLifecycleModeTxn(
+	ses FeSession,
+	stmt tree.Statement,
+	defaultDatabase string,
+) bool {
+	switch st := stmt.(type) {
+	case *tree.AlterTable:
+		return st.Table == nil || !isSessionTemporaryTable(ses, st.Table, defaultDatabase)
+	case *tree.RenameTable,
+		*tree.CloneTable, *tree.CloneDatabase,
+		*tree.DataBranchCreateTable, *tree.DataBranchCreateDatabase:
+		return true
+	default:
+		return false
+	}
+}
+
+// createTxnOpUnsafe creates a new txn operator using TxnClient. Should not be called outside txn.
 func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 	var err, err2 error
 	var hasRecovered bool
@@ -416,23 +796,6 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 			txnclient.WithUserTxn())
 	}
 
-	if execCtx.ses.IsBackgroundSession() ||
-		execCtx.ses.DisableTrace() {
-		opts = append(opts, txnclient.WithDisableTrace(true))
-	} else {
-		varVal, err := execCtx.ses.GetSessionSysVar("disable_txn_trace")
-		if err != nil {
-			return err
-		}
-		if def, ok := gSysVarsDefs["disable_txn_trace"]; ok {
-			if boolType, ok := def.GetType().(SystemVariableBoolType); ok {
-				if boolType.IsTrue(varVal) {
-					opts = append(opts, txnclient.WithDisableTrace(true))
-				}
-			}
-		}
-	}
-
 	// Attach session-level lock_wait_timeout to the txn so the lock service
 	// uses it instead of the global config.
 	if varVal, err := execCtx.ses.GetSessionSysVar("lock_wait_timeout"); err == nil {
@@ -442,7 +805,55 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 		}
 	}
 
-	tempCtx, tempCancel := context.WithTimeoutCause(th.txnCtx, pu.SV.CreateTxnOpTimeout.Duration, moerr.CauseCreateTxnOpUnsafe)
+	// A DATA BRANCH create can use an independent background transaction for its
+	// quota check and clone. Apply the required mode to that owning transaction;
+	// shared explicit transactions keep their configured semantics and are
+	// validated by the quota checker instead.
+	selectedIsolation, hasSelectedIsolation, consumeNextTxnIsolation := th.txnIsolationUnsafe(
+		statementConsumesNextTxnIsolation(execCtx.stmt, execCtx.txnOpt.autoCommit),
+	)
+	backSes, forceBackgroundPessimistic := execCtx.ses.(*backSession)
+	if execCtx.txnOpt.forcePessimisticObjectLifecycle ||
+		(forceBackgroundPessimistic && backSes.forcePessimisticRC) {
+		// DROP, CREATE OR REPLACE VIEW, and object-scoped GRANT must
+		// participate in one catalog-row lock protocol even when the deployment
+		// default is optimistic/SI. The selector above still consumes a pending
+		// one-shot isolation setting for this transaction generation.
+		opts = append(opts,
+			txnclient.WithTxnMode(pbtxn.TxnMode_Pessimistic),
+			txnclient.WithTxnIsolation(pbtxn.TxnIsolation_RC))
+	} else if execCtx.txnOpt.forcePessimisticLifecycleMode {
+		opts = append(opts, txnclient.WithTxnMode(pbtxn.TxnMode_Pessimistic))
+		if hasSelectedIsolation {
+			opts = append(opts, txnclient.WithTxnIsolation(selectedIsolation))
+		}
+	} else if hasSelectedIsolation {
+		opts = append(opts, txnclient.WithTxnIsolation(selectedIsolation))
+	}
+
+	var (
+		tempCtx    context.Context
+		tempCancel context.CancelFunc
+	)
+	if backSes, ok := execCtx.ses.(*backSession); ok && backSes.cancelTxnCreateWithRequest {
+		if execCtx.reqCtx == nil {
+			return moerr.NewInternalErrorNoCtx("request context is required for cancellable transaction creation")
+		}
+		// The request owns this short-lived frontend control-plane transaction.
+		// Its deadline is the single timeout owner of the freshness wait; applying
+		// the ordinary CreateTxnOpTimeout here would silently shorten that owning
+		// request. The child still guarantees prompt cleanup when TxnClient.New
+		// returns before the request does.
+		tempCtx, tempCancel = context.WithCancel(execCtx.reqCtx)
+	} else {
+		// Ordinary session transaction creation intentionally keeps the long-lived
+		// transaction context and its existing operation timeout.
+		tempCtx, tempCancel = context.WithTimeoutCause(
+			th.txnCtx,
+			pu.SV.CreateTxnOpTimeout.Duration,
+			moerr.CauseCreateTxnOpUnsafe,
+		)
+	}
 	defer tempCancel()
 
 	txnClient := pu.TxnClient
@@ -458,6 +869,12 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 	}
 	if th.txnOp == nil {
 		return moerr.NewInternalError(execCtx.reqCtx, "NewTxnOperator: txnClient new a null txn")
+	}
+	if consumeNextTxnIsolation {
+		th.hasNextTxnIsolation = false
+		if ses, ok := execCtx.ses.(*Session); ok {
+			ses.markMigrationSystemVarReplayable(migrationNextTxnIsolationKey, true)
+		}
 	}
 	return err
 }
@@ -485,7 +902,7 @@ func (th *TxnHandler) Commit(execCtx *ExecCtx) error {
 				the transaction need to be committed at the end of the statement.
 	*/
 	if !bitsIsSet(th.optionBits, OPTION_BEGIN|OPTION_NOT_AUTOCOMMIT) ||
-		th.inActiveTxnUnsafe() && NeedToBeCommittedInActiveTransaction(execCtx.stmt) ||
+		th.inActiveTxnUnsafe() && needToFinishTransactionAtStatementEnd(execCtx) ||
 		execCtx.txnOpt.byCommit {
 		execCtx.ses.EnterFPrint(FPCommitBeforeCommitUnsafe)
 		defer execCtx.ses.ExitFPrint(FPCommitBeforeCommitUnsafe)
@@ -493,9 +910,49 @@ func (th *TxnHandler) Commit(execCtx *ExecCtx) error {
 		if err != nil {
 			return err
 		}
+	} else if owner := upstreamUserSession(execCtx.ses); owner != nil {
+		owner.commitTempTableStatement(
+			tempTableTxnKey(th.txnOp),
+			tempTableStatementKey(execCtx.ses, th.shareTxn),
+		)
 	}
 	//do nothing
 	return nil
+}
+
+// commitBeforeStatement ends the transaction that precedes a statement with
+// MySQL's implicit-commit-before rule.  It intentionally bypasses Commit's
+// option-bit policy: an explicit BEGIN or AUTOCOMMIT=0 must not keep the old
+// workspace alive across TRUNCATE or RENAME TABLE. The unsafe path remains the sole
+// owner of commit-result-unknown, temporary-table, and DDL-generation cleanup.
+func (th *TxnHandler) commitBeforeStatement(execCtx *ExecCtx) error {
+	if th == nil || execCtx == nil {
+		return nil
+	}
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	return th.commitUnsafe(execCtx)
+}
+
+// validateLineageOwnerLifecycleBeforeCommitUnsafe is the single terminal
+// admission point for explicit transactions that mutated data-branch owner
+// catalogs. Callers hold th.mu and proceed directly to the physical commit, so
+// a successful validation write remains in the same transaction and cannot be
+// separated from commit by another frontend operation.
+func (th *TxnHandler) validateLineageOwnerLifecycleBeforeCommitUnsafe(execCtx *ExecCtx) error {
+	if !th.lineageOwnerLifecycleValidation {
+		return nil
+	}
+	err := validateDataBranchLineageOwnerLifecycleAtCommit(
+		execCtx.reqCtx, execCtx.ses, th.txnOp,
+	)
+	if err == nil {
+		return nil
+	}
+	// Validation failure is terminal. Use the transaction cleanup context so
+	// request cancellation cannot leave the transaction or its catalog locks
+	// alive after any implicit or explicit commit path returns the error.
+	return errors.Join(err, th.rollbackUnsafe(execCtx, nil))
 }
 
 func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
@@ -522,8 +979,17 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 	}
 
 	storage := th.storage
+	commitCtx := th.txnCtx
+	// A terminal commit for a DML statement belongs to the statement request,
+	// so a client disconnect can still abort it before it becomes visible.  A
+	// read-only statement must retain the transaction context for its whole
+	// finalization: KILL QUERY cancels reqCtx by design, and that cancellation
+	// may race with Commit after the initial requestContextErr check.
+	if execCtx != nil && execCtx.reqCtx != nil && !isReadOnlyTxnOp(th.txnOp) {
+		commitCtx = execCtx.reqCtx
+	}
 	ctx2, cancel := context.WithTimeoutCause(
-		th.txnCtx,
+		commitCtx,
 		storage.Hints().CommitOrRollbackTimeout,
 		moerr.CauseCommitUnsafe,
 	)
@@ -563,15 +1029,28 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 	}
 	execCtx.ses.EnterFPrint(FPCommitUnsafeBeforeCommit)
 	defer execCtx.ses.ExitFPrint(FPCommitUnsafeBeforeCommit)
+	if err := th.validateLineageOwnerLifecycleBeforeCommitUnsafe(execCtx); err != nil {
+		return err
+	}
 	if th.txnOp != nil {
 		execCtx.ses.EnterFPrint(FPCommitUnsafeBeforeCommitWithTxn)
 		defer execCtx.ses.ExitFPrint(FPCommitUnsafeBeforeCommitWithTxn)
 		commitTs := th.txnOp.Txn().CommitTS
+		tempTxnKey := tempTableTxnKey(th.txnOp)
+		haveDDL := th.txnOp.GetWorkspace().GetHaveDDL()
 		execCtx.ses.SetTxnId(th.txnOp.Txn().ID)
 		commitResultUnknown := false
 		err, hasRecovered = ExecuteFuncWithRecover(func() error {
 			return th.txnOp.Commit(ctx2)
 		})
+		// CommitTS is assigned by the transaction operator while Commit runs.
+		// Capture the final value before any failure path invalidates txnOp so
+		// the next session transaction cannot start before this commit. After a
+		// panic, retain the pre-commit value because the operator may have been
+		// left in a state that is unsafe to inspect.
+		if !hasRecovered {
+			commitTs = th.txnOp.Txn().CommitTS
+		}
 		if err != nil {
 			err = moerr.AttachCause(ctx2, err)
 			commitResultUnknown = isTxnCommitResultUnknown(err)
@@ -586,11 +1065,22 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 					err = errors.Join(err, moerr.AttachCause(ctx2, err2))
 				}
 			}
+			advanceDDLVersionAfterDiscardedTxnDDL(execCtx.ses, haveDDL)
 			if !commitResultUnknown {
 				th.invalidateTxnUnsafe()
 			}
 		}
 		execCtx.ses.updateLastCommitTS(commitTs)
+		if owner := upstreamUserSession(execCtx.ses); owner != nil {
+			if err == nil || commitResultUnknown {
+				// An unknown commit result may have persisted the physical
+				// relation. Preserve its alias so connection cleanup can still
+				// remove it; only known discarded transactions are restored.
+				owner.commitTempTableTransaction(tempTxnKey)
+			} else {
+				owner.rollbackTempTableTransaction(tempTxnKey)
+			}
+		}
 		if commitResultUnknown {
 			// ErrTxnUnknown is terminal for this frontend handle. The operator
 			// has already finalized its workspace non-destructively; retaining it
@@ -608,6 +1098,23 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 // Rollback rolls back the txn
 // the option bits decide the actual behavior
 func (th *TxnHandler) Rollback(execCtx *ExecCtx) error {
+	return th.rollback(execCtx, nil)
+}
+
+// rollbackWithContext rolls back the txn using operationCtx as the parent of
+// the storage rollback context. Normal statement rollback intentionally uses
+// the transaction context so that request cancellation cannot skip cleanup.
+func (th *TxnHandler) rollbackWithContext(
+	operationCtx context.Context,
+	execCtx *ExecCtx,
+) error {
+	return th.rollback(execCtx, operationCtx)
+}
+
+func (th *TxnHandler) rollback(
+	execCtx *ExecCtx,
+	operationCtx context.Context,
+) error {
 	execCtx.ses.EnterFPrint(FPRollback)
 	defer execCtx.ses.ExitFPrint(FPRollback)
 	var err error
@@ -623,14 +1130,14 @@ func (th *TxnHandler) Rollback(execCtx *ExecCtx) error {
 				(every error will abort the transaction.)
 	*/
 	if !bitsIsSet(th.optionBits, OPTION_BEGIN|OPTION_NOT_AUTOCOMMIT) ||
-		th.inActiveTxnUnsafe() && NeedToBeCommittedInActiveTransaction(execCtx.stmt) ||
+		th.inActiveTxnUnsafe() && needToFinishTransactionAtStatementEnd(execCtx) ||
 		execCtx.txnOpt.byRollback {
 		execCtx.ses.EnterFPrint(FPRollbackUnsafe1)
 		defer execCtx.ses.ExitFPrint(FPRollbackUnsafe1)
 		//Case1.1: autocommit && not_begin
 		//Case1.2: (not_autocommit || begin) && activeTxn && needToBeCommitted
 		//Case1.3: the error that should rollback the whole txn
-		err = th.rollbackUnsafe(execCtx)
+		err = th.rollbackUnsafe(execCtx, operationCtx)
 	} else {
 		//Case2: not ( autocommit && !begin ) && not ( activeTxn && needToBeCommitted )
 		//<==>  ( not_autocommit || begin ) && not ( activeTxn && needToBeCommitted )
@@ -639,19 +1146,142 @@ func (th *TxnHandler) Rollback(execCtx *ExecCtx) error {
 		defer execCtx.ses.ExitFPrint(FPRollbackUnsafe2)
 		//non derived statement
 		if th.txnOp != nil && !execCtx.ses.IsDerivedStmt() {
+			rollbackCtx := th.txnCtx
+			if operationCtx != nil {
+				rollbackCtx = operationCtx
+			}
 			err, hasRecovered = ExecuteFuncWithRecover(func() error {
-				return th.txnOp.GetWorkspace().RollbackLastStatement(th.txnCtx)
+				return th.txnOp.GetWorkspace().RollbackLastStatement(rollbackCtx)
 			})
 			if err != nil || hasRecovered {
-				err4 := th.rollbackUnsafe(execCtx)
+				err4 := th.rollbackUnsafe(execCtx, operationCtx)
 				return errors.Join(err, err4)
+			}
+			if owner := upstreamUserSession(execCtx.ses); owner != nil {
+				owner.rollbackTempTableStatement(
+					tempTableTxnKey(th.txnOp),
+					tempTableStatementKey(execCtx.ses, th.shareTxn),
+				)
 			}
 		}
 	}
 	return err
 }
 
-func (th *TxnHandler) rollbackUnsafe(execCtx *ExecCtx) error {
+// needToFinishTransactionAtStatementEnd reports whether the statement owns
+// the active transaction and must finish it. SET TRANSACTION changes future
+// transaction characteristics, so it must never commit or roll back a
+// transaction that was already active when the statement started. The
+// frontend still creates a transaction for every statement, including SET;
+// clean up that statement-owned transaction when autocommit is disabled.
+func needToFinishTransactionAtStatementEnd(execCtx *ExecCtx) bool {
+	if execCtx == nil {
+		return false
+	}
+	if execCtx.txnOpt.implicitCommitBefore {
+		return true
+	}
+	if statementContainsTransactionCharacteristic(execCtx.stmt) {
+		return execCtx.txnOpt.activeTxnAtStartKnown && !execCtx.txnOpt.activeTxnAtStart
+	}
+	// SET changes session state and must preserve an explicit transaction that
+	// was already active. The frontend still creates a temporary transaction
+	// for a standalone SET, so finish that transaction when there was no active
+	// user transaction at statement start. SET autocommit=1 is handled by
+	// TxnHandler.SetAutocommit, which commits the OFF -> ON transition directly.
+	if IsParameterModificationStatement(execCtx.stmt) {
+		return execCtx.txnOpt.activeTxnAtStartKnown && !execCtx.txnOpt.activeTxnAtStart
+	}
+	// Sequence DDL normally finishes an active user transaction. In a background
+	// executor it is nested inside an enclosing clone or restore transaction and
+	// must not finish that transaction early.
+	if execCtx.ses != nil && execCtx.ses.IsBackgroundSession() && IsCreateDropSequence(execCtx.stmt) {
+		return false
+	}
+	if NeedToBeCommittedInActiveTransaction(execCtx.stmt) {
+		return true
+	}
+	return false
+}
+
+// transactionIsolationAssignmentScope returns the transaction-characteristic
+// scope carried by a system-variable assignment. The legacy Global flag wins
+// for programmatically constructed ASTs that predate VarAssignmentExpr.TxnScope.
+func transactionIsolationAssignmentScope(
+	assign *tree.VarAssignmentExpr,
+) (tree.TransactionScope, bool) {
+	if assign == nil || !assign.System || !isTransactionIsolationSystemVariable(assign.Name) {
+		return 0, false
+	}
+	if assign.Global {
+		return tree.TransactionScopeGlobal, true
+	}
+	return assign.TxnScope, true
+}
+
+// transactionReadOnlyAssignmentScope returns the transaction-characteristic
+// scope carried by a transaction_read_only/tx_read_only assignment. The
+// legacy Global flag wins for programmatically constructed ASTs, matching the
+// isolation-variable helper above.
+func transactionReadOnlyAssignmentScope(
+	assign *tree.VarAssignmentExpr,
+) (tree.TransactionScope, bool) {
+	if assign == nil || !assign.System || !isTransactionReadOnlySystemVariable(assign.Name) {
+		return 0, false
+	}
+	if assign.Global {
+		return tree.TransactionScopeGlobal, true
+	}
+	return assign.TxnScope, true
+}
+
+// statementContainsTransactionCharacteristic identifies statements with any
+// transaction-characteristic assignment. Treat the whole SET statement as
+// preserving an already active user transaction even when it also contains
+// unrelated assignments; otherwise the generic SET lifecycle can commit or
+// roll back prior work when the transaction-characteristic assignment
+// succeeds or fails.
+func statementContainsTransactionCharacteristic(stmt tree.Statement) bool {
+	switch st := stmt.(type) {
+	case *tree.SetTransaction:
+		return true
+	case *tree.SetVar:
+		for _, assign := range st.Assignments {
+			if _, ok := transactionIsolationAssignmentScope(assign); ok {
+				return true
+			}
+			if _, ok := transactionReadOnlyAssignmentScope(assign); ok {
+				return true
+			}
+		}
+		return false
+	default:
+		return false
+	}
+}
+
+// statementConsumesNextTxnIsolation marks semantic transaction admission.
+// SET statements and autocommit PREPARE statements can create an
+// implementation-only frontend transaction; those temporary owners must never
+// consume a NEXT override intended for the next application transaction. With
+// autocommit disabled, PREPARE owns the user transaction that remains active
+// after the statement, so it must consume the NEXT override consistently with
+// the transaction it creates.
+func statementConsumesNextTxnIsolation(stmt tree.Statement, autoCommit bool) bool {
+	switch stmt.(type) {
+	case *tree.SetVar, *tree.SetTransaction:
+		return false
+	case *tree.PrepareStmt, *tree.PrepareString, *tree.PrepareVar:
+		return !autoCommit
+	default:
+		return true
+	}
+}
+
+func (th *TxnHandler) rollbackUnsafe(
+	execCtx *ExecCtx,
+	operationCtx context.Context,
+) error {
 	execCtx.ses.EnterFPrint(FPRollbackUnsafe)
 	defer execCtx.ses.ExitFPrint(FPRollbackUnsafe)
 	traceCtx := th.txnCtx
@@ -675,8 +1305,12 @@ func (th *TxnHandler) rollbackUnsafe(execCtx *ExecCtx) error {
 		panic("context should not be nil")
 	}
 
+	rollbackCtx := th.txnCtx
+	if operationCtx != nil {
+		rollbackCtx = operationCtx
+	}
 	ctx2, cancel := context.WithTimeoutCause(
-		th.txnCtx,
+		rollbackCtx,
 		th.storage.Hints().CommitOrRollbackTimeout,
 		moerr.CauseRollbackUnsafe,
 	)
@@ -713,17 +1347,35 @@ func (th *TxnHandler) rollbackUnsafe(execCtx *ExecCtx) error {
 		execCtx.ses.EnterFPrint(FPRollbackUnsafeBeforeRollbackWithTxn)
 		defer execCtx.ses.ExitFPrint(FPRollbackUnsafeBeforeRollbackWithTxn)
 		execCtx.ses.SetTxnId(th.txnOp.Txn().ID)
+		tempTxnKey := tempTableTxnKey(th.txnOp)
+		haveDDL := th.txnOp.GetWorkspace().GetHaveDDL()
 		err, hasRecovered = ExecuteFuncWithRecover(func() error {
 			return th.txnOp.Rollback(ctx2)
 		})
+		advanceDDLVersionAfterDiscardedTxnDDL(execCtx.ses, haveDDL)
 		if err != nil || hasRecovered {
 			err = moerr.AttachCause(ctx2, err)
 			th.invalidateTxnUnsafe()
+		}
+		if owner := upstreamUserSession(execCtx.ses); owner != nil {
+			owner.rollbackTempTableTransaction(tempTxnKey)
 		}
 	}
 	th.invalidateTxnUnsafe()
 	execCtx.ses.SetTxnId(dumpUUID[:])
 	return err
+}
+
+func advanceDDLVersionAfterDiscardedTxnDDL(ses FeSession, haveDDL bool) {
+	if !haveDDL {
+		return
+	}
+	if session := upstreamUserSession(ses); session != nil {
+		// Plans rebuilt against transaction-local DDL must not survive the
+		// rollback or failed terminal outcome of the workspace that supplied
+		// their schema.
+		session.advanceDDLVersion()
+	}
 }
 
 /*

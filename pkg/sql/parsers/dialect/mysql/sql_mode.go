@@ -18,11 +18,92 @@ import "strings"
 
 type SQLModeFlag uint8
 
+const SQLModeMatrixOneNative = "MATRIXONE_NATIVE"
+
+// SQLModeEnableBoolSumAvg selects MySQL's reading of SUM/AVG over a predicate.
+// MySQL has no BOOL type, so a predicate is an integer 0/1 there and
+// aggregating one is ordinary numeric aggregation; MO types it as BOOL and
+// rejects it when this token is absent.
+const SQLModeEnableBoolSumAvg = "ENABLE_BOOL_SUMAVG"
+
+// SQLModeNoUnsignedSubtraction selects signed result-domain binding for
+// subtraction when either operand is unsigned.
+const SQLModeNoUnsignedSubtraction = "NO_UNSIGNED_SUBTRACTION"
+
+const sqlModeIgnoreSpace = "IGNORE_SPACE"
+
+const (
+	sqlModeANSIQuotes         = "ANSI_QUOTES"
+	sqlModePipesAsConcat      = "PIPES_AS_CONCAT"
+	sqlModeNoBackslashEscapes = "NO_BACKSLASH_ESCAPES"
+	sqlModeRealAsFloat        = "REAL_AS_FLOAT"
+	sqlModeHighNotPrecedence  = "HIGH_NOT_PRECEDENCE"
+)
+
+var parserSQLModeTokens = []string{
+	sqlModeANSIQuotes,
+	sqlModePipesAsConcat,
+	sqlModeNoBackslashEscapes,
+	sqlModeRealAsFloat,
+	sqlModeHighNotPrecedence,
+	sqlModeIgnoreSpace,
+}
+
+var sqlModeSensitiveFunctionNames = map[string]struct{}{
+	"adddate":      {},
+	"bit_and":      {},
+	"bit_or":       {},
+	"bit_xor":      {},
+	"cast":         {},
+	"count":        {},
+	"curdate":      {},
+	"curtime":      {},
+	"date_add":     {},
+	"date_sub":     {},
+	"extract":      {},
+	"group_concat": {},
+	"max":          {},
+	"mid":          {},
+	"min":          {},
+	"now":          {},
+	"position":     {},
+	"session_user": {},
+	"std":          {},
+	"stddev":       {},
+	"stddev_pop":   {},
+	"stddev_samp":  {},
+	"subdate":      {},
+	"substr":       {},
+	"substring":    {},
+	"sum":          {},
+	"sysdate":      {},
+	"system_user":  {},
+	"trim":         {},
+	"variance":     {},
+	"var_pop":      {},
+	"var_samp":     {},
+}
+
+func isSQLModeSensitiveFunctionName(name string) bool {
+	_, ok := sqlModeSensitiveFunctionNames[strings.ToLower(name)]
+	return ok
+}
+
+// IsSQLModeSensitiveFunctionName reports whether MySQL's function-name
+// whitespace rule applies to name.
+func IsSQLModeSensitiveFunctionName(name string) bool {
+	return isSQLModeSensitiveFunctionName(name)
+}
+
 const (
 	SQLModeANSIQuotes SQLModeFlag = 1 << iota
 	SQLModePipesAsConcat
 	SQLModeNoBackslashEscapes
 	SQLModeRealAsFloat
+	SQLModeHighNotPrecedence
+	// SQLModeIgnoreSpace allows whitespace between a whitespace-sensitive
+	// built-in function name and its opening parenthesis.
+	SQLModeIgnoreSpace
 )
 
 type SQLModeFlags uint8
@@ -32,15 +113,19 @@ func ParseSQLModeFlags(mode string) SQLModeFlags {
 	for _, part := range strings.Split(mode, ",") {
 		switch strings.ToUpper(strings.TrimSpace(part)) {
 		case "ANSI":
-			flags |= SQLModeFlags(SQLModeANSIQuotes | SQLModePipesAsConcat | SQLModeRealAsFloat)
-		case "ANSI_QUOTES":
+			flags |= SQLModeFlags(SQLModeANSIQuotes | SQLModePipesAsConcat | SQLModeRealAsFloat | SQLModeIgnoreSpace)
+		case sqlModeANSIQuotes:
 			flags |= SQLModeFlags(SQLModeANSIQuotes)
-		case "PIPES_AS_CONCAT":
+		case sqlModePipesAsConcat:
 			flags |= SQLModeFlags(SQLModePipesAsConcat)
-		case "NO_BACKSLASH_ESCAPES":
+		case sqlModeNoBackslashEscapes:
 			flags |= SQLModeFlags(SQLModeNoBackslashEscapes)
-		case "REAL_AS_FLOAT":
+		case sqlModeRealAsFloat:
 			flags |= SQLModeFlags(SQLModeRealAsFloat)
+		case sqlModeHighNotPrecedence:
+			flags |= SQLModeFlags(SQLModeHighNotPrecedence)
+		case sqlModeIgnoreSpace:
+			flags |= SQLModeFlags(SQLModeIgnoreSpace)
 		}
 	}
 	return flags
@@ -48,6 +133,44 @@ func ParseSQLModeFlags(mode string) SQLModeFlags {
 
 func SessionSQLModeForParser(mode string) string {
 	return mode
+}
+
+// ParserSQLModeCombinations returns every distinct combination of SQL modes
+// that can change parser output. Callers that recover syntax without the
+// original session mode must consider the complete set rather than assuming a
+// single default interpretation.
+func ParserSQLModeCombinations() []string {
+	modes := make([]string, 0, 1<<len(parserSQLModeTokens))
+	for mask := 0; mask < 1<<len(parserSQLModeTokens); mask++ {
+		parts := make([]string, 0, len(parserSQLModeTokens))
+		for bit, token := range parserSQLModeTokens {
+			if mask&(1<<bit) != 0 {
+				parts = append(parts, token)
+			}
+		}
+		modes = append(modes, strings.Join(parts, ","))
+	}
+	return modes
+}
+
+func HasSQLMode(mode string, token string) bool {
+	if token == "" {
+		return false
+	}
+	for _, part := range strings.Split(mode, ",") {
+		if strings.EqualFold(strings.TrimSpace(part), token) {
+			return true
+		}
+	}
+	return false
+}
+
+func HasMatrixOneNativeSQLMode(mode string) bool {
+	return HasSQLMode(mode, SQLModeMatrixOneNative)
+}
+
+func HasEnableBoolSumAvgSQLMode(mode string) bool {
+	return HasSQLMode(mode, SQLModeEnableBoolSumAvg)
 }
 
 func (flags SQLModeFlags) Has(flag SQLModeFlag) bool {

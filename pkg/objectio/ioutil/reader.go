@@ -17,6 +17,7 @@ package ioutil
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -34,6 +35,9 @@ func NewObjectReader(
 	key objectio.Location,
 	opts ...objectio.ReaderOptionFunc,
 ) (*BlockReader, error) {
+	if key.IsEmpty() {
+		return nil, moerr.NewInvalidInputNoCtx("object location is empty")
+	}
 	name := key.Name()
 	metaExt := key.Extent()
 	var reader *objectio.ObjectReader
@@ -113,7 +117,7 @@ func (r *BlockReader) LoadColumns(
 	bat = batch.NewWithSize(len(cols))
 	var obj any
 	for i := range cols {
-		obj, err = objectio.Decode(ioVectors.Entries[i].CachedData.Bytes())
+		obj, err = objectio.DecodeCached(ioVectors.Entries[i].CachedData)
 		if err != nil {
 			return
 		}
@@ -150,7 +154,7 @@ func (r *BlockReader) LoadSubColumns(
 		bat := batch.NewWithSize(len(cols))
 		var obj any
 		for i := range cols {
-			obj, err = objectio.Decode(ioVectors[idx].Entries[i].CachedData.Bytes())
+			obj, err = objectio.DecodeCached(ioVectors[idx].Entries[i].CachedData)
 			if err != nil {
 				return
 			}
@@ -185,7 +189,7 @@ func (r *BlockReader) LoadOneSubColumns(
 	bat = batch.NewWithSize(len(cols))
 	var obj any
 	for i := range cols {
-		obj, err = objectio.Decode(ioVector.Entries[i].CachedData.Bytes())
+		obj, err = objectio.DecodeCached(ioVector.Entries[i].CachedData)
 		if err != nil {
 			return
 		}
@@ -231,7 +235,7 @@ func (r *BlockReader) LoadAllColumns(
 		bat := batch.NewWithSize(len(idxs))
 		var obj any
 		for i := range idxs {
-			obj, err = objectio.Decode(ioVectors.Entries[y*len(idxs)+i].CachedData.Bytes())
+			obj, err = objectio.DecodeCached(ioVectors.Entries[y*len(idxs)+i].CachedData)
 			if err != nil {
 				return nil, nil, err
 			}

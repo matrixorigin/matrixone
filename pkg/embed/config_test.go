@@ -18,13 +18,18 @@ import (
 	"context"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseTNConfig(t *testing.T) {
@@ -38,6 +43,7 @@ func TestParseTNConfig(t *testing.T) {
 	max-size = 512
 
 	[hakeeper-client]
+	backend-read-timeout = "20s"
 	service-addresses = [
 		"1",
 		"2"
@@ -62,14 +68,15 @@ func TestParseTNConfig(t *testing.T) {
 	data-dir = "data dir"
 
 	[tn.Txn.Storage]
-	# txn storage backend implementation. [TAE|MEM]
-	backend = "MEM"
+	# txn storage backend implementation. [TAE|MEMKV]
+	backend = "MEMKV"
 	`
 	cfg := &ServiceConfig{}
 	err := parseFromString(data, cfg)
 	assert.NoError(t, err)
-	assert.Equal(t, tnservice.StorageMEM, cfg.getTNServiceConfig().Txn.Storage.Backend)
+	assert.Equal(t, tnservice.StorageMEMKV, cfg.getTNServiceConfig().Txn.Storage.Backend)
 	assert.Equal(t, 2, len(cfg.FileServices))
+	assert.Equal(t, 20*time.Second, cfg.HAKeeperClient.BackendReadTimeout.Duration)
 	assert.Equal(t, "local", cfg.FileServices[0].Name)
 	assert.Equal(t, defines.SharedFileServiceName, cfg.FileServices[1].Name)
 	assert.Equal(t, 2, len(cfg.getTNServiceConfig().HAKeeper.ClientConfig.ServiceAddresses))
@@ -103,6 +110,76 @@ func TestFileServiceFactory(t *testing.T) {
 	fs, err := c.createFileService(ctx, metadata.ServiceType_CN, "")
 	assert.NoError(t, err)
 	assert.NotNil(t, fs)
+}
+
+func TestFileServiceFactoryScopesMemoryCacheMetrics(t *testing.T) {
+	ctx := context.Background()
+
+	newConfig := func(capacity toml.ByteSize) *ServiceConfig {
+		return &ServiceConfig{FileServices: []fileservice.Config{
+			{
+				Name:    defines.LocalFileServiceName,
+				Backend: "DISK",
+				DataDir: t.TempDir(),
+				Cache: fileservice.CacheConfig{
+					MemoryCapacity: &capacity,
+				},
+			},
+			{
+				Name:    defines.SharedFileServiceName,
+				Backend: "DISK",
+				DataDir: t.TempDir(),
+				Cache: fileservice.CacheConfig{
+					MemoryCapacity: &capacity,
+				},
+			},
+			{
+				Name:    defines.ETLFileServiceName,
+				Backend: "DISK-ETL",
+			},
+			{
+				Name:    defines.TmpFileServiceName,
+				Backend: "DISK-TMP",
+			},
+		}}
+	}
+
+	firstCapacity := toml.ByteSize(1 << 20)
+	first, err := newConfig(firstCapacity).createFileService(ctx, metadata.ServiceType_CN, "scope-node-a")
+	require.NoError(t, err)
+	t.Cleanup(func() { first.Close(ctx) })
+
+	secondCapacity := toml.ByteSize(2 << 20)
+	second, err := newConfig(secondCapacity).createFileService(ctx, metadata.ServiceType_CN, "scope-node-b")
+	require.NoError(t, err)
+	t.Cleanup(func() { second.Close(ctx) })
+
+	_, firstGauge := metric.GetFsCacheBytesGaugeWithScope(
+		fileservice.ServiceMetricScope(metadata.ServiceType_CN.String(), "scope-node-a"),
+		defines.SharedFileServiceName,
+		"mem",
+	)
+	_, secondGauge := metric.GetFsCacheBytesGaugeWithScope(
+		fileservice.ServiceMetricScope(metadata.ServiceType_CN.String(), "scope-node-b"),
+		defines.SharedFileServiceName,
+		"mem",
+	)
+	require.Equal(t, float64(firstCapacity), testutil.ToFloat64(firstGauge))
+	require.Equal(t, float64(secondCapacity), testutil.ToFloat64(secondGauge))
+}
+
+func TestDefaultTmpFileServiceUsesServiceDataDir(t *testing.T) {
+	c := newServiceConfig()
+	c.DataDir = t.TempDir()
+	assert.NoError(t, c.setDefaultValue())
+
+	for _, fs := range c.FileServices {
+		if fs.Name == defines.TmpFileServiceName {
+			assert.Equal(t, c.defaultFileServiceDataDir(defines.TmpFileServiceName), fs.DataDir)
+			return
+		}
+	}
+	t.Fatal("default TMP file service was not configured")
 }
 
 func TestResolveGossipSeedAddresses(t *testing.T) {
@@ -192,4 +269,104 @@ func TestDumpCommonConfig(t *testing.T) {
 	cfg1 := newServiceConfig()
 	_, err := dumpCommonConfig(cfg1)
 	assert.NoError(t, err)
+}
+
+func TestMongoDBEnablementConfigDefaults(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		input       string
+		wantEnabled bool
+	}{
+		{name: "omitted", input: "", wantEnabled: true},
+		{name: "explicit disable", input: "[cn.frontend.mongodb]\nenable = false\n", wantEnabled: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := newServiceConfig()
+			assert.NoError(t, parseFromString(tc.input, &cfg))
+			assert.NoError(t, cfg.setDefaultValue())
+			assert.Equal(t, tc.wantEnabled, cfg.CN.Frontend.MongoDB.Enable)
+			assert.False(t, cfg.CN.Frontend.MongoDB.EnablePerAccount)
+			assert.False(t, cfg.CN.Frontend.MongoDB.AllowLoopback)
+			assert.Empty(t, cfg.CN.Frontend.MongoDB.AllowedHostSuffixes)
+			assert.Empty(t, cfg.CN.Frontend.MongoDB.AllowedCIDRs)
+
+			cfg.CN.SetDefaultValue()
+			assert.Equal(t, tc.wantEnabled, cfg.CN.Frontend.MongoDB.Enable)
+		})
+	}
+}
+
+func TestMongoDBProgrammaticOptOutSurvivesCNDefaulting(t *testing.T) {
+	op := &operator{cfg: newServiceConfig()}
+	require.True(t, op.cfg.CN.Frontend.MongoDB.Enable)
+
+	// Model the public WithPreStart callback path.
+	op.Adjust(func(cfg *ServiceConfig) {
+		cfg.CN.Frontend.MongoDB.Enable = false
+	})
+
+	serviceCfg := op.GetServiceConfig()
+	cfg := serviceCfg.getCNServiceConfig()
+	cfg.SetDefaultValue()
+	cfg.Frontend.SetDefaultValues()
+	require.False(t, cfg.Frontend.MongoDB.Enable)
+}
+
+func TestClockOffsetBoundRetainedWhenMonitoringDisabled(t *testing.T) {
+	validators := []struct {
+		name string
+		call func(*ServiceConfig) error
+	}{
+		{name: "validate loaded config", call: (*ServiceConfig).validate},
+		{name: "apply programmatic defaults", call: (*ServiceConfig).setDefaultValue},
+	}
+	for _, validator := range validators {
+		t.Run(validator.name, func(t *testing.T) {
+			cfg := newServiceConfig()
+			cfg.ServiceType = metadata.ServiceType_CN.String()
+			require.False(t, cfg.Clock.EnableCheckMaxClockOffset)
+			require.NoError(t, validator.call(&cfg))
+			require.Equal(t, defaultMaxClockOffset, cfg.Clock.MaxClockOffset.Duration)
+
+			cfg = newServiceConfig()
+			cfg.ServiceType = metadata.ServiceType_CN.String()
+			cfg.Clock.MaxClockOffset.Duration = -time.Nanosecond
+			require.ErrorContains(t, validator.call(&cfg), "max-clock-offset must be positive")
+
+			cfg = newServiceConfig()
+			cfg.ServiceType = metadata.ServiceType_CN.String()
+			cfg.Clock.MaxClockOffset.Duration = time.Second
+			cfg.CN.Frontend.ConnectTimeout.Duration = 2*time.Second + time.Nanosecond
+			require.ErrorContains(t, validator.call(&cfg), "authentication freshness clock budget 2.000000001s")
+
+			cfg.CN.Frontend.ConnectTimeout.Duration = 2*time.Second + 2*time.Nanosecond
+			cfg.CN.Frontend.CreateTxnOpTimeout.Duration = time.Nanosecond
+			require.NoError(t, validator.call(&cfg))
+
+			// Catalog authentication is unreachable when user checks are skipped,
+			// so its connection-timeout budget must not reject startup.
+			cfg = newServiceConfig()
+			cfg.ServiceType = metadata.ServiceType_CN.String()
+			cfg.Clock.MaxClockOffset.Duration = time.Second
+			cfg.CN.Frontend.ConnectTimeout.Duration = time.Nanosecond
+			cfg.CN.Frontend.SkipCheckUser = true
+			require.NoError(t, validator.call(&cfg))
+
+			// Skipping authentication does not bypass the general clock contract.
+			cfg.Clock.MaxClockOffset.Duration = -time.Nanosecond
+			require.ErrorContains(t, validator.call(&cfg), "max-clock-offset must be positive")
+		})
+	}
+}
+
+func TestStartupRetryIntervalsDefaultAndConfigurable(t *testing.T) {
+	cfg := newServiceConfig()
+	assert.Equal(t, time.Second, cfg.HAKeeperRunningRetryInterval.Duration)
+	assert.Equal(t, time.Second, cfg.TNShardReadyRetryInterval.Duration)
+
+	cfg.HAKeeperRunningRetryInterval.Duration = 100 * time.Millisecond
+	cfg.TNShardReadyRetryInterval.Duration = 200 * time.Millisecond
+	assert.NoError(t, cfg.setStartupRetryIntervalsDefault())
+	assert.Equal(t, 100*time.Millisecond, cfg.HAKeeperRunningRetryInterval.Duration)
+	assert.Equal(t, 200*time.Millisecond, cfg.TNShardReadyRetryInterval.Duration)
 }

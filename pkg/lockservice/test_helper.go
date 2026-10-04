@@ -15,8 +15,11 @@
 package lockservice
 
 import (
-	"fmt"
+	"context"
+	"errors"
 	"os"
+	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -38,17 +41,28 @@ func RunLockServicesForTest(
 	opts ...Option,
 ) {
 	defaultLazyCheckDuration.Store(time.Millisecond * 50)
-	testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
+	testSocketDir, err := createTestSocketDir()
+	if err != nil {
+		panic(err)
+	}
+	cleanup := testTopologyCleanup{socketDir: testSocketDir}
+	defer func() {
+		panicValue := recover()
+		cleanupErr := cleanup.close()
+		if panicValue != nil {
+			panic(panicValue)
+		}
+		if cleanupErr != nil {
+			panic(cleanupErr)
+		}
+	}()
+	testSockets := testSocketAddress(testSocketDir, "allocator.sock")
 	services := make([]LockService, 0, len(serviceIDs))
 	cns := make([]metadata.CNService, 0, len(serviceIDs))
 	configs := make([]Config, 0, len(serviceIDs))
-	for _, v := range serviceIDs {
+	for idx, v := range serviceIDs {
 		runtime.SetupServiceBasedRuntime(v, runtime.ServiceRuntime(""))
-		address := fmt.Sprintf("unix:///tmp/service-%d-%s.sock",
-			time.Now().Nanosecond(), v)
-		if err := os.RemoveAll(address[7:]); err != nil {
-			panic(err)
-		}
+		address := testSocketAddress(testSocketDir, "service-"+strconv.Itoa(idx)+".sock")
 		cns = append(cns, metadata.CNService{
 			ServiceID:          v,
 			LockServiceAddress: address,
@@ -69,18 +83,19 @@ func RunLockServicesForTest(
 				},
 			}))
 	runtime.ServiceRuntime("").SetGlobalVariables(runtime.ClusterService, cluster)
-	defer cluster.Close()
+	cleanup.clusterCloser = cluster.Close
 
 	var removeDisconnectDuration time.Duration
-	for _, cfg := range configs {
+	for idx := range configs {
+		cfg := &configs[idx]
 		if adjustConfig != nil {
-			adjustConfig(&cfg)
+			adjustConfig(cfg)
 			removeDisconnectDuration = cfg.removeDisconnectDuration
 		}
-		services = append(services,
-			NewLockService(cfg, opts...).(*service))
 	}
 
+	// Service keepers start during construction and may immediately contact the
+	// allocator. Publish its listener first so initial RPCs cannot race startup.
 	allocator := NewLockTableAllocator(
 		"",
 		testSockets,
@@ -90,16 +105,49 @@ func RunLockServicesForTest(
 			lta.options.removeDisconnectDuration = removeDisconnectDuration
 		},
 	)
+	cleanup.allocatorCloser = allocator.Close
+	for _, cfg := range configs {
+		lockService := NewLockService(cfg, opts...)
+		services = append(services, lockService)
+		cleanup.serviceClosers = append(cleanup.serviceClosers, lockService.Close)
+	}
 	fn(allocator.(*lockTableAllocator), services)
+}
 
-	for _, s := range services {
-		if err := s.Close(); err != nil {
-			panic(err)
-		}
+type testTopologyCleanup struct {
+	serviceClosers  []func() error
+	allocatorCloser func() error
+	clusterCloser   func()
+	socketDir       string
+}
+
+func (c *testTopologyCleanup) close() error {
+	var cleanupErr error
+	for _, closeService := range c.serviceClosers {
+		cleanupErr = errors.Join(cleanupErr, closeService())
 	}
-	if err := allocator.Close(); err != nil {
-		panic(err)
+	if c.allocatorCloser != nil {
+		cleanupErr = errors.Join(cleanupErr, c.allocatorCloser())
 	}
+	if c.clusterCloser != nil {
+		c.clusterCloser()
+	}
+	if c.socketDir != "" {
+		cleanupErr = errors.Join(cleanupErr, removeTestSocketDir(c.socketDir))
+	}
+	return cleanupErr
+}
+
+func createTestSocketDir() (string, error) {
+	return os.MkdirTemp("/tmp", "mo-lockservice-")
+}
+
+func removeTestSocketDir(dir string) error {
+	return os.RemoveAll(dir)
+}
+
+func testSocketAddress(dir, name string) string {
+	return "unix://" + filepath.Join(dir, name)
 }
 
 // WaitWaiters wait waiters
@@ -110,7 +158,7 @@ func WaitWaiters(
 	key []byte,
 	waitersCount int) error {
 	s := ls.(*service)
-	v, err := s.getLockTable(group, table)
+	v, err := s.getLockTable(context.Background(), group, table)
 	if err != nil {
 		return err
 	}

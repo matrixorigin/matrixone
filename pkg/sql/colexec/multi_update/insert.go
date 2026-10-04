@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -137,19 +138,23 @@ func (update *MultiUpdate) check_null_and_insert_main_table(
 	if err = checkMainTableNotNull(proc, updateCtx, insertBatch); err != nil {
 		return err
 	}
-	tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
-	update.addInsertAffectRows(tableType, uint64(newRowCount))
-	source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Source
+	if err = checkZeroTemporalInStrictMode(update.RejectZeroTemporal, proc, insertBatch); err != nil {
+		return err
+	}
+	tableType := lookupUpdateCtxInfo(update.ctr.updateCtxInfos, updateCtx).tableType
+	update.addInsertAffectRows(
+		tableType, physicalInsertAffectedRows(updateCtx, uint64(newRowCount)))
+	source := lookupUpdateCtxInfo(update.ctr.updateCtxInfos, updateCtx).Source
 
 	crs := analyzer.GetOpCounterSet()
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-	if err = source.Write(newCtx, insertBatch); err != nil {
+	newCtx = update.writeContext(newCtx, targetTableID(updateCtx))
+	if err = process.MeasureFilesystemWaitErr(analyzer, func() error {
+		return source.Write(newCtx, insertBatch)
+	}); err != nil {
 		return err
 	}
 	analyzer.AddWrittenRows(int64(newRowCount))
-	analyzer.AddS3RequestCount(crs)
-	analyzer.AddFileServiceCacheInfo(crs)
-	analyzer.AddDiskIO(crs)
 	return nil
 }
 
@@ -197,7 +202,7 @@ func (update *MultiUpdate) insert_table(
 		return
 	}
 
-	info := update.ctr.updateCtxInfos[updateCtx.TableDef.Name]
+	info := lookupUpdateCtxInfo(update.ctr.updateCtxInfos, updateCtx)
 	writeBatch := insertBatch
 	if info.isContiguous {
 		if info.refBatch == nil {
@@ -219,20 +224,77 @@ func (update *MultiUpdate) insert_table(
 		}
 		insertBatch.SetRowCount(insertBatch.Vecs[0].Length())
 	}
+	if info.tableType == UpdateMainTable {
+		if err = checkZeroTemporalInStrictMode(update.RejectZeroTemporal, proc, writeBatch); err != nil {
+			return err
+		}
+	}
 
-	update.addInsertAffectRows(info.tableType, uint64(writeBatch.RowCount()))
+	affectedRows := uint64(writeBatch.RowCount())
+	if info.tableType == UpdateMainTable && update.ctr.action == actionUpdate {
+		affectedRows = physicalInsertAffectedRows(
+			updateCtx, update.insertAffectedRows(updateCtx, inputBatch))
+	}
+	update.addInsertAffectRows(info.tableType, affectedRows)
 
 	crs := analyzer.GetOpCounterSet()
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-	err = info.Source.Write(newCtx, writeBatch)
+	newCtx = update.writeContext(newCtx, targetTableID(updateCtx))
+	err = process.MeasureFilesystemWaitErr(analyzer, func() error {
+		return info.Source.Write(newCtx, writeBatch)
+	})
 	if err != nil {
 		return err
 	}
 	analyzer.AddWrittenRows(int64(writeBatch.RowCount()))
-	analyzer.AddS3RequestCount(crs)
-	analyzer.AddFileServiceCacheInfo(crs)
-	analyzer.AddDiskIO(crs)
 	return
+}
+
+// checkZeroTemporalInStrictMode also enforces the unconditional lower bound for
+// non-zero TIMESTAMP values that can reach MultiUpdate through parallel LOAD.
+func checkZeroTemporalInStrictMode(reject bool, proc *process.Process, bat *batch.Batch) error {
+	if proc == nil || bat == nil {
+		return nil
+	}
+
+	for _, vec := range bat.Vecs {
+		if vec == nil {
+			continue
+		}
+		switch vec.GetType().Oid {
+		case types.T_timestamp:
+		case types.T_date, types.T_datetime:
+			if !reject {
+				continue
+			}
+		default:
+			continue
+		}
+		for row := 0; row < vec.Length(); row++ {
+			if vec.IsNull(uint64(row)) {
+				continue
+			}
+			switch vec.GetType().Oid {
+			case types.T_date:
+				if reject && vector.GetFixedAtNoTypeCheck[types.Date](vec, row) == types.ZeroDate {
+					return moerr.NewTruncatedValueForField(proc.Ctx, "date", "0000-00-00", "value", row+1)
+				}
+			case types.T_datetime:
+				if reject && vector.GetFixedAtNoTypeCheck[types.Datetime](vec, row) == types.ZeroDatetime {
+					return moerr.NewTruncatedValueForField(proc.Ctx, "datetime", "0000-00-00 00:00:00", "value", row+1)
+				}
+			case types.T_timestamp:
+				timestamp := vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, row)
+				if !types.ValidTimestamp(timestamp) {
+					return moerr.NewTruncatedValueForField(proc.Ctx, "datetime", fmt.Sprintf("%d", int64(timestamp)), "value", row+1)
+				}
+				if reject && timestamp == types.ZeroTimestamp {
+					return moerr.NewTruncatedValueForField(proc.Ctx, "datetime", "0000-00-00 00:00:00", "value", row+1)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func isContiguousMapping(cols []int) bool {
@@ -287,20 +349,21 @@ func (update *MultiUpdate) check_null_and_insert_table(
 	newRowCount := insertBatch.Vecs[0].Length()
 	if newRowCount > 0 {
 		insertBatch.SetRowCount(newRowCount)
-		tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
-		update.addInsertAffectRows(tableType, uint64(newRowCount))
-		source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Source
+		tableType := lookupUpdateCtxInfo(update.ctr.updateCtxInfos, updateCtx).tableType
+		update.addInsertAffectRows(
+			tableType, physicalInsertAffectedRows(updateCtx, uint64(newRowCount)))
+		source := lookupUpdateCtxInfo(update.ctr.updateCtxInfos, updateCtx).Source
 
 		crs := analyzer.GetOpCounterSet()
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-		err = source.Write(newCtx, insertBatch)
+		newCtx = update.writeContext(newCtx, targetTableID(updateCtx))
+		err = process.MeasureFilesystemWaitErr(analyzer, func() error {
+			return source.Write(newCtx, insertBatch)
+		})
 		if err != nil {
 			return err
 		}
 		analyzer.AddWrittenRows(int64(insertBatch.RowCount()))
-		analyzer.AddS3RequestCount(crs)
-		analyzer.AddFileServiceCacheInfo(crs)
-		analyzer.AddDiskIO(crs)
 	}
 	return
 }

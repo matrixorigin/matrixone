@@ -102,7 +102,14 @@ func makeBatchIvfpqSearch(proc *process.Process) *batch.Batch {
 }
 
 func makeConstInputExprsIvfpqSearch() []*plan.Expr {
-	tblcfg := `{"db":"db","src":"src","metadata":"__meta","index":"__index"}`
+	// parttype (IndexTableConfig.KeyPartType) must name the index's base column type: the
+	// TVF refuses a query vector whose type differs, so that a mismatched query cannot drive
+	// the storage-type override off the QUERY type and deserialize the index wrongly. The
+	// query below is vecf32, so the config has to say so -- omitted, parttype defaults to 0
+	// and the guard rejects every query.
+	tblcfg := fmt.Sprintf(
+		`{"db":"db","src":"src","metadata":"__meta","index":"__index","parttype":%d}`,
+		int32(types.T_array_float32))
 	return []*plan.Expr{
 		{
 			Typ:  plan.Type{Id: int32(types.T_varchar), Width: 512},

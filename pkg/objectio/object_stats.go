@@ -48,6 +48,7 @@ const (
 	ObjectFlag_Appendable = 1 << iota
 	ObjectFlag_Sorted
 	ObjectFlag_CNCreated
+	ObjectFlag_CNDeleted
 )
 
 var ZeroObjectStats ObjectStats
@@ -153,12 +154,32 @@ func (des *ObjectStats) GetAppendable() bool {
 	return des[reservedOffset]&ObjectFlag_Appendable != 0
 }
 
+func SetObjectStatsAppendable(des *ObjectStats, appendable bool) {
+	if appendable {
+		des[reservedOffset] |= ObjectFlag_Appendable
+	} else {
+		des[reservedOffset] &^= ObjectFlag_Appendable
+	}
+}
+
 func (des *ObjectStats) GetSorted() bool {
 	return des[reservedOffset]&ObjectFlag_Sorted != 0
 }
 
 func (des *ObjectStats) GetCNCreated() bool {
 	return des[reservedOffset]&ObjectFlag_CNCreated != 0
+}
+
+func (des *ObjectStats) GetCNDeleted() bool {
+	return des[reservedOffset]&ObjectFlag_CNDeleted != 0
+}
+
+func SetObjectStatsCNDeleted(des *ObjectStats, cnDeleted bool) {
+	if cnDeleted {
+		des[reservedOffset] |= ObjectFlag_CNDeleted
+	} else {
+		des[reservedOffset] &^= ObjectFlag_CNDeleted
+	}
 }
 func (des *ObjectStats) IsZero() bool {
 	return bytes.Equal(des[:], ZeroObjectStats[:])
@@ -234,7 +255,7 @@ func (des *ObjectStats) BlkCnt() uint32 {
 }
 
 func (des *ObjectStats) SortKeyZoneMap() ZoneMap {
-	return ZoneMap(des[zoneMapOffset : zoneMapOffset+zoneMapLen])
+	return persistedZoneMapView(ZoneMap(des[zoneMapOffset : zoneMapOffset+zoneMapLen]))
 }
 
 func (des *ObjectStats) Extent() Extent {
@@ -258,6 +279,11 @@ func (des *ObjectStats) FlagString() string {
 		flags += "0"
 	}
 	if des.GetCNCreated() {
+		flags += "1"
+	} else {
+		flags += "0"
+	}
+	if des.GetCNDeleted() {
 		flags += "1"
 	} else {
 		flags += "0"

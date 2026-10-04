@@ -77,11 +77,18 @@ type TableChangeStream struct {
 	start            sync.WaitGroup
 	runCancel        context.CancelFunc
 	cancelOnce       sync.Once
+	registered       chan struct{}
+	registerOnce     sync.Once
 
 	// Configuration
-	initSnapshotSplitTxn bool
-	startTs, endTs       types.TS
-	noFull               bool
+	initSnapshotSplitTxn   bool
+	startTs, endTs         types.TS
+	noFull                 bool
+	initialSnapshotLimiter *InitialSnapshotLimiter
+	// initialSnapshotEpoch is non-zero only for tasks whose persisted protocol
+	// guarantees that every partial-snapshot retry uses the same source image.
+	initialSnapshotEpoch types.TS
+	ownerFence           *OwnerFence
 
 	// Column indices (for AtomicBatch)
 	insTsColIdx           int
@@ -95,6 +102,7 @@ type TableChangeStream struct {
 	retryable          bool        // Protected by stateMu, updated together with lastError
 	cleanupRollbackErr error       // Set by processWithTxn defer if rollback fails (protected by stateMu)
 	hasSucceeded       atomic.Bool // Tracks if reader has successfully processed data at least once
+	initialSyncPending atomic.Bool // Limits batches until the first full-sync round completes successfully
 
 	// Retry state with exponential backoff
 	retryCount      int           // Current retry count for the same error type
@@ -123,6 +131,43 @@ type TableChangeStream struct {
 
 type TableChangeStreamOption func(*tableChangeStreamOptions)
 
+// snapshotPermit follows one initial-snapshot batch from the reader to the
+// sinker. Its state transition is pending -> observed -> released. Release is
+// idempotent because cleanup paths can race with shutdown.
+type snapshotPermit struct {
+	mu       sync.Mutex
+	released bool
+	observed bool
+	release  func(bool)
+	observe  func(uint64)
+}
+
+func (p *snapshotPermit) Release() {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.released {
+		return
+	}
+	p.released = true
+	p.release(p.observed)
+}
+
+func (p *snapshotPermit) ObserveBatchBytes(bytes uint64) {
+	if p == nil || bytes == 0 {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.released || p.observed || p.observe == nil {
+		return
+	}
+	p.observed = true
+	p.observe(bytes)
+}
+
 type tableChangeStreamOptions struct {
 	watermarkStallThreshold   time.Duration
 	noProgressWarningInterval time.Duration
@@ -130,6 +175,10 @@ type tableChangeStreamOptions struct {
 	retryBackoffBase          time.Duration // Base delay for exponential backoff
 	retryBackoffMax           time.Duration // Max delay for exponential backoff
 	retryBackoffFactor        float64       // Factor for exponential backoff
+	initialSnapshotLimiter    *InitialSnapshotLimiter
+	initialSnapshotEpoch      types.TS
+	initialSnapshotPending    *bool
+	ownerFence                *OwnerFence
 }
 
 const (
@@ -198,6 +247,41 @@ func WithRetryBackoff(base, max time.Duration, factor float64) TableChangeStream
 	}
 }
 
+// WithInitialSnapshotLimiter shares a CN-level in-flight batch limit across
+// task/table streams. It applies only to the first successful full-sync round.
+func WithInitialSnapshotLimiter(limiter *InitialSnapshotLimiter) TableChangeStreamOption {
+	return func(opts *tableChangeStreamOptions) {
+		opts.initialSnapshotLimiter = limiter
+	}
+}
+
+// WithInitialSnapshotEpoch enables retry-safe bounded initial-snapshot target
+// transactions. The epoch must come from durable task metadata, never from an
+// individual execution attempt.
+func WithInitialSnapshotEpoch(epoch types.TS) TableChangeStreamOption {
+	return func(opts *tableChangeStreamOptions) {
+		opts.initialSnapshotEpoch = epoch
+	}
+}
+
+// WithInitialSnapshotPending supplies the durable startup classification. It
+// prevents completed streams from entering the CN-global initial-snapshot
+// limiter and makes an incomplete recreated generation read from an empty,
+// generation-local position instead of the retired generation's timestamp.
+func WithInitialSnapshotPending(pending bool) TableChangeStreamOption {
+	return func(opts *tableChangeStreamOptions) {
+		opts.initialSnapshotPending = &pending
+	}
+}
+
+// WithOwnerFence checks that this stream still owns the exact daemon-task
+// claim before target commits and watermark publication.
+func WithOwnerFence(fence *OwnerFence) TableChangeStreamOption {
+	return func(opts *tableChangeStreamOptions) {
+		opts.ownerFence = fence
+	}
+}
+
 // NewTableChangeStream creates a new table change stream
 var NewTableChangeStream = func(
 	cnTxnClient client.TxnClient,
@@ -247,6 +331,13 @@ var NewTableChangeStream = func(
 		tableInfo.SourceDbName,
 		tableInfo.SourceTblName,
 	)
+	txnManager.SetOwnerFence(opts.ownerFence)
+	if opts.ownerFence != nil {
+		// Generation ordering is part of the owner-fenced watermark protocol,
+		// independent of whether this particular stream needs a split initial
+		// snapshot. This also covers stable tasks with an explicit startTs.
+		txnManager.SetWatermarkGeneration(tableInfo.SourceTblId)
+	}
 
 	// Calculate column indices
 	// batch columns layout:
@@ -262,6 +353,10 @@ var NewTableChangeStream = func(
 		insCompositedPkColIdx = int(tableDef.Name2ColIndex[tableDef.Pkey.Names[0]])
 	}
 
+	// Splitting is safe only when all retries have a durable, stable source
+	// epoch. Legacy tasks lack the protocol marker and stay atomic.
+	retrySafeSnapshotSplit := initSnapshotSplitTxn &&
+		!noFull && startTs.IsEmpty() && !opts.initialSnapshotEpoch.IsEmpty()
 	// Create data processor
 	dataProcessor := NewDataProcessor(
 		sinker,
@@ -272,7 +367,7 @@ var NewTableChangeStream = func(
 		insCompositedPkColIdx,
 		delTsColIdx,
 		delCompositedPkColIdx,
-		initSnapshotSplitTxn,
+		retrySafeSnapshotSplit,
 		accountId,
 		taskId,
 		tableInfo.SourceDbName,
@@ -309,10 +404,14 @@ var NewTableChangeStream = func(
 		frequency:                 frequency,
 		runningReaders:            runningReaders,
 		runningReaderKey:          GenDbTblKey(tableInfo.SourceDbName, tableInfo.SourceTblName),
-		initSnapshotSplitTxn:      initSnapshotSplitTxn,
+		initSnapshotSplitTxn:      retrySafeSnapshotSplit,
 		startTs:                   startTs,
 		endTs:                     endTs,
 		noFull:                    noFull,
+		initialSnapshotLimiter:    opts.initialSnapshotLimiter,
+		initialSnapshotEpoch:      opts.initialSnapshotEpoch,
+		ownerFence:                opts.ownerFence,
+		registered:                make(chan struct{}),
 		insTsColIdx:               insTsColIdx,
 		insCompositedPkColIdx:     insCompositedPkColIdx,
 		delTsColIdx:               delTsColIdx,
@@ -327,7 +426,11 @@ var NewTableChangeStream = func(
 		retryBackoffMax:    opts.retryBackoffMax,
 		retryBackoffFactor: opts.retryBackoffFactor,
 	}
-
+	initialSnapshotPending := !noFull
+	if opts.initialSnapshotPending != nil {
+		initialSnapshotPending = *opts.initialSnapshotPending
+	}
+	stream.initialSyncPending.Store(initialSnapshotPending)
 	tableLabel := progressTracker.tableKey()
 	v2.CdcTableStuckGauge.WithLabelValues(tableLabel).Set(0)
 	v2.CdcTableLastActivityTimestamp.WithLabelValues(tableLabel).Set(float64(time.Now().Unix()))
@@ -338,6 +441,9 @@ var NewTableChangeStream = func(
 
 // Run starts the change stream
 func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
+	if s.registered == nil {
+		s.registered = make(chan struct{})
+	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	s.runCancel = cancel
 
@@ -346,6 +452,7 @@ func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
 
 	// 1. Check for duplicate readers
 	if _, loaded := s.runningReaders.LoadOrStore(s.runningReaderKey, s); loaded {
+		s.registerOnce.Do(func() { close(s.registered) })
 		logutil.Warn(
 			"cdc.table_stream.duplicate_running",
 			zap.String("table", s.tableInfo.String()),
@@ -356,6 +463,7 @@ func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
 		s.Close()
 		return
 	}
+	s.registerOnce.Do(func() { close(s.registered) })
 
 	logutil.Info(
 		"cdc.table_stream.start",
@@ -576,6 +684,13 @@ func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
 	}
 }
 
+// RegistrationDone reports when Run has published this stream (or rejected it
+// as a duplicate) in runningReaders. CDC task callbacks use this as their
+// publication barrier before they are allowed to complete.
+func (s *TableChangeStream) RegistrationDone() <-chan struct{} {
+	return s.registered
+}
+
 // cleanup performs cleanup when the stream stops
 func (s *TableChangeStream) cleanup(ctx context.Context) {
 	startTime := time.Now()
@@ -587,6 +702,10 @@ func (s *TableChangeStream) cleanup(ctx context.Context) {
 	)
 	defer s.wg.Done()
 	defer func() {
+		// Keep ownership until cleanup finishes so a replacement reader cannot
+		// start while this stream is still closing its sinker/watermark state.
+		s.runningReaders.CompareAndDelete(s.runningReaderKey, s)
+
 		// Decrement table stream state gauge on cleanup
 		if s.progressTracker != nil {
 			state, _ := s.progressTracker.GetState()
@@ -603,12 +722,48 @@ func (s *TableChangeStream) cleanup(ctx context.Context) {
 		)
 	}()
 
-	// Remove from running readers
-	s.runningReaders.Delete(s.runningReaderKey)
+	// Persist error message if any
+	// Read lastError and retryable atomically for consistency
+	s.stateMu.Lock()
+	lastError := s.lastError
+	retryable := s.retryable
+	s.stateMu.Unlock()
 
-	// Remove watermark cache
+	cleanupMode := WatermarkCleanupAll
+	if lastError != nil && !IsOwnerFenceLostError(lastError) {
+		isControlSignal := IsPauseOrCancelError(lastError.Error())
+		errorCtx := &ErrorContext{
+			IsRetryable:     retryable,
+			IsPauseOrCancel: isControlSignal,
+		}
+		if !isControlSignal {
+			// Retry metadata belongs to the logical stream failure sequence, not
+			// to one reader instance. Keep it while retiring this reader so the
+			// replacement pipeline advances the existing retry count. Preserve
+			// the task-generation fence with the diagnostic: a genuinely newer
+			// owner then clears both atomically during activation, while terminal
+			// task cleanup remains the full cleanup owner.
+			cleanupMode = WatermarkCleanupKeepDiagnostic
+		}
+
+		errorUpdateCtx := s.withWatermarkOwnerFence(ctx)
+		if err := s.watermarkUpdater.UpdateWatermarkErrMsg(
+			errorUpdateCtx, s.watermarkKey, lastError.Error(), errorCtx); err != nil {
+			logutil.Error(
+				"cdc.table_stream.update_watermark_errmsg_failed",
+				zap.String("table", s.tableInfo.String()),
+				zap.Error(err),
+			)
+		}
+	}
+
+	// Retire local progress only after the final diagnostic write. Stable
+	// diagnostics are update-only and do not need to read the progress row, while
+	// this ordering also keeps legacy error persistence from rehydrating a cache
+	// that this stream has already retired.
 	removeStart := time.Now()
-	if err := s.watermarkUpdater.RemoveCachedWM(ctx, s.watermarkKey); err != nil {
+	if err := s.watermarkUpdater.RemoveCachedWM(
+		ctx, s.watermarkKey, cleanupMode); err != nil {
 		logutil.Error(
 			"cdc.table_stream.remove_cached_watermark_failed",
 			zap.String("table", s.tableInfo.String()),
@@ -620,28 +775,6 @@ func (s *TableChangeStream) cleanup(ctx context.Context) {
 			zap.String("table", s.tableInfo.String()),
 			zap.Duration("cost", time.Since(removeStart)),
 		)
-	}
-
-	// Persist error message if any
-	// Read lastError and retryable atomically for consistency
-	s.stateMu.Lock()
-	lastError := s.lastError
-	retryable := s.retryable
-	s.stateMu.Unlock()
-
-	if lastError != nil {
-		errorCtx := &ErrorContext{
-			IsRetryable:     retryable,
-			IsPauseOrCancel: IsPauseOrCancelError(lastError.Error()),
-		}
-
-		if err := s.watermarkUpdater.UpdateWatermarkErrMsg(ctx, s.watermarkKey, lastError.Error(), errorCtx); err != nil {
-			logutil.Error(
-				"cdc.table_stream.update_watermark_errmsg_failed",
-				zap.String("table", s.tableInfo.String()),
-				zap.Error(err),
-			)
-		}
 	}
 
 	// Close sinker
@@ -802,6 +935,40 @@ func (s *TableChangeStream) processOneRound(ctx context.Context, ar *ActiveRouti
 	return err
 }
 
+func (s *TableChangeStream) acquireInitialSnapshotPermit(ctx context.Context) (*snapshotPermit, error) {
+	if !s.initialSyncPending.Load() || s.initialSnapshotLimiter == nil {
+		return nil, nil
+	}
+	if s.dataProcessor != nil && s.dataProcessor.hasPendingSnapshotGroup() {
+		if permit, ok := s.initialSnapshotLimiter.tryAcquire(); ok {
+			if s.progressTracker != nil {
+				s.progressTracker.SetState("reading")
+			}
+			return permit, nil
+		}
+		// Staged batches retain limiter permits, so blocking for another permit
+		// could deadlock when several streams hold partial groups. Commit this
+		// bounded group without a watermark, releasing both target ownership and
+		// permits, before joining the normal FIFO.
+		if err := s.dataProcessor.commitPendingSnapshotGroup(ctx); err != nil {
+			return nil, err
+		}
+	}
+
+	if s.progressTracker != nil {
+		s.progressTracker.SetState("waiting_for_initial_snapshot_batch_slot")
+	}
+	permit, err := s.initialSnapshotLimiter.acquire(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if s.progressTracker != nil {
+		s.progressTracker.SetState("reading")
+	}
+
+	return permit, nil
+}
+
 // updateErrorState updates lastError and retryable atomically
 // Also tracks retry count and error type for exponential backoff
 // Design: Preserves original error during retries to ensure deterministic error reporting
@@ -921,6 +1088,18 @@ func (s *TableChangeStream) determineRetryable(err error) bool {
 	if err == nil {
 		return false
 	}
+	if IsRetryableOwnerFenceError(err) {
+		return true
+	}
+	if IsRetryableTargetLockError(err) {
+		return true
+	}
+	if IsRetryableConnectionError(err) {
+		return true
+	}
+	if IsOwnerFenceLostError(err) {
+		return false
+	}
 
 	errMsg := err.Error()
 
@@ -1011,6 +1190,12 @@ func (s *TableChangeStream) determineRetryable(err error) bool {
 func (s *TableChangeStream) classifyErrorType(err error) string {
 	if err == nil {
 		return ""
+	}
+	if IsOwnerFenceLostError(err) {
+		return "owner_lost"
+	}
+	if IsRetryableOwnerFenceError(err) {
+		return "owner_check"
 	}
 
 	errMsg := err.Error()
@@ -1117,7 +1302,9 @@ func (s *TableChangeStream) clearErrorOnFirstSuccess(ctx context.Context) {
 		return
 	}
 	// Clear error asynchronously (preserves lazy batch processing design)
-	if err := s.watermarkUpdater.UpdateWatermarkErrMsg(ctx, s.watermarkKey, "", nil); err != nil {
+	errorUpdateCtx := s.withWatermarkOwnerFence(ctx)
+	if err := s.watermarkUpdater.UpdateWatermarkErrMsg(
+		errorUpdateCtx, s.watermarkKey, "", nil); err != nil {
 		s.hasSucceeded.Store(false)
 		logutil.Warn(
 			"cdc.table_stream.clear_error_failed",
@@ -1126,6 +1313,14 @@ func (s *TableChangeStream) clearErrorOnFirstSuccess(ctx context.Context) {
 		)
 		// Don't fail the operation if error clearing fails
 	}
+}
+
+func (s *TableChangeStream) withWatermarkOwnerFence(ctx context.Context) context.Context {
+	var sourceTableID uint64
+	if s.tableInfo != nil {
+		sourceTableID = s.tableInfo.SourceTblId
+	}
+	return WithWatermarkOwnerFence(ctx, s.ownerFence, sourceTableID)
 }
 
 // processWithTxn processes changes within a transaction
@@ -1148,6 +1343,12 @@ func (s *TableChangeStream) processWithTxn(
 	if err != nil {
 		return err
 	}
+	if s.initSnapshotSplitTxn && s.initialSyncPending.Load() {
+		// The cached value may belong to a retired source table ID. The durable
+		// frontend classification is authoritative until this generation has
+		// published its first complete snapshot watermark.
+		fromTs = types.TS{}
+	}
 
 	// Check if reached end time
 	if !s.endTs.IsEmpty() && fromTs.GE(&s.endTs) {
@@ -1159,12 +1360,34 @@ func (s *TableChangeStream) processWithTxn(
 		)
 		// Clear error on first success (lazy, eventual consistency)
 		s.clearErrorOnFirstSuccess(ctx)
+		s.initialSyncPending.Store(false)
 		s.progressTracker.EndRound(true, nil)
 		return nil // Graceful end
 	}
 
-	toTs := types.TimestampToTS(GetSnapshotTS(txnOp))
+	currentSnapshotTs := types.TimestampToTS(GetSnapshotTS(txnOp))
+	toTs := currentSnapshotTs
 	tsCapped := false
+	if fromTs.IsEmpty() && s.initSnapshotSplitTxn {
+		toTs = s.initialSnapshotEpoch
+		if !s.endTs.IsEmpty() && toTs.GT(&s.endTs) {
+			toTs = s.endTs
+			tsCapped = true
+		}
+		if currentSnapshotTs.LT(&toTs) {
+			// A persisted table-generation epoch normally came from an earlier
+			// transaction snapshot. Wait without selecting a different epoch if the
+			// current CN has not made it visible yet: changing it would invalidate a
+			// partial target snapshot after retry.
+			logutil.Debug(
+				"cdc.table_stream.initial_snapshot_epoch_not_visible",
+				zap.String("table", s.tableInfo.String()),
+				zap.String("current-snapshot-ts", currentSnapshotTs.ToString()),
+				zap.String("initial-snapshot-epoch", toTs.ToString()),
+			)
+			return s.handleSnapshotNoProgress(ctx, currentSnapshotTs, toTs)
+		}
+	}
 	if !s.endTs.IsEmpty() && toTs.GT(&s.endTs) {
 		toTs = s.endTs
 		tsCapped = true
@@ -1303,14 +1526,38 @@ func (s *TableChangeStream) processWithTxn(
 		// Update memory pool metrics
 		v2.CdcMpoolInUseBytesGauge.Set(float64(s.mp.Stats().NumCurrBytes.Load()))
 
+		// Acquire before collector.Next so blocked table streams do not retain an
+		// unbounded number of large initial-snapshot batches. Non-snapshot results
+		// release the permit immediately below.
+		permit, acquireErr := s.acquireInitialSnapshotPermit(ctx)
+		if acquireErr != nil {
+			s.progressTracker.EndRound(false, acquireErr)
+			return acquireErr
+		}
+
 		// Get next change
 		start = time.Now()
 		changeData, err := collector.Next(ctx)
 		v2.CdcReadDurationHistogram.Observe(time.Since(start).Seconds())
 		if err != nil {
+			permit.Release()
 			s.progressTracker.EndRound(false, err)
 			return err
 		}
+		if changeData.Type == ChangeTypeSnapshot && changeData.HasData() {
+			var allocated uint64
+			if changeData.InsertBatch != nil {
+				allocated += uint64(changeData.InsertBatch.Allocated())
+			}
+			if changeData.DeleteBatch != nil {
+				allocated += uint64(changeData.DeleteBatch.Allocated())
+			}
+			permit.ObserveBatchBytes(allocated)
+			changeData.snapshotPermit = permit
+		} else {
+			permit.Release()
+		}
+		s.progressTracker.SetState("processing")
 
 		// FIX: Check pause before processing NoMoreData
 		// NoMoreData triggers commit which updates watermark
@@ -1343,23 +1590,27 @@ func (s *TableChangeStream) processWithTxn(
 			}
 		}
 
+		// Capture observability before ProcessChange transfers batch ownership.
+		// ChangeData.Clean below only releases fields the processor did not consume.
+		var rows uint64
+		if changeData.InsertBatch != nil {
+			rows = uint64(changeData.InsertBatch.RowCount())
+		}
+		if changeData.DeleteBatch != nil {
+			rows += uint64(changeData.DeleteBatch.RowCount())
+		}
+
 		// Process change
 		if err = s.dataProcessor.ProcessChange(ctx, changeData); err != nil {
+			changeData.Clean(s.mp)
 			s.progressTracker.EndRound(false, err)
 			return err
 		}
+		changeData.Clean(s.mp)
 
 		// Track batch processing
 		if changeData.Type != ChangeTypeNoMoreData {
 			batchCount++
-			var rows uint64
-			if changeData.InsertBatch != nil {
-				rows = uint64(changeData.InsertBatch.RowCount())
-			}
-			if changeData.DeleteBatch != nil {
-				rows += uint64(changeData.DeleteBatch.RowCount())
-			}
-
 			// Record batch with estimated size
 			s.progressTracker.RecordBatch(rows, rows*100) // Rough estimate: 100 bytes per row
 
@@ -1379,7 +1630,7 @@ func (s *TableChangeStream) processWithTxn(
 		if changeData.Type == ChangeTypeNoMoreData {
 			// Clear error on first success (lazy, eventual consistency)
 			s.clearErrorOnFirstSuccess(ctx)
-
+			s.initialSyncPending.Store(false)
 			// Mark successful round completion
 			s.progressTracker.EndRound(true, nil)
 			s.progressTracker.UpdateWatermark(toTs)
@@ -1475,8 +1726,24 @@ func (s *TableChangeStream) onWatermarkAdvanced() {
 // handleStaleRead handles StaleRead error by resetting watermark
 // Returns error with retryable flag determined by recoverability
 func (s *TableChangeStream) handleStaleRead(ctx context.Context, txnOp client.TxnOperator) error {
-	// If startTs is set and noFull is false, StaleRead is fatal (non-retryable)
-	if !s.noFull && !s.startTs.IsEmpty() {
+	if s.initSnapshotSplitTxn {
+		// A partially committed snapshot is correct only for its persisted epoch.
+		// Resetting either an initial or already caught-up stream to a newer
+		// timestamp would leave deleted or changed source primary keys stranded
+		// in the target. Resetting to the older stable epoch cannot repair a stale
+		// read after source retention has removed its data.
+		return moerr.NewInternalErrorf(
+			ctx,
+			"CDC tableChangeStream %s cannot safely recover stale data for stable initial snapshot %s; recreate the task after verifying target state",
+			s.tableInfo.String(),
+			s.initialSnapshotEpoch.ToString(),
+		)
+	}
+
+	// A durable start timestamp is the activation boundary for both explicit
+	// starts and NoFull tasks. Advancing it to a later recovery snapshot would
+	// permanently skip commits in the gap, so fail closed when the range is stale.
+	if !s.startTs.IsEmpty() {
 		return moerr.NewInternalErrorf(
 			ctx,
 			"CDC tableChangeStream %s stale read with startTs %s set, cannot recover",

@@ -19,9 +19,12 @@ import (
 	"container/heap"
 	"fmt"
 	"io"
-	"os"
+	"math"
+	"slices"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -29,6 +32,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/topsites"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -53,6 +59,38 @@ func (top *Top) OpType() vm.OpType {
 	return vm.Top
 }
 
+func growTopSlice[T any](
+	values []T,
+	length int,
+	proc *process.Process,
+	allocation *spillutil.SpillAllocationAccount,
+	site mpool.AllocationSite,
+) ([]T, error) {
+	if length < len(values) || proc == nil {
+		return values, mpool.ErrAllocationAccountInvalid
+	}
+	if length <= cap(values) {
+		return values[:length], nil
+	}
+	if allocation != nil {
+		grown, err := spillutil.GrowAccountedSlice(
+			values,
+			length,
+			proc.Mp(),
+			allocation,
+			site,
+		)
+		if err != nil {
+			// Callers assign the returned slice back to its owning field. Failed
+			// growth leaves the old allocation live and owned until Reset/Free.
+			return values, err
+		}
+		return grown, nil
+	}
+	values = slices.Grow(values, length-len(values))
+	return values[:length], nil
+}
+
 func (top *Top) Prepare(proc *process.Process) (err error) {
 	if top.OpAnalyzer == nil {
 		top.OpAnalyzer = process.NewAnalyzer(top.GetIdx(), top.IsFirst, top.IsLast, "top")
@@ -60,9 +98,20 @@ func (top *Top) Prepare(proc *process.Process) (err error) {
 		top.OpAnalyzer.Reset()
 	}
 
+	if top.ctr.allocationAccount != nil {
+		top.ctr.budget, err = proc.GetExecutionResourceBudget()
+		if err != nil {
+			return err
+		}
+	}
+
 	// limit executor
 	if top.ctr.limitExecutor == nil {
-		top.ctr.limitExecutor, err = colexec.NewExpressionExecutor(proc, top.Limit)
+		top.ctr.limitExecutor, err = colexec.NewExpressionExecutorWithAllocation(
+			proc,
+			top.Limit,
+			top.ctr.expressionAllocation,
+		)
 		if err != nil {
 			return err
 		}
@@ -73,17 +122,30 @@ func (top *Top) Prepare(proc *process.Process) (err error) {
 	}
 	top.ctr.limit = vector.MustFixedColWithTypeCheck[uint64](vec)[0]
 
-	if top.ctr.limit > 1024 {
-		top.ctr.sels = make([]int64, 0, 1024)
-	} else {
-		top.ctr.sels = make([]int64, 0, top.ctr.limit)
+	initialSelections := int(min(top.ctr.limit, uint64(1024)))
+	if initialSelections > 0 {
+		top.ctr.sels, err = growTopSlice(
+			top.ctr.sels,
+			initialSelections,
+			proc,
+			top.ctr.spillAllocation,
+			topsites.TopSelections,
+		)
+		if err != nil {
+			return err
+		}
+		top.ctr.sels = top.ctr.sels[:0]
 	}
 	top.ctr.poses = make([]int32, 0, len(top.Fs))
 
 	if len(top.ctr.executorsForOrderColumn) != len(top.Fs) {
 		top.ctr.executorsForOrderColumn = make([]colexec.ExpressionExecutor, len(top.Fs))
 		for i := range top.ctr.executorsForOrderColumn {
-			top.ctr.executorsForOrderColumn[i], err = colexec.NewExpressionExecutor(proc, top.Fs[i].Expr)
+			top.ctr.executorsForOrderColumn[i], err = colexec.NewExpressionExecutorWithAllocation(
+				proc,
+				top.Fs[i].Expr,
+				top.ctr.expressionAllocation,
+			)
 			if err != nil {
 				return err
 			}
@@ -96,15 +158,22 @@ func (top *Top) Prepare(proc *process.Process) (err error) {
 		top.ctr.topValueZM = objectio.NewZM(types.T(typ.Id), typ.Scale)
 	}
 
+	// OrderedOutput is a topology contract, not a storage policy. Both eval
+	// paths produce sorted rows. Small results use type/actual-byte admission
+	// in build and migrate only under payload pressure; large K still spills.
 	if top.ctr.limit > topSpillThreshold {
 		top.ctr.spilling = true
-		top.ctr.rowRefs = make([]rowRef, 0, min(top.ctr.limit, 1024*1024))
 	}
 
 	return nil
 }
 
-func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
+func (top *Top) Call(
+	proc *process.Process,
+) (callResult vm.CallResult, callErr error) {
+	defer func() {
+		callErr = hashbuild.TerminalBudgetErrorForOperator(proc.Ctx, "top", callErr)
+	}()
 	analyzer := top.OpAnalyzer
 
 	if top.ctr.limit == 0 {
@@ -122,6 +191,11 @@ func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 			bat := result.Batch
 
 			if bat == nil {
+				// The child may cancel the process while returning EOF, after this
+				// Top invocation has passed vm.Exec's entry cancellation check.
+				if err, canceled := vm.CancelCheck(proc); canceled {
+					return vm.CancelResult, err
+				}
 				top.ctr.state = vm.Eval
 				break
 			}
@@ -147,6 +221,9 @@ func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 
 			err = top.ctr.build(top, top.ctr.buildBat, proc, analyzer)
 			if err != nil {
+				if _, canceled := vm.CancelCheck(proc); canceled {
+					return vm.CancelResult, err
+				}
 				return result, err
 			}
 			if top.TopValueTag > 0 && top.updateTopValueZM() {
@@ -157,7 +234,7 @@ func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 
 	result := vm.NewCallResult()
 	if top.ctr.state == vm.Eval {
-		if top.ctr.bat == nil && top.ctr.orderedRefs == nil {
+		if top.ctr.bat == nil && !top.ctr.spillOrdered {
 			top.ctr.state = vm.End
 			return result, nil
 		}
@@ -200,6 +277,22 @@ func (ctr *container) build(ap *Top, bat *batch.Batch, proc *process.Process, an
 	}
 
 	if len(ctr.cmps) == 0 {
+		// Types can prove the fixed-width fast path. Everything else uses
+		// actual winner-byte admission, not unconditional full-input spilling.
+		if !ctr.spilling {
+			remaining := uint64(evalSpillChunkBytes / 4)
+			if ctr.limit > 0 {
+				remaining /= ctr.limit
+			}
+			for _, vec := range bat.Vecs {
+				size := vec.GetType().TypeSize()
+				if size <= 0 || !vec.GetType().Oid.IsFixedLen() || uint64(size)+1 > remaining {
+					ctr.boundedResident = true
+					break
+				}
+				remaining -= uint64(size) + 1
+			}
+		}
 		mp := make(map[int]int)
 		for i, pos := range ctr.poses {
 			mp[int(pos)] = i
@@ -211,22 +304,34 @@ func (ctr *container) build(ap *Top, bat *batch.Batch, proc *process.Process, an
 				for idx, pos := range ctr.poses {
 					ctr.bat.Vecs[idx] = vector.NewOffHeapVecWithType(*bat.Vecs[pos].GetType())
 				}
+				if ctr.retainedAllocation != nil {
+					if err := ctr.bat.SetAllocationAccount(ctr.retainedAllocation); err != nil {
+						ctr.bat.Clean(proc.Mp())
+						ctr.bat = nil
+						return err
+					}
+				}
 			} else {
 				batNew, vecNew := batch.NewWithSize, vector.NewVec
-				if ap.ctr.limit > 10240 {
+				if ap.ctr.limit > 10240 || ctr.retainedAllocation != nil {
 					batNew, vecNew = batch.NewOffHeapWithSize, vector.NewOffHeapVecWithType
 				}
 				ctr.bat = batNew(len(bat.Vecs))
 				for i, vec := range bat.Vecs {
 					ctr.bat.Vecs[i] = vecNew(*vec.GetType())
 				}
+				if ctr.retainedAllocation != nil {
+					if err := ctr.bat.SetAllocationAccount(ctr.retainedAllocation); err != nil {
+						ctr.bat.Clean(proc.Mp())
+						ctr.bat = nil
+						return err
+					}
+				}
 			}
 		}
 
 		if ctr.spilling {
-			ctr.spillCmpPoses = make([]int32, len(ctr.poses))
 			for idx := range ctr.poses {
-				ctr.spillCmpPoses[idx] = int32(idx)
 				var desc, nullsLast bool
 				pos := ctr.poses[idx]
 				if posIdx, ok := mp[int(pos)]; ok {
@@ -241,7 +346,7 @@ func (ctr *container) build(ap *Top, bat *batch.Batch, proc *process.Process, an
 				}
 				ctr.cmps = append(
 					ctr.cmps,
-					compare.New(*bat.Vecs[pos].GetType(), desc, nullsLast),
+					compare.NewOrder(*bat.Vecs[pos].GetType(), desc, nullsLast),
 				)
 			}
 		} else {
@@ -259,7 +364,7 @@ func (ctr *container) build(ap *Top, bat *batch.Batch, proc *process.Process, an
 				}
 				ctr.cmps = append(
 					ctr.cmps,
-					compare.New(*bat.Vecs[i].GetType(), desc, nullsLast),
+					compare.NewOrder(*bat.Vecs[i].GetType(), desc, nullsLast),
 				)
 			}
 		}
@@ -268,7 +373,185 @@ func (ctr *container) build(ap *Top, bat *batch.Batch, proc *process.Process, an
 	if ctr.spilling {
 		return ctr.processBatchSpill(ap.ctr.limit, bat, proc, analyzer)
 	}
+	if ctr.boundedResident {
+		return ctr.processBatchResident(bat, proc, analyzer)
+	}
 	return ctr.processBatch(ap.ctr.limit, bat, proc)
+}
+
+func (ctr *container) residentWindow() uint64 {
+	window := uint64(evalSpillChunkBytes / 4)
+	if ctr.residentByteLimit != 0 {
+		window = min(window, ctr.residentByteLimit)
+	}
+	return min(window, uint64(mpool.MaxAllocationSize()/8))
+}
+
+// compactResident preserves row positions (and hence the heap). Admit the new
+// allocation while the old one is still owned, and publish only after all
+// columns have copied successfully. UnionBatch copies live varlen values only.
+func (ctr *container) compactResident(proc *process.Process) error {
+	next := batch.NewOffHeapWithSize(len(ctr.bat.Vecs))
+	defer func() {
+		if next != nil {
+			next.Clean(proc.Mp())
+		}
+	}()
+	for i, vec := range ctr.bat.Vecs {
+		next.Vecs[i] = vector.NewOffHeapVecWithType(*vec.GetType())
+	}
+	if ctr.retainedAllocation != nil {
+		if err := next.SetAllocationAccount(ctr.retainedAllocation); err != nil {
+			return err
+		}
+	}
+	for i := range next.Vecs {
+		if err := next.Vecs[i].UnionBatch(ctr.bat.Vecs[i], 0, ctr.bat.RowCount(), nil, proc.Mp()); err != nil {
+			return err
+		}
+	}
+	next.SetRowCount(ctr.bat.RowCount())
+	ctr.bat.Clean(proc.Mp())
+	ctr.bat, next = next, nil
+	for i, cmp := range ctr.cmps {
+		cmp.Set(0, ctr.bat.Vecs[i])
+	}
+	return nil
+}
+
+// startResidentSpill transfers only surviving rows. The pending input row has
+// not been mutated or consumed, so the caller resumes it exactly once. On any
+// failure the query aborts and Reset/Free still owns all published resources.
+func (ctr *container) startResidentSpill(proc *process.Process, analyzer process.Analyzer) error {
+	keys := batch.NewOffHeapWithSize(len(ctr.poses))
+	defer func() {
+		if keys != nil {
+			keys.Clean(proc.Mp())
+		}
+	}()
+	for i, pos := range ctr.poses {
+		keys.Vecs[i] = vector.NewOffHeapVecWithType(*ctr.bat.Vecs[pos].GetType())
+	}
+	if ctr.retainedAllocation != nil {
+		if err := keys.SetAllocationAccount(ctr.retainedAllocation); err != nil {
+			return err
+		}
+	}
+	rows := ctr.bat.RowCount()
+	if rows > 0 {
+		record, err := ctr.spillBatch(ctr.bat, proc, analyzer)
+		if err != nil {
+			return err
+		}
+		ctr.rowRefs, err = growTopSlice(ctr.rowRefs, rows, proc, ctr.spillAllocation, topsites.TopRowReferences)
+		if err != nil {
+			return err
+		}
+		for i, pos := range ctr.poses {
+			if err := keys.Vecs[i].UnionBatch(ctr.bat.Vecs[pos], 0, rows, nil, proc.Mp()); err != nil {
+				return err
+			}
+		}
+		for i := range rows {
+			width, err := spillOutputRowBytes(ctr.bat, ctr.n, i)
+			if err != nil {
+				return err
+			}
+			ctr.rowRefs[i] = rowRef{offset: record.offset, size: record.size, rowIdx: int64(i), outputBytes: width}
+		}
+	}
+	keys.SetRowCount(rows)
+	cmps := make([]compare.Compare, len(ctr.poses))
+	for i, pos := range ctr.poses {
+		cmps[i] = ctr.cmps[pos]
+		cmps[i].Set(0, keys.Vecs[i])
+	}
+	ctr.bat.Clean(proc.Mp())
+	ctr.bat, keys = keys, nil
+	ctr.cmps = cmps
+	ctr.spilling = true
+	ctr.residentBytes = 0
+	return nil
+}
+
+func (ctr *container) processBatchResident(bat *batch.Batch, proc *process.Process, analyzer process.Analyzer) error {
+	for i, cmp := range ctr.cmps {
+		cmp.Set(1, bat.Vecs[i])
+	}
+	window := ctr.residentWindow()
+	full := uint64(len(ctr.sels)) == ctr.limit
+	for row := 0; row < bat.RowCount(); row++ {
+		if full {
+			// Reject contiguous losers with only the comparison hot path. Keep
+			// cancellation outside that loop but bound each scan segment.
+			if err, canceled := vm.CancelCheck(proc); canceled {
+				return err
+			}
+			end := min(row+evalSpillChunkSize, bat.RowCount())
+			for row < end && ctr.compare(1, 0, int64(row), ctr.sels[0]) >= 0 {
+				row++
+			}
+			if row == end {
+				row-- // the outer loop advances to the next unchecked row
+				continue
+			}
+		}
+		if err, canceled := vm.CancelCheck(proc); canceled {
+			return err
+		}
+		width, err := spillOutputRowBytes(bat, len(bat.Vecs), row)
+		if err != nil {
+			return err
+		}
+		if width > window || ctr.residentBytes > window-width {
+			var live uint64
+			for i := 0; i < ctr.bat.RowCount(); i++ {
+				n, err := spillOutputRowBytes(ctr.bat, len(ctr.bat.Vecs), i)
+				if err != nil {
+					return err
+				}
+				live += n
+			}
+			if width <= window/2 && live <= window/2-width {
+				if err := ctr.compactResident(proc); err != nil {
+					return err
+				}
+				ctr.residentBytes = live
+			} else {
+				if err := ctr.startResidentSpill(proc, analyzer); err != nil {
+					return err
+				}
+				return ctr.processBatchSpillFrom(ctr.limit, bat, row, proc, analyzer)
+			}
+		}
+		if !full {
+			position := len(ctr.sels)
+			ctr.sels, err = growTopSlice(ctr.sels, position+1, proc, ctr.spillAllocation, topsites.TopSelections)
+			if err != nil {
+				return err
+			}
+			for i, vec := range ctr.bat.Vecs {
+				if err := vec.UnionOne(bat.Vecs[i], int64(row), proc.Mp()); err != nil {
+					return err
+				}
+			}
+			ctr.sels[position] = int64(position)
+			ctr.bat.AddRowCount(1)
+			if uint64(len(ctr.sels)) == ctr.limit {
+				ctr.sort()
+				full = true
+			}
+		} else {
+			for _, cmp := range ctr.cmps {
+				if err := cmp.Copy(1, 0, int64(row), ctr.sels[0], proc); err != nil {
+					return err
+				}
+			}
+			heap.Fix(ctr, 0)
+		}
+		ctr.residentBytes += width
+	}
+	return nil
 }
 
 func (ctr *container) processBatch(limit uint64, bat *batch.Batch, proc *process.Process) error {
@@ -276,6 +559,21 @@ func (ctr *container) processBatch(limit uint64, bat *batch.Batch, proc *process
 	processCount := rowsToFill(limit, len(ctr.sels), rowCount)
 
 	if processCount > 0 {
+		if processCount > math.MaxInt-len(ctr.sels) {
+			return moerr.NewInvalidInputNoCtx("top selection count exceeds platform limit")
+		}
+		baseSel := int64(len(ctr.sels))
+		var err error
+		ctr.sels, err = growTopSlice(
+			ctr.sels,
+			len(ctr.sels)+processCount,
+			proc,
+			ctr.spillAllocation,
+			topsites.TopSelections,
+		)
+		if err != nil {
+			return err
+		}
 		for j, vec := range ctr.bat.Vecs {
 			if err := vec.UnionBatch(
 				bat.Vecs[j],
@@ -287,9 +585,8 @@ func (ctr *container) processBatch(limit uint64, bat *batch.Batch, proc *process
 				return err
 			}
 		}
-		baseSel := int64(len(ctr.sels))
 		for i := range processCount {
-			ctr.sels = append(ctr.sels, baseSel+int64(i))
+			ctr.sels[int(baseSel)+i] = baseSel + int64(i)
 		}
 		ctr.bat.AddRowCount(processCount)
 
@@ -320,60 +617,187 @@ func (ctr *container) processBatch(limit uint64, bat *batch.Batch, proc *process
 	return nil
 }
 
-func (ctr *container) spillBatch(bat *batch.Batch, proc *process.Process, analyzer process.Analyzer) error {
-	if ctr.spillFile == nil {
-		f, err := os.CreateTemp("", "mo-top-spill-*")
-		if err != nil {
-			return err
-		}
-		ctr.spillFile = f
+const topSpillWriteBufferSize = 64 << 10
+
+func (ctr *container) ensureSpillWriter(proc *process.Process) error {
+	if ctr.spillWriter != nil {
+		return nil
 	}
-
-	offset, _ := ctr.spillFile.Seek(0, io.SeekCurrent)
-
-	// Only serialize the original n columns (excluding appended order columns).
-	origBat := batch.NewWithSize(ctr.n)
-	if len(bat.Attrs) >= ctr.n {
-		origBat.Attrs = bat.Attrs[:ctr.n]
+	if proc == nil || ctr.spillFile != nil || ctr.spillFDToken != nil ||
+		ctr.spillDiskToken != nil {
+		return mpool.ErrAllocationAccountInvariant
 	}
-	copy(origBat.Vecs, bat.Vecs[:ctr.n])
-	origBat.SetRowCount(bat.RowCount())
-
-	ctr.spillBuf.Reset()
-	data, err := origBat.MarshalBinaryWithBuffer(&ctr.spillBuf, false)
+	if ctr.allocationAccount != nil && ctr.budget == nil {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	spillFS, err := proc.GetSpillFileService()
 	if err != nil {
 		return err
 	}
-	if _, err := ctr.spillFile.Write(data); err != nil {
+
+	var fdToken *process.ExecutionSpillFDReservation
+	var diskToken *process.ExecutionSpillDiskReservation
+	if ctr.budget != nil {
+		fdToken, err = ctr.budget.ReserveSpillFD(1)
+		if err != nil {
+			return err
+		}
+		diskToken, err = ctr.budget.ReserveSpillDisk(0)
+		if err != nil {
+			fdToken.Release()
+			return err
+		}
+	}
+	file, err := spillFS.CreateAndRemoveFile(
+		proc.Ctx,
+		fmt.Sprintf("top_%s", uuid.NewString()),
+	)
+	if err != nil {
+		if diskToken != nil {
+			diskToken.Release()
+		}
+		if fdToken != nil {
+			fdToken.Release()
+		}
 		return err
 	}
-
-	analyzer.Spill(int64(len(data)))
-	analyzer.SpillRows(int64(bat.RowCount()))
-
-	ctr.spillIndex = append(ctr.spillIndex, spilledBatchInfo{
-		offset: offset,
-		size:   int64(len(data)),
-		rows:   int32(bat.RowCount()),
-	})
-	ctr.spillBatIdx++
+	writer, err := spillutil.NewAccountedWriter(
+		proc.Ctx,
+		proc.Mp(),
+		ctr.allocationAccount,
+		mpool.AllocationOwnerTop,
+		topsites.TopSpillWriteBuffer,
+		spillutil.NewDiskReservationWriter(file, diskToken),
+		topSpillWriteBufferSize,
+	)
+	if err != nil {
+		_ = file.Close()
+		if diskToken != nil {
+			diskToken.Release()
+		}
+		if fdToken != nil {
+			fdToken.Release()
+		}
+		return err
+	}
+	ctr.spillFile = file
+	ctr.spillWriter = writer
+	ctr.spillFDToken = fdToken
+	ctr.spillDiskToken = diskToken
 	return nil
 }
 
-func (ctr *container) processBatchSpill(limit uint64, bat *batch.Batch, proc *process.Process, analyzer process.Analyzer) error {
-	batchIdx := ctr.spillBatIdx
-	if err := ctr.spillBatch(bat, proc, analyzer); err != nil {
+func (ctr *container) flushSpillWriter() error {
+	if ctr.spillWriter == nil {
+		return nil
+	}
+	writer := ctr.spillWriter
+	ctr.spillWriter = nil
+	if err := writer.Flush(); err != nil {
+		writer.Free()
 		return err
 	}
+	writer.Free()
+	return nil
+}
+
+func (ctr *container) spillBatch(
+	bat *batch.Batch,
+	proc *process.Process,
+	analyzer process.Analyzer,
+) (spillRecordRef, error) {
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return spillRecordRef{}, err
+	}
+	if bat == nil || ctr.n < 0 || ctr.n > len(bat.Vecs) {
+		return spillRecordRef{}, moerr.NewInvalidInputNoCtx("invalid top spill batch")
+	}
+	if len(bat.ExtraBuf) != 0 {
+		return spillRecordRef{}, moerr.NewInvalidInputNoCtx("top spill batch has extra buffers")
+	}
+
+	// Serialize only original columns. The appended order expressions are
+	// retained in the bounded key batch and never duplicated on disk.
+	var origBat batch.Batch
+	origBat.Vecs = bat.Vecs[:ctr.n]
+	origBat.Recursive = bat.Recursive
+	origBat.ShuffleIDX = bat.ShuffleIDX
+	origBat.SetRowCount(bat.RowCount())
+	payloadSize, err := origBat.MarshalBinaryWithPrepareParamKindsSize()
+	if err != nil {
+		return spillRecordRef{}, err
+	}
+	if payloadSize <= 0 || uint64(payloadSize) > math.MaxInt64 ||
+		ctr.spillOffset > math.MaxInt64-int64(payloadSize) {
+		return spillRecordRef{}, moerr.NewInvalidInputNoCtx("top spill payload exceeds format")
+	}
+	if err = ctr.ensureSpillWriter(proc); err != nil {
+		return spillRecordRef{}, err
+	}
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return spillRecordRef{}, err
+	}
+	offset := ctr.spillOffset
+	if err = origBat.MarshalBinaryWithPrepareParamKindsTo(ctr.spillWriter); err != nil {
+		return spillRecordRef{}, err
+	}
+	ctr.spillOffset += int64(payloadSize)
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return spillRecordRef{}, err
+	}
+	if analyzer != nil {
+		analyzer.Spill(int64(payloadSize))
+		analyzer.SpillRows(int64(bat.RowCount()))
+	}
+	return spillRecordRef{offset: offset, size: int64(payloadSize)}, nil
+}
+
+func (ctr *container) processBatchSpill(limit uint64, bat *batch.Batch, proc *process.Process, analyzer process.Analyzer) error {
+	return ctr.processBatchSpillFrom(limit, bat, 0, proc, analyzer)
+}
+
+func (ctr *container) processBatchSpillFrom(limit uint64, bat *batch.Batch, start int, proc *process.Process, analyzer process.Analyzer) error {
+	// A complete loser batch must not create a spill file or consume disk.
+	var record spillRecordRef
+	var err error
 
 	rowCount := bat.RowCount()
-	processCount := rowsToFill(limit, len(ctr.sels), rowCount)
+	processCount := rowsToFill(limit, len(ctr.sels), rowCount-start)
 
 	if processCount > 0 {
+		record, err = ctr.spillBatch(bat, proc, analyzer)
+		if err != nil {
+			return err
+		}
+		if processCount > math.MaxInt-len(ctr.sels) {
+			return moerr.NewInvalidInputNoCtx("top selection count exceeds platform limit")
+		}
+		baseSel := len(ctr.sels)
+		newLength := baseSel + processCount
+		ctr.sels, err = growTopSlice(
+			ctr.sels,
+			newLength,
+			proc,
+			ctr.spillAllocation,
+			topsites.TopSelections,
+		)
+		if err != nil {
+			return err
+		}
+		ctr.rowRefs, err = growTopSlice(
+			ctr.rowRefs,
+			newLength,
+			proc,
+			ctr.spillAllocation,
+			topsites.TopRowReferences,
+		)
+		if err != nil {
+			return err
+		}
 		for idx, pos := range ctr.poses {
 			if err := ctr.bat.Vecs[idx].UnionBatch(
 				bat.Vecs[pos],
-				0,
+				int64(start),
 				processCount,
 				nil,
 				proc.Mp(),
@@ -381,22 +805,28 @@ func (ctr *container) processBatchSpill(limit uint64, bat *batch.Batch, proc *pr
 				return err
 			}
 		}
-		baseSel := int64(len(ctr.sels))
 		for i := range processCount {
-			ctr.sels = append(ctr.sels, baseSel+int64(i))
-			ctr.rowRefs = append(ctr.rowRefs, rowRef{
-				batchIdx: batchIdx,
-				rowIdx:   int32(i),
-			})
+			outputBytes, err := spillOutputRowBytes(bat, ctr.n, start+i)
+			if err != nil {
+				return err
+			}
+			position := baseSel + i
+			ctr.sels[position] = int64(position)
+			ctr.rowRefs[position] = rowRef{
+				offset:      record.offset,
+				size:        record.size,
+				rowIdx:      int64(start + i),
+				outputBytes: outputBytes,
+			}
 		}
 		ctr.bat.AddRowCount(processCount)
 
 		if uint64(len(ctr.sels)) == limit {
-			ctr.sortSpill()
+			ctr.sort()
 		}
 	}
 
-	if processCount == rowCount {
+	if start+processCount == rowCount {
 		return nil
 	}
 
@@ -404,22 +834,57 @@ func (ctr *container) processBatchSpill(limit uint64, bat *batch.Batch, proc *pr
 	for idx, pos := range ctr.poses {
 		ctr.cmps[idx].Set(1, bat.Vecs[pos])
 	}
-	for i, j := processCount, rowCount; i < j; i++ {
+	for i, j := start+processCount, rowCount; i < j; i++ {
 		rowIdx := int64(i)
 		if ctr.compare(1, 0, rowIdx, ctr.sels[0]) < 0 {
+			if record.size == 0 {
+				record, err = ctr.spillBatch(bat, proc, analyzer)
+				if err != nil {
+					return err
+				}
+			}
+			outputBytes, err := spillOutputRowBytes(bat, ctr.n, i)
+			if err != nil {
+				return err
+			}
 			for idx := range ctr.cmps {
 				if err := ctr.cmps[idx].Copy(1, 0, rowIdx, ctr.sels[0], proc); err != nil {
 					return err
 				}
 			}
 			ctr.rowRefs[ctr.sels[0]] = rowRef{
-				batchIdx: batchIdx,
-				rowIdx:   int32(i),
+				offset:      record.offset,
+				size:        record.size,
+				rowIdx:      int64(i),
+				outputBytes: outputBytes,
 			}
 			heap.Fix(ctr, 0)
 		}
 	}
 	return nil
+}
+
+func spillOutputRowBytes(bat *batch.Batch, columnCount, row int) (uint64, error) {
+	if bat == nil || columnCount < 0 || columnCount > len(bat.Vecs) ||
+		row < 0 || row >= bat.RowCount() {
+		return 0, moerr.NewInternalErrorNoCtx("invalid top spill output row")
+	}
+	var total uint64
+	for col := 0; col < columnCount; col++ {
+		vec := bat.Vecs[col]
+		if vec == nil || vec.GetType() == nil {
+			return 0, moerr.NewInternalErrorNoCtx("invalid top spill output vector")
+		}
+		rowBytes := uint64(vec.GetType().TypeSize())
+		if vec.GetType().IsVarlen() && !vec.IsNull(uint64(row)) {
+			rowBytes += uint64(len(vec.GetBytesAt(row)))
+		}
+		if rowBytes > math.MaxUint64-total {
+			return 0, moerr.NewInvalidInputNoCtx("top spill output row size overflows")
+		}
+		total += rowBytes
+	}
+	return total, nil
 }
 
 func rowsToFill(limit uint64, currentRows int, batchRows int) int {
@@ -448,13 +913,15 @@ func (ctr *container) evalInMemory(limit uint64, n int, proc *process.Process, r
 	for i, cmp := range ctr.cmps {
 		ctr.bat.Vecs[i] = cmp.Vector()
 	}
-	sels := make([]int64, len(ctr.sels))
-	for i, j := 0, len(ctr.sels); i < j; i++ {
-		sels[len(sels)-1-i] = heap.Pop(ctr).(int64)
+	ordered := ctr.sels[:len(ctr.sels)]
+	for range len(ordered) {
+		heap.Pop(ctr)
 	}
-	if err := ctr.bat.Shuffle(sels, proc.Mp()); err != nil {
+	ctr.sels = ordered
+	if err := ctr.bat.Shuffle(ctr.sels, proc.Mp()); err != nil {
 		return err
 	}
+	ctr.releaseSelectionState(proc)
 	for i := n; i < len(ctr.bat.Vecs); i++ {
 		ctr.bat.Vecs[i].Free(proc.Mp())
 	}
@@ -463,24 +930,81 @@ func (ctr *container) evalInMemory(limit uint64, n int, proc *process.Process, r
 	return nil
 }
 
-const evalSpillChunkSize = 8192
+const (
+	evalSpillChunkSize  = 8192
+	evalSpillChunkBytes = 64 * mpool.MB
+)
+
+func (ctr *container) nextSpillOutputChunkEnd(start int) (int, error) {
+	if start < 0 || start >= len(ctr.sels) {
+		return start, moerr.NewInternalErrorNoCtx("invalid top spill output cursor")
+	}
+	byteLimit := uint64(evalSpillChunkBytes)
+	if ctr.evalSpillOutputBytes != 0 {
+		byteLimit = ctr.evalSpillOutputBytes
+	}
+	// Leave growth/overlap slack under the actual allocator ceiling as well as
+	// the ordinary logical output window. A single oversized row still gets the
+	// existing resource/representation error instead of splitting a SQL row.
+	byteLimit = min(byteLimit, uint64(mpool.MaxAllocationSize()/4))
+	endLimit := min(start+evalSpillChunkSize, len(ctr.sels))
+	end := start
+	var outputBytes uint64
+	for end < endLimit {
+		selection := ctr.sels[end]
+		if selection < 0 || selection >= int64(len(ctr.rowRefs)) {
+			return start, moerr.NewInternalErrorNoCtx("invalid top spill row reference")
+		}
+		rowBytes := ctr.rowRefs[selection].outputBytes
+		if rowBytes > math.MaxUint64-outputBytes {
+			return start, moerr.NewInvalidInputNoCtx("top spill output batch size overflows")
+		}
+		// One individually valid row must make progress even when it is larger
+		// than the normal batch budget. Subsequent rows wait for the next call.
+		if end > start && outputBytes+rowBytes > byteLimit {
+			break
+		}
+		outputBytes += rowBytes
+		end++
+		if outputBytes >= byteLimit {
+			break
+		}
+	}
+	return end, nil
+}
 
 func (ctr *container) evalSpill(limit uint64, n int, proc *process.Process, result *vm.CallResult) (bool, error) {
-	// First call: pop heap into sorted order, free heap batch.
-	if ctr.orderedRefs == nil {
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return false, err
+	}
+	if err := ctr.flushSpillWriter(); err != nil {
+		return false, err
+	}
+
+	// First call: flush all published records, then reuse the heap's own
+	// backing as the final ascending selection order. heap.Pop stores each
+	// removed root in the vacated suffix, so no second data-scaled slice is
+	// needed for ordered references.
+	if !ctr.spillOrdered {
 		if uint64(len(ctr.sels)) < limit {
-			ctr.sortSpill()
+			ctr.sort()
 		}
-		ctr.orderedRefs = make([]rowRef, len(ctr.sels))
-		for i, j := 0, len(ctr.sels); i < j; i++ {
-			sel := heap.Pop(ctr).(int64)
-			ctr.orderedRefs[len(ctr.orderedRefs)-1-i] = ctr.rowRefs[sel]
+		ordered := ctr.sels[:len(ctr.sels)]
+		for i := range len(ordered) {
+			if i%evalSpillChunkSize == 0 {
+				if err, canceled := vm.CancelCheck(proc); canceled {
+					return false, err
+				}
+			}
+			heap.Pop(ctr)
 		}
+		ctr.sels = ordered
+		ctr.spillOrdered = true
 		ctr.evalCursor = 0
-		ctr.bat.Clean(proc.Mp())
-		ctr.bat = nil
-		ctr.rowRefs = nil
-		ctr.sels = nil
+		if ctr.bat != nil {
+			ctr.bat.Clean(proc.Mp())
+			ctr.bat = nil
+		}
 	}
 
 	// Free previous chunk's output batch.
@@ -489,83 +1013,152 @@ func (ctr *container) evalSpill(limit uint64, n int, proc *process.Process, resu
 		ctr.spillOutBat = nil
 	}
 
-	if ctr.evalCursor >= len(ctr.orderedRefs) {
-		return true, nil
+	if ctr.evalCursor >= len(ctr.sels) {
+		ctr.releaseSelectionState(proc)
+		return true, ctr.closeSpillFile()
+	}
+	if ctr.spillFile == nil {
+		return false, moerr.NewInternalErrorNoCtx("top spill file is unavailable")
 	}
 
 	chunkStart := ctr.evalCursor
-	chunkEnd := min(chunkStart+evalSpillChunkSize, len(ctr.orderedRefs))
-	chunkRefs := ctr.orderedRefs[chunkStart:chunkEnd]
+	chunkEnd, err := ctr.nextSpillOutputChunkEnd(chunkStart)
+	if err != nil {
+		return false, err
+	}
 	chunkSize := chunkEnd - chunkStart
 
 	type batchRow struct {
 		chunkPos int
-		rowIdx   int32
+		rowIdx   int64
 	}
-	batchRows := make(map[int32][]batchRow)
-	for i, ref := range chunkRefs {
-		batchRows[ref.batchIdx] = append(batchRows[ref.batchIdx], batchRow{
+	// The map and its value slices are bounded by evalSpillChunkSize,
+	// independently of total input batch count.
+	batchRows := make(map[spillRecordRef][]batchRow)
+	for i, selection := range ctr.sels[chunkStart:chunkEnd] {
+		if selection < 0 || selection >= int64(len(ctr.rowRefs)) {
+			return false, moerr.NewInternalErrorNoCtx("invalid top spill row reference")
+		}
+		ref := ctr.rowRefs[selection]
+		if ref.offset < 0 || ref.size <= 0 || ref.offset > ctr.spillOffset-ref.size {
+			return false, moerr.NewInternalErrorNoCtx("invalid top spill record reference")
+		}
+		record := spillRecordRef{offset: ref.offset, size: ref.size}
+		batchRows[record] = append(batchRows[record], batchRow{
 			chunkPos: i,
 			rowIdx:   ref.rowIdx,
 		})
 	}
 
 	outputBat := batch.NewOffHeapWithSize(n)
+	outputTransferred := false
+	defer func() {
+		if !outputTransferred {
+			outputBat.Clean(proc.Mp())
+		}
+	}()
 
 	reuseBat := batch.NewOffHeapWithSize(0)
+	if ctr.spillAllocation != nil {
+		if err := ctr.spillAllocation.ConfigureDecodedBatch(reuseBat); err != nil {
+			return false, err
+		}
+	}
 	defer reuseBat.Clean(proc.Mp())
 
-	for bIdx, rows := range batchRows {
-		info := ctr.spillIndex[bIdx]
-		data := make([]byte, info.size)
-		if _, err := ctr.spillFile.ReadAt(data, info.offset); err != nil {
+	outputInitialized := false
+	for record, rows := range batchRows {
+		if err, canceled := vm.CancelCheck(proc); canceled {
 			return false, err
 		}
-
 		reuseBat.CleanOnlyData()
-		if err := reuseBat.UnmarshalBinaryWithAnyMp(data, proc.Mp()); err != nil {
+		reader := io.NewSectionReader(ctr.spillFile, record.offset, record.size)
+		if err := reuseBat.UnmarshalFromReaderWithPrepareParamKindsForSpill(
+			reader,
+			record.size,
+			proc.Mp(),
+		); err != nil {
 			return false, err
 		}
+		if err := reuseBat.CheckLength(); err != nil {
+			return false, moerr.NewInvalidInputNoCtx(
+				"top spill vector length does not match row count",
+			)
+		}
+		if len(reuseBat.Vecs) != n {
+			return false, moerr.NewInternalErrorNoCtx("top spill column count mismatch")
+		}
 
-		if outputBat.Vecs[0] == nil {
+		if !outputInitialized {
 			for i := 0; i < n; i++ {
-				outputBat.Vecs[i] = vector.NewOffHeapVecWithType(*reuseBat.Vecs[i].GetType())
+				if ctr.outputAllocation == nil {
+					outputBat.Vecs[i] = vector.NewOffHeapVecWithType(*reuseBat.Vecs[i].GetType())
+				} else {
+					var err error
+					outputBat.Vecs[i], err = vector.NewOffHeapVecWithTypeAndAllocation(
+						*reuseBat.Vecs[i].GetType(),
+						ctr.outputAllocation,
+					)
+					if err != nil {
+						return false, err
+					}
+				}
 				if err := outputBat.Vecs[i].PreExtend(chunkSize, proc.Mp()); err != nil {
 					return false, err
 				}
+				if err := outputBat.Vecs[i].PreExtendBitmap(chunkSize, proc.Mp()); err != nil {
+					return false, err
+				}
 				outputBat.Vecs[i].SetLength(chunkSize)
+				// The output is capacity-reserved but no logical row has been
+				// written yet. Marking the slots null makes Copy's row-level
+				// provenance decision independent of the reserved length.
+				outputBat.Vecs[i].SetAllNulls(chunkSize)
 			}
-			if len(reuseBat.Attrs) > 0 {
-				outputBat.Attrs = make([]string, n)
-				copy(outputBat.Attrs, reuseBat.Attrs[:n])
-			}
+			outputInitialized = true
 		}
 
 		for _, r := range rows {
+			if r.rowIdx < 0 || r.rowIdx >= int64(reuseBat.RowCount()) {
+				return false, moerr.NewInternalErrorNoCtx("top spill row index out of range")
+			}
 			for col := 0; col < n; col++ {
-				if err := outputBat.Vecs[col].Copy(reuseBat.Vecs[col], int64(r.chunkPos), int64(r.rowIdx), proc.Mp()); err != nil {
+				if err := outputBat.Vecs[col].Copy(reuseBat.Vecs[col], int64(r.chunkPos), r.rowIdx, proc.Mp()); err != nil {
 					return false, err
 				}
 			}
 		}
 	}
 
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return false, err
+	}
 	outputBat.SetRowCount(chunkSize)
 	ctr.evalCursor = chunkEnd
+	done := ctr.evalCursor >= len(ctr.sels)
+	if done {
+		ctr.releaseSelectionState(proc)
+		if err := ctr.closeSpillFile(); err != nil {
+			return false, err
+		}
+	}
 	ctr.spillOutBat = outputBat
+	outputTransferred = true
 	result.Batch = outputBat
-	return ctr.evalCursor >= len(ctr.orderedRefs), nil
+	return done, nil
+}
+
+func (ctr *container) releaseSelectionState(proc *process.Process) {
+	if ctr.allocationAccount != nil && proc != nil {
+		spillutil.FreeAccountedSlice(ctr.sels, proc.Mp())
+		spillutil.FreeAccountedSlice(ctr.rowRefs, proc.Mp())
+	}
+	ctr.sels = nil
+	ctr.rowRefs = nil
 }
 
 // do sort work for heap, and result order will be set in container.sels
 func (ctr *container) sort() {
-	for i, cmp := range ctr.cmps {
-		cmp.Set(0, ctr.bat.Vecs[i])
-	}
-	heap.Init(ctr)
-}
-
-func (ctr *container) sortSpill() {
 	for i, cmp := range ctr.cmps {
 		cmp.Set(0, ctr.bat.Vecs[i])
 	}

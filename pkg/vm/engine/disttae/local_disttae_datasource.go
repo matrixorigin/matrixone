@@ -16,12 +16,14 @@ package disttae
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"fmt"
 	"slices"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -143,6 +145,13 @@ type LocalDisttaeDataSource struct {
 		txnOffset   int
 		entries     []workspaceDeleteEntry
 		byBlock     map[objectio.Blockid][]workspaceDeleteEntry
+		pointRows   map[objectio.Blockid][]uint64
+	}
+
+	pStateTombstoneObjects struct {
+		initialized bool
+		index       tombstoneObjectIndex
+		candidates  []int
 	}
 }
 
@@ -152,6 +161,13 @@ type workspaceDeleteEntry struct {
 }
 
 const mergeWorkspaceDeleteEntriesThreshold = 1024
+const indexWorkspaceDeleteEntriesForBlockThreshold = 128
+const maxIndexedWorkspaceDeleteRowsPerBlock = 256
+
+// Building the tombstone range index has a fixed per-scan cost. Benchmarks
+// with the QA shape (700 tombstone objects) put its break-even point below 32
+// blocks, so smaller scans retain the allocation-free linear iterator.
+const tombstoneRangeIndexMinBlocks = 32
 
 func (ls *LocalDisttaeDataSource) String() string {
 	blks := make([]*objectio.BlockInfo, ls.rangeSlice.Len())
@@ -170,6 +186,9 @@ func (ls *LocalDisttaeDataSource) String() string {
 
 func (ls *LocalDisttaeDataSource) SetOrderBy(orderby []*plan.OrderBySpec) {
 	ls.OrderBy = orderby
+	// Ordered scans prune blocks after reading their zone maps. Prefetching the
+	// original block order can read whole objects that the scan will skip.
+	ls.rc.prefetchDisabled = ls.rangeSlice.Len() < 4 || (len(orderby) > 0 && ls.Limit == 0)
 }
 
 func (ls *LocalDisttaeDataSource) GetOrderBy() []*plan.OrderBySpec {
@@ -203,8 +222,14 @@ func (ls *LocalDisttaeDataSource) needReadBlkByZM(i int) bool {
 	}
 }
 
-func (ls *LocalDisttaeDataSource) getBlockZMs() {
+func (ls *LocalDisttaeDataSource) getBlockZMs(ctx context.Context) ([]index.ZM, error) {
+	if len(ls.OrderBy) == 0 || ls.OrderBy[0] == nil || ls.OrderBy[0].Expr == nil {
+		return nil, moerr.NewInternalError(ctx, "missing ORDER BY expression for ordered scan")
+	}
 	orderByCol, _ := ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col)
+	if orderByCol == nil || orderByCol.Col == nil {
+		return nil, moerr.NewInternalError(ctx, "invalid ORDER BY column for ordered scan")
+	}
 
 	def := ls.table.tableDef
 
@@ -238,7 +263,7 @@ func (ls *LocalDisttaeDataSource) getBlockZMs() {
 	// Note: Name2ColIndex keys should be lowercase according to proto definition
 	if def.Name2ColIndex != nil {
 		if colIdx, ok := def.Name2ColIndex[orderByColName]; ok {
-			if int(colIdx) < len(def.Cols) {
+			if colIdx >= 0 && int(colIdx) < len(def.Cols) {
 				// Verify the found column's type matches the ORDER BY expression type
 				foundCol := def.Cols[colIdx]
 				if foundCol.Typ.Id == ls.OrderBy[0].Expr.Typ.Id {
@@ -277,7 +302,7 @@ func (ls *LocalDisttaeDataSource) getBlockZMs() {
 	// 3. ColPos is within valid bounds
 	// This fallback is risky in JOIN scenarios, so we add extra validation
 	if orderByColIDX == -1 {
-		if relPos <= 0 && int(orderByCol.Col.ColPos) < len(def.Cols) {
+		if relPos <= 0 && orderByCol.Col.ColPos >= 0 && int(orderByCol.Col.ColPos) < len(def.Cols) {
 			fallbackCol := def.Cols[int(orderByCol.Col.ColPos)]
 			// Verify type match before using fallback
 			if fallbackCol.Typ.Id == ls.OrderBy[0].Expr.Typ.Id {
@@ -296,41 +321,46 @@ func (ls *LocalDisttaeDataSource) getBlockZMs() {
 		}
 	}
 
-	// If we still haven't found the column, panic with detailed error information
+	// If we still haven't found the column, return a plan error.
 	if orderByColIDX == -1 {
 		var availableCols []string
 		for _, col := range def.Cols {
 			availableCols = append(availableCols, fmt.Sprintf("%s(type=%d)", col.Name, col.Typ.Id))
 		}
-		panic(fmt.Sprintf(
+		return nil, moerr.NewInternalErrorf(ctx,
 			"getBlockZMs: cannot find column for ORDER BY: name=%s, ColPos=%d, RelPos=%d, expectedType=%d, tableColsCount=%d, availableCols=%v",
-			orderByCol.Col.Name, orderByCol.Col.ColPos, relPos, ls.OrderBy[0].Expr.Typ.Id, len(def.Cols), availableCols))
+			orderByCol.Col.Name, orderByCol.Col.ColPos, relPos, ls.OrderBy[0].Expr.Typ.Id, len(def.Cols), availableCols)
 	}
 
 	sliceLen := ls.rangeSlice.Len()
-	ls.blockZMS = make([]index.ZM, sliceLen)
+	blockZMS := make([]index.ZM, sliceLen)
 	var objDataMeta objectio.ObjectDataMeta
 	var location objectio.Location
 	for i := ls.rangesCursor; i < sliceLen; i++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		location = ls.rangeSlice.Get(i).MetaLocation()
 		if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) {
-			objMeta, err := objectio.FastLoadObjectMeta(ls.ctx, &location, false, ls.fs)
+			objMeta, err := objectio.FastLoadObjectMeta(ctx, &location, false, ls.fs)
 			if err != nil {
-				panic("load object meta error when ordered scan!")
+				return nil, err
 			}
 			objDataMeta = objMeta.MustDataMeta()
 		}
 		blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
-		ls.blockZMS[i] = blkMeta.ColumnMeta(uint16(orderByColIDX)).ZoneMap()
+		blockZMS[i] = blkMeta.ColumnMeta(uint16(orderByColIDX)).ZoneMap()
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return blockZMS, nil
 }
 
 func (ls *LocalDisttaeDataSource) sortBlockList() {
 	sliceLen := ls.rangeSlice.Len()
-	// FIXME: no pointer in helper
-	helper := make([]*blockSortHelper, sliceLen)
+	helper := make([]blockSortHelper, sliceLen)
 	for i := range sliceLen {
-		helper[i] = &blockSortHelper{}
 		helper[i].blk = ls.rangeSlice.Get(i)
 		helper[i].zm = ls.blockZMS[i]
 	}
@@ -341,7 +371,7 @@ func (ls *LocalDisttaeDataSource) sortBlockList() {
 	// strict weak ordering (unlike a bare min/max compare, which is undefined for
 	// uninitialized zone maps). It returns (result, done): done is false only when
 	// both zone maps are initialized and the caller must compare values.
-	compareInit := func(a, b *blockSortHelper) (int, bool) {
+	compareInit := func(a, b blockSortHelper) (int, bool) {
 		ai, bi := a.zm.IsInited(), b.zm.IsInited()
 		if ai && bi {
 			return 0, false
@@ -355,14 +385,14 @@ func (ls *LocalDisttaeDataSource) sortBlockList() {
 		return 1, true
 	}
 	if ls.desc {
-		slices.SortFunc(helper, func(a, b *blockSortHelper) int {
+		slices.SortFunc(helper, func(a, b blockSortHelper) int {
 			if r, done := compareInit(a, b); done {
 				return r
 			}
 			return b.zm.CompareMax(a.zm) // descending by max
 		})
 	} else {
-		slices.SortFunc(helper, func(a, b *blockSortHelper) int {
+		slices.SortFunc(helper, func(a, b blockSortHelper) int {
 			if r, done := compareInit(a, b); done {
 				return r
 			}
@@ -382,6 +412,9 @@ func (ls *LocalDisttaeDataSource) Close() {
 		ls.pStateRows.insIter.Close()
 		ls.pStateRows.insIter = nil
 	}
+	ls.pStateTombstoneObjects.initialized = false
+	ls.pStateTombstoneObjects.index = tombstoneObjectIndex{}
+	ls.pStateTombstoneObjects.candidates = nil
 }
 
 func (ls *LocalDisttaeDataSource) Next(
@@ -448,7 +481,9 @@ func (ls *LocalDisttaeDataSource) Next(
 	}
 
 	// bathed prefetch block data and deletes
-	ls.batchPrefetch(seqNums)
+	if !fileservice.GetFileServicePolicy(ctx).Any(fileservice.SkipFullFilePreloads) {
+		ls.batchPrefetch(seqNums)
+	}
 
 	for {
 		switch ls.iteratePhase {
@@ -484,7 +519,10 @@ func (ls *LocalDisttaeDataSource) Next(
 				return
 			}
 
-			ls.handleOrderBy()
+			if err = ls.handleOrderBy(ctx); err != nil {
+				state = engine.Persisted
+				return
+			}
 
 			if ls.rangesCursor >= ls.rangeSlice.Len() {
 				state = engine.End
@@ -503,14 +541,21 @@ func (ls *LocalDisttaeDataSource) Next(
 	}
 }
 
-func (ls *LocalDisttaeDataSource) handleOrderBy() {
+func (ls *LocalDisttaeDataSource) handleOrderBy(ctx context.Context) error {
 	// for ordered scan, sort blocklist by zonemap info, and then filter by zonemap
 	if len(ls.OrderBy) > 0 && ls.Limit == 0 {
 		if !ls.sorted {
+			blockZMS, err := ls.getBlockZMs(ctx)
+			if err != nil {
+				return err
+			}
 			ls.desc = ls.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0
-			ls.getBlockZMs()
+			ls.blockZMS = blockZMS
 			ls.sortBlockList()
 			ls.sorted = true
+		}
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 		i := ls.rangesCursor
 		sliceLen := ls.rangeSlice.Len()
@@ -522,6 +567,7 @@ func (ls *LocalDisttaeDataSource) handleOrderBy() {
 		}
 		ls.rangesCursor = i
 	}
+	return nil
 }
 
 func (ls *LocalDisttaeDataSource) iterateInMemData(
@@ -1094,14 +1140,51 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceEntryDeletes(
 		defer ls.table.getTxn().Unlock()
 	}
 
-	for _, entry := range ls.workspaceDeleteEntriesForBlockLocked(bid) {
+	// A bitmap or a multi-row scan can consume the existing batches directly.
+	pointRead := deletedRows == nil && len(leftRows) == 1
+	blockEntries := ls.workspaceDeleteEntriesForBlockLocked(bid)
+	if pointRead {
+		offset64 := uint64(leftRows[0])
+		if offset64 >= 1<<32 {
+			return leftRows
+		}
+		offset := uint32(offset64)
+		if rows := ls.workspaceDeletes.pointRows[*bid]; rows != nil {
+			if offset64 < objectio.BlockMaxRows && rows[offset/64]&(uint64(1)<<(offset%64)) != 0 {
+				return leftRows[:0]
+			}
+			return leftRows
+		}
+		// Every block entry contains only Rowids for bid. Compare offsets
+		// directly instead of rebuilding and comparing a full Rowid per batch.
+		for _, entry := range blockEntries {
+			if len(entry.rowIds) >= 32 && entry.sorted {
+				_, found := slices.BinarySearchFunc(entry.rowIds, offset, func(rowID objectio.Rowid, target uint32) int {
+					return cmp.Compare(rowID.GetRowOffset(), target)
+				})
+				if found {
+					return leftRows[:0]
+				}
+				continue
+			}
+			for _, rowID := range entry.rowIds {
+				if rowID.GetRowOffset() == offset {
+					return leftRows[:0]
+				}
+			}
+		}
+		if offset64 < objectio.BlockMaxRows {
+			ls.indexWorkspaceDeleteBlockAfterPointMissLocked(bid, blockEntries)
+		}
+		return leftRows
+	}
+	for _, entry := range blockEntries {
 		readutil.FastApplyDeletesByRowIds(bid, &leftRows, deletedRows, entry.rowIds, entry.sorted)
 
 		if leftRows != nil && len(leftRows) == 0 {
 			break
 		}
 	}
-
 	return leftRows
 }
 
@@ -1118,7 +1201,49 @@ func (ls *LocalDisttaeDataSource) workspaceDeleteEntriesForBlockLocked(
 			ls.addWorkspaceDeleteEntryByBlock(entries[idx])
 		}
 	}
-	return ls.workspaceDeletes.byBlock[*bid]
+	blockEntries := ls.workspaceDeletes.byBlock[*bid]
+	return blockEntries
+}
+
+func (ls *LocalDisttaeDataSource) indexWorkspaceDeleteBlockAfterPointMissLocked(
+	bid *objectio.Blockid,
+	blockEntries []workspaceDeleteEntry,
+) {
+	if len(blockEntries) < indexWorkspaceDeleteEntriesForBlockThreshold {
+		return
+	}
+	_, seen := ls.workspaceDeletes.pointRows[*bid]
+	if !seen {
+		totalRows := 0
+		for _, entry := range blockEntries {
+			totalRows += len(entry.rowIds)
+			if totalRows > maxIndexedWorkspaceDeleteRowsPerBlock {
+				return
+			}
+			for _, rowID := range entry.rowIds {
+				if rowID.GetRowOffset() >= objectio.BlockMaxRows {
+					return
+				}
+			}
+		}
+		// A nil entry records one full miss without making that first read
+		// allocate and populate an index it may never use.
+		if ls.workspaceDeletes.pointRows == nil {
+			ls.workspaceDeletes.pointRows = make(map[objectio.Blockid][]uint64)
+		}
+		ls.workspaceDeletes.pointRows[*bid] = nil
+		return
+	}
+	// Two full misses establish reuse. A block has at most 8192 row offsets,
+	// so its index uses 1 KiB and is cheaper to build than sorting Rowids.
+	rows := make([]uint64, objectio.BlockMaxRows/64)
+	for _, entry := range blockEntries {
+		for _, rowID := range entry.rowIds {
+			offset := rowID.GetRowOffset()
+			rows[offset/64] |= uint64(1) << (offset % 64)
+		}
+	}
+	ls.workspaceDeletes.pointRows[*bid] = rows
 }
 
 func (ls *LocalDisttaeDataSource) addWorkspaceDeleteEntryByBlock(entry workspaceDeleteEntry) {
@@ -1195,6 +1320,7 @@ func (ls *LocalDisttaeDataSource) workspaceDeleteEntriesLocked() []workspaceDele
 	ls.workspaceDeletes.txnOffset = ls.txnOffset
 	ls.workspaceDeletes.entries = entries
 	ls.workspaceDeletes.byBlock = nil
+	ls.workspaceDeletes.pointRows = nil
 	return entries
 }
 
@@ -1395,27 +1521,37 @@ func (ls *LocalDisttaeDataSource) applyPStateTombstoneObjects(
 		return offsets, nil
 	}
 
-	var iter objectio.ObjectIter
-	getTombstone := func() (*objectio.ObjectStats, error) {
-		var err error
-		if iter == nil {
-			if iter, err = ls.pState.NewObjectsIter(
-				ls.snapshotTS, true, true,
-			); err != nil {
-				return nil, err
-			}
+	var (
+		getTombstone func() (*objectio.ObjectStats, error)
+		closeIter    = func() {}
+	)
+	if ls.rangeSlice.Len() >= tombstoneRangeIndexMinBlocks {
+		if err := ls.initPStateTombstoneObjectIndex(); err != nil {
+			return nil, err
 		}
-		if iter.Next() {
-			entry := iter.Entry()
-			return &entry.ObjectStats, nil
+		candidates := ls.pStateTombstoneObjects.index.selectCandidates(
+			bid, ls.pStateTombstoneObjects.candidates,
+		)
+		ls.pStateTombstoneObjects.candidates = candidates
+		statsIter := &indexedObjectStatsIter{
+			index:      &ls.pStateTombstoneObjects.index,
+			candidates: candidates,
 		}
-		return nil, nil
+		getTombstone = statsIter.next
+	} else {
+		iter, err := ls.pState.NewObjectsIter(
+			ls.snapshotTS, true, true,
+		)
+		if err != nil {
+			return nil, err
+		}
+		closeIter = func() {
+			_ = iter.Close()
+		}
+		statsIter := &reusableObjectStatsIter{iter: iter}
+		getTombstone = statsIter.next
 	}
-	defer func() {
-		if iter != nil {
-			iter.Close()
-		}
-	}()
+	defer closeIter()
 
 	// PXU TODO: handle len(offsets) < 10 or 20, 30?
 	if len(offsets) == 1 {
@@ -1460,6 +1596,51 @@ func (ls *LocalDisttaeDataSource) applyPStateTombstoneObjects(
 	})
 
 	return offsets, nil
+}
+
+func (ls *LocalDisttaeDataSource) initPStateTombstoneObjectIndex() error {
+	if ls.pStateTombstoneObjects.initialized {
+		return nil
+	}
+	iter, err := ls.pState.NewObjectsIter(ls.snapshotTS, true, true)
+	if err != nil {
+		return err
+	}
+	defer iter.Close()
+
+	objects := make(
+		[]objectio.ObjectStats,
+		0,
+		ls.pState.ApproxTombstoneObjectsNum(),
+	)
+	statsIter := reusableObjectStatsIter{iter: iter}
+	for {
+		stats, err := statsIter.next()
+		if err != nil {
+			return err
+		}
+		if stats == nil {
+			break
+		}
+		objects = append(objects, *stats)
+	}
+	ls.pStateTombstoneObjects.index = newTombstoneObjectIndex(objects)
+	ls.pStateTombstoneObjects.initialized = true
+	return nil
+}
+
+type reusableObjectStatsIter struct {
+	iter    objectio.ObjectIter
+	current objectio.ObjectStats
+}
+
+// next returns stats that remain valid until the next call.
+func (i *reusableObjectStatsIter) next() (*objectio.ObjectStats, error) {
+	if !i.iter.Next() {
+		return nil, nil
+	}
+	i.current = i.iter.Entry().ObjectStats
+	return &i.current, nil
 }
 
 func (ls *LocalDisttaeDataSource) batchPrefetch(seqNums []uint16) {
@@ -1561,11 +1742,22 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 			}
 
 			var deletedRowIds []objectio.Rowid
-			var commit []types.TS
+			var commit ioutil.TombstoneCommitTSColumn
+			var abortColumn ioutil.TombstoneAbortColumn
 
 			deletedRowIds = vector.MustFixedColWithTypeCheck[objectio.Rowid](&cacheVectors[0])
 			if !obj.GetCNCreated() {
-				commit = vector.MustFixedColWithTypeCheck[types.TS](&cacheVectors[1])
+				var commitErr, abortErr error
+				commit, commitErr = ioutil.ValidateTombstoneCommitTSColumn(len(deletedRowIds), &cacheVectors[1])
+				if commitErr != nil {
+					release()
+					return commitErr
+				}
+				abortColumn, abortErr = ioutil.ValidateTombstoneAbortColumn(len(deletedRowIds), &cacheVectors[2])
+				if abortErr != nil {
+					release()
+					return abortErr
+				}
 			}
 
 			for i := 0; i < len(rowIds); i++ {
@@ -1573,8 +1765,14 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 					deletedRowIds, rowIds[i].BorrowBlockID())
 
 				for j := s; j < e; j++ {
+					commitVisible := true
+					if commit.IsPresent() {
+						commitTS := commit.At(j)
+						commitVisible = commitTS.LE(&ls.snapshotTS)
+					}
 					if rowIds[i].EQ(&deletedRowIds[j]) &&
-						(commit == nil || commit[j].LE(&ls.snapshotTS)) {
+						(!abortColumn.IsPresent() || !abortColumn.IsAborted(j)) &&
+						commitVisible {
 						deletedMask.Add(uint64(i))
 						break
 					}

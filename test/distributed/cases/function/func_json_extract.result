@@ -33,7 +33,7 @@ json_extract({"a":[1,2,3,{"a":4}]}, $**.a)
 [[1, 2, 3, {"a": 4}], 4]
 select json_extract('{"a":[1,2,3,{"a":4}]}','$.a[*].a');
 json_extract({"a":[1,2,3,{"a":4}]}, $.a[*].a)
-4
+[4]
 select json_extract('{"a":1}','$[0]');
 json_extract({"a":1}, $[0])
 {"a": 1}
@@ -106,7 +106,7 @@ json_extract(t1.a, $**.a)
 [[1, 2, 3, {"a": 4}], 4]
 select json_extract(t1.a,'$.a[*].a') from t1 where t1.b=9;
 json_extract(t1.a, $.a[*].a)
-4
+[4]
 drop table t1;
 create table t1 (a json);
 insert into t1(a) values ('{"a":1}'),('[1,2]'),('{"xa":1}');
@@ -137,7 +137,7 @@ json_extract({"a":"a1","b":"b1"}, $.*)
 create view v1 as select json_extract('{"a":1}','$.a');
 desc v1;
 Field    Type    Null    Key    Default    Extra    Comment
-json_extract({"a":1}, $.a)    JSON(0)    NO        null        
+json_extract({"a":1}, $.a)    JSON(0)    YES        null
 select json_extract('{"a":1}',null);
 json_extract({"a":1}, null)
 null
@@ -195,7 +195,7 @@ select json_extract('[1,2,3]','$[last-1 to last-2]');
 invalid input: invalid json path '$[last-1 to last-2]'
 select json_extract('[1,2,3]','$[last-8 to last-2]');
 json_extract([1,2,3], $[last-8 to last-2])
-1
+[1]
 select json_extract('[1,2,3]','$[last-2 to last-8]');
 invalid input: invalid json path '$[last-2 to last-8]'
 select json_extract('[1,2,3]','$[0 to last-8]');
@@ -612,4 +612,183 @@ id    data
 select * from example_table where json_extract(data, '$.PANEL') = 'PANEL-17';
 id    data
 1    {"CODE": "CODE-3", "LINE": "LINE-4", "PANEL": "PANEL-17", "item1": "value1", "item10": "value10", "item11": "value11", "item12": "value12", "item13": "value13", "item14": "value14", "item15": "value15", "item16": "value16", "item17": "value17", "item18": "value18", "item19": "value19", "item2": "value2", "item20": "value20", "item3": "value3", "item4": "value4", "item5": "value5", "item6": "value6", "item7": "value7", "item8": "value8", "item9": "value9"}
+drop database test;
+create database test;
+use test;
+create table json_null_test(id int primary key, doc json);
+insert into json_null_test values (1, '{"a":null,"fallback":[]}');
+select json_extract(doc, '$.a'),
+json_extract(doc, '$.a') is null,
+coalesce(json_extract(doc, '$.a'), json_extract(doc, '$.fallback'))
+from json_null_test;
+json_extract(doc, $.a)    json_extract(doc, $.a) is null    coalesce(json_extract(doc, $.a), json_extract(doc, $.fallback))
+null    0    null
+with x as (
+select doc from json_null_test where id = 1
+)
+select json_extract(doc, '$.a'),
+json_extract(doc, '$.a') is null,
+coalesce(json_extract(doc, '$.a'), json_extract(doc, '$.fallback'))
+from x;
+json_extract(doc, $.a)    json_extract(doc, $.a) is null    coalesce(json_extract(doc, $.a), json_extract(doc, $.fallback))
+null    0    null
+select json_extract(doc, '$.missing') is null,
+json_extract(doc, '$.a', '$.missing'),
+json_extract(doc, '$.a', '$.fallback')
+from json_null_test;
+json_extract(doc, $.missing) is null    json_extract(doc, $.a, $.missing)    json_extract(doc, $.a, $.fallback)
+1    [null]    [null, []]
+select json_extract('{"items":[null,1]}', '$.items[*]');
+json_extract({"items":[null,1]}, $.items[*])
+[null, 1]
+select json_extract('{"a":null}', '$.a[0]'),
+json_extract('{"a":null}', '$.a[0]') is null;
+json_extract({"a":null}, $.a[0])    json_extract({"a":null}, $.a[0]) is null
+null    0
+select json_extract('null', '$[0]'),
+json_extract('null', '$[0]') is null;
+json_extract(null, $[0])    json_extract(null, $[0]) is null
+null    0
+select json_extract('1', '$[0 to 0]');
+json_extract(1, $[0 to 0])
+[1]
+select json_extract('[null]', '$[*]');
+json_extract([null], $[*])
+[null]
+select json_extract('[null]', '$[0 to 0]');
+json_extract([null], $[0 to 0])
+[null]
+select json_extract('{"a":null}', '$.*');
+json_extract({"a":null}, $.*)
+[null]
+select json_extract('{"a":null}', '$**.a');
+json_extract({"a":null}, $**.a)
+[null]
+select json_extract('{}', '$[0 to 0]');
+json_extract({}, $[0 to 0])
+[{}]
+select json_extract('{"a":1,"b":2}', '$[last to last]');
+json_extract({"a":1,"b":2}, $[last to last])
+[{"a": 1, "b": 2}]
+select json_extract('{"a":null,"b":2}', '$[last to last].a');
+json_extract({"a":null,"b":2}, $[last to last].a)
+[null]
+select json_extract('[]', '$[0 to 0]') is null,
+json_extract('[]', '$[last to last]') is null,
+json_extract('{"a":[]}', '$.a[0 to 0]') is null,
+json_extract('{"a":[]}', '$.a[last to last]') is null;
+json_extract([], $[0 to 0]) is null    json_extract([], $[last to last]) is null    json_extract({"a":[]}, $.a[0 to 0]) is null    json_extract({"a":[]}, $.a[last to last]) is null
+1    1    1    1
+select json_extract('[null]', '$[1 to 1]') is null,
+json_extract('[0,1,2]', '$[5 to 6]') is null,
+json_extract('[0,1,2]', '$[last-8 to last-7]') is null;
+json_extract([null], $[1 to 1]) is null    json_extract([0,1,2], $[5 to 6]) is null    json_extract([0,1,2], $[last-8 to last-7]) is null
+1    1    1
+select json_extract('[0,1,2]', '$[2 to 6]'),
+json_extract('[0,1,2]', '$[last-8 to last-2]');
+json_extract([0,1,2], $[2 to 6])    json_extract([0,1,2], $[last-8 to last-2])
+[2]    [0]
+drop database test;
+create database test;
+use test;
+create table json_bool_compare_test(id int primary key, doc json);
+insert into json_bool_compare_test values
+(1, '{"enabled":true}'),
+(2, '{"enabled":false}'),
+(3, '{}'),
+(4, '{"enabled":null}'),
+(5, '{"enabled":"true"}'),
+(6, '{"enabled":"false"}');
+select count(*) from json_bool_compare_test where json_extract(doc, '$.enabled') = true;
+count(*)
+1
+select count(*) from json_bool_compare_test where json_extract(doc, '$.enabled') = false;
+count(*)
+1
+prepare json_bool_compare_stmt from 'select id from json_bool_compare_test where json_extract(doc, ''$.enabled'') = ? order by id';
+set @json_bool_compare_param = true;
+execute json_bool_compare_stmt using @json_bool_compare_param;
+id
+1
+set @json_bool_compare_param = false;
+execute json_bool_compare_stmt using @json_bool_compare_param;
+id
+2
+deallocate prepare json_bool_compare_stmt;
+select json_extract('16777217', '$') = cast(16777216 as float) as direct_rounded_equal;
+direct_rounded_equal
+1
+prepare json_float_compare_stmt from 'select json_extract(''16777217'', ''$'') = ? as rounded_equal';
+set @json_float_compare_param = cast(16777216 as float);
+execute json_float_compare_stmt using @json_float_compare_param;
+rounded_equal
+1
+deallocate prepare json_float_compare_stmt;
+select json_extract('18446744073709551615', '$') = cast(9223372036854775807 as signed);
+invalid argument operator cast, bad value [JSON -> BIGINT]
+prepare json_signed_compare_stmt from 'select json_extract(''18446744073709551615'', ''$'') = ?';
+set @json_signed_compare_param = cast(9223372036854775807 as signed);
+execute json_signed_compare_stmt using @json_signed_compare_param;
+invalid argument operator cast, bad value [JSON -> BIGINT]
+deallocate prepare json_signed_compare_stmt;
+select json_extract('128', '$') = cast(1 as tinyint);
+invalid argument operator cast, bad value [JSON -> TINYINT]
+prepare json_tinyint_compare_stmt from 'select json_extract(''128'', ''$'') = ? as narrow_equal';
+set @json_narrow_compare_param = cast(1 as tinyint);
+execute json_tinyint_compare_stmt using @json_narrow_compare_param;
+invalid argument operator cast, bad value [JSON -> TINYINT]
+set @json_narrow_compare_param = cast(1 as signed);
+execute json_tinyint_compare_stmt using @json_narrow_compare_param;
+narrow_equal
+0
+set @json_narrow_compare_param = cast(1 as tinyint);
+execute json_tinyint_compare_stmt using @json_narrow_compare_param;
+invalid argument operator cast, bad value [JSON -> TINYINT]
+deallocate prepare json_tinyint_compare_stmt;
+select json_extract('256', '$') = cast(1 as tinyint unsigned);
+invalid argument operator cast, bad value [JSON -> TINYINT UNSIGNED]
+prepare json_utinyint_compare_stmt from 'select json_extract(''256'', ''$'') = ? as unsigned_narrow_equal';
+set @json_unsigned_compare_param = cast(1 as tinyint unsigned);
+execute json_utinyint_compare_stmt using @json_unsigned_compare_param;
+invalid argument operator cast, bad value [JSON -> TINYINT UNSIGNED]
+deallocate prepare json_utinyint_compare_stmt;
+select json_extract(json_array(cast(0.00 as decimal(10,2))), '$[0]') = true, json_extract(json_array(cast(1.20 as decimal(10,2))), '$[0]') = true;
+json_extract(json_array(cast(0.00 as decimal(10, 2))), $[0]) = true    json_extract(json_array(cast(1.20 as decimal(10, 2))), $[0]) = true
+0    1
+select json_extract(json_object('enabled', true), '$.enabled') = true as json_eq_bool, true = json_extract(json_object('enabled', true), '$.enabled') as bool_eq_json, json_extract(json_object('enabled', true), '$.enabled') != false as json_ne_bool, false != json_extract(json_object('enabled', true), '$.enabled') as bool_ne_json;
+json_eq_bool    bool_eq_json    json_ne_bool    bool_ne_json
+1    1    1    1
+select json_extract(json_object('enabled', 'true'), '$.enabled') = true as string_eq_bool,
+true = json_extract(json_object('enabled', 'true'), '$.enabled') as bool_eq_string,
+json_extract(json_object('enabled', 'true'), '$.enabled') != true as string_ne_bool,
+json_extract(json_object('enabled', 'true'), '$.enabled') <=> true as string_null_safe_bool,
+json_extract(json_object('enabled', 'true'), '$.enabled') in (true) as string_in_bool,
+json_extract(json_object('enabled', 'true'), '$.enabled') not in (true) as string_not_in_bool,
+cast(json_extract(json_object('enabled', 'true'), '$.enabled') as boolean) as explicit_cast_true,
+cast(json_extract(json_object('enabled', 'false'), '$.enabled') as boolean) as explicit_cast_false;
+string_eq_bool    bool_eq_string    string_ne_bool    string_null_safe_bool    string_in_bool    string_not_in_bool    explicit_cast_true    explicit_cast_false
+0    0    1    0    0    1    1    0
+prepare json_bool_category_stmt from 'select
+json_extract(json_object(''enabled'', ''true''), ''$.enabled'') = ? as prepared_eq,
+json_extract(json_object(''enabled'', ''true''), ''$.enabled'') != ? as prepared_ne,
+json_extract(json_object(''enabled'', ''true''), ''$.enabled'') <=> ? as prepared_null_safe,
+json_extract(json_object(''enabled'', ''true''), ''$.enabled'') in (?) as prepared_in,
+json_extract(json_object(''enabled'', ''true''), ''$.enabled'') not in (?) as prepared_not_in';
+set @json_bool_category_param = true;
+execute json_bool_category_stmt using @json_bool_category_param, @json_bool_category_param, @json_bool_category_param, @json_bool_category_param, @json_bool_category_param;
+prepared_eq    prepared_ne    prepared_null_safe    prepared_in    prepared_not_in
+0    1    0    0    1
+deallocate prepare json_bool_category_stmt;
+select cast(json_extract(json_array(cast(9007199254740993.9 as decimal(20,1))), '$[0]') as signed) as exact_decimal_cast;
+exact_decimal_cast
+9007199254740993
+prepare json_decimal_compare_stmt from 'select json_extract(json_array(cast(9007199254740992.1 as decimal(20,1))), ''$[0]'') = ? as exact_decimal_equal';
+set @json_decimal_compare_param = cast(9007199254740993.1 as decimal(20,1));
+execute json_decimal_compare_stmt using @json_decimal_compare_param;
+exact_decimal_equal
+0
+deallocate prepare json_decimal_compare_stmt;
+select json_extract('1e100', '$') = true as large_exponent, json_extract('1e-300', '$') = true as small_exponent, json_extract('0e-2147483647', '$') = true as exponent_zero;
+large_exponent    small_exponent    exponent_zero
+1    1    0
 drop database test;

@@ -509,6 +509,21 @@ func serialWithCompacted(
 					ps[i].EncodeDecimal128(b)
 				}
 			}
+		case types.T_decimal256:
+			s := vector.MustFixedColNoTypeCheck[types.Decimal256](v)
+			if hasNull {
+				for i, b := range s {
+					if nulls.Contains(vNull, uint64(i)) {
+						nulls.Add(bitMap, uint64(i))
+					} else {
+						ps[i].EncodeDecimal256(b)
+					}
+				}
+			} else {
+				for i, b := range s {
+					ps[i].EncodeDecimal256(b)
+				}
+			}
 		case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
 			types.T_array_float32, types.T_array_float64, types.T_datalink:
 			// NOTE 1: We will consider T_array as bytes here just like JSON, VARBINARY and BLOB.
@@ -790,6 +805,15 @@ func compactSingleIndexCol(
 			}
 		}
 		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
+	case types.T_decimal256:
+		s := vector.MustFixedColNoTypeCheck[types.Decimal256](v)
+		ns := make([]types.Decimal256, 0, len(s))
+		for i, b := range s {
+			if !nulls.Contains(v.GetNulls(), uint64(i)) {
+				ns = append(ns, b)
+			}
+		}
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob,
 		types.T_array_float32, types.T_array_float64:
 		s, area := vector.MustVarlenaRawData(v)
@@ -998,6 +1022,15 @@ func compactPrimaryCol(
 			}
 		}
 		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
+	case types.T_decimal256:
+		s := vector.MustFixedColNoTypeCheck[types.Decimal256](v)
+		ns := make([]types.Decimal256, 0)
+		for i, b := range s {
+			if !nulls.Contains(bitMap, uint64(i)) {
+				ns = append(ns, b)
+			}
+		}
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob,
 		types.T_array_float32, types.T_array_float64:
 		s, area := vector.MustVarlenaRawData(v)
@@ -1009,6 +1042,26 @@ func compactPrimaryCol(
 		}
 		err = vector.AppendBytesList(vec, ns, nil, proc.Mp())
 	}
+	return err
+}
+
+// CompactRowIdCol copies the Rowids whose input positions are not present in
+// bitMap. Callers keep the empty-bitmap path on UnionBatch so the common case
+// remains a bulk copy.
+func CompactRowIdCol(
+	v *vector.Vector,
+	vec *vector.Vector,
+	bitMap *nulls.Nulls,
+	proc *process.Process,
+) error {
+	sels := vector.GetSels()
+	for i := 0; i < v.Length(); i++ {
+		if !nulls.Contains(bitMap, uint64(i)) {
+			sels = append(sels, int64(i))
+		}
+	}
+	err := vec.Union(v, sels, proc.Mp())
+	vector.PutSels(sels)
 	return err
 }
 

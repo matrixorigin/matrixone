@@ -67,7 +67,7 @@ func newPipelineFinishMessage(id uint64) *pipeline.Message {
 func TestPipelineStreamLifecycleTimeoutRemovesRegistration(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	session := mock_morpc.NewMockClientSession(ctrl)
-	lifecycle, err := registerPipelineStreamLifecycle(session, 101)
+	lifecycle, err := registerPipelineStreamLifecycle(session, 101, nil)
 	require.NoError(t, err)
 	oldTimeout := pipelineStreamFinishTimeout
 	pipelineStreamFinishTimeout = 10 * time.Millisecond
@@ -85,10 +85,10 @@ func TestPipelineStreamLifecycleDuplicatePoisonsSession(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	session := mock_morpc.NewMockClientSession(ctrl)
 	session.EXPECT().Close().Return(nil)
-	first, err := registerPipelineStreamLifecycle(session, 102)
+	first, err := registerPipelineStreamLifecycle(session, 102, nil)
 	require.NoError(t, err)
 	defer first.remove()
-	_, err = registerPipelineStreamLifecycle(session, 102)
+	_, err = registerPipelineStreamLifecycle(session, 102, nil)
 	require.Error(t, err)
 }
 
@@ -127,7 +127,7 @@ func TestPipelineStreamLifecycleWaitTermination(t *testing.T) {
 	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			session := &lifecycleTestSession{ctx: context.Background()}
-			lifecycle, err := registerPipelineStreamLifecycle(session, uint64(200+i))
+			lifecycle, err := registerPipelineStreamLifecycle(session, uint64(200+i), nil)
 			require.NoError(t, err)
 			t.Cleanup(lifecycle.remove)
 			messageCtx, connectionCtx := tt.prepare(lifecycle)
@@ -195,7 +195,7 @@ func TestValidatedPipelineStreamFinishRequiresLifecycle(t *testing.T) {
 
 func TestValidatedPipelineStreamFinishRequiresFinisher(t *testing.T) {
 	session := &lifecycleTestSession{ctx: context.Background()}
-	lifecycle, err := registerPipelineStreamLifecycle(session, 107)
+	lifecycle, err := registerPipelineStreamLifecycle(session, 107, nil)
 	require.NoError(t, err)
 	t.Cleanup(lifecycle.remove)
 	lifecycle.markCleaned()
@@ -220,7 +220,7 @@ func TestValidatedPipelineStreamFinishRejectsInvalidResponse(t *testing.T) {
 			return nil
 		},
 	}
-	lifecycle, err := registerPipelineStreamLifecycle(session, 108)
+	lifecycle, err := registerPipelineStreamLifecycle(session, 108, nil)
 	require.NoError(t, err)
 	t.Cleanup(lifecycle.remove)
 	lifecycle.markCleaned()
@@ -261,7 +261,7 @@ func TestValidatedPipelineStreamFinishAck(t *testing.T) {
 					return tt.wantErr
 				},
 			}
-			lifecycle, err := registerPipelineStreamLifecycle(session, tt.id)
+			lifecycle, err := registerPipelineStreamLifecycle(session, tt.id, nil)
 			require.NoError(t, err)
 			t.Cleanup(lifecycle.remove)
 			lifecycle.markCleaned()
@@ -291,7 +291,7 @@ func TestValidatedPipelineStreamFinishTimeoutPoisonsSession(t *testing.T) {
 			return nil
 		},
 	}
-	lifecycle, err := registerPipelineStreamLifecycle(session, 111)
+	lifecycle, err := registerPipelineStreamLifecycle(session, 111, nil)
 	require.NoError(t, err)
 	t.Cleanup(lifecycle.remove)
 

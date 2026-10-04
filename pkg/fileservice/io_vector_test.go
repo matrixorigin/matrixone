@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"math"
 	"sync/atomic"
 	"testing"
 
@@ -28,6 +29,10 @@ type releaseCountingData struct {
 }
 
 func (r *releaseCountingData) Size() int64 {
+	return 0
+}
+
+func (r *releaseCountingData) Capacity() int64 {
 	return 0
 }
 
@@ -48,6 +53,7 @@ func (r *releaseCountingData) Release() {
 
 func TestIOVectorReleaseReadResultOnErrorSkipsUndoneReleaseData(t *testing.T) {
 	var cacheReleases atomic.Int32
+	var pinReleases atomic.Int32
 	var doneReleaseData atomic.Int32
 	var undoneReleaseData atomic.Int32
 
@@ -55,6 +61,9 @@ func TestIOVectorReleaseReadResultOnErrorSkipsUndoneReleaseData(t *testing.T) {
 		Entries: []IOEntry{
 			{
 				CachedData: &releaseCountingData{releases: &cacheReleases},
+				releaseCachedData: func() {
+					pinReleases.Add(1)
+				},
 				releaseData: func() {
 					doneReleaseData.Add(1)
 				},
@@ -63,6 +72,9 @@ func TestIOVectorReleaseReadResultOnErrorSkipsUndoneReleaseData(t *testing.T) {
 			},
 			{
 				CachedData: &releaseCountingData{releases: &cacheReleases},
+				releaseCachedData: func() {
+					pinReleases.Add(1)
+				},
 				releaseData: func() {
 					undoneReleaseData.Add(1)
 				},
@@ -74,13 +86,16 @@ func TestIOVectorReleaseReadResultOnErrorSkipsUndoneReleaseData(t *testing.T) {
 	vector.ReleaseReadResultOnError()
 
 	require.Equal(t, int32(2), cacheReleases.Load())
+	require.Equal(t, int32(2), pinReleases.Load())
 	require.Equal(t, int32(1), doneReleaseData.Load())
 	require.Equal(t, int32(0), undoneReleaseData.Load())
 	require.Nil(t, vector.Entries[0].CachedData)
+	require.Nil(t, vector.Entries[0].releaseCachedData)
 	require.Nil(t, vector.Entries[0].releaseData)
 	require.False(t, vector.Entries[0].done)
 	require.Nil(t, vector.Entries[0].fromCache)
 	require.Nil(t, vector.Entries[1].CachedData)
+	require.Nil(t, vector.Entries[1].releaseCachedData)
 	require.NotNil(t, vector.Entries[1].releaseData)
 	require.False(t, vector.Entries[1].done)
 	require.Nil(t, vector.Entries[1].fromCache)
@@ -125,4 +140,75 @@ func TestIOVectorIOMergeKeyDoesNotMutateReadToEndEntry(t *testing.T) {
 	require.Equal(t, int64(4), key.Offset)
 	require.Equal(t, int64(0), key.End)
 	require.Equal(t, int64(-1), vector.Entries[0].Size)
+}
+
+func TestIOVectorExpensiveMinimalRangeRead(t *testing.T) {
+	tests := []struct {
+		name      string
+		entries   []IOEntry
+		expensive bool
+	}{
+		{
+			name: "large sparse range",
+			entries: []IOEntry{
+				{Offset: 0, Size: 1 << 20},
+				{Offset: 32 << 20, Size: 1 << 20},
+			},
+			expensive: true,
+		},
+		{
+			name: "adjacent ranges",
+			entries: []IOEntry{
+				{Offset: 0, Size: 5 << 20},
+				{Offset: 5 << 20, Size: 5 << 20},
+			},
+		},
+		{
+			name: "small sparse range",
+			entries: []IOEntry{
+				{Offset: 0, Size: 1 << 10},
+				{Offset: 4 << 20, Size: 1 << 10},
+			},
+		},
+		{
+			name: "exact amplification boundary",
+			entries: []IOEntry{
+				{Offset: 0, Size: 1 << 20},
+				{Offset: 15 << 20, Size: 1 << 20},
+			},
+		},
+		{
+			name:    "single range",
+			entries: []IOEntry{{Offset: 32 << 20, Size: 1 << 10}},
+		},
+		{
+			name: "completed sparse range",
+			entries: []IOEntry{
+				{Offset: 0, Size: 1 << 20},
+				{Offset: 32 << 20, Size: 1 << 20, done: true},
+			},
+		},
+		{
+			name: "read to end",
+			entries: []IOEntry{
+				{Offset: 0, Size: 1 << 20},
+				{Offset: 32 << 20, Size: -1},
+			},
+		},
+		{
+			name: "overflowing range",
+			entries: []IOEntry{
+				{Offset: 0, Size: 1 << 20},
+				{Offset: math.MaxInt64, Size: 1},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			vector := IOVector{Entries: test.entries}
+			_, _, expensive := vector.expensiveMinimalRangeRead()
+			require.Equal(t, test.expensive, expensive)
+		})
+	}
 }

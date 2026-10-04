@@ -36,8 +36,9 @@ import (
 )
 
 const (
-	sidecarHintPrefix    = "/*+ SIDECAR */"
-	sidecarGPUHintPrefix = "/*+ SIDECAR GPU */"
+	sidecarHintPrefix      = "/*+ SIDECAR */"
+	sidecarGPUHintPrefix   = "/*+ SIDECAR GPU */"
+	sidecarMaxResponseSize = 512 << 20 // 512 MB
 )
 
 // errSidecarNotConfigured is a sentinel indicating sidecar offload should
@@ -53,8 +54,7 @@ var (
 )
 
 // Shared HTTP client for sidecar requests (goroutine-safe, enables keep-alive pooling).
-// Uses a dedicated transport to avoid the 20 s ResponseHeaderTimeout set by
-// fileservice on http.DefaultTransport — sidecar queries can take minutes.
+// Uses a dedicated transport because sidecar queries can take minutes.
 var sidecarClient = &http.Client{
 	Timeout: 30 * time.Minute,
 	Transport: &http.Transport{
@@ -328,6 +328,11 @@ func rewriteSelectStmt(stmt tree.SelectStatement, defaultDB string, manifestBase
 		for _, se := range s.Exprs {
 			walkExprForSubqueries(se.Expr, defaultDB, manifestBaseURL, cteNames)
 		}
+		for _, definition := range s.Windows {
+			if definition != nil {
+				walkWindowSpecForSubqueries(definition.Spec, defaultDB, manifestBaseURL, cteNames)
+			}
+		}
 	case *tree.UnionClause:
 		rewriteSelectStmt(s.Left, defaultDB, manifestBaseURL, cteNames)
 		rewriteSelectStmt(s.Right, defaultDB, manifestBaseURL, cteNames)
@@ -371,6 +376,12 @@ func walkExprForSubqueries(expr tree.Expr, defaultDB string, manifestBaseURL str
 		for _, arg := range e.Exprs {
 			walkExprForSubqueries(arg, defaultDB, manifestBaseURL, cteNames)
 		}
+		for _, order := range e.OrderBy {
+			if order != nil {
+				walkExprForSubqueries(order.Expr, defaultDB, manifestBaseURL, cteNames)
+			}
+		}
+		walkWindowSpecForSubqueries(e.WindowSpec, defaultDB, manifestBaseURL, cteNames)
 	case *tree.CaseExpr:
 		walkExprForSubqueries(e.Expr, defaultDB, manifestBaseURL, cteNames)
 		for _, w := range e.Whens {
@@ -392,6 +403,27 @@ func walkExprForSubqueries(expr tree.Expr, defaultDB string, manifestBaseURL str
 	case *tree.Tuple:
 		for _, item := range e.Exprs {
 			walkExprForSubqueries(item, defaultDB, manifestBaseURL, cteNames)
+		}
+	}
+}
+
+func walkWindowSpecForSubqueries(spec *tree.WindowSpec, defaultDB string, manifestBaseURL string, cteNames map[string]bool) {
+	if spec == nil {
+		return
+	}
+	for _, expr := range spec.PartitionBy {
+		walkExprForSubqueries(expr, defaultDB, manifestBaseURL, cteNames)
+	}
+	for _, order := range spec.OrderBy {
+		if order != nil {
+			walkExprForSubqueries(order.Expr, defaultDB, manifestBaseURL, cteNames)
+		}
+	}
+	if spec.Frame != nil {
+		for _, bound := range []*tree.FrameBound{spec.Frame.Start, spec.Frame.End} {
+			if bound != nil {
+				walkExprForSubqueries(bound.Expr, defaultDB, manifestBaseURL, cteNames)
+			}
 		}
 	}
 }
@@ -473,12 +505,11 @@ func sendToSidecar(ctx context.Context, sidecarURL string, sql string) (*sidecar
 	defer resp.Body.Close()
 	t1 := time.Now()
 
-	const maxResponseSize = 512 << 20 // 512 MB
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize+1))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, sidecarMaxResponseSize+1))
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to read sidecar response: %v", err)
 	}
-	if int64(len(body)) > maxResponseSize {
+	if int64(len(body)) > sidecarMaxResponseSize {
 		return nil, moerr.NewInternalErrorf(ctx, "sidecar response too large (>512 MB)")
 	}
 	t2 := time.Now()
@@ -508,7 +539,11 @@ func buildGPUResultSet(ctx context.Context, mrs *MysqlResultSet, result *sidecar
 		colTypes[i] = sidecarTypeToMysql(col.Type)
 		mc := new(MysqlColumn)
 		mc.SetName(col.Name)
-		mc.SetColumnType(colTypes[i])
+		if colTypes[i] == defines.MYSQL_TYPE_BLOB {
+			setMysqlOpaqueBinaryBlobColumnMetadata(mc, sidecarMaxResponseSize)
+		} else {
+			mc.SetColumnType(colTypes[i])
+		}
 		mrs.AddColumn(mc)
 	}
 

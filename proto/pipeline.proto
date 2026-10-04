@@ -35,6 +35,9 @@ enum Method {
   StopSending = 4;
   PipelineStreamFinish = 5;
   PipelineStreamFinishAck = 6;
+  PipelineBatchAck = 7;
+  // Admission on the execution stream before sending a vector partition-zero pipeline.
+  PipelineProtocolCheck = 8;
 }
 
 // StreamTeardownMode negotiates whether a completed logical pipeline stream can
@@ -53,6 +56,7 @@ enum Status {
 }
 
 message Message {
+  option (gogoproto.goproto_stringer) = false;
   Status sid = 1;
   Method cmd = 2;
   bytes err = 3;
@@ -65,6 +69,14 @@ message Message {
   string debugMsg = 10;
   StreamTeardownMode requested_teardown_mode = 11;
   StreamTeardownMode accepted_teardown_mode = 12;
+  uint32 requested_batch_credit_count = 13;
+  uint64 requested_batch_credit_bytes = 14;
+  uint32 accepted_batch_credit_count = 15;
+  uint64 accepted_batch_credit_bytes = 16;
+  uint64 batch_sequence = 17;
+  uint64 batch_ack_sequence = 18;
+  // Request: minimum required version. Response: actual receiver version.
+  int64 protocol_version = 19;
 }
 
 message Connector {
@@ -82,6 +94,10 @@ message Shuffle {
   repeated int64 shuffle_ranges_int64 = 7;
   plan.RuntimeFilterSpec runtimeFilterSpec = 8;
   plan.Expr ShuffleExpr = 9;
+  bool drain_all_buckets = 10;
+  // True when Hash shuffle routes CHAR/VARCHAR/TEXT keys and therefore needs
+  // the versioned complete-key owner contract.
+  bool string_hash_key = 11;
 }
 
 message Dispatch {
@@ -116,6 +132,7 @@ message Aggregate {
   bool dist = 2;
   repeated plan.Expr expr = 3;
   bytes config = 4;
+  plan.AggregateConfigType config_type = 5;
 }
 
 message Group {
@@ -130,6 +147,16 @@ message Group {
   repeated uint32 PartialResultTypes = 9;
   repeated bool grouping_flag = 10;
   int64 spill_mem = 11;
+  // Positions in exprs used for physical hash/equality. Empty means all exprs.
+  repeated int32 group_by_hash_key = 12;
+  // Grouping sentinels are supplied by input vectors and may change between
+  // batches, rather than being described by one static grouping_flag.
+  bool dynamic_grouping = 13;
+  // MERGE_GROUP only: dynamic grouping-set ids that own an empty aggregate
+  // row when the distributed input produces no partial pipeline.
+  repeated int64 empty_grouping_set_ids = 14;
+  // MERGE_GROUP only: the legacy/static all-rolled branch owns one empty row.
+  bool empty_grouping_set = 15;
 }
 
 message Insert {
@@ -160,6 +187,7 @@ message MultiUpdate {
   uint64 affected_rows = 1;
   uint32 Action = 2;
   repeated plan.UpdateCtx update_ctx_list = 3;
+  bool reject_zero_temporal = 4;
 }
 
 message Array {
@@ -200,6 +228,13 @@ message PreInsert {
   plan.Expr cluster_by_expr = 9;
   bool is_old_update = 10;
   bool is_new_update = 11;
+  bool reject_zero_temporal = 12;
+  bool has_target_selector = 13;
+  int32 target_row_number_col = 14;
+  int32 target_active_col = 15;
+  int32 target_row_id_col = 16;
+  bool track_auto_increment_generated = 17;
+  int32 auto_increment_generated_column = 18;
 }
 
 message PostDml {
@@ -249,6 +284,7 @@ message FuzzyFilter {
   plan.Type PkTyp = 3 [(gogoproto.nullable) = false];
   int32 BuildIdx = 4;
   bool IfInsertFromUnique = 5;
+  plan.RuntimeFilterSpec runtime_filter_spec = 6;
 }
 
 message HashJoin {
@@ -267,6 +303,9 @@ message HashJoin {
   repeated plan.Type right_types = 13 [(gogoproto.nullable) = false];
   int32 join_map_tag = 14;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 15;
+  bool emit_compressed_row_count = 16;
+  int32 asof_right_col = 17;
+  bool asof_build_left = 18;
 }
 
 message LoopJoin {
@@ -279,7 +318,9 @@ message LoopJoin {
   int32 join_map_tag = 7;
 }
 
-message SetOp {}
+message SetOp {
+  repeated plan.Expr key_exprs = 1;
+}
 
 message DedupJoin {
   repeated int32 rel_list = 1;
@@ -307,6 +348,14 @@ message DedupJoin {
   bool dedup_build_keep_last = 19;
   repeated int32 dedup_delete_keep_col_idx_list = 20;
   int32 dedup_delete_marker_col_idx = 21;
+  bool has_odku_affected_rows = 22;
+  int32 affected_rows_result_pos = 23;
+  int32 physical_changed_rows_result_pos = 24;
+  repeated int32 update_check_col_idx_list = 25;
+  bool count_found_rows = 26;
+  bool emit_action_rows = 27;
+  int32 action_final_result_pos = 28;
+  repeated ODKUForeignKeyCheck foreign_key_checks = 29 [(gogoproto.nullable) = false];
 }
 
 message RightDedupJoin {
@@ -326,6 +375,7 @@ message RightDedupJoin {
   repeated int32 update_col_idx_list = 14;
   repeated plan.Expr update_col_expr_list = 15;
   int32 del_col_idx = 16;
+  bool input_keys_unique = 17;
 }
 
 message Product {
@@ -357,6 +407,8 @@ message TableFunction {
   bool is_single = 6;
   plan.IndexReaderParam index_reader_param = 7;
   repeated plan.RuntimeFilterSpec runtime_filter_probe_list = 8;
+  plan.ObjectRef fulltext_source_ref = 9;
+  plan.ObjectRef fulltext_index_ref = 10;
 }
 
 message ExternalName2ColIndex {
@@ -376,7 +428,81 @@ message parquet_row_group_shard {
   int64 bytes = 5;
 }
 
+message IcebergDataFileTask {
+  option (gogoproto.goproto_stringer) = false;
+  string file_path = 1;
+  string file_format = 2;
+  int64 file_size = 3;
+  int64 record_count = 4;
+  int32 partition_spec_id = 5;
+  map<string, string> partition_values = 6;
+  repeated int64 split_offsets = 7;
+  int32 row_group_start = 8;
+  int32 row_group_end = 9;
+  string credential_scope = 10;
+  int64 content_sequence_number = 11;
+  int64 file_sequence_number = 12;
+  bool has_residual_filter = 13;
+  string residual_filter_hash = 14;
+}
+
+message IcebergDeleteFileTask {
+  option (gogoproto.goproto_stringer) = false;
+  string delete_type = 1;
+  string delete_file_path = 2;
+  string referenced_data_file = 3;
+  repeated int32 equality_field_ids = 4;
+  int32 delete_schema_id = 5;
+  int32 partition_spec_id = 6;
+  int64 sequence_number = 7;
+  string credential_scope = 8;
+}
+
+message IcebergColumnMapping {
+  int32 mo_col_index = 1;
+  int32 iceberg_field_id = 2;
+  string snapshot_field_name = 3;
+  string current_field_name = 4;
+  plan.Type mo_type = 5;
+  bool required = 6;
+  bool is_hidden = 7;
+  bool default_null_fill = 8;
+  string parquet_path_hint = 9;
+}
+
+message IcebergSnapshotRuntime {
+  int64 snapshot_id = 1;
+  int32 schema_id = 2;
+  repeated int32 partition_spec_ids = 3;
+  string metadata_location_hash = 4;
+  string manifest_list_hash = 5;
+  string ref_name = 6;
+  string planning_mode = 7;
+}
+
+message IcebergPlanningStats {
+  int64 metadata_bytes = 1;
+  int64 manifest_list_bytes = 2;
+  int64 manifest_bytes = 3;
+  int64 manifests_selected = 4;
+  int64 manifests_pruned = 5;
+  int64 data_files_selected = 6;
+  int64 data_files_pruned = 7;
+  int64 data_file_bytes_selected = 8;
+  int64 data_file_bytes_pruned = 9;
+  int64 planning_cache_hits = 10;
+  int64 planning_cache_miss = 11;
+}
+
+// ArrowExecutionScope is compile-produced positive authorization for Arrow
+// ingestion. Its zero value is deliberately fail-closed on every CN.
+enum ArrowExecutionScope {
+  UnknownArrowExecutionScope = 0;
+  ArrowLoadData = 1;
+}
+
 message ExternalScan {
+  option (gogoproto.goproto_stringer) = false;
   repeated plan.ExternAttr attrs = 1 [(gogoproto.nullable) = false];
   repeated int64 file_size = 2;
   repeated file_offset file_offset_total = 3;
@@ -390,12 +516,32 @@ message ExternalScan {
   bool parallel_load = 11;
   bool load_empty_numeric_as_zero = 12;
   repeated parquet_row_group_shard parquet_row_group_shards = 13;
-}
-
-message StreamScan {
-  plan.TableDef tbl_def = 1;
-  int64 offset = 2;
-  int64 limit = 3;
+  repeated IcebergDataFileTask iceberg_data_tasks = 14;
+  repeated IcebergDeleteFileTask iceberg_delete_tasks = 15;
+  repeated IcebergColumnMapping iceberg_columns = 16;
+  IcebergSnapshotRuntime iceberg_snapshot = 17;
+  string iceberg_object_io_ref = 18;
+  repeated int32 iceberg_hidden_read_columns = 19;
+  bool need_row_ordinal = 20;
+  IcebergPlanningStats iceberg_planning_stats = 21;
+  int64 iceberg_delete_max_memory_bytes = 22;
+  bool iceberg_delete_spill_enabled = 23;
+  plan.DataStreamScan datastream_scan = 24;
+  plan.ForeignScan foreign_scan = 25;
+  plan.KafkaScan kafka_scan = 26;
+  bool parquet_whole_file_fanout = 27;
+  ArrowExecutionScope arrow_execution_scope = 28;
+  repeated ArrowObjectIdentity arrow_object_identities = 29;
+  repeated ArrowRecordBatchShard arrow_record_batch_shards = 30;
+  bytes arrow_schema_fingerprint = 31;
+  uint32 arrow_conversion_plan_version = 32;
+  // Compile-time policy snapshot. Older CNs ignore this additive field and
+  // still reject Arrow format before execution, so mixed versions fail closed.
+  bool arrow_force_materialize = 33;
+  // This records actual fanout placement independently of the SQL PARALLEL
+  // request. Fanout scopes clear that request after splitting, but every
+  // receiving CN must still enforce its own distributed Arrow rollout gate.
+  bool arrow_distributed_execution = 34;
 }
 
 message TableScan {
@@ -448,6 +594,7 @@ message SampleFunc {
 }
 
 message Instruction {
+  option (gogoproto.goproto_stringer) = false;
   // Op specified the operator code of an instruction.
   int32 op = 1;
   // Idx specified the anaylze information index.
@@ -485,7 +632,8 @@ message Instruction {
   LockOp lock_op = 33;
   Shuffle shuffle = 34;
   Merge merge = 35;
-  StreamScan stream_scan = 36;
+  reserved 36; // former stream_scan
+  reserved "stream_scan";
   PreInsertSecondaryIndex pre_insert_secondary_index = 37;
   SampleFunc sample_func = 38;
   FuzzyFilter fuzzy_filter = 39;
@@ -505,6 +653,31 @@ message Instruction {
   MultiUpdate multi_update = 52;
   PostDml post_dml = 53;
   int64 spill_mem = 54;
+  plan.MongoScan mongodb_scan = 55;
+  // FILTER only: execute assertion expressions for their error side effect and
+  // pass the input batch through without building a selection vector.
+  bool filter_is_assert = 56;
+  // PARTITION only: number of leading order_by entries used as partition keys.
+  int32 partition_by_count = 57;
+  // PARTITION Top-N only: emit local candidates in dense batches for the
+  // global hash reduction rather than as one logical partition per batch.
+  bool partition_top_n_pre_reduce = 58;
+  // PARTITION only: planner-selected ordinary window partition algorithm.
+  plan.Node.PartitionAlgorithm partition_algorithm = 59;
+  // PROJECTION only: vector-level expansion metadata for planner-generated
+  // ROLLUP/CUBE grouping sets. Older CNs ignore these fields, so planning is
+  // gated by MORPCVersion49 until every participant understands them.
+  repeated bool projection_grouping_flags = 60;
+  int32 projection_grouping_set_count = 61;
+  // TOP only: every runtime worker must be consolidated into one stream that
+  // remains ordered across batch boundaries before leaving its CN.
+  bool top_ordered_output = 62;
+  // MERGE_TOP only: consume one independently ordered stream from every
+  // receiver. This is serialized for per-CN ordered gathers sent by RemoteRun.
+  bool merge_top_ordered_streams = 63;
+  // PARTITION Top-N only: retain all peers of the Nth row. Planning is gated
+  // by MORPCVersion69 so an older receiver cannot silently drop RANK ties.
+  bool partition_top_n_with_ties = 64;
 }
 
 message AnalysisList {
@@ -543,6 +716,7 @@ message ProcessLimitation {
   int64 batch_size = 3;
   int64 partition_rows = 4;
   int64 reader_size = 5;
+  int64 spill_size = 6;
 }
 
 message PrepareParamInfo {
@@ -550,6 +724,11 @@ message PrepareParamInfo {
   bytes data = 2;
   bytes area = 3;
   repeated bool nulls = 4;
+  repeated bool is_bin = 5;
+  repeated bool is_binary_string = 6;
+  repeated uint32 string_sources = 7;
+  // Explicit per-parameter runtime string domains; gated by MORPC v58.
+  repeated uint32 runtime_string_domains = 8;
 }
 
 message ProcessInfo {
@@ -563,6 +742,30 @@ message ProcessInfo {
   SessionLoggerInfo session_logger = 8 [(gogoproto.nullable) = false];
   PrepareParamInfo prepare_params = 9 [(gogoproto.nullable) = false];
   int64 affected_rows = 10;
+  // Planned PipelineMessage RPCs per target CN for statement-level remote
+  // MessageBoard and resource-account terminal ownership.
+  map<string, uint32> remote_fragment_counts = 11;
+  // Unique physical execution attempt. Unlike the SQL statement ID, this
+  // changes across retries and prepared-statement executions.
+  bytes remote_execution_id = 12;
+  // Statement-level INSERT IGNORE semantics used by casts in remote pipelines.
+  // Absent in messages from older CNs, which safely decodes as false.
+  bool statement_runtime_ignore = 13;
+  // Snapshot against which this execution generation's plan was bound. It is
+  // immutable for the generation even when RC lock handling advances the
+  // transaction snapshot. Absent on older senders, receivers fall back to the
+  // transaction snapshot for rolling-upgrade compatibility.
+  timestamp.Timestamp plan_snapshot_ts = 14;
+  // True when this execution admitted the bound generation from a session or
+  // prepared cache. A receiver uses it only if the cluster protocol rolls back
+  // before locking and the optional plan timestamp is no longer safe to send.
+  bool plan_generation_reused = 15;
+  // Immutable string-key shuffle owner algorithm selected for this execution.
+  // Zero is the legacy sampled-key mapping used by older senders. Value 1 is
+  // the complete-key stable mapping introduced with MORPC version 33. The
+  // matching Shuffle wire opcode makes pre-v33 receivers reject the pipeline;
+  // the pair prevents a rollout change from silently splitting key ownership.
+  uint32 string_shuffle_hash_algorithm = 16;
 }
 
 message SessionInfo {
@@ -576,6 +779,28 @@ message SessionInfo {
   string account = 8;
   repeated string query_id = 9;
   int64 lock_wait_timeout = 10;
+  bool lock_wait_timeout_set = 11;
+  bool matrixone_native_mode = 12;
+  bool explicit_zero_temporal_cast_returns_null = 13;
+  string sql_mode = 14;
+  // Statement-scoped AUTO_INCREMENT controls captured on the initiating CN.
+  // Zero preserves compatibility with older payloads and means the default
+  // value of one on the receiving CN.
+  uint64 auto_increment_increment = 15;
+  uint64 auto_increment_offset = 16;
+  // IANA identity preserves historical and DST rules. Empty means the legacy
+  // time_zone bytes describe a fixed-offset location.
+  string time_zone_name = 17;
+  // Statement-scoped diagnostic retention capacity. The explicit-set bit
+  // distinguishes a configured zero from an absent field on older CNs.
+  uint32 max_error_count = 18;
+  bool max_error_count_set = 19;
+  // Effective value captured for this execution; presence distinguishes zero
+  // from a process sent by an older coordinator.
+  uint32 default_week_format = 20;
+  bool default_week_format_set = 21;
+  // Effective locale captured for locale-sensitive temporal functions.
+  string lc_time_names = 22;
 }
 
 message SessionLoggerInfo {
@@ -595,6 +820,7 @@ message SessionLoggerInfo {
 }
 
 message Pipeline {
+  option (gogoproto.goproto_stringer) = false;
   enum PipelineType {
     Merge = 0;
     Normal = 1;
@@ -618,6 +844,9 @@ message Pipeline {
   repeated int32 nil_batch_cnt = 13;
 
   repeated UuidToRegIdx uuids_to_reg_idx = 14;
+  // Per receiver, preserve the single-producer ordered-stream contract across
+  // RemoteRun. Empty means the legacy unordered default.
+  repeated bool ordered_stream = 15;
 }
 
 message WrapNode {
@@ -636,4 +865,29 @@ message Apply {
   repeated int32 rel_list = 2;
   repeated int32 col_list = 3;
   repeated plan.Type types = 4 [(gogoproto.nullable) = false];
+  plan.VectorIndexScan vector_index_scan = 5;
+  repeated string vector_attrs = 6;
+  int64 txn_offset = 7;
+}
+
+message ODKUForeignKeyCheck {
+  repeated int32 col_idx_list = 1;
+  int32 eligibility_result_pos = 2;
+}
+
+message ArrowObjectIdentity {
+  int32 file_index = 1;
+  string version_id = 2;
+  string etag = 3;
+  int64 size = 4;
+  int64 last_modified_unix_nano = 5;
+}
+
+message ArrowRecordBatchShard {
+  int32 file_index = 1;
+  int32 record_batch_start = 2;
+  int32 record_batch_end = 3;
+  repeated int32 required_dictionary_block_indices = 4;
+  int64 estimated_rows = 5;
+  int64 estimated_wire_bytes = 6;
 }

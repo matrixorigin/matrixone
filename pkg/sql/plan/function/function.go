@@ -52,15 +52,9 @@ func initAllSupportedFunctions() {
 	}
 
 	for _, fn := range supportedWindowInNewFramework {
-		for _, ov := range fn.Overloads {
-			ov.aggFramework.aggRegister(encodeOverloadID(int32(fn.functionId), int32(ov.overloadId)))
-		}
 		allSupportedFunctions[fn.functionId] = fn
 	}
 	for _, fn := range supportedAggInNewFramework {
-		for _, ov := range fn.Overloads {
-			ov.aggFramework.aggRegister(encodeOverloadID(int32(fn.functionId), int32(ov.overloadId)))
-		}
 		allSupportedFunctions[fn.functionId] = fn
 	}
 }
@@ -101,14 +95,163 @@ func GetFunctionIsWinValueFunByName(name string) bool {
 	return f.isWindowValue()
 }
 
+// GetFunctionIgnoresWindowFrameByName reports whether a window function
+// operates on partition-relative row positions instead of the current frame.
+func GetFunctionIgnoresWindowFrameByName(name string) bool {
+	fid, exists := getFunctionIdByNameWithoutErr(name)
+	return exists && (fid == LAG || fid == LEAD)
+}
+
+func GetFunctionIsVolatileOrRealTimeRelatedByName(name string) bool {
+	fid, exists := getFunctionIdByNameWithoutErr(name)
+	if !exists {
+		return false
+	}
+	for _, ov := range allSupportedFunctions[fid].Overloads {
+		if ov.CannotFold() || ov.IsRealTimeRelated() {
+			return true
+		}
+	}
+	return false
+}
+
 func GetFunctionIsWinOrderFunById(overloadID int64) bool {
-	fid, _ := DecodeOverloadID(overloadID)
+	fid, oIndex := DecodeOverloadID(overloadID)
+	if !validFunctionOverloadID(fid, oIndex) {
+		return false
+	}
 	return allSupportedFunctions[fid].isWindowOrder()
+}
+
+func validFunctionOverloadID(fid, oIndex int32) bool {
+	return fid >= 0 && int(fid) < len(allSupportedFunctions) &&
+		int(fid) == allSupportedFunctions[fid].functionId &&
+		oIndex >= 0 && int(oIndex) < len(allSupportedFunctions[fid].Overloads)
+}
+
+// IsConstant applies the existing folding policy, including prepare-time
+// parameter and statement-time handling, at the function semantic owner.
+func IsConstant(expr *plan.Expr, varAndParamIsConst bool) bool {
+	return isConstant(expr, varAndParamIsConst, varAndParamIsConst, constantForFolding)
+}
+
+// IsStatementConstant conservatively admits speculative evaluation and endpoint
+// CONST provenance. Parameters and variables must already be materialized.
+func IsStatementConstant(expr *plan.Expr) bool {
+	return isConstant(expr, false, true, constantForFolding)
+}
+
+// IsRuntimeConstant admits one row-independent value for a scan. Parameters
+// retain their runtime binding promise; lazy selectors stay unevaluated.
+func IsRuntimeConstant(expr *plan.Expr) bool {
+	return isConstant(expr, true, true, constantForRuntime)
+}
+
+type constantPurpose uint8
+
+const (
+	constantForFolding constantPurpose = iota
+	constantForRuntime
+)
+
+func isConstant(expr *plan.Expr, allowParameters, currentExecution bool, purpose constantPurpose) bool {
+	if expr == nil {
+		return false
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Lit, *plan.Expr_T, *plan.Expr_Vec:
+		return true
+	case *plan.Expr_Fold:
+		return e.Fold != nil && e.Fold.IsConst
+	case *plan.Expr_P, *plan.Expr_V:
+		return allowParameters
+	case *plan.Expr_List:
+		if e.List == nil {
+			return false
+		}
+		for _, arg := range e.List.List {
+			if !isConstant(arg, allowParameters, currentExecution, purpose) {
+				return false
+			}
+		}
+		return true
+	case *plan.Expr_F:
+		if e.F == nil || e.F.Func == nil {
+			return false
+		}
+		fid, _ := DecodeOverloadID(e.F.Func.GetObj())
+		if fid == CASE && purpose == constantForFolding {
+			return false
+		}
+		f, ok := GetFunctionByIdWithoutError(e.F.Func.GetObj())
+		if !ok || f.CannotFold() || (f.IsRealTimeRelated() && !currentExecution) {
+			return false
+		}
+		if purpose == constantForRuntime && (allSupportedFunctions[fid].isAggregate() || allSupportedFunctions[fid].isWindow()) {
+			return false
+		}
+		for _, arg := range e.F.Args {
+			if !isConstant(arg, allowParameters, currentExecution, purpose) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+// CanUseZoneMapComparison checks whether physical byte ordering represents the
+// bound SQL comparison domain. CHAR comparisons ignore trailing spaces, which
+// the persisted raw-byte min/max and bloom metadata do not represent.
+func CanUseZoneMapComparison(overloadID int64, args []*plan.Expr) bool {
+	fid, _ := DecodeOverloadID(overloadID)
+	switch fid {
+	case IN, NOT_IN:
+		if len(args) != 2 || args[1] == nil {
+			return false
+		}
+		// List execution uses its first item type; a folded tuple can retain
+		// the outer T_tuple declaration, so encoded vectors own their type.
+		switch tuple := args[1].Expr.(type) {
+		case *plan.Expr_List:
+			return tuple.List != nil && len(tuple.List.List) > 0 && tuple.List.List[0] != nil && types.T(tuple.List.List[0].Typ.Id) != types.T_char
+		case *plan.Expr_Vec:
+			// The actual consumer validates and decodes the carrier once. Its
+			// outer tuple declaration cannot prove physical membership order.
+			return tuple.Vec != nil
+		case *plan.Expr_Fold:
+			return tuple.Fold != nil && !tuple.Fold.IsConst
+		default:
+			return false
+		}
+	case EQUAL, NULL_SAFE_EQUAL, NOT_EQUAL, GREAT_THAN, GREAT_EQUAL, LESS_THAN, LESS_EQUAL, BETWEEN:
+		if len(args) == 0 {
+			return false
+		}
+		for _, arg := range args {
+			if arg == nil {
+				return false
+			}
+		}
+		// The registered comparison kernels dispatch on operand zero. A raw
+		// Sval literal uses the executor's canonical VARCHAR container even
+		// when the plan declares CHAR (notably the empty string).
+		if types.T(args[0].Typ.Id) == types.T_char {
+			lit := args[0].GetLit()
+			if lit == nil || lit.Isnull {
+				return false
+			}
+			_, varcharLiteral := lit.Value.(*plan.Literal_Sval)
+			return varcharLiteral
+		}
+	}
+	return true
 }
 
 func GetFunctionIsZonemappableById(ctx context.Context, overloadID int64) (bool, error) {
 	fid, oIndex := DecodeOverloadID(overloadID)
-	if int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {
+	if !validFunctionOverloadID(fid, oIndex) {
 		return false, moerr.NewInvalidInput(ctx, "function overload id not found")
 	}
 	f := allSupportedFunctions[fid]
@@ -120,15 +263,15 @@ func GetFunctionIsZonemappableById(ctx context.Context, overloadID int64) (bool,
 
 func GetFunctionById(ctx context.Context, overloadID int64) (f overload, err error) {
 	fid, oIndex := DecodeOverloadID(overloadID)
-	if fid < 0 || int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {
+	if !validFunctionOverloadID(fid, oIndex) {
 		return overload{}, moerr.NewInvalidInput(ctx, "function overload id not found")
 	}
 	return allSupportedFunctions[fid].Overloads[oIndex], nil
 }
 
 func GetLayoutById(ctx context.Context, overloadID int64) (FuncExplainLayout, error) {
-	fid, _ := DecodeOverloadID(overloadID)
-	if fid < 0 || int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {
+	fid, oIndex := DecodeOverloadID(overloadID)
+	if !validFunctionOverloadID(fid, oIndex) {
 		return 0, moerr.NewInvalidInput(ctx, "function overload id not found")
 	}
 	return allSupportedFunctions[fid].layout, nil
@@ -136,13 +279,54 @@ func GetLayoutById(ctx context.Context, overloadID int64) (FuncExplainLayout, er
 
 func GetFunctionByIdWithoutError(overloadID int64) (f overload, exists bool) {
 	fid, oIndex := DecodeOverloadID(overloadID)
-	if fid < 0 || int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {
+	if !validFunctionOverloadID(fid, oIndex) {
 		return overload{}, false
 	}
 	return allSupportedFunctions[fid].Overloads[oIndex], true
 }
 
 func GetFunctionByName(ctx context.Context, name string, args []types.Type) (r FuncGetResult, err error) {
+	return getFunctionByName(ctx, name, args, nil)
+}
+
+// StringDomainCheckMode separates an operand's current string domain from the
+// provenance rules that decide whether it participates in regexp charset
+// compatibility. A single boolean cannot represent both PREPARE-time
+// uncertainty and MySQL's execute-time parameter-marker exception.
+type StringDomainCheckMode uint8
+
+const (
+	// StringDomainCheckKnown applies the operand's current text/binary domain.
+	StringDomainCheckKnown StringDomainCheckMode = iota
+	// StringDomainCheckDeferred omits a PREPARE-time runtime-owned domain. The
+	// concrete execution must bind the operand again with a non-deferred mode.
+	StringDomainCheckDeferred
+	// StringDomainCheckParamMarker keeps the marker's current domain for
+	// compatibility with a fixed binary operand, but a binary marker does not
+	// itself trigger MySQL's static-binary restriction.
+	StringDomainCheckParamMarker
+	// StringDomainCheckDomainless omits a bare, untyped NULL literal.
+	StringDomainCheckDomainless
+)
+
+// GetFunctionByNameWithStringDomainCheckModes resolves a function while
+// preserving the provenance needed by regexp charset checks. Ordinary argument
+// types remain authoritative for overload selection, casts, result metadata,
+// and the executor's effective text/binary domain.
+func GetFunctionByNameWithStringDomainCheckModes(
+	ctx context.Context, name string, args []types.Type, modes []StringDomainCheckMode,
+) (r FuncGetResult, err error) {
+	if len(modes) != len(args) {
+		return r, moerr.NewInternalErrorf(
+			ctx, "string domain check mode count %d does not match argument count %d",
+			len(modes), len(args))
+	}
+	return getFunctionByName(ctx, name, args, modes)
+}
+
+func getFunctionByName(
+	ctx context.Context, name string, args []types.Type, stringDomainModes []StringDomainCheckMode,
+) (r FuncGetResult, err error) {
 	r.fid, err = getFunctionIdByName(ctx, name)
 	if err != nil {
 		return r, err
@@ -152,7 +336,15 @@ func GetFunctionByName(ctx context.Context, name string, args []types.Type) (r F
 		return r, moerr.NewNYIf(ctx, "should implement the function %s", name)
 	}
 
-	check := f.checkFn(f.Overloads, args)
+	check := f.checkArgumentTypes(args, stringDomainModes)
+	if (r.fid == FORMAT || r.fid == MAKEDATE || r.fid == MAKETIME) && LegacySpecialConsumers(ctx) {
+		if legacy, ok := legacySpecialConsumerCheck(r.fid, f.Overloads, args); ok {
+			check = legacy
+		}
+	}
+	if r.fid == MINUS && signedUnsignedSubtraction(ctx, args) {
+		check = newCheckResultWithCast(3, integerDomainOperands(args))
+	}
 	switch check.status {
 	case succeedMatched:
 		r.overloadId = int32(check.idx)
@@ -167,7 +359,12 @@ func GetFunctionByName(ctx context.Context, name string, args []types.Type) (r F
 		r.cannotRunInParallel = f.Overloads[r.overloadId].cannotParallel
 
 	case failedFunctionParametersWrong:
-		if f.isFunction() {
+		if check.characterSetMismatch[0] != "" {
+			err = moerr.NewCharacterSetMismatch(
+				ctx, check.characterSetMismatch[0], check.characterSetMismatch[1], name)
+		} else if check.invalidJSONArgumentIndex != 0 {
+			err = moerr.NewInvalidTypeForJSON(ctx, check.invalidJSONArgumentIndex, name)
+		} else if f.isFunction() {
 			err = moerr.NewInvalidArg(ctx, fmt.Sprintf("function %s", name), args)
 		} else {
 			err = moerr.NewInvalidArg(ctx, fmt.Sprintf("operator %s", name), args)
@@ -176,11 +373,89 @@ func GetFunctionByName(ctx context.Context, name string, args []types.Type) (r F
 	case failedAggParametersWrong:
 		err = moerr.NewInvalidArg(ctx, fmt.Sprintf("aggregate function %s", name), args)
 
+	case failedBitwiseAggregateOperandsSize:
+		err = moerr.NewInvalidBitwiseAggregateOperandsSize(ctx)
+
 	case failedTooManyFunctionMatched:
 		err = moerr.NewInvalidArg(ctx, fmt.Sprintf("too many overloads matched %s", name), args)
 	}
+	if err == nil {
+		r.applyDivPrecisionIncrement(ctx, args)
+	}
 
 	return r, err
+}
+
+// GetFunctionByNameWithoutError tries to resolve a function overload without
+// constructing an error for an expected mismatch. It is intended for
+// speculative planner checks where unsupported candidate types are normal and
+// the caller only needs the successful resolution metadata.
+func GetFunctionByNameWithoutError(name string, args []types.Type) (r FuncGetResult, ok bool) {
+	r.fid, ok = getFunctionIdByNameWithoutErr(name)
+	if !ok || r.fid < 0 || int(r.fid) >= len(allSupportedFunctions) {
+		return FuncGetResult{}, false
+	}
+
+	f := allSupportedFunctions[r.fid]
+	if len(f.Overloads) == 0 || f.checkFn == nil {
+		return FuncGetResult{}, false
+	}
+
+	check := f.checkArgumentTypes(args, nil)
+	switch check.status {
+	case succeedMatched:
+		r.overloadId = int32(check.idx)
+		r.retType = f.Overloads[r.overloadId].retType(args)
+		r.cannotRunInParallel = f.Overloads[r.overloadId].cannotParallel
+		r.applyDivPrecisionIncrement(context.Background(), args)
+		return r, true
+
+	case succeedWithCast:
+		r.overloadId = int32(check.idx)
+		r.needCast = true
+		r.targetTypes = check.finalType
+		r.retType = f.Overloads[r.overloadId].retType(r.targetTypes)
+		r.cannotRunInParallel = f.Overloads[r.overloadId].cannotParallel
+		r.applyDivPrecisionIncrement(context.Background(), args)
+		return r, true
+
+	default:
+		return FuncGetResult{}, false
+	}
+}
+
+// GetFunctionByNameWithOverload validates the arguments using the function's
+// normal type checker, then selects a specific overload. It is intended for
+// planner-only variants that must keep the same SQL function name and layout.
+func GetFunctionByNameWithOverload(
+	ctx context.Context, name string, args []types.Type, overloadID int32,
+) (r FuncGetResult, err error) {
+	originalArgs := args
+	if name == "cast" && IsIntegerArgumentCastOverload(overloadID) {
+		if !integerArgumentCastSignature(overloadID, args) {
+			return FuncGetResult{}, moerr.NewInvalidInputf(ctx, "invalid integer argument cast signature %v", args)
+		}
+		return FuncGetResult{fid: CAST, overloadId: overloadID, retType: args[1]}, nil
+	}
+	r, err = GetFunctionByName(ctx, name, args)
+	if err != nil {
+		return r, err
+	}
+	f := allSupportedFunctions[r.fid]
+	if overloadID < 0 || int(overloadID) >= len(f.Overloads) {
+		return FuncGetResult{}, moerr.NewInvalidInputf(ctx, "function overload %s.%d not found", name, overloadID)
+	}
+	if !f.bindsOverload(int(overloadID)) {
+		return FuncGetResult{}, moerr.NewInvalidInputf(ctx, "function overload %s.%d is legacy execution only", name, overloadID)
+	}
+	r.overloadId = overloadID
+	if r.needCast {
+		args = r.targetTypes
+	}
+	r.retType = f.Overloads[overloadID].retType(args)
+	r.cannotRunInParallel = f.Overloads[overloadID].cannotParallel
+	r.applyDivPrecisionIncrement(ctx, originalArgs)
+	return r, nil
 }
 
 // RunFunctionDirectly runs a function directly without any protections.
@@ -199,9 +474,9 @@ func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vect
 
 	result := vector.NewFunctionResultWrapper(f.retType(inputTypes), mp)
 
-	fold := true
+	fold := !f.CannotFold() && !f.IsRealTimeRelated()
 	evaluateLength := length
-	if !f.CannotFold() && !f.IsRealTimeRelated() {
+	if fold {
 		for _, param := range inputs {
 			if !param.IsConst() {
 				fold = false
@@ -216,7 +491,7 @@ func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vect
 		result.Free()
 		return nil, err
 	}
-	exec, _, execFree := f.GetExecuteMethod()
+	exec, _, execFree, _ := f.GetExecuteMethod()
 	if err = exec(inputs, result, proc, evaluateLength, nil); err != nil {
 		result.Free()
 		if execFree != nil {
@@ -245,26 +520,202 @@ func GetAggFunctionNameByID(overloadID int64) string {
 	if !exist {
 		return "unknown function"
 	}
-	return f.aggFramework.str
+	return f.aggName
 }
 
-// DeduceNotNullable helps optimization sometimes.
-// deduce notNullable for function
-// for example, create table t1(c1 int not null, c2 int, c3 int not null ,c4 int);
-// sql select c1+1, abs(c2), cast(c3 as varchar(10)) from t1 where c1=c3;
-// we can deduce that c1+1, cast c3 and c1=c3 is notNullable, abs(c2) is nullable.
+// DeduceNotNullable reports whether a function result is guaranteed to be
+// non-NULL. STRICT functions normally preserve an all-non-NULL argument
+// guarantee, except for functions that can synthesize NULL from valid values.
 func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
-	fid, _ := DecodeOverloadID(overloadID)
-	if allSupportedFunctions[fid].testFlag(plan.Function_PRODUCE_NO_NULL) {
+	fid, oid := DecodeOverloadID(overloadID)
+	switch fid {
+	case EXTRACT:
+		// Numeric EXTRACT synthesizes NULL for invalid text/fields and zero
+		// calendar weeks. Released overloads 0..4 retain their physical ABI.
+		if oid >= 5 && oid <= 9 {
+			return false
+		}
+	case YEAR, MONTH, QUARTER, DAY, DAYOFMONTH, HOUR, MINUTE, SECOND, MICROSECOND:
+		// Tolerant string extractors may reject a non-NULL value. Typed field
+		// extraction remains non-NULL, including its zero-calendar fields.
+		if len(args) == 1 && types.T(args[0].Typ.Id).IsMySQLString() {
+			return false
+		}
+	case LAST_DAY, WEEK, WEEKOFYEAR, WEEKDAY, YEARWEEK, DAYOFWEEK, DAYOFYEAR, DAYNAME, MONTHNAME, FROM_DAYS:
+		// Calendar calculations reject zero dates; FROM_DAYS rejects values
+		// above the representable calendar even when the input is NOT NULL.
+		return false
+	case DATE:
+		// Typed zero DATE/DATETIME values become NULL under NO_ZERO_DATE.
+		if oid == 0 || oid == 2 {
+			return false
+		}
+	case CAST:
+		// Explicit typed DATE casts share the DATE conversion policy. Legacy
+		// implicit and assignment casts keep their existing nullability.
+		if oid == 1 && len(args) == 2 &&
+			types.T(args[1].Typ.Id) == types.T_date &&
+			(types.T(args[0].Typ.Id) == types.T_date || types.T(args[0].Typ.Id) == types.T_datetime) {
+			return false
+		}
+	case OCT:
+		// New string executors produce NULL for empty non-NULL input.
+		// Preserve the persisted legacy and numeric overload contracts.
+		if oid >= OctStringOverloadStart && len(args) == 1 {
+			switch types.T(args[0].Typ.Id) {
+			case types.T_char, types.T_varchar, types.T_text,
+				types.T_binary, types.T_varbinary, types.T_blob:
+				return false
+			}
+		}
+	case CASE:
+		if caseHasTemporalPromotion(args) {
+			return false
+		}
+		for _, arg := range args {
+			if !arg.Typ.NotNullable {
+				return false
+			}
+		}
+		return true
+	case TIMESTAMP:
+		if len(args) == 2 {
+			return false
+		}
+	case ADDTIME:
+		// These overloads can return NULL for an out-of-range TIME result
+		// even when every operand is NOT NULL. The intervening legacy
+		// DATETIME overloads retain their released contract.
+		if oid <= 5 || (oid >= 9 && oid <= 11) {
+			return false
+		}
+	case SUBTIME:
+		if oid <= 5 || (oid >= 11 && oid <= 15) {
+			return false
+		}
+	case TIMEDIFF:
+		if oid <= 8 {
+			return false
+		}
+	case DATE_ADD, DATE_SUB:
+		if oid <= 15 {
+			return false
+		}
+	case MAKETIME:
+		if oid <= 38 {
+			return false
+		}
+	case TIMESTAMPADD:
+		if oid <= 7 {
+			return false
+		}
+	case COALESCE:
+		for _, arg := range args {
+			if arg.Typ.NotNullable {
+				return true
+			}
+		}
+		return false
+	case GREATEST, LEAST:
+		return false
+	case EQUAL, NOT_EQUAL:
+		// Direct JSON/BOOL equality preserves the JSON scalar category. A
+		// physically non-NULL JSON value can still contain JSON null, which the
+		// comparison maps to SQL UNKNOWN. Do not infer a non-NULL result merely
+		// from the two vector-level argument declarations.
+		if len(args) == 2 && isJSONBooleanComparison(
+			types.T(args[0].Typ.Id).ToType(), types.T(args[1].Typ.Id).ToType()) {
+			return false
+		}
+	// Value window functions can synthesize NULLs even when every input is
+	// NOT NULL. LAG/LEAD do so outside the partition unless an explicit,
+	// non-NULL default is present. FIRST_VALUE/LAST_VALUE can observe an empty
+	// frame, and NTH_VALUE can also miss the requested row. The frame is not
+	// available here, so keep those contracts conservative.
+	case FIRST_VALUE, LAST_VALUE, NTH_VALUE:
+		return false
+	case LAG, LEAD:
+		if len(args) != 3 {
+			return false
+		}
+		for _, arg := range args {
+			if !arg.Typ.NotNullable {
+				return false
+			}
+		}
+		return true
+	// These STRICT functions can synthesize NULL from non-NULL arguments.
+	// The UUID extractors do so for non-RFC-4122 variants, and
+	// uuid_extract_timestamp also for versions without a time source (e.g. v4).
+	case DIV, INTEGER_DIV, MOD,
+		POW, EXP, COT,
+		JSON_EXTRACT, JSON_EXTRACT_STRING, JSON_EXTRACT_FLOAT64,
+		REGEXP_SUBSTR,
+		INET6_ATON, INET_ATON, INET6_NTOA, ELT, UNHEX, CONV, MAKEDATE,
+		SHA2, AES_ENCRYPT, AES_DECRYPT, COMPRESS, UNCOMPRESS, EXTRACTVALUE, UPDATEXML,
+		DATE_FORMAT, TIME_FORMAT,
+		UUID_EXTRACT_VERSION, UUID_EXTRACT_TIMESTAMP,
+		TO_INTERVAL, TO_INTERVAL_MICROSECOND:
+		return false
+	}
+	if ProducesNoNull(overloadID) {
 		return true
 	}
-
 	for _, arg := range args {
 		if !arg.Typ.NotNullable {
 			return false
 		}
 	}
 	return true
+}
+
+func caseHasTemporalPromotion(args []*plan.Expr) bool {
+	for i := 1; i < len(args); i += 2 {
+		if isTemporalPromotion(args[i]) {
+			return true
+		}
+	}
+	// CASE arguments are condition/value pairs followed by ELSE. The ELSE
+	// expression is at the final even index and needs the same check.
+	if len(args)%2 == 1 && isTemporalPromotion(args[len(args)-1]) {
+		return true
+	}
+	return false
+}
+
+func isTemporalPromotion(arg *plan.Expr) bool {
+	fn := arg.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 {
+		return false
+	}
+	source := types.T(fn.Args[0].Typ.Id)
+	target := types.T(arg.Typ.Id)
+	return source.IsDateRelate() && target.IsDateRelate() && source != target
+}
+
+// ProducesNoNull reports whether a function's contract guarantees a non-NULL
+// result independently of its argument values. This is stronger than
+// DeduceNotNullable: STRICT functions such as json_extract can still return
+// SQL NULL for non-NULL inputs when a requested value is absent.
+func ProducesNoNull(overloadID int64) bool {
+	fid, _ := DecodeOverloadID(overloadID)
+	return fid >= 0 &&
+		int(fid) < len(allSupportedFunctions) &&
+		int(fid) == allSupportedFunctions[fid].functionId &&
+		allSupportedFunctions[fid].testFlag(plan.Function_PRODUCE_NO_NULL)
+}
+
+// HasExecutableCTASTypeDefault reports whether the SQL type default is a valid
+// value for a materialized function result when an INSERT omits that column.
+// This contract is deliberately independent of ProducesNoNull: domain types
+// such as HLL sketches never return NULL, but their zero-value byte string is
+// not a valid encoded sketch.
+func HasExecutableCTASTypeDefault(overloadID int64) bool {
+	fid, _ := DecodeOverloadID(overloadID)
+	return fid >= 0 &&
+		int(fid) < len(allSupportedFunctions) &&
+		int(fid) == allSupportedFunctions[fid].functionId &&
+		allSupportedFunctions[fid].hasExecutableCTASTypeDefault
 }
 
 type FuncGetResult struct {
@@ -308,6 +759,15 @@ func DecodeOverloadID(overloadID int64) (fid int32, oIndex int32) {
 	return fid, oIndex
 }
 
+func IsUserLevelLockFunctionID(fid int32) bool {
+	switch fid {
+	case GET_LOCK, RELEASE_LOCK, IS_FREE_LOCK, IS_USED_LOCK, RELEASE_ALL_LOCKS:
+		return true
+	default:
+		return false
+	}
+}
+
 func getFunctionIdByName(ctx context.Context, name string) (int32, error) {
 	if fid, ok := functionIdRegister[name]; ok {
 		return fid, nil
@@ -330,13 +790,27 @@ type FuncNew struct {
 	// function type.
 	class plan.Function_FuncFlag
 
-	// All overloads of the function.
+	// Whether the SQL type default is a valid executable default after CTAS
+	// materializes this function's result as a table column.
+	hasExecutableCTASTypeDefault bool
+
+	// All execution overloads, including identities retained for old plans.
 	Overloads []overload
+
+	// Integer contexts and canonical binding identities are independent of the
+	// source numeric type. An empty bindingOverloads list keeps legacy binding.
+	integerParameters []integerParameter
+	bindingOverloads  []int
 
 	// checkFn was used to check whether the input type can match the requirement of the function.
 	// if matched, return the corresponding id of overload. If type conversion was required,
 	// the required type should be returned at the same time.
 	checkFn func(overloads []overload, inputs []types.Type) checkResult
+
+	// stringDomainCheckFn is the optional second-stage checker for functions
+	// whose string compatibility depends on operand provenance as well as the
+	// current text/binary type.
+	stringDomainCheckFn func(overloads []overload, inputs []types.Type, modes []StringDomainCheckMode) checkResult
 
 	// layout was used for `explain SQL`.
 	layout FuncExplainLayout
@@ -359,13 +833,10 @@ type executeFreeOfOverload func() error
 // in case we need it in the future.
 type executeResetOfOverload func() error
 
-type aggregationLogicOfOverload struct {
-	// agg related string for error message.
-	str string
-
-	// how to register the aggregation.
-	aggRegister func(overloadID int64)
-}
+// executeRetainedBytesOfOverload reports non-vector backing allocations kept
+// alive by a stateful function operator. It is optional: ordinary functions
+// whose complete retained state is represented by executor vectors omit it.
+type executeRetainedBytesOfOverload func() uint64
 
 // an overload of a function.
 // stores all information about execution logic.
@@ -390,13 +861,20 @@ type overload struct {
 
 	// the execution logic and free logic.
 	// NOTE: use either newOp or newOpWithFree.
-	newOpWithFree func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload)
+	newOpWithFree func() (
+		executeLogicOfOverload,
+		executeResetOfOverload,
+		executeFreeOfOverload,
+		executeRetainedBytesOfOverload,
+	)
 
 	// in fact, the function framework does not directly run aggregate functions and window functions.
 	// we use two flags to mark whether function is one of them.
-	isAgg        bool
-	isWin        bool
-	aggFramework aggregationLogicOfOverload
+	isAgg bool
+	isWin bool
+
+	// aggName is used in aggregate-related error messages.
+	aggName string
 
 	// if true, overload was unable to run in parallel.
 	// For example,
@@ -427,14 +905,18 @@ func (ov *overload) CannotExecuteInParallel() bool {
 	return ov.cannotParallel
 }
 
-func (ov *overload) GetExecuteMethod() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload) {
+func (ov *overload) GetExecuteMethod() (
+	executeLogicOfOverload,
+	executeResetOfOverload,
+	executeFreeOfOverload,
+	executeRetainedBytesOfOverload,
+) {
 	if ov.newOpWithFree != nil {
-		fn, fnReset, fnFree := ov.newOpWithFree()
-		return fn, fnReset, fnFree
+		return ov.newOpWithFree()
 	}
 
 	fn := ov.newOp()
-	return fn, nil, nil
+	return fn, nil, nil, nil
 }
 
 func (ov *overload) GetReturnTypeMethod() func(parameters []types.Type) types.Type {
@@ -472,19 +954,22 @@ func (fn *FuncNew) testFlag(funcFlag plan.Function_FuncFlag) bool {
 type overloadCheckSituation int
 
 const (
-	succeedMatched                overloadCheckSituation = 0
-	succeedWithCast               overloadCheckSituation = -1
-	failedFunctionParametersWrong overloadCheckSituation = -2
-	failedAggParametersWrong      overloadCheckSituation = -3
-	failedTooManyFunctionMatched  overloadCheckSituation = -4
+	succeedMatched                     overloadCheckSituation = 0
+	succeedWithCast                    overloadCheckSituation = -1
+	failedFunctionParametersWrong      overloadCheckSituation = -2
+	failedAggParametersWrong           overloadCheckSituation = -3
+	failedTooManyFunctionMatched       overloadCheckSituation = -4
+	failedBitwiseAggregateOperandsSize overloadCheckSituation = -5
 )
 
 type checkResult struct {
 	status overloadCheckSituation
 
 	// if matched
-	idx       int
-	finalType []types.Type
+	idx                      int
+	finalType                []types.Type
+	invalidJSONArgumentIndex int
+	characterSetMismatch     [2]string
 }
 
 func newCheckResultWithSuccess(overloadId int) checkResult {
@@ -493,6 +978,20 @@ func newCheckResultWithSuccess(overloadId int) checkResult {
 
 func newCheckResultWithFailure(status overloadCheckSituation) checkResult {
 	return checkResult{status: status}
+}
+
+func newCheckResultWithInvalidJSONArgument(argumentIndex int) checkResult {
+	return checkResult{
+		status:                   failedFunctionParametersWrong,
+		invalidJSONArgumentIndex: argumentIndex,
+	}
+}
+
+func newCheckResultWithCharacterSetMismatch(left, right string) checkResult {
+	return checkResult{
+		status:               failedFunctionParametersWrong,
+		characterSetMismatch: [2]string{left, right},
+	}
 }
 
 func newCheckResultWithCast(overloadId int, castType []types.Type) checkResult {

@@ -30,6 +30,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -38,10 +39,26 @@ import (
 	// "github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+)
+
+// ValueRepr selects how extractRowFromVector renders the types whose native Go
+// value and SQL-display string differ (temporal / decimal / uuid). A consumer that
+// builds SQL text needs the display string; a consumer that binary-encodes the value
+// (the WAND retrieval index) needs the native value so it can serialize it exactly.
+type ValueRepr int
+
+const (
+	// ReprSQLString is the historical behavior: datetime/time/timestamp/decimal/uuid
+	// come out as their SQL-display string (feeds convertColIntoSql). Default.
+	ReprSQLString ValueRepr = iota
+	// ReprNative returns those types as their native Go value (types.Datetime,
+	// types.Decimal128, types.Uuid, ...) so a binary encoder round-trips them exactly.
+	ReprNative
 )
 
 // extractRowFromEveryVector gets the j row from the every vector and outputs the row
@@ -54,6 +71,7 @@ func extractRowFromEveryVector(
 	dataSet *batch.Batch,
 	rowIndex int,
 	row []any,
+	repr ValueRepr,
 ) error {
 	for i := 0; i < len(row); i++ {
 		vec := dataSet.Vecs[i]
@@ -66,7 +84,7 @@ func extractRowFromEveryVector(
 			rowIndex = 0
 		}
 
-		if err := extractRowFromVector(ctx, vec, i, row, rowIndex); err != nil {
+		if err := extractRowFromVector(ctx, vec, i, row, rowIndex, repr); err != nil {
 			return err
 		}
 		rowIndex = rowIndexBackup
@@ -75,7 +93,7 @@ func extractRowFromEveryVector(
 }
 
 // extractRowFromVector gets the rowIndex row from the i vector
-func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []any, rowIndex int) error {
+func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []any, rowIndex int, repr ValueRepr) error {
 	if vec.IsConstNull() || vec.GetNulls().Contains(uint64(rowIndex)) {
 		row[i] = nil
 		return nil
@@ -118,30 +136,64 @@ func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []
 		//|   �?   @  @@                  |
 		//+------------------------------+
 		row[i] = vector.GetArrayAt[float32](vec, rowIndex)
+	case types.T_array_float16:
+		// vecf16: extract natively as []types.Float16 (2 bytes/element). The
+		// cuvs CDC writer reinterprets these bytes verbatim — no f32 widening.
+		row[i] = vector.GetArrayAt[types.Float16](vec, rowIndex)
+	case types.T_array_bf16:
+		row[i] = vector.GetArrayAt[types.BF16](vec, rowIndex)
+	case types.T_array_int8:
+		row[i] = vector.GetArrayAt[int8](vec, rowIndex)
+	case types.T_array_uint8:
+		row[i] = vector.GetArrayAt[uint8](vec, rowIndex)
 	case types.T_array_float64:
 		row[i] = vector.GetArrayAt[float64](vec, rowIndex)
 	case types.T_date:
 		row[i] = vector.GetFixedAtWithTypeCheck[types.Date](vec, rowIndex)
 	case types.T_datetime:
-		scale := vec.GetType().Scale
-		row[i] = vector.GetFixedAtWithTypeCheck[types.Datetime](vec, rowIndex).String2(scale)
+		if repr == ReprNative {
+			row[i] = vector.GetFixedAtWithTypeCheck[types.Datetime](vec, rowIndex)
+		} else {
+			scale := vec.GetType().Scale
+			row[i] = vector.GetFixedAtWithTypeCheck[types.Datetime](vec, rowIndex).String2(scale)
+		}
 	case types.T_time:
-		scale := vec.GetType().Scale
-		row[i] = vector.GetFixedAtWithTypeCheck[types.Time](vec, rowIndex).String2(scale)
+		if repr == ReprNative {
+			row[i] = vector.GetFixedAtWithTypeCheck[types.Time](vec, rowIndex)
+		} else {
+			scale := vec.GetType().Scale
+			row[i] = vector.GetFixedAtWithTypeCheck[types.Time](vec, rowIndex).String2(scale)
+		}
 	case types.T_timestamp:
-		scale := vec.GetType().Scale
-		//TODO:get the right timezone
-		//timeZone := ses.GetTimeZone()
-		timeZone := time.UTC
-		row[i] = vector.GetFixedAtWithTypeCheck[types.Timestamp](vec, rowIndex).String2(timeZone, scale)
+		if repr == ReprNative {
+			row[i] = vector.GetFixedAtWithTypeCheck[types.Timestamp](vec, rowIndex)
+		} else {
+			scale := vec.GetType().Scale
+			//TODO:get the right timezone
+			//timeZone := ses.GetTimeZone()
+			timeZone := time.UTC
+			row[i] = vector.GetFixedAtWithTypeCheck[types.Timestamp](vec, rowIndex).String2(timeZone, scale)
+		}
 	case types.T_decimal64:
-		scale := vec.GetType().Scale
-		row[i] = vector.GetFixedAtWithTypeCheck[types.Decimal64](vec, rowIndex).Format(scale)
+		if repr == ReprNative {
+			row[i] = vector.GetFixedAtWithTypeCheck[types.Decimal64](vec, rowIndex)
+		} else {
+			scale := vec.GetType().Scale
+			row[i] = vector.GetFixedAtWithTypeCheck[types.Decimal64](vec, rowIndex).Format(scale)
+		}
 	case types.T_decimal128:
-		scale := vec.GetType().Scale
-		row[i] = vector.GetFixedAtWithTypeCheck[types.Decimal128](vec, rowIndex).Format(scale)
+		if repr == ReprNative {
+			row[i] = vector.GetFixedAtWithTypeCheck[types.Decimal128](vec, rowIndex)
+		} else {
+			scale := vec.GetType().Scale
+			row[i] = vector.GetFixedAtWithTypeCheck[types.Decimal128](vec, rowIndex).Format(scale)
+		}
 	case types.T_uuid:
-		row[i] = vector.GetFixedAtWithTypeCheck[types.Uuid](vec, rowIndex).String()
+		if repr == ReprNative {
+			row[i] = vector.GetFixedAtWithTypeCheck[types.Uuid](vec, rowIndex)
+		} else {
+			row[i] = vector.GetFixedAtWithTypeCheck[types.Uuid](vec, rowIndex).String()
+		}
 	case types.T_Rowid:
 		row[i] = vector.GetFixedAtWithTypeCheck[types.Rowid](vec, rowIndex)
 	case types.T_Blockid:
@@ -259,6 +311,23 @@ func convertColIntoSql(
 		value := data.([]float64)
 		typstr := typ.DescString()
 		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", types.ArrayToString(value), typstr))
+	case types.T_array_float16:
+		// Narrow base columns (vecf16/bf16/int8/uint8). ArrayToString renders the
+		// half/bf16 bit pattern back to its decimal value and the int8/uint8 codes
+		// to integers, so CAST('[...]' as vecXXX(n)) reconstructs the same vector
+		// the ivfflat entry projection expects (matches the synchronous build,
+		// which reads the base column directly in SQL).
+		value := data.([]types.Float16)
+		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", types.ArrayToString(value), typ.DescString()))
+	case types.T_array_bf16:
+		value := data.([]types.BF16)
+		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", types.ArrayToString(value), typ.DescString()))
+	case types.T_array_int8:
+		value := data.([]int8)
+		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", types.ArrayToString(value), typ.DescString()))
+	case types.T_array_uint8:
+		value := data.([]uint8)
+		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", types.ArrayToString(value), typ.DescString()))
 	case types.T_date:
 		value := data.(types.Date)
 		sqlBuff = appendByte(sqlBuff, '\'')
@@ -368,6 +437,35 @@ var CollectChanges = func(ctx context.Context, rel engine.Relation, fromTs, toTs
 	return rel.CollectChanges(ctx, fromTs, toTs, false, mp)
 }
 
+// finishISCPTransaction is the single commit/rollback boundary for ISCP-owned
+// transactions. Cleanup must remain possible after the operation context is
+// canceled, and neither commit nor rollback failures may be converted to
+// success.
+func finishISCPTransaction(ctx context.Context, txnOp client.TxnOperator, err error) error {
+	if txnOp == nil {
+		return err
+	}
+	// Cancellation before the commit point is a failed operation, even when the
+	// last statement happened to return first. Use the detached cleanup context
+	// below to roll back instead of accidentally committing canceled work.
+	if err == nil {
+		err = ctx.Err()
+	}
+	cleanupCtx, cancel := context.WithTimeoutCause(
+		context.WithoutCancel(ctx),
+		time.Minute*5,
+		moerr.CauseISCPTransactionFinishTimeout,
+	)
+	defer cancel()
+	if err != nil {
+		if rollbackErr := txnOp.Rollback(cleanupCtx); rollbackErr != nil {
+			return errors.Join(err, rollbackErr)
+		}
+		return err
+	}
+	return txnOp.Commit(cleanupCtx)
+}
+
 func batchRowCount(bat *batch.Batch) int {
 	if bat == nil || len(bat.Vecs) == 0 {
 		return 0
@@ -389,11 +487,11 @@ func getTxn(
 		0)
 	op, err := cnTxnClient.New(ctx, nowTs, createByOpt)
 	if err != nil {
-		return nil, err
+		return nil, finishISCPTransaction(ctx, op, err)
 	}
 	err = cnEngine.New(ctx, op)
 	if err != nil {
-		return nil, errors.Join(err, op.Rollback(ctx))
+		return nil, finishISCPTransaction(ctx, op, err)
 	}
 	return op, nil
 }
@@ -439,16 +537,15 @@ func checkLease(
 	if err != nil {
 		return
 	}
-	defer txn.Commit(ctxWithTimeout)
+	defer func() {
+		err = finishISCPTransaction(ctxWithTimeout, txn, err)
+		if err != nil {
+			ok = false
+		}
+	}()
 
-	sql := `select task_runner from mo_task.sys_daemon_task where task_type = "ISCP" and task_runner is not null`
-	result, err := ExecWithResult(ctxWithTimeout, sql, cnUUID, txn)
-	if err != nil {
-		return
-	}
-	defer result.Close()
 	var runner string
-	runner, err = readSingleTaskRunner(result)
+	runner, err = GetTaskRunner(ctxWithTimeout, cnUUID, txn)
 	if err != nil {
 		return
 	}
@@ -467,23 +564,50 @@ func checkLease(
 	return
 }
 
+func GetTaskRunner(
+	ctx context.Context,
+	cnUUID string,
+	txn client.TxnOperator,
+) (string, error) {
+	ctxWithSysAccount := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	ctxWithTimeout, cancel := context.WithTimeoutCause(ctxWithSysAccount, time.Minute*5, moerr.CauseISCPGetTaskRunnerTimeout)
+	defer cancel()
+
+	sql := `select task_runner from mo_task.sys_daemon_task where task_type = "ISCP" and task_runner is not null`
+	result, err := ExecWithResult(ctxWithTimeout, sql, cnUUID, txn)
+	if err != nil {
+		return "", err
+	}
+	defer result.Close()
+	return readSingleTaskRunner(result)
+}
+
+// Result callbacks carry logical cardinality; a constant vector can encode
+// several rows in one physical value. Do not infer lease uniqueness from it.
 func readSingleTaskRunner(result executor.Result) (string, error) {
-	runners := make([]string, 0, 1)
+	var runner string
+	var rowCount int
 	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		if rows == 0 {
 			return true
 		}
-		runners = append(runners, executor.GetStringRows(cols[0])...)
-		return len(runners) < 2
+		rowCount += rows
+		if rowCount != 1 {
+			return false
+		}
+		if !cols[0].IsNull(0) {
+			runner = cols[0].GetStringAt(0)
+		}
+		return true
 	})
-	if len(runners) == 0 {
+	if rowCount == 0 {
 		return "", nil
 	}
-	if len(runners) != 1 {
-		return "", moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected rows count: %d", len(runners)))
+	if rowCount != 1 {
+		return "", moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected rows count: %d", rowCount))
 	}
-	if runners[0] == "" {
+	if runner == "" {
 		return "", moerr.NewInternalErrorNoCtx("task runner is null")
 	}
-	return runners[0], nil
+	return runner, nil
 }

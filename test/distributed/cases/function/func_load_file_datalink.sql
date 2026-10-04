@@ -28,6 +28,15 @@ insert into t1 values(5, 'file://$resources/file_test/normal.txt?offset=0&size=-
 
 select a, load_file(b) from t1;
 
+-- empty files must not truncate a multi-row result before ORDER BY shuffles it
+create table load_file_cardinality_probe(a int, b datalink);
+insert into load_file_cardinality_probe values
+(1, 'file://$resources/file_test/empty.txt'),
+(2, 'file://$resources/file_test/normal.txt');
+select a, length(load_file(b)) as content_length
+from load_file_cardinality_probe order by a;
+drop table load_file_cardinality_probe;
+
 -- stage tests
 create stage filestage URL='file://$resources/file_test/';
 create stage outfilestage URL='file://$resources/into_outfile/';

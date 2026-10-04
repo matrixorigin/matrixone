@@ -16,6 +16,8 @@ package fileservice
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"io"
 	"iter"
 	"runtime"
@@ -23,6 +25,9 @@ import (
 	"time"
 
 	"github.com/panjf2000/ants/v2"
+	"golang.org/x/sync/semaphore"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 const smallObjectThreshold = 64 * (1 << 20)
@@ -40,7 +45,18 @@ const (
 var (
 	parallelUploadPoolOnce sync.Once
 	parallelUploadPool     *ants.Pool
+
+	parallelUploadSemaphoreOnce sync.Once
+	parallelUploadSemaphore     chan struct{}
+
+	parallelUploadBufferBudgetOnce sync.Once
+	parallelUploadBufferBudget     *weightedUploadBufferBudget
 )
+
+type weightedUploadBufferBudget struct {
+	semaphore *semaphore.Weighted
+	capacity  int64
+}
 
 func getParallelUploadPool() *ants.Pool {
 	parallelUploadPoolOnce.Do(func() {
@@ -51,6 +67,52 @@ func getParallelUploadPool() *ants.Pool {
 		parallelUploadPool = pool
 	})
 	return parallelUploadPool
+}
+
+func getParallelUploadSemaphore() chan struct{} {
+	parallelUploadSemaphoreOnce.Do(func() {
+		parallelUploadSemaphore = make(chan struct{}, runtime.NumCPU())
+	})
+	return parallelUploadSemaphore
+}
+
+func getParallelUploadBufferBudget() *weightedUploadBufferBudget {
+	parallelUploadBufferBudgetOnce.Do(func() {
+		capacity := int64(runtime.NumCPU()) * int64(defaultParallelMultipartPartSize)
+		if capacity < 1 {
+			capacity = 1
+		}
+		parallelUploadBufferBudget = &weightedUploadBufferBudget{
+			semaphore: semaphore.NewWeighted(capacity),
+			capacity:  capacity,
+		}
+	})
+	return parallelUploadBufferBudget
+}
+
+func acquireParallelUploadBufferBudget(ctx context.Context, bytes int64) (int64, error) {
+	budget := getParallelUploadBufferBudget()
+	if bytes < 1 {
+		bytes = 1
+	}
+	if bytes > budget.capacity {
+		return 0, moerr.NewInvalidInputNoCtxf(
+			"multipart part size %d exceeds shared upload buffer budget %d",
+			bytes,
+			budget.capacity,
+		)
+	}
+	if err := budget.semaphore.Acquire(ctx, bytes); err != nil {
+		return 0, err
+	}
+	return bytes, nil
+}
+
+func releaseParallelUploadBufferBudget(bytes int64) {
+	if bytes <= 0 {
+		return
+	}
+	getParallelUploadBufferBudget().semaphore.Release(bytes)
 }
 
 func normalizeParallelOption(opt *ParallelMultipartOption) ParallelMultipartOption {
@@ -132,6 +194,95 @@ type ObjectStorage interface {
 	)
 }
 
+// objectStorageIdentityReader is an optional provider capability used by
+// format-neutral conditional FileService reads. Implementations must preserve
+// expected.VersionID or expected.ETag across every internal retry.
+type objectStorageIdentityReader interface {
+	StatObjectIdentity(ctx context.Context, key string) (ObjectIdentity, error)
+	ReadObjectWithIdentity(
+		ctx context.Context,
+		key string,
+		min *int64,
+		max *int64,
+		expected ObjectIdentity,
+	) (io.ReadCloser, error)
+}
+
+// mappedErrorReadCloser keeps provider error normalization outside the
+// retryable reader. A conditional GET may succeed initially and then reopen
+// after a transport failure; errors from that later reopen are returned by
+// Read rather than by the constructor and must obey the same public contract.
+type mappedErrorReadCloser struct {
+	io.ReadCloser
+	mapError func(error) error
+}
+
+func (r *mappedErrorReadCloser) Read(buffer []byte) (int, error) {
+	n, err := r.ReadCloser.Read(buffer)
+	if err != nil {
+		err = r.mapError(err)
+	}
+	return n, err
+}
+
+func (r *mappedErrorReadCloser) Close() error {
+	err := r.ReadCloser.Close()
+	if err != nil {
+		err = r.mapError(err)
+	}
+	return err
+}
+
+func mapReadCloserErrors(reader io.ReadCloser, mapError func(error) error) io.ReadCloser {
+	return &mappedErrorReadCloser{ReadCloser: reader, mapError: mapError}
+}
+
+// objectStorageCopier is implemented by object-store SDK adapters that can
+// ask the provider to copy an object without downloading it through CN.
+type objectStorageCopier interface {
+	CopyObject(
+		ctx context.Context,
+		src ObjectStorage,
+		srcKey string,
+		dstKey string,
+	) (copied bool, err error)
+}
+
+// objectStorageCopyCredentialDomain is an opaque identity for the credentials
+// used by an object-store client. Provider-side copies are safe only when the
+// destination client can prove it uses the same credentials as the source.
+// The digest avoids retaining credential material solely for this comparison.
+type objectStorageCopyCredentialDomain struct {
+	digest [sha256.Size]byte
+	valid  bool
+}
+
+func newObjectStorageCopyCredentialDomain(keyID, keySecret string, extras ...string) objectStorageCopyCredentialDomain {
+	if keyID == "" || keySecret == "" {
+		return objectStorageCopyCredentialDomain{}
+	}
+	hasher := sha256.New()
+	var size [8]byte
+	writePart := func(value string) {
+		binary.BigEndian.PutUint64(size[:], uint64(len(value)))
+		_, _ = hasher.Write(size[:])
+		_, _ = hasher.Write([]byte(value))
+	}
+	writePart(keyID)
+	writePart(keySecret)
+	for _, extra := range extras {
+		writePart(extra)
+	}
+	var domain objectStorageCopyCredentialDomain
+	copy(domain.digest[:], hasher.Sum(nil))
+	domain.valid = true
+	return domain
+}
+
+func (d objectStorageCopyCredentialDomain) matches(other objectStorageCopyCredentialDomain) bool {
+	return d.valid && other.valid && d.digest == other.digest
+}
+
 // ParallelMultipartWriter is implemented by storages that support parallel multipart uploads.
 type ParallelMultipartWriter interface {
 	SupportsParallelMultipart() bool
@@ -152,4 +303,7 @@ type ParallelMultipartOption struct {
 	Concurrency int
 	// Expire sets object expiration.
 	Expire *time.Time
+	// beforePartUpload is a test-only hook; do not set it in production.
+	// It runs after a worker owns its slots, before checking cancellation.
+	beforePartUpload func()
 }

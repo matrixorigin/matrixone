@@ -16,11 +16,213 @@ package cnservice
 
 import (
 	"context"
+	"errors"
+	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
+
+type blockingCNHeartbeatCommandClient struct {
+	*testHAKClient
+	heartbeatEntered   chan struct{}
+	heartbeatRelease   chan struct{}
+	heartbeatReentered chan struct{}
+	pollEntered        chan struct{}
+	heartbeatCalls     atomic.Int32
+	commandBatch       pb.CommandBatch
+}
+
+type admissionFailureCNHeartbeatClient struct {
+	*testHAKClient
+	batch pb.CommandBatch
+}
+
+type recordingCNHeartbeatClient struct {
+	*testHAKClient
+	heartbeat pb.CNStoreHeartbeat
+}
+
+type failingWithdrawalHeartbeatClient struct {
+	*testHAKClient
+	err             error
+	returnNilOnDone bool
+}
+
+func (c *failingWithdrawalHeartbeatClient) SendCNHeartbeat(
+	ctx context.Context,
+	_ pb.CNStoreHeartbeat,
+) (pb.CommandBatch, error) {
+	if c.returnNilOnDone {
+		<-ctx.Done()
+		return pb.CommandBatch{}, nil
+	}
+	return pb.CommandBatch{}, c.err
+}
+
+func (c *recordingCNHeartbeatClient) SendCNHeartbeat(
+	_ context.Context,
+	hb pb.CNStoreHeartbeat,
+) (pb.CommandBatch, error) {
+	c.heartbeat = hb
+	return pb.CommandBatch{}, nil
+}
+
+type canceledCNResponseClient struct {
+	*testHAKClient
+	heartbeatEntered chan struct{}
+	pollEntered      chan struct{}
+}
+
+type lateCNCommandClient struct {
+	*testHAKClient
+	heartbeatEntered chan struct{}
+	firstPollDone    chan struct{}
+	pollCalls        atomic.Int32
+	commandReady     atomic.Bool
+	commandBatch     pb.CommandBatch
+}
+
+type observingTaskHolder struct {
+	createErr   error
+	createCount atomic.Int32
+	created     chan struct{}
+}
+
+func testCommandBatch(batchID uint64, commands ...pb.ScheduleCommand) pb.CommandBatch {
+	commandIDs := make([]pb.ScheduleCommandID, len(commands))
+	for i := range commands {
+		commandIDs[i] = pb.ScheduleCommandID{
+			OriginBatchID: batchID,
+			CommandIndex:  uint64(i),
+		}
+	}
+	return pb.CommandBatch{
+		BatchID:    batchID,
+		Commands:   commands,
+		CommandIDs: commandIDs,
+	}
+}
+
+func (h *observingTaskHolder) Close() error {
+	return nil
+}
+
+func (h *observingTaskHolder) Get() (taskservice.TaskService, bool) {
+	return nil, false
+}
+
+func (h *observingTaskHolder) Create(pb.CreateTaskService) error {
+	h.createCount.Add(1)
+	select {
+	case h.created <- struct{}{}:
+	default:
+	}
+	return h.createErr
+}
+
+func (c *admissionFailureCNHeartbeatClient) SendCNHeartbeat(
+	context.Context,
+	pb.CNStoreHeartbeat,
+) (pb.CommandBatch, error) {
+	return c.batch, nil
+}
+
+func (c *canceledCNResponseClient) SendCNHeartbeat(
+	ctx context.Context,
+	_ pb.CNStoreHeartbeat,
+) (pb.CommandBatch, error) {
+	select {
+	case <-c.heartbeatEntered:
+	default:
+		close(c.heartbeatEntered)
+	}
+	<-ctx.Done()
+	return pb.CommandBatch{BatchID: 7, Commands: []pb.ScheduleCommand{{ServiceType: pb.TNService}}}, nil
+}
+
+func (c *canceledCNResponseClient) GetScheduleCommands(
+	ctx context.Context,
+	_ pb.ServiceType,
+) (pb.CommandBatch, error) {
+	select {
+	case <-c.pollEntered:
+	default:
+		close(c.pollEntered)
+	}
+	<-ctx.Done()
+	return pb.CommandBatch{BatchID: 7, Commands: []pb.ScheduleCommand{{ServiceType: pb.TNService}}}, nil
+}
+
+func (c *lateCNCommandClient) SendCNHeartbeat(
+	ctx context.Context,
+	_ pb.CNStoreHeartbeat,
+) (pb.CommandBatch, error) {
+	select {
+	case <-c.heartbeatEntered:
+	default:
+		close(c.heartbeatEntered)
+	}
+	<-ctx.Done()
+	return pb.CommandBatch{}, ctx.Err()
+}
+
+func (c *lateCNCommandClient) GetScheduleCommands(
+	context.Context,
+	pb.ServiceType,
+) (pb.CommandBatch, error) {
+	if c.pollCalls.Add(1) == 1 {
+		close(c.firstPollDone)
+		return pb.CommandBatch{}, nil
+	}
+	if c.commandReady.Load() {
+		return c.commandBatch, nil
+	}
+	return pb.CommandBatch{}, nil
+}
+
+func (c *blockingCNHeartbeatCommandClient) SendCNHeartbeat(
+	ctx context.Context,
+	hb pb.CNStoreHeartbeat,
+) (pb.CommandBatch, error) {
+	if c.heartbeatCalls.Add(1) == 1 {
+		close(c.heartbeatEntered)
+		select {
+		case <-ctx.Done():
+			return pb.CommandBatch{}, ctx.Err()
+		case <-c.heartbeatRelease:
+			return c.commandBatch, nil
+		}
+	}
+	select {
+	case <-c.heartbeatReentered:
+	default:
+		close(c.heartbeatReentered)
+	}
+	<-ctx.Done()
+	return pb.CommandBatch{}, ctx.Err()
+}
+
+func (c *blockingCNHeartbeatCommandClient) GetScheduleCommands(
+	context.Context,
+	pb.ServiceType,
+) (pb.CommandBatch, error) {
+	select {
+	case <-c.pollEntered:
+	default:
+		close(c.pollEntered)
+	}
+	return c.commandBatch, nil
+}
 
 func Test_heartbeat(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -38,4 +240,512 @@ func Test_heartbeat(t *testing.T) {
 		logger:          logutil.GetPanicLogger(),
 	}
 	sv.heartbeat(ctx)
+}
+
+func TestWithdrawViewMetadataAdmissionPublishesFinalHeartbeat(t *testing.T) {
+	conf := &Config{UUID: "cleanly-stopping-cn"}
+	conf.HAKeeper.HeatbeatTimeout.Duration = time.Second
+	client := &recordingCNHeartbeatClient{testHAKClient: &testHAKClient{cfg: conf}}
+	s := &service{
+		cfg:                             conf,
+		_hakeeperClient:                 client,
+		config:                          util.NewConfigData(nil),
+		logger:                          logutil.GetPanicLogger(),
+		viewMetadataAdmissionGeneration: 17,
+		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
+	}
+	require.NoError(t, s.viewMetadataEpochFence.Advance(context.Background(), 3))
+	s.viewMetadataCatalogFencedEpoch.Store(3)
+	s.viewMetadataIngressReady.Store(true)
+
+	require.NoError(t, s.withdrawViewMetadataAdmission())
+	require.False(t, s.viewMetadataIngressReady.Load())
+	require.Equal(t, conf.UUID, client.heartbeat.UUID)
+	require.True(t, client.heartbeat.ViewMetadataAdmissionSupported)
+	require.Equal(t, uint64(17), client.heartbeat.ViewMetadataAdmissionGeneration)
+	require.Equal(t, uint64(3), client.heartbeat.ViewMetadataObservedEpoch)
+	require.Equal(t, uint64(3), client.heartbeat.ViewMetadataCatalogFencedEpoch)
+	require.False(t, client.heartbeat.ViewMetadataIngressReady)
+}
+
+func TestWithdrawViewMetadataAdmissionFailureIsNotCleanHandoff(t *testing.T) {
+	t.Run("disabled admission has nothing to withdraw", func(t *testing.T) {
+		s := &service{}
+		require.NoError(t, s.withdrawViewMetadataAdmission())
+		s.viewMetadataAdmissionGeneration = 1
+		require.NoError(t, s.withdrawViewMetadataAdmission())
+	})
+
+	t.Run("heartbeat error is returned", func(t *testing.T) {
+		conf := &Config{UUID: "failing-cn"}
+		conf.HAKeeper.HeatbeatTimeout.Duration = time.Second
+		failure := errors.New("hakeeper unavailable")
+		s := &service{
+			cfg: conf,
+			_hakeeperClient: &failingWithdrawalHeartbeatClient{
+				testHAKClient: &testHAKClient{cfg: conf},
+				err:           failure,
+			},
+			config:                          util.NewConfigData(nil),
+			logger:                          zap.NewNop(),
+			viewMetadataAdmissionGeneration: 7,
+		}
+		s.viewMetadataIngressReady.Store(true)
+		require.ErrorIs(t, s.withdrawViewMetadataAdmission(), failure)
+		require.False(t, s.viewMetadataIngressReady.Load())
+	})
+
+	t.Run("deadline after send is returned", func(t *testing.T) {
+		conf := &Config{UUID: "timing-out-cn"}
+		conf.HAKeeper.HeatbeatTimeout.Duration = time.Millisecond
+		s := &service{
+			cfg: conf,
+			_hakeeperClient: &failingWithdrawalHeartbeatClient{
+				testHAKClient:   &testHAKClient{cfg: conf},
+				returnNilOnDone: true,
+			},
+			config:                          util.NewConfigData(nil),
+			logger:                          zap.NewNop(),
+			viewMetadataAdmissionGeneration: 8,
+		}
+		require.ErrorIs(t, s.withdrawViewMetadataAdmission(), context.DeadlineExceeded)
+	})
+}
+
+func TestCNCommandPollProgressesWhileHeartbeatIsBlocked(t *testing.T) {
+	conf := &Config{}
+	conf.UUID = "cn-1"
+	conf.HAKeeper.HeatbeatInterval.Duration = 10 * time.Millisecond
+	conf.HAKeeper.HeatbeatTimeout.Duration = 5 * time.Second
+	commandBatch := testCommandBatch(1, pb.ScheduleCommand{
+		UUID:        conf.UUID,
+		ServiceType: pb.CNService,
+		CreateTaskService: &pb.CreateTaskService{
+			User: pb.TaskTableUser{
+				Username: "cn-command-poll-test",
+				Password: "test-password",
+			},
+		},
+	})
+	client := &blockingCNHeartbeatCommandClient{
+		testHAKClient:      &testHAKClient{cfg: conf},
+		heartbeatEntered:   make(chan struct{}),
+		heartbeatRelease:   make(chan struct{}),
+		heartbeatReentered: make(chan struct{}),
+		pollEntered:        make(chan struct{}),
+		commandBatch:       commandBatch,
+	}
+	holder := &observingTaskHolder{
+		createErr: errors.New("stop after observing command application"),
+		created:   make(chan struct{}, 1),
+	}
+	service := &service{
+		cfg:               conf,
+		_hakeeperClient:   client,
+		config:            &util.ConfigData{},
+		logger:            logutil.GetPanicLogger(),
+		hakeeperConnected: make(chan struct{}),
+	}
+	service.task.holder = holder
+
+	ctx, cancel := context.WithCancel(context.Background())
+	controlDone := make(chan struct{})
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-controlDone:
+		case <-time.After(time.Second):
+			t.Error("control-plane workers did not terminate during cleanup")
+		}
+	})
+	go func() {
+		defer close(controlDone)
+		service.controlTask(ctx)
+	}()
+	select {
+	case <-client.heartbeatEntered:
+	case <-time.After(time.Second):
+		t.Fatal("heartbeat did not enter the injected blocked RPC")
+	}
+
+	select {
+	case <-holder.created:
+	case <-time.After(2 * time.Second):
+		t.Fatal("polled command was not applied while heartbeat was blocked")
+	}
+	require.Equal(t, int32(1), holder.createCount.Load())
+
+	// Let the heartbeat return the same batch. Entering the next heartbeat
+	// proves the first response was fully handled, so the exact count below
+	// verifies poll/heartbeat deduplication without a scheduling sleep.
+	close(client.heartbeatRelease)
+	select {
+	case <-client.heartbeatReentered:
+	case <-time.After(time.Second):
+		t.Fatal("heartbeat response was not handled")
+	}
+	require.Equal(t, uint64(1), service.ackedCommandBatchID.Load())
+	require.Equal(t, int32(1), holder.createCount.Load(),
+		"the same command batch must be applied exactly once")
+
+	cancel()
+	select {
+	case <-controlDone:
+	case <-time.After(time.Second):
+		t.Fatal("control-plane workers did not terminate after cancellation")
+	}
+}
+
+func TestCNCommandPollProgressesAfterHeartbeatFailure(t *testing.T) {
+	conf := &Config{UUID: "cn-1"}
+	conf.HAKeeper.HeatbeatInterval.Duration = 10 * time.Millisecond
+	conf.HAKeeper.HeatbeatTimeout.Duration = 10 * time.Millisecond
+	commandBatch := testCommandBatch(2, pb.ScheduleCommand{
+		UUID:        conf.UUID,
+		ServiceType: pb.CNService,
+		CreateTaskService: &pb.CreateTaskService{
+			User: pb.TaskTableUser{Username: "cn-command-poll-failure"},
+		},
+	})
+	client := &blockingCNHeartbeatCommandClient{
+		testHAKClient:      &testHAKClient{cfg: conf},
+		heartbeatEntered:   make(chan struct{}),
+		heartbeatRelease:   make(chan struct{}),
+		heartbeatReentered: make(chan struct{}),
+		pollEntered:        make(chan struct{}),
+		commandBatch:       commandBatch,
+	}
+	holder := &observingTaskHolder{createErr: errors.New("stop after observing command application"), created: make(chan struct{}, 1)}
+	service := &service{
+		cfg:               conf,
+		_hakeeperClient:   client,
+		config:            &util.ConfigData{},
+		logger:            logutil.GetPanicLogger(),
+		hakeeperConnected: make(chan struct{}),
+	}
+	service.task.holder = holder
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("control-plane workers did not terminate during cleanup")
+		}
+	})
+	go func() {
+		defer close(done)
+		service.controlTask(ctx)
+	}()
+
+	select {
+	case <-holder.created:
+	case <-time.After(2 * time.Second):
+		t.Fatal("poll did not take over after heartbeat failure")
+	}
+	require.Equal(t, int32(1), holder.createCount.Load())
+}
+
+func TestCNCommandPollDiscoversCommandCreatedAfterEmptyRead(t *testing.T) {
+	conf := &Config{UUID: "cn-1"}
+	conf.HAKeeper.HeatbeatInterval.Duration = 10 * time.Millisecond
+	conf.HAKeeper.HeatbeatTimeout.Duration = 10 * time.Second
+	command := pb.ScheduleCommand{
+		UUID:        conf.UUID,
+		ServiceType: pb.CNService,
+		CreateTaskService: &pb.CreateTaskService{
+			User: pb.TaskTableUser{Username: "late-command"},
+		},
+	}
+	client := &lateCNCommandClient{
+		testHAKClient:    &testHAKClient{cfg: conf},
+		heartbeatEntered: make(chan struct{}),
+		firstPollDone:    make(chan struct{}),
+		commandBatch:     testCommandBatch(3, command),
+	}
+	holder := &observingTaskHolder{
+		createErr: errors.New("observe command application"),
+		created:   make(chan struct{}, 1),
+	}
+	service := &service{
+		cfg:               conf,
+		_hakeeperClient:   client,
+		config:            &util.ConfigData{},
+		logger:            logutil.GetPanicLogger(),
+		hakeeperConnected: make(chan struct{}),
+	}
+	service.task.holder = holder
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("control-plane workers did not terminate during cleanup")
+		}
+	})
+	go func() {
+		defer close(done)
+		service.controlTask(ctx)
+	}()
+
+	select {
+	case <-client.heartbeatEntered:
+	case <-time.After(time.Second):
+		t.Fatal("heartbeat did not enter the injected blocked RPC")
+	}
+	select {
+	case <-client.firstPollDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first empty command poll did not complete")
+	}
+	client.commandReady.Store(true)
+	select {
+	case <-holder.created:
+	case <-time.After(2 * time.Second):
+		t.Fatal("command created after an empty read exceeded the poll progress bound")
+	}
+	require.Equal(t, int32(1), holder.createCount.Load())
+}
+
+func TestCNCommandTaskSkipsPollWithoutInFlightHeartbeat(t *testing.T) {
+	conf := &Config{UUID: "cn-1"}
+	client := &blockingCNHeartbeatCommandClient{
+		testHAKClient:    &testHAKClient{cfg: conf},
+		heartbeatEntered: make(chan struct{}),
+		pollEntered:      make(chan struct{}),
+	}
+	service := &service{
+		cfg:             conf,
+		_hakeeperClient: client,
+		config:          &util.ConfigData{},
+		logger:          logutil.GetPanicLogger(),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	service.commandTask(ctx)
+	select {
+	case <-client.pollEntered:
+		t.Fatal("healthy idle path issued an unnecessary command poll")
+	default:
+	}
+}
+
+func TestCNCanceledControlResponsesAreNotApplied(t *testing.T) {
+	conf := &Config{}
+	conf.UUID = "cn-1"
+	conf.HAKeeper.HeatbeatInterval.Duration = 10 * time.Millisecond
+	conf.HAKeeper.HeatbeatTimeout.Duration = 5 * time.Second
+	service := &service{
+		cfg: conf,
+		_hakeeperClient: &canceledCNResponseClient{
+			testHAKClient:    &testHAKClient{cfg: conf},
+			heartbeatEntered: make(chan struct{}),
+			pollEntered:      make(chan struct{}),
+		},
+		config: util.NewConfigData(nil),
+		logger: logutil.GetPanicLogger(),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		service.controlTask(ctx)
+	}()
+	client := service._hakeeperClient.(*canceledCNResponseClient)
+	for name, entered := range map[string]<-chan struct{}{
+		"heartbeat": client.heartbeatEntered,
+		"poll":      client.pollEntered,
+	} {
+		select {
+		case <-entered:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s request did not enter", name)
+		}
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("control-plane workers did not terminate after cancellation")
+	}
+	require.Zero(t, service.ackedCommandBatchID.Load(),
+		"a response returned after cancellation must not be acknowledged")
+}
+
+func TestCNHeartbeatDropsResponseAfterRequestDeadline(t *testing.T) {
+	conf := &Config{UUID: "cn-1"}
+	conf.HAKeeper.HeatbeatTimeout.Duration = time.Millisecond
+	service := &service{
+		cfg: conf,
+		_hakeeperClient: &canceledCNResponseClient{
+			testHAKClient:    &testHAKClient{cfg: conf},
+			heartbeatEntered: make(chan struct{}),
+			pollEntered:      make(chan struct{}),
+		},
+		config: util.NewConfigData(nil),
+		logger: logutil.GetPanicLogger(),
+	}
+
+	// A nil hakeeperConnected channel would panic if the successful-looking
+	// late response escaped the per-request deadline guard.
+	service.heartbeat(context.Background())
+}
+
+func TestCNHeartbeatHandlesCommandsWhenAdmissionApplyFails(t *testing.T) {
+	fenceErr := errors.New("catalog fence failed")
+	conf := &Config{UUID: "cn-1"}
+	conf.HAKeeper.HeatbeatTimeout.Duration = time.Second
+	command := pb.ScheduleCommand{
+		UUID:        conf.UUID,
+		ServiceType: pb.CNService,
+		CreateTaskService: &pb.CreateTaskService{
+			User: pb.TaskTableUser{Username: "command-after-admission-error"},
+		},
+	}
+	client := &admissionFailureCNHeartbeatClient{
+		testHAKClient: &testHAKClient{cfg: conf},
+		batch:         testCommandBatch(7, command),
+	}
+	client.batch.CatalogMetadataBarrier = &pb.CatalogMetadataBarrier{
+		RecipientGeneration: 13,
+		MembershipEpoch:     2,
+		RequiredGeneration:  3,
+		Phase:               pb.CATALOG_METADATA_BARRIER_SEALED,
+	}
+	client.batch.ViewMetadataAdmission = &pb.ViewMetadataAdmission{
+		Enabled:              true,
+		Epoch:                6,
+		RevalidationRequired: true,
+		Generation:           13,
+	}
+	connected := make(chan struct{})
+	close(connected)
+	holder := &observingTaskHolder{
+		createErr: errors.New("observe command application"),
+		created:   make(chan struct{}, 1),
+	}
+	service := &service{
+		cfg:                             conf,
+		_hakeeperClient:                 client,
+		config:                          util.NewConfigData(nil),
+		logger:                          zap.NewNop(),
+		hakeeperConnected:               connected,
+		viewMetadataAdmissionGeneration: 13,
+		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
+		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
+	}
+	service.task.holder = holder
+	service.sqlExecutor = executor.NewMemExecutor(func(string) (executor.Result, error) {
+		return executor.Result{}, fenceErr
+	})
+	service.viewMetadataCatalogFenceReady.Store(true)
+
+	service.heartbeat(context.Background())
+	require.Equal(t, int32(1), holder.createCount.Load())
+	require.Zero(t, service.viewMetadataCatalogFencedEpoch.Load())
+	require.Equal(t, &pb.CatalogMetadataAck{
+		Generation:         13,
+		MembershipEpoch:    2,
+		RequiredGeneration: 3,
+		ObservedPhase:      pb.CATALOG_METADATA_BARRIER_SEALED,
+	}, service.newCNStoreHeartbeat().CatalogMetadataAck,
+		"旧 admission 失败不得阻止独立的 participant 观察确认")
+}
+
+func TestCNCommandGenerationRolloverDoesNotReplayInheritedCommands(t *testing.T) {
+	conf := &Config{UUID: "cn-1"}
+	holder := &observingTaskHolder{
+		createErr: errors.New("observe command application"),
+		created:   make(chan struct{}, 3),
+	}
+	service := &service{
+		cfg:    conf,
+		logger: logutil.GetPanicLogger(),
+	}
+	service.task.holder = holder
+	command := func(user string) pb.ScheduleCommand {
+		return pb.ScheduleCommand{
+			UUID:        conf.UUID,
+			ServiceType: pb.CNService,
+			CreateTaskService: &pb.CreateTaskService{
+				User: pb.TaskTableUser{Username: user},
+			},
+		}
+	}
+	first := command("first")
+	second := command("second")
+	firstID := pb.ScheduleCommandID{OriginBatchID: 10}
+	secondID := pb.ScheduleCommandID{OriginBatchID: 11}
+	thirdID := pb.ScheduleCommandID{OriginBatchID: 12}
+
+	service.handleCommandBatch(pb.CommandBatch{
+		BatchID:    10,
+		Commands:   []pb.ScheduleCommand{first},
+		CommandIDs: []pb.ScheduleCommandID{firstID},
+	})
+	service.handleCommandBatch(pb.CommandBatch{
+		BatchID: 11,
+		Commands: []pb.ScheduleCommand{
+			first,
+			second,
+		},
+		CommandIDs: []pb.ScheduleCommandID{firstID, secondID},
+	})
+	require.Equal(t, int32(2), holder.createCount.Load(),
+		"a newer generation must apply only newly appended commands")
+
+	service.handleHeartbeatResponse(10, pb.CommandBatch{})
+	service.handleCommandBatch(pb.CommandBatch{
+		BatchID: 12,
+		Commands: []pb.ScheduleCommand{
+			first,
+			second,
+			command("third"),
+		},
+		CommandIDs: []pb.ScheduleCommandID{firstID, secondID, thirdID},
+	})
+	require.Equal(t, int32(3), holder.createCount.Load(),
+		"a stale acknowledgement must not erase the newer generation's lineage")
+
+	service.handleHeartbeatResponse(12, pb.CommandBatch{})
+	service.handleCommandBatch(pb.CommandBatch{
+		BatchID:    13,
+		Commands:   []pb.ScheduleCommand{first},
+		CommandIDs: []pb.ScheduleCommandID{{OriginBatchID: 13}},
+	})
+	require.Equal(t, int32(4), holder.createCount.Load(),
+		"the same command may be intentional work after the prior batch is acknowledged")
+}
+
+func TestCNIdenticalCommandAfterAckIsNotHiddenByDelayedResponse(t *testing.T) {
+	conf := &Config{UUID: "cn-1"}
+	holder := &observingTaskHolder{
+		createErr: errors.New("observe command application"),
+		created:   make(chan struct{}, 2),
+	}
+	service := &service{cfg: conf, logger: logutil.GetPanicLogger()}
+	service.task.holder = holder
+	command := pb.ScheduleCommand{
+		UUID:        conf.UUID,
+		ServiceType: pb.CNService,
+		CreateTaskService: &pb.CreateTaskService{
+			User: pb.TaskTableUser{Username: "same-payload"},
+		},
+	}
+
+	service.handleCommandBatch(testCommandBatch(20, command))
+	// HAKeeper has committed ack 20 and independently installed new work with
+	// the same payload. Polling can deliver it before the old heartbeat response.
+	service.handleCommandBatch(testCommandBatch(21, command))
+	service.handleHeartbeatResponse(20, pb.CommandBatch{})
+
+	require.Equal(t, int32(2), holder.createCount.Load(),
+		"a new identity must execute even when its payload equals acknowledged work")
+	require.Equal(t, uint64(21), service.ackedCommandBatchID.Load())
 }

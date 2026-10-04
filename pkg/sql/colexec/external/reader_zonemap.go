@@ -72,7 +72,9 @@ func (r *ZonemapReader) ReadBatch(
 	newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
 
 	// Load all block metadata
-	r.zoneparam.bs, err = r.blockReader.LoadAllBlocks(newCtx, proc.GetMPool())
+	r.zoneparam.bs, err = process.MeasureFilesystemWait(analyzer, func() ([]objectio.BlockObject, error) {
+		return r.blockReader.LoadAllBlocks(newCtx, proc.GetMPool())
+	})
 	if err != nil {
 		return false, err
 	}
@@ -86,20 +88,15 @@ func (r *ZonemapReader) ReadBatch(
 
 	// All blocks filtered out
 	if r.zoneparam.offset >= len(r.zoneparam.bs) {
-		analyzer.AddS3RequestCount(crs)
-		analyzer.AddFileServiceCacheInfo(crs)
-		analyzer.AddDiskIO(crs)
 		return true, nil
 	}
 
 	// Read the matching block
-	if err = r.getBatchFromZonemapFile(newCtx, proc, buf); err != nil {
+	if err = process.MeasureFilesystemWaitErr(analyzer, func() error {
+		return r.getBatchFromZonemapFile(newCtx, proc, buf)
+	}); err != nil {
 		return false, err
 	}
-
-	analyzer.AddS3RequestCount(crs)
-	analyzer.AddFileServiceCacheInfo(crs)
-	analyzer.AddDiskIO(crs)
 
 	r.zoneparam.offset++
 	fileFinished = r.zoneparam.offset >= len(r.zoneparam.bs)

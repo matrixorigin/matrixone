@@ -170,6 +170,13 @@ func Test_initExport(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			originalProvider := GetTracerProvider()
+			SetTracerProvider(newMOTracerProvider(
+				EnableTracer(tt.args.enableTracer),
+				WithBatchProcessor(NoopBatchProcessor{}),
+			))
+			t.Cleanup(func() { SetTracerProvider(originalProvider) })
+
 			if tt.args.needRecover {
 				defer func() {
 					if err := recover(); err != nil {

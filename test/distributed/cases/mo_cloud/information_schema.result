@@ -5,6 +5,12 @@ lower(is_default) = 'yes' as is_default
 from
 information_schema.collations;
 collation_name    character_set_name    is_default
+utf8_general_ci    utf8    1
+binary    binary    1
+utf8_bin    utf8    0
+utf8mb4_general_ci    utf8mb4    1
+utf8mb4_bin    utf8mb4    0
+utf8mb4_0900_ai_ci    utf8mb4    0
 select
 grantee,
 table_schema,

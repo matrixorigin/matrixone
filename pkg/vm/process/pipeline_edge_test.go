@@ -20,12 +20,74 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
+
+func TestPipelineEdgePublishTerminal(t *testing.T) {
+	first := moerr.NewInternalErrorNoCtx("first failure")
+	second := moerr.NewInternalErrorNoCtx("later failure")
+	for _, fatal := range []PipelineSignal{NewErrorSignal(first), NewAbortSignal(first)} {
+		t.Run(fatal.EventType.String(), func(t *testing.T) {
+			for _, full := range []bool{false, true} {
+				edge := NewPipelineEdge(1, 3)
+				end, ok := edge.PublishTerminal(NewEndSignal())
+				require.True(t, ok)
+				require.Equal(t, EventEnd, end.EventType)
+				if !full {
+					<-edge.Ch2
+				}
+				select {
+				case <-edge.Done():
+					t.Fatal("one End must not complete a three-sender edge")
+				default:
+				}
+				for _, requested := range []PipelineSignal{fatal, NewEndSignal(), NewErrorSignal(second), NewAbortSignal(second)} {
+					effective, ok := edge.PublishTerminal(requested)
+					require.True(t, ok)
+					require.Equal(t, fatal.EventType, effective.EventType)
+					require.Same(t, first, effective.TerminalErr())
+				}
+				require.Equal(t, 1, edge.endRecorded)
+				require.Equal(t, 2, edge.fatalRemaining)
+				<-edge.Done()
+				receiver := InitPipelineSignalReceiver(context.Background(), []*WaitRegister{edge})
+				got, err := receiver.GetNextBatch(nil)
+				require.Nil(t, got)
+				require.ErrorIs(t, err, first)
+			}
+		})
+	}
+	t.Run("graceful and reuse", func(t *testing.T) {
+		edge := NewPipelineEdge(1, 1)
+		for _, requested := range []PipelineSignal{NewEndSignal(), NewEndSignal(), NewErrorSignal(first)} {
+			effective, ok := edge.PublishTerminal(requested)
+			require.True(t, ok)
+			require.Equal(t, EventEnd, effective.EventType)
+			require.NoError(t, effective.TerminalErr())
+		}
+		require.Equal(t, 1, edge.endRecorded)
+		edge.ResetForReuse(1, 1)
+		effective, ok := edge.PublishTerminal(NewErrorSignal(second))
+		require.True(t, ok)
+		require.Same(t, second, effective.TerminalErr())
+	})
+	t.Run("unavailable", func(t *testing.T) {
+		for _, edge := range []*PipelineEdge{nil, {}} {
+			_, ok := edge.PublishTerminal(NewEndSignal())
+			require.False(t, ok)
+		}
+		edge := NewPipelineEdge(1, 1)
+		_, ok := edge.PublishTerminal(NewPipelineSignalToDirectly(batch.EmptyBatch, nil, nil))
+		require.False(t, ok)
+		require.Zero(t, edge.endRecorded)
+	})
+}
 
 // TestPipelineEdgeSendEndIsIdempotent verifies that calling SendEnd
 // multiple times is safe and that Done() is closed exactly once.
@@ -119,19 +181,140 @@ func TestPipelineEdgeSendDataNilContextDoesNotPanic(t *testing.T) {
 	}
 }
 
-// TestPipelineEdgeTrySendEndOnFullChannel verifies that TrySendEnd
-// succeeds when the channel has buffer space.
+func TestWaitPipelineSignalCapacityWaitsUntilChannelDrains(t *testing.T) {
+	edge := NewPipelineEdge(1, 1)
+	edge.Ch2 <- NewPipelineSignalToDirectly(nil, nil, nil)
+
+	done := make(chan bool, 1)
+	go func() {
+		done <- WaitPipelineSignalCapacity(context.Background(), edge)
+	}()
+
+	select {
+	case got := <-done:
+		t.Fatalf("WaitPipelineSignalCapacity returned before channel drained: %v", got)
+	case <-time.After(10 * time.Millisecond):
+	}
+
+	<-edge.Ch2
+	select {
+	case got := <-done:
+		if !got {
+			t.Fatal("WaitPipelineSignalCapacity returned false after channel drained")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WaitPipelineSignalCapacity did not return after channel drained")
+	}
+}
+
+func TestPipelineEdgeResetClearsOrderedStreamContract(t *testing.T) {
+	edge := NewPipelineEdge(1, 1)
+	edge.OrderedStream = true
+	edge.ResetForReuse(2, 2)
+	if edge.OrderedStream {
+		t.Fatal("ResetForReuse retained a stale ordered-stream contract")
+	}
+}
+
+func TestWaitPipelineSignalCapacityReturnsOnContextCancel(t *testing.T) {
+	edge := NewPipelineEdge(1, 1)
+	edge.Ch2 <- NewPipelineSignalToDirectly(nil, nil, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if WaitPipelineSignalCapacity(ctx, edge) {
+		t.Fatal("WaitPipelineSignalCapacity returned true with cancelled context")
+	}
+}
+
+func TestWaitPipelineSignalCapacityReturnsOnTerminalEdge(t *testing.T) {
+	edge := NewPipelineEdge(1, 1)
+	edge.Abort(moerr.NewInternalErrorNoCtx("abort"))
+
+	if WaitPipelineSignalCapacity(context.Background(), edge) {
+		t.Fatal("WaitPipelineSignalCapacity returned true for a terminal edge with spare capacity")
+	}
+}
+
+// TestPipelineEdgeTrySendEndOnFullChannel verifies that End is durably
+// observable even when buffered data occupies the signal channel.
 func TestPipelineEdgeTrySendEndOnFullChannel(t *testing.T) {
 	edge := NewPipelineEdge(1, 1)
+	edge.Ch2 <- NewPipelineSignalToDirectly(batch.EmptyBatch, nil, nil)
 
 	if !edge.TrySendEnd() {
-		t.Fatal("TrySendEnd failed on empty channel")
+		t.Fatal("TrySendEnd failed to record End on a full channel")
 	}
 
 	select {
 	case <-edge.Done():
 	default:
 		t.Fatal("Done was not closed after TrySendEnd")
+	}
+	if edge.Err() != nil {
+		t.Fatalf("durable End recorded an error: %v", edge.Err())
+	}
+
+	receiver := InitPipelineSignalReceiver(context.Background(), []*WaitRegister{edge})
+	got, err := receiver.GetNextBatch(nil)
+	if err != nil || got != batch.EmptyBatch {
+		t.Fatalf("buffered data was not drained before End: batch=%v err=%v", got, err)
+	}
+	got, err = receiver.GetNextBatch(nil)
+	if err != nil || got != nil {
+		t.Fatalf("durable End was not synthesized: batch=%v err=%v", got, err)
+	}
+}
+
+func TestPipelineEdgeSharedEndRecordsUndeliveredSenders(t *testing.T) {
+	edge := NewPipelineEdge(1, 2)
+	edge.Ch2 <- NewPipelineSignalToDirectly(batch.EmptyBatch, nil, nil)
+
+	if !edge.SendEnd() {
+		t.Fatal("first End was not recorded")
+	}
+	select {
+	case <-edge.Done():
+		t.Fatal("Done closed before every sender ended")
+	default:
+	}
+	if !edge.SendEnd() {
+		t.Fatal("second End was not recorded")
+	}
+	select {
+	case <-edge.Done():
+	default:
+		t.Fatal("Done did not close after every sender ended")
+	}
+
+	receiver := InitPipelineSignalReceiver(context.Background(), []*WaitRegister{edge})
+	got, err := receiver.GetNextBatch(nil)
+	if err != nil || got != batch.EmptyBatch {
+		t.Fatalf("buffered data was not drained before shared End: batch=%v err=%v", got, err)
+	}
+	got, err = receiver.GetNextBatch(nil)
+	if err != nil || got != nil {
+		t.Fatalf("shared durable End did not finish the receiver: batch=%v err=%v", got, err)
+	}
+}
+
+func TestPipelineEdgeSharedEndCombinesQueuedAndRecordedSignals(t *testing.T) {
+	edge := NewPipelineEdge(1, 2)
+
+	if !edge.SendEnd() {
+		t.Fatal("first End was not queued")
+	}
+	if !edge.SendEnd() {
+		t.Fatal("second End was not durably recorded")
+	}
+
+	receiver := InitPipelineSignalReceiver(context.Background(), []*WaitRegister{edge})
+	got, err := receiver.GetNextBatch(nil)
+	if err != nil || got != nil {
+		t.Fatalf("queued and recorded Ends did not finish the receiver: batch=%v err=%v", got, err)
+	}
+	if state := receiver.State(); state.Alive != 0 {
+		t.Fatalf("receiver still has %d live edges after both Ends", state.Alive)
 	}
 }
 
@@ -464,16 +647,18 @@ func TestBuildCleanupSignalFailedNilErrorUsesSentinel(t *testing.T) {
 	}
 }
 
-// TestSendPipelineSignalTimeout verifies the timeout behavior.
-func TestSendPipelineSignalTimeout(t *testing.T) {
+func TestSendPipelineSignalEndRecordsOnFullChannel(t *testing.T) {
 	reg := &WaitRegister{Ch2: make(chan PipelineSignal, 1)}
 
-	// Fill the channel.
-	reg.Ch2 <- NewEndSignal()
+	reg.Ch2 <- NewPipelineSignalToDirectly(batch.EmptyBatch, nil, nil)
 
-	// Try to send with timeout - should fail since channel is full.
-	if SendPipelineSignalWithTimeout(reg, NewEndSignal(), 10*time.Millisecond) {
-		t.Fatal("SendPipelineSignalWithTimeout succeeded on full channel")
+	if !SendPipelineSignalWithTimeout(reg, NewEndSignal(), 10*time.Millisecond) {
+		t.Fatal("SendPipelineSignalWithTimeout did not durably record End")
+	}
+	select {
+	case <-reg.Done():
+	default:
+		t.Fatal("durable End did not close Done")
 	}
 
 	// Nil register should return false.
@@ -495,24 +680,22 @@ func TestTrySendPipelineSignal(t *testing.T) {
 	}
 }
 
-// TestSendPipelineSignalWithContextCanceled verifies context cancellation.
-func TestSendPipelineSignalWithContextCanceled(t *testing.T) {
+func TestSendPipelineEndWithCanceledContextStillRecordsTerminal(t *testing.T) {
 	reg := &WaitRegister{Ch2: make(chan PipelineSignal, 1)}
 
-	// Fill the channel.
-	reg.Ch2 <- NewEndSignal()
+	reg.Ch2 <- NewPipelineSignalToDirectly(batch.EmptyBatch, nil, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if SendPipelineSignalWithContext(ctx, reg, NewEndSignal()) {
-		t.Fatal("SendPipelineSignalWithContext succeeded with cancelled context")
+	if !SendPipelineSignalWithContext(ctx, reg, NewEndSignal()) {
+		t.Fatal("canceled cleanup context prevented durable End")
 	}
 
 	select {
 	case <-reg.Done():
-		t.Fatal("cancelled End send closed Done before receiver observed the terminal")
 	default:
+		t.Fatal("canceled cleanup context left the edge non-terminal")
 	}
 }
 
@@ -666,15 +849,30 @@ func TestPipelineEdgeTimeoutFatalSendDoneClosesAfterTimeout(t *testing.T) {
 	reg := NewPipelineEdge(1, 0)
 	reg.Ch2 <- NewEndSignal() // fill it
 
-	// With a very short timeout, this must fail.
-	if SendPipelineSignalWithTimeout(reg, NewErrorSignal(moerr.NewInternalErrorNoCtx("fatal")), 10*time.Millisecond) {
+	start := time.Now()
+	if SendPipelineSignalWithTimeout(reg, NewErrorSignal(moerr.NewInternalErrorNoCtx("fatal")), time.Second) {
 		t.Fatal("SendPipelineSignalWithTimeout should fail on a full channel")
+	}
+	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
+		t.Fatalf("fatal send waited behind the full data channel: %s", elapsed)
 	}
 
 	select {
 	case <-reg.Done():
 	default:
 		t.Fatal("PipelineEdge Done was not closed")
+	}
+}
+
+func TestPipelineEdgeTerminalSignalSnapshotDefaultsToEnd(t *testing.T) {
+	var nilEdge *PipelineEdge
+	if signal := nilEdge.terminalSignalSnapshot(); signal.EventType != EventEnd {
+		t.Fatalf("nil edge snapshot returned %s, want End", signal.EventType)
+	}
+
+	edge := NewPipelineEdge(1, 1)
+	if signal := edge.terminalSignalSnapshot(); signal.EventType != EventEnd {
+		t.Fatalf("non-terminal edge snapshot returned %s, want End", signal.EventType)
 	}
 }
 

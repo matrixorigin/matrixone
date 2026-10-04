@@ -47,13 +47,46 @@ func getVal(val any) string {
 	}
 }
 
+func rejectZeroTemporalInStrictMode(proc *process.Process, value, typ string) error {
+	reject, err := RejectZeroTemporalWritePolicy(proc)
+	if err != nil {
+		return err
+	}
+	if reject {
+		return moerr.NewTruncatedValueForField(proc.Ctx, typ, value, "value", 1)
+	}
+	return nil
+}
+
+func RejectZeroTemporalWritePolicy(proc *process.Process) (bool, error) {
+	if proc == nil || proc.GetResolveVariableFunc() == nil {
+		return false, nil
+	}
+
+	mode, err := proc.GetResolveVariableFunc()("sql_mode", true, false)
+	if err != nil {
+		return false, err
+	}
+	statementIgnore := false
+	if sp := proc.GetStmtProfile(); sp != nil {
+		statementIgnore = sp.GetStatementIgnore()
+	}
+	return process.IsStrictNoZeroDateMode(mode) && !statementIgnore, nil
+}
+
 func HexToInt(hex string) (uint64, error) {
 	s := hex[2:]
+	if s == "" {
+		return 0, nil
+	}
 	return strconv.ParseUint(s, 16, 64)
 }
 
 func BinaryToInt(b string) (uint64, error) {
 	s := b[2:]
+	if s == "" {
+		return 0, nil
+	}
 	return strconv.ParseUint(s, 2, 64)
 }
 
@@ -84,13 +117,193 @@ func DecodeBinaryString(s string) ([]byte, error) {
 }
 
 func GenVectorByVarValue(proc *process.Process, typ types.Type, val any) (*vector.Vector, error) {
+	return GenVectorByVarValueWithAllocation(proc, typ, val, nil)
+}
+
+func GenVectorByVarValueWithAllocation(
+	proc *process.Process,
+	typ types.Type,
+	val any,
+	selection *vector.AllocationAccountSelection,
+) (*vector.Vector, error) {
 	if val == nil {
-		vec := vector.NewConstNull(typ, 1, proc.Mp())
+		if selection == nil {
+			return vector.NewConstNull(typ, 1, proc.Mp()), nil
+		}
+		return vector.NewConstNullWithAllocation(typ, 1, selection)
+	}
+	if typ.Oid.IsArrayRelate() {
+		value, err := arrayUserVariableValueToBytes(typ, val)
+		if err != nil {
+			return nil, err
+		}
+		if selection == nil {
+			return vector.NewConstBytes(typ, value, 1, proc.Mp())
+		}
+		return vector.NewConstBytesWithAllocation(typ, value, 1, proc.Mp(), selection)
+	}
+	if vec, handled, err := genInternalFixedUserVariableVector(proc, typ, val, selection); handled {
+		return vec, err
+	}
+	strVal := getVal(val)
+	// JSON values are stored in the vector's binary JSON representation rather
+	// than as their display string.  Route them through the typed setter just
+	// like fixed-width values; otherwise DecodeJson sees the raw text as an
+	// invalid encoded value when a typed user variable is read back.
+	if !typ.IsVarlen() || typ.Oid == types.T_json {
+		var vec *vector.Vector
+		var err error
+		if selection == nil {
+			vec = vector.NewVec(typ)
+		} else {
+			vec, err = vector.NewOffHeapVecWithTypeAndAllocation(typ, selection)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if err = vec.PreExtend(1, proc.Mp()); err != nil {
+			vec.Free(proc.Mp())
+			return nil, err
+		}
+		vec.SetLength(1)
+		if err = SetBytesToAnyVector(proc.Ctx, strVal, 0, false, vec, proc); err != nil {
+			vec.Free(proc.Mp())
+			return nil, err
+		}
+		vec.ToConst()
 		return vec, nil
-	} else {
-		strVal := getVal(val)
+	}
+	if selection == nil {
 		return vector.NewConstBytes(typ, []byte(strVal), 1, proc.Mp())
 	}
+	return vector.NewConstBytesWithAllocation(
+		typ, []byte(strVal), 1, proc.Mp(), selection,
+	)
+}
+
+func genInternalFixedUserVariableVector(
+	proc *process.Process,
+	typ types.Type,
+	val any,
+	selection *vector.AllocationAccountSelection,
+) (*vector.Vector, bool, error) {
+	switch typ.Oid {
+	case types.T_Rowid:
+		switch v := val.(type) {
+		case types.Rowid:
+			vec, err := newConstInternalFixedVector(proc, typ, v, selection)
+			return vec, true, err
+		case []byte:
+			if len(v) == types.RowidSize {
+				vec, err := newConstInternalFixedVector(proc, typ, types.DecodeFixed[types.Rowid](v), selection)
+				return vec, true, err
+			}
+		}
+	case types.T_Blockid:
+		switch v := val.(type) {
+		case types.Blockid:
+			vec, err := newConstInternalFixedVector(proc, typ, v, selection)
+			return vec, true, err
+		case []byte:
+			if len(v) == types.BlockidSize {
+				vec, err := newConstInternalFixedVector(proc, typ, types.DecodeFixed[types.Blockid](v), selection)
+				return vec, true, err
+			}
+		}
+	case types.T_TS:
+		switch v := val.(type) {
+		case types.TS:
+			vec, err := newConstInternalFixedVector(proc, typ, v, selection)
+			return vec, true, err
+		case []byte:
+			if len(v) == types.TxnTsSize {
+				vec, err := newConstInternalFixedVector(proc, typ, types.DecodeFixed[types.TS](v), selection)
+				return vec, true, err
+			}
+		}
+	default:
+		return nil, false, nil
+	}
+	return nil, true, moerr.NewInvalidArgNoCtx(typ.Oid.String()+" user variable value", fmt.Sprintf("%T", val))
+}
+
+func newConstInternalFixedVector[T types.FixedSizeT](
+	proc *process.Process,
+	typ types.Type,
+	val T,
+	selection *vector.AllocationAccountSelection,
+) (*vector.Vector, error) {
+	var vec *vector.Vector
+	var err error
+	if selection == nil {
+		vec = vector.NewVec(typ)
+	} else {
+		vec, err = vector.NewOffHeapVecWithTypeAndAllocation(typ, selection)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err = vec.PreExtend(1, proc.Mp()); err != nil {
+		vec.Free(proc.Mp())
+		return nil, err
+	}
+	vec.SetLength(1)
+	if err = vector.SetFixedAtNoTypeCheck(vec, 0, val); err != nil {
+		vec.Free(proc.Mp())
+		return nil, err
+	}
+	vec.ToConst()
+	return vec, nil
+}
+
+func arrayUserVariableValueToBytes(typ types.Type, val any) ([]byte, error) {
+	switch typ.Oid {
+	case types.T_array_float32:
+		return arrayUserVariableTypedValueToBytes[float32](typ, val)
+	case types.T_array_float64:
+		return arrayUserVariableTypedValueToBytes[float64](typ, val)
+	case types.T_array_bf16:
+		return arrayUserVariableTypedValueToBytes[types.BF16](typ, val)
+	case types.T_array_float16:
+		return arrayUserVariableTypedValueToBytes[types.Float16](typ, val)
+	case types.T_array_int8:
+		return arrayUserVariableTypedValueToBytes[int8](typ, val)
+	case types.T_array_uint8:
+		return arrayUserVariableTypedValueToBytes[uint8](typ, val)
+	default:
+		return nil, moerr.NewInternalErrorNoCtxf("unsupported array type %s", typ.Oid.String())
+	}
+}
+
+func arrayUserVariableTypedValueToBytes[T types.ArrayElement](typ types.Type, val any) ([]byte, error) {
+	var value []byte
+	switch v := val.(type) {
+	case []T:
+		value = types.ArrayToBytes[T](v)
+	case []byte:
+		value = v
+	case string:
+		var err error
+		value, err = types.StringToArrayToBytes[T](v)
+		if err != nil {
+			return nil, err
+		}
+	default:
+		return nil, moerr.NewInvalidArgNoCtx("array user variable value", fmt.Sprintf("%T", val))
+	}
+	if typ.Width > 0 {
+		size := typ.GetArrayElementSize()
+		if size <= 0 || len(value)%size != 0 {
+			return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), len(value))
+		}
+		if len(value)/size > types.MaxArrayDimension {
+			return nil, moerr.NewInvalidInputNoCtx("vector dimension exceeds maximum dimension")
+		}
+		if got := len(value) / size; typ.Width != types.MaxArrayDimension && got != int(typ.Width) {
+			return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), got)
+		}
+	}
+	return value, nil
 }
 
 func AppendAnyToStringVector(proc *process.Process, val any, vec *vector.Vector) error {
@@ -206,6 +419,12 @@ func SetBytesToAnyVector(ctx context.Context, val string, row int,
 			return err
 		}
 		return vector.SetFixedAtNoTypeCheck(vec, row, v)
+	case types.T_decimal256:
+		v, err := types.ParseDecimal256(val, vec.GetType().Width, vec.GetType().Scale)
+		if err != nil {
+			return err
+		}
+		return vector.SetFixedAtNoTypeCheck(vec, row, v)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_binary, types.T_varbinary, types.T_text, types.T_datalink, types.T_geometry:
 		return vector.SetBytesAt(vec, row, []byte(val), proc.Mp())
 	case types.T_array_float32:
@@ -216,6 +435,30 @@ func SetBytesToAnyVector(ctx context.Context, val string, row int,
 		return vector.SetBytesAt(vec, row, v, proc.Mp())
 	case types.T_array_float64:
 		v, err := types.StringToArrayToBytes[float64](val)
+		if err != nil {
+			return err
+		}
+		return vector.SetBytesAt(vec, row, v, proc.Mp())
+	case types.T_array_bf16:
+		v, err := types.StringToArrayToBytes[types.BF16](val)
+		if err != nil {
+			return err
+		}
+		return vector.SetBytesAt(vec, row, v, proc.Mp())
+	case types.T_array_float16:
+		v, err := types.StringToArrayToBytes[types.Float16](val)
+		if err != nil {
+			return err
+		}
+		return vector.SetBytesAt(vec, row, v, proc.Mp())
+	case types.T_array_int8:
+		v, err := types.StringToArrayToBytes[int8](val)
+		if err != nil {
+			return err
+		}
+		return vector.SetBytesAt(vec, row, v, proc.Mp())
+	case types.T_array_uint8:
+		v, err := types.StringToArrayToBytes[uint8](val)
 		if err != nil {
 			return err
 		}
@@ -239,7 +482,7 @@ func SetBytesToAnyVector(ctx context.Context, val string, row int,
 		}
 		return vector.SetFixedAtNoTypeCheck(vec, row, v)
 	case types.T_timestamp:
-		v, err := types.ParseTimestamp(time.Local, val, vec.GetType().Scale)
+		v, err := types.ParseTimestamp(sessionTimeZone(proc), val, vec.GetType().Scale)
 		if err != nil {
 			return err
 		}
@@ -256,9 +499,28 @@ func SetBytesToAnyVector(ctx context.Context, val string, row int,
 			return moerr.NewOutOfRangef(ctx, "enum", "value '%v'", val)
 		}
 		return vector.SetFixedAtNoTypeCheck(vec, row, types.Enum(v))
+	case types.T_year:
+		v, err := strconv.ParseInt(val, 10, 16)
+		if err != nil {
+			return moerr.NewOutOfRangef(ctx, "year", "value '%v'", val)
+		}
+		return vector.SetFixedAtNoTypeCheck(vec, row, types.MoYear(v))
+	case types.T_uuid:
+		v, err := types.ParseUuid(val)
+		if err != nil {
+			return err
+		}
+		return vector.SetFixedAtNoTypeCheck(vec, row, v)
 	default:
-		panic(fmt.Sprintf("unsupported type %v", vec.GetType().Oid))
+		return moerr.NewInternalErrorf(ctx, "unsupported type %v", vec.GetType().Oid)
 	}
+}
+
+func sessionTimeZone(proc *process.Process) *time.Location {
+	if proc != nil && proc.GetSessionInfo() != nil && proc.GetSessionInfo().TimeZone != nil {
+		return proc.GetSessionInfo().TimeZone
+	}
+	return time.Local
 }
 
 func SetInsertValueTimeStamp(proc *process.Process, numVal *tree.NumVal, typ *types.Type) (canInsert bool, isnull bool, res types.Timestamp, err error) {
@@ -323,6 +585,11 @@ func SetInsertValueTimeStamp(proc *process.Process, numVal *tree.NumVal, typ *ty
 			if err != nil {
 				return false, false, res, err
 			}
+			if res == types.ZeroTimestamp {
+				if err = rejectZeroTemporalInStrictMode(proc, s, "datetime"); err != nil {
+					return false, false, res, err
+				}
+			}
 			// Validate TIMESTAMP minimum value: '1970-01-01 00:00:01.000000' (MySQL behavior)
 			// Note: We don't enforce maximum value limit to allow values beyond MySQL's 2038 limit
 			// MySQL behavior: TIMESTAMP column valid range is always UTC [1970-01-01 00:00:01, 2038-01-19 03:14:07]
@@ -330,7 +597,7 @@ func SetInsertValueTimeStamp(proc *process.Process, numVal *tree.NumVal, typ *ty
 			// The value 'res' is already the UTC timestamp after conversion from the session timezone.
 			// So we directly compare 'res' with TimestampMinValue (which is also in UTC).
 			// This matches MySQL: timezones further west (smaller UTC offset) allow earlier local dates.
-			if res < types.TimestampMinValue {
+			if !types.ValidTimestamp(res) {
 				// MySQL error format: "Incorrect datetime value: 'value' for column 'column' at row 1"
 				// Use row 1 as default since we don't have row number in this context
 				return false, false, res, moerr.NewTruncatedValueForField(proc.Ctx, "datetime", s, "ts_min", 1)
@@ -378,6 +645,11 @@ func SetInsertValueDateTime(proc *process.Process, numVal *tree.NumVal, typ *typ
 			isnull = true
 		} else {
 			res, err = types.ParseDatetime(s, typ.Scale)
+			if err == nil && res == types.ZeroDatetime {
+				if err = rejectZeroTemporalInStrictMode(proc, s, "datetime"); err != nil {
+					canInsert = false
+				}
+			}
 		}
 
 	case tree.P_bool:
@@ -489,6 +761,10 @@ func SetInsertValueDate(proc *process.Process, numVal *tree.NumVal, typ *types.T
 			res, err = types.ParseDateCast(s)
 			if err != nil {
 				canInsert = false
+			} else if res == types.ZeroDate {
+				if err = rejectZeroTemporalInStrictMode(proc, s, "date"); err != nil {
+					canInsert = false
+				}
 			}
 		}
 
@@ -512,14 +788,14 @@ func SetInsertValueBool(proc *process.Process, numVal *tree.NumVal) (canInsert b
 		if !ok {
 			return false, false, moerr.NewInvalidInputf(proc.Ctx, "invalid int value '%s'", numVal.String())
 		}
-		num = val == 1
+		num = val != 0
 
 	case tree.P_uint64:
 		val, ok := numVal.Uint64()
 		if !ok {
 			return false, false, moerr.NewInvalidInputf(proc.Ctx, "invalid uint value '%s'", numVal.String())
 		}
-		num = val == 1
+		num = val != 0
 
 	case tree.P_decimal:
 		canInsert = false
@@ -549,7 +825,12 @@ func SetInsertValueString(proc *process.Process, numVal *tree.NumVal, typ *types
 
 	checkStrLen := func(s string, binaryLiteral bool) ([]byte, error) {
 		destLen := int(typ.Width)
-		checkWidth := typ.Oid != types.T_text && typ.Oid != types.T_datalink &&
+		// CHAR/VARCHAR width is enforced at runtime by the assignment cast
+		// (cast_assign), which honors sql_mode, the trailing-space exemption and
+		// the INSERT IGNORE downgrade. Excluding them here avoids a plan-time
+		// hard rejection that would ignore sql_mode.
+		checkWidth := typ.Oid != types.T_char && typ.Oid != types.T_varchar &&
+			typ.Oid != types.T_text && typ.Oid != types.T_datalink &&
 			(typ.Oid != types.T_binary || binaryLiteral) && destLen != 0 && !typ.Oid.IsArrayRelate()
 		if checkWidth {
 			srcLen := utf8.RuneCountInString(s)
@@ -569,37 +850,12 @@ func SetInsertValueString(proc *process.Process, numVal *tree.NumVal, typ *types
 
 		var v []byte
 		if typ.Oid.IsArrayRelate() {
-			// Assuming that input s is of type "[1,2,3]"
-
-			switch typ.Oid {
-			case types.T_array_float32:
-				_v, err := types.StringToArray[float32](s)
-				if err != nil {
-					return nil, err
-				}
-
-				if len(_v) != destLen {
-					return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), len(_v))
-				}
-
-				v = types.ArrayToBytes[float32](_v)
-
-			case types.T_array_float64:
-				_v, err := types.StringToArray[float64](s)
-				if err != nil {
-					return nil, err
-				}
-
-				if len(_v) != destLen {
-					return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), len(_v))
-				}
-
-				v = types.ArrayToBytes[float64](_v)
-			default:
-				return nil, moerr.NewInternalErrorNoCtxf("%s is not supported array type", typ.String())
-
+			// 与参数绑定共用六类型解析及固定/动态维度校验。
+			var err error
+			v, err = arrayUserVariableValueToBytes(*typ, s)
+			if err != nil {
+				return nil, err
 			}
-
 		} else {
 			v = []byte(s)
 		}
@@ -899,10 +1155,22 @@ func floatNumToFixFloat[T constraints.Float | constraints.Integer](
 	return T(v), nil
 }
 
-func SetInsertValueBit(proc *process.Process, numVal *tree.NumVal, colType *types.Type) (canInsert bool, val uint64, err error) {
+func SetInsertValueBit(proc *process.Process, numVal *tree.NumVal, colType *types.Type, isIgnore bool) (canInsert bool, val uint64, err error) {
 	var ok bool
 	canInsert = true
 	width := colType.Width
+	max := bitMaxValue(width)
+	adjustOverflow := func(value uint64) bool {
+		if value <= max {
+			return false
+		}
+		if isIgnore {
+			val = max
+			return true
+		}
+		err = moerr.NewInvalidInputf(proc.Ctx, "data too long, type width = %d, val = %b", width, value)
+		return true
+	}
 
 	switch numVal.ValType {
 	case tree.P_bool:
@@ -920,8 +1188,7 @@ func SetInsertValueBit(proc *process.Process, numVal *tree.NumVal, colType *type
 		for i := 0; i < len(s); i++ {
 			val = (val << 8) | uint64(s[i])
 		}
-		if val > uint64(1<<width-1) {
-			err = moerr.NewInvalidInputf(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
+		if adjustOverflow(val) {
 			return
 		}
 
@@ -931,13 +1198,23 @@ func SetInsertValueBit(proc *process.Process, numVal *tree.NumVal, colType *type
 			err = moerr.NewInvalidInputf(proc.Ctx, "invalid float value '%s'", numVal.String())
 			return
 		} else if num < 0 {
+			if isIgnore {
+				val = 0
+				return
+			}
 			err = moerr.NewInvalidInputf(proc.Ctx, "unsupported negative value %v", val)
 			return
-		} else if uint64(math.Round(num)) > uint64(1<<width-1) {
-			err = moerr.NewInvalidInputf(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
+		}
+		rounded := math.Round(num)
+		if math.IsNaN(rounded) || bitFloatOutOfRange(rounded, width) {
+			if isIgnore {
+				val = max
+				return
+			}
+			err = moerr.NewInvalidInputf(proc.Ctx, "data too long, type width = %d, val = %v", width, num)
 			return
 		}
-		val = uint64(math.Round(num))
+		val = uint64(rounded)
 
 	case tree.P_int64:
 		var tempVal int64
@@ -945,10 +1222,13 @@ func SetInsertValueBit(proc *process.Process, numVal *tree.NumVal, colType *type
 			err = moerr.NewInvalidInputf(proc.Ctx, "invalid int value '%s'", numVal.String())
 			return
 		} else if tempVal < 0 {
+			if isIgnore {
+				val = 0
+				return
+			}
 			err = moerr.NewInvalidInputf(proc.Ctx, "unsupported negative value %d", tempVal)
 			return
-		} else if uint64(tempVal) > uint64(1<<width-1) {
-			err = moerr.NewInvalidInputf(proc.Ctx, "data too long, type width = %d, val = %b", width, tempVal)
+		} else if adjustOverflow(uint64(tempVal)) {
 			return
 		}
 		val = uint64(tempVal)
@@ -957,32 +1237,28 @@ func SetInsertValueBit(proc *process.Process, numVal *tree.NumVal, colType *type
 		if val, ok = numVal.Uint64(); !ok {
 			err = moerr.NewInvalidInputf(proc.Ctx, "invalid int value '%s'", numVal.String())
 			return
-		} else if val > uint64(1<<width-1) {
-			err = moerr.NewInvalidInputf(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
+		} else if adjustOverflow(val) {
 			return
 		}
 
 	case tree.P_hexnum:
 		if val, err = HexToInt(numVal.String()); err != nil {
 			return
-		} else if val > uint64(1<<width-1) {
-			err = moerr.NewInvalidInputf(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
+		} else if adjustOverflow(val) {
 			return
 		}
 
 	case tree.P_bit:
 		if val, err = BinaryToInt(numVal.String()); err != nil {
 			return
-		} else if val > uint64(1<<width-1) {
-			err = moerr.NewInvalidInputf(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
+		} else if adjustOverflow(val) {
 			return
 		}
 
 	case tree.P_ScoreBinary:
 		if val, err = ScoreBinaryToInt(numVal.String()); err != nil {
 			return
-		} else if val > uint64(1<<width-1) {
-			err = moerr.NewInvalidInputf(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
+		} else if adjustOverflow(val) {
 			return
 		}
 
@@ -990,4 +1266,24 @@ func SetInsertValueBit(proc *process.Process, numVal *tree.NumVal, colType *type
 		canInsert = false
 	}
 	return
+}
+
+func bitMaxValue(width int32) uint64 {
+	if width >= 64 {
+		return math.MaxUint64
+	}
+	if width <= 0 {
+		return 0
+	}
+	return uint64(1)<<width - 1
+}
+
+func bitFloatOutOfRange(value float64, width int32) bool {
+	if math.IsInf(value, 0) {
+		return true
+	}
+	if width >= 64 {
+		return value >= math.Exp2(64)
+	}
+	return value > float64(bitMaxValue(width))
 }

@@ -37,7 +37,7 @@ func Test_NotFn(t *testing.T) {
 				[]bool{false, true, false, true}, []bool{false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, notFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -53,7 +53,7 @@ func Test_NotFn(t *testing.T) {
 				[]bool{false, true, false}, []bool{false, false, true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, notFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -76,7 +76,7 @@ func Test_EqualFn(t *testing.T) {
 				[]bool{true, false, true, false, true}, []bool{false, false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, equalFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -94,7 +94,7 @@ func Test_EqualFn(t *testing.T) {
 				[]bool{true, false, true, true}, []bool{false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, equalFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -112,7 +112,7 @@ func Test_EqualFn(t *testing.T) {
 				[]bool{true, false, true, false}, []bool{false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, equalFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -130,7 +130,7 @@ func Test_EqualFn(t *testing.T) {
 				[]bool{true, false, false}, []bool{false, true, true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, equalFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -152,7 +152,7 @@ func Test_NotEqualFn(t *testing.T) {
 				[]bool{false, true, false, true}, []bool{false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, notEqualFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -170,7 +170,7 @@ func Test_NotEqualFn(t *testing.T) {
 				[]bool{false, true, false}, []bool{false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, notEqualFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -192,7 +192,7 @@ func Test_GreatThanFn(t *testing.T) {
 				[]bool{true, false, false, true, false}, []bool{false, false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, greatThanFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -210,7 +210,7 @@ func Test_GreatThanFn(t *testing.T) {
 				[]bool{true, false, false, true}, []bool{false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, greatThanFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -228,7 +228,7 @@ func Test_GreatThanFn(t *testing.T) {
 				[]bool{true, false, true, false}, []bool{false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, greatThanFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -250,7 +250,7 @@ func Test_GreatEqualFn(t *testing.T) {
 				[]bool{true, true, false, true, false}, []bool{false, false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, greatEqualFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -268,7 +268,7 @@ func Test_GreatEqualFn(t *testing.T) {
 				[]bool{true, true, false, true}, []bool{false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, greatEqualFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -290,7 +290,7 @@ func Test_LessThanFn(t *testing.T) {
 				[]bool{true, false, false, true, false}, []bool{false, false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, lessThanFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -308,7 +308,7 @@ func Test_LessThanFn(t *testing.T) {
 				[]bool{true, false, false, true}, []bool{false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, lessThanFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -326,7 +326,7 @@ func Test_LessThanFn(t *testing.T) {
 				[]bool{true, false, true, false}, []bool{false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, lessThanFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -348,7 +348,7 @@ func Test_LessEqualFn(t *testing.T) {
 				[]bool{true, true, false, true, false}, []bool{false, false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, lessEqualFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -366,7 +366,7 @@ func Test_LessEqualFn(t *testing.T) {
 				[]bool{true, true, false, true}, []bool{false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, lessEqualFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -389,7 +389,7 @@ func Test_CompareEdgeCases(t *testing.T) {
 				[]bool{true, false, false}, []bool{false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, equalFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -408,7 +408,7 @@ func Test_CompareEdgeCases(t *testing.T) {
 				[]bool{true, false, false}, []bool{false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, lessThanFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -426,7 +426,7 @@ func Test_CompareEdgeCases(t *testing.T) {
 				[]bool{true, false, false}, []bool{false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, equalFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -461,7 +461,7 @@ func Test_Float32WithScaleComparison(t *testing.T) {
 				[]bool{false, false, true}, []bool{false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, greatThanFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -479,7 +479,7 @@ func Test_Float32WithScaleComparison(t *testing.T) {
 				[]bool{true, false, true}, []bool{false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, equalFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -497,7 +497,7 @@ func Test_Float32WithScaleComparison(t *testing.T) {
 				[]bool{false, true, false}, []bool{false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, lessThanFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -515,7 +515,7 @@ func Test_Float32WithScaleComparison(t *testing.T) {
 				[]bool{false, true, false}, []bool{false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, notEqualFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -533,7 +533,7 @@ func Test_Float32WithScaleComparison(t *testing.T) {
 				[]bool{true, false, false}, []bool{false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, greatEqualFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -551,7 +551,7 @@ func Test_Float32WithScaleComparison(t *testing.T) {
 				[]bool{true, false, true}, []bool{false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, lessEqualFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -570,7 +570,44 @@ func Test_Float32WithScaleComparison(t *testing.T) {
 				[]bool{false, false, true}, []bool{false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, greatThanFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
+	}
+}
+
+func TestFloat32MixedScaleComparisonContract(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	leftType := types.T_float32.ToType()
+	leftType.Scale = 2
+	rightType := types.T_float32.ToType()
+	rightType.Scale = 3
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(leftType, []float32{1.234, 1.234}, nil),
+		NewFunctionTestInput(rightType, []float32{1.2304, 1.2306}, nil),
+	}
+	tests := []struct {
+		name string
+		fn   executeLogicOfOverload
+		want []bool
+	}{
+		{name: "equal", fn: equalFn, want: []bool{true, false}},
+		{name: "null-safe-equal", fn: nullSafeEqualFn, want: []bool{true, false}},
+		{name: "not-equal", fn: notEqualFn, want: []bool{false, true}},
+		{name: "less-than", fn: lessThanFn, want: []bool{false, true}},
+		{name: "less-equal", fn: lessEqualFn, want: []bool{true, true}},
+		{name: "greater-than", fn: greatThanFn, want: []bool{false, false}},
+		{name: "greater-equal", fn: greatEqualFn, want: []bool{true, false}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tc := NewFunctionTestCase(
+				proc,
+				inputs,
+				NewFunctionTestResult(types.T_bool.ToType(), false, test.want, nil),
+				test.fn,
+			)
+			ok, errInfo := tc.RunAndFree()
+			require.True(t, ok, errInfo)
+		})
 	}
 }

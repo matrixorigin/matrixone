@@ -93,7 +93,7 @@ func indexMetadataType(unique bool, algo string) string {
 		return INDEX_TYPE_UNIQUE
 	case catalog.IsRTreeIndexAlgo(algo):
 		return INDEX_TYPE_SPATIAL
-	case catalog.IsFullTextIndexAlgo(algo):
+	case catalog.IsFullTextIndexAlgo(algo) || catalog.IsFullText2IndexAlgo(algo):
 		return INDEX_TYPE_FULLTEXT
 	default:
 		return INDEX_TYPE_MULTIPLE
@@ -452,7 +452,7 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 	if err != nil {
 		return nil, err
 	}
-	bat.Vecs[12] = vecPrikey
+	bat.Vecs[15] = vecPrikey
 
 	bat.SetRowCount(bat.GetVector(0).Length())
 	return bat, nil

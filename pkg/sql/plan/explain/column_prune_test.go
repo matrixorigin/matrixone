@@ -193,6 +193,79 @@ func TestSingleTableQueryPrune(t *testing.T) {
 	}
 }
 
+func TestCountStarInnerJoinPrunesOutputColumns(t *testing.T) {
+	tests := []struct {
+		name      string
+		sql       string
+		countOnly bool
+	}{
+		{
+			name:      "inner equi join",
+			sql:       "select count(*) from nation n inner join region r on n.n_regionkey = r.r_regionkey",
+			countOnly: true,
+		},
+		{
+			name: "volatile projection",
+			sql:  "select rand() from nation n inner join region r on n.n_regionkey = r.r_regionkey",
+		},
+		{
+			name: "sum constant",
+			sql:  "select sum(1) from nation n inner join region r on n.n_regionkey = r.r_regionkey",
+		},
+		{
+			name: "count constant",
+			sql:  "select count(1) from nation n inner join region r on n.n_regionkey = r.r_regionkey",
+		},
+		{
+			name: "multiple aggregates",
+			sql:  "select count(*), sum(1) from nation n inner join region r on n.n_regionkey = r.r_regionkey",
+		},
+		{
+			name: "constant grouping",
+			sql: "select cast(1 as signed), count(*) from nation n inner join region r " +
+				"on n.n_regionkey = r.r_regionkey group by cast(1 as signed)",
+		},
+		{
+			name: "inner non-equi join",
+			sql:  "select count(*) from nation n inner join region r on n.n_regionkey < r.r_regionkey",
+		},
+		{
+			name: "inner equi join with residual",
+			sql: "select count(*) from nation n inner join region r " +
+				"on n.n_regionkey = r.r_regionkey and n.n_nationkey > r.r_regionkey",
+		},
+		{
+			name: "left equi join",
+			sql:  "select count(*) from region r left join nation n on r.r_regionkey = n.n_regionkey",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logicPlan, err := buildOneStmt(plan2.NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+
+			var join *plan.Node
+			for _, node := range reachablePlanNodes(logicPlan.GetQuery()) {
+				if node.NodeType == plan.Node_JOIN {
+					require.Nil(t, join, "query should contain exactly one join")
+					join = node
+				}
+			}
+			require.NotNil(t, join)
+			if test.countOnly {
+				require.Empty(t, join.ProjectList,
+					"pure inner equi COUNT(*) should expose row count only")
+				require.True(t, join.EmitCompressedRowCount,
+					"the executor contract must be explicit")
+			} else {
+				require.NotEmpty(t, join.ProjectList,
+					"non-count-only join shape needs a row carrier")
+				require.False(t, join.EmitCompressedRowCount)
+			}
+		})
+	}
+}
+
 func TestJoinQueryPrune(t *testing.T) {
 	cases := []struct {
 		name         string
@@ -447,6 +520,10 @@ func TestNestedQueryPrune(t *testing.T) {
 				{
 					tableName: "lineitem",
 					colNames:  []string{"l_partkey", "l_quantity"},
+				},
+				{
+					tableName: "part",
+					colNames:  []string{"p_partkey", "p_brand", "p_container"},
 				},
 			},
 		},
@@ -787,11 +864,11 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 		require.Equal(t, "starcount", agg.AggList[0].GetF().Func.ObjName)
 	})
 
-	t.Run("scalar aggregate handles interval carrier candidate", func(t *testing.T) {
+	t.Run("scalar aggregate handles consumed interval carrier candidate", func(t *testing.T) {
 		logicPlan, err := buildOneStmt(
 			plan2.NewMockOptimizer(false),
 			t,
-			"select 1 from (select count(interval 1 day), count(*) from mo_catalog.mo_database) s",
+			"select 1 from (select count(date_add(date '2026-01-01', interval n_regionkey day)), count(*) from nation) s",
 		)
 		require.NoError(t, err)
 
@@ -898,6 +975,18 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 	})
 
 	t.Run("sample chooses low-cost discarded carrier", func(t *testing.T) {
+		consumedPlan, err := buildOneStmt(
+			plan2.NewMockOptimizer(false),
+			t,
+			"select n_name, n_regionkey from (select sample(n_name, n_regionkey, 2 rows) from nation) s",
+		)
+		require.NoError(t, err)
+		consumedColumns, err := getPrunedTableColumns(consumedPlan)
+		require.NoError(t, err)
+		require.Equal(t, []Entry[string, []string]{
+			{tableName: "nation", colNames: []string{"n_name", "n_regionkey"}},
+		}, consumedColumns)
+
 		logicPlan, err := buildOneStmt(
 			plan2.NewMockOptimizer(false),
 			t,
@@ -1082,7 +1171,7 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 		logicPlan, err := buildOneStmt(
 			plan2.NewMockOptimizer(false),
 			t,
-			"select timestampdiff(second, t1, t2), a from (select sysdate() as t1, sleep(2) as a, sysdate() as t2)",
+			"select timestampdiff(second, t1, t2), a from (select sysdate() as t1, sleep(2) as a, sysdate() as t2) as times",
 		)
 		require.NoError(t, err)
 

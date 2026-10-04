@@ -16,7 +16,9 @@ package compile
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -26,18 +28,48 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	mock_morpc "github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	rt "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	mock_lock "github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func TestResolveRemoteCompileMPoolCap(t *testing.T) {
+	const gib = uint64(1 << 30)
+
+	cap, err := resolveRemoteCompileMPoolCapFrom(process.Limitation{Size: int64(2 * gib)}, 0, 10*gib, 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, int64(2*gib), cap)
+
+	cap, err = resolveRemoteCompileMPoolCapFrom(process.Limitation{}, 0, 10*gib, 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, int64(9*gib), cap)
+
+	cap, err = resolveRemoteCompileMPoolCapFrom(process.Limitation{}, 0, 4*gib, 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, int64(4*gib-(4*gib)/10), cap)
+
+	cap, err = resolveRemoteCompileMPoolCapFrom(process.Limitation{}, 0, 10*gib, 0, 2*gib)
+	require.NoError(t, err)
+	require.Equal(t, int64(8*gib), cap)
+}
 
 // TestWorkspaceCreationInRemoteRun tests that workspace is created early in remote run scenario.
 // This is a critical test for the fix that prevents nil pointer panics.
@@ -164,11 +196,21 @@ func TestHandlePipelineMessage_UnknownType(t *testing.T) {
 // 3. Meaningful: Tests compile object structure creation
 // 4. Realistic: Tests real compile creation in remote run scenario
 func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
+	runtime := rt.ServiceRuntime("")
+	original, hadOriginal := runtime.GetGlobalVariables(rt.MOProtocolVersion)
+	defer func() {
+		if hadOriginal {
+			runtime.SetGlobalVariables(rt.MOProtocolVersion, original)
+		} else {
+			runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	}()
+
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
-	// Use mock engine instead of testengine
+	// Use a mock engine to isolate structure construction.
 	mockEngine := mock_frontend.NewMockEngine(ctrl)
 	// Create a valid MessageCenter for SetMultiCN to work
 	// SetMultiCN requires a non-nil MessageCenter with initialized RwMutex
@@ -190,13 +232,18 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
 	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
-	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
 	txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
 	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 	txnOperator.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{}, nil).AnyTimes()
 	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
+	sourceProc := testutil.NewProcess(t)
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("AB\x00\x00"), false, sourceProc.Mp()))
+	require.NoError(t, vector.AppendBytes(params, []byte("text"), false, sourceProc.Mp()))
+	t.Cleanup(func() { params.Free(sourceProc.Mp()) })
 
 	receiver := &messageReceiverOnServer{
 		colexecServer: colexec.GetServer(""),
@@ -207,24 +254,64 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 			storeEngine: mockEngine,
 		},
 		procBuildHelper: processHelper{
-			id:          "test-proc-id",
-			accountId:   catalog.System_Account,
-			unixTime:    time.Now().Unix(),
-			txnClient:   txnClient,
-			txnOperator: txnOperator,
+			id:                         "test-proc-id",
+			accountId:                  catalog.System_Account,
+			unixTime:                   time.Now().Unix(),
+			affectedRows:               42,
+			statementRuntimeIgnore:     true,
+			planSnapshotTS:             timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4},
+			hasPlanSnapshotTS:          true,
+			planGenerationReused:       true,
+			stringShuffleHashAlgorithm: process.StringShuffleHashComplete,
+			txnClient:                  txnClient,
+			txnOperator:                txnOperator,
+			prepareParams: pipeline.PrepareParamInfo{
+				Length:         2,
+				Data:           append([]byte(nil), params.GetData()...),
+				Area:           append([]byte(nil), params.GetArea()...),
+				Nulls:          []bool{false, false},
+				IsBin:          []bool{true, false, false, false, false, true, false, false},
+				IsBinaryString: []bool{true, false},
+			},
 		},
 		messageAcquirer: func() morpc.Message {
 			return &pipeline.Message{}
 		},
 	}
 
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion17)
 	compile, err := receiver.newCompile()
+	require.Error(t, err)
+	require.Nil(t, compile)
+
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion18)
+	compile, err = receiver.newCompile()
 	require.NoError(t, err)
 	require.NotNil(t, compile)
 	require.Equal(t, "test-addr", compile.addr)
 	require.Equal(t, mockEngine, compile.e)
 	require.NotNil(t, compile.proc)
+	require.Equal(t, "AB\x00\x00", compile.proc.GetPrepareParams().GetStringAt(0))
+	require.Equal(t, "text", compile.proc.GetPrepareParams().GetStringAt(1))
+	require.True(t, compile.proc.GetPrepareParamIsBin(0))
+	require.False(t, compile.proc.GetPrepareParamIsBin(1))
+	require.Equal(t, vector.PrepareParamNone, compile.proc.GetPrepareParamKind(0))
+	require.Equal(t, vector.PrepareParamFloat, compile.proc.GetPrepareParamKind(1))
+	require.True(t, compile.proc.GetPrepareParamIsBinaryString(0))
+	require.False(t, compile.proc.GetPrepareParamIsBinaryString(1))
+	require.Equal(t, int64(42), compile.proc.GetAffectedRows())
+	require.True(t, compile.proc.GetStmtProfile().GetStatementIgnore())
+	planSnapshot, ok := compile.proc.GetPlanSnapshotTS()
+	require.True(t, ok)
+	require.Equal(t, timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4}, planSnapshot)
+	require.True(t, compile.proc.PlanGenerationReused())
+	require.Equal(t, process.StringShuffleHashComplete,
+		compile.proc.StringShuffleHashAlgorithm())
 	require.NotNil(t, compile.fill, "fill callback should be set")
+	remoteParams := compile.proc.GetPrepareParams()
+	require.NotPanics(t, compile.Release)
+	require.Nil(t, remoteParams.GetData())
+	require.Nil(t, remoteParams.GetArea())
 }
 
 func TestHandlePipelineMessage_ReleasesCompileOnDecodeError(t *testing.T) {
@@ -290,14 +377,33 @@ func TestGenerateProcessHelper_WithSnapshot(t *testing.T) {
 	txnClient.EXPECT().NewWithSnapshot(gomock.Any(), gomock.Any()).Return(txnOperator, nil).Times(1)
 
 	// Create a valid ProcessInfo
+	proc := testutil.NewProcess(t)
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("AB\x00\x00"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(params, []byte("text"), false, proc.Mp()))
+	t.Cleanup(func() { params.Free(proc.Mp()) })
+
 	procInfo := &pipeline.ProcessInfo{
-		Id:        "test-proc-id",
-		AccountId: catalog.System_Account,
-		UnixTime:  time.Now().Unix(),
+		Id:                         "test-proc-id",
+		AccountId:                  catalog.System_Account,
+		UnixTime:                   time.Now().Unix(),
+		AffectedRows:               42,
+		StatementRuntimeIgnore:     true,
+		PlanSnapshotTs:             &timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4},
+		PlanGenerationReused:       true,
+		StringShuffleHashAlgorithm: uint32(process.StringShuffleHashComplete),
 		Snapshot: txn.CNTxnSnapshot{
 			Txn: txn.TxnMeta{
 				ID: []byte("test-txn-id"),
 			},
+		},
+		PrepareParams: pipeline.PrepareParamInfo{
+			Length:         2,
+			Data:           append([]byte(nil), params.GetData()...),
+			Area:           append([]byte(nil), params.GetArea()...),
+			Nulls:          []bool{false, false},
+			IsBin:          []bool{true, false},
+			IsBinaryString: []bool{true, false},
 		},
 	}
 
@@ -308,9 +414,27 @@ func TestGenerateProcessHelper_WithSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "test-proc-id", helper.id)
 	require.Equal(t, catalog.System_Account, helper.accountId)
+	require.Equal(t, []bool{true, false}, helper.prepareParams.IsBin)
+	require.Equal(t, []bool{true, false}, helper.prepareParams.IsBinaryString)
+	require.Equal(t, procInfo.PrepareParams.Data, helper.prepareParams.Data)
+	require.Equal(t, procInfo.PrepareParams.Area, helper.prepareParams.Area)
+	require.Equal(t, int64(42), helper.affectedRows)
+	require.True(t, helper.statementRuntimeIgnore)
+	require.True(t, helper.hasPlanSnapshotTS)
+	require.Equal(t, *procInfo.PlanSnapshotTs, helper.planSnapshotTS)
+	require.True(t, helper.planGenerationReused)
+	require.Equal(t, process.StringShuffleHashComplete, helper.stringShuffleHashAlgorithm)
 	require.NotNil(t, helper.txnOperator, "txnOperator should be created from snapshot")
 	// Verify that rebuilt txnOperator has nil workspace (key point for remote run)
 	require.Nil(t, helper.txnOperator.GetWorkspace(), "rebuilt txnOperator should have nil workspace initially")
+}
+
+func TestGenerateProcessHelperRejectsUnknownStringShuffleHashAlgorithm(t *testing.T) {
+	data, err := (&pipeline.ProcessInfo{StringShuffleHashAlgorithm: 99}).Marshal()
+	require.NoError(t, err)
+
+	_, err = generateProcessHelper(context.Background(), data, nil)
+	require.ErrorContains(t, err, "string shuffle hash algorithm 99 is not supported")
 }
 
 func TestNewMessageReceiverReturnsSnapshotRestoreError(t *testing.T) {
@@ -471,4 +595,623 @@ func TestCnServerMessageHandlerWaitObservesConnectionClose(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("wait did not observe connection close")
 	}
+}
+
+func TestHandlePipelineStopSendingAbortsOutstandingBatchFlow(t *testing.T) {
+	server := colexec.NewServer("")
+	session := &lifecycleTestSession{ctx: context.Background()}
+	flow := newPipelineBatchFlow(1, 1024)
+	lifecycle, err := registerPipelineStreamLifecycle(session, 400, flow)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		lifecycle.remove()
+		server.RemoveRelatedPipeline(session, 400)
+	})
+
+	seq, err := flow.reserve(context.Background(), context.Background(), 10)
+	require.NoError(t, err)
+	drainStarted := make(chan struct{})
+	drainDone := make(chan error, 1)
+	go func() {
+		close(drainStarted)
+		drainDone <- flow.waitUntilDrained(context.Background(), context.Background(), nil)
+	}()
+	<-drainStarted
+
+	receiver := &messageReceiverOnServer{
+		messageCtx:    context.Background(),
+		messageId:     400,
+		messageTyp:    pipeline.Method_StopSending,
+		clientSession: session,
+		colexecServer: server,
+	}
+	require.NoError(t, handlePipelineMessage(receiver))
+
+	select {
+	case err = <-drainDone:
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted), err)
+	case <-time.After(time.Second):
+		t.Fatal("StopSending did not release the terminal-response drain barrier")
+	}
+	require.NoError(t, handlePipelineBatchAck(
+		&pipeline.Message{Id: 400, BatchAckSequence: seq}, session),
+		"a concurrently flushed ACK must remain harmless after StopSending")
+	require.Zero(t, session.closeCalls)
+}
+
+func TestPipelineStopBeforeLifecycleRegistrationIsReconciled(t *testing.T) {
+	server := colexec.NewServer("")
+	sessionCtx, closeSession := context.WithCancel(context.Background())
+	session := &lifecycleTestSession{ctx: sessionCtx}
+	const streamID = 405
+	t.Cleanup(func() {
+		server.RemoveRelatedPipeline(session, streamID)
+		closeSession()
+	})
+
+	stopReceiver := &messageReceiverOnServer{
+		messageCtx:    context.Background(),
+		messageId:     streamID,
+		messageTyp:    pipeline.Method_StopSending,
+		clientSession: session,
+		colexecServer: server,
+	}
+	require.NoError(t, handlePipelineMessage(stopReceiver))
+	require.True(t, server.HasPendingPipelineCancellation(session, streamID))
+
+	flow := newPipelineBatchFlow(1, 1024)
+	lifecycle, err := registerPipelineStreamLifecycle(session, streamID, flow)
+	require.NoError(t, err)
+	t.Cleanup(lifecycle.remove)
+
+	// Model the failure mode directly: the lifecycle is now published, and an
+	// outstanding batch appears before the pre-registration Stop is reconciled.
+	seq, err := flow.reserve(context.Background(), context.Background(), 10)
+	require.NoError(t, err)
+	pipelineReceiver := &messageReceiverOnServer{
+		messageCtx:      context.Background(),
+		messageId:       streamID,
+		clientSession:   session,
+		streamLifecycle: lifecycle,
+		colexecServer:   server,
+	}
+	pipelineReceiver.abortBatchFlowForPendingStop()
+
+	err = flow.waitUntilDrained(context.Background(), context.Background(), nil)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted), err)
+	_, err = flow.reserve(context.Background(), context.Background(), 1)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted), err)
+	require.NoError(t, flow.acknowledge(seq), "a late ACK must be harmless after reconciliation")
+
+	dispatchReceiver := &process.WrapCs{
+		MsgId: streamID,
+		Uid:   uuid.Must(uuid.NewV7()),
+		Cs:    session,
+		Err:   make(chan error, 1),
+	}
+	server.RecordDispatchPipeline(session, streamID, dispatchReceiver)
+	require.False(t, dispatchReceiver.ReceiverDone,
+		"lifecycle cancellation must not change dispatch ReceiverDone semantics")
+	require.False(t, server.HasPendingPipelineCancellation(session, streamID),
+		"dispatch registration must retain its existing stale-tombstone cleanup")
+}
+
+func TestMessageReceiverSendBatchUsesNegotiatedCredits(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	flow := newPipelineBatchFlow(2, 1024)
+	lifecycle := &pipelineStreamLifecycle{batchFlow: flow}
+	var sent *pipeline.Message
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, message any) error {
+			sent = message.(*pipeline.Message)
+			return nil
+		})
+
+	receiver := &messageReceiverOnServer{
+		messageCtx:      context.Background(),
+		connectionCtx:   context.Background(),
+		messageId:       401,
+		clientSession:   session,
+		messageAcquirer: func() morpc.Message { return &pipeline.Message{} },
+		maxMessageSize:  1 << 20,
+		streamLifecycle: lifecycle,
+	}
+	require.NoError(t, receiver.sendBatch(batch.NewWithSize(0)))
+	require.NotNil(t, sent)
+	require.Equal(t, uint64(1), sent.GetBatchSequence())
+	require.Equal(t, uint32(2), sent.GetAcceptedBatchCreditCount())
+	require.Equal(t, uint64(1024), sent.GetAcceptedBatchCreditBytes())
+
+	flow.mu.Lock()
+	require.Len(t, flow.pending, 1)
+	flow.mu.Unlock()
+	require.NoError(t, flow.acknowledge(sent.GetBatchSequence()))
+}
+
+func TestMessageReceiverSendEndMessageBoundsWarningPayload(t *testing.T) {
+	const bodyLimit = 16 * 1024
+	const total = 10
+	warnings := make([]remoteWarningDiagnostic, total)
+	for i := range warnings {
+		warnings[i] = remoteWarningDiagnostic{
+			Code:    1292,
+			Message: strings.Repeat("x", process.WarningDiagnosticMaxMessageBytes),
+		}
+	}
+
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	var sent *pipeline.Message
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, message any) error {
+			sent = message.(*pipeline.Message)
+			return nil
+		})
+	receiver := &messageReceiverOnServer{
+		messageCtx:         context.Background(),
+		clientSession:      session,
+		messageAcquirer:    func() morpc.Message { return &pipeline.Message{} },
+		maxMessageSize:     bodyLimit,
+		warningCount:       total,
+		warningDiagnostics: warnings,
+	}
+
+	require.NoError(t, receiver.sendEndMessage())
+	require.NotNil(t, sent)
+	require.Less(t, sent.ProtoSize(), bodyLimit)
+	var envelope remoteTerminalEnvelope
+	require.NoError(t, json.Unmarshal(sent.GetAnalyse(), &envelope))
+	require.Equal(t, uint64(total), envelope.WarningCount)
+	require.NotEmpty(t, envelope.WarningDiagnostics)
+	require.Less(t, len(envelope.WarningDiagnostics), total)
+	require.Equal(t, warnings[0], envelope.WarningDiagnostics[0])
+}
+
+func TestMessageReceiverTerminalUsesConfiguredRPCBodyLimit(t *testing.T) {
+	const bodyLimit = 16 * 1024
+	const total = 10
+	warnings := make([]remoteWarningDiagnostic, total)
+	for i := range warnings {
+		warnings[i] = remoteWarningDiagnostic{
+			Code:    1292,
+			Message: strings.Repeat("x", process.WarningDiagnosticMaxMessageBytes),
+		}
+	}
+
+	receiver := &messageReceiverOnServer{
+		messageCtx:         morpc.ContextWithMaxMessageSize(context.Background(), bodyLimit),
+		maxMessageSize:     maxMessageSizeToMoRpc,
+		warningCount:       total,
+		warningDiagnostics: warnings,
+	}
+	message := &pipeline.Message{
+		Sid: pipeline.Status_MessageEnd,
+		Cmd: pipeline.Method_PipelineMessage,
+		Id:  1,
+	}
+	require.NoError(t, receiver.setTerminalAnalysis(message))
+
+	// Exercise the same codec validation used by production MORPC instead of
+	// relying on a mock ClientSession.Write implementation.
+	codec := morpc.NewMessageCodec(
+		"",
+		func() morpc.Message { return &pipeline.Message{} },
+		morpc.WithCodecMaxBodySize(bodyLimit),
+	)
+	require.NoError(t, codec.Valid(message))
+	require.Less(t, message.ProtoSize(), bodyLimit)
+
+	var envelope remoteTerminalEnvelope
+	require.NoError(t, json.Unmarshal(message.GetAnalyse(), &envelope))
+	require.Equal(t, uint64(total), envelope.WarningCount)
+	require.NotEmpty(t, envelope.WarningDiagnostics)
+	require.Less(t, len(envelope.WarningDiagnostics), total)
+}
+
+type observedDoneContext struct {
+	context.Context
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (c *observedDoneContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.entered) })
+	return c.Context.Done()
+}
+
+func TestRemoteNotifyCancellationReleasesCreditWaitAndRegistration(t *testing.T) {
+	for _, connectionClosed := range []bool{false, true} {
+		name := "query"
+		if connectionClosed {
+			name = "connection"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			server := colexec.NewServer("")
+			proc := testutil.NewProcess(t)
+			proc.BuildPipelineContext(context.Background())
+			defer proc.Cancel(context.Canceled)
+			uid := uuid.Must(uuid.NewV7())
+			terminal := colexec.NewRemoteReceiverTerminal(proc.Cancel)
+			notify := make(process.RemotePipelineInformationChannel)
+			require.NoError(t, server.PutProcIntoUuidMapWithTerminal(uid, proc, notify, terminal))
+			defer server.RemoveUuidsOwned([]uuid.UUID{uid}, notify)
+			queryCtx, cancelQuery := context.WithCancel(context.Background())
+			defer cancelQuery()
+			connCtx, cancelConn := context.WithCancel(context.Background())
+			defer cancelConn()
+			var workers sync.WaitGroup
+			defer func() {
+				cancelQuery()
+				cancelConn()
+				proc.Cancel(context.Canceled)
+				workers.Wait()
+			}()
+			session := mock_morpc.NewMockClientSession(ctrl)
+			// The session cleanup goroutine is irrelevant here: the handler must
+			// unregister the stream itself before it returns.
+			session.EXPECT().SessionCtx().Return(connCtx).AnyTimes()
+			session.EXPECT().Close().Return(nil).AnyTimes()
+			lock := mock_lock.NewMockLockService(ctrl)
+			lock.EXPECT().GetConfig().Return(lockservice.Config{}).AnyTimes()
+			var wireError error
+			session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, m morpc.Message) error {
+				var hasError bool
+				wireError, hasError = m.(*pipeline.Message).TryToGetMoErr()
+				if !hasError {
+					return errors.New("missing cancellation terminal error")
+				}
+				return ctx.Err()
+			}).Times(1)
+			const id = 404
+			handlerDone := make(chan error, 1)
+			workers.Add(1)
+			go func() {
+				defer workers.Done()
+				handlerDone <- CnServerMessageHandler(queryCtx, "", &pipeline.Message{
+					Id: id, Cmd: pipeline.Method_PrepareDoneNotifyMessage, Uuid: uid[:],
+					RequestedTeardownMode:     pipeline.StreamTeardownMode_FinishAck,
+					RequestedBatchCreditCount: 1, RequestedBatchCreditBytes: 1024,
+				}, session, nil, nil, lock, nil, nil, nil, nil, nil, func() morpc.Message { return &pipeline.Message{} })
+			}()
+			var info *process.WrapCs
+			select {
+			case info = <-notify:
+			case <-time.After(5 * time.Second):
+				t.Fatal("notify did not attach")
+			}
+			require.True(t, info.TerminalBacked)
+			require.Nil(t, info.Err)
+			_, err := info.ReserveBatch(proc.Ctx, 1)
+			require.NoError(t, err)
+			observed := &observedDoneContext{Context: proc.Ctx, entered: make(chan struct{})}
+			sendDone := make(chan error, 1)
+			workers.Add(1)
+			go func() {
+				defer workers.Done()
+				_, err := info.ReserveBatch(observed, 1)
+				sendDone <- err
+			}()
+			select {
+			case <-observed.entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("sender did not enter credit wait")
+			}
+			if connectionClosed {
+				cancelConn()
+			} else {
+				cancelQuery()
+			}
+			var sendErr, handlerErr error
+			select {
+			case sendErr = <-sendDone:
+			case <-time.After(5 * time.Second):
+				t.Fatal("credit waiter survived cancellation")
+			}
+			select {
+			case handlerErr = <-handlerDone:
+			case <-time.After(5 * time.Second):
+				t.Fatal("handler survived cancellation")
+			}
+			require.Error(t, sendErr)
+			require.Error(t, wireError)
+			if connectionClosed {
+				require.True(t, moerr.IsMoErrCode(wireError, moerr.ErrStreamClosed))
+				select {
+				case <-proc.Ctx.Done():
+				default:
+					t.Fatal("connection cancellation did not cancel the owning query")
+				}
+				cause := context.Cause(proc.Ctx)
+				require.Error(t, cause)
+				require.True(t, moerr.IsMoErrCode(cause, moerr.ErrStreamClosed))
+			} else {
+				require.ErrorIs(t, handlerErr, context.Canceled)
+				require.ErrorIs(t, sendErr, context.Canceled)
+			}
+			require.False(t, info.ReceiverStopped(), "external cancellation is not a certified retirement")
+			_, registered := pipelineStreamLifecycles.Load(pipelineStreamLifecycleKey{session: session, id: id})
+			require.False(t, registered, "handler must release the global credit/lifecycle owner")
+			// The source owns terminal publication; these are the registry cleanup
+			// operations used by RemoteReceiverRegistration.Cleanup. Its dedicated
+			// tests cover the owning handle and pooled-operator reset separately.
+			cause := context.Cause(proc.Ctx)
+			terminal.Finish(cause)
+			for range 2 {
+				server.CloseRemoteReceivers([]uuid.UUID{uid}, notify)
+				server.RemoveUuidsOwned([]uuid.UUID{uid}, notify)
+				terminal.Finish(nil)
+			}
+			require.ErrorIs(t, terminal.Err(), cause)
+			require.ErrorIs(t, context.Cause(proc.Ctx), cause)
+			_, _, registered = server.GetProcByUuid(uid, false)
+			require.False(t, registered)
+			require.NoError(t, handlePipelineBatchAck(&pipeline.Message{Id: id, BatchAckSequence: 1}, session))
+		})
+	}
+
+}
+
+func TestMessageReceiverSendBatchOldProtocolDropsStringSourceOnly(t *testing.T) {
+	runtime := rt.ServiceRuntime("")
+	original, hadOriginal := runtime.GetGlobalVariables(rt.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadOriginal {
+			runtime.SetGlobalVariables(rt.MOProtocolVersion, original)
+		} else {
+			runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion11)
+
+	mp := mpool.MustNewZero()
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("literal"), false, mp))
+	require.NoError(t, bat.Vecs[0].SetStringSource(types.StringSourceLiteral))
+	bat.SetRowCount(1)
+	defer bat.Clean(mp)
+
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	var sent *pipeline.Message
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, message any) error {
+			sent = message.(*pipeline.Message)
+			return nil
+		})
+	receiver := &messageReceiverOnServer{
+		messageCtx:      context.Background(),
+		connectionCtx:   context.Background(),
+		messageId:       405,
+		clientSession:   session,
+		messageAcquirer: func() morpc.Message { return &pipeline.Message{} },
+		maxMessageSize:  1 << 20,
+	}
+	require.NoError(t, receiver.sendBatch(bat))
+	require.NotNil(t, sent)
+	decoded := batch.NewOffHeapEmpty()
+	defer decoded.Clean(mp)
+	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(sent.Data, mp))
+	require.False(t, decoded.Vecs[0].HasStringSourceMetadata())
+}
+
+func TestMessageReceiverSendBatchPreservesMetadataAndRejectsOldProtocol(t *testing.T) {
+	runtime := rt.ServiceRuntime("")
+	original, hadOriginal := runtime.GetGlobalVariables(rt.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadOriginal {
+			runtime.SetGlobalVariables(rt.MOProtocolVersion, original)
+		} else {
+			runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	mp := mpool.MustNewZero()
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("raw"), false, mp))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("text"), false, mp))
+	require.NoError(t, bat.Vecs[0].SetRuntimeStringDomainsWithMP([]types.RuntimeStringDomain{
+		types.RuntimeStringBinary, types.RuntimeStringText,
+	}, mp))
+	require.NoError(t, bat.Vecs[0].SetPrepareParamKindsWithMP([]vector.PrepareParamKind{
+		vector.PrepareParamInteger, vector.PrepareParamNone,
+	}, mp))
+	bat.SetRowCount(2)
+	defer bat.Clean(mp)
+
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	receiver := &messageReceiverOnServer{
+		messageCtx:      context.Background(),
+		connectionCtx:   context.Background(),
+		messageId:       404,
+		clientSession:   session,
+		messageAcquirer: func() morpc.Message { return &pipeline.Message{} },
+		maxMessageSize:  1 << 20,
+	}
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion17)
+	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion18")
+
+	var sent *pipeline.Message
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, message any) error {
+			sent = message.(*pipeline.Message)
+			return nil
+		})
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion22)
+	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion23")
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion23)
+	require.NoError(t, receiver.sendBatch(bat))
+	require.NotNil(t, sent)
+	decoded := batch.NewOffHeapEmpty()
+	defer decoded.Clean(mp)
+	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(sent.Data, mp))
+	require.True(t, decoded.Vecs[0].GetIsBinaryStringAt(0))
+	require.False(t, decoded.Vecs[0].GetIsBinaryStringAt(1))
+	require.Equal(t, types.RuntimeStringText, decoded.Vecs[0].GetRuntimeStringDomainAt(1))
+	require.Equal(t, vector.PrepareParamInteger, decoded.Vecs[0].GetPrepareParamKindAt(0))
+
+	require.NoError(t, bat.Vecs[0].SetStringSourcesWithMP([]types.StringSource{
+		types.StringSourceCOMStmt, types.StringSourceSQLPrepare,
+	}, mp))
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, message any) error {
+			sent = message.(*pipeline.Message)
+			return nil
+		})
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion36)
+	require.NoError(t, receiver.sendBatch(bat))
+	decodedWithoutSources := batch.NewOffHeapEmpty()
+	defer decodedWithoutSources.Clean(mp)
+	require.NoError(t, decodedWithoutSources.UnmarshalBinaryWithPrepareParamKinds(sent.Data, mp))
+	require.False(t, decodedWithoutSources.Vecs[0].HasStringSourceMetadata())
+
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, message any) error {
+			sent = message.(*pipeline.Message)
+			return nil
+		})
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion37)
+	require.NoError(t, receiver.sendBatch(bat))
+	decodedWithSources := batch.NewOffHeapEmpty()
+	defer decodedWithSources.Clean(mp)
+	require.NoError(t, decodedWithSources.UnmarshalBinaryWithPrepareParamKinds(sent.Data, mp))
+	require.Equal(t, types.StringSourceCOMStmt, decodedWithSources.Vecs[0].GetStringSourceAt(0))
+	require.Equal(t, types.StringSourceSQLPrepare, decodedWithSources.Vecs[0].GetStringSourceAt(1))
+}
+
+func TestMessageReceiverSendBatchPreservesGrouping(t *testing.T) {
+	runtime := rt.ServiceRuntime("")
+	original, _ := runtime.GetGlobalVariables(rt.MOProtocolVersion)
+	t.Cleanup(func() { runtime.SetGlobalVariables(rt.MOProtocolVersion, original) })
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	bat := batch.NewWithSize(1)
+	t.Cleanup(func() { bat.Clean(mp) })
+	bat.Vecs[0] = vector.NewRollupConst(types.T_int32.ToType(), 2, mp)
+	bat.SetRowCount(2)
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	receiver := &messageReceiverOnServer{
+		messageCtx: context.Background(), connectionCtx: context.Background(),
+		clientSession: session, messageAcquirer: func() morpc.Message { return &pipeline.Message{} },
+		maxMessageSize: 1 << 20,
+	}
+	for _, version := range []any{nil, "unknown", int64(86)} {
+		runtime.SetGlobalVariables(rt.MOProtocolVersion, version)
+		require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion87")
+	}
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, message any) error {
+			decoded, err := decodeBatch(mp, message.(*pipeline.Message).Data)
+			require.NoError(t, err)
+			defer decoded.Clean(mp)
+			require.Equal(t, 2, decoded.Vecs[0].GetGrouping().Count())
+			return nil
+		})
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, int64(87))
+	require.NoError(t, receiver.sendBatch(bat))
+}
+
+func TestMessageReceiverSendFragmentedBatchRollsBackCreditOnWriteFailure(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	wantErr := errors.New("write fragment")
+	flow := newPipelineBatchFlow(2, 1024)
+	bat := batch.NewWithSize(0)
+	data, err := bat.MarshalBinary()
+	require.NoError(t, err)
+	require.Greater(t, len(data), 1)
+	writes := 0
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, message any) error {
+			writes++
+			msg := message.(*pipeline.Message)
+			require.Equal(t, uint64(1), msg.GetBatchSequence())
+			if writes == 2 {
+				return wantErr
+			}
+			return nil
+		}).Times(2)
+
+	receiver := &messageReceiverOnServer{
+		messageCtx:      context.Background(),
+		connectionCtx:   context.Background(),
+		messageId:       402,
+		clientSession:   session,
+		messageAcquirer: func() morpc.Message { return &pipeline.Message{} },
+		maxMessageSize:  len(data) - 1,
+		streamLifecycle: &pipelineStreamLifecycle{batchFlow: flow},
+	}
+	err = receiver.sendBatch(bat)
+	require.ErrorIs(t, err, wantErr)
+	require.Equal(t, 2, writes)
+	flow.mu.Lock()
+	require.Empty(t, flow.pending)
+	require.Zero(t, flow.bytes)
+	flow.mu.Unlock()
+}
+
+func TestMessageReceiverSendFragmentedBatchKeepsCreditUntilAck(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	flow := newPipelineBatchFlow(2, 1024)
+	bat := batch.NewWithSize(0)
+	data, err := bat.MarshalBinary()
+	require.NoError(t, err)
+	require.Greater(t, len(data), 1)
+	writes := 0
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, message any) error {
+			writes++
+			msg := message.(*pipeline.Message)
+			require.Equal(t, uint64(1), msg.GetBatchSequence())
+			return nil
+		}).Times(2)
+
+	receiver := &messageReceiverOnServer{
+		messageCtx:      context.Background(),
+		connectionCtx:   context.Background(),
+		messageId:       403,
+		clientSession:   session,
+		messageAcquirer: func() morpc.Message { return &pipeline.Message{} },
+		maxMessageSize:  len(data) - 1,
+		streamLifecycle: &pipelineStreamLifecycle{batchFlow: flow},
+	}
+	require.NoError(t, receiver.sendBatch(bat))
+	require.Equal(t, 2, writes)
+	flow.mu.Lock()
+	require.Len(t, flow.pending, 1)
+	flow.mu.Unlock()
+	require.NoError(t, flow.acknowledge(1))
+}
+
+func TestLiveReceiverStopRejectsConnectionAndMessageCancellation(t *testing.T) {
+	for _, closedConnection := range []bool{false, true} {
+		messageCtx, cancelMessage := context.WithCancel(context.Background())
+		connectionCtx, cancelConnection := context.WithCancel(context.Background())
+		flow := newPipelineBatchFlow(1, 1024)
+		r := &messageReceiverOnServer{messageCtx: messageCtx, connectionCtx: connectionCtx,
+			streamLifecycle: &pipelineStreamLifecycle{batchFlow: flow}}
+		require.False(t, r.hasLiveReceiverStop())
+		flow.stop(context.Canceled)
+		require.True(t, r.hasLiveReceiverStop())
+		if closedConnection {
+			cancelConnection()
+		} else {
+			cancelMessage()
+		}
+		require.False(t, r.hasLiveReceiverStop())
+		cancelMessage()
+		cancelConnection()
+	}
+	flow := newPipelineBatchFlow(1, 1024)
+	flow.abort(moerr.NewInternalErrorNoCtx("first substantive error"))
+	flow.stop(context.Canceled)
+	r := &messageReceiverOnServer{messageCtx: context.Background(), connectionCtx: context.Background(),
+		streamLifecycle: &pipelineStreamLifecycle{batchFlow: flow}}
+	require.False(t, r.hasLiveReceiverStop(), "a later stop must not certify a previously failed flow")
 }

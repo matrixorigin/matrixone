@@ -147,6 +147,10 @@ func (r *runtime) GetGlobalVariables(name string) (any, bool) {
 	return r.global.variables.Load(name)
 }
 
+func (r *runtime) CompareAndDeleteGlobalVariables(name string, old any) bool {
+	return r.global.variables.CompareAndDelete(name, old)
+}
+
 // DefaultRuntime used to test
 func DefaultRuntime() Runtime {
 	return DefaultRuntimeWithLevel(zap.InfoLevel)

@@ -25,11 +25,7 @@ var (
 	defaultColDefs = []*plan.ColDef{
 		{
 			Name: "col",
-			Typ: plan.Type{
-				Id:          int32(types.T_varchar),
-				NotNullable: false,
-				Width:       types.MaxVarcharLen,
-			},
+			Typ:  makeGeneratedPlan2Type(types.T_varchar, types.MaxVarcharLen, 0, false),
 		},
 		{
 			Name: "seq",
@@ -41,19 +37,11 @@ var (
 		},
 		{
 			Name: "key",
-			Typ: plan.Type{
-				Id:          int32(types.T_varchar),
-				NotNullable: false,
-				Width:       types.MaxVarcharLen,
-			},
+			Typ:  makeGeneratedPlan2Type(types.T_varchar, types.MaxVarcharLen, 0, false),
 		},
 		{
 			Name: "path",
-			Typ: plan.Type{
-				Id:          int32(types.T_varchar),
-				NotNullable: false,
-				Width:       types.MaxVarcharLen,
-			},
+			Typ:  makeGeneratedPlan2Type(types.T_varchar, types.MaxVarcharLen, 0, false),
 		},
 		{
 			Name: "index",
@@ -81,6 +69,24 @@ var (
 )
 
 func (builder *QueryBuilder) buildUnnest(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
+	// SQL EXECUTE transports untyped markers as TEXT. Give each marker the
+	// table function's argument domain before the executor is constructed.
+	// Explicit casts and typed JSON arguments retain their declared type.
+	boundExprs := append([]*plan.Expr(nil), exprs...)
+	for i, target := range []types.T{types.T_json, types.T_varchar, types.T_bool} {
+		if i >= len(boundExprs) {
+			break
+		}
+		if boundExprs[i].GetP() == nil {
+			continue
+		}
+		targetType := target.ToType()
+		casted, err := appendExplicitCastBeforeExpr(builder.GetContext(), boundExprs[i], makePlan2Type(&targetType))
+		if err != nil {
+			return 0, err
+		}
+		boundExprs[i] = casted
+	}
 	colDefs := DeepCopyColDefList(defaultColDefs)
 	colName := findColName(tbl.Func)
 	node := &plan.Node{
@@ -97,7 +103,7 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.TableFunction, ctx *BindConte
 		},
 		BindingTags:     []int32{builder.genNewBindTag()},
 		Children:        children,
-		TblFuncExprList: exprs,
+		TblFuncExprList: boundExprs,
 	}
 	return builder.appendNode(node, ctx), nil
 }

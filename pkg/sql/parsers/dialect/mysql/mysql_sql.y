@@ -33,7 +33,7 @@ func sqlTaskNodeString(node tree.NodeFormatter) string {
 }
 
 // makeSelectStarFromTable builds the `SELECT * FROM tbl` clause used to desugar
-// the MySQL `REPLACE ... TABLE tbl` source form.
+// MySQL TABLE query terms and their REPLACE source form.
 func makeSelectStarFromTable(tbl tree.TableExpr) *tree.SelectClause {
     return &tree.SelectClause{
         Exprs: tree.SelectExprs{tree.SelectExpr{Expr: tree.StarExpr()}},
@@ -67,6 +67,26 @@ func sqlTaskInt64(v any) int64 {
         return int64(value)
     default:
         panic(fmt.Sprintf("unexpected integral type %T", v))
+    }
+}
+
+func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.OrderBy, frame *tree.FrameClause) *tree.WindowSpec {
+    hasFrame := frame != nil
+    if frame == nil {
+        frame = &tree.FrameClause{Type: tree.Range}
+        frame.Start = &tree.FrameBound{Type: tree.Preceding, UnBounded: true}
+        if orderBy == nil {
+            frame.End = &tree.FrameBound{Type: tree.Following, UnBounded: true}
+        } else {
+            frame.End = &tree.FrameBound{Type: tree.CurrentRow}
+        }
+    }
+    return &tree.WindowSpec{
+        RefName: refName,
+        PartitionBy: partitionBy,
+        OrderBy: orderBy,
+        Frame: frame,
+        HasFrame: hasFrame,
     }
 }
 %}
@@ -110,8 +130,22 @@ func sqlTaskInt64(v any) int64 {
     attributeReference *tree.AttributeReference
     loadParam *tree.ExternParam
     tailParam *tree.TailParameter
-    connectorOption *tree.ConnectorOption
-    connectorOptions []*tree.ConnectorOption
+    icebergOption *tree.IcebergOption
+    icebergOptions tree.IcebergOptions
+    icebergTableParam *tree.IcebergTableParam
+    icebergRefSpec *tree.IcebergRefSpec
+    mongodbOption *tree.MongoDBOption
+    mongodbOptions tree.MongoDBOptions
+    mongodbTableParam *tree.MongoDBTableParam
+    datastreamOption *tree.DataStreamOption
+    datastreamOptions tree.DataStreamOptions
+    datastreamTableParam *tree.DataStreamTableParam
+    kafkaTableParam *tree.KafkaTableParam
+    kafkaTableOptions tree.KafkaTableOptions
+    kafkaTableOption *tree.KafkaTableOption
+    foreignTableOption tree.ForeignTableOption
+    foreignTableOptions tree.ForeignTableOptions
+    foreignTableParam *tree.ForeignTableParam
 
     functionName *tree.FunctionName
     funcArg tree.FunctionArg
@@ -138,6 +172,7 @@ func sqlTaskInt64(v any) int64 {
     unionTypeRecord *tree.UnionTypeRecord
     parenTableExpr *tree.ParenTableExpr
     identifierList tree.IdentifierList
+    insertColumns tree.InsertColumns
     joinCond tree.JoinCond
     selectLockInfo *tree.SelectLockInfo
 
@@ -167,7 +202,16 @@ func sqlTaskInt64(v any) int64 {
     selectOption uint64
 
     insert *tree.Insert
+    multiInsertTarget *tree.MultiInsertTarget
+    multiInsertTargets []*tree.MultiInsertTarget
+    multiInsertWhen *tree.MultiInsertWhen
+    multiInsertWhens []*tree.MultiInsertWhen
+    insertPartition *tree.InsertPartitionClause
+    partitionValues tree.PartitionValues
     replace *tree.Replace
+    merge *tree.Merge
+    mergeClause *tree.MergeClause
+    mergeClauses tree.MergeClauses
     createOption tree.CreateOption
     createOptions []tree.CreateOption
     indexType tree.IndexType
@@ -197,6 +241,8 @@ func sqlTaskInt64(v any) int64 {
     clusterByOption *tree.ClusterByOption
     partitionBy *tree.PartitionBy
     windowSpec *tree.WindowSpec
+    windowDefinition *tree.WindowDefinition
+    windowDefinitions tree.WindowDefinitions
     frameClause *tree.FrameClause
     frameBound *tree.FrameBound
     frameType tree.FrameType
@@ -229,7 +275,7 @@ func sqlTaskInt64(v any) int64 {
     ifNotExists bool
     defaultOptional bool
     sourceOptional bool
-    connectorOptional bool
+
     fullOpt bool
     boolVal bool
     int64Val int64
@@ -249,6 +295,7 @@ func sqlTaskInt64(v any) int64 {
     properties []tree.Property
     property tree.Property
     exportParm *tree.ExportParam
+    selectInto *tree.SelectInto
 
     explainOptions []tree.OptionElem
     explainOption tree.OptionElem
@@ -333,10 +380,14 @@ func sqlTaskInt64(v any) int64 {
 %nonassoc LOWER_THAN_COMMA
 %nonassoc LOWER_THAN_WITH
 %nonassoc WITH
-%token <str> SELECT INSERT UPDATE DELETE FROM WHERE GROUP HAVING BY LIMIT OFFSET FOR OF CONNECT MANAGE GRANTS OWNERSHIP REFERENCE
+%token <str> SELECT INSERT UPDATE DELETE FROM WHERE GROUP HAVING BY LIMIT
+%nonassoc <str> OFFSET
+%token <str> FOR OF CONNECT MANAGE GRANTS OWNERSHIP REFERENCE
 %nonassoc LOWER_THAN_SET
 %nonassoc <str> SET
-%token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT LOCK KEYS NULLS FIRST LAST AFTER
+%token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC
+%nonassoc <str> INTO
+%token <str> DUPLICATE DEFAULT LOCK KEYS NULLS FIRST LAST AFTER OVERWRITE
 %token <str> INSTANT INPLACE COPY DISABLE ENABLE UNDEFINED MERGE TEMPTABLE DEFINER INVOKER SQL SECURITY CASCADED
 %token <str> VALUES
 %token <str> NEXT VALUE SHARE MODE
@@ -345,6 +396,7 @@ func sqlTaskInt64(v any) int64 {
 %nonassoc LOWER_THAN_ON
 %nonassoc <str> ON USING
 %left <str> SUBQUERY_AS_EXPR
+%nonassoc LOWER_THAN_LPAREN
 %right <str> '('
 %left <str> ')'
 %nonassoc LOWER_THAN_STRING
@@ -370,7 +422,9 @@ func sqlTaskInt64(v any) int64 {
 %left <str> '*' '/' DIV '%' MOD
 %left <str> '^'
 %left PIPE_CONCAT
-%right <str> '~' UNARY
+// HIGH_NOT shares the unary precedence used by the `!` production. The lexer
+// emits it only when HIGH_NOT_PRECEDENCE is active.
+%right <str> '~' UNARY HIGH_NOT
 %nonassoc LOWER_THAN_COLLATE
 %left <str> COLLATE
 %left TYPECAST
@@ -394,9 +448,13 @@ func sqlTaskInt64(v any) int64 {
 %token <str> BIT TINYINT SMALLINT MEDIUMINT INT INTEGER BIGINT INTNUM
 %token <str> REAL DOUBLE FLOAT_TYPE DECIMAL NUMERIC DECIMAL_VALUE PRECISION
 %token <str> TIME TIMESTAMP DATETIME YEAR
-%token <str> CHAR VARCHAR BOOL CHARACTER VARBINARY NCHAR
+%token <str> CHAR
+%nonassoc <str> VARCHAR
+%token <str> BOOL CHARACTER
+%nonassoc <str> VARBINARY
+%token <str> NCHAR LONG
 %token <str> TEXT TINYTEXT MEDIUMTEXT LONGTEXT DATALINK
-%token <str> BLOB TINYBLOB MEDIUMBLOB LONGBLOB JSON ENUM UUID VECF32 VECF64
+%token <str> BLOB TINYBLOB MEDIUMBLOB LONGBLOB JSON ENUM UUID VECF32 VECF64 VECBF16 VECF16 VECINT8 VECUINT8
 %token <str> GEOMETRY POINT LINESTRING POLYGON GEOMETRYCOLLECTION MULTIPOINT MULTILINESTRING MULTIPOLYGON
 %token <str> GEOMETRY32 GEOGRAPHY GEOGRAPHY32 POINT32 LINESTRING32 POLYGON32 GEOMETRYCOLLECTION32 MULTIPOINT32 MULTILINESTRING32 MULTIPOLYGON32
 %token <str> INT1 INT2 INT3 INT4 INT8 S3OPTION STAGEOPTION
@@ -415,7 +473,8 @@ func sqlTaskInt64(v any) int64 {
 %token <str> MAX_ROWS MIN_ROWS PACK_KEYS ROW_FORMAT STATS_AUTO_RECALC STATS_PERSISTENT STATS_SAMPLE_PAGES
 %token <str> DYNAMIC COMPRESSED REDUNDANT COMPACT FIXED COLUMN_FORMAT AUTO_RANDOM ENGINE_ATTRIBUTE SECONDARY_ENGINE_ATTRIBUTE INSERT_METHOD
 %token <str> RESTRICT CASCADE ACTION PARTIAL SIMPLE CHECK ENFORCED
-%token <str> RANGE LIST ALGORITHM LINEAR PARTITIONS SUBPARTITION SUBPARTITIONS CLUSTER
+%nonassoc <str> RANGE
+%token <str> LIST ALGORITHM LINEAR PARTITIONS SUBPARTITION SUBPARTITIONS CLUSTER
 %token <str> TYPE ANY SOME EXTERNAL LOCALFILE URL
 %token <str> PREPARE DEALLOCATE RESET
 %token <str> EXTENSION
@@ -432,8 +491,8 @@ func sqlTaskInt64(v any) int64 {
 %token <str> PROPERTIES
 
 // Secondary Index
-%token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER HNSW CAGRA IVFPQ
-%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE INTERMEDIATE_GRAPH_DEGREE GRAPH_DEGREE QUANTIZATION BITS_PER_CODE DISTRIBUTION_MODE ITOPK_SIZE INCLUDE KMEANS_TRAIN_PERCENT KMEANS_MAX_ITERATION MAX_INDEX_CAPACITY
+%token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER HNSW CAGRA IVFPQ BM25
+%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE INTERMEDIATE_GRAPH_DEGREE GRAPH_DEGREE QUANTIZATION BITS_PER_CODE DISTRIBUTION_MODE ITOPK_SIZE INCLUDE KMEANS_TRAIN_PERCENT KMEANS_MAX_ITERATION MAX_INDEX_CAPACITY MAX_POSTINGS_CAPACITY QUANTIZER_TRAIN_LIMIT FULLTEXT2 POSITION_FREE FULLSCAN
 
 // Alter
 %token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATIBILITY_MODE UNIQUE_CHECK_ON_AUTOINCR
@@ -495,8 +554,7 @@ func sqlTaskInt64(v any) int64 {
 // With
 %token <str> RECURSIVE CONFIG DRAINER
 
-// Source
-%token <str> SOURCE STREAM HEADERS CONNECTOR CONNECTORS DAEMON PAUSE CANCEL RESUME SCHEDULE TIMEZONE TIMEOUT
+%token <str> DAEMON PAUSE CANCEL RESUME SCHEDULE TIMEZONE TIMEOUT
 %nonassoc <str> TASK
 
 // Match
@@ -534,6 +592,9 @@ func sqlTaskInt64(v any) int64 {
 // Do
 %token <str> DO
 
+// Perform
+%token <str> PERFORM
+
 // Declare
 %token <str> DECLARE
 
@@ -544,7 +605,7 @@ func sqlTaskInt64(v any) int64 {
 %token <str> CALL
 
 // Time window
-%token <str> PREV SLIDING FILL
+%token <str> PREV SLIDING FILL GAPFILL
 
 // sp_begin_sym
 %token <str> SPBEGIN
@@ -568,38 +629,51 @@ func sqlTaskInt64(v any) int64 {
 // CDC
 %token <str> CDC
 
+// Iceberg
+%token <str> ICEBERG CATALOG CATALOGS NAMESPACE NAMESPACES REF FOR_ICEBERG
+%token <str> MONGODB MONGODB_PATH MONGODB_CONVERT CONNECTIONS
+%token <str> DATASTREAM ESQL KAFKA
+
 // ROLLUP
 %token <str> GROUPING SETS CUBE ROLLUP 
 
 // Logservice
 %token <str> LOGSERVICE REPLICAS STORES SETTINGS
 
+// Native table object transfer
+%token <str> DUMP METADATA
+
 %type <statement> stmt block_stmt block_type_stmt normal_stmt
 %type <statements> stmt_list stmt_list_return
-%type <statement> create_stmt insert_stmt insert_no_with_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt alter_sequence_stmt upgrade_stmt
+%type <statement> create_stmt insert_stmt insert_no_with_stmt delete_stmt merge_stmt drop_stmt alter_stmt truncate_table_stmt alter_sequence_stmt upgrade_stmt
 %type <statement> delete_without_using_stmt delete_with_using_stmt
-%type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt drop_view_stmt drop_connector_stmt drop_function_stmt drop_procedure_stmt drop_sequence_stmt
+%type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt drop_view_stmt drop_function_stmt drop_procedure_stmt drop_sequence_stmt drop_iceberg_catalog_stmt drop_mongodb_connection_stmt
 %type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
 %type <statement> create_account_stmt create_user_stmt create_role_stmt
-%type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt create_procedure_stmt create_sequence_stmt
-%type <statement> create_source_stmt create_connector_stmt pause_daemon_task_stmt cancel_daemon_task_stmt resume_daemon_task_stmt create_sql_task_stmt drop_sql_task_stmt alter_sql_task_stmt show_sql_tasks_stmt show_sql_task_runs_stmt
-%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt show_roles_stmt show_stages_stmt show_snapshots_stmt show_upgrade_stmt show_rules_on_role_stmt
+%type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt create_procedure_stmt create_sequence_stmt create_iceberg_catalog_stmt create_mongodb_connection_stmt
+%type <statement> pause_daemon_task_stmt cancel_daemon_task_stmt resume_daemon_task_stmt create_sql_task_stmt drop_sql_task_stmt alter_sql_task_stmt show_sql_tasks_stmt show_sql_task_runs_stmt
+%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt show_roles_stmt show_stages_stmt show_snapshots_stmt show_upgrade_stmt show_rules_on_role_stmt show_iceberg_stmt show_mongodb_connections_stmt
 %type <statement> show_tables_stmt show_sequences_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_procedure_status_stmt show_function_status_stmt show_node_list_stmt show_locks_stmt
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt show_table_size_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
-%type <statement> show_servers_stmt show_connectors_stmt show_logservice_replicas_stmt show_logservice_stores_stmt show_logservice_settings_stmt
-%type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt alter_role_stmt rename_stmt
+%type <statement> show_servers_stmt show_logservice_replicas_stmt show_logservice_stores_stmt show_logservice_settings_stmt
+%type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt alter_role_stmt rename_stmt alter_iceberg_catalog_stmt alter_mongodb_connection_stmt
+%type <merge> merge_no_with_stmt
+%type <mergeClauses> merge_when_list
+%type <mergeClause> merge_when_clause
+%type <expr> merge_search_condition_opt
+%type <str> matched_keyword
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt savepoint_stmt release_savepoint_stmt rollback_to_savepoint_stmt
-%type <statement> explain_stmt explainable_stmt
+%type <statement> explain_stmt explain_plan_stmt explainable_stmt
 %type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt set_transaction_stmt set_connection_id_stmt set_logservice_non_voting_replica_num
 %type <statement> lock_stmt lock_table_stmt unlock_table_stmt
 %type <statement> revoke_stmt grant_stmt
-%type <statement> load_data_stmt
+%type <statement> load_data_stmt load_table_stmt dump_table_stmt
 %type <statement> analyze_stmt check_table_stmt show_profile_stmt
 %type <statement> prepare_stmt prepareable_stmt deallocate_stmt execute_stmt reset_stmt
 %type <statement> replace_stmt
-%type <statement> do_stmt
+%type <statement> do_stmt perform_stmt
 %type <statement> declare_stmt
 %type <statement> values_stmt
 %type <statement> call_stmt
@@ -614,7 +688,7 @@ func sqlTaskInt64(v any) int64 {
 %type <statement> create_cdc_stmt show_cdc_stmt pause_cdc_stmt drop_cdc_stmt resume_cdc_stmt restart_cdc_stmt
 %type <rowsExprs> row_constructor_list grouping_sets 
 %type <exprs>  row_constructor
-%type <exportParm> export_data_param_opt
+%type <selectInto> select_into_param_opt
 %type <loadParam> load_param_opt load_param_opt_2
 %type <tailParam> tail_param_opt
 %type <str> json_type_opt restore_snapshot_name restore_to_account_name_opt
@@ -637,7 +711,8 @@ func sqlTaskInt64(v any) int64 {
 %type <statement> create_snapshot_stmt drop_snapshot_stmt
 %type <statement> create_pitr_stmt drop_pitr_stmt show_pitr_stmt alter_pitr_stmt restore_pitr_stmt show_recovery_window_stmt
 %type <str> urlparams
-%type <str> comment_opt view_list_opt view_opt security_opt view_tail check_type
+%type <str> comment_opt view_list_opt view_opt security_opt view_tail check_type ctas_conflict_opt ctas_conflict_required
+%type <str> iceberg_namespace_value iceberg_option_key iceberg_option_value iceberg_ref_name
 %type <subscriptionOption> subscription_opt
 %type <accountsSetOption> alter_publication_accounts_opt create_publication_accounts
 %type <str> alter_publication_db_name_opt
@@ -648,30 +723,36 @@ func sqlTaskInt64(v any) int64 {
 %type <pickKeys> pick_keys_clause
 %type <diffOutputOpt> diff_output_opt
 
-%type <select> select_stmt select_no_parens replace_table_source
-%type <selectStatement> simple_select select_with_parens simple_select_clause
-%type <selectExprs> select_expression_list
+%type <select> select_stmt ctas_select_stmt select_no_parens perform_select table_stmt
+%type <selectStatement> simple_select select_with_parens simple_select_clause table_query_subquery table_query_expr table_query_term table_query_primary values_query_subquery values_query_expr values_query_term values_query_primary
+%type <selectExprs> select_expression_list returning_clause_opt
 %type <selectExpr> select_expression
 %type <selectOptions> select_options_opt select_option_list
 %type <selectOption> select_option_opt
 %type <tableExprs> table_name_wild_list
 %type <joinTableExpr>  join_table
+%type <expr> tolerance_opt
 %type <applyTableExpr> apply_table
 %type <tableExpr> into_table_name table_function table_factor table_reference escaped_table_reference table_references
 %type <direction> asc_desc_opt
 %type <nullsPosition> nulls_first_last_opt
 %type <order> order
-%type <orderBy> order_list order_by_clause order_by_opt
-%type <limit> limit_opt limit_clause
+%type <orderBy> order_list order_by_clause order_by_opt within_group_opt
+%type <limit> limit_opt limit_clause query_limit_opt offset_clause
 %type <rankOption> rank_opt
-%type <str> insert_column optype_opt
+%type <unresolvedName> insert_target_column
+%type <str> optype_opt
 %type <str> optype
-%type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list accounts_list restore_db_scope restore_table_scope diff_columns_opt
-%type <joinCond> join_condition join_condition_opt on_expression_opt
+%type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list accounts_list restore_db_scope restore_table_scope diff_columns_opt merge_insert_column_list
+%type <insertColumns> insert_column_list
+%type <insertPartition> insert_partition_clause_opt
+%type <partitionValues> insert_partition_value_list
+%type <joinCond> join_condition join_condition_opt
 %type <selectLockInfo> select_lock_opt
 %type <upgrade_target> target
 %type <analyzeTableEntries> analyze_table_list
 %type <analyzeTableEntry> analyze_table_entry
+%type <boolVal> analyze_fullscan_opt
 %type <checkTableOption> check_table_option_opt
 %type <int64Val> for_query_opt
 
@@ -690,6 +771,7 @@ func sqlTaskInt64(v any) int64 {
 %type <procArgType> proc_arg_in_out_type
 
 %type <atTimeStamp> table_snapshot_opt
+%type <icebergRefSpec> iceberg_ref_opt
 %type <tableDefs> table_elem_list_opt table_elem_list
 %type <tableDef> table_elem constaint_def constraint_elem index_def table_elem_2
 %type <tableName> table_name table_name_opt_wild
@@ -700,18 +782,36 @@ func sqlTaskInt64(v any) int64 {
 %type <str> integer_opt spatial_type_name
 %type <columnAttribute> column_attribute_elem keys
 %type <columnAttributes> column_attribute_list column_attribute_list_opt
-%type <tableOptions> table_option_list_opt table_option_list source_option_list_opt source_option_list
+%type <tableOptions> table_option_list_opt table_option_list
+%type <icebergTableParam> iceberg_table_param
+%type <icebergOptions> iceberg_option_list_opt iceberg_option_list
+%type <icebergOption> iceberg_option
+%type <mongodbTableParam> mongodb_table_param
+%type <mongodbOptions> mongodb_option_list_opt mongodb_option_list
+%type <mongodbOption> mongodb_option
+%type <str> mongodb_option_key mongodb_option_value
+%type <datastreamTableParam> datastream_table_param
+%type <datastreamOptions> datastream_option_list_opt datastream_option_list
+%type <datastreamOption> datastream_option
+%type <str> datastream_option_key datastream_option_value
+%type <foreignTableParam> foreign_table_param
+%type <kafkaTableParam> kafka_table_param
+%type <kafkaTableOptions> kafka_option_list_opt kafka_option_list
+%type <kafkaTableOption> kafka_option
+%type <foreignTableOptions> foreign_option_list_opt foreign_option_list
+%type <foreignTableOption> foreign_option
+%type <str> foreign_engine_kind
 %type <str> charset_name storage_opt collate_name column_format storage_media algorithm_type able_type space_type lock_type with_type rename_type algorithm_type_2 load_charset
 %type <rowFormatType> row_format_options
 %type <int64Val> field_length_opt max_file_size_opt
 %type <matchType> match match_opt
 %type <fullTextSearchType> fulltext_search_opt
-%type <str> search_pattern
+%type <expr> search_pattern
 %type <referenceOptionType> ref_opt on_delete on_update
 %type <referenceOnRecord> on_delete_update_opt
 %type <attributeReference> references_def
 %type <alterTableOptions> alter_option_list
-%type <alterTableOption> alter_option alter_table_drop alter_table_alter alter_table_rename
+%type <alterTableOption> alter_option alter_table_drop alter_table_alter alter_table_rename alter_table_reindex
 %type <renameTableOptions> rename_table_list
 %type <renameTableOption> rename_option
 %type <alterPartitionOption> alter_partition_option partition_option
@@ -722,16 +822,14 @@ func sqlTaskInt64(v any) int64 {
 %type <boolVal> auto_update
 %type <PartitionNames> AllOrPartitionNameList PartitionNameList
 
-%type <tableOption> table_option source_option
-%type <connectorOption> connector_option
-%type <connectorOptions> connector_option_list
+%type <tableOption> table_option
 %type <from> from_clause from_opt
 %type <where> where_expression_opt having_opt
 %type <groupBy> group_by_opt
 %type <aliasedTableExpr> aliased_table_name
 %type <unionTypeRecord> union_op
 %type <parenTableExpr> table_subquery
-%type <str> inner_join straight_join outer_join natural_join apply_type dedup_join
+%type <str> inner_join straight_join outer_join natural_join apply_type dedup_join asof_join
 %type <funcType> func_type_opt
 %type <funcExpr> function_call_generic
 %type <funcExpr> function_call_keyword
@@ -792,7 +890,7 @@ func sqlTaskInt64(v any) int64 {
 //%type <resourceOptions> conn_option_list conn_options
 //%type <resourceOption> conn_option
 %type <updateExpr> update_value
-%type <updateExprs> update_list on_duplicate_key_update_opt
+%type <updateExprs> update_list on_duplicate_key_update on_duplicate_key_update_opt
 %type <completionType> completion_type
 %type <str> password_opt
 %type <boolVal> grant_option_opt enforce enforce_opt generated_column_type_opt
@@ -813,7 +911,10 @@ func sqlTaskInt64(v any) int64 {
 %type <partitionOption> partition_by_opt
 %type <clusterByOption> cluster_by_opt
 %type <partitionBy> partition_method sub_partition_method sub_partition_opt
-%type <windowSpec> window_spec_opt window_spec
+%type <windowSpec> window_spec_opt window_spec window_spec_body
+%type <windowDefinition> window_definition
+%type <windowDefinitions> window_clause_opt window_definition_list
+%type <cstr> window_name_opt
 %type <frameClause> window_frame_clause window_frame_clause_opt
 %type <frameBound> frame_bound frame_bound_start
 %type <frameType> frame_type
@@ -824,6 +925,7 @@ func sqlTaskInt64(v any) int64 {
 %type <partitions> partition_list_opt partition_list
 %type <values> values_opt
 %type <tableOptions> partition_option_list
+%type <tableOption> partition_table_option
 %type <subPartition> sub_partition
 %type <subPartitions> sub_partition_list sub_partition_list_opt
 %type <subquery> subquery
@@ -833,22 +935,27 @@ func sqlTaskInt64(v any) int64 {
 %type <startWithOption> start_with_opt
 %type <cycleOption> alter_cycle_opt
 %type <alterTypeOption> alter_as_datatype_opt
-
 %type <lengthOpt> length_opt length_option_opt length timestamp_option_opt
 %type <lengthScaleOpt> float_length_opt decimal_length_opt
-%type <unsignedOpt> unsigned_opt header_opt parallel_opt strict_opt
+%type <unsignedOpt> unsigned_opt header_opt
+%type <int64Val> parallel_opt
+%type <unsignedOpt> strict_opt
 %type <zeroFillOpt> zero_fill_opt
 %type <boolVal> global_scope exists_opt temporary_opt cycle_opt drop_table_opt rollup_opt
 %type <item> pwd_expire clear_pwd_opt
 %type <str> name_confict separator_opt kmeans_opt
 %type <insert> insert_data
+%type <statement> multi_insert_stmt
+%type <multiInsertTarget> multi_insert_into
+%type <multiInsertTargets> multi_insert_into_list multi_insert_else_opt
+%type <multiInsertWhen> multi_insert_when
+%type <multiInsertWhens> multi_insert_when_list
 %type <replace> replace_data
 %type <rowsExprs> values_list
 %type <str> name_datetime_scale braces_opt name_braces
 %type <str> std_dev_pop extended_opt
 %type <expr> expr_or_default
 %type <exprs> data_values data_opt row_value
-
 %type <boolVal> local_opt
 %type <duplicateKey> duplicate_opt
 %type <fields> load_fields field_item export_fields
@@ -859,7 +966,7 @@ func sqlTaskInt64(v any) int64 {
 %type <uint64Val> export_splitsize_opt
 %type <int64Val> ignore_lines
 %type <varExpr> user_variable variable system_variable
-%type <varExprs> variable_list
+%type <varExprs> variable_list user_variable_list
 %type <loadColumn> columns_or_variable
 %type <loadColumns> columns_or_variable_list columns_or_variable_list_opt
 %type <updateExpr> load_set_item
@@ -914,7 +1021,26 @@ func sqlTaskInt64(v any) int64 {
 %token <str> BACKUP FILESYSTEM PARALLELISM RESTORE
 %type <statementOption> statement_id_opt
 %token <str> QUERY_RESULT
+%left <str> RETURNING
 %token <str> ARRAY
+// Ordered-set aggregate syntax. Keep these tokens at the end of the token
+// declarations so adding them does not renumber the existing generated lexer
+// constants and downstream serialized plans.
+%token <str> WITHIN PERCENTILE_CONT PERCENTILE_DISC
+%token <str> ASOF TOLERANCE
+// ASOF has higher precedence than the empty table alias. In the only
+// ambiguous legacy form, `t asof JOIN u`, this shifts ASOF into table_alias.
+// Once an alias or table-factor suffix is complete, ASOF can only be reduced
+// as the native join modifier.
+%left ASOF
+// Named window clause. Keep new tokens at the end of the token declarations
+// so regenerating the parser does not renumber every existing token.
+%token <str> WINDOW
+%nonassoc WINDOW_NAME_EMPTY
+// Explicit MySQL default for value-window null treatment.
+%token <str> RESPECT
+%left <str> MEMBER
+%token <str> AUTO_ID_CACHE
 %type<tableLock> table_lock_elem
 %type<tableLocks> table_lock_list
 %type<tableLockType> table_lock_type
@@ -927,6 +1053,7 @@ func sqlTaskInt64(v any) int64 {
 %type <timeWindow> time_window_opt time_window
 %type <timeInterval> interval
 %type <timeSliding> sliding_opt
+%type <boolVal> gapfill_opt
 %type <timeFill> fill_opt
 %type <fillMode> fill_mode
 
@@ -1015,10 +1142,12 @@ normal_stmt:
     create_stmt
 |   upgrade_stmt
 |   call_stmt
+|   dump_table_stmt
 |   mo_dump_stmt
 |   insert_stmt
 |   replace_stmt
 |   delete_stmt
+|   merge_stmt
 |   drop_stmt
 |   remove_stage_files_stmt
 |   truncate_table_stmt
@@ -1039,8 +1168,10 @@ normal_stmt:
 |   revoke_stmt
 |   grant_stmt
 |   load_data_stmt
+|   load_table_stmt
 |   load_extension_stmt
 |   do_stmt
+|   perform_stmt
 |   values_stmt
 |   select_stmt
     {
@@ -1850,8 +1981,24 @@ load_data_stmt:
             Table: $8,
         }
         $$.(*tree.Load).Param.Tail = $9
-        $$.(*tree.Load).Param.Parallel = $10
+		setLoadParallelOption($$.(*tree.Load).Param, $10)
         $$.(*tree.Load).Param.Strict = $11
+    }
+
+dump_table_stmt:
+    DUMP TABLE table_name TO STRING
+    {
+        $$ = &tree.DumpTable{Table: $3, Path: $5}
+    }
+|   DUMP TABLE table_name TO STRING METADATA ONLY
+    {
+        $$ = &tree.DumpTable{Table: $3, Path: $5, MetadataOnly: true}
+    }
+
+load_table_stmt:
+    LOAD TABLE table_name FROM STRING
+    {
+        $$ = &tree.LoadTable{Table: $3, Path: $5}
     }
 
 load_extension_stmt:
@@ -1899,15 +2046,15 @@ load_set_item:
 
 parallel_opt:
     {
-        $$ = false
+		$$ = -1
     }
 |   PARALLEL STRING
     {
         str := strings.ToLower($2)
         if str == "true" {
-            $$ = true
+			$$ = 1
         } else if str == "false" {
-            $$ = false
+			$$ = 0
         } else {
             yylex.Error("error strict flag")
             goto ret1
@@ -1996,6 +2143,16 @@ variable_list:
         $$ = []*tree.VarExpr{$1}
     }
 |   variable_list ',' variable
+    {
+        $$ = append($1, $3)
+    }
+
+user_variable_list:
+    user_variable
+    {
+        $$ = []*tree.VarExpr{$1}
+    }
+|   user_variable_list ',' user_variable
     {
         $$ = append($1, $3)
     }
@@ -2653,21 +2810,21 @@ set_transaction_stmt:
     SET TRANSACTION transaction_characteristic_list
     {
 	$$ = &tree.SetTransaction{
-	    Global: false,
+	    Scope: tree.TransactionScopeNext,
 	    CharacterList: $3,
 	    }
     }
 |   SET GLOBAL TRANSACTION transaction_characteristic_list
     {
         $$ = &tree.SetTransaction{
-            Global: true,
+            Scope: tree.TransactionScopeGlobal,
             CharacterList: $4,
             }
     }
 |   SET SESSION TRANSACTION transaction_characteristic_list
     {
         $$ = &tree.SetTransaction{
-            Global: false,
+            Scope: tree.TransactionScopeSession,
             CharacterList: $4,
             }
     }
@@ -2848,6 +3005,7 @@ var_assignment:
     {
         $$ = &tree.VarAssignmentExpr{
             System: true,
+            TxnScope: tree.TransactionScopeSession,
             Name: $1,
             Value: $3,
         }
@@ -2857,6 +3015,7 @@ var_assignment:
         $$ = &tree.VarAssignmentExpr{
             System: true,
             Global: true,
+            TxnScope: tree.TransactionScopeGlobal,
             Name: $2,
             Value: $4,
         }
@@ -2866,6 +3025,7 @@ var_assignment:
         $$ = &tree.VarAssignmentExpr{
             System: true,
             Global: true,
+            TxnScope: tree.TransactionScopeGlobal,
             Name: $2,
             Value: $4,
         }
@@ -2874,6 +3034,7 @@ var_assignment:
     {
         $$ = &tree.VarAssignmentExpr{
             System: true,
+            TxnScope: tree.TransactionScopeSession,
             Name: $2,
             Value: $4,
         }
@@ -2882,6 +3043,7 @@ var_assignment:
     {
         $$ = &tree.VarAssignmentExpr{
             System: true,
+            TxnScope: tree.TransactionScopeSession,
             Name: $2,
             Value: $4,
         }
@@ -2913,17 +3075,22 @@ var_assignment:
     {
         v := strings.ToLower($1)
 		var isGlobal bool
+		txnScope := tree.TransactionScopeNext
 		if strings.HasPrefix(v, "global.") {
 			isGlobal = true
+			txnScope = tree.TransactionScopeGlobal
 			v = strings.TrimPrefix(v, "global.")
 		} else if strings.HasPrefix(v, "session.") {
+			txnScope = tree.TransactionScopeSession
 			v = strings.TrimPrefix(v, "session.")
 		} else if strings.HasPrefix(v, "local.") {
+			txnScope = tree.TransactionScopeSession
 			v = strings.TrimPrefix(v, "local.")
 		} 
         $$ = &tree.VarAssignmentExpr{
             System: true,
             Global: isGlobal,
+			TxnScope: txnScope,
             Name: v,
             Value: $3,
         }
@@ -2931,6 +3098,7 @@ var_assignment:
 |   NAMES charset_name
     {
         $$ = &tree.VarAssignmentExpr{
+			SetNames: true,
             Name: strings.ToLower($1),
             Value: tree.NewNumVal($2, $2, false, tree.P_char),
         }
@@ -2938,6 +3106,7 @@ var_assignment:
 |   NAMES charset_name COLLATE DEFAULT
     {
         $$ = &tree.VarAssignmentExpr{
+			SetNames: true,
             Name: strings.ToLower($1),
             Value: tree.NewNumVal($2, $2, false, tree.P_char),
         }
@@ -2945,6 +3114,7 @@ var_assignment:
 |   NAMES charset_name COLLATE name_string
     {
         $$ = &tree.VarAssignmentExpr{
+			SetNames: true,
             Name: strings.ToLower($1),
             Value: tree.NewNumVal($2, $2, false, tree.P_char),
             Reserved: tree.NewNumVal($4, $4, false, tree.P_char),
@@ -2953,6 +3123,7 @@ var_assignment:
 |   NAMES DEFAULT
     {
         $$ = &tree.VarAssignmentExpr{
+			SetNames: true,
             Name: strings.ToLower($1),
             Value: &tree.DefaultVal{},
         }
@@ -3203,36 +3374,52 @@ use_stmt:
 
 update_stmt:
     update_no_with_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($1); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        $$ = $1
+    }
 |    with_clause update_no_with_stmt
     {
         $2.(*tree.Update).With = $1
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($2); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         $$ = $2
     }
 
 update_no_with_stmt:
-    UPDATE priority_opt ignore_opt table_reference SET update_list where_expression_opt order_by_opt limit_opt
+    UPDATE priority_opt ignore_opt table_reference SET update_list where_expression_opt order_by_opt limit_opt returning_clause_opt
     {
         // Single-table syntax
         $$ = &tree.Update{
             Tables: tree.TableExprs{$4},
             Exprs: $6,
+            Priority: $2,
             Ignore: $3 != "",
             Where: $7,
             OrderBy: $8,
             Limit: $9,
+            Returning: $10,
         }
     }
-|    UPDATE priority_opt ignore_opt table_references SET update_list where_expression_opt
+|    UPDATE priority_opt ignore_opt table_references SET update_list where_expression_opt returning_clause_opt
     {
         // Multiple-table syntax
         $$ = &tree.Update{
             Tables: tree.TableExprs{$4},
             Exprs: $6,
+            Priority: $2,
             Ignore: $3 != "",
             Where: $7,
+            Returning: $8,
+            MultiTable: true,
         }
     }
-|    UPDATE priority_opt ignore_opt table_reference SET update_list FROM table_references where_expression_opt
+|    UPDATE priority_opt ignore_opt table_reference SET update_list FROM table_references where_expression_opt returning_clause_opt
     {
         // PostgreSQL-style UPDATE target SET ... FROM source_tables WHERE ...
         // The target table is kept in Tables; FROM-clause sources are stored
@@ -3241,9 +3428,11 @@ update_no_with_stmt:
         $$ = &tree.Update{
             Tables: tree.TableExprs{$4},
             Exprs:  $6,
+            Priority: $2,
             Ignore: $3 != "",
             From:   &tree.From{Tables: tree.TableExprs{$8}},
             Where:  $9,
+            Returning: $10,
         }
     }
 
@@ -3316,12 +3505,20 @@ unlock_table_stmt:
 prepareable_stmt:
     create_stmt
 |   alter_stmt
+|   explain_plan_stmt
 |   insert_stmt
 |   replace_stmt
 |   delete_stmt
 |   drop_stmt
 |   show_stmt
 |   update_stmt
+|   SET var_assignment_list
+    {
+		$$ = &tree.SetVar{Assignments: $2}
+    }
+|   perform_stmt
+|   analyze_stmt
+|   branch_stmt
 |   select_stmt
     {
         $$ = $1
@@ -3397,12 +3594,26 @@ explain_stmt:
     {
         $$ = tree.NewExplainFor($4, uint64($7.(int64)))
     }
-|   explain_sym explainable_stmt
+|   explain_plan_stmt
     {
+        $$ = $1
+    }
+
+explain_plan_stmt:
+    explain_sym explainable_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($2); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         $$ = tree.NewExplainStmt($2, "text")
     }
 |   explain_sym VERBOSE explainable_stmt
     {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($3); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         options := []tree.OptionElem{
             tree.MakeOptionElem(tree.VerboseOption, "NULL"),
         }
@@ -3410,6 +3621,10 @@ explain_stmt:
     }
 |   explain_sym ANALYZE explainable_stmt
     {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($3); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         options := []tree.OptionElem{
             tree.MakeOptionElem(tree.AnalyzeOption, "NULL"),
         }
@@ -3417,6 +3632,10 @@ explain_stmt:
     }
 |   explain_sym ANALYZE VERBOSE explainable_stmt
     {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($4); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         options := []tree.OptionElem{
             tree.MakeOptionElem(tree.AnalyzeOption, "NULL"),
             tree.MakeOptionElem(tree.VerboseOption, "NULL"),
@@ -3425,6 +3644,10 @@ explain_stmt:
     }
 |   explain_sym PHYPLAN explainable_stmt
     {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($3); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         options := []tree.OptionElem{
             tree.MakeOptionElem(tree.PhyPlanOption, "NULL"),
         }
@@ -3432,6 +3655,10 @@ explain_stmt:
     }
 |   explain_sym PHYPLAN VERBOSE explainable_stmt
     {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($4); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
          options := []tree.OptionElem{
             tree.MakeOptionElem(tree.PhyPlanOption, "NULL"),
             tree.MakeOptionElem(tree.VerboseOption, "NULL"),
@@ -3440,6 +3667,10 @@ explain_stmt:
     }
 |   explain_sym PHYPLAN ANALYZE explainable_stmt
     {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($4); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         options := []tree.OptionElem{
             tree.MakeOptionElem(tree.PhyPlanOption, "NULL"),
             tree.MakeOptionElem(tree.AnalyzeOption, "NULL"),
@@ -3448,6 +3679,10 @@ explain_stmt:
     }
 |   explain_sym '(' utility_option_list ')' explainable_stmt
     {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($5); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         $$ = tree.MakeExplainStmt($5, $3)
     }
 |   explain_sym FORCE execute_stmt
@@ -3534,9 +3769,21 @@ utility_option_arg:
 |   STRING                      { $$ = $1 }
 
 analyze_stmt:
-    ANALYZE TABLE analyze_table_list
+    ANALYZE TABLE analyze_table_list analyze_fullscan_opt
     {
-        $$ = tree.NewAnalyzeStmt($3)
+        stmt := tree.NewAnalyzeStmt($3)
+        stmt.FullScan = $4
+        $$ = stmt
+    }
+
+analyze_fullscan_opt:
+    /* empty */
+    {
+        $$ = false
+    }
+|   FULLSCAN
+    {
+        $$ = true
     }
 
 analyze_table_list:
@@ -3646,8 +3893,58 @@ alter_stmt:
 |   alter_pitr_stmt
 |   alter_role_stmt
 |   alter_sql_task_stmt
+|   alter_iceberg_catalog_stmt
+|   alter_mongodb_connection_stmt
 |   rename_stmt
 // |    alter_ddl_stmt
+
+alter_iceberg_catalog_stmt:
+    ALTER ICEBERG CATALOG ident SET iceberg_option_list
+    {
+        $$ = &tree.AlterIcebergCatalog{
+            Name: tree.Identifier($4.Compare()),
+            Options: $6,
+        }
+    }
+|   ALTER ICEBERG CATALOG ident SET '(' iceberg_option_list ')'
+    {
+        $$ = &tree.AlterIcebergCatalog{
+            Name: tree.Identifier($4.Compare()),
+            Options: $7,
+        }
+    }
+
+alter_mongodb_connection_stmt:
+    ALTER MONGODB CONNECTION ident SET mongodb_option_list
+    {
+        $$ = &tree.AlterMongoDBConnection{
+            Name: tree.Identifier($4.Compare()),
+            Action: tree.AlterMongoDBConnectionSet,
+            Options: $6,
+        }
+    }
+|   ALTER MONGODB CONNECTION ident SET '(' mongodb_option_list ')'
+    {
+        $$ = &tree.AlterMongoDBConnection{
+            Name: tree.Identifier($4.Compare()),
+            Action: tree.AlterMongoDBConnectionSet,
+            Options: $7,
+        }
+    }
+|   ALTER MONGODB CONNECTION ident ENABLE
+    {
+        $$ = &tree.AlterMongoDBConnection{
+            Name: tree.Identifier($4.Compare()),
+            Action: tree.AlterMongoDBConnectionEnable,
+        }
+    }
+|   ALTER MONGODB CONNECTION ident DISABLE
+    {
+        $$ = &tree.AlterMongoDBConnection{
+            Name: tree.Identifier($4.Compare()),
+            Action: tree.AlterMongoDBConnectionDisable,
+        }
+    }
 
 alter_sequence_stmt:
     ALTER SEQUENCE exists_opt table_name alter_as_datatype_opt increment_by_opt min_value_opt max_value_opt start_with_opt alter_cycle_opt
@@ -3697,6 +3994,13 @@ alter_table_stmt:
         alterTable.PartitionOption = $4
         $$ = alterTable
     }
+|   ALTER TABLE table_name alter_table_reindex
+    {
+        var table = $3
+        alterTable := tree.NewAlterTable(table)
+        alterTable.Options = []tree.AlterTableOption{$4}
+        $$ = alterTable
+    }
 
 rename_stmt:
     RENAME TABLE rename_table_list
@@ -3724,6 +4028,73 @@ rename_option:
         opt := tree.AlterTableOption($3)
         alterTable.Options = []tree.AlterTableOption{opt}
         $$ = alterTable
+    }
+
+alter_table_reindex:
+    ALTER REINDEX ident IVFFLAT index_option_list
+    {
+        var io *tree.IndexOption = nil
+        if $5 == nil {
+            io = tree.NewIndexOption()
+            io.IType = tree.INDEX_TYPE_IVFFLAT
+        } else {
+            io = $5
+            io.IType = tree.INDEX_TYPE_IVFFLAT
+        }
+        var name = tree.Identifier($3.Compare())
+        $$ = tree.NewAlterOptionAlterReIndex(name, io)
+    }
+|   ALTER REINDEX ident HNSW index_option_list
+    {
+        var io *tree.IndexOption = nil
+        if $5 == nil {
+            io = tree.NewIndexOption()
+            io.IType = tree.INDEX_TYPE_HNSW
+        } else {
+            io = $5
+            io.IType = tree.INDEX_TYPE_HNSW
+        }
+        var name = tree.Identifier($3.Compare())
+        $$ = tree.NewAlterOptionAlterReIndex(name, io)
+    }
+|   ALTER REINDEX ident IVFPQ index_option_list
+    {
+        var io *tree.IndexOption = nil
+        if $5 == nil {
+            io = tree.NewIndexOption()
+            io.IType = tree.INDEX_TYPE_IVFPQ
+        } else {
+            io = $5
+            io.IType = tree.INDEX_TYPE_IVFPQ
+        }
+        var name = tree.Identifier($3.Compare())
+        $$ = tree.NewAlterOptionAlterReIndex(name, io)
+    }
+|   ALTER REINDEX ident CAGRA index_option_list
+    {
+        var io *tree.IndexOption = nil
+        if $5 == nil {
+            io = tree.NewIndexOption()
+            io.IType = tree.INDEX_TYPE_CAGRA
+        } else {
+            io = $5
+            io.IType = tree.INDEX_TYPE_CAGRA
+        }
+        var name = tree.Identifier($3.Compare())
+        $$ = tree.NewAlterOptionAlterReIndex(name, io)
+    }
+|   ALTER REINDEX ident FULLTEXT2 index_option_list
+    {
+        var io *tree.IndexOption = nil
+        if $5 == nil {
+            io = tree.NewIndexOption()
+            io.IType = tree.INDEX_TYPE_FULLTEXT2
+        } else {
+            io = $5
+            io.IType = tree.INDEX_TYPE_FULLTEXT2
+        }
+        var name = tree.Identifier($3.Compare())
+        $$ = tree.NewAlterOptionAlterReIndex(name, io)
     }
 
 alter_option_list:
@@ -4199,58 +4570,6 @@ alter_table_alter:
 	io.AutoUpdate = auto_update
         $$ = tree.NewAlterOptionAlterAutoUpdate(name, io)
     }
-| REINDEX ident IVFFLAT index_option_list
-    {
-        var io *tree.IndexOption = nil
-        if $4 == nil {
-            io = tree.NewIndexOption()
-            io.IType = tree.INDEX_TYPE_IVFFLAT
-        } else {
-            io = $4
-            io.IType = tree.INDEX_TYPE_IVFFLAT
-        }
-        var name = tree.Identifier($2.Compare())
-        $$ = tree.NewAlterOptionAlterReIndex(name, io)
-    }
-| REINDEX ident HNSW index_option_list
-    {
-        var io *tree.IndexOption = nil
-        if $4 == nil {
-            io = tree.NewIndexOption()
-            io.IType = tree.INDEX_TYPE_HNSW
-        } else {
-            io = $4
-            io.IType = tree.INDEX_TYPE_HNSW
-        }
-        var name = tree.Identifier($2.Compare())
-        $$ = tree.NewAlterOptionAlterReIndex(name, io)
-    }
-| REINDEX ident IVFPQ index_option_list
-    {
-        var io *tree.IndexOption = nil
-        if $4 == nil {
-            io = tree.NewIndexOption()
-            io.IType = tree.INDEX_TYPE_IVFPQ
-        } else {
-            io = $4
-            io.IType = tree.INDEX_TYPE_IVFPQ
-        }
-        var name = tree.Identifier($2.Compare())
-        $$ = tree.NewAlterOptionAlterReIndex(name, io)
-    }
-| REINDEX ident CAGRA index_option_list
-    {
-        var io *tree.IndexOption = nil
-        if $4 == nil {
-            io = tree.NewIndexOption()
-            io.IType = tree.INDEX_TYPE_CAGRA
-        } else {
-            io = $4
-            io.IType = tree.INDEX_TYPE_CAGRA
-        }
-        var name = tree.Identifier($2.Compare())
-        $$ = tree.NewAlterOptionAlterReIndex(name, io)
-    }
 |   CHECK ident enforce
     {
         var checkType = $1
@@ -4581,7 +4900,6 @@ show_stmt:
 |   show_ccpr_subscriptions_stmt
 |   show_servers_stmt
 |   show_stages_stmt
-|   show_connectors_stmt
 |   show_snapshots_stmt
 |   show_pitr_stmt
 |   show_recovery_window_stmt
@@ -4592,6 +4910,8 @@ show_stmt:
 |   show_rules_on_role_stmt
 |   show_sql_tasks_stmt
 |   show_sql_task_runs_stmt
+|   show_iceberg_stmt
+|   show_mongodb_connections_stmt
 
 show_sql_tasks_stmt:
     SHOW TASKS
@@ -4630,6 +4950,103 @@ sql_task_runs_limit_opt:
 |   LIMIT INTEGRAL
     {
         $$ = sqlTaskInt64($2)
+    }
+
+show_iceberg_stmt:
+    SHOW ICEBERG CATALOGS like_opt where_expression_opt
+    {
+        $$ = &tree.ShowIcebergCatalogs{
+            Like: $4,
+            Where: $5,
+        }
+    }
+
+|   SHOW ICEBERG NAMESPACES FROM ident like_opt where_expression_opt
+    {
+        $$ = &tree.ShowIcebergNamespaces{
+            Catalog: tree.Identifier($5.Compare()),
+            Like: $6,
+            Where: $7,
+        }
+    }
+|   SHOW ICEBERG NAMESPACES IN CATALOG ident like_opt where_expression_opt
+    {
+        $$ = &tree.ShowIcebergNamespaces{
+            Catalog: tree.Identifier($6.Compare()),
+            Like: $7,
+            Where: $8,
+        }
+    }
+|   SHOW ICEBERG NAMESPACES like_opt where_expression_opt
+    {
+        $$ = &tree.ShowIcebergNamespaces{
+            Like: $4,
+            Where: $5,
+        }
+    }
+|   SHOW ICEBERG TABLES like_opt where_expression_opt
+    {
+        $$ = &tree.ShowIcebergTables{
+            Like: $4,
+            Where: $5,
+        }
+    }
+|   SHOW ICEBERG TABLES FROM ident like_opt where_expression_opt
+    {
+        $$ = &tree.ShowIcebergTables{
+            Catalog: tree.Identifier($5.Compare()),
+            Like: $6,
+            Where: $7,
+        }
+    }
+|   SHOW ICEBERG TABLES FROM ident '.' iceberg_namespace_value like_opt where_expression_opt
+    {
+        $$ = &tree.ShowIcebergTables{
+            Catalog: tree.Identifier($5.Compare()),
+            Namespace: $7,
+            Like: $8,
+            Where: $9,
+        }
+    }
+|   SHOW ICEBERG TABLES IN CATALOG ident like_opt where_expression_opt
+    {
+        $$ = &tree.ShowIcebergTables{
+            Catalog: tree.Identifier($6.Compare()),
+            Like: $7,
+            Where: $8,
+        }
+    }
+|   SHOW ICEBERG TABLES IN NAMESPACE iceberg_namespace_value like_opt where_expression_opt
+    {
+        $$ = &tree.ShowIcebergTables{
+            Namespace: $6,
+            Like: $7,
+            Where: $8,
+        }
+    }
+|   SHOW ICEBERG TABLES IN NAMESPACE iceberg_namespace_value IN CATALOG ident like_opt where_expression_opt
+    {
+        $$ = &tree.ShowIcebergTables{
+            Namespace: $6,
+            Catalog: tree.Identifier($9.Compare()),
+            Like: $10,
+            Where: $11,
+        }
+    }
+
+show_mongodb_connections_stmt:
+    SHOW MONGODB CONNECTIONS like_opt where_expression_opt
+    {
+        $$ = &tree.ShowMongoDBConnections{
+            Like: $4,
+            Where: $5,
+        }
+    }
+
+iceberg_namespace_value:
+    iceberg_option_value
+    {
+        $$ = $1
     }
 
 show_logservice_replicas_stmt:
@@ -4927,13 +5344,21 @@ global_scope:
 show_warnings_stmt:
     SHOW WARNINGS limit_opt
     {
-        $$ = &tree.ShowWarnings{}
+        $$ = &tree.ShowWarnings{Limit: $3}
+    }
+|   SHOW COUNT '(' '*' ')' WARNINGS
+    {
+        $$ = &tree.ShowWarnings{Count: true}
     }
 
 show_errors_stmt:
     SHOW ERRORS limit_opt
     {
-        $$ = &tree.ShowErrors{}
+        $$ = &tree.ShowErrors{Limit: $3}
+    }
+|   SHOW COUNT '(' '*' ')' ERRORS
+    {
+        $$ = &tree.ShowErrors{Count: true}
     }
 
 show_process_stmt:
@@ -5202,11 +5627,12 @@ drop_ddl_stmt:
 |   drop_ccpr_subscription_stmt
 |   drop_procedure_stmt
 |   drop_stage_stmt
-|   drop_connector_stmt
 |   drop_snapshot_stmt
 |   drop_pitr_stmt
 |   drop_cdc_stmt
 |   drop_sql_task_stmt
+|   drop_iceberg_catalog_stmt
+|   drop_mongodb_connection_stmt
 
 drop_sql_task_stmt:
     DROP TASK exists_opt ident
@@ -5214,6 +5640,24 @@ drop_sql_task_stmt:
         $$ = &tree.DropSQLTask{
             IfExists: $3,
             Name: tree.Identifier($4.Compare()),
+        }
+    }
+
+drop_iceberg_catalog_stmt:
+    DROP ICEBERG CATALOG exists_opt ident
+    {
+        $$ = &tree.DropIcebergCatalog{
+            IfExists: $4,
+            Name: tree.Identifier($5.Compare()),
+        }
+    }
+
+drop_mongodb_connection_stmt:
+    DROP MONGODB CONNECTION exists_opt ident
+    {
+        $$ = &tree.DropMongoDBConnection{
+            IfExists: $4,
+            Name: tree.Identifier($5.Compare()),
         }
     }
 
@@ -5282,29 +5726,17 @@ drop_index_stmt:
     }
 
 drop_table_stmt:
-    DROP TABLE temporary_opt exists_opt table_name_list drop_table_opt
+    DROP temporary_opt TABLE exists_opt table_name_list drop_table_opt
     {
         var ifExists = $4
         var names = $5
-        $$ = tree.NewDropTable(ifExists, names)
-    }
-|   DROP SOURCE exists_opt table_name_list
-    {
-        var ifExists = $3
-        var names = $4
-        $$ = tree.NewDropTable(ifExists, names)
-    }
-
-drop_connector_stmt:
-    DROP CONNECTOR exists_opt table_name_list
-    {
-        var ifExists = $3
-        var names = $4
-        $$ = tree.NewDropConnector(ifExists, names)
+        var stmt = tree.NewDropTable(ifExists, names)
+        stmt.Temporary = $2
+        $$ = stmt
     }
 
 drop_view_stmt:
-    DROP VIEW exists_opt table_name_list
+    DROP VIEW exists_opt table_name_list drop_table_opt
     {
         var ifExists = $3
         var names = $4
@@ -5332,11 +5764,14 @@ drop_prepare_stmt:
     }
 
 drop_function_stmt:
-    DROP FUNCTION func_name '(' func_args_list_opt ')'
+    DROP FUNCTION exists_opt func_name '(' func_args_list_opt ')'
     {
-        var name = $3
-        var args = $5
-        $$ = tree.NewDropFunction(name, args)
+        var ifExists = $3
+        var name = $4
+        var args = $6
+        var dropFunction = tree.NewDropFunction(name, args)
+        dropFunction.IfExists = ifExists
+        $$ = dropFunction
     }
 
 drop_procedure_stmt:
@@ -5355,20 +5790,42 @@ drop_procedure_stmt:
 
 delete_stmt:
     delete_without_using_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($1); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        $$ = $1
+    }
 |    delete_with_using_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($1); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        $$ = $1
+    }
 |    with_clause delete_with_using_stmt
     {
         $2.(*tree.Delete).With = $1
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($2); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         $$ = $2
     }
 |    with_clause delete_without_using_stmt
     {
         $2.(*tree.Delete).With = $1
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($2); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         $$ = $2
     }
 
 delete_without_using_stmt:
-    DELETE priority_opt quick_opt ignore_opt FROM table_name partition_clause_opt as_opt_id where_expression_opt order_by_opt limit_opt
+    DELETE priority_opt quick_opt ignore_opt FROM table_name partition_clause_opt as_opt_id where_expression_opt order_by_opt limit_opt returning_clause_opt
     {
         // Single-Table Syntax
         t := &tree.AliasedTableExpr {
@@ -5379,29 +5836,42 @@ delete_without_using_stmt:
         }
         $$ = &tree.Delete{
             Tables: tree.TableExprs{t},
+            Priority: $2,
+            Quick: $3 != "",
+            Ignore: $4 != "",
+            PartitionNames: $7,
             Where: $9,
             OrderBy: $10,
             Limit: $11,
+            Returning: $12,
         }
     }
-|    DELETE priority_opt quick_opt ignore_opt table_name_wild_list FROM table_references where_expression_opt
+|    DELETE priority_opt quick_opt ignore_opt table_name_wild_list FROM table_references where_expression_opt returning_clause_opt
     {
         // Multiple-Table Syntax
         $$ = &tree.Delete{
             Tables: $5,
+            Priority: $2,
+            Quick: $3 != "",
+            Ignore: $4 != "",
             Where: $8,
             TableRefs: tree.TableExprs{$7},
+            Returning: $9,
         }
     }
 
 delete_with_using_stmt:
-    DELETE priority_opt quick_opt ignore_opt FROM table_name_wild_list USING table_references where_expression_opt
+    DELETE priority_opt quick_opt ignore_opt FROM table_name_wild_list USING table_references where_expression_opt returning_clause_opt
     {
         // Multiple-Table Syntax
         $$ = &tree.Delete{
             Tables: $6,
+            Priority: $2,
+            Quick: $3 != "",
+            Ignore: $4 != "",
             Where: $9,
             TableRefs: tree.TableExprs{$8},
+            Returning: $10,
         }
     }
 
@@ -5437,7 +5907,7 @@ wild_opt:
     {}
 
 priority_opt:
-    {}
+    { $$ = "" }
 |    priority
 
 priority:
@@ -5446,7 +5916,7 @@ priority:
 |    DELAYED
 
 quick_opt:
-    {}
+    { $$ = "" }
 |    QUICK
 
 ignore_opt:
@@ -5467,11 +5937,19 @@ replace_priority_opt:
 |    DELAYED
 
 replace_stmt:
-    REPLACE replace_priority_opt into_table_name partition_clause_opt replace_data
+    REPLACE replace_priority_opt into_table_name partition_clause_opt replace_data returning_clause_opt
     {
         rep := $5
+        if intoErr := tree.ValidateSelectIntoNotAllowed(rep.Rows); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         rep.Table = $3
+		target := $3.(*tree.TableName)
+		rep.TargetDatabaseName = target.SchemaName
+		rep.TargetTableName = target.ObjectName
         rep.PartitionNames = $4
+        rep.Returning = $6
         $$ = rep
     }
 
@@ -5481,19 +5959,6 @@ replace_data:
         vc := tree.NewValuesClause($2)
         $$ = &tree.Replace{
             Rows: tree.NewSelect(vc, nil, nil),
-        }
-    }
-|   replace_table_source
-    {
-        $$ = &tree.Replace{
-            Rows: $1,
-        }
-    }
-|   '(' insert_column_list ')' replace_table_source
-    {
-        $$ = &tree.Replace{
-            Columns: $2,
-            Rows: $4,
         }
     }
 |   select_stmt
@@ -5506,7 +5971,8 @@ replace_data:
     {
         vc := tree.NewValuesClause($5)
         $$ = &tree.Replace{
-            Columns: $2,
+            Columns: $2.Identifiers,
+            ColumnNames: $2.Names,
             Rows: tree.NewSelect(vc, nil, nil),
         }
     }
@@ -5520,7 +5986,8 @@ replace_data:
 |   '(' insert_column_list ')' select_stmt
     {
         $$ = &tree.Replace{
-            Columns: $2,
+            Columns: $2.Identifiers,
+            ColumnNames: $2.Names,
             Rows: $4,
         }
     }
@@ -5531,51 +5998,334 @@ replace_data:
 			goto ret1
 		}
 		var identList tree.IdentifierList
+		var columnNames []*tree.UnresolvedName
 		var valueList tree.Exprs
 		for _, a := range $2 {
 			identList = append(identList, a.Column)
+			columnNames = append(columnNames, a.ColumnName)
 			valueList = append(valueList, a.Expr)
 		}
 		vc := tree.NewValuesClause([]tree.Exprs{valueList})
 		$$ = &tree.Replace{
 			Columns: identList,
+			ColumnNames: columnNames,
 			Rows: tree.NewSelect(vc, nil, nil),
 			IsSetFormat: true,
 		}
 	}
-
-replace_table_source:
-    TABLE table_name order_by_opt limit_opt
-    {
-        // MySQL treats TABLE as a query source, so ORDER BY and LIMIT belong to
-        // the SELECT wrapper produced by the TABLE-to-SELECT rewrite.
-        $$ = tree.NewSelect(makeSelectStarFromTable($2), $3, $4)
-    }
 
 insert_stmt:
     insert_no_with_stmt
 |   with_clause insert_no_with_stmt
     {
         $2.(*tree.Insert).With = $1
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($2); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        $$ = $2
+    }
+|   multi_insert_stmt
+|   with_clause multi_insert_stmt
+    {
+        $2.(*tree.MultiInsert).With = $1
         $$ = $2
     }
 
+// Snowflake-style multi-table INSERT. The source query must not start with
+// '(' unless the preceding INTO clause carries a column list, because the
+// grammar cannot tell a parenthesized subquery from an INTO column list.
+multi_insert_stmt:
+    INSERT ALL multi_insert_into_list select_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($4); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        $$ = &tree.MultiInsert{Targets: $3, Source: $4}
+    }
+|   INSERT ALL multi_insert_when_list multi_insert_else_opt select_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($5); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        $$ = &tree.MultiInsert{Whens: $3, Else: $4, Source: $5}
+    }
+|   INSERT FIRST multi_insert_when_list multi_insert_else_opt select_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($5); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        $$ = &tree.MultiInsert{First: true, Whens: $3, Else: $4, Source: $5}
+    }
+
+multi_insert_when_list:
+    multi_insert_when
+    {
+        $$ = []*tree.MultiInsertWhen{$1}
+    }
+|   multi_insert_when_list multi_insert_when
+    {
+        $$ = append($1, $2)
+    }
+
+multi_insert_when:
+    WHEN expression THEN multi_insert_into_list
+    {
+        $$ = &tree.MultiInsertWhen{Cond: $2, Targets: $4}
+    }
+
+multi_insert_else_opt:
+    {
+        $$ = nil
+    }
+|   ELSE multi_insert_into_list
+    {
+        $$ = $2
+    }
+
+multi_insert_into_list:
+    multi_insert_into
+    {
+        $$ = []*tree.MultiInsertTarget{$1}
+    }
+|   multi_insert_into_list multi_insert_into
+    {
+        $$ = append($1, $2)
+    }
+
+multi_insert_into:
+    INTO table_name %prec LOWER_THAN_LPAREN
+    {
+        $$ = &tree.MultiInsertTarget{Table: $2}
+    }
+|   INTO table_name VALUES '(' expression_list ')'
+    {
+        $$ = &tree.MultiInsertTarget{Table: $2, Values: $5}
+    }
+|   INTO table_name '(' insert_column_list ')'
+    {
+        $$ = &tree.MultiInsertTarget{Table: $2, Columns: $4.Identifiers, ColumnNames: $4.Names}
+    }
+|   INTO table_name '(' insert_column_list ')' VALUES '(' expression_list ')'
+    {
+        $$ = &tree.MultiInsertTarget{Table: $2, Columns: $4.Identifiers, ColumnNames: $4.Names, Values: $8}
+    }
+
 insert_no_with_stmt:
-    INSERT into_table_name partition_clause_opt insert_data on_duplicate_key_update_opt
+    INSERT into_table_name insert_partition_clause_opt insert_data on_duplicate_key_update_opt returning_clause_opt
     {
         ins := $4
+        if intoErr := tree.ValidateSelectIntoNotAllowed(ins.Rows); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         ins.Table = $2
-        ins.PartitionNames = $3
+		target := $2.(*tree.TableName)
+		ins.TargetDatabaseName = target.SchemaName
+		ins.TargetTableName = target.ObjectName
+        if $3 != nil {
+            ins.PartitionNames = $3.Names
+            ins.PartitionValues = $3.Values
+        }
         ins.OnDuplicateUpdate = $5
+        if len(ins.OnDuplicateUpdate) == 1 && ins.OnDuplicateUpdate[0] == nil {
+            ins.Ignore = true
+            ins.OnDuplicateUpdate = nil
+        }
+        ins.Returning = $6
         $$ = ins
     }
-|   INSERT IGNORE into_table_name partition_clause_opt insert_data
+|   INSERT OVERWRITE into_table_name insert_partition_clause_opt insert_data returning_clause_opt
     {
         ins := $5
+        if intoErr := tree.ValidateSelectIntoNotAllowed(ins.Rows); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         ins.Table = $3
-        ins.PartitionNames = $4
-        ins.OnDuplicateUpdate = []*tree.UpdateExpr{nil}
+		target := $3.(*tree.TableName)
+		ins.TargetDatabaseName = target.SchemaName
+		ins.TargetTableName = target.ObjectName
+        if $4 != nil {
+            ins.PartitionNames = $4.Names
+            ins.PartitionValues = $4.Values
+        }
+        ins.Overwrite = true
+        ins.Returning = $6
         $$ = ins
+    }
+|   INSERT IGNORE into_table_name insert_partition_clause_opt insert_data returning_clause_opt
+    {
+        ins := $5
+        if intoErr := tree.ValidateSelectIntoNotAllowed(ins.Rows); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        ins.Table = $3
+		target := $3.(*tree.TableName)
+		ins.TargetDatabaseName = target.SchemaName
+		ins.TargetTableName = target.ObjectName
+        if $4 != nil {
+            ins.PartitionNames = $4.Names
+            ins.PartitionValues = $4.Values
+        }
+        ins.Ignore = true
+        ins.OnDuplicateUpdate = nil
+        ins.Returning = $6
+        $$ = ins
+    }
+|   INSERT IGNORE into_table_name insert_partition_clause_opt insert_data on_duplicate_key_update returning_clause_opt
+    {
+        ins := $5
+        if intoErr := tree.ValidateSelectIntoNotAllowed(ins.Rows); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        ins.Table = $3
+		target := $3.(*tree.TableName)
+		ins.TargetDatabaseName = target.SchemaName
+		ins.TargetTableName = target.ObjectName
+        if $4 != nil {
+            ins.PartitionNames = $4.Names
+            ins.PartitionValues = $4.Values
+        }
+        ins.Ignore = true
+        ins.OnDuplicateUpdate = $6
+        if len(ins.OnDuplicateUpdate) == 1 && ins.OnDuplicateUpdate[0] == nil {
+            ins.OnDuplicateUpdate = nil
+        }
+        ins.Returning = $7
+        $$ = ins
+    }
+
+returning_clause_opt:
+    {
+        $$ = nil
+    }
+|   RETURNING select_expression_list
+    {
+        $$ = $2
+    }
+
+merge_stmt:
+    merge_no_with_stmt
+    {
+        $$ = $1
+    }
+|   with_clause merge_no_with_stmt
+    {
+        $2.With = $1
+        $$ = $2
+    }
+
+merge_no_with_stmt:
+    MERGE INTO table_reference USING table_reference ON expression merge_when_list
+    {
+        $$ = &tree.Merge{
+            Target: $3,
+            Source: $5,
+            On: $7,
+            Clauses: $8,
+        }
+    }
+|   MERGE INTO table_reference USING table_reference ON expression merge_when_list RETURNING select_expression_list
+    {
+        $$ = &tree.Merge{
+            Target: $3,
+            Source: $5,
+            On: $7,
+            Clauses: $8,
+            Returning: $10,
+        }
+    }
+
+merge_when_list:
+    merge_when_clause
+    {
+        $$ = tree.MergeClauses{$1}
+    }
+|   merge_when_list merge_when_clause
+    {
+        $$ = append($1, $2)
+    }
+
+merge_when_clause:
+    WHEN matched_keyword merge_search_condition_opt THEN UPDATE SET update_list
+    {
+        $$ = &tree.MergeClause{
+            Matched: true,
+            Condition: $3,
+            Action: tree.MergeActionUpdate,
+            UpdateExprs: $7,
+        }
+    }
+|   WHEN matched_keyword merge_search_condition_opt THEN DELETE
+    {
+        $$ = &tree.MergeClause{
+            Matched: true,
+            Condition: $3,
+            Action: tree.MergeActionDelete,
+        }
+    }
+|   WHEN NOT matched_keyword merge_search_condition_opt THEN INSERT '(' merge_insert_column_list ')' VALUES '(' expression_list ')'
+    {
+        $$ = &tree.MergeClause{
+            Matched: false,
+            Condition: $4,
+            Action: tree.MergeActionInsert,
+            InsertColumns: $8,
+            InsertValues: $12,
+        }
+    }
+|   WHEN HIGH_NOT matched_keyword merge_search_condition_opt THEN INSERT '(' merge_insert_column_list ')' VALUES '(' expression_list ')'
+    {
+        $$ = &tree.MergeClause{
+            Matched: false,
+            Condition: $4,
+            Action: tree.MergeActionInsert,
+            InsertColumns: $8,
+            InsertValues: $12,
+        }
+    }
+|   WHEN NOT matched_keyword merge_search_condition_opt THEN INSERT VALUES '(' expression_list ')'
+    {
+        $$ = &tree.MergeClause{
+            Matched: false,
+            Condition: $4,
+            Action: tree.MergeActionInsert,
+            InsertValues: $9,
+        }
+    }
+|   WHEN HIGH_NOT matched_keyword merge_search_condition_opt THEN INSERT VALUES '(' expression_list ')'
+    {
+        $$ = &tree.MergeClause{
+            Matched: false,
+            Condition: $4,
+            Action: tree.MergeActionInsert,
+            InsertValues: $9,
+        }
+    }
+
+matched_keyword:
+    ident
+    {
+        if !strings.EqualFold($1.Origin(), "matched") {
+            yylex.Error("expected MATCHED")
+            goto ret1
+        }
+        $$ = $1.Origin()
+    }
+
+merge_search_condition_opt:
+    {
+        $$ = nil
+    }
+|   AND expression
+    {
+        $$ = $2
     }
 
 accounts_list:
@@ -5606,7 +6356,8 @@ insert_data:
     {
         vc := tree.NewValuesClause($5)
         $$ = &tree.Insert{
-            Columns: $2,
+            Columns: $2.Identifiers,
+            ColumnNames: $2.Names,
             Rows: tree.NewSelect(vc, nil, nil),
         }
     }
@@ -5620,7 +6371,8 @@ insert_data:
 |   '(' insert_column_list ')' select_stmt
     {
         $$ = &tree.Insert{
-            Columns: $2,
+            Columns: $2.Identifiers,
+            ColumnNames: $2.Names,
             Rows: $4,
         }
     }
@@ -5630,15 +6382,18 @@ insert_data:
             yylex.Error("the set list of insert can not be empty")
             goto ret1
         }
-        var identList tree.IdentifierList
+		var identList tree.IdentifierList
+		var columnNames []*tree.UnresolvedName
         var valueList tree.Exprs
         for _, a := range $2 {
-            identList = append(identList, a.Column)
+			identList = append(identList, a.Column)
+			columnNames = append(columnNames, a.ColumnName)
             valueList = append(valueList, a.Expr)
         }
         vc := tree.NewValuesClause([]tree.Exprs{valueList})
         $$ = &tree.Insert{
-            Columns: identList,
+			Columns: identList,
+			ColumnNames: columnNames,
             Rows: tree.NewSelect(vc, nil, nil),
         }
     }
@@ -5647,16 +6402,23 @@ on_duplicate_key_update_opt:
     {
 		$$ = []*tree.UpdateExpr{}
     }
-|   ON DUPLICATE KEY UPDATE update_list
+|   on_duplicate_key_update
     {
-      	$$ = $5
+	      $$ = $1
+    }
+
+on_duplicate_key_update:
+    ON DUPLICATE KEY UPDATE update_list
+    {
+        $$ = $5
     }
 |   ON DUPLICATE KEY IGNORE
     {
-      	$$ = []*tree.UpdateExpr{nil}
+	      $$ = []*tree.UpdateExpr{nil}
     }
 
 set_value_list:
+    %prec RETURNING
     {
         $$ = nil
     }
@@ -5670,32 +6432,63 @@ set_value_list:
     }
 
 set_value:
-    insert_column '=' expr_or_default
+    insert_target_column '=' expr_or_default
     {
         $$ = &tree.Assignment{
-            Column: tree.Identifier($1),
+            Column: tree.Identifier($1.ColName()),
+            ColumnName: $1,
             Expr: $3,
         }
     }
 
 insert_column_list:
-    insert_column
+    insert_target_column
     {
-        $$ = tree.IdentifierList{tree.Identifier($1)}
+        $$ = tree.InsertColumns{
+            Identifiers: tree.IdentifierList{tree.Identifier($1.ColName())},
+            Names: []*tree.UnresolvedName{$1},
+        }
     }
-|   insert_column_list ',' insert_column
+|   insert_column_list ',' insert_target_column
     {
-        $$ = append($1, tree.Identifier($3))
+		$$ = $1
+        $$.Identifiers = append($1.Identifiers, tree.Identifier($3.ColName()))
+        $$.Names = append($1.Names, $3)
     }
 
-insert_column:
+insert_target_column:
     ident
     {
-        $$ = yylex.(*Lexer).GetDbOrTblName($1.Origin())
+        $$ = tree.NewUnresolvedName(yylex.(*Lexer).GetDbOrTblNameCStr($1.Origin()))
     }
 |   ident '.' ident
     {
-        $$ = yylex.(*Lexer).GetDbOrTblName($3.Origin())
+        tblName := yylex.(*Lexer).GetDbOrTblNameCStr($1.Origin())
+        $$ = tree.NewUnresolvedName(tblName, $3)
+    }
+|   ident '.' ident '.' ident
+    {
+        dbName := yylex.(*Lexer).GetDbOrTblNameCStr($1.Origin())
+        tblName := yylex.(*Lexer).GetDbOrTblNameCStr($3.Origin())
+        $$ = tree.NewUnresolvedName(dbName, tblName, $5)
+    }
+
+merge_insert_column_list:
+    ident
+    {
+        $$ = tree.IdentifierList{tree.Identifier($1.Compare())}
+    }
+|   ident '.' ident
+    {
+        $$ = tree.IdentifierList{tree.Identifier($3.Compare())}
+    }
+|   merge_insert_column_list ',' ident
+    {
+        $$ = append($1, tree.Identifier($3.Compare()))
+    }
+|   merge_insert_column_list ',' ident '.' ident
+    {
+        $$ = append($1, tree.Identifier($5.Compare()))
     }
 
 values_list:
@@ -5750,6 +6543,29 @@ partition_clause_opt:
         $$ = $3
     }
 
+insert_partition_clause_opt:
+    {
+        $$ = nil
+    }
+|   PARTITION '(' partition_id_list ')'
+    {
+        $$ = &tree.InsertPartitionClause{Names: $3}
+    }
+|   PARTITION '(' insert_partition_value_list ')'
+    {
+        $$ = &tree.InsertPartitionClause{Values: $3}
+    }
+
+insert_partition_value_list:
+    ident '=' expression
+    {
+        $$ = tree.PartitionValues{{Name: tree.Identifier($1.Compare()), Expr: $3}}
+    }
+|   insert_partition_value_list ',' ident '=' expression
+    {
+        $$ = append($1, tree.PartitionValue{Name: tree.Identifier($3.Compare()), Expr: $5})
+    }
+
 partition_id_list:
     ident
     {
@@ -5770,13 +6586,14 @@ into_table_name:
         $$ = $1
     }
 
-export_data_param_opt:
+select_into_param_opt:
+    %prec EMPTY
     {
-        $$ = nil
+        $$ = &tree.SelectInto{}
     }
 |   INTO OUTFILE STRING export_format_opt export_splitsize_opt export_fields export_lines_opt header_opt max_file_size_opt force_quote_opt
     {
-        $$ = &tree.ExportParam{
+        $$ = &tree.SelectInto{Export: &tree.ExportParam{
             Outfile:      true,
             FilePath:     $3,
             ExportFormat: $4,
@@ -5786,7 +6603,11 @@ export_data_param_opt:
             Header:       $8,
             MaxFileSize:  uint64($9)*1024,
             ForceQuote:   $10,
-        }
+        }}
+    }
+|   INTO user_variable_list
+    {
+        $$ = &tree.SelectInto{UserVars: $2}
     }
 
 export_format_opt:
@@ -5947,37 +6768,246 @@ force_quote_list:
         $$ = append($1, $3.Compare())
     }
 
+// MySQL permits TABLE as a top-level query statement. Keep it separate from
+// simple_select so TABLE query terms can be composed with UNION without
+// introducing reduce/reduce conflicts.
+table_stmt:
+    table_query_expr order_by_opt query_limit_opt
+    {
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($1)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        $$ = &tree.Select{Select: $1, OrderBy: $2, Limit: $3, Ep: tree.SelectIntoExportOr($1, nil), IntoVars: intoVars, DeprecatedInto: deprecatedInto}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+    }
+
 select_stmt:
     select_no_parens
+|   table_stmt
+    {
+        $$ = $1
+    }
 |   select_with_parens
     {
-        $$ = &tree.Select{Select: $1}
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($1)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        $$ = &tree.Select{Select: $1, IntoVars: intoVars, DeprecatedInto: deprecatedInto}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+    }
+
+// CTAS and CREATE VIEW accept VALUES as a query expression without requiring
+// an extra pair of parentheses. Keep this entry point scoped to statements
+// that accept a SELECT source; top-level VALUES continues to use
+// ValuesStatement, and parenthesized query expressions keep their existing
+// AST shape.
+ctas_select_stmt:
+    select_stmt
+    {
+        $$ = $1
+    }
+|   VALUES row_constructor_list order_by_opt query_limit_opt
+    {
+        $$ = tree.NewSelect(&tree.ValuesClause{Rows: $2, RowWord: true}, $3, $4)
     }
 
 select_no_parens:
-    simple_select time_window_opt order_by_opt limit_opt rank_opt export_data_param_opt select_lock_opt
+    simple_select time_window_opt order_by_opt query_limit_opt rank_opt select_into_param_opt select_lock_opt
     {
-        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: $6, SelectLockInfo: $7}
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($1)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        if tree.SelectIntoActionConflict($1, $6) {
+            yylex.Error(tree.MisplacedIntoClauseMessage)
+            return 1
+        }
+        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: tree.SelectIntoExportOr($1, $6.Export), IntoVars: append(intoVars, $6.UserVars...), DeprecatedInto: deprecatedInto, SelectLockInfo: $7}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
     }
-|   select_with_parens time_window_opt order_by_clause export_data_param_opt
+|   select_with_parens time_window_opt order_by_clause select_into_param_opt
     {
-        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Ep: $4}
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($1)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        if tree.SelectIntoActionConflict($1, $4) {
+            yylex.Error(tree.MisplacedIntoClauseMessage)
+            return 1
+        }
+        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Ep: tree.SelectIntoExportOr($1, $4.Export), IntoVars: append(intoVars, $4.UserVars...), DeprecatedInto: deprecatedInto}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
     }
-|   select_with_parens time_window_opt order_by_opt limit_clause rank_opt export_data_param_opt
+|   select_with_parens time_window_opt order_by_opt limit_clause rank_opt select_into_param_opt
     {
-        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: $6}
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($1)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        if tree.SelectIntoActionConflict($1, $6) {
+            yylex.Error(tree.MisplacedIntoClauseMessage)
+            return 1
+        }
+        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: tree.SelectIntoExportOr($1, $6.Export), IntoVars: append(intoVars, $6.UserVars...), DeprecatedInto: deprecatedInto}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
     }
-|   with_clause simple_select time_window_opt order_by_opt limit_opt rank_opt export_data_param_opt select_lock_opt
+|   select_with_parens offset_clause rank_opt select_into_param_opt
     {
-        $$ = &tree.Select{Select: $2, TimeWindow: $3, OrderBy: $4, Limit: $5, RankOption: $6, Ep: $7, SelectLockInfo:$8, With: $1}
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($1)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        if tree.SelectIntoActionConflict($1, $4) {
+            yylex.Error(tree.MisplacedIntoClauseMessage)
+            return 1
+        }
+        $$ = &tree.Select{Select: $1, Limit: $2, RankOption: $3, Ep: tree.SelectIntoExportOr($1, $4.Export), IntoVars: append(intoVars, $4.UserVars...), DeprecatedInto: deprecatedInto}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
     }
-|   with_clause select_with_parens order_by_clause export_data_param_opt
+|   select_with_parens time_window offset_clause rank_opt select_into_param_opt
     {
-        $$ = &tree.Select{Select: $2, OrderBy: $3, Ep: $4, With: $1}
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($1)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        if tree.SelectIntoActionConflict($1, $5) {
+            yylex.Error(tree.MisplacedIntoClauseMessage)
+            return 1
+        }
+        $$ = &tree.Select{Select: $1, TimeWindow: $2, Limit: $3, RankOption: $4, Ep: tree.SelectIntoExportOr($1, $5.Export), IntoVars: append(intoVars, $5.UserVars...), DeprecatedInto: deprecatedInto}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
     }
-|   with_clause select_with_parens order_by_opt limit_clause rank_opt export_data_param_opt
+|   select_with_parens time_window_opt order_by_clause offset_clause rank_opt select_into_param_opt
     {
-        $$ = &tree.Select{Select: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: $6, With: $1}
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($1)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        if tree.SelectIntoActionConflict($1, $6) {
+            yylex.Error(tree.MisplacedIntoClauseMessage)
+            return 1
+        }
+        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: tree.SelectIntoExportOr($1, $6.Export), IntoVars: append(intoVars, $6.UserVars...), DeprecatedInto: deprecatedInto}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+    }
+|   with_clause simple_select time_window_opt order_by_opt query_limit_opt rank_opt select_into_param_opt select_lock_opt
+    {
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($2)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        if tree.SelectIntoActionConflict($2, $7) {
+            yylex.Error(tree.MisplacedIntoClauseMessage)
+            return 1
+        }
+        $$ = &tree.Select{Select: $2, TimeWindow: $3, OrderBy: $4, Limit: $5, RankOption: $6, Ep: tree.SelectIntoExportOr($2, $7.Export), IntoVars: append(intoVars, $7.UserVars...), DeprecatedInto: deprecatedInto, SelectLockInfo:$8, With: $1}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+    }
+|   with_clause select_with_parens order_by_clause select_into_param_opt
+    {
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($2)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        if tree.SelectIntoActionConflict($2, $4) {
+            yylex.Error(tree.MisplacedIntoClauseMessage)
+            return 1
+        }
+        $$ = &tree.Select{Select: $2, OrderBy: $3, Ep: tree.SelectIntoExportOr($2, $4.Export), IntoVars: append(intoVars, $4.UserVars...), DeprecatedInto: deprecatedInto, With: $1}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+    }
+|   with_clause select_with_parens order_by_opt limit_clause rank_opt select_into_param_opt
+    {
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($2)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        if tree.SelectIntoActionConflict($2, $6) {
+            yylex.Error(tree.MisplacedIntoClauseMessage)
+            return 1
+        }
+        $$ = &tree.Select{Select: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: tree.SelectIntoExportOr($2, $6.Export), IntoVars: append(intoVars, $6.UserVars...), DeprecatedInto: deprecatedInto, With: $1}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+    }
+|   with_clause select_with_parens offset_clause rank_opt select_into_param_opt
+    {
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($2)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        if tree.SelectIntoActionConflict($2, $5) {
+            yylex.Error(tree.MisplacedIntoClauseMessage)
+            return 1
+        }
+        $$ = &tree.Select{Select: $2, Limit: $3, RankOption: $4, Ep: tree.SelectIntoExportOr($2, $5.Export), IntoVars: append(intoVars, $5.UserVars...), DeprecatedInto: deprecatedInto, With: $1}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+    }
+|   with_clause select_with_parens order_by_clause offset_clause rank_opt select_into_param_opt
+    {
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($2)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        if tree.SelectIntoActionConflict($2, $6) {
+            yylex.Error(tree.MisplacedIntoClauseMessage)
+            return 1
+        }
+        $$ = &tree.Select{Select: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: tree.SelectIntoExportOr($2, $6.Export), IntoVars: append(intoVars, $6.UserVars...), DeprecatedInto: deprecatedInto, With: $1}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
     }
 
 time_window_opt:
@@ -5990,12 +7020,13 @@ time_window_opt:
 	}
 
 time_window:
-	interval sliding_opt fill_opt
+	interval sliding_opt gapfill_opt fill_opt
 	{
 		$$ = &tree.TimeWindow{
 			Interval: $1,
 			Sliding: $2,
-			Fill: $3,
+			GapFill: $3,
+			Fill: $4,
 		}
 	}
 
@@ -6031,6 +7062,15 @@ sliding_opt:
         	Val: tree.NewNumVal(v, str, false, tree.P_int64),
         	Unit: $5,
         }
+	}
+
+gapfill_opt:
+	{
+		$$ = false
+	}
+|	GAPFILL '(' PARTITION ')'
+	{
+		$$ = true
 	}
 
 fill_opt:
@@ -6126,6 +7166,19 @@ limit_opt:
         $$ = $1
     }
 
+query_limit_opt:
+    {
+        $$ = nil
+    }
+|   limit_clause
+    {
+        $$ = $1
+    }
+|   offset_clause
+    {
+        $$ = $1
+    }
+
 limit_clause:
     LIMIT expression
     {
@@ -6138,6 +7191,12 @@ limit_clause:
 |   LIMIT expression OFFSET expression
     {
         $$ = &tree.Limit{Offset: $4, Count: $2}
+    }
+
+offset_clause:
+    OFFSET expression
+    {
+        $$ = &tree.Limit{Offset: $2}
     }
 
 rank_opt:
@@ -6188,6 +7247,15 @@ order_by_opt:
         $$ = $1
     }
 
+within_group_opt:
+    {
+        $$ = nil
+    }
+|   WITHIN GROUP '(' order_by_clause ')'
+    {
+        $$ = $4
+    }
+
 order_by_clause:
     ORDER BY order_list
     {
@@ -6229,11 +7297,11 @@ nulls_first_last_opt:
     }
 |   NULLS FIRST
     {
-        $$ = tree.NullsFirst
+        yylex.Error("NULLS FIRST is not supported in MySQL syntax"); return 1
     }
 |   NULLS LAST
     {
-        $$ = tree.NullsLast
+        yylex.Error("NULLS LAST is not supported in MySQL syntax"); return 1
     }
 
 select_lock_opt:
@@ -6246,6 +7314,18 @@ select_lock_opt:
             LockType:tree.SelectLockForUpdate,
         }
     }
+|   FOR SHARE
+    {
+        $$ = &tree.SelectLockInfo{
+            LockType:tree.SelectLockForShare,
+        }
+    }
+|   LOCK IN SHARE MODE
+    {
+        $$ = &tree.SelectLockInfo{
+            LockType:tree.SelectLockForShare,
+        }
+    }
 
 select_with_parens:
     '(' select_no_parens ')'
@@ -6256,19 +7336,14 @@ select_with_parens:
     {
         $$ = &tree.ParenSelect{Select: &tree.Select{Select: $2}}
     }
-|   '(' values_stmt ')'
+|   values_query_subquery
     {
-        valuesStmt := $2.(*tree.ValuesStatement);
-        $$ = &tree.ParenSelect{Select: &tree.Select {
-            Select: &tree.ValuesClause {
-                Rows: valuesStmt.Rows,
-                RowWord: true,
-            },
-            OrderBy: valuesStmt.OrderBy,
-            Limit:   valuesStmt.Limit,
-        }}
+        $$ = $1
     }
-
+|   table_query_subquery
+    {
+        $$ = $1
+    }
 simple_select:
     simple_select_clause
     {
@@ -6313,6 +7388,103 @@ simple_select:
             All: $2.All,
             Distinct: $2.Distinct,
         }
+    }
+|   simple_select union_op table_query_primary
+    {
+        $$ = &tree.UnionClause{Type: $2.Type, Left: $1, Right: $3, All: $2.All, Distinct: $2.Distinct}
+    }
+|   select_with_parens union_op table_query_primary
+    {
+        $$ = &tree.UnionClause{Type: $2.Type, Left: $1, Right: $3, All: $2.All, Distinct: $2.Distinct}
+    }
+|   simple_select union_op values_query_primary
+    {
+        $$ = &tree.UnionClause{Type: $2.Type, Left: $1, Right: $3, All: $2.All, Distinct: $2.Distinct}
+    }
+|   select_with_parens union_op values_query_primary
+    {
+        $$ = &tree.UnionClause{Type: $2.Type, Left: $1, Right: $3, All: $2.All, Distinct: $2.Distinct}
+    }
+// TABLE is a query term in MySQL. Keep it separate from the ordinary
+// simple-select path, and preserve top-level VALUES as the existing
+// ValuesStatement AST.
+table_query_subquery:
+    '(' table_query_expr order_by_opt query_limit_opt ')'
+    {
+        $$ = &tree.ParenSelect{Select: tree.NewSelect($2, $3, $4)}
+    }
+
+table_query_expr:
+    table_query_primary
+    {
+        $$ = $1
+    }
+|   table_query_expr union_op table_query_term
+    {
+        $$ = &tree.UnionClause{Type: $2.Type, Left: $1, Right: $3, All: $2.All, Distinct: $2.Distinct}
+    }
+
+table_query_primary:
+    TABLE table_name
+    {
+        $$ = makeSelectStarFromTable($2)
+    }
+table_query_term:
+    simple_select_clause
+    {
+        $$ = $1
+    }
+|   table_query_primary
+    {
+        $$ = $1
+    }
+|   select_with_parens
+    {
+        $$ = $1
+    }
+|   VALUES row_constructor_list
+    {
+        $$ = &tree.ValuesClause{Rows: $2, RowWord: true}
+    }
+
+values_query_subquery:
+    '(' values_query_expr order_by_opt query_limit_opt ')'
+    {
+        $$ = &tree.ParenSelect{Select: tree.NewSelect($2, $3, $4)}
+    }
+
+values_query_expr:
+    values_query_primary
+    {
+        $$ = $1
+    }
+|   values_query_expr union_op values_query_term
+    {
+        $$ = &tree.UnionClause{Type: $2.Type, Left: $1, Right: $3, All: $2.All, Distinct: $2.Distinct}
+    }
+
+values_query_primary:
+    VALUES row_constructor_list
+    {
+        $$ = &tree.ValuesClause{Rows: $2, RowWord: true}
+    }
+
+values_query_term:
+    simple_select_clause
+    {
+        $$ = $1
+    }
+|   values_query_primary
+    {
+        $$ = $1
+    }
+|   table_query_primary
+    {
+        $$ = $1
+    }
+|   select_with_parens
+    {
+        $$ = $1
     }
 
 union_op:
@@ -6415,15 +7587,18 @@ union_op:
     }
 
 simple_select_clause:
-    SELECT select_options_opt select_expression_list from_opt where_expression_opt group_by_opt having_opt
+    SELECT select_options_opt select_expression_list select_into_param_opt from_opt where_expression_opt group_by_opt having_opt window_clause_opt
     {
         $$ = &tree.SelectClause{
             Distinct: tree.QuerySpecOptionDistinct & $2 != 0,
             Exprs: $3,
-            From: $4,
-            Where: $5,
-            GroupBy: $6,
-            Having: $7,
+            IntoVars: $4.UserVars,
+            IntoExport: $4.Export,
+            From: $5,
+            Where: $6,
+            GroupBy: $7,
+            Having: $8,
+            Windows: $9,
             Option: $2,
         }
     }
@@ -6536,6 +7711,7 @@ group_by_opt:
             GroupByExprsList: $6,
             Apart:      false,
             Cube :      false,
+            GroupingSets: true,
             Rollup:     false,
         }
     }
@@ -6654,6 +7830,14 @@ table_references:
 
 escaped_table_reference:
     table_reference %prec LOWER_THAN_SET
+|   '{' ID table_reference '}'
+    {
+        if !strings.EqualFold($2, "OJ") {
+            yylex.Error("expected OJ in table reference escape")
+            goto ret1
+        }
+        $$ = $3
+    }
 
 table_reference:
     table_factor
@@ -6687,7 +7871,7 @@ join_table:
         	}
 	}
     }
-|   table_reference straight_join table_factor on_expression_opt
+|   table_reference straight_join table_factor join_condition_opt
     {
         $$ = &tree.JoinTableExpr{
             Left: $1,
@@ -6696,15 +7880,19 @@ join_table:
             Cond: $4,
         }
     }
-|   table_reference outer_join table_factor join_condition
-    {
-        $$ = &tree.JoinTableExpr{
-            Left: $1,
-            JoinType: $2,
-            Right: $3,
-            Cond: $4,
-        }
-    }
+|   table_reference outer_join table_factor join_condition_opt
+	{
+		if $4 == nil {
+			yylex.Error("outer join requires ON/USING clause")
+			goto ret1
+		}
+		$$ = &tree.JoinTableExpr{
+			Left: $1,
+			JoinType: $2,
+			Right: $3,
+			Cond: $4,
+		}
+	}
 |   table_reference natural_join table_factor
     {
         $$ = &tree.JoinTableExpr{
@@ -6720,6 +7908,20 @@ join_table:
             JoinType: $2,
             Right: $3,
             Cond: $4,
+        }
+    }
+|   table_reference asof_join table_factor join_condition tolerance_opt
+    {
+		if !hasAsofLeftFactorAlias($1) {
+			yylex.Error("native ASOF JOIN requires an aliased left table factor")
+			goto ret1
+		}
+        $$ = &tree.JoinTableExpr{
+            Left: $1,
+            JoinType: $2,
+            Right: $3,
+            Cond: $4,
+            Tolerance: $5,
         }
     }
 
@@ -6792,14 +7994,42 @@ dedup_join:
         $$ = tree.JOIN_TYPE_DEDUP
     }
 
-values_stmt:
-    VALUES row_constructor_list order_by_opt limit_opt
+asof_join:
+    ASOF JOIN
     {
-        $$ = &tree.ValuesStatement{
+        $$ = tree.JOIN_TYPE_ASOF
+    }
+|   ASOF LEFT JOIN
+    {
+        $$ = tree.JOIN_TYPE_ASOF_LEFT
+    }
+|   ASOF LEFT OUTER JOIN
+    {
+        $$ = tree.JOIN_TYPE_ASOF_LEFT
+    }
+
+tolerance_opt:
+    {
+        $$ = nil
+    }
+|   TOLERANCE interval_expr
+    {
+        $$ = $2
+    }
+
+values_stmt:
+    VALUES row_constructor_list order_by_opt query_limit_opt
+    {
+        stmt := &tree.ValuesStatement{
             Rows: $2,
             OrderBy: $3,
             Limit: $4,
         }
+        if intoErr := tree.ValidateValuesIntoPlacement(stmt); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        $$ = stmt
     }
 
 row_constructor_list:
@@ -6816,16 +8046,6 @@ row_constructor:
     ROW '(' data_values ')'
     {
         $$ = $3
-    }
-
-on_expression_opt:
-    %prec JOIN
-    {
-        $$ = nil
-    }
-|   ON expression
-    {
-        $$ = &tree.OnJoinCond{Expr: $2}
     }
 
 optype:
@@ -6928,7 +8148,9 @@ table_factor:
 	}
 
 table_subquery:
-    select_with_parens %prec SUBQUERY_AS_EXPR
+    // The scanner returns ID when OFFSET is an implicit alias. A real OFFSET
+    // token must shift into select_no_parens' parenthesized-query clause.
+    select_with_parens %prec WITH
     {
     	$$ = &tree.ParenTableExpr{Expr: $1.(*tree.ParenSelect).Select}
     }
@@ -7038,6 +8260,7 @@ index_name_list:
 	}
 
 as_opt_id:
+    %prec RETURNING
     {
         $$ = ""
     }
@@ -7061,6 +8284,7 @@ table_alias:
     }
 
 as_name_opt:
+    %prec RETURNING
     {
         $$ = tree.NewCStr("", 1)
     }
@@ -7118,11 +8342,31 @@ create_ddl_stmt:
 |   create_extension_stmt
 |   create_sequence_stmt
 |   create_procedure_stmt
-|   create_source_stmt
-|   create_connector_stmt
+|   create_iceberg_catalog_stmt
+|   create_mongodb_connection_stmt
 |   pause_daemon_task_stmt
 |   cancel_daemon_task_stmt
 |   resume_daemon_task_stmt
+
+create_iceberg_catalog_stmt:
+    CREATE ICEBERG CATALOG not_exists_opt ident iceberg_option_list_opt
+    {
+        $$ = &tree.CreateIcebergCatalog{
+            IfNotExists: $4,
+            Name: tree.Identifier($5.Compare()),
+            Options: $6,
+        }
+    }
+
+create_mongodb_connection_stmt:
+    CREATE MONGODB CONNECTION not_exists_opt ident mongodb_option_list_opt
+    {
+        $$ = &tree.CreateMongoDBConnection{
+            IfNotExists: $4,
+            Name: tree.Identifier($5.Compare()),
+            Options: $6,
+        }
+    }
 
 create_sql_task_stmt:
     CREATE TASK not_exists_opt ident sql_task_schedule_opt sql_task_when_opt sql_task_retry_opt sql_task_timeout_opt AS block_stmt
@@ -7420,13 +8664,17 @@ func_handler:
     }
 
 create_view_stmt:
-    CREATE view_list_opt VIEW not_exists_opt table_name column_list_opt AS select_stmt view_tail
+    CREATE view_list_opt VIEW not_exists_opt table_name column_list_opt AS ctas_select_stmt view_tail
     {
         var Replace bool
         var Name = $5
         var ColNames = $6
         var AsSource = $8
         var IfNotExists = $4
+        if intoErr := tree.ValidateSelectIntoNotAllowed(AsSource); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         $$ = tree.NewCreateView(
             Replace,
             Name,
@@ -7435,13 +8683,17 @@ create_view_stmt:
             IfNotExists,
         )
     }
-|   CREATE replace_opt VIEW not_exists_opt table_name column_list_opt AS select_stmt view_tail
+|   CREATE replace_opt VIEW not_exists_opt table_name column_list_opt AS ctas_select_stmt view_tail
     {
         var Replace = $2
         var Name = $5
         var ColNames = $6
         var AsSource = $8
         var IfNotExists = $4
+        if intoErr := tree.ValidateSelectIntoNotAllowed(AsSource); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         $$ = tree.NewCreateView(
             Replace,
             Name,
@@ -8327,6 +9579,10 @@ index_prefix:
     {
         $$ = tree.INDEX_CATEGORY_FULLTEXT
     }
+|   FULLTEXT2
+    {
+        $$ = tree.INDEX_CATEGORY_FULLTEXT2
+    }
 |   SPATIAL
     {
         $$ = tree.INDEX_CATEGORY_SPATIAL
@@ -8350,7 +9606,7 @@ create_index_stmt:
             io = tree.NewIndexOption()
             io.IType = tree.INDEX_TYPE_INVALID
 	    }
-        var Name = tree.Identifier($4.Compare())
+        var Name = tree.Identifier($4.Origin())
         var Table = $7
         var ifNotExists = false
         var IndexCat = $2
@@ -8395,19 +9651,23 @@ index_option_list:
 	    } else if opt2.AlgoParamM > 0 {
 	      opt1.AlgoParamM = opt2.AlgoParamM
 	    } else if opt2.HnswEfConstruction > 0 {
- 	      opt1.HnswEfConstruction = opt2.HnswEfConstruction
+	      opt1.HnswEfConstruction = opt2.HnswEfConstruction
             } else if opt2.HnswEfSearch > 0 {
 	      opt1.HnswEfSearch = opt2.HnswEfSearch
- 	    } else if opt2.Async {
+	    } else if opt2.Async {
 	      opt1.Async = opt2.Async
- 	    } else if opt2.ForceSync {
+	    } else if opt2.ForceSync {
 	      opt1.ForceSync = opt2.ForceSync
- 	    } else if opt2.AutoUpdate {
+	    } else if opt2.Merge {
+	      opt1.Merge = opt2.Merge
+	    } else if opt2.AutoUpdate {
 	      opt1.AutoUpdate = opt2.AutoUpdate
- 	    } else if opt2.Day > 0 {
+	    } else if opt2.Day > 0 {
 	      opt1.Day = opt2.Day
- 	    } else if opt2.Hour > 0 {
+	    } else if opt2.Hour > 0 {
 	      opt1.Hour = opt2.Hour
+	    } else if opt2.Second > 0 {
+	      opt1.Second = opt2.Second
 	    } else if opt2.IntermediateGraphDegree > 0 {
               opt1.IntermediateGraphDegree = opt2.IntermediateGraphDegree
 	    } else if opt2.GraphDegree > 0 {
@@ -8428,6 +9688,13 @@ index_option_list:
               opt1.KmeansMaxIteration = opt2.KmeansMaxIteration
             } else if opt2.MaxIndexCapacity > 0 {
               opt1.MaxIndexCapacity = opt2.MaxIndexCapacity
+            } else if opt2.MaxPostingsCapacity > 0 {
+              opt1.MaxPostingsCapacity = opt2.MaxPostingsCapacity
+            } else if opt2.QuantizerTrainLimit > 0 {
+              opt1.QuantizerTrainLimit = opt2.QuantizerTrainLimit
+            } else if opt2.PositionFreeSet {
+              opt1.PositionFree = opt2.PositionFree
+              opt1.PositionFreeSet = true
             } else if len(opt2.IncludeColumns) > 0 {
               opt1.IncludeColumns = opt2.IncludeColumns
             }
@@ -8590,6 +9857,17 @@ index_option:
 	io.KmeansTrainPercent = val
 	$$ = io
     }
+|   QUANTIZER_TRAIN_LIMIT equal_opt INTEGRAL
+    {
+	val := int64($3.(int64))
+	if val <= 0 {
+		yylex.Error("QUANTIZER_TRAIN_LIMIT should be greater than 0")
+		return 1
+	}
+	io := tree.NewIndexOption()
+	io.QuantizerTrainLimit = val
+	$$ = io
+    }
 |   KMEANS_MAX_ITERATION equal_opt INTEGRAL
     {
 	val := int64($3.(int64))
@@ -8612,6 +9890,31 @@ index_option:
 	io.MaxIndexCapacity = val
 	$$ = io
     }
+|   MAX_POSTINGS_CAPACITY equal_opt INTEGRAL
+    {
+	val := int64($3.(int64))
+	if val <= 0 {
+		yylex.Error("MAX_POSTINGS_CAPACITY should be greater than 0")
+		return 1
+	}
+	io := tree.NewIndexOption()
+	io.MaxPostingsCapacity = val
+	$$ = io
+    }
+|   POSITION_FREE '=' TRUE
+    {
+	io := tree.NewIndexOption()
+	io.PositionFree = true
+	io.PositionFreeSet = true
+	$$ = io
+    }
+|   POSITION_FREE '=' FALSE
+    {
+	io := tree.NewIndexOption()
+	io.PositionFree = false
+	io.PositionFreeSet = true
+	$$ = io
+    }
 |    ASYNC
      {
 	io := tree.NewIndexOption()
@@ -8621,7 +9924,13 @@ index_option:
 |    FORCE_SYNC
      {
 	io := tree.NewIndexOption()
-	io.ForceSync = true	
+	io.ForceSync = true
+	$$ = io
+     }
+|    MERGE
+     {
+	io := tree.NewIndexOption()
+	io.Merge = true
 	$$ = io
      }
 |    AUTO_UPDATE '=' TRUE
@@ -8656,6 +9965,17 @@ index_option:
 	}
 	io := tree.NewIndexOption()
 	io.Hour = val
+	$$ = io
+     }
+|    SECOND equal_opt INTEGRAL
+     {
+        val := int64($3.(int64))
+	if val < 0 {
+		yylex.Error("SECOND should be greater than or equal to 0")
+		return 1
+	}
+	io := tree.NewIndexOption()
+	io.Second = val
 	$$ = io
      }
 
@@ -8758,6 +10078,7 @@ create_database_stmt:
 |   CREATE database_or_schema not_exists_opt db_name CLONE db_name table_snapshot_opt to_account_opt
     {
     	var t = tree.NewCloneDatabase()
+		t.IfNotExists = $3
     	t.DstDatabase = tree.Identifier($4)
     	t.SrcDatabase = tree.Identifier($6)
     	t.AtTsExpr = $7
@@ -8802,6 +10123,10 @@ not_exists_opt:
         $$ = false
     }
 |   IF NOT EXISTS
+    {
+        $$ = true
+    }
+|   IF HIGH_NOT EXISTS
     {
         $$ = true
     }
@@ -8868,23 +10193,6 @@ default_opt:
         $$ = true
     }
 
-create_connector_stmt:
-    CREATE CONNECTOR FOR table_name WITH '(' connector_option_list ')'
-    {
-        var TableName = $4
-        var Options = $7
-        $$ = tree.NewCreateConnector(
-            TableName,
-            Options,
-        )
-    }
-
-show_connectors_stmt:
-    SHOW CONNECTORS
-    {
-	$$ = &tree.ShowConnectors{}
-    }
-
 pause_daemon_task_stmt:
     PAUSE DAEMON TASK INTEGRAL
     {
@@ -8937,23 +10245,6 @@ resume_daemon_task_stmt:
         $$ = &tree.ResumeDaemonTask{
             TaskID: taskID,
         }
-    }
-
-create_source_stmt:
-    CREATE replace_opt SOURCE not_exists_opt table_name '(' table_elem_list_opt ')' source_option_list_opt
-    {
-        var Replace = $2
-        var IfNotExists = $4
-        var SourceName = $5
-        var Defs = $7
-        var Options = $9
-        $$ = tree.NewCreateSource(
-            Replace,
-            IfNotExists,
-            SourceName,
-            Defs,
-            Options,
-        )
     }
 
 replace_opt:
@@ -9093,7 +10384,7 @@ diff_output_opt:
     }
     | OUTPUT LIMIT INTEGRAL
     {
-    	x := $3.(int64)
+        x, errStr := util.GetInt64($3); if errStr != "" { yylex.Error("OUTPUT LIMIT is out of range"); goto ret1 }
     	$$ = &tree.DiffOutputOpt {
            Limit: &x,
         }
@@ -9173,6 +10464,15 @@ copy_grants_opt:
         $$ = true
     }
 
+ctas_conflict_opt:
+    /* empty */ { $$ = "" }
+    | IGNORE { $$ = "ignore" }
+    | REPLACE { $$ = "replace" }
+
+ctas_conflict_required:
+    IGNORE { $$ = "ignore" }
+    | REPLACE { $$ = "replace" }
+
 create_table_stmt:
     CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' table_option_list_opt partition_by_opt cluster_by_opt
     {
@@ -9195,6 +10495,59 @@ create_table_stmt:
         t.Param = $9
         $$ = t
     }
+|   CREATE EXTERNAL TABLE not_exists_opt table_name '(' table_elem_list_opt ')' iceberg_table_param
+    {
+        t := tree.NewCreateTable()
+        t.IfNotExists = $4
+        t.Table = *$5
+        t.Defs = $7
+        t.IcebergParam = $9
+        $$ = t
+    }
+|   CREATE EXTERNAL TABLE not_exists_opt table_name '(' table_elem_list_opt ')' mongodb_table_param
+    {
+        t := tree.NewCreateTable()
+        t.IfNotExists = $4
+        t.Table = *$5
+        t.Defs = $7
+        t.MongoDBParam = $9
+        $$ = t
+    }
+|   CREATE EXTERNAL TABLE not_exists_opt table_name '(' table_elem_list_opt ')' datastream_table_param
+    {
+        t := tree.NewCreateTable()
+        t.IfNotExists = $4
+        t.Table = *$5
+        t.Defs = $7
+        t.DataStreamParam = $9
+        $$ = t
+    }
+|   CREATE EXTERNAL TABLE not_exists_opt table_name '(' table_elem_list_opt ')' foreign_table_param
+    {
+        t := tree.NewCreateTable()
+        t.IfNotExists = $4
+        t.Table = *$5
+        t.Defs = $7
+        t.ForeignParam = $9
+        $$ = t
+    }
+|   CREATE EXTERNAL TABLE not_exists_opt table_name '(' table_elem_list_opt ')' kafka_table_param
+    {
+        t := tree.NewCreateTable()
+        t.IfNotExists = $4
+        t.Table = *$5
+        t.Defs = $7
+        t.KafkaParam = $9
+        $$ = t
+    }
+|   CREATE EXTERNAL TABLE not_exists_opt table_name iceberg_table_param
+    {
+        t := tree.NewCreateTable()
+        t.IfNotExists = $4
+        t.Table = *$5
+        t.IcebergParam = $6
+        $$ = t
+    }
 |   CREATE CLUSTER TABLE not_exists_opt table_name '(' table_elem_list_opt ')' table_option_list_opt partition_by_opt cluster_by_opt
     {
         t := tree.NewCreateTable()
@@ -9207,18 +10560,12 @@ create_table_stmt:
         t.ClusterByOption = $11
         $$ = t
     }
-|   CREATE DYNAMIC TABLE not_exists_opt table_name AS select_stmt source_option_list_opt
+|   CREATE temporary_opt TABLE not_exists_opt table_name ctas_select_stmt
     {
-        t := tree.NewCreateTable()
-        t.IsDynamicTable = true
-        t.IfNotExists = $4
-        t.Table = *$5
-        t.AsSource = $7
-        t.DTOptions = $8
-        $$ = t
-    }
-|   CREATE temporary_opt TABLE not_exists_opt table_name select_stmt
-    {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($6); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         t := tree.NewCreateTable()
         t.IsAsSelect = true
         t.Temporary = $2
@@ -9227,8 +10574,12 @@ create_table_stmt:
         t.AsSource = $6
         $$ = t
     }
-|   CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' select_stmt
+|   CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' ctas_select_stmt
     {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($9); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         t := tree.NewCreateTable()
         t.IsAsSelect = true
         t.Temporary = $2
@@ -9238,26 +10589,25 @@ create_table_stmt:
         t.AsSource = $9
         $$ = t
     }
-|   CREATE temporary_opt TABLE not_exists_opt table_name AS select_stmt
+|   CREATE temporary_opt TABLE not_exists_opt table_name ctas_conflict_required ctas_select_stmt
     {
-        t := tree.NewCreateTable()
-        t.IsAsSelect = true
-        t.Temporary = $2
-        t.IfNotExists = $4
-        t.Table = *$5
-        t.AsSource = $7
-        $$ = t
+        if intoErr := tree.ValidateSelectIntoNotAllowed($7); intoErr != "" { yylex.Error(intoErr); goto ret1 }
+        t := tree.NewCreateTable(); t.IsAsSelect = true; t.Temporary = $2; t.IfNotExists = $4; t.Table = *$5; t.CTASConflict = $6; t.AsSource = $7; $$ = t
     }
-|   CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' AS select_stmt
+|   CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' ctas_conflict_required ctas_select_stmt
     {
-        t := tree.NewCreateTable()
-        t.IsAsSelect = true
-        t.Temporary = $2
-        t.IfNotExists = $4
-        t.Table = *$5
-        t.Defs = $7
-        t.AsSource = $10
-        $$ = t
+        if intoErr := tree.ValidateSelectIntoNotAllowed($10); intoErr != "" { yylex.Error(intoErr); goto ret1 }
+        t := tree.NewCreateTable(); t.IsAsSelect = true; t.Temporary = $2; t.IfNotExists = $4; t.Table = *$5; t.Defs = $7; t.CTASConflict = $9; t.AsSource = $10; $$ = t
+    }
+|   CREATE temporary_opt TABLE not_exists_opt table_name ctas_conflict_opt AS ctas_select_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($8); intoErr != "" { yylex.Error(intoErr); goto ret1 }
+        t := tree.NewCreateTable(); t.IsAsSelect = true; t.Temporary = $2; t.IfNotExists = $4; t.Table = *$5; t.CTASConflict = $6; t.AsSource = $8; $$ = t
+    }
+|   CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' ctas_conflict_opt AS ctas_select_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($11); intoErr != "" { yylex.Error(intoErr); goto ret1 }
+        t := tree.NewCreateTable(); t.IsAsSelect = true; t.Temporary = $2; t.IfNotExists = $4; t.Table = *$5; t.Defs = $7; t.CTASConflict = $9; t.AsSource = $11; $$ = t
     }
 |   CREATE temporary_opt TABLE not_exists_opt table_name LIKE table_name
     {
@@ -9765,13 +11115,24 @@ sub_partition:
     }
 
 partition_option_list:
-    table_option
+    partition_table_option
     {
         $$ = []tree.TableOption{$1}
     }
-|   partition_option_list table_option
+|   partition_option_list partition_table_option
     {
         $$ = append($1, $2)
+    }
+
+partition_table_option:
+    table_option
+    {
+        if option, ok := $1.(*tree.TableOptionAutoIDCache); ok {
+            option.Free()
+            yylex.Error("AUTO_ID_CACHE is a table option, not a partition or subpartition option")
+            goto ret1
+        }
+        $$ = $1
     }
 
 values_opt:
@@ -9908,73 +11269,229 @@ linear_opt:
         $$ = true
     }
 
-connector_option_list:
-	connector_option
-	{
-		$$ = []*tree.ConnectorOption{$1}
-	}
-|	connector_option_list ',' connector_option
-	{
-		$$ = append($1, $3)
-	}
-
-connector_option:
-	ident equal_opt literal
+iceberg_table_param:
+    ENGINE equal_opt ICEBERG iceberg_option_list_opt
     {
-        var Key = tree.Identifier($1.Compare())
-        var Val = $3
-        $$ = tree.NewConnectorOption(
-            Key, 
-            Val,
-        )
+        $$ = tree.NewIcebergTableParam($4)
     }
-    |   STRING equal_opt literal
-        {
-            var Key = tree.Identifier($1)
-            var Val = $3
-            $$ = tree.NewConnectorOption(
-                Key, 
-                Val,
-            )
-        }
 
-source_option_list_opt:
+iceberg_option_list_opt:
     {
         $$ = nil
     }
-|	WITH '(' source_option_list ')'
-	{
-		$$ = $3
-	}
-
-source_option_list:
-	source_option
-	{
-		$$ = []tree.TableOption{$1}
-	}
-|	source_option_list ',' source_option
-	{
-		$$ = append($1, $3)
-	}
-
-source_option:
-	ident equal_opt literal
+|   WITH '(' iceberg_option_list ')'
     {
-        var Key = tree.Identifier($1.Compare())
-        var Val = $3
-        $$ = tree.NewCreateSourceWithOption(
-            Key,
-            Val,
-        )
+        $$ = $3
     }
-|   STRING equal_opt literal
+
+iceberg_option_list:
+    iceberg_option
     {
-        var Key = tree.Identifier($1)
-        var Val = $3
-        $$ = tree.NewCreateSourceWithOption(
-            Key,
-            Val,
-        )
+        $$ = tree.IcebergOptions{$1}
+    }
+|   iceberg_option_list ',' iceberg_option
+    {
+        $$ = append($1, $3)
+    }
+
+iceberg_option:
+    iceberg_option_key '=' iceberg_option_value
+    {
+        $$ = tree.NewIcebergOption(tree.Identifier($1), $3)
+    }
+
+iceberg_option_key:
+    ident
+    {
+        $$ = $1.Compare()
+    }
+|   STRING
+    {
+        $$ = $1
+    }
+
+iceberg_option_value:
+    ident
+    {
+        $$ = $1.Compare()
+    }
+|   STRING
+    {
+        $$ = $1
+    }
+
+mongodb_table_param:
+    ENGINE equal_opt MONGODB mongodb_option_list_opt
+    {
+        $$ = tree.NewMongoDBTableParam($4)
+    }
+
+mongodb_option_list_opt:
+    {
+        $$ = nil
+    }
+|   WITH '(' mongodb_option_list ')'
+    {
+        $$ = $3
+    }
+
+mongodb_option_list:
+    mongodb_option
+    {
+        $$ = tree.MongoDBOptions{$1}
+    }
+|   mongodb_option_list ',' mongodb_option
+    {
+        $$ = append($1, $3)
+    }
+
+mongodb_option:
+    mongodb_option_key '=' mongodb_option_value
+    {
+        $$ = tree.NewMongoDBOption(tree.Identifier($1), $3)
+    }
+
+mongodb_option_key:
+    ident
+    {
+        $$ = $1.Compare()
+    }
+|   STRING
+    {
+        $$ = $1
+    }
+
+mongodb_option_value:
+    ident
+    {
+        $$ = $1.Compare()
+    }
+|   STRING
+    {
+        $$ = $1
+    }
+
+datastream_table_param:
+    ENGINE equal_opt DATASTREAM datastream_option_list_opt
+    {
+        $$ = tree.NewDataStreamTableParam($4)
+    }
+
+datastream_option_list_opt:
+    {
+        $$ = nil
+    }
+|   WITH '(' datastream_option_list ')'
+    {
+        $$ = $3
+    }
+
+datastream_option_list:
+    datastream_option
+    {
+        $$ = tree.DataStreamOptions{$1}
+    }
+|   datastream_option_list ',' datastream_option
+    {
+        $$ = append($1, $3)
+    }
+
+datastream_option:
+    datastream_option_key '=' datastream_option_value
+    {
+        $$ = tree.NewDataStreamOption(tree.Identifier($1), $3)
+    }
+
+foreign_table_param:
+    ENGINE equal_opt foreign_engine_kind foreign_option_list_opt
+    {
+        $$ = tree.NewForeignTableParam($3, $4)
+    }
+
+kafka_table_param:
+    ENGINE equal_opt KAFKA kafka_option_list_opt
+    {
+        $$ = tree.NewKafkaTableParam($4)
+    }
+
+kafka_option_list_opt:
+    {
+        $$ = nil
+    }
+|   WITH '(' kafka_option_list ')'
+    {
+        $$ = $3
+    }
+
+kafka_option_list:
+    kafka_option
+    {
+        $$ = tree.KafkaTableOptions{$1}
+    }
+|   kafka_option_list ',' kafka_option
+    {
+        $$ = append($1, $3)
+    }
+
+kafka_option:
+    datastream_option_key '=' datastream_option_value
+    {
+        $$ = tree.NewKafkaTableOption(tree.Identifier($1), $3)
+    }
+
+foreign_engine_kind:
+    ESQL
+    {
+        $$ = "esql"
+    }
+|   SQL
+    {
+        $$ = "sql"
+    }
+
+foreign_option_list_opt:
+    {
+        $$ = nil
+    }
+|   WITH '(' foreign_option_list ')'
+    {
+        $$ = $3
+    }
+
+foreign_option_list:
+    foreign_option
+    {
+        $$ = tree.ForeignTableOptions{$1}
+    }
+|   foreign_option_list ',' foreign_option
+    {
+        $$ = append($1, $3)
+    }
+
+foreign_option:
+    datastream_option_key '=' datastream_option_value
+    {
+        $$ = tree.NewForeignTableOption(tree.Identifier($1), $3)
+    }
+
+datastream_option_key:
+    ident
+    {
+        $$ = $1.Compare()
+    }
+|   STRING
+    {
+        $$ = $1
+    }
+
+datastream_option_value:
+    ident
+    {
+        $$ = $1.Compare()
+    }
+|   STRING
+    {
+        $$ = $1
     }
 
 table_option_list_opt:
@@ -10007,7 +11524,11 @@ table_option:
     }
 |   AUTO_INCREMENT equal_opt INTEGRAL
     {
-        $$ = tree.NewTableOptionAutoIncrement(uint64($3.(int64)))
+        $$ = tree.NewTableOptionAutoIncrement(integralToUint64($3))
+    }
+|   AUTO_ID_CACHE equal_opt INTEGRAL
+    {
+        $$ = tree.NewTableOptionAutoIDCache(integralToUint64($3))
     }
 |   AVG_ROW_LENGTH equal_opt INTEGRAL
     {
@@ -10239,19 +11760,62 @@ table_name_list:
 // <table>
 // <schema>.<table>
 table_name:
-    ident table_snapshot_opt
+    ident table_snapshot_opt iceberg_ref_opt
     {
         tblName := yylex.(*Lexer).GetDbOrTblName($1.Origin())
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
         $$ = tree.NewTableName(tree.Identifier(tblName), prefix, $2)
+        $$.IcebergRef = $3
     }
-|   ident '.' ident table_snapshot_opt
+|   ident '.' ident table_snapshot_opt iceberg_ref_opt
     {
         dbName := yylex.(*Lexer).GetDbOrTblName($1.Origin())
         tblName := yylex.(*Lexer).GetDbOrTblName($3.Origin())
         prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier(dbName), ExplicitSchema: true}
         $$ = tree.NewTableName(tree.Identifier(tblName), prefix, $4)
+        $$.IcebergRef = $5
     }
+
+iceberg_ref_opt:
+    {
+        $$ = nil
+    }
+|   FOR_ICEBERG SNAPSHOT INTEGRAL
+    {
+        raw := fmt.Sprintf("%v", $3)
+        $$ = tree.NewIcebergSnapshotRef(tree.NewNumVal(raw, raw, false, tree.P_int64))
+    }
+|   FOR_ICEBERG SNAPSHOT STRING
+    {
+        $$ = tree.NewIcebergSnapshotRef(tree.NewNumVal($3, $3, false, tree.P_char))
+    }
+|   FOR_ICEBERG TIMESTAMP AS OF TIMESTAMP STRING
+    {
+        $$ = tree.NewIcebergTimestampRef(tree.NewNumVal($6, $6, false, tree.P_char))
+    }
+|   FOR_ICEBERG TIMESTAMP AS OF STRING
+    {
+        $$ = tree.NewIcebergTimestampRef(tree.NewNumVal($5, $5, false, tree.P_char))
+    }
+|   FOR_ICEBERG REF iceberg_ref_name
+    {
+        $$ = tree.NewIcebergNamedRef(tree.Identifier($3))
+    }
+
+iceberg_ref_name:
+    ID
+    {
+        $$ = $1
+    }
+|   QUOTE_ID
+    {
+        $$ = $1
+    }
+|   STRING
+    {
+        $$ = $1
+    }
+
 table_snapshot_opt:
     {
         $$ = nil
@@ -10362,6 +11926,21 @@ index_def:
             IndexOption,
         )
     }
+|   FULLTEXT2 key_or_index_opt index_name '(' index_column_list ')' index_option_list
+    {
+        var KeyParts = $5
+        var Name = $3
+        var Empty = true
+        var IndexOption = $7
+        fti := tree.NewFullTextIndex(
+            KeyParts,
+            Name,
+            Empty,
+            IndexOption,
+        )
+        fti.IsV2 = true
+        $$ = fti
+    }
 |   key_or_index not_exists_opt index_name_and_type_opt '(' index_column_list ')' index_option_list
     {
         keyTyp := tree.INDEX_TYPE_INVALID
@@ -10451,7 +12030,6 @@ index_def:
             IndexOption,
         )
     }
-
 constaint_def:
     constraint_keyword constraint_elem
     {
@@ -10463,6 +12041,7 @@ constaint_def:
                 v.ConstraintSymbol = $1
             case *tree.UniqueIndex:
                 v.ConstraintSymbol = $1
+            case *tree.CheckIndex: v.ConstraintSymbol = $1
             }
         }
         $$ = $2
@@ -10529,7 +12108,7 @@ constraint_elem:
     {
         var IfNotExists = $3
         var KeyParts = $6
-        var Name = $4
+        var Name = tree.NewCStr($4, 1).Compare()
         var Refer = $8
         var Empty = true
         $$ = tree.NewForeignKey(
@@ -10552,9 +12131,9 @@ constraint_elem:
 
 enforce_opt:
     {
-        $$ = false
+        $$ = true
     }
-|    enforce
+|   enforce
 
 key_or_index_opt:
     {
@@ -10585,7 +12164,7 @@ index_name_and_type_opt:
 |   ident TYPE index_type
     {
         $$ = make([]string, 2)
-        $$[0] = $1.Compare()
+        $$[0] = $1.Origin()
         $$[1] = $3
     }
 
@@ -10600,6 +12179,7 @@ index_type:
 |   HNSW
 |   CAGRA
 |   IVFPQ
+|   BM25
 
 insert_method_options:
     NO
@@ -10612,7 +12192,7 @@ index_name:
     }
 |    ident
 	{
-		$$ = $1.Compare()
+		$$ = $1.Origin()
 	}
 
 column_def:
@@ -10641,7 +12221,7 @@ column_name_unresolved:
 ident:
     ID
     {
-		$$ = tree.NewCStr($1, 1)
+		if rejectSQLModeReservedFunctionName(yylex, $1) { goto ret1 }; $$ = tree.NewCStr($1, 1)
     }
 |	QUOTE_ID
 	{
@@ -10649,11 +12229,11 @@ ident:
     }
 |   not_keyword
 	{
-    	$$ = tree.NewCStr($1, 1)
+		if rejectSQLModeReservedFunctionName(yylex, $1) { goto ret1 }; $$ = tree.NewCStr($1, 1)
     }
 |   non_reserved_keyword
 	{
-    	$$ = tree.NewCStr($1, 1)
+		if rejectSQLModeReservedFunctionName(yylex, $1) { goto ret1 }; $$ = tree.NewCStr($1, 1)
     }
 
 db_name_ident:
@@ -10707,6 +12287,10 @@ column_attribute_elem:
     {
         $$ = tree.NewAttributeNull(false)
     }
+|   HIGH_NOT NULL
+    {
+        $$ = tree.NewAttributeNull(false)
+    }
 |   DEFAULT bit_expr
     {
         $$ = tree.NewAttributeDefault($2)
@@ -10723,6 +12307,14 @@ column_attribute_elem:
     {
     	str := util.DealCommentString($2)
         $$ = tree.NewAttributeComment(tree.NewNumVal(str, str, false, tree.P_char))
+    }
+|   MONGODB_PATH STRING
+    {
+        $$ = tree.NewAttributeMongoDBPath($2)
+    }
+|   MONGODB_CONVERT STRING
+    {
+        $$ = tree.NewAttributeMongoDBConvert($2)
     }
 |   COLLATE collate_name
     {
@@ -10754,7 +12346,7 @@ column_attribute_elem:
     }
 |   constraint_keyword_opt CHECK '(' expression ')'
     {
-        $$ = tree.NewAttributeCheckConstraint($4, false, $1)
+        $$ = tree.NewAttributeCheckConstraint($4, true, $1)
     }
 |   constraint_keyword_opt CHECK '(' expression ')' enforce
     {
@@ -10799,18 +12391,10 @@ column_attribute_elem:
     {
         $$ = tree.NewAttributeVisable(false)
     }
-|   default_opt CHARACTER SET equal_opt ident
+|   default_opt CHARACTER SET equal_opt charset_name
     {
-        $$ = nil
+		$$ = tree.NewAttributeCharset($5)
     }
-|	HEADER '(' STRING ')'
-	{
-		$$ = tree.NewAttributeHeader($3)
-	}
-|	HEADERS
-	{
-		$$ = tree.NewAttributeHeaders()
-	}
 |   GENERATED ALWAYS AS '(' expression ')' generated_column_type_opt
     {
         $$ = tree.NewAttributeGeneratedAlways($5, $7)
@@ -10839,6 +12423,10 @@ enforce:
         $$ = true
     }
 |   NOT ENFORCED
+    {
+        $$ = false
+    }
+|   HIGH_NOT ENFORCED
     {
         $$ = false
     }
@@ -10990,6 +12578,10 @@ fulltext_search_opt:
     {
 	$$ = tree.FULLTEXT_QUERY_EXPANSION
     }
+|   IN BM25 MODE
+    {
+	$$ = tree.FULLTEXT_BM25
+    }
 
 index_column_list_opt:
     {
@@ -11037,15 +12629,6 @@ bit_expr:
 |   bit_expr '^' bit_expr %prec '^'
     {
         $$ = tree.NewBinaryExpr(tree.BIT_XOR, $1, $3)
-    }
-|   bit_expr PIPE_CONCAT bit_expr
-    {
-        name := tree.NewUnresolvedColName("concat")
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStr("concat", 1),
-            Exprs: tree.Exprs{$1, $3},
-        }
     }
 |   bit_expr '+' bit_expr %prec '+'
     {
@@ -11125,6 +12708,15 @@ simple_expr:
     {
         $$ = $1
     }
+|   simple_expr PIPE_CONCAT simple_expr
+    {
+        name := tree.NewUnresolvedColName("concat")
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr("concat", 1),
+            Exprs: tree.Exprs{$1, $3},
+        }
+    }
 |   '(' expression ')'
     {
         $$ = tree.NewParentExpr($2)
@@ -11148,6 +12740,10 @@ simple_expr:
 |   '!' simple_expr %prec UNARY
     {
         $$ = tree.NewUnaryExpr(tree.UNARY_MARK, $2)
+    }
+|   HIGH_NOT simple_expr %prec UNARY
+    {
+        $$ = tree.NewNotExpr($2)
     }
 |   '{'  ident expression '}'
     {   
@@ -11277,13 +12873,20 @@ simple_expr:
 		yylex.Error(err.Error())
 		goto ret1
 	}
-	$$ = val		
+	$$ = val
     }
-
 search_pattern:
     STRING
     {
-        $$ = $1
+        $$ = tree.NewNumVal($1, $1, false, tree.P_char)
+    }
+|   VALUE_ARG
+    {
+        $$ = tree.NewParamExpr(yylex.(*Lexer).GetParamIndex())
+    }
+|   ident
+    {
+        $$ = tree.NewUnresolvedName($1)
     }
 
 function_call_window:
@@ -11342,94 +12945,94 @@ function_call_window:
             WindowSpec: $4,
         }
     }
-|	LAG '(' expression ')' window_spec
+|	LAG '(' expression ')' value_window_null_treatment_opt window_spec
     {
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{$3},
-            WindowSpec: $5,
+            WindowSpec: $6,
         }
     }
-|	LAG '(' expression ',' expression ')' window_spec
+|	LAG '(' expression ',' expression ')' value_window_null_treatment_opt window_spec
     {
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{$3, $5},
-            WindowSpec: $7,
+            WindowSpec: $8,
         }
     }
-|	LAG '(' expression ',' expression ',' expression ')' window_spec
+|	LAG '(' expression ',' expression ',' expression ')' value_window_null_treatment_opt window_spec
     {
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{$3, $5, $7},
-            WindowSpec: $9,
+            WindowSpec: $10,
         }
     }
-|	LEAD '(' expression ')' window_spec
+|	LEAD '(' expression ')' value_window_null_treatment_opt window_spec
     {
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{$3},
-            WindowSpec: $5,
+            WindowSpec: $6,
         }
     }
-|	LEAD '(' expression ',' expression ')' window_spec
+|	LEAD '(' expression ',' expression ')' value_window_null_treatment_opt window_spec
     {
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{$3, $5},
-            WindowSpec: $7,
+            WindowSpec: $8,
         }
     }
-|	LEAD '(' expression ',' expression ',' expression ')' window_spec
+|	LEAD '(' expression ',' expression ',' expression ')' value_window_null_treatment_opt window_spec
     {
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{$3, $5, $7},
-            WindowSpec: $9,
+            WindowSpec: $10,
         }
     }
-|	FIRST_VALUE '(' expression ')' window_spec
+|	FIRST_VALUE '(' expression ')' value_window_null_treatment_opt window_spec
     {
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{$3},
-            WindowSpec: $5,
+            WindowSpec: $6,
         }
     }
-|	LAST_VALUE '(' expression ')' window_spec
+|	LAST_VALUE '(' expression ')' value_window_null_treatment_opt window_spec
     {
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{$3},
-            WindowSpec: $5,
+            WindowSpec: $6,
         }
     }
-|	NTH_VALUE '(' expression ',' expression ')' window_spec
+|	NTH_VALUE '(' expression ',' expression ')' nth_value_from_first_opt value_window_null_treatment_opt window_spec
     {
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{$3, $5},
-            WindowSpec: $7,
+            WindowSpec: $9,
         }
     }
 
@@ -11597,6 +13200,18 @@ mo_cast_type:
 
 mysql_cast_type:
     decimal_type
+|   JSON
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family:       tree.JsonFamily,
+                FamilyString: $1,
+                Locale:       &locale,
+                Oid:          uint32(defines.MYSQL_TYPE_JSON),
+            },
+        }
+    }
 |   BINARY length_option_opt
     {
         locale := ""
@@ -11736,6 +13351,10 @@ frame_bound:
     {
         $$ = &tree.FrameBound{Type: tree.Following, Expr: $1}
     }
+|   VALUE_ARG FOLLOWING
+    {
+        $$ = &tree.FrameBound{Type: tree.Following, Expr: tree.NewParamExpr(yylex.(*Lexer).GetParamIndex())}
+    }
 |	interval_expr FOLLOWING
 	{
 		$$ = &tree.FrameBound{Type: tree.Following, Expr: $1}
@@ -11753,6 +13372,10 @@ frame_bound_start:
 |   num_literal PRECEDING
     {
         $$ = &tree.FrameBound{Type: tree.Preceding, Expr: $1}
+    }
+|   VALUE_ARG PRECEDING
+    {
+        $$ = &tree.FrameBound{Type: tree.Preceding, Expr: tree.NewParamExpr(yylex.(*Lexer).GetParamIndex())}
     }
 |	interval_expr PRECEDING
 	{
@@ -11841,43 +13464,126 @@ window_spec_opt:
 |	window_spec
 
 window_spec:
-    OVER '(' window_partition_by_opt order_by_opt window_frame_clause_opt ')'
+    OVER ident
     {
-    	hasFrame := true
-    	var f *tree.FrameClause
-    	if $5 != nil {
-    		f = $5
-    	} else {
-    		hasFrame = false
-    		f = &tree.FrameClause{Type: tree.Range}
-    		if $4 == nil {
-				f.Start = &tree.FrameBound{Type: tree.Preceding, UnBounded: true}
-                f.End = &tree.FrameBound{Type: tree.Following, UnBounded: true}
-    		} else {
-    			f.Start = &tree.FrameBound{Type: tree.Preceding, UnBounded: true}
-            	f.End = &tree.FrameBound{Type: tree.CurrentRow}
-    		}
-    	}
-        $$ = &tree.WindowSpec{
-            PartitionBy: $3,
-            OrderBy: $4,
-            Frame: f,
-            HasFrame: hasFrame,
-        }
+		$$ = makeWindowSpec($2, nil, nil, nil)
+		$$.ReferencedOnly = true
+    }
+|   OVER '(' window_spec_body ')'
+    {
+        $$ = $3
+    }
+
+window_spec_body:
+    window_name_opt window_partition_by_opt order_by_opt window_frame_clause_opt
+    {
+        $$ = makeWindowSpec($1, $2, $3, $4)
+    }
+
+window_name_opt:
+    // RANGE remains a non-reserved identifier outside a window specification.
+    // Here it must start a frame instead of being consumed as a base-window
+    // name; a named window called `range` can still be quoted.
+    %prec WINDOW_NAME_EMPTY
+    {
+        $$ = nil
+    }
+|   ident
+    {
+        $$ = $1
+    }
+
+window_clause_opt:
+    {
+        $$ = nil
+    }
+|   WINDOW window_definition_list
+    {
+        $$ = $2
+    }
+
+window_definition_list:
+    window_definition
+    {
+        $$ = tree.WindowDefinitions{$1}
+    }
+|   window_definition_list ',' window_definition
+    {
+        $$ = append($1, $3)
+    }
+
+window_definition:
+    ident AS '(' window_spec_body ')'
+    {
+        $$ = &tree.WindowDefinition{Name: $1, Spec: $4}
     }
 
 function_call_aggregate:
-    GROUP_CONCAT '(' func_type_opt expression_list order_by_opt separator_opt ')' window_spec_opt
-    {
-	    name := tree.NewUnresolvedColName($1)
-	        $$ = &tree.FuncExpr{
-	        Func: tree.FuncName2ResolvableFunctionReference(name),
+    GROUP_CONCAT '(' func_type_opt expression_list order_by_opt separator_opt ')' within_group_opt window_spec_opt
+	    {
+	        functionName := $1
+	        arguments := $4
+	        separator := tree.Expr(tree.NewNumVal($6, $6, false, tree.P_char))
+	        if strings.EqualFold(functionName, "listagg") {
+	            // LISTAGG is a compatibility surface over GROUP_CONCAT. Keep the
+	            // spelling in FuncName for deparsing, but bind the canonical name.
+	            functionName = "group_concat"
+	            if len(arguments) < 1 || len(arguments) > 2 {
+	                yylex.Error("listagg requires one value and an optional delimiter")
+	                return 1
+	            }
+	            if len(arguments) == 2 {
+	                literal, ok := arguments[1].(*tree.NumVal)
+	                if !ok || (literal.ValType != tree.P_char && literal.ValType != tree.P_null) {
+	                    yylex.Error("listagg delimiter must be a string literal or NULL")
+	                    return 1
+	                }
+	                separator = arguments[1]
+	                arguments = arguments[:1]
+	            }
+	        }
+	        name := tree.NewUnresolvedColName(functionName)
+	        if $5 != nil && $8 != nil {
+	            yylex.Error($1 + " cannot use both ORDER BY and WITHIN GROUP ORDER BY")
+	            return 1
+	        }
+	        orderBy := $5
+	        if $8 != nil {
+	            orderBy = $8
+	        }
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
-	        Exprs: append($4,tree.NewNumVal($6, $6, false, tree.P_char)),
-	        Type: $3,
-	        WindowSpec: $8,
-            OrderBy:$5,
-	    }
+            Exprs: append(arguments, separator),
+            Type: $3,
+            WindowSpec: $9,
+            OrderBy: orderBy,
+			WithinGroup: $8 != nil,
+        }
+    }
+|   PERCENTILE_CONT '(' expression ')' within_group_opt window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3},
+            WindowSpec: $6,
+            OrderBy: $5,
+            WithinGroup: $5 != nil,
+        }
+    }
+|   PERCENTILE_DISC '(' expression ')' within_group_opt window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3},
+            WindowSpec: $6,
+            OrderBy: $5,
+            WithinGroup: $5 != nil,
+        }
     }
 |  CLUSTER_CENTERS '(' func_type_opt expression_list order_by_opt kmeans_opt ')' window_spec_opt
       {
@@ -11934,14 +13640,16 @@ function_call_aggregate:
             WindowSpec: $5,
         }
     }
-|   APPROX_PERCENTILE '(' expression_list ')' window_spec_opt
+|   APPROX_PERCENTILE '(' expression_list ')' within_group_opt window_spec_opt
     {
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
             Exprs: $3,
-            WindowSpec: $5,
+            WindowSpec: $6,
+            OrderBy: $5,
+            WithinGroup: $5 != nil,
         }
     }
 |   BIT_AND '(' func_type_opt expression ')' window_spec_opt
@@ -12085,7 +13793,18 @@ function_call_aggregate:
 	    Exprs: tree.Exprs{$4},
 	    Type: $3,
 	    WindowSpec: $6,
-	    }
+	}
+    }
+|   MEDIAN '(' ')' WITHIN GROUP '(' order_by_clause ')' window_spec_opt
+    {
+	name := tree.NewUnresolvedColName($1)
+	$$ = &tree.FuncExpr{
+	    Func: tree.FuncName2ResolvableFunctionReference(name),
+        FuncName: tree.NewCStr($1, 1),
+	    OrderBy: $7,
+	    WithinGroup: true,
+	    WindowSpec: $9,
+	}
     }
 |   BITMAP_CONSTRUCT_AGG '(' func_type_opt expression ')' window_spec_opt
     {
@@ -12109,26 +13828,26 @@ function_call_aggregate:
             WindowSpec: $6,
         }
     }
-|   GROUPING '(' func_type_opt column_list ')' window_spec_opt
+|   GROUPING '(' func_type_opt expression_list ')' window_spec_opt
     {
         name := tree.NewUnresolvedColName($1)
-        var columnList tree.Exprs
-        for _, columnStr := range $4{
-            column := tree.NewUnresolvedColName(string(columnStr))
-            columnList = append(columnList, column)
-        }
-
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
-            Exprs: columnList,
+            Exprs: $4,
             Type: $3,
             WindowSpec: $6,
         }
     }
 |   JSON_ARRAYAGG '(' func_type_opt expression ')' window_spec_opt
     {
-        name := tree.NewUnresolvedColName($1)
+	    functionName := $1
+	    if strings.EqualFold(functionName, "array_agg") {
+	        // MatrixOne has no general SQL ARRAY value. ARRAY_AGG deliberately
+	        // adopts JSON_ARRAYAGG's JSON return contract instead.
+	        functionName = "json_arrayagg"
+	    }
+	    name := tree.NewUnresolvedColName(functionName)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
@@ -12161,6 +13880,7 @@ function_call_generic:
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
+            IsGeneric: isSQLModeSensitiveFunctionName($1),
             Exprs: $3,
         }
     }
@@ -12231,7 +13951,7 @@ function_call_generic:
             Exprs: $3,
         }
     }
-|   VARIANCE '(' func_type_opt expression ')'
+|   VARIANCE '(' func_type_opt expression ')' window_spec_opt
     {
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
@@ -12239,6 +13959,7 @@ function_call_generic:
             FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{$4},
             Type: $3,
+            WindowSpec: $6,
         }
     }
 |   NEXTVAL '(' expression_list ')'
@@ -12325,14 +14046,13 @@ function_call_generic:
             Exprs: tree.Exprs{arg0, arg1, $4, $6},
         }
     }
-|   VALUES '(' insert_column ')'
+|   VALUES '(' column_name_unresolved ')'
     {
-        column := tree.NewUnresolvedColName($3)
         name := tree.NewUnresolvedColName($1)
     	$$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
-            Exprs: tree.Exprs{column},
+            Exprs: tree.Exprs{$3},
         }
     }
 
@@ -12430,7 +14150,7 @@ function_call_nonkeyword:
 	{
         name := tree.NewUnresolvedColName($1)
         str := strings.ToLower($3)
-        arg1 := tree.NewNumVal(str, str, false, tree.P_char)
+        arg1 := tree.NewTimeUnitExpr(str)
 		$$ =  &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
@@ -12529,14 +14249,18 @@ function_call_keyword:
     }
 |   CHAR '(' expression_list USING charset_name ')'
     {
-        cn := tree.NewNumVal($5, $5, false, tree.P_char)
-        es := $3
-        es = append(es, cn)
-        name := tree.NewUnresolvedColName($1)
+        charName := tree.NewUnresolvedColName($1)
+        charExpr := &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(charName),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+        }
+        charset := tree.NewNumVal($5, $5, false, tree.P_char)
+        name := tree.NewUnresolvedColName("convert")
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStr($1, 1),
-            Exprs: es,
+            FuncName: tree.NewCStr("convert", 1),
+            Exprs: tree.Exprs{charExpr, charset},
         }
     }
 |   DATE STRING
@@ -12690,6 +14414,7 @@ name_confict:
 |   REPEAT
 |   REPLACE
 |   REVERSE
+|   RESPECT
 |   RIGHT
 |   ROW_COUNT
 |   SECOND
@@ -12803,11 +14528,19 @@ boolean_primary:
     {
         $$ = tree.NewIsNotNullExpr($1)
     }
+|   boolean_primary IS HIGH_NOT NULL %prec IS
+    {
+        $$ = tree.NewIsNotNullExpr($1)
+    }
 |   boolean_primary IS UNKNOWN %prec IS
     {
         $$ = tree.NewIsUnknownExpr($1)
     }
 |   boolean_primary IS NOT UNKNOWN %prec IS
+    {
+        $$ = tree.NewIsNotUnknownExpr($1)
+    }
+|   boolean_primary IS HIGH_NOT UNKNOWN %prec IS
     {
         $$ = tree.NewIsNotUnknownExpr($1)
     }
@@ -12819,11 +14552,19 @@ boolean_primary:
     {
         $$ = tree.NewIsNotTrueExpr($1)
     }
+|   boolean_primary IS HIGH_NOT TRUE %prec IS
+    {
+        $$ = tree.NewIsNotTrueExpr($1)
+    }
 |   boolean_primary IS FALSE %prec IS
     {
         $$ = tree.NewIsFalseExpr($1)
     }
 |   boolean_primary IS NOT FALSE %prec IS
+    {
+        $$ = tree.NewIsNotFalseExpr($1)
+    }
+|   boolean_primary IS HIGH_NOT FALSE %prec IS
     {
         $$ = tree.NewIsNotFalseExpr($1)
     }
@@ -12847,11 +14588,23 @@ predicate:
     {
         $$ = tree.NewComparisonExpr(tree.NOT_IN, $1, $4)
     }
+|   bit_expr HIGH_NOT IN col_tuple
+    {
+        $$ = tree.NewComparisonExpr(tree.NOT_IN, $1, $4)
+    }
+|   bit_expr MEMBER opt_of '(' simple_expr ')' %prec IN
+    {
+        $$ = tree.NewComparisonExpr(tree.MEMBER_OF, $1, $5)
+    }
 |   bit_expr LIKE simple_expr like_escape_opt
     {
         $$ = tree.NewComparisonExprWithEscape(tree.LIKE, $1, $3, $4)
     }
 |   bit_expr NOT LIKE simple_expr like_escape_opt
+    {
+        $$ = tree.NewComparisonExprWithEscape(tree.NOT_LIKE, $1, $4, $5)
+    }
+|   bit_expr HIGH_NOT LIKE simple_expr like_escape_opt
     {
         $$ = tree.NewComparisonExprWithEscape(tree.NOT_LIKE, $1, $4, $5)
     }
@@ -12863,6 +14616,10 @@ predicate:
     {
         $$ = tree.NewComparisonExprWithEscape(tree.NOT_ILIKE, $1, $4, $5)
     }
+|   bit_expr HIGH_NOT ILIKE simple_expr like_escape_opt
+    {
+        $$ = tree.NewComparisonExprWithEscape(tree.NOT_ILIKE, $1, $4, $5)
+    }
 |   bit_expr REGEXP bit_expr
     {
         $$ = tree.NewComparisonExpr(tree.REG_MATCH, $1, $3)
@@ -12871,11 +14628,19 @@ predicate:
     {
         $$ = tree.NewComparisonExpr(tree.NOT_REG_MATCH, $1, $4)
     }
+|   bit_expr HIGH_NOT REGEXP bit_expr
+    {
+        $$ = tree.NewComparisonExpr(tree.NOT_REG_MATCH, $1, $4)
+    }
 |   bit_expr BETWEEN bit_expr AND predicate
     {
         $$ = tree.NewRangeCond(false, $1, $3, $5)
     }
 |   bit_expr NOT BETWEEN bit_expr AND predicate
+    {
+        $$ = tree.NewRangeCond(true, $1, $4, $6)
+    }
+|   bit_expr HIGH_NOT BETWEEN bit_expr AND predicate
     {
         $$ = tree.NewRangeCond(true, $1, $4, $6)
     }
@@ -12889,6 +14654,10 @@ like_escape_opt:
     {
         $$ = $2
     }
+
+opt_of:
+    /* EMPTY */
+|   OF
 
 col_tuple:
     tuple_expression
@@ -13334,7 +15103,7 @@ decimal_type:
         	yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
         	goto ret1
         }
-        if $2.DisplayWith >= 24 {
+        if $2.Scale == tree.NotDefineDec && $2.DisplayWith > 24 {
             $$ = &tree.T{
             	InternalType: tree.InternalType{
             		Family: tree.FloatFamily,
@@ -13620,6 +15389,30 @@ char_type:
             },
         }
     }
+|   LONG VARCHAR
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.BlobFamily,
+                FamilyString: "mediumtext",
+                Locale: &locale,
+                Oid: uint32(defines.MYSQL_TYPE_TEXT),
+            },
+        }
+    }
+|   LONG VARBINARY
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.BlobFamily,
+                FamilyString: "mediumblob",
+                Locale: &locale,
+                Oid: uint32(defines.MYSQL_TYPE_MEDIUM_BLOB),
+            },
+        }
+    }
 |   DATALINK
     {
         locale := ""
@@ -13632,7 +15425,7 @@ char_type:
             },
         }
     }
-|   TEXT
+|   TEXT length_opt
     {
         locale := ""
         $$ = &tree.T{
@@ -13641,6 +15434,7 @@ char_type:
                 FamilyString: $1,
                 Locale: &locale,
                 Oid:    uint32(defines.MYSQL_TYPE_TEXT),
+                DisplayWith: $2,
             },
         }
     }
@@ -13680,7 +15474,7 @@ char_type:
             },
         }
     }
-|   BLOB
+|   BLOB length_opt
     {
         locale := ""
         $$ = &tree.T{
@@ -13689,6 +15483,7 @@ char_type:
                 FamilyString: $1,
                 Locale: &locale,
                 Oid:    uint32(defines.MYSQL_TYPE_BLOB),
+                DisplayWith: $2,
             },
         }
     }
@@ -13766,6 +15561,58 @@ char_type:
             },
         }
     }
+|   VECBF16 length_option_opt
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.ArrayFamily,
+                Locale: &locale,
+                FamilyString: $1,
+                DisplayWith: $2,
+                Oid:uint32(defines.MYSQL_TYPE_VARCHAR),
+            },
+        }
+    }
+|   VECF16 length_option_opt
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.ArrayFamily,
+                Locale: &locale,
+                FamilyString: $1,
+                DisplayWith: $2,
+                Oid:uint32(defines.MYSQL_TYPE_VARCHAR),
+            },
+        }
+    }
+|   VECINT8 length_option_opt
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.ArrayFamily,
+                Locale: &locale,
+                FamilyString: $1,
+                DisplayWith: $2,
+                Oid:uint32(defines.MYSQL_TYPE_VARCHAR),
+            },
+        }
+    }
+|   VECUINT8 length_option_opt
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.ArrayFamily,
+                Locale: &locale,
+                FamilyString: $1,
+                DisplayWith: $2,
+                Oid:uint32(defines.MYSQL_TYPE_VARCHAR),
+            },
+        }
+    }
 | ENUM '(' enum_values ')'
     {
         locale := ""
@@ -13811,6 +15658,35 @@ do_stmt:
     {
         $$ = &tree.Do {
             Exprs: $2,
+        }
+    }
+
+perform_stmt:
+    PERFORM perform_select
+    {
+        $2.IsPerform = true
+        if intoErr := tree.ValidatePerformSelectIntoPlacement($2); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        $$ = $2
+    }
+
+perform_select:
+    simple_select time_window_opt order_by_opt query_limit_opt rank_opt select_into_param_opt select_lock_opt
+    {
+        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: tree.SelectIntoExportOr($1, $6.Export), IntoVars: $6.UserVars, SelectLockInfo: $7}
+        if intoErr := tree.ValidatePerformSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+    }
+|   with_clause simple_select time_window_opt order_by_opt query_limit_opt rank_opt select_into_param_opt select_lock_opt
+    {
+        $$ = &tree.Select{Select: $2, TimeWindow: $3, OrderBy: $4, Limit: $5, RankOption: $6, Ep: tree.SelectIntoExportOr($2, $7.Export), IntoVars: $7.UserVars, SelectLockInfo: $8, With: $1}
+        if intoErr := tree.ValidatePerformSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
         }
     }
 
@@ -13931,7 +15807,7 @@ decimal_length_opt:
     /* EMPTY */
     {
         $$ = tree.LengthScaleOpt{
-            DisplayWith: 38,           // this is the default precision for decimal
+            DisplayWith: 10,           // MySQL default precision for DECIMAL/NUMERIC
             Scale: 0,
         }
     }
@@ -14197,6 +16073,8 @@ non_reserved_keyword:
 |   BOOL
 |   BITS_PER_CODE
 |   BRANCH
+|   CATALOG
+|   CATALOGS
 |   CLONE
 |   CANCEL
 |   CHAIN
@@ -14217,11 +16095,8 @@ non_reserved_keyword:
 |   COMPRESSED
 |   COMPACT
 |   COLUMN_FORMAT
-|   CONNECTOR
-|   CONNECTORS
 |	COLLATION
 |   SECONDARY_ENGINE_ATTRIBUTE
-|   STREAM
 |   ENGINE_ATTRIBUTE
 |   INSERT_METHOD
 |   CASCADE
@@ -14233,7 +16108,9 @@ non_reserved_keyword:
 |   DECIMAL
 |   DYNAMIC
 |   DISK
+|   DUMP
 |   DO
+|   PERFORM
 |   DOUBLE
 |   DIRECTORY
 |   DISTRIBUTION_MODE
@@ -14272,30 +16149,48 @@ non_reserved_keyword:
 |   HNSW
 |   CAGRA
 |   IVFPQ
+|   BM25
 |   PERSIST
 |   GRANT
 |   INCLUDE
 |   INT
 |   INTEGER
 |   INDEXES
+|   ICEBERG
+|   MONGODB
+|   MONGODB_PATH
+|   MONGODB_CONVERT
+|   DATASTREAM
+|   ESQL
+|   KAFKA
+|   CONNECTIONS
 |   INTERMEDIATE_GRAPH_DEGREE
 |   ISOLATION
 |   ITOPK_SIZE
 |   JSON
 |   VECF32
 |   VECF64
+|   VECBF16
+|   VECF16
+|   VECINT8
+|   VECUINT8
 |   KEY_BLOCK_SIZE
 |   LISTS
 |   OP_TYPE
 |   KMEANS_TRAIN_PERCENT
 |   KMEANS_MAX_ITERATION
 |   MAX_INDEX_CAPACITY
+|   MAX_POSTINGS_CAPACITY
+|   QUANTIZER_TRAIN_LIMIT
+|   POSITION_FREE
+|   FULLSCAN
 |   KEYS
 |   LANGUAGE
 |   LESS
 |   LEVEL
 |   LINESTRING
 |   LOGSERVICE
+|   LONG %prec LOWER_THAN_STRING
 |   LONGBLOB
 |   LONGTEXT
 |   LOCAL
@@ -14306,6 +16201,8 @@ non_reserved_keyword:
 |   MEDIUMINT
 |   MEDIUMTEXT
 |   MEMORY
+|   MEMBER
+|   METADATA
 |   MODE
 |   MULTILINESTRING
 |   MULTIPOINT
@@ -14318,6 +16215,8 @@ non_reserved_keyword:
 |   MIN_ROWS
 |   MONTH
 |   NAMES
+|   NAMESPACE
+|   NAMESPACES
 |   NCHAR
 |   NUMERIC
 |   NEVER
@@ -14328,6 +16227,7 @@ non_reserved_keyword:
 |   OPEN
 |   OPTION
 |   OUTPUT
+|   OVERWRITE
 |   SUMMARY
 |   PACK_KEYS
 |   PARTIAL
@@ -14354,8 +16254,10 @@ non_reserved_keyword:
 |   REPAIR
 |   REPEATABLE
 |   REPLICAS
+|   REF
 |   RELEASE
 |   RESUME
+|   RESPECT
 |   REVOKE
 |   REPLICATION
 |   ROW_FORMAT
@@ -14380,7 +16282,6 @@ non_reserved_keyword:
 |   STATS_AUTO_RECALC
 |   STATS_PERSISTENT
 |   STATS_SAMPLE_PAGES
-|	SOURCE
 |   SUBPARTITIONS
 |   SUBPARTITION
 |   SIMPLE
@@ -14459,6 +16360,7 @@ non_reserved_keyword:
 |	MODIFY
 |	ASCII
 |	AUTO_INCREMENT
+|	AUTO_ID_CACHE
 |	AUTOEXTEND_SIZE
 |	BSI
 |	BINDINGS
@@ -14527,6 +16429,8 @@ non_reserved_keyword:
 |	SUPER
 |	TABLESPACE
 |	TRUNCATE
+|   ASOF
+|   TOLERANCE
 |	VISIBLE
 |	WITHOUT
 |	VALIDATION
@@ -14560,6 +16464,8 @@ non_reserved_keyword:
 |	PRECEDING
 |	FOLLOWING
 |	FILL
+
+|	GAPFILL
 |	TABLE_NUMBER
 |	TABLE_VALUES
 |	TABLE_SIZE
@@ -14567,6 +16473,7 @@ non_reserved_keyword:
 |   TASKS
 |	COLUMN_NUMBER
 |	RETURNS
+|	RETURNING
 |	QUERY_RESULT
 |	MYSQL_COMPATIBILITY_MODE
 |   UNIQUE_CHECK_ON_AUTOINCR
@@ -14655,12 +16562,27 @@ not_keyword:
 |   SETVAL
 |   CURRVAL
 |   LASTVAL
-|   HEADERS
 |   SERIAL_EXTRACT
 |   BIT_CAST
 |   BITMAP_BIT_POSITION
 |   BITMAP_BUCKET_NUMBER
 |   BITMAP_COUNT
+|   PERCENTILE_CONT
+|   PERCENTILE_DISC
+
+value_window_null_treatment_opt:
+    {
+    }
+|   RESPECT NULLS
+    {
+    }
+
+nth_value_from_first_opt:
+    {
+    }
+|   FROM FIRST
+    {
+    }
 
 //mo_keywords:
 //    PROPERTIES

@@ -32,8 +32,12 @@ import (
 )
 
 type UsearchBruteForceIndex[T types.RealNumbers] struct {
-	Dataset      *[]T // flattend vector
-	Metric       usearch.Metric
+	Dataset *[]T // flattend vector
+	Metric  usearch.Metric
+	// MoMetric is the metric the caller asked for, kept because MetricTypeToUsearchMetric
+	// is lossy: Metric_L2Distance and Metric_L2sqDistance both become usearch.L2sq, so
+	// without it the search cannot tell whether the caller wants the distance sqrt-ed.
+	MoMetric     metric.MetricType
 	Dimension    uint
 	Count        uint
 	Quantization usearch.Quantization
@@ -41,7 +45,10 @@ type UsearchBruteForceIndex[T types.RealNumbers] struct {
 	deallocator  malloc.Deallocator
 }
 
-type GoBruteForceIndex[T types.RealNumbers] struct {
+// GoBruteForceIndex holds vectors of element type T and computes distances in
+// result type R (float32 for f32/narrow inputs, float64 for f64). R only ever
+// differs from "float32" for f64 input, so the common path stays float32.
+type GoBruteForceIndex[T types.ArrayElement, R types.RealNumbers] struct {
 	Dataset   [][]T // flattend vector
 	Metric    metric.MetricType
 	Dimension uint
@@ -49,7 +56,7 @@ type GoBruteForceIndex[T types.RealNumbers] struct {
 }
 
 var _ cache.VectorIndexSearchIf = &UsearchBruteForceIndex[float32]{}
-var _ cache.VectorIndexSearchIf = &GoBruteForceIndex[float32]{}
+var _ cache.VectorIndexSearchIf = &GoBruteForceIndex[float32, float32]{}
 
 func GetUsearchQuantizationFromType(v any) (usearch.Quantization, error) {
 	switch v.(type) {
@@ -62,25 +69,57 @@ func GetUsearchQuantizationFromType(v any) (usearch.Quantization, error) {
 	}
 }
 
-func NewCpuBruteForceIndex[T types.RealNumbers](dataset [][]T,
+// NewCpuBruteForceIndex builds a pure-Go brute-force index for any ArrayElement.
+// It dispatches by concrete element type and picks the distance result type R:
+// float64 only for float64 input, float32 for everything else (f32 + the narrow
+// quantizations bf16/f16/int8/uint8 — whose kernels the resolver casts to float32).
+func NewCpuBruteForceIndex[T types.ArrayElement](dataset [][]T,
 	dimension uint,
 	m metric.MetricType,
 	elemsz uint) (cache.VectorIndexSearchIf, error) {
 
-	return NewGoBruteForceIndex(dataset, dimension, m, elemsz)
+	// R = element type for f32/f64; float32 for the narrow quantizations.
+	switch ds := any(dataset).(type) {
+	case [][]float32:
+		return newGoBruteForce[float32, float32](ds, dimension, m), nil
+	case [][]float64:
+		return newGoBruteForce[float64, float64](ds, dimension, m), nil
+	case [][]types.BF16:
+		return newGoBruteForce[types.BF16, float32](ds, dimension, m), nil
+	case [][]types.Float16:
+		return newGoBruteForce[types.Float16, float32](ds, dimension, m), nil
+	case [][]int8:
+		return newGoBruteForce[int8, float32](ds, dimension, m), nil
+	case [][]uint8:
+		return newGoBruteForce[uint8, float32](ds, dimension, m), nil
+	default:
+		return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("brute force: unsupported element type %T", *new(T)))
+	}
 }
 
+// newGoBruteForce constructs a GoBruteForceIndex with explicit element type T and
+// distance result type R. The single constructor for both the public f32/f64
+// entry point and the narrow (R=float32) dispatch.
+func newGoBruteForce[T types.ArrayElement, R types.RealNumbers](dataset [][]T,
+	dimension uint,
+	m metric.MetricType) cache.VectorIndexSearchIf {
+
+	return &GoBruteForceIndex[T, R]{
+		Dataset:   dataset,
+		Metric:    m,
+		Dimension: dimension,
+		Count:     uint(len(dataset)),
+	}
+}
+
+// NewGoBruteForceIndex builds an f32/f64 index whose result type equals the
+// element type (R=T). Kept as the public one-type-param entry point.
 func NewGoBruteForceIndex[T types.RealNumbers](dataset [][]T,
 	dimension uint,
 	m metric.MetricType,
 	elemsz uint) (cache.VectorIndexSearchIf, error) {
 
-	idx := &GoBruteForceIndex[T]{}
-	idx.Metric = m
-	idx.Dimension = dimension
-	idx.Count = uint(len(dataset))
-	idx.Dataset = dataset
-	return idx, nil
+	return newGoBruteForce[T, T](dataset, dimension, m), nil
 }
 
 func NewUsearchBruteForceIndex[T types.RealNumbers](dataset [][]T,
@@ -91,6 +130,7 @@ func NewUsearchBruteForceIndex[T types.RealNumbers](dataset [][]T,
 
 	idx := &UsearchBruteForceIndex[T]{}
 	idx.Metric = metric.MetricTypeToUsearchMetric[m]
+	idx.MoMetric = m
 	idx.Quantization, err = GetUsearchQuantizationFromType(T(0))
 	if err != nil {
 		return nil, err
@@ -145,6 +185,7 @@ func NewUsearchBruteForceIndexFlattened[T types.RealNumbers](dataset []T,
 
 	idx := &UsearchBruteForceIndex[T]{}
 	idx.Metric = metric.MetricTypeToUsearchMetric[m]
+	idx.MoMetric = m
 	idx.Quantization, err = GetUsearchQuantizationFromType(T(0))
 	if err != nil {
 		return nil, err
@@ -157,8 +198,24 @@ func NewUsearchBruteForceIndexFlattened[T types.RealNumbers](dataset []T,
 	return idx, nil
 }
 
+// Preload has nothing to measure: the dataset is supplied at construction, so GetIndexSize
+// already answers before Load.
+func (idx *UsearchBruteForceIndex[T]) Preload(sqlproc *sqlexec.SqlProcess) error { return nil }
+
 func (idx *UsearchBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 	return nil
+}
+
+// GetIndexSize reports the flattened dataset the index holds in host memory. Nothing here
+// reaches a GPU, so the device figure is 0.
+// BuildTS is the fulltext2 async-freshness hook; brute-force search has no async watermark.
+func (idx *UsearchBruteForceIndex[T]) BuildTS() int64 { return 0 }
+
+func (idx *UsearchBruteForceIndex[T]) GetIndexSize() (hostBytes, deviceBytes int64) {
+	if idx.Dataset == nil {
+		return 0, 0
+	}
+	return int64(len(*idx.Dataset)) * int64(util.UnsafeSizeOf[T]()), 0
 }
 
 func (idx *UsearchBruteForceIndex[T]) SearchFloat32(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
@@ -248,9 +305,18 @@ func (idx *UsearchBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries 
 		return
 	}
 
+	// Same rebase HNSW applies at its usearch boundary (hnsw/search.go): usearch's IP
+	// metric is 1 - a·b where MO's inner_product is -a·b, and an l2_distance query off an
+	// L2sq index must be sqrt-ed. Both are monotonic, so the order usearch returned is
+	// preserved. Without this the two usearch consumers would disagree by exactly 1 on
+	// inner product — the same silent value error, one layer down.
+	//
+	// The metric the caller built the index with is the authority here — not
+	// rt.OrigFuncName, which the index search paths populate but a direct brute-force
+	// caller need not set (and whose empty value would look up as Metric_L2Distance).
 	distances = make([]float64, len(distances_f32))
 	for i, dist := range distances_f32 {
-		distances[i] = float64(dist)
+		distances[i] = metric.DistanceTransformHnsw(float64(dist), idx.MoMetric, idx.Metric)
 	}
 
 	keys_i64 := make([]int64, len(keys_ui64))
@@ -264,10 +330,6 @@ func (idx *UsearchBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries 
 	return
 }
 
-func (idx *UsearchBruteForceIndex[T]) UpdateConfig(sif cache.VectorIndexSearchIf) error {
-	return nil
-}
-
 func (idx *UsearchBruteForceIndex[T]) Destroy() {
 	if idx.deallocator != nil {
 		idx.deallocator.Deallocate()
@@ -278,26 +340,39 @@ func (idx *UsearchBruteForceIndex[T]) Destroy() {
 	}
 }
 
-func (idx *GoBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) error {
+// Preload has nothing to measure: the dataset is supplied at construction.
+func (idx *GoBruteForceIndex[T, R]) Preload(sqlproc *sqlexec.SqlProcess) error { return nil }
+
+func (idx *GoBruteForceIndex[T, R]) Load(sqlproc *sqlexec.SqlProcess) error {
 	return nil
 }
 
-func (idx *GoBruteForceIndex[T]) UpdateConfig(sif cache.VectorIndexSearchIf) error {
-	return nil
+// GetIndexSize reports the row-major dataset the index holds in host memory: the vectors plus
+// the per-row slice headers backing them. Nothing here reaches a GPU, so the device figure is 0.
+// BuildTS is the fulltext2 async-freshness hook; brute-force search has no async watermark.
+func (idx *GoBruteForceIndex[T, R]) BuildTS() int64 { return 0 }
+
+func (idx *GoBruteForceIndex[T, R]) GetIndexSize() (hostBytes, deviceBytes int64) {
+	var elems int64
+	for _, row := range idx.Dataset {
+		elems += int64(len(row))
+	}
+	rows := int64(len(idx.Dataset))
+	return elems*int64(util.UnsafeSizeOf[T]()) + rows*int64(util.UnsafeSizeOf[[]T]()), 0
 }
 
-func (idx *GoBruteForceIndex[T]) Destroy() {
+func (idx *GoBruteForceIndex[T, R]) Destroy() {
 }
 
 // SearchFloat32 implements VectorIndexSearchIf — writes results directly into caller-provided
 // slices, eliminating the intermediate []int64 and []float64 heap allocations of Search.
-func (idx *GoBruteForceIndex[T]) SearchFloat32(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
+func (idx *GoBruteForceIndex[T, R]) SearchFloat32(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
 	queries, ok := _queries.([][]T)
 	if !ok {
 		return moerr.NewInternalErrorNoCtx("queries type invalid")
 	}
 
-	distfn, err := metric.ResolveDistanceFn[T](idx.Metric)
+	distfn, err := metric.ResolveDistanceFn[T, R](idx.Metric)
 	if err != nil {
 		return err
 	}
@@ -311,15 +386,15 @@ func (idx *GoBruteForceIndex[T]) SearchFloat32(proc *sqlexec.SqlProcess, _querie
 	}
 
 	exec := concurrent.NewThreadPoolExecutor(int(nthreads))
-	return exec.Execute(
+	err = exec.Execute(
 		proc.GetContext(),
 		nqueries,
 		func(ctx context.Context, thread_id int, start, end int) error {
 			var heapKeysBuf []int64
-			var heapDistBuf []T
+			var heapDistBuf []R
 			if limit > 1 {
 				heapKeysBuf = make([]int64, limit)
-				heapDistBuf = make([]T, limit)
+				heapDistBuf = make([]R, limit)
 			}
 
 			for k := start; k < end; k++ {
@@ -329,7 +404,7 @@ func (idx *GoBruteForceIndex[T]) SearchFloat32(proc *sqlexec.SqlProcess, _querie
 				}
 
 				if limit == 1 {
-					minDist := metric.MaxFloat[T]()
+					minDist := metric.MaxFloat[R]()
 					minIdx := -1
 					for j := range idx.Dataset {
 						dist, err2 := distfn(q, idx.Dataset[j])
@@ -341,12 +416,18 @@ func (idx *GoBruteForceIndex[T]) SearchFloat32(proc *sqlexec.SqlProcess, _querie
 							minIdx = j
 						}
 					}
+					if minIdx < 0 {
+						// No candidate was ever closer than MaxFloat: the dataset is empty, or
+						// every distance left the element domain. -1 is not a row index -- callers
+						// feed this straight into UnionOne -- so fail instead of returning it.
+						return moerr.NewInternalErrorNoCtx("brute force: no nearest centroid for query; every candidate distance is out of range")
+					}
 					outKeys[k] = int64(minIdx)
 					outDists[k] = float32(minDist)
 					continue
 				}
 
-				h := vectorindex.NewFastMaxHeap[T, int64](limit, heapKeysBuf, heapDistBuf)
+				h := vectorindex.NewFastMaxHeap[R, int64](limit, heapKeysBuf, heapDistBuf)
 				for j := range idx.Dataset {
 					dist, err2 := distfn(q, idx.Dataset[j])
 					if err2 != nil {
@@ -369,15 +450,24 @@ func (idx *GoBruteForceIndex[T]) SearchFloat32(proc *sqlexec.SqlProcess, _querie
 			}
 			return nil
 		})
+	if err != nil {
+		return err
+	}
+	// No finite check here. A distance that left the element domain cannot win a min-comparison,
+	// so it never changes the ranking -- it matters only where one is handed back as a score, and
+	// that is the caller's boundary, not this one. Checking in one entry point but not the other
+	// made the same index validate or not depending on which was called. An
+	// all-candidates-out-of-domain query is still caught by the negative-index guard above.
+	return nil
 }
 
-func (idx *GoBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+func (idx *GoBruteForceIndex[T, R]) Search(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 	queries, ok := _queries.([][]T)
 	if !ok {
 		return nil, nil, moerr.NewInternalErrorNoCtx("queries type invalid")
 	}
 
-	distfn, err := metric.ResolveDistanceFn[T](idx.Metric)
+	distfn, err := metric.ResolveDistanceFn[T, R](idx.Metric)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -401,10 +491,10 @@ func (idx *GoBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, 
 		func(ctx context.Context, thread_id int, start, end int) (err2 error) {
 			// Pre-allocate heap buffers for this thread
 			var heapKeysBuf []int64
-			var heapDistBuf []T
+			var heapDistBuf []R
 			if limit > 1 {
 				heapKeysBuf = make([]int64, limit)
-				heapDistBuf = make([]T, limit)
+				heapDistBuf = make([]R, limit)
 			}
 
 			for k := start; k < end; k++ {
@@ -414,7 +504,7 @@ func (idx *GoBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, 
 				}
 
 				if limit == 1 {
-					minDist := metric.MaxFloat[T]()
+					minDist := metric.MaxFloat[R]()
 					minIdx := -1
 					for j := range idx.Dataset {
 						dist, err2 := distfn(q, idx.Dataset[j])
@@ -426,13 +516,17 @@ func (idx *GoBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, 
 							minIdx = j
 						}
 					}
+					if minIdx < 0 {
+						// see SearchFloat32: -1 is not a row index
+						return moerr.NewInternalErrorNoCtx("brute force: no nearest centroid for query; every candidate distance is out of range")
+					}
 					retKeys64[k*limit] = int64(minIdx)
 					retDistances[k*limit] = float64(minDist)
 					continue
 				}
 
 				// Max-heap logic for K > 1
-				h := vectorindex.NewFastMaxHeap[T, int64](limit, heapKeysBuf, heapDistBuf)
+				h := vectorindex.NewFastMaxHeap[R, int64](limit, heapKeysBuf, heapDistBuf)
 
 				for j := range idx.Dataset {
 					dist, err2 := distfn(q, idx.Dataset[j])
@@ -464,4 +558,16 @@ func (idx *GoBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, 
 	}
 
 	return retKeys64, retDistances, nil
+}
+
+// SearchInto is not yet implemented for this algo (box-free LIMIT path); it will migrate
+// from the []any Search per the SearchOutput plan. Mirrors fulltext2's SearchFloat32 stub.
+func (idx *UsearchBruteForceIndex[T]) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, _ *vectorindex.SearchOutput) error {
+	return moerr.NewInternalErrorNoCtx("SearchInto not supported")
+}
+
+// SearchInto is not yet implemented for this algo (box-free LIMIT path); it will migrate
+// from the []any Search per the SearchOutput plan. Mirrors fulltext2's SearchFloat32 stub.
+func (idx *GoBruteForceIndex[T, R]) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, _ *vectorindex.SearchOutput) error {
+	return moerr.NewInternalErrorNoCtx("SearchInto not supported")
 }

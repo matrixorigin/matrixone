@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -61,12 +62,29 @@ func createSimpleTableDef() *plan.TableDef {
 // Note: BuildInsertSQL expects columns matching tableDef.Cols (excluding internal columns)
 // BuildInsertSQL will extract first len(b.insertColTypes) columns, which is [id, name]
 // AtomicBatch.Append uses tsColIdx=2, pkColIdx=0
-func createTestBatchForAtomicBatch(t *testing.T, mp *mpool.MPool, ts types.TS, ids []int32) *batch.Batch {
+func appendTestBatchToAtomic(
+	t *testing.T,
+	atomic *AtomicBatch,
+	packer *types.Packer,
+	mp *mpool.MPool,
+	ts types.TS,
+	ids []int32,
+) {
 	t.Helper()
+	t.Cleanup(atomic.Close) // Close is idempotent after command ownership is released.
 	bat := batch.NewWithSize(3)
 	idVec := vector.NewVec(types.T_int32.ToType())
 	nameVec := vector.NewVec(types.T_varchar.ToType())
 	tsVec := vector.NewVec(types.T_TS.ToType())
+	bat.Vecs[0] = idVec
+	bat.Vecs[1] = nameVec
+	bat.Vecs[2] = tsVec
+	owned := true
+	t.Cleanup(func() {
+		if owned {
+			bat.Clean(mp)
+		}
+	})
 
 	for _, id := range ids {
 		require.NoError(t, vector.AppendFixed(idVec, id, false, mp))
@@ -75,11 +93,9 @@ func createTestBatchForAtomicBatch(t *testing.T, mp *mpool.MPool, ts types.TS, i
 		require.NoError(t, vector.AppendFixed(tsVec, ts, false, mp))
 	}
 
-	bat.Vecs[0] = idVec   // PK column (index 0) - matches tableDef.Cols[0]
-	bat.Vecs[1] = nameVec // name column (index 1) - matches tableDef.Cols[1]
-	bat.Vecs[2] = tsVec   // TS column (index 2) - used by AtomicBatch.Append
 	bat.SetRowCount(len(ids))
-	return bat
+	atomic.Append(packer, bat, 2, 0)
+	owned = false
 }
 
 // Helper function to create an AtomicBatch with test data
@@ -89,9 +105,7 @@ func createAtomicBatchWithData(t *testing.T, mp *mpool.MPool, ts types.TS, ids [
 	packer := types.NewPacker()
 	defer packer.Close()
 
-	bat := createTestBatchForAtomicBatch(t, mp, ts, ids)
-	// Append to atomic batch: tsColIdx=2, pkColIdx=0
-	atmBatch.Append(packer, bat, 2, 0)
+	appendTestBatchToAtomic(t, atmBatch, packer, mp, ts, ids)
 	return atmBatch
 }
 
@@ -101,6 +115,7 @@ func createSinkerForInsertDeleteTest(t *testing.T) (*mysqlSinker2, *sql.DB, sqlm
 	t.Helper()
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
 
 	executor := &Executor{
 		conn:          db,
@@ -139,6 +154,7 @@ func createSinkerWithTableDef(t *testing.T, tableDef *plan.TableDef, maxSQLSize 
 	t.Helper()
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
 
 	executor := &Executor{
 		conn:          db,
@@ -167,7 +183,10 @@ func TestHandleInsertDeleteBatch_Comprehensive(t *testing.T) {
 	ctx := context.Background()
 	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	require.NoError(t, err)
-	defer mpool.DeleteMPool(mp)
+	defer func() {
+		require.Zero(t, mp.CurrNB()+mp.OnHeapCurrNB())
+		mpool.DeleteMPool(mp)
+	}()
 
 	t.Run("Success_InsertOnly", func(t *testing.T) {
 		tableDef := createStandardTableDef()
@@ -181,26 +200,7 @@ func TestHandleInsertDeleteBatch_Comprehensive(t *testing.T) {
 		packer := types.NewPacker()
 		defer packer.Close()
 
-		// Create batch matching tableDef structure: [id, name, ts]
-		bat := batch.NewWithSize(3)
-		idVec := vector.NewVec(types.T_int32.ToType())
-		nameVec := vector.NewVec(types.T_varchar.ToType())
-		tsVec := vector.NewVec(types.T_TS.ToType())
-
-		// Add 2 rows
-		for i := 1; i <= 2; i++ {
-			require.NoError(t, vector.AppendFixed(idVec, int32(i), false, mp))
-			require.NoError(t, vector.AppendBytes(nameVec, []byte("test"), false, mp))
-			require.NoError(t, vector.AppendFixed(tsVec, types.BuildTS(100, 0), false, mp))
-		}
-
-		bat.Vecs[0] = idVec
-		bat.Vecs[1] = nameVec
-		bat.Vecs[2] = tsVec
-		bat.SetRowCount(2)
-
-		// Append to atomic batch: tsColIdx=2, pkColIdx=0
-		insertBatch.Append(packer, bat, 2, 0)
+		appendTestBatchToAtomic(t, insertBatch, packer, mp, types.BuildTS(100, 0), []int32{1, 2})
 
 		fromTs := types.BuildTS(100, 0)
 		toTs := types.BuildTS(200, 0)
@@ -252,9 +252,9 @@ func TestHandleInsertDeleteBatch_Comprehensive(t *testing.T) {
 		toTs := types.BuildTS(200, 0)
 		cmd := NewInsertDeleteBatchCommand(insertBatch, deleteBatch, fromTs, toTs)
 
-		// Expect INSERT SQL first, then DELETE SQL
-		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(2, 2))
+		// Deletes must precede inserts so an update or partition move retains its replacement row.
 		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 2))
+		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(2, 2))
 
 		err = sinker.handleInsertDeleteBatch(ctx, cmd)
 
@@ -325,7 +325,7 @@ func TestHandleInsertDeleteBatch_Comprehensive(t *testing.T) {
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	t.Run("Success_MultipleBatchesInInsert", func(t *testing.T) {
+	t.Run("Success_MultipleSourceBatchesCoalesceIntoOneInsertSQL", func(t *testing.T) {
 		tableDef := createStandardTableDef()
 		sinker, db, mock := createSinkerWithTableDef(t, tableDef, 1024*1024)
 		defer db.Close()
@@ -336,25 +336,52 @@ func TestHandleInsertDeleteBatch_Comprehensive(t *testing.T) {
 		defer packer.Close()
 
 		// Add first batch
-		bat1 := createTestBatchForAtomicBatch(t, mp, types.BuildTS(100, 0), []int32{1})
-		insertBatch.Append(packer, bat1, 2, 0) // tsColIdx=2, pkColIdx=0
+		appendTestBatchToAtomic(t, insertBatch, packer, mp, types.BuildTS(100, 0), []int32{1})
 
 		// Add second batch
-		bat2 := createTestBatchForAtomicBatch(t, mp, types.BuildTS(100, 0), []int32{2})
-		insertBatch.Append(packer, bat2, 2, 0) // tsColIdx=2, pkColIdx=0
+		appendTestBatchToAtomic(t, insertBatch, packer, mp, types.BuildTS(100, 0), []int32{2})
 
 		fromTs := types.BuildTS(100, 0)
 		toTs := types.BuildTS(200, 0)
 		cmd := NewInsertDeleteBatchCommand(insertBatch, nil, fromTs, toTs)
 
-		// Expect SQL for each batch
-		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(1, 1))
+		// AtomicBatch source batches must be coalesced before SQL execution.
 		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(1, 1))
 
 		err = sinker.handleInsertDeleteBatch(ctx, cmd)
 
 		assert.NoError(t, err)
 		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("Success_8KSourceBatchesCoalesceIntoOneInsertSQL", func(t *testing.T) {
+		tableDef := createStandardTableDef()
+		sinker, db, mock := createSinkerWithTableDef(t, tableDef, 1024*1024)
+		defer db.Close()
+
+		const rowCount = int(objectio.BlockMaxRows)
+		insertBatch := NewAtomicBatch(mp)
+		packer := types.NewPacker()
+		defer packer.Close()
+
+		for i := 0; i < rowCount; i++ {
+			ts := types.BuildTS(int64(i+100), 0)
+			appendTestBatchToAtomic(t, insertBatch, packer, mp, ts, []int32{int32(i)})
+		}
+		require.Len(t, insertBatch.Batches, rowCount)
+
+		cmd := NewInsertDeleteBatchCommand(
+			insertBatch,
+			nil,
+			types.BuildTS(100, 0),
+			types.BuildTS(int64(rowCount+100), 0),
+		)
+
+		// One expectation proves that the MySQL executor receives one bounded
+		// SQL statement instead of one statement for every source batch.
+		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(int64(rowCount), int64(rowCount)))
+		require.NoError(t, sinker.handleInsertDeleteBatch(ctx, cmd))
+		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
 	// Note: SkipNilBatch test removed because:
@@ -374,8 +401,7 @@ func TestHandleInsertDeleteBatch_Comprehensive(t *testing.T) {
 		defer packer.Close()
 
 		// Add valid batch
-		bat1 := createTestBatchForAtomicBatch(t, mp, types.BuildTS(100, 0), []int32{1})
-		insertBatch.Append(packer, bat1, 2, 0) // tsColIdx=2, pkColIdx=0
+		appendTestBatchToAtomic(t, insertBatch, packer, mp, types.BuildTS(100, 0), []int32{1})
 
 		// Add empty batch (must have same structure: [id, name, ts])
 		emptyBat := batch.NewWithSize(3)
@@ -397,10 +423,6 @@ func TestHandleInsertDeleteBatch_Comprehensive(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
-
-	// Note: BuildInsertSQL failure is hard to test with valid data structure
-	// The builder is robust and handles most edge cases internally.
-	// We focus on ExecSQL failures which are more common in real scenarios.
 
 	t.Run("Error_ExecInsertSQLFailure", func(t *testing.T) {
 		tableDef := createStandardTableDef()
@@ -444,6 +466,52 @@ func TestHandleInsertDeleteBatch_Comprehensive(t *testing.T) {
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
 
+	t.Run("Error_InsertAfterDeleteRollsBackAndPreservesWatermark", func(t *testing.T) {
+		tableDef := createStandardTableDef()
+		sinker, db, mock := createSinkerWithTableDef(t, tableDef, 1024*1024)
+		defer db.Close()
+		sinker.executor.debugTxnRecorder.doRecord = true
+
+		key := WatermarkKey{AccountId: 1, TaskId: "task-1", DBName: "src", TableName: "test"}
+		watermark := types.BuildTS(99, 0)
+		sinker.watermarkUpdater = &CDCWatermarkUpdater{
+			cacheCommitted: map[WatermarkKey]types.TS{key: watermark},
+		}
+
+		mock.ExpectBegin()
+		sinker.processCommand(ctx, NewBeginCommand())
+		require.Equal(t, v2TxnStateActive, sinker.txnState.Load())
+		require.NotNil(t, sinker.executor.tx)
+
+		insertBatch := createAtomicBatchWithData(t, mp, types.BuildTS(100, 0), []int32{1})
+		deleteBatch := createAtomicBatchWithData(t, mp, types.BuildTS(100, 0), []int32{2})
+		cmd := NewInsertDeleteBatchCommand(insertBatch, deleteBatch, types.BuildTS(100, 0), types.BuildTS(200, 0))
+		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec("fakeSql").WillReturnError(moerr.NewInternalErrorNoCtx("insert failed"))
+		sinker.processCommand(ctx, cmd)
+
+		require.ErrorContains(t, sinker.Error(), "insert failed")
+		require.Equal(t, v2TxnStateActive, sinker.txnState.Load(), "the existing transaction owns rollback")
+		require.Nil(t, cmd.InsertAtmBatch)
+		require.Nil(t, cmd.DeleteAtmBatch)
+		require.Nil(t, insertBatch.Rows)
+		require.Nil(t, deleteBatch.Rows)
+		require.Equal(t, watermark, sinker.watermarkUpdater.cacheCommitted[key])
+		require.Equal(t, []string{
+			"/* [100-0, 200-0) */ DELETE FROM `test_db`.`test` WHERE `id` IN ((2));",
+			"/* [100-0, 200-0) */ INSERT INTO `test_db`.`test` VALUES (1,'test') ON DUPLICATE KEY UPDATE `id`=VALUES(`id`),`name`=VALUES(`name`);",
+		}, sinker.executor.debugTxnRecorder.txnSQL)
+
+		mock.ExpectRollback()
+		sinker.ClearError()
+		sinker.processCommand(ctx, NewRollbackCommand())
+		require.NoError(t, sinker.Error())
+		require.Equal(t, v2TxnStateIdle, sinker.txnState.Load())
+		require.Nil(t, sinker.executor.tx)
+		require.Equal(t, watermark, sinker.watermarkUpdater.cacheCommitted[key])
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
 	t.Run("Success_WithProgressTracker", func(t *testing.T) {
 		tableDef := createStandardTableDef()
 		sinker, db, mock := createSinkerWithTableDef(t, tableDef, 1024*1024)
@@ -460,8 +528,8 @@ func TestHandleInsertDeleteBatch_Comprehensive(t *testing.T) {
 		cmd := NewInsertDeleteBatchCommand(insertBatch, deleteBatch, fromTs, toTs)
 
 		// Expect SQL executions
-		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(2, 2))
 		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(2, 2))
 
 		err = sinker.handleInsertDeleteBatch(ctx, cmd)
 
@@ -481,17 +549,14 @@ func TestHandleInsertDeleteBatch_Comprehensive(t *testing.T) {
 		defer packer.Close()
 
 		// Add same batch twice (will create duplicates)
-		bat1 := createTestBatchForAtomicBatch(t, mp, types.BuildTS(100, 0), []int32{1})
-		insertBatch.Append(packer, bat1, 2, 0)                                          // tsColIdx=2, pkColIdx=0
-		bat2 := createTestBatchForAtomicBatch(t, mp, types.BuildTS(100, 0), []int32{1}) // Same PK
-		insertBatch.Append(packer, bat2, 2, 0)                                          // tsColIdx=2, pkColIdx=0
+		appendTestBatchToAtomic(t, insertBatch, packer, mp, types.BuildTS(100, 0), []int32{1})
+		appendTestBatchToAtomic(t, insertBatch, packer, mp, types.BuildTS(100, 0), []int32{1}) // Same PK
 
 		fromTs := types.BuildTS(100, 0)
 		toTs := types.BuildTS(200, 0)
 		cmd := NewInsertDeleteBatchCommand(insertBatch, nil, fromTs, toTs)
 
 		// Expect SQL execution (duplicates are deduplicated, so only one row)
-		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(1, 1))
 		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(1, 1))
 
 		// Check duplicate tracking before Close() (Close() resets duplicateRows to 0)
@@ -505,31 +570,10 @@ func TestHandleInsertDeleteBatch_Comprehensive(t *testing.T) {
 		// Note: After Close(), duplicateRows is reset to 0, so we checked before
 	})
 
-	t.Run("Success_SlowSQL_Warning", func(t *testing.T) {
-		tableDef := createStandardTableDef()
-		sinker, db, mock := createSinkerWithTableDef(t, tableDef, 1024*1024)
-		defer db.Close()
-
-		insertBatch := createAtomicBatchWithData(t, mp, types.BuildTS(100, 0), []int32{1})
-		fromTs := types.BuildTS(100, 0)
-		toTs := types.BuildTS(200, 0)
-		cmd := NewInsertDeleteBatchCommand(insertBatch, nil, fromTs, toTs)
-
-		// Mock SQL execution
-		// Note: sqlmock doesn't support delaying execution, so we can't test the slow warning
-		// But we can verify the code path exists and executes successfully
-		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(1, 1))
-
-		err = sinker.handleInsertDeleteBatch(ctx, cmd)
-
-		assert.NoError(t, err)
-		assert.NoError(t, mock.ExpectationsWereMet())
-	})
-
 	t.Run("Success_MultipleSQLStatements", func(t *testing.T) {
 		tableDef := createStandardTableDef()
 		// Use small maxSQLSize to force multiple SQL statements
-		sinker, db, mock := createSinkerWithTableDef(t, tableDef, 100) // Very small limit
+		sinker, db, mock := createSinkerWithTableDef(t, tableDef, 160) // Small limit that still fits one upsert row
 		defer db.Close()
 
 		// Create batch with multiple rows
@@ -537,35 +581,29 @@ func TestHandleInsertDeleteBatch_Comprehensive(t *testing.T) {
 		packer := types.NewPacker()
 		defer packer.Close()
 
-		bat := createTestBatchForAtomicBatch(t, mp, types.BuildTS(100, 0), []int32{1, 2, 3, 4, 5})
-		insertBatch.Append(packer, bat, 2, 0) // tsColIdx=2, pkColIdx=0
+		appendTestBatchToAtomic(t, insertBatch, packer, mp, types.BuildTS(100, 0), []int32{1, 2, 3, 4, 5})
 
 		fromTs := types.BuildTS(100, 0)
 		toTs := types.BuildTS(200, 0)
 		cmd := NewInsertDeleteBatchCommand(insertBatch, nil, fromTs, toTs)
+		sinker.executor.debugTxnRecorder.doRecord = true
 
-		// Expect multiple SQL executions (due to size limit)
-		// With 5 rows and small maxSQLSize (200 bytes), should generate multiple SQLs
-		// Each row generates ~30-40 bytes, so 5 rows might fit in 1-2 SQLs depending on overhead
-		// Use flexible expectations - allow up to 5 SQLs (sqlmock will match as many as needed)
-		for i := 0; i < 5; i++ {
+		// The exact limit admits three rows, then the remaining two.
+		for i := 0; i < 2; i++ {
 			mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(1, 1))
 		}
 
 		err = sinker.handleInsertDeleteBatch(ctx, cmd)
 
-		// Should succeed even with multiple SQL statements
-		assert.NoError(t, err)
-		// Note: sqlmock will match only the SQLs that were actually executed
-		// If fewer SQLs were generated, the remaining expectations will be unmatched
-		// We can't easily verify exact count, but we verify it doesn't error
+		require.NoError(t, err)
+		require.NoError(t, mock.ExpectationsWereMet())
+		require.Equal(t, []string{
+			"/* [100-0, 200-0) */ INSERT INTO `test_db`.`test` VALUES (1,'test'),(2,'test'),(3,'test') ON DUPLICATE KEY UPDATE `id`=VALUES(`id`),`name`=VALUES(`name`);",
+			"/* [100-0, 200-0) */ INSERT INTO `test_db`.`test` VALUES (4,'test'),(5,'test') ON DUPLICATE KEY UPDATE `id`=VALUES(`id`),`name`=VALUES(`name`);",
+		}, sinker.executor.debugTxnRecorder.txnSQL)
 	})
 
-	// Note: BuildDeleteSQL failure is hard to test with valid data structure
-	// The builder is robust and handles most edge cases internally.
-	// We focus on ExecSQL failures which are more common in real scenarios.
-
-	t.Run("Success_InsertThenDeleteOrder", func(t *testing.T) {
+	t.Run("Success_DeleteThenInsertOrder", func(t *testing.T) {
 		tableDef := createStandardTableDef()
 		sinker, db, mock := createSinkerWithTableDef(t, tableDef, 1024*1024)
 		defer db.Close()
@@ -575,16 +613,19 @@ func TestHandleInsertDeleteBatch_Comprehensive(t *testing.T) {
 		fromTs := types.BuildTS(100, 0)
 		toTs := types.BuildTS(200, 0)
 		cmd := NewInsertDeleteBatchCommand(insertBatch, deleteBatch, fromTs, toTs)
+		sinker.executor.debugTxnRecorder.doRecord = true
 
-		// Verify order: INSERT first, then DELETE
-		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(1, 1))
 		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(1, 1))
 
 		err = sinker.handleInsertDeleteBatch(ctx, cmd)
 
 		assert.NoError(t, err)
-		// Verify expectations were met in order (INSERT before DELETE)
 		assert.NoError(t, mock.ExpectationsWereMet())
+		require.Equal(t, []string{
+			"/* [100-0, 200-0) */ DELETE FROM `test_db`.`test` WHERE `id` IN ((2));",
+			"/* [100-0, 200-0) */ INSERT INTO `test_db`.`test` VALUES (1,'test') ON DUPLICATE KEY UPDATE `id`=VALUES(`id`),`name`=VALUES(`name`);",
+		}, sinker.executor.debugTxnRecorder.txnSQL)
 	})
 }
 
@@ -593,7 +634,10 @@ func TestHandleInsertDeleteBatch_EdgeCases(t *testing.T) {
 	ctx := context.Background()
 	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	require.NoError(t, err)
-	defer mpool.DeleteMPool(mp)
+	defer func() {
+		require.Zero(t, mp.CurrNB()+mp.OnHeapCurrNB())
+		mpool.DeleteMPool(mp)
+	}()
 
 	t.Run("NilInsertBatch", func(t *testing.T) {
 		tableDef := createSimpleTableDef()
@@ -646,32 +690,6 @@ func TestHandleInsertDeleteBatch_EdgeCases(t *testing.T) {
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	t.Run("LargeBatch", func(t *testing.T) {
-		tableDef := createStandardTableDef()
-		sinker, db, mock := createSinkerWithTableDef(t, tableDef, 1024*1024)
-		defer db.Close()
-
-		// Create batch with many rows
-		ids := make([]int32, 100)
-		for i := range ids {
-			ids[i] = int32(i + 1)
-		}
-		insertBatch := createAtomicBatchWithData(t, mp, types.BuildTS(100, 0), ids)
-		fromTs := types.BuildTS(100, 0)
-		toTs := types.BuildTS(200, 0)
-		cmd := NewInsertDeleteBatchCommand(insertBatch, nil, fromTs, toTs)
-
-		// Expect SQL execution (may be split into multiple SQLs due to size limits)
-		// Allow up to 5 SQLs to be flexible
-		for i := 0; i < 5; i++ {
-			mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(100, 100))
-		}
-
-		err = sinker.handleInsertDeleteBatch(ctx, cmd)
-
-		assert.NoError(t, err)
-		// Note: May have multiple SQLs due to size limits, but should not error
-	})
 }
 
 // BenchmarkHandleInsertDeleteBatch benchmarks handleInsertDeleteBatch performance
@@ -681,7 +699,12 @@ func BenchmarkHandleInsertDeleteBatch(b *testing.B) {
 	if err != nil {
 		b.Fatalf("Failed to create mpool: %v", err)
 	}
-	defer mpool.DeleteMPool(mp)
+	defer func() {
+		if allocated := mp.CurrNB() + mp.OnHeapCurrNB(); allocated != 0 {
+			b.Fatalf("fixture leaked %d mpool bytes", allocated)
+		}
+		mpool.DeleteMPool(mp)
+	}()
 
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -732,9 +755,19 @@ func BenchmarkHandleInsertDeleteBatch(b *testing.B) {
 		idVec := vector.NewVec(types.T_int32.ToType())
 		nameVec := vector.NewVec(types.T_varchar.ToType())
 		tsVec := vector.NewVec(types.T_TS.ToType())
-		vector.AppendFixed(idVec, int32(1), false, mp)
-		vector.AppendBytes(nameVec, []byte("test"), false, mp)
-		vector.AppendFixed(tsVec, types.BuildTS(100, 0), false, mp)
+		bat.Vecs[0], bat.Vecs[1], bat.Vecs[2] = idVec, nameVec, tsVec
+		if err = vector.AppendFixed(idVec, int32(1), false, mp); err != nil {
+			bat.Clean(mp)
+			b.Fatal(err)
+		}
+		if err = vector.AppendBytes(nameVec, []byte("test"), false, mp); err != nil {
+			bat.Clean(mp)
+			b.Fatal(err)
+		}
+		if err = vector.AppendFixed(tsVec, types.BuildTS(100, 0), false, mp); err != nil {
+			bat.Clean(mp)
+			b.Fatal(err)
+		}
 		bat.Vecs[0] = idVec
 		bat.Vecs[1] = nameVec
 		bat.Vecs[2] = tsVec
@@ -744,6 +777,11 @@ func BenchmarkHandleInsertDeleteBatch(b *testing.B) {
 
 		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(1, 1))
 		cmd := NewInsertDeleteBatchCommand(insertBatch, nil, fromTs, toTs)
-		_ = sinker.handleInsertDeleteBatch(ctx, cmd)
+		if err = sinker.handleInsertDeleteBatch(ctx, cmd); err != nil {
+			b.Fatal(err)
+		}
+	}
+	if err = mock.ExpectationsWereMet(); err != nil {
+		b.Fatal(err)
 	}
 }

@@ -204,6 +204,27 @@ func TestWindowFunctionRetType(t *testing.T) {
 	})
 }
 
+func TestRankingWindowFunctionRetType(t *testing.T) {
+	want := map[int]types.T{
+		RANK:         types.T_uint64,
+		ROW_NUMBER:   types.T_uint64,
+		DENSE_RANK:   types.T_uint64,
+		PERCENT_RANK: types.T_float64,
+		NTILE:        types.T_int64,
+	}
+
+	for i := range supportedWindowInNewFramework {
+		fn := &supportedWindowInNewFramework[i]
+		wantType, ok := want[fn.functionId]
+		if !ok {
+			continue
+		}
+		require.Equal(t, wantType, fn.Overloads[0].retType(nil).Oid)
+		delete(want, fn.functionId)
+	}
+	require.Empty(t, want)
+}
+
 // TestCumeDistCheckFn tests the checkFn for CUME_DIST window function
 func TestCumeDistCheckFn(t *testing.T) {
 	// Find CUME_DIST function
@@ -235,4 +256,39 @@ func TestCumeDistCheckFn(t *testing.T) {
 		result := cumeDistFunc.checkFn(cumeDistFunc.Overloads, []types.Type{intType, intType})
 		require.Equal(t, failedFunctionParametersWrong, result.status)
 	})
+}
+
+func TestNtileCheckFn(t *testing.T) {
+	var ntileFunc *FuncNew
+	for i := range supportedWindowInNewFramework {
+		if supportedWindowInNewFramework[i].functionId == NTILE {
+			ntileFunc = &supportedWindowInNewFramework[i]
+			break
+		}
+	}
+	require.NotNil(t, ntileFunc)
+
+	for _, typ := range []types.Type{
+		types.T_int8.ToType(),
+		types.T_int64.ToType(),
+		types.T_uint64.ToType(),
+	} {
+		result := ntileFunc.checkFn(ntileFunc.Overloads, []types.Type{typ})
+		require.Equal(t, succeedMatched, result.status)
+	}
+
+	for _, typ := range []types.Type{
+		types.T_float64.ToType(),
+		types.T_decimal64.ToType(),
+		types.T_varchar.ToType(),
+	} {
+		result := ntileFunc.checkFn(ntileFunc.Overloads, []types.Type{typ})
+		require.Equal(t, failedFunctionParametersWrong, result.status)
+	}
+
+	require.Equal(t, failedFunctionParametersWrong,
+		ntileFunc.checkFn(ntileFunc.Overloads, nil).status)
+	require.Equal(t, failedFunctionParametersWrong,
+		ntileFunc.checkFn(ntileFunc.Overloads,
+			[]types.Type{types.T_int64.ToType(), types.T_int64.ToType()}).status)
 }

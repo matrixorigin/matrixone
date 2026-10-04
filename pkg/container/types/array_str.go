@@ -15,11 +15,13 @@
 package types
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"math"
 	"strconv"
 	"strings"
 	"unicode"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // This class is only for benchmark analysis for StringToArray and ArrayToString.
@@ -260,13 +262,24 @@ func indexFrom(str, substr string, start int) int {
 	return pos
 }
 
+// rejectNonFiniteArrayElem returns an error when a vector element is NaN or ±Inf.
+func rejectNonFiniteArrayElem(num float64) error {
+	if math.IsNaN(num) || math.IsInf(num, 0) {
+		return moerr.NewInternalErrorNoCtxf("vector element cannot be NaN or Inf: %v", num)
+	}
+	return nil
+}
+
 // stringToT convert str to T
-func stringToT[T RealNumbers](str string) (t T, err error) {
+func stringToT[T ArrayElement](str string) (t T, err error) {
 	switch any(t).(type) {
 	case float32:
 		num, err := strconv.ParseFloat(str, 32)
 		if err != nil {
 			return t, moerr.NewInternalErrorNoCtxf("error while casting %s to %s", str, T_float32.String())
+		}
+		if err = rejectNonFiniteArrayElem(num); err != nil {
+			return t, err
 		}
 		// FIX: https://stackoverflow.com/a/36391858/1609570
 		numf32 := float32(num)
@@ -276,7 +289,56 @@ func stringToT[T RealNumbers](str string) (t T, err error) {
 		if err != nil {
 			return t, moerr.NewInternalErrorNoCtxf("error while casting %s to %s", str, T_float64.String())
 		}
+		if err = rejectNonFiniteArrayElem(num); err != nil {
+			return t, err
+		}
 		return *(*T)(unsafe.Pointer(&num)), nil
+	case BF16:
+		num, err := strconv.ParseFloat(str, 32)
+		if err != nil {
+			return t, moerr.NewInternalErrorNoCtxf("error while casting %s to %s", str, T_array_bf16.String())
+		}
+		bf := BF16FromFloat32(float32(num))
+		// Check the NARROWED value: a NaN/Inf literal, or a finite literal that overflows
+		// the 16-bit range (e.g. 3.4e38 for bf16), becomes ±Inf only after narrowing.
+		if err = rejectNonFiniteArrayElem(float64(bf.ToFloat32())); err != nil {
+			return t, err
+		}
+		return *(*T)(unsafe.Pointer(&bf)), nil
+	case Float16:
+		num, err := strconv.ParseFloat(str, 32)
+		if err != nil {
+			return t, moerr.NewInternalErrorNoCtxf("error while casting %s to %s", str, T_array_float16.String())
+		}
+		h := Float16FromFloat32(float32(num))
+		// Check the NARROWED value: a NaN/Inf literal, or a finite literal that overflows
+		// the 16-bit range (e.g. 70000 for f16), becomes ±Inf only after narrowing.
+		if err = rejectNonFiniteArrayElem(float64(h.ToFloat32())); err != nil {
+			return t, err
+		}
+		return *(*T)(unsafe.Pointer(&h)), nil
+	case int8:
+		// Strict: a vecint8 string literal must be an integer in [-128,127].
+		// Non-integer ("1.4") or out-of-range ("200") values error rather than
+		// silently rounding/clamping. (The vecf32 -> vecint8 CAST path does
+		// round+clamp; only direct string parsing is strict.)
+		num, err := strconv.ParseInt(str, 10, 8)
+		if err != nil {
+			return t, moerr.NewInternalErrorNoCtxf("error while casting %s to %s", str, T_array_int8.String())
+		}
+		i8 := int8(num)
+		return *(*T)(unsafe.Pointer(&i8)), nil
+	case uint8:
+		// Strict: a vecuint8 string literal must be an integer in [0,255].
+		// Non-integer ("1.4") or out-of-range ("300") values error rather than
+		// silently rounding/clamping. (The vecf32 -> vecuint8 CAST path does
+		// round+clamp; only direct string parsing is strict.)
+		num, err := strconv.ParseUint(str, 10, 8)
+		if err != nil {
+			return t, moerr.NewInternalErrorNoCtxf("error while casting %s to %s", str, T_array_uint8.String())
+		}
+		u8 := uint8(num)
+		return *(*T)(unsafe.Pointer(&u8)), nil
 	default:
 		panic(moerr.NewInternalErrorNoCtx("not implemented"))
 	}

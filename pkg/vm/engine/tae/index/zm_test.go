@@ -16,6 +16,11 @@ package index
 
 import (
 	"bytes"
+	"math"
+	"math/big"
+	"strconv"
+
+	"golang.org/x/exp/constraints"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -185,7 +190,7 @@ var testCases = []*testCase{
 		arithExpects: []*testArithRes{
 			{makeZM(types.T_decimal64, 8, types.Decimal64(3001), types.Decimal64(20004)), true},
 			{makeZM(types.T_decimal64, 8, types.Decimal64(2996), types.Decimal64(19999)), true},
-			{makeZM(types.T_decimal64, 12, types.Decimal64(3), types.Decimal64(80)), true},
+			{makeZM(types.T_decimal64, 12, types.Decimal64(0), types.Decimal64(8)), true},
 		},
 		idx: 4,
 	},
@@ -386,6 +391,99 @@ func TestZoneMapAnyInConstNull(t *testing.T) {
 	require.Equal(t, 0, upper)
 }
 
+func TestZoneMapFloatNaNPruningContract(t *testing.T) {
+	t.Run("float32", func(t *testing.T) {
+		testZoneMapFloatNaNPruningContract(
+			t, types.T_float32, float32(math.NaN()))
+	})
+	t.Run("float64", func(t *testing.T) {
+		testZoneMapFloatNaNPruningContract(
+			t, types.T_float64, math.NaN())
+	})
+}
+
+func testZoneMapFloatNaNPruningContract[T ~float32 | ~float64](
+	t *testing.T,
+	oid types.T,
+	nan T,
+) {
+	t.Helper()
+	mp := mpool.MustNewZero()
+	defer func() {
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	// New metadata ignores NaN regardless of its batch position.
+	for _, values := range [][]T{{nan, 7}, {7, nan}} {
+		input := newSortedFloatTestVector(t, mp, oid, values, false)
+		zm := NewZM(oid, 0)
+		require.NoError(t, BatchUpdateZM(zm, input))
+		input.Free(mp)
+		require.True(t, zm.IsInited())
+		require.Equal(t, T(7), zm.GetMin())
+		require.Equal(t, T(7), zm.GetMax())
+	}
+
+	allNaN := newSortedFloatTestVector(t, mp, oid, []T{nan, nan}, false)
+	allNaNZM := NewZM(oid, 0)
+	require.NoError(t, BatchUpdateZM(allNaNZM, allNaN))
+	allNaN.Free(mp)
+	require.False(t, allNaNZM.IsInited())
+
+	// A legacy [NaN, NaN] summary might have hidden ordinary values. It must
+	// disable every negative pruning decision, including the Bloom subrange
+	// and the sorted seek/quick-break predicates.
+	legacyPoisoned := NewZM(oid, 0)
+	UpdateZM(legacyPoisoned, types.EncodeValue(nan, oid))
+	keys := newSortedFloatTestVector(
+		t, mp, oid, []T{-100, 7, 100, 200}, true)
+	require.True(t, legacyPoisoned.AnyIn(keys))
+	lower, upper := legacyPoisoned.SubVecIn(keys)
+	require.Equal(t, 0, lower)
+	require.Equal(t, keys.Length(), upper)
+	seven := types.EncodeValue(T(7), oid)
+	require.True(t, legacyPoisoned.AnyGEByValue(seven))
+	require.True(t, legacyPoisoned.AnyLEByValue(seven))
+	keys.Free(mp)
+
+	// Current vectors use slices' total float order (NaN first). Zonemap
+	// binary searches must use the same order and narrow Bloom's window to the
+	// one ordinary candidate which can overlap [1, 9].
+	ordinary := NewZM(oid, 0)
+	UpdateZM(ordinary, types.EncodeValue(T(1), oid))
+	UpdateZM(ordinary, types.EncodeValue(T(9), oid))
+	sortedKeys := newSortedFloatTestVector(
+		t, mp, oid, []T{nan, -5, 7, 10}, true)
+	require.True(t, ordinary.AnyIn(sortedKeys))
+	lower, upper = ordinary.SubVecIn(sortedKeys)
+	require.Equal(t, 2, lower)
+	require.Equal(t, 3, upper)
+	sortedKeys.Free(mp)
+
+	onlyNaNKeys := newSortedFloatTestVector(
+		t, mp, oid, []T{nan, nan, nan, nan}, true)
+	require.False(t, ordinary.AnyIn(onlyNaNKeys))
+	onlyNaNKeys.Free(mp)
+}
+
+func newSortedFloatTestVector[T ~float32 | ~float64](
+	t *testing.T,
+	mp *mpool.MPool,
+	oid types.T,
+	values []T,
+	sortValues bool,
+) *vector.Vector {
+	t.Helper()
+	vec := vector.NewVec(oid.ToType())
+	for _, value := range values {
+		require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+	}
+	if sortValues {
+		vec.InplaceSort()
+	}
+	return vec
+}
+
 func TestZMArray(t *testing.T) {
 	zm := NewZM(types.T_array_float32, 0)
 	zm.Update(types.ArrayToBytes[float32]([]float32{1, 1, 1}))
@@ -567,6 +665,34 @@ func TestPrefixInRange(t *testing.T) {
 	require.False(t, zm.PrefixInRange([]byte("aaa"), []byte("bbb"), 3))
 }
 
+func TestPrefixInIsIndependentOfNeedleOrder(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	zm := BuildZM(types.T_varchar, []byte("az"))
+	UpdateZM(zm, []byte("c"))
+
+	for _, needles := range [][]string{
+		{"a", "ab"},
+		{"ab", "a"},
+		{"x", "a", "ab"},
+	} {
+		vec := vector.NewVec(types.T_varchar.ToType())
+		for _, needle := range needles {
+			require.NoError(t, vector.AppendBytes(vec, []byte(needle), false, mp))
+		}
+		require.True(t, zm.PrefixIn(vec), "needles %v must match", needles)
+		vec.Free(mp)
+	}
+
+	miss := vector.NewVec(types.T_varchar.ToType())
+	defer miss.Free(mp)
+	for _, needle := range []string{"x", "xy"} {
+		require.NoError(t, vector.AppendBytes(miss, []byte(needle), false, mp))
+	}
+	require.False(t, zm.PrefixIn(miss))
+}
+
 func TestInRangeZM(t *testing.T) {
 	v10 := int64(10)
 	v20 := int64(20)
@@ -707,4 +833,203 @@ func BenchmarkUpdateZMVector(b *testing.B) {
 			BatchUpdateZM(zm, vec)
 		}
 	})
+}
+
+// ZM.getValue enumerated only vecf32/vecf64 and PANICS on its default, so a
+// bf16/f16/int8/uint8 vector ZM crashed the process. The user-visible symptom
+// was mo_table_col_max panicking on a table that merely CONTAINED such a column.
+//
+// Array ZMs are not inited by the normal update path (see TestZMArray), so this
+// drives getValue through GetMin/GetMax on a ZM whose buffers are set directly —
+// the shape a persisted/legacy inited array ZM takes.
+func TestZMNarrowVectorGetValue(t *testing.T) {
+	check := func(name string, oid types.T, payload []byte, want any) {
+		t.Helper()
+		zm := NewZM(oid, 0)
+		// updateMinString/updateMaxString also write the length header byte;
+		// copying into GetMinBuf() alone is a no-op on a fresh ZM (its length
+		// starts at 0). Payloads here are <= 30 bytes so nothing is truncated.
+		require.LessOrEqual(t, len(payload), 30, name+" payload fits the ZM buffer")
+		zm.updateMinString(payload)
+		zm.updateMaxString(payload)
+		zm.setInited()
+		require.NotPanics(t, func() {
+			require.Equal(t, want, zm.GetMin(), name+" min")
+			require.Equal(t, want, zm.GetMax(), name+" max")
+		}, name)
+	}
+
+	bf := types.Float32ToBF16Slice([]float32{1, 2, 3})
+	check("bf16", types.T_array_bf16, types.ArrayToBytes[types.BF16](bf), bf)
+
+	f16 := types.Float32ToFloat16Slice([]float32{1, 2, 3})
+	check("f16", types.T_array_float16, types.ArrayToBytes[types.Float16](f16), f16)
+
+	i8 := []int8{-1, 0, 7}
+	check("int8", types.T_array_int8, types.ArrayToBytes[int8](i8), i8)
+
+	u8 := []uint8{1, 128, 255}
+	check("uint8", types.T_array_uint8, types.ArrayToBytes[uint8](u8), u8)
+}
+
+func TestZMArithmeticOverflowIsUnknown(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		typ         types.T
+		left, right any
+		op          byte
+	}{
+		{"signed addition", types.T_int64, int64(math.MaxInt64), int64(1), '+'},
+		{"signed subtraction", types.T_int64, int64(math.MinInt64), int64(1), '-'},
+		{"signed multiplication", types.T_int64, int64(math.MinInt64), int64(-1), '*'},
+		{"unsigned addition", types.T_uint64, uint64(math.MaxUint64), uint64(1), '+'},
+		{"unsigned subtraction", types.T_uint64, uint64(0), uint64(1), '-'},
+		{"unsigned multiplication", types.T_uint64, uint64(math.MaxUint64), uint64(2), '*'},
+		{"float32 overflow", types.T_float32, float32(math.MaxFloat32), float32(2), '*'},
+		{"float64 overflow", types.T_float64, float64(math.MaxFloat64), float64(2), '*'},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			left := makeZM(tc.typ, 0, tc.left, tc.left)
+			right := makeZM(tc.typ, 0, tc.right, tc.right)
+			scratch := makeZM(tc.typ, 0, tc.left, tc.left)
+			var result ZM
+			switch tc.op {
+			case '+':
+				result = ZMPlus(left, right, scratch)
+			case '-':
+				result = ZMMinus(left, right, scratch)
+			case '*':
+				result = ZMMulti(left, right, scratch)
+			}
+			require.False(t, result.IsInited(), "overflow must retain the block for row evaluation")
+		})
+	}
+}
+
+// big.Int supplies an independent oracle for every integer width, including
+// multiplication's asymmetric MinInt / -1 boundary.
+func checkIntegerArithmeticOracle[T constraints.Integer](t *testing.T, values []T, minimum, maximum string) {
+	t.Helper()
+	low, _ := new(big.Int).SetString(minimum, 10)
+	high, _ := new(big.Int).SetString(maximum, 10)
+	number := func(v T) *big.Int {
+		var text string
+		if v < 0 {
+			text = strconv.FormatInt(int64(v), 10)
+		} else {
+			text = strconv.FormatUint(uint64(v), 10)
+		}
+		n, ok := new(big.Int).SetString(text, 10)
+		require.True(t, ok)
+		return n
+	}
+	for _, a := range values {
+		for _, b := range values {
+			for _, op := range []byte{'+', '-', '*'} {
+				expected := new(big.Int)
+				switch op {
+				case '+':
+					expected.Add(number(a), number(b))
+				case '-':
+					expected.Sub(number(a), number(b))
+				case '*':
+					expected.Mul(number(a), number(b))
+				}
+				result, valid := checkedIntegerArithmetic(a, b, op)
+				require.Equal(t, expected.Cmp(low) >= 0 && expected.Cmp(high) <= 0, valid, "%v %c %v", a, op, b)
+				if valid {
+					require.Equal(t, expected.String(), number(result).String(), "%v %c %v", a, op, b)
+				}
+			}
+		}
+	}
+}
+
+func TestCheckedIntegerArithmeticOracle(t *testing.T) {
+	checkIntegerArithmeticOracle(t, []int8{math.MinInt8, -65, -1, 0, 1, 64, math.MaxInt8}, "-128", "127")
+	checkIntegerArithmeticOracle(t, []int16{math.MinInt16, -16385, -1, 0, 1, 16384, math.MaxInt16}, "-32768", "32767")
+	checkIntegerArithmeticOracle(t, []int32{math.MinInt32, -1073741825, -1, 0, 1, 1073741824, math.MaxInt32}, "-2147483648", "2147483647")
+	checkIntegerArithmeticOracle(t, []int64{math.MinInt64, math.MinInt64 + 1, -4611686018427387905, -1, 0, 1, 4611686018427387904, math.MaxInt64}, "-9223372036854775808", "9223372036854775807")
+	checkIntegerArithmeticOracle(t, []uint8{0, 1, 127, 128, math.MaxUint8}, "0", "255")
+	checkIntegerArithmeticOracle(t, []uint16{0, 1, 32767, 32768, math.MaxUint16}, "0", "65535")
+	checkIntegerArithmeticOracle(t, []uint32{0, 1, 2147483647, 2147483648, math.MaxUint32}, "0", "4294967295")
+	checkIntegerArithmeticOracle(t, []uint64{0, 1, 9223372036854775807, 9223372036854775808, math.MaxUint64}, "0", "18446744073709551615")
+}
+
+func BenchmarkZMArithmetic(b *testing.B) {
+	for _, tc := range []struct {
+		name     string
+		typ      types.T
+		min, max any
+	}{
+		{"int64", types.T_int64, int64(-100), int64(100)},
+		{"float64", types.T_float64, float64(-100), float64(100)},
+	} {
+		left, right := makeZM(tc.typ, 0, tc.min, tc.max), makeZM(tc.typ, 0, tc.min, tc.max)
+		for _, op := range []struct {
+			name     string
+			evaluate func(ZM, ZM, ZM) ZM
+		}{
+			{"add", ZMPlus}, {"subtract", ZMMinus}, {"multiply", ZMMulti},
+		} {
+			b.Run(tc.name+"/"+op.name, func(b *testing.B) {
+				scratch := NewZM(tc.typ, 0)
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					scratch = op.evaluate(left, right, scratch)
+				}
+				if !scratch.IsInited() {
+					b.Fatal("finite in-range arithmetic must retain usable metadata")
+				}
+			})
+		}
+	}
+}
+
+func TestZMFloatArithmeticBounds(t *testing.T) {
+	for _, typ := range []types.T{types.T_float32, types.T_float64} {
+		maximum, smallest := float64(math.MaxFloat64), math.SmallestNonzeroFloat64
+		if typ == types.T_float32 {
+			maximum, smallest = float64(math.MaxFloat32), float64(math.SmallestNonzeroFloat32)
+		}
+		for _, tc := range []struct {
+			name                             string
+			op                               byte
+			min1, max1, min2, max2, min, max float64
+			valid                            bool
+		}{
+			{"rounded addition", '+', 1e-30, 1e-30, 1, 1, 1, 1, true},
+			{"underflow remains usable", '*', smallest, smallest, 0.5, 0.5, 0, 0, true},
+			{"addition overflow", '+', maximum, maximum, maximum, maximum, 0, 0, false},
+			{"subtraction overflow", '-', -maximum, -maximum, maximum, maximum, 0, 0, false},
+			{"one unsafe endpoint", '+', -maximum, 0, -maximum, 0, 0, 0, false},
+			{"one unsafe corner", '*', -1, maximum, 0, 2, 0, 0, false},
+			{"nonfinite input", '*', math.Inf(1), math.Inf(1), 0, 0, 0, 0, false},
+			{"NaN input", '+', math.NaN(), math.NaN(), 1, 1, 0, 0, false},
+		} {
+			t.Run(typ.String()+"/"+tc.name, func(t *testing.T) {
+				makeFloatZM := func(min, max float64) ZM {
+					if typ == types.T_float32 {
+						return makeZM(typ, 0, float32(min), float32(max))
+					}
+					return makeZM(typ, 0, min, max)
+				}
+				left, right := makeFloatZM(tc.min1, tc.max1), makeFloatZM(tc.min2, tc.max2)
+				var result ZM
+				switch tc.op {
+				case '+':
+					result = ZMPlus(left, right, nil)
+				case '-':
+					result = ZMMinus(left, right, nil)
+				case '*':
+					result = ZMMulti(left, right, nil)
+				}
+				require.Equal(t, tc.valid, result.IsInited())
+				if tc.valid {
+					require.Equal(t, makeFloatZM(tc.min, tc.max), result)
+				}
+			})
+		}
+	}
 }

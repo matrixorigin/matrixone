@@ -14,12 +14,12 @@ uint64_col bigint unsigned not null
 load data infile {'filepath'='$resources/load_data/string_to_int.parq', 'format'='parquet'}
 into table test_string_to_int_all;
 select * from test_string_to_int_all order by int32_col;
-int8_col    int16_col    int32_col    int64_col    uint8_col    uint16_col    uint32_col    uint64_col
--128    -32768    -2147483648    -9223372036854775808    5    500    5000    50000
--1    -100    -1000    -10000    2    200    2000    20000
-0    0    0    0    0    0    0    0
-1    100    1000    10000    1    100    1000    10000
-127    32767    2147483647    9223372036854775807    255    65535    4294967295    18446744073709551615
+➤ int8_col[-6,8,0]  ¦  int16_col[5,16,0]  ¦  int32_col[4,32,0]  ¦  int64_col[-5,64,0]  ¦  uint8_col[-6,8,0]  ¦  uint16_col[5,16,0]  ¦  uint32_col[4,32,0]  ¦  uint64_col[-5,64,0]  𝄀
+-128  ¦  -32768  ¦  -2147483648  ¦  -9223372036854775808  ¦  5  ¦  500  ¦  5000  ¦  50000  𝄀
+-1  ¦  -100  ¦  -1000  ¦  -10000  ¦  2  ¦  200  ¦  2000  ¦  20000  𝄀
+0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  𝄀
+1  ¦  100  ¦  1000  ¦  10000  ¦  1  ¦  100  ¦  1000  ¦  10000  𝄀
+127  ¦  32767  ¦  2147483647  ¦  9223372036854775807  ¦  255  ¦  65535  ¦  4294967295  ¦  18446744073709551615
 select
 min(int8_col) as min_int8, max(int8_col) as max_int8,
 min(int16_col) as min_int16, max(int16_col) as max_int16,
@@ -28,8 +28,8 @@ max(uint8_col) as max_uint8,
 max(uint16_col) as max_uint16,
 max(uint32_col) as max_uint32
 from test_string_to_int_all;
-min_int8    max_int8    min_int16    max_int16    min_int32    max_int32    max_uint8    max_uint16    max_uint32
--128    127    -32768    32767    -2147483648    2147483647    255    65535    4294967295
+➤ min_int8[-6,8,0]  ¦  max_int8[-6,8,0]  ¦  min_int16[5,16,0]  ¦  max_int16[5,16,0]  ¦  min_int32[4,32,0]  ¦  max_int32[4,32,0]  ¦  max_uint8[-6,8,0]  ¦  max_uint16[5,16,0]  ¦  max_uint32[4,32,0]  𝄀
+-128  ¦  127  ¦  -32768  ¦  32767  ¦  -2147483648  ¦  2147483647  ¦  255  ¦  65535  ¦  4294967295
 create table test_string_to_int_nulls(
 id int not null,
 value bigint
@@ -37,16 +37,16 @@ value bigint
 load data infile {'filepath'='$resources/load_data/string_to_int_nulls.parq', 'format'='parquet'}
 into table test_string_to_int_nulls;
 select * from test_string_to_int_nulls order by id;
-id    value
-1    100
-2    null
-3    -50
-4    null
-5    200
+➤ id[4,32,0]  ¦  value[-5,64,0]  𝄀
+1  ¦  100  𝄀
+2  ¦  null  𝄀
+3  ¦  -50  𝄀
+4  ¦  null  𝄀
+5  ¦  200
 select count(*) as total, count(value) as non_null, count(*) - count(value) as null_count
 from test_string_to_int_nulls;
-total    non_null    null_count
-5    3    2
+➤ total[-5,64,0]  ¦  non_null[-5,64,0]  ¦  null_count[-5,64,0]  𝄀
+5  ¦  3  ¦  2
 create table test_string_to_int_special(
 leading_zero int not null,
 positive_sign int not null,
@@ -58,10 +58,10 @@ tab_newline int not null
 load data infile {'filepath'='$resources/load_data/string_to_int_special.parq', 'format'='parquet'}
 into table test_string_to_int_special;
 select * from test_string_to_int_special order by leading_zero;
-leading_zero    positive_sign    leading_space    trailing_space    both_spaces    tab_newline
-0    0    0    0    0    0
-1    1    1    1    1    1
-123    123    123    123    123    123
+➤ leading_zero[4,32,0]  ¦  positive_sign[4,32,0]  ¦  leading_space[4,32,0]  ¦  trailing_space[4,32,0]  ¦  both_spaces[4,32,0]  ¦  tab_newline[4,32,0]  𝄀
+0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  𝄀
+123  ¦  123  ¦  123  ¦  123  ¦  123  ¦  123
 create table test_int8_overflow(
 test_case varchar(50) not null,
 value tinyint not null

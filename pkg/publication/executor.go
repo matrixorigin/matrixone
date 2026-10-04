@@ -29,13 +29,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -49,6 +52,41 @@ const (
 )
 
 var running atomic.Bool
+
+var (
+	eventPublicationRetryAttempt = logutil.Event{
+		Name:    "publication.retry.attempt-failed",
+		Message: "publication operation failed and will be retried",
+	}
+	eventPublicationRetryExhausted = logutil.Event{
+		Name:    "publication.retry.exhausted",
+		Message: "publication operation failed after retry attempts",
+	}
+	eventPublicationLeaseCheckFailed = logutil.Event{
+		Name:    "publication.lease.check-failed",
+		Message: "publication lease check failed",
+	}
+	eventPublicationLeaseNotHeld = logutil.Event{
+		Name:    "publication.lease.executor-stopping",
+		Message: "publication executor is stopping because it does not hold the lease",
+	}
+	eventPublicationLeaseOwnerMismatch = logutil.Event{
+		Name:    "publication.lease.owner-mismatch",
+		Message: "publication lease is held by another CN",
+	}
+	eventPublicationTaskSubmitFailed = logutil.Event{
+		Name:    "publication.task.submit-failed",
+		Message: "publication task could not be submitted to the worker",
+	}
+	eventPublicationIterationStateUpdateFailed = logutil.Event{
+		Name:    "publication.iteration.state-update-failed",
+		Message: "publication iteration state update failed",
+	}
+	eventPublicationExecutorStartFailed = logutil.Event{
+		Name:    "publication.executor.start-failed",
+		Message: "publication executor startup failed",
+	}
+)
 
 const (
 	// These are kept for backward compatibility, prefer using config center
@@ -127,7 +165,10 @@ func PublicationTaskExecutorFactory(
 		}
 
 		if err = exec.Start(); err != nil {
-			return
+			eventPublicationExecutorStartFailed.ErrorLazy(func() []zap.Field {
+				return append([]zap.Field{zap.String("operation", "start")}, logutil.ErrorFingerprintFields("error", err)...)
+			})
+			return moerr.NewInternalErrorNoCtx("publication executor startup failed")
 		}
 		exec.waitForTermination(ctx)
 		exec.Stop()
@@ -330,6 +371,7 @@ func (exec *PublicationTaskExecutor) initStateLocked(parent context.Context) err
 	// next generation entirely from that authoritative snapshot.
 	err := retryPublication(
 		ctx,
+		"repair-abandoned-tasks",
 		func() error {
 			return exec.repairAbandonedTasks(ctx)
 		},
@@ -341,6 +383,7 @@ func (exec *PublicationTaskExecutor) initStateLocked(parent context.Context) err
 	}
 	err = retryPublication(
 		ctx,
+		"load-pending-tasks",
 		func() error {
 			return exec.rebuildState(ctx)
 		},
@@ -432,27 +475,24 @@ func (exec *PublicationTaskExecutor) run(ctx context.Context, worker Worker) {
 			// check lease before submitting tasks
 			ok, err := CheckLeaseWithRetry(ctx, exec.cnUUID, exec.txnEngine, exec.cnTxnClient)
 			if err != nil {
-				logutil.Error(
-					"Publication-Task check lease failed",
-					zap.Error(err),
-				)
 				continue
 			}
 			if !ok {
-				logutil.Error("Publication-Task lease check failed, stopping executor")
+				eventPublicationLeaseNotHeld.WarnLazy(func() []zap.Field {
+					return append(logutil.StringFingerprintFields("cn", exec.cnUUID), zap.Int("candidate-count", len(candidateTasks)))
+				})
 				go exec.Cancel()
 				return
 			}
 			for _, task := range candidateTasks {
 				err = worker.Submit(task.TaskID, task.LSN, task.State)
 				if err != nil {
-					logutil.Error(
-						"Publication-Task submit task failed",
-						zap.String("taskID", task.TaskID),
-						zap.Uint64("lsn", task.LSN),
-						zap.Int8("state", task.State),
-						zap.Error(err),
-					)
+					eventPublicationTaskSubmitFailed.ErrorLazy(func() []zap.Field {
+						return append([]zap.Field{
+							zap.Uint64("lsn", task.LSN),
+							zap.Int8("state", task.State),
+						}, append(logutil.StringFingerprintFields("task-id", task.TaskID), logutil.ErrorFingerprintFields("error", err)...)...)
+					})
 					continue
 				}
 				// Admission is the linearization point. Mark the task pending only
@@ -1252,7 +1292,9 @@ func GCSnapshots(
 
 	// Delete each snapshot in separate transaction
 	for _, sname := range snapshotsToDelete {
-		deleteSnapshotInSeparateTxn(ctx, txnEngine, cnTxnClient, cnUUID, sname)
+		if err := deleteSnapshotInSeparateTxn(ctx, txnEngine, cnTxnClient, cnUUID, sname); err != nil {
+			return err
+		}
 	}
 
 	if len(snapshotsToDelete) > 0 {
@@ -1271,32 +1313,73 @@ func deleteSnapshotInSeparateTxn(
 	cnTxnClient client.TxnClient,
 	cnUUID string,
 	snapshotName string,
-) {
-	txn, err := getTxn(ctx, txnEngine, cnTxnClient, "publication gc delete snapshot")
+) error {
+	txn, err := getTxn(
+		ctx,
+		txnEngine,
+		cnTxnClient,
+		"publication gc delete snapshot",
+		client.WithTxnMode(txn.TxnMode_Pessimistic),
+		client.WithTxnIsolation(txn.TxnIsolation_RC),
+	)
 	if err != nil {
 		logutil.Error("Publication-Task GCSnapshots failed to create txn for deleting snapshot",
 			zap.String("sname", snapshotName),
 			zap.Error(err),
 		)
-		return
+		return err
 	}
-	defer txn.Commit(ctx)
+	return deleteSnapshotWithLifecycleGate(ctx, txn, cnUUID, snapshotName, ExecWithResult)
+}
+
+type snapshotGCExec func(
+	context.Context, string, string, client.TxnOperator,
+) (executor.Result, error)
+
+// deleteSnapshotWithLifecycleGate keeps CCPR cleanup in the same owner-catalog
+// order as snapshot publication, restore, and lineage GC. Every pre-commit
+// failure rolls the transaction back; a commit failure is returned verbatim
+// because the client operator owns unknown-commit finalization semantics.
+func deleteSnapshotWithLifecycleGate(
+	ctx context.Context,
+	txn client.TxnOperator,
+	cnUUID string,
+	snapshotName string,
+	exec snapshotGCExec,
+) (err error) {
+	commitAttempted := false
+	defer func() {
+		if err != nil && !commitAttempted {
+			err = errors.Join(err, txn.Rollback(ctx))
+		}
+	}()
+
+	gate, err := exec(ctx, databranchutils.LineageOwnerLifecycleLockSQL(), cnUUID, txn)
+	gate.Close()
+	if err != nil {
+		return err
+	}
 
 	// Use direct delete since GC doesn't have publication context
-	dropSQL := fmt.Sprintf("delete from mo_catalog.mo_snapshots where sname = '%s'", snapshotName)
-	result, err := ExecWithResult(ctx, dropSQL, cnUUID, txn)
+	dropSQL := fmt.Sprintf("delete from mo_catalog.mo_snapshots where sname = %s", sqlquote.String(snapshotName))
+	result, err := exec(ctx, dropSQL, cnUUID, txn)
+	result.Close()
 	if err != nil {
 		logutil.Error("Publication-Task GCSnapshots failed to drop snapshot",
 			zap.String("sname", snapshotName),
 			zap.Error(err),
 		)
-		return
+		return err
 	}
-	defer result.Close()
+	commitAttempted = true
+	if err = txn.Commit(ctx); err != nil {
+		return err
+	}
 
 	logutil.Info("Publication-Task GCSnapshots deleted snapshot",
 		zap.String("sname", snapshotName),
 	)
+	return nil
 }
 
 func deleteCcprLogRecordInSeparateTxn(
@@ -1335,6 +1418,7 @@ func deleteCcprLogRecordInSeparateTxn(
 
 func retryPublication(
 	ctx context.Context,
+	operation string,
 	fn func() error,
 	retryOpt *ExecutorRetryOption,
 ) (err error) {
@@ -1375,17 +1459,27 @@ func retryPublication(
 
 		err = fn()
 		if err != nil {
-			logutil.Warn("Publication-Task retry attempt",
-				zap.Int("attempt", attempt),
-				zap.Int("maxAttempts", maxAttempts),
-				zap.Error(err),
-			)
+			eventPublicationRetryAttempt.WarnLazy(func() []zap.Field {
+				return append([]zap.Field{
+					zap.String("operation", operation),
+					zap.Int("attempt", attempt),
+					zap.Int("max-attempts", maxAttempts),
+					zap.Duration("elapsed", time.Since(startTime)),
+				}, logutil.ErrorFingerprintFields("error", err)...)
+			})
 		}
 		return err
 	})
 
 	if err != nil && !errors.Is(err, ErrNonRetryable) {
-		logutil.Errorf("Publication-Task retry failed, err: %v", err)
+		eventPublicationRetryExhausted.ErrorLazy(func() []zap.Field {
+			return append([]zap.Field{
+				zap.String("operation", operation),
+				zap.Int("attempt", attempt),
+				zap.Int("max-attempts", maxAttempts),
+				zap.Duration("elapsed", time.Since(startTime)),
+			}, logutil.ErrorFingerprintFields("error", err)...)
+		})
 	}
 	return err
 }
@@ -1421,6 +1515,7 @@ var getTxn = func(
 	cnEngine engine.Engine,
 	cnTxnClient client.TxnClient,
 	info string,
+	txnOptions ...client.TxnOption,
 ) (client.TxnOperator, error) {
 	nowTs := cnEngine.LatestLogtailAppliedTime()
 	createByOpt := client.WithTxnCreateBy(
@@ -1428,7 +1523,8 @@ var getTxn = func(
 		"",
 		info,
 		0)
-	op, err := cnTxnClient.New(ctx, nowTs, createByOpt)
+	txnOptions = append([]client.TxnOption{createByOpt}, txnOptions...)
+	op, err := cnTxnClient.New(ctx, nowTs, txnOptions...)
 	if err != nil {
 		return nil, err
 	}

@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"sort"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -92,46 +91,36 @@ func newImplPrefixIn() *implPrefixIn {
 	return &implPrefixIn{ready: false}
 }
 
-func (op *implPrefixIn) init(rvec *vector.Vector, mp *mpool.MPool) error {
+func (op *implPrefixIn) init(rvec *vector.Vector) {
 	op.ready = true
-	op.vals = make([][]byte, rvec.Length())
-	vlen := 0
-
-	var tmpVec *vector.Vector
-	var err error
-	if !rvec.GetSorted() {
-		tmpVec, err = rvec.Dup(mp)
-		if err != nil {
-			return err
-		}
-		tmpVec.InplaceSortAndCompact()
-		rvec = tmpVec
-	}
-	defer func() {
-		if tmpVec != nil {
-			tmpVec.Free(mp)
-		}
-	}()
-
-	rcol, rarea := vector.MustVarlenaRawData(rvec)
+	op.vals = make([][]byte, 0, rvec.Length())
 	for i := 0; i < rvec.Length(); i++ {
-		var rval []byte
-		rval = append(rval, rcol[i].GetByteSlice(rarea)...)
+		// prefix_in is an internal access predicate. A NULL IN-list item can
+		// never make a WHERE predicate true, so exclude it from the candidate
+		// prefixes instead of treating its empty payload as a universal prefix.
+		if rvec.IsNull(uint64(i)) {
+			continue
+		}
+		op.vals = append(op.vals, bytes.Clone(rvec.GetBytesAt(i)))
+	}
+	if !rvec.GetSorted() {
+		sort.Slice(op.vals, func(i, j int) bool {
+			return bytes.Compare(op.vals[i], op.vals[j]) < 0
+		})
+	}
+	vlen := 0
+	for _, rval := range op.vals {
 		if vlen == 0 || !bytes.HasPrefix(rval, op.vals[vlen-1]) {
 			op.vals[vlen] = rval
 			vlen++
 		}
 	}
 	op.vals = op.vals[:vlen]
-	return nil
 }
 
 func (op *implPrefixIn) doPrefixIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	if !op.ready {
-		err := op.init(parameters[1], proc.Mp())
-		if err != nil {
-			return err
-		}
+		op.init(parameters[1])
 	}
 
 	lvec := parameters[0]

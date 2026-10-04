@@ -390,6 +390,17 @@ func (t *CDCDao) DeleteManyWatermark(
 			return
 		}
 		deletedCnt += cnt
+
+		sql = cdc.CDCSQLBuilder.DeleteSnapshotEpochSQL(key.AccountId, key.TaskId)
+		logutil.Debug(
+			"cdc.dao.delete_snapshot_epoch_sql",
+			zap.Uint64("account-id", key.AccountId),
+			zap.String("task-id", key.TaskId),
+			zap.String("sql", sql),
+		)
+		if _, err = ExecuteAndGetRowsAffected(ctx, executor, sql); err != nil {
+			return
+		}
 	}
 
 	return
@@ -509,6 +520,34 @@ func (t *CDCDao) PrepareUpdateTask(
 	defer prepare.Close()
 
 	if result, err = prepare.ExecContext(ctx, targetState); err != nil {
+		return
+	}
+	affectedRows, err = result.RowsAffected()
+
+	return
+}
+
+// PrepareResumeTask publishes the legacy running admission only while the
+// catalog row has not already recorded a task failure. The state predicate is
+// evaluated by the same UPDATE that writes running, so a TableDetector failure
+// that commits before or concurrently with RESUME cannot be overwritten.
+func (t *CDCDao) PrepareResumeTask(
+	ctx context.Context,
+	accountId uint64,
+	taskName string,
+) (affectedRows int64, err error) {
+	var (
+		executor = t.MustGetSQLExecutor(ctx)
+		prepare  *sql.Stmt
+		result   sql.Result
+	)
+	sql := cdc.CDCSQLBuilder.UpdateTaskStateSQL(accountId, taskName) + " AND state <> ?"
+	if prepare, err = executor.PrepareContext(ctx, sql); err != nil {
+		return
+	}
+	defer prepare.Close()
+
+	if result, err = prepare.ExecContext(ctx, cdc.CDCState_Running, cdc.CDCState_Failed); err != nil {
 		return
 	}
 	affectedRows, err = result.RowsAffected()

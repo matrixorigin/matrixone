@@ -46,7 +46,7 @@ select * from articles where match(title,body)  AGAINST ('database' IN NATURAL L
 id    title    body
 1    MySQL Tutorial    DBMS stands for DataBase ...
 5    MySQL vs. YourSQL    In the following database comparison ...
-select count(*) from (select * from articles where match(title,body)  AGAINST ('database' IN NATURAL LANGUAGE MODE));
+select count(*) from (select * from articles where match(title,body)  AGAINST ('database' IN NATURAL LANGUAGE MODE)) as matched_articles;
 count(*)
 2
 drop table articles;
@@ -98,7 +98,7 @@ select * from articles where match(title,body)  AGAINST ('database' IN NATURAL L
 id    title    body
 1    {"title": "MySQL Tutorial"}    {"body": "DBMS stands for DataBase ..."}
 5    {"title": "MySQL vs. YourSQL"}    {"body": "In the following database comparison ..."}
-select count(*) from (select * from articles where match(title,body)  AGAINST ('database' IN NATURAL LANGUAGE MODE));
+select count(*) from (select * from articles where match(title,body)  AGAINST ('database' IN NATURAL LANGUAGE MODE)) as matched_articles;
 count(*)
 2
 drop table articles;

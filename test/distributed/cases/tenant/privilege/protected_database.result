@@ -138,8 +138,6 @@ create table protected_bvt_db.t2(a int);
 internal error: do not have privilege to execute the statement
 create external table protected_bvt_db.ext1(a int) infile{"filepath"='$resources/external_table_file/extable.csv'} fields terminated by ',' lines terminated by '\n';
 internal error: do not have privilege to execute the statement
-create dynamic table protected_bvt_db.dt1 as select * from protected_bvt_db.t1;
-internal error: do not have privilege to execute the statement
 create view protected_bvt_db.v2 as select * from protected_bvt_db.t1;
 internal error: do not have privilege to execute the statement
 alter view protected_bvt_db.v1 as select a from protected_bvt_db.t1;
@@ -173,8 +171,6 @@ internal error: do not have privilege to execute the statement
 create procedure protected_bvt_db.p2() 'begin select 1; end';
 internal error: do not have privilege to execute the statement
 drop procedure protected_bvt_db.p1;
-internal error: do not have privilege to execute the statement
-create connector for protected_bvt_db.conn1 with ("type"='kafka', "topic"='t1', "partition"='0', "value"='json', "bootstrap.servers"='127.0.0.1:9092');
 internal error: do not have privilege to execute the statement
 insert into protected_bvt_db.t1 values(2, 2);
 internal error: do not have privilege to execute the statement

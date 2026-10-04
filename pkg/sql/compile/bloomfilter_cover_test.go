@@ -21,148 +21,80 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/stretchr/testify/require"
 )
 
-func TestBuildReadersMembershipFilterFullCoverage(t *testing.T) {
-	// 1. Cover L1064-L1071 (case s.DataSource.Rel != nil) - if branch
-	t.Run("L1064-L1071_RelNotNull_MembershipFilterInSource", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-		expectedMembershipFilter := []byte{1, 2, 3}
+type membershipFilterCaptureEngine struct {
+	engine.Engine
+	hint engine.FilterHint
+}
 
-		mockRel := &mockRelationForMembershipFilter{}
-		s := &Scope{
-			Proc: proc,
-			DataSource: &Source{
-				Rel:                   mockRel,
-				MembershipFilterBytes: expectedMembershipFilter,
-				node: &plan.Node{
-					TableDef: &plan.TableDef{
-						TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
-					},
+func (e *membershipFilterCaptureEngine) BuildBlockReaders(
+	_ context.Context,
+	_ any,
+	_ timestamp.Timestamp,
+	_ *plan.Expr,
+	_ *plan.TableDef,
+	_ engine.RelData,
+	_ int,
+	filterHint ...engine.FilterHint,
+) ([]engine.Reader, error) {
+	e.hint = engine.FilterHint{}
+	if len(filterHint) > 0 {
+		e.hint = filterHint[0]
+	}
+	return []engine.Reader{new(readutil.EmptyReader)}, nil
+}
+
+func TestRemoteBuildReadersScopesMembershipFilterToIndexTable(t *testing.T) {
+	fulltextFilter := []byte{4, 5, 6}
+	tests := []struct {
+		name     string
+		tableDef *plan.TableDef
+		expected []byte
+	}{
+		{
+			name:     "ordinary table ignores unrelated filters",
+			tableDef: &plan.TableDef{Name: "t"},
+		},
+		{
+			name: "fulltext table uses fulltext filter",
+			tableDef: &plan.TableDef{
+				Name:      "__mo_index_secondary_fulltext",
+				TableType: catalog.FullTextIndex_TblType,
+			},
+			expected: fulltextFilter,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.Ctx = context.WithValue(proc.Ctx, defines.FulltextMembershipFilter{}, fulltextFilter)
+			capture := new(membershipFilterCaptureEngine)
+			scope := &Scope{
+				Proc:     proc,
+				IsRemote: true,
+				DataSource: &Source{
+					TableDef:           test.tableDef,
+					FilterList:         []*plan.Expr{plan2.MakeFalseExpr()},
+					RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
 				},
-			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
-		}
-
-		c := NewMockCompile(t)
-		c.proc = proc
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
-		s.DataSource.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{}
-
-		readers, err := s.buildReaders(c)
-		require.NoError(t, err)
-		require.NotNil(t, readers)
-		require.Equal(t, expectedMembershipFilter, mockRel.capturedHint.MembershipFilterBytes)
-	})
-
-	// 2. Cover L1064-L1071 (case s.DataSource.Rel != nil) - else if branch (Context)
-	t.Run("L1064-L1071_RelNotNull_MembershipFilterInContext", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-		expectedMembershipFilter := []byte{7, 8, 9}
-		proc.Ctx = context.WithValue(proc.Ctx, defines.IvfMembershipFilter{}, expectedMembershipFilter)
-
-		mockRel := &mockRelationForMembershipFilter{}
-		s := &Scope{
-			Proc: proc,
-			DataSource: &Source{
-				Rel:                   mockRel,
-				MembershipFilterBytes: nil, // Trigger else if
-				node: &plan.Node{
-					TableDef: &plan.TableDef{
-						TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
-					},
-				},
-			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
-		}
-
-		c := NewMockCompile(t)
-		c.proc = proc
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
-		s.DataSource.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{}
-
-		readers, err := s.buildReaders(c)
-		require.NoError(t, err)
-		require.NotNil(t, readers)
-		require.Equal(t, expectedMembershipFilter, mockRel.capturedHint.MembershipFilterBytes)
-	})
-
-	// 3. Cover L1139-L1146 (default case, Rel is nil initially) - if branch
-	t.Run("L1139-L1146_RelNull_PanicHack_Source", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-		expectedMembershipFilter := []byte{4, 5, 6}
-
-		s := &Scope{
-			Proc: proc,
-			DataSource: &Source{
-				Rel:                   nil, // This triggers the default case
-				MembershipFilterBytes: expectedMembershipFilter,
-				node: &plan.Node{
-					TableDef: &plan.TableDef{
-						TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
-					},
-				},
-			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
-		}
-
-		c := NewMockCompile(t)
-		c.proc = proc
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
-		s.DataSource.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{}
-
-		defer func() {
-			if r := recover(); r != nil {
-				t.Logf("Caught expected panic: %v", r)
+				NodeInfo: engine.Node{Mcpu: 1},
 			}
-		}()
+			compile := NewMockCompile(t)
+			compile.proc = proc
+			compile.e = capture
 
-		_, _ = s.buildReaders(c)
-	})
-
-	// 4. Cover L1139-L1146 (default case) - else if branch (Context)
-	t.Run("L1139-L1146_RelNull_PanicHack_Context", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-		expectedMembershipFilter := []byte{10, 11, 12}
-		proc.Ctx = context.WithValue(proc.Ctx, defines.IvfMembershipFilter{}, expectedMembershipFilter)
-
-		s := &Scope{
-			Proc: proc,
-			DataSource: &Source{
-				Rel:                   nil, // This triggers the default case
-				MembershipFilterBytes: nil, // Trigger else if
-				node: &plan.Node{
-					TableDef: &plan.TableDef{
-						TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
-					},
-				},
-			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
-		}
-
-		c := NewMockCompile(t)
-		c.proc = proc
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
-		s.DataSource.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{}
-
-		defer func() {
-			if r := recover(); r != nil {
-				t.Logf("Caught expected panic: %v", r)
-			}
-		}()
-
-		_, _ = s.buildReaders(c)
-	})
+			readers, err := scope.buildReaders(compile)
+			require.NoError(t, err)
+			require.Len(t, readers, 1)
+			require.Equal(t, test.expected, capture.hint.MembershipFilterBytes)
+		})
+	}
 }

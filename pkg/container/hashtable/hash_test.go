@@ -16,7 +16,9 @@ package hashtable
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
+	"io"
 	"math/rand"
 	"reflect"
 	"strconv"
@@ -25,6 +27,50 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/stretchr/testify/require"
 )
+
+func BenchmarkInt64HashMapFindBatchLarge(b *testing.B) {
+	const (
+		numKeys   = 1 << 20
+		batchSize = 8192
+	)
+
+	mp := mpool.MustNewZero()
+	defer func() {
+		if mp.CurrNB() != 0 {
+			b.Fatalf("memory leak detected: %d bytes", mp.CurrNB())
+		}
+	}()
+
+	keys := make([]uint64, numKeys)
+	hashes := make([]uint64, numKeys)
+	values := make([]uint64, numKeys)
+	for i := range keys {
+		keys[i] = uint64(i + 1)
+	}
+	Int64BatchHash(toUnsafePointer(&keys[0]), &hashes[0], len(keys))
+
+	var ht Int64HashMap
+	if err := ht.Init(mp); err != nil {
+		b.Fatal(err)
+	}
+	defer ht.Free()
+	if err := ht.InsertBatch(len(keys), hashes, toUnsafePointer(&keys[0]), values); err != nil {
+		b.Fatal(err)
+	}
+
+	b.ReportAllocs()
+	b.SetBytes(batchSize * 8)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		offset := (i * batchSize) & (numKeys - 1)
+		ht.FindBatch(
+			batchSize,
+			hashes[offset:offset+batchSize],
+			toUnsafePointer(&keys[offset]),
+			values[offset:offset+batchSize],
+		)
+	}
+}
 
 var data = [][]byte{
 	[]byte(""),
@@ -507,5 +553,87 @@ func TestWriteToError(t *testing.T) {
 		w = &errorAfterNWriter{N: 8 + 24} // Enough for elemCnt and HashState
 		_, err = m.WriteTo(w)
 		require.Error(t, err)
+	})
+}
+
+func TestUnmarshalRejectsCountLargerThanBoundedRecord(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	var count [8]byte
+	binary.LittleEndian.PutUint64(count[:], 1<<40)
+
+	t.Run("int64", func(t *testing.T) {
+		var hashMap Int64HashMap
+		_, err := hashMap.UnmarshalFrom(bytes.NewReader(count[:]), mp)
+		require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	})
+	t.Run("string", func(t *testing.T) {
+		var hashMap StringHashMap
+		_, err := hashMap.UnmarshalFrom(bytes.NewReader(count[:]), mp)
+		require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	})
+}
+
+func TestCommitInsertPlanRejectsDuplicateSlotsBeforeMutation(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+
+	t.Run("int64", func(t *testing.T) {
+		var hashMap Int64HashMap
+		require.NoError(t, hashMap.Init(mp))
+		defer hashMap.Free()
+		err := hashMap.CommitInsertBatchPlan(
+			hashMap.Version(), 0,
+			[]uint64{11, 22}, []uint64{1, 2},
+			[]uint64{0, 0}, []uint8{1, 1})
+		require.ErrorIs(t, err, mpool.ErrAllocationAccountInvariant)
+		require.Zero(t, hashMap.Cardinality())
+	})
+
+	t.Run("string", func(t *testing.T) {
+		var hashMap StringHashMap
+		require.NoError(t, hashMap.Init(mp))
+		defer hashMap.Free()
+		err := hashMap.CommitInsertStringBatchPlan(
+			hashMap.Version(), 0,
+			[][3]uint64{{11, 1, 2}, {22, 3, 4}}, []uint64{1, 2},
+			[]uint64{0, 0}, []uint8{1, 1})
+		require.ErrorIs(t, err, mpool.ErrAllocationAccountInvariant)
+		require.Zero(t, hashMap.Cardinality())
+	})
+}
+
+func TestCommitInsertPlanRollsBackLateInvalidRow(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+
+	t.Run("int64", func(t *testing.T) {
+		var hashMap Int64HashMap
+		require.NoError(t, hashMap.Init(mp))
+		defer hashMap.Free()
+		err := hashMap.CommitInsertBatchPlan(
+			hashMap.Version(), 0,
+			[]uint64{11, 22, 33}, []uint64{1, 2, 3},
+			[]uint64{0, 1, 2}, []uint8{1, 1, 2})
+		require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
+		require.Zero(t, hashMap.Cardinality())
+		for slot := uint64(0); slot < 2; slot++ {
+			require.Equal(t, Int64HashMapCell{}, *hashMap.cellAt(slot))
+		}
+	})
+
+	t.Run("string", func(t *testing.T) {
+		var hashMap StringHashMap
+		require.NoError(t, hashMap.Init(mp))
+		defer hashMap.Free()
+		err := hashMap.CommitInsertStringBatchPlan(
+			hashMap.Version(), 0,
+			[][3]uint64{{11, 1, 2}, {22, 3, 4}, {33, 5, 6}},
+			[]uint64{1, 2, 3}, []uint64{0, 1, 2}, []uint8{1, 1, 2})
+		require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
+		require.Zero(t, hashMap.Cardinality())
+		for slot := uint64(0); slot < 2; slot++ {
+			require.Equal(t, StringHashMapCell{}, *hashMap.cellAt(slot))
+		}
 	})
 }

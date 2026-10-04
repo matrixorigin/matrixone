@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -204,6 +205,17 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 		s.Constraint = req.GetUpdateCstr().GetConstraints()
 	case apipb.AlterKind_UpdateComment:
 		s.Comment = req.GetUpdateComment().GetComment()
+	case apipb.AlterKind_UpdateAutoIncrement:
+		if s.Extra.AutoIncrEpoch == math.MaxUint32 ||
+			req.GetUpdateAutoIncrement().GetEpoch() != s.Extra.AutoIncrEpoch+1 {
+			return moerr.NewInternalErrorNoCtxf(
+				"invalid AUTO_INCREMENT epoch transition %d -> %d",
+				s.Extra.AutoIncrEpoch,
+				req.GetUpdateAutoIncrement().GetEpoch(),
+			)
+		}
+		s.Extra.AutoIncrOffset = req.GetUpdateAutoIncrement().GetOffset()
+		s.Extra.AutoIncrEpoch = req.GetUpdateAutoIncrement().GetEpoch()
 	case apipb.AlterKind_RenameColumn:
 		rename := req.GetRenameCol()
 		var targetCol *ColDef
@@ -223,6 +235,9 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 		}
 		targetCol.Name = rename.NewName
 		s.NameMap[targetCol.Name] = targetCol.Idx
+		if rename.Checks != nil {
+			s.Extra.Checks = apipb.CloneExtra(&apipb.SchemaExtra{Checks: rename.Checks}).Checks
+		}
 		s.Extra.ColumnChanged = true
 		logutil.Infof("[Alter] rename column %s -> %s %d", rename.OldName, rename.NewName, targetCol.SeqNum)
 	case apipb.AlterKind_AddColumn:
@@ -342,9 +357,11 @@ func (s *Schema) HasFakePK() bool {
 }
 
 func (s *Schema) MustGetExtraBytes() []byte {
-	// Sync FromPublication to Extra before serialization
-	s.Extra.FromPublication = s.FromPublication
-	data, err := s.Extra.Marshal()
+	// Schema is immutable after publication. Keep serialization read-only so
+	// MVCC versions can safely share the same schema.
+	extra := *s.Extra
+	extra.FromPublication = s.FromPublication
+	data, err := extra.Marshal()
 	if err != nil {
 		panic(err)
 	}

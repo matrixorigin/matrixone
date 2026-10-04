@@ -16,8 +16,8 @@ package partition
 
 import (
 	"fmt"
-	"sync"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/embed"
@@ -28,11 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var (
-	once         sync.Once
-	shareCluster embed.Cluster
-	mu           sync.Mutex
-)
+var sharedCluster embed.SharedTestCluster
 
 func runPartitionTableCreateAndDeleteTestsWithAware(
 	t *testing.T,
@@ -164,47 +160,43 @@ func runPartitionClusterTestWithReuse(
 	reuse bool,
 	options ...embed.Option,
 ) error {
-	mu.Lock()
-	defer mu.Unlock()
-
-	var c embed.Cluster
-	createFunc := func() embed.Cluster {
+	createFunc := func() (embed.Cluster, error) {
 		options = append(
 			[]embed.Option{
 				embed.WithCNCount(3),
-				embed.WithTesting(),
+				// The shared test cluster runs one TN and three CNs on the same
+				// CI worker. Keep the test-only RPC deadline above transient
+				// scheduling stalls without changing production defaults.
+				embed.WithHAKeeperHeartbeatTimeout(15 * time.Second),
 			},
 			options...,
 		)
+		return embed.StartTestCluster(options...)
+	}
 
-		new, err := embed.NewCluster(options...)
+	run := func(c embed.Cluster) {
+		cn, err := c.GetCNService(0)
 		require.NoError(t, err)
-		require.NoError(t, new.Start())
-		return new
+		if !testutils.TableExists(t, catalog.MO_CATALOG, catalog.MOPartitionMetadata, cn) {
+			testutils.ExecSQL(
+				t,
+				catalog.MO_CATALOG,
+				cn,
+				partitionservice.InitSQLs...,
+			)
+		}
+		fn(c)
 	}
 
 	if reuse {
-		once.Do(
-			func() {
-				c = createFunc()
-				shareCluster = c
-			},
-		)
-		c = shareCluster
-	} else {
-		c = createFunc()
+		sharedCluster.Run(t, createFunc, run)
+		return nil
 	}
-
-	cn, err := c.GetCNService(0)
+	c, err := createFunc()
+	if c != nil {
+		t.Cleanup(func() { require.NoError(t, c.Close()) })
+	}
 	require.NoError(t, err)
-	if !testutils.TableExists(t, catalog.MO_CATALOG, catalog.MOPartitionMetadata, cn) {
-		testutils.ExecSQL(
-			t,
-			catalog.MO_CATALOG,
-			cn,
-			partitionservice.InitSQLs...,
-		)
-	}
-	fn(c)
+	run(c)
 	return nil
 }

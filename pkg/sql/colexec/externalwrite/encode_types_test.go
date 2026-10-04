@@ -80,6 +80,17 @@ func allTypesBatch(t *testing.T, mp *mpool.MPool) (*batch.Batch, []string) {
 		{"c_blob", bytesCol(t, mp, types.T_blob.ToType(), []byte{0x04, 0x05})},
 		{"c_json", bytesCol(t, mp, types.T_json.ToType(), jsonBytes)},
 		{"c_arrf32", bytesCol(t, mp, types.T_array_float32.ToType(), types.ArrayToBytes[float32]([]float32{1, 2}))},
+		// Narrow vector element types. SELECT ... INTO OUTFILE on such a column
+		// hit the default arm and failed to export, while the vecf32 column
+		// beside it exported fine. Values are chosen so a wrong element type is
+		// visible in the rendered text rather than merely differently rounded:
+		// int8 -128 and uint8 255 are the two that alias each other.
+		{"c_arrbf16", bytesCol(t, mp, types.T_array_bf16.ToType(),
+			types.ArrayToBytes[types.BF16]([]types.BF16{types.BF16FromFloat32(1), types.BF16FromFloat32(-2)}))},
+		{"c_arrf16", bytesCol(t, mp, types.T_array_float16.ToType(),
+			types.ArrayToBytes[types.Float16]([]types.Float16{types.Float16FromFloat32(1), types.Float16FromFloat32(-2)}))},
+		{"c_arri8", bytesCol(t, mp, types.T_array_int8.ToType(), types.ArrayToBytes[int8]([]int8{-128, 127}))},
+		{"c_arru8", bytesCol(t, mp, types.T_array_uint8.ToType(), types.ArrayToBytes[uint8]([]uint8{0, 255}))},
 		{"c_arrf64", bytesCol(t, mp, types.T_array_float64.ToType(), types.ArrayToBytes[float64]([]float64{3, 4}))},
 		{"c_date", fixedCol(t, mp, types.T_date.ToType(), must(types.ParseDateCast("2026-06-08")))},
 		{"c_datetime", fixedCol(t, mp, decType(types.T_datetime, 0, 0), must(types.ParseDatetime("2026-06-08 09:05:07", 0)))},
@@ -139,6 +150,12 @@ func TestEncodeCSVAllTypes(t *testing.T) {
 	require.Contains(t, s, `"hi"`)   // enclosed varchar
 	require.Contains(t, s, "123.45") // decimal64
 	require.Contains(t, s, "2026")   // date/year
+	// Narrow vectors must render as vector text, not as raw storage bytes.
+	// int8 -128 and uint8 255 occupy the same byte, so asserting BOTH is what
+	// proves the two arms are not sharing one element type.
+	require.Contains(t, s, "[-128, 127]") // vecint8 keeps the sign
+	require.Contains(t, s, "[0, 255]")    // vecuint8 does not wrap to -1
+	require.Contains(t, s, "[1, -2]")     // vecbf16 / vecf16
 }
 
 // TestEncodeJSONLineAllTypes exercises every jsonValue branch over a wide batch.

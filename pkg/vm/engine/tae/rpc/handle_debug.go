@@ -31,11 +31,9 @@ import (
 	"github.com/google/shlex"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
@@ -48,10 +46,7 @@ import (
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"go.uber.org/zap"
 )
 
@@ -113,15 +108,9 @@ func (h *Handle) HandleSnapshotRead(
 		v2.TaskSnapshotReadReqDurationHistogram.Observe(time.Since(now).Seconds())
 	}()
 	maxEnd := types.TS{}
-	maxCheckpoint := h.db.BGCheckpointRunner.MaxIncrementalCheckpoint()
+	maxCheckpoint := h.db.BGCheckpointRunner.MaxCheckpoint()
 	if maxCheckpoint != nil {
 		maxEnd = maxCheckpoint.GetEnd()
-	}
-	if maxEnd.IsEmpty() {
-		maxGlobal := h.db.BGCheckpointRunner.MaxGlobalCheckpoint()
-		if maxGlobal != nil {
-			maxEnd = maxGlobal.GetEnd()
-		}
 	}
 	snapshot := types.TimestampToTS(*req.Snapshot)
 	if snapshot.GT(&maxEnd) {
@@ -258,31 +247,15 @@ func getChangedListFromCheckpoints(
 			zap.String("hint", hint))
 	}
 
-	var ckp *checkpoint.CheckpointEntry
-	maxICKP := h.GetDB().BGCheckpointRunner.MaxIncrementalCheckpoint()
-	maxGCKP := h.GetDB().BGCheckpointRunner.MaxGlobalCheckpoint()
-	if maxICKP == nil && maxGCKP == nil {
+	ckp := h.GetDB().BGCheckpointRunner.MaxCheckpoint()
+	if ckp == nil {
 		return
-	}
-	if maxICKP == nil {
-		ckp = maxGCKP
-	}
-	if maxGCKP == nil {
-		ckp = maxICKP
-	}
-	if maxICKP != nil && maxGCKP != nil {
-		gckpEnd := maxGCKP.GetEnd()
-		ickpEnd := maxICKP.GetEnd()
-		if ickpEnd.GT(&gckpEnd) {
-			ckp = maxICKP
-		} else {
-			ckp = maxGCKP
-		}
 	}
 
 	tableIDLocation := ckp.GetTableIDLocation()
+	checkpointCoverageEnd := ckp.GetEnd().Prev()
 	accIds, dbIds, tblIds, oldest, ok := tryGetChangedListFromTableIDBatch(
-		ctx, from, to, tableIDLocation, h, isTheTblIWantWithTimeRange,
+		ctx, from, checkpointCoverageEnd, tableIDLocation, h, isTheTblIWantWithTimeRange,
 	)
 	// for ckp with old version,
 	// tableIDLocation is empty,
@@ -378,7 +351,7 @@ func getChangedListFromCheckpoints(
 func tryGetChangedListFromTableIDBatch(
 	ctx context.Context,
 	from types.TS,
-	to types.TS,
+	requiredHistoryEnd types.TS,
 	tableIDLocations objectio.LocationSlice,
 	h *Handle,
 	isTheTblIWantWithTimeRange func(exists []uint64, tblId uint64, start, end types.TS) bool,
@@ -393,33 +366,28 @@ func tryGetChangedListFromTableIDBatch(
 		return
 	}
 
-	consumeFn := func(bat *batch.Batch, release func()) {
-
-		defer release()
+	var historyEnd types.TS
+	consumeFn := func(bat *batch.Batch) {
 		accounts := vector.MustFixedColNoTypeCheck[uint32](bat.Vecs[0])
 		dbids := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[1])
 		tids := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[2])
 		starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[3])
 		ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[4])
 
-		var start types.TS
 		for i := 0; i < bat.RowCount(); i++ {
 			if tids[i] == logtail.CKPTableIDBatch_SpecialTableID {
-				start = starts[i]
-				break
-			}
-		}
-		if start.GT(&from) {
-			return
-		}
-		ok = true
-		oldest = start
-
-		tblIds = make([]uint64, 0)
-		accIds = make([]uint64, 0)
-		dbIds = make([]uint64, 0)
-		for i := 0; i < bat.RowCount(); i++ {
-			if tids[i] == logtail.CKPTableIDBatch_SpecialTableID {
+				if !ok {
+					oldest, historyEnd, ok = starts[i], ends[i], true
+				} else {
+					// Multiple coverage rows are unexpected. Their intersection is
+					// the only range all fragments prove is available.
+					if oldest.LT(&starts[i]) {
+						oldest = starts[i]
+					}
+					if historyEnd.GT(&ends[i]) {
+						historyEnd = ends[i]
+					}
+				}
 				continue
 			}
 			if !isTheTblIWantWithTimeRange(tblIds, tids[i], starts[i], ends[i]) {
@@ -435,12 +403,18 @@ func tryGetChangedListFromTableIDBatch(
 	for {
 		release, bat, isEnd, err := reader.Read(ctx)
 		if err != nil {
-			return
+			return nil, nil, nil, types.MaxTs(), false
 		}
 		if isEnd {
 			break
 		}
-		consumeFn(bat, release)
+		func() {
+			defer release()
+			consumeFn(bat)
+		}()
+	}
+	if !ok || oldest.GT(&historyEnd) || oldest.GT(&from) || historyEnd.LT(&requiredHistoryEnd) {
+		return nil, nil, nil, types.MaxTs(), false
 	}
 	return
 }
@@ -587,13 +561,7 @@ func (h *Handle) HandleGetChangedTableList(
 			return true
 
 		} else if req.Type == cmd_util.CollectChanged {
-			if start.GT(&to) {
-				return false
-			}
-			if end.LT(&start) {
-				return false
-			}
-			return true
+			return tableIDRangeIntersectsWindow(start, end, from, to)
 		}
 
 		return false
@@ -629,6 +597,12 @@ func (h *Handle) HandleGetChangedTableList(
 	})
 
 	return nil, nil
+}
+
+func tableIDRangeIntersectsWindow(start, end, from, to types.TS) bool {
+	// The checkpoint index retains older rows, so a valid table range must
+	// overlap this request's window before the table is recalculated.
+	return !end.LT(&start) && !start.GT(&to) && !end.LT(&from)
 }
 
 func (h *Handle) HandleFlushTable(
@@ -1019,70 +993,6 @@ func (h *Handle) HandleInspectTN(
 	return nil, nil
 }
 
-func (h *Handle) HandleCommitMerge(
-	ctx context.Context,
-	meta txn.TxnMeta,
-	req *api.MergeCommitEntry,
-	resp *api.TNStringResponse,
-) (err error) {
-
-	defer func() {
-		if err != nil {
-			e := moerr.DowncastError(err)
-			logutil.Error("mergeblocks err handle commit merge",
-				zap.String("table", fmt.Sprintf("%v-%v", req.TblId, req.TableName)),
-				zap.String("start-ts", req.StartTs.DebugString()),
-				zap.String("error", e.Display()))
-		}
-	}()
-	txn, err := h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
-		types.TimestampToTS(meta.GetSnapshotTS()))
-	txn.GetMemo().IsFlushOrMerge = true
-	if err != nil {
-		return
-	}
-	ids := make([]objectio.ObjectId, 0, len(req.MergedObjs))
-	for _, o := range req.MergedObjs {
-		stat := objectio.ObjectStats(o)
-		ids = append(ids, *stat.ObjectName().ObjectId())
-	}
-	h.GetDB().MergeScheduler.RemoveCNActiveObjects(ids)
-	if req.Err != "" {
-		resp.ReturnStr = req.Err
-		err = moerr.NewInternalErrorf(ctx, "merge err in cn: %s", req.Err)
-		return
-	}
-
-	defer func() {
-		if err != nil {
-			resp.ReturnStr = err.Error()
-			merge.CleanUpUselessFiles(req, h.db.Runtime.Fs)
-		}
-	}()
-
-	transferMaps, err := marshalTransferMaps(ctx, req, h.db.Runtime.SID(), h.db.Runtime.Fs)
-	if err != nil {
-		return err
-	}
-	_, err = jobs.HandleMergeEntryInTxn(ctx, txn, txn.String(), req, mergesort.NewTransferTableFromMaps(transferMaps), h.db.Runtime, false)
-	if err != nil {
-		return
-	}
-	b := new(bytes.Buffer)
-	b.WriteString("merged success\n")
-	for _, o := range req.CreatedObjs {
-		stat := objectio.ObjectStats(o)
-		b.WriteString(fmt.Sprintf("%v, rows %v, blks %v, osize %v, csize %v",
-			stat.ObjectName().String(), stat.Rows(), stat.BlkCnt(),
-			common.HumanReadableBytes(int(stat.OriginSize())),
-			common.HumanReadableBytes(int(stat.Size())),
-		))
-		b.WriteByte('\n')
-	}
-	resp.ReturnStr = b.String()
-	return
-}
-
 func (h *Handle) HandleGetLatestCheckpoint(
 	_ context.Context,
 	_ txn.TxnMeta,
@@ -1102,98 +1012,6 @@ func (h *Handle) HandleGetLatestCheckpoint(
 	}
 	resp.Location = locations
 	return nil, err
-}
-
-func marshalTransferMaps(
-	ctx context.Context,
-	req *api.MergeCommitEntry,
-	sid string,
-	fs fileservice.FileService,
-) (api.TransferMaps, error) {
-	if len(req.BookingLoc) > 0 {
-		// load transfer info from s3
-		if req.Booking != nil {
-			logutil.Error("mergeblocks err booking loc is not empty, but booking is not nil")
-		}
-
-		blkCnt := types.DecodeInt32(util.UnsafeStringToBytes(req.BookingLoc[0]))
-		booking := make(api.TransferMaps, blkCnt)
-		for i := range blkCnt {
-			rowCnt := types.DecodeInt32(util.UnsafeStringToBytes(req.BookingLoc[i+1]))
-			if rowCnt == 0 {
-				// fully-deleted block: leave booking[i] == nil so downstream
-				// mapping == nil checks correctly identify it as all-deleted.
-				continue
-			}
-			tm := make(api.TransferMap, rowCnt)
-			for j := range tm {
-				tm[j].ObjIdx = api.NoTransfer
-			}
-			booking[i] = tm
-		}
-		req.BookingLoc = req.BookingLoc[blkCnt+1:]
-		locations := req.BookingLoc
-		for _, filepath := range locations {
-			reader, err := ioutil.NewFileReader(fs, filepath)
-			if err != nil {
-				return nil, err
-			}
-			bats, releases, err := reader.LoadAllColumns(ctx, nil, nil)
-			if err != nil {
-				return nil, err
-			}
-
-			for _, bat := range bats {
-				for i := range bat.RowCount() {
-					srcBlk := vector.GetFixedAtNoTypeCheck[int32](bat.Vecs[0], i)
-					srcRow := vector.GetFixedAtNoTypeCheck[uint32](bat.Vecs[1], i)
-					destObj := vector.GetFixedAtNoTypeCheck[uint8](bat.Vecs[2], i)
-					destBlk := vector.GetFixedAtNoTypeCheck[uint16](bat.Vecs[3], i)
-					destRow := vector.GetFixedAtNoTypeCheck[uint32](bat.Vecs[4], i)
-
-					booking[srcBlk][srcRow] = api.TransferDestPos{
-						ObjIdx: destObj,
-						BlkIdx: destBlk,
-						RowIdx: destRow,
-					}
-				}
-			}
-			releases()
-			_ = fs.Delete(ctx, filepath)
-		}
-		return booking, nil
-	} else if req.Booking != nil {
-		booking := make(api.TransferMaps, len(req.Booking.Mappings))
-		for i, m := range req.Booking.Mappings {
-			// Find the maximum source row key to size the dense slice correctly.
-			maxKey := int32(-1)
-			for r := range m.M {
-				if r > maxKey {
-					maxKey = r
-				}
-			}
-			if maxKey < 0 {
-				// fully-deleted block: leave booking[i] == nil so downstream
-				// mapping == nil checks correctly identify it as all-deleted.
-				continue
-			}
-			sliceLen := int(maxKey) + 1
-			tm := make(api.TransferMap, sliceLen)
-			for j := range tm {
-				tm[j].ObjIdx = api.NoTransfer
-			}
-			for r, pos := range m.M {
-				tm[uint32(r)] = api.TransferDestPos{
-					ObjIdx: uint8(pos.ObjIdx),
-					BlkIdx: uint16(pos.BlkIdx),
-					RowIdx: uint32(pos.RowIdx),
-				}
-			}
-			booking[i] = tm
-		}
-		return booking, nil
-	}
-	return nil, nil
 }
 
 func (h *Handle) HandleFaultInject(

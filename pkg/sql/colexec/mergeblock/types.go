@@ -17,6 +17,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -161,6 +162,26 @@ func (mergeBlock *MergeBlock) GetMetaLocBat(
 	return hasTblIdxCol
 }
 
+func validateLegacyTableIndexes(tblIdx []int16) error {
+	for _, encodedIdx := range tblIdx {
+		targetIdx := int(encodedIdx)
+		if encodedIdx < 0 {
+			// Negative values encode an inline data batch as -(table index + 1).
+			targetIdx = int(-(encodedIdx + 1))
+		}
+		if targetIdx != 0 {
+			// A MergeBlock owns only the main-table relation, and Call writes only
+			// mp[0]/mp2[0]. Creating a batch for a legacy unique-index table here
+			// would still leave it unwritten (or require routing it through the
+			// wrong relation). This format is seen while CN versions overlap, so
+			// fail before appending any rows and let the whole transaction be
+			// retried after rolling restart instead of partially supporting it.
+			return moerr.NewRetryForCNRollingRestart()
+		}
+	}
+	return nil
+}
+
 func splitObjectStats(mergeBlock *MergeBlock, proc *process.Process,
 	analyzer process.Analyzer,
 	bat *batch.Batch, blkVec *vector.Vector, tblIdx []int16,
@@ -213,17 +234,24 @@ func splitObjectStats(mergeBlock *MergeBlock, proc *process.Process,
 			newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 
 			// comes from old version cn
-			objStats, objDataMeta, err = disttae.ConstructObjStatsByLoadObjMeta(newCtx, blkInfo.MetaLocation(), fs)
+			err = process.MeasureFilesystemWaitErr(analyzer, func() error {
+				objStats, objDataMeta, err = disttae.ConstructObjStatsByLoadObjMeta(newCtx, blkInfo.MetaLocation(), fs)
+				return err
+			})
 			if err != nil {
 				return err
 			}
-			analyzer.AddS3RequestCount(crs)
-			analyzer.AddDiskIO(crs)
 
-			vector.AppendBytes(destVec, objStats.Marshal(), false, proc.GetMPool())
+			if err = vector.AppendBytes(destVec, objStats.Marshal(), false, proc.GetMPool()); err != nil {
+				return err
+			}
 		} else {
 			// not comes from old version cn
-			vector.AppendBytes(destVec, statsVec.GetBytesAt(statsIdx), false, proc.GetMPool())
+			if err = vector.AppendBytes(
+				destVec, statsVec.GetBytesAt(statsIdx), false, proc.GetMPool(),
+			); err != nil {
+				return err
+			}
 			objDataMeta.BlockHeader().SetBlockID(&blkInfo.BlockID)
 			statsIdx++
 		}
@@ -244,27 +272,36 @@ func (mergeBlock *MergeBlock) Split(proc *process.Process, bat *batch.Batch, ana
 	// table idx column only exists in the old implementation.
 	if hasTblIdxCol {
 		tblIdx = vector.MustFixedColWithTypeCheck[int16](bat.GetVector(0))
+		if err := validateLegacyTableIndexes(tblIdx); err != nil {
+			return err
+		}
 		blkInfosVec = bat.GetVector(1)
 	} else {
 		blkInfosVec = bat.GetVector(0)
 	}
 
-	var hasObject bool
+	var (
+		hasObject       bool
+		affectedRowsInc uint64
+	)
 
 	for i := range blkInfosVec.Length() { // append s3 writer returned blk info
 		if (len(tblIdx) > 0 && tblIdx[i] >= 0) || !hasTblIdxCol {
-			if mergeBlock.AddAffectedRows {
-				blkInfo := objectio.DecodeBlockInfo(blkInfosVec.GetBytesAt(i))
-				mergeBlock.container.affectedRows += uint64(blkInfo.MetaLocation().Rows())
-			}
-
 			var dest *vector.Vector
 			if hasTblIdxCol {
 				dest = mergeBlock.container.mp[int(tblIdx[i])].Vecs[0]
 			} else {
 				dest = mergeBlock.container.mp[0].Vecs[0]
 			}
-			vector.AppendBytes(dest, blkInfosVec.GetBytesAt(i), false, proc.GetMPool())
+			if err := vector.AppendBytes(
+				dest, blkInfosVec.GetBytesAt(i), false, proc.GetMPool(),
+			); err != nil {
+				return err
+			}
+			if mergeBlock.AddAffectedRows {
+				blkInfo := objectio.DecodeBlockInfo(blkInfosVec.GetBytesAt(i))
+				affectedRowsInc += uint64(blkInfo.MetaLocation().Rows())
+			}
 
 			hasObject = true
 
@@ -275,7 +312,7 @@ func (mergeBlock *MergeBlock) Split(proc *process.Process, bat *batch.Batch, ana
 				return err
 			}
 			if mergeBlock.AddAffectedRows {
-				mergeBlock.container.affectedRows += uint64(newBat.RowCount())
+				affectedRowsInc += uint64(newBat.RowCount())
 			}
 			mergeBlock.container.mp2[idx] = append(mergeBlock.container.mp2[idx], newBat)
 		}
@@ -287,6 +324,11 @@ func (mergeBlock *MergeBlock) Split(proc *process.Process, bat *batch.Batch, ana
 			return err
 		}
 	}
+
+	// Split can still fail while appending object stats after accepting block
+	// infos. Publish the count only after the entire batch is ready so callers
+	// never observe rows from a batch that the pipeline will roll back.
+	mergeBlock.container.affectedRows += affectedRowsInc
 
 	for _, b := range mergeBlock.container.mp {
 		b.SetRowCount(b.Vecs[0].Length())

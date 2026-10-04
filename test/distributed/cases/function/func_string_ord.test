@@ -26,3 +26,18 @@ DROP TABLE t1;
 # Comparison with ASCII (should be same for single-byte characters)
 SELECT ORD('A') AS ord_value, ASCII('A') AS ascii_value;
 
+# UTF-8 bytes are combined in left-to-right order, while ASCII remains unchanged.
+SELECT ORD('é') AS latin1_multibyte,
+       ORD('中') AS cjk_multibyte,
+       ORD('😀') AS four_byte_multibyte,
+       ORD('éx') AS first_character_only;
+
+DROP TABLE IF EXISTS t_ord_utf8;
+CREATE TABLE t_ord_utf8(id INT PRIMARY KEY, str VARCHAR(50));
+INSERT INTO t_ord_utf8 VALUES (1, 'é'), (2, '中'), (3, '😀'), (4, 'ASCII');
+SELECT id, str, ORD(str) AS ord_value FROM t_ord_utf8 ORDER BY id;
+DROP TABLE t_ord_utf8;
+
+# Binary values are byte strings even when their bytes form valid UTF-8.
+SELECT ORD(CAST(_binary'é' AS BINARY(2))) AS binary_ord,
+       ORD(CAST(_binary'é' AS VARBINARY(2))) AS varbinary_ord;

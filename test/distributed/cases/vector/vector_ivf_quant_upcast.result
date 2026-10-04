@@ -1,0 +1,18 @@
+drop database if exists ivf_qup;
+create database ivf_qup;
+use ivf_qup;
+create table i8(a int, v vecint8(4));
+create table bf(a int, v vecbf16(4));
+create table hf(a int, v vecf16(4));
+create table u8(a int, v vecuint8(4));
+create index x using ivfflat on i8(v) lists=1 op_type 'vector_l2_ops' quantization 'float32';
+not supported: ivfflat QUANTIZATION 'float32' (4 bytes/element) cannot upcast base column VECINT8 (1 bytes/element); use a quantization of equal or smaller width, or omit it to keep the base type
+create index x using ivfflat on i8(v) lists=1 op_type 'vector_l2_ops' quantization 'bf16';
+not supported: ivfflat QUANTIZATION 'bf16' (2 bytes/element) cannot upcast base column VECINT8 (1 bytes/element); use a quantization of equal or smaller width, or omit it to keep the base type
+create index x using ivfflat on bf(v) lists=1 op_type 'vector_l2_ops' quantization 'float32';
+not supported: ivfflat QUANTIZATION 'float32' (4 bytes/element) cannot upcast base column VECBF16 (2 bytes/element); use a quantization of equal or smaller width, or omit it to keep the base type
+create index x using ivfflat on hf(v) lists=1 op_type 'vector_l2_ops' quantization 'float32';
+not supported: ivfflat QUANTIZATION 'float32' (4 bytes/element) cannot upcast base column VECF16 (2 bytes/element); use a quantization of equal or smaller width, or omit it to keep the base type
+create index x using ivfflat on u8(v) lists=1 op_type 'vector_l2_ops' quantization 'float16';
+not supported: ivfflat QUANTIZATION 'float16' (2 bytes/element) cannot upcast base column VECUINT8 (1 bytes/element); use a quantization of equal or smaller width, or omit it to keep the base type
+drop database ivf_qup;

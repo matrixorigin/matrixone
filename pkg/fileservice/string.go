@@ -21,6 +21,7 @@ var (
 	str_ioMerger_Merge_end                    = internString("ioMerger.Merge end")
 	str_ioMerger_Merge_initiate               = internString("ioMerger.Merge initiate")
 	str_ioMerger_Merge_wait                   = internString("ioMerger.Merge wait")
+	str_ioMerger_Merge_wait_expensive_range   = internString("ioMerger.Merge wait expensive range")
 	str_read_vector_Caches_begin              = internString("read vector.Caches begin")
 	str_read_vector_Caches_end                = internString("read vector.Caches end")
 	str_update_vector_Caches_begin            = internString("update vector.Caches begin")

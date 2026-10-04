@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -32,6 +33,17 @@ func NewProjectionBinder(builder *QueryBuilder, ctx *BindContext, havingBinder *
 }
 
 func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
+	if aliasExpr, projectPos, ok := b.ctx.isAliasExpansion(astExpr); ok {
+		if projectPos >= 0 && int(projectPos) < len(b.ctx.projects) {
+			return DeepCopyExpr(b.ctx.projects[projectPos]), nil
+		}
+		if b.havingBinder != nil {
+			previousHaving := b.havingBinder.bindingProjectedAlias
+			b.havingBinder.bindingProjectedAlias = true
+			defer func() { b.havingBinder.bindingProjectedAlias = previousHaving }()
+		}
+		return b.BindExpr(aliasExpr.Expr, depth, isRoot)
+	}
 	astStr := windowExprAstKey(astExpr)
 
 	if colPos, ok := b.ctx.timeByAst[astStr]; ok {
@@ -41,9 +53,9 @@ func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool)
 		return makeTimeWindowProjectionExpr(b.GetContext(), b.ctx, astExpr, colPos)
 	}
 
-	if colPos, ok := b.ctx.groupByAst[astStr]; ok {
+	if colPos, ok := lookupGroupByAst(b.ctx, astExpr, astStr); ok {
 		return &plan.Expr{
-			Typ: b.ctx.groups[colPos].Typ,
+			Typ: b.ctx.groupOutputType(colPos),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: b.ctx.groupTag,
@@ -53,7 +65,20 @@ func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool)
 		}, nil
 	}
 
-	if colPos, ok := b.ctx.aggregateByAst[astStr]; ok {
+	if colPos, ok := b.ctx.groupConcatAggregatePosition(astExpr); ok {
+		return &plan.Expr{
+			Typ: b.ctx.aggregates[colPos].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: b.ctx.aggregateTag,
+					ColPos: colPos,
+				},
+			},
+		}, nil
+	}
+
+	if colPos, ok := b.ctx.aggregateByAst[astStr]; ok &&
+		(!isGroupConcatAggregateExpr(astExpr) || b.allowGroupConcatReuse) {
 		return &plan.Expr{
 			Typ: b.ctx.aggregates[colPos].Typ,
 			Expr: &plan.Expr_Col{
@@ -89,11 +114,50 @@ func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool)
 		}, nil
 	}
 
+	// A numeric assignment target only shapes an expression that is bound fresh
+	// here. Group-by / aggregate / window / time-window / sample projections
+	// resolve to an already-computed column above, so the numeric context must
+	// be checked after those lookups to avoid re-binding a grouped expression
+	// against the raw scan columns.
+	if b.numericTargetType != nil {
+		target := b.numericTargetType
+		b.numericTargetType = nil
+		defer func() { b.numericTargetType = target }()
+		if types.T(target.Id) == types.T_bit && isPreparedAssignmentParam(b.builder, astExpr) {
+			// The marker is the assignment source, not an arithmetic expression.
+			// BIT assignments distinguish string bytes from numeric values.
+			// Preserve that source until the final assignment cast. Numeric
+			// function and aggregate inputs still require their target context.
+			return b.baseBindExpr(astExpr, depth, isRoot)
+		}
+		_, isBareColumn := unwrapParenExpr(astExpr).(*tree.UnresolvedName)
+		if isBareColumn && isEnumOrSetPlanType(target) {
+			previousTarget := b.mysqlSpecialTargetType
+			b.mysqlSpecialTargetType = target
+			defer func() { b.mysqlSpecialTargetType = previousTarget }()
+		}
+		if subquery, ok := scalarSubqueryExpr(astExpr); ok && !subquery.Exists {
+			previousSubqueryTarget := b.numericSubqueryTarget
+			b.numericSubqueryTarget = target
+			defer func() { b.numericSubqueryTarget = previousSubqueryTarget }()
+			return b.baseBindExpr(astExpr, depth, isRoot)
+		}
+		return b.bindNumericExprWithContext(astExpr, depth, target)
+	}
+
 	return b.baseBindExpr(astExpr, depth, isRoot)
 }
 
 func (b *ProjectionBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (*plan.Expr, error) {
-	return b.baseBindColRef(astExpr, depth, isRoot)
+	boundColCount := len(b.boundCols)
+	expr, err := b.baseBindColRef(astExpr, depth, isRoot)
+	if depth > 0 && b.havingBinder != nil && b.havingBinder.insideAgg {
+		// A correlated reference from a scalar subquery used as an aggregate
+		// argument belongs to that aggregate input. Do not classify it as a
+		// bare projection column for ONLY_FULL_GROUP_BY validation.
+		b.boundCols = b.boundCols[:boundColCount]
+	}
+	return expr, err
 }
 
 func (b *ProjectionBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
@@ -124,6 +188,5 @@ func (b *ProjectionBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*p
 }
 
 func (b *ProjectionBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
-	b.ctx.timeAsts = append(b.ctx.timeAsts, astExpr)
 	return b.havingBinder.BindTimeWindowFunc(funcName, astExpr, depth, isRoot)
 }

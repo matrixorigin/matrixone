@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -31,12 +32,15 @@ func init() {
 	reuse.CreatePool[Compile](
 		func() *Compile {
 			return &Compile{
-				affectRows:   &atomic.Uint64{},
-				counterSet:   &perfcounter.CounterSet{},
-				nodeRegs:     make(map[[2]int32]*process.WaitRegister),
-				stepRegs:     make(map[int32][][2]int32),
-				lockTables:   make(map[uint64]*plan.LockTarget),
-				MessageBoard: message.NewMessageBoard(),
+				affectRows:                &atomic.Uint64{},
+				counterSet:                &perfcounter.CounterSet{},
+				nodeRegs:                  make(map[[2]int32]*process.WaitRegister),
+				stepRegs:                  make(map[int32][][2]int32),
+				materializedSinkScanNodes: make(map[int32][]int32),
+				materializedSources:       make(map[int32]*materialized.Source),
+				materializedReaderIDs:     make(map[[2]int32]int),
+				lockTables:                make(map[uint64]*plan.LockTarget),
+				MessageBoard:              message.NewMessageBoard(),
 			}
 		},
 		func(c *Compile) {

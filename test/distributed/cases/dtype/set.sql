@@ -25,7 +25,50 @@ insert into set01 values
 
 select * from set01 order by id;
 select * from set01 where colors = 'red,green' order by id;
+-- SET keeps its comma-separated display value in string comparisons, but uses
+-- its member bitmap for arithmetic, bitwise, and numeric comparison contexts.
+select id, colors + 0, colors & 1, colors = 'red,blue' from set01 order by id;
+select id from set01 where colors & 1 order by id;
+select id from set01 where colors = 3 order by id;
 select * from set01 order by colors;
+-- SET bit-order, including multi-member values, must survive a derived table.
+select id, colors from (select id, colors from set01) d order by colors, id;
+select colors from (select colors from set01 group by colors) d order by colors;
+with c as (select colors from set01)
+select group_concat(colors order by colors separator '|') as ordered_values
+from c where colors is not null and colors <> '';
+
+-- SET('', 'a') maps bitmap 0 and bitmap 1 to the same display value. Direct
+-- sorting and transparent projections retain raw identity. Equality boundaries
+-- sort the canonical bitmap of the surviving display, without splitting it.
+drop table if exists set_empty_member_order;
+create table set_empty_member_order (id int primary key, tags set('', 'a'));
+insert into set_empty_member_order values (2, 0), (1, 1), (3, 2);
+select id, tags from set_empty_member_order order by tags, id;
+select id, tags from (select id, tags from set_empty_member_order) d order by tags, id;
+with c as (select id, tags from set_empty_member_order)
+select id, tags from c order by tags, id;
+select tags, count(*) as cnt from set_empty_member_order group by tags order by tags;
+select distinct tags from set_empty_member_order order by tags;
+drop table set_empty_member_order;
+
+-- An empty member in the middle distinguishes raw, canonical and lexical order.
+drop table if exists set_boundary_order;
+create table set_boundary_order (id int primary key, s set('z', '', 'a'));
+insert into set_boundary_order values (1, 2), (2, 0), (3, 1), (4, 4), (5, null);
+select id, s, s + 0 as bitmap from (select id, s from set_boundary_order) d order by s, id;
+select s, count(*) as cnt from set_boundary_order group by s order by s;
+select distinct s from set_boundary_order order by s;
+select s from (select distinct s from set_boundary_order) d order by s;
+select cast(s as unsigned) as bitmap from (select distinct s from set_boundary_order) d order by bitmap;
+select id, s, s + 0 as bitmap, cast(s as unsigned) as cast_bitmap
+from (select id, s from set_boundary_order order by id limit 5) d order by s, id;
+select id, s from set_boundary_order order by cast(s as char), id;
+delete from set_boundary_order;
+insert into set_boundary_order values (5, null), (4, 4), (3, 1), (2, 0), (1, 2);
+select s, count(*) as cnt from set_boundary_order group by s order by s;
+select distinct s from set_boundary_order order by s;
+drop table set_boundary_order;
 
 drop table if exists set_idx;
 create table set_idx (

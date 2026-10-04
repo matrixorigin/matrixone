@@ -1,0 +1,33 @@
+{
+  "cases": [
+    {
+      "id": "four_rows_two_row_groups",
+      "position_deletes": [
+        {
+          "deleted_value": 2,
+          "pos": 1
+        }
+      ],
+      "row_groups": [
+        {
+          "ordinal": 0,
+          "row_count": 2,
+          "start_row_ordinal": 0
+        },
+        {
+          "ordinal": 1,
+          "row_count": 2,
+          "start_row_ordinal": 2
+        }
+      ],
+      "rows_per_group": 2,
+      "values": [
+        1,
+        2,
+        3,
+        4
+      ]
+    }
+  ],
+  "source": "Parquet row-group fixture matching Iceberg physical row position semantics."
+}

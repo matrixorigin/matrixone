@@ -33,7 +33,7 @@ func TestFetchBoolRows(t *testing.T) {
 		t,
 		types.New(types.T_bool, 0, 0),
 		values,
-		lock.Granularity_Range,
+		lock.Granularity_Row,
 		values,
 		values,
 		values,
@@ -596,7 +596,10 @@ func TestFetchFloat32Rows(t *testing.T) {
 		lock.Granularity_Row,
 		values,
 		expectRangeValues,
-		[]float32{math.SmallestNonzeroFloat32, math.MaxFloat32},
+		[]float32{
+			math.Float32frombits(math.MaxUint32),
+			math.Float32frombits(math.MaxInt32),
+		},
 		func(packer *types.Packer, v float32) {
 			packer.EncodeFloat32(v)
 		},
@@ -616,7 +619,10 @@ func TestFetchFloat32RowsWithFilter(t *testing.T) {
 		lock.Granularity_Row,
 		values[:2],
 		expectRangeValues,
-		[]float32{math.SmallestNonzeroFloat32, math.MaxFloat32},
+		[]float32{
+			math.Float32frombits(math.MaxUint32),
+			math.Float32frombits(math.MaxInt32),
+		},
 		func(packer *types.Packer, v float32) {
 			packer.EncodeFloat32(v)
 		},
@@ -636,7 +642,10 @@ func TestFetchFloat32RowsWithFilterAll(t *testing.T) {
 		lock.Granularity_Row,
 		values[:2],
 		expectRangeValues,
-		[]float32{math.SmallestNonzeroFloat32, math.MaxFloat32},
+		[]float32{
+			math.Float32frombits(math.MaxUint32),
+			math.Float32frombits(math.MaxInt32),
+		},
 		func(packer *types.Packer, v float32) {
 			packer.EncodeFloat32(v)
 		},
@@ -656,7 +665,10 @@ func TestFetchFloat64Rows(t *testing.T) {
 		lock.Granularity_Row,
 		values,
 		expectRangeValues,
-		[]float64{math.SmallestNonzeroFloat64, math.MaxFloat64},
+		[]float64{
+			math.Float64frombits(math.MaxUint64),
+			math.Float64frombits(math.MaxInt64),
+		},
 		func(packer *types.Packer, v float64) {
 			packer.EncodeFloat64(v)
 		},
@@ -676,7 +688,10 @@ func TestFetchFloat64RowsWithFilter(t *testing.T) {
 		lock.Granularity_Row,
 		values[:2],
 		expectRangeValues,
-		[]float64{math.SmallestNonzeroFloat64, math.MaxFloat64},
+		[]float64{
+			math.Float64frombits(math.MaxUint64),
+			math.Float64frombits(math.MaxInt64),
+		},
 		func(packer *types.Packer, v float64) {
 			packer.EncodeFloat64(v)
 		},
@@ -696,7 +711,10 @@ func TestFetchFloat64RowsWithFilterAll(t *testing.T) {
 		lock.Granularity_Row,
 		values[:2],
 		expectRangeValues,
-		[]float64{math.SmallestNonzeroFloat64, math.MaxFloat64},
+		[]float64{
+			math.Float64frombits(math.MaxUint64),
+			math.Float64frombits(math.MaxInt64),
+		},
 		func(packer *types.Packer, v float64) {
 			packer.EncodeFloat64(v)
 		},
@@ -1234,7 +1252,7 @@ func TestFetchCharRows(t *testing.T) {
 		lock.Granularity_Row,
 		values,
 		expectRangeValues,
-		[][]byte{{0}, nil},
+		[][]byte{{}, nil},
 		func(packer *types.Packer, v []byte) {
 			if v == nil {
 				packer.EncodeStringTypeMax()
@@ -1257,7 +1275,7 @@ func TestFetchCharRowsWithFilter(t *testing.T) {
 		lock.Granularity_Row,
 		values[:2],
 		expectRangeValues,
-		[][]byte{{0}, nil},
+		[][]byte{{}, nil},
 		func(packer *types.Packer, v []byte) {
 			if v == nil {
 				packer.EncodeStringTypeMax()
@@ -1280,7 +1298,7 @@ func TestFetchVarcharRows(t *testing.T) {
 		lock.Granularity_Row,
 		values,
 		expectRangeValues,
-		[][]byte{{0}, nil},
+		[][]byte{{}, nil},
 		func(packer *types.Packer, v []byte) {
 			if v == nil {
 				packer.EncodeStringTypeMax()
@@ -1303,7 +1321,7 @@ func TestFetchVarcharRowsWithFilter(t *testing.T) {
 		lock.Granularity_Row,
 		values[:2],
 		expectRangeValues,
-		[][]byte{{0}, nil},
+		[][]byte{{}, nil},
 		func(packer *types.Packer, v []byte) {
 			if v == nil {
 				packer.EncodeStringTypeMax()
@@ -1430,7 +1448,7 @@ func runFetchRowsTestWithAppendFunc[T any](
 		return
 	} else {
 		assert.Equal(t, expectG, g)
-		assert.Equal(t, len(expectValues), len(rows))
+		require.Equal(t, len(expectValues), len(rows))
 		assertFN(expectValues, rows)
 	}
 
@@ -1442,11 +1460,11 @@ func runFetchRowsTestWithAppendFunc[T any](
 	} else {
 		if len(expectRangeValues) > 1 {
 			assert.Equal(t, lock.Granularity_Range, g)
-			assert.Equal(t, 2, len(rows))
+			require.Equal(t, 2, len(rows))
 			assertFN(expectRangeValues, rows)
 		} else {
 			assert.Equal(t, lock.Granularity_Row, g)
-			assert.Equal(t, 1, len(rows))
+			require.Equal(t, 1, len(rows))
 			assertFN(expectRangeValues, rows)
 		}
 	}
@@ -1455,7 +1473,7 @@ func runFetchRowsTestWithAppendFunc[T any](
 	ok, rows, g = fetcher(vec, packer, tp, len(values), true, filter, filterCols)
 	require.True(t, ok)
 	assert.Equal(t, lock.Granularity_Range, g)
-	assert.Equal(t, 2, len(rows))
+	require.Equal(t, 2, len(rows))
 	assertFN(expectLockTableValues, rows)
 }
 
@@ -1470,6 +1488,191 @@ func TestDecimal128(t *testing.T) {
 	minDecimal128 := decimal128Fn(max128.Minus())
 	maxDecimal128 := decimal128Fn(max128)
 	assert.True(t, bytes.Compare(minDecimal128, maxDecimal128) < 0)
+}
+
+func TestFetchRowsSkipsConstNull(t *testing.T) {
+	mp := mpool.MustNew("test")
+	vec := vector.NewConstNull(types.T_uint64.ToType(), 1, mp)
+	defer vec.Free(mp)
+
+	fetcher := GetFetchRowsFunc(types.T_uint64.ToType())
+	ok, rows, granularity := fetcher(vec, types.NewPacker(), types.T_uint64.ToType(), 1, false, nil, nil)
+	require.False(t, ok)
+	require.Empty(t, rows)
+	require.Equal(t, lock.Granularity_Row, granularity)
+
+	ok, rows, granularity = fetcher(vec, types.NewPacker(), types.T_uint64.ToType(), 1, true, nil, nil)
+	require.True(t, ok)
+	require.Len(t, rows, 2)
+	require.Equal(t, lock.Granularity_Range, granularity)
+}
+
+func TestSupportsTotalLockTableRange(t *testing.T) {
+	require.True(t, SupportsTotalLockTableRange(types.T_uint32.ToType()))
+	require.True(t, SupportsTotalLockTableRange(types.T_varchar.ToType()))
+	require.True(t, SupportsTotalLockTableRange(types.T_float32.ToType()))
+	require.True(t, SupportsTotalLockTableRange(types.T_float64.ToType()))
+	require.False(t, SupportsTotalLockTableRange(types.T_blob.ToType()))
+	for oid := 0; oid <= math.MaxUint8; oid++ {
+		typ := types.Type{Oid: types.T(oid)}
+		want := getFetchRowsFunc(typ) != nil
+		require.Equalf(t, want, SupportsTotalLockTableRange(typ),
+			"logical-plan admission drifted from lockop support for oid %d", oid)
+	}
+	require.NotPanics(t, func() { GetFetchRowsFunc(types.T_uint32.ToType()) })
+	require.Panics(t, func() { GetFetchRowsFunc(types.T_blob.ToType()) })
+}
+
+func TestFetchFloat32RowsUsesPackedKeyOrder(t *testing.T) {
+	positiveNaN := math.Float32frombits(0x7fc00001)
+	negativeNaN := math.Float32frombits(0xffc00001)
+	values := []float32{
+		positiveNaN,
+		0,
+		negativeNaN,
+		float32(math.Inf(1)),
+		float32(math.Inf(-1)),
+		math.Float32frombits(1),
+		math.Float32frombits(0x80000000),
+	}
+	runFetchRowsTest(
+		t,
+		types.T_float32.ToType(),
+		values,
+		lock.Granularity_Row,
+		values,
+		[]float32{negativeNaN, positiveNaN},
+		[]float32{
+			math.Float32frombits(math.MaxUint32),
+			math.Float32frombits(math.MaxInt32),
+		},
+		func(packer *types.Packer, v float32) {
+			packer.EncodeFloat32(v)
+		},
+		nil,
+		nil,
+		false,
+	)
+}
+
+func TestFetchFloat64RowsUsesPackedKeyOrder(t *testing.T) {
+	positiveNaN := math.Float64frombits(0x7ff8000000000001)
+	negativeNaN := math.Float64frombits(0xfff8000000000001)
+	values := []float64{
+		positiveNaN,
+		0,
+		negativeNaN,
+		math.Inf(1),
+		math.Inf(-1),
+		math.Float64frombits(1),
+		math.Float64frombits(0x8000000000000000),
+	}
+	runFetchRowsTest(
+		t,
+		types.T_float64.ToType(),
+		values,
+		lock.Granularity_Row,
+		values,
+		[]float64{negativeNaN, positiveNaN},
+		[]float64{
+			math.Float64frombits(math.MaxUint64),
+			math.Float64frombits(math.MaxInt64),
+		},
+		func(packer *types.Packer, v float64) {
+			packer.EncodeFloat64(v)
+		},
+		nil,
+		nil,
+		false,
+	)
+}
+
+func TestFetchFloatLockTableRangesCoverEveryEncodedPayload(t *testing.T) {
+	tests := []struct {
+		name         string
+		typ          types.Type
+		payloadBytes int
+		encodeZero   func(*types.Packer)
+	}{
+		{
+			name:         "float32",
+			typ:          types.T_float32.ToType(),
+			payloadBytes: 4,
+			encodeZero: func(packer *types.Packer) {
+				packer.EncodeFloat32(0)
+			},
+		},
+		{
+			name:         "float64",
+			typ:          types.T_float64.ToType(),
+			payloadBytes: 8,
+			encodeZero: func(packer *types.Packer) {
+				packer.EncodeFloat64(0)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			packer := types.NewPacker()
+			defer packer.Close()
+			test.encodeZero(packer)
+			zeroKey := packer.Bytes()
+			require.Len(t, zeroKey, test.payloadBytes+1)
+
+			ok, rows, granularity := GetFetchRowsFunc(test.typ)(
+				nil, packer, test.typ, 0, true, nil, nil)
+			require.True(t, ok)
+			require.Equal(t, lock.Granularity_Range, granularity)
+			require.Len(t, rows, 2)
+
+			wantMin := make([]byte, len(zeroKey))
+			wantMin[0] = zeroKey[0]
+			wantMax := bytes.Repeat([]byte{math.MaxUint8}, len(zeroKey))
+			wantMax[0] = zeroKey[0]
+			require.Equal(t, wantMin, rows[0])
+			require.Equal(t, wantMax, rows[1])
+		})
+	}
+}
+
+func TestFetchRowsSkipsPartialNull(t *testing.T) {
+	mp := mpool.MustNew("test")
+
+	fixed := vector.NewVec(types.T_uint64.ToType())
+	require.NoError(t, vector.AppendFixed(fixed, uint64(0), true, mp))
+	require.NoError(t, vector.AppendFixed(fixed, uint64(0), false, mp))
+	require.NoError(t, vector.AppendFixed(fixed, uint64(1), false, mp))
+	defer fixed.Free(mp)
+	fetcher := GetFetchRowsFunc(types.T_uint64.ToType())
+	packer := types.NewPacker()
+	ok, rows, granularity := fetcher(fixed, packer, types.T_uint64.ToType(), 10, false, nil, nil)
+	require.True(t, ok)
+	require.Equal(t, lock.Granularity_Row, granularity)
+	require.Len(t, rows, 2)
+	packer.Reset()
+	packer.EncodeUint64(0)
+	require.Equal(t, packer.Bytes(), rows[0])
+	packer.Reset()
+	packer.EncodeUint64(1)
+	require.Equal(t, packer.Bytes(), rows[1])
+
+	text := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(text, nil, true, mp))
+	require.NoError(t, vector.AppendBytes(text, []byte{}, false, mp))
+	require.NoError(t, vector.AppendBytes(text, []byte("x"), false, mp))
+	defer text.Free(mp)
+	fetcher = GetFetchRowsFunc(types.T_varchar.ToType())
+	ok, rows, granularity = fetcher(text, packer, types.T_varchar.ToType(), 10, false, nil, nil)
+	require.True(t, ok)
+	require.Equal(t, lock.Granularity_Row, granularity)
+	require.Len(t, rows, 2)
+	packer.Reset()
+	packer.EncodeStringType([]byte{})
+	require.Equal(t, packer.Bytes(), rows[0])
+	packer.Reset()
+	packer.EncodeStringType([]byte("x"))
+	require.Equal(t, packer.Bytes(), rows[1])
 }
 
 func TestDecimal256(t *testing.T) {

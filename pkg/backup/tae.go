@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -142,12 +143,12 @@ func getParallelCount(count int) int {
 }
 
 // parallelCopyData copy data from srcFs to dstFs in parallel
-func parallelCopyData(srcFs, dstFs fileservice.FileService,
+func parallelCopyData(ctx context.Context, srcFs, dstFs fileservice.FileService,
 	files map[string]*objectio.BackupObject,
 	parallelCount int,
 	gcFileMap map[string]string,
 ) ([]*taeFile, error) {
-	var copyCount, skipCount, copySize int64
+	var copyCount, copySize int64
 	var printMutex, fileMutex sync.Mutex
 	stopPrint := false
 	defer func() {
@@ -159,10 +160,11 @@ func parallelCopyData(srcFs, dstFs fileservice.FileService,
 	}()
 	// record files
 	taeFileList := make([]*taeFile, 0, len(files))
-	errC := make(chan error, 1)
-	defer close(errC)
 	jobScheduler := tasks.NewParallelJobScheduler(parallelCount)
 	defer jobScheduler.Stop()
+	copyCtx, cancelCopy := context.WithCancelCause(ctx)
+	defer cancelCopy(nil)
+	jobDone := make(chan struct{}, len(files))
 	go func() {
 		for {
 			printMutex.Lock()
@@ -175,7 +177,6 @@ func parallelCopyData(srcFs, dstFs fileservice.FileService,
 			logutil.Info("backup", common.OperationField("copy file"),
 				common.AnyField("copy file size", copySize),
 				common.AnyField("copy file num", copyCount),
-				common.AnyField("skip file num", skipCount),
 				common.AnyField("total file num", len(files)))
 			fileMutex.Unlock()
 			time.Sleep(time.Second * 5)
@@ -185,8 +186,11 @@ func parallelCopyData(srcFs, dstFs fileservice.FileService,
 	backupJobs := make([]*tasks.Job, len(files))
 	getJob := func(srcFs, dstFs fileservice.FileService, backupObject *objectio.BackupObject) *tasks.Job {
 		job := new(tasks.Job)
-		job.Init(context.Background(), backupObject.Location.Name().String(), tasks.JTAny,
-			func(_ context.Context) *tasks.JobResult {
+		job.Init(copyCtx, backupObject.Location.Name().String(), tasks.JTAny,
+			func(jobCtx context.Context) *tasks.JobResult {
+				defer func() {
+					jobDone <- struct{}{}
+				}()
 
 				name := backupObject.Location.Name().String()
 				size := backupObject.Location.Extent().End() + objectio.FooterSize
@@ -205,22 +209,12 @@ func parallelCopyData(srcFs, dstFs fileservice.FileService,
 						Res: nil,
 					}
 				}
-				checksum, err := CopyFileWithRetry(context.Background(), srcFs, dstFs, backupObject.Location.Name().String(), "")
+				checksum, err := CopyFileWithRetry(jobCtx, srcFs, dstFs, backupObject.Location.Name().String(), "")
 				if err != nil {
-					if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-						// TODO: handle file not found, maybe GC
-						fileMutex.Lock()
-						skipCount++
-						fileMutex.Unlock()
-						return &tasks.JobResult{
-							Res: nil,
-						}
-					} else {
-						errC <- err
-						return &tasks.JobResult{
-							Err: err,
-							Res: nil,
-						}
+					cancelCopy(err)
+					return &tasks.JobResult{
+						Err: err,
+						Res: nil,
 					}
 				}
 				fileMutex.Lock()
@@ -247,32 +241,52 @@ func parallelCopyData(srcFs, dstFs fileservice.FileService,
 		idx++
 	}
 
-	for n := range backupJobs {
+	scheduledCount, completedCount, nextJob := 0, 0, 0
+	schedule := func(n int) bool {
+		if context.Cause(copyCtx) != nil {
+			return false
+		}
 		err := jobScheduler.Schedule(backupJobs[n])
 		if err != nil {
 			logutil.Infof("schedule job failed %v", err.Error())
-			return nil, err
+			cancelCopy(err)
+			return false
 		}
-		select {
-		case err = <-errC:
-			logutil.Infof("copy file failed %v", err.Error())
-			return nil, err
-		default:
+		scheduledCount++
+		return true
+	}
+	for nextJob < len(backupJobs) && scheduledCount-completedCount < parallelCount {
+		if !schedule(nextJob) {
+			break
+		}
+		nextJob++
+	}
+	for completedCount < scheduledCount {
+		<-jobDone
+		completedCount++
+		if nextJob < len(backupJobs) && schedule(nextJob) {
+			nextJob++
 		}
 	}
 
-	for n := range backupJobs {
+	var firstErr error
+	for n := 0; n < scheduledCount; n++ {
 		ret := backupJobs[n].WaitDone()
-		if ret.Err != nil {
+		if ret.Err != nil && firstErr == nil {
 			logutil.Infof("wait job done failed %v", ret.Err.Error())
-			return nil, ret.Err
+			firstErr = ret.Err
 		}
+	}
+	if cause := context.Cause(copyCtx); cause != nil {
+		return nil, cause
+	}
+	if firstErr != nil {
+		return nil, firstErr
 	}
 
 	logutil.Info("backup", common.OperationField("copy file"),
 		common.AnyField("copy file size", copySize),
 		common.AnyField("copy file num", copyCount),
-		common.AnyField("skip file num", skipCount),
 		common.AnyField("total file num", len(files)))
 	return taeFileList, nil
 }
@@ -306,9 +320,9 @@ func execBackup(
 	backupTime := names[0]
 	trimString := names[1]
 	names = names[1:]
-	files := make(map[string]*objectio.BackupObject, 0)
+	var files map[string]*objectio.BackupObject
 	gcFileMap := make(map[string]string)
-	softDeletes := make(map[string]bool)
+	var err error
 	var loadDuration, copyDuration, reWriteDuration time.Duration
 	var oNames []*objectio.BackupObject
 	parallelNum := getParallelCount(count)
@@ -323,6 +337,30 @@ func execBackup(
 			common.AnyField("copy file cost", copyDuration),
 			common.AnyField("rewrite checkpoint cost", reWriteDuration))
 	}()
+	// The special checkpoint is rewritten to its start timestamp. Objects
+	// dropped before that timestamp are absent from the restored snapshot and
+	// may already have been collected by GC. Objects dropped at or after it
+	// remain live after the rewrite and must still be copied.
+	var cnLoc, mergeStart, mergeEnd string
+	var end, start types.TS
+	var version uint64
+	if trimString != "" {
+		ckpStr := strings.Split(trimString, ":")
+		if len(ckpStr) != 5 {
+			return moerr.NewInternalError(ctx, fmt.Sprintf("invalid checkpoint string: %v", ckpStr))
+		}
+		cnLoc = ckpStr[0]
+		mergeEnd = ckpStr[2]
+		// tnLoc = ckpStr[3]
+		mergeStart = ckpStr[4]
+		end = types.StringToTS(mergeEnd)
+		start = types.StringToTS(mergeStart)
+		version, err = strconv.ParseUint(ckpStr[1], 10, 32)
+		if err != nil {
+			return err
+		}
+	}
+
 	startTime := time.Now()
 	baseTS := ts
 	// When rewriting the checkpoint and trimming the aobject,
@@ -348,11 +386,15 @@ func execBackup(
 		}
 		var oneNames []*objectio.BackupObject
 		var data *logtail.CKPReader
-		if i == 0 {
-			oneNames, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, sid, srcFs, key, uint32(version), nil, &baseTS)
-		} else {
-			oneNames, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, sid, srcFs, key, uint32(version), &softDeletes, &baseTS)
-		}
+		oneNames, data, err = logtail.LoadCheckpointEntriesFromKey(
+			ctx,
+			sid,
+			srcFs,
+			key,
+			uint32(version),
+			nil,
+			&baseTS,
+		)
 		if err != nil {
 			return err
 		}
@@ -379,42 +421,7 @@ func execBackup(
 		}
 	}
 	startTime = time.Now()
-	for _, oName := range oNames {
-		objName := oName.Location.Name().String()
-		// Check if file already exists in current backup directory
-		if dstHave[objName] {
-			oName.NeedCopy = false
-		}
-		// Check if file exists in global index (already backed up in previous backups)
-		if globalIndex != nil && globalIndex.Has(objName) {
-			oName.NeedCopy = false
-		}
-		if files[objName] == nil {
-			files[objName] = oName
-		}
-	}
-
-	// trim checkpoint and block
-	var cnLoc, mergeStart, mergeEnd string
-	var end, start types.TS
-	var version uint64
-	if trimString != "" {
-		var err error
-		ckpStr := strings.Split(trimString, ":")
-		if len(ckpStr) != 5 {
-			return moerr.NewInternalError(ctx, fmt.Sprintf("invalid checkpoint string: %v", ckpStr))
-		}
-		cnLoc = ckpStr[0]
-		mergeEnd = ckpStr[2]
-		// tnLoc = ckpStr[3]
-		mergeStart = ckpStr[4]
-		end = types.StringToTS(mergeEnd)
-		start = types.StringToTS(mergeStart)
-		version, err = strconv.ParseUint(ckpStr[1], 10, 32)
-		if err != nil {
-			return err
-		}
-	}
+	files = selectBackupObjects(oNames, start, dstHave, globalIndex)
 
 	// Set protectedTS to the backup time point
 	// This is the timestamp that should be protected from GC
@@ -433,7 +440,7 @@ func execBackup(
 	}
 
 	// copy data
-	taeFileList, err := parallelCopyData(srcFs, dstFs, files, parallelNum, gcFileMap)
+	taeFileList, err := parallelCopyData(ctx, srcFs, dstFs, files, parallelNum, gcFileMap)
 	if err != nil {
 		return err
 	}
@@ -507,6 +514,37 @@ func execBackup(
 		*filesList = append(*filesList, taeFileList...)
 	}
 	return err
+}
+
+func selectBackupObjects(
+	oNames []*objectio.BackupObject,
+	restoreTS types.TS,
+	dstHave map[string]bool,
+	globalIndex *GlobalFileIndex,
+) map[string]*objectio.BackupObject {
+	files := make(map[string]*objectio.BackupObject, len(oNames))
+	for _, oName := range oNames {
+		objName := oName.Location.Name().String()
+		// A DropTS alone does not prove that an object is absent from the
+		// snapshot being restored. The special checkpoint rewrite makes objects
+		// dropped at or after restoreTS live again, so only an earlier DropTS is
+		// safe to omit.
+		if !restoreTS.IsEmpty() && !oName.DropTS.IsEmpty() && oName.DropTS.LT(&restoreTS) {
+			continue
+		}
+		// Check if file already exists in current backup directory
+		if dstHave[objName] {
+			oName.NeedCopy = false
+		}
+		// Check if file exists in global index (already backed up in previous backups)
+		if globalIndex != nil && globalIndex.Has(objName) {
+			oName.NeedCopy = false
+		}
+		if files[objName] == nil {
+			files[objName] = oName
+		}
+	}
+	return files
 }
 
 // CopyCheckpointDir copy checkpoint dir from srcFs to dstFs
@@ -611,15 +649,20 @@ func CopyGCDir(
 		filesList := make([]*taeFile, 0)
 		needCopy := true
 		for _, object := range objects {
-			checksum, err = CopyFileWithRetry(ctx, srcFs, dstFs, object.ObjectName().String(), "")
+			objectName := object.ObjectName().String()
+			checksum, err = CopyFileWithRetry(ctx, srcFs, dstFs, objectName, "")
 			if err != nil {
-				logutil.Warnf("[Backup] copy file %v failed", object.ObjectName().String())
+				logutil.Warnf("[Backup] copy file %v failed", objectName)
 				needCopy = false
 				break
 			}
+			entry, err := dstFs.StatFile(ctx, objectName)
+			if err != nil {
+				return nil, err
+			}
 			filesList = append(filesList, &taeFile{
-				path:     object.ObjectName().String(),
-				size:     files[metaFile.GetIdx()].Size,
+				path:     objectName,
+				size:     entry.Size,
 				checksum: checksum,
 				needCopy: true,
 				ts:       backup,
@@ -633,7 +676,7 @@ func CopyGCDir(
 
 	for i, metaFile := range copyFiles {
 		name := metaFile.GetName()
-		if i == len(metaFiles)-1 {
+		if i == len(copyFiles)-1 {
 			if !min.IsEmpty() && metaFile.GetEnd().LT(&min) {
 				// It means that the gc consumption is too slow, and the gc water level needs to be raised.
 				// Otherwise, the gc will not work after the cluster is restored because it cannot find the checkpoint.
@@ -686,14 +729,30 @@ func CopyCheckpointDir(
 	return taeFiles, minTs, nil
 }
 
+type copiedObjectChecksumError struct {
+	err error
+}
+
+func (e *copiedObjectChecksumError) Error() string {
+	return "checksum copied backup object: " + e.err.Error()
+}
+
+func (e *copiedObjectChecksumError) Unwrap() error {
+	return e.err
+}
+
 func CopyFileWithRetry(ctx context.Context, srcFs, dstFs fileservice.FileService, name, dstDir string, newName ...string) ([]byte, error) {
-	return fileservice.DoWithRetry(
+	return fileservice.DoWithRetryContext(
+		ctx,
 		"CopyFile",
 		func() ([]byte, error) {
 			return CopyFile(ctx, srcFs, dstFs, name, dstDir, newName...)
 		},
 		64,
-		fileservice.IsRetryableError,
+		func(err error) bool {
+			var checksumErr *copiedObjectChecksumError
+			return !errors.As(err, &checksumErr) && fileservice.IsRetryableError(err)
+		},
 	)
 }
 
@@ -709,6 +768,73 @@ func CopyFile(ctx context.Context, srcFs, dstFs fileservice.FileService, name, d
 		}
 	}
 
+	if copier, ok := dstFs.(fileservice.ObjectCopier); ok {
+		copied, err := copier.CopyObject(ctx, srcFs, name, newName)
+		if err != nil {
+			return nil, err
+		}
+		if copied {
+			// Hash the copied object itself. Provider-side copy avoids opening a
+			// source response in CN while the destination operation needs an
+			// HTTP connection, and the checksum still describes the bytes that
+			// were actually written to the backup.
+			checksum, err := fileservice.DoWithRetryContext(
+				ctx,
+				"ChecksumCopiedBackupObject",
+				func() ([]byte, error) {
+					return checksumFile(ctx, dstFs, newName)
+				},
+				64,
+				fileservice.IsRetryableError,
+			)
+			if err != nil {
+				// CopyFileWithRetry must not repeat a successful provider copy:
+				// the destination now exists, so retry only this checksum phase.
+				return nil, &copiedObjectChecksumError{err: err}
+			}
+			return checksum, nil
+		}
+	}
+
+	return streamCopyFile(ctx, srcFs, dstFs, name, newName)
+}
+
+func checksumFile(ctx context.Context, fs fileservice.FileService, name string) (checksum []byte, err error) {
+	var reader io.ReadCloser
+	ioVec := &fileservice.IOVector{
+		FilePath: name,
+		Entries: []fileservice.IOEntry{
+			{
+				ReadCloserForRead: &reader,
+				Offset:            0,
+				Size:              -1,
+			},
+		},
+		Policy: fileservice.SkipAllCache,
+	}
+
+	err = fs.Read(ctx, ioVec)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := reader.Close(); err == nil {
+			err = closeErr
+		}
+	}()
+
+	hasher := sha256.New()
+	if _, err = io.Copy(hasher, reader); err != nil {
+		return nil, err
+	}
+	return hasher.Sum(nil), nil
+}
+
+func streamCopyFile(
+	ctx context.Context,
+	srcFs, dstFs fileservice.FileService,
+	name, newName string,
+) ([]byte, error) {
 	var reader io.ReadCloser
 	ioVec := &fileservice.IOVector{
 		FilePath: name,
@@ -727,7 +853,7 @@ func CopyFile(ctx context.Context, srcFs, dstFs fileservice.FileService, name, d
 		return nil, err
 	}
 	defer reader.Close()
-	// hash
+
 	hasher := sha256.New()
 	hashingReader := io.TeeReader(reader, hasher)
 	dstIoVec := fileservice.IOVector{

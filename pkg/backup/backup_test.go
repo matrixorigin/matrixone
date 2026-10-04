@@ -22,7 +22,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/panjf2000/ants/v2"
 	"github.com/prashantv/gostub"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -30,12 +29,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/stretchr/testify/assert"
@@ -45,6 +48,25 @@ import (
 const (
 	ModuleName = "Backup"
 )
+
+func appendBatchesConcurrently(
+	t *testing.T,
+	batches []*containers.Batch,
+	relation string,
+	engine *db.DB,
+) {
+	t.Helper()
+
+	// The fixture bounds batches to a small finite set. One goroutine per batch
+	// preserves concurrent-append coverage without a worker pool and its
+	// purge/ticktock goroutines.
+	var wg sync.WaitGroup
+	wg.Add(len(batches))
+	for _, data := range batches {
+		go testutil.AppendClosure(t, data, relation, engine, &wg)()
+	}
+	wg.Wait()
+}
 
 func TestExecBackupRejectsIncompleteCheckpointResponse(t *testing.T) {
 	testCases := []struct {
@@ -98,6 +120,141 @@ func TestExecBackupRejectsIncompleteCheckpointResponse(t *testing.T) {
 	}
 }
 
+func TestExecBackupKeepsObjectDeletedAfterRestoreTimestamp(t *testing.T) {
+	ctx := t.Context()
+	src := newBackupMemoryFS(t, "backup-soft-deleted-src")
+	dst := newBackupMemoryFS(t, "backup-soft-deleted-dst")
+
+	objectID := objectio.NewObjectid()
+	objectName := objectio.BuildObjectNameWithObjectID(&objectID)
+	objectStats := objectio.NewObjectStatsWithObjectID(&objectID, false, false, false)
+	require.NoError(t, objectio.SetObjectStatsLocation(
+		objectStats,
+		objectio.BuildLocation(objectName, objectio.NewExtent(0, 0, 1, 1), 1, 0),
+	))
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(objectStats, 1))
+	require.NoError(t, objectio.SetObjectStatsRowCnt(objectStats, 1))
+	require.NoError(t, writeFile(ctx, src, objectName.String(), []byte("deleted object")))
+
+	cat := catalog.MockCatalog(nil)
+	defer cat.Close()
+	dbEntry, err := cat.CreateDBEntry("backup_test", "", "", nil)
+	require.NoError(t, err)
+	table, err := dbEntry.CreateTableEntry(catalog.MockSchema(2, 0), nil, nil)
+	require.NoError(t, err)
+
+	createTS := types.BuildTS(5, 0)
+	checkpointStart := types.BuildTS(15, 0)
+	checkpointEnd := types.BuildTS(30, 0)
+	entry, err := table.CreateCommittedObject(
+		createTS,
+		&objectio.CreateObjOpt{Stats: objectStats},
+		nil,
+	)
+	require.NoError(t, err)
+	catalog.MockDroppedObjectEntry2List(entry, checkpointEnd)
+
+	checkpointData, err := logtail.BackupCheckpointDataFactory(
+		checkpointStart,
+		checkpointEnd,
+		src,
+	)(cat)
+	require.NoError(t, err)
+	defer checkpointData.Close()
+	checkpointLocation, _, err := checkpointData.Sync(ctx, src)
+	require.NoError(t, err)
+
+	objects, reader, err := logtail.LoadCheckpointEntriesFromKey(
+		ctx,
+		"backup-test",
+		src,
+		checkpointLocation,
+		logtail.CheckpointCurrentVersion,
+		nil,
+		&types.TS{},
+	)
+	require.NoError(t, err)
+
+	// DropTS is after the restore timestamp. ReWriteCheckpointAndBlockFromKey
+	// clears this DeleteTS and retains the non-appendable object, so its physical
+	// file must be present in the backup.
+	files := selectBackupObjects(objects, checkpointStart, nil, nil)
+	require.Contains(t, files, objectName.String())
+	_, err = parallelCopyData(ctx, src, dst, files, 1, nil)
+	require.NoError(t, err)
+	var restoredLive bool
+	rewrittenLocation, _, _, err := logtail.ReWriteCheckpointAndBlockFromKey(
+		ctx,
+		"backup-test",
+		src,
+		dst,
+		checkpointLocation,
+		reader,
+		logtail.CheckpointCurrentVersion,
+		checkpointStart,
+	)
+	require.NoError(t, err)
+	rewrittenReader, err := logtail.GetCheckpointReader(
+		ctx,
+		"backup-test",
+		dst,
+		rewrittenLocation,
+		logtail.CheckpointCurrentVersion,
+	)
+	require.NoError(t, err)
+	require.NoError(t, rewrittenReader.ForEachRow(
+		ctx,
+		func(
+			_ uint32,
+			_, _ uint64,
+			_ int8,
+			stats objectio.ObjectStats,
+			_ types.TS,
+			deleteTS types.TS,
+			_ types.Rowid,
+		) error {
+			if stats.ObjectName().String() == objectName.String() && deleteTS.IsEmpty() {
+				restoredLive = true
+			}
+			return nil
+		},
+	))
+	require.True(t, restoredLive)
+	_, err = dst.StatFile(ctx, objectName.String())
+	require.NoError(t, err)
+}
+
+func TestSelectBackupObjectsOnlySkipsObjectsDeletedBeforeRestoreTimestamp(t *testing.T) {
+	newObject := func(dropTS types.TS) *objectio.BackupObject {
+		objectID := objectio.NewObjectid()
+		objectName := objectio.BuildObjectNameWithObjectID(&objectID)
+		objectStats := objectio.NewObjectStatsWithObjectID(&objectID, false, false, false)
+		require.NoError(t, objectio.SetObjectStatsLocation(
+			objectStats,
+			objectio.BuildLocation(objectName, objectio.NewExtent(0, 0, 1, 1), 1, 0),
+		))
+		return &objectio.BackupObject{
+			Location: objectStats.ObjectLocation(),
+			CrateTS:  types.BuildTS(5, 0),
+			DropTS:   dropTS,
+			NeedCopy: true,
+		}
+	}
+
+	before := newObject(types.BuildTS(10, 0))
+	at := newObject(types.BuildTS(15, 0))
+	after := newObject(types.BuildTS(30, 0))
+	files := selectBackupObjects(
+		[]*objectio.BackupObject{before, at, after},
+		types.BuildTS(15, 0),
+		nil,
+		nil,
+	)
+	require.NotContains(t, files, before.Location.Name().String())
+	require.Contains(t, files, at.Location.Name().String())
+	require.Contains(t, files, after.Location.Name().String())
+}
+
 func TestBackupData(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
@@ -127,17 +284,8 @@ func TestBackupData(t *testing.T) {
 	defer bat.Close()
 	bats := bat.Split(100)
 
-	var wg sync.WaitGroup
-	pool, _ := ants.NewPool(80)
-	defer pool.Release()
-
 	start := time.Now()
-	for _, data := range bats {
-		wg.Add(1)
-		err := pool.Submit(testutil.AppendClosure(t, data, schema.Name, db.DB, &wg))
-		assert.Nil(t, err)
-	}
-	wg.Wait()
+	appendBatchesConcurrently(t, bats, schema.Name, db.DB)
 	t.Logf("Append %d rows takes: %s", totalRows, time.Since(start))
 
 	deletedRows := 0
@@ -242,21 +390,15 @@ func TestBackupData2(t *testing.T) {
 	defer bat.Close()
 	bats := bat.Split(100)
 
-	var wg sync.WaitGroup
-	pool, _ := ants.NewPool(80)
-	defer pool.Release()
-
 	start := time.Now()
-	for _, data := range bats {
-		wg.Add(1)
-		err := pool.Submit(testutil.AppendClosure(t, data, schema.Name, db.DB, &wg))
-		assert.Nil(t, err)
-	}
-	wg.Wait()
+	appendBatchesConcurrently(t, bats, schema.Name, db.DB)
 	opts = config.WithLongScanAndCKPOpts(nil)
-	testutils.WaitExpect(5000, func() bool {
+	// Restart only after the quick-checkpoint generation has been observed.
+	// Use a generous outer guard for loaded race builders; successful runs
+	// return on the first observed watermark.
+	require.Eventually(t, func() bool {
 		return db.DiskCleaner.GetCleaner().GetScanWaterMark() != nil
-	})
+	}, 30*time.Second, 50*time.Millisecond, "scan watermark was not produced before restart")
 	db.Restart(ctx, opts)
 	t.Logf("Append %d rows takes: %s", totalRows, time.Since(start))
 	deletedRows := 0
@@ -506,17 +648,8 @@ func TestBackupData5(t *testing.T) {
 	defer bat.Close()
 	bats := bat.Split(100)
 
-	var wg sync.WaitGroup
-	pool, _ := ants.NewPool(80)
-	defer pool.Release()
-
 	start := time.Now()
-	for _, data := range bats {
-		wg.Add(1)
-		err := pool.Submit(testutil.AppendClosure(t, data, schema.Name, db.DB, &wg))
-		assert.Nil(t, err)
-	}
-	wg.Wait()
+	appendBatchesConcurrently(t, bats, schema.Name, db.DB)
 	t.Logf("Append %d rows takes: %s", totalRows, time.Since(start))
 
 	deletedRows := 0

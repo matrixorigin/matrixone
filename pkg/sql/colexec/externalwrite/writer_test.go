@@ -51,11 +51,11 @@ func TestNewExternalWriterDefaults(t *testing.T) {
 // TestWriteBatchNilEmpty: nil or empty batches never open a file.
 func TestWriteBatchNilEmpty(t *testing.T) {
 	w := NewExternalWriter(nil, WriterConfig{Format: FormatCSV}).(*externalWriter)
-	require.NoError(t, w.WriteBatch(context.Background(), nil))
+	require.NoError(t, w.WriteBatch(context.Background(), nil, nil))
 
 	empty := batch.New([]string{"v"})
 	empty.SetRowCount(0)
-	require.NoError(t, w.WriteBatch(context.Background(), empty))
+	require.NoError(t, w.WriteBatch(context.Background(), empty, nil))
 
 	require.False(t, w.opened)
 }

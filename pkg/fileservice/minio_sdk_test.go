@@ -15,17 +15,24 @@
 package fileservice
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
@@ -79,6 +86,8 @@ func TestMinioSDK(t *testing.T) {
 					Name:      name,
 					Endpoint:  "http://localhost:9007",
 					Bucket:    "test",
+					KeyID:     "minioadmin",
+					KeySecret: "minioadmin",
 					KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
 					IsMinio:   true,
 				},
@@ -96,6 +105,144 @@ func TestMinioSDK(t *testing.T) {
 		})
 	})
 
+}
+
+func TestMinioSDKConditionalObjectIdentityReads(t *testing.T) {
+	const lastModRaw = "Wed, 02 Sep 2026 03:04:05 GMT"
+	var requests []*http.Request
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Query().Has("location") {
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = io.WriteString(w, `<LocationConstraint>us-east-1</LocationConstraint>`)
+			return
+		}
+		requests = append(requests, r.Clone(context.Background()))
+		if r.URL.Query().Get("versionId") == "gone" {
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, `<Error><Code>NoSuchVersion</Code><Message>planned version was deleted</Message></Error>`)
+			return
+		}
+		if r.URL.Query().Get("versionId") == "stale" || r.Header.Get("If-Match") == `"stale"` {
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusPreconditionFailed)
+			_, _ = io.WriteString(w, `<Error><Code>PreconditionFailed</Code><Message>object changed</Message></Error>`)
+			return
+		}
+		if r.Method == http.MethodHead {
+			w.Header().Set("Content-Length", "6")
+			w.Header().Set("ETag", `"etag-v1"`)
+			w.Header().Set("x-amz-version-id", "version-v1")
+			w.Header().Set("Last-Modified", lastModRaw)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Content-Length", "3")
+		w.Header().Set("ETag", `"etag-v1"`)
+		w.Header().Set("Last-Modified", lastModRaw)
+		w.Header().Set("Content-Range", "bytes 1-3/6")
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = io.WriteString(w, "bcd")
+	}))
+	defer server.Close()
+
+	endpoint, err := url.Parse(server.URL)
+	require.NoError(t, err)
+	client, err := minio.New(endpoint.Host, &minio.Options{
+		Creds: credentials.NewStaticV4("id", "secret", ""), Secure: false,
+		Transport: server.Client().Transport,
+		Region:    "us-east-1",
+	})
+	require.NoError(t, err)
+	sdk := &MinioSDK{bucket: "bucket", client: client}
+
+	identity, err := sdk.StatObjectIdentity(context.Background(), "object")
+	require.NoError(t, err)
+	wantLastModified, err := time.Parse(http.TimeFormat, lastModRaw)
+	require.NoError(t, err)
+	require.Equal(t, ObjectIdentity{
+		VersionID: "version-v1", ETag: "etag-v1", Size: 6, LastModified: wantLastModified,
+	}, identity)
+
+	min, max := int64(1), int64(4)
+	reader, err := sdk.ReadObjectWithIdentity(context.Background(), "object", &min, &max, identity)
+	require.NoError(t, err)
+	data, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	require.NoError(t, reader.Close())
+	require.Equal(t, "bcd", string(data))
+	versionRequest := requests[len(requests)-1]
+	require.Equal(t, "version-v1", versionRequest.URL.Query().Get("versionId"))
+
+	etagIdentity := identity
+	etagIdentity.VersionID = ""
+	reader, err = sdk.ReadObjectWithIdentity(context.Background(), "object", &min, &max, etagIdentity)
+	require.NoError(t, err)
+	require.NoError(t, reader.Close())
+	etagRequest := requests[len(requests)-1]
+	require.Equal(t, `"etag-v1"`, etagRequest.Header.Get("If-Match"))
+
+	stale := identity
+	stale.VersionID = "stale"
+	_, err = sdk.ReadObjectWithIdentity(context.Background(), "object", &min, &max, stale)
+	require.ErrorIs(t, err, ErrObjectChanged)
+	stale.VersionID = ""
+	stale.ETag = "stale"
+	_, err = sdk.ReadObjectWithIdentity(context.Background(), "object", &min, &max, stale)
+	require.ErrorIs(t, err, ErrObjectChanged)
+
+	gone := identity
+	gone.VersionID = "gone"
+	_, err = sdk.ReadObjectWithIdentity(context.Background(), "object", &min, &max, gone)
+	require.ErrorIs(t, err, ErrObjectChanged)
+}
+
+func TestMinioPutObjectPhysicalAccounting(t *testing.T) {
+	var fail bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Query().Has("location") {
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = w.Write([]byte(`<LocationConstraint>us-east-1</LocationConstraint>`))
+			return
+		}
+		_, _ = io.Copy(io.Discard, r.Body)
+		if fail {
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`<Error><Code>InvalidRequest</Code><Message>rejected</Message></Error>`))
+			return
+		}
+		w.Header().Set("ETag", "etag")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	endpoint, err := url.Parse(server.URL)
+	require.NoError(t, err)
+	client, err := minio.New(endpoint.Host, &minio.Options{
+		Creds:     credentials.NewStaticV4("id", "secret", ""),
+		Secure:    false,
+		Transport: server.Client().Transport,
+	})
+	require.NoError(t, err)
+	sdk := &MinioSDK{bucket: "bucket", client: client}
+
+	data := []byte("accepted")
+	size := int64(len(data))
+	counter := new(perfcounter.CounterSet)
+	ctx := perfcounter.WithCounterSet(context.Background(), counter)
+	_, err = sdk.putObject(ctx, "object", bytes.NewReader(data), &size, nil)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), counter.FileService.S3.Put.Load())
+	require.Equal(t, size, counter.FileService.S3WriteSize.Load())
+
+	fail = true
+	failed := new(perfcounter.CounterSet)
+	ctx = perfcounter.WithCounterSet(context.Background(), failed)
+	_, err = sdk.putObject(ctx, "object", bytes.NewReader(data), &size, nil)
+	require.Error(t, err)
+	require.Equal(t, int64(1), failed.FileService.S3.Put.Load())
+	require.Zero(t, failed.FileService.S3WriteSize.Load())
 }
 
 func startMinio(dir string) (*exec.Cmd, error) {

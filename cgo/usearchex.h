@@ -30,6 +30,7 @@ typedef char const *mo_error_t;
 #define USEARCHEX_FILTER_BLOOM    0  /* filter is a bloomfilter_t* (approximate) */
 #define USEARCHEX_FILTER_CROARING 2  /* filter is a roaring64 bitmap (exact)     */
 #define USEARCHEX_FILTER_CBITMAP  3  /* filter is a dense cbitmap (exact)        */
+#define USEARCHEX_FILTER_SORTED64 4  /* filter is [count][sorted uint64s] (exact) */
 
 /* Filtered search against a doc_id membership filter. `filter` is the C handle
  * of a docfilter.MembershipFilter and `filter_kind` selects how each candidate
@@ -41,4 +42,3 @@ size_t usearchex_filtered_search_with_membership(
     usearch_key_t* keys, usearch_distance_t* distances, usearch_error_t* error);
 
 #endif
-

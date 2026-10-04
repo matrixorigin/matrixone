@@ -1,0 +1,142 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package plan
+
+import pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
+
+// determineGroupByHashKeys records a minimal physical equality key for each
+// ordinary aggregate. GroupBy remains unchanged because it defines the logical
+// output; GroupByHashKey is only an executor hint proven from table metadata.
+func (builder *QueryBuilder) determineGroupByHashKeys(nodeID int32) {
+	node := builder.qry.Nodes[nodeID]
+	for _, childID := range node.Children {
+		builder.determineGroupByHashKeys(childID)
+	}
+	builder.determineGroupByHashKey(node)
+}
+
+// determineGroupByHashKey proves the physical equality key for one aggregate.
+// Keep this separate from the tree walk because optimizer rewrites can create a
+// new aggregate after the initial annotation pass.
+func (builder *QueryBuilder) determineGroupByHashKey(node *pbplan.Node) {
+	// Some semantic rewrites provide an explicit physical key that differs from
+	// the user-visible grouping value. Preserve that stronger proof.
+	if len(node.GroupByHashKey) > 0 {
+		return
+	}
+	node.GroupByHashKey = nil
+	if node.NodeType != pbplan.Node_AGG || len(node.GroupBy) < 2 || hasInactiveGroupingColumn(node.GroupingFlag) {
+		return
+	}
+
+	// Direct base-table column references are deliberately required here. This
+	// keeps the proof local and makes derived expressions remain hash keys.
+	groupedColumns := make(map[int32]map[int32]struct{})
+	for _, expr := range node.GroupBy {
+		if col := expr.GetCol(); col != nil {
+			tableDef := builder.tag2Table[col.RelPos]
+			if tableDef == nil || col.ColPos < 0 || int(col.ColPos) >= len(tableDef.Cols) ||
+				tableDef.Cols[col.ColPos] == nil ||
+				!sqlEqualityJoinUsesOneIdentityDomain(expr.Typ, tableDef.Cols[col.ColPos].Typ) {
+				// A direct column reference is a uniqueness proof only while its
+				// recorded type remains in the concrete table column's identity
+				// domain. Stale expression metadata must retain every hash key.
+				continue
+			}
+			columns := groupedColumns[col.RelPos]
+			if columns == nil {
+				columns = make(map[int32]struct{})
+				groupedColumns[col.RelPos] = columns
+			}
+			columns[col.ColPos] = struct{}{}
+		}
+	}
+
+	determinedTables := make(map[int32]map[int32]struct{})
+	for tag, grouped := range groupedColumns {
+		tableDef := builder.tag2Table[tag]
+		pkColumns, ok := sqlEqualityCompatiblePrimaryKeyColumnPositions(tableDef)
+		if !ok {
+			continue
+		}
+		allGrouped := true
+		for _, colPos := range pkColumns {
+			if _, exists := grouped[colPos]; !exists {
+				allGrouped = false
+				break
+			}
+		}
+		if allGrouped {
+			pkSet := make(map[int32]struct{}, len(pkColumns))
+			for _, colPos := range pkColumns {
+				pkSet[colPos] = struct{}{}
+			}
+			determinedTables[tag] = pkSet
+		}
+	}
+
+	if len(determinedTables) == 0 {
+		return
+	}
+
+	hashKey := make([]int32, 0, len(node.GroupBy))
+	for i, expr := range node.GroupBy {
+		col := expr.GetCol()
+		if col == nil {
+			hashKey = append(hashKey, int32(i))
+			continue
+		}
+		tableDef := builder.tag2Table[col.RelPos]
+		pkSet, determined := determinedTables[col.RelPos]
+		_, isPrimaryKey := pkSet[col.ColPos]
+		if !determined || col.ColPos < 0 || int(col.ColPos) >= len(tableDef.Cols) || isPrimaryKey {
+			hashKey = append(hashKey, int32(i))
+		}
+	}
+
+	// Empty means the legacy "all columns" behavior on the wire. A valid PK
+	// proof always leaves at least one key, but keep this guard explicit.
+	if len(hashKey) > 0 && len(hashKey) < len(node.GroupBy) {
+		node.GroupByHashKey = hashKey
+	}
+}
+
+func hasInactiveGroupingColumn(flags []bool) bool {
+	for _, flag := range flags {
+		if !flag {
+			return true
+		}
+	}
+	return false
+}
+
+func isPhysicalGroupByKey(node *pbplan.Node, groupByPos int) bool {
+	if len(node.GroupingFlag) > 0 {
+		if len(node.GroupingFlag) != len(node.GroupBy) ||
+			groupByPos < 0 || groupByPos >= len(node.GroupingFlag) ||
+			!node.GroupingFlag[groupByPos] {
+			return false
+		}
+	}
+	if len(node.GroupByHashKey) == 0 {
+		return true
+	}
+	for _, pos := range node.GroupByHashKey {
+		if int(pos) == groupByPos {
+			return true
+		}
+	}
+	return false
+}

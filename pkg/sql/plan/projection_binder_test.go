@@ -459,8 +459,8 @@ func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
 			name:                 "INTERVAL '1.5' SECOND (varchar)",
 			intervalValueExpr:    makeVarcharConstForProjection("1.5"),
 			intervalUnit:         "SECOND",
-			expectedIntervalVal:  math.MaxInt64, // "1.5" is invalid format for SECOND, returns MaxInt64
-			expectedIntervalType: types.Second,
+			expectedIntervalVal:  1500000, // fractional SECOND text is normalized to microseconds
+			expectedIntervalType: types.MicroSecond,
 		},
 		{
 			name:                 "INTERVAL '1' DAY (char)",
@@ -1624,6 +1624,35 @@ func TestProjectionBinderBindWinFunc(t *testing.T) {
 			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
 				require.NoError(t, err)
 				require.NotNil(t, expr)
+			},
+		},
+		{
+			name:     "Aggregate window with implicit RANGE frame and varchar ORDER BY - issue #24816",
+			funcName: "sum",
+			astExpr: &tree.FuncExpr{
+				Func:  tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName("sum")),
+				Type:  tree.FUNC_TYPE_DEFAULT,
+				Exprs: []tree.Expr{tree.NewUnresolvedColName("a")},
+				WindowSpec: &tree.WindowSpec{
+					OrderBy: tree.OrderBy{
+						&tree.Order{
+							Expr:      tree.NewUnresolvedColName("c"),
+							Direction: tree.Ascending,
+						},
+					},
+					Frame: &tree.FrameClause{
+						Type:  tree.Range,
+						Start: &tree.FrameBound{Type: tree.Preceding, UnBounded: true},
+						End:   &tree.FrameBound{Type: tree.CurrentRow},
+					},
+				},
+			},
+			expectError: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				window := bindCtx.windows[expr.GetCol().ColPos].GetW()
+				require.Equal(t, plan.FrameClause_RANGE, window.Frame.Type)
 			},
 		},
 		{

@@ -57,6 +57,10 @@ func NewOOMNoCtx() *Error {
 	return newError(Context(), ErrOOM)
 }
 
+func NewMPoolCapacityNoCtxf(format string, args ...any) *Error {
+	return NewMPoolCapacity(Context(), fmt.Sprintf(format, args...))
+}
+
 func NewDivByZeroNoCtx() *Error {
 	return newError(Context(), ErrDivByZero)
 }
@@ -99,6 +103,26 @@ func NewInvalidInputNoCtxf(format string, args ...any) *Error {
 
 func NewInvalidInputNoCtx(msg string) *Error {
 	return newError(Context(), ErrInvalidInput, msg)
+}
+
+func NewInvalidBitwiseAggregateOperandsSizeNoCtx() *Error {
+	return newError(Context(), ErrInvalidBitwiseAggregateOperandsSize)
+}
+
+func NewInvalidBitwiseOperandsSizeNoCtx() *Error {
+	return newError(Context(), ErrInvalidBitwiseOperandsSize)
+}
+
+func NewWrongParamCountToNativeFctNoCtx(function string) *Error {
+	return newError(Context(), ErrWrongParamCountToNativeFct, function)
+}
+
+func NewAESInvalidIVNoCtx(function string, minLength int) *Error {
+	return newError(Context(), ErrAESInvalidIV, function, minLength)
+}
+
+func NewUserLockWrongNameNoCtx(name string) *Error {
+	return newError(Context(), ErrUserLockWrongName, name)
 }
 
 func NewArrayInvalidOpNoCtx(expected, actual int) *Error {

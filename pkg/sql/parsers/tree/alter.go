@@ -724,6 +724,8 @@ func (node *AlterTable) reset() {
 				opt.Free()
 			case *TableOptionAUTOEXTEND_SIZE:
 				opt.Free()
+			case *TableOptionAutoIDCache:
+				opt.Free()
 			case *TableOptionAutoIncrement:
 				opt.Free()
 			case *TableOptionComment:
@@ -915,6 +917,7 @@ type AlterOptionAlterReIndex struct {
 	BitsPerCode              int64
 	Async                    bool
 	ForceSync                bool
+	Merge                    bool
 	AutoUpdate               bool
 	Day                      int64
 	Hour                     int64
@@ -926,6 +929,10 @@ type AlterOptionAlterReIndex struct {
 	KmeansTrainPercent       int64
 	KmeansMaxIteration       int64
 	MaxIndexCapacity         int64
+	MaxPostingsCapacity      int64
+	PositionFree             bool
+	PositionFreeSet          bool
+	QuantizerTrainLimit      int64
 	IncludeColumns           []*UnresolvedName
 }
 
@@ -947,6 +954,7 @@ func NewAlterOptionAlterReIndex(name Identifier, option *IndexOption) *AlterOpti
 	a.BitsPerCode = option.BitsPerCode
 	a.Async = option.Async
 	a.ForceSync = option.ForceSync
+	a.Merge = option.Merge
 	a.AutoUpdate = option.AutoUpdate
 	a.Day = option.Day
 	a.Hour = option.Hour
@@ -958,6 +966,10 @@ func NewAlterOptionAlterReIndex(name Identifier, option *IndexOption) *AlterOpti
 	a.KmeansTrainPercent = option.KmeansTrainPercent
 	a.KmeansMaxIteration = option.KmeansMaxIteration
 	a.MaxIndexCapacity = option.MaxIndexCapacity
+	a.MaxPostingsCapacity = option.MaxPostingsCapacity
+	a.PositionFree = option.PositionFree
+	a.PositionFreeSet = option.PositionFreeSet
+	a.QuantizerTrainLimit = option.QuantizerTrainLimit
 	a.IncludeColumns = option.IncludeColumns
 	return a
 }
@@ -1005,6 +1017,8 @@ func (node *AlterOptionAlterReIndex) Format(ctx *FmtCtx) {
 	writeInt("kmeans_train_percent", node.KmeansTrainPercent)
 	writeInt("kmeans_max_iteration", node.KmeansMaxIteration)
 	writeInt("max_index_capacity", node.MaxIndexCapacity)
+	writeInt("max_postings_capacity", node.MaxPostingsCapacity)
+	writeInt("quantizer_train_limit", node.QuantizerTrainLimit)
 	if len(node.IncludeColumns) != 0 {
 		ctx.WriteString(" include (")
 		for i, c := range node.IncludeColumns {
@@ -1017,6 +1031,9 @@ func (node *AlterOptionAlterReIndex) Format(ctx *FmtCtx) {
 	}
 	if node.ForceSync {
 		ctx.WriteString(" force_sync")
+	}
+	if node.Merge {
+		ctx.WriteString(" merge")
 	}
 }
 

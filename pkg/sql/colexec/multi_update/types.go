@@ -15,13 +15,53 @@
 package multi_update
 
 import (
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func updateCtxKey(ctx *MultiUpdateCtx) string {
+	if ctx == nil {
+		return ""
+	}
+	tableID := uint64(0)
+	if ctx.TableDef != nil {
+		tableID = ctx.TableDef.TblId
+	}
+	if ctx.ObjRef != nil {
+		return fmt.Sprintf(
+			"%d/%d/%d/%s/%s/%d",
+			ctx.ObjRef.Db,
+			ctx.ObjRef.Schema,
+			ctx.ObjRef.Obj,
+			ctx.ObjRef.SchemaName,
+			ctx.ObjRef.ObjName,
+			tableID,
+		)
+	}
+	if ctx.TableDef != nil {
+		return fmt.Sprintf("%s/%s/%d", ctx.TableDef.DbName, ctx.TableDef.Name, tableID)
+	}
+	return ""
+}
+
+func lookupUpdateCtxInfo(infos map[string]*updateCtxInfo, ctx *MultiUpdateCtx) *updateCtxInfo {
+	if info := infos[updateCtxKey(ctx)]; info != nil {
+		return info
+	}
+	if ctx != nil && ctx.TableDef != nil {
+		return infos[ctx.TableDef.Name]
+	}
+	return nil
+}
 
 var _ vm.Operator = new(MultiUpdate)
 
@@ -49,6 +89,10 @@ const (
 	actionInsert actionType = iota
 	actionDelete
 	actionUpdate
+	// actionAffectedRows is an internal WriteS3 -> FlushS3Info control record.
+	// It carries no storage batch; rowCount is the statement-semantic affected
+	// count accumulated by one or more ODKU writers.
+	actionAffectedRows
 )
 
 func init() {
@@ -75,11 +119,13 @@ type MultiUpdate struct {
 	IsOnduplicateKeyUpdate bool
 	IsRemote               bool
 	CountDeleteAffectRows  bool
+	RejectZeroTemporal     bool
 	Engine                 engine.Engine
 
 	getS3WriterFunc          func(sid string, id uint64) (*s3WriterDelegate, error)
 	getFlushableS3WriterFunc func() *s3WriterDelegate
 	addAffectedRowsFunc      func(uint64)
+	takeS3AffectedRowsFunc   func() uint64
 
 	vm.OperatorBase
 }
@@ -95,7 +141,11 @@ type updateCtxInfo struct {
 type container struct {
 	state        vm.CtrState
 	affectedRows uint64
-	action       actionType
+	// s3AffectedRows is pending semantic metadata. UpdateWriteS3 owns it only
+	// until it is transferred exactly once through the internal output stream;
+	// UpdateFlushS3Info is the sole owner of the client-visible count.
+	s3AffectedRows uint64
+	action         actionType
 
 	flushed        bool
 	s3Writer       *s3WriterDelegate
@@ -104,6 +154,10 @@ type container struct {
 
 	insertBuf []*batch.Batch
 	deleteBuf []*batch.Batch
+
+	seenTargetRows map[uint64]*hashmap.StrHashMap
+	seenRowsGrant  int64
+	seenRowsRSC    rscthrottler.RSCThrottler
 }
 
 type MultiUpdateCtx struct {
@@ -115,7 +169,34 @@ type MultiUpdateCtx struct {
 	SkipInsertOnNullPk bool
 	// InsertPkColIdx is the PK column's index within InsertCols. It is only
 	// used with SkipInsertOnNullPk for REPLACE delete-only rows.
-	InsertPkColIdx int
+	InsertPkColIdx     int
+	IgnoreAffectedRows bool
+	// DedupByTargetRowID makes this context consume only the whole input row
+	// selected for its physical target row. The planner supplies an independent
+	// row_number() partition for every updated target table.
+	DedupByTargetRowID bool
+	TargetUpdateCtxIdx int
+	// ChangedRowsCol is the input bool column containing the final row-image
+	// change marker. Nil requests the legacy matched-row count.
+	ChangedRowsCol *int
+	// AffectedRowsWeightCol is an ODKU-only uint64 column containing the
+	// logical affected rows accumulated before equal input keys collapse.
+	AffectedRowsWeightCol *int
+	// PhysicalChangedRowsCol independently controls whether the final row image
+	// needs storage/index maintenance. Logical counts are collected first.
+	PhysicalChangedRowsCol *int
+	// AffectedRowsCols contains one semantic selector for every writable alias
+	// coalesced into this physical target. DeleteCols[3] independently controls
+	// physical write eligibility, so implicit cascade rows can be written without
+	// contributing to SQL affected-row accounting.
+	AffectedRowsCols []int
+	// SuppressPhysicalAffectedRows is set by the partition wrapper after it has
+	// already accounted for this context's semantic selectors. Partition-local
+	// writers must not count their physical inserts a second time.
+	SuppressPhysicalAffectedRows bool
+	// TargetTableID stays logical when a partition wrapper replaces TableDef
+	// with a physical partition definition.
+	TargetTableID uint64
 }
 
 func (update MultiUpdate) TypeName() string {
@@ -136,6 +217,13 @@ func (update *MultiUpdate) GetOperatorBase() *vm.OperatorBase {
 	return &update.OperatorBase
 }
 
+func (update *MultiUpdate) SetRejectZeroTemporal(reject bool) {
+	update.RejectZeroTemporal = reject
+	if update.ctr.s3Writer != nil {
+		update.ctr.s3Writer.rejectZeroTemporal = reject
+	}
+}
+
 func (update *MultiUpdate) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	for _, buf := range update.ctr.insertBuf {
 		if buf != nil {
@@ -151,7 +239,8 @@ func (update *MultiUpdate) Reset(proc *process.Process, pipelineFailed bool, err
 	if update.ctr.s3Writer != nil {
 		update.ctr.s3Writer.reset(proc)
 	}
-
+	update.ctr.s3AffectedRows = 0
+	update.freeSeenTargetRows()
 	update.ctr.state = vm.Build
 }
 
@@ -175,9 +264,22 @@ func (update *MultiUpdate) Free(proc *process.Process, pipelineFailed bool, err 
 		update.ctr.s3Writer.free(proc)
 		update.ctr.s3Writer = nil
 	}
+	update.freeSeenTargetRows()
 
 	update.ctr.updateCtxInfos = nil
 	update.ctr.sources = nil
+}
+
+func (update *MultiUpdate) freeSeenTargetRows() {
+	if update.ctr.seenRowsGrant > 0 {
+		update.ctr.seenRowsRSC.Release(update.ctr.seenRowsGrant)
+		update.ctr.seenRowsGrant = 0
+	}
+	update.ctr.seenRowsRSC = nil
+	for _, seen := range update.ctr.seenTargetRows {
+		seen.Free()
+	}
+	update.ctr.seenTargetRows = nil
 }
 
 func (update *MultiUpdate) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
@@ -207,6 +309,50 @@ func (update *MultiUpdate) addInsertAffectRows(tableType UpdateTableType, rowCou
 	}
 }
 
+func physicalInsertAffectedRows(updateCtx *MultiUpdateCtx, rowCount uint64) uint64 {
+	if updateCtx != nil && (len(updateCtx.AffectedRowsCols) > 0 ||
+		updateCtx.AffectedRowsWeightCol != nil || updateCtx.SuppressPhysicalAffectedRows) {
+		return 0
+	}
+	return rowCount
+}
+
+func hasODKUAffectedRows(updateCtxs []*MultiUpdateCtx) bool {
+	for _, updateCtx := range updateCtxs {
+		if updateCtx.AffectedRowsWeightCol != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func (update *MultiUpdate) insertAffectedRows(updateCtx *MultiUpdateCtx, input *batch.Batch) uint64 {
+	return insertAffectedRows(updateCtx, input)
+}
+
+func insertAffectedRows(updateCtx *MultiUpdateCtx, input *batch.Batch) uint64 {
+	if updateCtx.ChangedRowsCol == nil {
+		return uint64(input.RowCount())
+	}
+	changed := vector.MustFixedColWithTypeCheck[bool](input.Vecs[*updateCtx.ChangedRowsCol])
+	var count uint64
+	for row := 0; row < input.RowCount(); row++ {
+		if changed[row] {
+			count++
+		}
+	}
+	return count
+}
+
+func hasChangedRowsCol(updateCtxs []*MultiUpdateCtx) bool {
+	for _, updateCtx := range updateCtxs {
+		if updateCtx.ChangedRowsCol != nil {
+			return true
+		}
+	}
+	return false
+}
+
 func (update *MultiUpdate) addDeleteAffectRows(tableType UpdateTableType, rowCount uint64) {
 	if tableType != UpdateMainTable {
 		return
@@ -222,5 +368,21 @@ func (update *MultiUpdate) addDeleteAffectRows(tableType UpdateTableType, rowCou
 }
 
 func (update *MultiUpdate) doAddAffectedRows(affectedRows uint64) {
+	if len(update.MultiUpdateCtx) > 0 && update.MultiUpdateCtx[0].IgnoreAffectedRows {
+		return
+	}
 	update.ctr.affectedRows += affectedRows
+}
+
+func (update *MultiUpdate) doAddS3AffectedRows(affectedRows uint64) {
+	if len(update.MultiUpdateCtx) > 0 && update.MultiUpdateCtx[0].IgnoreAffectedRows {
+		return
+	}
+	update.ctr.s3AffectedRows += affectedRows
+}
+
+func (update *MultiUpdate) takeS3AffectedRows() uint64 {
+	affectedRows := update.ctr.s3AffectedRows
+	update.ctr.s3AffectedRows = 0
+	return affectedRows
 }

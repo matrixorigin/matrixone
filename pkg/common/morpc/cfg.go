@@ -15,14 +15,19 @@
 package morpc
 
 import (
-	"math"
 	"runtime"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"go.uber.org/zap"
+)
+
+const (
+	defaultMinServerWorkers    = 100
+	defaultServerWorkersPerCPU = 8
 )
 
 var (
@@ -71,7 +76,7 @@ type Config struct {
 	// idle backends, not the idle timeout (which is controlled by MaxIdleDuration).
 	GCIdleCheckInterval toml.Duration `toml:"gc-idle-check-interval"`
 	// GCChannelBufferSize buffer size for GC task channels (gcInactiveC and createC).
-	// Default is 1024. When channel is full, requests are dropped to avoid blocking.
+	// Default is 4096. When channel is full, requests are dropped to avoid blocking.
 	GCChannelBufferSize int `toml:"gc-channel-buffer-size"`
 
 	// BackendOptions extra backend options
@@ -109,7 +114,9 @@ func (c *Config) Adjust() {
 		c.SendQueueSize = 100000
 	}
 	if c.ServerWorkers == 0 {
-		c.ServerWorkers = int(math.Max(100, float64(8*runtime.NumCPU())))
+		// GOMAXPROCS reflects container CPU quotas and explicit scheduler limits,
+		// while NumCPU can expose all CPUs on the host.
+		c.ServerWorkers = defaultServerWorkers(runtime.GOMAXPROCS(0))
 	}
 	if c.ServerBufferQueueSize == 0 {
 		c.ServerBufferQueueSize = 100000
@@ -123,6 +130,14 @@ func (c *Config) Adjust() {
 	if c.GCChannelBufferSize == 0 {
 		c.GCChannelBufferSize = DefaultGCChannelBufferSize
 	}
+}
+
+func defaultServerWorkers(maxProcs int) int {
+	workers := defaultServerWorkersPerCPU * maxProcs
+	if workers < defaultMinServerWorkers {
+		return defaultMinServerWorkers
+	}
+	return workers
 }
 
 // NewClient create client from config
@@ -156,6 +171,38 @@ func (c Config) NewClient(
 		bf,
 		c.getClientOptions(getLogger(sid).RawLogger().Named(name))...,
 	)
+}
+
+// NewControlClient creates a physically independent, ping-only client. Each
+// remote uses at most one small-queue backend, which gives ping/pong its own
+// TCP, writer, Flush, read loop, breaker, and reconnect generation.
+func (c Config) NewControlClient(
+	sid string,
+	name string,
+	responseFactory func() Message,
+) (ControlClient, error) {
+	c.MaxConnections = 1
+	c.SendQueueSize = 1
+	c.BusyQueueSize = 1
+	c.ClientOptions = append(
+		append([]ClientOption(nil), c.ClientOptions...),
+		WithClientMaxBackendPerHost(1),
+	)
+	c.BackendOptions = append(
+		append([]BackendOption(nil), c.BackendOptions...),
+		WithBackendBufferSize(1),
+		WithBackendBusyBufferSize(1),
+	)
+	rpcClient, err := c.NewClient(sid, name, responseFactory)
+	if err != nil {
+		return nil, err
+	}
+	control, ok := rpcClient.(ControlClient)
+	if !ok {
+		_ = rpcClient.Close()
+		return nil, moerr.NewInternalErrorNoCtx("morpc client does not support control transport")
+	}
+	return control, nil
 }
 
 // NewServer new rpc server

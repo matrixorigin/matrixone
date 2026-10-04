@@ -17,7 +17,6 @@ package frontend
 import (
 	"bytes"
 	"context"
-	"strings"
 	"sync"
 	"testing"
 
@@ -28,6 +27,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/stretchr/testify/require"
 )
 
@@ -56,6 +58,65 @@ func TestAcquireReleaseBuffer(t *testing.T) {
 	})
 }
 
+func TestDataBranchSQLKeyEqual(t *testing.T) {
+	require.Equal(t, "left_key = right_key",
+		dataBranchSQLKeyEqual("left_key", "right_key", types.T_int64.ToType()))
+
+	for _, typ := range []types.Type{types.T_float32.ToType(), types.T_float64.ToType()} {
+		require.Equal(t, "serial(left_key) = serial(right_key)",
+			dataBranchSQLKeyEqual("left_key", "right_key", typ),
+		)
+	}
+}
+
+func TestValidateDataBranchNamedSnapshotScope(t *testing.T) {
+	ctx := context.Background()
+	snapshot := &plan2.Snapshot{ExtraInfo: &planpb.SnapshotExtraInfo{
+		Name:  "snapshot",
+		Level: tree.SNAPSHOTLEVELTABLE.String(),
+		ObjId: 7,
+	}}
+	namedSnapshot := &tree.AtTimeStamp{Type: tree.ATTIMESTAMPSNAPSHOT}
+
+	t.Run("unnamed source does not require a relation", func(t *testing.T) {
+		require.NoError(t, validateDataBranchNamedSnapshotScope(
+			ctx, nil, snapshot, "db", "table", nil,
+		))
+	})
+
+	tests := []struct {
+		name     string
+		tableDef *planpb.TableDef
+		err      string
+	}{
+		{
+			name:     "matches logical table identity",
+			tableDef: &planpb.TableDef{DbId: 1, TblId: 8, LogicalId: 7},
+		},
+		{
+			name:     "rejects another table",
+			tableDef: &planpb.TableDef{DbId: 1, TblId: 8, LogicalId: 9},
+			err:      "internal error: table-level snapshot(snapshot) does not belong to the table(db-table)",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			relation := mock_frontend.NewMockRelation(ctrl)
+			relation.EXPECT().GetTableDef(ctx).Return(test.tableDef)
+
+			err := validateDataBranchNamedSnapshotScope(
+				ctx, namedSnapshot, snapshot, "db", "table", relation,
+			)
+			if test.err == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.EqualError(t, err, test.err)
+		})
+	}
+}
+
 func TestNewEmitter(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -76,79 +137,6 @@ func TestNewEmitter(t *testing.T) {
 	require.False(t, stop)
 	require.NoError(t, err)
 	require.Equal(t, wrapped, <-retCh)
-}
-
-func TestContainsDataBranchTempTableName(t *testing.T) {
-	require.True(t, containsDataBranchTempTableName("delete from test.__mo_diff_del_merge_1"))
-	require.True(t, containsDataBranchTempTableName("insert into __mo_diff_ins_merge_1 values (1)"))
-	require.True(t, containsDataBranchTempTableName("drop table if exists `db1`.`__mo_diff_del_x`"))
-	require.False(t, containsDataBranchTempTableName("select '__mo_diff_del_merge_1'"))
-	require.False(t, containsDataBranchTempTableName("select 1 -- from __mo_diff_del_merge_1"))
-}
-
-func TestDataBranchTempSQLNeedsBackExec(t *testing.T) {
-	tests := []struct {
-		name string
-		sql  string
-		want bool
-	}{
-		{
-			name: "drop temp table",
-			sql:  "drop table if exists test.__mo_diff_del_merge_1",
-			want: true,
-		},
-		{
-			name: "create temp table",
-			sql:  "create table test.__mo_diff_ins_merge_1 as select id from test.t where 1 = 0",
-			want: true,
-		},
-		{
-			name: "insert into temp table",
-			sql:  "insert into test.__mo_diff_del_merge_1 values (1)",
-			want: true,
-		},
-		{
-			name: "delete from temp table",
-			sql:  "delete from test.__mo_diff_ins_merge_1",
-			want: true,
-		},
-		{
-			name: "quoted drop temp table",
-			sql:  "drop table if exists `db1`.`__mo_diff_del_x`",
-			want: true,
-		},
-		{
-			name: "quoted insert into temp table",
-			sql:  "insert into `db1`.`__mo_diff_del_x` values (1)",
-			want: true,
-		},
-		{
-			name: "main table delete reads temp table",
-			sql:  "delete from `db1`.`base` where `id` in (select `branch_apply_key_0` from `db1`.`__mo_diff_del_x`)",
-			want: true,
-		},
-		{
-			name: "main table insert reads temp table",
-			sql:  "insert into `db1`.`base` (`id`, `name`) select `id`, `name` from `db1`.`__mo_diff_ins_x`",
-			want: true,
-		},
-		{
-			name: "unknown temp table statement stays conservative",
-			sql:  "select * from test.__mo_diff_ins_merge_1",
-			want: true,
-		},
-		{
-			name: "ordinary statement",
-			sql:  "delete from test.orders where id = 1",
-			want: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			require.Equal(t, tt.want, dataBranchTempSQLNeedsBackExec(strings.ToLower(tt.sql)))
-		})
-	}
 }
 
 func TestRunSQL_BackgroundExecPaths(t *testing.T) {
@@ -186,7 +174,7 @@ func TestRunSQL_BackgroundExecPaths(t *testing.T) {
 	})
 }
 
-func TestRunSQL_DataBranchTempTablesUseBackgroundExec(t *testing.T) {
+func TestExecRetryableSQLStatementsUsesBackgroundExec(t *testing.T) {
 	tests := []struct {
 		name string
 		sql  string
@@ -202,6 +190,14 @@ func TestRunSQL_DataBranchTempTablesUseBackgroundExec(t *testing.T) {
 		{
 			name: "insert main table using diff insert table",
 			sql:  "insert into `db1`.`base` (`id`, `name`) select `id`, `name` from `db1`.`__mo_diff_ins_x`",
+		},
+		{
+			name: "insert update staging row",
+			sql:  "insert into `db1`.`__mo_diff_upd_x` values (1, 'new', 1)",
+		},
+		{
+			name: "update main table using diff update table",
+			sql:  "update `db1`.`base` as branch_apply_base join `db1`.`__mo_diff_upd_x` as branch_apply_stage on branch_apply_base.`id` = branch_apply_stage.`branch_apply_key_0` set branch_apply_base.`name` = branch_apply_stage.`name`",
 		},
 	}
 
@@ -219,23 +215,34 @@ func TestRunSQL_DataBranchTempTablesUseBackgroundExec(t *testing.T) {
 			bh.EXPECT().GetExecResultSet().Return(nil).Times(1)
 			bh.EXPECT().ClearExecResultSet().Times(1)
 
-			_, err := runSql(context.Background(), ses, bh, tt.sql, nil, nil)
+			err := execRetryableSQLStatements(context.Background(), ses, bh, nil, []string{tt.sql})
 			require.NoError(t, err)
 			require.Empty(t, spyExec.sql)
 		})
 	}
 }
 
-func TestRunSQL_DataBranchOrdinaryMainTableDMLUsesInternalExec(t *testing.T) {
-	ses := newValidateSession(t)
-	spyExec := &pickStreamingExecutor{}
-	bh := newPickStreamingBackExecForTest(t, ses, spyExec)
+func TestRunSQL_DataBranchUserIdentifiersUseInternalExec(t *testing.T) {
+	statements := []string{
+		"delete from test.orders where id = 1",
+		"select * from test.__mo_diff_orders",
+		"select * from `__mo_diff_orders`.`orders`",
+		"select __mo_diff_flag from test.orders",
+		"select * from test.__mo_diff_upd_orders",
+	}
 
-	stmt := "delete from test.orders where id = 1"
-	ret, err := runSql(context.Background(), ses, bh, stmt, nil, nil)
-	require.NoError(t, err)
-	ret.Close()
-	require.Equal(t, stmt, spyExec.sql)
+	for _, stmt := range statements {
+		t.Run(stmt, func(t *testing.T) {
+			ses := newValidateSession(t)
+			spyExec := &pickStreamingExecutor{}
+			bh := newPickStreamingBackExecForTest(t, ses, spyExec)
+
+			ret, err := runSql(context.Background(), ses, bh, stmt, nil, nil)
+			require.NoError(t, err)
+			ret.Close()
+			require.Equal(t, stmt, spyExec.sql)
+		})
+	}
 }
 
 func TestScanSnapshotRelationByID_EarlyAndErrorPaths(t *testing.T) {
@@ -280,6 +287,7 @@ func TestScanSnapshotRelationByID_EarlyAndErrorPaths(t *testing.T) {
 
 		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(10, 0).ToTimestamp()).AnyTimes()
+		txnOp.EXPECT().CloneSnapshotOp(gomock.Any()).Return(txnOp).Times(1)
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 		wantErr := moerr.NewInternalErrorNoCtx("get relation failed")
@@ -307,12 +315,54 @@ func TestScanSnapshotRelationByID_EarlyAndErrorPaths(t *testing.T) {
 		require.ErrorIs(t, err, wantErr)
 	})
 
+	t.Run("uses historical fallback when current relation is gone", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(10, 0).ToTimestamp()).AnyTimes()
+		txnOp.EXPECT().CloneSnapshotOp(gomock.Any()).Return(txnOp).Times(1)
+
+		currentLookupErr := moerr.NewInternalErrorNoCtx("can not find table by id 7")
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(7)).
+			Return("", "", nil, currentLookupErr).
+			Times(1)
+
+		historicalRel := mock_frontend.NewMockRelation(ctrl)
+		wantErr := moerr.NewInternalErrorNoCtx("historical ranges reached")
+		historicalRel.EXPECT().Ranges(gomock.Any(), gomock.Any()).
+			Return(nil, wantErr).
+			Times(1)
+
+		ses.txnHandler = &TxnHandler{
+			storage: eng,
+			txnOp:   txnOp,
+		}
+
+		err := scanSnapshotRelationByIDWithFallback(
+			context.Background(),
+			"unit-test",
+			ses,
+			7,
+			types.BuildTS(20, 0),
+			historicalRel,
+			[]string{"id"},
+			[]types.Type{types.T_int64.ToType()},
+			nil,
+			0,
+			func(*batch.Batch) error { return nil },
+		)
+		require.ErrorIs(t, err, wantErr)
+	})
+
 	t.Run("returns error when range relation is missing", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
 		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(10, 0).ToTimestamp()).AnyTimes()
+		txnOp.EXPECT().CloneSnapshotOp(gomock.Any()).Return(txnOp).Times(1)
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(7)).
@@ -346,6 +396,7 @@ func TestScanSnapshotRelationByID_EarlyAndErrorPaths(t *testing.T) {
 
 		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(10, 0).ToTimestamp()).AnyTimes()
+		txnOp.EXPECT().CloneSnapshotOp(gomock.Any()).Return(txnOp).Times(1)
 
 		rangeRel := mock_frontend.NewMockRelation(ctrl)
 		wantErr := moerr.NewInternalErrorNoCtx("ranges failed")

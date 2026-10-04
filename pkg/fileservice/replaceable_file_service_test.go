@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -38,6 +39,12 @@ func testReplaceableFileService(
 		},
 	})
 	assert.Nil(t, err)
+
+	err = fs.Replace(ctx, IOVector{
+		FilePath: "",
+		Entries:  []IOEntry{{Size: 1, Data: []byte{1}}},
+	})
+	assert.Truef(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "Replace returned %v", err)
 
 	err = fs.Replace(ctx, IOVector{
 		FilePath: "foo",

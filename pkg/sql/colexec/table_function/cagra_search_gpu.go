@@ -26,17 +26,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	cagraPkg "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/overfetch"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type cagraSearchState struct {
+	// slots caches the pk/score output positions for the current result layout.
+	slots     vectorSearchSlots
 	inited    bool
 	param     vectorindex.CagraParam
 	tblcfg    vectorindex.IndexTableConfig
@@ -48,6 +52,8 @@ type cagraSearchState struct {
 	// Filter predicates JSON for the current row, populated from argVecs[2]
 	// when a third arg is present; empty → unfiltered.
 	predsJSON string
+	// Named-snapshot read TS, from tf.ScanSnapshot (#27927).
+	scanSnapshot *plan.Snapshot
 	// holding one call batch, cagraSearchState owns it.
 	batch *batch.Batch
 }
@@ -60,15 +66,27 @@ func newCagraAlgoFn(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTabl
 	// test-only: mirror the build-side device simulation so search loads the same
 	// SHARDED / REPLICATED topology. No-op when gpu_multi_simulation < 2.
 	devices = vectorindex.SimulateDevices(devices, tblcfg.GpuMultiSimulation)
-	switch metric.QuantizationType(idxcfg.CuvsCagra.Quantization) {
+	// Dispatch on (base type B, storage type Q): indices store Q, overflow is B.
+	q := metric.QuantizationType(idxcfg.CuvsCagra.Quantization)
+	if types.T(tblcfg.KeyPartType) == types.T_array_float16 {
+		switch q {
+		case metric.Quantization_INT8:
+			return cagraPkg.NewCagraSearch[cuvs.Float16, int8](idxcfg, tblcfg, devices)
+		case metric.Quantization_UINT8:
+			return cagraPkg.NewCagraSearch[cuvs.Float16, uint8](idxcfg, tblcfg, devices)
+		default: // F16 (direct)
+			return cagraPkg.NewCagraSearch[cuvs.Float16, cuvs.Float16](idxcfg, tblcfg, devices)
+		}
+	}
+	switch q {
 	case metric.Quantization_F16:
-		return cagraPkg.NewCagraSearch[cuvs.Float16](idxcfg, tblcfg, devices)
+		return cagraPkg.NewCagraSearch[float32, cuvs.Float16](idxcfg, tblcfg, devices)
 	case metric.Quantization_INT8:
-		return cagraPkg.NewCagraSearch[int8](idxcfg, tblcfg, devices)
+		return cagraPkg.NewCagraSearch[float32, int8](idxcfg, tblcfg, devices)
 	case metric.Quantization_UINT8:
-		return cagraPkg.NewCagraSearch[uint8](idxcfg, tblcfg, devices)
+		return cagraPkg.NewCagraSearch[float32, uint8](idxcfg, tblcfg, devices)
 	default: // Quantization_F32 and unknown
-		return cagraPkg.NewCagraSearch[float32](idxcfg, tblcfg, devices)
+		return cagraPkg.NewCagraSearch[float32, float32](idxcfg, tblcfg, devices)
 	}
 }
 
@@ -80,6 +98,7 @@ func (u *cagraSearchState) reset(tf *TableFunction, proc *process.Process) {
 	if u.batch != nil {
 		u.batch.CleanOnlyData()
 	}
+	u.scanSnapshot = nil
 }
 
 func (u *cagraSearchState) call(tf *TableFunction, proc *process.Process) (vm.CallResult, error) {
@@ -88,8 +107,13 @@ func (u *cagraSearchState) call(tf *TableFunction, proc *process.Process) (vm.Ca
 	nkeys := len(u.keys)
 	n := 0
 	for i := u.offset; i < nkeys && n < 8192; i++ {
-		vector.AppendFixed[int64](u.batch.Vecs[0], u.keys[i], false, proc.Mp())
-		vector.AppendFixed[float64](u.batch.Vecs[1], u.distances[i], false, proc.Mp())
+		// Positions resolved by name: the planner may prune either column.
+		if pkPos := u.slots.pk; pkPos >= 0 {
+			vector.AppendFixed[int64](u.batch.Vecs[pkPos], u.keys[i], false, proc.Mp())
+		}
+		if scorePos := u.slots.score; scorePos >= 0 {
+			vector.AppendFixed[float64](u.batch.Vecs[scorePos], u.distances[i], false, proc.Mp())
+		}
 		n++
 	}
 	u.offset += n
@@ -111,9 +135,25 @@ func cagraSearchPrepare(proc *process.Process, arg *TableFunction) (tvfState, er
 	var err error
 	st := &cagraSearchState{}
 
-	st.limit, err = evalLimitExpression(proc, arg.Limit, 1)
-	if err != nil {
-		return nil, err
+	// k is carried on IndexReaderParam.Limit (prepared/param path: raw k,
+	// over-fetched here at EXECUTE) or on arg.Limit (literal path: already
+	// over-fetched at plan time, or the no-filter limit). Take the max.
+	if arg.IndexReaderParam != nil {
+		st.limit, err = evalLimitExpression(proc, arg.IndexReaderParam.GetLimit(), 0)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if arg.Limit != nil {
+		var tfLimit uint64
+		tfLimit, err = evalLimitExpression(proc, arg.Limit, 1)
+		if err != nil {
+			return nil, err
+		}
+		st.limit = max(st.limit, tfLimit)
+	}
+	if st.limit == 0 {
+		st.limit = 1
 	}
 
 	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
@@ -127,6 +167,8 @@ func cagraSearchPrepare(proc *process.Process, arg *TableFunction) (tvfState, er
 
 // start is called once per query vector row.
 func (u *cagraSearchState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) (err error) {
+	u.scanSnapshot = tf.ScanSnapshot
+
 	if !u.inited {
 		// ---- parse Params ----
 		if len(tf.Params) > 0 {
@@ -213,7 +255,35 @@ func (u *cagraSearchState) start(tf *TableFunction, proc *process.Process, nthRo
 		u.idxcfg.CuvsCagra.Dimensions = uint(faVec.GetType().Width)
 		u.idxcfg.Type = vectorindex.CAGRA
 
+		// The query vector type must equal the index's base column type. The
+		// planner pushdown normally forces this, but the table function has no
+		// other guard: without it a mismatched query (e.g. a vecf16 query against
+		// an f32-base/f32-storage index) would drive the f32->f16 storage override
+		// below and runCagraSearchHalf off the QUERY type and deserialize the
+		// on-disk index with the wrong storage type. Mirrors the CPU IVF-FLAT scan guard.
+		if int32(faVec.GetType().Oid) != u.tblcfg.KeyPartType {
+			return moerr.NewInvalidInput(proc.Ctx, "query vector type does not match the index base column type")
+		}
+
+		// A vecf16 base with no QUANTIZATION stores natively as half: derive the
+		// storage qtype from the (f16) base type so newCagraAlgo dispatches
+		// NewCagraSearch[cuvs.Float16]. (vecf16 + QUANTIZATION keeps int8/uint8.)
+		if types.T(u.tblcfg.KeyPartType) == types.T_array_float16 &&
+			metric.QuantizationType(u.idxcfg.CuvsCagra.Quantization) == metric.Quantization_F32 {
+			u.idxcfg.CuvsCagra.Quantization = uint16(metric.Quantization_F16)
+		}
+
 		u.batch = tf.createResultBatch()
+		// Resolve the output slots once for this layout (see vector_search_layout.go).
+		u.slots = resolveVectorSearchSlots(u.batch.Attrs, nil, "")
+		// When a residual filter will drop candidates after this search (post-filter
+		// JOIN), grow the candidate budget so k rows still survive. For a prepared
+		// LIMIT ? this is the only place k is known; a literal LIMIT was already
+		// over-fetched at plan time and leaves the flag off. Done once here (guarded
+		// by u.inited). See pkg/vectorindex/overfetch.
+		if u.tblcfg.PostFilterOverFetch && u.limit > 0 {
+			u.limit = overfetch.PostFilterLimit(u.limit)
+		}
 		u.inited = true
 	}
 
@@ -242,6 +312,13 @@ func (u *cagraSearchState) start(tf *TableFunction, proc *process.Process, nthRo
 
 	veccache.Cache.Once()
 
+	// A vecf16 query is decoded natively to half. CagraSearch.Search dispatches:
+	// f16-direct (T==Float16) searches the half index natively; a quantized
+	// f16->int8/uint8 index quantizes the half query to T via the half quantizer.
+	if faVec.GetType().Oid == types.T_array_float16 {
+		return runCagraSearchHalf(proc, u, faVec, nthRow)
+	}
+
 	return runCagraSearch[float32](proc, u, faVec, nthRow)
 }
 
@@ -250,7 +327,20 @@ func runCagraSearch[T types.RealNumbers](proc *process.Process, u *cagraSearchSt
 	if uint(len(fa)) != u.idxcfg.CuvsCagra.Dimensions {
 		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("vector ops between different dimensions (%d, %d) is not permitted.", u.idxcfg.CuvsCagra.Dimensions, len(fa)))
 	}
+	return cagraRunSearchQuery(proc, u, fa)
+}
 
+// runCagraSearchHalf decodes a vecf16 query natively to []cuvs.Float16 (no f32
+// detour) for a half-storage index.
+func runCagraSearchHalf(proc *process.Process, u *cagraSearchState, faVec *vector.Vector, nthRow int) (err error) {
+	h := types.BytesToArray[types.Float16](faVec.GetBytesAt(nthRow))
+	if uint(len(h)) != u.idxcfg.CuvsCagra.Dimensions {
+		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("vector ops between different dimensions (%d, %d) is not permitted.", u.idxcfg.CuvsCagra.Dimensions, len(h)))
+	}
+	return cagraRunSearchQuery(proc, u, f16ToCuvs(h))
+}
+
+func cagraRunSearchQuery(proc *process.Process, u *cagraSearchState, fa any) (err error) {
 	algo := newCagraAlgo(u.idxcfg, u.tblcfg)
 
 	rt := vectorindex.RuntimeConfig{
@@ -258,8 +348,16 @@ func runCagraSearch[T types.RealNumbers](proc *process.Process, u *cagraSearchSt
 		OrigFuncName: u.tblcfg.OrigFuncName,
 		FilterJSON:   u.predsJSON,
 	}
+	// Named-snapshot search (#27927): sp.SnapshotTS makes the index-load SQL run on a txn
+	// cloned at that TS, and the cache key carries the same TS so the historical index is a
+	// separate cache entry from the current one.
+	sp := sqlexec.NewSqlProcess(proc)
+	cacheKey := u.tblcfg.IndexTable
+	if ets := sp.ApplyScanSnapshot(u.scanSnapshot); ets != nil {
+		cacheKey = veccache.SnapshotKey(u.tblcfg.IndexTable, *ets)
+	}
 	var keys any
-	keys, u.distances, err = veccache.Cache.Search(sqlexec.NewSqlProcess(proc), u.tblcfg.IndexTable, algo, fa, rt)
+	keys, u.distances, err = veccache.Cache.Search(sp, cacheKey, algo, fa, rt)
 	if err != nil {
 		return err
 	}

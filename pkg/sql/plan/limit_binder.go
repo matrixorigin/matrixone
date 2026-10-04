@@ -56,6 +56,21 @@ func (b *LimitBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 	if err != nil {
 		return nil, err
 	}
+	if expr.GetLit() != nil && expr.GetLit().Isnull && preparedSourceBindings(b.GetContext()) != nil {
+		if param, ok := unwrapParenExpr(astExpr).(*tree.ParamExpr); ok {
+			// Prepared NULL pagination is evaluated at execution (NULL LIMIT
+			// yields no rows; NULL OFFSET is zero). Ordinary literal NULL below
+			// remains a syntax error.
+			binding, bindErr := preparedSourceBindingAt(b.GetContext(), param.Offset)
+			if bindErr != nil {
+				return nil, bindErr
+			}
+			expr = &plan.Expr{
+				Typ:  makePlan2Type(&binding.Type),
+				Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: binding.Position}},
+			}
+		}
+	}
 
 	// NULL check: reject NULL in LIMIT/OFFSET with a clear message.
 	if cExpr, ok := expr.Expr.(*plan.Expr_Lit); ok && cExpr.Lit != nil && cExpr.Lit.GetIsnull() {

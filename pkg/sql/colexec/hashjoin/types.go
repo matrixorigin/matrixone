@@ -17,6 +17,7 @@ package hashjoin
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -47,6 +48,24 @@ const (
 	psBatchRow
 )
 
+const hashJoinAllocationSiteMatchedRows mpool.AllocationSite = 80
+const hashJoinAllocationSiteAsofIndex mpool.AllocationSite = 106
+
+const (
+	hashJoinAllocationSiteResultData mpool.AllocationSite = iota + 102
+	hashJoinAllocationSiteResultArea
+	hashJoinAllocationSiteResultNulls
+	hashJoinAllocationSiteResultGrouping
+)
+
+const (
+	hashJoinAllocationSiteAsofCandidateData mpool.AllocationSite = iota + 107
+	hashJoinAllocationSiteAsofCandidateArea
+	hashJoinAllocationSiteAsofCandidateNulls
+	hashJoinAllocationSiteAsofCandidateGrouping
+	hashJoinAllocationSiteAsofCandidateState
+)
+
 type container struct {
 	state       int
 	itr         hashmap.Iterator
@@ -55,6 +74,9 @@ type container struct {
 	// globalBuildRowCnt is independent of the currently loaded spill bucket.
 	// MARK join needs the global empty-build fact for SQL three-valued logic.
 	globalBuildRowCnt int64
+	// Borrowed from eqCondExecs/nonEqCondExec; never freed independently.
+	joinDiagnosticActivation []colexec.ExpressionExecutor
+	joinDiagnosticActivated  bool
 
 	leftBat *batch.Batch
 	resBat  *batch.Batch
@@ -72,16 +94,60 @@ type container struct {
 	probeState probeState
 
 	// Pre-computed per-query flags — avoid method calls in per-row probe loop.
-	probeHashOnPK      bool // HashOnPK || mp.HashOnUnique()
-	probeEmitUnmatched bool // EmitUnmatchedProbe()
-	probeRightSemiAnti bool // !IsRightSemi() && !IsAnti()
-	probeRightJoin     bool
-	probeSingle        bool
-	probeLeftSingle    bool
-	probeLeftSemi      bool
-	probeLeftAnti      bool
-	probeMark          bool
-	buildHasNullKey    bool
+	probeHashOnPK          bool // HashOnPK || mp.HashOnUnique()
+	probeEmitUnmatched     bool // EmitUnmatchedProbe()
+	probeRightSemiAnti     bool // !IsRightSemi() && !IsAnti()
+	probeTrackBuildMatches bool // EmitUnmatchedBuild()
+	probeSingle            bool
+	probeLeftSingle        bool
+	probeLeftSemi          bool
+	probeLeftAnti          bool
+	probeMark              bool
+	buildHasNullKey        bool
+	asofLeftCol            int
+	asofStrict             bool
+	asofIndexes            []asofIndex
+	asofIndexCount         int
+	// The build-left ASOF path retains the logical left input and scans the
+	// logical right input once. Small actual equality groups keep candidate
+	// slots aligned by materialized left-row ordinal. If any actual group is
+	// larger than the direct-work bound, all groups share one range-update tree:
+	// the leaves are ordered by equality group and logical-left timestamp, and
+	// every retained candidate slot is one tree node.
+	asofBuildLeftBestTimes []int64
+	// Sequence breaks equal-timestamp ties across different range-tree nodes in
+	// favor of the first row in the physical logical-right stream.
+	asofBuildLeftBestSequences []uint64
+	asofBuildLeftMatched       []uint8
+	// Indexed candidates share one retained right payload across every tree
+	// node updated by the same source row. Refcounts make superseded payload
+	// slots reusable without copying a full right row O(log L) times.
+	asofBuildLeftNodePayload      []int32
+	asofBuildLeftPayloadRefs      []int32
+	asofBuildLeftPayloadLive      []uint8
+	asofBuildLeftFreePayloadSlots []int32
+	asofBuildLeftFreePayloadCount int
+	asofBuildLeftNextPayload      int
+	// asofBuildLeftBatchRows records at most one source row per candidate slot
+	// for the current physical-right input batch. touchedSlots avoids scanning
+	// every slot after a small batch and is bounded by the slot count.
+	asofBuildLeftBatchRows    []int32
+	asofBuildLeftTouchedSlots []int32
+	asofBuildLeftTouchedCount int
+	// Indexed mode metadata is immutable for one JoinMap/spill generation.
+	// groups are addressed by JoinMap group id; order stores logical-left row
+	// ordinals sorted by timestamp inside each contiguous group range; leafPos
+	// maps a materialized left ordinal back to its point-query position.
+	asofBuildLeftGroups        []asofBuildLeftGroup
+	asofBuildLeftOrder         []int32
+	asofBuildLeftLeafPos       []int32
+	asofBuildLeftIndexed       bool
+	asofBuildLeftProbeSequence uint64
+	asofBuildLeftBestRight     *batch.Batch
+	asofBuildLeftInitialized   bool
+	asofBuildLeftFinalRow      int64
+	asofBuildLeftLiveBytes     int64
+	asofBuildLeftDeadBytes     int64
 
 	nonEqCondExec colexec.ExpressionExecutor
 
@@ -108,23 +174,70 @@ type container struct {
 	probeBucketActive bool // true while reading probe batches from a bucket
 }
 
+type asofIndexOrder uint8
+
+const (
+	asofIndexEmpty asofIndexOrder = iota
+	asofIndexAscending
+	asofIndexDescending
+	asofIndexLinear
+	asofIndexSorted
+)
+
+// asofIndexEntry is the cache-friendly representation used only after an
+// unordered equality group proves hot enough to amortize sorting. Ordinal is
+// the position in the immutable JoinMap selection; reverse ordinal order for
+// equal timestamps preserves the first materialized row during predecessor
+// search.
+type asofIndexEntry struct {
+	value   int64
+	row     int32
+	ordinal int32
+}
+
+// asofIndex keeps all equality-group metadata in an accounted open-addressed
+// table. Time-ordered groups search the immutable JoinMap selection directly.
+// An unordered group starts with one-best-row linear scans and owns a sorted
+// entry slice only after repeated probes amortize its construction cost.
+type asofIndex struct {
+	key            uint64
+	entries        []asofIndexEntry
+	candidateCount int32
+	validCount     int32
+	linearProbes   uint32
+	order          asofIndexOrder
+	occupied       bool
+}
+
+// asofBuildLeftGroup identifies one half-open range in asofBuildLeftOrder.
+// It is pointer-free because it is allocated from the off-heap query mpool.
+type asofBuildLeftGroup struct {
+	start  int32
+	length int32
+}
+
 type HashJoin struct {
 	ctr container
 
 	JoinType    plan.Node_JoinType
 	IsRightJoin bool
 
-	ResultCols []colexec.ResultPos
-	LeftTypes  []types.Type
-	RightTypes []types.Type
-	NonEqCond  *plan.Expr
-	EqConds    [][]*plan.Expr
+	ResultCols                    []colexec.ResultPos
+	LeftTypes                     []types.Type
+	RightTypes                    []types.Type
+	NonEqCond                     *plan.Expr
+	EqConds                       [][]*plan.Expr
+	OwnsConstantFilterDiagnostics bool
+	JoinDiagnostic                *colexec.DeferredJoinDiagnostic
 
-	Channel chan *bitmap.Bitmap
+	Mailbox *BitmapMailbox
 	NumCPU  uint64
 
 	HashOnPK     bool
 	CanSkipProbe bool
+	// EmitCompressedRowCount is an explicit planner/executor contract. It is
+	// valid only when a scalar, single COUNT(*) directly consumes this join.
+	EmitCompressedRowCount bool
 
 	IsShuffle  bool
 	ShuffleIdx int32
@@ -133,8 +246,106 @@ type HashJoin struct {
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	JoinMapTag         int32
 	SpillThreshold     int64
+	AsofRightCol       int32
+	// AsofBuildLeft selects the bounded-memory physical path for a memory-cheaper
+	// logical left input: build/hash the left rows, stream the logical right,
+	// retain bounded predecessor candidates, then finalize the left rows.
+	AsofBuildLeft           bool
+	allocationAccount       *mpool.AllocationAccount
+	resultAllocation        *vector.AllocationAccountSelection
+	asofCandidateAllocation *vector.AllocationAccountSelection
+	// recursiveProbe is derived from the operator tree during Prepare. An empty
+	// build must still drain a recursive probe until its round marker.
+	recursiveProbe bool
 
 	vm.OperatorBase
+
+	// Fixed scratch for one Find chunk; every selected slot is overwritten.
+	// Keep it last to preserve the locality of existing hot state/config fields.
+	// Operator ownership avoids per-chunk heap escapes through Vector.Union.
+	uniqueLeftRows  [hashmap.UnitLimit]int64
+	uniqueRightRows [hashmap.UnitLimit]int64
+}
+
+func (hashJoin *HashJoin) SetAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if account == nil || account.Handle() == 0 {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if hashJoin.allocationAccount != nil &&
+		hashJoin.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if hashJoin.allocationAccount == account {
+		return nil
+	}
+	selection, err := vector.NewAllocationAccountSelection(
+		account,
+		mpool.AllocationOwnerHashBuild,
+		hashJoinAllocationSiteResultData,
+		hashJoinAllocationSiteResultArea,
+		hashJoinAllocationSiteResultNulls,
+		hashJoinAllocationSiteResultGrouping,
+	)
+	if err != nil {
+		return err
+	}
+	asofCandidateSelection, err := vector.NewAllocationAccountSelection(
+		account,
+		mpool.AllocationOwnerHashBuild,
+		hashJoinAllocationSiteAsofCandidateData,
+		hashJoinAllocationSiteAsofCandidateArea,
+		hashJoinAllocationSiteAsofCandidateNulls,
+		hashJoinAllocationSiteAsofCandidateGrouping,
+	)
+	if err != nil {
+		return err
+	}
+	hashJoin.allocationAccount = account
+	hashJoin.resultAllocation = selection
+	hashJoin.asofCandidateAllocation = asofCandidateSelection
+	return nil
+}
+
+func (hashJoin *HashJoin) ClearAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if hashJoin.allocationAccount == nil {
+		return nil
+	}
+	if hashJoin.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if hashJoin.ctr.mp != nil || hashJoin.ctr.spillEngine != nil ||
+		len(hashJoin.ctr.asofIndexes) != 0 ||
+		len(hashJoin.ctr.asofBuildLeftBestTimes) != 0 ||
+		len(hashJoin.ctr.asofBuildLeftBestSequences) != 0 ||
+		len(hashJoin.ctr.asofBuildLeftMatched) != 0 ||
+		len(hashJoin.ctr.asofBuildLeftNodePayload) != 0 ||
+		len(hashJoin.ctr.asofBuildLeftPayloadRefs) != 0 ||
+		len(hashJoin.ctr.asofBuildLeftPayloadLive) != 0 ||
+		len(hashJoin.ctr.asofBuildLeftFreePayloadSlots) != 0 ||
+		len(hashJoin.ctr.asofBuildLeftBatchRows) != 0 ||
+		len(hashJoin.ctr.asofBuildLeftTouchedSlots) != 0 ||
+		len(hashJoin.ctr.asofBuildLeftGroups) != 0 ||
+		len(hashJoin.ctr.asofBuildLeftOrder) != 0 ||
+		len(hashJoin.ctr.asofBuildLeftLeafPos) != 0 ||
+		hashJoin.ctr.asofBuildLeftBestRight != nil ||
+		hashJoin.ctr.asofBuildLeftInitialized ||
+		len(hashJoin.ctr.eqCondExecs) != 0 ||
+		hashJoin.ctr.nonEqCondExec != nil ||
+		hashJoin.ctr.rightRowsMatched != nil ||
+		hashJoin.ctr.resBat != nil {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	if hashJoin.NumCPU > 1 && !hashJoin.Mailbox.Terminal() {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	hashJoin.allocationAccount = nil
+	hashJoin.resultAllocation = nil
+	hashJoin.asofCandidateAllocation = nil
+	return nil
 }
 
 func (hashJoin *HashJoin) GetOperatorBase() *vm.OperatorBase {
@@ -142,6 +353,9 @@ func (hashJoin *HashJoin) GetOperatorBase() *vm.OperatorBase {
 }
 
 func (hashJoin *HashJoin) NeedBuildBatches() bool {
+	if hashJoin.IsAsof() {
+		return true
+	}
 	if hashJoin.NonEqCond != nil {
 		return true
 	}
@@ -185,26 +399,42 @@ func (hashJoin *HashJoin) ExecProjection(proc *process.Process, input *batch.Bat
 }
 
 func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	if hashJoin.JoinDiagnostic != nil {
+		hashJoin.JoinDiagnostic.Reset()
+	}
 	ctr := &hashJoin.ctr
+	hashmap.IteratorClearOwner(ctr.itr)
 	ctr.itr = nil
 	if !ctr.bitmapSynced && hashJoin.NumCPU > 1 && !hashJoin.IsMerger {
-		hashJoin.Channel <- nil
+		hashJoin.Mailbox.Send(nil)
+	}
+	if hashJoin.NumCPU > 1 && hashJoin.IsMerger {
+		hashJoin.Mailbox.SealAndDrain(proc.Mp())
 	}
 	ctr.cleanBucketBatches(proc)
+	ctr.cleanAsofIndexes(proc)
+	ctr.cleanAsofBuildLeftState(proc)
+	ctr.cleanEqCondExecutors()
 	ctr.cleanHashMap()
-	ctr.resetNonEqCondExecutor()
-	ctr.resetEqCondExecutors()
-	ctr.rightRowsMatched = nil
+	ctr.cleanNonEqCondExecutor()
+	ctr.joinDiagnosticActivation = nil
+	ctr.joinDiagnosticActivated = false
+	if ctr.resBat != nil {
+		ctr.resBat.Clean(proc.GetMPool())
+		ctr.resBat = nil
+	}
+	ctr.freeRightRowsMatched(proc)
 	ctr.rightMatchedIter = nil
 	ctr.skipProbe = false
 	ctr.bitmapSynced = false
 	ctr.probeMark = false
 	ctr.buildHasNullKey = false
+	ctr.asofLeftCol = -1
+	ctr.asofStrict = false
 	ctr.globalBuildRowCnt = 0
 	ctr.state = Build
 	ctr.probeState = psNextBatch
 	ctr.lastIdx = 0
-
 	if hashJoin.OpAnalyzer != nil {
 		hashJoin.OpAnalyzer.Alloc(ctr.maxAllocSize)
 	}
@@ -213,18 +443,72 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 }
 
 func (hashJoin *HashJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if hashJoin.JoinDiagnostic != nil {
+		hashJoin.JoinDiagnostic.Reset()
+	}
 	ctr := &hashJoin.ctr
+	ctr.cleanAsofIndexes(proc)
+	ctr.cleanAsofBuildLeftState(proc)
 	ctr.cleanBatch(proc)
 	ctr.cleanBucketBatches(proc)
+	ctr.cleanEqCondExecutors()
 	ctr.cleanHashMap()
 	ctr.cleanNonEqCondExecutor()
-	ctr.cleanEqCondExecutors()
+	ctr.joinDiagnosticActivation = nil
+	ctr.joinDiagnosticActivated = false
 }
 
-func (ctr *container) resetNonEqCondExecutor() {
-	if ctr.nonEqCondExec != nil {
-		ctr.nonEqCondExec.ResetForNextQuery()
+func (ctr *container) cleanAsofIndexes(proc *process.Process) {
+	if proc != nil {
+		for _, index := range ctr.asofIndexes {
+			mpool.FreeSlice(proc.Mp(), index.entries)
+		}
+		mpool.FreeSlice(proc.Mp(), ctr.asofIndexes)
 	}
+	ctr.asofIndexes = nil
+	ctr.asofIndexCount = 0
+}
+
+func (ctr *container) cleanAsofBuildLeftState(proc *process.Process) {
+	if ctr.asofBuildLeftBestRight != nil && proc != nil {
+		ctr.asofBuildLeftBestRight.Clean(proc.Mp())
+	}
+	if proc != nil {
+		mpool.FreeSlice(proc.Mp(), ctr.asofBuildLeftBestTimes)
+		mpool.FreeSlice(proc.Mp(), ctr.asofBuildLeftBestSequences)
+		mpool.FreeSlice(proc.Mp(), ctr.asofBuildLeftMatched)
+		mpool.FreeSlice(proc.Mp(), ctr.asofBuildLeftNodePayload)
+		mpool.FreeSlice(proc.Mp(), ctr.asofBuildLeftPayloadRefs)
+		mpool.FreeSlice(proc.Mp(), ctr.asofBuildLeftPayloadLive)
+		mpool.FreeSlice(proc.Mp(), ctr.asofBuildLeftFreePayloadSlots)
+		mpool.FreeSlice(proc.Mp(), ctr.asofBuildLeftBatchRows)
+		mpool.FreeSlice(proc.Mp(), ctr.asofBuildLeftTouchedSlots)
+		mpool.FreeSlice(proc.Mp(), ctr.asofBuildLeftGroups)
+		mpool.FreeSlice(proc.Mp(), ctr.asofBuildLeftOrder)
+		mpool.FreeSlice(proc.Mp(), ctr.asofBuildLeftLeafPos)
+	}
+	ctr.asofBuildLeftBestTimes = nil
+	ctr.asofBuildLeftBestSequences = nil
+	ctr.asofBuildLeftMatched = nil
+	ctr.asofBuildLeftNodePayload = nil
+	ctr.asofBuildLeftPayloadRefs = nil
+	ctr.asofBuildLeftPayloadLive = nil
+	ctr.asofBuildLeftFreePayloadSlots = nil
+	ctr.asofBuildLeftFreePayloadCount = 0
+	ctr.asofBuildLeftNextPayload = 0
+	ctr.asofBuildLeftBatchRows = nil
+	ctr.asofBuildLeftTouchedSlots = nil
+	ctr.asofBuildLeftTouchedCount = 0
+	ctr.asofBuildLeftGroups = nil
+	ctr.asofBuildLeftOrder = nil
+	ctr.asofBuildLeftLeafPos = nil
+	ctr.asofBuildLeftIndexed = false
+	ctr.asofBuildLeftProbeSequence = 0
+	ctr.asofBuildLeftBestRight = nil
+	ctr.asofBuildLeftInitialized = false
+	ctr.asofBuildLeftFinalRow = 0
+	ctr.asofBuildLeftLiveBytes = 0
+	ctr.asofBuildLeftDeadBytes = 0
 }
 
 func (ctr *container) cleanNonEqCondExecutor() {
@@ -246,9 +530,12 @@ func (ctr *container) cleanBatch(proc *process.Process) {
 			ctr.joinBats[i] = nil
 		}
 	}
-	if ctr.rightRowsMatched != nil {
-		ctr.rightRowsMatched = nil
-	}
+	ctr.freeRightRowsMatched(proc)
+}
+
+func (ctr *container) freeRightRowsMatched(proc *process.Process) {
+	colexec.FreeAccountedBitmap(ctr.rightRowsMatched, proc.Mp())
+	ctr.rightRowsMatched = nil
 }
 
 func (ctr *container) cleanBucketBatches(proc *process.Process) {
@@ -260,6 +547,8 @@ func (ctr *container) cleanBucketBatches(proc *process.Process) {
 }
 
 func (ctr *container) cleanHashMap() {
+	hashmap.IteratorClearOwner(ctr.itr)
+	ctr.itr = nil
 	if ctr.mp != nil {
 		ctr.mp.Free()
 		ctr.mp = nil
@@ -273,14 +562,7 @@ func (ctr *container) cleanEqCondExecutors() {
 		}
 	}
 	ctr.eqCondExecs = nil
-}
-
-func (ctr *container) resetEqCondExecutors() {
-	for i := range ctr.eqCondExecs {
-		if ctr.eqCondExecs[i] != nil {
-			ctr.eqCondExecs[i].ResetForNextQuery()
-		}
-	}
+	ctr.eqCondVecs = nil
 }
 
 func (hashJoin *HashJoin) IsInner() bool {
@@ -288,7 +570,11 @@ func (hashJoin *HashJoin) IsInner() bool {
 }
 
 func (hashJoin *HashJoin) IsLeftOuter() bool {
-	return hashJoin.JoinType == plan.Node_LEFT
+	return hashJoin.JoinType == plan.Node_LEFT || hashJoin.JoinType == plan.Node_ASOF_LEFT
+}
+
+func (hashJoin *HashJoin) IsAsof() bool {
+	return hashJoin.JoinType == plan.Node_ASOF || hashJoin.JoinType == plan.Node_ASOF_LEFT
 }
 
 func (hashJoin *HashJoin) IsRightOuter() bool {

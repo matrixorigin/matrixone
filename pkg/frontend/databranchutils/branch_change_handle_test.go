@@ -94,6 +94,7 @@ func TestBranchChangeHandleNextReappliesPolicies(t *testing.T) {
 	require.Equal(t, engine.SnapshotReadPolicyVisibleState, engine.SnapshotReadPolicyFromContext(fake.lastCtx))
 	require.True(t, engine.RetainRowIDFromContext(fake.lastCtx))
 	require.Same(t, pkFilter, engine.PKFilterFromContext(fake.lastCtx))
+	require.False(t, engine.ChangeRangeLimitFromContext(fake.lastCtx).Enabled())
 }
 
 func TestBranchChangeHandleNextUnderlyingError(t *testing.T) {
@@ -133,6 +134,7 @@ func TestCollectChangesRange(t *testing.T) {
 			_ *mpool.MPool,
 		) (engine.ChangesHandle, error) {
 			require.Equal(t, engine.SnapshotReadPolicyVisibleState, engine.SnapshotReadPolicyFromContext(ctx))
+			require.False(t, engine.ChangeRangeLimitFromContext(ctx).Enabled())
 			return fake, nil
 		},
 	)
@@ -179,6 +181,7 @@ func TestCollectChangesPropagatesError(t *testing.T) {
 			_ *mpool.MPool,
 		) (engine.ChangesHandle, error) {
 			require.Equal(t, engine.SnapshotReadPolicyVisibleState, engine.SnapshotReadPolicyFromContext(ctx))
+			require.False(t, engine.ChangeRangeLimitFromContext(ctx).Enabled())
 			return nil, expectedErr
 		},
 	)
@@ -212,6 +215,7 @@ func TestCollectChangesWithPKFilterPropagatesPoliciesToHandle(t *testing.T) {
 			require.Equal(t, engine.SnapshotReadPolicyVisibleState, engine.SnapshotReadPolicyFromContext(ctx))
 			require.True(t, engine.RetainRowIDFromContext(ctx))
 			require.Same(t, pkFilter, engine.PKFilterFromContext(ctx))
+			require.False(t, engine.ChangeRangeLimitFromContext(ctx).Enabled())
 			return fake, nil
 		},
 	)

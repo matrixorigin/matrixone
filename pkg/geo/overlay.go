@@ -77,11 +77,12 @@ func ovSignedArea(p0, p1, p2 Coord) float64 {
 // circle approximations) are not. Snap-rounding both inputs and computed
 // intersection points to this grid restores robustness at ~1e-9 precision.
 const snapScale = 1e9
+const float64Epsilon = 2.220446049250313e-16
 
-func snapCoord(c Coord) Coord {
+func snapCoordAtScale(c Coord, scale float64) Coord {
 	return Coord{
-		X: ovRound(c.X*snapScale) / snapScale,
-		Y: ovRound(c.Y*snapScale) / snapScale,
+		X: ovRound(c.X*scale) / scale,
+		Y: ovRound(c.Y*scale) / scale,
 	}
 }
 
@@ -421,8 +422,10 @@ func (s *statusLine) next(n *slNode) *ovEvent {
 }
 
 type overlay struct {
-	q  eventQueue
-	op BoolOp
+	q              eventQueue
+	op             BoolOp
+	snapScale      float64
+	allowSnapError bool
 }
 
 func newEvent(p Coord, left bool, subject bool) *ovEvent {
@@ -431,7 +434,7 @@ func newEvent(p Coord, left bool, subject bool) *ovEvent {
 
 // addEdge enqueues the two endpoints of one polygon edge.
 func (o *overlay) addEdge(p1, p2 Coord, subject bool) {
-	p1, p2 = snapCoord(p1), snapCoord(p2)
+	p1, p2 = snapCoordAtScale(p1, o.snapScale), snapCoordAtScale(p2, o.snapScale)
 	if ovEqual(p1, p2) {
 		return // skip zero-length edges
 	}
@@ -516,7 +519,7 @@ func (o *overlay) inResult(e *ovEvent) bool {
 func (o *overlay) possibleIntersection(e1, e2 *ovEvent) int {
 	p1, p2 := e1.p, e1.other.p
 	p3, p4 := e2.p, e2.other.p
-	nInter, ip1, _ := segmentIntersection(p1, p2, p3, p4)
+	nInter, ip1, _ := segmentIntersectionAtScale(p1, p2, p3, p4, o.snapScale, o.allowSnapError)
 
 	if nInter == 0 {
 		return 0
@@ -585,7 +588,7 @@ func (o *overlay) possibleIntersection(e1, e2 *ovEvent) int {
 
 // divideSegment splits edge e at point p, producing two edges.
 func (o *overlay) divideSegment(e *ovEvent, p Coord) {
-	p = snapCoord(p)
+	p = snapCoordAtScale(p, o.snapScale)
 	if ovEqual(p, e.p) || ovEqual(p, e.other.p) {
 		return // snapped onto an existing endpoint; nothing to split
 	}
@@ -610,7 +613,9 @@ func (o *overlay) divideSegment(e *ovEvent, p Coord) {
 	o.q.push(r)
 }
 
-// run executes the sweep and returns the result events that are in the output.
+// run executes the sweep and returns the canonical left event for each noded
+// segment. The connector uses their transition fields to select and direct the
+// result boundary.
 func (o *overlay) run() []*ovEvent {
 	var status statusLine
 	var sortedResult []*ovEvent

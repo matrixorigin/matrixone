@@ -1,0 +1,177 @@
+drop database if exists vector_ivfflat_include_rounds;
+create database vector_ivfflat_include_rounds;
+use vector_ivfflat_include_rounds;
+drop table if exists include_rounds_main;
+create table include_rounds_main(
+id int primary key,
+embedding vecf32(3),
+title varchar(20),
+category int
+);
+insert into include_rounds_main values
+(1, "[0,0,0]", "a0", 10),
+(2, "[0,0,1]", "a1", 10),
+(3, "[0,1,0]", "a2", 10),
+(4, "[1,0,0]", "a3", 10),
+(5, "[10,10,10]", "b0", 20),
+(6, "[11,11,11]", "b1", 20),
+(7, "[12,12,12]", "b2", 20),
+(8, "[13,13,13]", "b3", 20);
+create index idx_ivf_include_rounds using ivfflat on include_rounds_main(embedding)
+lists=2 op_type "vector_l2_ops" include(title, category);
+set probe_limit = 1;
+select id, title, category
+from include_rounds_main
+where category = 20
+order by l2_distance(embedding, "[0,0,0]")
+limit 2 by rank with option 'mode=include';
+➤ id[4,32,0]  ¦  title[12,20,0]  ¦  category[4,32,0]  𝄀
+5  ¦  b0  ¦  20  𝄀
+6  ¦  b1  ¦  20
+explain analyze verbose select id, title, category
+from include_rounds_main
+where category = 20
+order by l2_distance(embedding, "[0,0,0]")
+limit 2 by rank with option 'mode=include';
+-- @regex("Vector Index Search Round 1: bucket_window=0:1", true)
+-- @regex("Vector Index Search Round 2: bucket_window=1:2", true)
+-- @regex("Vector Index Search Summary: search_count=[1-9][0-9]* round_count=([2-9]|[1-9][0-9]+) buckets_searched=([2-9]|[1-9][0-9]+)", true)
+➤ QUERY PLAN[12,-1,0]  𝄀
+Project[2] (cost=2.00 outcnt=2.00 selectivity=0.0020 dop=1 blockNum=1 rowsize=100.00)  𝄀
+  Output: #[0,0], #[0,1], #[0,2]  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=2 (min=2, max=2) InputSize=64 bytes OutputSize=64 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64 bytes (min=64 bytes, max=64 bytes)  𝄀
+  ->  Sort[1] (cost=2.00 outcnt=2.00 selectivity=0.0020 dop=1 blockNum=1 rowsize=100.00)  𝄀
+        Output: #[0,0], #[0,2], #[0,3]  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=2 (min=2, max=2) InputSize=80 bytes OutputSize=64 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64 bytes (min=64 bytes, max=64 bytes)  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 2  𝄀
+        ->  Vector Index Scan[0] on idx_ivf_include_rounds [l2_distance] (cost=500.00 outcnt=2.00 selectivity=0.0020 dop=1 blockNum=1 rowsize=92.00)  𝄀
+              Output: pkid, score, __mo_index_include_title, __mo_index_include_category  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=2 (min=2, max=2) InputSize=80 bytes OutputSize=80 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=160 bytes (min=160 bytes, max=160 bytes)  𝄀
+              Vector Index: idx_ivf_include_rounds, Metric: l2_distance, Candidate Limit: 2, NProbe: 1, Index Filter: (__mo_index_include_category = 20)  𝄀
+  Vector Index Search Round 1: bucket_window=0:1 row_limit=12 output_rows=0 exhausted=false  𝄀
+  Vector Index Search Round 2: bucket_window=1:2 row_limit=12 output_rows=4 exhausted=true  𝄀
+  Vector Index Search Summary: search_count=1 round_count=2 buckets_searched=2 bucket_windows=0:1, 1:2 row_limits=12, 12 empty_rounds=1
+set probe_limit = 10;
+explain select id, title, category
+from include_rounds_main
+where category = 20
+order by l2_distance(embedding, "[0,0,0]")
+limit 2 by rank with option 'mode=include';
+-- @regex("Vector Index Scan", true)
+➤ AP QUERY PLAN ON MULTICN(32 core)[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 2  𝄀
+        ->  Vector Index Scan on idx_ivf_include_rounds [l2_distance]  𝄀
+              Vector Index: idx_ivf_include_rounds, Metric: l2_distance, Candidate Limit: 2, NProbe: 10, Index Filter: (__mo_index_include_category = 20)
+explain select id, title, category
+from include_rounds_main
+where category = 20
+order by l2_distance(embedding, "[0,0,0]")
+limit 2 by rank with option 'mode=post';
+-- @regex("Vector Index Scan", true)
+➤ AP QUERY PLAN ON MULTICN(32 core)[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,3] INTERNAL  𝄀
+        Limit: 2  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (include_rounds_main.id = #[1,0])  𝄀
+              ->  Table Scan on vector_ivfflat_include_rounds.include_rounds_main  𝄀
+                    Filter Cond: (include_rounds_main.category = 20)  𝄀
+              ->  Vector Index Scan on idx_ivf_include_rounds [l2_distance]  𝄀
+                    Vector Index: idx_ivf_include_rounds, Metric: l2_distance, Candidate Limit: 2, NProbe: 10
+explain select id, title, category
+from include_rounds_main
+where category = 20
+order by l2_distance(embedding, "[0,0,0]")
+limit 2 by rank with option 'mode=pre';
+-- @regex("Vector Index Scan", true)
+➤ AP QUERY PLAN ON ONE CN(32 core)[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,3] INTERNAL  𝄀
+        Limit: 2  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (include_rounds_main.id = #[1,0])  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on vector_ivfflat_include_rounds.include_rounds_main  𝄀
+                    Filter Cond: (include_rounds_main.category = 20)  𝄀
+                    Runtime Filter Probe: include_rounds_main.id  𝄀
+              ->  Join  𝄀
+                    Join Type: SEMI  𝄀
+                    Join Cond: (#[0,0] = include_rounds_main.id)  𝄀
+                    Runtime Filter Build: #[10,0]  𝄀
+                    ->  Vector Index Scan on idx_ivf_include_rounds [l2_distance]  𝄀
+                          Runtime Filter Probe: #[8,0]  𝄀
+                          Vector Index: idx_ivf_include_rounds, Metric: l2_distance, Candidate Limit: 2, NProbe: 10  𝄀
+                    ->  Table Scan on vector_ivfflat_include_rounds.include_rounds_main  𝄀
+                          Filter Cond: (include_rounds_main.category = 20)
+select id, title, category
+from include_rounds_main
+where category = 20
+order by l2_distance(embedding, "[0,0,0]")
+limit 2 by rank with option 'mode=include';
+➤ id[4,32,0]  ¦  title[12,20,0]  ¦  category[4,32,0]  𝄀
+5  ¦  b0  ¦  20  𝄀
+6  ¦  b1  ¦  20
+select id, title, category
+from include_rounds_main
+where category = 20
+order by l2_distance(embedding, "[0,0,0]")
+limit 1 offset 1 by rank with option 'mode=include';
+➤ id[4,32,0]  ¦  title[12,20,0]  ¦  category[4,32,0]  𝄀
+6  ¦  b1  ¦  20
+select id, title, category
+from include_rounds_main
+where category = 20
+order by l2_distance(embedding, "[0,0,0]")
+limit 2 by rank with option 'mode=post';
+➤ id[4,32,0]  ¦  title[12,20,0]  ¦  category[4,32,0]  𝄀
+5  ¦  b0  ¦  20  𝄀
+6  ¦  b1  ¦  20
+select id, title, category
+from include_rounds_main
+where category = 20
+order by l2_distance(embedding, "[0,0,0]")
+limit 2 by rank with option 'mode=pre';
+➤ id[4,32,0]  ¦  title[12,20,0]  ¦  category[4,32,0]  𝄀
+5  ¦  b0  ¦  20  𝄀
+6  ¦  b1  ¦  20
+drop table if exists include_rounds_residual;
+create table include_rounds_residual(
+id int primary key,
+embedding vecf32(3),
+note varchar(20),
+category int
+);
+insert into include_rounds_residual values
+(1, "[0,0,1]", "reject", 20),
+(2, "[0,0,2]", "reject", 20),
+(3, "[0,0,3]", "reject", 20),
+(4, "[0,0,4]", "reject", 20),
+(5, "[0,0,5]", "reject", 20),
+(6, "[0,0,6]", "reject", 20),
+(7, "[0,0,7]", "reject", 20),
+(8, "[0,0,8]", "reject", 20),
+(9, "[0,0,9]", "reject", 20),
+(10, "[0,0,10]", "reject", 20),
+(11, "[0,0,11]", "reject", 20),
+(12, "[100,100,100]", "far", 20),
+(13, "[0,0,12]", "target", 20);
+create index idx_ivf_include_residual using ivfflat on include_rounds_residual(embedding)
+lists=1 op_type "vector_l2_ops" include(category);
+select id, note
+from include_rounds_residual
+where category = 20 and note = "target"
+order by l2_distance(embedding, "[0,0,0]")
+limit 1 by rank with option 'mode=include';
+➤ id[4,32,0]  ¦  note[12,20,0]  𝄀
+13  ¦  target
+drop table include_rounds_residual;
+drop table include_rounds_main;
+drop database vector_ivfflat_include_rounds;

@@ -16,7 +16,9 @@ package frontend
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"sync"
 	"testing"
 	"time"
@@ -24,9 +26,12 @@ import (
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/golang/mock/gomock"
 	"github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -40,12 +45,24 @@ import (
 var _ client.Workspace = (*testWorkspace)(nil)
 
 type testWorkspace struct {
-	start      bool
-	incr       bool
-	mu         sync.Mutex
-	stack      []uint64
-	stmtId     uint64
-	reportErr1 bool
+	start               bool
+	incr                bool
+	mu                  sync.Mutex
+	stack               []uint64
+	stmtId              uint64
+	reportErr1          bool
+	haveDDL             bool
+	readonly            bool
+	protectedCloneFiles []string
+	trackedLoadFiles    []string
+}
+
+func (txn *testWorkspace) ProtectCloneFiles(names ...string) {
+	txn.protectedCloneFiles = append(txn.protectedCloneFiles, names...)
+}
+
+func (txn *testWorkspace) TrackLoadFiles(names ...string) {
+	txn.trackedLoadFiles = append(txn.trackedLoadFiles, names...)
 }
 
 func (txn *testWorkspace) SetCloneTxn(snapshot int64) {}
@@ -63,7 +80,7 @@ func (txn *testWorkspace) SetSyncProtectionJobID(jobID string) {}
 func (txn *testWorkspace) GetSyncProtectionJobID() string { return "" }
 
 func (txn *testWorkspace) Readonly() bool {
-	panic("implement me")
+	return txn.readonly
 }
 
 func (txn *testWorkspace) PPString() string {
@@ -84,7 +101,7 @@ func (txn *testWorkspace) GetSnapshotWriteOffset() int {
 }
 
 func newTestWorkspace() *testWorkspace {
-	return &testWorkspace{}
+	return &testWorkspace{readonly: true}
 }
 
 func (txn *testWorkspace) StartStatement() {
@@ -188,11 +205,11 @@ func (t *testWorkspace) BindTxnOp(op client.TxnOperator) {
 }
 
 func (t *testWorkspace) SetHaveDDL(flag bool) {
-	//TODO implement me
+	t.haveDDL = flag
 }
 
 func (t *testWorkspace) GetHaveDDL() bool {
-	return false
+	return t.haveDDL
 }
 
 func TestWorkspace(t *testing.T) {
@@ -790,6 +807,532 @@ func Test_commit(t *testing.T) {
 	})
 }
 
+func TestCommitUsesFinalCommitTSForNextTxn(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Hints().Return(engine.Hints{
+		CommitOrRollbackTimeout: time.Second,
+	}).AnyTimes()
+	ses.txnHandler.storage = eng
+
+	commitTS := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 1}
+	committedOp := newTestTxnOp()
+	committedOp.meta = txn.TxnMeta{
+		ID:     []byte{1, 2, 3, 4},
+		Status: txn.TxnStatus_Active,
+	}
+	committedOp.commitTS = commitTS
+	ses.txnHandler.txnOp = committedOp
+	ses.txnHandler.txnCtx = ctx
+
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	execCtx.stmt = &tree.Select{}
+	execCtx.txnOpt = FeTxnOption{autoCommit: true}
+	if err := ses.GetTxnHandler().Commit(execCtx); err != nil {
+		t.Fatalf("commit failed: %v", err)
+	}
+	if got := ses.getLastCommitTS(); !got.Equal(commitTS) {
+		t.Fatalf("unexpected session commit timestamp: got %s, want %s", got.DebugString(), commitTS.DebugString())
+	}
+
+	originalTxnClient := getPu("").TxnClient
+	t.Cleanup(func() { getPu("").TxnClient = originalTxnClient })
+	nextOp := newTestTxnOp()
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().New(gomock.Any(), commitTS, gomock.Any()).Return(nextOp, nil)
+	getPu("").TxnClient = txnClient
+
+	handler := ses.GetTxnHandler()
+	handler.mu.Lock()
+	err := handler.createTxnOpUnsafe(&ExecCtx{reqCtx: ctx, ses: ses})
+	handler.txnOp = nil
+	handler.mu.Unlock()
+	if err != nil {
+		t.Fatalf("create next transaction failed: %v", err)
+	}
+}
+
+func TestCreateUnsafeRollsBackPublishedGenerationOnPanic(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	op := newTestTxnOp()
+	op.meta = txn.TxnMeta{ID: []byte("panic-generation"), Status: txn.TxnStatus_Active}
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(op, nil)
+	pu := getPu("")
+	previousTxnClient := pu.TxnClient
+	pu.TxnClient = txnClient
+	t.Cleanup(func() { pu.TxnClient = previousTxnClient })
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().New(gomock.Any(), op).DoAndReturn(func(context.Context, client.TxnOperator) error {
+		panic("storage new panic")
+	})
+	eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second})
+	ses.txnHandler.storage = eng
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	execCtx.stmt = &tree.Select{}
+	execCtx.txnOpt = FeTxnOption{autoCommit: true}
+
+	handler := ses.GetTxnHandler()
+	func() {
+		handler.mu.Lock()
+		defer handler.mu.Unlock()
+		require.PanicsWithValue(t, "storage new panic", func() {
+			_ = handler.createUnsafe(execCtx)
+		})
+	}()
+
+	require.Equal(t, 1, op.rollbackCalls)
+	require.Equal(t, txn.TxnStatus_Aborted, op.meta.Status)
+	require.Nil(t, handler.GetTxn())
+}
+
+func TestCancellableBackgroundTxnCreationUsesRequestContext(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	pu := getPu("")
+	previousTxnClient := pu.TxnClient
+	previousCreateTxnOpTimeout := pu.SV.CreateTxnOpTimeout.Duration
+	t.Cleanup(func() {
+		pu.TxnClient = previousTxnClient
+		pu.SV.CreateTxnOpTimeout.Duration = previousCreateTxnOpTimeout
+	})
+	pu.SV.CreateTxnOpTimeout.Duration = time.Nanosecond
+
+	entered := make(chan struct{})
+	deadlineC := make(chan time.Time, 1)
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, _ timestamp.Timestamp, _ ...client.TxnOption) (client.TxnOperator, error) {
+			deadline, _ := ctx.Deadline()
+			deadlineC <- deadline
+			close(entered)
+			<-ctx.Done()
+			return nil, context.Cause(ctx)
+		},
+	)
+	pu.TxnClient = txnClient
+
+	bh := ses.InitBackExec(nil, "", fakeDataSetFetcher2, &BackgroundExecOption{
+		cancelTxnCreateWithRequest: true,
+	}).(*backExec)
+	defer bh.Close()
+	require.ErrorContains(t,
+		bh.backSes.GetTxnHandler().createTxnOpUnsafe(&ExecCtx{ses: bh.backSes}),
+		"request context is required for cancellable transaction creation",
+	)
+
+	reqDeadline := time.Now().Add(time.Hour)
+	reqCtx, cancel := context.WithDeadline(
+		defines.AttachAccountId(context.Background(), sysAccountID),
+		reqDeadline,
+	)
+	defer cancel()
+	errC := make(chan error, 1)
+	go func() {
+		errC <- bh.backSes.GetTxnHandler().createTxnOpUnsafe(&ExecCtx{
+			reqCtx: reqCtx,
+			ses:    bh.backSes,
+		})
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("transaction creation did not enter txn client")
+	}
+	gotDeadline := <-deadlineC
+	require.False(t, gotDeadline.IsZero())
+	require.WithinDuration(t, reqDeadline, gotDeadline, time.Millisecond,
+		"the request deadline, not CreateTxnOpTimeout, must own authentication transaction creation")
+	cancel()
+
+	select {
+	case err := <-errC:
+		require.Error(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("transaction creation did not stop after request cancellation")
+	}
+}
+
+func TestOrdinaryBackgroundTxnCreationKeepsCreateTxnTimeout(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	pu := getPu("")
+	previousTxnClient := pu.TxnClient
+	previousCreateTxnOpTimeout := pu.SV.CreateTxnOpTimeout.Duration
+	t.Cleanup(func() {
+		pu.TxnClient = previousTxnClient
+		pu.SV.CreateTxnOpTimeout.Duration = previousCreateTxnOpTimeout
+	})
+	const createTimeout = time.Hour
+	pu.SV.CreateTxnOpTimeout.Duration = createTimeout
+
+	deadlineC := make(chan time.Time, 1)
+	wantErr := moerr.NewInternalErrorNoCtx("stop after context capture")
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, _ timestamp.Timestamp, _ ...client.TxnOption) (client.TxnOperator, error) {
+			deadline, _ := ctx.Deadline()
+			deadlineC <- deadline
+			return nil, wantErr
+		},
+	)
+	pu.TxnClient = txnClient
+
+	bh := ses.InitBackExec(nil, "", fakeDataSetFetcher2).(*backExec)
+	defer bh.Close()
+	requestCtx, cancelRequest := context.WithTimeout(
+		defines.AttachAccountId(context.Background(), sysAccountID),
+		time.Second,
+	)
+	defer cancelRequest()
+	started := time.Now()
+	err := bh.backSes.GetTxnHandler().createTxnOpUnsafe(&ExecCtx{
+		reqCtx: requestCtx,
+		ses:    bh.backSes,
+	})
+	require.ErrorIs(t, err, wantErr)
+	gotDeadline := <-deadlineC
+	require.False(t, gotDeadline.IsZero())
+	require.WithinDuration(t, started.Add(createTimeout), gotDeadline, time.Second,
+		"ordinary transaction creation must retain CreateTxnOpTimeout ownership")
+}
+
+func TestTxnHandlerDoesNotOwnKafkaProgress(t *testing.T) {
+	newState := func(t *testing.T) (*Session, *ExecCtx, *testTxnOp) {
+		t.Helper()
+		ctrl := gomock.NewController(t)
+		ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+		ses := newTestSession(t, ctrl)
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().Hints().Return(engine.Hints{
+			CommitOrRollbackTimeout: time.Second,
+		}).AnyTimes()
+		ses.txnHandler.storage = eng
+
+		op := newTestTxnOp()
+		op.meta = txn.TxnMeta{ID: []byte{1}, Status: txn.TxnStatus_Active}
+		ses.txnHandler.txnOp = op
+		ses.txnHandler.txnCtx = ctx
+
+		execCtx := newTestExecCtx(ctx, ctrl)
+		execCtx.ses = ses
+		return ses, execCtx, op
+	}
+
+	t.Run("commit leaves publication to statement terminal", func(t *testing.T) {
+		ses, execCtx, op := newState(t)
+		defer ses.Close()
+		defer execCtx.Close()
+
+		var calls []bool
+		ses.EnqueueKafkaProgress(func(publish bool) { calls = append(calls, publish) })
+		execCtx.stmt = &tree.CommitTransaction{}
+		execCtx.txnOpt = FeTxnOption{byCommit: true, autoCommit: false}
+
+		require.NoError(t, ses.GetTxnHandler().Commit(execCtx))
+		require.Equal(t, 1, op.commitCalls)
+		require.Empty(t, calls)
+		require.Len(t, ses.kafkaProgressQueue, 1)
+
+		// executeStmtWithResponse owns this terminal action.
+		ses.FinalizeKafkaProgress(true)
+		require.Equal(t, []bool{true}, calls)
+		require.Empty(t, ses.kafkaProgressQueue)
+	})
+
+	t.Run("rollback leaves discard to statement terminal", func(t *testing.T) {
+		ses, execCtx, op := newState(t)
+		defer ses.Close()
+		defer execCtx.Close()
+
+		var calls []bool
+		ses.EnqueueKafkaProgress(func(publish bool) { calls = append(calls, publish) })
+		execCtx.stmt = &tree.RollbackTransaction{}
+		execCtx.txnOpt = FeTxnOption{byRollback: true, autoCommit: false}
+
+		require.NoError(t, ses.GetTxnHandler().Rollback(execCtx))
+		require.Equal(t, 1, op.rollbackCalls)
+		require.Empty(t, calls)
+		require.Len(t, ses.kafkaProgressQueue, 1)
+
+		// executeStmtWithResponse owns this terminal action.
+		ses.FinalizeKafkaProgress(false)
+		require.Equal(t, []bool{false}, calls)
+		require.Empty(t, ses.kafkaProgressQueue)
+	})
+}
+
+func TestFinishTxnRollsBackWhenRequestIsCancelled(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		stmt tree.Statement
+	}{
+		{name: "insert", stmt: &tree.Insert{}},
+		// LOAD DATA executes its fanout scopes before the frontend owns the
+		// statement terminal action.  A canceled request must therefore take
+		// the same no-commit/rollback path after those scopes have returned.
+		{name: "load data", stmt: &tree.Load{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+			ses := newTestSession(t, ctrl)
+			defer ses.Close()
+			eng := mock_frontend.NewMockEngine(ctrl)
+			eng.EXPECT().Hints().Return(engine.Hints{
+				CommitOrRollbackTimeout: time.Second,
+			}).AnyTimes()
+			ses.txnHandler.storage = eng
+
+			txnOp := newTestTxnOp()
+			txnOp.meta = txn.TxnMeta{
+				ID:     []byte{1, 2, 3, 4},
+				Status: txn.TxnStatus_Active,
+			}
+			txnOp.wp.readonly = false
+			ses.txnHandler.txnOp = txnOp
+			ses.txnHandler.txnCtx = ctx
+			ses.txnHandler.shareTxn = false
+
+			reqCtx, cancel := context.WithCancel(ctx)
+			cancel()
+			execCtx := newTestExecCtx(reqCtx, ctrl)
+			execCtx.ses = ses
+			execCtx.stmt = tc.stmt
+			execCtx.txnOpt = FeTxnOption{autoCommit: true}
+
+			err := finishTxnFunc(ses, nil, execCtx)
+			require.ErrorIs(t, err, context.Canceled)
+			require.Equal(t, 0, txnOp.commitCalls)
+			require.Equal(t, 1, txnOp.rollbackCalls)
+		})
+	}
+}
+
+func TestLineageOwnerLifecycleValidationCoversEveryTerminalCommitPath(t *testing.T) {
+	type terminalCommitPath struct {
+		name string
+		run  func(*TxnHandler, *ExecCtx) error
+	}
+	paths := []terminalCommitPath{
+		{
+			name: "implicit commit before rename",
+			run: func(th *TxnHandler, execCtx *ExecCtx) error {
+				execCtx.stmt = &tree.RenameTable{}
+				return th.commitBeforeStatement(execCtx)
+			},
+		},
+		{
+			name: "explicit commit",
+			run: func(th *TxnHandler, execCtx *ExecCtx) error {
+				execCtx.txnOpt.byCommit = true
+				return th.Commit(execCtx)
+			},
+		},
+		{
+			name: "replacement begin",
+			run: func(th *TxnHandler, execCtx *ExecCtx) error {
+				execCtx.txnOpt.byBegin = true
+				execCtx.txnOpt.autoCommit = true
+				return th.Create(execCtx)
+			},
+		},
+		{
+			name: "enable autocommit",
+			run: func(th *TxnHandler, execCtx *ExecCtx) error {
+				return th.SetAutocommit(execCtx, false, true)
+			},
+		},
+	}
+
+	for _, path := range paths {
+		t.Run(path.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+			ses := newTestSession(t, ctrl)
+			t.Cleanup(ses.Close)
+			eng := mock_frontend.NewMockEngine(ctrl)
+			eng.EXPECT().Hints().Return(engine.Hints{
+				CommitOrRollbackTimeout: time.Second,
+			}).AnyTimes()
+			ses.txnHandler.storage = eng
+
+			op := newTestTxnOp()
+			op.meta = txn.TxnMeta{ID: []byte{1}, Status: txn.TxnStatus_Active}
+			ses.txnHandler.txnOp = op
+			ses.txnHandler.txnCtx = ctx
+			ses.txnHandler.optionBits = OPTION_BEGIN | OPTION_NOT_AUTOCOMMIT
+			ses.txnHandler.lineageOwnerLifecycleValidation = true
+
+			wantErr := errors.New("lifecycle validation failed")
+			sqlExecutor := &lineageLifecycleCommitSQLExecutor{
+				err: wantErr,
+				beforeExec: func() {
+					require.Zero(t, op.commitCalls,
+						"lifecycle validation must precede physical commit")
+				},
+			}
+			rt := moruntime.ServiceRuntime(ses.GetService())
+			oldExecutor, hadOldExecutor := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+			if hadOldExecutor {
+				require.True(t, rt.CompareAndDeleteGlobalVariables(
+					moruntime.InternalSQLExecutor, oldExecutor))
+			}
+			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, sqlExecutor)
+			t.Cleanup(func() {
+				require.True(t, rt.CompareAndDeleteGlobalVariables(
+					moruntime.InternalSQLExecutor, sqlExecutor))
+				if hadOldExecutor {
+					rt.SetGlobalVariables(moruntime.InternalSQLExecutor, oldExecutor)
+				}
+			})
+
+			execCtx := newTestExecCtx(ctx, ctrl)
+			execCtx.ses = ses
+			t.Cleanup(execCtx.Close)
+			err := path.run(ses.GetTxnHandler(), execCtx)
+
+			require.ErrorIs(t, err, wantErr)
+			require.Equal(t, []string{
+				databranchutils.LineageOwnerLifecycleLockSQL(),
+			}, sqlExecutor.sqls)
+			require.Len(t, sqlExecutor.opts, 1)
+			require.Same(t, op, sqlExecutor.opts[0].Txn())
+			require.Zero(t, op.commitCalls)
+			require.Equal(t, 1, op.rollbackCalls)
+			require.False(t, ses.GetTxnHandler().InActiveTxn())
+		})
+	}
+}
+
+func TestCommitUsesRequestContext(t *testing.T) {
+	type requestContextKey struct{}
+
+	ctrl := gomock.NewController(t)
+	txnCtx := defines.AttachAccountId(context.Background(), sysAccountID)
+	marker := "request-context"
+	reqCtx := context.WithValue(txnCtx, requestContextKey{}, marker)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Hints().Return(engine.Hints{
+		CommitOrRollbackTimeout: time.Second,
+	}).AnyTimes()
+	ses.txnHandler.storage = eng
+
+	txnOp := newTestTxnOp()
+	txnOp.meta = txn.TxnMeta{
+		ID:     []byte{1, 2, 3, 4},
+		Status: txn.TxnStatus_Active,
+	}
+	txnOp.wp.readonly = false
+	ses.txnHandler.txnOp = txnOp
+	ses.txnHandler.txnCtx = txnCtx
+	ses.txnHandler.shareTxn = false
+
+	execCtx := newTestExecCtx(reqCtx, ctrl)
+	execCtx.ses = ses
+	execCtx.stmt = &tree.Insert{}
+	execCtx.txnOpt = FeTxnOption{autoCommit: true}
+
+	require.NoError(t, finishTxnFunc(ses, nil, execCtx))
+	require.Equal(t, 1, txnOp.commitCalls)
+	require.Equal(t, marker, txnOp.commitCtx.Value(requestContextKey{}))
+}
+
+func TestReadOnlyCommitIgnoresKillDuringCommit(t *testing.T) {
+	type requestContextKey struct{}
+
+	ctrl := gomock.NewController(t)
+	txnCtx := defines.AttachAccountId(context.Background(), sysAccountID)
+	marker := "request-context"
+	reqCtx, cancel := context.WithCancel(context.WithValue(txnCtx, requestContextKey{}, marker))
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ses.setRoutine(&Routine{})
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Hints().Return(engine.Hints{
+		CommitOrRollbackTimeout: time.Second,
+	}).AnyTimes()
+	ses.txnHandler.storage = eng
+
+	txnOp := newTestTxnOp()
+	txnOp.meta = txn.TxnMeta{
+		ID:     []byte{1, 2, 3, 4},
+		Status: txn.TxnStatus_Active,
+	}
+	txnOp.commitCheckContext = true
+	txnOp.commitHook = cancel
+	txnOp.wp.readonly = true
+	ses.txnHandler.txnOp = txnOp
+	ses.txnHandler.txnCtx = txnCtx
+	ses.txnHandler.shareTxn = false
+
+	execCtx := newTestExecCtx(reqCtx, ctrl)
+	execCtx.ses = ses
+	execCtx.stmt = &tree.Select{}
+	execCtx.txnOpt = FeTxnOption{autoCommit: true}
+
+	require.NoError(t, finishTxnFunc(ses, nil, execCtx))
+	require.ErrorIs(t, reqCtx.Err(), context.Canceled)
+	require.NotNil(t, txnOp.commitCtx)
+	require.Nil(t, txnOp.commitCtx.Value(requestContextKey{}))
+	require.Equal(t, 1, txnOp.commitCalls)
+	require.Equal(t, 0, txnOp.rollbackCalls)
+}
+
+func TestWritableDQLCommitPropagatesKillDuringCommit(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	txnCtx := defines.AttachAccountId(context.Background(), sysAccountID)
+	reqCtx, cancel := context.WithCancel(txnCtx)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Hints().Return(engine.Hints{
+		CommitOrRollbackTimeout: time.Second,
+	}).AnyTimes()
+	ses.txnHandler.storage = eng
+
+	txnOp := newTestTxnOp()
+	txnOp.meta = txn.TxnMeta{
+		ID:     []byte{1, 2, 3, 4},
+		Status: txn.TxnStatus_Active,
+	}
+	txnOp.commitCheckContext = true
+	txnOp.commitHook = cancel
+	txnOp.wp.readonly = false
+	ses.txnHandler.txnOp = txnOp
+	ses.txnHandler.txnCtx = txnCtx
+	ses.txnHandler.shareTxn = false
+
+	execCtx := newTestExecCtx(reqCtx, ctrl)
+	execCtx.ses = ses
+	execCtx.stmt = &tree.Select{}
+	execCtx.txnOpt = FeTxnOption{autoCommit: true}
+
+	err := finishTxnFunc(ses, nil, execCtx)
+	require.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, reqCtx.Err(), context.Canceled)
+	require.Equal(t, 1, txnOp.commitCalls)
+	require.Equal(t, 0, txnOp.rollbackCalls)
+	require.Equal(t, txn.TxnStatus_Active, txnOp.meta.Status)
+}
+
 func TestCommitTxnUnknownInvalidatesTxnOperator(t *testing.T) {
 	convey.Convey("commit ErrTxnUnknown invalidates the frontend txn operator", t, func() {
 		ctrl := gomock.NewController(t)
@@ -809,6 +1352,7 @@ func TestCommitTxnUnknownInvalidatesTxnOperator(t *testing.T) {
 			Status: txn.TxnStatus_Active,
 		}
 		txnOp.commitErr = moerr.NewTxnUnknown(ctx, "test")
+		txnOp.wp.SetHaveDDL(true)
 		ses.txnHandler.txnOp = txnOp
 		ses.txnHandler.txnCtx = ctx
 		ses.txnHandler.shareTxn = false
@@ -822,8 +1366,345 @@ func TestCommitTxnUnknownInvalidatesTxnOperator(t *testing.T) {
 		convey.So(moerr.IsMoErrCode(err, moerr.ErrTxnUnknown), convey.ShouldBeTrue)
 		convey.So(txnOp.commitCalls, convey.ShouldEqual, 1)
 		convey.So(txnOp.rollbackCalls, convey.ShouldEqual, 0)
+		convey.So(ses.getDDLVersion(), convey.ShouldEqual, uint64(1))
 		convey.So(ses.GetTxnHandler().GetTxn(), convey.ShouldBeNil)
 		convey.So(ses.GetTxnHandler().InActiveTxn(), convey.ShouldBeFalse)
+	})
+}
+
+func TestFinishTxnPreservesEOFOnRollback(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Hints().Return(engine.Hints{
+		CommitOrRollbackTimeout: time.Second,
+	}).AnyTimes()
+	ses.txnHandler.storage = eng
+
+	txnOp := newTestTxnOp()
+	txnOp.meta = txn.TxnMeta{
+		ID:     []byte{1, 2, 3, 4},
+		Status: txn.TxnStatus_Active,
+	}
+	ses.txnHandler.txnOp = txnOp
+	ses.txnHandler.txnCtx = ctx
+	ses.txnHandler.shareTxn = false
+
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	execCtx.stmt = &tree.Select{}
+	execCtx.txnOpt = FeTxnOption{autoCommit: true}
+
+	var err error
+	require.NotPanics(t, func() {
+		err = finishTxnFunc(ses, io.EOF, execCtx)
+	})
+	require.ErrorIs(t, err, io.EOF)
+	require.Equal(t, 1, txnOp.rollbackCalls)
+	require.Nil(t, ses.GetTxnHandler().GetTxn())
+}
+
+func TestCommitFailureAdvancesSessionGeneration(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ses := newTestSession(t, ctrl)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Hints().Return(engine.Hints{
+		CommitOrRollbackTimeout: time.Second,
+	}).AnyTimes()
+	ses.txnHandler.storage = eng
+
+	txnOp := newTestTxnOp()
+	txnOp.meta = txn.TxnMeta{
+		ID:     []byte{1, 2, 3, 4},
+		Status: txn.TxnStatus_Active,
+	}
+	txnOp.wp.SetHaveDDL(true)
+	txnOp.commitErr = moerr.NewInternalError(ctx, "commit failed")
+	ses.txnHandler.txnOp = txnOp
+	ses.txnHandler.txnCtx = ctx
+	ses.txnHandler.shareTxn = false
+
+	ec := newTestExecCtx(ctx, ctrl)
+	ec.ses = ses
+	ec.stmt = &tree.Select{}
+	ec.txnOpt = FeTxnOption{autoCommit: true}
+
+	err := finishTxnFunc(ses, nil, ec)
+	if err == nil {
+		t.Fatal("expected commit failure")
+	}
+	if txnOp.commitCalls != 1 {
+		t.Fatalf("expected one commit call, got %d", txnOp.commitCalls)
+	}
+	if got := ses.getDDLVersion(); got != 1 {
+		t.Fatalf("unexpected DDL generation: got %d, want 1", got)
+	}
+}
+
+func TestRollbackDDLAdvancesSessionGeneration(t *testing.T) {
+	tests := []struct {
+		name            string
+		haveDDL         bool
+		rollbackError   bool
+		statementError  bool
+		expectedVersion uint64
+	}{
+		{
+			name:            "explicit rollback with DDL",
+			haveDDL:         true,
+			expectedVersion: 1,
+		},
+		{
+			name:            "error rollback with DDL",
+			haveDDL:         true,
+			statementError:  true,
+			expectedVersion: 1,
+		},
+		{
+			name:            "rollback without DDL",
+			expectedVersion: 0,
+		},
+		{
+			name:            "failed rollback with DDL",
+			haveDDL:         true,
+			rollbackError:   true,
+			expectedVersion: 1,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+			ses := newTestSession(t, ctrl)
+			eng := mock_frontend.NewMockEngine(ctrl)
+			eng.EXPECT().Hints().Return(engine.Hints{
+				CommitOrRollbackTimeout: time.Second,
+			}).AnyTimes()
+			ses.txnHandler.storage = eng
+
+			txnOp := newTestTxnOp()
+			txnOp.meta = txn.TxnMeta{
+				ID:     []byte{1, 2, 3, 4},
+				Status: txn.TxnStatus_Active,
+			}
+			txnOp.wp.SetHaveDDL(test.haveDDL)
+			if test.rollbackError {
+				txnOp.mod = modRollbackError
+			}
+			ses.txnHandler.txnOp = txnOp
+			ses.txnHandler.txnCtx = ctx
+			ses.txnHandler.shareTxn = false
+
+			ec := newTestExecCtx(ctx, ctrl)
+			ec.ses = ses
+			ec.stmt = &tree.RollbackTransaction{}
+			ec.txnOpt = FeTxnOption{autoCommit: true}
+
+			var err error
+			if test.statementError {
+				ec.stmt = &tree.Select{}
+				err = finishTxnFunc(
+					ses,
+					moerr.NewInternalError(ctx, "statement failed"),
+					ec,
+				)
+			} else {
+				ec.txnOpt.byRollback = true
+				err = ses.GetTxnHandler().Rollback(ec)
+			}
+			if test.rollbackError && err == nil {
+				t.Fatal("expected rollback failure")
+			}
+			if !test.rollbackError && test.statementError && err == nil {
+				t.Fatal("expected the original statement failure")
+			}
+			if !test.rollbackError && !test.statementError && err != nil {
+				t.Fatalf("rollback failed: %v", err)
+			}
+			if txnOp.rollbackCalls != 1 {
+				t.Fatalf("expected one rollback call, got %d", txnOp.rollbackCalls)
+			}
+			if got := ses.getDDLVersion(); got != test.expectedVersion {
+				t.Fatalf(
+					"unexpected DDL generation: got %d, want %d",
+					got,
+					test.expectedVersion,
+				)
+			}
+		})
+	}
+}
+
+func TestCommitPanicRollbackAdvancesSessionGeneration(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ses := newTestSession(t, ctrl)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Hints().Return(engine.Hints{
+		CommitOrRollbackTimeout: time.Second,
+	}).AnyTimes()
+	ses.txnHandler.storage = eng
+
+	txnOp := newTestTxnOp()
+	txnOp.meta = txn.TxnMeta{
+		ID:     []byte{1, 2, 3, 4},
+		Status: txn.TxnStatus_Active,
+	}
+	txnOp.wp.SetHaveDDL(true)
+	txnOp.commitPanic = true
+	ses.txnHandler.txnOp = txnOp
+	ses.txnHandler.txnCtx = ctx
+	ses.txnHandler.shareTxn = false
+
+	ec := newTestExecCtx(ctx, ctrl)
+	ec.ses = ses
+	ec.stmt = &tree.Select{}
+	ec.txnOpt = FeTxnOption{autoCommit: true}
+
+	err := finishTxnFunc(ses, nil, ec)
+	if err == nil {
+		t.Fatal("expected commit panic error")
+	}
+	if txnOp.commitCalls != 1 {
+		t.Fatalf("expected one commit call, got %d", txnOp.commitCalls)
+	}
+	if txnOp.rollbackCalls != 1 {
+		t.Fatalf("expected one rollback call, got %d", txnOp.rollbackCalls)
+	}
+	if got := ses.getDDLVersion(); got != 1 {
+		t.Fatalf("unexpected DDL generation: got %d, want 1", got)
+	}
+}
+
+func TestTempTableAliasesFollowTransactionLifecycle(t *testing.T) {
+	type testState struct {
+		ses   *Session
+		op    *testTxnOp
+		exec  *ExecCtx
+		close func()
+	}
+	newState := func(t *testing.T, txnID byte) testState {
+		ctrl := gomock.NewController(t)
+		ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+		ses := newTestSession(t, ctrl)
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().Hints().Return(engine.Hints{
+			CommitOrRollbackTimeout: time.Second,
+		}).AnyTimes()
+		ses.txnHandler.storage = eng
+
+		op := newTestTxnOp()
+		op.meta = txn.TxnMeta{
+			ID:     []byte{txnID},
+			Status: txn.TxnStatus_Active,
+		}
+		ses.txnHandler.txnOp = op
+		ses.txnHandler.txnCtx = ctx
+		ses.txnHandler.shareTxn = false
+		ses.txnHandler.optionBits = OPTION_BEGIN | OPTION_AUTOCOMMIT
+
+		execCtx := newTestExecCtx(ctx, ctrl)
+		execCtx.ses = ses
+		execCtx.stmt = &tree.Select{}
+		execCtx.txnOpt = FeTxnOption{autoCommit: true}
+		return testState{
+			ses:  ses,
+			op:   op,
+			exec: execCtx,
+			close: func() {
+				execCtx.Close()
+				ctrl.Finish()
+			},
+		}
+	}
+
+	t.Run("commit preserves aliases", func(t *testing.T) {
+		state := newState(t, 1)
+		defer state.close()
+		state.ses.AddTempTable("db", "created", "real-created")
+		state.exec.txnOpt.byCommit = true
+
+		require.NoError(t, state.ses.GetTxnHandler().Commit(state.exec))
+
+		realName, ok := state.ses.GetTempTable("db", "created")
+		require.True(t, ok)
+		require.Equal(t, "real-created", realName)
+		require.Empty(t, state.ses.tempTableTxnJournals)
+	})
+
+	t.Run("rollback restores aliases", func(t *testing.T) {
+		state := newState(t, 2)
+		defer state.close()
+		state.ses.AddTempTable("db", "created", "real-created")
+		state.exec.txnOpt.byRollback = true
+
+		require.NoError(t, state.ses.GetTxnHandler().Rollback(state.exec))
+
+		_, ok := state.ses.GetTempTable("db", "created")
+		require.False(t, ok)
+		require.Empty(t, state.ses.tempTableTxnJournals)
+	})
+
+	t.Run("statement rollback preserves prior transaction changes", func(t *testing.T) {
+		state := newState(t, 3)
+		defer state.close()
+		state.ses.AddTempTable("db", "committed-statement", "real-committed")
+		state.ses.commitTempTableStatement(
+			tempTableTxnKey(state.op),
+			tempTableStatementKey(state.ses, false),
+		)
+		state.op.wp.StartStatement()
+		require.NoError(t, state.op.wp.IncrStatementID(context.Background(), false))
+		state.ses.AddTempTable("db", "failed-statement", "real-failed")
+
+		require.NoError(t, state.ses.GetTxnHandler().Rollback(state.exec))
+
+		_, ok := state.ses.GetTempTable("db", "failed-statement")
+		require.False(t, ok)
+		realName, ok := state.ses.GetTempTable("db", "committed-statement")
+		require.True(t, ok)
+		require.Equal(t, "real-committed", realName)
+		require.True(t, state.ses.GetTxnHandler().InActiveTxn())
+		state.op.wp.EndStatement()
+	})
+
+	t.Run("known commit failure restores aliases", func(t *testing.T) {
+		state := newState(t, 4)
+		defer state.close()
+		state.ses.addTempTable("db", "existing", "real-existing", "", "")
+		state.ses.RemoveTempTable("db", "existing")
+		state.ses.AddTempTable("db", "created", "real-created")
+		state.op.commitErr = moerr.NewInternalErrorNoCtx("commit failed")
+		state.exec.txnOpt.byCommit = true
+
+		require.ErrorContains(t, state.ses.GetTxnHandler().Commit(state.exec), "commit failed")
+
+		realName, ok := state.ses.GetTempTable("db", "existing")
+		require.True(t, ok)
+		require.Equal(t, "real-existing", realName)
+		_, ok = state.ses.GetTempTable("db", "created")
+		require.False(t, ok)
+		require.Empty(t, state.ses.tempTableTxnJournals)
+	})
+
+	t.Run("unknown commit result preserves aliases for cleanup", func(t *testing.T) {
+		state := newState(t, 5)
+		defer state.close()
+		state.ses.AddTempTable("db", "created", "real-created")
+		state.op.commitErr = moerr.NewTxnUnknown(state.exec.reqCtx, "test")
+		state.exec.txnOpt.byCommit = true
+
+		err := state.ses.GetTxnHandler().Commit(state.exec)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnUnknown))
+
+		realName, ok := state.ses.GetTempTable("db", "created")
+		require.True(t, ok)
+		require.Equal(t, "real-created", realName)
+		require.Empty(t, state.ses.tempTableTxnJournals)
 	})
 }
 
@@ -837,8 +1718,13 @@ type testTxnOp struct {
 	meta                 txn.TxnMeta
 	wp                   *testWorkspace
 	mod                  int
+	commitTS             timestamp.Timestamp
 	commitErr            error
+	commitPanic          bool
 	commitCalls          int
+	commitCtx            context.Context
+	commitHook           func()
+	commitCheckContext   bool
 	rollbackCalls        int
 	checkLockTableBinds  func(context.Context) error
 	checkLockTableChecks int
@@ -930,9 +1816,22 @@ func (txnop *testTxnOp) WriteAndCommit(ctx context.Context, ops []txn.TxnRequest
 
 func (txnop *testTxnOp) Commit(ctx context.Context) error {
 	txnop.commitCalls++
+	txnop.commitCtx = ctx
+	if txnop.commitHook != nil {
+		txnop.commitHook()
+	}
+	if txnop.commitCheckContext {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+	if txnop.commitPanic {
+		panic("commit panic")
+	}
 	if txnop.commitErr != nil {
 		return txnop.commitErr
 	}
+	txnop.meta.CommitTS = txnop.commitTS
 	txnop.meta.Status = txn.TxnStatus_Committed
 	return nil
 }
@@ -1001,10 +1900,6 @@ func (txnop *testTxnOp) AppendEventCallback(event client.EventType, callbacks ..
 func (txnop *testTxnOp) Debug(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error) {
 	//TODO implement me
 	panic("implement me")
-}
-
-func (txnop *testTxnOp) NextSequence() uint64 {
-	return 0
 }
 
 func (txnop *testTxnOp) EnterRunSqlWithTokenAndSQL(_ context.CancelFunc, _ string) uint64 {
@@ -1450,4 +2345,210 @@ func TestSetAutocommitStatusInResponse(t *testing.T) {
 			convey.So(serverStatus&SERVER_STATUS_AUTOCOMMIT, convey.ShouldEqual, SERVER_STATUS_AUTOCOMMIT)
 		})
 	})
+}
+
+func TestRequiresPessimisticObjectLifecycleTxn(t *testing.T) {
+	persistent := tree.NewTableName(tree.Identifier("persistent"), tree.ObjectNamePrefix{
+		SchemaName: tree.Identifier("db"), ExplicitSchema: true,
+	}, nil)
+	for _, stmt := range []tree.Statement{
+		&tree.TruncateTable{},
+		&tree.CreatePitr{},
+		&tree.DropPitr{},
+		&tree.AlterPitr{},
+		&tree.DropDatabase{},
+		&tree.DropTable{Names: tree.TableNames{persistent}},
+		&tree.DropView{},
+		&tree.DropSequence{},
+		&tree.AlterView{},
+		&tree.AlterSequence{},
+		&tree.CreateView{Replace: true},
+		&tree.DataBranchDeleteTable{},
+		&tree.DataBranchDeleteDatabase{},
+		&tree.DataBranchDiff{},
+		&tree.DataBranchMerge{},
+		&tree.DataBranchPick{},
+	} {
+		require.True(t, requiresPessimisticObjectLifecycleTxn(nil, stmt, ""))
+	}
+	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.CreateView{}, ""))
+	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.DropTable{Temporary: true}, ""))
+	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.Select{}, ""))
+
+	ses := &Session{tempTables: make(map[string]string), tempTablesRev: make(map[string]string)}
+	ses.AddTempTable("db", "alias", "__mo_temp_alias")
+	alias := tree.NewTableName(tree.Identifier("alias"), tree.ObjectNamePrefix{
+		SchemaName: tree.Identifier("db"), ExplicitSchema: true,
+	}, nil)
+	require.False(t, requiresPessimisticObjectLifecycleTxn(ses, &tree.DropTable{
+		Names: tree.TableNames{alias},
+	}, ""))
+	require.True(t, requiresPessimisticObjectLifecycleTxn(ses, &tree.DropTable{
+		Names: tree.TableNames{alias, persistent},
+	}, ""))
+
+	for _, stmt := range []tree.Statement{
+		&tree.AlterTable{},
+		&tree.RenameTable{},
+		&tree.CloneTable{},
+		&tree.CloneDatabase{},
+		&tree.DataBranchCreateTable{},
+		&tree.DataBranchCreateDatabase{},
+	} {
+		require.True(t, requiresPessimisticLifecycleModeTxn(nil, stmt, ""))
+		require.False(t, requiresPessimisticObjectLifecycleTxn(nil, stmt, ""))
+	}
+	require.False(t, requiresPessimisticLifecycleModeTxn(nil, &tree.TruncateTable{}, ""))
+	require.False(t, requiresPessimisticLifecycleModeTxn(nil, &tree.Select{}, ""))
+
+	// The session alias wins over a persistent table of the same name, while
+	// qualified names and prepared-statement default databases remain scoped.
+	temp := tree.NewTableName(tree.Identifier("alias"), tree.ObjectNamePrefix{}, nil)
+	qualifiedTemp := tree.NewTableName(tree.Identifier("alias"), tree.ObjectNamePrefix{
+		SchemaName: tree.Identifier("db"), ExplicitSchema: true,
+	}, nil)
+	qualifiedOther := tree.NewTableName(tree.Identifier("alias"), tree.ObjectNamePrefix{
+		SchemaName: tree.Identifier("other"), ExplicitSchema: true,
+	}, nil)
+	require.False(t, requiresPessimisticLifecycleModeTxn(ses, &tree.AlterTable{Table: temp}, "db"))
+	require.False(t, requiresPessimisticLifecycleModeTxn(ses, &tree.AlterTable{Table: qualifiedTemp}, "other"))
+	require.True(t, requiresPessimisticLifecycleModeTxn(ses, &tree.AlterTable{Table: temp}, "other"))
+	require.True(t, requiresPessimisticLifecycleModeTxn(ses, &tree.AlterTable{Table: qualifiedOther}, "db"))
+	require.True(t, requiresPessimisticLifecycleModeTxn(nil, &tree.AlterTable{Table: qualifiedTemp}, "db"))
+}
+
+func TestCreateRollsBackPublishedGenerationOnStorageInitFailure(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	storageErr := moerr.NewInternalErrorNoCtx("storage initialization failed")
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(storageErr)
+	eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second})
+	ses.GetTxnHandler().storage = eng
+
+	op := newTestTxnOp()
+	op.meta = txn.TxnMeta{ID: []byte{1}, Status: txn.TxnStatus_Active}
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(op, nil)
+	originalTxnClient := getPu("").TxnClient
+	defer func() { getPu("").TxnClient = originalTxnClient }()
+	getPu("").TxnClient = txnClient
+
+	err := ses.GetTxnHandler().Create(&ExecCtx{
+		reqCtx: ctx,
+		ses:    ses,
+		stmt:   &tree.Select{},
+		txnOpt: FeTxnOption{autoCommit: true},
+	})
+	require.ErrorIs(t, err, storageErr)
+	require.Nil(t, ses.GetTxnHandler().GetTxn())
+	require.Equal(t, 1, op.rollbackCalls)
+}
+
+func TestCreateRollsBackPublishedGenerationOnValidityFailure(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil)
+	eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second})
+	ses.GetTxnHandler().storage = eng
+
+	op := newTestTxnOp()
+	op.meta = txn.TxnMeta{ID: []byte{2}, Status: txn.TxnStatus_Aborted}
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(op, nil)
+	originalTxnClient := getPu("").TxnClient
+	defer func() { getPu("").TxnClient = originalTxnClient }()
+	getPu("").TxnClient = txnClient
+
+	err := ses.GetTxnHandler().Create(&ExecCtx{
+		reqCtx: ctx,
+		ses:    ses,
+		stmt:   &tree.Select{},
+		txnOpt: FeTxnOption{autoCommit: true},
+	})
+	require.Error(t, err)
+	require.Nil(t, ses.GetTxnHandler().GetTxn())
+	require.Equal(t, 1, op.rollbackCalls)
+}
+
+func TestObjectLifecycleRejectsExistingUnsafeTxn(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	handler := ses.GetTxnHandler()
+	op := newTestTxnOp()
+	op.meta = txn.TxnMeta{
+		ID: []byte{1}, Status: txn.TxnStatus_Active,
+		Mode: txn.TxnMode_Optimistic, Isolation: txn.TxnIsolation_SI,
+	}
+	handler.txnOp = op
+	handler.txnCtx = ctx
+
+	err := handler.Create(&ExecCtx{
+		reqCtx: ctx,
+		ses:    ses,
+		txnOpt: FeTxnOption{forcePessimisticObjectLifecycle: true},
+	})
+	require.ErrorContains(t, err, "require an existing pessimistic RC transaction")
+	require.Same(t, op, handler.GetTxn())
+	require.Zero(t, op.rollbackCalls)
+
+	op.meta.Mode = txn.TxnMode_Pessimistic
+	err = handler.Create(&ExecCtx{
+		reqCtx: ctx,
+		ses:    ses,
+		txnOpt: FeTxnOption{forcePessimisticObjectLifecycle: true},
+	})
+	require.ErrorContains(t, err, "require an existing pessimistic RC transaction")
+	require.Same(t, op, handler.GetTxn())
+	require.Zero(t, op.rollbackCalls)
+
+	op.meta.Isolation = txn.TxnIsolation_RC
+	require.NoError(t, handler.Create(&ExecCtx{
+		reqCtx: ctx,
+		ses:    ses,
+		txnOpt: FeTxnOption{forcePessimisticObjectLifecycle: true},
+	}))
+	require.Same(t, op, handler.GetTxn())
+}
+
+func TestFixedSnapshotLifecycleRequiresPessimisticModeAndPreservesSI(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	handler := ses.GetTxnHandler()
+	op := newTestTxnOp()
+	op.meta = txn.TxnMeta{
+		ID: []byte{1}, Status: txn.TxnStatus_Active,
+		Mode: txn.TxnMode_Optimistic, Isolation: txn.TxnIsolation_SI,
+	}
+	handler.txnOp = op
+	handler.txnCtx = ctx
+
+	err := handler.Create(&ExecCtx{
+		reqCtx: ctx,
+		ses:    ses,
+		txnOpt: FeTxnOption{forcePessimisticLifecycleMode: true},
+	})
+	require.ErrorContains(t, err, "require an existing pessimistic transaction")
+	require.Same(t, op, handler.GetTxn())
+	require.Zero(t, op.rollbackCalls)
+
+	op.meta.Mode = txn.TxnMode_Pessimistic
+	require.NoError(t, handler.Create(&ExecCtx{
+		reqCtx: ctx,
+		ses:    ses,
+		txnOpt: FeTxnOption{forcePessimisticLifecycleMode: true},
+	}))
+	require.Same(t, op, handler.GetTxn())
+	require.Equal(t, txn.TxnIsolation_SI, op.Txn().Isolation)
 }

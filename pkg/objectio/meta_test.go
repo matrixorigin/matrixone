@@ -17,13 +17,45 @@ package objectio
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/stretchr/testify/assert"
 )
+
+func TestObjectMetadataReadersRejectEmptyLocation(t *testing.T) {
+	ctx := context.Background()
+
+	_, err := FastLoadObjectMeta(ctx, nil, false, nil)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+
+	for _, test := range []struct {
+		name     string
+		location Location
+	}{
+		{name: "missing encoding"},
+		{
+			name:     "truncated encoding",
+			location: append(Location{1}, make(Location, LocationLen-2)...),
+		},
+		{name: "zero object name", location: make(Location, LocationLen)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := FastLoadObjectMeta(ctx, &test.location, false, nil)
+			assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+
+			_, err = FastLoadBF(ctx, test.location, false, nil)
+			assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+
+			_, err = LoadBFWithMeta(ctx, nil, test.location, nil)
+			assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+		})
+	}
+}
 
 func TestBuildMetaData(t *testing.T) {
 	objectMeta := BuildMetaData(20, 30)
@@ -31,6 +63,84 @@ func TestBuildMetaData(t *testing.T) {
 		blkMeta := objectMeta.GetBlockMeta(uint32(i))
 		assert.Equal(t, i, blkMeta.BlockHeader().Sequence())
 		assert.Equal(t, uint16(30), blkMeta.BlockHeader().ColumnCount())
+	}
+}
+
+type dedupLoadWaiterContext struct {
+	context.Context
+	admitted chan struct{}
+	once     sync.Once
+}
+
+const dedupLoadWaiterAdmissionTimeout = time.Second
+
+// dedupLoad calls Done only after it finds an existing load call. Observing
+// that call gives these tests a phase barrier without relying on scheduling.
+func (c *dedupLoadWaiterContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.admitted) })
+	return c.Context.Done()
+}
+
+func newDedupLoadWaiterContext() (*dedupLoadWaiterContext, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &dedupLoadWaiterContext{
+		Context:  ctx,
+		admitted: make(chan struct{}),
+	}, cancel
+}
+
+func waitForDedupLoadWaiterAdmission(
+	t *testing.T,
+	waiterCtx *dedupLoadWaiterContext,
+	waiterDone <-chan struct{},
+	ownerDone <-chan struct{},
+	releaseOwner func(),
+	cancelWaiter context.CancelFunc,
+) {
+	t.Helper()
+
+	timer := time.NewTimer(dedupLoadWaiterAdmissionTimeout)
+	defer timer.Stop()
+
+	select {
+	case <-waiterCtx.admitted:
+		return
+	case <-waiterDone:
+		cancelWaiter()
+		releaseOwner()
+		drainDedupLoadAfterAdmissionFailure(t, ownerDone, waiterDone)
+		t.Fatalf("dedup load waiter completed before admission")
+	case <-timer.C:
+		cancelWaiter()
+		releaseOwner()
+		drainDedupLoadAfterAdmissionFailure(t, ownerDone, waiterDone)
+		t.Fatalf("timed out waiting for dedup load waiter admission")
+	}
+}
+
+func drainDedupLoadAfterAdmissionFailure(
+	t *testing.T,
+	ownerDone <-chan struct{},
+	waiterDone <-chan struct{},
+) {
+	t.Helper()
+	if !waitForDedupLoadCompletion(ownerDone) {
+		t.Errorf("dedup load owner did not exit after admission failure")
+	}
+	if !waitForDedupLoadCompletion(waiterDone) {
+		t.Errorf("dedup load waiter did not exit after admission failure")
+	}
+}
+
+func waitForDedupLoadCompletion(done <-chan struct{}) bool {
+	timer := time.NewTimer(dedupLoadWaiterAdmissionTimeout)
+	defer timer.Stop()
+
+	select {
+	case <-done:
+		return true
+	case <-timer.C:
+		return false
 	}
 }
 
@@ -45,11 +155,13 @@ func TestDedupLoadCleansUpAfterPanic(t *testing.T) {
 	key[0] = 1
 	started := make(chan struct{})
 	release := make(chan struct{})
-	panicDone := make(chan any, 1)
+	ownerDone := make(chan struct{})
+	var panicValue any
 
 	go func() {
 		defer func() {
-			panicDone <- recover()
+			panicValue = recover()
+			close(ownerDone)
 		}()
 		_, _ = dedupLoad(context.Background(), key, func() ([]byte, error) {
 			close(started)
@@ -59,20 +171,31 @@ func TestDedupLoadCleansUpAfterPanic(t *testing.T) {
 	}()
 
 	<-started
-	waiterDone := make(chan error, 1)
+	waiterCtx, cancelWaiter := newDedupLoadWaiterContext()
+	defer cancelWaiter()
+	waiterDone := make(chan struct{})
+	var waiterErr error
 	go func() {
-		_, err := dedupLoad(context.Background(), key, func() ([]byte, error) {
+		_, waiterErr = dedupLoad(waiterCtx, key, func() ([]byte, error) {
 			return nil, errors.New("unexpected waiter load")
 		})
-		waiterDone <- err
+		close(waiterDone)
 	}()
 
-	time.Sleep(10 * time.Millisecond)
+	waitForDedupLoadWaiterAdmission(
+		t,
+		waiterCtx,
+		waiterDone,
+		ownerDone,
+		func() { close(release) },
+		cancelWaiter,
+	)
 	close(release)
-	assert.Equal(t, "boom", <-panicDone)
-	err := <-waiterDone
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "dedup load did not complete")
+	<-ownerDone
+	<-waiterDone
+	assert.Equal(t, "boom", panicValue)
+	assert.Error(t, waiterErr)
+	assert.Contains(t, waiterErr.Error(), "dedup load did not complete")
 
 	metaLoadMu.Lock()
 	_, ok := metaLoadCalls[key]
@@ -97,12 +220,10 @@ func TestDedupLoadWaiterGetsSuccessfulOwnerValue(t *testing.T) {
 	key[0] = 8
 	started := make(chan struct{})
 	release := make(chan struct{})
-	waiterDone := make(chan struct {
-		val []byte
-		err error
-	}, 1)
+	ownerDone := make(chan struct{})
 
 	go func() {
+		defer close(ownerDone)
 		_, _ = dedupLoad(context.Background(), key, func() ([]byte, error) {
 			close(started)
 			<-release
@@ -111,21 +232,31 @@ func TestDedupLoadWaiterGetsSuccessfulOwnerValue(t *testing.T) {
 	}()
 	<-started
 
+	waiterCtx, cancelWaiter := newDedupLoadWaiterContext()
+	defer cancelWaiter()
+	waiterDone := make(chan struct{})
+	var waiterVal []byte
+	var waiterErr error
 	go func() {
-		v, err := dedupLoad(context.Background(), key, func() ([]byte, error) {
+		waiterVal, waiterErr = dedupLoad(waiterCtx, key, func() ([]byte, error) {
 			return nil, errors.New("unexpected waiter load")
 		})
-		waiterDone <- struct {
-			val []byte
-			err error
-		}{v, err}
+		close(waiterDone)
 	}()
 
-	time.Sleep(10 * time.Millisecond)
+	waitForDedupLoadWaiterAdmission(
+		t,
+		waiterCtx,
+		waiterDone,
+		ownerDone,
+		func() { close(release) },
+		cancelWaiter,
+	)
 	close(release)
-	result := <-waiterDone
-	assert.NoError(t, result.err)
-	assert.Equal(t, []byte("ok"), result.val)
+	<-ownerDone
+	<-waiterDone
+	assert.NoError(t, waiterErr)
+	assert.Equal(t, []byte("ok"), waiterVal)
 }
 
 func TestDedupLoadWaiterTimeoutWhileOwnerStillLoading(t *testing.T) {
@@ -173,33 +304,47 @@ func TestDedupLoadCleansUpAfterLoadCancel(t *testing.T) {
 	var key mataCacheKey
 	key[0] = 2
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	started := make(chan struct{})
-	ownerDone := make(chan error, 1)
+	ownerDone := make(chan struct{})
+	var ownerErr error
 
 	go func() {
-		_, err := dedupLoad(ctx, key, func() ([]byte, error) {
+		defer close(ownerDone)
+		_, ownerErr = dedupLoad(ctx, key, func() ([]byte, error) {
 			close(started)
 			<-ctx.Done()
 			return nil, ctx.Err()
 		})
-		ownerDone <- err
 	}()
 	<-started
 
+	waiterCtx, cancelWaiter := newDedupLoadWaiterContext()
+	defer cancelWaiter()
 	var waiterLoadCount atomic.Int32
-	waiterDone := make(chan error, 1)
+	waiterDone := make(chan struct{})
+	var waiterErr error
 	go func() {
-		_, err := dedupLoad(context.Background(), key, func() ([]byte, error) {
+		_, waiterErr = dedupLoad(waiterCtx, key, func() ([]byte, error) {
 			waiterLoadCount.Add(1)
 			return nil, errors.New("unexpected waiter load")
 		})
-		waiterDone <- err
+		close(waiterDone)
 	}()
 
-	time.Sleep(10 * time.Millisecond)
+	waitForDedupLoadWaiterAdmission(
+		t,
+		waiterCtx,
+		waiterDone,
+		ownerDone,
+		cancel,
+		cancelWaiter,
+	)
 	cancel()
-	assert.ErrorIs(t, <-ownerDone, context.Canceled)
-	assert.ErrorIs(t, <-waiterDone, context.Canceled)
+	<-ownerDone
+	<-waiterDone
+	assert.ErrorIs(t, ownerErr, context.Canceled)
+	assert.ErrorIs(t, waiterErr, context.Canceled)
 	assert.Zero(t, waiterLoadCount.Load())
 
 	metaLoadMu.Lock()

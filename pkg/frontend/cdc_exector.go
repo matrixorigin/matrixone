@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"regexp"
 	"strconv"
 	"sync"
@@ -36,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -44,7 +46,121 @@ import (
 
 var CDCExectorError_QueryDaemonTaskTimeout = moerr.NewInternalErrorNoCtx("query daemon task timeout")
 
+// All CDC tasks in one CN share the same admission controller because they
+// allocate from the same cgroup/host memory budget.
+var cnInitialSnapshotLimiter = cdc.NewInitialSnapshotLimiter()
+
 var CDCExeutorAllocator *mpool.MPool
+
+var (
+	eventCDCExecutorRestartStarting = logutil.Event{Name: "frontend.cdc.executor.restart.starting", Message: "CDC executor restart is starting a replacement generation"}
+	eventCDCExecutorRestartReady    = logutil.Event{Name: "frontend.cdc.executor.restart.ready", Message: "CDC executor replacement generation is running"}
+	eventCDCExecutorRestartFailed   = logutil.Event{Name: "frontend.cdc.executor.restart.start-failed", Message: "CDC executor replacement generation failed to start"}
+	eventCDCExecutorRestartClearErr = logutil.Event{Name: "frontend.cdc.executor.restart.clear-errors-failed", Message: "CDC executor could not clear table errors before restart"}
+)
+
+// cdcTestAdmissionHook is intentionally process-local.  Integration tests use
+// it to hold the asynchronous table-pipeline admission after CREATE CDC has
+// returned, so source commits can be placed deterministically between the
+// durable creation snapshot and executor startup.  Production has no hook
+// installed and therefore pays only the read-lock cost on this path.
+var cdcTestAdmissionHook struct {
+	sync.RWMutex
+	fn func()
+}
+
+// cdcTestCancelHook is a process-local barrier for lifecycle integration tests.
+// It is intentionally inert in production and lets a test hold a runner's
+// cancellation after local readers have stopped but before the cancellation
+// path returns to taskservice. It reports whether both callback and reader
+// drains completed within their bounds, so tests do not sample progress while
+// an old producer is still running.
+var cdcTestCancelHook struct {
+	sync.RWMutex
+	fn func(producersStopped bool)
+}
+
+// cdcTestCancelCompletionHook is a process-local completion observer for
+// lifecycle integration tests. It runs after the selected cancellation path
+// has finished all cleanup, so tests can distinguish the pre-cleanup barrier
+// above from the actual return of cancel.
+var cdcTestCancelCompletionHook struct {
+	sync.RWMutex
+	fn func(error)
+}
+
+// SetCDCTestAdmissionHookForTest installs a process-local CDC pipeline
+// admission hook and returns a restore function.  The hook is invoked outside
+// the mutex and must be deterministic/non-blocking unless the caller is
+// deliberately controlling an integration-test barrier.
+func SetCDCTestAdmissionHookForTest(hook func()) (restore func()) {
+	cdcTestAdmissionHook.Lock()
+	previous := cdcTestAdmissionHook.fn
+	cdcTestAdmissionHook.fn = hook
+	cdcTestAdmissionHook.Unlock()
+	return func() {
+		cdcTestAdmissionHook.Lock()
+		cdcTestAdmissionHook.fn = previous
+		cdcTestAdmissionHook.Unlock()
+	}
+}
+
+func runCDCTestAdmissionHook() {
+	cdcTestAdmissionHook.RLock()
+	hook := cdcTestAdmissionHook.fn
+	cdcTestAdmissionHook.RUnlock()
+	if hook != nil {
+		hook()
+	}
+}
+
+// SetCDCTestCancelHookForTest installs a process-local cancellation barrier and
+// returns a restore function. The hook runs outside the mutex and may block
+// only when the caller is deliberately controlling a test phase. A false
+// producersStopped means a bounded cancellation wait timed out.
+func SetCDCTestCancelHookForTest(hook func(producersStopped bool)) (restore func()) {
+	cdcTestCancelHook.Lock()
+	previous := cdcTestCancelHook.fn
+	cdcTestCancelHook.fn = hook
+	cdcTestCancelHook.Unlock()
+	return func() {
+		cdcTestCancelHook.Lock()
+		cdcTestCancelHook.fn = previous
+		cdcTestCancelHook.Unlock()
+	}
+}
+
+func runCDCTestCancelHook(producersStopped bool) {
+	cdcTestCancelHook.RLock()
+	hook := cdcTestCancelHook.fn
+	cdcTestCancelHook.RUnlock()
+	if hook != nil {
+		hook(producersStopped)
+	}
+}
+
+// SetCDCTestCancelCompletionHookForTest installs a post-cancel observer and
+// returns a restore function. The observer is inert unless a test installs it.
+func SetCDCTestCancelCompletionHookForTest(hook func(error)) (restore func()) {
+	cdcTestCancelCompletionHook.Lock()
+	previous := cdcTestCancelCompletionHook.fn
+	cdcTestCancelCompletionHook.fn = hook
+	cdcTestCancelCompletionHook.Unlock()
+	return func() {
+		cdcTestCancelCompletionHook.Lock()
+		cdcTestCancelCompletionHook.fn = previous
+		cdcTestCancelCompletionHook.Unlock()
+	}
+}
+
+func runCDCTestCancelCompletionHook(err error) {
+	cdcTestCancelCompletionHook.RLock()
+	hook := cdcTestCancelCompletionHook.fn
+	cdcTestCancelCompletionHook.RUnlock()
+	if hook != nil {
+		hook(err)
+	}
+}
 
 func init() {
 	var err error
@@ -79,6 +195,11 @@ func CDCTaskExecutorFactory(
 		if len(tasks) != 1 {
 			return moerr.NewInternalErrorf(ctx, "invalid tasks count %d", len(tasks))
 		}
+		claim, ok := spec.(*task.DaemonTask)
+		if !ok || claim.TaskRunner != cnUUID || tasks[0].TaskRunner != claim.TaskRunner ||
+			!tasks[0].LastRun.Equal(claim.LastRun) {
+			return moerr.NewInvalidTask(ctx, cnUUID, spec.GetID())
+		}
 		details, ok := tasks[0].Details.Details.(*task.Details_CreateCdc)
 		if !ok {
 			return moerr.NewInternalError(ctx, "invalid details type")
@@ -94,21 +215,49 @@ func CDCTaskExecutorFactory(
 			txnEngine,
 			CDCExeutorAllocator,
 		)
-		exec.activeRoutine = cdc.NewCdcActiveRoutine()
-		if err = attachToTask(ctx, spec.GetID(), exec); err != nil {
+		exec.taskService = ts
+		exec.UpdateDaemonTaskClaim(*claim)
+		// Restart timeout persistence is a control-plane path. It must use a
+		// fresh executor so it cannot queue behind the serialized executor held
+		// by the Start attempt that just timed out.
+		exec.restartCatalogExecutorFactory = sqlExecutorFactory
+		exec.setActiveRoutine(cdc.NewCdcActiveRoutine())
+		// Bind replacement generations to the task-runner lifecycle before
+		// publishing the ActiveRoutine. Resume/Restart can then never detach a
+		// replacement Start from runner/CN shutdown.
+		exec.bindLifecycleContext(ctx)
+		// Attach publishes the executor to taskservice cancellation. Enter a
+		// cancelable state first so Cancel can always fence a Start that has not
+		// entered the factory call below yet.
+		if err = exec.stateMachine.Transition(TransitionStart); err != nil {
+			exec.cancelLifecycleContext()
 			return err
 		}
-		return exec.Start(ctx)
+		if err = attachToTask(ctx, spec.GetID(), exec); err != nil {
+			exec.cancelLifecycleContext()
+			return err
+		}
+		if err = exec.Start(ctx); err != nil {
+			// Attach transferred lifetime ownership to taskservice. Start's done
+			// notification may already have admitted a same-object replacement;
+			// only generation-fenced runner completion may cancel that lifetime.
+			return err
+		}
+		return nil
 	}
 }
 
 type CDCTaskExecutor struct {
 	sync.Mutex
 
-	logger *zap.Logger
-	ie     ie.InternalExecutor
+	logger  *zap.Logger
+	claimMu sync.RWMutex
+	ie      ie.InternalExecutor
 
 	cnUUID      string
+	claimTask   *task.DaemonTask
+	claimFence  *cdc.OwnerFence
+	taskService taskservice.TaskService
 	cnTxnClient client.TxnClient
 	cnEngine    engine.Engine
 	fileService fileservice.FileService
@@ -118,28 +267,426 @@ type CDCTaskExecutor struct {
 	mp         *mpool.MPool
 	packerPool *fileservice.Pool[*types.Packer]
 
-	sinkUri          cdc.UriInfo
-	tables           cdc.PatternTuples
-	exclude          *regexp.Regexp
-	startTs, endTs   types.TS
-	noFull           bool
-	additionalConfig map[string]interface{}
+	sinkUri               cdc.UriInfo
+	tables                cdc.PatternTuples
+	exclude               *regexp.Regexp
+	startTs, endTs        types.TS
+	stableInitialSnapshot bool
+	noFull                bool
+	additionalConfig      map[string]interface{}
+	// initialSnapshotLimiter bounds retained initial-snapshot batches across all
+	// CDC tasks in this CN while allowing tables to make progress independently.
+	initialSnapshotLimiter *cdc.InitialSnapshotLimiter
 
-	activeRoutine *cdc.ActiveRoutine
+	activeRoutineMu sync.RWMutex
+	activeRoutine   *cdc.ActiveRoutine
 	// watermarkUpdater update the watermark of the items that has been sunk to downstream
 	watermarkUpdater *cdc.CDCWatermarkUpdater
 	// runningReaders store the running execute pipelines, map key pattern: db.table
 	runningReaders *sync.Map
+	// removedReaderShutdowns stores in-progress shutdowns for readers that disappeared from scan results.
+	removedReaderShutdowns sync.Map
 
 	// stateMachine manages executor state transitions
 	stateMachine *ExecutorStateMachine
 	holdCh       chan int
 
-	callbackMu         sync.RWMutex
-	callbackGeneration atomic.Uint64
+	callbackMu                    sync.RWMutex
+	callbackCount                 int
+	callbackDone                  chan struct{}
+	callbackCtx                   context.Context
+	callbackCancel                context.CancelFunc
+	callbackGeneration            atomic.Uint64
+	readerStopMu                  sync.Mutex
+	readerShutdownMu              sync.Mutex
+	readerShutdownDone            <-chan struct{}
+	restartWaitMu                 sync.Mutex
+	restartWaiters                map[uint64]chan error
+	restartCatalogState           map[uint64]string
+	restartMu                     sync.Mutex
+	restartCatalogMu              sync.Mutex
+	restartCatalogPersistence     *cdcRestartCatalogPersistence
+	restartCatalogExecutorFactory func() ie.InternalExecutor
+	startAttemptMu                sync.Mutex
+	activeStartAttempt            *cdcStartAttempt
+	lifecycleMu                   sync.RWMutex
+	lifecycleCtx                  context.Context
+	lifecycleCancel               context.CancelFunc
+	lifecycleRootStop             func() bool
+	lifecycleTaskScheduler        taskservice.TaskExecutorTaskScheduler
+	// restartStartupTimeout is test-only when non-zero. Production keeps the
+	// historical four-second admission bound.
+	restartStartupTimeout time.Duration
+	// restartStartupTimeoutSignal lets tests deterministically choose when the
+	// replacement-startup wait times out. Production leaves it nil and uses
+	// restartStartupTimeout through a real timer.
+	restartStartupTimeoutSignal <-chan time.Time
 
 	// start wrapper, for ut
 	startFunc func(ctx context.Context) error
+}
+
+// cdcStartAttempt owns one invocation of Start. A replacement never begins
+// until the prior attempt has exited, so the executor's legacy shared
+// lifecycle fields (activeRoutine, runningReaders, and detector registration)
+// cannot be cleaned up by an older generation after being reused.
+type cdcStartAttempt struct {
+	generation   uint64
+	cancel       context.CancelFunc
+	done         chan struct{}
+	doneOnce     sync.Once
+	timeoutFence atomic.Uint64
+	restartOwner atomic.Uint32
+}
+
+const (
+	cdcRestartOwnerPending uint32 = iota
+	cdcRestartOwnerCompleted
+	cdcRestartOwnerTimedOut
+)
+
+func (attempt *cdcStartAttempt) completeRestart() bool {
+	return attempt.restartOwner.CompareAndSwap(
+		cdcRestartOwnerPending,
+		cdcRestartOwnerCompleted,
+	)
+}
+
+func (attempt *cdcStartAttempt) timeoutRestart() bool {
+	return attempt.restartOwner.CompareAndSwap(
+		cdcRestartOwnerPending,
+		cdcRestartOwnerTimedOut,
+	)
+}
+
+// cdcRestartCatalogPersistence owns the bounded best-effort catalog write for
+// one timed-out restart generation. Restart never waits for this write on its
+// timeout return path. A later retry does wait for completion before admitting
+// a new generation, preventing the old restarting -> failed CAS from racing the
+// new generation's restarting -> running publication.
+type cdcRestartCatalogPersistence struct {
+	done chan struct{}
+	err  error
+}
+
+type cdcStartAttemptContextKey struct{}
+
+func newCDCStartAttempt(ctx context.Context, generation uint64) (context.Context, *cdcStartAttempt) {
+	ctx, cancel := context.WithCancel(ctx)
+	attempt := &cdcStartAttempt{
+		generation: generation,
+		cancel:     cancel,
+		done:       make(chan struct{}),
+	}
+	return context.WithValue(ctx, cdcStartAttemptContextKey{}, attempt), attempt
+}
+
+// bindLifecycleContext captures only the cancellation lifetime of the
+// task-runner context. Replacement attempts must inherit runner/CN shutdown,
+// but must not inherit attempt-specific values such as a fresh-takeover
+// restart admission marker.
+func (exec *CDCTaskExecutor) bindLifecycleContext(rootCtx context.Context) {
+	exec.lifecycleMu.Lock()
+	defer exec.lifecycleMu.Unlock()
+	if exec.lifecycleCtx != nil {
+		return
+	}
+	if rootCtx == nil {
+		rootCtx = context.Background()
+	}
+	exec.lifecycleCtx, exec.lifecycleCancel = context.WithCancel(context.Background())
+	exec.lifecycleRootStop = context.AfterFunc(rootCtx, exec.lifecycleCancel)
+	exec.lifecycleTaskScheduler = taskservice.TaskExecutorTaskSchedulerFromContext(rootCtx)
+}
+
+func (exec *CDCTaskExecutor) replacementStartContext() context.Context {
+	exec.lifecycleMu.RLock()
+	defer exec.lifecycleMu.RUnlock()
+	if exec.lifecycleCtx == nil {
+		// Direct unit construction predates lifecycle binding. Production binds
+		// before ActiveRoutine publication, and Start binds as a safety net.
+		return context.Background()
+	}
+	return exec.lifecycleCtx
+}
+
+func (exec *CDCTaskExecutor) cancelLifecycleContext() {
+	exec.lifecycleMu.Lock()
+	cancel := exec.lifecycleCancel
+	stop := exec.lifecycleRootStop
+	exec.lifecycleRootStop = nil
+	exec.lifecycleMu.Unlock()
+	if stop != nil {
+		stop()
+	}
+	if cancel != nil {
+		cancel()
+	}
+}
+
+// callbackContextLocked returns the context for the currently admitted table
+// detector generation. The runner lifecycle remains live across Restart and
+// only this generation context is canceled when replacing callbacks.
+func (exec *CDCTaskExecutor) callbackContextLocked() context.Context {
+	if exec.callbackCtx == nil {
+		exec.callbackCtx, exec.callbackCancel = context.WithCancel(exec.replacementStartContext())
+	}
+	return exec.callbackCtx
+}
+
+func (exec *CDCTaskExecutor) rotateCallbackContextLocked() {
+	if exec.callbackCancel != nil {
+		exec.callbackCancel()
+	}
+	exec.callbackCtx = nil
+	exec.callbackCancel = nil
+	if exec.stateMachine.State() != StateCancelling && exec.stateMachine.State() != StateCancelled {
+		exec.callbackContextLocked()
+	}
+}
+
+func (exec *CDCTaskExecutor) cancelCallbackContextLocked() {
+	if exec.callbackCancel != nil {
+		exec.callbackCancel()
+	}
+	exec.callbackCtx = nil
+	exec.callbackCancel = nil
+}
+
+func (exec *CDCTaskExecutor) runLifecycleTask(
+	name string,
+	task func(),
+) error {
+	return exec.runLifecycleContextTask(name, func(context.Context) {
+		task()
+	})
+}
+
+func (exec *CDCTaskExecutor) runLifecycleContextTask(
+	name string,
+	task func(context.Context),
+) error {
+	exec.lifecycleMu.RLock()
+	scheduler := exec.lifecycleTaskScheduler
+	exec.lifecycleMu.RUnlock()
+	if scheduler == nil {
+		// Direct construction is retained for unit tests and legacy embedding.
+		// Production TaskExecutors always capture the task-runner scheduler in
+		// bindLifecycleContext.
+		go task(exec.replacementStartContext())
+		return nil
+	}
+	return scheduler(name, task)
+}
+
+func cdcStartAttemptFromContext(ctx context.Context) *cdcStartAttempt {
+	attempt, _ := ctx.Value(cdcStartAttemptContextKey{}).(*cdcStartAttempt)
+	return attempt
+}
+
+func (exec *CDCTaskExecutor) installStartAttempt(attempt *cdcStartAttempt) bool {
+	exec.startAttemptMu.Lock()
+	defer exec.startAttemptMu.Unlock()
+	if exec.activeStartAttempt != nil {
+		return false
+	}
+	exec.activeStartAttempt = attempt
+	return true
+}
+
+func (exec *CDCTaskExecutor) beginImplicitStartAttempt(ctx context.Context) (context.Context, *cdcStartAttempt, error) {
+	ctx, attempt := newCDCStartAttempt(ctx, exec.callbackGeneration.Load())
+	if !exec.installStartAttempt(attempt) {
+		attempt.cancel()
+		return nil, nil, moerr.NewInternalErrorNoCtx("CDC start already has an active generation")
+	}
+	return ctx, attempt, nil
+}
+
+func (exec *CDCTaskExecutor) activeStart() *cdcStartAttempt {
+	exec.startAttemptMu.Lock()
+	defer exec.startAttemptMu.Unlock()
+	return exec.activeStartAttempt
+}
+
+func (exec *CDCTaskExecutor) isActiveStartAttempt(attempt *cdcStartAttempt) bool {
+	if attempt == nil {
+		return false
+	}
+	exec.startAttemptMu.Lock()
+	defer exec.startAttemptMu.Unlock()
+	return exec.activeStartAttempt == attempt
+}
+
+func (exec *CDCTaskExecutor) finishStartAttempt(attempt *cdcStartAttempt) {
+	if attempt == nil {
+		return
+	}
+	exec.startAttemptMu.Lock()
+	if exec.activeStartAttempt == attempt {
+		exec.activeStartAttempt = nil
+	}
+	exec.startAttemptMu.Unlock()
+	// Clear the active owner before waking a replacement waiter. Otherwise a
+	// waiter can observe done, race installStartAttempt, and falsely conclude
+	// that the completed attempt is still active.
+	// Cancel also detaches this child from the long-lived lifecycle context.
+	// Without it, every completed Resume/Restart generation remains retained
+	// by that parent until the whole executor shuts down.
+	attempt.cancel()
+	attempt.doneOnce.Do(func() { close(attempt.done) })
+}
+
+func (exec *CDCTaskExecutor) isCurrentStartAttempt(attempt *cdcStartAttempt) bool {
+	if attempt == nil || !exec.isCurrentCallbackGeneration(attempt.generation) {
+		return false
+	}
+	exec.startAttemptMu.Lock()
+	defer exec.startAttemptMu.Unlock()
+	return exec.activeStartAttempt == attempt
+}
+
+func (exec *CDCTaskExecutor) restartTimeout() time.Duration {
+	if exec.restartStartupTimeout > 0 {
+		return exec.restartStartupTimeout
+	}
+	return 4 * time.Second
+}
+
+func (exec *CDCTaskExecutor) waitForRestartStartup(
+	completion <-chan error,
+	timeout time.Duration,
+) (error, bool) {
+	if exec.restartStartupTimeoutSignal != nil {
+		return selectCDCCompletion(completion, exec.restartStartupTimeoutSignal)
+	}
+	return waitForCDCCompletion(completion, timeout)
+}
+
+func waitForCDCCompletion[T any](
+	completion <-chan T,
+	timeout time.Duration,
+) (T, bool) {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	return selectCDCCompletion(completion, timer.C)
+}
+
+func selectCDCCompletion[T any](
+	completion <-chan T,
+	timeout <-chan time.Time,
+) (T, bool) {
+	select {
+	case result := <-completion:
+		return result, false
+	case <-timeout:
+		// A completion that became ready with the timer is authoritative. A
+		// plain select can choose the timeout arm pseudo-randomly when both are
+		// ready and turn an on-time restart into a false failure.
+		select {
+		case result := <-completion:
+			return result, false
+		default:
+			var zero T
+			return zero, true
+		}
+	}
+}
+
+func (exec *CDCTaskExecutor) setActiveRoutine(routine *cdc.ActiveRoutine) {
+	exec.activeRoutineMu.Lock()
+	exec.activeRoutine = routine
+	exec.activeRoutineMu.Unlock()
+}
+
+func (exec *CDCTaskExecutor) currentActiveRoutine() *cdc.ActiveRoutine {
+	exec.activeRoutineMu.RLock()
+	defer exec.activeRoutineMu.RUnlock()
+	return exec.activeRoutine
+}
+
+func (exec *CDCTaskExecutor) closeActiveRoutinePause() {
+	if routine := exec.currentActiveRoutine(); routine != nil {
+		routine.ClosePause()
+	}
+}
+
+func (exec *CDCTaskExecutor) closeActiveRoutineCancel() {
+	if routine := exec.currentActiveRoutine(); routine != nil {
+		routine.CloseCancel()
+	}
+}
+
+func (exec *CDCTaskExecutor) beginRestartWaiter(generation uint64, catalogState string) chan error {
+	exec.restartWaitMu.Lock()
+	defer exec.restartWaitMu.Unlock()
+	if exec.restartWaiters == nil {
+		exec.restartWaiters = make(map[uint64]chan error)
+	}
+	if exec.restartCatalogState == nil {
+		exec.restartCatalogState = make(map[uint64]string)
+	}
+	ready := make(chan error, 1)
+	exec.restartWaiters[generation] = ready
+	exec.restartCatalogState[generation] = catalogState
+	return ready
+}
+
+func (exec *CDCTaskExecutor) finishRestartWaiter(generation uint64, err error) bool {
+	exec.restartWaitMu.Lock()
+	defer exec.restartWaitMu.Unlock()
+	ready := exec.restartWaiters[generation]
+	if ready == nil {
+		return false
+	}
+	select {
+	case ready <- err:
+	default:
+	}
+	return true
+}
+
+func (exec *CDCTaskExecutor) removeRestartWaiter(generation uint64) {
+	exec.restartWaitMu.Lock()
+	defer exec.restartWaitMu.Unlock()
+	delete(exec.restartWaiters, generation)
+	delete(exec.restartCatalogState, generation)
+}
+
+func (exec *CDCTaskExecutor) restartCatalogStateForGeneration(generation uint64) (string, bool) {
+	exec.restartWaitMu.Lock()
+	defer exec.restartWaitMu.Unlock()
+	if state := exec.restartCatalogState[generation]; state != "" {
+		return state, true
+	}
+	return "", false
+}
+
+// publishStartupCatalogTransition moves the durable catalog admission to
+// running. The caller must still claim the attempt's in-memory completion
+// token before publishing readiness: timeout and completion race on that token,
+// rather than on channel scheduling.
+func (exec *CDCTaskExecutor) publishStartupCatalogTransition(
+	ctx context.Context,
+	generation uint64,
+	restartAdmission bool,
+) (required bool, updateErr error) {
+	catalogState, hasRestartCatalogState := exec.restartCatalogStateForGeneration(generation)
+	required = hasRestartCatalogState || restartAdmission
+	updateErr = exec.updateErrMsgForStartup(
+		ctx,
+		"",
+		catalogState,
+		hasRestartCatalogState,
+		restartAdmission,
+	)
+	return required, updateErr
+}
+
+func (exec *CDCTaskExecutor) restartFields(fields ...zap.Field) []zap.Field {
+	out := logutil.StringFingerprintFields("task-id", exec.spec.TaskId)
+	out = append(out, logutil.StringFingerprintFields("task-name", exec.spec.TaskName)...)
+	return append(out, fields...)
 }
 
 func NewCDCTaskExecutor(
@@ -173,23 +720,155 @@ func NewCDCTaskExecutor(
 				packer.Close()
 			},
 		),
-		stateMachine: NewExecutorStateMachine(), // Initialize state machine
-		holdCh:       make(chan int, 1),         // Initialize holdCh to prevent race condition
+		stateMachine:           NewExecutorStateMachine(), // Initialize state machine
+		holdCh:                 make(chan int, 1),         // Initialize holdCh to prevent race condition
+		initialSnapshotLimiter: cnInitialSnapshotLimiter,
 	}
 	task.startFunc = task.Start
 	return task
 }
 
+// currentDaemonClaimFence returns the immutable claim generation installed by
+// taskservice. Existing table streams retain the old object when Resume or
+// Restart publishes a replacement claim, so stale work cannot borrow the new
+// generation's identity.
+func (exec *CDCTaskExecutor) currentDaemonClaimFence() *cdc.OwnerFence {
+	exec.claimMu.RLock()
+	defer exec.claimMu.RUnlock()
+	return exec.claimFence
+}
+
+func classifyStableSnapshotRestart(
+	watermark types.TS,
+	watermarkGeneration uint64,
+	sourceTableID uint64,
+	state cdc.InitialSnapshotEpochState,
+) (incomplete, resetTarget, metadataMissing, generationAhead bool) {
+	hasProgress := !watermark.IsEmpty()
+	generationAhead = watermarkGeneration > sourceTableID || state.HasNewerGeneration
+	sameGeneration := watermarkGeneration == sourceTableID
+	// A same-generation watermark cannot exist before its immutable epoch. A
+	// non-empty generation-zero watermark with no retired epoch is likewise not
+	// attributable to this stable protocol and must fail closed.
+	metadataMissing = state.Created && hasProgress &&
+		(sameGeneration || (watermarkGeneration == 0 && !state.HasOtherGeneration))
+	incomplete = !sameGeneration || watermark.LT(&state.Epoch)
+	resetTarget = incomplete && (state.HasOtherGeneration ||
+		(hasProgress && watermarkGeneration > 0 && watermarkGeneration < sourceTableID))
+	return
+}
+
+func shouldCompactStableSnapshotEpochs(
+	targetWillReset bool,
+	incomplete bool,
+	hasOtherGeneration bool,
+) bool {
+	return targetWillReset || (!incomplete && hasOtherGeneration)
+}
+
+func capInitialSnapshotEpoch(candidate, end types.TS) types.TS {
+	if !end.IsEmpty() && candidate.GT(&end) {
+		return end
+	}
+	return candidate
+}
+
+// UpdateDaemonTaskClaim advances the exact token used by target and watermark
+// fences after taskservice has durably installed a Resume/Restart generation.
+func (exec *CDCTaskExecutor) UpdateDaemonTaskClaim(claim task.DaemonTask) {
+	exec.claimMu.Lock()
+	if exec.claimTask != nil &&
+		exec.claimTask.ID == claim.ID &&
+		exec.claimTask.TaskRunner == claim.TaskRunner &&
+		exec.claimTask.LastRun.Equal(claim.LastRun) {
+		// Status is an authority phase within one immutable generation. Keep the
+		// same fence pointer (existing pipelines own it), but advance the snapshot
+		// used by future durable checks, notably RestartRequested -> Running.
+		claimCopy := claim
+		exec.claimTask = &claimCopy
+		exec.claimMu.Unlock()
+		return
+	}
+	claimCopy := claim
+	service := exec.taskService
+	var fence *cdc.OwnerFence
+	if service != nil {
+		fence = cdc.NewOwnerFenceForGeneration(claimCopy.LastRun, func(ctx context.Context) error {
+			// Resume/Restart on this CN publishes a new immutable fence before
+			// starting replacement work. Reject a delayed old pipeline locally.
+			// taskservice canonicalizes and monotonically advances the persisted
+			// microsecond last_run token, so status-only publication is the only
+			// path that intentionally retains this fence pointer.
+			exec.claimMu.RLock()
+			currentFence := exec.claimFence
+			currentClaim := exec.claimTask
+			var validationClaim task.DaemonTask
+			if currentClaim != nil {
+				validationClaim = *currentClaim
+			}
+			exec.claimMu.RUnlock()
+			if currentFence != fence || currentClaim == nil {
+				return moerr.NewInvalidTask(ctx, claimCopy.TaskRunner, claimCopy.ID)
+			}
+			fenceCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			return service.ValidateDaemonTask(fenceCtx, validationClaim)
+		})
+	}
+	exec.claimTask = &claimCopy
+	exec.claimFence = fence
+	exec.claimMu.Unlock()
+}
+
 func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
+	// Factory binding closes the attach-before-start publication window.
+	// Retain this fallback for direct callers and tests.
+	exec.bindLifecycleContext(rootCtx)
+	attempt := cdcStartAttemptFromContext(rootCtx)
+	if attempt == nil {
+		rootCtx, attempt, err = exec.beginImplicitStartAttempt(rootCtx)
+		if err != nil {
+			return err
+		}
+	} else if !exec.isActiveStartAttempt(attempt) {
+		if !exec.installStartAttempt(attempt) {
+			attempt.cancel()
+			return moerr.NewInternalErrorNoCtx("CDC start already has an active generation")
+		}
+	}
+	// Keep the attempt installed until all cleanup below has completed. A
+	// replacement is admitted only after done is closed, which makes the
+	// resource cleanup below generation-owned rather than best-effort.
+	defer exec.finishStartAttempt(attempt)
+	if !exec.isCurrentStartAttempt(attempt) {
+		return moerr.NewInternalErrorNoCtx("CDC start was superseded by a newer lifecycle generation")
+	}
+	state := exec.stateMachine.State()
+	if state == StateCancelling || state == StateCancelled {
+		return moerr.NewInternalErrorNoCtx("CDC start was canceled before execution")
+	}
+
 	taskId := exec.spec.TaskId
 	taskName := exec.spec.TaskName
 	cnUUID := exec.cnUUID
 	accountId := uint32(exec.spec.Accounts[0].GetId())
+	restartGeneration := attempt.generation
+	restartAdmission := taskservice.IsRestartAdmission(rootCtx)
 	detector := cdc.GetTableDetector(cnUUID)
 	var (
 		registered      bool
-		enteredStarting bool
+		enteredStarting = exec.stateMachine.State() == StateStarting
 	)
+
+	// A fresh takeover retry may follow a prior startup failure that durably
+	// moved the catalog admission to failed before taskservice released its
+	// daemon claim. Reopen that exact failure state; an already-restarting first
+	// attempt is accepted idempotently, while PAUSE/DROP remains conflicting.
+	if restartAdmission {
+		if err = exec.admitRestartCatalogState(rootCtx); err != nil {
+			return err
+		}
+	}
 
 	// Check if this task is already registered in TableDetector
 	// This prevents duplicate task execution when taskservice schedules the same task twice
@@ -211,8 +890,12 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 				detector.UnRegister(taskId)
 			}
 
-			// Transition to Failed state only if we entered Starting state
-			if enteredStarting {
+			// A timed-out generation may finish later. It still owns the
+			// detector/routine until this defer returns, but it no longer owns
+			// lifecycle state, metrics, catalog state, or a restart waiter.
+			// Never let that late completion overwrite its replacement.
+			ownsLifecycle := enteredStarting && exec.isCurrentStartAttempt(attempt)
+			if ownsLifecycle {
 				if setFailErr := exec.stateMachine.SetFailed(err.Error()); setFailErr != nil {
 					logutil.Warn(
 						"cdc.frontend.task.set_state_failed",
@@ -226,20 +909,46 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 				v2.CdcTaskErrorCounter.WithLabelValues("start_failed", "false").Inc()
 			}
 
-			// if Start failed, there will be some dangle goroutines(watermarkUpdater, reader, sinker...)
-			// need to close them to avoid goroutine leak
-			exec.activeRoutine.ClosePause()
-			exec.activeRoutine.CloseCancel()
+			// Start retains exclusive ownership of these resources until its
+			// attempt finishes. Close them even when the generation has been
+			// fenced so a timed-out startup cannot leak workers.
+			exec.closeActiveRoutinePause()
+			exec.closeActiveRoutineCancel()
 
-			updateErrMsgErr := exec.updateErrMsg(rootCtx, err.Error())
-			logutil.Error(
-				"cdc.frontend.task.start_failed",
-				zap.String("task-id", taskId),
-				zap.String("task-name", taskName),
-				zap.String("state", exec.stateMachine.State().String()),
-				zap.Error(err),
-				zap.NamedError("update-err-msg-err", updateErrMsgErr),
-			)
+			if ownsLifecycle {
+				catalogState, hasRestartCatalogState := exec.restartCatalogStateForGeneration(restartGeneration)
+				restartFailed := false
+				if attempt.completeRestart() {
+					restartFailed = exec.finishRestartWaiter(restartGeneration, err)
+				}
+				updateErrMsgErr := exec.updateErrMsgForStartup(rootCtx, err.Error(), catalogState, hasRestartCatalogState, restartAdmission)
+				if restartFailed || restartAdmission {
+					eventCDCExecutorRestartFailed.ErrorLazy(func() []zap.Field {
+						fields := append([]zap.Field{
+							zap.String("state", exec.stateMachine.State().String()),
+						}, logutil.ErrorFingerprintFields("error", err)...)
+						if updateErrMsgErr != nil {
+							fields = append(
+								fields,
+								logutil.ErrorFingerprintFields(
+									"catalog-update-error",
+									updateErrMsgErr,
+								)...,
+							)
+						}
+						return exec.restartFields(fields...)
+					})
+				} else {
+					logutil.Error(
+						"cdc.frontend.task.start_failed",
+						zap.String("task-id", taskId),
+						zap.String("task-name", taskName),
+						zap.String("state", exec.stateMachine.State().String()),
+						zap.Error(err),
+						zap.NamedError("update-err-msg-err", updateErrMsgErr),
+					)
+				}
+			}
 		}
 	}()
 
@@ -284,7 +993,7 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 	exec.watermarkUpdater = cdc.GetCDCWatermarkUpdater(exec.cnUUID, exec.ie)
 
 	// register to table scanner
-	callbackGeneration := exec.callbackGeneration.Load()
+	callbackGeneration := restartGeneration
 	if !detector.RegisterIfAbsent(taskId, accountId, dbs, tables, func(tbls map[uint32]cdc.TblMap) error {
 		return exec.handleNewTablesForGeneration(callbackGeneration, tbls)
 	}) {
@@ -319,25 +1028,69 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 		zap.String("state", exec.stateMachine.State().String()),
 	)
 
+	// A restart waiter may have timed out while this Start was still doing its
+	// admission work. Its generation is then invalidated, so it must not publish
+	// a late Running state into a newer restart attempt.
+	if !exec.isCurrentStartAttempt(attempt) {
+		return moerr.NewInternalErrorNoCtx("CDC start was superseded by a newer lifecycle generation")
+	}
+
 	// Transition to Running state
 	if err = exec.stateMachine.Transition(TransitionStartSuccess); err != nil {
 		return moerr.NewInternalErrorf(ctx, "cannot transition to running: %v", err)
 	}
 
-	// Metrics: task started
+	requiredRestartTransition, clearErrMsgErr :=
+		exec.publishStartupCatalogTransition(
+			ctx,
+			restartGeneration,
+			restartAdmission,
+		)
+	if requiredRestartTransition && clearErrMsgErr != nil {
+		return moerr.NewInternalErrorf(
+			ctx,
+			"cannot publish CDC restart catalog state: %v",
+			clearErrMsgErr,
+		)
+	}
+
+	// A timeout and catalog publication can cross while ExecWithStatus is in
+	// flight. The attempt token is the in-memory linearization point: only one
+	// side may claim the result. If timeout won, repair a catalog write that
+	// committed late and enter normal error cleanup without publishing metrics
+	// or leaving the detector registered.
+	if !exec.isCurrentStartAttempt(attempt) ||
+		(requiredRestartTransition && !attempt.completeRestart()) {
+		if requiredRestartTransition && clearErrMsgErr == nil {
+			exec.reconcileTimedOutStartupPublication(attempt)
+		}
+		return moerr.NewInternalErrorNoCtx("CDC start was superseded by a newer lifecycle generation")
+	}
+
+	restartReady := false
+	if requiredRestartTransition {
+		restartReady = exec.finishRestartWaiter(restartGeneration, nil)
+	}
+
+	// Metrics and readiness are published only after the required restart
+	// catalog transition succeeds. Ordinary CREATE startup keeps its historical
+	// best-effort error-message cleanup semantics.
 	v2.CdcTaskTotalGauge.WithLabelValues("running").Inc()
 	v2.CdcTaskStateChangeCounter.WithLabelValues("starting", "running").Inc()
 
-	// start success, clear err msg
-	clearErrMsgErr := exec.updateErrMsg(ctx, "")
-
-	logutil.Info(
-		"cdc.frontend.task.start_success",
-		zap.String("task-id", taskId),
-		zap.String("task-name", taskName),
-		zap.String("state", exec.stateMachine.State().String()),
-		zap.NamedError("clear-err-msg-err", clearErrMsgErr),
-	)
+	if restartReady {
+		eventCDCExecutorRestartReady.InfoLazy(func() []zap.Field {
+			return exec.restartFields(zap.String("state", exec.stateMachine.State().String()))
+		})
+	} else {
+		logutil.Info(
+			"cdc.frontend.task.start_success",
+			zap.String("task-id", taskId),
+			zap.String("task-name", taskName),
+			zap.String("state", exec.stateMachine.State().String()),
+			zap.NamedError("clear-err-msg-err", clearErrMsgErr),
+		)
+	}
 
 	// hold - wait for Pause/Cancel/Restart signal
 	select {
@@ -352,13 +1105,57 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 // Resume cdc task from last recorded watermark
 func (exec *CDCTaskExecutor) Resume() error {
 	exec.callbackMu.Lock()
-	defer exec.callbackMu.Unlock()
+	callbackLocked := true
+	defer func() {
+		if callbackLocked {
+			exec.callbackMu.Unlock()
+		}
+	}()
 
-	// Transition to Starting state (via Resume transition)
+	// If the table detector has not completed permanent-error cleanup yet, the
+	// executor is still Running and RESUME only needs to clear the persisted
+	// table errors. If cleanup won the race, the executor is Failed and follows
+	// the ordinary resume replacement below, which rebuilds from the recorded
+	// watermarks without applying restart/reset-watermark semantics.
+	if exec.stateMachine.State() == StateRunning {
+		ctx := defines.AttachAccountId(context.Background(), uint32(exec.spec.Accounts[0].GetId()))
+		if err := exec.clearAllTableErrors(ctx); err != nil {
+			return moerr.NewInternalErrorf(context.Background(), "cannot clear CDC table errors: %v", err)
+		}
+		logutil.Info(
+			"cdc.frontend.task.resume_running_recovery",
+			zap.String("task-id", exec.spec.TaskId),
+			zap.String("task-name", exec.spec.TaskName),
+			zap.String("state", exec.stateMachine.State().String()),
+		)
+		return nil
+	}
+
+	stateBeforeResume := exec.stateMachine.State()
+	if !exec.previousReaderGenerationStoppedLocked(stateBeforeResume) {
+		return moerr.NewInternalErrorNoCtx("cannot resume: previous CDC reader generation is still stopping")
+	}
+	// Paused and table-error Failed executions both resume from their recorded
+	// watermarks. Other failure recovery remains the explicit RESTART command.
 	if err := exec.stateMachine.Transition(TransitionResume); err != nil {
 		return moerr.NewInternalErrorf(context.Background(), "cannot resume: %v", err)
 	}
-	exec.callbackGeneration.Add(1)
+	exec.recordLeavingFailedMetrics(stateBeforeResume, StateStarting)
+	generation := exec.callbackGeneration.Add(1)
+	exec.rotateCallbackContextLocked()
+	failedRecovery := stateBeforeResume == StateFailed
+	var (
+		recoveryReady   chan error
+		recoveryAttempt atomic.Pointer[cdcStartAttempt]
+	)
+	if failedRecovery {
+		// The durable CDC catalog row remains Failed until Start has rebuilt the
+		// execution from its existing watermarks. Reuse the bounded startup
+		// publication waiter so taskservice cannot publish daemon Running merely
+		// because the replacement goroutine was scheduled.
+		recoveryReady = exec.beginRestartWaiter(generation, cdc.CDCState_Failed)
+		defer exec.removeRestartWaiter(generation)
+	}
 
 	// Log watermark states before resume
 	exec.logCurrentWatermarks("before_resume")
@@ -369,10 +1166,17 @@ func (exec *CDCTaskExecutor) Resume() error {
 		zap.String("task-name", exec.spec.TaskName),
 		zap.String("state", exec.stateMachine.State().String()),
 	)
+	resumeScheduled := false
 	defer func() {
-		// Metrics: task resumed
-		v2.CdcTaskTotalGauge.WithLabelValues("paused").Dec()
-		v2.CdcTaskStateChangeCounter.WithLabelValues("paused", "starting").Inc()
+		if !resumeScheduled {
+			return
+		}
+		if stateBeforeResume == StatePaused {
+			// Failed recovery was accounted when it left Failed above. Only a
+			// normal paused resume owns the paused -> starting metrics.
+			v2.CdcTaskTotalGauge.WithLabelValues("paused").Dec()
+			v2.CdcTaskStateChangeCounter.WithLabelValues("paused", "starting").Inc()
+		}
 
 		logutil.Info(
 			"cdc.frontend.task.resume_success",
@@ -386,6 +1190,13 @@ func (exec *CDCTaskExecutor) Resume() error {
 	// This allows tables with non-retryable errors to be retried after user fixes the issues
 	ctx := defines.AttachAccountId(context.Background(), uint32(exec.spec.Accounts[0].GetId()))
 	if err := exec.clearAllTableErrors(ctx); err != nil {
+		if failedRecovery {
+			if failErr := exec.stateMachine.SetFailed(err.Error()); failErr == nil {
+				v2.CdcTaskTotalGauge.WithLabelValues("failed").Inc()
+				v2.CdcTaskStateChangeCounter.WithLabelValues("starting", "failed").Inc()
+			}
+			return moerr.NewInternalErrorf(context.Background(), "cannot clear CDC table errors: %v", err)
+		}
 		logutil.Warn(
 			"cdc.frontend.task.resume_clear_errors_failed",
 			zap.String("task-id", exec.spec.TaskId),
@@ -399,10 +1210,47 @@ func (exec *CDCTaskExecutor) Resume() error {
 		exec.watermarkUpdater.UnmarkTaskPaused(exec.spec.TaskId)
 	}
 
-	go func() {
+	if err := exec.runLifecycleTask("cdc-resume-replacement", func() {
+		// Pause releases Start through holdCh, but its goroutine can still be
+		// unwinding while Resume returns. Preserve the same resource-ownership
+		// rule as Restart: do not replace activeRoutine until that Start exits.
+		lifecycleCtx := exec.replacementStartContext()
+		if previous := exec.activeStart(); previous != nil {
+			select {
+			case <-previous.done:
+			case <-lifecycleCtx.Done():
+				return
+			}
+		}
+		if !exec.isCurrentCallbackGeneration(generation) {
+			return
+		}
+
+		startCtx, attempt := newCDCStartAttempt(lifecycleCtx, generation)
+		if !exec.installStartAttempt(attempt) {
+			// A concurrent lifecycle operation owns the newer generation. Its
+			// own result is authoritative; this stale resume must stay silent.
+			attempt.cancel()
+			return
+		}
+		defer exec.finishStartAttempt(attempt)
+		if failedRecovery {
+			recoveryAttempt.Store(attempt)
+		}
+
 		// closed in Pause, need renew
-		exec.activeRoutine = cdc.NewCdcActiveRoutine()
-		if err := exec.startFunc(context.Background()); err != nil {
+		if !exec.isCurrentCallbackGeneration(generation) {
+			return
+		}
+		exec.setActiveRoutine(cdc.NewCdcActiveRoutine())
+		if !exec.isCurrentCallbackGeneration(generation) {
+			exec.closeActiveRoutineCancel()
+			return
+		}
+		if err := exec.startFunc(startCtx); err != nil {
+			if failedRecovery && attempt.completeRestart() {
+				exec.finishRestartWaiter(generation, err)
+			}
 			logutil.Error(
 				"cdc.frontend.task.resume_start_failed",
 				zap.String("task-id", exec.spec.TaskId),
@@ -411,28 +1259,195 @@ func (exec *CDCTaskExecutor) Resume() error {
 				zap.Error(err),
 			)
 		} else {
+			if failedRecovery && attempt.completeRestart() {
+				exec.finishRestartWaiter(generation, nil)
+			}
 			// Log watermark states after resume completed
 			exec.logCurrentWatermarks("after_resume")
 		}
-	}()
-	return nil
+	}); err != nil {
+		if stateBeforeResume == StateFailed {
+			if failErr := exec.stateMachine.SetFailed(err.Error()); failErr == nil {
+				v2.CdcTaskTotalGauge.WithLabelValues("failed").Inc()
+				v2.CdcTaskStateChangeCounter.WithLabelValues("starting", "failed").Inc()
+			}
+		}
+		return moerr.NewInternalErrorf(context.Background(), "cannot schedule CDC resume replacement: %v", err)
+	}
+	resumeScheduled = !failedRecovery
+	if !failedRecovery {
+		return nil
+	}
+
+	// Start and its table-detector callback must not wait behind the control
+	// mutex while taskservice waits for durable recovery readiness.
+	exec.callbackMu.Unlock()
+	callbackLocked = false
+	if err, timedOut := exec.waitForRestartStartup(recoveryReady, exec.restartTimeout()); !timedOut {
+		resumeScheduled = err == nil
+		return err
+	}
+
+	timeoutErr := moerr.NewInternalErrorNoCtx("CDC resume recovery startup timed out")
+	attempt := recoveryAttempt.Load()
+	if attempt != nil && !attempt.timeoutRestart() {
+		// Completion won the generation token even if the timeout channel became
+		// ready at the same instant. Its buffered result is authoritative.
+		err := <-recoveryReady
+		resumeScheduled = err == nil
+		return err
+	}
+	if attempt != nil {
+		attempt.cancel()
+		attempt.timeoutFence.Store(generation + 1)
+	}
+	exec.closeActiveRoutineCancel()
+	select {
+	case exec.holdCh <- 1:
+	default:
+	}
+	if !exec.callbackGeneration.CompareAndSwap(generation, generation+1) && attempt != nil {
+		attempt.timeoutFence.Store(0)
+	}
+	stateBeforeTimeout := exec.stateMachine.State()
+	if err := exec.stateMachine.SetFailed(timeoutErr.Error()); err == nil {
+		v2.CdcTaskTotalGauge.WithLabelValues("failed").Inc()
+		v2.CdcTaskStateChangeCounter.WithLabelValues(
+			cdcTaskMetricStateLabel(stateBeforeTimeout),
+			"failed",
+		).Inc()
+	}
+	return timeoutErr
 }
 
 // Restart cdc task from init watermark
 func (exec *CDCTaskExecutor) Restart() error {
+	// A restart generation spans the in-memory transition, Start ownership,
+	// and timeout catalog publication. Serializing the full operation closes
+	// the entry-time TOCTOU window where a concurrent retry could pass the
+	// persistence check before the older generation installs its pending
+	// restarting -> failed write. Fail fast instead of waiting on the mutex:
+	// every Restart caller must retain a bounded response time.
+	if !exec.restartMu.TryLock() {
+		return moerr.NewInternalErrorNoCtx("CDC restart is already in progress")
+	}
+	defer exec.restartMu.Unlock()
+
+	timeout := exec.restartTimeout()
+	if _, timedOut := exec.waitForRestartCatalogPersistence(timeout); timedOut {
+		return moerr.NewInternalErrorNoCtx("CDC restart timed out waiting for the previous timeout record")
+	}
+
 	exec.callbackMu.Lock()
-	defer exec.callbackMu.Unlock()
 
 	stateBeforeRestart := exec.stateMachine.State()
+	if !exec.previousReaderGenerationStoppedLocked(stateBeforeRestart) {
+		exec.callbackMu.Unlock()
+		return moerr.NewInternalErrorNoCtx("cannot restart: previous CDC reader generation is still stopping")
+	}
 	shouldStopOldExecution := stateBeforeRestart == StateRunning || stateBeforeRestart == StateStarting
 	shouldClearTableErrors := stateBeforeRestart == StateFailed || stateBeforeRestart == StatePaused
 
 	// Transition to Restarting state
 	if err := exec.stateMachine.Transition(TransitionRestart); err != nil {
+		exec.callbackMu.Unlock()
 		return moerr.NewInternalErrorf(context.Background(), "cannot restart: %v", err)
 	}
 	exec.recordLeavingFailedMetrics(stateBeforeRestart, StateRestarting)
-	exec.callbackGeneration.Add(1)
+	generation := exec.callbackGeneration.Add(1)
+	exec.rotateCallbackContextLocked()
+	// Complete the lifecycle/generation critical section before performing
+	// potentially slow cleanup or waiting for the replacement. Existing table
+	// detector callbacks captured the previous generation and will reject
+	// themselves after this fence.
+	if err := exec.stateMachine.Transition(TransitionRestartBegin); err != nil {
+		exec.callbackMu.Unlock()
+		return moerr.NewInternalErrorf(context.Background(), "cannot begin restart: %v", err)
+	}
+	// The catalog restart request has already installed this durable admission
+	// marker. Requiring it at ready/failure publication prevents a concurrent
+	// PAUSE that reaches paused from being changed back to running.
+	ready := exec.beginRestartWaiter(generation, cdc.CDCState_Restarting)
+	callbackDone := exec.callbackDone
+	if callbackDone == nil {
+		callbackDone = closedChan()
+	}
+	exec.callbackMu.Unlock()
+	defer exec.removeRestartWaiter(generation)
+	if _, timedOut := waitForCDCCompletion(callbackDone, timeout); timedOut {
+		drainTimeoutErr := moerr.NewInternalErrorNoCtx("CDC restart timed out waiting for table detector callbacks")
+		// TransitionRestartBegin has already published local Starting. Fence the
+		// timed-out generation and restore a retryable Failed state; otherwise the
+		// durable RestartRequested owner retries into an in-memory state from
+		// which TransitionRestart is impossible.
+		exec.callbackGeneration.Add(1)
+		cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
+		exec.closeActiveRoutineCancel()
+		// Register completion ownership before returning. Do not add the normal
+		// ten-second synchronous reader wait to an already expired four-second
+		// restart control path; the next durable retry is gated on this channel.
+		exec.initiateReaderShutdown()
+		select {
+		case exec.holdCh <- 1:
+		default:
+		}
+		_ = exec.stateMachine.SetFailed(drainTimeoutErr.Error())
+		exec.recordRestartTimeoutAsync(nil, drainTimeoutErr)
+		return drainTimeoutErr
+	}
+	// A Start owns mutable executor resources until it exits. Do not publish a
+	// replacement while a previous Start can still run its deferred cleanup.
+	// This is intentionally stronger than a generation check: generation fences
+	// publication, while this drain fence protects ownership of the legacy
+	// shared fields themselves.
+	if oldAttempt := exec.activeStart(); oldAttempt != nil {
+		oldAttempt.cancel()
+		cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
+		exec.closeActiveRoutineCancel()
+		select {
+		case <-exec.holdCh:
+		default:
+		}
+		select {
+		case exec.holdCh <- 1:
+		default:
+		}
+
+		if _, timedOut := waitForCDCCompletion(oldAttempt.done, timeout); timedOut {
+			drainTimeoutErr := moerr.NewInternalErrorNoCtx("CDC restart startup timed out while waiting for previous start to exit")
+			// The replacement has not been launched, so the stale attempt is
+			// the only owner of the shared resources. Fence its later failure
+			// publication and persist this terminal admission result.
+			exec.callbackGeneration.Add(1)
+			_ = exec.stateMachine.SetFailed(drainTimeoutErr.Error())
+			exec.recordRestartTimeoutAsync(nil, drainTimeoutErr)
+			return drainTimeoutErr
+		}
+	} else if shouldStopOldExecution {
+		// Some callers created the old run before start-attempt ownership was
+		// introduced. Preserve its cleanup contract while the rollout has both
+		// forms in flight.
+		cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
+		exec.closeActiveRoutineCancel()
+		select {
+		case <-exec.holdCh:
+		default:
+		}
+		select {
+		case exec.holdCh <- 1:
+		default:
+		}
+	}
+
+	// The first restart request normally changed the catalog to restarting
+	// before reaching this executor. A retry after a timeout starts from the
+	// failed state we recorded above, so reopen that exact state explicitly.
+	if stateBeforeRestart == StateFailed {
+		if err := exec.admitRestartCatalogState(context.Background()); err != nil {
+			_ = exec.stateMachine.SetFailed(err.Error())
+			return err
+		}
+	}
 
 	// FIX: Unmark task as paused to allow watermark updates after restart
 	// Without this, if task was paused before restart, it would remain in pausedTasks
@@ -444,68 +1459,88 @@ func (exec *CDCTaskExecutor) Restart() error {
 	if shouldClearTableErrors {
 		ctx := defines.AttachAccountId(context.Background(), uint32(exec.spec.Accounts[0].GetId()))
 		if err := exec.clearAllTableErrors(ctx); err != nil {
-			logutil.Warn(
-				"cdc.frontend.task.restart_clear_errors_failed",
-				zap.String("task-id", exec.spec.TaskId),
-				zap.Error(err),
-			)
+			eventCDCExecutorRestartClearErr.WarnLazy(func() []zap.Field {
+				return exec.restartFields(logutil.ErrorFingerprintFields("error", err)...)
+			})
 			// Don't fail Restart if clearing errors fails - continue anyway
 		}
 	}
 
-	logutil.Info(
-		"cdc.frontend.task.restart_start",
-		zap.String("task-id", exec.spec.TaskId),
-		zap.String("task-name", exec.spec.TaskName),
-		zap.String("state", exec.stateMachine.State().String()),
-	)
-	defer func() {
-		logutil.Info(
-			"cdc.frontend.task.restart_success",
-			zap.String("task-id", exec.spec.TaskId),
-			zap.String("task-name", exec.spec.TaskName),
-			zap.String("state", exec.stateMachine.State().String()),
-		)
-	}()
+	eventCDCExecutorRestartStarting.InfoLazy(func() []zap.Field {
+		return exec.restartFields(zap.String("state", exec.stateMachine.State().String()))
+	})
 
-	if shouldStopOldExecution {
-		cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
-		exec.activeRoutine.CloseCancel()
-		// let Start() go
-		select {
-		case <-exec.holdCh:
-		default:
-		}
-		select {
-		case exec.holdCh <- 1:
-		default:
-		}
+	startCtx, attempt := newCDCStartAttempt(exec.replacementStartContext(), generation)
+	if !exec.installStartAttempt(attempt) {
+		attempt.cancel()
+		return moerr.NewInternalErrorNoCtx("CDC restart found an active startup after drain")
+	}
+	if !exec.isCurrentCallbackGeneration(generation) {
+		exec.finishStartAttempt(attempt)
+		return moerr.NewInternalErrorNoCtx("CDC restart was superseded by a newer lifecycle generation")
 	}
 
-	// Transition to Starting state (beginning restart)
-	if err := exec.stateMachine.Transition(TransitionRestartBegin); err != nil {
-		return moerr.NewInternalErrorf(context.Background(), "cannot begin restart: %v", err)
+	exec.setActiveRoutine(cdc.NewCdcActiveRoutine())
+	if err := exec.runLifecycleTask("cdc-restart-replacement", func() {
+		defer exec.finishStartAttempt(attempt)
+		if err := exec.startFunc(startCtx); err != nil {
+			exec.refineRestartTimeoutCause(attempt, err)
+			if attempt.completeRestart() && exec.finishRestartWaiter(generation, err) {
+				eventCDCExecutorRestartFailed.ErrorLazy(func() []zap.Field {
+					return exec.restartFields(append([]zap.Field{
+						zap.String("state", exec.stateMachine.State().String()),
+					}, logutil.ErrorFingerprintFields("error", err)...)...)
+				})
+			}
+			return
+		}
+		if attempt.completeRestart() {
+			exec.finishRestartWaiter(generation, nil)
+		}
+	}); err != nil {
+		exec.finishStartAttempt(attempt)
+		return moerr.NewInternalErrorf(context.Background(), "cannot schedule CDC restart replacement: %v", err)
 	}
 
-	go func() {
-		exec.activeRoutine = cdc.NewCdcActiveRoutine()
-		if err := exec.startFunc(context.Background()); err != nil {
-			logutil.Error(
-				"cdc.frontend.task.restart_start_failed",
-				zap.String("task-id", exec.spec.TaskId),
-				zap.String("task-name", exec.spec.TaskName),
-				zap.String("state", exec.stateMachine.State().String()),
-				zap.Error(err),
-			)
-		}
-	}()
-	return nil
+	if err, timedOut := exec.waitForRestartStartup(ready, timeout); !timedOut {
+		return err
+	}
+	// Completion and timeout race on the attempt token, not on which select arm
+	// happened to run first. If startup already claimed completion, its buffered
+	// result is authoritative even when the timer became ready concurrently.
+	if !attempt.timeoutRestart() {
+		return <-ready
+	}
+	attempt.cancel()
+	exec.closeActiveRoutineCancel()
+	select {
+	case exec.holdCh <- 1:
+	default:
+	}
+	// Fence the late Start before it can publish Running. The active attempt
+	// remains installed until its goroutine exits, so the next restart will
+	// drain it instead of reusing its resources.
+	// Publish the expected timeout fence before incrementing, so a start
+	// goroutine that races this path can emit late-error evidence only after
+	// the fence is visible and still current.
+	attempt.timeoutFence.Store(generation + 1)
+	if exec.callbackGeneration.Add(1) != generation+1 {
+		attempt.timeoutFence.Store(0)
+	}
+	// Constructing a moerr reports it. Only emit timeout evidence after the
+	// timeout has actually won, never during a successful restart.
+	startupTimeoutErr := moerr.NewInternalErrorNoCtx("CDC restart startup timed out")
+	_ = exec.stateMachine.SetFailed(startupTimeoutErr.Error())
+	exec.recordRestartTimeoutAsync(attempt, startupTimeoutErr)
+	return startupTimeoutErr
 }
 
 // Pause cdc task
 func (exec *CDCTaskExecutor) Pause() error {
+	exec.callbackMu.Lock()
 	state := exec.stateMachine.State()
 	if state == StatePaused {
+		exec.callbackMu.Unlock()
 		logutil.Info(
 			"cdc.frontend.task.pause_skip_already_paused",
 			zap.String("task-id", exec.spec.TaskId),
@@ -516,13 +1551,28 @@ func (exec *CDCTaskExecutor) Pause() error {
 
 	// Check if running before state transition
 	wasRunning := state == StateRunning || state == StateStarting
+	// Failed startup/table callbacks can still own readers while unwinding,
+	// and a retry already in Pausing must finish the same drain.
+	needsProducerDrain := wasRunning || state == StatePausing || state == StateFailed
 
 	// Transition to Pausing state
 	if state != StatePausing {
 		if err := exec.stateMachine.Transition(TransitionPause); err != nil {
+			exec.callbackMu.Unlock()
 			return moerr.NewInternalErrorf(context.Background(), "cannot pause: %v", err)
 		}
+		// A Resume goroutine may still be waiting for the previous Start to
+		// unwind. Fence it before pause completion so it cannot revive the task
+		// after this pause wins the lifecycle transition.
+		exec.callbackGeneration.Add(1)
+		exec.recordLeavingFailedMetrics(state, StatePausing)
 	}
+	exec.cancelCallbackContextLocked()
+	callbackDone := exec.callbackDone
+	if callbackDone == nil {
+		callbackDone = closedChan()
+	}
+	exec.callbackMu.Unlock()
 
 	// FIX: Mark task as paused ASAP to maximize blocking window
 	// This prevents watermark updates from commits that start after pause signal
@@ -545,9 +1595,12 @@ func (exec *CDCTaskExecutor) Pause() error {
 		zap.Bool("was-running", wasRunning),
 	)
 
-	if wasRunning {
+	if needsProducerDrain {
 		cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
-		exec.activeRoutine.ClosePause()
+		exec.closeActiveRoutinePause()
+		if _, timedOut := waitForCDCCompletion(callbackDone, 30*time.Second); timedOut {
+			return moerr.NewInternalErrorNoCtx("CDC pause timed out waiting for table detector callbacks")
+		}
 
 		// Synchronously wait for all readers to stop before proceeding
 		// This ensures no goroutine leaks and clean pause state
@@ -602,9 +1655,9 @@ func (exec *CDCTaskExecutor) Pause() error {
 
 	if wasRunning {
 		v2.CdcTaskTotalGauge.WithLabelValues("running").Dec()
-		v2.CdcTaskTotalGauge.WithLabelValues("paused").Inc()
 		v2.CdcTaskStateChangeCounter.WithLabelValues("running", "paused").Inc()
 	}
+	v2.CdcTaskTotalGauge.WithLabelValues("paused").Inc()
 
 	logutil.Info(
 		"cdc.frontend.task.pause_success",
@@ -617,22 +1670,59 @@ func (exec *CDCTaskExecutor) Pause() error {
 }
 
 // Cancel cdc task
-func (exec *CDCTaskExecutor) Cancel() error {
+func (exec *CDCTaskExecutor) Cancel() error { return exec.cancel(true) }
+
+// CancelWithoutWatermarkCleanup stops local work after claim loss. The task may
+// already have been taken over, so deleting shared progress would destroy the
+// replacement owner's watermark.
+func (exec *CDCTaskExecutor) CancelWithoutWatermarkCleanup() error { return exec.cancel(false) }
+
+func (exec *CDCTaskExecutor) cancel(deleteWatermarks bool) (err error) {
+	defer func() {
+		runCDCTestCancelCompletionHook(err)
+	}()
+	exec.callbackMu.Lock()
 	// Check if running before state transition
 	stateBeforeCancel := exec.stateMachine.State()
-	wasRunning := stateBeforeCancel == StateRunning || stateBeforeCancel == StateStarting
+	wasRunning := stateBeforeCancel == StateRunning
 
 	// Transition to Cancelling state
-	if err := exec.stateMachine.Transition(TransitionCancel); err != nil {
-		return moerr.NewInternalErrorf(context.Background(), "cannot cancel: %v", err)
+	if stateBeforeCancel != StateCancelling {
+		if err := exec.stateMachine.Transition(TransitionCancel); err != nil {
+			exec.callbackMu.Unlock()
+			return moerr.NewInternalErrorf(context.Background(), "cannot cancel: %v", err)
+		}
 	}
+	// A Resume goroutine may be waiting for a paused Start to unwind. Fence it
+	// before cancellation completes so it cannot install a new routine after we
+	// have reached Cancelled.
+	exec.callbackGeneration.Add(1)
+	exec.cancelCallbackContextLocked()
+	callbackDone := exec.callbackDone
+	if callbackDone == nil {
+		callbackDone = closedChan()
+	}
+	exec.callbackMu.Unlock()
+	// A table-detector callback that passed its generation check can still be
+	// initializing a watermark or publishing a reader. Drain that old callback
+	// generation before taking the reader snapshot and performing the terminal
+	// watermark delete. Callbacks queued behind this fence observe the increment
+	// above and return without publishing work.
+	exec.cancelLifecycleContext()
+	if deleteWatermarks && exec.watermarkUpdater != nil && exec.spec != nil {
+		// The tombstone is installed before waiting for any control mutex or
+		// reader shutdown so late callbacks remain fenced on every timeout path.
+		exec.watermarkUpdater.MarkTaskDeleted(exec.spec.TaskId)
+	}
+	callbackDrainCtx, callbackDrainCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	callbacksDrained := false
+	select {
+	case <-callbackDone:
+		callbacksDrained = true
+	case <-callbackDrainCtx.Done():
+	}
+	callbackDrainCancel()
 	exec.recordLeavingFailedMetrics(stateBeforeCancel, StateCancelling)
-
-	// FIX: Unmark task as paused to prevent pausedTasks leakage
-	// If task was paused before cancel, we need to clean up the pause mark
-	if exec.watermarkUpdater != nil {
-		exec.watermarkUpdater.UnmarkTaskPaused(exec.spec.TaskId)
-	}
 
 	logutil.Info(
 		"cdc.frontend.task.cancel_start",
@@ -641,7 +1731,16 @@ func (exec *CDCTaskExecutor) Cancel() error {
 		zap.String("state", exec.stateMachine.State().String()),
 		zap.Bool("was-running", wasRunning),
 	)
+	cancelSucceeded := false
 	defer func() {
+		if !cancelSucceeded {
+			logutil.Warn(
+				"cdc.frontend.task.cancel_incomplete",
+				zap.String("task-id", exec.spec.TaskId),
+				zap.Error(err),
+			)
+			return
+		}
 		// Transition to Cancelled state
 		if err := exec.stateMachine.Transition(TransitionCancelComplete); err != nil {
 			logutil.Warn(
@@ -664,22 +1763,74 @@ func (exec *CDCTaskExecutor) Cancel() error {
 		)
 	}()
 
-	if wasRunning {
-		cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
-		exec.activeRoutine.CloseCancel()
+	if attempt := exec.activeStart(); attempt != nil {
+		attempt.cancel()
+	}
+	// Terminal cancellation owns every local producer regardless of the state
+	// from which it was entered. Pausing, Restarting, and Failed can all retain
+	// an old reader or startup attempt, so state is not evidence of quiescence.
+	cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
+	exec.closeActiveRoutineCancel()
+	readersStopped, readersDone := exec.stopAllReaders()
+	// Let lifecycle tests hold the runner-selected cleanup after local work has
+	// stopped. Claim takeover can then advance the durable owner/checkpoint while
+	// the old generation is still unwinding.
+	runCDCTestCancelHook(callbacksDrained && readersStopped)
+	// let Start() go, including the no-reader path where there is no
+	// completion channel to wait on.
+	select {
+	case exec.holdCh <- 1:
+		// Signal sent successfully
+	default:
+		// Channel full or Start() already exited, ignore
+	}
 
-		// Synchronously wait for all readers to stop before proceeding
-		// This ensures no goroutine leaks and no interference with new tasks
-		exec.stopAllReaders()
-
-		// let Start() go
-		select {
-		case exec.holdCh <- 1:
-			// Signal sent successfully
-		default:
-			// Channel full or Start() already exited, ignore
+	// DROP CDC removes metadata before taskservice asynchronously reaches this
+	// routine. Drain all earlier updater work after readers have stopped, remove
+	// the task from the shared updater caches, then perform the terminal delete.
+	// This also covers paused tasks, whose readers were stopped by Pause.
+	if deleteWatermarks && exec.watermarkUpdater != nil && exec.spec != nil && len(exec.spec.Accounts) > 0 {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := exec.watermarkUpdater.DeleteTaskWatermarks(
+			cleanupCtx,
+			uint64(exec.spec.Accounts[0].GetId()),
+			exec.spec.TaskId,
+		); err != nil {
+			logutil.Error(
+				"cdc.frontend.task.cancel_watermark_cleanup_failed",
+				zap.String("task-id", exec.spec.TaskId),
+				zap.String("task-name", exec.spec.TaskName),
+				zap.Error(err),
+			)
+			return err
+		}
+		if callbacksDrained && readersStopped {
+			exec.watermarkUpdater.ForgetTaskDeleted(exec.spec.TaskId)
+		} else {
+			// The timeout above only bounds cancellation; it must not release
+			// the tombstone while an old callback or reader can still publish a
+			// watermark. Keep one completion owner until both producer classes
+			// have actually exited, then reclaim the CN-local tombstone.
+			exec.reclaimDeletedWatermark(exec.spec.TaskId, callbackDone, readersDone)
 		}
 	}
+	if !deleteWatermarks && exec.watermarkUpdater != nil && exec.spec != nil && len(exec.spec.Accounts) > 0 {
+		// Claim-loss cancellation must retain the durable row for the
+		// replacement owner, but it must not retain this CN's stale cache tiers.
+		// Evict only after callbacks/readers are fenced and drained so no old
+		// producer can repopulate the local updater while it is being cleaned.
+		if fence := exec.currentDaemonClaimFence(); fence != nil {
+			exec.evictClaimLossWatermarkState(
+				fence.GenerationToken(),
+				exec.spec.TaskId,
+				uint64(exec.spec.Accounts[0].GetId()),
+				callbackDone,
+				readersDone,
+			)
+		}
+	}
+	cancelSucceeded = true
 	return nil
 }
 
@@ -754,85 +1905,298 @@ func (exec *CDCTaskExecutor) logCurrentWatermarks(phase string) {
 	}
 }
 
-// stopAllReaders stops all running readers and waits for them to exit
-// This method ensures complete cleanup before Cancel/Pause returns
-func (exec *CDCTaskExecutor) stopAllReaders() {
+// initiateReaderShutdown signals every currently visible reader and registers
+// an aggregate completion owner without waiting for it.
+func (exec *CDCTaskExecutor) initiateReaderShutdown() (<-chan struct{}, int) {
+	exec.readerStopMu.Lock()
+	defer exec.readerStopMu.Unlock()
+	readersDone := make(chan struct{})
+	if exec.runningReaders == nil {
+		close(readersDone)
+		return exec.setReaderShutdownCompletion(readersDone), 0
+	}
+
+	logutil.Info("cdc.frontend.task.stop_all_readers_start", zap.String("task-id", exec.spec.TaskId))
+	type shutdownEntry struct {
+		key    string
+		reader cdc.ChangeReader
+	}
+	readers := make([]shutdownEntry, 0)
+	exec.runningReaders.Range(func(key, value interface{}) bool {
+		readers = append(readers, shutdownEntry{key: key.(string), reader: value.(cdc.ChangeReader)})
+		return true
+	})
+	// Atomically transfer only the captured instances from map ownership to the
+	// completion channel below. A later publication at the same key survives the
+	// compare, while a repeated cleanup cannot launch another Close/Wait pair for
+	// an already-owned reader.
+	for _, entry := range readers {
+		exec.runningReaders.CompareAndDelete(entry.key, entry.reader)
+	}
+	if len(readers) == 0 {
+		close(readersDone)
+		return exec.setReaderShutdownCompletion(readersDone), 0
+	}
+
+	var readerWG sync.WaitGroup
+	readerWG.Add(len(readers))
+	for _, entry := range readers {
+		go func(entry shutdownEntry) {
+			defer readerWG.Done()
+			closeStart := time.Now()
+			logutil.Debug("cdc.frontend.task.stop_reader_close_start", zap.String("task-id", exec.spec.TaskId), zap.String("table", entry.key))
+			entry.reader.Close()
+			logutil.Debug("cdc.frontend.task.stop_reader_close_done", zap.String("task-id", exec.spec.TaskId), zap.String("table", entry.key), zap.Duration("cost", time.Since(closeStart)))
+			entry.reader.Wait()
+		}(entry)
+	}
+	go func() {
+		readerWG.Wait()
+		close(readersDone)
+	}()
+
+	return exec.setReaderShutdownCompletion(readersDone), len(readers)
+}
+
+// stopAllReaders stops all running readers and waits for them to exit up to the
+// synchronous lifecycle bound. The returned completion remains authoritative
+// after a timeout.
+func (exec *CDCTaskExecutor) stopAllReaders() (bool, <-chan struct{}) {
+	allReadersDone, readerCount := exec.initiateReaderShutdown()
+	_, timedOut := waitForCDCCompletion(allReadersDone, 10*time.Second)
+	if timedOut {
+		logutil.Warn("cdc.frontend.task.stop_reader_wait_timeout", zap.String("task-id", exec.spec.TaskId), zap.Duration("waited", 10*time.Second))
+	}
+	allStopped := !timedOut && completionReady(allReadersDone)
+	logutil.Debug("cdc.frontend.task.stop_all_readers_complete", zap.String("task-id", exec.spec.TaskId), zap.Int("reader-count", readerCount))
+	return allStopped, allReadersDone
+}
+
+func completionReady(done <-chan struct{}) bool {
+	select {
+	case <-done:
+		return true
+	default:
+		return false
+	}
+}
+
+// previousReaderGenerationStoppedLocked prevents Pause/Failed recovery from
+// reopening watermark admission while a callback or reader from that terminal
+// generation still owns work. Callers hold callbackMu, which seals callback
+// admission while this readiness snapshot is evaluated.
+func (exec *CDCTaskExecutor) previousReaderGenerationStoppedLocked(state ExecutorState) bool {
+	if state != StatePaused && state != StateFailed {
+		return true
+	}
+	if exec.callbackDone != nil && !completionReady(exec.callbackDone) {
+		return false
+	}
+	readersDone := exec.readerShutdownCompletion()
+	return readersDone == nil || completionReady(readersDone)
+}
+
+func (exec *CDCTaskExecutor) readerShutdownCompletion() <-chan struct{} {
+	exec.readerShutdownMu.Lock()
+	defer exec.readerShutdownMu.Unlock()
+	return exec.readerShutdownDone
+}
+
+func (exec *CDCTaskExecutor) setReaderShutdownCompletion(done <-chan struct{}) <-chan struct{} {
+	if done == nil {
+		return exec.readerShutdownCompletion()
+	}
+	exec.readerShutdownMu.Lock()
+	previous := exec.readerShutdownDone
+	if previous == nil || previous == done {
+		exec.readerShutdownDone = done
+		exec.readerShutdownMu.Unlock()
+		return done
+	}
+	// Do not grow one waiter goroutine per repeated cleanup retry when either
+	// side of the aggregate is already complete. This is especially important
+	// after a timed-out reader has been removed from runningReaders and a later
+	// retry takes an empty snapshot.
+	if completionReady(previous) {
+		exec.readerShutdownDone = done
+		exec.readerShutdownMu.Unlock()
+		return done
+	}
+	if completionReady(done) {
+		exec.readerShutdownMu.Unlock()
+		return previous
+	}
+	combined := make(chan struct{})
+	go func() {
+		<-previous
+		<-done
+		close(combined)
+	}()
+	exec.readerShutdownDone = combined
+	exec.readerShutdownMu.Unlock()
+	return combined
+}
+
+func (exec *CDCTaskExecutor) reclaimDeletedWatermark(
+	taskID string,
+	callbacksDone <-chan struct{},
+	readersDone <-chan struct{},
+) {
+	if callbacksDone == nil {
+		callbacksDone = closedChan()
+	}
+	if readersDone == nil {
+		readersDone = closedChan()
+	}
+	go func() {
+		// If the bounded Cancel wait expired, a callback admitted before the
+		// generation fence may publish a reader after Cancel's first snapshot.
+		// RegistrationDone guarantees that once callbacksDone closes, every such
+		// reader is visible. Take one final snapshot before releasing the local
+		// terminal tombstone.
+		<-callbacksDone
+		_, lateReadersDone := exec.stopAllReaders()
+		<-readersDone
+		<-lateReadersDone
+		if exec.watermarkUpdater != nil {
+			exec.watermarkUpdater.ForgetTaskDeleted(taskID)
+		}
+	}()
+}
+
+func (exec *CDCTaskExecutor) evictClaimLossWatermarkState(
+	ownerGeneration uint64,
+	taskID string,
+	accountID uint64,
+	callbacksDone <-chan struct{},
+	readersDone <-chan struct{},
+) {
+	if ownerGeneration == 0 {
+		return
+	}
+	if callbacksDone == nil {
+		callbacksDone = closedChan()
+	}
+	if readersDone == nil {
+		readersDone = closedChan()
+	}
+	cleanup := func() {
+		<-callbacksDone
+		_, lateReadersDone := exec.stopAllReaders()
+		<-readersDone
+		<-lateReadersDone
+		// Claim-loss cleanup is best-effort and must not hold up replacement
+		// admission on a stalled updater queue. A later updater cycle can retry
+		// the local eviction if this bounded barrier cannot complete.
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := exec.watermarkUpdater.EvictTaskLocalStateForOwner(
+			cleanupCtx, accountID, taskID, ownerGeneration); err != nil {
+			logutil.Warn(
+				"cdc.frontend.task.claim_loss_cache_cleanup_failed",
+				zap.String("task-id", taskID),
+				zap.Uint64("owner-generation", ownerGeneration),
+				zap.Error(err),
+			)
+		}
+	}
+	// Do not hold taskservice's cancellation completion on the updater queue.
+	// The queue barrier and local eviction are safe to finish asynchronously
+	// after all producer fences have closed, and a replacement runner must be
+	// able to publish its claim immediately.
+	go cleanup()
+}
+
+type removedReaderShutdown struct {
+	reader cdc.ChangeReader
+	done   chan struct{}
+}
+
+func (exec *CDCTaskExecutor) stopReadersMissingFromScan(accountTbls cdc.TblMap) {
 	if exec.runningReaders == nil {
 		return
 	}
 
-	logutil.Info(
-		"cdc.frontend.task.stop_all_readers_start",
-		zap.String("task-id", exec.spec.TaskId),
-	)
-
-	// Step 1: Send stop signal to all readers
-	readerCount := 0
 	exec.runningReaders.Range(func(key, value interface{}) bool {
-		reader := value.(cdc.ChangeReader)
-		tableKey, _ := key.(string)
-		closeStart := time.Now()
-		logutil.Debug(
-			"cdc.frontend.task.stop_reader_close_start",
-			zap.String("task-id", exec.spec.TaskId),
-			zap.String("table", tableKey),
-		)
-		reader.Close()
-		logutil.Debug(
-			"cdc.frontend.task.stop_reader_close_done",
-			zap.String("task-id", exec.spec.TaskId),
-			zap.String("table", tableKey),
-			zap.Duration("cost", time.Since(closeStart)),
-		)
-		readerCount++
-		return true
-	})
-
-	// Step 2: Wait for all readers to completely exit
-	exec.runningReaders.Range(func(key, value interface{}) bool {
-		reader := value.(cdc.ChangeReader)
-		tableKey, _ := key.(string)
-		waitStart := time.Now()
-		logutil.Debug(
-			"cdc.frontend.task.stop_reader_wait_start",
-			zap.String("task-id", exec.spec.TaskId),
-			zap.String("table", tableKey),
-		)
-		done := make(chan struct{})
-		go func() {
-			reader.Wait()
-			close(done)
-		}()
-		select {
-		case <-done:
-			logutil.Debug(
-				"cdc.frontend.task.stop_reader_wait_done",
-				zap.String("task-id", exec.spec.TaskId),
-				zap.String("table", tableKey),
-				zap.Duration("cost", time.Since(waitStart)),
-			)
-		case <-time.After(10 * time.Second):
-			logutil.Warn(
-				"cdc.frontend.task.stop_reader_wait_timeout",
-				zap.String("task-id", exec.spec.TaskId),
-				zap.String("table", tableKey),
-				zap.Duration("waited", time.Since(waitStart)),
-			)
+		tableKey, ok := key.(string)
+		if !ok {
+			return true
 		}
+		if _, ok = accountTbls[tableKey]; ok {
+			return true
+		}
+
+		reader, ok := value.(cdc.ChangeReader)
+		if !ok {
+			exec.runningReaders.Delete(key)
+			return true
+		}
+
+		if !exec.matchesAnySourcePattern(tableKey) {
+			return true
+		}
+
+		exec.stopRemovedReader(tableKey, key, reader)
 		return true
 	})
+}
 
-	// Step 3: Clear the map
-	exec.runningReaders.Range(func(key, value interface{}) bool {
-		exec.runningReaders.Delete(key)
-		return true
-	})
+func (exec *CDCTaskExecutor) stopRemovedReader(tableKey string, mapKey interface{}, reader cdc.ChangeReader) {
+	shutdown := &removedReaderShutdown{
+		reader: reader,
+		done:   make(chan struct{}),
+	}
 
-	logutil.Debug(
-		"cdc.frontend.task.stop_all_readers_complete",
+	actual, loaded := exec.removedReaderShutdowns.LoadOrStore(tableKey, shutdown)
+	if loaded {
+		existing, ok := actual.(*removedReaderShutdown)
+		if ok && existing.reader == reader {
+			select {
+			case <-existing.done:
+				exec.removedReaderShutdowns.CompareAndDelete(tableKey, existing)
+			default:
+				return
+			}
+		} else {
+			exec.removedReaderShutdowns.CompareAndDelete(tableKey, actual)
+		}
+		_, loaded = exec.removedReaderShutdowns.LoadOrStore(tableKey, shutdown)
+		if loaded {
+			return
+		}
+	}
+
+	logutil.Info(
+		"cdc.frontend.task.stop_reader_removed_from_scan",
 		zap.String("task-id", exec.spec.TaskId),
-		zap.Int("reader-count", readerCount),
+		zap.String("task-name", exec.spec.TaskName),
+		zap.String("table", tableKey),
 	)
+
+	go func() {
+		reader.Close()
+		reader.Wait()
+		exec.runningReaders.CompareAndDelete(mapKey, reader)
+		close(shutdown.done)
+		exec.removedReaderShutdowns.CompareAndDelete(tableKey, shutdown)
+	}()
+}
+
+func (exec *CDCTaskExecutor) removedReaderShutdownInProgress(tableKey string, reader cdc.ChangeReader) bool {
+	actual, ok := exec.removedReaderShutdowns.Load(tableKey)
+	if !ok {
+		return false
+	}
+	shutdown, ok := actual.(*removedReaderShutdown)
+	if !ok || shutdown.reader != reader {
+		return false
+	}
+	select {
+	case <-shutdown.done:
+		return false
+	default:
+		return true
+	}
 }
 
 func (exec *CDCTaskExecutor) initAesKeyByInternalExecutor(ctx context.Context, accountId uint32) (err error) {
@@ -861,26 +2225,384 @@ func (exec *CDCTaskExecutor) initAesKeyByInternalExecutor(ctx context.Context, a
 }
 
 func (exec *CDCTaskExecutor) updateErrMsg(ctx context.Context, errMsg string) (err error) {
-	accId := exec.spec.Accounts[0].GetId()
+	return exec.updateErrMsgWithCurrentState(ctx, errMsg, cdc.CDCState_Running)
+}
+
+func (exec *CDCTaskExecutor) updateErrMsgWithCurrentState(
+	ctx context.Context,
+	errMsg string,
+	currentState string,
+) (err error) {
 	state := cdc.CDCState_Running
 	if errMsg != "" {
 		state = cdc.CDCState_Failed
 	}
+	return exec.updateCatalogStateAndErrMsg(ctx, state, errMsg, currentState)
+}
+
+func (exec *CDCTaskExecutor) updateCatalogStateAndErrMsg(
+	ctx context.Context,
+	state string,
+	errMsg string,
+	currentState string,
+) (err error) {
+	return exec.updateCatalogStateAndErrMsgWithExecutor(ctx, exec.ie, state, errMsg, currentState)
+}
+
+func (exec *CDCTaskExecutor) updateCatalogStateAndErrMsgWithExecutor(
+	ctx context.Context,
+	sqlExecutor ie.InternalExecutor,
+	state string,
+	errMsg string,
+	currentState string,
+) (err error) {
+	if sqlExecutor == nil || exec.spec == nil || len(exec.spec.Accounts) == 0 {
+		return nil
+	}
+	accId := exec.spec.Accounts[0].GetId()
 	if len(errMsg) > cdc.CDCWatermarkErrMsgMaxLen {
 		errMsg = errMsg[:cdc.CDCWatermarkErrMsgMaxLen]
 	}
 
-	sql := cdc.CDCSQLBuilder.UpdateTaskStateAndErrMsgSQL(
+	sql := cdc.CDCSQLBuilder.UpdateTaskStateAndErrMsgByStateSQL(
 		uint64(accId),
 		exec.spec.TaskId,
 		state,
 		errMsg,
+		currentState,
 	)
-	return exec.ie.Exec(
-		defines.AttachAccountId(ctx, catalog.System_Account),
+	expectedErrMsg := errMsg
+	return execCDCSQLWithAffectedRows(
+		ctx,
+		sqlExecutor,
 		sql,
-		ie.SessionOverrideOptions{},
+		uint64(accId),
+		exec.spec.TaskId,
+		state,
+		currentState,
+		&expectedErrMsg,
 	)
+}
+
+// admitRestartCatalogState reopens only the failure persisted by a prior local
+// or fresh restart attempt. If the request path already put the row in
+// restarting, exact-state validation makes the transition idempotent.
+func (exec *CDCTaskExecutor) admitRestartCatalogState(ctx context.Context) error {
+	if exec.spec == nil || len(exec.spec.Accounts) == 0 {
+		return nil
+	}
+	ctx = defines.AttachAccountId(ctx, uint32(exec.spec.Accounts[0].GetId()))
+	return exec.updateCatalogStateAndErrMsg(ctx, cdc.CDCState_Restarting, "", cdc.CDCState_Failed)
+}
+
+func (exec *CDCTaskExecutor) recordRestartTimeoutAsync(
+	attempt *cdcStartAttempt,
+	timeoutErr error,
+) {
+	if exec.spec == nil || len(exec.spec.Accounts) == 0 {
+		return
+	}
+	persistence := &cdcRestartCatalogPersistence{done: make(chan struct{})}
+	exec.restartCatalogMu.Lock()
+	if previous := exec.restartCatalogPersistence; previous != nil {
+		select {
+		case <-previous.done:
+		default:
+			exec.restartCatalogMu.Unlock()
+			eventCDCExecutorRestartFailed.ErrorLazy(func() []zap.Field {
+				return exec.restartFields(append([]zap.Field{
+					zap.String("reason", "startup-timeout-record-already-pending"),
+				}, logutil.ErrorFingerprintFields("error", timeoutErr)...)...)
+			})
+			return
+		}
+	}
+	exec.restartCatalogPersistence = persistence
+	exec.restartCatalogMu.Unlock()
+
+	runPersistence := func(lifecycleCtx context.Context) {
+		defer close(persistence.done)
+		factory := exec.restartCatalogExecutorFactory
+		if factory == nil {
+			persistence.err = moerr.NewInternalErrorNoCtx("CDC restart timeout catalog executor is unavailable")
+		} else {
+			// This work is independent of the request that timed out, but it is
+			// still owned by task-runner/CN shutdown. The scheduler context
+			// preserves both properties: Restart returns immediately, while
+			// Stop cancels and joins the catalog repair before dependencies
+			// are torn down.
+			ctx, cancel := context.WithTimeout(lifecycleCtx, exec.restartTimeout())
+			defer cancel()
+			ctx = defines.AttachAccountId(ctx, uint32(exec.spec.Accounts[0].GetId()))
+			sqlExecutor := factory()
+			if sqlExecutor == nil {
+				persistence.err = moerr.NewInternalErrorNoCtx("CDC restart timeout catalog executor factory returned nil")
+			} else {
+				persistence.err = exec.updateCatalogStateAndErrMsgWithExecutor(
+					ctx,
+					sqlExecutor,
+					cdc.CDCState_Failed,
+					timeoutErr.Error(),
+					cdc.CDCState_Restarting,
+				)
+				// The startup publication may have held the catalog row lock
+				// across the timeout. If it committed running first, repair
+				// that exact late state while this persistence fence still
+				// prevents a newer restart generation from being admitted.
+				if persistence.err != nil &&
+					attempt != nil &&
+					attempt.restartOwner.Load() == cdcRestartOwnerTimedOut {
+					persistence.err = exec.updateCatalogStateAndErrMsgWithExecutor(
+						ctx,
+						sqlExecutor,
+						cdc.CDCState_Failed,
+						timeoutErr.Error(),
+						cdc.CDCState_Running,
+					)
+				}
+			}
+		}
+		if persistence.err != nil {
+			eventCDCExecutorRestartFailed.ErrorLazy(func() []zap.Field {
+				return exec.restartFields(append([]zap.Field{
+					zap.String("reason", "startup-timeout-catalog-update"),
+				}, logutil.ErrorFingerprintFields("error", persistence.err)...)...)
+			})
+		}
+	}
+	if err := exec.runLifecycleContextTask(
+		"cdc-restart-timeout-persistence",
+		runPersistence,
+	); err != nil {
+		// RunNamedTask either admits exactly one task or returns an error. Close
+		// the generation fence on rejection so a later control request cannot
+		// wait forever for work that was never started.
+		persistence.err = moerr.NewInternalErrorf(
+			context.Background(),
+			"cannot schedule CDC restart timeout persistence: %v",
+			err,
+		)
+		close(persistence.done)
+		eventCDCExecutorRestartFailed.ErrorLazy(func() []zap.Field {
+			return exec.restartFields(append([]zap.Field{
+				zap.String("reason", "startup-timeout-persistence-schedule"),
+			}, logutil.ErrorFingerprintFields("error", persistence.err)...)...)
+		})
+	}
+}
+
+func (exec *CDCTaskExecutor) waitForRestartCatalogPersistence(timeout time.Duration) (error, bool) {
+	exec.restartCatalogMu.Lock()
+	persistence := exec.restartCatalogPersistence
+	exec.restartCatalogMu.Unlock()
+	if persistence == nil {
+		return nil, false
+	}
+
+	_, timedOut := waitForCDCCompletion(persistence.done, timeout)
+	if timedOut {
+		return nil, true
+	}
+	exec.restartCatalogMu.Lock()
+	if exec.restartCatalogPersistence == persistence {
+		exec.restartCatalogPersistence = nil
+	}
+	exec.restartCatalogMu.Unlock()
+	return persistence.err, false
+}
+
+// refineRestartTimeoutCause preserves late failure evidence without mutating
+// catalog state. Once Restart has returned a timeout, a later generation may
+// already be retrying; a delayed failed -> failed update has no durable
+// generation token and could overwrite that newer generation's error.
+func (exec *CDCTaskExecutor) refineRestartTimeoutCause(attempt *cdcStartAttempt, startErr error) {
+	if attempt == nil || errors.Is(startErr, context.Canceled) || errors.Is(startErr, context.DeadlineExceeded) {
+		return
+	}
+	fence := attempt.timeoutFence.Load()
+	if fence == 0 || exec.callbackGeneration.Load() != fence {
+		return
+	}
+	eventCDCExecutorRestartFailed.ErrorLazy(func() []zap.Field {
+		return exec.restartFields(append([]zap.Field{
+			zap.String("reason", "late-startup-error-after-timeout"),
+		}, logutil.ErrorFingerprintFields("error", startErr)...)...)
+	})
+}
+
+// reconcileTimedOutStartupPublication repairs the only ambiguous catalog
+// outcome: restarting -> running committed after the timeout side had already
+// claimed the attempt. A newer restart cannot be admitted while this attempt
+// remains installed, and the exact running -> failed CAS preserves a
+// concurrent PAUSE/CANCEL/DROP that has already moved the row elsewhere.
+func (exec *CDCTaskExecutor) reconcileTimedOutStartupPublication(
+	attempt *cdcStartAttempt,
+) {
+	if attempt == nil ||
+		attempt.restartOwner.Load() != cdcRestartOwnerTimedOut ||
+		!exec.isActiveStartAttempt(attempt) ||
+		exec.spec == nil ||
+		len(exec.spec.Accounts) == 0 {
+		return
+	}
+
+	sqlExecutor := exec.ie
+	if factory := exec.restartCatalogExecutorFactory; factory != nil {
+		sqlExecutor = factory()
+	}
+	if sqlExecutor == nil {
+		eventCDCExecutorRestartFailed.ErrorLazy(func() []zap.Field {
+			return exec.restartFields(zap.String("reason", "late-running-catalog-reconcile-executor-unavailable"))
+		})
+		return
+	}
+
+	timeoutErr := moerr.NewInternalErrorNoCtx("CDC restart startup timed out")
+	ctx, cancel := context.WithTimeout(context.Background(), exec.restartTimeout())
+	defer cancel()
+	ctx = defines.AttachAccountId(ctx, uint32(exec.spec.Accounts[0].GetId()))
+	if err := exec.updateCatalogStateAndErrMsgWithExecutor(
+		ctx,
+		sqlExecutor,
+		cdc.CDCState_Failed,
+		timeoutErr.Error(),
+		cdc.CDCState_Running,
+	); err != nil {
+		eventCDCExecutorRestartFailed.ErrorLazy(func() []zap.Field {
+			return exec.restartFields(append([]zap.Field{
+				zap.String("reason", "late-running-catalog-reconcile"),
+			}, logutil.ErrorFingerprintFields("error", err)...)...)
+		})
+	}
+}
+
+func (exec *CDCTaskExecutor) updateErrMsgForStartup(
+	ctx context.Context,
+	errMsg string,
+	catalogState string,
+	hasRestartCatalogState bool,
+	restartAdmission bool,
+) error {
+	if hasRestartCatalogState {
+		return exec.updateErrMsgWithCurrentState(ctx, errMsg, catalogState)
+	}
+	if restartAdmission {
+		return exec.updateErrMsgWithCurrentState(ctx, errMsg, cdc.CDCState_Restarting)
+	}
+	return exec.updateErrMsgWithCurrentState(ctx, errMsg, cdc.CDCState_Running)
+}
+
+func execCDCSQLWithAffectedRows(
+	ctx context.Context,
+	sqlExecutor ie.InternalExecutor,
+	sql string,
+	accountID uint64,
+	taskID string,
+	targetState string,
+	currentState string,
+	targetErrMsg *string,
+) error {
+	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+	fault.TriggerFault(cdcStateTransitionFaultPoint(currentState, targetState))
+	if sqlExecutorWithStatus, ok := sqlExecutor.(ie.InternalExecutorWithStatus); ok {
+		status, err := sqlExecutorWithStatus.ExecWithStatus(ctx, sql, ie.SessionOverrideOptions{})
+		if err != nil {
+			return err
+		}
+		switch status.AffectedRows {
+		case 1:
+			return nil
+		case 0:
+			return validateCDCStateTransitionResult(
+				ctx,
+				sqlExecutor,
+				accountID,
+				taskID,
+				currentState,
+				targetState,
+				targetErrMsg,
+			)
+		default:
+			return moerr.NewInternalErrorf(
+				ctx,
+				"cdc task state transition affected %d rows, task_id=%s, current_state=%s, target_state=%s",
+				status.AffectedRows,
+				taskID,
+				currentState,
+				targetState,
+			)
+		}
+	}
+	return sqlExecutor.Exec(ctx, sql, ie.SessionOverrideOptions{})
+}
+
+func validateCDCStateTransitionResult(
+	ctx context.Context,
+	sqlExecutor ie.InternalExecutor,
+	accountID uint64,
+	taskID string,
+	currentState string,
+	targetState string,
+	targetErrMsg *string,
+) error {
+	querySQL := cdc.CDCSQLBuilder.GetTaskStateSQL(accountID, taskID)
+	result := sqlExecutor.Query(ctx, querySQL, ie.SessionOverrideOptions{})
+	if result == nil {
+		return moerr.NewInternalErrorf(
+			ctx,
+			"cdc task state transition query returned no result, task_id=%s, current_state=%s, target_state=%s",
+			taskID,
+			currentState,
+			targetState,
+		)
+	}
+	if err := result.Error(); err != nil {
+		return err
+	}
+	if result.RowCount() == 0 {
+		return moerr.NewInternalErrorf(
+			ctx,
+			"cdc task state transition found no catalog row, task_id=%s, current_state=%s, target_state=%s",
+			taskID,
+			currentState,
+			targetState,
+		)
+	}
+	state, err := result.GetString(ctx, 0, 0)
+	if err != nil {
+		return err
+	}
+	if state == targetState {
+		if targetErrMsg == nil {
+			return nil
+		}
+		errMsg, err := result.GetString(ctx, 0, 1)
+		if err != nil {
+			return err
+		}
+		if errMsg == *targetErrMsg {
+			return nil
+		}
+		return moerr.NewInternalErrorf(
+			ctx,
+			"cdc task state transition found conflicting catalog err_msg, task_id=%s, current_state=%s, target_state=%s",
+			taskID,
+			currentState,
+			targetState,
+		)
+	}
+	return moerr.NewInternalErrorf(
+		ctx,
+		"cdc task state transition found conflicting catalog state %s, task_id=%s, current_state=%s, target_state=%s",
+		state,
+		taskID,
+		currentState,
+		targetState,
+	)
+}
+
+func cdcStateTransitionFaultPoint(currentState string, targetState string) string {
+	return "cdc/state_transition/" + currentState + "_to_" + targetState + "/before_exec"
 }
 
 func CDCPauseTaskCompleteHook(sqlExecutorFactory func() ie.InternalExecutor) taskservice.PauseTaskCompletedHook {
@@ -931,11 +2653,7 @@ func updateCDCTaskState(
 		state,
 		cdc.CDCState_Pausing,
 	)
-	if err := sqlExecutor.Exec(
-		defines.AttachAccountId(ctx, catalog.System_Account),
-		sql,
-		ie.SessionOverrideOptions{},
-	); err != nil {
+	if err := execCDCSQLWithAffectedRows(ctx, sqlExecutor, sql, accountID, spec.TaskId, state, cdc.CDCState_Pausing, nil); err != nil {
 		logutil.Error(
 			"cdc.frontend.task.update_state.failed",
 			zap.String("task-id", spec.TaskId),
@@ -980,16 +2698,39 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 	return exec.handleNewTablesForGeneration(exec.callbackGeneration.Load(), allAccountTbls)
 }
 
+func closedChan() chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+
 func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 	callbackGeneration uint64,
 	allAccountTbls map[uint32]cdc.TblMap,
 ) error {
-	exec.callbackMu.RLock()
-	defer exec.callbackMu.RUnlock()
-
-	if !exec.isCurrentCallbackGeneration(callbackGeneration) {
+	exec.callbackMu.Lock()
+	if !exec.isCurrentCallbackGeneration(callbackGeneration) ||
+		!exec.tableCallbackStateAllowsAdmission() {
+		exec.callbackMu.Unlock()
 		return nil
 	}
+	if exec.callbackCount == 0 {
+		exec.callbackDone = make(chan struct{})
+	}
+	exec.callbackCount++
+	callbackDone := exec.callbackDone
+	callbackCtx := exec.callbackContextLocked()
+	exec.callbackMu.Unlock()
+	defer func() {
+		exec.callbackMu.Lock()
+		exec.callbackCount--
+		if exec.callbackCount == 0 && exec.callbackDone == callbackDone {
+			close(exec.callbackDone)
+		}
+		exec.callbackMu.Unlock()
+	}()
+	accountId := uint32(exec.spec.Accounts[0].GetId())
+	ctx := defines.AttachAccountId(callbackCtx, accountId)
 
 	// lock to avoid create pipelines for the same table
 	// 2025.7, this lock might be needless now
@@ -1002,11 +2743,14 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 
 	// if injected, we expect nothing
 	if sleepSeconds, injected := objectio.CDCHandleSlowInjected(); injected {
-		time.Sleep(time.Duration(sleepSeconds) * time.Second)
+		timer := time.NewTimer(time.Duration(sleepSeconds) * time.Second)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		}
 	}
-
-	accountId := uint32(exec.spec.Accounts[0].GetId())
-	ctx := defines.AttachAccountId(context.Background(), accountId)
 
 	txnOp, err := cdc.GetTxnOp(ctx, exec.cnEngine, exec.cnTxnClient, "cdc-handleNewTables")
 	if err != nil {
@@ -1041,14 +2785,25 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 	// Track failed tables for better error reporting
 	failedTables := make(map[string]error)
 	successCount := 0
+	accountTbls := allAccountTbls[accountId]
+	exec.stopReadersMissingFromScan(accountTbls)
 
-	for key, info := range allAccountTbls[accountId] {
+	for key, info := range accountTbls {
 		// already running
 		if val, ok := exec.runningReaders.Load(key); ok {
 			if reader, ok := val.(cdc.ChangeReader); ok {
 				readerInfo := reader.GetTableInfo()
 				// wait the old reader to stop
 				if info.OnlyDiffinTblId(readerInfo) {
+					if exec.removedReaderShutdownInProgress(key, reader) {
+						logutil.Info(
+							"cdc.frontend.task.skip_wait_removed_reader_shutdown",
+							zap.String("table", key),
+							zap.Uint64("old-table-id", readerInfo.SourceTblId),
+							zap.Uint64("new-table-id", info.SourceTblId),
+						)
+						continue
+					}
 					logutil.Info(
 						"cdc.frontend.task.wait_old_reader",
 						zap.String("table", key),
@@ -1060,7 +2815,11 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 						defer close(waitChan)
 						reader.Wait()
 					}()
-					<-waitChan
+					select {
+					case <-waitChan:
+					case <-ctx.Done():
+						return ctx.Err()
+					}
 				} else {
 					continue
 				}
@@ -1102,15 +2861,41 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 			zap.String("source-db", newTableInfo.SourceDbName),
 			zap.String("source-table", newTableInfo.SourceTblName),
 		)
-		if err = exec.addExecPipelineForTable(ctx, newTableInfo, txnOp); err != nil {
+		var pipelineOwnerFence *cdc.OwnerFence
+		if exec.stableInitialSnapshot {
+			// Capture one immutable identity for both pipeline effects and any
+			// diagnostic produced while constructing that pipeline. Re-reading the
+			// current fence after a failure could lend a replacement generation's
+			// identity to obsolete work.
+			pipelineOwnerFence = exec.currentDaemonClaimFence()
+		}
+		if err = exec.addExecPipelineForTable(
+			ctx, newTableInfo, txnOp, pipelineOwnerFence); err != nil {
 			logutil.Error(
 				"cdc.frontend.task.add_exec_pipeline_failed",
 				zap.String("task-name", exec.spec.TaskName),
 				zap.String("table", key),
 				zap.Error(err),
 			)
-			// Persist error to database for this table
-			if exec.watermarkUpdater != nil {
+			// Ownership loss is a control-plane result for this obsolete executor.
+			// Do not poison shared table metadata that belongs to the new owner.
+			if cdc.IsOwnerFenceLostError(err) {
+				return err
+			}
+			// Pause, cancel, restart, or CN shutdown can cancel this callback
+			// while target initialization is in flight. The obsolete callback is
+			// lifecycle cleanup, not a table-data failure; never persist it into
+			// shared err_msg state owned by a later generation.
+			if ctx.Err() != nil || !exec.isCurrentCallbackGeneration(callbackGeneration) {
+				return err
+			}
+			// Persist data/setup errors, and retain transient fence/epoch backend
+			// failures as retryable rather than permanently failing the table.
+			// A stable diagnostic without the exact pipeline fence would silently
+			// fall back to the legacy upsert and escape generation ownership. If the
+			// fence itself is missing, leave reporting to the task-level startup error.
+			if exec.watermarkUpdater != nil &&
+				(!exec.stableInitialSnapshot || pipelineOwnerFence != nil) {
 				watermarkKey := cdc.WatermarkKey{
 					AccountId: uint64(exec.spec.Accounts[0].GetId()),
 					TaskId:    exec.spec.TaskId,
@@ -1118,9 +2903,15 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 					TableName: newTableInfo.SourceTblName,
 				}
 				errorCtx := &cdc.ErrorContext{
-					IsRetryable: false, // Pipeline creation errors are not retryable by default
+					IsRetryable: cdc.IsRetryableSnapshotEpochError(err) ||
+						cdc.IsRetryableOwnerFenceError(err) ||
+						cdc.IsRetryableTargetLockError(err) ||
+						cdc.IsRetryableConnectionError(err),
 				}
-				if updateErr := exec.watermarkUpdater.UpdateWatermarkErrMsg(ctx, &watermarkKey, err.Error(), errorCtx); updateErr != nil {
+				errorUpdateCtx := cdc.WithWatermarkOwnerFence(
+					ctx, pipelineOwnerFence, newTableInfo.SourceTblId)
+				if updateErr := exec.watermarkUpdater.UpdateWatermarkErrMsg(
+					errorUpdateCtx, &watermarkKey, err.Error(), errorCtx); updateErr != nil {
 					logutil.Warn(
 						"cdc.frontend.task.persist_table_error_failed",
 						zap.String("table", key),
@@ -1160,6 +2951,21 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 	}
 
 	return nil
+}
+
+func (exec *CDCTaskExecutor) tableCallbackStateAllowsAdmission() bool {
+	// Production callbacks are registered while Starting and normally execute
+	// while Running. Permit Idle for directly constructed legacy/unit callers,
+	// but make every state that has fenced or stopped producers reject new work.
+	if exec.stateMachine == nil {
+		return true
+	}
+	switch exec.stateMachine.State() {
+	case StatePausing, StatePaused, StateRestarting, StateCancelling, StateCancelled, StateFailed:
+		return false
+	default:
+		return true
+	}
 }
 
 func (exec *CDCTaskExecutor) isCurrentCallbackGeneration(callbackGeneration uint64) bool {
@@ -1205,9 +3011,10 @@ func (exec *CDCTaskExecutor) failTaskForPermanentTableError(ctx context.Context,
 	}
 
 	cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
-	if exec.activeRoutine != nil {
-		exec.activeRoutine.CloseCancel()
-	}
+	exec.closeActiveRoutineCancel()
+	// Keep the completion owner even when a permanent table error leaves a
+	// reader unwinding past the bounded wait.  A later DROP may observe
+	// StateFailed and otherwise assume that no reader survived this path.
 	exec.stopAllReaders()
 	if exec.holdCh != nil {
 		select {
@@ -1344,12 +3151,53 @@ func (exec *CDCTaskExecutor) matchAnyPattern(key string, info *cdc.DbTableInfo) 
 	return false
 }
 
+func (exec *CDCTaskExecutor) matchesAnySourcePattern(key string) bool {
+	match := func(s, p string) bool {
+		if p == cdc.CDCPitrGranularity_All {
+			return true
+		}
+		return s == p
+	}
+
+	db, table := cdc.SplitDbTblKey(key)
+	for _, pt := range exec.tables.Pts {
+		if match(db, pt.Source.Database) && match(table, pt.Source.Table) {
+			return true
+		}
+	}
+	return false
+}
+
+// effectiveCDCStartTS returns the durable activation boundary used by the
+// reader. Legacy NoFull rows have no serialized start_ts, so a previously
+// committed watermark is the only safe boundary; passing an empty start_ts
+// would allow stale-read recovery to advance past unprocessed commits.
+func effectiveCDCStartTS(taskStart, durableProgress types.TS, legacyNoFull bool) types.TS {
+	if legacyNoFull && !durableProgress.IsEmpty() {
+		return durableProgress
+	}
+	return taskStart
+}
+
+func legacyNoFullStartTS(durable types.TS, found bool, admission types.TS) types.TS {
+	if found && !durable.IsEmpty() {
+		return durable
+	}
+	return admission
+}
+
 // reader ----> sinker ----> remote db
 func (exec *CDCTaskExecutor) addExecPipelineForTable(
 	ctx context.Context,
 	info *cdc.DbTableInfo,
 	txnOp client.TxnOperator,
+	ownerFence *cdc.OwnerFence,
 ) (err error) {
+	// Test-only admission fence. The public SQL regression drives a real
+	// detector scan while this callback is held, preserving CREATE-returned
+	// ordering without changing production scheduling.
+	runCDCTestAdmissionHook()
+
 	// for ut
 	if objectio.CDCAddExecConsumeTruncateInjected() {
 		info.IdChanged = false
@@ -1363,14 +3211,36 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 	// step 1. init watermarkUpdater
 	// get watermark from db
 	watermark := exec.startTs
-	if exec.noFull {
-		watermark = types.TimestampToTS(txnOp.SnapshotTS())
-	}
 	watermarkKey := cdc.WatermarkKey{
 		AccountId: uint64(exec.spec.Accounts[0].GetId()),
 		TaskId:    exec.spec.TaskId,
 		DBName:    info.SourceDbName,
 		TableName: info.SourceTblName,
+	}
+	legacyNoFull := exec.noFull && exec.startTs.IsEmpty() && !exec.stableInitialSnapshot
+	if legacyNoFull {
+		// A legacy NoFull task is safe to resume only when it already has a
+		// durable progress point. Never invent a new snapshot here: that would
+		// silently skip commits between CREATE CDC and executor admission.
+		var found bool
+		watermark, _, found, err = exec.watermarkUpdater.GetWatermarkProgressIfExists(ctx, &watermarkKey)
+		if err != nil {
+			return err
+		}
+		watermark = legacyNoFullStartTS(watermark, found, types.TimestampToTS(txnOp.SnapshotTS()))
+	} else if exec.noFull && watermark.IsEmpty() {
+		// A stable-protocol marker without its lossless start_ts is a malformed
+		// catalog row. Do not silently replace the activation boundary with a
+		// later executor snapshot.
+		return moerr.NewInternalErrorNoCtx("CDC NoFull task has a stable protocol marker without a durable start timestamp")
+	}
+	var initialSnapshotEpoch types.TS
+	var initialSnapshotPending bool
+	var compactSnapshotEpochs bool
+	if exec.stableInitialSnapshot {
+		if ownerFence == nil {
+			return moerr.NewInternalErrorNoCtx("stable CDC executor has no daemon claim fence")
+		}
 	}
 	if watermark, err = exec.watermarkUpdater.GetOrAddCommitted(
 		ctx,
@@ -1378,6 +3248,86 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		&watermark,
 	); err != nil {
 		return err
+	}
+	streamStartTs := effectiveCDCStartTS(exec.startTs, watermark, legacyNoFull)
+	initialSnapshotPending = !exec.noFull && exec.startTs.IsEmpty() && watermark.IsEmpty()
+	if exec.stableInitialSnapshot {
+		if err = ownerFence.Check(ctx); err != nil {
+			return err
+		}
+		var watermarkGeneration uint64
+		watermark, watermarkGeneration, err = exec.watermarkUpdater.GetWatermarkProgress(ctx, &watermarkKey)
+		if err != nil {
+			return err
+		}
+		var epochState cdc.InitialSnapshotEpochState
+		initialSnapshot := !exec.noFull && exec.startTs.IsEmpty()
+		if initialSnapshot {
+			candidate := types.TimestampToTS(txnOp.SnapshotTS())
+			// Persist the actual bounded snapshot endpoint. Persisting a later
+			// transaction timestamp and only capping it inside the reader would make
+			// a completed EndTs task look permanently pre-epoch after restart.
+			candidate = capInitialSnapshotEpoch(candidate, exec.endTs)
+			epochState, err = exec.watermarkUpdater.GetOrCreateInitialSnapshotEpochStateForProgress(
+				ctx,
+				&watermarkKey,
+				info.SourceTblId,
+				candidate,
+				watermark,
+				watermarkGeneration,
+			)
+			if err != nil {
+				return err
+			}
+			initialSnapshotEpoch = epochState.Epoch
+		}
+		// Publish the execution generation before using progress for admission.
+		// This claim and guarded checkpoints serialize on the same watermark row:
+		// the reread sees an old checkpoint that won first, or fences one that lost.
+		// Explicit StartTs and no-full tasks need the same protection even though
+		// they intentionally have no initial-snapshot epoch row.
+		watermark, watermarkGeneration, err = exec.watermarkUpdater.ClaimWatermarkOwner(
+			ctx, &watermarkKey, ownerFence)
+		if err != nil {
+			return err
+		}
+		if initialSnapshot {
+			// A stable task can only have a non-empty watermark after its epoch
+			// metadata was durable. Missing metadata without an older generation is
+			// corruption/manual deletion; choosing a fresh epoch would strand target
+			// rows from an unknown source image.
+			incomplete, resetTarget, metadataMissing, generationAhead := classifyStableSnapshotRestart(
+				watermark, watermarkGeneration, info.SourceTblId, epochState)
+			if generationAhead {
+				return cdc.NewRetryableSnapshotEpochError(moerr.NewInternalErrorf(
+					ctx,
+					"CDC source table generation %d is older than durable CDC metadata for %s (watermark generation %d, newer snapshot generation present: %t)",
+					info.SourceTblId, watermarkKey.String(), watermarkGeneration,
+					epochState.HasNewerGeneration,
+				))
+			}
+			if metadataMissing {
+				return moerr.NewInternalErrorf(
+					ctx,
+					"CDC stable snapshot metadata is missing for %s generation %d with watermark %s",
+					watermarkKey.String(), info.SourceTblId, watermark.ToString(),
+				)
+			}
+
+			// Empty or pre-epoch progress means the initial snapshot is incomplete.
+			// If another table ID exists, reset the target under the ownership lock;
+			// otherwise retain partial same-epoch target groups for idempotent replay.
+			initialSnapshotPending = incomplete
+			if resetTarget {
+				info.IdChanged = true
+			}
+			// NewSinker clears IdChanged after a successful target reset, so capture
+			// cleanup intent before handing it the mutable table descriptor. A
+			// completed current generation may also compact a retired row left by a
+			// crash after target commit but before metadata cleanup.
+			compactSnapshotEpochs = shouldCompactStableSnapshotEpochs(
+				info.IdChanged, incomplete, epochState.HasOtherGeneration)
+		}
 	}
 
 	// Note: Do NOT clear err_msg here
@@ -1390,8 +3340,18 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		return
 	}
 
+	// The attempt owns this routine until it exits. Take one snapshot so a
+	// lifecycle transition cannot make the sinker and reader observe different
+	// routine pointers.
+	routine := exec.currentActiveRoutine()
+	if routine == nil {
+		return moerr.NewInternalErrorNoCtx("CDC active routine is not initialized")
+	}
+	info.SetOwnerFence(ownerFence)
+
 	// step 2. new sinker
 	sinker, err := cdc.NewSinker(
+		ctx,
 		exec.sinkUri,
 		uint64(exec.spec.Accounts[0].GetId()),
 		exec.spec.TaskId,
@@ -1400,17 +3360,47 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		tableDef,
 		cdc.CDCDefaultRetryTimes,
 		cdc.CDCDefaultRetryDuration,
-		exec.activeRoutine,
+		routine,
 		uint64(exec.additionalConfig[cdc.CDCTaskExtraOptions_MaxSqlLength].(float64)),
 		exec.additionalConfig[cdc.CDCTaskExtraOptions_SendSqlTimeout].(string),
 	)
+	info.SetOwnerFence(nil)
 	if err != nil {
 		return err
+	}
+	// Sink initialization owns target DDL. A lifecycle transition can race the
+	// final successful statement, so reject publication after initialization as
+	// well as relying on the statement context itself.
+	if err = ctx.Err(); err != nil {
+		sinker.Close()
+		return err
+	}
+	if exec.stableInitialSnapshot && compactSnapshotEpochs {
+		if err = ownerFence.Check(ctx); err != nil {
+			sinker.Close()
+			return err
+		}
+		if err = exec.watermarkUpdater.DeleteInitialSnapshotGenerationsBefore(
+			ctx, &watermarkKey, info.SourceTblId); err != nil {
+			sinker.Close()
+			return err
+		}
+		if err = ownerFence.Check(ctx); err != nil {
+			sinker.Close()
+			return err
+		}
 	}
 
 	// step 3. new reader (using V2 tableChangeStream)
 	frequencyStr := exec.additionalConfig[cdc.CDCTaskExtraOptions_Frequency].(string)
 	frequency := cdc.ParseFrequencyToDuration(frequencyStr)
+	initSnapshotSplitTxn := exec.additionalConfig[cdc.CDCTaskExtraOptions_InitSnapshotSplitTxn].(bool)
+	if exec.stableInitialSnapshot {
+		// Stable-epoch tasks persist the legacy boolean as false so an older CN
+		// safely falls back to an atomic transaction during rolling upgrades.
+		initSnapshotSplitTxn = true
+	}
+
 	reader := cdc.NewTableChangeStream(
 		exec.cnTxnClient,
 		exec.cnEngine,
@@ -1422,19 +3412,27 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		sinker,
 		exec.watermarkUpdater,
 		tableDef,
-		exec.additionalConfig[cdc.CDCTaskExtraOptions_InitSnapshotSplitTxn].(bool),
+		initSnapshotSplitTxn,
 		exec.runningReaders,
-		exec.startTs,
+		streamStartTs,
 		exec.endTs,
 		exec.noFull,
 		frequency,
+		cdc.WithInitialSnapshotLimiter(exec.initialSnapshotLimiter),
+		cdc.WithInitialSnapshotEpoch(initialSnapshotEpoch),
+		cdc.WithInitialSnapshotPending(initialSnapshotPending),
+		cdc.WithOwnerFence(ownerFence),
 	)
 
 	// step 4. start goroutines (sinker first, then reader)
 	// Note: Reader will register itself in runningReaders during Run()
 	// to prevent duplicate readers (see TableChangeStream.Run line 287)
-	go sinker.Run(ctx, exec.activeRoutine)
-	go reader.Run(ctx, exec.activeRoutine)
+	go sinker.Run(ctx, routine)
+	go reader.Run(ctx, routine)
+	// Reader publication happens inside Run. Do not let this callback return
+	// before publication, otherwise Cancel can observe both callbackDone and an
+	// empty reader map while the newly launched reader is still starting.
+	<-reader.RegistrationDone()
 
 	return
 }
@@ -1541,5 +3539,16 @@ func (exec *CDCTaskExecutor) retrieveCdcTask(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return json.Unmarshal([]byte(additionalConfigStr), &exec.additionalConfig)
+	if err = json.Unmarshal([]byte(additionalConfigStr), &exec.additionalConfig); err != nil {
+		return err
+	}
+
+	protocol, _ := exec.additionalConfig[cdc.CDCTaskExtraOptions_InitialSnapshotProtocol].(string)
+	// Lossless NoFull tasks use the same owner-fenced watermark path as stable
+	// snapshot tasks. Without this, their buffered checkpoints use the legacy
+	// unfenced updater and an obsolete executor can overwrite a replacement
+	// generation's durable progress after claim loss.
+	exec.stableInitialSnapshot = protocol == cdc.CDCInitialSnapshotProtocolStableEpoch ||
+		protocol == cdc.CDCInitialSnapshotProtocolNoFullHLC
+	return nil
 }

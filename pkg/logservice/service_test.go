@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
 	"runtime/debug"
 	"sync"
 	"testing"
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	hapkg "github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -148,10 +150,21 @@ func TestNewServiceClosesStoreOnMetadataFailure(t *testing.T) {
 
 func TestNewServiceClosesStoreOnReplicaStartFailure(t *testing.T) {
 	defer leaktest.AfterTest(t)()
-	cfg := getServiceTestConfig()
-	defer vfs.ReportLeakedFD(cfg.FS, t)
+	fs := vfs.NewStrictMem()
+	genCfg := newTestServiceConfigGenerator(fs)
+	var cfg Config
+	generate := func() Config {
+		cfg = genCfg()
+		// This fixture tests duplicate-replica startup cleanup, not remote
+		// membership discovery. An unrelated service at the default 32001
+		// address could classify the injected replica as a zombie and bypass
+		// the intended StartReplica failure. Self is excluded from that probe.
+		cfg.HAKeeperClientConfig.ServiceAddresses = []string{cfg.LogServiceServiceAddr()}
+		return cfg
+	}
+	defer vfs.ReportLeakedFD(fs, t)
 
-	service, err := NewService(cfg, newFS(), nil)
+	service, err := NewServiceWithRetry(generate, newFS(), nil)
 	require.NoError(t, err)
 	members := map[uint64]dragonboat.Target{1: service.ID()}
 	require.NoError(t, service.store.startReplica(1, 1, members, false))
@@ -167,13 +180,17 @@ func TestNewServiceClosesStoreOnReplicaStartFailure(t *testing.T) {
 	}
 	require.NoError(t, createMetadataFile(cfg.DataDir, logMetadataFilename, &md, cfg.FS))
 
-	service, err = NewService(cfg, newFS(), nil)
+	service, err = NewServiceWithRetry(generate, newFS(), nil)
+	if service != nil {
+		unexpected := service
+		t.Cleanup(func() { require.NoError(t, unexpected.Close()) })
+	}
 	require.Nil(t, service)
 	require.ErrorIs(t, err, dragonboat.ErrShardAlreadyExist)
 
 	md.Shards = md.Shards[:1]
 	require.NoError(t, createMetadataFile(cfg.DataDir, logMetadataFilename, &md, cfg.FS))
-	service, err = NewService(cfg, newFS(), nil)
+	service, err = NewServiceWithRetry(generate, newFS(), nil)
 	require.NoError(t, err)
 	require.NoError(t, service.Close())
 }
@@ -181,34 +198,28 @@ func TestNewServiceClosesStoreOnReplicaStartFailure(t *testing.T) {
 func TestNewServiceRetry(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	cfg0 := getServiceTestConfig()
-	genCfg0 := func() Config {
-		return cfg0
-	}
-	defer vfs.ReportLeakedFD(cfg0.FS, t)
-	service0, err := NewServiceWithRetry(genCfg0,
-		newFS(),
-		nil,
-		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
-			return true
-		}),
-	)
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	defer func() {
-		assert.NoError(t, service0.Close())
-	}()
+	t.Cleanup(func() { _ = occupied.Close() })
+	cfg0.RaftAddress = occupied.Addr().String()
+	defer vfs.ReportLeakedFD(cfg0.FS, t)
 
 	var cfg Config
+	attempts := 0
 	first := true
 	genCfg := func() Config {
+		attempts++
 		if first {
 			first = false
 			return cfg0
-		} else {
-			cfg = getServiceTestConfig()
-			return cfg
 		}
+		if attempts == 2 {
+			require.NoError(t, occupied.Close())
+		}
+		cfg = getServiceTestConfig()
+		return cfg
 	}
-	defer vfs.ReportLeakedFD(cfg.FS, t)
+	defer func() { vfs.ReportLeakedFD(cfg.FS, t) }()
 	service, err := NewServiceWithRetry(genCfg,
 		newFS(),
 		nil,
@@ -217,6 +228,7 @@ func TestNewServiceRetry(t *testing.T) {
 		}),
 	)
 	require.NoError(t, err)
+	require.GreaterOrEqual(t, attempts, 2)
 	assert.NoError(t, service.Close())
 }
 
@@ -353,6 +365,12 @@ func TestServiceHandleLogHeartbeat(t *testing.T) {
 			s.store.addScheduleCommands(ctx, 1, []pb.ScheduleCommand{sc1, sc2, sc3}))
 		resp := s.handleLogHeartbeat(ctx, req)
 		require.Equal(t, []pb.ScheduleCommand{sc1, sc3}, resp.CommandBatch.Commands)
+		require.Len(t, s.store.hakeeperCheckWakeup, 1)
+		<-s.store.hakeeperCheckWakeup
+		resp = s.handleLogHeartbeat(ctx, req)
+		require.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		require.Empty(t, resp.CommandBatch.Commands)
+		require.Empty(t, s.store.hakeeperCheckWakeup)
 	}
 	runServiceTest(t, true, true, fn)
 }
@@ -371,6 +389,12 @@ func TestServiceHandleCNHeartbeat(t *testing.T) {
 		resp := s.handleCNHeartbeat(ctx, req)
 		assert.Equal(t, &pb.CommandBatch{}, resp.CommandBatch)
 		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		require.Len(t, s.store.hakeeperCheckWakeup, 1)
+		<-s.store.hakeeperCheckWakeup
+		resp = s.handleCNHeartbeat(ctx, req)
+		require.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		require.Empty(t, resp.CommandBatch.Commands)
+		require.Empty(t, s.store.hakeeperCheckWakeup)
 	}
 	runServiceTest(t, true, true, fn)
 }
@@ -414,8 +438,542 @@ func TestServiceHandleTNHeartbeat(t *testing.T) {
 			s.store.addScheduleCommands(ctx, 1, []pb.ScheduleCommand{sc1, sc2, sc3}))
 		resp := s.handleTNHeartbeat(ctx, req)
 		require.Equal(t, []pb.ScheduleCommand{sc1, sc3}, resp.CommandBatch.Commands)
+		require.Len(t, s.store.hakeeperCheckWakeup, 1)
+		<-s.store.hakeeperCheckWakeup
+		resp = s.handleTNHeartbeat(ctx, req)
+		require.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		require.Empty(t, resp.CommandBatch.Commands)
+		require.Empty(t, s.store.hakeeperCheckWakeup)
 	}
 	runServiceTest(t, true, true, fn)
+}
+
+func TestServicePollCommandsIsNonDestructiveAndDeduplicable(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		activateCommandDelivery(t, ctx, s)
+
+		command := pb.ScheduleCommand{
+			UUID:        "uuid1",
+			ServiceType: pb.TNService,
+			ConfigChange: &pb.ConfigChange{
+				ChangeType: pb.StartReplica,
+				Replica: pb.Replica{
+					ShardID:   1,
+					ReplicaID: 2,
+				},
+			},
+		}
+		require.NoError(t,
+			s.store.addScheduleCommands(ctx, 1, []pb.ScheduleCommand{command}))
+
+		pollResp := s.handleGetScheduleCommands(ctx, pb.Request{
+			Method: pb.GET_SCHEDULE_COMMANDS,
+			ScheduleCommandQuery: &pb.ScheduleCommandQuery{
+				UUID:        "uuid1",
+				ServiceType: pb.TNService,
+			},
+		})
+		require.Equal(t, uint32(moerr.Ok), pollResp.ErrorCode)
+		require.Equal(t, []pb.ScheduleCommand{command}, pollResp.CommandBatch.Commands)
+		require.NotZero(t, pollResp.CommandBatch.BatchID)
+		require.True(t, ScheduleCommandBatchHasStableIDs(*pollResp.CommandBatch))
+
+		// A retry observes the same stable batch ID and does not mutate the RSM.
+		secondResp := s.handleGetScheduleCommands(ctx, pb.Request{
+			Method: pb.GET_SCHEDULE_COMMANDS,
+			ScheduleCommandQuery: &pb.ScheduleCommandQuery{
+				UUID:        "uuid1",
+				ServiceType: pb.TNService,
+			},
+		})
+		require.Equal(t, *pollResp.CommandBatch, *secondResp.CommandBatch)
+
+		// An upgraded heartbeat remains the delivery path; a heartbeat without
+		// the capability is intentionally handled as an admission-safe no-op.
+		heartbeatResp := s.handleTNHeartbeat(ctx, pb.Request{
+			Method: pb.TN_HEARTBEAT,
+			TNHeartbeat: &pb.TNStoreHeartbeat{
+				UUID:                        "uuid1",
+				CommandDeliveryAckSupported: true,
+			},
+		})
+		require.Equal(t, *pollResp.CommandBatch, *heartbeatResp.CommandBatch)
+		ackedResp := s.handleTNHeartbeat(ctx, pb.Request{
+			Method: pb.TN_HEARTBEAT,
+			TNHeartbeat: &pb.TNStoreHeartbeat{
+				UUID:                        "uuid1",
+				AckedCommandBatchID:         pollResp.CommandBatch.BatchID,
+				CommandDeliveryAckSupported: true,
+			},
+		})
+		require.Empty(t, ackedResp.CommandBatch.Commands)
+
+		afterDelivery := s.handleGetScheduleCommands(ctx, pb.Request{
+			Method: pb.GET_SCHEDULE_COMMANDS,
+			ScheduleCommandQuery: &pb.ScheduleCommandQuery{
+				UUID:        "uuid1",
+				ServiceType: pb.TNService,
+			},
+		})
+		require.Empty(t, afterDelivery.CommandBatch.Commands)
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func TestServiceRejectsInvalidScheduleCommandQueries(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		for _, req := range []pb.Request{
+			{Method: pb.GET_SCHEDULE_COMMANDS},
+			{
+				Method: pb.GET_SCHEDULE_COMMANDS,
+				ScheduleCommandQuery: &pb.ScheduleCommandQuery{
+					UUID:        "uuid1",
+					ServiceType: pb.LogService,
+				},
+			},
+		} {
+			resp := s.handleGetScheduleCommands(ctx, req)
+			require.NotEqual(t, uint32(moerr.Ok), resp.ErrorCode)
+		}
+		activateCommandDelivery(t, ctx, s)
+
+		command := pb.ScheduleCommand{
+			UUID:        "uuid1",
+			ServiceType: pb.CNService,
+		}
+		require.NoError(t,
+			s.store.addScheduleCommands(ctx, 1, []pb.ScheduleCommand{command}))
+		resp := s.handleGetScheduleCommands(ctx, pb.Request{
+			Method: pb.GET_SCHEDULE_COMMANDS,
+			ScheduleCommandQuery: &pb.ScheduleCommandQuery{
+				UUID:        "uuid1",
+				ServiceType: pb.TNService,
+			},
+		})
+		require.NotEqual(t, uint32(moerr.Ok), resp.ErrorCode)
+
+		// Validation happens after a read, not a consume. The intended service
+		// can still retrieve the batch after a wrong-type request.
+		resp = s.handleGetScheduleCommands(ctx, pb.Request{
+			Method: pb.GET_SCHEDULE_COMMANDS,
+			ScheduleCommandQuery: &pb.ScheduleCommandQuery{
+				UUID:        "uuid1",
+				ServiceType: pb.CNService,
+			},
+		})
+		require.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		require.Equal(t, []pb.ScheduleCommand{command}, resp.CommandBatch.Commands)
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func TestServiceCommandDeliveryActivationWaitsForServiceCapabilities(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		sendCNHeartbeat := func(supported bool) pb.Response {
+			return s.handleCNHeartbeat(ctx, pb.Request{
+				Method: pb.CN_HEARTBEAT,
+				CNHeartbeat: &pb.CNStoreHeartbeat{
+					UUID:                        "cn-1",
+					CommandDeliveryAckSupported: supported,
+				},
+			})
+		}
+		sendTNHeartbeat := func(supported bool) pb.Response {
+			return s.handleTNHeartbeat(ctx, pb.Request{
+				Method: pb.TN_HEARTBEAT,
+				TNHeartbeat: &pb.TNStoreHeartbeat{
+					UUID:                        "tn-1",
+					CommandDeliveryAckSupported: supported,
+				},
+			})
+		}
+		sendLogHeartbeat := func() pb.Response {
+			logHeartbeat := s.store.getHeartbeatMessage()
+			return s.handleLogHeartbeat(ctx, pb.Request{
+				Method:       pb.LOG_HEARTBEAT,
+				LogHeartbeat: &logHeartbeat,
+			})
+		}
+		sendLegacyLogHeartbeat := func(supported bool) pb.Response {
+			return s.handleLogHeartbeat(ctx, pb.Request{
+				Method: pb.LOG_HEARTBEAT,
+				LogHeartbeat: &pb.LogStoreHeartbeat{
+					UUID:                     "legacy-log",
+					CommandDeliverySupported: supported,
+				},
+			})
+		}
+
+		require.Equal(t, uint32(moerr.Ok), sendCNHeartbeat(false).ErrorCode)
+		require.Equal(t, uint32(moerr.Ok), sendTNHeartbeat(false).ErrorCode)
+		require.Equal(t, uint32(moerr.Ok), sendLegacyLogHeartbeat(false).ErrorCode)
+		// HAKeeper/logservice may already be upgraded, but activation cannot
+		// begin while a current command target still advertises the old protocol.
+		require.False(t, advanceCommandDelivery(t, ctx, s))
+		first := sendLogHeartbeat()
+		require.Equal(t, uint32(moerr.Ok), first.ErrorCode)
+		require.False(t, s.store.commandDeliveryEnabled.Load())
+
+		require.Equal(t, uint32(moerr.Ok), sendCNHeartbeat(true).ErrorCode)
+		require.Equal(t, uint32(moerr.Ok), sendTNHeartbeat(true).ErrorCode)
+		require.False(t, advanceCommandDelivery(t, ctx, s))
+		delivery, err := s.store.getCommandDeliveryState(ctx)
+		require.NoError(t, err)
+		require.False(t, delivery.Preparing,
+			"a live legacy LogStore remains eligible for HAKeeper admission")
+		require.Equal(t, uint32(moerr.Ok), sendLegacyLogHeartbeat(true).ErrorCode)
+		require.False(t, advanceCommandDelivery(t, ctx, s))
+		delivery, err = s.store.getCommandDeliveryState(ctx)
+		require.NoError(t, err)
+		require.True(t, delivery.Preparing)
+		phaseOne := sendLogHeartbeat()
+		require.Equal(t, uint32(moerr.Ok), phaseOne.ErrorCode)
+		require.False(t, s.store.commandDeliveryEnabled.Load())
+
+		// Phase-one is a replicated cutover point. The capability observations
+		// above are intentionally insufficient; repeat them after the barrier.
+		require.Equal(t, uint32(moerr.Ok), sendCNHeartbeat(true).ErrorCode)
+		require.Equal(t, uint32(moerr.Ok), sendTNHeartbeat(true).ErrorCode)
+		require.True(t, advanceCommandDelivery(t, ctx, s))
+		phaseTwo := sendLogHeartbeat()
+		require.Equal(t, uint32(moerr.Ok), phaseTwo.ErrorCode)
+		require.True(t, s.store.commandDeliveryEnabled.Load())
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func TestServiceCommandDeliveryActivationWaitsForPendingHAKeeperAdmission(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		heartbeat := func(uuid string, supported bool) pb.Response {
+			message := pb.LogStoreHeartbeat{
+				UUID:                     uuid,
+				CommandDeliverySupported: supported,
+			}
+			if uuid == s.store.id() {
+				message = s.store.getHeartbeatMessage()
+			}
+			return s.handleLogHeartbeat(ctx, pb.Request{
+				Method:       pb.LOG_HEARTBEAT,
+				LogHeartbeat: &message,
+			})
+		}
+
+		require.Equal(t, uint32(moerr.Ok), heartbeat(s.store.id(), true).ErrorCode)
+		require.Equal(t, uint32(moerr.Ok), heartbeat("legacy", false).ErrorCode)
+		command := pb.ScheduleCommand{
+			UUID:        s.store.id(),
+			ServiceType: pb.LogService,
+			ConfigChange: &pb.ConfigChange{
+				ChangeType: pb.AddReplica,
+				Replica: pb.Replica{
+					UUID:    "legacy",
+					ShardID: hapkg.DefaultHAKeeperShardID,
+				},
+			},
+		}
+		require.NoError(t, s.store.addScheduleCommands(ctx, 1, []pb.ScheduleCommand{command}))
+
+		// The leader-side read prevents even proposing an update tag that the
+		// pending legacy member could later replay.
+		require.False(t, advanceCommandDelivery(t, ctx, s))
+		delivery, err := s.store.getCommandDeliveryState(ctx)
+		require.NoError(t, err)
+		require.False(t, delivery.Preparing)
+
+		require.Equal(t, uint32(moerr.Ok), heartbeat("legacy", true).ErrorCode)
+		response := heartbeat(s.store.id(), true)
+		require.Equal(t, uint32(moerr.Ok), response.ErrorCode)
+		require.Equal(t, []pb.ScheduleCommand{command}, response.CommandBatch.Commands)
+		require.False(t, advanceCommandDelivery(t, ctx, s))
+		delivery, err = s.store.getCommandDeliveryState(ctx)
+		require.NoError(t, err)
+		require.True(t, delivery.Preparing)
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func TestLogHeartbeatDoesNotDriveCommandDeliveryActivation(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		for range 2 {
+			heartbeat := s.store.getHeartbeatMessage()
+			resp := s.handleLogHeartbeat(ctx, pb.Request{
+				Method:       pb.LOG_HEARTBEAT,
+				LogHeartbeat: &heartbeat,
+			})
+			require.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		}
+		delivery, err := s.store.getCommandDeliveryState(ctx)
+		require.NoError(t, err)
+		require.False(t, delivery.Preparing,
+			"the high-frequency heartbeat path must not propose activation")
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func TestServiceViewMetadataAdmissionActivation(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		logHeartbeat := s.store.getHeartbeatMessage()
+		response := s.handleLogHeartbeat(ctx, pb.Request{
+			Method:       pb.LOG_HEARTBEAT,
+			LogHeartbeat: &logHeartbeat,
+		})
+		require.Equal(t, uint32(moerr.Ok), response.ErrorCode)
+		cnHeartbeat := func(observed, catalog uint64) pb.Response {
+			return s.handleCNHeartbeat(ctx, pb.Request{
+				Method: pb.CN_HEARTBEAT,
+				CNHeartbeat: &pb.CNStoreHeartbeat{
+					UUID:                               "cn-admission",
+					ViewMetadataAdmissionSupported:     true,
+					PersistedExpressionProtocolVersion: uint64(defines.MORPCLatestVersion),
+					ViewMetadataAdmissionGeneration:    10,
+					ViewMetadataObservedEpoch:          observed,
+					ViewMetadataCatalogFencedEpoch:     catalog,
+					CommandDeliveryAckSupported:        true,
+				},
+			})
+		}
+		proxyHeartbeat := func(observed uint64) pb.Response {
+			return s.handleProxyHeartbeat(ctx, pb.Request{
+				Method: pb.PROXY_HEARTBEAT,
+				ProxyHeartbeat: &pb.ProxyHeartbeat{
+					UUID:                            "proxy-admission",
+					ViewMetadataAdmissionSupported:  true,
+					ViewMetadataAdmissionGeneration: 20,
+					ViewMetadataObservedEpoch:       observed,
+				},
+			})
+		}
+		require.Equal(t, uint32(moerr.Ok), cnHeartbeat(0, 0).ErrorCode)
+		require.Equal(t, uint32(moerr.Ok), proxyHeartbeat(0).ErrorCode)
+
+		state, err := s.store.getCheckerStateWithContext(ctx)
+		require.NoError(t, err)
+		enabled, err := s.store.tryEnableViewMetadataAdmission(ctx, state)
+		require.NoError(t, err)
+		require.False(t, enabled)
+		admission, err := s.store.getViewMetadataAdmissionState(ctx)
+		require.NoError(t, err)
+		require.True(t, admission.Preparing)
+
+		// Every pre-barrier observation is deliberately insufficient.
+		state, err = s.store.getCheckerStateWithContext(ctx)
+		require.NoError(t, err)
+		enabled, err = s.store.tryEnableViewMetadataAdmission(ctx, state)
+		require.NoError(t, err)
+		require.False(t, enabled)
+
+		logHeartbeat = s.store.getHeartbeatMessage()
+		response = s.handleLogHeartbeat(ctx, pb.Request{
+			Method:       pb.LOG_HEARTBEAT,
+			LogHeartbeat: &logHeartbeat,
+		})
+		require.Equal(t, uint32(moerr.Ok), response.ErrorCode)
+		require.Equal(t, uint32(moerr.Ok), cnHeartbeat(1, 1).ErrorCode)
+		require.Equal(t, uint32(moerr.Ok), proxyHeartbeat(1).ErrorCode)
+
+		state, err = s.store.getCheckerStateWithContext(ctx)
+		require.NoError(t, err)
+		enabled, err = s.store.tryEnableViewMetadataAdmission(ctx, state)
+		require.NoError(t, err)
+		require.True(t, enabled)
+		admission, err = s.store.getViewMetadataAdmissionState(ctx)
+		require.NoError(t, err)
+		require.True(t, admission.Enabled)
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func TestServiceViewMetadataAdmissionReconcilesPendingBeforeProtocolRaise(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		propose := func(cmd []byte) {
+			session := s.store.nh.GetNoOPSession(hapkg.DefaultHAKeeperShardID)
+			_, err := s.store.propose(ctx, session, cmd)
+			require.NoError(t, err)
+		}
+		logHeartbeat := func() {
+			hb := s.store.getHeartbeatMessage()
+			response := s.handleLogHeartbeat(ctx, pb.Request{
+				Method:       pb.LOG_HEARTBEAT,
+				LogHeartbeat: &hb,
+			})
+			require.Equal(t, uint32(moerr.Ok), response.ErrorCode)
+		}
+		cnHeartbeat := func(generation, observed, fenced uint64) pb.Response {
+			response := s.handleCNHeartbeat(ctx, pb.Request{
+				Method: pb.CN_HEARTBEAT,
+				CNHeartbeat: &pb.CNStoreHeartbeat{
+					UUID:                               "cn-pending-reconcile",
+					ViewMetadataAdmissionSupported:     true,
+					PersistedExpressionProtocolVersion: uint64(defines.MORPCLatestVersion),
+					ViewMetadataAdmissionGeneration:    generation,
+					ViewMetadataObservedEpoch:          observed,
+					ViewMetadataCatalogFencedEpoch:     fenced,
+					ViewMetadataIngressReady:           true,
+					ViewMetadataRefreshSupported:       false,
+					CommandDeliveryAckSupported:        true,
+				},
+			})
+			require.Equal(t, uint32(moerr.Ok), response.ErrorCode)
+			return response
+		}
+		proxyHeartbeat := func(generation, observed uint64) {
+			response := s.handleProxyHeartbeat(ctx, pb.Request{
+				Method: pb.PROXY_HEARTBEAT,
+				ProxyHeartbeat: &pb.ProxyHeartbeat{
+					UUID:                            "proxy-pending-reconcile",
+					ViewMetadataAdmissionSupported:  true,
+					ViewMetadataAdmissionGeneration: generation,
+					ViewMetadataObservedEpoch:       observed,
+				},
+			})
+			require.Equal(t, uint32(moerr.Ok), response.ErrorCode)
+		}
+
+		// Simulate an already-enabled legacy cluster. This is the upgrade state
+		// that the normal current-version bootstrap path no longer creates.
+		logHeartbeat()
+		cnHeartbeat(10, 0, 0)
+		proxyHeartbeat(20, 0)
+		propose(hapkg.GetEnableViewMetadataAdmissionCmd())
+		logHeartbeat()
+		cnHeartbeat(10, 1, 1)
+		proxyHeartbeat(20, 1)
+		cfg := s.store.cfg.GetHAKeeperConfig()
+		cfg.Fill()
+		propose(hapkg.GetEnableViewMetadataAdmissionCmdForConfig(cfg))
+
+		admission, err := s.store.getViewMetadataAdmissionState(ctx)
+		require.NoError(t, err)
+		require.True(t, admission.Enabled)
+		require.False(t, admission.Pending)
+		require.Zero(t, admission.RequiredProtocolVersion)
+
+		// A same-UUID restart captures generation 10 as a drain target and
+		// starts a new epoch. The replacement acknowledges that epoch, but the
+		// old target remains pending until its logical timeout.
+		state, err := s.store.getCheckerStateWithContext(ctx)
+		require.NoError(t, err)
+		oldTargetTick := state.Tick
+		restartResponse := cnHeartbeat(11, 2, 2)
+		require.NotNil(t, restartResponse.CommandBatch)
+		require.NotNil(t, restartResponse.CommandBatch.ViewMetadataAdmission)
+		restartEpoch := restartResponse.CommandBatch.ViewMetadataAdmission.Epoch
+		admission, err = s.store.getViewMetadataAdmissionState(ctx)
+		require.NoError(t, err)
+		require.True(t, admission.Pending)
+
+		timeoutTicks := uint64(cfg.CNStoreTimeout/time.Second) *
+			uint64(cfg.TickPerSecond)
+		for {
+			state, err = s.store.getCheckerStateWithContext(ctx)
+			require.NoError(t, err)
+			if state.Tick > oldTargetTick+timeoutTicks {
+				break
+			}
+			propose(hapkg.GetTickCmd())
+		}
+		// The first checker pass after expiry must use legacy reconciliation.
+		// It clears the old-generation target while the durable floor remains 0.
+		state, err = s.store.getCheckerStateWithContext(ctx)
+		require.NoError(t, err)
+		_, err = s.store.tryEnableViewMetadataAdmission(ctx, state)
+		require.NoError(t, err)
+		admission, err = s.store.getViewMetadataAdmissionState(ctx)
+		require.NoError(t, err)
+		require.False(t, admission.Pending)
+		require.Zero(t, admission.RequiredProtocolVersion)
+
+		// Only after pending is durably cleared may the protocol-bearing entry
+		// raise the floor and begin a fresh admission epoch.
+		state, err = s.store.getCheckerStateWithContext(ctx)
+		require.NoError(t, err)
+		_, err = s.store.tryEnableViewMetadataAdmission(ctx, state)
+		require.NoError(t, err)
+		admission, err = s.store.getViewMetadataAdmissionState(ctx)
+		require.NoError(t, err)
+		require.Equal(t, uint64(defines.MORPCLatestVersion), admission.RequiredProtocolVersion)
+		require.True(t, admission.Pending)
+
+		state, err = s.store.getCheckerStateWithContext(ctx)
+		require.NoError(t, err)
+		newEpoch := restartEpoch + 1
+		cnHeartbeat(11, newEpoch, newEpoch)
+		proxyHeartbeat(20, newEpoch)
+		state, err = s.store.getCheckerStateWithContext(ctx)
+		require.NoError(t, err)
+		enabled, err := s.store.tryEnableViewMetadataAdmission(ctx, state)
+		require.NoError(t, err)
+		require.True(t, enabled)
+		admission, err = s.store.getViewMetadataAdmissionState(ctx)
+		require.NoError(t, err)
+		require.False(t, admission.Pending)
+		require.Equal(t, uint64(defines.MORPCLatestVersion), admission.RequiredProtocolVersion)
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func advanceCommandDelivery(
+	t *testing.T,
+	ctx context.Context,
+	s *Service,
+) bool {
+	t.Helper()
+	state, err := s.store.getCheckerStateWithContext(ctx)
+	require.NoError(t, err)
+	enabled, err := s.store.tryEnableCommandDelivery(ctx, state)
+	require.NoError(t, err)
+	return enabled
+}
+
+func activateCommandDelivery(t *testing.T, ctx context.Context, s *Service) {
+	t.Helper()
+	// Seed the leader's capability view before the checker is allowed to enter
+	// phase one. Heartbeats only publish capability and advertise cached state;
+	// the checker owns activation progress.
+	logHeartbeat := s.store.getHeartbeatMessage()
+	priming := s.handleLogHeartbeat(ctx, pb.Request{
+		Method:       pb.LOG_HEARTBEAT,
+		LogHeartbeat: &logHeartbeat,
+	})
+	require.Equal(t, uint32(moerr.Ok), priming.ErrorCode)
+	require.False(t, s.store.commandDeliveryEnabled.Load())
+	for phase := 0; phase < 2; phase++ {
+		enabled := advanceCommandDelivery(t, ctx, s)
+		logHeartbeat = s.store.getHeartbeatMessage()
+		activation := s.handleLogHeartbeat(ctx, pb.Request{
+			Method:       pb.LOG_HEARTBEAT,
+			LogHeartbeat: &logHeartbeat,
+		})
+		require.Equal(t, uint32(moerr.Ok), activation.ErrorCode)
+		if phase == 0 {
+			require.False(t, enabled)
+			require.False(t, s.store.commandDeliveryEnabled.Load(),
+				"the first checker pass establishes the replicated upgrade barrier")
+		} else {
+			require.True(t, enabled)
+			require.True(t, s.store.commandDeliveryEnabled.Load())
+		}
+	}
 }
 
 func TestServiceHandleAppend(t *testing.T) {
@@ -751,12 +1309,56 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 		"",
 		func(rt runtime.Runtime) {
 			defer leaktest.AfterTest(t)()
-			debug.SetMemoryLimit(1 << 30)
-			// start all services
+			previousMemoryLimit := debug.SetMemoryLimit(1 << 30)
+			defer debug.SetMemoryLimit(previousMemoryLimit)
+			// The full topology remains available for explicit stress runs. The
+			// short race suite only needs two three-node shards to cover gossip
+			// aggregation, replica addition, and restart convergence.
 			nodeCount := 24
+			if testing.Short() {
+				nodeCount = 6
+			}
 			shardCount := nodeCount / 3
-			configs := make([]Config, 0)
-			services := make([]*Service, 0)
+			maxNotReady := 1
+			if testing.Short() {
+				// With only two shards/nodesets, allowing one miss would accept
+				// half-converged gossip state. Require complete short-suite coverage.
+				maxNotReady = 0
+			}
+			seedCount := min(nodeCount, 10)
+			gossipPorts := make([]int, nodeCount)
+			for i := range gossipPorts {
+				gossipPorts[i] = getTestGossipPort()
+			}
+			seedAddresses := make([]string, seedCount)
+			for i := range seedCount {
+				seedAddresses[i] = getTestGossipAddress(gossipPorts[i])
+			}
+			configs := make([]Config, 0, nodeCount)
+			services := make([]*Service, 0, nodeCount)
+			defer func() {
+				testLogger.Info("going to close all services")
+				var wg sync.WaitGroup
+				var closeErr error
+				var closeErrMu sync.Mutex
+				for _, s := range services {
+					if s != nil {
+						selected := s
+						wg.Add(1)
+						go func() {
+							defer wg.Done()
+							if err := selected.Close(); err != nil {
+								closeErrMu.Lock()
+								closeErr = errors.Join(closeErr, err)
+								closeErrMu.Unlock()
+							}
+							testLogger.Info("closed a service")
+						}()
+					}
+				}
+				wg.Wait()
+				require.NoError(t, closeErr)
+			}()
 			for i := 0; i < nodeCount; i++ {
 				cfg := DefaultConfig()
 				cfg.FS = vfs.NewStrictMem()
@@ -764,21 +1366,10 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 				cfg.DeploymentID = 1
 				cfg.RTTMillisecond = 200
 				cfg.DataDir = fmt.Sprintf("data-%d", i)
-				cfg.LogServicePort = 26000 + 10*i
-				cfg.RaftPort = 26000 + 10*i + 1
-				cfg.GossipPort = 26000 + 10*i + 2
-				cfg.GossipSeedAddresses = []string{
-					"127.0.0.1:26002",
-					"127.0.0.1:26012",
-					"127.0.0.1:26022",
-					"127.0.0.1:26032",
-					"127.0.0.1:26042",
-					"127.0.0.1:26052",
-					"127.0.0.1:26062",
-					"127.0.0.1:26072",
-					"127.0.0.1:26082",
-					"127.0.0.1:26092",
-				}
+				cfg.LogServicePort = getTestServicePort()
+				cfg.RaftPort = getAvailablePort()
+				cfg.GossipPort = gossipPorts[i]
+				cfg.GossipSeedAddresses = append([]string(nil), seedAddresses...)
 				cfg.DisableWorkers = true
 				cfg.LogDBBufferSize = 1024 * 16
 				cfg.GossipProbeInterval.Duration = 350 * time.Millisecond
@@ -796,23 +1387,6 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 				require.NoError(t, err)
 				services = append(services, service)
 			}
-			defer func() {
-				testLogger.Info("going to close all services")
-				var wg sync.WaitGroup
-				for _, s := range services {
-					if s != nil {
-						selected := s
-						wg.Add(1)
-						go func() {
-							require.NoError(t, selected.Close())
-							wg.Done()
-							testLogger.Info("closed a service")
-						}()
-					}
-				}
-				wg.Wait()
-				time.Sleep(time.Second * 2)
-			}()
 			// start all replicas
 			// shardID: [1, 16]
 			id := uint64(100)
@@ -844,17 +1418,17 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 					info, ok := service.getShardInfo(context.Background(), shardID, false, false)
 					if !ok || info.LeaderID == 0 {
 						notReady++
-						wait()
 						continue
 					}
 					if shardID == 1 && info.Epoch != 0 {
 						cci = info.Epoch
 					}
 				}
-				if notReady <= 1 {
+				if notReady <= maxNotReady {
 					break
 				}
 				require.True(t, retry < iterations-1)
+				wait()
 			}
 			require.True(t, cci != 0)
 			// all good now, add a replica to shard 1
@@ -886,21 +1460,24 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 					info, ok := service.getShardInfo(context.Background(), 1, false, false)
 					if !ok || info.LeaderID == 0 || len(info.Replicas) != 4 {
 						notReady++
-						wait()
 						continue
 					}
 				}
-				if notReady <= 1 {
+				if notReady <= maxNotReady {
 					break
 				}
 				require.True(t, retry < iterations-1)
+				wait()
 			}
 			// restart a service, watch how long will it take to get all required
 			// shard info
-			require.NoError(t, services[12].Close())
-			services[12] = nil
-			time.Sleep(2 * time.Second)
-			service, err := NewService(configs[12],
+			restartIndex := 12
+			if testing.Short() {
+				restartIndex = 0
+			}
+			require.NoError(t, services[restartIndex].Close())
+			services[restartIndex] = nil
+			service, err := NewService(configs[restartIndex],
 				newFS(),
 				nil,
 				WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
@@ -918,14 +1495,14 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 					info, ok := service.getShardInfo(context.Background(), shardID, false, false)
 					if !ok || info.LeaderID == 0 {
 						notReady++
-						wait()
 						continue
 					}
 				}
-				if notReady <= 1 {
+				if notReady <= maxNotReady {
 					break
 				}
 				require.True(t, retry < iterations-1)
+				wait()
 			}
 		},
 	)

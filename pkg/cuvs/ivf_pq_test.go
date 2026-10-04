@@ -38,7 +38,7 @@ func TestGpuIvfPq(t *testing.T) {
 	bp.NLists = 10
 	bp.M = 8 // dimension 16 is divisible by 8
 	bp.KmeansTrainsetFraction = 1.0
-	index, err := NewGpuIvfPq[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
+	index, err := NewGpuIvfPq[float32, float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
 	if err != nil {
 		t.Fatalf("Failed to create GpuIvfPq: %v", err)
 	}
@@ -77,6 +77,52 @@ func TestGpuIvfPq(t *testing.T) {
 	}
 }
 
+// ivfPqRoundTripK is the neighbour count the serialization round-trip tests
+// compare on. It is >1 so that a PQ tie between adjacent rows shows up as an
+// ordering detail instead of deciding the entire assertion.
+const ivfPqRoundTripK = 5
+
+// assertSameIvfPqResults requires a reloaded index to answer a query exactly as
+// the index it was serialized from.
+//
+// The obvious assertion -- "top-1 must be row 0" -- is NOT sound for IVF-PQ on
+// the dataset these tests build. Every coordinate of row i is i*10, so the data
+// is perfectly collinear: all M PQ subspaces see the same residual value and the
+// joint code space collapses from 256^M down to one 256-entry partition. 1000
+// rows cannot be separated by 256 codes, so adjacent rows share a code and come
+// back with *exactly equal* approximate distances, leaving top-1 to arbitrary
+// tie-breaking. Measured over 30 rebuilds: 7-13 wrong at M=2, still 1 wrong at
+// M=4 -- so no parameter choice rescues an exact top-1 assertion here.
+//
+// Round-trip equality is both sound and a stronger oracle for what these tests
+// exist to verify: the reloaded index must reproduce the source index exactly,
+// ties included. A serialization defect that perturbed codes, centroids or ids
+// fails this check, where an exact-top-1 check could pass by luck.
+func assertSameIvfPqResults(t *testing.T, want, got SearchResultIvfPq) {
+	t.Helper()
+	if len(got.Neighbors) != len(want.Neighbors) || len(got.Distances) != len(want.Distances) {
+		t.Fatalf("round-trip result shape: want %d/%d neighbors/distances, got %d/%d",
+			len(want.Neighbors), len(want.Distances), len(got.Neighbors), len(got.Distances))
+	}
+	for i := range want.Neighbors {
+		if got.Neighbors[i] != want.Neighbors[i] || got.Distances[i] != want.Distances[i] {
+			t.Errorf("round-trip mismatch at rank %d: want id=%d dist=%v, got id=%d dist=%v\n  want ids=%v dists=%v\n  got  ids=%v dists=%v",
+				i, want.Neighbors[i], want.Distances[i], got.Neighbors[i], got.Distances[i],
+				want.Neighbors, want.Distances, got.Neighbors, got.Distances)
+			return
+		}
+	}
+	// Sanity floor: if both indexes were equally broken, equality alone would not
+	// notice. The exact match for the all-zeros query must still be in the top-k.
+	for _, id := range got.Neighbors {
+		if id == 0 {
+			return
+		}
+	}
+	t.Errorf("row 0 (the exact match) absent from top-%d: ids=%v dists=%v",
+		len(got.Neighbors), got.Neighbors, got.Distances)
+}
+
 func TestGpuIvfPqSaveLoad(t *testing.T) {
 	dimension := uint32(4)
 	n_vectors := uint64(1000)
@@ -92,12 +138,22 @@ func TestGpuIvfPqSaveLoad(t *testing.T) {
 	bp.NLists = 10
 	bp.M = 2
 	bp.KmeansTrainsetFraction = 1.0
-	index, err := NewGpuIvfPq[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
+	index, err := NewGpuIvfPq[float32, float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
 	if err != nil {
 		t.Fatalf("Failed to create GpuIvfPq: %v", err)
 	}
 	index.Start()
 	index.Build()
+
+	// Capture the source index's answer before serializing; the reloaded index
+	// must reproduce it exactly. See assertSameIvfPqResults.
+	query := make([]float32, dimension) // all zeros: exact match for row 0
+	sp := DefaultIvfPqSearchParams()
+	sp.NProbes = 10
+	want, err := index.Search(query, 1, dimension, ivfPqRoundTripK, sp)
+	if err != nil {
+		t.Fatalf("Search before save failed: %v", err)
+	}
 
 	filename := "test_ivf_pq.idx"
 	err = index.Save(filename)
@@ -107,7 +163,7 @@ func TestGpuIvfPqSaveLoad(t *testing.T) {
 	defer os.Remove(filename)
 	index.Destroy()
 
-	index2, err := NewGpuIvfPqFromFile[float32](filename, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+	index2, err := NewGpuIvfPqFromFile[float32, float32](filename, dimension, L2Expanded, bp, devices, 1, SingleGpu)
 	if err != nil {
 		t.Fatalf("Failed to create GpuIvfPq from file: %v", err)
 	}
@@ -123,16 +179,11 @@ func TestGpuIvfPqSaveLoad(t *testing.T) {
 		t.Fatalf("Load from file failed: %v", err)
 	}
 
-	query := make([]float32, dimension) // all zeros
-	sp := DefaultIvfPqSearchParams()
-	sp.NProbes = 10
-	result, err := index2.Search(query, 1, dimension, 1, sp)
+	got, err := index2.Search(query, 1, dimension, ivfPqRoundTripK, sp)
 	if err != nil {
 		t.Fatalf("Search failed: %v", err)
 	}
-	if result.Neighbors[0] != 0 {
-		t.Errorf("Expected 0, got %d", result.Neighbors[0])
-	}
+	assertSameIvfPqResults(t, want, got)
 }
 
 func TestGpuIvfPqPackUnpack(t *testing.T) {
@@ -150,7 +201,7 @@ func TestGpuIvfPqPackUnpack(t *testing.T) {
 	bp.NLists = 10
 	bp.M = 2
 	bp.KmeansTrainsetFraction = 1.0
-	index, err := NewGpuIvfPq[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
+	index, err := NewGpuIvfPq[float32, float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
 	if err != nil {
 		t.Fatalf("Failed to create GpuIvfPq: %v", err)
 	}
@@ -159,14 +210,23 @@ func TestGpuIvfPqPackUnpack(t *testing.T) {
 		t.Fatalf("Build failed: %v", err)
 	}
 
+	// Source-index answer that every unpacked copy must reproduce exactly.
+	query := make([]float32, dimension) // all zeros: exact match for row 0
+	sp := DefaultIvfPqSearchParams()
+	sp.NProbes = 10
+	want, err := index.Search(query, 1, dimension, ivfPqRoundTripK, sp)
+	if err != nil {
+		t.Fatalf("Search before pack failed: %v", err)
+	}
+
 	for _, filename := range []string{"test_ivf_pq_pack.tar", "test_ivf_pq_pack.tar.gz"} {
 		t.Run(filename, func(t *testing.T) {
-			if err := index.Pack(filename); err != nil {
+			if _, err := index.Pack(filename, ""); err != nil {
 				t.Fatalf("Pack failed: %v", err)
 			}
 			defer os.Remove(filename)
 
-			index2, err := NewGpuIvfPqEmpty[float32](0, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+			index2, err := NewGpuIvfPqEmpty[float32, float32](0, dimension, L2Expanded, bp, devices, 1, SingleGpu)
 			if err != nil {
 				t.Fatalf("NewGpuIvfPqEmpty failed: %v", err)
 			}
@@ -174,20 +234,15 @@ func TestGpuIvfPqPackUnpack(t *testing.T) {
 			if err := index2.Start(); err != nil {
 				t.Fatalf("index2 Start failed: %v", err)
 			}
-			if err := index2.Unpack(filename, SingleGpu); err != nil {
+			if err := index2.Unpack(filename, "", SingleGpu); err != nil {
 				t.Fatalf("Unpack failed: %v", err)
 			}
 
-			query := make([]float32, dimension)
-			sp := DefaultIvfPqSearchParams()
-			sp.NProbes = 10
-			result, err := index2.Search(query, 1, dimension, 1, sp)
+			got, err := index2.Search(query, 1, dimension, ivfPqRoundTripK, sp)
 			if err != nil {
 				t.Fatalf("Search failed: %v", err)
 			}
-			if result.Neighbors[0] != 0 {
-				t.Errorf("Expected neighbor 0, got %d", result.Neighbors[0])
-			}
+			assertSameIvfPqResults(t, want, got)
 		})
 	}
 	index.Destroy()
@@ -208,7 +263,7 @@ func TestGpuIvfPqFromDataDirectory(t *testing.T) {
 	bp.NLists = 10
 	bp.M = 2
 	bp.KmeansTrainsetFraction = 1.0
-	index, err := NewGpuIvfPq[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
+	index, err := NewGpuIvfPq[float32, float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
 	if err != nil {
 		t.Fatalf("Failed to create GpuIvfPq: %v", err)
 	}
@@ -217,8 +272,18 @@ func TestGpuIvfPqFromDataDirectory(t *testing.T) {
 		t.Fatalf("Build failed: %v", err)
 	}
 
+	// Source-index answer, captured before Destroy; the directory-loaded index
+	// must reproduce it exactly.
+	query := make([]float32, dimension) // all zeros: exact match for row 0
+	sp := DefaultIvfPqSearchParams()
+	sp.NProbes = 10
+	want, err := index.Search(query, 1, dimension, ivfPqRoundTripK, sp)
+	if err != nil {
+		t.Fatalf("Search before pack failed: %v", err)
+	}
+
 	tarFile := "test_ivf_pq_dir.tar"
-	if err := index.Pack(tarFile); err != nil {
+	if _, err := index.Pack(tarFile, ""); err != nil {
 		t.Fatalf("Pack failed: %v", err)
 	}
 	defer os.Remove(tarFile)
@@ -234,22 +299,17 @@ func TestGpuIvfPqFromDataDirectory(t *testing.T) {
 		t.Fatalf("Unpack to dir failed: %v", err)
 	}
 
-	index2, err := NewGpuIvfPqFromDataDirectory[float32](tmpDir, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+	index2, err := NewGpuIvfPqFromDataDirectory[float32, float32](tmpDir, dimension, L2Expanded, bp, devices, 1, SingleGpu)
 	if err != nil {
 		t.Fatalf("NewGpuIvfPqFromDataDirectory failed: %v", err)
 	}
 	defer index2.Destroy()
 
-	query := make([]float32, dimension)
-	sp := DefaultIvfPqSearchParams()
-	sp.NProbes = 10
-	result, err := index2.Search(query, 1, dimension, 1, sp)
+	got, err := index2.Search(query, 1, dimension, ivfPqRoundTripK, sp)
 	if err != nil {
 		t.Fatalf("Search failed: %v", err)
 	}
-	if result.Neighbors[0] != 0 {
-		t.Errorf("Expected neighbor 0, got %d", result.Neighbors[0])
-	}
+	assertSameIvfPqResults(t, want, got)
 }
 
 func TestGpuIvfPqChunked(t *testing.T) {
@@ -261,7 +321,7 @@ func TestGpuIvfPqChunked(t *testing.T) {
 	bp.M = 4
 
 	// Create empty index (target type int8)
-	index, err := NewGpuIvfPqEmpty[int8](totalCount, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+	index, err := NewGpuIvfPqEmpty[float32, int8](totalCount, dimension, L2Expanded, bp, devices, 1, SingleGpu)
 	if err != nil {
 		t.Fatalf("Failed to create GpuIvfPqEmpty: %v", err)
 	}
@@ -280,7 +340,7 @@ func TestGpuIvfPqChunked(t *testing.T) {
 		for j := range chunk {
 			chunk[j] = val
 		}
-		err = index.AddChunkFloat(chunk, chunkSize, nil)
+		err = index.AddChunkQuantize(chunk, chunkSize, nil)
 		if err != nil {
 			t.Fatalf("AddChunkFloat failed at offset %d: %v", i, err)
 		}
@@ -343,7 +403,7 @@ func TestGpuShardedIvfPq(t *testing.T) {
 	bp := DefaultIvfPqBuildParams()
 	bp.NLists = 10
 	bp.M = 2
-	index, err := NewGpuIvfPq[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, Sharded, nil)
+	index, err := NewGpuIvfPq[float32, float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, Sharded, nil)
 	if err != nil {
 		t.Fatalf("Failed to create sharded IVF-PQ: %v", err)
 	}
@@ -385,7 +445,7 @@ func TestGpuReplicatedIvfPq(t *testing.T) {
 	bp := DefaultIvfPqBuildParams()
 	bp.NLists = 10
 	bp.M = 2
-	index, err := NewGpuIvfPq[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, Replicated, nil)
+	index, err := NewGpuIvfPq[float32, float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, Replicated, nil)
 	if err != nil {
 		t.Fatalf("Failed to create replicated IVF-PQ: %v", err)
 	}
@@ -423,7 +483,18 @@ func TestGpuIvfPqExtend(t *testing.T) {
 	bp := DefaultIvfPqBuildParams()
 	bp.NLists = 10
 	bp.M = 8
-	index, err := NewGpuIvfPq[float32](dataset, nBase, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
+	// Explicit ids for the base rows, equal to their internal positions -- which is
+	// exactly what an id-less index means by "id". Passing nil here instead built an
+	// index with NO host_ids, and the id-bearing Extend below then zero-filled
+	// host_ids[0..nBase) to make room for the extended ids. Every base row therefore
+	// reported external id 0, which made the "expect ID 0" assertion below vacuous:
+	// it passed for any base row, not just row 0. That mix is now refused outright
+	// (index_base.hpp: an index is all-ids or all-id-less), so state the intent.
+	baseIDs := make([]int64, nBase)
+	for i := range baseIDs {
+		baseIDs[i] = int64(i)
+	}
+	index, err := NewGpuIvfPq[float32, float32](dataset, nBase, dimension, L2Expanded, bp, devices, 1, SingleGpu, baseIDs)
 	if err != nil {
 		t.Fatalf("Failed to create GpuIvfPq: %v", err)
 	}
@@ -498,7 +569,18 @@ func TestGpuIvfPqExtendFloat(t *testing.T) {
 	bp.M = 8
 	bp.KmeansTrainsetFraction = 1.0
 	// Use Float16 so ExtendFloat exercises quantization
-	index, err := NewGpuIvfPq[Float16](dataset, nBase, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
+	// Explicit ids for the base rows, equal to their internal positions -- which is
+	// exactly what an id-less index means by "id". Passing nil here instead built an
+	// index with NO host_ids, and the id-bearing Extend below then zero-filled
+	// host_ids[0..nBase) to make room for the extended ids. Every base row therefore
+	// reported external id 0, which made the "expect ID 0" assertion below vacuous:
+	// it passed for any base row, not just row 0. That mix is now refused outright
+	// (index_base.hpp: an index is all-ids or all-id-less), so state the intent.
+	baseIDs := make([]int64, nBase)
+	for i := range baseIDs {
+		baseIDs[i] = int64(i)
+	}
+	index, err := NewGpuIvfPq[Float16, Float16](dataset, nBase, dimension, L2Expanded, bp, devices, 1, SingleGpu, baseIDs)
 	if err != nil {
 		t.Fatalf("Failed to create GpuIvfPq[Float16]: %v", err)
 	}
@@ -532,14 +614,20 @@ func TestGpuIvfPqExtendFloat(t *testing.T) {
 	sp := DefaultIvfPqSearchParams()
 	sp.NProbes = 10
 
-	// Query exactly at extended cluster; expect ID in [3000, 3050)
-	qExt := make([]float32, dimension)
-	for j := range qExt {
-		qExt[j] = extVal
+	// Query exactly at extended cluster; expect ID in [3000, 3050). This is a
+	// Float16-base index, so SearchQuantize takes a []Float16 query (the old
+	// SearchFloat's implicit f32->half is gone — convert explicitly).
+	qExtF32 := make([]float32, dimension)
+	for j := range qExtF32 {
+		qExtF32[j] = extVal
 	}
-	r, err := index.SearchFloat(qExt, 1, dimension, 1, sp)
+	qExt := make([]Float16, dimension)
+	if err := GpuConvertF32ToF16(qExtF32, qExt, 0); err != nil {
+		t.Fatalf("convert query to f16: %v", err)
+	}
+	r, err := index.SearchQuantize(qExt, 1, dimension, 1, sp)
 	if err != nil {
-		t.Fatalf("SearchFloat failed: %v", err)
+		t.Fatalf("SearchQuantize failed: %v", err)
 	}
 	if r.Neighbors[0] < 3000 || r.Neighbors[0] >= 3050 {
 		t.Errorf("expected neighbor in [3000, 3050), got %d dist=%f", r.Neighbors[0], r.Distances[0])
@@ -565,7 +653,7 @@ func TestGpuIvfPqDeleteId(t *testing.T) {
 	bp.NLists = 10
 	bp.M = 8
 	bp.KmeansTrainsetFraction = 1.0
-	index, err := NewGpuIvfPq[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
+	index, err := NewGpuIvfPq[float32, float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
 	if err != nil {
 		t.Fatalf("Failed to create GpuIvfPq: %v", err)
 	}
@@ -608,7 +696,7 @@ func TestGpuIvfPqDeleteId(t *testing.T) {
 	}
 
 	// 2. Test SearchFloat (this verifies the fix in search_float_internal)
-	r, err = index.SearchFloat(q50, 1, dimension, 1, sp)
+	r, err = index.SearchQuantize(q50, 1, dimension, 1, sp)
 	if err != nil {
 		t.Fatalf("SearchFloat failed: %v", err)
 	}
@@ -633,7 +721,7 @@ func BenchmarkGpuShardedIvfPq(b *testing.B) {
 	bp := DefaultIvfPqBuildParams()
 	bp.NLists = 1000
 	bp.M = 128 // 1024 / 8
-	index, err := NewGpuIvfPq[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 8, Sharded, nil)
+	index, err := NewGpuIvfPq[float32, float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 8, Sharded, nil)
 	if err != nil {
 		b.Fatalf("Failed to create sharded IVF-PQ: %v", err)
 	}
@@ -662,7 +750,7 @@ func BenchmarkGpuShardedIvfPq(b *testing.B) {
 					queries[i] = rand.Float32()
 				}
 				for pb.Next() {
-					_, err := index.SearchFloat(queries, 1, dimension, 10, sp)
+					_, err := index.SearchQuantize(queries, 1, dimension, 10, sp)
 					if err != nil {
 						b.Fatalf("Search failed: %v", err)
 					}
@@ -670,7 +758,7 @@ func BenchmarkGpuShardedIvfPq(b *testing.B) {
 			})
 			b.StopTimer()
 			ReportRecall(b, dataset, uint64(n_vectors), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
-				res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
+				res, err := index.SearchQuantize(queries, numQueries, dimension, limit, sp)
 				if err != nil {
 					return nil, err
 				}
@@ -694,7 +782,7 @@ func BenchmarkGpuSingleIvfPq(b *testing.B) {
 	bp := DefaultIvfPqBuildParams()
 	bp.NLists = 1000
 	bp.M = 128 // 1024 / 8
-	index, err := NewGpuIvfPq[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 8, SingleGpu, nil)
+	index, err := NewGpuIvfPq[float32, float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 8, SingleGpu, nil)
 	if err != nil {
 		b.Fatalf("Failed to create single IVF-PQ: %v", err)
 	}
@@ -723,7 +811,7 @@ func BenchmarkGpuSingleIvfPq(b *testing.B) {
 					queries[i] = rand.Float32()
 				}
 				for pb.Next() {
-					_, err := index.SearchFloat(queries, 1, dimension, 10, sp)
+					_, err := index.SearchQuantize(queries, 1, dimension, 10, sp)
 					if err != nil {
 						b.Fatalf("Search failed: %v", err)
 					}
@@ -731,7 +819,7 @@ func BenchmarkGpuSingleIvfPq(b *testing.B) {
 			})
 			b.StopTimer()
 			ReportRecall(b, dataset, uint64(n_vectors), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
-				res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
+				res, err := index.SearchQuantize(queries, numQueries, dimension, limit, sp)
 				if err != nil {
 					return nil, err
 				}
@@ -758,7 +846,7 @@ func BenchmarkGpuReplicatedIvfPq(b *testing.B) {
 	bp := DefaultIvfPqBuildParams()
 	bp.NLists = 1000
 	bp.M = 128 // 1024 / 8
-	index, err := NewGpuIvfPq[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 8, Replicated, nil)
+	index, err := NewGpuIvfPq[float32, float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 8, Replicated, nil)
 	if err != nil {
 		b.Fatalf("Failed to create replicated IVF-PQ: %v", err)
 	}
@@ -787,7 +875,7 @@ func BenchmarkGpuReplicatedIvfPq(b *testing.B) {
 					queries[i] = rand.Float32()
 				}
 				for pb.Next() {
-					_, err := index.SearchFloat(queries, 1, dimension, 10, sp)
+					_, err := index.SearchQuantize(queries, 1, dimension, 10, sp)
 					if err != nil {
 						b.Fatalf("Search failed: %v", err)
 					}
@@ -795,7 +883,7 @@ func BenchmarkGpuReplicatedIvfPq(b *testing.B) {
 			})
 			b.StopTimer()
 			ReportRecall(b, dataset, uint64(n_vectors), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
-				res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
+				res, err := index.SearchQuantize(queries, numQueries, dimension, limit, sp)
 				if err != nil {
 					return nil, err
 				}
@@ -820,7 +908,7 @@ func BenchmarkGpuAddChunkAndSearchIvfPqF16(b *testing.B) {
 	bp := DefaultIvfPqBuildParams()
 	bp.NLists = 1000
 	// Use Float16 as internal type
-	index, err := NewGpuIvfPqEmpty[Float16](uint64(totalCount), dimension, L2Expanded, bp, devices, 8, SingleGpu)
+	index, err := NewGpuIvfPqEmpty[float32, Float16](uint64(totalCount), dimension, L2Expanded, bp, devices, 8, SingleGpu)
 	if err != nil {
 		b.Fatalf("Failed to create index: %v", err)
 	}
@@ -833,7 +921,7 @@ func BenchmarkGpuAddChunkAndSearchIvfPqF16(b *testing.B) {
 	// Add data in chunks using AddChunkFloat
 	for i := 0; i < totalCount; i += chunkSize {
 		chunk := dataset[i*dimension : (i+chunkSize)*dimension]
-		if err := index.AddChunkFloat(chunk, uint64(chunkSize), nil); err != nil {
+		if err := index.AddChunkQuantize(chunk, uint64(chunkSize), nil); err != nil {
 			b.Fatalf("AddChunkFloat failed at %d: %v", i, err)
 		}
 	}
@@ -854,7 +942,7 @@ func BenchmarkGpuAddChunkAndSearchIvfPqF16(b *testing.B) {
 			queries[i] = rand.Float32()
 		}
 		for pb.Next() {
-			_, err := index.SearchFloat(queries, 1, dimension, 10, sp)
+			_, err := index.SearchQuantize(queries, 1, dimension, 10, sp)
 			if err != nil {
 				b.Fatalf("Search failed: %v", err)
 			}
@@ -862,7 +950,7 @@ func BenchmarkGpuAddChunkAndSearchIvfPqF16(b *testing.B) {
 	})
 	b.StopTimer()
 	ReportRecall(b, dataset, uint64(totalCount), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
-		res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
+		res, err := index.SearchQuantize(queries, numQueries, dimension, limit, sp)
 		if err != nil {
 			return nil, err
 		}
@@ -884,7 +972,7 @@ func BenchmarkGpuAddChunkAndSearchIvfPqInt8(b *testing.B) {
 	bp := DefaultIvfPqBuildParams()
 	bp.NLists = 1000
 	// Use int8 as internal type
-	index, err := NewGpuIvfPqEmpty[int8](uint64(totalCount), dimension, L2Expanded, bp, devices, 8, SingleGpu)
+	index, err := NewGpuIvfPqEmpty[float32, int8](uint64(totalCount), dimension, L2Expanded, bp, devices, 8, SingleGpu)
 	if err != nil {
 		b.Fatalf("Failed to create index: %v", err)
 	}
@@ -897,7 +985,7 @@ func BenchmarkGpuAddChunkAndSearchIvfPqInt8(b *testing.B) {
 	// Add data in chunks using AddChunkFloat
 	for i := 0; i < totalCount; i += chunkSize {
 		chunk := dataset[i*dimension : (i+chunkSize)*dimension]
-		if err := index.AddChunkFloat(chunk, uint64(chunkSize), nil); err != nil {
+		if err := index.AddChunkQuantize(chunk, uint64(chunkSize), nil); err != nil {
 			b.Fatalf("AddChunkFloat failed at %d: %v", i, err)
 		}
 	}
@@ -918,7 +1006,7 @@ func BenchmarkGpuAddChunkAndSearchIvfPqInt8(b *testing.B) {
 			queries[i] = rand.Float32()
 		}
 		for pb.Next() {
-			_, err := index.SearchFloat(queries, 1, dimension, 10, sp)
+			_, err := index.SearchQuantize(queries, 1, dimension, 10, sp)
 			if err != nil {
 				b.Fatalf("Search failed: %v", err)
 			}
@@ -926,7 +1014,7 @@ func BenchmarkGpuAddChunkAndSearchIvfPqInt8(b *testing.B) {
 	})
 	b.StopTimer()
 	ReportRecall(b, dataset, uint64(totalCount), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
-		res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
+		res, err := index.SearchQuantize(queries, numQueries, dimension, limit, sp)
 		if err != nil {
 			return nil, err
 		}

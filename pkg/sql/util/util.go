@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -44,7 +45,18 @@ func CopyBatch(bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
 	rbat := batch.NewWithSize(len(bat.Vecs))
 	rbat.Attrs = append(rbat.Attrs, bat.Attrs...)
 	for i, srcVec := range bat.Vecs {
-		vec, err := srcVec.CloneToFlatCompact(proc.Mp())
+		var (
+			vec *vector.Vector
+			err error
+		)
+		if srcVec.AllocationAccountSelection() != nil {
+			// CopyBatch is an ownership boundary: the source keeps its physical
+			// account until Free, while the independent destination belongs to
+			// the generic downstream batch owner.
+			vec, err = srcVec.CloneToFlatCompactWithAllocation(proc.Mp(), nil)
+		} else {
+			vec, err = srcVec.CloneToFlatCompact(proc.Mp())
+		}
 		if err != nil {
 			rbat.Clean(proc.Mp())
 			return nil, err
@@ -147,6 +159,62 @@ func BuildSysStatementInfoFilter(curAccountId uint64) tree.Expr {
 
 func BuildSysMetricFilter(curAccountId uint64) tree.Expr {
 	return makeAccountIdEqualAst(curAccountId)
+}
+
+// BuildTableScanAccountFilter returns the implicit account filter that the
+// planner must apply when accountID scans the named physical table. A nil
+// result means the scan covers the table's complete physical row domain.
+//
+// Keep this as the single classification point for both plan construction and
+// consumers that decide whether a query result is safe to publish as
+// process-global table metadata (for example, ANALYZE statistics).
+func BuildTableScanAccountFilter(
+	accountID uint32,
+	databaseName string,
+	tableName string,
+	tableType string,
+) tree.Expr {
+	if accountID == catalog.System_Account {
+		return nil
+	}
+
+	switch {
+	case databaseName == catalog.MO_CATALOG && tableName == catalog.MO_DATABASE:
+		return BuildMoDataBaseFilter(uint64(accountID))
+	case databaseName == catalog.MO_SYSTEM_METRICS &&
+		(tableName == catalog.MO_METRIC || tableName == catalog.MO_SQL_STMT_CU):
+		return BuildSysMetricFilter(uint64(accountID))
+	case databaseName == catalog.MO_SYSTEM && tableName == catalog.MO_STATEMENT:
+		return BuildSysStatementInfoFilter(uint64(accountID))
+	case databaseName == catalog.MO_CATALOG && tableName == catalog.MO_TABLES:
+		return BuildMoTablesFilter(uint64(accountID))
+	case databaseName == catalog.MO_CATALOG && tableName == catalog.MO_COLUMNS:
+		return BuildMoColumnsFilter(uint64(accountID))
+	case TableIsClusterTable(tableType):
+		return makeAccountIdEqualAst(uint64(accountID))
+	default:
+		return nil
+	}
+}
+
+// BuildViewMetadataDependenciesFilter exposes only the current account's
+// dependency rows plus the system activation sentinel. The sentinel is cluster
+// wide state used by tenant information_schema views to fail closed while a
+// rolling-upgrade revalidation pass is required or running.
+func BuildViewMetadataDependenciesFilter(curAccountId uint64) tree.Expr {
+	currentAccount := makeAccountIdEqualAst(curAccountId)
+	globalSentinel := tree.NewAndExpr(
+		makeAccountIdEqualAst(uint64(catalog.System_Account)),
+		tree.NewAndExpr(
+			tree.NewComparisonExpr(tree.EQUAL,
+				tree.NewUnresolvedColName("target_relation_id"),
+				tree.NewNumVal(uint64(0), "0", false, tree.P_uint64)),
+			tree.NewComparisonExpr(tree.EQUAL,
+				tree.NewUnresolvedColName("dependency_ordinal"),
+				tree.NewNumVal(uint64(0), "0", false, tree.P_uint64)),
+		),
+	)
+	return tree.NewOrExpr(currentAccount, tree.NewParentExpr(globalSentinel))
 }
 
 // Build the filter condition AST expression for mo_tables, as follows:

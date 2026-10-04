@@ -18,6 +18,7 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -70,6 +71,54 @@ func genericPartition[T types.FixedSizeT](sels []int64, diffs []bool, partitions
 		}
 	}
 
+	return partitions
+}
+
+func floatOrderPartition[T types.FixedSizeT](
+	sels []int64,
+	diffs []bool,
+	partitions []int64,
+	vec *vector.Vector,
+	compare func(T, T) int,
+) []int64 {
+	partitions = partitions[:0]
+	if len(sels) == 0 {
+		return partitions
+	}
+	diffs[0] = true
+	diffs = diffs[:len(sels)]
+
+	if !vec.IsConst() {
+		var n bool
+		var v T
+		vs := vector.MustFixedColWithTypeCheck[T](vec)
+		nsp := vec.GetNulls()
+		if nsp.Any() {
+			for i, sel := range sels {
+				w := vs[sel]
+				isNull := nulls.Contains(nsp, uint64(sel))
+				if n != isNull {
+					diffs[i] = true
+				} else if !isNull {
+					diffs[i] = diffs[i] || compare(v, w) != 0
+				}
+				n = isNull
+				v = w
+			}
+		} else {
+			for i, sel := range sels {
+				w := vs[sel]
+				diffs[i] = diffs[i] || compare(v, w) != 0
+				v = w
+			}
+		}
+	}
+
+	for i, j := int64(0), int64(len(diffs)); i < j; i++ {
+		if diffs[i] {
+			partitions = append(partitions, i)
+		}
+	}
 	return partitions
 }
 
@@ -176,7 +225,9 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		return genericPartition[types.Blockid](sels, diffs, partitions, vec)
 	case types.T_char, types.T_varchar, types.T_json, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_blob,
-		types.T_array_float32, types.T_array_float64, types.T_datalink:
+		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_datalink:
 		return bytesPartition(sels, diffs, partitions, vec)
 		//Used by ORDER_BY SQL clause.
 		//Byte partition logic doesn't use byte.Compare or Str.
@@ -184,4 +235,77 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 	default:
 		panic(moerr.NewNotSupportedNoCtx(vec.GetType().Oid.String()))
 	}
+}
+
+// PartitionForOrder returns peer-group boundaries for SQL ORDER BY. Generic
+// Partition intentionally retains value-identity semantics for GROUP BY,
+// PARTITION BY, and storage callers; only scalar NaN equality differs here.
+func PartitionForOrder(sels []int64, diffs []bool, partitions []int64, vec *vector.Vector) []int64 {
+	switch vec.GetType().Oid {
+	case types.T_float32:
+		return floatOrderPartition(sels, diffs, partitions, vec, types.Float32OrderAscCompare)
+	case types.T_float64:
+		return floatOrderPartition(sels, diffs, partitions, vec, types.Float64OrderAscCompare)
+	case types.T_json:
+		return jsonOrderPartition(sels, diffs, partitions, vec)
+	default:
+		return Partition(sels, diffs, partitions, vec)
+	}
+}
+
+func jsonOrderPartition(
+	sels []int64, diffs []bool, partitions []int64, vec *vector.Vector,
+) []int64 {
+	partitions = partitions[:0]
+	if len(sels) == 0 {
+		return partitions
+	}
+	diffs[0] = true
+	diffs = diffs[:len(sels)]
+
+	if !vec.IsConst() {
+		data, area := vector.MustVarlenaRawData(vec)
+		nsp := vec.GetNulls()
+		var previous bytejson.ByteJson
+		var previousValid bool
+		var previousNull bool
+		var havePrevious bool
+		for i, sel := range sels {
+			isNull := nulls.Contains(nsp, uint64(sel))
+			var current bytejson.ByteJson
+			var currentValid bool
+			if !isNull {
+				current = types.DecodeJson(data[sel].GetByteSlice(area))
+				currentValid = bytejson.IsValidByteJson(current)
+			}
+
+			if havePrevious {
+				if previousNull != isNull {
+					diffs[i] = true
+				} else if !isNull {
+					var cmp int
+					if currentValid && previousValid {
+						cmp = bytejson.CompareByteJsonTrusted(current, previous)
+					} else {
+						cmp = bytejson.CompareByteJson(current, previous)
+					}
+					diffs[i] = diffs[i] || cmp != 0
+				}
+			}
+
+			if !isNull {
+				previous = current
+				previousValid = currentValid
+			}
+			previousNull = isNull
+			havePrevious = true
+		}
+	}
+
+	for i, j := int64(0), int64(len(diffs)); i < j; i++ {
+		if diffs[i] {
+			partitions = append(partitions, i)
+		}
+	}
+	return partitions
 }

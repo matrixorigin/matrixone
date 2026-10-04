@@ -16,9 +16,14 @@ package proxy
 
 import (
 	"context"
+	"errors"
+	"net"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"github.com/fagongzi/goetty/v2/codec"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -26,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	"github.com/matrixorigin/matrixone/pkg/version"
@@ -33,11 +39,27 @@ import (
 
 var statsFamilyName = "proxy counter"
 
+const (
+	// These values pin the application-facing Goetty session contract used by
+	// calculateProtocolMemoryBudget. Goetty allocates the two copy buffers when
+	// the session is created; the read input is phase-owned and released after
+	// authentication, while the other three buffers live until session close.
+	proxyApplicationReadBufferSize         = 256
+	proxyApplicationWriteBufferSize        = 256
+	proxyApplicationReadCopyBufferSize     = 1024
+	proxyApplicationWriteCopyBufferSize    = 1024
+	proxyApplicationReadChunkSize          = 4 << 10
+	proxyApplicationSessionPersistentBytes = proxyApplicationWriteBufferSize +
+		proxyApplicationReadCopyBufferSize +
+		proxyApplicationWriteCopyBufferSize
+)
+
 type Server struct {
-	runtime runtime.Runtime
-	stopper *stopper.Stopper
-	config  Config
-	app     goetty.NetApplication
+	runtime  runtime.Runtime
+	stopper  *stopper.Stopper
+	config   Config
+	app      goetty.NetApplication
+	listener net.Listener
 
 	// handler handles the client connection.
 	handler *handler
@@ -45,14 +67,32 @@ type Server struct {
 	counterSet     *counterSet
 	haKeeperClient logservice.ProxyHAKeeperClient
 	// configData will be sent to HAKeeper.
-	configData *util.ConfigData
-	test       bool
+	configData                      *util.ConfigData
+	catalogMetadataParticipant      logservicepb.CatalogMetadataParticipant
+	viewMetadataAdmissionGeneration uint64
+	viewMetadataObservedEpoch       atomic.Uint64
+	viewMetadataAdmission           atomic.Pointer[logservicepb.ViewMetadataAdmission]
+	viewMetadataAdmissionUpdated    chan struct{}
+	viewMetadataHeartbeatWakeup     chan struct{}
+	viewMetadataAdmissionContext    context.Context
+	viewMetadataAdmissionCancel     context.CancelFunc
+	viewMetadataRevocationOnce      sync.Once
+	viewMetadataCloseFn             func() error
+	lifecycleMu                     sync.Mutex
+	started                         bool
+	closed                          bool
+	closeOnce                       sync.Once
+	closeErr                        error
+	test                            bool
 }
 
 // NewServer creates the proxy server.
 //
 // NB: runtime must be included in opts.
 func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	config.FillDefault()
 	if err := config.Validate(); err != nil {
 		return nil, err
@@ -67,9 +107,32 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 		config:     config,
 		counterSet: newCounterSet(),
 	}
+	s.viewMetadataAdmissionContext, s.viewMetadataAdmissionCancel = context.WithCancel(ctx)
+	initialized := false
+	statsRegistered := false
+	haKeeperClientOwned := false
+	defer func() {
+		if initialized {
+			return
+		}
+		s.viewMetadataAdmissionCancel()
+		_ = s.closeIngress()
+		if s.handler != nil {
+			_ = s.handler.Close()
+		} else if haKeeperClientOwned && s.haKeeperClient != nil {
+			_ = s.haKeeperClient.Close()
+		}
+		if s.stopper != nil {
+			s.stopper.Stop()
+		}
+		if statsRegistered {
+			stats.Unregister(statsFamilyName)
+		}
+	}()
 	for _, opt := range opts {
 		opt(s)
 	}
+	haKeeperClientOwned = s.haKeeperClient != nil
 	if s.runtime == nil {
 		panic("runtime of proxy is not set")
 	}
@@ -83,6 +146,10 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 		if err != nil {
 			return nil, err
 		}
+		haKeeperClientOwned = true
+	}
+	if err = s.initViewMetadataAdmission(ctx); err != nil {
+		return nil, err
 	}
 
 	logExporter := newCounterLogExporter(s.counterSet)
@@ -90,6 +157,7 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 	// (e.g., from a previous test run or failed initialization).
 	stats.Unregister(statsFamilyName)
 	stats.Register(statsFamilyName, stats.WithLogExporter(logExporter))
+	statsRegistered = true
 
 	s.stopper = stopper.NewStopper("mo-proxy", stopper.WithLogger(s.runtime.Logger().RawLogger()))
 	h, err := newProxyHandler(
@@ -105,28 +173,101 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 		return nil, err
 	}
 
+	s.handler = h
+	haKeeperClientOwned = false
 	if err := runBootstrapTask(ctx, s.stopper, h); err != nil {
 		return nil, err
 	}
 
-	if err := s.stopper.RunNamedTask("proxy heartbeat", s.heartbeat); err != nil {
-		return nil, err
-	}
-
-	s.handler = h
-	app, err := goetty.NewApplication(config.ListenAddress, nil,
-		goetty.WithAppLogger(s.runtime.Logger().RawLogger()),
-		goetty.WithAppHandleSessionFunc(s.handler.handle),
-		goetty.WithAppSessionOptions(
-			goetty.WithSessionCodec(WithProxyProtocolCodec(frontend.NewSqlCodec())),
-			goetty.WithSessionLogger(s.runtime.Logger().RawLogger()),
-		),
-	)
+	listener, err := newProxyListener(config.ListenAddress)
 	if err != nil {
 		return nil, err
 	}
+	listener = newConnectionAdmissionListener(
+		listener,
+		s.handler.connectionLimiter,
+		s.handler.rejectBeforeSession,
+	)
+	app, err := goetty.NewApplicationWithListeners([]net.Listener{listener}, nil,
+		goetty.WithAppLogger(s.runtime.Logger().RawLogger()),
+		goetty.WithAppHandleSessionFunc(s.handler.handle),
+		goetty.WithAppSessionOptions(
+			goetty.WithSessionCodec(newProxySessionCodec(config)),
+			goetty.WithSessionLogger(s.runtime.Logger().RawLogger()),
+			goetty.WithSessionAllocator(newProxyApplicationAllocator(
+				s.handler.sessionAllocator,
+			)),
+			// Keep the dependency defaults explicit because their concrete
+			// allocations are part of the configured protocol-memory budget.
+			goetty.WithSessionRWBUfferSize(
+				int(proxyApplicationReadBufferSize),
+				int(proxyApplicationWriteBufferSize),
+			),
+		),
+	)
+	if err != nil {
+		_ = listener.Close()
+		return nil, err
+	}
 	s.app = app
+	s.listener = listener
+
+	// Admission may revoke this generation immediately, so publish every ingress
+	// resource before the first heartbeat can observe an authoritative response.
+	if err := s.stopper.RunNamedTask("proxy heartbeat", s.heartbeat); err != nil {
+		return nil, err
+	}
+	initialized = true
 	return s, nil
+}
+
+func newProxySessionCodec(config Config) codec.Codec {
+	return WithProxyProtocolCodec(frontend.NewSqlCodec(
+		frontend.WithSQLCodecMaxPayloadSize(int(config.ClientHandshakePacketLimit)),
+	), WithProxyProtocolMaxBodySize(int(config.ProxyProtocolBodyLimit)))
+}
+
+// proxyApplicationAllocator keeps Goetty's small bootstrap buffers infallible,
+// then routes every grown protocol buffer through the Proxy's shared bounded
+// allocator. Goetty constructs an application session after listener admission
+// but before the handler takes the lease, and panics if that initial allocation
+// returns an error. The listener bounds these bootstrap allocations; putting
+// them behind a fallible allocator would turn overload into a process crash.
+//
+// The first socket read always requests a 4 KiB writable region, which moves the
+// input above the inline threshold after the handshake lease has been acquired.
+// From then on growth and handoff Close have deterministic allocate/free edges.
+type proxyApplicationAllocator struct {
+	managed frontend.Allocator
+}
+
+func newProxyApplicationAllocator(managed frontend.Allocator) *proxyApplicationAllocator {
+	return &proxyApplicationAllocator{managed: managed}
+}
+
+func (a *proxyApplicationAllocator) Alloc(capacity int) ([]byte, error) {
+	if capacity < 0 {
+		return nil, moerr.NewInternalErrorNoCtx("negative proxy application buffer capacity")
+	}
+	if capacity <= proxyApplicationReadBufferSize {
+		return make([]byte, capacity), nil
+	}
+	if a == nil || a.managed == nil {
+		return nil, moerr.NewInternalErrorNoCtx("proxy application allocator is unavailable")
+	}
+	return a.managed.Alloc(capacity)
+}
+
+func (a *proxyApplicationAllocator) Free(data []byte) {
+	if len(data) <= proxyApplicationReadBufferSize {
+		return
+	}
+	if a == nil || a.managed == nil {
+		// A large buffer cannot be produced by Alloc without a managed owner.
+		// Keep cleanup non-panicking if a future caller violates that invariant.
+		return
+	}
+	a.managed.Free(data)
 }
 
 func runBootstrapTask(ctx context.Context, st *stopper.Stopper, h *handler) error {
@@ -148,19 +289,71 @@ func runBootstrapTask(ctx context.Context, st *stopper.Stopper, h *handler) erro
 
 // Start starts the proxy server.
 func (s *Server) Start() error {
+	admissionCtx := s.viewMetadataAdmissionContext
+	if admissionCtx == nil {
+		admissionCtx = context.Background()
+	}
+	admissionTimeoutReported := false
+	for {
+		err := s.waitForViewMetadataAdmission(admissionCtx)
+		if err == nil {
+			break
+		}
+		if admissionCtx.Err() != nil {
+			return context.Cause(admissionCtx)
+		}
+		if !errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		if !admissionTimeoutReported {
+			s.runtime.Logger().Warn("proxy view metadata admission did not converge before startup deadline; continuing to wait",
+				zap.Uint64("generation", s.viewMetadataAdmissionGeneration),
+				zap.Duration("deadline", s.viewMetadataAdmissionTimeout()))
+			admissionTimeoutReported = true
+		}
+	}
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.closed {
+		return moerr.NewInternalErrorNoCtx("proxy server is closed")
+	}
 	err := s.app.Start()
 	if err != nil {
 		s.runtime.Logger().Error("proxy server start failed", zap.Error(err))
 	} else {
+		s.started = true
 		s.runtime.Logger().Info("proxy server started")
 	}
 	return err
 }
 
+func (s *Server) closeIngress() error {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	s.closed = true
+	if !s.started && s.listener != nil {
+		_ = s.listener.Close()
+	}
+	if s.app != nil {
+		return s.app.Stop()
+	}
+	return nil
+}
+
 // Close closes the proxy server.
 func (s *Server) Close() error {
-	_ = s.handler.Close()
-	s.stopper.Stop()
-	stats.Unregister(statsFamilyName)
-	return s.app.Stop()
+	s.closeOnce.Do(func() {
+		if s.viewMetadataAdmissionCancel != nil {
+			s.viewMetadataAdmissionCancel()
+		}
+		s.closeErr = s.closeIngress()
+		if s.handler != nil {
+			_ = s.handler.Close()
+		}
+		if s.stopper != nil {
+			s.stopper.Stop()
+		}
+		stats.Unregister(statsFamilyName)
+	})
+	return s.closeErr
 }

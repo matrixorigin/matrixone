@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -36,6 +37,55 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
+
+func TestAutoIncrEpochFenceCommitRequiresV9(t *testing.T) {
+	rt := newTestRuntime(newTestClock(), zap.NewNop())
+	req := &txn.TxnRequest{Method: txn.TxnMethod_CommitAutoIncrEpochFence}
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion8)
+	require.Error(t, checkMethodVersion(context.Background(), rt, req))
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion9)
+	require.NoError(t, checkMethodVersion(context.Background(), rt, req))
+
+	legacyMethods := map[txn.TxnMethod]int64{txn.TxnMethod_Commit: defines.MORPCVersion1}
+	require.Error(t, runtime.CheckMethodVersionWithRuntime(context.Background(), rt, legacyMethods, req))
+}
+
+func TestAutoIncrEpochFenceCommitNetworkDispatchRequiresV9(t *testing.T) {
+	runTestTxnServer(t, testTN1Addr, func(s *server) {
+		var calls atomic.Int32
+		s.RegisterMethodHandler(txn.TxnMethod_CommitAutoIncrEpochFence, func(
+			context.Context,
+			*txn.TxnRequest,
+			*txn.TxnResponse,
+		) error {
+			calls.Add(1)
+			return nil
+		})
+
+		s.rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion8)
+		v8Message := newMessage(&txn.TxnRequest{Method: txn.TxnMethod_CommitAutoIncrEpochFence})
+		require.Error(t, s.onMessage(
+			context.Background(),
+			v8Message,
+			1,
+			newTestClientSession(make(chan morpc.Message, 1)),
+		))
+		require.Zero(t, calls.Load(), "V8 must reject before invoking the handler")
+
+		s.rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion9)
+		v9Message := newMessage(&txn.TxnRequest{Method: txn.TxnMethod_CommitAutoIncrEpochFence})
+		defer v9Message.Cancel()
+		require.NoError(t, s.onMessage(
+			context.Background(),
+			v9Message,
+			2,
+			newTestClientSession(make(chan morpc.Message, 1)),
+		))
+		require.Eventually(t, func() bool { return calls.Load() == 1 }, time.Second, time.Millisecond)
+	})
+}
 
 func TestHandleMessageWithSender(t *testing.T) {
 	runTestTxnServer(t, testTN1Addr, func(s *server) {
@@ -290,6 +340,154 @@ func TestCloseConcurrentAndRepeatedReturnsSameError(t *testing.T) {
 	require.Equal(t, int32(1), rpc.closeCalls.Load())
 }
 
+func TestQuiesceAndDrainWaitForAcceptedHandler(t *testing.T) {
+	runTestTxnServer(t, testTN1Addr, func(s *server) {
+		started := make(chan struct{})
+		release := make(chan struct{})
+		var releaseOnce sync.Once
+		unblock := func() { releaseOnce.Do(func() { close(release) }) }
+		// The helper closes the server when this callback returns, including
+		// FailNow. Release the handler before that close can begin draining.
+		defer unblock()
+		s.RegisterMethodHandler(txn.TxnMethod_Read, func(context.Context, *txn.TxnRequest, *txn.TxnResponse) error {
+			close(started)
+			<-release
+			return nil
+		})
+
+		msg := newMessage(&txn.TxnRequest{Method: txn.TxnMethod_Read})
+		require.NoError(t, s.onMessage(context.Background(), msg, 0,
+			newTestClientSession(make(chan morpc.Message, 1))))
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			require.FailNow(t, "handler did not start")
+		}
+
+		require.NoError(t, s.Quiesce())
+		drainCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		err := s.Drain(drainCtx)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.ErrorIs(t, err, ErrTxnDrainTimeout)
+		cancel()
+
+		unblock()
+		drainCtx, cancel = context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		require.NoError(t, s.Drain(drainCtx))
+	})
+}
+
+func TestQuiesceCancelsForwardWaitBeforeHandlerEntry(t *testing.T) {
+	for _, promote := range []bool{false, true} {
+		t.Run(fmt.Sprintf("promotion=%t", promote), func(t *testing.T) {
+			testForwardWaitQuiesce(t, promote)
+		})
+	}
+}
+
+// Done is evaluated once by the worker's queue select, then again by its
+// forward-wait select. The second evaluation proves that the worker dequeued
+// the request, passed beginHandler, and selected TxnForwardWait. Holding that
+// evaluation lets the test arrange promotion/quiesce before either select arm
+// can win, without adding a hook to production code.
+type forwardWaitBarrierContext struct {
+	context.Context
+	calls   int
+	entered chan struct{}
+	resume  chan struct{}
+}
+
+func (c *forwardWaitBarrierContext) Done() <-chan struct{} {
+	c.calls++ // Only the single test worker calls Done.
+	if c.calls == 2 {
+		close(c.entered)
+		<-c.resume
+	}
+	return c.Context.Done()
+}
+
+func testForwardWaitQuiesce(t *testing.T, promote bool) {
+	t.Helper()
+	rpcServer := &testRPCServer{}
+	s := newBlockedQueueTestServer(t, rpcServer)
+	s.handleState.state = TxnForwardWait
+	s.handleState.forward.waitReady = make(chan struct{})
+	var forwarded atomic.Int32
+	s.handleState.forward.forwardFunc = func(context.Context, *txn.TxnRequest, *txn.TxnResponse) error {
+		forwarded.Add(1)
+		return errors.New("unexpected forwarding after quiesce")
+	}
+	s.pool.responses.New = func() any { return &txn.TxnResponse{} }
+
+	workerCtx, cancelWorker := context.WithCancel(context.Background())
+	barrier := &forwardWaitBarrierContext{
+		Context: workerCtx,
+		entered: make(chan struct{}),
+		resume:  make(chan struct{}),
+	}
+	var resumeOnce sync.Once
+	resume := func() { resumeOnce.Do(func() { close(barrier.resume) }) }
+	joined := make(chan struct{})
+	// Install all release paths before any assertion or worker launch. In
+	// particular, a failed barrier oracle must not strand the worker in Done.
+	defer func() {
+		cancelWorker()
+		resume()
+		select {
+		case <-joined:
+		case <-time.After(time.Second):
+			t.Error("forward-wait worker did not exit")
+		}
+		assert.NoError(t, s.Close())
+	}()
+	go func() {
+		defer close(joined)
+		s.handleTxnRequest(barrier)
+	}()
+
+	var canceled atomic.Int32
+	req := &txn.TxnRequest{RequestID: 42}
+	require.True(t, s.beginProducer())
+	s.queue <- executor{
+		ctx:     context.Background(),
+		req:     req,
+		cancel:  func() { canceled.Add(1) },
+		handler: s.handlers[txn.TxnMethod_Read],
+		s:       s,
+	}
+	s.finishProducer()
+	select {
+	case <-barrier.entered:
+	case <-time.After(time.Second):
+		require.FailNow(t, "worker did not enter forward-wait")
+	}
+	require.Empty(t, s.queue)
+	if promote {
+		require.NoError(t, s.SwitchTxnHandleStateTo(TxnForwarding))
+	}
+
+	require.NoError(t, s.Quiesce())
+	resume()
+	drainCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	require.NoError(t, s.Drain(drainCtx))
+	cancelWorker()
+	select {
+	case <-joined:
+	case <-time.After(time.Second):
+		require.FailNow(t, "forward-wait worker did not exit")
+	}
+	require.Equal(t, int32(1), canceled.Load())
+	require.Zero(t, forwarded.Load())
+	require.Zero(t, req.RequestID, "request must be reset before release")
+	s.activeHandlers.Lock()
+	active := s.activeHandlers.active
+	s.activeHandlers.Unlock()
+	require.Zero(t, active)
+	require.Equal(t, int32(1), rpcServer.closeCalls.Load())
+}
+
 func newBlockedQueueTestServer(t *testing.T, rpcServer morpc.RPCServer) *server {
 	t.Helper()
 	rt := newTestRuntime(newTestClock(), logutil.GetPanicLogger())
@@ -302,6 +500,7 @@ func newBlockedQueueTestServer(t *testing.T, rpcServer morpc.RPCServer) *server 
 		stopper:   stopper.NewStopper("txn rpc test"),
 		stoppingC: make(chan struct{}),
 	}
+	s.activeHandlers.zero = make(chan struct{})
 	s.options.maxChannelBufferSize = 1
 	s.handlers[txn.TxnMethod_Read] = func(context.Context, *txn.TxnRequest, *txn.TxnResponse) error {
 		return nil
@@ -412,6 +611,12 @@ func (cs *testClientSession) AsyncWrite(response morpc.Message) error {
 func (cs *testClientSession) CreateCache(
 	ctx context.Context,
 	cacheID uint64) (morpc.MessageCache, error) {
+	panic("not implement")
+}
+func (cs *testClientSession) CreateCacheWithCancel(
+	context.Context,
+	uint64,
+	context.CancelFunc) (morpc.MessageCache, error) {
 	panic("not implement")
 }
 

@@ -17,12 +17,14 @@ package proxy
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"io"
 	"net"
 
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/fagongzi/goetty/v2/codec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 )
 
 const (
@@ -47,12 +49,46 @@ const (
 	ipv6AddrLength = 16
 )
 
-func WithProxyProtocolCodec(c codec.Codec) codec.Codec {
-	return &proxyProtocolCodec{Codec: c}
+// ProxyProtocolCodecOption configures the PROXY protocol decoder.
+type ProxyProtocolCodecOption func(*proxyProtocolCodec)
+
+// WithProxyProtocolMaxBodySize rejects a PROXY v2 body larger than size after
+// reading only its fixed header. Non-positive values leave the cap disabled.
+func WithProxyProtocolMaxBodySize(size int) ProxyProtocolCodecOption {
+	return func(c *proxyProtocolCodec) {
+		c.maxBodySize = size
+	}
+}
+
+func WithProxyProtocolCodec(c codec.Codec, options ...ProxyProtocolCodecOption) codec.Codec {
+	pp := &proxyProtocolCodec{Codec: c}
+	for _, option := range options {
+		if option != nil {
+			option(pp)
+		}
+	}
+	return pp
 }
 
 type proxyProtocolCodec struct {
 	codec.Codec
+	maxBodySize int
+}
+
+// mysqlPacketDecodeError retains the header information needed to produce a
+// correctly sequenced MySQL error after the underlying codec rejects a payload
+// before constructing a Packet.
+type mysqlPacketDecodeError struct {
+	cause      error
+	sequenceID uint8
+}
+
+func (e *mysqlPacketDecodeError) Error() string {
+	return e.cause.Error()
+}
+
+func (e *mysqlPacketDecodeError) Unwrap() error {
+	return e.cause
 }
 
 // ProxyHeaderV2 is the structure of the Proxy Protocol version 2 header.
@@ -73,14 +109,29 @@ type ProxyAddr struct {
 
 // Decode implements the Codec interface.
 func (c *proxyProtocolCodec) Decode(in *buf.ByteBuf) (interface{}, bool, error) {
-	proxyAddr, ok, err := parseProxyHeaderV2(in)
+	proxyAddr, ok, needMore, err := parseProxyHeaderV2(in, c.maxBodySize)
 	if err != nil {
 		return nil, false, err
+	}
+	if needMore {
+		return nil, false, nil
 	}
 	if ok {
 		return proxyAddr, ok, nil
 	}
-	return c.Codec.Decode(in)
+	var sequenceID uint8
+	hasPacketHeader := in.Readable() >= frontend.PacketHeaderLength
+	if hasPacketHeader {
+		sequenceID = in.PeekN(0, frontend.PacketHeaderLength)[3]
+	}
+	value, complete, err := c.Codec.Decode(in)
+	if hasPacketHeader && errors.Is(err, frontend.ErrPacketTooLarge) {
+		err = &mysqlPacketDecodeError{
+			cause:      err,
+			sequenceID: sequenceID,
+		}
+	}
+	return value, complete, err
 }
 
 // Encode implements the Codec interface.
@@ -90,25 +141,46 @@ func (c *proxyProtocolCodec) Encode(data interface{}, out *buf.ByteBuf, writer i
 
 // parseProxyHeader read potential proxy protocol v2 header from the stream
 // ref: https://www.haproxy.org/download/1.8/doc/proxy-protocol.txt
-func parseProxyHeaderV2(in *buf.ByteBuf) (*ProxyAddr, bool, error) {
-	// Read the Proxy Protocol header.
+func parseProxyHeaderV2(in *buf.ByteBuf, maxBodySize int) (*ProxyAddr, bool, bool, error) {
+	// A stream read may stop anywhere in the signature, fixed header, or
+	// variable-length body. Keep input buffered while every available signature
+	// byte still matches; only a mismatch proves that this is a MySQL packet and
+	// allows the caller to delegate to the SQL codec.
+	prefixLength := min(in.Readable(), len(ProxyProtocolV2Signature))
+	if prefixLength > 0 {
+		prefix := in.PeekN(0, prefixLength)
+		for i := range prefix {
+			if prefix[i] != ProxyProtocolV2Signature[i] {
+				return nil, false, false, nil
+			}
+		}
+	}
 	if in.Readable() < ProxyHeaderLength {
-		return nil, false, nil
+		return nil, false, true, nil
 	}
 	headerBytes := in.PeekN(0, ProxyHeaderLength)
 
 	header := &ProxyHeaderV2{}
 	if err := binary.Read(bytes.NewBuffer(headerBytes), binary.BigEndian, header); err != nil {
-		return nil, false, nil
+		return nil, false, false, nil
 	}
 
 	// verify the signature of the header
 	if string(header.Signature[:]) != ProxyProtocolV2Signature {
-		return nil, false, nil
+		return nil, false, false, nil
+	}
+	if maxBodySize > 0 && int(header.Length) > maxBodySize {
+		// Reject from the fixed header alone. Waiting for an attacker-controlled
+		// uint16 body would retain it in goetty outside the shared allocator.
+		return nil, false, false, frontend.ErrPacketTooLarge
 	}
 
-	// valid proxy header, consume the bytes
-	in.Skip(ProxyHeaderLength)
+	// Do not consume the fixed header until the complete declared body is
+	// buffered. Decoders are retried with the same ByteBuf after the next socket
+	// read, so partial consumption would corrupt the protocol boundary.
+	if in.Readable() < ProxyHeaderLength+int(header.Length) {
+		return nil, false, true, nil
+	}
 
 	// According to ppv2:
 	//
@@ -120,28 +192,30 @@ func parseProxyHeaderV2(in *buf.ByteBuf) (*ProxyAddr, bool, error) {
 	// In practice, the proxy may add extra information (AWS NLB do this) in the proxy header
 	// which makes the body length > address length. So here we consume the entire body and
 	// read address from it.
-	body := make([]byte, header.Length)
-	if _, err := io.ReadFull(in, body); err != nil {
-		return nil, false, moerr.NewInternalErrorNoCtxf("cannot read proxy address, %s", err.Error())
-	}
-	bodyBuf := bytes.NewBuffer(body)
+	// Parse directly from the ByteBuf. The complete-frame check above keeps the
+	// view valid, and avoiding a second body copy removes the unaccounted peak.
+	body := in.PeekN(ProxyHeaderLength, int(header.Length))
+	bodyBuf := bytes.NewReader(body)
+	in.Skip(ProxyHeaderLength + int(header.Length))
 	addr := &ProxyAddr{}
 	switch header.ProtocolFamily {
 	case tcpOverIPv4, udpOverIPv4:
 		if err := readProxyAddr(bodyBuf, ipv4AddrLength, addr); err != nil {
-			return nil, false, err
+			return nil, false, false, err
 		}
-		return addr, true, nil
+		return addr, true, false, nil
 	case tcpOverIPv6, udpOverIPv6:
 		if err := readProxyAddr(bodyBuf, ipv6AddrLength, addr); err != nil {
-			return nil, false, err
+			return nil, false, false, err
 		}
-		return addr, true, nil
+		return addr, true, false, nil
 	case unspec, unixStream, unixDatagram:
-		// no address to read
-		return addr, false, nil
+		// The frame is still a consumed PROXY protocol message even when it
+		// carries no IP address. Returning complete=true lets the connection
+		// state machine record it and reject any later duplicate header.
+		return addr, true, false, nil
 	default:
-		return nil, false, moerr.NewInternalErrorNoCtxf("unknown protocol family [%x]", header.ProtocolFamily)
+		return nil, false, false, moerr.NewInternalErrorNoCtxf("unknown protocol family [%x]", header.ProtocolFamily)
 	}
 }
 

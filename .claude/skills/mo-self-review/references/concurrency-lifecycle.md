@@ -1,5 +1,14 @@
 # Concurrency And Lifecycle Reasoning
 
+## Contents
+
+1. Start From Invariants
+2. Build The State And Ownership Model
+3. Draw The Wait-For Graph
+4. Close The Generation Boundary
+5. Derive The Test Matrix
+6. Validate The Closure
+
 Use this reference when a diff changes shared state, cancellation, close/terminal
 operations, retry/restart, pooling, callbacks, or asynchronous cleanup. Derive
 tests from the model below; do not copy a fixed list of cases.
@@ -112,8 +121,10 @@ when a remembered list of test names is present.
 - Assert fail-fast latency with a short outer deadline and verify it did not fire.
 - Count irreversible side effects and require exactly once, not merely non-zero.
 - Make test cleanup release blockers even after an assertion fails.
-- Run new concurrency tests with `-race`; stress the focused transition set with
-  `-count=N`, then run the entire owning package under `-race` once.
+- Run the minimal, explicitly named set of new, modified, or directly affected
+  concurrency tests with the adaptive `-race -count=N` budget defined by the
+  main skill; never apply repeated stress to the package. Then run the entire
+  owning package under `-race` once.
 
 ## 6. Validate The Closure
 

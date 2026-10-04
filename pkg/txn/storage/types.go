@@ -21,14 +21,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 )
 
-// TxnStorage In order for TxnService to implement distributed transactions based on Clock-SI on a stand-alone
-// storage engine, it requires a number of interfaces implemented by the storage engine.
+// TxnStorage defines the storage operations used by TxnService.
 type TxnStorage interface {
 	// Start starts txnStorage if necessary.
 	Start() error
-	// StartRecovery start txnStorage recovery process. Use the incoming channel to send the Txn that needs to be
-	// recovered and close the channel when all the logs have been processed.
-	StartRecovery(context.Context, chan txn.TxnMeta)
 	// Close close the txn storage.
 	Close(context.Context) error
 	// Destroy is similar to Close, but perform remove all related data and resources.
@@ -48,16 +44,6 @@ type TxnStorage interface {
 	// Write execute write requests sent by CN.
 	// TODO: Handle spec error by storage.
 	Write(ctx context.Context, txnMeta txn.TxnMeta, op uint32, payload []byte) ([]byte, error)
-	// Prepare prepare data written by a transaction on a DNShard. TxnStorage needs to do conflict
-	// detection locally. The txn metadata(status change to prepared) and the data should be written to
-	// LogService.
-	//
-	// Note that for a distributed transaction, when all DNShards are Prepared, then the transaction is
-	// considered to have been committed.
-	Prepare(ctx context.Context, txnMeta txn.TxnMeta) (timestamp.Timestamp, error)
-	// Committing for distributed transactions, all participating DNShards have been PREPARED and the status
-	// of the transaction is logged to the LogService.
-	Committing(ctx context.Context, txnMeta txn.TxnMeta) error
 	// Commit commit the transaction. TxnStorage needs to do conflict locally.
 	Commit(
 		ctx context.Context,

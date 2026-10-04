@@ -5,17 +5,34 @@ SELECT QUOTE('Don\'t') AS result1;
 SELECT QUOTE('Hello') AS basic_string;
 SELECT QUOTE('It\'s') AS single_quote;
 SELECT QUOTE('C:\\path') AS backslash;
-SELECT QUOTE('line1\nline2') AS newline;
-SELECT QUOTE('tab\ttest') AS tab;
 SELECT QUOTE('') AS empty_string;
+
+# Use HEX for control bytes so the expected result is unambiguous.
+SELECT HEX(QUOTE(CONCAT('a', CHAR(39), 'b'))) AS apostrophe;
+SELECT HEX(QUOTE(CONCAT('a', CHAR(92), 'b'))) AS backslash_hex;
+SELECT HEX(QUOTE(CONCAT('a', CHAR(10), 'b'))) AS newline;
+SELECT HEX(QUOTE(CONCAT('a', CHAR(13), 'b'))) AS carriage_return;
+SELECT HEX(QUOTE(CONCAT('a', CHAR(9), 'b'))) AS tab;
+SELECT HEX(QUOTE(CONCAT('a', CHAR(0), 'b'))) AS nul;
+SELECT HEX(QUOTE(CONCAT('a', CHAR(26), 'b'))) AS ctrl_z;
 
 # NULL handling
 SELECT QUOTE(NULL) AS null_input;
+SELECT HEX(QUOTE(NULL)) AS null_input_hex;
+
+# The NULL result is four bytes even for a zero-width nullable source. Keep
+# this CTAS boundary explicit so inferred metadata cannot understate the value.
+CREATE TABLE quote_zero_src(s VARCHAR(0));
+INSERT INTO quote_zero_src VALUES (NULL);
+CREATE TABLE quote_zero_dst AS SELECT QUOTE(s) AS q FROM quote_zero_src;
+SELECT q, OCTET_LENGTH(q) AS q_bytes FROM quote_zero_dst;
+DROP TABLE quote_zero_dst;
+DROP TABLE quote_zero_src;
 
 # Table usage
 CREATE TABLE t1(str VARCHAR(50));
-INSERT INTO t1 VALUES ('Hello'), ('Don\'t'), ('It\'s'), ('C:\\path');
-SELECT str, QUOTE(str) AS quoted FROM t1;
+INSERT INTO t1 VALUES ('Hello'), ('Don\'t'), ('It\'s'), ('C:\\path'), (NULL);
+SELECT str, HEX(QUOTE(str)) AS quoted_hex FROM t1;
 DROP TABLE t1;
 
 # WHERE clause
@@ -25,6 +42,54 @@ SELECT * FROM t1 WHERE QUOTE(str) = QUOTE('Hello');
 DROP TABLE t1;
 
 # Complex escaping
-SELECT QUOTE('test\x00null') AS with_null_byte;
-SELECT QUOTE('test\x1aend') AS with_ctrl_z;
+SELECT HEX(QUOTE(CONCAT('test', CHAR(0), 'null'))) AS with_null_byte;
+SELECT HEX(QUOTE(CONCAT('test', CHAR(26), 'end'))) AS with_ctrl_z;
 
+# VARBINARY input returns utf8mb4 text, and invalid UTF-8 is rejected.
+DROP TABLE IF EXISTS quote_binary_domain;
+CREATE TABLE quote_binary_domain(id INT PRIMARY KEY, b VARBINARY(64));
+INSERT INTO quote_binary_domain VALUES
+(1, CAST('Ashcraft' AS VARBINARY(64))),
+(2, UNHEX('410042')),
+(3, UNHEX('C3A9')),
+(4, UNHEX('41FF42')),
+(5, X''),
+(6, NULL);
+SELECT id, HEX(QUOTE(b)) AS quoted_hex
+FROM quote_binary_domain WHERE id <> 4 ORDER BY id;
+CREATE VIEW quote_binary_view AS SELECT QUOTE(b) AS q FROM quote_binary_domain WHERE id <> 4;
+CREATE TABLE quote_binary_ctas AS SELECT QUOTE(b) AS q FROM quote_binary_domain WHERE id <> 4;
+SELECT table_name, column_name, data_type, character_maximum_length,
+character_set_name, collation_name
+FROM information_schema.columns
+WHERE table_schema = DATABASE()
+AND table_name IN ('quote_binary_view', 'quote_binary_ctas')
+ORDER BY table_name;
+-- @regex("Cannot convert string.*from binary to utf8mb4", true)
+SELECT QUOTE(b) FROM quote_binary_domain WHERE id = 4;
+DROP TABLE quote_binary_ctas;
+DROP VIEW quote_binary_view;
+DROP TABLE quote_binary_domain;
+
+# SQL PREPARE/EXECUTE interprets a bare binary user-variable marker as text for
+# QUOTE. Check malformed input, NULL, and reuse without changing other uses.
+PREPARE quote_prepared_28912 FROM 'SELECT HEX(QUOTE(?)) AS quoted_hex, QUOTE(?) IS NULL AS is_null';
+SET @quote_prepared_28912 = UNHEX('41FF42');
+EXECUTE quote_prepared_28912 USING @quote_prepared_28912, @quote_prepared_28912;
+SET @quote_prepared_28912 = 'valid';
+EXECUTE quote_prepared_28912 USING @quote_prepared_28912, @quote_prepared_28912;
+SET @quote_prepared_28912 = UNHEX('41FF42');
+EXECUTE quote_prepared_28912 USING @quote_prepared_28912, @quote_prepared_28912;
+SET @quote_prepared_28912 = NULL;
+EXECUTE quote_prepared_28912 USING @quote_prepared_28912, @quote_prepared_28912;
+DEALLOCATE PREPARE quote_prepared_28912;
+
+# Explicit BINARY context remains binary and may fail conversion, but a later
+# valid execution of that same statement must still succeed.
+PREPARE quote_explicit_binary_28912 FROM 'SELECT HEX(QUOTE(CAST(? AS VARBINARY(3)))) AS quoted_hex';
+SET @quote_explicit_binary_28912 = UNHEX('41FF42');
+-- @regex("Cannot convert string.*from binary to utf8mb4", true)
+EXECUTE quote_explicit_binary_28912 USING @quote_explicit_binary_28912;
+SET @quote_explicit_binary_28912 = UNHEX('41');
+EXECUTE quote_explicit_binary_28912 USING @quote_explicit_binary_28912;
+DEALLOCATE PREPARE quote_explicit_binary_28912;

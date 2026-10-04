@@ -17,52 +17,99 @@ package plan
 import (
 	"math"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
+func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, *Query, error) {
 	if s, ok := stmt.(*tree.Insert); ok {
 		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
-			return BuildPlan(ctx, stmt, true)
+			p, err := BuildPlan(ctx, stmt, true)
+			return p, nil, err
 		}
 	} else if s, ok := stmt.(*tree.Replace); ok {
 		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
-			return BuildPlan(ctx, stmt, true)
+			p, err := BuildPlan(ctx, stmt, true)
+			return p, nil, err
 		}
 	}
 
 	switch stmt := stmt.(type) {
 	case *tree.Select, *tree.ParenSelect,
-		*tree.Update, *tree.Delete, *tree.Insert,
+		*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan,
+		*tree.Update, *tree.Delete, *tree.Insert, *tree.MultiInsert,
 		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns,
 		*tree.ShowCreateDatabase, *tree.ShowCreateTable:
 		opt := NewPrepareOptimizer(ctx)
 		optimized, err := opt.Optimize(stmt, true)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		return &Plan{
 			Plan: &Plan_Query{
 				Query: optimized,
 			},
-		}, nil
+		}, nil, nil
+	case *tree.SetVar:
+		return buildSetVariablesWithQuery(stmt, ctx, true)
+	case *tree.ShowPublications:
+		if stmt.Like != nil {
+			switch pattern := stmt.Like.Right.(type) {
+			case *tree.ParamExpr:
+				if pattern.Offset != 1 {
+					return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), "SHOW PUBLICATIONS requires one LIKE parameter")
+				}
+			case *tree.NumVal:
+				if pattern.Kind() != tree.Str {
+					return nil, nil, moerr.NewNotSupported(ctx.GetContext(),
+						"prepared SHOW PUBLICATIONS requires a string literal or parameter marker LIKE pattern")
+				}
+			default:
+				return nil, nil, moerr.NewNotSupported(ctx.GetContext(),
+					"prepared SHOW PUBLICATIONS requires a string literal or parameter marker LIKE pattern")
+			}
+		}
+		return &Plan{}, nil, nil
+	case *tree.AnalyzeStmt,
+		*tree.CreatePublication, *tree.AlterPublication, *tree.DropPublication,
+		*tree.ShowPublicationCoverage,
+		*tree.DataBranchCreateTable, *tree.DataBranchCreateDatabase,
+		*tree.DataBranchDiff, *tree.DataBranchMerge, *tree.DataBranchPick,
+		*tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase:
+		// These statements are executed entirely by the frontend. Keep an inner
+		// plan as the prepared-statement carrier, but do not make the engine
+		// compile it.
+		return &Plan{}, nil, nil
 	default:
-		return BuildPlan(ctx, stmt, true)
+		p, err := BuildPlan(ctx, stmt, true)
+		return p, nil, err
 	}
 }
 
 func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
+	// Views belong to the statement currently being built. Query/DML builders
+	// replace this state, but pure DDL builders do not, so clear the previous
+	// statement's dependencies before planning this PREPARE.
+	ctx.SetViews(nil)
+
 	var preparePlan *Plan
+	var preparedStmt tree.Statement
+	var transientQuery *Query
 	var err error
 	var stmtName string
+	var sourceParameterCount int
 
 	switch pstmt := stmt.(type) {
 	case *tree.PrepareStmt:
 		stmtName = string(pstmt.Name)
-		preparePlan, err = getPreparePlan(ctx, pstmt.Stmt)
+		preparedStmt = pstmt.Stmt
+		sourceParameterCount = tree.ParameterCount(preparedStmt)
+		preparePlan, transientQuery, err = getPreparePlan(ctx, pstmt.Stmt)
 		if err != nil {
 			return nil, err
 		}
@@ -93,17 +140,45 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot prepare multi statements")
 		}
 		stmtName = string(pstmt.Name)
-		preparePlan, err = getPreparePlan(ctx, stmts[0])
+		preparedStmt = stmts[0]
+		sourceParameterCount = tree.ParameterCount(preparedStmt)
+		preparePlan, transientQuery, err = getPreparePlan(ctx, stmts[0])
 		if err != nil {
 			return nil, err
 		}
 		preparePlan.IsPrepare = true
 	}
 
-	schemas, paramTypes, err := ResetPreparePlan(ctx, preparePlan)
+	schemas, paramTypes, err := resetPreparePlan(ctx, preparePlan, transientQuery, sourceParameterCount)
 	if err != nil {
 		return nil, err
 	}
+	if dataBranchParamTypes, err := dataBranchPickPrepareParamTypes(ctx, preparedStmt); err != nil {
+		return nil, err
+	} else if dataBranchParamTypes != nil {
+		paramTypes = dataBranchParamTypes
+	}
+	// Frontend SHOW has no query plan for resetPreparePlan to inspect.
+	if show, ok := preparedStmt.(*tree.ShowPublications); ok && show.Like != nil {
+		if _, parameterized := show.Like.Right.(*tree.ParamExpr); parameterized {
+			paramTypes = []int32{int32(types.T_varchar)}
+		}
+	}
+	viewSchemas, err := collectPrepareViewSchemas(ctx)
+	if err != nil {
+		return nil, err
+	}
+	schemas = appendPrepareSchemas(schemas, viewSchemas...)
+	ddlSchemas, err := collectPrepareDdlSchemas(ctx, preparedStmt, preparePlan)
+	if err != nil {
+		return nil, err
+	}
+	schemas = appendPrepareSchemas(schemas, ddlSchemas...)
+	analyzeSchemas, err := collectPrepareAnalyzeSchemas(ctx, preparedStmt)
+	if err != nil {
+		return nil, err
+	}
+	schemas = appendPrepareSchemas(schemas, analyzeSchemas...)
 	if len(paramTypes) > math.MaxUint16 {
 		return nil, moerr.NewErrTooManyParameter(ctx.GetContext())
 	}
@@ -125,6 +200,436 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 			},
 		},
 	}, nil
+}
+
+// dataBranchPickPrepareParamTypes returns the parameter metadata for DATA
+// BRANCH PICK value keys. These statements execute in the frontend and have no
+// query plan for resetPreparePlan to inspect.
+func dataBranchPickPrepareParamTypes(ctx CompilerContext, stmt tree.Statement) ([]int32, error) {
+	pick, ok := stmt.(*tree.DataBranchPick)
+	if !ok || pick.Keys == nil {
+		return nil, nil
+	}
+
+	if pick.Keys.Type == tree.PickKeysSubquery {
+		if dataBranchPickSubqueryHasParams(pick.Keys.Select) {
+			return nil, moerr.NewNotSupported(ctx.GetContext(),
+				"prepared DATA BRANCH PICK KEYS subqueries do not support parameter markers")
+		}
+		return nil, nil
+	}
+	if pick.Keys.Type != tree.PickKeysValues {
+		return nil, nil
+	}
+
+	paramTypes := make([]int32, 0, len(pick.Keys.KeyExprs))
+	for _, expr := range pick.Keys.KeyExprs {
+		if err := collectDataBranchPickValueParamTypes(ctx, expr, &paramTypes); err != nil {
+			return nil, err
+		}
+	}
+	return paramTypes, nil
+}
+
+// Value keys are materialized recursively: the outer expression list holds
+// rows and each tuple holds its primary-key components. Collect parameter
+// metadata in that same lexical order so its positions match execution.
+func collectDataBranchPickValueParamTypes(
+	ctx CompilerContext,
+	expr tree.Expr,
+	paramTypes *[]int32,
+) error {
+	switch expr := expr.(type) {
+	case *tree.ParenExpr:
+		return collectDataBranchPickValueParamTypes(ctx, expr.Expr, paramTypes)
+	case *tree.Tuple:
+		for _, elem := range expr.Exprs {
+			if err := collectDataBranchPickValueParamTypes(ctx, elem, paramTypes); err != nil {
+				return err
+			}
+		}
+	case *tree.ParamExpr:
+		if expr.Offset != len(*paramTypes)+1 {
+			return moerr.NewInternalError(ctx.GetContext(), "offset not match")
+		}
+		*paramTypes = append(*paramTypes, int32(types.T_varchar))
+	}
+	return nil
+}
+
+func dataBranchPickSubqueryHasParams(selectStmt *tree.Select) bool {
+	if selectStmt == nil {
+		return false
+	}
+	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithSingleQuoteString())
+	selectStmt.Format(fmtCtx)
+	scanner := mysql.NewScanner(dialect.MYSQL, fmtCtx.String())
+	defer mysql.PutScanner(scanner)
+	for {
+		token, _ := scanner.Scan()
+		switch token {
+		case mysql.VALUE_ARG:
+			return true
+		case 0, mysql.LEX_ERROR:
+			return false
+		}
+	}
+}
+
+func collectPrepareAnalyzeSchemas(ctx CompilerContext, stmt tree.Statement) ([]*plan.ObjectRef, error) {
+	analyze, ok := stmt.(*tree.AnalyzeStmt)
+	if !ok {
+		return nil, nil
+	}
+	if len(analyze.Entries) == 0 {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "ANALYZE TABLE requires at least one table")
+	}
+
+	var schemas []*plan.ObjectRef
+	for _, entry := range analyze.Entries {
+		if entry == nil || entry.Table == nil {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "ANALYZE TABLE requires a table")
+		}
+		databaseName := string(entry.Table.Schema())
+		if databaseName == "" {
+			databaseName = ctx.DefaultDatabase()
+		}
+		if databaseName == "" {
+			return nil, moerr.NewNoDB(ctx.GetContext())
+		}
+		tableName := string(entry.Table.Name())
+
+		var snapshot *Snapshot
+		var err error
+		if entry.Table.AtTsExpr != nil {
+			snapshot, err = getTimeStampByTsHint(ctx, entry.Table.AtTsExpr)
+			if err != nil {
+				return nil, err
+			}
+		}
+		objRef, tableDef, err := ctx.Resolve(databaseName, tableName, snapshot)
+		if err != nil {
+			return nil, err
+		}
+		if objRef == nil || tableDef == nil {
+			return nil, moerr.NewNoSuchTable(ctx.GetContext(), databaseName, tableName)
+		}
+
+		if len(entry.Cols) == 0 {
+			hasVisibleColumn := false
+			for _, col := range tableDef.Cols {
+				if !col.Hidden {
+					hasVisibleColumn = true
+					break
+				}
+			}
+			if !hasVisibleColumn {
+				return nil, moerr.NewInternalErrorf(ctx.GetContext(),
+					"ANALYZE TABLE: no visible columns found for table %s", tableName)
+			}
+		} else {
+			for _, column := range entry.Cols {
+				columnName := string(column)
+				colDef := FindColumn(tableDef.Cols, columnName)
+				if colDef == nil || colDef.Hidden {
+					return nil, moerr.NewBadFieldErrorf(ctx.GetContext(),
+						"invalid input: column %s does not exist", columnName)
+				}
+			}
+		}
+
+		schemas = appendPrepareSchemas(schemas,
+			prepareSchemaRefWithSnapshot(objRef, tableDef, snapshot))
+	}
+	return schemas, nil
+}
+
+func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, preparePlan *Plan) ([]*plan.ObjectRef, error) {
+	var tableNames []*tree.TableName
+	var schemas []*plan.ObjectRef
+
+	addTableNames := func(names tree.TableNames) {
+		for _, name := range names {
+			tableNames = append(tableNames, name)
+		}
+	}
+	addForeignKey := func(fk *tree.ForeignKey) {
+		if fk != nil && fk.Refer != nil {
+			tableNames = append(tableNames, fk.Refer.TableName)
+		}
+	}
+	addRenameTarget := func(source *tree.TableName, rename *tree.AlterOptionTableName) {
+		if source == nil || rename == nil || rename.Name == nil {
+			return
+		}
+		target := rename.Name.ToTableName()
+		// The current rename planner and executor only consume the target object
+		// name. The operation remains in the source table's database even when
+		// the SQL spells an explicit target database.
+		target.SchemaName = source.SchemaName
+		tableNames = append(tableNames, &target)
+	}
+	addQuerySchemas := func(selectStmt *tree.Select) error {
+		if selectStmt == nil {
+			return nil
+		}
+		queryPlan, err := bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, selectStmt, true, true)
+		if err != nil {
+			return err
+		}
+		querySchemas, _, err := ResetPreparePlan(ctx, queryPlan)
+		if err != nil {
+			return err
+		}
+		schemas = appendPrepareSchemas(schemas, querySchemas...)
+		return nil
+	}
+	addDatabaseSchema := func(databaseName string) error {
+		if databaseName == "" {
+			databaseName = ctx.DefaultDatabase()
+		}
+		var databaseID uint64
+		var err error
+		if ctx.DatabaseExists(databaseName, nil) {
+			databaseID, err = ctx.GetDatabaseId(databaseName, nil)
+			if err != nil {
+				return err
+			}
+		}
+		schemas = appendPrepareSchemas(schemas, &plan.ObjectRef{
+			Db:         int64(databaseID),
+			Schema:     int64(databaseID),
+			SchemaName: databaseName,
+		})
+		return nil
+	}
+
+	switch ddl := stmt.(type) {
+	case *tree.AlterTable:
+		tableNames = append(tableNames, ddl.Table)
+		for _, option := range ddl.Options {
+			if rename, ok := option.(*tree.AlterOptionTableName); ok {
+				addRenameTarget(ddl.Table, rename)
+			}
+			if add, ok := option.(*tree.AlterOptionAdd); ok {
+				if fk, ok := add.Def.(*tree.ForeignKey); ok {
+					addForeignKey(fk)
+				}
+			}
+		}
+	case *tree.RenameTable:
+		for _, alterTable := range ddl.AlterTables {
+			tableNames = append(tableNames, alterTable.Table)
+			for _, option := range alterTable.Options {
+				if rename, ok := option.(*tree.AlterOptionTableName); ok {
+					addRenameTarget(alterTable.Table, rename)
+				}
+			}
+		}
+	case *tree.CreateIndex:
+		tableNames = append(tableNames, ddl.Table)
+	case *tree.DropIndex:
+		tableNames = append(tableNames, ddl.TableName)
+	case *tree.TruncateTable:
+		tableNames = append(tableNames, ddl.Name)
+	case *tree.DropTable:
+		addTableNames(ddl.Names)
+	case *tree.DropView:
+		addTableNames(ddl.Names)
+	case *tree.DropSequence:
+		addTableNames(ddl.Names)
+	case *tree.AlterSequence:
+		tableNames = append(tableNames, ddl.Name)
+	case *tree.AlterView:
+		tableNames = append(tableNames, ddl.Name)
+		if err := addQuerySchemas(ddl.AsSource); err != nil {
+			return nil, err
+		}
+	case *tree.CreateView:
+		tableNames = append(tableNames, ddl.Name)
+		if err := addQuerySchemas(ddl.AsSource); err != nil {
+			return nil, err
+		}
+	case *tree.CreateTable:
+		tableNames = append(tableNames, &ddl.Table)
+		if ddl.IsAsLike {
+			tableNames = append(tableNames, &ddl.LikeTableName)
+		}
+		for _, def := range ddl.Defs {
+			if fk, ok := def.(*tree.ForeignKey); ok {
+				addForeignKey(fk)
+			}
+		}
+	case *tree.CloneTable:
+		if clone := preparePlan.GetDdl().GetCloneTable(); clone != nil {
+			schemas = appendPrepareSchemas(schemas, prepareSchemaRefWithSnapshot(
+				clone.GetSrcObjDef(), clone.GetSrcTableDef(), clone.GetScanSnapshot()))
+		}
+	}
+
+	switch ddl := stmt.(type) {
+	case *tree.CreateSequence:
+		if err := addDatabaseSchema(string(ddl.Name.SchemaName)); err != nil {
+			return nil, err
+		}
+	case *tree.CloneTable:
+		if err := addDatabaseSchema(string(ddl.CreateTable.Table.SchemaName)); err != nil {
+			return nil, err
+		}
+	}
+
+	for _, tableName := range tableNames {
+		if tableName == nil {
+			continue
+		}
+		databaseName := string(tableName.SchemaName)
+		if databaseName == "" {
+			databaseName = ctx.DefaultDatabase()
+		}
+		name := string(tableName.ObjectName)
+		objRef, tableDef, err := ctx.Resolve(databaseName, name, nil)
+		if err != nil {
+			return nil, err
+		}
+		if objRef == nil || tableDef == nil {
+			var databaseID uint64
+			if ctx.DatabaseExists(databaseName, nil) {
+				databaseID, err = ctx.GetDatabaseId(databaseName, nil)
+				if err != nil {
+					return nil, err
+				}
+			}
+			schemas = appendPrepareSchemas(schemas, &plan.ObjectRef{
+				Db:         int64(databaseID),
+				Schema:     int64(databaseID),
+				SchemaName: databaseName,
+				ObjName:    name,
+			})
+			continue
+		}
+		schemas = appendPrepareSchemas(schemas, prepareSchemaRef(objRef, tableDef))
+	}
+
+	createTable := preparePlan.GetDdl().GetCreateTable()
+	if clone := preparePlan.GetDdl().GetCloneTable(); createTable == nil && clone != nil {
+		createTable = clone.GetCreateTable().GetDdl().GetCreateTable()
+	}
+	if createTable != nil {
+		// A child table that forward-references this table can be created in any
+		// database of the account after PREPARE. Track account-wide table changes
+		// so FksReferToMe is rebuilt before CREATE TABLE executes.
+		schemas = appendPrepareSchemas(schemas, &plan.ObjectRef{})
+		for i, tableName := range createTable.GetFkTables() {
+			if i >= len(createTable.GetFkDbs()) {
+				return nil, moerr.NewInternalError(ctx.GetContext(), "foreign key table is missing its database")
+			}
+			databaseName := createTable.GetFkDbs()[i]
+			objRef, tableDef, err := ctx.Resolve(databaseName, tableName, nil)
+			if err != nil {
+				return nil, err
+			}
+			if objRef == nil || tableDef == nil {
+				return nil, moerr.NewNoSuchTable(ctx.GetContext(), databaseName, tableName)
+			}
+			schemas = appendPrepareSchemas(schemas, prepareSchemaRef(objRef, tableDef))
+		}
+		for _, fk := range createTable.GetFksReferToMe() {
+			objRef, tableDef, err := ctx.Resolve(fk.GetDb(), fk.GetTable(), nil)
+			if err != nil {
+				return nil, err
+			}
+			if objRef == nil || tableDef == nil {
+				return nil, moerr.NewNoSuchTable(ctx.GetContext(), fk.GetDb(), fk.GetTable())
+			}
+			schemas = appendPrepareSchemas(schemas, prepareSchemaRef(objRef, tableDef))
+		}
+	}
+
+	return schemas, nil
+}
+
+func collectPrepareViewSchemas(ctx CompilerContext) ([]*plan.ObjectRef, error) {
+	var schemas []*plan.ObjectRef
+	for _, viewKey := range ctx.GetViews() {
+		snapshot := ctx.GetSnapshot()
+		databaseName, tableName, dependencySnapshot, err := ParseViewDependencyKey(viewKey)
+		if err != nil {
+			return nil, moerr.NewInternalErrorf(
+				ctx.GetContext(), "invalid view dependency snapshot: %v", err)
+		}
+		if dependencySnapshot != nil {
+			snapshot = dependencySnapshot
+		}
+		objRef, tableDef, err := ctx.Resolve(databaseName, tableName, snapshot)
+		if err != nil {
+			return nil, err
+		}
+		if objRef == nil || tableDef == nil {
+			return nil, moerr.NewNoSuchTable(ctx.GetContext(), databaseName, tableName)
+		}
+		schemas = appendPrepareSchemas(schemas, prepareSchemaRefWithSnapshot(
+			objRef, tableDef, snapshot))
+	}
+	return schemas, nil
+}
+
+func prepareSchemaRef(objRef *plan.ObjectRef, tableDef *plan.TableDef) *plan.ObjectRef {
+	return prepareSchemaRefWithSnapshot(objRef, tableDef, nil)
+}
+
+func prepareSchemaRefWithSnapshot(
+	objRef *plan.ObjectRef,
+	tableDef *plan.TableDef,
+	snapshot *Snapshot,
+) *plan.ObjectRef {
+	if objRef == nil || tableDef == nil {
+		return nil
+	}
+	ref := DeepCopyObjectRef(objRef)
+	if IsSnapshotValid(snapshot) {
+		ref.Snapshot = DeepCopySnapshot(snapshot)
+	} else {
+		ref.Snapshot = nil
+	}
+	ref.Server = int64(tableDef.Version)
+	ref.Db = int64(tableDef.DbId)
+	ref.Schema = int64(tableDef.DbId)
+	ref.Obj = int64(tableDef.TblId)
+	if ref.SchemaName == "" {
+		ref.SchemaName = tableDef.DbName
+	}
+	if ref.ObjName == "" {
+		ref.ObjName = tableDef.Name
+	}
+	return ref
+}
+
+func appendPrepareSchemas(schemas []*plan.ObjectRef, refs ...*plan.ObjectRef) []*plan.ObjectRef {
+	for _, ref := range refs {
+		if ref == nil {
+			continue
+		}
+		duplicate := false
+		for _, schema := range schemas {
+			sameTenant := (schema.PubInfo == nil && ref.PubInfo == nil) ||
+				(schema.PubInfo != nil && ref.PubInfo != nil &&
+					schema.PubInfo.GetTenantId() == ref.PubInfo.GetTenantId())
+			sameSubscription := schema.SubscriptionName == ref.SubscriptionName
+			sameSnapshot := proto.Equal(schema.Snapshot, ref.Snapshot)
+			sameID := sameTenant && sameSubscription && sameSnapshot &&
+				schema.Obj != 0 && ref.Obj != 0 && schema.Db == ref.Db && schema.Obj == ref.Obj
+			sameName := sameTenant && sameSubscription && sameSnapshot &&
+				schema.SchemaName == ref.SchemaName && schema.ObjName == ref.ObjName
+			if sameID || sameName {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			schemas = append(schemas, ref)
+		}
+	}
+	return schemas
 }
 
 func buildExecute(stmt *tree.Execute, ctx CompilerContext) (*Plan, error) {
@@ -174,11 +679,20 @@ func buildDeallocate(stmt *tree.Deallocate, _ CompilerContext) (*Plan, error) {
 	}, nil
 }
 
-func buildSetVariables(stmt *tree.SetVar, ctx CompilerContext) (*Plan, error) {
+func buildSetVariables(stmt *tree.SetVar, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {
+	p, _, err := buildSetVariablesWithQuery(stmt, ctx, isPrepareStmt)
+	return p, err
+}
+
+func buildSetVariablesWithQuery(
+	stmt *tree.SetVar,
+	ctx CompilerContext,
+	isPrepareStmt bool,
+) (*Plan, *Query, error) {
 	var err error
 	items := make([]*plan.SetVariablesItem, len(stmt.Assignments))
 
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	binder := NewWhereBinder(builder, &BindContext{})
 
 	for idx, assignment := range stmt.Assignments {
@@ -188,16 +702,16 @@ func buildSetVariables(stmt *tree.SetVar, ctx CompilerContext) (*Plan, error) {
 			Name:   assignment.Name,
 		}
 		if assignment.Value == nil {
-			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Set statement has no value")
+			return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), "Set statement has no value")
 		}
 		item.Value, err = binder.baseBindExpr(assignment.Value, 0, true)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if assignment.Reserved != nil {
 			item.Reserved, err = binder.baseBindExpr(assignment.Reserved, 0, true)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		}
 		items[idx] = item
@@ -216,7 +730,7 @@ func buildSetVariables(stmt *tree.SetVar, ctx CompilerContext) (*Plan, error) {
 				},
 			},
 		},
-	}, nil
+	}, builder.qry, nil
 }
 
 func buildCreateAccount(stmt *tree.CreateAccount, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {

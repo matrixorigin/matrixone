@@ -33,6 +33,15 @@ type Hooks interface {
 	// callers index by name.
 	HiddenTableTypes() []string
 
+	// IsVectorIndex reports the index KIND: true for an ANN vector index
+	// (HNSW / IVF-FLAT / IVF-PQ / CAGRA), false for a fulltext-family engine
+	// (classic fulltext, fulltext2). It is the static per-plugin classification
+	// behind indexplugin.IsVectorIndexAlgo, so the multi-table-vector-index
+	// gate is a capability the plugin declares — not an algorithm-name exception
+	// each call site has to keep in sync. A new fulltext-style engine returns
+	// false here and is classified correctly everywhere for free.
+	IsVectorIndex() bool
+
 	// ParamsFromTree extracts and validates the WITH(...) options from a
 	// CREATE INDEX statement, returning the canonical params map that gets
 	// JSON-encoded into mo_indexes. Replaces one switch arm of
@@ -82,6 +91,18 @@ type Hooks interface {
 	// columns" (like SupportedVectorTypes — NOT "all types"). HNSW, IVF-FLAT
 	// and fulltext return nil, so SupportsIncludeColumnType reports false.
 	SupportedIncludeColumnTypes() []types.T
+
+	// ValidQuantization reports whether QUANTIZATION='quant' is usable by this
+	// algorithm under op_type 'op', returning a descriptive error when not
+	// (nil = valid). It is the single per-algorithm rule for the
+	// (quantization, op_type) pair, so CREATE (plan-side schema validation) and
+	// REINDEX (compile-side ValidateReindexParams) gate it identically instead
+	// of duplicating the check. An empty quant means "no quantization / default
+	// storage" (valid); an empty op means "no metric in play" (only the
+	// storage-type rule applies). Example: the cuvs (CAGRA / IVF-PQ) backend
+	// rejects int8/uint8 with inner-product / cosine because its affine scalar
+	// quantizer only preserves L2 geometry.
+	ValidQuantization(quant, op string) error
 
 	// ExperimentalFlag returns the experimental-feature flag name that
 	// must be enabled (set to true via SET / system var) for this
@@ -264,6 +285,13 @@ type SyncDescriptor struct {
 	// false for cuvs algorithms (CAGRA, IVF-PQ) which have no "lists"
 	// or training-sample concept — they always rebuild on cadence.
 	IdxcronListsAware bool
+
+	// IdxcronReindexOption is an extra REINDEX option keyword the executor
+	// inserts before FORCE_SYNC when building the cron-triggered ALTER —
+	// e.g. "MERGE" so a bm25 index runs incremental fold+tiered compaction
+	// instead of a full rebuild-from-source. Empty for the vector algorithms
+	// (plain rebuild); the executor omits it when unset.
+	IdxcronReindexOption string
 }
 
 // AlterTableCloneBehavior declares the per-hidden-table semantics

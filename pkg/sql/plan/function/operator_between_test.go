@@ -16,11 +16,151 @@ package function
 
 import (
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
+
+func TestBetweenDatetimeTimestampPreservesInstantSemantics(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	zone, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	proc.GetSessionInfo().TimeZone = zone
+
+	datetime, err := types.ParseDatetime("2024-11-03 01:30:00", 6)
+	require.NoError(t, err)
+	lower, err := types.ParseTimestamp(time.UTC, "2024-11-03 05:00:00", 6)
+	require.NoError(t, err)
+	upper, err := types.ParseTimestamp(time.UTC, "2024-11-03 06:15:00", 6)
+	require.NoError(t, err)
+	want := datetime.ToTimestamp(zone) >= lower && datetime.ToTimestamp(zone) <= upper
+
+	testCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_datetime.ToTypeWithScale(6), []types.Datetime{datetime, datetime}, []bool{false, true}),
+			NewFunctionTestConstInput(types.T_timestamp.ToTypeWithScale(6), []types.Timestamp{lower}, nil),
+			NewFunctionTestConstInput(types.T_timestamp.ToTypeWithScale(6), []types.Timestamp{upper}, nil),
+		},
+		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{want, false}, []bool{false, true}),
+		betweenImpl,
+	)
+	ok, info := testCase.RunAndFree()
+	require.True(t, ok, info)
+}
+
+func TestBetweenDatetimeTimestampPreservesCommonValueScale(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.GetSessionInfo().TimeZone = time.UTC
+
+	value, err := types.ParseDatetime("2026-08-10 12:00:00.123456", 6)
+	require.NoError(t, err)
+	lower := value.ToTimestamp(time.UTC).TruncateToScale(3)
+	upper, err := types.ParseTimestamp(time.UTC, "2026-08-10 12:00:00.123100", 6)
+	require.NoError(t, err)
+
+	testCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_datetime.ToTypeWithScale(6), []types.Datetime{value}, nil),
+			NewFunctionTestConstInput(types.T_timestamp.ToTypeWithScale(3), []types.Timestamp{lower}, nil),
+			NewFunctionTestConstInput(types.T_timestamp.ToTypeWithScale(6), []types.Timestamp{upper}, nil),
+		},
+		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true}, nil),
+		betweenImpl,
+	)
+	ok, info := testCase.RunAndFree()
+	require.True(t, ok, info)
+}
+
+func TestBetweenDatetimeTimestampTypeArrangements(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.GetSessionInfo().TimeZone = time.UTC
+
+	valueDatetime, err := types.ParseDatetime("2026-08-10 12:00:00", 6)
+	require.NoError(t, err)
+	lowerDatetime, err := types.ParseDatetime("2026-08-10 11:00:00", 6)
+	require.NoError(t, err)
+	upperDatetime, err := types.ParseDatetime("2026-08-10 13:00:00", 6)
+	require.NoError(t, err)
+	valueTimestamp := valueDatetime.ToTimestamp(time.UTC)
+	lowerTimestamp := lowerDatetime.ToTimestamp(time.UTC)
+	upperTimestamp := upperDatetime.ToTimestamp(time.UTC)
+
+	datetimeType := types.T_datetime.ToTypeWithScale(6)
+	timestampType := types.T_timestamp.ToTypeWithScale(6)
+	datetimeInput := func(value types.Datetime, nulls []bool) FunctionTestInput {
+		return NewFunctionTestInput(datetimeType, []types.Datetime{value, value}, nulls)
+	}
+	timestampInput := func(value types.Timestamp, nulls []bool) FunctionTestInput {
+		return NewFunctionTestInput(timestampType, []types.Timestamp{value, value}, nulls)
+	}
+
+	tests := []struct {
+		name   string
+		inputs []FunctionTestInput
+	}{
+		{
+			name: "datetime value datetime lower timestamp upper",
+			inputs: []FunctionTestInput{
+				datetimeInput(valueDatetime, []bool{false, true}),
+				datetimeInput(lowerDatetime, nil),
+				timestampInput(upperTimestamp, nil),
+			},
+		},
+		{
+			name: "datetime value timestamp lower datetime upper",
+			inputs: []FunctionTestInput{
+				datetimeInput(valueDatetime, []bool{false, true}),
+				timestampInput(lowerTimestamp, nil),
+				datetimeInput(upperDatetime, nil),
+			},
+		},
+		{
+			name: "timestamp value timestamp lower datetime upper",
+			inputs: []FunctionTestInput{
+				timestampInput(valueTimestamp, []bool{false, true}),
+				timestampInput(lowerTimestamp, nil),
+				datetimeInput(upperDatetime, nil),
+			},
+		},
+		{
+			name: "timestamp value datetime lower timestamp upper",
+			inputs: []FunctionTestInput{
+				timestampInput(valueTimestamp, []bool{false, true}),
+				datetimeInput(lowerDatetime, nil),
+				timestampInput(upperTimestamp, nil),
+			},
+		},
+		{
+			name: "timestamp value datetime bounds",
+			inputs: []FunctionTestInput{
+				timestampInput(valueTimestamp, []bool{false, true}),
+				datetimeInput(lowerDatetime, nil),
+				datetimeInput(upperDatetime, nil),
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			testCase := NewFunctionTestCase(
+				proc,
+				test.inputs,
+				NewFunctionTestResult(
+					types.T_bool.ToType(), false,
+					[]bool{true, false}, []bool{false, true},
+				),
+				betweenImpl,
+			)
+			ok, info := testCase.RunAndFree()
+			require.True(t, ok, info)
+		})
+	}
+}
 
 func TestOpBetweenBool(t *testing.T) {
 	proc := testutil.NewProcess(t)
@@ -77,7 +217,36 @@ func TestOpBetweenBool(t *testing.T) {
 				NewFunctionTestResult(types.T_bool.ToType(), false, tc.want, tc.wantNul),
 				betweenImpl,
 			)
-			ok, info := fn.Run()
+			ok, info := fn.RunAndFree()
+			require.True(t, ok, info)
+		})
+	}
+}
+
+func TestOpBetweenRowsFalseDominatesNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, test := range []struct {
+		name   string
+		typ    types.Type
+		values any
+		lower  any
+		upper  any
+	}{
+		{name: "fixed", typ: types.T_int64.ToType(), values: []int64{3, 1}, lower: []int64{0, 2}, upper: []int64{2, 0}},
+		{name: "bytes", typ: types.T_varchar.ToType(), values: []string{"3", "1"}, lower: []string{"", "2"}, upper: []string{"2", ""}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fn := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(test.typ, test.values, nil),
+					NewFunctionTestInput(test.typ, test.lower, []bool{true, false}),
+					NewFunctionTestInput(test.typ, test.upper, []bool{false, true}),
+				},
+				NewFunctionTestResult(types.T_bool.ToType(), false,
+					[]bool{false, false}, []bool{false, false}),
+				betweenImpl,
+			)
+			ok, info := fn.RunAndFree()
 			require.True(t, ok, info)
 		})
 	}
@@ -97,7 +266,45 @@ func TestOpBetweenFixedNullBound(t *testing.T) {
 			[]bool{false, false, false}, []bool{true, true, true}),
 		betweenImpl,
 	)
-	ok, info := tc.Run()
+	ok, info := tc.RunAndFree()
+	require.True(t, ok, info)
+}
+
+func TestOpBetweenFixedRowBounds(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	int64Type := types.T_int64.ToType()
+
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(int64Type, []int64{1, 2, 3, 4}, nil),
+			NewFunctionTestInput(int64Type, []int64{1, 1, 4, 4}, []bool{false, false, true, false}),
+			NewFunctionTestInput(int64Type, []int64{1, 2, 5, 3}, nil),
+		},
+		NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{true, true, false, false}, []bool{false, false, true, false}),
+		betweenImpl,
+	)
+	ok, info := tc.RunAndFree()
+	require.True(t, ok, info)
+}
+
+func TestOpBetweenBytesRowBounds(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	varcharType := types.T_varchar.ToType()
+
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(varcharType, []string{"b", "c", "d"}, nil),
+			NewFunctionTestInput(varcharType, []string{"a", "d", "c"}, nil),
+			NewFunctionTestInput(varcharType, []string{"b", "z", "e"}, []bool{false, false, true}),
+		},
+		NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{true, false, false}, []bool{false, false, true}),
+		betweenImpl,
+	)
+	ok, info := tc.RunAndFree()
 	require.True(t, ok, info)
 }
 
@@ -129,7 +336,7 @@ func TestInRangeBool(t *testing.T) {
 				NewFunctionTestResult(types.T_bool.ToType(), false, tc.want, nil),
 				inRangeImpl,
 			)
-			ok, info := fn.Run()
+			ok, info := fn.RunAndFree()
 			require.True(t, ok, info)
 		})
 	}
@@ -147,7 +354,7 @@ func TestInRangeBool(t *testing.T) {
 				[]bool{false, false}, []bool{true, true}),
 			inRangeImpl,
 		)
-		ok, info := fn.Run()
+		ok, info := fn.RunAndFree()
 		require.True(t, ok, info)
 	})
 }
@@ -168,6 +375,6 @@ func TestInRangeFixedNullBound(t *testing.T) {
 			[]bool{false, false, false}, []bool{true, true, true}),
 		inRangeImpl,
 	)
-	ok, info := tc.Run()
+	ok, info := tc.RunAndFree()
 	require.True(t, ok, info)
 }

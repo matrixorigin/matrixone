@@ -186,27 +186,12 @@ func (s *taeStorage) Commit(
 	return s.taeHandler.HandleCommit(ctx, txnMeta, response, commitRequests)
 }
 
-// Committing implements storage.TxnTAEStorage
-func (s *taeStorage) Committing(ctx context.Context, txnMeta txn.TxnMeta) error {
-	return s.taeHandler.HandleCommitting(ctx, txnMeta)
-}
-
 // Destroy implements storage.TxnTAEStorage
 func (s *taeStorage) Destroy(ctx context.Context) error {
 	return errors.Join(s.Close(ctx), s.taeHandler.HandleDestroy(ctx))
 }
 
-// Prepare implements storage.TxnTAEStorage
-func (s *taeStorage) Prepare(ctx context.Context, txnMeta txn.TxnMeta) (timestamp.Timestamp, error) {
-	return s.taeHandler.HandlePrepare(ctx, txnMeta)
-}
-
 // Rollback implements storage.TxnTAEStorage
 func (s *taeStorage) Rollback(ctx context.Context, txnMeta txn.TxnMeta) error {
 	return s.taeHandler.HandleRollback(ctx, txnMeta)
-}
-
-// StartRecovery implements storage.TxnTAEStorage
-func (s *taeStorage) StartRecovery(ctx context.Context, ch chan txn.TxnMeta) {
-	s.taeHandler.HandleStartRecovery(ctx, ch)
 }

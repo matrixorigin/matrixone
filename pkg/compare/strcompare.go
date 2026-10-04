@@ -17,7 +17,6 @@ package compare
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -32,22 +31,14 @@ func (c *strCompare) Set(idx int, v *vector.Vector) {
 }
 
 func (c *strCompare) Copy(vecSrc, vecDst int, src, dst int64, proc *process.Process) error {
-	if c.vs[vecSrc].GetGrouping().Contains(uint64(src)) {
-		nulls.Add(c.vs[vecDst].GetGrouping(), uint64(dst))
-	} else {
-		nulls.Del(c.vs[vecDst].GetGrouping(), uint64(dst))
-	}
-	if c.isConstNull[vecSrc] || c.vs[vecSrc].GetNulls().Contains(uint64(src)) {
-		nulls.Add(c.vs[vecDst].GetNulls(), uint64(dst))
-		return nil
-	}
-	nulls.Del(c.vs[vecDst].GetNulls(), uint64(dst))
 	return c.vs[vecDst].Copy(c.vs[vecSrc], dst, src, proc.Mp())
 }
 
 func (c *strCompare) Compare(veci, vecj int, vi, vj int64) int {
-	n0 := c.isConstNull[veci] || c.vs[veci].GetNulls().Contains(uint64(vi))
-	n1 := c.isConstNull[vecj] || c.vs[vecj].GetNulls().Contains(uint64(vj))
+	n0 := c.isConstNull[veci] || c.vs[veci].GetNulls().Contains(uint64(vi)) ||
+		c.vs[veci].GetGrouping().Contains(uint64(vi))
+	n1 := c.isConstNull[vecj] || c.vs[vecj].GetNulls().Contains(uint64(vj)) ||
+		c.vs[vecj].GetGrouping().Contains(uint64(vj))
 	cmp := nullsCompare(n0, n1, c.nullsLast)
 	if cmp != 0 {
 		return cmp - nullsCompareFlag

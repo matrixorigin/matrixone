@@ -37,15 +37,20 @@ select std(h) from t1;
 ➤ std(h)[3,38,19]  𝄀
 47.4771387090671206400
 select std(i) from t1;
-invalid argument aggregate function std, bad value [DATE]
+➤ std(i)[3,38,6]  𝄀
+4303.222281
 select std(k) from t1;
-invalid argument aggregate function std, bad value [DATETIME]
+➤ std(k)[3,38,6]  𝄀
+26809513236.909024
 select std(l) from t1;
-invalid argument aggregate function std, bad value [TIMESTAMP]
+➤ std(l)[3,38,6]  𝄀
+110764389617.670000
 select std(m) from t1;
-invalid argument aggregate function std, bad value [CHAR]
+➤ std(m)[8,53,31]  𝄀
+1.299038105676658
 select std(n) from t1;
-invalid argument aggregate function std, bad value [VARCHAR]
+➤ std(n)[8,53,31]  𝄀
+1.299038105676658
 select STDDEV_POP(a) from t1;
 ➤ STDDEV_POP(a)[8,54,0]  𝄀
 30.31088913245535
@@ -71,15 +76,20 @@ select STDDEV_POP(h) from t1;
 ➤ STDDEV_POP(h)[3,38,19]  𝄀
 47.4771387090671206400
 select STDDEV_POP(i) from t1;
-invalid argument aggregate function stddev_pop, bad value [DATE]
+➤ STDDEV_POP(i)[3,38,6]  𝄀
+4303.222281
 select STDDEV_POP(k) from t1;
-invalid argument aggregate function stddev_pop, bad value [DATETIME]
+➤ STDDEV_POP(k)[3,38,6]  𝄀
+26809513236.909024
 select STDDEV_POP(l) from t1;
-invalid argument aggregate function stddev_pop, bad value [TIMESTAMP]
+➤ STDDEV_POP(l)[3,38,6]  𝄀
+110764389617.670000
 select STDDEV_POP(m) from t1;
-invalid argument aggregate function stddev_pop, bad value [CHAR]
+➤ STDDEV_POP(m)[8,53,31]  𝄀
+1.299038105676658
 select STDDEV_POP(n) from t1;
-invalid argument aggregate function stddev_pop, bad value [VARCHAR]
+➤ STDDEV_POP(n)[8,53,31]  𝄀
+1.299038105676658
 drop table t1;
 select STDDEV_POP(99999999999999999.99999);
 ➤ STDDEV_POP(99999999999999999.99999)[3,38,11]  𝄀
@@ -242,3 +252,20 @@ select STDDEV_SAMP(value) from t1;
 ➤ STDDEV_SAMP(value)[8,54,0]  𝄀
 null
 drop table t1;
+CREATE TABLE t_stddev_scaled(value DOUBLE);
+INSERT INTO t_stddev_scaled VALUES (1e200),(-1e200);
+SELECT STDDEV_POP(value) = 1e200 AS resident_ok, STDDEV_POP(DISTINCT value) = 1e200 AS distinct_ok, STDDEV_SAMP(value) > 1.4142e200 AND STDDEV_SAMP(value) < 1.4143e200 AS sample_ok FROM t_stddev_scaled;
+➤ resident_ok[-7,1,0]  ¦  distinct_ok[-7,1,0]  ¦  sample_ok[-7,1,0]  𝄀
+1  ¦  1  ¦  1
+TRUNCATE TABLE t_stddev_scaled;
+INSERT INTO t_stddev_scaled VALUES (0),(2e154),(1e154);
+SELECT VAR_POP(value) > 6.66e307 AND VAR_POP(value) < 6.67e307 AS finite_var_ok FROM t_stddev_scaled;
+➤ finite_var_ok[-7,1,0]  𝄀
+1
+DROP TABLE t_stddev_scaled;
+CREATE TABLE t_variance_integer_limits(s BIGINT, u BIGINT UNSIGNED);
+INSERT INTO t_variance_integer_limits VALUES (9223372036854775804, 18446744073709551612),(9223372036854775805, 18446744073709551613),(9223372036854775806, 18446744073709551614),(9223372036854775807, 18446744073709551615);
+SELECT VAR_POP(s) = 1.25 AS signed_var_ok, VAR_POP(DISTINCT u) = 1.25 AS unsigned_distinct_var_ok, STDDEV_POP(s) > 1.118 AND STDDEV_POP(s) < 1.119 AS signed_stddev_ok, VAR_SAMP(u) > 1.6666 AND VAR_SAMP(u) < 1.6667 AS unsigned_sample_ok FROM t_variance_integer_limits;
+➔ signed_var_ok[-7,1,0]  ¦  unsigned_distinct_var_ok[-7,1,0]  ¦  signed_stddev_ok[-7,1,0]  ¦  unsigned_sample_ok[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1
+DROP TABLE t_variance_integer_limits;

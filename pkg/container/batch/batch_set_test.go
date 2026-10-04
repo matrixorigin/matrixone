@@ -419,6 +419,33 @@ func TestBatchSetUnionReuseBuf(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
+func TestBatchSetReadinessAndOffHeapGrowth(t *testing.T) {
+	mp := mpool.MustNewZero()
+	queue := NewBatchSet(TestBatchMaxRow)
+	require.Zero(t, queue.ReadyCount())
+	require.Zero(t, queue.ReadyDelta(1))
+	require.Equal(t, 1, queue.ReadyDelta(TestBatchMaxRow))
+
+	src := makeTestBatch(1, mp)
+	consumed, err := queue.Union(mp, src, []int32{0}, nil)
+	require.NoError(t, err)
+	require.False(t, consumed)
+	require.Zero(t, queue.ReadyCount())
+	require.True(t, queue.Get(0).offHeap)
+	require.Less(t, queue.Get(0).Allocated(), TestBatchMaxRow, "a sparse tail must not preallocate a full batch")
+	src.Clean(mp)
+
+	queue.Clean(mp)
+	full := makeTestBatch(TestBatchMaxRow, mp)
+	_, err = queue.Extend(mp, full, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, queue.ReadyCount(), "a full final batch must consume a ready credit")
+	require.Equal(t, 1, queue.ReadyDelta(TestBatchMaxRow))
+	full.Clean(mp)
+	queue.Clean(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
 // TestBatchSetTakeBatches verifies TakeBatches transfers ownership and leaves set empty.
 func TestBatchSetTakeBatches(t *testing.T) {
 	mp := mpool.MustNewZero()

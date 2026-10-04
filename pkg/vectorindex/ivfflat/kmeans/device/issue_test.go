@@ -85,7 +85,7 @@ func Search(datasetvec [][]float32, queriesvec [][]float32, limit uint, distance
 
 	deviceID := 0
 	nthread := uint32(1)
-	bf, err := cuvs.NewGpuBruteForce[float32](flattenedDataset, uint64(len(datasetvec)), uint32(dim), distanceType, nthread, deviceID)
+	bf, err := cuvs.NewGpuBruteForce[float32, float32](flattenedDataset, uint64(len(datasetvec)), uint32(dim), distanceType, nthread, deviceID)
 	if err != nil {
 		return nil, nil, err
 	}

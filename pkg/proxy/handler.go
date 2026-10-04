@@ -30,6 +30,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	moconfig "github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -46,6 +48,8 @@ type handler struct {
 	moCluster clusterservice.MOCluster
 	// router select the best CN server and connects to it.
 	router Router
+	// plugin owns the optional RPC client used by the decorated router.
+	plugin *rpcPlugin
 	// rebalancer is the global rebalancer.
 	rebalancer *rebalancer
 	// counterSet counts the events in proxy.
@@ -61,6 +65,14 @@ type handler struct {
 	queryClient client.QueryClient
 	// connCache is the cache of server connections.
 	connCache ConnCache
+	// sessionAllocator owns all MySQL protocol buffers retained by this Proxy.
+	// Sharing it avoids one ManagedAllocator (and its arenas) per connection.
+	sessionAllocator frontend.Allocator
+	// connectionLimiter bounds aggregate and per-tenant live connections.
+	connectionLimiter *connectionLimiter
+	// protocolMemoryLimiter serializes phase overlap against the headroom left
+	// after steady per-connection protocol memory has been reserved.
+	protocolMemoryLimiter *protocolMemoryLimiter
 }
 
 var ErrNoAvailableCNServers = moerr.NewInternalErrorNoCtx("no available CN servers")
@@ -75,9 +87,47 @@ func newProxyHandler(
 	haKeeperClient logservice.ProxyHAKeeperClient,
 	test bool,
 ) (*handler, error) {
-	// Create the MO cluster.
+	protocolMemoryLimiter, err := newProtocolMemoryLimiter(&cfg)
+	if err != nil {
+		return nil, err
+	}
+	frontendParameters := &moconfig.FrontendParameters{
+		GuestMmuLimitation: int64(protocolMemoryLimiter.budget.managedBytes),
+	}
+	sessionAllocator := frontend.NewSessionAllocator(
+		moconfig.NewParameterUnit(frontendParameters, nil, nil, nil),
+	)
+
+	// Create the MO cluster. It starts private background tasks immediately, so
+	// keep local ownership until the complete handler has been constructed.
 	mc := clusterservice.NewMOCluster(cfg.UUID, haKeeperClient, cfg.Cluster.RefreshInterval.Duration)
-	rt.SetGlobalVariables(runtime.ClusterService, mc)
+	constructed := false
+	var pluginClient *rpcPlugin
+	var queryClient client.QueryClient
+	defer func() {
+		if constructed {
+			return
+		}
+		if queryClient != nil {
+			_ = queryClient.Close()
+		}
+		if pluginClient != nil {
+			_ = pluginClient.Close()
+		}
+		mc.Close()
+	}()
+
+	// Create fallible standalone clients before starting rebalancer tasks.
+	if cfg.Plugin != nil {
+		pluginClient, err = newRPCPlugin(cfg.UUID, cfg.Plugin.Backend, cfg.Plugin.Timeout)
+		if err != nil {
+			return nil, err
+		}
+	}
+	queryClient, err = client.NewQueryClient(cfg.UUID, morpc.Config{})
+	if err != nil {
+		return nil, err
+	}
 
 	// Create the rebalancer.
 	var opts []rebalancerOption
@@ -99,9 +149,11 @@ func newProxyHandler(
 
 	var ru Router
 	if test {
-		ru = newRouter(mc, re, re.connManager, false)
+		ru = newRouter(mc, re, re.connManager, false,
+			withSessionAllocator(sessionAllocator))
 	} else {
 		routerOpts := []routeOption{
+			withSessionAllocator(sessionAllocator),
 			withConnectTimeout(cfg.ConnectTimeout.Duration),
 			withAuthTimeout(cfg.AuthTimeout.Duration),
 			withCNHealthCheckCooldown(
@@ -121,13 +173,9 @@ func newProxyHandler(
 		ru = newRouter(mc, re, sw, false, routerOpts...)
 	}
 
-	// Decorate the router if plugin is enabled
-	if cfg.Plugin != nil {
-		p, err := newRPCPlugin(cfg.UUID, cfg.Plugin.Backend, cfg.Plugin.Timeout)
-		if err != nil {
-			return nil, err
-		}
-		ru = newPluginRouter(cfg.UUID, ru, p)
+	// Decorate the router if plugin is enabled.
+	if pluginClient != nil {
+		ru = newPluginRouter(cfg.UUID, ru, pluginClient)
 	}
 
 	var ipNetList []*net.IPNet
@@ -141,27 +189,42 @@ func newProxyHandler(
 			ipNetList = append(ipNetList, ipNet)
 		}
 	}
-	qc, err := client.NewQueryClient(cfg.UUID, morpc.Config{})
-	if err != nil {
-		return nil, err
+	maxConnections := cfg.MaxConnections
+	if maxConnections == 0 {
+		maxConnections = defaultMaxConnections
+	}
+	maxConnectionsPerTenant := cfg.MaxConnectionsPerTenant
+	if maxConnectionsPerTenant == 0 {
+		maxConnectionsPerTenant = min(defaultMaxConnectionsPerTenant, maxConnections)
 	}
 	h := &handler{
-		ctx:            ctx,
-		logger:         rt.Logger(),
-		config:         cfg,
-		stopper:        st,
-		moCluster:      mc,
-		counterSet:     cs,
-		router:         ru,
-		rebalancer:     re,
-		haKeeperClient: haKeeperClient,
-		ipNetList:      ipNetList,
-		sqlWorker:      sw,
-		queryClient:    qc,
+		ctx:              ctx,
+		logger:           rt.Logger(),
+		config:           cfg,
+		stopper:          st,
+		moCluster:        mc,
+		counterSet:       cs,
+		router:           ru,
+		plugin:           pluginClient,
+		rebalancer:       re,
+		haKeeperClient:   haKeeperClient,
+		ipNetList:        ipNetList,
+		sqlWorker:        sw,
+		queryClient:      queryClient,
+		sessionAllocator: sessionAllocator,
+		connectionLimiter: newConnectionLimiter(
+			maxConnections,
+			maxConnectionsPerTenant,
+		),
+		protocolMemoryLimiter: protocolMemoryLimiter,
 	}
 	if h.config.ConnCacheEnabled && h.config.Plugin == nil {
 		var cacheOpts []connCacheOption
-		cacheOpts = append(cacheOpts, withQueryClient(qc))
+		cacheOpts = append(cacheOpts,
+			withMOCluster(mc),
+			withQueryClient(queryClient),
+			withCounterSet(cs),
+		)
 		if checker, ok := ru.(cacheReuseChecker); ok {
 			cacheOpts = append(cacheOpts, withCanReuseCN(checker.CanReuseCachedCN))
 		}
@@ -169,6 +232,8 @@ func newProxyHandler(
 	} else if h.config.ConnCacheEnabled && h.config.Plugin != nil {
 		rt.Logger().Warn("proxy conn cache disabled because plugin routing is enabled")
 	}
+	rt.SetGlobalVariables(runtime.ClusterService, mc)
+	constructed = true
 	return h, nil
 }
 
@@ -177,23 +242,52 @@ func (h *handler) handle(c goetty.IOSession) error {
 	h.logger.Info("new connection comes", zap.Uint64("session ID", c.ID()))
 	v2.ProxyConnectAcceptedCounter.Inc()
 	h.counterSet.connAccepted.Add(1)
+	defer func() {
+		v2.ProxyConnectClosedCounter.Inc()
+	}()
+
+	admission, preadmitted := takeConnectionAdmission(c.RawConn())
+	if !preadmitted {
+		var ok bool
+		admission, ok = h.connectionLimiter.acquire()
+		if !ok {
+			v2.ProxyConnectRejectCounter.Inc()
+			writeConnectionLimitError(c.RawConn())
+			return nil
+		}
+	} else if admission == nil {
+		// Goetty shutdown may close the raw connection immediately before the
+		// handler begins. In that ordering the connection wrapper remains the
+		// lease owner and has already released it.
+		v2.ProxyConnectRejectCounter.Inc()
+		return nil
+	}
+	defer admission.release()
+
 	v2.ProxyConnectionsCurrentGauge.Inc()
 	h.counterSet.connTotal.Add(1)
 	defer func() {
 		v2.ProxyConnectionsCurrentGauge.Dec()
-		v2.ProxyConnectClosedCounter.Inc()
 		h.counterSet.connTotal.Add(-1)
 	}()
 
 	// Create a new tunnel to manage client connection and server connection.
-	t := newTunnel(h.ctx, h.logger, h.counterSet,
+	tunnelOptions := []tunnelOption{
 		withRealConn(),
 		withRebalancePolicy(RebalancePolicyMapping[h.config.RebalancePolicy]),
 		withRebalancer(h.rebalancer),
 		withConnCacheEnabled(h.connCache != nil),
-	)
+	}
+	if h.connCache != nil {
+		tunnelOptions = append(tunnelOptions, withCacheReuseBarrier())
+	}
+	t := newTunnel(h.ctx, h.logger, h.counterSet, tunnelOptions...)
 	defer func() {
 		_ = t.Close()
+		// This defer was installed before the client/server and event-handler
+		// cleanup defers, so reaching it proves the old tunnel generation can no
+		// longer touch a backend that is about to be reused.
+		t.markCacheReuseReady()
 	}()
 
 	cc, err := newClientConn(
@@ -209,6 +303,9 @@ func (h *handler) handle(c goetty.IOSession) error {
 		h.ipNetList,
 		h.queryClient,
 		h.connCache,
+		withClientConnAllocator(h.sessionAllocator),
+		withClientConnAdmission(admission),
+		withClientConnProtocolMemoryLimiter(h.protocolMemoryLimiter),
 	)
 	if err != nil {
 		h.logger.Error("failed to create client conn", zap.Error(err))
@@ -219,9 +316,15 @@ func (h *handler) handle(c goetty.IOSession) error {
 
 	// client builds connections with a best CN server and returns
 	// the server connection.
-	sc, err := cc.BuildConnWithServer("")
+	sc, err := cc.BuildConnWithServer(h.ctx, "")
 	if err != nil {
 		if isConnEndErr(err) {
+			return nil
+		}
+		if isProxyAdmissionError(err) {
+			v2.ProxyConnectRejectCounter.Inc()
+			h.logger.Debug("connection rejected during handshake", zap.Error(err))
+			cc.SendErrToClient(err)
 			return nil
 		}
 		h.logger.Error("failed to create server conn", zap.Error(err))
@@ -248,9 +351,10 @@ func (h *handler) handle(c goetty.IOSession) error {
 			serverC = sc
 		}
 		if serverC != nil {
-			if err := serverC.Quit(); err != nil {
-				_ = serverC.Close()
-			}
+			// This connection was not admitted to the cache. A protocol QUIT can
+			// wait indefinitely for a broken CN to close its side; direct Close is
+			// the terminal ownership edge and also removes connManager state.
+			_ = serverC.Close()
 		}
 	}()
 
@@ -271,7 +375,10 @@ func (h *handler) handle(c goetty.IOSession) error {
 	if err := st.RunNamedTask("event-handler", func(ctx context.Context) {
 		for {
 			select {
-			case e := <-t.reqC:
+			case e, ok := <-t.reqC:
+				if !ok {
+					return
+				}
 				if err := cc.HandleEvent(ctx, e, t.respC); err != nil {
 					h.logger.Error("failed to handle event",
 						zap.Any("event", e), zap.Error(err))
@@ -305,6 +412,14 @@ func (h *handler) handle(c goetty.IOSession) error {
 	case err := <-t.errC:
 		return h.handleTunnelErr(err, cc, t, c.ID(), goId)
 	}
+}
+
+func (h *handler) rejectBeforeSession(conn net.Conn) {
+	v2.ProxyConnectAcceptedCounter.Inc()
+	v2.ProxyConnectRejectCounter.Inc()
+	v2.ProxyConnectClosedCounter.Inc()
+	h.counterSet.connAccepted.Add(1)
+	writeConnectionLimitError(conn)
 }
 
 func (h *handler) handleTunnelErr(err error, cc ClientConn, t *tunnel, sessionID uint64, goId int64) error {
@@ -393,14 +508,17 @@ func (h *handler) closeBackendAfterClientDisconnect(cc ClientConn, sc ServerConn
 // Close closes the handler.
 func (h *handler) Close() error {
 	if h != nil {
-		h.moCluster.Close()
-		_ = h.haKeeperClient.Close()
-		if h.queryClient != nil {
-			_ = h.queryClient.Close()
-		}
 		if h.connCache != nil {
 			_ = h.connCache.Close()
 		}
+		if h.queryClient != nil {
+			_ = h.queryClient.Close()
+		}
+		if h.plugin != nil {
+			_ = h.plugin.Close()
+		}
+		h.moCluster.Close()
+		_ = h.haKeeperClient.Close()
 	}
 	return nil
 }

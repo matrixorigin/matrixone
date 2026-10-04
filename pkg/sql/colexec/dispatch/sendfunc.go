@@ -15,16 +15,20 @@
 package dispatch
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -44,10 +48,83 @@ const (
 	FailureModeTolerant
 )
 
+// sendBatchOutcome separates a receiver being removed from the reason it was
+// removed. A certified StopSending is a consumer-owned retirement and must not
+// be reported as transport/data loss; an uncertified ReceiverDone remains a
+// failure in strict mode (or a failover opportunity in tolerant mode).
+type sendBatchOutcome struct {
+	receiverDone      bool
+	explicitlyStopped bool
+}
+
 var (
 	sendToAnyLocal  = sendToAnyLocalFunc
 	sendToAnyRemote = sendToAnyRemoteFunc
 )
+
+func prepareParamKindRemoteWireEnabled(proc *process.Process) bool {
+	return remoteBatchWireVersion(proc) >= defines.MORPCVersion12
+}
+
+func binaryStringRemoteWireEnabled(proc *process.Process) bool {
+	return remoteBatchWireVersion(proc) >= defines.MORPCVersion18
+}
+
+func explicitTextRemoteWireEnabled(proc *process.Process) bool {
+	return remoteBatchWireVersion(proc) >= defines.MORPCVersion23
+}
+
+func stringSourceRemoteWireEnabled(proc *process.Process) bool {
+	return remoteBatchWireVersion(proc) >= defines.MORPCVersion37
+}
+
+func remoteBatchWireVersion(proc *process.Process) int64 {
+	if proc == nil {
+		return 0
+	}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	if rt == nil {
+		return 0
+	}
+	value, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, ok := value.(int64)
+	if !ok {
+		return 0
+	}
+	return version
+}
+
+// marshalRemoteBatch keeps the stable Batch prefix unchanged and appends the
+// optional transient provenance trailer only after the shared protocol gate is
+// enabled. During a rolling upgrade, source metadata is omitted for an older
+// peer while the already-supported provenance axes remain lossless.
+func marshalRemoteBatch(proc *process.Process, bat *batch.Batch, buf *bytes.Buffer) ([]byte, error) {
+	if bat == nil {
+		return nil, moerr.NewInvalidInputNoCtx("cannot marshal a nil remote batch")
+	}
+	if bat.HasGrouping() && remoteBatchWireVersion(proc) < defines.MORPCVersion87 {
+		return nil, moerr.NewInvalidStateNoCtx(
+			"grouping provenance requires MORPCVersion87 for remote dispatch")
+	}
+	wireEnabled := prepareParamKindRemoteWireEnabled(proc)
+	if bat.HasBinaryStringMetadata() && !binaryStringRemoteWireEnabled(proc) {
+		return nil, moerr.NewInvalidStateNoCtx(
+			"binary-string provenance requires MORPCVersion18 for remote dispatch")
+	}
+	if bat.HasExplicitTextStringMetadata() && !explicitTextRemoteWireEnabled(proc) {
+		return nil, moerr.NewInvalidStateNoCtx(
+			"explicit-text provenance requires MORPCVersion23 for remote dispatch")
+	}
+	if bat.HasPrepareParamKindMetadataWithoutStringSources() && !wireEnabled {
+		return nil, moerr.NewInvalidStateNoCtx(
+			"prepared parameter provenance requires MORPCVersion12 for remote dispatch")
+	}
+	if wireEnabled {
+		return bat.MarshalBinaryForPipeline(
+			buf, true, stringSourceRemoteWireEnabled(proc))
+	}
+	return bat.MarshalBinaryWithBuffer(buf, true)
+}
 
 func (ctr *container) removeIdxReceiver(idx int) {
 	ctr.remoteReceivers = append(ctr.remoteReceivers[:idx], ctr.remoteReceivers[idx+1:]...)
@@ -82,7 +159,7 @@ func sendToAllRemoteFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) 
 	}
 
 	{ // send to remote regs
-		encodeData, errEncode := bat.MarshalBinaryWithBuffer(&ap.ctr.marshalBuf, true)
+		encodeData, errEncode := marshalRemoteBatch(proc, bat, &ap.ctr.marshalBuf)
 		if errEncode != nil {
 			return false, errEncode
 		}
@@ -93,15 +170,15 @@ func sendToAllRemoteFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) 
 
 			// SendToAll requires strict failure checking
 			// If any receiver fails, we must report error to prevent data loss
-			remove, err := sendBatchToClientSession(proc.Ctx, encodeData, receiver, FailureModeStrict, receiverID)
+			outcome, err := sendBatchToClientSessionOutcome(proc.Ctx, encodeData, receiver, FailureModeStrict, receiverID)
 			if err != nil {
 				return false, err
 			}
 
-			if remove {
+			if outcome.receiverDone {
 				ap.ctr.removeIdxReceiver(i)
 				if ap.ctr.remoteRegsCnt == 0 {
-					return true, nil
+					return ap.ctr.localRegsCnt == 0, nil
 				}
 				i--
 			}
@@ -111,18 +188,24 @@ func sendToAllRemoteFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) 
 	return false, nil
 }
 
-func sendBatToIndex(ap *Dispatch, proc *process.Process, bat *batch.Batch, shuffleIndex uint32) (err error) {
+func sendBatToIndex(ap *Dispatch, proc *process.Process, bat *batch.Batch, shuffleIndex uint32) error {
+	_, err := sendBatToIndexOutcome(ap, proc, bat, shuffleIndex)
+	return err
+}
+
+func sendBatToIndexOutcome(ap *Dispatch, proc *process.Process, bat *batch.Batch, shuffleIndex uint32) (bool, error) {
 	var queryDone bool
+	var err error
 
 	for i := range ap.LocalRegs {
 		batIndex := uint32(ap.ShuffleRegIdxLocal[i])
 		if shuffleIndex == batIndex {
 			queryDone, err = ap.ctr.sp.SendBatch(proc.Ctx, i, bat, nil)
 			if err != nil || queryDone {
-				return err
+				return queryDone, err
 			}
 			if !onlyOneRegToDealThis(i, ap, proc) {
-				return context.Canceled
+				return false, context.Canceled
 			}
 			break
 		}
@@ -135,25 +218,30 @@ func sendBatToIndex(ap *Dispatch, proc *process.Process, bat *batch.Batch, shuff
 		if shuffleIndex == batIndex {
 			if bat != nil && !bat.IsEmpty() {
 				receiverID := fmt.Sprintf("%s(ShuffleIdx=%d)", r.Uid.String(), shuffleIndex)
-				encodeData, errEncode := bat.MarshalBinaryWithBuffer(&ap.ctr.marshalBuf, true)
+				encodeData, errEncode := marshalRemoteBatch(proc, bat, &ap.ctr.marshalBuf)
 				if errEncode != nil {
-					err = errEncode
-					break
+					return false, errEncode
 				}
 
-				// Shuffle requires strict failure checking
-				// If target receiver fails, data for this shuffle key will be lost
-				remove, errSend := sendBatchToClientSession(proc.Ctx, encodeData, r, FailureModeStrict, receiverID)
+				// Shuffle requires strict failure checking. A certified consumer
+				// retirement is handled as a removal; an unqualified failure must
+				// still fail closed because this key has no alternate target.
+				outcome, errSend := sendBatchToClientSessionOutcome(proc.Ctx, encodeData, r, FailureModeStrict, receiverID)
 				if errSend != nil {
-					err = errSend
-					break
+					return false, errSend
 				}
 
-				if remove {
-					// In shuffle scenario, if target receiver is removed, it's a critical error
-					err = moerr.NewInternalError(proc.Ctx, fmt.Sprintf(
-						"shuffle target receiver %s was removed, data loss may occur", receiverID))
-					break
+				if outcome.receiverDone {
+					ap.ctr.removeIdxReceiver(i)
+					if ap.ctr.remoteRegsCnt == 0 && ap.ctr.localRegsCnt == 0 {
+						return true, nil
+					}
+					// An explicitly stopped receiver no longer owns this shuffle
+					// partition. Continue producing data for remaining consumers;
+					// dropping this partition is intentional consumer retirement.
+					if outcome.explicitlyStopped {
+						return false, nil
+					}
 				}
 			}
 			// Found the target receiver, exit loop
@@ -161,7 +249,7 @@ func sendBatToIndex(ap *Dispatch, proc *process.Process, bat *batch.Batch, shuff
 		}
 	}
 
-	return err
+	return false, nil
 }
 
 func sendBatToLocalMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Batch, regIndex uint32) error {
@@ -183,6 +271,11 @@ func sendBatToLocalMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Ba
 }
 
 func sendBatToMultiMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Batch, shuffleIndex uint32) error {
+	_, err := sendBatToMultiMatchedRegOutcome(ap, proc, bat, shuffleIndex)
+	return err
+}
+
+func sendBatToMultiMatchedRegOutcome(ap *Dispatch, proc *process.Process, bat *batch.Batch, shuffleIndex uint32) (bool, error) {
 	localRegsCnt := uint32(ap.ctr.localRegsCnt)
 
 	// send to remote first because send to spool will modify the bat.Agg.
@@ -193,19 +286,30 @@ func sendBatToMultiMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Ba
 		if shuffleIndex%localRegsCnt == batIndex%localRegsCnt {
 			if bat != nil && !bat.IsEmpty() {
 				receiverID := fmt.Sprintf("%s(ShuffleIdx=%d)", r.Uid.String(), shuffleIndex)
-				encodeData, errEncode := bat.MarshalBinaryWithBuffer(&ap.ctr.marshalBuf, true)
+				encodeData, errEncode := marshalRemoteBatch(proc, bat, &ap.ctr.marshalBuf)
 				if errEncode != nil {
-					return errEncode
+					return false, errEncode
 				}
 
-				// Shuffle requires strict failure checking
-				remove, err := sendBatchToClientSession(proc.Ctx, encodeData, r, FailureModeStrict, receiverID)
+				// Shuffle requires strict failure checking. Certified retirement is
+				// removed and the remaining matched targets continue receiving data.
+				outcome, err := sendBatchToClientSessionOutcome(proc.Ctx, encodeData, r, FailureModeStrict, receiverID)
 				if err != nil {
-					return err
+					return false, err
 				}
 
-				if remove {
-					return moerr.NewInternalError(proc.Ctx, fmt.Sprintf(
+				if outcome.receiverDone {
+					ap.ctr.removeIdxReceiver(i)
+					if outcome.explicitlyStopped {
+						// Continue with other receivers mapped to this hash
+						// group. The stopped consumer owns this retirement.
+						if ap.ctr.remoteRegsCnt == 0 && ap.ctr.localRegsCnt == 0 {
+							return true, nil
+						}
+						i--
+						continue
+					}
+					return false, moerr.NewInternalError(proc.Ctx, fmt.Sprintf(
 						"shuffle target receiver %s was removed, data loss may occur", receiverID))
 				}
 			}
@@ -218,16 +322,16 @@ func sendBatToMultiMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Ba
 		if shuffleIndex%localRegsCnt == batIndex%localRegsCnt {
 			queryDone, err := ap.ctr.sp.SendBatch(proc.Ctx, i, bat, nil)
 			if err != nil || queryDone {
-				return err
+				return queryDone, err
 			}
 			if !onlyOneRegToDealThis(i, ap, proc) {
-				return context.Canceled
+				return false, context.Canceled
 			}
 			break
 		}
 	}
 
-	return nil
+	return false, nil
 }
 
 // shuffle to all receiver (include LocalReceiver and RemoteReceiver)
@@ -245,11 +349,11 @@ func shuffleToAllFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (bo
 	ap.ctr.batchCnt[bat.ShuffleIDX]++
 	ap.ctr.rowCnt[bat.ShuffleIDX] += bat.RowCount()
 	if ap.ShuffleType == plan2.ShuffleToRegIndex {
-		return false, sendBatToIndex(ap, proc, bat, uint32(bat.ShuffleIDX))
+		return sendBatToIndexOutcome(ap, proc, bat, uint32(bat.ShuffleIDX))
 	} else if ap.ShuffleType == plan2.ShuffleToLocalMatchedReg {
 		return false, sendBatToLocalMatchedReg(ap, proc, bat, uint32(bat.ShuffleIDX))
 	} else {
-		return false, sendBatToMultiMatchedReg(ap, proc, bat, uint32(bat.ShuffleIDX))
+		return sendBatToMultiMatchedRegOutcome(ap, proc, bat, uint32(bat.ShuffleIDX))
 	}
 }
 
@@ -309,7 +413,7 @@ func sendToAnyRemoteFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) 
 	default:
 	}
 
-	encodeData, errEncode := bat.MarshalBinaryWithBuffer(&ap.ctr.marshalBuf, true)
+	encodeData, errEncode := marshalRemoteBatch(proc, bat, &ap.ctr.marshalBuf)
 	if errEncode != nil {
 		return false, errEncode
 	}
@@ -389,14 +493,13 @@ func sendToAnyFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (bool,
 //   - failureMode: how to handle receiver failures (strict or tolerant)
 //   - receiverID: receiver identifier for error messages
 //
-// Returns:
-//   - receiverDone: whether the receiver is done (normally or abnormally)
-//   - err: error if any
+// Returns receiverDone for compatibility with existing callers. New dispatch
+// paths use sendBatchToClientSessionOutcome so they can distinguish a
+// certified consumer retirement from an unavailable receiver.
 //
-// Critical fix for silent data loss:
-// When ReceiverDone=true, the behavior depends on failureMode:
-//   - FailureModeStrict: MUST return error (for SendToAll/Shuffle)
-//   - FailureModeTolerant: Can return success (for SendToAny)
+// When ReceiverDone=true, a live StopSending certificate is a normal
+// consumer-owned retirement. Without that certificate, failureMode controls
+// whether the receiver is a strict data-loss error or a tolerant failover.
 func sendBatchToClientSession(
 	ctx context.Context,
 	encodeBatData []byte,
@@ -404,10 +507,28 @@ func sendBatchToClientSession(
 	failureMode receiverFailureMode,
 	receiverID string,
 ) (receiverDone bool, err error) {
+	outcome, err := sendBatchToClientSessionOutcome(
+		ctx, encodeBatData, wcs, failureMode, receiverID)
+	return outcome.receiverDone, err
+}
+
+func sendBatchToClientSessionOutcome(
+	ctx context.Context,
+	encodeBatData []byte,
+	wcs *process.WrapCs,
+	failureMode receiverFailureMode,
+	receiverID string,
+) (outcome sendBatchOutcome, err error) {
 	wcs.Lock()
 	defer wcs.Unlock()
 
 	if wcs.ReceiverDone {
+		if retireStoppedReceiver(ctx, wcs) {
+			return sendBatchOutcome{
+				receiverDone:      true,
+				explicitlyStopped: true,
+			}, nil
+		}
 		// Critical fix: distinguish between strict and tolerant modes
 		if failureMode == FailureModeStrict {
 			// Strict mode: receiver done indicates data loss
@@ -416,7 +537,7 @@ func sendBatchToClientSession(
 				zap.String("receiverID", receiverID),
 				zap.Uint64("msgId", wcs.MsgId),
 				zap.String("uid", wcs.Uid.String()))
-			return true, moerr.NewInternalError(ctx, fmt.Sprintf(
+			return sendBatchOutcome{receiverDone: true}, moerr.NewInternalError(ctx, fmt.Sprintf(
 				"remote receiver %s is already done, data loss may occur. "+
 					"This usually indicates the remote CN has failed or been canceled",
 				receiverID))
@@ -424,18 +545,43 @@ func sendBatchToClientSession(
 			// Tolerant mode: acceptable for SendToAny scenarios
 			// We can try other receivers
 			// Use non-blocking send to avoid potential deadlock
-			select {
-			case wcs.Err <- nil:
-				// Error notification sent successfully
-			default:
-				// Channel full or no receiver, that's acceptable
-				// Receiver will eventually timeout or get canceled via context
+			if !wcs.TerminalBacked {
+				select {
+				case wcs.Err <- nil:
+					// Error notification sent successfully
+				default:
+					// Channel full or no receiver, that's acceptable
+					// Receiver will eventually timeout or get canceled via context
+				}
 			}
-			return true, nil
+			return sendBatchOutcome{receiverDone: true}, nil
 		}
 	}
 
-	// Send data (original logic unchanged)
+	var batchSequence uint64
+	batchSent := false
+	if wcs.ReserveBatch != nil {
+		batchSequence, err = wcs.ReserveBatch(ctx, uint64(len(encodeBatData)))
+		if err != nil {
+			if (errors.Is(err, context.Canceled) || moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted)) &&
+				retireStoppedReceiver(ctx, wcs) {
+				return sendBatchOutcome{
+					receiverDone:      true,
+					explicitlyStopped: true,
+				}, nil
+			}
+			return sendBatchOutcome{}, err
+		}
+		defer func() {
+			if !batchSent && wcs.RollbackBatch != nil {
+				wcs.RollbackBatch(batchSequence)
+			}
+		}()
+	}
+
+	// A logical batch uses one sequence number even when morpc fragmentation is
+	// required. The receiver acknowledges it only after all fragments have been
+	// reconstructed and handed to the local pipeline.
 	if len(encodeBatData) <= maxMessageSizeToMoRpc {
 		msg := cnclient.AcquireMessage()
 		{
@@ -443,11 +589,15 @@ func sendBatchToClientSession(
 			msg.Data = encodeBatData
 			msg.Cmd = pipeline.Method_BatchMessage
 			msg.Sid = pipeline.Status_Last
+			msg.BatchSequence = batchSequence
+			msg.AcceptedBatchCreditCount = wcs.BatchCredits
+			msg.AcceptedBatchCreditBytes = wcs.ByteCredits
 		}
 		if err = wcs.Cs.Write(ctx, msg); err != nil {
-			return false, err
+			return sendBatchOutcome{}, err
 		}
-		return false, nil
+		batchSent = true
+		return sendBatchOutcome{}, nil
 	}
 
 	// Send large message in chunks (original logic unchanged)
@@ -465,12 +615,34 @@ func sendBatchToClientSession(
 			msg.Data = encodeBatData[start:end]
 			msg.Cmd = pipeline.Method_BatchMessage
 			msg.Sid = sid
+			msg.BatchSequence = batchSequence
+			msg.AcceptedBatchCreditCount = wcs.BatchCredits
+			msg.AcceptedBatchCreditBytes = wcs.ByteCredits
 		}
 
 		if err = wcs.Cs.Write(ctx, msg); err != nil {
-			return false, err
+			return sendBatchOutcome{}, err
 		}
 		start = end
 	}
-	return false, nil
+	batchSent = true
+	return sendBatchOutcome{}, nil
+}
+
+// Called with wcs locked, only on receiver retirement/error paths. StopSending
+// retires this subscription; the remote main pipeline still owns query errors.
+func retireStoppedReceiver(ctx context.Context, wcs *process.WrapCs) bool {
+	if ctx.Err() != nil || wcs.ReceiverStopped == nil || !wcs.ReceiverStopped() {
+		return false
+	}
+	// The caller removes this receiver, so Reset will no longer notify its
+	// registration handler. Legacy registrations need a completion signal;
+	// terminal-backed registrations wait on their immutable generation result.
+	if !wcs.TerminalBacked {
+		select {
+		case wcs.Err <- nil:
+		default:
+		}
+	}
+	return true
 }

@@ -23,32 +23,32 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"golang.org/x/exp/constraints"
 )
 
 var (
 	minUUID = [16]byte{}
 	maxUUID = [16]byte{
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8}
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8}
 )
 
-// GetFetchRowsFunc get FetchLockRowsFunc based on primary key type
-func GetFetchRowsFunc(t types.Type) FetchLockRowsFunc {
+func getFetchRowsFunc(t types.Type) FetchLockRowsFunc {
 	switch t.Oid {
 	case types.T_bool:
 		return fetchBoolRows
@@ -98,7 +98,35 @@ func GetFetchRowsFunc(t types.Type) FetchLockRowsFunc {
 	case types.T_enum:
 		return fetchEnumRows
 	default:
+		return nil
+	}
+}
+
+// SupportsTotalLockTableRange reports whether lockop's table range covers the
+// complete physical keyspace for the primary-key type.
+func SupportsTotalLockTableRange(t types.Type) bool {
+	return colexec.SupportsTotalLockTableRange(t)
+}
+
+// GetFetchRowsFunc get FetchLockRowsFunc based on primary key type
+func GetFetchRowsFunc(t types.Type) FetchLockRowsFunc {
+	fetcher := getFetchRowsFunc(t)
+	if fetcher == nil {
 		panic(fmt.Sprintf("not support for %s", t.String()))
+	}
+	return func(
+		vec *vector.Vector,
+		packer *types.Packer,
+		tp types.Type,
+		max int,
+		lockTable bool,
+		filter RowsFilter,
+		filterCols []int32,
+	) (bool, [][]byte, lock.Granularity) {
+		if !lockTable && vec.IsConstNull() {
+			return false, nil, lock.Granularity_Row
+		}
+		return fetcher(vec, packer, tp, max, lockTable, filter, filterCols)
 	}
 }
 
@@ -115,8 +143,26 @@ func fetchBoolRows(
 		parker.EncodeBool(v)
 		return parker.Bytes()
 	}
-	return true, [][]byte{fn(false), fn(true)},
-		lock.Granularity_Range
+	if lockTable {
+		return true, [][]byte{fn(false), fn(true)},
+			lock.Granularity_Range
+	}
+	return fetchFixedRowsWithCompare(
+		vec,
+		max,
+		fn,
+		func(left, right bool) int {
+			if left == right {
+				return 0
+			}
+			if !left {
+				return -1
+			}
+			return 1
+		},
+		filter,
+		filterCols,
+	)
 }
 
 func fetchInt8Rows(
@@ -349,15 +395,20 @@ func fetchFloat32Rows(
 		return parker.Bytes()
 	}
 	if lockTable {
-		min := fn(math.SmallestNonzeroFloat32)
-		max := fn(math.MaxFloat32)
+		// Packer's physical total order covers every IEEE-754 bit pattern,
+		// including infinities, signed zeroes, and every NaN payload. The raw
+		// MaxUint32 and MaxInt32 bit patterns encode to the all-zero and all-one
+		// payload endpoints respectively.
+		min := fn(math.Float32frombits(math.MaxUint32))
+		max := fn(math.Float32frombits(math.MaxInt32))
 		return true, [][]byte{min, max},
 			lock.Granularity_Range
 	}
-	return fetchFixedRows(
+	return fetchFixedRowsWithCompare(
 		vec,
 		max,
 		fn,
+		types.Float32TupleAscCompare,
 		filter,
 		filterCols)
 }
@@ -376,15 +427,16 @@ func fetchFloat64Rows(
 		return parker.Bytes()
 	}
 	if lockTable {
-		min := fn(math.SmallestNonzeroFloat64)
-		max := fn(math.MaxFloat64)
+		min := fn(math.Float64frombits(math.MaxUint64))
+		max := fn(math.Float64frombits(math.MaxInt64))
 		return true, [][]byte{min, max},
 			lock.Granularity_Range
 	}
-	return fetchFixedRows(
+	return fetchFixedRowsWithCompare(
 		vec,
 		max,
 		fn,
+		types.Float64TupleAscCompare,
 		filter,
 		filterCols)
 }
@@ -705,7 +757,7 @@ func fetchVarlenaRows(
 	}
 
 	if lockTable {
-		min := fn([]byte{0})
+		min := fn([]byte{})
 		max := fn(nil)
 		return true, [][]byte{min, max},
 			lock.Granularity_Range
@@ -714,7 +766,7 @@ func fetchVarlenaRows(
 	n := vec.Length()
 	data, area := vector.MustVarlenaRawData(vec)
 	if n == 1 {
-		if filter != nil &&
+		if vec.GetNulls().Contains(0) || filter != nil &&
 			!filter(0, filterCols) {
 			return false, nil, lock.Granularity_Row
 		}
@@ -727,7 +779,7 @@ func fetchVarlenaRows(
 		initialized := false
 		applied := 0
 		for i := 0; i < n; i++ {
-			if filter != nil &&
+			if vec.GetNulls().Contains(uint64(i)) || filter != nil &&
 				!filter(i, filterCols) {
 				continue
 			}
@@ -757,7 +809,7 @@ func fetchVarlenaRows(
 	}
 	rows := make([][]byte, 0, n)
 	for idx := range data {
-		if filter != nil &&
+		if vec.GetNulls().Contains(uint64(idx)) || filter != nil &&
 			!filter(idx, filterCols) {
 			continue
 		}
@@ -799,7 +851,7 @@ func fetchFixedRowsWithCompare[T any](
 	n := vec.Length()
 	values := vector.MustFixedColWithTypeCheck[T](vec)
 	if n == 1 {
-		if filter != nil && !filter(0, filterCols) {
+		if vec.GetNulls().Contains(0) || filter != nil && !filter(0, filterCols) {
 			return false, nil, lock.Granularity_Row
 		}
 		return true, [][]byte{fn(values[0])}, lock.Granularity_Row
@@ -809,7 +861,7 @@ func fetchFixedRowsWithCompare[T any](
 		initialized := false
 		applied := 0
 		for row, v := range values {
-			if filter != nil &&
+			if vec.GetNulls().Contains(uint64(row)) || filter != nil &&
 				!filter(row, filterCols) {
 				continue
 			}
@@ -838,7 +890,7 @@ func fetchFixedRowsWithCompare[T any](
 	}
 	rows := make([][]byte, 0, n)
 	for row, v := range values {
-		if filter != nil &&
+		if vec.GetNulls().Contains(uint64(row)) || filter != nil &&
 			!filter(row, filterCols) {
 			continue
 		}

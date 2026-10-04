@@ -45,8 +45,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
 )
 
 /*
@@ -87,6 +89,11 @@ func (m *logtailer) RangeLogtail(
 }
 
 func (m *logtailer) RegisterCallback(cb func(from, to timestamp.Timestamp, closeCB func(), tails ...logtail.TableLogtail) error) {
+}
+
+func (m *logtailer) ReadBarrier(context.Context) (timestamp.Timestamp, error) {
+	frontier, _ := m.Now()
+	return frontier, nil
 }
 
 func (m *logtailer) TableLogtail(
@@ -226,6 +233,19 @@ func runTestWithLogTailServer(t *testing.T, test func(ctx context.Context, e *En
 }
 */
 
+type barrierTimestampWaiter struct {
+	get func(context.Context, timestamp.Timestamp) (timestamp.Timestamp, error)
+}
+
+func (w *barrierTimestampWaiter) GetTimestamp(
+	ctx context.Context, ts timestamp.Timestamp,
+) (timestamp.Timestamp, error) {
+	return w.get(ctx, ts)
+}
+func (*barrierTimestampWaiter) NotifyLatestCommitTS(timestamp.Timestamp) {}
+func (*barrierTimestampWaiter) Close()                                   {}
+func (*barrierTimestampWaiter) LatestTS() timestamp.Timestamp            { return timestamp.Timestamp{} }
+
 func TestPushClient_LatestLogtailAppliedTime(t *testing.T) {
 	var c PushClient
 	tw := client.NewTimestampWaiter(runtime.GetLogger(""))
@@ -238,6 +258,68 @@ func TestPushClient_LatestLogtailAppliedTime(t *testing.T) {
 		c.receivedLogTailTime.updateTimestamp(i, ts, time.Now())
 	}
 	assert.Equal(t, ts, c.LatestLogtailAppliedTime())
+}
+
+func TestAcquireAppliedLogtailReadBarrier(t *testing.T) {
+	frontier := timestamp.Timestamp{PhysicalTime: 20, LogicalTime: 2}
+	waiter := &barrierTimestampWaiter{get: func(
+		_ context.Context, target timestamp.Timestamp,
+	) (timestamp.Timestamp, error) {
+		require.Equal(t, frontier, target)
+		return target.Next(), nil
+	}}
+
+	got, err := acquireAppliedLogtailReadBarrier(
+		t.Context(), waiter, func(context.Context) (timestamp.Timestamp, error) {
+			return frontier, nil
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, frontier, got)
+}
+
+func TestAcquireAppliedLogtailReadBarrierFailsClosed(t *testing.T) {
+	frontier := timestamp.Timestamp{PhysicalTime: 20}
+	wantErr := moerr.NewInternalErrorNoCtx("barrier failed")
+
+	t.Run("missing waiter", func(t *testing.T) {
+		_, err := acquireAppliedLogtailReadBarrier(
+			t.Context(), nil, func(context.Context) (timestamp.Timestamp, error) {
+				t.Fatal("barrier must not run without an apply waiter")
+				return timestamp.Timestamp{}, nil
+			},
+		)
+		require.ErrorContains(t, err, "waiter is not initialized")
+	})
+
+	t.Run("barrier failure", func(t *testing.T) {
+		waiter := &barrierTimestampWaiter{get: func(
+			context.Context, timestamp.Timestamp,
+		) (timestamp.Timestamp, error) {
+			t.Fatal("apply wait must not run after barrier failure")
+			return timestamp.Timestamp{}, nil
+		}}
+		_, err := acquireAppliedLogtailReadBarrier(
+			t.Context(), waiter, func(context.Context) (timestamp.Timestamp, error) {
+				return timestamp.Timestamp{}, wantErr
+			},
+		)
+		require.ErrorIs(t, err, wantErr)
+	})
+
+	t.Run("apply waiter regresses", func(t *testing.T) {
+		waiter := &barrierTimestampWaiter{get: func(
+			context.Context, timestamp.Timestamp,
+		) (timestamp.Timestamp, error) {
+			return timestamp.Timestamp{PhysicalTime: 19}, nil
+		}}
+		_, err := acquireAppliedLogtailReadBarrier(
+			t.Context(), waiter, func(context.Context) (timestamp.Timestamp, error) {
+				return frontier, nil
+			},
+		)
+		require.ErrorContains(t, err, "before read barrier")
+	})
 }
 
 func TestPushClient_GetState(t *testing.T) {
@@ -697,10 +779,6 @@ func TestPushClient_DoGCPartitionState(t *testing.T) {
 	assert.Equal(t, 3, state.ApproxInMemRows())
 }
 
-func TestLogTailConnect(t *testing.T) {
-	// this case is tested by TestSpeedupAbortAllTxn
-}
-
 func TestPushClient_LoadAndConsumeLatestCkp(t *testing.T) {
 	ctx, cancel := context.WithTimeoutCause(
 		context.Background(),
@@ -1144,6 +1222,7 @@ func TestWaitCanServeTableSnapshotWaitsForPendingUpdate(t *testing.T) {
 	snapshot := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 1}
 	pendingTo := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 0}
 	e.pClient.subscribed.setTablePendingUpdate(10, 42, pendingTo)
+	initial, pending := e.pClient.getSubscribedSnapshotAndPending(ctx, 0, 10, 42)
 
 	go func() {
 		time.Sleep(10 * time.Millisecond)
@@ -1152,13 +1231,358 @@ func TestWaitCanServeTableSnapshotWaitsForPendingUpdate(t *testing.T) {
 		done()
 	}()
 
-	ps, ok, err := e.pClient.waitCanServeTableSnapshot(ctx, 0, 10, 42, part.Snapshot(), snapshot)
+	ps, ok, err := e.pClient.waitCanServeTableSnapshot(
+		ctx, 0, 10, 42, initial, pending, snapshot,
+	)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.NotNil(t, ps)
 	expectedApplied := types.TimestampToTS(snapshot.Prev())
 	applied := ps.GetAppliedTo()
 	assert.True(t, applied.EQ(&expectedApplied))
+}
+
+func TestWaitCanServeTableSnapshotUsesInitialCaptureWithoutRetry(t *testing.T) {
+	ctx := context.Background()
+	e := &Engine{partitions: make(map[[2]uint64]*logtailreplay.Partition)}
+	e.pClient.eng = e
+	e.pClient.subscribed = subscribedTable{
+		eng: e,
+		m: map[uint64]*subEntry{
+			42: {dbID: 10, state: Subscribed},
+		},
+	}
+
+	part := e.GetOrCreateLatestPart(ctx, 0, 10, 42)
+	state, done := part.MutateState()
+	state.UpdateDuration(types.TS{}, types.MaxTs())
+	done()
+	initial := part.Snapshot()
+
+	// A later partition state makes an accidental first-iteration recapture
+	// observable by pointer identity. No pending update means the initial
+	// coupled capture is already sufficient to serve this snapshot.
+	state, done = part.MutateState()
+	state.UpdateAppliedTo(types.BuildTS(200, 0))
+	done()
+	recaptured := part.Snapshot()
+	require.NotSame(t, initial, recaptured)
+
+	ps, ok, err := e.pClient.waitCanServeTableSnapshot(
+		ctx,
+		0,
+		10,
+		42,
+		initial,
+		false,
+		timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 1},
+	)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Same(t, initial, ps)
+}
+
+func TestToSubscribeTableReturnsCoupledPendingSnapshot(t *testing.T) {
+	ctx := context.Background()
+	e := &Engine{partitions: make(map[[2]uint64]*logtailreplay.Partition)}
+	e.pClient.eng = e
+	e.pClient.subscribed = subscribedTable{
+		eng: e,
+		m: map[uint64]*subEntry{
+			42: {dbID: 10, state: Subscribed},
+		},
+	}
+
+	part := e.GetOrCreateLatestPart(ctx, 0, 10, 42)
+	state, done := part.MutateState()
+	state.UpdateDuration(types.TS{}, types.MaxTs())
+	done()
+	e.pClient.subscribed.setTablePendingUpdate(
+		10, 42, timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 0},
+	)
+
+	pending := false
+	ps, err := e.pClient.toSubscribeTable(ctx, 0, 42, "t", 10, "db", &pending)
+	require.NoError(t, err)
+	require.NotNil(t, ps)
+	require.True(t, pending)
+}
+
+func TestToSubscribeTableReturnsInjectedFailure(t *testing.T) {
+	ctx := context.Background()
+	fault.Enable()
+	t.Cleanup(func() { fault.Disable() })
+	rmFault, err := objectio.InjectLogging(
+		objectio.FJ_CNSubscribeTableFail, "db", "t", 0, true,
+	)
+	require.NoError(t, err)
+	t.Cleanup(rmFault)
+
+	_, err = (&PushClient{}).toSubscribeTable(ctx, 0, 42, "t", 10, "db")
+	require.ErrorContains(t, err, "injected subscribe table err")
+}
+
+func TestWaitCanServeTableSnapshotRefreshesAfterPendingApply(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	e := &Engine{partitions: make(map[[2]uint64]*logtailreplay.Partition)}
+	e.pClient.eng = e
+	e.pClient.subscribed = subscribedTable{
+		eng: e,
+		m: map[uint64]*subEntry{
+			42: {dbID: 10, state: Subscribed},
+		},
+	}
+
+	part := e.GetOrCreateLatestPart(ctx, 0, 10, 42)
+	state, done := part.MutateState()
+	state.UpdateDuration(types.TS{}, types.MaxTs())
+	done()
+
+	snapshot := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 1}
+	e.pClient.subscribed.setTablePendingUpdate(10, 42, snapshot.Prev())
+	stale := part.Snapshot()
+
+	state, done = part.MutateState()
+	state.UpdateAppliedTo(types.TimestampToTS(snapshot.Prev()))
+	done()
+	e.pClient.subscribed.clearTablePendingUpdate(10, 42, snapshot.Prev())
+
+	ps, ok, err := e.pClient.waitCanServeTableSnapshot(ctx, 0, 10, 42, stale, true, snapshot)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NotNil(t, ps)
+	expected := types.TimestampToTS(snapshot.Prev())
+	applied := ps.GetAppliedTo()
+	require.True(t, applied.GE(&expected),
+		"the readiness proof must refresh a snapshot captured before pending apply")
+	staleApplied := stale.GetAppliedTo()
+	require.False(t, staleApplied.GE(&expected), "the setup must retain the pre-apply snapshot")
+}
+
+func TestGetSubscribedSnapshotAndPendingRejectsInvalidSubscription(t *testing.T) {
+	ctx := context.Background()
+
+	for _, test := range []struct {
+		name  string
+		entry *subEntry
+	}{
+		{
+			name: "subscription reset",
+		},
+		{
+			name:  "database changed",
+			entry: &subEntry{dbID: 11, state: Subscribed},
+		},
+		{
+			name:  "unsubscribing",
+			entry: &subEntry{dbID: 10, state: Unsubscribing},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			e := &Engine{}
+			e.pClient.eng = e
+			e.pClient.subscribed = subscribedTable{
+				eng: e,
+				m:   map[uint64]*subEntry{},
+			}
+			if test.entry != nil {
+				e.pClient.subscribed.m[42] = test.entry
+			}
+
+			ps, pending := e.pClient.getSubscribedSnapshotAndPending(ctx, 0, 10, 42)
+			require.Nil(t, ps)
+			require.False(t, pending)
+		})
+	}
+}
+
+func TestPKCheckSnapshotRejectsResetSubscriptionGeneration(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	e := &Engine{partitions: make(map[[2]uint64]*logtailreplay.Partition)}
+	e.pClient.eng = e
+	e.pClient.subscribed = subscribedTable{
+		eng: e,
+		m: map[uint64]*subEntry{
+			42: {dbID: 10, state: Subscribed},
+		},
+	}
+	e.pClient.receivedLogTailTime.ready.Store(true)
+
+	part := e.GetOrCreateLatestPart(ctx, 0, 10, 42)
+	state, done := part.MutateState()
+	state.UpdateDuration(types.TS{}, types.MaxTs())
+	done()
+	snapshot := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 1}
+	e.pClient.subscribed.setTablePendingUpdate(10, 42, snapshot.Prev())
+	stale := part.Snapshot()
+
+	// Reconnect resets the subscription generation before replacing partitions.
+	e.pClient.subscribed.rw.Lock()
+	e.pClient.subscribed.m = make(map[uint64]*subEntry)
+	e.pClient.subscribed.rw.Unlock()
+
+	ps, ok, subState, pending := e.pClient.getSubscribedSnapshotForPKCheck(ctx, 0, 10, 42)
+	require.Nil(t, ps)
+	require.False(t, ok, "a snapshot from a reset subscription generation is not ready")
+	require.Equal(t, Unsubscribed, subState)
+	require.False(t, pending)
+
+	// The stale snapshot itself still covers the timestamp. The generation
+	// check above is what prevents the PK path from treating it as current.
+	canServe, _ := canServeTableSnapshotWithPending(stale, snapshot, false)
+	require.True(t, canServe)
+}
+
+func TestPKCheckSnapshotRefreshesAfterPendingApply(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	e := &Engine{partitions: make(map[[2]uint64]*logtailreplay.Partition)}
+	e.pClient.eng = e
+	e.pClient.subscribed = subscribedTable{
+		eng: e,
+		m: map[uint64]*subEntry{
+			42: {dbID: 10, state: Subscribed},
+		},
+	}
+	e.pClient.receivedLogTailTime.ready.Store(true)
+
+	part := e.GetOrCreateLatestPart(ctx, 0, 10, 42)
+	state, done := part.MutateState()
+	state.UpdateDuration(types.TS{}, types.MaxTs())
+	done()
+	snapshot := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 1}
+	e.pClient.subscribed.setTablePendingUpdate(10, 42, snapshot.Prev())
+	stale := part.Snapshot()
+
+	state, done = part.MutateState()
+	state.UpdateAppliedTo(types.TimestampToTS(snapshot.Prev()))
+	done()
+	e.pClient.subscribed.clearTablePendingUpdate(10, 42, snapshot.Prev())
+
+	ps, ok, subState, pending := e.pClient.getSubscribedSnapshotForPKCheck(ctx, 0, 10, 42)
+	require.True(t, ok)
+	require.Equal(t, Subscribed, subState)
+	require.False(t, pending)
+	applied := ps.GetAppliedTo()
+	expected := types.TimestampToTS(snapshot.Prev())
+	require.True(t, applied.GE(&expected),
+		"the readiness proof must return the state that observed the applied update")
+	staleApplied := stale.GetAppliedTo()
+	require.False(t, staleApplied.GE(&expected), "the setup must retain the pre-apply snapshot")
+	require.Positive(t, e.pClient.subscribed.m[42].lastTs.Load(),
+		"PK checks must keep write-only subscriptions active for GC")
+}
+
+func TestPKCheckSnapshotRejectsClosedPushClientAdmission(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	e := &Engine{partitions: make(map[[2]uint64]*logtailreplay.Partition)}
+	e.pClient.eng = e
+	e.pClient.subscribed = subscribedTable{
+		eng: e,
+		m: map[uint64]*subEntry{
+			42: {dbID: 10, state: Subscribed},
+		},
+	}
+	part := e.GetOrCreateLatestPart(ctx, 0, 10, 42)
+	state, done := part.MutateState()
+	state.UpdateDuration(types.TS{}, types.MaxTs())
+	done()
+
+	ps, ok, subState, pending := e.pClient.getSubscribedSnapshotForPKCheck(ctx, 0, 10, 42)
+	require.Nil(t, ps)
+	require.False(t, ok)
+	require.Equal(t, InvalidSubState, subState)
+	require.False(t, pending)
+
+	e.pClient.receivedLogTailTime.ready.Store(true)
+	ps, ok, subState, pending = e.pClient.getSubscribedSnapshotForPKCheck(ctx, 0, 10, 42)
+	require.NotNil(t, ps)
+	require.True(t, ok)
+	require.Equal(t, Subscribed, subState)
+	require.False(t, pending)
+}
+
+type waitReadyObservedContext struct {
+	context.Context
+	checked chan struct{}
+	once    sync.Once
+}
+
+func (c *waitReadyObservedContext) Err() error {
+	err := c.Context.Err()
+	if err == nil {
+		c.once.Do(func() { close(c.checked) })
+	}
+	return err
+}
+
+func TestLogTailSubscriberWaitReadyReturnsOnContextCancel(t *testing.T) {
+	subscriber := newLogTailSubscriber()
+	base, cancel := context.WithCancel(context.Background())
+	ctx := &waitReadyObservedContext{
+		Context: base,
+		checked: make(chan struct{}),
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- subscriber.waitReady(ctx)
+	}()
+
+	select {
+	case <-ctx.checked:
+	case <-time.After(time.Second):
+		t.Fatal("waitReady did not reach its wait loop")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		// Release the waiter so a failed assertion does not leak the goroutine.
+		subscriber.setReady()
+		t.Fatal("waitReady did not observe context cancellation")
+	}
+}
+
+func TestLogTailSubscriberWaitReadyClientDoesNotExposeInitializingClient(t *testing.T) {
+	subscriber := newLogTailSubscriber()
+	subscriber.swapClient(&service.LogtailClient{})
+	base, cancel := context.WithCancel(context.Background())
+	ctx := &waitReadyObservedContext{
+		Context: base,
+		checked: make(chan struct{}),
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := subscriber.waitReadyClient(ctx)
+		done <- err
+	}()
+
+	select {
+	case <-ctx.checked:
+	case <-time.After(time.Second):
+		t.Fatal("waitReadyClient did not reach its wait loop")
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("initializing client escaped before ready: %v", err)
+	default:
+	}
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		subscriber.setReady()
+		t.Fatal("waitReadyClient did not observe context cancellation")
+	}
 }
 
 func newTestRoutineControllers(buffer int) []*routineController {
@@ -2362,6 +2786,154 @@ func TestToSubIfUnsubscribed_Concurrent(t *testing.T) {
 	assert.True(t, exists)
 }
 
+func TestToSubIfUnsubscribedPreservesStateInstalledWhileWaitingReady(t *testing.T) {
+	testCases := []struct {
+		name  string
+		state SubscribeState
+	}{
+		{name: "subscribing", state: Subscribing},
+		{name: "response received", state: SubRspReceived},
+		{name: "subscribed", state: Subscribed},
+		{name: "unsubscribing", state: Unsubscribing},
+		{name: "table not found", state: SubRspTableNotExist},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			const (
+				dbID    = uint64(1000)
+				tableID = uint64(100)
+			)
+
+			var c PushClient
+			c.subscribed.m = make(map[uint64]*subEntry)
+			c.subscriber = newLogTailSubscriber()
+
+			var sendCount atomic.Int32
+			c.subscriber.sendSubscribe = func(context.Context, api.TableID) error {
+				sendCount.Add(1)
+				return nil
+			}
+
+			baseCtx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			ctx := &waitReadyObservedContext{
+				Context: baseCtx,
+				checked: make(chan struct{}),
+			}
+			type result struct {
+				state SubscribeState
+				err   error
+			}
+			done := make(chan result, 1)
+			go func() {
+				state, err := c.toSubIfUnsubscribed(ctx, dbID, tableID)
+				done <- result{state: state, err: err}
+			}()
+
+			select {
+			case <-ctx.checked:
+			case <-time.After(time.Second):
+				c.subscriber.setReady()
+				t.Fatal("subscription did not wait for subscriber readiness")
+			}
+
+			entry := &subEntry{dbID: dbID, state: tc.state}
+			c.subscribed.rw.Lock()
+			c.subscribed.m[tableID] = entry
+			c.subscribed.rw.Unlock()
+			c.subscriber.setReady()
+
+			select {
+			case res := <-done:
+				require.NoError(t, res.err)
+				require.Equal(t, tc.state, res.state)
+			case <-time.After(time.Second):
+				cancel()
+				t.Fatal("subscription did not finish after subscriber became ready")
+			}
+			require.Equal(t, int32(0), sendCount.Load())
+
+			c.subscribed.rw.RLock()
+			got := c.subscribed.m[tableID]
+			c.subscribed.rw.RUnlock()
+			require.Same(t, entry, got)
+		})
+	}
+}
+
+func TestToSubIfUnsubscribedConcurrentWaitReadySingleSend(t *testing.T) {
+	const (
+		dbID       = uint64(1000)
+		tableID    = uint64(100)
+		goroutines = 8
+	)
+
+	var c PushClient
+	c.subscribed.m = make(map[uint64]*subEntry)
+	c.subscriber = newLogTailSubscriber()
+
+	var sendCount atomic.Int32
+	c.subscriber.sendSubscribe = func(context.Context, api.TableID) error {
+		sendCount.Add(1)
+		return nil
+	}
+
+	type result struct {
+		state SubscribeState
+		err   error
+	}
+	results := make(chan result, goroutines)
+	contexts := make([]*waitReadyObservedContext, 0, goroutines)
+	cancels := make([]context.CancelFunc, 0, goroutines)
+	defer func() {
+		for _, cancel := range cancels {
+			cancel()
+		}
+		c.subscriber.setReady()
+	}()
+
+	for range goroutines {
+		baseCtx, cancel := context.WithCancel(context.Background())
+		cancels = append(cancels, cancel)
+		ctx := &waitReadyObservedContext{
+			Context: baseCtx,
+			checked: make(chan struct{}),
+		}
+		contexts = append(contexts, ctx)
+		go func() {
+			state, err := c.toSubIfUnsubscribed(ctx, dbID, tableID)
+			results <- result{state: state, err: err}
+		}()
+	}
+
+	for _, ctx := range contexts {
+		select {
+		case <-ctx.checked:
+		case <-time.After(time.Second):
+			t.Fatal("not all subscriptions reached the readiness wait")
+		}
+	}
+	c.subscriber.setReady()
+
+	for range goroutines {
+		select {
+		case res := <-results:
+			require.NoError(t, res.err)
+			require.Equal(t, Subscribing, res.state)
+		case <-time.After(time.Second):
+			t.Fatal("subscription did not finish after subscriber became ready")
+		}
+	}
+	require.Equal(t, int32(1), sendCount.Load())
+
+	c.subscribed.rw.RLock()
+	entry := c.subscribed.m[tableID]
+	c.subscribed.rw.RUnlock()
+	require.NotNil(t, entry)
+	require.Equal(t, Subscribing, entry.state)
+}
+
 // TestIsNotSubscribing_Concurrent tests concurrent isNotSubscribing calls
 func TestIsNotSubscribing_Concurrent(t *testing.T) {
 	ctx := context.Background()
@@ -3000,4 +3572,17 @@ func TestIsSubscribed_StateChangeAfterCheck(t *testing.T) {
 	// Both should be non-zero in a proper concurrent test (initial read guarantees >=10)
 	assert.True(t, trueCount >= 10, "should have successful reads")
 	assert.True(t, falseCount > 0, "should observe non-subscribed states as well")
+}
+
+func TestWaitCanServeTableSnapshotCancellation(t *testing.T) {
+	ps := logtailreplay.NewPartitionState("test", false, 42, false)
+	ps.UpdateDuration(types.TS{}, types.MaxTs())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var client PushClient
+	state, ready, err := client.waitCanServeTableSnapshot(ctx, 0, 10, 42, ps, true,
+		timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 1})
+	require.ErrorIs(t, err, context.Canceled)
+	require.False(t, ready)
+	require.Nil(t, state, "cancellation cannot admit a stale pre-apply snapshot")
 }

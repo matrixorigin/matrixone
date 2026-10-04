@@ -24,14 +24,17 @@ import (
 	"github.com/stretchr/testify/require"
 
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -44,6 +47,196 @@ import (
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
+
+func TestAutoIncrEpochFenceIsModeIndependent(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	for _, mode := range []txnpb.TxnMode{txnpb.TxnMode_Optimistic, txnpb.TxnMode_Pessimistic} {
+		t.Run(mode.String(), func(t *testing.T) {
+			ctx := context.Background()
+			h := mockTAEHandle(ctx, t, config.WithLongScanAndCKPOpts(nil))
+			defer h.HandleClose(ctx)
+
+			schema := catalog.MockSchemaAll(3, 1)
+			schema.Name = "mode_fence"
+			_, createdRel := testutil.CreateRelation(t, h.db, testutil.DefaultTestDB, schema, true)
+			tableID := createdRel.ID()
+			databaseID := createdRel.GetMeta().(*catalog.TableEntry).GetDB().ID
+
+			alterTxn, alterRel := testutil.GetDefaultRelation(t, h.db, schema.Name)
+			require.NoError(t, alterRel.AlterTable(ctx, api.NewUpdateAutoIncrementReq(0, tableID, 10, 1)))
+			require.NoError(t, alterTxn.Commit(ctx))
+
+			insertBatch := catalog.MockBatch(schema, 1)
+			defer insertBatch.Close()
+			entry, err := makePBEntry(INSERT, databaseID, tableID, testutil.DefaultTestDB,
+				schema.Name, "", containers.ToCNBatch(insertBatch))
+			require.NoError(t, err)
+			entry.AutoIncrEpoch = 0
+			entry.AutoIncrEpochKnown = true
+			payload, err := (&api.PrecommitWriteCmd{EntryList: []*api.Entry{entry}}).MarshalBinary()
+			require.NoError(t, err)
+			commitReq := &txnpb.TxnCommitRequest{Payload: []*txnpb.TxnRequest{{
+				CNRequest: &txnpb.CNOpRequest{OpCode: uint32(api.OpCode_OpPreCommit), Payload: payload},
+			}}}
+			meta := mock1PCTxn(h.db)
+			meta.Mode = mode
+
+			_, err = h.HandleCommit(ctx, meta, nil, commitReq)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
+
+			// Legacy writers are accepted while the table is at epoch zero, but
+			// fail closed after the first allocator reset.
+			entry.AutoIncrEpochKnown = false
+			payload, err = (&api.PrecommitWriteCmd{EntryList: []*api.Entry{entry}}).MarshalBinary()
+			require.NoError(t, err)
+			commitReq.Payload[0].CNRequest.Payload = payload
+			meta = mock1PCTxn(h.db)
+			meta.Mode = mode
+			_, err = h.HandleCommit(ctx, meta, nil, commitReq)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
+		})
+	}
+}
+
+func TestHandleCommitStaleTableGenerationRequestsDefinitionRetry(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+	h := mockTAEHandle(ctx, t, config.WithLongScanAndCKPOpts(nil))
+	defer h.HandleClose(ctx)
+
+	schema := catalog.MockSchemaAll(3, 1)
+	schema.Name = "stale_generation"
+	_, oldRel := testutil.CreateRelation(t, h.db, testutil.DefaultTestDB, schema, true)
+	oldTableID := oldRel.ID()
+	databaseID := oldRel.GetMeta().(*catalog.TableEntry).GetDB().ID
+
+	// Replace the physical table while preserving its logical name, as copy-based
+	// ALTER TABLE does. The write below deliberately represents a plan compiled
+	// against the previous generation.
+	replacementSchema := schema.Clone()
+	replacementSchema.Name = "stale_generation_replacement"
+	replaceTxn, err := h.db.StartTxn(nil)
+	require.NoError(t, err)
+	replaceDB, err := replaceTxn.GetDatabase(testutil.DefaultTestDB)
+	require.NoError(t, err)
+	replacement, err := replaceDB.CreateRelation(replacementSchema)
+	require.NoError(t, err)
+	_, err = replaceDB.DropRelationByID(oldTableID)
+	require.NoError(t, err)
+	require.NoError(t, replacement.AlterTable(ctx,
+		api.NewRenameTableReq(0, 0, replacementSchema.Name, schema.Name)))
+	require.NoError(t, replaceTxn.Commit(ctx))
+	require.NotEqual(t, oldTableID, replacement.ID())
+
+	insertBatch := catalog.MockBatch(schema, 1)
+	defer insertBatch.Close()
+	insertEntry, err := makePBEntry(INSERT, databaseID, oldTableID,
+		testutil.DefaultTestDB, schema.Name, "", containers.ToCNBatch(insertBatch))
+	require.NoError(t, err)
+
+	softDeleteBatch := batch.NewWithSize(1)
+	softDeleteBatch.SetAttributes([]string{"object_id"})
+	softDeleteBatch.Vecs[0] = vector.NewVec(types.T_binary.ToType())
+	objectID := types.NewObjectid()
+	require.NoError(t, vector.AppendBytes(softDeleteBatch.Vecs[0], objectID[:], false, h.m))
+	softDeleteBatch.SetRowCount(1)
+	defer softDeleteBatch.Clean(h.m)
+	softDeleteEntry, err := makePBEntry(DELETE, databaseID, oldTableID,
+		testutil.DefaultTestDB, schema.Name, softDeleteObjectPrefix+"false", softDeleteBatch)
+	require.NoError(t, err)
+
+	for _, entryCase := range []struct {
+		name  string
+		entry *api.Entry
+	}{
+		{name: "insert", entry: insertEntry},
+		{name: "soft-delete-object", entry: softDeleteEntry},
+	} {
+		t.Run(entryCase.name, func(t *testing.T) {
+			payload, err := (&api.PrecommitWriteCmd{EntryList: []*api.Entry{entryCase.entry}}).MarshalBinary()
+			require.NoError(t, err)
+			commitReq := &txnpb.TxnCommitRequest{Payload: []*txnpb.TxnRequest{{
+				CNRequest: &txnpb.CNOpRequest{
+					OpCode:  uint32(api.OpCode_OpPreCommit),
+					Payload: payload,
+				},
+			}}}
+
+			for _, mode := range []txnpb.TxnMode{txnpb.TxnMode_Optimistic, txnpb.TxnMode_Pessimistic} {
+				t.Run(mode.String(), func(t *testing.T) {
+					meta := mock1PCTxn(h.db)
+					meta.Mode = mode
+					_, commitErr := h.HandleCommit(ctx, meta, nil, commitReq)
+					require.True(t,
+						moerr.IsMoErrCode(commitErr, moerr.ErrTxnNeedRetryWithDefChanged),
+						commitErr)
+				})
+			}
+		})
+	}
+}
+
+func TestHandleSoftDeleteObjectMarksCNProvenance(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+	h := mockTAEHandle(ctx, t, config.WithLongScanAndCKPOpts(nil))
+	defer h.HandleClose(ctx)
+
+	schema := catalog.MockSchemaAll(1, 0)
+	schema.Name = "cn_soft_delete"
+	_, createdRel := testutil.CreateRelation(
+		t, h.db, testutil.DefaultTestDB, schema, true,
+	)
+	tableEntry := createdRel.GetMeta().(*catalog.TableEntry)
+	databaseID := tableEntry.GetDB().ID
+	tableID := tableEntry.ID
+
+	sourceID := objectio.NewObjectid()
+	createTxn, err := h.db.StartTxn(nil)
+	require.NoError(t, err)
+	createDB, err := createTxn.GetDatabaseByID(databaseID)
+	require.NoError(t, err)
+	createRel, err := createDB.GetRelationByID(tableID)
+	require.NoError(t, err)
+	obj, err := createRel.CreateNonAppendableObject(true, &objectio.CreateObjOpt{
+		Stats:       objectio.NewObjectStatsWithObjectID(&sourceID, false, true, true),
+		IsTombstone: true,
+	})
+	require.NoError(t, err)
+	require.NoError(t, obj.Close())
+	require.NoError(t, createTxn.Commit(ctx))
+
+	deleteTxn, err := h.db.StartTxn(nil)
+	require.NoError(t, err)
+	require.NoError(t, h.HandleSoftDeleteObject(ctx, deleteTxn, &cmd_util.WriteReq{
+		DatabaseId:   databaseID,
+		TableID:      tableID,
+		DatabaseName: testutil.DefaultTestDB,
+		TableName:    schema.Name,
+		ObjectID:     &sourceID,
+		IsTombstone:  true,
+	}))
+	require.NoError(t, deleteTxn.Commit(ctx))
+
+	readTxn, err := h.db.StartTxn(nil)
+	require.NoError(t, err)
+	readDB, err := readTxn.GetDatabaseByID(databaseID)
+	require.NoError(t, err)
+	readRel, err := readDB.GetRelationByID(tableID)
+	require.NoError(t, err)
+	it := readRel.GetMeta().(*catalog.TableEntry).MakeTombstoneObjectIt()
+	marked := false
+	for ok := it.Last(); ok; ok = it.Prev() {
+		entry := it.Item()
+		if entry.IsDEntry() && *entry.ID() == sourceID {
+			marked = entry.ObjectStats.GetCNDeleted()
+			break
+		}
+	}
+	it.Release()
+	require.True(t, marked)
+	require.NoError(t, readTxn.Commit(ctx))
+}
 
 func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 	defer testutils.AfterTest(t)()
@@ -220,7 +413,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 				EntryList: createDbEntries},
 		},
 	}
-	txnMeta := mock2PCTxn(handle.db)
+	txnMeta := mock1PCTxn(handle.db)
 	err = handle.handleCmds(ctx, txnMeta, txnCmds)
 	assert.Nil(t, err)
 	var dbTestId uint64
@@ -241,7 +434,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	wg.Wait()
 	assert.Equal(t, 1, len(dbNames))
 
-	err = handle.HandlePrepare(ctx, txnMeta)
+	err = nil
 	assert.Nil(t, err)
 	//start reader after preparing success.
 	startTime := time.Now()
@@ -268,7 +461,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	time.Sleep(1 * time.Second)
 	//CommitTS = PreparedTS + 1
 	err = handle.handleCmds(ctx, txnMeta, []txnCommand{
-		{typ: CmdCommitting}, {typ: CmdCommit},
+		{typ: CmdCommit},
 	})
 	assert.Nil(t, err)
 	wg.Wait()
@@ -325,9 +518,9 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 				//RoleId:    ac.roleId,
 				EntryList: createTbEntries},
 		},
-		{typ: CmdPrepare},
+		{typ: CmdCommit},
 	}
-	txnMeta = mock2PCTxn(handle.db)
+	txnMeta = mock1PCTxn(handle.db)
 	ctx = context.TODO()
 	err = handle.handleCmds(ctx, txnMeta, txnCmds)
 	assert.Nil(t, err)
@@ -363,7 +556,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	}()
 	time.Sleep(1 * time.Second)
 	err = handle.handleCmds(ctx, txnMeta, []txnCommand{
-		{typ: CmdCommitting}, {typ: CmdCommit},
+		{typ: CmdCommit},
 	})
 	assert.Nil(t, err)
 	wg.Wait()
@@ -382,9 +575,9 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 				//RoleId:    ac.roleId,
 				EntryList: []*api.Entry{insertEntry}},
 		},
-		{typ: CmdPrepare},
+		{typ: CmdCommit},
 	}
-	insertTxn := mock2PCTxn(handle.db)
+	insertTxn := mock1PCTxn(handle.db)
 	ctx = context.TODO()
 	err = handle.handleCmds(ctx, insertTxn, txnCmds)
 	assert.Nil(t, err)
@@ -419,7 +612,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	time.Sleep(1 * time.Second)
 	//insertTxn 's CommitTS = PreparedTS + 1.
 	err = handle.handleCmds(ctx, insertTxn, []txnCommand{
-		{typ: CmdCommitting}, {typ: CmdCommit},
+		{typ: CmdCommit},
 	})
 	assert.Nil(t, err)
 	wg.Wait()
@@ -451,8 +644,8 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	}
 
 	hideBats := containers.SplitBatch(delBat, 5)
-	//delete 20 rows by 2PC txn
-	deleteTxn := mock2PCTxn(handle.db)
+	// delete 20 rows in a transaction
+	deleteTxn := mock1PCTxn(handle.db)
 	//batch.SetLength(delBat, 20)
 	deleteEntry, err := makePBEntry(
 		DELETE,
@@ -470,7 +663,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 			cmd: api.PrecommitWriteCmd{
 				EntryList: []*api.Entry{deleteEntry}},
 		},
-		{typ: CmdPrepare},
+		{typ: CmdCommit},
 	}
 	ctx = context.TODO()
 	err = handle.handleCmds(ctx, deleteTxn, txnCmds)
@@ -509,7 +702,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	time.Sleep(1 * time.Second)
 	//deleteTxn 's CommitTS = PreparedTS + 1
 	err = handle.handleCmds(ctx, deleteTxn, []txnCommand{
-		{typ: CmdCommitting}, {typ: CmdCommit},
+		{typ: CmdCommit},
 	})
 	assert.Nil(t, err)
 	wg.Wait()

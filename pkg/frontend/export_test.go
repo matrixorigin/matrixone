@@ -17,18 +17,24 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"io"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/parquet-go/parquet-go"
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/stretchr/testify/require"
 )
 
 var colName1, colName2 = "DATABASE()", "VARIABLE_VALUE"
@@ -265,6 +271,46 @@ func Test_exportDataToCSVFile(t *testing.T) {
 		convey.So(exportDataFromResultSetToCSVFile(ep), convey.ShouldBeNil)
 	})
 
+	// Guards the narrow-vector export path: bf16/f16/int8 are emitted as their
+	// distinct slice types and vecuint8 as its display string (see
+	// extractRowFromVector). Before the fix the VARCHAR branch only special-cased
+	// []float32/[]float64 and then did value.([]byte) — a panic for []types.BF16 /
+	// []types.Float16 / []int8 and raw-byte corruption for []uint8.
+	convey.Convey("exportDataFromResultSetToCSVFile narrow vectors", t, func() {
+		ep := &ExportConfig{
+			userConfig: &tree.ExportParam{
+				Lines:    &tree.Lines{TerminatedBy: &tree.Terminated{}},
+				Fields:   &tree.Fields{Terminated: &tree.Terminated{}, EnclosedBy: &tree.EnclosedBy{}, EscapedBy: &tree.EscapedBy{}},
+				Header:   true,
+				FilePath: "test/export_narrow.csv",
+			},
+			mrs: &MysqlResultSet{},
+		}
+		col := make([]MysqlColumn, 4)
+		for i := range col {
+			col[i].SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+			ep.mrs.AddColumn(&col[i])
+		}
+		f32 := []float32{1, 2, 3}
+		data := make([]interface{}, len(col))
+		data[0] = types.Float32ToBF16Slice(f32)                // bf16 slice
+		data[1] = types.Float32ToFloat16Slice(f32)             // f16 slice
+		data[2] = []int8{1, 2, 3}                              // int8 slice
+		data[3] = types.ArrayToString[uint8]([]uint8{1, 2, 3}) // uint8 display string
+		ep.mrs.AddRow(data)
+		ep.Symbol = make([][]byte, len(col))
+		ep.ColumnFlag = make([]bool, len(col))
+
+		stubs := gostub.StubFunc(&Close, nil)
+		defer stubs.Reset()
+		stubs = gostub.StubFunc(&openNewFile, nil)
+		defer stubs.Reset()
+		stubs = gostub.StubFunc(&writeDataToCSVFile, nil)
+		defer stubs.Reset()
+
+		convey.So(exportDataFromResultSetToCSVFile(ep), convey.ShouldBeNil)
+	})
+
 	convey.Convey("exportDataToCSVFile fail", t, func() {
 		ep := &ExportConfig{
 			userConfig: &tree.ExportParam{
@@ -303,6 +349,98 @@ func Test_exportDataToCSVFile(t *testing.T) {
 		defer stubs.Reset()
 		convey.So(exportDataFromResultSetToCSVFile(ep), convey.ShouldBeNil)
 	})
+}
+
+func TestConstructByteFormatsUnscaledFloat64WithFullPrecision(t *testing.T) {
+	convey.Convey("constructByte formats unscaled float64 with full precision", t, func() {
+		mp := mpool.MustNewZero()
+		vec := testutil.NewVector(1, types.T_float64.ToType(), mp, false, []float64{3.14159265358979})
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vec
+		bat.SetRowCount(1)
+
+		ep := &ExportConfig{
+			userConfig: &tree.ExportParam{
+				Fields: &tree.Fields{EnclosedBy: &tree.EnclosedBy{}},
+			},
+			Symbol:     [][]byte{{'\n'}},
+			ColumnFlag: []bool{false},
+		}
+		bytesChan := make(chan *BatchByte, 1)
+		constructByte(context.Background(), &backSession{feSessionImpl: feSessionImpl{pool: mp}}, bat, 0, bytesChan, ep)
+
+		result := <-bytesChan
+		convey.So(result.err, convey.ShouldBeNil)
+		convey.So(string(result.writeByte), convey.ShouldEqual, "3.14159265358979\n")
+	})
+}
+
+func TestExportWorkerBatchEndsStatementAllocationOwnership(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+
+	source := batch.NewWithSchema(
+		true,
+		[]string{"value"},
+		[]types.Type{types.T_int64.ToType()},
+	)
+	require.NoError(t, source.SetAllocationAccount(selection))
+	require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(42), false, mp))
+	source.SetRowCount(1)
+	require.Positive(t, account.Snapshot().Used)
+
+	workerBatch, err := cloneExportWorkerBatch(source, mp)
+	require.NoError(t, err)
+	require.Nil(t, workerBatch.AllocationAccountSelection())
+	require.Nil(t, workerBatch.Vecs[0].AllocationAccountSelection())
+
+	source.Clean(mp)
+	snapshot := account.Seal()
+	require.Zero(t, snapshot.Used)
+	require.Zero(t, registry.LiveAllocationMetadata())
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
+	require.Equal(t, int64(42), vector.GetFixedAtNoTypeCheck[int64](workerBatch.Vecs[0], 0))
+	workerBatch.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestJSONExportCancellationCleansBlockedWorkerBatch(t *testing.T) {
+	mp := mpool.MustNewZero()
+	bat := batch.NewOffHeapWithSize(1)
+	bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(42), false, mp))
+	bat.SetRowCount(1)
+	require.Positive(t, mp.CurrNB())
+
+	mrs := &MysqlResultSet{}
+	column := &MysqlColumn{}
+	column.SetName("value")
+	mrs.AddColumn(column)
+	ep := &ExportConfig{mrs: mrs}
+	bytesChan := make(chan *BatchByte, 1)
+	bytesChan <- &BatchByte{index: 0}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	ses := &backSession{feSessionImpl: feSessionImpl{pool: mp}}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		constructJSONLine(ctx, ses, bat, 1, bytesChan, ep)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("canceled JSON export worker remained blocked on a full channel")
+	}
+	require.Zero(t, mp.CurrNB())
 }
 
 func Test_getExportFormat(t *testing.T) {
@@ -1099,4 +1237,60 @@ func Test_shouldSplitParquetFile(t *testing.T) {
 			convey.So(result, convey.ShouldBeTrue)
 		})
 	})
+}
+
+func TestParquetBlobFamilySchemaAndBytes(t *testing.T) {
+	for _, mysqlType := range []defines.MysqlType{defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_MEDIUM_BLOB, defines.MYSQL_TYPE_LONG_BLOB} {
+		for _, binary := range []bool{false, true} {
+			flag := uint16(0)
+			if binary {
+				flag = uint16(defines.BINARY_FLAG)
+			}
+			node := buildParquetNode(mysqlType, flag)
+			require.Equal(t, parquet.ByteArray, node.Type().Kind())
+			require.True(t, node.Optional())
+			if binary {
+				require.Nil(t, node.Type().LogicalType())
+			} else {
+				require.NotNil(t, node.Type().LogicalType().UTF8)
+			}
+		}
+	}
+	for _, width := range []int32{types.MaxTinyTextLen, types.MaxStringSize, types.MaxMediumTextLen, types.MaxLongTextLen} {
+		mp := mpool.MustNewZero()
+		typ := types.T_blob.ToType()
+		typ.Width = width
+		col := new(MysqlColumn)
+		col.SetName("payload")
+		require.NoError(t, setMysqlColumnTypeInfo(context.Background(), typ, col))
+		mrs := &MysqlResultSet{}
+		mrs.AddColumn(col)
+		writer, err := NewParquetWriter(context.Background(), mrs)
+		require.NoError(t, err)
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewVec(typ)
+		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte{0xff, 0x00}, false, mp))
+		require.NoError(t, vector.AppendBytes(bat.Vecs[0], nil, true, mp))
+		bat.SetRowCount(2)
+		require.NoError(t, writer.WriteBatch(bat, mp, time.UTC))
+		bat.Clean(mp)
+		data, err := writer.Close()
+		require.NoError(t, err)
+		file, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
+		require.NoError(t, err)
+		require.Nil(t, file.Schema().Fields()[0].Type().LogicalType())
+		reader := parquet.NewGenericReader[struct {
+			Payload []byte `parquet:"payload,optional"`
+		}](bytes.NewReader(data))
+		rows := make([]struct {
+			Payload []byte `parquet:"payload,optional"`
+		}, 2)
+		n, err := reader.Read(rows)
+		require.ErrorIs(t, err, io.EOF)
+		require.Equal(t, 2, n)
+		require.Equal(t, []byte{0xff, 0x00}, rows[0].Payload)
+		require.Nil(t, rows[1].Payload)
+		require.NoError(t, reader.Close())
+		require.Zero(t, mp.CurrNB())
+	}
 }

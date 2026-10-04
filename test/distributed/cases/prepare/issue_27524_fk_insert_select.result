@@ -1,0 +1,44 @@
+drop database if exists issue_27524_fk_insert_select;
+create database issue_27524_fk_insert_select;
+use issue_27524_fk_insert_select;
+create table parent(id int primary key);
+create table child(
+id int primary key,
+parent_id int,
+constraint child_parent foreign key(parent_id) references parent(id)
+);
+insert into parent values (1);
+insert into parent select result from generate_series(2, 9999) g;
+insert into child select result, result from generate_series(1, 10000) g;
+internal error: Cannot add or update a child row: a foreign key constraint fails
+select count(*) from child;
+count(*)
+0
+insert into child select result, result from generate_series(1, 10000) g;
+internal error: Cannot add or update a child row: a foreign key constraint fails
+select count(*) from child;
+count(*)
+0
+insert into child select result, result from generate_series(1, 10000) g;
+internal error: Cannot add or update a child row: a foreign key constraint fails
+select count(*) from child;
+count(*)
+0
+insert into child select result, result from generate_series(1, 10000) g;
+internal error: Cannot add or update a child row: a foreign key constraint fails
+select count(*) from child;
+count(*)
+0
+insert into child select result, result from generate_series(1, 10000) g;
+internal error: Cannot add or update a child row: a foreign key constraint fails
+select count(*) from child;
+count(*)
+0
+insert into child values (1, 1);
+select count(*) from child;
+count(*)
+1
+select count(*) from parent;
+count(*)
+9999
+drop database issue_27524_fk_insert_select;

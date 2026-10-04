@@ -15,11 +15,12 @@
 package plan
 
 import (
+	"context"
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -56,6 +57,143 @@ func canDeleteRewriteToTruncate(ctx CompilerContext, dmlCtx *DMLContext) (bool, 
 	return true, nil
 }
 
+// isUnrestrictedDelete reports whether the statement targets every row of one
+// table without evaluating a row-producing or row-filtering clause.  Keep this
+// semantic classification separate from the physical truncate checks: foreign
+// keys, partitions, session settings, and RETURNING can still prevent a
+// truncate implementation for an otherwise unrestricted delete.
+func isUnrestrictedDelete(stmt *tree.Delete, targetCount int) bool {
+	return stmt != nil &&
+		targetCount == 1 &&
+		stmt.Where == nil &&
+		stmt.Limit == nil &&
+		len(stmt.TableRefs) == 0 &&
+		len(stmt.PartitionNames) == 0
+}
+
+// normalizeDeleteOldValueExpr restores the physical value representation used
+// by INSERT before DELETE consumes a scanned old row for index maintenance.
+// Column binding deliberately exposes ENUM/SET columns as display strings, but
+// index keys contain the ENUM ordinal or SET bitmap.  DELETE must therefore
+// remove the display wrapper before applying the same special-type cast that
+// INSERT uses; casting the display text directly loses empty/zero members and
+// can produce a key that cannot match the stored index row.
+func normalizeDeleteOldValueExpr(ctx context.Context, expr *plan.Expr, targetType plan.Type) (*plan.Expr, error) {
+	if !isEnumPlanType(&targetType) && !isSetPlanType(&targetType) {
+		return expr, nil
+	}
+	if expr == nil {
+		return nil, moerr.NewInternalError(ctx, "DELETE old-value projection is nil")
+	}
+	if raw, ok := storedMySQLSpecialTypeExpr(expr); ok {
+		expr = raw
+	}
+	if isEnumPlanType(&targetType) {
+		return funcCastForEnumType(ctx, expr, targetType)
+	}
+	return funcCastForSetType(ctx, expr, targetType)
+}
+
+// normalizeDeleteOldValueProjection makes the scan projection consumed by all
+// DELETE maintenance paths use the declared storage types.  Keeping this as a
+// single boundary is important: regular and serialized indexes, primary-key
+// locking, and the main-table delete must all consume the same old row image.
+func (builder *QueryBuilder) normalizeDeleteOldValueProjection(
+	selectNodeID int32,
+	tableDefs []*plan.TableDef,
+	colName2Idx []map[string]int32,
+) error {
+	if selectNodeID < 0 || int(selectNodeID) >= len(builder.qry.Nodes) || builder.qry.Nodes[selectNodeID] == nil {
+		return moerr.NewInternalError(builder.GetContext(), "DELETE old-value projection is nil")
+	}
+	for tableIdx, tableDef := range tableDefs {
+		if tableDef == nil || tableIdx >= len(colName2Idx) {
+			return moerr.NewInternalError(builder.GetContext(), "DELETE old-value projection has invalid table mapping")
+		}
+		for _, col := range tableDef.Cols {
+			if !isEnumPlanType(&col.Typ) && !isSetPlanType(&col.Typ) {
+				continue
+			}
+			colPos, ok := colName2Idx[tableIdx][col.Name]
+			if !ok || colPos < 0 {
+				return moerr.NewInternalErrorf(
+					builder.GetContext(), "DELETE old-value projection cannot locate column %s", col.Name,
+				)
+			}
+			if err := builder.normalizeDeleteOldValueProjectionAtNode(
+				selectNodeID, colPos, col.Typ, make(map[int32]bool),
+			); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// normalizeDeleteOldValueProjectionAtNode follows the unary projection/order
+// chain emitted by bindSelect until it reaches the node that still owns the
+// original ENUM/SET display wrapper.  DELETE's ORDER BY/LIMIT path adds a
+// result projection above SORT; normalizing only that outer projection would
+// turn a reference to the display value back into text and lose non-injective
+// values such as an empty SET member.
+func (builder *QueryBuilder) normalizeDeleteOldValueProjectionAtNode(
+	nodeID int32,
+	colPos int32,
+	targetType plan.Type,
+	visiting map[int32]bool,
+) error {
+	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) || builder.qry.Nodes[nodeID] == nil {
+		return moerr.NewInternalError(builder.GetContext(), "DELETE old-value projection chain is invalid")
+	}
+	if visiting[nodeID] {
+		return moerr.NewInternalError(builder.GetContext(), "DELETE old-value projection chain is cyclic")
+	}
+	visiting[nodeID] = true
+	defer delete(visiting, nodeID)
+
+	node := builder.qry.Nodes[nodeID]
+	if node.NodeType == plan.Node_PROJECT {
+		if colPos < 0 || int(colPos) >= len(node.ProjectList) {
+			return moerr.NewInternalError(builder.GetContext(), "DELETE old-value projection column is out of range")
+		}
+		expr := node.ProjectList[colPos]
+		if col := expr.GetCol(); col != nil {
+			if len(node.Children) != 1 || col.ColPos < 0 {
+				return moerr.NewInternalError(builder.GetContext(), "DELETE old-value projection reference is invalid")
+			}
+			if err := builder.normalizeDeleteOldValueProjectionAtNode(
+				node.Children[0], col.ColPos, targetType, visiting,
+			); err != nil {
+				return err
+			}
+			// The projection only forwards the physical value from its child. Keep
+			// its type aligned so every downstream DELETE consumer builds the same
+			// key and lock contract.
+			expr.Typ = targetType
+			return nil
+		}
+
+		normalized, err := normalizeDeleteOldValueExpr(builder.GetContext(), expr, targetType)
+		if err != nil {
+			return err
+		}
+		node.ProjectList[colPos] = normalized
+		return nil
+	}
+
+	// SORT, FILTER, LIMIT and similar unary nodes preserve the row projection;
+	// recurse through them without changing the column position. A raw table
+	// scan already exposes the physical stored column, so it is a valid terminal
+	// when no presentation projection was inserted.
+	if node.NodeType == plan.Node_TABLE_SCAN {
+		return nil
+	}
+	if len(node.Children) != 1 {
+		return moerr.NewInternalError(builder.GetContext(), "DELETE old-value projection chain is not unary")
+	}
+	return builder.normalizeDeleteOldValueProjectionAtNode(node.Children[0], colPos, targetType, visiting)
+}
+
 func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, bindCtx *BindContext) (int32, error) {
 	if len(stmt.Tables) != 1 {
 		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "delete from multiple tables")
@@ -71,9 +209,20 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 	if err != nil {
 		return 0, err
 	}
+	if err = validateDeleteTargetSubqueries(builder.compCtx, stmt, dmlCtx.objRefs, dmlCtx.tableDefs); err != nil {
+		return 0, err
+	}
+	if stmt.HasReturning() {
+		if len(dmlCtx.tableDefs) != 1 {
+			return 0, returningNotSupported(builder, "multi-table DELETE")
+		}
+		if err = validateReturningTarget(builder, dmlCtx.tableDefs[0], dmlCtx.objRefs[0]); err != nil {
+			return 0, err
+		}
+	}
 
 	//FIXME: optimize truncate table?
-	if stmt.Where == nil && stmt.Limit == nil && len(stmt.TableRefs) == 0 {
+	if !stmt.HasReturning() && isUnrestrictedDelete(stmt, len(dmlCtx.tableDefs)) {
 		var cantrucate bool
 		cantrucate, err = canDeleteRewriteToTruncate(ctx, dmlCtx)
 		if err != nil {
@@ -82,6 +231,11 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 
 		if cantrucate {
 			return 0, moerr.NewUnsupportedDML(builder.GetContext(), "rewrite to truncate table")
+		}
+	}
+	for _, tableDef := range dmlCtx.tableDefs {
+		if err := validateTableRegularIndexPrefixMetadata(tableDef); err != nil {
+			return 0, err
 		}
 	}
 
@@ -141,6 +295,9 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 
 	selectNode := builder.qry.Nodes[lastNodeID]
 	selectNodeTag := selectNode.BindingTags[0]
+	if err = builder.normalizeDeleteOldValueProjection(lastNodeID, dmlCtx.tableDefs, colName2Idx); err != nil {
+		return 0, err
+	}
 
 	// When DELETE has joins, duplicate target rows may be produced if the
 	// right side has multiple matches. A DISTINCT node above the select
@@ -148,7 +305,43 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 	// including the unique Row_ID, so exact-duplicate rows are guaranteed
 	// to be the same physical row.
 	if len(stmt.TableRefs) > 0 {
-		lastNodeID = builder.appendDistinctNode(selectCtx, lastNodeID)
+		lastNodeID, err = builder.appendDistinctNode(selectCtx, lastNodeID)
+		if err != nil {
+			return 0, err
+		}
+	}
+
+	var returningIrregularIndexes []*plan.IndexDef
+	if stmt.HasReturning() {
+		tableDef := dmlCtx.tableDefs[0]
+		returningIrregularIndexes = getIrregularIndexes(tableDef)
+		alias := dmlCtx.aliases[0]
+		colPos := make(map[string]int32, len(tableDef.Cols))
+		for _, col := range tableDef.Cols {
+			pos, ok := colName2Idx[0][col.Name]
+			if !ok {
+				return 0, moerr.NewInternalErrorf(
+					builder.GetContext(), "DML RETURNING cannot locate old image column %s", col.Name,
+				)
+			}
+			colPos[strings.ToLower(col.Name)] = pos
+		}
+		lastNodeID = builder.materializeReturningSource(
+			bindCtx, lastNodeID, selectNodeTag, tableDef, dmlCtx.objRefs[0], tableDef.Name, alias, colPos,
+		)
+		if len(returningIrregularIndexes) > 0 {
+			pkPos, ok := colPos[strings.ToLower(tableDef.Pkey.PkeyColName)]
+			if !ok {
+				return 0, moerr.NewInternalError(builder.GetContext(), "DML RETURNING cannot locate delete primary key image")
+			}
+			if err = builder.recordReturningIrregularMaintenance(
+				returningIrregularIndexes, tableDef, dmlCtx.objRefs[0], pkPos, true,
+			); err != nil {
+				return 0, err
+			}
+		}
+		selectNode = builder.qry.Nodes[lastNodeID]
+		selectNodeTag = selectNode.BindingTags[0]
 	}
 
 	makeDeleteIndexPartExpr := func(colPos int32, partName string, prefixLengths map[string]int) (*plan.Expr, error) {
@@ -170,7 +363,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 
 	for i, tableDef := range dmlCtx.tableDefs {
 		validIndexes, hasIrregularIndex := getValidIndexes(tableDef)
-		if hasIrregularIndex {
+		if hasIrregularIndex && !stmt.HasReturning() {
 			return 0, moerr.NewUnsupportedDML(builder.GetContext(), "have vector index table")
 		}
 		tableDef.Indexes = validIndexes
@@ -304,7 +497,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 			partitionPos = colName2Idx[i][colName]
 		}
 		updateCtx := &plan.UpdateCtx{
-			TableDef: DeepCopyTableDef(tableDef, true),
+			TableDef: CloneTableDefForPlan(tableDef, true),
 			ObjRef:   DeepCopyObjectRef(dmlCtx.objRefs[i]),
 		}
 
@@ -372,7 +565,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 			}
 
 			dmlNode.UpdateCtxList = append(dmlNode.UpdateCtxList, &plan.UpdateCtx{
-				TableDef: DeepCopyTableDef(idxNode.TableDef, true),
+				TableDef: CloneTableDefForPlan(idxNode.TableDef, true),
 				ObjRef:   DeepCopyObjectRef(idxNode.ObjRef),
 				DeleteCols: []plan.ColRef{
 					{
@@ -397,35 +590,13 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 			LockTargets: lockTargets,
 		}, bindCtx)
 
-		reCheckifNeedLockWholeTable(builder)
+		applyLockTableFallback(builder)
 	}
 
 	dmlNode.Children = append(dmlNode.Children, lastNodeID)
 	lastNodeID = builder.appendNode(dmlNode, bindCtx)
 
 	return lastNodeID, err
-}
-
-func (builder *QueryBuilder) updateLocksOnDemand(nodeID int32) {
-	lockService := builder.compCtx.GetProcess().Base.LockService
-	if lockService == nil {
-		// MockCompilerContext
-		return
-	}
-	lockconfig := lockService.GetConfig()
-
-	node := builder.qry.Nodes[nodeID]
-	if node.NodeType != plan.Node_LOCK_OP {
-		for _, childID := range node.Children {
-			builder.updateLocksOnDemand(childID)
-		}
-	} else if !node.LockTargets[0].LockTable && node.Stats.Outcnt > float64(lockconfig.MaxLockRowCount) {
-		logutil.Infof("Row lock upgraded to table lock for SQL : %s", builder.compCtx.GetRootSql())
-		logutil.Infof("the outcnt stats is %f", node.Stats.Outcnt)
-		for _, target := range node.LockTargets {
-			target.LockTable = true
-		}
-	}
 }
 
 func getPartitionColName(expr *plan.Expr) string {

@@ -71,6 +71,7 @@ type flushTableTailEntry struct {
 	pageIds              []*common.ID
 	transCntBeforeCommit int
 	nextRoundDirties     map[*catalog.ObjectEntry]struct{}
+	transferredDels      transferredDeleteSet
 }
 
 func NewFlushTableTailEntry(
@@ -110,6 +111,7 @@ func NewFlushTableTailEntry(
 		if entry.createdObjHandle != nil {
 			entry.delTbls = make([]*types.Blockid, entry.createdObjHandle.GetMeta().(*catalog.ObjectEntry).GetLatestNode().BlockCnt())
 			entry.nextRoundDirties = make(map[*catalog.ObjectEntry]struct{})
+			entry.transferredDels = make(transferredDeleteSet)
 			// collect deletes phase 1
 			entry.collectTs = rt.Now()
 			if _, _, injected := fault.TriggerFault(objectio.FJ_TransferSlow); injected {
@@ -197,6 +199,7 @@ func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) error {
 func (entry *flushTableTailEntry) collectDelsAndTransfer(
 	ctx context.Context, from, to types.TS,
 ) (transCnt int, err error) {
+	scanStart := from.Next()
 	if len(entry.aobjHandles) == 0 {
 		return
 	}
@@ -205,6 +208,7 @@ func (entry *flushTableTailEntry) collectDelsAndTransfer(
 		return
 	}
 	var rowIDVec, pkVec containers.Vector
+	pendingDels := make(transferredDeleteSet)
 	defer func() {
 		if rowIDVec != nil {
 			rowIDVec.Close()
@@ -226,7 +230,7 @@ func (entry *flushTableTailEntry) collectDelsAndTransfer(
 			ctx,
 			entry.tableEntry,
 			*obj.ID(),
-			from.Next(), // NOTE HERE
+			scanStart, // NOTE HERE
 			to,
 			common.MergeAllocator,
 			entry.rt.VectorPool.Small,
@@ -242,10 +246,13 @@ func (entry *flushTableTailEntry) collectDelsAndTransfer(
 		deletesPK := bat.GetVectorByName(objectio.TombstoneAttr_PK_Attr)
 
 		count := len(rowid)
-		transCnt += count
 		for i := 0; i < count; i++ {
+			if entry.transferredDels.contains(rowid[i]) || pendingDels.contains(rowid[i]) {
+				continue
+			}
 			row := rowid[i].GetRowOffset()
 			if uint32(len(mapping)) <= row || mapping[row].ObjIdx == api.NoTransfer {
+				bat.Close()
 				err = moerr.NewInternalErrorNoCtxf("%s find no transfer mapping for row %d", obj.ID().String(), row)
 				return
 			}
@@ -264,12 +271,17 @@ func (entry *flushTableTailEntry) collectDelsAndTransfer(
 			rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(*entry.createdObjHandle.GetID(), destpos.BlkIdx, destpos.RowIdx)
 			rowIDVec.Append(rowID, false)
 			pkVec.Append(deletesPK.Get(i), false)
+			pendingDels.add(rowid[i])
+			transCnt++
 		}
 		bat.Close()
 		entry.nextRoundDirties[obj] = struct{}{}
 	}
 	if rowIDVec != nil {
 		err = entry.createdObjHandle.GetRelation().DeleteByPhyAddrKeys(rowIDVec, pkVec, handle.DT_MergeCompact)
+		if err == nil {
+			entry.transferredDels.merge(pendingDels)
+		}
 	}
 	return
 }
@@ -285,7 +297,12 @@ func (entry *flushTableTailEntry) PrepareCommit() error {
 		return nil
 	}
 	ctx := context.Background()
-	trans, err := entry.collectDelsAndTransfer(ctx, entry.collectTs, entry.txn.GetPrepareTS().Prev())
+	txnStart := entry.txn.GetStartTS()
+	flushScanStart := txnStart.Next()
+	commitScanStart := entry.collectTs.Next()
+	prepareTS := entry.txn.GetPrepareTS()
+	preparePrev := prepareTS.Prev()
+	trans, err := entry.collectDelsAndTransfer(ctx, entry.collectTs, preparePrev)
 	if err != nil {
 		return err
 	}
@@ -294,7 +311,14 @@ func (entry *flushTableTailEntry) PrepareCommit() error {
 		logutil.Info(
 			"[FLUSH-PREPARE-COMMIT]",
 			zap.String("task", entry.taskName),
-			zap.String("commit-ts", entry.txn.GetPrepareTS().ToString()),
+			zap.String("commit-ts", prepareTS.ToString()),
+			zap.String("transfer-split-ts", entry.collectTs.ToString()),
+			zap.String("flush-range-from", txnStart.ToString()),
+			zap.String("flush-range-scan-start", flushScanStart.ToString()),
+			zap.String("flush-range-to", entry.collectTs.ToString()),
+			zap.String("commit-range-from", entry.collectTs.ToString()),
+			zap.String("commit-range-scan-start", commitScanStart.ToString()),
+			zap.String("commit-range-to", preparePrev.ToString()),
 			zap.Int("ablks", aconflictCnt),
 			zap.Int("transfer-rows", totalTrans),
 			zap.Int("in-queue-transfers", trans),
@@ -305,6 +329,7 @@ func (entry *flushTableTailEntry) PrepareCommit() error {
 
 // PrepareRollback remove transfer page and written files
 func (entry *flushTableTailEntry) PrepareRollback() (err error) {
+	entry.transferredDels = nil
 	logutil.Warn(
 		"[FLUSH-PREPARE-ROLLBACK]",
 		zap.String("task", entry.taskName),

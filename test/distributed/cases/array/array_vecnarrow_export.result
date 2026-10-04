@@ -1,0 +1,30 @@
+drop database if exists nvec_export;
+create database nvec_export;
+use nvec_export;
+create table t(id int primary key, bf vecbf16(3), h vecf16(3), i8 vecint8(3), u8 vecuint8(3));
+insert into t values (1, '[1.5, 2.5, 3.5]', '[0.25, -1.75, 4]', '[1, -2, 3]', '[1, 2, 255]');
+insert into t values (2, '[10, 20, 30]', '[0.5, 0.5, 0.5]', '[-128, 0, 127]', '[0, 128, 254]');
+select * from t order by id;
+➤ id[4,32,0]  ¦  bf[12,3,0]  ¦  h[12,3,0]  ¦  i8[12,3,0]  ¦  u8[12,3,0]  𝄀
+1  ¦  [1.5, 2.5, 3.5]  ¦  [0.25, -1.75, 4]  ¦  [1, -2, 3]  ¦  [1, 2, 255]  𝄀
+2  ¦  [10, 20, 30]  ¦  [0.5, 0.5, 0.5]  ¦  [-128, 0, 127]  ¦  [0, 128, 254]
+select * from t order by id into outfile '$resources/into_outfile/narrow_vec.csv';
+select load_file(cast('file://$resources/into_outfile/narrow_vec.csv' as datalink)) as csv_content;
+➤ csv_content[12,0,0]  𝄀
+id,bf,h,i8,u8
+1,"[1.5, 2.5, 3.5]","[0.25, -1.75, 4]","[1, -2, 3]","[1, 2, 255]"
+2,"[10, 20, 30]","[0.5, 0.5, 0.5]","[-128, 0, 127]","[0, 128, 254]"
+
+create table t_csv(id int primary key, bf vecbf16(3), h vecf16(3), i8 vecint8(3), u8 vecuint8(3));
+load data infile '$resources/into_outfile/narrow_vec.csv' into table t_csv fields terminated by ',' enclosed by '"' ignore 1 lines;
+select * from t_csv order by id;
+➤ id[4,32,0]  ¦  bf[12,3,0]  ¦  h[12,3,0]  ¦  i8[12,3,0]  ¦  u8[12,3,0]  𝄀
+1  ¦  [1.5, 2.5, 3.5]  ¦  [0.25, -1.75, 4]  ¦  [1, -2, 3]  ¦  [1, 2, 255]  𝄀
+2  ¦  [10, 20, 30]  ¦  [0.5, 0.5, 0.5]  ¦  [-128, 0, 127]  ¦  [0, 128, 254]
+select * from t order by id into outfile '$resources/into_outfile/narrow_vec.jsonl';
+select load_file(cast('file://$resources/into_outfile/narrow_vec.jsonl' as datalink)) as jsonl_content;
+➤ jsonl_content[12,0,0]  𝄀
+{"bf":[1.5,2.5,3.5],"h":[0.25,-1.75,4],"i8":[1,-2,3],"id":1,"u8":[1,2,255]}
+{"bf":[10,20,30],"h":[0.5,0.5,0.5],"i8":[-128,0,127],"id":2,"u8":[0,128,254]}
+
+drop database nvec_export;

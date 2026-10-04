@@ -254,6 +254,36 @@ func TestIvfpqValidateReindexParams_Unsupported(t *testing.T) {
 	require.Contains(t, err.Error(), catalog.HnswEfConstruction)
 }
 
+// TestIvfpqValidateReindexParams_Quantization: IVF-PQ (cuvs) accepts the
+// cuvs-supported quantization names and rejects others (e.g. bf16).
+func TestIvfpqValidateReindexParams_Quantization(t *testing.T) {
+	got, err := Hooks{}.ValidateReindexParams(nil, compileplugin.ReindexParamUpdate{
+		Params: map[string]string{catalog.Quantization: "int8"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "int8", got[catalog.Quantization])
+
+	_, err = Hooks{}.ValidateReindexParams(nil, compileplugin.ReindexParamUpdate{
+		Params: map[string]string{catalog.Quantization: "bf16"},
+	})
+	require.Error(t, err)
+
+	// int8/uint8 on a non-L2 (inner-product) index IS rejected at REINDEX via the
+	// ValidQuantization hook: the merged op_type is inner-product and the
+	// int8/uint8 affine quantizer only preserves L2 geometry.
+	_, err = Hooks{}.ValidateReindexParams(
+		map[string]string{catalog.IndexAlgoParamOpType: "vector_ip_ops"},
+		compileplugin.ReindexParamUpdate{Params: map[string]string{catalog.Quantization: "uint8"}})
+	require.Error(t, err)
+
+	// ...but uint8 with L2 (the merged op_type) is accepted.
+	got, err = Hooks{}.ValidateReindexParams(
+		map[string]string{catalog.IndexAlgoParamOpType: "vector_l2_ops"},
+		compileplugin.ReindexParamUpdate{Params: map[string]string{catalog.Quantization: "uint8"}})
+	require.NoError(t, err)
+	require.Equal(t, "uint8", got[catalog.Quantization])
+}
+
 func TestIvfpqHandleDropIndex(t *testing.T) {
 	require.NoError(t, Hooks{}.HandleDropIndex(nil, nil))
 }
@@ -390,7 +420,7 @@ func TestIvfpqHandleCreateIndex_AsyncFalseExplicit(t *testing.T) {
 func TestIvfpqHandleCreateIndex_BackgroundReentry(t *testing.T) {
 	ctx := newHandleCtx(true)
 	ctx.stubCompileContext.isFrontend = false
-	err := Hooks{}.HandleReindex(ctx, ivfpqIndexDefs(), true)
+	err := Hooks{}.HandleReindex(ctx, ivfpqIndexDefs(), true, false)
 	require.NoError(t, err)
 	require.True(t, ctx.stubCompileContext.lastCdcTask.called, "background re-entry still drives the CDC task")
 	require.False(t, ctx.stubCompileContext.lastIdxcronUpdate.called, "background re-entry must NOT rewrite mo_index_update")
@@ -399,7 +429,7 @@ func TestIvfpqHandleCreateIndex_BackgroundReentry(t *testing.T) {
 func TestIvfpqHandleReindex_DelegatesToCreate(t *testing.T) {
 	// HandleReindex is a thin pass-through to handleCreate; honors
 	// the forceSync arg directly (unlike HandleCreateIndex, which
-	// now reads catalog.IsIndexAsync).
-	err := Hooks{}.HandleReindex(newHandleCtx(true), ivfpqIndexDefs(), false)
+	// now reads catalog.IndexParamAsync).
+	err := Hooks{}.HandleReindex(newHandleCtx(true), ivfpqIndexDefs(), false, false)
 	require.NoError(t, err)
 }

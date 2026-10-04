@@ -16,25 +16,26 @@ package cnservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/proxy"
 	"github.com/matrixorigin/matrixone/pkg/publication"
-	moconnector "github.com/matrixorigin/matrixone/pkg/stream/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
@@ -68,6 +69,9 @@ func (s *service) initTaskServiceHolder() {
 	}
 	s.task.Lock()
 	defer s.task.Unlock()
+	if s.task.holder != nil {
+		return
+	}
 	if s.task.storageFactory == nil {
 		s.task.holder = taskservice.NewTaskServiceHolder(
 			runtime.ServiceRuntime(s.cfg.UUID),
@@ -191,7 +195,44 @@ func (s *service) createProxyUser(command *logservicepb.CreateTaskService) {
 func (s *service) startTaskRunner() {
 	s.task.Lock()
 	defer s.task.Unlock()
+	s.startTaskRunnerLocked()
+}
 
+func (s *service) publishTaskRunner() error {
+	s.task.Lock()
+	defer s.task.Unlock()
+	if s.task.generationRevoked || s.viewMetadataGenerationRevoked.Load() {
+		s.task.runnerReady.Store(false)
+		return moerr.NewInvalidStateNoCtx("CN view metadata admission generation revoked")
+	}
+	s.task.runnerReady.Store(true)
+	s.startTaskRunnerLocked()
+	return nil
+}
+
+func (s *service) detachRevokedTaskRunner() taskservice.TaskRunner {
+	s.task.Lock()
+	defer s.task.Unlock()
+	s.task.generationRevoked = true
+	s.task.runnerReady.Store(false)
+	runner := s.task.runner
+	s.task.runner = nil
+	return runner
+}
+
+func (s *service) stopRevokedTaskRunner(runner taskservice.TaskRunner) {
+	if runner != nil {
+		if err := runner.Stop(); err != nil {
+			s.logger.Error("stop revoked generation task runner failed", zap.Error(err))
+		}
+	}
+}
+
+func (s *service) startTaskRunnerLocked() {
+	if s.task.generationRevoked || s.viewMetadataGenerationRevoked.Load() {
+		s.task.runnerReady.Store(false)
+		return
+	}
 	if !s.task.runnerReady.Load() {
 		return
 	}
@@ -266,13 +307,11 @@ func (s *service) stopTask() error {
 		return nil
 	}
 
-	if err := s.task.holder.Close(); err != nil {
-		return err
-	}
+	err := s.task.holder.Close()
 	if s.task.runner != nil {
-		return s.task.runner.Stop()
+		err = errors.Join(err, s.task.runner.Stop())
 	}
-	return nil
+	return err
 }
 
 func (s *service) registerExecutorsLocked() {
@@ -306,45 +345,19 @@ func (s *service) registerExecutorsLocked() {
 	s.task.runner.RegisterExecutor(
 		task.TaskCode_MetricStorageUsage,
 		mometric.GetMetricStorageUsageExecutor(s.cfg.UUID, ieFactory))
-	// streaming connector task
-	s.task.runner.RegisterExecutor(task.TaskCode_ConnectorKafkaSink,
-		moconnector.KafkaSinkConnectorExecutor(s.logger, ts, ieFactory, s.task.runner.Attach))
-	s.task.runner.RegisterExecutor(task.TaskCode_MergeObject,
-		func(ctx context.Context, task task.Task) error {
-			metadata := task.GetMetadata()
-			var mergeTask api.MergeTaskEntry
-			err := mergeTask.Unmarshal(metadata.Context)
-			if err != nil {
-				return err
-			}
-
-			objs := make([]string, len(mergeTask.ToMergeObjs))
-			for i, b := range mergeTask.ToMergeObjs {
-				stats := objectio.ObjectStats(b)
-				objs[i] = stats.ObjectName().String()
-			}
-			sql := fmt.Sprintf("select mo_ctl('CN', 'MERGEOBJECTS', 'o:%d.%d:%s')",
-				mergeTask.TblId, mergeTask.AccountId, strings.Join(objs, ","))
-			ctx, cancel := context.WithTimeoutCause(ctx, 10*time.Minute, moerr.CauseMergeObject)
-			defer cancel()
-			opts := executor.Options{}.WithWaitCommittedLogApplied()
-			_, err = s.sqlExecutor.Exec(ctx, sql, opts)
-			return moerr.AttachCause(ctx, err)
-		},
+	cdcExecutor := frontend.CDCTaskExecutorFactory(
+		s.logger,
+		ieFactory,
+		s.task.runner.Attach,
+		s.cfg.UUID,
+		ts,
+		s.fileService,
+		s._txnClient,
+		s.storeEngine,
 	)
-
-	s.task.runner.RegisterExecutor(task.TaskCode_InitCdc,
-		frontend.CDCTaskExecutorFactory(
-			s.logger,
-			ieFactory,
-			s.task.runner.Attach,
-			s.cfg.UUID,
-			ts,
-			s.fileService,
-			s._txnClient,
-			s.storeEngine,
-		),
-	)
+	s.task.runner.RegisterExecutor(task.TaskCode_InitCdc, cdcExecutor)
+	s.task.runner.RegisterExecutor(task.TaskCode_InitCdcStableEpoch, cdcExecutor)
+	s.task.runner.RegisterExecutor(task.TaskCode_InitCdcLosslessStart, cdcExecutor)
 
 	s.task.runner.RegisterExecutor(task.TaskCode_ISCPExecutor,
 		iscp.ISCPTaskExecutorFactory(
@@ -353,6 +366,7 @@ func (s *service) registerExecutorsLocked() {
 			s.task.runner.Attach,
 			s.cfg.UUID,
 			common.ISCPAllocator,
+			s.fileService,
 		),
 	)
 
@@ -380,4 +394,40 @@ func (s *service) registerExecutorsLocked() {
 		task.TaskCode_SQLTask,
 		taskservice.NewSQLTaskExecutor(ieFactory, ts, s.cfg.UUID).TaskExecutor(),
 	)
+	s.task.runner.RegisterExecutor(
+		task.TaskCode_DataBranchLineageGC,
+		compile.DataBranchLineageGCExecutor(s.sqlExecutor),
+	)
+	// Register outside task.Lock and the heartbeat/startup command paths. The
+	// stopper owns both retries and cancellation before task storage is closed.
+	if err := s.stopper.RunNamedTask("register lineage GC cron", func(ctx context.Context) {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		s.registerLineageGCCron(ctx, ts, ticker.C)
+	}); err != nil {
+		if !s.viewMetadataGenerationRevoked.Load() {
+			s.logger.Error("failed to start lineage GC cron registration", zap.Error(err))
+		}
+	}
+}
+
+func (s *service) registerLineageGCCron(ctx context.Context, ts taskservice.TaskService, retry <-chan time.Time) {
+	for {
+		if ctx.Err() != nil || !s.task.runnerReady.Load() || s.viewMetadataGenerationRevoked.Load() {
+			return
+		}
+		attempt, cancel := context.WithTimeout(ctx, 30*time.Second)
+		attempt = defines.AttachAccount(attempt, catalog.System_Account, catalog.System_User, catalog.System_Role)
+		err := ts.CreateCronTask(attempt, databranchutils.LineageGCTaskMetadata(), databranchutils.LineageGCTaskCronExpr)
+		cancel()
+		if err == nil || ctx.Err() != nil {
+			return
+		}
+		s.logger.Warn("failed to register lineage GC cron; retrying", zap.Error(err))
+		select {
+		case <-ctx.Done():
+			return
+		case <-retry:
+		}
+	}
 }

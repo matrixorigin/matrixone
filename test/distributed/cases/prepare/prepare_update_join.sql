@@ -35,4 +35,27 @@ execute s1 using @delta2, @closed, @code2, @open;
 select tenant, acct_id, status, amount, parent_id from acct order by tenant;
 
 deallocate prepare s1;
+
+-- TIME assignment casts must stay at the write boundary rather than entering the join result mapping
+create table temporal_dst(id int primary key, tm time(6));
+create table temporal_src(k int primary key);
+insert into temporal_dst values(1, '00:00:01');
+insert into temporal_src values(10);
+set @temporal_old_sql_mode=@@session.sql_mode;
+set session sql_mode='STRICT_TRANS_TABLES';
+prepare temporal_update from 'update temporal_dst d join temporal_src s on s.k=? set d.tm=? where d.id=?';
+set @temporal_key=10;
+set @temporal_value='02:03:04.000005';
+set @temporal_id=1;
+execute temporal_update using @temporal_key, @temporal_value, @temporal_id;
+select id, cast(tm as char) as tm from temporal_dst;
+set @temporal_value='838:59:59.000001';
+execute temporal_update using @temporal_key, @temporal_value, @temporal_id;
+select id, cast(tm as char) as tm from temporal_dst;
+set @temporal_value='03:04:05.000006';
+execute temporal_update using @temporal_key, @temporal_value, @temporal_id;
+select id, cast(tm as char) as tm from temporal_dst;
+deallocate prepare temporal_update;
+set session sql_mode=@temporal_old_sql_mode;
+
 drop database prep_update_join;

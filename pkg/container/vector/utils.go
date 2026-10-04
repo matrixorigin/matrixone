@@ -16,6 +16,7 @@ package vector
 
 import (
 	"bytes"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
@@ -221,6 +222,34 @@ func OrderedGetMinAndMax[T types.OrderedT](vec *Vector) (minv, maxv T) {
 	return
 }
 
+// FloatGetMinAndMax computes the comparable floating-point bounds of vec.
+// NaN is not equal to any SQL value, including itself, so it cannot widen a
+// useful min/max summary. Returning ok=false for an all-NULL/all-NaN vector
+// keeps the zonemap uninitialized instead of publishing poisoned NaN bounds.
+func FloatGetMinAndMax[T ~float32 | ~float64](vec *Vector) (
+	minv, maxv T,
+	ok bool,
+) {
+	col := MustFixedColNoTypeCheck[T](vec)
+	nulls := vec.GetNulls()
+	for i, value := range col {
+		if nulls.Contains(uint64(i)) || math.IsNaN(float64(value)) {
+			continue
+		}
+		if !ok {
+			minv, maxv, ok = value, value, true
+			continue
+		}
+		if minv > value {
+			minv = value
+		}
+		if maxv < value {
+			maxv = value
+		}
+	}
+	return
+}
+
 func FixedSizeGetMinMax[T types.OrderedT](
 	vec *Vector, comp func(T, T) int64,
 ) (minv, maxv T) {
@@ -326,6 +355,33 @@ func ArrayGetMinMax[T types.RealNumbers](vec *Vector) (minv, maxv []T) {
 			if types.ArrayCompare[T](maxv, val) < 0 {
 				maxv = val
 			}
+		}
+	}
+	return
+}
+
+// ArrayElementGetMinMax mirrors ArrayGetMinMax for the narrow vector element
+// types (bf16/f16/int8). Ordering goes through the float32 bridge via
+// ArrayElementCompare so that bf16/f16 sign bits don't corrupt the comparison.
+// The returned min/max are original stored values (no reconversion).
+func ArrayElementGetMinMax[T types.ArrayElement](vec *Vector) (minv, maxv []T) {
+	col, area := MustVarlenaRawData(vec)
+	first := true
+	for i, j := 0, vec.Length(); i < j; i++ {
+		if vec.HasNull() && vec.IsNull(uint64(i)) {
+			continue
+		}
+		val := types.GetArray[T](&col[i], area)
+		if first {
+			minv, maxv = val, val
+			first = false
+			continue
+		}
+		if types.ArrayElementCompare[T](minv, val) > 0 {
+			minv = val
+		}
+		if types.ArrayElementCompare[T](maxv, val) < 0 {
+			maxv = val
 		}
 	}
 	return

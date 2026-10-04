@@ -55,7 +55,7 @@ func (update *MultiUpdate) delete_table(
 
 		for i := 0; i < rowCount; i++ {
 			if !rowIdNulls.Contains(uint64(i)) {
-				for deleteIdx, inputIdx := range updateCtx.DeleteCols {
+				for deleteIdx, inputIdx := range updateCtx.DeleteCols[:2] {
 					err = deleteBatch.Vecs[deleteIdx].UnionOne(inputBatch.Vecs[inputIdx], int64(i), proc.Mp())
 					if err != nil {
 						return err
@@ -65,7 +65,7 @@ func (update *MultiUpdate) delete_table(
 		}
 
 	} else {
-		for deleteIdx, inputIdx := range updateCtx.DeleteCols {
+		for deleteIdx, inputIdx := range updateCtx.DeleteCols[:2] {
 			err = deleteBatch.Vecs[deleteIdx].UnionBatch(inputBatch.Vecs[inputIdx], 0, inputBatch.Vecs[inputIdx].Length(), nil, proc.GetMPool())
 			if err != nil {
 				return err
@@ -76,20 +76,20 @@ func (update *MultiUpdate) delete_table(
 	if rowCount > 0 {
 		deleteBatch.SetRowCount(rowCount)
 
-		tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
+		tableType := lookupUpdateCtxInfo(update.ctr.updateCtxInfos, updateCtx).tableType
 		update.addDeleteAffectRows(tableType, uint64(rowCount))
-		source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Source
+		source := lookupUpdateCtxInfo(update.ctr.updateCtxInfos, updateCtx).Source
 
 		crs := analyzer.GetOpCounterSet()
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-		err = source.Delete(newCtx, deleteBatch, catalog.Row_ID)
+		newCtx = update.writeContext(newCtx, targetTableID(updateCtx))
+		err = process.MeasureFilesystemWaitErr(analyzer, func() error {
+			return source.Delete(newCtx, deleteBatch, catalog.Row_ID)
+		})
 		if err != nil {
 			return err
 		}
 		analyzer.AddDeletedRows(int64(deleteBatch.RowCount()))
-		analyzer.AddS3RequestCount(crs)
-		analyzer.AddFileServiceCacheInfo(crs)
-		analyzer.AddDiskIO(crs)
 	}
 	return
 }

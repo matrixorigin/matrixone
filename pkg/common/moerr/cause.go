@@ -51,7 +51,6 @@ var (
 	CauseSaveProfile        = NewInternalError(context.Background(), "save profile")
 	CauseHeartbeat          = NewInternalError(context.Background(), "cn service heartbeat")
 	CauseCanClaimDaemonTask = NewInternalError(context.Background(), "canClaimDaemonTask")
-	CauseMergeObject        = NewInternalError(context.Background(), "merge object")
 	CauseRSSCacheEvict      = NewInternalError(context.Background(), "rss cache evict")
 	//pkg/common/morpc
 	CauseDeadlineContextCodec = NewInternalError(context.Background(), "morpc deadlineContextCodec")
@@ -76,6 +75,20 @@ var (
 	CauseNewAwsSDKv2     = NewInternalError(context.Background(), "fileservice newAwsSDKv2")
 	CauseReadCache       = NewInternalError(context.Background(), "fileservice read cache")
 	CauseRemoteCacheRead = NewInternalError(context.Background(), "fileservice remote cache read")
+	//pkg/iceberg
+	CauseIcebergConfig     = NewInternalError(context.Background(), "iceberg config")
+	CauseIcebergCatalog    = NewInternalError(context.Background(), "iceberg catalog")
+	CauseIcebergMetadata   = NewInternalError(context.Background(), "iceberg metadata")
+	CauseIcebergPlanning   = NewInternalError(context.Background(), "iceberg planning")
+	CauseIcebergCredential = NewInternalError(context.Background(), "iceberg credential")
+	CauseIcebergResidency  = NewInternalError(context.Background(), "iceberg residency")
+	CauseIcebergInternal   = NewInternalError(context.Background(), "iceberg internal")
+	//pkg/iscp
+	CauseISCPIterationTimeout                  = NewInternalError(context.Background(), "iscp iteration timeout")
+	CauseISCPFlushJobStatusTimeout             = NewInternalError(context.Background(), "iscp flush job status timeout")
+	CauseISCPFlushPermanentErrorMessageTimeout = NewInternalError(context.Background(), "iscp flush permanent error message timeout")
+	CauseISCPTransactionFinishTimeout          = NewInternalError(context.Background(), "iscp transaction finish timeout")
+	CauseISCPGetTaskRunnerTimeout              = NewInternalError(context.Background(), "iscp get task runner timeout")
 	//pkg/vm/engine/disttae
 	CauseWorkspaceRSSCacheEvict = NewInternalError(context.Background(), "workspace rss cache evict")
 	//pkg/frontend
@@ -96,10 +109,11 @@ var (
 	CauseAllocateTasks = NewInternalError(context.Background(), "allocateTask")
 	CauseTruncateTasks = NewInternalError(context.Background(), "truncateTasks")
 	//pkg/incrservice
-	CauseDoAllocate    = NewInternalError(context.Background(), "doAllocate")
-	CauseDoUpdate      = NewInternalError(context.Background(), "doUpdate")
-	CauseDestroyTables = NewInternalError(context.Background(), "destroyTables")
-	CauseAllocate      = NewInternalError(context.Background(), "allocate")
+	CauseDoAllocate       = NewInternalError(context.Background(), "doAllocate")
+	CauseDoUpdate         = NewInternalError(context.Background(), "doUpdate")
+	CauseDoForceSetOffset = NewInternalError(context.Background(), "doForceSetOffset")
+	CauseDestroyTables    = NewInternalError(context.Background(), "destroyTables")
+	CauseAllocate         = NewInternalError(context.Background(), "allocate")
 	//pkg/lockservice
 	CauseCleanCommitState          = NewInternalError(context.Background(), "cleanCommitState")
 	CauseValidateService           = NewInternalError(context.Background(), "validateService")
@@ -157,6 +171,9 @@ var (
 	CauseBuildInsertIndexMetaBatch2 = NewInternalError(context.Background(), "buildInsertIndexMetaBatch 2")
 	//pkg/sql/colexec/dispatch
 	CauseWaitRemoteRegsReady = NewInternalError(context.Background(), "waitRemoteRegsReady")
+	//pkg/sql/mongodb
+	CauseMongoDBClientCleanup    = NewInternalError(context.Background(), "mongodb client cleanup")
+	CauseMongoDBClientRetirement = NewInternalError(context.Background(), "mongodb client retirement")
 	//pkg/sql/compile
 	CauseIsAvailable              = NewInternalError(context.Background(), "isAvailable")
 	CauseNewMessageSenderOnClient = NewInternalError(context.Background(), "newMessageSenderOnClient")
@@ -178,8 +195,6 @@ var (
 	CauseTransferTaskToCN               = NewInternalError(context.Background(), "transferTaskToCN")
 	CauseTransferRequest2OtherCNs       = NewInternalError(context.Background(), "transferRequest2OtherCNs")
 	CauseDoUnsubscribeTable             = NewInternalError(context.Background(), "doUnsubscribeTable")
-	//pkg/stream/connector
-	CauseKafkaSinkConnectorExecutor = NewInternalError(context.Background(), "kafkaSinkConnectorExecutor")
 	//pkg/taskservice
 	CauseResumeTaskHandle  = NewInternalError(context.Background(), "resume task handle")
 	CauseRestartTaskHandle = NewInternalError(context.Background(), "restart task handle")
@@ -216,21 +231,6 @@ var (
 	//pkg/txn/storage/mem
 	CauseSaveLog           = NewInternalError(context.Background(), "saveLog")
 	CauseNewCatalogHandler = NewInternalError(context.Background(), "NewCatalogHandler")
-	//pkg/txn/trace
-	CauseWatch                   = NewInternalError(context.Background(), "txn trace Watch")
-	CauseUpdateState             = NewInternalError(context.Background(), "txn trace UpdateState")
-	CauseAddTableFilter          = NewInternalError(context.Background(), "txn trace AddTableFilter")
-	CauseClearTableFilters       = NewInternalError(context.Background(), "txn trace ClearTableFilters")
-	CauseRefreshTableFilters     = NewInternalError(context.Background(), "txn trace RefreshTableFilters")
-	CauseWriteToMO               = NewInternalError(context.Background(), "txn trace WriteToMO")
-	CauseWriteToS3               = NewInternalError(context.Background(), "txn trace WriteToS3")
-	CauseAddStatementFilter      = NewInternalError(context.Background(), "AddStatementFilter")
-	CauseClearStatementFilters   = NewInternalError(context.Background(), "ClearStatementFilters")
-	CauseRefreshStatementFilters = NewInternalError(context.Background(), "RefreshStatementFilters")
-	CauseAddTxnFilter            = NewInternalError(context.Background(), "AddTxnFilter")
-	CauseClearTxnFilters         = NewInternalError(context.Background(), "ClearTxnFilters")
-	CauseRefreshTxnFilters       = NewInternalError(context.Background(), "RefreshTxnFilters")
-	CauseDoAddTxnError           = NewInternalError(context.Background(), "DoAddTxnError")
 	//pkg/util
 	CauseAddressFunc = NewInternalError(context.Background(), "AddressFunc")
 	//pkg/util/export/etl/db
@@ -252,14 +252,11 @@ var (
 	CauseShardingLocalReader           = NewInternalError(context.Background(), "ShardingLocalReader Close")
 	CauseHakeeperIDGeneratorNew        = NewInternalError(context.Background(), "HakeeperIDGenerator New")
 	CauseHakeeperIDGeneratorNewIDByKey = NewInternalError(context.Background(), "HakeeperIDGenerator NewIDByKey")
-	//pkg/vm/engine/memoryengine
-	CauseDoTxnRequest = NewInternalError(context.Background(), "DoTxnRequest")
 	//pkg/vm/engine/tae/common
 	CauseRetryWithIntervalAndTimeout = NewInternalError(context.Background(), "RetryWithIntervalAndTimeout")
 	//pkg/vm/engine/tae/db/merge
 	CauseCleanUpUselessFiles = NewInternalError(context.Background(), "CleanUpUselessFiles")
 	CauseOnObject            = NewInternalError(context.Background(), "OnObject")
-	CauseCreateCNMerge       = NewInternalError(context.Background(), "CreateCNMergeTask")
 	//pkg/vm/engine/tae/logstore/driver/logservicedriver
 	CauseDriverAppender1        = NewInternalError(context.Background(), "DriverAppender append 1")
 	CauseDriverAppender2        = NewInternalError(context.Background(), "DriverAppender append 2")

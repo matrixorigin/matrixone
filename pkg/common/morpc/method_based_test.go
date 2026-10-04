@@ -17,6 +17,7 @@ package morpc
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"testing"
 	"time"
@@ -28,6 +29,97 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type testMethodBasedClientSession struct {
+	write func(context.Context, Message) error
+}
+
+func (s *testMethodBasedClientSession) Close() error {
+	return nil
+}
+
+func (s *testMethodBasedClientSession) SessionCtx() context.Context {
+	return context.Background()
+}
+
+func (s *testMethodBasedClientSession) Write(ctx context.Context, message Message) error {
+	return s.write(ctx, message)
+}
+
+func (s *testMethodBasedClientSession) AsyncWrite(Message) error {
+	panic("not implemented")
+}
+
+func (s *testMethodBasedClientSession) CreateCache(context.Context, uint64) (MessageCache, error) {
+	panic("not implemented")
+}
+func (s *testMethodBasedClientSession) CreateCacheWithCancel(context.Context, uint64, context.CancelFunc) (MessageCache, error) {
+	return nil, nil
+}
+
+func (s *testMethodBasedClientSession) DeleteCache(uint64) {
+	panic("not implemented")
+}
+
+func (s *testMethodBasedClientSession) GetCache(uint64) (MessageCache, error) {
+	panic("not implemented")
+}
+
+func (s *testMethodBasedClientSession) RemoteAddress() string {
+	return ""
+}
+
+func TestMethodBasedServerCancelsRejectedRequest(t *testing.T) {
+	writeErr := io.ErrClosedPipe
+	for _, tc := range []struct {
+		name     string
+		writeErr error
+	}{
+		{name: "write succeeds"},
+		{name: "write fails", writeErr: writeErr},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pool := NewMessagePool(
+				func() *testMethodBasedMessage { return &testMethodBasedMessage{} },
+				func() *testMethodBasedMessage { return &testMethodBasedMessage{} },
+			)
+			s := &methodBasedServer[*testMethodBasedMessage, *testMethodBasedMessage]{
+				logger:   getLogger(""),
+				pool:     pool,
+				handlers: make(map[uint32]handleFuncCtx[*testMethodBasedMessage, *testMethodBasedMessage]),
+			}
+
+			cancelCalls := 0
+			writeCalls := 0
+			cs := &testMethodBasedClientSession{
+				write: func(_ context.Context, message Message) error {
+					writeCalls++
+					require.Zero(t, cancelCalls)
+					require.True(t, moerr.IsMoErrCode(
+						message.(*testMethodBasedMessage).UnwrapError(),
+						moerr.ErrNotSupported,
+					))
+					return tc.writeErr
+				},
+			}
+			request := RPCMessage{
+				Message: &testMethodBasedMessage{method: 100},
+				Cancel: func() {
+					cancelCalls++
+				},
+			}
+
+			err := s.onMessage(t.Context(), request, 0, cs)
+			if tc.writeErr == nil {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, tc.writeErr)
+			}
+			require.Equal(t, 1, writeCalls)
+			require.Equal(t, 1, cancelCalls)
+		})
+	}
+}
 
 func TestRPCSend(t *testing.T) {
 	runRPCTests(
@@ -74,6 +166,7 @@ func TestRPCSend(t *testing.T) {
 }
 
 func TestRequestCanBeFilter(t *testing.T) {
+	filtered := make(chan struct{}, 1)
 	runRPCTests(
 		t,
 		func(
@@ -92,16 +185,26 @@ func TestRequestCanBeFilter(t *testing.T) {
 				1,
 				fn,
 				false)
-			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second*10)
 			defer cancel()
 
 			f, err := c.Send(ctx, addr, &testMethodBasedMessage{method: 1})
 			require.NoError(t, err)
 			defer f.Close()
+			select {
+			case <-filtered:
+				cancel()
+			case <-ctx.Done():
+				require.FailNow(t, "request was not filtered", ctx.Err())
+			}
 			_, err = f.Get()
 			require.Error(t, err)
 		},
 		WithHandleMessageFilter[*testMethodBasedMessage, *testMethodBasedMessage](func(tmbm *testMethodBasedMessage) bool {
+			select {
+			case filtered <- struct{}{}:
+			default:
+			}
 			return false
 		}),
 	)

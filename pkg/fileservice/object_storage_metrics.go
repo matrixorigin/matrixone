@@ -57,6 +57,22 @@ func newObjectStorageMetrics(
 
 var _ ObjectStorage = new(objectStorageMetrics)
 var _ ParallelMultipartWriter = new(objectStorageMetrics)
+var _ objectStorageCopier = new(objectStorageMetrics)
+var _ objectStorageIdentityReader = new(objectStorageMetrics)
+
+func (o *objectStorageMetrics) CopyObject(
+	ctx context.Context,
+	src ObjectStorage,
+	srcKey string,
+	dstKey string,
+) (bool, error) {
+	copier, ok := o.upstream.(objectStorageCopier)
+	if !ok {
+		return false, nil
+	}
+	o.numWrite.Inc()
+	return copier.CopyObject(ctx, src, srcKey, dstKey)
+}
 
 func (o *objectStorageMetrics) Delete(ctx context.Context, keys ...string) (err error) {
 	o.numDelete.Inc()
@@ -90,6 +106,39 @@ func (o *objectStorageMetrics) Read(ctx context.Context, key string, min *int64,
 			return r.Close()
 		},
 	}, nil
+}
+
+func (o *objectStorageMetrics) StatObjectIdentity(ctx context.Context, key string) (ObjectIdentity, error) {
+	upstream, ok := o.upstream.(objectStorageIdentityReader)
+	if !ok {
+		return ObjectIdentity{}, moerr.NewNotSupported(ctx, "object storage identity")
+	}
+	o.numStat.Inc()
+	return upstream.StatObjectIdentity(ctx, key)
+}
+
+func (o *objectStorageMetrics) ReadObjectWithIdentity(
+	ctx context.Context,
+	key string,
+	min *int64,
+	max *int64,
+	expected ObjectIdentity,
+) (io.ReadCloser, error) {
+	upstream, ok := o.upstream.(objectStorageIdentityReader)
+	if !ok {
+		return nil, moerr.NewNotSupported(ctx, "conditional object storage read")
+	}
+	o.numRead.Inc()
+	o.numActiveRead.Inc()
+	r, err := upstream.ReadObjectWithIdentity(ctx, key, min, max, expected)
+	if err != nil {
+		o.numActiveRead.Dec()
+		return nil, err
+	}
+	return &readCloser{r: r, closeFunc: func() error {
+		o.numActiveRead.Dec()
+		return r.Close()
+	}}, nil
 }
 
 func (o *objectStorageMetrics) Stat(ctx context.Context, key string) (size int64, err error) {

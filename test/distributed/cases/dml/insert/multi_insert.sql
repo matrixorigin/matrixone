@@ -1,0 +1,234 @@
+-- Multi-table INSERT (Snowflake style): INSERT ALL / INSERT FIRST ... INTO ... SELECT
+drop database if exists multi_insert_db;
+create database multi_insert_db;
+use multi_insert_db;
+
+create table customers (id int primary key, name varchar(50), region varchar(10), score int);
+insert into customers values (1,'alice','EU',10),(2,'bob','US',20),(3,'carol','APAC',30),(4,'dave','EU',40),(5,'erin',NULL,50);
+
+-- targets with different schemas and index shapes
+create table customers_eu (id int primary key, name varchar(50), region varchar(10), unique key uk_name(name), key ik_region(region));
+create table customers_us (id int primary key, name varchar(50), region varchar(10), key ik_region(region));
+create table customers_other (id int primary key, name varchar(50), region varchar(10));
+create table audit_log (seq int auto_increment primary key, cust_id int, note varchar(100) default 'n/a');
+
+-- unconditional INSERT ALL: every row to every target; positional and explicit column lists
+insert all
+  into customers_other
+  into audit_log (cust_id, note) values (id, concat('copied ', name))
+select id, name, region from customers;
+select * from customers_other order by id;
+select * from audit_log order by seq;
+
+-- conditional INSERT ALL with ELSE: a NULL condition never matches, so the NULL region goes to ELSE
+delete from customers_other;
+insert all
+  when region = 'EU' then into customers_eu (id, name, region) values (id, name, region)
+  when region = 'US' then into customers_us (id, name, region) values (id, name, region)
+  else into customers_other (id, name, region) values (id, name, region)
+select id, name, region from customers;
+select 'eu' as t, id, name, region from customers_eu order by id;
+select 'us' as t, id, name, region from customers_us order by id;
+select 'other' as t, id, name, region from customers_other order by id;
+
+-- INSERT ALL: a row matching several WHENs goes to all of them
+delete from customers_eu; delete from customers_us; delete from customers_other;
+insert all
+  when score >= 20 then into customers_us (id, name, region) values (id, name, region)
+  when score >= 40 then into customers_eu (id, name, region) values (id, name, region)
+  else into customers_other (id, name, region) values (id, name, region)
+select id, name, region, score from customers;
+select 'us' as t, id from customers_us order by id;
+select 'eu' as t, id from customers_eu order by id;
+select 'other' as t, id from customers_other order by id;
+
+-- INSERT FIRST: only the first matching WHEN; ELSE for rows matching none
+delete from customers_eu; delete from customers_us; delete from customers_other;
+insert first
+  when score >= 20 then into customers_us (id, name, region) values (id, name, region)
+  when score >= 40 then into customers_eu (id, name, region) values (id, name, region)
+  else into customers_other (id, name, region) values (id, name, region)
+select id, name, region, score from customers;
+select 'us' as t, id from customers_us order by id;
+select 'eu' as t, id from customers_eu order by id;
+select 'other' as t, id from customers_other order by id;
+
+-- several INTO clauses under one WHEN, expressions in VALUES, WITH clause, ORDER BY / LIMIT in source
+delete from customers_eu; delete from customers_us; delete from customers_other; delete from audit_log;
+with src as (select id, name, region, score from customers where region is not null)
+insert first
+  when score < 25 then into customers_us (id, name, region) values (id, upper(name), region)
+                       into audit_log (cust_id, note) values (id, 'small')
+  else into customers_eu (id, name, region) values (id * 100, name, lower(region))
+select id, name, region, score from src order by score desc limit 3;
+select * from customers_us order by id;
+select * from customers_eu order by id;
+select cust_id, note from audit_log order by cust_id;
+
+-- constraints are enforced per target: duplicate primary key
+insert all into customers_other (id, name, region) values (id, name, region) select id, name, region from customers where id = 3;
+insert all into customers_other (id, name, region) values (id, name, region) select id, name, region from customers where id = 3;
+-- duplicate unique key in a target
+delete from customers_eu;
+insert into customers_eu values (100, 'alice', 'EU');
+insert all into customers_eu (id, name, region) values (id, name, region) select id, name, region from customers where id = 1;
+select count(*) from customers_eu;
+-- a failing target rolls back the whole statement
+delete from customers_other;
+insert all
+  into customers_other (id, name, region) values (id, name, region)
+  into customers_eu (id, name, region) values (id, name, region)
+select id, name, region from customers where id in (1, 2);
+select count(*) from customers_other;
+
+-- the same table in several INTO clauses: one write pipeline, so duplicate keys across clauses are rejected
+create table wide (id int primary key, lo int, hi int);
+insert into wide values (1, 10, 100), (2, 20, 200);
+create table narrow (id int primary key, val int, tag varchar(10) default 'none');
+insert all
+  into narrow (id, val, tag) values (id, lo, 'lo')
+  into narrow (id, val) values (id + 1000, hi)
+select id, lo, hi from wide;
+select * from narrow order by id;
+insert all into narrow (id, val) values (id + 5000, lo) into narrow (id, val) values (id + 5000, hi) select id, lo, hi from wide;
+select count(*) from narrow where id > 5000;
+-- FIRST with the same table in both branches routes each row exactly once
+insert first
+  when lo < 15 then into narrow (id, val, tag) values (id + 2000, lo, 'small')
+  else into narrow (id, val, tag) values (id + 2000, hi, 'big')
+select id, lo, hi from wide;
+select * from narrow where id > 2000 order by id;
+-- auto-increment in a merged group: every clause must agree on whether the value
+-- is generated. Classification is on the VALUE, not the column list, because a
+-- listed column holding NULL is still generated -- and in the default sql_mode an
+-- explicit 0 is converted to NULL and generated too, so only a non-zero literal
+-- counts as certainly explicit.
+-- All clauses supply a non-zero literal:
+create table seqs (seq int auto_increment primary key, val int);
+insert all into seqs (seq, val) values (7, lo) into seqs (seq, val) values (8, hi) select id, lo, hi from wide where id = 1;
+select * from seqs order by seq;
+-- A non-literal expression could evaluate to 0, hence be generated: refused.
+create table seqs0 (seq int auto_increment primary key, val int);
+insert all into seqs0 (seq, val) values (id * 100, lo) into seqs0 (seq, val) values (id * 100 + 1, hi) select id, lo, hi from wide;
+select count(*) from seqs0;
+-- A listed column holding NULL is generated, so mixing it with a literal is refused.
+create table seqs5 (seq int auto_increment primary key, val int);
+insert all into seqs5 (seq, val) values (5, lo) into seqs5 (seq, val) values (null, hi) select id, lo, hi from wide;
+select count(*) from seqs5;
+-- Zero in ANY literal form reaches PRE_INSERT as 0 and is generated, so mixing
+-- it with an explicit value is refused too.
+create table seqs7 (seq int auto_increment primary key, val int);
+insert all into seqs7 (seq, val) values (0.0, lo) into seqs7 (seq, val) values (9, hi) select id, lo, hi from wide where id = 1;
+select count(*) from seqs7;
+create table seqs8 (seq int auto_increment primary key, val int);
+insert all into seqs8 (seq, val) values ('0', lo) into seqs8 (seq, val) values (9, hi) select id, lo, hi from wide where id = 1;
+select count(*) from seqs8;
+-- Classification does NOT depend on sql_mode: the guard must not bake a session
+-- bit into the plan, because PRE_INSERT re-reads that bit at EXECUTE time. A
+-- zero is treated as generated in either mode, so this stays refused.
+set sql_mode = 'NO_AUTO_VALUE_ON_ZERO';
+create table seqs6 (seq int auto_increment primary key, val int);
+insert all into seqs6 (seq, val) values (id * 100, lo) into seqs6 (seq, val) values (id * 100 + 1, hi) select id, lo, hi from wide;
+select count(*) from seqs6;
+set sql_mode = default;
+-- A plan prepared under one mode and executed under another must stay refused,
+-- in both directions.
+create table seqs9 (seq int auto_increment primary key, val int);
+set sql_mode = 'NO_AUTO_VALUE_ON_ZERO';
+prepare ps9 from 'insert all into seqs9 (seq, val) values (0, lo) into seqs9 (seq, val) values (1000, hi) select id, lo, hi from wide where id = 1';
+set sql_mode = default;
+execute ps9;
+select count(*) from seqs9;
+deallocate prepare ps9;
+set sql_mode = default;
+prepare ps10 from 'insert all into seqs9 (seq, val) values (0, lo) into seqs9 (seq, val) values (1000, hi) select id, lo, hi from wide where id = 1';
+set sql_mode = 'NO_AUTO_VALUE_ON_ZERO';
+execute ps10;
+select count(*) from seqs9;
+deallocate prepare ps10;
+set sql_mode = default;
+-- No clause sets it, so every row is numbered by the engine:
+create table seqs2 (seq int auto_increment primary key, val int);
+insert all into seqs2 (val) values (lo) into seqs2 (val) values (hi) select id, lo, hi from wide;
+select count(*), count(distinct seq), min(seq) from seqs2;
+-- Mixing the two in one merged group is rejected: the generated values would race
+-- the explicit ones through the shared PRE_INSERT and could collide.
+create table seqs3 (seq int auto_increment primary key, val int);
+insert all into seqs3 (seq, val) values (id * 100, lo) into seqs3 (val) values (hi) select id, lo, hi from wide;
+select count(*) from seqs3;
+-- Distinct tables are unaffected: each has its own write pipeline.
+create table seqs4 (seq int auto_increment primary key, val int);
+insert all into seqs3 (seq, val) values (id * 100, lo) into seqs4 (val) values (hi) select id, lo, hi from wide;
+select (select count(*) from seqs3) as s3, (select count(*) from seqs4) as s4;
+
+-- targets with fulltext and ivfflat indexes get their index maintenance, including for merged clauses
+create table docs (id int primary key, body varchar(200), fulltext (body));
+create table vecs (id int primary key, e vecf32(3));
+create index iv using ivfflat on vecs(e) lists=1 op_type "vector_l2_ops";
+insert all
+  into docs (id, body) values (id, concat('hello ', name))
+  into docs (id, body) values (id + 10, concat('bye ', name))
+  into vecs (id, e) values (id, cast(concat('[', score, ',', score, ',', score, ']') as vecf32(3)))
+select id, name, score from customers where id <= 2;
+select id from docs where match(body) against('bob' in natural language mode) order by id;
+select id from docs where match(body) against('bye' in natural language mode) order by id;
+select id, e from vecs order by id;
+
+-- ================= LAST_INSERT_ID(): defined only when one target generates keys.
+-- Exactly one auto_increment target: reports that target's first generated value.
+-- (a table with no primary key carries a HIDDEN auto_increment fake key, which
+-- must not count as an auto_increment target.)
+create table lid_one (n int auto_increment primary key, v int);
+create table lid_plain (v int);
+insert all into lid_one (v) values (lo) into lid_plain (v) values (hi) select id, lo, hi from wide;
+select last_insert_id() as one_autoincr_target;
+-- Two auto_increment targets with deliberately different counters: ambiguous, so
+-- the statement reports no insert id and LAST_INSERT_ID() keeps its previous
+-- value. Establish a distinctive prior value (51) first, otherwise "unchanged"
+-- and "took the other target's value" are indistinguishable.
+create table lid_mark (n int auto_increment primary key, v int);
+insert into lid_mark (n, v) values (50, 0);
+insert into lid_mark (v) values (1);
+select last_insert_id() as prior_generated;
+create table lid_a (n int auto_increment primary key, v int);
+create table lid_b (n int auto_increment primary key, v int);
+insert into lid_a (n, v) values (100, 0);
+delete from lid_a;
+insert all into lid_a (v) values (lo) into lid_b (v) values (hi) select id, lo, hi from wide;
+select last_insert_id() as a_then_b_unchanged;
+-- reversing the clause order must give the same answer
+insert all into lid_b (v) values (lo) into lid_a (v) values (hi) select id, lo, hi from wide;
+select last_insert_id() as b_then_a_unchanged;
+select (select group_concat(n order by n) from lid_a) as a_ids, (select group_concat(n order by n) from lid_b) as b_ids;
+
+-- explicit transaction
+begin;
+insert all into customers_other (id, name, region) values (id, name, region) into customers_us (id, name, region) values (id, name, region) select id, name, region from customers where id = 5;
+select count(*) from customers_other;
+rollback;
+select count(*) from customers_other;
+
+-- errors
+insert all into customers_other (id, name) values (id) select id, name from customers;
+insert all into customers_other select id, name from customers;
+insert all into customers_other (id, name, region) values (id, name, nosuch) select id, name, region from customers;
+insert all when nosuch > 1 then into customers_other select id, name, region from customers;
+insert all into customers_other (id, name, nosuch) values (id, name, region) select id, name, region from customers;
+insert all into no_such_table select id from customers;
+insert first into customers_other select id, name, region from customers;
+-- foreign keys are not supported
+create table parent (id int primary key);
+create table child (id int primary key, pid int, foreign key (pid) references parent(id));
+insert all into child (id, pid) values (id, id) select id from customers;
+-- external tables are not supported
+create external table ext_t (a int) url s3option{"endpoint"='http://127.0.0.1:9000', "access_key_id"='x', "secret_access_key"='y', "bucket"='b', "filepath"='f.csv'};
+insert all into ext_t (a) values (id) select id from customers;
+
+-- explain shows one sink feeding one write pipeline per target (targets without unique indexes, so no generated index table names appear)
+-- @separator:table
+explain insert all
+  when region = 'US' then into customers_us (id, name, region) values (id, name, region)
+  else into customers_other (id, name, region) values (id, name, region)
+select id, name, region from customers;
+
+drop database multi_insert_db;

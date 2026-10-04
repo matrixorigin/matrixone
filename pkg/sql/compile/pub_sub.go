@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const sysAccountId = 0
@@ -73,18 +74,37 @@ func createSubscription(ctx context.Context, c *Compile, dbName string, subOptio
 		UPDATE mo_catalog.mo_subs
 		SET sub_name='%s', sub_time=now()
 		WHERE pub_account_name = '%s' AND pub_name = '%s' AND sub_account_id = %d
-	`, dbName, subOption.From, subOption.Publication, accountId)
-	return c.runSqlWithAccountIdAndOptions(
+			AND status = %d AND sub_name IS NULL
+	`, dbName, subOption.From, subOption.Publication, accountId, pubsub.SubStatusNormal)
+	updateResult, err := c.runSqlWithResultAndOptions(
 		sql,
 		sysAccountId,
 		executor.StatementOption{}.WithDisableLog(),
 	)
+	if err != nil {
+		return err
+	}
+	defer updateResult.Close()
+	if updateResult.AffectedRows != 1 {
+		return moerr.NewInternalErrorf(ctx, "publication %s is not authorized or no longer exists", subOption.Publication)
+	}
+	return nil
 }
 
 func dropSubscription(ctx context.Context, c *Compile, dbName string) error {
 	accountId, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return err
+	}
+	if viewMetadataRefreshEnabled(c.proc.GetService()) &&
+		(!c.proc.GetSessionInfo().IsRestore || restoreInvalidatesViewMetadata(c.proc.Ctx)) {
+		oldCtx := c.proc.Ctx
+		c.proc.Ctx = process.WithSystemCTELimits(oldCtx)
+		defer func() { c.proc.Ctx = oldCtx }()
+		if err = c.runSqlWithSystemTenant(SubscriptionViewMetadataInvalidationSQL(
+			accountId, dbName, uint64(c.proc.GetTxnOperator().SnapshotTS().PhysicalTime))); err != nil {
+			return err
+		}
 	}
 
 	// update SubStatusNormal records

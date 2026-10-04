@@ -1,0 +1,31 @@
+drop database if exists ivf_quant_boundary;
+create database ivf_quant_boundary;
+use ivf_quant_boundary;
+create table t(id int primary key, vf32 vecf32(1), vf64 vecf64(1));
+insert into t values
+(1, '[0.367]',     '[0.367]'),
+(2, '[0.3670001]', '[0.3670001]'),
+(3, '[0.1]',       '[0.1]'),
+(4, '[0.99]',      '[0.99]'),
+(5, '[0.5]',       '[0.5]');
+select id,
+cast(cast(vf32 as vecf32(1)) * 286.516854 + (-156.651685) as vecint8(1)) as i8_f32,
+cast(cast(vf64 as vecf32(1)) * 286.516854 + (-156.651685) as vecint8(1)) as i8_f64
+from t order by id;
+➤ id[4,32,0]  ¦  i8_f32[12,1,0]  ¦  i8_f64[12,1,0]  𝄀
+1  ¦  [-52]  ¦  [-52]  𝄀
+2  ¦  [-51]  ¦  [-51]  𝄀
+3  ¦  [-128]  ¦  [-128]  𝄀
+4  ¦  [127]  ¦  [127]  𝄀
+5  ¦  [-13]  ¦  [-13]
+select id,
+cast(cast(vf32 as vecf32(1)) * 286.516854 + (-28.6516854) as vecuint8(1)) as u8_f32,
+cast(cast(vf64 as vecf32(1)) * 286.516854 + (-28.6516854) as vecuint8(1)) as u8_f64
+from t order by id;
+➤ id[4,32,0]  ¦  u8_f32[12,1,0]  ¦  u8_f64[12,1,0]  𝄀
+1  ¦  [77]  ¦  [77]  𝄀
+2  ¦  [77]  ¦  [77]  𝄀
+3  ¦  [0]  ¦  [0]  𝄀
+4  ¦  [255]  ¦  [255]  𝄀
+5  ¦  [115]  ¦  [115]
+drop database ivf_quant_boundary;

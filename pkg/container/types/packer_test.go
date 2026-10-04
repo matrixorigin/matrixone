@@ -14,7 +14,10 @@
 
 package types
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestPacker(t *testing.T) {
 	packer := NewPacker()
@@ -41,6 +44,31 @@ func TestClosedPackerIsOK(t *testing.T) {
 	packer.Close()
 }
 
+func TestFixedBufferPackerNeverAllocatesPastCapacity(t *testing.T) {
+	storage := make([]byte, 0, 3)
+	packer := NewPackerWithFixedBuffer(storage)
+	packer.EncodeBool(true)
+	packer.EncodeNull()
+	if err := packer.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(packer.GetBuf()) != 2 {
+		t.Fatalf("encoded length = %d", len(packer.GetBuf()))
+	}
+	packer.EncodeInt64(42)
+	if !errors.Is(packer.Err(), ErrPackerCapacity) {
+		t.Fatalf("overflow error = %v", packer.Err())
+	}
+	if len(packer.GetBuf()) > cap(storage) {
+		t.Fatal("fixed packer exceeded caller-owned storage")
+	}
+	packer.Reset()
+	packer.EncodeBool(true)
+	if err := packer.Err(); err != nil {
+		t.Fatalf("reset fixed packer error = %v", err)
+	}
+}
+
 func BenchmarkPacker(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		packer := NewPacker()
@@ -50,11 +78,29 @@ func BenchmarkPacker(b *testing.B) {
 }
 
 func BenchmarkPackerEncode(b *testing.B) {
-	packer := NewPacker()
-	defer packer.Close()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		packer.EncodeInt64(42)
-		packer.Reset()
+	for _, fixed := range []bool{false, true} {
+		mode := "allocator-backed"
+		if fixed {
+			mode = "fixed-buffer"
+		}
+		b.Run(mode, func(b *testing.B) {
+			var packer *Packer
+			if fixed {
+				packer = NewPackerWithFixedBuffer(make([]byte, 16))
+			} else {
+				packer = NewPacker()
+				defer packer.Close()
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				packer.EncodeInt64(42)
+				packer.Reset()
+			}
+			b.StopTimer()
+			if err := packer.Err(); err != nil {
+				b.Fatal(err)
+			}
+		})
 	}
 }

@@ -95,6 +95,10 @@ func toError(ctx context.Context, resp pb.Response) error {
 	} else if resp.ErrorCode == uint32(moerr.ErrInternal) {
 		// internal error
 		return moerr.NewInternalError(ctx, resp.ErrorMessage)
+	} else if resp.ErrorCode == uint32(moerr.ErrNotSupported) {
+		// Additive RPC methods use this during rolling upgrades. It is a normal
+		// compatibility response, not a protocol-corruption panic.
+		return moerr.NewNotSupported(ctx, resp.ErrorMessage)
 	} else {
 		// will logger.Panicf panic?
 		panic(moerr.NewInternalErrorf(ctx, "unknown error code: %d", resp.ErrorCode))

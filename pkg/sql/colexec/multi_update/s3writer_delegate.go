@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
@@ -39,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	sqlutil "github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -86,8 +88,9 @@ type s3WriterDelegate struct {
 	deleteBatches []*batch.BatchSet
 	segmentMap    map[string]int32
 
-	action   actionType
-	isRemote bool
+	action             actionType
+	isRemote           bool
+	rejectZeroTemporal bool
 
 	updateCtxs     []*MultiUpdateCtx
 	updateCtxInfos map[string]*updateCtxInfo
@@ -111,8 +114,12 @@ type s3WriterDelegate struct {
 	batchSize      uint64
 	flushThreshold uint64
 
-	checkSizeCols []int
-	buf           bytes.Buffer
+	checkSizeCols    []int
+	buf              bytes.Buffer
+	addAffectedRows  func(uint64)
+	takeAffectedRows func() uint64
+	seenTargetRows   map[uint64]*hashmap.StrHashMap
+	admitSeenGrowth  func(int64) error
 
 	memController struct {
 		grantedSize int64
@@ -142,6 +149,11 @@ func newS3Writer(
 		deleteBlockMap:      make([]map[types.Blockid]*deleteBlockData, tableCount),
 		insertFreeLists:     make([]*containers.BatchFreeList, tableCount),
 		isRemote:            update.IsRemote,
+		rejectZeroTemporal:  update.RejectZeroTemporal,
+		addAffectedRows:     update.addAffectedRowsFunc,
+		takeAffectedRows:    update.takeS3AffectedRowsFunc,
+		seenTargetRows:      update.ctr.seenTargetRows,
+		admitSeenGrowth:     update.admitSeenTargetRowsGrowth,
 	}
 	for i := range writer.insertFreeLists {
 		writer.insertFreeLists[i] = containers.NewBatchFreeList(nil, nil, true)
@@ -155,12 +167,7 @@ func newS3Writer(
 
 	faultInjected := false
 
-	mainIdx := 0
-	for i, updateCtx := range update.MultiUpdateCtx {
-		if update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType == UpdateMainTable {
-			mainIdx = i
-		}
-
+	for _, updateCtx := range update.MultiUpdateCtx {
 		if !faultInjected {
 			faultInjected, _ = objectio.LogCNFlushSmallObjsInjected(
 				updateCtx.TableDef.DbName, updateCtx.TableDef.Name,
@@ -177,26 +184,52 @@ func newS3Writer(
 		threshold = colexec.FaultInjectedS3Threshold
 	}
 
-	upCtx := writer.updateCtxs[mainIdx]
-	if len(upCtx.DeleteCols) > 0 && len(upCtx.InsertCols) > 0 {
-		//update
-		writer.action = actionUpdate
-		writer.flushThreshold = threshold
-		writer.checkSizeCols = append(writer.checkSizeCols, upCtx.InsertCols...)
-		writer.checkSizeCols = append(writer.checkSizeCols, upCtx.DeleteCols...)
-	} else if len(upCtx.InsertCols) > 0 {
-		//insert
-		writer.action = actionInsert
-		writer.flushThreshold = threshold
-		writer.checkSizeCols = append(writer.checkSizeCols, upCtx.InsertCols...)
-	} else {
-		//delete
-		writer.action = actionDelete
+	writer.action = s3WriterAction(writer.updateCtxs)
+	if writer.action == actionDelete {
 		writer.flushThreshold = DeleteWriteS3Threshold
-		writer.checkSizeCols = append(writer.checkSizeCols, upCtx.DeleteCols...)
+	} else {
+		writer.flushThreshold = threshold
 	}
+	writer.checkSizeCols = retainedS3InputCols(writer.updateCtxs, writer.action)
 
 	return writer, nil
+}
+
+func (writer *s3WriterDelegate) refreshSelectorState(update *MultiUpdate) {
+	writer.seenTargetRows = update.ctr.seenTargetRows
+	writer.admitSeenGrowth = update.admitSeenTargetRowsGrowth
+	writer.addAffectedRows = update.addAffectedRowsFunc
+	writer.takeAffectedRows = update.takeS3AffectedRowsFunc
+}
+
+func s3WriterAction(updateCtxs []*MultiUpdateCtx) actionType {
+	hasInsert := false
+	hasDelete := false
+	for _, updateCtx := range updateCtxs {
+		hasInsert = hasInsert || len(updateCtx.InsertCols) > 0
+		hasDelete = hasDelete || len(updateCtx.DeleteCols) > 0
+	}
+	if hasInsert && hasDelete {
+		return actionUpdate
+	}
+	if hasInsert {
+		return actionInsert
+	}
+	return actionDelete
+}
+
+func retainedS3InputCols(updateCtxs []*MultiUpdateCtx, action actionType) []int {
+	var cols []int
+	for _, updateCtx := range updateCtxs {
+		if action != actionDelete {
+			cols = append(cols, updateCtx.InsertCols...)
+		}
+		if action != actionInsert && len(updateCtx.DeleteCols) > 0 {
+			deleteColCount := min(2, len(updateCtx.DeleteCols))
+			cols = append(cols, updateCtx.DeleteCols[:deleteColCount]...)
+		}
+	}
+	return cols
 }
 
 // ensureInsertSinkers lazily creates persistent per-table insert sinkers
@@ -219,8 +252,8 @@ func (writer *s3WriterDelegate) ensureInsertSinkers(proc *process.Process) error
 		if v, ok := proc.Ctx.Value(ioutil.PipelineFlushKey).(bool); ok && v {
 			opts = append(opts, ioutil.WithPipelineFlush())
 		}
-		writer.insertSinkers[i] = colexec.NewCNS3DataWriter(
-			proc.Mp(), fs, updateCtx.TableDef, -1, false,
+		writer.insertSinkers[i] = colexec.NewCNS3DataWriterForService(
+			proc.GetService(), proc.Mp(), fs, updateCtx.TableDef, -1, false,
 			opts...)
 	}
 	return nil
@@ -257,6 +290,42 @@ func (writer *s3WriterDelegate) append(
 	}
 
 	mp := proc.Mp()
+	seenSizeBefore := writer.seenTargetRowsSize()
+	targetBatches := make(map[int]*batch.Batch)
+	defer func() {
+		for _, targetBatch := range targetBatches {
+			if targetBatch != inBatch {
+				targetBatch.Clean(mp)
+			}
+		}
+	}()
+	contextBatches := make([]*batch.Batch, len(writer.updateCtxs))
+	for i, updateCtx := range writer.updateCtxs {
+		targetIdx := updateCtx.TargetUpdateCtxIdx
+		if targetIdx < 0 || targetIdx >= len(writer.updateCtxs) {
+			return moerr.NewInternalError(proc.Ctx, "invalid multi-target update context index")
+		}
+		targetBatch, ok := targetBatches[targetIdx]
+		if !ok {
+			var duplicateRows uint64
+			targetBatch, _, duplicateRows, err = filterTargetRows(
+				proc,
+				writer.updateCtxs[targetIdx],
+				inBatch,
+				writer.seenTargetRows[targetTableID(writer.updateCtxs[targetIdx])],
+			)
+			if err != nil {
+				return err
+			}
+			writer.addAffectedRows(duplicateRows)
+			targetBatches[targetIdx] = targetBatch
+		}
+		contextBatches[i] = targetBatch
+	}
+	seenIncrement := writer.seenTargetRowsSize() - seenSizeBefore
+	if err = writer.admitSeenGrowth(seenIncrement); err != nil {
+		return err
+	}
 
 	// Route insert columns directly to per-table sinkers (no clone).
 	// Auto-spill S3 writes during Write use proc.Ctx; perfcounter tracking
@@ -265,10 +334,14 @@ func (writer *s3WriterDelegate) append(
 		if len(updateCtx.InsertCols) == 0 || writer.insertSinkers[i] == nil {
 			continue
 		}
-		insertAttrs := writer.updateCtxInfos[updateCtx.TableDef.Name].insertAttrs
-		projBat := inBatch.SelectColumns(updateCtx.InsertCols, insertAttrs)
+		contextBatch := contextBatches[i]
+		if contextBatch.RowCount() == 0 {
+			continue
+		}
+		insertAttrs := lookupUpdateCtxInfo(writer.updateCtxInfos, updateCtx).insertAttrs
+		projBat := contextBatch.SelectColumns(updateCtx.InsertCols, insertAttrs)
 
-		tableType := writer.updateCtxInfos[updateCtx.TableDef.Name].tableType
+		tableType := lookupUpdateCtxInfo(writer.updateCtxInfos, updateCtx).tableType
 
 		mainTablePkProjectIdx := -1
 		mainTableNullPkFilter := false
@@ -284,7 +357,9 @@ func (writer *s3WriterDelegate) append(
 		if tableType == UpdateMainTable {
 			if mainTableNullPkFilter {
 				var checked *batch.Batch
-				if checked, err = projBat.Clone(mp, false); err != nil {
+				// This validation copy leaves any allocation-accounted join owner;
+				// it is short-lived and never published back into that owner.
+				if checked, err = sqlutil.CopyBatch(projBat, proc); err != nil {
 					return
 				}
 				nulls := checked.Vecs[mainTablePkProjectIdx].GetNulls().GetBitmap().Clone()
@@ -298,12 +373,17 @@ func (writer *s3WriterDelegate) append(
 				for insertIdx, inputIdx := range updateCtx.InsertCols {
 					col := updateCtx.TableDef.Cols[insertIdx]
 					if col.Default != nil && !col.Default.NullAbility && !strings.HasPrefix(col.Name, catalog.PrefixCBColName) {
-						if inBatch.Vecs[inputIdx].HasNull() {
+						if contextBatch.Vecs[inputIdx].HasNull() {
 							return moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", col.Name))
 						}
 					}
 				}
 			}
+		}
+
+		if tableType == UpdateMainTable && updateCtx.ChangedRowsCol != nil &&
+			len(updateCtx.AffectedRowsCols) == 0 && !updateCtx.SuppressPhysicalAffectedRows {
+			writer.addAffectedRows(insertAffectedRows(updateCtx, contextBatch))
 		}
 
 		// Index tables with a sort key need null rows stripped — the sinker
@@ -319,7 +399,9 @@ func (writer *s3WriterDelegate) append(
 			// Clone because SelectColumns shares vectors, and ShrinkByMask
 			// modifies in-place.
 			var filtered *batch.Batch
-			if filtered, err = projBat.Clone(mp, false); err != nil {
+			// The sinker owns the filtered copy independently of the input
+			// pipeline, so cross the allocation ownership boundary explicitly.
+			if filtered, err = sqlutil.CopyBatch(projBat, proc); err != nil {
 				return
 			}
 			nullIdx := writer.sortIndexes[i]
@@ -329,6 +411,12 @@ func (writer *s3WriterDelegate) append(
 			nulls := filtered.Vecs[nullIdx].GetNulls().GetBitmap().Clone()
 			filtered.ShrinkByMask(nulls, true, 0)
 			if filtered.RowCount() > 0 {
+				if tableType == UpdateMainTable {
+					if err = checkZeroTemporalInStrictMode(writer.rejectZeroTemporal, proc, filtered); err != nil {
+						filtered.Clean(mp)
+						return
+					}
+				}
 				err = writer.insertSinkers[i].Write(proc.Ctx, filtered)
 			}
 			filtered.Clean(mp)
@@ -336,6 +424,12 @@ func (writer *s3WriterDelegate) append(
 				return
 			}
 			continue
+		}
+
+		if tableType == UpdateMainTable {
+			if err = checkZeroTemporalInStrictMode(writer.rejectZeroTemporal, proc, projBat); err != nil {
+				return
+			}
 		}
 
 		if err = writer.insertSinkers[i].Write(proc.Ctx, projBat); err != nil {
@@ -348,10 +442,14 @@ func (writer *s3WriterDelegate) append(
 		if len(updateCtx.DeleteCols) == 0 {
 			continue
 		}
+		contextBatch := contextBatches[i]
+		if contextBatch.RowCount() == 0 {
+			continue
+		}
 		if writer.deleteBatches[i] == nil {
 			writer.deleteBatches[i] = batch.NewBatchSet(objectio.BlockMaxRows)
 		}
-		projBat := inBatch.SelectColumns(updateCtx.DeleteCols, DeleteBatchAttrs)
+		projBat := contextBatch.SelectColumns(updateCtx.DeleteCols[:2], DeleteBatchAttrs)
 		if _, err = writer.deleteBatches[i].Extend(mp, projBat, nil); err != nil {
 			return
 		}
@@ -382,6 +480,14 @@ func (writer *s3WriterDelegate) append(
 	writer.memController.grantedSize += int64(increment)
 
 	return
+}
+
+func (writer *s3WriterDelegate) seenTargetRowsSize() int64 {
+	var size int64
+	for _, seen := range writer.seenTargetRows {
+		size += seen.Size()
+	}
+	return size
 }
 
 func checkMainTableNotNull(proc *process.Process, updateCtx *MultiUpdateCtx, bat *batch.Batch) error {
@@ -457,13 +563,23 @@ func (writer *s3WriterDelegate) prepareDeleteBatches(
 			bitmap := block.bitmap
 			if bitmap.Contains(uint64(rowOffset)) {
 				continue
-			} else {
-				bitmap.Add(uint64(rowOffset))
 			}
 
-			vector.AppendFixed(block.bat.GetVector(RowIDIdx), rowID, false, proc.GetMPool())
-			block.bat.GetVector(PkIdx).UnionOne(bat.GetVector(PkIdx), int64(i), proc.GetMPool())
-			block.bat.SetRowCount(block.bat.Vecs[0].Length())
+			rowIDDst := block.bat.GetVector(RowIDIdx)
+			pkDst := block.bat.GetVector(PkIdx)
+			rowIDCheckpoint := rowIDDst.MakeAppendCheckpoint()
+			pkCheckpoint := pkDst.MakeAppendCheckpoint()
+			if err := vector.AppendFixed(rowIDDst, rowID, false, proc.GetMPool()); err != nil {
+				rowIDDst.RollbackAppend(rowIDCheckpoint, 1)
+				return nil, err
+			}
+			if err := pkDst.UnionOne(bat.GetVector(PkIdx), int64(i), proc.GetMPool()); err != nil {
+				rowIDDst.RollbackAppend(rowIDCheckpoint, 1)
+				pkDst.RollbackAppend(pkCheckpoint, 1)
+				return nil, err
+			}
+			block.bat.SetRowCount(rowIDDst.Length())
+			bitmap.Add(uint64(rowOffset))
 		}
 	}
 
@@ -480,6 +596,7 @@ func (writer *s3WriterDelegate) prepareDeleteBatches(
 		return a.Compare(&b)
 	})
 	deleteBats := batch.NewBatchSet(objectio.BlockMaxRows)
+	defer deleteBats.Clean(proc.GetMPool())
 	for _, blkid := range blkids {
 		bat := blockMap[blkid].bat
 		delete(blockMap, blkid)
@@ -559,11 +676,13 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 
 	if isTombstone {
 		pkCol := plan2.PkColByTableDef(tblDef)
-		s3Writer = colexec.NewCNS3TombstoneWriter(
-			proc.Mp(), fs, plan2.ExprType2Type(&pkCol.Typ), -1, opts...,
+		s3Writer = colexec.NewCNS3TombstoneWriterForService(
+			proc.GetService(), proc.Mp(), fs, plan2.ExprType2Type(&pkCol.Typ), -1, opts...,
 		)
 	} else {
-		s3Writer = colexec.NewCNS3DataWriter(proc.Mp(), fs, tblDef, -1, false, opts...)
+		s3Writer = colexec.NewCNS3DataWriterForService(
+			proc.GetService(), proc.Mp(), fs, tblDef, -1, false, opts...,
+		)
 	}
 
 	defer s3Writer.Close()
@@ -576,7 +695,9 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 		// When cleanBatchAfterUse is true, the batch is exclusively owned
 		// (cloned), so we can transfer it to the sinker without copying.
 		if cleanBatchAfterUse {
-			owned, writeErr := s3Writer.WriteOwned(writeCtx, bats[i])
+			owned, writeErr := process.MeasureFilesystemWait(analyzer, func() (bool, error) {
+				return s3Writer.WriteOwned(writeCtx, bats[i])
+			})
 			if writeErr != nil {
 				err = writeErr
 				return
@@ -591,7 +712,9 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 			bats[i] = nil
 			continue
 		}
-		if err = s3Writer.Write(writeCtx, bats[i]); err != nil {
+		if err = process.MeasureFilesystemWaitErr(analyzer, func() error {
+			return s3Writer.Write(writeCtx, bats[i])
+		}); err != nil {
 			return
 		}
 
@@ -601,13 +724,12 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 		bats[i] = nil
 	}
 
-	if _, err = s3Writer.Sync(writeCtx); err != nil {
+	if err = process.MeasureFilesystemWaitErr(analyzer, func() error {
+		_, syncErr := s3Writer.Sync(writeCtx)
+		return syncErr
+	}); err != nil {
 		return
 	}
-
-	analyzer.AddS3RequestCount(counterSet)
-	analyzer.AddFileServiceCacheInfo(counterSet)
-	analyzer.AddDiskIO(counterSet)
 
 	if blockInfoBat, err = s3Writer.FillBlockInfoBat(); err != nil {
 		return
@@ -695,7 +817,9 @@ func (writer *s3WriterDelegate) flushTailAndWriteToOutput(proc *process.Process,
 		if s3w == nil {
 			continue
 		}
-		stats, syncErr := s3w.Sync(writeCtx)
+		stats, syncErr := process.MeasureFilesystemWait(analyzer, func() ([]objectio.ObjectStats, error) {
+			return s3w.Sync(writeCtx)
+		})
 		if syncErr != nil {
 			return syncErr
 		}
@@ -714,9 +838,6 @@ func (writer *s3WriterDelegate) flushTailAndWriteToOutput(proc *process.Process,
 			return
 		}
 	}
-	analyzer.AddS3RequestCount(counterSet)
-	analyzer.AddFileServiceCacheInfo(counterSet)
-	analyzer.AddDiskIO(counterSet)
 
 	// Flush remaining deletes — always call sortAndSync so that accumulated
 	// deleteBatches are processed through prepareDeleteBatches into
@@ -761,6 +882,19 @@ func (writer *s3WriterDelegate) flushTailAndWriteToOutput(proc *process.Process,
 			resetMergeBlockForOldCN(proc, bat)
 			err = writer.addBatchToOutput(mp, actionInsert, i, writer.insertBlockRowCount[i], "", bat)
 			if err != nil {
+				return
+			}
+		}
+	}
+
+	// Logical ODKU counts are independent of physical blocks: a pure no-op can
+	// have a non-zero CLIENT_FOUND_ROWS result, and parallel writers may be
+	// hidden below merge PreScopes. Emit one control record from the shared
+	// pending owner; the first flushable writer drains it and later writers see
+	// zero. The final FlushS3Info operator then counts it exactly once.
+	if writer.takeAffectedRows != nil {
+		if affectedRows := writer.takeAffectedRows(); affectedRows > 0 {
+			if err = writer.addAffectedRowsToOutput(mp, affectedRows); err != nil {
 				return
 			}
 		}
@@ -878,6 +1012,9 @@ func (writer *s3WriterDelegate) addBatchToOutput(
 	bat *batch.Batch,
 ) (err error) {
 	output := writer.outputBat
+	if action == actionInsert {
+		rowCount = physicalInsertAffectedRows(writer.updateCtxs[idx], rowCount)
+	}
 
 	if err = vector.AppendFixed(output.Vecs[0], uint8(action), false, mp); err != nil {
 		return
@@ -904,9 +1041,33 @@ func (writer *s3WriterDelegate) addBatchToOutput(
 	return
 }
 
+func (writer *s3WriterDelegate) addAffectedRowsToOutput(
+	mp *mpool.MPool,
+	affectedRows uint64,
+) (err error) {
+	output := writer.outputBat
+	if err = vector.AppendFixed(output.Vecs[0], uint8(actionAffectedRows), false, mp); err != nil {
+		return
+	}
+	if err = vector.AppendFixed(output.Vecs[1], uint64(0), false, mp); err != nil {
+		return
+	}
+	if err = vector.AppendFixed(output.Vecs[2], affectedRows, false, mp); err != nil {
+		return
+	}
+	if err = vector.AppendBytes(output.Vecs[3], nil, false, mp); err != nil {
+		return
+	}
+	if err = vector.AppendBytes(output.Vecs[4], nil, false, mp); err != nil {
+		return
+	}
+	output.SetRowCount(output.Vecs[0].Length())
+	return
+}
+
 func makeS3OutputBatch() *batch.Batch {
 	bat := batch.NewOffHeapWithSize(5)
-	bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_uint8.ToType())   // action type  0=actionInsert, 1=actionDelete
+	bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_uint8.ToType())   // actionInsert/actionDelete/actionAffectedRows
 	bat.Vecs[1] = vector.NewOffHeapVecWithType(types.T_uint64.ToType())  // tableID
 	bat.Vecs[2] = vector.NewOffHeapVecWithType(types.T_uint64.ToType())  // rowCount of s3 blocks
 	bat.Vecs[3] = vector.NewOffHeapVecWithType(types.T_varchar.ToType()) // name for delete. empty for insert

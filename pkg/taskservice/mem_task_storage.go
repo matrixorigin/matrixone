@@ -272,6 +272,13 @@ func (s *memTaskStorage) DeleteSQLTask(ctx context.Context, conds ...Condition) 
 	}
 
 	for _, t := range removeTasks {
+		parentTaskID := fmt.Sprintf("sql-task:%d", t.TaskID)
+		for asyncTaskID, asyncTask := range s.asyncTasks {
+			if asyncTask.ParentTaskID == parentTaskID {
+				delete(s.asyncTasks, asyncTaskID)
+				delete(s.asyncTaskIndexes, asyncTask.Metadata.ID)
+			}
+		}
 		delete(s.sqlTasks, t.TaskID)
 		delete(s.sqlTaskIndexes, sqlTaskIndexKey(t.AccountID, t.TaskName))
 	}
@@ -473,6 +480,58 @@ func (s *memTaskStorage) UpdateDaemonTask(ctx context.Context, tasks []task.Daem
 	return n, nil
 }
 
+func (s *memTaskStorage) UpdateDaemonTaskError(ctx context.Context, claim task.DaemonTask, release bool) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if s.preUpdate != nil {
+		s.preUpdate()
+	}
+	s.Lock()
+	defer s.Unlock()
+	current, ok := s.daemonTasks[claim.ID]
+	if !ok || current.TaskStatus != task.TaskStatus_Running || !sameDaemonClaim(current, claim) {
+		return 0, nil
+	}
+	current.Details = cloneDaemonTaskDetails(claim.Details)
+	current.UpdateAt = claim.UpdateAt
+	if release {
+		current.TaskStatus = task.TaskStatus_RestartRequested
+		current.TaskRunner = ""
+		current.LastHeartbeat = time.Time{}
+	}
+	s.daemonTasks[claim.ID] = current
+	return 1, nil
+}
+
+func (s *memTaskStorage) UpdateDaemonTaskStatus(
+	ctx context.Context,
+	taskID uint64,
+	status task.TaskStatus,
+	updateAt time.Time,
+	endAt time.Time,
+	conds ...Condition,
+) (int, error) {
+	if s.preUpdate != nil {
+		s.preUpdate()
+	}
+
+	c := newConditions(conds...)
+
+	s.Lock()
+	defer s.Unlock()
+
+	t, ok := s.daemonTasks[taskID]
+	if !ok || !s.filterDaemonTask(c, t) {
+		return 0, nil
+	}
+	t.TaskStatus = status
+	t.UpdateAt = updateAt
+	t.EndAt = endAt
+	s.daemonTasks[taskID] = t
+	return 1, nil
+}
+
 func (s *memTaskStorage) DeleteDaemonTask(ctx context.Context, conds ...Condition) (int, error) {
 	c := newConditions(conds...)
 
@@ -527,12 +586,30 @@ func (s *memTaskStorage) HeartbeatDaemonTask(ctx context.Context, tasks []task.D
 
 	n := 0
 	for _, t := range tasks {
-		if _, ok := s.daemonTasks[t.ID]; ok {
+		if current, ok := s.daemonTasks[t.ID]; ok {
+			if current.TaskRunner != t.TaskRunner ||
+				!current.LastRun.Equal(t.LastRun) {
+				continue
+			}
 			n++
-			s.daemonTasks[t.ID] = t
+			current.LastHeartbeat = t.LastHeartbeat
+			s.daemonTasks[t.ID] = current
 		}
 	}
 	return n, nil
+}
+
+func (s *memTaskStorage) ValidateDaemonTask(
+	ctx context.Context,
+	t task.DaemonTask,
+) (bool, error) {
+	s.RLock()
+	defer s.RUnlock()
+	current, ok := s.daemonTasks[t.ID]
+	return ok &&
+		daemonTaskStatusAuthorizesEffect(t.TaskStatus, current.TaskStatus) &&
+		current.TaskRunner == t.TaskRunner &&
+		current.LastRun.Equal(t.LastRun), nil
 }
 
 func (s *memTaskStorage) nextIDLocked() uint64 {
@@ -610,6 +687,13 @@ func (s *memTaskStorage) filterDaemonTask(c *conditions, task task.DaemonTask) b
 		return false
 	}
 
+	if cond, e := (*c)[CondTaskExecutor]; e {
+		ok = cond.eval(task.Metadata.Executor)
+	}
+	if !ok {
+		return false
+	}
+
 	if cond, e := (*c)[CondTaskType]; e {
 		ok = cond.eval(task.TaskType)
 	}
@@ -624,6 +708,12 @@ func (s *memTaskStorage) filterDaemonTask(c *conditions, task task.DaemonTask) b
 
 	if cond, e := (*c)[CondLastHeartbeat]; e {
 		ok = cond.eval(task.LastHeartbeat.UnixNano())
+	}
+	if !ok {
+		return false
+	}
+	if cond, e := (*c)[CondLastRun]; e {
+		ok = cond.eval(task.LastRun)
 	}
 	return ok
 }

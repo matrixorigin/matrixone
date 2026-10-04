@@ -15,15 +15,260 @@
 package vector
 
 import (
+	"encoding/binary"
 	"errors"
 	"testing"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
+
+func TestFunctionParamFrameGrowsAndPreservesWrappers(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	result := NewFunctionResultWrapper(types.T_int64.ToType(), mp)
+	defer result.Free()
+	input, err := NewConstFixed(types.T_int64.ToType(), int64(7), 1, mp)
+	require.NoError(t, err)
+	defer input.Free(mp)
+	result.UseOptFunctionParamFrame(1)
+	first := OptGetParamFromWrapper[int64](result, 0, input)
+	result.UseOptFunctionParamFrame(2)
+	require.Same(t, first, OptGetParamFromWrapper[int64](result, 0, input))
+	second := OptGetParamFromWrapper[int64](result, 1, input)
+	value, isNull := second.GetValue(0)
+	require.Equal(t, int64(7), value)
+	require.False(t, isNull)
+	result.UseOptFunctionParamFrame(1)
+	result.UseOptFunctionParamFrame(2)
+	require.Same(t, second, OptGetParamFromWrapper[int64](result, 1, input))
+}
+
+func TestAppendBytesWithWriterOwnsFinalAreaAndRollsBack(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	vec := NewVec(types.T_blob.ToType())
+	t.Cleanup(func() { vec.Free(mp) })
+
+	require.NoError(t, AppendBytesWithWriter(vec, 64, mp, func(dst []byte) error {
+		for i := range dst {
+			dst[i] = byte(i)
+		}
+		return nil
+	}))
+	require.Equal(t, byte(63), vec.GetBytesAt(0)[63])
+	beforeLength, beforeArea := vec.Length(), len(vec.GetArea())
+	require.Error(t, AppendBytesWithWriter(vec, 128, mp, func([]byte) error { return errors.New("reject") }))
+	require.Equal(t, beforeLength, vec.Length())
+	require.Equal(t, beforeArea, len(vec.GetArea()))
+}
+
+func TestAppendBytesWithWriterAdmitsDescriptorBeforeWriter(t *testing.T) {
+	state := newTestVectorAllocationAccount(t, 1, 1)
+	mp := mpool.MustNewZero()
+	vec := newAccountedTestVector(t, types.T_blob.ToType(), state.selection)
+	called := false
+
+	err := AppendBytesWithWriter(vec, 1, mp, func([]byte) error {
+		called = true
+		return nil
+	})
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.False(t, called)
+	require.Zero(t, vec.Length())
+
+	vec.Free(mp)
+	finalizeTestVectorAllocationAccount(t, state)
+}
+
+func TestFunctionResultAllocationSurvivesVectorTransfer(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+	wrapper, err := NewFunctionResultWrapperWithAllocation(
+		types.T_int64.ToType(), mp, selection,
+	)
+	require.NoError(t, err)
+	require.NoError(t, wrapper.PreExtendAndReset(64))
+	transferred := wrapper.GetResultVector()
+	require.Same(t, selection, transferred.AllocationAccountSelection())
+	firstUsed := account.Snapshot().Used
+	require.Positive(t, firstUsed)
+
+	wrapper.SetResultVector(nil)
+	require.NoError(t, wrapper.PreExtendAndReset(64))
+	require.Same(t, selection, wrapper.GetResultVector().AllocationAccountSelection())
+	require.Greater(t, account.Snapshot().Used, firstUsed)
+
+	transferred.Free(mp)
+	wrapper.Free()
+	require.Zero(t, account.Snapshot().Used)
+}
+
+func TestFunctionResultAllocationBoundsNullUnion(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+	wrapper, err := NewFunctionResultWrapperWithAllocation(
+		types.T_int64.ToType(), mp, selection,
+	)
+	require.NoError(t, err)
+	require.NoError(t, wrapper.PreExtendAndReset(1))
+	result := MustFunctionResult[int64](wrapper)
+	require.NoError(t, result.Append(42, false))
+	result.vec.ToConst()
+	result.vec.SetLength(4)
+	require.True(t, result.vec.IsConst())
+
+	// A folded result resets before growing, while an ordinary reused result
+	// resets after capacity growth. Both generations must publish the same
+	// owner-provided NULL row bound.
+	require.NoError(t, wrapper.PreExtendAndReset(64))
+	require.False(t, result.vec.IsConst())
+	require.EqualValues(t, 64, result.vec.GetNulls().GetBitmap().Len())
+	result.AddNullAt(63)
+	require.NoError(t, wrapper.PreExtendAndReset(4))
+
+	result = MustFunctionResult[int64](wrapper)
+	capacityRows := result.GetResultVector().GetNulls().GetBitmap().ExternalStorageCapacity() * 64
+	require.GreaterOrEqual(t, capacityRows, 4)
+	source := nulls.NewWithSize(capacityRows + 1)
+	source.Add(1, uint64(capacityRows))
+
+	require.NotPanics(t, func() {
+		result.AddNulls(source)
+	})
+	require.True(t, result.GetNullAt(1))
+	require.False(t, result.GetNullAt(uint64(capacityRows)))
+	require.EqualValues(t, 4, result.GetResultVector().GetNulls().GetBitmap().Len())
+
+	wrapper.Free()
+	require.Zero(t, account.Snapshot().Used)
+}
+
+func TestFunctionResultUnaccountedKeepsLazyNullBitmap(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	wrapper := NewFunctionResultWrapper(types.T_int64.ToType(), mp)
+	require.NoError(t, wrapper.PreExtendAndReset(64))
+
+	bitmap := wrapper.GetResultVector().GetNulls().GetBitmap()
+	require.False(t, bitmap.HasExternalStorage())
+	require.Zero(t, bitmap.Len())
+	require.Zero(t, bitmap.Size())
+
+	wrapper.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestFunctionResultAppendMultiBytesSharesPayload(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	wrapper := NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
+	require.NoError(t, wrapper.PreExtendAndReset(3))
+	result := MustFunctionResult[types.Varlena](wrapper)
+	payload := []byte("non-inline-payload-shared-by-every-row")
+
+	require.NoError(t, result.AppendMultiBytes(payload, false, 3))
+	result.AddNullAt(1)
+
+	vec := result.GetResultVector()
+	require.Equal(t, 3, vec.Length())
+	require.Len(t, vec.GetArea(), len(payload))
+	require.False(t, vec.VarlenaAreaIsDisjoint())
+	require.Equal(t, payload, vec.GetBytesAt(0))
+	require.True(t, vec.IsNull(1))
+	require.Equal(t, payload, vec.GetBytesAt(2))
+
+	wrapper.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestAppendByteJsonUsesStorageCompatibleTypeCodes(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	wrapper := NewFunctionResultWrapper(types.T_json.ToType(), mp)
+	require.NoError(t, wrapper.PreExtendAndReset(2))
+	result := MustFunctionResult[types.Varlena](wrapper)
+
+	newBinaryValue := func(tp bytejson.TpCode, payload []byte) bytejson.ByteJson {
+		data := binary.AppendUvarint(nil, uint64(len(payload)))
+		data = append(data, payload...)
+		return bytejson.ByteJson{Type: tp, Data: data}
+	}
+	opaque := newBinaryValue(bytejson.TpCodeOpaque, []byte{0x01})
+	bit := newBinaryValue(bytejson.TpCodeBit, []byte{0x02})
+	nested, err := bytejson.CreateByteJSON([]any{opaque, bit})
+	require.NoError(t, err)
+
+	require.NoError(t, result.AppendByteJson(opaque, false))
+	require.NoError(t, result.AppendByteJson(nested, false))
+
+	for row, value := range []bytejson.ByteJson{opaque, nested} {
+		want, err := value.Marshal()
+		require.NoError(t, err)
+		require.Equal(t, want, result.vec.GetBytesAt(row))
+	}
+
+	var stored bytejson.ByteJson
+	require.NoError(t, stored.Unmarshal(result.vec.GetBytesAt(1)))
+	require.Equal(t, bytejson.TpCodeBlob, stored.GetArrayElem(0).Type)
+	require.Equal(t, bytejson.TpCodeBlob, stored.GetArrayElem(1).Type)
+	require.Equal(t, "BIT", stored.GetArrayElem(1).TYPE())
+
+	wrapper.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestAppendByteJsonEncodedUsesStorageCompatibleTypeCodes(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	wrapper := NewFunctionResultWrapper(types.T_json.ToType(), mp)
+	require.NoError(t, wrapper.PreExtendAndReset(2))
+	result := MustFunctionResult[types.Varlena](wrapper)
+
+	newBinaryValue := func(tp bytejson.TpCode, payload []byte) bytejson.ByteJson {
+		data := binary.AppendUvarint(nil, uint64(len(payload)))
+		data = append(data, payload...)
+		return bytejson.ByteJson{Type: tp, Data: data}
+	}
+	opaque := newBinaryValue(bytejson.TpCodeOpaque, []byte{0x01})
+	bit := newBinaryValue(bytejson.TpCodeBit, []byte{0x02})
+	nested, err := bytejson.CreateByteJSON([]any{opaque, bit})
+	require.NoError(t, err)
+
+	builder := bytejson.NewMergePatchBuilder()
+	require.NoError(t, builder.BeginRow())
+	require.NoError(t, builder.Reset(opaque))
+	require.NoError(t, builder.Finalize())
+	require.NoError(t, result.AppendByteJsonEncoded(builder))
+
+	builder.Clear()
+	require.NoError(t, builder.BeginRow())
+	require.NoError(t, builder.Reset(nested))
+	require.NoError(t, builder.Finalize())
+	require.NoError(t, result.AppendByteJsonEncoded(builder))
+
+	var stored bytejson.ByteJson
+	require.NoError(t, stored.Unmarshal(result.vec.GetBytesAt(0)))
+	require.Equal(t, bytejson.TpCodeBlob, stored.Type)
+	require.Equal(t, `"AQ=="`, stored.String())
+
+	require.NoError(t, stored.Unmarshal(result.vec.GetBytesAt(1)))
+	require.Equal(t, bytejson.TpCodeBlob, stored.GetArrayElem(0).Type)
+	require.Equal(t, bytejson.TpCodeBlob, stored.GetArrayElem(1).Type)
+	require.Equal(t, "BIT", stored.GetArrayElem(1).TYPE())
+	require.Equal(t, `["AQ==", "Ag=="]`, stored.String())
+
+	wrapper.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
+}
 
 type testByteJsonEncoder struct {
 	value bytejson.ByteJson
@@ -127,6 +372,27 @@ func TestPreExtendAndReset(t *testing.T) {
 
 	wrapper.Free()
 	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestPreExtendAndResetExpandsFoldedFixedResult(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	wrapper := NewFunctionResultWrapper(types.T_decimal128.ToType(), mp)
+	defer wrapper.Free()
+	result := MustFunctionResult[types.Decimal128](wrapper)
+
+	require.NoError(t, wrapper.PreExtendAndReset(1))
+	require.NoError(t, result.Append(types.Decimal128{B0_63: 1}, false))
+	result.vec.ToConst()
+	result.vec.SetLength(4)
+	require.True(t, result.vec.IsConst())
+
+	require.NoError(t, wrapper.PreExtendAndReset(4))
+	require.False(t, result.vec.IsConst())
+	require.Len(t, result.cols, 4)
+	for i := int64(0); i < 4; i++ {
+		require.NoError(t, result.Append(types.Decimal128{B0_63: uint64(i + 2)}, false))
+	}
+	require.Equal(t, 4, result.vec.Length())
 }
 
 func TestAppendByteJsonEncoded(t *testing.T) {

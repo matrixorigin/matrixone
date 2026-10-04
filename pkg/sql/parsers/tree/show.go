@@ -421,10 +421,20 @@ func NewShowProcessList(f bool) *ShowProcessList {
 
 type ShowErrors struct {
 	showImpl
+	Count bool
+	Limit *Limit
 }
 
 func (node *ShowErrors) Format(ctx *FmtCtx) {
-	ctx.WriteString("show errors")
+	ctx.WriteString("show ")
+	if node.Count {
+		ctx.WriteString("count(*) ")
+	}
+	ctx.WriteString("errors")
+	if node.Limit != nil {
+		ctx.WriteByte(' ')
+		node.Limit.Format(ctx)
+	}
 }
 func (node *ShowErrors) GetStatementType() string { return "Show Errors" }
 func (node *ShowErrors) GetQueryType() string     { return QueryTypeOth }
@@ -435,10 +445,20 @@ func NewShowErrors() *ShowErrors {
 
 type ShowWarnings struct {
 	showImpl
+	Count bool
+	Limit *Limit
 }
 
 func (node *ShowWarnings) Format(ctx *FmtCtx) {
-	ctx.WriteString("show warnings")
+	ctx.WriteString("show ")
+	if node.Count {
+		ctx.WriteString("count(*) ")
+	}
+	ctx.WriteString("warnings")
+	if node.Limit != nil {
+		ctx.WriteByte(' ')
+		node.Limit.Format(ctx)
+	}
 }
 func (node *ShowWarnings) GetStatementType() string { return "Show Warnings" }
 func (node *ShowWarnings) GetQueryType() string     { return QueryTypeOth }
@@ -647,7 +667,7 @@ type ShowTableNumber struct {
 }
 
 func (node *ShowTableNumber) Format(ctx *FmtCtx) {
-	ctx.WriteString("show table number")
+	ctx.WriteString("show table_number")
 	if node.DbName != "" {
 		ctx.WriteString(" from ")
 		ctx.WriteString(node.DbName)
@@ -876,20 +896,6 @@ func (node *ShowBackendServers) Format(ctx *FmtCtx) {
 
 func (node *ShowBackendServers) GetStatementType() string { return "Show Backend Servers" }
 func (node *ShowBackendServers) GetQueryType() string     { return QueryTypeOth }
-
-type ShowConnectors struct {
-	showImpl
-}
-
-func (node *ShowConnectors) Format(ctx *FmtCtx) {
-	ctx.WriteString("show connectors")
-}
-func (node *ShowConnectors) GetStatementType() string { return "Show Connectors" }
-func (node *ShowConnectors) GetQueryType() string     { return QueryTypeOth }
-
-func NewShowConnectors(f bool) *ShowConnectors {
-	return &ShowConnectors{}
-}
 
 type ShowLogserviceReplicas struct {
 	showImpl

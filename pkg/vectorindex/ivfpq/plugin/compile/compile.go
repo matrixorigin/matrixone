@@ -58,6 +58,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	ivfpqruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/runtime"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 )
 
 // insertIntoIvfpqIndexTableFormat is the SQL template used to populate the
@@ -95,7 +96,7 @@ type Hooks struct{}
 //     ivfpq_create table-function builder in pkg/sql/plan/ivfpq.go.
 //
 // The sync-vs-async branch is driven by the index's `async`
-// IndexAlgoParam (catalog.IsIndexAsync). Default (key missing or
+// IndexAlgoParam (catalog.IndexParamAsync). Default (key missing or
 // "false"): forceSync=true — ivfpq_create runs inline before the CDC
 // task is registered. Explicit async="true": forceSync=false — the
 // build SQL is stashed as ConsumerInfo.InitSQL and runs at the first
@@ -108,7 +109,7 @@ func (h Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map
 	if !ok || metaDef == nil {
 		return h.handleCreate(ctx, indexDefs, true)
 	}
-	async, err := catalog.IsIndexAsync(metaDef.IndexAlgoParams)
+	async, err := catalog.IndexParamAsync(metaDef.IndexAlgoParams)
 	if err != nil {
 		return err
 	}
@@ -120,7 +121,7 @@ func (h Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map
 // branch builds ivfpq_create synchronously inside the txn so the new
 // tag=0 model lands before subsequent steps observe the index — mirrors
 // IVF-FLAT and CAGRA.
-func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error {
+func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool, _ bool) error {
 	return h.handleCreate(ctx, indexDefs, forceSync)
 }
 
@@ -130,8 +131,27 @@ func (Hooks) RestoreInitSQL(ctx compileplugin.CompileContext, indexDefs map[stri
 	if !ok {
 		return false, "", moerr.NewInternalErrorNoCtx("ivfpq_meta index definition not found")
 	}
-	return true, fmt.Sprintf("ALTER TABLE `%s`.`%s` ALTER REINDEX `%s` ivfpq FORCE_SYNC",
-		ctx.QryDatabase(), ctx.OriginalTableDef().Name, metaDef.IndexName), nil
+	return true, fmt.Sprintf("ALTER TABLE %s ALTER REINDEX %s ivfpq FORCE_SYNC",
+		sqlquote.QualifiedIdent(ctx.QryDatabase(), ctx.OriginalTableDef().Name),
+		sqlquote.Ident(metaDef.IndexName)), nil
+}
+
+// AlterCopyInitSQL — a COPY ALTER's cloneUnaffectedIndexes SKIPS this (SkipWholeIndex) async
+// index, so the replacement hidden tables start EMPTY. The cuvs ISCP consumer is stateless
+// across flushes: IvfpqSync only APPENDS tag=1 event chunks under the CdcTailId sentinel and
+// never writes a tag=0 sub-index, so the ts=0 replay alone leaves the whole table living in the
+// CDC tail with no base index -- every query brute-forces the overflow, and a table large enough
+// makes that overflow refuse admission. Return a REINDEX FORCE_SYNC as the InitSQL: the CDC's
+// first iteration (post-commit) builds the base from source, then arms the tail at the post-build
+// watermark. Same shape as this algorithm's RestoreInitSQL, and as fulltext2's fix for #28837.
+func (Hooks) AlterCopyInitSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) (bool, string, error) {
+	metaDef, ok := indexDefs[catalog.Ivfpq_TblType_Metadata]
+	if !ok {
+		return false, "", moerr.NewInternalErrorNoCtx("ivfpq_meta index definition not found")
+	}
+	return true, fmt.Sprintf("ALTER TABLE %s ALTER REINDEX %s ivfpq FORCE_SYNC",
+		sqlquote.QualifiedIdent(ctx.QryDatabase(), ctx.OriginalTableDef().Name),
+		sqlquote.Ident(metaDef.IndexName)), nil
 }
 
 // handleCreate is the shared body for HandleCreateIndex and
@@ -187,7 +207,7 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 	}
 
 	// 3. clear the cache
-	cache.Cache.Remove(storageDef.IndexTableName)
+	cache.Cache.RemoveAllGenerations(storageDef.IndexTableName, "ddl")
 
 	// 4. delete old data first
 	sqls, err := genDeleteSQL(indexDefs, ctx.QryDatabase())
@@ -279,14 +299,39 @@ func registerIdxcronUpdate(
 // IVF-PQ supports updating `lists` at REINDEX time — mirrors IVF-FLAT
 // since both algorithms key on the inverted-list count for their build.
 func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.ReindexParamUpdate) (map[string]string, error) {
-	return compileplugin.MergeReindexParams(old, alter, "ivfpq",
+	if err := compileplugin.RejectMerge(alter, "ivfpq"); err != nil {
+		return nil, err
+	}
+	// Merge first, then validate the EFFECTIVE quantization via the per-algo
+	// catalog hook (the single home shared with CREATE). The merged map is the
+	// index's actual post-reindex config: the value the reindex set, or — when
+	// the reindex omitted QUANTIZATION (e.g. the idxcron-issued rebuild) — the
+	// value already stored on the index. Validating the merge (not the raw alter
+	// delta) means the check is never skipped just because the statement omitted
+	// quantization, and quantization and op_type come from one consistent source.
+	merged, err := compileplugin.MergeReindexParams(old, alter, "ivfpq",
 		catalog.IndexAlgoParamLists,
 		catalog.IndexAlgoParamKmeansTrainPercent,
 		catalog.IndexAlgoParamKmeansMaxIteration,
 		catalog.IndexAlgoParamMaxIndexCapacity,
+		catalog.IndexAlgoParamQuantizerTrainLimit,
 		catalog.HnswM,
 		catalog.BitsPerCode,
+		catalog.Quantization,
 	)
+	if err != nil {
+		return nil, err
+	}
+	if err := (ivfpqruntime.CatalogHooks{}).ValidQuantization(
+		merged[catalog.Quantization], merged[catalog.IndexAlgoParamOpType]); err != nil {
+		return nil, err
+	}
+	if q, changed := compileplugin.ReindexQuantizationChange(old, alter); changed && alter.BaseVectorType != 0 {
+		if err := quantizer.CheckNoUpcast("IvfPQ", q, alter.BaseVectorType); err != nil {
+			return nil, err
+		}
+	}
+	return merged, nil
 }
 
 // HandleDropIndex runs algorithm-specific cleanup beyond the generic
@@ -299,7 +344,17 @@ func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.Re
 // so this is a no-op. Compare HNSW, which does maintain CDC tasks.
 func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, defs map[string]*plan.IndexDef) error {
 	logutil.Infof("[plugin] ivfpq HandleDropIndex: defs=%d", len(defs))
+	// Evict the cached search index so its GPU resources are freed NOW, rather
+	// than lingering until the 5-min VectorIndexCacheTTL housekeeping reaps it.
+	// Mirrors the create-side cache.Cache.RemoveAllGenerations(storageDef.IndexTableName, "ddl").
+	if storageDef, ok := defs[catalog.Ivfpq_TblType_Storage]; ok {
+		cache.Cache.RemoveAllGenerations(storageDef.IndexTableName, "ddl")
+	}
 	return nil
+}
+
+func (Hooks) HiddenTableDropPriority(_ string) int {
+	return 0
 }
 
 // IdxcronMetadata pins IVF-PQ's build-time params into the cron task's

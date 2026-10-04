@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -92,6 +93,43 @@ func TestOrder(t *testing.T) {
 		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
+}
+
+func TestOrderResetReleasesPartiallyAccumulatedAccountedBatch(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+
+	input := batch.NewOffHeapWithSize(2)
+	for i := range input.Vecs {
+		input.Vecs[i] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	}
+	require.NoError(t, input.SetAllocationAccount(selection))
+	for i := range 64 {
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(i), false, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(input.Vecs[1], int64(i), false, proc.Mp()))
+	}
+	input.SetRowCount(64)
+
+	arg := &Order{}
+	_, err = arg.ctr.appendBatch(proc, input)
+	require.NoError(t, err)
+	input.Clean(proc.Mp())
+	require.Positive(t, account.Snapshot().Used)
+
+	arg.Reset(proc, true, nil)
+	require.Nil(t, arg.ctr.batWaitForSort)
+	require.Zero(t, account.Snapshot().Used)
+	_, _, err = registry.CompleteTerminal(account)
+	require.NoError(t, err)
+
+	arg.Free(proc, true, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
 }
 
 func BenchmarkOrder(b *testing.B) {

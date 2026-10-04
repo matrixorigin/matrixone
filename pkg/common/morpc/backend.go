@@ -41,8 +41,15 @@ var (
 	stateStopping = int32(1)
 	stateStopped  = int32(2)
 
-	backendClosed  = moerr.NewBackendClosedNoCtx()
-	messageSkipped = moerr.NewInvalidStateNoCtx("request is skipped")
+	backendClosed   = moerr.NewBackendClosedNoCtx()
+	backendDraining = moerr.NewInvalidStateNoCtx("backend is draining")
+	messageSkipped  = moerr.NewInvalidStateNoCtx("request is skipped")
+
+	// Cancellation releases a shared manager worker before goetty's legacy,
+	// timeout-bounded Connect necessarily returns. Retain the same process-wide
+	// bound for those lower-level attempts so rapid invalidation cannot turn
+	// prompt worker cancellation into unbounded dial goroutines.
+	goettyContextCreateSlots = make(chan struct{}, backendCreateWorkerCount)
 )
 
 // WithBackendLogger set the backend logger
@@ -84,10 +91,19 @@ func WithBackendBatchSendSize(size int) BackendOption {
 	}
 }
 
-// WithBackendConnectTimeout set the timeout for connect to remote. Default 10s.
+// WithBackendConnectTimeout sets the total timeout for connecting to a remote,
+// including retry waits. Default 5s.
 func WithBackendConnectTimeout(timeout time.Duration) BackendOption {
 	return func(rb *remoteBackend) {
 		rb.options.connectTimeout = timeout
+	}
+}
+
+// WithBackendConnectAttemptTimeout sets the timeout for one TCP connect
+// attempt. By default, one attempt may consume the complete connect timeout.
+func WithBackendConnectAttemptTimeout(timeout time.Duration) BackendOption {
+	return func(rb *remoteBackend) {
+		rb.options.connectAttemptTimeout = timeout
 	}
 }
 
@@ -121,6 +137,16 @@ func WithBackendReadTimeout(value time.Duration) BackendOption {
 	}
 }
 
+// WithBackendLivenessProbe observes peer liveness over a transport independent
+// from this backend. When unary data traffic stalls, the current data generation
+// is drained without discarding pending requests; probe failures remain
+// inconclusive because the data connection can still make progress.
+func WithBackendLivenessProbe(value func(context.Context, string) error) BackendOption {
+	return func(rb *remoteBackend) {
+		rb.options.livenessProbe = value
+	}
+}
+
 // WithBackendMetrics setup backend metrics
 func WithBackendMetrics(metrics *metrics) BackendOption {
 	return func(rb *remoteBackend) {
@@ -132,6 +158,16 @@ func WithBackendMetrics(metrics *metrics) BackendOption {
 func WithBackendFreeOrphansResponse(value func(Message)) BackendOption {
 	return func(rb *remoteBackend) {
 		rb.options.freeResponse = value
+	}
+}
+
+// WithBackendRequestRelease transfers request ownership to the backend after a
+// successful Send. The callback runs exactly once after the writer no longer
+// accesses the request. Configuring this option also allows Future.Get to
+// return on request context cancellation before the write completes.
+func WithBackendRequestRelease(value func(Message)) BackendOption {
+	return func(rb *remoteBackend) {
+		rb.options.releaseRequest = value
 	}
 }
 
@@ -155,28 +191,36 @@ type remoteBackend struct {
 	writeC          chan *Future
 	waitWriteC      chan struct{}
 	stopWriteC      chan struct{}
+	stopWriteOnce   sync.Once
 	resetConnC      chan error
 	stopper         *stopper.Stopper
 	readStopper     *stopper.Stopper
 	closeOnce       sync.Once
+	closeDone       chan struct{}
 	ctx             context.Context
 	cancel          context.CancelFunc
 	cancelOnce      sync.Once
 	pingTimer       *time.Timer
 	lastPingTime    time.Time
+	livenessEpoch   time.Time
 
 	options struct {
-		hasPayloadResponse  bool
-		goettyOptions       []goetty.Option
-		connectTimeout      time.Duration
-		bufferSize          int
-		busySize            int
-		batchSendSize       int
-		streamBufferSize    int
-		disconnectAfterRead int
-		filter              func(msg Message, backendAddr string) bool
-		readTimeout         time.Duration
-		freeResponse        func(Message)
+		hasPayloadResponse    bool
+		goettyOptions         []goetty.Option
+		connectTimeout        time.Duration
+		connectAttemptTimeout time.Duration
+		connectNow            func() time.Time
+		connectWait           func(context.Context, time.Duration) error
+		bufferSize            int
+		busySize              int
+		batchSendSize         int
+		streamBufferSize      int
+		disconnectAfterRead   int
+		filter                func(msg Message, backendAddr string) bool
+		readTimeout           time.Duration
+		livenessProbe         func(context.Context, string) error
+		freeResponse          func(Message)
+		releaseRequest        func(Message)
 	}
 
 	stateMu struct {
@@ -191,14 +235,48 @@ type remoteBackend struct {
 		futures       map[uint64]*Future
 		activeStreams map[uint64]*stream
 	}
+	// queueMetricMu orders queue accounting with channel publication. A receiver
+	// may run as soon as a send commits, so it takes this lock after receiving;
+	// the sender holds it across the send and increment. This prevents transient
+	// negative depths and makes shared per-name gauges exact across backends.
+	queueMetricMu struct {
+		sync.Mutex
+		depth int
+		busy  bool
+	}
+
+	livenessMu struct {
+		sync.Mutex
+		// pending contains unary user writes not yet matched by a response. Any user
+		// read resets pendingSince because it proves that this physical data
+		// connection is still making progress, but only the matching response
+		// removes a write. This keeps one slow request visible when another
+		// concurrent request responds. overflow is sticky for the connection
+		// generation, bounding fault-path memory when timed-out requests keep
+		// arriving faster than the read timeout can recycle the transport.
+		// This tracker serves probe-enabled backends only; probe-less backends
+		// answer the same question via pendingRequestReadWindow (see its doc).
+		pending      map[uint64]struct{}
+		pendingSince int64
+		overflow     bool
+	}
 
 	atomic struct {
 		id             uint64
 		lastActiveTime atomic.Value //time.Time
+		unavailable    atomic.Bool
+		// draining seals new pool admission after data transport inactivity.
+		// Existing Futures remain owned by this backend and may still complete.
+		draining atomic.Bool
+		// lastStreamFlushAt is the livenessTick of the most recent successfully
+		// flushed user stream message. Probe-less backends grant stream traffic
+		// one complete read window from this stamp so a stream write admitted
+		// late in an idle read window is not charged the idle time; it is never
+		// reset because an old stamp only ever grants less time.
+		lastStreamFlushAt atomic.Int64
 	}
 
 	pool struct {
-		streams *sync.Pool
 		futures *sync.Pool
 	}
 }
@@ -217,6 +295,7 @@ func NewRemoteBackend(
 		codec:       codec,
 		resetConnC:  make(chan error, 1),
 		stopWriteC:  make(chan struct{}),
+		closeDone:   make(chan struct{}),
 	}
 
 	for _, opt := range options {
@@ -231,17 +310,6 @@ func NewRemoteBackend(
 			return newFuture(rb.releaseFuture)
 		},
 	}
-	rb.pool.streams = &sync.Pool{
-		New: func() any {
-			return newStream(
-				rb,
-				make(chan Message, rb.options.streamBufferSize),
-				rb.newFuture,
-				rb.doSend,
-				rb.removeActiveStream,
-				rb.active)
-		},
-	}
 	rb.waitWriteC = make(chan struct{}, 1)
 	rb.writeC = make(chan *Future, rb.options.bufferSize)
 	rb.mu.futures = make(map[uint64]*Future, rb.options.bufferSize)
@@ -253,7 +321,10 @@ func NewRemoteBackend(
 	rb.conn = goetty.NewIOSession(rb.options.goettyOptions...)
 
 	if err := rb.resetConn(); err != nil {
-		rb.logger.Error("connect to remote failed", rb.logFields()...)
+		rb.logger.Error(
+			"connect to remote failed",
+			append(rb.logFields(), zap.Error(err))...,
+		)
 		return nil, err
 	}
 	rb.activeReadLoop(false)
@@ -282,6 +353,16 @@ func (rb *remoteBackend) adjust() {
 	if rb.options.connectTimeout == 0 {
 		rb.options.connectTimeout = time.Second * 5
 	}
+	if rb.options.connectAttemptTimeout <= 0 ||
+		rb.options.connectAttemptTimeout > rb.options.connectTimeout {
+		rb.options.connectAttemptTimeout = rb.options.connectTimeout
+	}
+	if rb.options.connectNow == nil {
+		rb.options.connectNow = time.Now
+	}
+	if rb.options.connectWait == nil {
+		rb.options.connectWait = waitConnectRetry
+	}
 	if rb.options.streamBufferSize == 0 {
 		rb.options.streamBufferSize = 16
 	}
@@ -296,6 +377,7 @@ func (rb *remoteBackend) adjust() {
 	// under sysbench this path reached ~102GB with newCounters alone ~83.4GB. See
 	// docs/worklog_morpc_backend_logger_memory.md.
 	rb.logger = logutil.Adjust(rb.logger)
+	rb.livenessEpoch = time.Now()
 	rb.logID = rb.nextID()
 	rb.logFieldsCache = []zap.Field{zap.String("remote", rb.remote), zap.Uint64("backend-id", rb.logID)}
 	rb.rateLimitLogger = logutil.NewRateLimitedLogger(rb.logger)
@@ -332,6 +414,9 @@ func (rb *remoteBackend) SendInternal(ctx context.Context, request Message) (*Fu
 func (rb *remoteBackend) send(ctx context.Context, request Message, internal bool) (*Future, error) {
 	f := rb.getFuture(ctx, request, internal)
 	if err := rb.doSend(f); err != nil {
+		// Ownership transfers only after doSend enqueues the Future. On this
+		// path the caller remains responsible for the request.
+		f.clearSendRelease()
 		f.messageSent(err)
 		f.Close()
 		return nil, err
@@ -344,6 +429,11 @@ func (rb *remoteBackend) getFuture(ctx context.Context, request Message, interna
 	request.SetID(rb.nextID())
 	f := rb.newFuture()
 	f.init(RPCMessage{Ctx: ctx, Message: request, internal: internal})
+	if !internal {
+		f.setSendRelease(rb.options.releaseRequest)
+		f.setResponseRelease(rb.options.freeResponse)
+		f.enableRequestMetrics(rb.metrics)
+	}
 	rb.addFuture(f)
 	return f
 }
@@ -355,6 +445,9 @@ func (rb *remoteBackend) NewStream(unlockAfterClose bool) (Stream, error) {
 	if rb.stateMu.state != stateRunning {
 		return nil, backendClosed
 	}
+	if rb.atomic.draining.Load() {
+		return nil, backendDraining
+	}
 
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
@@ -362,7 +455,10 @@ func (rb *remoteBackend) NewStream(unlockAfterClose bool) (Stream, error) {
 	st := rb.acquireStream()
 	st.init(rb.nextID(), unlockAfterClose)
 	rb.mu.activeStreams[st.ID()] = st
-	rb.active()
+	// stateMu is already read-locked here. Keep the activity update in the
+	// same state snapshot so Close cannot publish stateStopped between the
+	// state check and the timestamp write.
+	rb.activeLocked()
 	return st, nil
 }
 
@@ -379,30 +475,27 @@ func (rb *remoteBackend) doSend(f *Future) error {
 			rb.stateMu.RUnlock()
 			return backendClosed
 		}
+		if rb.atomic.draining.Load() {
+			rb.stateMu.RUnlock()
+			return backendDraining
+		}
 
 		// The close method need acquire the write lock, so we cannot block at here.
 		// The write loop may reset the backend's network link and may not be able to
 		// process writeC for a long time, causing the writeC buffer to reach its limit.
+		rb.queueMetricMu.Lock()
 		select {
 		case rb.writeC <- f:
-			queueLen := float64(len(rb.writeC))
-			rb.metrics.sendingQueueSizeGauge.Set(queueLen)
-			if rb.metrics.writeQueueLengthGauge != nil {
-				rb.metrics.writeQueueLengthGauge.Set(queueLen)
-			}
-			if rb.metrics.busyGauge != nil {
-				if len(rb.writeC) >= rb.options.busySize {
-					rb.metrics.busyGauge.Set(1)
-				} else {
-					rb.metrics.busyGauge.Set(0)
-				}
-			}
+			rb.changeQueueDepthLocked(1)
+			rb.queueMetricMu.Unlock()
 			rb.stateMu.RUnlock()
 			return nil
 		case <-f.send.Ctx.Done():
+			rb.queueMetricMu.Unlock()
 			rb.stateMu.RUnlock()
 			return f.send.Ctx.Err()
 		default:
+			rb.queueMetricMu.Unlock()
 			rb.stateMu.RUnlock()
 			rb.waitWrite(f.send.Ctx)
 		}
@@ -416,15 +509,35 @@ func (rb *remoteBackend) Close() {
 	})
 	rb.stateMu.Lock()
 	if rb.stateMu.state == stateStopped {
+		// stateStopped seals admission, but teardown may still be running. Join
+		// the owner so every successful Close observes the same physical cleanup
+		// completion.
+		closeDone := rb.closeDone
+		rb.atomic.unavailable.Store(true)
+		rb.inactive()
 		rb.stateMu.Unlock()
+		<-closeDone
 		return
 	}
 	rb.stateMu.state = stateStopped
+	// Publish the terminal flag before clearing activity. active() rechecks the
+	// flag after its timestamp store, so every interleaving ends at zero without
+	// adding a state mutex to the per-message hot path.
+	rb.atomic.unavailable.Store(true)
+	rb.inactive()
 	rb.stopWriteLoop()
+	closeDone := rb.closeDone
 	rb.stateMu.Unlock()
+	defer close(closeDone)
 
+	// Seal every active stream before waiting for transport workers. This makes
+	// receiver termination independent of network I/O and prevents a late read
+	// callback from publishing after the terminal notification.
+	rb.cancelActiveStreams()
 	rb.stopper.Stop()
 	rb.doClose()
+	rb.makeAllWaitingFutureFailed(backendClosed)
+	rb.clean()
 	rb.inactive()
 }
 
@@ -460,9 +573,53 @@ func (rb *remoteBackend) Locked() bool {
 	return rb.stateMu.locked
 }
 
+// markIdle seals admission only if the backend is still idle. The state lock
+// serializes this decision with doSend and NewStream; the future lock covers
+// requests registered before they reach doSend. Physical Close runs separately.
+func (rb *remoteBackend) markIdle(maxIdle time.Duration) bool {
+	rb.stateMu.Lock()
+	defer rb.stateMu.Unlock()
+	rb.mu.RLock()
+	defer rb.mu.RUnlock()
+
+	lastActive := rb.LastActiveTime()
+	if rb.stateMu.locked || time.Since(lastActive) <= maxIdle ||
+		(rb.atomic.draining.Load() && !lastActive.IsZero()) {
+		return false
+	}
+	if rb.stateMu.state == stateRunning {
+		for _, f := range rb.mu.futures {
+			if f.isUserUnary() && f.send.Ctx.Err() == nil {
+				return false
+			}
+		}
+		rb.stateMu.state = stateStopping
+		rb.atomic.unavailable.Store(true)
+		rb.inactive()
+	}
+	return true
+}
+
 func (rb *remoteBackend) active() {
-	now := time.Now()
-	rb.atomic.lastActiveTime.Store(now)
+	if rb.atomic.unavailable.Load() {
+		return
+	}
+	rb.atomic.lastActiveTime.Store(time.Now())
+	// Close may publish unavailable between the first check and the timestamp
+	// store. Repair that ordering here; if Close happens after this check, its
+	// own inactive store wins instead.
+	if rb.atomic.unavailable.Load() {
+		rb.inactive()
+	}
+}
+
+// activeLocked records activity only for the running generation. The caller
+// must hold stateMu for reading or writing.
+func (rb *remoteBackend) activeLocked() {
+	if rb.stateMu.state != stateRunning {
+		return
+	}
+	rb.atomic.lastActiveTime.Store(time.Now())
 }
 
 func (rb *remoteBackend) inactive() {
@@ -474,6 +631,8 @@ func (rb *remoteBackend) changeToStopping() {
 	defer rb.stateMu.Unlock()
 	if rb.stateMu.state == stateRunning {
 		rb.stateMu.state = stateStopping
+		rb.atomic.unavailable.Store(true)
+		rb.inactive()
 	}
 }
 
@@ -481,8 +640,15 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 	rb.logger.Debug("write loop started", rb.logFields()...)
 	defer func() {
 		rb.pingTimer.Stop()
-		rb.closeConn(false)
+		disconnected := rb.closeConn(false)
 		rb.readStopper.Stop()
+		// goetty.Close always closes its raw net.Conn before releasing the
+		// session buffers, even after Disconnect already closed it. Detach the
+		// closed socket only after the read loop has stopped so final session
+		// cleanup does not report an expected double-close as an error.
+		if disconnected {
+			rb.conn.UseConn(nil)
+		}
 		rb.closeConn(true)
 		close(rb.waitWriteC)
 		rb.logger.Debug("write loop stopped", rb.logFields()...)
@@ -504,50 +670,15 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 	rb.pingTimer = time.NewTimer(rb.getPingTimeout())
 	messages := make([]*Future, 0, rb.options.batchSendSize)
 	stopped := false
-	metricsUpdateTicker := time.NewTicker(time.Second)
-	defer metricsUpdateTicker.Stop()
-
-	updateMetrics := func() {
-		if rb.metrics != nil {
-			rb.mu.RLock()
-			if rb.metrics.activeRequestsGauge != nil {
-				rb.metrics.activeRequestsGauge.Set(float64(len(rb.mu.futures)))
-			}
-			rb.mu.RUnlock()
-			if rb.metrics.writeQueueLengthGauge != nil {
-				rb.metrics.writeQueueLengthGauge.Set(float64(len(rb.writeC)))
-			}
-			if rb.metrics.busyGauge != nil {
-				if len(rb.writeC) >= rb.options.busySize {
-					rb.metrics.busyGauge.Set(1)
-				} else {
-					rb.metrics.busyGauge.Set(0)
-				}
-			}
-		}
-	}
-
-	go func() {
-		for {
-			select {
-			case <-metricsUpdateTicker.C:
-				updateMetrics()
-			case <-rb.stopWriteC:
-				return
-			}
-		}
-	}()
-
 	for {
 		messages, stopped = rb.fetch(messages, rb.options.batchSendSize)
-		updateMetrics()
 		if len(messages) > 0 {
 			rb.metrics.sendingBatchSizeGauge.Set(float64(len(messages)))
 			start := time.Now()
 
-			writeTimeout := time.Duration(0)
+			var writeDeadline time.Time
 			written := messages[:0]
-			for _, f := range messages {
+			for idx, f := range messages {
 				rb.metrics.writeLatencyDurationHistogram.Observe(start.Sub(f.send.createAt).Seconds())
 
 				id := f.getSendMessageID()
@@ -556,14 +687,31 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 					continue
 				}
 
-				if v := rb.doWrite(id, f); v > 0 {
-					writeTimeout += v
+				deadline, err := rb.doWrite(id, f)
+				if err != nil {
+					// Encoding may have written a partial frame (including directly
+					// to the socket). Never flush or reuse this connection after it.
+					rb.changeToStopping()
+					rb.stopWriteLoop()
+					rb.cancelActiveStreams()
+					for _, pending := range written {
+						pending.messageSent(err)
+					}
+					for _, pending := range messages[idx+1:] {
+						pending.messageSent(err)
+					}
+					rb.makeAllWaitingFutureFailed(err)
+					return
+				}
+				if !deadline.IsZero() {
+					writeDeadline = earliestDeadline(writeDeadline, deadline)
 					written = append(written, f)
 				}
 			}
 
 			if len(written) > 0 {
 				rb.metrics.outputBytesCounter.Add(float64(rb.conn.OutBuf().Readable()))
+				writeTimeout := remainingDeadlineTimeout(writeDeadline, time.Now())
 				if err := rb.conn.Flush(writeTimeout); err != nil {
 					for _, f := range written {
 						id := f.getSendMessageID()
@@ -572,8 +720,28 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 							append(rb.logFields(), zap.Uint64("request-id", id), zap.Error(err))...)
 						f.messageSent(err)
 					}
+					rb.changeToStopping()
+					rb.stopWriteLoop()
+					rb.cancelActiveStreams()
+					rb.makeAllWaitingFutureFailed(err)
+					return
 				} else {
+					// Record only transport-complete writes. A request that merely
+					// reached the userspace buffer must not extend the read window
+					// when Flush ultimately fails. Every request in the batch became
+					// transport-complete at this flush, so one tick serves them all.
+					var flushedAt int64
+					if rb.options.readTimeout > 0 && rb.options.livenessProbe == nil {
+						flushedAt = rb.livenessTick()
+					}
 					for _, f := range written {
+						if flushedAt != 0 {
+							if f.isUserUnary() {
+								f.writtenAt.Store(flushedAt)
+							} else if f.send.stream && !f.send.internal {
+								rb.atomic.lastStreamFlushAt.Store(flushedAt)
+							}
+						}
 						f.messageSent(nil)
 					}
 				}
@@ -587,21 +755,27 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 	}
 }
 
-func (rb *remoteBackend) doWrite(id uint64, f *Future) time.Duration {
+func (rb *remoteBackend) doWrite(id uint64, f *Future) (time.Time, error) {
 	if !rb.options.filter(f.send.Message, rb.remote) {
 		f.messageSent(messageSkipped)
-		return 0
+		return time.Time{}, nil
 	}
 	// already timeout in future, and future will get a ctx timeout
 	if f.send.Timeout() {
 		f.messageSent(f.send.Ctx.Err())
-		return 0
+		return time.Time{}, nil
 	}
 
 	v, err := f.send.GetTimeoutFromContext()
 	if err != nil {
 		f.messageSent(err)
-		return 0
+		return time.Time{}, nil
+	}
+	deadline := time.Now().Add(v)
+	if f.streamOwner != nil &&
+		!f.streamOwner.assignSendSequence(&f.send) {
+		f.messageSent(backendClosed)
+		return time.Time{}, nil
 	}
 
 	// For PayloadMessage, the internal Codec will write the Payload directly to the underlying socket
@@ -609,21 +783,31 @@ func (rb *remoteBackend) doWrite(id uint64, f *Future) time.Duration {
 	// here, otherwise an old deadline will be out causing io/timeout.
 	conn := rb.conn.RawConn()
 	if _, ok := f.send.Message.(PayloadMessage); ok && conn != nil {
-		conn.SetWriteDeadline(time.Now().Add(v))
+		conn.SetWriteDeadline(deadline)
 	}
 	if ce := rb.logger.Check(zap.DebugLevel, "write request"); ce != nil {
 		ce.Write(append(rb.logFields(), zap.Uint64("request-id", id),
 			zap.String("request", f.send.Message.DebugString()))...)
 	}
+	trackLiveness := !f.send.internal && !f.send.stream &&
+		rb.options.livenessProbe != nil
+	if trackLiveness {
+		// Publish before entering the transport. This removes the fast-response
+		// race and also treats a blocked conn.Write as data-path inactivity.
+		rb.recordDataWrite(id, rb.livenessTick())
+	}
 	if err := rb.conn.Write(f.send, goetty.WriteOptions{}); err != nil {
+		if trackLiveness {
+			rb.rollbackDataWrite(id)
+		}
 		rb.metrics.observeBackendError(rb.remote, "write", err)
 		rb.rateLimitLogger.Error("write-conn",
 			"write request failed",
 			append(rb.logFields(), zap.Uint64("request-id", id), zap.Error(err))...)
 		f.messageSent(err)
-		return 0
+		return time.Time{}, err
 	}
-	return v
+	return deadline, nil
 }
 
 func (rb *remoteBackend) readLoop(ctx context.Context) {
@@ -656,12 +840,14 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			normalExit = true
-			rb.clean()
 			return
 		default:
 			msg, err := rb.conn.Read(goetty.ReadOptions{Timeout: rb.options.readTimeout})
 			n++
 			if err != nil || rb.options.disconnectAfterRead == n {
+				if err != nil && rb.keepDataConnectionAfterReadTimeout(ctx, err) {
+					continue
+				}
 				if err == nil {
 					err = backendClosed
 				}
@@ -684,17 +870,25 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 			}
 			rb.metrics.receiveCounter.Inc()
 
-			// Only update lastActiveTime for user traffic; heartbeat (internal) should not prevent idle timeout.
-			if rpcm, ok := msg.(interface{ InternalMessage() bool }); ok && !rpcm.InternalMessage() {
+			// Only update progress/activity for user traffic; heartbeat
+			// (internal) must neither mask a stalled data path nor prevent idle
+			// timeout.
+			rpcMsg := msg.(RPCMessage)
+			if !rpcMsg.InternalMessage() {
+				rb.recordDataProgress(
+					rpcMsg.Message.GetID(),
+					!rpcMsg.stream,
+					rb.livenessTick(),
+				)
 				rb.active()
 			}
 
 			if rb.options.hasPayloadResponse {
 				wg.Add(1)
 			}
-			resp := msg.(RPCMessage).Message
+			resp := rpcMsg.Message
 			rb.metrics.inputBytesCounter.Add(float64(resp.ProtoSize()))
-			rb.requestDone(ctx, resp.GetID(), msg.(RPCMessage), nil, cb)
+			rb.requestDone(ctx, resp.GetID(), rpcMsg, nil, cb)
 			if rb.options.hasPayloadResponse {
 				wg.Wait()
 			}
@@ -703,23 +897,6 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 }
 
 func (rb *remoteBackend) fetch(messages []*Future, maxFetchCount int) ([]*Future, bool) {
-	defer func() {
-		queueLen := float64(len(rb.writeC))
-		if rb.metrics != nil {
-			rb.metrics.sendingQueueSizeGauge.Set(queueLen)
-			if rb.metrics.writeQueueLengthGauge != nil {
-				rb.metrics.writeQueueLengthGauge.Set(queueLen)
-			}
-			if rb.metrics.busyGauge != nil {
-				if len(rb.writeC) >= rb.options.busySize {
-					rb.metrics.busyGauge.Set(1)
-				} else {
-					rb.metrics.busyGauge.Set(0)
-				}
-			}
-		}
-	}()
-
 	n := len(messages)
 	for i := 0; i < n; i++ {
 		messages[i] = nil
@@ -746,6 +923,7 @@ func (rb *remoteBackend) fetch(messages []*Future, maxFetchCount int) ([]*Future
 	case <-rb.pingTimer.C:
 		doHeartbeat()
 	case f := <-rb.writeC:
+		rb.changeQueueDepth(-1)
 		rb.notifyWaitWrite()
 		handleHeartbeat()
 		messages = append(messages, f)
@@ -772,6 +950,7 @@ func (rb *remoteBackend) fetchN(messages []*Future, max int) []*Future {
 	for i := 0; i < n; i++ {
 		select {
 		case f := <-rb.writeC:
+			rb.changeQueueDepth(-1)
 			messages = append(messages, f)
 		default:
 			return messages
@@ -784,6 +963,7 @@ func (rb *remoteBackend) makeAllWritesDoneWithClosed() {
 	for {
 		select {
 		case m := <-rb.writeC:
+			rb.changeQueueDepth(-1)
 			m.messageSent(backendClosed)
 		default:
 			return
@@ -792,24 +972,26 @@ func (rb *remoteBackend) makeAllWritesDoneWithClosed() {
 }
 
 func (rb *remoteBackend) makeAllWaitingFutureFailed(err error) {
-	var ids []uint64
-	var waitings []*Future
+	type waitingFuture struct {
+		id uint64
+		f  *Future
+	}
+	var waitings []waitingFuture
 	func() {
 		rb.mu.Lock()
 		defer rb.mu.Unlock()
-		ids = make([]uint64, 0, len(rb.mu.futures))
-		waitings = make([]*Future, 0, len(rb.mu.futures))
+		waitings = make([]waitingFuture, 0, len(rb.mu.futures))
 		for id, f := range rb.mu.futures {
-			if f.waiting.Load() {
-				waitings = append(waitings, f)
-				ids = append(ids, id)
+			if f.waiting.Load() && f.tryRef() {
+				waitings = append(waitings, waitingFuture{id: id, f: f})
 			}
 		}
 	}()
 
-	for i, f := range waitings {
+	for _, waiting := range waitings {
 		rb.metrics.observeBackendError(rb.remote, "wait_response", err)
-		f.error(ids[i], err, nil)
+		waiting.f.error(waiting.id, err, nil)
+		waiting.f.unRef()
 	}
 }
 
@@ -840,50 +1022,60 @@ func (rb *remoteBackend) clean() {
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
 
-	for id := range rb.mu.futures {
-		delete(rb.mu.futures, id)
+	if n := len(rb.mu.futures); n > 0 {
+		clear(rb.mu.futures)
+		if rb.metrics != nil {
+			rb.metrics.activeRequestsGauge.Sub(float64(n))
+		}
 	}
 }
 
 func (rb *remoteBackend) acquireStream() *stream {
-	return rb.pool.streams.Get().(*stream)
+	return newStream(
+		rb,
+		make(chan Message, rb.options.streamBufferSize),
+		rb.newFuture,
+		rb.doSend,
+		rb.removeActiveStream,
+		rb.active)
 }
 
 func (rb *remoteBackend) cancelActiveStreams() {
-	rb.mu.Lock()
-	defer rb.mu.Unlock()
-
+	// Snapshot under rb.mu, then enter each stream without holding rb.mu. Stream
+	// Close unregisters through s.mu -> rb.mu, so retaining rb.mu here would
+	// reintroduce the inverse lock order that terminal delivery must avoid.
+	rb.mu.RLock()
+	streams := make([]*stream, 0, len(rb.mu.activeStreams))
 	for _, st := range rb.mu.activeStreams {
-		st.done(context.TODO(), RPCMessage{}, true)
+		streams = append(streams, st)
+	}
+	rb.mu.RUnlock()
+
+	for _, st := range streams {
+		st.terminate()
 	}
 }
 
 func (rb *remoteBackend) removeActiveStream(s *stream) {
 	rb.mu.Lock()
-	defer rb.mu.Unlock()
-
 	delete(rb.mu.activeStreams, s.id)
-	delete(rb.mu.futures, s.id)
-	if s.unlockAfterClose {
-		rb.Unlock()
-	}
-	if len(s.c) > 0 {
+	rb.deleteFutureLocked(s.id)
+	channelNotEmpty := len(s.c) > 0
+	rb.finishDrainingLocked()
+	rb.mu.Unlock()
+	if channelNotEmpty {
 		panic("BUG: stream channel is not empty")
 	}
-	// When backend is already stopped (e.g. stream closed with closeConn=true), do not Put
-	// the stream back into the pool. Otherwise backend->pool->stream->backend forms a cycle
-	// and the backend (and its goetty session / newCounters) can never be GC'd after removal
-	// from the client, so heap inuse for newCounters stays high.
-	rb.stateMu.RLock()
-	stopped := rb.stateMu.state == stateStopped
-	rb.stateMu.RUnlock()
-	if !stopped {
-		rb.pool.streams.Put(s)
+
+	if s.unlockAfterClose {
+		rb.Unlock()
 	}
 }
 
 func (rb *remoteBackend) stopWriteLoop() {
-	close(rb.stopWriteC)
+	// Wake every admission waiter before termination waits for stream locks.
+	// The writer's failure path and Close may both own this notification.
+	rb.stopWriteOnce.Do(func() { close(rb.stopWriteC) })
 }
 
 func (rb *remoteBackend) requestDone(
@@ -912,10 +1104,31 @@ func (rb *remoteBackend) requestDone(
 
 	rb.mu.Lock()
 	if f, ok := rb.mu.futures[id]; ok {
-		delete(rb.mu.futures, id)
+		rb.deleteFutureLocked(id)
+		rb.finishDrainingLocked()
+		// Pin the Future before dropping rb.mu. Close plus writer completion
+		// may otherwise return it to the pool before terminal delivery starts.
+		// tryRef is safe under rb.mu because release callbacks run after f.mu
+		// is unlocked and therefore cannot form an f.mu -> rb.mu cycle.
+		pinned := f.tryRef()
 		rb.mu.Unlock()
+		if !pinned {
+			if cb != nil {
+				cb()
+			}
+			if !msg.internal && response != nil && rb.options.freeResponse != nil {
+				rb.options.freeResponse(response)
+			}
+			return
+		}
+		defer f.unRef()
 		if err == nil {
-			f.done(response, cb)
+			if !f.done(response, cb) &&
+				!msg.internal &&
+				response != nil &&
+				rb.options.freeResponse != nil {
+				rb.options.freeResponse(response)
+			}
 		} else {
 			errutil.ReportError(ctx, err)
 			f.error(id, err, cb)
@@ -927,6 +1140,7 @@ func (rb *remoteBackend) requestDone(
 		}
 	} else {
 		// future has been removed, e.g. it has timed out.
+		rb.finishDrainingLocked()
 		rb.mu.Unlock()
 		if cb != nil {
 			cb()
@@ -945,9 +1159,13 @@ func (rb *remoteBackend) addFuture(f *Future) {
 	defer rb.mu.Unlock()
 
 	f.ref()
-	rb.mu.futures[f.getSendMessageID()] = f
+	id := f.getSendMessageID()
+	if _, exists := rb.mu.futures[id]; exists {
+		panic("duplicate MORPC future ID")
+	}
+	rb.mu.futures[id] = f
 	if rb.metrics != nil {
-		rb.metrics.activeRequestsGauge.Set(float64(len(rb.mu.futures)))
+		rb.metrics.activeRequestsGauge.Inc()
 	}
 }
 
@@ -955,12 +1173,57 @@ func (rb *remoteBackend) releaseFuture(f *Future) {
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
 
-	delete(rb.mu.futures, f.getSendMessageID())
-	if rb.metrics != nil {
-		rb.metrics.activeRequestsGauge.Set(float64(len(rb.mu.futures)))
-	}
+	rb.deleteFutureLocked(f.getSendMessageID())
+	rb.finishDrainingLocked()
 	f.reset()
 	rb.pool.futures.Put(f)
+}
+
+func (rb *remoteBackend) deleteFutureLocked(id uint64) bool {
+	if _, ok := rb.mu.futures[id]; !ok {
+		return false
+	}
+	delete(rb.mu.futures, id)
+	if rb.metrics != nil {
+		rb.metrics.activeRequestsGauge.Dec()
+	}
+	return true
+}
+
+func (rb *remoteBackend) changeQueueDepth(delta int) {
+	rb.queueMetricMu.Lock()
+	defer rb.queueMetricMu.Unlock()
+	rb.changeQueueDepthLocked(delta)
+}
+
+func (rb *remoteBackend) changeQueueDepthLocked(delta int) {
+	previous := rb.queueMetricMu.depth
+	current := previous + delta
+	if current < 0 {
+		panic("negative MORPC backend write queue depth")
+	}
+	rb.queueMetricMu.depth = current
+	if rb.metrics == nil {
+		return
+	}
+	rb.metrics.sendingQueueSizeGauge.Add(float64(delta))
+	// Keep the historical metric as an exact compatibility alias. New
+	// dashboards use sending_queue_size to avoid duplicate signals.
+	if rb.metrics.writeQueueLengthGauge != nil {
+		rb.metrics.writeQueueLengthGauge.Add(float64(delta))
+	}
+	busy := current >= rb.options.busySize
+	if busy == rb.queueMetricMu.busy {
+		return
+	}
+	rb.queueMetricMu.busy = busy
+	if rb.metrics.busyGauge != nil {
+		if busy {
+			rb.metrics.busyGauge.Inc()
+		} else {
+			rb.metrics.busyGauge.Dec()
+		}
+	}
 }
 
 func (rb *remoteBackend) running() bool {
@@ -970,9 +1233,11 @@ func (rb *remoteBackend) running() bool {
 }
 
 func (rb *remoteBackend) resetConn() error {
-	start := time.Now()
+	start := rb.options.connectNow()
+	deadline := start.Add(rb.options.connectTimeout)
 	defer func() {
-		rb.metrics.connectDurationHistogram.Observe(time.Since(start).Seconds())
+		rb.metrics.connectDurationHistogram.Observe(
+			rb.options.connectNow().Sub(start).Seconds())
 	}()
 
 	wait := time.Second
@@ -986,13 +1251,26 @@ func (rb *remoteBackend) resetConn() error {
 			return backendClosed
 		default:
 		}
+		remaining := deadline.Sub(rb.options.connectNow())
+		if remaining <= 0 {
+			err := moerr.NewRPCTimeoutNoCtx()
+			rb.metrics.observeBackendError(rb.remote, "connect", err)
+			return err
+		}
 
 		rb.logger.Debug("start connect to remote", rb.logFields()...)
 		rb.closeConn(false)
 		rb.metrics.connectCounter.Inc()
-		err := rb.conn.Connect(rb.remote, rb.options.connectTimeout)
+		attemptTimeout := rb.options.connectAttemptTimeout
+		if attemptTimeout > remaining {
+			attemptTimeout = remaining
+		}
+		err := rb.conn.Connect(rb.remote, attemptTimeout)
 		if err == nil {
 			rb.logger.Debug("connect to remote succeed", rb.logFields()...)
+			// Transport-progress evidence belongs to one physical connection.
+			// Never carry a stalled old-generation latch onto a fresh socket.
+			rb.resetDataProgress()
 			rb.activeReadLoop(false)
 			return nil
 		}
@@ -1016,18 +1294,20 @@ func (rb *remoteBackend) resetConn() error {
 		}
 		duration := time.Duration(0)
 		for {
-			time.Sleep(sleep)
-			duration += sleep
-			if time.Since(start) > rb.options.connectTimeout {
+			remaining = deadline.Sub(rb.options.connectNow())
+			if remaining <= 0 {
 				err := moerr.NewRPCTimeoutNoCtx()
 				rb.metrics.observeBackendError(rb.remote, "connect", err)
 				return err
 			}
-			select {
-			case <-rb.ctx.Done():
-				return backendClosed
-			default:
+			delay := sleep
+			if delay > remaining {
+				delay = remaining
 			}
+			if err := rb.options.connectWait(rb.ctx, delay); err != nil {
+				return backendClosed
+			}
+			duration += delay
 			if duration >= wait {
 				break
 			}
@@ -1040,10 +1320,22 @@ func (rb *remoteBackend) resetConn() error {
 	}
 }
 
+func waitConnectRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func (rb *remoteBackend) notifyAllWaitWritesFailed(err error) {
 	for {
 		select {
 		case f := <-rb.writeC:
+			rb.changeQueueDepth(-1)
 			f.messageSent(err)
 		default:
 			return
@@ -1094,7 +1386,7 @@ func (rb *remoteBackend) scheduleResetConn(err error) {
 	}
 }
 
-func (rb *remoteBackend) closeConn(close bool) {
+func (rb *remoteBackend) closeConn(close bool) bool {
 	fn := rb.conn.Disconnect
 	if close {
 		fn = rb.conn.Close
@@ -1108,7 +1400,9 @@ func (rb *remoteBackend) closeConn(close bool) {
 		} else {
 			rb.logger.Error("close remote conn failed", fields...)
 		}
+		return false
 	}
+	return true
 }
 
 // isExpectedReadError checks if the error is an expected error during normal connection lifecycle
@@ -1158,10 +1452,247 @@ func (rb *remoteBackend) nextID() uint64 {
 }
 
 func (rb *remoteBackend) getPingTimeout() time.Duration {
+	if rb.options.livenessProbe != nil {
+		return time.Duration(math.MaxInt64)
+	}
 	if rb.options.readTimeout > 0 {
 		return rb.options.readTimeout / 5
 	}
 	return time.Duration(math.MaxInt64)
+}
+
+// keepDataConnectionAfterReadTimeout decides whether a socket read timeout may
+// recycle the data connection. A socket read can begin while the connection is
+// idle and inherit a deadline that is already mostly consumed when the next
+// request arrives. Idle time is not request latency, so admitted traffic is
+// judged against request-owned read windows instead of the socket's deadline.
+func (rb *remoteBackend) keepDataConnectionAfterReadTimeout(
+	ctx context.Context,
+	readErr error,
+) bool {
+	if !isTimeoutError(readErr) {
+		return false
+	}
+	select {
+	case <-ctx.Done():
+		return false
+	default:
+	}
+	if rb.options.livenessProbe == nil {
+		return rb.keepOrdinaryDataConnection()
+	}
+	return rb.keepProbedDataConnection(ctx)
+}
+
+// keepOrdinaryDataConnection is the probe-less policy. Every admitted user
+// unary request owns exactly one complete read window: it starts at admission,
+// restarts once at the successful flush, and a terminal send failure owns
+// none. The oldest window rules the decision: once the oldest admitted request
+// has waited one full window without any read progress, the transport is
+// stalled and a newer admission cannot rescue it — this also bounds a write
+// blocked against a dead peer to one window instead of letting the queued
+// state renew the connection until the request deadline. Stream traffic keeps
+// the coarser bound of one window from the most recent flushed stream message,
+// but only while no unary request owns a window. Once the oldest unary window
+// expires, newer stream traffic cannot rescue that already-stalled connection
+// generation. An idle backend (no open window at all) keeps the pre-existing
+// idle-timeout close behavior.
+func (rb *remoteBackend) keepOrdinaryDataConnection() bool {
+	now := rb.livenessTick()
+	unaryWindow := rb.pendingRequestReadWindow()
+	if unaryWindow != 0 {
+		return rb.withinReadWindow(now, unaryWindow)
+	}
+	return rb.withinReadWindow(now, rb.atomic.lastStreamFlushAt.Load())
+}
+
+// keepProbedDataConnection is the probe-enabled policy: response inactivity
+// beyond one read window stops admission (draining) and consults the
+// independent liveness probe, but never closes the data connection here — a
+// probe failure is inconclusive because the peer may still return a valid slow
+// response on the data connection.
+func (rb *remoteBackend) keepProbedDataConnection(ctx context.Context) bool {
+	pendingSince := rb.dataPendingSince()
+	if pendingSince == 0 {
+		return true
+	}
+	if rb.withinReadWindow(rb.livenessTick(), pendingSince) {
+		return true
+	}
+
+	rb.stateMu.Lock()
+	if rb.stateMu.state != stateRunning {
+		rb.stateMu.Unlock()
+		return false
+	}
+	startedDraining := rb.dataPendingSince() != 0 &&
+		rb.atomic.draining.CompareAndSwap(false, true)
+	rb.stateMu.Unlock()
+	if startedDraining {
+		// Response inactivity is enough to stop admitting new work to this data
+		// generation, but not enough to fail requests that can still complete.
+		// Preserve them while the client publishes a fresh generation on demand.
+		rb.logger.Debug(
+			"data backend draining after response inactivity",
+			rb.logFields()...,
+		)
+		rb.mu.Lock()
+		rb.finishDrainingLocked()
+		rb.mu.Unlock()
+	}
+
+	timeout := rb.options.readTimeout / 5
+	if timeout <= 0 || timeout > internalTimeout {
+		timeout = internalTimeout
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	if err := rb.options.livenessProbe(probeCtx, rb.remote); err != nil {
+		rb.metrics.observeBackendError(rb.remote, "liveness-probe", err)
+		// The control transport is independent from this data connection. Its
+		// failure is therefore inconclusive: the peer may still return a valid
+		// slow response on the data connection. Leave reset and Future failure to
+		// a terminal data error or the client's bounded generation lifecycle.
+		return true
+	}
+	return true
+}
+
+func (rb *remoteBackend) admissionAvailable() bool {
+	return !rb.atomic.draining.Load()
+}
+
+// finishDrainingLocked makes a fully drained backend eligible for the client's
+// normal inactive cleanup. The caller must hold rb.mu.
+func (rb *remoteBackend) finishDrainingLocked() {
+	if rb.atomic.draining.Load() &&
+		len(rb.mu.futures) == 0 &&
+		len(rb.mu.activeStreams) == 0 {
+		rb.inactive()
+	}
+}
+
+func (rb *remoteBackend) livenessTick() int64 {
+	return time.Since(rb.livenessEpoch).Nanoseconds() + 1
+}
+
+// withinReadWindow reports whether the read window that started at since is
+// still open at now. Zero means no window. A start observed slightly after now
+// (a flush racing this scan) is inside its window, never expired.
+func (rb *remoteBackend) withinReadWindow(now, since int64) bool {
+	return since != 0 && now-since < rb.options.readTimeout.Nanoseconds()
+}
+
+func (rb *remoteBackend) recordDataWrite(id uint64, at int64) {
+	rb.livenessMu.Lock()
+	if rb.livenessMu.pending == nil {
+		rb.livenessMu.pending = make(map[uint64]struct{})
+	}
+	if _, exists := rb.livenessMu.pending[id]; !exists &&
+		!rb.livenessMu.overflow {
+		if len(rb.livenessMu.pending) < rb.options.bufferSize {
+			rb.livenessMu.pending[id] = struct{}{}
+		} else {
+			rb.livenessMu.overflow = true
+		}
+	}
+	if rb.livenessMu.pendingSince == 0 {
+		rb.livenessMu.pendingSince = at
+	}
+	rb.livenessMu.Unlock()
+}
+
+func (rb *remoteBackend) rollbackDataWrite(id uint64) {
+	rb.livenessMu.Lock()
+	delete(rb.livenessMu.pending, id)
+	if len(rb.livenessMu.pending) == 0 && !rb.livenessMu.overflow {
+		rb.livenessMu.pendingSince = 0
+	}
+	rb.livenessMu.Unlock()
+}
+
+func (rb *remoteBackend) recordDataProgress(id uint64, matchedUnary bool, at int64) {
+	rb.livenessMu.Lock()
+	if matchedUnary {
+		delete(rb.livenessMu.pending, id)
+	}
+	if len(rb.livenessMu.pending) == 0 && !rb.livenessMu.overflow {
+		rb.livenessMu.pendingSince = 0
+	} else if rb.livenessMu.pendingSince != 0 {
+		// The connection made observable read progress. Give every remaining
+		// unmatched write one complete read window before probing again.
+		rb.livenessMu.pendingSince = at
+	}
+	rb.livenessMu.Unlock()
+}
+
+func (rb *remoteBackend) dataPendingSince() int64 {
+	rb.livenessMu.Lock()
+	defer rb.livenessMu.Unlock()
+	return rb.livenessMu.pendingSince
+}
+
+// pendingRequestReadWindow returns the oldest read-window start among pending
+// user unary requests, or zero when none holds a window.
+//
+// This future scan is the probe-less twin of the livenessMu.pending machinery:
+// probe-enabled backends publish per-write progress into livenessMu
+// (recordDataWrite/recordDataProgress/resetDataProgress) because the probe
+// wants refresh-on-any-read semantics, while probe-less backends derive the
+// same "how long has user traffic been unanswered" answer from the
+// lifecycle-bounded future set. A timeout-policy change in one tracker usually
+// needs a matching look at the other.
+func (rb *remoteBackend) pendingRequestReadWindow() int64 {
+	rb.mu.RLock()
+	defer rb.mu.RUnlock()
+	oldest := int64(0)
+	for _, f := range rb.mu.futures {
+		if !f.isUserUnary() {
+			continue
+		}
+		// Read the publication flag before the timestamp. The success path stores
+		// writtenAt and then publishes waiting=true; this order prevents observing
+		// the old zero timestamp together with the new success flag.
+		waiting := f.waiting.Load()
+		start := f.writtenAt.Load()
+		if start == 0 {
+			if waiting {
+				// messageSent publishes waiting=true for both success and failure.
+				// Success publishes writtenAt first; therefore zero plus waiting is
+				// exactly the terminal-send-failure state, which owns no window.
+				continue
+			}
+			// Admitted/queued/write-in-progress: the window starts at admission.
+			// f.send is published by addFuture's lock and cleared only under the
+			// same lock in releaseFuture, so this read is synchronized.
+			start = f.send.createAt.Sub(rb.livenessEpoch).Nanoseconds() + 1
+		}
+		if oldest == 0 || start < oldest {
+			oldest = start
+		}
+	}
+	return oldest
+}
+
+func (rb *remoteBackend) resetDataProgress() {
+	rb.livenessMu.Lock()
+	clear(rb.livenessMu.pending)
+	rb.livenessMu.pendingSince = 0
+	rb.livenessMu.overflow = false
+	rb.livenessMu.Unlock()
+}
+
+func isTimeoutError(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	text := err.Error()
+	return strings.Contains(text, "i/o timeout") ||
+		strings.Contains(text, "deadline exceeded")
 }
 
 func (rb *remoteBackend) notifyWaitWrite() {
@@ -1174,6 +1705,7 @@ func (rb *remoteBackend) notifyWaitWrite() {
 func (rb *remoteBackend) waitWrite(ctx context.Context) {
 	select {
 	case <-rb.waitWriteC:
+	case <-rb.stopWriteC:
 	case <-ctx.Done():
 	}
 }
@@ -1182,6 +1714,8 @@ type goettyBasedBackendFactory struct {
 	codec   Codec
 	options []BackendOption
 }
+
+var _ ContextBackendFactory = (*goettyBasedBackendFactory)(nil)
 
 func NewGoettyBasedBackendFactory(codec Codec, options ...BackendOption) BackendFactory {
 	return &goettyBasedBackendFactory{
@@ -1193,8 +1727,85 @@ func NewGoettyBasedBackendFactory(codec Codec, options ...BackendOption) Backend
 func (bf *goettyBasedBackendFactory) Create(
 	remote string,
 	extraOptions ...BackendOption) (Backend, error) {
-	opts := append(bf.options, extraOptions...)
+	opts := make([]BackendOption, 0, len(bf.options)+len(extraOptions))
+	opts = append(opts, bf.options...)
+	opts = append(opts, extraOptions...)
 	return NewRemoteBackend(remote, bf.codec, opts...)
+}
+
+// CreateWithContext adapts goetty's timeout-bounded legacy Connect API to the
+// contextual factory contract. Cancellation returns the shared factory worker
+// immediately. The bounded connect attempt retains ownership of its result and
+// closes a late Backend before it can escape into a replacement generation.
+func (bf *goettyBasedBackendFactory) CreateWithContext(
+	ctx context.Context,
+	remote string,
+	extraOptions ...BackendOption,
+) (Backend, error) {
+	return boundedBackendCreate(ctx, goettyContextCreateSlots, func() (Backend, error) {
+		return bf.Create(remote, extraOptions...)
+	})
+}
+
+func boundedBackendCreate(
+	ctx context.Context,
+	slots chan struct{},
+	create func() (Backend, error),
+) (Backend, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	select {
+	case slots <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	resultC := make(chan backendCreateResult)
+	go func() {
+		defer func() { <-slots }()
+		backend, err := create()
+		transferBackendCreateResult(
+			ctx,
+			resultC,
+			backendCreateResult{backend: backend, err: err},
+		)
+	}()
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case result := <-resultC:
+		if err := ctx.Err(); err != nil {
+			if result.backend != nil {
+				result.backend.Close()
+			}
+			return nil, err
+		}
+		return result.backend, result.err
+	}
+}
+
+type backendCreateResult struct {
+	backend Backend
+	err     error
+}
+
+// transferBackendCreateResult is the ownership linearization point for a
+// completed legacy create. An unbuffered transfer gives the Backend to exactly
+// one live receiver; if cancellation wins instead, the producer remains its
+// owner and destroys it before releasing the shared create slot.
+func transferBackendCreateResult(
+	ctx context.Context,
+	resultC chan<- backendCreateResult,
+	result backendCreateResult,
+) {
+	select {
+	case resultC <- result:
+	case <-ctx.Done():
+		if result.backend != nil {
+			result.backend.Close()
+		}
+	}
 }
 
 type stream struct {
@@ -1212,9 +1823,12 @@ type stream struct {
 	id                   uint64
 	sequence             uint32
 	lastReceivedSequence uint32
+	sendSequenceMu       sync.Mutex
+	sendSequenceClosed   bool
 	mu                   struct {
 		sync.RWMutex
-		closed bool
+		closed   bool
+		terminal bool
 	}
 }
 
@@ -1243,9 +1857,13 @@ func newStream(
 func (s *stream) init(id uint64, unlockAfterClose bool) {
 	s.id = id
 	s.unlockAfterClose = unlockAfterClose
+	s.sendSequenceMu.Lock()
 	s.sequence = 0
+	s.sendSequenceClosed = false
+	s.sendSequenceMu.Unlock()
 	s.lastReceivedSequence = 0
 	s.mu.closed = false
+	s.mu.terminal = false
 	for {
 		select {
 		case <-s.c:
@@ -1263,7 +1881,9 @@ func (s *stream) setFinalizer() {
 
 func (s *stream) destroy() {
 	close(s.c)
-	s.cancel()
+	if s.cancel != nil {
+		s.cancel()
+	}
 }
 
 func (s *stream) Send(ctx context.Context, request Message) error {
@@ -1273,19 +1893,15 @@ func (s *stream) Send(ctx context.Context, request Message) error {
 	if _, ok := ctx.Deadline(); !ok {
 		panic("deadline not set in context")
 	}
-	s.activeFunc()
-
-	f := s.newFutureFunc()
-	f.ref()
-	defer f.Close()
-
 	s.mu.RLock()
-	if s.mu.closed {
+	if s.mu.closed || s.mu.terminal {
 		s.mu.RUnlock()
 		s.rb.logger.Warn("stream is closed on send", append(s.rb.logFields(), zap.Uint64("stream-id", s.id))...)
 		return moerr.NewStreamClosedNoCtx()
 	}
 
+	f := s.newFutureFunc()
+	defer f.Close()
 	err := s.doSendLocked(ctx, f, request)
 	// unlock before future.close to avoid deadlock with future.Close
 	// 1. current goroutine:        stream.RLock
@@ -1297,6 +1913,7 @@ func (s *stream) Send(ctx context.Context, request Message) error {
 	if err != nil {
 		return err
 	}
+	s.activeFunc()
 	// stream only wait send completed
 	return f.waitSendCompleted()
 }
@@ -1305,21 +1922,26 @@ func (s *stream) doSendLocked(
 	ctx context.Context,
 	f *Future,
 	request Message) error {
-	s.sequence++
 	f.init(RPCMessage{
-		Ctx:            ctx,
-		Message:        request,
-		stream:         true,
-		streamSequence: s.sequence,
+		Ctx:     ctx,
+		Message: request,
+		stream:  true,
 	})
-
-	return s.sendFunc(f)
+	f.streamOwner = s
+	f.ref()
+	err := s.sendFunc(f)
+	if err != nil {
+		// The Future never entered the backend write queue, so complete the
+		// writer ownership locally before Close returns it to the pool.
+		f.messageSent(err)
+	}
+	return err
 }
 
 func (s *stream) Receive() (chan Message, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.mu.closed {
+	if s.mu.closed || s.mu.terminal {
 		s.rb.logger.Warn("stream is closed on receive", append(s.rb.logFields(), zap.Uint64("stream-id", s.id))...)
 		return nil, moerr.NewStreamClosedNoCtx()
 	}
@@ -1327,21 +1949,49 @@ func (s *stream) Receive() (chan Message, error) {
 }
 
 func (s *stream) Close(closeConn bool) error {
+	s.cancel()
+	s.sendSequenceMu.Lock()
+	s.sendSequenceClosed = true
+	s.sendSequenceMu.Unlock()
 	if closeConn {
 		s.rb.logger.Info("stream call closed on client", append(s.rb.logFields(), zap.Uint64("stream-id", s.id))...)
 		s.rb.Close()
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if s.mu.closed {
+		s.mu.Unlock()
 		return nil
 	}
 
 	s.cleanCLocked()
 	s.mu.closed = true
+	s.mu.Unlock()
 	s.unregisterFunc(s)
+	// cancel makes every in-flight done stop independently, and unregister
+	// observes an empty channel. Publish one terminal response for both close
+	// modes so a receiver that obtained the channel before Close is always
+	// released. Stream handles/channels are generation-private and never pooled.
+	select {
+	case s.c <- nil:
+	default:
+		panic("BUG: stream close notification channel is full")
+	}
 	return nil
+}
+
+// assignSendSequence runs in the single backend write loop after a request has
+// passed filter and context checks. Assigning at Stream.Send time would consume
+// a sequence for a queued request that expires before transport write, making
+// the next control message look out of order to the server.
+func (s *stream) assignSendSequence(message *RPCMessage) bool {
+	s.sendSequenceMu.Lock()
+	defer s.sendSequenceMu.Unlock()
+	if s.sendSequenceClosed {
+		return false
+	}
+	s.sequence++
+	message.streamSequence = s.sequence
+	return true
 }
 
 func (s *stream) ID() uint64 {
@@ -1355,7 +2005,7 @@ func (s *stream) done(
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if s.mu.closed {
+	if s.mu.closed || s.mu.terminal {
 		return
 	}
 
@@ -1381,8 +2031,31 @@ func (s *stream) done(
 		select {
 		case s.c <- response:
 		case <-ctx.Done():
+		case <-s.ctx.Done():
 		}
 	})
+}
+
+// terminate seals response delivery and publishes exactly one terminal value
+// for receivers that already obtained the channel. It deliberately leaves
+// unregister ownership with Stream.Close, as required by the Stream contract.
+func (s *stream) terminate() {
+	s.cancel()
+	s.sendSequenceMu.Lock()
+	s.sendSequenceClosed = true
+	s.sendSequenceMu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.mu.closed || s.mu.terminal {
+		return
+	}
+	s.cleanCLocked()
+	s.mu.terminal = true
+	select {
+	case s.c <- nil:
+	default:
+		panic("BUG: stream terminal notification channel is full")
+	}
 }
 
 func (s *stream) cleanCLocked() {

@@ -74,6 +74,7 @@ type Service struct {
 	stopper     *stopper.Stopper
 	haClient    LogHAKeeperClient
 	fileService fileservice.FileService
+	heartbeatC  chan struct{}
 	shutdownC   chan struct{}
 
 	options struct {
@@ -88,7 +89,12 @@ type Service struct {
 		storageFactory taskservice.TaskStorageFactory
 	}
 
-	config *util.ConfigData
+	config      *util.ConfigData
+	walRecovery struct {
+		configured  bool
+		coordinator bool
+		pending     atomic.Bool
+	}
 
 	// dataSync is used to sync data to other modules.
 	dataSync DataSync
@@ -111,6 +117,7 @@ func NewService(
 		cfg:         cfg,
 		stopper:     stopper.NewStopper("log-service"),
 		fileService: fileService,
+		heartbeatC:  make(chan struct{}, 1),
 		shutdownC:   shutdownC,
 	}
 	for _, opt := range opts {
@@ -131,6 +138,7 @@ func NewService(
 		service.runtime.Logger().Error("failed to create log store", zap.Error(err))
 		return nil, err
 	}
+	store.bootstrapCommandsAdded = service.requestHeartbeat
 	if err := store.loadMetadata(); err != nil {
 		_ = store.close()
 		return nil, err
@@ -194,6 +202,14 @@ func NewService(
 	service.server = server
 	service.pool = pool
 	service.respPool = respPool
+	if cfg.BootstrapConfig.Restore.Enabled {
+		// Set this before the heartbeat worker starts. The status is carried in
+		// LogStore heartbeats, so whichever HAKeeper replica becomes leader can
+		// keep the cluster out of Running state until replay completes.
+		service.walRecovery.configured = true
+		service.walRecovery.coordinator = cfg.BootstrapConfig.Restore.WALDataPath != ""
+		service.walRecovery.pending.Store(true)
+	}
 
 	server.RegisterRequestHandler(service.handleRPCRequest)
 	// TODO: before making the service available to the outside world, restore all
@@ -362,6 +378,8 @@ func (s *Service) handle(ctx context.Context, req pb.Request,
 		return s.handleCheckHealth(ctx, req), pb.LogRecordResponse{}
 	case pb.READ_LSN:
 		return s.handleReadLsn(ctx, req)
+	case pb.GET_SCHEDULE_COMMANDS:
+		return s.handleGetScheduleCommands(ctx, req), pb.LogRecordResponse{}
 	default:
 		resp := getResponse(req)
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(
@@ -373,6 +391,46 @@ func (s *Service) handle(ctx context.Context, req pb.Request,
 
 func getResponse(req pb.Request) pb.Response {
 	return pb.Response{Method: req.Method}
+}
+
+func (s *Service) handleGetScheduleCommands(ctx context.Context, req pb.Request) pb.Response {
+	resp := getResponse(req)
+	query := req.ScheduleCommandQuery
+	if query == nil || query.UUID == "" {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(
+			moerr.NewInvalidInput(ctx, "missing schedule command query"))
+		return resp
+	}
+	if query.ServiceType != pb.CNService && query.ServiceType != pb.TNService {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(
+			moerr.NewInvalidInputf(ctx, "unsupported schedule command service type %s", query.ServiceType.String()))
+		return resp
+	}
+	batch, err := s.store.getCommandBatch(ctx, query.UUID)
+	if err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+		return resp
+	}
+	for _, command := range batch.Commands {
+		if command.ServiceType != query.ServiceType {
+			resp.ErrorCode, resp.ErrorMessage = toErrorCode(
+				moerr.NewInternalErrorf(ctx,
+					"schedule command for %s returned to %s",
+					command.ServiceType.String(), query.ServiceType.String()))
+			return resp
+		}
+	}
+	// A batch installed before every HAKeeper replica understood stable delivery
+	// IDs cannot be safely deduplicated against a concurrent heartbeat response
+	// or generation rollover. Let the acknowledged heartbeat path migrate it;
+	// protocol activation (or a later existing TickUpdate after snapshot
+	// recovery) also fills the IDs without adding a delivery-specific Raft write.
+	if len(batch.Commands) > 0 && !ScheduleCommandBatchHasStableIDs(batch) {
+		resp.CommandBatch = &pb.CommandBatch{}
+		return resp
+	}
+	resp.CommandBatch = &batch
+	return resp
 }
 
 func (s *Service) handleGetShardInfo(ctx context.Context, req pb.Request) pb.Response {
@@ -528,7 +586,6 @@ func (s *Service) handleLogHeartbeat(ctx context.Context, req pb.Request) pb.Res
 	} else {
 		resp.CommandBatch = &cb
 	}
-
 	return resp
 }
 
@@ -546,7 +603,6 @@ func (s *Service) handleCNHeartbeat(ctx context.Context, req pb.Request) pb.Resp
 	} else {
 		resp.CommandBatch = &cb
 	}
-
 	return resp
 }
 
@@ -575,7 +631,6 @@ func (s *Service) handleTNHeartbeat(ctx context.Context, req pb.Request) pb.Resp
 	} else {
 		resp.CommandBatch = &cb
 	}
-
 	return resp
 }
 
@@ -583,6 +638,10 @@ func (s *Service) handleCheckHAKeeper(ctx context.Context, req pb.Request) pb.Re
 	resp := getResponse(req)
 	if atomic.LoadUint64(&s.store.haKeeperReplicaID) != 0 {
 		resp.IsHAKeeper = true
+		delivery, err := s.store.getCommandDeliveryState(ctx)
+		if err == nil && delivery.Enabled {
+			s.store.commandDeliveryEnabled.Store(true)
+		}
 	}
 	return resp
 }

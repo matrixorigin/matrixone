@@ -16,13 +16,19 @@ package compile
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -32,18 +38,27 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var _ plan.CompilerContext = new(compilerContext)
+var _ plan.TableDefStatsCompilerContext = new(compilerContext)
+var _ plan.UserVariableTypeResolver = new(compilerContext)
 
 type compilerContext struct {
-	ctx        context.Context
-	defaultDB  string
-	engine     engine.Engine
-	proc       *process.Process
-	statsCache *plan.StatsCache
+	ctx                context.Context
+	defaultDB          string
+	engine             engine.Engine
+	proc               *process.Process
+	statsCache         *plan.StatsCache
+	statsCacheVersions map[uint64]uint32
+	viewChild          bool
+	viewDelegate       plan.CompilerContext
+	viewSnapshot       *plan.Snapshot
+	viewSubscription   *plan.SubscriptionMeta
+	viewViews          []string
 
 	buildAlterView       bool
 	dbOfView, nameOfView string
@@ -53,21 +68,68 @@ type compilerContext struct {
 	lower int64
 }
 
+func (c *compilerContext) NewViewDescriptionCompilerContext(
+	ctx context.Context,
+) (plan.CompilerContext, func(), error) {
+	child := &compilerContext{
+		ctx: ctx, defaultDB: c.defaultDB, engine: c.engine, proc: c.proc,
+		statsCache: c.statsCache, lower: c.lower, viewChild: true,
+		buildAlterView: c.buildAlterView, dbOfView: c.dbOfView, nameOfView: c.nameOfView,
+		sql: c.sql,
+	}
+	if delegate := c.sessionCompilerContextValue(); delegate != nil {
+		provider, ok := delegate.(plan.ViewDescriptionContextProvider)
+		if !ok {
+			return nil, nil, moerr.NewInternalError(ctx, "session compiler context cannot isolate view binding")
+		}
+		isolated, cleanup, err := provider.NewViewDescriptionCompilerContext(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		child.viewDelegate = isolated
+		if isolated.GetProcess() != nil && isolated.GetProcess() != c.proc {
+			child.proc = isolated.GetProcess()
+		} else if c.proc != nil {
+			// Other providers may isolate binding state without cloning the process.
+			// Keep the internal compiler context's process private as well.
+			child.proc = c.proc.NewViewBindingProcess(ctx)
+			previousCleanup := cleanup
+			cleanup = func() { previousCleanup(); child.proc.Free() }
+		}
+		if child.proc != nil {
+			child.proc.GetSessionInfo().CompilerContext = child
+		}
+		child.viewSnapshot = isolated.GetSnapshot()
+		child.viewSubscription = isolated.GetQueryingSubscription()
+		return child, cleanup, nil
+	}
+	if c.proc != nil {
+		child.proc = c.proc.NewViewBindingProcess(ctx)
+		child.proc.GetSessionInfo().CompilerContext = child
+		return child, child.proc.Free, nil
+	}
+	return child, func() {}, nil
+}
+
 func (c *compilerContext) GetLowerCaseTableNames() int64 {
 	return c.lower
 }
 
 func (c *compilerContext) GetViews() []string {
-	return nil
+	return c.viewViews
 }
 
-func (c *compilerContext) SetViews(views []string) {}
+func (c *compilerContext) SetViews(views []string) { c.viewViews = views }
 
 func (c *compilerContext) GetSnapshot() *plan.Snapshot {
-	return nil
+	return c.viewSnapshot
 }
 
 func (c *compilerContext) SetSnapshot(snapshot *plan.Snapshot) {
+	c.viewSnapshot = snapshot
+	if c.viewDelegate != nil {
+		c.viewDelegate.SetSnapshot(snapshot)
+	}
 }
 
 func (c *compilerContext) InitExecuteStmtParam(execPlan *planpb.Execute) (*planpb.Plan, tree.Statement, error) {
@@ -76,39 +138,169 @@ func (c *compilerContext) InitExecuteStmtParam(execPlan *planpb.Execute) (*planp
 }
 
 func (c *compilerContext) CheckSubscriptionValid(subName, accName string, pubName string) error {
-	panic("not supported in internal sql executor")
+	delegate, err := c.sessionCompilerContext()
+	if err != nil {
+		return err
+	}
+	return delegate.CheckSubscriptionValid(subName, accName, pubName)
 }
 
 func (c *compilerContext) ResolveSubscriptionTableById(tableId uint64, pubmeta *plan.SubscriptionMeta) (*plan.ObjectRef, *plan.TableDef, error) {
-	panic("not supported in internal sql executor")
+	if delegate := c.sessionCompilerContextValue(); delegate != nil {
+		return delegate.ResolveSubscriptionTableById(tableId, pubmeta)
+	}
+	// Metadata scans from an internal executor have no frontend session. The
+	// caller binds this isolated child to the publisher account before lookup.
+	return c.ResolveById(tableId, c.GetSnapshot())
 }
 
 func (c *compilerContext) IsPublishing(dbName string) (bool, error) {
-	panic("not supported in internal sql executor")
+	delegate, err := c.sessionCompilerContext()
+	if err != nil {
+		return false, err
+	}
+	return delegate.IsPublishing(dbName)
 }
 
 func (c *compilerContext) BuildTableDefByMoColumns(dbName, table string) (*plan.TableDef, error) {
-	panic("not supported in internal sql executor")
+	_, tableDef, err := c.Resolve(dbName, table, nil)
+	if err != nil {
+		return nil, err
+	}
+	if tableDef == nil {
+		return nil, moerr.NewNoSuchTable(c.GetContext(), dbName, table)
+	}
+	return tableDef, nil
 }
 
 func (c *compilerContext) ResolveSnapshotWithSnapshotName(snapshotName string) (*plan.Snapshot, error) {
-	panic("not supported in internal sql executor")
+	delegate, err := c.sessionCompilerContext()
+	if err != nil {
+		return nil, err
+	}
+	return delegate.ResolveSnapshotWithSnapshotName(snapshotName)
 }
 
 func (c *compilerContext) CheckTimeStampValid(ts int64) (bool, error) {
-	panic("not supported in internal sql executor")
+	delegate, err := c.sessionCompilerContext()
+	if err != nil {
+		return false, err
+	}
+	return delegate.CheckTimeStampValid(ts)
 }
 
 func (c *compilerContext) SetQueryingSubscription(meta *plan.SubscriptionMeta) {
-	panic("not supported in internal sql executor")
+	if c.viewChild {
+		c.viewSubscription = meta
+		if c.viewDelegate != nil {
+			c.viewDelegate.SetQueryingSubscription(meta)
+		}
+		return
+	}
+	if delegate := c.sessionCompilerContextValue(); delegate != nil {
+		delegate.SetQueryingSubscription(meta)
+	}
 }
 
 func (c *compilerContext) GetQueryingSubscription() *plan.SubscriptionMeta {
+	if c.viewChild {
+		if c.viewDelegate != nil {
+			return c.viewDelegate.GetQueryingSubscription()
+		}
+		return c.viewSubscription
+	}
+	if delegate := c.sessionCompilerContextValue(); delegate != nil {
+		return delegate.GetQueryingSubscription()
+	}
 	return nil
 }
 
-func (c *compilerContext) ResolveUdf(name string, ast []*plan.Expr) (*function.Udf, error) {
+func (c *compilerContext) ResolveUdf(name string, args []*plan.Expr) (*function.Udf, error) {
+	if c.viewChild {
+		return c.ResolveViewUdf(name, args, c.DefaultDatabase())
+	}
 	panic("not supported in internal sql executor")
+}
+
+func (c *compilerContext) ResolveViewUdf(name string, args []*plan.Expr, database string) (*function.Udf, error) {
+	if c.viewDelegate != nil {
+		if resolver, ok := c.viewDelegate.(plan.ViewUdfResolver); ok {
+			return resolver.ResolveViewUdf(name, args, database)
+		}
+		return c.viewDelegate.ResolveUdf(name, args)
+	}
+	if !c.viewChild || c.proc == nil {
+		return nil, moerr.NewNotSupported(c.GetContext(), "View UDF resolution requires an isolated compiler context")
+	}
+	if err := c.GetContext().Err(); err != nil {
+		return nil, err
+	}
+	sp := sqlexec.NewSqlProcess(c.proc)
+	sp.DatabaseOverride = catalog.MO_CATALOG
+	sp.ApplyScanSnapshot(c.GetSnapshot())
+	if sub := c.GetQueryingSubscription(); sub != nil {
+		sp.WithExecutionIdentity(uint32(sub.AccountId), catalog.MO_CATALOG)
+	}
+	query := fmt.Sprintf("select args, body, language, rettype, db, cast(modified_time as varchar(64)), sql_mode "+
+		"from mo_catalog.mo_user_defined_function where name = %s and db = %s",
+		sqlquote.String(name), sqlquote.String(database))
+	result, err := sqlexec.RunSql(sp, query)
+	if err != nil {
+		return nil, err
+	}
+	defer result.Close()
+	from := make([]types.Type, len(args))
+	for i, arg := range args {
+		from[i] = types.Type{Oid: types.T(arg.Typ.Id), Width: arg.Typ.Width, Scale: arg.Typ.Scale}
+	}
+	var best *function.Udf
+	bestCost := int(^uint(0) >> 1)
+	matches := 0
+	var decodeErr error
+	result.ReadRows(func(n int, cols []*vector.Vector) bool {
+		for i := 0; i < n; i++ {
+			udf := &function.Udf{
+				Body: cols[1].GetStringAt(i), Language: cols[2].GetStringAt(i),
+				RetType: cols[3].GetStringAt(i), Db: cols[4].GetStringAt(i),
+				ModifiedTime: strings.NewReplacer(" ", "_", ":", "-").Replace(cols[5].GetStringAt(i)),
+			}
+			mode := cols[6].GetStringAt(i)
+			udf.SQLMode = &mode
+			if decodeErr = json.Unmarshal([]byte(types.DecodeJson(cols[0].GetBytesAt(i)).String()), &udf.Args); decodeErr != nil {
+				return false
+			}
+			if len(udf.Args) != len(from) {
+				continue
+			}
+			to := make([]types.T, len(from))
+			for j, arg := range udf.Args {
+				if from[j].IsDecimal() && arg.Type == "decimal" {
+					to[j] = from[j].Oid
+				} else {
+					to[j] = types.Types[arg.Type]
+				}
+			}
+			if ok, cost := function.UdfArgTypeMatch(from, to); ok {
+				if cost < bestCost {
+					best, bestCost, matches = udf, cost, 1
+					best.ArgsType = function.UdfArgTypeCast(from, to)
+				} else if cost == bestCost {
+					matches++
+				}
+			}
+		}
+		return true
+	})
+	if decodeErr != nil {
+		return nil, decodeErr
+	}
+	if matches > 1 {
+		return nil, moerr.NewInvalidInputf(c.GetContext(), "call to %s is ambiguous", name)
+	}
+	if best == nil {
+		return nil, moerr.NewNotSupportedf(c.GetContext(), "function or operator '%s'", name)
+	}
+	return best, nil
 }
 
 func (c *compilerContext) ResolveAccountIds(accountNames []string) ([]uint32, error) {
@@ -116,6 +308,26 @@ func (c *compilerContext) ResolveAccountIds(accountNames []string) ([]uint32, er
 }
 
 func (c *compilerContext) Stats(obj *plan.ObjectRef, snapshot *plan.Snapshot) (*pb.StatsInfo, error) {
+	return c.statsWithTableDefVersion(obj, snapshot, nil)
+}
+
+func (c *compilerContext) StatsWithTableDef(
+	obj *plan.ObjectRef,
+	tableDef *plan.TableDef,
+	snapshot *plan.Snapshot,
+) (*pb.StatsInfo, error) {
+	if tableDef == nil {
+		return c.statsWithTableDefVersion(obj, snapshot, nil)
+	}
+	version := tableDef.Version
+	return c.statsWithTableDefVersion(obj, snapshot, &version)
+}
+
+func (c *compilerContext) statsWithTableDefVersion(
+	obj *plan.ObjectRef,
+	snapshot *plan.Snapshot,
+	tableDefVersion *uint32,
+) (*pb.StatsInfo, error) {
 	stats := statistic.StatsInfoFromContext(c.GetContext())
 	start := time.Now()
 	defer func() {
@@ -123,13 +335,19 @@ func (c *compilerContext) Stats(obj *plan.ObjectRef, snapshot *plan.Snapshot) (*
 	}()
 
 	tableID := uint64(obj.Obj)
+	cachedVersion, versioned := c.statsCacheVersions[tableID]
+	if (tableDefVersion == nil && versioned) ||
+		(tableDefVersion != nil && (!versioned || cachedVersion != *tableDefVersion)) {
+		c.GetStatsCache().Delete(tableID)
+		delete(c.statsCacheVersions, tableID)
+	}
 
-	// Fast path: return cached result if visited within 3 seconds AND stats is valid
-	// Stats is valid if AccurateObjectNumber > 0 (meaning we have real data)
+	// Fast path: return a recent real observation. An explicit table-wide scan
+	// can observe committed rows before the first object is flushed.
 	if w := c.GetStatsCache().Get(tableID); w.Exists() {
 		if time.Now().Unix()-w.GetLastVisit() < 3 {
 			s := w.GetStats()
-			if s != nil && s.AccurateObjectNumber > 0 {
+			if plan.StatsCacheEligible(c.proc, snapshot) && plan.StatsInfoUsableForCache(s) {
 				return s, nil
 			}
 			// Stats is nil or empty, need to re-check
@@ -142,8 +360,24 @@ func (c *compilerContext) Stats(obj *plan.ObjectRef, snapshot *plan.Snapshot) (*
 		return nil, err
 	}
 
-	// Cache the result
-	c.GetStatsCache().Set(tableID, result)
+	// NDV/range consumers read the table-ID wrapper during this planning pass.
+	// Keep snapshot maps there without permitting a later ordinary fast hit;
+	// return the completed observation itself so named empty remains usable.
+	cachedResult := result
+	if plan.IsSnapshotValid(snapshot) && result != nil {
+		copy := *result
+		copy.TableName = ""
+		cachedResult = &copy
+	}
+	if c.GetStatsCache().SetAndReportReset(tableID, cachedResult) {
+		clear(c.statsCacheVersions)
+	}
+	if tableDefVersion != nil {
+		if c.statsCacheVersions == nil {
+			c.statsCacheVersions = make(map[uint64]uint32)
+		}
+		c.statsCacheVersions[tableID] = *tableDefVersion
+	}
 
 	return result, nil
 }
@@ -170,7 +404,7 @@ func (c *compilerContext) doStatsHeavyWork(obj *plan.ObjectRef, snapshot *plan.S
 	if err != nil {
 		return nil, err
 	}
-	if stats != nil && stats.AccurateObjectNumber > 0 {
+	if plan.StatsInfoUsable(stats) {
 		return stats, nil
 	}
 	// Return nil for empty table, calcScanStats will use DefaultStats()
@@ -185,7 +419,44 @@ func (c *compilerContext) GetStatsCache() *plan.StatsCache {
 }
 
 func (c *compilerContext) GetSubscriptionMeta(dbName string, snapshot *plan.Snapshot) (*plan.SubscriptionMeta, error) {
-	return nil, nil
+	delegate := c.sessionCompilerContextValue()
+	if delegate == nil {
+		// Most internal executor queries are unrelated to subscriptions and do
+		// not originate from a frontend session. Preserve their historical
+		// non-subscription result; CTAS has the session delegate installed and
+		// therefore takes the branch below.
+		return nil, nil
+	}
+	return delegate.GetSubscriptionMeta(dbName, snapshot)
+}
+
+func (c *compilerContext) sessionCompilerContext() (plan.CompilerContext, error) {
+	errCtx := c.ctx
+	if errCtx == nil {
+		errCtx = context.Background()
+	}
+	if delegate := c.sessionCompilerContextValue(); delegate != nil {
+		return delegate, nil
+	}
+	return nil, moerr.NewInternalError(errCtx,
+		"session compiler context is unavailable in internal sql executor")
+}
+
+func (c *compilerContext) sessionCompilerContextValue() plan.CompilerContext {
+	if c.viewChild {
+		return c.viewDelegate
+	}
+	if delegate := getInternalExecutorCompilerContext(c.ctx); delegate != nil && delegate != c {
+		return delegate
+	}
+	if c.proc == nil || c.proc.GetSessionInfo().SqlHelper == nil {
+		return nil
+	}
+	delegate, ok := c.proc.GetSessionInfo().SqlHelper.GetCompilerContext().(plan.CompilerContext)
+	if !ok || delegate == nil || delegate == c {
+		return nil
+	}
+	return delegate
 }
 
 func (c *compilerContext) GetProcess() *process.Process {
@@ -272,17 +543,31 @@ func (c *compilerContext) GetUserName() string {
 }
 
 func (c *compilerContext) GetAccountId() (uint32, error) {
-	return defines.GetAccountId(c.proc.GetTopContext())
+	return defines.GetAccountId(c.GetContext())
 }
 
 func (c *compilerContext) GetAccountName() string {
 	return "sys"
 }
 func (c *compilerContext) GetContext() context.Context {
+	if c.viewChild {
+		return c.ctx
+	}
 	return c.proc.GetTopContext()
 }
 
 func (c *compilerContext) SetContext(ctx context.Context) {
+	if c.viewChild {
+		c.ctx = ctx
+		if c.proc != nil {
+			c.proc.ReplaceTopCtx(ctx)
+			c.proc.Ctx = ctx
+		}
+		if c.viewDelegate != nil {
+			c.viewDelegate.SetContext(ctx)
+		}
+		return
+	}
 	c.proc.ReplaceTopCtx(ctx)
 }
 
@@ -309,10 +594,31 @@ func (c *compilerContext) ResolveById(tableId uint64, snapshot *plan.Snapshot) (
 }
 
 func (c *compilerContext) ResolveIndexTableByRef(ref *plan.ObjectRef, tblName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
-	return c.Resolve(plan.DbNameOfObjRef(ref), tblName, snapshot)
+	obj, def, err := c.Resolve(plan.DbNameOfObjRef(ref), tblName, snapshot)
+	if obj != nil && ref.NotLockMeta {
+		obj.NotLockMeta = true
+	}
+	return obj, def, err
+}
+
+func (c *compilerContext) resolveDelegate() plan.CompilerContext {
+	if c.viewChild {
+		return c.viewDelegate
+	}
+	if delegate := getInternalExecutorCompilerContext(c.ctx); delegate != nil && delegate != c {
+		return delegate
+	}
+	return nil
 }
 
 func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+	// CTAS follow-up compilation carries the original frontend compiler
+	// context. Delegate relation resolution as one operation so subscription,
+	// snapshot, tenant, and physical-account mapping cannot diverge between
+	// GetSubscriptionMeta and the actual catalog lookup.
+	if delegate := c.resolveDelegate(); delegate != nil {
+		return delegate.Resolve(dbName, tableName, snapshot)
+	}
 	// In order to be compatible with various GUI clients and BI tools, lower case db and table name if it's a mysql system table
 	if slices.Contains(mysql.CaseInsensitiveDbs, strings.ToLower(dbName)) {
 		dbName = strings.ToLower(dbName)
@@ -345,22 +651,84 @@ func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *pla
 		return nil, nil, nil
 	}
 
-	tableDef := table.CopyTableDef(ctx)
-	if isTmpTable || tableDef.IsTemporary {
+	tableDef := plan.CloneTableDefForPlan(table.GetTableDef(ctx), true)
+	if tableDef.DbName == "" {
+		tableDef.DbName = dbName
+	}
+	if err := plan.RecoverLegacyTinyText(ctx, tableDef, func(
+		_ context.Context,
+		sourceDB string,
+		sourceTable string,
+	) (*plan.TableDef, error) {
+		if sourceDB == "" {
+			sourceDB = dbName
+		}
+		sourceCtx, sourceRelation, err := c.getRelation(sourceDB, sourceTable, snapshot)
+		if err != nil || sourceRelation == nil {
+			return nil, err
+		}
+		sourceDef := plan.CloneTableDefForPlan(sourceRelation.GetTableDef(sourceCtx), true)
+		if sourceDef.DbName == "" {
+			sourceDef.DbName = sourceDB
+		}
+		return sourceDef, nil
+	}); err != nil {
+		return nil, nil, err
+	}
+	if err := plan.MigrateLegacyHexTableDef(c.proc, tableDef); err != nil {
+		return nil, nil, err
+	}
+	ownedTemporary := false
+	if owner, ok := c.proc.GetSession().(process.TemporaryTableDDL); ok {
+		ownedTemporary = owner.OwnsTemporaryTable(dbName, tableName)
+	}
+	if isTmpTable || ownedTemporary || tableDef.IsTemporary {
 		tableDef.IsTemporary = true
 		tableDef.Name = tableName
 	}
 	tableID := int64(table.GetTableID(ctx))
 	obj := &plan.ObjectRef{
-		SchemaName: dbName,
-		ObjName:    tableName,
-		Obj:        tableID,
+		SchemaName:  dbName,
+		ObjName:     tableName,
+		Obj:         tableID,
+		NotLockMeta: ownedTemporary,
 	}
 	return obj, tableDef, nil
 }
 
 func (c *compilerContext) ResolveVariable(varName string, isSystemVar bool, isGlobalVar bool) (interface{}, error) {
+	// CTAS follow-up compilation replays the user's own statement and carries
+	// the original frontend compiler context. A variable that shaped the plan
+	// of that statement must shape the replay identically, for the same reason
+	// Resolve delegates: the two compilations cannot be allowed to diverge.
+	// Variables read as values are already folded in before the replay; the
+	// ones that reach here decide how the query compiles, so answering nil
+	// silently compiles the replay under different rules than the statement
+	// the user ran.
+	//
+	// Replay may carry the original frontend context; other internal SQL can
+	// carry a partial session resolver on its process (e.g. ALTER TABLE).
+	// Prefer the former, then forward only explicit precision and DOP settings.
+	if delegate := c.resolveDelegate(); delegate != nil {
+		return delegate.ResolveVariable(varName, isSystemVar, isGlobalVar)
+	}
+	if isSystemVar && !isGlobalVar && c.proc != nil &&
+		(strings.EqualFold(varName, "div_precision_increment") ||
+			strings.EqualFold(varName, "max_dop")) {
+		if resolve := c.proc.GetResolveVariableFunc(); resolve != nil {
+			return resolve(varName, isSystemVar, isGlobalVar)
+		}
+	}
 	return nil, nil
+}
+
+func (c *compilerContext) ResolveVariableType(varName string, isSystemVar, isGlobalVar bool) (plan.Type, error) {
+	if delegate := getInternalExecutorCompilerContext(c.ctx); delegate != nil && delegate != c {
+		if resolver, ok := delegate.(plan.UserVariableTypeResolver); ok {
+			return resolver.ResolveVariableType(varName, isSystemVar, isGlobalVar)
+		}
+	}
+	return plan.Type{}, nil
 }
 
 func (c *compilerContext) SetBuildingAlterView(yesOrNo bool, dbName, viewName string) {
@@ -410,6 +778,12 @@ func (c *compilerContext) getRelation(
 
 	db, err := c.engine.Database(ctx, dbName, txnOpt)
 	if err != nil {
+		// A database that is not visible at this transaction's snapshot is
+		// indistinguishable from a missing database for name resolution. Let
+		// callers such as DROP TABLE IF EXISTS build their normal no-op plan.
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return ctx, nil, nil
+		}
 		return nil, nil, err
 	}
 

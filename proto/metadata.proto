@@ -94,6 +94,9 @@ message LogStore {
   string UUID = 1;
   // Shards is for Log shards metadata.
   repeated LogShard Shards = 2 [(gogoproto.nullable) = false];
+  // Incarnation identifies the persistent storage generation used by this
+  // Log store. It changes when the store starts from a new data directory.
+  string Incarnation = 3;
 }
 
 // CNRole cn node role
@@ -136,6 +139,9 @@ message CNService {
   uint64 CPUTotal = 11;
   // MemTotal is mem quota from logservicepb.CNStore
   uint64 MemTotal = 12;
+  uint64 ViewMetadataAdmissionGeneration = 13;
+  bool ViewMetadataAdmissionReady = 14;
+  uint64 ViewMetadataObservedEpoch = 15;
 }
 
 // TNService tn service metadata
@@ -156,6 +162,9 @@ message TNService {
   // QueryAddress it the address of query service on the tn
   string          QueryAddress       = 8;
   string  ShardServiceAddress   = 9;
+  // AutoIncrEpochFenceSupported reports that this TN enforces the
+  // auto_incr_epoch fields carried by CN writes.
+  bool AutoIncrEpochFenceSupported = 10;
 }
 
 // LabelList defines the labels on CN store.
@@ -170,4 +179,3 @@ enum WorkState {
   Draining = 2;
   Drained  = 3;
 }
-

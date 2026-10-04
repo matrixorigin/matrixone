@@ -75,23 +75,6 @@ func (c *GpuClusterer[T]) Close() error {
 	return nil
 }
 
-func resolveCuvsDistanceForDense(distance metric.MetricType) cuvs.DistanceType {
-	switch distance {
-	case metric.Metric_L2sqDistance:
-		return cuvs.L2Expanded
-	case metric.Metric_L2Distance:
-		return cuvs.L2Expanded
-	case metric.Metric_InnerProduct:
-		return cuvs.InnerProduct
-	case metric.Metric_CosineDistance:
-		return cuvs.CosineSimilarity
-	case metric.Metric_L1Distance:
-		return cuvs.L1
-	default:
-		return cuvs.L2Expanded
-	}
-}
-
 func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 	maxIterations int, deltaThreshold float64,
 	distanceType metric.MetricType, _ kmeans.InitType,
@@ -122,7 +105,13 @@ func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 		deviceID := 0
 		nthread := uint32(1)
 
-		km, err := cuvs.NewGpuKMeans[float32](uint32(clusterCnt), uint32(dim), resolveCuvsDistanceForDense(distanceType), maxIterations, deviceID, nthread)
+		// Dense centroid clustering always uses L2, independent of the index's
+		// search metric (matches the CPU path, ResolveKmeansDistanceFnForDense,
+		// which forces L2 for every metric). cuVS kmeans_balanced only supports
+		// L2/InnerProduct — forwarding the search metric (e.g. L1, cosine) makes
+		// cuVS abort with "distance metric not supported". The search metric is
+		// applied later at query time (centroid scan + re-rank), not in clustering.
+		km, err := cuvs.NewGpuKMeans[float32](uint32(clusterCnt), uint32(dim), cuvs.L2Expanded, maxIterations, deviceID, nthread)
 		if err != nil {
 			return nil, err
 		}

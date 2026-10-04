@@ -33,24 +33,29 @@ const (
 	IOET_WALTxnCommand_PersistedDeleteNode uint16 = 3013
 
 	IOET_WALTxnCommand_AppendNode_V1 uint16 = 1
+	IOET_WALTxnCommand_AppendNode_V2 uint16 = 2
 
-	IOET_WALTxnCommand_AppendNode_CurrVer = IOET_WALTxnCommand_AppendNode_V1
+	IOET_WALTxnCommand_AppendNode_CurrVer = IOET_WALTxnCommand_AppendNode_V2
 )
 
 func init() {
-	objectio.RegisterIOEnrtyCodec(
-		objectio.IOEntryHeader{
-			Type:    IOET_WALTxnCommand_AppendNode,
-			Version: IOET_WALTxnCommand_AppendNode_V1,
-		},
-		nil,
-		func(b []byte) (any, error) {
-			txnCmd := NewEmptyCmd(IOET_WALTxnCommand_AppendNode,
-				IOET_WALTxnCommand_AppendNode_V1)
-			err := txnCmd.UnmarshalBinary(b)
-			return txnCmd, err
-		},
-	)
+	for _, version := range []uint16{
+		IOET_WALTxnCommand_AppendNode_V1,
+		IOET_WALTxnCommand_AppendNode_V2,
+	} {
+		objectio.RegisterIOEnrtyCodec(
+			objectio.IOEntryHeader{
+				Type:    IOET_WALTxnCommand_AppendNode,
+				Version: version,
+			},
+			nil,
+			func(b []byte) (any, error) {
+				txnCmd := NewEmptyCmd(IOET_WALTxnCommand_AppendNode, version)
+				err := txnCmd.UnmarshalBinary(b)
+				return txnCmd, err
+			},
+		)
+	}
 }
 
 type UpdateCmd struct {
@@ -58,12 +63,14 @@ type UpdateCmd struct {
 	dest    *common.ID
 	append  *AppendNode
 	cmdType uint16
+	version uint16
 }
 
 func NewEmptyCmd(cmdType uint16, version uint16) *UpdateCmd {
 	cmd := &UpdateCmd{}
 	cmd.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(0, cmd)
 	cmd.cmdType = cmdType
+	cmd.version = version
 	if cmdType == IOET_WALTxnCommand_AppendNode {
 		cmd.append = NewAppendNode(nil, 0, 0, false, nil)
 	} else {
@@ -76,6 +83,7 @@ func NewAppendCmd(id uint32, app *AppendNode) *UpdateCmd {
 	impl := &UpdateCmd{
 		append:  app,
 		cmdType: IOET_WALTxnCommand_AppendNode,
+		version: IOET_WALTxnCommand_AppendNode_CurrVer,
 		dest:    app.mvcc.meta.AsCommonID(),
 	}
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
@@ -100,6 +108,9 @@ func (c *UpdateCmd) SetReplayTxn(txn txnif.AsyncTxn) {
 func (c *UpdateCmd) GetCurrentVersion() uint16 {
 	switch c.cmdType {
 	case IOET_WALTxnCommand_AppendNode:
+		if c.version != 0 {
+			return c.version
+		}
 		return IOET_WALTxnCommand_AppendNode_CurrVer
 	default:
 		panic(fmt.Sprintf("invalid command type %d", c.cmdType))
@@ -182,7 +193,7 @@ func (c *UpdateCmd) WriteTo(w io.Writer) (n int64, err error) {
 	n += common.IDSize
 	switch c.GetType() {
 	case IOET_WALTxnCommand_AppendNode:
-		sn, err = c.append.WriteTo(w)
+		sn, err = c.append.WriteToVersion(w, ver)
 	}
 	n += sn
 	return
@@ -198,7 +209,7 @@ func (c *UpdateCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	switch c.GetType() {
 	case IOET_WALTxnCommand_AppendNode:
-		n, err = c.append.ReadFrom(r)
+		n, err = c.append.ReadFromVersion(r, c.version)
 	}
 	n += 4 + common.IDSize
 	return

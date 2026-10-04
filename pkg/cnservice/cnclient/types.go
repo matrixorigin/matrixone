@@ -30,6 +30,7 @@ const (
 
 	dfMaxSenderNumber       = 100000
 	dfConnectTimeout        = 5 * time.Second
+	dfConnectAttemptTimeout = time.Second
 	dfClientReadBufferSize  = 1 << 10
 	dfClientWriteBufferSize = 1 << 10
 )
@@ -46,8 +47,11 @@ var (
 type PipelineConfig struct {
 	// MaxSenderNumber is the max number of backends per host for compute node service.
 	MaxSenderNumber int
-	// TimeOutForEachConnect is the out time for each tcp connect.
+	// TimeOutForEachConnect is the total timeout for establishing a backend,
+	// including TCP connection retries.
 	TimeOutForEachConnect time.Duration
+	// ConnectAttemptTimeout is the timeout for one TCP connection attempt.
+	ConnectAttemptTimeout time.Duration
 	// related buffer size.
 	ReadBufferSize  int
 	WriteBufferSize int

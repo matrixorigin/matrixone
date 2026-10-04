@@ -29,6 +29,40 @@ type FmtCtx struct {
 	quoteString       bool
 	singleQuoteString bool
 	quoteIdentifier   bool
+	// noBackslashEscape mirrors the NO_BACKSLASH_ESCAPES sql_mode: when set, string
+	// literals are emitted without backslash escaping (backslash is a literal char),
+	// so a value deparsed here re-parses to the same string under that mode. Nodes that
+	// re-escape a stored (already-unescaped) literal — e.g. FullTextMatchExpr's pattern
+	// — must consult this to keep format->parse idempotent under NO_BACKSLASH_ESCAPES.
+	noBackslashEscape bool
+	// modeIndependentStringLiterals emits string values containing backslashes
+	// as hex-to-varchar casts so the SQL reparses identically with or without
+	// NO_BACKSLASH_ESCAPES.
+	modeIndependentStringLiterals bool
+	paramExprOffset               bool
+	detectDateTimeFormat          bool
+	sawDateTimeFormat             bool
+	stringLiteralPositions        *[]StringLiteralPosition
+	parameterCount                *int
+}
+
+// ParameterCount returns the parser's original parameter slot count. Use the
+// formatter's complete AST traversal so optimizer pruning and duplicated
+// occurrences cannot compact or increase the protocol parameter layout.
+func ParameterCount(node NodeFormatter) int {
+	count := 0
+	ctx := NewFmtCtx(dialect.MYSQL)
+	ctx.parameterCount = &count
+	node.Format(ctx)
+	return count
+}
+
+// StringLiteralPosition identifies the bytes occupied by one string literal
+// in the formatted output. Positions are recorded only when requested by the
+// caller and are relative to the FmtCtx builder.
+type StringLiteralPosition struct {
+	Start int
+	End   int
 }
 
 func NewFmtCtx(dialectType dialect.DialectType, opts ...FmtCtxOption) *FmtCtx {
@@ -64,6 +98,64 @@ func WithQuoteIdentifier() FmtCtxOption {
 	return FmtCtxOption(func(ctx *FmtCtx) {
 		ctx.quoteIdentifier = true
 	})
+}
+
+// WithNoBackslashEscape makes string-literal formatting match the
+// NO_BACKSLASH_ESCAPES sql_mode: a deparse-then-reparse under that mode stays
+// idempotent (a backslash is emitted literally, not doubled). Pass this when the
+// output will be re-parsed with NO_BACKSLASH_ESCAPES active.
+func WithNoBackslashEscape() FmtCtxOption {
+	return FmtCtxOption(func(ctx *FmtCtx) {
+		ctx.noBackslashEscape = true
+	})
+}
+
+// NoBackslashEscape reports whether string literals should be formatted for the
+// NO_BACKSLASH_ESCAPES sql_mode.
+func (ctx *FmtCtx) NoBackslashEscape() bool { return ctx.noBackslashEscape }
+
+func WithModeIndependentStringLiterals() FmtCtxOption {
+	return FmtCtxOption(func(ctx *FmtCtx) {
+		ctx.modeIndependentStringLiterals = true
+	})
+}
+
+func (ctx *FmtCtx) ModeIndependentStringLiterals() bool {
+	return ctx.modeIndependentStringLiterals
+}
+
+// WithParamExprOffset includes a parameter's parser-assigned offset in its
+// formatted form. It is intended for internal semantic keys; SQL restored for
+// users must keep the default placeholder-only representation.
+func WithParamExprOffset() FmtCtxOption {
+	return FmtCtxOption(func(ctx *FmtCtx) {
+		ctx.paramExprOffset = true
+	})
+}
+
+// WithDateTimeFormatDetection asks the formatter to report whether the
+// expression tree contains a DATE_FORMAT or TIME_FORMAT call. Detection is
+// performed by the formatter itself, so nested expressions and subqueries use
+// the same complete traversal as normal SQL rendering.
+func WithDateTimeFormatDetection() FmtCtxOption {
+	return FmtCtxOption(func(ctx *FmtCtx) {
+		ctx.detectDateTimeFormat = true
+	})
+}
+
+// WithStringLiteralPositions records the output ranges of string literals.
+// The caller normally combines this with WithSingleQuoteString so the ranges
+// include their stable SQL quoting.
+func WithStringLiteralPositions(positions *[]StringLiteralPosition) FmtCtxOption {
+	return FmtCtxOption(func(ctx *FmtCtx) {
+		ctx.stringLiteralPositions = positions
+	})
+}
+
+// HasDateTimeFormatFunction reports whether formatting visited a
+// DATE_FORMAT/TIME_FORMAT call while detection was enabled.
+func (ctx *FmtCtx) HasDateTimeFormatFunction() bool {
+	return ctx.sawDateTimeFormat
 }
 
 // NodeFormatter for formatted output of the node.
@@ -138,18 +230,32 @@ func (ctx *FmtCtx) PrintExpr(currentExpr Expr, expr Expr, left bool) {
 }
 
 func (ctx *FmtCtx) WriteValue(t P_TYPE, v string) (int, error) {
+	start := ctx.Len()
+	var n int
+	var err error
 	if ctx.quoteString {
 		switch t {
 		case P_char:
-			return ctx.WriteString(fmt.Sprintf("%q", v))
+			n, err = ctx.WriteString(fmt.Sprintf("%q", v))
 		default:
-			return ctx.WriteString(v)
+			n, err = ctx.WriteString(v)
 		}
+	} else if ctx.singleQuoteString && (t == P_char || t == P_ScoreBinary) {
+		if t == P_ScoreBinary {
+			n, err = ctx.WriteString(fmt.Sprintf("_binary '%s'", strings.ReplaceAll(v, "'", "''")))
+		} else {
+			n, err = ctx.WriteString(fmt.Sprintf("'%s'", strings.ReplaceAll(v, "'", "''")))
+		}
+	} else {
+		n, err = ctx.WriteString(v)
 	}
-	if ctx.singleQuoteString && t == P_char {
-		return ctx.WriteString(fmt.Sprintf("'%s'", strings.ReplaceAll(v, "'", "''")))
+	if err == nil && (t == P_char || t == P_ScoreBinary) && ctx.stringLiteralPositions != nil {
+		*ctx.stringLiteralPositions = append(*ctx.stringLiteralPositions, StringLiteralPosition{
+			Start: start,
+			End:   ctx.Len(),
+		})
 	}
-	return ctx.WriteString(v)
+	return n, err
 }
 
 func (ctx *FmtCtx) WriteStringQuote(v string) (int, error) {

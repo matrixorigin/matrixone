@@ -68,6 +68,11 @@ type ChangeData struct {
 
 	// Original engine hint
 	Hint engine.ChangesHandle_Hint
+
+	// snapshotPermit bounds initial-snapshot batches retained across all tables
+	// in one CDC task. Ownership follows InsertBatch and is cleared together
+	// with that field when the batch transfers to the processor or sinker.
+	snapshotPermit *snapshotPermit
 }
 
 // HasData returns true if there is insert or delete data
@@ -84,6 +89,14 @@ func (cd *ChangeData) Clean(mp *mpool.MPool) {
 	if cd.DeleteBatch != nil {
 		cd.DeleteBatch.Clean(mp)
 		cd.DeleteBatch = nil
+	}
+	cd.releaseSnapshotPermit()
+}
+
+func (cd *ChangeData) releaseSnapshotPermit() {
+	if cd != nil && cd.snapshotPermit != nil {
+		cd.snapshotPermit.Release()
+		cd.snapshotPermit = nil
 	}
 }
 

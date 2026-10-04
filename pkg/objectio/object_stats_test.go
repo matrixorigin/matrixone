@@ -103,10 +103,16 @@ func TestObjectStatsOptions(t *testing.T) {
 	require.True(t, stats.IsZero())
 	require.False(t, stats.GetAppendable())
 	require.False(t, stats.GetCNCreated())
+	require.False(t, stats.GetCNDeleted())
 	require.False(t, stats.GetSorted())
 
 	WithCNCreated()(stats)
 	require.True(t, stats.GetCNCreated())
+
+	SetObjectStatsCNDeleted(stats, true)
+	require.True(t, stats.GetCNDeleted())
+	SetObjectStatsCNDeleted(stats, false)
+	require.False(t, stats.GetCNDeleted())
 
 	WithSorted()(stats)
 	require.True(t, stats.GetSorted())
@@ -153,7 +159,7 @@ func TestObjectStats_SetLevel(t *testing.T) {
 			stats := NewObjectStats()
 
 			// Set some flags to ensure they're preserved
-			stats[reservedOffset] = ObjectFlag_Appendable | ObjectFlag_Sorted
+			stats[reservedOffset] = ObjectFlag_Appendable | ObjectFlag_Sorted | ObjectFlag_CNDeleted
 
 			stats.SetLevel(tt.level)
 
@@ -169,6 +175,63 @@ func TestObjectStats_SetLevel(t *testing.T) {
 			}
 			if !stats.GetSorted() {
 				t.Error("Sorted flag was not preserved")
+			}
+			if !stats.GetCNDeleted() {
+				t.Error("CNDeleted flag was not preserved")
+			}
+		})
+	}
+}
+
+// Bounds persisted by the old BOOL vector min/max implementation may describe
+// a mixed false/true block as false/false. Every metadata entry point must expose
+// a conservative view without changing the shared serialized bytes.
+func TestPersistedBoolZoneMapBounds(t *testing.T) {
+	malformed := index.BuildZM(types.T_bool, []byte{0})
+	malformed[61] = 0 // A truncated max must not add a decoder panic at metadata access.
+
+	for _, tc := range []struct {
+		name  string
+		zm    ZoneMap
+		widen bool
+	}{
+		{"ambiguous false", index.BuildZM(types.T_bool, []byte{0}), true},
+		{"true", index.BuildZM(types.T_bool, []byte{1}), false},
+		{"truncated maximum", malformed, false},
+		{"uninitialized", index.NewZM(types.T_bool, 0), false},
+		{"integer", index.BuildZM(types.T_int8, []byte{0}), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			col := ColumnMeta(make([]byte, colMetaLen))
+			col.SetZoneMap(tc.zm)
+			stats := NewObjectStats()
+			require.NoError(t, SetObjectStatsSortKeyZoneMap(stats, tc.zm))
+			blockIndex := BuildBlockIndex(1)
+			blockIndex.SetBlockCount(1)
+			blockIndex.SetBlockMetaPos(0, uint32(blockIndex.Length()), ZoneMapSize)
+			area := ZoneMapArea(append(blockIndex, tc.zm...))
+			for _, entry := range []struct {
+				name string
+				read func() ZoneMap
+				raw  []byte
+			}{
+				{"column", col.ZoneMap, col},
+				{"object sort key", stats.SortKeyZoneMap, stats[:]},
+				{"zone map area", func() ZoneMap { return area.GetZoneMap(0, 0) }, area},
+			} {
+				t.Run(entry.name, func(t *testing.T) {
+					before := bytes.Clone(entry.raw)
+					view := entry.read()
+					if tc.widen {
+						require.False(t, types.DecodeBool(view.GetMinBuf()))
+						require.True(t, types.DecodeBool(view.GetMaxBuf()))
+						view[0] = 1 // No mutation of shared cached metadata through the copy.
+					} else {
+						require.Equal(t, tc.zm, view)
+						require.Equal(t, float64(0), testing.AllocsPerRun(10, func() { _ = entry.read() }))
+					}
+					require.Equal(t, before, entry.raw)
+				})
 			}
 		})
 	}

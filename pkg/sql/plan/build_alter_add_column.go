@@ -17,13 +17,13 @@ package plan
 import (
 	"context"
 	"fmt"
-	"math"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
+	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -49,12 +49,19 @@ func AddColumn(
 	if col := FindColumn(tableDef.Cols, newColName); col != nil {
 		return false, moerr.NewErrDupFieldName(ctx.GetContext(), newColName)
 	}
+	// same reservation as CREATE TABLE: these names are hidden by name in
+	// external-scan star expansion and readers.
+	if catalog.IsReservedExternalColName(newColName) {
+		return false, moerr.NewInvalidInputf(ctx.GetContext(),
+			"column name %s is reserved for external table scans", newColName)
+	}
 
 	colType, err := getTypeFromAst(ctx.GetContext(), specNewColumn.Type)
 	if err != nil {
 		return false, err
 	}
-	if err = applyColumnAttributesToType(ctx.GetContext(), &colType, specNewColumn.Attributes); err != nil {
+	colType.Charset = uint32(types.CharsetType(types.T(colType.Id)))
+	if err = applyDefaultAndColumnAttributesToType(ctx.GetContext(), &colType, tableDef.DefaultCharset, specNewColumn.Attributes); err != nil {
 		return false, err
 	}
 	if err = checkTypeCapSize(ctx.GetContext(), &colType, newColName); err != nil {
@@ -104,7 +111,10 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 	}
 
 	newCol := &ColDef{
-		ColId: math.MaxUint64,
+		// Keep planner-only IDs distinct until the replacement relation assigns
+		// durable IDs. Foreign keys added by the same COPY ALTER use these IDs to
+		// render column names in the temporary CREATE TABLE statement.
+		ColId: nextAlterCopyColumnID(alterPlan.CopyTableDef.Cols),
 		//Primary: originalCol.Primary,
 		//NotNull:  originalCol.NotNull,
 		//Default:  originalCol.Default,
@@ -115,6 +125,10 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 		Typ:        colType,
 		Alg:        plan.CompressType_Lz4,
 	}
+	// Bind the new definition against the post-ALTER row schema.  The new
+	// column is appended to this temporary scope; handleAddColumnPosition
+	// remaps ColPos after the requested physical insertion.
+	scopeCols := append(append([]*ColDef(nil), alterPlan.CopyTableDef.Cols...), newCol)
 
 	hasDefaultValue := false
 	auto_incr := false
@@ -161,8 +175,7 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 			constrNames := map[string]bool{}
 			// Check not empty constraint name whether is duplicated.
 			for _, idx := range alterPlan.CopyTableDef.Indexes {
-				nameLower := strings.ToLower(idx.IndexName)
-				constrNames[nameLower] = true
+				constrNames[indexNameKey(idx.IndexName)] = true
 			}
 			// set empty constraint names(index and unique index)
 			setEmptyUniqueIndexName(constrNames, uniqueIndex)
@@ -180,23 +193,29 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 		//	newCol.Default = defaultValue
 		//	hasDefaultValue = true
 		case *tree.AttributeOnUpdate:
-			onUpdateExpr, err := buildOnUpdate(specNewColumn, colType, ctx.GetProcess())
+			onUpdateExpr, err := buildOnUpdate(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, ctx.GetProcess())
 			if err != nil {
 				return nil, err
 			}
 			newCol.OnUpdate = onUpdateExpr
 		case *tree.AttributeGeneratedAlways:
-			generatedCol, err := buildGeneratedExpr(specNewColumn, colType, alterPlan.CopyTableDef.Cols, ctx.GetProcess())
+			generatedCol, err := buildGeneratedExpr(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, scopeCols, ctx.GetProcess())
 			if err != nil {
 				return nil, err
 			}
 			newCol.GeneratedCol = generatedCol
+		case *tree.AttributeCharset, *tree.AttributeCollate:
+			// Type metadata was resolved centrally before constructing the column.
 			//default:
 			//	return nil, moerr.NewNotSupported(ctx.GetContext(), "unsupport column definition %v", attribute)
 		}
 	}
 
 	if newCol.GeneratedCol != nil {
+		if exprReferencesColumn(newCol.GeneratedCol.Expr, newColName, scopeCols) {
+			return nil, moerr.NewInvalidInputf(ctx.GetContext(),
+				"generated column '%s' cannot refer to itself", newColNameOrigin)
+		}
 		// Generated columns preserve declared nullability but use no default expr for storage layer compatibility
 		newCol.Default = &plan.Default{
 			NullAbility:  getColumnNullAbility(specNewColumn),
@@ -204,11 +223,15 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 			OriginString: "",
 		}
 	} else {
-		defaultValue, err := buildDefaultExpr(specNewColumn, colType, ctx.GetProcess())
+		defaultValue, err := buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, ctx.GetProcess(), scopeCols)
 		if err != nil {
 			return nil, err
 		}
 		newCol.Default = defaultValue
+		if exprReferencesColumn(defaultValue.Expr, newColName, scopeCols) {
+			return nil, moerr.NewInvalidInputf(ctx.GetContext(),
+				"default expression for column '%s' cannot refer to itself", newColNameOrigin)
+		}
 
 		hasDefaultValue = defaultValue.Expr != nil
 		if auto_incr && hasDefaultValue {
@@ -216,6 +239,21 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 		}
 	}
 	return newCol, nil
+}
+
+func nextAlterCopyColumnID(cols []*ColDef) uint64 {
+	used := make(map[uint64]struct{}, len(cols))
+	for _, col := range cols {
+		if col != nil {
+			used[col.ColId] = struct{}{}
+		}
+	}
+	for candidate := UnKnownColId; candidate > 0; candidate-- {
+		if _, exists := used[candidate]; !exists {
+			return candidate
+		}
+	}
+	return 0
 }
 
 // checkTypeCapSize check type for add single column.
@@ -259,8 +297,8 @@ func checkPrimaryKeyPartType(ctx context.Context, colType plan.Type, columnName 
 	if colType.GetId() == int32(types.T_json) {
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("JSON column '%s' cannot be in primary key", columnName))
 	}
-	if isEnumPlanType(&colType) {
-		return moerr.NewNotSupported(ctx, fmt.Sprintf("ENUM column '%s' cannot be in primary key", columnName))
+	if types.T(colType.GetId()).IsArrayRelate() {
+		return moerr.NewNotSupported(ctx, fmt.Sprintf("VECTOR column '%s' cannot be in primary key", columnName))
 	}
 	if isSetPlanType(&colType) {
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("SET column '%s' cannot be in primary key", columnName))
@@ -321,6 +359,7 @@ func checkAddColumWithUniqueKey(ctx context.Context, tableDef *TableDef, uniKey 
 		TableExist:     true,
 		Comment:        "",
 	}
+	setIndexDefVisibility(indexDef, uniKey.IndexOption)
 
 	if uniKey.IndexOption != nil {
 		indexDef.Comment = uniKey.IndexOption.Comment
@@ -395,6 +434,9 @@ func DropColumn(
 	if err := checkColumnWithGeneratedDependency(ctx.GetContext(), tableDef, colName); err != nil {
 		return column.Primary, err
 	}
+	if err := checkColumnWithDefaultDependency(ctx.GetContext(), tableDef, colName); err != nil {
+		return column.Primary, err
+	}
 
 	if err := handleDropColumnPosition(ctx.GetContext(), tableDef, column); err != nil {
 		return column.Primary, err
@@ -405,6 +447,7 @@ func DropColumn(
 	}
 
 	delete(alterCtx.alterColMap, colName)
+	delete(alterCtx.changColDefMap, column.ColId)
 	return column.Primary, nil
 }
 
@@ -436,6 +479,7 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 			// handle unique index
 			if len(indexInfo.Parts) == 0 {
 				tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
+				i--
 			}
 		} else if !indexInfo.Unique {
 			// handle secondary index
@@ -452,27 +496,37 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 					//NOTE: if the last SK column is an __mo_alias or __mo_fake or __mo_cp, then the index will be deleted.
 					// There is no way that user can add __mo_alias or __mo_fake or __mo_cp as the SK column.
 					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
+					i--
 				} else if len(indexInfo.Parts) == 0 {
 					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
+					i--
 				}
 			case catalog.MOIndexMasterAlgo.ToString():
 				if len(indexInfo.Parts) == 0 {
 					// TODO: verify this
 					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
+					i--
 				}
 			default:
-				// Plugin-registered indexes (vector + fulltext) own
-				// their hidden-table count via HiddenTableTypes(). The
-				// previous shape hardcoded 3 for IVF-FLAT, 2 for HNSW,
-				// 1 for fulltext, and silently omitted CAGRA / IVF-PQ
-				// — which left orphan hidden-table IndexDefs in tbInfo
-				// for those algos when the affected column emptied
-				// Parts. Reading the count from the plugin restores
-				// CAGRA / IVF-PQ coverage and stays correct for any
-				// future algo added under the plugin system.
-				if p, ok := indexplugin.Get(algo); ok && len(indexInfo.Parts) == 0 {
-					n := len(p.Catalog().HiddenTableTypes())
-					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+n:]...)
+				// Plugin-registered indexes may span multiple hidden IndexDefs;
+				// remove all entries sharing the logical index name when the key
+				// columns are gone or plugin-owned metadata depends on this column.
+				if p, ok := indexplugin.Get(algo); ok {
+					dropIndex := len(indexInfo.Parts) == 0
+					if alterHooks, ok := p.Plan().(planplugin.AlterColumnHooks); ok {
+						affected, err := alterHooks.HandleAlterDropColumn(tbInfo, indexInfo, colName)
+						if err != nil {
+							return err
+						}
+						dropIndex = dropIndex || affected
+					}
+					if !dropIndex {
+						continue
+					}
+					tbInfo.Indexes = RemoveIf[*IndexDef](tbInfo.Indexes, func(def *IndexDef) bool {
+						return def.IndexName == indexInfo.IndexName
+					})
+					i--
 				}
 			}
 		}
@@ -507,6 +561,9 @@ func handleDropColumnWithPrimaryKey(ctx context.Context, colName string, tbInfo 
 func checkDropColumnWithForeignKey(ctx CompilerContext, tbInfo *TableDef, targetCol *ColDef) error {
 	colName := targetCol.Name
 	for _, fkInfo := range tbInfo.Fkeys {
+		if fkInfo == nil {
+			return moerr.NewInternalError(ctx.GetContext(), "nil foreign key definition while dropping column")
+		}
 		for _, colId := range fkInfo.Cols {
 			referCol := FindColumnByColId(tbInfo.Cols, colId)
 			if referCol == nil {
@@ -519,7 +576,7 @@ func checkDropColumnWithForeignKey(ctx CompilerContext, tbInfo *TableDef, target
 	}
 
 	for _, referredTblId := range tbInfo.RefChildTbls {
-		_, refTableDef, err := ctx.ResolveById(referredTblId, nil)
+		_, refTableDef, selfReference, err := resolveAlterForeignKeyTable(ctx, tbInfo, referredTblId)
 		if err != nil {
 			return err
 		}
@@ -527,11 +584,21 @@ func checkDropColumnWithForeignKey(ctx CompilerContext, tbInfo *TableDef, target
 			return moerr.NewInternalErrorf(ctx.GetContext(), "The reference foreign key table %d does not exist", referredTblId)
 		}
 		for _, referredFK := range refTableDef.Fkeys {
-			if referredFK.ForeignTbl == tbInfo.TblId {
-				for i := 0; i < len(referredFK.Cols); i++ {
-					if referredFK.ForeignCols[i] == targetCol.ColId {
-						return moerr.NewErrFkColumnCannotDropChild(ctx.GetContext(), colName, referredFK.Name, refTableDef.Name)
-					}
+			if referredFK == nil {
+				return moerr.NewInternalError(ctx.GetContext(), "nil foreign key definition while dropping column")
+			}
+			if len(referredFK.Cols) != len(referredFK.ForeignCols) {
+				return moerr.NewInternalErrorf(ctx.GetContext(),
+					"foreign key %s has mismatched child and parent columns", referredFK.Name)
+			}
+			if referredFK.ForeignTbl != tbInfo.TblId && !(selfReference && referredFK.ForeignTbl == 0) {
+				continue
+			}
+			for _, foreignColID := range referredFK.ForeignCols {
+				if foreignColID == targetCol.ColId {
+					return moerr.NewErrFkColumnCannotDropChild(
+						ctx.GetContext(), colName, referredFK.Name, refTableDef.Name,
+					)
 				}
 			}
 		}
@@ -589,7 +656,8 @@ func handleDropColumnWithClusterBy(ctx context.Context, copyTableDef *TableDef, 
 	return nil
 }
 
-// shiftColPosInExpr adjusts ColRef.ColPos values in a generated column expression.
+// shiftColPosInExpr adjusts row-local ColRef.ColPos values in a generated or
+// expression-default definition.
 // All positions >= threshold are shifted by delta (+1 for insert, -1 for drop).
 func shiftColPosInExpr(expr *plan.Expr, threshold int32, delta int32) {
 	if expr == nil {
@@ -597,7 +665,7 @@ func shiftColPosInExpr(expr *plan.Expr, threshold int32, delta int32) {
 	}
 	switch e := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		if e.Col.RelPos == 0 && e.Col.ColPos >= threshold {
+		if e.Col != nil && e.Col.RelPos == 0 && e.Col.ColPos >= threshold {
 			e.Col.ColPos += delta
 		}
 	case *plan.Expr_F:
@@ -611,23 +679,29 @@ func shiftColPosInExpr(expr *plan.Expr, threshold int32, delta int32) {
 	}
 }
 
-// remapGeneratedColExprsAfterInsert adjusts all generated column expressions
-// after a new column is inserted at insertPos. ColPos >= insertPos shift up by 1.
-// The newly inserted column's own expression (if any) is also adjusted.
+// remapGeneratedColExprsAfterInsert adjusts all row-local expressions after a
+// new column is inserted at insertPos. ColPos >= insertPos shift up by 1. The
+// newly inserted column's own expression (if any) is also adjusted.
 func remapGeneratedColExprsAfterInsert(tableDef *TableDef, insertPos int32) {
 	for _, col := range tableDef.Cols {
 		if col.GeneratedCol != nil && col.GeneratedCol.Expr != nil {
 			shiftColPosInExpr(col.GeneratedCol.Expr, insertPos, 1)
 		}
+		if col.Default != nil && col.Default.Expr != nil {
+			shiftColPosInExpr(col.Default.Expr, insertPos, 1)
+		}
 	}
 }
 
-// remapGeneratedColExprsAfterDrop adjusts all generated column expressions
-// after a column is removed from dropPos. ColPos > dropPos shift down by 1.
+// remapGeneratedColExprsAfterDrop adjusts all row-local expressions after a
+// column is removed from dropPos. ColPos > dropPos shift down by 1.
 func remapGeneratedColExprsAfterDrop(tableDef *TableDef, dropPos int32) {
 	for _, col := range tableDef.Cols {
 		if col.GeneratedCol != nil && col.GeneratedCol.Expr != nil {
 			shiftColPosInExpr(col.GeneratedCol.Expr, dropPos+1, -1)
+		}
+		if col.Default != nil && col.Default.Expr != nil {
+			shiftColPosInExpr(col.Default.Expr, dropPos+1, -1)
 		}
 	}
 }
@@ -646,6 +720,21 @@ func checkColumnWithGeneratedDependency(ctx context.Context, tableDef *TableDef,
 	return nil
 }
 
+// checkColumnWithDefaultDependency prevents a DROP/RENAME from leaving
+// persisted row-local default expressions pointing at a different or missing
+// column position. Rebinding those expressions is unsafe for a COPY ALTER
+// because existing rows and future inserts must observe the same dependency.
+func checkColumnWithDefaultDependency(ctx context.Context, tableDef *TableDef, colName string) error {
+	for _, col := range tableDef.Cols {
+		if col.Default != nil && col.Default.Expr != nil && exprReferencesColumn(col.Default.Expr, colName, tableDef.Cols) {
+			return moerr.NewInvalidInputf(ctx,
+				"Cannot modify column '%s': default expression of column '%s' depends on it",
+				colName, col.Name)
+		}
+	}
+	return nil
+}
+
 // exprReferencesColumn checks if a plan expression references a column by name.
 func exprReferencesColumn(expr *plan.Expr, colName string, cols []*ColDef) bool {
 	if expr == nil {
@@ -653,7 +742,7 @@ func exprReferencesColumn(expr *plan.Expr, colName string, cols []*ColDef) bool 
 	}
 	switch e := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		if int(e.Col.ColPos) < len(cols) {
+		if e.Col != nil && e.Col.RelPos == 0 && e.Col.ColPos >= 0 && int(e.Col.ColPos) < len(cols) {
 			return strings.EqualFold(cols[e.Col.ColPos].Name, colName)
 		}
 	case *plan.Expr_F:

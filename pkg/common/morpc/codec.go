@@ -171,18 +171,46 @@ type baseCodec struct {
 
 func (c *baseCodec) Decode(in *buf.ByteBuf) (any, bool, error) {
 	msg := RPCMessage{}
+	decoded := false
+	defer func() {
+		if !decoded && msg.Cancel != nil {
+			msg.Cancel()
+		}
+	}()
 	offset := 0
 	data := getDecodeData(in)
 
 	// 2.1
+	if err := requireDecodeBytes(data, offset, 1, "flag"); err != nil {
+		return nil, false, err
+	}
 	flag, n := c.readFlag(&msg, data, offset)
 	offset += n
+	if flag&flagCompressEnabled != 0 && (!c.compressEnabled || c.allocator == nil) {
+		return nil, false, moerr.NewInvalidInputNoCtx("compressed message is not supported")
+	}
+	if flag&flagHashPayload != 0 {
+		if _, ok := msg.Message.(PayloadMessage); !ok {
+			return nil, false, moerr.NewInvalidInputNoCtxf(
+				"payload flag is invalid for message type %T", msg.Message)
+		}
+	}
 
 	// 2.2
+	if flag&flagChecksumEnabled != 0 {
+		if err := requireDecodeBytes(data, offset, checksumFieldBytes, "checksum"); err != nil {
+			return nil, false, err
+		}
+	}
 	expectChecksum, n := readChecksum(flag, data, offset)
 	offset += n
 
 	// 2.3
+	if flag&flagHashPayload != 0 {
+		if err := requireDecodeBytes(data, offset, payloadSizeFieldBytes, "payload size"); err != nil {
+			return nil, false, err
+		}
+	}
 	payloadSize, n := readPayloadSize(flag, data, offset)
 	offset += n
 
@@ -194,6 +222,11 @@ func (c *baseCodec) Decode(in *buf.ByteBuf) (any, bool, error) {
 	offset += n
 
 	// 2.5
+	if flag&flagStreamingMessage != 0 {
+		if err := requireDecodeBytes(data, offset, 4, "stream sequence"); err != nil {
+			return nil, false, err
+		}
+	}
 	offset += readStreaming(flag, &msg, data, offset)
 
 	// 3.1 and 3.2
@@ -203,6 +236,7 @@ func (c *baseCodec) Decode(in *buf.ByteBuf) (any, bool, error) {
 
 	in.SetReadIndex(in.GetMarkIndex())
 	in.ClearMark()
+	decoded = true
 	return msg, true, nil
 }
 
@@ -269,6 +303,7 @@ func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) e
 	// 2.4 Custom header size
 	n, err := c.encodeCustomHeaders(&msg, out)
 	if err != nil {
+		discardWritten()
 		return err
 	}
 	totalSize += n
@@ -325,12 +360,25 @@ func (c *baseCodec) compress(src []byte) ([]byte, malloc.Deallocator, error) {
 	return dst, dec, nil
 }
 
-func (c *baseCodec) uncompress(src []byte) ([]byte, malloc.Deallocator, error) {
+func (c *baseCodec) uncompress(src []byte, maxSize int) ([]byte, malloc.Deallocator, error) {
 	// The lz4 library requires a []byte with a large enough dst when
 	// decompressing, otherwise it will return an ErrInvalidSourceShortBuffer, we
 	// can't confirm how large a dst we need to give initially, so when we encounter
-	// an ErrInvalidSourceShortBuffer, we expand the size and retry.
-	n := len(src) * 2
+	// an ErrInvalidSourceShortBuffer, we expand the size and retry. Never grow past
+	// maxSize: compressed input must not bypass the configured logical body limit.
+	if maxSize <= 0 {
+		return nil, nil, moerr.NewInvalidInputNoCtxf(
+			"decompressed message body is too large, max is %d", c.maxBodySize)
+	}
+	n := len(src)
+	if n == 0 {
+		n = 1
+	}
+	if n > maxSize/2 {
+		n = maxSize
+	} else {
+		n *= 2
+	}
 	for {
 		dst, dec, err := c.allocator.Allocate(uint64(n), malloc.NoHints)
 		if err != nil {
@@ -344,7 +392,15 @@ func (c *baseCodec) uncompress(src []byte) ([]byte, malloc.Deallocator, error) {
 		if err != lz4.ErrInvalidSourceShortBuffer {
 			return nil, nil, err
 		}
-		n *= 2
+		if n == maxSize {
+			return nil, nil, moerr.NewInvalidInputNoCtxf(
+				"decompressed message body is too large, max is %d", c.maxBodySize)
+		}
+		if n > maxSize/2 {
+			n = maxSize
+		} else {
+			n *= 2
+		}
 	}
 }
 
@@ -405,12 +461,23 @@ func (c *baseCodec) readCustomHeaders(flag byte, msg *RPCMessage, data []byte, o
 	if flag&flagHasCustomHeader == 0 {
 		return 0, nil
 	}
+	if err := requireDecodeBytes(data, offset, 0, "custom headers"); err != nil {
+		return 0, err
+	}
 
 	readed := 0
 	for _, hc := range c.headerCodecs {
+		if err := requireDecodeBytes(data, offset+readed, 0, "custom header"); err != nil {
+			return 0, err
+		}
 		n, err := hc.Decode(msg, data[offset+readed:])
 		if err != nil {
 			return 0, err
+		}
+		if n < 0 || n > len(data)-(offset+readed) {
+			return 0, moerr.NewInvalidInputNoCtxf(
+				"invalid custom header size %d at offset %d, frame size %d",
+				n, offset+readed, len(data))
 		}
 		readed += n
 	}
@@ -466,12 +533,16 @@ func (c *baseCodec) readMessage(
 	expectChecksum uint64,
 	payloadSize int,
 	msg *RPCMessage) error {
-	if offset == len(data) {
+	if offset == len(data) && payloadSize == 0 {
+		if msg.internal {
+			return moerr.NewInvalidInputNoCtx("internal message body is missing")
+		}
 		return nil
 	}
 
-	// invalid body packet
-	if offset >= len(data)-payloadSize {
+	// invalid body packet. Check without subtracting an untrusted payload size
+	// from len(data), which can overflow or produce an invalid slice boundary.
+	if offset < 0 || offset >= len(data) || payloadSize < 0 || payloadSize >= len(data)-offset {
 		c.logger.Warn("invalid body packet",
 			zap.Int("offset", offset),
 			zap.Int("len", len(data)),
@@ -490,7 +561,7 @@ func (c *baseCodec) readMessage(
 	}
 
 	if flag&flagCompressEnabled != 0 {
-		dstBody, dec, err := c.uncompress(body)
+		dstBody, dec, err := c.uncompress(body, c.maxBodySize-1)
 		if err != nil {
 			return err
 		}
@@ -498,7 +569,7 @@ func (c *baseCodec) readMessage(
 		body = dstBody
 
 		if payloadSize > 0 {
-			dstPayload, dec, err := c.uncompress(payload)
+			dstPayload, dec, err := c.uncompress(payload, c.maxBodySize-1-len(body))
 			if err != nil {
 				return err
 			}
@@ -510,6 +581,9 @@ func (c *baseCodec) readMessage(
 			payload = clone(dstPayload)
 		}
 	}
+	if err := c.validDecodedMessageSize(len(body), len(payload)); err != nil {
+		return err
+	}
 
 	if err := msg.Message.Unmarshal(body); err != nil {
 		return err
@@ -517,6 +591,16 @@ func (c *baseCodec) readMessage(
 
 	if payloadSize > 0 {
 		msg.Message.(PayloadMessage).SetPayloadField(payload)
+	}
+	return nil
+}
+
+func (c *baseCodec) validDecodedMessageSize(bodySize, payloadSize int) error {
+	if c.maxBodySize <= 0 || bodySize < 0 || payloadSize < 0 ||
+		bodySize >= c.maxBodySize || payloadSize >= c.maxBodySize-bodySize {
+		return moerr.NewInvalidInputNoCtxf(
+			"message body %d with payload %d is too large, max is %d",
+			bodySize, payloadSize, c.maxBodySize)
 	}
 	return nil
 }
@@ -593,6 +677,15 @@ func writeChecksum(offset int, out *buf.ByteBuf, body, payload []byte) error {
 
 func getDecodeData(in *buf.ByteBuf) []byte {
 	return in.RawSlice(in.GetReadIndex(), in.GetMarkIndex())
+}
+
+func requireDecodeBytes(data []byte, offset, size int, field string) error {
+	if offset < 0 || size < 0 || offset > len(data) || size > len(data)-offset {
+		return moerr.NewInvalidInputNoCtxf(
+			"truncated %s at offset %d: need %d bytes, frame size %d",
+			field, offset, size, len(data))
+	}
+	return nil
 }
 
 func (c *baseCodec) readFlag(msg *RPCMessage, data []byte, offset int) (byte, int) {

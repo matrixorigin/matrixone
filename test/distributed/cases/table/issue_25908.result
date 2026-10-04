@@ -1,0 +1,78 @@
+drop table if exists issue_25908_ext;
+create external table issue_25908_ext (
+account_id varchar(32),
+accounting varchar(32),
+customer_account varchar(32),
+payload varchar(32),
+account varchar(32),
+`customer.account` varchar(32),
+`customer.__mo_filepath` varchar(32)
+) infile{'filepath'='$resources/external_table_file/issue_25908.csv'}
+fields terminated by ',' lines terminated by '\n';
+select account_id, payload
+from issue_25908_ext
+where issue_25908_ext.account_id = 'normal';
+➤ account_id[12,-1,0]  ¦  payload[12,-1,0]  𝄀
+normal  ¦  first
+select accounting, payload
+from issue_25908_ext
+where accounting = 'cash';
+➤ accounting[12,-1,0]  ¦  payload[12,-1,0]  𝄀
+cash  ¦  second
+select customer_account, payload
+from issue_25908_ext
+where customer_account = 'customer-a';
+➤ customer_account[12,-1,0]  ¦  payload[12,-1,0]  𝄀
+customer-a  ¦  first
+select payload
+from issue_25908_ext as account_source
+where account_source.payload = 'second';
+➤ payload[12,-1,0]  𝄀
+second
+select count(*) as cnt
+from issue_25908_ext
+where account_id = 'missing';
+➤ cnt[-5,64,0]  𝄀
+0
+select count(*) as cnt
+from issue_25908_ext
+where __mo_filepath = account_id;
+➤ cnt[-5,64,0]  𝄀
+0
+select account, payload
+from issue_25908_ext
+where account = 'row-account';
+➤ account[12,-1,0]  ¦  payload[12,-1,0]  𝄀
+row-account  ¦  first
+select `customer.account`, payload
+from issue_25908_ext
+where `customer.account` = 'dotted-account';
+➤ customer.account[12,-1,0]  ¦  payload[12,-1,0]  𝄀
+dotted-account  ¦  first
+select `customer.__mo_filepath`, payload
+from issue_25908_ext
+where `customer.__mo_filepath` = 'dotted-filepath';
+➤ customer.__mo_filepath[12,-1,0]  ¦  payload[12,-1,0]  𝄀
+dotted-filepath  ¦  first
+select count(*) as cnt
+from issue_25908_ext
+where if(true, true, 'never-selected' = __mo_filepath);
+➤ cnt[-5,64,0]  𝄀
+2
+select count(*) as cnt
+from issue_25908_ext
+where if(true, false, 'never-selected' = __mo_filepath);
+➤ cnt[-5,64,0]  𝄀
+0
+prepare issue_25908_stmt from
+select count(*) as cnt from issue_25908_ext where __mo_filepath like ?;
+set @issue_25908_path = '%issue_25908.csv';
+execute issue_25908_stmt using @issue_25908_path;
+➤ cnt[-5,64,0]  𝄀
+2
+set @issue_25908_path = '%missing.csv';
+execute issue_25908_stmt using @issue_25908_path;
+➤ cnt[-5,64,0]  𝄀
+0
+deallocate prepare issue_25908_stmt;
+drop table issue_25908_ext;

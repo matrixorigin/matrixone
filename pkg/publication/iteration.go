@@ -93,9 +93,11 @@ type ObjectWithTableInfo struct {
 // AObjectMappingJSON represents the serializable part of AObjectMapping
 type AObjectMappingJSON struct {
 	DownstreamStats string `json:"downstream_stats"` // ObjectStats as base64-encoded string
-	IsTombstone     bool   `json:"is_tombstone"`
-	DBName          string `json:"db_name"`
-	TableName       string `json:"table_name"`
+	// Pointer preserves absent (legacy one-to-one) versus present-but-empty.
+	DownstreamObjectIDs *[]string `json:"downstream_object_ids,omitempty"`
+	IsTombstone         bool      `json:"is_tombstone"`
+	DBName              string    `json:"db_name"`
+	TableName           string    `json:"table_name"`
 }
 
 // IterationContextJSON represents the serializable part of IterationContext
@@ -107,9 +109,75 @@ type IterationContextJSON struct {
 	SrcInfo          SrcInfo `json:"src_info"`
 
 	// Context information
-	AObjectMap         map[string]AObjectMappingJSON `json:"aobject_map"` // AObjectMap as serializable map (key is upstream ObjectId as string)
+	AObjectMap         map[string]AObjectMappingJSON `json:"aobject_map"` // key is the upstream ObjectId string
 	TableIDs           map[string]uint64             `json:"table_ids"`
 	IndexTableMappings map[string]string             `json:"index_table_mappings"` // IndexTableMappings as serializable map (key is upstream_index_table_name, value is downstream_index_table_name)
+}
+
+func serializeAObjectMap(aobjectMap *AObjectMap) map[string]AObjectMappingJSON {
+	serialized := make(map[string]AObjectMappingJSON)
+	if aobjectMap == nil {
+		return serialized
+	}
+	aobjectMap.Range(func(upstreamID string, mapping *AObjectMapping) {
+		mappingJSON := AObjectMappingJSON{
+			IsTombstone: mapping.IsTombstone,
+			DBName:      mapping.DBName,
+			TableName:   mapping.TableName,
+		}
+		if !mapping.DownstreamStats.IsZero() {
+			mappingJSON.DownstreamStats = base64.StdEncoding.EncodeToString(
+				mapping.DownstreamStats.Marshal())
+		}
+		if mapping.DownstreamObjectIDs != nil {
+			encodedIDs := make([]string, len(*mapping.DownstreamObjectIDs))
+			for i := range *mapping.DownstreamObjectIDs {
+				encodedIDs[i] = base64.StdEncoding.EncodeToString(
+					(*mapping.DownstreamObjectIDs)[i][:])
+			}
+			mappingJSON.DownstreamObjectIDs = &encodedIDs
+		}
+		serialized[upstreamID] = mappingJSON
+	})
+	return serialized
+}
+
+func restoreAObjectMap(
+	ctx context.Context,
+	serialized map[string]AObjectMappingJSON,
+) (*AObjectMap, error) {
+	aobjectMap := NewAObjectMap()
+	for upstreamID, mappingJSON := range serialized {
+		mapping := &AObjectMapping{
+			IsTombstone: mappingJSON.IsTombstone,
+			DBName:      mappingJSON.DBName,
+			TableName:   mappingJSON.TableName,
+		}
+		if mappingJSON.DownstreamStats != "" {
+			statsBytes, err := base64.StdEncoding.DecodeString(mappingJSON.DownstreamStats)
+			if err != nil {
+				return nil, moerr.NewInternalErrorf(
+					ctx, "failed to decode downstream stats for upstream id %s: %v", upstreamID, err)
+			}
+			if len(statsBytes) == objectio.ObjectStatsLen {
+				mapping.DownstreamStats.UnMarshal(statsBytes)
+			}
+		}
+		if mappingJSON.DownstreamObjectIDs != nil {
+			objectIDs := make([]objectio.ObjectId, len(*mappingJSON.DownstreamObjectIDs))
+			for i, encodedID := range *mappingJSON.DownstreamObjectIDs {
+				idBytes, err := base64.StdEncoding.DecodeString(encodedID)
+				if err != nil || len(idBytes) != objectio.ObjectIDSize {
+					return nil, moerr.NewInternalErrorf(
+						ctx, "failed to decode downstream object id %d for upstream id %s", i, upstreamID)
+				}
+				copy(objectIDs[i][:], idBytes)
+			}
+			mapping.DownstreamObjectIDs = &objectIDs
+		}
+		aobjectMap.Set(upstreamID, mapping)
+	}
+	return aobjectMap, nil
 }
 
 func (iterCtx *IterationContext) String() string {
@@ -314,26 +382,10 @@ func InitializeIterationContext(
 			return nil, moerr.NewInternalErrorf(ctx, "failed to unmarshal context JSON: %v", err)
 		}
 
-		// Restore AObjectMap from JSON
-		if ctxJSON.AObjectMap != nil {
-			for upstreamIDStr, mappingJSON := range ctxJSON.AObjectMap {
-				mapping := &AObjectMapping{
-					IsTombstone: mappingJSON.IsTombstone,
-					DBName:      mappingJSON.DBName,
-					TableName:   mappingJSON.TableName,
-				}
-				// Deserialize DownstreamStats from base64
-				if mappingJSON.DownstreamStats != "" {
-					statsBytes, err := base64.StdEncoding.DecodeString(mappingJSON.DownstreamStats)
-					if err != nil {
-						return nil, moerr.NewInternalErrorf(ctx, "failed to decode downstream stats for upstream id %s: %v", upstreamIDStr, err)
-					}
-					if len(statsBytes) == objectio.ObjectStatsLen {
-						mapping.DownstreamStats.UnMarshal(statsBytes)
-					}
-				}
-				iterationCtx.AObjectMap.Set(upstreamIDStr, mapping)
-			}
+		// Restore AObjectMap from JSON.
+		iterationCtx.AObjectMap, err = restoreAObjectMap(ctx, ctxJSON.AObjectMap)
+		if err != nil {
+			return nil, err
 		}
 
 		// Restore TableIDs from JSON
@@ -433,23 +485,8 @@ func UpdateIterationState(
 		// Serialize IterationContext to JSON
 		var contextJSON string
 		if iterationCtx != nil {
-			// Convert AObjectMap to serializable format
-			aobjectMapJSON := make(map[string]AObjectMappingJSON)
-			if iterationCtx.AObjectMap != nil {
-				iterationCtx.AObjectMap.Range(func(upstreamIDStr string, mapping *AObjectMapping) {
-					mappingJSON := AObjectMappingJSON{
-						IsTombstone: mapping.IsTombstone,
-						DBName:      mapping.DBName,
-						TableName:   mapping.TableName,
-					}
-					// Serialize DownstreamStats to base64
-					if !mapping.DownstreamStats.IsZero() {
-						statsBytes := mapping.DownstreamStats.Marshal()
-						mappingJSON.DownstreamStats = base64.StdEncoding.EncodeToString(statsBytes)
-					}
-					aobjectMapJSON[upstreamIDStr] = mappingJSON
-				})
-			}
+			// Convert AObjectMap to serializable format.
+			aobjectMapJSON := serializeAObjectMap(iterationCtx.AObjectMap)
 
 			// Convert TableIDs to string map for JSON serialization
 			tableIDsJSON := make(map[string]uint64)
@@ -546,23 +583,8 @@ func UpdateIterationStateNoSubscriptionState(
 		// Serialize IterationContext to JSON
 		var contextJSON string
 		if iterationCtx != nil {
-			// Convert AObjectMap to serializable format
-			aobjectMapJSON := make(map[string]AObjectMappingJSON)
-			if iterationCtx.AObjectMap != nil {
-				iterationCtx.AObjectMap.Range(func(upstreamIDStr string, mapping *AObjectMapping) {
-					mappingJSON := AObjectMappingJSON{
-						IsTombstone: mapping.IsTombstone,
-						DBName:      mapping.DBName,
-						TableName:   mapping.TableName,
-					}
-					// Serialize DownstreamStats to base64
-					if !mapping.DownstreamStats.IsZero() {
-						statsBytes := mapping.DownstreamStats.Marshal()
-						mappingJSON.DownstreamStats = base64.StdEncoding.EncodeToString(statsBytes)
-					}
-					aobjectMapJSON[upstreamIDStr] = mappingJSON
-				})
-			}
+			// Convert AObjectMap to serializable format.
+			aobjectMapJSON := serializeAObjectMap(iterationCtx.AObjectMap)
 
 			// Convert TableIDs to string map for JSON serialization
 			tableIDsJSON := make(map[string]uint64)
@@ -1494,6 +1516,7 @@ func ExecuteIteration(
 			err = moerr.NewInternalErrorf(ctx, "failed to renew sync protection before apply: %v", renewErr)
 			return
 		}
+		syncProtectionTTLExpireTS = newTTLExpireTS
 		// Update worker's TTL tracking after successful renew
 		if syncProtectionWorker != nil {
 			syncProtectionWorker.RegisterSyncProtection(syncProtectionJobID, newTTLExpireTS)
@@ -1503,13 +1526,19 @@ func ExecuteIteration(
 	// Create TTL checker for ApplyObjects if sync protection is registered
 	// ttlChecker returns true when TTL is still valid, false when TTL has expired
 	var ttlChecker func() bool
-	if syncProtectionJobID != "" && syncProtectionWorker != nil {
+	if syncProtectionJobID != "" {
 		ttlChecker = func() bool {
-			currentTTL := syncProtectionWorker.GetSyncProtectionTTL(syncProtectionJobID)
+			currentTTL := syncProtectionTTLExpireTS
+			if syncProtectionWorker != nil {
+				currentTTL = syncProtectionWorker.GetSyncProtectionTTL(
+					syncProtectionJobID)
+			}
 			// Return true if TTL is valid (currentTTL > 0 and now < TTL)
 			return currentTTL > 0 && time.Now().UnixNano() < currentTTL
 		}
 	}
+	ccprTNShardID := cnEngine.(*disttae.Engine).GetPrimaryTNShardID(
+		iterationCtx.LocalTxn.GetWorkspace())
 
 	err = ApplyObjects(
 		ctx,
@@ -1532,6 +1561,17 @@ func ExecuteIteration(
 		cnEngine.(*disttae.Engine).GetCCPRTxnCache(),
 		iterationCtx.AObjectMap,
 		ttlChecker,
+		CCPRSyncProtection{
+			JobID:     syncProtectionJobID,
+			TNShardID: ccprTNShardID,
+			ValidTS: func() int64 {
+				if syncProtectionWorker != nil {
+					return syncProtectionWorker.GetSyncProtectionTTL(
+						syncProtectionJobID)
+				}
+				return syncProtectionTTLExpireTS
+			},
+		},
 	)
 	if err != nil {
 		err = moerr.NewInternalErrorf(ctx, "failed to apply object list: %v", err)

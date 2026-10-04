@@ -96,6 +96,7 @@ const (
 	RESP_BY_SITUATION        RespType = 0x3
 	RESP_STATUS              RespType = 0x4
 	RESP_MIXED_RESULT_ROW    RespType = 0x5
+	RESP_DEFERRED_RESULT_ROW RespType = 0x6
 
 	//
 	EXEC_IN_ENGINE   ExecLocation = 0x0
@@ -130,7 +131,6 @@ var (
 	frontendStatusTyp = MakeStmtKind(OUTPUT_STATUS, RESP_STATUS, EXEC_IN_FRONTEND)
 
 	//like statements: they composite the result set themselves
-	//    ShowConnectors
 	//    ExplainStmt
 	//    ShowTableStatus
 	//    ShowErrors
@@ -146,7 +146,10 @@ var (
 )
 
 func (node *Select) StmtKind() StmtKind {
-	if node.Ep != nil {
+	if node.IsPerform {
+		return defaultStatusTyp
+	}
+	if node.Ep != nil || len(node.IntoVars) > 0 {
 		return defaultStatusTyp
 	}
 	return defaultResRowTyp
@@ -342,6 +345,13 @@ func (node *Deallocate) StmtKind() StmtKind {
 }
 
 func (node *Update) StmtKind() StmtKind {
+	if node.HasReturning() {
+		return MakeStmtKind(OUTPUT_RESULT_ROW, RESP_DEFERRED_RESULT_ROW, EXEC_IN_ENGINE)
+	}
+	return defaultStatusTyp
+}
+
+func (node *Merge) StmtKind() StmtKind {
 	return defaultStatusTyp
 }
 
@@ -350,10 +360,6 @@ func (node *CreateDatabase) StmtKind() StmtKind {
 }
 
 func (node *CreateTable) StmtKind() StmtKind {
-	return defaultStatusTyp
-}
-
-func (node *CreateSource) StmtKind() StmtKind {
 	return defaultStatusTyp
 }
 
@@ -378,6 +384,9 @@ func (node *ShowCreateTable) StmtKind() StmtKind {
 }
 
 func (node *Insert) StmtKind() StmtKind {
+	if node.HasReturning() {
+		return MakeStmtKind(OUTPUT_RESULT_ROW, RESP_DEFERRED_RESULT_ROW, EXEC_IN_ENGINE)
+	}
 	return defaultStatusTyp
 }
 
@@ -478,10 +487,6 @@ func (node *ShowRolesStmt) StmtKind() StmtKind {
 	return defaultResRowTyp
 }
 
-func (node *ShowConnectors) StmtKind() StmtKind {
-	return compositeResRowType
-}
-
 func (node *ShowLogserviceReplicas) StmtKind() StmtKind {
 	return compositeResRowType
 }
@@ -514,10 +519,6 @@ func (node *RenameTable) StmtKind() StmtKind {
 	return defaultStatusTyp
 }
 
-func (node *CreateConnector) StmtKind() StmtKind {
-	return frontendStatusTyp
-}
-
 func (node *DropTable) StmtKind() StmtKind {
 	return defaultStatusTyp
 }
@@ -535,6 +536,9 @@ func (node *TruncateTable) StmtKind() StmtKind {
 }
 
 func (node *Delete) StmtKind() StmtKind {
+	if node.HasReturning() {
+		return MakeStmtKind(OUTPUT_RESULT_ROW, RESP_DEFERRED_RESULT_ROW, EXEC_IN_ENGINE)
+	}
 	return defaultStatusTyp
 }
 
@@ -607,10 +611,6 @@ func (node *AlterSequence) StmtKind() StmtKind {
 }
 
 func (node *Reset) StmtKind() StmtKind {
-	return frontendStatusTyp
-}
-
-func (node *DropConnector) StmtKind() StmtKind {
 	return frontendStatusTyp
 }
 
@@ -776,4 +776,27 @@ func (node *RestartCDC) StmtKind() StmtKind {
 
 func (node *SetLogserviceSettings) StmtKind() StmtKind {
 	return frontendStatusTyp
+}
+
+// IsIgnoreStatement reports the DML error policy encoded by the statement.
+// LOAD DATA IGNORE LINES is a header count, not an IGNORE error policy.
+func IsIgnoreStatement(statement Statement) bool {
+	switch stmt := statement.(type) {
+	case *Insert:
+		return stmt.IsIgnore()
+	case *Update:
+		return stmt.Ignore
+	case *Load:
+		return isLoadDataIgnore(stmt)
+	default:
+		return false
+	}
+}
+
+func isLoadDataIgnore(stmt *Load) bool {
+	if stmt == nil {
+		return false
+	}
+	_, ok := stmt.DuplicateHandling.(*DuplicateKeyIgnore)
+	return ok
 }

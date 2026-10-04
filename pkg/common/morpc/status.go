@@ -88,6 +88,9 @@ func GetStatusCategory(err error) StatusCategory {
 	if err == ErrBackendCreating || errors.Is(err, ErrBackendCreating) {
 		return StatusTransient
 	}
+	if isBackendCreateQueueCongestion(err) {
+		return StatusTransient
+	}
 
 	// Backend unavailable or create timeout - treat as unavailable (permanent for this request)
 	if err == ErrBackendUnavailable || errors.Is(err, ErrBackendUnavailable) ||

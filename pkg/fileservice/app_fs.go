@@ -39,24 +39,53 @@ func (fs *AppFS) getAppDir() string {
 func (fs *AppFS) Name() string {
 	return fs.appConfig.Name
 }
+
+func (fs *AppFS) toAppFilePath(filePath string) (string, error) {
+	parsed, err := parseFilePathAtService(filePath, fs.Name())
+	if err != nil {
+		return "", err
+	}
+	return path.Join(fs.getAppDir(), parsed.File), nil
+}
+
 func (fs *AppFS) Write(
 	ctx context.Context,
 	vector IOVector,
 ) error {
-	dir := fs.getAppDir()
-	vector.FilePath = path.Join(dir, vector.FilePath)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	filePath, err := fs.toAppFilePath(vector.FilePath)
+	if err != nil {
+		return err
+	}
+	vector.FilePath = filePath
 	return fs.tmpFS.Write(ctx, vector)
 }
 func (fs *AppFS) Read(
 	ctx context.Context,
 	vector *IOVector,
 ) error {
-	dir := fs.getAppDir()
-	vector.FilePath = path.Join(dir, vector.FilePath)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	filePath, err := fs.toAppFilePath(vector.FilePath)
+	if err != nil {
+		return err
+	}
+	vector.FilePath = filePath
 	return fs.tmpFS.Read(ctx, vector)
 }
 func (fs *AppFS) ReadCache(ctx context.Context, vector *IOVector) error {
-	panic("not implemented")
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	filePath, err := fs.toAppFilePath(vector.FilePath)
+	if err != nil {
+		return err
+	}
+	vector.FilePath = filePath
+	return fs.tmpFS.ReadCache(ctx, vector)
 }
 func (fs *AppFS) List(ctx context.Context, dirPath string) iter.Seq2[*DirEntry, error] {
 	dir := fs.getAppDir()
@@ -64,20 +93,38 @@ func (fs *AppFS) List(ctx context.Context, dirPath string) iter.Seq2[*DirEntry, 
 	return fs.tmpFS.List(ctx, dirPath)
 }
 func (fs *AppFS) Delete(ctx context.Context, filePaths ...string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	newFilePaths := make([]string, len(filePaths))
-	dir := fs.getAppDir()
 	for i, filePath := range filePaths {
-		newFilePaths[i] = path.Join(dir, filePath)
+		appFilePath, err := fs.toAppFilePath(filePath)
+		if err != nil {
+			return err
+		}
+		newFilePaths[i] = appFilePath
 	}
 	return fs.tmpFS.Delete(ctx, newFilePaths...)
 }
 func (fs *AppFS) StatFile(ctx context.Context, filePath string) (*DirEntry, error) {
-	dir := fs.getAppDir()
-	filePath = path.Join(dir, filePath)
-	return fs.tmpFS.StatFile(ctx, filePath)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	appFilePath, err := fs.toAppFilePath(filePath)
+	if err != nil {
+		return nil, err
+	}
+	return fs.tmpFS.StatFile(ctx, appFilePath)
 }
 func (fs *AppFS) PrefetchFile(ctx context.Context, filePath string) error {
-	panic("not implemented")
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	appFilePath, err := fs.toAppFilePath(filePath)
+	if err != nil {
+		return err
+	}
+	return fs.tmpFS.PrefetchFile(ctx, appFilePath)
 }
 func (fs *AppFS) Cost() *CostAttr {
 	panic("not implemented")

@@ -16,6 +16,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -33,7 +34,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -42,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	mock_executor "github.com/matrixorigin/matrixone/pkg/util/executor/test"
 )
 
 var _ client.TxnOperator = new(testTxnOperator)
@@ -196,11 +200,6 @@ func (tTxnOp *testTxnOperator) Debug(ctx context.Context, ops []txn.TxnRequest) 
 	panic("implement me")
 }
 
-func (tTxnOp *testTxnOperator) NextSequence() uint64 {
-	//TODO implement me
-	panic("implement me")
-}
-
 func (tTxnOp *testTxnOperator) EnterRunSqlWithTokenAndSQL(_ context.CancelFunc, _ string) uint64 {
 	//TODO implement me
 	return 1
@@ -321,6 +320,375 @@ func TestBootstrapWithWait(t *testing.T) {
 	)
 }
 
+func TestBootstrapRetriesOwnerInitializationWithoutReacquiringLock(t *testing.T) {
+	tests := []struct {
+		name string
+		err  func() error
+	}{
+		{
+			name: "connection reset",
+			err:  func() error { return moerr.NewConnectionResetNoCtx() },
+		},
+		{
+			name: "backend closed",
+			err:  func() error { return moerr.NewBackendClosedNoCtx() },
+		},
+		{
+			name: "backend cannot connect",
+			err:  func() error { return moerr.NewBackendCannotConnectNoCtx() },
+		},
+		{
+			name: "transaction unknown",
+			err: func() error {
+				return moerr.NewTxnUnknown(context.Background(), "bootstrap initialization")
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			sid := ""
+			runtime.RunTest(sid, func(rt runtime.Runtime) {
+				ctrl := gomock.NewController(t)
+				exec := mock_executor.NewMockSQLExecutor(ctrl)
+				var initAttempts atomic.Uint32
+				locker := &memLocker{}
+				exec.EXPECT().Exec(gomock.Any(), "show databases", gomock.Any()).
+					Return(executor.Result{}, nil)
+				exec.EXPECT().ExecTxn(gomock.Any(), gomock.Any(), gomock.Any()).
+					DoAndReturn(func(
+						ctx context.Context,
+						execFunc func(executor.TxnExecutor) error,
+						opts executor.Options,
+					) error {
+						txn := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+							if sql == initSQLs[0] && initAttempts.Add(1) == 1 {
+								return executor.Result{}, test.err()
+							}
+							return newBootstrapStringResult("mo_catalog", "mo_catalog"), nil
+						}, nil)
+						if err := execFunc(txn); err != nil {
+							// sqlExecutor wraps a failed transaction body this way when
+							// rollback succeeds.
+							return errors.Join(err, nil)
+						}
+						return nil
+					}).Times(2)
+
+				b := NewService(
+					sid,
+					locker,
+					clock.NewHLCClock(func() int64 { return 0 }, 0),
+					nil,
+					exec,
+				)
+				ctx, cancel := newBootstrapTestContext(time.Second)
+				defer cancel()
+
+				require.NoError(t, b.Bootstrap(ctx))
+				require.Equal(t, uint32(2), initAttempts.Load())
+				require.Equal(t, uint64(1), locker.ids[bootstrapKey])
+			})
+		})
+	}
+}
+
+func TestBootstrapRetriesInitialStateCheckBeforeLock(t *testing.T) {
+	tests := []struct {
+		name string
+		err  func() error
+	}{
+		{
+			name: "connection reset",
+			err:  func() error { return moerr.NewConnectionResetNoCtx() },
+		},
+		{
+			name: "backend closed",
+			err:  func() error { return moerr.NewBackendClosedNoCtx() },
+		},
+		{
+			name: "backend cannot connect",
+			err:  func() error { return moerr.NewBackendCannotConnectNoCtx() },
+		},
+		{
+			name: "transaction unknown",
+			err: func() error {
+				return moerr.NewTxnUnknown(context.Background(), "bootstrap check")
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			sid := ""
+			runtime.RunTest(
+				sid,
+				func(rt runtime.Runtime) {
+					var stateChecks atomic.Uint32
+					var initAttempts atomic.Uint32
+					locker := &memLocker{}
+					exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+						if sql == "show databases" {
+							if stateChecks.Add(1) == 1 {
+								// sqlExecutor wraps a failed statement body this way when
+								// rollback succeeds.
+								return executor.Result{}, errors.Join(test.err(), nil)
+							}
+							return executor.Result{}, nil
+						}
+						if sql == initSQLs[0] {
+							initAttempts.Add(1)
+						}
+						return newBootstrapStringResult("mo_catalog", "mo_catalog"), nil
+					})
+
+					b := NewService(
+						sid,
+						locker,
+						clock.NewHLCClock(func() int64 { return 0 }, 0),
+						nil,
+						exec,
+					)
+					ctx, cancel := newBootstrapTestContext(time.Second)
+					defer cancel()
+
+					require.NoError(t, b.Bootstrap(ctx))
+					require.Equal(t, uint32(2), stateChecks.Load())
+					require.Equal(t, uint32(1), initAttempts.Load())
+					require.Equal(t, uint64(1), locker.ids[bootstrapKey])
+				},
+			)
+		})
+	}
+}
+
+func TestBootstrapDoesNotRetryNonRetryableErrorWithRetryableRollback(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(t *testing.T, bodyErr, rollbackErr error)
+	}{
+		{
+			name: "initial state check",
+			run: func(t *testing.T, bodyErr, rollbackErr error) {
+				locker := &memLocker{}
+				exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+					if sql == "show databases" {
+						return executor.Result{}, errors.Join(bodyErr, rollbackErr)
+					}
+					return executor.Result{}, nil
+				})
+				b := NewService(
+					"",
+					locker,
+					clock.NewHLCClock(func() int64 { return 0 }, 0),
+					nil,
+					exec,
+				)
+
+				err := b.Bootstrap(context.Background())
+				require.ErrorIs(t, err, bodyErr)
+				require.Equal(t, uint64(0), locker.ids[bootstrapKey])
+			},
+		},
+		{
+			name: "owner initialization",
+			run: func(t *testing.T, bodyErr, rollbackErr error) {
+				ctrl := gomock.NewController(t)
+				exec := mock_executor.NewMockSQLExecutor(ctrl)
+				locker := &memLocker{}
+				var initAttempts atomic.Uint32
+				exec.EXPECT().Exec(gomock.Any(), "show databases", gomock.Any()).
+					Return(executor.Result{}, nil)
+				exec.EXPECT().ExecTxn(gomock.Any(), gomock.Any(), gomock.Any()).
+					DoAndReturn(func(
+						ctx context.Context,
+						execFunc func(executor.TxnExecutor) error,
+						opts executor.Options,
+					) error {
+						txn := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+							if sql == initSQLs[0] {
+								initAttempts.Add(1)
+								return executor.Result{}, bodyErr
+							}
+							return executor.Result{}, nil
+						}, nil)
+						require.ErrorIs(t, execFunc(txn), bodyErr)
+						return errors.Join(bodyErr, rollbackErr)
+					}).Times(1)
+				b := NewService(
+					"",
+					locker,
+					clock.NewHLCClock(func() int64 { return 0 }, 0),
+					nil,
+					exec,
+				)
+				ctx, cancel := newBootstrapTestContext(time.Second)
+				defer cancel()
+
+				err := b.Bootstrap(ctx)
+				require.ErrorIs(t, err, bodyErr)
+				require.Equal(t, uint32(1), initAttempts.Load())
+				require.Equal(t, uint64(1), locker.ids[bootstrapKey])
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runtime.RunTest("", func(rt runtime.Runtime) {
+				bodyErr := moerr.NewInternalErrorNoCtx("bootstrap SQL failed")
+				test.run(t, bodyErr, moerr.NewBackendClosedNoCtx())
+			})
+		})
+	}
+}
+
+func TestBootstrapReconcilesUncertainTxnWithoutReplay(t *testing.T) {
+	tests := []struct {
+		name string
+		err  func(context.Context) error
+	}{
+		{
+			name: "connection reset",
+			err:  func(context.Context) error { return moerr.NewConnectionResetNoCtx() },
+		},
+		{
+			name: "transaction unknown",
+			err:  func(ctx context.Context) error { return moerr.NewTxnUnknown(ctx, "bootstrap") },
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			sid := ""
+			runtime.RunTest(
+				sid,
+				func(rt runtime.Runtime) {
+					ctrl := gomock.NewController(t)
+					exec := mock_executor.NewMockSQLExecutor(ctrl)
+					locker := &memLocker{}
+					var initAttempts atomic.Uint32
+
+					gomock.InOrder(
+						exec.EXPECT().Exec(gomock.Any(), "show databases", gomock.Any()).
+							Return(executor.Result{}, nil),
+						exec.EXPECT().ExecTxn(gomock.Any(), gomock.Any(), gomock.Any()).
+							DoAndReturn(func(
+								ctx context.Context,
+								execFunc func(executor.TxnExecutor) error,
+								opts executor.Options,
+							) error {
+								txn := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+									if sql == initSQLs[0] {
+										initAttempts.Add(1)
+									}
+									return newBootstrapStringResult("mo_catalog", "mo_catalog"), nil
+								}, nil)
+								require.NoError(t, execFunc(txn))
+								return test.err(ctx)
+							}),
+						exec.EXPECT().Exec(gomock.Any(), "show databases", gomock.Any()).
+							Return(executor.Result{}, nil),
+						exec.EXPECT().Exec(gomock.Any(), "show databases", gomock.Any()).
+							Return(executor.Result{}, moerr.NewConnectionResetNoCtx()),
+						exec.EXPECT().Exec(gomock.Any(), "show databases", gomock.Any()).
+							Return(newBootstrapStringResult(bootstrappedCheckerDB), nil),
+						exec.EXPECT().Exec(
+							gomock.Any(),
+							fmt.Sprintf("show tables from %s", bootstrappedCheckerDB),
+							gomock.Any(),
+						).Return(newBootstrapStringResult(allBootstrappedCheckerTables()...), nil),
+					)
+
+					b := NewService(
+						sid,
+						locker,
+						clock.NewHLCClock(func() int64 { return 0 }, 0),
+						nil,
+						exec,
+					)
+					ctx, cancel := newBootstrapTestContext(time.Second)
+					defer cancel()
+
+					require.NoError(t, b.Bootstrap(ctx))
+					require.Equal(t, uint32(1), initAttempts.Load())
+					require.Equal(t, uint64(1), locker.ids[bootstrapKey])
+				},
+			)
+		})
+	}
+}
+
+func TestBootstrapUncertainTxnStopsAtContextWithoutReplay(t *testing.T) {
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			ctrl := gomock.NewController(t)
+			exec := mock_executor.NewMockSQLExecutor(ctrl)
+			locker := &memLocker{}
+			var initAttempts atomic.Uint32
+
+			exec.EXPECT().Exec(gomock.Any(), "show databases", gomock.Any()).
+				Return(executor.Result{}, nil).AnyTimes()
+			exec.EXPECT().ExecTxn(gomock.Any(), gomock.Any(), gomock.Any()).
+				DoAndReturn(func(
+					ctx context.Context,
+					execFunc func(executor.TxnExecutor) error,
+					opts executor.Options,
+				) error {
+					txn := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+						if sql == initSQLs[0] {
+							initAttempts.Add(1)
+						}
+						return newBootstrapStringResult("mo_catalog", "mo_catalog"), nil
+					}, nil)
+					require.NoError(t, execFunc(txn))
+					return moerr.NewTxnUnknown(ctx, "bootstrap")
+				}).Times(1)
+
+			b := NewService(
+				sid,
+				locker,
+				clock.NewHLCClock(func() int64 { return 0 }, 0),
+				nil,
+				exec,
+			)
+			ctx, cancel := newBootstrapTestContext(250 * time.Millisecond)
+			defer cancel()
+
+			err := b.Bootstrap(ctx)
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			require.Equal(t, uint32(1), initAttempts.Load())
+			require.Equal(t, uint64(1), locker.ids[bootstrapKey])
+		},
+	)
+}
+
+func TestBootstrapDoesNotRetryUncertainLockAllocation(t *testing.T) {
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			locker := &uncertainMemLocker{err: moerr.NewConnectionResetNoCtx()}
+			b := NewService(
+				sid,
+				locker,
+				clock.NewHLCClock(func() int64 { return 0 }, 0),
+				nil,
+				executor.NewMemExecutor(func(string) (executor.Result, error) {
+					return executor.Result{}, nil
+				}),
+			)
+
+			err := b.Bootstrap(context.Background())
+			require.ErrorIs(t, err, locker.err)
+			require.Equal(t, uint32(1), locker.calls.Load())
+			require.Equal(t, uint64(1), locker.ids[bootstrapKey])
+		},
+	)
+}
+
 func TestBootstrapMissingSQLTaskTablesIsNotBootstrapped(t *testing.T) {
 	sid := ""
 	runtime.RunTest(
@@ -417,6 +785,14 @@ func newBootstrapStringResult(values ...string) executor.Result {
 	return memRes.GetResult()
 }
 
+func newBootstrapTestContext(timeout time.Duration) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	frontendParameters := &config.FrontendParameters{}
+	frontendParameters.SetDefaultValues()
+	return context.WithValue(ctx, config.ParameterUnitKey,
+		config.NewParameterUnit(frontendParameters, nil, nil, nil)), cancel
+}
+
 type memLocker struct {
 	sync.Mutex
 	ids map[string]uint64
@@ -433,6 +809,23 @@ func (l *memLocker) Get(
 
 	l.ids[key]++
 	return l.ids[key] == 1, nil
+}
+
+type uncertainMemLocker struct {
+	memLocker
+	err   error
+	calls atomic.Uint32
+}
+
+func (l *uncertainMemLocker) Get(ctx context.Context, key string) (bool, error) {
+	ok, err := l.memLocker.Get(ctx, key)
+	if err != nil {
+		return false, err
+	}
+	if l.calls.Add(1) == 1 {
+		return false, l.err
+	}
+	return ok, nil
 }
 
 // tolerance test
@@ -619,6 +1012,79 @@ func TestDoUpgrade(t *testing.T) {
 	)
 }
 
+func TestDoUpgradeWaitsForTenantSnapshotProtocol(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		protocol   string
+		wantErr    bool
+		wantPrefix []string
+	}{
+		{
+			name:       "older writer blocks snapshot",
+			protocol:   `{"method":"GETPROTOCOLVERSION","result":"cn-a:32,cn-b:31"}`,
+			wantErr:    true,
+			wantPrefix: []string{"SELECT mo_ctl('cn', 'GetProtocolVersion', '')"},
+		},
+		{
+			name:     "all writers ready before snapshot",
+			protocol: `{"method":"GETPROTOCOLVERSION","result":"cn-a:32,cn-b:32"}`,
+			wantPrefix: []string{
+				"SELECT mo_ctl('cn', 'GetProtocolVersion', '')",
+				"select account_id from mo_account where account_id > -1 order by account_id limit 16",
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sid := ""
+			runtime.RunTest(
+				sid,
+				func(rt runtime.Runtime) {
+					h := newTestVersionHandler("2.0.0", "1.2.0", versions.No, versions.Yes, 2)
+					h.metadata.RequiredProtocolVersion = defines.MORPCVersion32
+					var calls []string
+					b := newServiceForTest(
+						sid,
+						&memLocker{},
+						clock.NewHLCClock(func() int64 { return 0 }, 0),
+						nil,
+						executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+							return executor.Result{}, nil
+						}),
+						func(s *service) { s.handles = []VersionHandle{h} },
+					)
+					b.upgrade.upgradeTenantBatch = 16
+
+					txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+					txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+					txnExecutor := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+						calls = append(calls, sql)
+						if sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')" {
+							return newBootstrapStringResult(test.protocol), nil
+						}
+						return executor.Result{}, nil
+					}, txnOperator)
+
+					_, err := b.doUpgrade(context.Background(), versions.VersionUpgrade{
+						FromVersion:    "1.2.0",
+						ToVersion:      "2.0.0",
+						FinalVersion:   "2.0.0",
+						State:          versions.StateCreated,
+						UpgradeTenant:  versions.Yes,
+						UpgradeCluster: versions.No,
+					}, txnExecutor)
+					if test.wantErr {
+						require.ErrorContains(t, err, "node")
+					} else {
+						require.NoError(t, err)
+					}
+					require.GreaterOrEqual(t, len(calls), len(test.wantPrefix))
+					require.Equal(t, test.wantPrefix, calls[:len(test.wantPrefix)])
+				},
+			)
+		})
+	}
+}
+
 func TestPerformUpgradeReturnsWhenTenantUpgradeInProgress(t *testing.T) {
 	sid := ""
 	runtime.RunTest(
@@ -782,4 +1248,54 @@ func (h *testVersionHandle) HandleTenantUpgrade(ctx context.Context, tenantID in
 
 func (h *testVersionHandle) HandleCreateFrameworkDeps(txn executor.TxnExecutor) error {
 	return nil
+}
+
+func TestInitSystemViewsRetryAndCancellation(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		first         error
+		retry, cancel bool
+	}{
+		{name: "success"},
+		{name: "uncertain commit", first: moerr.NewTxnUnknown(t.Context(), "test"), retry: true},
+		{name: "concurrent DDL", first: moerr.NewTxnNeedRetryNoCtx(), retry: true},
+		{name: "authoring rejected", first: moerr.NewNotSupportedNoCtx("protocol version 97")},
+		{name: "rollback does not mask body", first: errors.Join(errors.New("body failed"), moerr.NewTxnNeedRetryNoCtx())},
+		{name: "rollback failure is not retried", first: errors.Join(moerr.NewTxnNeedRetryNoCtx(), errors.New("rollback failed"))},
+		{name: "cancelled retry", first: moerr.NewTxnNeedRetryNoCtx(), cancel: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			attempts := 0
+			exec := mock_executor.NewMockSQLExecutor(gomock.NewController(t))
+			exec.EXPECT().ExecTxn(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+				func(ctx context.Context, body func(executor.TxnExecutor) error, _ executor.Options) error {
+					attempts++
+					if attempts == 1 && tc.first != nil {
+						if tc.cancel {
+							cancel()
+						}
+						return tc.first
+					}
+					return body(executor.NewMemTxnExecutor(func(string) (executor.Result, error) {
+						return newBootstrapStringResult(catalog.SystemViewRel), nil
+					}, nil))
+				}).AnyTimes()
+			err := InitSystemViews(ctx, exec)
+			switch {
+			case tc.cancel:
+				require.ErrorIs(t, err, context.Canceled)
+			case tc.first != nil && !tc.retry:
+				require.ErrorIs(t, err, tc.first)
+			default:
+				require.NoError(t, err)
+			}
+			want := 1
+			if tc.retry {
+				want = 2
+			}
+			require.Equal(t, want, attempts)
+		})
+	}
 }

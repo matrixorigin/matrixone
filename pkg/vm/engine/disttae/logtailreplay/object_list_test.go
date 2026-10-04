@@ -16,8 +16,10 @@ package logtailreplay
 
 import (
 	"context"
+	"errors"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -28,6 +30,69 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestVisitSnapshotObjectsFiltersAndStopsOnVisitorError(t *testing.T) {
+	state := NewPartitionState("test", false, 42, false)
+	add := func(tombstone bool, create, deleteAt types.TS) {
+		id := objectio.NewObjectid()
+		stats := objectio.NewObjectStatsWithObjectID(&id, false, false, false)
+		entry := objectio.ObjectEntry{ObjectStats: *stats, CreateTime: create, DeleteTime: deleteAt}
+		if tombstone {
+			state.tombstoneObjectsNameIndex.Set(entry)
+		} else {
+			state.dataObjectsNameIndex.Set(entry)
+		}
+	}
+	snapshot := types.BuildTS(20, 0)
+	add(false, types.BuildTS(10, 0), types.TS{})
+	add(false, types.BuildTS(30, 0), types.TS{})
+	add(false, types.BuildTS(5, 0), types.BuildTS(20, 0))
+	add(true, types.BuildTS(15, 0), types.TS{})
+
+	var kinds []bool
+	require.NoError(t, VisitSnapshotObjects(context.Background(), state, snapshot, func(_ objectio.ObjectStats, tombstone bool) error {
+		kinds = append(kinds, tombstone)
+		return nil
+	}))
+	require.Equal(t, []bool{false, true}, kinds)
+
+	stop := errors.New("stop")
+	calls := 0
+	err := VisitSnapshotObjects(context.Background(), state, snapshot, func(objectio.ObjectStats, bool) error {
+		calls++
+		return stop
+	})
+	require.ErrorIs(t, err, stop)
+	require.Equal(t, 1, calls)
+}
+
+func TestHasSnapshotTombstonesStopsAtVisiblePresence(t *testing.T) {
+	state := NewPartitionState("test", false, 42, false)
+	snapshot := types.BuildTS(20, 0)
+
+	has, err := state.HasSnapshotTombstones(context.Background(), snapshot)
+	require.NoError(t, err)
+	require.False(t, has)
+
+	tombstone := &PrimaryIndexEntry{Bytes: []byte("row-tombstone"), Time: types.BuildTS(15, 0), Deleted: true}
+	state.inMemTombstoneRowIdIndex.Set(tombstone)
+	has, err = state.HasSnapshotTombstones(context.Background(), snapshot)
+	require.NoError(t, err)
+	require.True(t, has)
+
+	state.inMemTombstoneRowIdIndex.Delete(tombstone)
+	id := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&id, false, false, false)
+	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{ObjectStats: *stats, CreateTime: types.BuildTS(15, 0)})
+	has, err = state.HasSnapshotTombstones(context.Background(), snapshot)
+	require.NoError(t, err)
+	require.True(t, has)
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = state.HasSnapshotTombstones(canceled, snapshot)
+	require.ErrorIs(t, err, context.Canceled)
+}
 
 // TestTailCheckFn tests the tailCheckFn function which filters objects based on time range
 func TestTailCheckFn(t *testing.T) {
@@ -880,9 +945,8 @@ func TestObjectStatsInBatch(t *testing.T) {
 	assert.Equal(t, uint32(1000), storedStats.Size())
 }
 
-// TestGetObjectListFromCKPWithEmptyLocation tests GetObjectListFromCKP with checkpoint entry having empty location
-// Note: This test verifies that the function panics when given an empty location,
-// which is expected behavior since empty locations should never be passed to this function
+// TestGetObjectListFromCKPWithEmptyLocation verifies the public checkpoint
+// consumer propagates an invalid location as an error instead of panicking.
 func TestGetObjectListFromCKPWithEmptyLocation(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
@@ -899,16 +963,7 @@ func TestGetObjectListFromCKPWithEmptyLocation(t *testing.T) {
 	var bat *batch.Batch
 	checkpointEntries := []*checkpoint.CheckpointEntry{entry}
 
-	// This will panic because location is empty and ReadMeta attempts to read from it
-	// We use recover to verify the panic behavior
-	defer func() {
-		if r := recover(); r != nil {
-			// Expected: panic when location is empty
-			t.Logf("Expected panic occurred: %v", r)
-		}
-	}()
-
-	_ = GetObjectListFromCKP(
+	err := GetObjectListFromCKP(
 		ctx,
 		1,  // tid
 		"", // sid
@@ -921,9 +976,13 @@ func TestGetObjectListFromCKPWithEmptyLocation(t *testing.T) {
 		mp,
 		fs,
 	)
-
-	// If we reach here, the function didn't panic which is unexpected
-	t.Fatal("Expected panic for empty location, but function completed normally")
+	require.NotNil(t, bat)
+	t.Cleanup(func() {
+		bat.Clean(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+	require.Zero(t, bat.RowCount())
 }
 
 // TestCollectObjectListNilBatch tests CollectObjectList does not panic with nil batch

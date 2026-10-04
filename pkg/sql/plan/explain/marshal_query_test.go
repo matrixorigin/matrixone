@@ -50,7 +50,13 @@ func TestGetLabelOrTitle(t *testing.T) {
 			Format:   EXPLAIN_FORMAT_TEXT,
 			NodeType: plan2.Node_NodeType(v),
 		}
-		_, e := m.GetNodeTitle(context.TODO(), opt)
+		_, e := m.GetNodeName(context.TODO())
+		if e != nil && e.Error() == "internal error: "+errUnsupportedNodeType {
+			errCount = errCount + 1
+			fmt.Printf("you should add name for node=%s\n", plan2.Node_NodeType_name[v])
+		}
+
+		_, e = m.GetNodeTitle(context.TODO(), opt)
 		if e != nil && e.Error() == "internal error: "+errUnsupportedNodeType {
 			errCount = errCount + 1
 			fmt.Printf("you should add title for node=%s\n", plan2.Node_NodeType_name[v])
@@ -403,6 +409,10 @@ func TestMarshalNodeImpl_GetStatistics_ReadSize(t *testing.T) {
 
 			m := MarshalNodeImpl{node: node}
 			statistics := m.GetStatistics(ctx, options)
+			if len(statistics.Memory) != 1 || statistics.Memory[0].Name != MemorySize ||
+				statistics.Memory[0].Value != tt.analyzeInfo.MemorySize {
+				t.Fatalf("operator memory diagnostic missing from logical JSON explain: %+v", statistics.Memory)
+			}
 
 			// Convert to JSON to verify structure
 			jsonData, err := json.Marshal(statistics)

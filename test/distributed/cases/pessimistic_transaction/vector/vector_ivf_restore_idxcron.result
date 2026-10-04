@@ -8,9 +8,6 @@ insert into src values
 (10,'[100,100,100]'),(11,'[101,101,101]'),
 (20,'[500,500,500]'),(21,'[501,501,501]');
 create index idx using ivfflat on src(b) lists=3 op_type 'vector_l2_ops' ASYNC;
-select sleep(30);
-sleep(30)
-0
 select a from src order by l2_distance(b,'[1,1,1]') limit 1;
 a
 1
@@ -21,9 +18,6 @@ count(*)
 show create table dst;
 Table    Create Table
 dst    CREATE TABLE `dst` (\n  `a` int NOT NULL,\n  `b` vecf32(3) DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `idx` USING ivfflat (`b`) lists = 3  op_type 'vector_l2_ops'  async \n)
-select sleep(30);
-sleep(30)
-0
 select a from dst order by l2_distance(b,'[1,1,1]') limit 1;
 a
 1
@@ -31,9 +25,6 @@ select a from dst order by l2_distance(b,'[500,500,500]') limit 1;
 a
 20
 insert into dst values (30,'[1000,1000,1000]'),(31,'[1001,1001,1001]');
-select sleep(45);
-sleep(45)
-0
 select a from dst order by l2_distance(b,'[1000,1000,1000]') limit 1;
 a
 30

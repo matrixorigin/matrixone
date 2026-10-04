@@ -15,7 +15,6 @@
 package gossip
 
 import (
-	"encoding/binary"
 	"fmt"
 
 	"github.com/hashicorp/memberlist"
@@ -23,12 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
-	"github.com/pierrec/lz4/v4"
 	"go.uber.org/zap"
-)
-
-var (
-	binaryEnc = binary.BigEndian
 )
 
 type Module interface {
@@ -167,101 +161,17 @@ func (d *delegate) GetBroadcasts(overhead, limit int) [][]byte {
 	return data
 }
 
-func (d *delegate) dataCacheState() map[string]*query.CacheKeys {
-	d.dataCacheKey.mu.Lock()
-	defer d.dataCacheKey.mu.Unlock()
-	targetCacheKeys := make(map[string]*query.CacheKeys)
-	for key, target := range d.dataCacheKey.mu.keyTarget {
-		if _, ok := targetCacheKeys[target]; !ok {
-			targetCacheKeys[target] = &query.CacheKeys{}
-		}
-		targetCacheKeys[target].Keys = append(targetCacheKeys[target].Keys, key)
-	}
-	return targetCacheKeys
-}
-
-func (d *delegate) statsInfoState() map[string]*statsinfo.StatsInfoKeys {
-	d.statsInfoKey.mu.Lock()
-	defer d.statsInfoKey.mu.Unlock()
-	targetStatsInfo := make(map[string]*statsinfo.StatsInfoKeys)
-	for key, target := range d.statsInfoKey.mu.keyTarget {
-		if _, ok := targetStatsInfo[target]; !ok {
-			targetStatsInfo[target] = &statsinfo.StatsInfoKeys{}
-		}
-		targetStatsInfo[target].Keys = append(targetStatsInfo[target].Keys, key)
-	}
-	return targetStatsInfo
-}
-
 // LocalState implements the memberlist.Delegate interface.
-func (d *delegate) LocalState(join bool) []byte {
-	// If this a join action, there is no user data on this node.
-	if join {
-		return nil
-	}
-	targetState := gossip.TargetState{
-		Data: map[string]*gossip.LocalState{},
-	}
-
-	for addr, st := range d.dataCacheState() {
-		_, ok := targetState.Data[addr]
-		if !ok {
-			targetState.Data[addr] = &gossip.LocalState{}
-		}
-		targetState.Data[addr].CacheKeys = *st
-	}
-
-	for addr, st := range d.statsInfoState() {
-		_, ok := targetState.Data[addr]
-		if !ok {
-			targetState.Data[addr] = &gossip.LocalState{}
-		}
-		targetState.Data[addr].StatsInfoKeys = *st
-	}
-
-	data, err := targetState.Marshal()
-	if err != nil {
-		d.logger.Error("failed to marshal cache data", zap.Error(err))
-		return nil
-	}
-	dst := make([]byte, lz4.CompressBlockBound(len(data)+4))
-	l := lz4.Compressor{}
-	n, err := l.CompressBlock(data, dst[4:])
-	if err != nil {
-		d.logger.Error("failed to compress cache data", zap.Error(err))
-		return nil
-	}
-	binaryEnc.PutUint32(dst, uint32(len(data)))
-	return dst[:n+4]
+func (d *delegate) LocalState(bool) []byte {
+	// Routes are propagated incrementally by GetBroadcasts and NotifyMsg.
+	// Do not expose route snapshots through memberlist push/pull state.
+	return nil
 }
 
 // MergeRemoteState implements the memberlist.Delegate interface.
-func (d *delegate) MergeRemoteState(buf []byte, join bool) {
-	// We do NOT merge remote user data if this is a pull/push action.
-	// Means that, we only accept user data from a remote node when this
-	// is a new node and is trying to join to the gossip cluster.
-	if !join {
-		return
-	}
-	sz := binaryEnc.Uint32(buf)
-	dst := make([]byte, sz)
-	n, err := lz4.UncompressBlock(buf[4:], dst)
-	if err != nil {
-		d.logger.Error("failed to uncompress cache data from buf", zap.Error(err))
-		return
-	}
-	dst = dst[:n]
-	targetState := gossip.TargetState{}
-	if err := targetState.Unmarshal(dst); err != nil {
-		d.logger.Error("failed to unmarshal cache data", zap.Error(err))
-		return
-	}
-
-	for target, state := range targetState.Data {
-		d.dataCacheKey.update(target, state.CacheKeys.Keys)
-		d.statsInfoKey.update(target, state.StatsInfoKeys.Keys)
-	}
-}
+// Route snapshots are not part of MatrixOne's push/pull protocol, so ignore
+// remote user state without parsing or allocating from untrusted contents.
+func (d *delegate) MergeRemoteState([]byte, bool) {}
 
 // NotifyJoin implements the memberlist.EventDelegate interface.
 func (d *delegate) NotifyJoin(*memberlist.Node) {}
@@ -272,13 +182,8 @@ func (d *delegate) NotifyLeave(node *memberlist.Node) {
 	if len(cacheServiceAddr) == 0 {
 		return
 	}
-	d.dataCacheKey.mu.Lock()
-	defer d.dataCacheKey.mu.Unlock()
-	for key, target := range d.dataCacheKey.mu.keyTarget {
-		if cacheServiceAddr == target {
-			delete(d.dataCacheKey.mu.keyTarget, key)
-		}
-	}
+	d.dataCacheKey.removeByTarget(cacheServiceAddr)
+	d.statsInfoKey.removeByTarget(cacheServiceAddr)
 }
 
 // NotifyUpdate implements the memberlist.EventDelegate interface.

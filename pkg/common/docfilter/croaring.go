@@ -21,6 +21,7 @@ package docfilter
 import "C"
 
 import (
+	"runtime"
 	"sync/atomic"
 	"unsafe"
 
@@ -29,36 +30,97 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-// TagCRoaring marks a payload serialized by the CRoaring (C, roaring64) filter,
-// alongside docfilter.TagBitset (Go roaring) and TagBloom in the shared
-// reader-side transport. CRoaring is the C-backed, compact, exact integer-PK
-// filter (build/probe in C, one cgo call per vector).
+// TagCRoaring marks a legacy payload serialized by the CRoaring (C, roaring64)
+// filter. New producers use TagCbitmap or TagSorted64 for integer PKs, but the
+// reader keeps this portable format for rolling-upgrade compatibility.
 const TagCRoaring byte = 2
 
 // CRoaringFilter wraps a C roaring64_bitmap_t (via cgo/croaring) and
 // implements engine.MembershipFilter. It uses CBloomFilter-style refcounting so the
 // same C bitmap can be shared across parallel readers and freed exactly once.
 type CRoaringFilter struct {
-	ptr    unsafe.Pointer
-	refcnt int32
+	ptr           unsafe.Pointer
+	refcnt        int32
+	memoryRelease func()
 }
 
 // vecFixedArgs extracts the (data ptr, byte len, elemsz, nitem, nullmap ptr,
 // nullmap len) that the C *_fixed entry points expect, mirroring
 // cbloomfilter's fixed-vector path.
+// vecFixedArgs returns the C args for the PHYSICAL elements of v. A CONSTANT vector stores a
+// single physical value (or none, for const-null) but reports a logical Length() equal to the
+// row count; feeding the logical length over the 1-element (or empty) buffer causes
+// out-of-range reads (#25621). nitem is therefore the physical element count: 1 for a non-null
+// constant, 0 for a const-null, v.Length() otherwise. Callers broadcast the single result to
+// all logical rows.
 func vecFixedArgs(v *vector.Vector) (data unsafe.Pointer, dataLen C.size_t, elemsz C.size_t, nitem C.size_t, nullPtr unsafe.Pointer, nullLen C.size_t) {
 	fixed := v.GetData()
-	nitem = C.size_t(v.Length())
 	elemsz = C.size_t(v.GetType().TypeSize())
-	if len(fixed) > 0 {
+	isConst := v.IsConst()
+	if isConst {
+		// A zero-logical-length constant retains its physical value (SetLength(0) on a
+		// reused/shrunk vector) but has no rows: treat it as empty so build/test stay
+		// no-ops instead of inserting/probing the retained value.
+		if v.IsConstNull() || v.Length() == 0 {
+			nitem = 0
+		} else {
+			nitem = 1
+		}
+	} else {
+		nitem = C.size_t(v.Length())
+	}
+	if len(fixed) > 0 && nitem > 0 {
 		data = unsafe.Pointer(&fixed[0])
 		dataLen = C.size_t(len(fixed))
 	}
-	if nb := v.GetNulls().GetBitmap(); nb != nil {
+	// A non-null constant has no per-row nulls; a const-null produces no physical element.
+	// Only report the nullmap bytes actually needed for the logical nitem — the
+	// underlying bitmap may be larger (vector.SetLength preserves bits beyond the
+	// logical length), but C callers iterate [0, nitem) and should never read past
+	// the logical range.
+	if nb := v.GetNulls().GetBitmap(); nb != nil && !isConst {
 		nullPtr = unsafe.Pointer(nb.Ptr())
-		nullLen = C.size_t(nb.Size())
+		nullLen = C.size_t((uint64(nitem) + 7) / 8)
 	}
 	return
+}
+
+// finalizeVecResults expands a TestVector result to all logical rows and invokes cb per row.
+// For a CONSTANT vector only res[0] was filled by C (one physical element), so it is broadcast
+// to every row (const-null stays all-zero, every row NULL). For a regular vector res is already
+// per-row (#25621).
+//
+// A zero-length vector is safe to return immediately: both callers (CbitmapFilter.TestVector,
+// CRoaringFilter.TestVector) already return early for length==0, but this guard makes the
+// function self-sufficient so a future caller that skips that check cannot panic on res[0]
+// for a zero-length non-null constant.
+func finalizeVecResults(v *vector.Vector, res []uint8, cb func(bool, bool, int)) {
+	length := v.Length()
+	if length == 0 {
+		return
+	}
+	if v.IsConst() {
+		r := uint8(0)
+		if !v.IsConstNull() {
+			r = res[0]
+		}
+		for i := 0; i < length; i++ {
+			res[i] = r
+		}
+		if cb != nil {
+			isNull := v.IsConstNull()
+			for i := 0; i < length; i++ {
+				cb(res[i] != 0, isNull, i)
+			}
+		}
+		return
+	}
+	if cb != nil {
+		nulls := v.GetNulls()
+		for i := 0; i < length; i++ {
+			cb(res[i] != 0, nulls.Contains(uint64(i)), i)
+		}
+	}
 }
 
 // BuildCRoaringBytes builds a roaring64 bitset from an integer doc_id vector
@@ -88,13 +150,17 @@ func buildCRoaringBytes(v *vector.Vector, runOpt bool) ([]byte, error) {
 		C.mo_croaring_run_optimize(r)
 	}
 
-	var clen C.size_t
-	buf := C.mo_croaring_serialize(r, &clen)
-	if buf == nil {
+	clen := C.mo_croaring_serialized_size(r)
+	if clen == 0 || uint64(clen) > uint64(^uint(0)>>1) {
 		return nil, moerr.NewInternalErrorNoCtx("croaring: serialize failed")
 	}
-	defer C.mo_croaring_free_buf(buf)
-	return C.GoBytes(unsafe.Pointer(buf), C.int(clen)), nil
+	serialized := make([]byte, int(clen))
+	if !bool(C.mo_croaring_serialize_into(
+		r, (*C.uint8_t)(unsafe.Pointer(unsafe.SliceData(serialized))), clen)) {
+		return nil, moerr.NewInternalErrorNoCtx("croaring: serialize failed")
+	}
+	runtime.KeepAlive(serialized)
+	return serialized, nil
 }
 
 // NewCRoaringFilter deserializes a portable roaring64 payload (no tag prefix).
@@ -131,12 +197,7 @@ func (f *CRoaringFilter) TestVector(v *vector.Vector, cb func(bool, bool, int)) 
 	if data != nil {
 		C.mo_croaring_test_fixed(f.ptr, data, dataLen, elemsz, nitem, nullPtr, nullLen, unsafe.Pointer(&res[0]))
 	}
-	if cb != nil {
-		nulls := v.GetNulls()
-		for i := 0; i < length; i++ {
-			cb(res[i] != 0, nulls.Contains(uint64(i)), i)
-		}
-	}
+	finalizeVecResults(v, res, cb)
 	return res
 }
 
@@ -163,6 +224,10 @@ func (f *CRoaringFilter) Free() {
 		if atomic.AddInt32(&f.refcnt, -1) == 0 {
 			C.mo_croaring_free(f.ptr)
 			f.ptr = nil
+			if f.memoryRelease != nil {
+				f.memoryRelease()
+				f.memoryRelease = nil
+			}
 		}
 	}
 }

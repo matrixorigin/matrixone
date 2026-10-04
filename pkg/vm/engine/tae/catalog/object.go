@@ -177,11 +177,15 @@ func (entry *ObjectEntry) GetCommandMVCCNode() *MVCCNode[*ObjectMVCCNode] {
 }
 func (entry *ObjectEntry) GetDropEntry(
 	txn txnif.TxnReader,
+	deleteByCN bool,
 ) (dropped *ObjectEntry, updatedCEntry *ObjectEntry, isNewNode bool) {
 	dropped = entry.Clone()
 	dropped.ObjectState = ObjectState_Delete_Active
 	dropped.DeletedAt = txnif.UncommitTS
 	dropped.DeleteNode = txnbase.NewTxnMVCCNodeWithTxn(txn)
+	// ObjectStats must be finalized before UpdateMeta publishes this entry to
+	// readers.
+	objectio.SetObjectStatsCNDeleted(&dropped.ObjectStats, deleteByCN)
 	dropped.GetObjectData().UpdateMeta(dropped)
 	updatedCEntry = entry.Clone()
 	updatedCEntry.nextVersion = dropped
@@ -319,6 +323,9 @@ func (entry *ObjectEntry) PrepareRollback() (err error) {
 		entry.table.getObjectList(entry.IsTombstone).DeleteAllEntries(lastNode.ID())
 	case ObjectState_Delete_Active, ObjectState_Delete_PrepareCommit:
 		newEntry := entry.Clone()
+		// CNDeleted describes the rolled-back delete transition, not the
+		// underlying object. Do not let it become inherited C-entry state.
+		objectio.SetObjectStatsCNDeleted(&newEntry.ObjectStats, false)
 		newEntry.DeleteNode.Reset()
 		newEntry.prevVersion = nil
 		newEntry.nextVersion = nil
@@ -386,6 +393,34 @@ func NewObjectEntry(
 	return e
 }
 
+func NewCommittedObjectEntry(
+	table *TableEntry,
+	ts types.TS,
+	stats objectio.ObjectStats,
+	dataFactory ObjectDataFactory,
+	isTombstone bool,
+) *ObjectEntry {
+	e := &ObjectEntry{
+		table: table,
+		ObjectNode: ObjectNode{
+			SortHint:    table.GetDB().catalog.NextObject(),
+			IsTombstone: isTombstone,
+		},
+		EntryMVCCNode: EntryMVCCNode{
+			CreatedAt: ts,
+		},
+		CreateNode:  txnbase.NewTxnMVCCNodeWithTS(ts),
+		ObjectState: ObjectState_Create_ApplyCommit,
+		ObjectMVCCNode: ObjectMVCCNode{
+			ObjectStats: stats,
+		},
+	}
+	if dataFactory != nil {
+		e.objData = dataFactory(e)
+	}
+	return e
+}
+
 func NewReplayObjectEntry() *ObjectEntry {
 	e := &ObjectEntry{}
 	return e
@@ -431,15 +466,44 @@ func (entry *ObjectEntry) GetObjectStats() (stats *objectio.ObjectStats) {
 	return &entry.ObjectStats
 }
 
+type ObjectListGroup uint8
+
+const (
+	ObjectListGroupAppendableCreate ObjectListGroup = iota
+	ObjectListGroupAppendableCreateWithDrop
+	ObjectListGroupAppendableDrop
+	ObjectListGroupNonAppendableCreate
+	ObjectListGroupNonAppendableCreateWithDrop
+	ObjectListGroupNonAppendableDrop
+)
+
+func (entry *ObjectEntry) ObjectListGroup() ObjectListGroup {
+	var group ObjectListGroup
+	if !entry.IsAppendable() {
+		group = ObjectListGroupNonAppendableCreate
+	}
+	if entry.IsDEntry() {
+		return group + 2
+	}
+	if entry.HasDCounterpart() {
+		return group + 1
+	}
+	return group
+}
+
+func (entry *ObjectEntry) ObjectListCommitTS() types.TS {
+	if entry.IsDEntry() {
+		return entry.DeletedAt
+	}
+	return entry.CreatedAt
+}
+
 func (entry *ObjectEntry) Less(b *ObjectEntry) bool {
-	t1 := entry.CreatedAt
-	if t1.LT(&entry.DeletedAt) {
-		t1 = entry.DeletedAt
+	group1, group2 := entry.ObjectListGroup(), b.ObjectListGroup()
+	if group1 != group2 {
+		return group1 < group2
 	}
-	t2 := b.CreatedAt
-	if t2.LT(&b.DeletedAt) {
-		t2 = b.DeletedAt
-	}
+	t1, t2 := entry.ObjectListCommitTS(), b.ObjectListCommitTS()
 	if !t1.EQ(&t2) {
 		return t1.LT(&t2)
 	}

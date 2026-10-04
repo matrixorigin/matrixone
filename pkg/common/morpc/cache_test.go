@@ -32,6 +32,7 @@ func TestCacheAdd(t *testing.T) {
 	v, err = c.Len()
 	assert.Error(t, err)
 	assert.Equal(t, v, 0)
+	assert.Nil(t, c.(*cache).queue)
 }
 
 func TestCachePop(t *testing.T) {

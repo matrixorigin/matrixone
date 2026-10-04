@@ -17,6 +17,7 @@ package service
 import (
 	"context"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -44,6 +45,132 @@ func TestMain(m *testing.M) {
 	os.Exit(ret)
 }
 
+func TestSegmentPayloadCapacityPreservesQueuedResponses(t *testing.T) {
+	cs := newCaptureSession()
+	t.Cleanup(func() { require.NoError(t, cs.Close()) })
+	stream := mockMorpcStream(cs, 17, 1024)
+	type pending struct {
+		response *LogtailResponse
+		segments []*LogtailResponseSegment
+	}
+	// Include exact segment and varint boundaries and concurrent queued sends.
+	sizes := []int{32, 127, 128, stream.limit, stream.limit + 1, 3*stream.limit + 7}
+	queued := make([]pending, 0, len(sizes))
+	for _, size := range sizes {
+		response := &LogtailResponse{LogtailResponse: logtail.LogtailResponse{
+			ResponseId: uint64(size),
+			Response:   &logtail.LogtailResponse_Error{Error: &logtail.ErrorResponse{}},
+		}}
+		messageLength := size - response.ProtoSize()
+		for attempt := 0; attempt < 4; attempt++ {
+			response.GetError().Status.Message = strings.Repeat("x", messageLength)
+			if response.ProtoSize() == size {
+				break
+			}
+			messageLength += size - response.ProtoSize()
+		}
+		require.Equal(t, size, response.ProtoSize())
+		require.NoError(t, stream.write(context.Background(), response))
+		item := pending{response: response}
+		for index := 0; index < (size+stream.limit-1)/stream.limit; index++ {
+			select {
+			case message := <-cs.writes:
+				seg := message.(*LogtailResponseSegment)
+				require.Equal(t, uint64(17), seg.StreamID)
+				require.Equal(t, int32(size), seg.MessageSize)
+				require.Equal(t, int32(index+1), seg.Sequence)
+				require.Equal(t, int32((size+stream.limit-1)/stream.limit), seg.MaxSequence)
+				require.Equal(t, min(stream.limit, size-index*stream.limit), len(seg.Payload))
+				require.LessOrEqual(t, cap(seg.Payload), stream.limit)
+				require.LessOrEqual(t, seg.ProtoSize(), 1024)
+				item.segments = append(item.segments, seg)
+			default:
+				t.Fatal("missing response segment")
+			}
+		}
+		queued = append(queued, item)
+	}
+	// Retain all queued segments until after later writes. No earlier payload
+	// may alias a later segment or the writer's temporary serialized buffer.
+	for _, item := range queued {
+		var payload []byte
+		for _, seg := range item.segments {
+			payload = append(payload, seg.Payload...)
+		}
+		var decoded logtail.LogtailResponse
+		require.NoError(t, decoded.Unmarshal(payload))
+		require.Equal(t, item.response.ResponseId, decoded.ResponseId)
+		require.Equal(t, item.response.GetError(), decoded.GetError())
+		for _, seg := range item.segments {
+			capacity := cap(seg.Payload)
+			stream.segments.Release(seg)
+			require.Zero(t, seg.StreamID)
+			require.Zero(t, seg.MessageSize)
+			require.Zero(t, seg.Sequence)
+			require.Zero(t, seg.MaxSequence)
+			require.Equal(t, capacity, len(seg.Payload))
+		}
+	}
+	// Empty protobuf responses have no segments or transport writes.
+	require.NoError(t, stream.write(context.Background(), &LogtailResponse{}))
+	require.Empty(t, cs.writes)
+}
+
+// Force reuse without depending on sync.Pool retaining an item under -race.
+type reusableSegmentPool struct {
+	segment *LogtailResponseSegment
+	limit   int
+}
+
+func (p *reusableSegmentPool) Acquire() *LogtailResponseSegment {
+	segment := p.segment
+	p.segment = nil
+	return segment
+}
+
+func (p *reusableSegmentPool) Release(segment *LogtailResponseSegment) {
+	p.segment = segment
+}
+
+func (p *reusableSegmentPool) LeastEffectiveCapacity() int { return p.limit }
+
+func TestSegmentPayloadGrowthAndReuse(t *testing.T) {
+	cs := newCaptureSession()
+	t.Cleanup(func() { require.NoError(t, cs.Close()) })
+	stream := mockMorpcStream(cs, 17, 1024)
+	pool := &reusableSegmentPool{segment: &LogtailResponseSegment{}, limit: stream.limit}
+	stream.segments = pool
+	// Cold, geometric growth, growth directly to a larger payload, shrinking,
+	// and a final clamp at the protocol limit.
+	for _, messageLength := range []int{20, 30, 200, 600, 10, stream.limit - 11} {
+		response := &LogtailResponse{LogtailResponse: logtail.LogtailResponse{
+			Response: &logtail.LogtailResponse_Error{Error: &logtail.ErrorResponse{
+				Status: logtail.Status{Message: strings.Repeat("x", messageLength)},
+			}},
+		}}
+		oldCapacity := cap(pool.segment.Payload)
+		require.LessOrEqual(t, response.ProtoSize(), stream.limit)
+		require.NoError(t, stream.write(context.Background(), response))
+		var segment *LogtailResponseSegment
+		select {
+		case message := <-cs.writes:
+			segment = message.(*LogtailResponseSegment)
+		default:
+			t.Fatal("missing response segment")
+		}
+		require.Equal(t, response.ProtoSize(), len(segment.Payload))
+		require.GreaterOrEqual(t, cap(segment.Payload), oldCapacity)
+		require.LessOrEqual(t, cap(segment.Payload), stream.limit)
+		if messageLength == stream.limit-11 {
+			require.Equal(t, stream.limit, cap(segment.Payload))
+		}
+		var decoded logtail.LogtailResponse
+		require.NoError(t, decoded.Unmarshal(segment.Payload))
+		require.Equal(t, response.GetError(), decoded.GetError())
+		pool.Release(segment)
+	}
+}
+
 func TestSessionManger(t *testing.T) {
 	sm := NewSessionManager()
 
@@ -63,7 +190,7 @@ func TestSessionManger(t *testing.T) {
 	streamA := mockMorpcStream(csA, 10, chunkSize)
 	sessionA := sm.GetSession(
 		ctx, logger, pooler, notifier, streamA,
-		sendTimeout, poisonTime, heartbeatInterval,
+		sendTimeout, poisonTime, heartbeatInterval, heartbeatInterval,
 	)
 	require.NotNil(t, sessionA)
 	require.Equal(t, 1, len(sm.ListSession()))
@@ -73,7 +200,7 @@ func TestSessionManger(t *testing.T) {
 	streamB := mockMorpcStream(csB, 11, chunkSize)
 	sessionB := sm.GetSession(
 		ctx, logger, pooler, notifier, streamB,
-		sendTimeout, poisonTime, heartbeatInterval,
+		sendTimeout, poisonTime, heartbeatInterval, heartbeatInterval,
 	)
 	require.NotNil(t, sessionB)
 	require.Equal(t, 2, len(sm.ListSession()))
@@ -83,6 +210,43 @@ func TestSessionManger(t *testing.T) {
 	require.Equal(t, 1, len(sm.ListSession()))
 	sm.DeleteSession(streamB)
 	require.Equal(t, 0, len(sm.ListSession()))
+}
+
+func TestDeletedSessionHistoryIsBoundedAndLightweight(t *testing.T) {
+	sm := NewSessionManager()
+	stream := morpcStream{streamID: 1, remote: "client"}
+	live := &Session{
+		stream:   stream,
+		sendChan: make(chan message, responseBufferSize),
+	}
+	sm.clients[stream] = live
+	sm.DeleteSession(stream)
+
+	require.Len(t, sm.deletedClients, 1)
+	history := sm.DeletedSessions()
+	require.Len(t, history, 1)
+	require.Equal(t, "client", history[0].RemoteAddress())
+	require.Nil(t, history[0].sendChan,
+		"diagnostic history must not retain the live session response buffer")
+
+	for i := 0; i < maxDeletedSessionHistory*2; i++ {
+		sm.AddDeletedSession(uint64(i))
+	}
+	require.LessOrEqual(t, len(sm.DeletedSessions()), maxDeletedSessionHistory)
+}
+
+func TestDeletedSessionHistoryExpiresByTime(t *testing.T) {
+	sm := NewSessionManager()
+	now := time.Now()
+	sm.deletedClients = []deletedSessionRecord{
+		{remote: "expired", deletedAt: now.Add(-2 * time.Hour)},
+		{remote: "retained", deletedAt: now},
+	}
+	sm.pruneDeletedSessionsBefore(now.Add(-time.Hour))
+
+	history := sm.DeletedSessions()
+	require.Len(t, history, 1)
+	require.Equal(t, "retained", history[0].RemoteAddress())
 }
 
 func TestSessionError(t *testing.T) {
@@ -102,7 +266,7 @@ func TestSessionError(t *testing.T) {
 	tableA := mockTable(1, 2, 3)
 	ss := NewSession(
 		ctx, logger, pooler, notifier, stream,
-		sendTimeout, poisionTime, heartbeatInterval,
+		sendTimeout, poisionTime, heartbeatInterval, heartbeatInterval,
 	)
 
 	/* ---- 1. send subscription response ---- */
@@ -146,7 +310,7 @@ func TestPoisionSession(t *testing.T) {
 	tableA := mockTable(1, 2, 3)
 	ss := NewSession(
 		ctx, logger, pooler, notifier, stream,
-		sendTimeout, poisionTime, heartbeatInterval,
+		sendTimeout, poisionTime, heartbeatInterval, heartbeatInterval,
 	)
 
 	/* ---- 1. send response repeatedly ---- */
@@ -189,7 +353,7 @@ func TestSession(t *testing.T) {
 
 	ss := NewSession(
 		ctx, logger, pooler, notifier, stream,
-		sendTimeout, poisionTime, heartbeatInterval,
+		sendTimeout, poisionTime, heartbeatInterval, heartbeatInterval,
 	)
 	defer ss.PostClean()
 
@@ -329,6 +493,13 @@ func (m *blockStream) CreateCache(
 	panic("not implement")
 }
 
+func (m *blockStream) CreateCacheWithCancel(
+	context.Context,
+	uint64,
+	context.CancelFunc) (morpc.MessageCache, error) {
+	panic("not implement")
+}
+
 func (m *blockStream) DeleteCache(cacheID uint64) {
 	panic("not implement")
 }
@@ -366,6 +537,13 @@ func (m *brokenStream) Close() error {
 func (m *brokenStream) CreateCache(
 	ctx context.Context,
 	cacheID uint64) (morpc.MessageCache, error) {
+	panic("not implement")
+}
+
+func (m *brokenStream) CreateCacheWithCancel(
+	context.Context,
+	uint64,
+	context.CancelFunc) (morpc.MessageCache, error) {
 	panic("not implement")
 }
 
@@ -414,6 +592,13 @@ func (m *normalStream) Close() error {
 func (m *normalStream) CreateCache(
 	ctx context.Context,
 	cacheID uint64) (morpc.MessageCache, error) {
+	panic("not implement")
+}
+
+func (m *normalStream) CreateCacheWithCancel(
+	context.Context,
+	uint64,
+	context.CancelFunc) (morpc.MessageCache, error) {
 	panic("not implement")
 }
 

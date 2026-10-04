@@ -237,6 +237,7 @@ const (
 	NOT_ILIKE
 	REG_MATCH     // REG_MATCH
 	NOT_REG_MATCH // NOT REG_MATCH
+	MEMBER_OF     // MEMBER [OF]
 	IS_DISTINCT_FROM
 	IS_NOT_DISTINCT_FROM
 	NULL_SAFE_EQUAL // <=>
@@ -290,6 +291,8 @@ func (op ComparisonOp) ToString() string {
 		return "ilike"
 	case NOT_ILIKE:
 		return "not ilike"
+	case MEMBER_OF:
+		return "member of"
 	default:
 		return "Unknown ComparisonExprOperator"
 	}
@@ -312,6 +315,12 @@ func (node *ComparisonExpr) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 	}
 	ctx.WriteString(node.Op.ToString())
+	if node.Op == MEMBER_OF {
+		ctx.WriteString(" (")
+		ctx.PrintExpr(node, node.Right, false)
+		ctx.WriteByte(')')
+		return
+	}
 	ctx.WriteByte(' ')
 
 	if node.SubOp != ComparisonOp(0) {
@@ -345,6 +354,15 @@ func (node *ComparisonExpr) Accept(v Visitor) (Expr, bool) {
 		return node, false
 	}
 	node.Right = tmpNode
+
+	// ESCAPE is an expression and may itself reference a column.
+	if node.Escape != nil {
+		tmpNode, ok = node.Escape.Accept(v)
+		if !ok {
+			return node, false
+		}
+		node.Escape = tmpNode
+	}
 	return v.Exit(node)
 }
 
@@ -942,8 +960,13 @@ type FuncExpr struct {
 	exprImpl
 	Func     ResolvableFunctionReference
 	FuncName *CStr
-	Type     FuncType
-	Exprs    Exprs
+	// IsGeneric is true when the parser recognized a whitespace-sensitive
+	// MySQL function through the generic identifier-function rule rather than
+	// its native built-in rule. That distinction matters when IGNORE_SPACE is
+	// disabled.
+	IsGeneric bool
+	Type      FuncType
+	Exprs     Exprs
 
 	//specify the type of aggregation.
 	AggType AggType
@@ -951,12 +974,19 @@ type FuncExpr struct {
 	WindowSpec *WindowSpec
 
 	OrderBy OrderBy
+	// WithinGroup marks an ORDER BY clause that belongs to an ordered-set
+	// aggregate. OrderBy is also used for GROUP_CONCAT's function-local
+	// ordering, so the marker keeps the two syntaxes distinct.
+	WithinGroup bool
 }
 
 func (node *FuncExpr) Format(ctx *FmtCtx) {
 	funcName := ""
 	if node.FuncName != nil {
 		funcName = node.FuncName.Origin()
+	}
+	if ctx.detectDateTimeFormat && isDateTimeFormatFunction(funcName) {
+		ctx.sawDateTimeFormat = true
 	}
 
 	if strings.ToLower(funcName) == "interval" && len(node.Exprs) == 2 {
@@ -977,22 +1007,71 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 		node.Func.Format(ctx)
 	}
 
-	ctx.WriteString("(")
+	if node.IsGeneric {
+		// MySQL's whitespace-sensitive function names are parsed as generic
+		// calls when IGNORE_SPACE is disabled. Preserve that separator so a
+		// format/reparse cycle cannot silently turn the call into a native
+		// built-in.
+		ctx.WriteString(" (")
+	} else {
+		ctx.WriteByte('(')
+	}
 	if node.Type != FUNC_TYPE_DEFAULT && node.Type != FUNC_TYPE_TABLE {
 		ctx.WriteString(node.Type.ToString())
 		ctx.WriteByte(' ')
 	}
-	if node.Func.FunctionReference.(*UnresolvedName).ColName() == "trim" {
+	isConvertUsing := !node.IsGeneric && strings.EqualFold(funcName, "convert") && len(node.Exprs) == 2
+	isExtract := !node.IsGeneric && strings.EqualFold(funcName, "extract") && len(node.Exprs) == 2
+	isPosition := !node.IsGeneric && strings.EqualFold(funcName, "position") && len(node.Exprs) == 2
+	isListAgg := !node.IsGeneric && strings.EqualFold(funcName, "listagg")
+	isGroupConcat := !node.IsGeneric && (strings.EqualFold(funcName, "group_concat") ||
+		strings.EqualFold(node.Func.FunctionReference.(*UnresolvedName).ColName(), "group_concat"))
+	if isConvertUsing {
+		node.Exprs[0].Format(ctx)
+		ctx.WriteString(" using ")
+		if charset, ok := node.Exprs[1].(*NumVal); ok {
+			ctx.WriteString(charset.String())
+		} else {
+			node.Exprs[1].Format(ctx)
+		}
+	} else if isExtract {
+		node.Exprs[0].Format(ctx)
+		ctx.WriteString(" from ")
+		node.Exprs[1].Format(ctx)
+	} else if isPosition {
+		node.Exprs[0].Format(ctx)
+		ctx.WriteString(" in ")
+		node.Exprs[1].Format(ctx)
+	} else if isListAgg && len(node.Exprs) == 2 {
+		node.Exprs[0].Format(ctx)
+		ctx.WriteString(", ")
+		node.Exprs[1].Format(ctx)
+	} else if isGroupConcat && len(node.Exprs) > 0 {
+		// The parser stores GROUP_CONCAT's separator as the final expression so
+		// binders can consume it uniformly. It is not a concatenated argument.
+		node.Exprs[:len(node.Exprs)-1].Format(ctx)
+		if node.OrderBy != nil && !node.WithinGroup {
+			ctx.WriteByte(' ')
+			node.OrderBy.Format(ctx)
+		}
+		ctx.WriteString(" separator ")
+		node.Exprs[len(node.Exprs)-1].Format(ctx)
+	} else if !node.IsGeneric && node.Func.FunctionReference.(*UnresolvedName).ColName() == "trim" {
 		trimExprsFormat(ctx, node.Exprs)
 	} else {
 		formatFuncExprs(ctx, node)
-	}
 
-	if node.OrderBy != nil {
-		node.OrderBy.Format(ctx)
+		if node.OrderBy != nil && !node.WithinGroup {
+			node.OrderBy.Format(ctx)
+		}
 	}
 
 	ctx.WriteByte(')')
+	if node.WithinGroup && node.OrderBy != nil {
+		ctx.WriteString(" within group (")
+		node.OrderBy.Format(ctx)
+		ctx.WriteByte(')')
+	}
 
 	if node.WindowSpec != nil {
 		ctx.WriteString(" ")
@@ -1000,14 +1079,27 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 	}
 }
 
+func isDateTimeFormatFunction(name string) bool {
+	return strings.EqualFold(name, "date_format") || strings.EqualFold(name, "time_format")
+}
+
 func formatFuncExprs(ctx *FmtCtx, node *FuncExpr) {
+	if ctx.ModeIndependentStringLiterals() &&
+		node.FuncName != nil &&
+		strings.EqualFold(node.FuncName.Origin(), "name_const") &&
+		len(node.Exprs) == 2 &&
+		formatModeIndependentNameConstName(ctx, node.Exprs[0]) {
+		ctx.WriteString(", ")
+		node.Exprs[1].Format(ctx)
+		return
+	}
 	if !ctx.singleQuoteString || len(node.Exprs) == 0 || node.FuncName == nil {
 		node.Exprs.Format(ctx)
 		return
 	}
 
 	switch strings.ToLower(node.FuncName.Origin()) {
-	case "timestampdiff", "extract":
+	case "timestampdiff":
 		formatExprWithSingleQuoteDisabled(ctx, node.Exprs[0])
 		if len(node.Exprs) > 1 {
 			ctx.WriteString(", ")
@@ -1026,6 +1118,30 @@ func formatFuncExprs(ctx *FmtCtx, node *FuncExpr) {
 	default:
 		node.Exprs.Format(ctx)
 	}
+}
+
+func formatModeIndependentNameConstName(ctx *FmtCtx, expr Expr) bool {
+	parenCount := 0
+	for {
+		paren, ok := expr.(*ParenExpr)
+		if !ok {
+			break
+		}
+		parenCount++
+		expr = paren.Expr
+	}
+	value, ok := expr.(*NumVal)
+	if !ok || value.ValType != P_char || !strings.Contains(value.origString, "\\") {
+		return false
+	}
+	for range parenCount {
+		ctx.WriteByte('(')
+	}
+	fmt.Fprintf(ctx, "0x%x", []byte(value.origString))
+	for range parenCount {
+		ctx.WriteByte(')')
+	}
+	return true
 }
 
 func formatExprWithSingleQuoteDisabled(ctx *FmtCtx, expr Expr) {
@@ -1071,6 +1187,50 @@ func (node *FuncExpr) Accept(v Visitor) (Expr, bool) {
 		}
 		node.Exprs[i] = tmpNode
 	}
+	for _, order := range node.OrderBy {
+		if order == nil || order.Expr == nil {
+			continue
+		}
+		tmpNode, ok := order.Expr.Accept(v)
+		if !ok {
+			return node, false
+		}
+		order.Expr = tmpNode
+	}
+	if node.WindowSpec != nil {
+		for i, expr := range node.WindowSpec.PartitionBy {
+			if expr == nil {
+				continue
+			}
+			tmpNode, ok := expr.Accept(v)
+			if !ok {
+				return node, false
+			}
+			node.WindowSpec.PartitionBy[i] = tmpNode
+		}
+		for _, order := range node.WindowSpec.OrderBy {
+			if order == nil || order.Expr == nil {
+				continue
+			}
+			tmpNode, ok := order.Expr.Accept(v)
+			if !ok {
+				return node, false
+			}
+			order.Expr = tmpNode
+		}
+		if node.WindowSpec.Frame != nil {
+			for _, bound := range []*FrameBound{node.WindowSpec.Frame.Start, node.WindowSpec.Frame.End} {
+				if bound == nil || bound.Expr == nil {
+					continue
+				}
+				tmpNode, ok := bound.Expr.Accept(v)
+				if !ok {
+					return node, false
+				}
+				bound.Expr = tmpNode
+			}
+		}
+	}
 	return v.Exit(node)
 }
 
@@ -1084,11 +1244,11 @@ func trimExprsFormat(ctx *FmtCtx, exprs Exprs) {
 		ctx.WriteString(" from ")
 		exprs[3].Format(ctx)
 	case "2":
-		exprs[1].Format(ctx)
+		ctx.WriteString(exprs[1].(*NumVal).String())
 		ctx.WriteString(" from ")
 		exprs[3].Format(ctx)
 	case "3":
-		exprs[1].Format(ctx)
+		ctx.WriteString(exprs[1].(*NumVal).String())
 		ctx.WriteString(" ")
 		exprs[2].Format(ctx)
 		ctx.WriteString(" from ")
@@ -1099,16 +1259,38 @@ func trimExprsFormat(ctx *FmtCtx, exprs Exprs) {
 }
 
 type WindowSpec struct {
-	PartitionBy Exprs
-	OrderBy     OrderBy
-	HasFrame    bool
-	Frame       *FrameClause
+	// RefName identifies a named window used as this specification's base.
+	// ReferencedOnly distinguishes OVER name from the parenthesized OVER (name)
+	// form, which matters for MySQL's inheritance rules.
+	RefName        *CStr
+	ReferencedOnly bool
+	PartitionBy    Exprs
+	OrderBy        OrderBy
+	HasFrame       bool
+	Frame          *FrameClause
 }
 
 func (node *WindowSpec) Format(ctx *FmtCtx) {
-	ctx.WriteString("over (")
+	ctx.WriteString("over ")
+	if node.ReferencedOnly && node.RefName != nil {
+		ctx.WriteIdentifier(Identifier(node.RefName.Origin()))
+		return
+	}
+	ctx.WriteByte('(')
+	node.formatBody(ctx)
+	ctx.WriteByte(')')
+}
+
+func (node *WindowSpec) formatBody(ctx *FmtCtx) {
 	flag := false
+	if node.RefName != nil {
+		ctx.WriteIdentifier(Identifier(node.RefName.Origin()))
+		flag = true
+	}
 	if len(node.PartitionBy) > 0 {
+		if flag {
+			ctx.WriteByte(' ')
+		}
 		ctx.WriteString("partition by ")
 		node.PartitionBy.Format(ctx)
 		flag = true
@@ -1128,8 +1310,31 @@ func (node *WindowSpec) Format(ctx *FmtCtx) {
 		}
 		node.Frame.Format(ctx)
 	}
+}
 
+type WindowDefinition struct {
+	Name *CStr
+	Spec *WindowSpec
+}
+
+func (node *WindowDefinition) Format(ctx *FmtCtx) {
+	ctx.WriteIdentifier(Identifier(node.Name.Origin()))
+	ctx.WriteString(" as (")
+	if node.Spec != nil {
+		node.Spec.formatBody(ctx)
+	}
 	ctx.WriteByte(')')
+}
+
+type WindowDefinitions []*WindowDefinition
+
+func (node *WindowDefinitions) Format(ctx *FmtCtx) {
+	for i, definition := range *node {
+		if i > 0 {
+			ctx.WriteString(", ")
+		}
+		definition.Format(ctx)
+	}
 }
 
 type FrameType int
@@ -1458,11 +1663,16 @@ func (node *CaseExpr) Accept(v Visitor) (Expr, bool) {
 	}
 	node = newNode.(*CaseExpr)
 
-	tmpNode, ok := node.Expr.Accept(v)
-	if !ok {
-		return node, false
+	var tmpNode Expr
+	var ok bool
+	// Expr is absent for a searched CASE expression.
+	if node.Expr != nil {
+		tmpNode, ok = node.Expr.Accept(v)
+		if !ok {
+			return node, false
+		}
+		node.Expr = tmpNode
 	}
-	node.Expr = tmpNode
 
 	for _, when := range node.Whens {
 		tmpNode, ok = when.Cond.Accept(v)
@@ -1478,11 +1688,14 @@ func (node *CaseExpr) Accept(v Visitor) (Expr, bool) {
 		when.Val = tmpNode
 	}
 
-	tmpNode, ok = node.Else.Accept(v)
-	if !ok {
-		return node, false
+	// ELSE is optional; omitting it is equivalent to ELSE NULL during binding.
+	if node.Else != nil {
+		tmpNode, ok = node.Else.Accept(v)
+		if !ok {
+			return node, false
+		}
+		node.Else = tmpNode
 	}
-	node.Else = tmpNode
 
 	return v.Exit(node)
 }
@@ -1679,8 +1892,13 @@ func (node *VarExpr) Format(ctx *FmtCtx) {
 		ctx.WriteByte('@')
 		if node.System {
 			ctx.WriteByte('@')
+			if node.Global {
+				ctx.WriteString("global.")
+			}
+			ctx.WriteString(node.Name)
+		} else {
+			ctx.WriteIdentifier(Identifier(node.Name))
 		}
-		ctx.WriteString(node.Name)
 	}
 }
 
@@ -1705,12 +1923,22 @@ type ParamExpr struct {
 }
 
 func (node *ParamExpr) Format(ctx *FmtCtx) {
+	if ctx.parameterCount != nil {
+		*ctx.parameterCount = max(*ctx.parameterCount, node.Offset)
+	}
 	ctx.WriteByte('?')
+	if ctx.paramExprOffset {
+		ctx.WriteString(strconv.Itoa(node.Offset))
+	}
 }
 
 // Accept implements NodeChecker Accept interface.
 func (node *ParamExpr) Accept(v Visitor) (Expr, bool) {
-	panic("unimplement ParamExpr Accept")
+	newNode, skipChildren := v.Enter(node)
+	if skipChildren {
+		return v.Exit(newNode)
+	}
+	return v.Exit(newNode)
 }
 
 func NewParamExpr(offset int) *ParamExpr {
@@ -1762,19 +1990,41 @@ func (s SampleExpr) String() string {
 }
 
 func (s SampleExpr) Format(ctx *FmtCtx) {
-	if s.typ == SampleRows {
-		ctx.WriteString(fmt.Sprintf("sample %d rows", s.n))
+	ctx.WriteString("sample(")
+	if s.isStar {
+		ctx.WriteByte('*')
 	} else {
-		ctx.WriteString(fmt.Sprintf("sample %.1f percent", s.k))
+		s.columns.Format(ctx)
 	}
+	ctx.WriteString(", ")
+	if s.typ == SampleRows {
+		ctx.WriteString(fmt.Sprintf("%d rows", s.n))
+		if s.level == SampleUsingRow {
+			ctx.WriteString(", 'row'")
+		}
+	} else {
+		ctx.WriteString(fmt.Sprintf("%.1f percent", s.k))
+	}
+	ctx.WriteByte(')')
 }
 
-func (s SampleExpr) Accept(v Visitor) (node Expr, ok bool) {
-	newNode, skipChildren := v.Enter(node)
+func (s *SampleExpr) Accept(v Visitor) (node Expr, ok bool) {
+	newNode, skipChildren := v.Enter(s)
 	if skipChildren {
 		return v.Exit(newNode)
 	}
-	return v.Exit(node)
+	s = newNode.(*SampleExpr)
+	for i, column := range s.columns {
+		if column == nil {
+			continue
+		}
+		newColumn, ok := column.Accept(v)
+		if !ok {
+			return s, false
+		}
+		s.columns[i] = newColumn
+	}
+	return v.Exit(s)
 }
 
 func (s SampleExpr) Valid() error {
@@ -1793,6 +2043,17 @@ func (s SampleExpr) Valid() error {
 
 func (s SampleExpr) GetColumns() (columns Exprs, isStar bool) {
 	return s.columns, s.isStar
+}
+
+// SetColumns changes the sampled expressions while preserving the sampling
+// mode and limit.  It is used by view-definition rewriting to replace
+// SAMPLE(*) with the columns visible when the view is created.
+func (s *SampleExpr) SetColumns(columns Exprs, isStar bool) {
+	if s == nil {
+		return
+	}
+	s.columns = columns
+	s.isStar = isStar
 }
 
 func (s SampleExpr) GetSampleDetail() (isSampleRows bool, usingRow bool, n int32, k float64) {
@@ -1862,6 +2123,11 @@ const (
 	FULLTEXT_NL_QUERY_EXPANSION
 	FULLTEXT_BOOLEAN
 	FULLTEXT_QUERY_EXPANSION
+	// FULLTEXT_BM25 — IN BM25 MODE: ranked bag-of-words retrieval on a fulltext2
+	// index (each token an OR term, no positional phrase), so it works on a
+	// POSITION_FREE index. Distinct from FullTextMatchExpr.IsBm25 (the BM25() verb
+	// of the standalone bm25 index).
+	FULLTEXT_BM25
 )
 
 type FullTextMatchExpr struct {
@@ -1870,7 +2136,7 @@ type FullTextMatchExpr struct {
 	KeyParts []*KeyPart
 
 	// pattern
-	Pattern string
+	Pattern Expr
 
 	Mode FullTextSearchType
 }
@@ -1887,6 +2153,8 @@ func (node *FullTextSearchType) ToString() string {
 		return "IN BOOLEAN MODE"
 	case FULLTEXT_QUERY_EXPANSION:
 		return "WITH QUERY EXPANSION"
+	case FULLTEXT_BM25:
+		return "IN BM25 MODE"
 
 	default:
 		return "Unknown FullSearchType"
@@ -1895,20 +2163,53 @@ func (node *FullTextSearchType) ToString() string {
 
 // Accept implements NodeChecker Accept interface.
 func (node *FullTextMatchExpr) Accept(v Visitor) (Expr, bool) {
-	panic("unimplement FullTextMatchExpr Accept")
+	newNode, skipChildren := v.Enter(node)
+	if skipChildren {
+		return v.Exit(newNode)
+	}
+	node = newNode.(*FullTextMatchExpr)
+
+	// MATCH stores its column expressions in KeyPart rather than Expr fields, so
+	// they must be traversed explicitly for generic AST rewrites.
+	for _, keyPart := range node.KeyParts {
+		if keyPart.ColName != nil {
+			tmpNode, ok := keyPart.ColName.Accept(v)
+			if !ok {
+				return node, false
+			}
+			keyPart.ColName = tmpNode.(*UnresolvedName)
+		}
+		if keyPart.Expr != nil {
+			tmpNode, ok := keyPart.Expr.Accept(v)
+			if !ok {
+				return node, false
+			}
+			keyPart.Expr = tmpNode
+		}
+	}
+
+	tmpNode, ok := node.Pattern.Accept(v)
+	if !ok {
+		return node, false
+	}
+	node.Pattern = tmpNode
+	return v.Exit(node)
 }
 
 func (node *FullTextMatchExpr) Valid() error {
 	if len(node.KeyParts) == 0 {
 		return moerr.NewSyntaxErrorNoCtx("MATCH(expr list) expression list is empty.")
 	}
-	if len(node.Pattern) == 0 {
+	if node.Pattern == nil {
+		return moerr.NewSyntaxErrorNoCtx("AGAINST('pattern') pattern is empty.")
+	}
+	if val, ok := node.Pattern.(*NumVal); ok && val.ValType == P_char && len(val.String()) == 0 {
 		return moerr.NewSyntaxErrorNoCtx("AGAINST('pattern') pattern is empty.")
 	}
 	return nil
 }
 
-func NewFullTextMatchFuncExpression(columns []*KeyPart, pattern string, mode FullTextSearchType) (*FullTextMatchExpr, error) {
+func NewFullTextMatchFuncExpression(columns []*KeyPart, pattern Expr, mode FullTextSearchType) (*FullTextMatchExpr, error) {
 
 	e := &FullTextMatchExpr{KeyParts: columns, Pattern: pattern, Mode: mode}
 	if err := e.Valid(); err != nil {
@@ -1927,7 +2228,36 @@ func (node *FullTextMatchExpr) Format(ctx *FmtCtx) {
 	}
 	ctx.WriteString(") ")
 	ctx.WriteString("AGAINST (")
-	ctx.WriteString(node.Pattern)
+	// Post-#24796 the pattern is an Expr: a *NumVal (search_pattern: STRING) for a
+	// literal, a *ParamExpr (VALUE_ARG) for a prepared '?', or an
+	// *UnresolvedName for a stored-procedure variable. For the string case
+	// (the common one) emit it as a single-quoted, escaped SQL string literal
+	// UNCONDITIONALLY — do NOT route it through NumVal.Format / ctx.WriteValue, which
+	// only quotes when the FmtCtx opts in (quoteString/singleQuoteString). The default
+	// tree.String() path does not opt in, so a bare pattern produced invalid SQL that
+	// failed to re-parse (CREATE TABLE AS SELECT, view expansion, or any other
+	// re-serialization) — #24823. Unconditional quoting is correct precisely because a
+	// string pattern is never a number/null/bool: bare output is never valid SQL here.
+	if val, ok := node.Pattern.(*NumVal); ok && val.ValType == P_char {
+		// origString holds the already-unescaped literal (NewNumVal($1,$1,...)).
+		pat := val.String()
+		ctx.WriteString("'")
+		if ctx.NoBackslashEscape() {
+			// Under NO_BACKSLASH_ESCAPES a backslash is a literal char and only '' escapes
+			// a quote. pat is the already-unescaped value, so routing it through
+			// FormatString (which escapes '\' -> '\\') would double the backslashes on
+			// every parse->format cycle. Emit it verbatim, quote-doubled only, to keep the
+			// format->parse contract idempotent under that mode (#24823 follow-up).
+			ctx.WriteString(strings.ReplaceAll(pat, "'", "''"))
+		} else {
+			ctx.WriteString(strings.ReplaceAll(FormatString(pat), "'", "''"))
+		}
+		ctx.WriteString("'")
+	} else {
+		// A non-string pattern (e.g. a prepared-statement '?' param, #24796) delegates
+		// to its own Format.
+		node.Pattern.Format(ctx)
+	}
 
 	if node.Mode != FULLTEXT_DEFAULT {
 		ctx.WriteString(" ")

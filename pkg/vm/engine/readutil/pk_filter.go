@@ -19,6 +19,7 @@ import (
 	stdcmp "cmp"
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -66,7 +67,26 @@ func ConstructBlockPKFilter(
 	}
 
 	readFilter := objectio.BlockReadFilter{
-		HasFakePK: isFakePK,
+		HasFakePK:       isFakePK,
+		ExactMembership: bf != nil && bf.Exact(),
+	}
+	// CachedSearch only handles the primary-key predicate, not membership on
+	// a second key column. Exact membership uses the separate closed descriptor
+	// below. Fake PK columns are not physically sorted even when the block carries
+	// the sorted flag, so they remain on the legacy owned-vector path.
+	if !isFakePK && bf == nil {
+		readFilter.CachedSearch = buildCachedPKSearch(basePKFilter)
+	}
+	if !isFakePK && readFilter.ExactMembership {
+		var pkSearch *objectio.ReadFilterSearch
+		if basePKFilter.Valid {
+			pkSearch = buildCachedPKSearch(basePKFilter)
+		}
+		if !basePKFilter.Valid || pkSearch != nil {
+			if member, ok := bf.(docfilter.MembershipFilter); ok {
+				readFilter.CachedMembership = objectio.NewReadFilterMembership(pkSearch, member)
+			}
+		}
 	}
 	if basePKFilter.cleanup != nil {
 		readFilter.Cleanup = basePKFilter.cleanup.run
@@ -89,27 +109,34 @@ func ConstructBlockPKFilter(
 		disjuncts = []BasePKFilter{basePKFilter}
 	}
 
+	// BasePKFilter's zero Op is EQUAL. When the planner cannot materialize a
+	// predicate (for example, an internal raw prefix literal), an invalid base
+	// filter must therefore not be handed to the search-function builder: it
+	// would be mistaken for an empty equality and intersect every membership
+	// hit away. With a membership filter, fail open to the membership search.
 	var (
-		sortedMissing bool
-		unsMissing    bool
+		sortedMissing = !basePKFilter.Valid
+		unsMissing    = !basePKFilter.Valid
 		sortedFuncs   []func(*vector.Vector) []int64
 		unsFuncs      []func(*vector.Vector) []int64
 	)
 
-	for idx := range disjuncts {
-		sortedFunc, unsortedFunc, err := buildBlockPKSearchFuncs(disjuncts[idx])
-		if err != nil {
-			return objectio.BlockReadFilter{}, err
-		}
-		if sortedFunc == nil {
-			sortedMissing = true
-		} else {
-			sortedFuncs = append(sortedFuncs, sortedFunc)
-		}
-		if unsortedFunc == nil {
-			unsMissing = true
-		} else {
-			unsFuncs = append(unsFuncs, unsortedFunc)
+	if basePKFilter.Valid {
+		for idx := range disjuncts {
+			sortedFunc, unsortedFunc, err := buildBlockPKSearchFuncs(disjuncts[idx])
+			if err != nil {
+				return objectio.BlockReadFilter{}, err
+			}
+			if sortedFunc == nil {
+				sortedMissing = true
+			} else {
+				sortedFuncs = append(sortedFuncs, sortedFunc)
+			}
+			if unsortedFunc == nil {
+				unsMissing = true
+			} else {
+				unsFuncs = append(unsFuncs, unsortedFunc)
+			}
 		}
 	}
 
@@ -271,6 +298,100 @@ func ConstructBlockPKFilter(
 
 	readFilter.Valid = true
 	return readFilter, nil
+}
+
+func buildCachedPKSearch(base BasePKFilter) *objectio.ReadFilterSearch {
+	disjuncts := base.Disjuncts
+	if len(disjuncts) == 0 {
+		disjuncts = []BasePKFilter{base}
+	}
+	searches := make([]*objectio.ReadFilterSearch, 0, len(disjuncts))
+	for i := range disjuncts {
+		filter := &disjuncts[i]
+		if !validBlockPKSearchFilter(*filter) {
+			return nil
+		}
+		var search *objectio.ReadFilterSearch
+		switch filter.Op {
+		case function.EQUAL:
+			switch filter.Oid {
+			case types.T_char, types.T_varchar, types.T_binary,
+				types.T_varbinary, types.T_json:
+			default:
+				return nil
+			}
+			search = objectio.NewReadFilterSearch(filter.Oid, [][]byte{filter.LB})
+		case function.IN:
+			switch filter.Oid {
+			case types.T_char, types.T_varchar, types.T_binary,
+				types.T_varbinary, types.T_json, types.T_blob, types.T_text,
+				types.T_array_float32, types.T_array_float64, types.T_datalink:
+			default:
+				return nil
+			}
+			search = objectio.NewReadFilterSearch(
+				filter.Oid,
+				vector.InefficientMustBytesCol(filter.Vec),
+			)
+		case function.PREFIX_EQ:
+			search = objectio.NewReadFilterPrefixSearch(
+				filter.Oid,
+				[][]byte{filter.LB},
+			)
+		case function.PREFIX_IN:
+			search = objectio.NewReadFilterPrefixSearch(
+				filter.Oid,
+				vector.InefficientMustBytesCol(filter.Vec),
+			)
+		case function.LESS_EQUAL, function.LESS_THAN:
+			search = objectio.NewReadFilterLessSearch(
+				filter.Oid,
+				filter.LB,
+				filter.Op == function.LESS_EQUAL,
+			)
+		case function.GREAT_EQUAL, function.GREAT_THAN:
+			search = objectio.NewReadFilterGreaterSearch(
+				filter.Oid,
+				filter.LB,
+				filter.Op == function.GREAT_EQUAL,
+			)
+		case function.BETWEEN, RangeLeftOpen, RangeRightOpen, RangeBothOpen:
+			search = objectio.NewReadFilterBetweenSearch(
+				filter.Oid,
+				filter.LB,
+				filter.UB,
+				blockPKRangeHint(filter.Op),
+			)
+		case function.PREFIX_BETWEEN,
+			PrefixRangeLeftOpen, PrefixRangeRightOpen, PrefixRangeBothOpen:
+			search = objectio.NewReadFilterPrefixBetweenSearch(
+				filter.Oid,
+				filter.LB,
+				filter.UB,
+				blockPKRangeHint(filter.Op),
+			)
+		default:
+			return nil
+		}
+		if search == nil {
+			return nil
+		}
+		searches = append(searches, search)
+	}
+	return objectio.CombineReadFilterSearch(searches...)
+}
+
+func blockPKRangeHint(op int) uint8 {
+	switch op {
+	case RangeLeftOpen, PrefixRangeLeftOpen:
+		return 1
+	case RangeRightOpen, PrefixRangeRightOpen:
+		return 2
+	case RangeBothOpen, PrefixRangeBothOpen:
+		return 3
+	default:
+		return 0
+	}
 }
 
 func linearBoolSearchOffsetByValFactory(values []bool) func(*vector.Vector) []int64 {
@@ -1358,8 +1479,6 @@ func mergeFilters(
 ) (finalFilter BasePKFilter, err error) {
 	unsafeInput := false
 	defer func() {
-		finalFilter.Oid = left.Oid
-
 		if !finalFilter.Valid && connector == function.AND && !unsafeInput {
 			// Keep one atomic conjunct when representing the full intersection
 			// would require distributing AND over OR.  It remains a safe early
@@ -1380,7 +1499,10 @@ func mergeFilters(
 					(*left).Vec = nil
 				}
 			}
+			return
 		}
+
+		finalFilter.Oid = left.Oid
 	}()
 	unsafeInput = (len(left.Disjuncts) == 0 && !validBasePKMergeOperand(*left)) ||
 		(len(right.Disjuncts) == 0 && !validBasePKMergeOperand(*right))
@@ -1388,6 +1510,14 @@ func mergeFilters(
 		(len(left.Disjuncts) == 0 && len(right.Disjuncts) == 0 && left.Oid != right.Oid) ||
 		(left.Op != function.IN && len(left.Disjuncts) == 0 && !validEncodedBasePKValue(left.Oid, left.LB)) ||
 		(right.Op != function.IN && len(right.Disjuncts) == 0 && !validEncodedBasePKValue(right.Oid, right.LB)) {
+		return BasePKFilter{}, nil
+	}
+	// A disjunctive filter is a container, not an atomic predicate. Its zero
+	// value Op happens to equal function.EQUAL, so entering either connector's
+	// atomic merge can compare empty bounds and produce a false-negative filter.
+	// Return an invalid merge: OR will flatten both containers, while AND's
+	// deferred fallback keeps one safe atomic conjunct.
+	if len(left.Disjuncts) > 0 || len(right.Disjuncts) > 0 {
 		return BasePKFilter{}, nil
 	}
 

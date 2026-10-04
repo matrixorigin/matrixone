@@ -1,0 +1,87 @@
+[
+  {
+    "id": "ICE-TEST-156",
+    "case_id": "ICE-TEST-156_timestamp_pruning_non_utc",
+    "name": "timestamp-pruning-non-utc",
+    "namespace": "golden",
+    "table": "timestamp_pruning",
+    "ref": "main",
+    "comparison_mode": "ordered",
+    "timestamp_normalization": "utc_microseconds",
+    "mo_compare_sql": [
+      "set time_zone = '+03:00'; select count(*) as c, min(event_ts) as min_ts, max(event_ts) as max_ts from ${MO_ICEBERG_GOLDEN_MO_TIMESTAMP_TABLE} where event_ts > timestamp '2026-01-01 00:00:00' and event_ts < timestamp '2026-01-03 00:00:00'",
+      "set time_zone = '+03:00'; select event_id, cast(event_ts as varchar) as event_ts_text, cast(event_tstz as varchar) as event_tstz_text from ${MO_ICEBERG_GOLDEN_MO_TIMESTAMP_TABLE} where event_tstz >= timestamp '2026-01-01 00:00:00' order by event_id"
+    ],
+    "spark_compare_sql": [
+      "set spark.sql.session.timeZone=Asia/Riyadh; select count(*) as c, min(event_ts) as min_ts, max(event_ts) as max_ts from ${MO_ICEBERG_GOLDEN_SPARK_TIMESTAMP_TABLE} where event_ts > timestamp '2026-01-01 00:00:00' and event_ts < timestamp '2026-01-03 00:00:00'",
+      "set spark.sql.session.timeZone=Asia/Riyadh; select event_id, cast(event_ts as string) as event_ts_text, cast(event_tstz as string) as event_tstz_text from ${MO_ICEBERG_GOLDEN_SPARK_TIMESTAMP_TABLE} where event_tstz >= timestamp '2026-01-01 00:00:00' order by event_id"
+    ],
+    "trino_compare_sql": [
+      "select count(*) as c, min(event_ts) as min_ts, max(event_ts) as max_ts from ${MO_ICEBERG_GOLDEN_TRINO_TIMESTAMP_TABLE} where event_ts > timestamp '2026-01-01 00:00:00' and event_ts < timestamp '2026-01-03 00:00:00'",
+      "select event_id, cast(event_ts as varchar) as event_ts_text, cast(event_tstz as varchar) as event_tstz_text from ${MO_ICEBERG_GOLDEN_TRINO_TIMESTAMP_TABLE} where event_tstz >= timestamp '2026-01-01 00:00:00' order by event_id"
+    ]
+  },
+  {
+    "id": "ICE-TEST-157",
+    "case_id": "ICE-TEST-157_bucket_truncate_pruning",
+    "name": "bucket-truncate-pruning",
+    "namespace": "golden",
+    "table": "bucket_truncate",
+    "ref": "main",
+    "comparison_mode": "ordered",
+    "mo_compare_sql": [
+      "select bucket_key, truncate_key, decimal_key, hex(binary_key) as binary_hex, payload from ${MO_ICEBERG_GOLDEN_MO_BUCKET_TABLE} where bucket_key in (1, 17, 1024) or truncate_key in ('ksa-0001', 'uae-0001') order by bucket_key, truncate_key, payload",
+      "select count(*) as c, sum(cast(bucket_key as bigint)) as key_sum from ${MO_ICEBERG_GOLDEN_MO_BUCKET_TABLE} where decimal_key >= 10.00 and decimal_key < 20.00"
+    ],
+    "spark_compare_sql": [
+      "select bucket_key, truncate_key, decimal_key, hex(binary_key) as binary_hex, payload from ${MO_ICEBERG_GOLDEN_SPARK_BUCKET_TABLE} where bucket_key in (1, 17, 1024) or truncate_key in ('ksa-0001', 'uae-0001') order by bucket_key, truncate_key, payload",
+      "select count(*) as c, sum(cast(bucket_key as bigint)) as key_sum from ${MO_ICEBERG_GOLDEN_SPARK_BUCKET_TABLE} where decimal_key >= 10.00 and decimal_key < 20.00"
+    ],
+    "trino_compare_sql": [
+      "select bucket_key, truncate_key, decimal_key, to_hex(binary_key) as binary_hex, payload from ${MO_ICEBERG_GOLDEN_TRINO_BUCKET_TABLE} where bucket_key in (1, 17, 1024) or truncate_key in ('ksa-0001', 'uae-0001') order by bucket_key, truncate_key, payload",
+      "select count(*) as c, sum(cast(bucket_key as bigint)) as key_sum from ${MO_ICEBERG_GOLDEN_TRINO_BUCKET_TABLE} where decimal_key >= decimal '10.00' and decimal_key < decimal '20.00'"
+    ]
+  },
+  {
+    "id": "ICE-TEST-158",
+    "case_id": "ICE-TEST-158_parquet_field_id_mapping",
+    "name": "parquet-field-id-mapping",
+    "namespace": "golden",
+    "table": "field_id_evolution",
+    "ref": "main",
+    "comparison_mode": "ordered",
+    "mo_compare_sql": [
+      "select user_id, renamed_region, optional_score from ${MO_ICEBERG_GOLDEN_MO_FIELD_ID_TABLE} order by user_id",
+      "select count(*) as c, sum(cast(user_id as bigint)) as user_sum from ${MO_ICEBERG_GOLDEN_MO_FIELD_ID_TABLE}"
+    ],
+    "spark_compare_sql": [
+      "select user_id, renamed_region, optional_score from ${MO_ICEBERG_GOLDEN_SPARK_FIELD_ID_TABLE} order by user_id",
+      "select count(*) as c, sum(cast(user_id as bigint)) as user_sum from ${MO_ICEBERG_GOLDEN_SPARK_FIELD_ID_TABLE}"
+    ],
+    "trino_compare_sql": [
+      "select user_id, renamed_region, optional_score from ${MO_ICEBERG_GOLDEN_TRINO_FIELD_ID_TABLE} order by user_id",
+      "select count(*) as c, sum(cast(user_id as bigint)) as user_sum from ${MO_ICEBERG_GOLDEN_TRINO_FIELD_ID_TABLE}"
+    ]
+  },
+  {
+    "id": "ICE-TEST-159",
+    "case_id": "ICE-TEST-159_position_delete_row_ordinal",
+    "name": "position-delete-row-ordinal",
+    "namespace": "golden",
+    "table": "row_ordinal_mor",
+    "ref": "main",
+    "comparison_mode": "ordered",
+    "mo_compare_sql": [
+      "select count(*) as c, sum(cast(order_id as bigint)) as order_sum from ${MO_ICEBERG_GOLDEN_MO_ROW_ORDINAL_TABLE}",
+      "select order_id, row_group_marker, payload from ${MO_ICEBERG_GOLDEN_MO_ROW_ORDINAL_TABLE} order by order_id"
+    ],
+    "spark_compare_sql": [
+      "select count(*) as c, sum(cast(order_id as bigint)) as order_sum from ${MO_ICEBERG_GOLDEN_SPARK_ROW_ORDINAL_TABLE}",
+      "select order_id, row_group_marker, payload from ${MO_ICEBERG_GOLDEN_SPARK_ROW_ORDINAL_TABLE} order by order_id"
+    ],
+    "trino_compare_sql": [
+      "select count(*) as c, sum(cast(order_id as bigint)) as order_sum from ${MO_ICEBERG_GOLDEN_TRINO_ROW_ORDINAL_TABLE}",
+      "select order_id, row_group_marker, payload from ${MO_ICEBERG_GOLDEN_TRINO_ROW_ORDINAL_TABLE} order by order_id"
+    ]
+  }
+]

@@ -1079,10 +1079,15 @@ func Test_MultiTxnInsertDelete(t *testing.T) {
 	{
 		require.NoError(t, testutil.WriteToRelation(ctx, txn, relation, bat2, false, true))
 
+		localPKs := vector.MustFixedColWithTypeCheck[int64](bat2.Vecs[primaryKeyIdx])
+		localPKOffset := 0
 		txn.GetWorkspace().(*disttae.Transaction).ForEachTableWrites(
 			relation.GetDBID(ctx), relation.GetTableID(ctx), 1, func(entry disttae.Entry) {
 				waitedDeletes := vector.MustFixedColWithTypeCheck[types.Rowid](entry.Bat().GetVector(0))
 				require.NoError(t, vector.AppendFixedList[types.Rowid](tombstoneBat.Vecs[0], waitedDeletes, nil, mp))
+				require.NoError(t, vector.AppendFixedList[int64](
+					tombstoneBat.Vecs[1], localPKs[localPKOffset:localPKOffset+len(waitedDeletes)], nil, mp))
+				localPKOffset += len(waitedDeletes)
 				tombstoneBat.SetRowCount(tombstoneBat.RowCount() + len(waitedDeletes))
 			})
 
@@ -1882,10 +1887,15 @@ func Test_MultiTxnRollbackStatement(t *testing.T) {
 		require.NoError(t, txn.GetWorkspace().RollbackLastStatement(ctx))
 		require.NoError(t, txn.GetWorkspace().IncrStatementID(ctx, false))
 
+		localPKs := vector.MustFixedColWithTypeCheck[int64](bat2.Vecs[primaryKeyIdx])
+		localPKOffset := 0
 		txn.GetWorkspace().(*disttae.Transaction).ForEachTableWrites(
 			relation.GetDBID(ctx), relation.GetTableID(ctx), 1, func(entry disttae.Entry) {
 				waitedDeletes := vector.MustFixedColWithTypeCheck[types.Rowid](entry.Bat().GetVector(0))
 				require.NoError(t, vector.AppendFixedList[types.Rowid](tombstoneBat.Vecs[0], waitedDeletes, nil, mp))
+				require.NoError(t, vector.AppendFixedList[int64](
+					tombstoneBat.Vecs[1], localPKs[localPKOffset:localPKOffset+len(waitedDeletes)], nil, mp))
+				localPKOffset += len(waitedDeletes)
 				tombstoneBat.SetRowCount(tombstoneBat.RowCount() + len(waitedDeletes))
 			})
 
@@ -2525,7 +2535,7 @@ func TestGCFiles(t *testing.T) {
 		for i := range files {
 			objectio.SetObjectStatsBlkCnt(&files[i], 1)
 			objectio.SetObjectStatsRowCnt(&files[i], 1)
-			bat := colexec.AllocCNS3ResultBat(false, false)
+			bat := colexec.AllocCNS3ResultBat(false)
 			colexec.ExpandObjectStatsToBatch(p.Mp, false, bat, true, files[i])
 			err = txn.WriteFile(
 				disttae.INSERT,

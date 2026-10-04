@@ -375,7 +375,7 @@ func TestCagraHandleCreateIndex_AsyncFalseExplicit(t *testing.T) {
 func TestCagraHandleCreateIndex_BackgroundReentry(t *testing.T) {
 	ctx := newHandleCtx(true)
 	ctx.stubCompileContext.isFrontend = false
-	err := Hooks{}.HandleReindex(ctx, cagraIndexDefs(), true)
+	err := Hooks{}.HandleReindex(ctx, cagraIndexDefs(), true, false)
 	require.NoError(t, err)
 	require.True(t, ctx.stubCompileContext.lastCdcTask.called, "background re-entry still drives the CDC task")
 	require.False(t, ctx.stubCompileContext.lastIdxcronUpdate.called, "background re-entry must NOT rewrite mo_index_update")
@@ -384,8 +384,8 @@ func TestCagraHandleCreateIndex_BackgroundReentry(t *testing.T) {
 func TestCagraHandleReindex_DelegatesToCreate(t *testing.T) {
 	// HandleReindex is a thin pass-through to handleCreate; honors
 	// the forceSync arg directly (unlike HandleCreateIndex, which
-	// now reads catalog.IsIndexAsync).
-	err := Hooks{}.HandleReindex(newHandleCtx(true), cagraIndexDefs(), false)
+	// now reads catalog.IndexParamAsync).
+	err := Hooks{}.HandleReindex(newHandleCtx(true), cagraIndexDefs(), false, false)
 	require.NoError(t, err)
 }
 
@@ -423,4 +423,35 @@ func TestCagraValidateReindexParams_MergesGraphDegree(t *testing.T) {
 	// Original untouched.
 	_, had := old[catalog.GraphDegree]
 	require.False(t, had)
+}
+
+// TestCagraValidateReindexParams_Quantization: CAGRA (cuvs) accepts the
+// cuvs-supported quantization names and rejects others (e.g. bf16, which the
+// cuvs backend does not support even though IVF-FLAT does).
+func TestCagraValidateReindexParams_Quantization(t *testing.T) {
+	got, err := Hooks{}.ValidateReindexParams(nil, compileplugin.ReindexParamUpdate{
+		Params: map[string]string{catalog.Quantization: "float16"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "float16", got[catalog.Quantization])
+
+	_, err = Hooks{}.ValidateReindexParams(nil, compileplugin.ReindexParamUpdate{
+		Params: map[string]string{catalog.Quantization: "bf16"},
+	})
+	require.Error(t, err)
+
+	// int8/uint8 on a non-L2 (inner-product) index IS rejected at REINDEX via the
+	// ValidQuantization hook: the merged op_type is inner-product and the
+	// int8/uint8 affine quantizer only preserves L2 geometry.
+	_, err = Hooks{}.ValidateReindexParams(
+		map[string]string{catalog.IndexAlgoParamOpType: "vector_ip_ops"},
+		compileplugin.ReindexParamUpdate{Params: map[string]string{catalog.Quantization: "int8"}})
+	require.Error(t, err)
+
+	// ...but int8 with L2 (the merged op_type) is accepted.
+	got, err = Hooks{}.ValidateReindexParams(
+		map[string]string{catalog.IndexAlgoParamOpType: "vector_l2_ops"},
+		compileplugin.ReindexParamUpdate{Params: map[string]string{catalog.Quantization: "int8"}})
+	require.NoError(t, err)
+	require.Equal(t, "int8", got[catalog.Quantization])
 }

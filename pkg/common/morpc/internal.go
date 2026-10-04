@@ -16,6 +16,7 @@ package morpc
 
 import (
 	"fmt"
+	"io"
 
 	"github.com/fagongzi/goetty/v2/buf"
 )
@@ -47,6 +48,9 @@ func (m *flagOnlyMessage) MarshalTo(data []byte) (int, error) {
 }
 
 func (m *flagOnlyMessage) Unmarshal(data []byte) error {
+	if len(data) < 8 {
+		return io.ErrUnexpectedEOF
+	}
 	m.id = buf.Byte2Uint64(data)
 	return nil
 }

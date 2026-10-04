@@ -100,23 +100,33 @@ func WithServerHandler(
 	}
 }
 
+// WithServerMessageCacheScanHookForTesting installs a hook invoked after each
+// message cache timeout scan.
+func WithServerMessageCacheScanHookForTesting(hook func()) ServerOption {
+	return func(s *server) {
+		s.options.messageCacheScanHook = hook
+	}
+}
+
 type server struct {
-	name        string
-	metrics     *serverMetrics
-	address     string
-	logger      *zap.Logger
-	codec       Codec
-	application goetty.NetApplication
-	stopper     *stopper.Stopper
-	handler     func(ctx context.Context, request RPCMessage, sequence uint64, cs ClientSession) error
-	sessions    *sync.Map // session-id => *clientSession
-	options     struct {
+	name               string
+	metrics            *serverMetrics
+	address            string
+	logger             *zap.Logger
+	codec              Codec
+	application        goetty.NetApplication
+	stopper            *stopper.Stopper
+	handler            func(ctx context.Context, request RPCMessage, sequence uint64, cs ClientSession) error
+	sessions           *sync.Map // session-id => *clientSession
+	sessionOwnershipMu sync.Mutex
+	options            struct {
 		goettyOptions            []goetty.Option
 		bufferSize               int
 		batchSendSize            int
 		filter                   func(Message) bool
 		releaseMessageFunc       func(Message)
 		disableAutoCancelContext bool
+		messageCacheScanHook     func()
 	}
 	pool struct {
 		futures *sync.Pool
@@ -183,12 +193,11 @@ func (s *server) Start() error {
 
 func (s *server) Close() error {
 	s.stopper.Stop()
-	err := s.application.Stop()
+	err := s.application.StopAndWait()
 	if err != nil {
 		s.logger.Error("stop rpc server failed",
 			zap.Error(err))
 	}
-
 	return err
 }
 
@@ -310,10 +319,6 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 		responses := make([]*Future, 0, s.options.batchSendSize)
 		needClose := make([]*Future, 0, s.options.batchSendSize)
 		fetch := func() bool {
-			defer func() {
-				cs.metrics.sendingQueueSizeGauge.Set(float64(len(cs.c)))
-			}()
-
 			for i := 0; i < len(responses); i++ {
 				responses[i] = nil
 			}
@@ -337,6 +342,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 						return true
 					case resp, ok := <-cs.c:
 						if ok {
+							cs.changeQueueDepth(-1)
 							responses = append(responses, resp)
 						}
 					}
@@ -350,6 +356,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 						return true
 					case resp, ok := <-cs.c:
 						if ok {
+							cs.changeQueueDepth(-1)
 							responses = append(responses, resp)
 						}
 					default:
@@ -375,7 +382,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 				}
 
 				written := responses[:0]
-				timeout := time.Duration(0)
+				var writeDeadline time.Time
 				closeNeedClose := func() {
 					for _, f := range needClose {
 						f.Close()
@@ -383,9 +390,10 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 				}
 				failUnwritten := func(values []*Future, err error) {
 					for _, f := range values {
+						oneWay := f.oneWay
 						cs.releaseMessage(f.send)
 						f.messageSent(err)
-						if f.oneWay {
+						if oneWay {
 							f.Close()
 						}
 					}
@@ -414,13 +422,14 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 						f.messageSent(err)
 						continue
 					}
+					deadline := time.Now().Add(v)
 
 					if !cs.assignStreamSequence(&f.send) {
 						cs.releaseMessage(f.send)
 						f.messageSent(backendClosed)
 						continue
 					}
-					timeout += v
+					writeDeadline = earliestDeadline(writeDeadline, deadline)
 					// Record the information of some responses in advance, because after flush,
 					// these responses will be released, thus avoiding causing data race.
 					if ce != nil {
@@ -431,11 +440,11 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 					}
 					conn := cs.conn.RawConn()
 					if _, ok := f.send.Message.(PayloadMessage); ok && conn != nil {
-						conn.SetWriteDeadline(time.Now().Add(v))
+						conn.SetWriteDeadline(deadline)
 					}
 					if err := cs.conn.Write(f.send, goetty.WriteOptions{}); err != nil {
 						s.logger.Error("write response failed",
-							zap.Uint64("request-id", f.send.Message.GetID()),
+							zap.Uint64("request-id", f.getSendMessageID()),
 							zap.Error(err))
 						if err == goetty.ErrIllegalState {
 							cs.releaseMessage(f.send)
@@ -453,19 +462,18 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 
 				if len(written) > 0 {
 					s.metrics.outputBytesCounter.Add(float64(cs.conn.OutBuf().Readable()))
+					timeout := remainingDeadlineTimeout(writeDeadline, time.Now())
 					err := cs.conn.Flush(timeout)
 					if err != nil {
 						if ce != nil {
 							fields = append(fields, zap.Error(err))
 						}
-						for _, f := range responses {
-							if s.options.filter(f.send.Message) {
-								id := f.getSendMessageID()
-								s.logger.Error("write response failed",
-									zap.Uint64("request-id", id),
-									zap.Error(err))
-								f.messageSent(err)
-							}
+						for _, f := range written {
+							id := f.getSendMessageID()
+							s.logger.Error("write response failed",
+								zap.Uint64("request-id", id),
+								zap.Error(err))
+							f.messageSent(err)
 						}
 					}
 					if ce != nil {
@@ -493,8 +501,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 }
 
 func (s *server) closeClientSession(cs *clientSession) {
-	s.sessions.Delete(cs.conn.ID())
-	s.metrics.sessionSizeGauge.Set(float64(s.getSessionCount()))
+	s.deleteClientSession(cs.conn.ID(), cs)
 	if err := cs.Close(); err != nil {
 		s.logger.Error("close client session failed",
 			zap.Error(err))
@@ -507,19 +514,48 @@ func (s *server) getSession(rs goetty.IOSession) (*clientSession, error) {
 	}
 
 	cs := newClientSession(s.metrics, rs, s.codec, s.newFuture, s.options.releaseMessageFunc)
-	v, loaded := s.sessions.LoadOrStore(rs.ID(), cs)
+	cs.messageCacheScanHook = s.options.messageCacheScanHook
+	v, loaded := s.loadOrStoreClientSession(rs.ID(), cs)
 	if loaded {
 		close(cs.c)
-		return v.(*clientSession), nil
+		return v, nil
 	}
 
-	s.metrics.sessionSizeGauge.Set(float64(s.getSessionCount()))
 	rs.Ref()
 	if err := s.startWriteLoop(cs); err != nil {
 		s.closeClientSession(cs)
 		return nil, err
 	}
 	return cs, nil
+}
+
+// loadOrStoreClientSession couples the session's map ownership with its gauge
+// ownership. Only the generation that wins LoadOrStore contributes +1.
+func (s *server) loadOrStoreClientSession(
+	id uint64,
+	cs *clientSession,
+) (*clientSession, bool) {
+	s.sessionOwnershipMu.Lock()
+	defer s.sessionOwnershipMu.Unlock()
+	v, loaded := s.sessions.LoadOrStore(id, cs)
+	if !loaded && s.metrics != nil {
+		s.metrics.sessionSizeGauge.Inc()
+	}
+	return v.(*clientSession), loaded
+}
+
+// deleteClientSession retires only the matching generation. This prevents a
+// repeated or stale close from removing a replacement or decrementing twice.
+func (s *server) deleteClientSession(id uint64, cs *clientSession) bool {
+	s.sessionOwnershipMu.Lock()
+	defer s.sessionOwnershipMu.Unlock()
+	if !s.sessions.CompareAndDelete(id, cs) {
+		return false
+	}
+	if s.metrics != nil {
+		s.metrics.sessionSizeGauge.Dec()
+	}
+	return true
 }
 
 func (s *server) releaseFuture(f *Future) {
@@ -550,15 +586,6 @@ func (s *server) closeDisconnectedSession(ctx context.Context) {
 			})
 		}
 	}
-}
-
-func (s *server) getSessionCount() int {
-	n := 0
-	s.sessions.Range(func(key, value any) bool {
-		n++
-		return true
-	})
-	return n
 }
 
 // sentStreamState owns the complete lifecycle of server-side stream response
@@ -626,6 +653,11 @@ func (s *sentStreamState) contains(id uint64) bool {
 	return ok
 }
 
+type receivedStreamState struct {
+	sequence  uint32
+	finishing bool
+}
+
 type clientSession struct {
 	metrics       *serverMetrics
 	codec         Codec
@@ -636,15 +668,22 @@ type clientSession struct {
 	// map from a handler goroutine, so streamStateMu is the synchronization
 	// boundary for validation and terminal retirement.
 	streamStateMu           sync.Mutex
-	receivedStreamSequences map[uint64]uint32
+	receivedStreamSequences map[uint64]receivedStreamState
 	sentStreams             sentStreamState
 	cancel                  context.CancelFunc
 	ctx                     context.Context
 	releaseMessageFunc      func(Message)
 	checkTimeoutCacheOnce   sync.Once
+	messageCacheScanHook    func()
 	closedC                 chan struct{}
 	disconnectedC           chan struct{}
-	mu                      struct {
+	queueMetricMu           struct {
+		sync.Mutex
+		accounted sync.Cond
+		depth     int
+		waiters   int
+	}
+	mu struct {
 		sync.RWMutex
 		closed bool
 		caches map[uint64]cacheWithContext
@@ -664,13 +703,14 @@ func newClientSession(
 		disconnectedC:           make(chan struct{}, 1),
 		codec:                   codec,
 		c:                       make(chan *Future, 1024),
-		receivedStreamSequences: make(map[uint64]uint32),
+		receivedStreamSequences: make(map[uint64]receivedStreamState),
 		conn:                    conn,
 		ctx:                     ctx,
 		cancel:                  cancel,
 		newFutureFunc:           newFutureFunc,
 		releaseMessageFunc:      releaseMessageFunc,
 	}
+	cs.queueMetricMu.accounted.L = &cs.queueMetricMu.Mutex
 	cs.mu.caches = make(map[uint64]cacheWithContext)
 	return cs
 }
@@ -681,10 +721,10 @@ func (cs *clientSession) RemoteAddress() string {
 
 func (cs *clientSession) Close() error {
 	cs.streamStateMu.Lock()
-	defer cs.streamStateMu.Unlock()
 	cs.mu.Lock()
-	defer cs.mu.Unlock()
 	if cs.mu.closed {
+		cs.mu.Unlock()
+		cs.streamStateMu.Unlock()
 		return nil
 	}
 	close(cs.closedC)
@@ -698,10 +738,18 @@ func (cs *clientSession) Close() error {
 		cs.metrics.messageCacheStateGauge.Sub(float64(len(cs.mu.caches)))
 	}
 	clear(cs.receivedStreamSequences)
+	caches := make([]cacheWithContext, 0, len(cs.mu.caches))
 	for _, c := range cs.mu.caches {
-		c.cache.Close()
+		c.closeCache()
+		caches = append(caches, c)
 	}
 	cs.mu.caches = nil
+	cs.mu.Unlock()
+	cs.streamStateMu.Unlock()
+
+	for _, c := range caches {
+		c.cancelContexts()
+	}
 	cs.cancelWrite()
 	return cs.conn.Close()
 }
@@ -724,9 +772,11 @@ func (cs *clientSession) cleanSend() {
 			if !ok {
 				return
 			}
+			cs.changeQueueDepth(-1)
+			oneWay := f.oneWay
 			cs.releaseMessage(f.send)
 			f.messageSent(backendClosed)
-			if f.oneWay {
+			if oneWay {
 				f.Close()
 			}
 		default:
@@ -791,16 +841,38 @@ func (cs *clientSession) send(msg RPCMessage) (*Future, error) {
 	}
 	select {
 	case cs.c <- f:
+		cs.changeQueueDepth(1)
 	case <-msg.Ctx.Done():
+		oneWay := f.oneWay
 		cs.releaseMessage(msg)
 		f.Close()
-		if !f.oneWay {
+		if !oneWay {
 			f.unRef()
 		}
 		return nil, msg.Ctx.Err()
 	}
-	cs.metrics.sendingQueueSizeGauge.Set(float64(len(cs.c)))
 	return f, nil
+}
+
+func (cs *clientSession) changeQueueDepth(delta int) {
+	cs.queueMetricMu.Lock()
+	defer cs.queueMetricMu.Unlock()
+	for cs.queueMetricMu.depth+delta < 0 {
+		// A receive can win scheduling immediately after its matching send.
+		// Wait only for that sender's post-admission accounting; the sender does
+		// not depend on this receiver and Cond.Wait releases the mutex.
+		cs.queueMetricMu.waiters++
+		cs.queueMetricMu.accounted.Wait()
+		cs.queueMetricMu.waiters--
+	}
+	depth := cs.queueMetricMu.depth + delta
+	cs.queueMetricMu.depth = depth
+	if cs.metrics != nil {
+		cs.metrics.sendingQueueSizeGauge.Add(float64(delta))
+	}
+	if delta > 0 && cs.queueMetricMu.waiters > 0 {
+		cs.queueMetricMu.accounted.Signal()
+	}
 }
 
 // assignStreamSequence runs in the single server write loop after a response
@@ -839,17 +911,21 @@ func (cs *clientSession) checkCacheTimeout() {
 			case <-cs.closedC:
 				return
 			case <-timer.C:
+				var expired []cacheWithContext
 				cs.mu.Lock()
 				for k, c := range cs.mu.caches {
 					if c.closeIfTimeout() {
-						c.cache.Close()
-						delete(cs.mu.caches, k)
-						if cs.metrics != nil {
-							cs.metrics.messageCacheStateGauge.Dec()
-						}
+						retired, _ := cs.retireCacheLocked(k)
+						expired = append(expired, retired)
 					}
 				}
 				cs.mu.Unlock()
+				for _, c := range expired {
+					c.cancelContexts()
+				}
+				if cs.messageCacheScanHook != nil {
+					cs.messageCacheScanHook()
+				}
 				timer.Reset(time.Second)
 			}
 		}
@@ -865,8 +941,15 @@ func (cs *clientSession) validateStreamRequest(
 	sequence uint32) bool {
 	cs.streamStateMu.Lock()
 	defer cs.streamStateMu.Unlock()
-	expectSequence := cs.receivedStreamSequences[id] + 1
-	if sequence != expectSequence {
+	cs.mu.RLock()
+	closed := cs.mu.closed
+	cs.mu.RUnlock()
+	if closed {
+		return false
+	}
+	state := cs.receivedStreamSequences[id]
+	expectSequence := state.sequence + 1
+	if state.finishing || sequence != expectSequence {
 		return false
 	}
 	if sequence == 1 {
@@ -878,37 +961,44 @@ func (cs *clientSession) validateStreamRequest(
 			cs.metrics.sentStreamStateGauge.Inc()
 		}
 	}
-	cs.receivedStreamSequences[id] = sequence
+	cs.receivedStreamSequences[id] = receivedStreamState{sequence: sequence}
 	return true
 }
 
 func (cs *clientSession) lastReceivedStreamSequence(id uint64) uint32 {
 	cs.streamStateMu.Lock()
 	defer cs.streamStateMu.Unlock()
-	return cs.receivedStreamSequences[id]
+	return cs.receivedStreamSequences[id].sequence
 }
 
 // FinishStream synchronously flushes the final response before removing both
-// receive and send sequence entries. Holding streamStateMu prevents the IO loop
-// from validating a later request against half-retired state.
+// receive and send sequence entries. A terminal claim excludes later requests
+// without holding streamStateMu across a send that Close may need to complete.
 func (cs *clientSession) FinishStream(
 	ctx context.Context,
 	token StreamTerminalToken,
 	response Message,
 ) error {
 	cs.streamStateMu.Lock()
-	valid := token.owner == cs &&
-		cs.receivedStreamSequences[token.streamID] == token.sequence &&
+	state, exists := cs.receivedStreamSequences[token.streamID]
+	valid := exists && !state.finishing && token.owner == cs &&
+		state.sequence == token.sequence &&
 		response != nil && response.GetID() == token.streamID
 	if !valid {
 		cs.streamStateMu.Unlock()
+		if response != nil {
+			cs.releaseMessage(RPCMessage{Message: response})
+		}
 		_ = cs.Close()
 		return moerr.NewStreamClosedNoCtx()
 	}
+	state.finishing = true
+	cs.receivedStreamSequences[token.streamID] = state
+	cs.streamStateMu.Unlock()
 
 	cache, err := cs.GetCache(token.streamID)
 	if err != nil || cache != nil {
-		cs.streamStateMu.Unlock()
+		cs.releaseMessage(RPCMessage{Message: response})
 		_ = cs.Close()
 		if err != nil {
 			return err
@@ -917,24 +1007,35 @@ func (cs *clientSession) FinishStream(
 	}
 
 	err = cs.Write(ctx, response)
-	if err == nil {
-		delete(cs.receivedStreamSequences, token.streamID)
-		cs.sentStreams.finish(token.streamID)
-		if cs.metrics != nil {
-			cs.metrics.receivedStreamStateGauge.Dec()
-			cs.metrics.sentStreamStateGauge.Dec()
-		}
-	}
-	cs.streamStateMu.Unlock()
 	if err != nil {
 		_ = cs.Close()
+		return err
 	}
-	return err
+	cs.streamStateMu.Lock()
+	defer cs.streamStateMu.Unlock()
+	current, exists := cs.receivedStreamSequences[token.streamID]
+	if !exists || current != state {
+		return moerr.NewStreamClosedNoCtx()
+	}
+	delete(cs.receivedStreamSequences, token.streamID)
+	cs.sentStreams.finish(token.streamID)
+	if cs.metrics != nil {
+		cs.metrics.receivedStreamStateGauge.Dec()
+		cs.metrics.sentStreamStateGauge.Dec()
+	}
+	return nil
 }
 
 func (cs *clientSession) CreateCache(
 	ctx context.Context,
 	cacheID uint64) (MessageCache, error) {
+	return cs.CreateCacheWithCancel(ctx, cacheID, nil)
+}
+
+func (cs *clientSession) CreateCacheWithCancel(
+	ctx context.Context,
+	cacheID uint64,
+	cancel context.CancelFunc) (MessageCache, error) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
@@ -945,29 +1046,48 @@ func (cs *clientSession) CreateCache(
 	v, ok := cs.mu.caches[cacheID]
 	if !ok {
 		v = cacheWithContext{ctx: ctx, cache: newCache()}
-		cs.mu.caches[cacheID] = v
 		if cs.metrics != nil {
 			cs.metrics.messageCacheStateGauge.Inc()
 		}
 		cs.startCheckCacheTimeout()
 	}
+	if cancel != nil {
+		v.cancels = append(v.cancels, cancel)
+	}
+	cs.mu.caches[cacheID] = v
 	return v.cache, nil
 }
 
 func (cs *clientSession) DeleteCache(cacheID uint64) {
 	cs.mu.Lock()
-	defer cs.mu.Unlock()
-
 	if cs.mu.closed {
+		cs.mu.Unlock()
 		return
 	}
-	if c, ok := cs.mu.caches[cacheID]; ok {
-		c.cache.Close()
-		delete(cs.mu.caches, cacheID)
-		if cs.metrics != nil {
-			cs.metrics.messageCacheStateGauge.Dec()
-		}
+	c, ok := cs.retireCacheLocked(cacheID)
+	cs.mu.Unlock()
+	if ok {
+		c.cancelContexts()
 	}
+}
+
+// retireCacheLocked closes a cache before publishing its removal. This keeps
+// the registry and every cache handle in one lifecycle state: once callers can
+// no longer discover the cache, previously returned handles are already closed.
+// The caller must hold cs.mu for writing. Transferred context cancellation is
+// deliberately deferred until after the lock is released because it may re-enter
+// the session.
+func (cs *clientSession) retireCacheLocked(cacheID uint64) (cacheWithContext, bool) {
+	c, ok := cs.mu.caches[cacheID]
+	if !ok {
+		return cacheWithContext{}, false
+	}
+	c.closeCache()
+	delete(cs.mu.caches, cacheID)
+	if cs.metrics != nil {
+		cs.metrics.messageCacheStateGauge.Dec()
+	}
+	return c, true
 }
 
 func (cs *clientSession) GetCache(cacheID uint64) (MessageCache, error) {
@@ -985,8 +1105,19 @@ func (cs *clientSession) GetCache(cacheID uint64) (MessageCache, error) {
 }
 
 type cacheWithContext struct {
-	ctx   context.Context
-	cache MessageCache
+	ctx     context.Context
+	cache   MessageCache
+	cancels []context.CancelFunc
+}
+
+func (c cacheWithContext) closeCache() {
+	c.cache.Close()
+}
+
+func (c cacheWithContext) cancelContexts() {
+	for _, cancel := range c.cancels {
+		cancel()
+	}
 }
 
 func (c cacheWithContext) closeIfTimeout() bool {

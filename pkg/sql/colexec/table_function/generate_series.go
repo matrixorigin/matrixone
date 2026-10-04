@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -37,7 +36,7 @@ type genDatetimeState struct {
 	start, end, next types.Datetime
 	step             int64
 	tp               types.IntervalType // used by handleDateTime
-	scale            int32              // used by handleDateTime
+	scale            int32
 }
 
 type generateSeriesArg struct {
@@ -145,30 +144,6 @@ func initStartAndEndDatetime(gs *genDatetimeState,
 	return nil
 }
 
-// init start, end, step with varchar types.
-// XXX: varchar type is always converted to datetime.  we should for example, support
-// timestamp time.
-func initStartAndEndVarChar(gs *genDatetimeState,
-	proc *process.Process, startVec, endVec *vector.Vector, nthRow int) error {
-	var err error
-	if startVec.GetNulls().Contains(uint64(nthRow)) {
-		return moerr.NewInvalidInput(proc.Ctx, "generate_series datetime start can't be NULL")
-	}
-	startStr := startVec.UnsafeGetStringAt(nthRow)
-	if endVec.GetNulls().Contains(uint64(nthRow)) {
-		return moerr.NewInvalidInput(proc.Ctx, "generate_series datetime end can't be NULL")
-	}
-	endStr := endVec.UnsafeGetStringAt(nthRow)
-	gs.scale = int32(findScale(startStr, endStr))
-	gs.start, err = types.ParseDatetime(startStr, gs.scale)
-	if err != nil {
-		return err
-	}
-	gs.end, err = types.ParseDatetime(endStr, gs.scale)
-	gs.next = gs.start
-	return err
-}
-
 func generateSeriesPrepare(proc *process.Process, tableFunction *TableFunction) (tvfState, error) {
 	st := new(generateSeriesArg)
 	var err error
@@ -231,6 +206,7 @@ func (g *generateSeriesArg) start(tf *TableFunction, proc *process.Process, nthR
 		}
 
 	case types.T_datetime:
+		g.dtState.scale = resTyp.Scale
 		if err = initDateTimeStep(&g.dtState, proc, stepVec, nthRow); err != nil {
 			return err
 		}
@@ -238,20 +214,6 @@ func (g *generateSeriesArg) start(tf *TableFunction, proc *process.Process, nthR
 		if err = initStartAndEndDatetime(&g.dtState, proc, startVec, endVec, nthRow); err != nil {
 			return err
 		}
-	case types.T_varchar:
-		// call step first, then we know startVec and endVec are not nil
-		if err = initDateTimeStep(&g.dtState, proc, stepVec, nthRow); err != nil {
-			return err
-		}
-		// convert varchar to datetime
-		if err = initStartAndEndVarChar(&g.dtState, proc, startVec, endVec, nthRow); err != nil {
-			return err
-		}
-		// reset schema
-		typ := types.T_datetime.ToType()
-		typ.Scale = g.dtState.scale
-		tf.Rets[0].Typ = plan2.MakePlan2Type(&typ)
-		tf.ctr.retSchema[0] = typ
 	default:
 		return moerr.NewNotSupportedf(proc.Ctx, "generate_series not support type %s", resTyp.Oid.String())
 	}
@@ -295,6 +257,25 @@ func buildNextDatetimeBatch(g *genDatetimeState, rbat *batch.Batch, maxSz int, p
 	return nil
 }
 
+func buildNextDatetimeStringBatch(g *genDatetimeState, rbat *batch.Batch, maxSz int, proc *process.Process) error {
+	cnt := 0
+	for cnt = 0; cnt < maxSz; cnt++ {
+		if (g.step > 0 && (g.next < g.start || g.next > g.end)) || (g.step < 0 && (g.next > g.start || g.next < g.end)) {
+			break
+		}
+		if err := vector.AppendBytes(rbat.Vecs[0], []byte(g.next.String2(g.scale)), false, proc.Mp()); err != nil {
+			return err
+		}
+		var ok bool
+		g.next, ok = g.next.AddInterval(g.step, g.tp, types.DateTimeType)
+		if !ok {
+			return moerr.NewInvalidInputf(proc.Ctx, "invalid step '%v %v'", g.step, g.tp)
+		}
+	}
+	rbat.SetRowCount(cnt)
+	return nil
+}
+
 func (g *generateSeriesArg) call(tf *TableFunction, proc *process.Process) (vm.CallResult, error) {
 	// clean up previous batch
 	g.batch.CleanOnlyData()
@@ -308,7 +289,7 @@ func (g *generateSeriesArg) call(tf *TableFunction, proc *process.Process) (vm.C
 			return vm.CancelResult, err
 		}
 	case types.T_varchar:
-		if err := buildNextDatetimeBatch(&g.dtState, g.batch, 8192, proc); err != nil {
+		if err := buildNextDatetimeStringBatch(&g.dtState, g.batch, 8192, proc); err != nil {
 			return vm.CancelResult, err
 		}
 	}
@@ -317,22 +298,4 @@ func (g *generateSeriesArg) call(tf *TableFunction, proc *process.Process) (vm.C
 		return vm.CancelResult, nil
 	}
 	return vm.CallResult{Status: vm.ExecNext, Batch: g.batch}, nil
-}
-
-func findScale(s1, s2 string) int {
-	p1 := 0
-	if strings.Contains(s1, ".") {
-		p1 = len(s1) - strings.LastIndex(s1, ".")
-	}
-	p2 := 0
-	if strings.Contains(s2, ".") {
-		p2 = len(s2) - strings.LastIndex(s2, ".")
-	}
-	if p2 > p1 {
-		p1 = p2
-	}
-	if p1 > 6 {
-		p1 = 6
-	}
-	return p1
 }

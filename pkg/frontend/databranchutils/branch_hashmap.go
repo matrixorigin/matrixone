@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -77,7 +79,7 @@ type BranchHashmap interface {
 	// ForEachShardParallel provides exclusive access to each shard. The callback
 	// receives a cursor offering read-only iteration plus mutation helpers that
 	// avoid blocking other shards. parallelism <= 0 selects the default value:
-	// min(runtime.NumCPU(), shardCount), clamped to [1, shardCount].
+	// min(system.GoMaxProcs(), shardCount), clamped to [1, shardCount].
 	ForEachShardParallel(fn func(cursor ShardCursor) error, parallelism int) error
 	// Project rebuilds a new hashmap using the provided keyCols from the current
 	// rows. parallelism controls shard-level fan-out; see ForEachShardParallel
@@ -161,6 +163,11 @@ const (
 // exported APIs are safe for concurrent use.
 type branchHashmap struct {
 	allocator malloc.Allocator
+	// strictCapacity rejects an entry that cannot fit after spilling instead of
+	// placing that entry on the unaccounted Go heap. It is used by recovery
+	// stores whose capacity contract must fail closed.
+	strictCapacity bool
+	rawEncodedKeys bool
 
 	valueTypes []types.Type
 	keyTypes   []types.Type
@@ -191,6 +198,18 @@ func WithBranchHashmapAllocator(allocator malloc.Allocator) BranchHashmapOption 
 	}
 }
 
+func withBranchHashmapStrictCapacity() BranchHashmapOption {
+	return func(bh *branchHashmap) {
+		bh.strictCapacity = true
+	}
+}
+
+func withBranchHashmapRawEncodedKeys() BranchHashmapOption {
+	return func(bh *branchHashmap) {
+		bh.rawEncodedKeys = true
+	}
+}
+
 // WithBranchHashmapSpillRoot sets the root directory where spill files will be created.
 func WithBranchHashmapSpillRoot(root string) BranchHashmapOption {
 	return func(bh *branchHashmap) {
@@ -217,11 +236,16 @@ func WithBranchHashmapSpillSegmentMaxBytes(maxBytes uint64) BranchHashmapOption 
 	}
 }
 
-// WithBranchHashmapShardCount sets the shard count. Values outside [4, 64] are clamped.
+// WithBranchHashmapShardCount sets the shard count. Values outside [4, 128] are clamped.
 func WithBranchHashmapShardCount(shards int) BranchHashmapOption {
 	return func(bh *branchHashmap) {
 		bh.shardCount = shards
 	}
+}
+
+// Preserve the historical bare-metal default while respecting the CPU budget.
+func defaultBranchHashmapShardCount(visibleCPUs, cpuBudget int) int {
+	return min(visibleCPUs/2, max(1, cpuBudget))
 }
 
 // NewBranchHashmap constructs a new branchHashmap.
@@ -245,8 +269,7 @@ func NewBranchHashmap(opts ...BranchHashmapOption) (BranchHashmap, error) {
 		return nil, moerr.NewInternalErrorNoCtx("branchHashmap requires a non-nil allocator")
 	}
 	if bh.shardCount <= 0 {
-		cpu := runtime.NumCPU() / 2
-		bh.shardCount = cpu
+		bh.shardCount = defaultBranchHashmapShardCount(runtime.NumCPU(), system.GoMaxProcs())
 	}
 	if bh.shardCount < minShardCount {
 		bh.shardCount = minShardCount
@@ -371,7 +394,13 @@ func (bh *branchHashmap) flushPreparedEntries(shardEntries [][]int, chunk []prep
 	if totalBytes > 0 {
 		buf, deallocator, err = bh.allocateBuffer(uint64(totalBytes))
 		if err != nil {
+			if !moerr.IsMoErrCode(err, moerr.ErrMPoolCapacity) {
+				return err
+			}
 			if len(chunk) <= 1 {
+				if bh.strictCapacity {
+					return err
+				}
 				// Fallback to Go heap for single entry when allocator is exhausted.
 				buf = make([]byte, totalBytes)
 			} else {
@@ -420,14 +449,35 @@ func (bh *branchHashmap) flushPreparedEntries(shardEntries [][]int, chunk []prep
 		shardIdx := int(hash % uint64(bh.shardCount))
 		shardEntries[shardIdx] = append(shardEntries[shardIdx], i)
 	}
+
+	bh.metaMu.RLock()
+	if bh.closed {
+		bh.metaMu.RUnlock()
+		for range entries {
+			block.release()
+		}
+		return moerr.NewInternalErrorNoCtx("branchHashmap is closed")
+	}
+	defer bh.metaMu.RUnlock()
+
+	remaining := len(entries)
 	for idx, entryIdxs := range shardEntries {
 		if len(entryIdxs) == 0 {
 			continue
 		}
 		shard := bh.shards[idx]
 		shard.lock()
+		if shard.spill != nil && shard.spill.failed != nil {
+			err := shard.spill.failed
+			shard.unlock()
+			for i := 0; i < remaining; i++ {
+				block.release()
+			}
+			return err
+		}
 		for _, entryIdx := range entryIdxs {
 			shard.insertEntryLocked(entries[entryIdx])
+			remaining--
 		}
 		shard.unlock()
 		shardEntries[idx] = entryIdxs[:0]
@@ -446,7 +496,7 @@ func (bh *branchHashmap) GetByEncodedKey(encodedKey []byte) (GetResult, error) {
 		bh.metaMu.RUnlock()
 		return result, moerr.NewInternalErrorNoCtx("branchHashmap is closed")
 	}
-	if len(bh.keyTypes) == 0 {
+	if len(bh.keyTypes) == 0 && !bh.rawEncodedKeys {
 		bh.metaMu.RUnlock()
 		return result, nil
 	}
@@ -532,6 +582,11 @@ func (bh *branchHashmap) PopByVectorsStream(keyVecs []*vector.Vector, removeAll 
 		}
 		probesByShard[shard] = append(probesByShard[shard], probe)
 	}
+	for shard := range probesByShard {
+		if err := shard.spillFailure(); err != nil {
+			return 0, err
+		}
+	}
 
 	var totalRemoved int64
 	collectValues := fn != nil
@@ -540,35 +595,50 @@ func (bh *branchHashmap) PopByVectorsStream(keyVecs []*vector.Vector, removeAll 
 			continue
 		}
 		shard.lock()
+		if shard.spill != nil && shard.spill.failed != nil {
+			err := shard.spill.failed
+			shard.unlock()
+			return int(totalRemoved), err
+		}
 		var removedTotal int64
+		finishShard := func() {
+			if removedTotal > 0 {
+				atomic.AddInt64(&shard.items, -removedTotal)
+				totalRemoved += removedTotal
+			}
+			shard.unlock()
+		}
 		for _, probe := range probes {
-			rows, removedBytes, removedCount := shard.mem.collect(probe.hash, probe.key, probe.plan, true, collectValues)
+			var (
+				removedBytes uint64
+				removedCount int
+				err          error
+			)
+			if collectValues {
+				removedBytes, removedCount, err = shard.mem.collectStream(probe.hash, probe.key, probe.plan, func(row []byte) error {
+					return fn(probe.idx, probe.key, row)
+				})
+			} else {
+				_, removedBytes, removedCount = shard.mem.collect(probe.hash, probe.key, probe.plan, true, false)
+			}
 			if removedBytes > 0 {
 				shard.memInUse -= removedBytes
 			}
 			if removedCount > 0 {
 				removedTotal += int64(removedCount)
 			}
-			if collectValues {
-				for _, row := range rows {
-					if err := fn(probe.idx, probe.key, row); err != nil {
-						shard.unlock()
-						return int(totalRemoved), err
-					}
-				}
+			if err != nil {
+				finishShard()
+				return int(totalRemoved), err
 			}
 		}
 		if shard.spill != nil {
 			if err := collectSpillPopStream(shard, probes, removeAll, fn, &removedTotal, collectValues); err != nil {
-				shard.unlock()
+				finishShard()
 				return int(totalRemoved), err
 			}
 		}
-		if removedTotal > 0 {
-			atomic.AddInt64(&shard.items, -removedTotal)
-			totalRemoved += removedTotal
-		}
-		shard.unlock()
+		finishShard()
 	}
 
 	return int(totalRemoved), nil
@@ -637,12 +707,24 @@ func (bh *branchHashmap) lookupByVectors(keyVecs []*vector.Vector, removeAll *bo
 		}
 		probesByShard[shard] = append(probesByShard[shard], probe)
 	}
+	if removeAll != nil {
+		for shard := range probesByShard {
+			if err := shard.spillFailure(); err != nil {
+				return nil, err
+			}
+		}
+	}
 
 	for shard, probes := range probesByShard {
 		if shard == nil {
 			continue
 		}
 		shard.lock()
+		if shard.spill != nil && shard.spill.failed != nil {
+			err := shard.spill.failed
+			shard.unlock()
+			return nil, err
+		}
 		var removedTotal int64
 		copyValues := removeAll != nil
 		for _, probe := range probes {
@@ -693,7 +775,7 @@ func (bh *branchHashmap) PopByEncodedKey(encodedKey []byte, removeAll bool) (Get
 		bh.metaMu.RUnlock()
 		return result, moerr.NewInternalErrorNoCtx("branchHashmap is closed")
 	}
-	if len(bh.keyTypes) == 0 {
+	if len(bh.keyTypes) == 0 && !bh.rawEncodedKeys {
 		bh.metaMu.RUnlock()
 		return result, nil
 	}
@@ -721,7 +803,7 @@ func (bh *branchHashmap) PopByEncodedKeyValue(encodedKey []byte, encodedValue []
 		bh.metaMu.RUnlock()
 		return 0, moerr.NewInternalErrorNoCtx("branchHashmap is closed")
 	}
-	if len(bh.keyTypes) == 0 {
+	if len(bh.keyTypes) == 0 && !bh.rawEncodedKeys {
 		bh.metaMu.RUnlock()
 		return 0, nil
 	}
@@ -843,9 +925,14 @@ func (bh *branchHashmap) ForEachShardParallel(fn func(cursor ShardCursor) error,
 	if shardCount == 0 {
 		return nil
 	}
+	for _, shard := range bh.shards {
+		if err := shard.spillFailure(); err != nil {
+			return err
+		}
+	}
 
 	if parallelism <= 0 {
-		parallelism = runtime.NumCPU()
+		parallelism = system.GoMaxProcs()
 	}
 	if parallelism <= 0 {
 		parallelism = 1
@@ -1214,6 +1301,15 @@ func (hs *hashShard) unlock() {
 	hs.mu.Unlock()
 }
 
+func (hs *hashShard) spillFailure() error {
+	hs.lock()
+	defer hs.unlock()
+	if hs.spill != nil {
+		return hs.spill.failed
+	}
+	return nil
+}
+
 func (hs *hashShard) beginIteration() {
 	hs.mu.Lock()
 	for hs.iterating {
@@ -1291,6 +1387,9 @@ func (hs *hashShard) popRowsByValueDuringIteration(hash uint64, key []byte, valu
 }
 
 func (hs *hashShard) popRowsUnsafe(hash uint64, key []byte, removeAll bool) ([][]byte, error) {
+	if hs.spill != nil && hs.spill.failed != nil {
+		return nil, hs.spill.failed
+	}
 	plan := newRemovalPlan(removeAll)
 	rows, removedBytes, removedCount := hs.mem.collect(hash, key, plan, true, true)
 	if removedBytes > 0 {
@@ -1314,6 +1413,9 @@ func (hs *hashShard) popRowsUnsafe(hash uint64, key []byte, removeAll bool) ([][
 }
 
 func (hs *hashShard) popRowsByValueUnsafe(hash uint64, key []byte, value []byte, removeAll bool) (int, error) {
+	if hs.spill != nil && hs.spill.failed != nil {
+		return 0, hs.spill.failed
+	}
 	matchValue := value
 	if removeAll && len(value) > 0 {
 		matchValue = make([]byte, len(value))
@@ -1353,29 +1455,46 @@ func (hs *hashShard) spillLocked(required uint64) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	entries, freed := hs.mem.pickEvictionEntries(minRequired)
+	entries, _ := hs.mem.pickEvictionEntries(minRequired)
 	if len(entries) == 0 {
 		return 0, nil
 	}
-	grouped := make(map[uint32][]spillEntry, len(entries))
+	if store.failed != nil {
+		return 0, store.failed
+	}
+	type spillGroup struct {
+		entries []spillEntry
+		indices []int32
+	}
+	grouped := make(map[uint32]*spillGroup, len(entries))
 	for _, idx := range entries {
 		entry := &hs.mem.entries[idx]
 		bucketID := store.bucketID(entry.hash)
-		grouped[bucketID] = append(grouped[bucketID], spillEntry{
+		group := grouped[bucketID]
+		if group == nil {
+			group = &spillGroup{}
+			grouped[bucketID] = group
+		}
+		group.entries = append(group.entries, spillEntry{
 			hash:  entry.hash,
 			key:   entry.keyBytes(),
 			value: entry.valueBytes(),
 		})
+		group.indices = append(group.indices, idx)
 	}
-	for bucketID, list := range grouped {
-		if err := store.appendEntries(bucketID, list); err != nil {
-			return 0, err
+	var freed uint64
+	for bucketID, group := range grouped {
+		if err := store.appendEntries(bucketID, group.entries); err != nil {
+			return freed, err
 		}
-	}
-	for _, idx := range entries {
-		freedBytes := hs.mem.removeEntry(idx)
-		if freedBytes > 0 {
-			hs.memInUse -= freedBytes
+		// Transfer ownership only after this bucket is fully written. A later
+		// bucket failure must not leave these entries in both stores.
+		for _, idx := range group.indices {
+			freedBytes := hs.mem.removeEntry(idx)
+			if freedBytes > 0 {
+				hs.memInUse -= freedBytes
+				freed += freedBytes
+			}
 		}
 	}
 	return freed, nil
@@ -1514,7 +1633,14 @@ func (bh *branchHashmap) allocateBuffer(size uint64) ([]byte, malloc.Deallocator
 		return nil, nil, err
 	}
 	if buf == nil {
-		if err := bh.spill(size); err != nil {
+		bh.metaMu.RLock()
+		if bh.closed {
+			bh.metaMu.RUnlock()
+			return nil, nil, moerr.NewInternalErrorNoCtx("branchHashmap is closed")
+		}
+		err = bh.spill(size)
+		bh.metaMu.RUnlock()
+		if err != nil {
 			return nil, nil, err
 		}
 		buf, deallocator, err = bh.allocator.Allocate(size, malloc.NoClear)
@@ -1522,7 +1648,9 @@ func (bh *branchHashmap) allocateBuffer(size uint64) ([]byte, malloc.Deallocator
 			return nil, nil, err
 		}
 		if buf == nil {
-			return nil, nil, moerr.NewInternalErrorNoCtx("branchHashmap failed to allocate memory after spilling")
+			return nil, nil, moerr.NewMPoolCapacityNoCtxf(
+				"branchHashmap failed to allocate %d bytes after spilling", size,
+			)
 		}
 	}
 	return buf, deallocator, nil
@@ -1558,7 +1686,9 @@ func (bh *branchHashmap) spill(required uint64) error {
 		}
 	}
 	if freed < required {
-		return moerr.NewInternalErrorNoCtx("branchHashmap cannot spill enough data to satisfy allocation request")
+		return moerr.NewMPoolCapacityNoCtxf(
+			"branchHashmap cannot spill %d bytes required for allocation", required-freed,
+		)
 	}
 	// TODO(monitoring): emit spill counters once metrics plumbing is ready.
 	return nil
@@ -1802,6 +1932,8 @@ func encodeDecodedValue(p *types.Packer, typ types.Type, v any) error {
 			return moerr.NewInvalidInputNoCtx("expected decimal128 value")
 		}
 		p.EncodeDecimal128(val)
+	case types.T_decimal256:
+		return encodeDecodedDecimal256(p, v)
 	case types.T_uuid:
 		val, ok := v.(types.Uuid)
 		if !ok {
@@ -1817,9 +1949,9 @@ func encodeDecodedValue(p *types.Packer, typ types.Type, v any) error {
 	case types.T_enum:
 		switch val := v.(type) {
 		case types.Enum:
-			p.EncodeUint16(uint16(val))
+			p.EncodeEnum(val)
 		case uint16:
-			p.EncodeUint16(val)
+			p.EncodeEnum(types.Enum(val))
 		default:
 			return moerr.NewInvalidInputNoCtx("expected enum value")
 		}
@@ -1837,6 +1969,21 @@ func encodeDecodedValue(p *types.Packer, typ types.Type, v any) error {
 			return moerr.NewInvalidInputNoCtx("expected byte slice value")
 		}
 		p.EncodeStringType(bytesVal)
+	}
+	return nil
+}
+
+func encodeDecodedDecimal256(p *types.Packer, v any) error {
+	switch val := v.(type) {
+	case types.Decimal256:
+		p.EncodeStringType(types.EncodeDecimal256(&val))
+	case []byte:
+		if len(val) != types.Decimal256Size {
+			return moerr.NewInvalidInputNoCtxf("expected decimal256 raw bytes length %d, got %d", types.Decimal256Size, len(val))
+		}
+		p.EncodeStringType(val)
+	default:
+		return moerr.NewInvalidInputNoCtx("expected decimal256 value")
 	}
 	return nil
 }
@@ -1897,6 +2044,11 @@ func encodeValue(p *types.Packer, vec *vector.Vector, row int) error {
 	case types.T_decimal128:
 		v := vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, row)
 		p.EncodeDecimal128(v)
+	case types.T_decimal256:
+		raw := vec.GetRawBytesAt(row)
+		tmp := make([]byte, len(raw))
+		copy(tmp, raw)
+		p.EncodeStringType(tmp)
 	case types.T_uuid:
 		v := vector.GetFixedAtNoTypeCheck[types.Uuid](vec, row)
 		p.EncodeUuid(v)
@@ -1905,7 +2057,7 @@ func encodeValue(p *types.Packer, vec *vector.Vector, row int) error {
 		p.EncodeBit(v)
 	case types.T_enum:
 		v := vector.GetFixedAtNoTypeCheck[types.Enum](vec, row)
-		p.EncodeUint16(uint16(v))
+		p.EncodeEnum(v)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_datalink,
 		types.T_array_float32, types.T_array_float64:
@@ -2239,6 +2391,40 @@ func (ms *memStore) collect(hash uint64, key []byte, plan *removalPlan, copyValu
 	return rows, removedBytes, removedCount
 }
 
+func (ms *memStore) collectStream(hash uint64, key []byte, plan *removalPlan, fn func(row []byte) error) (uint64, int, error) {
+	if len(ms.index) == 0 || ms.count == 0 {
+		return 0, 0, nil
+	}
+	var (
+		removedCount int
+		removedBytes uint64
+	)
+	mask := len(ms.index) - 1
+	slot := int(hash & uint64(mask))
+	for {
+		cur := ms.index[slot]
+		if cur == memSlotEmpty {
+			break
+		}
+		if cur >= 0 {
+			entry := &ms.entries[cur]
+			if entry.inUse && entry.hash == hash && bytes.Equal(entry.keyBytes(), key) &&
+				plan.matchesValue(entry.valueBytes()) && plan.take() {
+				value := entry.valueBytes()
+				payload := make([]byte, len(value))
+				copy(payload, value)
+				removedCount++
+				removedBytes += ms.removeEntry(cur)
+				if err := fn(payload); err != nil {
+					return removedBytes, removedCount, err
+				}
+			}
+		}
+		slot = (slot + 1) & mask
+	}
+	return removedBytes, removedCount, nil
+}
+
 func (ms *memStore) forEach(fn func(entry *memEntry) error) error {
 	if fn == nil {
 		return nil
@@ -2279,6 +2465,8 @@ type spillStore struct {
 	maxSegmentBytes uint64
 	buckets         []spillBucket
 	stats           spillStats
+	// A failed rollback makes the spill unreadable until the map is closed.
+	failed error
 }
 
 type spillEntry struct {
@@ -2531,11 +2719,21 @@ func (ss *spillStore) bucketID(hash uint64) uint32 {
 	return uint32(hash & ss.bucketMask)
 }
 
-func (ss *spillStore) appendEntries(bucketID uint32, entries []spillEntry) error {
+func (ss *spillStore) appendEntries(bucketID uint32, entries []spillEntry) (err error) {
+	if ss.failed != nil {
+		return ss.failed
+	}
 	if len(entries) == 0 {
 		return nil
 	}
 	bucket := &ss.buckets[bucketID]
+	oldSegmentCount := len(bucket.segments)
+	oldRowCount := bucket.rowCount
+	oldStats := ss.stats
+	var oldLastSize int64
+	if oldSegmentCount > 0 {
+		oldLastSize = bucket.segments[oldSegmentCount-1].size
+	}
 	var (
 		seg    *spillSegment
 		file   *os.File
@@ -2544,21 +2742,44 @@ func (ss *spillStore) appendEntries(bucketID uint32, entries []spillEntry) error
 	if len(bucket.segments) > 0 {
 		seg = bucket.segments[len(bucket.segments)-1]
 	}
-	closeWriter := func() error {
-		if writer != nil {
-			if err := writer.Flush(); err != nil {
-				return err
-			}
+	closeWriter := func(flush bool) error {
+		var closeErr error
+		if writer != nil && flush {
+			closeErr = writer.Flush()
 		}
 		if file != nil {
-			if err := file.Close(); err != nil {
-				return err
-			}
+			closeErr = errors.Join(closeErr, file.Close())
 		}
 		writer = nil
 		file = nil
-		return nil
+		return closeErr
 	}
+	// Writes may have reached an existing segment before an error. Restore its
+	// old length as well as removing any segments created by this append.
+	defer func() {
+		if err == nil {
+			return
+		}
+		err = errors.Join(err, closeWriter(false))
+		var rollbackErr error
+		for i := len(bucket.segments) - 1; i >= oldSegmentCount; i-- {
+			rollbackErr = errors.Join(rollbackErr, os.Remove(bucket.segments[i].path))
+		}
+		if oldSegmentCount > 0 {
+			rollbackErr = errors.Join(rollbackErr, os.Truncate(bucket.segments[oldSegmentCount-1].path, oldLastSize))
+		}
+		if rollbackErr != nil {
+			ss.failed = errors.Join(err, rollbackErr)
+			err = ss.failed
+			return
+		}
+		bucket.segments = bucket.segments[:oldSegmentCount]
+		if oldSegmentCount > 0 {
+			bucket.segments[oldSegmentCount-1].size = oldLastSize
+		}
+		bucket.rowCount = oldRowCount
+		ss.stats = oldStats
+	}()
 	for _, entry := range entries {
 		entryBytes := spillEntryHeaderSize + len(entry.key) + len(entry.value)
 		needsNewSegment := seg == nil
@@ -2567,7 +2788,7 @@ func (ss *spillStore) appendEntries(bucketID uint32, entries []spillEntry) error
 			needsNewSegment = true
 		}
 		if needsNewSegment {
-			if err := closeWriter(); err != nil {
+			if err := closeWriter(true); err != nil {
 				return err
 			}
 			var err error
@@ -2588,19 +2809,16 @@ func (ss *spillStore) appendEntries(bucketID uint32, entries []spillEntry) error
 		binary.LittleEndian.PutUint32(header[8:12], uint32(len(entry.key)))
 		binary.LittleEndian.PutUint32(header[12:16], uint32(len(entry.value)))
 		if _, err := writer.Write(header[:]); err != nil {
-			_ = closeWriter()
-			return err
+			return errors.Join(err, closeWriter(false))
 		}
 		if len(entry.key) > 0 {
 			if _, err := writer.Write(entry.key); err != nil {
-				_ = closeWriter()
-				return err
+				return errors.Join(err, closeWriter(false))
 			}
 		}
 		if len(entry.value) > 0 {
 			if _, err := writer.Write(entry.value); err != nil {
-				_ = closeWriter()
-				return err
+				return errors.Join(err, closeWriter(false))
 			}
 		}
 		seg.size += int64(entryBytes)
@@ -2609,7 +2827,7 @@ func (ss *spillStore) appendEntries(bucketID uint32, entries []spillEntry) error
 		ss.stats.spilledPayloadBytes += uint64(len(entry.key) + len(entry.value))
 		ss.stats.spilledBytes += uint64(entryBytes)
 	}
-	return closeWriter()
+	return closeWriter(true)
 }
 
 func (ss *spillStore) createSegment(bucket *spillBucket, bucketID uint32) (*spillSegment, *os.File, *bufio.Writer, error) {
@@ -2632,6 +2850,9 @@ func (ss *spillStore) forEachEntry(bucketID uint32, scratch *[]byte, fn func(key
 }
 
 func (ss *spillStore) collect(bucketID uint32, hash uint64, key []byte, dst *[][]byte, plan *removalPlan, collectValues bool, reason scanReason) error {
+	if ss.failed != nil {
+		return ss.failed
+	}
 	bucket := &ss.buckets[bucketID]
 	if bucket.rowCount == 0 {
 		return nil
@@ -2668,6 +2889,9 @@ func (ss *spillStore) collect(bucketID uint32, hash uint64, key []byte, dst *[][
 }
 
 func (ss *spillStore) scanBucket(bucketID uint32, reason scanReason, scratch *[]byte, fn func(hash uint64, key []byte, value []byte, rid uint64) (bool, error)) error {
+	if ss.failed != nil {
+		return ss.failed
+	}
 	bucket := &ss.buckets[bucketID]
 	if bucket.rowCount == 0 {
 		return nil
@@ -3097,6 +3321,9 @@ func (hs *hashShard) iterateUnsafe(fn func(key []byte, row []byte) error) error 
 	}
 	if !hs.iterating {
 		return moerr.NewInternalErrorNoCtx("shard iteration context required")
+	}
+	if hs.spill != nil && hs.spill.failed != nil {
+		return hs.spill.failed
 	}
 	if hs.mem != nil {
 		if err := hs.mem.forEach(func(entry *memEntry) error {

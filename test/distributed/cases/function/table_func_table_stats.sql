@@ -26,9 +26,9 @@ select count(*) from t1;
 -- Flush to ensure stats are available
 select mo_ctl('dn', 'flush', 'table_func_table_stats.t1');
 
-select sleep(1);
-
 -- Query table stats - basic columns (new column structure)
+-- Retry only while the new stats snapshot is pending.
+-- @wait_expect(1, 10)
 select * from table_stats('table_func_table_stats.t1') g;
 
 -- Check sampling_ratio is present
@@ -90,6 +90,35 @@ select table_name, ndv_map, min_val_map from table_stats('table_func_table_stats
 
 -- Test with system tables (should work)
 select table_name, table_cnt >= 0 from table_stats('mo_catalog.mo_tables') g;
+
+-- Cross-account table_stats coverage.
+-- The account ID is intentionally read at runtime so this case is isolated
+-- from account allocation order in the test cluster.
+drop account if exists table_stats_bvt_acc;
+create account table_stats_bvt_acc admin_name = 'table_stats_bvt_admin' identified by '111';
+set @table_stats_bvt_account_id = (select account_id from mo_catalog.mo_account where account_name = 'table_stats_bvt_acc');
+
+-- Tenant creates and queries its own table.
+-- @session:id=1&user=table_stats_bvt_acc:table_stats_bvt_admin&password=111
+create database table_stats_bvt_db;
+use table_stats_bvt_db;
+create table table_stats_bvt_t1 (id int, value varchar(20));
+insert into table_stats_bvt_t1 values (1, 'tenant-row');
+select table_name from table_stats('table_stats_bvt_db.table_stats_bvt_t1') g;
+
+-- A tenant cannot explicitly query a different account.
+-- @regex("only sys account can query stats for other accounts",true)
+select * from table_stats('table_stats_bvt_db.table_stats_bvt_t1.0') g;
+-- @session
+
+-- Sys resolves the dynamically allocated tenant account and target table.
+set @table_stats_bvt_path = concat('table_stats_bvt_db.table_stats_bvt_t1.', @table_stats_bvt_account_id);
+set @table_stats_bvt_sql = concat('select table_name from table_stats(''', @table_stats_bvt_path, ''') g');
+prepare table_stats_bvt_stmt from @table_stats_bvt_sql;
+execute table_stats_bvt_stmt;
+deallocate prepare table_stats_bvt_stmt;
+
+drop account if exists table_stats_bvt_acc;
 
 -- Cleanup
 drop table if exists t1;

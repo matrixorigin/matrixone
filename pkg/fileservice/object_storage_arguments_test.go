@@ -15,15 +15,19 @@
 package fileservice
 
 import (
+	"context"
 	"encoding/csv"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"math/rand/v2"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/stretchr/testify/assert"
@@ -162,29 +166,23 @@ func TestQCloudRegion(t *testing.T) {
 }
 
 func TestAWSRegion(t *testing.T) {
-	origHead := objectStorageHTTPHead
-	objectStorageHTTPHead = func(url string) (*http.Response, error) {
-		resp := &http.Response{Header: make(http.Header)}
+	probe := func(_ context.Context, url string) (string, error) {
 		switch url {
 		case "https://aws.s3.amazonaws.com":
-			resp.Header.Set("x-amz-bucket-region", "us-east-1")
-			return resp, nil
+			return "us-east-1", nil
 		case "https://fdsafdsafasdfsdafsadfsdafdsafewrewqrweqrewrwerwqrew.s3.amazonaws.com":
-			return resp, nil
+			return "", nil
 		default:
-			return nil, assert.AnError
+			return "", assert.AnError
 		}
 	}
-	t.Cleanup(func() {
-		objectStorageHTTPHead = origHead
-	})
 
 	args := ObjectStorageArguments{
 		Endpoint: "amazonaws.com",
 
 		Bucket: "aws", // hope it will not change its region
 	}
-	assert.Nil(t, args.validate())
+	assert.Nil(t, args.validateWithRegionProbe(probe))
 	assert.Equal(t, "us-east-1", args.Region)
 
 	args = ObjectStorageArguments{
@@ -192,7 +190,7 @@ func TestAWSRegion(t *testing.T) {
 
 		Bucket: "fdsafdsafasdfsdafsadfsdafdsafewrewqrweqrewrwerwqrew", // invalid bucket
 	}
-	assert.Nil(t, args.validate())
+	assert.Nil(t, args.validateWithRegionProbe(probe))
 	assert.Equal(t, "", args.Region)
 
 	args = ObjectStorageArguments{
@@ -200,7 +198,68 @@ func TestAWSRegion(t *testing.T) {
 
 		Bucket: "a/b/c", // invalid bucket
 	}
-	assert.NotNil(t, args.validate())
+	assert.NotNil(t, args.validateWithRegionProbe(probe))
+}
+
+func TestAWSRegionProbeClosesResponseBody(t *testing.T) {
+	body := &closeTrackingBody{Reader: strings.NewReader("")}
+	header := make(http.Header)
+	header.Set("x-amz-bucket-region", "us-east-1")
+	client := &http.Client{
+		Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusMovedPermanently,
+				Header:     header,
+				Body:       body,
+			}, nil
+		}),
+	}
+
+	region, err := probeAWSRegionWithClient(context.Background(), client, "https://aws.s3.amazonaws.com")
+	assert.NoError(t, err)
+	assert.Equal(t, "us-east-1", region)
+	assert.True(t, body.closed)
+}
+
+func TestAWSRegionProbeHonorsContextDeadline(t *testing.T) {
+	requestStarted := make(chan struct{})
+	releaseHandler := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		close(requestStarted)
+		<-releaseHandler
+	}))
+	t.Cleanup(func() {
+		close(releaseHandler)
+		server.Close()
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := probeAWSRegionWithClient(ctx, server.Client(), server.URL)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, time.Since(start), time.Second)
+	select {
+	case <-requestStarted:
+	default:
+		t.Fatal("region probe did not reach the server")
+	}
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+type closeTrackingBody struct {
+	io.Reader
+	closed bool
+}
+
+func (b *closeTrackingBody) Close() error {
+	b.closed = true
+	return nil
 }
 
 func TestSetFromStringParallelMode(t *testing.T) {

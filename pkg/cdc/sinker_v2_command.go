@@ -81,6 +81,10 @@ type Command struct {
 	// Needed for proper cleanup via batch.Clean(mp).
 	Mp *mpool.MPool
 
+	// snapshotPermit is released only after the snapshot batch has been
+	// processed and cleaned, or when this command is dropped during shutdown.
+	snapshotPermit *snapshotPermit
+
 	// Metadata for the command
 	Meta CommandMetadata
 }
@@ -250,5 +254,9 @@ func (c *Command) Close() {
 	if c.DeleteAtmBatch != nil {
 		c.DeleteAtmBatch.Close()
 		c.DeleteAtmBatch = nil
+	}
+	if c.snapshotPermit != nil {
+		c.snapshotPermit.Release()
+		c.snapshotPermit = nil
 	}
 }

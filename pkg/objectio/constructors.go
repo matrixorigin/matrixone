@@ -15,22 +15,139 @@
 package objectio
 
 import (
+	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"io"
+	"math/bits"
+	"slices"
+	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
-
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 )
+
+var eventVectorDestinationNotEmpty = logutil.Event{
+	Name:    "objectio.vector.destination-not-empty",
+	Message: "ObjectIO destination vector must be readonly or empty",
+}
 
 type CacheConstructor = func(ctx context.Context, r io.Reader, buf []byte, allocator fileservice.CacheDataAllocator) (fscache.Data, error)
 type CacheConstructorFactory = func(size int64, algo uint8) CacheConstructor
+
+func newColumnIOEntry(ext Extent, factory CacheConstructorFactory) fileservice.IOEntry {
+	return fileservice.IOEntry{
+		Offset:            int64(ext.Offset()),
+		Size:              int64(ext.Length()),
+		CachedDataSize:    int64(ext.OriginSize()),
+		ToCacheData:       factory(int64(ext.OriginSize()), ext.Alg()),
+		ValidateCacheData: validateVectorCacheData,
+	}
+}
+
+// validatedVectorCacheData owns bytes that passed the full V2 vector validator
+// after decompression. The backing Data is deliberately not embedded or
+// exposed: every consumer receives an independent snapshot, so a decoded
+// Vector cannot mutate the sealed representation retained by the cache.
+type validatedVectorCacheData struct {
+	data fscache.Data
+}
+
+var _ fscache.Data = (*validatedVectorCacheData)(nil)
+var _ fscache.DataOwnership = (*validatedVectorCacheData)(nil)
+var _ fscache.DataCacheReservation = (*validatedVectorCacheData)(nil)
+var _ fscache.DataCacheAdmission = (*validatedVectorCacheData)(nil)
+
+func (d *validatedVectorCacheData) Bytes() []byte {
+	return d.validatedVectorSnapshot()
+}
+
+func (d *validatedVectorCacheData) Size() int64 {
+	return int64(len(d.data.Bytes()))
+}
+
+func (d *validatedVectorCacheData) Capacity() int64 {
+	return d.data.Capacity()
+}
+
+func (d *validatedVectorCacheData) Slice(length int) fscache.Data {
+	buf := d.data.Bytes()
+	if length == len(buf) {
+		return d
+	}
+	// A changed range gets independent storage and no validation capability.
+	// In particular, do not call Data.Slice: fileservice.Bytes slices in place,
+	// which would mutate this sealed owner and every existing alias.
+	return fileservice.NewBytes(bytes.Clone(buf[:length]))
+}
+
+func (d *validatedVectorCacheData) Retain() {
+	d.data.Retain()
+}
+
+func (d *validatedVectorCacheData) Release() {
+	d.data.Release()
+}
+
+func (d *validatedVectorCacheData) CommitCacheReservation() {
+	if reserved, ok := d.data.(fscache.DataCacheReservation); ok {
+		reserved.CommitCacheReservation()
+	}
+}
+
+func (d *validatedVectorCacheData) CacheAdmissionAllowed(owner *fscache.DataOwner) bool {
+	if admission, ok := d.data.(fscache.DataCacheAdmission); ok {
+		return admission.CacheAdmissionAllowed(owner)
+	}
+	return true
+}
+
+func (d *validatedVectorCacheData) CacheDataOwner() *fscache.DataOwner {
+	if owned, ok := d.data.(fscache.DataOwnership); ok {
+		return owned.CacheDataOwner()
+	}
+	return nil
+}
+
+func (d *validatedVectorCacheData) RehomeCacheData(copyData func([]byte) fscache.Data) fscache.Data {
+	return &validatedVectorCacheData{data: copyData(d.data.Bytes())}
+}
+
+func (d *validatedVectorCacheData) validatedVectorSnapshot() []byte {
+	return bytes.Clone(d.data.Bytes())
+}
+
+// validatedVectorBackingForScope may only be consumed synchronously by an
+// ObjectIO operation that returns owned data or scalar/row-offset results. The
+// returned slice, and any Vector bound to it, must never escape to a caller.
+func (d *validatedVectorCacheData) validatedVectorBackingForScope() []byte {
+	return d.data.Bytes()
+}
+
+type validatedVectorCacheDataMarker interface {
+	validatedVectorSnapshot() []byte
+	validatedVectorBackingForScope() []byte
+}
+
+func isValidatedVectorCacheData(data fscache.Data) bool {
+	_, ok := data.(validatedVectorCacheDataMarker)
+	return ok
+}
+
+func vectorCacheDataBytes(data fscache.Data) (buf []byte, trusted bool) {
+	if marked, ok := data.(validatedVectorCacheDataMarker); ok {
+		return marked.validatedVectorSnapshot(), true
+	}
+	return data.Bytes(), false
+}
 
 // use this to replace all other constructors
 func constructorFactory(size int64, algo uint8) CacheConstructor {
@@ -40,6 +157,9 @@ func constructorFactory(size int64, algo uint8) CacheConstructor {
 			if err != nil {
 				return
 			}
+		}
+		if algo == compress.Lz4Chunked {
+			return decodeChunkedColumn(ctx, data, allocator)
 		}
 
 		// no compress
@@ -60,11 +180,124 @@ func constructorFactory(size int64, algo uint8) CacheConstructor {
 	}
 }
 
+// DecompressColumnExtent materializes one serialized object column from its
+// physical extent encoding. Raw object consumers must use this entry point so
+// Lz4Chunked columns are not mistaken for legacy single-frame LZ4 data.
+func DecompressColumnExtent(
+	ctx context.Context,
+	data []byte,
+	ext Extent,
+	allocator fileservice.CacheDataAllocator,
+) (fscache.Data, error) {
+	if uint64(len(data)) != uint64(ext.Length()) {
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"object column extent length %d does not match data length %d",
+			ext.Length(), len(data),
+		)
+	}
+	switch ext.Alg() {
+	case compress.None, compress.Lz4, compress.Lz4Chunked:
+	default:
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"unsupported object column compression algorithm %d", ext.Alg(),
+		)
+	}
+	return constructorFactory(int64(ext.OriginSize()), ext.Alg())(ctx, nil, data, allocator)
+}
+
+// columnCacheConstructorFactory validates V2 column data once, after
+// decompression and before it can enter the memory cache. Varlen cache hits can
+// then bind an isolated snapshot without repeating linear value scans. Fixed
+// vectors stay unmarked because they do not perform the per-value scan, and
+// copying their payload would make the common empty-bitmap path O(bytes).
+func columnCacheConstructorFactory(size int64, algo uint8) CacheConstructor {
+	construct := constructorFactory(size, algo)
+	return func(
+		ctx context.Context,
+		reader io.Reader,
+		data []byte,
+		allocator fileservice.CacheDataAllocator,
+	) (fscache.Data, error) {
+		cacheData, err := construct(ctx, reader, data, allocator)
+		if err != nil {
+			return nil, err
+		}
+		validated, err := validateVectorCacheData(cacheData)
+		if err != nil {
+			if cacheData != nil {
+				cacheData.Release()
+			}
+			return nil, err
+		}
+		return validated, nil
+	}
+}
+
+func validateVectorCacheData(data fscache.Data) (fscache.Data, error) {
+	if data == nil {
+		return nil, moerr.NewInvalidInputNoCtx("nil object column cache data")
+	}
+	if isValidatedVectorCacheData(data) {
+		return data, nil
+	}
+	buf := data.Bytes()
+	if len(buf) < IOEntryHeaderSize {
+		return nil, io.ErrUnexpectedEOF
+	}
+	header := DecodeIOEntryHeader(buf)
+	if header.Type != IOET_ColData {
+		return nil, moerr.NewInvalidInputNoCtx("invalid object column data type")
+	}
+	if header.Version == IOET_ColumnData_V1 {
+		// V1 null bitmaps compute their count while decoding, so V1 cannot
+		// provide the constant-time trusted contract. Keep it on the legacy
+		// path without granting the marker.
+		return data, nil
+	}
+	if header.Version != IOET_ColumnData_V2 {
+		return nil, moerr.NewInvalidInputNoCtx("invalid object column data version")
+	}
+	var vec vector.Vector
+	if err := vec.UnmarshalBinary(buf[IOEntryHeaderSize:]); err != nil {
+		return nil, err
+	}
+	if !vec.GetType().IsVarlen() {
+		return data, nil
+	}
+	return &validatedVectorCacheData{data: data}, nil
+}
+
 func Decode(buf []byte) (any, error) {
+	return decode(buf, false)
+}
+
+// DecodeCached uses the trusted V2 bind only for FileService cache data that
+// objectio itself validated before cache admission. The trusted decoder binds
+// an independent snapshot, not the sealed cache backing. Unmarked data uses
+// the normal versioned decoder; V2 therefore keeps its full validation.
+func DecodeCached(data fscache.Data) (any, error) {
+	if data == nil {
+		return nil, moerr.NewInvalidInputNoCtx("nil object cache data")
+	}
+	buf, trusted := vectorCacheDataBytes(data)
+	return decode(buf, trusted)
+}
+
+func decode(buf []byte, trusted bool) (any, error) {
+	if len(buf) < IOEntryHeaderSize {
+		return nil, io.ErrUnexpectedEOF
+	}
 	header := DecodeIOEntryHeader(buf)
 	codec := GetIOEntryCodec(*header)
 	if codec.NoUnmarshal() {
 		return buf[IOEntryHeaderSize:], nil
+	}
+	if trusted && header.Type == IOET_ColData && header.Version == IOET_ColumnData_V2 {
+		vec := vector.NewVec(types.Type{})
+		if err := vec.UnmarshalBinaryTrusted(buf[IOEntryHeaderSize:]); err != nil {
+			return nil, err
+		}
+		return vec, nil
 	}
 	v, err := codec.Decode(buf[IOEntryHeaderSize:])
 	if err != nil {
@@ -75,22 +308,682 @@ func Decode(buf []byte) (any, error) {
 
 // NOTE: hack way to get vector
 func MustVectorTo(toVec *vector.Vector, buf []byte) (err error) {
-	// check if vector cannot be freed
-	if !toVec.NeedDup() && toVec.Allocated() > 0 {
-		logutil.Warn("input vector should be readonly or empty")
+	return mustVectorTo(toVec, buf, false)
+}
+
+// MustVectorToCached binds cache-backed column data to toVec. Only data with
+// objectio's private validation marker uses the trusted path.
+func MustVectorToCached(toVec *vector.Vector, data fscache.Data) error {
+	if data == nil {
+		return moerr.NewInvalidInputNoCtx("nil object cache data")
+	}
+	buf, trusted := vectorCacheDataBytes(data)
+	return mustVectorTo(toVec, buf, trusted)
+}
+
+// MustVectorToCachedWithMpool is the owned hot-path variant of
+// MustVectorToCached. A validated varlen Vector is duplicated into mp before it
+// is exposed; fixed and unmarked data keep the checked zero-copy path.
+func MustVectorToCachedWithMpool(toVec *vector.Vector, data fscache.Data, mp *mpool.MPool) error {
+	if data == nil {
+		return moerr.NewInvalidInputNoCtx("nil object cache data")
+	}
+	marked, ok := data.(validatedVectorCacheDataMarker)
+	if !ok || mp == nil {
+		return MustVectorToCached(toVec, data)
+	}
+	buf := marked.validatedVectorBackingForScope()
+	warnVectorDestinationNotEmpty(toVec, len(buf))
+	var borrowed vector.Vector
+	if err := mustVectorTo(&borrowed, buf, true); err != nil {
+		return err
+	}
+	owned, err := borrowed.Dup(mp)
+	if err != nil {
+		return err
+	}
+	*toVec = *owned
+	return nil
+}
+
+// CopyCachedVectorRows materializes selected cache-backed rows into toVec
+// without exposing a writable alias to the cached representation. The source
+// is bound only for the duration of this call, while its FileService cache
+// lease is held by the caller.
+func CopyCachedVectorRows(toVec *vector.Vector, data fscache.Data, sels []int64, mp *mpool.MPool) error {
+	return copyCachedVector(toVec, data, sels, false, mp)
+}
+
+// CopyCachedVectorAll materializes a complete cache-backed Vector into toVec
+// without exposing a writable alias to the cached representation.
+func CopyCachedVectorAll(toVec *vector.Vector, data fscache.Data, mp *mpool.MPool) error {
+	return copyCachedVector(toVec, data, nil, true, mp)
+}
+
+// MaterializeCachedVectorWindow copies one row window from a cache-backed
+// object column without cloning or exposing the complete decoded Vector.
+func MaterializeCachedVectorWindow(
+	data fscache.Data,
+	offset, length int,
+	mp *mpool.MPool,
+) (*vector.Vector, error) {
+	if mp == nil {
+		return nil, moerr.NewInvalidInputNoCtx("nil mpool for object column materialization")
+	}
+	var source vector.Vector
+	if err := bindCachedVectorForScope(&source, data); err != nil {
+		return nil, err
+	}
+	defer source.Free(nil)
+	if offset < 0 || length < 0 || offset > source.Length()-length {
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"object column window [%d, %d) out of range [0, %d)",
+			offset, offset+length, source.Length(),
+		)
+	}
+	// A checked persisted vector may legally contain overlapping varlena
+	// descriptors (broadcast/shrink representations). Union would copy every
+	// logical value and can turn one compact area into rows*area bytes. Preserve
+	// the bounded physical representation for that shape instead.
+	if cachedVarlenaAreaOverlaps(&source) {
+		window, err := source.Window(offset, offset+length)
+		if err != nil {
+			return nil, err
+		}
+		defer window.Free(nil)
+		return window.DupOffHeap(mp)
+	}
+	dst := vector.NewVec(*source.GetType())
+	sels := make([]int64, length)
+	for i := range sels {
+		sels[i] = int64(offset + i)
+	}
+	if err := dst.Union(&source, sels, mp); err != nil {
+		dst.Free(mp)
+		return nil, err
+	}
+	return dst, nil
+}
+
+func cachedVarlenaAreaOverlaps(source *vector.Vector) bool {
+	if source == nil || !source.GetType().IsVarlen() || source.IsConst() {
+		return false
+	}
+	values := vector.MustFixedColNoTypeCheck[types.Varlena](source)
+	var previousEnd uint64
+	seen := false
+	for row, value := range values {
+		if source.IsNull(uint64(row)) || value.IsSmall() {
+			continue
+		}
+		offset, length := value.OffsetLen()
+		if length == 0 {
+			continue
+		}
+		start := uint64(offset)
+		if seen && start < previousEnd {
+			// This includes exact aliases and conservatively treats reordered
+			// disjoint ranges as potentially shared. The latter only retains the
+			// already-bounded source area; it never changes values.
+			return true
+		}
+		previousEnd = start + uint64(length)
+		seen = true
+	}
+	return false
+}
+
+func copyCachedVector(
+	toVec *vector.Vector,
+	data fscache.Data,
+	sels []int64,
+	allRows bool,
+	mp *mpool.MPool,
+) error {
+	if toVec == nil {
+		return moerr.NewInvalidInputNoCtx("nil object column destination")
+	}
+	if mp == nil {
+		return moerr.NewInvalidInputNoCtx("nil mpool for object column materialization")
+	}
+	var source vector.Vector
+	if err := bindCachedVectorForScope(&source, data); err != nil {
+		return err
+	}
+	defer source.Free(nil)
+
+	// Width, scale, and other logical metadata may legitimately differ across
+	// schema versions while the physical Vector representation remains the same.
+	// The OID is the compatibility boundary used by the existing Union paths.
+	if toVec.GetType().Oid != source.GetType().Oid {
+		return moerr.NewInvalidInputNoCtxf(
+			"object column type %s does not match destination type %s",
+			source.GetType().String(),
+			toVec.GetType().String(),
+		)
+	}
+	if allRows {
+		return toVec.UnionBatch(&source, 0, source.Length(), nil, mp)
+	}
+	for _, sel := range sels {
+		if sel < 0 || sel >= int64(source.Length()) {
+			return moerr.NewInvalidInputNoCtxf(
+				"object column row %d out of range [0, %d)",
+				sel,
+				source.Length(),
+			)
+		}
+	}
+	return toVec.Union(&source, sels, mp)
+}
+
+// SearchCachedVector executes a fixed supported varlen search while the cache
+// entry is pinned. The borrowed Vector never crosses the ObjectIO boundary.
+func SearchCachedVector(
+	entry fileservice.IOEntry,
+	search *ReadFilterSearch,
+	sorted bool,
+) ([]int64, error) {
+	if search == nil {
+		return nil, moerr.NewInvalidInputNoCtx("nil object column search")
+	}
+	var source vector.Vector
+	if err := bindCachedVectorForScope(&source, entry.CachedData); err != nil {
+		return nil, err
+	}
+	defer source.Free(nil)
+	return search.search(&source, sorted), nil
+}
+
+func (s *ReadFilterSearch) search(source *vector.Vector, sorted bool) []int64 {
+	if source.GetType().Oid != s.oid {
+		return allReadFilterRows(source.Length(), false)
+	}
+	if source.Length() == 0 || len(s.terms) == 0 {
+		return nil
+	}
+	if source.IsConstNull() || source.GetNulls().Any() {
+		// Primary-key columns are non-null. Treat a malformed/unavailable null
+		// column as unknown and fail open; persisted tombstone checks must never
+		// turn it into a false negative.
+		return allReadFilterRows(source.Length(), false)
+	}
+	if len(s.terms) == 1 {
+		return s.terms[0].search(source, sorted)
+	}
+	// Keep one bit per source row while unioning the term matches. The old
+	// int64-per-row mark array dominated allocations for large object blocks;
+	// a bitset preserves the same row-order semantics at 1/64 of the size.
+	marks := make([]uint64, (source.Length()+63)/64)
+	for i := range s.terms {
+		for _, row := range s.terms[i].search(source, sorted) {
+			if row >= 0 && row < int64(source.Length()) {
+				index := uint64(row)
+				marks[index>>6] |= uint64(1) << (index & 63)
+			}
+		}
+	}
+
+	matchedRows := 0
+	for _, word := range marks {
+		matchedRows += bits.OnesCount64(word)
+	}
+	rows := make([]int64, 0, matchedRows)
+	for wordIndex, word := range marks {
+		for word != 0 {
+			bit := bits.TrailingZeros64(word)
+			rows = append(rows, int64(wordIndex*64+bit))
+			word &= word - 1
+		}
+	}
+	return rows
+}
+
+func (t *readFilterSearchTerm) search(source *vector.Vector, sorted bool) []int64 {
+	if source.IsConst() {
+		value := source.GetBytesAt(0)
+		if !t.matches(value, sorted) {
+			return nil
+		}
+		return allReadFilterRows(
+			source.Length(),
+			t.kind == readFilterSearchGreater,
+		)
+	}
+	switch t.kind {
+	case readFilterSearchExact:
+		if len(t.values) == 0 {
+			return nil
+		}
+		if sorted {
+			return vector.VarlenBinarySearchOffsetByValFactory(t.values)(source)
+		}
+		if len(t.values) <= readFilterLinearKeys {
+			return vector.VarlenLinearSearchOffsetByValFactory(t.values)(source)
+		}
+		// Only the needles are sorted. In particular, tombstone PK columns
+		// follow rowid order and cannot be binary-searched. Reuse the already
+		// owned needles instead of doing rows*keys comparisons or allocating
+		// another lookup structure for every block. Keep a short
+		// linear prefix so frequently matching early keys retain the old
+		// constant-time best case instead of paying log(keys) for every row.
+		tail := t.values[readFilterLinearKeys:]
+		if t.exactTail != nil {
+			tail = t.exactTail.values
+		}
+		minLen, maxLen := len(tail[0]), len(tail[len(tail)-1])
+		var members map[string]struct{}
+		if t.exactTail != nil {
+			members = t.exactTail.members
+		}
+		col, area := vector.MustVarlenaRawData(source)
+		var rows []int64
+		for row := 0; row < source.Length(); row++ {
+			value := col[row].GetByteSlice(area)
+			found := false
+			for _, needle := range t.values[:readFilterLinearKeys] {
+				if bytes.Equal(needle, value) {
+					found = true
+					break
+				}
+			}
+			if !found && len(value) >= minLen && len(value) <= maxLen {
+				// Equality can reject unequal lengths without reading payloads.
+				// Preserve that property for long common prefixes, including
+				// absent lengths inside the min/max range of mixed-length keys.
+				found = readFilterExactContains(tail, members, value)
+			}
+			if found {
+				rows = append(rows, int64(row))
+			}
+		}
+		return rows
+	case readFilterSearchPrefix:
+		if len(t.values) == 0 {
+			return nil
+		}
+		if len(t.values) == 1 {
+			if sorted {
+				return vector.CollectOffsetsByPrefixEqFactory(t.values[0])(source)
+			}
+			return vector.LinearCollectOffsetsByPrefixEqFactory(t.values[0])(source)
+		}
+		if sorted {
+			return searchSortedReadFilterPrefixes(source, t.values)
+		}
+		col, area := vector.MustVarlenaRawData(source)
+		rows := make([]int64, 0, len(t.values))
+		for row := 0; row < source.Length(); row++ {
+			value := col[row].GetByteSlice(area)
+			for i := range t.values {
+				if bytes.HasPrefix(value, t.values[i]) {
+					rows = append(rows, int64(row))
+					break
+				}
+			}
+		}
+		return rows
+	case readFilterSearchLess:
+		return vector.VarlenSearchOffsetByLess(t.ub, t.closed, sorted)(source)
+	case readFilterSearchGreater:
+		return vector.VarlenSearchOffsetByGreat(t.lb, t.closed, sorted)(source)
+	case readFilterSearchBetween:
+		if sorted {
+			return vector.CollectOffsetsByBetweenString(string(t.lb), string(t.ub), t.hint)(source)
+		}
+		return vector.LinearCollectOffsetsByBetweenString(string(t.lb), string(t.ub), t.hint)(source)
+	case readFilterSearchPrefixBetween:
+		if t.hint == 0 {
+			if sorted {
+				return vector.CollectOffsetsByPrefixBetweenFactory(t.lb, t.ub)(source)
+			}
+			return vector.LinearCollectOffsetsByPrefixBetweenFactory(t.lb, t.ub)(source)
+		}
+		if sorted {
+			return vector.CollectOffsetsByPrefixInRangeFactory(t.lb, t.ub, t.hint)(source)
+		}
+		return vector.LinearCollectOffsetsByPrefixInRangeFactory(t.lb, t.ub, t.hint)(source)
+	default:
+		return nil
+	}
+}
+
+// values is a nonempty length-ordered tail. Reject missing lengths before
+// hashing payloads; a small same-length group is cheaper to compare directly.
+func readFilterExactContains(values [][]byte, members map[string]struct{}, value []byte) bool {
+	if len(values[0]) != len(values[len(values)-1]) {
+		low := sort.Search(len(values), func(i int) bool { return len(values[i]) >= len(value) })
+		if low == len(values) || len(values[low]) != len(value) {
+			return false
+		}
+		high := low + sort.Search(len(values)-low, func(i int) bool { return len(values[low+i]) > len(value) })
+		values = values[low:high]
+	}
+	if len(values) <= readFilterLinearKeys {
+		for _, needle := range values {
+			if bytes.Equal(needle, value) {
+				return true
+			}
+		}
+		return false
+	}
+	if len(value) <= types.VarlenaInlineSize {
+		_, found := slices.BinarySearchFunc(values, value, bytes.Compare)
+		return found
+	}
+	// A transient []byte-to-string map lookup does not copy or retain value.
+	_, found := members[string(value)]
+	return found
+}
+
+func searchSortedReadFilterPrefixes(source *vector.Vector, values [][]byte) []int64 {
+	col, area := vector.MustVarlenaRawData(source)
+	rows := make([]int64, 0, len(values))
+	valuePos := 0
+	value := values[0]
+	row := 0
+	for row < source.Length() {
+		rowValue := col[row].GetByteSlice(area)
+		cmp := types.PrefixCompare(rowValue, value)
+		if cmp > 0 {
+			valuePos++
+			if valuePos == len(values) {
+				break
+			}
+			value = values[valuePos]
+			continue
+		}
+		if cmp == 0 {
+			rows = append(rows, int64(row))
+			row++
+			continue
+		}
+		row = gallopReadFilterPrefixGE(col, area, value, row+1, source.Length())
+	}
+	return rows
+}
+
+func gallopReadFilterPrefixGE(
+	col []types.Varlena,
+	area, value []byte,
+	low, high int,
+) int {
+	previous, current, step := low, low, 1
+	for current < high &&
+		types.PrefixCompare(col[current].GetByteSlice(area), value) < 0 {
+		previous = current + 1
+		current += step
+		step <<= 1
+	}
+	if current > high {
+		current = high
+	}
+	for previous < current {
+		middle := int(uint(previous+current) >> 1)
+		if types.PrefixCompare(col[middle].GetByteSlice(area), value) < 0 {
+			previous = middle + 1
+		} else {
+			current = middle
+		}
+	}
+	return previous
+}
+
+func (t *readFilterSearchTerm) matches(value []byte, sorted bool) bool {
+	switch t.kind {
+	case readFilterSearchExact:
+		for i := range t.values {
+			if bytes.Equal(value, t.values[i]) {
+				return true
+			}
+		}
+		return false
+	case readFilterSearchPrefix:
+		for i := range t.values {
+			if bytes.HasPrefix(value, t.values[i]) {
+				return true
+			}
+		}
+		return false
+	case readFilterSearchLess:
+		cmp := bytes.Compare(value, t.ub)
+		return cmp < 0 || t.closed && cmp == 0
+	case readFilterSearchGreater:
+		cmp := bytes.Compare(value, t.lb)
+		return cmp > 0 || t.closed && cmp == 0
+	case readFilterSearchBetween:
+		return readFilterRangeMatches(
+			bytes.Compare(value, t.lb),
+			bytes.Compare(value, t.ub),
+			t.hint,
+		)
+	case readFilterSearchPrefixBetween:
+		leftCmp := types.PrefixCompare(value, t.lb)
+		if sorted && t.hint == 0 {
+			// Preserve CollectOffsetsByPrefixBetweenFactory's sorted lower
+			// bound semantics, which use the full byte comparison.
+			leftCmp = bytes.Compare(value, t.lb)
+		}
+		return readFilterRangeMatches(
+			leftCmp,
+			types.PrefixCompare(value, t.ub),
+			t.hint,
+		)
+	default:
+		return false
+	}
+}
+
+func readFilterRangeMatches(leftCmp, rightCmp int, hint uint8) bool {
+	switch hint {
+	case 0:
+		return leftCmp >= 0 && rightCmp <= 0
+	case 1:
+		return leftCmp > 0 && rightCmp <= 0
+	case 2:
+		return leftCmp >= 0 && rightCmp < 0
+	case 3:
+		return leftCmp > 0 && rightCmp < 0
+	default:
+		return false
+	}
+}
+
+func allReadFilterRows(length int, reverse bool) []int64 {
+	rows := make([]int64, length)
+	for i := range rows {
+		if reverse {
+			rows[i] = int64(length - i - 1)
+		} else {
+			rows[i] = int64(i)
+		}
+	}
+	return rows
+}
+
+// FilterCachedRowsByCommitTS removes rows newer than snapshot from sels while
+// the cache entry is pinned. It never exposes the commit-ts Vector.
+func FilterCachedRowsByCommitTS(
+	data fscache.Data,
+	sels []int64,
+	snapshot types.TS,
+) ([]int64, error) {
+	return FilterCachedRowsByCommitTSAndAbort(data, nil, sels, snapshot)
+}
+
+// FilterCachedRowsByCommitTSAndAbort removes rows newer than snapshot and rows
+// marked aborted. A nil or const-null abort vector is the legacy object format.
+func FilterCachedRowsByCommitTSAndAbort(
+	data fscache.Data,
+	abortData fscache.Data,
+	sels []int64,
+	snapshot types.TS,
+) ([]int64, error) {
+	var commits vector.Vector
+	if err := bindCachedVectorForScope(&commits, data); err != nil {
+		return nil, err
+	}
+	defer commits.Free(nil)
+	if commits.GetType().Oid != types.T_TS || commits.IsConstNull() {
+		return nil, moerr.NewInvalidInputNoCtx("object commit-ts column is unavailable")
+	}
+	var aborts vector.Vector
+	hasAborts := abortData != nil
+	if hasAborts {
+		if err := bindCachedVectorForScope(&aborts, abortData); err != nil {
+			return nil, err
+		}
+		defer aborts.Free(nil)
+		if aborts.IsConstNull() {
+			hasAborts = false
+		} else if aborts.GetType().Oid != types.T_bool || aborts.Length() != commits.Length() {
+			return nil, moerr.NewInvalidInputNoCtx("object abort column is unavailable")
+		}
+	}
+
+	filtered := sels[:0]
+	for _, sel := range sels {
+		if sel < 0 || sel >= int64(commits.Length()) {
+			return nil, moerr.NewInvalidInputNoCtxf(
+				"object commit-ts row %d out of range [0, %d)",
+				sel,
+				commits.Length(),
+			)
+		}
+		if commits.IsNull(uint64(sel)) {
+			return nil, moerr.NewInvalidInputNoCtxf("object commit-ts row %d is null", sel)
+		}
+		if hasAborts {
+			if aborts.IsNull(uint64(sel)) {
+				return nil, moerr.NewInvalidInputNoCtxf("object abort row %d is null", sel)
+			}
+			if vector.GetFixedAtNoTypeCheck[bool](&aborts, int(sel)) {
+				continue
+			}
+		}
+		commit := vector.GetFixedAtNoTypeCheck[types.TS](&commits, int(sel))
+		if !commit.GT(&snapshot) {
+			filtered = append(filtered, sel)
+		}
+	}
+	return filtered, nil
+}
+
+// AnyCachedTSInRange checks selected commit timestamps without returning a
+// borrowed Vector. usable is false when the column cannot provide row-level
+// commit timestamps, preserving the caller's conservative fallback.
+func AnyCachedTSInRange(
+	data fscache.Data,
+	sels []int64,
+	from, to types.TS,
+) (matched bool, usable bool, err error) {
+	return AnyCachedTSInRangeWithAbort(data, nil, sels, from, to)
+}
+
+// AnyCachedTSInRangeWithAbort checks selected commit timestamps while ignoring
+// rows marked aborted. A nil or const-null abort vector represents the legacy
+// commitTS-only object format.
+func AnyCachedTSInRangeWithAbort(
+	data fscache.Data,
+	abortData fscache.Data,
+	sels []int64,
+	from, to types.TS,
+) (matched bool, usable bool, err error) {
+	var commits vector.Vector
+	if err = bindCachedVectorForScope(&commits, data); err != nil {
+		return
+	}
+	defer commits.Free(nil)
+	if commits.GetType().Oid != types.T_TS || commits.IsConstNull() {
+		return false, false, nil
+	}
+	var aborts vector.Vector
+	hasAborts := abortData != nil
+	if hasAborts {
+		if err = bindCachedVectorForScope(&aborts, abortData); err != nil {
+			return
+		}
+		defer aborts.Free(nil)
+		if aborts.IsConstNull() {
+			hasAborts = false
+		} else if aborts.GetType().Oid != types.T_bool || aborts.Length() != commits.Length() {
+			return false, false, nil
+		}
+	}
+	for _, sel := range sels {
+		if sel < 0 || sel >= int64(commits.Length()) || commits.IsNull(uint64(sel)) {
+			return false, false, nil
+		}
+		if hasAborts {
+			if aborts.IsNull(uint64(sel)) {
+				return false, false, nil
+			}
+			if vector.GetFixedAtNoTypeCheck[bool](&aborts, int(sel)) {
+				continue
+			}
+		}
+		commit := vector.GetFixedAtNoTypeCheck[types.TS](&commits, int(sel))
+		if commit.GT(&from) && commit.LE(&to) {
+			return true, true, nil
+		}
+	}
+	return false, true, nil
+}
+
+func bindCachedVectorForScope(toVec *vector.Vector, data fscache.Data) error {
+	if toVec == nil {
+		return moerr.NewInvalidInputNoCtx("nil object vector destination")
+	}
+	if data == nil {
+		return moerr.NewInvalidInputNoCtx("nil object cache data")
+	}
+	var bound vector.Vector
+	var err error
+	if marked, ok := data.(validatedVectorCacheDataMarker); ok {
+		err = mustVectorTo(&bound, marked.validatedVectorBackingForScope(), true)
+	} else {
+		err = mustVectorTo(&bound, data.Bytes(), false)
+	}
+	if err != nil {
+		return err
+	}
+	*toVec = bound
+	return nil
+}
+
+func mustVectorTo(toVec *vector.Vector, buf []byte, trusted bool) (err error) {
+	warnVectorDestinationNotEmpty(toVec, len(buf))
+	if len(buf) < IOEntryHeaderSize {
+		return io.ErrUnexpectedEOF
 	}
 	header := DecodeIOEntryHeader(buf)
 	if header.Type != IOET_ColData {
 		return moerr.NewInternalError(context.Background(), fmt.Sprintf("invalid object meta: %s", header.String()))
 	}
 	if header.Version == IOET_ColumnData_V2 {
-		err = toVec.UnmarshalBinary(buf[IOEntryHeaderSize:])
+		if trusted {
+			err = toVec.UnmarshalBinaryTrusted(buf[IOEntryHeaderSize:])
+		} else {
+			err = toVec.UnmarshalBinary(buf[IOEntryHeaderSize:])
+		}
 		return
 	} else if header.Version == IOET_ColumnData_V1 {
 		err = toVec.UnmarshalBinaryV1(buf[IOEntryHeaderSize:])
 		return
 	}
 	panic(fmt.Sprintf("invalid column data: %s", header.String()))
+}
+
+func warnVectorDestinationNotEmpty(toVec *vector.Vector, inputBytes int) {
+	if !toVec.NeedDup() && toVec.Allocated() > 0 {
+		eventVectorDestinationNotEmpty.WarnLazy(func() []zap.Field {
+			return []zap.Field{
+				zap.Bool("need-dup", toVec.NeedDup()),
+				zap.Int("allocated-bytes", toVec.Allocated()),
+				zap.Int("input-bytes", inputBytes),
+			}
+		})
+	}
 }
 
 func MustObjectMeta(buffer []byte) ObjectMeta {

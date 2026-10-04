@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -93,6 +94,9 @@ func (h *taskServiceHolder) Create(command logservicepb.CreateTaskService) error
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.mu.closed {
+		return ErrNotReady
+	}
 	if h.mu.service != nil {
 		return nil
 	}
@@ -110,7 +114,7 @@ func (h *taskServiceHolder) Create(command logservicepb.CreateTaskService) error
 func (h *taskServiceHolder) Get() (TaskService, bool) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	if h.mu.service == nil {
+	if h.mu.closed || h.mu.service == nil {
 		return nil, false
 	}
 	return h.mu.service, true
@@ -323,6 +327,48 @@ func (s *refreshableTaskStorage) UpdateDaemonTask(ctx context.Context, tasks []t
 		err = ErrNotReady
 	} else if err = s.mu.store.PingContext(ctx); err == nil {
 		v, err = s.mu.store.UpdateDaemonTask(ctx, tasks, conditions...)
+	}
+	s.mu.RUnlock()
+	if err != nil {
+		s.maybeRefresh(lastAddress)
+	}
+	return v, err
+}
+
+func (s *refreshableTaskStorage) UpdateDaemonTaskError(ctx context.Context, claim task.DaemonTask, release bool) (int, error) {
+	var n int
+	var err error
+	s.mu.RLock()
+	lastAddress := s.mu.lastAddress
+	if s.mu.store == nil {
+		err = ErrNotReady
+	} else if err = s.mu.store.PingContext(ctx); err == nil {
+		n, err = s.mu.store.UpdateDaemonTaskError(ctx, claim, release)
+	}
+	s.mu.RUnlock()
+	if err != nil {
+		s.maybeRefresh(lastAddress)
+	}
+	return n, err
+}
+
+func (s *refreshableTaskStorage) UpdateDaemonTaskStatus(
+	ctx context.Context,
+	taskID uint64,
+	status task.TaskStatus,
+	updateAt time.Time,
+	endAt time.Time,
+	conditions ...Condition,
+) (int, error) {
+	var v int
+	var err error
+	s.mu.RLock()
+	lastAddress := s.mu.lastAddress
+	if s.mu.store == nil {
+		err = ErrNotReady
+	} else if err = s.mu.store.PingContext(ctx); err == nil {
+		v, err = s.mu.store.UpdateDaemonTaskStatus(
+			ctx, taskID, status, updateAt, endAt, conditions...)
 	}
 	s.mu.RUnlock()
 	if err != nil {
@@ -569,6 +615,29 @@ func (s *refreshableTaskStorage) HeartbeatDaemonTask(ctx context.Context, tasks 
 	return v, err
 }
 
+func (s *refreshableTaskStorage) ValidateDaemonTask(
+	ctx context.Context,
+	t task.DaemonTask,
+) (bool, error) {
+	var valid bool
+	var err error
+	s.mu.RLock()
+	lastAddress := s.mu.lastAddress
+	if s.mu.store == nil {
+		err = ErrNotReady
+	} else {
+		// Validation is itself a read round trip. An additional PingContext would
+		// double the CDC effect-fence hot path without strengthening the result;
+		// the read error below drives the same asynchronous address refresh.
+		valid, err = s.mu.store.ValidateDaemonTask(ctx, t)
+	}
+	s.mu.RUnlock()
+	if err != nil {
+		s.maybeRefresh(lastAddress)
+	}
+	return valid, err
+}
+
 func (s *refreshableTaskStorage) AddCDCTask(ctx context.Context, dt task.DaemonTask, callback func(context.Context, SqlExecutor) (int, error)) (int, error) {
 	v, lastAddress, err := s.AddCdcTaskSub(ctx, dt, callback)
 	if err != nil {
@@ -650,18 +719,16 @@ func (s *refreshableTaskStorage) refreshTask(ctx context.Context) {
 
 func (s *refreshableTaskStorage) refresh(ctx context.Context, lastAddress string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.mu.store != nil {
-		_ = s.mu.store.Close()
-	}
-
 	if s.mu.closed {
+		s.mu.Unlock()
 		return
 	}
 	if lastAddress != "" && lastAddress != s.mu.lastAddress {
+		s.mu.Unlock()
 		return
 	}
+	s.mu.Unlock()
+
 	connectAddress, err := s.addressFactory(ctx, true)
 	if err != nil {
 		s.rt.Logger().Error(
@@ -671,7 +738,6 @@ func (s *refreshableTaskStorage) refresh(ctx context.Context, lastAddress string
 		return
 	}
 
-	s.mu.lastAddress = connectAddress
 	s.rt.Logger().Debug(
 		"taskservice.holder.refresh.trying",
 		zap.String("address", connectAddress),
@@ -684,7 +750,40 @@ func (s *refreshableTaskStorage) refresh(ctx context.Context, lastAddress string
 			zap.Error(err))
 		return
 	}
+	if store == nil {
+		s.rt.Logger().Error(
+			"taskservice.holder.refresh.failed",
+			zap.String("address", connectAddress),
+			zap.Error(ErrNotReady))
+		return
+	}
+
+	// Creating a replacement can block on DNS, dialing, or credentials. Recheck
+	// the generation after that work so an old refresh cannot replace or close a
+	// newer store, and a concurrent Close cannot publish a fresh resource.
+	s.mu.Lock()
+	if s.mu.closed || ctx.Err() != nil ||
+		(lastAddress != "" && lastAddress != s.mu.lastAddress) {
+		current := s.mu.store
+		s.mu.Unlock()
+		if store != current {
+			_ = store.Close()
+		}
+		return
+	}
+	previous := s.mu.store
 	s.mu.store = store
+	s.mu.lastAddress = connectAddress
+	s.mu.Unlock()
+
+	if previous != nil && previous != store {
+		if err := previous.Close(); err != nil {
+			s.rt.Logger().Error(
+				"taskservice.holder.refresh.close-previous.failed",
+				zap.String("address", connectAddress),
+				zap.Error(err))
+		}
+	}
 	s.rt.Logger().Debug(
 		"taskservice.holder.refresh.completed",
 		zap.String("sql-address", connectAddress),
@@ -698,7 +797,7 @@ type mysqlBasedStorageFactory struct {
 // newMySQLBasedTaskStorageFactory creates a mysql based task storage factory using the special username, password and database
 func newMySQLBasedTaskStorageFactory(username, password, database string) TaskStorageFactory {
 	return &mysqlBasedStorageFactory{
-		dsnTemplate: fmt.Sprintf("%s:%s@tcp(%s)/%s?readTimeout=15s&writeTimeout=15s&timeout=15s&parseTime=true&loc=Local&disable_txn_trace=1",
+		dsnTemplate: fmt.Sprintf("%s:%s@tcp(%s)/%s?readTimeout=15s&writeTimeout=15s&timeout=15s&parseTime=true&loc=Local",
 			username,
 			password,
 			"%s", database),

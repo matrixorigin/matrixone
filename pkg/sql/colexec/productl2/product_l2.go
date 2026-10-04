@@ -16,16 +16,15 @@ package productl2
 
 import (
 	"bytes"
-	"runtime"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/brute_force"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -176,9 +175,9 @@ func getIndex[T types.RealNumbers](ap *Productl2, proc *process.Process, analyze
 
 func (productl2 *Productl2) build(proc *process.Process, analyzer process.Analyzer) error {
 	ctr := &productl2.ctr
-	start := time.Now()
-	defer analyzer.WaitStop(start)
-	mp, err := message.ReceiveJoinMap(productl2.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
+	mp, err := process.MeasureWait(analyzer, resource.WaitOther, func() (*message.JoinMap, error) {
+		return message.ReceiveJoinMap(productl2.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
+	})
 	if err != nil {
 		return err
 	}
@@ -186,8 +185,16 @@ func (productl2 *Productl2) build(proc *process.Process, analyzer process.Analyz
 		return nil
 	}
 	batches := mp.GetBatches()
-	//maybe optimize this in the future
+	// ProductL2 index/scratch is outside the first HashBuild accounting domain.
+	// Create an explicit unaccounted destination instead of letting a nil
+	// AppendWithCopy clone inherit the producer's allocation selection.
 	for i := range batches {
+		if ctr.bat == nil {
+			ctr.bat = batch.NewOffHeapWithSize(len(batches[i].Vecs))
+			for j, source := range batches[i].Vecs {
+				ctr.bat.Vecs[j] = vector.NewOffHeapVecWithType(*source.GetType())
+			}
+		}
 		ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), batches[i])
 		if err != nil {
 			return err
@@ -274,27 +281,55 @@ func newMat[T types.RealNumbers](ctr *container, ap *Productl2, probes [][]T, nu
 		}
 	}
 
+	// T is the centroid (index) element type. T==float32 covers f32 centroids,
+	// which a base of any type (f32/f64/narrow) is decoded to; T==float64 is the
+	// plain f64 index where the base is f64 and reinterpreted directly.
+	_, toF32 := any(*new(T)).(float32)
+	oid := tblColVec.GetType().Oid
 	for j := 0; j < probeCount; j++ {
 		if tblColVec.IsNull(uint64(j)) {
 			probes[j] = nullvec
 			continue
 		}
-		v := types.BytesToArray[T](tblColVec.GetBytesAt(j))
-		probes[j] = v
+		b := tblColVec.GetBytesAt(j)
+		if !toF32 {
+			probes[j] = types.BytesToArray[T](b) // f64 centroids: base is f64
+			continue
+		}
+		var f32 []float32
+		switch oid {
+		case types.T_array_float64:
+			f64 := types.BytesToArray[float64](b)
+			f32 = make([]float32, len(f64))
+			for i, x := range f64 {
+				f32[i] = float32(x)
+			}
+		case types.T_array_bf16:
+			f32 = types.BF16ToFloat32Slice(types.BytesToArray[types.BF16](b))
+		case types.T_array_float16:
+			f32 = types.Float16ToFloat32Slice(types.BytesToArray[types.Float16](b))
+		case types.T_array_int8:
+			f32 = types.Int8ToFloat32Slice(types.BytesToArray[int8](b))
+		case types.T_array_uint8:
+			f32 = types.Uint8ToFloat32Slice(types.BytesToArray[uint8](b))
+		default: // T_array_float32
+			f32 = types.BytesToArray[float32](b)
+		}
+		probes[j] = any(f32).([]T)
 	}
 
 	return probes, nil
 }
 
 func (ctr *container) probe(ap *Productl2, proc *process.Process, result *vm.CallResult) error {
-	tblColPos := ap.OnExpr.GetF().GetArgs()[1].GetCol().GetColPos()
-	switch ctr.inBat.Vecs[tblColPos].GetType().Oid {
-	case types.T_array_float32:
-		return probeRun[float32](ctr, ap, proc, result)
-	case types.T_array_float64:
+	// Dispatch on the CENTROID (index) type, not the base type: under QUANTIZATION
+	// an f64/narrow base is assigned against f32 centroids, so the base must be
+	// decoded to f32 (in newMat) to match. Only a plain f64 index keeps f64.
+	centroidColPos := ap.OnExpr.GetF().GetArgs()[0].GetCol().GetColPos()
+	if ctr.bat.Vecs[centroidColPos].GetType().Oid == types.T_array_float64 {
 		return probeRun[float64](ctr, ap, proc, result)
 	}
-	return nil
+	return probeRun[float32](ctr, ap, proc, result)
 }
 
 func (ctr *container) release() {
@@ -329,7 +364,9 @@ func probeRun[T types.RealNumbers](ctr *container, ap *Productl2, proc *process.
 	centroidVec := ctr.bat.Vecs[centroidColPos]
 	dim := int(centroidVec.GetType().Width)
 
-	ncpu := runtime.NumCPU()
+	// Keep centroid assignment within the CN's effective scheduler
+	// parallelism. NumCPU reports the host count and ignores container quotas.
+	ncpu := int(vectorindex.GetConcurrency(0))
 	if probeCount < ncpu {
 		ncpu = probeCount
 	}
@@ -393,6 +430,16 @@ func probeRun[T types.RealNumbers](ctr *container, ap *Productl2, proc *process.
 
 		if tblColVec.IsNull(uint64(j)) {
 			leastClusterIndex[j] = 0
+		}
+		// The key is about to index ctr.bat, which has no row -1. The Go index refuses to emit
+		// one -- an all-out-of-domain query leaves its minIdx at -1 and it fails there -- but the
+		// device index has no such guard: cuVS marks a slot it could not fill with -1 and pairs
+		// it with an ordinary finite distance, so checking the scores does not catch it. A VECF32
+		// table whose squares overflow float32 reached "index out of range [-8]" here (#29090);
+		// -8 is the byte offset of row -1 on an 8-byte column. Checked after the null override,
+		// which supplies its own key.
+		if leastClusterIndex[j] < 0 {
+			return moerr.NewInternalErrorNoCtx("product_l2: no nearest centroid for query; every candidate distance is out of range")
 		}
 		for k, rp := range ap.Result {
 			if rp.Rel == 0 {

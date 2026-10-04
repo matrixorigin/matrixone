@@ -16,7 +16,12 @@ package compile
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"reflect"
+	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -92,7 +98,15 @@ func (c *Compile) querySchedulePlacementFields(placement schedule.QueryDecision)
 		zap.String("current-cn-id", currentCN.ID),
 		zap.String("current-cn-address", currentCN.Addr),
 		zap.Int("worker-count", len(placement.Workers)),
+		zap.Int("eligible-worker-count", placement.EligibleCount),
 		zap.Int("dropped-worker-count", len(placement.Dropped)),
+		zap.String("requested-pool", placement.ResolvedPool.RequestedIdentity),
+		zap.String("resolved-pool", placement.ResolvedPool.Identity),
+		zap.Bool("pool-fallback", placement.ResolvedPool.Fallback),
+		zap.String("worker-set", placement.Intent.WorkerSet.Mode.String()),
+		zap.Int("max-workers", placement.Intent.WorkerSet.MaxWorkers),
+		zap.Bool("require-current-cn", placement.RequireCurrentCN),
+		zap.Bool("ingress-only", placement.IngressOnly),
 		zap.Bool("is-internal", c.isInternal),
 	}
 }
@@ -254,9 +268,8 @@ func nilEngineValue(e engine.Engine) bool {
 }
 
 type resolvedQueryCandidates struct {
-	workers        schedule.Workers
-	resolution     schedule.CandidateResolution
-	hasMixedCommit bool
+	pool       schedule.ResolvedPool
+	resolution schedule.CandidateResolution
 }
 
 type queryCandidatePoolResolver interface {
@@ -271,15 +284,19 @@ type legacyEngineNodesPoolResolver struct{}
 func (legacyEngineNodesPoolResolver) resolve(
 	ctx context.Context,
 	discovered discoveredQueryCandidates,
-	_ queryCandidatePoolRequest,
+	request queryCandidatePoolRequest,
 ) (resolvedQueryCandidates, error) {
 	if err := ctx.Err(); err != nil {
 		return resolvedQueryCandidates{}, err
 	}
 	workers := toScheduleCandidateWorkers(discovered.legacyNodes)
 	return resolvedQueryCandidates{
-		workers:        workers,
-		hasMixedCommit: hasMixedCommit(discovered.legacyNodes),
+		pool: schedule.ResolvedPool{
+			RequestedIdentity: request.RequestedPool,
+			Identity:          "legacy-engine-nodes",
+			Resolution:        schedule.PoolResolutionLegacyEngineNodes,
+			Workers:           workers,
+		},
 		resolution: schedule.CandidateResolution{
 			DiscoverySource: discovered.source,
 			PoolResolution:  schedule.PoolResolutionLegacyEngineNodes,
@@ -298,7 +315,7 @@ func (r engineQueryCandidatePoolResolver) resolve(
 	request queryCandidatePoolRequest,
 ) (resolvedQueryCandidates, error) {
 	request.CNLabel = cloneCNLabels(request.CNLabel)
-	nodes, err := r.provider.ResolveQueryCandidatePool(
+	pool, err := r.provider.ResolveQueryCandidatePool(
 		ctx,
 		discovered.candidates,
 		request,
@@ -307,8 +324,14 @@ func (r engineQueryCandidatePoolResolver) resolve(
 		return resolvedQueryCandidates{}, err
 	}
 	return resolvedQueryCandidates{
-		workers:        toScheduleCandidateWorkers(nodes),
-		hasMixedCommit: hasMixedCommit(nodes),
+		pool: schedule.ResolvedPool{
+			RequestedIdentity: pool.RequestedIdentity,
+			Identity:          pool.Identity,
+			Resolution:        schedule.PoolResolution(pool.Resolution),
+			Fallback:          pool.Fallback,
+			FallbackReason:    pool.FallbackReason,
+			Workers:           toScheduleCandidateWorkers(pool.Nodes),
+		},
 		resolution: schedule.CandidateResolution{
 			DiscoverySource: discovered.source,
 			PoolResolution:  schedule.PoolResolutionTenantLabels,
@@ -333,6 +356,10 @@ func queryCandidatePipeline(
 		return engineQueryCandidateDiscoverer{provider: discoverer},
 			engineQueryCandidatePoolResolver{provider: resolver}, nil
 	case !hasDiscoverer && !hasResolver:
+		if poolRequest.FallbackPolicy == engine.QueryPoolFallbackStrict {
+			return nil, nil, moerr.NewInternalErrorNoCtx(
+				"strict query pool intent requires explicit candidate discovery and pool resolution")
+		}
 		// Engine.Nodes has no context, so preview cannot bound its latency.
 		if mode == queryCandidateModePreview {
 			return nil, nil, moerr.NewInternalErrorNoCtx(
@@ -364,11 +391,56 @@ func (c *Compile) evaluateQueryPlacement(
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	var requireCurrentCN, ingressOnly, currentCNOrdinalZero bool
+	// TP and AP_ONECN are already local, so inspecting workspace/AST state
+	// cannot change their placement. Keep their legacy hot path untouched and
+	// derive these guards only for the remotely schedulable execution kind.
+	if c.execType == plan2.ExecTypeAP_MULTICN {
+		requireCurrentCN = c.executionRequiresCurrentCN()
+		ingressOnly = c.ingressOnlyExecution()
+		var qry *plan.Query
+		if c.pn != nil {
+			qry = c.pn.GetQuery()
+		}
+		if queryHasVectorIndexScan(qry) {
+			// The local partition is the only one that can see the coordinator's
+			// appendable IVF ranges. This is an execution invariant, not a
+			// user-selectable current-CN preference, so give it the same identity
+			// proof and route canonicalization as a writable workspace.
+			requireCurrentCN = true
+			currentCNOrdinalZero = true
+		}
+	}
 	currentCN := c.currentCNWorker()
+	intent := c.effectiveQuerySchedulingIntent()
 	req := schedule.QueryRequest{
-		ExecKind:        toScheduleExecKind(c.execType),
-		CurrentCN:       currentCN,
-		CurrentCNPolicy: c.currentCNPolicy(),
+		ExecKind:             toScheduleExecKind(c.execType),
+		CurrentCN:            currentCN,
+		RequireCurrentCN:     requireCurrentCN,
+		IngressOnly:          ingressOnly,
+		CurrentCNPolicy:      intent.CurrentCNPolicy,
+		CurrentCNOrdinalZero: currentCNOrdinalZero,
+		Intent:               intent,
+	}
+	if (requireCurrentCN || ingressOnly) && intent.CurrentCNPolicy == schedule.CurrentCNExcluded {
+		return schedule.DecideQueryPlacement(req), "", nil
+	}
+	if schedule.ValidateSchedulingIntent(intent) != "" {
+		return schedule.DecideQueryPlacement(req), "", nil
+	}
+	if c.execType == plan2.ExecTypeAP_MULTICN {
+		if err := ctx.Err(); err != nil {
+			return schedule.QueryDecision{}, scheduleFailureCandidateDiscovery, err
+		}
+	}
+	if ingressOnly && intent.PoolFallback != schedule.PoolFallbackStrict {
+		// With no strict target pool to prove, LOCAL input has exactly one
+		// executable owner. Avoid candidate discovery on this ingress-only path.
+		req.CandidateResolution = schedule.CandidateResolution{
+			DiscoverySource: schedule.CandidateSourceNotRequired,
+			PoolResolution:  schedule.PoolResolutionNotRequired,
+		}
+		return schedule.DecideQueryPlacement(req), "", nil
 	}
 	if c.execType != plan2.ExecTypeAP_MULTICN {
 		req.CandidateResolution = schedule.CandidateResolution{
@@ -377,15 +449,13 @@ func (c *Compile) evaluateQueryPlacement(
 		}
 		return schedule.DecideQueryPlacement(req), "", nil
 	}
-	if err := ctx.Err(); err != nil {
-		return schedule.QueryDecision{}, scheduleFailureCandidateDiscovery, err
-	}
-
 	poolRequest := queryCandidatePoolRequest{
-		IsInternal: c.isInternal,
-		Tenant:     c.tenant,
-		Username:   c.uid,
-		CNLabel:    c.cnLabel,
+		IsInternal:     c.isInternal,
+		Tenant:         c.tenant,
+		Username:       c.uid,
+		CNLabel:        c.cnLabel,
+		RequestedPool:  intent.RequestedPool,
+		FallbackPolicy: toEnginePoolFallbackPolicy(intent.PoolFallback),
 	}
 	discoverer, poolResolver, err := queryCandidatePipeline(c.e, poolRequest, mode)
 	if err != nil {
@@ -408,24 +478,123 @@ func (c *Compile) evaluateQueryPlacement(
 	if err != nil {
 		return schedule.QueryDecision{}, scheduleFailurePoolResolution, err
 	}
-	req.Candidates = resolved.workers
+	resolved.pool.Workers = markCurrentWorkerRoute(resolved.pool.Workers, currentCN)
+	req.ResolvedPool = resolved.pool
 	req.CandidateResolution = resolved.resolution
-	var qry *plan.Query
-	if c.pn != nil {
-		qry = c.pn.GetQuery()
-	}
-	isIvfEntriesScan := queryHasIvfSearchEntriesInternalScan(qry)
-	// The local partition is the only one that can see the coordinator's
-	// appendable IVF ranges. Keep it at partition zero; persisted ranges remain
-	// distributed by ObjectID across all selected workers.
-	req.CurrentCNFirst = isIvfEntriesScan
-	if isIvfEntriesScan && resolved.hasMixedCommit {
-		if mode == queryCandidateModeExecution {
-			c.execType = plan2.ExecTypeAP_ONECN
-		}
-		req.ExecKind = schedule.QueryExecAPOneCN
-	}
 	return schedule.DecideQueryPlacement(req), "", nil
+}
+
+// executionRequiresCurrentCN identifies coordinator-owned transaction state
+// that cannot be reconstructed by a remote CN. A writable workspace is the
+// conservative boundary: read-only snapshot workspaces remain remotely
+// schedulable, while a writable transaction keeps ingress participation so
+// its local partition can observe uncommitted state.
+func (c *Compile) executionRequiresCurrentCN() bool {
+	if c == nil || c.proc == nil {
+		return false
+	}
+	txnOp := c.proc.GetTxnOperator()
+	if txnOp == nil {
+		return false
+	}
+	workspace := txnOp.GetWorkspace()
+	return workspace != nil && !workspace.Readonly()
+}
+
+// ingressOnlyExecution identifies LOAD DATA LOCAL, whose client input stream
+// exists only at the ingress CN and cannot be sent through a remote scheduler
+// decision.
+func (c *Compile) ingressOnlyExecution() bool {
+	if c == nil || c.stmt == nil {
+		return false
+	}
+	load, ok := c.stmt.(*tree.Load)
+	return ok && load.Local
+}
+
+func (c *Compile) SetQuerySchedulingIntent(intent schedule.SchedulingIntent) {
+	c.querySchedulingIntent = intent
+}
+
+func (c *Compile) effectiveQuerySchedulingIntent() schedule.SchedulingIntent {
+	intent := c.querySchedulingIntent
+	if intent.RequestedPool == "" {
+		intent.RequestedPool = canonicalQueryPoolIdentity(c.tenant, c.cnLabel)
+	}
+	if intent.WorkerSet.Mode == schedule.WorkerSetMax && intent.WorkerSet.SelectionKey == "" {
+		intent.WorkerSet.SelectionKey = c.querySchedulingSelectionKey()
+	}
+	if intent.WorkerSet.Mode == schedule.WorkerSetMax && intent.WorkerSet.AlgorithmVersion == "" {
+		intent.WorkerSet.AlgorithmVersion = schedule.WorkerSelectionAlgorithmV1
+	}
+	return intent
+}
+
+func (c *Compile) querySchedulingSelectionKey() string {
+	if c.proc != nil {
+		if profile := c.proc.GetStmtProfile(); profile != nil {
+			id := profile.GetStmtId().String()
+			if strings.Trim(id, "0-") != "" {
+				return id
+			}
+		}
+		if id := strings.TrimSpace(c.proc.QueryId()); id != "" {
+			return id
+		}
+	}
+	// Some internal/test callers have neither a statement profile nor a query
+	// ID. Hash stable statement-owned text once instead of making HRW hash an
+	// arbitrarily large SQL string for every candidate. Equal SQL can share a
+	// subset, which is preferable to either randomness or rejecting the query.
+	sqlText := c.originSQL
+	if sqlText == "" {
+		sqlText = c.sql
+	}
+	sum := sha256.Sum256([]byte(sqlText))
+	return "sql-sha256:" + hex.EncodeToString(sum[:16])
+}
+
+func canonicalQueryPoolIdentity(tenant string, labels map[string]string) string {
+	keys := make([]string, 0, len(labels))
+	for key := range labels {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	b.WriteString("tenant:")
+	b.WriteString(strconv.Itoa(len(tenant)))
+	b.WriteByte(':')
+	b.WriteString(tenant)
+	for _, key := range keys {
+		value := labels[key]
+		b.WriteByte('|')
+		b.WriteString(strconv.Itoa(len(key)))
+		b.WriteByte(':')
+		b.WriteString(key)
+		b.WriteByte('=')
+		b.WriteString(strconv.Itoa(len(value)))
+		b.WriteByte(':')
+		b.WriteString(value)
+	}
+	return b.String()
+}
+
+func toEnginePoolFallbackPolicy(policy schedule.PoolFallbackPolicy) engine.QueryPoolFallbackPolicy {
+	if policy == schedule.PoolFallbackStrict {
+		return engine.QueryPoolFallbackStrict
+	}
+	return engine.QueryPoolFallbackLegacyCompatible
+}
+
+func markCurrentWorkerRoute(workers schedule.Workers, current schedule.Worker) schedule.Workers {
+	marked := append(schedule.Workers(nil), workers...)
+	for i := range marked {
+		if (current.ID != "" && marked[i].ID == current.ID) ||
+			(current.Addr != "" && marked[i].Addr == current.Addr) {
+			marked[i].Route = schedule.WorkerRouteLocal
+		}
+	}
+	return marked
 }
 
 func currentCNWorkerFromCandidates(
@@ -531,21 +700,12 @@ func droppedWorkerReasonCounts(dropped schedule.DroppedWorkers) map[string]int {
 	return counts
 }
 
-func hasMixedCommit(nodes engine.Nodes) bool {
-	for i := range nodes {
-		if nodes[i].HasMixedCommit {
-			return true
-		}
-	}
-	return false
-}
-
-func queryHasIvfSearchEntriesInternalScan(qry *plan.Query) bool {
+func queryHasVectorIndexScan(qry *plan.Query) bool {
 	if qry == nil {
 		return false
 	}
 	for _, node := range qry.GetNodes() {
-		if plan2.IsIvfSearchEntriesInternalScan(node) {
+		if node.GetNodeType() == plan.Node_VECTOR_INDEX_SCAN {
 			return true
 		}
 	}
@@ -557,7 +717,9 @@ func (c *Compile) currentCNWorker() schedule.Worker {
 	if c.proc != nil {
 		currentCN.Id = c.proc.GetService()
 	}
-	return toScheduleWorker(currentCN)
+	worker := toScheduleWorker(currentCN)
+	worker.Route = schedule.WorkerRouteLocal
+	return worker
 }
 
 func (c *Compile) currentCNWorkerWithRuntimeState(ctx context.Context) (schedule.Worker, error) {
@@ -597,13 +759,6 @@ func (c *Compile) currentCNWorkState(ctx context.Context, serviceID string) (met
 			return false
 		})
 	return state, err
-}
-
-func (c *Compile) currentCNPolicy() schedule.CurrentCNPolicy {
-	if c.proc != nil && c.proc.Base.QueryClient != nil {
-		return schedule.CurrentCNRequired
-	}
-	return schedule.CurrentCNAllowed
 }
 
 func toScheduleExecKind(execType plan2.ExecType) schedule.QueryExecKind {
@@ -649,6 +804,7 @@ func toScheduleCandidateWorkers(nodes engine.Nodes) schedule.Workers {
 	workers := make(schedule.Workers, 0, len(nodes))
 	for _, node := range nodes {
 		worker := toScheduleWorker(node)
+		worker.Route = schedule.WorkerRouteRemote
 		workers = append(workers, worker)
 	}
 	if len(workers) == 0 {
@@ -679,7 +835,15 @@ func toScheduledQueryWorkers(nodes engine.Nodes) schedule.Workers {
 }
 
 func (c *Compile) scheduledQueryWorkers() schedule.Workers {
-	return toScheduledQueryWorkers(c.cnList)
+	workers := toScheduledQueryWorkers(c.cnList)
+	for i := range workers {
+		if workers[i].Addr == "" {
+			workers[i].Route = schedule.WorkerRouteLocal
+		} else {
+			workers[i].Route = schedule.WorkerRouteRemote
+		}
+	}
+	return markCurrentWorkerRoute(workers, c.currentCNWorker())
 }
 
 func toEngineNode(worker schedule.Worker) engine.Node {
@@ -693,7 +857,11 @@ func toEngineNode(worker schedule.Worker) engine.Node {
 
 func (c *Compile) materializeScheduledWorker(worker schedule.Worker) engine.Node {
 	node := toEngineNode(worker)
-	if node.Addr == "" && c.canUseLocalExecutionRoute(worker) {
+	// Route is the placement decision; the candidate address is discovery
+	// metadata. Once a worker is identified as the ingress CN, always use the
+	// actual in-process address so a stale/aliased advertised address cannot
+	// turn the transaction-workspace partition into RemoteRun.
+	if c.canUseLocalExecutionRoute(worker) {
 		node.Addr = c.addr
 	}
 	return node
@@ -711,10 +879,7 @@ func (c *Compile) materializeScheduledWorkers(workers schedule.Workers) engine.N
 }
 
 func (c *Compile) canUseLocalExecutionRoute(worker schedule.Worker) bool {
-	// At this materialization boundary, an empty Addr in already-scheduled
-	// workers can only represent the local current CN: candidate discovery drops
-	// unroutable remote workers, and multi-CN query output is route-validated.
-	return c.addr != "" && worker.Addr == ""
+	return c.addr != "" && worker.Route == schedule.WorkerRouteLocal
 }
 
 func normalizeMcpu(mcpu int) int {

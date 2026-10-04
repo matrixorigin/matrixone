@@ -70,6 +70,20 @@ func ChangeColumn(
 		if err := checkColumnWithGeneratedDependency(ctx, tableDef, oldColName); err != nil {
 			return false, err
 		}
+		if err := checkColumnWithDefaultDependency(ctx, tableDef, oldColName); err != nil {
+			return false, err
+		}
+		// CHANGE COLUMN renames through the COPY path. Rewrite the CHECK
+		// definitions before ConstructCreateTableSQL builds the temporary table,
+		// otherwise its constraints still reference the removed column name.
+		if err := recoverLegacyChecks(cctx, tableDef); err != nil {
+			return false, err
+		}
+		if err := renameColumnInCheckConstraints(
+			ctx, tableDef.Checks, oldColName, newColNameOrigin,
+		); err != nil {
+			return false, err
+		}
 	}
 
 	//change the name of the column in the foreign key constraint
@@ -88,13 +102,19 @@ func ChangeColumn(
 		return false, err
 	}
 
+	if oldColName != newColName {
+		sqls, err := handleAlterRenameColumnWithPluginHooks(tableDef, oldColName, newColName)
+		if err != nil {
+			return false, err
+		}
+		alterCtx.UpdateSqls = append(alterCtx.UpdateSqls, sqls...)
+	}
+
 	updateClusterByInTableDef(ctx, tableDef, newColName, oldColName)
 
-	delete(alterCtx.alterColMap, oldColName)
-	alterCtx.alterColMap[newColName] = selectExpr{
-		sexprType: exprColumnName,
-		sexprStr:  oldColName,
-	}
+	// CHANGE may rename the target column, but it must preserve the original
+	// copy source (or the absence of one for a column added by this ALTER).
+	alterCtx.renameColumnSource(oldColName, newColName)
 
 	if tmpCol, ok := alterCtx.changColDefMap[oCol.ColId]; ok {
 		tmpCol.Name = newColName
@@ -122,12 +142,21 @@ func buildColumnAndConstraint(
 
 	newCol := &ColDef{
 		ColId:      oldCol.ColId,
+		Seqnum:     oldCol.Seqnum,
 		Primary:    oldCol.Primary,
 		ClusterBy:  oldCol.ClusterBy,
 		Name:       newColName,
 		OriginName: newColNameOrigin,
 		Typ:        colType,
 		Alg:        plan.CompressType_Lz4,
+	}
+	defaultScope := make([]*ColDef, len(targetTableDef.Cols))
+	for i, col := range targetTableDef.Cols {
+		if strings.EqualFold(col.Name, oldCol.Name) {
+			defaultScope[i] = newCol
+		} else {
+			defaultScope[i] = col
+		}
 	}
 
 	// If the column null property is not specified, it defaults to allowing null
@@ -181,8 +210,7 @@ func buildColumnAndConstraint(
 			constrNames := map[string]bool{}
 			// Check not empty constraint name whether is duplicated.
 			for _, idx := range targetTableDef.Indexes {
-				nameLower := strings.ToLower(idx.IndexName)
-				constrNames[nameLower] = true
+				constrNames[indexNameKey(idx.IndexName)] = true
 			}
 			// set empty constraint names(index and unique index)
 			setEmptyUniqueIndexName(constrNames, uniqueIndex)
@@ -193,27 +221,27 @@ func buildColumnAndConstraint(
 			}
 			targetTableDef.Indexes = append(targetTableDef.Indexes, indexDef)
 		case *tree.AttributeDefault:
-			defaultValue, err := buildDefaultExpr(specNewColumn, colType, ctx.GetProcess())
+			defaultValue, err := buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, ctx.GetProcess(), defaultScope)
 			if err != nil {
 				return nil, err
 			}
 			newCol.Default = defaultValue
 			hasDefaultValue = true
 		case *tree.AttributeNull:
-			defaultValue, err := buildDefaultExpr(specNewColumn, colType, ctx.GetProcess())
+			defaultValue, err := buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, ctx.GetProcess(), defaultScope)
 			if err != nil {
 				return nil, err
 			}
 			newCol.Default = defaultValue
 			hasNullFlag = defaultValue.NullAbility
 		case *tree.AttributeOnUpdate:
-			onUpdateExpr, err := buildOnUpdate(specNewColumn, colType, ctx.GetProcess())
+			onUpdateExpr, err := buildOnUpdate(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, ctx.GetProcess())
 			if err != nil {
 				return nil, err
 			}
 			newCol.OnUpdate = onUpdateExpr
 		case *tree.AttributeGeneratedAlways:
-			generatedCol, err := buildGeneratedExpr(specNewColumn, colType, targetTableDef.Cols, ctx.GetProcess())
+			generatedCol, err := buildGeneratedExpr(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, targetTableDef.Cols, ctx.GetProcess())
 			if err != nil {
 				return nil, err
 			}
@@ -222,6 +250,8 @@ func buildColumnAndConstraint(
 				return nil, err
 			}
 			newCol.GeneratedCol = generatedCol
+		case *tree.AttributeCharset, *tree.AttributeCollate:
+			// Type metadata was resolved centrally before constructing the column.
 		default:
 			return nil, moerr.NewNotSupportedf(ctx.GetContext(), "unsupport column definition %v", attribute)
 		}
@@ -243,11 +273,15 @@ func buildColumnAndConstraint(
 			return nil, moerr.NewErrInvalidDefault(ctx.GetContext(), newColNameOrigin)
 		}
 		if !hasDefaultValue {
-			defaultValue, err := buildDefaultExpr(specNewColumn, colType, ctx.GetProcess())
+			defaultValue, err := buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, ctx.GetProcess(), defaultScope)
 			if err != nil {
 				return nil, err
 			}
 			newCol.Default = defaultValue
+		}
+		if exprReferencesColumn(newCol.Default.Expr, newColName, defaultScope) {
+			return nil, moerr.NewInvalidInputf(ctx.GetContext(),
+				"default expression for column '%s' cannot refer to itself", newColNameOrigin)
 		}
 	}
 
@@ -258,10 +292,18 @@ func buildColumnAndConstraint(
 	// If the column name of the table changes, it is necessary to check if it is associated
 	// with the index key. If it is an index key column, column name replacement is required.
 	if newColName != oldCol.Name {
+		if err := requirePrefixIndexesRenameProtocol(
+			ctx, targetTableDef.Indexes, oldCol.Name, newColName,
+		); err != nil {
+			return nil, err
+		}
 		for _, indexInfo := range targetTableDef.Indexes {
 			for j, partCol := range indexInfo.Parts {
 				partCol = catalog.ResolveAlias(partCol)
 				if partCol == oldCol.Name {
+					if _, err := renameIndexPrefixLengthMetadata(indexInfo, oldCol.Name, newColName); err != nil {
+						return nil, err
+					}
 					indexInfo.Parts[j] = newColName
 				}
 			}
@@ -333,7 +375,7 @@ func checkIndexedColumnTypeChange(ctx context.Context, tableDef *plan.TableDef, 
 
 // Check if the column name is valid and conflicts with internal hidden columns
 func checkColumnNameValid(ctx context.Context, colName string) error {
-	if _, ok := catalog.InternalColumns[colName]; ok {
+	if _, ok := catalog.InternalColumns[colName]; ok || catalog.IsAlias(colName) {
 		return moerr.NewErrWrongColumnName(ctx, colName)
 	}
 	return nil

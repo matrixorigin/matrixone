@@ -33,44 +33,73 @@ const (
 )
 
 // BytesToArray bytes should be of little-endian format
-func BytesToArray[T RealNumbers](input []byte) (res []T) {
+func BytesToArray[T ArrayElement](input []byte) (res []T) {
 	return DecodeSlice[T](input)
 }
 
-func ArrayToBytes[T RealNumbers](input []T) []byte {
+func ArrayToBytes[T ArrayElement](input []T) []byte {
 	return EncodeSlice(input)
 }
 
 // ArrayToBase64 encodes a vector as base64 of its raw little-endian bytes.
 // ~22x faster than ArrayToString for 768-dim float32 (no per-element float formatting).
-func ArrayToBase64[T RealNumbers](input []T) string {
+func ArrayToBase64[T ArrayElement](input []T) string {
 	return base64.StdEncoding.EncodeToString(EncodeSlice(input))
 }
 
-func ArrayToString[T RealNumbers](input []T) string {
-	var buffer bytes.Buffer
-	_, _ = io.WriteString(&buffer, "[")
+// WriteArrayTo writes the SQL text representation of an array to writer.
+func WriteArrayTo[T ArrayElement](writer io.Writer, input []T) error {
+	writeString := func(value string) error {
+		n, err := io.WriteString(writer, value)
+		if err == nil && n != len(value) {
+			return io.ErrShortWrite
+		}
+		return err
+	}
+
+	if err := writeString("["); err != nil {
+		return err
+	}
 	for i, value := range input {
 		if i > 0 {
-			_, _ = io.WriteString(&buffer, ", ")
+			if err := writeString(", "); err != nil {
+				return err
+			}
 		}
 
 		// following the similar logic of float32 and float64 from
 		// - output.go #extractRowFromVector()
 		// - mysql_protocol.go #makeResultSetTextRow() MYSQL_TYPE_FLOAT  & MYSQL_TYPE_DOUBLE
 		// NOTE: vector does not handle NaN and Inf.
+		var text string
 		switch value := any(value).(type) {
 		case float32:
-			_, _ = io.WriteString(&buffer, strconv.FormatFloat(float64(value), 'f', -1, 32))
+			text = strconv.FormatFloat(float64(value), 'f', -1, 32)
 		case float64:
-			_, _ = io.WriteString(&buffer, strconv.FormatFloat(value, 'f', -1, 64))
+			text = strconv.FormatFloat(value, 'f', -1, 64)
+		case BF16:
+			text = strconv.FormatFloat(float64(value.ToFloat32()), 'f', -1, 32)
+		case Float16:
+			text = strconv.FormatFloat(float64(value.ToFloat32()), 'f', -1, 32)
+		case int8:
+			text = strconv.FormatInt(int64(value), 10)
+		case uint8:
+			text = strconv.FormatUint(uint64(value), 10)
+		}
+		if err := writeString(text); err != nil {
+			return err
 		}
 	}
-	_, _ = io.WriteString(&buffer, "]")
+	return writeString("]")
+}
+
+func ArrayToString[T ArrayElement](input []T) string {
+	var buffer bytes.Buffer
+	_ = WriteArrayTo(&buffer, input)
 	return buffer.String()
 }
 
-func ArraysToString[T RealNumbers](input [][]T, sep string) string {
+func ArraysToString[T ArrayElement](input [][]T, sep string) string {
 	strValues := make([]string, len(input))
 	for i, row := range input {
 		strValues[i] = ArrayToString(row)
@@ -78,7 +107,7 @@ func ArraysToString[T RealNumbers](input [][]T, sep string) string {
 	return strings.Join(strValues, sep)
 }
 
-func StringToArray[T RealNumbers](str string) ([]T, error) {
+func StringToArray[T ArrayElement](str string) ([]T, error) {
 	input := strings.ReplaceAll(str, " ", "")
 
 	if !(strings.HasPrefix(input, "[") && strings.HasSuffix(input, "]")) {
@@ -113,7 +142,7 @@ func StringToArray[T RealNumbers](str string) ([]T, error) {
 }
 
 // StringToArrayToBytes convert "[1,2,3]" --> []float32{1.0,2.0,3.0} --> []bytes{11,33...}
-func StringToArrayToBytes[T RealNumbers](input string) ([]byte, error) {
+func StringToArrayToBytes[T ArrayElement](input string) ([]byte, error) {
 	// Convert "[1,2,3]" --> []float32{1.0, 2.0, 3.0}
 	a, err := StringToArray[T](input)
 	if err != nil {
@@ -123,7 +152,7 @@ func StringToArrayToBytes[T RealNumbers](input string) ([]byte, error) {
 	return ArrayToBytes(a), nil
 }
 
-func BytesToArrayToString[T RealNumbers](input []byte) string {
+func BytesToArrayToString[T ArrayElement](input []byte) string {
 	// Convert []byte{11, 33, 45, 56,.....} --> []float32{1.0, 2.0, 3.0}
 	a := BytesToArray[T](input)
 

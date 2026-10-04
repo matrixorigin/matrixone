@@ -31,6 +31,8 @@ import (
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // init wires the two planplugin helper vars the BuildSecondaryIndexDefs
@@ -60,6 +62,11 @@ func init() {
 type stubCompilerContext struct{ ctx context.Context }
 
 func (c stubCompilerContext) GetContext() context.Context { return c.ctx }
+
+// GetProcess hands back a test process on the default service runtime, which carries
+// MORPCLatestVersion -- so these tests plan as a fully activated deployment.
+func (c stubCompilerContext) GetProcess() *process.Process { return testutil.NewProcess(nil) }
+
 func (c stubCompilerContext) ResolveVariable(string, bool, bool) (interface{}, error) {
 	return nil, nil
 }
@@ -162,10 +169,70 @@ func TestBuildSecondaryIndexDefs_OK(t *testing.T) {
 	require.Len(t, tblDefs, 2)
 	require.Equal(t, catalog.Cagra_TblType_Metadata, tblDefs[0].TableType)
 	require.Equal(t, catalog.Cagra_TblType_Storage, tblDefs[1].TableType)
-	require.Len(t, tblDefs[0].Cols, 4)
+	// metadata: index_id, checksum, timestamp, filesize, then nrow and build_ts appended
+	// last so a reader that predates them keeps its positional 0..3.
+	require.Len(t, tblDefs[0].Cols, 6)
+	require.Equal(t, catalog.Cagra_TblCol_Metadata_Nrow, tblDefs[0].Cols[4].Name)
+	require.Equal(t, catalog.Cagra_TblCol_Metadata_Build_Ts, tblDefs[0].Cols[5].Name)
 	require.Len(t, tblDefs[1].Cols, 5)
 	require.NotNil(t, tblDefs[0].Pkey)
 	require.NotNil(t, tblDefs[1].Pkey)
+}
+
+// indexOnQuant builds a single-column *tree.Index over colName with a
+// QUANTIZATION option.
+func indexOnQuant(colName, quant string) *tree.Index {
+	idx := indexOn(colName)
+	idx.IndexOption = &tree.IndexOption{Quantization: quant}
+	return idx
+}
+
+// f16ColMap returns a colMap with an int64 pk and a vecf16 base column.
+func f16ColMap(pkName, vecName string) map[string]*plan.ColDef {
+	m := vecColMap(pkName, vecName)
+	m[vecName].Typ.Id = int32(types.T_array_float16)
+	return m
+}
+
+// TestBuildSecondaryIndexDefs_F16Base: a vecf16 base column is accepted.
+func TestBuildSecondaryIndexDefs_F16Base(t *testing.T) {
+	idxDefs, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(), indexOn("vec"), f16ColMap("id", "vec"), nil, "id")
+	require.NoError(t, err)
+	require.Len(t, idxDefs, 2)
+}
+
+// TestBuildSecondaryIndexDefs_UnsupportedBase: only vecf32 / vecf16 are valid
+// base columns; vecf64 / vecbf16 / vecint8 / vecuint8 are rejected.
+func TestBuildSecondaryIndexDefs_UnsupportedBase(t *testing.T) {
+	for _, oid := range []types.T{
+		types.T_array_float64, types.T_array_bf16, types.T_array_int8, types.T_array_uint8,
+	} {
+		colMap := vecColMap("id", "vec")
+		colMap["vec"].Typ.Id = int32(oid)
+		_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(), indexOn("vec"), colMap, nil, "id")
+		require.Error(t, err, "base type %s must be rejected", oid)
+	}
+}
+
+// TestBuildSecondaryIndexDefs_F16UpcastRejected: vecf16 base + QUANTIZATION
+// float32 is an upcast (4 > 2 bytes) and must be rejected by the downcast
+// guard. (The accepted downcast path — f16 -> int8/uint8 — is exercised
+// end-to-end by the GPU functional BVT, since the full def build past the
+// guard needs a richer compiler context than this stub provides.)
+func TestBuildSecondaryIndexDefs_F16UpcastRejected(t *testing.T) {
+	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(), indexOnQuant("vec", "float32"), f16ColMap("id", "vec"), nil, "id")
+	require.Error(t, err)
+}
+
+// TestBuildSecondaryIndexDefs_BF16QuantRejected: QUANTIZATION 'bf16' has no GPU
+// bfloat16 storage (cuVS has no bfloat16 index/quantizer), so it must be rejected
+// rather than silently falling back to f32 storage — even though it passes the
+// downcast width guard (bf16 is 2 bytes). Rejected on both f32 and f16 bases.
+func TestBuildSecondaryIndexDefs_BF16QuantRejected(t *testing.T) {
+	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(), indexOnQuant("vec", "bf16"), vecColMap("id", "vec"), nil, "id")
+	require.Error(t, err, "f32 base + bf16 quant must be rejected")
+	_, _, err = Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(), indexOnQuant("vec", "bf16"), f16ColMap("id", "vec"), nil, "id")
+	require.Error(t, err, "f16 base + bf16 quant must be rejected")
 }
 
 // --- schema.go: BuildFullTextIndexDefs -------------------------------------

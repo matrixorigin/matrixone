@@ -15,19 +15,49 @@
 package morpc
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net"
 	"os"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
+type requestOutcome uint8
+
+// Request outcomes are deliberately fixed and transport-level. A syntactically
+// valid response is success here even when its application payload represents
+// an error; MORPC cannot generically inspect application-specific messages.
+const (
+	requestOutcomeSuccess requestOutcome = iota
+	requestOutcomeTimeout
+	requestOutcomeCanceled
+	requestOutcomeSendError
+	requestOutcomeBackendError
+	requestOutcomeAbandoned
+	requestOutcomeCount
+)
+
+var requestOutcomeNames = [...]string{
+	requestOutcomeSuccess:      "success",
+	requestOutcomeTimeout:      "timeout",
+	requestOutcomeCanceled:     "canceled",
+	requestOutcomeSendError:    "send_error",
+	requestOutcomeBackendError: "backend_error",
+	requestOutcomeAbandoned:    "abandoned",
+}
+
 type metrics struct {
 	name                          string
+	requestStartedCounter         prometheus.Counter
+	requestCompletedCounters      [requestOutcomeCount]prometheus.Counter
+	requestDurationHistogram      prometheus.Observer
 	sendCounter                   prometheus.Counter
 	receiveCounter                prometheus.Counter
 	createCounter                 prometheus.Counter
@@ -39,6 +69,8 @@ type metrics struct {
 	sendingQueueSizeGauge         prometheus.Gauge
 	sendingBatchSizeGauge         prometheus.Gauge
 	poolSizeGauge                 prometheus.Gauge
+	poolSizeMu                    sync.Mutex
+	poolSize                      int
 	activeRequestsGauge           prometheus.Gauge
 	writeQueueLengthGauge         prometheus.Gauge
 	busyGauge                     prometheus.Gauge
@@ -47,12 +79,15 @@ type metrics struct {
 	connectDurationHistogram      prometheus.Observer
 	doneDurationHistogram         prometheus.Observer
 	autoCreateTimeoutCounter      prometheus.Counter // tracks auto-create wait timeouts
+	autoCreateTimeoutEventCounter prometheus.Counter // tracks distinct create states causing wait timeouts
 	backendUnavailableCounter     prometheus.Counter // tracks backend unavailable (pool has backends but all down)
 }
 
 func newMetrics(name string) *metrics {
-	return &metrics{
+	m := &metrics{
 		name:                          name,
+		requestStartedCounter:         v2.NewRPCClientRequestStartedCounterByName(name),
+		requestDurationHistogram:      v2.NewRPCClientRequestDurationHistogramByName(name),
 		sendCounter:                   v2.NewRPCMessageSendCounterByName(name),
 		receiveCounter:                v2.NewRPCMessageReceiveCounterByName(name),
 		createCounter:                 v2.NewRPCBackendCreateCounterByName(name),
@@ -72,8 +107,57 @@ func newMetrics(name string) *metrics {
 		inputBytesCounter:             v2.NewRPCInputCounter(),
 		outputBytesCounter:            v2.NewRPCOutputCounter(),
 		autoCreateTimeoutCounter:      v2.NewRPCBackendAutoCreateTimeoutCounterByName(name),
+		autoCreateTimeoutEventCounter: v2.NewRPCBackendAutoCreateTimeoutEventCounterByName(name),
 		backendUnavailableCounter:     v2.NewRPCBackendUnavailableCounterByName(name),
 	}
+	for outcome := requestOutcome(0); outcome < requestOutcomeCount; outcome++ {
+		m.requestCompletedCounters[outcome] =
+			v2.NewRPCClientRequestCompletedCounterByNameAndOutcome(name, requestOutcomeNames[outcome])
+	}
+	return m
+}
+
+func (m *metrics) requestStarted() {
+	if m != nil {
+		m.requestStartedCounter.Inc()
+	}
+}
+
+func (m *metrics) setBackendPoolSize(size int) {
+	if m == nil {
+		return
+	}
+	m.poolSizeMu.Lock()
+	defer m.poolSizeMu.Unlock()
+	delta := size - m.poolSize
+	m.poolSize = size
+	if delta != 0 {
+		m.poolSizeGauge.Add(float64(delta))
+	}
+}
+
+func (m *metrics) requestCompleted(start time.Time, outcome requestOutcome) {
+	if m == nil {
+		return
+	}
+	if outcome >= requestOutcomeCount {
+		panic("invalid MORPC request outcome")
+	}
+	m.requestDurationHistogram.Observe(time.Since(start).Seconds())
+	m.requestCompletedCounters[outcome].Inc()
+}
+
+func requestOutcomeForError(err error, fallback requestOutcome) requestOutcome {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return requestOutcomeCanceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) ||
+		moerr.IsMoErrCode(err, moerr.ErrRPCTimeout) ||
+		rpcMetricErrorType(err) == "timeout" {
+		return requestOutcomeTimeout
+	}
+	return fallback
 }
 
 func (m *metrics) observeBackendError(backend, phase string, err error) {
@@ -92,6 +176,9 @@ func rpcMetricErrorType(err error) string {
 	}
 	if moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) {
 		return "backend_cannot_connect"
+	}
+	if errors.Is(err, ErrBackendCreateTimeout) {
+		return "backend_create_timeout"
 	}
 	if moerr.IsMoErrCode(err, moerr.ErrBackendClosed) || errors.Is(err, backendClosed) {
 		return "backend_closed"

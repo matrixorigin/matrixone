@@ -171,6 +171,8 @@ func mpoolRelatedMetrics() {
 	v2.MemTotalCrossPoolFreeCounter.Add(float64(mpool.GlobalStats().NumCrossPoolFree.Load()))
 	v2.MemGlobalStatsAllocatedGauge.Set(float64(mpool.GlobalStats().NumCurrBytes.Load()))
 	v2.MemGlobalStatsHighWaterMarkGauge.Set(float64(mpool.GlobalStats().HighWaterMark.Load()))
+	v2.MemMPoolOnHeapOutstandingBytesGauge.Set(float64(mpool.GlobalOnHeapStats().NumCurrBytes.Load()))
+	v2.MemMPoolOnHeapOutstandingObjectsGauge.Set(float64(mpool.GlobalOnHeapStats().NumCurrObjects.Load()))
 }
 
 func IsEnable() bool {

@@ -41,6 +41,7 @@ import (
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/testutil/clusteradmission"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 )
@@ -256,7 +257,8 @@ type testCluster struct {
 	}
 
 	log struct {
-		once sync.Once
+		once                  sync.Once
+		initialClusterInfoErr error
 
 		sync.Mutex
 		cfgs []logservice.Config
@@ -282,7 +284,8 @@ type testCluster struct {
 
 	mu struct {
 		sync.Mutex
-		running bool
+		running   bool
+		admission *clusteradmission.Lease
 	}
 }
 
@@ -331,6 +334,9 @@ func (c *testCluster) Start() error {
 	if c.mu.running {
 		return nil
 	}
+	if err := c.acquireAdmissionLocked(); err != nil {
+		return err
+	}
 
 	ctx, cancel := context.WithTimeoutCause(context.Background(), defaultTestTimeout, moerr.CauseTestClusterStart)
 	defer cancel()
@@ -354,6 +360,21 @@ func (c *testCluster) Start() error {
 	return nil
 }
 
+func (c *testCluster) acquireAdmissionLocked() error {
+	if c.mu.admission != nil {
+		return moerr.NewInvalidStateNoCtx("test cluster cleanup is incomplete")
+	}
+	admission, err := clusteradmission.Acquire(
+		context.Background(),
+		clusteradmission.Exclusive,
+	)
+	if err != nil {
+		return err
+	}
+	c.mu.admission = admission
+	return nil
+}
+
 func (c *testCluster) Options() Options {
 	return c.opt
 }
@@ -370,7 +391,7 @@ func (c *testCluster) Close() error {
 	defer c.mu.Unlock()
 
 	if !c.mu.running {
-		return nil
+		return c.releaseAdmissionLocked()
 	}
 
 	// close all cn services first
@@ -389,6 +410,9 @@ func (c *testCluster) Close() error {
 	}
 
 	c.mu.running = false
+	if err := c.releaseAdmissionLocked(); err != nil {
+		return err
+	}
 	c.stopper.Stop()
 
 	if !c.opt.keepData {
@@ -396,6 +420,17 @@ func (c *testCluster) Close() error {
 			return err
 		}
 	}
+	return nil
+}
+
+func (c *testCluster) releaseAdmissionLocked() error {
+	if c.mu.admission == nil {
+		return nil
+	}
+	if err := c.mu.admission.Release(); err != nil {
+		return err
+	}
+	c.mu.admission = nil
 	return nil
 }
 
@@ -610,7 +645,12 @@ func (c *testCluster) IsClusterHealthy() bool {
 // The following are implements for interface `ClusterWaitState`.
 // --------------------------------------------------------------
 func (c *testCluster) WaitHAKeeperLeader(ctx context.Context) LogService {
+	ticker := time.NewTicker(defaultWaitInterval)
+	defer ticker.Stop()
 	for {
+		if leader := c.getHAKeeperLeader(); leader != nil {
+			return leader
+		}
 		select {
 		case <-ctx.Done():
 			assert.FailNow(
@@ -618,13 +658,7 @@ func (c *testCluster) WaitHAKeeperLeader(ctx context.Context) LogService {
 				"terminated when waiting for hakeeper leader",
 				"error: %s cause: %s ", ctx.Err(), context.Cause(ctx),
 			)
-		default:
-			time.Sleep(defaultWaitInterval)
-
-			leader := c.getHAKeeperLeader()
-			if leader != nil {
-				return leader
-			}
+		case <-ticker.C:
 		}
 	}
 }
@@ -1476,7 +1510,7 @@ func (c *testCluster) startLogServices(ctx context.Context) error {
 	}
 
 	// initialize cluster information
-	if err := c.setInitialClusterInfo(); err != nil {
+	if err := c.setInitialClusterInfo(ctx); err != nil {
 		return err
 	}
 

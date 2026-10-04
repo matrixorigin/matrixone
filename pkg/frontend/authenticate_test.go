@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -25,6 +26,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -38,26 +40,94 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	mysqlparser "github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func TestTemporaryTableSkipsPersistentOwnershipChanges(t *testing.T) {
+	require.NoError(t, doGrantPrivilegeImplicitly(
+		context.Background(), nil, &tree.CreateTable{Temporary: true},
+	))
+	require.NoError(t, doRevokePrivilegeImplicitly(
+		context.Background(), nil, &tree.DropTable{}, nil, "",
+	))
+}
+
+func TestUserDefinedFunctionArgumentTypes(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		types []string
+		want  string
+	}{
+		{name: "no arguments", want: ""},
+		{name: "one argument", types: []string{"int"}, want: `["int"]`},
+		{name: "overload signature", types: []string{"varchar", "decimal(10,2)"}, want: `["varchar", "decimal(10,2)"]`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := userDefinedFunctionArgumentTypes(test.types)
+			require.NoError(t, err)
+			require.Equal(t, test.want, got)
+		})
+	}
+
+	got, err := userDefinedFunctionArgumentTypesFromJSON(`[{"name":"arg","type":"int"}]`)
+	require.NoError(t, err)
+	require.Equal(t, `["int"]`, got)
+	got, err = userDefinedFunctionArgumentTypesFromJSON(`[]`)
+	require.NoError(t, err)
+	require.Empty(t, got)
+	got, err = userDefinedFunctionArgumentTypesFromJSON(`[{"name":"left","type":"int"},{"name":"right","type":"int"}]`)
+	require.NoError(t, err)
+	require.Equal(t, `["int", "int"]`, got)
+	_, err = userDefinedFunctionArgumentTypesFromJSON(`not json`)
+	require.Error(t, err)
+
+	wideTypes := make([]string, 105)
+	for i := range wideTypes {
+		wideTypes[i] = "decimal(10,0)"
+	}
+	wideSignature, err := userDefinedFunctionArgumentTypes(wideTypes)
+	require.NoError(t, err)
+	require.Greater(t, len(wideSignature), 1024)
+	require.LessOrEqual(t, len(wideSignature), types.MaxStringSize)
+
+	maxSignature, err := userDefinedFunctionArgumentTypes([]string{strings.Repeat("x", types.MaxStringSize-4)})
+	require.NoError(t, err)
+	require.Len(t, maxSignature, types.MaxStringSize)
+
+	_, err = userDefinedFunctionArgumentTypes([]string{strings.Repeat("x", types.MaxStringSize)})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "catalog limit")
+}
+
+func TestUserDefinedFunctionCatalogSignatureWidth(t *testing.T) {
+	require.Contains(t, MoCatalogMoUserDefinedFunctionDDL,
+		fmt.Sprintf("arg_types varchar(%d)", types.MaxStringSize))
+}
 
 func TestGetTenantInfo(t *testing.T) {
 	convey.Convey("tenant", t, func() {
@@ -179,6 +249,64 @@ func TestEscapeSQLStringForDoubleQuotes_PythonUdfBodyRoundTrip(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(goodStored), &decoded))
 }
 
+func TestViewMetadataSQLAcceptsQuotedIdentifiers(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), 42)
+	dbName := "db`\\'name"
+	viewName := "view`\\'name"
+
+	for _, name := range []string{dbName, viewName} {
+		scanner := mysqlparser.NewScanner(dialect.MYSQL, escapeSQLString(name))
+		typ, value := scanner.Scan()
+		require.Equal(t, mysqlparser.STRING, typ)
+		require.Equal(t, name, value)
+		typ, _ = scanner.Scan()
+		require.Equal(t, 0, typ)
+	}
+
+	checkSQL, err := getSqlForCheckDatabaseView(ctx, dbName, viewName)
+	require.NoError(t, err)
+	require.Contains(t, checkSQL, "relname = "+escapeSQLString(viewName))
+	require.Contains(t, checkSQL, "reldatabase = "+escapeSQLString(dbName))
+
+	metaSQL, err := getSqlForCheckViewMeta(ctx, dbName, viewName)
+	require.NoError(t, err)
+	require.Contains(t, metaSQL, "relname = "+escapeSQLString(viewName))
+	require.Contains(t, metaSQL, "reldatabase = "+escapeSQLString(dbName))
+
+	snapshotSQL, err := getSqlForCheckViewMetaWithSnapshot(ctx, dbName, viewName, 123)
+	require.NoError(t, err)
+	require.Contains(t, snapshotSQL, "relname = "+escapeSQLString(viewName))
+	require.Contains(t, snapshotSQL, "reldatabase = "+escapeSQLString(dbName))
+
+	queries := []string{checkSQL, metaSQL, snapshotSQL}
+	for _, build := range []func() (string, error){
+		func() (string, error) { return getSqlForCheckDatabase(ctx, dbName) },
+		func() (string, error) { return getSqlForCheckDatabaseByAccount(ctx, dbName) },
+		func() (string, error) { return getSqlForCheckDatabaseWithOwner(ctx, dbName, 42) },
+		func() (string, error) { return getSqlForCheckDatabaseTable(ctx, dbName, viewName) },
+		func() (string, error) {
+			return getSqlForCheckRoleHasTableLevelPrivilegeWithObjType(
+				ctx, objectTypeView, 7, PrivilegeTypeSelect, dbName, viewName)
+		},
+		func() (string, error) {
+			return getSqlForCheckWithGrantOptionForTableDatabaseTableWithObjType(
+				ctx, objectTypeView, 7, PrivilegeTypeSelect, dbName, viewName)
+		},
+	} {
+		sql, err := build()
+		require.NoError(t, err)
+		require.Contains(t, sql, escapeSQLString(dbName))
+		queries = append(queries, sql)
+	}
+
+	for _, sql := range queries {
+		stmts, err := parsers.Parse(ctx, dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		require.Len(t, stmts, 1)
+		freeStatements(stmts)
+	}
+}
+
 func TestPrivilegeType_Scope(t *testing.T) {
 	convey.Convey("scope", t, func() {
 		pss := []struct {
@@ -225,8 +353,6 @@ func TestFormSql(t *testing.T) {
 		convey.So(sql, convey.ShouldEqual, fmt.Sprintf(checkTenantFormat, "a"))
 		sql, _ = getSqlForPasswordOfUser(context.TODO(), "u")
 		convey.So(sql, convey.ShouldEqual, fmt.Sprintf(getPasswordOfUserFormat, "u"))
-		sql, _ = getSqlForCheckRoleExists(context.TODO(), 0, "r")
-		convey.So(sql, convey.ShouldEqual, fmt.Sprintf(checkRoleExistsFormat, 0, "r"))
 		sql, _ = getSqlForRoleIdOfRole(context.TODO(), "r")
 		convey.So(sql, convey.ShouldEqual, fmt.Sprintf(roleIdOfRoleFormat, "r"))
 		sql, _ = getSqlForRoleOfUser(context.TODO(), 0, "r")
@@ -274,6 +400,16 @@ func Test_checkTenantExistsOrNot(t *testing.T) {
 
 		ses := newSes(nil, ctrl)
 		ses.tenant = tenant
+		originalAcquire := acquireAccountLifecycleSharedGates
+		acquireAccountLifecycleSharedGates = func(
+			context.Context,
+			*Session,
+			BackgroundExec,
+			...accountLifecycleGate,
+		) error {
+			return nil
+		}
+		defer func() { acquireAccountLifecycleSharedGates = originalAcquire }()
 
 		err = InitGeneralTenant(ctx, bh, ses, &createAccount{
 			Name:        "test",
@@ -323,7 +459,7 @@ func TestGetSqlForCheckDatabaseByAccountUsesAccountID(t *testing.T) {
 	sql, err := getSqlForCheckDatabaseByAccount(ctx, "db1")
 	require.NoError(t, err)
 	require.Equal(t,
-		`select dat_id from mo_catalog.mo_database where datname = "db1" and account_id = 42;`,
+		`select dat_id from mo_catalog.mo_database where datname = 'db1' and account_id = 42;`,
 		sql,
 	)
 
@@ -344,12 +480,20 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
 		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		protocolQuery := false
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+			protocolQuery = sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')"
+			return nil
+		}).AnyTimes()
 		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
-		msr := newMrsForCheckTenant([][]interface{}{
-			{1, "test"},
-		})
-		bh.EXPECT().GetExecResultSet().Return([]interface{}{msr}).AnyTimes()
+		msr := newMrsForCheckTenant([][]interface{}{{1, "test"}})
+		protocolResult := newMrsForCheckTenant([][]interface{}{{`{"result":"cn-a:100"}`}})
+		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
+			if protocolQuery {
+				return []interface{}{protocolResult}
+			}
+			return []interface{}{msr}
+		}).AnyTimes()
 
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
@@ -375,9 +519,193 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 		_, _, err := createTablesInMoCatalogOfGeneralTenant(ctx, bh, finalVersion, ca)
 		convey.So(err, convey.ShouldBeNil)
 
-		err = createTablesInInformationSchemaOfGeneralTenant(ctx, bh)
+		err = createTablesInInformationSchemaOfGeneralTenant(ctx, bh, "")
 		convey.So(err, convey.ShouldBeNil)
 	})
+}
+
+func TestMoRoleGrantHasGranteeLookupIndex(t *testing.T) {
+	require.Contains(t, MoCatalogMoRoleGrantDDL,
+		"key idx_mo_role_grant_grantee_id(grantee_id)")
+}
+
+func Test_createTablesInInformationSchemaOfGeneralTenant_UsesProtocolAwareViews(t *testing.T) {
+	tests := []struct {
+		name                   string
+		protocol               int64
+		wantCheckFunction      bool
+		wantCurrentRoles       bool
+		wantCompatibilityRoles bool
+		wantCanonicalViews     bool
+	}{
+		{
+			name:                   "pre check-constraint protocol uses compatibility roles",
+			protocol:               defines.MORPCVersion15,
+			wantCompatibilityRoles: true,
+		},
+		{
+			name:                   "protocol 16 uses check constraints and compatibility roles",
+			protocol:               defines.MORPCVersion16,
+			wantCheckFunction:      true,
+			wantCompatibilityRoles: true,
+		},
+		{
+			name:                   "protocol 32 does not install current-role table function views",
+			protocol:               defines.MORPCVersion32,
+			wantCheckFunction:      true,
+			wantCompatibilityRoles: true,
+		},
+		{
+			name:                   "protocol 34 does not alias the current-role capability",
+			protocol:               defines.MORPCVersion34,
+			wantCheckFunction:      true,
+			wantCompatibilityRoles: true,
+		},
+		{
+			name:                   "protocol 35 does not alias the current-role capability",
+			protocol:               defines.MORPCVersion35,
+			wantCheckFunction:      true,
+			wantCompatibilityRoles: true,
+		},
+		{
+			name:               "protocol 41 installs canonical full role closure views",
+			protocol:           defines.MORPCVersion41,
+			wantCheckFunction:  true,
+			wantCurrentRoles:   true,
+			wantCanonicalViews: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			moruntime.RunTest("", func(rt moruntime.Runtime) {
+				oldProtocol, oldProtocolExists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+				defer func() {
+					if oldProtocolExists {
+						rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
+					} else {
+						rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+					}
+				}()
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.protocol)
+
+				ctrl := gomock.NewController(t)
+				defer ctrl.Finish()
+
+				var executed []string
+				bh := mock_frontend.NewMockBackgroundExec(ctrl)
+				bh.EXPECT().ClearExecResultSet().AnyTimes()
+				bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(
+					func(_ context.Context, sql string) error {
+						executed = append(executed, sql)
+						return nil
+					}).AnyTimes()
+
+				require.NoError(t, createTablesInInformationSchemaOfGeneralTenant(context.Background(), bh, ""))
+
+				require.Equal(t, test.wantCheckFunction, containsSQLFragment(executed, "mo_check_constraints()"))
+				require.Equal(t, test.wantCurrentRoles, containsSQLFragment(executed, "mo_current_roles()"))
+				require.Equal(t, test.wantCompatibilityRoles,
+					containsSQLFragment(executed, "FROM mo_catalog.mo_role_grant rg"))
+				require.Equal(t, test.wantCanonicalViews,
+					containsSQL(executed, sysview.InformationSchemaTableConstraintsDDL))
+			})
+		})
+	}
+}
+
+func TestCreateTenantInformationSchemaWaitsForAllProtocol100Peers(t *testing.T) {
+	moruntime.RunTest("", func(rt moruntime.Runtime) {
+		previous, exists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion100)
+		defer func() {
+			if exists {
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+			} else {
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+			}
+		}()
+		for _, tc := range []struct {
+			name, response string
+			wantError      bool
+		}{
+			{name: "mixed", response: `{"result":"cn-a:96,cn-b:95"}`, wantError: true},
+			{name: "missing response", wantError: true},
+			{name: "all ready", response: `{"result":"cn-a:100,cn-b:100"}`},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				ctrl := gomock.NewController(t)
+				bh := mock_frontend.NewMockBackgroundExec(ctrl)
+				var executed []string
+				tenantCtx := defines.AttachAccount(t.Context(), 42, 1, 2)
+				bh.EXPECT().ClearExecResultSet().AnyTimes()
+				bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(execCtx context.Context, sql string) error {
+					account, err := defines.GetAccountId(execCtx)
+					require.NoError(t, err)
+					if sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')" {
+						require.Equal(t, uint32(catalog.System_Account), account)
+						require.Equal(t, uint32(catalog.System_User), defines.GetUserId(execCtx))
+						require.Equal(t, uint32(catalog.System_Role), defines.GetRoleId(execCtx))
+					} else {
+						require.Equal(t, uint32(42), account)
+						require.Equal(t, uint32(1), defines.GetUserId(execCtx))
+						require.Equal(t, uint32(2), defines.GetRoleId(execCtx))
+					}
+					require.Equal(t, tenantCtx.Done(), execCtx.Done())
+					executed = append(executed, sql)
+					return nil
+				}).AnyTimes()
+				var rows [][]interface{}
+				if tc.response != "" {
+					rows = [][]interface{}{{tc.response}}
+				}
+				bh.EXPECT().GetExecResultSet().Return([]interface{}{newMrsForCheckTenant(rows)}).AnyTimes()
+				err := createTablesInInformationSchemaOfGeneralTenant(tenantCtx, bh, "")
+				if tc.wantError {
+					require.ErrorContains(t, err, "protocol version 100")
+					require.Equal(t, []string{"SELECT mo_ctl('cn', 'GetProtocolVersion', '')"}, executed)
+				} else {
+					require.NoError(t, err)
+					require.Contains(t, executed, sysview.InformationSchemaColumnsDDL)
+				}
+			})
+		}
+		for _, protocol := range []int64{defines.MORPCVersion94, defines.MORPCVersion95, defines.MORPCVersion96, defines.MORPCVersion97, defines.MORPCVersion98, defines.MORPCVersion99} {
+			t.Run(fmt.Sprintf("CN%d uses legacy definition", protocol), func(t *testing.T) {
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, protocol)
+				ctrl := gomock.NewController(t)
+				bh := mock_frontend.NewMockBackgroundExec(ctrl)
+				var executed []string
+				bh.EXPECT().ClearExecResultSet().AnyTimes()
+				bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+					executed = append(executed, sql)
+					return nil
+				}).AnyTimes()
+				require.NoError(t, createTablesInInformationSchemaOfGeneralTenant(t.Context(), bh, ""))
+				require.Contains(t, executed, sysview.InformationSchemaColumnsV58DDL())
+				require.NotContains(t, executed, sysview.InformationSchemaColumnsDDL)
+				require.NotContains(t, executed, "SELECT mo_ctl('cn', 'GetProtocolVersion', '')")
+			})
+		}
+	})
+}
+
+func containsSQL(sqls []string, expected string) bool {
+	for _, sql := range sqls {
+		if sql == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func containsSQLFragment(sqls []string, fragment string) bool {
+	for _, sql := range sqls {
+		if strings.Contains(sql, fragment) {
+			return true
+		}
+	}
+	return false
 }
 
 func Test_initFunction(t *testing.T) {
@@ -391,17 +719,29 @@ func Test_initFunction(t *testing.T) {
 		setPu("", pu)
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		ctx = defines.AttachAccountId(ctx, sysAccountID)
 
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
 		bh.EXPECT().ClearExecResultSet().AnyTimes()
 		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		var executed []string
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, sql string) error {
+				executed = append(executed, sql)
+				return nil
+			},
+		).AnyTimes()
 		rs := mock_frontend.NewMockExecResult(ctrl)
 		rs.EXPECT().GetRowCount().Return(uint64(0)).AnyTimes()
 		bh.EXPECT().GetExecResultSet().Return([]interface{}{rs}).AnyTimes()
 
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
+		oldNewBackgroundExec := NewBackgroundExec
+		defer func() { NewBackgroundExec = oldNewBackgroundExec }()
+		var forcedPessimisticRC bool
+		NewBackgroundExec = func(_ context.Context, _ FeSession, opts ...*BackgroundExecOption) BackgroundExec {
+			forcedPessimisticRC = len(opts) == 1 && opts[0] != nil && opts[0].forcePessimisticRC
+			return bh
+		}
 
 		locale := ""
 
@@ -444,7 +784,34 @@ func Test_initFunction(t *testing.T) {
 		}
 		err := InitFunction(ses, newTestExecCtx(ctx, ctrl), tenant, cu)
 		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(forcedPessimisticRC, convey.ShouldBeTrue)
+		convey.So(executed, convey.ShouldContain, "begin;")
+		convey.So(executed, convey.ShouldContain,
+			"select dat_id from mo_catalog.mo_database where datname = 'db' and account_id = 0 for update;")
+		convey.So(executed, convey.ShouldContain, "rollback;")
 	})
+}
+
+func TestHandleGrantPrivilegeForcesPessimisticRC(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	bh := &backgroundExecTest{}
+	bh.init()
+	oldNewBackgroundExec := NewBackgroundExec
+	defer func() { NewBackgroundExec = oldNewBackgroundExec }()
+	forcedPessimisticRC := false
+	NewBackgroundExec = func(_ context.Context, _ FeSession, opts ...*BackgroundExecOption) BackgroundExec {
+		forcedPessimisticRC = len(opts) == 1 && opts[0] != nil && opts[0].forcePessimisticRC
+		return bh
+	}
+	ses := newSes(nil, ctrl)
+	stmt := &tree.GrantPrivilege{
+		ObjType: tree.OBJECT_TYPE_ACCOUNT,
+		Level:   &tree.PrivilegeLevel{Level: tree.PRIVILEGE_LEVEL_TYPE_STAR},
+	}
+
+	require.NoError(t, handleGrantPrivilege(ses, &ExecCtx{reqCtx: context.Background()}, stmt))
+	require.True(t, forcedPessimisticRC)
+	require.Equal(t, []string{"begin;", "commit;"}, bh.executedSQLs)
 }
 
 func Test_initUser(t *testing.T) {
@@ -695,6 +1062,9 @@ func Test_determineCreateAccount(t *testing.T) {
 			getSqlForRoleIdOfUserId(2): newMrsForRoleIdOfUserId([][]interface{}{
 				{2, false},
 			}),
+			getSqlForCheckUserGrantForAuthorization(2, 2): newMrsForCheckUserGrant([][]interface{}{
+				{2, 2, false},
+			}),
 			getSqlForCheckRoleHasAccountLevelForStarWithSysScope(2, PrivilegeTypeCreateAccount, true): newMrsForCheckRoleHasPrivilege([][]interface{}{
 				{PrivilegeTypeAccountAll, false},
 			}),
@@ -729,6 +1099,9 @@ func Test_determineCreateAccount(t *testing.T) {
 		sql2result := map[string]ExecResult{
 			getSqlForRoleIdOfUserId(2): newMrsForRoleIdOfUserId([][]interface{}{
 				{2, false},
+			}),
+			getSqlForCheckUserGrantForAuthorization(2, 2): newMrsForCheckUserGrant([][]interface{}{
+				{2, 2, false},
 			}),
 			getSqlForCheckRoleHasAccountLevelForStarWithSysScope(2, PrivilegeTypeAlterAccount, true): newMrsForCheckRoleHasPrivilege([][]interface{}{
 				{PrivilegeTypeAccountAll, false},
@@ -867,6 +1240,9 @@ func Test_determineCreateAccount(t *testing.T) {
 			getSqlForRoleIdOfUserId(2): newMrsForRoleIdOfUserId([][]interface{}{
 				{2, false},
 			}),
+			getSqlForCheckUserGrantForAuthorization(2, 2): newMrsForCheckUserGrant([][]interface{}{
+				{2, 2, false},
+			}),
 			getSqlForCheckRoleHasAccountLevelForStarWithSysScope(2, PrivilegeTypeDropAccount, true): newMrsForCheckRoleHasPrivilege([][]interface{}{
 				{PrivilegeTypeAccountAll, false},
 			}),
@@ -903,6 +1279,9 @@ func Test_determineCreateAccount(t *testing.T) {
 		sql2result := map[string]ExecResult{
 			getSqlForRoleIdOfUserId(2): newMrsForRoleIdOfUserId([][]interface{}{
 				{2, false},
+			}),
+			getSqlForCheckUserGrantForAuthorization(2, 2): newMrsForCheckUserGrant([][]interface{}{
+				{2, 2, false},
 			}),
 			getSqlForCheckRoleHasAccountLevelForStarWithSysScope(2, PrivilegeTypeUpgradeAccount, true): newMrsForCheckRoleHasPrivilege([][]interface{}{
 				{PrivilegeTypeAccountAll, false},
@@ -2299,6 +2678,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				UserID:        1001,
 				DefaultRoleID: 1001,
 			}
+			ses.markActiveRoleGrantValid()
 			ses.SetDatabaseName("db")
 			//TODO: make sql2result
 			bh.init()
@@ -2476,6 +2856,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				UserID:        1001,
 				DefaultRoleID: 1001,
 			}
+			ses.markActiveRoleGrantValid()
 			ses.SetDatabaseName("db")
 			//TODO: make sql2result
 			bh.init()
@@ -2626,6 +3007,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		bh.init()
 
 		checkSql, err := getSqlForCheckDatabase(ses.GetTxnHandler().GetTxnCtx(), "db")
@@ -2682,6 +3064,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -2744,6 +3127,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -2798,6 +3182,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -2853,6 +3238,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		bh.init()
 
 		checkSql, err := getSqlForCheckDatabase(ses.GetTxnHandler().GetTxnCtx(), "db1")
@@ -2913,6 +3299,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -2981,6 +3368,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -3057,6 +3445,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -3133,6 +3522,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -3207,6 +3597,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -3260,6 +3651,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -3334,6 +3726,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -3420,6 +3813,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -3483,6 +3877,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -3553,6 +3948,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -3628,6 +4024,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -3686,6 +4083,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -3753,6 +4151,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -3810,6 +4209,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: uint32(internRoleID),
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -3874,6 +4274,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: uint32(internRoleID),
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -3949,6 +4350,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: uint32(internRoleID),
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -4033,6 +4435,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: uint32(internRoleID),
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -4108,6 +4511,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				UserID:        1001,
 				DefaultRoleID: 1001,
 			}
+			ses.markActiveRoleGrantValid()
 			ses.SetDatabaseName("db")
 			//TODO: make sql2result
 			bh.init()
@@ -4189,6 +4593,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				UserID:        1001,
 				DefaultRoleID: 1001,
 			}
+			ses.markActiveRoleGrantValid()
 			ses.SetDatabaseName("db")
 			//TODO: make sql2result
 			bh.init()
@@ -4261,6 +4666,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				UserID:        1001,
 				DefaultRoleID: 1001,
 			}
+			ses.markActiveRoleGrantValid()
 			ses.SetDatabaseName("db")
 			//TODO: make sql2result
 			bh.init()
@@ -4322,6 +4728,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				UserID:        1001,
 				DefaultRoleID: 1001,
 			}
+			ses.markActiveRoleGrantValid()
 			ses.SetDatabaseName("db")
 			//TODO: make sql2result
 			bh.init()
@@ -5048,10 +5455,6 @@ func Test_determineUseDatabase(t *testing.T) {
 	})
 }
 
-func Test_determineUseRole(t *testing.T) {
-	//TODO:add ut
-}
-
 func Test_determineCreateTable(t *testing.T) {
 	convey.Convey("create table succ", t, func() {
 		ctrl := gomock.NewController(t)
@@ -5681,6 +6084,265 @@ func Test_getDbNameForPrivilege(t *testing.T) {
 	}
 }
 
+func TestExtractPrivilegeTipsFromPlanInsertDedupTargetScan(t *testing.T) {
+	const (
+		dbName     = "insert_privilege"
+		targetName = "target"
+		sourceName = "source"
+	)
+
+	newTable := func(name string) (*plan.ObjectRef, *plan.TableDef) {
+		return &plan.ObjectRef{SchemaName: dbName, ObjName: name}, &plan.TableDef{
+			DbName: dbName,
+			Name:   name,
+		}
+	}
+	type tipKey struct {
+		typ      PrivilegeType
+		database string
+		table    string
+	}
+
+	tests := []struct {
+		name            string
+		isRightJoin     bool
+		childrenSwapped bool
+		sourceScan      bool
+		sameTable       bool
+		want            []tipKey
+	}{
+		{
+			name: "plain insert values skips internal target scan",
+			want: []tipKey{{
+				typ:      PrivilegeTypeInsert,
+				database: dbName,
+				table:    targetName,
+			}},
+		},
+		{
+			name:        "right dedup keeps the physical target scan internal",
+			isRightJoin: true,
+			want: []tipKey{{
+				typ:      PrivilegeTypeInsert,
+				database: dbName,
+				table:    targetName,
+			}},
+		},
+		{
+			name:       "insert select keeps source select privilege",
+			sourceScan: true,
+			want: []tipKey{
+				{
+					typ:      PrivilegeTypeSelect,
+					database: dbName,
+					table:    sourceName,
+				},
+				{
+					typ:      PrivilegeTypeInsert,
+					database: dbName,
+					table:    targetName,
+				},
+			},
+		},
+		{
+			name:       "insert select from target still requires select",
+			sourceScan: true,
+			sameTable:  true,
+			want: []tipKey{
+				{
+					typ:      PrivilegeTypeSelect,
+					database: dbName,
+					table:    targetName,
+				},
+				{
+					typ:      PrivilegeTypeInsert,
+					database: dbName,
+					table:    targetName,
+				},
+			},
+		},
+		{
+			name:            "recursive source child swap keeps source select privilege",
+			childrenSwapped: true,
+			sourceScan:      true,
+			want: []tipKey{
+				{
+					typ:      PrivilegeTypeSelect,
+					database: dbName,
+					table:    sourceName,
+				},
+				{
+					typ:      PrivilegeTypeInsert,
+					database: dbName,
+					table:    targetName,
+				},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			targetRef, targetDef := newTable(targetName)
+			sourceRef, sourceDef := newTable(sourceName)
+			if tc.sameTable {
+				sourceRef, sourceDef = targetRef, targetDef
+			}
+
+			targetID, sourceID := int32(0), int32(1)
+			targetTag, sourceTag := int32(10), int32(20)
+			children := []int32{targetID, sourceID}
+			targetChild, sourceChild := int32(0), int32(1)
+			if tc.isRightJoin || tc.childrenSwapped {
+				children = []int32{sourceID, targetID}
+				targetChild, sourceChild = 1, 0
+			}
+			sourceNode := &plan.Node{NodeType: plan.Node_VALUE_SCAN, BindingTags: []int32{sourceTag}}
+			if tc.sourceScan {
+				sourceNode = &plan.Node{NodeType: plan.Node_TABLE_SCAN, ObjRef: sourceRef, TableDef: sourceDef, BindingTags: []int32{sourceTag}}
+			}
+			dedupCondition := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
+				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: targetChild}}},
+				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: sourceChild}}},
+			}}}}
+			p := &plan2.Plan{Plan: &plan2.Plan_Query{Query: &plan.Query{
+				StmtType: plan.Query_INSERT,
+				Nodes: []*plan.Node{
+					{NodeType: plan.Node_TABLE_SCAN, ObjRef: targetRef, TableDef: targetDef, BindingTags: []int32{targetTag}},
+					sourceNode,
+					{NodeType: plan.Node_JOIN, JoinType: plan.Node_DEDUP, Children: children, IsRightJoin: tc.isRightJoin, OnList: []*plan.Expr{dedupCondition}, OnDuplicateAction: plan.Node_FAIL, DedupColName: "PRIMARY"},
+					{NodeType: plan.Node_PRE_INSERT, PreInsertCtx: &plan.PreInsertCtx{Ref: targetRef, TableDef: targetDef}},
+				},
+			}}}
+
+			got := make([]tipKey, 0, len(p.GetQuery().GetNodes()))
+			for _, tip := range extractPrivilegeTipsFromPlan(p) {
+				got = append(got, tipKey{tip.typ, tip.databaseName, tip.tableName})
+			}
+			require.ElementsMatch(t, tc.want, got)
+		})
+	}
+}
+
+func TestExtractPrivilegeTipsFromPlanKeepsUserDedupJoinSources(t *testing.T) {
+	const dbName = "insert_privilege"
+	newTable := func(name string) (*plan.ObjectRef, *plan.TableDef) {
+		return &plan.ObjectRef{SchemaName: dbName, ObjName: name}, &plan.TableDef{DbName: dbName, Name: name}
+	}
+	targetRef, targetDef := newTable("target")
+	secretRef, secretDef := newTable("secret")
+	allowedRef, allowedDef := newTable("allowed")
+	column := func(tag int32) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: tag}}}
+	}
+	equality := func(leftTag, rightTag int32) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{column(leftTag), column(rightTag)}}}}
+	}
+
+	// The first DEDUP is the INSERT's internal conflict probe. The second
+	// represents INSERT ... SELECT ... FROM secret DEDUP JOIN allowed. It has
+	// the default FAIL action too, but no DML-only DedupColName marker.
+	p := &plan2.Plan{Plan: &plan2.Plan_Query{Query: &plan.Query{
+		StmtType: plan.Query_INSERT,
+		Nodes: []*plan.Node{
+			{NodeType: plan.Node_TABLE_SCAN, ObjRef: targetRef, TableDef: targetDef, BindingTags: []int32{10}},
+			{NodeType: plan.Node_VALUE_SCAN, BindingTags: []int32{20}},
+			{NodeType: plan.Node_JOIN, JoinType: plan.Node_DEDUP, Children: []int32{0, 1}, OnList: []*plan.Expr{equality(0, 1)}, OnDuplicateAction: plan.Node_FAIL, DedupColName: "PRIMARY"},
+			{NodeType: plan.Node_TABLE_SCAN, ObjRef: secretRef, TableDef: secretDef, BindingTags: []int32{30}},
+			{NodeType: plan.Node_TABLE_SCAN, ObjRef: allowedRef, TableDef: allowedDef, BindingTags: []int32{40}},
+			{NodeType: plan.Node_JOIN, JoinType: plan.Node_DEDUP, Children: []int32{3, 4}, OnList: []*plan.Expr{equality(0, 1)}},
+			{NodeType: plan.Node_PRE_INSERT, PreInsertCtx: &plan.PreInsertCtx{Ref: targetRef, TableDef: targetDef}},
+		},
+	}}}
+
+	type tipKey struct {
+		typ   PrivilegeType
+		table string
+	}
+	got := make([]tipKey, 0)
+	for _, tip := range extractPrivilegeTipsFromPlan(p) {
+		got = append(got, tipKey{typ: tip.typ, table: tip.tableName})
+	}
+	require.ElementsMatch(t, []tipKey{
+		{typ: PrivilegeTypeSelect, table: "secret"},
+		{typ: PrivilegeTypeSelect, table: "allowed"},
+		{typ: PrivilegeTypeInsert, table: "target"},
+	}, got)
+}
+
+func TestInsertDedupTargetScansMalformedPlans(t *testing.T) {
+	column := func(child int32) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: child}}}
+	}
+	join := func(children []int32, condition *plan.Expr) *plan.Node {
+		return &plan.Node{
+			NodeType:          plan.Node_JOIN,
+			JoinType:          plan.Node_DEDUP,
+			Children:          children,
+			OnList:            []*plan.Expr{condition},
+			OnDuplicateAction: plan.Node_FAIL,
+			DedupColName:      "PRIMARY",
+		}
+	}
+
+	require.Nil(t, insertDedupTargetScans(nil))
+	require.Nil(t, insertDedupTargetScans(&plan.Query{StmtType: plan.Query_SELECT}))
+
+	// A malformed DEDUP probe must fail closed: no target scan becomes exempt
+	// from SELECT privilege checking.
+	for _, node := range []*plan.Node{
+		join([]int32{0, 1}, nil),
+		join([]int32{0, 1}, &plan.Expr{}),
+		join([]int32{0, 1}, &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{}}}),
+		join([]int32{0, 1}, &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{{}}}}}),
+		join([]int32{0, 1}, &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{column(-1)}}}}),
+		join([]int32{0, 1}, &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{column(2)}}}}),
+	} {
+		q := &plan.Query{StmtType: plan.Query_INSERT, Nodes: []*plan.Node{
+			{NodeType: plan.Node_TABLE_SCAN},
+			{NodeType: plan.Node_VALUE_SCAN},
+			node,
+		}}
+		require.Empty(t, insertDedupTargetScans(q))
+	}
+
+	// Traversal accepts only the target child, tolerates invalid and nil child
+	// references, and remains cycle-safe when the same child is listed twice.
+	q := &plan.Query{StmtType: plan.Query_INSERT, Nodes: []*plan.Node{
+		{NodeType: plan.Node_TABLE_SCAN},
+		{NodeType: plan.Node_VALUE_SCAN},
+		{NodeType: plan.Node_PROJECT, Children: []int32{0, 0, 3, -1}},
+		nil,
+		join([]int32{2, 1}, &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{column(0)}}}}),
+	}}
+	require.Equal(t, map[int32]struct{}{0: {}}, insertDedupTargetScans(q))
+}
+
+func TestFirstColumnChildIndex(t *testing.T) {
+	column := &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1}}}
+	nestedColumn := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
+		{},
+		{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{column}}}},
+	}}}}
+
+	for _, tc := range []struct {
+		name string
+		expr *plan.Expr
+		want int32
+		ok   bool
+	}{
+		{name: "nil", expr: nil},
+		{name: "no column", expr: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{}}}},
+		{name: "column", expr: column, want: 1, ok: true},
+		{name: "nested column", expr: nestedColumn, want: 1, ok: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := firstColumnChildIndex(tc.expr)
+			require.Equal(t, tc.ok, ok)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
 func Test_extractPrivilegeTipsFromPlan_Subscription(t *testing.T) {
 	// When a TABLE_SCAN node has SubscriptionName set, the extracted
 	// privilegeTips should use the subscription database name instead
@@ -5705,6 +6367,208 @@ func Test_extractPrivilegeTipsFromPlan_Subscription(t *testing.T) {
 	assert.Equal(t, 1, len(arr))
 	assert.Equal(t, "sub2", arr[0].databaseName)
 	assert.Equal(t, "t1", arr[0].tableName)
+}
+
+func TestExtractPrivilegeTipsFromPlanIncludesMongoDBExternalScan(t *testing.T) {
+	const (
+		dbName    = "mongodb_permission"
+		tableName = "events_ext"
+		viewName  = "events_view"
+	)
+
+	for _, tc := range []struct {
+		name        string
+		originViews []string
+		directView  string
+	}{
+		{name: "direct table"},
+		{
+			name:        "view",
+			originViews: []string{dbName + "." + viewName},
+			directView:  dbName + "." + viewName,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &plan2.Plan{
+				Plan: &plan2.Plan_Query{
+					Query: &plan2.Query{
+						StmtType: plan.Query_SELECT,
+						Nodes: []*plan2.Node{
+							{
+								NodeType: plan.Node_EXTERNAL_SCAN,
+								ObjRef: &plan2.ObjectRef{
+									SchemaName: dbName,
+									ObjName:    tableName,
+								},
+								ExternScan: &plan.ExternScan{
+									Type: int32(plan.ExternType_MONGODB_TB),
+									MongodbScan: &plan.MongoScan{
+										Database:   "mongodb_source",
+										Collection: "events",
+									},
+								},
+								OriginViews: tc.originViews,
+								DirectView:  tc.directView,
+							},
+						},
+					},
+				},
+			}
+
+			arr := extractPrivilegeTipsFromPlan(p)
+			require.Len(t, arr, 1)
+			require.Equal(t, PrivilegeTypeSelect, arr[0].typ)
+			require.Equal(t, objectTypeTable, arr[0].objType)
+			require.Equal(t, dbName, arr[0].databaseName)
+			require.Equal(t, tableName, arr[0].tableName)
+			require.Equal(t, tc.originViews, arr[0].originViews)
+			require.Equal(t, tc.directView, arr[0].directView)
+		})
+	}
+}
+
+func TestMongoDBExternalTableScanDetectionExcludesOtherExternalScans(t *testing.T) {
+	for _, externType := range []plan.ExternType{
+		plan.ExternType_LOAD,
+		plan.ExternType_EXTERNAL_TB,
+		plan.ExternType_ICEBERG_TB,
+		plan.ExternType_RESULT_SCAN,
+	} {
+		node := &plan.Node{
+			NodeType:   plan.Node_EXTERNAL_SCAN,
+			ExternScan: &plan.ExternScan{Type: int32(externType)},
+		}
+		require.False(t, isMongoDBExternalTableScan(node), externType.String())
+	}
+	require.False(t, isMongoDBExternalTableScan(nil))
+	require.False(t, isMongoDBExternalTableScan(&plan.Node{NodeType: plan.Node_EXTERNAL_SCAN}))
+	require.False(t, isMongoDBExternalTableScan(&plan.Node{NodeType: plan.Node_TABLE_SCAN}))
+}
+
+func TestAuthenticateMongoDBExternalScanSelectPrivilege(t *testing.T) {
+	const (
+		dbName    = "mongodb_permission"
+		tableName = "events_ext"
+		viewName  = "events_view"
+		userID    = 3
+		roleID    = 5
+	)
+
+	for _, tc := range []struct {
+		name           string
+		originViews    []string
+		directView     string
+		tableSelect    bool
+		addRevokedView bool
+		want           bool
+	}{
+		{name: "table select revoked"},
+		{name: "table select granted", tableSelect: true, want: true},
+		{
+			name:           "view select revoked",
+			originViews:    []string{dbName + "." + viewName},
+			directView:     dbName + "." + viewName,
+			tableSelect:    true,
+			addRevokedView: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			stmt := &tree.Select{}
+			ses := newSes(determinePrivilegeSetOfStatement(stmt), ctrl)
+			ses.SetTenantInfo(&TenantInfo{
+				Tenant:        "test_account",
+				User:          "mongodb_reader",
+				DefaultRole:   "mongodb_reader_role",
+				TenantID:      1,
+				UserID:        userID,
+				DefaultRoleID: roleID,
+			})
+
+			sql2result := makeSql2ExecResult2(userID, [][]interface{}{
+				{roleID, false},
+			}, nil, nil, nil, nil, nil, nil, nil)
+			addTablePrivilegeResultsForRole(t, sql2result, roleID, dbName, tableName, map[PrivilegeType]bool{
+				PrivilegeTypeSelect: tc.tableSelect,
+			})
+			if tc.addRevokedView {
+				addViewPrivilegeResultsForRole(t, sql2result, roleID, dbName, viewName, nil)
+			}
+			sql2result[getSqlForInheritedRoleIdOfRoleId(roleID)] = newMrsForInheritedRoleIdOfRoleId(nil)
+
+			bh := newBh(ctrl, sql2result)
+			bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+			defer bhStub.Reset()
+
+			p := &plan2.Plan{Plan: &plan2.Plan_Query{Query: &plan.Query{
+				StmtType: plan.Query_SELECT,
+				Nodes: []*plan.Node{
+					{
+						NodeType: plan.Node_EXTERNAL_SCAN,
+						ObjRef: &plan.ObjectRef{
+							SchemaName: dbName,
+							ObjName:    tableName,
+						},
+						ExternScan: &plan.ExternScan{
+							Type:        int32(plan.ExternType_MONGODB_TB),
+							MongodbScan: &plan.MongoScan{},
+						},
+						OriginViews: tc.originViews,
+						DirectView:  tc.directView,
+					},
+				},
+			}}}
+
+			ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(
+				ses.GetTxnHandler().GetTxnCtx(), ses, stmt, p)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, ok)
+		})
+	}
+}
+
+func TestExtractPrivilegeTipsFromTableChanges(t *testing.T) {
+	tests := []struct {
+		name           string
+		databaseName   string
+		tableName      string
+		isClusterTable bool
+	}{
+		{name: "ordinary table", databaseName: "db1", tableName: "secret"},
+		{name: "cluster table", databaseName: moCatalog, tableName: "tenant_secret", isClusterTable: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &plan2.Plan{Plan: &plan2.Plan_Query{Query: &plan2.Query{
+				StmtType: plan.Query_SELECT,
+				Nodes: []*plan2.Node{{
+					NodeType: plan.Node_FUNCTION_SCAN,
+					ObjRef:   &plan2.ObjectRef{SchemaName: tt.databaseName, ObjName: tt.tableName},
+					TableDef: &plan2.TableDef{TableType: "func_table", TblFunc: &plan.TableFunction{Name: "table_changes"}},
+				}},
+			}}}
+			arr := extractPrivilegeTipsFromPlan(p)
+			require.Len(t, arr, 1)
+			assert.Equal(t, PrivilegeTypeSelect, arr[0].typ)
+			assert.Equal(t, tt.databaseName, arr[0].databaseName)
+			assert.Equal(t, tt.tableName, arr[0].tableName)
+			assert.Equal(t, tt.isClusterTable, arr[0].isClusterTable)
+			assert.Equal(t, clusterTableSelect, arr[0].clusterTableOperation)
+		})
+	}
+}
+
+func TestCDCSystemTablesAreNotClassifiedAsClusterTables(t *testing.T) {
+	for _, tableName := range []string{
+		catalog.MO_CDC_TASK,
+		catalog.MO_CDC_WATERMARK,
+		catalog.MO_CDC_SNAPSHOT,
+	} {
+		require.Contains(t, predefinedTables, tableName)
+		require.False(t, isClusterTable(moCatalog, tableName))
+	}
 }
 
 func Test_determineDML(t *testing.T) {
@@ -5794,7 +6658,7 @@ func Test_determineDML(t *testing.T) {
 
 			for _, roleId := range roleIds {
 				for _, entry := range priv.entries {
-					sql, _ := getSqlForCheckRoleHasTableLevelPrivilege(context.TODO(), int64(roleId), entry.privilegeId, entry.databaseName, entry.tableName)
+					sql, _ := getSqlForCheckRoleHasTableLevelPrivilegeWithObjType(context.TODO(), objectTypeTable, int64(roleId), entry.privilegeId, entry.databaseName, entry.tableName)
 					sql2result[sql] = newMrsForWithGrantOptionPrivilege([][]interface{}{
 						{entry.privilegeId, true},
 					})
@@ -6204,6 +7068,174 @@ func TestExtractPrivilegeTipsFromPlanSkipsInvalidMultiUpdateCtx(t *testing.T) {
 	})
 }
 
+func TestNamedWindowValidationDependencyRequiresSelectPrivilege(t *testing.T) {
+	const (
+		dbName = "tpch"
+		userID = 1
+		roleID = 2
+		nation = "nation"
+		region = "region"
+	)
+
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+		"select 1 from nation window unused_w as (order by (select r_name from region limit 1))", 1)
+	require.NoError(t, err)
+	queryPlan, err := plan2.BuildPlan(plan2.NewMockCompilerContext(true), stmt, false)
+	require.NoError(t, err)
+	dependencies := queryPlan.GetQuery().GetCatalogDependencies()
+	require.Len(t, dependencies, 2)
+	require.ElementsMatch(t, []string{nation, region}, []string{dependencies[0].ObjName, dependencies[1].ObjName})
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newSes(determinePrivilegeSetOfStatement(stmt), ctrl)
+	ses.SetTenantInfo(&TenantInfo{
+		Tenant:        "test_account",
+		User:          "named_window_reader",
+		DefaultRole:   "named_window_reader_role",
+		TenantID:      1,
+		UserID:        userID,
+		DefaultRoleID: roleID,
+	})
+
+	sql2result := makeSql2ExecResult2(userID, nil, nil, nil, nil, nil, nil, nil, nil)
+	addTablePrivilegeResultsForRole(t, sql2result, roleID, dbName, nation, map[PrivilegeType]bool{
+		PrivilegeTypeSelect: true,
+	})
+	addTablePrivilegeResultsForRole(t, sql2result, roleID, dbName, region, map[PrivilegeType]bool{
+		PrivilegeTypeSelect: false,
+	})
+	sql2result[getSqlForInheritedRoleIdOfRoleId(roleID)] = newMrsForInheritedRoleIdOfRoleId(nil)
+	bhStub := gostub.StubFunc(&NewBackgroundExec, newBh(ctrl, sql2result))
+	defer bhStub.Reset()
+
+	ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(
+		ses.GetTxnHandler().GetTxnCtx(), ses, stmt, queryPlan)
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
+// namedWindowAuthorizationCompilerContext adds the MongoDB catalog entry used
+// by TestNamedWindowValidationSpecialScansRequireSelectPrivilege while keeping
+// the normal mock catalog (including tpch.nation) intact.  The test must bind
+// the source through BuildPlan instead of manufacturing a scan node: that is
+// what proves validation-only named-window definitions retain the same node
+// shape the frontend authorization walk consumes.
+type namedWindowAuthorizationCompilerContext struct {
+	*plan2.MockCompilerContext
+	mongoObject *plan.ObjectRef
+	mongoTable  *plan.TableDef
+}
+
+func (c *namedWindowAuthorizationCompilerContext) DatabaseExists(name string, snapshot *plan2.Snapshot) bool {
+	return name == "mongo_window_auth" || c.MockCompilerContext.DatabaseExists(name, snapshot)
+}
+
+func (c *namedWindowAuthorizationCompilerContext) Resolve(dbName, tableName string, snapshot *plan2.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+	if dbName == "mongo_window_auth" && tableName == "events" {
+		return plan2.DeepCopyObjectRef(c.mongoObject), plan2.DeepCopyTableDef(c.mongoTable, true), nil
+	}
+	return c.MockCompilerContext.Resolve(dbName, tableName, snapshot)
+}
+
+func TestNamedWindowValidationSpecialScansRequireSelectPrivilege(t *testing.T) {
+	const (
+		userID = 1
+		roleID = 2
+		nation = "nation"
+		region = "region"
+	)
+
+	mongoMapping := sqlmongodb.TableMapping{
+		Connection: "mongo_window_auth",
+		Database:   "telemetry",
+		Collection: "events",
+		SchemaMode: sqlmongodb.SchemaExplicit,
+		Conversion: sqlmongodb.ConversionStrict,
+		Columns: []sqlmongodb.ColumnMapping{{
+			Name: "event_id", Path: "event_id", TypeID: int32(types.T_int64), Conversion: sqlmongodb.ConversionStrict,
+		}},
+	}
+
+	newCompilerContext := func() *namedWindowAuthorizationCompilerContext {
+		return &namedWindowAuthorizationCompilerContext{
+			MockCompilerContext: plan2.NewMockCompilerContext(true),
+			mongoObject: &plan.ObjectRef{
+				Db: 1, Obj: 2, SchemaName: "mongo_window_auth", ObjName: "events",
+			},
+			mongoTable: &plan.TableDef{
+				Name: "events", DbName: "mongo_window_auth", DbId: 1, TblId: 2,
+				TableType: catalog.SystemExternalRel, FeatureFlag: features.MongoDBExternal,
+				Createsql: sqlmongodb.BuildCreateSQLEnvelope(mongoMapping),
+				Cols:      []*plan.ColDef{{Name: "event_id", Typ: plan.Type{Id: int32(types.T_int64)}}},
+			},
+		}
+	}
+
+	tests := []struct {
+		name      string
+		sql       string
+		database  string
+		table     string
+		grantScan bool
+	}{
+		{
+			name:     "unused MongoDB definition is rejected without select",
+			database: "mongo_window_auth", table: "events",
+			sql: "select 1 from nation window w as (order by (select event_id from mongo_window_auth.events limit 1))",
+		},
+		{
+			name:     "unused MongoDB definition succeeds with select",
+			database: "mongo_window_auth", table: "events", grantScan: true,
+			sql: "select 1 from nation window w as (order by (select event_id from mongo_window_auth.events limit 1))",
+		},
+		{
+			name:     "used MongoDB window control succeeds with select",
+			database: "mongo_window_auth", table: "events", grantScan: true,
+			sql: "select sum(n_nationkey) over w from nation window w as (order by (select event_id from mongo_window_auth.events limit 1))",
+		},
+		{
+			name:     "unused table_changes definition is rejected without select",
+			database: "tpch", table: region,
+			sql: "select 1 from nation window w as (order by (select count(*) from table_changes('tpch', 'region', '', '1-0')))",
+		},
+		{
+			name:     "unused table_changes definition succeeds with select",
+			database: "tpch", table: region, grantScan: true,
+			sql: "select 1 from nation window w as (order by (select count(*) from table_changes('tpch', 'region', '', '1-0')))",
+		},
+		{
+			name:     "used table_changes window control succeeds with select",
+			database: "tpch", table: region, grantScan: true,
+			sql: "select sum(n_nationkey) over w from nation window w as (order by (select count(*) from table_changes('tpch', 'region', '', '1-0')))",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			queryPlan, err := plan2.BuildPlan(newCompilerContext(), stmt, false)
+			require.NoError(t, err)
+
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+			ses := newSes(determinePrivilegeSetOfStatement(stmt), ctrl)
+			ses.SetTenantInfo(&TenantInfo{Tenant: "test_account", User: "named_window_reader", DefaultRole: "named_window_reader_role", TenantID: 1, UserID: userID, DefaultRoleID: roleID})
+			sql2result := makeSql2ExecResult2(userID, nil, nil, nil, nil, nil, nil, nil, nil)
+			addTablePrivilegeResultsForRole(t, sql2result, roleID, "tpch", nation, map[PrivilegeType]bool{PrivilegeTypeSelect: true})
+			addTablePrivilegeResultsForRole(t, sql2result, roleID, tc.database, tc.table, map[PrivilegeType]bool{PrivilegeTypeSelect: tc.grantScan})
+			sql2result[getSqlForInheritedRoleIdOfRoleId(roleID)] = newMrsForInheritedRoleIdOfRoleId(nil)
+			bhStub := gostub.StubFunc(&NewBackgroundExec, newBh(ctrl, sql2result))
+			defer bhStub.Reset()
+
+			ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, queryPlan)
+			require.NoError(t, err)
+			require.Equal(t, tc.grantScan, ok)
+		})
+	}
+}
+
 func makeReplacePrivilegePlan(dbName, tableName string, fakePK bool, uniqueIndex bool) *plan2.Plan {
 	pkName := "id"
 	if fakePK {
@@ -6537,6 +7569,39 @@ func addTablePrivilegeResultsForRole(
 		entry.objType = objectTypeTable
 		entry.databaseName = dbName
 		entry.tableName = tableName
+		levels, err := getPrivilegeLevelsOfObjectType(context.TODO(), entry.objType)
+		require.NoError(t, err)
+		for _, level := range levels {
+			sql, err := getSqlForPrivilege(context.TODO(), roleID, entry, level)
+			require.NoError(t, err)
+			rows := [][]interface{}{}
+			if allowed[privType] {
+				rows = [][]interface{}{{entry.privilegeId, true}}
+			}
+			sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
+		}
+	}
+}
+
+func addViewPrivilegeResultsForRole(
+	t *testing.T,
+	sql2result map[string]ExecResult,
+	roleID int64,
+	dbName string,
+	viewName string,
+	allowed map[PrivilegeType]bool,
+) {
+	t.Helper()
+	privTypes := []PrivilegeType{
+		PrivilegeTypeSelect,
+		PrivilegeTypeTableAll,
+		PrivilegeTypeTableOwnership,
+	}
+	for _, privType := range privTypes {
+		entry := privilegeEntriesMap[privType]
+		entry.objType = objectTypeView
+		entry.databaseName = dbName
+		entry.tableName = viewName
 		levels, err := getPrivilegeLevelsOfObjectType(context.TODO(), entry.objType)
 		require.NoError(t, err)
 		for _, level := range levels {
@@ -7363,7 +8428,15 @@ func Test_doRevokeRole(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		var forcedPessimisticRC bool
+		bhStub := gostub.Stub(&NewBackgroundExec, func(
+			_ context.Context,
+			_ FeSession,
+			opts ...*BackgroundExecOption,
+		) BackgroundExec {
+			forcedPessimisticRC = len(opts) == 1 && opts[0] != nil && opts[0].forcePessimisticRC
+			return bh
+		})
 		defer bhStub.Reset()
 
 		stmt := &tree.RevokeRole{
@@ -7416,6 +8489,7 @@ func Test_doRevokeRole(t *testing.T) {
 
 		err := doRevokeRole(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
 		convey.So(err, convey.ShouldBeNil)
+		convey.So(forcedPessimisticRC, convey.ShouldBeTrue)
 	})
 
 	convey.Convey("revoke role from role succ (if exists = true, miss role before FROM)", t, func() {
@@ -7691,6 +8765,15 @@ func Test_doRevokeRole(t *testing.T) {
 }
 
 func Test_doGrantPrivilege(t *testing.T) {
+	registerLockedSQL := func(bh *backgroundExecTest, sql string, result ExecResult) {
+		bh.sql2result[strings.TrimSuffix(sql, ";")+" for share;"] = result
+	}
+	registerLockedDatabase := func(ctx context.Context, bh *backgroundExecTest, dbName string, result ExecResult) {
+		sql, err := getSqlForCheckDatabaseByAccount(ctx, dbName)
+		require.NoError(t, err)
+		registerLockedSQL(bh, sql, result)
+	}
+
 	convey.Convey("grant account, role succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -7831,12 +8914,14 @@ func Test_doGrantPrivilege(t *testing.T) {
 					{0},
 				})
 				bh.sql2result[sql] = mrs
+				registerLockedDatabase(ses.GetTxnHandler().GetTxnCtx(), bh, stmt.Level.DbName, mrs)
 			} else if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE {
 				sql, _ := getSqlForCheckDatabase(context.TODO(), stmt.Level.TabName)
 				mrs := newMrsForCheckDatabase([][]interface{}{
 					{0},
 				})
 				bh.sql2result[sql] = mrs
+				registerLockedDatabase(ses.GetTxnHandler().GetTxnCtx(), bh, stmt.Level.TabName, mrs)
 			}
 
 			_, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevel(context.TODO(), ses, bh, stmt.ObjType, *stmt.Level)
@@ -7966,20 +9051,25 @@ func Test_doGrantPrivilege(t *testing.T) {
 					{0},
 				})
 				bh.sql2result[sql] = mrs
+				registerLockedDatabase(ses.GetTxnHandler().GetTxnCtx(), bh, dbName, mrs)
 			} else if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE ||
 				stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE {
+				registerLockedDatabase(ses.GetTxnHandler().GetTxnCtx(), bh, dbName,
+					newMrsForCheckDatabase([][]interface{}{{1}}))
 				if stmt.ObjType == tree.OBJECT_TYPE_VIEW {
 					sql, _ := getSqlForCheckDatabaseView(ctx, dbName, tableName)
 					mrs := newMrsForCheckDatabaseTable([][]interface{}{
 						{0},
 					})
 					bh.sql2result[sql] = mrs
+					registerLockedSQL(bh, sql, mrs)
 				} else {
 					sql, _ := getSqlForCheckDatabaseTable(ctx, dbName, tableName)
 					mrs := newMrsForCheckDatabaseTable([][]interface{}{
 						{0},
 					})
 					bh.sql2result[sql] = mrs
+					registerLockedSQL(bh, sql, mrs)
 				}
 			}
 
@@ -8110,20 +9200,25 @@ func Test_doGrantPrivilege(t *testing.T) {
 					{0},
 				})
 				bh.sql2result[sql] = mrs
+				registerLockedDatabase(ses.GetTxnHandler().GetTxnCtx(), bh, dbName, mrs)
 			} else if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE ||
 				stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE {
+				registerLockedDatabase(ses.GetTxnHandler().GetTxnCtx(), bh, dbName,
+					newMrsForCheckDatabase([][]interface{}{{1}}))
 				if stmt.ObjType == tree.OBJECT_TYPE_VIEW {
 					sql, _ := getSqlForCheckDatabaseView(ctx, dbName, tableName)
 					mrs := newMrsForCheckDatabaseTable([][]interface{}{
 						{0},
 					})
 					bh.sql2result[sql] = mrs
+					registerLockedSQL(bh, sql, mrs)
 				} else {
 					sql, _ := getSqlForCheckDatabaseTable(ctx, dbName, tableName)
 					mrs := newMrsForCheckDatabaseTable([][]interface{}{
 						{0},
 					})
 					bh.sql2result[sql] = mrs
+					registerLockedSQL(bh, sql, mrs)
 				}
 			}
 
@@ -8146,7 +9241,235 @@ func Test_doGrantPrivilege(t *testing.T) {
 	})
 }
 
+func TestGrantPrivilegeLocksObjectLifecycle(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newSes(nil, ctrl)
+	ses.SetDatabaseName("d")
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(sysAccountID))
+
+	lockedDatabaseSQL := func(dbName string) string {
+		sql, err := getSqlForCheckDatabaseByAccount(ctx, dbName)
+		require.NoError(t, err)
+		return strings.TrimSuffix(sql, ";") + " for share;"
+	}
+	lockedTableSQL := func(tableName string) string {
+		sql, err := getSqlForCheckDatabaseTable(ctx, "d", tableName)
+		require.NoError(t, err)
+		return strings.TrimSuffix(sql, ";") + " for share;"
+	}
+	lockedViewSQL := func(viewName string) string {
+		sql, err := getSqlForCheckDatabaseView(ctx, "d", viewName)
+		require.NoError(t, err)
+		return strings.TrimSuffix(sql, ";") + " for share;"
+	}
+
+	testCases := []struct {
+		name         string
+		objectType   tree.ObjectType
+		level        tree.PrivilegeLevel
+		objectID     int64
+		expectedSQLs []string
+	}{
+		{
+			name:       "global scope needs no object lock",
+			objectType: tree.OBJECT_TYPE_TABLE,
+			level:      tree.PrivilegeLevel{Level: tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR},
+			objectID:   objectIDAll,
+		},
+		{
+			name:         "database scope locks database",
+			objectType:   tree.OBJECT_TYPE_DATABASE,
+			level:        tree.PrivilegeLevel{Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE, DbName: "d"},
+			objectID:     11,
+			expectedSQLs: []string{lockedDatabaseSQL("d")},
+		},
+		{
+			name:         "database wildcard locks database",
+			objectType:   tree.OBJECT_TYPE_TABLE,
+			level:        tree.PrivilegeLevel{Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR, DbName: "d"},
+			objectID:     11,
+			expectedSQLs: []string{lockedDatabaseSQL("d")},
+		},
+		{
+			name:       "exact table locks database before relation",
+			objectType: tree.OBJECT_TYPE_TABLE,
+			level: tree.PrivilegeLevel{
+				Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE, DbName: "d", TabName: "t",
+			},
+			objectID:     42,
+			expectedSQLs: []string{lockedDatabaseSQL("d"), lockedTableSQL("t")},
+		},
+		{
+			name:       "exact view locks database before relation",
+			objectType: tree.OBJECT_TYPE_VIEW,
+			level: tree.PrivilegeLevel{
+				Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE, DbName: "d", TabName: "v",
+			},
+			objectID:     43,
+			expectedSQLs: []string{lockedDatabaseSQL("d"), lockedViewSQL("v")},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			for _, sql := range testCase.expectedSQLs {
+				objectID := testCase.objectID
+				if sql == lockedDatabaseSQL("d") && len(testCase.expectedSQLs) > 1 {
+					objectID = 11
+				}
+				bh.sql2result[sql] = newMrsForCheckDatabase([][]interface{}{{objectID}})
+			}
+
+			_, objectID, err := checkPrivilegeObjectTypeAndPrivilegeLevelForGrant(
+				ctx, ses, bh, testCase.objectType, testCase.level)
+			require.NoError(t, err)
+			require.Equal(t, testCase.objectID, objectID)
+			require.Equal(t, testCase.expectedSQLs, bh.executedSQLs)
+		})
+	}
+
+	t.Run("hidden index relation cannot become an authorization object", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		_, _, err := checkPrivilegeObjectTypeAndPrivilegeLevelForGrant(
+			ctx,
+			ses,
+			bh,
+			tree.OBJECT_TYPE_TABLE,
+			tree.PrivilegeLevel{
+				Level:   tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
+				DbName:  "d",
+				TabName: catalog.IndexTableNamePrefix + "legacy",
+			},
+		)
+		require.ErrorContains(t, err, "cannot grant privileges on internal relation")
+		require.Empty(t, bh.executedSQLs)
+	})
+
+	for _, testCase := range []struct {
+		name  string
+		level tree.PrivilegeLevel
+	}{
+		{
+			name: "qualified exact subscription table grant is rejected explicitly",
+			level: tree.PrivilegeLevel{
+				Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE, DbName: "d", TabName: "published_t",
+			},
+		},
+		{
+			name: "current database exact subscription table grant is rejected explicitly",
+			level: tree.PrivilegeLevel{
+				Level: tree.PRIVILEGE_LEVEL_TYPE_TABLE, TabName: "published_t",
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			bh.sql2result[lockedDatabaseSQL("d")] = newMrsForCheckDatabase([][]interface{}{{int64(11)}})
+			bh.sql2result[lockedTableSQL("published_t")] = newMrsForCheckDatabaseTable(nil)
+
+			dbTypeSQL, err := getSqlForGetDbIdAndType(ctx, "d", true, uint64(sysAccountID))
+			require.NoError(t, err)
+			dbTypeResult := &MysqlResultSet{}
+			for _, name := range []string{"dat_id", "dat_type"} {
+				col := &MysqlColumn{}
+				col.SetName(name)
+				dbTypeResult.AddColumn(col)
+			}
+			dbTypeResult.AddRow([]interface{}{uint64(11), catalog.SystemDBTypeSubscription})
+			bh.sql2result[dbTypeSQL] = dbTypeResult
+
+			_, _, err = checkPrivilegeObjectTypeAndPrivilegeLevelForGrant(
+				ctx, ses, bh, tree.OBJECT_TYPE_TABLE, testCase.level)
+			require.ErrorContains(t, err, `exact table grants on subscription database "d" are unsupported`)
+			require.ErrorContains(t, err, `grant on "d.*" or narrow the publication table list instead`)
+			require.Equal(t, []string{
+				lockedDatabaseSQL("d"),
+				lockedTableSQL("published_t"),
+				dbTypeSQL,
+			}, bh.executedSQLs)
+		})
+	}
+
+	t.Run("missing table in ordinary database keeps missing-table diagnosis", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[lockedDatabaseSQL("d")] = newMrsForCheckDatabase([][]interface{}{{int64(11)}})
+		bh.sql2result[lockedTableSQL("missing_t")] = newMrsForCheckDatabaseTable(nil)
+
+		dbTypeSQL, err := getSqlForGetDbIdAndType(ctx, "d", true, uint64(sysAccountID))
+		require.NoError(t, err)
+		dbTypeResult := &MysqlResultSet{}
+		for _, name := range []string{"dat_id", "dat_type"} {
+			col := &MysqlColumn{}
+			col.SetName(name)
+			dbTypeResult.AddColumn(col)
+		}
+		dbTypeResult.AddRow([]interface{}{uint64(11), ""})
+		bh.sql2result[dbTypeSQL] = dbTypeResult
+
+		_, _, err = checkPrivilegeObjectTypeAndPrivilegeLevelForGrant(
+			ctx,
+			ses,
+			bh,
+			tree.OBJECT_TYPE_TABLE,
+			tree.PrivilegeLevel{
+				Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE, DbName: "d", TabName: "missing_t",
+			},
+		)
+		require.ErrorContains(t, err, `there is no table "missing_t" in database "d"`)
+		require.NotContains(t, err.Error(), "subscription database")
+	})
+
+	t.Run("lock failure prevents privilege mutation", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		roleSQL, err := getSqlForRoleIdOfRole(ctx, "r1")
+		require.NoError(t, err)
+		bh.sql2result[roleSQL] = newMrsForRoleIdOfRole([][]interface{}{{int64(7)}})
+		lockErr := errors.New("database lifecycle lock failed")
+		bh.sql2err[lockedDatabaseSQL("d")] = lockErr
+		stmt := &tree.GrantPrivilege{
+			Privileges: []*tree.Privilege{{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT}},
+			ObjType:    tree.OBJECT_TYPE_TABLE,
+			Level: &tree.PrivilegeLevel{
+				Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE, DbName: "d", TabName: "t",
+			},
+			Roles: []*tree.Role{{UserName: "r1"}},
+		}
+
+		err = doGrantPrivilege(ctx, ses, stmt, bh)
+		require.ErrorIs(t, err, lockErr)
+		require.NotContains(t, bh.executedSQLs, lockedTableSQL("t"))
+		for _, sql := range bh.executedSQLs {
+			require.NotContains(t, sql, "insert into mo_catalog.mo_role_privs")
+			require.NotContains(t, sql, "update mo_catalog.mo_role_privs")
+		}
+	})
+}
+
 func Test_doRevokePrivilege(t *testing.T) {
+	registerLockedObjects := func(ctx context.Context, bh *backgroundExecTest, database, relation string, isView bool) {
+		if database == "" {
+			return
+		}
+		dbSQL, err := getSqlForCheckDatabaseByAccount(ctx, database)
+		require.NoError(t, err)
+		bh.sql2result[strings.TrimSuffix(dbSQL, ";")+" for share;"] = newMrsForCheckDatabase([][]interface{}{{0}})
+		if relation != "" {
+			var sql string
+			if isView {
+				sql, err = getSqlForCheckDatabaseView(ctx, database, relation)
+			} else {
+				sql, err = getSqlForCheckDatabaseTable(ctx, database, relation)
+			}
+			require.NoError(t, err)
+			bh.sql2result[strings.TrimSuffix(sql, ";")+" for share;"] = bh.sql2result[sql]
+		}
+	}
 	convey.Convey("revoke account, role succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -8308,6 +9631,7 @@ func Test_doRevokePrivilege(t *testing.T) {
 				}
 			}
 
+			registerLockedObjects(ses.GetTxnHandler().GetTxnCtx(), bh, "d", "", false)
 			err = doRevokePrivilege(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, bh)
 			convey.So(err, convey.ShouldBeNil)
 		}
@@ -8452,6 +9776,7 @@ func Test_doRevokePrivilege(t *testing.T) {
 				}
 			}
 
+			registerLockedObjects(ctx, bh, dbName, tableName, false)
 			err = doRevokePrivilege(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, bh)
 			convey.So(err, convey.ShouldBeNil)
 		}
@@ -8596,6 +9921,7 @@ func Test_doRevokePrivilege(t *testing.T) {
 				}
 			}
 
+			registerLockedObjects(ctx, bh, dbName, tableName, true)
 			err = doRevokePrivilege(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, bh)
 			convey.So(err, convey.ShouldBeNil)
 		}
@@ -8669,6 +9995,104 @@ func Test_doDropFunction(t *testing.T) {
 		err := doDropFunction(ctx, ses, cu, nil)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
+}
+
+func Test_doDropFunctionIfExists(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	ses := newSes(nil, ctrl)
+	ctx := ses.GetTxnHandler().GetTxnCtx()
+	checkDBSQL, err := getSqlForCheckDatabaseByAccount(ctx, "db")
+	require.NoError(t, err)
+	bh.sql2result[checkDBSQL] = newMrsForCheckDatabase([][]interface{}{{int64(1)}})
+	bh.sql2result[fmt.Sprintf(checkUdfArgs, "testFunc", "db")] = newMrsForCheckDatabase(nil)
+
+	drop := &tree.DropFunction{
+		Name: tree.NewFuncName("testFunc",
+			tree.ObjectNamePrefix{
+				SchemaName:      tree.Identifier("db"),
+				ExplicitSchema:  true,
+				ExplicitCatalog: false,
+			},
+		),
+		IfExists: true,
+	}
+
+	require.NoError(t, doDropFunction(ctx, ses, drop, nil))
+	drop.IfExists = false
+	require.Error(t, doDropFunction(ctx, ses, drop, nil))
+}
+
+func Test_doDropFunctionIfExistsWithDifferentOverload(t *testing.T) {
+	tests := []struct {
+		name       string
+		sql        string
+		ifExists   bool
+		wantErr    bool
+		wantCommit bool
+	}{
+		{
+			name:       "if exists ignores a missing signature",
+			sql:        "drop function if exists db.testfunc (int)",
+			ifExists:   true,
+			wantCommit: true,
+		},
+		{
+			name:    "missing signature returns an error",
+			sql:     "drop function db.testfunc (int)",
+			wantErr: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+
+			bh := &backgroundExecTest{}
+			bh.init()
+			bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+			defer bhStub.Reset()
+
+			ses := newSes(nil, ctrl)
+			ctx := ses.GetTxnHandler().GetTxnCtx()
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			drop, ok := stmt.(*tree.DropFunction)
+			require.True(t, ok)
+			require.Equal(t, test.ifExists, drop.IfExists)
+
+			checkDBSQL, err := getSqlForCheckDatabaseByAccount(ctx, "db")
+			require.NoError(t, err)
+			bh.sql2result[checkDBSQL] = newMrsForCheckDatabase([][]interface{}{{int64(1)}})
+			bh.sql2result[fmt.Sprintf(checkUdfArgs, "testfunc", "db")] = newMrsForCheckUdfArgs([][]interface{}{
+				{`[{"name":"arg","type":"varchar"}]`, int64(1), `{}`},
+			})
+
+			err = doDropFunction(ctx, ses, drop, nil)
+			if test.wantErr {
+				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrDropNonExistsFunction))
+			} else {
+				require.NoError(t, err)
+			}
+
+			require.NotContains(t, bh.executedSQLs, fmt.Sprintf(deleteUserDefinedFunctionFormat, int64(1)))
+			if test.wantCommit {
+				require.Contains(t, bh.executedSQLs, "commit;")
+				require.NotContains(t, bh.executedSQLs, "rollback;")
+			} else {
+				require.Contains(t, bh.executedSQLs, "rollback;")
+				require.NotContains(t, bh.executedSQLs, "commit;")
+			}
+		})
+	}
 }
 
 func Test_doDropRole(t *testing.T) {
@@ -8982,7 +10406,19 @@ func Test_doDropUser(t *testing.T) {
 }
 
 func Test_doInterpretCall(t *testing.T) {
-	t.Skip("skip doInterpretCall")
+	convey.Convey("call procedure without database fails", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		call := &tree.CallStmt{
+			Name: tree.NewProcedureName("test_without_database", tree.ObjectNamePrefix{}),
+		}
+		ses := newSes(determinePrivilegeSetOfStatement(call), ctrl)
+
+		_, err := doInterpretCall(context.Background(), ses, call, false, 0, new(int64))
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+
 	convey.Convey("call precedure (not exist)fail", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -9022,7 +10458,7 @@ func Test_doInterpretCall(t *testing.T) {
 		mrs := newMrsForPasswordOfUser([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		_, err = doInterpretCall(ctx, ses, call, false)
+		_, err = doInterpretCall(ctx, ses, call, false, 0, new(int64))
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 
@@ -9060,8 +10496,8 @@ func Test_doInterpretCall(t *testing.T) {
 
 		sql, err := getSqlForSpBody(ses.GetTxnHandler().GetConnCtx(), string(call.Name.Name.ObjectName), ses.GetDatabaseName())
 		convey.So(err, convey.ShouldBeNil)
-		mrs := newMrsForPasswordOfUser([][]interface{}{
-			{"begin set sid = 1000; end", "{}"},
+		mrs := newMrsForStoredProcedure([][]interface{}{
+			{"unsupported", "begin set sid = 1000; end", "[]", ""},
 		})
 		bh.sql2result[sql] = mrs
 
@@ -9075,7 +10511,7 @@ func Test_doInterpretCall(t *testing.T) {
 		})
 		bh.sql2result[sql] = mrs
 
-		_, err = doInterpretCall(ctx, ses, call, false)
+		_, err = doInterpretCall(ctx, ses, call, false, 0, new(int64))
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 
@@ -9114,8 +10550,8 @@ func Test_doInterpretCall(t *testing.T) {
 
 		sql, err := getSqlForSpBody(ses.GetTxnHandler().GetConnCtx(), string(call.Name.Name.ObjectName), ses.GetDatabaseName())
 		convey.So(err, convey.ShouldBeNil)
-		mrs := newMrsForPasswordOfUser([][]interface{}{
-			{"begin DECLARE v1 INT; SET v1 = 10; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end", "{}"},
+		mrs := newMrsForStoredProcedure([][]interface{}{
+			{"sql", "begin DECLARE v1 INT; SET v1 = 10; end", "[]", ""},
 		})
 		bh.sql2result[sql] = mrs
 
@@ -9129,19 +10565,45 @@ func Test_doInterpretCall(t *testing.T) {
 		})
 		bh.sql2result[sql] = mrs
 
-		sql = "select v1 > 5"
-		mrs = newMrsForPasswordOfUser([][]interface{}{
-			{"1"},
-		})
-		bh.sql2result[sql] = mrs
-
-		sql = "select * from tbh1"
-		mrs = newMrsForPasswordOfUser([][]interface{}{})
-		bh.sql2result[sql] = mrs
-
-		_, err = doInterpretCall(ctx, ses, call, false)
+		var affectedRows int64
+		_, err = doInterpretCall(ctx, ses, call, false, 7, &affectedRows)
 		convey.So(err, convey.ShouldBeNil)
+		convey.So(affectedRows, convey.ShouldEqual, int64(7))
 	})
+}
+
+func TestProceduralOnlyStatementsPreserveAffectedRows(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ses.GetTxnCompileCtx().execCtx = &ExecCtx{
+		reqCtx: context.Background(),
+		proc:   testutil.NewProcess(t),
+		ses:    ses,
+	}
+	stmt, err := parsers.ParseOne(
+		context.Background(),
+		dialect.MYSQL,
+		"begin declare x int default 1; set x = 2; end",
+		1,
+	)
+	require.NoError(t, err)
+	varScope := []map[string]interface{}{}
+	back := &evalCondBackgroundExec{}
+	interpreter := &Interpreter{
+		ctx:                 context.Background(),
+		ses:                 ses,
+		bh:                  back,
+		varScope:            &varScope,
+		fmtctx:              tree.NewFmtCtx(dialect.MYSQL),
+		argsMap:             map[string]tree.Expr{},
+		argsAttr:            map[string]tree.InOutArgType{},
+		outParamMap:         map[string]interface{}{},
+		initialAffectedRows: 7,
+	}
+
+	require.NoError(t, interpreter.ExecuteSp(stmt, "db", false))
+	require.Equal(t, int64(7), interpreter.lastAffectedRows)
 }
 
 func TestParseStoredProcedureBodyUsesCreationSQLMode(t *testing.T) {
@@ -9210,6 +10672,123 @@ func TestInitProcedurePersistsCreationSQLMode(t *testing.T) {
 	require.Contains(t, createSQL, "'PIPES_AS_CONCAT'")
 }
 
+func TestInitProcedurePersistsDefaultBoolSumAvgSQLMode(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	cp := &tree.CreateProcedure{
+		Name: tree.NewProcedureName("procedure_default_sql_mode", tree.ObjectNamePrefix{}),
+		Lang: "sql",
+		Body: "begin select 1; end",
+	}
+	ses := newSes(determinePrivilegeSetOfStatement(cp), ctrl)
+	ses.SetDatabaseName("test_procedure")
+	bh.sql2result[getSqlForCheckProcedureExistence(string(cp.Name.Name.ObjectName), ses.GetDatabaseName())] =
+		newMrsForPasswordOfUser([][]interface{}{})
+
+	require.NoError(t, InitProcedure(ses.GetTxnHandler().GetConnCtx(), ses, ses.GetTenantInfo(), cp))
+
+	var createSQL string
+	for _, sql := range bh.executedSQLs {
+		if strings.HasPrefix(sql, "insert into mo_catalog.mo_stored_procedure") {
+			createSQL = sql
+			break
+		}
+	}
+	require.NotEmpty(t, createSQL)
+	require.Contains(t, createSQL, mysqlparser.SQLModeEnableBoolSumAvg)
+}
+
+func TestInitProcedurePersistsDeclaredArgumentType(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	stmt, err := parsers.ParseOne(
+		context.Background(),
+		dialect.MYSQL,
+		"create procedure procedure_decimal(in amount decimal(10,2)) 'begin select amount; end'",
+		1,
+	)
+	require.NoError(t, err)
+	defer stmt.Free()
+	cp, ok := stmt.(*tree.CreateProcedure)
+	require.True(t, ok)
+
+	ses := newSes(determinePrivilegeSetOfStatement(cp), ctrl)
+	ses.SetDatabaseName("test_procedure")
+	bh.sql2result[getSqlForCheckProcedureExistence(string(cp.Name.Name.ObjectName), ses.GetDatabaseName())] =
+		newMrsForPasswordOfUser([][]interface{}{})
+
+	require.NoError(t, InitProcedure(ses.GetTxnHandler().GetConnCtx(), ses, ses.GetTenantInfo(), cp))
+
+	var createSQL string
+	for _, sql := range bh.executedSQLs {
+		if strings.HasPrefix(sql, "insert into mo_catalog.mo_stored_procedure") {
+			createSQL = sql
+			break
+		}
+	}
+	require.NotEmpty(t, createSQL)
+	require.Contains(t, createSQL, `"ArgName":"amount"`)
+	require.Contains(t, createSQL, `"FamilyString":"decimal"`)
+	require.Contains(t, createSQL, `"DisplayWith":10`)
+	require.Contains(t, createSQL, `"Scale":2`)
+}
+
+func TestUpsertStoredProcedureReplaceAndDuplicateHandling(t *testing.T) {
+	ctx := context.Background()
+	tenant := &TenantInfo{User: "root"}
+	definition := storedProcedureDefinition{
+		name:    "p_replace",
+		args:    "[]",
+		lang:    "sql",
+		body:    "begin select 1; end",
+		sqlMode: "",
+		dbName:  "procedure_db",
+	}
+	checkSQL := getSqlForCheckProcedureExistence(definition.name, definition.dbName)
+
+	t.Run("replace updates the existing catalog row", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[checkSQL] = newMrsForPasswordOfUser([][]interface{}{{int64(99)}})
+
+		require.NoError(t, upsertStoredProcedure(ctx, bh, tenant, definition, true))
+		require.Len(t, bh.executedSQLs, 2)
+		require.Equal(t, checkSQL, bh.executedSQLs[0])
+		require.Contains(t, bh.executedSQLs[1], "update mo_catalog.mo_stored_procedure")
+		require.Contains(t, bh.executedSQLs[1], "where proc_id = 99")
+	})
+
+	t.Run("non replace rejects an existing catalog row before persistence", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[checkSQL] = newMrsForPasswordOfUser([][]interface{}{{int64(99)}})
+
+		require.ErrorContains(t, upsertStoredProcedure(ctx, bh, tenant, definition, false), "procedure p_replace already exists")
+		require.Equal(t, []string{checkSQL}, bh.executedSQLs)
+	})
+
+	t.Run("replace rejects an invalid existing catalog id", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[checkSQL] = newMrsForPasswordOfUser([][]interface{}{{"not-an-id"}})
+
+		require.Error(t, upsertStoredProcedure(ctx, bh, tenant, definition, true))
+		require.Equal(t, []string{checkSQL}, bh.executedSQLs)
+	})
+}
+
 func Test_initProcedure(t *testing.T) {
 	convey.Convey("init precedure fail", t, func() {
 		ctrl := gomock.NewController(t)
@@ -9271,202 +10850,34 @@ func Test_initProcedure(t *testing.T) {
 	})
 }
 
-func TestDoSetSecondaryRoleAll(t *testing.T) {
-	convey.Convey("do set secondary role succ", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
+func TestDoSwitchRoleIgnoresSecondaryRole(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
 
-		bh := &backgroundExecTest{}
-		bh.init()
+	ses := newSes(&privilege{}, ctrl)
+	tenant := &TenantInfo{
+		Tenant:        "test_account",
+		User:          "test_user",
+		DefaultRole:   "role1",
+		TenantID:      3001,
+		UserID:        3,
+		DefaultRoleID: 5,
+	}
+	ses.SetTenantInfo(tenant)
 
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		stmt := &tree.SetRole{
-			SecondaryRole: false,
-		}
-
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
-		tenant := &TenantInfo{
-			Tenant:        "test_account",
-			User:          "test_user",
-			DefaultRole:   "role1",
-			TenantID:      3001,
-			UserID:        3,
-			DefaultRoleID: 5,
-		}
-		ses.SetTenantInfo(tenant)
-
-		//no result set
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-
-		sql := getSqlForgetUserRolesExpectPublicRole(publicRoleID, ses.GetTenantInfo().UserID)
-		mrs := newMrsForPasswordOfUser([][]interface{}{
-			{"6", "role5"},
-		})
-		bh.sql2result[sql] = mrs
-
-		err := doSetSecondaryRoleAll(ses.GetTxnHandler().GetTxnCtx(), ses)
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(tenant.GetDefaultRoleID(), convey.ShouldEqual, uint32(5))
-		convey.So(tenant.GetDefaultRole(), convey.ShouldEqual, "role1")
-	})
-
-	convey.Convey("do set secondary role succ", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		bh := &backgroundExecTest{}
-		bh.init()
-
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		stmt := &tree.SetRole{
-			SecondaryRole: false,
-		}
-
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
-		tenant := &TenantInfo{
-			Tenant:        "test_account",
-			User:          "test_user",
-			DefaultRole:   "role1",
-			TenantID:      3001,
-			UserID:        3,
-			DefaultRoleID: 5,
-		}
-		ses.SetTenantInfo(tenant)
-
-		//no result set
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-
-		sql := getSqlForgetUserRolesExpectPublicRole(publicRoleID, ses.GetTenantInfo().UserID)
-		mrs := newMrsForPasswordOfUser([][]interface{}{})
-		bh.sql2result[sql] = mrs
-
-		err := doSetSecondaryRoleAll(ses.GetTxnHandler().GetTxnCtx(), ses)
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(tenant.GetDefaultRoleID(), convey.ShouldEqual, uint32(5))
-		convey.So(tenant.GetDefaultRole(), convey.ShouldEqual, "role1")
-	})
-}
-
-func TestDoSwitchRoleSecondaryRoleAllInvalidatesRuleCache(t *testing.T) {
-	convey.Convey("set secondary role all invalidates rule cache", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		bh := &backgroundExecTest{}
-		bh.init()
-
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		ses := newSes(&privilege{}, ctrl)
-		tenant := &TenantInfo{
-			Tenant:        "test_account",
-			User:          "test_user",
-			DefaultRole:   "role1",
-			TenantID:      3001,
-			UserID:        3,
-			DefaultRoleID: 5,
-		}
-		ses.SetTenantInfo(tenant)
-		ses.ruleCache = map[string]string{"db1.t1": "select a from db1.t1"}
-
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-		bh.sql2result[getSqlForgetUserRolesExpectPublicRole(publicRoleID, tenant.UserID)] = newMrsForPasswordOfUser([][]interface{}{
-			{"6", "role5"},
-		})
-
+	for _, secondaryRoleType := range []tree.SecondaryRoleType{
+		tree.SecondaryRoleTypeAll,
+		tree.SecondaryRoleTypeNone,
+	} {
 		err := doSwitchRole(ses.GetTxnHandler().GetTxnCtx(), ses, &tree.SetRole{
 			SecondaryRole:     true,
-			SecondaryRoleType: tree.SecondaryRoleTypeAll,
+			SecondaryRoleType: secondaryRoleType,
 		})
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(tenant.GetUseSecondaryRole(), convey.ShouldBeTrue)
-		convey.So(tenant.GetDefaultRoleID(), convey.ShouldEqual, uint32(5))
-		convey.So(tenant.GetDefaultRole(), convey.ShouldEqual, "role1")
-
-		ses.ruleCacheMu.RLock()
-		cacheIsNil := ses.ruleCache == nil
-		ses.ruleCacheMu.RUnlock()
-		convey.So(cacheIsNil, convey.ShouldBeTrue)
-	})
-
-	convey.Convey("set secondary role all returns setup error", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		bh := &backgroundExecTest{}
-		bh.init()
-
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		ses := newSes(&privilege{}, ctrl)
-		tenant := &TenantInfo{
-			Tenant:        "test_account",
-			User:          "test_user",
-			DefaultRole:   "role1",
-			TenantID:      3001,
-			UserID:        3,
-			DefaultRoleID: 5,
-		}
-		ses.SetTenantInfo(tenant)
-
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-		bh.sql2err[getSqlForgetUserRolesExpectPublicRole(publicRoleID, tenant.UserID)] = fmt.Errorf("load roles failed")
-
-		err := doSwitchRole(ses.GetTxnHandler().GetTxnCtx(), ses, &tree.SetRole{
-			SecondaryRole:     true,
-			SecondaryRoleType: tree.SecondaryRoleTypeAll,
-		})
-		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(tenant.GetUseSecondaryRole(), convey.ShouldBeFalse)
-	})
-}
-
-func TestDoSwitchRoleSecondaryRoleNoneInvalidatesRuleCache(t *testing.T) {
-	convey.Convey("set secondary role none invalidates rule cache", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		ses := newSes(&privilege{}, ctrl)
-		tenant := &TenantInfo{
-			Tenant:        "test_account",
-			User:          "test_user",
-			DefaultRole:   "role1",
-			TenantID:      3001,
-			UserID:        3,
-			DefaultRoleID: 5,
-		}
-		tenant.SetUseSecondaryRole(true)
-		ses.SetTenantInfo(tenant)
-		ses.ruleCache = map[string]string{"db1.t1": "select a from db1.t1"}
-
-		err := doSwitchRole(ses.GetTxnHandler().GetTxnCtx(), ses, &tree.SetRole{
-			SecondaryRole:     true,
-			SecondaryRoleType: tree.SecondaryRoleTypeNone,
-		})
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(tenant.GetUseSecondaryRole(), convey.ShouldBeFalse)
-
-		ses.ruleCacheMu.RLock()
-		cacheIsNil := ses.ruleCache == nil
-		ses.ruleCacheMu.RUnlock()
-		convey.So(cacheIsNil, convey.ShouldBeTrue)
-	})
+		require.NoError(t, err)
+		require.Equal(t, uint32(5), tenant.GetDefaultRoleID())
+		require.Equal(t, "role1", tenant.GetDefaultRole())
+		require.False(t, tenant.GetUseSecondaryRole())
+	}
 }
 
 func TestDoSwitchRolePrimaryRoleInvalidatesRuleCache(t *testing.T) {
@@ -9511,6 +10922,26 @@ func TestDoSwitchRolePrimaryRoleInvalidatesRuleCache(t *testing.T) {
 		convey.So(tenant.GetDefaultRoleID(), convey.ShouldEqual, uint32(6))
 		convey.So(tenant.GetDefaultRole(), convey.ShouldEqual, "role2")
 		convey.So(tenant.GetUseSecondaryRole(), convey.ShouldBeFalse)
+		valid, cached := ses.GetPrivilegeCache().getActiveRoleGrant(tenant.GetUserID(), 6)
+		convey.So(cached, convey.ShouldBeTrue)
+		convey.So(valid, convey.ShouldBeTrue)
+
+		// A role switch while privilege caching is disabled must not publish a
+		// membership decision that a later cache enable could reuse.
+		convey.So(ses.SetSessionSysVar(context.Background(), "enable_privilege_cache", int8(0)), convey.ShouldBeNil)
+		roleSQL, err = getSqlForRoleIdOfRole(context.Background(), "role3")
+		convey.So(err, convey.ShouldBeNil)
+		bh.sql2result[roleSQL] = newMrsForRoleIdOfRole([][]interface{}{{int64(7)}})
+		bh.sql2result[getSqlForCheckUserGrant(7, int64(tenant.UserID))] = newMrsForCheckUserGrant([][]interface{}{
+			{int64(7), int64(tenant.UserID), false},
+		})
+		err = doSwitchRole(ses.GetTxnHandler().GetTxnCtx(), ses, &tree.SetRole{
+			Role: &tree.Role{UserName: "role3"},
+		})
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(tenant.GetDefaultRoleID(), convey.ShouldEqual, uint32(7))
+		_, cached = ses.GetPrivilegeCache().getActiveRoleGrant(tenant.GetUserID(), 7)
+		convey.So(cached, convey.ShouldBeFalse)
 
 		ses.ruleCacheMu.RLock()
 		cacheIsNil := ses.ruleCache == nil
@@ -9739,6 +11170,60 @@ func TestSetGlobalSysVar(t *testing.T) {
 		value, err = ses2.GetGlobalSysVar("autocommit")
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(value, convey.ShouldEqual, 0)
+
+		groupConcatGetSQL := getSqlForGetSysVarWithAccount(sysAccountID, groupConcatMaxLenVariable)
+		bh.sql2result[groupConcatGetSQL] = newMrsForSystemVariableNameOfAccount([][]interface{}{})
+		groupConcatInsertSQL := getSqlForInsertSysVarWithAccount(
+			sysAccountID, sysAccountName, groupConcatMaxLenVariable, "4")
+		bh.sql2result[groupConcatInsertSQL] = nil
+		err = ses0.SetGlobalSysVar(context.TODO(), groupConcatMaxLenVariable, int64(0))
+		convey.So(err, convey.ShouldBeNil)
+		value, err = ses0.GetGlobalSysVar(groupConcatMaxLenVariable)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(value, convey.ShouldEqual, uint64(4))
+		info := ses0.diagnosticsSnapshot()
+		convey.So(info.codes, convey.ShouldResemble, []uint16{moerr.ER_TRUNCATED_WRONG_VALUE})
+		convey.So(info.msgs, convey.ShouldResemble,
+			[]string{groupConcatMaxLenTruncationWarning(int64(0))})
+
+		globalControls := []struct {
+			value   string
+			persist string
+			want    uint64
+		}{
+			{value: "+4", persist: "4", want: 4},
+			{value: "+9223372036854775807", persist: "9223372036854775807", want: uint64(9223372036854775807)},
+			{value: "+18446744073709551615", persist: "18446744073709551615", want: ^uint64(0)},
+		}
+		for _, tc := range globalControls {
+			ses0.resetDiagnostics()
+			bh.sql2result[getSqlForInsertSysVarWithAccount(
+				sysAccountID, sysAccountName, groupConcatMaxLenVariable, tc.persist)] = nil
+			err = ses0.SetGlobalSysVar(context.TODO(), groupConcatMaxLenVariable, tc.value)
+			convey.So(err, convey.ShouldBeNil)
+			value, err = ses0.GetGlobalSysVar(groupConcatMaxLenVariable)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(value, convey.ShouldEqual, tc.want)
+			info = ses0.diagnosticsSnapshot()
+			convey.So(info.codes, convey.ShouldBeEmpty)
+			convey.So(info.msgs, convey.ShouldBeEmpty)
+		}
+
+		for _, invalid := range []string{
+			"invalid",
+			"18446744073709551616",
+			"+18446744073709551616",
+		} {
+			ses0.resetDiagnostics()
+			err = ses0.SetGlobalSysVar(context.TODO(), groupConcatMaxLenVariable, invalid)
+			convey.So(err, convey.ShouldNotBeNil)
+			value, err = ses0.GetGlobalSysVar(groupConcatMaxLenVariable)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(value, convey.ShouldEqual, ^uint64(0))
+			info = ses0.diagnosticsSnapshot()
+			convey.So(info.codes, convey.ShouldBeEmpty)
+			convey.So(info.msgs, convey.ShouldBeEmpty)
+		}
 
 		err = ses0.SetGlobalSysVar(context.TODO(), "not exists sys var", "xxxx")
 		convey.So(err, convey.ShouldNotBeNil)
@@ -10046,7 +11531,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx, "")
+		rm := newTestRoutineManager(t, ctx)
 		ses.rm = rm
 
 		//no result set
@@ -10101,7 +11586,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx, "")
+		rm := newTestRoutineManager(t, ctx)
 		ses.rm = rm
 
 		//no result set
@@ -10156,7 +11641,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx, "")
+		rm := newTestRoutineManager(t, ctx)
 		ses.rm = rm
 
 		//no result set
@@ -10207,7 +11692,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx, "")
+		rm := newTestRoutineManager(t, ctx)
 		ses.rm = rm
 
 		//no result set
@@ -10259,7 +11744,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx, "")
+		rm := newTestRoutineManager(t, ctx)
 		ses.rm = rm
 
 		//no result set
@@ -10307,7 +11792,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx, "")
+		rm := newTestRoutineManager(t, ctx)
 		ses.rm = rm
 
 		//no result set
@@ -10362,7 +11847,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx, "")
+		rm := newTestRoutineManager(t, ctx)
 		ses.rm = rm
 
 		//no result set
@@ -10407,7 +11892,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx, "")
+		rm := newTestRoutineManager(t, ctx)
 		ses.rm = rm
 
 		//no result set
@@ -10456,7 +11941,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx, "")
+		rm := newTestRoutineManager(t, ctx)
 		ses.rm = rm
 
 		//no result set
@@ -10505,7 +11990,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx, "")
+		rm := newTestRoutineManager(t, ctx)
 		ses.rm = rm
 
 		//no result set
@@ -10540,6 +12025,13 @@ func newMrsForShowTables(rows [][]interface{}) *MysqlResultSet {
 	}
 
 	return mrs
+}
+
+func registerEmptyBranchMetadataResult(results map[string]ExecResult) {
+	results[branchMetadataReclaimSQL()] = newMrsForShowTables([][]interface{}{})
+	results[historicalAlterLineageEdgeSQL()] = newMrsForShowTables([][]interface{}{})
+	results[historicalSnapshotSourceSQL()] = newMrsForShowTables([][]interface{}{})
+	results[historicalPitrSourceSQL()] = newMrsForShowTables([][]interface{}{})
 }
 
 func newMrsForShowDatabases(rows [][]interface{}) *MysqlResultSet {
@@ -10580,7 +12072,7 @@ func Test_doDropAccount(t *testing.T) {
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		ctx = defines.AttachAccountId(ctx, 0)
 
-		rm, _ := NewRoutineManager(ctx, "")
+		rm := newTestRoutineManager(t, ctx)
 		ses.rm = rm
 
 		//no result set
@@ -10615,6 +12107,7 @@ func Test_doDropAccount(t *testing.T) {
 		bh.sql2result["drop database if exists `db1`;"] = nil
 
 		bh.sql2result["show tables from mo_catalog;"] = newMrsForShowTables([][]interface{}{})
+		registerEmptyBranchMetadataResult(bh.sql2result)
 
 		err := doDropAccount(ses.GetTxnHandler().GetTxnCtx(), bh, ses, &dropAccount{
 			IfExists: stmt.IfExists,
@@ -10645,7 +12138,7 @@ func Test_doDropAccount(t *testing.T) {
 		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx, "")
+		rm := newTestRoutineManager(t, ctx)
 		ses.rm = rm
 
 		//no result set
@@ -10664,6 +12157,7 @@ func Test_doDropAccount(t *testing.T) {
 		}
 
 		bh.sql2result["show tables from mo_catalog;"] = newMrsForShowTables([][]interface{}{})
+		registerEmptyBranchMetadataResult(bh.sql2result)
 
 		err := doDropAccount(ses.GetTxnHandler().GetTxnCtx(), bh, ses, &dropAccount{
 			IfExists: stmt.IfExists,
@@ -10692,7 +12186,7 @@ func Test_doDropAccount(t *testing.T) {
 		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx, "")
+		rm := newTestRoutineManager(t, ctx)
 		ses.rm = rm
 
 		//no result set
@@ -10718,6 +12212,71 @@ func Test_doDropAccount(t *testing.T) {
 	})
 }
 
+func TestGetSqlForDropAccountSQLTasks(t *testing.T) {
+	require.Equal(t, []string{
+		"select account_id from mo_catalog.mo_account where account_id = 42 for update;",
+		"update mo_task.sql_task set enabled = 0, updated_at = current_timestamp where account_id = 42;",
+		"delete from mo_task.sys_async_task where task_parent_id in (" +
+			"select concat('sql-task:', task_id) from mo_task.sql_task where account_id = 42 " +
+			"union select concat('sql-task:', task_id) from mo_task.sql_task_run where account_id = 42);",
+		"delete from mo_task.sql_task_run where account_id = 42;",
+		"delete from mo_task.sql_task where account_id = 42;",
+	}, getSqlForDropAccountSQLTasks(42))
+}
+
+func TestSQLTaskCleanupIndexesExistInBootstrapDDL(t *testing.T) {
+	require.Contains(t, MoTaskSQLTaskDDL, "index idx_account_id (account_id)")
+	require.Contains(t, MoTaskSQLTaskRunDDL, "index idx_account_id (account_id)")
+	require.Contains(t, MoTaskSysAsyncTaskDDL, "index idx_task_parent_id (task_parent_id)")
+}
+
+func TestDoDropAccountSQLTaskCleanupFailureRollsBack(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	bh.sql2result["begin;"] = nil
+	bh.sql2result["rollback;"] = nil
+
+	stmt := &tree.DropAccount{Name: boxExprStr("task_cleanup_failure")}
+	ses := newSes(determinePrivilegeSetOfStatement(stmt), ctrl)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	pu.SV.KillRountinesInterval = 0
+	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+	ctx = defines.AttachAccountId(ctx, 0)
+	ses.rm = newTestRoutineManager(t, ctx)
+
+	lockSQL, err := getSqlForLockMoAccountNameFormat(ctx, "task_cleanup_failure")
+	require.NoError(t, err)
+	bh.sql2result[lockSQL] = nil
+	checkSQL, err := getSqlForCheckTenant(ctx, "task_cleanup_failure")
+	require.NoError(t, err)
+	bh.sql2result[checkSQL] = newMrsForGetAllAccounts([][]interface{}{
+		{uint64(42), "task_cleanup_failure", "open", uint64(1), nil},
+	})
+
+	cleanupSQL := getSqlForDropAccountSQLTasks(42)
+	cleanupErr := errors.New("injected SQL task cleanup failure")
+	bh.sql2err[cleanupSQL[2]] = cleanupErr
+
+	err = doDropAccount(ses.GetTxnHandler().GetTxnCtx(), bh, ses, &dropAccount{
+		Name: "task_cleanup_failure",
+	})
+	require.ErrorIs(t, err, cleanupErr)
+	require.Equal(t, []string{
+		"begin;",
+		databranchutils.LineageOwnerLifecycleLockSQL(),
+		lockSQL,
+		checkSQL,
+		cleanupSQL[0],
+		cleanupSQL[1],
+		cleanupSQL[2],
+		"rollback;",
+	}, bh.executedSQLs)
+}
+
 func Test_doDropAccount_InTransaction(t *testing.T) {
 	convey.Convey("doDropAccount with inTransaction parameter", t, func() {
 		// Test case 1: inTransaction=false (default behavior - creates new transaction)
@@ -10740,7 +12299,7 @@ func Test_doDropAccount_InTransaction(t *testing.T) {
 			ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 			ctx = defines.AttachAccountId(ctx, 0)
 
-			rm, _ := NewRoutineManager(ctx, "")
+			rm := newTestRoutineManager(t, ctx)
 			ses.rm = rm
 
 			// Setup SQL results
@@ -10749,6 +12308,7 @@ func Test_doDropAccount_InTransaction(t *testing.T) {
 			bh.sql2result["rollback;"] = nil
 
 			sql, _ := getSqlForLockMoAccountNameFormat(ctx, "test_acc")
+			accountLockSQL := sql
 			bh.sql2result[sql] = nil
 
 			sql, _ = getSqlForCheckTenant(ctx, "test_acc")
@@ -10765,6 +12325,7 @@ func Test_doDropAccount_InTransaction(t *testing.T) {
 			}
 
 			bh.sql2result["show tables from mo_catalog;"] = newMrsForShowTables([][]interface{}{})
+			registerEmptyBranchMetadataResult(bh.sql2result)
 
 			sql = fmt.Sprintf(getPubInfoSql, 1) + " order by update_time desc, created_time desc"
 			bh.sql2result[sql] = newMrsForSqlForGetPubs([][]interface{}{})
@@ -10786,8 +12347,12 @@ func Test_doDropAccount_InTransaction(t *testing.T) {
 			}, false) // inTransaction=false
 
 			convey.So(err, convey.ShouldBeNil)
-			// Verify that "begin;" was executed
 			convey.So(bh.hasExecuted("begin;"), convey.ShouldBeTrue)
+			require.GreaterOrEqual(t, len(bh.executedSqls), 3)
+			require.Equal(t, "begin;", bh.executedSqls[0])
+			require.Equal(t, databranchutils.LineageOwnerLifecycleLockSQL(), bh.executedSqls[1])
+			require.Equal(t, accountLockSQL, bh.executedSqls[2])
+			requireAccountOwnedMetadataCleanup(t, bh, 1)
 		})
 
 		// Test case 2: inTransaction=true (restore scenario - uses existing transaction)
@@ -10810,7 +12375,7 @@ func Test_doDropAccount_InTransaction(t *testing.T) {
 			ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 			ctx = defines.AttachAccountId(ctx, 0)
 
-			rm, _ := NewRoutineManager(ctx, "")
+			rm := newTestRoutineManager(t, ctx)
 			ses.rm = rm
 
 			// Setup SQL results (no begin; needed)
@@ -10834,6 +12399,7 @@ func Test_doDropAccount_InTransaction(t *testing.T) {
 			}
 
 			bh.sql2result["show tables from mo_catalog;"] = newMrsForShowTables([][]interface{}{})
+			registerEmptyBranchMetadataResult(bh.sql2result)
 
 			sql = fmt.Sprintf(getPubInfoSql, 1) + " order by update_time desc, created_time desc"
 			bh.sql2result[sql] = newMrsForSqlForGetPubs([][]interface{}{})
@@ -10855,10 +12421,118 @@ func Test_doDropAccount_InTransaction(t *testing.T) {
 			}, true) // inTransaction=true
 
 			convey.So(err, convey.ShouldBeNil)
-			// Verify that "begin;" was NOT executed
 			convey.So(bh.hasExecuted("begin;"), convey.ShouldBeFalse)
+			convey.So(
+				bh.hasExecuted(databranchutils.LineageOwnerLifecycleLockSQL()),
+				convey.ShouldBeFalse,
+			)
+			requireAccountOwnedMetadataCleanup(t, bh, 1)
+		})
+
+		convey.Convey("standalone lifecycle admission failure rolls back before account lock", func() {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			bh := &backgroundExecTestWithHistory{}
+			bh.init()
+			gateSQL := databranchutils.LineageOwnerLifecycleLockSQL()
+			wantErr := errors.New("lifecycle gate failed")
+			bh.sql2result["begin;"] = nil
+			bh.sql2result["rollback;"] = nil
+			bh.sql2err[gateSQL] = wantErr
+
+			stmt := &tree.DropAccount{Name: boxExprStr("test_acc")}
+			ses := newSes(determinePrivilegeSetOfStatement(stmt), ctrl)
+			pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+			pu.SV.SetDefaultValues()
+			pu.SV.KillRountinesInterval = 0
+			ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+			ctx = defines.AttachAccountId(ctx, 0)
+			ses.rm = newTestRoutineManager(t, ctx)
+
+			err := doDropAccount(ctx, bh, ses, &dropAccount{Name: "test_acc"}, false)
+			require.ErrorIs(t, err, wantErr)
+			require.Equal(t, []string{"begin;", gateSQL, "rollback;"}, bh.executedSqls)
 		})
 	})
+}
+
+func Test_doDropAccount_AccountOwnedMetadataCleanupError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := &backgroundExecTestWithHistory{}
+	bh.init()
+
+	stmt := &tree.DropAccount{Name: boxExprStr("acc")}
+	priv := determinePrivilegeSetOfStatement(stmt)
+	ses := newSes(priv, ctrl)
+
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	pu.SV.KillRountinesInterval = 0
+	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+	ctx = defines.AttachAccountId(ctx, 0)
+
+	rm := newTestRoutineManager(t, ctx)
+	ses.rm = rm
+
+	bh.sql2result["begin;"] = nil
+	bh.sql2result["commit;"] = nil
+	bh.sql2result["rollback;"] = nil
+
+	sql, _ := getSqlForCheckTenant(ctx, "acc")
+	bh.sql2result[sql] = newMrsForGetAllAccounts([][]interface{}{
+		{uint64(1), "acc", "open", uint64(1), nil},
+	})
+
+	sql, _ = getSqlForDeleteAccountFromMoAccount(context.TODO(), "acc")
+	bh.sql2result[sql] = nil
+	for _, sql = range getSqlForDropAccount() {
+		bh.sql2result[sql] = nil
+	}
+
+	sql = fmt.Sprintf(getPubInfoSql, 1) + " order by update_time desc, created_time desc"
+	bh.sql2result[sql] = newMrsForSqlForGetPubs([][]interface{}{})
+	sql = "select 1 from mo_catalog.mo_columns where att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
+	bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{{1}})
+	sql = getSubsSql + " and sub_account_id = 1"
+	bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{})
+	bh.sql2result["show databases;"] = newMrsForShowDatabases([][]interface{}{})
+	bh.sql2result["show tables from mo_catalog;"] = newMrsForShowTables([][]interface{}{})
+
+	branchMetadataSQL := branchMetadataReclaimSQL()
+	wantErr := moerr.NewInternalErrorNoCtx("account-owned metadata cleanup failed")
+	bh.sql2err[branchMetadataSQL] = wantErr
+
+	err := doDropAccount(ctx, bh, ses, &dropAccount{Name: "acc"})
+	require.ErrorIs(t, err, wantErr)
+	require.True(t, bh.hasExecuted("rollback;"))
+	require.False(t, bh.hasExecuted(getSqlForDeleteFeatureLimitByAccountID(1)))
+}
+
+func requireAccountOwnedMetadataCleanup(t *testing.T, bh *backgroundExecTestWithHistory, accountID int64) {
+	t.Helper()
+	assertSystemAccountSQL := func(sql string) {
+		for i, executedSQL := range bh.executedSqls {
+			if executedSQL != sql {
+				continue
+			}
+			require.Equal(t, uint32(sysAccountID), bh.executionAccountIDs[i], executedSQL)
+			return
+		}
+		require.Fail(t, "expected SQL was not executed", sql)
+	}
+
+	for _, sql := range []string{
+		getSqlForDeleteFeatureLimitByAccountID(accountID),
+		branchMetadataReclaimSQL(),
+		historicalAlterLineageEdgeSQL(),
+		historicalSnapshotSourceSQL(),
+		historicalPitrSourceSQL(),
+	} {
+		assertSystemAccountSQL(sql)
+	}
 }
 
 // backgroundExecTestWithHistory extends backgroundExecTest to track SQL execution history
@@ -11206,7 +12880,8 @@ func newBh(ctrl *gomock.Controller, sql2result map[string]ExecResult) Background
 		return nil
 	}).AnyTimes()
 	bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-		return []interface{}{sql2result[currentSql]}
+		result := sql2result[currentSql]
+		return []interface{}{result}
 	}).AnyTimes()
 	bh.EXPECT().GetExecStatsArray().DoAndReturn(func() statistic.StatsArray {
 		var stats statistic.StatsArray
@@ -11222,12 +12897,112 @@ type backgroundExecTest struct {
 	sql2result                     map[string]ExecResult
 	sql2err                        map[string]error
 	executedSQLs                   []string
+	beforeExec                     func(string)
 	dropDatabaseIgnoresForeignKeys bool
+	systemCTELimits                []bool
+	lockWriterFair                 []bool
+	executionAccountIDs            []uint32
+	executionDatabaseTypes         []string
 }
 
 func (bt *backgroundExecTest) ExecStmt(ctx context.Context, statement tree.Statement) error {
 	//TODO implement me
 	panic("implement me")
+}
+
+func TestInheritViewMetadataRevalidation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+	originalAcquire := acquireAccountLifecycleSharedGates
+	acquireAccountLifecycleSharedGates = func(
+		context.Context, *Session, BackgroundExec, ...accountLifecycleGate,
+	) error {
+		return nil
+	}
+	t.Cleanup(func() { acquireAccountLifecycleSharedGates = originalAcquire })
+	runtime := moruntime.ServiceRuntime(ses.GetService())
+	readyCluster := &mockMOCluster{cnServices: []metadata.CNService{{
+		ServiceID: "ready-cn", WorkState: metadata.WorkState_Working,
+	}}}
+	oldCluster, hadOldCluster := runtime.GetGlobalVariables(moruntime.ClusterService)
+	runtime.SetGlobalVariables(moruntime.ClusterService, readyCluster)
+	t.Cleanup(func() {
+		if hadOldCluster {
+			runtime.SetGlobalVariables(moruntime.ClusterService, oldCluster)
+		} else {
+			runtime.CompareAndDeleteGlobalVariables(moruntime.ClusterService, readyCluster)
+		}
+	})
+
+	t.Run("inherits active generation", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		require.NoError(t, inheritViewMetadataRevalidation(context.Background(), bh, ses, 42))
+		require.Len(t, bh.executedSQLs, 3)
+		require.Equal(t, []string{catalog.SnapshotLifecycleSharedGateSQL, catalog.ViewMetadataLifecycleSharedGateSQL}, bh.executedSQLs[:2])
+		require.Contains(t, bh.executedSQLs[2], "select 42,0,0,0")
+		require.Contains(t, bh.executedSQLs[2], "d.dependency_generation")
+		require.Contains(t, bh.executedSQLs[2], "d.source_relation_kind")
+		require.NotContains(t, bh.executedSQLs[2], "'','','','','REVALIDATE_SCAN'")
+		require.Contains(t, bh.executedSQLs[2],
+			"in ('REVALIDATE_REQUIRED','REVALIDATE_SCAN','ACTIVATED','LEGACY_SCAN')")
+	})
+
+	t.Run("capability disabled", func(t *testing.T) {
+		disabled := &mockMOCluster{cnServices: []metadata.CNService{{
+			ServiceID: "old-cn", WorkState: metadata.WorkState_Working,
+		}}}
+		runtime.SetGlobalVariables(moruntime.ClusterService, disabled)
+		defer runtime.SetGlobalVariables(moruntime.ClusterService, readyCluster)
+		bh := &backgroundExecTest{}
+		bh.init()
+		require.NoError(t, inheritViewMetadataRevalidation(context.Background(), bh, ses, 42))
+		require.Len(t, bh.executedSQLs, 3)
+		require.Equal(t, []string{catalog.SnapshotLifecycleSharedGateSQL, catalog.ViewMetadataLifecycleSharedGateSQL}, bh.executedSQLs[:2])
+		require.Contains(t, bh.executedSQLs[2], "select 42,0,0,0")
+
+		missing := &backgroundExecTest{}
+		missing.init()
+		missing.sql2err[catalog.ViewMetadataLifecycleSharedGateSQL] =
+			moerr.NewNoSuchTableNoCtx("mo_catalog", catalog.MO_VIEW_REFRESH)
+		require.NoError(t, inheritViewMetadataRevalidation(
+			context.Background(), missing, ses, 43))
+		require.Equal(t, []string{catalog.SnapshotLifecycleSharedGateSQL, catalog.ViewMetadataLifecycleSharedGateSQL}, missing.executedSQLs)
+	})
+}
+
+func TestInitGeneralTenantLocksSharedSnapshotBeforeAccountName(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newSes(nil, ctrl)
+	originalAcquire := acquireAccountLifecycleSharedGates
+	acquireAccountLifecycleSharedGates = func(
+		context.Context, *Session, BackgroundExec, ...accountLifecycleGate,
+	) error {
+		return nil
+	}
+	t.Cleanup(func() { acquireAccountLifecycleSharedGates = originalAcquire })
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	wantErr := errors.New("snapshot lifecycle gate failed")
+	bh.sql2err[catalog.SnapshotLifecycleSharedGateSQL] = wantErr
+
+	err := InitGeneralTenant(context.Background(), bh, ses, &createAccount{
+		Name:      "issue_28433_account",
+		AdminName: "admin",
+		IdentTyp:  tree.AccountIdentifiedByPassword,
+		IdentStr:  "111",
+	})
+	require.ErrorIs(t, err, wantErr)
+
+	accountLock, err := getSqlForLockMoAccountNameFormat(context.Background(), "issue_28433_account")
+	require.NoError(t, err)
+	require.Equal(t,
+		[]string{"begin;", catalog.SnapshotLifecycleSharedGateSQL, "rollback;"},
+		bh.executedSQLs,
+	)
+	require.NotContains(t, bh.executedSQLs, accountLock)
 }
 
 func (bt *backgroundExecTest) GetExecResultBatches() []*batch.Batch {
@@ -11257,12 +13032,24 @@ func (bt *backgroundExecTest) GetExecStatsArray() statistic.StatsArray {
 }
 
 func (bt *backgroundExecTest) Exec(ctx context.Context, s string) error {
+	if bt.beforeExec != nil {
+		bt.beforeExec(s)
+	}
 	bt.currentSql = s
 	bt.executedSQLs = append(bt.executedSQLs, s)
+	bt.systemCTELimits = append(bt.systemCTELimits, process.HasSystemCTELimits(ctx))
+	bt.lockWriterFair = append(bt.lockWriterFair, defines.IsLockWriterFair(ctx))
+	accountID, _ := defines.GetAccountId(ctx)
+	bt.executionAccountIDs = append(bt.executionAccountIDs, accountID)
+	databaseType, _ := ctx.Value(defines.DatTypKey{}).(string)
+	bt.executionDatabaseTypes = append(bt.executionDatabaseTypes, databaseType)
 	if strings.HasPrefix(s, "drop database if exists ") {
 		bt.dropDatabaseIgnoresForeignKeys, _ = ctx.Value(defines.IgnoreForeignKey{}).(bool)
 	}
-	return bt.sql2err[s]
+	if err, ok := bt.sql2err[s]; ok {
+		return err
+	}
+	return nil
 }
 
 func (bt *backgroundExecTest) ExecWithSQLMode(ctx context.Context, s string, sqlMode string) error {
@@ -11273,15 +13060,18 @@ func (bt *backgroundExecTest) ExecWithSQLMode(ctx context.Context, s string, sql
 func (bt *backgroundExecTest) ExecRestore(ctx context.Context, s string, from uint32, to uint32) error {
 	bt.currentSql = s
 	bt.executedSQLs = append(bt.executedSQLs, s)
+	databaseType, _ := ctx.Value(defines.DatTypKey{}).(string)
+	bt.executionDatabaseTypes = append(bt.executionDatabaseTypes, databaseType)
 	return bt.sql2err[s]
 }
 
 func (bt *backgroundExecTest) GetExecResultSet() []interface{} {
-	if _, ok := bt.sql2result[bt.currentSql]; !ok &&
+	result, ok := bt.sql2result[bt.currentSql]
+	if !ok &&
 		strings.HasPrefix(bt.currentSql, "select granted_id,with_grant_option from mo_catalog.mo_role_grant where grantee_id = ") {
 		return []interface{}{newMrsForInheritedRoleIdOfRoleId([][]interface{}{})}
 	}
-	return []interface{}{bt.sql2result[bt.currentSql]}
+	return []interface{}{result}
 }
 
 func (bt *backgroundExecTest) ClearExecResultSet() {
@@ -11522,6 +13312,20 @@ func newMrsForPasswordOfUser(rows [][]interface{}) *MysqlResultSet {
 	return mrs
 }
 
+func newMrsForStoredProcedure(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+	for _, name := range []string{"language", "body", "args", "sql_mode"} {
+		col := &MysqlColumn{}
+		col.SetName(name)
+		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+		mrs.AddColumn(col)
+	}
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+	return mrs
+}
+
 func newMrsForFeatureRegistry(rows [][]interface{}) *MysqlResultSet {
 	mrs := &MysqlResultSet{}
 
@@ -11607,12 +13411,15 @@ func mockSnapshotQuotaResult(
 	})
 
 	countSQL := fmt.Sprintf(
-		"select count(*) from %s.%s where account_name = '%s' and level = '%s'",
-		catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, accountName, scope,
+		"select count(*) from %s.%s where account_name = '%s' and level = '%s' and kind != '%s'",
+		catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, accountName, scope, databranchutils.BranchSnapshotKind,
 	)
 	bh.sql2result[countSQL] = newMrsForSnapshotCount([][]interface{}{
 		{int64(0)},
 	})
+	if accountId != sysAccountID && scope == tree.SNAPSHOTLEVELACCOUNT.String() {
+		bh.sql2result[fmt.Sprintf("%s and obj_id = %d", countSQL, accountId)] = newMrsForSnapshotCount([][]interface{}{{int64(0)}})
+	}
 
 	return nil
 }
@@ -11755,6 +13562,22 @@ func newMrsForCheckDatabase(rows [][]interface{}) *MysqlResultSet {
 	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
 
 	mrs.AddColumn(col1)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
+func newMrsForCheckUdfArgs(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	for _, name := range []string{"args", "function_id", "body"} {
+		col := &MysqlColumn{}
+		col.SetName(name)
+		mrs.AddColumn(col)
+	}
 
 	for _, row := range rows {
 		mrs.AddRow(row)
@@ -11959,6 +13782,17 @@ func makeRowsOfMoRole(sql2result map[string]ExecResult, roleNames []string, rows
 
 func makeRowsOfMoUserGrant(sql2result map[string]ExecResult, userId int, rows [][]interface{}) {
 	sql2result[getSqlForRoleIdOfUserId(userId)] = newMrsForRoleIdOfUserId(rows)
+	for _, row := range rows {
+		if len(row) < 2 {
+			continue
+		}
+		roleID, err := strconv.ParseInt(fmt.Sprint(row[0]), 10, 64)
+		if err != nil {
+			panic(fmt.Sprintf("invalid role id %v in mo_user_grant fixture: %v", row[0], err))
+		}
+		sql2result[getSqlForCheckUserGrant(roleID, int64(userId))] = newMrsForCheckUserGrant(
+			[][]interface{}{{roleID, int64(userId), row[1]}})
+	}
 }
 
 func makeRowsOfMoRolePrivs(sql2result map[string]ExecResult, roleIds []int, entries []privilegeEntry, rowsOfMoRolePrivs [][]interface{}) {
@@ -12208,6 +14042,529 @@ func Test_cache(t *testing.T) {
 			ret = cache1.has(objectTypeTable, privilegeLevelStar, a.db, a.table, PrivilegeTypeCreateObject)
 			convey.So(ret, convey.ShouldBeFalse)
 		}
+	})
+}
+
+func TestActiveRoleGrantCacheLifecycle(t *testing.T) {
+	var nilCache *privilegeCache
+	_, cached := nilCache.getActiveRoleGrant(2, 3)
+	require.False(t, cached)
+	nilCache.setActiveRoleGrant(2, 3, true)
+
+	cache := &privilegeCache{}
+
+	_, cached = cache.getActiveRoleGrant(2, 3)
+	require.False(t, cached)
+
+	cache.setActiveRoleGrant(2, 3, true)
+	valid, cached := cache.getActiveRoleGrant(2, 3)
+	require.True(t, cached)
+	require.True(t, valid)
+
+	// Switching the session's active role cannot reuse the previous role's
+	// membership decision.
+	_, cached = cache.getActiveRoleGrant(2, 4)
+	require.False(t, cached)
+
+	cache.invalidate()
+	_, cached = cache.getActiveRoleGrant(2, 3)
+	require.False(t, cached)
+
+	cache.setActiveRoleGrant(2, 3, false)
+	valid, cached = cache.getActiveRoleGrant(2, 3)
+	require.True(t, cached)
+	require.False(t, valid)
+}
+
+func TestActiveRoleGrantCacheRejectsStaleGeneration(t *testing.T) {
+	var nilCache *privilegeCache
+	require.Zero(t, nilCache.getActiveRoleGrantGeneration())
+
+	cache := &privilegeCache{}
+	generation := cache.getActiveRoleGrantGeneration()
+	cache.invalidate()
+
+	require.False(t, cache.setActiveRoleGrantForGeneration(2, 3, true, generation))
+	_, cached := cache.getActiveRoleGrant(2, 3)
+	require.False(t, cached)
+
+	// Model the narrow race where an old validation stores after invalidate's
+	// clear. The generation embedded in the entry still makes it unusable.
+	cache.activeRoleGrant.Store(&activeRoleGrantCacheEntry{
+		key:        activeRoleGrantKey(2, 3),
+		valid:      true,
+		generation: generation,
+	})
+	_, cached = cache.getActiveRoleGrant(2, 3)
+	require.False(t, cached)
+}
+
+func TestActiveRoleGrantCachePublishesKeyAndValueAtomically(t *testing.T) {
+	cache := &privilegeCache{}
+	const iterations = 10_000
+
+	var writers sync.WaitGroup
+	writers.Add(2)
+	go func() {
+		defer writers.Done()
+		for range iterations {
+			cache.setActiveRoleGrant(2, 3, true)
+		}
+	}()
+	go func() {
+		defer writers.Done()
+		for range iterations {
+			cache.setActiveRoleGrant(4, 5, false)
+		}
+	}()
+
+	for range iterations {
+		if valid, cached := cache.getActiveRoleGrant(2, 3); cached {
+			require.True(t, valid)
+		}
+		if valid, cached := cache.getActiveRoleGrant(4, 5); cached {
+			require.False(t, valid)
+		}
+	}
+	writers.Wait()
+}
+
+func TestActiveRoleGrantValidationCompatibility(t *testing.T) {
+	for _, tenant := range []*TenantInfo{
+		{Tenant: sysAccountName, TenantID: sysAccountID, DefaultRoleID: moAdminRoleID},
+		{Tenant: sysAccountName, TenantID: sysAccountID, DefaultRoleID: publicRoleID},
+		{Tenant: "acc1", TenantID: 1, DefaultRoleID: accountAdminRoleID},
+		{Tenant: "acc1", TenantID: 1, DefaultRoleID: publicRoleID},
+	} {
+		require.False(t, activeRoleGrantNeedsCheck(tenant))
+		valid, err := activeRoleGrantIsValid(context.Background(), nil, tenant)
+		require.NoError(t, err)
+		require.True(t, valid)
+	}
+
+	require.False(t, activeRoleGrantNeedsCheck(nil))
+	require.True(t, activeRoleGrantNeedsCheck(&TenantInfo{
+		Tenant: sysAccountName, TenantID: sysAccountID, DefaultRoleID: accountAdminRoleID,
+	}))
+	require.True(t, activeRoleGrantNeedsCheck(&TenantInfo{
+		Tenant: "acc1", TenantID: 1, DefaultRoleID: moAdminRoleID,
+	}))
+	require.True(t, activeRoleGrantNeedsCheck(&TenantInfo{
+		Tenant: "acc1", TenantID: 1, DefaultRoleID: 3,
+	}))
+}
+
+func TestActiveRoleGrantAuthorizationUsesNonLockingRead(t *testing.T) {
+	sql := getSqlForCheckUserGrantForAuthorization(3, 2)
+	require.Equal(t, getSqlForCheckUserGrant(3, 2), sql)
+	require.NotContains(t, strings.ToLower(sql), "for update")
+}
+
+func TestSysTenantCustomRoleIDTwoIsRevalidated(t *testing.T) {
+	cacheEnabledStub := gostub.Stub(&privilegeCacheIsEnabled, func(context.Context, *Session) (bool, error) {
+		return true, nil
+	})
+	defer cacheEnabledStub.Reset()
+
+	cache := &privilegeCache{}
+	ses := &Session{cache: cache}
+	ses.SetTenantInfo(&TenantInfo{
+		Tenant:        sysAccountName,
+		TenantID:      sysAccountID,
+		User:          "alice",
+		UserID:        2,
+		DefaultRole:   "custom_role",
+		DefaultRoleID: accountAdminRoleID,
+	})
+	bh := &backgroundExecTest{}
+	bh.init()
+	roleGrantSQL := getSqlForCheckUserGrantForAuthorization(accountAdminRoleID, 2)
+	bh.sql2result[roleGrantSQL] = newMrsForCheckUserGrant(nil)
+	backgroundExecStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer backgroundExecStub.Reset()
+
+	valid, _, err := validateActiveRoleGrantForAuthorization(context.Background(), ses)
+	require.NoError(t, err)
+	require.False(t, valid)
+	require.Contains(t, bh.executedSQLs, roleGrantSQL)
+	cachedValid, cached := cache.getActiveRoleGrant(2, accountAdminRoleID)
+	require.True(t, cached)
+	require.False(t, cachedValid)
+}
+
+func TestActiveRoleGrantAuthorizationDoesNotSerializeSameUser(t *testing.T) {
+	cacheEnabledStub := gostub.Stub(&privilegeCacheIsEnabled, func(context.Context, *Session) (bool, error) {
+		return false, nil
+	})
+	defer cacheEnabledStub.Reset()
+
+	roleGrantSQL := getSqlForCheckUserGrantForAuthorization(3, 2)
+	arrived := make(chan struct{}, 2)
+	release := make(chan struct{})
+	executors := make([]BackgroundExec, 2)
+	for i := range executors {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[roleGrantSQL] = newMrsForCheckUserGrant(
+			[][]interface{}{{int64(3), int64(2), false}})
+		bh.beforeExec = func(sql string) {
+			if sql == roleGrantSQL {
+				arrived <- struct{}{}
+				<-release
+			}
+		}
+		executors[i] = bh
+	}
+
+	var executorMu sync.Mutex
+	nextExecutor := 0
+	backgroundExecStub := gostub.Stub(&NewBackgroundExec, func(
+		_ context.Context,
+		_ FeSession,
+		_ ...*BackgroundExecOption,
+	) BackgroundExec {
+		executorMu.Lock()
+		defer executorMu.Unlock()
+		executor := executors[nextExecutor]
+		nextExecutor++
+		return executor
+	})
+	defer backgroundExecStub.Reset()
+
+	results := make(chan error, 2)
+	start := time.Now()
+	for range 2 {
+		ses := &Session{cache: &privilegeCache{}}
+		ses.SetTenantInfo(&TenantInfo{
+			Tenant:        "acc1",
+			User:          "alice",
+			TenantID:      1,
+			UserID:        2,
+			DefaultRole:   "reader",
+			DefaultRoleID: 3,
+		})
+		go func() {
+			_, _, err := validateActiveRoleGrantForAuthorization(context.Background(), ses)
+			results <- err
+		}()
+	}
+
+	deadline := time.After(time.Second)
+	for range 2 {
+		select {
+		case <-arrived:
+		case <-deadline:
+			close(release)
+			for range 2 {
+				<-results
+			}
+			t.Fatal("same-user authorization reads did not reach the catalog concurrently")
+		}
+	}
+	close(release)
+	for range 2 {
+		require.NoError(t, <-results)
+	}
+	require.Less(t, time.Since(start), 2*time.Second)
+}
+
+func TestValidateActiveRoleGrantForAuthorizationDoesNotCacheCatalogErrors(t *testing.T) {
+	cacheEnabledStub := gostub.Stub(&privilegeCacheIsEnabled, func(context.Context, *Session) (bool, error) {
+		return true, nil
+	})
+	defer cacheEnabledStub.Reset()
+
+	ses := &Session{cache: &privilegeCache{}}
+	ses.SetTenantInfo(&TenantInfo{
+		Tenant:        "acc1",
+		User:          "alice",
+		TenantID:      1,
+		UserID:        2,
+		DefaultRole:   "reader",
+		DefaultRoleID: 3,
+	})
+	bh := &backgroundExecTest{}
+	bh.init()
+	roleGrantSQL := getSqlForCheckUserGrantForAuthorization(3, 2)
+	catalogErr := errors.New("role grant catalog unavailable")
+	bh.sql2err[roleGrantSQL] = catalogErr
+	var forcedPessimisticRC bool
+	backgroundExecStub := gostub.Stub(&NewBackgroundExec, func(
+		_ context.Context,
+		_ FeSession,
+		opts ...*BackgroundExecOption,
+	) BackgroundExec {
+		forcedPessimisticRC = len(opts) == 1 && opts[0] != nil && opts[0].forcePessimisticRC
+		return bh
+	})
+	defer backgroundExecStub.Reset()
+
+	valid, _, err := validateActiveRoleGrantForAuthorization(context.Background(), ses)
+	require.False(t, valid)
+	require.ErrorIs(t, err, catalogErr)
+	require.True(t, forcedPessimisticRC)
+	_, cached := ses.GetPrivilegeCache().getActiveRoleGrant(2, 3)
+	require.False(t, cached)
+
+	delete(bh.sql2err, roleGrantSQL)
+	bh.sql2result[roleGrantSQL] = newMrsForCheckUserGrant(
+		[][]interface{}{{int64(3), int64(2), false}})
+	valid, _, err = validateActiveRoleGrantForAuthorization(context.Background(), ses)
+	require.NoError(t, err)
+	require.True(t, valid)
+}
+
+func TestValidateActiveRoleGrantForAuthorizationPublishesOnlyAfterCommit(t *testing.T) {
+	cacheEnabledStub := gostub.Stub(&privilegeCacheIsEnabled, func(context.Context, *Session) (bool, error) {
+		return true, nil
+	})
+	defer cacheEnabledStub.Reset()
+
+	for _, tc := range []struct {
+		name  string
+		rows  [][]interface{}
+		valid bool
+	}{
+		{name: "granted", rows: [][]interface{}{{int64(3), int64(2), false}}, valid: true},
+		{name: "revoked", valid: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cache := &privilegeCache{}
+			ses := &Session{cache: cache}
+			ses.SetTenantInfo(&TenantInfo{
+				Tenant:        "acc1",
+				User:          "alice",
+				TenantID:      1,
+				UserID:        2,
+				DefaultRole:   "reader",
+				DefaultRoleID: 3,
+			})
+			bh := &backgroundExecTest{}
+			bh.init()
+			roleGrantSQL := getSqlForCheckUserGrantForAuthorization(3, 2)
+			bh.sql2result[roleGrantSQL] = newMrsForCheckUserGrant(tc.rows)
+			commitErr := errors.New("commit failed")
+			bh.sql2err["commit;"] = commitErr
+			backgroundExecStub := gostub.StubFunc(&NewBackgroundExec, bh)
+			defer backgroundExecStub.Reset()
+
+			valid, _, err := validateActiveRoleGrantForAuthorization(context.Background(), ses)
+			require.False(t, valid)
+			require.ErrorIs(t, err, commitErr)
+			require.Contains(t, bh.executedSQLs, "rollback;")
+			_, cached := cache.getActiveRoleGrant(2, 3)
+			require.False(t, cached)
+		})
+	}
+}
+
+func TestDetermineUserHasPrivilegeSetPublishesRoleGrantOnlyAfterCommit(t *testing.T) {
+	cacheEnabledStub := gostub.Stub(&privilegeCacheIsEnabled, func(context.Context, *Session) (bool, error) {
+		return true, nil
+	})
+	defer cacheEnabledStub.Reset()
+	cacheHitStub := gostub.Stub(&checkPrivilegeInCache, func(context.Context, *Session, *privilege, bool) (bool, error) {
+		return true, nil
+	})
+	defer cacheHitStub.Reset()
+
+	for _, tc := range []struct {
+		name string
+		rows [][]interface{}
+	}{
+		{name: "granted", rows: [][]interface{}{{int64(3), int64(2), false}}},
+		{name: "revoked"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cache := &privilegeCache{}
+			ses := &Session{cache: cache}
+			ses.SetTenantInfo(&TenantInfo{
+				Tenant:        "acc1",
+				User:          "alice",
+				TenantID:      1,
+				UserID:        2,
+				DefaultRole:   "reader",
+				DefaultRoleID: 3,
+			})
+			bh := &backgroundExecTest{}
+			bh.init()
+			roleGrantSQL := getSqlForCheckUserGrantForAuthorization(3, 2)
+			bh.sql2result[roleGrantSQL] = newMrsForCheckUserGrant(tc.rows)
+			commitErr := errors.New("commit failed")
+			bh.sql2err["commit;"] = commitErr
+			backgroundExecStub := gostub.StubFunc(&NewBackgroundExec, bh)
+			defer backgroundExecStub.Reset()
+
+			priv := determinePrivilegeSetOfStatement(&tree.ShowDatabases{})
+			_, _, err := determineUserHasPrivilegeSet(context.Background(), ses, priv)
+			require.ErrorIs(t, err, commitErr)
+			require.Contains(t, bh.executedSQLs, "rollback;")
+			_, cached := cache.getActiveRoleGrant(2, 3)
+			require.False(t, cached)
+		})
+	}
+}
+
+func TestDetermineUserHasPrivilegeSetPublishesRoleGrantAfterSuccessfulCommit(t *testing.T) {
+	cacheEnabledStub := gostub.Stub(&privilegeCacheIsEnabled, func(context.Context, *Session) (bool, error) {
+		return true, nil
+	})
+	defer cacheEnabledStub.Reset()
+	cacheHitStub := gostub.Stub(&checkPrivilegeInCache, func(context.Context, *Session, *privilege, bool) (bool, error) {
+		return true, nil
+	})
+	defer cacheHitStub.Reset()
+
+	for _, tc := range []struct {
+		name      string
+		rows      [][]interface{}
+		wantValid bool
+		wantError bool
+	}{
+		{name: "granted", rows: [][]interface{}{{int64(3), int64(2), false}}, wantValid: true},
+		{name: "revoked", wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cache := &privilegeCache{}
+			ses := &Session{cache: cache}
+			ses.SetTenantInfo(&TenantInfo{
+				Tenant:        "acc1",
+				User:          "alice",
+				TenantID:      1,
+				UserID:        2,
+				DefaultRole:   "reader",
+				DefaultRoleID: 3,
+			})
+			bh := &backgroundExecTest{}
+			bh.init()
+			roleGrantSQL := getSqlForCheckUserGrantForAuthorization(3, 2)
+			bh.sql2result[roleGrantSQL] = newMrsForCheckUserGrant(tc.rows)
+			bh.beforeExec = func(sql string) {
+				if sql == "commit;" {
+					_, cached := cache.getActiveRoleGrant(2, 3)
+					require.False(t, cached)
+				}
+			}
+			backgroundExecStub := gostub.StubFunc(&NewBackgroundExec, bh)
+			defer backgroundExecStub.Reset()
+
+			priv := determinePrivilegeSetOfStatement(&tree.ShowDatabases{})
+			valid, _, err := determineUserHasPrivilegeSet(context.Background(), ses, priv)
+			if tc.wantError {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, tc.wantValid, valid)
+			cachedValid, cached := cache.getActiveRoleGrant(2, 3)
+			require.True(t, cached)
+			require.Equal(t, tc.wantValid, cachedValid)
+		})
+	}
+}
+
+func TestValidateActiveRoleGrantForAuthorizationDoesNotPublishAcrossInvalidation(t *testing.T) {
+	cacheEnabledStub := gostub.Stub(&privilegeCacheIsEnabled, func(context.Context, *Session) (bool, error) {
+		return true, nil
+	})
+	defer cacheEnabledStub.Reset()
+
+	cache := &privilegeCache{}
+	ses := &Session{cache: cache}
+	ses.SetTenantInfo(&TenantInfo{
+		Tenant:        "acc1",
+		User:          "alice",
+		TenantID:      1,
+		UserID:        2,
+		DefaultRole:   "reader",
+		DefaultRoleID: 3,
+	})
+	bh := &backgroundExecTest{}
+	bh.init()
+	roleGrantSQL := getSqlForCheckUserGrantForAuthorization(3, 2)
+	bh.sql2result[roleGrantSQL] = newMrsForCheckUserGrant(
+		[][]interface{}{{int64(3), int64(2), false}})
+	bh.beforeExec = func(sql string) {
+		if sql == "commit;" {
+			_, cached := cache.getActiveRoleGrant(2, 3)
+			require.False(t, cached)
+			cache.invalidate()
+		}
+	}
+	backgroundExecStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer backgroundExecStub.Reset()
+
+	valid, _, err := validateActiveRoleGrantForAuthorization(context.Background(), ses)
+	require.NoError(t, err)
+	require.True(t, valid)
+	_, cached := cache.getActiveRoleGrant(2, 3)
+	require.False(t, cached)
+}
+
+func TestRevokedActiveRoleCannotUseAuthorizationFallbacks(t *testing.T) {
+	cacheEnabledStub := gostub.Stub(&privilegeCacheIsEnabled, func(context.Context, *Session) (bool, error) {
+		return true, nil
+	})
+	defer cacheEnabledStub.Reset()
+
+	newRevokedSession := func(priv *privilege) *Session {
+		ses := &Session{cache: &privilegeCache{}, priv: priv}
+		ses.SetFromRealUser(true)
+		ses.SetTenantInfo(&TenantInfo{
+			Tenant:        "acc1",
+			User:          "alice",
+			TenantID:      1,
+			UserID:        2,
+			DefaultRole:   "reader",
+			DefaultRoleID: 3,
+		})
+		ses.GetPrivilegeCache().setActiveRoleGrant(2, 3, false)
+		return ses
+	}
+
+	t.Run("database ownership", func(t *testing.T) {
+		stmt := &tree.DropDatabase{Name: tree.Identifier("owned_db")}
+		ses := newRevokedSession(determinePrivilegeSetOfStatement(stmt))
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[getSqlForGetOwnerOfDatabase("owned_db")] = newMrsForOwner(
+			[][]interface{}{{int64(3)}})
+		backgroundExecStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer backgroundExecStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(
+			context.Background(), ses, stmt)
+		require.False(t, ok)
+		require.Error(t, err)
+		require.Empty(t, bh.executedSQLs, "revoked role must not reach ownership fallback")
+	})
+
+	t.Run("privilege grant option", func(t *testing.T) {
+		stmt := &tree.GrantPrivilege{
+			Privileges: []*tree.Privilege{{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT}},
+			ObjType:    tree.OBJECT_TYPE_TABLE,
+			Level:      &tree.PrivilegeLevel{Level: tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR},
+		}
+		ses := newRevokedSession(determinePrivilegeSetOfStatement(stmt))
+		bh := &backgroundExecTest{}
+		bh.init()
+		backgroundExecStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer backgroundExecStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(
+			context.Background(), ses, stmt)
+		require.False(t, ok)
+		require.NoError(t, err)
+		require.Empty(t, bh.executedSQLs, "revoked role must not reach WITH GRANT OPTION traversal")
+	})
+
+	t.Run("role switch remains available", func(t *testing.T) {
+		stmt := &tree.SetRole{}
+		ses := newRevokedSession(determinePrivilegeSetOfStatement(stmt))
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(
+			context.Background(), ses, stmt)
+		require.True(t, ok)
+		require.NoError(t, err)
 	})
 }
 
@@ -13054,18 +15411,6 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedCoverageEdges(t *testing.T) {
 		require.Equal(t, 0, roleSet.Len())
 	})
 
-	t.Run("table ownership uses object scoped ownership query", func(t *testing.T) {
-		bh := &backgroundExecTest{}
-		bh.init()
-		sql := getSqlForCheckRoleHasPrivilegeWGOWithObj(int64(PrivilegeTypeTableOwnership), objectTypeTable, 10001)
-		bh.sql2result[sql] = newMrsForPrivilegeWGO([][]interface{}{{roleID}})
-
-		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObj(
-			ctx, bh, PrivilegeTypeTableOwnership, objectTypeTable, 10001)
-		require.NoError(t, err)
-		require.True(t, roleSet.Contains(roleID))
-	})
-
 	t.Run("table ownership uses object type scoped ownership query", func(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
@@ -13074,18 +15419,6 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedCoverageEdges(t *testing.T) {
 
 		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObjType(
 			ctx, bh, PrivilegeTypeTableOwnership, objectTypeView)
-		require.NoError(t, err)
-		require.True(t, roleSet.Contains(roleID))
-	})
-
-	t.Run("unsupported scoped privilege falls back to unscoped WGO sql", func(t *testing.T) {
-		bh := &backgroundExecTest{}
-		bh.init()
-		sql := getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(PrivilegeTypeCreateDatabase)
-		bh.sql2result[sql] = newMrsForPrivilegeWGO([][]interface{}{{roleID}})
-
-		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObj(
-			ctx, bh, PrivilegeTypeCreateDatabase, objectTypeTable, objectIDAll)
 		require.NoError(t, err)
 		require.True(t, roleSet.Contains(roleID))
 	})
@@ -13100,30 +15433,6 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedCoverageEdges(t *testing.T) {
 			ctx, bh, PrivilegeTypeCreateDatabase, objectTypeView)
 		require.NoError(t, err)
 		require.True(t, roleSet.Contains(roleID))
-	})
-
-	t.Run("object scoped exec error is returned", func(t *testing.T) {
-		bh := &backgroundExecTest{}
-		bh.init()
-		sql := getSqlForCheckRoleHasPrivilegeWGOWithObj(int64(PrivilegeTypeTableOwnership), objectTypeTable, 10001)
-		bh.sql2err[sql] = moerr.NewInternalError(ctx, "object scoped WGO failed")
-
-		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObj(
-			ctx, bh, PrivilegeTypeTableOwnership, objectTypeTable, 10001)
-		require.Error(t, err)
-		require.Nil(t, roleSet)
-	})
-
-	t.Run("object scoped row decode error is returned", func(t *testing.T) {
-		bh := &backgroundExecTest{}
-		bh.init()
-		sql := getSqlForCheckRoleHasPrivilegeWGOWithObj(int64(PrivilegeTypeTableOwnership), objectTypeTable, 10001)
-		bh.sql2result[sql] = newMrsForPrivilegeWGO([][]interface{}{{"bad-role-id"}})
-
-		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObj(
-			ctx, bh, PrivilegeTypeTableOwnership, objectTypeTable, 10001)
-		require.Error(t, err)
-		require.Nil(t, roleSet)
 	})
 
 	t.Run("object type scoped exec error is returned", func(t *testing.T) {
@@ -14074,7 +16383,7 @@ func TestDoDropStage(t *testing.T) {
 		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx, "")
+		rm := newTestRoutineManager(t, ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -14129,7 +16438,7 @@ func TestDoDropStage(t *testing.T) {
 		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx, "")
+		rm := newTestRoutineManager(t, ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -14184,7 +16493,7 @@ func TestDoDropStage(t *testing.T) {
 		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx, "")
+		rm := newTestRoutineManager(t, ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -14237,7 +16546,7 @@ func TestDoDropStage(t *testing.T) {
 		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx, "")
+		rm := newTestRoutineManager(t, ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -15057,7 +17366,7 @@ func TestUpload(t *testing.T) {
 		pu.FileService = fs
 		setPu("", pu)
 
-		ioses, err := NewIOSession(tConn, pu, "")
+		ioses, err := NewIOSessionWithOptions(tConn, pu, "", WithIOSessionAllocator(NewLeakCheckAllocator()))
 		assert.Nil(t, err)
 		proto := &testMysqlWriter{
 			ioses: ioses,
@@ -15182,6 +17491,52 @@ func TestCheckSnapshotExistOrNot(t *testing.T) {
 	})
 }
 
+func TestShouldInvalidateTimestampSnapshotBindings(t *testing.T) {
+	const query = "select snapshot_id from mo_catalog.mo_snapshots where ts = 123 " +
+		"order by snapshot_id for update;"
+	newSnapshotIDs := func(ids ...string) *MysqlResultSet {
+		result := &MysqlResultSet{}
+		column := &MysqlColumn{}
+		column.SetName("snapshot_id")
+		column.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+		result.AddColumn(column)
+		for _, id := range ids {
+			result.AddRow([]interface{}{id})
+		}
+		return result
+	}
+
+	for _, tc := range []struct {
+		name       string
+		ids        []string
+		queryErr   error
+		invalidate bool
+	}{
+		{name: "last snapshot", ids: []string{"dropped"}, invalidate: true},
+		{name: "another snapshot retains timestamp", ids: []string{"dropped", "retained"}},
+		{name: "catalog row already absent", invalidate: true},
+		{name: "catalog error", queryErr: errors.New("snapshot catalog unavailable")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			bh.sql2result[query] = newSnapshotIDs(tc.ids...)
+			bh.sql2err[query] = tc.queryErr
+
+			invalidate, err := shouldInvalidateTimestampSnapshotBindings(
+				context.Background(), bh, "dropped", 123)
+			if tc.queryErr != nil {
+				require.ErrorIs(t, err, tc.queryErr)
+				require.False(t, invalidate)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.invalidate, invalidate)
+			require.Equal(t, []string{query}, bh.executedSQLs)
+		})
+	}
+}
+
 func TestDoDropSnapshot(t *testing.T) {
 	convey.Convey("doDropSnapshot success", t, func() {
 		ctrl := gomock.NewController(t)
@@ -15192,6 +17547,7 @@ func TestDoDropSnapshot(t *testing.T) {
 
 		bh := &backgroundExecTest{}
 		bh.init()
+		registerEmptyHistoricalLineageResults(bh)
 
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
@@ -15242,6 +17598,7 @@ func TestDoDropSnapshot(t *testing.T) {
 
 		err := doDropSnapshot(ctx, ses, ds)
 		convey.So(err, convey.ShouldBeNil)
+		convey.So(bh.executedSQLs, convey.ShouldContain, historicalAlterLineageMetadataSQL())
 	})
 
 	convey.Convey("doDropSnapshot success", t, func() {
@@ -15253,6 +17610,7 @@ func TestDoDropSnapshot(t *testing.T) {
 
 		bh := &backgroundExecTest{}
 		bh.init()
+		registerEmptyHistoricalLineageResults(bh)
 
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
@@ -15415,6 +17773,24 @@ func TestDoDropSnapshot(t *testing.T) {
 }
 
 func TestDoCreateSnapshot(t *testing.T) {
+	// The fixtures below replace NewBackgroundExec with backgroundExecTest. Keep
+	// the test independent of any service-global InternalSQLExecutor installed
+	// by another fixture, and restore the runtime state after the test.
+	rt := moruntime.ServiceRuntime("")
+	oldExecutor, hadOldExecutor := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if hadOldExecutor {
+		require.True(t, rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, oldExecutor))
+	}
+	t.Cleanup(func() {
+		if hadOldExecutor {
+			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, oldExecutor)
+			return
+		}
+		if currentExecutor, ok := rt.GetGlobalVariables(moruntime.InternalSQLExecutor); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, currentExecutor)
+		}
+	})
+
 	convey.Convey("doCreateSnapshot success", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -15425,8 +17801,13 @@ func TestDoCreateSnapshot(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
+		oldNewBackgroundExec := NewBackgroundExec
+		defer func() { NewBackgroundExec = oldNewBackgroundExec }()
+		var forcedPessimisticRC bool
+		NewBackgroundExec = func(_ context.Context, _ FeSession, opts ...*BackgroundExecOption) BackgroundExec {
+			forcedPessimisticRC = len(opts) == 1 && opts[0] != nil && opts[0].forcePessimisticRC
+			return bh
+		}
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
@@ -15474,6 +17855,12 @@ func TestDoCreateSnapshot(t *testing.T) {
 
 		err := doCreateSnapshot(ctx, ses, cs)
 		convey.So(err, convey.ShouldBeNil)
+		convey.So(forcedPessimisticRC, convey.ShouldBeTrue)
+
+		commitErr := errors.New("snapshot commit conflict")
+		bh.sql2err["commit;"] = commitErr
+		err = doCreateSnapshot(ctx, ses, cs)
+		convey.So(err, convey.ShouldEqual, commitErr)
 	})
 
 	// non-system tenant can't create cluster level snapshot
@@ -15600,7 +17987,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		mrs2 := newMrsForPasswordOfUser([][]interface{}{{1}})
 		bh.sql2result[sql2] = mrs2
 
-		quotaErr := mockSnapshotQuotaResult(bh, tenant.Tenant, tenant.TenantID, tree.SNAPSHOTLEVELACCOUNT.String())
+		quotaErr := mockSnapshotQuotaResult(bh, "acc1", 1, tree.SNAPSHOTLEVELACCOUNT.String())
 		convey.So(quotaErr, convey.ShouldBeNil)
 
 		err := doCreateSnapshot(ctx, ses, cs)
@@ -16381,6 +18768,91 @@ func Test_determinePrivilegeSetOfStatement_CreateTableAsSelect(t *testing.T) {
 	require.True(t, seen[PrivilegeTypeDatabaseOwnership])
 	require.False(t, seen[PrivilegeTypeSelect])
 	require.False(t, seen[PrivilegeTypeInsert])
+}
+
+func Test_determinePrivilegeSetOfStatement_ShowRules(t *testing.T) {
+	stmt := &tree.ShowRules{RoleName: "r1"}
+	priv := determinePrivilegeSetOfStatement(stmt)
+
+	require.Equal(t, privilegeKindGeneral, priv.kind)
+	require.Equal(t, objectTypeAccount, priv.objectType())
+	require.True(t, priv.canExecInRestricted)
+
+	seen := make(map[PrivilegeType]bool)
+	for _, entry := range priv.entries {
+		seen[entry.privilegeId] = true
+	}
+	require.True(t, seen[PrivilegeTypeAlterRole])
+	require.True(t, seen[PrivilegeTypeAccountAll])
+}
+
+func Test_authenticateShowRulesRequiresAlterRole(t *testing.T) {
+	stmt := &tree.ShowRules{RoleName: "r1"}
+	priv := determinePrivilegeSetOfStatement(stmt)
+
+	convey.Convey("ordinary role without alter role cannot show rules", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newSes(priv, ctrl)
+
+		rowsOfMoUserGrant := [][]interface{}{
+			{0, false},
+		}
+		roleIdsInMoRolePrivs := []int{0}
+		rowsOfMoRolePrivs := [][]interface{}{}
+		roleIdsInMoRoleGrant := []int{0}
+		rowsOfMoRoleGrant := [][]interface{}{}
+
+		sql2result := makeSql2ExecResult(0, rowsOfMoUserGrant,
+			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
+			roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
+
+		bh := newBh(ctrl, sql2result)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(
+			ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeFalse)
+	})
+
+	convey.Convey("role with alter role can show rules", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newSes(priv, ctrl)
+
+		rowsOfMoUserGrant := [][]interface{}{
+			{0, false},
+		}
+		roleIdsInMoRolePrivs := []int{0}
+		rowsOfMoRolePrivs := make([][][][]interface{}, len(roleIdsInMoRolePrivs))
+		for i := 0; i < len(roleIdsInMoRolePrivs); i++ {
+			rowsOfMoRolePrivs[i] = make([][][]interface{}, len(priv.entries))
+		}
+		// AlterRole granted; AccountAll not granted.
+		rowsOfMoRolePrivs[0][0] = [][]interface{}{
+			{int64(PrivilegeTypeAlterRole), false},
+		}
+		rowsOfMoRolePrivs[0][1] = [][]interface{}{}
+
+		roleIdsInMoRoleGrant := []int{0}
+		rowsOfMoRoleGrant := [][][]interface{}{{}}
+
+		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant, roleIdsInMoRolePrivs,
+			priv.entries, rowsOfMoRolePrivs, roleIdsInMoRoleGrant, rowsOfMoRoleGrant, nil, nil)
+
+		bh := newBh(ctrl, sql2result)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(
+			ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+	})
 }
 
 func TestCopyTablePrivileges(t *testing.T) {

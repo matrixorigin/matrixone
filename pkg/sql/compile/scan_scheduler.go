@@ -17,7 +17,6 @@ package compile
 import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
@@ -28,10 +27,6 @@ func (c *Compile) generateNodes(node *plan.Node) (engine.Nodes, error) {
 	rel, _, _, err := c.handleDbRelContext(node, false)
 	if err != nil {
 		return nil, err
-	}
-
-	if nodes := c.partitionedIvfScanNodes(node); nodes != nil {
-		return nodes, nil
 	}
 
 	forceSingle := forceSingleScan(node)
@@ -46,7 +41,7 @@ func (c *Compile) generateNodes(node *plan.Node) (engine.Nodes, error) {
 		QueryPlacementReason: c.queryPlacement.Reason,
 		Stats:                stats,
 		ForceSingle:          forceSingle,
-		ForceMultiCN:         plan2.GetForceScanOnMultiCN() || plan2.IsIvfSearchEntriesInternalScan(node),
+		ForceMultiCN:         plan2.GetForceScanOnMultiCN(),
 		OneCNBlockThreshold:  int32(plan2.BlockThresholdForOneCN),
 	}
 	scanPlacement := schedule.DecideScanPlacement(scanRequest)
@@ -60,26 +55,6 @@ func (c *Compile) generateNodes(node *plan.Node) (engine.Nodes, error) {
 	return c.materializeScanNodes(scanPlacement.Workers, stats, node, rel)
 }
 
-func (c *Compile) partitionedIvfScanNodes(node *plan.Node) engine.Nodes {
-	if !plan2.IsIvfSearchEntriesInternalScan(node) {
-		return nil
-	}
-	param := node.GetIndexReaderParam()
-	if param.GetPartitionCnCnt() <= 1 {
-		return nil
-	}
-	mcpu := 1
-	if node.GetStats() != nil && node.GetStats().GetDop() > 0 {
-		mcpu = int(node.GetStats().GetDop())
-	}
-	return engine.Nodes{{
-		Addr:  c.addr,
-		Mcpu:  normalizeMcpu(mcpu),
-		CNCNT: param.GetPartitionCnCnt(),
-		CNIDX: param.GetPartitionCnIdx(),
-	}}
-}
-
 func forceSingleScan(node *plan.Node) bool {
 	if len(node.AggList) == 0 {
 		return false
@@ -91,14 +66,7 @@ func forceSingleScan(node *plan.Node) bool {
 	if node.Stats != nil && node.Stats.ForceOneCN {
 		return true
 	}
-	for _, agg := range node.AggList {
-		if f, ok := agg.Expr.(*plan.Expr_F); ok {
-			if (uint64(f.F.Func.Obj) & function.Distinct) != 0 {
-				return true
-			}
-		}
-	}
-	return false
+	return plan2.RequiresSingleStageDistinctAgg(node)
 }
 
 func (c *Compile) localScanNodes(

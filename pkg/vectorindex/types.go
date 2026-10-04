@@ -15,13 +15,19 @@
 package vectorindex
 
 import (
-	"runtime"
-
+	"encoding/binary"
+	"fmt"
 	"github.com/bytedance/sonic"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	usearch "github.com/unum-cloud/usearch/golang"
+	"hash/crc32"
 )
+
+// QUANTIZATION lives in pkg/vectorindex/quantizer: ToVectorType, Int8Params,
+// SQLTypeName, TrainInt8, ApplyInt8, and the SQL entry-projection builders.
 
 /*
   HNSW vector index using usearch
@@ -67,6 +73,49 @@ const (
 // time alongside the real sub-index models.
 const CdcTailId = "cdc_tail"
 
+// MaxMetadataInsertTuples bounds the metadata rows per INSERT statement. A tail flush writes one
+// row per chunk, so a large flush would otherwise build one statement out of hundreds of tuples.
+const MaxMetadataInsertTuples = 500
+
+// TailFrameMetaId names the metadata row describing ONE tail frame, keyed by the chunk id the
+// frame starts at. That key is what lets the row be referred back to its bytes: chunk ids are
+// assigned contiguously in frame order, so a frame owns
+// [startChunkId, startChunkId+ceil(filesize/MaxChunkSize)) and any chunk belongs to the row with
+// the greatest start id at or below it.
+func TailFrameMetaId(startChunkId int64) string {
+	return fmt.Sprintf("%s:%d", CdcTailId, startChunkId)
+}
+
+// TailFrameMetaPrefix matches every tail frame row and nothing else: base/sub-index ids are
+// "<index table>:<ts>:<n>" or ":<n>:<n>:<n>", so they cannot begin with this.
+const TailFrameMetaPrefix = CdcTailId + ":"
+
+// TailFrameSQL and NotTailFrameSQL are the two predicates a metadata query needs: the tail
+// frames, and their complement, the bases.
+//
+// The metadata table holds two kinds of row: one per base/sub-index, and one per CDC tail frame.
+// A reader that forgets this loads a tail frame AS a base, or folds the tail's bytes into the
+// base totals.
+//
+// The test is prefix_eq, NOT `LIKE 'cdc_tail:%'`. `_` is LIKE's single-character wildcard, so
+// that pattern also matches `cdcXtail:...` for any X -- and this predicate is the load-bearing
+// boundary between "base generation" and "tail frame": a row on the wrong side is excluded from
+// LoadMetadata (a sub-index that never loads), kept by DeleteAllBasesSqls, and deleted by
+// DeleteTailSqls. Today's generated ids cannot collide, but the classification must not rest on
+// that, and escaping the wildcard would put the answer at the mercy of how one more layer
+// handles a backslash.
+//
+// prefix_eq is bytes.HasPrefix (pkg/sql/plan/function/func_prefix.go): no pattern to interpret,
+// and the planner recognizes it as a range predicate, so unlike a substring() comparison it can
+// still be served by a prefix scan on index_id.
+func TailFrameSQL(indexIdCol string) string {
+	return fmt.Sprintf("prefix_eq(%s, %s)", indexIdCol, sqlquote.String(TailFrameMetaPrefix))
+}
+
+func NotTailFrameSQL(indexIdCol string) string {
+	return fmt.Sprintf("NOT prefix_eq(%s, %s)", indexIdCol, sqlquote.String(TailFrameMetaPrefix))
+}
+
 type DistributionMode uint16
 
 const (
@@ -108,16 +157,28 @@ type IndexTableConfig struct {
 	ThreadsSearch int64  `json:"threads_search"`
 
 	// IVF related
-	EntriesTable   string  `json:"entries"`
-	DataSize       int64   `json:"datasize"`
-	Nprobe         uint    `json:"nprobe"`
-	PKeyType       int32   `json:"pktype"`
-	KeyPartType    int32   `json:"parttype"`
-	Limit          uint64  `json:"limit"`
-	LowerBoundType int8    `json:"lower_bound_type"`
-	LowerBound     float64 `json:"lower_bound"`
-	UpperBoundType int8    `json:"upper_bound_type"`
-	UpperBound     float64 `json:"upper_bound"`
+	EntriesTable       string   `json:"entries"`
+	DataSize           int64    `json:"datasize"`
+	Nprobe             uint     `json:"nprobe"`
+	PKeyType           int32    `json:"pktype"`
+	KeyPartType        int32    `json:"parttype"`
+	KmeansTrainPercent float64  `json:"kmeans_train_percent"`
+	KmeansMaxIteration int64    `json:"kmeans_max_iteration"`
+	Limit              uint64   `json:"limit"`
+	LowerBoundType     int8     `json:"lower_bound_type"`
+	LowerBound         float64  `json:"lower_bound"`
+	UpperBoundType     int8     `json:"upper_bound_type"`
+	UpperBound         float64  `json:"upper_bound"`
+	IncludeColumns     []string `json:"include_columns,omitempty"`
+	IncludeColumnTypes []int32  `json:"include_column_types,omitempty"`
+
+	// PostFilterOverFetch tells the search to grow the candidate budget so that
+	// k rows still survive a residual filter applied after the search. The plan
+	// sets it when a residual post-filter is present but the LIMIT is a prepared
+	// parameter (LIMIT ?), whose value is unknown until EXECUTE — the search
+	// resolves k there and over-fetches via pkg/vectorindex/overfetch. A literal
+	// LIMIT is over-fetched at plan time instead, and leaves this false.
+	PostFilterOverFetch bool `json:"post_filter_overfetch,omitempty"`
 
 	// GPU related
 	BatchWindow int64 `json:"batch_window"`
@@ -150,16 +211,17 @@ type IvfParam struct {
 
 // IVF-PQ specified parameters
 type IvfpqParam struct {
-	Lists              string `json:"lists"`
-	M                  string `json:"m"`
-	BitsPerCode        string `json:"bits_per_code"`
-	OpType             string `json:"op_type"`
-	Quantization       string `json:"quantization"`
-	Distribution       string `json:"distribution_mode"`
-	IncludedColumns    string `json:"included_columns"`
-	KmeansTrainPercent string `json:"kmeans_train_percent"`
-	KmeansMaxIteration string `json:"kmeans_max_iteration"`
-	MaxIndexCapacity   string `json:"max_index_capacity"`
+	Lists               string `json:"lists"`
+	M                   string `json:"m"`
+	BitsPerCode         string `json:"bits_per_code"`
+	OpType              string `json:"op_type"`
+	Quantization        string `json:"quantization"`
+	Distribution        string `json:"distribution_mode"`
+	IncludedColumns     string `json:"included_columns"`
+	KmeansTrainPercent  string `json:"kmeans_train_percent"`
+	KmeansMaxIteration  string `json:"kmeans_max_iteration"`
+	MaxIndexCapacity    string `json:"max_index_capacity"`
+	QuantizerTrainLimit string `json:"quantizer_train_limit"`
 }
 
 // CAGRA specified parameters
@@ -176,16 +238,23 @@ type CagraParam struct {
 	ITopkSize              string `json:"itopk_size"`
 	IncludedColumns        string `json:"included_columns"`
 	MaxIndexCapacity       string `json:"max_index_capacity"`
+	QuantizerTrainLimit    string `json:"quantizer_train_limit"`
 }
 
 type IvfflatIndexConfig struct {
-	Lists              uint
-	Metric             uint16
-	InitType           uint16
-	Dimensions         uint
-	Spherical          bool
-	Version            int64
-	VectorType         int32
+	Lists      uint
+	Metric     uint16
+	InitType   uint16
+	Dimensions uint
+	Spherical  bool
+	Version    int64
+	VectorType int32
+	// CentroidType is the element type the centroid hidden table is stored in.
+	// Entries always keep VectorType (the input/quantization type); centroids may
+	// be f32 (decoupled — best recall, fast f32 SIMD search, negligible RAM for
+	// few centroids) or follow VectorType (least RAM, narrow-native search). 0 ==
+	// unset is treated as T_array_float32. (cuVS allows the same choice.)
+	CentroidType       int32
 	KmeansTrainPercent float64
 	KmeansMaxIteration int64
 }
@@ -213,6 +282,7 @@ type CuvsCagraIndexConfig struct {
 	Quantization            uint16
 	DistributionMode        uint16
 	IncludedColumns         []string
+	QuantizerTrainLimit     uint64
 }
 
 type CuvsIvfpqIndexConfig struct {
@@ -226,6 +296,7 @@ type CuvsIvfpqIndexConfig struct {
 	Version                int64
 	KmeansTrainsetFraction float64
 	IncludedColumns        []string
+	QuantizerTrainLimit    uint64
 }
 
 // This is generalized index config and able to share between various algorithm types.  Simply add your new configuration such as usearch.IndexConfig
@@ -245,18 +316,116 @@ type RuntimeConfig struct {
 	Probe             uint
 	OrigFuncName      string
 	BackgroundQueries []*plan.Query
-	NThreads          uint // Brute Force Index
 
 	// FilterJSON is a JSON predicate array forwarded verbatim to CGo
 	// (gpu_<idx>_search_with_filter). Empty → unfiltered search path.
 	// Go never parses this payload; it's produced by the SQL layer and
 	// consumed by the C++ eval_filter_bitmap_cpu.
 	FilterJSON string
+
+	// Emit, when non-nil, requests a STREAMING search: instead of returning all
+	// results at once, the index yields them in bounded batches by calling Emit once
+	// per batch with a *SearchOutput (Search then returns empty keys/distances). Only
+	// the fulltext2 index honors it, and only for the no-LIMIT case (return every
+	// matching doc, ranked by an upstream ORDER BY) — so it walks and streams without a
+	// top-K heap. Other algorithms ignore this field.
+	//
+	// Emit hands the consumer the SAME box-free container SearchInto fills (see
+	// SearchOutput), so the two result paths share one consumer. Ownership differs by
+	// path: SearchInto's out is caller-OWNED and reused across queries; an Emit batch is
+	// PRODUCER-owned per flush — its out.Keys is a pooled ColumnBuffer the consumer must
+	// recycle (PutColumnBuffer) once it has copied the batch out, and out.Include/out.Dists
+	// are per-batch and dropped. out.Dists is float32 (matching the T_float32 score column),
+	// out.Include is column-major (one nullable ColumnBuffer per FULL index INCLUDE column,
+	// segment order) or empty when the caller requested no include columns — so a
+	// million-row stream boxes nothing.
+	Emit func(out *SearchOutput) error
+
+	// Optional raw runtime-filter payload from the build side. IVF search turns
+	// this into either an exact-pk filter or a membership filter for entries.
+	RuntimeFilterData []byte
+	NThreads          uint // Brute Force Index
+
+	// Query-scoped IVF search state. These fields must not be cached on the
+	// shared index object because every query can ask for different output
+	// columns, push down different predicates, and advance through different
+	// search rounds.
+	//
+	// RuntimeConfig is passed to Search by value. Pointer fields such as
+	// IncludeResult and SearchCursor can be mutated by Search and observed by
+	// the caller. Value fields such as SearchRoundLimit and BucketExpandStep are
+	// copied into Search and do not propagate caller-visible mutations back out.
+	RequestedIncludeColumns []string
+	PushdownFilterSQL       string
+	// PushdownFilters is the typed VECTOR_INDEX_SCAN equivalent of
+	// PushdownFilterSQL. Expressions are already rebound to entries-table
+	// columns and are applied before the physical round top-k.
+	PushdownFilters  []*plan.Expr
+	IncludeResult    *IvfIncludeResult
+	TargetRows       uint
+	SearchRoundLimit uint
+	BucketExpandStep uint
+	SearchCursor     *IvfSearchCursor
+	// IvfPrepareRouteOnly seals centroid routing without opening entry readers.
+	IvfPrepareRouteOnly bool
+	// IvfRoutePrepared distinguishes an empty prepared route from an uninitialized cursor.
+	IvfRoutePrepared bool
+
+	// SearchedBuildTS, when non-nil, receives the build_ts of the generation this search ACTUALLY
+	// ran on, captured UNDER the cache entry's read lock (atomic with the search) and observed by
+	// the caller after Search returns. A caller that must bound follow-up work to the SAME
+	// generation -- the fulltext2 json-probe table_changes tail -- MUST use this, never a
+	// post-search GetBuildTS: the entry lock is released when Search returns, so a concurrent
+	// evict+reload can publish a NEWER generation before that later read, binding the follow-up
+	// above what was searched and silently dropping the rows in the gap between.
+	SearchedBuildTS *int64
+
+	// EmptyGeneration, when non-nil, receives the searched index's empty-generation flag
+	// captured under the cache entry's read lock during Search/SearchInto. The cache reads
+	// it back to decide eviction without touching the underlying algo unsynchronized.
+	EmptyGeneration *bool
 }
 
+type IvfIncludeResult struct {
+	ColNames []string
+	Data     map[string][]any
+	Nulls    map[string][]bool
+}
+
+// SearchOutput is the box-free result container shared by BOTH fulltext2 result paths:
+// the pull path (LIMIT) fills a caller-owned one via VectorIndexSearchIf.SearchInto, and
+// the push path (no-LIMIT streaming) hands one per batch through RuntimeConfig.Emit. One
+// shape, one consumer. Fields (len(Dists) == Keys.N on both paths):
+//   - Keys: the pk column, box-free for EVERY pk type (unlike SearchFloat32's []int64).
+//   - Dists: scores aligned to Keys (float32 matches the T_float32 score column).
+//   - Include: one nullable ColumnBuffer per FULL index INCLUDE column (segment order), or
+//     empty when rt.RequestedIncludeColumns is empty; the TVF maps its projected columns to
+//     segment positions the same way on both paths.
+//
+// Two ownership modes:
+//   - SearchInto (pull): the caller pools the SearchOutput and its buffers and Resets them
+//     per query, so a warm LIMIT query allocates nothing for its results. SearchInto Resets
+//     before filling.
+//   - Emit (push): each batch's SearchOutput is producer-owned; its Keys is a pooled
+//     ColumnBuffer the consumer must recycle after copying, and Dists/Include are per-batch.
+type SearchOutput struct {
+	Keys    *ColumnBuffer
+	Dists   []float32
+	Include []*ColumnBuffer
+}
+
+type IvfSearchCursor struct {
+	RankedCentroidIDs  []int64
+	NextBucketOffset   uint
+	CurrentBucketCount uint
+	Round              uint
+	Exhausted          bool
+}
+
+// ColumnBuffer (the typed, box-free streaming key batch used by Emit) lives in
+// columnbuffer.go.
+
 type VectorIndexCdc[T types.RealNumbers] struct {
-	// Start string                   `json:"start"`
-	// End   string                   `json:"end"`
 	Data []VectorIndexCdcEntry[T] `json:"cdc"`
 }
 
@@ -315,7 +484,6 @@ func (h *VectorIndexCdc[T]) Delete(key int64) {
 }
 
 func (h *VectorIndexCdc[T]) ToJson() (string, error) {
-
 	b, err := sonic.Marshal(h)
 	if err != nil {
 		return "", err
@@ -343,21 +511,26 @@ type HnswCdcParam struct {
 	VecType   int32     `json:"type"`
 }
 
-// nthread == 0, result will return NumCPU - 1
+// nthread == 0 uses the effective Go scheduler parallelism. runtime.NumCPU
+// reports the host CPU count in quota-limited containers and can therefore
+// oversubscribe every concurrent vector query by a large factor.
 func GetConcurrency(nthread int64) int64 {
-	if nthread > 0 {
-		return nthread
-	}
-	ncpu := runtime.NumCPU()
-	return int64(ncpu)
+	return resolveConcurrency(nthread, system.GoMaxProcs())
 }
 
-// nthread == 0, result will return NumCPU
+// nthread == 0 uses the effective Go scheduler parallelism.
 func GetConcurrencyForBuild(nthread int64) int64 {
+	return resolveConcurrency(nthread, system.GoMaxProcs())
+}
+
+func resolveConcurrency(nthread int64, maxProcs int) int64 {
 	if nthread > 0 {
 		return nthread
 	}
-	return int64(runtime.NumCPU())
+	if maxProcs < 1 {
+		return 1
+	}
+	return int64(maxProcs)
 }
 
 // SimulateDevices is a test-only seam for exercising SHARDED / REPLICATED
@@ -372,4 +545,32 @@ func SimulateDevices(devices []int, n int64) []int {
 	sim := make([]int, n)
 	// all zeros -> every logical rank maps to physical device 0
 	return sim
+}
+
+// CdcChunkSetChecksum renders the checksum recorded on a CDC tail frame's metadata row.
+//
+// A flush spans as many chunks as its records need and the row describes all of them, so:
+//
+//	one chunk  -- that chunk's own CRC32, the value in its footer
+//	several    -- the CRC32 over their CRC32s in chunk order, which changes if any chunk's
+//	              content changes, if one goes missing, or if they come back reordered
+//	none       -- empty
+//
+// Plain hex, no algorithm tag. A reader reaches this column through the row's index_id -- the
+// tail rows are keyed cdc_tail:<n> and readMetadata selects by exact id -- so it already knows
+// which kind of row it holds, and how many chunks the frame has, which is what selects between
+// the two rules above. (The base sub-index rows carry an MD5 here; at 32 hex against 8 there is
+// nothing to confuse even by eye.)
+func CdcChunkSetChecksum(sums []uint32) string {
+	switch len(sums) {
+	case 0:
+		return ""
+	case 1:
+		return fmt.Sprintf("%08x", sums[0])
+	}
+	buf := make([]byte, 4*len(sums))
+	for i, s := range sums {
+		binary.LittleEndian.PutUint32(buf[i*4:], s)
+	}
+	return fmt.Sprintf("%08x", crc32.ChecksumIEEE(buf))
 }

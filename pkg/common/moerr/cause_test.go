@@ -45,7 +45,6 @@ var causeArray = []error{
 	CauseSaveProfile,
 	CauseHeartbeat,
 	CauseCanClaimDaemonTask,
-	CauseMergeObject,
 	CauseRSSCacheEvict,
 
 	CauseDeadlineContextCodec,
@@ -71,6 +70,20 @@ var causeArray = []error{
 	CauseReadCache,
 	CauseRemoteCacheRead,
 
+	CauseIcebergConfig,
+	CauseIcebergCatalog,
+	CauseIcebergMetadata,
+	CauseIcebergPlanning,
+	CauseIcebergCredential,
+	CauseIcebergResidency,
+	CauseIcebergInternal,
+
+	CauseISCPIterationTimeout,
+	CauseISCPFlushJobStatusTimeout,
+	CauseISCPFlushPermanentErrorMessageTimeout,
+	CauseISCPTransactionFinishTimeout,
+	CauseISCPGetTaskRunnerTimeout,
+
 	CauseWorkspaceRSSCacheEvict,
 
 	CauseRegisterCdc,
@@ -90,6 +103,7 @@ var causeArray = []error{
 
 	CauseDoAllocate,
 	CauseDoUpdate,
+	CauseDoForceSetOffset,
 	CauseDestroyTables,
 	CauseAllocate,
 
@@ -148,6 +162,9 @@ var causeArray = []error{
 
 	CauseWaitRemoteRegsReady,
 
+	CauseMongoDBClientCleanup,
+	CauseMongoDBClientRetirement,
+
 	CauseIsAvailable,
 	CauseNewMessageSenderOnClient,
 	CauseWaitingTheStopResponse,
@@ -168,8 +185,6 @@ var causeArray = []error{
 	CauseTransferTaskToCN,
 	CauseTransferRequest2OtherCNs,
 	CauseDoUnsubscribeTable,
-
-	CauseKafkaSinkConnectorExecutor,
 
 	CauseResumeTaskHandle,
 	CauseRestartTaskHandle,
@@ -207,21 +222,6 @@ var causeArray = []error{
 	CauseSaveLog,
 	CauseNewCatalogHandler,
 
-	CauseWatch,
-	CauseUpdateState,
-	CauseAddTableFilter,
-	CauseClearTableFilters,
-	CauseRefreshTableFilters,
-	CauseWriteToMO,
-	CauseWriteToS3,
-	CauseAddStatementFilter,
-	CauseClearStatementFilters,
-	CauseRefreshStatementFilters,
-	CauseAddTxnFilter,
-	CauseClearTxnFilters,
-	CauseRefreshTxnFilters,
-	CauseDoAddTxnError,
-
 	CauseAddressFunc,
 
 	CauseWriteRowRecords,
@@ -242,8 +242,6 @@ var causeArray = []error{
 	CauseShardingLocalReader,
 	CauseHakeeperIDGeneratorNew,
 	CauseHakeeperIDGeneratorNewIDByKey,
-
-	CauseDoTxnRequest,
 
 	CauseRetryWithIntervalAndTimeout,
 

@@ -38,19 +38,17 @@
 #
 # make proto-vendor
 #
-# To compile mo-service with GPU support,
-# 1. install CUDA toolkit (version 12.0, 13.0, or above)
-# 2. install cuVS Go bindings with conda
-#  % git clone git@github.com:rapidsai/cuvs.git
-#  % cd cuvs
-#  % conda env create --name go -f conda/environments/go_cuda-130_arch-$(uname -m).yaml
-#  % conda activate go
-# 3. compile matrixone
-#  % cd matrixone
-#  % MO_CL_CUDA=1 make
+# To compile mo-service with GPU support, use the frozen Pixi profile described
+# in optools/gpu/README.md. CPU-only builds do not require Pixi.
+
+# Go toolchain (override with `make GO=/path/to/go ...`); defaults to `go`.
+# Requires Go 1.26+ for the arch-specific SIMD kernels (built by default on x86_64).
+ifeq ($(GO),)
+	GO=go
+endif
 
 # where am I
-ROOT_DIR = $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
+ROOT_DIR := $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 BIN_NAME := mo-service
 # MatrixOne is a single-module repository. Official Make targets must not
 # inherit a parent or user-selected go.work that can replace dependencies.
@@ -115,6 +113,13 @@ help:
 	@echo "  make ut                 - Run unit tests"
 	@echo "  make ci                 - Run CI tests (BVT + optional UT)"
 	@echo "  make compose            - Run docker compose BVT tests"
+	@echo "  make test-iceberg-e2e-local - Run local Nessie/MinIO/MO Iceberg E2E smoke"
+	@echo "  make test-iceberg-local - Run legacy local Iceberg CI gates"
+	@echo "  make test-iceberg-nightly - Run enabled Iceberg external nightly gates"
+	@echo "  make test-iceberg-golden-real - Run real-file Iceberg golden cross-engine scenarios"
+	@echo "  make test-iceberg-external-templates - Validate external Iceberg scenario templates"
+	@echo "  make test-iceberg-readiness - Generate external Iceberg test readiness report"
+	@echo "  make test-iceberg-external-coverage - Verify external reports cover expected ICE-TEST ids"
 	@echo ""
 	@echo "Local Development with MinIO:"
 	@echo "  make dev-up-minio-local     - Start MinIO service (local storage)"
@@ -123,6 +128,14 @@ help:
 	@echo "  make dev-status-minio-local - Show MinIO service status"
 	@echo "  make dev-logs-minio-local   - Show MinIO logs"
 	@echo "  make dev-clean-minio-local  - Clean MinIO data"
+	@echo "  make dev-up-iceberg-tier-a  - Start MinIO + Nessie for Iceberg Tier A tests"
+	@echo "  make dev-up-iceberg-tier-a-brew - Start Iceberg Tier A services via local brew binaries"
+	@echo "  make dev-down-iceberg-tier-a-brew - Stop local brew Iceberg Tier A services"
+	@echo "  make dev-status-iceberg-tier-a-brew - Show local brew Iceberg Tier A service status"
+	@echo "  make dev-seed-iceberg-tier-a - Seed deterministic Iceberg Tier A tables"
+	@echo "  make dev-test-iceberg-tier-a - Run Iceberg Tier A integration tests"
+	@echo "  make dev-seed-iceberg-tier-b-nyc-tlc - Seed NYC TLC public dataset into local Iceberg"
+	@echo "  make dev-test-iceberg-tier-b-nyc-tlc - Run NYC TLC Tier B public dataset checks"
 	@echo "  make launch-minio           - Build and start MO with MinIO storage"
 	@echo "  make launch-minio-debug     - Build (debug) and start MO with MinIO"
 	@echo ""
@@ -206,46 +219,208 @@ pb: generate-pb
 VERSION_INFO :=-X '$(GO_MODULE)/pkg/version.GoVersion=$(GO_VERSION)' -X '$(GO_MODULE)/pkg/version.BranchName=$(BRANCH_NAME)' -X '$(GO_MODULE)/pkg/version.CommitID=$(LAST_COMMIT_ID)' -X '$(GO_MODULE)/pkg/version.BuildTime=$(BUILD_TIME)' -X '$(GO_MODULE)/pkg/version.Version=$(MO_VERSION)'
 THIRDPARTIES_INSTALL_DIR=$(ROOT_DIR)/thirdparties/install
 CGO_DIR=$(ROOT_DIR)/cgo
+# mo-service links libmo dynamically (-L$(CGO_DIR) -lmo picks the shared
+# library over libmo.a), so libmo is a runtime dependency resolved through
+# the binary's rpath -- $ORIGIN/lib on Linux, @executable_path/lib on macOS.
+# cgo/ is not on that rpath, so libmo must be published into lib/ beside the
+# thirdparty libraries or the built binary cannot start.
+LIBMO_NAME := $(if $(filter darwin,$(UNAME_S)),libmo.dylib,libmo.so)
 JIEBA_DICT_SRC_DIR=$(ROOT_DIR)/pkg/monlp/tokenizer/dict
 RACE_OPT :=
 DEBUG_OPT :=
 CGO_DEBUG_OPT :=
-TAGS :=
+BUILD_TAGS :=
+TAGS = $(if $(strip $(BUILD_TAGS)),-tags "$(strip $(BUILD_TAGS))")
+
+# Native artifacts are reusable only when every semantic build input matches.
+# Keep these dimensions independent so adding one feature cannot silently alias
+# an existing artifact generation.
+NATIVE_PROVENANCE_ACCELERATOR = $(if $(filter 1,$(MO_CL_CUDA)),gpu,cpu)
+NATIVE_PROVENANCE_OPTIMIZATION = $(if $(filter debug,$(CGO_DEBUG_OPT)),debug,release)
+NATIVE_PROVENANCE_SIMSIMD = $(if $(filter 1,$(MO_CL_SIMSIMD)),1,0)
+
+# Env-var prefix for the build command. On x86_64 the arch-specific SIMD kernels in
+# pkg/vectorindex/metric are compiled by default (ARCHSIMD=1): GOAMD64 defaults to v3
+# (Haswell baseline -- AVX2/FMA/BMI, required by the Go simd experiment) and
+# GOEXPERIMENT defaults to simd (enables the goexperiment.simd build tag on Go 1.26+).
+# Disable the SIMD kernels with:
+#   make ARCHSIMD=0 build                       # plain x86 build, no SIMD kernels
+# Either default can still be overridden individually, e.g. `make GOAMD64=v4 build`.
+GOEXPERIMENT_OPT ?=
+ifeq ("$(UNAME_M)", "x86_64")
+  ARCHSIMD ?= 1
+  ifeq ($(ARCHSIMD),1)
+	# DECISION (owner: cpegeric): raising the default x86 baseline to v3 (Haswell:
+	# AVX2/FMA/BMI) is intentional. The narrow-vector (bf16/f16/int8/uint8) SIMD
+	# kernels in pkg/vectorindex/metric require it, and the Go simd experiment
+	# mandates a v3 baseline. Pre-Haswell CPUs must build with `make ARCHSIMD=0`.
+	GOAMD64 ?= v3
+	GOEXPERIMENT_SIMD ?= simd
+  endif
+  ifneq ($(GOAMD64),)
+	GOEXPERIMENT_OPT += GOAMD64=$(GOAMD64)
+  endif
+  ifneq ($(GOEXPERIMENT_SIMD),)
+	GOEXPERIMENT_OPT += GOEXPERIMENT=$(GOEXPERIMENT_SIMD)
+  endif
+endif
 
 ifeq ($(MO_CL_CUDA),1)
-  ifeq ($(CONDA_PREFIX),)
-    $(error CONDA_PREFIX env variable not found.)
-  endif
-	CUVS_CFLAGS := -I$(CONDA_PREFIX)/include
-	CUVS_LDFLAGS := -L$(CONDA_PREFIX)/lib -lcuvs -lcuvs_c
-	CUDA_CFLAGS := -I/usr/local/cuda/include $(CUVS_CFLAGS)
-	CUDA_LDFLAGS := -L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64 -lcudart $(CUVS_LDFLAGS) -lstdc++
-	TAGS += -tags "gpu"
+	include $(ROOT_DIR)/cgo/gpu-toolchain.mk
+	CUDA_CFLAGS := $(MO_GPU_CFLAGS)
+	CUDA_LDFLAGS := $(MO_GPU_LDFLAGS)
+	BUILD_TAGS += gpu
 endif
 
 ifeq ($(TYPECHECK),1)
-	TAGS += -tags "typecheck"
+	BUILD_TAGS += typecheck
 endif
 
-CGO_OPTS :=CGO_CFLAGS="-I$(CGO_DIR) -I$(THIRDPARTIES_INSTALL_DIR)/include $(CUDA_CFLAGS)"
-GOLDFLAGS=-ldflags="-extldflags '$(CUDA_LDFLAGS) -L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,\$${ORIGIN}/lib -fopenmp' $(VERSION_INFO)"
+SIRIUS_SDK ?=
+SIRIUS_BUILD_MODE ?= release
+SIRIUS_MERGED_REF ?=
+SIRIUS_PREPARED := $(ROOT_DIR)/.sirius-sdk
+ifeq ($(MO_SIRIUS),1)
+ifneq ($(UNAME_S)/$(UNAME_M),linux/x86_64)
+$(error MO_SIRIUS=1 requires Linux amd64)
+endif
+ifeq ($(strip $(SIRIUS_SDK)),)
+$(error MO_SIRIUS=1 requires a generated SIRIUS_SDK directory)
+endif
+ifneq ($(PIXI_ENVIRONMENT_NAME),mo)
+$(error MO_SIRIUS=1 requires pixi run --frozen -e mo)
+endif
+ifeq ($(strip $(PIXI_PROJECT_ROOT)),)
+$(error MO_SIRIUS=1 requires an activated Sirius Pixi project)
+endif
+ifeq ($(strip $(CONDA_PREFIX)),)
+$(error MO_SIRIUS=1 requires an activated Sirius Pixi prefix)
+endif
+ifneq ($(realpath $(CONDA_PREFIX)),$(realpath $(PIXI_PROJECT_ROOT)/.pixi/envs/mo))
+$(error MO_SIRIUS=1 requires the Sirius mo Pixi prefix)
+endif
+	BUILD_TAGS += sirius
+	# Go's cache does not track external headers/archives behind an unchanged
+	# include path or response file. Bind CGo compilation to the verified SDK.
+	SIRIUS_SDK_FINGERPRINT := $(shell python3 -c 'import hashlib; print(hashlib.sha256(open("$(SIRIUS_SDK)/link.json", "rb").read()).hexdigest())')
+	SIRIUS_CFLAGS := -I$(abspath $(SIRIUS_SDK)) -DSIRIUS_SDK_BUILD_$(SIRIUS_SDK_FINGERPRINT)=1
+	SIRIUS_LDFLAGS := @$(SIRIUS_PREPARED)/link.rsp
+	SIRIUS_CC := $(shell python3 -c 'import json; print(json.load(open("$(SIRIUS_SDK)/link.json"))["c_compiler"])')
+	SIRIUS_CXX := $(shell python3 -c 'import json; print(json.load(open("$(SIRIUS_SDK)/link.json"))["compiler"])')
+	SIRIUS_CGO_ENV := CC="$(SIRIUS_CC)" CXX="$(SIRIUS_CXX)"
+	SIRIUS_EXTLD := -extld=$(SIRIUS_CXX)
+endif
+
+CGO_OPTS :=$(SIRIUS_CGO_ENV) CGO_CFLAGS="-I$(CGO_DIR) -I$(THIRDPARTIES_INSTALL_DIR)/include $(CUDA_CFLAGS) $(SIRIUS_CFLAGS)"
+GOLDFLAGS=-ldflags="$(SIRIUS_EXTLD) -extldflags '$(CUDA_LDFLAGS) -L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib $(SIRIUS_LDFLAGS) -Wl,-rpath,\$${ORIGIN}/lib -fopenmp' $(VERSION_INFO)"
 
 ifeq ("$(UNAME_S)","darwin")
 GOLDFLAGS:=-ldflags="-extldflags '-L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,@executable_path/lib' $(VERSION_INFO)"
 endif
 
+# Keep all mo-service build variants on one compiler/feature contract. Targets
+# may differ in how native dependencies are produced, never in the Go binary
+# they emit.
+MO_SERVICE_BUILD=$(GOEXPERIMENT_OPT) $(CGO_OPTS) $(GO) build $(GO_MODULE_MODE) $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
+
+define SIRIUS_PREPARE
+$(if $(filter 1,$(MO_SIRIUS)),python3 "$(ROOT_DIR)/optools/sirius_sdk.py" prepare --sdk "$(SIRIUS_SDK)" --mode "$(SIRIUS_BUILD_MODE)" --merged-ref "$(SIRIUS_MERGED_REF)" --mo-root "$(ROOT_DIR)" --output "$(SIRIUS_PREPARED)")
+endef
+
+.PHONY: sirius-sdk-prepare
+sirius-sdk-prepare:
+	$(SIRIUS_PREPARE)
+
+define SIRIUS_PACKAGE
+$(if $(filter 1,$(MO_SIRIUS)),python3 "$(ROOT_DIR)/optools/sirius_sdk.py" package --prepared "$(SIRIUS_PREPARED)" --binary "$(ROOT_DIR)/$(BIN_NAME)" --output "$(ROOT_DIR)/lib")
+endef
+
 ifeq ($(GOBUILD_OPT),)
 	GOBUILD_OPT :=
 endif
 
-.PHONY: cgo
-cgo: thirdparties
-	@(cd cgo; ${MAKE} ${CGO_DEBUG_OPT})
+define BUILD_THIRDPARTIES
+@$(MAKE) -C thirdparties $(if $(NATIVE_BUILD_JOBS),-j$(NATIVE_BUILD_JOBS))
+@"$(ROOT_DIR)/cgo/mo-stage-native-libs" "$(THIRDPARTIES_INSTALL_DIR)/lib" "$(ROOT_DIR)/lib"
+endef
+
+.PHONY: cgo cgo-native-prepare-internal cgo-native-thirdparties-internal
+cgo: cgo-native-thirdparties-internal
+	@(cd cgo; ${MAKE} $(if $(NATIVE_BUILD_JOBS),-j$(NATIVE_BUILD_JOBS)) ${CGO_DEBUG_OPT})
+	@"$(ROOT_DIR)/cgo/mo-stage-native-libs" --file \
+		"$(CGO_DIR)/$(LIBMO_NAME)" "$(ROOT_DIR)/lib/$(LIBMO_NAME)"
+ifeq ($(MO_CL_CUDA),1)
+	@"$(ROOT_DIR)/cgo/mo-stage-native-libs" --file \
+		"$(ROOT_DIR)/cgo/cuda/mocl_kernel64.fatbin" \
+		"$(ROOT_DIR)/mocl_kernel64.fatbin"
+endif
+	@GO="$(GO)" ./cgo/mo-native-provenance record "$(ROOT_DIR)" \
+		"$(NATIVE_PROVENANCE_ACCELERATOR)" "$(NATIVE_PROVENANCE_OPTIMIZATION)" \
+		"$(NATIVE_PROVENANCE_SIMSIMD)"
+
+cgo-native-thirdparties-internal: cgo-native-prepare-internal
+	$(BUILD_THIRDPARTIES)
+
+cgo-native-prepare-internal:
+	@set -eu; \
+		case "$(firstword $(MAKEFLAGS))" in \
+			-*) ;; \
+			*n*|*t*|*q*) exit 0 ;; \
+			esac; \
+		case " $(MAKEFLAGS) " in \
+			*" -n "*|*" -t "*|*" -q "*|*" --just-print "*|*" --dry-run "*|*" --recon "*|*" --touch "*|*" --question "*) exit 0 ;; \
+		esac; \
+		action=$$(GO="$(GO)" ./cgo/mo-native-provenance prepare \
+			"$(ROOT_DIR)" "$(NATIVE_PROVENANCE_ACCELERATOR)" \
+			"$(NATIVE_PROVENANCE_OPTIMIZATION)" "$(NATIVE_PROVENANCE_SIMSIMD)"); \
+		case "$$action" in \
+			local|reuse) ;; \
+			rebuild-cgo) \
+				echo "native provenance: cleaning CGo outputs before rebuilding $(NATIVE_PROVENANCE_ACCELERATOR)/$(NATIVE_PROVENANCE_OPTIMIZATION)"; \
+				$(MAKE) -C cgo clean; \
+				rm -f "$(ROOT_DIR)/mocl_kernel64.fatbin" ;; \
+			rebuild-all) \
+				echo "native provenance: cleaning thirdparty and CGo outputs before rebuilding $(NATIVE_PROVENANCE_ACCELERATOR)/$(NATIVE_PROVENANCE_OPTIMIZATION), simsimd=$(NATIVE_PROVENANCE_SIMSIMD)"; \
+				$(MAKE) -C cgo clean; \
+				rm -f "$(ROOT_DIR)/mocl_kernel64.fatbin"; \
+				$(MAKE) -C thirdparties clean ;; \
+			*) echo "invalid native rebuild action: $$action" >&2; exit 1 ;; \
+		esac; \
+		GO="$(GO)" ./cgo/mo-native-provenance begin \
+			"$(ROOT_DIR)" "$(NATIVE_PROVENANCE_ACCELERATOR)" \
+			"$(NATIVE_PROVENANCE_OPTIMIZATION)" "$(NATIVE_PROVENANCE_SIMSIMD)"
 
 .PHONY: thirdparties
+
+# GNU/BSD make deduplicate a shared target, but not two different targets that
+# expand the same recipe. When users explicitly request `thirdparties` beside a
+# native consumer, make the public goal wait for that consumer instead of
+# becoming a second thirdparty owner.
+NATIVE_RELEASE_OWNER_GOALS := all cgo build build-typecheck mo-tool ut \
+	dev-create-dashboard dev-list-dashboard dev-delete-dashboard launch-minio
+NATIVE_DEBUG_OWNER_GOALS := debug launch-minio-debug
+NATIVE_REQUESTED_RELEASE_OWNER := $(firstword $(filter $(NATIVE_RELEASE_OWNER_GOALS),$(MAKECMDGOALS)))
+NATIVE_REQUESTED_DEBUG_OWNER := $(firstword $(filter $(NATIVE_DEBUG_OWNER_GOALS),$(MAKECMDGOALS)))
+
+ifneq ($(NATIVE_REQUESTED_RELEASE_OWNER),)
+ifneq ($(NATIVE_REQUESTED_DEBUG_OWNER),)
+$(error release and debug native build goals cannot share one invocation)
+endif
+endif
+
+ifneq ($(filter thirdparties,$(MAKECMDGOALS)),)
+ifneq ($(NATIVE_REQUESTED_DEBUG_OWNER),)
+thirdparties: $(NATIVE_REQUESTED_DEBUG_OWNER)
+else ifneq ($(NATIVE_REQUESTED_RELEASE_OWNER),)
+thirdparties: $(NATIVE_REQUESTED_RELEASE_OWNER)
+else
 thirdparties:
-	@(cd thirdparties; ${MAKE})
-	cp -r $(THIRDPARTIES_INSTALL_DIR)/lib $(ROOT_DIR)/
+	$(BUILD_THIRDPARTIES)
+endif
+else
+thirdparties:
+	$(BUILD_THIRDPARTIES)
+endif
 
 # Stage the jieba dictionary next to the binary, the same way thirdparties/lib
 # is staged. jiebaDictPaths() in pkg/monlp/tokenizer/jieba_dict.go searches
@@ -260,9 +435,31 @@ jieba-dict:
 
 # build mo-service binary
 .PHONY: build
-build: config cgo thirdparties jieba-dict
+build: config cgo jieba-dict
+	$(SIRIUS_PREPARE)
 	$(info [Build binary])
-	$(CGO_OPTS) go build $(GO_MODULE_MODE) $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
+	$(MO_SERVICE_BUILD)
+	$(SIRIUS_PACKAGE)
+
+# Build with native libraries supplied by a prebuilt stage or image. This target
+# is for CI image builds: unlike build, it must not rebuild cgo or thirdparties
+# after the source tree has been copied into the builder.
+.PHONY: build-with-prebuilt-native
+build-with-prebuilt-native: config jieba-dict
+	@test -f "$(CGO_DIR)/libmo.so" || test -f "$(CGO_DIR)/libmo.dylib"
+	@test -f "$(THIRDPARTIES_INSTALL_DIR)/lib/libusearch_c.so" || test -f "$(THIRDPARTIES_INSTALL_DIR)/lib/libusearch_c.dylib"
+	@"$(ROOT_DIR)/cgo/mo-stage-native-libs" "$(THIRDPARTIES_INSTALL_DIR)/lib" "$(ROOT_DIR)/lib"
+	@"$(ROOT_DIR)/cgo/mo-stage-native-libs" --file \
+		"$(CGO_DIR)/$(LIBMO_NAME)" "$(ROOT_DIR)/lib/$(LIBMO_NAME)"
+ifeq ($(MO_CL_CUDA),1)
+	@"$(ROOT_DIR)/cgo/mo-stage-native-libs" --file \
+		"$(ROOT_DIR)/cgo/cuda/mocl_kernel64.fatbin" \
+		"$(ROOT_DIR)/mocl_kernel64.fatbin"
+endif
+	$(SIRIUS_PREPARE)
+	$(info [Build binary with prebuilt native libraries])
+	$(MO_SERVICE_BUILD)
+	$(SIRIUS_PACKAGE)
 
 # https://wiki.musl-libc.org/getting-started.html
 # https://musl.cc/
@@ -292,13 +489,41 @@ musl: override TAGS := -tags musl
 musl: musl-install musl-cgo config musl-thirdparties jieba-dict
 musl:
 	$(info [Build binary(musl)])
-	$(CGO_OPTS) go build $(GO_MODULE_MODE) $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
+	$(GOEXPERIMENT_OPT) $(CGO_OPTS) $(GO) build $(GO_MODULE_MODE) $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
 
 # build mo-tool
 .PHONY: mo-tool
-mo-tool: config cgo thirdparties
+mo-tool: config cgo
 	$(info [Build mo-tool tool])
-	$(CGO_OPTS) go build $(GO_MODULE_MODE) $(GOLDFLAGS) -o mo-tool ./cmd/mo-tool
+	$(GOEXPERIMENT_OPT) $(CGO_OPTS) $(GO) build $(GO_MODULE_MODE) $(GOLDFLAGS) -o mo-tool ./cmd/mo-tool
+
+# Build the jstfu datastream gRPC server (xtool/jstfu/target/jstfu.jar), the
+# reference server for ENGINE = DATASTREAM external tables.  Requires only a
+# JDK: the build uses the committed Maven wrapper (xtool/jstfu/mvnw), which
+# bootstraps its own Maven, so a missing system `mvn` does NOT silently skip
+# the build.  Override with MVN=/path/to/mvn to use a preinstalled Maven.  The
+# jar targets Java 8 bytecode so it runs on the BVT tester image's JDK 8.
+MVN ?= ./mvnw
+JSTFU_MVN_FLAGS ?= -B --no-transfer-progress -Dmaven.wagon.http.retryHandler.count=3
+.PHONY: jstfu
+jstfu:
+	$(info [Build jstfu datastream server])
+	@cd xtool/jstfu && $(MVN) $(JSTFU_MVN_FLAGS) -DskipTests package
+	@echo "built xtool/jstfu/target/jstfu.jar"
+
+.PHONY: jstfu-test
+jstfu-test:
+	$(info [Test and build jstfu datastream server])
+	@cd xtool/jstfu && $(MVN) $(JSTFU_MVN_FLAGS) verify
+	@test -s xtool/jstfu/target/jstfu.jar
+	@echo "tested and built xtool/jstfu/target/jstfu.jar"
+
+# The S0 Connector/J pool regression deliberately builds its Java fixture and
+# fails when MatrixOne is unavailable; it must never report green by skipping
+# either prerequisite.
+.PHONY: test-connectorj-pool-reset-e2e-local
+test-connectorj-pool-reset-e2e-local:
+	@bash ./optools/connectorj_pool_reset_ci.bash
 
 # build mo-service binary for debugging with go's race detector enabled
 # produced executable is 10x slower and consumes much more memory
@@ -321,20 +546,72 @@ build-typecheck: build
 # Excluding frontend test cases temporarily
 # Argument SKIP_TEST to skip a specific go test
 .PHONY: ut
-ut: config cgo thirdparties
+UT_PREREQUISITES := cgo
+# CI times config separately to monitor module-proxy health. Let that caller
+# attest that the exact checkout already passed config instead of verifying the
+# same package graph twice; direct developer invocations retain the prerequisite.
+ifneq ($(UT_CONFIGURED),1)
+UT_PREREQUISITES += config
+endif
+ut: $(UT_PREREQUISITES)
 	$(info [Unit testing])
 ifeq ($(UNAME_S),darwin)
-	@cd optools && ./run_ut.sh UT $(SKIP_TEST)
+	@cd optools && UT_NATIVE_PREPARED="$(NATIVE_PROVENANCE_ACCELERATOR):$(NATIVE_PROVENANCE_OPTIMIZATION):$(NATIVE_PROVENANCE_SIMSIMD)" ./run_ut.sh UT $(SKIP_TEST)
 else
-	@cd optools && timeout 60m ./run_ut.sh UT $(SKIP_TEST)
+	# The race suite is internally partitioned into light/HNSW, exclusive issues,
+	# embedded-cluster, heavy/engine, and plan stages. Keep the outer budget above
+	# the per-package timeout so an expanded main branch cannot be killed while a
+	# selected stage is still making progress. GNU timeout sends TERM first so
+	# run_ut.sh can preserve its checkpoint and active-case diagnostics.
+	@cd optools && UT_NATIVE_PREPARED="$(NATIVE_PROVENANCE_ACCELERATOR):$(NATIVE_PROVENANCE_OPTIMIZATION):$(NATIVE_PROVENANCE_SIMSIMD)" timeout --signal=TERM --kill-after=120s $(UT_HARD_TIMEOUT) ./run_ut.sh UT $(SKIP_TEST)
 endif
 
 ###############################################################################
 # bvt and unit test
 ###############################################################################
 UT_PARALLEL ?= 1
+# Compile/test task and heavy-link budgets are independent. The runner falls
+# back to three tasks if kernel link admission is unavailable.
+UT_LIGHT_PARALLEL ?= 6
+UT_LINK_PARALLEL ?= 3
+UT_SHARD ?= all
+# The outer lifecycle budget covers every sequential UT stage, not one package.
+# A cold race run can spend over an hour in light/issues/embedded before the
+# heavy/engine/plan stages start. Keep per-package UT_TIMEOUT unchanged and
+# leave enough time after TERM for checkpoint flushing and artifact upload.
+UT_HARD_TIMEOUT ?= 120m
+# Emit one bounded progress heartbeat per interval while UT is running.
+UT_HEARTBEAT_INTERVAL ?= 60
+# Build embedded race binaries with one compiler while the exclusive issues
+# fixture runs, then execute those exact binaries serially. Build or admission
+# failures fall back before any prebuilt binary executes.
+UT_PREBUILD_EMBEDDED ?= 1
+UT_PREBUILD_MIN_FREE_KB ?= 6291456
+UT_EMBEDDED_HARD_TIMEOUT_SECONDS ?= 0
+# Reuse released engine slots for plan while resource-heavy work finishes.
+# The heavy process budget is unchanged; set 0 for a sequential A/B baseline.
+UT_OVERLAP_PLAN ?= 1
+# Keep light/issues overlap opt-in: the measured treatment was slower than the
+# serial baseline and left insufficient cgroup memory headroom. Re-enable only
+# when a new schedule has same-runner timing and memory evidence.
+UT_OVERLAP_LIGHT ?= 0
+UT_OVERLAP_LIGHT_PARALLEL ?= 2
+# Parent cancellation waits long enough for helper-owned child process groups
+# to receive TERM and bounded KILL cleanup in sequence.
+UT_HELPER_TERM_GRACE_TICKS ?= 60
+export UT_SHARD UT_HARD_TIMEOUT UT_HEARTBEAT_INTERVAL UT_PREBUILD_EMBEDDED UT_PREBUILD_MIN_FREE_KB UT_EMBEDDED_HARD_TIMEOUT_SECONDS UT_OVERLAP_PLAN UT_OVERLAP_LIGHT UT_OVERLAP_LIGHT_PARALLEL UT_LIGHT_PARALLEL UT_LINK_PARALLEL UT_HELPER_TERM_GRACE_TICKS
+# Native compilation runs before Go tests, so it can use an explicit UT CPU
+# budget without increasing peak race-test memory. With the default UT value,
+# omit -j and preserve recursive make's jobserver contract: a plain make stays
+# serial while a developer's `make -jN` remains parallel.
+NATIVE_BUILD_JOBS ?= $(if $(filter-out 1,$(UT_PARALLEL)),$(UT_PARALLEL))
+ifeq ($(strip $(NATIVE_BUILD_JOBS)),0)
+$(error NATIVE_BUILD_JOBS and UT_PARALLEL must be positive)
+endif
 ENABLE_UT ?= "false"
-GOPROXY ?= https://proxy.golang.com.cn,https://goproxy.cn,https://proxy.golang.org
+# These are public mirrors, not policy gatekeepers. Fall through on transient
+# errors as well as 404/410 responses so one unhealthy mirror cannot block CI.
+GOPROXY ?= https://proxy.golang.com.cn|https://goproxy.cn|https://proxy.golang.org
 export GOPROXY
 LAUNCH ?= "launch"
 
@@ -342,7 +619,7 @@ LAUNCH ?= "launch"
 ci:
 	@rm -rf $(ROOT_DIR)/tester-log
 	@docker image prune -f
-	@docker build -f optools/bvt_ut/Dockerfile . -t matrixorigin/matrixone:local-ci --build-arg GOPROXY=$(GOPROXY)
+	@docker build -f optools/bvt_ut/Dockerfile . -t matrixorigin/matrixone:local-ci --build-arg GOPROXY="$(GOPROXY)"
 	@docker run --name tester -it \
 			-e LAUNCH=$(LAUNCH) \
 			-e UT_PARALLEL=$(UT_PARALLEL) \
@@ -353,6 +630,82 @@ ci:
 ci-clean:
 	@docker rmi matrixorigin/matrixone:local-ci
 	@docker image prune -f
+
+.PHONY: test-iceberg-core
+test-iceberg-core:
+	@optools/iceberg_ci.bash core
+
+.PHONY: test-iceberg-embedded
+test-iceberg-embedded:
+	@optools/iceberg_ci.bash embedded
+
+.PHONY: test-iceberg-adapter
+test-iceberg-adapter:
+	@optools/iceberg_ci.bash adapter
+
+.PHONY: test-iceberg-golden
+test-iceberg-golden:
+	@optools/iceberg_ci.bash golden
+
+.PHONY: test-iceberg-golden-real
+test-iceberg-golden-real:
+	@optools/iceberg_ci.bash golden-real
+
+.PHONY: test-iceberg-external-templates
+test-iceberg-external-templates:
+	@optools/iceberg_ci.bash external-templates
+
+.PHONY: test-iceberg-coverage
+test-iceberg-coverage:
+	@optools/iceberg_ci.bash coverage
+
+.PHONY: test-iceberg-preflight
+test-iceberg-preflight:
+	@optools/iceberg_ci.bash preflight
+
+.PHONY: test-iceberg-artifact
+test-iceberg-artifact:
+	@optools/iceberg_ci.bash artifact
+
+.PHONY: test-iceberg-external-coverage
+test-iceberg-external-coverage:
+	@optools/iceberg_ci.bash external-coverage
+
+.PHONY: test-iceberg-dashboard
+test-iceberg-dashboard:
+	@optools/iceberg_ci.bash dashboard
+
+.PHONY: test-iceberg-readiness
+test-iceberg-readiness:
+	@optools/iceberg_ci.bash readiness
+
+.PHONY: test-iceberg-e2e-local
+test-iceberg-e2e-local:
+	@optools/iceberg_ci.bash e2e-local
+
+.PHONY: test-mongodb-e2e-local
+test-mongodb-e2e-local:
+	@optools/mongodb_ci.bash e2e-local
+
+.PHONY: test-mongodb-unit
+test-mongodb-unit:
+	@optools/mongodb_ci.bash unit
+
+.PHONY: test-esql-tvf-e2e-local
+test-esql-tvf-e2e-local:
+	@optools/esql_ci.bash e2e-local
+
+.PHONY: test-kafka-exttab-e2e-local
+test-kafka-exttab-e2e-local:
+	@optools/kafka_ci.bash e2e-local
+
+.PHONY: test-iceberg-local
+test-iceberg-local:
+	@optools/iceberg_ci.bash local
+
+.PHONY: test-iceberg-nightly
+test-iceberg-nightly:
+	@optools/iceberg_ci.bash nightly
 
 
 ###############################################################################
@@ -982,6 +1335,7 @@ dev-up-minio-local:
 	@echo "✅ MinIO started!"
 	@echo "  - API: http://127.0.0.1:9000"
 	@echo "  - Console: http://127.0.0.1:9001"
+	@echo "  - Nessie: http://127.0.0.1:19120"
 	@echo "  - Access Key: minio"
 	@echo "  - Secret Key: minio123"
 	@echo "  - Data directory: $(MINIO_DATA_DIR)"
@@ -1005,6 +1359,77 @@ dev-status-minio-local:
 .PHONY: dev-logs-minio-local
 dev-logs-minio-local:
 	@cd $(MINIO_DIR) && docker compose logs -f minio
+
+.PHONY: dev-up-iceberg-tier-a
+dev-up-iceberg-tier-a: dev-up-minio-local
+	@echo "Waiting for Nessie Iceberg REST catalog..."
+	@for i in $$(seq 1 60); do \
+		if curl -fsS --max-time 5 http://127.0.0.1:19120/iceberg/v1/config >/dev/null 2>&1; then \
+			break; \
+		fi; \
+		if [ "$$i" -eq 60 ]; then \
+			echo "Timed out waiting for Nessie Iceberg REST catalog" >&2; \
+			cd $(MINIO_DIR) && docker compose logs --tail=80 nessie >&2 || true; \
+			exit 1; \
+		fi; \
+		sleep 1; \
+	done
+	@echo "✅ Iceberg Tier A services started"
+	@echo "  - REST catalog: http://127.0.0.1:19120/iceberg"
+	@echo "  - Warehouse: s3://mo-iceberg/warehouse"
+
+.PHONY: dev-down-iceberg-tier-a
+dev-down-iceberg-tier-a: dev-down-minio-local
+
+.PHONY: dev-up-iceberg-tier-a-brew
+dev-up-iceberg-tier-a-brew:
+	@$(MINIO_DIR)/tier-a/start-brew-tier-a.sh
+
+.PHONY: dev-down-iceberg-tier-a-brew
+dev-down-iceberg-tier-a-brew:
+	@$(MINIO_DIR)/tier-a/stop-brew-tier-a.sh
+
+.PHONY: dev-status-iceberg-tier-a-brew
+dev-status-iceberg-tier-a-brew:
+	@printf "MinIO: "; curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null && echo up || echo down
+	@printf "Nessie: "; curl -fsS http://127.0.0.1:19120/iceberg/v1/config >/dev/null && echo up || echo down
+
+.PHONY: dev-logs-iceberg-tier-a-brew
+dev-logs-iceberg-tier-a-brew:
+	@tail -n 200 -f $(MINIO_DIR)/mo-data/logs/minio.log $(MINIO_DIR)/mo-data/logs/nessie.log
+
+.PHONY: dev-status-iceberg-tier-a
+dev-status-iceberg-tier-a:
+	@cd $(MINIO_DIR) && docker compose ps
+
+.PHONY: dev-logs-iceberg-tier-a
+dev-logs-iceberg-tier-a:
+	@cd $(MINIO_DIR) && docker compose logs -f minio nessie
+
+.PHONY: dev-seed-iceberg-tier-a
+dev-seed-iceberg-tier-a: dev-up-iceberg-tier-a
+	@$(MINIO_DIR)/tier-a/seed-iceberg-tier-a.sh
+
+.PHONY: dev-test-iceberg-tier-a
+dev-test-iceberg-tier-a:
+	@test -f $(MINIO_DIR)/tier-a/tier_a.generated.env || (echo "Missing $(MINIO_DIR)/tier-a/tier_a.generated.env. Run make dev-seed-iceberg-tier-a first."; exit 1)
+	@. $(MINIO_DIR)/tier-a/tier_a.generated.env && \
+		MO_ICEBERG_ALLOW_PLAIN_HTTP=1 \
+		MO_ICEBERG_REPORT_DIR=$${MO_ICEBERG_REPORT_DIR:-test/iceberg/reports/run_$$(date -u +%Y%m%dT%H%M%SZ)} \
+		go test ./pkg/sql/iceberg -run TestIcebergTierA -count=1
+
+.PHONY: dev-seed-iceberg-tier-b-nyc-tlc
+dev-seed-iceberg-tier-b-nyc-tlc: dev-up-iceberg-tier-a
+	@$(MINIO_DIR)/tier-b/seed-nyc-tlc-iceberg.sh
+
+.PHONY: dev-test-iceberg-tier-b-nyc-tlc
+dev-test-iceberg-tier-b-nyc-tlc:
+	@test -f $(MINIO_DIR)/tier-b/tier_b_nyc_tlc.generated.env || (echo "Missing $(MINIO_DIR)/tier-b/tier_b_nyc_tlc.generated.env. Run make dev-seed-iceberg-tier-b-nyc-tlc first."; exit 1)
+	@. $(MINIO_DIR)/tier-b/tier_b_nyc_tlc.generated.env && \
+		MO_ICEBERG_ALLOW_PLAIN_HTTP=1 \
+		MO_ICEBERG_CI_PROFILE=tier-b \
+		MO_ICEBERG_REPORT_DIR=$${MO_ICEBERG_REPORT_DIR:-test/iceberg/reports/nyc_tlc_$$(date -u +%Y%m%dT%H%M%SZ)} \
+		$(MAKE) test-iceberg-nightly
 
 .PHONY: dev-clean-minio-local
 dev-clean-minio-local:
@@ -1030,7 +1455,7 @@ launch-minio: build dev-up-minio-local
 	@echo "Starting MatrixOne with MinIO storage..."
 	@echo "  Launch config: $(MINIO_DIR)/launch.toml"
 	@echo ""
-	@./mo-service -launch $(MINIO_DIR)/launch.toml
+	@MO_ICEBERG_ALLOW_PLAIN_HTTP=1 ./mo-service -launch $(MINIO_DIR)/launch.toml
 
 .PHONY: launch-minio-debug
 launch-minio-debug: debug dev-up-minio-local
@@ -1038,7 +1463,7 @@ launch-minio-debug: debug dev-up-minio-local
 	@echo "Starting MatrixOne (debug mode) with MinIO storage..."
 	@echo "  Launch config: $(MINIO_DIR)/launch.toml"
 	@echo ""
-	@./mo-service -launch $(MINIO_DIR)/launch.toml
+	@MO_ICEBERG_ALLOW_PLAIN_HTTP=1 ./mo-service -launch $(MINIO_DIR)/launch.toml
 
 ###############################################################################
 # clean
@@ -1057,6 +1482,7 @@ clean:
 	$(MAKE) -C cgo clean
 	$(MAKE) -C thirdparties clean
 	rm -rf $(ROOT_DIR)/lib
+	rm -f $(ROOT_DIR)/mocl_kernel64.fatbin
 	rm -rf $(ROOT_DIR)/dict
 
 ###############################################################################
@@ -1070,15 +1496,32 @@ fmt:
 .PHONY: install-static-check-tools
 install-static-check-tools:
 	@GOBIN="$(GOPATH)/bin" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.6.2
-	@go install github.com/matrixorigin/linter/cmd/molint@latest
+	@go install github.com/matrixorigin/linter/cmd/molint@v0.0.0-20260602145143-222a0b8adf07
 	@go install github.com/apache/skywalking-eyes/cmd/license-eye@v0.4.0
 
-.PHONY: static-check
+.PHONY: static-check static-check-analysis static-check-golangci
+GOLANGCI_LINT_CONCURRENCY ?=
+GOLANGCI_LINT_CONCURRENCY_FLAG := $(if $(strip $(GOLANGCI_LINT_CONCURRENCY)),--concurrency $(strip $(GOLANGCI_LINT_CONCURRENCY)))
+STATIC_CHECK_MOLINT = $(CGO_OPTS) go vet $(GO_MODULE_MODE) -vettool=`which molint` ./...
+STATIC_CHECK_GOLANGCI = $(CGO_OPTS) golangci-lint run -v $(GOLANGCI_LINT_CONCURRENCY_FLAG) -c .golangci.yml ./...
 static-check: config err-check
-	$(CGO_OPTS) go vet $(GO_MODULE_MODE) -vettool=`which molint` ./...
+	$(STATIC_CHECK_MOLINT)
 	$(CGO_OPTS) license-eye -c .licenserc.yml header check
 	$(CGO_OPTS) license-eye -c .licenserc.yml dep check
-	$(CGO_OPTS) golangci-lint run -v -c .golangci.yml ./...
+	$(STATIC_CHECK_GOLANGCI)
+
+# Keep the complete local/release entry point above. PR CI owns license scope
+# selection, but still analyzes the full package graph through content-addressed
+# Go and golangci-lint caches.
+static-check-analysis: config err-check
+	$(STATIC_CHECK_MOLINT)
+	$(STATIC_CHECK_GOLANGCI)
+
+# Trusted cache producers only need to populate golangci-lint's analysis
+# cache. This is not a reduced validation gate; PR and local SCA continue to
+# use static-check-analysis or static-check above.
+static-check-golangci:
+	$(STATIC_CHECK_GOLANGCI)
 
 fmtErrs := $(shell grep -onr 'fmt.Errorf' pkg/ --exclude-dir=.git --exclude-dir=vendor \
 				--exclude=*.pb.go --exclude=*_test.go --exclude=system_vars.go --exclude=Makefile)

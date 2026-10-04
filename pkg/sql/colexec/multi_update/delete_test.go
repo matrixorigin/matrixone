@@ -34,7 +34,7 @@ func TestDeleteSimpleTable(t *testing.T) {
 	hasSecondaryKey := false
 
 	proc, case1 := buildDeleteTestCase(t, hasUniqueKey, hasSecondaryKey)
-	runTestCases(t, proc, []*testCase{case1})
+	runTestCase(t, proc, case1)
 }
 
 func TestDeleteTableWithUniqueKeyAndSecondaryKey(t *testing.T) {
@@ -42,7 +42,7 @@ func TestDeleteTableWithUniqueKeyAndSecondaryKey(t *testing.T) {
 	hasSecondaryKey := true
 
 	proc, case1 := buildDeleteTestCase(t, hasUniqueKey, hasSecondaryKey)
-	runTestCases(t, proc, []*testCase{case1})
+	runTestCaseAfterReset(t, proc, case1)
 }
 
 // delete s3
@@ -51,7 +51,7 @@ func TestDeleteS3SimpleTable(t *testing.T) {
 	hasSecondaryKey := false
 
 	proc, case1 := buildDeleteS3TestCase(t, hasUniqueKey, hasSecondaryKey)
-	runTestCases(t, proc, []*testCase{case1})
+	runTestCase(t, proc, case1)
 }
 
 func TestDeleteS3TableWithUniqueKeyAndSecondaryKey(t *testing.T) {
@@ -59,7 +59,7 @@ func TestDeleteS3TableWithUniqueKeyAndSecondaryKey(t *testing.T) {
 	hasSecondaryKey := true
 
 	proc, case1 := buildDeleteS3TestCase(t, hasUniqueKey, hasSecondaryKey)
-	runTestCases(t, proc, []*testCase{case1})
+	runTestCaseAfterReset(t, proc, case1)
 }
 
 // multi delete
@@ -69,7 +69,9 @@ func buildDeleteTestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool) 
 	_, ctrl, proc := prepareTestCtx(t, false)
 	eng := prepareTestEng(ctrl, false)
 
-	batchs, affectRows := prepareTestDeleteBatchs(proc.GetMPool(), 2, hasUniqueKey, hasSecondaryKey)
+	batchs, affectRows := prepareTestDeleteBatchs(
+		proc.GetMPool(), 2, colexec.DefaultBatchSize, hasUniqueKey, hasSecondaryKey,
+	)
 	multiUpdateCtxs := prepareTestDeleteMultiUpdateCtx(hasUniqueKey, hasSecondaryKey)
 	action := UpdateWriteTable
 	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, affectRows, action, false)
@@ -80,21 +82,29 @@ func buildDeleteS3TestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool
 	_, ctrl, proc := prepareTestCtx(t, true)
 	eng := prepareTestEng(ctrl, false)
 
-	batchs, _ := prepareTestDeleteBatchs(proc.GetMPool(), 12, hasUniqueKey, hasSecondaryKey)
+	batchs, _ := prepareTestDeleteBatchs(
+		proc.GetMPool(), testS3BatchCount, testS3BatchRows, hasUniqueKey, hasSecondaryKey,
+	)
 	multiUpdateCtxs := prepareTestDeleteMultiUpdateCtx(hasUniqueKey, hasSecondaryKey)
 	action := UpdateWriteS3
 	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, 0, action, false)
 	return proc, retCase
 }
 
-func prepareTestDeleteBatchs(mp *mpool.MPool, size int, hasUniqueKey bool, hasSecondaryKey bool) ([]*batch.Batch, uint64) {
+func prepareTestDeleteBatchs(
+	mp *mpool.MPool,
+	size int,
+	rowsPerBatch int,
+	hasUniqueKey bool,
+	hasSecondaryKey bool,
+) ([]*batch.Batch, uint64) {
 	var bats = make([]*batch.Batch, size)
 	affectRows := 0
 	mainObjectID := types.NewObjectid()
 	uniqueObjectID := types.NewObjectid()
 	secondaryObjectID := types.NewObjectid()
 	for i := 0; i < size; i++ {
-		rowCount := colexec.DefaultBatchSize
+		rowCount := rowsPerBatch
 		if i == size-1 {
 			rowCount = rowCount / 2
 		}

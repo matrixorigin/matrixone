@@ -25,11 +25,7 @@ import (
 	"go.uber.org/zap"
 )
 
-var (
-	tmpService *TmpFileService
-
-	appConfigs = map[string]*AppConfig{}
-)
+var appConfigs = map[string]*AppConfig{}
 
 func init() {
 	appConfigs = make(map[string]*AppConfig)
@@ -56,31 +52,14 @@ const (
 )
 
 func NewTmpFileService(name, rootPath string, gcInterval time.Duration) (*TmpFileService, error) {
-	if tmpService != nil {
-		return tmpService, nil
-	}
-	var etlfs FileService
-	var err error
-	if etlfs, err = NewLocalETLFS(name, rootPath); err != nil {
-		return nil, err
-	}
-
-	service := &TmpFileService{
-		FileService: etlfs,
-		gcInterval:  gcInterval,
-		apps:        make(map[string]*AppFS),
-		appsMu:      sync.RWMutex{},
-		wg:          sync.WaitGroup{},
-	}
-	var ctx context.Context
-	ctx, service.cancel = context.WithCancel(context.Background())
-	go service.tmpFileServiceGCTicker(ctx)
-	tmpService = service
-	service.init()
-	return service, nil
+	return buildTmpFileService(name, rootPath, gcInterval)
 }
 
 func NewTestTmpFileService(name, rootPath string, gcInterval time.Duration) (*TmpFileService, error) {
+	return buildTmpFileService(name, rootPath, gcInterval)
+}
+
+func buildTmpFileService(name, rootPath string, gcInterval time.Duration) (*TmpFileService, error) {
 	var etlfs FileService
 	var err error
 	if etlfs, err = NewLocalETLFS(name, rootPath); err != nil {
@@ -96,8 +75,8 @@ func NewTestTmpFileService(name, rootPath string, gcInterval time.Duration) (*Tm
 	}
 	var ctx context.Context
 	ctx, service.cancel = context.WithCancel(context.Background())
+	service.wg.Add(1)
 	go service.tmpFileServiceGCTicker(ctx)
-	tmpService = service
 	service.init()
 	return service, nil
 }
@@ -184,7 +163,6 @@ func (fs *TmpFileService) tmpFileServiceGCTicker(ctx context.Context) {
 		"fs.tmp.gc.start",
 		zap.String("interval", fs.gcInterval.String()),
 	)
-	fs.wg.Add(1)
 	defer fs.wg.Done()
 	ticker := time.NewTicker(fs.gcInterval)
 	defer ticker.Stop()
@@ -201,11 +179,10 @@ func (fs *TmpFileService) tmpFileServiceGCTicker(ctx context.Context) {
 }
 
 func (fs *TmpFileService) Close(ctx context.Context) {
-	if fs.closed.Load() {
+	if !fs.closed.CompareAndSwap(false, true) {
 		return
 	}
 	defer logutil.Info("fs.tmp.close")
-	fs.closed.Store(true)
 	fs.cancel()
 	fs.wg.Wait()
 	fs.FileService.Close(ctx)
@@ -215,9 +192,13 @@ func (fs *TmpFileService) init() {
 	entries := fs.List(context.Background(), "")
 	for entry, err := range entries {
 		if err != nil {
+			entryName := ""
+			if entry != nil {
+				entryName = entry.Name
+			}
 			logutil.Warn(
 				"fs.tmp.init.failed",
-				zap.String("name", entry.Name),
+				zap.String("name", entryName),
 				zap.Error(err),
 			)
 			continue

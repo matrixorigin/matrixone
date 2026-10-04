@@ -80,8 +80,12 @@ TombstoneRangeScanByObject scans the an object's tombstones committed in the ran
 Since the returned batch must have accruate ts for each row, we need collect the data from appendable objects.
 
 Targets:
-1. CNCreated entries where start <= CreatedAt <= end
-2. Appendable entries where x <= CreatedAt <= end, where x is the first appendable entry with CreatedAt < start
+ 1. CNCreated entries where start <= CreatedAt <= end. These immutable source
+    objects remain the unique scan owners after tombstone merges; scanning the
+    TN-created copies as well would duplicate the same delete rows.
+ 2. Appendable entries whose catalog lifetime can overlap the range. All live
+    appendable entries created before end remain candidates because their rows
+    can commit out of object creation order.
 */
 func TombstoneRangeScanByObject(
 	ctx context.Context,
@@ -94,15 +98,19 @@ func TombstoneRangeScanByObject(
 	tableEntry.WaitTombstoneObjectCommitted(end)
 	it := tableEntry.MakeTombstoneObjectIt()
 	defer it.Release()
-	earlybreak := false
+	// CreatedAt orders catalog publication, not the commit timestamps of rows
+	// appended later. Concurrent flushes can populate multiple appendable
+	// tombstone objects and commit them out of creation order, so an older
+	// object can still contain deletes in [start, end]. Do not stop the scan
+	// solely because an object's catalog lifetime precedes start.
 	for ok := it.Last(); ok; ok = it.Prev() {
-		if earlybreak {
-			break
-		}
-
 		tombstone := it.Item()
-		// we only check the created version of the object.
-		if tombstone.HasDropIntent() {
+		if tombstone.IsAppendable() && tombstone.IsCEntry() &&
+			tombstone.HasDCounterpart() && tombstone.GetNextVersion().HasDropCommitted() {
+			// The D counterpart owns the same persisted appendable data. A
+			// non-appendable C entry is different: it is the immutable
+			// CN-created source of a tombstone merge and remains the unique
+			// range-scan owner after its drop commits.
 			continue
 		}
 
@@ -111,11 +119,34 @@ func TombstoneRangeScanByObject(
 				// committing create object is excluded here
 				continue
 			}
-			// first committed appendable object with CreatedAt < start, stop at next round
-			if tombstone.CreatedAt.LT(&start) {
-				earlybreak = true
+			if tombstone.DeletedAt.Equal(&txnif.UncommitTS) {
+				// Its C counterpart remains visible until the drop commits.
+				continue
+			}
+			if tombstone.HasDropCommitted() {
+				deleteAt := tombstone.GetDeleteAt()
+				if tombstone.CreatedAt.GT(&end) || deleteAt.LT(&start) {
+					continue
+				}
 			}
 		} else {
+			// Check only CN-created immutable source versions. Tombstone-merge
+			// outputs copy these rows and are deliberately excluded below.
+			if tombstone.HasDropIntent() {
+				continue
+			}
+			// A CN-side publication rewrite retains CN provenance on its output.
+			// Once the explicitly marked D counterpart commits within the scan
+			// range, this C entry no longer owns the rows; its CN replacement (if
+			// any) is the unique range-scan owner.
+			if tombstone.IsCEntry() && tombstone.HasDCounterpart() {
+				drop := tombstone.GetNextVersion()
+				deleteAt := drop.GetDeleteAt()
+				if drop.HasDropCommitted() && !deleteAt.GT(&end) &&
+					drop.ObjectStats.GetCNDeleted() {
+					continue
+				}
+			}
 			if !tombstone.ObjectStats.GetCNCreated() {
 				continue
 			}

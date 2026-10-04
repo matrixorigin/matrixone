@@ -16,10 +16,13 @@ package plan
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"math"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -75,8 +78,12 @@ type SubscriptionMeta = plan.SubscriptionMeta
 type Snapshot = plan.Snapshot
 type SnapshotTenant = plan.SnapshotTenant
 type ExternAttr = plan.ExternAttr
+type DataStreamScan = plan.DataStreamScan
+type ForeignScan = plan.ForeignScan
+type KafkaScan = plan.KafkaScan
 
 const ViewSnapshotKeySuffix = "@ts="
+const viewDependencyKeyPrefix = "\x00mo_view_dependency\x00"
 
 // FormatViewKeyWithSnapshot appends snapshot information to a view key for privilege checks.
 func FormatViewKeyWithSnapshot(viewKey string, snapshot *Snapshot) string {
@@ -84,6 +91,148 @@ func FormatViewKeyWithSnapshot(viewKey string, snapshot *Snapshot) string {
 		return viewKey
 	}
 	return fmt.Sprintf("%s%s%d", viewKey, ViewSnapshotKeySuffix, snapshot.TS.PhysicalTime)
+}
+
+// FormatViewDependencyKey preserves database and view identifiers separately,
+// plus the complete optional table-level snapshot used to resolve the view.
+func FormatViewDependencyKey(databaseName, viewName string, snapshot *Snapshot) (string, error) {
+	var snapshotData []byte
+	if IsSnapshotValid(snapshot) {
+		var err error
+		snapshotData, err = snapshot.Marshal()
+		if err != nil {
+			return "", err
+		}
+	}
+	return viewDependencyKeyPrefix +
+		base64.RawURLEncoding.EncodeToString([]byte(databaseName)) + "." +
+		base64.RawURLEncoding.EncodeToString([]byte(viewName)) + "." +
+		base64.RawURLEncoding.EncodeToString(snapshotData), nil
+}
+
+// ParseViewDependencyKey returns the database, view, and optional table-level
+// snapshot recorded while binding a view. Plain database#view keys remain
+// readable for callers that have not recorded the structured dependency form.
+func ParseViewDependencyKey(viewKey string) (string, string, *Snapshot, error) {
+	if !strings.HasPrefix(viewKey, viewDependencyKeyPrefix) {
+		databaseName, viewName, ok := strings.Cut(viewKey, "#")
+		if !ok || databaseName == "" || viewName == "" {
+			return "", "", nil, moerr.NewInternalErrorNoCtx("invalid view dependency")
+		}
+		return databaseName, viewName, nil, nil
+	}
+	parts := strings.Split(viewKey[len(viewDependencyKeyPrefix):], ".")
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" {
+		return "", "", nil, moerr.NewInternalErrorNoCtx("invalid encoded view dependency")
+	}
+	databaseName, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return "", "", nil, err
+	}
+	viewName, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", "", nil, err
+	}
+	if parts[2] == "" {
+		return string(databaseName), string(viewName), nil, nil
+	}
+	data, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		return "", "", nil, err
+	}
+	snapshot := &Snapshot{}
+	if err = snapshot.Unmarshal(data); err != nil {
+		return "", "", nil, err
+	}
+	return string(databaseName), string(viewName), snapshot, nil
+}
+
+// ValidateSnapshotScope verifies that a relation belongs to the object covered
+// by a named snapshot. Timestamp-only snapshots have no object restriction.
+func ValidateSnapshotScope(
+	snapshot *Snapshot,
+	databaseName string,
+	tableName string,
+	databaseID uint64,
+	tableID uint64,
+) error {
+	if snapshot == nil || snapshot.ExtraInfo == nil {
+		return nil
+	}
+
+	switch snapshot.ExtraInfo.Level {
+	case tree.SNAPSHOTLEVELCLUSTER.String(), tree.SNAPSHOTLEVELACCOUNT.String():
+		return nil
+	case tree.SNAPSHOTLEVELDATABASE.String():
+		if snapshot.ExtraInfo.ObjId != databaseID {
+			return moerr.NewInternalErrorNoCtxf(
+				"database-level snapshot(%s) does not belong to the database(%s)",
+				snapshot.ExtraInfo.Name,
+				databaseName,
+			)
+		}
+	case tree.SNAPSHOTLEVELTABLE.String():
+		if snapshot.ExtraInfo.ObjId != tableID {
+			return moerr.NewInternalErrorNoCtxf(
+				"table-level snapshot(%s) does not belong to the table(%s-%s)",
+				snapshot.ExtraInfo.Name,
+				databaseName,
+				tableName,
+			)
+		}
+	default:
+		return moerr.NewInternalErrorNoCtxf("unsupported snapshot level %q", snapshot.ExtraInfo.Level)
+	}
+
+	return nil
+}
+
+// SnapshotTableID returns the stable identity used by table snapshots. A
+// copy-table ALTER replaces the physical table while preserving LogicalId.
+func SnapshotTableID(tableDef *TableDef) uint64 {
+	if tableDef == nil {
+		return 0
+	}
+	if tableDef.LogicalId != 0 {
+		return tableDef.LogicalId
+	}
+	return tableDef.TblId
+}
+
+// ValidateSnapshotDatabaseScope verifies that an operation scoped to a
+// database is compatible with a named snapshot. A table snapshot cannot read
+// database-wide metadata because it represents a single relation.
+func ValidateSnapshotDatabaseScope(
+	snapshot *Snapshot,
+	databaseName string,
+	databaseID uint64,
+) error {
+	if snapshot == nil || snapshot.ExtraInfo == nil {
+		return nil
+	}
+
+	switch snapshot.ExtraInfo.Level {
+	case tree.SNAPSHOTLEVELCLUSTER.String(), tree.SNAPSHOTLEVELACCOUNT.String():
+		return nil
+	case tree.SNAPSHOTLEVELDATABASE.String():
+		if snapshot.ExtraInfo.ObjId != databaseID {
+			return moerr.NewInternalErrorNoCtxf(
+				"database-level snapshot(%s) does not belong to the database(%s)",
+				snapshot.ExtraInfo.Name,
+				databaseName,
+			)
+		}
+	case tree.SNAPSHOTLEVELTABLE.String():
+		return moerr.NewInternalErrorNoCtxf(
+			"table-level snapshot(%s) cannot read database-wide metadata for database(%s)",
+			snapshot.ExtraInfo.Name,
+			databaseName,
+		)
+	default:
+		return moerr.NewInternalErrorNoCtxf("unsupported snapshot level %q", snapshot.ExtraInfo.Level)
+	}
+
+	return nil
 }
 
 type CompilerContext interface {
@@ -152,6 +301,57 @@ type CompilerContext interface {
 	GetLowerCaseTableNames() int64
 }
 
+// SubscriptionMetadata carries both publication membership and the
+// subscriber-local RBAC scope that was established before the planner crosses
+// into the publisher catalog. AllTablesVisible and VisibleTableIDs are
+// mutually exclusive representations of that subscriber-side scope.
+type SubscriptionMetadata struct {
+	Meta             *SubscriptionMeta
+	AllTablesVisible bool
+	VisibleTableIDs  []uint64
+}
+
+// SubscriptionMetadataProvider enumerates the active subscriptions whose
+// metadata is visible to the current account and active role closure.
+// maxCandidates is the remaining statement admission budget. Implementations
+// must fail instead of returning a partial result when more active catalog
+// candidates exist, and must bound catalog materialization to at most
+// maxCandidates+1 rows before performing visibility expansion.
+type SubscriptionMetadataProvider interface {
+	GetSubscriptionMetadata(snapshot *Snapshot, maxCandidates int) ([]*SubscriptionMetadata, error)
+}
+
+// TableDefStatsCompilerContext is an optional extension for compiler contexts
+// that can bind a statistics read to the table definition used by the plan.
+// Implementations should reject schema-bound statistics from another table
+// definition version. Keeping this separate from CompilerContext preserves
+// compatibility with lightweight and external planner contexts.
+type TableDefStatsCompilerContext interface {
+	StatsWithTableDef(
+		obj *ObjectRef,
+		tableDef *TableDef,
+		snapshot *Snapshot,
+	) (*pb.StatsInfo, error)
+}
+
+// UserVariableTypeResolver is an optional extension implemented by session
+// compiler contexts. User variables are stored as text on the frontend wire
+// path, but their assignment type is part of the statement contract used by
+// numeric binding. Keeping this optional avoids widening CompilerContext for
+// callers that do not have session user variables (for example metadata
+// builders and lightweight test contexts).
+type UserVariableTypeResolver interface {
+	ResolveVariableType(varName string, isSystemVar, isGlobalVar bool) (Type, error)
+}
+
+// UserVariableStringDomainResolver exposes the assigned value's domain override
+// at binding time. A variable expression captures that domain in its VarRef,
+// independently of its static Type. It does not rewrite the session value or
+// EXECUTE USING parameters.
+type UserVariableStringDomainResolver interface {
+	ResolveVariableStringDomain(varName string, isSystemVar, isGlobalVar bool) (types.RuntimeStringDomain, error)
+}
+
 type Optimizer interface {
 	Optimize(stmt tree.Statement) (*Query, error)
 	CurrentContext() CompilerContext
@@ -170,40 +370,164 @@ type BaseOptimizer struct {
 }
 
 type ViewData struct {
-	Stmt            string
-	DefaultDatabase string
-	SQLMode         *string `json:"sql_mode,omitempty"`
-	SecurityType    string  `json:"security_type,omitempty"`
+	Stmt                string
+	DefaultDatabase     string
+	SQLMode             *string          `json:"sql_mode,omitempty"`
+	SecurityType        string           `json:"security_type,omitempty"`
+	LowerCaseTableNames *int64           `json:"lower_case_table_names,omitempty"`
+	Dependencies        []ViewDependency `json:"dependencies,omitempty"`
+	// RequiredProtocolVersion records the minimum protocol needed to bind the
+	// persisted view expression on a local CN. It is a defense-in-depth marker;
+	// cluster admission remains the authoritative old-CN re-entry fence.
+	RequiredProtocolVersion *int64 `json:"required_protocol_version,omitempty"`
 }
 
 type QueryBuilder struct {
+	preparedBindingProof *bool
+	// Deep existential regions are owned by a SQL block, never by a partially
+	// constructed node. The registry stays nil on the ordinary flattening path.
+	nextExistentialBlock    uint64
+	pendingExistentials     map[uint64]*pendingExistential
+	hadPendingExistentials  bool
+	existentialGateProjects map[int32]struct{}
+
 	qry     *plan.Query
 	compCtx CompilerContext
+	// queryingSubscriptionMetadata is scoped to binding one account-wide
+	// subscription metadata branch. It complements CompilerContext's publisher
+	// routing state with subscriber-local table visibility.
+	queryingSubscriptionMetadata *SubscriptionMetadata
+	// subscriptionStatisticsPublisherBranches is the statement-wide admission
+	// count for publisher STATISTICS view expansions. It is reserved before an
+	// occurrence binds either its local view or any publisher view, so an
+	// over-budget statement cannot produce a partial metadata plan.
+	subscriptionStatisticsPublisherBranches int
+	// subscriptionStatisticsPublicationTableEntries and
+	// subscriptionStatisticsPublicationTableLiteralBytes account for the
+	// per-publication IN-list literals that are expanded inside each publisher
+	// branch. Branch count alone does not bound a publication containing a large
+	// explicit table list.
+	subscriptionStatisticsPublicationTableEntries      int
+	subscriptionStatisticsPublicationTableLiteralBytes int
+	// subscriptionStatisticsMetadata caches the complete, bounded visible set
+	// per requested snapshot for this QueryBuilder. Sibling STATISTICS
+	// occurrences reuse it instead of repeating catalog and RBAC enumeration.
+	subscriptionStatisticsMetadata map[string][]*SubscriptionMetadata
+	// persistedViewTarget is set structurally by CREATE/ALTER/regeneration
+	// while one persisted view definition is bound. It is statement-local so
+	// detached CTE contexts cannot lose the private system-function owner.
+	persistedViewTarget string
 
-	ctxByNode            []*BindContext
-	nameByColRef         map[[2]int32]string
-	protectedScans       map[int32]int
-	projectSpecialGuards map[int32]*specialIndexGuard
-	indexHintsByScan     map[int32]*indexHintSet
-	indexHintOwnerByNode map[int32]int32
+	ctxByNode []*BindContext
+	// Synthetic scalar reaggregations preserve earlier scalar outputs as
+	// grouping keys. Each alias keeps its original column identity through
+	// final column pruning without changing the executable plan format.
+	scalarReaggAliases      map[int32][]scalarReaggAlias
+	headingProvenanceByNode map[int32]headingProvenanceMap
+	windowValidationScans   []*plan.Node
+	nameByColRef            map[[2]int32]string
+	protectedScans          map[int32]int
+	updateTargetScans       map[int32]struct{}
+	projectSpecialGuards    map[int32]*specialIndexGuard
+	// projectAnchoredSorts holds Top-K SORT node ids that a PROJECT directly above them
+	// will anchor the vector rewrite on. applyIndices walks children first, so without
+	// this the SORT-anchored entry point would claim the classic
+	// PROJECT -> SORT -> SCAN shape before the project ever ran, losing the project's
+	// column information and with it the index-only scan.
+	projectAnchoredSorts        map[int32]struct{}
+	setBitmapByDisplayNode      map[[2]int32]int32
+	indexHintsByScan            map[int32]*indexHintSet
+	indexHintOwnerByNode        map[int32]int32
+	preserveSinkProjection      map[int32]struct{}
+	preserveLockProjection      map[int32]struct{}
+	preserveFilterProjection    map[int32]struct{}
+	preservePreInsertProjection map[int32]struct{}
+	preserveInsertProjection    map[int32]struct{}
+	preserveScanProjection      map[int32]struct{}
+	positionalSinkScans         map[int32]struct{}
+	// fullTableUpdateLockTargets contains only the exclusive targets admitted for
+	// an unrestricted, single-target UPDATE after complete-keyspace and lock-order
+	// checks. Planner-local metadata lets the final cardinality pass choose table
+	// locks without weakening bounded UPDATE predicates into table-wide locks.
+	fullTableUpdateLockTargets map[*plan.LockTarget]struct{}
+	// fullTableUpdateSourceTableID identifies the single logical target whose
+	// complete scan cardinality can safely repair an underestimated LOCK_OP
+	// cardinality. The accompanying flag keeps table ID zero representable in
+	// planner tests and fail-closed mock catalogs.
+	fullTableUpdateSourceTableID    uint64
+	hasFullTableUpdateSourceTableID bool
+	// userWindowNodes contains only WINDOW nodes produced from user
+	// SELECT window expressions. Internal ROW_NUMBER windows used by correlated
+	// LIMIT and DML deduplication must stay on their dedicated paths.
+	userWindowNodes          map[int32]struct{}
+	internalTopNWindows      map[int32]struct{}
+	partitionTopNWindowNodes map[int32]struct{}
+	// distinctKeyLocalPreAggs marks the first (group keys, DISTINCT key)
+	// Group in Path B. It must retain local ownership so duplicate rows are
+	// removed before any exchange.
+	distinctKeyLocalPreAggs map[*plan.Node]struct{}
+	// distinctKeyShuffleCols marks the second pair Group and the DISTINCT-key
+	// column that owns its exchange. Both maps are planner-local; HashMapStats
+	// carries the final physical decision after shuffle planning.
+	distinctKeyShuffleCols map[*plan.Node]int32
+
+	// ftJoinServed records the MATCHes rewritten while applyIndices walked a JOIN's children,
+	// paired with the fulltext node producing each score. applyIndices recurses children
+	// first, so those scans already exist when the PROJECT above the join is visited -- but
+	// that PROJECT is a different call frame and gets no return value from them. A MATCH in
+	// its select list is resolved against this.
+	//
+	// Never reset, and it does not need to be: a QueryBuilder is built per statement, and
+	// within one build every binding tag is unique, so an entry can only ever be matched by a
+	// MATCH on the very table instance it came from -- steps and subqueries cannot collide.
+	// If a builder is ever reused across statements, this must be cleared with it.
+	ftJoinServed []fulltextServedMatch
 
 	tag2Table  map[int32]*TableDef
 	tag2NodeID map[int32]int32
 
-	nextBindTag int32
-	nextMsgTag  int32
+	nextBindTag      int32
+	nextMsgTag       int32
+	nextSQLUdfCallID uint64
+	// Negative AuxIds identify memoized expression sources across every bind
+	// context that can contribute expressions to this query.
+	nextVolatileExprMemoID int32
 
-	isPrepareStatement    bool
-	mysqlCompatible       bool
+	isPrepareStatement     bool
+	mysqlCompatible        bool
+	mysqlFullGroupByCompat bool
+	// boolSumAvgCompat is the ENABLE_BOOL_SUMAVG sql_mode, resolved once per
+	// builder like the two flags above so every bind path (direct, HAVING,
+	// window, PREPARE) reads the same decision.
+	boolSumAvgCompat      bool
+	noUnsignedSubtraction bool
+	divPrecisionIncrement int32
 	isForUpdate           bool // if it's a query plan for update
 	isRestore             bool
 	isRestoreByTs         bool
 	isSkipResolveTableDef bool
 	skipStats             bool
+	isInsertIgnore        bool             // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
+	deleteNode            map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
 
-	deleteNode map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
+	insertHasOnDuplicateUpdate bool // statement-local: keep pure INSERT IGNORE auto-increment handling out of ODKU
 
 	// spill memory for aggregate function
+	// jsonProbeFtNodes marks the fulltext index-scan nodes built for a json
+	// PROBE — a prefilter the optimizer injected, not a user MATCH. Their score
+	// is a constant, so the passes that rank by relevance must skip them, and
+	// they sit under a GROUP BY that does not re-expose the scan's columns.
+	jsonProbeFtNodes map[int32]bool
+
+	// jsonProbeTail records, per base-scan node id, that a mandatory json_extract probe against an
+	// async index must SELF-COMPLETE: the fulltext2_search operator binds the generation it actually
+	// searched at runtime and unions a table_changes tail up to the read snapshot, so no UNION arm is
+	// built in the plan. The value is the reconstructed tail SQL, shown in EXPLAIN (Verbose) via the
+	// node's Stats.Sql -- so the internally-run tail is visible, not a black box. Set by
+	// addJSONFulltextProbes, consumed at the join splice (Stats.Sql) and by buildFulltext2SearchCfg
+	// (which flips TableConfig.ProbeTail). Presence ⇒ self-complete; absent ⇒ MATCH / synchronous.
+	jsonProbeTail map[int32]jsonProbeTailInfo
+
 	aggSpillMem int64
 
 	// spill memory for join
@@ -213,10 +537,29 @@ type QueryBuilder struct {
 	sortSpillMem int64
 
 	optimizerHints *OptimizerHints
+	// sqlCalcFoundRows disables limit pushdown that would otherwise stop a
+	// source before the complete result count can be observed.
+	sqlCalcFoundRows bool
+	// sessionSelectLimitMayStopEarly records a finite ordinary
+	// sql_select_limit or a dynamic prepared one. Such a top-level cap is
+	// materialized only after optimization and therefore cannot appear in the
+	// logical drain-witness walk.
+	sessionSelectLimitMayStopEarly bool
 
 	// optimizationHistory records key optimization steps for debugging remap errors
 	// Only records when optimizations actually change the plan structure
 	optimizationHistory []string
+
+	// groupingSetCandidates are internally generated UNION ALL branches whose
+	// common input can be shared after CTE reuse has established any nested
+	// producer boundaries.
+	groupingSetCandidates []groupingSetCandidate
+	// sharedMaterializationMemoryBytes and sharedMaterializationSpillBytes are
+	// the conservative cumulative reservations made by planner-introduced CTE
+	// and grouping-set sources. They prevent individually valid rewrites from
+	// jointly exceeding explicit statement caps.
+	sharedMaterializationMemoryBytes float64
+	sharedMaterializationSpillBytes  float64
 
 	// Irregular index (IVF/fulltext) synchronous maintenance for the modern DML
 	// path. The modern dedup+MULTI_UPDATE handles the base table and regular
@@ -239,8 +582,50 @@ type QueryBuilder struct {
 	irregularMaintDeletePkPos int32
 	irregularMaintDeletePkTyp plan.Type
 	irregularMaintIndexes     []*plan.IndexDef
-	irregularMaintTableDef    *plan.TableDef
-	irregularMaintObjRef      *plan.ObjectRef
+	// irregularMaintInsertOnlyIndexes are logical irregular indexes whose parts
+	// cannot change in an ODKU conflict. Their insert maintenance reads only
+	// non-conflicting rows from irregularMaintInsertOnlySourceStep; delete
+	// maintenance is intentionally absent.
+	irregularMaintInsertOnlySourceStep int32
+	irregularMaintInsertOnlyIndexes    []*plan.IndexDef
+	// irregularMaintValueChangedSourceSteps maps an affected logical index to a
+	// derivative source containing only new rows or conflict rows whose stored
+	// index inputs actually changed. Groups absent from the map retain the
+	// conservative unfiltered maintenance source.
+	irregularMaintValueChangedSourceSteps map[string]int32
+	irregularMaintTableDef                *plan.TableDef
+	irregularMaintObjRef                  *plan.ObjectRef
+	irregularMaintSkipInsert              bool
+	irregularUpdateMaints                 []irregularUpdateMaintenance
+
+	// DML RETURNING consumes an attempt-local row image from a dedicated sink.
+	// The mutation plan and the returning projection use independent SINK_SCAN
+	// readers, so index/FK side-effect branches cannot multiply returned rows.
+	returningSourceStep int32
+	// returningFilterPos identifies an optional semantic eligibility selector in
+	// the materialized row image. It filters only the RETURNING reader; mutation
+	// readers continue to consume implicit FK action rows.
+	returningFilterPos int32
+	returningRequested bool
+	returningTableDef  *plan.TableDef
+	returningObjRef    *plan.ObjectRef
+	returningTableName string
+	returningAlias     string
+	returningColPos    map[string]int32
+	// updateParentActionStack bounds recursive ON UPDATE actions by the active
+	// physical-table path. Acyclic multi-layer cascades recurse normally; a
+	// cycle is rejected before any mutation step is appended.
+	updateParentActionStack map[uint64]int
+	// updateAffectedRowsCols records selector columns added while self-referencing
+	// FK action rows are folded into a root UPDATE stream. The physical writer
+	// consumes every row, but SQL affected-row accounting includes only rows
+	// selected by the original statement.
+	updateAffectedRowsCols map[uint64]updateAffectedRowsColumn
+	// insertInputKeysUnique is set while binding a plain INSERT ... SELECT when
+	// the source primary key proves uniqueness of the target primary-key key.
+	// It is consumed only by the target-PK DEDUP node; secondary unique-index
+	// DEDUP nodes retain their existing duplicate-detection semantics.
+	insertInputKeysUnique bool
 	// sinkColRef records, per materialized step, the post-pruning column remap
 	// produced by createQuery's final remapAllColRefs pass: {step, originalColPos}
 	// -> newColPos. The irregular-index maintenance sub-plans are appended after
@@ -248,9 +633,28 @@ type QueryBuilder struct {
 	// so positions recorded pre-prune (e.g. the REPLACE old-PK key) must be remapped
 	// through this map before use.
 	sinkColRef map[[2]int32]int
+
+	// cteRefs contains only non-recursive CTEs that were actually bound. It is
+	// populated lazily so unused CTE bodies retain their existing lazy-binding
+	// semantics.
+	cteRefs []*CTERef
+}
+
+type irregularUpdateMaintenance struct {
+	sourceStep              int32
+	deleteStep              int32
+	deletePkPos             int32
+	deletePkTyp             plan.Type
+	indexes                 []*plan.IndexDef
+	insertOnlySourceStep    int32
+	insertOnlyIndexes       []*plan.IndexDef
+	valueChangedSourceSteps map[string]int32
+	tableDef                *plan.TableDef
+	objRef                  *plan.ObjectRef
 }
 
 type OptimizerHints struct {
+	vectorLocalDOP             int
 	pushDownLimitToScan        int
 	pushDownTopThroughLeftJoin int
 	pushDownSemiAntiJoins      int
@@ -271,21 +675,39 @@ type OptimizerHints struct {
 	execType                   int
 	disableRightJoin           int
 	disableRightSingleRF       int
+	sharedComputation          int
+	subqueryPredicatePlanning  int
 	printShuffle               int
 	skipDedup                  int
+	outerAntiPlanning          int
 }
 
 type CTERef struct {
-	isRecursive bool
-	ast         *tree.CTE
-	maskedCTEs  map[string]bool
-	snapshot    *Snapshot
+	isRecursive    bool
+	ast            *tree.CTE
+	maskedCTEs     map[string]bool
+	snapshot       *Snapshot
+	declarationCtx *BindContext
+	occurrences    []cteOccurrence
+	hasNestedRef   bool
+	hasNestedUse   bool
+}
+
+type cteOccurrence struct {
+	rootID            int32
+	rootTag           int32
+	ctx               *BindContext
+	headings          []string
+	headingProvenance headingProvenanceMap
+	types             []plan.Type
+	isCorrelated      bool
 }
 
 type CteBindState struct {
-	cte           *CTERef
-	cteBindType   int
-	recScanNodeId int32
+	cte                    *CTERef
+	cteBindType            int
+	recScanNodeId          int32
+	recursiveRefQueryBlock *BindContext
 }
 
 func (state CteBindState) masked(name string) bool {
@@ -313,18 +735,158 @@ type aliasItem struct {
 	astExpr tree.Expr
 }
 
+// headingPart keeps the syntax provenance needed when a CTAS heading is
+// normalized. Identifier text is lower-cased, while SQL string literals keep
+// their spelling because format strings are case-sensitive. Keeping the
+// segments separate avoids trying to infer syntax from apostrophes in the
+// rendered heading (an apostrophe is valid identifier data too).
+type headingPart struct {
+	text    string
+	literal bool
+}
+
+type headingProvenance struct {
+	parts []headingPart
+}
+
+// headingProvenanceMap stores only output columns whose headings contain
+// case-sensitive SQL string literals. Most planner outputs have no such
+// metadata, so keeping this map nil avoids allocating one empty entry per
+// heading (and avoids copying a full-width slice through every boundary).
+type headingProvenanceMap map[int32]headingProvenance
+
+func cloneHeadingProvenance(provenance headingProvenance) headingProvenance {
+	if len(provenance.parts) == 0 {
+		return headingProvenance{}
+	}
+	return headingProvenance{parts: append([]headingPart(nil), provenance.parts...)}
+}
+
+func headingProvenanceEqual(left, right headingProvenance) bool {
+	if len(left.parts) != len(right.parts) {
+		return false
+	}
+	for i := range left.parts {
+		if left.parts[i] != right.parts[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func cloneHeadingProvenances(provenances headingProvenanceMap) headingProvenanceMap {
+	if len(provenances) == 0 {
+		return nil
+	}
+	cloned := make(headingProvenanceMap, len(provenances))
+	for i, provenance := range provenances {
+		if len(provenance.parts) == 0 {
+			continue
+		}
+		cloned[i] = cloneHeadingProvenance(provenance)
+	}
+	if len(cloned) == 0 {
+		return nil
+	}
+	return cloned
+}
+
+func mergeHeadingProvenances(
+	dst *headingProvenanceMap,
+	src headingProvenanceMap,
+	offset int32,
+) {
+	if len(src) == 0 {
+		return
+	}
+	if *dst == nil {
+		*dst = make(headingProvenanceMap, len(src))
+	}
+	for index, provenance := range src {
+		if len(provenance.parts) == 0 {
+			continue
+		}
+		(*dst)[offset+index] = cloneHeadingProvenance(provenance)
+	}
+}
+
+func truncateHeadingProvenances(provenances *headingProvenanceMap, length int32) {
+	if len(*provenances) == 0 {
+		return
+	}
+	for index := range *provenances {
+		if index >= length {
+			delete(*provenances, index)
+		}
+	}
+	if len(*provenances) == 0 {
+		*provenances = nil
+	}
+}
+
+type orderResolutionMetadata struct {
+	bindAsts          []tree.Expr
+	semanticKeysByTag map[int32][]string
+}
+
 type BindContext struct {
+	existentialBlock     uint64
+	subqueryNestingDepth uint32
+
 	binder Binder
+
+	// outputColumnProvenance records planner-local source or pure-NULL identity
+	// by output position. An explicit None prevents later transparent-boundary
+	// code from rediscovering metadata after a semantic boundary has cleared it.
+	outputColumnProvenance map[int32]OutputColumnProvenance
+
+	// mysqlSpecialOrderTypes records the storage type behind a visible ENUM/SET
+	// display value.  It is planner-local semantic provenance: only a pure
+	// display projection (or a pure column passthrough of one) may populate it.
+	// A present key with a nil value explicitly suppresses provenance when a
+	// multi-input construct proves the originating display contract unsafe.
+	// The generated plan consumes the provenance by materializing an ordinary
+	// numeric sort expression, so this metadata never crosses the plan wire.
+	mysqlSpecialOrderTypes map[int32]*plan.Type
+	// mysqlSpecialCanonicalTypes records outputs whose SQL-visible value has
+	// already passed through GROUP BY or DISTINCT and must be canonically
+	// re-encoded when a persisted View exposes an ENUM/SET catalog type.
+	mysqlSpecialCanonicalTypes map[int32]*plan.Type
+	// restoreViewMySQLSpecialTypes is inherited only while rebinding a persisted
+	// View. It lets transparent derived/CTE query boundaries expose their raw
+	// ENUM/SET values without changing ordinary query-boundary behavior.
+	restoreViewMySQLSpecialTypes bool
+	// mysqlSpecialRawProjectPositions maps a visible output position to a hidden
+	// raw ENUM/SET sidecar in the query block's PROJECT. It is populated only
+	// for row-preserving View ORDER BY boundaries.
+	mysqlSpecialRawProjectPositions map[int32]int32
 
 	//cteByName saves all cte definitions in the current stmt
 	cteByName map[string]*CTERef
 	//cteState records state of binding cte
-	cteState      CteBindState
-	sliding       bool
-	isDistinct    bool
-	isCorrelated  bool
-	hasSingleRow  bool
-	isGroupingSet bool
+	cteState                     CteBindState
+	sliding                      bool
+	explicitSliding              bool
+	isDistinct                   bool
+	normalizeGroupingSetDistinct bool
+	// groupingSetOrderHiddenCount marks the generated ORDER BY projections at
+	// the tail of a grouping-set branch select list. They are qualified after
+	// FROM binding with source-column-first ORDER BY semantics.
+	groupingSetOrderHiddenCount int
+	// groupingSetOrderAliases carries the original select-list expressions for
+	// generated hidden ORDER BY projections. Unlike normal branch projections,
+	// those expressions use source-column-first alias fallback semantics.
+	groupingSetOrderAliases map[string][]tree.Expr
+	// groupingSetOrderSourceProbes resolves names whose presence cannot be known
+	// until the generated branch has bound its FROM scope.
+	groupingSetOrderSourceProbes map[string]*tree.GroupingSetOrderSourceProbe
+	// preserveOrderSemanticKeys retains source-scope projection identities for
+	// a grouping-set branch whose UNION output otherwise loses that identity.
+	preserveOrderSemanticKeys bool
+	isCorrelated              bool
+	hasSingleRow              bool
+	isGroupingSet             bool
+	groupingFuncAllowed       bool
 
 	//cteName denotes the alias of this BindContext.
 	//it may be from view name, cte name or subquery name
@@ -332,6 +894,28 @@ type BindContext struct {
 	//cte in binding or bound already
 	boundCtes map[string]*CTERef
 	headings  []string
+	// headingProvenance records only output positions with structural SQL
+	// literal segments in an expression heading. CTAS uses it to preserve
+	// case-sensitive format strings without confusing apostrophes that are part
+	// of identifier text with string delimiters.
+	headingProvenance headingProvenanceMap
+	// generatedHeadingProvenance is keyed by output ordinal for the
+	// ROLLUP/window rewrite. An ordinal avoids case-folding collisions between
+	// headings such as DATE_FORMAT(..., '%M') and DATE_FORMAT(..., '%m').
+	generatedHeadingProvenance headingProvenanceMap
+
+	// captureViewStarExpansion is enabled only while binding a CREATE/ALTER
+	// VIEW definition. Ordinary SELECT planning must not clone its select list
+	// just to support view metadata persistence.
+	captureViewStarExpansion bool
+	// persistedExpressionProtocolRequirement is shared by the root view bind
+	// context and all nested query blocks. It records protocol-sensitive
+	// expressions immediately after function binding, before a bind-time fold
+	// can erase the function from the persisted plan.
+	persistedExpressionProtocolRequirement *int64
+	// expandedSelectLists records the expanded output for each SELECT clause
+	// participating in a view definition, including UNION branches.
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs
 
 	groupTag     int32
 	aggregateTag int32
@@ -349,16 +933,60 @@ type BindContext struct {
 	windows    []*plan.Expr
 	times      []*plan.Expr
 
-	groupByAst     map[string]int32
-	aggregateByAst map[string]int32
-	sampleByAst    map[string]int32
-	windowByAst    map[string]int32
-	projectByExpr  map[string]int32
-	timeByAst      map[string]int32
+	// pendingAggregateQuery is set after the pre-aggregate FROM/JOIN/WHERE/GROUP
+	// BY clauses are bound and before HAVING, projection, and ORDER BY. At that
+	// point SELECT/HAVING/ORDER BY aggregates may not have been appended to
+	// aggregates yet, but the query block is already an implicit aggregate query
+	// for ONLY_FULL_GROUP_BY correlation checks.
+	pendingAggregateQuery bool
+
+	// timeBoundaryType is the public type for _wstart/_wend. It is filled once
+	// the time-window grouping key is bound, before the SELECT projection binds
+	// boundary column references.
+	timeBoundaryType *plan.Type
+
+	groupByAst          map[string]int32
+	groupByCanonicalAst map[string]int32
+	groupByParamAst     map[string]int32
+	// sampleGroupByAst retains the logical identity of stable GROUP BY
+	// literals removed from the physical key. SAMPLE must still reject those
+	// expressions even though ordinary projection binding should see literals.
+	sampleGroupByAst map[string]struct{}
+	aggregateByAst   map[string]int32
+	// aliasExpandedExprs marks synthetic wrappers inserted when an ORDER BY or
+	// HAVING alias is expanded and retains the selected projection position.
+	// Binders can therefore resolve a cloned alias expression to its exact
+	// projection instead of relying on an AST-wide aggregate cache.
+	aliasExpandedExprs map[*tree.ParenExpr]int32
+	// groupConcatByExpr records the physical aggregate slot for each GROUP_CONCAT
+	// AST node. HAVING is bound before SELECT, so an alias may materialize the
+	// aggregate first; the later SELECT occurrence must reuse that exact slot.
+	groupConcatByExpr      map[*tree.FuncExpr]int32
+	sampleByAst            map[string]int32
+	windowByAst            map[string]int32
+	projectByExpr          map[string]int32
+	timeByAst              map[string]int32
+	whereFilters           []*plan.Expr
+	flattenedVolatileExprs map[int32]*plan.Expr
+	// gapFillWhereFilters preserves the complete bound WHERE tree before
+	// subqueries are flattened into joins. Bounded GAPFILL inference must see
+	// every timestamp predicate, including IN/ANY/ALL subquery operands.
+	gapFillWhereFilters []*plan.Expr
 
 	projectColByAst map[string]int32
 
 	projectByAst []SelectField
+	// projectSemanticKeys is populated only when preserveOrderSemanticKeys is
+	// set, keeping the ordinary-query projection path allocation-free.
+	projectSemanticKeys []string
+	// orderResolution is allocated only for generated ROLLUP/CUBE window
+	// boundaries that must preserve output AST categories and bound identity.
+	orderResolution *orderResolutionMetadata
+
+	numericProjectionTypes          []Type
+	numericTableProjectionTypes     map[string][]Type
+	numericTableProjectionAmbiguous map[string][]bool
+	numericCteByName                map[string]*tree.CTE
 
 	timeAsts []tree.Expr
 
@@ -374,20 +1002,30 @@ type BindContext struct {
 	// Only populated when the column has been merged through at least one
 	// FULL OUTER JOIN ... USING. Length is always >= 2 when present.
 	outerUsingCols map[string][]string
+	// sqlUdfArgs holds the already-bound arguments of the SQL UDF currently
+	// being expanded in this query block. The UDF body uses body-unique marker
+	// names for its $n parameters; resolving those markers from a child query
+	// block turns the argument's column references into correlated references.
+	sqlUdfArgs map[string]*plan.Expr
 
 	// for join tables
 	bindingTree *BindingTreeNode
 
 	parent *BindContext
+	// queryBlockOwner identifies the SELECT that owns this context. Structural
+	// contexts created while binding one FROM clause inherit the owner, while a
+	// nested SELECT replaces it when bindSelect starts.
+	queryBlockOwner *BindContext
+	// aggregateInputParent is set on a subquery context when that subquery is
+	// bound as an aggregate argument of its parent query. Correlations back to
+	// this parent are per-row aggregate inputs, not bare aggregate-query output
+	// columns for ONLY_FULL_GROUP_BY validation.
+	aggregateInputParent *BindContext
 
 	defaultDatabase string
 
 	// sample function related.
 	sampleFunc SampleFuncCtx
-
-	// groupConcatOrderBys stores ORDER BY specs from group_concat functions.
-	// Used to generate a Sort node before the Agg node instead of using window function.
-	groupConcatOrderBys []*plan.OrderBySpec
 
 	snapshot *Snapshot
 	// all view keys(dbName#viewName)
@@ -404,7 +1042,31 @@ type BindContext struct {
 
 	groupingFlag []bool
 
+	// Only GROUP BY validation consumes this query-block-local proof. It is
+	// never a physical uniqueness property or prepared-execution state.
+	fullGroupByInputNode  int32
+	fullGroupByInputReady bool
+	fullGroupByProof      *fullGroupByDependencyProof
+
 	remapOption *tree.RewriteOption
+}
+
+// groupOutputType describes a group key after aggregation. A grouping-set
+// branch emits a synthetic NULL for every inactive key, independent of the
+// source expression's nullability.
+func (bc *BindContext) groupOutputType(groupPos int32) Type {
+	typ := bc.groups[groupPos].Typ
+	if groupPos >= 0 && int(groupPos) < len(bc.groupingFlag) && !bc.groupingFlag[groupPos] {
+		typ.NotNullable = false
+	}
+	return typ
+}
+
+func groupingFlagOutputType(typ Type, groupingFlag []bool, groupPos int32) Type {
+	if groupPos >= 0 && int(groupPos) < len(groupingFlag) && !groupingFlag[groupPos] {
+		typ.NotNullable = false
+	}
+	return typ
 }
 
 type SelectField struct {
@@ -433,6 +1095,12 @@ type BindingTreeNode struct {
 
 	left  *BindingTreeNode
 	right *BindingTreeNode
+
+	// rightJoinUsingStar records the SQL surface order for an explicit
+	// RIGHT JOIN ... USING or NATURAL RIGHT JOIN. The merged columns are
+	// emitted before this node's children; the preserved right child then
+	// precedes the left child for an unqualified star.
+	rightJoinUsingStar bool
 }
 
 type Binder interface {
@@ -446,18 +1114,49 @@ type Binder interface {
 }
 
 type baseBinder struct {
-	sysCtx           context.Context
-	builder          *QueryBuilder
-	ctx              *BindContext
-	impl             Binder
-	boundCols        []string
-	numericParamType *Type
+	sysCtx    context.Context
+	builder   *QueryBuilder
+	ctx       *BindContext
+	impl      Binder
+	boundCols []boundColumn
+	// Catalog FORMAT must choose its legacy string contract before binding
+	// precision: some historical source types (e.g. DATE) cannot cast to INT64.
+	persistedFormatCompatibility bool
+	// Integer consumers own the source domain of their operands. An enclosing
+	// default/assignment target must not pre-convert their numeric literals.
+	integerArgumentSourceContext     bool
+	preparedFieldArgumentContext     bool
+	numericParamType                 *Type
+	numericSubqueryTarget            *Type
+	numericFunctionTarget            bool
+	mysqlSpecialTargetType           *Type
+	allowCanonicalNameConstValueCast bool
+	bindRawMySQLSpecialType          bool
+	// suppressDefaultValueBindType prevents a destination column type from
+	// changing the type of a nested literal while a function-specific binder
+	// resolves that literal.  Some functions, such as INET_NTOA, have a
+	// string-valued result but still preserve native numeric input overloads.
+	suppressDefaultValueBindType bool
+	// inetNtoaNumericLiteralContext preserves HEX/BIT literal provenance until
+	// INET_NTOA can select its numeric overload.  Those literals are otherwise
+	// materialized as binary strings by the generic literal binder.
+	inetNtoaNumericLiteralContext bool
+	subqueryInAggregateInput      bool
+	aggregateInputCorrelation     bool
+}
+
+type boundColumn struct {
+	name      string
+	relation  int32
+	columnPos int32
 }
 
 type DefaultBinder struct {
 	baseBinder
-	typ  Type
-	cols []string
+	typ           Type
+	cols          []string
+	colTypes      []Type
+	allowSubquery bool
 }
 
 // ReplaceValueBinder binds the RHS value expressions of a `REPLACE ... SET`
@@ -482,9 +1181,12 @@ type UpdateBinder struct {
 
 type OndupUpdateBinder struct {
 	baseBinder
-	scanTag   int32
-	selectTag int32
-	tableDef  *plan.TableDef
+	scanTag             int32
+	selectTag           int32
+	tableDef            *plan.TableDef
+	targetDBName        string
+	targetTableName     string
+	lowerCaseTableNames int64
 }
 
 type TableBinder struct {
@@ -498,18 +1200,28 @@ type WhereBinder struct {
 
 type GroupBinder struct {
 	baseBinder
-	selectList tree.SelectExprs
+	selectList          tree.SelectExprs
+	projectionExprPos   int32
+	allowScalarSubquery bool
 }
 
 type HavingBinder struct {
 	baseBinder
-	insideAgg    bool
-	rollupHaving bool
+	insideAgg             bool
+	bindingProjectedAlias bool
+	rollupHaving          bool
+	bindingHaving         bool
 }
 
 type ProjectionBinder struct {
 	baseBinder
-	havingBinder *HavingBinder
+	havingBinder      *HavingBinder
+	numericTargetType *Type
+	// allowGroupConcatReuse is scoped to ORDER BY binding. ORDER BY expressions
+	// resolve against the aggregate result and must reuse an existing
+	// GROUP_CONCAT slot when the same call is already selected. A grouped wrapper
+	// remains independent because MySQL evaluates it as a per-group sort key.
+	allowGroupConcatReuse bool
 }
 
 type OrderBinder struct {
@@ -558,10 +1270,24 @@ type Binding struct {
 	// lower case: used for binding/lookup
 	cols []string
 	// original case: only for SELECT * display, must be same length as cols (or empty)
-	originCols  []string
-	colIsHidden []bool
-	types       []*plan.Type
-	refCnts     []uint
+	originCols []string
+	// headingProvenance carries expression-heading syntax through a derived
+	// table/CTE so SELECT * can retain the original literal spelling. It is
+	// sparse and keyed by column ordinal.
+	headingProvenance headingProvenanceMap
+	colIsHidden       []bool
+	types             []*plan.Type
+	// mysqlSpecialOrderTypes is aligned with cols. A non-nil entry means that
+	// the string column is a pure display of the recorded ENUM/SET storage
+	// type, and may therefore use definition-order semantics when ordered.
+	mysqlSpecialOrderTypes []*plan.Type
+	// mysqlSpecialCanonicalTypes is aligned with cols and propagates the
+	// post-semantic canonical-value contract through transparent bindings.
+	mysqlSpecialCanonicalTypes []*plan.Type
+	// outputColumnProvenance is aligned with cols and carries planner-local
+	// source or pure-NULL output identity. It is never serialized into the plan.
+	outputColumnProvenance []OutputColumnProvenance
+	refCnts                []uint
 	// lower case
 	colIdByName    map[string]int32
 	isClusterTable bool

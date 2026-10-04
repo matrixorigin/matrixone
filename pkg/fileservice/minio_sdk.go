@@ -17,6 +17,7 @@ package fileservice
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"iter"
 	"net/http"
@@ -37,12 +38,36 @@ import (
 )
 
 type MinioSDK struct {
-	name            string
-	bucket          string
-	core            *minio.Core
-	client          *minio.Client
-	perfCounterSets []*perfcounter.CounterSet
-	listMaxKeys     int
+	name                 string
+	endpoint             string
+	bucket               string
+	core                 *minio.Core
+	client               *minio.Client
+	copyCredentialDomain objectStorageCopyCredentialDomain
+	perfCounterSets      []*perfcounter.CounterSet
+	listMaxKeys          int
+}
+
+var _ objectStorageCopier = new(MinioSDK)
+var _ objectStorageIdentityReader = new(MinioSDK)
+
+func (a *MinioSDK) CopyObject(
+	ctx context.Context,
+	src ObjectStorage,
+	srcKey string,
+	dstKey string,
+) (bool, error) {
+	s, ok := src.(*MinioSDK)
+	if !ok || !strings.EqualFold(a.endpoint, s.endpoint) ||
+		!a.copyCredentialDomain.matches(s.copyCredentialDomain) {
+		return false, nil
+	}
+	_, err := a.client.CopyObject(
+		ctx,
+		minio.CopyDestOptions{Bucket: a.bucket, Object: dstKey},
+		minio.CopySrcOptions{Bucket: s.bucket, Object: srcKey},
+	)
+	return true, err
 }
 
 func NewMinioSDK(
@@ -204,10 +229,14 @@ func NewMinioSDK(
 	}
 
 	return &MinioSDK{
-		name:            args.Name,
-		bucket:          args.Bucket,
-		client:          client,
-		core:            core,
+		name:     args.Name,
+		endpoint: args.Endpoint,
+		bucket:   args.Bucket,
+		client:   client,
+		core:     core,
+		copyCredentialDomain: newObjectStorageCopyCredentialDomain(
+			keyID, keySecret, sessionToken, args.RoleARN, args.ExternalID,
+		),
 		perfCounterSets: perfCounterSets,
 	}, nil
 }
@@ -292,6 +321,60 @@ func (a *MinioSDK) Stat(
 	return
 }
 
+func (a *MinioSDK) StatObjectIdentity(ctx context.Context, key string) (ObjectIdentity, error) {
+	info, err := a.statObject(ctx, key)
+	if err != nil {
+		if a.is404(err) {
+			return ObjectIdentity{}, moerr.NewFileNotFoundNoCtx(key)
+		}
+		return ObjectIdentity{}, err
+	}
+	identity := ObjectIdentity{
+		VersionID: info.VersionID, ETag: info.ETag, Size: info.Size, LastModified: info.LastModified,
+	}
+	return identity, identity.Validate()
+}
+
+func (a *MinioSDK) ReadObjectWithIdentity(
+	ctx context.Context,
+	key string,
+	min *int64,
+	max *int64,
+	expected ObjectIdentity,
+) (io.ReadCloser, error) {
+	if err := expected.Validate(); err != nil {
+		return nil, err
+	}
+	options := minio.GetObjectOptions{}
+	if expected.VersionID != "" {
+		options.VersionID = expected.VersionID
+	} else if err := options.SetMatchETag(expected.ETag); err != nil {
+		return nil, err
+	}
+	r, err := a.getObjectWithOptions(ctx, key, min, max, options)
+	if err != nil {
+		return nil, mapMinioConditionalReadError(err)
+	}
+	// MinIO defers the GET until the first operation on Object.
+	if _, err = r.Read(nil); err != nil {
+		r.Close()
+		return nil, mapMinioConditionalReadError(err)
+	}
+	r = mapReadCloserErrors(r, mapMinioConditionalReadError)
+	if max == nil {
+		return r, nil
+	}
+	return &readCloser{r: io.LimitReader(r, *max-*min), closeFunc: r.Close}, nil
+}
+
+func mapMinioConditionalReadError(err error) error {
+	response := minio.ToErrorResponse(err)
+	if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusPreconditionFailed {
+		return errors.Join(ErrObjectChanged, moerr.NewInternalErrorNoCtx("conditional S3-compatible read failed"))
+	}
+	return err
+}
+
 func (a *MinioSDK) Exists(
 	ctx context.Context,
 	key string,
@@ -342,7 +425,7 @@ func (a *MinioSDK) Write(
 		if err != nil {
 			return err
 		}
-		_, err = DoWithRetry("write", func() (minio.UploadInfo, error) {
+		_, err = DoWithRetryContext(ctx, "write", func() (minio.UploadInfo, error) {
 			return a.putObject(
 				ctx,
 				key,
@@ -473,7 +556,8 @@ func (a *MinioSDK) deleteSingle(ctx context.Context, key string) error {
 func (a *MinioSDK) listObjects(ctx context.Context, prefix string, marker string) (minio.ListBucketResult, error) {
 	ctx, task := gotrace.NewTask(ctx, "MinioSDK.listObjects")
 	defer task.End()
-	return DoWithRetry(
+	return DoWithRetryContext(
+		ctx,
 		"s3 list objects",
 		func() (minio.ListBucketResult, error) {
 			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
@@ -495,7 +579,8 @@ func (a *MinioSDK) listObjects(ctx context.Context, prefix string, marker string
 func (a *MinioSDK) statObject(ctx context.Context, key string) (minio.ObjectInfo, error) {
 	ctx, task := gotrace.NewTask(ctx, "MinioSDK.statObject")
 	defer task.End()
-	return DoWithRetry(
+	return DoWithRetryContext(
+		ctx,
 		"s3 head object",
 		func() (minio.ObjectInfo, error) {
 			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
@@ -524,14 +609,12 @@ func (a *MinioSDK) putObject(
 	defer task.End()
 	// not retryable because Reader may be half consumed
 	//TODO set expire
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.Put.Add(1)
-	}, a.perfCounterSets...)
+	recordS3PutRequest(ctx, a.perfCounterSets...)
 	size := int64(-1)
 	if sizeHint != nil {
 		size = *sizeHint
 	}
-	return a.client.PutObject(
+	info, err := a.client.PutObject(
 		ctx,
 		a.bucket,
 		key,
@@ -539,9 +622,23 @@ func (a *MinioSDK) putObject(
 		size,
 		minio.PutObjectOptions{},
 	)
+	if err == nil {
+		recordS3AcceptedBytes(ctx, info.Size, a.perfCounterSets...)
+	}
+	return info, err
 }
 
 func (a *MinioSDK) getObject(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {
+	return a.getObjectWithOptions(ctx, key, min, max, minio.GetObjectOptions{})
+}
+
+func (a *MinioSDK) getObjectWithOptions(
+	ctx context.Context,
+	key string,
+	min *int64,
+	max *int64,
+	options minio.GetObjectOptions,
+) (io.ReadCloser, error) {
 	ctx, task := gotrace.NewTask(ctx, "MinioSDK.getObject")
 	defer task.End()
 	if min == nil {
@@ -549,13 +646,14 @@ func (a *MinioSDK) getObject(ctx context.Context, key string, min *int64, max *i
 	}
 	r, err := newRetryableReader(
 		func(offset int64) (io.ReadCloser, error) {
-			obj, err := DoWithRetry(
+			obj, err := DoWithRetryContext(
+				ctx,
 				"s3 get object",
 				func() (obj *minio.Object, err error) {
 					perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 						counter.FileService.S3.Get.Add(1)
 					}, a.perfCounterSets...)
-					return a.client.GetObject(ctx, a.bucket, key, minio.GetObjectOptions{})
+					return a.client.GetObject(ctx, a.bucket, key, options)
 				},
 				maxRetryAttemps,
 				IsRetryableError,
@@ -589,7 +687,8 @@ func (a *MinioSDK) getObject(ctx context.Context, key string, min *int64, max *i
 func (a *MinioSDK) deleteObject(ctx context.Context, key string) (any, error) {
 	ctx, task := gotrace.NewTask(ctx, "MinioSDK.deleteObject")
 	defer task.End()
-	return DoWithRetry(
+	return DoWithRetryContext(
+		ctx,
 		"s3 delete object",
 		func() (any, error) {
 			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
@@ -608,7 +707,8 @@ func (a *MinioSDK) deleteObject(ctx context.Context, key string) (any, error) {
 func (a *MinioSDK) deleteObjects(ctx context.Context, keys ...string) (any, error) {
 	ctx, task := gotrace.NewTask(ctx, "MinioSDK.deleteObjects")
 	defer task.End()
-	return DoWithRetry(
+	return DoWithRetryContext(
+		ctx,
 		"s3 delete objects",
 		func() (any, error) {
 			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {

@@ -38,9 +38,14 @@ import (
 )
 
 type RoutineManager struct {
-	mu      sync.RWMutex
-	ctx     context.Context
-	clients map[*Conn]*Routine
+	mu                     sync.RWMutex
+	disconnectProbeMu      sync.Mutex
+	disconnectProbeScratch []activeClientRequest
+	ctx                    context.Context
+	clients                map[*Conn]*Routine
+	workerWG               sync.WaitGroup
+	cleanKillQueueInterval time.Duration
+	pu                     *config.ParameterUnit
 	// routinesByID keeps the routines by connection ID.
 	routinesByConnID map[uint32]*Routine
 	tlsConfig        *tls.Config
@@ -62,6 +67,16 @@ type AccountRoutineManager struct {
 type KillRecord struct {
 	killTime time.Time
 	version  uint64
+}
+
+type activeClientRequest struct {
+	conn    *Conn
+	routine *Routine
+}
+
+var clientDisconnectProbeErrorEvent = logutil.Event{
+	Name:    "frontend.client-disconnect-probe.error",
+	Message: "failed to probe active client connection",
 }
 
 func NewKillRecord(killtime time.Time, version uint64) KillRecord {
@@ -186,6 +201,56 @@ func (rm *RoutineManager) getRoutineByConnID(id uint32) *Routine {
 	return nil
 }
 
+func (rm *RoutineManager) appendLongRunningRequests(
+	requests []activeClientRequest,
+	now time.Time,
+	minimum time.Duration,
+) []activeClientRequest {
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
+	nowValue := clientRequestClockValue(now)
+	for conn, routine := range rm.clients {
+		if conn != nil && routine != nil && routine.requestRunningLongerThan(nowValue, minimum) {
+			requests = append(requests, activeClientRequest{conn: conn, routine: routine})
+		}
+	}
+	return requests
+}
+
+func (rm *RoutineManager) cancelDisconnectedRequests(
+	now time.Time,
+	minimum time.Duration,
+	probe func(*Conn) (bool, error),
+) {
+	if probe == nil {
+		return
+	}
+	rm.disconnectProbeMu.Lock()
+	defer rm.disconnectProbeMu.Unlock()
+	requests := rm.appendLongRunningRequests(rm.disconnectProbeScratch[:0], now, minimum)
+	defer func() {
+		clear(requests)
+		rm.disconnectProbeScratch = requests[:0]
+	}()
+	for _, request := range requests {
+		closed, err := probe(request.conn)
+		if err != nil {
+			clientDisconnectProbeErrorEvent.DebugLazy(func() []zap.Field {
+				return []zap.Field{
+					zap.String("connection", request.conn.RemoteAddress()),
+					zap.Error(err),
+				}
+			})
+			continue
+		}
+		if !closed {
+			continue
+		}
+		logutil.Infof("cancel active query after client disconnect: connection=%s", request.conn.RemoteAddress())
+		request.routine.beginClose()
+	}
+}
+
 func (rm *RoutineManager) deleteRoutine(rs *Conn) *Routine {
 	var rt *Routine
 	var ok bool
@@ -209,12 +274,16 @@ func (rm *RoutineManager) getTlsConfig() *tls.Config {
 
 func (rm *RoutineManager) getConnID() (uint32, error) {
 	// Only works in unit test.
-	if getPu(rm.service).HAKeeperClient == nil {
+	if rm.pu.HAKeeperClient == nil {
 		return nextConnectionID(), nil
 	}
-	ctx, cancel := context.WithTimeoutCause(rm.ctx, time.Second*2, moerr.CauseGetConnID)
+	ctx, cancel := context.WithTimeoutCause(
+		rm.ctx,
+		rm.pu.SV.ConnectTimeout.Duration,
+		moerr.CauseGetConnID,
+	)
 	defer cancel()
-	connID, err := getPu(rm.service).HAKeeperClient.AllocateIDByKey(ctx, ConnIDAllocKey)
+	connID, err := rm.pu.HAKeeperClient.AllocateIDByKey(ctx, ConnIDAllocKey)
 	if err != nil {
 		return 0, moerr.AttachCause(ctx, err)
 	}
@@ -246,12 +315,9 @@ func (rm *RoutineManager) Created(rs *Conn) error {
 		logutil.Errorf("failed to get connection ID from HAKeeper: %v", err)
 		return err
 	}
-	sid := ""
-	if rm.baseService != nil {
-		sid = rm.baseService.ID()
-	}
-	pro := NewMysqlClientProtocol(sid, connID, rs, int(getPu(rm.service).SV.MaxBytesInOutbufToFlush), getPu(rm.service).SV)
-	routine := NewRoutine(rm.getCtx(), pro, getPu(rm.service).SV)
+	sid := rm.service
+	pro := NewMysqlClientProtocol(sid, connID, rs, int(rm.pu.SV.MaxBytesInOutbufToFlush), rm.pu.SV)
+	routine := NewRoutine(rm.getCtx(), pro, rm.pu.SV)
 	v2.CreatedRoutineCounter.Inc()
 
 	cancelCtx := routine.getCancelRoutineCtx()
@@ -280,7 +346,7 @@ func (rm *RoutineManager) Created(rs *Conn) error {
 	ses.Debugf(cancelCtx, "have done some preparation for the connection %s", rs.RemoteAddress())
 
 	// With proxy module enabled, we try to update salt value and label info from proxy.
-	if getPu(rm.service).SV.ProxyEnabled {
+	if rm.pu.SV.ProxyEnabled {
 		pro.receiveExtraInfo(rs)
 	}
 	rm.setRoutine(rs, pro.connectionID, routine)
@@ -296,6 +362,10 @@ func (rm *RoutineManager) Closed(rs *Conn) {
 	if rt == nil {
 		return
 	}
+	// Seal admission and cancel request/lifecycle work before waiting. This
+	// keeps connection close independent of the work it is stopping.
+	rt.beginClose()
+	rt.mc.waitAndClose()
 
 	defer func() {
 		v2.CloseRoutineCounter.Inc()
@@ -372,13 +442,21 @@ func (rm *RoutineManager) Handler(rs *Conn, msg []byte) error {
 		logutil.Errorf("%s error:%v", connectionInfo, err)
 		return err
 	}
+	if len(msg) == 0 {
+		return moerr.NewInvalidInput(ctx, "empty MySQL command packet")
+	}
+	req := ToRequest(msg)
+	if req.GetCmd() == COM_RESET_CONNECTION || req.GetCmd() == COM_CHANGE_USER {
+		return routine.handleSessionCommand(ctx, req)
+	}
+	if !routine.mc.tryBeginRequest() {
+		return moerr.NewInternalError(ctx, "cannot process request as routine is closed or busy")
+	}
+	defer routine.mc.endRequest()
 	routine.setInProcessRequest(true)
 	defer routine.setInProcessRequest(false)
-	payload := msg
-
 	ses := routine.getSession()
 
-	req := ToRequest(payload)
 	//handle request
 	err = routine.handleRequest(req)
 	if err != nil {
@@ -406,13 +484,12 @@ func (rm *RoutineManager) cleanKillQueue() {
 	ar := rm.accountRoutine
 	ar.killQueueMu.Lock()
 	defer ar.killQueueMu.Unlock()
-	pu := getPu(rm.service)
-	if pu != nil && pu.SV != nil {
-		tout := pu.SV.CleanKillQueueInterval
-		for toKillAccount, killRecord := range ar.killIdQueue {
-			if time.Since(killRecord.killTime) > time.Duration(tout)*time.Minute {
-				delete(ar.killIdQueue, toKillAccount)
-			}
+	if rm.cleanKillQueueInterval <= 0 {
+		return
+	}
+	for toKillAccount, killRecord := range ar.killIdQueue {
+		if time.Since(killRecord.killTime) > rm.cleanKillQueueInterval {
+			delete(ar.killIdQueue, toKillAccount)
 		}
 	}
 }
@@ -449,11 +526,25 @@ func (rm *RoutineManager) MigrateConnectionTo(ctx context.Context, req *query.Mi
 }
 
 func (rm *RoutineManager) MigrateConnectionFrom(req *query.MigrateConnFromRequest, resp *query.MigrateConnFromResponse) error {
+	return rm.MigrateConnectionFromWithContext(rm.ctx, req, resp)
+}
+
+func (rm *RoutineManager) MigrateConnectionFromWithContext(
+	ctx context.Context,
+	req *query.MigrateConnFromRequest,
+	resp *query.MigrateConnFromResponse,
+) error {
 	routine := rm.getRoutineByConnID(req.ConnID)
 	if routine == nil {
 		return moerr.NewInternalErrorf(rm.ctx, "cannot get routine to migrate connection %d", req.ConnID)
 	}
-	return routine.migrateConnectionFrom(resp)
+	return routine.migrateConnectionFromActionWithCapabilities(
+		ctx,
+		req.Action,
+		req.TempTableMigrationSupported,
+		req.LastInsertIDMigrationSupported,
+		resp,
+	)
 }
 
 func (rm *RoutineManager) ResetSession(req *query.ResetSessionRequest, resp *query.ResetSessionResponse) error {
@@ -464,15 +555,44 @@ func (rm *RoutineManager) ResetSession(req *query.ResetSessionRequest, resp *que
 	return routine.resetSession(rm.baseService.ID(), resp)
 }
 
+func (rm *RoutineManager) ResetSessionWithContext(
+	ctx context.Context,
+	req *query.ResetSessionRequest,
+	resp *query.ResetSessionResponse,
+) error {
+	routine := rm.getRoutineByConnID(req.ConnID)
+	if routine == nil {
+		return moerr.NewInternalErrorf(rm.ctx, "cannot get routine to clear session %d", req.ConnID)
+	}
+	return routine.resetSessionWithContext(ctx, rm.baseService.ID(), resp)
+}
+
+// RefreshSessionAuthWithContext revalidates a cached backend's credentials and
+// resolved authorization state against the current catalog.
+func (rm *RoutineManager) RefreshSessionAuthWithContext(
+	ctx context.Context,
+	req *query.RefreshSessionAuthRequest,
+	resp *query.RefreshSessionAuthResponse,
+) error {
+	if req == nil || resp == nil {
+		return moerr.NewInvalidInput(rm.ctx, "invalid refresh session authentication request")
+	}
+	routine := rm.getRoutineByConnID(req.ConnID)
+	if routine == nil {
+		return moerr.NewInternalErrorf(rm.ctx,
+			"cannot get routine to refresh session authentication %d", req.ConnID)
+	}
+	return routine.refreshSessionAuthWithContext(ctx, req, resp)
+}
+
 func (rm *RoutineManager) cancelCtx() {
 	if rm == nil {
 		return
 	}
-	rm.mu.Lock()
-	defer rm.mu.Unlock()
 	if rm.cancel != nil {
 		rm.cancel()
 	}
+	rm.workerWG.Wait()
 }
 
 func (rm *RoutineManager) killNetConns() {
@@ -488,9 +608,57 @@ func (rm *RoutineManager) killNetConns() {
 	}
 }
 
+func (rm *RoutineManager) startKillRoutineWorker(interval time.Duration) {
+	if interval <= 0 {
+		return
+	}
+	rm.workerWG.Add(1)
+	go func() {
+		defer rm.workerWG.Done()
+		select {
+		case <-rm.ctx.Done():
+			return
+		default:
+		}
+		rm.KillRoutineConnections()
+
+		timer := time.NewTimer(interval)
+		defer timer.Stop()
+		for {
+			select {
+			case <-rm.ctx.Done():
+				return
+			case <-timer.C:
+			}
+			rm.KillRoutineConnections()
+			timer.Reset(interval)
+		}
+	}()
+}
+
 func NewRoutineManager(ctx context.Context, service string) (*RoutineManager, error) {
-	var cancel context.CancelFunc
-	ctx, cancel = context.WithCancel(ctx)
+	ctx, cancel := context.WithCancel(ctx)
+	contextPU, _ := ctx.Value(config.ParameterUnitKey).(*config.ParameterUnit)
+	if contextPU != nil && contextPU.SV == nil {
+		cancel()
+		return nil, moerr.NewInternalError(ctx, "invalid parameter unit")
+	}
+	servicePU := getPuIfPresent(service)
+	pu := servicePU
+	publishPU := false
+	if contextPU != nil {
+		if servicePU == nil {
+			pu = contextPU
+			publishPU = true
+		} else if contextPU != servicePU {
+			cancel()
+			return nil, moerr.NewInternalErrorf(ctx, "parameter unit mismatch for service %q", service)
+		}
+	}
+	if pu == nil || pu.SV == nil {
+		cancel()
+		return nil, moerr.NewInternalError(ctx, "invalid parameter unit")
+	}
 	accountRoutine := &AccountRoutineManager{
 		killQueueMu:       sync.RWMutex{},
 		accountId2Routine: make(map[int64]map[*Routine]uint64),
@@ -504,36 +672,26 @@ func NewRoutineManager(ctx context.Context, service string) (*RoutineManager, er
 		routinesByConnID: make(map[uint32]*Routine),
 		accountRoutine:   accountRoutine,
 		cancel:           cancel,
+		pu:               pu,
 		service:          service,
 	}
-	pu := getPu(rm.service)
 	sv := pu.SV
-	if sv != nil && sv.EnableTls {
+	rm.cleanKillQueueInterval = time.Duration(sv.CleanKillQueueInterval) * time.Minute
+	if sv.EnableTls {
 		err := initTlsConfig(rm, sv)
 		if err != nil {
+			cancel()
 			return nil, err
 		}
 	}
+	if publishPU && publishPuIfAbsent(service, pu) != pu {
+		cancel()
+		return nil, moerr.NewInternalErrorf(ctx, "parameter unit mismatch for service %q", service)
+	}
 
 	// add kill connect routine
-	tout := pu.SV.KillRountinesInterval
-	if tout != 0 {
-		go func() {
-			for {
-				select {
-				case <-rm.ctx.Done():
-					return
-				default:
-				}
-				rm.KillRoutineConnections()
-				if tout != 0 {
-					time.Sleep(time.Duration(tout) * time.Second)
-				} else {
-					break
-				}
-			}
-		}()
-	}
+	interval := time.Duration(sv.KillRountinesInterval) * time.Second
+	rm.startKillRoutineWorker(interval)
 
 	return rm, nil
 }

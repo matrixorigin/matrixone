@@ -1,0 +1,90 @@
+[
+  {
+    "id": "ICE-TEST-130",
+    "case_id": "ICE-TEST-130_public_dataset_count_filter",
+    "name": "public-dataset-count-filter",
+    "catalog": "${MO_ICEBERG_PUBLIC_DATASET_CATALOG_URI}",
+    "namespace": "${MO_ICEBERG_PUBLIC_DATASET_NAMESPACE}",
+    "table": "${MO_ICEBERG_PUBLIC_DATASET_TABLE}",
+    "ref": "main",
+    "comparison_mode": "ordered",
+    "engines": [
+      {
+        "name": "mo",
+        "command_env": "MO_ICEBERG_PUBLIC_DATASET_MO_SQL_CMD",
+        "sql": "select count(*) as c from ${MO_ICEBERG_PUBLIC_DATASET_MO_TABLE} where ${MO_ICEBERG_PUBLIC_DATASET_FILTER}"
+      },
+      {
+        "name": "official",
+        "command_env": "MO_ICEBERG_PUBLIC_DATASET_OFFICIAL_SQL_CMD",
+        "sql": "select count(*) as c from ${MO_ICEBERG_PUBLIC_DATASET_OFFICIAL_TABLE} where ${MO_ICEBERG_PUBLIC_DATASET_FILTER}"
+      }
+    ]
+  },
+  {
+    "id": "ICE-TEST-130",
+    "case_id": "ICE-TEST-130_public_dataset_limit_projection",
+    "name": "public-dataset-limit-projection",
+    "catalog": "${MO_ICEBERG_PUBLIC_DATASET_CATALOG_URI}",
+    "namespace": "${MO_ICEBERG_PUBLIC_DATASET_NAMESPACE}",
+    "table": "${MO_ICEBERG_PUBLIC_DATASET_TABLE}",
+    "ref": "main",
+    "comparison_mode": "ordered",
+    "engines": [
+      {
+        "name": "mo",
+        "command_env": "MO_ICEBERG_PUBLIC_DATASET_MO_SQL_CMD",
+        "sql": "${MO_ICEBERG_PUBLIC_DATASET_MO_PROJECTION_SQL}"
+      },
+      {
+        "name": "official",
+        "command_env": "MO_ICEBERG_PUBLIC_DATASET_OFFICIAL_SQL_CMD",
+        "sql": "${MO_ICEBERG_PUBLIC_DATASET_OFFICIAL_PROJECTION_SQL}"
+      }
+    ]
+  },
+  {
+    "id": "ICE-TEST-130",
+    "case_id": "ICE-TEST-130_public_dataset_time_range",
+    "name": "public-dataset-time-range",
+    "catalog": "${MO_ICEBERG_PUBLIC_DATASET_CATALOG_URI}",
+    "namespace": "${MO_ICEBERG_PUBLIC_DATASET_NAMESPACE}",
+    "table": "${MO_ICEBERG_PUBLIC_DATASET_TABLE}",
+    "ref": "main",
+    "comparison_mode": "ordered",
+    "engines": [
+      {
+        "name": "mo",
+        "command_env": "MO_ICEBERG_PUBLIC_DATASET_MO_SQL_CMD",
+        "sql": "${MO_ICEBERG_PUBLIC_DATASET_MO_TIME_RANGE_SQL}"
+      },
+      {
+        "name": "official",
+        "command_env": "MO_ICEBERG_PUBLIC_DATASET_OFFICIAL_SQL_CMD",
+        "sql": "${MO_ICEBERG_PUBLIC_DATASET_OFFICIAL_TIME_RANGE_SQL}"
+      }
+    ]
+  },
+  {
+    "id": "ICE-TEST-130",
+    "case_id": "ICE-TEST-130_public_dataset_location_aggregation",
+    "name": "public-dataset-location-aggregation",
+    "catalog": "${MO_ICEBERG_PUBLIC_DATASET_CATALOG_URI}",
+    "namespace": "${MO_ICEBERG_PUBLIC_DATASET_NAMESPACE}",
+    "table": "${MO_ICEBERG_PUBLIC_DATASET_TABLE}",
+    "ref": "main",
+    "comparison_mode": "ordered",
+    "engines": [
+      {
+        "name": "mo",
+        "command_env": "MO_ICEBERG_PUBLIC_DATASET_MO_SQL_CMD",
+        "sql": "${MO_ICEBERG_PUBLIC_DATASET_MO_AGG_SQL}"
+      },
+      {
+        "name": "official",
+        "command_env": "MO_ICEBERG_PUBLIC_DATASET_OFFICIAL_SQL_CMD",
+        "sql": "${MO_ICEBERG_PUBLIC_DATASET_OFFICIAL_AGG_SQL}"
+      }
+    ]
+  }
+]

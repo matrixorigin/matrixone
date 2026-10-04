@@ -16,6 +16,7 @@ package taskservice
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -264,12 +265,55 @@ func TestUpdateDaemonTaskWithConditions(t *testing.T) {
 
 			mustUpdateTestDaemonTask(t, s, 0, tasks, WithTaskRunnerCond(EQ, "t2"))
 			mustUpdateTestDaemonTask(t, s, 1, tasks, WithTaskRunnerCond(EQ, "t1"))
+			mustUpdateTestDaemonTask(t, s, 0, tasks,
+				WithTaskExecutorCond(EQ, task.TaskCode_InitCdc))
+			mustUpdateTestDaemonTask(t, s, 1, tasks,
+				WithTaskExecutorCond(EQ, task.TaskCode_TestOnly))
 
 			tasks[0].Metadata.Context = []byte{1}
 			mustUpdateTestDaemonTask(t, s, 0, tasks, WithTaskIDCond(EQ, tasks[0].ID+1))
 			mustUpdateTestDaemonTask(t, s, 1, tasks, WithTaskIDCond(EQ, tasks[0].ID))
 			tasks[0].Metadata.Context = []byte{1, 2}
 			mustUpdateTestDaemonTask(t, s, 1, tasks, WithTaskIDCond(GT, 0))
+		})
+	}
+}
+
+func TestUpdateDaemonTaskStatusPreservesLeaseAndPayload(t *testing.T) {
+	for name, factory := range storages {
+		t.Run(name, func(t *testing.T) {
+			s := factory(t)
+			defer func() {
+				assert.NoError(t, s.Close())
+			}()
+
+			v := newTestDaemonTask(1, "t1")
+			v.TaskStatus = task.TaskStatus_Running
+			v.LastHeartbeat = time.Now().Add(-time.Minute)
+			v.Metadata.Context = []byte("payload")
+			mustAddTestDaemonTask(t, s, 1, v)
+
+			updateAt := time.Now()
+			endAt := updateAt.Add(time.Second)
+			n, err := s.UpdateDaemonTaskStatus(
+				context.Background(),
+				v.ID,
+				task.TaskStatus_Canceled,
+				updateAt,
+				endAt,
+				WithTaskStatusCond(task.TaskStatus_Running),
+				WithTaskRunnerCond(EQ, v.TaskRunner),
+			)
+			require.NoError(t, err)
+			require.Equal(t, 1, n)
+
+			got := mustGetTestDaemonTask(t, s, 1, WithTaskIDCond(EQ, v.ID))[0]
+			require.Equal(t, task.TaskStatus_Canceled, got.TaskStatus)
+			require.Equal(t, updateAt, got.UpdateAt)
+			require.Equal(t, endAt, got.EndAt)
+			require.Equal(t, v.TaskRunner, got.TaskRunner)
+			require.Equal(t, v.LastHeartbeat, got.LastHeartbeat)
+			require.Equal(t, v.Metadata, got.Metadata)
 		})
 	}
 }
@@ -306,9 +350,13 @@ func TestQueryDaemonTaskWithConditions(t *testing.T) {
 				assert.NoError(t, s.Close())
 			}()
 
-			mustAddTestDaemonTask(t, s, 1, newTestDaemonTask(1, "t1"))
-			mustAddTestDaemonTask(t, s, 1, newTestDaemonTask(2, "t2"))
-			mustAddTestDaemonTask(t, s, 1, newTestDaemonTask(3, "t3"))
+			t1 := newTestDaemonTask(1, "t1")
+			t2 := newTestDaemonTask(2, "t2")
+			t2.Metadata.Executor = task.TaskCode_InitCdc
+			t3 := newTestDaemonTask(3, "t3")
+			mustAddTestDaemonTask(t, s, 1, t1)
+			mustAddTestDaemonTask(t, s, 1, t2)
+			mustAddTestDaemonTask(t, s, 1, t3)
 			tasks := mustGetTestDaemonTask(t, s, 3)
 
 			mustGetTestDaemonTask(t, s, 1, WithLimitCond(1))
@@ -319,6 +367,14 @@ func TestQueryDaemonTaskWithConditions(t *testing.T) {
 			mustGetTestDaemonTask(t, s, 2, WithTaskIDCond(LT, tasks[2].ID))
 			mustGetTestDaemonTask(t, s, 1, WithLimitCond(1), WithTaskIDCond(GT, tasks[0].ID))
 			mustGetTestDaemonTask(t, s, 1, WithTaskIDCond(EQ, tasks[0].ID))
+			testOnly := mustGetTestDaemonTask(t, s, 2,
+				WithTaskExecutorCond(EQ, task.TaskCode_TestOnly))
+			for _, daemonTask := range testOnly {
+				require.Equal(t, task.TaskCode_TestOnly, daemonTask.Metadata.Executor)
+			}
+			cdc := mustGetTestDaemonTask(t, s, 1,
+				WithTaskExecutorCond(EQ, task.TaskCode_InitCdc))
+			require.Equal(t, task.TaskCode_InitCdc, cdc[0].Metadata.Executor)
 		})
 	}
 }
@@ -438,6 +494,46 @@ func TestTriggerSQLTask(t *testing.T) {
 			n, err = s.TriggerSQLTask(context.Background(), sqlTask, asyncTask)
 			require.NoError(t, err)
 			require.Equal(t, 0, n)
+		})
+	}
+}
+
+func TestDeleteSQLTaskCleansQueuedAsyncChildren(t *testing.T) {
+	for name, factory := range storages {
+		t.Run(name, func(t *testing.T) {
+			s := factory(t)
+			defer func() {
+				assert.NoError(t, s.Close())
+			}()
+
+			sqlTask := newTestSQLTask("task-delete-queued", 1)
+			sqlTask.TriggerCount = 0
+			mustAddTestSQLTask(t, s, 1, sqlTask)
+			sqlTask = mustGetTestSQLTask(t, s, 1)[0]
+			sqlTask.TriggerCount++
+
+			parentTaskID := fmt.Sprintf("sql-task:%d", sqlTask.TaskID)
+			asyncTask := newTestAsyncTask(parentTaskID + ":1")
+			asyncTask.ParentTaskID = parentTaskID
+			affected, err := s.TriggerSQLTask(context.Background(), sqlTask, asyncTask)
+			require.NoError(t, err)
+			require.Equal(t, 2, affected)
+			mustGetTestAsyncTask(t, s, 1, WithTaskParentTaskIDCond(EQ, parentTaskID))
+			mustGetTestSQLTaskRun(t, s, 0, WithTaskIDCond(EQ, sqlTask.TaskID))
+
+			unrelated := newTestAsyncTask("unrelated")
+			unrelated.ParentTaskID = "sql-task:999999"
+			mustAddTestAsyncTask(t, s, 1, unrelated)
+
+			mustDeleteTestSQLTask(t, s, 1, WithTaskIDCond(EQ, sqlTask.TaskID))
+			mustGetTestSQLTask(t, s, 0, WithTaskIDCond(EQ, sqlTask.TaskID))
+			mustGetTestAsyncTask(t, s, 0, WithTaskParentTaskIDCond(EQ, parentTaskID))
+			mustGetTestAsyncTask(t, s, 1, WithTaskParentTaskIDCond(EQ, unrelated.ParentTaskID))
+			mustGetTestSQLTaskRun(t, s, 0, WithTaskIDCond(EQ, sqlTask.TaskID))
+
+			_, err = s.AcquireSQLTaskRun(context.Background(), sqlTask,
+				newTestSQLTaskRun(sqlTask.TaskID, sqlTask.TaskName, SQLTaskStatusRunning))
+			require.ErrorIs(t, err, ErrSQLTaskNotFound)
 		})
 	}
 }

@@ -26,17 +26,23 @@ import (
 // update statement
 type Update struct {
 	statementImpl
-	Tables TableExprs
-	Exprs  UpdateExprs
-	Ignore bool
+	Tables   TableExprs
+	Exprs    UpdateExprs
+	Priority string
+	Ignore   bool
+	// MultiTable records the comma-separated multi-target parser production.
+	// The normalized Tables tree alone cannot distinguish it from an explicit
+	// CROSS JOIN, but DML RETURNING gives those forms different stable errors.
+	MultiTable bool
 	// From is the optional PostgreSQL-style FROM clause that introduces
 	// additional read-only join sources. It is nil for the classic
 	// single-table and multi-table (comma) UPDATE syntaxes.
-	From    *From
-	Where   *Where
-	OrderBy OrderBy
-	Limit   *Limit
-	With    *With
+	From      *From
+	Where     *Where
+	OrderBy   OrderBy
+	Limit     *Limit
+	With      *With
+	Returning SelectExprs
 }
 
 func (node *Update) Format(ctx *FmtCtx) {
@@ -45,6 +51,10 @@ func (node *Update) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 	}
 	ctx.WriteString("update")
+	if node.Priority != "" {
+		ctx.WriteByte(' ')
+		ctx.WriteString(strings.ToLower(node.Priority))
+	}
 	if node.Ignore {
 		ctx.WriteString(" ignore")
 	}
@@ -95,7 +105,13 @@ func (node *Update) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 		node.Limit.Format(ctx)
 	}
+	if node.HasReturning() {
+		ctx.WriteString(" returning ")
+		node.Returning.Format(ctx)
+	}
 }
+
+func (node *Update) HasReturning() bool { return len(node.Returning) > 0 }
 
 func (node *Update) GetStatementType() string { return "Update" }
 func (node *Update) GetQueryType() string     { return QueryTypeDML }
@@ -193,6 +209,8 @@ const (
 	LZW        = "lzw"
 	ZLIB       = "zlib"
 	LZ4        = "lz4"
+	ZSTD       = "zstd"
+	ZIP        = "zip"
 	TAR_GZ     = "tar.gz"
 	TAR_BZ2    = "tar.bz2"
 )
@@ -202,6 +220,15 @@ const (
 	CSV      = "csv"
 	JSONLINE = "jsonline"
 	PARQUET  = "parquet"
+	ARROW    = "arrow"
+)
+
+// Arrow IPC container kinds. AUTO probes the object content; it never relies
+// on a filename suffix.
+const (
+	ARROW_CONTAINER_AUTO   = "auto"
+	ARROW_CONTAINER_FILE   = "file"
+	ARROW_CONTAINER_STREAM = "stream"
 )
 
 // if $format is jsonline
@@ -224,16 +251,24 @@ type ExternParam struct {
 }
 
 type ExParamConst struct {
-	ScanType     int
-	FileSize     int64
-	FileStartOff int64
-	Filepath     string
-	CompressType string
-	Format       string
-	Option       []string
-	Data         string
-	Tail         *TailParameter
-	StageName    Identifier
+	ScanType       int
+	FileSize       int64
+	FileStartOff   int64
+	Filepath       string
+	CompressType   string
+	Format         string
+	ArrowContainer string
+	// ArrowMatchByPosition is planner-derived from an explicit LOAD column
+	// list. It is inert unless the compile-only Arrow execution scope is set.
+	ArrowMatchByPosition bool
+	// ArrowForceMaterialize is a compile-time snapshot of the CN rollout
+	// setting. Keeping it with the external-scan payload makes local and remote
+	// scopes use one conversion policy for the whole statement generation.
+	ArrowForceMaterialize bool
+	Option                []string
+	Data                  string
+	Tail                  *TailParameter
+	StageName             Identifier
 
 	HivePartitioning      bool
 	HivePartitionCols     []string
@@ -247,6 +282,7 @@ type HivePartColType struct {
 	Width       int32
 	Scale       int32
 	Enumvalues  string
+	Charset     uint32
 	NullAbility bool
 }
 
@@ -259,7 +295,9 @@ type ExParam struct {
 	Ctx                   context.Context
 	Local                 bool
 	Parallel              bool
+	ParallelSpecified     bool
 	ParallelLoadRequested bool
+	ParallelLoadMinSize   int64
 	Strict                bool
 }
 
@@ -324,7 +362,13 @@ func (node *Load) Format(ctx *FmtCtx) {
 		} else {
 			if len(node.Param.Option) == 0 {
 				ctx.WriteString(" infile ")
-				ctx.WriteString(node.Param.Filepath)
+				ctx.WriteString("'")
+				if ctx.NoBackslashEscape() {
+					ctx.WriteString(strings.ReplaceAll(node.Param.Filepath, "'", "''"))
+				} else {
+					ctx.WriteString(strings.ReplaceAll(FormatString(node.Param.Filepath), "'", "''"))
+				}
+				ctx.WriteString("'")
 			} else {
 				if node.Param.ScanType == S3 {
 					ctx.WriteString(" url s3option ")
@@ -387,11 +431,21 @@ func (node *Load) Format(ctx *FmtCtx) {
 		ctx.WriteString(" set ")
 		node.Param.Tail.Assignments.Format(ctx)
 	}
-	if node.Param.Parallel {
-		ctx.WriteString(" parallel true ")
+	if node.Param.Parallel || node.Param.ParallelSpecified {
+		ctx.WriteString(" parallel ")
+		ctx.WriteByte('\'')
+		ctx.WriteString(strconv.FormatBool(node.Param.Parallel))
+		ctx.WriteByte('\'')
+		ctx.WriteByte(' ')
 		if node.Param.Strict {
-			ctx.WriteString("strict true ")
+			ctx.WriteString("strict 'true' ")
+			return
 		}
+	}
+	// STRICT defaults to true when omitted. Only false needs spelling out to
+	// preserve the parsed statement when formatting it back into SQL.
+	if !node.Param.Strict {
+		ctx.WriteString(" strict 'false'")
 	}
 }
 

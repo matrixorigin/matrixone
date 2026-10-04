@@ -775,6 +775,7 @@ func (c *objGetArg) GetData(ctx context.Context) (res string, err error) {
 		}
 	}
 
+	specialLayout := objectio.ResolveSpecialColumnLayout(blk)
 	for _, i := range c.cols {
 		idx := uint16(i)
 		if idx >= cnt {
@@ -783,9 +784,12 @@ func (c *objGetArg) GetData(ctx context.Context) (res string, err error) {
 		}
 		col := blk.ColumnMeta(idx)
 		tp := types.T(col.DataType()).ToType()
-		if col.DataType() == uint8(types.T_TS) && i == len(c.cols)-1 {
+		switch idx {
+		case specialLayout.CommitTS:
 			idxs = append(idxs, objectio.SEQNUM_COMMITTS)
-		} else {
+		case specialLayout.Abort:
+			idxs = append(idxs, objectio.SEQNUM_ABORT)
+		default:
 			idxs = append(idxs, idx)
 		}
 		typs = append(typs, tp)

@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/url"
@@ -168,9 +169,14 @@ func (o *ObjectStorageArguments) SetFromString(arguments []string) error {
 }
 
 var qcloudEndpointPattern = regexp.MustCompile(`cos\.([^.]+)\.myqcloud\.com`)
-var objectStorageHTTPHead = http.Head
 
 func (o *ObjectStorageArguments) validate() error {
+	return o.validateWithRegionProbe(probeAWSRegion)
+}
+
+func (o *ObjectStorageArguments) validateWithRegionProbe(
+	probe func(context.Context, string) (string, error),
+) error {
 
 	// validate endpoint
 	var endpointURL *url.URL
@@ -199,14 +205,14 @@ func (o *ObjectStorageArguments) validate() error {
 		} else if o.Endpoint != "" && strings.Contains(o.Endpoint, "amazonaws.com") {
 			// AWS
 			// try to get region from bucket
-			resp, err := objectStorageHTTPHead("https://" + o.Bucket + ".s3.amazonaws.com")
-			if err == nil {
-				if value := resp.Header.Get("x-amz-bucket-region"); value != "" {
-					o.Region = value
-				}
-			} else {
+			ctx, cancel := context.WithTimeoutCause(
+				context.Background(), readWriteTimeout, context.DeadlineExceeded)
+			region, err := probe(ctx, "https://"+o.Bucket+".s3.amazonaws.com")
+			cancel()
+			if err != nil {
 				return err
 			}
+			o.Region = region
 		}
 
 	}
@@ -217,6 +223,27 @@ func (o *ObjectStorageArguments) validate() error {
 	}
 
 	return nil
+}
+
+func probeAWSRegion(ctx context.Context, target string) (string, error) {
+	return probeAWSRegionWithClient(ctx, newHTTPClient(ObjectStorageArguments{}), target)
+}
+
+func probeAWSRegionWithClient(
+	ctx context.Context,
+	client *http.Client,
+	target string,
+) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, target, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	return resp.Header.Get("x-amz-bucket-region"), nil
 }
 
 func (o *ObjectStorageArguments) shouldLoadDefaultCredentials() bool {

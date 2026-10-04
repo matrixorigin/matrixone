@@ -26,7 +26,10 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -90,6 +93,8 @@ type pitrRecord struct {
 	objId         uint64
 	pitrValue     uint64
 	pitrUnit      string
+	pitrStatus    uint8
+	hasStatus     bool
 }
 
 const (
@@ -173,21 +178,21 @@ func getSqlForCheckDupPitrFormat(accountId, objId uint64) string {
 }
 
 func getPubInfoWithPitr(ts int64, accountId uint32, dbName string) string {
-	return fmt.Sprintf(getPubInfoWithPitrFormat, ts, accountId, dbName)
+	return fmt.Sprintf(getPubInfoWithPitrFormat, ts, accountId, sqlquote.EscapeString(dbName))
 }
 
 func getSqlForUpdateMoPitrAccountObjectId(accountName string, objId uint64, ts int64) string {
-	return fmt.Sprintf(updateMoPitrAccountObjectIdFmt, ts, accountName, objId)
+	return fmt.Sprintf(updateMoPitrAccountObjectIdFmt, ts, sqlquote.EscapeString(accountName), objId)
 }
 
 func getSqlForGetLengthAndUnitFmt(accountId uint32, level, accName, dbName, tblName string) string {
 	sql := fmt.Sprintf(getLengthAndUnitFmt, accountId, level)
 	if level == "account" {
-		sql += fmt.Sprintf(" and account_name = '%s'", accName)
+		sql += fmt.Sprintf(" and account_name = '%s'", sqlquote.EscapeString(accName))
 	} else if level == "database" {
-		sql += fmt.Sprintf(" and database_name = '%s'", dbName)
+		sql += fmt.Sprintf(" and database_name = '%s'", sqlquote.EscapeString(dbName))
 	} else if level == "table" {
-		sql += fmt.Sprintf(" and table_name = '%s'", tblName)
+		sql += fmt.Sprintf(" and table_name = '%s'", sqlquote.EscapeString(tblName))
 	}
 	return sql
 }
@@ -230,14 +235,14 @@ func getSqlForCheckPitrDup(createAccount string, createAccountId uint64, stmt *t
 		return getSqlForCheckDupPitrFormat(createAccountId, math.MaxUint64)
 	case tree.PITRLEVELACCOUNT:
 		if len(stmt.AccountName) > 0 {
-			return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and account_name = '%s' and level = 'account' and pitr_status = 1;", stmt.AccountName)
+			return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and account_name = '%s' and level = 'account' and pitr_status = 1;", sqlquote.EscapeString(string(stmt.AccountName)))
 		} else {
-			return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and account_name = '%s' and level = 'account' and pitr_status = 1;", createAccount)
+			return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and account_name = '%s' and level = 'account' and pitr_status = 1;", sqlquote.EscapeString(createAccount))
 		}
 	case tree.PITRLEVELDATABASE:
-		return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and database_name = '%s' and level = 'database' and pitr_status = 1;", stmt.DatabaseName)
+		return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and database_name = '%s' and level = 'database' and pitr_status = 1;", sqlquote.EscapeString(string(stmt.DatabaseName)))
 	case tree.PITRLEVELTABLE:
-		return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and database_name = '%s' and table_name = '%s' and level = 'table' and pitr_status = 1;", stmt.DatabaseName, stmt.TableName)
+		return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and database_name = '%s' and table_name = '%s' and level = 'table' and pitr_status = 1;", sqlquote.EscapeString(string(stmt.DatabaseName)), sqlquote.EscapeString(string(stmt.TableName)))
 	}
 	return sql
 }
@@ -274,9 +279,8 @@ func checkPitrExistOrNot(ctx context.Context, bh BackgroundExec, pitrName string
 	return false, nil
 }
 
-func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) error {
+func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) (err error) {
 	var (
-		err            error
 		pitrLevel      tree.PitrLevel
 		pitrForAccount string
 		pitrName       string
@@ -290,7 +294,7 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) erro
 		newUUid        uuid.UUID
 	)
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
 	// check create pitr priv
@@ -311,6 +315,19 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) erro
 	tenantInfo := ses.GetTenantInfo()
 	currentAccount := tenantInfo.GetTenant()
 	pitrLevel = stmt.Level
+	if pitrLevel == tree.PITRLEVELDATABASE || pitrLevel == tree.PITRLEVELTABLE {
+		databaseName = string(stmt.DatabaseName)
+		// The exclusive target name also serializes the per-object duplicate
+		// check, whose mo_pitr key is the caller-chosen PITR name.
+		err = admitLocalLifecycleRC(ctx, ses, bh, tenantInfo.GetTenantID(),
+			databaseName, "", lock.LockMode_Exclusive, "", "")
+	} else {
+		// Account and cluster PITR still span more than one database.
+		err = lockDataBranchLineageOwnerLifecycle(ctx, bh)
+	}
+	if err != nil {
+		return err
+	}
 	if pitrLevel == tree.PITRLEVELCLUSTER && currentAccount != sysAccountName {
 		return moerr.NewInternalError(ctx, "only sys tenant can create cluster level pitr")
 	}
@@ -649,9 +666,8 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) erro
 
 	if execResultArrayHasData(erArray) {
 		var (
-			sysPitrValue       uint64
-			sysPitrUnit        string
-			oldMinTs, newMinTs time.Time
+			sysPitrValue uint64
+			sysPitrUnit  string
 		)
 		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
 			sysPitrValue, err = erArray[0].GetUint64(ctx, i, 11)
@@ -664,19 +680,19 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) erro
 			}
 		}
 
-		oldMinTs, err = addTimeSpan(time.Time{}, int(sysPitrValue), sysPitrUnit)
+		mergedValue, mergedUnit, err := databranchutils.MergePitrRetentionRanges(
+			int(sysPitrValue),
+			sysPitrUnit,
+			int(pitrVal),
+			pitrUnit,
+		)
 		if err != nil {
 			return err
 		}
 
-		newMinTs, err = addTimeSpan(time.Time{}, int(pitrVal), pitrUnit)
-		if err != nil {
-			return err
-		}
-
-		if newMinTs.UnixNano() < oldMinTs.UnixNano() {
+		if mergedValue != int(sysPitrValue) || mergedUnit != sysPitrUnit {
 			// update sysMoCatalogPitr
-			sql = fmt.Sprintf("update mo_catalog.mo_pitr set pitr_length = %d, pitr_unit = '%s' where pitr_name = '%s';", pitrVal, pitrUnit, SYSMOCATALOGPITR)
+			sql = fmt.Sprintf("update mo_catalog.mo_pitr set pitr_length = %d, pitr_unit = '%s' where pitr_name = '%s';", mergedValue, mergedUnit, SYSMOCATALOGPITR)
 			getLogger(ses.GetService()).Info("update sys mo_catalog pitr", zap.String("sql", sql))
 			err = bh.Exec(ctx, sql)
 			if err != nil {
@@ -763,7 +779,7 @@ func doDropPitr(ctx context.Context, ses *Session, stmt *tree.DropPitr) (err err
 		erArray   []ExecResult
 	)
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
 	// check drop pitr priv
@@ -778,6 +794,9 @@ func doDropPitr(ctx context.Context, ses *Session, stmt *tree.DropPitr) (err err
 		err = finishTxn(ctx, bh, err)
 	}()
 	if err != nil {
+		return err
+	}
+	if err = lockDataBranchLineageOwnerLifecycle(ctx, bh); err != nil {
 		return err
 	}
 
@@ -832,6 +851,9 @@ func doDropPitr(ctx context.Context, ses *Session, stmt *tree.DropPitr) (err err
 				return err
 			}
 		}
+		if err = compactHistoricalAlterLineageWithBH(ctx, bh, time.Now().UTC()); err != nil {
+			return err
+		}
 	}
 	return err
 }
@@ -841,7 +863,7 @@ func doAlterPitr(ctx context.Context, ses *Session, stmt *tree.AlterPitr) (err e
 		sql       string
 		pitrExist bool
 	)
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
 	// check alter pitr priv
@@ -852,7 +874,7 @@ func doAlterPitr(ctx context.Context, ses *Session, stmt *tree.AlterPitr) (err e
 	}
 
 	// check pitr value
-	if stmt.PitrValue < 0 || stmt.PitrValue > 100 {
+	if stmt.PitrValue <= 0 || stmt.PitrValue > 100 {
 		return moerr.NewInternalErrorf(ctx, "invalid pitr value %d", stmt.PitrValue)
 	}
 
@@ -868,6 +890,9 @@ func doAlterPitr(ctx context.Context, ses *Session, stmt *tree.AlterPitr) (err e
 	}()
 
 	if err != nil {
+		return err
+	}
+	if err = lockDataBranchLineageOwnerLifecycle(ctx, bh); err != nil {
 		return err
 	}
 
@@ -886,8 +911,42 @@ func doAlterPitr(ctx context.Context, ses *Session, stmt *tree.AlterPitr) (err e
 			return err
 		}
 	} else {
+		currentPitr, getErr := getPitrByName(
+			ctx,
+			bh,
+			string(stmt.Name),
+			uint64(tenantInfo.GetTenantID()),
+		)
+		if getErr != nil {
+			return getErr
+		}
+		if currentPitr.hasStatus && currentPitr.pitrStatus != 1 {
+			return moerr.NewNotSupportedf(ctx, "cannot alter inactive pitr %s", stmt.Name)
+		}
+		doesNotExpand, rangeErr := databranchutils.PitrRetentionRangeDoesNotExpand(
+			int(currentPitr.pitrValue),
+			currentPitr.pitrUnit,
+			int(stmt.PitrValue),
+			pitrUnit,
+		)
+		if rangeErr != nil {
+			return rangeErr
+		}
+		if !doesNotExpand {
+			return moerr.NewNotSupportedf(
+				ctx,
+				"cannot expand PITR %s recovery range from %d %s to %d %s; create a new PITR instead",
+				string(stmt.Name),
+				currentPitr.pitrValue,
+				currentPitr.pitrUnit,
+				stmt.PitrValue,
+				pitrUnit,
+			)
+		}
+
+		alterTime := time.Now().UTC()
 		sql = getSqlForAlterPitr(
-			time.Now().UTC().UnixNano(),
+			alterTime.UnixNano(),
 			uint8(stmt.PitrValue),
 			pitrUnit,
 			string(stmt.Name),
@@ -904,12 +963,15 @@ func doAlterPitr(ctx context.Context, ses *Session, stmt *tree.AlterPitr) (err e
 		if err != nil {
 			return err
 		}
+		if err = compactHistoricalAlterLineageWithBH(ctx, bh, alterTime); err != nil {
+			return err
+		}
 	}
 	return err
 }
 
 func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (stats statistic.StatsArray, err error) {
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	bh.SetRestore(true)
 	defer func() {
 		stats = bh.GetExecStatsArray()
@@ -918,12 +980,13 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 	}()
 
 	var (
-		restoreLevel  tree.RestoreLevel
-		ts            int64
-		pitrExist     bool
-		sortedFkTbls  []string
-		fkTableMap    map[string]*tableInfo
-		accountRecord *accountRecord
+		restoreLevel             tree.RestoreLevel
+		ts                       int64
+		pitrExist                bool
+		sortedFkTbls             []string
+		fkTableMap               map[string]*tableInfo
+		accountRecord            *accountRecord
+		retiredMongoDBAccountIDs []uint32
 	)
 	// resolve timestamp
 	ts, err = doResolveTimeStamp(stmt.TimeStamp)
@@ -945,8 +1008,14 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		return stats, err
 	}
 	defer func() {
-		err = finishTxn(ctx, bh, err)
+		err = finishTxnAndRetireMongoDBAccounts(ctx, bh, ses.GetService(), retiredMongoDBAccountIDs, err)
 	}()
+	if err = lockRestoreLineageOwnerLifecycle(ctx, bh, stmt.Level); err != nil {
+		return stats, err
+	}
+	if err = lockViewMetadataLifecycle(ctx, bh); err != nil {
+		return stats, err
+	}
 
 	// check if the pitr exists
 	tenantInfo := ses.GetTenantInfo()
@@ -981,69 +1050,47 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 	}
 
 	if stmt.Level == tree.RESTORELEVELACCOUNT && len(accountName) > 0 {
+		fromAccount := string(stmt.SrcAccountName)
+		if len(fromAccount) == 0 {
+			fromAccount = pitr.accountName
+		}
+		accountRecord, err = getAccountRecordByTs(ctx, ses, bh, pitrName, ts, fromAccount)
+		if err != nil {
+			return stats, err
+		}
+		if err = preflightRestorePitrEntry(
+			ctx, ses.GetService(), bh, pitrName, ts, stmt.Level, "", uint32(accountRecord.accountId),
+		); err != nil {
+			return stats, err
+		}
+
 		restoreOtherAccount := func() (rtnErr error) {
-			fromAccount := string(stmt.SrcAccountName)
 			var (
 				toAccountId uint32
 			)
 
-			if len(fromAccount) == 0 {
-				// using account level pitr
-				fromAccount = pitr.accountName
-				accountRecord, rtnErr = getAccountRecordByTs(ctx, ses, bh, pitrName, ts, fromAccount)
+			if fromAccount == accountName {
+				getLogger(ses.GetService()).Info("restore to the same account", zap.String("fromAccount", accountName), zap.String("toAccount", accountName))
+				toAccountId, rtnErr = getAccountId(ctx, bh, accountName)
 				if rtnErr != nil {
-					return
-				}
-				if fromAccount == accountName {
-					// restore to the same account
-					getLogger(ses.GetService()).Info("restore to the same account", zap.String("fromAccount", accountName), zap.String("toAccount", accountName))
-					toAccountId, rtnErr = getAccountId(ctx, bh, accountName)
-					if rtnErr != nil {
-						// need create a new account
-						if rtnErr = createDroppedAccount(ctx, ses, bh, pitrName, *accountRecord); rtnErr != nil {
-							return
-						}
-
-						if toAccountId, rtnErr = getAccountId(ctx, bh, accountRecord.accountName); rtnErr != nil {
-							return
-						}
+					if rtnErr = createDroppedAccount(ctx, ses, bh, pitrName, *accountRecord); rtnErr != nil {
+						return
 					}
-				} else {
-					// restore to new account
-					getLogger(ses.GetService()).Info("restore to the same account", zap.String("fromAccount", fromAccount), zap.String("toAccount", accountName))
-					toAccountId, rtnErr = getAccountId(ctx, bh, accountName)
-					if rtnErr != nil {
+
+					if toAccountId, rtnErr = getAccountId(ctx, bh, accountRecord.accountName); rtnErr != nil {
 						return
 					}
 				}
 			} else {
-				// using cluster level pitr
-				accountRecord, rtnErr = getAccountRecordByTs(ctx, ses, bh, pitrName, ts, fromAccount)
+				getLogger(ses.GetService()).Info("restore to another account", zap.String("fromAccount", fromAccount), zap.String("toAccount", accountName))
+				toAccountId, rtnErr = getAccountId(ctx, bh, accountName)
 				if rtnErr != nil {
-					return
+					return rtnErr
 				}
-				if fromAccount == accountName {
-					// restore to the same account
-					getLogger(ses.GetService()).Info("restore to the same account", zap.String("fromAccount", accountName), zap.String("toAccount", accountName))
-					toAccountId, rtnErr = getAccountId(ctx, bh, fromAccount)
-					if rtnErr != nil {
-						// need create a new account
-						if rtnErr = createDroppedAccount(ctx, ses, bh, pitrName, *accountRecord); rtnErr != nil {
-							return
-						}
+			}
 
-						if toAccountId, rtnErr = getAccountId(ctx, bh, accountRecord.accountName); rtnErr != nil {
-							return
-						}
-					}
-				} else {
-					// restore to new account
-					getLogger(ses.GetService()).Info("restore to the same account", zap.String("fromAccount", fromAccount), zap.String("toAccount", accountName))
-					toAccountId, rtnErr = getAccountId(ctx, bh, accountName)
-					if rtnErr != nil {
-						return rtnErr
-					}
-				}
+			if rtnErr = invalidateAccountViewMetadata(ctx, ses, bh, toAccountId); rtnErr != nil {
+				return rtnErr
 			}
 
 			// check account exists or not
@@ -1063,10 +1110,14 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 			if rtnErr != nil {
 				return rtnErr
 			}
+			if rtnErr = reconcileAccountViewMetadata(ctx, ses, bh, toAccountId); rtnErr != nil {
+				return rtnErr
+			}
 
 			if rtnErr = CancelCheck(ctx); rtnErr != nil {
 				return
 			}
+			markMongoDBAccountForRetirement(&retiredMongoDBAccountIDs, toAccountId)
 			return rtnErr
 		}
 
@@ -1088,6 +1139,59 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 	if !accountExist {
 		return stats, moerr.NewInternalErrorf(ctx, "account `%s` does not exists at timestamp: %v", tenantInfo.GetTenant(), nanoTimeFormat(ts))
 	}
+	if restoreLevel == tree.RESTORELEVELCLUSTER {
+		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelCluster)
+		if err = restoreToCluster(ctx, ses, bh, pitrName, ts, &retiredMongoDBAccountIDs); err != nil {
+			return stats, err
+		}
+		return stats, nil
+	}
+	if err = preflightRestorePitrEntry(
+		ctx, ses.GetService(), bh, pitrName, ts, restoreLevel, dbName, tenantInfo.TenantID,
+	); err != nil {
+		return stats, err
+	}
+	if restoreLevel == tree.RESTORELEVELACCOUNT {
+		if err = invalidateAccountViewMetadata(ctx, ses, bh, tenantInfo.TenantID); err != nil {
+			return stats, err
+		}
+	}
+
+	sourceSnapshot := &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: ts}, Tenant: &plan.SnapshotTenant{TenantID: tenantInfo.TenantID}}
+	sourceTableInfos, err := collectRestoreSourceTableInfos(
+		dbName,
+		tblName,
+		func() ([]string, error) {
+			return showDatabasesWithPitr(ctx, ses.GetService(), bh, pitrName, ts)
+		},
+		func(sourceDBName string, sourceTblName string) ([]*tableInfo, error) {
+			return getTableInfoWithPitr(ctx, ses.GetService(), bh, pitrName, ts, sourceDBName, sourceTblName)
+		},
+	)
+	if err != nil {
+		return
+	}
+
+	var source *partialRestoreSource
+	var selected map[restoreObjectName]struct{}
+	if dbName != "" {
+		source, selected, err = preparePartialRestoreSource(ctx, ses, bh, pitrName, sourceSnapshot, sourceTableInfos, tenantInfo.TenantID, tenantInfo.TenantID)
+		if err != nil {
+			return stats, err
+		}
+	}
+	ownershipCtx, ownershipErr := prepareRestoreOwnership(ctx, bh, ts, tenantInfo.TenantID, tenantInfo.TenantID, dbName, tblName, selected)
+	if ownershipErr != nil {
+		return stats, ownershipErr
+	}
+	ctx = ownershipCtx
+	var partialPrivileges *partialRestorePrivileges
+	if restoreLevel == tree.RESTORELEVELDATABASE || restoreLevel == tree.RESTORELEVELTABLE {
+		partialPrivileges, err = capturePartialRestorePrivileges(ctx, bh, tenantInfo.TenantID, dbName, tblName)
+		if err != nil {
+			return stats, err
+		}
+	}
 
 	//drop foreign key related tables first
 	if err = deleteCurFkTableInPitrRestore(ctx, ses.GetService(), bh, pitrName, dbName, tblName); err != nil {
@@ -1095,13 +1199,13 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 	}
 
 	// get topo sorted tables with foreign key
-	sortedFkTbls, err = fkTablesTopoSortInPitrRestore(ctx, bh, ts, dbName, tblName)
+	sortedFkTbls, err = fkTablesTopoSortInPitrRestore(ctx, bh, ts, dbName, tblName, sourceTableInfos)
 	if err != nil {
 		return
 	}
 
 	// get foreign key table infos
-	fkTableMap, err = getTableInfoMapInPitrRestore(ctx, ses.GetService(), bh, pitrName, ts, dbName, tblName, sortedFkTbls)
+	fkTableMap, err = getTableInfoMapInPitrRestore(ctx, ses.GetService(), bh, pitrName, ts, dbName, tblName, sortedFkTbls, source)
 	if err != nil {
 		return
 	}
@@ -1111,35 +1215,20 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 
 	// restore according the restore level
 	switch restoreLevel {
-	case tree.RESTORELEVELCLUSTER:
-		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelCluster)
-		subDbToRestore := make(map[string]*subDbRestoreRecord)
-		if err = restoreToCluster(ctx, ses, bh, pitrName, ts, subDbToRestore); err != nil {
-			return
-		}
-		if err = restorePubsWithSnapshotName(ctx, ses.GetService(), bh, pitrName, ts); err != nil {
-			return
-		}
-
-		for _, subDb := range subDbToRestore {
-			if err = restoreToSubDb(ctx, ses.GetService(), bh, pitrName, subDb); err != nil {
-				return
-			}
-		}
-		return
 	case tree.RESTORELEVELACCOUNT:
 		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelAccount)
 		if err = restoreToAccountWithPitr(ctx, ses.GetService(), bh, pitrName, ts, fkTableMap, viewMap, tenantInfo.TenantID); err != nil {
 			return
 		}
+		markMongoDBAccountForRetirement(&retiredMongoDBAccountIDs, tenantInfo.TenantID)
 	case tree.RESTORELEVELDATABASE:
 		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelDatabase)
-		if err = restoreToDatabaseWithPitr(ctx, ses.GetService(), bh, pitrName, ts, dbName, fkTableMap, viewMap, tenantInfo.TenantID); err != nil {
+		if err = restoreToDatabaseWithPitr(ctx, ses.GetService(), bh, pitrName, ts, dbName, fkTableMap, viewMap, tenantInfo.TenantID, source); err != nil {
 			return
 		}
 	case tree.RESTORELEVELTABLE:
 		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelTable)
-		if err = restoreToTableWithPitr(ctx, ses.service, bh, pitrName, ts, dbName, tblName, fkTableMap, viewMap, tenantInfo.TenantID); err != nil {
+		if err = restoreToTableWithPitr(ctx, ses.service, bh, pitrName, ts, dbName, tblName, fkTableMap, viewMap, tenantInfo.TenantID, source); err != nil {
 			return
 		}
 
@@ -1154,8 +1243,39 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 	}
 
 	if len(viewMap) > 0 {
-		if err = restoreViewsWithPitr(ctx, ses, bh, pitrName, ts, viewMap, tenantInfo.GetTenant(), tenantInfo.GetTenantID()); err != nil {
+		if source != nil {
+			err = restoreViews(ctx, ses, bh, pitrName, viewMap, tenantInfo.TenantID, source.sortedViews, false)
+		} else {
+			err = restoreViewsWithPitr(ctx, ses, bh, pitrName, ts, viewMap, tenantInfo.GetTenant(), tenantInfo.GetTenantID())
+		}
+		if err != nil {
 			return
+		}
+	}
+
+	if restoreLevel == tree.RESTORELEVELACCOUNT {
+		// Account PITR recreates databases and relations just like snapshot
+		// restore. Run the same catalog-owner phase only after FK tables and
+		// views exist, so every physical or logical source ID has a final target
+		// identity to bind to. Database/table PITR intentionally does not replace
+		// account-level authorization catalogs and therefore skips this phase.
+		if err = restoreSystemCatalogsAfterObjects(
+			ctx,
+			ses.GetService(),
+			bh,
+			ts,
+			tenantInfo.GetTenantID(),
+			tenantInfo.GetTenantID(),
+		); err != nil {
+			return
+		}
+		if err = reconcileAccountViewMetadata(ctx, ses, bh, tenantInfo.GetTenantID()); err != nil {
+			return
+		}
+	}
+	if partialPrivileges != nil {
+		if err = partialPrivileges.rebind(ctx, bh); err != nil {
+			return stats, err
 		}
 	}
 
@@ -1164,6 +1284,42 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 	}
 	return
 
+}
+
+func preflightRestorePitrEntry(
+	ctx context.Context,
+	sid string,
+	bh BackgroundExec,
+	pitrName string,
+	ts int64,
+	level tree.RestoreLevel,
+	dbName string,
+	sourceAccount uint32,
+) error {
+	sourceCtx := defines.AttachAccountId(ctx, sourceAccount)
+	var databaseNames []string
+	var err error
+	switch level {
+	case tree.RESTORELEVELACCOUNT:
+		databaseNames, err = showDatabasesWithPitr(sourceCtx, sid, bh, pitrName, ts)
+		if err != nil {
+			return err
+		}
+	case tree.RESTORELEVELDATABASE, tree.RESTORELEVELTABLE:
+		databaseNames = []string{dbName}
+	default:
+		return nil
+	}
+	return preflightLogicalRestoreDatabases(
+		sourceCtx,
+		databaseNames,
+		currentProtocolVersionForService(bh.Service()),
+		func(sourceDBName string) (logicalRestoreDatabaseDefinition, error) {
+			return getCreateDatabaseSqlInPitr(
+				sourceCtx, sid, bh, pitrName, sourceDBName, sourceAccount, ts,
+			)
+		},
+	)
 }
 
 func restoreToAccountWithPitr(
@@ -1178,13 +1334,17 @@ func restoreToAccountWithPitr(
 ) (err error) {
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore account '%d', restore timestamp : %d", pitrName, curAccount, ts))
 
-	var dbNames []string
-	// delete current dbs
-	if dbNames, err = showDatabases(ctx, sid, bh, ""); err != nil {
+	var currentDBNames, restoreDBNames []string
+	if restoreDBNames, err = showDatabasesWithPitr(ctx, sid, bh, pitrName, ts); err != nil {
 		return
 	}
 
-	for _, dbName := range dbNames {
+	// delete current dbs
+	if currentDBNames, err = showDatabases(ctx, sid, bh, ""); err != nil {
+		return
+	}
+
+	for _, dbName := range currentDBNames {
 		if needSkipDb(dbName) {
 			// drop existing cluster table
 			if curAccount == 0 && dbName == moCatalog {
@@ -1203,16 +1363,7 @@ func restoreToAccountWithPitr(
 	}
 
 	// restore dbs
-	if dbNames, err = showDatabasesWithPitr(
-		ctx,
-		sid,
-		bh,
-		pitrName,
-		ts); err != nil {
-		return
-	}
-
-	for _, dbName := range dbNames {
+	for _, dbName := range restoreDBNames {
 		if err = restoreToDatabaseWithPitr(
 			ctx,
 			sid,
@@ -1222,7 +1373,7 @@ func restoreToAccountWithPitr(
 			dbName,
 			fkTableMap,
 			viewMap,
-			curAccount); err != nil {
+			curAccount, nil); err != nil {
 			return
 		}
 	}
@@ -1250,6 +1401,7 @@ func restoreToDatabaseWithPitr(
 	fkTableMap map[string]*tableInfo,
 	viewMap map[string]*tableInfo,
 	curAccount uint32,
+	source *partialRestoreSource,
 ) (err error) {
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore db: '%s', restore timestamp: %d", pitrName, dbName, ts))
 
@@ -1271,7 +1423,7 @@ func restoreToDatabaseWithPitr(
 		"",
 		fkTableMap,
 		viewMap,
-		curAccount)
+		curAccount, source)
 }
 
 func restoreToTableWithPitr(
@@ -1285,6 +1437,7 @@ func restoreToTableWithPitr(
 	fkTableMap map[string]*tableInfo,
 	viewMap map[string]*tableInfo,
 	curAccount uint32,
+	source *partialRestoreSource,
 ) (err error) {
 	getLogger(sid).Info(fmt.Sprintf("[%s]  start to restore table: '%v' at timestamp %d", pitrName, tblName, ts))
 
@@ -1305,7 +1458,7 @@ func restoreToTableWithPitr(
 		tblName,
 		fkTableMap,
 		viewMap,
-		curAccount)
+		curAccount, source)
 }
 
 func restoreToDatabaseOrTableWithPitr(
@@ -1319,6 +1472,7 @@ func restoreToDatabaseOrTableWithPitr(
 	fkTableMap map[string]*tableInfo,
 	viewMap map[string]*tableInfo,
 	curAccount uint32,
+	source *partialRestoreSource,
 ) (err error) {
 	if needSkipDb(dbName) {
 		getLogger(sid).Info(fmt.Sprintf("[%s] skip restore db: '%v'", pitrName, dbName))
@@ -1326,11 +1480,18 @@ func restoreToDatabaseOrTableWithPitr(
 	}
 
 	var (
-		createDbSql string
-		tableInfos  []*tableInfo
-		isSubDb     bool
+		definition logicalRestoreDatabaseDefinition
+		tableInfos []*tableInfo
+		isSubDb    bool
 	)
-	createDbSql, err = getCreateDatabaseSqlInPitr(ctx, sid, bh, pitrName, dbName, curAccount, ts)
+	definition, err = getCreateDatabaseSqlInPitr(ctx, sid, bh, pitrName, dbName, curAccount, ts)
+	if err != nil {
+		return
+	}
+	createDbSql := definition.createSQL
+	ctx, err = prepareLogicalRestoreDatabase(
+		ctx, dbName, definition, currentProtocolVersionForService(bh.Service()),
+	)
 	if err != nil {
 		return
 	}
@@ -1373,7 +1534,10 @@ func restoreToDatabaseOrTableWithPitr(
 		// else skip restore the db
 
 		var isPubExist bool
-		isPubExist, _ = checkPubExistOrNot(ctx, sid, bh, pitrName, dbName, ts)
+		isPubExist, err = checkPubExistOrNot(ctx, sid, bh, pitrName, dbName, ts)
+		if err != nil {
+			return err
+		}
 		if !isPubExist {
 			getLogger(sid).Info(fmt.Sprintf("[%s] skip restore db: %v, no publication", pitrName, dbName))
 			return
@@ -1381,23 +1545,27 @@ func restoreToDatabaseOrTableWithPitr(
 
 		// create db with publication
 		getLogger(sid).Info(fmt.Sprintf("[%s] start to create db with pub: %v, create db sql: %s", pitrName, dbName, createDbSql))
-		if err = bh.Exec(ctx, createDbSql); err != nil {
+		if err = execRestoreCreateDatabase(ctx, bh, dbName, createDbSql); err != nil {
 			return
 		}
 
 		return
 	} else {
-		createDbSql = fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", dbName)
+		createDbSql = createDatabaseIfNotExistsSQL(dbName)
 		// create db
 		getLogger(sid).Info(fmt.Sprintf("[%s] start to create db: %v, create db sql: %s", pitrName, dbName, createDbSql))
-		if err = bh.Exec(ctx, createDbSql); err != nil {
+		if err = execRestoreCreateDatabase(ctx, bh, dbName, createDbSql); err != nil {
 			return
 		}
 	}
 
-	tableInfos, err = getTableInfoWithPitr(ctx, sid, bh, pitrName, ts, dbName, tblName)
-	if err != nil {
-		return
+	if source != nil {
+		tableInfos = source.tables
+	} else {
+		tableInfos, err = getTableInfoWithPitr(ctx, sid, bh, pitrName, ts, dbName, tblName)
+		if err != nil {
+			return
+		}
 	}
 
 	// if restore to table, expect only one table here
@@ -1467,6 +1635,41 @@ func reCreateTableWithPitr(
 	if isExternalTable(tblInfo) {
 		return newExternalTableRestoreError(ctx, tblInfo, "pitr")
 	}
+	if isCurrentSchemaUserDefinedFunctionCatalog(tblInfo) {
+		accountID, accountErr := defines.GetAccountId(ctx)
+		if accountErr != nil {
+			return accountErr
+		}
+		return restoreUserDefinedFunctionCatalogWithCurrentSchema(
+			ctx,
+			bh,
+			fmt.Sprintf(" {MO_TS = %d}", ts),
+			accountID,
+			accountID,
+		)
+	}
+	ctx, err = restoreDDLContext(ctx, tblInfo.dbName, tblInfo.tblName)
+	if err != nil {
+		return err
+	}
+	if isSequence(tblInfo) {
+		accountID, accountErr := defines.GetAccountId(ctx)
+		if accountErr != nil {
+			return accountErr
+		}
+		return restoreSequence(
+			ctx,
+			bh,
+			tblInfo.createSql,
+			tblInfo.dbName,
+			tblInfo.tblName,
+			tblInfo.dbName,
+			tblInfo.tblName,
+			ts,
+			accountID,
+			accountID,
+		)
+	}
 
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore table: '%v' at timestamp %d", pitrName, tblInfo.tblName, ts))
 
@@ -1478,29 +1681,17 @@ func reCreateTableWithPitr(
 		return
 	}
 
-	if err = bh.Exec(ctx, fmt.Sprintf("use `%s`", tblInfo.dbName)); err != nil {
+	if err = bh.Exec(ctx, useDatabaseSQL(tblInfo.dbName)); err != nil {
 		return
 	}
 
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to drop table: '%v',", pitrName, tblInfo.tblName))
-	if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists `%s`", tblInfo.tblName)); err != nil {
+	if err = bh.Exec(ctx, dropTableIfExistsSQL("", tblInfo.tblName)); err != nil {
 		return
 	}
 
-	if !isRestoreByCloneSql.MatchString(restoreTableDataByTsFmt) {
-		// create table
-		getLogger(sid).Info(fmt.Sprintf("[%s]  start to create table: '%v', create table sql: %s", pitrName, tblInfo.tblName, tblInfo.createSql))
-		if err = bh.Exec(ctx, tblInfo.createSql); err != nil {
-			if strings.Contains(err.Error(), "no such table") {
-				getLogger(sid).Info(fmt.Sprintf("[%s] foreign key table %v referenced table not exists, skip restore", pitrName, tblInfo.tblName))
-				err = nil
-			}
-			return
-		}
-	}
-
 	// insert data
-	insertIntoSql := fmt.Sprintf(restoreTableDataByTsFmt, tblInfo.dbName, tblInfo.tblName, tblInfo.dbName, tblInfo.tblName, ts)
+	insertIntoSql := restoreTableDataByTsSQL(tblInfo.dbName, tblInfo.tblName, ts)
 	beginTime := time.Now()
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to insert select table: '%v', insert sql: %s", pitrName, tblInfo.tblName, insertIntoSql))
 	if err = bh.Exec(ctx, insertIntoSql); err != nil {
@@ -1540,6 +1731,17 @@ func getTableInfoWithPitr(
 		pitrName,
 		tableInfos,
 		func(tblInfo *tableInfo) (string, error) {
+			if isSequence(tblInfo) {
+				return getCreateSequenceSQL(
+					ctx,
+					ts,
+					tblInfo.dbName,
+					tblInfo.tblName,
+					func(queryCtx context.Context, sql string, colIndices ...uint64) ([][]string, error) {
+						return getStringColsList(queryCtx, bh, sql, colIndices...)
+					},
+				)
+			}
 			return getCreateTableSqlWithTs(ctx, bh, ts, tblInfo.dbName, tblInfo.tblName)
 		},
 	)
@@ -1580,7 +1782,7 @@ func showFullTablesWitsTs(
 }
 
 func getCreateTableSqlWithTs(ctx context.Context, bh BackgroundExec, ts int64, dbName string, tblName string) (string, error) {
-	sql := fmt.Sprintf("show create table `%s`.`%s`", dbName, tblName)
+	sql := showCreateTableSQL(dbName, tblName)
 	if ts > 0 {
 		sql += fmt.Sprintf(" {MO_TS = %d}", ts)
 	}
@@ -1635,12 +1837,12 @@ func deleteCurFkTableInPitrRestore(ctx context.Context,
 	)
 
 	// get topo sorted tables with foreign key
-	sortedFkTbls, err = fkTablesTopoSortInPitrRestore(ctx, bh, 0, dbName, tblName)
+	sortedFkTbls, err = fkTablesTopoSortInPitrRestore(ctx, bh, 0, dbName, tblName, nil)
 	if err != nil {
 		return
 	}
 	// collect table infos which need to be dropped in current state; snapshotName must set to empty
-	curFkTableMap, err = getTableInfoMap(ctx, sid, bh, nil, dbName, tblName, sortedFkTbls)
+	curFkTableMap, err = getTableInfoMap(ctx, sid, bh, nil, dbName, tblName, sortedFkTbls, nil)
 	if err != nil {
 		return
 	}
@@ -1658,7 +1860,7 @@ func deleteCurFkTableInPitrRestore(ctx context.Context,
 			}
 
 			getLogger(sid).Info(fmt.Sprintf("start to drop table: %v", tblInfo.tblName))
-			if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists `%s`.`%s`", tblInfo.dbName, tblInfo.tblName)); err != nil {
+			if err = bh.Exec(ctx, dropTableIfExistsSQL(tblInfo.dbName, tblInfo.tblName)); err != nil {
 				return
 			}
 		}
@@ -1671,25 +1873,14 @@ func fkTablesTopoSortInPitrRestore(
 	bh BackgroundExec,
 	ts int64,
 	dbName string,
-	tblName string) (sortedTbls []string, err error) {
-	// get foreign key deps from mo_catalog.mo_foreign_keys
+	tblName string,
+	tableInfos []*tableInfo,
+) (sortedTbls []string, err error) {
 	fkDeps, err := getFkDepsInPitrRestore(ctx, bh, ts, dbName, tblName)
 	if err != nil {
 		return
 	}
-
-	g := toposort{next: make(map[string][]string)}
-	for key, deps := range fkDeps {
-		g.addVertex(key)
-		for _, depTbl := range deps {
-			// exclude self dep
-			if key != depTbl {
-				g.addEdge(depTbl, key)
-			}
-		}
-	}
-	sortedTbls, err = g.sort()
-	return
+	return topoSortRestoreFkDeps(ctx, fkDeps, tableInfos)
 }
 
 func restoreTablesWithFkByPitr(
@@ -1767,12 +1958,26 @@ func restoreViewsWithPitr(
 			_, err = plan.BuildPlan(compCtx, stmts[0], false)
 			freeStatements(stmts)
 			if err != nil {
+				// The dependency sort plans every view BEFORE the restore loop, so the
+				// #27027 refusal lands here first and would abort the whole restore -- the
+				// skip further down never gets a chance.
+				//
+				// Preserve the vertex and classification for execution. A marked
+				// view reaches neither DROP nor CREATE; an existing live view
+				// survives when its database is retained.
+				if markUnservableViewInSort(ses, pitrName, viewEntry, &g, key, err) {
+					continue
+				}
 				return err
 			}
 		}
 
 		g.addVertex(key)
 		for _, depView := range compCtx.GetViews() {
+			depView, err = normalizeViewDependencyKey(depView)
+			if err != nil {
+				return err
+			}
 			g.addEdge(depView, key)
 		}
 	}
@@ -1790,15 +1995,29 @@ func restoreViewsWithPitr(
 		if tblInfo, ok := viewMap[key]; ok {
 			getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] start to restore view: %v, restore timestamp: %d", pitrName, tblInfo.tblName, ts))
 
-			if err = bh.Exec(ctx, "use `"+tblInfo.dbName+"`"); err != nil {
+			if err = bh.Exec(ctx, useDatabaseSQL(tblInfo.dbName)); err != nil {
 				return err
 			}
 
-			if err = bh.Exec(ctx, "drop view if exists "+tblInfo.tblName); err != nil {
+			if skipUnservableViewInRestore(ses, pitrName, tblInfo) {
+				continue
+			}
+
+			if err = bh.Exec(ctx, dropViewIfExistsSQL(tblInfo.tblName)); err != nil {
 				return err
 			}
 
 			if err = executeViewCreateSQLForRestore(ctx, bh, tblInfo); err != nil {
+				// Same reasoning as restoreViews: the view was dropped just above, and an
+				// unrunnable legacy definition must not make the entire PITR restore fail.
+				// This path has no skip flag at all, so the tolerance is unconditional.
+				if isUnservableViewError(err) {
+					getLogger(ses.GetService()).Warn(fmt.Sprintf(
+						"[%s] skip restore view %v.%v: its definition can never run (%v); "+
+							"the view is NOT present after the restore",
+						pitrName, tblInfo.dbName, tblInfo.tblName, err))
+					continue
+				}
 				return err
 			}
 		}
@@ -1833,9 +2052,12 @@ func restoreSystemDatabaseWithPitr(
 		}
 
 		getLogger(sid).Info(fmt.Sprintf("[%s] start to restore system table: %v.%v", pitrName, moCatalog, tblInfo.tblName))
-		tblInfo.createSql, err = getCreateTableSqlWithTs(ctx, bh, ts, dbName, tblInfo.tblName)
-		if err != nil {
-			return err
+		// Sequences use their CREATE definition; table schemas belong to CLONE.
+		if isSequence(tblInfo) {
+			tblInfo.createSql, err = getCreateTableSqlWithTs(ctx, bh, ts, dbName, tblInfo.tblName)
+			if err != nil {
+				return err
+			}
 		}
 
 		// checks if the given context has been canceled.
@@ -1908,6 +2130,22 @@ func getPitrRecords(ctx context.Context, bh BackgroundExec, sql string) ([]*pitr
 				}
 				if record.pitrUnit, err = er.GetString(ctx, row, 12); err != nil {
 					return nil, err
+				}
+				// pitr_status was appended to the legacy 13-column schema before
+				// pitr_status_changed_time. Parse it as soon as it is present so a
+				// partially upgraded catalog cannot make an inactive PITR look
+				// active. The changed-time column is not needed by ALTER and has
+				// had different types across catalog versions, so do not read it.
+				if er.GetColumnCount() > 13 {
+					status, statusErr := er.GetUint64(ctx, row, 13)
+					if statusErr != nil {
+						return nil, statusErr
+					}
+					if status > math.MaxUint8 {
+						return nil, moerr.NewInvalidInputf(ctx, "invalid PITR status %d", status)
+					}
+					record.pitrStatus = uint8(status)
+					record.hasStatus = true
 				}
 			}
 			records = append(records, &record)
@@ -2008,18 +2246,11 @@ func addTimeSpan(pivot time.Time, length int, unit string) (time.Time, error) {
 		now = time.Now().UTC()
 	}
 
-	switch unit {
-	case "h":
-		return now.Add(time.Duration(-length) * time.Hour), nil
-	case "d":
-		return now.AddDate(0, 0, -length), nil
-	case "mo":
-		return now.AddDate(0, -length, 0), nil
-	case "y":
-		return now.AddDate(-length, 0, 0), nil
-	default:
-		return time.Time{}, moerr.NewInternalErrorNoCtxf("unknown unit '%s'", unit)
+	lower, err := databranchutils.PitrRetentionLowerBound(now, length, unit)
+	if err != nil {
+		return time.Time{}, err
 	}
+	return time.Unix(0, lower).UTC(), nil
 }
 
 func checkPitrValidOrNot(pitrRecord *pitrRecord, stmt *tree.RestorePitr, tenantInfo *TenantInfo) (err error) {
@@ -2135,9 +2366,9 @@ func getFkDepsInPitrRestore(
 		sql += fmt.Sprintf(" {MO_TS = %d}", ts)
 	}
 	if len(dbName) > 0 {
-		sql += fmt.Sprintf(" where db_name = '%s'", dbName)
+		sql += fmt.Sprintf(" where db_name = %s", quoteSQLStringLiteral(dbName))
 		if len(tblName) > 0 {
-			sql += fmt.Sprintf(" and table_name = '%s'", tblName)
+			sql += fmt.Sprintf(" and table_name = %s", quoteSQLStringLiteral(tblName))
 		}
 	}
 
@@ -2185,7 +2416,9 @@ func getTableInfoMapInPitrRestore(
 	ts int64,
 	dbName string,
 	tblName string,
-	tblKeys []string) (tblInfoMap map[string]*tableInfo, err error) {
+	tblKeys []string,
+	source *partialRestoreSource,
+) (tblInfoMap map[string]*tableInfo, err error) {
 	tblInfoMap = make(map[string]*tableInfo)
 	curAccountId, err := defines.GetAccountId(ctx)
 	if err != nil {
@@ -2208,6 +2441,12 @@ func getTableInfoMapInPitrRestore(
 			continue
 		}
 
+		if source != nil {
+			if info, ok := source.byName[restoreObjectName{d, t}]; ok {
+				tblInfoMap[key] = info
+			}
+			continue
+		}
 		if tblInfoMap[key], err = getTableInfoInPitrRestore(ctx, sid, bh, pitrName, ts, d, t); err != nil {
 			return
 		}
@@ -2344,24 +2583,24 @@ func getCreateDatabaseSqlInPitr(ctx context.Context,
 	dbName string,
 	accountId uint32,
 	ts int64,
-) (string, error) {
+) (logicalRestoreDatabaseDefinition, error) {
 
-	sql := "select datname, dat_createsql from mo_catalog.mo_database"
+	sql := "select datname, dat_createsql, dat_type from mo_catalog.mo_database"
 	if ts > 0 {
 		sql += fmt.Sprintf(" {MO_TS = %d}", ts)
 	}
 	sql += fmt.Sprintf(" where datname = '%s' and account_id = %d", dbName, accountId)
 	getLogger(sid).Info(fmt.Sprintf("[%s] get create database `%s` sql: %s", pitrName, dbName, sql))
 
-	// cols: database_name, create_sql
-	colsList, err := getStringColsList(ctx, bh, sql, 0, 1)
+	// cols: database_name, create_sql, database_type
+	colsList, err := getStringColsList(ctx, bh, sql, 0, 1, 2)
 	if err != nil {
-		return "", err
+		return logicalRestoreDatabaseDefinition{}, err
 	}
 	if len(colsList) == 0 || len(colsList[0]) == 0 {
-		return "", moerr.NewBadDB(ctx, dbName)
+		return logicalRestoreDatabaseDefinition{}, moerr.NewBadDB(ctx, dbName)
 	}
-	return colsList[0][1], nil
+	return newLogicalRestoreDatabaseDefinition(ctx, dbName, colsList[0])
 }
 
 // createPubByPitr create pub after the database is created by pitr

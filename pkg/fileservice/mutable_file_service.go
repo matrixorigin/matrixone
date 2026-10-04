@@ -26,7 +26,8 @@ type MutableFileService interface {
 	// NewMutator creates a new mutator
 	NewMutator(ctx context.Context, filePath string) (Mutator, error)
 
-	// Raw os.File API
+	// Raw os.File API. EnsureDir accepts an empty path for the service root;
+	// operations targeting a file require a non-empty file component.
 	EnsureDir(ctx context.Context, filePath string) error
 	OpenFile(ctx context.Context, filePath string) (*os.File, error)
 	CreateFile(ctx context.Context, filePath string) (*os.File, error)

@@ -13,9 +13,7 @@
 // limitations under the License.
 
 #include "usearchex.h"
-#include "bitmap.h"
-#include <string.h>
-#include <stdio.h>
+#include "sorted64.h"
 #include <stdint.h>
 
 // Per-candidate membership predicate. `data` is a membership_filter_t carrying
@@ -39,6 +37,8 @@ static int filtered_search_membership_cb(usearch_key_t key, void *data) {
             return mo_cbitmap_contain(mf->filter, (uint64_t)key) ? 1 : 0;
         case USEARCHEX_FILTER_CROARING:
             return mo_croaring_contains(mf->filter, (uint64_t)key) ? 1 : 0;
+        case USEARCHEX_FILTER_SORTED64:
+            return mo_sorted64_contains(mf->filter, (uint64_t)key) ? 1 : 0;
         default:
             // Unknown kind: fail CLOSED (exclude). Keeping the candidate here
             // would silently disable filtering for the whole search. The Go

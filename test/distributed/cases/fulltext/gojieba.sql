@@ -424,7 +424,6 @@ drop table srcph;
 -- ============================================================
 select count(*) from (
 select cast(column_0 as bigint) as id, column_1 as body
-from (values row(1, '我来到北京清华大学'))
+from (values row(1, '我来到北京清华大学')) as input_rows
 ) as src
 cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
-

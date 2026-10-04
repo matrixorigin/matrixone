@@ -72,23 +72,26 @@ func (op *opBuiltInJq) tryJq(params []*vector.Vector, result vector.FunctionResu
 func (op *opBuiltInJq) tryJqImpl(params []*vector.Vector, result vector.FunctionResultWrapper,
 	proc *process.Process, length int, selectList *FunctionSelectList,
 	isTry bool) error {
-	p1 := vector.GenerateFunctionStrParameter(params[0])
-	p2 := vector.GenerateFunctionStrParameter(params[1])
 	rs := vector.MustFunctionResult[types.Varlena](result)
-
-	// special case
-	if selectList.IgnoreAllRow() {
-		rs.AddNullRange(0, uint64(length))
+	if length == 0 {
 		return nil
 	}
 
+	// special case
+	if selectList.IgnoreAllRow() {
+		rs.SetNullResult(uint64(length))
+		return nil
+	}
+
+	p1 := vector.GenerateFunctionStrParameter(params[0])
+	p2 := vector.GenerateFunctionStrParameter(params[1])
 	c1, c2 := params[0].IsConst(), params[1].IsConst()
 	// if both parameters are constant, just eval
 	if c1 && c2 {
 		v1, null1 := p1.GetStrValue(0)
 		v2, null2 := p2.GetStrValue(0)
 		if null1 || null2 {
-			rs.AddNullRange(0, uint64(length))
+			rs.SetNullResult(uint64(length))
 		} else {
 			code, err := op.getJqCode(string(v2))
 			if err == nil {
@@ -96,14 +99,13 @@ func (op *opBuiltInJq) tryJqImpl(params []*vector.Vector, result vector.Function
 			}
 			if err != nil {
 				if isTry {
-					rs.AddNullRange(0, uint64(length))
+					rs.SetNullResult(uint64(length))
 					return nil
 				} else {
 					return err
 				}
 			}
-			rs.AppendBytes(op.enc.bytes(), false)
-			op.enc.done()
+			return op.appendJqConstResult(rs, length, selectList)
 		}
 		return nil
 	} else if c1 {
@@ -111,13 +113,15 @@ func (op *opBuiltInJq) tryJqImpl(params []*vector.Vector, result vector.Function
 		// of json string.
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			rs.AddNullRange(0, uint64(length))
+			rs.SetNullResult(uint64(length))
 			return nil
 		} else {
 			for i := uint64(0); i < uint64(length); i++ {
 				v2, null2 := p2.GetStrValue(i)
 				if null2 || selectList.Contains(i) {
-					rs.AppendBytes(nil, true)
+					if err := rs.AppendBytes(nil, true); err != nil {
+						return err
+					}
 				} else {
 					code, err := op.getJqCode(string(v2))
 					if err == nil {
@@ -125,13 +129,16 @@ func (op *opBuiltInJq) tryJqImpl(params []*vector.Vector, result vector.Function
 					}
 					if err != nil {
 						if isTry {
-							rs.AppendBytes(nil, true)
+							if err = rs.AppendBytes(nil, true); err != nil {
+								return err
+							}
 						} else {
 							return err
 						}
 					} else {
-						rs.AppendBytes(op.enc.bytes(), false)
-						op.enc.done()
+						if err = op.appendJqRowResult(rs); err != nil {
+							return err
+						}
 					}
 				}
 			}
@@ -141,13 +148,13 @@ func (op *opBuiltInJq) tryJqImpl(params []*vector.Vector, result vector.Function
 		// this is the common case that need to be optimized.
 		v2, null2 := p2.GetStrValue(0)
 		if null2 {
-			rs.AddNullRange(0, uint64(length))
+			rs.SetNullResult(uint64(length))
 			return nil
 		}
 		code, err := op.getJqCode(string(v2))
 		if err != nil {
 			if isTry {
-				rs.AddNullRange(0, uint64(length))
+				rs.SetNullResult(uint64(length))
 				return nil
 			} else {
 				return err
@@ -157,18 +164,23 @@ func (op *opBuiltInJq) tryJqImpl(params []*vector.Vector, result vector.Function
 		for i := uint64(0); i < uint64(length); i++ {
 			v1, null1 := p1.GetStrValue(i)
 			if null1 || selectList.Contains(i) {
-				rs.AppendBytes(nil, true)
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
 			} else {
 				err = op.jqImpl(v1, code)
 				if err != nil {
 					if isTry {
-						rs.AppendBytes(nil, true)
+						if err = rs.AppendBytes(nil, true); err != nil {
+							return err
+						}
 					} else {
 						return err
 					}
 				} else {
-					rs.AppendBytes(op.enc.bytes(), false)
-					op.enc.done()
+					if err = op.appendJqRowResult(rs); err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -178,7 +190,9 @@ func (op *opBuiltInJq) tryJqImpl(params []*vector.Vector, result vector.Function
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
 			if null1 || null2 || selectList.Contains(i) {
-				rs.AppendBytes(nil, true)
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
 			} else {
 				code, err := op.getJqCode(string(v2))
 				if err == nil {
@@ -187,19 +201,35 @@ func (op *opBuiltInJq) tryJqImpl(params []*vector.Vector, result vector.Function
 
 				if err != nil {
 					if isTry {
-						rs.AppendBytes(nil, true)
-						// continue
+						if err = rs.AppendBytes(nil, true); err != nil {
+							return err
+						}
 					} else {
 						return err
 					}
 				} else {
-					rs.AppendBytes(op.enc.bytes(), false)
-					op.enc.done()
+					if err = op.appendJqRowResult(rs); err != nil {
+						return err
+					}
 				}
 			}
 		}
 	}
 	return nil
+}
+
+func (op *opBuiltInJq) appendJqRowResult(rs *vector.FunctionResult[types.Varlena]) (err error) {
+	defer op.enc.done()
+	return rs.AppendBytes(op.enc.bytes(), false)
+}
+
+func (op *opBuiltInJq) appendJqConstResult(
+	rs *vector.FunctionResult[types.Varlena],
+	length int,
+	selectList *FunctionSelectList,
+) (err error) {
+	defer op.enc.done()
+	return appendRepeatedBytesResultWithSelection(rs, op.enc.bytes(), length, selectList)
 }
 
 // run jq.  The result is stored in the encoder bytes().  If succeeded, caller
@@ -581,6 +611,18 @@ func (op *opBuiltInJsonRow) jsonRow(params []*vector.Vector, result vector.Funct
 		case types.T_array_float64:
 			// vector of float, we will encode them as json array
 			encodeFloatArray[float64](op, params[i], ulen)
+		case types.T_array_bf16:
+			encodeNarrowArray[types.BF16](op, params[i], ulen,
+				func(x types.BF16) float64 { return float64(x.ToFloat32()) })
+		case types.T_array_float16:
+			encodeNarrowArray[types.Float16](op, params[i], ulen,
+				func(x types.Float16) float64 { return float64(x.ToFloat32()) })
+		case types.T_array_int8:
+			encodeNarrowArray[int8](op, params[i], ulen,
+				func(x int8) float64 { return float64(x) })
+		case types.T_array_uint8:
+			encodeNarrowArray[uint8](op, params[i], ulen,
+				func(x uint8) float64 { return float64(x) })
 		case types.T_uuid:
 			encodeFixedStringer[types.Uuid](op, params[i], ulen)
 		case types.T_json:
@@ -704,6 +746,29 @@ func encodeFloatArray[T constraints.Float](op *opBuiltInJsonRow, v *vector.Vecto
 				}
 				ff := float64(val)
 				op.enc[i].encodeFloat64(ff)
+			}
+			op.enc[i].w.WriteByte(']')
+		}
+	}
+}
+
+// encodeNarrowArray is encodeFloatArray for element types that are not
+// constraints.Float: BF16/Float16 need ToFloat32(), int8/uint8 are plain
+// integers. The JSON shape emitted is identical to the f32/f64 arrays.
+func encodeNarrowArray[T types.ArrayElement](op *opBuiltInJsonRow, v *vector.Vector, length uint64, toF64 func(T) float64) {
+	p := vector.GenerateFunctionStrParameter(v)
+	for i := uint64(0); i < length; i++ {
+		v, null := p.GetStrValue(i)
+		if null {
+			op.enc[i].w.WriteString("null")
+		} else {
+			vv := types.BytesToArray[T](v)
+			op.enc[i].w.WriteByte('[')
+			for j, val := range vv {
+				if j > 0 {
+					op.enc[i].w.WriteByte(',')
+				}
+				op.enc[i].encodeFloat64(toF64(val))
 			}
 			op.enc[i].w.WriteByte(']')
 		}

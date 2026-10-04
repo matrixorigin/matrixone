@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/stretchr/testify/require"
 )
 
 func TestInsertSimpleTable(t *testing.T) {
@@ -34,7 +35,7 @@ func TestInsertSimpleTable(t *testing.T) {
 	hasSecondaryKey := false
 
 	proc, case1 := buildInsertTestCase(t, hasUniqueKey, hasSecondaryKey)
-	runTestCases(t, proc, []*testCase{case1})
+	runTestCase(t, proc, case1)
 }
 
 func TestInsertSpecialTable(t *testing.T) {
@@ -52,7 +53,7 @@ func TestInsertSpecialTable(t *testing.T) {
 	oldBat.Vecs[0].Free(proc.GetMPool())
 	oldBat.ReplaceVector(oldBat.Vecs[0], columnA, 0)
 	case1.expectErr = true
-	runTestCases(t, proc, []*testCase{case1})
+	runTestCase(t, proc, case1)
 
 	//case 2: unique key has null, that will be ok
 	hasUniqueKey = true
@@ -65,7 +66,7 @@ func TestInsertSpecialTable(t *testing.T) {
 	uniquePk := testutil.MakeVarcharVector(pkArr, []uint64{0, 1, 2}, proc.GetMPool())
 	oldBat.Vecs[4].Free(proc.GetMPool())
 	oldBat.ReplaceVector(oldBat.Vecs[4], uniquePk, 0)
-	runTestCases(t, proc, []*testCase{case1})
+	runTestCase(t, proc, case1)
 }
 
 func TestInsertTableWithUniqueKeyAndSecondaryKey(t *testing.T) {
@@ -73,7 +74,7 @@ func TestInsertTableWithUniqueKeyAndSecondaryKey(t *testing.T) {
 	hasSecondaryKey := true
 
 	proc, case1 := buildInsertTestCase(t, hasUniqueKey, hasSecondaryKey)
-	runTestCases(t, proc, []*testCase{case1})
+	runTestCaseAfterReset(t, proc, case1)
 }
 
 // insert s3
@@ -82,7 +83,7 @@ func TestInsertS3SimpleTable(t *testing.T) {
 	hasSecondaryKey := false
 
 	proc, case1 := buildInsertS3TestCase(t, hasUniqueKey, hasSecondaryKey)
-	runTestCases(t, proc, []*testCase{case1})
+	runTestCase(t, proc, case1)
 }
 
 func TestInsertS3TableWithUniqueKeyAndSecondaryKey(t *testing.T) {
@@ -90,7 +91,114 @@ func TestInsertS3TableWithUniqueKeyAndSecondaryKey(t *testing.T) {
 	hasSecondaryKey := true
 
 	proc, case1 := buildInsertS3TestCase(t, hasUniqueKey, hasSecondaryKey)
-	runTestCases(t, proc, []*testCase{case1})
+	runTestCaseAfterReset(t, proc, case1)
+}
+
+func TestInsertRejectsZeroTemporalInStrictMode(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		build func(*testing.T, bool, bool) (*process.Process, *testCase)
+	}{
+		{name: "write table", build: buildInsertTestCase},
+		{name: "write s3", build: buildInsertS3TestCase},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc, c := tc.build(t, false, false)
+			c.op.RejectZeroTemporal = true
+			c.op.MultiUpdateCtx[0].TableDef.Cols[3].Typ = plan.Type{Id: int32(types.T_date)}
+			for _, bat := range c.inputBatchs {
+				zeroDates := vector.NewVec(types.T_date.ToType())
+				for i := 0; i < bat.RowCount(); i++ {
+					require.NoError(t, vector.AppendFixed(zeroDates, types.ZeroDate, false, proc.Mp()))
+				}
+				bat.Vecs[3].Free(proc.Mp())
+				bat.Vecs[3] = zeroDates
+			}
+			c.expectErr = true
+			runTestCase(t, proc, c)
+		})
+	}
+}
+
+func TestCheckTemporalWriteRejectsTimestampBelowMinimum(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	for _, tc := range []struct {
+		name    string
+		value   types.Timestamp
+		wantErr bool
+	}{
+		{name: "below minimum", value: types.TimestampMinValue - 1, wantErr: true},
+		{name: "exact minimum", value: types.TimestampMinValue},
+		{name: "zero follows zero temporal policy", value: types.ZeroTimestamp},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vec := vector.NewVec(types.T_timestamp.ToType())
+			require.NoError(t, vector.AppendFixed(vec, tc.value, false, proc.Mp()))
+			bat := &batch.Batch{Vecs: []*vector.Vector{vec}}
+			bat.SetRowCount(1)
+			defer bat.Clean(proc.Mp())
+
+			err := checkZeroTemporalInStrictMode(false, proc, bat)
+			if tc.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestInsertRejectsTimestampBelowMinimum(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		build func(*testing.T, bool, bool) (*process.Process, *testCase)
+	}{
+		{name: "write table", build: buildInsertTestCase},
+		{name: "write s3", build: buildInsertS3TestCase},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc, c := tc.build(t, false, false)
+			c.op.MultiUpdateCtx[0].TableDef.Cols[3].Typ = plan.Type{Id: int32(types.T_timestamp)}
+			for _, bat := range c.inputBatchs {
+				timestamps := vector.NewVec(types.T_timestamp.ToType())
+				for i := 0; i < bat.RowCount(); i++ {
+					require.NoError(t, vector.AppendFixed(timestamps, types.TimestampMinValue-1, false, proc.Mp()))
+				}
+				bat.Vecs[3].Free(proc.Mp())
+				bat.Vecs[3] = timestamps
+			}
+			c.expectErr = true
+			runTestCase(t, proc, c)
+		})
+	}
+}
+
+func TestMultiUpdatePreparePreservesCompiledZeroTemporalPolicy(t *testing.T) {
+	_, ctrl, proc := prepareTestCtx(t, false)
+	defer ctrl.Finish()
+	defer proc.Free()
+	op := &MultiUpdate{
+		MultiUpdateCtx:     prepareTestInsertMultiUpdateCtx(false, false),
+		Action:             UpdateWriteTable,
+		Engine:             prepareTestEng(ctrl, false),
+		RejectZeroTemporal: true,
+	}
+	require.NoError(t, op.Prepare(proc))
+	require.True(t, op.RejectZeroTemporal)
+}
+
+func TestMultiUpdateSetRejectZeroTemporalUpdatesCachedS3Writer(t *testing.T) {
+	op := &MultiUpdate{
+		RejectZeroTemporal: true,
+		ctr: container{
+			s3Writer: &s3WriterDelegate{rejectZeroTemporal: true},
+		},
+	}
+	op.SetRejectZeroTemporal(false)
+	require.False(t, op.RejectZeroTemporal)
+	require.False(t, op.ctr.s3Writer.rejectZeroTemporal)
 }
 
 // ----- util function ----
@@ -98,7 +206,9 @@ func buildInsertTestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool) 
 	_, ctrl, proc := prepareTestCtx(t, false)
 	eng := prepareTestEng(ctrl, false)
 
-	batchs, affectRows := prepareTestInsertBatchs(proc.GetMPool(), 2, hasUniqueKey, hasSecondaryKey)
+	batchs, affectRows := prepareTestInsertBatchs(
+		proc.GetMPool(), 2, colexec.DefaultBatchSize, hasUniqueKey, hasSecondaryKey,
+	)
 	multiUpdateCtxs := prepareTestInsertMultiUpdateCtx(hasUniqueKey, hasSecondaryKey)
 	action := UpdateWriteTable
 	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, affectRows, action, false)
@@ -109,18 +219,26 @@ func buildInsertS3TestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool
 	_, ctrl, proc := prepareTestCtx(t, true)
 	eng := prepareTestEng(ctrl, false)
 
-	batchs, _ := prepareTestInsertBatchs(proc.GetMPool(), 10, hasUniqueKey, hasSecondaryKey)
+	batchs, _ := prepareTestInsertBatchs(
+		proc.GetMPool(), testS3BatchCount, testS3BatchRows, hasUniqueKey, hasSecondaryKey,
+	)
 	multiUpdateCtxs := prepareTestInsertMultiUpdateCtx(hasUniqueKey, hasSecondaryKey)
 	action := UpdateWriteS3
 	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, 0, action, false)
 	return proc, retCase
 }
 
-func prepareTestInsertBatchs(mp *mpool.MPool, size int, hasUniqueKey bool, hasSecondaryKey bool) ([]*batch.Batch, uint64) {
+func prepareTestInsertBatchs(
+	mp *mpool.MPool,
+	size int,
+	rowsPerBatch int,
+	hasUniqueKey bool,
+	hasSecondaryKey bool,
+) ([]*batch.Batch, uint64) {
 	var bats = make([]*batch.Batch, size)
 	affectRows := 0
 	for i := 0; i < size; i++ {
-		rowCount := colexec.DefaultBatchSize
+		rowCount := rowsPerBatch
 		if i == size-1 {
 			rowCount = rowCount / 2
 		}

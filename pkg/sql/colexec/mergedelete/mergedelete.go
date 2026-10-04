@@ -90,7 +90,7 @@ func (mergeDelete *MergeDelete) Call(proc *process.Process) (vm.CallResult, erro
 	// If the target table is a general table
 	for i := 0; i < resBat.RowCount(); i++ {
 		name = fmt.Sprintf("%s|%d", blkIds[i], typs[i])
-		if err := bat.UnmarshalBinary(deltaLocs[i].GetByteSlice(area1)); err != nil {
+		if err := bat.UnmarshalBinaryWithAnyMp(deltaLocs[i].GetByteSlice(area1), proc.Mp()); err != nil {
 			return input, err
 		}
 		err = mergeDelete.ctr.delSource.Delete(proc.Ctx, bat, name)

@@ -18,36 +18,356 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
+// rewriteLeftJoinNullFiltersToAnti recognizes the relational anti-join idiom
+//
+//	left LEFT JOIN right ON match
+//	WHERE right.proven_not_null_column IS NULL
+//
+// when the null-extended side is otherwise unobservable.  A matched right row
+// can never pass the predicate, while an unmatched row always does, so the
+// result is exactly a left ANTI join.  The marker must trace through pure column
+// projections to a NOT NULL scan column.  A general non-NULL expression is not
+// sufficient: it may reject the NULL-extended row (for example COALESCE), or its
+// evaluation may raise an error that the rewrite would otherwise suppress.
+// Keep the proof independent of stats and fail closed for computed or nullable
+// markers, volatile predicates, non-equi joins, or any other consumer of the
+// right-side bindings.
+//
+// tagCnt contains references from ancestors only.  This lets the rewrite
+// distinguish the anti marker in the current FILTER from a right-side value
+// that must still be produced above it.
+func (builder *QueryBuilder) rewriteLeftJoinNullFiltersToAnti(
+	nodeID int32,
+	tagCnt map[int32]int,
+) (int32, bool) {
+	if builder == nil || builder.qry == nil || nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return nodeID, false
+	}
+	if builder.outerAntiPlanningDisabled() {
+		return nodeID, false
+	}
+	node := builder.qry.Nodes[nodeID]
+	if node == nil {
+		return nodeID, false
+	}
+
+	changed := false
+	if rewrittenID, ok := builder.tryRewriteLeftJoinNullFilter(nodeID, tagCnt); ok {
+		nodeID = rewrittenID
+		node = builder.qry.Nodes[nodeID]
+		changed = true
+	}
+
+	increaseNodeTagCnt(node, 1, tagCnt)
+	for i, childID := range node.Children {
+		var childChanged bool
+		node.Children[i], childChanged = builder.rewriteLeftJoinNullFiltersToAnti(childID, tagCnt)
+		changed = changed || childChanged
+	}
+	increaseNodeTagCnt(node, -1, tagCnt)
+	return nodeID, changed
+}
+
+func (builder *QueryBuilder) tryRewriteLeftJoinNullFilter(
+	nodeID int32,
+	ancestorTagCnt map[int32]int,
+) (int32, bool) {
+	node := builder.qry.Nodes[nodeID]
+	if node.NodeType != plan.Node_FILTER || len(node.Children) != 1 || len(node.FilterList) == 0 {
+		return nodeID, false
+	}
+	joinID := node.Children[0]
+	if joinID < 0 || int(joinID) >= len(builder.qry.Nodes) {
+		return nodeID, false
+	}
+	join := builder.qry.Nodes[joinID]
+	if join == nil || join.NodeType != plan.Node_JOIN || join.JoinType != plan.Node_LEFT ||
+		join.IsRightJoin || !builder.IsEquiJoin(join) {
+		return nodeID, false
+	}
+	for _, expr := range join.OnList {
+		if ContainsVolatileFunction(expr) {
+			return nodeID, false
+		}
+	}
+
+	leftTags := make(map[int32]bool)
+	for _, tag := range builder.enumerateTags(join.Children[0]) {
+		leftTags[tag] = true
+	}
+	rightTags := make(map[int32]bool)
+	for _, tag := range builder.enumerateTags(join.Children[1]) {
+		rightTags[tag] = true
+		if ancestorTagCnt[tag] > 0 {
+			return nodeID, false
+		}
+	}
+	if nodeExprListsReferenceTagsExceptFilters(node, rightTags) {
+		return nodeID, false
+	}
+
+	kept := make([]*plan.Expr, 0, len(node.FilterList))
+	found := false
+	for _, filter := range node.FilterList {
+		if builder.isLeftJoinAntiNullMarker(filter, join.Children[1], leftTags, rightTags) {
+			found = true
+			continue
+		}
+		if exprRefsAnyTag(filter, rightTags) {
+			return nodeID, false
+		}
+		kept = append(kept, filter)
+	}
+	if !found {
+		return nodeID, false
+	}
+
+	join.JoinType = plan.Node_ANTI
+	node.FilterList = kept
+	builder.optimizationHistory = append(builder.optimizationHistory,
+		fmt.Sprintf("left-null-to-anti: filter=%d join=%d", node.NodeId, join.NodeId))
+	if len(kept) == 0 && len(node.ProjectList) == 0 && len(node.OrderBy) == 0 &&
+		node.Limit == nil && node.Offset == nil {
+		return joinID, true
+	}
+	return nodeID, true
+}
+
+// outerAntiPlanningDisabled is the operational rollback boundary for the
+// outer/anti planning rules.  The default keeps the rules enabled; setting
+// optimizer_hints to outerAntiPlanning=1 restores the legacy behavior.
+func (builder *QueryBuilder) outerAntiPlanningDisabled() bool {
+	return builder != nil && builder.optimizerHints != nil &&
+		builder.optimizerHints.outerAntiPlanning != 0
+}
+
+func (builder *QueryBuilder) isLeftJoinAntiNullMarker(
+	expr *plan.Expr,
+	rightChildID int32,
+	leftTags, rightTags map[int32]bool,
+) bool {
+	if expr == nil || ContainsVolatileFunction(expr) {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil ||
+		(fn.Func.ObjName != "isnull" && fn.Func.ObjName != "is_null") || len(fn.Args) != 1 {
+		return false
+	}
+	arg := fn.Args[0]
+	if getJoinSide(arg, leftTags, rightTags, 0) != JoinSideRight {
+		return false
+	}
+	return builder.isLeftJoinAntiMarkerColumn(arg, rightChildID)
+}
+
+func (builder *QueryBuilder) isLeftJoinAntiMarkerColumn(
+	expr *plan.Expr,
+	nodeID int32,
+) bool {
+	if expr == nil || !expr.Typ.NotNullable || expr.GetCol() == nil {
+		return false
+	}
+	return builder.leftJoinAntiMarkerOriginatesFromNotNullScan(
+		expr.GetCol(),
+		nodeID,
+	)
+}
+
+func (builder *QueryBuilder) leftJoinAntiMarkerOriginatesFromNotNullScan(
+	col *plan.ColRef,
+	nodeID int32,
+) bool {
+	if builder == nil || builder.qry == nil || col == nil ||
+		nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return false
+	}
+	node := builder.qry.Nodes[nodeID]
+	if node == nil {
+		return false
+	}
+
+	if sourceExpr, childID, materialized := materializedOutputExprBeforeRemap(node, col); materialized {
+		if sourceExpr == nil || !sourceExpr.Typ.NotNullable || sourceExpr.GetCol() == nil {
+			return false
+		}
+		return builder.leftJoinAntiMarkerOriginatesFromNotNullScan(
+			sourceExpr.GetCol(),
+			childID,
+		)
+	}
+
+	for _, bindingTag := range node.BindingTags {
+		if bindingTag != col.RelPos {
+			continue
+		}
+		if node.NodeType != plan.Node_TABLE_SCAN || node.TableDef == nil ||
+			col.ColPos < 0 || int(col.ColPos) >= len(node.TableDef.Cols) ||
+			node.TableDef.Cols[col.ColPos] == nil {
+			return false
+		}
+		return node.TableDef.Cols[col.ColPos].Typ.NotNullable
+	}
+
+	for childIdx, childID := range node.Children {
+		if !builder.nodeContainsBindingTag(childID, col.RelPos) {
+			continue
+		}
+		if nodeNullExtendsChild(node, childIdx) {
+			return false
+		}
+		return builder.leftJoinAntiMarkerOriginatesFromNotNullScan(col, childID)
+	}
+	return false
+}
+
+func nodeExprListsReferenceTagsExceptFilters(node *plan.Node, tags map[int32]bool) bool {
+	if node == nil {
+		return false
+	}
+	for _, exprs := range [][]*plan.Expr{
+		node.ProjectList,
+		node.OnList,
+		node.GroupBy,
+		node.AggList,
+		node.WinSpecList,
+		node.TimeWindowPartitionBy,
+		node.TblFuncExprList,
+		node.BlockFilterList,
+		node.FillVal,
+		node.OnUpdateExprs,
+	} {
+		for _, expr := range exprs {
+			if exprRefsAnyTag(expr, tags) {
+				return true
+			}
+		}
+	}
+	for _, order := range node.OrderBy {
+		if order != nil && exprRefsAnyTag(order.Expr, tags) {
+			return true
+		}
+	}
+	return false
+}
+
+func increaseNodeTagCnt(node *plan.Node, inc int, tagCnt map[int32]int) {
+	if node == nil {
+		return
+	}
+	increaseTagCntForExprList(node.ProjectList, inc, tagCnt)
+	increaseTagCntForExprList(node.OnList, inc, tagCnt)
+	increaseTagCntForExprList(node.FilterList, inc, tagCnt)
+	increaseTagCntForExprList(node.GroupBy, inc, tagCnt)
+	increaseTagCntForExprList(node.AggList, inc, tagCnt)
+	increaseTagCntForExprList(node.WinSpecList, inc, tagCnt)
+	for _, order := range node.OrderBy {
+		if order != nil {
+			increaseTagCnt(order.Expr, inc, tagCnt)
+		}
+	}
+}
+
 const maxVectorIndexTopPushdownLimit = uint64(^uint(0) >> 1)
+
+func (builder *QueryBuilder) filterPushdownBarrier(expr *plan.Expr) bool {
+	return ContainsVolatileFunction(expr) ||
+		builder.containsStatementInvariantFilterDiagnostic(expr)
+}
+
+func normalizeScalarReaggFilterRefs(expr *plan.Expr, groupTag int32, aliases map[[2]int32]int32) {
+	if expr == nil {
+		return
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if e.Col != nil {
+			if groupPos, ok := aliases[[2]int32{e.Col.RelPos, e.Col.ColPos}]; ok {
+				e.Col.RelPos, e.Col.ColPos = groupTag, groupPos
+			}
+		}
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			normalizeScalarReaggFilterRefs(arg, groupTag, aliases)
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			normalizeScalarReaggFilterRefs(item, groupTag, aliases)
+		}
+	}
+}
 
 func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr, separateNonEquiConds bool) (int32, []*plan.Expr) {
 	originalNodeID := nodeID
+	if builder.checkPlanningCanceled() != nil {
+		return originalNodeID, filters
+	}
 	// Record before pushdownFilters
 	builder.optimizationHistory = append(builder.optimizationHistory,
 		fmt.Sprintf("pushdownFilters:before (nodeID: %d, nodeType: %s, filters: %d)", nodeID, builder.qry.Nodes[nodeID].NodeType, len(filters)))
 	node := builder.qry.Nodes[nodeID]
+	if !builder.subqueryPredicatePlanningDisabled() && !separateNonEquiConds &&
+		node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_MARK && len(filters) > 0 {
+		rewrittenID, remaining := builder.rewriteFilteringOrOfExists(nodeID, filters)
+		if rewrittenID != nodeID {
+			return builder.pushdownFilters(rewrittenID, remaining, separateNonEquiConds)
+		}
+	}
 
 	var canPushdown, cantPushdown []*plan.Expr
 
-	if node.Limit != nil {
-		// can not push down over limit
-		cantPushdown = filters
+	if node.Limit != nil || node.Offset != nil {
+		// can not push down over limit or offset: a predicate above OFFSET filters the
+		// rows that survive pagination, so pushing it below would change which rows OFFSET
+		// skips (e.g. an outer WHERE across an OFFSET-only subquery would run before the skip).
+		cantPushdown = append(cantPushdown, filters...)
 		filters = nil
 	}
 
 	switch node.NodeType {
 	case plan.Node_AGG:
+		// Legacy positional aggregates have no global binding tags. Keep filters
+		// above them because tag-based replacement cannot address their outputs.
+		if len(node.BindingTags) < 2 {
+			return originalNodeID, filters
+		}
 		groupTag := node.BindingTags[0]
 		aggregateTag := node.BindingTags[1]
+		// A scalar reaggregation groups earlier scalar outputs under this node's
+		// group tag. Normalize their old tags before deciding whether a filter
+		// belongs below the aggregate or in its HAVING list.
+		if aliases := builder.scalarReaggAliases[nodeID]; len(aliases) > 0 {
+			byRef := make(map[[2]int32]int32, len(aliases))
+			for _, alias := range aliases {
+				byRef[alias.ref] = alias.groupPos
+			}
+			for _, filter := range filters {
+				normalizeScalarReaggFilterRefs(filter, groupTag, byRef)
+			}
+			for _, filter := range node.FilterList {
+				normalizeScalarReaggFilterRefs(filter, groupTag, byRef)
+			}
+		}
 
 		for _, filter := range filters {
-			if !containsTag(filter, aggregateTag) && !containGrouping(filter) {
+			if builder.filterPushdownBarrier(filter) {
+				node.FilterList = append(node.FilterList, filter)
+				continue
+			}
+			// A predicate with no column references is not safe below a global
+			// aggregate. If it evaluates to false, filtering the aggregate input
+			// still leaves the single global-aggregate output row alive. This can
+			// happen after set-operation columns are replaced by branch literals.
+			if len(node.GroupBy) == 0 && !exprHasColRef(filter) {
+				node.FilterList = append(node.FilterList, filter)
+			} else if !containsTag(filter, aggregateTag) && !containGrouping(filter) &&
+				!referencesSyntheticGroupKey(filter, groupTag, len(node.GroupBy), node.GroupingFlag) {
 				canPushdown = append(canPushdown, replaceColRefs(filter, groupTag, node.GroupBy))
 			} else {
 				node.FilterList = append(node.FilterList, filter)
@@ -71,7 +391,9 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		sampleTag := node.BindingTags[1]
 
 		for _, filter := range filters {
-			if !containsTag(filter, sampleTag) {
+			if builder.filterPushdownBarrier(filter) {
+				node.FilterList = append(node.FilterList, filter)
+			} else if !containsTag(filter, sampleTag) {
 				canPushdown = append(canPushdown, replaceColRefs(filter, groupTag, node.GroupBy))
 			} else {
 				node.FilterList = append(node.FilterList, filter)
@@ -112,7 +434,9 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		}
 
 		for _, filter := range filters {
-			if containsTag(filter, windowTag) {
+			if builder.filterPushdownBarrier(filter) {
+				node.FilterList = append(node.FilterList, filter)
+			} else if containsTag(filter, windowTag) {
 				node.FilterList = append(node.FilterList, filter)
 			} else if exprColRefsSubsetOf(filter, partCols) {
 				canPushdown = append(canPushdown, filter)
@@ -137,7 +461,9 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		windowTag := node.BindingTags[0]
 
 		for _, filter := range filters {
-			if !containsTag(filter, windowTag) {
+			if builder.filterPushdownBarrier(filter) {
+				node.FilterList = append(node.FilterList, filter)
+			} else if !containsTag(filter, windowTag) {
 				canPushdown = append(canPushdown, replaceColRefs(filter, windowTag, node.WinSpecList))
 			} else {
 				node.FilterList = append(node.FilterList, filter)
@@ -157,11 +483,37 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		node.Children[0] = childID
 
 	case plan.Node_FILTER:
+		// IsEnd filters are terminal assertions/action selectors. Moving their
+		// predicates below joins can change both assertion scope and marker layout.
+		// Barrier filters are cardinality-changing semantic boundaries over a
+		// final DML row image. Unlike ASSERT they discard rows, but have the same
+		// non-reorderability requirement.
+		if node.IsEnd {
+			cantPushdown = append(cantPushdown, filters...)
+			return originalNodeID, cantPushdown
+		}
+		if node.FilterIsBarrier {
+			childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], nil, separateNonEquiConds)
+			if len(cantPushdownChild) > 0 {
+				childID = builder.appendNode(&plan.Node{
+					NodeType:   plan.Node_FILTER,
+					Children:   []int32{childID},
+					FilterList: cantPushdownChild,
+				}, nil)
+			}
+			node.Children[0] = childID
+			cantPushdown = append(cantPushdown, filters...)
+			return originalNodeID, cantPushdown
+		}
 		canPushdown = filters
 		if !node.RollupFilter {
 			for _, filter := range node.FilterList {
-				canPushdown = append(canPushdown, splitPlanConjunction(applyDistributivity(builder.GetContext(), filter))...)
+				canPushdown = append(canPushdown, splitPlanConjunction(applyDistributivity(
+					builder.GetContext(), filter, !builder.subqueryPredicatePlanningDisabled()))...)
 			}
+		}
+		if !node.RollupFilter && !separateNonEquiConds {
+			node.Children[0], canPushdown = builder.rewriteFilteringOrOfExists(node.Children[0], canPushdown)
 		}
 
 		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown, separateNonEquiConds)
@@ -178,7 +530,62 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 			nodeID = childID
 		}
 
+	case plan.Node_ASSERT:
+		// ASSERT is a row-preserving semantic boundary. Its predicates describe
+		// the row image at this exact point in the DML pipeline, so neither the
+		// assertion nor filters from its parent may cross it.
+		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], nil, separateNonEquiConds)
+		if len(cantPushdownChild) > 0 {
+			childID = builder.appendNode(&plan.Node{
+				NodeType:   plan.Node_FILTER,
+				Children:   []int32{childID},
+				FilterList: cantPushdownChild,
+			}, nil)
+		}
+		node.Children[0] = childID
+		cantPushdown = append(cantPushdown, filters...)
+
 	case plan.Node_JOIN:
+		if builder.joinOwnsConstantDiagnostic(node) {
+			// ON diagnostics belong to these two logical inputs. Keep complete
+			// hash keys here, and do not let incoming WHERE predicates or other
+			// ON conjuncts pre-filter an input and erase diagnostic activation.
+			node.OnList = splitPlanConjunctions(node.OnList)
+			cantPushdown = append(cantPushdown, filters...)
+			for i, child := range node.Children {
+				childID, remaining := builder.pushdownFilters(child, nil, separateNonEquiConds)
+				if len(remaining) > 0 {
+					childID = builder.appendNode(&plan.Node{
+						NodeType: plan.Node_FILTER, Children: []int32{childID}, FilterList: remaining,
+					}, nil)
+				}
+				node.Children[i] = childID
+			}
+			break
+		}
+		dedupIgnoreHasReleaseRows := node.JoinType == plan.Node_DEDUP &&
+			node.OnDuplicateAction == plan.Node_IGNORE && node.DedupJoinCtx != nil &&
+			len(node.DedupJoinCtx.OldColList) > 1
+		if node.JoinType == plan.Node_DEDUP &&
+			(node.OnDuplicateAction == plan.Node_UPDATE || dedupIgnoreHasReleaseRows) {
+			// DEDUP UPDATE mutates columns from its right input into the final row
+			// image. DEDUP IGNORE can also carry delete-only rows that release keys
+			// for later candidates. A predicate above either form must stay above
+			// the join or it can change conflict detection.
+			for i, child := range node.Children {
+				childID, cantPushdownChild := builder.pushdownFilters(child, nil, separateNonEquiConds)
+				if len(cantPushdownChild) > 0 {
+					childID = builder.appendNode(&plan.Node{
+						NodeType:   plan.Node_FILTER,
+						Children:   []int32{childID},
+						FilterList: cantPushdownChild,
+					}, nil)
+				}
+				node.Children[i] = childID
+			}
+			cantPushdown = append(cantPushdown, filters...)
+			break
+		}
 		// Record middle: processing JOIN node
 		builder.optimizationHistory = append(builder.optimizationHistory,
 			fmt.Sprintf("pushdownFilters:middle (nodeID: %d, JOIN, filters: %d, onList: %d)", nodeID, len(filters), len(node.OnList)))
@@ -208,7 +615,8 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 
 		if node.JoinType == plan.Node_INNER {
 			for _, cond := range node.OnList {
-				filters = append(filters, splitPlanConjunction(applyDistributivity(builder.GetContext(), cond))...)
+				filters = append(filters, splitPlanConjunction(applyDistributivity(
+					builder.GetContext(), cond, !builder.subqueryPredicatePlanningDisabled()))...)
 			}
 
 			node.OnList = nil
@@ -235,7 +643,8 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 
 			if canTurnInner && node.JoinType == plan.Node_LEFT && joinSides[i] == JoinSideRight && rejectsNull(filter, builder.compCtx.GetProcess()) {
 				for _, cond := range node.OnList {
-					filters = append(filters, splitPlanConjunction(applyDistributivity(builder.GetContext(), cond))...)
+					filters = append(filters, splitPlanConjunction(applyDistributivity(
+						builder.GetContext(), cond, !builder.subqueryPredicatePlanningDisabled()))...)
 				}
 
 				node.JoinType = plan.Node_INNER
@@ -257,8 +666,13 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		} else if node.JoinType == plan.Node_LEFT {
 			var newOnList []*plan.Expr
 			for _, cond := range node.OnList {
-				conj := splitPlanConjunction(applyDistributivity(builder.GetContext(), cond))
+				conj := splitPlanConjunction(applyDistributivity(
+					builder.GetContext(), cond, !builder.subqueryPredicatePlanningDisabled()))
 				for _, conjElem := range conj {
+					if builder.filterPushdownBarrier(conjElem) {
+						newOnList = append(newOnList, conjElem)
+						continue
+					}
 					side := getJoinSideForPushdown(conjElem, leftTags, rightTags, markTag)
 					if side&JoinSideLeft == 0 {
 						rightPushdown = append(rightPushdown, conjElem)
@@ -299,19 +713,23 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 				cantPushdown = append(cantPushdown, filter)
 				continue
 			}
+			if builder.filterPushdownBarrier(filter) {
+				cantPushdown = append(cantPushdown, filter)
+				continue
+			}
 
 			switch joinSides[i] {
 			case JoinSideNone:
 				if filter.GetLit().GetBval() {
 					break
 				}
-
 				switch node.JoinType {
 				case plan.Node_INNER:
 					leftPushdown = append(leftPushdown, DeepCopyExpr(filter))
 					rightPushdown = append(rightPushdown, filter)
 
-				case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE, plan.Node_MARK:
+				case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE, plan.Node_MARK,
+					plan.Node_ASOF, plan.Node_ASOF_LEFT:
 					leftPushdown = append(leftPushdown, filter)
 
 				default:
@@ -354,20 +772,48 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 				cantPushdown = append(cantPushdown, filter)
 
 			case JoinSideMark:
-				if tryMark := filter.GetCol(); tryMark != nil {
-					if tryMark.RelPos == node.BindingTags[0] {
+				if isMarkColumn(filter, node.BindingTags[0]) {
+					if !builder.subqueryPredicatePlanningDisabled() &&
+						!areTruncationSafePredicates(node.OnList) {
+						cantPushdown = append(cantPushdown, filter)
+						break
+					}
+					node.JoinType = plan.Node_SEMI
+					if !builder.subqueryPredicatePlanningDisabled() {
+						node.OnList = unwrapIsTrueFromMarkJoinEqualities(node.OnList, leftTags, rightTags, markTag)
+					}
+					node.BindingTags = nil
+					break
+				}
+				if fExpr := filter.GetF(); fExpr != nil {
+					funcID, _ := function.DecodeOverloadID(fExpr.Func.GetObj())
+					if funcID == function.ISTRUE && len(fExpr.Args) == 1 &&
+						isMarkColumn(fExpr.Args[0], node.BindingTags[0]) {
+						if !builder.subqueryPredicatePlanningDisabled() &&
+							!areTruncationSafePredicates(node.OnList) {
+							cantPushdown = append(cantPushdown, filter)
+							break
+						}
 						node.JoinType = plan.Node_SEMI
+						if !builder.subqueryPredicatePlanningDisabled() {
+							node.OnList = unwrapIsTrueFromMarkJoinEqualities(node.OnList, leftTags, rightTags, markTag)
+						}
 						node.BindingTags = nil
 						break
 					}
-				} else if fExpr := filter.GetF(); fExpr != nil && filter.Typ.NotNullable && fExpr.Func.ObjName == "not" {
-					arg := fExpr.Args[0]
-					if tryMark := arg.GetCol(); tryMark != nil {
-						if tryMark.RelPos == node.BindingTags[0] {
-							node.JoinType = plan.Node_ANTI
-							node.BindingTags = nil
+					if filter.Typ.NotNullable && fExpr.Func.ObjName == "not" && len(fExpr.Args) == 1 &&
+						isTrueMarkColumn(fExpr.Args[0], node.BindingTags[0]) {
+						if !builder.subqueryPredicatePlanningDisabled() &&
+							!areTruncationSafePredicates(node.OnList) {
+							cantPushdown = append(cantPushdown, filter)
 							break
 						}
+						node.JoinType = plan.Node_ANTI
+						if !builder.subqueryPredicatePlanningDisabled() {
+							node.OnList = unwrapIsTrueFromMarkJoinEqualities(node.OnList, leftTags, rightTags, markTag)
+						}
+						node.BindingTags = nil
+						break
 					}
 				}
 
@@ -392,13 +838,14 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 				}
 			}
 
-		case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE:
+		case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE,
+			plan.Node_ASOF, plan.Node_ASOF_LEFT:
 			if len(node.OnList) > 0 {
 				var newOnList []*plan.Expr
 
 				for _, cond := range node.OnList {
 					joinSide := getJoinSideForPushdown(cond, leftTags, rightTags, markTag)
-					if joinSide == JoinSideRight {
+					if joinSide == JoinSideRight && !builder.filterPushdownBarrier(cond) {
 						rightPushdown = append(rightPushdown, cond)
 					} else {
 						newOnList = append(newOnList, cond)
@@ -412,19 +859,30 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		switch node.JoinType {
 		case plan.Node_INNER, plan.Node_SEMI:
 			//inner and semi join can deduce new predicate from both side
-			builder.pushdownFilters(node.Children[0], deduceNewFilterList(rightPushdown, node.OnList), separateNonEquiConds)
-			builder.pushdownFilters(node.Children[1], deduceNewFilterList(leftPushdown, node.OnList), separateNonEquiConds)
+			if deduced := deduceNewFilterList(rightPushdown, node.OnList); len(deduced) > 0 {
+				builder.pushdownFilters(node.Children[0], deduced, separateNonEquiConds)
+			}
+			if deduced := deduceNewFilterList(leftPushdown, node.OnList); len(deduced) > 0 {
+				builder.pushdownFilters(node.Children[1], deduced, separateNonEquiConds)
+			}
 		case plan.Node_RIGHT, plan.Node_ANTI:
 			//right join can deduce new predicate only from right side to left
-			builder.pushdownFilters(node.Children[0], deduceNewFilterList(rightPushdown, node.OnList), separateNonEquiConds)
-		case plan.Node_LEFT, plan.Node_SINGLE:
+			if deduced := deduceNewFilterList(rightPushdown, node.OnList); len(deduced) > 0 {
+				builder.pushdownFilters(node.Children[0], deduced, separateNonEquiConds)
+			}
+		case plan.Node_LEFT, plan.Node_SINGLE, plan.Node_ASOF, plan.Node_ASOF_LEFT:
 			//left join can deduce new predicate only from left side to right
-			builder.pushdownFilters(node.Children[1], deduceNewFilterList(leftPushdown, node.OnList), separateNonEquiConds)
+			if deduced := deduceNewFilterList(leftPushdown, node.OnList); len(deduced) > 0 {
+				builder.pushdownFilters(node.Children[1], deduced, separateNonEquiConds)
+			}
 		}
 
 		if builder.qry.Nodes[node.Children[1]].NodeType == plan.Node_FUNCTION_SCAN {
 
 			for _, filter := range filters {
+				if builder.filterPushdownBarrier(filter) {
+					continue
+				}
 				down := false
 				if builder.checkExprCanPushdown(filter, builder.qry.Nodes[node.Children[0]]) {
 					leftPushdown = append(leftPushdown, DeepCopyExpr(filter))
@@ -472,6 +930,15 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		node.Children[1] = childID
 
 	case plan.Node_UNION, plan.Node_UNION_ALL, plan.Node_MINUS, plan.Node_MINUS_ALL, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
+		// Physical equality keys can identify distinct visible values (for
+		// example PAD SPACE 'a' and 'a '). An outer byte-sensitive predicate
+		// must not change which rows match, cancel or survive deduplication.
+		// Until equivalence-preservation is proven, keep such predicates above
+		// the set operation, while still optimizing each branch's own filters.
+		if node.NodeType != plan.Node_UNION_ALL && len(node.PhysicalEqualityKeyList) > 0 {
+			cantPushdown = append(cantPushdown, filters...)
+			filters = nil
+		}
 		// Record middle: processing UNION/MINUS/INTERSECT node
 		builder.optimizationHistory = append(builder.optimizationHistory,
 			fmt.Sprintf("pushdownFilters:middle (nodeID: %d, %s, filters: %d)", nodeID, node.NodeType, len(filters)))
@@ -480,6 +947,10 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		var canPushDownRight []*plan.Expr
 
 		for _, filter := range filters {
+			if builder.filterPushdownBarrier(filter) {
+				cantPushdown = append(cantPushdown, filter)
+				continue
+			}
 			canPushdown = append(canPushdown, replaceColRefsForSet(DeepCopyExpr(filter), leftChild.ProjectList))
 			canPushDownRight = append(canPushDownRight, replaceColRefsForSet(filter, rightChild.ProjectList))
 		}
@@ -511,10 +982,19 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 			break
 		}
 
+		if len(node.BindingTags) == 0 {
+			node.BindingTags = []int32{0}
+		}
 		projectTag := node.BindingTags[0]
 
 		for _, filter := range filters {
-			canPushdown = append(canPushdown, replaceColRefs(filter, projectTag, node.ProjectList))
+			introducesVolatile := replaceColRefsIntroducesVolatile(filter, projectTag, node.ProjectList)
+			rewritten := replaceColRefs(DeepCopyExpr(filter), projectTag, node.ProjectList)
+			if introducesVolatile {
+				cantPushdown = append(cantPushdown, filter)
+				continue
+			}
+			canPushdown = append(canPushdown, rewritten)
 		}
 
 		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown, separateNonEquiConds)
@@ -540,7 +1020,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 				cantPushdown = append(cantPushdown, filter)
 			}
 		}
-	case plan.Node_FUNCTION_SCAN:
+	case plan.Node_FUNCTION_SCAN, plan.Node_VECTOR_INDEX_SCAN:
 		downFilters := make([]*plan.Expr, 0)
 		selfFilters := make([]*plan.Expr, 0)
 		for _, filter := range filters {
@@ -562,9 +1042,20 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		}
 
 	case plan.Node_APPLY:
-		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], filters, separateNonEquiConds)
+		leftTags := make(map[int32]bool)
+		for _, tag := range builder.enumerateTags(node.Children[0]) {
+			leftTags[tag] = true
+		}
+		for _, filter := range filters {
+			if builder.filterPushdownBarrier(filter) || !containsOnlyTags(filter, leftTags) {
+				cantPushdown = append(cantPushdown, filter)
+			} else {
+				canPushdown = append(canPushdown, filter)
+			}
+		}
+		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown, separateNonEquiConds)
 
-		cantPushdown = cantPushdownChild
+		cantPushdown = append(cantPushdown, cantPushdownChild...)
 
 		node.Children[0] = childID
 	default:
@@ -581,7 +1072,11 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 
 			node.Children[0] = childID
 		} else {
-			cantPushdown = filters
+			// A leaf (e.g. SINK_SCAN): APPEND rather than overwrite, so filters the
+			// limit/offset guard above already moved into cantPushdown are preserved. A
+			// recursive-CTE consumer SINK_SCAN carries Offset (#29332), so an outer WHERE
+			// blocked by the guard would otherwise be silently dropped here (#29065).
+			cantPushdown = append(cantPushdown, filters...)
 		}
 	}
 
@@ -594,6 +1089,428 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 			fmt.Sprintf("pushdownFilters:after (nodeID: %d, no change, cantPushdown: %d)", nodeID, len(cantPushdown)))
 	}
 	return nodeID, cantPushdown
+}
+
+func isMarkColumn(expr *plan.Expr, markTag int32) bool {
+	col := expr.GetCol()
+	return col != nil && col.RelPos == markTag
+}
+
+func isTrueMarkColumn(expr *plan.Expr, markTag int32) bool {
+	if isMarkColumn(expr, markTag) {
+		return true
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) != 1 {
+		return false
+	}
+	funcID, _ := function.DecodeOverloadID(fn.Func.GetObj())
+	return funcID == function.ISTRUE && isMarkColumn(fn.Args[0], markTag)
+}
+
+type existenceJoinKey struct {
+	outer       *plan.Expr
+	inner       *plan.Expr
+	equality    *plan.Expr
+	innerArgIdx int
+}
+
+// rewriteFilteringOrOfExists turns a filtering disjunction of positive
+// existential MARK joins into one SEMI join over the UNION ALL of their key
+// inputs.  A MARK chain must otherwise materialize every large build before
+// the OR can be evaluated, even though a WHERE predicate only needs to know
+// whether any branch has a match.
+//
+// The rule deliberately accepts only a consecutive MARK prefix whose branches
+// have the same deterministic outer equality keys.  Projected markers,
+// NOT EXISTS, IN/ANY three-valued markers, non-equality correlations, and mixed
+// outer keys retain the original MARK semantics.
+func (builder *QueryBuilder) rewriteFilteringOrOfExists(
+	nodeID int32,
+	filters []*plan.Expr,
+) (int32, []*plan.Expr) {
+	if builder.subqueryPredicatePlanningDisabled() {
+		return nodeID, filters
+	}
+	remaining := append([]*plan.Expr(nil), filters...)
+	for {
+		rewritten := false
+		for i, filter := range remaining {
+			newNodeID, ok := builder.rewriteOneFilteringOrOfExists(nodeID, filter)
+			if !ok {
+				continue
+			}
+			nodeID = newNodeID
+			remaining = append(remaining[:i], remaining[i+1:]...)
+			rewritten = true
+			break
+		}
+		if !rewritten {
+			return nodeID, remaining
+		}
+	}
+}
+
+func (builder *QueryBuilder) rewriteOneFilteringOrOfExists(
+	nodeID int32,
+	filter *plan.Expr,
+) (int32, bool) {
+	var markTags []int32
+	if !collectPositiveExistenceMarkTags(filter, &markTags) || len(markTags) < 2 {
+		return nodeID, false
+	}
+
+	wanted := make(map[int32]struct{}, len(markTags))
+	for _, tag := range markTags {
+		if _, exists := wanted[tag]; exists {
+			return nodeID, false
+		}
+		wanted[tag] = struct{}{}
+	}
+
+	markNodes := make([]*plan.Node, 0, len(markTags))
+	baseID := nodeID
+	for len(markNodes) < len(markTags) {
+		if baseID < 0 || int(baseID) >= len(builder.qry.Nodes) {
+			return nodeID, false
+		}
+		markNode := builder.qry.Nodes[baseID]
+		if markNode.NodeType != plan.Node_JOIN || markNode.JoinType != plan.Node_MARK ||
+			len(markNode.Children) != 2 || len(markNode.BindingTags) != 1 {
+			return nodeID, false
+		}
+		if _, ok := wanted[markNode.BindingTags[0]]; !ok {
+			return nodeID, false
+		}
+		delete(wanted, markNode.BindingTags[0])
+		markNodes = append(markNodes, markNode)
+		baseID = markNode.Children[0]
+	}
+	if len(wanted) != 0 {
+		return nodeID, false
+	}
+
+	branchKeys := make([][]existenceJoinKey, len(markNodes))
+	for i, markNode := range markNodes {
+		if builder.planSubtreeContainsVolatile(markNode.Children[1]) {
+			return nodeID, false
+		}
+		keys, ok := builder.extractExistenceJoinKeys(markNode)
+		if !ok {
+			return nodeID, false
+		}
+		if i == 0 {
+			branchKeys[i] = keys
+			continue
+		}
+
+		ordered := make([]existenceJoinKey, len(branchKeys[0]))
+		used := make([]bool, len(keys))
+		for keyIdx, reference := range branchKeys[0] {
+			match := -1
+			for candidateIdx, candidate := range keys {
+				if !used[candidateIdx] && exprStructuralEqual(reference.outer, candidate.outer) {
+					if match != -1 {
+						return nodeID, false
+					}
+					match = candidateIdx
+				}
+			}
+			if match == -1 || !makeTypeByPlan2Expr(reference.inner).Eq(makeTypeByPlan2Expr(keys[match].inner)) {
+				return nodeID, false
+			}
+			used[match] = true
+			ordered[keyIdx] = keys[match]
+		}
+		if len(keys) != len(ordered) {
+			return nodeID, false
+		}
+		branchKeys[i] = ordered
+	}
+
+	branchIDs := make([]int32, len(markNodes))
+	branchTags := make([]int32, len(markNodes))
+	for i, markNode := range markNodes {
+		projectList := make([]*plan.Expr, len(branchKeys[i]))
+		for keyIdx, key := range branchKeys[i] {
+			projectList[keyIdx] = DeepCopyExpr(key.inner)
+		}
+		branchTags[i] = builder.genNewBindTag()
+		branchIDs[i] = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			Children:    []int32{markNode.Children[1]},
+			ProjectList: projectList,
+			BindingTags: []int32{branchTags[i]},
+		}, nil)
+	}
+
+	unionID := branchIDs[0]
+	unionTag := branchTags[0]
+	for i := 1; i < len(branchIDs); i++ {
+		leftProject := builder.qry.Nodes[unionID].ProjectList
+		rightProject := builder.qry.Nodes[branchIDs[i]].ProjectList
+		unionProject := make([]*plan.Expr, len(leftProject))
+		for keyIdx, leftExpr := range leftProject {
+			unionProject[keyIdx] = &plan.Expr{
+				Typ: setOperationOutputType(plan.Node_UNION_ALL, leftExpr.Typ, rightProject[keyIdx].Typ),
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: unionTag,
+					ColPos: int32(keyIdx),
+				}},
+			}
+		}
+		unionTag = builder.genNewBindTag()
+		unionID = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_UNION_ALL,
+			Children:    []int32{unionID, branchIDs[i]},
+			ProjectList: unionProject,
+			BindingTags: []int32{unionTag},
+		}, nil)
+	}
+
+	unionProject := builder.qry.Nodes[unionID].ProjectList
+	joinPredicates := make([]*plan.Expr, len(branchKeys[0]))
+	for keyIdx, key := range branchKeys[0] {
+		equality := DeepCopyExpr(key.equality)
+		unionKey := &plan.Expr{
+			Typ: unionProject[keyIdx].Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: unionTag,
+				ColPos: int32(keyIdx),
+			}},
+		}
+		equality.GetF().Args[key.innerArgIdx] = unionKey
+		equality.Typ.NotNullable = key.outer.Typ.NotNullable && unionKey.Typ.NotNullable
+		joinPredicates[keyIdx] = equality
+	}
+
+	return builder.appendNode(&plan.Node{
+		NodeType: plan.Node_JOIN,
+		Children: []int32{baseID, unionID},
+		JoinType: plan.Node_SEMI,
+		OnList:   joinPredicates,
+		SpillMem: builder.joinSpillMem,
+	}, nil), true
+}
+
+func collectPositiveExistenceMarkTags(expr *plan.Expr, tags *[]int32) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	funcID, _ := function.DecodeOverloadID(fn.Func.GetObj())
+	if funcID == function.OR {
+		return len(fn.Args) == 2 &&
+			collectPositiveExistenceMarkTags(fn.Args[0], tags) &&
+			collectPositiveExistenceMarkTags(fn.Args[1], tags)
+	}
+
+	if funcID != function.ISTRUE || len(fn.Args) != 1 {
+		return false
+	}
+	marker := fn.Args[0].GetCol()
+	if marker == nil || marker.ColPos != 0 {
+		return false
+	}
+	*tags = append(*tags, marker.RelPos)
+	return true
+}
+
+func (builder *QueryBuilder) planSubtreeContainsVolatile(nodeID int32) bool {
+	visited := make(map[int32]bool)
+	var visit func(int32) bool
+	visit = func(currentID int32) bool {
+		if currentID < 0 || int(currentID) >= len(builder.qry.Nodes) || visited[currentID] {
+			return false
+		}
+		visited[currentID] = true
+		node := builder.qry.Nodes[currentID]
+		expressions := [][]*plan.Expr{
+			node.OnList,
+			node.FilterList,
+			node.ProjectList,
+			node.GroupBy,
+			node.AggList,
+			node.WinSpecList,
+			node.TblFuncExprList,
+			node.BlockFilterList,
+			node.FillVal,
+			node.OnUpdateExprs,
+			node.TimeWindowPartitionBy,
+		}
+		for _, list := range expressions {
+			for _, expr := range list {
+				if ContainsVolatileFunction(expr) {
+					return true
+				}
+			}
+		}
+		for _, expr := range []*plan.Expr{
+			node.Limit,
+			node.Offset,
+			node.Interval,
+			node.Sliding,
+			node.Timestamp,
+			node.WEnd,
+		} {
+			if expr != nil && ContainsVolatileFunction(expr) {
+				return true
+			}
+		}
+		for _, orderBy := range node.OrderBy {
+			if ContainsVolatileFunction(orderBy.Expr) {
+				return true
+			}
+		}
+		for _, childID := range node.Children {
+			if visit(childID) {
+				return true
+			}
+		}
+		return false
+	}
+	return visit(nodeID)
+}
+
+func (builder *QueryBuilder) extractExistenceJoinKeys(markNode *plan.Node) ([]existenceJoinKey, bool) {
+	if len(markNode.OnList) == 0 {
+		return nil, false
+	}
+	leftTags := make(map[int32]bool)
+	for _, tag := range builder.enumerateTags(markNode.Children[0]) {
+		leftTags[tag] = true
+	}
+	rightTags := make(map[int32]bool)
+	for _, tag := range builder.enumerateTags(markNode.Children[1]) {
+		rightTags[tag] = true
+	}
+
+	keys := make([]existenceJoinKey, 0, len(markNode.OnList))
+	for _, predicate := range markNode.OnList {
+		if !isTruncationSafePredicateExpr(predicate) {
+			return nil, false
+		}
+		fn := predicate.GetF()
+		if fn == nil || fn.Func == nil || len(fn.Args) != 2 || !IsEqualFunc(fn.Func.GetObj()) {
+			return nil, false
+		}
+		leftSide := getJoinSideWithOuterScope(fn.Args[0], leftTags, rightTags, markNode.BindingTags[0])
+		rightSide := getJoinSideWithOuterScope(fn.Args[1], leftTags, rightTags, markNode.BindingTags[0])
+
+		var outer, inner *plan.Expr
+		innerArgIdx := 1
+		switch {
+		case leftSide == JoinSideLeft && rightSide == JoinSideRight:
+			outer, inner = fn.Args[0], fn.Args[1]
+		case leftSide == JoinSideRight && rightSide == JoinSideLeft:
+			outer, inner = fn.Args[1], fn.Args[0]
+			innerArgIdx = 0
+		default:
+			return nil, false
+		}
+		for _, key := range keys {
+			if exprStructuralEqual(key.outer, outer) {
+				return nil, false
+			}
+		}
+		keys = append(keys, existenceJoinKey{
+			outer:       outer,
+			inner:       inner,
+			equality:    predicate,
+			innerArgIdx: innerArgIdx,
+		})
+	}
+	return keys, true
+}
+
+func unwrapIsTrueFromMarkJoinEqualities(
+	conditions []*plan.Expr,
+	leftTags, rightTags map[int32]bool,
+	markTag int32,
+) []*plan.Expr {
+	for i, condition := range conditions {
+		isTrue := condition.GetF()
+		if isTrue == nil || isTrue.Func == nil || len(isTrue.Args) != 1 {
+			continue
+		}
+		funcID, _ := function.DecodeOverloadID(isTrue.Func.GetObj())
+		if funcID != function.ISTRUE {
+			continue
+		}
+
+		equality := isTrue.Args[0]
+		equalFunc := equality.GetF()
+		if equalFunc == nil || equalFunc.Func == nil || len(equalFunc.Args) != 2 || !IsEqualFunc(equalFunc.Func.GetObj()) {
+			continue
+		}
+		if !isTruncationSafePredicateExpr(equality) {
+			continue
+		}
+
+		leftSide := getJoinSideWithOuterScope(equalFunc.Args[0], leftTags, rightTags, markTag)
+		rightSide := getJoinSideWithOuterScope(equalFunc.Args[1], leftTags, rightTags, markTag)
+		if leftSide == JoinSideLeft && rightSide == JoinSideRight ||
+			leftSide == JoinSideRight && rightSide == JoinSideLeft {
+			conditions[i] = equality
+		}
+	}
+
+	return conditions
+}
+
+// referencesSyntheticGroupKey reports whether expr cannot be rewritten below
+// an aggregate because it refers to a group-key position synthesized by that
+// aggregate branch. Invalid positions and expression variants that
+// replaceColRefs cannot safely rewrite are kept above the aggregate as well.
+func referencesSyntheticGroupKey(expr *plan.Expr, groupTag int32, groupCount int, groupingFlag []bool) bool {
+	if expr == nil {
+		return true
+	}
+
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if exprImpl.F == nil {
+			return true
+		}
+		for _, arg := range exprImpl.F.Args {
+			if referencesSyntheticGroupKey(arg, groupTag, groupCount, groupingFlag) {
+				return true
+			}
+		}
+		return false
+
+	case *plan.Expr_W:
+		// replaceColRefs does not assign its rewritten WindowSpec children back.
+		// Keep windows with group output references above the aggregate.
+		return exprImpl.W == nil || containsTag(expr, groupTag)
+
+	case *plan.Expr_List:
+		// replaceColRefs does not recurse into Expr_List. Keep a list that
+		// contains any group output reference above the aggregate, including
+		// active keys, rather than pushing an expression with stale tags.
+		return exprImpl.List == nil || containsTag(expr, groupTag)
+
+	case *plan.Expr_Col:
+		if exprImpl.Col == nil || exprImpl.Col.RelPos != groupTag {
+			return exprImpl.Col == nil
+		}
+		colPos := exprImpl.Col.ColPos
+		if colPos < 0 || int(colPos) >= groupCount {
+			return true
+		}
+		return len(groupingFlag) > 0 &&
+			(int(colPos) >= len(groupingFlag) || !groupingFlag[colPos])
+
+	case *plan.Expr_Sub, *plan.Expr_Corr:
+		return true
+
+	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Raw,
+		*plan.Expr_T, *plan.Expr_Max, *plan.Expr_Vec, *plan.Expr_Fold:
+		return false
+
+	default:
+		return true
+	}
 }
 
 // order by limit can be pushed down to left child of left join
@@ -615,7 +1532,7 @@ func (builder *QueryBuilder) pushdownTopThroughLeftJoin(nodeID int32) {
 	}
 
 	//before join order, only left join
-	if joinnode.JoinType != plan.Node_LEFT {
+	if joinnode.JoinType != plan.Node_LEFT || builder.joinOwnsConstantDiagnostic(joinnode) {
 		goto END
 	}
 
@@ -657,11 +1574,30 @@ func (builder *QueryBuilder) pushdownLimitToTableScan(nodeID int32) {
 	for _, childID := range node.Children {
 		builder.pushdownLimitToTableScan(childID)
 	}
-	if node.NodeType == plan.Node_PROJECT && len(node.Children) > 0 {
+	if node.NodeType == plan.Node_PROJECT && len(node.Children) > 0 &&
+		(node.Limit != nil || node.Offset != nil) {
 		child := builder.qry.Nodes[node.Children[0]]
 		if child.NodeType == plan.Node_TABLE_SCAN {
-			child.Limit, child.Offset = node.Limit, node.Offset
-			node.Limit, node.Offset = nil, nil
+			if limit, offset, ok := composePagination(
+				child.Limit, child.Offset, node.Limit, node.Offset,
+			); ok {
+				child.Limit, child.Offset = limit, offset
+				node.Limit, node.Offset = nil, nil
+			}
+		} else if node.Offset == nil &&
+			child.NodeType == plan.Node_FUNCTION_SCAN &&
+			child.TableDef != nil && child.TableDef.TblFunc != nil &&
+			child.TableDef.TblFunc.Name == "mo_check_constraints" {
+			// CHECK_CONSTRAINTS is a source function whose rows have no
+			// ordering contract.  A plain LIMIT can therefore be evaluated
+			// by the producer, but OFFSET (or a sort above it) must remain
+			// outside so that the result semantics are unchanged.
+			if limit, offset, ok := composePagination(
+				child.Limit, child.Offset, node.Limit, nil,
+			); ok {
+				child.Limit, child.Offset = limit, offset
+				node.Limit = nil
+			}
 		}
 	}
 }
@@ -670,13 +1606,6 @@ func (builder *QueryBuilder) pushdownVectorIndexTopToTableScan(nodeID int32) {
 	node := builder.qry.Nodes[nodeID]
 	for _, childID := range node.Children {
 		builder.pushdownVectorIndexTopToTableScan(childID)
-	}
-	if node.NodeType == plan.Node_TABLE_SCAN && node.GetTableDef().GetTableType() == catalog.SystemSI_IVFFLAT_TblType_Entries {
-		if ctxVal := builder.compCtx.GetProcess().Ctx.Value(defines.IvfReaderParam{}); ctxVal != nil {
-			if readerParam, ok := ctxVal.(*plan.IndexReaderParam); ok {
-				applyIvfReaderParamToEntriesScan(node, readerParam)
-			}
-		}
 	}
 	if builder.optimizerHints != nil && builder.optimizerHints.pushDownLimitToScan != 0 {
 		return
@@ -700,6 +1629,14 @@ func (builder *QueryBuilder) pushdownVectorIndexTopToTableScan(nodeID int32) {
 		return
 	}
 
+	// The ORDER BY column indexes the child project's list, but the two can disagree:
+	// pruning a derived table's projection (`select count(*) from (<top-k>) t`) empties
+	// the list while the sort keeps its pre-pruning ColPos. This runs on the final plan,
+	// after applyIndices, and the entries-table gate that would reject such a shape is
+	// below — so check before dereferencing rather than panicking the CN.
+	if orderCol.ColPos < 0 || int(orderCol.ColPos) >= len(projNode.ProjectList) {
+		return
+	}
 	orderFunc := projNode.ProjectList[orderCol.ColPos]
 	if metric.DistFuncOpTypes[orderFunc.GetF().GetFunc().GetObjName()] == "" {
 		return
@@ -730,11 +1667,6 @@ func (builder *QueryBuilder) pushdownVectorIndexTopToTableScan(nodeID int32) {
 		},
 		Limit: DeepCopyExpr(node.Limit),
 	}
-	if ctxVal := builder.compCtx.GetProcess().Ctx.Value(defines.IvfReaderParam{}); ctxVal != nil {
-		if readerParam, ok := ctxVal.(*plan.IndexReaderParam); ok {
-			applyIvfReaderParamToEntriesScan(scanNode, readerParam)
-		}
-	}
 
 	// if there is a limit, outcnt is limit number
 	scanNode.Stats.Outcnt = float64(scanNode.Stats.BlockNum) * float64(limitVal)
@@ -753,21 +1685,6 @@ func (builder *QueryBuilder) pushdownVectorIndexTopToTableScan(nodeID int32) {
 	}
 
 	builder.nameByColRef[[2]int32{orderFuncTag, 0}] = "__dist_func__"
-}
-
-func applyIvfReaderParamToEntriesScan(scanNode *plan.Node, readerParam *plan.IndexReaderParam) {
-	if scanNode == nil || scanNode.NodeType != plan.Node_TABLE_SCAN ||
-		scanNode.GetTableDef().GetTableType() != catalog.SystemSI_IVFFLAT_TblType_Entries ||
-		readerParam == nil || readerParam.GetOrigFuncName() == "" {
-		return
-	}
-	if scanNode.IndexReaderParam == nil {
-		scanNode.IndexReaderParam = &plan.IndexReaderParam{}
-	}
-	scanNode.IndexReaderParam.OrigFuncName = readerParam.OrigFuncName
-	scanNode.IndexReaderParam.DistRange = readerParam.DistRange
-	scanNode.IndexReaderParam.PartitionCnCnt = readerParam.PartitionCnCnt
-	scanNode.IndexReaderParam.PartitionCnIdx = readerParam.PartitionCnIdx
 }
 
 // exprColRefsSubsetOf returns true when every column reference in expr

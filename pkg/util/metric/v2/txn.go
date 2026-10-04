@@ -91,6 +91,10 @@ var (
 	TxnLockTotalCounter       = txnLockCounter.WithLabelValues("total")
 	TxnLocalLockTotalCounter  = txnLockCounter.WithLabelValues("local")
 	TxnRemoteLockTotalCounter = txnLockCounter.WithLabelValues("remote")
+	// TxnLockWaitTimeoutCeilingClampedCounter counts positive caller budgets
+	// reduced by the lockservice safety ceiling; zero-value injection is normal
+	// fallback behavior and is intentionally excluded.
+	TxnLockWaitTimeoutCeilingClampedCounter = txnLockCounter.WithLabelValues("wait-timeout-ceiling-clamped")
 
 	TxnDeadlockDetectorEnqueueCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -277,6 +281,19 @@ var (
 	TxnStatementBuildUpdateHistogram            = txnStatementDurationHistogram.WithLabelValues("BuildUpdate")
 	TxnStatementBuildDeleteHistogram            = txnStatementDurationHistogram.WithLabelValues("BuildDelete")
 	TxnStatementBuildLoadHistogram              = txnStatementDurationHistogram.WithLabelValues("BuildLoad")
+
+	txnLoadLogtailReadBarrierDurationHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "load_logtail_read_barrier_duration_seconds",
+			Help:      "LOAD DATA logtail read barrier duration by fixed terminal outcome.",
+			Buckets:   prometheus.ExponentialBuckets(0.0001, 2, 21),
+		}, []string{"outcome"})
+	TxnLoadLogtailReadBarrierSuccessDurationHistogram  = txnLoadLogtailReadBarrierDurationHistogram.WithLabelValues("success")
+	TxnLoadLogtailReadBarrierCanceledDurationHistogram = txnLoadLogtailReadBarrierDurationHistogram.WithLabelValues("canceled")
+	TxnLoadLogtailReadBarrierTimeoutDurationHistogram  = txnLoadLogtailReadBarrierDurationHistogram.WithLabelValues("timeout")
+	TxnLoadLogtailReadBarrierErrorDurationHistogram    = txnLoadLogtailReadBarrierDurationHistogram.WithLabelValues("error")
 
 	txnLockDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{

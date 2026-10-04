@@ -1,3 +1,5 @@
+//go:build !(amd64 && go1.26 && goexperiment.simd)
+
 // Copyright 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,12 +35,11 @@ func L2Distance[T types.RealNumbers](v1, v2 []T) (T, error) {
 */
 
 func L2Distance[T types.RealNumbers](v1, v2 []T) (T, error) {
-	dist, err := L2DistanceSq(v1, v2)
+	sq, err := L2DistanceSq(v1, v2)
 	if err != nil {
-		return dist, err
+		return 0, err
 	}
-
-	return T(math.Sqrt(float64(dist))), nil
+	return L2FromSquared(sq)
 }
 
 /*
@@ -254,20 +255,36 @@ func CosineDistance[T types.RealNumbers](p, q []T) (T, error) {
 		i++
 	}
 
-	// The denominator is the product of the L2 norms (Euclidean lengths).
-	// We must cast to float64 to use the standard library's math.Sqrt.
+	// The denominator is the product of the L2 norms (Euclidean lengths). Each norm is
+	// square-rooted before multiplying so a representable cosine is not lost to an
+	// intermediate overflow of normP*normQ.
+	dot := float64(dotProduct)
 	denominator := math.Sqrt(float64(normV1Sq)) * math.Sqrt(float64(normV2Sq))
+	if !cosineNormsOK(float64(normV1Sq), float64(normV2Sq), smallestNormalOf[T]()) {
+		var normP, normQ float64
+		var ok bool
+		if dot, normP, normQ, ok = cosineRecomputeF64(p, q); !ok {
+			return T(0), moerr.NewInternalErrorNoCtx("cosine distance: vector magnitude overflows the float64 domain")
+		}
+		denominator = math.Sqrt(normP) * math.Sqrt(normQ)
+	}
 
 	// Handle the edge case of a zero-magnitude vector. If the denominator is zero,
 	// the cosine similarity is undefined. A distance of 1.0 is a common convention,
 	// implying the vectors are maximally dissimilar (orthogonal).
 	if denominator == 0 {
-		// This can happen if one or both vectors are all zeros.
+		// A zero denominator means a zero norm. If that vector really is all zeros it takes the
+		// documented convention; if BOTH vectors hold non-zero values the norms underflowed even
+		// in float64 (a float64 element near 1e-200), which has no computable cosine and is
+		// rejected rather than reported as maximally dissimilar.
+		if anyNonZero(p) && anyNonZero(q) {
+			return T(0), moerr.NewInternalErrorNoCtx("cosine distance: vector magnitude underflows the element domain")
+		}
 		return 1.0, nil
 	}
 
 	// Calculate cosine similarity.
-	similarity := float64(dotProduct) / denominator
+	similarity := dot / denominator
 
 	// handle precision issues. Clamp the cosine simliarity to the range [-1, 1].
 	if similarity > 1.0 {
@@ -333,17 +350,28 @@ func CosineSimilarity[T types.RealNumbers](p, q []T) (T, error) {
 		i++
 	}
 
-	// The denominator is the product of the L2 norms (Euclidean lengths).
-	// We must cast to float64 to use the standard library's math.Sqrt.
+	// Each norm is square-rooted before multiplying -- see CosineDistance.
+	dot := float64(dotProduct)
 	denominator := math.Sqrt(float64(normV1Sq)) * math.Sqrt(float64(normV2Sq))
+	if !cosineNormsOK(float64(normV1Sq), float64(normV2Sq), smallestNormalOf[T]()) {
+		var normP, normQ float64
+		var ok bool
+		if dot, normP, normQ, ok = cosineRecomputeF64(p, q); !ok {
+			return T(0), moerr.NewInternalErrorNoCtx("cosine similarity: vector magnitude overflows the float64 domain")
+		}
+		denominator = math.Sqrt(normP) * math.Sqrt(normQ)
+	}
 
 	if denominator == 0 {
-		// This can happen if one or both vectors are all zeros.
+		// See CosineDistance: an underflowed magnitude is distinct from a zero vector.
+		if anyNonZero(p) && anyNonZero(q) {
+			return T(0), moerr.NewInternalErrorNoCtx("cosine similarity: vector magnitude underflows the element domain")
+		}
 		return 0, moerr.NewInternalErrorNoCtx("cosine similarity: one of the vector is zero")
 	}
 
 	// Calculate cosine similarity.
-	similarity := float64(dotProduct) / denominator
+	similarity := dot / denominator
 
 	// handle precision issues. Clamp the cosine simliarity to the range [-1, 1].
 	if similarity > 1.0 {
@@ -408,152 +436,8 @@ func SphericalDistance[T types.RealNumbers](p, q []T) (T, error) {
 	return T(theta / math.Pi), nil
 }
 
-func NormalizeL2[T types.RealNumbers](v1 []T, normalized []T) error {
-
-	if len(v1) == 0 {
-		return moerr.NewInternalErrorNoCtx("cannot normalize empty vector")
-	}
-
-	// Compute the norm of the vector
-	var sumSquares float64
-	for _, val := range v1 {
-		sumSquares += float64(val) * float64(val)
-	}
-	norm := math.Sqrt(sumSquares)
-	if norm == 0 {
-		copy(normalized, v1)
-		return nil
-	}
-
-	// Divide each element by the norm
-	for i, val := range v1 {
-		normalized[i] = T(float64(val) / norm)
-	}
-
-	return nil
-}
-
 func ScaleInPlace[T types.RealNumbers](v []T, scale T) {
 	for i := range v {
 		v[i] *= scale
 	}
-}
-
-// IMPORTANT: Elkans Kmeans always use L2Distance for dense vector or images.  After getting the centroids, we can use other distance function
-// specified by user to assign vector to corresponding centroids (CENTROIDX JOIN / ProductL2).
-
-func ResolveKmeansDistanceFn[T types.RealNumbers](metric MetricType, spherical bool) (DistanceFunction[T], bool, error) {
-	if spherical {
-		return ResolveKmeansDistanceFnForSparse[T](metric)
-	}
-	return ResolveKmeansDistanceFnForDense[T](metric)
-}
-
-func ResolveKmeansDistanceFnForDense[T types.RealNumbers](metric MetricType) (DistanceFunction[T], bool, error) {
-	var distanceFunction DistanceFunction[T]
-	normalize := false
-	switch metric {
-	case Metric_L2Distance:
-		distanceFunction = L2Distance[T]
-		normalize = false
-	case Metric_L2sqDistance:
-		// Elkans Kmeans always uses true L2Distance regardless of user metric.
-		distanceFunction = L2Distance[T]
-		normalize = false
-	case Metric_InnerProduct:
-		distanceFunction = L2Distance[T]
-		normalize = false
-	case Metric_CosineDistance:
-		distanceFunction = L2Distance[T]
-		normalize = false
-	case Metric_L1Distance:
-		distanceFunction = L2Distance[T]
-		normalize = false
-	default:
-		return nil, normalize, moerr.NewInternalErrorNoCtx("invalid distance type")
-	}
-	return distanceFunction, normalize, nil
-}
-
-// IMPORTANT: Spherical Kmeans always use Spherical Distance / Cosine Similarity for Sparse vector or text embedding (TD-IDF).
-// After getting the centroids, we can use other distance function
-// specified by user to assign vector to corresponding centroids (CENTROIDX JOIN / ProductL2).
-func ResolveKmeansDistanceFnForSparse[T types.RealNumbers](metric MetricType) (DistanceFunction[T], bool, error) {
-	var distanceFunction DistanceFunction[T]
-	normalize := false
-	switch metric {
-	case Metric_L2Distance:
-		distanceFunction = L2Distance[T]
-		normalize = false
-	case Metric_L2sqDistance:
-		distanceFunction = L2Distance[T]
-		normalize = false
-	case Metric_InnerProduct:
-		distanceFunction = SphericalDistance[T]
-		normalize = true
-	case Metric_CosineDistance:
-		distanceFunction = SphericalDistance[T]
-		normalize = true
-	case Metric_L1Distance:
-		distanceFunction = L2Distance[T]
-		normalize = false
-	default:
-		return nil, normalize, moerr.NewInternalErrorNoCtx("invalid distance type")
-	}
-	return distanceFunction, normalize, nil
-}
-
-// ResolveDistanceFn is used for similarity score for search and assign vector to centroids (CENTROIDX JOIN / ProductL2).
-// IMPORTANT: Don't use it for Elkans Kmeans.
-// NOTE: Metric_L2Distance returns L2DistanceSq (squared distance). Callers that need true L2
-// must apply sqrt to each result afterwards (as GoPairWiseDistance does).
-func ResolveDistanceFn[T types.RealNumbers](metric MetricType) (DistanceFunction[T], error) {
-	var distanceFunction DistanceFunction[T]
-	switch metric {
-	case Metric_L2Distance:
-		distanceFunction = L2DistanceSq[T] // caller must sqrt; see function doc above
-	case Metric_L2sqDistance:
-		distanceFunction = L2DistanceSq[T]
-	case Metric_InnerProduct:
-		distanceFunction = InnerProduct[T]
-	case Metric_CosineDistance:
-		distanceFunction = CosineDistance[T]
-	case Metric_L1Distance:
-		distanceFunction = L1Distance[T]
-	default:
-		return nil, moerr.NewInternalErrorNoCtx("invalid distance type")
-	}
-	return distanceFunction, nil
-}
-
-func GoPairWiseDistance[T types.RealNumbers](
-	x [][]T,
-	y [][]T,
-	metric MetricType,
-) ([]float32, error) {
-	distFn, err := ResolveDistanceFn[T](metric)
-	if err != nil {
-		return nil, err
-	}
-
-	nX := len(x)
-	nY := len(y)
-	res := make([]float32, nX*nY)
-	for i := 0; i < nX; i++ {
-		for j := 0; j < nY; j++ {
-			d, err := distFn(x[i], y[j])
-			if err != nil {
-				return nil, err
-			}
-			res[i*nY+j] = float32(d)
-		}
-	}
-
-	if metric == Metric_L2Distance {
-		for i := range res {
-			res[i] = float32(math.Sqrt(float64(res[i])))
-		}
-	}
-
-	return res, nil
 }

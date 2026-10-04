@@ -20,7 +20,11 @@
 package compile
 
 import (
+	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -155,8 +159,11 @@ type Hooks interface {
 
 	// HandleReindex is the ALTER … REINDEX path. forceSync mirrors the
 	// existing IVF-FLAT semantics (run synchronously inside the txn) and is
-	// ignored by algorithms that do not support it.
-	HandleReindex(ctx CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error
+	// ignored by algorithms that do not support it. merge requests incremental
+	// compaction (fold + tiered merge of already-built segments) instead of a
+	// full rebuild-from-source; only the bm25 index honors it, every other
+	// algorithm ignores it and rebuilds.
+	HandleReindex(ctx CompileContext, indexDefs map[string]*plan.IndexDef, forceSync, merge bool) error
 
 	// RestoreInitSQL returns (startFromNow, initSQL) for the restored index's
 	// CDC. initSQL rebuilds the index from the cloned rows — run post-commit by
@@ -166,6 +173,29 @@ type Hooks interface {
 	// suffice, e.g. fulltext) and startFromNow is false (the CDC catches the
 	// cloned tables up from their watermark). See Scope.RestoreTable.
 	RestoreInitSQL(ctx CompileContext, indexDefs map[string]*plan.IndexDef) (startFromNow bool, initSQL string, err error)
+
+	// AlterCopyInitSQL returns (startFromNow, initSQL) for the CDC of an UNAFFECTED
+	// plugin index on the replacement table of a COPY ALTER (ALTER … ADD/CHANGE …
+	// that does not touch the indexed column). cloneUnaffectedIndexes SKIPS the clone
+	// for a SkipWholeIndex async index, so the replacement hidden tables start empty
+	// and the CDC is registered from ts=0.
+	//
+	// An algorithm whose ISCP consumer rebuilds the whole index from that ts=0 replay
+	// returns (false, ""): RunHnsw mutates and Save()s the usearch model; IVF-FLAT clones
+	// metadata+centroids and CDC-rebuilds entries; classic fulltext is row-based so the
+	// replay re-inserts its rows.
+	//
+	// An algorithm whose consumer only APPENDS an event tail returns (true, "ALTER …
+	// REINDEX … FORCE_SYNC") instead, run post-commit by the CDC's first iteration to build
+	// the base, then arming the tail at the post-build watermark. fulltext2 (#28837): its
+	// base (tag=0)+metadata are written ONLY by buildFromSource and RunFulltext2 only
+	// appends a cdc_tail, so the ts=0 replay yields a tail with no base and MATCH returns
+	// empty. CAGRA/IVF-PQ (#29011): CagraSync/IvfpqSync are stateless across flushes and
+	// write only tag=1 chunks, so the replay leaves the whole table in the CDC tail with no
+	// sub-index — correct but brute-forced per query, and large enough to refuse admission.
+	// (This differs from their RestoreInitSQL, valid there only because Restore's block
+	// clone copies the base — copy-alter does not.)
+	AlterCopyInitSQL(ctx CompileContext, indexDefs map[string]*plan.IndexDef) (startFromNow bool, initSQL string, err error)
 
 	// ValidateReindexParams checks a parameter update against the algorithm's
 	// schema and returns the merged params map. Replaces the inner switch
@@ -179,6 +209,11 @@ type Hooks interface {
 	// layer already performs). Examples: unregister CDC tasks, unregister
 	// idxcron schedules. May be a no-op.
 	HandleDropIndex(ctx CompileContext, indexDefs map[string]*plan.IndexDef) error
+
+	// HiddenTableDropPriority returns the algorithm-defined drop order for a
+	// hidden table type. Higher values are dropped first. Algorithms that have
+	// no dependency between hidden tables should return 0.
+	HiddenTableDropPriority(algoTableType string) int
 
 	// IdxcronMetadata builds the metadata blob registered with idxcron
 	// alongside the action key (catalog.Hooks.CDC().IdxcronAction).
@@ -203,6 +238,36 @@ type ReindexParamUpdate struct {
 	// Sourced from the parse tree (c.stmt) at the compile site, so no plan
 	// proto field is needed to carry them. nil/empty means none specified.
 	Params map[string]string
+
+	// Merge is true when the reindex is a MERGE (compact the CDC tail into the
+	// base in place) rather than a full REBUILD (re-derive the base from the
+	// source table). A plugin uses it to reject params that a MERGE cannot honor
+	// — e.g. fulltext2 forbids changing POSITION_FREE on a MERGE, since a
+	// tail-into-base compaction cannot re-derive positions the base does not hold.
+	Merge bool
+
+	// BaseVectorType is the type of the indexed column; zero when unknown.
+	BaseVectorType types.T
+}
+
+// ReindexQuantizationChange returns the QUANTIZATION update specifies and whether it differs,
+// ignoring case, from the stored one.
+func ReindexQuantizationChange(old map[string]string, update ReindexParamUpdate) (string, bool) {
+	q, ok := update.Params[catalog.Quantization]
+	if !ok || strings.EqualFold(q, old[catalog.Quantization]) {
+		return q, false
+	}
+	return q, true
+}
+
+// RejectMerge returns an error when update is a MERGE. algo names the index algorithm in the
+// message. For plugins whose HandleReindex has no MERGE (tail-compaction) path.
+func RejectMerge(update ReindexParamUpdate, algo string) error {
+	if !update.Merge {
+		return nil
+	}
+	return moerr.NewNotSupportedNoCtxf(
+		"ALTER ... REINDEX MERGE is not supported for a %s index; use ALTER ... REINDEX without MERGE", algo)
 }
 
 // MergeReindexParams is the shared body for a plugin's

@@ -14,6 +14,8 @@
 
 package types
 
+import "math"
+
 func BoolAscCompare(x, y bool) int {
 	if x == y {
 		return 0
@@ -57,6 +59,117 @@ func GenericAscCompare[T OrderedT](x, y T) int {
 		return -1
 	}
 	return 1
+}
+
+// Float32OrderAscCompare implements the SQL ORDER BY relation for FLOAT.
+// Infinities retain their numeric order. Signed zeroes and all NaN payloads
+// are peers, and NaNs sort after every numeric value.
+func Float32OrderAscCompare(x, y float32) int {
+	if x < y {
+		return -1
+	}
+	if x > y {
+		return 1
+	}
+	if x == y || x != x && y != y {
+		return 0
+	}
+	if x != x {
+		return 1
+	}
+	return -1
+}
+
+// Float32OrderDescCompare keeps NaNs last while reversing numeric order.
+func Float32OrderDescCompare(x, y float32) int {
+	if x > y {
+		return -1
+	}
+	if x < y {
+		return 1
+	}
+	if x == y || x != x && y != y {
+		return 0
+	}
+	if x != x {
+		return 1
+	}
+	return -1
+}
+
+// Float64OrderAscCompare is the float64 counterpart of
+// Float32OrderAscCompare.
+func Float64OrderAscCompare(x, y float64) int {
+	if x < y {
+		return -1
+	}
+	if x > y {
+		return 1
+	}
+	if x == y || x != x && y != y {
+		return 0
+	}
+	if x != x {
+		return 1
+	}
+	return -1
+}
+
+// Float64OrderDescCompare keeps NaNs last while reversing numeric order.
+func Float64OrderDescCompare(x, y float64) int {
+	if x > y {
+		return -1
+	}
+	if x < y {
+		return 1
+	}
+	if x == y || x != x && y != y {
+		return 0
+	}
+	if x != x {
+		return 1
+	}
+	return -1
+}
+
+// Float32TupleAscCompare orders FLOAT values exactly as Packer encodes them.
+// Unlike SQL ordering, the physical tuple-key order distinguishes signed zero
+// and every NaN sign/payload. Consumers that construct byte ranges must use
+// this total order so the endpoints cover every encoded key between them.
+func Float32TupleAscCompare(x, y float32) int {
+	return compareOrderedBits(orderedFloat32Bits(x), orderedFloat32Bits(y))
+}
+
+// Float64TupleAscCompare is the float64 counterpart of
+// Float32TupleAscCompare.
+func Float64TupleAscCompare(x, y float64) int {
+	return compareOrderedBits(orderedFloat64Bits(x), orderedFloat64Bits(y))
+}
+
+func orderedFloat32Bits(v float32) uint32 {
+	bits := math.Float32bits(v)
+	if bits&(uint32(1)<<31) != 0 {
+		return ^bits
+	}
+	return bits ^ (uint32(1) << 31)
+}
+
+func orderedFloat64Bits(v float64) uint64 {
+	bits := math.Float64bits(v)
+	if bits&(uint64(1)<<63) != 0 {
+		return ^bits
+	}
+	return bits ^ (uint64(1) << 63)
+}
+
+func compareOrderedBits[T ~uint32 | ~uint64](x, y T) int {
+	if x < y {
+		return -1
+	}
+	if x > y {
+		return 1
+	}
+	return 0
 }
 
 func BoolDescCompare(x, y bool) int {
@@ -107,6 +220,79 @@ func GenericDescCompare[T OrderedT](x, y T) int {
 // Compare returns an integer comparing two arrays/vectors lexicographically.
 // TODO: this function might not be correct. we need to compare using tolerance for float values.
 // TODO: need to check if we need len(v1)==len(v2) check.
+// ArrayElementCompare orders two narrow-typed vectors lexicographically without
+// materializing any []float32 bridge — it is called once per comparison in the
+// sort/merge/scalar-compare/min-max hot paths, so it must be allocation-free.
+// float32/float64/int8/uint8 compare directly in their native type; bf16/f16
+// widen one scalar at a time to float32 (direct uint16 comparison would be wrong
+// because the sign bit makes bit order disagree with value order).
+func ArrayElementCompare[T ArrayElement](v1, v2 []T) int {
+	switch a := any(v1).(type) {
+	case []float32:
+		return arrayOrderedCompare(a, any(v2).([]float32))
+	case []float64:
+		return arrayOrderedCompare(a, any(v2).([]float64))
+	case []int8:
+		return arrayOrderedCompare(a, any(v2).([]int8))
+	case []uint8:
+		return arrayOrderedCompare(a, any(v2).([]uint8))
+	case []BF16:
+		return arrayFloat16Compare(a, any(v2).([]BF16))
+	case []Float16:
+		return arrayFloat16Compare(a, any(v2).([]Float16))
+	default:
+		panic("ArrayElementCompare: unsupported element type")
+	}
+}
+
+// arrayOrderedCompare compares two slices whose elements support the native `<`
+// operator (float32/float64/int8/uint8), lexicographically then by length.
+func arrayOrderedCompare[T interface {
+	~float32 | ~float64 | ~int8 | ~uint8
+}](v1, v2 []T) int {
+	minLen := len(v1)
+	if len(v2) < minLen {
+		minLen = len(v2)
+	}
+	for i := 0; i < minLen; i++ {
+		if v1[i] < v2[i] {
+			return -1
+		} else if v1[i] > v2[i] {
+			return 1
+		}
+	}
+	if len(v1) < len(v2) {
+		return -1
+	} else if len(v1) > len(v2) {
+		return 1
+	}
+	return 0
+}
+
+// arrayFloat16Compare compares two bf16/f16 slices by widening one scalar at a
+// time to float32 (the sign bit makes raw uint16 order disagree with value
+// order). No slice is allocated.
+func arrayFloat16Compare[T interface{ ToFloat32() float32 }](v1, v2 []T) int {
+	minLen := len(v1)
+	if len(v2) < minLen {
+		minLen = len(v2)
+	}
+	for i := 0; i < minLen; i++ {
+		a, b := v1[i].ToFloat32(), v2[i].ToFloat32()
+		if a < b {
+			return -1
+		} else if a > b {
+			return 1
+		}
+	}
+	if len(v1) < len(v2) {
+		return -1
+	} else if len(v1) > len(v2) {
+		return 1
+	}
+	return 0
+}
+
 func ArrayCompare[T RealNumbers](v1, v2 []T) int {
 	minLen := len(v1)
 	if len(v2) < minLen {
@@ -137,4 +323,16 @@ func CompareArrayFromBytes[T RealNumbers](_x, _y []byte, desc bool) int {
 		return ArrayCompare[T](y, x)
 	}
 	return ArrayCompare[T](x, y)
+}
+
+// CompareArrayElementFromBytes is the narrow-type (bf16/f16/int8) counterpart of
+// CompareArrayFromBytes; it orders through the float32 bridge.
+func CompareArrayElementFromBytes[T ArrayElement](_x, _y []byte, desc bool) int {
+	x := BytesToArray[T](_x)
+	y := BytesToArray[T](_y)
+
+	if desc {
+		return ArrayElementCompare[T](y, x)
+	}
+	return ArrayElementCompare[T](x, y)
 }

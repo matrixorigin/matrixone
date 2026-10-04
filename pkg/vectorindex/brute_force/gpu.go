@@ -65,8 +65,8 @@ func NewAdhocBruteForceIndex[T types.RealNumbers](dataset [][]T,
 	switch dset := any(dataset).(type) {
 	case [][]float32:
 		return NewGpuAdhocBruteForceIndex[float32](dset, dimension, m, elemsz)
-	case [][]uint16:
-		// Convert [][]uint16 to [][]cuvs.Float16 to pass to NewGpuAdhocBruteForceIndex
+	case [][]types.Float16:
+		// types.Float16 (NOT a bare uint16, which could also be BF16) -> cuvs.Float16.
 		f16dset := make([][]cuvs.Float16, len(dset))
 		for i, v := range dset {
 			f16dset[i] = util.UnsafeSliceCast[cuvs.Float16](v)
@@ -138,8 +138,22 @@ func NewGpuAdhocBruteForceIndex[T cuvs.VectorType](dataset [][]T,
 	}, nil
 }
 
+// Preload has nothing to measure: the dataset is supplied at construction.
+func (idx *GpuAdhocBruteForceIndex[T]) Preload(sqlproc *sqlexec.SqlProcess) error { return nil }
+
 func (idx *GpuAdhocBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 	return nil
+}
+
+// GetIndexSize reports the flattened dataset this ad-hoc index holds. The bytes are charged to
+// the HOST arena only: the dataset lives in Go memory and is uploaded per search, so nothing is
+// device RESIDENT between queries -- the transient device copy is bounded by the search itself,
+// not by this cache entry's lifetime.
+// BuildTS is the fulltext2 async-freshness hook; brute-force search has no async watermark.
+func (idx *GpuAdhocBruteForceIndex[T]) BuildTS() int64 { return 0 }
+
+func (idx *GpuAdhocBruteForceIndex[T]) GetIndexSize() (hostBytes, deviceBytes int64) {
+	return int64(len(idx.dataset)) * int64(util.UnsafeSizeOf[T]()), 0
 }
 
 // SearchFloat32 implements VectorIndexSearchIf — writes results into caller-provided slices.
@@ -215,18 +229,28 @@ func (idx *GpuAdhocBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries
 	return
 }
 
-func (idx *GpuAdhocBruteForceIndex[T]) UpdateConfig(sif cache.VectorIndexSearchIf) error {
-	return nil
-}
-
 func (idx *GpuAdhocBruteForceIndex[T]) Destroy() {
 	idx.dataset = nil
 }
 
 type GpuBruteForceIndex[T cuvs.VectorType] struct {
-	index     *cuvs.GpuBruteForce[T]
+	index     *cuvs.GpuBruteForce[T, T]
 	dimension uint
 	count     uint
+	// device is the GPU this index was built on. Retained so the cache can charge its bytes
+	// to that card: an index whose placement is unknown is charged to EVERY card, which
+	// inflates each one's usage and can evict for pressure it does not relieve.
+	device int
+}
+
+// DeviceResidency reports this index's bytes on the one card it occupies. Implements the
+// cache's devicePlacement interface.
+func (idx *GpuBruteForceIndex[T]) DeviceResidency() map[int]int64 {
+	_, device := idx.GetIndexSize()
+	if device <= 0 {
+		return nil
+	}
+	return map[int]int64{idx.device: device}
 }
 
 var _ cache.VectorIndexSearchIf = &GpuBruteForceIndex[float32]{}
@@ -248,7 +272,7 @@ func resolveCuvsDistance(m metric.MetricType) cuvs.DistanceType {
 	}
 }
 
-func NewBruteForceIndex[T types.RealNumbers](dataset [][]T,
+func NewBruteForceIndex[T types.ArrayElement](dataset [][]T,
 	dimension uint,
 	m metric.MetricType,
 	elemsz uint,
@@ -261,20 +285,40 @@ func NewBruteForceIndex[T types.RealNumbers](dataset [][]T,
 		return NewCpuBruteForceIndex[T](dataset, dimension, m, elemsz)
 	}
 
+	// cuVS brute force supports float32 and Float16 only. Switch on the distinct
+	// Go named type so types.BF16 (also uint16-backed) is never mistaken for f16.
 	switch dset := any(dataset).(type) {
-	case [][]float64:
-		return NewCpuBruteForceIndex[T](dataset, dimension, m, elemsz)
 	case [][]float32:
 		return NewGpuBruteForceIndex[float32](dset, dimension, m, elemsz, nthread)
-	case [][]uint16:
-		// Convert [][]uint16 to [][]cuvs.Float16 to pass to NewGpuBruteForceIndex
+	case [][]types.Float16:
 		f16dset := make([][]cuvs.Float16, len(dset))
 		for i, v := range dset {
 			f16dset[i] = util.UnsafeSliceCast[cuvs.Float16](v)
 		}
 		return NewGpuBruteForceIndex[cuvs.Float16](f16dset, dimension, m, elemsz, nthread)
 	default:
-		return nil, moerr.NewInternalErrorNoCtx("type not supported for BruteForceIndex")
+		// float64, bf16, int8, uint8 -> pure-Go CPU brute force.
+		return NewCpuBruteForceIndex[T](dataset, dimension, m, elemsz)
+	}
+}
+
+// DispatchesToDevice reports whether NewBruteForceIndex would build a DEVICE-resident index
+// for element type T under gpuMode. It exists so a caller sizing an index BEFORE it is built
+// charges the arena the build will actually use: the answer depends on the build tag as well as
+// the session, and duplicating either half in the caller is how the two drift apart.
+//
+// It mirrors the dispatch below exactly -- cuVS brute force stores float32 and Float16 only,
+// everything else falls through to the pure-Go CPU index.
+func DispatchesToDevice[T types.ArrayElement](gpuMode bool) bool {
+	if !gpuMode {
+		return false
+	}
+	var zero T
+	switch any(zero).(type) {
+	case float32, types.Float16:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -320,7 +364,7 @@ func NewGpuBruteForceIndex[T cuvs.VectorType](dataset [][]T,
 	}
 
 	deviceID := cuvs.GetNextGpuDeviceId()
-	km, err := cuvs.NewGpuBruteForce[T](flattened, uint64(len(dataset)), uint32(dimension), resolveCuvsDistance(m), uint32(nthread), deviceID)
+	km, err := cuvs.NewGpuBruteForce[T, T](flattened, uint64(len(dataset)), uint32(dimension), resolveCuvsDistance(m), uint32(nthread), deviceID)
 	if err != nil {
 		return nil, err
 	}
@@ -330,14 +374,30 @@ func NewGpuBruteForceIndex[T cuvs.VectorType](dataset [][]T,
 		index:     km,
 		dimension: dimension,
 		count:     uint(len(dataset)),
+		device:    deviceID,
 	}, nil
 }
+
+// Preload has nothing to measure: count and dimension are fixed at construction, so the device
+// cost is known before Build claims it.
+func (idx *GpuBruteForceIndex[T]) Preload(sqlproc *sqlexec.SqlProcess) error { return nil }
 
 func (idx *GpuBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	if idx.index == nil {
 		return moerr.NewInternalErrorNoCtx("GpuBruteForce not initialized")
 	}
 	return idx.index.Build()
+}
+
+// GetIndexSize reports the dataset cuVS holds on the GPU: count * dimension * sizeof(T). It is
+// charged to the DEVICE arena only -- unlike GpuAdhocBruteForceIndex, which keeps its vectors in
+// Go memory and uploads per search, this index owns a built device-resident cuVS index for the
+// whole life of the cache entry, and the Go copy is released at build time.
+// BuildTS is the fulltext2 async-freshness hook; brute-force search has no async watermark.
+func (idx *GpuBruteForceIndex[T]) BuildTS() int64 { return 0 }
+
+func (idx *GpuBruteForceIndex[T]) GetIndexSize() (hostBytes, deviceBytes int64) {
+	return 0, int64(idx.count) * int64(idx.dimension) * int64(util.UnsafeSizeOf[T]())
 }
 
 // SearchFloat32 implements VectorIndexSearchIf — writes results into caller-provided slices.
@@ -424,12 +484,20 @@ func (idx *GpuBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any,
 	return
 }
 
-func (idx *GpuBruteForceIndex[T]) UpdateConfig(sif cache.VectorIndexSearchIf) error {
-	return nil
-}
-
 func (idx *GpuBruteForceIndex[T]) Destroy() {
 	if idx.index != nil {
 		idx.index.Destroy()
 	}
+}
+
+// SearchInto is not yet implemented for this algo (box-free LIMIT path); it will migrate
+// from the []any Search per the SearchOutput plan. Mirrors fulltext2's SearchFloat32 stub.
+func (idx *GpuAdhocBruteForceIndex[T]) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, _ *vectorindex.SearchOutput) error {
+	return moerr.NewInternalErrorNoCtx("SearchInto not supported")
+}
+
+// SearchInto is not yet implemented for this algo (box-free LIMIT path); it will migrate
+// from the []any Search per the SearchOutput plan. Mirrors fulltext2's SearchFloat32 stub.
+func (idx *GpuBruteForceIndex[T]) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, _ *vectorindex.SearchOutput) error {
+	return moerr.NewInternalErrorNoCtx("SearchInto not supported")
 }

@@ -120,9 +120,13 @@ do
   esac
 	dir=$(basename "$file" .proto)
 	mkdir -p "${PB_DIR}/${dir}"
-	"${GOPATH}/bin/protoc" "-I=.:${PROTOC_DIR}:${PROTO_VENDOR_DIR}" "--${outArgName}=paths=source_relative:./pkg/pb/${dir}" "$file"
+	"${GOPATH}/bin/protoc" "-I=.:${PROTOC_DIR}:${PROTO_VENDOR_DIR}" "--${outArgName}=paths=source_relative:./pkg/pb/${dir}" "$(basename "$file")"
     goimports -w "${PB_DIR}/${dir}"/*pb.go
 done
+
+# The gogo generator has no hook for validating preserved unknown enum values.
+# Install the plan Expr owner-boundary check deterministically after generation.
+go run ./proto/postprocess/plan_string_literal_form ./pkg/pb/plan/plan.pb.go
 
 
 # Generate pb file for each package's own

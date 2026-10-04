@@ -16,7 +16,10 @@ package fulltext
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"os"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -98,6 +101,278 @@ func TestPool(t *testing.T) {
 	err = mp.FreeItem(addrs[0])
 	//fmt.Println(err)
 	require.NotNil(t, err)
+}
+
+// TestPoolMemAvailGate covers #25638: growing the pool by another partition also grows the
+// fulltext TVF's non-spillable per-doc maps. Before creating a new block the pool estimates
+// that block's footprint (docvec + map entries) and, if projected live Go heap would exceed
+// the budget (a fraction of total memory), fails cleanly instead of OOMing the CN.
+func TestPoolMemAvailGate(t *testing.T) {
+	origHeap := memGolang
+	origTotal := memTotal
+	origMpool := memMpool
+	defer func() { memGolang = origHeap; memTotal = origTotal; memMpool = origMpool }()
+	memMpool = func() uint64 { return 0 }
+
+	m := mpool.MustNewZeroNoFixed()
+	proc := &process.Process{Base: &process.BaseProcess{}, Ctx: context.Background()}
+	proc.SetMPool(m)
+
+	// dsize=2, partition_cap=6 -> 3 items per partition; est per new block = 6 + (6/2)*MapMemPerItem.
+	mp := NewFixedBytePool(proc, 2, 6, 0)
+
+	// ~1 TiB total, heap ~empty: the first block (3 items) is created and filled fine.
+	// (partition 0 is never gated; the gate only fires when growing PAST it.)
+	memTotal = func() uint64 { return 1 << 40 }
+	memGolang = func() int { return 0 }
+	for i := 0; i < 3; i++ {
+		_, _, err := mp.NewItem()
+		require.NoError(t, err)
+	}
+
+	// heap now at total (well over the 80% budget): creating the next block fails cleanly.
+	memGolang = func() int { return 1 << 40 }
+	_, _, err := mp.NewItem()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "too many documents")
+
+	mp.Close()
+}
+
+// TestPoolFirstPartitionOverBudget covers the review hole where the very first partition was
+// ungated: a CN that is ALREADY over its heap budget must refuse even partition 0 (its docvec
+// plus the per-doc side maps) rather than fail open into an OOM.
+func TestPoolFirstPartitionOverBudget(t *testing.T) {
+	origHeap := memGolang
+	origTotal := memTotal
+	origMpool := memMpool
+	defer func() { memGolang = origHeap; memTotal = origTotal; memMpool = origMpool }()
+	memMpool = func() uint64 { return 0 }
+
+	m := mpool.MustNewZeroNoFixed()
+	proc := &process.Process{Base: &process.BaseProcess{}, Ctx: context.Background()}
+	proc.SetMPool(m)
+
+	mp := NewFixedBytePool(proc, 2, 6, 0)
+
+	// CN heap already past the 80% budget before any partition exists.
+	memTotal = func() uint64 { return 1000 }
+	memGolang = func() int { return 900 } // > 800 budget
+	_, _, err := mp.NewItem()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "too many documents")
+
+	mp.Close()
+}
+
+// TestPoolPartitionZeroFillCrossesBudget covers the review hole that the budget was only
+// re-checked at partition boundaries: the first partition holds ~1M items, so a query whose
+// non-spillable side maps push the heap over budget WHILE filling partition 0 (before it is
+// ever full) must still be refused. The fast-path interval check (HeapCheckInterval) enforces
+// this without waiting for a second partition.
+func TestPoolPartitionZeroFillCrossesBudget(t *testing.T) {
+	origHeap := memGolang
+	origTotal := memTotal
+	origMpool := memMpool
+	origInterval := HeapCheckInterval
+	defer func() {
+		memGolang = origHeap
+		memTotal = origTotal
+		memMpool = origMpool
+		HeapCheckInterval = origInterval
+	}()
+	// isolate from the process-wide mpool counter (this test's own pool
+	// allocations land there and would skew the stubbed budget arithmetic)
+	memMpool = func() uint64 { return 0 }
+
+	m := mpool.MustNewZeroNoFixed()
+	proc := &process.Process{Base: &process.BaseProcess{}, Ctx: context.Background()}
+	proc.SetMPool(m)
+
+	// A large partition_cap (500 items) so every item below lands in partition 0 — the
+	// new-partition gate never fires; only the fast-path interval check can catch the overrun.
+	mp := NewFixedBytePool(proc, 2, 1000, 0)
+	defer mp.Close()
+	HeapCheckInterval = 4 // re-check every 4 items on the fast path
+
+	memTotal = func() uint64 { return 1000 } // 800 budget
+	memGolang = func() int { return 0 }      // under budget
+
+	// Fill several items inside partition 0 (all fast path) while under budget — all accepted.
+	for i := 0; i < 6; i++ {
+		_, _, err := mp.NewItem()
+		require.NoError(t, err, "item %d should be accepted under budget", i)
+	}
+
+	// The heap crosses the budget mid-fill (side maps grew). Still deep inside partition 0
+	// (cap 500), so ONLY the fast-path interval check guards it — within HeapCheckInterval more
+	// items it must refuse, not wait for partition 0 to fill.
+	memGolang = func() int { return 900 } // > 800 budget
+	var err error
+	for i := 0; i <= int(HeapCheckInterval); i++ {
+		if _, _, err = mp.NewItem(); err != nil {
+			break
+		}
+	}
+	require.Error(t, err, "fast-path interval check must refuse once the heap crosses the budget while filling partition 0")
+	require.Contains(t, err.Error(), "too many documents")
+}
+
+// TestPoolUnspillBounded covers the review hole that the top-K scoring pass (fulltext TVF
+// evaluate/sort_topk) GetItems every matched doc, which unspills partitions. Without an
+// eviction policy on that path it would re-materialize ALL spilled partitions and grow
+// resident memory past mem_limit. Here we spill during build, then GetItem every item (as
+// scoring does) and assert resident memory stays bounded instead of re-inflating to full.
+func TestPoolUnspillBounded(t *testing.T) {
+	origHeap := memGolang
+	origTotal := memTotal
+	defer func() { memGolang = origHeap; memTotal = origTotal }()
+	// Keep the NewItem heap-budget gate out of the way; this test exercises the spill/unspill
+	// eviction, not the admission gate.
+	memTotal = func() uint64 { return 1 << 40 }
+	memGolang = func() int { return 0 }
+
+	localFS, err := fileservice.NewLocalFS(
+		context.Background(),
+		defines.LocalFileServiceName,
+		t.TempDir(),
+		fileservice.DisabledCacheConfig,
+		nil,
+	)
+	assert.Nil(t, err)
+	m := mpool.MustNewZeroNoFixed()
+	proc := &process.Process{Base: &process.BaseProcess{FileService: localFS}, Ctx: context.Background()}
+	proc.SetMPool(m)
+
+	// dsize=2, partition_cap=6 (3 items/partition), mem_limit=19 -> forces spilling.
+	// 30 items -> 10 partitions; if unspill were unbounded, GetItem-ing all would push
+	// mem_in_use toward 10*6=60. The bound we assert is mem_limit + partition_cap = 25.
+	const nitem = 30
+	mp := NewFixedBytePool(proc, 2, 6, 19)
+	bound := mp.mem_limit + mp.partition_cap
+
+	addrs := make([]uint64, nitem)
+	for i := 0; i < nitem; i++ {
+		addr, data, err := mp.NewItem()
+		require.Nil(t, err)
+		addrs[i] = addr
+		for j := range data {
+			data[j] = byte(i)
+		}
+		require.LessOrEqual(t, mp.mem_in_use, bound, "build phase exceeded resident bound")
+	}
+
+	// Scoring phase: GetItem every item (random-ish order across partitions). Resident memory
+	// must stay bounded, and every item must still read back correctly.
+	for i, addr := range addrs {
+		data, err := mp.GetItem(addr)
+		require.Nil(t, err)
+		for j := range data {
+			require.Equal(t, byte(i), data[j])
+		}
+		require.LessOrEqual(t, mp.mem_in_use, bound, "unspill on GetItem re-materialized past the resident bound")
+	}
+
+	mp.Close()
+}
+
+// TestPoolUnspillHeapBudgetBinds covers the review point that the top-K unspill path must obey
+// the HEAP budget, not only mem_limit: mem_limit is a fixed default that can EXCEED the heap
+// budget on a small/loaded CN. Here mem_limit is loose but the heap budget is tight during the
+// scoring phase (the CN grew near its budget from other work), so GetItem must evict against the
+// heap budget and keep resident pool memory well below mem_limit.
+
+// TestPoolFreeItemSpilled covers the FreeItem/spill interaction the scoring pass now exercises:
+// after the pool has spilled partitions, freeing every item (as sort_topk/evaluate cleanup does)
+// must not double-subtract resident bytes (mem_in_use underflow) nor panic on spilled partitions.
+func TestPoolFreeItemSpilled(t *testing.T) {
+	origHeap := memGolang
+	origTotal := memTotal
+	defer func() { memGolang = origHeap; memTotal = origTotal }()
+	memTotal = func() uint64 { return 1 << 40 }
+	memGolang = func() int { return 0 }
+
+	localFS, err := fileservice.NewLocalFS(
+		context.Background(),
+		defines.LocalFileServiceName,
+		t.TempDir(),
+		fileservice.DisabledCacheConfig,
+		nil,
+	)
+	assert.Nil(t, err)
+	m := mpool.MustNewZeroNoFixed()
+	proc := &process.Process{Base: &process.BaseProcess{FileService: localFS}, Ctx: context.Background()}
+	proc.SetMPool(m)
+
+	// mem_limit=19 forces spilling across the 10 partitions.
+	const nitem = 30
+	mp := NewFixedBytePool(proc, 2, 6, 19)
+	addrs := make([]uint64, nitem)
+	for i := 0; i < nitem; i++ {
+		addr, _, err := mp.NewItem()
+		require.Nil(t, err)
+		addrs[i] = addr
+	}
+
+	// Free every item; many partitions are spilled at this point. Accounting must land at 0
+	// (no double subtraction from the spilled partitions).
+	for _, addr := range addrs {
+		require.Nil(t, mp.FreeItem(addr))
+	}
+	require.Equal(t, uint64(0), mp.mem_in_use, "mem_in_use should be exactly 0 after freeing all items")
+
+	// double free is still detected.
+	require.Error(t, mp.FreeItem(addrs[0]))
+
+	mp.Close()
+}
+
+// TestPoolSpillExcludesActivePartition covers the regression where GetItem's eviction (which
+// also fires during BUILD, since the fulltext TVF GetItems existing docs to bump word counts)
+// could spill the active NON-FULL append partition; the next NewItem fast path then failed with
+// "NewItem: partition is spillled". Spill() must never evict a partition that can still be
+// appended to. We put a full partition and a non-full active partition both resident, force an
+// aggressive Spill, and assert the active one is protected and still appendable.
+func TestPoolSpillExcludesActivePartition(t *testing.T) {
+	localFS, err := fileservice.NewLocalFS(
+		context.Background(),
+		defines.LocalFileServiceName,
+		t.TempDir(),
+		fileservice.DisabledCacheConfig,
+		nil,
+	)
+	assert.Nil(t, err)
+	m := mpool.MustNewZeroNoFixed()
+	proc := &process.Process{Base: &process.BaseProcess{FileService: localFS}, Ctx: context.Background()}
+	proc.SetMPool(m)
+
+	// Large mem_limit so the build does not auto-spill: both partitions stay resident.
+	mp := NewFixedBytePool(proc, 2, 6, 1<<30)
+
+	// partition 0: 3 items -> full.
+	for i := 0; i < 3; i++ {
+		_, _, err := mp.NewItem()
+		require.Nil(t, err)
+	}
+	// partition 1: 1 item -> non-full, the active append target.
+	_, _, err = mp.NewItem()
+	require.Nil(t, err)
+
+	require.Equal(t, 2, len(mp.partitions))
+	require.True(t, mp.partitions[0].full, "partition 0 should be full")
+	require.False(t, mp.partitions[1].full, "partition 1 should be the non-full active partition")
+
+	// Force the most aggressive eviction (spill everything eligible).
+	mp.spill_size = 16
+	require.Nil(t, mp.Spill())
+
+	// The active non-full partition must NOT have been spilled...
+	require.False(t, mp.partitions[1].Spilled(), "active non-full partition must not be spilled")
+	// ...and must still be appendable (the failing path was Partition.NewItem on a spilled part).
+	_, _, err = mp.NewItem()
+	require.Nil(t, err, "NewItem on the active partition must succeed after eviction")
+
+	mp.Close()
 }
 
 func TestPoolSpill(t *testing.T) {
@@ -250,6 +525,115 @@ func TestPartitionSpill(t *testing.T) {
 
 }
 
+type failingSpillFile struct {
+	*os.File
+	writeMode  string
+	writeErr   error
+	closeErr   error
+	closeCalls int
+}
+
+func (f *failingSpillFile) Write(data []byte) (int, error) {
+	if f.writeMode == "normal" {
+		return f.File.Write(data)
+	}
+	n, err := f.File.Write(data[:1])
+	if err != nil {
+		return n, err
+	}
+	if f.writeMode == "error" {
+		return n, f.writeErr
+	}
+	return n, nil
+}
+
+func (f *failingSpillFile) Close() error {
+	f.closeCalls++
+	err := f.File.Close()
+	if f.closeErr != nil {
+		return f.closeErr
+	}
+	return err
+}
+
+func TestPartitionFailedSpillKeepsDataAndRemovesTemp(t *testing.T) {
+	writeFailure := errors.New("spill write failure")
+	closeFailure := errors.New("spill close failure")
+	for _, tc := range []struct {
+		name      string
+		writeMode string
+		writeErr  error
+		closeErr  error
+		wantErr   error
+	}{
+		{name: "write error", writeMode: "error", writeErr: writeFailure, wantErr: writeFailure},
+		{name: "short write", writeMode: "short", wantErr: io.ErrShortWrite},
+		{name: "close error", writeMode: "normal", closeErr: closeFailure, wantErr: closeFailure},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := &process.Process{Base: &process.BaseProcess{}, Ctx: context.Background()}
+			proc.SetMPool(mpool.MustNewZeroNoFixed())
+			part, err := NewPartition(proc, 0, 8, 2)
+			require.NoError(t, err)
+			t.Cleanup(part.Close)
+			addr, item, err := part.NewItem()
+			require.NoError(t, err)
+			copy(item, "ab")
+
+			file, err := os.CreateTemp(t.TempDir(), "fulltext")
+			require.NoError(t, err)
+			staging := &failingSpillFile{
+				File: file, writeMode: tc.writeMode,
+				writeErr: tc.writeErr, closeErr: tc.closeErr,
+			}
+			require.ErrorIs(t, part.spillToFile(staging), tc.wantErr)
+			require.Equal(t, 1, staging.closeCalls)
+			_, err = os.Stat(file.Name())
+			require.True(t, os.IsNotExist(err), "failed spill left staging file: %v", err)
+			require.False(t, part.Spilled())
+			require.Empty(t, part.spill_fpath)
+			item, err = part.GetItem(GetPartitionOffset(addr))
+			require.NoError(t, err)
+			require.Equal(t, []byte("ab"), item)
+
+			require.NoError(t, part.Spill(), "resident data must permit retry")
+			require.NoError(t, part.Unspill())
+			item, err = part.GetItem(GetPartitionOffset(addr))
+			require.NoError(t, err)
+			require.Equal(t, []byte("ab"), item)
+		})
+	}
+}
+
+func TestPoolPartialSpillAccountsSuccessfulPartitions(t *testing.T) {
+	proc := &process.Process{Base: &process.BaseProcess{}, Ctx: context.Background()}
+	proc.SetMPool(mpool.MustNewZeroNoFixed())
+	pool := NewFixedBytePool(proc, 2, 4, 1024)
+	t.Cleanup(pool.Close)
+	for i := 0; i < 6; i++ {
+		_, _, err := pool.NewItem()
+		require.NoError(t, err)
+	}
+	require.Equal(t, uint64(12), pool.mem_in_use)
+	failure := errors.New("one partition failed")
+	err := pool.spillWith(func(part *Partition) error {
+		if part.Id() == 0 {
+			return failure
+		}
+		return part.Spill()
+	})
+	require.ErrorIs(t, err, failure)
+	require.False(t, pool.partitions[0].Spilled())
+	require.True(t, pool.partitions[1].Spilled())
+	require.Equal(t, uint64(8), pool.mem_in_use)
+
+	require.NoError(t, pool.Spill())
+	require.Equal(t, uint64(0), pool.mem_in_use)
+	for _, part := range pool.partitions {
+		require.True(t, part.Spilled())
+	}
+}
+
 func TestPartitionSpillError(t *testing.T) {
 
 	addrs := make([]uint64, 10)
@@ -350,4 +734,83 @@ func TestPartitionSpillError2(t *testing.T) {
 	p.Close()
 	p.Close()
 
+}
+
+// TestPoolSideBytesCrossBudget: wide varchar doc IDs retain far more side-map bytes per
+// item than the fixed MapMemPerItem estimate, so the fast-path budget re-check must also
+// trigger on ACCUMULATED BYTES (ChargeSideBytes / HeapCheckBytes), not only on item
+// count — otherwise ~2 GiB of key bytes could be admitted between checks at the 65,535-
+// byte varchar maximum (#25638 review).
+func TestPoolSideBytesCrossBudget(t *testing.T) {
+	origHeap := memGolang
+	origTotal := memTotal
+	origMpool := memMpool
+	origBytes := HeapCheckBytes
+	defer func() {
+		memGolang = origHeap
+		memTotal = origTotal
+		memMpool = origMpool
+		HeapCheckBytes = origBytes
+	}()
+
+	m := mpool.MustNewZeroNoFixed()
+	proc := &process.Process{Base: &process.BaseProcess{}, Ctx: context.Background()}
+	proc.SetMPool(m)
+	pool := NewFixedBytePool(proc, 8, 1024*8, 0)
+	defer pool.Close()
+
+	// Budget 800; heap starts under budget so the first items are admitted.
+	memTotal = func() uint64 { return 1000 }
+	memGolang = func() int { return 0 }
+	memMpool = func() uint64 { return 0 }
+	HeapCheckBytes = 1 << 20
+
+	// First item under budget.
+	_, _, err := pool.NewItem()
+	require.NoError(t, err)
+
+	// Simulate wide varchar doc IDs: each new doc retains ~64KB of key bytes.
+	// After ~16 docs the accumulated charge crosses HeapCheckBytes and the next
+	// NewItem must re-check the budget; the heap is now over it, so NewItem fails
+	// long before HeapCheckInterval (16384) items.
+	memGolang = func() int { return 900 } // now over the 800 budget
+	failed := false
+	for i := 0; i < 64; i++ {
+		pool.ChargeSideBytes(64 << 10)
+		if _, _, err = pool.NewItem(); err != nil {
+			failed = true
+			break
+		}
+	}
+	require.True(t, failed, "byte-accumulation must force a budget re-check before HeapCheckInterval items")
+	require.ErrorContains(t, err, "fulltext search aborted")
+}
+
+// TestPoolBudgetIncludesMpool: partition blocks live OFF the Go heap (C allocator via
+// mpool), so the admission budget must count the process-wide mpool bytes as well —
+// a Go-heap-only check fails open when mpools already hold most of the cgroup
+// (#25692 review).
+func TestPoolBudgetIncludesMpool(t *testing.T) {
+	origHeap := memGolang
+	origTotal := memTotal
+	origMpool := memMpool
+	defer func() {
+		memGolang = origHeap
+		memTotal = origTotal
+		memMpool = origMpool
+	}()
+
+	m := mpool.MustNewZeroNoFixed()
+	proc := &process.Process{Base: &process.BaseProcess{}, Ctx: context.Background()}
+	proc.SetMPool(m)
+	pool := NewFixedBytePool(proc, 8, 1024*8, 0)
+	defer pool.Close()
+
+	memTotal = func() uint64 { return 1000 } // budget 800
+	memGolang = func() int { return 100 }    // Go heap alone is fine
+	memMpool = func() uint64 { return 750 }  // but off-heap pools push it over
+
+	_, _, err := pool.NewItem()
+	require.ErrorContains(t, err, "fulltext search aborted",
+		"admission must account off-heap mpool bytes, not only runtime.Alloc")
 }

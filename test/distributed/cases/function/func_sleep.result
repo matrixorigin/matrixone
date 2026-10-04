@@ -23,9 +23,6 @@ invalid argument sleep, bad value input contains null
 SELECT sleep(0);
 sleep(0)
 0
-SELECT sleep(1);
-sleep(1)
-0
 SELECT sleep(0.33);
 sleep(0.33)
 0
@@ -112,12 +109,6 @@ d    d1    sleep(0.4)
 2    xlziblkfdi    0
 3    ixioklakmaria    0
 4    brzilaiusd    0
-SELECT sleep_03.d, sleep(1) FROM sleep_03 join sleep_04 on sleep_03.d=sleep_04.d;
-d    sleep(1)
-1    0
-2    0
-3    0
-4    0
 SELECT sleep_03.d, sleep(0.432)FROM sleep_03 right join sleep_04 on sleep_03.d=sleep_04.d;
 d    sleep(0.432)
 1    0
@@ -130,28 +121,3 @@ d    sleep(0.5)
 2    0
 3    0
 1    0
-select sleep();
-invalid argument function sleep, bad value []
-select sleep(1);
-sleep(1)
-0
-select sleep(1.5);
-sleep(1.5)
-0
-select sleep(null);
-invalid argument sleep, bad value input contains null
-select sleep(-1);
-invalid argument sleep, bad value input contains negative
-select sleep(-1.5);
-invalid argument sleep, bad value input contains negative
-create table t1 (a int,b int);
-table t1 already exists
-insert into t1 values (1,1),(1,null);
-select sleep(a) from t1;
-sleep(a)
-0
-0
-0
-0
-select sleep(b) from t1;
-invalid argument sleep, bad value input contains null

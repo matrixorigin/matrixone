@@ -17,6 +17,7 @@ package function
 import (
 	"bytes"
 	"sort"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -28,6 +29,9 @@ import (
 func betweenImpl(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
+	if isMixedDatetimeTimestampTypes(parameters) {
+		return opBetweenDatetimeTimestamp(parameters, rs, proc, length)
+	}
 	switch paramType.Oid {
 	case types.T_bool:
 		return opBetweenBool(parameters, rs, proc, length)
@@ -76,11 +80,156 @@ func betweenImpl(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			return lhs.Compare(&rhs)
 		})
 
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
+	case types.T_char:
+		return opBetweenBytesWithFunc(parameters, rs, proc, length, selectList, func(a, b []byte) int {
+			return bytes.Compare(bytes.TrimRight(a, " "), bytes.TrimRight(b, " "))
+		})
+	case types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
 		return opBetweenBytesWithFunc(parameters, rs, proc, length, selectList, bytes.Compare)
 	}
 
 	panic("unreached code")
+}
+
+func isMixedDatetimeTimestampTypes(parameters []*vector.Vector) bool {
+	if len(parameters) != 3 {
+		return false
+	}
+	hasDatetime, hasTimestamp := false, false
+	for _, parameter := range parameters {
+		switch parameter.GetType().Oid {
+		case types.T_datetime:
+			hasDatetime = true
+		case types.T_timestamp:
+			hasTimestamp = true
+		default:
+			return false
+		}
+	}
+	return hasDatetime && hasTimestamp
+}
+
+func opBetweenDatetimeTimestamp(
+	parameters []*vector.Vector,
+	result *vector.FunctionResult[bool],
+	proc *process.Process,
+	length int,
+) error {
+	zone := proc.GetSessionInfo().TimeZone
+	valueScale := parameters[0].GetType().Scale
+	lowerScale := parameters[1].GetType().Scale
+	upperScale := parameters[2].GetType().Scale
+
+	switch {
+	case parameters[0].GetType().Oid == types.T_datetime &&
+		parameters[1].GetType().Oid == types.T_datetime:
+		return opBetweenTemporal[types.Datetime, types.Datetime, types.Timestamp](
+			parameters, result, length,
+			func(value, lower types.Datetime) bool { return value >= lower },
+			func(value types.Datetime, upper types.Timestamp) bool {
+				return value.ToTimestamp(zone).TruncateToScale(upperScale) <= upper
+			})
+	case parameters[0].GetType().Oid == types.T_datetime &&
+		parameters[2].GetType().Oid == types.T_datetime:
+		return opBetweenTemporal[types.Datetime, types.Timestamp, types.Datetime](
+			parameters, result, length,
+			func(value types.Datetime, lower types.Timestamp) bool {
+				return value.ToTimestamp(zone).TruncateToScale(lowerScale) >= lower
+			},
+			func(value, upper types.Datetime) bool { return value <= upper })
+	case parameters[0].GetType().Oid == types.T_datetime:
+		return opBetweenDatetimeAndTimestampBounds(
+			parameters, result, zone, lowerScale, length,
+		)
+	case parameters[0].GetType().Oid == types.T_timestamp &&
+		parameters[1].GetType().Oid == types.T_timestamp:
+		return opBetweenTemporal[types.Timestamp, types.Timestamp, types.Datetime](
+			parameters, result, length,
+			func(value, lower types.Timestamp) bool { return value >= lower },
+			func(value types.Timestamp, upper types.Datetime) bool {
+				return value <= upper.ToTimestamp(zone).TruncateToScale(valueScale)
+			})
+	case parameters[0].GetType().Oid == types.T_timestamp &&
+		parameters[2].GetType().Oid == types.T_timestamp:
+		return opBetweenTemporal[types.Timestamp, types.Datetime, types.Timestamp](
+			parameters, result, length,
+			func(value types.Timestamp, lower types.Datetime) bool {
+				return value >= lower.ToTimestamp(zone).TruncateToScale(valueScale)
+			},
+			func(value, upper types.Timestamp) bool { return value <= upper })
+	default:
+		return opBetweenTemporal[types.Timestamp, types.Datetime, types.Datetime](
+			parameters, result, length,
+			func(value types.Timestamp, lower types.Datetime) bool {
+				return value >= lower.ToTimestamp(zone).TruncateToScale(valueScale)
+			},
+			func(value types.Timestamp, upper types.Datetime) bool {
+				return value <= upper.ToTimestamp(zone).TruncateToScale(valueScale)
+			})
+	}
+}
+
+// The pre-existing BETWEEN cast rule converted the value using the lower
+// comparison's target type, then reused that value for the upper comparison.
+// Preserve that observable precision contract while keeping the plan operands
+// cross-typed so storage can still see an unwrapped DATETIME column.
+func opBetweenDatetimeAndTimestampBounds(
+	parameters []*vector.Vector,
+	result *vector.FunctionResult[bool],
+	zone *time.Location,
+	timestampScale int32,
+	length int,
+) error {
+	valueParam := vector.GenerateFunctionFixedTypeParameter[types.Datetime](parameters[0])
+	lowerParam := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](parameters[1])
+	upperParam := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](parameters[2])
+	resultVector := result.GetResultVector()
+	values := vector.MustFixedColNoTypeCheck[bool](resultVector)
+	resultNulls := resultVector.GetNulls()
+
+	for i := uint64(0); i < uint64(length); i++ {
+		value, valueNull := valueParam.GetValue(i)
+		lower, lowerNull := lowerParam.GetValue(i)
+		upper, upperNull := upperParam.GetValue(i)
+		if valueNull || lowerNull || upperNull {
+			resultNulls.Add(i)
+			continue
+		}
+		instant := value.ToTimestamp(zone).TruncateToScale(timestampScale)
+		values[i] = instant >= lower && instant <= upper
+	}
+	return nil
+}
+
+func opBetweenTemporal[
+	V types.Datetime | types.Timestamp,
+	L types.Datetime | types.Timestamp,
+	U types.Datetime | types.Timestamp,
+](
+	parameters []*vector.Vector,
+	result *vector.FunctionResult[bool],
+	length int,
+	matchesLower func(V, L) bool,
+	matchesUpper func(V, U) bool,
+) error {
+	valueParam := vector.GenerateFunctionFixedTypeParameter[V](parameters[0])
+	lowerParam := vector.GenerateFunctionFixedTypeParameter[L](parameters[1])
+	upperParam := vector.GenerateFunctionFixedTypeParameter[U](parameters[2])
+	resultVector := result.GetResultVector()
+	values := vector.MustFixedColNoTypeCheck[bool](resultVector)
+	resultNulls := resultVector.GetNulls()
+
+	for i := uint64(0); i < uint64(length); i++ {
+		value, valueNull := valueParam.GetValue(i)
+		lower, lowerNull := lowerParam.GetValue(i)
+		upper, upperNull := upperParam.GetValue(i)
+		if valueNull || lowerNull || upperNull {
+			resultNulls.Add(i)
+			continue
+		}
+		values[i] = matchesLower(value, lower) && matchesUpper(value, upper)
+	}
+	return nil
 }
 
 func opBetweenBool(
@@ -89,6 +238,17 @@ func opBetweenBool(
 	_ *process.Process,
 	length int,
 ) error {
+	if hasBetweenRowBounds(parameters) {
+		return opBetweenFixedRows(parameters, result, length, func(left, right bool) int {
+			if left == right {
+				return 0
+			}
+			if !left {
+				return -1
+			}
+			return 1
+		})
+	}
 	if parameters[1].IsConstNull() || parameters[2].IsConstNull() {
 		nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
 		return nil
@@ -171,6 +331,17 @@ func opBetweenFixed[T constraints.Integer | constraints.Float](
 	_ *process.Process,
 	length int,
 ) error {
+	if hasBetweenRowBounds(parameters) {
+		return opBetweenFixedRows(parameters, result, length, func(left, right T) int {
+			if left < right {
+				return -1
+			}
+			if left > right {
+				return 1
+			}
+			return 0
+		})
+	}
 	if parameters[1].IsConstNull() || parameters[2].IsConstNull() {
 		nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
 		return nil
@@ -239,6 +410,9 @@ func opBetweenFixedWithFn[T types.FixedSizeTExceptStrType](
 	length int,
 	compareFunc func(v1, v2 T) int,
 ) error {
+	if hasBetweenRowBounds(parameters) {
+		return opBetweenFixedRows(parameters, result, length, compareFunc)
+	}
 	if parameters[1].IsConstNull() || parameters[2].IsConstNull() {
 		nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
 		return nil
@@ -308,6 +482,9 @@ func opBetweenBytesWithFunc(
 	_ *FunctionSelectList,
 	compareFunc func(v1, v2 []byte) int,
 ) error {
+	if hasBetweenRowBounds(parameters) {
+		return opBetweenBytesRows(parameters, result, length, compareFunc)
+	}
 	if parameters[1].IsConstNull() || parameters[2].IsConstNull() {
 		nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
 		return nil
@@ -366,6 +543,101 @@ func opBetweenBytesWithFunc(
 		}
 	}
 
+	return nil
+}
+
+func hasBetweenRowBounds(parameters []*vector.Vector) bool {
+	return (!parameters[1].IsConst() && parameters[1].Length() > 1) ||
+		(!parameters[2].IsConst() && parameters[2].Length() > 1)
+}
+
+func opBetweenFixedRows[T types.FixedSizeTExceptStrType](
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	length int,
+	compareFunc func(v1, v2 T) int,
+) error {
+	valueParam := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
+	lowerParam := vector.GenerateFunctionFixedTypeParameter[T](parameters[1])
+	upperParam := vector.GenerateFunctionFixedTypeParameter[T](parameters[2])
+	resultVector := result.GetResultVector()
+	values := vector.MustFixedColNoTypeCheck[bool](resultVector)
+	resultNulls := resultVector.GetNulls()
+	for i := uint64(0); i < uint64(length); i++ {
+		valueIndex, lowerIndex, upperIndex := i, i, i
+		if parameters[0].Length() == 1 {
+			valueIndex = 0
+		}
+		if parameters[1].Length() == 1 {
+			lowerIndex = 0
+		}
+		if parameters[2].Length() == 1 {
+			upperIndex = 0
+		}
+		value, valueNull := valueParam.GetValue(valueIndex)
+		lower, lowerNull := lowerParam.GetValue(lowerIndex)
+		upper, upperNull := upperParam.GetValue(upperIndex)
+		if valueNull {
+			resultNulls.Add(i)
+			continue
+		}
+		lowerFalse := !lowerNull && compareFunc(value, lower) < 0
+		upperFalse := !upperNull && compareFunc(value, upper) > 0
+		if lowerFalse || upperFalse {
+			values[i] = false
+			continue
+		}
+		if lowerNull || upperNull {
+			resultNulls.Add(i)
+			continue
+		}
+		values[i] = true
+	}
+	return nil
+}
+
+func opBetweenBytesRows(
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	length int,
+	compareFunc func(v1, v2 []byte) int,
+) error {
+	valueParam := vector.GenerateFunctionStrParameter(parameters[0])
+	lowerParam := vector.GenerateFunctionStrParameter(parameters[1])
+	upperParam := vector.GenerateFunctionStrParameter(parameters[2])
+	resultVector := result.GetResultVector()
+	values := vector.MustFixedColNoTypeCheck[bool](resultVector)
+	resultNulls := resultVector.GetNulls()
+	for i := uint64(0); i < uint64(length); i++ {
+		valueIndex, lowerIndex, upperIndex := i, i, i
+		if parameters[0].Length() == 1 {
+			valueIndex = 0
+		}
+		if parameters[1].Length() == 1 {
+			lowerIndex = 0
+		}
+		if parameters[2].Length() == 1 {
+			upperIndex = 0
+		}
+		value, valueNull := valueParam.GetStrValue(valueIndex)
+		lower, lowerNull := lowerParam.GetStrValue(lowerIndex)
+		upper, upperNull := upperParam.GetStrValue(upperIndex)
+		if valueNull {
+			resultNulls.Add(i)
+			continue
+		}
+		lowerFalse := !lowerNull && compareFunc(value, lower) < 0
+		upperFalse := !upperNull && compareFunc(value, upper) > 0
+		if lowerFalse || upperFalse {
+			values[i] = false
+			continue
+		}
+		if lowerNull || upperNull {
+			resultNulls.Add(i)
+			continue
+		}
+		values[i] = true
+	}
 	return nil
 }
 

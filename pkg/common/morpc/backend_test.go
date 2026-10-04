@@ -16,12 +16,15 @@ package morpc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,10 +32,13 @@ import (
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 // testError is a custom error type for testing to avoid Makefile err-check
@@ -68,6 +74,37 @@ func TestSend(t *testing.T) {
 	)
 }
 
+func TestBackendRequestLifecycleMetricsEndToEnd(t *testing.T) {
+	testBackendSend(t,
+		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
+			return conn.Write(msg, goetty.WriteOptions{Flush: true})
+		},
+		func(b *remoteBackend) {
+			startedBefore := testutil.ToFloat64(b.metrics.requestStartedCounter)
+			completedBefore := requestCompletedCount(b.metrics)
+			successBefore := testutil.ToFloat64(
+				b.metrics.requestCompletedCounters[requestOutcomeSuccess])
+			durationBefore, _ := observerHistogram(t, b.metrics.requestDurationHistogram)
+
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			f, err := b.Send(ctx, newTestMessage(1))
+			require.NoError(t, err)
+			resp, err := f.Get()
+			require.NoError(t, err)
+			require.NotNil(t, resp)
+			f.Close()
+
+			require.Equal(t, startedBefore+1, testutil.ToFloat64(b.metrics.requestStartedCounter))
+			require.Equal(t, completedBefore+1, requestCompletedCount(b.metrics))
+			require.Equal(t, successBefore+1, testutil.ToFloat64(
+				b.metrics.requestCompletedCounters[requestOutcomeSuccess]))
+			durationCount, _ := observerHistogram(t, b.metrics.requestDurationHistogram)
+			require.Equal(t, durationBefore+1, durationCount)
+		},
+	)
+}
+
 func TestSendContextErrorReleasesFuture(t *testing.T) {
 	rb := &remoteBackend{
 		codec:      newTestCodec(),
@@ -98,10 +135,382 @@ func TestSendContextErrorReleasesFuture(t *testing.T) {
 		"a future that was never enqueued must be removed on Send failure")
 }
 
+func TestSendFailureKeepsRequestOwnership(t *testing.T) {
+	var released atomic.Int32
+	rb := &remoteBackend{
+		codec:      newTestCodec(),
+		metrics:    newMetrics(""),
+		waitWriteC: make(chan struct{}, 1),
+		writeC:     make(chan *Future, 1),
+	}
+	rb.options.releaseRequest = func(Message) {
+		released.Add(1)
+	}
+	rb.stateMu.state = stateStopped
+	rb.mu.futures = make(map[uint64]*Future)
+	rb.pool.futures = &sync.Pool{
+		New: func() any {
+			return newFuture(rb.releaseFuture)
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	future, err := rb.Send(ctx, newTestMessage(1))
+	require.ErrorIs(t, err, backendClosed)
+	require.Nil(t, future)
+	require.Zero(t, released.Load(),
+		"a request that was not enqueued remains owned by the caller")
+}
+
+func TestBackendMetricsAggregateAcrossBackends(t *testing.T) {
+	m := newMetrics(t.Name())
+	newBackend := func() *remoteBackend {
+		rb := &remoteBackend{
+			metrics:    m,
+			codec:      newTestCodec(),
+			writeC:     make(chan *Future, 8),
+			waitWriteC: make(chan struct{}, 1),
+		}
+		rb.options.busySize = 2
+		rb.stateMu.state = stateRunning
+		rb.mu.futures = make(map[uint64]*Future)
+		return rb
+	}
+	rb1 := newBackend()
+	rb2 := newBackend()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+	newQueuedFuture := func(id uint64) *Future {
+		f := newFuture(nil)
+		f.init(newTestRPCMessage(ctx, id))
+		return f
+	}
+
+	require.NoError(t, rb1.doSend(newQueuedFuture(1)))
+	require.NoError(t, rb1.doSend(newQueuedFuture(2)))
+	require.NoError(t, rb2.doSend(newQueuedFuture(3)))
+	require.Equal(t, float64(3), testutil.ToFloat64(m.sendingQueueSizeGauge))
+	require.Equal(t, float64(3), testutil.ToFloat64(m.writeQueueLengthGauge))
+	require.Equal(t, float64(1), testutil.ToFloat64(m.busyGauge),
+		"busy is the count of busy backends, not the last backend's boolean")
+
+	require.Len(t, rb1.fetchN(nil, 1), 1)
+	require.Equal(t, float64(2), testutil.ToFloat64(m.sendingQueueSizeGauge))
+	require.Equal(t, float64(0), testutil.ToFloat64(m.busyGauge))
+	require.Len(t, rb1.fetchN(nil, 8), 1)
+	require.Len(t, rb2.fetchN(nil, 8), 1)
+	require.Equal(t, float64(0), testutil.ToFloat64(m.sendingQueueSizeGauge))
+	require.Equal(t, float64(0), testutil.ToFloat64(m.writeQueueLengthGauge))
+}
+
+func TestBackendQueueMetricsReturnToZeroOnCloseDrain(t *testing.T) {
+	m := newMetrics(t.Name())
+	rb := &remoteBackend{
+		metrics:    m,
+		codec:      newTestCodec(),
+		writeC:     make(chan *Future, 8),
+		waitWriteC: make(chan struct{}, 1),
+	}
+	rb.options.busySize = 1
+	rb.stateMu.state = stateRunning
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+	for id := uint64(1); id <= 3; id++ {
+		f := newFuture(nil)
+		f.init(newTestRPCMessage(ctx, id))
+		f.ref()
+		require.NoError(t, rb.doSend(f))
+	}
+	require.Equal(t, float64(3), testutil.ToFloat64(m.sendingQueueSizeGauge))
+	require.Equal(t, float64(1), testutil.ToFloat64(m.busyGauge))
+
+	rb.makeAllWritesDoneWithClosed()
+	require.Equal(t, float64(0), testutil.ToFloat64(m.sendingQueueSizeGauge))
+	require.Equal(t, float64(0), testutil.ToFloat64(m.writeQueueLengthGauge))
+	require.Equal(t, float64(0), testutil.ToFloat64(m.busyGauge))
+}
+
+func TestBackendQueueMetricsConcurrentProducersAndConsumer(t *testing.T) {
+	m := newMetrics(t.Name())
+	rb := &remoteBackend{
+		metrics:    m,
+		codec:      newTestCodec(),
+		writeC:     make(chan *Future, 32),
+		waitWriteC: make(chan struct{}, 1),
+	}
+	rb.options.busySize = 16
+	rb.stateMu.state = stateRunning
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	const producers = 8
+	const perProducer = 128
+	const total = producers * perProducer
+	consumerDone := make(chan struct{})
+	go func() {
+		defer close(consumerDone)
+		for range total {
+			select {
+			case <-ctx.Done():
+				return
+			case <-rb.writeC:
+				rb.changeQueueDepth(-1)
+				rb.notifyWaitWrite()
+			}
+		}
+	}()
+
+	var wg sync.WaitGroup
+	errorsC := make(chan error, total)
+	for producer := range producers {
+		wg.Add(1)
+		go func(producer int) {
+			defer wg.Done()
+			for offset := range perProducer {
+				id := uint64(producer*perProducer + offset + 1)
+				f := newFuture(nil)
+				f.init(newTestRPCMessage(ctx, id))
+				if err := rb.doSend(f); err != nil {
+					errorsC <- err
+					return
+				}
+			}
+		}(producer)
+	}
+	wg.Wait()
+	close(errorsC)
+	for err := range errorsC {
+		require.NoError(t, err)
+	}
+	select {
+	case <-consumerDone:
+	case <-ctx.Done():
+		t.Fatal("queue consumer did not drain all produced Futures")
+	}
+
+	require.Equal(t, float64(0), testutil.ToFloat64(m.sendingQueueSizeGauge))
+	require.Equal(t, float64(0), testutil.ToFloat64(m.writeQueueLengthGauge))
+	require.Equal(t, float64(0), testutil.ToFloat64(m.busyGauge))
+}
+
+func TestActiveFutureMetricAggregatesAndDeletesExactlyOnce(t *testing.T) {
+	m := newMetrics(t.Name())
+	newBackend := func() *remoteBackend {
+		rb := &remoteBackend{metrics: m}
+		rb.mu.futures = make(map[uint64]*Future)
+		return rb
+	}
+	rb1 := newBackend()
+	rb2 := newBackend()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+
+	f1 := newFuture(nil)
+	f1.init(newTestRPCMessage(ctx, 1))
+	f2 := newFuture(nil)
+	f2.init(newTestRPCMessage(ctx, 2))
+	rb1.addFuture(f1)
+	rb2.addFuture(f2)
+	require.Equal(t, float64(2), testutil.ToFloat64(m.activeRequestsGauge))
+
+	rb1.mu.Lock()
+	require.True(t, rb1.deleteFutureLocked(1))
+	require.False(t, rb1.deleteFutureLocked(1))
+	rb1.mu.Unlock()
+	require.Equal(t, float64(1), testutil.ToFloat64(m.activeRequestsGauge))
+	rb2.clean()
+	require.Equal(t, float64(0), testutil.ToFloat64(m.activeRequestsGauge))
+}
+
+func TestSnapshotGaugeDeltasAggregateAcrossOwners(t *testing.T) {
+	clientMetrics1 := newMetrics(t.Name() + "-client")
+	clientMetrics2 := newMetrics(t.Name() + "-client")
+	clientMetrics1.setBackendPoolSize(2)
+	clientMetrics2.setBackendPoolSize(3)
+	require.Equal(t, float64(5), testutil.ToFloat64(clientMetrics1.poolSizeGauge))
+	clientMetrics1.setBackendPoolSize(1)
+	require.Equal(t, float64(4), testutil.ToFloat64(clientMetrics1.poolSizeGauge))
+	clientMetrics1.setBackendPoolSize(0)
+	clientMetrics2.setBackendPoolSize(0)
+	require.Equal(t, float64(0), testutil.ToFloat64(clientMetrics1.poolSizeGauge))
+
+	serverMetrics1 := newServerMetrics(t.Name() + "-server")
+	serverMetrics2 := newServerMetrics(t.Name() + "-server")
+	server1 := &server{metrics: serverMetrics1, sessions: &sync.Map{}}
+	server2 := &server{metrics: serverMetrics2, sessions: &sync.Map{}}
+	server1Sessions := []*clientSession{{}, {}}
+	server2Sessions := []*clientSession{{}, {}, {}}
+	for id, session := range server1Sessions {
+		server1.loadOrStoreClientSession(uint64(id), session)
+	}
+	for id, session := range server2Sessions {
+		server2.loadOrStoreClientSession(uint64(id), session)
+	}
+	require.Equal(t, float64(5), testutil.ToFloat64(serverMetrics1.sessionSizeGauge))
+	require.True(t, server1.deleteClientSession(0, server1Sessions[0]))
+	require.Equal(t, float64(4), testutil.ToFloat64(serverMetrics1.sessionSizeGauge))
+	require.True(t, server1.deleteClientSession(1, server1Sessions[1]))
+	for id, session := range server2Sessions {
+		require.True(t, server2.deleteClientSession(uint64(id), session))
+	}
+	require.Equal(t, float64(0), testutil.ToFloat64(serverMetrics1.sessionSizeGauge))
+}
+
+func TestRequestDoneCloseAndPoolReuseRace(t *testing.T) {
+	m := newMetrics(t.Name())
+	rb := &remoteBackend{
+		metrics: m,
+		logger:  zap.NewNop(),
+	}
+	rb.mu.futures = make(map[uint64]*Future)
+	rb.mu.activeStreams = make(map[uint64]*stream)
+	rb.pool.futures = &sync.Pool{New: func() any {
+		return newFuture(rb.releaseFuture)
+	}}
+	const generations = 256
+	startedBefore := testutil.ToFloat64(m.requestStartedCounter)
+	completedBefore := requestCompletedCount(m)
+
+	for generation := 1; generation <= generations; generation++ {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+		id := uint64(generation)
+		f := rb.newFuture()
+		f.init(newTestRPCMessage(ctx, id))
+		f.enableRequestMetrics(m)
+		rb.addFuture(f)
+
+		var wg sync.WaitGroup
+		wg.Add(3)
+		go func() {
+			defer wg.Done()
+			f.messageSent(nil)
+		}()
+		go func() {
+			defer wg.Done()
+			f.Close()
+		}()
+		go func() {
+			defer wg.Done()
+			rb.requestDone(ctx, id, RPCMessage{Message: newTestMessage(id)}, nil, nil)
+		}()
+		wg.Wait()
+		cancel()
+
+		rb.mu.RLock()
+		require.Empty(t, rb.mu.futures)
+		rb.mu.RUnlock()
+	}
+
+	require.Equal(t, startedBefore+generations, testutil.ToFloat64(m.requestStartedCounter))
+	require.Equal(t, completedBefore+generations, requestCompletedCount(m))
+	require.Equal(t, float64(0), testutil.ToFloat64(m.activeRequestsGauge))
+}
+
+func TestFailAllWaitingCloseAndPoolReuseRace(t *testing.T) {
+	m := newMetrics(t.Name())
+	rb := &remoteBackend{
+		metrics: m,
+		remote:  "test-remote",
+	}
+	rb.mu.futures = make(map[uint64]*Future)
+	rb.mu.activeStreams = make(map[uint64]*stream)
+	rb.pool.futures = &sync.Pool{New: func() any {
+		return newFuture(rb.releaseFuture)
+	}}
+	const generations = 256
+	startedBefore := testutil.ToFloat64(m.requestStartedCounter)
+	completedBefore := requestCompletedCount(m)
+
+	for generation := 1; generation <= generations; generation++ {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+		id := uint64(generation)
+		f := rb.newFuture()
+		f.init(newTestRPCMessage(ctx, id))
+		f.enableRequestMetrics(m)
+		rb.addFuture(f)
+		f.messageSent(nil)
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			f.Close()
+		}()
+		go func() {
+			defer wg.Done()
+			rb.makeAllWaitingFutureFailed(backendClosed)
+		}()
+		wg.Wait()
+		cancel()
+
+		rb.mu.RLock()
+		require.Empty(t, rb.mu.futures)
+		rb.mu.RUnlock()
+	}
+
+	require.Equal(t, startedBefore+generations, testutil.ToFloat64(m.requestStartedCounter))
+	require.Equal(t, completedBefore+generations, requestCompletedCount(m))
+	require.Equal(t, float64(0), testutil.ToFloat64(m.activeRequestsGauge))
+}
+
+func TestSuccessfulSendReleasesOwnedRequest(t *testing.T) {
+	released := make(chan Message, 1)
+	testBackendSend(
+		t,
+		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
+			return conn.Write(msg, goetty.WriteOptions{Flush: true})
+		},
+		func(b *remoteBackend) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			f, err := b.Send(ctx, newTestMessage(1))
+			require.NoError(t, err)
+			defer f.Close()
+			_, err = f.Get()
+			require.NoError(t, err)
+			select {
+			case request := <-released:
+				require.Equal(t, f.getSendMessageID(), request.GetID())
+			case <-ctx.Done():
+				t.Fatal("writer did not release the owned request")
+			}
+		},
+		WithBackendRequestRelease(func(message Message) {
+			released <- message
+		}),
+	)
+}
+
+func TestWaitWriteWakesWhenBackendStops(t *testing.T) {
+	rb := &remoteBackend{
+		waitWriteC: make(chan struct{}),
+		stopWriteC: make(chan struct{}),
+	}
+	woke := make(chan struct{})
+	go func() {
+		rb.waitWrite(context.Background())
+		close(woke)
+	}()
+
+	close(rb.stopWriteC)
+	select {
+	case <-woke:
+	case <-time.After(time.Second):
+		t.Fatal("write waiter did not observe backend stop")
+	}
+}
+
 func TestReadTimeoutWithNormalMessageMissed(t *testing.T) {
+	accepted := make(chan struct{}, 1)
 	testBackendSend(t,
 		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
 			request := msg.(RPCMessage)
+			if request.Cancel != nil {
+				defer request.Cancel()
+			}
 			if request.internal {
 				if m, ok := request.Message.(*flagOnlyMessage); ok {
 					switch m.flag {
@@ -119,6 +528,9 @@ func TestReadTimeoutWithNormalMessageMissed(t *testing.T) {
 					}
 				}
 			}
+			if !request.internal {
+				accepted <- struct{}{}
+			}
 			// no response
 			return nil
 		},
@@ -129,6 +541,7 @@ func TestReadTimeoutWithNormalMessageMissed(t *testing.T) {
 			f, err := b.Send(ctx, req)
 			assert.NoError(t, err)
 			defer f.Close()
+			requireTestRequestAccepted(t, accepted)
 			_, err = f.Get()
 			assert.Equal(t, ctx.Err(), err)
 		},
@@ -137,8 +550,16 @@ func TestReadTimeoutWithNormalMessageMissed(t *testing.T) {
 }
 
 func TestReadTimeout(t *testing.T) {
+	accepted := make(chan struct{}, 1)
 	testBackendSend(t,
-		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
+		func(_ goetty.IOSession, msg interface{}, _ uint64) error {
+			request := msg.(RPCMessage)
+			if request.Cancel != nil {
+				defer request.Cancel()
+			}
+			if !request.internal {
+				accepted <- struct{}{}
+			}
 			// no response
 			return nil
 		},
@@ -149,11 +570,858 @@ func TestReadTimeout(t *testing.T) {
 			f, err := b.Send(ctx, req)
 			assert.NoError(t, err)
 			defer f.Close()
+			requireTestRequestAccepted(t, accepted)
 			_, err = f.Get()
 			assert.NotEqual(t, backendClosed, err)
 		},
 		WithBackendReadTimeout(time.Millisecond*200),
 	)
+}
+
+func TestReadTimeoutDoesNotChargeIdleTimeToNewRequest(t *testing.T) {
+	rb := &remoteBackend{livenessEpoch: time.Now().Add(-2 * time.Second)}
+	rb.options.bufferSize = 2
+	rb.options.readTimeout = time.Second
+
+	// Preserve ordinary backends' existing idle-timeout behavior. The special
+	// case below applies only once a unary request has actually been flushed.
+	require.False(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded))
+	rb.mu.activeStreams = map[uint64]*stream{1: {}}
+	require.False(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded),
+		"a stream with no flushed message must retain the ordinary backend's timeout semantics")
+	clear(rb.mu.activeStreams)
+	internal := &Future{send: RPCMessage{internal: true}}
+	internal.writtenAt.Store(rb.livenessTick())
+	rb.mu.futures = map[uint64]*Future{1: internal}
+	require.False(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded),
+		"internal traffic must not extend the user-request read window")
+	oneWay := &Future{oneWay: true}
+	oneWay.send.createAt = time.Now()
+	rb.mu.futures = map[uint64]*Future{1: oneWay}
+	require.False(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded),
+		"one-way traffic must not create a response read window")
+	inFlight := &Future{}
+	inFlight.send.createAt = time.Now()
+	rb.mu.futures = map[uint64]*Future{1: inFlight}
+	require.True(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded),
+		"an admitted request must not inherit the remainder of an idle read window")
+	inFlight.send.createAt = time.Now().Add(-rb.options.readTimeout)
+	require.False(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded),
+		"a request stuck before flush must not renew the connection beyond one admission window")
+	inFlight.send.createAt = time.Now()
+	inFlight.waiting.Store(true)
+	require.False(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded),
+		"a terminal send failure must not extend the read window")
+
+	// If a request arrived during that old read window, it owns a fresh window
+	// measured from its write, rather than the remainder of the idle window.
+	pending := &Future{}
+	pending.writtenAt.Store(rb.livenessTick())
+	pending.waiting.Store(true)
+	rb.mu.futures = map[uint64]*Future{1: pending}
+	require.True(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded))
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.False(t, rb.keepDataConnectionAfterReadTimeout(
+		canceledCtx, context.DeadlineExceeded),
+		"backend cancellation must win over a fresh request window")
+
+	// A backend without an independent liveness probe still closes once a full
+	// request-owned window has elapsed without progress.
+	pending.writtenAt.Store(rb.livenessTick() - rb.options.readTimeout.Nanoseconds())
+	require.False(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded))
+	rb.atomic.lastStreamFlushAt.Store(rb.livenessTick())
+	require.False(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded),
+		"fresh stream traffic must not rescue a generation with an expired unary request")
+	fresh := &Future{}
+	fresh.send.createAt = time.Now()
+	rb.mu.futures[2] = fresh
+	require.False(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded),
+		"new admissions must not keep an already-stalled request generation alive")
+	require.False(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), errors.New("connection reset")))
+
+	// Stream traffic owns one window from its most recent successful flush, so
+	// a stream message admitted late in an idle read window is not charged the
+	// idle time; once that window elapses the idle-close behavior returns.
+	clear(rb.mu.futures)
+	rb.atomic.lastStreamFlushAt.Store(rb.livenessTick())
+	require.True(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded),
+		"a freshly flushed stream message owns one complete read window")
+	failed := &Future{}
+	failed.waiting.Store(true)
+	rb.mu.futures[1] = failed
+	require.True(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded),
+		"a terminal unary send failure owns no response window and must not suppress a live stream")
+	rb.atomic.lastStreamFlushAt.Store(
+		rb.livenessTick() - rb.options.readTimeout.Nanoseconds())
+	require.False(t, rb.keepDataConnectionAfterReadTimeout(
+		context.Background(), context.DeadlineExceeded),
+		"an expired stream window must not keep a silent connection open")
+}
+
+func TestReadTimeoutTracksRequestsWithoutLivenessProbe(t *testing.T) {
+	requestReceived := make(chan struct{})
+	var received sync.Once
+	testBackendSend(t,
+		func(_ goetty.IOSession, message interface{}, _ uint64) error {
+			if !message.(RPCMessage).internal {
+				received.Do(func() { close(requestReceived) })
+			}
+			return nil
+		},
+		func(b *remoteBackend) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			f, err := b.Send(ctx, newTestMessage(1))
+			require.NoError(t, err)
+			defer f.Close()
+			require.NoError(t, f.waitSendCompleted())
+
+			select {
+			case <-requestReceived:
+			case <-ctx.Done():
+				t.Fatal("request did not reach server")
+			}
+			require.NotZero(t, f.writtenAt.Load(),
+				"a flushed request must carry its flush stamp")
+			require.Equal(t, f.writtenAt.Load(), b.pendingRequestReadWindow(),
+				"read-timeout accounting must not depend on a liveness probe")
+		},
+		WithBackendReadTimeout(200*time.Millisecond),
+	)
+}
+
+func TestReadTimeoutTracksStreamWritesWithoutLivenessProbe(t *testing.T) {
+	testBackendSend(t,
+		func(_ goetty.IOSession, _ interface{}, _ uint64) error {
+			// no response: only the write-side stamp is under test
+			return nil
+		},
+		func(b *remoteBackend) {
+			st, err := b.NewStream(false)
+			require.NoError(t, err)
+			defer func() {
+				require.NoError(t, st.Close(false))
+			}()
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			// Send returns only after the flush completed, so the stamp is
+			// already published.
+			require.NoError(t, st.Send(ctx, &testMessage{id: st.ID()}))
+
+			require.NotZero(t, b.atomic.lastStreamFlushAt.Load(),
+				"a flushed stream message must open a stream read window")
+			require.True(t, b.keepDataConnectionAfterReadTimeout(
+				context.Background(), context.DeadlineExceeded),
+				"a stream message admitted late in an idle read window must not be charged the idle time")
+		},
+		WithBackendReadTimeout(200*time.Millisecond),
+	)
+}
+
+func TestHealthyLivenessProbePreservesSlowRequest(t *testing.T) {
+	requestReceived := make(chan struct{})
+	releaseResponse := make(chan struct{})
+	probed := make(chan struct{}, 4)
+	var requestOnce sync.Once
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseResponse) }) }
+	t.Cleanup(release)
+
+	testBackendSend(t,
+		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
+			request := msg.(RPCMessage)
+			requestOnce.Do(func() { close(requestReceived) })
+			select {
+			case <-releaseResponse:
+			case <-time.After(time.Second):
+				return context.DeadlineExceeded
+			}
+			return conn.Write(RPCMessage{
+				Ctx:     request.Ctx,
+				Message: newTestMessage(request.Message.GetID()),
+			}, goetty.WriteOptions{Flush: true})
+		},
+		func(b *remoteBackend) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			f, err := b.Send(ctx, newTestMessage(1))
+			require.NoError(t, err)
+			defer f.Close()
+
+			select {
+			case <-requestReceived:
+			case <-ctx.Done():
+				t.Fatal("request did not reach server")
+			}
+			for range 2 {
+				select {
+				case <-probed:
+				case <-ctx.Done():
+					t.Fatal("independent liveness probe did not run")
+				}
+			}
+			_, err = b.Send(ctx, newTestMessage(2))
+			require.ErrorIs(t, err, backendDraining)
+			_, err = b.NewStream(false)
+			require.ErrorIs(t, err, backendDraining)
+			b.mu.RLock()
+			require.Len(t, b.mu.futures, 1,
+				"draining must reject direct admission without disturbing the slow request")
+			require.Empty(t, b.mu.activeStreams)
+			b.mu.RUnlock()
+			release()
+			_, err = f.Get()
+			require.NoError(t, err,
+				"a healthy peer must not lose a valid slow request at the data read timeout")
+		},
+		WithBackendReadTimeout(20*time.Millisecond),
+		WithBackendLivenessProbe(func(context.Context, string) error {
+			probed <- struct{}{}
+			return nil
+		}),
+	)
+}
+
+func TestIdleBackendDoesNotProbeOrDrain(t *testing.T) {
+	var probes atomic.Int32
+	testBackendSend(t,
+		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
+			request := msg.(RPCMessage)
+			return conn.Write(RPCMessage{
+				Ctx:     request.Ctx,
+				Message: newTestMessage(request.Message.GetID()),
+			}, goetty.WriteOptions{Flush: true})
+		},
+		func(b *remoteBackend) {
+			time.Sleep(100 * time.Millisecond)
+			require.Zero(t, probes.Load())
+			require.True(t, b.admissionAvailable())
+			require.False(t, b.LastActiveTime().IsZero())
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			f, err := b.Send(ctx, newTestMessage(1))
+			require.NoError(t, err)
+			defer f.Close()
+			_, err = f.Get()
+			require.NoError(t, err)
+		},
+		WithBackendReadTimeout(20*time.Millisecond),
+		WithBackendLivenessProbe(func(context.Context, string) error {
+			probes.Add(1)
+			return nil
+		}),
+	)
+}
+
+func TestUnavailableControlDoesNotResetIdleDataConnection(t *testing.T) {
+	var probes atomic.Int32
+	testBackendSend(t,
+		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
+			request := msg.(RPCMessage)
+			return conn.Write(RPCMessage{
+				Ctx:     request.Ctx,
+				Message: newTestMessage(request.Message.GetID()),
+			}, goetty.WriteOptions{Flush: true})
+		},
+		func(b *remoteBackend) {
+			time.Sleep(100 * time.Millisecond)
+			require.Zero(t, probes.Load(),
+				"idle data must not depend on an unavailable control transport")
+			require.True(t, b.admissionAvailable())
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			f, err := b.Send(ctx, newTestMessage(1))
+			require.NoError(t, err)
+			defer f.Close()
+			_, err = f.Get()
+			require.NoError(t, err)
+		},
+		WithBackendReadTimeout(20*time.Millisecond),
+		WithBackendLivenessProbe(func(context.Context, string) error {
+			probes.Add(1)
+			return errors.New("control transport unavailable")
+		}),
+	)
+}
+
+func TestSkippedRequestDoesNotDrainHealthyBackend(t *testing.T) {
+	var probes atomic.Int32
+	testBackendSend(t,
+		func(goetty.IOSession, interface{}, uint64) error {
+			t.Fatal("filtered request must not reach the transport")
+			return nil
+		},
+		func(b *remoteBackend) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			f, err := b.Send(ctx, newTestMessage(1))
+			require.NoError(t, err)
+			_, err = f.Get()
+			require.ErrorIs(t, err, messageSkipped)
+			f.Close()
+
+			time.Sleep(100 * time.Millisecond)
+			require.Zero(t, probes.Load(),
+				"a request filtered before conn.Write must not trigger a control probe")
+			require.True(t, b.admissionAvailable(),
+				"a request skipped before conn.Write is not stalled data traffic")
+		},
+		WithBackendReadTimeout(20*time.Millisecond),
+		WithBackendFilter(func(Message, string) bool { return false }),
+		WithBackendLivenessProbe(func(context.Context, string) error {
+			probes.Add(1)
+			return nil
+		}),
+	)
+}
+
+type manuallyExpiringContext struct {
+	context.Context
+	deadline time.Time
+	done     chan struct{}
+	once     sync.Once
+	err      error
+}
+
+func newManuallyExpiringContext(deadline time.Time) *manuallyExpiringContext {
+	return &manuallyExpiringContext{
+		Context:  context.Background(),
+		deadline: deadline,
+		done:     make(chan struct{}),
+		err:      context.DeadlineExceeded,
+	}
+}
+
+func (c *manuallyExpiringContext) Deadline() (time.Time, bool) {
+	return c.deadline, true
+}
+
+func (c *manuallyExpiringContext) Done() <-chan struct{} {
+	return c.done
+}
+
+func (c *manuallyExpiringContext) Err() error {
+	select {
+	case <-c.done:
+		return c.err
+	default:
+		return nil
+	}
+}
+
+func (c *manuallyExpiringContext) expire() {
+	c.once.Do(func() { close(c.done) })
+}
+
+func newManuallyCancelledContext(deadline time.Time) *manuallyExpiringContext {
+	ctx := newManuallyExpiringContext(deadline)
+	ctx.err = context.Canceled
+	ctx.expire()
+	return ctx
+}
+
+func TestGetTimeoutFromContextDeadlineContract(t *testing.T) {
+	t.Run("deadline elapsed before timer signal", func(t *testing.T) {
+		ctx := newManuallyExpiringContext(time.Now().Add(-time.Second))
+		_, err := (RPCMessage{Ctx: ctx}).GetTimeoutFromContext()
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	})
+
+	t.Run("internal deadline elapsed before timer signal", func(t *testing.T) {
+		ctx := newManuallyExpiringContext(time.Now().Add(-time.Second))
+		_, err := (RPCMessage{Ctx: ctx, internal: true}).GetTimeoutFromContext()
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	})
+
+	for _, internal := range []bool{false, true} {
+		t.Run(fmt.Sprintf("expired %s context remains canceled", map[bool]string{false: "normal", true: "internal"}[internal]), func(t *testing.T) {
+			ctx := newManuallyCancelledContext(time.Now().Add(-time.Second))
+			_, err := (RPCMessage{Ctx: ctx, internal: internal}).GetTimeoutFromContext()
+			require.ErrorIs(t, err, context.Canceled)
+		})
+	}
+
+	t.Run("one-way message keeps its fixed timeout", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		timeout, err := (RPCMessage{Ctx: ctx, oneWay: true}).GetTimeoutFromContext()
+		require.NoError(t, err)
+		require.Equal(t, oneWayTimeout, timeout)
+	})
+}
+
+func TestTimedOutRequestStillDrainsBlackholedBackend(t *testing.T) {
+	accepted := make(chan struct{}, 1)
+	probed := make(chan struct{}, 1)
+	testBackendSend(t,
+		func(_ goetty.IOSession, value interface{}, _ uint64) error {
+			request := value.(RPCMessage)
+			if request.Cancel != nil {
+				defer request.Cancel()
+			}
+			// Simulate a user request accepted by the peer whose data response
+			// path never makes progress. Control traffic is not a send barrier.
+			if !request.internal {
+				accepted <- struct{}{}
+			}
+			return nil
+		},
+		func(b *remoteBackend) {
+			ctx := newManuallyExpiringContext(time.Now().Add(time.Hour))
+			t.Cleanup(ctx.expire)
+			f, err := b.Send(ctx, newTestMessage(1))
+			require.NoError(t, err)
+			futureClosed := false
+			defer func() {
+				if !futureClosed {
+					f.Close()
+				}
+			}()
+			requireTestRequestAccepted(t, accepted)
+			ctx.expire()
+			_, err = f.Get()
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			futureClosed = true
+			f.Close()
+
+			select {
+			case <-probed:
+			case <-time.After(time.Second):
+				t.Fatal("liveness probe did not run after the short Future left the map")
+			}
+			require.Eventually(t, func() bool {
+				return !b.admissionAvailable() && b.LastActiveTime().IsZero()
+			}, time.Second, time.Millisecond)
+			retryCtx, retryCancel := context.WithTimeout(context.Background(), time.Second)
+			defer retryCancel()
+			_, err = b.Send(retryCtx, newTestMessage(2))
+			require.ErrorIs(t, err, backendDraining,
+				"latched user traffic must seal the blackholed data generation")
+		},
+		WithBackendReadTimeout(50*time.Millisecond),
+		WithBackendLivenessProbe(func(context.Context, string) error {
+			probed <- struct{}{}
+			return nil
+		}),
+	)
+}
+
+func TestContinuousTimedOutRequestsCannotPostponeProbe(t *testing.T) {
+	var probes atomic.Int32
+	probeCalled := make(chan struct{}, 1)
+	accepted := make(chan struct{}, 1)
+	testBackendSend(t,
+		func(_ goetty.IOSession, message interface{}, _ uint64) error {
+			request := message.(RPCMessage)
+			if request.Cancel != nil {
+				defer request.Cancel()
+			}
+			// A response timeout must be tested after the request has crossed the
+			// transport. Otherwise a short context can expire while the writer is
+			// still encoding the frame, and the writer correctly retires a
+			// connection after an encode failure.
+			if !request.internal {
+				accepted <- struct{}{}
+			}
+			return nil
+		},
+		func(b *remoteBackend) {
+			deadline := time.Now().Add(time.Second)
+			probeObserved := false
+			for !probeObserved && time.Now().Before(deadline) {
+				func() {
+					// Keep the transport deadline well beyond the send barrier, then
+					// expire the request explicitly. This isolates response timeout
+					// accounting from queue and codec scheduling.
+					ctx := newManuallyExpiringContext(time.Now().Add(time.Hour))
+					defer ctx.expire()
+					f, err := b.Send(ctx, newTestMessage(1))
+					if err == nil {
+						defer f.Close()
+						requireTestRequestAccepted(t, accepted)
+						ctx.expire()
+						_, err = f.Get()
+						require.ErrorIs(t, err, context.DeadlineExceeded)
+					} else {
+						require.ErrorIs(t, err, backendDraining,
+							"unexpected request error before draining publication")
+					}
+				}()
+				select {
+				case <-probeCalled:
+					probeObserved = true
+				default:
+				}
+			}
+			require.True(t, probeObserved,
+				"new short requests must not move the oldest unprogressed write epoch")
+			require.Positive(t, probes.Load())
+			require.Eventually(t, func() bool {
+				return !b.admissionAvailable()
+			}, time.Second, time.Millisecond)
+
+			retryCtx, retryCancel := context.WithTimeout(context.Background(), time.Second)
+			defer retryCancel()
+			_, err := b.Send(retryCtx, newTestMessage(2))
+			require.ErrorIs(t, err, backendDraining,
+				"durably drained backend must reject new user traffic")
+		},
+		WithBackendReadTimeout(50*time.Millisecond),
+		WithBackendLivenessProbe(func(context.Context, string) error {
+			probes.Add(1)
+			select {
+			case probeCalled <- struct{}{}:
+			default:
+			}
+			return nil
+		}),
+	)
+}
+
+func requireTestRequestAccepted(t *testing.T, accepted <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-accepted:
+	case <-time.After(time.Second):
+		t.Fatal("peer did not accept the request")
+	}
+}
+
+func requireTestFutureReleased(t *testing.T, released <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-released:
+	case <-time.After(time.Second):
+		t.Fatal("Future release did not complete")
+	}
+}
+
+func TestDataProgressLatchPreservesWriteReadOrdering(t *testing.T) {
+	rb := &remoteBackend{}
+	rb.options.bufferSize = 16
+
+	rb.recordDataWrite(1, 1)
+	require.Equal(t, int64(1), rb.dataPendingSince())
+
+	rb.recordDataProgress(1, true, 2)
+	require.Zero(t, rb.dataPendingSince(),
+		"the matching response retires the only pending write")
+
+	rb.recordDataWrite(2, 3)
+	require.Equal(t, int64(3), rb.dataPendingSince(),
+		"a later write must open a new pending generation")
+}
+
+func TestConcurrentResponseDoesNotHideAnotherPendingWrite(t *testing.T) {
+	rb := &remoteBackend{}
+	rb.options.bufferSize = 16
+
+	rb.recordDataWrite(1, 1)
+	rb.recordDataWrite(2, 2)
+	rb.recordDataProgress(2, true, 3)
+	require.Equal(t, int64(3), rb.dataPendingSince(),
+		"progress resets the inactivity window but must preserve the unmatched request")
+
+	rb.recordDataProgress(1, true, 4)
+	require.Zero(t, rb.dataPendingSince())
+}
+
+func TestStreamProgressCannotRetireUnaryWrite(t *testing.T) {
+	rb := &remoteBackend{}
+	rb.options.bufferSize = 16
+
+	rb.recordDataWrite(7, 1)
+	rb.recordDataProgress(7, false, 3)
+	require.Equal(t, int64(3), rb.dataPendingSince(),
+		"stream response sequence numbers do not correlate to request sequence numbers")
+}
+
+func TestDataProgressPendingSetIsBounded(t *testing.T) {
+	rb := &remoteBackend{}
+	rb.options.bufferSize = 2
+
+	rb.recordDataWrite(1, 1)
+	rb.recordDataWrite(2, 2)
+	rb.recordDataWrite(3, 3)
+	require.Len(t, rb.livenessMu.pending, 2)
+	require.True(t, rb.livenessMu.overflow)
+
+	rb.recordDataProgress(1, true, 4)
+	rb.recordDataProgress(2, true, 5)
+	require.Equal(t, int64(5), rb.dataPendingSince(),
+		"overflow remains a conservative pending latch until generation reset")
+
+	rb.resetDataProgress()
+	require.Zero(t, rb.dataPendingSince())
+	require.False(t, rb.livenessMu.overflow)
+}
+
+func TestTimedOutLivenessProbePreservesSlowDataResponse(t *testing.T) {
+	requestReceived := make(chan struct{})
+	releaseResponse := make(chan struct{})
+	probeStarted := make(chan struct{})
+	var requestOnce sync.Once
+	var probeOnce sync.Once
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseResponse) }) }
+	t.Cleanup(release)
+
+	testBackendSend(t,
+		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
+			request := msg.(RPCMessage)
+			requestOnce.Do(func() { close(requestReceived) })
+			select {
+			case <-releaseResponse:
+			case <-time.After(time.Second):
+				return context.DeadlineExceeded
+			}
+			return conn.Write(RPCMessage{
+				Ctx:     request.Ctx,
+				Message: newTestMessage(request.Message.GetID()),
+			}, goetty.WriteOptions{Flush: true})
+		},
+		func(b *remoteBackend) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			f, err := b.Send(ctx, newTestMessage(1))
+			require.NoError(t, err)
+			defer f.Close()
+
+			select {
+			case <-requestReceived:
+			case <-ctx.Done():
+				t.Fatal("request did not reach server")
+			}
+			select {
+			case <-probeStarted:
+			case <-ctx.Done():
+				t.Fatal("failed liveness probe did not run")
+			}
+
+			require.False(t, b.admissionAvailable(),
+				"an inconclusive probe must still seal the inactive data generation")
+			_, err = b.Send(ctx, newTestMessage(2))
+			require.ErrorIs(t, err, backendDraining)
+
+			release()
+			_, err = f.Get()
+			require.NoError(t, err,
+				"a timed-out control transport must not discard a valid slow data response")
+		},
+		WithBackendReadTimeout(20*time.Millisecond),
+		WithBackendLivenessProbe(func(ctx context.Context, _ string) error {
+			probeOnce.Do(func() { close(probeStarted) })
+			<-ctx.Done()
+			return ctx.Err()
+		}),
+	)
+}
+
+func TestRequestDoneReleasesRejectedResponse(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	f := newFuture(nil)
+	f.init(newTestRPCMessage(ctx, 1))
+	require.True(t, f.error(1, moerr.NewBackendClosedNoCtx(), nil))
+
+	var callbacks, responses atomic.Int32
+	rb := &remoteBackend{
+		logger:  zap.NewNop(),
+		metrics: newMetrics(""),
+	}
+	rb.mu.futures = map[uint64]*Future{1: f}
+	rb.options.freeResponse = func(Message) {
+		responses.Add(1)
+	}
+	response := newTestMessage(1)
+	rb.requestDone(ctx, 1, RPCMessage{Message: response}, nil, func() {
+		callbacks.Add(1)
+	})
+
+	require.Equal(t, int32(1), callbacks.Load())
+	require.Equal(t, int32(1), responses.Load())
+	require.Empty(t, rb.mu.futures)
+}
+
+func TestIndependentControlBackendPreservesSlowDataRequest(t *testing.T) {
+	const (
+		dataReadTimeout = 5 * time.Second
+		testTimeout     = 5 * time.Second
+	)
+
+	requestReceived := make(chan struct{})
+	replacementReceived := make(chan struct{})
+	releaseResponse := make(chan struct{})
+	var sessionMu sync.Mutex
+	var firstDataSession, replacementDataSession, controlSession goetty.IOSession
+	var dataRequests atomic.Int32
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseResponse) }) }
+	t.Cleanup(release)
+
+	// Darwin's sockaddr_un path is short enough that t.TempDir plus this long
+	// test name can exceed it. Keep uniqueness and cleanup without coupling the
+	// transport contract to the test runner's directory naming scheme.
+	socketDir, err := os.MkdirTemp("", "mo-morpc-")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, os.RemoveAll(socketDir)) })
+	unixFile := filepath.Join(socketDir, "rpc.sock")
+	addr := "unix://" + unixFile
+	app := newTestAppWithAddr(t, addr, unixFile, func(conn goetty.IOSession, msg interface{}, _ uint64) error {
+		request := msg.(RPCMessage)
+		if request.internal {
+			sessionMu.Lock()
+			controlSession = conn
+			sessionMu.Unlock()
+			ping := request.Message.(*flagOnlyMessage)
+			return conn.Write(RPCMessage{
+				Ctx:      request.Ctx,
+				internal: true,
+				Message: &flagOnlyMessage{
+					flag: flagPong,
+					id:   ping.id,
+				},
+			}, goetty.WriteOptions{Flush: true})
+		}
+
+		requestNumber := dataRequests.Add(1)
+		sessionMu.Lock()
+		if requestNumber == 1 {
+			firstDataSession = conn
+		} else {
+			replacementDataSession = conn
+		}
+		sessionMu.Unlock()
+		if requestNumber == 1 {
+			close(requestReceived)
+			select {
+			case <-releaseResponse:
+			case <-time.After(testTimeout):
+				return context.DeadlineExceeded
+			}
+		} else {
+			close(replacementReceived)
+		}
+		return conn.Write(RPCMessage{
+			Ctx:     request.Ctx,
+			Message: newTestMessage(request.Message.GetID()),
+		}, goetty.WriteOptions{Flush: true})
+	})
+	require.NoError(t, app.Start())
+	defer func() { require.NoError(t, app.Stop()) }()
+
+	newBackend := func(options ...BackendOption) *remoteBackend {
+		options = append(options,
+			WithBackendMetrics(newMetrics("")),
+			WithBackendLogger(logutil.GetPanicLoggerWithLevel(zap.FatalLevel)))
+		value, err := NewRemoteBackend(addr, newTestCodec(), options...)
+		require.NoError(t, err)
+		return value.(*remoteBackend)
+	}
+
+	control := newBackend(WithBackendReadTimeout(testTimeout))
+	defer control.Close()
+
+	dataFactory := NewGoettyBasedBackendFactory(
+		newTestCodec(),
+		// keepDataConnectionAfterReadTimeout gives the probe one fifth of this timeout.
+		// The probe gets a full second without making the test wait for a timeout.
+		WithBackendReadTimeout(dataReadTimeout),
+		WithBackendLivenessProbe(func(ctx context.Context, _ string) error {
+			f, err := control.SendInternal(ctx, &flagOnlyMessage{flag: flagPing})
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+			_, err = f.Get()
+			return err
+		}),
+	)
+	dataClient, err := NewClient(
+		"data-replacement-test",
+		dataFactory,
+		WithClientMaxBackendPerHost(1),
+		// Keep the process-wide idle GC from racing the state setup below. The
+		// direct closeIdleBackends call still exercises the draining protection:
+		// without that guard, a zero threshold makes this backend immediately
+		// eligible for cleanup.
+		WithClientMaxBackendMaxIdleDuration(0),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, dataClient.Close()) }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+	f, err := dataClient.Send(ctx, addr, newTestMessage(1))
+	require.NoError(t, err)
+	defer f.Close()
+	select {
+	case <-requestReceived:
+	case <-ctx.Done():
+		t.Fatal("data request did not reach server")
+	}
+
+	client := dataClient.(*client)
+	client.mu.Lock()
+	backends := client.mu.backends[addr]
+	client.mu.Unlock()
+	require.Len(t, backends, 1)
+	dataBackend, ok := backends[0].(*remoteBackend)
+	require.True(t, ok)
+	dataBackend.livenessMu.Lock()
+	dataBackend.livenessMu.pendingSince = dataBackend.livenessTick() - dataReadTimeout.Nanoseconds()
+	dataBackend.livenessMu.Unlock()
+	// Drive the read-timeout branch directly. Waiting for a real socket deadline
+	// only tests the clock and was the source of this test's CI flakiness.
+	require.True(t, dataBackend.keepDataConnectionAfterReadTimeout(ctx, context.DeadlineExceeded))
+	require.False(t, dataBackend.admissionAvailable(),
+		"a successful control probe must drain the stalled data backend")
+	require.Zero(t, client.closeIdleBackends(),
+		"idle GC must not close a draining backend with an outstanding request")
+
+	replacement, err := dataClient.Send(ctx, addr, newTestMessage(2))
+	require.NoError(t, err)
+	defer replacement.Close()
+	select {
+	case <-replacementReceived:
+	case <-ctx.Done():
+		t.Fatal("replacement data request did not reach server")
+	}
+	_, err = replacement.Get()
+	require.NoError(t, err,
+		"new traffic must recover on a replacement data generation")
+
+	sessionMu.Lock()
+	require.NotNil(t, firstDataSession)
+	require.NotNil(t, replacementDataSession)
+	require.NotNil(t, controlSession)
+	require.NotEqual(t, firstDataSession, controlSession,
+		"control ping must use a physical session independent from data")
+	require.NotEqual(t, firstDataSession, replacementDataSession,
+		"new traffic must not stay on the stalled data session")
+	sessionMu.Unlock()
+
+	release()
+	_, err = f.Get()
+	require.NoError(t, err)
 }
 
 func TestSendWithPayloadCannotTimeout(t *testing.T) {
@@ -180,50 +1448,128 @@ func TestSendWithPayloadCannotTimeout(t *testing.T) {
 }
 
 func TestSendWithPayloadCannotBlockIfFutureRemoved(t *testing.T) {
-	var wg sync.WaitGroup
-	wg.Add(1)
+	entered := make(chan struct{})
+	responseWriteErr := make(chan error, 1)
+	responseHandled := make(chan struct{})
+	release := make(chan struct{})
+	var enteredOnce sync.Once
+	var releaseOnce sync.Once
+	var responseHandledOnce sync.Once
+	releaseHandler := func() {
+		releaseOnce.Do(func() { close(release) })
+	}
 	testBackendSend(t,
 		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
-			wg.Wait()
-			return conn.Write(msg, goetty.WriteOptions{Flush: true})
+			request := msg.(RPCMessage)
+			if request.Cancel != nil {
+				defer request.Cancel()
+			}
+			if request.internal {
+				return nil
+			}
+			enteredOnce.Do(func() { close(entered) })
+			<-release
+			err := conn.Write(msg, goetty.WriteOptions{Flush: true})
+			responseWriteErr <- err
+			return err
 		},
 		func(b *remoteBackend) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
-			defer cancel()
+			defer releaseHandler()
+			ctx := newManuallyExpiringContext(time.Now().Add(time.Hour))
+			defer ctx.expire()
 			req := newTestMessage(1)
 			req.payload = []byte("hello")
 			f, err := b.Send(ctx, req)
 			require.NoError(t, err)
+			var closeOnce sync.Once
+			closeFuture := func() {
+				closeOnce.Do(func() { f.Close() })
+			}
+			defer closeFuture()
+
+			released := make(chan struct{})
+			f.mu.Lock()
+			originalRelease := f.releaseFunc
+			if originalRelease == nil {
+				f.mu.Unlock()
+				t.Fatal("backend Future has no release callback")
+			}
+			f.releaseFunc = func(releasedFuture *Future) {
+				releasedFuture.mu.Lock()
+				releasedFuture.releaseFunc = originalRelease
+				releasedFuture.mu.Unlock()
+				originalRelease(releasedFuture)
+				close(released)
+			}
+			f.mu.Unlock()
+
+			requireTestRequestAccepted(t, entered)
+			require.NoError(t, f.waitSendCompleted())
 			id := f.getSendMessageID()
-			// keep future in the futures map
-			f.ref()
-			defer f.unRef()
-			f.Close()
+			closeFuture()
+			requireTestFutureReleased(t, released)
 			b.mu.RLock()
 			_, ok := b.mu.futures[id]
-			assert.True(t, ok)
 			b.mu.RUnlock()
-			wg.Done()
-			time.Sleep(time.Second)
+			require.False(t, ok,
+				"Future release must remove the request before the response is allowed")
+			releaseHandler()
+			select {
+			case err := <-responseWriteErr:
+				require.NoError(t, err,
+					"server response write failed after the Future was removed")
+			case <-time.After(time.Second):
+				t.Fatal("server response remained blocked after the Future was removed")
+			}
+			// In payload mode this callback runs after requestDone has released the
+			// read buffer, so the test also proves the orphan response was consumed.
+			select {
+			case <-responseHandled:
+			case <-time.After(time.Second):
+				t.Fatal("client did not finish handling the orphaned payload response")
+			}
 		},
-		WithBackendHasPayloadResponse())
+		WithBackendHasPayloadResponse(),
+		WithBackendFreeOrphansResponse(func(Message) {
+			responseHandledOnce.Do(func() { close(responseHandled) })
+		}))
 }
 
 func TestSendWithPayloadCannotBlockIfFutureClosed(t *testing.T) {
-	var wg sync.WaitGroup
-	wg.Add(1)
+	entered := make(chan struct{})
+	responseWriteErr := make(chan error, 1)
+	responseHandled := make(chan struct{})
+	release := make(chan struct{})
+	var enteredOnce sync.Once
+	var releaseOnce sync.Once
+	var responseHandledOnce sync.Once
+	releaseHandler := func() {
+		releaseOnce.Do(func() { close(release) })
+	}
 	testBackendSend(t,
 		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
-			wg.Wait()
-			return conn.Write(msg, goetty.WriteOptions{Flush: true})
+			request := msg.(RPCMessage)
+			if request.Cancel != nil {
+				defer request.Cancel()
+			}
+			if request.internal {
+				return nil
+			}
+			enteredOnce.Do(func() { close(entered) })
+			<-release
+			err := conn.Write(msg, goetty.WriteOptions{Flush: true})
+			responseWriteErr <- err
+			return err
 		},
 		func(b *remoteBackend) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
-			defer cancel()
+			defer releaseHandler()
+			ctx := newManuallyExpiringContext(time.Now().Add(time.Hour))
+			defer ctx.expire()
 			req := newTestMessage(1)
 			req.payload = []byte("hello")
 			f, err := b.Send(ctx, req)
 			require.NoError(t, err)
+			requireTestRequestAccepted(t, entered)
 			id := f.getSendMessageID()
 			f.mu.Lock()
 			f.mu.closed = true
@@ -233,10 +1579,26 @@ func TestSendWithPayloadCannotBlockIfFutureClosed(t *testing.T) {
 			_, ok := b.mu.futures[id]
 			b.mu.RUnlock()
 			assert.True(t, ok)
-			wg.Done()
-			time.Sleep(time.Second)
+			releaseHandler()
+			select {
+			case err := <-responseWriteErr:
+				require.NoError(t, err,
+					"server response write failed after the Future was closed")
+			case <-time.After(time.Second):
+				t.Fatal("server response remained blocked after the Future was closed")
+			}
+			// In payload mode this callback runs after requestDone has released the
+			// read buffer, so the test also proves the closed Future response was consumed.
+			select {
+			case <-responseHandled:
+			case <-time.After(time.Second):
+				t.Fatal("client did not finish handling the closed Future payload response")
+			}
 		},
-		WithBackendHasPayloadResponse())
+		WithBackendHasPayloadResponse(),
+		WithBackendFreeOrphansResponse(func(Message) {
+			responseHandledOnce.Do(func() { close(responseHandled) })
+		}))
 }
 
 func TestCloseWhileContinueSending(t *testing.T) {
@@ -313,22 +1675,31 @@ func TestSendWithAlreadyContextDone(t *testing.T) {
 }
 
 func TestSendWithTimeout(t *testing.T) {
+	accepted := make(chan struct{}, 1)
 	testBackendSend(t,
-		func(conn goetty.IOSession, msg interface{}, seq uint64) error {
+		func(_ goetty.IOSession, msg interface{}, _ uint64) error {
+			request := msg.(RPCMessage)
+			if request.Cancel != nil {
+				defer request.Cancel()
+			}
+			if !request.internal {
+				accepted <- struct{}{}
+			}
 			return nil
 		},
 		func(b *remoteBackend) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*200)
-			defer cancel()
+			ctx := newManuallyExpiringContext(time.Now().Add(time.Hour))
+			defer ctx.expire()
 			req := &testMessage{id: 1}
 			f, err := b.Send(ctx, req)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			defer f.Close()
+			requireTestRequestAccepted(t, accepted)
 
+			ctx.expire()
 			resp, err := f.Get()
-			assert.Error(t, err)
-			assert.Nil(t, resp)
-			assert.Equal(t, err, ctx.Err())
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			require.Nil(t, resp)
 		},
 	)
 }
@@ -389,6 +1760,53 @@ func TestFutureGetCannotBlockIfCloseBackend(t *testing.T) {
 			time.Sleep(time.Millisecond * 100)
 			return false
 		}),
+	)
+}
+
+func TestCloseBackendNotifiesWaitingFuture(t *testing.T) {
+	received := make(chan struct{})
+	var once sync.Once
+	testBackendSend(t,
+		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
+			once.Do(func() { close(received) })
+			return nil
+		},
+		func(b *remoteBackend) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			f, err := b.Send(ctx, newTestMessage(1))
+			require.NoError(t, err)
+			defer f.Close()
+			select {
+			case <-received:
+			case <-time.After(time.Second):
+				t.Fatal("request was not written before backend close")
+			}
+
+			resultC := make(chan error, 1)
+			go func() {
+				_, err := f.Get()
+				resultC <- err
+			}()
+
+			closeC := make(chan struct{})
+			go func() {
+				b.Close()
+				close(closeC)
+			}()
+			select {
+			case <-closeC:
+			case <-time.After(time.Second):
+				t.Fatal("backend close did not return")
+			}
+			select {
+			case err := <-resultC:
+				require.ErrorIs(t, err, backendClosed)
+			case <-time.After(time.Second):
+				t.Fatal("waiting future was not notified when backend closed")
+			}
+		},
 	)
 }
 
@@ -492,6 +1910,289 @@ func TestStreamSendWillPanicIfDeadlineNotSet(t *testing.T) {
 			assert.NoError(t, st.Send(context.TODO(), req))
 		},
 	)
+}
+
+func TestStreamSendFailureReleasesAndReusesFuture(t *testing.T) {
+	var releases atomic.Int32
+	var futures sync.Pool
+	futures.New = func() any {
+		return newFuture(func(f *Future) {
+			f.reset()
+			releases.Add(1)
+			futures.Put(f)
+		})
+	}
+	sendErr := errors.New("send rejected before enqueue")
+	s := newStream(
+		nil,
+		make(chan Message, 1),
+		func() *Future { return futures.Get().(*Future) },
+		func(*Future) error { return sendErr },
+		func(*stream) {},
+		func() {},
+	)
+	s.init(1, false)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+
+	for range 2 {
+		require.ErrorIs(t, s.Send(ctx, newTestMessage(1)), sendErr)
+	}
+	require.Equal(t, int32(2), releases.Load())
+}
+
+func TestSkippedStreamRequestDoesNotCreateSequenceGap(t *testing.T) {
+	sequences := make(chan uint32, 2)
+	var attempts atomic.Int32
+	testBackendSend(t,
+		func(_ goetty.IOSession, value interface{}, _ uint64) error {
+			sequences <- value.(RPCMessage).streamSequence
+			return nil
+		},
+		func(b *remoteBackend) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			stream, err := b.NewStream(false)
+			require.NoError(t, err)
+			defer func() { require.NoError(t, stream.Close(false)) }()
+
+			require.NoError(t, stream.Send(ctx, newTestMessage(stream.ID())))
+			require.ErrorIs(t,
+				stream.Send(ctx, newTestMessage(stream.ID())),
+				messageSkipped)
+			require.NoError(t, stream.Send(ctx, newTestMessage(stream.ID())))
+
+			for _, expected := range []uint32{1, 2} {
+				select {
+				case sequence := <-sequences:
+					require.Equal(t, expected, sequence)
+				case <-ctx.Done():
+					t.Fatal("timed out waiting for stream request")
+				}
+			}
+		},
+		WithBackendBatchSendSize(1),
+		WithBackendFilter(func(Message, string) bool {
+			return attempts.Add(1) != 2
+		}),
+	)
+}
+
+func TestCanceledStreamRequestDoesNotCreateSequenceGap(t *testing.T) {
+	sequences := make(chan uint32, 1)
+	testBackendSend(t,
+		func(_ goetty.IOSession, value interface{}, _ uint64) error {
+			sequences <- value.(RPCMessage).streamSequence
+			return nil
+		},
+		func(b *remoteBackend) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			stream, err := b.NewStream(false)
+			require.NoError(t, err)
+			defer func() { require.NoError(t, stream.Close(false)) }()
+
+			canceledCtx, cancelSend := context.WithTimeout(context.Background(), time.Second)
+			cancelSend()
+			require.ErrorIs(t,
+				stream.Send(canceledCtx, newTestMessage(stream.ID())),
+				context.Canceled)
+			require.NoError(t, stream.Send(ctx, newTestMessage(stream.ID())))
+
+			select {
+			case sequence := <-sequences:
+				require.Equal(t, uint32(1), sequence)
+			case <-ctx.Done():
+				t.Fatal("timed out waiting for stream request")
+			}
+		},
+		WithBackendBatchSendSize(1),
+	)
+}
+
+func TestAssignStreamSequenceRejectsClosedStream(t *testing.T) {
+	stream := newStream(
+		nil,
+		make(chan Message, 1),
+		func() *Future { return newFuture(nil) },
+		func(*Future) error { return nil },
+		func(*stream) {},
+		func() {},
+	)
+	stream.init(1, false)
+	require.NoError(t, stream.Close(false))
+
+	message := RPCMessage{stream: true}
+	require.False(t, stream.assignSendSequence(&message))
+	require.Zero(t, message.streamSequence)
+	require.Zero(t, stream.sequence)
+}
+
+func TestTerminatedStreamRejectsQueuedWrite(t *testing.T) {
+	conn := newTestIOSession(assert.AnError, nil)
+	defer conn.Close()
+	rb := &remoteBackend{conn: conn}
+	rb.options.filter = func(Message, string) bool { return true }
+	s := newStream(rb, make(chan Message, 1), nil, nil, func(*stream) {}, nil)
+	s.init(1, false)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	f := newFuture(nil)
+	f.init(RPCMessage{Ctx: ctx, Message: newTestMessage(1), stream: true})
+	f.streamOwner = s
+	f.ref()
+	defer f.Close()
+	// Connection reset seals old streams before publishing the new transport.
+	s.terminate()
+	deadline, err := rb.doWrite(1, f)
+	require.NoError(t, err)
+	require.True(t, deadline.IsZero())
+	require.ErrorIs(t, f.waitSendCompleted(), backendClosed)
+	require.Zero(t, conn.writeCount.Load(), "old request reached replacement transport")
+	require.Zero(t, s.sequence)
+}
+
+type deadlineEncodingSession struct {
+	*testIOSession
+	codec  Codec
+	cancel context.CancelFunc
+}
+
+func (s *deadlineEncodingSession) Write(value any, _ goetty.WriteOptions) error {
+	if s.writeCount.Add(1) == 2 {
+		s.cancel()
+	}
+	return s.codec.Encode(value, s.out, io.Discard)
+}
+
+func TestBackendWriteFailureRetiresBatch(t *testing.T) {
+	for _, failure := range []string{"write", "flush", "encode deadline"} {
+		t.Run(failure, func(t *testing.T) {
+			conn := newTestIOSessionWithWriteErrorAt(2, assert.AnError, nil)
+			if failure == "flush" {
+				conn.writeErr = nil
+				conn.flushErr = assert.AnError
+			}
+			rb := &remoteBackend{
+				conn: conn, metrics: newMetrics(t.Name()),
+				readStopper: stopper.NewStopper(t.Name()),
+				writeC:      make(chan *Future, 4), waitWriteC: make(chan struct{}, 1),
+				stopWriteC: make(chan struct{}),
+			}
+			rb.adjust()
+			rb.stateMu.state = stateRunning
+			rb.options.batchSendSize = 3
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			encodeCtx := newManuallyExpiringContext(time.Now().Add(time.Minute))
+			if failure == "encode deadline" {
+				rb.conn = &deadlineEncodingSession{testIOSession: conn, codec: newTestCodec(), cancel: func() {
+					encodeCtx.deadline = time.Now().Add(-time.Minute)
+					encodeCtx.expire()
+				}}
+			}
+			var futures []*Future
+			for i := range 4 {
+				f := newFuture(nil)
+				requestCtx := ctx
+				if i == 1 && failure == "encode deadline" {
+					requestCtx = encodeCtx
+				}
+				f.init(RPCMessage{Ctx: requestCtx, Message: newTestMessage(uint64(i + 1)), stream: true})
+				s := newStream(rb, make(chan Message, 1), nil, nil, func(*stream) {}, nil)
+				s.init(uint64(i+1), false)
+				f.streamOwner = s
+				f.ref()
+				defer f.Close()
+				futures = append(futures, f)
+				rb.writeC <- f
+				rb.changeQueueDepth(1)
+			}
+			done := make(chan struct{})
+			go func() { rb.writeLoop(ctx); close(done) }()
+			defer func() { rb.stopWriteLoop(); <-done }()
+			select {
+			case <-done:
+			case <-ctx.Done():
+				t.Fatal("write failure did not retire backend")
+			}
+			for _, f := range futures {
+				require.Error(t, f.waitSendCompleted())
+			}
+			require.Equal(t, stateStopping, rb.stateMu.state)
+			if failure != "flush" {
+				require.Equal(t, int32(2), conn.writeCount.Load())
+				require.Empty(t, conn.flushC, "partial batch was flushed after write failure")
+			}
+		})
+	}
+}
+
+func TestAssignStreamSequenceProgressesWhileSendAdmissionBlocked(t *testing.T) {
+	sendEntered := make(chan struct{})
+	releaseSend := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseSend) }) }
+	var workers sync.WaitGroup
+	stream := newStream(
+		nil,
+		make(chan Message, 1),
+		func() *Future { return newFuture(nil) },
+		func(f *Future) error {
+			close(sendEntered)
+			<-releaseSend
+			f.messageSent(nil)
+			return nil
+		},
+		func(*stream) {},
+		func() {},
+	)
+	stream.init(1, false)
+	defer func() {
+		// Send holds the stream read lock while waiting on our barrier. Release
+		// it before joining workers or closing, including after FailNow.
+		release()
+		workers.Wait()
+		require.NoError(t, stream.Close(false))
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	sendDone := make(chan error, 1)
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		sendDone <- stream.Send(ctx, newTestMessage(stream.ID()))
+	}()
+	select {
+	case <-sendEntered:
+	case <-ctx.Done():
+		t.Fatal("send did not reach the admission barrier")
+	}
+
+	message := RPCMessage{stream: true}
+	assigned := make(chan bool, 1)
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		assigned <- stream.assignSendSequence(&message)
+	}()
+	select {
+	case ok := <-assigned:
+		require.True(t, ok)
+		require.Equal(t, uint32(1), message.streamSequence)
+	case <-ctx.Done():
+		t.Fatal("sequence assignment blocked behind stream send admission")
+	}
+
+	release()
+	select {
+	case err := <-sendDone:
+		require.NoError(t, err)
+	case <-ctx.Done():
+		t.Fatal("blocked send did not finish")
+	}
 }
 
 func TestStreamClosedByConnReset(t *testing.T) {
@@ -602,6 +2303,133 @@ func TestDoneWithClosedStreamCannotPanic(t *testing.T) {
 	s.done(context.TODO(), RPCMessage{}, false)
 }
 
+func TestCloseStreamUnblocksFullReceiveChannel(t *testing.T) {
+	c := make(chan Message, 1)
+	unregistered := 0
+	s := newStream(
+		nil,
+		c,
+		func() *Future { return newFuture(nil) },
+		func(m *Future) error { return nil },
+		func(s *stream) { unregistered++ },
+		func() {})
+	s.init(1, false)
+	c <- newTestMessage(1)
+
+	doneC := make(chan struct{})
+	go func() {
+		defer close(doneC)
+		s.done(context.Background(), RPCMessage{
+			Message:        newTestMessage(1),
+			stream:         true,
+			streamSequence: 1,
+		}, false)
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for s.mu.TryLock() {
+		s.mu.Unlock()
+		if time.Now().After(deadline) {
+			t.Fatal("stream response did not block on the full receive channel")
+		}
+		runtime.Gosched()
+	}
+
+	closeC := make(chan error, 1)
+	go func() { closeC <- s.Close(false) }()
+	select {
+	case err := <-closeC:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("stream close blocked behind a full receive channel")
+	}
+	select {
+	case <-doneC:
+	case <-time.After(time.Second):
+		t.Fatal("stream response delivery did not observe stream close")
+	}
+	require.Equal(t, 1, unregistered)
+	select {
+	case message := <-c:
+		require.Nil(t, message)
+	default:
+		t.Fatal("stream close did not publish a terminal response")
+	}
+	require.Empty(t, c)
+}
+
+func TestClosedStreamHandleAndChannelAreNotReused(t *testing.T) {
+	testBackendSend(t,
+		func(conn goetty.IOSession, msg interface{}, _ uint64) error { return nil },
+		func(b *remoteBackend) {
+			first, err := b.NewStream(false)
+			require.NoError(t, err)
+			firstC, err := first.Receive()
+			require.NoError(t, err)
+			require.NoError(t, first.Close(false))
+
+			second, err := b.NewStream(false)
+			require.NoError(t, err)
+			secondC, err := second.Receive()
+			require.NoError(t, err)
+			defer func() { require.NoError(t, second.Close(false)) }()
+
+			require.NotSame(t, first, second)
+			require.NotEqual(t, firstC, secondC)
+		},
+	)
+}
+
+func TestRemoveActiveStreamDoesNotHoldBackendMutexWhileUnlocking(t *testing.T) {
+	rb := &remoteBackend{}
+	rb.stateMu.state = stateStopped
+	rb.stateMu.locked = true
+	rb.mu.futures = make(map[uint64]*Future)
+	rb.mu.activeStreams = make(map[uint64]*stream)
+	s := &stream{
+		rb:               rb,
+		c:                make(chan Message, 1),
+		id:               1,
+		unlockAfterClose: true,
+	}
+	rb.mu.activeStreams[s.id] = s
+
+	// Reproduce NewStream's stateMu -> rb.mu order while stream removal
+	// needs to release the backend lock via stateMu.
+	rb.mu.Lock()
+	rb.stateMu.RLock()
+	doneC := make(chan struct{})
+	go func() {
+		defer close(doneC)
+		rb.removeActiveStream(s)
+	}()
+	rb.mu.Unlock()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		if rb.mu.TryLock() {
+			_, exists := rb.mu.activeStreams[s.id]
+			rb.mu.Unlock()
+			if !exists {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			rb.stateMu.RUnlock()
+			t.Fatal("stream removal held rb.mu while waiting for stateMu")
+		}
+		runtime.Gosched()
+	}
+
+	rb.stateMu.RUnlock()
+	select {
+	case <-doneC:
+	case <-time.After(time.Second):
+		t.Fatal("stream removal did not finish after stateMu was released")
+	}
+	require.False(t, rb.Locked())
+}
+
 func TestGCStream(t *testing.T) {
 	c := make(chan Message, 1)
 	s := newStream(
@@ -698,16 +2526,31 @@ func TestLastActiveWithStream(t *testing.T) {
 // active() for non-internal messages. Heartbeat (ping/pong) is internal and must not update
 // LastActiveTime, so idle timeout can still collect backends that only receive heartbeats.
 func TestReadLoopInternalMessageDoesNotUpdateLastActive(t *testing.T) {
-	// Event-driven: wait for server to send pong (pongSent), then assert lastActive unchanged (no Sleep ordering).
-	pongSent := make(chan struct{}, 1)
+	internalRequestReceived := make(chan struct{}, 1)
+	releaseInternalResponse := make(chan struct{})
+	userRequestReceived := make(chan struct{}, 1)
+	releaseUserResponse := make(chan struct{})
+	var releaseInternalOnce sync.Once
+	releaseInternal := func() {
+		releaseInternalOnce.Do(func() { close(releaseInternalResponse) })
+	}
+	var releaseOnce sync.Once
+	releaseResponse := func() {
+		releaseOnce.Do(func() { close(releaseUserResponse) })
+	}
 	testBackendSend(t,
 		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
 			request := msg.(RPCMessage)
 			if request.InternalMessage() {
 				if m, ok := request.Message.(*flagOnlyMessage); ok && m.flag == flagPing {
 					select {
-					case pongSent <- struct{}{}:
+					case internalRequestReceived <- struct{}{}:
 					default:
+					}
+					select {
+					case <-releaseInternalResponse:
+					case <-time.After(10 * time.Second):
+						return context.DeadlineExceeded
 					}
 					return conn.Write(RPCMessage{
 						Ctx:      request.Ctx,
@@ -716,48 +2559,188 @@ func TestReadLoopInternalMessageDoesNotUpdateLastActive(t *testing.T) {
 					}, goetty.WriteOptions{Flush: true})
 				}
 			}
+			select {
+			case userRequestReceived <- struct{}{}:
+			default:
+			}
+			select {
+			case <-releaseUserResponse:
+			case <-time.After(10 * time.Second):
+				return context.DeadlineExceeded
+			}
 			return conn.Write(msg, goetty.WriteOptions{Flush: true})
 		},
 		func(b *remoteBackend) {
-			t0 := b.LastActiveTime()
-			select {
-			case <-pongSent:
-			case <-time.After(10 * time.Second):
-				t.Fatal("timeout waiting for pong (heartbeat may not have fired or readLoop stalled)")
-			}
-			deadline := time.Now().Add(2 * time.Second)
-			for time.Now().Before(deadline) {
-				runtime.Gosched()
-				if b.LastActiveTime().Equal(t0) {
-					break
-				}
-			}
-			require.True(t, b.LastActiveTime().Equal(t0), "internal (pong) message must not call active(); lastActive changed")
-
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer releaseInternal()
+			defer releaseResponse()
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
+			internalFuture, err := b.SendInternal(ctx, &flagOnlyMessage{flag: flagPing})
+			require.NoError(t, err)
+			defer internalFuture.Close()
+			select {
+			case <-internalRequestReceived:
+			case <-time.After(5 * time.Second):
+				t.Fatal("server did not receive internal request")
+			}
+			lastActiveAfterInternalSend := b.LastActiveTime()
+			releaseInternal()
+			_, err = internalFuture.Get()
+			require.NoError(t, err)
+			require.True(t, b.LastActiveTime().Equal(lastActiveAfterInternalSend),
+				"internal response must not call active(); lastActive changed")
+
 			req := newTestMessage(1)
 			f, err := b.Send(ctx, req)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			defer f.Close()
+			select {
+			case <-userRequestReceived:
+			case <-time.After(5 * time.Second):
+				t.Fatal("server did not receive user request")
+			}
+			lastActiveAfterSend := b.LastActiveTime()
+			releaseResponse()
 			_, err = f.Get()
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			t2 := b.LastActiveTime()
-			assert.True(t, t2.After(t0), "user response must call active() and update lastActive")
+			require.True(t, t2.After(lastActiveAfterSend), "user response must call active() and update lastActive")
 		},
-		WithBackendReadTimeout(30*time.Millisecond),
+		WithBackendReadTimeout(10*time.Second),
 	)
 }
 
 func TestBackendConnectTimeout(t *testing.T) {
+	core, logs := observer.New(zap.ErrorLevel)
 	rb, err := NewRemoteBackend(
 		testAddr,
 		newTestCodec(),
 		WithBackendMetrics(newMetrics("")),
+		WithBackendLogger(zap.New(core)),
 		WithBackendConnectTimeout(time.Millisecond*200),
 	)
-	assert.Error(t, err)
-	assert.Nil(t, rb)
+	require.Error(t, err)
+	require.Nil(t, rb)
+
+	var terminalLogs []observer.LoggedEntry
+	for _, entry := range logs.All() {
+		if entry.Message == "connect to remote failed" {
+			terminalLogs = append(terminalLogs, entry)
+		}
+	}
+	require.Len(t, terminalLogs, 1)
+	require.Equal(t, err.Error(), terminalLogs[0].ContextMap()["error"])
+}
+
+type timeoutConnectSession struct {
+	*testIOSession
+	mu       sync.Mutex
+	failures int
+	timeouts []time.Duration
+	elapse   func(time.Duration)
+}
+
+func (s *timeoutConnectSession) Connect(_ string, timeout time.Duration) error {
+	s.mu.Lock()
+	s.timeouts = append(s.timeouts, timeout)
+	attempt := len(s.timeouts)
+	s.mu.Unlock()
+	if attempt > s.failures {
+		return nil
+	}
+	s.elapse(timeout)
+	return context.DeadlineExceeded
+}
+
+func (s *timeoutConnectSession) connectTimeouts() []time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]time.Duration(nil), s.timeouts...)
+}
+
+type connectTestClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func newConnectTestClock() *connectTestClock {
+	return &connectTestClock{now: time.Unix(0, 0)}
+}
+
+func (c *connectTestClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *connectTestClock) Advance(elapsed time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(elapsed)
+}
+
+func (c *connectTestClock) Wait(ctx context.Context, delay time.Duration) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		c.Advance(delay)
+		return nil
+	}
+}
+
+func newConnectTimeoutTestBackend(
+	t *testing.T,
+	connectTimeout time.Duration,
+	failures int,
+) (*remoteBackend, *timeoutConnectSession, *connectTestClock) {
+	t.Helper()
+	clock := newConnectTestClock()
+	conn := &timeoutConnectSession{
+		testIOSession: newTestIOSession(nil, nil),
+		failures:      failures,
+		elapse:        clock.Advance,
+	}
+	t.Cleanup(func() { require.NoError(t, conn.Close()) })
+	readStopper := stopper.NewStopper(t.Name())
+	t.Cleanup(readStopper.Stop)
+	rb := &remoteBackend{
+		remote:      "temporarily-unreachable",
+		metrics:     newMetrics(t.Name()),
+		logger:      zap.NewNop(),
+		conn:        conn,
+		ctx:         context.Background(),
+		readStopper: readStopper,
+	}
+	rb.options.connectTimeout = connectTimeout
+	rb.options.connectAttemptTimeout = 50 * time.Millisecond
+	rb.options.connectNow = clock.Now
+	rb.options.connectWait = clock.Wait
+	rb.adjust()
+	return rb, conn, clock
+}
+
+func TestBackendConnectAttemptTimeoutRecoversOnRetry(t *testing.T) {
+	rb, conn, clock := newConnectTimeoutTestBackend(t, 1150*time.Millisecond, 1)
+
+	err := rb.resetConn()
+	require.NoError(t, err)
+	require.Equal(t,
+		[]time.Duration{50 * time.Millisecond, 50 * time.Millisecond},
+		conn.connectTimeouts(),
+		"the first attempt must time out without consuming the second attempt's budget")
+	require.Equal(t, 1050*time.Millisecond, clock.Now().Sub(time.Unix(0, 0)))
+}
+
+func TestBackendConnectAttemptTimeoutHonorsTotalBudget(t *testing.T) {
+	rb, conn, clock := newConnectTimeoutTestBackend(t, 1075*time.Millisecond, 2)
+
+	err := rb.resetConn()
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrRPCTimeout), err)
+	require.Equal(t,
+		[]time.Duration{50 * time.Millisecond, 25 * time.Millisecond},
+		conn.connectTimeouts())
+	require.Equal(t, 1075*time.Millisecond, clock.Now().Sub(time.Unix(0, 0)))
 }
 
 func TestInactiveAfterCannotConnect(t *testing.T) {
@@ -870,6 +2853,84 @@ func TestRemoteBackendUsesSharedLogger(t *testing.T) {
 	assert.Same(t, logger, b.logger, "backend should use shared logger, not a With() clone")
 }
 
+func TestGoettyBasedBackendFactoryConcurrentCreateOptions(t *testing.T) {
+	app := newTestApp(t, func(conn goetty.IOSession, msg interface{}, _ uint64) error {
+		return conn.Write(msg, goetty.WriteOptions{Flush: true})
+	})
+	require.NoError(t, app.Start())
+	defer func() { require.NoError(t, app.Stop()) }()
+
+	ready := make(chan struct{}, 2)
+	release := make(chan struct{})
+	options := make([]BackendOption, 1, 2)
+	options[0] = func(rb *remoteBackend) {
+		rb.metrics = newMetrics(t.Name())
+		ready <- struct{}{}
+		<-release
+	}
+	factory := NewGoettyBasedBackendFactory(newTestCodec(), options...)
+
+	type createResult struct {
+		backend Backend
+		err     error
+	}
+	create := func(bufferSize int) <-chan createResult {
+		resultC := make(chan createResult, 1)
+		go func() {
+			backend, err := factory.Create(testAddr, WithBackendBufferSize(bufferSize))
+			resultC <- createResult{backend: backend, err: err}
+		}()
+		return resultC
+	}
+
+	firstC := create(1)
+	secondC := create(2)
+	<-ready
+	<-ready
+	close(release)
+
+	first := <-firstC
+	second := <-secondC
+	defer func() {
+		if first.backend != nil {
+			first.backend.Close()
+		}
+		if second.backend != nil {
+			second.backend.Close()
+		}
+	}()
+	require.NoError(t, first.err)
+	require.NoError(t, second.err)
+	firstBackend := first.backend.(*remoteBackend)
+	secondBackend := second.backend.(*remoteBackend)
+	require.Equal(t, 1, firstBackend.options.bufferSize)
+	require.Equal(t, 2, secondBackend.options.bufferSize)
+}
+
+func TestRemoteBackendCloseDoesNotLogExpectedDoubleClose(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	core, logs := observer.New(zap.ErrorLevel)
+	logger := zap.New(core)
+	app := newTestApp(t, func(conn goetty.IOSession, msg interface{}, _ uint64) error {
+		return conn.Write(msg, goetty.WriteOptions{Flush: true})
+	})
+	require.NoError(t, app.Start())
+	defer func() { assert.NoError(t, app.Stop()) }()
+
+	rb, err := NewRemoteBackend(
+		testAddr,
+		newTestCodec(),
+		WithBackendMetrics(newMetrics(t.Name())),
+		WithBackendLogger(logger),
+	)
+	require.NoError(t, err)
+	rb.Close()
+
+	for _, entry := range logs.All() {
+		require.NotEqual(t, "close conneciton failed", entry.Message)
+	}
+}
+
 // TestRemoteBackendLogFields ensures logFields() returns "remote" and "backend-id"
 // so that shared-logger logs still have backend identity (regression test for the memory fix).
 func TestRemoteBackendLogFields(t *testing.T) {
@@ -908,6 +2969,191 @@ func TestIsExpectedCloseError(t *testing.T) {
 
 	// Test with nil error
 	assert.False(t, rb.isExpectedCloseError(nil), "should return false for nil error")
+}
+
+func TestStoppedBackendCannotBeReactivated(t *testing.T) {
+	closeDone := make(chan struct{})
+	close(closeDone)
+	rb := &remoteBackend{
+		cancel:    func() {},
+		closeDone: closeDone,
+	}
+	rb.stateMu.state = stateStopped
+	rb.atomic.unavailable.Store(true)
+	rb.atomic.lastActiveTime.Store(time.Time{})
+
+	// Simulate an activity completion racing after the terminal state was
+	// published. It must not make the backend selectable again.
+	rb.active()
+	require.True(t, rb.LastActiveTime().IsZero())
+
+	// Repeated Close must also repair a stale activity timestamp left by an
+	// older racing caller, while remaining idempotent.
+	rb.atomic.lastActiveTime.Store(time.Now())
+	rb.Close()
+	require.True(t, rb.LastActiveTime().IsZero())
+}
+
+func newBlockingCloseRemoteBackend(
+	t *testing.T,
+) (*remoteBackend, <-chan struct{}, func()) {
+	t.Helper()
+	rb := &remoteBackend{
+		stopper:    stopper.NewStopper("blocking-backend-close"),
+		stopWriteC: make(chan struct{}),
+		closeDone:  make(chan struct{}),
+		cancel:     func() {},
+	}
+	rb.atomic.lastActiveTime.Store(time.Now())
+	rb.mu.futures = make(map[uint64]*Future)
+	rb.mu.activeStreams = make(map[uint64]*stream)
+	// This helper has no IOSession. Mark the connection-only destructor done so
+	// the test exercises the real Close state machine without a transport mock.
+	rb.closeOnce.Do(func() {})
+
+	teardownStarted := make(chan struct{})
+	releaseTeardown := make(chan struct{})
+	require.NoError(t, rb.stopper.RunTask(func(ctx context.Context) {
+		<-ctx.Done()
+		close(teardownStarted)
+		<-releaseTeardown
+	}))
+
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() { close(releaseTeardown) })
+	}
+	t.Cleanup(func() {
+		release()
+		rb.Close()
+	})
+	return rb, teardownStarted, release
+}
+
+func TestConcurrentRemoteBackendCloseJoinsTeardown(t *testing.T) {
+	rb, teardownStarted, release := newBlockingCloseRemoteBackend(t)
+	firstDone := make(chan struct{})
+	go func() {
+		rb.Close()
+		close(firstDone)
+	}()
+
+	select {
+	case <-teardownStarted:
+	case <-time.After(time.Second):
+		t.Fatal("backend teardown did not start")
+	}
+
+	secondDone := make(chan struct{})
+	go func() {
+		rb.Close()
+		close(secondDone)
+	}()
+	select {
+	case <-secondDone:
+		t.Fatal("concurrent Close returned before the teardown owner")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	release()
+	for _, done := range []<-chan struct{}{firstDone, secondDone} {
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("Close did not finish after teardown was released")
+		}
+	}
+}
+
+func TestRemoteBackendCloseTerminatesActiveStream(t *testing.T) {
+	rb, teardownStarted, release := newBlockingCloseRemoteBackend(t)
+	s := newStream(
+		rb,
+		make(chan Message, 1),
+		func() *Future { return newFuture(nil) },
+		func(*Future) error { return nil },
+		rb.removeActiveStream,
+		func() {},
+	)
+	s.init(1, false)
+	rb.mu.activeStreams[s.ID()] = s
+	recv, err := s.Receive()
+	require.NoError(t, err)
+
+	closeDone := make(chan struct{})
+	go func() {
+		rb.Close()
+		close(closeDone)
+	}()
+	select {
+	case <-teardownStarted:
+	case <-time.After(time.Second):
+		t.Fatal("backend teardown did not start")
+	}
+
+	// The receiver must terminate before the deliberately blocked transport
+	// teardown is released; client cleanup is not allowed to depend on it.
+	select {
+	case message := <-recv:
+		require.Nil(t, message)
+	case <-time.After(time.Second):
+		t.Fatal("backend close did not terminate the active stream receiver")
+	}
+	require.NoError(t, s.Close(false))
+
+	release()
+	select {
+	case <-closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("backend Close did not finish after teardown was released")
+	}
+}
+
+func TestStreamTerminationRejectsLateResponse(t *testing.T) {
+	s := newStream(
+		nil,
+		make(chan Message, 1),
+		func() *Future { return newFuture(nil) },
+		func(*Future) error { return nil },
+		func(*stream) {},
+		func() {},
+	)
+	s.init(1, false)
+	recv, err := s.Receive()
+	require.NoError(t, err)
+
+	s.terminate()
+	s.done(context.Background(), RPCMessage{
+		Message:        newTestMessage(s.ID()),
+		stream:         true,
+		streamSequence: 1,
+	}, false)
+
+	message := <-recv
+	require.Nil(t, message)
+	require.Empty(t, recv, "a response must not be published after terminal")
+	require.NoError(t, s.Close(false))
+}
+
+func TestStreamCloseWithoutConnectionCloseTerminatesReceiver(t *testing.T) {
+	s := newStream(
+		nil,
+		make(chan Message, 1),
+		func() *Future { return newFuture(nil) },
+		func(*Future) error { return nil },
+		func(*stream) {},
+		func() {},
+	)
+	s.init(1, false)
+	recv, err := s.Receive()
+	require.NoError(t, err)
+	require.NoError(t, s.Close(false))
+	select {
+	case message := <-recv:
+		require.Nil(t, message)
+	case <-time.After(time.Second):
+		t.Fatal("stream Close(false) did not terminate an existing receiver")
+	}
 }
 
 func TestWaitingFutureMustGetClosedError(t *testing.T) {
@@ -1026,7 +3272,7 @@ func testBackendSendWithoutServer(t *testing.T, addr string,
 
 	options = append(
 		options,
-		WithBackendMetrics(newMetrics("")),
+		WithBackendMetrics(newMetrics(t.Name())),
 		WithBackendBufferSize(1),
 		WithBackendLogger(logutil.GetPanicLoggerWithLevel(zap.DebugLevel).With(zap.String("testcase", t.Name()))))
 	rb, err := NewRemoteBackend(addr, newTestCodec(), options...)
@@ -1043,11 +3289,20 @@ func testBackendSendWithoutServer(t *testing.T, addr string,
 func newTestApp(t *testing.T,
 	handleFunc func(goetty.IOSession, interface{}, uint64) error,
 	opts ...goetty.AppOption) goetty.NetApplication {
-	assert.NoError(t, os.RemoveAll(testUnixFile))
+	return newTestAppWithAddr(t, testAddr, testUnixFile, handleFunc, opts...)
+}
+
+func newTestAppWithAddr(t *testing.T,
+	addr string,
+	unixFile string,
+	handleFunc func(goetty.IOSession, interface{}, uint64) error,
+	opts ...goetty.AppOption) goetty.NetApplication {
+	t.Helper()
+	require.NoError(t, os.RemoveAll(unixFile))
 	codec := newTestCodec().(*messageCodec)
 	opts = append(opts, goetty.WithAppSessionOptions(goetty.WithSessionCodec(codec)))
-	app, err := goetty.NewApplication(testAddr, handleFunc, opts...)
-	assert.NoError(t, err)
+	app, err := goetty.NewApplication(addr, handleFunc, opts...)
+	require.NoError(t, err)
 
 	return app
 }
@@ -1129,6 +3384,7 @@ func (b *testBackend) Close() {
 	b.RWMutex.Lock()
 	defer b.RWMutex.Unlock()
 	b.closed = true
+	b.activeTime = time.Time{}
 }
 func (b *testBackend) Busy() bool { return b.busy }
 func (b *testBackend) LastActiveTime() time.Time {
@@ -1211,10 +3467,12 @@ func (tm *testMessage) GetPayloadField() []byte {
 }
 
 func (tm *testMessage) SetPayloadField(data []byte) {
-	if len(data) > 0 {
-		tm.payload = make([]byte, len(data))
-		copy(tm.payload, data)
+	if len(data) == 0 {
+		tm.payload = nil
+		return
 	}
+	tm.payload = make([]byte, len(data))
+	copy(tm.payload, data)
 }
 
 func newTestCodec(options ...CodecOption) Codec {

@@ -34,6 +34,8 @@ type safeQueue struct {
 	ctx       context.Context
 	cancel    context.CancelFunc
 	wg        sync.WaitGroup
+	mu        sync.Mutex
+	stopOnce  sync.Once
 	state     atomic.Int32
 	pending   atomic.Int64
 	batchSize int
@@ -62,8 +64,14 @@ func NewNonBlockingQueue(queueSize int, batchSize int, onItem OnItemsCB) *safeQu
 }
 
 func (q *safeQueue) Start() {
+	q.mu.Lock()
+	if q.state.Load() != Created {
+		q.mu.Unlock()
+		return
+	}
 	q.state.Store(Running)
 	q.wg.Add(1)
+	q.mu.Unlock()
 	items := make([]any, 0, q.batchSize)
 	go func() {
 		defer q.wg.Done()
@@ -73,6 +81,7 @@ func (q *safeQueue) Start() {
 				return
 			case item := <-q.queue:
 				if q.onItemsCB == nil {
+					q.pending.Add(-1)
 					continue
 				}
 				items = append(items, item)
@@ -95,17 +104,24 @@ func (q *safeQueue) Start() {
 }
 
 func (q *safeQueue) Stop() {
-	q.stopReceiver()
-	q.waitStop()
-	close(q.queue)
+	q.stopOnce.Do(func() {
+		q.stopReceiver()
+		q.waitStop()
+		// waitStop observes pending == 0 only after every producer that passed
+		// the second state check has sent and been handled. Producers that race
+		// with Stop after this point withdraw before sending, so close releases
+		// the queue buffer without racing a sender.
+		close(q.queue)
+		q.state.Store(Stopped)
+	})
 }
 
 func (q *safeQueue) stopReceiver() {
-	state := q.state.Load()
-	if state >= ReceiverStopped {
-		return
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.state.Load() < ReceiverStopped {
+		q.state.Store(ReceiverStopped)
 	}
-	q.state.CompareAndSwap(state, ReceiverStopped)
 }
 
 func (q *safeQueue) waitStop() {
@@ -131,15 +147,80 @@ func (q *safeQueue) Enqueue(item any) (any, error) {
 
 	if q.blocking {
 		q.pending.Add(1)
+		// Stop may begin after the first state check. Register before the
+		// second check so Stop keeps the receiver alive until this producer
+		// either sends or withdraws its pending item.
+		if q.state.Load() != Running {
+			q.pending.Add(-1)
+			return item, ErrClose
+		}
+		// Keep the established background-producer hot path exact: unlike a
+		// request-scoped enqueue it has no context checks and no select. Stop
+		// waits for pending to reach zero, so the receiver remains alive until
+		// this send is handled.
 		q.queue <- item
 		return item, nil
-	} else {
+	}
+
+	q.pending.Add(1)
+	if q.state.Load() != Running {
+		q.pending.Add(-1)
+		return item, ErrClose
+	}
+	select {
+	case q.queue <- item:
+		return item, nil
+	default:
+		q.pending.Add(-1)
+		return item, ErrFull
+	}
+}
+
+func (q *safeQueue) EnqueueWithContext(ctx context.Context, item any) (any, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return item, context.Cause(ctx)
+	}
+	if q.state.Load() != Running {
+		return item, ErrClose
+	}
+
+	if q.blocking {
+		q.pending.Add(1)
+		// Stop may begin after the first state check. Register before the
+		// second check so Stop keeps the receiver alive until this producer
+		// either sends or withdraws its pending item.
+		if q.state.Load() != Running {
+			q.pending.Add(-1)
+			return item, ErrClose
+		}
+		// Stop waits for pending to reach zero before canceling q.ctx. Caller
+		// cancellation is different: this producer can withdraw its own pending
+		// item before it has transferred ownership to the receiver.
 		select {
 		case q.queue <- item:
-			q.pending.Add(1)
 			return item, nil
-		default:
-			return item, ErrFull
+		case <-ctx.Done():
+			q.pending.Add(-1)
+			return item, context.Cause(ctx)
 		}
+	}
+
+	q.pending.Add(1)
+	if q.state.Load() != Running {
+		q.pending.Add(-1)
+		return item, ErrClose
+	}
+	select {
+	case q.queue <- item:
+		return item, nil
+	case <-ctx.Done():
+		q.pending.Add(-1)
+		return item, context.Cause(ctx)
+	default:
+		q.pending.Add(-1)
+		return item, ErrFull
 	}
 }

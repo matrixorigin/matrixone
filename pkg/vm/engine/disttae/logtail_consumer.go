@@ -220,6 +220,48 @@ func (c *PushClient) LatestLogtailAppliedTime() timestamp.Timestamp {
 	return c.receivedLogTailTime.getTimestamp()
 }
 
+// AcquireLogtailReadBarrier obtains a TN-ordered publication frontier and
+// waits until the normal CN logtail apply pipeline reaches it. It does not
+// bypass, duplicate, or special-case catalog application.
+func (c *PushClient) AcquireLogtailReadBarrier(
+	ctx context.Context,
+) (timestamp.Timestamp, error) {
+	if c.subscriber == nil {
+		return timestamp.Timestamp{}, moerr.NewInternalError(
+			ctx, "logtail subscriber is not initialized")
+	}
+	return acquireAppliedLogtailReadBarrier(
+		ctx, c.timestampWaiter, c.subscriber.readBarrier,
+	)
+}
+
+func acquireAppliedLogtailReadBarrier(
+	ctx context.Context,
+	timestampWaiter client.TimestampWaiter,
+	readBarrier func(context.Context) (timestamp.Timestamp, error),
+) (timestamp.Timestamp, error) {
+	if timestampWaiter == nil {
+		return timestamp.Timestamp{}, moerr.NewInternalError(
+			ctx, "logtail timestamp waiter is not initialized")
+	}
+	frontier, err := readBarrier(ctx)
+	if err != nil {
+		return timestamp.Timestamp{}, moerr.AttachCause(ctx, err)
+	}
+	applied, err := timestampWaiter.GetTimestamp(ctx, frontier)
+	if err != nil {
+		return timestamp.Timestamp{}, moerr.AttachCause(ctx, err)
+	}
+	if applied.Less(frontier) {
+		return timestamp.Timestamp{}, moerr.NewInternalErrorf(
+			ctx,
+			"logtail waiter returned %s before read barrier %s",
+			applied.DebugString(), frontier.DebugString(),
+		)
+	}
+	return frontier, nil
+}
+
 func (c *PushClient) GetState() State {
 	c.subscribed.rw.RLock()
 	defer c.subscribed.rw.RUnlock()
@@ -301,9 +343,14 @@ func (c *PushClient) init(
 ) error {
 
 	c.serviceID = e.GetService()
-	c.timestampWaiter = timestampWaiter
 	if c.subscriber == nil {
 		c.subscriber = newLogTailSubscriber()
+	}
+	if !c.initialized {
+		// The waiter belongs to the PushClient generation, not to an individual
+		// transport connection. Reconnect reuses it and must not race barrier
+		// callers by rewriting the same field.
+		c.timestampWaiter = timestampWaiter
 	}
 
 	// lock all.
@@ -390,13 +437,14 @@ func (c *PushClient) waitCanServeTableSnapshot(
 	ctx context.Context,
 	accId, dbId, tblId uint64,
 	ps *logtailreplay.PartitionState,
+	pending bool,
 	snapshot timestamp.Timestamp,
 ) (*logtailreplay.PartitionState, bool, error) {
 	ticker := time.NewTicker(time.Millisecond)
 	defer ticker.Stop()
 
 	for {
-		canServe, needWait := c.canServeTableSnapshotNoWait(dbId, tblId, ps, snapshot)
+		canServe, needWait := canServeTableSnapshotWithPending(ps, snapshot, pending)
 		if canServe || !needWait {
 			return ps, canServe, nil
 		}
@@ -405,7 +453,7 @@ func (c *PushClient) waitCanServeTableSnapshot(
 		case <-ctx.Done():
 			return nil, false, ctx.Err()
 		case <-ticker.C:
-			ps = c.eng.GetOrCreateLatestPart(ctx, accId, dbId, tblId).Snapshot()
+			ps, pending = c.getSubscribedSnapshotAndPending(ctx, accId, dbId, tblId)
 		}
 	}
 }
@@ -414,6 +462,18 @@ func (c *PushClient) canServeTableSnapshotNoWait(
 	dbId, tblId uint64,
 	ps *logtailreplay.PartitionState,
 	snapshot timestamp.Timestamp,
+) (canServe bool, needWait bool) {
+	return canServeTableSnapshotWithPending(
+		ps,
+		snapshot,
+		c.subscribed.hasPendingUpdate(dbId, tblId),
+	)
+}
+
+func canServeTableSnapshotWithPending(
+	ps *logtailreplay.PartitionState,
+	snapshot timestamp.Timestamp,
+	pending bool,
 ) (canServe bool, needWait bool) {
 	snapshotTS := types.TimestampToTS(snapshot)
 	if ps == nil || !ps.CanServe(snapshotTS) {
@@ -434,7 +494,7 @@ func (c *PushClient) canServeTableSnapshotNoWait(
 	// waterline. Only block the latest-state fast path when this table has a
 	// known pending update and the current state has not applied up to the
 	// statement snapshot yet.
-	if c.subscribed.hasPendingUpdate(dbId, tblId) {
+	if pending {
 		return false, true
 	}
 	return true, false
@@ -445,13 +505,13 @@ func (c *PushClient) skipSubIfSubscribed(
 	acctId uint64,
 	tableID uint64,
 	dbID uint64,
-) (bool, *logtailreplay.PartitionState) {
+) (bool, *logtailreplay.PartitionState, bool) {
 
 	//if table has been subscribed, return quickly.
-	if ps, ok, _ := c.isSubscribed(ctx, acctId, dbID, tableID); ok {
-		return true, ps
+	if ps, ok, _, pending := c.isSubscribedWithPending(ctx, acctId, dbID, tableID); ok {
+		return true, ps, pending
 	}
-	return false, nil
+	return false, nil, false
 }
 
 func (c *PushClient) toSubscribeTable(
@@ -461,12 +521,18 @@ func (c *PushClient) toSubscribeTable(
 	tableName string,
 	dbID uint64,
 	dbName string,
+	pendingOut ...*bool,
 ) (ps *logtailreplay.PartitionState, err error) {
+	var pending *bool
+	if len(pendingOut) > 0 {
+		pending = pendingOut[0]
+	}
 
 	var (
-		skip     bool
-		state    SubscribeState
-		injected bool
+		skip           bool
+		state          SubscribeState
+		injected       bool
+		initialPending bool
 	)
 
 	if injected, _ = objectio.LogCNSubscribeTableFailInjected(
@@ -476,7 +542,10 @@ func (c *PushClient) toSubscribeTable(
 			moerr.NewInternalErrorNoCtx("injected subscribe table err")
 	}
 
-	if skip, ps = c.skipSubIfSubscribed(ctx, accId, tableID, dbID); skip {
+	if skip, ps, initialPending = c.skipSubIfSubscribed(ctx, accId, tableID, dbID); skip {
+		if pending != nil {
+			*pending = initialPending
+		}
 		return ps, nil
 	}
 
@@ -515,8 +584,11 @@ func (c *PushClient) toSubscribeTable(
 
 		case Subscribed:
 			//if table has been subscribed, return the ps.
-			ps, _, state = c.isSubscribed(ctx, accId, dbID, tableID)
+			ps, _, state, initialPending = c.isSubscribedWithPending(ctx, accId, dbID, tableID)
 			if ps != nil {
+				if pending != nil {
+					*pending = initialPending
+				}
 				logutil.Info(
 					fmt.Sprintf("%s-subscribe-ok", logTag),
 					zap.Uint64("table-id", tableID),
@@ -627,7 +699,7 @@ func (c *PushClient) pause(s bool) {
 	// Note
 	// If subSysTables fails to send a successful request, receiveLogtails will receive nothing until the context is done. In this case, we attempt to stop the receiveLogtails goroutine immediately.
 	// The break signal left in the channel will interrupt the normal receiving process, but this is not an issue because reconnecting will create a new channel.
-	c.subscriber.logTailClient.BreakoutReceive()
+	c.subscriber.breakoutReceive()
 	select {
 	case c.pauseC <- s:
 		c.mu.paused = true
@@ -1269,10 +1341,47 @@ type SubTableStatus struct {
 	LatestTime time.Time
 }
 
+// getSubscribedSnapshotAndPending captures the pending marker before the immutable
+// partition snapshot while holding the subscription generation. If pending is
+// clear, the later snapshot includes every update whose marker was cleared.
+func (c *PushClient) getSubscribedSnapshotAndPending(
+	ctx context.Context,
+	accId, dbId, tId uint64,
+) (*logtailreplay.PartitionState, bool) {
+	s := &c.subscribed
+	s.rw.RLock()
+	ent, exist := s.m[tId]
+	if !exist {
+		s.rw.RUnlock()
+		return nil, false
+	}
+	if ent.dbID != dbId || ent.state != Subscribed {
+		s.rw.RUnlock()
+		return nil, false
+	}
+
+	now := time.Now().UnixNano()
+	if now-ent.lastTs.Load() > int64(time.Minute) {
+		ent.lastTs.Store(now)
+	}
+	pending := ent.pendingTo.Load() != nil
+	ps := c.eng.GetOrCreateLatestPart(ctx, accId, dbId, tId).Snapshot()
+	s.rw.RUnlock()
+	return ps, pending
+}
+
 func (c *PushClient) isSubscribed(
 	ctx context.Context,
 	accId, dbId, tId uint64,
 ) (*logtailreplay.PartitionState, bool, SubscribeState) {
+	ps, ok, state, _ := c.isSubscribedWithPending(ctx, accId, dbId, tId)
+	return ps, ok, state
+}
+
+func (c *PushClient) isSubscribedWithPending(
+	ctx context.Context,
+	accId, dbId, tId uint64,
+) (*logtailreplay.PartitionState, bool, SubscribeState, bool) {
 
 	s := &c.subscribed
 
@@ -1282,12 +1391,12 @@ func (c *PushClient) isSubscribed(
 	ent, exist := s.m[tId]
 	if !exist {
 		s.rw.RUnlock()
-		return nil, false, Unsubscribed
+		return nil, false, Unsubscribed, false
 	}
 	if ent.state != Subscribed {
 		st := ent.state
 		s.rw.RUnlock()
-		return nil, false, st
+		return nil, false, st, false
 	}
 	// Update timestamp (with sampling) while holding the read lock to keep
 	// state consistent with the partition creation below.
@@ -1295,10 +1404,51 @@ func (c *PushClient) isSubscribed(
 	if now-ent.lastTs.Load() > int64(time.Minute) {
 		ent.lastTs.Store(now)
 	}
+	pending := ent.pendingTo.Load() != nil
 	ps := c.eng.GetOrCreateLatestPart(ctx, accId, dbId, tId).Snapshot()
 	s.rw.RUnlock()
 
-	return ps, true, Subscribed
+	return ps, true, Subscribed, pending
+}
+
+// getSubscribedSnapshotForPKCheck requires an open push-client admission gate
+// and captures the pending marker before the immutable partition snapshot while
+// holding the subscription generation.
+// If there is no pending update, the later snapshot includes every table
+// update known when the global logtail waterline reached the lock timestamp.
+func (c *PushClient) getSubscribedSnapshotForPKCheck(
+	ctx context.Context,
+	accId, dbId, tId uint64,
+) (*logtailreplay.PartitionState, bool, SubscribeState, bool) {
+	if !c.receivedLogTailTime.ready.Load() {
+		return nil, false, InvalidSubState, false
+	}
+
+	s := &c.subscribed
+	s.rw.RLock()
+	ent, exist := s.m[tId]
+	if !exist {
+		s.rw.RUnlock()
+		return nil, false, Unsubscribed, false
+	}
+	if ent.dbID != dbId || ent.state != Subscribed {
+		state := ent.state
+		s.rw.RUnlock()
+		return nil, false, state, false
+	}
+
+	now := time.Now().UnixNano()
+	if now-ent.lastTs.Load() > int64(time.Minute) {
+		ent.lastTs.Store(now)
+	}
+	pending := ent.pendingTo.Load() != nil
+	ps := c.eng.GetOrCreateLatestPart(ctx, accId, dbId, tId).Snapshot()
+	if !c.receivedLogTailTime.ready.Load() {
+		s.rw.RUnlock()
+		return nil, false, InvalidSubState, false
+	}
+	s.rw.RUnlock()
+	return ps, true, Subscribed, pending
 }
 
 func (c *PushClient) toSubIfUnsubscribed(ctx context.Context, dbId, tblId uint64) (SubscribeState, error) {
@@ -1319,8 +1469,13 @@ func (c *PushClient) toSubIfUnsubscribed(ctx context.Context, dbId, tblId uint64
 			}
 		}
 		ent, exist := c.subscribed.m[tblId]
-		if exist && ent.state == Subscribed {
-			return Subscribed, nil
+		if exist {
+			// The lock was released while waiting for the subscriber to become
+			// ready. Another waiter may already own the subscription attempt, or
+			// its response may already have advanced the state. Preserve that
+			// state so concurrent waiters cannot send duplicate requests or move
+			// SubRspReceived back to Subscribing.
+			return ent.state, nil
 		}
 		c.subscribed.m[tblId] = &subEntry{
 			dbID:  dbId,
@@ -1548,7 +1703,7 @@ func (c *PushClient) isNotUnsubscribing(ctx context.Context, dbId, tblId uint64)
 func (c *PushClient) Disconnect() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.subscriber.logTailClient.Close()
+	return c.subscriber.closeClient()
 }
 
 func (s *subscribedTable) setTableSubNotExist(dbId, tblId uint64) {
@@ -1762,9 +1917,8 @@ func (s *logTailSubscriber) init(
 	// clear the old status.
 	s.sendSubscribe = clientIsPreparing
 	s.sendUnSubscribe = clientIsPreparing
-	if s.logTailClient != nil {
-		_ = s.logTailClient.Close()
-		s.logTailClient = nil
+	if oldClient := s.swapClient(nil); oldClient != nil {
+		_ = oldClient.Close()
 	}
 
 	rpcClient, rpcStream, err := rpcStreamFactory(ctx, sid, serviceAddr, s.rpcClient)
@@ -1781,7 +1935,7 @@ func (s *logTailSubscriber) init(
 	s.rpcStream = rpcStream
 
 	// new the log tail client.
-	s.logTailClient, err = service.NewLogtailClient(
+	logTailClient, err := service.NewLogtailClient(
 		ctx,
 		s.rpcStream,
 		service.WithClientRequestPerSecond(maxSubscribeRequestPerSecond),
@@ -1789,10 +1943,40 @@ func (s *logTailSubscriber) init(
 	if err != nil {
 		return err
 	}
+	s.swapClient(logTailClient)
 
 	s.sendSubscribe = s.subscribeTable
 	s.sendUnSubscribe = s.unSubscribeTable
 	return nil
+}
+
+func (s *logTailSubscriber) swapClient(client *service.LogtailClient) *service.LogtailClient {
+	s.mu.Lock()
+	old := s.logTailClient
+	s.logTailClient = client
+	s.mu.Unlock()
+	return old
+}
+
+func (s *logTailSubscriber) client() *service.LogtailClient {
+	s.mu.RLock()
+	client := s.logTailClient
+	s.mu.RUnlock()
+	return client
+}
+
+func (s *logTailSubscriber) closeClient() error {
+	client := s.client()
+	if client == nil {
+		return nil
+	}
+	return client.Close()
+}
+
+func (s *logTailSubscriber) breakoutReceive() {
+	if client := s.client(); client != nil {
+		client.BreakoutReceive()
+	}
 }
 
 func (s *logTailSubscriber) setReady() {
@@ -1817,6 +2001,23 @@ func (s *logTailSubscriber) ready() bool {
 func (s *logTailSubscriber) waitReady(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// If ctx is already cancelled, return immediately. We check this before
+	// registering AfterFunc to avoid unnecessary callback registration.
+	// Note: context.AfterFunc always runs its callback in a separate goroutine,
+	// never synchronously in the caller's goroutine.
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	// sync.Cond cannot observe context cancellation itself. Register the
+	// wakeup while holding the same mutex as Wait: if cancellation races the
+	// ctx.Err check above, the callback waits for Wait to atomically release
+	// the lock and then broadcasts, so no wakeup can be lost.
+	stop := context.AfterFunc(ctx, func() {
+		s.mu.Lock()
+		s.mu.cond.Broadcast()
+		s.mu.Unlock()
+	})
+	defer stop()
 	for !s.mu.ready {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -1826,27 +2027,77 @@ func (s *logTailSubscriber) waitReady(ctx context.Context) error {
 	return nil
 }
 
+// waitReadyClient captures the client belonging to the ready stream
+// generation under the same lock as the ready flag. A reconnect can either
+// close that captured old client or publish a later ready generation, but a
+// caller can never observe the new client while it is still initializing.
+func (s *logTailSubscriber) waitReadyClient(
+	ctx context.Context,
+) (*service.LogtailClient, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	stop := context.AfterFunc(ctx, func() {
+		s.mu.Lock()
+		s.mu.cond.Broadcast()
+		s.mu.Unlock()
+	})
+	defer stop()
+	for !s.mu.ready {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		s.mu.cond.Wait()
+	}
+	if s.logTailClient == nil {
+		return nil, moerr.NewStreamClosedNoCtx()
+	}
+	return s.logTailClient, nil
+}
+
 // can't call this method directly.
 func (s *logTailSubscriber) subscribeTable(
 	ctx context.Context, tblId api.TableID) error {
-	err := s.logTailClient.Subscribe(ctx, tblId)
+	client := s.client()
+	if client == nil {
+		return moerr.NewStreamClosedNoCtx()
+	}
+	err := client.Subscribe(ctx, tblId)
 	return moerr.AttachCause(ctx, err)
 }
 
 // can't call this method directly.
 func (s *logTailSubscriber) unSubscribeTable(
 	ctx context.Context, tblId api.TableID) error {
-	err := s.logTailClient.Unsubscribe(ctx, tblId)
+	client := s.client()
+	if client == nil {
+		return moerr.NewStreamClosedNoCtx()
+	}
+	err := client.Unsubscribe(ctx, tblId)
 	return moerr.AttachCause(ctx, err)
 }
 
 func (s *logTailSubscriber) receiveResponse(deadlineCtx context.Context) logTailSubscriberResponse {
-	r, err := s.logTailClient.Receive(deadlineCtx)
+	client := s.client()
+	if client == nil {
+		return logTailSubscriberResponse{err: moerr.NewStreamClosedNoCtx()}
+	}
+	r, err := client.Receive(deadlineCtx)
 	resp := logTailSubscriberResponse{
 		response: r,
 		err:      err,
 	}
 	return resp
+}
+
+func (s *logTailSubscriber) readBarrier(ctx context.Context) (timestamp.Timestamp, error) {
+	client, err := s.waitReadyClient(ctx)
+	if err != nil {
+		return timestamp.Timestamp{}, err
+	}
+	return client.ReadBarrier(ctx)
 }
 
 func waitServerReady(addr string) {

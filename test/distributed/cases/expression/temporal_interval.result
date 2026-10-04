@@ -125,7 +125,8 @@ select date_add("9999-12-31 23:59:59",INTERVAL 1 SECOND);
 ➤ date_add(9999-12-31 23:59:59, INTERVAL 1 second)[12,-1,0]  𝄀
 null
 select date_sub("0000-00-00 00:00:00",INTERVAL 1 SECOND);
-invalid input: invalid datetime value 0000-00-00 00:00:00
+➤ date_sub(0000-00-00 00:00:00, INTERVAL 1 second)[12,-1,0]  𝄀
+null
 select date_add('1998-01-30',Interval 1 month);
 ➤ date_add(1998-01-30, INTERVAL 1 month)[12,-1,0]  𝄀
 1998-02-28
@@ -272,7 +273,8 @@ select date_sub("1998-01-01 00:00:00",INTERVAL 1 SECOND);
 ➤ date_sub(1998-01-01 00:00:00, INTERVAL 1 second)[12,-1,0]  𝄀
 1997-12-31 23:59:59
 select date_sub("0000-00-00 00:00:00",INTERVAL 1 SECOND);
-invalid input: invalid datetime value 0000-00-00 00:00:00
+➤ date_sub(0000-00-00 00:00:00, INTERVAL 1 second)[12,-1,0]  𝄀
+null
 select date_add('1998-01-30',Interval 1 month);
 ➤ date_add(1998-01-30, INTERVAL 1 month)[12,-1,0]  𝄀
 1998-02-28
@@ -621,10 +623,10 @@ drop table t1;
 set @tt=now();
 select @tt;
 ➤ @tt[12,0,0]  𝄀
-2026-07-15 15:09:12.915759
+2026-07-16 16:18:39.373043
 select date_add(@tt, Interval 30 SECOND);
 ➤ date_add(@tt, INTERVAL 30 second)[12,0,0]  𝄀
-2026-07-15 15:09:42.915759
+2026-07-16 16:19:09.373043
 select date_sub(@tt, Interval 30 SECOND);
 ➤ date_sub(@tt, INTERVAL 30 second)[12,0,0]  𝄀
-2026-07-15 15:08:42.915759
+2026-07-16 16:18:09.373043

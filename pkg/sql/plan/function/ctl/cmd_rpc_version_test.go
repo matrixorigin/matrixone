@@ -15,6 +15,7 @@
 package ctl
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -28,7 +29,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -74,6 +77,102 @@ func TestHandleGetProtocolVersion(t *testing.T) {
 				Method: GetProtocolVersionMethod,
 				Data:   fmt.Sprintf("%s:%d", id, defines.MORPCLatestVersion),
 			})
+		},
+	)
+}
+
+type protocolVersionClusterClient struct {
+	details logservicepb.ClusterDetails
+}
+
+func (c *protocolVersionClusterClient) GetClusterDetails(context.Context) (logservicepb.ClusterDetails, error) {
+	return c.details, nil
+}
+
+type protocolVersionQueryClient struct {
+	versions map[string]int64
+}
+
+func (c *protocolVersionQueryClient) ServiceID() string {
+	return ""
+}
+
+func (c *protocolVersionQueryClient) SendMessage(
+	_ context.Context, address string, req *query.Request,
+) (*query.Response, error) {
+	if req.CmdMethod != query.CmdMethod_GetProtocolVersion {
+		return nil, moerr.NewInternalErrorNoCtx("unexpected query method")
+	}
+	version, ok := c.versions[address]
+	if !ok {
+		return nil, moerr.NewInternalErrorf(context.Background(), "unknown query address %s", address)
+	}
+	return &query.Response{
+		GetProtocolVersion: &query.GetProtocolVersionResponse{Version: version},
+	}, nil
+}
+
+func (c *protocolVersionQueryClient) NewRequest(method query.CmdMethod) *query.Request {
+	return &query.Request{CmdMethod: method}
+}
+
+func (c *protocolVersionQueryClient) Release(*query.Response) {}
+
+func (c *protocolVersionQueryClient) Close() error {
+	return nil
+}
+
+func TestHandleGetProtocolVersionIncludesPendingCNs(t *testing.T) {
+	runtime.RunTest(
+		"",
+		func(rt runtime.Runtime) {
+			const protocolVersion = int64(42)
+			cluster := clusterservice.NewMOCluster(
+				"",
+				&protocolVersionClusterClient{details: logservicepb.ClusterDetails{
+					ViewMetadataAdmission: &logservicepb.ViewMetadataAdmission{
+						Enabled: true,
+						Epoch:   1,
+					},
+					CNStores: []logservicepb.CNStore{
+						{
+							UUID:                       "ready-cn",
+							QueryAddress:               "ready-address",
+							ViewMetadataAdmissionReady: true,
+						},
+						{
+							UUID:         "pending-cn",
+							QueryAddress: "pending-address",
+						},
+					},
+				}},
+				time.Hour,
+			)
+			defer cluster.Close()
+			require.NoError(t, cluster.(clusterservice.AuthoritativeRefresher).Refresh(context.Background()))
+			rt.SetGlobalVariables(runtime.ClusterService, cluster)
+
+			var rawCNs []string
+			require.NoError(t, clusterservice.GetCNServiceRawWithContext(
+				context.Background(), cluster, clusterservice.NewSelector(),
+				func(cn metadata.CNService) bool {
+					rawCNs = append(rawCNs, cn.ServiceID)
+					return true
+				}))
+			require.ElementsMatch(t, []string{"ready-cn", "pending-cn"}, rawCNs)
+
+			proc := &process.Process{Base: &process.BaseProcess{
+				QueryClient: &protocolVersionQueryClient{versions: map[string]int64{
+					"ready-address":   protocolVersion,
+					"pending-address": protocolVersion,
+				}},
+			}}
+			ret, err := handleGetProtocolVersion(proc, cn, "", nil)
+			require.NoError(t, err)
+			require.Equal(t, Result{
+				Method: GetProtocolVersionMethod,
+				Data:   "ready-cn:42, pending-cn:42",
+			}, ret)
 		},
 	)
 }
@@ -138,6 +237,18 @@ func requireVersionValue(t *testing.T, version int64) {
 	require.EqualValues(t, version, v)
 }
 
+type addressRecordingQueryClient struct {
+	testQClient
+	address string
+}
+
+func (c *addressRecordingQueryClient) SendMessage(
+	_ context.Context, address string, _ *query.Request,
+) (*query.Response, error) {
+	c.address = address
+	return nil, moerr.NewInternalErrorNoCtx("send error")
+}
+
 func Test_transferToTN(t *testing.T) {
 
 	rt := runtime.DefaultRuntime()
@@ -159,7 +270,8 @@ func Test_transferToTN(t *testing.T) {
 	defer mc.Close()
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
 
-	qcli := &testQClient{}
+	qcli := &addressRecordingQueryClient{}
 	_, err := transferToTN(qcli, 0)
 	assert.Error(t, err)
+	assert.Equal(t, "wrong address", qcli.address)
 }

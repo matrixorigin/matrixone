@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -31,9 +32,10 @@ import (
 )
 
 const (
-	minIDAllocCapacity   uint64 = 1024
-	defaultIDBatchSize   uint64 = 1024 * 10
-	checkBootstrapCycles        = 100
+	minIDAllocCapacity             uint64 = 1024
+	defaultIDBatchSize             uint64 = 1024 * 10
+	checkBootstrapCycles                  = 100
+	bootstrapHAKeeperCheckInterval        = 100 * time.Millisecond
 )
 
 var (
@@ -41,10 +43,13 @@ var (
 )
 
 type idAllocator struct {
+	mu sync.Mutex
+
 	// [nextID, lastID] is the range of IDs that can be assigned.
 	// the next ID to be assigned is nextID
-	nextID uint64
-	lastID uint64
+	nextID                uint64
+	lastID                uint64
+	restoreGenerationSeen uint64
 }
 
 var _ hakeeper.IDAllocator = (*idAllocator)(nil)
@@ -54,6 +59,9 @@ func newIDAllocator() hakeeper.IDAllocator {
 }
 
 func (a *idAllocator) Next() (uint64, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	if a.nextID <= a.lastID {
 		v := a.nextID
 		a.nextID++
@@ -63,6 +71,9 @@ func (a *idAllocator) Next() (uint64, bool) {
 }
 
 func (a *idAllocator) Set(next uint64, last uint64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	// make sure that this id allocator never emit any id smaller than
 	// K8SIDRangeEnd
 	if next < hakeeper.K8SIDRangeEnd {
@@ -73,10 +84,24 @@ func (a *idAllocator) Set(next uint64, last uint64) {
 }
 
 func (a *idAllocator) Capacity() uint64 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	if a.nextID <= a.lastID {
 		return (a.lastID - a.nextID) + 1
 	}
 	return 0
+}
+
+func (a *idAllocator) discardForRestoreGeneration(generation uint64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if generation > a.restoreGenerationSeen {
+		a.nextID = 1
+		a.lastID = 0
+		a.restoreGenerationSeen = generation
+	}
 }
 
 func (l *store) setInitialClusterInfo(
@@ -87,13 +112,53 @@ func (l *store) setInitialClusterInfo(
 	nextIDByKey map[string]uint64,
 	nonVotingLocality map[string]string,
 ) error {
-	cmd := hakeeper.GetInitialClusterRequestCmd(
+	_, err := l.setInitialClusterInfoWithResult(
 		numOfLogShards,
 		numOfTNShards,
 		numOfLogReplicas,
 		nextID,
 		nextIDByKey,
 		nonVotingLocality,
+	)
+	return err
+}
+
+func (l *store) setInitialClusterInfoWithResult(
+	numOfLogShards uint64,
+	numOfTNShards uint64,
+	numOfLogReplicas uint64,
+	nextID uint64,
+	nextIDByKey map[string]uint64,
+	nonVotingLocality map[string]string,
+) (bool, error) {
+	return l.setInitialClusterInfoWithRecoveryResult(
+		numOfLogShards,
+		numOfTNShards,
+		numOfLogReplicas,
+		nextID,
+		nextIDByKey,
+		nonVotingLocality,
+		false,
+	)
+}
+
+func (l *store) setInitialClusterInfoWithRecoveryResult(
+	numOfLogShards uint64,
+	numOfTNShards uint64,
+	numOfLogReplicas uint64,
+	nextID uint64,
+	nextIDByKey map[string]uint64,
+	nonVotingLocality map[string]string,
+	logServiceRecovery bool,
+) (bool, error) {
+	cmd := hakeeper.GetInitialClusterRequestCmdWithRecovery(
+		numOfLogShards,
+		numOfTNShards,
+		numOfLogReplicas,
+		nextID,
+		nextIDByKey,
+		nonVotingLocality,
+		logServiceRecovery,
 	)
 	ctx, cancel := context.WithTimeoutCause(context.Background(), hakeeperDefaultTimeout, moerr.CauseSetInitialClusterInfo)
 	defer cancel()
@@ -102,13 +167,61 @@ func (l *store) setInitialClusterInfo(
 	if err != nil {
 		err = moerr.AttachCause(ctx, err)
 		l.runtime.Logger().Error("failed to propose initial cluster info", zap.Error(err))
-		return err
+		return false, err
 	}
 	if result.Value == uint64(pb.HAKeeperBootstrapFailed) {
 		panic("bootstrap failed")
 	}
 	if result.Value != uint64(pb.HAKeeperCreated) {
 		l.runtime.Logger().Error("initial cluster info already set")
+		return false, nil
+	}
+	l.notifyHAKeeperCheck()
+	return true, nil
+}
+
+func (l *store) restoreIDWatermarks(
+	ctx context.Context,
+	nextID uint64,
+	nextIDByKey map[string]uint64,
+	logServiceRecovery bool,
+) error {
+	cmd := hakeeper.GetRestoreIDWatermarkCmd(nextID, nextIDByKey, logServiceRecovery)
+	ctx, cancel := context.WithTimeoutCause(ctx, hakeeperDefaultTimeout, moerr.CauseSetInitialClusterInfo)
+	defer cancel()
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	result, err := l.propose(ctx, session, cmd)
+	if err != nil {
+		return moerr.AttachCause(ctx, err)
+	}
+	if result.Value == uint64(pb.HAKeeperCreated) {
+		return moerr.NewInternalError(ctx,
+			"cannot restore HAKeeper ID watermarks before initial cluster state is applied")
+	}
+	if len(result.Data) > 0 {
+		return moerr.NewInternalErrorf(ctx,
+			"cannot restore HAKeeper ID watermarks in state %s or without initial recovery intent",
+			pb.HAKeeperState(result.Value).String())
+	}
+	return nil
+}
+
+func (l *store) completeLogServiceRecovery(ctx context.Context) error {
+	cmd := hakeeper.GetCompleteLogServiceRecoveryCmd()
+	ctx, cancel := context.WithTimeoutCause(ctx, hakeeperDefaultTimeout, moerr.CauseSetInitialClusterInfo)
+	defer cancel()
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	result, err := l.propose(ctx, session, cmd)
+	if err != nil {
+		return moerr.AttachCause(ctx, err)
+	}
+	if result.Value == uint64(pb.HAKeeperCreated) {
+		return moerr.NewInternalError(ctx,
+			"cannot complete LogService recovery before initial cluster state is applied")
+	}
+	if len(result.Data) > 0 {
+		return moerr.NewInternalError(ctx,
+			"cannot complete LogService recovery before ID watermarks are prepared")
 	}
 	return nil
 }
@@ -123,6 +236,9 @@ func (l *store) updateIDAlloc(count uint64) error {
 		err = moerr.AttachCause(ctx, err)
 		l.runtime.Logger().Error("propose get id failed", zap.Error(err))
 		return err
+	}
+	if result.Value == 0 {
+		return moerr.NewInternalError(ctx, "HAKeeper is not ready for ID allocation")
 	}
 	// TODO: add a test for this
 	l.alloc.Set(result.Value, result.Value+count-1)
@@ -153,20 +269,103 @@ func (l *store) getCheckerStateFromLeader() (*pb.CheckerState, uint64) {
 
 var debugPrintHAKeeperState atomic.Bool
 
-func (l *store) hakeeperCheck() {
+// Only reset on cadence changes. Resetting after every synchronous check adds
+// the check's execution time to the configured interval, delaying health checks
+// and repair commands on a busy HAKeeper leader.
+func (l *store) updateHAKeeperCheckTicker(
+	reset func(time.Duration),
+	current time.Duration,
+	state *pb.CheckerState,
+) time.Duration {
+	next := l.nextHAKeeperCheckInterval(state)
+	if next != current {
+		reset(next)
+	}
+	return next
+}
+
+func (l *store) nextHAKeeperCheckInterval(state *pb.CheckerState) time.Duration {
+	interval := l.cfg.HAKeeperCheckInterval.Duration
+	if interval <= 0 {
+		panic("invalid HAKeeperCheckInterval")
+	}
+	if state != nil &&
+		(state.State == pb.HAKeeperBootstrapping ||
+			state.State == pb.HAKeeperBootstrapCommandsReceived) {
+		if interval > bootstrapHAKeeperCheckInterval {
+			return bootstrapHAKeeperCheckInterval
+		}
+	}
+	return interval
+}
+
+func (l *store) bootstrapCheckWindow() time.Duration {
+	interval := l.cfg.HAKeeperCheckInterval.Duration
+	if interval <= 0 {
+		panic("invalid HAKeeperCheckInterval")
+	}
+	if interval > (time.Duration(1<<63-1) / checkBootstrapCycles) {
+		panic("HAKeeperCheckInterval is too large")
+	}
+	return time.Duration(checkBootstrapCycles) * interval
+}
+
+func (l *store) startBootstrapCheckBudget() {
+	l.bootstrapCheckDeadline = time.Now().Add(l.bootstrapCheckWindow())
+}
+
+func (l *store) bootstrapStatusLogAllowed() bool {
+	now := time.Now()
+	if !l.lastBootstrapLogTime.IsZero() &&
+		now.Sub(l.lastBootstrapLogTime) < time.Second {
+		return false
+	}
+	l.lastBootstrapLogTime = now
+	return true
+}
+
+func (l *store) hakeeperCheck() *pb.CheckerState {
 	state, term := l.getCheckerStateFromLeader()
 	if state == nil {
-		return
+		return nil
+	}
+	if state.State == pb.HAKeeperCreated {
+		l.runtime.Logger().Warn("waiting for initial cluster info to be set, check skipped")
+		return state
 	}
 
+	// Establish the replicated protocol barrier before this checker pass can
+	// schedule a command that admits another HAKeeper member. Once preparing,
+	// the RSM retains admission commands until their targets advertise support.
+	ctx, cancel := context.WithTimeoutCause(
+		context.Background(),
+		hakeeperDefaultTimeout,
+		moerr.CauseHealthCheck,
+	)
+	if _, err := l.tryEnableCommandDelivery(ctx, state); err != nil {
+		err = moerr.AttachCause(ctx, err)
+		l.runtime.Logger().Debug("command delivery activation deferred", zap.Error(err))
+	}
+	if _, err := l.tryEnableViewMetadataAdmission(ctx, state); err != nil {
+		err = moerr.AttachCause(ctx, err)
+		l.runtime.Logger().Debug("view metadata admission activation deferred", zap.Error(err))
+	}
+	if l.catalogExecutor.enabled {
+		if err := l.reconcileCatalogMembership(ctx, nil); err != nil {
+			l.runtime.Logger().Debug("catalog membership reconciliation deferred", zap.Error(err))
+		}
+	}
+	cancel()
+
 	switch state.State {
-	case pb.HAKeeperCreated:
-		l.runtime.Logger().Warn("waiting for initial cluster info to be set, check skipped")
-		return
 	case pb.HAKeeperBootstrapping:
-		l.bootstrap(term, state)
+		if err := l.bootstrap(term, state); err != nil {
+			return nil // Retry failures at the configured cadence, not the fast bootstrap cadence.
+		}
 	case pb.HAKeeperBootstrapCommandsReceived:
-		l.checkBootstrap(state)
+		if err := l.checkBootstrap(state); err != nil {
+			return nil
+		}
 	case pb.HAKeeperBootstrapFailed:
 		l.handleBootstrapFailure()
 	case pb.HAKeeperRunning:
@@ -178,10 +377,13 @@ func (l *store) hakeeperCheck() {
 	default:
 		panic("unknown HAKeeper state")
 	}
+	return state
 }
 
 func (l *store) assertHAKeeperState(s pb.HAKeeperState) {
-	state, err := l.getCheckerState()
+	ctx, cancel := context.WithTimeoutCause(context.Background(), hakeeperDefaultTimeout, moerr.CauseGetCheckerState)
+	defer cancel()
+	state, err := l.readCheckerState(ctx, &hakeeper.StateQuery{StateOnly: true})
 	if err != nil {
 		// TODO: check whether this is temp error
 		l.runtime.Logger().Error("failed to get checker state", zap.Error(err))
@@ -252,11 +454,19 @@ func (l *store) registerTaskUser() {
 	}
 }
 
-func (l *store) bootstrap(term uint64, state *pb.CheckerState) {
+func (l *store) bootstrap(term uint64, state *pb.CheckerState) error {
+	if state.LogServiceRecoveryPending && !state.LogServiceRecoveryPrepared {
+		if l.bootstrapStatusLogAllowed() {
+			l.runtime.Logger().Info("waiting for LogService recovery ID watermarks before bootstrap")
+		}
+		return nil
+	}
 	cmds, err := l.getScheduleCommand(false, term, state)
 	if err != nil {
-		l.runtime.Logger().Error("failed to get bootstrap schedule commands", zap.Error(err))
-		return
+		if l.bootstrapStatusLogAllowed() {
+			l.runtime.Logger().Error("failed to get bootstrap schedule commands", zap.Error(err))
+		}
+		return err
 	}
 	if len(cmds) > 0 {
 		for _, c := range cmds {
@@ -292,41 +502,70 @@ func (l *store) bootstrap(term uint64, state *pb.CheckerState) {
 			}
 		}
 
-		l.bootstrapCheckCycles = checkBootstrapCycles
+		// Bootstrap checks run more frequently while the cluster is coming up.
+		// Keep the failure window based on elapsed time, rather than on the number
+		// of polls. Each check performs synchronous raft and checker work, so a
+		// poll-count budget would stretch when that work is slow.
+		l.startBootstrapCheckBudget()
 		l.bootstrapMgr = bootstrap.NewBootstrapManager(state.ClusterInfo)
 		l.assertHAKeeperState(pb.HAKeeperBootstrapCommandsReceived)
+		if l.bootstrapCommandsAdded != nil {
+			l.bootstrapCommandsAdded()
+		}
 	}
+	return nil
 }
 
-func (l *store) checkBootstrap(state *pb.CheckerState) {
-	l.checkBootstrapWithSetter(state, l.setBootstrapState)
+func (l *store) checkBootstrap(state *pb.CheckerState) error {
+	return l.checkBootstrapWithSetter(state, l.setBootstrapState)
 }
 
 func (l *store) checkBootstrapWithSetter(
 	state *pb.CheckerState,
 	setState func(bool) error,
-) {
-	if l.bootstrapCheckCycles == 0 {
-		if err := setState(false); err != nil {
-			l.logSetBootstrapStateFailure(false, err)
-			return
-		}
-		l.assertHAKeeperState(pb.HAKeeperBootstrapFailed)
-		return
-	}
+) error {
+	return l.checkBootstrapWithSetterAt(time.Now(), state, setState)
+}
 
+func (l *store) checkBootstrapWithSetterAt(
+	now time.Time,
+	state *pb.CheckerState,
+	setState func(bool) error,
+) error {
+	if l.bootstrapCheckDeadline.IsZero() {
+		// A leader can change after bootstrap commands are replicated. The new
+		// leader has no local start timestamp, so establish a bounded budget when
+		// it first observes the state instead of failing immediately.
+		l.bootstrapCheckDeadline = now.Add(l.bootstrapCheckWindow())
+	}
 	if l.bootstrapMgr == nil {
 		l.bootstrapMgr = bootstrap.NewBootstrapManager(state.ClusterInfo)
 	}
 	if !l.bootstrapMgr.CheckBootstrap(state.LogState) {
-		l.bootstrapCheckCycles--
+		if !now.Before(l.bootstrapCheckDeadline) {
+			if err := setState(false); err != nil {
+				l.logSetBootstrapStateFailure(false, err)
+				return err
+			}
+			l.assertHAKeeperState(pb.HAKeeperBootstrapFailed)
+		}
 	} else {
+		// Recovery status is replicated through LogStore heartbeats. Do not use
+		// the leader process's local flag here: the recovery coordinator and the
+		// HAKeeper leader are not guaranteed to be the same LogService pod.
+		if walRecoveryPending(state) {
+			if l.runtime != nil && l.bootstrapStatusLogAllowed() {
+				l.runtime.Logger().Info("bootstrap complete but WAL recovery is pending")
+			}
+			return nil
+		}
 		if err := setState(true); err != nil {
 			l.logSetBootstrapStateFailure(true, err)
-			return
+			return err
 		}
 		l.assertHAKeeperState(pb.HAKeeperRunning)
 	}
+	return nil
 }
 
 func (l *store) logSetBootstrapStateFailure(success bool, err error) {
@@ -349,8 +588,20 @@ func (l *store) setBootstrapState(success bool) error {
 	ctx, cancel := context.WithTimeoutCause(context.Background(), hakeeperDefaultTimeout, moerr.CauseSetBootstrapState)
 	defer cancel()
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
-	_, err := l.propose(ctx, session, cmd)
-	return moerr.AttachCause(ctx, err)
+	result, err := l.propose(ctx, session, cmd)
+	if err != nil {
+		return moerr.AttachCause(ctx, err)
+	}
+	if len(result.Data) >= headerSize {
+		current := pb.HAKeeperState(binaryEnc.Uint32(result.Data[:headerSize]))
+		if current == state {
+			return nil
+		}
+		return moerr.NewInternalErrorf(ctx,
+			"HAKeeper rejected state transition to %s, current state is %s",
+			state.String(), current.String())
+	}
+	return nil
 }
 
 func (l *store) getCheckerState() (*pb.CheckerState, error) {
@@ -360,7 +611,11 @@ func (l *store) getCheckerState() (*pb.CheckerState, error) {
 }
 
 func (l *store) getCheckerStateWithContext(ctx context.Context) (*pb.CheckerState, error) {
-	s, err := l.read(ctx, hakeeper.DefaultHAKeeperShardID, &hakeeper.StateQuery{})
+	return l.readCheckerState(ctx, &hakeeper.StateQuery{})
+}
+
+func (l *store) readCheckerState(ctx context.Context, query *hakeeper.StateQuery) (*pb.CheckerState, error) {
+	s, err := l.read(ctx, hakeeper.DefaultHAKeeperShardID, query)
 	if err != nil {
 		return &pb.CheckerState{}, moerr.AttachCause(ctx, err)
 	}
@@ -369,6 +624,9 @@ func (l *store) getCheckerStateWithContext(ctx context.Context) (*pb.CheckerStat
 
 func (l *store) getScheduleCommand(check bool,
 	term uint64, state *pb.CheckerState) ([]pb.ScheduleCommand, error) {
+	if alloc, ok := l.alloc.(*idAllocator); ok {
+		alloc.discardForRestoreGeneration(state.IDWatermarkRestoreGeneration)
+	}
 	if l.alloc.Capacity() < minIDAllocCapacity {
 		if err := l.updateIDAlloc(defaultIDBatchSize); err != nil {
 			return nil, err
@@ -379,7 +637,14 @@ func (l *store) getScheduleCommand(check bool,
 		return l.checker.Check(l.alloc, *state, l.cfg.BootstrapConfig.StandbyEnabled), nil
 	}
 	m := bootstrap.NewBootstrapManager(state.ClusterInfo)
-	return m.Bootstrap(l.cfg.UUID, l.alloc, state.TNState, state.LogState)
+	tnState := state.TNState
+	if state.LogServiceRecoveryPending {
+		// A rebuilt TN replays the new Log shard only once during startup. Keep
+		// TN bootstrap behind the replicated recovery barrier so that it cannot
+		// observe the empty shard before restored WAL is durable.
+		tnState = pb.TNState{}
+	}
+	return m.Bootstrap(l.cfg.UUID, l.alloc, tnState, state.LogState)
 }
 
 func (l *store) setTaskTableUser(user pb.TaskTableUser) error {

@@ -17,8 +17,8 @@ package tnservice
 import (
 	"context"
 	"errors"
-	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -39,12 +39,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/status"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
@@ -52,6 +54,19 @@ import (
 var (
 	retryCreateStorageInterval = time.Second * 5
 )
+
+// FJ_TNStoreHandlersDrained is triggered after all accepted TN handlers have
+// left the active set and before replica, WAL, and storage teardown starts.
+const FJ_TNStoreHandlersDrained = "fj/tn/store/handlers-drained"
+
+// txnServerLifecycle is deliberately kept private so adding the ordered
+// shutdown hooks does not change the public rpc.TxnServer contract. The
+// production RPC server implements it; a server without these hooks cannot be
+// safely drained before the TN storage is closed.
+type txnServerLifecycle interface {
+	Quiesce() error
+	Drain(context.Context) error
+}
 
 // WithConfigAdjust set adjust config func
 func WithConfigAdjust(adjustConfigFunc func(c *Config)) Option {
@@ -113,6 +128,21 @@ type store struct {
 	replicas            *sync.Map
 	stopper             *stopper.Stopper
 	shutdownC           chan struct{}
+	closeOnce           sync.Once
+	closeErr            error
+	quiesced            atomic.Bool
+	localHandlers       localHandlerLifecycle
+	heartbeatInFlight   atomic.Bool
+	commandPollNeeded   atomic.Bool
+	commandPollWakeup   chan struct{}
+	commandMu           sync.Mutex
+	shutdownAckMu       sync.Mutex
+	lastCommandBatchID  uint64
+	ackedCommandBatchID atomic.Uint64
+	appliedCommandIDs   map[logservice.ScheduleCommandIdentity]struct{}
+	shutdownBatchID     atomic.Uint64
+	lastCommandHash     [32]byte
+	legacyDedupeArmed   bool
 
 	options struct {
 		logServiceClientFactory func(metadata.TNShard) (logservice.Client, error)
@@ -140,6 +170,87 @@ type store struct {
 	queryService queryservice.QueryService
 
 	queryClient client.QueryClient
+}
+
+// localHandlerLifecycle covers requests dispatched through TxnSender's local
+// fast path.  A sender may cache a handler, so checking quiesced only during
+// lookup is insufficient; every invocation must acquire this lease.
+type localHandlerLifecycle struct {
+	sync.Mutex
+	quiesced bool
+	active   int
+	zero     chan struct{}
+}
+
+func (s *store) quiesceLocalHandlers() {
+	s.localHandlers.Lock()
+	if s.localHandlers.zero == nil {
+		s.localHandlers.zero = make(chan struct{})
+	}
+	s.localHandlers.quiesced = true
+	if s.localHandlers.active == 0 {
+		select {
+		case <-s.localHandlers.zero:
+		default:
+			close(s.localHandlers.zero)
+		}
+	}
+	s.localHandlers.Unlock()
+}
+
+func (s *store) acquireLocalHandler() (func(), bool) {
+	s.localHandlers.Lock()
+	defer s.localHandlers.Unlock()
+	if s.localHandlers.zero == nil {
+		s.localHandlers.zero = make(chan struct{})
+	}
+	if s.localHandlers.quiesced {
+		return nil, false
+	}
+	if s.localHandlers.active == 0 {
+		// A closed zero channel belongs to the previous drain epoch.  Keep a
+		// fresh channel for the handler that is about to become active.
+		select {
+		case <-s.localHandlers.zero:
+			s.localHandlers.zero = make(chan struct{})
+		default:
+		}
+	}
+	s.localHandlers.active++
+	return func() { s.releaseLocalHandler() }, true
+}
+
+func (s *store) releaseLocalHandler() {
+	s.localHandlers.Lock()
+	if s.localHandlers.active > 0 {
+		s.localHandlers.active--
+	}
+	if s.localHandlers.quiesced && s.localHandlers.active == 0 {
+		select {
+		case <-s.localHandlers.zero:
+		default:
+			close(s.localHandlers.zero)
+		}
+	}
+	s.localHandlers.Unlock()
+}
+
+func (s *store) drainLocalHandlers(ctx context.Context) error {
+	s.localHandlers.Lock()
+	if s.localHandlers.zero == nil {
+		s.localHandlers.zero = make(chan struct{})
+		if s.localHandlers.active == 0 {
+			close(s.localHandlers.zero)
+		}
+	}
+	zero := s.localHandlers.zero
+	s.localHandlers.Unlock()
+	select {
+	case <-zero:
+		return nil
+	case <-ctx.Done():
+		return errors.Join(rpc.ErrTxnDrainTimeout, ctx.Err())
+	}
 }
 
 // NewService create TN Service
@@ -234,27 +345,66 @@ func (s *store) Start() error {
 		}
 	}
 	s.rt.SubLogger(runtime.SystemInit).Info("dn heartbeat task started")
-	return s.stopper.RunTask(s.heartbeatTask)
+	return s.stopper.RunTask(s.controlTask)
 }
 
 func (s *store) Close() error {
+	s.closeOnce.Do(func() { s.closeErr = s.close() })
+	return s.closeErr
+}
+
+func (s *store) drainHandlers(ctx context.Context) error {
+	// Stop accepting new RPCs first, but keep replicas, WAL and storage alive
+	// while already accepted handlers finish. This prevents an in-flight commit
+	// from observing a cancelled replica context before WAL durability settles.
+	s.quiesced.Store(true)
+	s.quiesceLocalHandlers()
+	if s.server != nil {
+		lifecycle, ok := s.server.(txnServerLifecycle)
+		if !ok {
+			return moerr.NewInternalErrorNoCtx("txn server does not support lifecycle drain")
+		}
+		if err := lifecycle.Quiesce(); err != nil {
+			return err
+		}
+		if err := lifecycle.Drain(ctx); err != nil {
+			return err
+		}
+	}
+	return s.drainLocalHandlers(ctx)
+}
+
+func (s *store) close() error {
+	// Both network and cached local dispatch share the same drain budget.
+	// Starting a fresh local deadline after network drain could double it.
+	drainCtx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	err := s.drainHandlers(drainCtx)
+	cancel()
+	if err != nil {
+		return err
+	}
+	fault.TriggerFault(FJ_TNStoreHandlersDrained)
+
+	// No handler can acquire a replica after the drain gate. It is now safe to
+	// cancel replica start contexts and close their storage.
+	s.replicas.Range(func(_, value any) bool {
+		r := value.(*replica)
+		r.cancelStart(false)
+		return true
+	})
 	s.stopper.Stop()
 	s.moCluster.Close()
 
-	var err error
-	// Reject new replica calls and cancel active call contexts before waiting
-	// for the RPC server to drain. Storage remains open until the drain ends.
-	s.replicas.Range(func(_, value any) bool {
-		value.(*replica).cancelStart(false)
-		return true
-	})
+	err = nil
 	if s.queryService != nil {
 		err = errors.Join(err, s.queryService.Close())
 	}
 	if s.cfg.ShardService.Enable {
 		err = errors.Join(err, s.shardServer.Close())
 	}
-	err = errors.Join(err, s.server.Close())
+	if s.server != nil {
+		err = errors.Join(err, s.server.Close())
+	}
 	s.replicas.Range(func(_, value any) bool {
 		r := value.(*replica)
 		if e := r.close(false); e != nil {
@@ -333,9 +483,7 @@ func (s *store) createReplicaLocked(shard metadata.TNShard) error {
 	}
 
 	err := s.stopper.RunTask(func(stopperCtx context.Context) {
-		stopCancelPropagation := context.AfterFunc(stopperCtx, func() {
-			r.cancelStart(false)
-		})
+		stopCancelPropagation := propagateReplicaStopperCancellation(stopperCtx, r)
 		defer stopCancelPropagation()
 
 		for {
@@ -403,6 +551,15 @@ func (s *store) createReplicaLocked(shard metadata.TNShard) error {
 	return nil
 }
 
+func propagateReplicaStopperCancellation(
+	stopperCtx context.Context,
+	r *replica,
+) func() bool {
+	return context.AfterFunc(stopperCtx, func() {
+		r.cancelStart(false)
+	})
+}
+
 func waitCreateRetry(stopperCtx, createCtx context.Context) error {
 	timer := time.NewTimer(retryCreateStorageInterval)
 	defer timer.Stop()
@@ -418,8 +575,6 @@ func waitCreateRetry(stopperCtx, createCtx context.Context) error {
 
 func (s *store) removeReplicaLocked(tnShardID uint64) error {
 	if r := s.getReplica(tnShardID); r != nil {
-		r.cancelStart(true)
-		r.waitStartCompleted()
 		err := r.close(true)
 		s.replicas.CompareAndDelete(tnShardID, r)
 		s.removeTNShardLocked(tnShardID)

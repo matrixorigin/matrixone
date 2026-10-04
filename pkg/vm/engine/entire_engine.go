@@ -17,10 +17,16 @@ package engine
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+)
+
+var (
+	_ TableVersionedStats = new(EntireEngine)
+	_ RemoteStatsExporter = new(EntireEngine)
 )
 
 func (e *EntireEngine) New(ctx context.Context, op client.TxnOperator) error {
@@ -29,6 +35,17 @@ func (e *EntireEngine) New(ctx context.Context, op client.TxnOperator) error {
 
 func (e *EntireEngine) LatestLogtailAppliedTime() timestamp.Timestamp {
 	return e.Engine.LatestLogtailAppliedTime()
+}
+
+func (e *EntireEngine) AcquireLogtailReadBarrier(
+	ctx context.Context,
+) (timestamp.Timestamp, error) {
+	barrier, ok := e.Engine.(LogtailReadBarrier)
+	if !ok {
+		return timestamp.Timestamp{}, moerr.NewNotSupported(
+			ctx, "logtail read barrier")
+	}
+	return barrier.AcquireLogtailReadBarrier(ctx)
 }
 
 func (e *EntireEngine) Delete(ctx context.Context, databaseName string, op client.TxnOperator) error {
@@ -65,8 +82,9 @@ func (e *EntireEngine) BuildBlockReaders(
 	expr *plan.Expr,
 	def *plan.TableDef,
 	relData RelData,
-	num int) ([]Reader, error) {
-	return e.Engine.BuildBlockReaders(ctx, proc, ts, expr, def, relData, num)
+	num int,
+	filterHint ...FilterHint) ([]Reader, error) {
+	return e.Engine.BuildBlockReaders(ctx, proc, ts, expr, def, relData, num, filterHint...)
 }
 
 func (e *EntireEngine) GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error) {
@@ -94,6 +112,27 @@ func (e *EntireEngine) PrefetchTableMeta(ctx context.Context, key pb.StatsInfoKe
 }
 
 func (e *EntireEngine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
+	return e.Engine.Stats(ctx, key, sync)
+}
+
+func (e *EntireEngine) StatsForRemote(ctx context.Context, key pb.StatsInfoKey) *pb.StatsInfo {
+	if exporter, ok := e.Engine.(RemoteStatsExporter); ok {
+		return exporter.StatsForRemote(ctx, key)
+	}
+	// Engines without the optional capability can only produce legacy,
+	// unbound metadata statistics, so their normal non-blocking read is safe.
+	return e.Engine.Stats(ctx, key, false)
+}
+
+func (e *EntireEngine) StatsAtTableVersion(
+	ctx context.Context,
+	key pb.StatsInfoKey,
+	sync bool,
+	tableDefVersion uint32,
+) *pb.StatsInfo {
+	if versioned, ok := e.Engine.(TableVersionedStats); ok {
+		return versioned.StatsAtTableVersion(ctx, key, sync, tableDefVersion)
+	}
 	return e.Engine.Stats(ctx, key, sync)
 }
 

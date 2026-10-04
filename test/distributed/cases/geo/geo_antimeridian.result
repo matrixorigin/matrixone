@@ -1,0 +1,105 @@
+drop database if exists geo_antimeridian;
+create database geo_antimeridian;
+use geo_antimeridian;
+drop table if exists antimeridian_pairs;
+create table antimeridian_pairs(
+id int primary key,
+g geometry srid 4326
+);
+insert into antimeridian_pairs values
+(1, st_geomfromtext('POLYGON((179 -1,-179 -1,-179 1,179 1,179 -1))', 4326)),
+(2, st_geomfromtext('POLYGON((179.5 -0.5,-179.5 -0.5,-179.5 0.5,179.5 0.5,179.5 -0.5))', 4326)),
+(3, st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 4326)),
+(4, st_geomfromtext('POLYGON((0.5 0.5,1.5 0.5,1.5 1.5,0.5 1.5,0.5 0.5))', 4326));
+select
+st_contains(o.g, i.g),
+st_within(i.g, o.g),
+st_intersects(o.g, i.g),
+st_disjoint(o.g, i.g),
+st_touches(o.g, i.g),
+st_crosses(o.g, i.g),
+st_overlaps(o.g, i.g),
+st_equals(o.g, i.g),
+st_covers(o.g, i.g),
+st_coveredby(i.g, o.g)
+from antimeridian_pairs o join antimeridian_pairs i on o.id = 1 and i.id = 2;
+➤ st_contains(o.g, i.g)[-7,1,0]  ¦  st_within(i.g, o.g)[-7,1,0]  ¦  st_intersects(o.g, i.g)[-7,1,0]  ¦  st_disjoint(o.g, i.g)[-7,1,0]  ¦  st_touches(o.g, i.g)[-7,1,0]  ¦  st_crosses(o.g, i.g)[-7,1,0]  ¦  st_overlaps(o.g, i.g)[-7,1,0]  ¦  st_equals(o.g, i.g)[-7,1,0]  ¦  st_covers(o.g, i.g)[-7,1,0]  ¦  st_coveredby(i.g, o.g)[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  1  ¦  1
+select
+st_contains(i.g, o.g),
+st_within(o.g, i.g),
+st_intersects(i.g, o.g),
+st_disjoint(i.g, o.g),
+st_touches(i.g, o.g),
+st_crosses(i.g, o.g),
+st_overlaps(i.g, o.g),
+st_equals(i.g, o.g),
+st_covers(i.g, o.g),
+st_coveredby(o.g, i.g)
+from antimeridian_pairs o join antimeridian_pairs i on o.id = 1 and i.id = 2;
+➤ st_contains(i.g, o.g)[-7,1,0]  ¦  st_within(o.g, i.g)[-7,1,0]  ¦  st_intersects(i.g, o.g)[-7,1,0]  ¦  st_disjoint(i.g, o.g)[-7,1,0]  ¦  st_touches(i.g, o.g)[-7,1,0]  ¦  st_crosses(i.g, o.g)[-7,1,0]  ¦  st_overlaps(i.g, o.g)[-7,1,0]  ¦  st_equals(i.g, o.g)[-7,1,0]  ¦  st_covers(i.g, o.g)[-7,1,0]  ¦  st_coveredby(o.g, i.g)[-7,1,0]  𝄀
+0  ¦  0  ¦  1  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0
+select
+st_astext(st_intersection(o.g, i.g)) as intersection,
+st_astext(st_union(o.g, i.g)) as union_result,
+st_astext(st_difference(o.g, i.g)) as difference_result,
+st_astext(st_symdifference(o.g, i.g)) as xor_result
+from antimeridian_pairs o join antimeridian_pairs i on o.id = 1 and i.id = 2;
+➤ intersection[12,65535,0]  ¦  union_result[12,65535,0]  ¦  difference_result[12,65535,0]  ¦  xor_result[12,65535,0]  𝄀
+POLYGON((179.5 0.5,179.5 -0.5,-179.5 -0.5,-179.5 0.5,179.5 0.5))  ¦  POLYGON((179 1,179 -1,-179 -1,-179 1,179 1))  ¦  POLYGON((179 1,179 -1,-179 -1,-179 1,179 1),(179.5 -0.5,179.5 0.5,-179.5 0.5,-179.5 -0.5,179.5 -0.5))  ¦  POLYGON((179 1,179 -1,-179 -1,-179 1,179 1),(179.5 -0.5,179.5 0.5,-179.5 0.5,-179.5 -0.5,179.5 -0.5))
+select
+st_area(st_intersection(o.g, i.g)) as intersection_area_m2,
+st_area(st_union(o.g, i.g)) as union_area_m2,
+st_area(st_difference(o.g, i.g)) as difference_area_m2
+from antimeridian_pairs o join antimeridian_pairs i on o.id = 1 and i.id = 2;
+➤ intersection_area_m2[8,53,31]  ¦  union_area_m2[8,53,31]  ¦  difference_area_m2[8,53,31]  𝄀
+1.2364502783544256E10  ¦  4.94598932679109E10  ¦  3.709539048436664E10
+select st_contains(o.g, i.g), st_intersects(o.g, i.g), st_overlaps(o.g, i.g)
+from antimeridian_pairs o join antimeridian_pairs i on o.id = 3 and i.id = 4;
+➤ st_contains(o.g, i.g)[-7,1,0]  ¦  st_intersects(o.g, i.g)[-7,1,0]  ¦  st_overlaps(o.g, i.g)[-7,1,0]  𝄀
+1  ¦  1  ¦  0
+select st_contains(
+st_geomfromtext('POLYGON((179 80,-179 80,-179 81,179 81,179 80))', 4326),
+st_geomfromtext('POLYGON((179.5 80.2,-179.5 80.2,-179.5 80.8,179.5 80.8,179.5 80.2))', 4326)
+);
+➤ st_contains(st_geomfromtext(POLYGON((179 80,-179 80,-179 81,179 81,179 80)), 4326), st_geomfromtext(POLYGON((179.5 80.2,-179.5 80.2,-179.5 80.8,179.5 80.8,179.5 80.2)), 4326))[-7,1,0]  𝄀
+1
+select st_intersects(
+st_geomfromtext('POLYGON((0 85,10 85,10 90,0 90,0 85))', 4326),
+st_geomfromtext('POINT(5 85)', 4326)
+);
+-- @regex("SRID 4326 topology does not support geometry vertices at the poles", true)
+invalid input: SRID 4326 topology does not support geometry vertices at the poles
+drop table if exists antimeridian_geometry32;
+create table antimeridian_geometry32(id int primary key, g geography32);
+insert into antimeridian_geometry32 values
+(1, cast('POLYGON((179 -1,-179 -1,-179 1,179 1,179 -1))' as geography32)),
+(2, cast('POLYGON((179.5 -0.5,-179.5 -0.5,-179.5 0.5,179.5 0.5,179.5 -0.5))' as geography32));
+select st_astext(st_intersection(o.g, i.g)),
+st_area(st_intersection(o.g, i.g))
+from antimeridian_geometry32 o join antimeridian_geometry32 i on o.id = 1 and i.id = 2;
+➤ st_astext(st_intersection(o.g, i.g))[12,65535,0]  ¦  st_area(st_intersection(o.g, i.g))[7,23,31]  𝄀
+POLYGON((179.5 0.5,179.5 -0.5,-179.5 -0.5,-179.5 0.5,179.5 0.5))  ¦  1.2364503E10
+drop table if exists antimeridian_index;
+create table antimeridian_index(
+id int primary key,
+g geometry srid 4326 not null
+);
+create spatial index idx_g on antimeridian_index(g);
+insert into antimeridian_index values
+(1, st_geomfromtext('POLYGON((179 -1,-179 -1,-179 1,179 1,179 -1))', 4326)),
+(2, st_geomfromtext('POLYGON((160 0,162 0,162 2,160 2,160 0))', 4326));
+select id from antimeridian_index
+where st_contains(g, st_geomfromtext('POINT(180 0)', 4326))
+order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from antimeridian_index
+where st_intersects(g, st_geomfromtext('POINT(180 0)', 4326))
+order by id;
+➤ id[4,32,0]  𝄀
+1
+drop table antimeridian_index;
+drop table antimeridian_geometry32;
+drop table antimeridian_pairs;
+drop database geo_antimeridian;

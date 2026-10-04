@@ -381,25 +381,14 @@ func TestCoverage_taskObserver(t *testing.T) {
 		f: func() { called = true },
 	}
 	obs.OnExecDone(nil)
+	assert.False(t, called)
+	obs.OnExecDone(nil)
+	assert.False(t, called)
+	obs.Admit()
 	assert.True(t, called)
-}
-
-func TestCoverage_CNActiveObjectsString(t *testing.T) {
-	sched := &MergeScheduler{}
-	assert.Equal(t, "", sched.CNActiveObjectsString())
-}
-
-func TestCoverage_RemoveCNActiveObjects(t *testing.T) {
-	sched := &MergeScheduler{}
-	// Should not panic
-	sched.RemoveCNActiveObjects(nil)
-	sched.RemoveCNActiveObjects([]objectio.ObjectId{})
-}
-
-func TestCoverage_PruneCNActiveObjects(t *testing.T) {
-	sched := &MergeScheduler{}
-	// Should not panic
-	sched.PruneCNActiveObjects(0, time.Second)
+	obs.Admit()
+	obs.OnExecDone(nil)
+	assert.True(t, called)
 }
 
 func TestCoverage_MMsgKind_Constants(t *testing.T) {

@@ -35,7 +35,7 @@ func TestCheckpoint1(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
-	opts := config.WithQuickScanAndCKPOpts(nil)
+	opts := config.WithQuickScanAndCKPOpts(nil, options.WithDisableGCCatalog())
 	db := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	defer db.Close()
 
@@ -75,7 +75,7 @@ func TestCheckpoint1(t *testing.T) {
 		assert.NoError(t, err)
 		return blockCnt == 2
 	}
-	testutils.WaitExpect(1000, fn)
+	testutils.WaitExpect(testutil.DefaultCheckpointWaitTimeoutMS, fn)
 	fn()
 	assert.Equal(t, 2, blockCnt)
 }

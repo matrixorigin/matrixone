@@ -13,16 +13,29 @@
 # limitations under the License.
 
 PWD=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
+DOWNLOAD=$(PWD)/download
 UNAME_S=$(shell uname -s | tr A-Z a-z)
 UNAME_M=$(shell uname -m)
+# Extracted third-party sources live in _-prefixed directories: go/build skips
+# any directory whose name starts with _ or ., so `go list ./...` (and gopls,
+# and `go test ./...`) never walk into them.
+#
+# Without the prefix, StringZilla-4.2.1/scripts/ breaks the top-level `config`
+# target: it ships bench.go alongside bench_*.cpp, and a directory containing a
+# .go file IS a package, so `go list` rejects its C++ sources with
+#   C++ source files not allowed when not using cgo or SWIG: bench_container.cpp ...
+# (a directory of .cpp with no .go is simply skipped, which is why this only
+# bites on trees that carry Go bindings). The extracted tree exists only while
+# this Makefile runs, so under `make -j` it fails a clean build and vanishes
+# before anyone can look -- see the `config` target in ../Makefile.
 USEARCH_DIR=_usearch_build
 USEARCH_TAR=usearch-2.25.3.tar.gz
-STRINGZILLA_DIR=StringZilla-4.2.1
-STRINGZILLA_TAR=$(STRINGZILLA_DIR).tar.gz
-SIMSIMD_DIR=SimSIMD-6.5.3
-SIMSIMD_TAR=$(SIMSIMD_DIR).tar.gz
-FP16_DIR=fp16
-FP16_TAR=$(FP16_DIR).tar.gz
+STRINGZILLA_DIR=_stringzilla
+STRINGZILLA_TAR=StringZilla-4.2.1.tar.gz
+SIMSIMD_DIR=_simsimd
+SIMSIMD_TAR=SimSIMD-6.5.3.tar.gz
+FP16_DIR=_fp16
+FP16_TAR=fp16.tar.gz
 XXHASH_DIR=xxHash-0.8.3
 XXHASH_TAR=$(XXHASH_DIR).tar.gz
 XXHASH_TMP=_xxhash_build
@@ -30,14 +43,66 @@ CROARING_DIR=CRoaring-4.7.0
 CROARING_TAR=$(CROARING_DIR).tar.gz
 CROARING_TMP=_croaring_build
 CROARING_CFLAGS=-O3 -fPIC -std=c11
+JEMALLOC_DIR=_jemalloc_build
+JEMALLOC_TAR=jemalloc-5.3.1.tar.bz2
+JEMALLOC_SHA256=3826bc80232f22ed5c4662f3034f799ca316e819103bdc7bb99018a421706f92
+JEMALLOC_CONFIGURE_FLAGS=--disable-shared --enable-static --enable-stats --with-jemalloc-prefix=mo_je_ --with-private-namespace=mo_je_
 
-all: init usearch xxhash croaring
+# Prebuilt onnxruntime shared library (CPU-only) from the MatrixOne thirdparty
+# mirror. GPU (linux_x64_gpu_cuda12) is intentionally not fetched here.
+# ONNX_LIB is the local filename our loader resolves; ONNX_SRC is the source path
+# in the mirror (whose real files are versioned/symlinked).
+#
+# The download is pinned to an immutable mirror commit and verified against a
+# per-platform SHA-256, so the same MatrixOne commit always produces the same
+# native library and a changed mirror artifact fails the build instead of
+# silently shipping different code.
+ONNX_VERSION=1.26.0
+ONNX_REPO_COMMIT=655365097e21c4df0f82337063f9a12b66700593
+ONNX_BASE_URL=https://github.com/matrixorigin/thirdparty/raw/$(ONNX_REPO_COMMIT)/onnxrt/$(ONNX_VERSION)
+# GitHub's media endpoint serves the same immutable Git LFS objects directly.
+# It is used only after the primary endpoint times out and is still verified by
+# the platform-specific SHA-256 below.
+ONNX_FALLBACK_BASE_URL=https://media.githubusercontent.com/media/matrixorigin/thirdparty/$(ONNX_REPO_COMMIT)/onnxrt/$(ONNX_VERSION)
+# The MatrixOne CI builder image ships these pinned artifacts. Keep this a
+# versioned directory so a base-image update cannot accidentally satisfy a
+# different ONNX Runtime version. A local build simply falls back to DOWNLOAD.
+ONNX_PREBUILT_DIR ?= /opt/matrixone/onnxruntime/$(ONNX_VERSION)
+ONNX_SUPPORTED=
+ifeq ($(UNAME_S)_$(UNAME_M),darwin_arm64)
+  ONNX_SUPPORTED=1
+  ONNX_LIB=onnxruntime_arm64.dylib
+  ONNX_SRC=osx_arm64/lib/libonnxruntime.$(ONNX_VERSION).dylib
+  ONNX_SHA256=30afadcfc3c704f7671f8430d6252956651c1972373901d2be629da2e6a4d8ee
+else ifeq ($(UNAME_S)_$(UNAME_M),darwin_aarch64)
+  ONNX_SUPPORTED=1
+  ONNX_LIB=onnxruntime_arm64.dylib
+  ONNX_SRC=osx_arm64/lib/libonnxruntime.$(ONNX_VERSION).dylib
+  ONNX_SHA256=30afadcfc3c704f7671f8430d6252956651c1972373901d2be629da2e6a4d8ee
+else ifeq ($(UNAME_S)_$(UNAME_M),linux_x86_64)
+  ONNX_SUPPORTED=1
+  ONNX_LIB=onnxruntime.so
+  ONNX_SRC=linux_x64/lib/libonnxruntime.so.$(ONNX_VERSION)
+  ONNX_SHA256=5bd5bedf736fc501692435d0ec4f6e8b2bdf48cd30af8e6d00d61b3ddc9a7ab8
+else ifeq ($(UNAME_S)_$(UNAME_M),linux_aarch64)
+  ONNX_SUPPORTED=1
+  ONNX_LIB=onnxruntime_arm64.so
+  ONNX_SRC=linux_aarch64/lib/libonnxruntime.so.$(ONNX_VERSION)
+  ONNX_SHA256=115ecb838e703d390262b8b4d07d5248e6693c67658d4c98c48f94905ab27af4
+else ifeq ($(UNAME_S)_$(UNAME_M),linux_arm64)
+  ONNX_SUPPORTED=1
+  ONNX_LIB=onnxruntime_arm64.so
+  ONNX_SRC=linux_aarch64/lib/libonnxruntime.so.$(ONNX_VERSION)
+  ONNX_SHA256=115ecb838e703d390262b8b4d07d5248e6693c67658d4c98c48f94905ab27af4
+endif
+
+all: init usearch xxhash croaring jemalloc onnxruntime
 
 init:
 	mkdir -p install
 	mkdir -p install/include install/lib
 
-usearch: stringzilla fp16 simsimd install/include/usearch.h
+usearch: install/include/usearch.h
 
 stringzilla: install/include/stringzilla/stringzilla.h
 
@@ -49,22 +114,28 @@ simsimd: install/include/simsimd/simsimd.h
 
 xxhash: install/include/xxhash.h
 
-install/include/xxhash.h:
+install/include/xxhash.h: | init
 	mkdir -p $(XXHASH_TMP)
-	tar zxvf $(XXHASH_TAR) -C $(XXHASH_TMP) --strip-components=1
+	tar zxf $(XXHASH_TAR) -C $(XXHASH_TMP) --strip-components=1
 	cp $(XXHASH_TMP)/xxhash.h install/include
 	rm -rf $(XXHASH_TMP)
 
-install/include/fp16.h:
-	tar zxvf $(FP16_TAR)
+install/include/fp16.h: | init
+	rm -rf $(FP16_DIR)
+	mkdir -p $(FP16_DIR)
+	tar zxf $(FP16_TAR) -C $(FP16_DIR) --strip-components=1
 	cp -r $(FP16_DIR)/include/* install/include
 
-install/include/simsimd/simsimd.h:
-	tar zxvf $(SIMSIMD_TAR)
+install/include/simsimd/simsimd.h: | init
+	rm -rf $(SIMSIMD_DIR)
+	mkdir -p $(SIMSIMD_DIR)
+	tar zxf $(SIMSIMD_TAR) -C $(SIMSIMD_DIR) --strip-components=1
 	cp -r $(SIMSIMD_DIR)/include/* install/include
 
-install/include/stringzilla/stringzilla.h:
-	tar zxvf $(STRINGZILLA_TAR)
+install/include/stringzilla/stringzilla.h: | init
+	rm -rf $(STRINGZILLA_DIR)
+	mkdir -p $(STRINGZILLA_DIR)
+	tar zxf $(STRINGZILLA_TAR) -C $(STRINGZILLA_DIR) --strip-components=1
 	cp -r $(STRINGZILLA_DIR)/include/* install/include
 
 USEARCH_CMAKE_FLAG := -DUSEARCH_BUILD_BENCH_CPP=OFF -DUSEARCH_BUILD_TEST_C=OFF -DUSEARCH_BUILD_TEST_CPP=OFF -DUSEARCH_BUILD_LIB_C=ON -DCMAKE_CXX_FLAGS=-I$(PWD)/install/include -DCMAKE_POLICY_VERSION_MINIMUM=3.5
@@ -84,10 +155,10 @@ ifeq ($(MO_CL_SIMSIMD),1)
   endif
 endif
 
-install/include/usearch.h:
+install/include/usearch.h: install/include/fp16.h install/include/simsimd/simsimd.h install/include/stringzilla/stringzilla.h | init
 	rm -rf $(USEARCH_DIR)
 	mkdir -p $(USEARCH_DIR)
-	tar zxvf $(USEARCH_TAR) -C $(USEARCH_DIR) --strip-components=1
+	tar zxf $(USEARCH_TAR) -C $(USEARCH_DIR) --strip-components=1
 	mkdir -p $(USEARCH_DIR)/fp16 $(USEARCH_DIR)/simsimd $(USEARCH_DIR)/stringzilla
 	cp -r $(FP16_DIR)/* $(USEARCH_DIR)/fp16
 	cp -r $(SIMSIMD_DIR)/* $(USEARCH_DIR)/simsimd
@@ -111,9 +182,29 @@ endif
 
 croaring: install/lib/libroaring.a
 
+jemalloc: install/lib/libjemalloc.a
+
+# jemalloc is statically linked into mo-service and all public symbols are
+# prefixed with mo_je_. This keeps Memory Cache's allocator independent from
+# libc malloc and the C/C++ dependencies already linked into MatrixOne.
+install/lib/libjemalloc.a: | init
+	@actual="$$(shasum -a 256 $(JEMALLOC_TAR) | awk '{print $$1}')"; \
+	if [ "$$actual" != "$(JEMALLOC_SHA256)" ]; then \
+		echo "jemalloc tarball checksum mismatch: $$actual" >&2; \
+		exit 1; \
+	fi
+	rm -rf $(JEMALLOC_DIR)
+	mkdir -p $(JEMALLOC_DIR)
+	tar xjf $(JEMALLOC_TAR) -C $(JEMALLOC_DIR) --strip-components=1
+	(cd $(JEMALLOC_DIR) && CC="$(CC)" CFLAGS="$(CFLAGS) -fPIC" ./configure $(JEMALLOC_CONFIGURE_FLAGS))
+	$(MAKE) -C $(JEMALLOC_DIR) build_lib
+	cp $(JEMALLOC_DIR)/lib/libjemalloc.a install/lib/libjemalloc.a
+	cp $(JEMALLOC_DIR)/include/jemalloc/jemalloc.h install/include/jemalloc.h
+	rm -rf $(JEMALLOC_DIR)
+
 # Build CRoaring as a static lib from its single-file amalgamation, and install
 # the amalgamated header. Used by the cgo doc_id filter (roaring64 bitset).
-install/lib/libroaring.a:
+install/lib/libroaring.a: | init
 	rm -rf $(CROARING_TMP)
 	mkdir -p $(CROARING_TMP)
 	tar zxf $(CROARING_TAR) -C $(CROARING_TMP) --strip-components=1
@@ -123,7 +214,39 @@ install/lib/libroaring.a:
 	cp $(CROARING_TMP)/roaring.h install/include/roaring.h
 	rm -rf $(CROARING_TMP)
 
-clean:
-	rm -rf install $(USEARCH_DIR) $(STRINGZILLA_DIR) $(SIMSIMD_DIR) $(FP16_DIR) $(CROARING_TMP)
+# Download the prebuilt onnxruntime $(ONNX_VERSION) shared library (CPU) for the
+# current platform, saved under the name our loader resolves:
+#   linux amd64  -> onnxruntime.so
+#   linux arm64  -> onnxruntime_arm64.so
+#   macOS arm64  -> onnxruntime_arm64.dylib
+ifeq ($(ONNX_SUPPORTED),1)
+onnxruntime: | init
+	@installed="install/lib/$(ONNX_LIB)"; \
+	if test -r "$$installed"; then \
+		actual_sha256="$$(shasum -a 256 "$$installed" | awk '{print $$1}')"; \
+		if test "$$actual_sha256" = "$(ONNX_SHA256)"; then \
+			echo "using verified installed ONNX Runtime $(ONNX_VERSION) from $$installed"; \
+			exit 0; \
+		fi; \
+	fi; \
+	if test -r "$(ONNX_PREBUILT_DIR)/$(ONNX_LIB)"; then \
+		echo "using prebuilt ONNX Runtime $(ONNX_VERSION) from $(ONNX_PREBUILT_DIR)"; \
+		install -m 0644 "$(ONNX_PREBUILT_DIR)/$(ONNX_LIB)" "$$installed"; \
+		actual_sha256="$$(shasum -a 256 "$$installed" | awk '{print $$1}')"; \
+		test "$$actual_sha256" = "$(ONNX_SHA256)" || { echo "ONNX Runtime checksum mismatch: got $$actual_sha256, expected $(ONNX_SHA256)" >&2; rm -f "$$installed"; exit 1; }; \
+	else \
+		MO_DOWNLOAD_FALLBACK_URL="$(ONNX_FALLBACK_BASE_URL)/$(ONNX_SRC)" \
+			$(DOWNLOAD) "$(ONNX_BASE_URL)/$(ONNX_SRC)" "$(ONNX_SHA256)" "$$installed"; \
+	fi
+else
+onnxruntime:
+	$(error unsupported ONNX Runtime platform: $(UNAME_S)/$(UNAME_M))
+endif
 
-.PHONY: usearch stringzilla fp16 simsimd init croaring
+test-download:
+	$(PWD)/download_test
+
+clean:
+	rm -rf install $(USEARCH_DIR) $(STRINGZILLA_DIR) $(SIMSIMD_DIR) $(FP16_DIR) $(CROARING_TMP) $(JEMALLOC_DIR)
+
+.PHONY: usearch stringzilla fp16 simsimd init croaring jemalloc onnxruntime test-download

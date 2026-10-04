@@ -16,6 +16,14 @@
 
 #pragma once
 
+#include "device_memory.hpp"
+#include "helper.h"
+#include "host_memory.hpp"
+
+#include <filesystem>
+#include "index_cost.hpp"
+
+
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
@@ -42,6 +50,7 @@
 #include <algorithm>
 #include <atomic>
 #include <fstream>
+#include <limits>
 #include <numeric>
 #include <map>
 #include <mutex>
@@ -51,6 +60,25 @@
 #include <iostream>
 
 namespace matrixone {
+
+// kStagingReserveFloorRowsNs / staging_grow_rows are the staging arenas' growth
+// rule, at namespace scope so a test can walk the REAL sequence rather than
+// restate it. `want` is the row count that must fit, `bound` is
+// staging_bound_rows(): double from a floor, cap at the bound, never go below
+// what is needed.
+//
+// The Go planner (memory.HostRowsFittingStaged) deliberately does NOT mirror this
+// schedule. It charges 2x the staged row cost, which is correct for any schedule
+// because the superseded buffer can never exceed `bound`. This is exposed so the
+// two can be checked against each other, not so the planner can copy it.
+inline constexpr uint64_t kStagingReserveFloorRowsNs = 4096;
+
+inline uint64_t staging_grow_rows(uint64_t want, uint64_t bound) {
+    uint64_t g = std::max<uint64_t>(want * 2, kStagingReserveFloorRowsNs);
+    g = std::min<uint64_t>(g, bound);
+    return std::max<uint64_t>(g, want);                     // never below what we need
+}
+
 
 using ::distance_type_t;
 using ::quantization_t;
@@ -62,12 +90,12 @@ using ::distribution_mode_t;
 //
 // OVERVIEW
 // --------
-// gpu_index_base_t<T, BuildParams, IdT> is the CRTP-style base class shared by
+// gpu_index_base_t<B, T, BuildParams, IdT> is the CRTP-style base class shared by
 // all three GPU index types:
 //
-//   gpu_ivf_flat_t<T>  (IdT = int64_t)
-//   gpu_ivf_pq_t<T>    (IdT = int64_t)
-//   gpu_cagra_t<T>     (IdT = uint32_t)
+//   gpu_ivf_flat_t<T>   (IdT = int64_t)   // base hardcoded to float
+//   gpu_ivf_pq_t<B, T>  (IdT = int64_t)   // B = base/source element type, T = storage type
+//   gpu_cagra_t<B, T>   (IdT = uint32_t)  // B = base/source element type, T = storage type
 //
 // It provides:
 //   - Pre-build vector buffering (flattened_host_dataset)
@@ -202,17 +230,37 @@ using ::distribution_mode_t;
 //
 // QUANTIZER  (1-byte types only: int8_t, uint8_t)
 // ------------------------------------------------
-// scalar_quantizer_t<float> quantizer_ maps float32 values to [min, max] range
-// and packs them into int8/uint8.  It must be trained before add_chunk_float()
-// or extend_float() is called for 1-byte types.
+// scalar_quantizer_t<B> quantizer_ maps source-type B values into the storage
+// range [min, max] and packs them into int8/uint8.
 //
-// Training: quantizer_.train(res, train_matrix) or train_quantizer(data, n).
-//   - Auto-training occurs in add_chunk_float if not yet trained (uses up to 500
-//     samples from the first chunk).
-//   - For extend_float, the quantizer MUST already be trained (throws otherwise).
+// Training (on the ORIGINAL float/half source data only):
+//   - add_chunk_float() / add_chunk_quantize() buffer their raw B chunks in
+//     staging_data_/staging_spans_; flush_pending_float_chunks_internal() — invoked at
+//     build time via train_quantizer_if_needed() — trains the quantizer on ALL
+//     buffered rows at once, then quantizes them into storage. (No "first chunk"
+//     or 500-sample heuristic; the full buffered set is used.)
 //
-// Extended vectors must lie within the trained [min, max] range; vectors outside
-// this range will be clamped and produce degraded search quality.
+//     DECISION — prefix training is intentional, WON'T FIX (owner: cpegeric).
+//     The buffered set is the first `quantizer_train_limit` source rows (an
+//     ORDER-independent scan prefix, plumbed from the SQL WITH option). A review
+//     raised that a small limit trains [min,max] on a non-representative prefix
+//     and degrades search on out-of-range vectors. This is by design and accepted:
+//     the limit is fully user-controlled — set quantizer_train_limit high enough
+//     (up to a full-table scan) to train on a representative sample. Nothing caps
+//     it, so there is no correctness loss the engine can or should force. Do not
+//     re-raise; do not add an automatic full-scan fallback (it would defeat the
+//     bounded-memory / bounded-time purpose of the limit).
+//   - The quantizer is NEVER trained from flattened_host_dataset: for a 1-byte T
+//     that buffer holds only storage bytes, so training on it would learn the
+//     COMPRESSED range, not the original float range.
+//   - A pre-quantized index (rows added via add_chunk(T*), with no original
+//     floats and no set_quantizer()) therefore leaves the quantizer UNTRAINED.
+//     Base-typed (B) search/extend on it requires an explicit range via
+//     set_quantizer() first — quantize_query() (search) and
+//     upload_float_matrix_as_T() (extend) throw "quantizer not trained" otherwise.
+//
+// Extended/searched vectors must lie within the trained [min, max] range; values
+// outside it are clamped and produce degraded search quality.
 //
 //
 // SERIALIZATION  (save_dir / load_dir)
@@ -283,8 +331,7 @@ inline int64_t map_neighbor_id(int64_t raw, int64_t offset,
 // apply_pq_post_filter_locked uses FLT_MAX).
 // =============================================================================
 
-// Effective top-k for the cuVS call: clamp the caller's requested limit to
-// the shard / index row count. Pure host-side; raft-free.
+
 inline uint32_t clamp_k_to_index_size(uint32_t limit, uint64_t shard_sz) {
     return static_cast<uint32_t>(
         std::min<uint64_t>(static_cast<uint64_t>(limit), shard_sz));
@@ -330,27 +377,37 @@ inline void fill_all_sentinel(NeighborT* neighbors, float* distances,
     std::fill_n(distances, count, std::numeric_limits<float>::max());
 }
 
-// InnerProduct sign flip on the search result's distances. cuvs returns
-// inner-product distances negated (so smaller is "closer") — we flip back so
-// downstream callers see the true inner product. ±FLT_MAX sentinels are
-// preserved (they mark padded / filtered-out slots from scatter_with_padding
-// or fill_all_sentinel above). No-op for any other metric.
+// Post-process a search result's distances in place:
+//   - InnerProduct: flip the sign. cuvs returns inner-product distances negated
+//     (so smaller is "closer"); we flip back so callers see the true IP.
+//   - quantized L2 (dequant_factor != 1): rescale the quantized-domain distance
+//     back to the base (f32) scale, so a 1-byte (int8/uint8) main index merges
+//     on the same scale as the base-typed CDC overflow brute force. The factor
+//     comes from quantized_l2_dequant_factor() (1/scalar^2 for squared L2). IP
+//     and L2-dequant are mutually exclusive — IP/cosine + int8/uint8 is rejected
+//     at plan time (an affine quantizer is not a pure rescale for IP/cosine).
+// ±FLT_MAX sentinels (padded / filtered-out slots from scatter_with_padding or
+// fill_all_sentinel above) are preserved. No-op for plain f32/f16 L2.
 inline void transform_distance(distance_type_t metric,
-                               float* distances, size_t count) {
-    if (metric != DistanceType_InnerProduct) return;
+                               float* distances, size_t count,
+                               double dequant_factor = 1.0) {
+    const bool flip    = (metric == DistanceType_InnerProduct);
+    const bool rescale = (dequant_factor != 1.0);
+    if (!flip && !rescale) return;
     const float kSentinel = std::numeric_limits<float>::max();
     for (size_t i = 0; i < count; ++i) {
-        if (distances[i] != kSentinel && distances[i] != -kSentinel) {
-            distances[i] *= -1.0f;
-        }
+        if (distances[i] == kSentinel || distances[i] == -kSentinel) continue;
+        if (flip) distances[i] *= -1.0f;
+        else      distances[i] = static_cast<float>(static_cast<double>(distances[i]) * dequant_factor);
     }
 }
 
 // Convenience overload for the persistent-index path where distances live in
 // a std::vector. Same semantics as the (float*, size_t) form.
 inline void transform_distance(distance_type_t metric,
-                               std::vector<float>& distances) {
-    transform_distance(metric, distances.data(), distances.size());
+                               std::vector<float>& distances,
+                               double dequant_factor = 1.0) {
+    transform_distance(metric, distances.data(), distances.size(), dequant_factor);
 }
 
 /**
@@ -359,13 +416,16 @@ inline void transform_distance(distance_type_t metric,
  * See the Developer Guide block above for full details on lifecycle, locking,
  * distribution modes, ID mapping, and the soft-delete bitset system.
  *
- * @tparam T           Element type: float, half (__half), int8_t, uint8_t
+ * @tparam B           Base/query/quantizer-SOURCE element type: float or half
+ * @tparam T           Storage element type: float, half (__half), int8_t, uint8_t
  * @tparam BuildParams Index-specific build parameter struct
  * @tparam IdT         Neighbor ID type: int64_t (IVF) or uint32_t (CAGRA)
  */
-template <typename T, typename BuildParams, typename IdT = int64_t>
+template <typename B, typename T, typename BuildParams, typename IdT = int64_t>
 class gpu_index_base_t {
 public:
+    using base_type    = B;
+    using storage_type = T;
     // ---- Index configuration (immutable after build) ----
     uint32_t dimension = 0;          ///< Vector dimensionality
     distance_type_t metric;          ///< Distance metric (L2, IP, cosine, ...)
@@ -384,14 +444,60 @@ public:
     // Released immediately after build_internal() completes to free host RAM.
     std::vector<T> flattened_host_dataset;
 
-    // ---- Deferred float buffer for quantizer training (1-byte types only) ----
-    // When T is int8_t or uint8_t the quantizer must be trained on a
-    // representative sample before any vectors can be quantized.
-    // Raw float chunks are accumulated here until kQuantizerTrainThreshold
-    // vectors are available, then the quantizer is trained on all of them at
-    // once and the buffer is flushed into flattened_host_dataset as T.
-    // If build() is called before the threshold is reached the buffer is
-    // force-flushed (trained on whatever is available).
+    // ---- Staging arena for quantizer training (1-byte storage only) ----
+    //
+    // When T is int8_t/uint8_t the quantizer is an affine map q(x)=round(x*mul+add)
+    // derived from a [min,max] range, so NOTHING can be encoded until that range
+    // exists. Until then rows can only be held raw. Staging stops at
+    // quantizer_train_limit_ rows; the flush trains on them and quantizes them
+    // into flattened_host_dataset, and every row after that is mapped on arrival.
+    //
+    // WHY NOT TWO PASSES (sample+train, then re-read and encode)?
+    // Not available at this layer. Rows arrive ONE PER CALL across the cgo
+    // boundary, and chunk_data points into Go-owned memory valid only for that
+    // call — the index cannot retain it, let alone replay it. The source is a
+    // SQL scan driven by the table function; re-reading means re-executing that
+    // query, which is the caller's business and something this class has no
+    // handle on. So within this layer there are exactly two options: retain
+    // every row until training, or train on what has arrived so far.
+    //
+    // WHY NOT RETAIN EVERYTHING?
+    // That is O(N*sizeof(B)) host memory — 3.07 GB of raw f32 for a 1M x 768
+    // build, on top of the 768 MB quantized result. It is what OOM-killed
+    // mo-service at 20.2 GB RSS and is the reason this staging bound exists. It
+    // buys a strided sample over the whole table, which is only worth paying for
+    // if arrival order correlates with value.
+    //
+    // WHY A PREFIX IS SOUND.
+    // Two separate arguments, and they do different work:
+    //   * Contract. The build scan has no ORDER BY, so the engine owes no
+    //     ordering and nothing downstream may assume one. This is what makes
+    //     training on arrival order PERMISSIBLE — we are not breaking a promise,
+    //     because none was made. Note it is "unspecified", not "guaranteed
+    //     unsorted": an engine may legitimately return storage order.
+    //   * Practice. Bulk ingest and the build scan are both PARALLEL, so the
+    //     first N arrivals are interleaved across the table rather than being
+    //     the head of it. Measured directly: a 1M-row table loaded from a
+    //     STRICTLY value-ordered CSV (value == id, ascending) returns its first
+    //     200k arrivals spanning ids [49153, 983040] — 93% of the value range.
+    //     That is what makes the sample representative, and therefore what
+    //     protects RECALL. Note the effect is size-dependent: the same test at
+    //     20k rows stayed in file order ([1,1000] for the first 1000), because
+    //     parallelism does not engage on a small load. Small tables are also
+    //     where the whole table fits under the staging bound and the question
+    //     does not arise.
+    // Measured on wiki 1M, this design vs the old full-table strided sample:
+    // cagra f32+int8 0.9378 vs 0.9407, cagra f16+int8 0.9400 vs 0.9377, ivfpq
+    // f32+int8 0.8315 vs 0.8253 — within run-to-run noise in both directions,
+    // with host staging down from ~3 GB to ~0.31 GB. That dataset is not
+    // value-ordered, so it shows no regression here; it is not a proof for a
+    // magnitude-sorted source.
+    //
+    // The one shape this does NOT cover is a caller handing over a large
+    // value-ordered buffer in a SINGLE call — see the bulk shortcut in
+    // ingest_quantized_rows, which trains from the caller's own buffer instead
+    // and covers the whole chunk up to the VRAM cap.
+    //
     // Only ever accessed from submit_main() tasks (serialised), so no extra
     // locking is needed beyond what those tasks already take.
     // (Fields are in protected: — see below.)
@@ -458,12 +564,48 @@ public:
     // Used only when host_ids is non-empty.
     std::unordered_map<IdT, uint64_t> id_to_index_;
 
+    // id_to_index_ is DERIVED state, built on demand rather than during ingest.
+    //
+    // delete_id() is its only reader, and the lifecycle above forbids delete_id()
+    // before build(), so nothing can read it while a build is running. It is not
+    // serialized either -- save_ids() writes host_ids alone, and load_ids() rebuilds
+    // from that. Populating it per row during a build therefore cost one malloc per
+    // row, plus rehash spikes, for a structure Pack() throws away: ~40 bytes/row of
+    // host memory that no reader ever saw. On a narrow int8 vector that was more
+    // than a fifth of the whole per-row host cost, which is capacity taken from the
+    // index for nothing.
+    //
+    // INVARIANT: the map is either EMPTY (not built yet) or COMPLETE for host_ids.
+    // id_index_built_ separates "empty because unbuilt" from "empty because there
+    // are no ids", so an id-less index does not rebuild on every delete. Writers
+    // extend the map only once it is built; ensure_id_index() materialises it the
+    // first time a reader needs it.
+    bool id_index_built_ = false;
+
     // ---- Host-resident filter columns for pre-filtered search (protected by mutex_) ----
     // Populated before build() via set_filter_columns() + add_filter_chunk().
     // Retained for the lifetime of the index — search-time predicate eval reads
     // directly from this store (see filter.hpp / eval_filter_bitmap_cpu).
     // Empty means the index has no INCLUDE columns and only unfiltered search applies.
     FilterStore filter_host_;
+
+    // cost_ is this index's DEVICE cost model (index_cost.hpp). Each index type
+    // constructs its own concrete cost in its constructor, so "what does a row
+    // cost" and "what will this build peak at" have exactly one definition per
+    // index and every caller -- the capacity planner and the build claim alike --
+    // reads the same object.
+    std::unique_ptr<matrixone::index_cost_base> cost_;
+
+    // build_peak_bytes: what a build of `rows` rows is about to allocate. Routed
+    // through cost_ so the claim cannot drift from the planner's model.
+    // The per-index budget fraction, for the claim sites below and for
+    // rows_fitting. 0 when no cost class is attached, which the governor reads as
+    // "use the default".
+    size_t budget_percent() const { return cost_ ? cost_->budget_percent() : 0; }
+
+    size_t build_peak_bytes(uint64_t rows) const {
+        return cost_ ? cost_->build_peak_bytes(rows) : 0;
+    }
 
     gpu_index_base_t() = default;
     virtual ~gpu_index_base_t() {
@@ -493,6 +635,42 @@ public:
             return info;
         }
         return it->second;
+    }
+
+    // Factor that rescales a quantized-domain L2 distance back to the base (f32)
+    // scale, for transform_distance(). For 1-byte storage (int8/uint8) the index
+    // computes L2 over the quantized vectors, where each element is
+    // q(x)=scalar*x+offset with scalar=255/(max-min); the per-element offset is a
+    // constant translation that cancels in a difference, so
+    // ||q(a)-q(b)||^2 = scalar^2*||a-b||^2 (and scalar*||a-b|| for the sqrt
+    // metrics). Returning 1/scalar^2 (resp. 1/scalar) undoes that, so a quantized
+    // main-index distance lands on the SAME scale as the base-typed CDC overflow
+    // brute force — otherwise mergeMultiResults compares scalar^2-scaled main
+    // distances against base-scale overflow distances and the overflow rows
+    // wrongly dominate the top-k. Also makes the reported l2_distance correct.
+    //
+    // Returns 1.0 (no-op) for plain f32/f16 storage, an untrained quantizer, a
+    // degenerate range, or a non-L2 metric (IP/cosine are not a pure rescale
+    // under an affine quantizer and are rejected at plan time).
+    double quantized_l2_dequant_factor() const {
+        if constexpr (sizeof(T) == 1) {
+            if (!this->quantizer_.is_trained()) return 1.0;
+            const double range = static_cast<double>(this->quantizer_.max()) -
+                                 static_cast<double>(this->quantizer_.min());
+            if (!(range > 0.0)) return 1.0;
+            const double s = 255.0 / range; // scalar
+            switch (this->metric) {
+                case DistanceType_L2Expanded:
+                case DistanceType_L2Unexpanded:
+                    return 1.0 / (s * s); // distances are squared L2
+                case DistanceType_L2SqrtExpanded:
+                case DistanceType_L2SqrtUnexpanded:
+                    return 1.0 / s;
+                default:
+                    return 1.0; // IP / cosine: scale alone can't reconcile them
+            }
+        }
+        return 1.0;
     }
 
     // Sync a shard-local slice of the deleted bitset to device (SHARDED mode).
@@ -848,25 +1026,136 @@ public:
         set_ids_internal(ids, count_vectors, offset);
     }
 
+    // Materialise id_to_index_ from host_ids. CALLER MUST HOLD mutex_ (unique_lock):
+    // this takes no lock of its own, because its only caller already holds one and
+    // re-locking a shared_mutex here would deadlock.
+    //
+    // Sized up front, so the build the reader pays for is one allocation and n
+    // inserts rather than the doubling rehash sequence the per-row path incurred.
+    //
+    // Trusts the WHOLE of host_ids, which is sound because the writers refuse to
+    // leave a hole in it (see the all-ids-or-all-id-less guard in add_chunk). A
+    // hole would zero-fill, and a zero is indistinguishable from a legitimate
+    // external id 0.
+    // Host bytes per row of id_to_index_: 24 for the unordered_map node, 8 for
+    // the allocator header, 8 for the bucket slot. Mirrors
+    // pkg/vectorindex/memory.HostIDMapBytesPerRow, which is the authority: the
+    // claim below covers only the allocation, so the Go cache budget is what
+    // charges the map for as long as it stays resident.
+    static constexpr size_t kIdMapBytesPerRow = 40;
+
+    // Claims the host memory a load is about to materialise out of `dir`.
+    //
+    // The artifact is the authoritative size here: a search-path load has no
+    // capacity to model from (IndexCapacity is resolved by the build operator
+    // and never written back), so sizing from config would claim nothing at all.
+    //
+    // The returned claim is meant to be held for the whole of load_dir and to
+    // drop on scope exit -- by then the components are materialised and the
+    // availability reading has moved by the same amount. Over-claims by
+    // manifest.json and by anything the loader frees again before returning,
+    // which is the direction that cannot under-admit.
+    host_memory_governor::reservation claim_host_components(const std::string& dir,
+                                                            const char* who) {
+        size_t          need = 0;
+        std::error_code ec;
+        for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end;
+             it.increment(ec)) {
+            std::error_code fec;
+            if (!it->is_regular_file(fec) || fec) continue;
+            if (!matrixone::is_host_resident_component(it->path().filename().string()))
+                continue;
+            const auto n = it->file_size(fec);
+            if (!fec) need += static_cast<size_t>(n);
+        }
+        if (need == 0) return host_memory_governor::reservation();
+        return host_memory_governor::reserve(need, who);
+    }
+
+    void ensure_id_index() {
+        if (this->id_index_built_) return;
+        // Completeness check for the OTHER direction of the all-ids-or-none contract.
+        // The writers refuse a hole before the ids (add_chunk / set_ids_internal /
+        // the flush span), and run_extend refuses an id-less extend of an id-bearing
+        // index -- but rows can be appended from several independent sites and there
+        // is no single choke point to guard, so the invariant is asserted here, where
+        // the ambiguity actually bites and every one of those paths converges.
+        //
+        // host_ids.size() >= current_offset_ for a well-formed index: equal normally,
+        // greater when a constructor pre-filled ids to `count` and current_offset_ has
+        // not caught up. Smaller means rows exist that no id addresses, so the map
+        // cannot be complete and delete_id would silently miss them.
+        if (this->host_ids.size() < this->current_offset_) {
+            throw std::runtime_error(
+                "ensure_id_index: index has " + std::to_string(this->current_offset_) +
+                " rows but ids for only " + std::to_string(this->host_ids.size()) +
+                "; an index is either all-ids or all-id-less, not a mix");
+        }
+        // Materialising the map allocates for the WHOLE index at once -- around
+        // 3.5 GB at 88M rows -- on a path where failing to allocate leaves the
+        // index unloadable rather than merely refused. It is claimed here rather
+        // than at load because an index that never has a delete replayed never
+        // builds the map at all.
+        //
+        // Under delete_id's mutex_, and reserve() reads /proc (~39us on the dev
+        // box). id_index_built_ makes this once per index, not once per delete,
+        // so hoisting the sample into delete_id would turn one sample into one
+        // per deleted row.
+        const size_t need = this->host_ids.size() * kIdMapBytesPerRow;
+        host_memory_governor::reservation claim;
+        if (need > 0) claim = host_memory_governor::reserve(need, "id map");
+
+        this->id_to_index_.reserve(this->host_ids.size());
+        for (uint64_t i = 0; i < this->host_ids.size(); ++i) {
+            this->id_to_index_[this->host_ids[i]] = i;
+        }
+        claim.release();
+        this->id_index_built_ = true;
+    }
+
     void set_ids_internal(const IdT* ids, uint64_t count_vectors, uint64_t offset = 0) {
         if (!ids) return;
         // std::cout << "[DEBUG] set_ids: count=" << count_vectors << " offset=" << offset 
         //           << " first_id=" << ids[0] << " last_id=" << ids[count_vectors-1] 
         //           << " sizeof(IdT)=" << sizeof(IdT) << std::endl;
+        // See the contract note in add_chunk: ids must extend or overwrite the
+        // existing range, never start past its end and leave a zero-filled hole.
+        if (this->host_ids.size() < offset) {
+            throw std::runtime_error(
+                "set_ids: would leave rows " + std::to_string(this->host_ids.size()) +
+                ".." + std::to_string(offset) + " without ids; an index is either "
+                "all-ids or all-id-less, not a mix");
+        }
         if (this->host_ids.size() < offset + count_vectors) {
             this->host_ids.resize(offset + count_vectors);
         }
         std::copy(ids, ids + count_vectors, this->host_ids.begin() + offset);
-        for (uint64_t i = 0; i < count_vectors; ++i) {
-            this->id_to_index_[ids[i]] = offset + i;
+        // Extend the map only if a reader already forced it into existence; otherwise
+        // leave it empty and let ensure_id_index() build it complete on demand.
+        if (this->id_index_built_) {
+            for (uint64_t i = 0; i < count_vectors; ++i) {
+                this->id_to_index_[ids[i]] = offset + i;
+            }
         }
     }
 
+    // Brings up the worker and whatever else the index needs before ingest or
+    // search. It allocates nothing on its own: the large host buffers are
+    // claimed and taken where they are used -- see allocate_host_capacity.
     virtual void start() {}
     virtual void build() {}
 
     // Common management methods
     virtual void destroy() {
+        // Drop any rows still staged by an index destroyed before build()
+        // (failed CREATE INDEX, DROP during ingest).
+        {
+            std::unique_lock<std::shared_mutex> lock(mutex_);
+            pending_total_count_ = 0;
+            std::vector<B>().swap(staging_data_);
+            std::vector<IdT>().swap(staging_ids_);
+            std::vector<staged_span_t>().swap(staging_spans_);
+        }
         if (worker) worker->stop();
     }
 
@@ -949,12 +1238,32 @@ public:
         }
 
         if (ids) {
+            // An index is all-ids or all-id-less; a MIX is rejected here rather than
+                // silently tolerated. Writing ids at target_offset when host_ids ends
+                // before it leaves the rows in between zero-filled, and a zero is
+                // indistinguishable from a legitimate external id 0: search would report
+                // 0 for those rows (map_neighbor_id subscripts host_ids directly) and
+                // ensure_id_index would map id 0 onto one of them. Nothing constructs
+                // such an index today -- every entry point supplies ids for all chunks
+                // or none -- so this turns an unwritten assumption into a checked one,
+                // and is what lets ensure_id_index trust the whole of host_ids.
+            if (host_ids.size() < target_offset) {
+                throw std::runtime_error(
+                    "add_chunk: would leave rows " + std::to_string(host_ids.size()) +
+                    ".." + std::to_string(target_offset) + " without ids; an index is "
+                    "either all-ids or all-id-less, not a mix");
+            }
             if (host_ids.size() < current_offset_) {
                 host_ids.resize(current_offset_);
             }
             std::copy(ids, ids + chunk_count, host_ids.begin() + target_offset);
-            for (uint64_t i = 0; i < chunk_count; ++i) {
-                id_to_index_[ids[i]] = target_offset + i;
+            // Build-time path: the map is unbuilt here by construction (delete_id
+            // cannot run before build()), so this loop is skipped and the per-row
+            // malloc never happens.
+            if (id_index_built_) {
+                for (uint64_t i = 0; i < chunk_count; ++i) {
+                    id_to_index_[ids[i]] = target_offset + i;
+                }
             }
         }
     }
@@ -973,9 +1282,25 @@ public:
 
     void set_filter_columns(const std::string& col_meta_json, uint64_t total_count) {
         auto cols = parse_filter_col_meta(col_meta_json);
+
+        // FilterStore::init resizes every INCLUDE column to capacity * elem_size,
+        // so this is a capacity-sized host allocation like the vector buffer and
+        // claims the same way. A build with several fixed-width INCLUDE columns
+        // can spend more here than on a narrow vector.
+        //
+        // Claimed before the lock: the availability reading touches /proc and the
+        // cgroup files, and there is no reason to hold mutex_ across that.
+        size_t need = 0;
+        for (const auto& m : cols) {
+            need += static_cast<size_t>(total_count) * filter_col_elem_size(m.type);
+        }
+        host_memory_governor::reservation claim;
+        if (need > 0) claim = host_memory_governor::reserve(need, "filter columns");
+
         std::unique_lock<std::shared_mutex> lock(mutex_);
         if (is_loaded_) throw std::runtime_error("Cannot set filter columns on built index");
         filter_host_.init(std::move(cols), total_count);
+        claim.release();
     }
 
     // null_bitmap: packed uint32 words, LSB-first (bit i = row i is not-null).
@@ -1018,6 +1343,9 @@ public:
         std::unique_lock<std::shared_mutex> lock(mutex_);
         uint64_t pos;
         if (!host_ids.empty()) {
+            // The only reader, and the only place the map is ever built. Under the
+            // unique_lock taken above, so ensure_id_index() must not take its own.
+            ensure_id_index();
             auto it = id_to_index_.find(id);
             if (it == id_to_index_.end()) return; // not found
             pos = it->second;
@@ -1041,75 +1369,345 @@ public:
         }
     }
 
-    // Flush all pending float chunks: train the quantizer on the combined data,
-    // then quantize each chunk and store into flattened_host_dataset.
-    // Must be called only from inside a submit_main() task (GPU work is legal there).
-    // GPU operations are performed without holding mutex_; shared state is updated
-    // under unique_lock after each chunk's GPU work completes.
+    // Cap a requested quantizer training-sample row count so its device copy fits
+    // in ~60% of FREE GPU memory. train() uploads the sample as ONE contiguous
+    // n_rows*dim*sizeof(B) block; a single block rarely fits 80% of free memory
+    // once the pool is fragmented, and cuVS needs scratch for the quantile
+    // reduction — so 60% with headroom. High dim => fewer rows (Google's rule to
+    // avoid OOM during the training call). Logs when it caps (no silent
+    // truncation); a no-op when cudaMemGetInfo fails or the sample already fits.
+    // Must run on the target device (called from the flush worker task).
+    // Rows to stage before training must run: the training sample we need
+    // (quantizer_train_limit_), bounded by what the device can actually train on
+    // in one shot.
+    //
+    // Both bounds are load-bearing. Without the limit, staging would retain far
+    // more than the sample needs. Without the GPU bound, quantizer_train_limit
+    // -- settable straight from SQL and deliberately unclamped -- would size the
+    // host buffer directly: `quantizer_train_limit 50000000` at dim 768 / f32
+    // stages 50M * 3072 B = 153 GB before anything trims it, since
+    // cap_train_rows_to_gpu_mem only trims the DEVICE copy, at flush, long after
+    // the host buffer has grown. Taking the min keeps the SQL knob expressive
+    // and harmless.
+    //
+    // Called under the staging lock inside a submit_main task, so a device is
+    // current; a cudaMemGetInfo failure throws rather than guessing (see
+    // cap_train_rows_to_gpu_mem).
+    //
+    // Measured ONCE per index and reused. The builders stage one row per call,
+    // so measuring per chunk would mean a cudaMemGetInfo driver call per row --
+    // and, on a device too small for the requested sample, one "train sample
+    // capped" log line per row. Once is also the right cadence: the figure is
+    // only a staging ceiling, and cap_train_rows_to_gpu_mem is applied again at
+    // flush (once per flush, not per row) against the free VRAM that actually
+    // matters -- the amount available when the training upload happens.
+    uint64_t staging_row_limit() {
+        uint64_t cached = staging_row_limit_.load(std::memory_order_relaxed);
+        if (cached != 0) return cached;
+        uint64_t want;
+        {
+            // set_quantizer_train_limit writes this under unique_lock; read it
+            // under the shared lock rather than racing it. The GPU query below
+            // stays OUTSIDE the lock (CLAUDE.md rule 1).
+            std::shared_lock<std::shared_mutex> lock(mutex_);
+            want = quantizer_train_limit_;
+        }
+        // The rule lives in matrixone::quantizer_staging_rows so the Go planner,
+        // which must charge this arena against the host budget, asks the same
+        // function instead of reimplementing it.
+        uint64_t limit = matrixone::quantizer_staging_rows(
+            static_cast<size_t>(dimension) * sizeof(B), want, this->budget_percent());
+        staging_row_limit_.store(limit, std::memory_order_relaxed);
+        return limit;
+    }
+
+    // Thin wrapper over matrixone::rows_fitting_gpu_mem, which owns the
+    // fraction-of-free-VRAM rule shared with the index-build capacity bound. It throws rather than falling back
+    // to the requested count: this runs inside a submit_main task, so a device is current
+    // by construction and a cudaMemGetInfo failure means the context is already broken
+    // (sticky launch error, device reset). Returning requested_rows would send an
+    // unchecked upload into a dead context and surface the real fault later as an opaque
+    // allocation failure inside train().
+    //
+    // Re-caps the training sample at FLUSH, against the free VRAM that actually
+    // matters by then. Must use the index's own fraction: the upload claim in
+    // train_quantizer_from_host reserves at budget_percent(), so re-capping at the
+    // governor default would retain a sample the very next reservation refuses --
+    // 75% here against IVF-PQ's 65% there. Same defect the trainset probe had.
+    int64_t cap_train_rows_to_gpu_mem(int64_t requested_rows) const {
+        return matrixone::cap_rows_to_gpu_mem(
+            requested_rows, static_cast<size_t>(dimension) * sizeof(B), "quantizer",
+            this->budget_percent());
+    }
+
+    // Allocates the capacity-sized host buffers, claiming them from the host
+    // governor first.
+    //
+    // These are the build's large host allocations: flattened_host_dataset at
+    // capacity * dim * sizeof(T), and for the pre-allocating constructors
+    // host_ids at capacity * sizeof(IdT). Both are taken here in full, which is
+    // what lets ONE claim with ONE lifetime cover them.
+    //
+    // The claim is released as soon as the buffers exist, not when they are
+    // freed: from that moment the bytes are visible in the availability reading
+    // instead, and a claim still on the ledger would be counted twice. See
+    // host_memory_governor::reservation::release.
+    //
+    // resize()+clear() rather than reserve(): reserve() obtains the allocation
+    // but leaves the pages unfaulted, and the availability reading (cgroup
+    // usage, or MemAvailable) only moves once a page is touched -- so releasing
+    // the claim would leave the bytes counted in neither the ledger nor
+    // availability, and a second build could be admitted against them. The
+    // alternative is to hold the claim for the buffer's whole lifetime, which
+    // permits a bare reserve() but double-counts every page as ingest faults
+    // it. Faulting now costs one linear pass; holding costs a concurrent build
+    // this claim's worth of headroom for the length of the build. clear() then
+    // returns size() to 0 while KEEPING the capacity, so the append path and
+    // the host_ids.empty() id-less test are both unchanged.
+    //
+    // THROWS if the host cannot admit the buffers, which propagates out of the
+    // constructor and is reported to the caller as a failed index creation.
+    void allocate_host_capacity(const char* who, bool with_ids) {
+        const size_t rows      = static_cast<size_t>(this->count);
+        const size_t elems     = rows * this->dimension;
+        const size_t vec_bytes = elems * sizeof(T);
+        const size_t id_bytes  = with_ids ? rows * sizeof(IdT) : 0;
+        const size_t need      = vec_bytes + id_bytes;
+        if (need == 0) return;  // a zero-row index allocates nothing to claim for
+
+        auto claim = host_memory_governor::reserve(need, who);
+        this->flattened_host_dataset.resize(elems);
+        if (with_ids) {
+            this->host_ids.resize(this->count);
+            this->host_ids.clear();
+        }
+        claim.release();
+    }
+
+
+    // Upper bound on rows this index can ever stage: the staging bound, further
+    // capped by the index's capacity (staging beyond capacity is impossible).
+    uint64_t staging_bound_rows(uint64_t stage_limit) const {
+        uint64_t bound = stage_limit;
+        if (this->count > 0) bound = std::min<uint64_t>(bound, this->count);
+        return bound < 1 ? 1 : bound;
+    }
+
+    // Append `count` rows to the staging arenas and record the span describing
+    // them. Caller holds mutex_ and has already clamped `count` to the room left
+    // under the staging bound.
+    //
+    // The merge below is what keeps staging_spans_ from becoming per-row
+    // metadata: two consecutive calls that both append (offset -1) and agree
+    // about ids are indistinguishable from one larger append, so the last span
+    // is extended rather than a new one pushed. Its four conditions are each
+    // load-bearing — offsets must both be "append", ids-ness must match (or the
+    // merged span would claim ids it does not have, or hide ids it does), and
+    // the rows must be physically adjacent in staging_data_.
+    // NOTE: the row-count parameter is deliberately NOT named `count` — that is
+    // the member holding this index's constructor row count, and shadowing it
+    // here silently sized the arena to the incoming chunk (1 row in production)
+    // instead of the table, so the "single pre-allocation" grew geometrically.
+    void stage_rows_locked(const B* rows, uint64_t n_rows, int64_t offset,
+                           const IdT* ids, uint64_t stage_limit) {
+        // Grow the arenas geometrically toward the bound rather than jumping to
+        // it. Reserving the full bound up front allocated for a table we may not
+        // have: `count` is the index's CAPACITY (cap(): total allocated slots),
+        // not its row count, so a 1000-row table created with an explicit
+        // max_index_capacity — or simply a default 100k train limit — reserved
+        // ~307 MB at dim 768 to stage 3 MB. Doubling keeps the allocation count
+        // logarithmic (the thing the arena exists for: production stages one row
+        // per call) while never over-allocating more than 2x what is in use.
+        const uint64_t bound = staging_bound_rows(stage_limit);
+        const uint64_t need  = pending_total_count_ + n_rows;
+
+        auto grow_to = [&](uint64_t want) { return staging_grow_rows(want, bound); };
+        const bool grow_data = staging_data_.capacity() < need * dimension;
+        const bool grow_ids  = ids && staging_ids_.capacity() < need;
+        const uint64_t data_rows = grow_data ? grow_to(need) : 0;
+        const uint64_t ids_rows  = grow_ids ? grow_to(need) : 0;
+
+        // Claim what the growth ADDS, not what the arenas will hold: most calls
+        // fit the existing capacity and add nothing. One claim covers both
+        // arenas so a growth is admitted or refused as a unit.
+        //
+        // This runs under the caller's mutex_, and reserve() reads /proc and the
+        // cgroup files -- measured at ~39us per call on the dev box. It is taken
+        // only when the arenas actually grow, and growth is geometric toward the
+        // bound, so a whole build pays it a handful of times rather than once per
+        // staged row. Sampling before the lock instead would mean sampling on
+        // EVERY call, which is the far worse trade: production stages one row per
+        // call.
+        //
+        // Held across the growth AND the inserts, and the growth MATERIALISES the
+        // whole span before the claim is released.
+        //
+        // A bare reserve() would leave the geometric slack beyond `need`
+        // allocated but unfaulted, and cgroup usage only moves on fault. The
+        // claim covering that slack was then released against memory the kernel
+        // had not charged, and every later call that fits inside the slack takes
+        // no claim at all (grow_data is false) while faulting it. Two builders
+        // could each pass a growth admission, release having touched only their
+        // current rows, and then consume their unclaimed slack concurrently.
+        //
+        // resize-then-restore is the same idiom allocate_host_capacity uses:
+        // resize() value-initialises, which faults every page, and shrinking the
+        // size afterwards keeps the capacity. So by the time the claim drops, the
+        // bytes it stood for are charged to the availability the next caller
+        // reads, and no byte of the arena is accounted in neither place.
+        // The FULL replacement buffer, not the delta over the current capacity.
+        // A growing resize does not extend in place: it allocates the new buffer,
+        // copies, and only then frees the old one, so the transient peak is old +
+        // new. Availability already reflects the old buffer (its pages are
+        // faulted), so what still has to be admitted is the whole new one.
+        //
+        // Claiming the delta under-admits by the old buffer's size, and that gap
+        // is exactly what a peak has to cover: with an arena at S/2 resident and
+        // a target of S = 75% of initial free, the delta passes the budget while
+        // the allocation itself needs S against less free than that.
+        // The Go planner (memory.HostRowsFittingStaged) charges 2x the staged row
+        // cost so a plan it admits can always reach this bound. That factor rests
+        // on two properties of the code below, not on the doubling ratio: at most
+        // ONE superseded buffer is resident when the claim is taken, and the claim
+        // is exactly its replacement. Changing the ratio or the floor is safe;
+        // holding a second old buffer, or claiming more than the replacement, is
+        // not -- update the planner's charge with it.
+        size_t growth = 0;
+        if (grow_data) growth += static_cast<size_t>(data_rows) * dimension * sizeof(B);
+        if (grow_ids) growth += static_cast<size_t>(ids_rows) * sizeof(IdT);
+        host_memory_governor::reservation staging_claim;
+        if (growth > 0) staging_claim = host_memory_governor::reserve(growth, "quantizer staging");
+
+        if (grow_data) {
+            const size_t keep = staging_data_.size();
+            staging_data_.resize(static_cast<size_t>(data_rows) * dimension);
+            staging_data_.resize(keep);
+        }
+        if (grow_ids) {
+            const size_t keep = staging_ids_.size();
+            staging_ids_.resize(static_cast<size_t>(ids_rows));
+            staging_ids_.resize(keep);
+        }
+
+        const uint64_t start_row = pending_total_count_;
+        const uint64_t ids_start = staging_ids_.size();
+        staging_data_.insert(staging_data_.end(), rows, rows + n_rows * dimension);
+        if (ids) staging_ids_.insert(staging_ids_.end(), ids, ids + n_rows);
+        pending_total_count_ += n_rows;
+        staging_claim.release();
+
+        if (!staging_spans_.empty()) {
+            staged_span_t& last = staging_spans_.back();
+            if (last.offset == -1 && offset == -1 &&
+                last.has_ids == (ids != nullptr) &&
+                last.start_row + last.count == start_row) {
+                last.count += n_rows;   // merge consecutive appends
+                return;
+            }
+        }
+        staging_spans_.push_back(
+            staged_span_t{start_row, n_rows, offset, ids_start, ids != nullptr});
+    }
+
+    // Upload `n_rows` rows starting at `rows` and train the quantizer on them.
+    // No host-side copy: the caller's buffer is uploaded as-is, so this works
+    // equally for the staging arena and for a caller's own chunk.
+    // Must run inside a submit_main task; takes no lock across the GPU work.
+    void train_quantizer_from_host(raft_handle_wrapper_t& handle,
+                                   const B* rows, int64_t n_rows) {
+        auto res = handle.get_raft_resources();
+        {
+            // Scoped so the device matrix is released before the caller's
+            // quantize pass — handing the VRAM back before the index build asks
+            // for it (a 1M CAGRA build peaks at 7.65 of 8.15 GB).
+            //
+            // GOVERNED. This upload is n_rows x dimension of B and was the one
+            // large device allocation on this path taking no claim, so two int8
+            // builds could observe the same free VRAM and upload concurrently --
+            // cap_train_rows_to_gpu_mem is only a snapshot, not an admission, and
+            // a snapshot cannot serialise anything. The claim is declared BEFORE
+            // the matrix so it is destroyed after it, holding the ledger for the
+            // allocation's whole lifetime rather than just the decision.
+            //
+            // Covers the matrix, not quantizer_.train's internal scratch, which
+            // cuVS sizes; the matrix is the dominant term and the budget fraction
+            // is what the remainder rides in.
+            const size_t upload_bytes =
+                static_cast<size_t>(n_rows) * static_cast<size_t>(this->dimension) * sizeof(B);
+            matrixone::device_memory_governor::reservation train_claim;
+            if (upload_bytes > 0) {
+                train_claim = matrixone::device_memory_governor::reserve(
+                    upload_bytes, "quantizer::train upload", this->budget_percent());
+            }
+            auto host_view = raft::make_host_matrix_view<const B, int64_t>(
+                rows, n_rows, static_cast<int64_t>(dimension));
+            auto dev = raft::make_device_matrix<B, int64_t>(*res, n_rows, dimension);
+            raft::copy(*res, dev.view(), host_view);
+            quantizer_.train(*res, dev.view());
+            handle.sync();
+        }
+        // Brief unique_lock after sync publishes the trained state: the
+        // lock/unlock is a memory barrier, so any later shared_lock sees
+        // is_trained() == true.
+        { std::unique_lock<std::shared_mutex> _pub_lock(mutex_); }
+    }
+
+    // Flush the staging arena: train the quantizer on the staged rows, then
+    // quantize every staged row into flattened_host_dataset and release the
+    // arena. Must be called only from inside a submit_main() task (GPU work is
+    // legal there). GPU operations run without holding mutex_; shared state is
+    // updated under unique_lock per span after the GPU work completes.
     void flush_pending_float_chunks_internal(raft_handle_wrapper_t& handle) {
-        std::vector<pending_float_chunk_t> chunks;
+        std::vector<B>             data;
+        std::vector<IdT>           sids;
+        std::vector<staged_span_t> spans;
         uint64_t total;
         {
             std::unique_lock<std::shared_mutex> lock(mutex_);
-            if (pending_float_chunks_.empty()) return;
-            chunks = std::move(pending_float_chunks_);
+            if (staging_spans_.empty()) return;
+            data  = std::move(staging_data_);
+            sids  = std::move(staging_ids_);
+            spans = std::move(staging_spans_);
             total = pending_total_count_;
             pending_total_count_ = 0;
-            pending_float_chunks_.clear();
+            staging_data_.clear();
+            staging_ids_.clear();
+            staging_spans_.clear();
         }
 
         auto res = handle.get_raft_resources();
 
-        // --- GPU work: train quantizer on ALL pending float data — NO LOCK ---
-        std::vector<float> all_floats;
-        all_floats.reserve(total * dimension);
-        for (auto& c : chunks) {
-            all_floats.insert(all_floats.end(), c.data.begin(), c.data.end());
-        }
-        auto train_host_view = raft::make_host_matrix_view<const float, int64_t>(
-            all_floats.data(), static_cast<int64_t>(total), static_cast<int64_t>(dimension));
-        auto train_device = raft::make_device_matrix<float, int64_t>(*res, total, dimension);
-        raft::copy(*res, train_device.view(), train_host_view);
-        // Train without holding the lock: GPU kernels run while lock is not held,
-        // so concurrent readers are not blocked for the duration of training.
-        quantizer_.train(*res, train_device.view());
-        handle.sync();
-        // Brief unique_lock after sync to publish the completed quantizer state.
-        // The lock/unlock acts as a memory barrier: any subsequent shared_lock
-        // acquisition by a reader is guaranteed to see is_trained() == true.
-        { std::unique_lock<std::shared_mutex> _pub_lock(mutex_); }
+        // --- GPU work: train the quantizer on the staged rows — NO LOCK ---
+        //
+        // The quantizer is a scale + offset derived from the value range
+        // ([min,max] -> 8-bit codes), so it needs a representative sample of the
+        // element population, not every row.
+        //
+        // The arena is contiguous, so the first n_train rows upload directly —
+        // no intermediate copy. n_train == total except when free VRAM fell
+        // since the one-time staging measurement; the staged rows are the first
+        // stage_limit of the ARRIVAL stream either way (random for the
+        // one-row-per-call builders, and a bulk caller's rows past the bound
+        // were never staged, so there is nothing further to sample from).
+        int64_t n_train = cap_train_rows_to_gpu_mem(
+            std::min<int64_t>(static_cast<int64_t>(total),
+                              static_cast<int64_t>(quantizer_train_limit_)));
+        train_quantizer_from_host(handle, data.data(), n_train);
 
-        // --- GPU work + locked store: process each buffered chunk ---
-        for (auto& c : chunks) {
-            // Upload and quantize — NO LOCK
-            auto chunk_host_view = raft::make_host_matrix_view<const float, int64_t>(
-                c.data.data(), static_cast<int64_t>(c.count), static_cast<int64_t>(dimension));
-            auto chunk_device = raft::make_device_matrix<float, int64_t>(*res, c.count, dimension);
-            raft::copy(*res, chunk_device.view(), chunk_host_view);
-
-            auto chunk_device_target = raft::make_device_matrix<T, int64_t>(*res, c.count, dimension);
-            
-            {
-                std::shared_lock<std::shared_mutex> lock(mutex_);
-                quantizer_.template transform<T>(*res, chunk_device.view(), chunk_device_target.data_handle(), true);
-            }
-
-            std::vector<T> chunk_host_target(c.count * dimension);
-            raft::copy(*res,
-                raft::make_host_matrix_view<T, int64_t>(chunk_host_target.data(), static_cast<int64_t>(c.count), static_cast<int64_t>(dimension)),
-                chunk_device_target.view());
-            handle.sync();
-
-            // Store into shared state — unique_lock
+        // --- Quantize the staged rows on the CPU and store. The quantizer is
+        // trained (above), so B->T is a pure host affine map — no per-row GPU
+        // round-trip. One transform_host call per SPAN, and the production path
+        // merges into a single span. ---
+        for (const staged_span_t& sp : spans) {
             std::unique_lock<std::shared_mutex> lock(mutex_);
             uint64_t target_offset;
-            if (c.offset == -1) {
+            if (sp.offset == -1) {
                 target_offset = current_offset_;
-                current_offset_ += c.count;
+                current_offset_ += sp.count;
             } else {
-                target_offset = static_cast<uint64_t>(c.offset);
-                if (target_offset + c.count > current_offset_) {
-                    current_offset_ = target_offset + c.count;
+                target_offset = static_cast<uint64_t>(sp.offset);
+                if (target_offset + sp.count > current_offset_) {
+                    current_offset_ = target_offset + sp.count;
                 }
             }
             if (current_offset_ > count) count = current_offset_;
@@ -1118,31 +1716,236 @@ public:
             if (flattened_host_dataset.size() < required_elements) {
                 flattened_host_dataset.resize(required_elements);
             }
-            std::copy(chunk_host_target.begin(), chunk_host_target.end(),
-                      flattened_host_dataset.begin() + target_offset * dimension);
+            quantizer_.template transform_host<T>(
+                data.data() + static_cast<size_t>(sp.start_row) * dimension,
+                flattened_host_dataset.data() + target_offset * dimension,
+                static_cast<size_t>(sp.count) * dimension);
 
             if (this->dist_mode == DistributionMode_SHARDED) {
                 int num_shards = static_cast<int>(this->devices_.size());
                 if (this->shard_sizes_.size() != (size_t)num_shards) {
                     this->shard_sizes_.assign(num_shards, 0);
                 }
-                uint64_t total = this->current_offset_;
-                uint64_t rows_per_shard = (total / num_shards) & ~static_cast<uint64_t>(31);
+                uint64_t shard_total = this->current_offset_;
+                uint64_t rows_per_shard = (shard_total / num_shards) & ~static_cast<uint64_t>(31);
                 for (int i = 0; i < num_shards - 1; ++i) this->shard_sizes_[i] = rows_per_shard;
-                this->shard_sizes_.back() = total - rows_per_shard * (num_shards - 1);
+                this->shard_sizes_.back() = shard_total - rows_per_shard * (num_shards - 1);
             }
 
-            if (!c.ids.empty()) {
+            if (sp.has_ids) {
+                // Same all-ids-or-none contract as add_chunk; a span that starts past
+                // the end of host_ids would zero-fill the gap.
+                if (host_ids.size() < target_offset) {
+                    throw std::runtime_error(
+                        "flush_pending: would leave rows " + std::to_string(host_ids.size()) +
+                        ".." + std::to_string(target_offset) + " without ids; an index is "
+                        "either all-ids or all-id-less, not a mix");
+                }
                 if (host_ids.size() < current_offset_) {
                     host_ids.resize(current_offset_);
                 }
-                std::copy(c.ids.begin(), c.ids.end(), host_ids.begin() + target_offset);
-                for (uint64_t i = 0; i < c.count; ++i) {
-                    id_to_index_[c.ids[i]] = target_offset + i;
+                const IdT* span_ids = sids.data() + sp.ids_start;
+                std::copy(span_ids, span_ids + sp.count, host_ids.begin() + target_offset);
+                if (id_index_built_) {
+                    for (uint64_t i = 0; i < sp.count; ++i) {
+                        id_to_index_[span_ids[i]] = target_offset + i;
+                    }
                 }
             }
         }
+
+        // Release the arena now that every staged row has been quantized into
+        // flattened_host_dataset; it is never read again.
+        std::vector<B>().swap(data);
+        std::vector<IdT>().swap(sids);
     }
+
+    // Shared 1-byte (int8/uint8) ingest path for add_chunk_float and
+    // add_chunk_quantize.
+    //
+    // The two differ only in how the rows arrive: add_chunk_quantize is handed
+    // base-typed rows directly, add_chunk_float converts its f32 input to B
+    // first. Everything after that — the staging bound, the bulk-training
+    // shortcut, the split against the bound, the flush, and the trained
+    // fast-path quantize of the remainder — was identical, and keeping two
+    // verbatim copies in step by hand is exactly how the paths drift.
+    //
+    // Runs INSIDE a submit_main task (the caller owns the submit/wait), so GPU
+    // work is legal here and `rows` stays alive for the whole call.
+    void ingest_quantized_rows(raft_handle_wrapper_t& handle, const B* rows,
+                               uint64_t chunk_count, int64_t offset, const IdT* ids) {
+                {
+                    std::shared_lock<std::shared_mutex> lock(mutex_);
+                    if (is_loaded_) throw std::runtime_error("Cannot add chunk to built index");
+                }
+                bool trained;
+                uint64_t staged = 0;   // rows of this chunk taken by staging
+                {
+                    std::shared_lock<std::shared_mutex> lock(mutex_);
+                    trained = quantizer_.is_trained();
+                }
+                if (!trained) {
+                    // Measured with NO lock held: it issues cudaMemGetInfo and
+                    // may log when the device trims the sample, and CLAUDE.md
+                    // rule 1 forbids a GPU call under the mutex. Memoized, so
+                    // this costs one driver query per index.
+                    const uint64_t stage_limit = staging_row_limit();
+                    bool should_flush = false;
+                    // A caller that hands over at least a full training
+                    // sample in ONE contiguous buffer needs no staging at
+                    // all: train straight off their rows, then quantize the
+                    // whole chunk on the trained path below. Costs no host
+                    // allocation (the upload reads the caller's buffer
+                    // directly) and needs no strided sample. `staged` stays
+                    // 0, so the fast path stores every row exactly once.
+                    //
+                    // WHY KEEP THIS for a path production does not take (the
+                    // builders always pass chunk_count == 1): without it a bulk
+                    // caller stages the first stage_limit rows, copying them
+                    // into the arena for no reason — they are already contiguous
+                    // and alive in the caller's buffer for the whole call. The C
+                    // API, the .cu tests and benchmark_cuvs all take this path,
+                    // and it is the only one that trains on the whole of a bulk
+                    // chunk rather than on its first stage_limit rows.
+                    //
+                    // The upload is bounded by cap_train_rows_to_gpu_mem, so
+                    // it never exceeds 60% of free VRAM however large the
+                    // chunk is. Two cases follow:
+                    //   chunk <= that cap  training covers the ENTIRE chunk,
+                    //                      so a value-ordered bulk load
+                    //                      learns a range over all of it.
+                    //                      This is the common case: 1M rows
+                    //                      at dim 768 / f32 is 3 GB, inside
+                    //                      60% of an 8 GB card.
+                    //   chunk >  that cap  training covers the chunk's
+                    //                      LEADING rows only (e.g. ~1.4M of
+                    //                      a 10M-row call on an 8 GB card),
+                    //                      so a value-ordered load that big
+                    //                      still learns a prefix range and
+                    //                      clamps its tail. Accepted: it
+                    //                      needs a single call larger than
+                    //                      60% of VRAM from a caller whose
+                    //                      rows are value-ordered, and no
+                    //                      shipping path passes
+                    //                      chunk_count > 1 at all.
+                    bool arena_empty;
+                    {
+                        std::shared_lock<std::shared_mutex> lock(mutex_);
+                        arena_empty = (pending_total_count_ == 0);
+                    }
+                    if (arena_empty && chunk_count >= stage_limit) {
+                        // Re-check under the exclusive lock before training:
+                        // set_quantizer() may have pinned an explicit range
+                        // between the shared_lock read above and here, and
+                        // training would silently overwrite it. The staging
+                        // branch does the same re-check.
+                        bool do_train;
+                        {
+                            std::unique_lock<std::shared_mutex> lock(mutex_);
+                            do_train = !quantizer_.is_trained();
+                        }
+                        if (do_train) {
+                            // Bounded by free VRAM ONLY, deliberately not by
+                            // quantizer_train_limit_: that limit sizes the
+                            // host STAGING arena, and this path stages
+                            // nothing — it uploads out of the caller's own
+                            // buffer. Applying it here would train on the
+                            // first train_limit rows of a value-ordered bulk
+                            // load and clamp the tail, for no memory saving.
+                            train_quantizer_from_host(
+                                handle, rows,
+                                cap_train_rows_to_gpu_mem(
+                                    static_cast<int64_t>(chunk_count)));
+                        }
+                        trained = true;
+                    } else {
+                    {
+                        std::unique_lock<std::shared_mutex> lock(mutex_);
+                        if (!quantizer_.is_trained()) {
+                            // Stage only what still fits under the bound. The
+                            // check used to run AFTER appending the whole chunk,
+                            // so a single add_chunk_quantize(base, 1'000'000, ...)
+                            // staged 1M rows against a 100k bound and the bound
+                            // guaranteed nothing (cgo/cuvs/test/benchmark_cuvs.cu
+                            // hands over a whole dataset in one call). Splitting
+                            // here is what makes the bound hold for ANY caller;
+                            // the rows past the split are quantized below, on the
+                            // trained fast path, and never staged.
+                            uint64_t room = (stage_limit > pending_total_count_)
+                                          ? (stage_limit - pending_total_count_) : 0;
+                            staged = std::min<uint64_t>(chunk_count, room);
+                            if (staged > 0) {
+                                stage_rows_locked(rows, staged, offset,
+                                                  ids, stage_limit);
+                            }
+                            if (pending_total_count_ >= stage_limit) {
+                                should_flush = true;
+                            }
+                        } else {
+                            trained = true; // trained on another thread while copying
+                        }
+                    }
+                    if (should_flush) {
+                        flush_pending_float_chunks_internal(handle);
+                    }
+                    }   // end of the non-bulk staging branch
+                    // Fully staged (and possibly flushed with the rest) — done.
+                    if (!trained && staged == chunk_count) return;
+                    // Otherwise the quantizer is trained now — either by the flush
+                    // above, or by a set_quantizer() that raced in — and the rows
+                    // from `staged` on are quantized directly below.
+                }
+
+                // Quantizer trained: CPU affine map straight into the dataset
+                // (pure host transform — no per-chunk GPU round-trip). Operates
+                // on the rows staging did NOT take (all of them in the steady
+                // state, where staged == 0).
+                const B*   q_data   = rows + staged * dimension;
+                const IdT* q_ids    = ids ? ids + staged : nullptr;
+                uint64_t   q_count  = chunk_count - staged;
+                int64_t    q_offset = (offset == -1)
+                                    ? -1 : offset + static_cast<int64_t>(staged);
+                if (q_count == 0) return;
+
+                std::unique_lock<std::shared_mutex> lock(mutex_);
+                uint64_t target_offset;
+                if (q_offset == -1) {
+                    target_offset = current_offset_;
+                    current_offset_ += q_count;
+                } else {
+                    target_offset = static_cast<uint64_t>(q_offset);
+                    if (target_offset + q_count > current_offset_) {
+                        current_offset_ = target_offset + q_count;
+                    }
+                }
+                if (current_offset_ > count) count = current_offset_;
+
+                size_t required_elements = static_cast<size_t>(current_offset_) * dimension;
+                if (flattened_host_dataset.size() < required_elements) {
+                    flattened_host_dataset.resize(required_elements);
+                }
+                quantizer_.template transform_host<T>(
+                    q_data,
+                    flattened_host_dataset.data() + (target_offset * dimension),
+                    static_cast<size_t>(q_count) * dimension);
+
+                if (this->dist_mode == DistributionMode_SHARDED) {
+                    int num_shards = static_cast<int>(this->devices_.size());
+                    if (this->shard_sizes_.size() != (size_t)num_shards) {
+                        this->shard_sizes_.assign(num_shards, 0);
+                    }
+                    uint64_t total = this->current_offset_;
+                    uint64_t rows_per_shard = (total / num_shards) & ~static_cast<uint64_t>(31);
+                    for (int i = 0; i < num_shards - 1; ++i) this->shard_sizes_[i] = rows_per_shard;
+                    this->shard_sizes_.back() = total - rows_per_shard * (num_shards - 1);
+                }
+
+                if (q_ids) {
+                    this->set_ids_internal(q_ids, q_count, target_offset);
+                }
+                return;
+    }
+
 
     void add_chunk_float(const float* chunk_data, uint64_t chunk_count, int64_t offset = -1, const IdT* ids = nullptr) {
         uint64_t job_id = worker->submit_main(
@@ -1152,99 +1955,22 @@ public:
                     if (is_loaded_) throw std::runtime_error("Cannot add chunk to built index");
                 }
 
-                auto res = handle.get_raft_resources();
-                
                 // If quantization is needed (T is 1-byte)
                 if constexpr (sizeof(T) == 1) {
-                    bool trained;
-                    {
-                        std::shared_lock<std::shared_mutex> lock(mutex_);
-                        trained = quantizer_.is_trained();
+                    // The staging arena and the quantizer both work on the
+                    // SOURCE type B, so convert the incoming f32 chunk once
+                    // (identical bytes when B==float; per-element float->half
+                    // cast when B==half) and hand it to the shared 1-byte
+                    // ingest path — the same one add_chunk_quantize uses.
+                    std::vector<B> chunk_b(chunk_count * dimension);
+                    for (size_t i = 0; i < chunk_count * dimension; ++i) {
+                        chunk_b[i] = static_cast<B>(chunk_data[i]);
                     }
-
-                    if (!trained) {
-                        // Buffer this chunk for deferred training.
-                        pending_float_chunk_t c;
-                        c.data.assign(chunk_data, chunk_data + chunk_count * dimension);
-                        c.count  = chunk_count;
-                        c.offset = offset;
-                        if (ids) c.ids.assign(ids, ids + chunk_count);
-                        
-                        bool should_flush = false;
-                        {
-                            std::unique_lock<std::shared_mutex> lock(mutex_);
-                            // Re-check trained under unique_lock to be absolutely safe
-                            if (!quantizer_.is_trained()) {
-                                pending_total_count_ += chunk_count;
-                                pending_float_chunks_.push_back(std::move(c));
-                                if (pending_total_count_ >= kQuantizerTrainThreshold) {
-                                    should_flush = true;
-                                }
-                            } else {
-                                trained = true; // Someone trained it while we were copying
-                            }
-                        }
-                        
-                        if (should_flush) {
-                            flush_pending_float_chunks_internal(handle);
-                        }
-                        
-                        if (!trained) return std::any();
-                        // trained=true here means set_quantizer() was called on another thread
-                        // between the first check (shared_lock) and the re-check (unique_lock).
-                        // c was NOT pushed to pending, so fall through to process chunk_data directly.
-                    }
-
-                    // Quantizer already trained: quantize this chunk immediately.
-                    auto queries_host_view = raft::make_host_matrix_view<const float, int64_t>(chunk_data, chunk_count, dimension);
-                    auto queries_device = raft::make_device_matrix<float, int64_t>(*res, chunk_count, dimension);
-                    raft::copy(*res, queries_device.view(), queries_host_view);
-
-                    auto chunk_device_target = raft::make_device_matrix<T, int64_t>(*res, chunk_count, dimension);
-                    
-                    {
-                        std::shared_lock<std::shared_mutex> lock(mutex_);
-                        quantizer_.template transform<T>(*res, queries_device.view(), chunk_device_target.data_handle(), true);
-                    }
-
-                    std::vector<T> chunk_host_target(chunk_count * dimension);
-                    raft::copy(*res, raft::make_host_matrix_view<T, int64_t>(chunk_host_target.data(), chunk_count, dimension), chunk_device_target.view());
-                    handle.sync();
-
-                    std::unique_lock<std::shared_mutex> lock(mutex_);
-                    uint64_t target_offset;
-                    if (offset == -1) {
-                        target_offset = current_offset_;
-                        current_offset_ += chunk_count;
-                    } else {
-                        target_offset = static_cast<uint64_t>(offset);
-                        if (target_offset + chunk_count > current_offset_) {
-                            current_offset_ = target_offset + chunk_count;
-                        }
-                    }
-                    if (current_offset_ > count) count = current_offset_;
-
-                    size_t required_elements = static_cast<size_t>(current_offset_) * dimension;
-                    if (flattened_host_dataset.size() < required_elements) {
-                        flattened_host_dataset.resize(required_elements);
-                    }
-                    std::copy(chunk_host_target.begin(), chunk_host_target.end(), flattened_host_dataset.begin() + (target_offset * dimension));
-
-                    if (this->dist_mode == DistributionMode_SHARDED) {
-                        int num_shards = static_cast<int>(this->devices_.size());
-                        if (this->shard_sizes_.size() != (size_t)num_shards) {
-                            this->shard_sizes_.assign(num_shards, 0);
-                        }
-                        uint64_t total = this->current_offset_;
-                        uint64_t rows_per_shard = (total / num_shards) & ~static_cast<uint64_t>(31);
-                        for (int i = 0; i < num_shards - 1; ++i) this->shard_sizes_[i] = rows_per_shard;
-                        this->shard_sizes_.back() = total - rows_per_shard * (num_shards - 1);
-                    }
-
-                    if (ids) {
-                        this->set_ids_internal(ids, chunk_count, target_offset);
-                    }                
+                    this->ingest_quantized_rows(handle, chunk_b.data(), chunk_count, offset, ids);
+                    return std::any();
 		} else {
+                    // Storage is float/half: no quantizer, no staging — copy
+                    // straight into the dataset.
                     std::unique_lock<std::shared_mutex> lock(mutex_);
                     uint64_t target_offset;
                     if (offset == -1) {
@@ -1288,12 +2014,12 @@ public:
         if (res.error) std::rethrow_exception(res.error);
     }
 
-    void train_quantizer(const float* train_data, uint64_t n_samples) {
+    void train_quantizer(const B* train_data, uint64_t n_samples) {
         uint64_t job_id = worker->submit_main(
             [this, train_data, n_samples](raft_handle_wrapper_t& handle) -> std::any {
                 auto res = handle.get_raft_resources();
-                auto train_host_view = raft::make_host_matrix_view<const float, int64_t>(train_data, n_samples, dimension);
-                auto train_device = raft::make_device_matrix<float, int64_t>(*res, n_samples, dimension);
+                auto train_host_view = raft::make_host_matrix_view<const B, int64_t>(train_data, n_samples, dimension);
+                auto train_device = raft::make_device_matrix<B, int64_t>(*res, n_samples, dimension);
                 raft::copy(*res, train_device.view(), train_host_view);
                 quantizer_.train(*res, train_device.view());
                 handle.sync();
@@ -1311,44 +2037,23 @@ public:
                     // 1. Flush any buffered chunks first
                     flush_pending_float_chunks_internal(handle);
 
-                    // 2. Check if still not trained (might have used add_chunk<T> instead of float).
-                    // WARNING: if data was added via add_chunk(T*) rather than add_chunk_float(),
-                    // flattened_host_dataset already holds T values (e.g. int8 in [-128,127]).
-                    // Casting them to float trains the quantizer on the compressed range, not the
-                    // original float range.  extend_float() will then clamp to the wrong range.
-                    // If extend_float() is needed after add_chunk(T*), call train_quantizer()
-                    // explicitly with representative original float data before calling build().
-                    bool needs_training;
-                    uint64_t n_train = 0;
-                    {
-                        std::shared_lock<std::shared_mutex> lock(mutex_);
-                        needs_training = !quantizer_.is_trained() && !flattened_host_dataset.empty();
-                        if (needs_training) {
-                            n_train = std::min(static_cast<uint64_t>(500), count);
-                            if (n_train == 0) needs_training = false;
-                        }
-                    }
-
-                    if (needs_training) {
-                        std::vector<float> train_data(n_train * dimension);
-                        {
-                            std::shared_lock<std::shared_mutex> lock(mutex_);
-                            for (size_t i = 0; i < n_train * dimension; ++i) {
-                                train_data[i] = static_cast<float>(flattened_host_dataset[i]);
-                            }
-                        }
-                        
-                        auto res = handle.get_raft_resources();
-                        auto train_host_view = raft::make_host_matrix_view<const float, int64_t>(train_data.data(), n_train, dimension);
-                        auto train_device = raft::make_device_matrix<float, int64_t>(*res, n_train, dimension);
-                        raft::copy(*res, train_device.view(), train_host_view);
-                        
-                        {
-                            std::unique_lock<std::shared_mutex> lock(mutex_);
-                            quantizer_.train(*res, train_device.view());
-                        }
-                        handle.sync();
-                    }
+                    // 2. Do NOT auto-train the quantizer from flattened_host_dataset.
+                    // For a 1-byte storage type that buffer only ever holds STORAGE
+                    // bytes — raw T from add_chunk(T*) (a pre-quantized index) or the
+                    // post-flush quantized output — never original floats. Training on
+                    // it would learn the COMPRESSED range (e.g. int8 [-128,127]) instead
+                    // of the true float range, so later base-typed search/extend would
+                    // silently quantize against the wrong min/max.
+                    //
+                    // Correct training happens above in flush_pending_float_chunks_internal()
+                    // on the ORIGINAL floats buffered by add_chunk_float()/add_chunk_quantize().
+                    // A pre-quantized index (built solely via add_chunk(T*)) therefore
+                    // leaves the quantizer untrained; base-typed (B) search/extend on it
+                    // requires an explicit range via set_quantizer() first. Both base-typed
+                    // entry points already throw "quantizer not trained" while it is
+                    // untrained — search via quantize_query() and extend via
+                    // upload_float_matrix_as_T() — so the op fails loudly instead of
+                    // mis-quantizing against a wrong range.
                     return std::any();
                 }
             );
@@ -1364,8 +2069,71 @@ public:
 
     void get_quantizer(float* min, float* max) {
         std::shared_lock<std::shared_mutex> lock(mutex_);
-        *min = quantizer_.min();
-        *max = quantizer_.max();
+        *min = static_cast<float>(quantizer_.min());
+        *max = static_cast<float>(quantizer_.max());
+    }
+
+    // Set the number of rows to stage and train the int8/uint8 quantizer on. 0 keeps the default (kDefaultQuantizerTrainLimit).
+    // Call before build/flush; it sizes the training SAMPLE only, never the
+    // staging buffer -- it IS the staging bound: rows are staged until this
+    // many are held, then the quantizer trains on them and the buffer is freed.
+    // Unclamped on purpose; cap_train_rows_to_gpu_mem() trims the device copy if
+    // the value is larger than free VRAM allows.
+    void set_quantizer_train_limit(uint64_t n) {
+        if (n == 0) return;
+        {
+            std::unique_lock<std::shared_mutex> lock(mutex_);
+            quantizer_train_limit_ = n;
+        }
+        // Drop the memoized staging bound: it was derived from the OLD limit, so
+        // leaving it would silently ignore this call. Normally a no-op — every
+        // production caller sets the limit in the constructor, before any row is
+        // staged — but a caller that changes it mid-build gets the value it
+        // asked for rather than the one measured first.
+        staging_row_limit_.store(0, std::memory_order_relaxed);
+    }
+
+    // ---- Native B-source quantization (base element B -> 1-byte T) ----
+    // Base-typed (B) add: converts the SOURCE-typed chunk to storage T, the add
+    // counterpart of search_quantize (symmetric: same B->T conversion). Routes by
+    // (B,T): B==T is a native store; sizeof(T)==1 buffers the B chunk for deferred
+    // quantizer training (the B->T transform happens at build via
+    // flush_pending_float_chunks_internal — B==float and B==half both supported,
+    // no f32 detour for half); the remaining (B=float, T=half) case casts f32->f16
+    // via add_chunk_float (std::copy into vector<half> = __half assignment).
+    void add_chunk_quantize(const B* chunk_data, uint64_t chunk_count, int64_t offset = -1, const IdT* ids = nullptr) {
+        if constexpr (std::is_same_v<B, T>) {
+            // B == T: no conversion — native storage add.
+            this->add_chunk(chunk_data, chunk_count, offset, ids);
+        } else if constexpr (sizeof(T) == 1) {
+            // int8/uint8 storage: quantize B -> T. Rows are staged raw until the
+            // quantizer is trained (nothing can be quantized before it exists),
+            // then every later chunk is mapped on the fly straight into
+            // flattened_host_dataset. Staging stops at quantizer_train_limit_
+            // rows — the training sample — or at build(), whichever comes first,
+            // so the raw buffer never exceeds the sample it exists to feed. Same
+            // stage/flush/
+            // stream shape as add_chunk_float, but the input is already base type
+            // B (no f32->B conversion). GPU training must run in a worker task,
+            // so submit_main.
+            uint64_t job_id = worker->submit_main(
+                [this, chunk_data, chunk_count, offset, ids](raft_handle_wrapper_t& handle) -> std::any {
+                    {
+                        std::shared_lock<std::shared_mutex> lock(mutex_);
+                        if (is_loaded_) throw std::runtime_error("Cannot add chunk to built index");
+                    }
+                    this->ingest_quantized_rows(handle, chunk_data, chunk_count, offset, ids);
+                    return std::any();
+                }
+            );
+            auto res = worker->wait(job_id).get();
+            if (res.error) std::rethrow_exception(res.error);
+        } else if constexpr (std::is_same_v<B, float>) {
+            // B=float, T=half (sizeof(T)!=1): f32 -> T cast via add_chunk_float.
+            this->add_chunk_float(chunk_data, chunk_count, offset, ids);
+        } else {
+            throw std::runtime_error("add_chunk_quantize: unsupported (base,storage) type combination");
+        }
     }
 
     // Returns a snapshot of host_ids by value. The previous signature
@@ -1403,15 +2171,36 @@ public:
         if (!is) throw std::runtime_error("Failed to open file for loading IDs: " + filename);
         uint64_t size;
         is.read(reinterpret_cast<char*>(&size), sizeof(size));
+        // Read STRAIGHT into host_ids. The previous shape staged into a
+        // temp_ids(size) and then let set_ids copy it into host_ids, so both
+        // buffers were live at once and the load peaked at 2*size*sizeof(IdT) --
+        // ~1.4 GB at 88M rows where the retained array is ~704 MB. The host
+        // admission this path takes is sized from ids.bin, i.e. the RETAINED
+        // array, so the staging copy was demand nothing had admitted.
+        //
+        // Resizing under the lock and reading outside it keeps the lock off the
+        // file I/O: host_ids.data() is stable once resized, and nothing else can
+        // reach this index during a load.
+        IdT* dst = nullptr;
         {
             std::unique_lock<std::shared_mutex> lock(mutex_);
             this->host_ids.clear();
             this->id_to_index_.clear();
+            // Back to "unbuilt", not "complete and empty": host_ids is repopulated
+            // below, and the map must be rebuilt from it on the next delete.
+            this->id_index_built_ = false;
+            if (size > 0) {
+                this->host_ids.resize(size);
+                dst = this->host_ids.data();
+            }
         }
         if (size > 0) {
-            std::vector<IdT> temp_ids(size);
-            is.read(reinterpret_cast<char*>(temp_ids.data()), size * sizeof(IdT));
-            this->set_ids(temp_ids.data(), size);
+            is.read(reinterpret_cast<char*>(dst), size * sizeof(IdT));
+            if (!is) {
+                std::unique_lock<std::shared_mutex> lock(mutex_);
+                this->host_ids.clear();
+                throw std::runtime_error("Short read loading IDs from: " + filename);
+            }
         }
     }
 
@@ -1498,10 +2287,10 @@ public:
     struct manifest_data_t {
         std::string raw;          // full manifest.json content
         std::string comp_json;    // "components" sub-object
-        bool has_ids       = false;
-        bool has_quantizer = false;
-        bool has_bitset    = false;
-        bool has_filter    = false;
+        bool has_ids            = false;
+        bool has_quantizer      = false;
+        bool has_bitset         = false;
+        bool has_filter         = false;
     };
 
     // Saves ids, quantizer, bitset, and filter data (when present) to dir.
@@ -1513,23 +2302,23 @@ public:
         FilterStore filter_snapshot;
         {
             std::shared_lock<std::shared_mutex> lock(mutex_);
-            has_ids       = !this->host_ids.empty();
-            has_quantizer = this->quantizer_.is_trained();
-            has_bitset    = !this->deleted_bitset_.empty();
-            has_filter    = !this->filter_host_.empty();
+            has_ids            = !this->host_ids.empty();
+            has_quantizer      = this->quantizer_.is_trained();
+            has_bitset         = !this->deleted_bitset_.empty();
+            has_filter         = !this->filter_host_.empty();
             if (has_filter) filter_snapshot = this->filter_host_;  // copy
         }
 
-        if (has_ids)       this->save_ids(dir + "/ids.bin");
-        if (has_quantizer) this->quantizer_.save_to_file(dir + "/quantizer.bin");
-        if (has_bitset)    this->save_bitset(dir);
-        if (has_filter)    filter_snapshot.save(dir + "/filter_data.bin");
+        if (has_ids)            this->save_ids(dir + "/ids.bin");
+        if (has_quantizer)      this->quantizer_.save_to_file(dir + "/quantizer.bin");
+        if (has_bitset)         this->save_bitset(dir);
+        if (has_filter)         filter_snapshot.save(dir + "/filter_data.bin");
 
         std::vector<std::string> entries;
-        if (has_ids)       entries.push_back("    \"ids\": \"ids.bin\"");
-        if (has_quantizer) entries.push_back("    \"quantizer\": \"quantizer.bin\"");
-        if (has_bitset)    entries.push_back("    \"bitset\": \"bitset.bin\"");
-        if (has_filter)    entries.push_back("    \"filter_data\": \"filter_data.bin\"");
+        if (has_ids)            entries.push_back("    \"ids\": \"ids.bin\"");
+        if (has_quantizer)      entries.push_back("    \"quantizer\": \"quantizer.bin\"");
+        if (has_bitset)         entries.push_back("    \"bitset\": \"bitset.bin\"");
+        if (has_filter)         entries.push_back("    \"filter_data\": \"filter_data.bin\"");
         return entries;
     }
 
@@ -1554,10 +2343,10 @@ public:
         uint64_t cap_val, len_val, del_count, bs_ver;
         {
             std::shared_lock<std::shared_mutex> lock(mutex_);
-            has_ids       = !this->host_ids.empty();
-            has_quantizer = this->quantizer_.is_trained();
-            has_bitset    = !this->deleted_bitset_.empty();
-            has_filter    = !this->filter_host_.empty();
+            has_ids            = !this->host_ids.empty();
+            has_quantizer      = this->quantizer_.is_trained();
+            has_bitset         = !this->deleted_bitset_.empty();
+            has_filter         = !this->filter_host_.empty();
             cap_val       = this->count;
             len_val       = this->current_offset_;
             del_count     = this->deleted_count_;
@@ -1624,11 +2413,11 @@ public:
 
         manifest_data_t m;
         m.raw           = raw;
-        m.comp_json     = json_object(raw, "components");
-        m.has_ids       = json_bool(raw, "has_ids");
-        m.has_quantizer = json_bool(raw, "has_quantizer");
-        m.has_bitset    = json_bool(raw, "has_bitset");
-        m.has_filter    = json_bool(raw, "has_filter");
+        m.comp_json          = json_object(raw, "components");
+        m.has_ids            = json_bool(raw, "has_ids");
+        m.has_quantizer      = json_bool(raw, "has_quantizer");
+        m.has_bitset         = json_bool(raw, "has_bitset");
+        m.has_filter         = json_bool(raw, "has_filter");
         return m;
     }
 
@@ -1670,7 +2459,10 @@ public:
     }
 
 protected:
-    scalar_quantizer_t<float> quantizer_;
+    // Scalar quantizer over the SOURCE element type B (float or half). Used only
+    // when the STORAGE type T is 1-byte (int8/uint8); for float/half storage the
+    // add path casts B->T directly with no quantizer.
+    scalar_quantizer_t<B> quantizer_;
     uint64_t current_offset_ = 0;
     // Serializes concurrent extend() calls. Held across GPU work and count update so that
     // set_ids() offsets always match the GPU execution order. Does NOT block searches.
@@ -1709,6 +2501,22 @@ protected:
                 throw std::runtime_error(std::string(fn_name) + ": index not built");
             }
             if (n_rows == 0) return;
+            // The other half of the all-ids-or-all-id-less contract enforced by the
+            // writers (see add_chunk). Those catch a hole BEFORE the ids; this catches
+            // one after: extending an id-bearing index without ids leaves the new rows
+            // with no entry in host_ids, so search resolves them to -1 (map_neighbor_id
+            // falls back when global_pos runs past host_ids) and delete_id can never
+            // address them. Checked before any GPU work so the refusal costs nothing.
+            //
+            // An all-id-less extend of an all-id-less index is unaffected and stays
+            // supported -- host_ids is empty on both sides, and run_extend skips
+            // set_ids_internal entirely when new_ids is null.
+            if (!new_ids && !this->host_ids.empty()) {
+                throw std::runtime_error(
+                    std::string(fn_name) + ": index has ids for its existing " +
+                    std::to_string(this->host_ids.size()) + " rows, so the extension must "
+                    "supply them too; an index is either all-ids or all-id-less, not a mix");
+            }
             old_count = this->count;
         }
 
@@ -1780,8 +2588,19 @@ protected:
         raft_handle_wrapper_t& handle, const T* host_data, uint64_t n_rows) {
         auto res    = handle.get_raft_resources();
         auto stream = raft::resource::get_cuda_stream(*res);
+        // Claim the upload before allocating it. extend() decides how much it is
+        // about to move to the device well before it moves it, and that window is
+        // invisible to a live cudaMemGetInfo -- which is exactly what a claim is
+        // for. The claim ends when this returns: by then the buffer exists and
+        // every later admission sees it in the free figure, so holding it longer
+        // would count the same bytes twice.
+        const size_t upload_bytes = static_cast<size_t>(n_rows) * this->dimension * sizeof(T);
+        matrixone::device_memory_governor::reservation upload_claim;
+        if (upload_bytes > 0) {
+            upload_claim = matrixone::device_memory_governor::reserve(upload_bytes, "index::upload", this->budget_percent());
+        }
         rmm::device_uvector<T> storage(
-            static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr());
+            static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr_ref());
         auto device_view = raft::make_device_matrix_view<T, int64_t>(
             storage.data(), (int64_t)n_rows, (int64_t)this->dimension);
         raft::copy(*res, device_view,
@@ -1799,8 +2618,25 @@ protected:
         raft_handle_wrapper_t& handle, const float* host_data, uint64_t n_rows) {
         auto res    = handle.get_raft_resources();
         auto stream = raft::resource::get_cuda_stream(*res);
+        // As upload_T_matrix, but this path can stage more than the destination:
+        // a non-float T also materialises the f32 source on device, and a half
+        // base adds a B buffer on top. Charge the peak, not just the result --
+        // under-claiming the staging is how a concurrent load gets admitted
+        // against memory this upload is about to take.
+        const size_t elems = static_cast<size_t>(n_rows) * this->dimension;
+        size_t upload_bytes = elems * sizeof(T);
+        if constexpr (!std::is_same_v<T, float>) {
+            upload_bytes += elems * sizeof(float);
+            if constexpr (!std::is_same_v<B, float>) {
+                upload_bytes += elems * sizeof(B);
+            }
+        }
+        matrixone::device_memory_governor::reservation upload_claim;
+        if (upload_bytes > 0) {
+            upload_claim = matrixone::device_memory_governor::reserve(upload_bytes, "index::upload", this->budget_percent());
+        }
         rmm::device_uvector<T> storage(
-            static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr());
+            static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr_ref());
         auto device_view = raft::make_device_matrix_view<T, int64_t>(
             storage.data(), (int64_t)n_rows, (int64_t)this->dimension);
         if constexpr (std::is_same_v<T, float>) {
@@ -1809,7 +2645,7 @@ protected:
                            host_data, n_rows, this->dimension));
         } else {
             rmm::device_uvector<float> float_storage(
-                static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr());
+                static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr_ref());
             auto float_view = raft::make_device_matrix_view<float, int64_t>(
                 float_storage.data(), (int64_t)n_rows, (int64_t)this->dimension);
             raft::copy(*res, float_view,
@@ -1820,8 +2656,20 @@ protected:
                     throw std::runtime_error(
                         "upload_float_matrix_as_T: quantizer not trained");
                 }
-                this->quantizer_.template transform<T>(
-                    *res, float_view, storage.data(), true);
+                if constexpr (std::is_same_v<B, float>) {
+                    this->quantizer_.template transform<T>(
+                        *res, float_view, storage.data(), true);
+                } else {
+                    // B == half: quantizer is half-source. Cast the f32 input to
+                    // half on-device, then transform half -> T.
+                    rmm::device_uvector<B> b_storage(
+                        static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr_ref());
+                    auto b_view = raft::make_device_matrix_view<B, int64_t>(
+                        b_storage.data(), (int64_t)n_rows, (int64_t)this->dimension);
+                    raft::copy(*res, b_view, float_view);
+                    this->quantizer_.template transform<T>(
+                        *res, b_view, storage.data(), true);
+                }
             } else {
                 // T is half — cast float → half
                 raft::copy(*res, device_view, float_view);
@@ -1830,17 +2678,74 @@ protected:
         return storage;
     }
 
-    // Deferred float chunk buffer for quantizer training (1-byte types only).
-    // See class-level comment block above for full description.
-    struct pending_float_chunk_t {
-        std::vector<float> data;   ///< count * dimension floats
-        uint64_t           count;
-        int64_t            offset; ///< -1 = append; >= 0 = explicit position
-        std::vector<IdT>   ids;    ///< empty if caller supplied no IDs
+    // Deferred B-source chunk buffer for quantizer training (1-byte storage T).
+    // See class-level comment block above for full description. Holds the raw
+    // SOURCE element type B (float or half); the quantizer trains on B and
+    // transforms B->T at flush time.
+    // Rows staged by ONE add_chunk_* call, described as a range inside the
+    // shared arenas (staging_data_ / staging_ids_) instead of owning its own
+    // buffers the way the old pending_float_chunk_t did.
+    //
+    // WHY THIS EXISTS AT ALL — the arenas are appended sequentially by a single
+    // worker thread, so row positions are implicit and a span looks redundant.
+    // It is not, because two properties are per-CALL, not per-cycle, and flush
+    // has to reproduce them exactly:
+    //
+    //   offset   Where the caller wants these rows placed. -1 (every caller
+    //            today) means "append at current_offset_", so consecutive calls
+    //            form one run. A caller passing an explicit position instead
+    //            starts a new, separately-placed group; without spans the flush
+    //            could only place everything sequentially and would silently put
+    //            those rows at the wrong index.
+    //   has_ids  Whether the caller supplied ids. The API allows nullptr, and a
+    //            span without ids must be skipped by the id/id_to_index_ update
+    //            rather than reading someone else's ids. ids_start is that
+    //            span's first index in staging_ids_, which is why a no-ids call
+    //            does not shift the ids of the calls around it.
+    //
+    // WHAT IT COSTS IN PRACTICE — nothing: consecutive appends that agree about
+    // ids merge (see stage_rows_locked), so the shipping path (one row per call,
+    // offset -1, ids always present) produces EXACTLY ONE span whether it stages
+    // 1 row or 100 000, and flush runs its loop once. Spans multiply only for a
+    // caller that interleaves explicit offsets or alternates ids, which no
+    // caller in this repo does — every C entry point hardcodes offset -1.
+    struct staged_span_t {
+        uint64_t start_row;  ///< first row of this span within staging_data_
+        uint64_t count;      ///< rows in this span
+        int64_t  offset;     ///< -1 = append at current_offset_; >= 0 = explicit
+        uint64_t ids_start;  ///< this span's first index in staging_ids_ (iff has_ids)
+        bool     has_ids;    ///< false => flush skips the id update for these rows
     };
-    static constexpr uint64_t kQuantizerTrainThreshold = 1000;
-    std::vector<pending_float_chunk_t> pending_float_chunks_;
+    // (kQuantizerTrainThreshold, a hard 1000-row early-train trigger, was
+    // removed: it trained every f32->int8/uint8 build on the first ~1000 rows
+    // and made set_quantizer_train_limit inert on that path. Both paths now
+    // stage exactly quantizer_train_limit_ rows.)
+    // Rows staged and trained on for the int8/uint8 scalar quantizer. Default
+    // 100000; settable per index via set_quantizer_train_limit, and capped to
+    // 60% of free GPU memory (cap_train_rows_to_gpu_mem / staging_row_limit).
+    // 100k rows give a fine 0.99-quantile estimate at a few hundred MB of f32
+    // even at high dim; 1M would be ~3-4 GB and get capped.
+    static constexpr uint64_t kDefaultQuantizerTrainLimit =
+        matrixone::kDefaultQuantizerTrainLimit;
+    uint64_t quantizer_train_limit_ = kDefaultQuantizerTrainLimit;
+    // Contiguous staging arena: ONE allocation sized to the staging bound (which
+    // is known before the first row lands), appended into as rows arrive,
+    // uploaded to the device in place, then released at flush. Replaces a
+    // vector-of-vectors that cost two heap allocations plus a 64-byte record per
+    // staged ROW (the builders stage one row per call) and forced a second
+    // full-size copy at flush just to make the rows contiguous for raft::copy.
+    std::vector<B>             staging_data_;
+    std::vector<IdT>           staging_ids_;
+    std::vector<staged_span_t> staging_spans_;
     uint64_t pending_total_count_ = 0;
+    // First reservation step for the staging arenas — big enough that a
+    // one-row-per-call build does not thrash on the early doublings, small
+    // enough to be irrelevant for a tiny table.
+    static constexpr uint64_t kStagingReserveFloorRows = kStagingReserveFloorRowsNs;
+    // min(quantizer_train_limit_, GPU-trainable rows); measured once, then reused.
+    // Atomic because staging_row_limit() runs OUTSIDE mutex_ (it issues a CUDA
+    // driver query and may log, neither of which may happen under the lock).
+    std::atomic<uint64_t> staging_row_limit_{0};
 };
 
 } // namespace matrixone

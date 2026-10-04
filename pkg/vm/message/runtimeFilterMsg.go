@@ -17,6 +17,7 @@ package message
 import (
 	"bytes"
 	"strconv"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
@@ -34,10 +35,20 @@ const (
 var _ Message = new(RuntimeFilterMessage)
 
 type RuntimeFilterMessage struct {
-	Tag  int32
-	Typ  int32
-	Card int32
-	Data []byte
+	Tag           int32
+	Typ           int32
+	Card          int32
+	Data          []byte
+	memoryOnce    *sync.Once
+	memoryRelease func()
+}
+
+func (rt *RuntimeFilterMessage) SetMemoryRelease(release func()) {
+	if release == nil {
+		return
+	}
+	rt.memoryOnce = &sync.Once{}
+	rt.memoryRelease = release
 }
 
 func (rt RuntimeFilterMessage) Serialize() []byte {
@@ -57,6 +68,9 @@ func (rt RuntimeFilterMessage) GetMsgTag() int32 {
 }
 
 func (rt RuntimeFilterMessage) Destroy() {
+	if rt.memoryOnce != nil {
+		rt.memoryOnce.Do(rt.memoryRelease)
+	}
 }
 
 func (rt RuntimeFilterMessage) GetReceiverAddr() MessageAddress {
@@ -87,4 +101,15 @@ func FinalizeRuntimeFilter(m *plan.RuntimeFilterSpec, sendSucceed bool, mb *Mess
 			SendMessage(runtimeFilter, mb)
 		}
 	}
+}
+
+// FinalizeRuntimeFilterOnBuildError completes a runtime-filter dependency in
+// the permissive direction.  A failed build has no trustworthy unique keys;
+// publishing DROP would incorrectly discard every probe row before the typed
+// JoinMap BuildError reaches the consumer.
+func FinalizeRuntimeFilterOnBuildError(m *plan.RuntimeFilterSpec, mb *MessageBoard) {
+	if m == nil {
+		return
+	}
+	SendMessage(RuntimeFilterMessage{Tag: m.Tag, Typ: RuntimeFilter_PASS}, mb)
 }

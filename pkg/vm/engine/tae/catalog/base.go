@@ -134,9 +134,20 @@ func (be *BaseEntryImpl[T]) getOrSetUpdateNodeLocked(txn txnif.TxnReader) (newNo
 	}
 }
 
+func (be *BaseEntryImpl[T]) getOrSetDeleteNodeLocked(txn txnif.TxnReader) (newNode bool, node *MVCCNode[T]) {
+	entry := be.GetLatestNodeLocked()
+	if entry.IsSameTxn(txn) {
+		return false, entry
+	}
+	node = entry.CloneForDelete()
+	node.TxnMVCCNode = txnbase.NewTxnMVCCNodeWithTxn(txn)
+	be.InsertLocked(node)
+	return true, node
+}
+
 func (be *BaseEntryImpl[T]) DeleteLocked(txn txnif.TxnReader) (isNewNode bool, err error) {
 	var entry *MVCCNode[T]
-	isNewNode, entry = be.getOrSetUpdateNodeLocked(txn)
+	isNewNode, entry = be.getOrSetDeleteNodeLocked(txn)
 	entry.Delete()
 	return
 }

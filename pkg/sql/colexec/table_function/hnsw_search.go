@@ -23,11 +23,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/overfetch"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -35,6 +37,8 @@ import (
 )
 
 type hnswSearchState struct {
+	// slots caches the pk/score output positions for the current result layout.
+	slots     vectorSearchSlots
 	inited    bool
 	param     vectorindex.HnswParam
 	tblcfg    vectorindex.IndexTableConfig
@@ -43,6 +47,8 @@ type hnswSearchState struct {
 	limit     uint64
 	keys      []int64
 	distances []float64
+	// Named-snapshot read TS, from tf.ScanSnapshot (#27927).
+	scanSnapshot *plan.Snapshot
 	// holding one call batch, tokenizedState owns it.
 	batch *batch.Batch
 }
@@ -69,6 +75,7 @@ func (u *hnswSearchState) reset(tf *TableFunction, proc *process.Process) {
 	if u.batch != nil {
 		u.batch.CleanOnlyData()
 	}
+	u.scanSnapshot = nil
 }
 
 func (u *hnswSearchState) call(tf *TableFunction, proc *process.Process) (vm.CallResult, error) {
@@ -79,8 +86,13 @@ func (u *hnswSearchState) call(tf *TableFunction, proc *process.Process) (vm.Cal
 	n := 0
 
 	for i := u.offset; i < nkeys && n < 8192; i++ {
-		vector.AppendFixed[int64](u.batch.Vecs[0], u.keys[i], false, proc.Mp())
-		vector.AppendFixed[float64](u.batch.Vecs[1], u.distances[i], false, proc.Mp())
+		// Positions resolved by name: the planner may prune either column.
+		if pkPos := u.slots.pk; pkPos >= 0 {
+			vector.AppendFixed[int64](u.batch.Vecs[pkPos], u.keys[i], false, proc.Mp())
+		}
+		if scorePos := u.slots.score; scorePos >= 0 {
+			vector.AppendFixed[float64](u.batch.Vecs[scorePos], u.distances[i], false, proc.Mp())
+		}
 		n++
 	}
 
@@ -106,9 +118,26 @@ func hnswSearchPrepare(proc *process.Process, arg *TableFunction) (tvfState, err
 	var err error
 	st := &hnswSearchState{}
 
-	st.limit, err = evalLimitExpression(proc, arg.Limit, 1)
-	if err != nil {
-		return nil, err
+	// k is carried either on IndexReaderParam.Limit (prepared/param path: raw k,
+	// over-fetched here at EXECUTE) or on arg.Limit (literal path: already
+	// over-fetched at plan time, or the no-filter limit). Take the max so both
+	// paths resolve the intended candidate budget.
+	if arg.IndexReaderParam != nil {
+		st.limit, err = evalLimitExpression(proc, arg.IndexReaderParam.GetLimit(), 0)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if arg.Limit != nil {
+		var tfLimit uint64
+		tfLimit, err = evalLimitExpression(proc, arg.Limit, 1)
+		if err != nil {
+			return nil, err
+		}
+		st.limit = max(st.limit, tfLimit)
+	}
+	if st.limit == 0 {
+		st.limit = 1
 	}
 
 	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
@@ -124,6 +153,8 @@ func hnswSearchPrepare(proc *process.Process, arg *TableFunction) (tvfState, err
 // start calling tvf on nthRow and put the result in u.batch.  Note that current tokenize impl will
 // always return one batch per nthRow.
 func (u *hnswSearchState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) (err error) {
+
+	u.scanSnapshot = tf.ScanSnapshot
 
 	if !u.inited {
 		if len(tf.Params) > 0 {
@@ -197,6 +228,8 @@ func (u *hnswSearchState) start(tf *TableFunction, proc *process.Process, nthRow
 		u.idxcfg.Type = vectorindex.HNSW
 
 		u.batch = tf.createResultBatch()
+		// Resolve the output slots once for this layout (see vector_search_layout.go).
+		u.slots = resolveVectorSearchSlots(u.batch.Attrs, nil, "")
 		u.inited = true
 	}
 
@@ -235,12 +268,29 @@ func runHnswSearch[T types.RealNumbers](proc *process.Process, u *hnswSearchStat
 
 	algo := newHnswAlgo(u.idxcfg, u.tblcfg)
 
+	// When a residual filter will drop candidates after this search (post-filter
+	// JOIN), over-fetch so k rows still survive. For a prepared LIMIT ? this is
+	// the only place k is known; a literal LIMIT was already over-fetched at plan
+	// time and leaves the flag off. See pkg/vectorindex/overfetch (#26869).
+	searchLimit := u.limit
+	if u.tblcfg.PostFilterOverFetch {
+		searchLimit = overfetch.PostFilterLimit(searchLimit)
+	}
+
 	rt := vectorindex.RuntimeConfig{
-		Limit:        uint(u.limit),
+		Limit:        uint(searchLimit),
 		OrigFuncName: u.tblcfg.OrigFuncName,
 	}
+	// Named-snapshot search (#27927): sp.SnapshotTS makes the index-load SQL run on a txn
+	// cloned at that TS, and the cache key carries the same TS so the historical index is a
+	// separate cache entry from the current one.
+	sp := sqlexec.NewSqlProcess(proc)
+	cacheKey := u.tblcfg.IndexTable
+	if ets := sp.ApplyScanSnapshot(u.scanSnapshot); ets != nil {
+		cacheKey = veccache.SnapshotKey(u.tblcfg.IndexTable, *ets)
+	}
 	var keys any
-	keys, u.distances, err = veccache.Cache.Search(sqlexec.NewSqlProcess(proc), u.tblcfg.IndexTable, algo, fa, rt)
+	keys, u.distances, err = veccache.Cache.Search(sp, cacheKey, algo, fa, rt)
 	if err != nil {
 		return err
 	}

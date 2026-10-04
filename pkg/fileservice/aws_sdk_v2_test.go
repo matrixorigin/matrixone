@@ -15,22 +15,452 @@
 package fileservice
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
+func TestAwsSDKv2ConditionalObjectIdentityReads(t *testing.T) {
+	const (
+		body       = "abcdef"
+		lastModRaw = "Wed, 02 Sep 2026 03:04:05 GMT"
+	)
+	var requests []*http.Request
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Clone(context.Background()))
+		if r.Method == http.MethodHead {
+			w.Header().Set("Content-Length", "6")
+			w.Header().Set("ETag", `"etag-v1"`)
+			w.Header().Set("x-amz-version-id", "version-v1")
+			w.Header().Set("Last-Modified", lastModRaw)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.URL.Query().Get("versionId") == "gone" {
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, awsS3ErrorXML("NoSuchVersion", "planned version was deleted"))
+			return
+		}
+		if r.URL.Query().Get("versionId") == "stale" || r.Header.Get("If-Match") == `"stale"` {
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusPreconditionFailed)
+			_, _ = io.WriteString(w, awsS3ErrorXML("PreconditionFailed", "object changed"))
+			return
+		}
+		w.Header().Set("Content-Length", "3")
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = io.WriteString(w, body[1:4])
+	}))
+	defer server.Close()
+
+	sdk := newTestAWSClient(t, server)
+	identity, err := sdk.StatObjectIdentity(context.Background(), "object")
+	require.NoError(t, err)
+	wantLastModified, err := time.Parse(http.TimeFormat, lastModRaw)
+	require.NoError(t, err)
+	require.Equal(t, ObjectIdentity{
+		VersionID: "version-v1", ETag: `"etag-v1"`, Size: 6, LastModified: wantLastModified,
+	}, identity)
+
+	min, max := int64(1), int64(4)
+	reader, err := sdk.ReadObjectWithIdentity(context.Background(), "object", &min, &max, identity)
+	require.NoError(t, err)
+	data, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	require.NoError(t, reader.Close())
+	require.Equal(t, "bcd", string(data))
+	versionRequest := requests[len(requests)-1]
+	require.Equal(t, "version-v1", versionRequest.URL.Query().Get("versionId"))
+	require.Empty(t, versionRequest.Header.Get("If-Match"))
+	require.Equal(t, "bytes=1-3", versionRequest.Header.Get("Range"))
+
+	etagIdentity := identity
+	etagIdentity.VersionID = ""
+	reader, err = sdk.ReadObjectWithIdentity(context.Background(), "object", &min, &max, etagIdentity)
+	require.NoError(t, err)
+	require.NoError(t, reader.Close())
+	etagRequest := requests[len(requests)-1]
+	require.Empty(t, etagRequest.URL.Query().Get("versionId"))
+	require.Equal(t, `"etag-v1"`, etagRequest.Header.Get("If-Match"))
+
+	stale := identity
+	stale.VersionID = "stale"
+	_, err = sdk.ReadObjectWithIdentity(context.Background(), "object", &min, &max, stale)
+	require.ErrorIs(t, err, ErrObjectChanged)
+	stale.VersionID = ""
+	stale.ETag = `"stale"`
+	_, err = sdk.ReadObjectWithIdentity(context.Background(), "object", &min, &max, stale)
+	require.ErrorIs(t, err, ErrObjectChanged)
+
+	gone := identity
+	gone.VersionID = "gone"
+	_, err = sdk.ReadObjectWithIdentity(context.Background(), "object", &min, &max, gone)
+	require.ErrorIs(t, err, ErrObjectChanged)
+}
+
 func Test_NewAwsSDKv2(t *testing.T) {
-	_, err := NewAwsSDKv2(context.Background(), ObjectStorageArguments{}, nil)
-	assert.Error(t, err)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer server.Close()
+
+	args := ObjectStorageArguments{
+		Bucket:    "bucket",
+		Endpoint:  server.URL,
+		Region:    "us-east-1",
+		KeyID:     "id",
+		KeySecret: "secret",
+	}
+	_, err := NewAwsSDKv2(context.Background(), args, nil)
+	require.ErrorContains(t, err, "bad s3 config")
 
 	ctx, cancel := context.WithTimeoutCause(context.Background(), 0, moerr.NewInternalErrorNoCtx("ut tester"+
 		""))
 	defer cancel()
 
-	_, err = NewAwsSDKv2(ctx, ObjectStorageArguments{}, nil)
-	assert.Error(t, err)
+	_, err = NewAwsSDKv2(ctx, args, nil)
+	require.Error(t, err)
+}
+
+func TestNewAwsSDKv2UsesCompatibilityChecksumPolicy(t *testing.T) {
+	sdk, err := NewAwsSDKv2(context.Background(), ObjectStorageArguments{
+		Bucket:             "bucket",
+		Endpoint:           "http://127.0.0.1:1",
+		Region:             "us-east-1",
+		KeyID:              "id",
+		KeySecret:          "secret",
+		NoBucketValidation: true,
+	}, nil)
+	require.NoError(t, err)
+	require.Equal(t, aws.RequestChecksumCalculationWhenRequired,
+		sdk.client.Options().RequestChecksumCalculation)
+	require.Equal(t, aws.ResponseChecksumValidationWhenRequired,
+		sdk.client.Options().ResponseChecksumValidation)
+}
+
+func TestAwsSDKv2BasicObjectOperations(t *testing.T) {
+	const body = "hello object"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key := ""
+		if r.URL.Path != "/bucket" {
+			key = strings.TrimPrefix(r.URL.Path, "/bucket/")
+		}
+		switch {
+		case r.Method == http.MethodGet && key == "" && !strings.Contains(r.URL.RawQuery, "marker=page2"):
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = io.WriteString(w, `<ListBucketResult><Name>bucket</Name><Prefix>dir/</Prefix><MaxKeys>2</MaxKeys><IsTruncated>true</IsTruncated><Contents><Key>dir/file1</Key><Size>11</Size></Contents><CommonPrefixes><Prefix>dir/sub/</Prefix></CommonPrefixes><NextMarker>page2</NextMarker></ListBucketResult>`)
+		case r.Method == http.MethodGet && key == "" && strings.Contains(r.URL.RawQuery, "marker=page2"):
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = io.WriteString(w, `<ListBucketResult><Name>bucket</Name><Prefix>dir/</Prefix><Marker>page2</Marker><IsTruncated>false</IsTruncated><Contents><Key>dir/file2</Key><Size>7</Size></Contents></ListBucketResult>`)
+		case r.Method == http.MethodHead && key == "missing":
+			w.WriteHeader(http.StatusNotFound)
+		case r.Method == http.MethodHead:
+			w.Header().Set("Content-Length", "12")
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodGet && key == "missing":
+			w.WriteHeader(http.StatusNotFound)
+		case r.Method == http.MethodGet:
+			data := []byte(body)
+			if rangeHeader := r.Header.Get("Range"); rangeHeader != "" && rangeHeader != "bytes=0-" {
+				data = data[1:5]
+			}
+			_, _ = w.Write(data)
+		case r.Method == http.MethodPut:
+			_, _ = io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodDelete:
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPost && strings.Contains(r.URL.RawQuery, "uploads"):
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = io.WriteString(w, `<CreateMultipartUploadResult><UploadId>empty-upload</UploadId></CreateMultipartUploadResult>`)
+		case r.Method == http.MethodPost && strings.Contains(r.URL.RawQuery, "delete"):
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = io.ReadAll(r.Body)
+			_, _ = io.WriteString(w, `<DeleteResult></DeleteResult>`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	sdk := newTestAWSClient(t, server)
+	sdk.listMaxKeys = 2
+
+	entries := make([]DirEntry, 0, 3)
+	for entry, err := range sdk.List(context.Background(), "dir/") {
+		require.NoError(t, err)
+		entries = append(entries, *entry)
+	}
+	require.Equal(t, []DirEntry{
+		{Name: "dir/file1", Size: 11},
+		{IsDir: true, Name: "dir/sub/"},
+		{Name: "dir/file2", Size: 7},
+	}, entries)
+
+	size, err := sdk.Stat(context.Background(), "dir/file1")
+	require.NoError(t, err)
+	require.EqualValues(t, 12, size)
+
+	_, err = sdk.Stat(context.Background(), "missing")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "got %v", err)
+
+	exists, err := sdk.Exists(context.Background(), "dir/file1")
+	require.NoError(t, err)
+	require.True(t, exists)
+	exists, err = sdk.Exists(context.Background(), "missing")
+	require.NoError(t, err)
+	require.False(t, exists)
+
+	reader, err := sdk.Read(context.Background(), "dir/file1", nil, nil)
+	require.NoError(t, err)
+	data, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	require.NoError(t, reader.Close())
+	require.Equal(t, body, string(data))
+
+	min, max := int64(1), int64(5)
+	reader, err = sdk.Read(context.Background(), "dir/file1", &min, &max)
+	require.NoError(t, err)
+	data, err = io.ReadAll(reader)
+	require.NoError(t, err)
+	require.NoError(t, reader.Close())
+	require.Equal(t, "ello", string(data))
+
+	reader, err = sdk.Read(context.Background(), "missing", nil, nil)
+	require.Nil(t, reader)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "got %v", err)
+
+	require.True(t, sdk.SupportsParallelMultipart())
+	require.NoError(t, sdk.Delete(context.Background()))
+	require.NoError(t, sdk.Delete(context.Background(), "dir/file1"))
+	require.NoError(t, sdk.Delete(context.Background(), "dir/file1", "dir/file2"))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	seen := false
+	for entry, err := range sdk.List(ctx, "dir/") {
+		require.Nil(t, entry)
+		require.ErrorIs(t, err, context.Canceled)
+		seen = true
+	}
+	require.True(t, seen)
+	require.ErrorIs(t, sdk.Delete(ctx, "dir/file1"), context.Canceled)
+
+	size = int64(4)
+	require.NoError(t, sdk.Write(context.Background(), "dir/file1", bytes.NewReader([]byte("data")), &size, nil))
+	require.NoError(t, sdk.Write(context.Background(), "empty", bytes.NewReader(nil), nil, nil))
+}
+
+func TestAwsSDKv2WriteUnknownSizeMultipartCompletes(t *testing.T) {
+	var uploadedParts int
+	var completed bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key := strings.TrimPrefix(r.URL.Path, "/bucket/")
+		switch {
+		case r.Method == http.MethodPost && key == "large" && strings.Contains(r.URL.RawQuery, "uploads"):
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = io.WriteString(w, `<CreateMultipartUploadResult><Bucket>bucket</Bucket><Key>large</Key><UploadId>upload-1</UploadId></CreateMultipartUploadResult>`)
+		case r.Method == http.MethodPut && key == "large" && strings.Contains(r.URL.RawQuery, "partNumber="):
+			uploadedParts++
+			_, _ = io.Copy(io.Discard, r.Body)
+			w.Header().Set("ETag", `"etag-1"`)
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodPost && key == "large" && strings.Contains(r.URL.RawQuery, "uploadId=upload-1"):
+			completed = true
+			_, _ = io.Copy(io.Discard, r.Body)
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = io.WriteString(w, `<CompleteMultipartUploadResult><Bucket>bucket</Bucket><Key>large</Key><ETag>"final"</ETag></CompleteMultipartUploadResult>`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	sdk := newTestAWSClient(t, server)
+	err := sdk.Write(context.Background(), "large", bytes.NewReader([]byte("non-empty")), nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, uploadedParts)
+	require.True(t, completed)
+}
+
+func TestAwsSDKv2WriteUnknownSizeEmptyCreatesObject(t *testing.T) {
+	var activeUploads, putCount int
+	var putBytes int
+	objects := make(map[string]int)
+	var mu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.RawQuery, "uploads"):
+			mu.Lock()
+			activeUploads++
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = io.WriteString(w, `<CreateMultipartUploadResult><UploadId>empty-upload</UploadId></CreateMultipartUploadResult>`)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.RawQuery, "uploadId=empty-upload"):
+			mu.Lock()
+			activeUploads--
+			mu.Unlock()
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPut && !strings.Contains(r.URL.RawQuery, "uploadId="):
+			if r.URL.Path == "/bucket/fail-empty" {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			data, err := io.ReadAll(r.Body)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			mu.Lock()
+			putCount++
+			putBytes += len(data)
+			objects[r.URL.Path] = len(data)
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodHead:
+			mu.Lock()
+			size, exists := objects[r.URL.Path]
+			mu.Unlock()
+			if !exists {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Length", strconv.Itoa(size))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	sdk := newTestAWSClient(t, server)
+	require.NoError(t, sdk.Write(context.Background(), "empty", bytes.NewReader(nil), nil, nil))
+	exists, err := sdk.Exists(context.Background(), "empty")
+	require.NoError(t, err)
+	require.True(t, exists, "success must mean the zero-byte object exists")
+	fs := &S3FS{name: "s3", storage: sdk, rawStorage: sdk, ioMerger: NewIOMerger(), asyncUpdate: true, parallelMode: ParallelOff}
+	vector := IOVector{FilePath: "from-fs", Entries: []IOEntry{{Offset: 0, Size: -1, ReaderForWrite: bytes.NewReader(nil)}}}
+	require.NoError(t, fs.Write(context.Background(), vector))
+	entry, err := fs.StatFile(context.Background(), "from-fs")
+	require.NoError(t, err)
+	require.Zero(t, entry.Size)
+	require.True(t, moerr.IsMoErrCode(fs.Write(context.Background(), vector), moerr.ErrFileAlreadyExists))
+	require.Error(t, sdk.Write(context.Background(), "fail-empty", bytes.NewReader(nil), nil, nil))
+	exists, err = sdk.Exists(context.Background(), "fail-empty")
+	require.NoError(t, err)
+	require.False(t, exists)
+	require.ErrorIs(t, sdk.Write(context.Background(), "reader-failure", errReader{}, nil, nil), io.ErrShortWrite)
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, 2, putCount)
+	require.Zero(t, putBytes)
+	require.Zero(t, activeUploads, "empty writes must not leak multipart uploads")
+}
+
+func TestAwsSDKv2WriteUnknownSizePartFailureAborts(t *testing.T) {
+	var mu sync.Mutex
+	var created, aborted, completed int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.RawQuery, "uploads"):
+			created++
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = io.WriteString(w, `<CreateMultipartUploadResult><UploadId>failed-upload</UploadId></CreateMultipartUploadResult>`)
+		case r.Method == http.MethodPut && strings.Contains(r.URL.RawQuery, "partNumber="):
+			w.WriteHeader(http.StatusForbidden)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.RawQuery, "uploadId=failed-upload"):
+			aborted++
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPost && strings.Contains(r.URL.RawQuery, "uploadId=failed-upload"):
+			completed++
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	sdk := newTestAWSClient(t, server)
+	err := sdk.Write(context.Background(), "failed", strings.NewReader("non-empty"), nil, nil)
+	require.Error(t, err)
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, 1, created)
+	require.Equal(t, 1, aborted)
+	require.Zero(t, completed)
+}
+
+func TestAwsSDKv2WriteUnknownSizeCanceledBeforeRead(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, (&AwsSDKv2{}).Write(ctx, "canceled", errReader{}, nil, nil), context.Canceled)
+}
+
+func TestAwsSDKv2ConstructorCredentialsAndRetryer(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	sdk, err := NewAwsSDKv2(context.Background(), ObjectStorageArguments{
+		Name:               "aws-new",
+		Bucket:             "bucket",
+		Endpoint:           server.URL,
+		Region:             "us-east-1",
+		KeyID:              "id",
+		KeySecret:          "secret",
+		SessionToken:       "token",
+		NoBucketValidation: true,
+	}, nil)
+	require.NoError(t, err)
+	require.Equal(t, "aws-new", sdk.name)
+	require.Equal(t, "bucket", sdk.bucket)
+
+	provider, err := (ObjectStorageArguments{
+		KeyID:        "id",
+		KeySecret:    "secret",
+		SessionToken: "token",
+	}).credentialsProviderForAwsSDKv2(context.Background())
+	require.NoError(t, err)
+	creds, err := provider.Retrieve(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "id", creds.AccessKeyID)
+	require.Equal(t, "secret", creds.SecretAccessKey)
+	require.Equal(t, "token", creds.SessionToken)
+
+	provider, err = (ObjectStorageArguments{
+		NoDefaultCredentials: true,
+	}).credentialsProviderForAwsSDKv2(context.Background())
+	require.Nil(t, provider)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "got %v", err)
+
+	provider, err = (ObjectStorageArguments{}).credentialsProviderForAwsSDKv2(context.Background())
+	require.NoError(t, err)
+	require.Nil(t, provider)
+
+	retryer := newAWSRetryer()
+	release := retryer.GetInitialToken()
+	require.NoError(t, release(nil))
+	release, err = retryer.GetRetryToken(context.Background(), errors.New("retry me"))
+	if err == nil {
+		require.NoError(t, release(nil))
+	}
+	_ = retryer.IsErrorRetryable(errors.New("not retryable"))
+	require.Greater(t, retryer.MaxAttempts(), 0)
+	_, _ = retryer.RetryDelay(1, errors.New("delay"))
 }

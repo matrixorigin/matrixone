@@ -1,0 +1,91 @@
+DROP DATABASE IF EXISTS numeric_context_test;
+CREATE DATABASE numeric_context_test;
+USE numeric_context_test;
+SET @a = 9007199254740993;
+SET @b = 0;
+PREPARE p_cast FROM 'SELECT CAST((? + ?) + 1 AS DECIMAL(30, 0))';
+EXECUTE p_cast USING @a, @b;
+➤ cast((? + ?) + 1 as decimal(30))[3,30,0]  𝄀
+9007199254740994
+EXECUTE p_cast USING @b, @a;
+➤ cast((? + ?) + 1 as decimal(30))[3,30,0]  𝄀
+9007199254740994
+DEALLOCATE PREPARE p_cast;
+PREPARE p_reuse FROM 'SELECT CAST((? + ?) + 1 AS DECIMAL(30, 0))';
+SET @dynamic = 9007199254740993;
+EXECUTE p_reuse USING @dynamic, @b;
+➤ cast((? + ?) + 1 as decimal(30))[3,30,0]  𝄀
+9007199254740994
+SET @dynamic = '9007199254740993';
+EXECUTE p_reuse USING @dynamic, @b;
+➤ cast((? + ?) + 1 as decimal(30))[3,30,0]  𝄀
+9007199254740994
+SET @dynamic = CAST(9007199254740993 AS DECIMAL(30, 0));
+EXECUTE p_reuse USING @dynamic, @b;
+➤ cast((? + ?) + 1 as decimal(30))[3,30,0]  𝄀
+9007199254740994
+SET @dynamic = CAST(9007199254740993 AS UNSIGNED);
+EXECUTE p_reuse USING @dynamic, @b;
+➤ cast((? + ?) + 1 as decimal(30))[3,30,0]  𝄀
+9007199254740994
+SET @dynamic = -9007199254740993;
+EXECUTE p_reuse USING @dynamic, @b;
+➤ cast((? + ?) + 1 as decimal(30))[3,30,0]  𝄀
+-9007199254740992
+SET @dynamic = NULL;
+EXECUTE p_reuse USING @dynamic, @b;
+➤ cast((? + ?) + 1 as decimal(30))[3,30,0]  𝄀
+null
+SET @dynamic = 'not-a-number';
+EXECUTE p_reuse USING @dynamic, @b;
+invalid input: "not-a-number" is invalid decimal string
+SET @dynamic = 9007199254740993;
+EXECUTE p_reuse USING @dynamic, @b;
+➤ cast((? + ?) + 1 as decimal(30))[3,30,0]  𝄀
+9007199254740994
+DEALLOCATE PREPARE p_reuse;
+PREPARE p_mod FROM 'SELECT CAST(MOD(?, 2) AS SIGNED)';
+EXECUTE p_mod USING @a;
+➤ cast(MOD(?, 2) as signed)[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE p_mod;
+PREPARE p_bool FROM 'SELECT CAST(? AS DOUBLE) AS d, ROUND(SIN(?),12) AS s, ROUND(ACOS(?),12) AS a';
+SET @bool_math = TRUE;
+EXECUTE p_bool USING @bool_math, @bool_math, @bool_math;
+➤ d[8,64,0]  ¦  s[8,64,0]  ¦  a[8,64,0]  𝄀
+1  ¦  0.841470984808  ¦  0
+SET @bool_math = FALSE;
+EXECUTE p_bool USING @bool_math, @bool_math, @bool_math;
+➤ d[8,64,0]  ¦  s[8,64,0]  ¦  a[8,64,0]  𝄀
+0  ¦  0  ¦  1.570796326795
+SET @bool_math = NULL;
+EXECUTE p_bool USING @bool_math, @bool_math, @bool_math;
+➤ d[8,64,0]  ¦  s[8,64,0]  ¦  a[8,64,0]  𝄀
+null  ¦  null  ¦  null
+SET @bool_math = 'true';
+EXECUTE p_bool USING @bool_math, @bool_math, @bool_math;
+➤ d[8,64,0]  ¦  s[8,64,0]  ¦  a[8,64,0]  𝄀
+0  ¦  0  ¦  1.570796326795
+SET @bool_math = TRUE;
+EXECUTE p_bool USING @bool_math, @bool_math, @bool_math;
+➤ d[8,64,0]  ¦  s[8,64,0]  ¦  a[8,64,0]  𝄀
+1  ¦  0.841470984808  ¦  0
+DEALLOCATE PREPARE p_bool;
+PREPARE p_bool_int FROM 'SELECT ABS(?) AS a, ROUND(?) AS r, SIGN(?) AS s';
+EXECUTE p_bool_int USING @bool_math, @bool_math, @bool_math;
+➤ a[-5,64,0]  ¦  r[-5,64,0]  ¦  s[-5,64,0]  𝄀
+1  ¦  1  ¦  1
+SET @bool_math = FALSE;
+EXECUTE p_bool_int USING @bool_math, @bool_math, @bool_math;
+➤ a[-5,64,0]  ¦  r[-5,64,0]  ¦  s[-5,64,0]  𝄀
+0  ¦  0  ¦  0
+SET @bool_math = NULL;
+EXECUTE p_bool_int USING @bool_math, @bool_math, @bool_math;
+➤ a[-5,64,0]  ¦  r[-5,64,0]  ¦  s[-5,64,0]  𝄀
+null  ¦  null  ¦  null
+SET @bool_math = TRUE;
+EXECUTE p_bool_int USING @bool_math, @bool_math, @bool_math;
+➤ a[-5,64,0]  ¦  r[-5,64,0]  ¦  s[-5,64,0]  𝄀
+1  ¦  1  ¦  1
+DEALLOCATE PREPARE p_bool_int;
+DROP DATABASE numeric_context_test;

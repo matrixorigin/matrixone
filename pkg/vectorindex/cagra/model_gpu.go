@@ -18,23 +18,28 @@ package cagra
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/detailyang/go-fallocate"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
+	vimemory "github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
@@ -45,12 +50,36 @@ var runSql_streaming = sqlexec.RunStreamingSql
 // CagraModel wraps a GpuCagra index and handles load/save to the secondary index tables.
 // The serialized form is a tar file produced by cuvs.Pack / cuvs.Unpack.
 // T must satisfy cuvs.VectorType (float32 | Float16 | int8 | uint8).
-type CagraModel[T cuvs.VectorType] struct {
-	Id          string
-	Index       *cuvs.GpuCagra[T]
-	Path        string // local tar file path; empty when index is in GPU memory only
-	FileSize    int64
-	MaxCapacity uint64
+type CagraModel[B, Q cuvs.VectorType] struct {
+	Id     string
+	Index  *cuvs.GpuCagra[B, Q]
+	Path   string
+	TmpDir string
+	// TmpDir scopes this model's packed tar to its builder's private directory so
+	// the builder can reclaim every tar with one RemoveAll. Empty means $TMPDIR,
+	// which keeps any non-builder caller behaving exactly as before. // local tar file path; empty when index is in GPU memory only
+	FileSize int64
+	// DeviceComponentBytes is every GPU-resident component of this sub-index by
+	// name -- index.bin, or shard_N.bin per rank under SHARDED. Kept per component
+	// rather than pre-reduced to a max because which device holds which shard
+	// depends on the device list: with distinct cards each holds one shard, but
+	// under gpu_multi_simulation several ranks alias onto the same physical device
+	// and it holds all of theirs.
+	DeviceComponentBytes map[string]int64
+	// HostComponentBytes is what this sub-index keeps in HOST memory once loaded --
+	// ids.bin, the INCLUDE blobs, the quantizer, the bitset: cuvs.PackSizes.Host, the
+	// complement of DeviceComponentBytes. Kept beside it so the cache's byte governor
+	// can charge RAM and VRAM to their own budgets instead of summing two arenas that
+	// are not interchangeable.
+	HostComponentBytes int64
+	MaxCapacity        uint64
+	// idMapCharged records that the delete id-map has already been added to
+	// HostComponentBytes. Deletes reach an index by TWO paths -- this model's own
+	// events during LoadIndex, and the shared cdc_tail replayed afterwards by the
+	// search's loadCdcTail -- and the map is built once for the WHOLE index by
+	// whichever arrives first. Charging per path would double-count it; charging in
+	// only one leaves it uncharged whenever the other is the one that fires.
+	idMapCharged bool
 
 	// build/load configuration
 	Idxcfg  vectorindex.IndexConfig
@@ -60,6 +89,12 @@ type CagraModel[T cuvs.VectorType] struct {
 	// from DB metadata
 	Timestamp int64
 	Checksum  string
+
+	// Nrow is the source rows this generation indexes and BuildTS is the transaction
+	// SnapshotTS its content was built from. Both 0 when the metadata row predates the
+	// columns -- read as unknown, never as "empty" or "built at the epoch".
+	Nrow    int64
+	BuildTS int64
 
 	// CDC / sync tracking
 	Dirty bool
@@ -77,7 +112,7 @@ type CagraModel[T cuvs.VectorType] struct {
 	// (quantizer params live in the model tar, not available at CDC write
 	// time).
 	OverflowPkids []int64
-	OverflowVecs  []float32 // len = len(OverflowPkids) * dim
+	OverflowVecs  []B // len = len(OverflowPkids) * dim (native base type B)
 
 	// INCLUDE column data carried alongside each overflow row. Layout
 	// matches the EncodeEventRecord INSERT-record include section:
@@ -98,8 +133,8 @@ type CagraModel[T cuvs.VectorType] struct {
 
 // NewCagraModelForBuild creates a CagraModel ready for bulk-build.
 // Call InitEmpty once the total vector count is known, then AddChunk, then Build.
-func NewCagraModelForBuild[T cuvs.VectorType](id string, cfg vectorindex.IndexConfig, nthread uint32, devices []int) (*CagraModel[T], error) {
-	return &CagraModel[T]{
+func NewCagraModelForBuild[B, Q cuvs.VectorType](id string, cfg vectorindex.IndexConfig, nthread uint32, devices []int) (*CagraModel[B, Q], error) {
+	return &CagraModel[B, Q]{
 		Id:      id,
 		Idxcfg:  cfg,
 		NThread: nthread,
@@ -108,7 +143,7 @@ func NewCagraModelForBuild[T cuvs.VectorType](id string, cfg vectorindex.IndexCo
 }
 
 // cagraConfig returns the cuvs types derived from idx.Idxcfg.
-func (idx *CagraModel[T]) cagraConfig() (cuvsMetric cuvs.DistanceType, bp cuvs.CagraBuildParams, mode cuvs.DistributionMode, err error) {
+func (idx *CagraModel[B, Q]) cagraConfig() (cuvsMetric cuvs.DistanceType, bp cuvs.CagraBuildParams, mode cuvs.DistributionMode, err error) {
 	cfg := idx.Idxcfg.CuvsCagra
 	var ok bool
 	cuvsMetric, ok = metric.MetricTypeToCuvsMetric[metric.MetricType(cfg.Metric)]
@@ -123,13 +158,16 @@ func (idx *CagraModel[T]) cagraConfig() (cuvsMetric cuvs.DistanceType, bp cuvs.C
 	if cfg.GraphDegree > 0 {
 		bp.GraphDegree = cfg.GraphDegree
 	}
+	if cfg.QuantizerTrainLimit > 0 {
+		bp.QuantizerTrainLimit = cfg.QuantizerTrainLimit
+	}
 	mode = cuvs.DistributionMode(cfg.DistributionMode)
 	return
 }
 
 // InitEmpty allocates the GPU buffer for totalCount vectors.
 // Must be called after NewCagraModelForBuild and before any AddChunk call.
-func (idx *CagraModel[T]) InitEmpty(totalCount uint64) error {
+func (idx *CagraModel[B, Q]) InitEmpty(totalCount uint64) error {
 	if idx.Index != nil {
 		return moerr.NewInternalErrorNoCtx("CagraModel: index already initialized")
 	}
@@ -137,7 +175,7 @@ func (idx *CagraModel[T]) InitEmpty(totalCount uint64) error {
 	if err != nil {
 		return err
 	}
-	gi, err := cuvs.NewGpuCagraEmpty[T](
+	gi, err := cuvs.NewGpuCagraEmpty[B, Q](
 		totalCount,
 		uint32(idx.Idxcfg.CuvsCagra.Dimensions),
 		cuvsMetric,
@@ -159,7 +197,7 @@ func (idx *CagraModel[T]) InitEmpty(totalCount uint64) error {
 }
 
 // AddChunk appends a chunk of typed vectors to the pre-allocated GPU buffer.
-func (idx *CagraModel[T]) AddChunk(chunk []T, chunkCount uint64, ids []int64) error {
+func (idx *CagraModel[B, Q]) AddChunk(chunk []Q, chunkCount uint64, ids []int64) error {
 	if idx.Index == nil {
 		return moerr.NewInternalErrorNoCtx("CagraModel: index not initialized; call InitEmpty first")
 	}
@@ -175,17 +213,14 @@ func (idx *CagraModel[T]) AddChunk(chunk []T, chunkCount uint64, ids []int64) er
 	return nil
 }
 
-// AddChunkFloat appends a chunk of float32 vectors, quantizing on the fly when T is a 1-byte type.
-func (idx *CagraModel[T]) AddChunkFloat(chunk []float32, chunkCount uint64, ids []int64) error {
+// AddChunkQuantize appends a chunk of base-typed (B) vectors, quantizing
+// natively to the 1-byte storage type Q (int8/uint8). Used for a vecf16 base
+// with QUANTIZATION=int8/uint8 — no f32 detour.
+func (idx *CagraModel[B, Q]) AddChunkQuantize(chunk []B, chunkCount uint64, ids []int64) error {
 	if idx.Index == nil {
 		return moerr.NewInternalErrorNoCtx("CagraModel: index not initialized; call InitEmpty first")
 	}
-	/*
-		if len(ids) > 0 {
-			logutil.Infof("[DEBUG] CagraModel.AddChunkFloat: chunkCount=%d, first_id=%d, last_id=%d", chunkCount, ids[0], ids[len(ids)-1])
-		}
-	*/
-	if err := idx.Index.AddChunkFloat(chunk, chunkCount, ids); err != nil {
+	if err := idx.Index.AddChunkQuantize(chunk, chunkCount, ids); err != nil {
 		return err
 	}
 	idx.Len += int64(chunkCount)
@@ -193,7 +228,7 @@ func (idx *CagraModel[T]) AddChunkFloat(chunk []float32, chunkCount uint64, ids 
 }
 
 // Build constructs the CAGRA graph from the loaded vectors and starts the worker pool.
-func (idx *CagraModel[T]) Build() error {
+func (idx *CagraModel[B, Q]) Build() error {
 	if idx.Index == nil {
 		return moerr.NewInternalErrorNoCtx("CagraModel: index not initialized")
 	}
@@ -205,12 +240,17 @@ func (idx *CagraModel[T]) Build() error {
 }
 
 // Destroy frees GPU memory and removes the local tar file if present.
-func (idx *CagraModel[T]) Destroy() error {
+func (idx *CagraModel[B, Q]) Destroy() error {
+	// Release the GPU handle and the packed tar independently: the file does not
+	// depend on the handle, so returning early on a Destroy() error used to leak it
+	// for the lifetime of the process. Collect both outcomes instead.
+	var errs error
 	if idx.Index != nil {
 		if err := idx.Index.Destroy(); err != nil {
-			return err
+			errs = errors.Join(errs, err)
+		} else {
+			idx.Index = nil
 		}
-		idx.Index = nil
 	}
 	if len(idx.Path) > 0 {
 		if _, err := os.Stat(idx.Path); err == nil || os.IsExist(err) {
@@ -218,13 +258,13 @@ func (idx *CagraModel[T]) Destroy() error {
 		}
 		idx.Path = ""
 	}
-	return nil
+	return errs
 }
 
 // saveToFile serializes the CAGRA index to a local tar file and updates idx.Path / idx.Checksum.
 // If the index is clean (not dirty) or nil, it is a no-op.
 // On success the GPU memory is freed and idx.Index is set to nil.
-func (idx *CagraModel[T]) saveToFile() error {
+func (idx *CagraModel[B, Q]) saveToFile() error {
 	if idx.Index == nil {
 		return nil
 	}
@@ -242,6 +282,7 @@ func (idx *CagraModel[T]) saveToFile() error {
 
 	if idx.Len == 0 {
 		// Empty index — just release GPU memory, nothing to persist.
+		logutil.Infof("CagraModel.saveToFile: empty index idx=%s, destroy only", idx.Id)
 		if err := idx.Index.Destroy(); err != nil {
 			return err
 		}
@@ -249,38 +290,74 @@ func (idx *CagraModel[T]) saveToFile() error {
 		return nil
 	}
 
-	tarFile, err := os.CreateTemp("", "cagra")
+	tarFile, err := os.CreateTemp(idx.TmpDir, "cagra")
 	if err != nil {
 		return err
 	}
 	tarPath := tarFile.Name()
 	tarFile.Close()
 
-	if err = idx.Index.Pack(tarPath); err != nil {
+	logutil.Infof("CagraModel.saveToFile: idx=%s len=%d calling Pack -> %s", idx.Id, idx.Len, tarPath)
+	t0 := time.Now()
+	packSizes, err := idx.Index.Pack(tarPath, idx.TmpDir)
+	if err != nil {
+		logutil.Errorf("CagraModel.saveToFile: Pack FAILED idx=%s after %v: %v", idx.Id, time.Since(t0), err)
 		os.Remove(tarPath)
 		return err
 	}
+	packDur := time.Since(t0)
+	fi, _ := os.Stat(tarPath)
+	packedBytes := int64(0)
+	if fi != nil {
+		packedBytes = fi.Size()
+	}
+	logutil.Infof("CagraModel.saveToFile: Pack done idx=%s in %v (%d bytes)", idx.Id, packDur, packedBytes)
 
 	chksum, err := vectorindex.CheckSum(tarPath)
 	if err != nil {
+		logutil.Errorf("CagraModel.saveToFile: CheckSum FAILED idx=%s: %v", idx.Id, err)
 		os.Remove(tarPath)
 		return err
 	}
 	idx.Checksum = chksum
 
+	// Record the successfully-packed tar BEFORE attempting Destroy: a Destroy
+	// failure does not invalidate the on-disk artifact, and removing it here
+	// would lose committed data.
+	idx.Path = tarPath
+	// What of this tar lands on the GPU. The tar also carries host-only members
+	// (ids.bin, the INCLUDE blobs), so its total size is the wrong basis for a
+	// VRAM decision; the build-side aggregate gate uses this instead.
+	// The largest single device-resident component. Under SHARDED each device
+	// receives ONE shard, so the per-device demand is the biggest shard, not the
+	// sum of all of them -- and not the sum divided by the device count, which
+	// under-states the largest whenever the split is uneven (the last shard
+	// absorbs the remainder). With one index.bin it is simply that file.
+	idx.DeviceComponentBytes = make(map[string]int64, len(packSizes.Files))
+	for name, sz := range packSizes.Files {
+		if !cuvs.IsHostResidentComponent(name) {
+			idx.DeviceComponentBytes[name] = sz
+		}
+	}
+	idx.HostComponentBytes = packSizes.Host
+
+	// Record the vector count while the handle is still alive; ToInsertSql needs it for the
+	// metadata row and Destroy below releases the index.
+	idx.Len = int64(idx.Index.Len())
+
 	// Free GPU memory — the index is now persisted on disk.
 	if err = idx.Index.Destroy(); err != nil {
-		os.Remove(tarPath)
+		logutil.Errorf("CagraModel.saveToFile: Destroy FAILED idx=%s (tar RETAINED at %s): %v", idx.Id, tarPath, err)
 		return err
 	}
 	idx.Index = nil
-	idx.Path = tarPath
+	logutil.Infof("CagraModel.saveToFile: DONE idx=%s path=%s", idx.Id, tarPath)
 	return nil
 }
 
 // ToSql generates INSERT SQL statements to store the model in the secondary index storage table.
 // Mirrors HnswModel.ToSql — callers are responsible for generating the metadata INSERT.
-func (idx *CagraModel[T]) ToSql(cfg vectorindex.IndexTableConfig) ([]string, error) {
+func (idx *CagraModel[B, Q]) ToSql(cfg vectorindex.IndexTableConfig) ([]string, error) {
 	if err := idx.saveToFile(); err != nil {
 		return nil, err
 	}
@@ -329,8 +406,26 @@ func (idx *CagraModel[T]) ToSql(cfg vectorindex.IndexTableConfig) ([]string, err
 	return sqls, nil
 }
 
+// chargeIdMap adds the delete id-map's host footprint to this sub-index, once.
+//
+// The FIRST replayed delete materialises id_to_index_ for EVERY row of the index and it stays
+// resident for the index's life (cgo/cuvs/index_base.hpp, ensure_id_index). The native side
+// reserves that allocation and releases the claim as soon as it succeeds, so nothing downstream
+// tracks it -- uncharged, the governor evicts against a host figure short by 40 bytes per row.
+//
+// Deletes arrive by two paths and either can be the one that builds the map: this model's own
+// events during LoadIndex, and the SHARED cdc_tail replayed afterwards by the search's
+// loadCdcTail. Both call here; the flag makes the charge exactly once.
+func (idx *CagraModel[B, Q]) chargeIdMap(rows uint64) {
+	if idx.idMapCharged || rows == 0 {
+		return
+	}
+	idx.idMapCharged = true
+	idx.HostComponentBytes += int64(rows) * vimemory.HostIDMapBytesPerRow
+}
+
 // ToDeleteSql generates DELETE SQL for both the storage and metadata tables.
-func (idx *CagraModel[T]) ToDeleteSql(cfg vectorindex.IndexTableConfig) ([]string, error) {
+func (idx *CagraModel[B, Q]) ToDeleteSql(cfg vectorindex.IndexTableConfig) ([]string, error) {
 	sqls := make([]string, 0, 2)
 	sqls = append(sqls, fmt.Sprintf("DELETE FROM %s WHERE %s = %s",
 		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable), catalog.Cagra_TblCol_Storage_Index_Id, sqlquote.String(idx.Id)))
@@ -340,17 +435,17 @@ func (idx *CagraModel[T]) ToDeleteSql(cfg vectorindex.IndexTableConfig) ([]strin
 }
 
 // Empty returns true when no vectors have been added.
-func (idx *CagraModel[T]) Empty() bool {
+func (idx *CagraModel[B, Q]) Empty() bool {
 	return idx.Len == 0
 }
 
 // Full returns true when the index has reached its maximum capacity.
-func (idx *CagraModel[T]) Full() bool {
+func (idx *CagraModel[B, Q]) Full() bool {
 	return idx.MaxCapacity > 0 && uint64(idx.Len) >= idx.MaxCapacity
 }
 
 // Search performs a KNN search and returns external PKs with distances.
-func (idx *CagraModel[T]) Search(query []T, limit uint32) (keys []int64, distances []float32, err error) {
+func (idx *CagraModel[B, Q]) Search(query []Q, limit uint32) (keys []int64, distances []float32, err error) {
 	if idx.Index == nil {
 		return nil, nil, moerr.NewInternalErrorNoCtx("CagraModel: index not loaded")
 	}
@@ -366,7 +461,7 @@ func (idx *CagraModel[T]) Search(query []T, limit uint32) (keys []int64, distanc
 }
 
 // loadChunk reads one streaming result batch and writes each chunk at the correct file offset.
-func (idx *CagraModel[T]) loadChunk(ctx context.Context,
+func (idx *CagraModel[B, Q]) loadChunk(ctx context.Context,
 	sqlproc *sqlexec.SqlProcess,
 	stream_chan chan executor.Result,
 	error_chan chan error,
@@ -406,6 +501,118 @@ func (idx *CagraModel[T]) loadChunk(ctx context.Context,
 	return false, nil
 }
 
+// FetchArtifact streams this sub-index's packed tar to local disk and returns its
+// path, without touching the GPU.
+//
+// Split out of LoadIndex so the search path can fetch every sub-index, measure the
+// aggregate with cuvs.MeasureTar, and refuse before any device allocation. That is
+// what keeps CREATE and the load gate on the same quantity -- both admit the
+// device-resident components of the packed artifact, differing only in whether
+// they compare against total VRAM (permanent) or free VRAM (situational).
+//
+// The caller owns the returned file. On failure the partial file is removed and
+// the path is empty.
+func (idx *CagraModel[B, Q]) FetchArtifact(sqlproc *sqlexec.SqlProcess, tblcfg vectorindex.IndexTableConfig) (path string, err error) {
+	var (
+		fp         *os.File
+		streamChan = make(chan executor.Result, 2)
+		errorChan  = make(chan error, 2)
+		fname      string
+		wg         sync.WaitGroup
+	)
+
+	// Download the tar file from the database via streaming SQL.
+	// Under the LOCAL fileservice, NOT $TMPDIR. This tar is the whole sub-index --
+	// ~17.6 GB at 88M rows -- and loadIndexes fetches EVERY sub-index before it
+	// admits the aggregate, so the peak here is the sum of them plus whatever
+	// Unpack extracts alongside the current one. /tmp is frequently a small or
+	// slow mount, so a load could fail for space on a node whose LOCAL volume was
+	// provisioned for exactly this. The build path has always spilled here; the
+	// load path claimed to (see the comment above Unpack in LoadIndex) but did
+	// not, because a model straight from LoadMetadata carries no TmpDir.
+	//
+	// HostSpillDir returns "" when there is no LOCAL fileservice, and CreateTemp
+	// reads "" as $TMPDIR, so unit tests and one-shot tools keep today's behaviour
+	// with no branch here.
+	spillDir := idx.TmpDir
+	if spillDir == "" && sqlproc != nil && sqlproc.Proc != nil {
+		spillDir = vimemory.HostSpillDir(sqlproc.GetTopContext(), sqlproc.Proc.Base.FileService, sqlproc.GetService())
+	}
+	fp, err = os.CreateTemp(spillDir, "cagra")
+	if err != nil {
+		return "", err
+	}
+	fname = fp.Name()
+
+	// On failure the partial file is this method's to remove; on success the
+	// caller owns it. LoadIndex removes it in view mode when LoadIndex fetched it;
+	// a pre-fetching caller removes it itself.
+	defer func() {
+		if fp != nil {
+			fp.Close()
+			fp = nil
+		}
+		if err != nil && len(fname) > 0 {
+			os.Remove(fname)
+			fname = ""
+		}
+	}()
+
+	if err = fallocate.Fallocate(fp, 0, idx.FileSize); err != nil {
+		return "", err
+	}
+
+	sql := fmt.Sprintf("SELECT chunk_id, data FROM %s WHERE index_id = %s AND tag = %d",
+		sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.IndexTable), sqlquote.String(idx.Id), vectorindex.Tag_ModelChunk)
+
+	ctx, cancel := context.WithCancelCause(sqlproc.GetTopContext())
+	defer cancel(nil)
+
+	wg.Add(1)
+	go func() {
+		defer func() {
+			close(streamChan)
+			wg.Done()
+		}()
+		_, err2 := runSql_streaming(ctx, sqlproc, sql, streamChan, errorChan)
+		if err2 != nil {
+			errorChan <- err2
+		}
+	}()
+
+	sql_closed := false
+	for !sql_closed {
+		sql_closed, err = idx.loadChunk(ctx, sqlproc, streamChan, errorChan, fp)
+		if err != nil {
+			cancel(err)
+			break
+		}
+	}
+
+	// Drain the channel so the producer goroutine can finish.
+	if !sql_closed {
+		for res := range streamChan {
+			res.Close()
+		}
+	}
+	wg.Wait()
+
+	if err == nil {
+		select {
+		case err = <-errorChan:
+		default:
+		}
+	}
+	if err != nil {
+		return "", err
+	}
+
+	path = fp.Name()
+	fp.Close()
+	fp = nil
+	return path, nil
+}
+
 // LoadIndex downloads the tar from the database, unpacks it, and loads the CAGRA index into GPU memory.
 // Mirrors HnswModel.LoadIndex.
 // idx.Devices must be set before calling LoadIndex.
@@ -414,20 +621,12 @@ func (idx *CagraModel[T]) loadChunk(ctx context.Context,
 //   - tag=0: model tar chunks (streaming, multi-GB)
 //   - tag=1: CDC event log (small KB–MB; replayed once after Unpack to derive
 //     the deleted-pkid set and the brute-force overflow)
-func (idx *CagraModel[T]) LoadIndex(
+func (idx *CagraModel[B, Q]) LoadIndex(
 	sqlproc *sqlexec.SqlProcess,
 	idxcfg vectorindex.IndexConfig,
 	tblcfg vectorindex.IndexTableConfig,
 	nthread int64,
 	view bool) (err error) {
-
-	var (
-		fp         *os.File
-		streamChan = make(chan executor.Result, 2)
-		errorChan  = make(chan error, 2)
-		fname      string
-		wg         sync.WaitGroup
-	)
 
 	if idx.Index != nil {
 		return nil
@@ -459,77 +658,19 @@ func (idx *CagraModel[T]) LoadIndex(
 	}
 
 	if len(idx.Path) == 0 {
-		// Download the tar file from the database via streaming SQL.
-		fp, err = os.CreateTemp("", "cagra")
-		if err != nil {
+		var fetched string
+		if fetched, err = idx.FetchArtifact(sqlproc, tblcfg); err != nil {
 			return err
 		}
-		fname = fp.Name()
-
+		idx.Path = fetched
+		// This call fetched it, so this call owns it: in view mode the tar is
+		// scratch and goes once Unpack has read it. A Path supplied by a
+		// pre-fetching caller is left for that caller to clean up.
 		defer func() {
-			if fp != nil {
-				fp.Close()
-				fp = nil
-			}
-			if view {
-				if len(fname) > 0 {
-					os.Remove(fname)
-				}
+			if view && len(fetched) > 0 {
+				os.Remove(fetched)
 			}
 		}()
-
-		if err = fallocate.Fallocate(fp, 0, idx.FileSize); err != nil {
-			return err
-		}
-
-		sql := fmt.Sprintf("SELECT chunk_id, data FROM %s WHERE index_id = %s AND tag = %d",
-			sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.IndexTable), sqlquote.String(idx.Id), vectorindex.Tag_ModelChunk)
-
-		ctx, cancel := context.WithCancelCause(sqlproc.GetTopContext())
-		defer cancel(nil)
-
-		wg.Add(1)
-		go func() {
-			defer func() {
-				close(streamChan)
-				wg.Done()
-			}()
-			_, err2 := runSql_streaming(ctx, sqlproc, sql, streamChan, errorChan)
-			if err2 != nil {
-				errorChan <- err2
-			}
-		}()
-
-		sql_closed := false
-		for !sql_closed {
-			sql_closed, err = idx.loadChunk(ctx, sqlproc, streamChan, errorChan, fp)
-			if err != nil {
-				cancel(err)
-				break
-			}
-		}
-
-		// Drain the channel so the producer goroutine can finish.
-		if !sql_closed {
-			for res := range streamChan {
-				res.Close()
-			}
-		}
-		wg.Wait()
-
-		if err == nil {
-			select {
-			case err = <-errorChan:
-			default:
-			}
-		}
-		if err != nil {
-			return
-		}
-
-		idx.Path = fp.Name()
-		fp.Close()
-		fp = nil
 	}
 
 	// Verify checksum.
@@ -545,12 +686,36 @@ func (idx *CagraModel[T]) LoadIndex(
 	idx.Idxcfg = idxcfg
 	idx.NThread = uint32(nthread)
 
+	// Reconcile idx.Devices with the shard topology recorded in the tar's
+	// manifest.json. On a single-GPU host the loader auto-pads so a SHARDED
+	// index built under gpu_multi_simulation=N loads all N shards even when
+	// the search session has the sim var unset (without this, only shard_0
+	// gets loaded and every search returns 100% shard-0 results). On a
+	// multi-GPU host with fewer physical GPUs than the saved shard count
+	// this errors, since silently overloading some GPUs would just tank
+	// throughput and hide the misconfig.
+	resolved, shardCount, perr := cuvs.ResolveDevicesForTarLoad(idx.Devices, idx.Path)
+	if perr != nil {
+		return perr
+	}
+	if shardCount > 0 && len(resolved) != len(idx.Devices) {
+		logutil.Infof("CagraModel.LoadIndex: adjusted idx.Devices from %v to %v to match manifest shard_count=%d",
+			idx.Devices, resolved, shardCount)
+		idx.Devices = resolved
+	}
+
+	// VRAM admission for this load lives in C++ now: cgo/cuvs/device_memory.hpp
+	// claims the bytes each deserialize is about to materialise, in one ledger
+	// that C++ builds can also join. A Go-side ledger could never see a build,
+	// whose decided-but-unallocated window spans minutes. It also needs no shard
+	// attribution: each shard's deserialize claims its own file on its own device.
+
 	cuvsMetric, bp, mode, err := idx.cagraConfig()
 	if err != nil {
 		return err
 	}
 
-	gi, err := cuvs.NewGpuCagraEmpty[T](
+	gi, err := cuvs.NewGpuCagraEmpty[B, Q](
 		uint64(idxcfg.IndexCapacity),
 		uint32(idxcfg.CuvsCagra.Dimensions),
 		cuvsMetric,
@@ -568,7 +733,14 @@ func (idx *CagraModel[T]) LoadIndex(
 		return err
 	}
 
-	if err = gi.Unpack(idx.Path, mode); err != nil {
+	// idx.Path lives in HostSpillDir; extract into the same directory so the
+	// intermediate (same-size scratch as the tar) does NOT land in /tmp.
+	// The host components Unpack materialises -- ids, quantizer, deleted bitset
+	// and the INCLUDE columns -- are claimed natively inside load_dir, where the
+	// deserialisation that allocates them happens (index_base.hpp,
+	// claim_host_components).
+
+	if err = gi.Unpack(idx.Path, filepath.Dir(idx.Path), mode); err != nil {
 		gi.Destroy()
 		return err
 	}
@@ -587,7 +759,7 @@ func (idx *CagraModel[T]) LoadIndex(
 		}
 		includeBytesPerRow = ibpr
 	}
-	delPkids, ovPkids, ovVecs, ovInc, err := replayEventChunks(eventChunks, dim, includeBytesPerRow)
+	delPkids, ovPkids, ovVecs, ovInc, err := replayEventChunks[B](eventChunks, dim, includeBytesPerRow)
 	if err != nil {
 		gi.Destroy()
 		return err
@@ -602,9 +774,18 @@ func (idx *CagraModel[T]) LoadIndex(
 	// idempotent and silently no-ops on pkids the cuvs id_map doesn't know
 	// (e.g. a row that was inserted post-build and now lives only in
 	// OverflowPkids — that case is handled at search time).
-	if err = gi.DeleteIds(idx.DeletedPkids); err != nil {
-		gi.Destroy()
-		return err
+	// The FIRST delete materialises id_to_index_ for every row of the index and it stays
+	// resident for the index's life (index_base.hpp, ensure_id_index). The native side reserves
+	// that allocation and releases the claim as soon as it succeeds, so nothing downstream is
+	// still tracking it -- charging it to the cache budget is this side's job, or the governor
+	// evicts against a host figure short by 40 bytes per row on every generation that ever
+	// replayed a delete.
+	if len(idx.DeletedPkids) > 0 && gi.Len() > 0 {
+		if err = gi.DeleteIds(idx.DeletedPkids); err != nil {
+			gi.Destroy()
+			return err
+		}
+		idx.chargeIdMap(gi.Len())
 	}
 
 	idx.Index = gi
@@ -627,7 +808,7 @@ func (idx *CagraModel[T]) LoadIndex(
 }
 
 // Unload persists dirty state to a local tar file and frees GPU memory.
-func (idx *CagraModel[T]) Unload() error {
+func (idx *CagraModel[B, Q]) Unload() error {
 	if idx.Index == nil {
 		return nil
 	}
@@ -650,7 +831,7 @@ func (idx *CagraModel[T]) Unload() error {
 // returns one EventChunk per row. The caller (LoadIndex / search) sorts by
 // chunk_id before replay since record ordering across chunks encodes the
 // temporal ordering between DELETE and INSERT events for the same pkid.
-func (idx *CagraModel[T]) loadCdcEventsFromDB(
+func (idx *CagraModel[B, Q]) loadCdcEventsFromDB(
 	sqlproc *sqlexec.SqlProcess,
 	tblcfg vectorindex.IndexTableConfig,
 ) ([]cuvscdc.EventChunk, error) {
@@ -682,16 +863,20 @@ func (idx *CagraModel[T]) loadCdcEventsFromDB(
 // flattens the (deleted, overflow) replay state into the parallel slices the
 // CagraModel struct carries (pkids/vecs/include layout that buildOverflow
 // expects). Pass includeBytesPerRow=0 for indexes without INCLUDE columns.
-func replayEventChunks(
+func replayEventChunks[B cuvs.VectorType](
 	chunks []cuvscdc.EventChunk,
 	dim int,
 	includeBytesPerRow int,
-) ([]int64, []int64, []float32, []byte, error) {
+) ([]int64, []int64, []B, []byte, error) {
 	if len(chunks) == 0 {
 		return nil, nil, nil, nil, nil
 	}
 	cuvscdc.SortChunks(chunks)
-	state, err := cuvscdc.ReplayEventLog(chunks, dim, includeBytesPerRow)
+	// The codec stores vectors as opaque bytes; the per-row byte length is
+	// dim * sizeof(B). Reinterpret each row's bytes back to the native base
+	// type B for the overflow brute force — no f32 detour.
+	vecBytesPerRow := dim * int(util.UnsafeSizeOf[B]())
+	state, err := cuvscdc.ReplayEventLog(chunks, vecBytesPerRow, includeBytesPerRow)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
@@ -703,14 +888,15 @@ func replayEventChunks(
 		return deletedPkids, nil, nil, nil, nil
 	}
 	ovPkids := make([]int64, len(state.Overflow))
-	ovVecs := make([]float32, len(state.Overflow)*dim)
+	ovVecs := make([]B, len(state.Overflow)*dim)
+	ovVecBytes := util.UnsafeSliceToBytes(ovVecs)
 	var ovInc []byte
 	if includeBytesPerRow > 0 {
 		ovInc = make([]byte, len(state.Overflow)*includeBytesPerRow)
 	}
 	for i, e := range state.Overflow {
 		ovPkids[i] = e.Pkid
-		copy(ovVecs[i*dim:(i+1)*dim], e.Vec)
+		copy(ovVecBytes[i*vecBytesPerRow:(i+1)*vecBytesPerRow], e.Vec)
 		if includeBytesPerRow > 0 {
 			copy(ovInc[i*includeBytesPerRow:(i+1)*includeBytesPerRow], e.Include)
 		}
@@ -720,8 +906,13 @@ func replayEventChunks(
 
 // LoadMetadata loads CagraModel descriptors from the metadata table.
 // Each returned model has Id, Checksum, Timestamp, and FileSize set; Index is nil.
-func LoadMetadata[T cuvs.VectorType](sqlproc *sqlexec.SqlProcess, dbname string, metatbl string) ([]*CagraModel[T], error) {
-	sql := fmt.Sprintf("SELECT * FROM %s ORDER BY timestamp ASC", sqlquote.QualifiedIdent(dbname, metatbl))
+func LoadMetadata[B, Q cuvs.VectorType](sqlproc *sqlexec.SqlProcess, dbname string, metatbl string) ([]*CagraModel[B, Q], error) {
+	// The BASE sub-indexes only. The metadata table also holds one row per CDC tail frame
+	// (see vectorindex.TailFrameMetaId); a tail row read here would become a sub-index model
+	// with no tar behind it.
+	sql := fmt.Sprintf("SELECT * FROM %s WHERE %s ORDER BY timestamp ASC",
+		sqlquote.QualifiedIdent(dbname, metatbl),
+		vectorindex.NotTailFrameSQL(catalog.Cagra_TblCol_Metadata_Index_Id))
 	res, err := runSql(sqlproc, sql)
 	if err != nil {
 		return nil, err
@@ -733,7 +924,7 @@ func LoadMetadata[T cuvs.VectorType](sqlproc *sqlexec.SqlProcess, dbname string,
 		total += bat.RowCount()
 	}
 
-	indexes := make([]*CagraModel[T], 0, total)
+	indexes := make([]*CagraModel[B, Q], 0, total)
 	for _, bat := range res.Batches {
 		idVec := bat.Vecs[0]
 		chksumVec := bat.Vecs[1]
@@ -744,9 +935,45 @@ func LoadMetadata[T cuvs.VectorType](sqlproc *sqlexec.SqlProcess, dbname string,
 			chksum := chksumVec.GetStringAt(i)
 			ts := vector.GetFixedAtWithTypeCheck[int64](tsVec, i)
 			fs := vector.GetFixedAtWithTypeCheck[int64](fsVec, i)
-			idx := &CagraModel[T]{Id: id, Checksum: chksum, Timestamp: ts, FileSize: fs}
+			idx := &CagraModel[B, Q]{Id: id, Checksum: chksum, Timestamp: ts, FileSize: fs}
+			// nrow and build_ts were appended after the original four columns, and the
+			// metadata table is created per index at CREATE INDEX -- REINDEX rewrites its
+			// rows, not the table -- so an index created before they existed still has four.
+			// Read them only when the batch carries them; absent means unknown.
+			if len(bat.Vecs) > 4 {
+				idx.Nrow = vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[4], i)
+			}
+			if len(bat.Vecs) > 5 {
+				idx.BuildTS = vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[5], i)
+			}
 			indexes = append(indexes, idx)
 		}
 	}
+
+	var rows, newest int64
+	for _, idx := range indexes {
+		rows += idx.Nrow
+		if idx.BuildTS > newest {
+			newest = idx.BuildTS
+		}
+	}
+	logMetadataProvenance(metatbl, len(indexes), rows, newest)
+
 	return indexes, nil
+}
+
+// logMetadataProvenance reports what the metadata rows say a loaded index is: how many source
+// rows its generations cover, and the newest data version they were built from. build_ts is 0
+// for a generation written before the column existed, and for content with no single source
+// version -- both print as "unknown" rather than as an epoch timestamp.
+//
+// This is the read side of the provenance columns: without it nrow/build_ts are written and
+// never surfaced, and an operator asking "how far behind is this resident index?" has to query
+// the hidden metadata table by hand.
+func logMetadataProvenance(metatbl string, count int, rows, buildTS int64) {
+	if buildTS <= 0 {
+		logutil.Infof("%s: loaded %d generation(s), rows=%d, build_ts=unknown", metatbl, count, rows)
+		return
+	}
+	logutil.Infof("%s: loaded %d generation(s), rows=%d, build_ts=%d", metatbl, count, rows, buildTS)
 }

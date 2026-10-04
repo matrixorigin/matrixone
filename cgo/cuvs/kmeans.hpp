@@ -74,8 +74,10 @@ struct kmeans_result_t {
  * Note: cuVS KMeans fits and predicts always use float centroids internally.
  */
 template <typename T>
-class gpu_kmeans_t : public gpu_index_base_t<T, kmeans_build_params_t, int64_t> {
+class gpu_kmeans_t : public gpu_index_base_t<float, T, kmeans_build_params_t, int64_t> {
 public:
+    using base_type    = float;
+    using storage_type = T;
     // Internal centroids storage - ALWAYS float for cuVS KMeans
     std::unique_ptr<raft::device_matrix<float, int64_t>> centroids_;
 
@@ -98,7 +100,7 @@ public:
 
         this->worker = std::make_unique<cuvs_worker_t>(nthread, this->devices_, this->dist_mode);
 
-        this->flattened_host_dataset.resize(this->count * this->dimension);
+        this->allocate_host_capacity("kmeans", /*with_ids=*/false);
         if (dataset_data) {
             std::copy(dataset_data, dataset_data + (this->count * this->dimension), this->flattened_host_dataset.begin());
         }
@@ -117,7 +119,7 @@ public:
 
         this->worker = std::make_unique<cuvs_worker_t>(static_cast<uint32_t>(nthread), this->devices_, this->dist_mode);
 
-        this->flattened_host_dataset.resize(this->count * this->dimension);
+        this->allocate_host_capacity("kmeans", /*with_ids=*/false);
         if (dataset_data) {
             std::copy(dataset_data, dataset_data + (this->count * this->dimension), this->flattened_host_dataset.begin());
         }
@@ -137,7 +139,7 @@ public:
 
         this->worker = std::make_unique<cuvs_worker_t>(nthread, this->devices_, this->dist_mode);
 
-        this->flattened_host_dataset.resize(this->count * this->dimension);
+        this->allocate_host_capacity("kmeans", /*with_ids=*/false);
     }
 
     // Constructor for kmeans_c.cpp compatibility
@@ -184,6 +186,12 @@ public:
         std::unique_lock<std::shared_mutex> lock(this->mutex_);
         auto res = handle.get_raft_resources();
 
+        // cuVS kmeans is not safe to run twice at once on one GPU (the same
+        // reason ivf_flat/cagra/ivf_pq/brute_force take this lock for build).
+        // Without it, concurrent async ivfflat reindexes each run their own
+        // GpuKMeans::fit on device 0 and race on GPU/RMM state -> SIGABRT.
+        std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+
         cuvs::cluster::kmeans::balanced_params kmeans_params;
         kmeans_params.metric = static_cast<cuvs::distance::DistanceType>(this->metric);
         kmeans_params.n_iters = static_cast<uint32_t>(this->build_params.max_iter);
@@ -210,7 +218,7 @@ public:
 
     kmeans_result_t fit(const T* dataset_data, uint64_t count_vectors) {
         this->count = count_vectors;
-        this->flattened_host_dataset.resize(this->count * this->dimension);
+        this->allocate_host_capacity("kmeans", /*with_ids=*/false);
         std::copy(dataset_data, dataset_data + (this->count * this->dimension), this->flattened_host_dataset.begin());
         
         this->train_quantizer_if_needed();
@@ -219,6 +227,13 @@ public:
             [&](raft_handle_wrapper_t& handle) -> std::any {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
                 auto res = handle.get_raft_resources();
+
+                // cuVS kmeans is not safe to run twice at once on one GPU (the
+                // same reason ivf_flat/cagra/ivf_pq/brute_force take this lock
+                // for build). Without it, concurrent async ivfflat reindexes
+                // each run their own GpuKMeans::fit on device 0 and race on
+                // GPU/RMM state -> SIGABRT.
+                std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
 
                 cuvs::cluster::kmeans::balanced_params kmeans_params;
                 kmeans_params.metric = static_cast<cuvs::distance::DistanceType>(this->metric);
@@ -335,7 +350,7 @@ public:
 
     kmeans_result_t fit_predict(const T* dataset_data, uint64_t count_vectors) {
         this->count = count_vectors;
-        this->flattened_host_dataset.resize(this->count * this->dimension);
+        this->allocate_host_capacity("kmeans", /*with_ids=*/false);
         std::copy(dataset_data, dataset_data + (this->count * this->dimension), this->flattened_host_dataset.begin());
         
         this->train_quantizer_if_needed();
@@ -344,6 +359,13 @@ public:
             [&](raft_handle_wrapper_t& handle) -> std::any {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
                 auto res = handle.get_raft_resources();
+
+                // cuVS kmeans is not safe to run twice at once on one GPU (the
+                // same reason ivf_flat/cagra/ivf_pq/brute_force take this lock
+                // for build). Without it, concurrent async ivfflat reindexes
+                // each run their own GpuKMeans::fit on device 0 and race on
+                // GPU/RMM state -> SIGABRT.
+                std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
 
                 cuvs::cluster::kmeans::balanced_params kmeans_params;
                 kmeans_params.metric = static_cast<cuvs::distance::DistanceType>(this->metric);
@@ -389,11 +411,15 @@ public:
     kmeans_result_t fit_predict_float(const float* dataset_data, uint64_t count_vectors) {
         this->count = count_vectors;
         this->train_quantizer_if_needed();
-        
+
         uint64_t job_id = this->worker->submit_main(
             [&](raft_handle_wrapper_t& handle) -> std::any {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
                 auto res = handle.get_raft_resources();
+
+                // cuVS kmeans is not safe to run twice at once on one GPU; see
+                // the device_build_mutex note in fit()/build_internal().
+                std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
 
                 auto dataset_device_f = raft::make_device_matrix<float, int64_t>(*res, (int64_t)this->count, (int64_t)this->dimension);
                 raft::copy(*res, dataset_device_f.view(), raft::make_host_matrix_view<const float, int64_t>(dataset_data, this->count, this->dimension));
@@ -458,7 +484,7 @@ public:
     }
 
     std::string info() const override {
-        std::string json = gpu_index_base_t<T, kmeans_build_params_t, int64_t>::info();
+        std::string json = gpu_index_base_t<float, T, kmeans_build_params_t, int64_t>::info();
         json += ", \"type\": \"KMeans\", \"kmeans\": {";
         if (centroids_) json += "\"clusters\": " + std::to_string(centroids_->extent(0));
         else json += "\"built\": false";

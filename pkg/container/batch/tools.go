@@ -22,12 +22,15 @@ import (
 func BatchToProtoBatch(bat *Batch) (*api.Batch, error) {
 	rbat := new(api.Batch)
 	rbat.Attrs = bat.Attrs
-	for _, vec := range bat.Vecs {
+	if len(bat.Vecs) > 0 {
+		rbat.Vecs = make([]api.Vector, len(bat.Vecs))
+	}
+	for i, vec := range bat.Vecs {
 		pbVector, err := vector.VectorToProtoVector(vec)
 		if err != nil {
 			return nil, err
 		}
-		rbat.Vecs = append(rbat.Vecs, pbVector)
+		rbat.Vecs[i] = pbVector
 	}
 	return rbat, nil
 

@@ -35,12 +35,12 @@ const bloomFpProbability = 0.001
 // compile-time assertion in package disttae; that shared method set's single
 // source of truth lives in engine.
 //
-// This is intentionally free of any cgo/unsafe detail: a general (non-C-backed)
+// This is intentionally free of any cgo/unsafe detail: a general filter
 // filter implementation only needs to probe. The C-bridge methods live on the
 // separate CFilter contract below, which the cgo search bridge type-asserts.
 //
 // Callers obtain one via New (from tagged bytes produced by Build) and never
-// need to know which concrete structure (cbitmap / CRoaring / bloom) backs it.
+// need to know which concrete structure (cbitmap / Sorted64 / bloom) backs it.
 type MembershipFilter interface {
 	// Test reports whether the raw fixed bytes of a single key may be present.
 	Test(data []byte) bool
@@ -48,7 +48,7 @@ type MembershipFilter interface {
 	TestVector(v *vector.Vector, cb func(bool, bool, int)) []uint8
 	// Valid reports whether the filter is usable.
 	Valid() bool
-	// Exact reports whether membership is exact (a bitset, no false positives)
+	// Exact reports whether membership is exact (a set, no false positives)
 	// rather than approximate (a bloom filter).
 	Exact() bool
 	// Free releases resources / drops one share.
@@ -57,19 +57,19 @@ type MembershipFilter interface {
 	Share() MembershipFilter
 }
 
-// CFilter is the C-backed ADAPTER contract: a MembershipFilter that can also
-// expose its underlying C handle + structure tag for the cgo vector-index
+// CFilter is the C-search ADAPTER contract: a MembershipFilter that can also
+// expose an opaque probe pointer + structure tag for the cgo vector-index
 // filtered-search bridge (pkg/vectorindex/usearchex), whose C predicate tests
 // each candidate key against the structure directly. The bridge type-asserts a
 // MembershipFilter to CFilter, so general filters that cannot back a C search
 // are not forced to expose unsafe.Pointer details.
 type CFilter interface {
 	MembershipFilter
-	// CHandle returns the underlying C handle (mo_cbitmap_t* / roaring64 /
-	// bloomfilter_t*).
+	// CHandle returns the opaque pointer borrowed by the C bridge: either a
+	// native handle or a validated, Go-owned Sorted64 payload.
 	CHandle() unsafe.Pointer
-	// CKind reports the structure tag (TagBloom / TagCRoaring / TagCbitmap),
-	// telling the bridge which C membership test to dispatch.
+	// CKind reports the structure tag (TagBloom / TagCRoaring / TagCbitmap /
+	// TagSorted64), telling the bridge which C membership test to dispatch.
 	CKind() byte
 }
 
@@ -77,75 +77,139 @@ var (
 	_ MembershipFilter = (*CbitmapFilter)(nil)
 	_ MembershipFilter = (*CRoaringFilter)(nil)
 	_ MembershipFilter = (*cbloomFilter)(nil)
-	// The concrete C-backed filters also satisfy the cgo-bridge adapter.
+	_ MembershipFilter = (*Sorted64Filter)(nil)
+	// Every concrete filter also satisfies the C-search bridge adapter.
 	_ CFilter = (*CbitmapFilter)(nil)
 	_ CFilter = (*CRoaringFilter)(nil)
 	_ CFilter = (*cbloomFilter)(nil)
+	_ CFilter = (*Sorted64Filter)(nil)
 )
 
 // Build serializes the best doc_id filter for the whole vector and returns the
-// tagged bytes: an exact bitset (cbitmap for a bounded integer-id range, else
-// CRoaring) for integer PKs, or a CBloomFilter for non-integer PKs. Build and
-// probe read the column buffer directly in C (one cgo call). Callers just
+// tagged bytes: an exact set (cbitmap for a cost-effective integer-id range,
+// else Sorted64) for integer PKs, or a CBloomFilter for non-integer PKs. Dense
+// integer and bloom probes read the column buffer directly in C. Callers just
 // transport the bytes; New reconstructs the right filter from the tag.
 func Build(v *vector.Vector) ([]byte, error) {
-	if SupportsBitset(*v.GetType()) {
-		tag, payload, err := BuildIntegerFilter(v)
-		if err != nil {
-			return nil, err
-		}
-		return append([]byte{tag}, payload...), nil
+	return BuildWithMemoryAdmission(v, nil)
+}
+
+// BuildWithMemoryAdmission is Build with CN-wide peak-memory admission at the
+// allocation site. A denied reservation is an error because silently omitting
+// an exact prefilter can change Top-K results.
+func BuildWithMemoryAdmission(
+	v *vector.Vector,
+	admission MemoryAdmission,
+) ([]byte, error) {
+	bytes, ok := buildAllocationBytes(v)
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtx(
+			"docfilter: invalid filter allocation size")
 	}
-	payload, err := buildBloomBytes(v)
+	release, err := acquireMemory(admission, bytes)
 	if err != nil {
 		return nil, err
 	}
-	return append([]byte{TagBloom}, payload...), nil
+	if release != nil {
+		defer release()
+	}
+	if SupportsBitset(*v.GetType()) {
+		return buildTaggedIntegerFilter(v)
+	}
+	return buildTaggedBloomBytes(v)
 }
 
 // New reconstructs a MembershipFilter from the tagged bytes produced by Build.
 func New(data []byte) (MembershipFilter, error) {
+	return NewWithMemoryAdmission(data, nil)
+}
+
+// NewWithMemoryAdmission is New with one shared lease covering the retained
+// wire payload and any reconstructed allocation. The last shared reader frees
+// the filter, refreshes RSS, and then releases the reservation.
+func NewWithMemoryAdmission(
+	data []byte,
+	admission MemoryAdmission,
+) (MembershipFilter, error) {
 	if len(data) <= 1 {
 		return nil, moerr.NewInternalErrorNoCtx("docfilter: empty filter payload")
 	}
 	tag, payload := data[0], data[1:]
+	switch tag {
+	case TagCbitmap, TagCRoaring, TagSorted64, TagBloom:
+	default:
+		return nil, moerr.NewInternalErrorNoCtx("docfilter: unknown filter tag")
+	}
+	bytes, ok := reconstructAllocationBytes(tag, payload)
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtx("docfilter: invalid filter allocation size")
+	}
+	release, err := acquireMemory(admission, bytes)
+	if err != nil {
+		return nil, err
+	}
+	owned := false
+	defer func() {
+		if !owned && release != nil {
+			release()
+		}
+	}()
 	switch tag {
 	case TagCbitmap:
 		f, err := NewCbitmapFilter(payload)
 		if err != nil {
 			return nil, err
 		}
+		f.memoryRelease = release
+		owned = true
 		return f, nil
 	case TagCRoaring:
 		f, err := NewCRoaringFilter(payload)
 		if err != nil {
 			return nil, err
 		}
+		f.memoryRelease = release
+		owned = true
+		return f, nil
+	case TagSorted64:
+		f, err := NewSorted64Filter(payload)
+		if err != nil {
+			return nil, err
+		}
+		f.memoryRelease = release
+		owned = true
 		return f, nil
 	case TagBloom:
 		bf := &bloomfilter.CBloomFilter{}
 		if err := bf.Unmarshal(payload); err != nil {
 			return nil, err
 		}
-		return &cbloomFilter{bf: bf}, nil
+		owned = true
+		return &cbloomFilter{bf: bf, memory: newSharedMemoryRelease(release)}, nil
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("docfilter: unknown filter tag")
 	}
 }
 
-// buildBloomBytes builds a CBloomFilter over the vector and marshals it (the
-// non-integer-PK fallback).
-func buildBloomBytes(v *vector.Vector) ([]byte, error) {
+func buildTaggedBloomBytes(v *vector.Vector) ([]byte, error) {
+	return buildBloomBytesMode(v, true)
+}
+
+func buildBloomBytesMode(v *vector.Vector, tagged bool) ([]byte, error) {
 	bf := bloomfilter.NewCBloomFilterWithProbability(int64(v.Length()), bloomFpProbability)
 	defer bf.Free()
 	bf.AddVector(v)
+	if tagged {
+		return bf.MarshalWithPrefix(TagBloom)
+	}
 	return bf.Marshal()
 }
 
 // cbloomFilter adapts *bloomfilter.CBloomFilter to MembershipFilter (the non-integer
 // PK fallback), so New can return it behind the interface like the bitsets.
 type cbloomFilter struct {
-	bf *bloomfilter.CBloomFilter
+	bf     *bloomfilter.CBloomFilter
+	memory *sharedMemoryRelease
 }
 
 func (f *cbloomFilter) Test(data []byte) bool {
@@ -180,9 +244,13 @@ func (f *cbloomFilter) CKind() byte { return TagBloom }
 func (f *cbloomFilter) Free() {
 	if f != nil && f.bf != nil {
 		f.bf.Free()
+		f.memory.free()
+		f.bf = nil
+		f.memory = nil
 	}
 }
 
 func (f *cbloomFilter) Share() MembershipFilter {
-	return &cbloomFilter{bf: f.bf.SharePointer()}
+	f.memory.share()
+	return &cbloomFilter{bf: f.bf.SharePointer(), memory: f.memory}
 }

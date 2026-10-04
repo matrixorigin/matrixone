@@ -15,13 +15,18 @@
 package config
 
 import (
+	"bytes"
 	"context"
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	btoml "github.com/BurntSushi/toml"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -208,6 +213,380 @@ var (
 	defaultConnectTimeout = time.Minute
 )
 
+const (
+	IcebergConfigKeyManifestCacheBytes      = "iceberg.scan.manifest_cache_bytes"
+	IcebergConfigKeyManifestCacheTTL        = "iceberg.scan.manifest_cache_ttl"
+	IcebergConfigKeyManifestReadParallelism = "iceberg.scan.manifest_read_parallelism"
+	IcebergConfigKeyMaxManifestFiles        = "iceberg.scan.max_manifest_files"
+	IcebergConfigKeyMaxDataFiles            = "iceberg.scan.max_data_files"
+	IcebergConfigKeyPlanningMaxMemory       = "iceberg.scan.planning_max_memory"
+	IcebergConfigKeyServerPlanningMode      = "iceberg.scan.server_planning"
+	IcebergConfigKeyPlanningTimeout         = "iceberg.planning.timeout"
+	IcebergConfigKeyDeleteMaxMemory         = "iceberg.delete.max_memory"
+	IcebergConfigKeyDMLMaxMemory            = "iceberg.write.dml_max_memory"
+	IcebergConfigKeyEnableDeleteSpill       = "iceberg.delete.enable_spill"
+	IcebergConfigKeyWriteOrphanTTL          = "iceberg.write.orphan_ttl"
+	IcebergConfigKeyEnableOrphanGC          = "iceberg.write.enable_orphan_gc"
+	IcebergConfigKeyProtectedCNToCN         = "iceberg.security.protected_cn_to_cn"
+
+	IcebergServerPlanningOff      = "off"
+	IcebergServerPlanningAuto     = "auto"
+	IcebergServerPlanningRequired = "required"
+)
+
+type IcebergParameters struct {
+	Enable                  bool          `toml:"enable" user_setting:"advanced"`
+	EnablePerAccount        bool          `toml:"enable-per-account" user_setting:"advanced"`
+	ManifestCacheBytes      int64         `toml:"manifest-cache-bytes" user_setting:"advanced"`
+	ManifestCacheTTL        toml.Duration `toml:"manifest-cache-ttl" user_setting:"advanced"`
+	ManifestReadParallelism int           `toml:"manifest-read-parallelism" user_setting:"advanced"`
+	MaxManifestFiles        int           `toml:"max-manifest-files" user_setting:"advanced"`
+	MaxDataFiles            int           `toml:"max-data-files" user_setting:"advanced"`
+	PlanningMaxMemory       int64         `toml:"planning-max-memory" user_setting:"advanced"`
+	ServerPlanningMode      string        `toml:"server-planning-mode" user_setting:"advanced"`
+	PlanningTimeout         toml.Duration `toml:"planning-timeout" user_setting:"advanced"`
+	EnableWrite             bool          `toml:"enable-write" user_setting:"advanced"`
+	EnableDelete            bool          `toml:"enable-delete" user_setting:"advanced"`
+	DeleteMaxMemory         int64         `toml:"delete-max-memory" user_setting:"advanced"`
+	DMLMaxMemory            int64         `toml:"dml-max-memory" user_setting:"advanced"`
+	EnableDeleteSpill       bool          `toml:"enable-delete-spill" user_setting:"advanced"`
+	EnableDML               bool          `toml:"enable-dml" user_setting:"advanced"`
+	EnableMaintenance       bool          `toml:"enable-maintenance" user_setting:"advanced"`
+	EnableRemoteSigning     bool          `toml:"enable-remote-signing" user_setting:"advanced"`
+	ProtectedCNToCN         bool          `toml:"protected-cn-to-cn" user_setting:"advanced"`
+	OrphanTTL               toml.Duration `toml:"orphan-ttl" user_setting:"advanced"`
+	EnableOrphanGC          bool          `toml:"enable-orphan-gc" user_setting:"advanced"`
+}
+
+type MongoDBParameters struct {
+	Enable                 bool          `toml:"enable" user_setting:"advanced"`
+	EnablePerAccount       bool          `toml:"enable-per-account" user_setting:"advanced"`
+	AllowedAccounts        []uint32      `toml:"allowed-accounts" user_setting:"advanced"`
+	AllowLoopback          bool          `toml:"allow-loopback" user_setting:"advanced"`
+	AllowedHostSuffixes    []string      `toml:"allowed-host-suffixes" user_setting:"advanced"`
+	AllowedCIDRs           []string      `toml:"allowed-cidrs" user_setting:"advanced"`
+	ConnectTimeout         toml.Duration `toml:"connect-timeout" user_setting:"advanced"`
+	ServerSelectionTimeout toml.Duration `toml:"server-selection-timeout" user_setting:"advanced"`
+	SocketTimeout          toml.Duration `toml:"socket-timeout" user_setting:"advanced"`
+	MaxPoolSize            uint64        `toml:"max-pool-size" user_setting:"advanced"`
+	MinPoolSize            uint64        `toml:"min-pool-size" user_setting:"advanced"`
+	MaxConnecting          uint64        `toml:"max-connecting" user_setting:"advanced"`
+	MaxCachedClients       int           `toml:"max-cached-clients" user_setting:"advanced"`
+	BatchRows              int32         `toml:"batch-rows" user_setting:"advanced"`
+	MaxBatchBytes          int64         `toml:"max-batch-bytes" user_setting:"advanced"`
+	MaxValueBytes          int64         `toml:"max-value-bytes" user_setting:"advanced"`
+	MaxScanRows            int64         `toml:"max-scan-rows" user_setting:"advanced"`
+	MaxScanBytes           int64         `toml:"max-scan-bytes" user_setting:"advanced"`
+	MaxConversionErrors    int64         `toml:"max-conversion-errors" user_setting:"advanced"`
+	MaxConversionErrorRate float64       `toml:"max-conversion-error-rate" user_setting:"advanced"`
+	MaxSourceConcurrency   int           `toml:"max-source-concurrency" user_setting:"advanced"`
+
+	// enableConfigured records a TOML-provided value. enableDefaulted makes
+	// defaulting idempotent so a later programmatic false remains an opt-out.
+	enableConfigured bool
+	enableDefaulted  bool
+}
+
+const (
+	arrowLoadEnabledConfigured uint8 = 1 << iota
+	arrowLoadS3EnabledConfigured
+	arrowLoadDistributedEnabledConfigured
+)
+
+// ArrowLoadParameters controls the LOAD-only Arrow IPC surface. Local files,
+// S3-backed sources, and distributed execution are available by default; the
+// three enable fields remain explicit deployment kill switches.
+//
+// configuredFields distinguishes an omitted TOML key from an explicit false.
+// defaultsApplied makes repeated service validation idempotent, so a later
+// programmatic false is not silently changed back to true.
+type ArrowLoadParameters struct {
+	Enabled            bool `toml:"enabled" user_setting:"advanced"`
+	S3Enabled          bool `toml:"s3-enabled" user_setting:"advanced"`
+	DistributedEnabled bool `toml:"distributed-enabled" user_setting:"advanced"`
+	// ForceMaterialize disables the Arrow-to-MO borrow path without disabling
+	// Arrow LOAD itself. It is a rollout diagnostic and emergency fallback, not
+	// the normal execution policy, so its zero value keeps borrowing enabled.
+	ForceMaterialize bool `toml:"force-materialize" user_setting:"advanced"`
+
+	configuredFields uint8
+	defaultsApplied  bool
+}
+
+// NewArrowLoadParameters returns the default-on Arrow LOAD settings. Callers
+// that adjust a programmatic service configuration should start from
+// this value so an explicit setting survives later validation and defaulting
+// passes.
+func NewArrowLoadParameters() *ArrowLoadParameters {
+	parameters := &ArrowLoadParameters{}
+	parameters.SetDefaultValues()
+	return parameters
+}
+
+// UnmarshalTOML records explicit opt-outs while preserving defaults for omitted
+// keys. BurntSushi TOML matches field names case-insensitively, so conflicting
+// case variants are rejected instead of making the selected value ambiguous.
+func (parameters *ArrowLoadParameters) UnmarshalTOML(value interface{}) error {
+	table, ok := value.(map[string]interface{})
+	if !ok {
+		return moerr.NewBadConfigNoCtx("arrow-load configuration must be a TOML table")
+	}
+
+	var configured uint8
+	for key := range table {
+		var field uint8
+		var name string
+		switch {
+		case strings.EqualFold(key, "enabled"):
+			field, name = arrowLoadEnabledConfigured, "enabled"
+		case strings.EqualFold(key, "s3-enabled"):
+			field, name = arrowLoadS3EnabledConfigured, "s3-enabled"
+		case strings.EqualFold(key, "distributed-enabled"):
+			field, name = arrowLoadDistributedEnabledConfigured, "distributed-enabled"
+		default:
+			continue
+		}
+		if configured&field != 0 {
+			return moerr.NewBadConfigNoCtxf(
+				"arrow-load configuration contains conflicting %s keys", name,
+			)
+		}
+		configured |= field
+	}
+
+	var encoded bytes.Buffer
+	if err := btoml.NewEncoder(&encoded).Encode(table); err != nil {
+		return err
+	}
+	type plainArrowLoadParameters ArrowLoadParameters
+	decoded := plainArrowLoadParameters(*parameters)
+	if _, err := btoml.Decode(encoded.String(), &decoded); err != nil {
+		return err
+	}
+	*parameters = ArrowLoadParameters(decoded)
+	parameters.configuredFields |= configured
+	return nil
+}
+
+// SetDefaultValues enables every supported Arrow LOAD source and execution
+// mode unless the corresponding TOML key was explicitly configured.
+func (parameters *ArrowLoadParameters) SetDefaultValues() {
+	if parameters.defaultsApplied {
+		return
+	}
+	if parameters.configuredFields&arrowLoadEnabledConfigured == 0 {
+		parameters.Enabled = true
+	}
+	if parameters.configuredFields&arrowLoadS3EnabledConfigured == 0 {
+		parameters.S3Enabled = true
+	}
+	if parameters.configuredFields&arrowLoadDistributedEnabledConfigured == 0 {
+		parameters.DistributedEnabled = true
+	}
+	parameters.defaultsApplied = true
+}
+
+// NewMongoDBParameters returns MongoDB parameters with defaults that must be
+// established before TOML decoding. Initializing Enable here lets an explicit
+// false from either TOML or programmatic configuration remain meaningful when
+// SetDefaultValues is called again later in the service lifecycle.
+func NewMongoDBParameters() *MongoDBParameters {
+	return &MongoDBParameters{Enable: true, enableDefaulted: true}
+}
+
+// UnmarshalTOML rejects ambiguous case variants while preserving defaults that
+// were initialized before decoding. The alias prevents recursive calls back
+// into this method when decoding the remaining MongoDB settings.
+func (parameters *MongoDBParameters) UnmarshalTOML(value interface{}) error {
+	table, ok := value.(map[string]interface{})
+	if !ok {
+		return moerr.NewBadConfigNoCtx("mongodb configuration must be a TOML table")
+	}
+	enableConfigured := false
+	for key := range table {
+		if !strings.EqualFold(key, "enable") {
+			continue
+		}
+		if enableConfigured {
+			return moerr.NewBadConfigNoCtx("mongodb configuration contains conflicting enable keys")
+		}
+		enableConfigured = true
+	}
+
+	var encoded bytes.Buffer
+	if err := btoml.NewEncoder(&encoded).Encode(table); err != nil {
+		return err
+	}
+	type plainMongoDBParameters MongoDBParameters
+	decoded := plainMongoDBParameters(*parameters)
+	if _, err := btoml.Decode(encoded.String(), &decoded); err != nil {
+		return err
+	}
+	*parameters = MongoDBParameters(decoded)
+	parameters.enableConfigured = enableConfigured
+	return nil
+}
+
+func (parameters *MongoDBParameters) SetDefaultValues() {
+	if !parameters.enableConfigured && !parameters.enableDefaulted {
+		parameters.Enable = true
+	}
+	parameters.enableDefaulted = true
+	if parameters.ConnectTimeout.Duration == 0 {
+		parameters.ConnectTimeout.Duration = 10 * time.Second
+	}
+	if parameters.ServerSelectionTimeout.Duration == 0 {
+		parameters.ServerSelectionTimeout.Duration = 10 * time.Second
+	}
+	if parameters.SocketTimeout.Duration == 0 {
+		parameters.SocketTimeout.Duration = 30 * time.Second
+	}
+	if parameters.MaxPoolSize == 0 {
+		parameters.MaxPoolSize = 32
+	}
+	if parameters.MaxConnecting == 0 {
+		parameters.MaxConnecting = 2
+	}
+	if parameters.MaxCachedClients == 0 {
+		parameters.MaxCachedClients = 64
+	}
+	if parameters.BatchRows == 0 {
+		parameters.BatchRows = 8192
+	}
+	if parameters.MaxBatchBytes == 0 {
+		parameters.MaxBatchBytes = 64 << 20
+	}
+	if parameters.MaxValueBytes == 0 {
+		parameters.MaxValueBytes = 16 << 20
+	}
+	if parameters.MaxScanRows == 0 {
+		parameters.MaxScanRows = 50_000_000
+	}
+	if parameters.MaxScanBytes == 0 {
+		parameters.MaxScanBytes = 32 << 30
+	}
+	if parameters.MaxConversionErrors == 0 {
+		parameters.MaxConversionErrors = 1_000
+	}
+	if parameters.MaxConversionErrorRate == 0 {
+		parameters.MaxConversionErrorRate = 0.10
+	}
+	if parameters.MaxSourceConcurrency == 0 {
+		parameters.MaxSourceConcurrency = 4
+	}
+}
+
+func (parameters MongoDBParameters) Validate(ctx context.Context) error {
+	if parameters.ConnectTimeout.Duration <= 0 || parameters.ServerSelectionTimeout.Duration <= 0 || parameters.SocketTimeout.Duration <= 0 {
+		return moerr.NewBadConfig(ctx, "mongodb timeouts must be greater than zero")
+	}
+	if parameters.MaxPoolSize == 0 || parameters.MaxConnecting == 0 || parameters.MaxCachedClients <= 0 || parameters.MinPoolSize > parameters.MaxPoolSize {
+		return moerr.NewBadConfig(ctx, "mongodb pool limits are invalid")
+	}
+	if parameters.BatchRows <= 0 || parameters.MaxBatchBytes <= 0 || parameters.MaxValueBytes <= 0 || parameters.MaxValueBytes > parameters.MaxBatchBytes {
+		return moerr.NewBadConfig(ctx, "mongodb batch/value limits are invalid")
+	}
+	if parameters.MaxScanRows <= 0 || parameters.MaxScanBytes <= 0 || parameters.MaxSourceConcurrency <= 0 {
+		return moerr.NewBadConfig(ctx, "mongodb source protection limits must be greater than zero")
+	}
+	if parameters.MaxConversionErrors <= 0 || parameters.MaxConversionErrorRate <= 0 || parameters.MaxConversionErrorRate > 1 {
+		return moerr.NewBadConfig(ctx, "mongodb conversion error limits are invalid")
+	}
+	for _, raw := range parameters.AllowedHostSuffixes {
+		suffix := strings.Trim(strings.TrimSpace(raw), ".")
+		if suffix == "" || net.ParseIP(suffix) != nil || strings.ContainsAny(suffix, "*/@: \t\r\n") {
+			return moerr.NewBadConfig(ctx, "mongodb allowed host suffix is invalid")
+		}
+	}
+	for _, raw := range parameters.AllowedCIDRs {
+		if _, _, err := net.ParseCIDR(strings.TrimSpace(raw)); err != nil {
+			return moerr.NewBadConfig(ctx, "mongodb allowed CIDR is invalid")
+		}
+	}
+	return nil
+}
+
+func (ip *IcebergParameters) SetDefaultValues() {
+	if ip.ManifestCacheBytes == 0 {
+		ip.ManifestCacheBytes = 256 << 20
+	}
+	if ip.ManifestCacheTTL.Duration == 0 {
+		ip.ManifestCacheTTL.Duration = 5 * time.Minute
+	}
+	if ip.ManifestReadParallelism == 0 {
+		ip.ManifestReadParallelism = 8
+	}
+	if ip.MaxManifestFiles == 0 {
+		ip.MaxManifestFiles = 100000
+	}
+	if ip.MaxDataFiles == 0 {
+		ip.MaxDataFiles = 1000000
+	}
+	if ip.PlanningMaxMemory == 0 {
+		ip.PlanningMaxMemory = 256 << 20
+	}
+	if ip.ServerPlanningMode == "" {
+		ip.ServerPlanningMode = IcebergServerPlanningAuto
+	}
+	if ip.PlanningTimeout.Duration == 0 {
+		ip.PlanningTimeout.Duration = 30 * time.Second
+	}
+	if ip.DeleteMaxMemory == 0 {
+		ip.DeleteMaxMemory = 256 << 20
+	}
+	if ip.DMLMaxMemory == 0 {
+		ip.DMLMaxMemory = 256 << 20
+	}
+	if ip.OrphanTTL.Duration == 0 {
+		ip.OrphanTTL.Duration = 24 * time.Hour
+	}
+}
+
+func (ip IcebergParameters) Validate(ctx context.Context) error {
+	if ip.ManifestCacheBytes < 0 {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyManifestCacheBytes+" must be greater than or equal to zero")
+	}
+	if ip.ManifestCacheTTL.Duration < 0 {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyManifestCacheTTL+" must be greater than or equal to zero")
+	}
+	if ip.ManifestReadParallelism <= 0 {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyManifestReadParallelism+" must be greater than zero")
+	}
+	if ip.MaxManifestFiles <= 0 {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyMaxManifestFiles+" must be greater than zero")
+	}
+	if ip.MaxDataFiles <= 0 {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyMaxDataFiles+" must be greater than zero")
+	}
+	if ip.PlanningMaxMemory <= 0 {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyPlanningMaxMemory+" must be greater than zero")
+	}
+	switch ip.ServerPlanningMode {
+	case IcebergServerPlanningOff, IcebergServerPlanningAuto, IcebergServerPlanningRequired:
+	default:
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyServerPlanningMode+" must be off, auto, or required")
+	}
+	if ip.PlanningTimeout.Duration < 0 {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyPlanningTimeout+" must be greater than or equal to zero")
+	}
+	if ip.DeleteMaxMemory < 0 {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyDeleteMaxMemory+" must be greater than or equal to zero")
+	}
+	if ip.DMLMaxMemory <= 0 {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyDMLMaxMemory+" must be greater than zero")
+	}
+	if ip.EnableDeleteSpill {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyEnableDeleteSpill+" is not supported; keep enable-delete-spill disabled")
+	}
+	if ip.OrphanTTL.Duration < 0 {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyWriteOrphanTTL+" must be greater than or equal to zero")
+	}
+	if ip.EnableOrphanGC {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyEnableOrphanGC+" is not supported; orphan files are recorded for audited cleanup")
+	}
+	return nil
+}
+
 // FrontendParameters of the frontend
 type FrontendParameters struct {
 	MoVersion string
@@ -232,6 +611,9 @@ type FrontendParameters struct {
 
 	//process.Limitation.Size. default: 10 << 32 = 42949672960
 	ProcessLimitationSize int64 `toml:"processLimitationSize"`
+
+	// process.Limitation.SpillSize. Zero selects the bounded query default.
+	ProcessLimitationSpillSize int64 `toml:"processLimitationSpillSize"`
 
 	//process.Limitation.BatchRows. default: 10 << 32 = 42949672960
 	ProcessLimitationBatchRows int64 `toml:"processLimitationBatchRows"`
@@ -376,6 +758,10 @@ type FrontendParameters struct {
 	// Can be overridden per-session with SET sidecar_url = '...' or
 	// globally for new sessions with SET GLOBAL sidecar_url = '...'.
 	SidecarURL string `toml:"sidecarUrl" user_setting:"advanced"`
+
+	Iceberg   IcebergParameters   `toml:"iceberg" user_setting:"advanced"`
+	MongoDB   MongoDBParameters   `toml:"mongodb" user_setting:"advanced"`
+	ArrowLoad ArrowLoadParameters `toml:"arrow-load" user_setting:"advanced"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
@@ -532,6 +918,10 @@ func (fp *FrontendParameters) SetDefaultValues() {
 	if fp.ConnectTimeout.Duration == 0 {
 		fp.ConnectTimeout.Duration = defaultConnectTimeout
 	}
+
+	fp.Iceberg.SetDefaultValues()
+	fp.MongoDB.SetDefaultValues()
+	fp.ArrowLoad.SetDefaultValues()
 }
 
 func (fp *FrontendParameters) SetMaxMessageSize(size uint64) {

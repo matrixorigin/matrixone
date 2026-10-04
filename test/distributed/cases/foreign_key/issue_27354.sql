@@ -1,0 +1,14 @@
+drop database if exists issue_27354;
+create database issue_27354;
+use issue_27354;
+
+create table parent_t(id varchar(8) primary key);
+
+create external table ext_fk (id varchar(8) mongodb_path '_id', constraint fk_ext foreign key(id) references parent_t(id)) engine=mongodb with ('connection'='source', 'database'='test_db', 'collection'='events', 'schema_mode'='explicit');
+
+show tables;
+select table_name, constraint_name, refer_table_name
+from mo_catalog.mo_foreign_keys
+where db_name = database();
+
+drop database issue_27354;

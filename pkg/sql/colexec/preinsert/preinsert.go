@@ -16,6 +16,7 @@ package preinsert
 
 import (
 	"bytes"
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -37,6 +39,8 @@ import (
 )
 
 const opName = "preinsert"
+
+const autoIncrementGeneratedAttr = "__mo_auto_increment_generated"
 
 func (preInsert *PreInsert) String(buf *bytes.Buffer) {
 	buf.WriteString(opName)
@@ -74,6 +78,9 @@ func (preInsert *PreInsert) Prepare(proc *process.Process) (err error) {
 		if err = preInsert.refreshAutoIncrementTableID(proc); err != nil {
 			return
 		}
+	}
+	if preInsert.TrackAutoIncrementGenerated && preInsert.AutoIncrementGeneratedColumn < 0 {
+		return moerr.NewInvalidInput(proc.Ctx, "invalid auto-increment provenance column")
 	}
 	return
 }
@@ -243,34 +250,185 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 	if err != nil {
 		return result, err
 	}
+	workBat := preInsert.ctr.buf
+	var selectedRows []int64
+	if preInsert.HasTargetSelector {
+		selectedRows, err = preInsert.targetSelectedRows(proc, bat)
+		if err != nil {
+			return result, err
+		}
+		workBat, err = preInsert.ctr.buf.Clone(proc.Mp(), true)
+		if err != nil {
+			return result, err
+		}
+		defer workBat.Clean(proc.Mp())
+		workBat.Shrink(selectedRows, false)
+		workBat.SetRowCount(len(selectedRows))
+	}
+	if err = checkZeroTemporalInStrictMode(preInsert, workBat, proc); err != nil {
+		return result, err
+	}
 	// keep shuffleIDX unchanged
 	preInsert.ctr.buf.ShuffleIDX = bat.ShuffleIDX
 	preInsert.ctr.buf.AddRowCount(bat.RowCount())
 
-	if preInsert.HasAutoCol {
+	if preInsert.HasAutoCol && (!preInsert.HasTargetSelector || len(selectedRows) > 0) {
 		if shouldConvertZeroToNull(preInsert, proc) {
-			convertZeroToNull(preInsert.ctr.buf, preInsert)
+			convertZeroToNull(workBat, preInsert)
+		}
+		if err = preInsert.captureAutoIncrementGeneratedRows(workBat); err != nil {
+			return result, err
 		}
 		start := time.Now()
-		err = genAutoIncrCol(preInsert.ctr.buf, proc, preInsert)
+		err = genAutoIncrCol(workBat, proc, preInsert)
 		if err != nil {
 			return result, err
 		}
+		if preInsert.HasTargetSelector {
+			for idx, col := range preInsert.TableDef.Cols {
+				if !col.Typ.AutoIncr {
+					continue
+				}
+				vecIdx := int(preInsert.ColOffset) + idx
+				for selectedIdx, inputIdx := range selectedRows {
+					if err = preInsert.ctr.buf.Vecs[vecIdx].Copy(
+						workBat.Vecs[vecIdx], inputIdx, int64(selectedIdx), proc.Mp()); err != nil {
+						return result, err
+					}
+				}
+			}
+		}
 		analyzer.AddIncrementTime(start)
 	}
-	// check new rows not null
-	tempVecs := preInsert.ctr.buf.Vecs[preInsert.ColOffset : int(preInsert.ColOffset)+len(preInsert.Attrs)]
-	err = colexec.BatchDataNotNullCheck(tempVecs, preInsert.Attrs, preInsert.TableDef, proc.Ctx)
-	if err != nil {
-		return result, err
+	// An unmatched target contributes no row to this UPDATE branch. Its outer
+	// join placeholders must not participate in target-table constraints.
+	if !preInsert.HasTargetSelector || len(selectedRows) > 0 {
+		// check new rows not null
+		tempVecs := workBat.Vecs[preInsert.ColOffset : int(preInsert.ColOffset)+len(preInsert.Attrs)]
+		err = colexec.BatchDataNotNullCheck(tempVecs, preInsert.Attrs, preInsert.TableDef, proc.Ctx)
+		if err != nil {
+			return result, err
+		}
 	}
 
 	if err = preInsert.constructHiddenColBuf(proc, bat, first); err != nil {
 		return result, err
 	}
+	if err = preInsert.constructAutoIncrementGeneratedCol(proc, bat, first); err != nil {
+		return result, err
+	}
 
 	result.Batch = preInsert.ctr.buf
 	return result, nil
+}
+
+func (preInsert *PreInsert) captureAutoIncrementGeneratedRows(bat *batch.Batch) error {
+	if !preInsert.TrackAutoIncrementGenerated {
+		return nil
+	}
+	autoCol := -1
+	for i, col := range preInsert.TableDef.Cols {
+		if !col.Typ.AutoIncr {
+			continue
+		}
+		if autoCol >= 0 {
+			return moerr.NewInvalidInputNoCtx("auto-increment provenance requires one auto-increment column")
+		}
+		autoCol = i
+	}
+	if autoCol < 0 {
+		return moerr.NewInvalidInputNoCtx("auto-increment provenance has no auto-increment column")
+	}
+	pos := int(preInsert.ColOffset) + autoCol
+	if pos < 0 || pos >= len(bat.Vecs) {
+		return moerr.NewInternalErrorNoCtxf(
+			"auto-increment provenance input column %d is outside batch width %d",
+			pos, len(bat.Vecs))
+	}
+	vec := bat.Vecs[pos]
+	generated := make([]bool, bat.RowCount())
+	for row := range generated {
+		generated[row] = vec.IsNull(uint64(row))
+	}
+	preInsert.ctr.autoIncrementGenerated = generated
+	return nil
+}
+
+func (preInsert *PreInsert) constructAutoIncrementGeneratedCol(
+	proc *proc,
+	bat *batch.Batch,
+	first bool,
+) error {
+	if !preInsert.TrackAutoIncrementGenerated {
+		return nil
+	}
+	markerPos := int(preInsert.AutoIncrementGeneratedColumn)
+	if markerPos < 0 {
+		return moerr.NewInvalidInput(proc.Ctx, "invalid auto-increment provenance column")
+	}
+	if first {
+		if markerPos != len(preInsert.ctr.buf.Vecs) {
+			return moerr.NewInternalErrorf(proc.Ctx,
+				"auto-increment provenance column %d does not follow PRE_INSERT output width %d",
+				markerPos, len(preInsert.ctr.buf.Vecs))
+		}
+		preInsert.ctr.canFreeVecIdx[markerPos] = true
+		preInsert.ctr.buf.Vecs = append(preInsert.ctr.buf.Vecs,
+			vector.NewOffHeapVecWithType(types.T_bool.ToType()))
+		preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, autoIncrementGeneratedAttr)
+	} else {
+		if markerPos >= len(preInsert.ctr.buf.Vecs) {
+			return moerr.NewInternalErrorf(proc.Ctx,
+				"auto-increment provenance column %d is outside PRE_INSERT output width %d",
+				markerPos, len(preInsert.ctr.buf.Vecs))
+		}
+		preInsert.ctr.buf.Vecs[markerPos].CleanOnlyData()
+	}
+	generated := preInsert.ctr.autoIncrementGenerated
+	preInsert.ctr.autoIncrementGenerated = nil
+	if len(generated) != bat.RowCount() {
+		return moerr.NewInternalErrorf(proc.Ctx,
+			"auto-increment provenance rows %d do not match batch rows %d",
+			len(generated), bat.RowCount())
+	}
+	for _, value := range generated {
+		if err := vector.AppendFixed(
+			preInsert.ctr.buf.Vecs[markerPos], value, false, proc.Mp()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (preInsert *PreInsert) targetSelectedRows(proc *proc, bat *batch.Batch) ([]int64, error) {
+	rowNumberPos := int(preInsert.TargetRowNumberCol)
+	activePos := int(preInsert.TargetActiveCol)
+	rowIDPos := int(preInsert.TargetRowIDCol)
+	if rowNumberPos < 0 || rowNumberPos >= len(bat.Vecs) || activePos < 0 || activePos >= len(bat.Vecs) ||
+		rowIDPos < 0 || rowIDPos >= len(bat.Vecs) {
+		return nil, moerr.NewInternalErrorf(
+			proc.Ctx,
+			"invalid pre-insert target selector columns: row_number=%d active=%d row_id=%d input=%d",
+			rowNumberPos, activePos, rowIDPos, len(bat.Vecs),
+		)
+	}
+	rowNumberVec := bat.Vecs[rowNumberPos]
+	activeVec := bat.Vecs[activePos]
+	rowIDVec := bat.Vecs[rowIDPos]
+	if rowNumberVec.GetType().Oid != types.T_int64 || activeVec.GetType().Oid != types.T_bool ||
+		rowIDVec.GetType().Oid != types.T_Rowid {
+		return nil, moerr.NewInternalError(proc.Ctx, "invalid pre-insert target selector types")
+	}
+	selected := make([]int64, 0, bat.RowCount())
+	for row := 0; row < bat.RowCount(); row++ {
+		if rowNumberVec.IsNull(uint64(row)) || activeVec.IsNull(uint64(row)) || rowIDVec.IsNull(uint64(row)) ||
+			vector.GetFixedAtNoTypeCheck[int64](rowNumberVec, row) != 1 ||
+			!vector.GetFixedAtNoTypeCheck[bool](activeVec, row) {
+			continue
+		}
+		selected = append(selected, int64(row))
+	}
+	return selected, nil
 }
 
 func shouldTreatZeroAsAutoIncr(proc *proc) bool {
@@ -301,6 +459,55 @@ func shouldConvertZeroToNull(preInsert *PreInsert, proc *proc) bool {
 		return false
 	}
 	return shouldTreatZeroAsAutoIncr(proc)
+}
+
+// checkZeroTemporalInStrictMode covers expression-produced values that bypass
+// literal conversion. It also enforces the unconditional TIMESTAMP lower bound.
+func checkZeroTemporalInStrictMode(preInsert *PreInsert, bat *batch.Batch, proc *proc) error {
+	if preInsert == nil || bat == nil || proc == nil {
+		return nil
+	}
+
+	for idx := range preInsert.Attrs {
+		vecIdx := int(preInsert.ColOffset) + idx
+		if vecIdx >= len(bat.Vecs) || bat.Vecs[vecIdx] == nil {
+			continue
+		}
+		vec := bat.Vecs[vecIdx]
+		switch vec.GetType().Oid {
+		case types.T_timestamp:
+		case types.T_date, types.T_datetime:
+			if !preInsert.RejectZeroTemporal {
+				continue
+			}
+		default:
+			continue
+		}
+		for row := 0; row < vec.Length(); row++ {
+			if vec.IsNull(uint64(row)) {
+				continue
+			}
+			switch vec.GetType().Oid {
+			case types.T_date:
+				if preInsert.RejectZeroTemporal && vector.GetFixedAtNoTypeCheck[types.Date](vec, row) == types.ZeroDate {
+					return moerr.NewTruncatedValueForField(proc.Ctx, "date", "0000-00-00", "value", row+1)
+				}
+			case types.T_datetime:
+				if preInsert.RejectZeroTemporal && vector.GetFixedAtNoTypeCheck[types.Datetime](vec, row) == types.ZeroDatetime {
+					return moerr.NewTruncatedValueForField(proc.Ctx, "datetime", "0000-00-00 00:00:00", "value", row+1)
+				}
+			case types.T_timestamp:
+				timestamp := vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, row)
+				if !types.ValidTimestamp(timestamp) {
+					return moerr.NewTruncatedValueForField(proc.Ctx, "datetime", fmt.Sprintf("%d", int64(timestamp)), "value", row+1)
+				}
+				if preInsert.RejectZeroTemporal && timestamp == types.ZeroTimestamp {
+					return moerr.NewTruncatedValueForField(proc.Ctx, "datetime", "0000-00-00 00:00:00", "value", row+1)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func convertZeroToNull(bat *batch.Batch, preInsert *PreInsert) {
@@ -351,8 +558,8 @@ func checkIfNeedReGenAutoIncrCol(bat *batch.Batch, preInsert *PreInsert) map[str
 
 	var pkSet map[string]bool
 	if preInsert.TableDef.IsTemporary || preInsert.TableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
-		// 1. currently temporary table is supported by memory engine, this distinction should be removed after refactoring
-		// 2. for __mo_fake_pk_col, user can not specify the value for this column, so no need to check
+		// Temporary tables and internal fake primary keys skip the persistent duplicate probe.
+		// Users cannot provide values for __mo_fake_pk_col.
 	} else {
 		pkSet = make(map[string]bool)
 		for _, n := range preInsert.TableDef.Pkey.Names {
@@ -377,6 +584,7 @@ func genAutoIncrCol(bat *batch.Batch, proc *proc, preInsert *PreInsert) error {
 
 retryInsertValues:
 	tableID := preInsert.ctr.tblId
+	policyCtx := incrservice.WithAutoIDCachePolicy(proc.Ctx, preInsert.TableDef.TblId, preInsert.TableDef.AutoIdCache)
 	needReCheck := checkIfNeedReGenAutoIncrCol(bat, preInsert)
 
 	// Capture the oldest active range's allocation timestamp before InsertValues.
@@ -384,16 +592,24 @@ retryInsertValues:
 	// but conflict detection must still cover every value generated for this batch.
 	lastAllocateTSMap := make(map[string]timestamp.Timestamp)
 	for col := range needReCheck {
-		ts, err := proc.GetIncrService().GetLastAllocateTS(proc.Ctx, tableID, col)
+		ts, err := proc.GetIncrService().GetLastAllocateTS(policyCtx, tableID, preInsert.TableDef.AutoIncrEpoch, currentTxn, col)
 		if err != nil {
 			return err
 		}
 		lastAllocateTSMap[col] = ts
 	}
 
+	options := incrservice.NormalizeAutoIncrementOptions(
+		proc.GetSessionInfo().AutoIncrementIncrement,
+		proc.GetSessionInfo().AutoIncrementOffset,
+	)
+	autoIncrementCtx := incrservice.WithAutoIncrementOptions(
+		policyCtx, options.Increment, options.Offset)
 	lastInsertValue, err := proc.GetIncrService().InsertValues(
-		proc.Ctx,
+		autoIncrementCtx,
 		tableID,
+		preInsert.TableDef.AutoIncrEpoch,
+		currentTxn,
 		bat.Vecs[preInsert.ColOffset:int(preInsert.ColOffset)+len(preInsert.Attrs)],
 		bat.RowCount(),
 		preInsert.EstimatedRowCount,
@@ -453,6 +669,14 @@ retryInsertValues:
 		}
 	}
 
-	proc.SetLastInsertID(lastInsertValue)
+	if lastInsertValue != 0 && !preInsert.TrackAutoIncrementGenerated {
+		// A parallel INSERT ... SELECT has one PreInsert operator per scope,
+		// all sharing the statement-wide process state.  Publish the smallest
+		// generated value through the shared coordinator so scheduling cannot make
+		// LAST_INSERT_ID depend on which scope happens to finish first.  Subsequent
+		// batches in a serial scope naturally keep the first value because
+		// auto-increment allocations are monotonic.
+		proc.SetStatementLastInsertIDIfEarlier(lastInsertValue)
+	}
 	return nil
 }

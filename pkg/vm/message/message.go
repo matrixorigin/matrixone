@@ -75,6 +75,8 @@ type MessageCenter struct {
 
 type MessageBoard struct {
 	reset         bool // for debug purpose
+	closed        bool
+	drained       bool
 	multiCN       bool
 	stmtId        uuid.UUID
 	messageCenter *MessageCenter
@@ -98,9 +100,17 @@ func (m *MessageBoard) finalize() {
 }
 
 func (m *MessageBoard) DebugString() string {
+	if m == nil || m.rwMutex == nil {
+		return "messageBoard is nil\n"
+	}
+	m.rwMutex.RLock()
+	defer m.rwMutex.RUnlock()
 	buf := bytes.NewBuffer(make([]byte, 0, 400))
 	if m.reset {
 		buf.WriteString("messageBoard has been reseted!\n")
+	}
+	if m.closed {
+		buf.WriteString("messageBoard has been closed!\n")
 	}
 	if m.multiCN {
 		buf.WriteString("messageBoard on MultiCN\n")
@@ -135,24 +145,97 @@ func (m *MessageBoard) BeforeRunonce() {
 	// call this before runonce
 	m.rwMutex.Lock()
 	defer m.rwMutex.Unlock()
-	m.reset = false
+	if !m.closed {
+		m.reset = false
+	}
 }
 
 func (m *MessageBoard) Reset() *MessageBoard {
-	if m.multiCN {
-		m.messageCenter.RwMutex.Lock()
-		delete(m.messageCenter.StmtIDToBoard, m.stmtId)
-		m.messageCenter.RwMutex.Unlock()
+	m.rwMutex.RLock()
+	multiCN := m.multiCN
+	center := m.messageCenter
+	stmtID := m.stmtId
+	m.rwMutex.RUnlock()
+	if multiCN {
+		center.RwMutex.Lock()
+		delete(center.StmtIDToBoard, stmtID)
+		center.RwMutex.Unlock()
 		// other pipeline could still access thie messageBoard
 		// so reset current message board to a new one
 		return NewMessageBoard()
 	}
 	m.rwMutex.Lock()
 	defer m.rwMutex.Unlock()
+	if m.closed {
+		return NewMessageBoard()
+	}
 	m.cleanupQueuedMessagesLocked()
 	m.multiCN = false
 	m.reset = true
 	return m
+}
+
+// Close prevents publication and wakes blocked receivers without destroying
+// queued ownership. It is safe while consumers are still unwinding; the
+// terminal owner must call CloseAndDrain after every producer and consumer is
+// quiescent. True identifies the call that first closed the board.
+func (m *MessageBoard) Close() bool {
+	return m.close(false)
+}
+
+// CloseAndDrain is the terminal MessageBoard boundary for one execution
+// attempt. Callers invoke it only after all scope and remote-notifier producers
+// and consumers are quiescent. It removes a multi-CN registration, destroys
+// every queued ownership-bearing message, and prevents a late producer from
+// republishing into the closed generation. The operation is idempotent; true
+// identifies the call that performed the drain, including a drain after an
+// earlier Close.
+func (m *MessageBoard) CloseAndDrain() bool {
+	return m.close(true)
+}
+
+func (m *MessageBoard) close(drain bool) bool {
+	if m == nil || m.rwMutex == nil {
+		return false
+	}
+	m.rwMutex.RLock()
+	multiCN := m.multiCN
+	center := m.messageCenter
+	stmtID := m.stmtId
+	m.rwMutex.RUnlock()
+	if multiCN && center != nil {
+		center.RwMutex.Lock()
+		if center.StmtIDToBoard[stmtID] == m {
+			delete(center.StmtIDToBoard, stmtID)
+		}
+		center.RwMutex.Unlock()
+	}
+
+	m.rwMutex.Lock()
+	defer m.rwMutex.Unlock()
+	firstClose := !m.closed
+	if firstClose {
+		m.closed = true
+		m.reset = true
+		for _, waiter := range m.waiters {
+			if waiter == nil {
+				continue
+			}
+			select {
+			case waiter <- true:
+			default:
+			}
+		}
+	}
+	if !drain {
+		return firstClose
+	}
+	if m.drained {
+		return false
+	}
+	m.drained = true
+	m.cleanupQueuedMessagesLocked()
+	return true
 }
 
 func (m *MessageBoard) cleanupQueuedMessages() {
@@ -198,6 +281,11 @@ func NewMessageReceiver(tags []int32, addr MessageAddress, mb *MessageBoard) *Me
 func SendMessage(m Message, mb *MessageBoard) {
 	if m.GetReceiverAddr().CnAddr == CURRENTCN { // message for current CN
 		mb.rwMutex.Lock()
+		if mb.closed {
+			mb.rwMutex.Unlock()
+			m.Destroy()
+			return
+		}
 		mb.messages = append(mb.messages, &m)
 		if m.NeedBlock() {
 			// broadcast for block message
@@ -214,7 +302,7 @@ func SendMessage(m Message, mb *MessageBoard) {
 	}
 }
 
-func (mr *MessageReceiver) receiveMessageNonBlock() []Message {
+func (mr *MessageReceiver) receiveMessageNonBlock() ([]Message, bool) {
 	mr.mb.rwMutex.RLock()
 	defer mr.mb.rwMutex.RUnlock()
 	var result []Message
@@ -235,24 +323,43 @@ func (mr *MessageReceiver) receiveMessageNonBlock() []Message {
 			}
 		}
 	}
-	return result
+	return result, mr.mb.closed
 }
 
 func (mr *MessageReceiver) ReceiveMessage(needBlock bool, ctx context.Context) ([]Message, bool, error) {
-	var result = mr.receiveMessageNonBlock()
+	result, closed := mr.receiveMessageNonBlock()
 	if !needBlock || len(result) > 0 {
 		return result, false, nil
+	}
+	if closed {
+		return result, false, moerr.NewInternalErrorNoCtx(
+			"message board is closed",
+		)
 	}
 	if mr.waiter == nil {
 		mr.waiter = make(chan bool, 1)
 		mr.mb.rwMutex.Lock()
-		mr.mb.waiters = append(mr.mb.waiters, mr.waiter)
+		if mr.mb.closed {
+			closed = true
+		} else {
+			mr.mb.waiters = append(mr.mb.waiters, mr.waiter)
+		}
 		mr.mb.rwMutex.Unlock()
+		if closed {
+			return result, false, moerr.NewInternalErrorNoCtx(
+				"message board is closed",
+			)
+		}
 	}
 	for {
-		result = mr.receiveMessageNonBlock()
+		result, closed = mr.receiveMessageNonBlock()
 		if len(result) > 0 {
 			break
+		}
+		if closed {
+			return result, false, moerr.NewInternalErrorNoCtx(
+				"message board is closed",
+			)
 		}
 		timeout := messageTimeout
 		if mr.debug {

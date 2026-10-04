@@ -17,6 +17,7 @@ package preinsert
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
@@ -101,6 +103,32 @@ func TestPreInsertNormal(t *testing.T) {
 	argument1.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
+}
+
+func TestTargetSelectedRows(t *testing.T) {
+	proc := testutil.NewProc(t)
+	bat := batch.NewWithSize(3)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_bool.ToType())
+	bat.Vecs[2] = vector.NewVec(types.T_Rowid.ToType())
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []int64{1, 2, 1, 1}, nil, proc.Mp()))
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []bool{true, true, false, true}, nil, proc.Mp()))
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[2], []types.Rowid{{1}, {2}, {3}, {4}}, nil, proc.Mp()))
+	bat.Vecs[0].GetNulls().Add(3)
+	bat.Vecs[2].GetNulls().Add(1)
+	bat.SetRowCount(4)
+	t.Cleanup(func() { bat.Clean(proc.Mp()) })
+
+	preInsert := &PreInsert{
+		HasTargetSelector: true, TargetRowNumberCol: 0, TargetActiveCol: 1, TargetRowIDCol: 2,
+	}
+	selected, err := preInsert.targetSelectedRows(proc, bat)
+	require.NoError(t, err)
+	require.Equal(t, []int64{0}, selected)
+
+	preInsert.TargetActiveCol = 3
+	_, err = preInsert.targetSelectedRows(proc, bat)
+	require.ErrorContains(t, err, "invalid pre-insert target selector columns")
 }
 
 func TestPreInsertExpandsConstVectorToBatchRowCount(t *testing.T) {
@@ -228,7 +256,7 @@ func TestPreInsertHasAutoCol(t *testing.T) {
 	}).AnyTimes()
 
 	incrService := mock_frontend.NewMockAutoIncrementService(ctrl)
-	incrService.EXPECT().InsertValues(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(uint64(111111), nil).AnyTimes()
+	incrService.EXPECT().InsertValues(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(uint64(111111), nil).AnyTimes()
 
 	proc := testutil.NewProc(t)
 	proc.Base.TxnClient = txnClient
@@ -293,6 +321,154 @@ func TestShouldConvertZeroToNullSkipOnUpdate(t *testing.T) {
 	require.False(t, shouldConvertZeroToNull(pre, proc))
 }
 
+func TestPreInsertRejectsZeroTemporalInStrictNoZeroDateMode(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	tests := []struct {
+		name string
+		typ  types.T
+	}{
+		{name: "date", typ: types.T_date},
+		{name: "datetime", typ: types.T_datetime},
+		{name: "timestamp", typ: types.T_timestamp},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			vec := vector.NewVec(tc.typ.ToType())
+			switch tc.typ {
+			case types.T_date:
+				require.NoError(t, vector.AppendFixed(vec, types.ZeroDate, false, proc.Mp()))
+			case types.T_datetime:
+				require.NoError(t, vector.AppendFixed(vec, types.ZeroDatetime, false, proc.Mp()))
+			case types.T_timestamp:
+				require.NoError(t, vector.AppendFixed(vec, types.ZeroTimestamp, false, proc.Mp()))
+			}
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vec
+			bat.SetRowCount(1)
+			pre := &PreInsert{
+				RejectZeroTemporal: true,
+				TableDef:           &plan.TableDef{Cols: []*plan.ColDef{{Name: "v", Typ: plan.Type{Id: int32(tc.typ)}}}},
+				Attrs:              []string{"v"},
+			}
+
+			require.Error(t, checkZeroTemporalInStrictMode(pre, bat, proc))
+			pre.RejectZeroTemporal = false
+			require.NoError(t, checkZeroTemporalInStrictMode(pre, bat, proc))
+			bat.Clean(proc.Mp())
+		})
+	}
+}
+
+func TestPreInsertCallRejectsZeroTemporalExpressionsInStrictNoZeroDateMode(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	for _, tc := range []struct {
+		name string
+		typ  types.T
+	}{
+		{name: "date", typ: types.T_date},
+		{name: "datetime", typ: types.T_datetime},
+		{name: "timestamp", typ: types.T_timestamp},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vec := newZeroTemporalConstVector(t, tc.typ, proc)
+			input := batch.NewWithSize(1)
+			input.Vecs[0] = vec
+			input.SetRowCount(1)
+			child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+			pre := &PreInsert{
+				RejectZeroTemporal: true,
+				TableDef:           &plan.TableDef{Cols: []*plan.ColDef{{Name: "v", Typ: plan.Type{Id: int32(tc.typ)}}}},
+				Attrs:              []string{"v"},
+			}
+			pre.AppendChild(child)
+			require.NoError(t, pre.Prepare(proc))
+
+			_, err := pre.Call(proc)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrTruncatedWrongValueForField))
+
+			pre.Free(proc, false, err)
+			child.Free(proc, false, nil)
+		})
+	}
+
+	vec := newZeroTemporalConstVector(t, types.T_date, proc)
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = vec
+	input.SetRowCount(1)
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	pre := &PreInsert{
+		RejectZeroTemporal: false,
+		TableDef:           &plan.TableDef{Cols: []*plan.ColDef{{Name: "v", Typ: plan.Type{Id: int32(types.T_date)}}}},
+		Attrs:              []string{"v"},
+	}
+	pre.AppendChild(child)
+	require.NoError(t, pre.Prepare(proc))
+	_, err := pre.Call(proc)
+	require.NoError(t, err)
+	pre.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+}
+
+func TestPreInsertCallRejectsTimestampBelowMinimum(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	vec, err := vector.NewConstFixed(
+		types.T_timestamp.ToType(),
+		types.TimestampMinValue-1,
+		1,
+		proc.Mp(),
+	)
+	require.NoError(t, err)
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = vec
+	input.SetRowCount(1)
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	pre := &PreInsert{
+		RejectZeroTemporal: false,
+		TableDef: &plan.TableDef{Cols: []*plan.ColDef{{
+			Name: "v",
+			Typ:  plan.Type{Id: int32(types.T_timestamp)},
+		}}},
+		Attrs: []string{"v"},
+	}
+	pre.AppendChild(child)
+	require.NoError(t, pre.Prepare(proc))
+
+	_, err = pre.Call(proc)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTruncatedWrongValueForField))
+
+	pre.Free(proc, false, err)
+	child.Free(proc, false, nil)
+}
+
+func newZeroTemporalConstVector(t *testing.T, typ types.T, proc *proc) *vector.Vector {
+	t.Helper()
+	switch typ {
+	case types.T_date:
+		vec, err := vector.NewConstFixed(typ.ToType(), types.ZeroDate, 1, proc.Mp())
+		require.NoError(t, err)
+		return vec
+	case types.T_datetime:
+		vec, err := vector.NewConstFixed(typ.ToType(), types.ZeroDatetime, 1, proc.Mp())
+		require.NoError(t, err)
+		return vec
+	case types.T_timestamp:
+		vec, err := vector.NewConstFixed(typ.ToType(), types.ZeroTimestamp, 1, proc.Mp())
+		require.NoError(t, err)
+		return vec
+	default:
+		require.FailNow(t, "unsupported temporal type", typ.String())
+		return nil
+	}
+}
+
 func TestShouldTreatZeroAsAutoIncrFallback(t *testing.T) {
 	proc := testutil.NewProc(t)
 	defer proc.Free()
@@ -339,7 +515,7 @@ func TestPreInsertIsUpdate(t *testing.T) {
 	}).AnyTimes()
 
 	incrService := mock_frontend.NewMockAutoIncrementService(ctrl)
-	incrService.EXPECT().InsertValues(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(uint64(111111), nil).AnyTimes()
+	incrService.EXPECT().InsertValues(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(uint64(111111), nil).AnyTimes()
 
 	proc := testutil.NewProc(t)
 	proc.Base.TxnClient = txnClient
@@ -513,9 +689,9 @@ func TestGenAutoIncrColRefreshesStaleTableID(t *testing.T) {
 
 	incrService := mock_frontend.NewMockAutoIncrementService(ctrl)
 	gomock.InOrder(
-		incrService.EXPECT().InsertValues(gomock.Any(), uint64(100), gomock.Any(), 1, int64(1)).
+		incrService.EXPECT().InsertValues(gomock.Any(), uint64(100), uint32(5), txnOperator, gomock.Any(), 1, int64(1)).
 			Return(uint64(0), moerr.NewNoSuchTableNoCtx("", "100")),
-		incrService.EXPECT().InsertValues(gomock.Any(), uint64(200), gomock.Any(), 1, int64(1)).
+		incrService.EXPECT().InsertValues(gomock.Any(), uint64(200), uint32(5), txnOperator, gomock.Any(), 1, int64(1)).
 			Return(uint64(111111), nil),
 	)
 
@@ -530,8 +706,10 @@ func TestGenAutoIncrColRefreshesStaleTableID(t *testing.T) {
 		HasAutoCol: true,
 		SchemaName: "testDb",
 		TableDef: &plan.TableDef{
-			Name:  "idx_tbl",
-			TblId: 100,
+			Name:          "idx_tbl",
+			TblId:         100,
+			Version:       17,
+			AutoIncrEpoch: 5,
 			Cols: []*plan.ColDef{
 				{Name: catalog.FakePrimaryKeyColName, Typ: i32typ},
 			},
@@ -574,7 +752,7 @@ func TestGenAutoIncrColReturnsRetryWhenDefinitionStillChanged(t *testing.T) {
 	rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(100))
 
 	incrService := mock_frontend.NewMockAutoIncrementService(ctrl)
-	incrService.EXPECT().InsertValues(gomock.Any(), uint64(100), gomock.Any(), 1, int64(1)).
+	incrService.EXPECT().InsertValues(gomock.Any(), uint64(100), gomock.Any(), txnOperator, gomock.Any(), 1, int64(1)).
 		Return(uint64(0), moerr.NewNoSuchTableNoCtx("", "100"))
 
 	proc := testutil.NewProc(t)
@@ -622,7 +800,7 @@ func TestGenAutoIncrColKeepsTemporaryTableBehavior(t *testing.T) {
 
 	eng := mock_frontend.NewMockEngine(ctrl)
 	incrService := mock_frontend.NewMockAutoIncrementService(ctrl)
-	incrService.EXPECT().InsertValues(gomock.Any(), uint64(100), gomock.Any(), 1, int64(1)).
+	incrService.EXPECT().InsertValues(gomock.Any(), uint64(100), gomock.Any(), txnOperator, gomock.Any(), 1, int64(1)).
 		Return(uint64(0), moerr.NewNoSuchTableNoCtx("", "100"))
 
 	proc := testutil.NewProc(t)
@@ -655,6 +833,128 @@ func TestGenAutoIncrColKeepsTemporaryTableBehavior(t *testing.T) {
 
 	err := genAutoIncrCol(bat, proc, preInsert)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
+}
+
+func TestGenAutoIncrColKeepsFirstGeneratedIDAcrossBatches(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	incrService := mock_frontend.NewMockAutoIncrementService(ctrl)
+	incrService.EXPECT().InsertValues(gomock.Any(), uint64(100), gomock.Any(), txnOperator, gomock.Any(), 1, int64(1)).
+		Return(uint64(1), nil)
+	incrService.EXPECT().InsertValues(gomock.Any(), uint64(100), gomock.Any(), txnOperator, gomock.Any(), 1, int64(1)).
+		Return(uint64(8193), nil)
+
+	proc := testutil.NewProc(t)
+	proc.Base.TxnOperator = txnOperator
+	proc.Base.IncrService = incrService
+	preInsert := &PreInsert{
+		HasAutoCol: true,
+		TableDef: &plan.TableDef{
+			Name:        "temp_idx_tbl",
+			TblId:       100,
+			IsTemporary: true,
+			Cols: []*plan.ColDef{{
+				Name: catalog.FakePrimaryKeyColName,
+				Typ:  i32typ,
+			}},
+			Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName},
+		},
+		Attrs:             []string{catalog.FakePrimaryKeyColName},
+		EstimatedRowCount: 1,
+	}
+	preInsert.ctr.tblId = preInsert.TableDef.TblId
+
+	makeBatch := func() *batch.Batch {
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = testutil.MakeInt64Vector([]int64{0}, nil, proc.Mp())
+		bat.SetRowCount(1)
+		return bat
+	}
+
+	first := makeBatch()
+	defer first.Clean(proc.Mp())
+	require.NoError(t, genAutoIncrCol(first, proc, preInsert))
+	require.Equal(t, uint64(1), proc.GetLastInsertID())
+
+	second := makeBatch()
+	defer second.Clean(proc.Mp())
+	require.NoError(t, genAutoIncrCol(second, proc, preInsert))
+	require.Equal(t, uint64(1), proc.GetLastInsertID())
+}
+
+func TestGenAutoIncrColCoordinatesParallelFirstGeneratedID(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	incrService := mock_frontend.NewMockAutoIncrementService(ctrl)
+	firstCallStarted := make(chan struct{})
+	releaseFirstCall := make(chan struct{})
+	var calls int32
+	incrService.EXPECT().InsertValues(gomock.Any(), uint64(100), gomock.Any(), txnOperator, gomock.Any(), 1, int64(1)).
+		Times(2).DoAndReturn(func(context.Context, uint64, uint32, client.TxnOperator, []*vector.Vector, int, int64) (uint64, error) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			close(firstCallStarted)
+			<-releaseFirstCall
+			return uint64(8193), nil
+		}
+		return uint64(1), nil
+	})
+
+	proc := testutil.NewProc(t)
+	proc.Base.TxnOperator = txnOperator
+	proc.Base.IncrService = incrService
+	makePreInsert := func() *PreInsert {
+		preInsert := &PreInsert{
+			HasAutoCol: true,
+			TableDef: &plan.TableDef{
+				Name:        "parallel_auto_increment",
+				TblId:       100,
+				IsTemporary: true,
+				Cols: []*plan.ColDef{{
+					Name: catalog.FakePrimaryKeyColName,
+					Typ:  i32typ,
+				}},
+				Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName},
+			},
+			Attrs:             []string{catalog.FakePrimaryKeyColName},
+			EstimatedRowCount: 1,
+		}
+		preInsert.ctr.tblId = preInsert.TableDef.TblId
+		return preInsert
+	}
+	makeBatch := func() *batch.Batch {
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = testutil.MakeInt64Vector([]int64{0}, nil, proc.Mp())
+		bat.SetRowCount(1)
+		return bat
+	}
+
+	firstErr := make(chan error, 1)
+	go func() {
+		bat := makeBatch()
+		defer bat.Clean(proc.Mp())
+		firstErr <- genAutoIncrCol(bat, proc, makePreInsert())
+	}()
+	<-firstCallStarted
+
+	secondErr := make(chan error, 1)
+	go func() {
+		bat := makeBatch()
+		defer bat.Clean(proc.Mp())
+		secondErr <- genAutoIncrCol(bat, proc, makePreInsert())
+	}()
+
+	// The second scope publishes 1 while the first scope is still blocked
+	// after allocating 8193.  The statement-wide coordinator must keep the
+	// lower value when the first scope resumes.
+	close(releaseFirstCall)
+	require.NoError(t, <-firstErr)
+	require.NoError(t, <-secondErr)
+	require.Equal(t, uint64(1), proc.GetStatementLastInsertID())
+	require.Equal(t, uint64(1), proc.GetLastInsertID())
 }
 
 func resetChildren(arg *PreInsert, m *mpool.MPool) {

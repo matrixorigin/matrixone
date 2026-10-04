@@ -1,0 +1,256 @@
+set ft_relevancy_algorithm="TF-IDF";
+set experimental_fulltext_index = 1;
+drop database if exists ft_wrapped;
+create database ft_wrapped;
+use ft_wrapped;
+create table docs(id int primary key, body text);
+insert into docs values (1,'hello a'),(2,'other text'),(3,'hello hello b');
+create fulltext index ft on docs(body);
+select id, match(body) against('hello') as sc from docs where match(body) against('hello') order by id;
+➤ id[4,32,0]  ¦  sc[7,5,0]  𝄀
+1  ¦  0.031008132  𝄀
+3  ¦  0.062016264
+select id, round(match(body) against('hello'), 3) as r from docs where match(body) against('hello') order by id;
+➤ id[4,32,0]  ¦  r[8,53,31]  𝄀
+1  ¦  0.031  𝄀
+3  ¦  0.062
+select id, cast(match(body) against('hello') as decimal(10,3)) as r from docs where match(body) against('hello') order by id;
+➤ id[4,32,0]  ¦  r[3,10,3]  𝄀
+1  ¦  0.031  𝄀
+3  ¦  0.062
+select id, match(body) against('hello') * 100 as r from docs where match(body) against('hello') order by id;
+➤ id[4,32,0]  ¦  r[8,53,31]  𝄀
+1  ¦  3.100813180208206  𝄀
+3  ¦  6.201626360416412
+select id, round(match(body) against('hello') + 1, 3) as r from docs where match(body) against('hello') order by id;
+➤ id[4,32,0]  ¦  r[8,53,31]  𝄀
+1  ¦  1.031  𝄀
+3  ¦  1.062
+select id, round(match(body) against('hello'), 3) as r from docs where match(body) against('hello') order by r desc;
+➤ id[4,32,0]  ¦  r[8,53,31]  𝄀
+3  ¦  0.062  𝄀
+1  ¦  0.031
+explain select id, round(match(body) against('hello'), 3) as r from docs where match(body) against('hello');
+-- @regex("Table Function on fulltext_index_scan", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.score DESC  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (docs.id = mo_fulltext_alias_0.doc_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on ft_wrapped.docs  𝄀
+                    Runtime Filter Probe: docs.id  𝄀
+              ->  Table Function on fulltext_index_scan
+create view v as select id, match(body) against('hello') as sc from docs where match(body) against('hello');
+select id from v where sc > 0 order by id;              -- baseline: every match
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+select id from v where sc > 0.05 order by id;           -- only the higher scorer
+➤ id[4,32,0]  𝄀
+3
+select id from v where round(sc, 4) > 0.05 order by id;
+➤ id[4,32,0]  𝄀
+3
+select id from v where cast(sc as double) > 0.05 order by id;
+➤ id[4,32,0]  𝄀
+3
+select id from v where sc * 2 > 0.1 order by id;
+➤ id[4,32,0]  𝄀
+3
+select id from v where sc > 0.05 and id > 1 order by id;
+➤ id[4,32,0]  𝄀
+3
+select id from v where round(cast(sc as double) * 2, 3) > 0.1 order by id;
+➤ id[4,32,0]  𝄀
+3
+explain select id from v where round(sc, 4) > 0;
+-- @regex("Table Function on fulltext_index_scan", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.score DESC  𝄀
+        ->  Filter  𝄀
+              Filter Cond: (round(cast(mo_fulltext_alias_0.score AS DOUBLE), 4) > 0)  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (docs.id = mo_fulltext_alias_0.doc_id)  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on ft_wrapped.docs  𝄀
+                          Runtime Filter Probe: docs.id  𝄀
+                    ->  Table Function on fulltext_index_scan
+select id from v where sc > 0.05 order by id;      -- only the higher-scoring row
+➤ id[4,32,0]  𝄀
+3
+select id from v where sc > 0.5 order by id;     -- none
+➤ id[4,32,0]
+select id from v where round(sc, 4) > 0.05 order by id;
+➤ id[4,32,0]  𝄀
+3
+select id from v where cast(sc as double) > 0.5 order by id;
+➤ id[4,32,0]
+select id from (
+select id, match(body) against('hello') as sc from docs where match(body) against('hello')
+) x where sc > 0 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+create table two(id int primary key, body text);
+insert into two values (1,'hello'),(2,'hello hello'),(3,'hello hello hello'),(4,'world'),(5,'hello hello world');
+create fulltext index ft_two on two(body);
+select id, match(body) against('hello') as h from two where match(body) against('hello') order by id;
+➤ id[4,32,0]  ¦  h[7,5,0]  𝄀
+1  ¦  0.009391551  𝄀
+2  ¦  0.018783102  𝄀
+3  ¦  0.028174654  𝄀
+5  ¦  0.018783102
+select id, match(body) against('world') as w from two where match(body) against('world') order by id;
+➤ id[4,32,0]  ¦  w[7,5,0]  𝄀
+4  ¦  0.15835625  𝄀
+5  ¦  0.15835625
+select id, round(match(body) against('hello'),3) as h, round(match(body) against('world'),3) as w
+from two where match(body) against('hello') and match(body) against('world') order by id;
+➤ id[4,32,0]  ¦  h[8,53,31]  ¦  w[8,53,31]  𝄀
+5  ¦  0.019  ¦  0.158
+select id, match(body) against('hello') as sc, round(match(body) against('hello'),3) as r
+from two where match(body) against('hello') order by id;
+➤ id[4,32,0]  ¦  sc[7,5,0]  ¦  r[8,53,31]  𝄀
+1  ¦  0.009391551  ¦  0.009  𝄀
+2  ¦  0.018783102  ¦  0.019  𝄀
+3  ¦  0.028174654  ¦  0.028  𝄀
+5  ¦  0.018783102  ¦  0.019
+select id, round(match(body) against('world'),3) as r from two where match(body) against('hello') order by id;
+➤ id[4,32,0]  ¦  r[8,53,31]  𝄀
+5  ¦  0.158
+select id from two where match(body) against('hello') and match(body) against('world') > 0.1 order by id;
+➤ id[4,32,0]  𝄀
+5
+select id from two where match(body) against('hello') and match(body) against('world') > 0.9 order by id;
+➤ id[4,32,0]
+select id, round(match(body) against('world'),3) as w from two
+where match(body) against('hello') and match(body) against('world')
+and match(body) against('world') > 0.1 order by id;
+➤ id[4,32,0]  ¦  w[8,53,31]  𝄀
+5  ¦  0.158
+select id from two
+where match(body) against('hello') and match(body) against('world')
+and match(body) against('world') > 0.9 order by id;
+➤ id[4,32,0]
+select id from two where match(body) against('hello') order by round(match(body) against('hello'),3) desc, id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+2  𝄀
+5  𝄀
+1
+select id from two where match(body) against('hello') > 0.015 order by id;   -- drops the lowest scorer
+➤ id[4,32,0]  𝄀
+2  𝄀
+3  𝄀
+5
+select id from two where match(body) against('hello') > 0.9 order by id;     -- none
+➤ id[4,32,0]
+select id, round(match(body) against('hello'),3) as r from two order by id;  -- projection, no WHERE MATCH
+➤ id[4,32,0]  ¦  r[8,53,31]  𝄀
+1  ¦  0.009  𝄀
+2  ¦  0.019  𝄀
+3  ¦  0.028  𝄀
+5  ¦  0.019
+select count(*) as n from two where match(body) against('hello') > 0.015;    -- and through an aggregate
+➤ n[-5,64,0]  𝄀
+3
+select count(*) as n from two where match(body) against('hello') > 0.9;
+➤ n[-5,64,0]  𝄀
+0
+select id from two where match(body) against('hello') > 0.005;
+➤ id[4,32,0]  𝄀
+3  𝄀
+2  𝄀
+5  𝄀
+1
+select id from two where match(body) against('hello');
+➤ id[4,32,0]  𝄀
+3  𝄀
+2  𝄀
+5  𝄀
+1
+explain select id from two where match(body) against('hello') > 0.015;
+-- @regex("Table Function on fulltext_index_scan", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.score DESC  𝄀
+        ->  Filter  𝄀
+              Filter Cond: (cast(mo_fulltext_alias_0.score AS DOUBLE) > 0.015)
+              -- HINT: Cast expression may prevent index usage  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (two.id = mo_fulltext_alias_0.doc_id)  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on ft_wrapped.two  𝄀
+                          Runtime Filter Probe: two.id  𝄀
+                    ->  Table Function on fulltext_index_scan
+create table nodx(id int primary key, txt text);
+insert into nodx values (1,'hello');
+select id from nodx where match(txt) against('hello') > 0.1;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+select id from two where match(body) against('hello') > 0.5 or id = 4;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+select id from two where not match(body) against('hello');
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+select id from two where id = 4 or match(body) against('hello') > 0.5;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+select id from two where match(body) against('hello') < 0.015 order by id;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+select id from two where match(body) against('hello') and match(body) against('hello') < 0.015 order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from two where match(body) against('hello') and (match(body) against('hello') < 0.015 or id = 3) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+select id from two where match(body) against('hello') and not (match(body) against('hello') > 0.015) order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from two where match(body) against('hello') >= 0 order by id;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+create table jb(id int primary key, note varchar(20));
+insert into jb values (1,'x'),(2,'y'),(3,'z');
+select id, match(body) against('hello') as sc from two where match(body) against('hello') order by id;
+➤ id[4,32,0]  ¦  sc[7,5,0]  𝄀
+1  ¦  0.009391551  𝄀
+2  ¦  0.018783102  𝄀
+3  ¦  0.028174654  𝄀
+5  ¦  0.018783102
+select t.id, jb.note from two t join jb on t.id=jb.id
+where match(t.body) against('hello') > 0.015 order by t.id;
+➤ id[4,32,0]  ¦  note[12,15,0]  𝄀
+2  ¦  y  𝄀
+3  ¦  z
+select t.id from two t join jb on t.id=jb.id
+where match(t.body) against('hello') > 0.9 order by t.id;
+➤ id[4,32,0]
+select id from two where match(body) against('hello') > 0.015 and id in (select id from jb) order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+select t.id from two t join jb on t.id=jb.id
+where match(t.body) against('hello') < 0.015 order by t.id;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+select id from two where match(body) against('hello') and match(body) against('hello') < 0.015 limit 1;
+➤ id[4,32,0]  𝄀
+1
+select id from two where match(body) against('hello') and match(body) against('hello') < 0.015;
+➤ id[4,32,0]  𝄀
+1
+select count(*) as n from (
+select id from two where match(body) against('hello') and match(body) against('hello') < 0.02 limit 1
+) q;
+➤ n[-5,64,0]  𝄀
+1
+select id from two where match(body) against('hello') and match(body) against('hello') > 0.02 limit 1;
+➤ id[4,32,0]  𝄀
+3
+drop database ft_wrapped;
+set ft_relevancy_algorithm="TF-IDF";

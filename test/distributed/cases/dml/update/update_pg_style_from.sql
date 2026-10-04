@@ -163,8 +163,8 @@ SELECT COUNT(*) AS synthesized_row FROM whole_row_t WHERE a = 7 AND b = 'from-nu
 DROP TABLE whole_row_t;
 DROP TABLE whole_row_s;
 
--- FK target with a generated column: the FK forces the fallback planner
--- (buildTableUpdate). Generated column protection must still apply there.
+-- FK metadata must stay on the modern planner when the FK key is unchanged.
+-- Generated-column protection and recomputation must remain intact.
 DROP TABLE IF EXISTS fk_parent;
 DROP TABLE IF EXISTS fk_child;
 DROP TABLE IF EXISTS fk_src;
@@ -181,11 +181,10 @@ INSERT INTO fk_child (id, parent_id, base) VALUES (1, 1, 1), (2, 2, 2), (3, 3, 3
 CREATE TABLE fk_src (id INT PRIMARY KEY, new_base INT);
 INSERT INTO fk_src VALUES (1, 11), (2, 22), (3, 33);
 
--- Direct write to a generated column must error even on the fallback path.
+-- Direct write to a generated column must error on the modern path.
 UPDATE fk_child SET gen_col = 999 FROM fk_src WHERE fk_src.id = fk_child.id;
 
--- Base-column update must recompute the stored generated column on the
--- fallback path too.
+-- Base-column update must recompute the stored generated column.
 UPDATE fk_child SET base = fk_src.new_base FROM fk_src WHERE fk_src.id = fk_child.id;
 SELECT id, parent_id, base, gen_col FROM fk_child ORDER BY id;
 DROP TABLE fk_child;
@@ -213,10 +212,9 @@ UPDATE ob_t SET v = ob_s.v FROM ob_s WHERE ob_t.id = ob_s.id LIMIT 1;
 DROP TABLE ob_t;
 DROP TABLE ob_s;
 
--- Duplicate-match on the fallback path: target row 1 is matched by both
--- (10,1,...) and (11,1,...) source rows. Because dup_t has a FK the fallback
--- planner (buildTableUpdate) handles this. It must still dedup duplicate
--- matches instead of silently double-writing target row 1.
+-- Modern FK-table duplicate match: target row 1 is matched by both
+-- (10,1,...) and (11,1,...) source rows. It must dedup duplicate matches
+-- instead of silently double-writing target row 1.
 DROP TABLE IF EXISTS dup_t;
 DROP TABLE IF EXISTS dup_p;
 DROP TABLE IF EXISTS dup_s;
@@ -237,8 +235,7 @@ DROP TABLE dup_t;
 DROP TABLE dup_p;
 DROP TABLE dup_s;
 
--- Fallback UPDATE ... FROM dedup must also pick a whole source row. FK on the
--- target forces buildTableUpdate instead of the new bindUpdate path.
+-- Modern UPDATE ... FROM dedup on an FK table must also pick a whole source row.
 DROP TABLE IF EXISTS fk_whole_row_t;
 DROP TABLE IF EXISTS fk_whole_row_p;
 DROP TABLE IF EXISTS fk_whole_row_s;
@@ -313,9 +310,8 @@ SELECT v FROM geo_dedup_t WHERE id = 2;
 DROP TABLE geo_dedup_t;
 DROP TABLE geo_dedup_s;
 
--- Same GEOMETRY32 guard on the fallback path: a foreign key on the target
--- forces buildTableUpdate, which must also dedup on row_id instead of the
--- whole old row.
+-- Same GEOMETRY32 guard on the modern FK-table path: dedup must use row_id
+-- instead of the whole old row.
 DROP TABLE IF EXISTS geo_fk_dedup_t;
 DROP TABLE IF EXISTS geo_fk_dedup_p;
 DROP TABLE IF EXISTS geo_fk_dedup_s;
@@ -344,12 +340,11 @@ DROP TABLE geo_fk_dedup_t;
 DROP TABLE geo_fk_dedup_p;
 DROP TABLE geo_fk_dedup_s;
 
--- Fallback multi-target UPDATE ... FROM with LEFT JOIN target must still drop
+-- Modern multi-target UPDATE ... FROM with LEFT JOIN target must drop
 -- NULL rows of unmatched left-join targets. jt1.id=2 has no jt2 match, so
 -- jt2's row_id is NULL for that row; it must be filtered out of jt2's update
--- pipeline while jt1.id=2 is still updated. Replacing the any_value dedup with
--- a row_number() window must not lose this NULL-row safeguard.
--- (Multi-target routes through the fallback buildTableUpdate path.)
+-- pipeline while jt1.id=2 is still updated. Target-local row_number() dedup
+-- must preserve this NULL-row safeguard.
 DROP TABLE IF EXISTS jt1;
 DROP TABLE IF EXISTS jt2;
 DROP TABLE IF EXISTS js;

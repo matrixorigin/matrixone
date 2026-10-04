@@ -23,6 +23,7 @@ import "lock.proto";
 import "txn.proto";
 import "timestamp.proto";
 import "statsinfo.proto";
+import "plan.proto";
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 import "google/protobuf/timestamp.proto";
 
@@ -102,6 +103,25 @@ enum CmdMethod {
   WorkspaceThreshold = 34;
   MinTimestamp = 35;
   CtlPrefetchOnSubscribed = 36;
+  ISCPDrainConsumer = 37;
+  // IcebergCacheInvalidate invalidates Iceberg metadata/manifest cache after commit.
+  IcebergCacheInvalidate = 38;
+  // MongoDBClientRetire drains obsolete MongoDB driver clients after catalog DDL.
+  MongoDBClientRetire = 39;
+  // RefreshSessionAuth revalidates a cached backend against the current catalog.
+  RefreshSessionAuth = 40;
+  // SetVectorIndexFreshnessInterval overrides the vector/fulltext2 index cache's cross-CN
+  // freshness sweep cadence on a CN (sys-admin/test knob; not persisted).
+  SetVectorIndexFreshnessInterval = 41;
+  // GetVectorIndexCacheInfo reports how many vector/fulltext2 index cache entries a CN holds for a
+  // given index key (0 = not cached). Used to observe cross-CN eviction (test/ops).
+  GetVectorIndexCacheInfo = 42;
+  // EvictVectorIndexCache drops a vector/fulltext2 index's cache entries on a CN so the next query
+  // reloads a current generation (sys-admin/test; synchronous).
+  EvictVectorIndexCache = 43;
+  // GetVectorIndexCacheKeys lists the exact cache keys a CN currently holds, so an operator can
+  // discover the key to pass to GetVectorIndexCacheInfo / EvictVectorIndexCache (test/ops).
+  GetVectorIndexCacheKeys = 44;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -160,6 +180,44 @@ message GetProtocolVersionResponse {
 message SetProtocolVersionRequest {
   // ProtocolVersion is the version of the protocol
   int64 Version = 1;
+}
+
+message SetVectorIndexFreshnessIntervalRequest {
+  // IntervalNs is the cross-CN freshness sweep cadence in nanoseconds; <=0 restores the default.
+  int64 IntervalNs = 1;
+}
+
+message SetVectorIndexFreshnessIntervalResponse {
+  // IntervalNs echoes the applied interval in nanoseconds (0 = default restored).
+  int64 IntervalNs = 1;
+}
+
+message GetVectorIndexCacheInfoRequest {
+  // Key is the index (hidden) table name to count cached entries for; empty = all entries.
+  string Key = 1;
+}
+
+message GetVectorIndexCacheInfoResponse {
+  // Count is the number of cached entries this CN holds for Key.
+  int64 Count = 1;
+}
+
+message EvictVectorIndexCacheRequest {
+  // Key is the index (hidden) table name to evict from this CN's cache; empty = all entries.
+  string Key = 1;
+}
+
+message EvictVectorIndexCacheResponse {
+  // Evicted is the number of cache entries this CN dropped for Key.
+  int64 Evicted = 1;
+}
+
+message GetVectorIndexCacheKeysRequest {
+}
+
+message GetVectorIndexCacheKeysResponse {
+  // Keys are the exact cache keys this CN currently holds.
+  repeated string Keys = 1;
 }
 
 message SetProtocolVersionResponse {
@@ -242,6 +300,15 @@ message Request {
   CtlMoTableStatsRequest CtlMoTableStatsRequest = 36 [ (gogoproto.nullable) = false ];
   WorkspaceThresholdRequest WorkspaceThresholdRequest = 37;
   CtlPrefetchOnSubscribedRequest CtlPrefetchOnSubscribedRequest = 38;
+  ISCPDrainConsumerRequest ISCPDrainConsumerRequest = 39;
+  IcebergCacheInvalidateRequest IcebergCacheInvalidateRequest = 40 [ (gogoproto.nullable) = false ];
+  MongoDBClientRetireRequest MongoDBClientRetireRequest = 41 [ (gogoproto.nullable) = false ];
+  // RefreshSessionAuthRequest reauthenticates a cached backend for a new login.
+  RefreshSessionAuthRequest RefreshSessionAuthRequest = 42;
+  SetVectorIndexFreshnessIntervalRequest SetVectorIndexFreshnessInterval = 43 [ (gogoproto.nullable) = false ];
+  GetVectorIndexCacheInfoRequest GetVectorIndexCacheInfo = 44 [ (gogoproto.nullable) = false ];
+  EvictVectorIndexCacheRequest EvictVectorIndexCache = 45 [ (gogoproto.nullable) = false ];
+  GetVectorIndexCacheKeysRequest GetVectorIndexCacheKeys = 46 [ (gogoproto.nullable) = false ];
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -307,6 +374,15 @@ message Response {
   WorkspaceThresholdResponse WorkspaceThresholdResponse = 37;
   MinTimestampResponse MinTimestampResponse = 38;
   CtlPrefetchOnSubscribedResponse CtlPrefetchOnSubscribedResponse = 39;
+  ISCPDrainConsumerResponse ISCPDrainConsumerResponse = 40;
+  IcebergCacheInvalidateResponse IcebergCacheInvalidateResponse = 41 [ (gogoproto.nullable) = false ];
+  MongoDBClientRetireResponse MongoDBClientRetireResponse = 42 [ (gogoproto.nullable) = false ];
+  // RefreshSessionAuthResponse contains the current authentication string.
+  RefreshSessionAuthResponse RefreshSessionAuthResponse = 43;
+  SetVectorIndexFreshnessIntervalResponse SetVectorIndexFreshnessInterval = 44 [ (gogoproto.nullable) = false ];
+  GetVectorIndexCacheInfoResponse GetVectorIndexCacheInfo = 45 [ (gogoproto.nullable) = false ];
+  EvictVectorIndexCacheResponse EvictVectorIndexCache = 46 [ (gogoproto.nullable) = false ];
+  GetVectorIndexCacheKeysResponse GetVectorIndexCacheKeys = 47 [ (gogoproto.nullable) = false ];
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
@@ -352,6 +428,19 @@ message CtlPrefetchOnSubscribedResponse {
   string Resp = 1;
 }
 
+message ISCPDrainConsumerRequest {
+  uint32 AccountID = 1;
+  uint64 TableID = 2;
+  string JobName = 3;
+  uint64 JobID = 4;
+  bool RemoveFenceOnly = 5;
+  bool RenewFenceOnly = 6;
+}
+
+message ISCPDrainConsumerResponse {
+  bool Success = 1;
+}
+
 message TraceSpanRequest {
   string Cmd = 1;
   string Spans = 2;
@@ -363,6 +452,9 @@ message TraceSpanResponse {
 }
 
 message GetLockInfoRequest{
+  // IdentityOnly avoids enumerating and copying all local locks when a
+  // controller only needs the current lock-service incarnation.
+  bool IdentityOnly = 1;
 }
 
 message LockInfo{
@@ -377,6 +469,8 @@ message LockInfo{
 message GetLockInfoResponse{
   string CnId = 1;
   repeated LockInfo LockInfoList = 2;
+  // Exact incarnation generated by the running CN lock service.
+  string LockServiceID = 3;
 }
 
 message GetTxnInfoRequest{}
@@ -403,6 +497,9 @@ message TxnInfo{
   bool UserTxn = 3;
   // WaitLocks denotes the locks that the txn is waiting on
   repeated TxnLockInfo WaitLocks = 4;
+  // AccountID is the account that created the txn. It is used internally to
+  // enforce tenant isolation and is not exposed by the SQL system view.
+  uint32 AccountID = 5;
 }
 
 message GetTxnInfoResponse{
@@ -511,14 +608,73 @@ message PrepareStmt {
   bytes ParamTypes = 3;
 }
 
+message MigrateTempTable {
+  string Database = 1;
+  string Alias = 2;
+  string PhysicalName = 3;
+}
+
+enum MigrateConnFromAction {
+  // Default: export session state for connection migration.
+  MigrateConnFromExport = 0;
+  // Legacy compatibility mode used only by old proxies.
+  MigrateConnFromSkipUserLevelLockRelease = 1;
+  // Legacy compatibility mode used only by old proxies.
+  MigrateConnFromEnableUserLevelLockRelease = 2;
+}
+
 message MigrateConnFromRequest {
   uint32 ConnID = 1;
+  MigrateConnFromAction Action = 2;
+  reserved 3;
+  // True when Proxy understands MigrateTempTable snapshots. A current CN must
+  // reject migration of a session with temporary tables when this is false.
+  bool TempTableMigrationSupported = 4;
+  // True when Proxy understands the complete LAST_INSERT_ID migration
+  // contract, including the export marker and target compatibility checks.
+  bool LastInsertIDMigrationSupported = 5;
 }
 
 message MigrateConnFromResponse {
   string DB = 1;
   repeated PrepareStmt PrepareStmts = 2;
   int64 LastAffectedRows = 3;
+  repeated UserLevelLock UserLevelLocks = 4;
+  bool UserLevelLockReleaseSupported = 5;
+  repeated MigrateUserDefinedVar UserDefinedVars = 6;
+  bool UserDefinedVarsExported = 7;
+  repeated MigrateSystemVariable SystemVariables = 8;
+  bool SystemVariablesExported = 9;
+  // Whether the proxy's raw COM_QUERY SET history is complete for the
+  // corresponding typed state. A false value requires a v22 target.
+  bool UserDefinedVarsReplayable = 10;
+  bool SystemVariablesReplayable = 11;
+  // Whether the typed system-variable snapshot was omitted because it exceeded
+  // the migration size limit. Pre-v22 targets may use complete raw replay;
+  // v22 targets must fail closed rather than apply an unsafe projection.
+  bool SystemVariablesSnapshotTooLarge = 12;
+  // Whether the typed user-variable snapshot was omitted because it exceeded
+  // the migration size limit. Pre-v22 targets may use complete raw replay;
+  // v22 targets must fail closed rather than re-evaluate raw SET expressions.
+  bool UserDefinedVarsSnapshotTooLarge = 13;
+  // True only when the exporting CN verified that no prepared statement owns
+  // COM_STMT_SEND_LONG_DATA buffers omitted from the migration payload.
+  bool PreparedStmtLongDataChecked = 14;
+  uint64 FoundRows = 15;
+  repeated MigrateTempTable TempTables = 16;
+  // Distinguishes an empty snapshot from an older CN that cannot report
+  // temporary-table state.
+  bool TempTableStateExported = 17;
+  // True only when the exporting CN verified that no prepared statement owns
+  // an active server cursor, whose result and offset cannot be migrated.
+  // Field 18 is occupied by LastInsertID in the main branch; use a new field
+  // number so both migration capabilities remain wire-compatible.
+  bool PreparedStmtCursorsChecked = 20;
+  // LastInsertID is the session-visible value returned by LAST_INSERT_ID().
+  uint64 LastInsertID = 18;
+  // True when LastInsertID was captured by a source that understands this
+  // migration contract. False means the value is unavailable, not zero.
+  bool LastInsertIDExported = 19;
 }
 
 message MigrateConnToRequest {
@@ -527,6 +683,38 @@ message MigrateConnToRequest {
   repeated string SetVarStmts = 3;
   repeated PrepareStmt PrepareStmts = 4;
   int64 LastAffectedRows = 5;
+  repeated UserLevelLock UserLevelLocks = 6;
+  repeated MigrateUserDefinedVar UserDefinedVars = 7;
+  bool UserDefinedVarsExported = 8;
+  repeated MigrateSystemVariable SystemVariables = 9;
+  bool SystemVariablesExported = 10;
+  // Whether the proxy's raw COM_QUERY SET history is complete for the
+  // corresponding typed state. A false value requires a v22 target on the
+  // next migration hop.
+  bool UserDefinedVarsReplayable = 11;
+  bool SystemVariablesReplayable = 12;
+  uint64 FoundRows = 13;
+  repeated MigrateTempTable TempTables = 14;
+  // LastInsertID is the session-visible value returned by LAST_INSERT_ID().
+  uint64 LastInsertID = 15;
+  // True only when LastInsertID came from an authoritative source snapshot.
+  bool LastInsertIDExported = 16;
+}
+
+message MigrateUserDefinedVar {
+  string Name = 1;
+  plan.Expr Value = 2;
+  string Sql = 3;
+  bool IsBin = 4;
+  uint32 PrepareParamKind = 5;
+  plan.Type Type = 6;
+  uint32 RuntimeStringDomain = 7;
+}
+
+message UserLevelLock {
+  string Name = 1;
+  uint64 Count = 2;
+  repeated bytes TxnIDs = 3;
 }
 
 message MigrateConnToResponse {
@@ -629,6 +817,19 @@ message MetadataCacheResponse {
   int64 CacheCapacity = 1;
 }
 
+message IcebergCacheInvalidateRequest {
+  uint32 AccountID = 1;
+  uint64 CatalogID = 2;
+  string Namespace = 3;
+  string Table = 4;
+  int64 SnapshotID = 5;
+  string MetadataLocationHash = 6;
+  string CommitID = 7;
+}
+
+message IcebergCacheInvalidateResponse {
+  int64 RemovedEntries = 1;
+}
 
 message GoGCPercentRequest {
   int32 Percent = 1;
@@ -671,4 +872,55 @@ message WorkspaceThresholdResponse {
 message MinTimestampResponse {
   // LatestCommitTS update latest commit ts.
   timestamp.Timestamp MinTimestamp = 1 [(gogoproto.nullable) = false];
+}
+
+message MongoDBClientRetireRequest {
+  uint32 AccountID = 1;
+  // Zero retires every MongoDB client for AccountID.
+  uint64 ConnectionID = 2;
+  // Zero retires the whole connection; otherwise generations below this value.
+  uint64 VersionExclusive = 3;
+}
+
+message MongoDBClientRetireResponse {
+  bool Success = 1;
+}
+
+message MigrateSystemVariable {
+  string Name = 1;
+  plan.Expr Value = 2;
+  bool NextTransaction = 3;
+  // RuntimeValue carries the effective service-runtime value for variables
+  // whose SQL SET path updates service-global planner state. It is kept
+  // separate from the session snapshot so a source SET GLOBAL cannot be
+  // overwritten by an inherited session value during migration.
+  plan.Expr RuntimeValue = 4;
+}
+
+// RefreshSessionAuthRequest revalidates the client credentials and resolved
+// authorization state against the current catalog before cache reuse.
+message RefreshSessionAuthRequest {
+  uint32 ConnID = 1;
+  string UserInput = 2;
+  string Database = 3;
+  bytes AuthResponse = 4;
+  bytes Salt = 5;
+  string ClientAddress = 6;
+}
+
+// RefreshSessionAuthResponse reports the current credential snapshot used by
+// the cache entry after successful reauthentication.
+message RefreshSessionAuthResponse {
+  bool Success = 1;
+  bytes AuthString = 2;
+  // AuthenticationFailed means the request reached the canonical catalog
+  // authentication boundary and the client credentials were rejected. It is
+  // distinct from transport, protocol-version, and routine-lifecycle errors,
+  // which may be retried against another cached backend.
+  bool AuthenticationFailed = 3;
+  // RequestRejected means the login request hit a deterministic request-level
+  // validation failure, such as an unknown or inaccessible database. It is
+  // distinct from candidate-specific transport and lifecycle failures, which
+  // may be retried against another cached backend.
+  bool RequestRejected = 4;
 }

@@ -117,6 +117,9 @@ insert into decimal02 values(-298432432433242412313123321231321313);
 insert into decimal02 values(-34243214324324342321313321321342342343.123143);
 insert into decimal02 values(-0.12813218391321939921391929391293912);
 select * from decimal02;
+-- The converted DECIMAL result overflows.  Its float64 payload is an
+-- implementation detail and may vary with a numerically stable algorithm.
+-- @regex("invalid input: [0-9.e+-]+ beyond the range, can't be converted to Decimal128\(38,6\)\.", true)
 select VAR_SAMP(col1) from decimal02;
 drop table decimal02;
 
@@ -128,7 +131,7 @@ insert into test02 values(-2121313214325334213213257654323234324.90);
 insert into test02 values(-123.2314123412321);
 insert into test02 values(9932129321093029302930290439029432423.5);
 select * from test02;
--- @regex("Can't convert Float64 To Decimal128: [0-9.e+-]+\(38,6\)", true)
+-- @regex("invalid input: [0-9.e+-]+ beyond the range, can't be converted to Decimal128\(38,6\)\.", true)
 select VAR_SAMP(col1) from test02;
 drop table test02;
 
@@ -137,6 +140,7 @@ create table test03(a decimal(38,2));
 insert into test03 values(9999999999999999999999999999999.1);
 insert into test03 values(-0.00001);
 insert into test03 values(NULL);
+-- @regex("invalid input: [0-9.e+-]+ beyond the range, can't be converted to Decimal128\(38,8\)\.", true)
 select VAR_SAMP(a) from test03;
 drop table test03;
 
@@ -149,6 +153,7 @@ insert into test04 values(100000000000000000.00000000000000000001);
 insert into test04 values(-999999999999999999.9);
 insert into test04 values(-0.00000000000000000001);
 select * from test04;
+-- @regex("invalid input: [0-9.e+-]+ beyond the range, can't be converted to Decimal128\(38,20\)\.", true)
 select VAR_SAMP(a) from test04;
 drop table test04;
 
@@ -173,4 +178,3 @@ select VAR_SAMP(a) from test06;
 drop table test06;
 
 drop database test;
-

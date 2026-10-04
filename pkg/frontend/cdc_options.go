@@ -28,6 +28,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+)
+
+const (
+	defaultCDCTaskMaxRetryTimes = 10
+	defaultCDCTaskRetryInterval = int64(10 * time.Second)
 )
 
 type CDCUserInfo struct {
@@ -37,22 +43,23 @@ type CDCUserInfo struct {
 }
 
 type CDCCreateTaskOptions struct {
-	TaskName     string
-	TaskId       string
-	UserInfo     *CDCUserInfo
-	Exclude      string
-	StartTs      string
-	EndTs        string
-	MaxSqlLength int64
-	PitrTables   string // json encoded pitr tables: cdc2.PatternTuples
-	SrcUri       string // json encoded source uri: cdc2.UriInfo
-	SrcUriInfo   cdc.UriInfo
-	SinkUri      string // json encoded sink uri: cdc2.UriInfo
-	SinkUriInfo  cdc.UriInfo
-	ExtraOpts    string // json encoded extra opts: map[string]any
-	SinkType     string
-	NoFull       bool
-	ConfigFile   string
+	TaskName            string
+	TaskId              string
+	UserInfo            *CDCUserInfo
+	Exclude             string
+	StartTs             string
+	EndTs               string
+	MaxSqlLength        int64
+	PitrTables          string // json encoded pitr tables: cdc2.PatternTuples
+	SrcUri              string // json encoded source uri: cdc2.UriInfo
+	SrcUriInfo          cdc.UriInfo
+	SinkUri             string // json encoded sink uri: cdc2.UriInfo
+	SinkUriInfo         cdc.UriInfo
+	ExtraOpts           string // json encoded extra opts: map[string]any
+	SinkType            string
+	NoFull              bool
+	startTsFromSnapshot bool
+	ConfigFile          string
 
 	// control options
 	UseConsole bool
@@ -69,11 +76,29 @@ func (opts *CDCCreateTaskOptions) Reset() {
 	opts.PitrTables = ""
 	opts.SinkType = ""
 	opts.NoFull = false
+	opts.startTsFromSnapshot = false
 	opts.UseConsole = false
 	opts.ConfigFile = ""
 	opts.SrcUriInfo = cdc.UriInfo{}
 	opts.SinkUriInfo = cdc.UriInfo{}
 	opts.UserInfo = nil
+}
+
+// setNoFullStartTS persists the creation snapshot as the incremental start
+// point.  A NoFull task starts asynchronously, so deriving its watermark when
+// the daemon later starts leaves a window in which committed changes can be
+// skipped.  Do not replace an explicit StartTs supplied by the user.
+func (opts *CDCCreateTaskOptions) setNoFullStartTS(txnOp client.TxnOperator) {
+	if txnOp != nil && opts.NoFull && opts.StartTs == "" {
+		snapshotTS := txnOp.SnapshotTS()
+		if !snapshotTS.IsEmpty() {
+			// Keep both HLC components. Converting through time.Time would
+			// discard LogicalTime and move the watermark backwards within the
+			// same physical timestamp.
+			opts.StartTs = snapshotTS.DebugString()
+			opts.startTsFromSnapshot = true
+		}
+	}
 }
 
 func (opts *CDCCreateTaskOptions) ValidateAndFill(
@@ -106,11 +131,17 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 		); err != nil {
 			return
 		}
-		if _, err = cdc.OpenDbConn(
+		sourceConn, sourceConnErr := cdc.OpenDbConn(
+			ctx,
 			opts.SrcUriInfo.User, opts.SrcUriInfo.Password, opts.SrcUriInfo.Ip, opts.SrcUriInfo.Port, cdc.CDCDefaultSendSqlTimeout,
-		); err != nil {
+		)
+		if sourceConnErr != nil {
 			err = moerr.NewInternalErrorf(ctx, ""+
-				"failed to connect to source, please check the connection, err: %v", err)
+				"failed to connect to source, please check the connection, err: %v", sourceConnErr)
+			return
+		}
+		if closeErr := sourceConn.Close(); closeErr != nil {
+			err = moerr.NewInternalErrorf(ctx, "failed to close source connection check: %v", closeErr)
 			return
 		}
 	}
@@ -135,10 +166,16 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 		); err != nil {
 			return
 		}
-		if _, err = cdc.OpenDbConn(
+		sinkConn, sinkConnErr := cdc.OpenDbConn(
+			ctx,
 			opts.SinkUriInfo.User, opts.SinkUriInfo.Password, opts.SinkUriInfo.Ip, opts.SinkUriInfo.Port, cdc.CDCDefaultSendSqlTimeout,
-		); err != nil {
-			err = moerr.NewInternalErrorf(ctx, "failed to connect to sink, please check the connection, err: %v", err)
+		)
+		if sinkConnErr != nil {
+			err = moerr.NewInternalErrorf(ctx, "failed to connect to sink, please check the connection, err: %v", sinkConnErr)
+			return
+		}
+		if closeErr := sinkConn.Close(); closeErr != nil {
+			err = moerr.NewInternalErrorf(ctx, "failed to close sink connection check: %v", closeErr)
 			return
 		}
 	}
@@ -222,6 +259,11 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 		return
 	}
 
+	// The task is persisted and acknowledged before its asynchronous executor
+	// starts. Keep the creation transaction snapshot so the executor does not
+	// install a later watermark and miss changes committed after CREATE CDC.
+	opts.setNoFullStartTS(ses.GetTxnHandler().GetTxn())
+
 	// fill default value for additional opts
 	if _, ok := extraOpts[cdc.CDCTaskExtraOptions_InitSnapshotSplitTxn]; !ok {
 		extraOpts[cdc.CDCTaskExtraOptions_InitSnapshotSplitTxn] = cdc.CDCDefaultTaskExtra_InitSnapshotSplitTxn
@@ -231,6 +273,24 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 	}
 	if _, ok := extraOpts[cdc.CDCTaskExtraOptions_MaxSqlLength]; !ok {
 		extraOpts[cdc.CDCTaskExtraOptions_MaxSqlLength] = cdc.CDCDefaultTaskExtra_MaxSQLLen
+	}
+	// Only full snapshots need the stable-epoch capability fence. NoFull tasks
+	// with an automatically persisted HLC start also require the new executor
+	// capability; older executors cannot parse the lossless timestamp format.
+	if opts.NoFull && opts.StartTs != "" && opts.startTsFromSnapshot {
+		extraOpts[cdc.CDCTaskExtraOptions_InitialSnapshotProtocol] = cdc.CDCInitialSnapshotProtocolNoFullHLC
+	}
+	if !opts.NoFull {
+		cdc.FinalizeInitialSnapshotOptions(extraOpts)
+		_, stable := extraOpts[cdc.CDCTaskExtraOptions_InitialSnapshotProtocol]
+		if err = validateStableInitialSnapshotProtocol(
+			ctx, stable, currentProtocolVersion(ses.proc)); err != nil {
+			return
+		}
+	} else if opts.startTsFromSnapshot {
+		if err = validateLosslessNoFullStartProtocol(ctx, currentProtocolVersion(ses.proc)); err != nil {
+			return
+		}
 	}
 
 	var extraOptsBytes []byte
@@ -243,13 +303,32 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 	return
 }
 
+func validateStableInitialSnapshotProtocol(
+	ctx context.Context,
+	stable bool,
+	protocolVersion int64,
+) error {
+	return cdc.ValidateStableInitialSnapshotProtocol(ctx, stable, protocolVersion)
+}
+
+func validateLosslessNoFullStartProtocol(ctx context.Context, protocolVersion int64) error {
+	return cdc.ValidateLosslessNoFullStartProtocol(ctx, protocolVersion)
+}
+
 func (opts *CDCCreateTaskOptions) BuildTaskMetadata() task.TaskMetadata {
+	executor := task.TaskCode_InitCdc
+	switch {
+	case opts.NoFull && cdc.UsesLosslessNoFullStart(opts.ExtraOpts):
+		executor = task.TaskCode_InitCdcLosslessStart
+	case !opts.NoFull && cdc.UsesStableEpochInitialSnapshot(opts.ExtraOpts):
+		executor = task.TaskCode_InitCdcStableEpoch
+	}
 	return task.TaskMetadata{
 		ID:       opts.TaskId,
-		Executor: task.TaskCode_InitCdc,
+		Executor: executor,
 		Options: task.TaskOptions{
-			MaxRetryTimes: defaultConnectorTaskMaxRetryTimes,
-			RetryInterval: defaultConnectorTaskRetryInterval,
+			MaxRetryTimes: defaultCDCTaskMaxRetryTimes,
+			RetryInterval: defaultCDCTaskRetryInterval,
 			DelayDuration: 0,
 			Concurrency:   0,
 		},
@@ -341,7 +420,6 @@ func (opts *CDCCreateTaskOptions) handleLevel(
 	if patterTupples, err = CDCParsePitrGranularity(
 		ctx, level, req.Tables,
 	); err != nil {
-		err = moerr.NewInternalErrorf(ctx, "invalid level: %s", level)
 		return
 	}
 	if err = WithBackgroundExec(
@@ -379,7 +457,6 @@ func (opts *CDCCreateTaskOptions) handleFrequency(
 	if patterTupples, err = CDCParsePitrGranularity(
 		ctx, level, req.Tables,
 	); err != nil {
-		err = moerr.NewInternalErrorf(ctx, "invalid level: %s", level)
 		return
 	}
 	if err = WithBackgroundExec(

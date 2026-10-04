@@ -1,0 +1,80 @@
+-- @bvt:issue
+-- @bvt:parallel
+
+-- Scalar TIME and a string use string comparison. A TIME column converts a
+-- constant string to the column's TIME(scale) before comparison.
+select cast('03:04:05.123456' as time(6)) = '030405.123456' as time_eq_compact_string,
+       cast('03:04:05.123456' as time(6)) = '03:04:05.123456' as time_eq_formatted_string;
+select '030405.123456' = cast('03:04:05.123456' as time(6)) as compact_string_eq_time;
+select cast('03:04:05.123456' as time(6)) < '030405.123456' as time_lt_compact_string,
+       cast('03:04:05.123456' as time(6)) > '030405.123456' as time_gt_compact_string;
+select cast('03:04:05.123456' as time(6)) != '030405.123456' as time_ne_compact_string,
+       cast('03:04:05.123456' as time(6)) <=> '030405.123456' as time_null_safe_eq_compact_string,
+       cast('03:04:05.123456' as time(6)) <= '030405.123456' as time_le_compact_string,
+       cast('03:04:05.123456' as time(6)) >= '030405.123456' as time_ge_compact_string;
+select cast('03:04:05.123456' as time(6)) between '030405.123455' and '030405.123457' as time_between_compact_string;
+
+drop table if exists mysql_compat_time_string_compare;
+create table mysql_compat_time_string_compare(t time(6));
+insert into mysql_compat_time_string_compare values ('03:04:05.123456');
+select t = '030405.123456' as time_col_eq_compact_string,
+       t between '030405.123455' and '030405.123457' as time_col_between_compact_string
+from mysql_compat_time_string_compare;
+drop table mysql_compat_time_string_compare;
+
+-- A direct prepared parameter is an execution-time constant, so a TIME column
+-- casts it to the column scale instead of falling back to string comparison.
+drop table if exists mysql_compat_time_prepare;
+create table mysql_compat_time_prepare(t time(2));
+insert into mysql_compat_time_prepare values ('12:00:00.24');
+
+prepare time_col_gt_param from 'select t > ? as time_col_gt_param from mysql_compat_time_prepare';
+set @time_param = '2:00:00';
+execute time_col_gt_param using @time_param;
+deallocate prepare time_col_gt_param;
+
+prepare time_param_lt_col from 'select ? < t as time_param_lt_col from mysql_compat_time_prepare';
+execute time_param_lt_col using @time_param;
+deallocate prepare time_param_lt_col;
+
+prepare time_col_eq_compact_param from 'select t = ? as time_col_eq_compact_param from mysql_compat_time_prepare';
+set @time_param = '120000.24';
+execute time_col_eq_compact_param using @time_param;
+deallocate prepare time_col_eq_compact_param;
+
+prepare time_col_lt_scale_param from 'select t < ? as time_col_lt_scale_param from mysql_compat_time_prepare';
+set @time_param = '120000.25';
+execute time_col_lt_scale_param using @time_param;
+deallocate prepare time_col_lt_scale_param;
+
+prepare time_col_between_params from 'select t between ? and ? as time_col_between_params from mysql_compat_time_prepare';
+set @time_lower = '2:00:00';
+set @time_upper = '13:00:00';
+execute time_col_between_params using @time_lower, @time_upper;
+deallocate prepare time_col_between_params;
+
+-- MySQL converts each BETWEEN bound independently when the left side is a
+-- TIME field. Cover direct parameter, literal, and TIME-value boundaries.
+prepare time_col_between_lower_param from 'select t between ? and ''13:00:00'' as time_col_between_lower_param from mysql_compat_time_prepare';
+execute time_col_between_lower_param using @time_lower;
+deallocate prepare time_col_between_lower_param;
+
+prepare time_col_between_upper_param from 'select t between ''2:00:00'' and ? as time_col_between_upper_param from mysql_compat_time_prepare';
+execute time_col_between_upper_param using @time_upper;
+deallocate prepare time_col_between_upper_param;
+
+prepare time_col_between_time_param from 'select t between cast(''2:00:00'' as time(2)) and ? as time_col_between_time_param from mysql_compat_time_prepare';
+execute time_col_between_time_param using @time_upper;
+deallocate prepare time_col_between_time_param;
+
+prepare time_col_eq_nullable_param from 'select t = ? as time_col_eq_nullable_param from mysql_compat_time_prepare';
+set @time_param = null;
+execute time_col_eq_nullable_param using @time_param;
+set @time_param = '';
+execute time_col_eq_nullable_param using @time_param;
+set @time_param = 'not-a-time';
+-- @regex("invalid time value not-a-time",true)
+execute time_col_eq_nullable_param using @time_param;
+deallocate prepare time_col_eq_nullable_param;
+
+drop table mysql_compat_time_prepare;

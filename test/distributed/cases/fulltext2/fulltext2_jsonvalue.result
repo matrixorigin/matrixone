@@ -1,0 +1,119 @@
+drop database if exists fulltext2_jsonvalue;
+create database fulltext2_jsonvalue;
+use fulltext2_jsonvalue;
+set experimental_fulltext2_index = 1;
+drop table if exists js;
+create table js(id bigint primary key, doc json);
+insert into js values
+(0,'{"a":"redbluebrownyelloworange","b":"winter"}'),
+(1,'{"a":"red","b":"winter"}'),
+(2,'{"a":"中文學習教材"}'),
+(3,'{"a":"happybirthday.happy-birthday_happybirthday"}');
+create fulltext2 index ft on js(doc) with parser json_value;
+select id from js where match(doc) against('redbluebrownyelloworange' in boolean mode) order by id;
+id
+0
+select id from js where match(doc) against('中文學習教材' in boolean mode) order by id;
+id
+2
+select id from js where match(doc) against('happybirthday.happy-birthday_happybirthday' in boolean mode) order by id;
+id
+3
+select id from js where match(doc) against('red' in boolean mode) order by id;
+id
+1
+select id from js where match(doc) against('winter' in boolean mode) order by id;
+id
+0
+1
+select id from js where match(doc) against('+red +winter' in boolean mode) order by id;
+id
+1
+select id from js where match(doc) against('bluebrown' in boolean mode) order by id;
+id
+select id from js where match(doc) against('中文學習' in boolean mode) order by id;
+id
+drop table if exists js2;
+create table js2(id bigint primary key, j1 json, j2 json);
+insert into js2 values
+(0,'{"x":"red"}','{"y":"winter"}'),
+(1,'{"x":"blue"}','{"y":"summer"}');
+create fulltext2 index ft on js2(j1, j2) with parser json_value;
+select id from js2 where match(j1, j2) against('+red +winter' in boolean mode) order by id;
+id
+0
+select id from js2 where match(j1, j2) against('summer' in boolean mode) order by id;
+id
+1
+drop table if exists jt;
+create table jt(id bigint primary key, doc text);
+insert into jt values
+(0,'{"a":"red..blue--brown@@yellow::orange"}'),
+(1,'{"a":"兒童中文"}');
+create fulltext2 index ft on jt(doc) with parser json_value;
+select id from jt where match(doc) against('red..blue--brown@@yellow::orange' in boolean mode) order by id;
+id
+0
+select id from jt where match(doc) against('兒童中文' in boolean mode) order by id;
+id
+1
+select id from jt where match(doc) against('red' in boolean mode) order by id;
+id
+drop table if exists js_null;
+create table js_null(id bigint primary key, left_doc json, right_doc json);
+insert into js_null values
+(1,'{"k":"leftboth"}','{"k":"rightboth"}'),
+(2,NULL,'{"k":"onlyrighttoken"}'),
+(3,'{"k":"onlylefttoken"}',NULL),
+(4,NULL,NULL),
+(5,'null','{"k":"literalcontrol"}'),
+(6,'"null"',NULL);
+create fulltext2 index ft_null on js_null(left_doc, right_doc) with parser json_value;
+select id from js_null where match(left_doc, right_doc) against('onlyrighttoken' in boolean mode) order by id;
+id
+2
+select id from js_null where match(left_doc, right_doc) against('onlylefttoken' in boolean mode) order by id;
+id
+3
+select id from js_null where match(left_doc, right_doc) against('+leftboth +rightboth' in boolean mode) order by id;
+id
+1
+select id from js_null where match(left_doc, right_doc) against('literalcontrol' in boolean mode) order by id;
+id
+5
+select id from js_null where match(left_doc, right_doc) against('null' in boolean mode) order by id;
+id
+6
+alter table js_null alter reindex ft_null fulltext2 merge force_sync;
+select id from js_null where match(left_doc, right_doc) against('onlyrighttoken' in boolean mode) order by id;
+id
+2
+select id from js_null where match(left_doc, right_doc) against('onlylefttoken' in boolean mode) order by id;
+id
+3
+select id from js_null where match(left_doc, right_doc) against('+leftboth +rightboth' in boolean mode) order by id;
+id
+1
+select id from js_null where match(left_doc, right_doc) against('literalcontrol' in boolean mode) order by id;
+id
+5
+select id from js_null where match(left_doc, right_doc) against('null' in boolean mode) order by id;
+id
+6
+alter table js_null alter reindex ft_null fulltext2 force_sync;
+select id from js_null where match(left_doc, right_doc) against('onlyrighttoken' in boolean mode) order by id;
+id
+2
+select id from js_null where match(left_doc, right_doc) against('onlylefttoken' in boolean mode) order by id;
+id
+3
+select id from js_null where match(left_doc, right_doc) against('+leftboth +rightboth' in boolean mode) order by id;
+id
+1
+select id from js_null where match(left_doc, right_doc) against('literalcontrol' in boolean mode) order by id;
+id
+5
+select id from js_null where match(left_doc, right_doc) against('null' in boolean mode) order by id;
+id
+6
+drop database fulltext2_jsonvalue;

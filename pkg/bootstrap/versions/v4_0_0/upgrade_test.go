@@ -22,11 +22,14 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -48,6 +51,10 @@ func mockTenantUpgrade(t *testing.T) {
 }
 
 func Test_Upgrade(t *testing.T) {
+	originalTenantUpgEntries := append([]versions.UpgradeEntry(nil), tenantUpgEntries...)
+	defer func() {
+		tenantUpgEntries = originalTenantUpgEntries
+	}()
 	mockTenantUpgrade(t)
 
 	sid := ""
@@ -56,8 +63,17 @@ func Test_Upgrade(t *testing.T) {
 		func(rt runtime.Runtime) {
 			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
 			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+			mp := mpool.MustNewZeroNoFixed()
+			defer mpool.DeleteMPool(mp)
 
 			executor := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+				if sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')" {
+					result := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, mp)
+					result.NewBatchWithRowCount(1)
+					require.NoError(t, executor.AppendStringRows(result, 0,
+						[]string{`{"method":"GETPROTOCOLVERSION","result":"cn-a:46"}`}))
+					return result.GetResult(), nil
+				}
 				return executor.Result{}, nil
 			}, txnOperator)
 
@@ -85,11 +101,11 @@ func Test_Upgrade(t *testing.T) {
 }
 
 func Test_versionHandle_HandleClusterUpgrade(t *testing.T) {
-	originalEntries := clusterUpgEntries
-	clusterUpgEntries = nil
+	originalClusterUpgEntries := append([]versions.UpgradeEntry(nil), clusterUpgEntries...)
 	defer func() {
-		clusterUpgEntries = originalEntries
+		clusterUpgEntries = originalClusterUpgEntries
 	}()
+	clusterUpgEntries = []versions.UpgradeEntry{}
 
 	v := &versionHandle{
 		metadata: versions.Version{
@@ -107,6 +123,16 @@ func Test_versionHandle_HandleClusterUpgrade(t *testing.T) {
 		executor2,
 	)
 	assert.Nil(t, err)
+}
+
+func TestUpgradeDefersMoIndexesIncludeColumn(t *testing.T) {
+	for _, entries := range [][]versions.UpgradeEntry{clusterUpgEntries, tenantUpgEntries} {
+		for _, entry := range entries {
+			require.False(t,
+				entry.Schema == catalog.MO_CATALOG && entry.TableName == catalog.MO_INDEXES && entry.UpgType == versions.ADD_COLUMN,
+				"mo_indexes schema changes require a staged release after all writers use explicit column lists")
+		}
+	}
 }
 
 func Test_upg_create_mo_task_sql_task_check_exists(t *testing.T) {

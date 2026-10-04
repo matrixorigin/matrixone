@@ -16,7 +16,6 @@ package shard
 
 import (
 	"fmt"
-	"sync"
 	"testing"
 	"time"
 
@@ -31,11 +30,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var (
-	once         sync.Once
-	shareCluster embed.Cluster
-	mu           sync.Mutex
-)
+var sharedCluster embed.SharedTestCluster
 
 func runShardClusterTest(
 	t *testing.T,
@@ -53,14 +48,9 @@ func runShardClusterTestWithReuse(
 	fn func(embed.Cluster),
 	reuse bool,
 ) error {
-	mu.Lock()
-	defer mu.Unlock()
-
-	var c embed.Cluster
-	createFunc := func() embed.Cluster {
-		new, err := embed.NewCluster(
+	createFunc := func() (embed.Cluster, error) {
+		return embed.StartTestCluster(
 			embed.WithCNCount(3),
-			embed.WithTesting(),
 			embed.WithPreStart(
 				func(op embed.ServiceOperator) {
 					op.Adjust(
@@ -85,34 +75,32 @@ func runShardClusterTestWithReuse(
 				},
 			),
 		)
+	}
+
+	run := func(c embed.Cluster) {
+		cn, err := c.GetCNService(0)
 		require.NoError(t, err)
-		require.NoError(t, new.Start())
-		return new
+		if !testutils.TableExists(t, catalog.MO_CATALOG, catalog.MOPartitionMetadata, cn) {
+			testutils.ExecSQL(
+				t,
+				catalog.MO_CATALOG,
+				cn,
+				partitionservice.InitSQLs...,
+			)
+		}
+		fn(c)
 	}
 
 	if reuse {
-		once.Do(
-			func() {
-				c = createFunc()
-				shareCluster = c
-			},
-		)
-		c = shareCluster
-	} else {
-		c = createFunc()
+		sharedCluster.Run(t, createFunc, run)
+		return nil
 	}
-
-	cn, err := c.GetCNService(0)
+	c, err := createFunc()
+	if c != nil {
+		t.Cleanup(func() { require.NoError(t, c.Close()) })
+	}
 	require.NoError(t, err)
-	if !testutils.TableExists(t, catalog.MO_CATALOG, catalog.MOPartitionMetadata, cn) {
-		testutils.ExecSQL(
-			t,
-			catalog.MO_CATALOG,
-			cn,
-			partitionservice.InitSQLs...,
-		)
-	}
-	fn(c)
+	run(c)
 	return nil
 }
 

@@ -26,14 +26,19 @@
 package plugin
 
 import (
+	"context"
 	"strings"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/indexplugin/coverage"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	idxcronplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/idxcron"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
+	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 )
 
 // AlgoPlugin is the integration contract for a vector index algorithm.
@@ -55,6 +60,24 @@ type AlgoPlugin interface {
 	// IVF-FLAT / CAGRA / IVF-PQ implementations consult the storage
 	// table to enforce their respective minimums.
 	Idxcron() idxcronplugin.Hooks
+}
+
+// SearchPlugin is an optional capability implemented by algorithms that have
+// migrated query execution from a table function to VECTOR_INDEX_SCAN.  The
+// separate interface lets algorithms migrate independently without a SQL-layer
+// name switch or no-op hooks on unrelated fulltext/GPU plugins.
+type SearchPlugin interface {
+	AlgoPlugin
+	Search() searchplugin.Hooks
+}
+
+// CoveragePlugin is an optional capability implemented by algorithms that can
+// report whether their durable state covers a read snapshot. Only an algorithm
+// that can answer honestly implements it; the rest are treated as never covered,
+// so no plugin carries a no-op hook.
+type CoveragePlugin interface {
+	AlgoPlugin
+	Coverage() coverage.Hooks
 }
 
 var (
@@ -83,6 +106,30 @@ func Get(algo string) (AlgoPlugin, bool) {
 	return p, ok
 }
 
+// CoversSnapshot asks algo whether its index is current enough to be used as a
+// MANDATORY filter at req.Snapshot, and returns the build_ts of the generation a probe would
+// search (0 = unknown) for the planner's partial-plan gap decision.
+//
+// It FAILS CLOSED at every step: an unregistered algo, one that does not
+// implement CoveragePlugin, or a hook that errors all report false. A caller may
+// therefore treat the result as "safe to filter with" without inspecting the
+// error, which is reported only for logging.
+func CoversSnapshot(ctx context.Context, algo string, req coverage.Request) (bool, types.TS, error) {
+	p, ok := Get(algo)
+	if !ok {
+		return false, types.TS{}, nil
+	}
+	cp, ok := p.(CoveragePlugin)
+	if !ok {
+		return false, types.TS{}, nil
+	}
+	covered, buildTS, err := cp.Coverage().CoversSnapshot(ctx, req)
+	if err != nil {
+		return false, types.TS{}, err
+	}
+	return covered, buildTS, nil
+}
+
 // All returns every registered plugin. Useful for catalog enumeration.
 func All() []AlgoPlugin {
 	registryMu.RLock()
@@ -96,7 +143,7 @@ func All() []AlgoPlugin {
 
 // IsVectorIndexAlgo reports whether algo is a registered vector
 // index algorithm (HNSW, CAGRA, IVF-PQ, IVF-FLAT) — i.e. plugin-
-// registered AND not the fulltext algorithm. Replaces the chain
+// registered AND of the vector KIND. Replaces the chain
 //
 //	catalog.IsIvfIndexAlgo(a) || catalog.IsHnswIndexAlgo(a) ||
 //	catalog.IsCagraIndexAlgo(a) || catalog.IsIvfpqIndexAlgo(a)
@@ -104,12 +151,21 @@ func All() []AlgoPlugin {
 // at every site that needs to gate "is this a multi-table vector
 // index?". Use IsFullTextIndexAlgo for fulltext and IsPluginAlgo for
 // "registered with the plugin system, vector OR fulltext".
+//
+// Kind is classified by the plugin's static CAPABILITY (Catalog().IsVectorIndex()),
+// not by an algo-name check: vector plugins (HNSW / IVF-FLAT / IVF-PQ / CAGRA)
+// declare true, the fulltext-family plugins (classic fulltext AND fulltext2)
+// declare false. This keeps fulltext2 correctly NON-vector without a second
+// fulltext algo-name exception here; a future fulltext-style engine is classified
+// right for free. (Previously this special-cased only classic fulltext by name, so
+// a registered fulltext2 wrongly reported as a vector index and had to be excluded
+// again ad hoc at call sites, e.g. compile/ddl.go.)
 func IsVectorIndexAlgo(algo string) bool {
-	if IsFullTextIndexAlgo(algo) {
+	p, ok := Get(algo)
+	if !ok {
 		return false
 	}
-	_, ok := Get(algo)
-	return ok
+	return p.Catalog().IsVectorIndex()
 }
 
 // IsFullTextIndexAlgo reports whether algo is the fulltext index

@@ -37,7 +37,7 @@ drop database if exists `select`;
 create database `select`;
 use `select`;
 drop table if exists `_binary`;
-create table `_binary` (`add` int, `all` bigint, `alter` smallint, `analyze` decimal, `and` char, `as` varchar, `asc` int, `begin` float);
+create table `_binary` (`add` int, `all` bigint, `alter` smallint, `analyze` decimal(38,0), `and` char, `as` varchar, `asc` int, `begin` float);
 show create table `_binary`;
 
 drop snapshot if exists sp01;
@@ -61,7 +61,7 @@ drop database if exists `column`;
 create database `column`;
 use `column`;
 drop table if exists `current_date`;
-create table `current_date` (`current_role` int, `current_time` bigint, `current_timestamp` smallint, `current_user` decimal, `database` char, `databases` varchar, `day_hour` int, `day_microsecond` float);
+create table `current_date` (`current_role` int, `current_time` bigint, `current_timestamp` smallint, `current_user` decimal(38,0), `database` char, `databases` varchar, `day_hour` int, `day_microsecond` float);
 show create table `current_date`;
 drop table `current_date`;
 

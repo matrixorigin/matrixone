@@ -32,6 +32,45 @@ func keyPartWithLength(colName string, length int) *tree.KeyPart {
 	}
 }
 
+func TestIndexNameKeyUsesCanonicalLowercaseInsteadOfSimpleFold(t *testing.T) {
+	require.Equal(t, indexNameKey("MixedCaseIdx"), indexNameKey("mixedcaseidx"))
+	require.Equal(t, indexNameKey("Σ"), indexNameKey("σ"))
+	require.NotEqual(t, indexNameKey("Σ"), indexNameKey("ς"))
+
+	indexes := []*plan.IndexDef{
+		{IndexName: "Σ"},
+		{IndexName: "ς"},
+	}
+	resolved, found := resolveIndexName(indexes, "ς")
+	require.True(t, found)
+	require.Equal(t, "ς", resolved)
+
+	resolved, found = resolveIndexName(indexes, "σ")
+	require.True(t, found)
+	require.Equal(t, "Σ", resolved)
+}
+
+func TestIndexNameKeyIsUsedForDuplicateChecksAndGeneratedNames(t *testing.T) {
+	ctx := context.Background()
+	names := make(map[string]bool)
+
+	require.NoError(t, checkDuplicateConstraint(names, "Σ", false, ctx))
+	require.NoError(t, checkDuplicateConstraint(names, "ς", false, ctx))
+	require.Error(t, checkDuplicateConstraint(names, "σ", false, ctx))
+
+	ordinary := &tree.Index{KeyParts: []*tree.KeyPart{keyPartWithLength("ς", 0)}}
+	setEmptyIndexName(map[string]bool{indexNameKey("Σ"): true}, ordinary)
+	require.Equal(t, "ς", ordinary.Name)
+
+	unique := &tree.UniqueIndex{KeyParts: []*tree.KeyPart{keyPartWithLength("σ", 0)}}
+	setEmptyUniqueIndexName(map[string]bool{indexNameKey("Σ"): true}, unique)
+	require.Equal(t, "σ_2", unique.Name)
+
+	fulltext := &tree.FullTextIndex{KeyParts: []*tree.KeyPart{keyPartWithLength("σ", 0)}}
+	setEmptyFullTextIndexName(map[string]bool{indexNameKey("Σ"): true}, fulltext)
+	require.Equal(t, "σ_2", fulltext.Name)
+}
+
 func TestIndexTableKeyTypeForPrefix(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -169,14 +208,24 @@ func TestCheckIndexColumnSupportability(t *testing.T) {
 		require.Error(t, checkIndexColumnSupportability(ctx, colOf(types.T_json), keyPart, "secondary"))
 	})
 
-	t.Run("vector only allowed for ivfflat and hnsw", func(t *testing.T) {
-		require.NoError(t, checkIndexColumnSupportability(ctx, colOf(types.T_array_float32), keyPart, "ivfflat"))
+	t.Run("vector type support is delegated to the plugin per algo", func(t *testing.T) {
+		// ivfflat accepts every vector element type (f32/f64 + narrow f16/bf16/int8/uint8).
+		for _, ty := range []types.T{
+			types.T_array_float32, types.T_array_float64, types.T_array_float16,
+			types.T_array_bf16, types.T_array_int8, types.T_array_uint8,
+		} {
+			require.NoError(t, checkIndexColumnSupportability(ctx, colOf(ty), keyPart, "ivfflat"))
+		}
 		require.NoError(t, checkIndexColumnSupportability(ctx, colOf(types.T_array_float64), keyPart, "hnsw"))
+		// A vector column in a non-vector index kind has no plugin → rejected,
+		// for both wide and narrow element types.
 		require.Error(t, checkIndexColumnSupportability(ctx, colOf(types.T_array_float32), keyPart, "secondary"))
+		require.Error(t, checkIndexColumnSupportability(ctx, colOf(types.T_array_int8), keyPart, "secondary"))
+		require.Error(t, checkIndexColumnSupportability(ctx, colOf(types.T_array_float16), keyPart, "unique"))
 	})
 
-	t.Run("enum rejected only in primary key", func(t *testing.T) {
-		require.Error(t, checkIndexColumnSupportability(ctx, colOf(types.T_enum, "a", "b"), keyPart, "primary"))
+	t.Run("enum allowed in indexes", func(t *testing.T) {
+		require.NoError(t, checkIndexColumnSupportability(ctx, colOf(types.T_enum, "a", "b"), keyPart, "primary"))
 		require.NoError(t, checkIndexColumnSupportability(ctx, colOf(types.T_enum, "a", "b"), keyPart, "secondary"))
 		require.NoError(t, checkIndexColumnSupportability(ctx, colOf(types.T_enum, "a", "b"), keyPart, "unique"))
 	})

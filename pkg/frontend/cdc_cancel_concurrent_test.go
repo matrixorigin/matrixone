@@ -16,7 +16,6 @@ package frontend
 
 import (
 	"context"
-	"reflect"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -30,41 +29,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// createMockTableDetector creates a properly initialized mock TableDetector
-// This ensures scanTableFn is set to prevent panics in scanTableLoop
+// createMockTableDetector creates a mock TableDetector without a background
+// scanner. Scanner behavior belongs to the cdc package tests.
 func createMockTableDetector() *cdc.TableDetector {
-	detector := &cdc.TableDetector{
-		Mp:                   make(map[uint32]cdc.TblMap),
-		Callbacks:            make(map[string]cdc.TableCallback),
-		CallBackAccountId:    make(map[string]uint32),
-		SubscribedAccountIds: make(map[uint32][]string),
-		CallBackDbName:       make(map[string][]string),
-		SubscribedDbNames:    make(map[string][]string),
-		CallBackTableName:    make(map[string][]string),
-		SubscribedTableNames: make(map[string][]string),
-	}
-
-	// Set scanTableFn to no-op to prevent panic in scanTableLoop
-	detectorValue := reflect.ValueOf(detector).Elem()
-	scanTableFnField := detectorValue.FieldByName("scanTableFn")
-	if scanTableFnField.IsValid() && scanTableFnField.CanSet() {
-		scanTableFnField.Set(reflect.ValueOf(func() error {
-			return nil // No-op scan function for testing
-		}))
-	}
-
-	// Call RegisterIfAbsent to properly initialize cancel field
-	// This starts scanTableLoop, which is safe because scanTableFn is no-op
-	detector.RegisterIfAbsent("__test_permanent_dummy__", 1, []string{}, []string{}, func(map[uint32]cdc.TblMap) error {
-		return nil // Dummy callback
-	})
-
-	return detector
+	return createMockTableDetectorForTest()("test-cn")
 }
 
 // setupMockTableDetector creates and stubs a mock TableDetector for testing
 // Returns gostub.Stubs that should be reset with .Reset()
-// Uses a shared mock detector instance and initializes cancel properly via Register
+// Uses a shared mock detector instance.
 func setupMockTableDetector() *gostub.Stubs {
 	sharedDetector := createMockTableDetector()
 

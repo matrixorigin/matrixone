@@ -23,8 +23,10 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
@@ -51,6 +53,250 @@ func GetExplainColumn(ctx context.Context, explainColName string) ([]*plan2.ColD
 	return cols, columns, err
 }
 
+func getPreparedResultColumns(stmt *PrepareStmt, txnHaveDDL bool) []*plan2.ColDef {
+	return getPreparedResultColumnsFromPlanWithGroupConcatMaxLen(
+		stmt.PrepareStmt, stmt.PreparePlan, txnHaveDDL, stmt.groupConcatMaxLenFloor)
+}
+
+func getPreparedResultColumnsFromPlanWithGroupConcatMaxLen(
+	stmt tree.Statement, preparedPlan *plan2.Plan, txnHaveDDL bool, groupConcatMaxLenFloor uint64,
+) []*plan2.ColDef {
+	plan := preparedPlan.GetDcl().GetPrepare().GetPlan()
+	return getPreparedResultColumnsForWithGroupConcatMaxLen(
+		stmt, plan, txnHaveDDL, groupConcatMaxLenFloor)
+}
+
+func getPreparedResultColumnsFor(stmt tree.Statement, plan *plan.Plan, txnHaveDDL bool) []*plan2.ColDef {
+	return getPreparedResultColumnsForWithGroupConcatMaxLen(stmt, plan, txnHaveDDL, 0)
+}
+
+func getPreparedResultColumnsForWithGroupConcatMaxLen(
+	stmt tree.Statement, preparedPlan *plan.Plan, txnHaveDDL bool, groupConcatMaxLenFloor uint64,
+) []*plan2.ColDef {
+	if isPerformStatement(stmt) {
+		return nil
+	}
+	// Frontend publication SHOW statements have no engine query plan. PREPARE
+	// and execution must use the same result schema and wire type conversion.
+	if columns := publicationShowResultColumns(stmt); columns != nil {
+		return columns
+	}
+	if query := preparedPlan.GetQuery(); query != nil {
+		var title string
+		switch stmt.(type) {
+		case *tree.ExplainStmt, *tree.ExplainAnalyze:
+			title = plan2.GetPlanTitle(query, txnHaveDDL)
+		case *tree.ExplainPhyPlan:
+			title = plan2.GetPhyPlanTitle(query, txnHaveDDL)
+		}
+		if title != "" {
+			return []*plan2.ColDef{{
+				Typ:        plan2.Type{Id: int32(types.T_varchar)},
+				Name:       title,
+				OriginName: title,
+			}}
+		}
+	}
+	columns := plan2.GetResultColumnsFromPlan(preparedPlan)
+	overlayPreparedGroupConcatResultMetadata(
+		preparedPlan.GetQuery(), columns, groupConcatMaxLenFloor)
+	return columns
+}
+
+const preparedGroupConcatVarcharMaxLen = 512
+
+type preparedGroupConcatResultColumnRef struct {
+	nodeID int32
+	colPos int32
+}
+
+func preparedPlanContainsGroupConcat(preparedPlan *plan.Plan) bool {
+	if preparedPlan == nil || preparedPlan.GetQuery() == nil {
+		return false
+	}
+	for _, node := range preparedPlan.GetQuery().Nodes {
+		if node == nil {
+			continue
+		}
+		for _, expr := range node.AggList {
+			if preparedExprContainsGroupConcat(expr) {
+				return true
+			}
+		}
+		for _, expr := range node.WinSpecList {
+			if preparedExprContainsGroupConcat(expr) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func preparedExprContainsGroupConcat(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if fn := expr.GetF(); fn != nil {
+		if fn.GetFunc() != nil && fn.GetFunc().GetObjName() == plan2.NameGroupConcat {
+			return true
+		}
+		for _, arg := range fn.Args {
+			if preparedExprContainsGroupConcat(arg) {
+				return true
+			}
+		}
+	}
+	if window := expr.GetW(); window != nil {
+		if preparedExprContainsGroupConcat(window.WindowFunc) {
+			return true
+		}
+		for _, arg := range window.PartitionBy {
+			if preparedExprContainsGroupConcat(arg) {
+				return true
+			}
+		}
+		for _, order := range window.OrderBy {
+			if order != nil && preparedExprContainsGroupConcat(order.Expr) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// overlayPreparedGroupConcatResultMetadata applies the MySQL result-type rule
+// that depends on group_concat_max_len to prepared result metadata only. The
+// execution plan keeps the aggregate's engine type (T_text/T_blob); changing it
+// here would change vector allocation and aggregate execution semantics.
+func overlayPreparedGroupConcatResultMetadata(
+	query *plan.Query, columns []*plan2.ColDef, groupConcatMaxLen uint64,
+) {
+	if query == nil || groupConcatMaxLen == 0 || len(query.Steps) == 0 {
+		return
+	}
+	step := len(query.Steps) - 1
+	if query.HasReturning {
+		if query.ReturningStep < 0 || int(query.ReturningStep) >= len(query.Steps) {
+			return
+		}
+		step = int(query.ReturningStep)
+	}
+	rootID := query.Steps[step]
+	if rootID < 0 || int(rootID) >= len(query.Nodes) {
+		return
+	}
+	root := query.Nodes[rootID]
+	if root == nil || len(root.ProjectList) != len(columns) {
+		return
+	}
+
+	for idx, expr := range root.ProjectList {
+		if !isDirectPreparedGroupConcatResult(query, rootID, expr, make(map[preparedGroupConcatResultColumnRef]struct{})) {
+			continue
+		}
+		col := columns[idx]
+		if col == nil {
+			continue
+		}
+		isBinary := col.Typ.Id == int32(types.T_blob) ||
+			col.Typ.Charset == uint32(types.CharsetBinary)
+		if groupConcatMaxLen <= preparedGroupConcatVarcharMaxLen {
+			if isBinary {
+				col.Typ.Id = int32(types.T_varbinary)
+				col.Typ.Charset = uint32(types.CharsetBinary)
+			} else {
+				col.Typ.Id = int32(types.T_varchar)
+			}
+			col.Typ.Width = int32(groupConcatMaxLen)
+		} else if isBinary {
+			// MySQL exposes a binary GROUP_CONCAT as BLOB above the VARCHAR
+			// threshold. Keep the binary OID so colDef2MysqlColumn emits both
+			// the binary charset and BINARY_FLAG.
+			col.Typ.Id = int32(types.T_blob)
+			col.Typ.Charset = uint32(types.CharsetBinary)
+		} else {
+			col.Typ.Id = int32(types.T_text)
+			col.Typ.Width = types.MaxLongTextLen
+		}
+	}
+}
+
+func isDirectPreparedGroupConcatResult(
+	query *plan.Query, nodeID int32, expr *plan.Expr, seen map[preparedGroupConcatResultColumnRef]struct{},
+) bool {
+	if expr == nil {
+		return false
+	}
+	if query == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) {
+		return false
+	}
+	node := query.Nodes[nodeID]
+	if node == nil {
+		return false
+	}
+	switch node.NodeType {
+	case plan.Node_UNION, plan.Node_UNION_ALL,
+		plan.Node_INTERSECT, plan.Node_INTERSECT_ALL,
+		plan.Node_MINUS, plan.Node_MINUS_ALL:
+		// Set-operation output types are common to both branches. Following
+		// only the left projection could narrow a result whose right branch
+		// still produces a wider value.
+		return false
+	}
+	if fn := expr.GetF(); fn != nil && fn.GetFunc() != nil {
+		return fn.GetFunc().GetObjName() == plan2.NameGroupConcat
+	}
+	col := expr.GetCol()
+	if col == nil {
+		return false
+	}
+	switch {
+	case col.RelPos == -2:
+		if node.NodeType != plan.Node_AGG {
+			return false
+		}
+		aggPos := col.ColPos - int32(len(node.GroupBy))
+		if aggPos < 0 || int(aggPos) >= len(node.AggList) {
+			return false
+		}
+		return isDirectPreparedGroupConcatResult(
+			query, nodeID, node.AggList[aggPos], seen)
+	case col.RelPos >= 0:
+		if int(col.RelPos) >= len(node.Children) {
+			return false
+		}
+		childID := node.Children[col.RelPos]
+		if childID < 0 || int(childID) >= len(query.Nodes) {
+			return false
+		}
+		child := query.Nodes[childID]
+		if child == nil || col.ColPos < 0 || int(col.ColPos) >= len(child.ProjectList) {
+			return false
+		}
+		ref := preparedGroupConcatResultColumnRef{nodeID: childID, colPos: col.ColPos}
+		if _, ok := seen[ref]; ok {
+			return false
+		}
+		seen[ref] = struct{}{}
+		return isDirectPreparedGroupConcatResult(
+			query, childID, child.ProjectList[col.ColPos], seen)
+	default:
+		return false
+	}
+}
+
+func sessionTxnHaveDDL(ses FeSession) bool {
+	if ses == nil || ses.GetProc() == nil {
+		return false
+	}
+	txnOperator := ses.GetProc().GetTxnOperator()
+	if txnOperator == nil {
+		return false
+	}
+	workspace := txnOperator.GetWorkspace()
+	return workspace != nil && workspace.GetHaveDDL()
+}
+
 func getSelectColumnsAndResultColumns(ctx context.Context, cw ComputationWrapper) ([]interface{}, []*plan2.ColDef, error) {
 	if txnCW, ok := cw.(*TxnComputationWrapper); ok {
 		if _, ok = txnCW.GetAst().(*tree.Select); ok {
@@ -65,12 +311,66 @@ func getSelectColumnsAndResultColumns(ctx context.Context, cw ComputationWrapper
 	return columns, plan2.GetResultColumnsFromPlan(cw.Plan()), nil
 }
 
+type resultMetadataFreezer interface {
+	FreezeResultMetadata()
+}
+
+func freezeResultMetadata(runner ComputationRunner) {
+	if freezer, ok := runner.(resultMetadataFreezer); ok {
+		freezer.FreezeResultMetadata()
+	}
+}
+
 // executeResultRowStmt run the statemet that responses result rows
 func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	var columns []interface{}
 	var colDefs []*plan2.ColDef
 	ses.EnterFPrint(FPResultRowStmt)
 	defer ses.ExitFPrint(FPResultRowStmt)
+	if execCtx.stmt.StmtKind().RespType() == tree.RESP_DEFERRED_RESULT_ROW {
+		if execCtx.returning == nil || execCtx.returning.spool == nil {
+			return moerr.NewInternalError(execCtx.reqCtx, "DML RETURNING spool is not initialized")
+		}
+		if execCtx.runResult, err = execCtx.runner.Run(0); err != nil {
+			return err
+		}
+		// RETURNING rows are attempt-spooled and no metadata has reached the
+		// client yet. Sync a definition-retried generation first, then derive
+		// metadata from the plan that actually produced the committed spool.
+		if txnCw, ok := execCtx.cw.(*TxnComputationWrapper); ok {
+			if runningCompile, ok := execCtx.runner.(Compile); ok {
+				txnCw.syncCompileExecution(runningCompile)
+			}
+		}
+		columns, err = execCtx.cw.GetColumns(execCtx.reqCtx)
+		if err != nil {
+			return err
+		}
+		colDefs = plan2.GetResultColumnsFromPlan(execCtx.cw.Plan())
+		if len(columns) != len(colDefs) {
+			return moerr.NewInternalError(execCtx.reqCtx, "DML RETURNING metadata does not match projection")
+		}
+		ses.rs = &plan.ResultColDef{ResultCols: colDefs}
+		execCtx.returning.columns = columns
+		execCtx.returning.affectedRows = execCtx.runResult.AffectRows
+		if got := execCtx.returning.spool.RowCount(); got != execCtx.runResult.AffectRows {
+			return moerr.NewInternalErrorf(execCtx.reqCtx,
+				"DML RETURNING row count %d does not match affected rows %d", got, execCtx.runResult.AffectRows)
+		}
+		if canSaveQueryResult(execCtx.reqCtx, ses) {
+			saver := &QueryResult{}
+			execCtx.returning.stagedSaver = saver
+			if err = execCtx.returning.spool.Replay(execCtx.reqCtx, func(bat *batch.Batch, crs *perfcounter.CounterSet) error {
+				return saver.Stage(execCtx, crs, bat)
+			}); err != nil {
+				return err
+			}
+			if err = saver.FinishStage(execCtx); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	switch statement := execCtx.stmt.(type) {
 	case *tree.Select:
 
@@ -86,9 +386,22 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 		ses.EnterFPrint(FPResultRowStmtSelect1)
 		defer ses.ExitFPrint(FPResultRowStmtSelect1)
-		err = execCtx.resper.RespPreMeta(execCtx, columns)
-		if err != nil {
-			return
+		freezeResultMetadata(execCtx.runner)
+		cursorExecute := execCtx.input != nil && execCtx.input.isCursorExecute
+		if cursorExecute {
+			// A cursor must retain its metadata before the pipeline starts so
+			// captured batches can be decoded, but its execute terminator must
+			// not be sent until all batches have materialized successfully.
+			if resper, ok := execCtx.resper.(*MysqlResp); ok {
+				resper.setPreparedCursorColumns(execCtx, columns)
+			} else {
+				return moerr.NewInternalError(execCtx.reqCtx, "prepared cursor requires MySQL response writer")
+			}
+		} else {
+			err = execCtx.resper.RespPreMeta(execCtx, columns)
+			if err != nil {
+				return
+			}
 		}
 
 		ses.EnterFPrint(FPResultRowStmtSelect2)
@@ -102,6 +415,10 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		if _, err = execCtx.runner.Run(0); err != nil {
 			return
 		}
+		// Cursor metadata is retained above for decoding, but its wire response
+		// is emitted by respStreamResultRow after transaction finalization. This
+		// prevents a later autocommit commit error from following a successful
+		// cursor response on the same connection.
 
 		// only log if run time is longer than 1s
 		if time.Since(runBegin) > time.Second {
@@ -138,6 +455,7 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 		ses.EnterFPrint(FPResultRowStmtExplainAnalyze1)
 		defer ses.ExitFPrint(FPResultRowStmtExplainAnalyze1)
+		freezeResultMetadata(execCtx.runner)
 		err = execCtx.resper.RespPreMeta(execCtx, columns)
 		if err != nil {
 			return
@@ -171,6 +489,7 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 		ses.EnterFPrint(FPResultRowStmtDefault1)
 		defer ses.ExitFPrint(FPResultRowStmtDefault1)
+		freezeResultMetadata(execCtx.runner)
 		err = execCtx.resper.RespPreMeta(execCtx, columns)
 		if err != nil {
 			return
@@ -210,8 +529,54 @@ func (resper *MysqlResp) respColumnDefsWithoutFlush(ses *Session, execCtx *ExecC
 	//!!!carefully to use
 	//execCtx.proto.DisableAutoFlush()
 	//defer execCtx.proto.EnableAutoFlush()
+	resper.setPreparedCursorColumns(execCtx, columns)
+	if err = resper.writeColumnDefs(ses, execCtx, columns); err != nil {
+		return err
+	}
+	/*
+		mysql COM_QUERY response: End after the column has been sent.
+		send EOF packet
+	*/
+	return resper.mysqlRrWr.WriteEOFIFAndNoFlush(0, ses.GetTxnHandler().GetServerStatus())
+}
 
+// respCursorColumnDefs writes the complete COM_STMT_EXECUTE cursor response
+// after the pipeline has successfully materialized the result and transaction
+// finalization has succeeded. A server cursor response has one and only one
+// execute terminator: the EOF/OK packet following the column definitions,
+// carrying SERVER_STATUS_CURSOR_EXISTS. Delaying this packet prevents a failed
+// decode, limit check, pipeline, or commit operation from advertising a cursor
+// that cannot be fetched.
+func (resper *MysqlResp) respCursorColumnDefs(ses *Session, execCtx *ExecCtx, columns []any) error {
+	if execCtx.inMigration {
+		return nil
+	}
+	resper.setPreparedCursorColumns(execCtx, columns)
+	if err := resper.writeColumnDefs(ses, execCtx, columns); err != nil {
+		return err
+	}
+	status := cursorExecuteStatus(checkMoreResultSet(ses.getStatusAfterTxnIsEnded(), execCtx.isLastStmt))
+	return resper.mysqlRrWr.WriteEOFOrOK(0, status)
+}
+
+func (resper *MysqlResp) setPreparedCursorColumns(execCtx *ExecCtx, columns []any) {
+	if execCtx == nil || execCtx.input == nil || !execCtx.input.isCursorExecute ||
+		execCtx.prepareStmt == nil || execCtx.prepareStmt.cursor == nil {
+		return
+	}
+	if execCtx.prepareStmt.cursor.result == nil {
+		execCtx.prepareStmt.cursor.result = &MysqlResultSet{}
+	}
+	cursorColumns := make([]Column, 0, len(columns))
+	for _, column := range columns {
+		cursorColumns = append(cursorColumns, column.(Column))
+	}
+	execCtx.prepareStmt.cursor.result.Columns = cursorColumns
+}
+
+func (resper *MysqlResp) writeColumnDefs(ses *Session, execCtx *ExecCtx, columns []any) (err error) {
 	mrs := ses.GetMysqlResultSet()
+
 	/*
 		Step 1 : send column count and column definition.
 	*/
@@ -247,14 +612,6 @@ func (resper *MysqlResp) respColumnDefsWithoutFlush(ses *Session, execCtx *ExecC
 			}
 		}
 	}
-	/*
-		mysql COM_QUERY response: End after the column has been sent.
-		send EOF packet
-	*/
-	err = resper.mysqlRrWr.WriteEOFIFAndNoFlush(0, ses.GetTxnHandler().GetServerStatus())
-	if err != nil {
-		return
-	}
 	return
 }
 
@@ -272,7 +629,28 @@ func (resper *MysqlResp) respStreamResultRow(ses *Session,
 			ses.AddSeqValues(execCtx.proc)
 		}
 		ses.SetSeqLastValue(execCtx.proc)
-		err2 := resper.mysqlRrWr.WriteEOFOrOK(0, checkMoreResultSet(ses.getStatusAfterTxnIsEnded(), execCtx.isLastStmt))
+		if execCtx.input != nil && execCtx.input.isCursorExecute {
+			// The execute pipeline has already materialized the retained rows. Emit
+			// the column definitions and the sole cursor terminator only now: this
+			// callback runs after executeStmtWithWorkspace has finalized the
+			// transaction. Fetch owns the next protocol packet, including
+			// LAST_ROW_SENT for an empty result.
+			if execCtx.prepareStmt == nil || execCtx.prepareStmt.cursor == nil ||
+				execCtx.prepareStmt.cursor.result == nil || len(execCtx.prepareStmt.cursor.result.Columns) == 0 {
+				err = moerr.NewInternalError(execCtx.reqCtx, "prepared cursor result metadata is missing")
+				return
+			}
+			columns := make([]any, len(execCtx.prepareStmt.cursor.result.Columns))
+			for i, column := range execCtx.prepareStmt.cursor.result.Columns {
+				columns[i] = column
+			}
+			if err = resper.respCursorColumnDefs(ses, execCtx, columns); err != nil {
+				return
+			}
+			return nil
+		}
+		status := checkMoreResultSet(ses.getStatusAfterTxnIsEnded(), execCtx.isLastStmt)
+		err2 := resper.mysqlRrWr.WriteEOFOrOK(0, status)
 		if err2 != nil {
 			err = moerr.NewInternalErrorf(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
 			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
@@ -361,6 +739,11 @@ func (resper *MysqlResp) respStreamResultRow(ses *Session,
 	return
 }
 
+func cursorExecuteStatus(status uint16) uint16 {
+	status &^= SERVER_STATUS_CURSOR_EXISTS | SERVER_STATUS_LAST_ROW_SENT
+	return status | SERVER_STATUS_CURSOR_EXISTS
+}
+
 func schedulingTraceFromComputationWrapper(cw ComputationWrapper) schedule.Trace {
 	if provider, ok := cw.(interface{ SchedulingTrace() schedule.Trace }); ok {
 		return provider.SchedulingTrace()
@@ -383,7 +766,7 @@ func (resper *MysqlResp) respPrebuildResultRow(ses *Session,
 		return nil
 	}
 	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
-	res := ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, execCtx.isLastStmt)
+	res := ses.SetNewResponse(ResultResponse, 0, int(ses.GetCmd()), mer, execCtx.isLastStmt)
 	if err := resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, res); err != nil {
 		return moerr.NewInternalErrorf(execCtx.reqCtx, "routine send response failed, error: %v ", err)
 	}
@@ -420,16 +803,35 @@ func (resper *MysqlResp) respBySituation(ses *Session,
 	defer func() {
 		execCtx.results = nil
 	}()
-	resp := NewGeneralOkResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus())
 	if len(execCtx.results) == 0 {
+		var affectedRows uint64
+		if execCtx.runResult != nil {
+			affectedRows = execCtx.runResult.AffectRows
+		}
+		resp := setResponse(ses, execCtx.isLastStmt, affectedRows)
 		if err = resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, resp); err != nil {
 			return moerr.NewInternalErrorf(execCtx.reqCtx, "routine send response failed. error:%v ", err)
 		}
 	} else {
+		_, isCall := execCtx.stmt.(*tree.CallStmt)
+		cmd := int(COM_QUERY)
+		if execCtx.input != nil && execCtx.input.isBinaryProtExecute {
+			cmd = int(COM_STMT_EXECUTE)
+		}
 		for i, result := range execCtx.results {
 			mer := NewMysqlExecutionResult(0, 0, 0, 0, result.(*MysqlResultSet))
-			isLastResult := i == len(execCtx.results)-1 && execCtx.isLastStmt
-			resp = ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, isLastResult)
+			isLastResult := i == len(execCtx.results)-1 && execCtx.isLastStmt && !isCall
+			resp := ses.SetNewResponse(ResultResponse, 0, cmd, mer, isLastResult)
+			if err = resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, resp); err != nil {
+				return moerr.NewInternalErrorf(execCtx.reqCtx, "routine send response failed. error:%v ", err)
+			}
+		}
+		if isCall {
+			var affectedRows uint64
+			if execCtx.runResult != nil {
+				affectedRows = execCtx.runResult.AffectRows
+			}
+			resp := setResponse(ses, execCtx.isLastStmt, affectedRows)
 			if err = resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, resp); err != nil {
 				return moerr.NewInternalErrorf(execCtx.reqCtx, "routine send response failed. error:%v ", err)
 			}

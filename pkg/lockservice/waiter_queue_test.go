@@ -216,6 +216,51 @@ func TestSkipCompletedWaiters(t *testing.T) {
 	})
 }
 
+func TestNotifyLeadingSharedDoesNotPassInFlightReader(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		q := newWaiterQueue()
+		reader := acquireWaiter(pb.WaitTxn{TxnID: []byte("reader")}, "test", nil)
+		reader.lockWaitMode = pb.LockMode_Shared
+		reader.setStatus(completed)
+		writer := acquireWaiter(pb.WaitTxn{TxnID: []byte("writer")}, "test", nil)
+		writer.lockWaitMode = pb.LockMode_Exclusive
+		writer.setStatus(blocking)
+		q.put(reader, writer)
+
+		q.notifyLeadingShared(notifyValue{})
+		require.Equal(t, 2, q.size(),
+			"a reader between notification and retry must retain its FIFO position")
+		require.Equal(t, blocking, writer.getStatus(),
+			"Shared cohort notification must never advance into an Exclusive waiter")
+
+		removed, _ := q.remove(reader)
+		require.True(t, removed)
+		removed, _ = q.remove(writer)
+		require.True(t, removed)
+		reader.close("test", nil)
+		writer.close("test", nil)
+	})
+}
+
+func TestNotifyLeadingSharedSkipsMergeWaiter(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		q := newWaiterQueue()
+		merge := acquireWaiter(pb.WaitTxn{TxnID: []byte("merge")}, "test", nil)
+		merge.lockWaitMode = pb.LockMode_Shared
+		merge.notifyOnSharedHolderChange = true
+		merge.setStatus(blocking)
+		q.put(merge)
+
+		q.notifyLeadingShared(notifyValue{})
+		require.Equal(t, blocking, merge.getStatus(),
+			"range merge waiters wake only when an existing Shared holder leaves")
+
+		removed, _ := q.remove(merge)
+		require.True(t, removed)
+		merge.close("test", nil)
+	})
+}
+
 func TestCanGetCommitTSInWaitQueue(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		q := newWaiterQueue()
@@ -262,6 +307,47 @@ func TestCanGetCommitTSInWaitQueue(t *testing.T) {
 		// w5 get notify
 		assert.Equal(t, int64(3), w5.wait(context.Background(), getLogger("")).ts.PhysicalTime)
 		q.removeByTxnID(w5.txn.TxnID)
+	})
+}
+
+func TestNotifySharedHolderChange(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		q := newWaiterQueue().(*sliceBasedWaiterQueue)
+
+		mergeWaiter := acquireWaiter(pb.WaitTxn{TxnID: []byte("merge")}, "", nil)
+		mergeWaiter.notifyOnSharedHolderChange = true
+		mergeWaiter.setStatus(blocking)
+		defer mergeWaiter.close("", nil)
+
+		completedMergeWaiter := acquireWaiter(pb.WaitTxn{TxnID: []byte("completed-merge")}, "", nil)
+		completedMergeWaiter.notifyOnSharedHolderChange = true
+		completedMergeWaiter.setStatus(completed)
+		defer completedMergeWaiter.close("", nil)
+
+		ordinaryWaiter := acquireWaiter(pb.WaitTxn{TxnID: []byte("ordinary")}, "", nil)
+		ordinaryWaiter.setStatus(blocking)
+		defer ordinaryWaiter.close("", nil)
+
+		q.put(mergeWaiter, completedMergeWaiter, ordinaryWaiter)
+		q.resetCommittedAt(timestamp.Timestamp{PhysicalTime: 3})
+		q.notifySharedHolderChange(notifyValue{ts: timestamp.Timestamp{PhysicalTime: 1}})
+
+		// Only the merge waiter retries; it also inherits the queue's monotonic
+		// commit timestamp instead of the older holder departure timestamp.
+		require.Equal(t, int64(3), mergeWaiter.wait(context.Background(), nil).ts.PhysicalTime)
+		require.Equal(t, 1, q.size())
+		require.Same(t, ordinaryWaiter, q.first())
+		require.Equal(t, blocking, ordinaryWaiter.getStatus())
+		// Compaction must release every removed queue reference from the
+		// backing array. The queue can live much longer than these waiters, so
+		// merely reducing len would retain pooled waiter objects at the queue's
+		// historical high-water mark.
+		retainedSlots := q.waiters[:3]
+		require.Nil(t, retainedSlots[1])
+		require.Nil(t, retainedSlots[2])
+
+		q.close(notifyValue{})
+		ordinaryWaiter.wait(context.Background(), nil)
 	})
 }
 

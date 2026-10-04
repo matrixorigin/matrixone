@@ -15,14 +15,244 @@
 package bytejson
 
 import (
+	"bytes"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/defines"
 )
+
+func TestMarshalBinarySubtypesRemainLegacyReadable(t *testing.T) {
+	opaque := ByteJson{Type: TpCodeOpaque, Data: appendBinaryString(nil, string([]byte{0x01, 0x02}))}
+	bit := ByteJson{Type: TpCodeBit, Data: appendBinaryString(nil, string([]byte{0x01}))}
+	array, err := CreateByteJSON([]any{opaque, bit})
+	require.NoError(t, err)
+	object, err := CreateByteJSON(map[string]any{"bit": bit, "opaque": opaque})
+	require.NoError(t, err)
+
+	tests := []struct {
+		name  string
+		value ByteJson
+		check func(*testing.T, ByteJson)
+	}{
+		{
+			name:  "root opaque",
+			value: opaque,
+			check: func(t *testing.T, got ByteJson) {
+				require.Equal(t, TpCodeBlob, got.Type)
+				require.Equal(t, `"AQI="`, got.String())
+				length, ok := BinaryJSONPayloadLen(got)
+				require.True(t, ok)
+				require.Equal(t, 2, length)
+			},
+		},
+		{
+			name:  "root bit",
+			value: bit,
+			check: func(t *testing.T, got ByteJson) {
+				require.Equal(t, TpCodeBlob, got.Type)
+				require.Equal(t, "BIT", got.TYPE())
+				require.Equal(t, `"AQ=="`, got.String())
+			},
+		},
+		{
+			name:  "array",
+			value: array,
+			check: func(t *testing.T, got ByteJson) {
+				require.Equal(t, TpCodeBlob, got.GetArrayElem(0).Type)
+				require.Equal(t, TpCodeBlob, got.GetArrayElem(1).Type)
+				require.Equal(t, "BIT", got.GetArrayElem(1).TYPE())
+				require.Equal(t, `["AQI=", "AQ=="]`, got.String())
+			},
+		},
+		{
+			name:  "object",
+			value: object,
+			check: func(t *testing.T, got ByteJson) {
+				require.Equal(t, TpCodeBlob, got.GetObjectVal(0).Type)
+				require.Equal(t, "BIT", got.GetObjectVal(0).TYPE())
+				require.Equal(t, TpCodeBlob, got.GetObjectVal(1).Type)
+				require.Equal(t, `{"bit": "AQ==", "opaque": "AQI="}`, got.String())
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			stored, err := tc.value.Marshal()
+			require.NoError(t, err)
+			requireLegacyJSONReadable(t, stored)
+
+			var got ByteJson
+			require.NoError(t, got.Unmarshal(stored))
+			tc.check(t, got)
+		})
+	}
+}
+
+func TestMySQLOpaqueTaggedValue(t *testing.T) {
+	payload := []byte{0x00, 0xff, 0x41}
+	for _, tc := range []struct {
+		name      string
+		fieldType uint8
+		want      string
+	}{
+		{name: "varbinary", fieldType: 15, want: "base64:type15:AP9B"},
+		{name: "bit", fieldType: 16, want: "base64:type16:AP9B"},
+		{name: "blob", fieldType: 252, want: "base64:type252:AP9B"},
+		{name: "binary", fieldType: 254, want: "base64:type254:AP9B"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			value, err := NewMySQLOpaque(defines.MORPCLatestVersion, tc.fieldType, payload)
+			require.NoError(t, err)
+			require.Equal(t, TpCodeBlob, value.Type)
+			wantType := "BLOB"
+			if tc.fieldType == 16 {
+				wantType = "BIT"
+			}
+			require.Equal(t, wantType, value.TYPE())
+			require.Equal(t, strconv.Quote(tc.want), value.String())
+			require.Equal(t, tc.want, mustUnquote(t, value))
+			length, ok := BinaryJSONPayloadLen(value)
+			require.True(t, ok)
+			require.Equal(t, len(payload), length)
+
+			stored, err := value.Marshal()
+			require.NoError(t, err)
+			requireLegacyJSONReadable(t, stored)
+			var restored ByteJson
+			require.NoError(t, restored.Unmarshal(stored))
+			require.Equal(t, value.String(), restored.String())
+		})
+	}
+}
+
+func TestMySQLOpaqueRequiresRollingUpgradeAdmission(t *testing.T) {
+	require.Equal(t, int64(defines.MORPCVersion52), MySQLOpaqueProtocolVersion)
+
+	_, err := NewMySQLOpaque(defines.MORPCVersion49, 252, []byte{0x00})
+	require.ErrorContains(t, err, "MORPC protocol version "+strconv.FormatInt(MySQLOpaqueProtocolVersion, 10))
+
+	value, err := NewMySQLOpaque(MySQLOpaqueProtocolVersion, 252, []byte{0x00})
+	require.NoError(t, err)
+	require.Equal(t, `"base64:type252:AA=="`, value.String())
+}
+
+func TestMySQLOpaqueTypeDoesNotAllocatePayload(t *testing.T) {
+	payload := bytes.Repeat([]byte{0x01}, 1<<20)
+	value, err := NewMySQLOpaque(defines.MORPCLatestVersion, 16, payload)
+	require.NoError(t, err)
+
+	allocs := testing.AllocsPerRun(10, func() {
+		if typ := value.TYPE(); typ != "BIT" {
+			t.Fatalf("unexpected type: %s", typ)
+		}
+	})
+	require.Zero(t, allocs, "tagged BIT TYPE should not materialize the payload")
+}
+
+func TestUint64TypeRemainsInteger(t *testing.T) {
+	value, err := CreateByteJSON(uint64(2024))
+	require.NoError(t, err)
+	require.Equal(t, "INTEGER", value.TYPE())
+}
+
+func TestBinaryJSONPayloadLenLegacyBlobLargePayloadAllocations(t *testing.T) {
+	payload := bytes.Repeat([]byte{0xef}, 1<<20)
+	legacy := makeBinaryJson(TpCodeBlob, []byte(base64.StdEncoding.EncodeToString(payload)))
+
+	allocs := testing.AllocsPerRun(10, func() {
+		length, ok := BinaryJSONPayloadLen(legacy)
+		if !ok || length != len(payload) {
+			t.Fatalf("unexpected payload length: length=%d ok=%v", length, ok)
+		}
+	})
+	require.Less(t, allocs, float64(1), "payload length should not allocate decoded payload buffers")
+}
+
+func TestBinaryJSONPayloadLenLegacyBlobPreservesBase64Newlines(t *testing.T) {
+	payload := bytes.Repeat([]byte{0xef}, 16*1024)
+	encoded := base64.StdEncoding.EncodeToString(payload)
+	legacyWithNewlines := makeBinaryJson(TpCodeBlob, []byte(encoded[:4095]+"\r\n"+encoded[4095:]))
+
+	length, ok := BinaryJSONPayloadLen(legacyWithNewlines)
+	require.True(t, ok)
+	require.Equal(t, len(payload), length)
+}
+
+func TestBinaryJSONPayloadLenLegacyBitPreservesBase64Newlines(t *testing.T) {
+	payload := bytes.Repeat([]byte{0x01}, 16*1024)
+	encoded := base64.StdEncoding.EncodeToString(payload)
+	legacyWithNewlines := makeBinaryJson(TpCodeBlob, []byte(persistedBitPrefix+encoded[:4095]+"\r\n"+encoded[4095:]))
+
+	length, ok := BinaryJSONPayloadLen(legacyWithNewlines)
+	require.True(t, ok)
+	require.Equal(t, len(payload), length)
+}
+
+// requireLegacyJSONReadable models the pre-TpCodeOpaque/TpCodeBit reader. It
+// intentionally rejects type codes newer than TpCodeBlob and recursively
+// validates every value entry and offset that the old reader would follow.
+func requireLegacyJSONReadable(t *testing.T, stored []byte) {
+	t.Helper()
+	require.NotEmpty(t, stored)
+	requireLegacyJSONValueReadable(t, TpCode(stored[0]), stored[1:])
+}
+
+func requireLegacyJSONValueReadable(t *testing.T, tp TpCode, data []byte) {
+	t.Helper()
+	switch tp {
+	case TpCodeLiteral:
+		require.NotEmpty(t, data)
+	case TpCodeInt64, TpCodeUint64, TpCodeFloat64:
+		require.GreaterOrEqual(t, len(data), numberSize)
+	case TpCodeString, TpCodeDecimal, TpCodeDate, TpCodeTime, TpCodeDatetime, TpCodeBlob:
+		length, prefixLen := binary.Uvarint(data)
+		require.Greater(t, prefixLen, 0)
+		require.LessOrEqual(t, uint64(prefixLen)+length, uint64(len(data)))
+	case TpCodeArray, TpCodeObject:
+		require.GreaterOrEqual(t, len(data), headerSize)
+		count := int(endian.Uint32(data))
+		docSize := int(endian.Uint32(data[docSizeOff:]))
+		require.LessOrEqual(t, headerSize, docSize)
+		require.LessOrEqual(t, docSize, len(data))
+		keyTableSize := 0
+		if tp == TpCodeObject {
+			keyTableSize = count * keyEntrySize
+			require.LessOrEqual(t, headerSize+keyTableSize+count*valEntrySize, docSize)
+			for i := 0; i < count; i++ {
+				off := headerSize + i*keyEntrySize
+				keyOff := int(endian.Uint32(data[off:]))
+				keyLen := int(endian.Uint16(data[off+keyOriginOff:]))
+				require.LessOrEqual(t, keyOff+keyLen, docSize)
+			}
+		} else {
+			require.LessOrEqual(t, headerSize+count*valEntrySize, docSize)
+		}
+		valTableOff := headerSize + keyTableSize
+		for i := 0; i < count; i++ {
+			off := valTableOff + i*valEntrySize
+			childType := TpCode(data[off])
+			if childType == TpCodeLiteral {
+				requireLegacyJSONValueReadable(t, childType, data[off+valTypeSize:off+valEntrySize])
+				continue
+			}
+			valueOff := int(endian.Uint32(data[off+valTypeSize:]))
+			require.Less(t, valueOff, docSize)
+			requireLegacyJSONValueReadable(t, childType, data[valueOff:docSize])
+		}
+	default:
+		t.Fatalf("legacy reader does not recognize JSON type code %#x", tp)
+	}
+}
 
 func TestLiteral(t *testing.T) {
 	j := []string{"true", "false", "null"}
@@ -31,6 +261,30 @@ func TestLiteral(t *testing.T) {
 		require.Nil(t, err)
 		require.Equal(t, x, bj.String())
 	}
+}
+
+func TestEmptyJSONInputUsesStableError(t *testing.T) {
+	_, err := ParseFromString("")
+	require.ErrorContains(t, err, "json text is empty")
+
+	_, err = ParseFromByteSlice(nil)
+	require.ErrorContains(t, err, "json text is empty")
+}
+
+func TestParserFreesCompletedRootWhenTokenizerRejectsSuffix(t *testing.T) {
+	p := parser{src: []byte(`{}x`)}
+	_, err := p.do()
+	require.Error(t, err)
+	require.Empty(t, p.stack)
+	require.Nil(t, p.top.V)
+}
+
+func TestParserFreesWideCompletedRootWhenTokenizerRejectsSuffix(t *testing.T) {
+	p := parser{src: []byte(`{"values":[` + strings.Repeat(`0,`, 1024) + `0]}x`)}
+	_, err := p.do()
+	require.Error(t, err)
+	require.Empty(t, p.stack)
+	require.Nil(t, p.top.V)
 }
 
 func TestNumber(t *testing.T) {
@@ -214,6 +468,149 @@ func TestQuery(t *testing.T) {
 			out2 := bj.QuerySimple([]*Path{&path})
 			require.JSONEq(t, kase.outStr, out2.String())
 		}
+	}
+}
+
+func TestQueryWithExistsPreservesJSONNull(t *testing.T) {
+	bj, err := ParseFromString(`{"a":null,"b":1,"items":[null,2]}`)
+	require.NoError(t, err)
+
+	parsePaths := func(pathStrings ...string) []*Path {
+		paths := make([]*Path, len(pathStrings))
+		for i, pathString := range pathStrings {
+			path, parseErr := ParseJsonPath(pathString)
+			require.NoError(t, parseErr)
+			paths[i] = &path
+		}
+		return paths
+	}
+
+	tests := []struct {
+		name   string
+		paths  []string
+		result string
+		exists bool
+	}{
+		{name: "existing null", paths: []string{"$.a"}, result: "null", exists: true},
+		{name: "missing", paths: []string{"$.missing"}, result: "null", exists: false},
+		{name: "null and value", paths: []string{"$.a", "$.b"}, result: "[null,1]", exists: true},
+		{name: "all null", paths: []string{"$.a", "$.a"}, result: "[null,null]", exists: true},
+		{name: "null and missing", paths: []string{"$.a", "$.missing"}, result: "[null]", exists: true},
+		{name: "wildcard", paths: []string{"$.items[*]"}, result: "[null,2]", exists: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			paths := parsePaths(test.paths...)
+			result, exists := bj.QueryWithExists(paths)
+			require.Equal(t, test.exists, exists)
+			require.JSONEq(t, test.result, result.String())
+
+			allSimple := true
+			for _, path := range paths {
+				allSimple = allSimple && path.IsSimple()
+			}
+			if allSimple {
+				simpleResult, simpleExists := bj.QuerySimpleWithExists(paths)
+				require.Equal(t, test.exists, simpleExists)
+				require.JSONEq(t, test.result, simpleResult.String())
+			}
+		})
+	}
+}
+
+func TestQueryWithExistsAutowrapsScalarIndexZero(t *testing.T) {
+	tests := []struct {
+		name    string
+		json    string
+		path    string
+		expects string
+	}{
+		{name: "root null", json: `null`, path: `$[0]`, expects: `null`},
+		{name: "nested null", json: `{"a":null}`, path: `$.a[0]`, expects: `null`},
+		{name: "root scalar range", json: `1`, path: `$[0 to 0]`, expects: `[1]`},
+		{name: "array wildcard", json: `[null]`, path: `$[*]`, expects: `[null]`},
+		{name: "array range", json: `[null]`, path: `$[0 to 0]`, expects: `[null]`},
+		{name: "object wildcard", json: `{"a":null}`, path: `$.*`, expects: `[null]`},
+		{name: "recursive descent", json: `{"a":null}`, path: `$**.a`, expects: `[null]`},
+		{name: "empty object range", json: `{}`, path: `$[0 to 0]`, expects: `[{}]`},
+		{name: "object last range", json: `{"a":1,"b":2}`, path: `$[last to last]`, expects: `[{"a":1,"b":2}]`},
+		{name: "object last range then key", json: `{"a":null,"b":2}`, path: `$[last to last].a`, expects: `[null]`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			bj, err := ParseFromString(test.json)
+			require.NoError(t, err)
+			path, err := ParseJsonPath(test.path)
+			require.NoError(t, err)
+
+			result, exists := bj.QueryWithExists([]*Path{&path})
+			require.True(t, exists)
+			require.JSONEq(t, test.expects, result.String())
+
+			if path.IsSimple() {
+				simpleResult, simpleExists := bj.QuerySimpleWithExists([]*Path{&path})
+				require.True(t, simpleExists)
+				require.JSONEq(t, test.expects, simpleResult.String())
+			}
+		})
+	}
+}
+
+func TestQueryWithExistsEmptyArrayRangeDoesNotMatch(t *testing.T) {
+	tests := []struct {
+		name string
+		json string
+		path string
+	}{
+		{name: "root numeric range", json: `[]`, path: `$[0 to 0]`},
+		{name: "root last range", json: `[]`, path: `$[last to last]`},
+		{name: "nested numeric range", json: `{"a":[]}`, path: `$.a[0 to 0]`},
+		{name: "nested last range", json: `{"a":[]}`, path: `$.a[last to last]`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			bj, err := ParseFromString(test.json)
+			require.NoError(t, err)
+			path, err := ParseJsonPath(test.path)
+			require.NoError(t, err)
+
+			_, exists := bj.QueryWithExists([]*Path{&path})
+			require.False(t, exists)
+		})
+	}
+}
+
+func TestQueryWithExistsArrayRangeOverlap(t *testing.T) {
+	tests := []struct {
+		name    string
+		json    string
+		path    string
+		exists  bool
+		expects string
+	}{
+		{name: "json null right of array", json: `[null]`, path: `$[1 to 1]`},
+		{name: "right of array", json: `[0,1,2]`, path: `$[5 to 6]`},
+		{name: "left of array", json: `[0,1,2]`, path: `$[last-8 to last-7]`},
+		{name: "overlap right edge", json: `[0,1,2]`, path: `$[2 to 6]`, exists: true, expects: `[2]`},
+		{name: "overlap left edge", json: `[0,1,2]`, path: `$[last-8 to last-2]`, exists: true, expects: `[0]`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			bj, err := ParseFromString(test.json)
+			require.NoError(t, err)
+			path, err := ParseJsonPath(test.path)
+			require.NoError(t, err)
+
+			result, exists := bj.QueryWithExists([]*Path{&path})
+			require.Equal(t, test.exists, exists)
+			if test.exists {
+				require.JSONEq(t, test.expects, result.String())
+			}
+		})
 	}
 }
 
@@ -648,6 +1045,16 @@ func TestByteJson_Unquote(t *testing.T) {
 			valid:   true,
 		},
 		{
+			jsonStr: `"\"x\""`,
+			outStr:  `"x"`,
+			valid:   true,
+		},
+		{
+			jsonStr: `"\"\""`,
+			outStr:  `""`,
+			valid:   true,
+		},
+		{
 			jsonStr: `"a\b"`,
 			outStr:  "a\b",
 			valid:   true,
@@ -698,6 +1105,28 @@ func TestByteJson_Unquote(t *testing.T) {
 		out, err := bj.Unquote()
 		require.Nil(t, err)
 		require.Equal(t, kase.outStr, out)
+	}
+}
+
+func TestByteJson_UnquotePreservesPayloadBoundaryQuotes(t *testing.T) {
+	values := []string{
+		"plain",
+		"a\"b",
+		"\"leading",
+		"trailing\"",
+		"\"both\"",
+		"\"",
+		"\"\"",
+		"\"你好\"",
+	}
+	for _, want := range values {
+		encoded, err := json.Marshal(want)
+		require.NoError(t, err)
+		bj, err := ParseFromString(string(encoded))
+		require.NoError(t, err)
+		got, err := bj.Unquote()
+		require.NoError(t, err)
+		require.Equal(t, want, got)
 	}
 }
 

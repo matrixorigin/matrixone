@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -41,7 +42,7 @@ func Test_PlusFn_Int8(t *testing.T) {
 				[]int8{15, -15, 0, 80, -80}, []bool{false, false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -59,7 +60,7 @@ func Test_PlusFn_Int8(t *testing.T) {
 				[]int8{15, 0, 0}, []bool{false, true, true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -77,7 +78,7 @@ func Test_PlusFn_Int8(t *testing.T) {
 				[]int8{0}, []bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -99,7 +100,7 @@ func Test_PlusFn_Int16(t *testing.T) {
 				[]int16{1500, -700, 0, 32000}, []bool{false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -121,7 +122,7 @@ func Test_PlusFn_Int32(t *testing.T) {
 				[]int32{150000, -70000, 0, 2000000000}, []bool{false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -143,7 +144,7 @@ func Test_PlusFn_Int64(t *testing.T) {
 				[]int64{1500000000, -700000000, 0, 8000000000000000000}, []bool{false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -166,7 +167,7 @@ func Test_PlusFn_UInt8(t *testing.T) {
 				[]uint8{150, 75, 0, 255}, []bool{false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -184,7 +185,7 @@ func Test_PlusFn_UInt8(t *testing.T) {
 				[]uint8{0}, []bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -206,7 +207,7 @@ func Test_PlusFn_UInt16(t *testing.T) {
 				[]uint16{60000, 1500, 0, 65535}, []bool{false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -228,7 +229,7 @@ func Test_PlusFn_UInt32(t *testing.T) {
 				[]uint32{4000000000, 1500000, 0, 4294967295}, []bool{false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -250,7 +251,7 @@ func Test_PlusFn_UInt64(t *testing.T) {
 				[]uint64{18000000000000000000, 1500000000, 0, 18446744073709551615}, []bool{false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -272,7 +273,7 @@ func Test_PlusFn_Bit(t *testing.T) {
 				[]uint64{192, 96, 0, 300}, []bool{false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -294,7 +295,7 @@ func Test_PlusFn_Float32(t *testing.T) {
 				[]float32{15.75, -8.0, 0.0, 5.85987, 3.5}, []bool{false, false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -312,7 +313,7 @@ func Test_PlusFn_Float32(t *testing.T) {
 				[]float32{15.75, 0.0}, []bool{false, true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -334,7 +335,7 @@ func Test_PlusFn_Float64(t *testing.T) {
 				[]float64{15.75, -8.0, 0.0, 5.85987448205, 11.1111111}, []bool{false, false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -352,7 +353,7 @@ func Test_PlusFn_Float64(t *testing.T) {
 				[]float64{15.75, 0.0, 0.0}, []bool{false, true, true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -374,7 +375,7 @@ func Test_PlusFn_Decimal64(t *testing.T) {
 				[]types.Decimal64{1100, 700, 500}, []bool{false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -392,7 +393,7 @@ func Test_PlusFn_Decimal64(t *testing.T) {
 				[]types.Decimal64{1100, 0}, []bool{false, true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -429,8 +430,58 @@ func Test_PlusFn_Decimal128(t *testing.T) {
 				[]bool{false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
+	}
+}
+
+func TestPlusFnDecimal128RespectsSelectListNulls(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	decimalType := types.New(types.T_decimal128, 38, 2)
+	maskSecondRow := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}
+
+	tests := []struct {
+		name   string
+		inputs []FunctionTestInput
+	}{
+		{
+			name: "vector vector",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(decimalType, []types.Decimal128{{B0_63: 500}, {B0_63: 900}}, nil),
+				NewFunctionTestInput(decimalType, []types.Decimal128{{B0_63: 200}, {B0_63: 300}}, nil),
+			},
+		},
+		{
+			name: "const vector",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(decimalType, []types.Decimal128{{B0_63: 500}}, nil),
+				NewFunctionTestInput(decimalType, []types.Decimal128{{B0_63: 200}, {B0_63: 300}}, nil),
+			},
+		},
+		{
+			name: "vector const",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(decimalType, []types.Decimal128{{B0_63: 500}, {B0_63: 900}}, nil),
+				NewFunctionTestConstInput(decimalType, []types.Decimal128{{B0_63: 200}}, nil),
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc, test.inputs,
+				NewFunctionTestResult(decimalType, false, nil, nil), plusFn)
+			defer tcc.Free()
+			require.NoError(t, tcc.result.PreExtendAndReset(2))
+			require.NoError(t, tcc.fn(tcc.parameters, tcc.result, proc, 2, maskSecondRow))
+
+			result := tcc.GetResultVectorDirectly()
+			require.Equal(t, decimalType, *result.GetType())
+			require.Equal(t, types.Decimal128{B0_63: 700},
+				vector.MustFixedColNoTypeCheck[types.Decimal128](result)[0])
+			require.False(t, result.GetNulls().Contains(0))
+			require.True(t, result.GetNulls().Contains(1))
+		})
 	}
 }
 
@@ -463,7 +514,7 @@ func Test_PlusFn_ArrayFloat32(t *testing.T) {
 				[]bool{false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -493,7 +544,7 @@ func Test_PlusFn_ArrayFloat32(t *testing.T) {
 				[]bool{false, true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -530,7 +581,7 @@ func Test_PlusFn_ArrayFloat64(t *testing.T) {
 				[]bool{false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -563,7 +614,7 @@ func Test_PlusFn_ArrayFloat64(t *testing.T) {
 				[]bool{false, true, true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -586,7 +637,7 @@ func Test_PlusFn_EdgeCases(t *testing.T) {
 				[]int64{100, -50, 0}, []bool{false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -604,7 +655,7 @@ func Test_PlusFn_EdgeCases(t *testing.T) {
 				[]int64{20, 20, 32}, []bool{false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -622,7 +673,7 @@ func Test_PlusFn_EdgeCases(t *testing.T) {
 				[]int64{50, 0, 0}, []bool{false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -640,7 +691,7 @@ func Test_PlusFn_EdgeCases(t *testing.T) {
 				[]float64{math.MaxFloat64, 0.0, 0.0}, []bool{false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }

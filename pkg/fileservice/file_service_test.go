@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	mrand "math/rand"
+	"os"
 	"path"
 	"sort"
 	"strconv"
@@ -45,12 +46,26 @@ func testFileService(
 	policy Policy,
 	newFS func(name string) FileService,
 ) {
+	testFileServiceWithContext(t, policy, func(_ context.Context, name string) FileService {
+		return newFS(name)
+	})
+}
 
+func testFileServiceWithContext(
+	t *testing.T,
+	policy Policy,
+	newFS func(context.Context, string) FileService,
+) {
 	fsName := time.Now().Format("fs-2006-01-02-15-04-05")
+	// Real object-storage specs are part of this shared test suite. Bound the
+	// constructor and the whole suite so a remote outage cannot consume the
+	// package-level Go test timeout.
+	testCtx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+	defer cancel()
 
 	t.Run("basic", func(t *testing.T) {
-		ctx := context.Background()
-		fs := newFS(fsName)
+		ctx := testCtx
+		fs := newFS(ctx, fsName)
 		defer fs.Close(ctx)
 
 		assert.True(t, strings.Contains(fs.Name(), fsName))
@@ -181,8 +196,8 @@ func testFileService(
 	})
 
 	t.Run("WriterForRead", func(t *testing.T) {
-		fs := newFS(fsName)
-		ctx := context.Background()
+		ctx := testCtx
+		fs := newFS(ctx, fsName)
 		defer fs.Close(ctx)
 
 		err := fs.Write(ctx, IOVector{
@@ -233,8 +248,8 @@ func testFileService(
 	})
 
 	t.Run("ReadCloserForRead", func(t *testing.T) {
-		ctx := context.Background()
-		fs := newFS(fsName)
+		ctx := testCtx
+		fs := newFS(ctx, fsName)
 		defer fs.Close(ctx)
 
 		err := fs.Write(ctx, IOVector{
@@ -312,8 +327,8 @@ func testFileService(
 	})
 
 	t.Run("random", func(t *testing.T) {
-		fs := newFS(fsName)
-		ctx := context.Background()
+		ctx := testCtx
+		fs := newFS(ctx, fsName)
 		defer fs.Close(ctx)
 
 		for i := 0; i < 8; i++ {
@@ -442,8 +457,8 @@ func testFileService(
 	})
 
 	t.Run("tree", func(t *testing.T) {
-		fs := newFS(fsName)
-		ctx := context.Background()
+		ctx := testCtx
+		fs := newFS(ctx, fsName)
 		defer fs.Close(ctx)
 
 		for _, dir := range []string{
@@ -573,8 +588,8 @@ func testFileService(
 	})
 
 	t.Run("errors", func(t *testing.T) {
-		fs := newFS(fsName)
-		ctx := context.Background()
+		ctx := testCtx
+		fs := newFS(ctx, fsName)
 		defer fs.Close(ctx)
 
 		err := fs.Read(ctx, &IOVector{
@@ -677,9 +692,63 @@ func testFileService(
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidPath))
 	})
 
+	t.Run("empty file path never aliases root", func(t *testing.T) {
+		ctx := testCtx
+		fs := newFS(ctx, fsName)
+		defer fs.Close(ctx)
+
+		assertFileNotFound := func(operation string, err error) {
+			t.Helper()
+			assert.Truef(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound),
+				"%s returned %v", operation, err)
+		}
+
+		readVector := &IOVector{
+			FilePath: "",
+			Entries:  []IOEntry{{Size: -1}},
+			Policy:   policy,
+		}
+		assertFileNotFound("Read", fs.Read(ctx, readVector))
+		assertFileNotFound("ReadCache", fs.ReadCache(ctx, readVector))
+		assertFileNotFound("Write", fs.Write(ctx, IOVector{
+			FilePath: "",
+			Entries:  []IOEntry{{Size: 1, Data: []byte{1}}},
+			Policy:   policy,
+		}))
+		_, err := fs.StatFile(ctx, "")
+		assertFileNotFound("StatFile", err)
+		assertFileNotFound("PrefetchFile", fs.PrefetchFile(ctx, ""))
+		assertFileNotFound("Delete", fs.Delete(ctx, ""))
+		assertFileNotFound("Delete dot root alias", fs.Delete(ctx, "."))
+
+		if rwFS, ok := fs.(ReaderWriterFileService); ok {
+			reader, err := rwFS.NewReader(ctx, "")
+			if reader != nil {
+				_ = reader.Close()
+			}
+			assertFileNotFound("NewReader", err)
+			writer, err := rwFS.NewWriter(ctx, "")
+			if writer != nil {
+				_ = writer.Close()
+			}
+			assertFileNotFound("NewWriter", err)
+		}
+
+		_, err = SortedList(fs.List(ctx, ""))
+		assert.NoError(t, err, "List must keep accepting the root path")
+		switch local := fs.(type) {
+		case *LocalFS:
+			_, err = os.Stat(local.rootPath)
+			assert.NoError(t, err, "empty file operations removed the LocalFS root")
+		case *LocalETLFS:
+			_, err = os.Stat(local.rootPath)
+			assert.NoError(t, err, "empty file operations removed the LocalETLFS root")
+		}
+	})
+
 	t.Run("cache data", func(t *testing.T) {
-		ctx := context.Background()
-		fs := newFS(fsName)
+		ctx := testCtx
+		fs := newFS(ctx, fsName)
 		defer fs.Close(ctx)
 		var counterSet perfcounter.CounterSet
 		ctx = perfcounter.WithCounterSet(ctx, &counterSet)
@@ -755,8 +824,8 @@ func testFileService(
 	})
 
 	t.Run("ignore", func(t *testing.T) {
-		ctx := context.Background()
-		fs := newFS(fsName)
+		ctx := testCtx
+		fs := newFS(ctx, fsName)
 		defer fs.Close(ctx)
 
 		data := []byte("foo")
@@ -793,8 +862,8 @@ func testFileService(
 	})
 
 	t.Run("named path", func(t *testing.T) {
-		ctx := context.Background()
-		fs := newFS(fsName)
+		ctx := testCtx
+		fs := newFS(ctx, fsName)
 		defer fs.Close(ctx)
 
 		// write
@@ -863,8 +932,8 @@ func testFileService(
 	})
 
 	t.Run("issue6110", func(t *testing.T) {
-		ctx := context.Background()
-		fs := newFS(fsName)
+		ctx := testCtx
+		fs := newFS(ctx, fsName)
 		defer fs.Close(ctx)
 
 		err := fs.Write(ctx, IOVector{
@@ -886,8 +955,8 @@ func testFileService(
 	})
 
 	t.Run("streaming write", func(t *testing.T) {
-		ctx := context.Background()
-		fs := newFS(fsName)
+		ctx := testCtx
+		fs := newFS(ctx, fsName)
 		defer fs.Close(ctx)
 
 		reader, writer := io.Pipe()
@@ -981,11 +1050,11 @@ func testFileService(
 			},
 			Policy: policy,
 		}
-		ctx, cancel := context.WithCancel(context.Background())
+		cancelCtx, cancel := context.WithCancel(context.Background())
 		cancel()
 		errCh := make(chan error)
 		go func() {
-			err := fs.Write(ctx, vec)
+			err := fs.Write(cancelCtx, vec)
 			errCh <- err
 		}()
 		select {
@@ -1000,7 +1069,7 @@ func testFileService(
 	t.Run("context cancel", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		fs := newFS(fsName)
+		fs := newFS(testCtx, fsName)
 		defer fs.Close(ctx)
 
 		err := fs.Write(ctx, IOVector{
@@ -1013,6 +1082,19 @@ func testFileService(
 		})
 		assert.ErrorIs(t, err, context.Canceled)
 
+		err = fs.ReadCache(ctx, &IOVector{
+			FilePath: "",
+			Entries:  []IOEntry{{Size: -1}},
+			Policy:   policy,
+		})
+		assert.ErrorIs(t, err, context.Canceled)
+
+		_, err = fs.StatFile(ctx, "")
+		assert.ErrorIs(t, err, context.Canceled)
+
+		err = fs.PrefetchFile(ctx, "")
+		assert.ErrorIs(t, err, context.Canceled)
+
 		_, err = SortedList(fs.List(ctx, ""))
 		assert.ErrorIs(t, err, context.Canceled)
 
@@ -1023,7 +1105,7 @@ func testFileService(
 	t.Run("NewReader and NewWriter", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
-		fs := newFS(fsName)
+		fs := newFS(testCtx, fsName)
 		defer fs.Close(ctx)
 
 		rwFS, ok := fs.(ReaderWriterFileService)
@@ -1047,7 +1129,7 @@ func testFileService(
 	})
 
 	t.Run("NewReader and NewWriter error", func(t *testing.T) {
-		fs := newFS(fsName)
+		fs := newFS(testCtx, fsName)
 		defer fs.Close(t.Context())
 
 		rwFS, ok := fs.(ReaderWriterFileService)

@@ -32,12 +32,32 @@ func testObjectStorage[T ObjectStorage](
 	sdkName string,
 	newStorage func(t *testing.T) T,
 ) {
+	testObjectStorageWithContext(t, sdkName, func(t *testing.T, _ context.Context) T {
+		return newStorage(t)
+	})
+}
 
+func testObjectStorageWithContext[T ObjectStorage](
+	t *testing.T,
+	sdkName string,
+	newStorage func(*testing.T, context.Context) T,
+) {
+	testObjectStorageWithParentContext(t, sdkName, t.Context(), newStorage)
+}
+
+func testObjectStorageWithParentContext[T ObjectStorage](
+	t *testing.T,
+	sdkName string,
+	parentCtx context.Context,
+	newStorage func(*testing.T, context.Context) T,
+) {
 	t.Run(sdkName, func(t *testing.T) {
+		testCtx, cancel := context.WithTimeout(parentCtx, 3*time.Minute)
+		defer cancel()
 
 		t.Run("basic", func(t *testing.T) {
-			storage := newStorage(t)
-			ctx := context.Background()
+			storage := newStorage(t, testCtx)
+			ctx := testCtx
 
 			prefix := time.Now().Format("2006-01-02-15-04-05.000000")
 			name := path.Join(prefix, "foo")
@@ -159,8 +179,8 @@ func testObjectStorage[T ObjectStorage](
 		})
 
 		t.Run("invalid write length", func(t *testing.T) {
-			storage := newStorage(t)
-			ctx := context.Background()
+			storage := newStorage(t, testCtx)
+			ctx := testCtx
 			prefix := time.Now().Format("2006-01-02-15-04-05.000000")
 
 			name := path.Join(prefix, "foo")
@@ -183,8 +203,8 @@ func testObjectStorage[T ObjectStorage](
 		})
 
 		t.Run("write empty", func(t *testing.T) {
-			storage := newStorage(t)
-			ctx := context.Background()
+			storage := newStorage(t, testCtx)
+			ctx := testCtx
 			prefix := time.Now().Format("2006-01-02-15-04-05.000000")
 
 			name := path.Join(prefix, "foo")
@@ -207,13 +227,15 @@ func TestObjectStorages(t *testing.T) {
 	for _, args := range objectStorageArgumentsForTest("test", t) {
 
 		t.Run(args.Name, func(t *testing.T) {
+			specCtx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+			defer cancel()
 
 			switch {
 
 			case strings.HasPrefix(strings.ToLower(args.Endpoint), "hdfs"):
 				// HDFS
-				testObjectStorage(t, "hdfs", func(t *testing.T) *HDFS {
-					storage, err := NewHDFS(context.Background(), args, nil)
+				testObjectStorageWithParentContext(t, "hdfs", specCtx, func(t *testing.T, ctx context.Context) *HDFS {
+					storage, err := NewHDFS(ctx, args, nil)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -222,8 +244,8 @@ func TestObjectStorages(t *testing.T) {
 
 			case args.Endpoint == "disk":
 				// disk
-				testObjectStorage(t, "disk", func(t *testing.T) *diskObjectStorage {
-					storage, err := newDiskObjectStorage(context.Background(), args, nil)
+				testObjectStorageWithParentContext(t, "disk", specCtx, func(t *testing.T, ctx context.Context) *diskObjectStorage {
+					storage, err := newDiskObjectStorage(ctx, args, nil)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -232,23 +254,23 @@ func TestObjectStorages(t *testing.T) {
 
 			case strings.Contains(args.Endpoint, "aliyun"):
 				// aliyun
-				testObjectStorage(t, "aliyun", func(t *testing.T) *AliyunSDK {
-					storage, err := NewAliyunSDK(context.Background(), args, nil)
+				testObjectStorageWithParentContext(t, "aliyun", specCtx, func(t *testing.T, ctx context.Context) *AliyunSDK {
+					storage, err := NewAliyunSDK(ctx, args, nil)
 					if err != nil {
 						t.Fatal(err)
 					}
 					return storage
 				})
 				if args.RoleARN == "" {
-					testObjectStorage(t, "minio", func(t *testing.T) *MinioSDK {
-						storage, err := NewMinioSDK(context.Background(), args, nil)
+					testObjectStorageWithParentContext(t, "minio", specCtx, func(t *testing.T, ctx context.Context) *MinioSDK {
+						storage, err := NewMinioSDK(ctx, args, nil)
 						if err != nil {
 							t.Fatal(err)
 						}
 						return storage
 					})
-					testObjectStorage(t, "aws", func(t *testing.T) *AwsSDKv2 {
-						storage, err := NewAwsSDKv2(context.Background(), args, nil)
+					testObjectStorageWithParentContext(t, "aws", specCtx, func(t *testing.T, ctx context.Context) *AwsSDKv2 {
+						storage, err := NewAwsSDKv2(ctx, args, nil)
 						if err != nil {
 							t.Fatal(err)
 						}
@@ -258,22 +280,22 @@ func TestObjectStorages(t *testing.T) {
 
 			case strings.Contains(args.Endpoint, "qcloud"):
 				// qcloud
-				testObjectStorage(t, "aws", func(t *testing.T) *AwsSDKv2 {
-					storage, err := NewAwsSDKv2(context.Background(), args, nil)
+				testObjectStorageWithParentContext(t, "aws", specCtx, func(t *testing.T, ctx context.Context) *AwsSDKv2 {
+					storage, err := NewAwsSDKv2(ctx, args, nil)
 					if err != nil {
 						t.Fatal(err)
 					}
 					return storage
 				})
-				testObjectStorage(t, "minio", func(t *testing.T) *MinioSDK {
-					storage, err := NewMinioSDK(context.Background(), args, nil)
+				testObjectStorageWithParentContext(t, "minio", specCtx, func(t *testing.T, ctx context.Context) *MinioSDK {
+					storage, err := NewMinioSDK(ctx, args, nil)
 					if err != nil {
 						t.Fatal(err)
 					}
 					return storage
 				})
-				testObjectStorage(t, "qcloud", func(t *testing.T) *QCloudSDK {
-					storage, err := NewQCloudSDK(context.Background(), args, nil)
+				testObjectStorageWithParentContext(t, "qcloud", specCtx, func(t *testing.T, ctx context.Context) *QCloudSDK {
+					storage, err := NewQCloudSDK(ctx, args, nil)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -282,15 +304,15 @@ func TestObjectStorages(t *testing.T) {
 
 			case strings.Contains(args.Endpoint, "aws"):
 				// AWS
-				testObjectStorage(t, "aws", func(t *testing.T) *AwsSDKv2 {
-					storage, err := NewAwsSDKv2(context.Background(), args, nil)
+				testObjectStorageWithParentContext(t, "aws", specCtx, func(t *testing.T, ctx context.Context) *AwsSDKv2 {
+					storage, err := NewAwsSDKv2(ctx, args, nil)
 					if err != nil {
 						t.Fatal(err)
 					}
 					return storage
 				})
-				testObjectStorage(t, "minio", func(t *testing.T) *MinioSDK {
-					storage, err := NewMinioSDK(context.Background(), args, nil)
+				testObjectStorageWithParentContext(t, "minio", specCtx, func(t *testing.T, ctx context.Context) *MinioSDK {
+					storage, err := NewMinioSDK(ctx, args, nil)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -299,15 +321,15 @@ func TestObjectStorages(t *testing.T) {
 
 			case strings.Contains(args.Endpoint, "qiniu"):
 				// qiniu
-				testObjectStorage(t, "minio", func(t *testing.T) *MinioSDK {
-					storage, err := NewMinioSDK(context.Background(), args, nil)
+				testObjectStorageWithParentContext(t, "minio", specCtx, func(t *testing.T, ctx context.Context) *MinioSDK {
+					storage, err := NewMinioSDK(ctx, args, nil)
 					if err != nil {
 						t.Fatal(err)
 					}
 					return storage
 				})
-				testObjectStorage(t, "aws", func(t *testing.T) *AwsSDKv2 {
-					storage, err := NewAwsSDKv2(context.Background(), args, nil)
+				testObjectStorageWithParentContext(t, "aws", specCtx, func(t *testing.T, ctx context.Context) *AwsSDKv2 {
+					storage, err := NewAwsSDKv2(ctx, args, nil)
 					if err != nil {
 						t.Fatal(err)
 					}

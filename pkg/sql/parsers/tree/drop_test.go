@@ -21,6 +21,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDropTemporaryTableFormat(t *testing.T) {
+	stmt := NewDropTable(true, TableNames{NewTableName(Identifier("t"), ObjectNamePrefix{}, nil)})
+	stmt.Temporary = true
+
+	ctx := NewFmtCtx(dialect.MYSQL)
+	stmt.Format(ctx)
+	require.Equal(t, "drop temporary table if exists t", ctx.String())
+
+	stmt.Free()
+}
+
 func TestDropCcprSubscriptionLifecycle(t *testing.T) {
 	// Test creation with NewDropCcprSubscription
 	stmt := NewDropCcprSubscription(false, "test_sub")

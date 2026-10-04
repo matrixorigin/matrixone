@@ -80,9 +80,17 @@ const (
 )
 
 type collectRange struct {
-	from []types.TS
-	end  []types.TS
-	rel  []engine.Relation
+	from             []types.TS
+	end              []types.TS
+	rel              []engine.Relation
+	startBoundaryRel []engine.Relation
+}
+
+func (r collectRange) startBoundary(i int) engine.Relation {
+	if i < 0 || i >= len(r.startBoundaryRel) {
+		return nil
+	}
+	return r.startBoundaryRel[i]
 }
 
 // branchMetaInfo describes the lineage relationship between the two
@@ -131,10 +139,15 @@ type collectRange struct {
 type branchMetaInfo struct {
 	lcaTableId uint64
 
-	pathFromLCAToTar    []uint64
-	pathFromLCAToTarTS  []types.TS
-	pathFromLCAToBase   []uint64
-	pathFromLCAToBaseTS []types.TS
+	pathFromLCAToTar   []uint64
+	pathFromLCAToTarTS []types.TS
+	// LineageOnly[i] marks an ALTER copy-and-swap edge into path[i]. Such
+	// edges split physical collection ranges but do not represent a branch
+	// fork for LCA probing/conflict semantics.
+	pathFromLCAToTarLineageOnly  []bool
+	pathFromLCAToBase            []uint64
+	pathFromLCAToBaseTS          []types.TS
+	pathFromLCAToBaseLineageOnly []bool
 }
 
 // hasLCA reports whether tar and base share a common ancestor in the
@@ -154,24 +167,42 @@ func (m *branchMetaInfo) hasLCA() bool {
 // point from base: base's first-child CloneTS, or baseSP if base is
 // also the LCA (case-0 same-table diff).
 func (m *branchMetaInfo) tarLCASnapshot(baseSP types.TS) types.TS {
-	if len(m.pathFromLCAToTar) > 1 {
-		return m.pathFromLCAToTarTS[1]
+	if ts, ok := firstDataBranchForkTS(
+		m.pathFromLCAToTarTS, m.pathFromLCAToTarLineageOnly,
+	); ok {
+		return ts
 	}
-	if len(m.pathFromLCAToBase) > 1 {
-		return m.pathFromLCAToBaseTS[1]
+	if ts, ok := firstDataBranchForkTS(
+		m.pathFromLCAToBaseTS, m.pathFromLCAToBaseLineageOnly,
+	); ok {
+		return ts
 	}
 	return baseSP
 }
 
 // baseLCASnapshot is the mirror of tarLCASnapshot for the base side.
 func (m *branchMetaInfo) baseLCASnapshot(tarSP types.TS) types.TS {
-	if len(m.pathFromLCAToBase) > 1 {
-		return m.pathFromLCAToBaseTS[1]
+	if ts, ok := firstDataBranchForkTS(
+		m.pathFromLCAToBaseTS, m.pathFromLCAToBaseLineageOnly,
+	); ok {
+		return ts
 	}
-	if len(m.pathFromLCAToTar) > 1 {
-		return m.pathFromLCAToTarTS[1]
+	if ts, ok := firstDataBranchForkTS(
+		m.pathFromLCAToTarTS, m.pathFromLCAToTarLineageOnly,
+	); ok {
+		return ts
 	}
 	return tarSP
+}
+
+func firstDataBranchForkTS(pathTS []types.TS, lineageOnly []bool) (types.TS, bool) {
+	for i := 1; i < len(pathTS); i++ {
+		if i < len(lineageOnly) && lineageOnly[i] {
+			continue
+		}
+		return pathTS[i], true
+	}
+	return types.TS{}, false
 }
 
 // lcaProbeSnapshot is the snapshot used by diffOnBase to fetch the
@@ -193,16 +224,31 @@ type tableStuff struct {
 	tarSnap  *plan.Snapshot
 	baseSnap *plan.Snapshot
 
-	lcaRel engine.Relation
+	lcaRel            engine.Relation
+	lcaCTS            types.TS
+	lcaHasZeroHistory bool
 
 	def struct {
-		colNames     []string     // all columns
-		colTypes     []types.Type // all columns
-		visibleIdxes []int
-		pkColIdx     int
-		pkSeqnum     int   // physical column seqnum for PK (for ZoneMap lookup)
-		pkColIdxes   []int // expanded pk columns
-		pkKind       int
+		colNames      []string     // all columns
+		colTypes      []types.Type // all columns
+		visibleIdxes  []int
+		writableIdxes []int
+		pkColIdx      int
+		pkSeqnum      int   // physical column seqnum for PK (for ZoneMap lookup)
+		pkColIdxes    []int // expanded pk columns
+		pkKind        int
+
+		commonIdxes         []int    // indices of common columns (target data-batch ordering)
+		commonVisibleIdxes  []int    // user-visible subset of commonIdxes for DIFF and row identity
+		commonWritableIdxes []int    // destination-writable subset of commonVisibleIdxes for apply
+		tarOnlyIdxes        []int    // indices of target-only columns (target data-batch ordering)
+		baseColToTarIdx     []int    // for base batch Vec[i+1], the target column index, or -1
+		baseColNames        []string // target data column index to lineage-resolved base name
+		lcaColNames         []string // target data column index to lineage-resolved LCA name
+		// indexedSpecialUpdateIdxes are special writable columns that belong to
+		// a unique secondary index. MatrixOne rejects assigning those columns in
+		// ON DUPLICATE KEY UPDATE, so changed values use a native UPDATE instead.
+		indexedSpecialUpdateIdxes []int
 	}
 
 	worker               *ants.Pool
@@ -240,7 +286,14 @@ type batchWithKind struct {
 	kind       string
 	side       int
 	fromUpdate bool
-	batch      *batch.Batch
+	// requiresNativeUpdate marks an update whose changed special column is
+	// part of a unique secondary index. It must bypass the staged ODKU path.
+	requiresNativeUpdate bool
+	restoreMissing       bool
+	// hasReplacement marks a preserved PICK conflict whose source side emitted
+	// a row to replace the destination conflict victim.
+	hasReplacement bool
+	batch          *batch.Batch
 }
 
 type emitFunc func(batchWithKind) (stop bool, err error)

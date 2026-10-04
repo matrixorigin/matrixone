@@ -1,0 +1,121 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package v4_0_5
+
+import (
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	icebergsql "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
+)
+
+var tenantUpgEntries = []versions.UpgradeEntry{
+	upgradeIcebergCatalogIDAllocator(),
+	addOrphanFileColumn("namespace", "varchar(2048) not null default ''", "catalog_id"),
+	addOrphanFileColumn("table_name", "varchar(1024) not null default ''", "namespace"),
+	addOrphanFileColumn("file_path", "varchar(4096) not null default ''", "table_location_hash"),
+	upgradeInformationSchemaView("TABLES", sysview.InformationSchemaTablesDDL),
+	upgradeInformationSchemaView("COLUMNS", sysview.InformationSchemaColumnsV46UpgradeDDL),
+	upgradeInformationSchemaView("STATISTICS", sysview.InformationSchemaStatisticsDDL),
+	upgradeInformationSchemaViewFromLegacyTable("TABLE_CONSTRAINTS", sysview.InformationSchemaTableConstraintsDDL),
+}
+
+func upgradeInformationSchemaView(viewName, viewDDL string) versions.UpgradeEntry {
+	requiredProtocol := int64(0)
+	if viewName == "TABLES" || viewName == "COLUMNS" {
+		requiredProtocol = defines.MORPCVersion46
+	}
+	return versions.UpgradeEntry{
+		Schema:                  sysview.InformationDBConst,
+		TableName:               viewName,
+		UpgType:                 versions.MODIFY_VIEW,
+		UpgSql:                  viewDDL,
+		RequiredProtocolVersion: requiredProtocol,
+		CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+			exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, viewName)
+			if err != nil {
+				return false, err
+			}
+			return exists && viewDef == viewDDL, nil
+		},
+		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, viewName),
+	}
+}
+
+// upgradeInformationSchemaViewFromLegacyTable converges an information_schema
+// object that historical tenant upgrades may have left as a base table. Keep
+// all SQL fully qualified because tenant upgrade transactions use mo_catalog as
+// their default database.
+func upgradeInformationSchemaViewFromLegacyTable(viewName, viewDDL string) versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    sysview.InformationDBConst,
+		TableName: viewName,
+		UpgType:   versions.MODIFY_VIEW,
+		UpgSql:    fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, viewName),
+		CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+			exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, viewName)
+			if err != nil {
+				return false, err
+			}
+			return exists && viewDef == viewDDL, nil
+		},
+		PreSql:  fmt.Sprintf("DROP TABLE IF EXISTS %s.%s;", sysview.InformationDBConst, viewName),
+		PostSql: viewDDL,
+	}
+}
+
+func upgradeIcebergCatalogIDAllocator() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    catalog.MO_CATALOG,
+		TableName: icebergsql.TableCatalogs,
+		UpgType:   versions.MODIFY_COLUMN,
+		// Existing deployments used an account-local MAX(id)+1 allocator. Preserve
+		// the account-first composite key (and its existing duplicate IDs across
+		// accounts); only move allocation into the storage engine. MatrixOne permits
+		// an auto-increment column inside this composite primary key.
+		UpgSql: fmt.Sprintf(
+			"alter table %s.%s modify catalog_id bigint unsigned not null auto_increment",
+			catalog.MO_CATALOG,
+			icebergsql.TableCatalogs,
+		),
+		CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+			column, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, icebergsql.TableCatalogs, "catalog_id")
+			if err != nil || !column.IsExits || column.Extra != "auto_increment" {
+				return false, err
+			}
+			return true, nil
+		},
+	}
+}
+
+func addOrphanFileColumn(column, definition, after string) versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    catalog.MO_CATALOG,
+		TableName: icebergsql.TableOrphanFiles,
+		UpgType:   versions.ADD_COLUMN,
+		UpgSql:    fmt.Sprintf("alter table %s.%s add column %s %s after %s", catalog.MO_CATALOG, icebergsql.TableOrphanFiles, column, definition, after),
+		CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+			info, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, icebergsql.TableOrphanFiles, column)
+			if err != nil {
+				return false, err
+			}
+			return info.IsExits, nil
+		},
+	}
+}

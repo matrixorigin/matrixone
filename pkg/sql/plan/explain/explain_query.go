@@ -19,6 +19,8 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -26,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
 
 const (
@@ -35,6 +38,7 @@ const (
 	Label_Scan_Columns              = "Scan columns"
 	Label_List_Expression           = "List of expressions"
 	Label_Grouping_Keys             = "Grouping keys"
+	Label_Grouping_Hash_Keys        = "Grouping hash keys"
 	Label_Agg_Functions             = "Aggregate functions"
 	Label_Filter_Conditions         = "Filter conditions"
 	Label_Block_Filter_Conditions   = "Block Filter conditions"
@@ -84,9 +88,13 @@ const (
 )
 
 const (
-	Statistic_Unit_ns    = "ns"
-	Statistic_Unit_count = "count"
-	Statistic_Unit_byte  = "byte"
+	maxDefaultExpandedBackgroundQueries = 2
+	Statistic_Unit_ns                   = "ns"
+	Statistic_Unit_count                = "count"
+	Statistic_Unit_byte                 = "byte"
+
+	maxVerboseBackgroundQueryPrefix = 3
+	maxVerboseBackgroundQuerySuffix = 2
 )
 
 var _ ExplainQuery = &ExplainQueryImpl{}
@@ -142,14 +150,326 @@ func explainPlanTree(qry *plan.Query, ctx context.Context, buffer *ExplainDataBu
 		return err
 	}
 
-	for _, bq := range qry.BackgroundQueries {
-		err = explainPlanTree(bq, ctx, buffer, options)
-		if err != nil {
+	rounds, executions, backgroundQueries := splitIvfSearchDiagnostics(qry.BackgroundQueries)
+	if options.Analyze && len(rounds) > 0 {
+		explainIvfSearchDiagnostics(rounds, buffer, options.Verbose)
+	}
+	if options.Analyze && len(executions) > 0 {
+		explainIvfExecutionDiagnostics(executions, buffer)
+	}
+	if len(backgroundQueries) == 0 {
+		return nil
+	}
+
+	if !options.Verbose {
+		if len(backgroundQueries) <= maxDefaultExpandedBackgroundQueries {
+			return explainVerboseBackgroundQueries(backgroundQueries, ctx, buffer, options)
+		}
+		summary := summarizeBackgroundQueries(&plan.Query{BackgroundQueries: backgroundQueries})
+		if summary != "" {
+			buffer.PushNewLine(summary, false, 0)
+		}
+		return nil
+	}
+
+	return explainVerboseBackgroundQueries(backgroundQueries, ctx, buffer, options)
+}
+
+func splitIvfSearchDiagnostics(backgroundQueries []*plan.Query) (
+	[]vectorindex.IvfSearchRoundDiagnostic,
+	[]vectorindex.IvfExecutionDiagnostic,
+	[]*plan.Query,
+) {
+	rounds := make([]vectorindex.IvfSearchRoundDiagnostic, 0, len(backgroundQueries))
+	executions := make([]vectorindex.IvfExecutionDiagnostic, 0, len(backgroundQueries))
+	remaining := make([]*plan.Query, 0, len(backgroundQueries))
+	for _, query := range backgroundQueries {
+		if diagnostic, ok := vectorindex.DecodeIvfSearchRoundDiagnostic(query); ok {
+			rounds = append(rounds, diagnostic)
+			continue
+		}
+		if diagnostic, ok := vectorindex.DecodeIvfExecutionDiagnostic(query); ok {
+			executions = append(executions, diagnostic)
+			continue
+		}
+		remaining = append(remaining, query)
+	}
+	return rounds, executions, remaining
+}
+
+func explainIvfExecutionDiagnostics(
+	diagnostics []vectorindex.IvfExecutionDiagnostic,
+	buffer *ExplainDataBuffer,
+) {
+	var summary vectorindex.IvfExecutionDiagnostic
+	for _, diagnostic := range diagnostics {
+		summary.Merge(diagnostic)
+	}
+	buffer.PushNewLine(fmt.Sprintf(
+		"Vector Index Execution: search_count=%d readers=%d metadata_blocks=%d metadata_rows=%d metadata_time_ns=%d centroid_blocks=%d centroid_rows=%d centroid_time_ns=%d entry_blocks_selected=%d entry_blocks_read=%d entry_output_rows=%d entry_time_ns=%d storage_filter_rows=%d:%d vector_rows_scored=%d vector_chunks=%d vector_chunk_cache_hits=%d vector_compressed_bytes=%d vector_decoded_bytes=%d block_topk_rows=%d output_rows=%d",
+		summary.SearchCount,
+		summary.ReaderCount,
+		summary.MetadataBlocks,
+		summary.MetadataRows,
+		summary.MetadataTimeNS,
+		summary.CentroidBlocks,
+		summary.CentroidRows,
+		summary.CentroidTimeNS,
+		summary.EntryBlocksSelected,
+		summary.EntryBlocksRead,
+		summary.EntryOutputRows,
+		summary.EntryTimeNS,
+		summary.StorageFilterInputRows,
+		summary.StorageFilterOutputRows,
+		summary.VectorRowsScored,
+		summary.VectorChunksRead,
+		summary.VectorChunkCacheHits,
+		summary.VectorCompressedBytes,
+		summary.VectorDecodedBytes,
+		summary.TopKOutputRows,
+		summary.OutputRows,
+	), false, 0)
+}
+
+func explainIvfSearchDiagnostics(
+	rounds []vectorindex.IvfSearchRoundDiagnostic,
+	buffer *ExplainDataBuffer,
+	verbose bool,
+) {
+	if len(rounds) == 0 {
+		return
+	}
+	if verbose {
+		prefix := min(len(rounds), maxVerboseBackgroundQueryPrefix)
+		suffixStart := prefix
+		if len(rounds) > maxVerboseBackgroundQueryPrefix+maxVerboseBackgroundQuerySuffix {
+			suffixStart = len(rounds) - maxVerboseBackgroundQuerySuffix
+		}
+		for _, round := range rounds[:prefix] {
+			buffer.PushNewLine(formatIvfSearchRound(round), false, 0)
+		}
+		if suffixStart > prefix {
+			buffer.PushNewLine(fmt.Sprintf(
+				"Vector Index Search Rounds: skipped %d middle round(s)", suffixStart-prefix), false, 0)
+			for _, round := range rounds[suffixStart:] {
+				buffer.PushNewLine(formatIvfSearchRound(round), false, 0)
+			}
+		} else {
+			for _, round := range rounds[prefix:] {
+				buffer.PushNewLine(formatIvfSearchRound(round), false, 0)
+			}
+		}
+	}
+	buffer.PushNewLine(summarizeIvfSearchDiagnostics(rounds), false, 0)
+}
+
+func formatIvfSearchRound(round vectorindex.IvfSearchRoundDiagnostic) string {
+	return fmt.Sprintf(
+		"Vector Index Search Round %d: bucket_window=%d:%d row_limit=%d output_rows=%d exhausted=%t",
+		round.Round,
+		round.BucketOffset,
+		round.BucketOffset+round.BucketCount,
+		round.RowLimit,
+		round.OutputRows,
+		round.Exhausted,
+	)
+}
+
+func summarizeIvfSearchDiagnostics(rounds []vectorindex.IvfSearchRoundDiagnostic) string {
+	windows := make([]string, 0, len(rounds))
+	limits := make([]string, 0, len(rounds))
+	searchCount := 0
+	emptyRounds := 0
+	var bucketsSearched uint64
+	for _, round := range rounds {
+		if round.Round == 1 {
+			searchCount++
+		}
+		if round.OutputRows == 0 {
+			emptyRounds++
+		}
+		bucketsSearched += round.BucketCount
+		windows = append(windows, fmt.Sprintf("%d:%d", round.BucketOffset, round.BucketOffset+round.BucketCount))
+		limits = append(limits, strconv.FormatUint(round.RowLimit, 10))
+	}
+	return fmt.Sprintf(
+		"Vector Index Search Summary: search_count=%d round_count=%d buckets_searched=%d bucket_windows=%s row_limits=%s empty_rounds=%d",
+		searchCount,
+		len(rounds),
+		bucketsSearched,
+		truncateDiagnosticList(windows),
+		truncateDiagnosticList(limits),
+		emptyRounds,
+	)
+}
+
+func truncateDiagnosticList(items []string) string {
+	if len(items) <= maxVerboseBackgroundQueryPrefix+maxVerboseBackgroundQuerySuffix {
+		return strings.Join(items, ", ")
+	}
+	visible := append([]string{}, items[:maxVerboseBackgroundQueryPrefix]...)
+	visible = append(visible, fmt.Sprintf("...(%d skipped)...",
+		len(items)-maxVerboseBackgroundQueryPrefix-maxVerboseBackgroundQuerySuffix))
+	visible = append(visible, items[len(items)-maxVerboseBackgroundQuerySuffix:]...)
+	return strings.Join(visible, ", ")
+}
+
+func explainVerboseBackgroundQueries(backgroundQueries []*plan.Query, ctx context.Context, buffer *ExplainDataBuffer, options *ExplainOptions) error {
+	total := len(backgroundQueries)
+	if total == 0 {
+		return nil
+	}
+
+	if total <= maxVerboseBackgroundQueryPrefix+maxVerboseBackgroundQuerySuffix {
+		for _, bq := range backgroundQueries {
+			if err := explainPlanTree(bq, ctx, buffer, options); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for _, bq := range backgroundQueries[:maxVerboseBackgroundQueryPrefix] {
+		if err := explainPlanTree(bq, ctx, buffer, options); err != nil {
 			return err
 		}
 	}
 
+	skipped := total - maxVerboseBackgroundQueryPrefix - maxVerboseBackgroundQuerySuffix
+	buffer.PushNewLine(
+		fmt.Sprintf("Background Queries: skipped %d middle plan(s); use fewer rounds to inspect every round plan", skipped),
+		false,
+		0,
+	)
+
+	for _, bq := range backgroundQueries[total-maxVerboseBackgroundQuerySuffix:] {
+		if err := explainPlanTree(bq, ctx, buffer, options); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func summarizeBackgroundQueries(qry *plan.Query) string {
+	if len(qry.BackgroundQueries) == 0 {
+		return ""
+	}
+
+	roundCount := len(qry.BackgroundQueries)
+	roundLimits := make([]string, 0, roundCount)
+	bucketWindows := make([]string, 0, roundCount)
+	nextWindowOffset := 0
+	emptyRounds := 0
+
+	for _, bq := range qry.BackgroundQueries {
+		sql := backgroundQuerySQL(bq)
+		if limit, ok := extractSQLLimit(sql); ok {
+			roundLimits = append(roundLimits, strconv.FormatUint(uint64(limit), 10))
+		}
+		if bucketCount, ok := extractSQLInListCount(sql); ok {
+			end := nextWindowOffset + bucketCount
+			bucketWindows = append(bucketWindows, fmt.Sprintf("%d:%d", nextWindowOffset, end))
+			nextWindowOffset = end
+		}
+		if queryOutputRows(bq) == 0 {
+			emptyRounds++
+		}
+	}
+
+	parts := []string{fmt.Sprintf("Background Queries: round_count=%d", roundCount)}
+	if len(bucketWindows) > 0 {
+		parts = append(parts, "bucket_windows="+truncateSummaryList(bucketWindows, 4))
+	}
+	if len(roundLimits) > 0 {
+		parts = append(parts, "round_limits="+truncateSummaryList(roundLimits, 4))
+	}
+	parts = append(parts, fmt.Sprintf("empty_rounds=%d", emptyRounds))
+	parts = append(parts, "use EXPLAIN VERBOSE ANALYZE to expand")
+	return strings.Join(parts, " ")
+}
+
+func backgroundQuerySQL(qry *plan.Query) string {
+	if qry == nil {
+		return ""
+	}
+	for _, rootID := range qry.Steps {
+		if int(rootID) >= len(qry.Nodes) || qry.Nodes[rootID] == nil {
+			continue
+		}
+		if qry.Nodes[rootID].Stats != nil {
+			if sql := qry.Nodes[rootID].Stats.GetSql(); sql != "" {
+				return sql
+			}
+		}
+	}
+	for _, node := range qry.Nodes {
+		if node == nil || node.Stats == nil {
+			continue
+		}
+		if sql := node.Stats.GetSql(); sql != "" {
+			return sql
+		}
+	}
+	return ""
+}
+
+func extractSQLLimit(sql string) (int, bool) {
+	upper := strings.ToUpper(sql)
+	idx := strings.LastIndex(upper, " LIMIT ")
+	if idx < 0 {
+		return 0, false
+	}
+	value := strings.TrimSpace(sql[idx+len(" LIMIT "):])
+	if value == "" {
+		return 0, false
+	}
+	limit, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, false
+	}
+	return limit, true
+}
+
+func extractSQLInListCount(sql string) (int, bool) {
+	upper := strings.ToUpper(sql)
+	inIdx := strings.LastIndex(upper, " IN (")
+	if inIdx < 0 {
+		return 0, false
+	}
+	listStart := inIdx + len(" IN (")
+	listEnd := strings.Index(sql[listStart:], ")")
+	if listEnd < 0 {
+		return 0, false
+	}
+	content := strings.TrimSpace(sql[listStart : listStart+listEnd])
+	if content == "" {
+		return 0, false
+	}
+	return strings.Count(content, ",") + 1, true
+}
+
+func queryOutputRows(qry *plan.Query) int64 {
+	if qry == nil {
+		return 0
+	}
+	for _, rootID := range qry.Steps {
+		if int(rootID) >= len(qry.Nodes) || qry.Nodes[rootID] == nil {
+			continue
+		}
+		if analyze := qry.Nodes[rootID].AnalyzeInfo; analyze != nil {
+			return analyze.OutputRows
+		}
+	}
+	return 0
+}
+
+func truncateSummaryList(items []string, maxItems int) string {
+	if len(items) <= maxItems {
+		return strings.Join(items, ", ")
+	}
+	visible := append([]string{}, items[:maxItems]...)
+	visible = append(visible, "...")
+	return strings.Join(visible, ", ")
 }
 
 func explainSinglePlan(qry *plan.Query, ctx context.Context, buffer *ExplainDataBuffer, options *ExplainOptions) error {
@@ -369,7 +689,12 @@ func explainStep(ctx context.Context, step *plan.Node, nodes []*plan.Node, setti
 						sinkScan = childNode
 					}
 				}
-				if (tableScan.Stats.Cost / sinkScan.Stats.Cost) < 0.5 {
+				buildOnTable := step.FuzzyBuildSide ==
+					plan.Node_FUZZY_BUILD_SIDE_TABLE ||
+					(step.FuzzyBuildSide ==
+						plan.Node_FUZZY_BUILD_SIDE_UNSPECIFIED &&
+						(tableScan.Stats.Cost/sinkScan.Stats.Cost) < 0.3)
+				if buildOnTable {
 					buf.WriteString("TableScan")
 					if step.IfInsertFromUnique {
 						buf.WriteString(" (InsertFromUnique)")

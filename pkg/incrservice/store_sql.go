@@ -17,18 +17,20 @@ package incrservice
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
@@ -42,24 +44,55 @@ func (c AutoColumn) getInsertSQL() string {
 		values(%d, '%s', %d, %d, %d)`,
 		incrTableName,
 		c.TableID,
-		c.ColName,
+		sqlquote.EscapeString(c.ColName),
 		c.ColIndex,
 		c.Offset,
 		c.Step)
 }
 
+type logtailReadBarrier func(context.Context) (timestamp.Timestamp, error)
+
+type autoIDObservationScopeKey struct{}
+
+type autoIDObservationScope struct {
+	once     sync.Once
+	frontier timestamp.Timestamp
+	err      error
+}
+
+// WithAutoIDObservationScope lets one vectorized metadata expression share a
+// visibility frontier. Allocator values are never cached: each table still
+// performs its own point read at or after that frontier.
+func WithAutoIDObservationScope(ctx context.Context) context.Context {
+	return context.WithValue(ctx, autoIDObservationScopeKey{}, &autoIDObservationScope{})
+}
+
+func acquireAutoIDObservationFrontier(ctx context.Context, acquire logtailReadBarrier) (timestamp.Timestamp, error) {
+	if scope, ok := ctx.Value(autoIDObservationScopeKey{}).(*autoIDObservationScope); ok {
+		scope.once.Do(func() { scope.frontier, scope.err = acquire(ctx) })
+		return scope.frontier, scope.err
+	}
+	return acquire(ctx)
+}
+
 type sqlStore struct {
-	ls   lockservice.LockService
-	exec executor.SQLExecutor
+	ls                      lockservice.LockService
+	exec                    executor.SQLExecutor
+	acquireLogtailReadFence logtailReadBarrier
 }
 
 func NewSQLStore(
 	exec executor.SQLExecutor,
 	ls lockservice.LockService,
+	acquireLogtailReadFence func(context.Context) (timestamp.Timestamp, error),
 ) (IncrValueStore, error) {
+	if acquireLogtailReadFence == nil {
+		return nil, moerr.NewInternalErrorNoCtx("AUTO_INCREMENT store requires a logtail read barrier")
+	}
 	return &sqlStore{
-		exec: exec,
-		ls:   ls,
+		exec:                    exec,
+		ls:                      ls,
+		acquireLogtailReadFence: acquireLogtailReadFence,
 	}, nil
 }
 
@@ -75,7 +108,7 @@ func (s *sqlStore) Create(
 	if txnOp != nil {
 		opts = opts.WithDisableIncrStatement()
 	} else {
-		opts = opts.WithEnableTrace().WithDisableWaitPaused()
+		opts = opts.WithDisableWaitPaused()
 	}
 
 	return s.exec.ExecTxn(
@@ -106,7 +139,7 @@ func (s *sqlStore) Allocate(
 	fetchSQL := fmt.Sprintf(`select offset, step from %s where table_id = %d and col_name = '%s' for update`,
 		incrTableName,
 		tableID,
-		colName)
+		sqlquote.EscapeString(colName))
 	opts := executor.Options{}.
 		WithDatabase(database).
 		WithTxn(txnOp).
@@ -115,7 +148,7 @@ func (s *sqlStore) Allocate(
 	if txnOp != nil {
 		opts = opts.WithDisableIncrStatement()
 	} else {
-		opts = opts.WithEnableTrace().WithDisableWaitPaused()
+		opts = opts.WithDisableWaitPaused()
 	}
 
 	ctxDone := func() bool {
@@ -148,7 +181,7 @@ func (s *sqlStore) Allocate(
 					if err != nil {
 						return err
 					}
-					trace.GetService(s.ls.GetConfig().ServiceID).Sync()
+
 					if ctxDone() {
 						return ctx.Err()
 					}
@@ -177,7 +210,7 @@ func (s *sqlStore) Allocate(
 					incrTableName,
 					next,
 					tableID,
-					colName,
+					sqlquote.EscapeString(colName),
 					current)
 				start = time.Now()
 				res, err = te.Exec(sql, executor.StatementOption{}.WithDisableLog())
@@ -202,7 +235,7 @@ func (s *sqlStore) Allocate(
 					if err != nil {
 						return err
 					}
-					trace.GetService(s.ls.GetConfig().ServiceID).Sync()
+
 					getLogger(s.ls.GetConfig().ServiceID).Error("pre lock released by lock table changed",
 						zap.String("update-sql", sql),
 						zap.Any("account", accountID),
@@ -284,7 +317,6 @@ func (s *sqlStore) UpdateMinValue(
 	if txnOp == nil {
 		opts = opts.
 			WithWaitCommittedLogApplied().
-			WithEnableTrace().
 			WithDisableWaitPaused().
 			WithStatementOption(executor.StatementOption{}.WithDisableLog())
 	} else {
@@ -296,7 +328,7 @@ func (s *sqlStore) UpdateMinValue(
 			incrTableName,
 			minValue,
 			tableID,
-			col,
+			sqlquote.EscapeString(col),
 			minValue),
 		opts)
 	if err != nil {
@@ -306,12 +338,124 @@ func (s *sqlStore) UpdateMinValue(
 	return nil
 }
 
-func (s *sqlStore) Delete(ctx context.Context, tableID uint64) error {
+func (s *sqlStore) SetOffset(
+	ctx context.Context,
+	tableID uint64,
+	colName string,
+	offset uint64,
+	txnOp client.TxnOperator,
+) error {
 	opts := executor.Options{}.
 		WithDatabase(database).
-		WithEnableTrace().
+		WithTxn(txnOp)
+	if txnOp == nil {
+		opts = opts.
+			WithWaitCommittedLogApplied().
+			WithDisableWaitPaused().
+			WithStatementOption(executor.StatementOption{}.WithDisableLog())
+	} else {
+		opts = opts.WithDisableIncrStatement()
+	}
+	res, err := s.exec.Exec(
+		ctx,
+		fmt.Sprintf(
+			"update %s set offset = %d where table_id = %d and col_name = '%s' and offset < %d",
+			incrTableName, offset, tableID, sqlquote.EscapeString(colName), offset,
+		),
+		opts,
+	)
+	if err != nil {
+		return err
+	}
+	defer res.Close()
+	return nil
+}
+
+// ForceSetOffset sets the offset and current name of an auto-increment column
+// to any value, bypassing the monotonic guard. Only called from service.SetOffset
+// during ALTER TABLE AUTO_INCREMENT, which holds an exclusive DDL lock.
+func (s *sqlStore) ForceSetOffset(
+	ctx context.Context,
+	tableID uint64,
+	colIndex int,
+	colName string,
+	offset uint64,
+	txnOp client.TxnOperator,
+) error {
+	opts := executor.Options{}.
+		WithDatabase(database).
+		WithTxn(txnOp)
+	if txnOp == nil {
+		opts = opts.
+			WithWaitCommittedLogApplied().
+			WithDisableWaitPaused().
+			WithStatementOption(executor.StatementOption{}.WithDisableLog())
+	} else {
+		opts = opts.WithDisableIncrStatement()
+	}
+	currentRes, err := s.exec.Exec(
+		ctx,
+		fmt.Sprintf(
+			"select col_name, offset from %s where table_id = %d and col_index = %d for update",
+			incrTableName, tableID, colIndex,
+		),
+		opts,
+	)
+	if err != nil {
+		return err
+	}
+	var (
+		currentNames   []string
+		currentOffsets []uint64
+	)
+	currentRes.ReadRows(func(_ int, cols []*vector.Vector) bool {
+		currentNames = append(currentNames, executor.GetStringRows(cols[0])...)
+		currentOffsets = append(currentOffsets, executor.GetFixedRows[uint64](cols[1])...)
+		return true
+	})
+	currentRes.Close()
+	if len(currentNames) != 1 || len(currentOffsets) != 1 {
+		return moerr.NewInternalErrorf(
+			ctx,
+			"incrservice: expected one auto-increment column at index %d for table %d, found %d rows",
+			colIndex,
+			tableID,
+			min(len(currentNames), len(currentOffsets)),
+		)
+	}
+	res, err := s.exec.Exec(
+		ctx,
+		fmt.Sprintf(
+			"update %s set col_name = '%s', offset = %d where table_id = %d and col_index = %d",
+			incrTableName, sqlquote.EscapeString(colName), offset, tableID, colIndex,
+		),
+		opts,
+	)
+	if err != nil {
+		return err
+	}
+	defer res.Close()
+	if res.AffectedRows != 1 && !(res.AffectedRows == 0 && currentNames[0] == colName && currentOffsets[0] == offset) {
+		return moerr.NewInternalErrorf(
+			ctx,
+			"incrservice: expected to reset one auto-increment column at index %d for table %d, updated %d rows",
+			colIndex,
+			tableID,
+			res.AffectedRows,
+		)
+	}
+	return nil
+}
+
+func (s *sqlStore) Delete(ctx context.Context, tableID uint64) error {
+	// This is lazy GC for a dropped table whose globally allocated ID is not
+	// reused. Commit durability is sufficient: no later operation depends on
+	// this CN observing the deletion immediately. In particular, do not wait
+	// for committed logtail visibility here, because service shutdown cancels
+	// and joins this worker and that wait does not observe the worker context.
+	opts := executor.Options{}.
+		WithDatabase(database).
 		WithDisableWaitPaused().
-		WithWaitCommittedLogApplied().
 		WithStatementOption(executor.StatementOption{}.WithDisableLog())
 
 	return s.exec.ExecTxn(ctx,
@@ -333,8 +477,8 @@ func (s *sqlStore) Delete(ctx context.Context, tableID uint64) error {
 				rowCount += rows
 				return true
 			})
+			res.Close()
 			if rowCount == 0 {
-				res.Close()
 				return nil
 			}
 			res, err = s.exec.Exec(
@@ -348,25 +492,46 @@ func (s *sqlStore) Delete(ctx context.Context, tableID uint64) error {
 		opts)
 }
 
+// autoColumnPolicyTableKey redirects only the table-metadata half of a reset
+// read. TRUNCATE has already replaced the old mo_tables row, but its allocator
+// rows remain until Reset migrates them. The new physical table owns the policy.
+type autoColumnPolicyTableKey struct{}
+
+type autoColumnKnownPolicyKey struct{}
+
+type autoColumnKnownPolicy struct {
+	tableID uint64
+	size    uint64
+}
+
+// WithAutoIDCachePolicy carries policy from a resolved table definition or an
+// existing cache owner. Binding the hint to a physical table ID prevents reuse
+// after a table-ID refresh or for a different table in the same context.
+// Callers without authoritative metadata must leave the context unchanged.
+func WithAutoIDCachePolicy(ctx context.Context, tableID, size uint64) context.Context {
+	return context.WithValue(ctx, autoColumnKnownPolicyKey{}, autoColumnKnownPolicy{tableID: tableID, size: size})
+}
+
 func (s *sqlStore) GetColumns(
 	ctx context.Context,
 	tableID uint64,
 	txnOp client.TxnOperator) ([]AutoColumn, error) {
-	fetchSQL := fmt.Sprintf(`select col_name, col_index, offset, step from %s where table_id = %d order by col_index`,
-		incrTableName,
-		tableID)
-	opts := executor.Options{}.
-		WithDatabase(database).
-		WithTxn(txnOp).
-		WithStatementOption(executor.StatementOption{}.WithDisableLog())
-
-	if txnOp != nil {
-		opts = opts.WithDisableIncrStatement()
-	} else {
-		opts = opts.WithEnableTrace().WithDisableWaitPaused()
+	policyTableID := tableID
+	if replacement, ok := ctx.Value(autoColumnPolicyTableKey{}).(uint64); ok {
+		policyTableID = replacement
 	}
-
-	res, err := s.exec.Exec(ctx, fetchSQL, opts)
+	// A resolved definition or existing cache owner supplies immutable policy.
+	// Other cold loads discover it in the same SQL snapshot as fresh offsets.
+	knownPolicy, hasKnownPolicy := ctx.Value(autoColumnKnownPolicyKey{}).(autoColumnKnownPolicy)
+	hasKnownPolicy = hasKnownPolicy && knownPolicy.tableID == policyTableID
+	policySQL := fmt.Sprintf("(select extra_info from mo_tables where rel_id = %d)", policyTableID)
+	if hasKnownPolicy {
+		policySQL = "''"
+	}
+	fetchSQL := fmt.Sprintf(`select col_name, col_index, offset, step,
+		%s as table_extra from %s where table_id = %d order by col_index`,
+		policySQL, incrTableName, tableID)
+	res, err := s.exec.Exec(ctx, fetchSQL, autoColumnReadOptions(txnOp))
 	if err != nil {
 		return nil, err
 	}
@@ -376,7 +541,23 @@ func (s *sqlStore) GetColumns(
 	var indexes []int32
 	var offsets []uint64
 	var steps []uint64
+	var extra api.SchemaExtra
+	var metadataRead bool
+	var metadataErr error
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows == 0 {
+			return true
+		}
+		if !metadataRead {
+			if cols[4].IsNull(0) {
+				metadataErr = moerr.NewNoSuchTableNoCtx("", fmt.Sprintf("%d", tableID))
+				return false
+			}
+			if metadataErr = extra.Unmarshal(cols[4].GetBytesAt(0)); metadataErr != nil {
+				return false
+			}
+			metadataRead = true
+		}
 		colNames = append(colNames, executor.GetStringRows(cols[0])...)
 		indexes = append(indexes, executor.GetFixedRows[int32](cols[1])...)
 		offsets = append(offsets, executor.GetFixedRows[uint64](cols[2])...)
@@ -384,17 +565,76 @@ func (s *sqlStore) GetColumns(
 		return true
 	})
 
+	if metadataErr != nil {
+		return nil, metadataErr
+	}
+	if hasKnownPolicy {
+		extra.AutoIdCache = knownPolicy.size
+	}
+	if err := validateAutoIDCacheSize(ctx, extra.AutoIdCache); err != nil {
+		return nil, err
+	}
 	cols := make([]AutoColumn, len(colNames))
 	for idx, colName := range colNames {
 		cols[idx] = AutoColumn{
-			TableID:  tableID,
-			ColName:  colName,
-			ColIndex: int(indexes[idx]),
-			Offset:   offsets[idx],
-			Step:     steps[idx],
+			TableID:   tableID,
+			ColName:   colName,
+			ColIndex:  int(indexes[idx]),
+			Offset:    offsets[idx],
+			Step:      steps[idx],
+			CacheSize: extra.AutoIdCache,
 		}
 	}
 	return cols, nil
+}
+
+func autoColumnReadOptions(txnOp client.TxnOperator) executor.Options {
+	opts := executor.Options{}.
+		WithDatabase(database).
+		WithTxn(txnOp).
+		WithStatementOption(executor.StatementOption{}.WithDisableLog())
+	if txnOp != nil {
+		return opts.WithDisableIncrStatement()
+	}
+	return opts.WithDisableWaitPaused()
+}
+
+// GetColumnValue uses the allocator's (table_id, col_name) key. Policy is
+// already validated by the cache owner; every observation still reads fresh
+// allocator state, including reservations made by another CN.
+func (s *sqlStore) GetColumnValue(ctx context.Context, tableID uint64, colName string, txnOp client.TxnOperator) (uint64, uint64, error) {
+	query := fmt.Sprintf("select offset, step from %s where table_id = %d and col_name = '%s'",
+		incrTableName, tableID, sqlquote.EscapeString(colName))
+	opts := autoColumnReadOptions(txnOp)
+	if txnOp == nil {
+		if s.acquireLogtailReadFence == nil {
+			return 0, 0, moerr.NewInternalErrorNoCtx("AUTO_INCREMENT observation requires a logtail read barrier")
+		}
+		frontier, err := acquireAutoIDObservationFrontier(ctx, s.acquireLogtailReadFence)
+		if err != nil {
+			return 0, 0, err
+		}
+		opts = opts.WithMinCommittedTS(frontier)
+	}
+	res, err := s.exec.Exec(ctx, query, opts)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer res.Close()
+	var offset, step uint64
+	var count int
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		count += rows
+		if rows > 0 {
+			offset = executor.GetFixedRows[uint64](cols[0])[0]
+			step = executor.GetFixedRows[uint64](cols[1])[0]
+		}
+		return true
+	})
+	if count != 1 {
+		return 0, 0, moerr.NewInternalErrorf(ctx, "AUTO_INCREMENT column %q for table %d: expected one allocator row, got %d", colName, tableID, count)
+	}
+	return offset, step, nil
 }
 
 func (s *sqlStore) Close() {

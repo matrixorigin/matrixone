@@ -91,7 +91,22 @@ insert into temp_pk values (1, 'charlie');  -- 应该失败
 select * from temp_pk;
 drop table temp_pk;
 
--- 测试用例 3.2: not null 约束
+-- 测试用例 3.2: 持久化临时表标记支持所有 INSERT 冲突模式
+-- 预期结果: 普通 INSERT、INSERT IGNORE 和 ON DUPLICATE KEY UPDATE 均成功
+create temporary table temp_insert_modes (
+    id int primary key,
+    value varchar(50)
+);
+
+insert into temp_insert_modes values (1, 'plain');
+insert ignore into temp_insert_modes values (1, 'ignored');
+insert into temp_insert_modes values (1, 'updated')
+    on duplicate key update value = values(value);
+
+select * from temp_insert_modes;
+drop table temp_insert_modes;
+
+-- 测试用例 3.3: not null 约束
 -- 预期结果: 前两条成功，第三条因not null约束失败
 create temporary table temp_not_null (
     id int not null,
@@ -106,7 +121,7 @@ insert into temp_not_null values (null, 'item3', 'description');  -- 应该失�
 select * from temp_not_null;
 drop table temp_not_null;
 
--- 测试用例 3.3: 默认值
+-- 测试用例 3.4: 默认值
 -- 预期结果: 第一条使用默认值，第二条使用指定值
 create temporary table temp_default (
     id int,
@@ -353,12 +368,137 @@ show create table temp_show;
 drop table temp_show;
 
 -- 测试用例 9.2: show tables 不显示临时表
--- 预期结果: show tables结果中不包含临时表
+-- 预期结果: show tables结果中不包含临时表，但包含名字使用临时表前缀的永久表
 create table permanent_table (id int);
-create temporary table temp_invisible (id int);
+create table __mo_tmp_customer (
+    id int primary key,
+    customer_code int,
+    unique key uk_customer_code (customer_code),
+    key idx_customer_code (customer_code)
+);
+create table __mo_tmp_0123456789abcdef0123456789abcdef_customer (id int primary key);
+create temporary table temp_invisible (
+    id int primary key,
+    customer_code int,
+    unique key uk_temp_customer_code (customer_code),
+    key idx_temp_customer_code (customer_code)
+);
 
-show tables;  -- 应该只显示 permanent_table
+show tables;  -- 应该显示三个永久表
+-- 表名匹配未转义的 LIKE '__mo_tmp_%'，但它不是临时表，必须在 information_schema.tables 中可见
+create table xxmo_tmp_visible (id int);
+select table_name, table_type
+from information_schema.tables
+where table_schema = database()
+order by table_name;
+
+-- 临时基表必须使用持久化的 catalog 标记；内部索引保留 index relkind；普通前缀表仍保持 ordinary relkind
+select relname, relkind
+from mo_catalog.mo_tables
+where reldatabase = database()
+  and relname in ('__mo_tmp_customer', '__mo_tmp_0123456789abcdef0123456789abcdef_customer')
+order by relname;
+select count(*) > 0 as has_temp_objects,
+	   sum(if(relkind = 'temporary_table', 1, 0)) = 1 as temp_base_marked,
+	   sum(if(relkind = 'i', 1, 0)) > 0 as temp_indexes_keep_relkind,
+	   count(*) = sum(if(relkind in ('temporary_table', 'i'), 1, 0)) as all_temp_objects_classified
+from mo_catalog.mo_tables
+where reldatabase = database()
+  and left(relname, 9) = '__mo_tmp_'
+  and relname not in ('__mo_tmp_customer', '__mo_tmp_0123456789abcdef0123456789abcdef_customer');
+
+-- 宽前缀和严格物理名形状的永久表必须在所有相关 metadata view 中可见
+select distinct table_name from information_schema.columns
+where table_schema = database()
+  and table_name in ('__mo_tmp_customer', '__mo_tmp_0123456789abcdef0123456789abcdef_customer')
+order by table_name;
+select distinct table_name from information_schema.statistics
+where table_schema = database()
+  and table_name in ('__mo_tmp_customer', '__mo_tmp_0123456789abcdef0123456789abcdef_customer')
+order by table_name;
+select distinct table_name from information_schema.table_constraints
+where table_schema = database()
+  and table_name in ('__mo_tmp_customer', '__mo_tmp_0123456789abcdef0123456789abcdef_customer')
+order by table_name;
+
+-- 临时基表和派生索引表不能泄漏到任何相关 metadata view
+select 'TABLES' as metadata_view, count(*) as leaked_objects
+from information_schema.tables
+where table_schema = database() and left(table_name, 9) = '__mo_tmp_'
+  and table_name not in ('__mo_tmp_customer', '__mo_tmp_0123456789abcdef0123456789abcdef_customer')
+union all
+select 'COLUMNS', count(*) from information_schema.columns
+where table_schema = database() and left(table_name, 9) = '__mo_tmp_'
+  and table_name not in ('__mo_tmp_customer', '__mo_tmp_0123456789abcdef0123456789abcdef_customer')
+union all
+select 'STATISTICS', count(*) from information_schema.statistics
+where table_schema = database() and left(table_name, 9) = '__mo_tmp_'
+  and table_name not in ('__mo_tmp_customer', '__mo_tmp_0123456789abcdef0123456789abcdef_customer')
+union all
+select 'TABLE_CONSTRAINTS', count(*) from information_schema.table_constraints
+where table_schema = database() and left(table_name, 9) = '__mo_tmp_'
+  and table_name not in ('__mo_tmp_customer', '__mo_tmp_0123456789abcdef0123456789abcdef_customer')
+order by metadata_view;
 
 drop table temp_invisible;
 drop table permanent_table;
+drop table __mo_tmp_customer;
+drop table __mo_tmp_0123456789abcdef0123456789abcdef_customer;
+drop table xxmo_tmp_visible;
+
+-- ============================================================================
+-- 测试分类 10: 预处理语句重新解析同名临时表
+-- ============================================================================
+
+create table prepared_shadow (id int primary key, value varchar(20));
+insert into prepared_shadow values (1, 'permanent');
+
+prepare prepared_shadow_stmt from
+    'select id, value from prepared_shadow order by id';
+execute prepared_shadow_stmt;
+
+create temporary table prepared_shadow (
+    id int primary key,
+    value varchar(20)
+);
+insert into prepared_shadow values (2, 'temporary');
+execute prepared_shadow_stmt;
+
+drop table prepared_shadow;
+execute prepared_shadow_stmt;
+
+deallocate prepare prepared_shadow_stmt;
+drop table prepared_shadow;
 drop database temp_db;
+
+-- ============================================================================
+-- 测试分类 11: 重建时保留 PREPARE 阶段的默认数据库
+-- ============================================================================
+
+drop database if exists prepared_db1;
+drop database if exists prepared_db2;
+create database prepared_db1;
+create database prepared_db2;
+
+use prepared_db1;
+create table t(v int);
+insert into t values (1);
+prepare prepared_db_stmt from 'select v from t';
+
+use prepared_db2;
+create table t(v int);
+insert into t values (2);
+create temporary table unrelated_temp(v int);
+execute prepared_db_stmt;
+drop table unrelated_temp;
+
+create temporary table prepared_db1.t(v int);
+insert into prepared_db1.t values (3);
+execute prepared_db_stmt;
+
+drop table prepared_db1.t;
+execute prepared_db_stmt;
+
+deallocate prepare prepared_db_stmt;
+drop database prepared_db1;
+drop database prepared_db2;

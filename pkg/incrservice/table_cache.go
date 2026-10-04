@@ -16,19 +16,29 @@ package incrservice
 
 import (
 	"context"
-	"go.uber.org/zap"
+	"math"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"go.uber.org/zap"
 )
 
 type tableCache struct {
 	logger  *log.MOLogger
 	tableID uint64
+	epochID uint32
 	cols    []AutoColumn
+
+	lifecycle struct {
+		sync.Mutex
+		users   int
+		retired bool
+		closed  bool
+	}
 
 	mu struct {
 		sync.RWMutex
@@ -42,6 +52,7 @@ func newTableCache(
 	ctx context.Context,
 	sid string,
 	tableID uint64,
+	epoch uint32,
 	cols []AutoColumn,
 	cfg Config,
 	allocator valueAllocator,
@@ -50,6 +61,7 @@ func newTableCache(
 	c := &tableCache{
 		logger:  getLogger(sid).Named("incrservice"),
 		tableID: tableID,
+		epochID: epoch,
 		cols:    cols,
 	}
 	c.mu.cols = make(map[string]*columnCache, 1)
@@ -67,6 +79,10 @@ func newTableCache(
 			txnOp,
 		)
 		if err != nil {
+			for _, created := range c.mu.cols {
+				created.retire()
+				_ = created.close()
+			}
 			return nil, err
 		}
 		c.mu.cols[col.ColName] = cc
@@ -95,14 +111,18 @@ func (c *tableCache) getTxn() client.TxnOperator {
 	return c.mu.txnOp
 }
 
-func (c *tableCache) getLastAllocateTS(colName string) (timestamp.Timestamp, error) {
+func (c *tableCache) getLastAllocateTS(ctx context.Context, colName string) (timestamp.Timestamp, error) {
 	cc := c.getColumnCache(colName)
 	if cc == nil {
 		panic("column cache should not be nil, " + colName)
 	}
 	cc.RLock()
-	ts := cc.ranges.oldestAllocateAt()
+	ts := cc.oldestAllocateAtLocked()
+	unknown := cc.cfg.demandOnly && ts.IsEmpty() && (!cc.ranges.empty() || cc.terminal)
 	cc.RUnlock()
+	if unknown {
+		return timestamp.Timestamp{}, moerr.NewInternalError(ctx, "AUTO_INCREMENT range has no allocation timestamp")
+	}
 	// Log a warning if the allocation timestamp is empty, which may cause PrimaryKeysMayBeUpserted
 	// to scan a very large time range and impact performance.
 	if ts.IsEmpty() && c.logger.Enabled(zap.DebugLevel) {
@@ -129,13 +149,18 @@ func (c *tableCache) insertAutoValues(
 		}
 
 		if estimate > int64(cc.cfg.CountPerAllocate) {
-			cc.preAllocate(ctx, tableID, int(estimate), txnOp)
+			// Planner bounds are speculative and may be billions of rows.
+			// Reserve only the configured cache range; actual batch demand
+			// remains owned by columnCache.insertAutoValues/allocateLocked.
+			cc.preAllocate(ctx, tableID, cc.cfg.CountPerAllocate, txnOp)
 		}
 
 		vec := vecs[col.ColIndex]
 		if v, err := cc.insertAutoValues(ctx, tableID, vec, rows, txnOp); err != nil {
 			return 0, err
-		} else {
+		} else if lastInsert == 0 {
+			// A statement may carry more than one auto-increment cache. Keep
+			// the first generated value for the statement-level protocol result.
 			lastInsert = v
 		}
 	}
@@ -145,14 +170,29 @@ func (c *tableCache) insertAutoValues(
 func (c *tableCache) currentValue(
 	ctx context.Context,
 	tableID uint64,
-	targetCol string) (uint64, error) {
+	targetCol string,
+	store IncrValueStore) (uint64, error) {
 	for _, col := range c.cols {
 		if col.ColName == targetCol {
 			cc := c.getColumnCache(col.ColName)
 			if cc == nil {
 				panic("column cache should not be nil, " + col.ColName)
 			}
-			return cc.current(ctx)
+			value, err := cc.current(ctx)
+			if err != nil || value != 0 || !cc.cfg.demandOnly {
+				return value, err
+			}
+			// An uncommitted CREATE owns private allocator rows. Observe through
+			// that cache's transaction, not a new committed snapshot. getTxn
+			// releases its lock before I/O and returns nil after cache commit.
+			offset, step, err := store.GetColumnValue(ctx, tableID, targetCol, c.getTxn())
+			if err != nil {
+				return 0, err
+			}
+			if step == 0 || offset > math.MaxUint64-step {
+				return 0, moerr.NewOutOfRange(ctx, "AUTO_INCREMENT", "no next value is representable")
+			}
+			return offset + step, nil
 		}
 	}
 	return 0, nil
@@ -160,6 +200,48 @@ func (c *tableCache) currentValue(
 
 func (c *tableCache) table() uint64 {
 	return c.tableID
+}
+
+func (c *tableCache) epoch() uint32 {
+	return c.epochID
+}
+
+func (c *tableCache) acquire() {
+	c.lifecycle.Lock()
+	defer c.lifecycle.Unlock()
+	c.lifecycle.users++
+}
+
+func (c *tableCache) release() {
+	c.lifecycle.Lock()
+	c.lifecycle.users--
+	closeNow := c.lifecycle.retired && c.lifecycle.users == 0 && !c.lifecycle.closed
+	if closeNow {
+		c.lifecycle.closed = true
+	}
+	c.lifecycle.Unlock()
+	if closeNow {
+		_ = c.close()
+	}
+}
+
+func (c *tableCache) retire() {
+	c.mu.RLock()
+	for _, col := range c.mu.cols {
+		col.retire()
+	}
+	c.mu.RUnlock()
+
+	c.lifecycle.Lock()
+	c.lifecycle.retired = true
+	closeNow := c.lifecycle.users == 0 && !c.lifecycle.closed
+	if closeNow {
+		c.lifecycle.closed = true
+	}
+	c.lifecycle.Unlock()
+	if closeNow {
+		_ = c.close()
+	}
 }
 
 func (c *tableCache) columns() []AutoColumn {

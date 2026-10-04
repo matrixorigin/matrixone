@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -41,21 +42,48 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
+var (
+	frontendConnectionCloseEvents = logutil.ConnectionCloseEvents{
+		Expected: logutil.Event{Name: "frontend.connection.close.expected", Message: "frontend connection closed during normal lifecycle"},
+		Failed:   logutil.Event{Name: "frontend.connection.close.failed", Message: "frontend connection close failed"},
+	}
+	frontendSessionReadEvents = logutil.ConnectionCloseEvents{
+		Expected: logutil.Event{Name: "frontend.session.read.expected", Message: "frontend session read closed during normal lifecycle"},
+		Failed:   logutil.Event{Name: "frontend.session.read.failed", Message: "frontend session read failed"},
+	}
+	frontendSessionHandleEvents = logutil.ConnectionCloseEvents{
+		Expected: logutil.Event{Name: "frontend.session.handle.expected", Message: "frontend session handling closed during normal lifecycle"},
+		Failed:   logutil.Event{Name: "frontend.session.handle.failed", Message: "frontend session handling failed"},
+	}
+)
+
 // RelationName counter for the new connection
 var initConnectionID uint32 = 1000
 
 // ConnIDAllocKey is used get connection ID from HAKeeper.
 var ConnIDAllocKey = "____server_conn_id"
 
+const (
+	// The request handler owns the connection read loop while a statement is
+	// executing, so probe every active request from the first monitor tick.
+	clientDisconnectProbeInterval = time.Second
+	clientDisconnectProbeGrace    = 0
+)
+
 // MOServer MatrixOne Server
 type MOServer struct {
-	addr    string
-	uaddr   string
-	rm      *RoutineManager
-	handler func(*Conn, []byte) error
-	mu      sync.RWMutex
-	wg      sync.WaitGroup
-	running bool
+	addr         string
+	uaddr        string
+	rm           *RoutineManager
+	handler      func(*Conn, []byte) error
+	mu           sync.RWMutex
+	wg           sync.WaitGroup
+	running      bool
+	stopping     bool
+	stopOnce     sync.Once
+	stopErr      error
+	connections  map[net.Conn]struct{}
+	connectionWG sync.WaitGroup
 
 	pu        *config.ParameterUnit
 	listeners []net.Listener
@@ -91,31 +119,60 @@ func (mo *MOServer) GetRoutineManager() *RoutineManager {
 }
 
 func (mo *MOServer) Start() error {
-	logutil.Infof("Server Listening on : %s ", mo.addr)
+	mo.mu.Lock()
+	defer mo.mu.Unlock()
+	if mo.stopping {
+		return moerr.NewInvalidStateNoCtx("frontend server is stopped")
+	}
+	address := mo.addr
+	if len(mo.listeners) > 0 && mo.listeners[0] != nil {
+		address = mo.listeners[0].Addr().String()
+	}
+	logutil.Infof("Server Listening on : %s ", address)
 	mo.running = true
 	mo.startTempTableGC(24 * time.Hour)
+	mo.startConnectionLivenessMonitor()
 	mo.startListener()
 	setMoServerStarted(mo.service, true)
 	return nil
 }
 
-func (mo *MOServer) Stop() error {
-	mo.mu.Lock()
-	if !mo.running {
-		mo.mu.Unlock()
-		return nil
+func (mo *MOServer) startConnectionLivenessMonitor() {
+	if mo == nil || mo.rm == nil || mo.rm.ctx == nil {
+		return
 	}
+	mo.wg.Add(1)
+	go func() {
+		defer mo.wg.Done()
+		ticker := time.NewTicker(clientDisconnectProbeInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-mo.rm.ctx.Done():
+				return
+			case now := <-ticker.C:
+				mo.rm.cancelDisconnectedRequests(now, clientDisconnectProbeGrace, connectionPeerClosed)
+			}
+		}
+	}()
+}
+
+func (mo *MOServer) Stop() error {
+	mo.stopOnce.Do(func() { mo.stopErr = mo.stop() })
+	return mo.stopErr
+}
+
+func (mo *MOServer) stop() error {
+	mo.mu.Lock()
+	mo.stopping = true
 	mo.running = false
+	listeners := mo.listeners
+	mo.listeners = nil
 	mo.mu.Unlock()
 
-	var errors []error
-	for _, listener := range mo.listeners {
-		if err := listener.Close(); err != nil {
-			errors = append(errors, err)
-		}
-	}
-	if len(errors) > 0 {
-		return errors[0]
+	var err error
+	for _, listener := range listeners {
+		err = errors.Join(err, listener.Close())
 	}
 
 	logutil.Debug("application listener closed")
@@ -123,13 +180,30 @@ func (mo *MOServer) Stop() error {
 	// Cancel context first to allow goroutines (like startTempTableGC) to exit,
 	// then wait for them to complete. This prevents deadlock where wg.Wait()
 	// blocks while goroutines wait for ctx.Done().
-	mo.rm.cancelCtx()
+	if mo.rm != nil {
+		mo.rm.cancelCtx()
+	}
 	mo.wg.Wait()
 
-	mo.rm.killNetConns()
+	// Include connections still allocating a session or handshaking, which are
+	// not necessarily registered in RoutineManager yet. Admission is sealed;
+	// never hold mu while interrupting I/O or joining deferred session cleanup.
+	mo.mu.Lock()
+	connections := make([]net.Conn, 0, len(mo.connections))
+	for conn := range mo.connections {
+		connections = append(connections, conn)
+	}
+	mo.mu.Unlock()
+	for _, conn := range connections {
+		_ = conn.Close()
+	}
+	if mo.rm != nil {
+		mo.rm.killNetConns()
+	}
+	mo.connectionWG.Wait()
 
 	logutil.Debug("application stopped")
-	return nil
+	return err
 }
 
 func (mo *MOServer) IsRunning() bool {
@@ -184,8 +258,38 @@ func (mo *MOServer) startAccept(ctx context.Context, listener net.Listener) {
 		}
 		tempDelay = 0
 
-		go mo.handleConn(ctx, conn)
+		if !mo.admitConnection(conn) {
+			_ = conn.Close()
+			return
+		}
+		go func() {
+			defer mo.releaseConnection(conn)
+			mo.handleConn(ctx, conn)
+		}()
 	}
+}
+
+func (mo *MOServer) admitConnection(conn net.Conn) bool {
+	mo.mu.Lock()
+	defer mo.mu.Unlock()
+	if mo.stopping {
+		return false
+	}
+	if mo.connections == nil {
+		mo.connections = make(map[net.Conn]struct{})
+	}
+	mo.connections[conn] = struct{}{}
+	mo.connectionWG.Add(1)
+	return true
+}
+
+func (mo *MOServer) releaseConnection(conn net.Conn) {
+	// Also close connections whose session allocation failed before rs existed.
+	_ = conn.Close()
+	mo.mu.Lock()
+	delete(mo.connections, conn)
+	mo.mu.Unlock()
+	mo.connectionWG.Done()
 }
 
 func (mo *MOServer) cleanOrphanTempTables() error {
@@ -310,7 +414,7 @@ func (mo *MOServer) handleConn(ctx context.Context, conn net.Conn) {
 	defer func() {
 		if rs != nil {
 			if err := rs.Close(); err != nil {
-				logutil.LogConnectionCloseError("Close conn error", err)
+				logutil.LogConnectionCloseEvent(frontendConnectionCloseEvents, err)
 			}
 		}
 	}()
@@ -335,7 +439,7 @@ func (mo *MOServer) handleConn(ctx context.Context, conn net.Conn) {
 
 func (mo *MOServer) handleLoop(ctx context.Context, rs *Conn) {
 	if err := mo.handleMessage(ctx, rs); err != nil {
-		logutil.LogConnectionCloseError("handle session failed", err)
+		logutil.LogConnectionCloseEvent(frontendSessionHandleEvents, err)
 	}
 }
 
@@ -508,6 +612,16 @@ func nextConnectionID() uint32 {
 
 var serverVarsMap sync.Map
 
+const (
+	optimizerStatsPublisherStripes = 64
+	optimizerStatsVersionEntries   = 64 * 1024
+)
+
+type optimizerStatsTableKey struct {
+	accountID uint32
+	tableID   uint64
+}
+
 func init() {
 	InitServerLevelVars("")
 }
@@ -522,8 +636,23 @@ func getServerLevelVars(service string) *ServerLevelVariables {
 }
 
 func InitServerLevelVars(service string) {
-	serverVarsMap.LoadOrStore(service, &ServerLevelVariables{})
+	vars := &ServerLevelVariables{
+		optimizerStatsVersions: make(map[optimizerStatsTableKey]uint64),
+	}
+	for i := range vars.optimizerStatsPublish {
+		vars.optimizerStatsPublish[i] = make(chan struct{}, 1)
+	}
+	serverVarsMap.LoadOrStore(service, vars)
 	getServerLevelVars(service)
+}
+
+func getOptimizerStatsVars(service string) *ServerLevelVariables {
+	vars := getServerLevelVars(service)
+	if vars == nil {
+		InitServerLevelVars(service)
+		vars = getServerLevelVars(service)
+	}
+	return vars
 }
 
 func getSessionAlloc(service string) Allocator {
@@ -554,12 +683,121 @@ func setPu(service string, pu *config.ParameterUnit) {
 	getServerLevelVars(service).Pu.Store(pu)
 }
 
+func publishPuIfAbsent(service string, pu *config.ParameterUnit) *config.ParameterUnit {
+	InitServerLevelVars(service)
+	vars := getServerLevelVars(service)
+	if vars.Pu.CompareAndSwap(nil, pu) {
+		return pu
+	}
+	return vars.Pu.Load().(*config.ParameterUnit)
+}
+
 func SetPUForExternalUT(service string, pu *config.ParameterUnit) {
 	setPu(service, pu)
 }
 
+func getPuIfPresent(service string) *config.ParameterUnit {
+	vars := getServerLevelVars(service)
+	if vars == nil {
+		return nil
+	}
+	value := vars.Pu.Load()
+	if value == nil {
+		return nil
+	}
+	pu, _ := value.(*config.ParameterUnit)
+	return pu
+}
+
 func getPu(service string) *config.ParameterUnit {
-	return getServerLevelVars(service).Pu.Load().(*config.ParameterUnit)
+	pu := getPuIfPresent(service)
+	if pu == nil {
+		panic("parameter unit is not initialized")
+	}
+	return pu
+}
+
+func currentOptimizerStatsClock(service string) uint64 {
+	vars := getOptimizerStatsVars(service)
+	vars.optimizerStatsMu.RLock()
+	defer vars.optimizerStatsMu.RUnlock()
+	return vars.optimizerStatsClock
+}
+
+func currentOptimizerStatsVersion(service string, key optimizerStatsTableKey) uint64 {
+	vars := getOptimizerStatsVars(service)
+	vars.optimizerStatsMu.RLock()
+	defer vars.optimizerStatsMu.RUnlock()
+	return currentOptimizerStatsVersionLocked(vars, key)
+}
+
+func advanceOptimizerStatsVersion(service string, key optimizerStatsTableKey) uint64 {
+	vars := getOptimizerStatsVars(service)
+	vars.optimizerStatsMu.Lock()
+	defer vars.optimizerStatsMu.Unlock()
+	return advanceOptimizerStatsVersionLocked(vars, key, optimizerStatsVersionEntries)
+}
+
+func currentOptimizerStatsVersionLocked(vars *ServerLevelVariables, key optimizerStatsTableKey) uint64 {
+	if version, ok := vars.optimizerStatsVersions[key]; ok {
+		return version
+	}
+	return vars.optimizerStatsReset
+}
+
+func advanceOptimizerStatsVersionLocked(
+	vars *ServerLevelVariables,
+	key optimizerStatsTableKey,
+	maxEntries int,
+) uint64 {
+	if _, exists := vars.optimizerStatsVersions[key]; !exists && len(vars.optimizerStatsVersions) >= maxEntries {
+		// Explicit ANALYZE of many short-lived tables must not grow process
+		// metadata forever. A rare compaction advances the missing-key token,
+		// making every older cache label conservatively stale before reuse.
+		vars.optimizerStatsClock++
+		vars.optimizerStatsReset = vars.optimizerStatsClock
+		clear(vars.optimizerStatsVersions)
+	}
+	vars.optimizerStatsClock++
+	vars.optimizerStatsVersions[key] = vars.optimizerStatsClock
+	return vars.optimizerStatsClock
+}
+
+func optimizerStatsVersionsCurrent(
+	service string,
+	versions map[optimizerStatsTableKey]uint64,
+) bool {
+	if len(versions) == 0 {
+		return true
+	}
+	vars := getOptimizerStatsVars(service)
+	vars.optimizerStatsMu.RLock()
+	defer vars.optimizerStatsMu.RUnlock()
+	for key, version := range versions {
+		if currentOptimizerStatsVersionLocked(vars, key) != version {
+			return false
+		}
+	}
+	return true
+}
+
+func optimizerStatsPublisherStripe(key optimizerStatsTableKey) int {
+	mixed := key.tableID ^ uint64(key.accountID)*0x9e3779b97f4a7c15
+	return int(mixed % optimizerStatsPublisherStripes)
+}
+
+func acquireOptimizerStatsPublisher(
+	ctx context.Context,
+	service string,
+	key optimizerStatsTableKey,
+) (func(), error) {
+	admission := getOptimizerStatsVars(service).optimizerStatsPublish[optimizerStatsPublisherStripe(key)]
+	select {
+	case admission <- struct{}{}:
+		return func() { <-admission }, nil
+	case <-ctx.Done():
+		return nil, context.Cause(ctx)
+	}
 }
 
 func setAicm(service string, aicm *defines.AutoIncrCacheManager) {
@@ -653,7 +891,7 @@ func (mo *MOServer) handleMessage(ctx context.Context, rs *Conn) error {
 				return nil
 			}
 
-			logutil.LogConnectionCloseError("session read failed", err)
+			logutil.LogConnectionCloseEvent(frontendSessionReadEvents, err)
 			return err
 		}
 	}
@@ -674,7 +912,7 @@ func (mo *MOServer) handleRequest(rs *Conn) error {
 			return err
 		}
 
-		logutil.LogConnectionCloseError("session read failed", err)
+		logutil.LogConnectionCloseEvent(frontendSessionReadEvents, err)
 		return err
 	}
 
@@ -683,7 +921,7 @@ func (mo *MOServer) handleRequest(rs *Conn) error {
 		if skipClientQuit(err.Error()) {
 			return nil
 		} else {
-			logutil.LogConnectionCloseError("session handle failed, close this session", err)
+			logutil.LogConnectionCloseEvent(frontendSessionHandleEvents, err)
 		}
 		return err
 	}
@@ -728,5 +966,9 @@ func (mo *MOServer) applyInteractiveWaitTimeout(ctx context.Context, ses *Sessio
 	}
 	if err = ses.SetSessionSysVar(ctx, "wait_timeout", val); err != nil {
 		ses.Errorf(ctx, "set wait_timeout from interactive_timeout failed: %v", err)
+		return
 	}
+	// The interactive handshake deterministically reproduces this assignment
+	// on the target, so it must not make legacy replay fail closed.
+	ses.markMigrationSystemVarReplayable("wait_timeout", true)
 }

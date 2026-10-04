@@ -78,7 +78,7 @@ func (hc *traceCodec) Decode(msg *RPCMessage, data []byte) (int, error) {
 		return 0, io.ErrShortBuffer
 	}
 
-	if len(data) < int(data[0]) {
+	if len(data)-1 < int(data[0]) {
 		return 0, io.ErrShortBuffer
 	}
 

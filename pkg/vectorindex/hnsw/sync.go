@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -26,7 +25,6 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -53,7 +51,20 @@ type HnswSync[T types.RealNumbers] struct {
 	current *HnswModel[T]
 	last    *HnswModel[T]
 	idxname string
+
+	// tmpDir is the LOCAL fileservice scratch volume, resolved once at construction: the
+	// model-creating helpers below have no SqlProcess in scope, and this type is what
+	// pkg/iscp drives the CDC sync through.
+	tmpDir string
+
+	// buildTS is the data version the synced generations reflect, supplied by the ISCP
+	// consumer from the iteration it is applying. 0 means unknown.
+	buildTS int64
 }
+
+// SetBuildTS records the data version this sync's generations will reflect: the upper bound of
+// the change range being applied. The ISCP consumer takes it from DataRetriever.GetToTS.
+func (s *HnswSync[T]) SetBuildTS(ts int64) { s.buildTS = ts }
 
 func (s *HnswSync[T]) RunOnce(sqlproc *sqlexec.SqlProcess, cdc *vectorindex.VectorIndexCdc[T]) (err error) {
 
@@ -71,13 +82,26 @@ func (s *HnswSync[T]) RunOnce(sqlproc *sqlexec.SqlProcess, cdc *vectorindex.Vect
 	return nil
 }
 
+// syncSpillDir prefers the directory the caller resolved. A CDC sync is driven from pkg/iscp on
+// a SqlContext with no process.Process, so hnswSpillDir cannot find a FileService from the
+// SqlProcess alone; the ISCP writer resolves it from the executor's root FileService and passes
+// it in, exactly as the fulltext2 consumer does for its tail spills. The sqlproc fallback covers
+// any caller that does have a Process.
+func syncSpillDir(sqlproc *sqlexec.SqlProcess, spillDir string) string {
+	if spillDir != "" {
+		return spillDir
+	}
+	return hnswSpillDir(sqlproc)
+}
+
 func NewHnswSync[T types.RealNumbers](sqlproc *sqlexec.SqlProcess,
 	db string,
 	tbl string,
 	idxname string,
 	idxdefs []*plan.IndexDef,
 	vectype int32,
-	dimension int32) (*HnswSync[T], error) {
+	dimension int32,
+	spillDir string) (*HnswSync[T], error) {
 	var err error
 
 	var idxtblcfg vectorindex.IndexTableConfig
@@ -177,7 +201,7 @@ func NewHnswSync[T types.RealNumbers](sqlproc *sqlexec.SqlProcess,
 	//os.Stderr.WriteString(fmt.Sprintf("idxcfg: %v\n", idxcfg))
 
 	// load metadata
-	indexes, err := LoadMetadata[T](sqlproc, idxtblcfg.DbName, idxtblcfg.MetadataTable)
+	indexes, _, err := LoadMetadata[T](sqlproc, idxtblcfg.DbName, idxtblcfg.MetadataTable)
 	if err != nil {
 		return nil, err
 	}
@@ -185,12 +209,20 @@ func NewHnswSync[T types.RealNumbers](sqlproc *sqlexec.SqlProcess,
 	// assume CDC run in single thread
 	// model id for CDC is cdc:1:0:timestamp
 	uid := fmt.Sprintf("%s:%d:%d", "cdc", 1, 0)
-	ts := time.Now().Unix()
-	sync := &HnswSync[T]{indexes: indexes, idxcfg: idxcfg, tblcfg: idxtblcfg, uid: uid, ts: ts, idxname: idxname}
+	sync := &HnswSync[T]{indexes: indexes, idxcfg: idxcfg, tblcfg: idxtblcfg, uid: uid, idxname: idxname,
+		tmpDir: syncSpillDir(sqlproc, spillDir)}
+	// Monotonic metadata timestamp (the cross-CN cache-freshness generation) — strictly greater
+	// than every existing model row, not a bare wall-clock value. See nextTimestamp. (Save
+	// recomputes it just before writing; this initial value keeps the uid:ts model id unique.)
+	sync.ts = sync.nextTimestamp()
 
 	// save all model to local by LoadIndex and Unload
 	err = sync.DownloadAll(sqlproc)
 	if err != nil {
+		// DownloadAll may have committed earlier models' local files (view=false keeps them) before a
+		// later model failed. runHnsw only Destroys a non-nil sync, so those files would orphan; free
+		// them here before abandoning the sync.
+		sync.Destroy()
 		return nil, err
 	}
 
@@ -207,6 +239,11 @@ func (s *HnswSync[T]) Destroy() {
 func (s *HnswSync[T]) DownloadAll(sqlproc *sqlexec.SqlProcess) (err error) {
 
 	for _, m := range s.indexes {
+		// LoadMetadata builds models with an empty TmpDir. Point each at the directory the ISCP
+		// writer already resolved (syncSpillDir) before LoadIndex creates its local file, so
+		// view=false spills land there -- reclaimable by HostSpillDir.sweepOnce -- instead of
+		// os.TempDir(), which hnswSpillDir falls back to when the SqlContext has no Process.
+		m.TmpDir = s.tmpDir
 		err = m.LoadIndex(sqlproc, s.idxcfg, s.tblcfg, s.tblcfg.ThreadsBuild, false)
 		if err != nil {
 			return
@@ -411,7 +448,7 @@ func (s *HnswSync[T]) setupModel(sqlproc *sqlexec.SqlProcess, maxcap uint) error
 	if len(s.indexes) == 0 {
 		// create a new model and do insert
 		id := s.getModelId()
-		newmodel, err := NewHnswModelForBuild[T](id, s.idxcfg, int(s.tblcfg.ThreadsBuild), maxcap)
+		newmodel, err := NewHnswModelForBuild[T](id, s.idxcfg, int(s.tblcfg.ThreadsBuild), maxcap, s.tmpDir)
 		if err != nil {
 			return err
 		}
@@ -425,7 +462,7 @@ func (s *HnswSync[T]) setupModel(sqlproc *sqlexec.SqlProcess, maxcap uint) error
 			//os.Stderr.WriteString(fmt.Sprintf("full len %d, cap %d\n", idxlen, last.MaxCapacity))
 			id := s.getModelId()
 			// model is already full, create a new model for insert
-			newmodel, err := NewHnswModelForBuild[T](id, s.idxcfg, int(s.tblcfg.ThreadsBuild), maxcap)
+			newmodel, err := NewHnswModelForBuild[T](id, s.idxcfg, int(s.tblcfg.ThreadsBuild), maxcap, s.tmpDir)
 			if err != nil {
 				return err
 			}
@@ -579,10 +616,40 @@ func (s *HnswSync[T]) Update(sqlproc *sqlexec.SqlProcess, cdc *vectorindex.Vecto
 	return nil
 }
 
+// nextTimestamp allocates a metadata timestamp strictly greater than every existing model row.
+// The metadata timestamp is the cross-CN cache-freshness generation (MAX(timestamp), see
+// cachegen), so it must be MONOTONIC — not merely microsecond-resolution wall-clock. time.Now()
+// alone is not enough: CREATE and CDC may run on different CNs with clock skew, or a local clock
+// may step backward, in which case a fresh wall-clock value could be <= an unchanged model row's
+// timestamp; since CDC only replaces the dirty model, MAX(timestamp) would then stay == the
+// value a warm remote CN loaded, and IsStale would miss the update. Allocating above the current
+// max enforces the ordering regardless of the clock. Correct because CDC is single-writer per
+// index (ISCP job ownership): s.indexes (loaded at NewHnswSync) reflects the current persisted
+// max and no concurrent writer can insert between this read and the write.
+func (s *HnswSync[T]) nextTimestamp() int64 {
+	var maxTs int64
+	for _, m := range s.indexes {
+		if m != nil && m.Timestamp > maxTs {
+			maxTs = m.Timestamp
+		}
+	}
+	if now := time.Now().UnixMicro(); now > maxTs {
+		return now
+	}
+	return maxTs + 1
+}
+
 func (s *HnswSync[T]) Save(sqlproc *sqlexec.SqlProcess) error {
 	// save to files and then save to database
-	s.ts = time.Now().Unix()
-	sqls, err := s.ToSql(s.ts)
+	s.ts = s.nextTimestamp()
+	// build_ts is the upper bound of the change range this sync applied -- the data version the
+	// rewritten generation now reflects -- which the ISCP consumer sets via SetBuildTS. It is
+	// deliberately NOT this transaction's SnapshotTS: that is >= the applied range and would
+	// claim coverage of changes committed after the range was collected but never applied.
+	// 0 when no consumer supplied one (a direct caller outside ISCP), meaning unknown.
+	sqls, err := s.ToSql(s.ts, s.buildTS,
+		sqlexec.HasProvenanceColumns(sqlproc, s.tblcfg.DbName, s.tblcfg.MetadataTable,
+			catalog.Hnsw_TblCol_Metadata_Build_Ts))
 	if err != nil {
 		return err
 	}
@@ -660,7 +727,7 @@ func (s *HnswSync[T]) getLastModel(sqlproc *sqlexec.SqlProcess, maxcap uint) (*H
 
 		id := s.getModelId()
 		// model is already full, create a new model for insert
-		newmodel, err := NewHnswModelForBuild[T](id, s.idxcfg, int(s.tblcfg.ThreadsBuild), maxcap)
+		newmodel, err := NewHnswModelForBuild[T](id, s.idxcfg, int(s.tblcfg.ThreadsBuild), maxcap, s.tmpDir)
 		if err != nil {
 			return nil, err
 		}
@@ -681,7 +748,7 @@ func (s *HnswSync[T]) getLastModelAndIncrForSync(sqlproc *sqlexec.SqlProcess, ma
 	if full {
 		id := s.getModelId()
 		// model is already full, create a new model for insert
-		newmodel, err := NewHnswModelForBuild[T](id, s.idxcfg, int(s.tblcfg.ThreadsBuild), maxcap)
+		newmodel, err := NewHnswModelForBuild[T](id, s.idxcfg, int(s.tblcfg.ThreadsBuild), maxcap, s.tmpDir)
 		if err != nil {
 			return nil, false, err
 		}
@@ -701,7 +768,11 @@ func (s *HnswSync[T]) getLastModelAndIncrForSync(sqlproc *sqlexec.SqlProcess, ma
 // generate SQL to update the secondary index tables
 // 1. sync the metadata table
 // 2. sync the index file to index table
-func (s *HnswSync[T]) ToSql(ts int64) ([]string, error) {
+// ToSql emits the CDC sync's inserts. ts orders the generations (wall clock); buildTS is the
+// transaction SnapshotTS the content reflects. provenance says whether the metadata table has
+// the nrow/build_ts columns yet -- a CDC sync is the path most likely to meet a table created
+// before they existed, since it writes to indexes it did not create.
+func (s *HnswSync[T]) ToSql(ts int64, buildTS int64, provenance bool) ([]string, error) {
 
 	if len(s.indexes) == 0 {
 		return []string{}, nil
@@ -750,12 +821,12 @@ func (s *HnswSync[T]) ToSql(ts int64) ([]string, error) {
 		}
 		fs := finfo.Size()
 
-		metas = append(metas, fmt.Sprintf("('%s', '%s', %d, %d)", idx.Id, chksum, ts, fs))
+		metas = append(metas, catalog.IndexMetadataRow(provenance, idx.Id, chksum, ts, fs, idx.Len.Load(), buildTS))
 		ts++
 	}
 
 	if len(metas) > 0 {
-		metasql := fmt.Sprintf("INSERT INTO %s VALUES %s", sqlquote.QualifiedIdent(s.tblcfg.DbName, s.tblcfg.MetadataTable), strings.Join(metas, ", "))
+		metasql := catalog.IndexMetadataInsertSql(s.tblcfg.DbName, s.tblcfg.MetadataTable, provenance, metas)
 		sqls = append(sqls, metasql)
 	}
 	return sqls, nil

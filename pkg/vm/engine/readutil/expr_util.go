@@ -15,6 +15,7 @@
 package readutil
 
 import (
+	"bytes"
 	"context"
 	"strings"
 
@@ -46,20 +47,77 @@ func NewColumnExpr(pos int, typ plan.Type, name string) *plan.Expr {
 	}
 }
 
+// ConstructInExpr builds `colName IN (<colVec>)`.
+//
+// The payload is published ordered and flagged, because zone-map pruning
+// binary-searches it (ZM.AnyIn) and drops blocks that hold matching rows when the
+// order is wrong -- and because colexec refuses to prune on a payload whose order
+// it cannot establish, so an unflagged one silently loses block filtering.
+//
+// The caller's vector is never modified. Callers pass vectors they use
+// positionally elsewhere: disttae's transfer pairs searchPKColumn with
+// searchEntryPos and searchBatPos by index, so sorting it in place would
+// mis-associate rows. Normalising a private copy costs one clone per scan, not
+// per block.
+//
+// Errors are returned rather than swallowed. Publishing a filter built from a
+// payload that failed to encode would prune against garbage, and silently
+// skipping normalisation would cost pruning with no signal that anything went
+// wrong.
 func ConstructInExpr(
 	ctx context.Context,
 	colName string,
 	colVec *vector.Vector,
-) *plan.Expr {
-	data, _ := colVec.MarshalBinary()
+) (*plan.Expr, error) {
+	data, err := colVec.MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+	length := colVec.Length()
+	if !colVec.GetSorted() && length > 1 {
+		if data, length, err = normalizeInPayload(data); err != nil {
+			return nil, err
+		}
+	}
 	colExpr := NewColumnExpr(0, plan2.MakePlan2Type(colVec.GetType()), colName)
 	return plan2.MakeInExpr(
 		ctx,
 		colExpr,
-		int32(colVec.Length()),
+		int32(length),
 		data,
 		false,
-	)
+	), nil
+}
+
+// normalizeInPayload re-encodes an IN payload in ascending order with the sorted
+// flag set, so zone-map pruning can binary-search it.
+//
+// It decodes into its own vector rather than sorting the caller's: callers pass
+// vectors they use positionally elsewhere, and reordering one in place would
+// mis-associate rows against its parallel arrays.
+//
+// A payload carrying NULLs is returned unchanged. InplaceSortAndCompact permutes
+// only the value column, so the null bitmap would be left indexing the wrong rows,
+// and compaction rebuilds the vector with a nil bitmap, dropping the NULLs
+// outright; planner constant folding and normalizePKInVector both sidestep it the
+// same way. Publishing that payload unsorted and unflagged costs nothing beyond
+// pruning, because zone-map filtering refuses to binary-search an unflagged
+// payload and keeps the block. Today's callers all pass PK-derived vectors, which
+// cannot be NULL -- the guard is here so a future one cannot silently publish a
+// corrupted filter.
+func normalizeInPayload(data []byte) ([]byte, int, error) {
+	owned := vector.NewVec(types.T_any.ToType())
+	if err := owned.UnmarshalBinary(bytes.Clone(data)); err != nil {
+		return nil, 0, err
+	}
+	if owned.GetNulls().Any() {
+		return data, owned.Length(), nil
+	}
+	owned.InplaceSortAndCompact() // also sets the sorted flag
+	// Returned directly rather than branched on: there is nothing to unwind here,
+	// and the caller discards the length whenever the error is non-nil.
+	sorted, err := owned.MarshalBinary()
+	return sorted, owned.Length(), err
 }
 
 func getColDefByName(expr *plan.Expr, name string, colPos int32, tableDef *plan.TableDef) *plan.ColDef {
@@ -72,12 +130,15 @@ func getColDefByName(expr *plan.Expr, name string, colPos int32, tableDef *plan.
 		pos = tableDef.Name2ColIndex[name]
 	}
 	common.DoIfDebugEnabled(func() {
-		if name != tableDef.Cols[colPos].Name {
+		// ColPos is local to the scan (and can be a metadata-only slot),
+		// while tableDef is the full relation schema. Validate the name used
+		// for resolution instead of indexing this schema with ColPos.
+		if int(pos) >= len(tableDef.Cols) || tableDef.Cols[pos].Name != name[strings.LastIndexByte(name, '.')+1:] {
 			logutil.Error(
 				"Bad-ColExpr",
 				zap.String("col-name", name),
-				zap.Int32("col-actual-pos", colPos),
-				zap.Int32("col-expected-pos", pos),
+				zap.Int32("scan-col-pos", colPos),
+				zap.Int32("relation-col-pos", pos),
 				zap.String("col-expr", plan2.FormatExpr(expr, plan2.FormatOption{})),
 			)
 		}
@@ -102,9 +163,10 @@ func evalValue(
 ) {
 	var val []byte
 	var col *plan.Expr_Col
+	var valExprs []*plan.Expr
 
 	if !isVec {
-		col, vals, ok = mustColConstValueFromBinaryFuncExpr(exprImpl)
+		col, vals, valExprs, ok = mustColConstValueWithTypeFromBinaryFuncExpr(exprImpl)
 	} else {
 		col, val, ok = mustColVecValueFromBinaryFuncExpr(exprImpl)
 	}
@@ -154,12 +216,40 @@ func evalValue(
 	if isVec {
 		return true, types.T(tblDef.Cols[colPos].Typ.Id), [][]byte{val}
 	}
+	if mixedTemporalColumnAndValues(types.T(tblDef.Cols[colPos].Typ.Id), valExprs) {
+		return false, 0, nil
+	}
 	return true, types.T(tblDef.Cols[colPos].Typ.Id), vals
+}
+
+// A BasePKFilter compares persisted primary-key bytes directly. DATETIME and
+// TIMESTAMP use different physical domains, so a cross-typed scalar predicate
+// cannot be represented without the session time zone. Keep it on the residual
+// expression path instead of constructing a filter that can drop matching rows.
+func mixedTemporalColumnAndValues(
+	columnType types.T,
+	values []*plan.Expr,
+) bool {
+	for _, value := range values {
+		valueType := types.T(value.Typ.Id)
+		if columnType == types.T_datetime && valueType == types.T_timestamp ||
+			columnType == types.T_timestamp && valueType == types.T_datetime {
+			return true
+		}
+	}
+	return false
 }
 
 func mustColConstValueFromBinaryFuncExpr(
 	expr *plan.Expr_F,
 ) (*plan.Expr_Col, [][]byte, bool) {
+	colExpr, vals, _, ok := mustColConstValueWithTypeFromBinaryFuncExpr(expr)
+	return colExpr, vals, ok
+}
+
+func mustColConstValueWithTypeFromBinaryFuncExpr(
+	expr *plan.Expr_F,
+) (*plan.Expr_Col, [][]byte, []*plan.Expr, bool) {
 	var (
 		colExpr  *plan.Expr_Col
 		tmpExpr  *plan.Expr_Col
@@ -176,14 +266,14 @@ func mustColConstValueFromBinaryFuncExpr(
 	}
 
 	if len(valExprs) == 0 || colExpr == nil {
-		return nil, nil, false
+		return nil, nil, nil, false
 	}
 
 	vals, ok := getConstBytesFromExpr(valExprs)
 	if !ok {
-		return nil, nil, false
+		return nil, nil, nil, false
 	}
-	return colExpr, vals, true
+	return colExpr, vals, valExprs, true
 }
 
 func getConstBytesFromExpr(exprs []*plan.Expr) ([][]byte, bool) {

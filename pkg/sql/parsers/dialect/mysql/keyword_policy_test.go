@@ -36,7 +36,7 @@ var legacyKeywordPolicyExceptions = map[string]string{
 	"cdc":               "legacy parser behavior before incremental keyword policy",
 	"centroidx":         "legacy parser behavior before incremental keyword policy",
 	"ccpr":              "legacy parser behavior before incremental keyword policy",
-	"config":            "legacy parser behavior before incremental keyword policy",
+	"config":            "contextual keyword: lexer preserves SHOW/ALTER ACCOUNT CONFIG and returns ID otherwise",
 	"coverage":          "legacy parser behavior before incremental keyword policy",
 	"current_role":      "legacy parser behavior before incremental keyword policy",
 	"datalink":          "legacy parser behavior before incremental keyword policy",
@@ -45,6 +45,7 @@ var legacyKeywordPolicyExceptions = map[string]string{
 	"escape":            "legacy parser behavior before incremental keyword policy",
 	"force_sync":        "legacy parser behavior before incremental keyword policy",
 	"full":              "legacy parser behavior before incremental keyword policy",
+	"fulltext2":         "fulltext2 index-type keyword (CREATE FULLTEXT2 / REINDEX ... FULLTEXT2); non_reserved_keyword introduces a grammar conflict, so it stays contextual",
 	"ilike":             "legacy parser behavior before incremental keyword policy",
 	"intersect":         "legacy parser behavior before incremental keyword policy",
 	"minus":             "legacy parser behavior before incremental keyword policy",
@@ -62,6 +63,7 @@ var legacyKeywordPolicyExceptions = map[string]string{
 	"temporary":         "legacy parser behavior before incremental keyword policy",
 	"until":             "legacy parser behavior before incremental keyword policy",
 	"upgrade":           "legacy parser behavior before incremental keyword policy",
+	"within":            "contextual keyword: scanner returns WITHIN only for WITHIN GROUP, otherwise ID",
 }
 
 func TestNewKeywordsHaveExplicitIdentifierPolicy(t *testing.T) {

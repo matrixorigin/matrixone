@@ -35,25 +35,30 @@ func (s *store) registerRPCHandlers() {
 	s.server.RegisterMethodHandler(txn.TxnMethod_Read, s.handleRead)
 	s.server.RegisterMethodHandler(txn.TxnMethod_Write, s.handleWrite)
 	s.server.RegisterMethodHandler(txn.TxnMethod_Commit, s.handleCommit)
+	s.server.RegisterMethodHandler(txn.TxnMethod_CommitAutoIncrEpochFence, s.handleCommit)
 	s.server.RegisterMethodHandler(txn.TxnMethod_Rollback, s.handleRollback)
-
-	// request from other TN node
-	s.server.RegisterMethodHandler(txn.TxnMethod_Prepare, s.handlePrepare)
-	s.server.RegisterMethodHandler(txn.TxnMethod_CommitTNShard, s.handleCommitTNShard)
-	s.server.RegisterMethodHandler(txn.TxnMethod_RollbackTNShard, s.handleRollbackTNShard)
-	s.server.RegisterMethodHandler(txn.TxnMethod_GetStatus, s.handleGetStatus)
 
 	// debug request
 	s.server.RegisterMethodHandler(txn.TxnMethod_DEBUG, s.handleDebug)
 }
 
 func (s *store) dispatchLocalRequest(shard metadata.TNShard) rpc.TxnRequestHandleFunc {
+	if s.quiesced.Load() {
+		return nil
+	}
 	// DNShard not found, TxnSender will RPC call
 	r := s.getReplica(shard.ShardID)
 	if r == nil {
 		return nil
 	}
-	return r.handleLocalRequest
+	return func(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
+		release, ok := s.acquireLocalHandler()
+		if !ok {
+			return moerr.NewStreamClosedNoCtx()
+		}
+		defer release()
+		return r.handleLocalRequest(ctx, request, response)
+	}
 }
 
 func (s *store) handleRead(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
@@ -75,7 +80,20 @@ func (s *store) doRead(ctx context.Context, request *txn.TxnRequest, response *t
 	}
 	defer lease.release()
 	prepareResponse(request, response)
-	return lease.service.Read(lease.ctx, request, response)
+	if err := lease.service.Read(lease.ctx, request, response); err != nil {
+		if ctxErr := context.Cause(ctx); ctxErr != nil {
+			return ctxErr
+		}
+		if context.Cause(lease.ctx) != nil {
+			response.TxnError = txn.WrapError(
+				moerr.NewTNShardNotFound(ctx, s.cfg.UUID, request.GetTargetTN().ShardID),
+				0,
+			)
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *store) doWrite(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
@@ -120,46 +138,6 @@ func (s *store) handleRollback(ctx context.Context, request *txn.TxnRequest, res
 	defer lease.release()
 	prepareResponse(request, response)
 	return lease.service.Rollback(lease.ctx, request, response)
-}
-
-func (s *store) handlePrepare(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	lease, err := s.acquireTNReplica(ctx, request, response)
-	if err != nil || lease == nil {
-		return err
-	}
-	defer lease.release()
-	prepareResponse(request, response)
-	return lease.service.Prepare(lease.ctx, request, response)
-}
-
-func (s *store) handleCommitTNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	lease, err := s.acquireTNReplica(ctx, request, response)
-	if err != nil || lease == nil {
-		return err
-	}
-	defer lease.release()
-	prepareResponse(request, response)
-	return lease.service.CommitTNShard(lease.ctx, request, response)
-}
-
-func (s *store) handleRollbackTNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	lease, err := s.acquireTNReplica(ctx, request, response)
-	if err != nil || lease == nil {
-		return err
-	}
-	defer lease.release()
-	prepareResponse(request, response)
-	return lease.service.RollbackTNShard(lease.ctx, request, response)
-}
-
-func (s *store) handleGetStatus(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	lease, err := s.acquireTNReplica(ctx, request, response)
-	if err != nil || lease == nil {
-		return err
-	}
-	defer lease.release()
-	prepareResponse(request, response)
-	return lease.service.GetStatus(lease.ctx, request, response)
 }
 
 func (s *store) validTNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) *replica {

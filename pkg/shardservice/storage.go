@@ -347,7 +347,7 @@ func (s *storage) Read(
 ) ([]byte, error) {
 	fn, ok := s.handles[method]
 	if !ok {
-		panic(fmt.Sprintf("method not found: %d", method))
+		return nil, moerr.NewNotSupportedf(ctx, "shard read method not found: %d", method)
 	}
 
 	return fn(

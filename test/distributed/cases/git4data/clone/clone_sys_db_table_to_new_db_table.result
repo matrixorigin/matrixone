@@ -134,6 +134,7 @@ mo_cache
 mo_ccpr_dbs
 mo_ccpr_log
 mo_ccpr_tables
+mo_cdc_snapshot
 mo_cdc_task
 mo_cdc_watermark
 mo_columns
@@ -143,11 +144,21 @@ mo_database
 mo_feature_limit
 mo_feature_registry
 mo_foreign_keys
+mo_iceberg_catalogs
+mo_iceberg_maintenance_jobs
+mo_iceberg_orphan_files
+mo_iceberg_principal_map
+mo_iceberg_publish_jobs
+mo_iceberg_refs
+mo_iceberg_residency_policy
+mo_iceberg_tables
 mo_index_update
 mo_indexes
 mo_iscp_log
 mo_locks
 mo_merge_settings
+mo_mongodb_connections
+mo_mongodb_tables
 mo_mysql_compatibility_mode
 mo_partition_metadata
 mo_partition_tables
@@ -175,6 +186,8 @@ mo_user_defined_function
 mo_user_grant
 mo_variables
 mo_version
+mo_view_dependencies
+mo_view_refresh
 select count(*) from mo_catalog.mo_database;
 count(*)
 13
@@ -191,6 +204,7 @@ mo_cache
 mo_ccpr_dbs
 mo_ccpr_log
 mo_ccpr_tables
+mo_cdc_snapshot
 mo_cdc_task
 mo_cdc_watermark
 mo_columns
@@ -200,11 +214,21 @@ mo_database
 mo_feature_limit
 mo_feature_registry
 mo_foreign_keys
+mo_iceberg_catalogs
+mo_iceberg_maintenance_jobs
+mo_iceberg_orphan_files
+mo_iceberg_principal_map
+mo_iceberg_publish_jobs
+mo_iceberg_refs
+mo_iceberg_residency_policy
+mo_iceberg_tables
 mo_index_update
 mo_indexes
 mo_iscp_log
 mo_locks
 mo_merge_settings
+mo_mongodb_connections
+mo_mongodb_tables
 mo_mysql_compatibility_mode
 mo_partition_metadata
 mo_partition_tables
@@ -232,6 +256,8 @@ mo_user_defined_function
 mo_user_grant
 mo_variables
 mo_version
+mo_view_dependencies
+mo_view_refresh
 drop database mo_catalog_new_new;
 drop database mo_catalog_new;
 drop database if exists test100;
@@ -266,7 +292,7 @@ internal error: table test100.table01 does not exist
 drop database if exists db08;
 create database db08;
 create table db08.table01 clone test100.table01 {snapshot = 'sp08'};
-internal error: find 0 snapshot records by name(sp08), expect only 1
+invalid input: snapshot 'sp08' not found
 drop database test101;
 drop database db08;
 drop snapshot sp08;

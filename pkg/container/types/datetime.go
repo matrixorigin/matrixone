@@ -47,19 +47,30 @@ var (
 )
 
 const (
-	// ZeroDatetime is the zero value for date Time '0000-01-01 00:00:00'.
-	ZeroDatetime = Datetime(0)
+	// DatetimeEpoch is the internal epoch for 0001-01-01 00:00:00.
+	DatetimeEpoch = Datetime(0)
+	// ZeroDatetime represents MySQL's 0000-00-00 00:00:00 value.
+	ZeroDatetime = Datetime(-1)
 )
 
 // The Datetime type holds number of microseconds since January 1, year 1 in Gregorian calendar
 
 func (dt Datetime) String() string {
+	if dt == ZeroDatetime {
+		return "0000-00-00 00:00:00"
+	}
 	y, m, d, _ := dt.ToDate().Calendar(true)
 	hour, minute, sec := dt.Clock()
 	return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d", y, m, d, hour, minute, sec)
 }
 
 func (dt Datetime) String2(scale int32) string {
+	if dt == ZeroDatetime {
+		if scale > 0 {
+			return "0000-00-00 00:00:00." + strings.Repeat("0", int(scale))
+		}
+		return "0000-00-00 00:00:00"
+	}
 	y, m, d, _ := dt.ToDate().Calendar(true)
 	hour, minute, sec := dt.Clock()
 
@@ -88,6 +99,97 @@ func (dt Datetime) String2(scale int32) string {
 	return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d", y, m, d, hour, minute, sec)
 }
 
+// IsCalendarStringCandidate distinguishes supported calendar spellings from
+// compact TIME values before callers choose a temporal parser. The separated
+// date grammar shares ParseDateCast's delimiter set and requires both date
+// separators; this keeps compact TIME fractions such as 1234.5 as durations.
+// Compact dates and datetimes have exactly eight and fourteen digits.
+func IsCalendarStringCandidate(s string) bool {
+	// A complete colon clock is a duration even when its fields also look
+	// like a separated date. Decide the family before validating the fields:
+	// an invalid minute must not be reinterpreted as a calendar month.
+	if IsWholeColonClock(s) {
+		return false
+	}
+	// Short separated years are accepted by ParseDateCast. The ordinary
+	// clock spelling is also accepted there as a short year. Recognize the
+	// remaining date structure without validating it so an invalid date
+	// cannot fall back to TIME.
+	for yearLen := 1; yearLen <= 3 && yearLen+3 < len(s); yearLen++ {
+		if !isAllDigit(s[:yearLen]) || !isDateDelimiter(s[yearLen]) {
+			continue
+		}
+		for monthLen := 1; monthLen <= 2; monthLen++ {
+			second := yearLen + 1 + monthLen
+			if second >= len(s) {
+				break
+			}
+			if isAllDigit(s[yearLen+1:second]) && isDateDelimiter(s[second]) {
+				return true
+			}
+		}
+	}
+	if len(s) >= 5 && isAllDigit(s[:4]) && isDateDelimiter(s[4]) {
+		for second := 6; second <= 7 && second < len(s); second++ {
+			if isAllDigit(s[5:second]) && isDateDelimiter(s[second]) {
+				return true
+			}
+		}
+	}
+	whole := s
+	if dot := strings.IndexByte(s, '.'); dot >= 0 {
+		whole = s[:dot]
+	}
+	if (len(whole) != 8 && len(whole) != 14) || !isAllDigit(whole) {
+		return false
+	}
+	if len(whole) == 8 && whole[0] == '0' {
+		// Eight digits can be a compact DATE or a zero-padded TIME. Keep
+		// accepted compact dates (including the zero-date sentinel) as dates;
+		// an impossible leading-zero calendar belongs to the TIME grammar.
+		_, err := ParseDateCast(s)
+		return err == nil
+	}
+	return true
+}
+
+// IsWholeColonClock recognizes only a complete H:MM[:SS][.fraction] shape.
+// ParseTime remains responsible for the actual field and range checks.
+func IsWholeColonClock(s string) bool {
+	i := 0
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		i++
+	}
+	if i == 0 || i == len(s) || s[i] != ':' {
+		return false
+	}
+	i++
+	start := i
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		i++
+	}
+	if i == start {
+		return false
+	}
+	if i < len(s) && s[i] == ':' {
+		i++
+		start = i
+		for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+			i++
+		}
+		if i == start {
+			return false
+		}
+	}
+	if i < len(s) && s[i] == '.' {
+		i++
+		for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+			i++
+		}
+	}
+	return i == len(s)
+}
+
 // ParseDatetime will parse a string to be a Datetime
 // Support Format:
 // 1. all the Date value
@@ -105,7 +207,16 @@ func (dt Datetime) String2(scale int32) string {
 //	"1999-09-09 11:11:"             "1999-09-09 11:11:00.000"
 func ParseDatetime(s string, scale int32) (Datetime, error) {
 	s = strings.TrimSpace(s)
-	if len(s) < 14 {
+	if isZeroDatetimeString(s) {
+		return ZeroDatetime, nil
+	}
+	var dtSepIdx int
+	if len(s) > 10 && (s[4] == '-' || s[4] == '/' || s[4] == ':') && s[7] == s[4] && (s[10] == ' ' || s[10] == 'T') {
+		dtSepIdx = 10
+	} else {
+		dtSepIdx = strings.IndexAny(s, " T")
+	}
+	if len(s) < 14 && dtSepIdx < 0 {
 		if d, err := ParseDateCast(s); err == nil {
 			return d.ToDatetime(), nil
 		}
@@ -117,14 +228,13 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 	var carry uint32 = 0
 	var err error
 
-	if s[4] == '-' || s[4] == '/' || s[4] == ':' {
+	if dtSepIdx >= 0 {
 		var unum uint64
-		dateSep := s[4]
 
 		// Fast path: standard zero-padded format "yyyy-mm-dd hh:mm:ss[.f...]"
 		// or ISO 8601 "yyyy-mm-ddThh:mm:ss[.f...]" with fixed-width fields.
 		// Separators at known positions; no slice allocations needed.
-		if len(s) >= 19 && s[7] == dateSep && (s[10] == ' ' || s[10] == 'T') &&
+		if len(s) >= 19 && (s[4] == '-' || s[4] == '/' || s[4] == ':') && s[7] == s[4] && (s[10] == ' ' || s[10] == 'T') &&
 			s[13] == ':' && s[16] == ':' && (len(s) == 19 || s[19] == '.') {
 			var num int64
 			num, err = strconv.ParseInt(s[0:4], 10, 32)
@@ -142,9 +252,6 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
 			}
 			day = uint8(unum)
-			if !ValidDate(year, month, day) {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
-			}
 			unum, err = strconv.ParseUint(s[11:13], 10, 8)
 			if err != nil {
 				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
@@ -160,9 +267,6 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
 			}
 			second = uint8(unum)
-			if !ValidTimeInDay(hour, minute, second) {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
-			}
 			if len(s) == 19 {
 				// nothing
 			} else if s[19] == '.' {
@@ -174,42 +278,17 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
 			}
 		} else {
-			// Slow path: variable-width fields. Use IndexByte instead of
-			// strings.Split to avoid []string allocations.
-			dtSepIdx := strings.IndexByte(s, ' ')
-			if dtSepIdx < 0 {
-				dtSepIdx = strings.IndexByte(s, 'T')
-			}
-			if dtSepIdx < 0 || dtSepIdx == len(s)-1 {
+			// Share the DATE grammar for short years and separated calendar
+			// fields. Adding a clock must not change the date's interpretation.
+			if dtSepIdx == len(s)-1 {
 				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
 			}
-			dateStr := s[:dtSepIdx]
+			date, dateErr := ParseDateCast(s[:dtSepIdx])
+			if dateErr != nil || date == ZeroDate {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
+			year, month, day, _ = date.Calendar(true)
 			timeStr := s[dtSepIdx+1:]
-
-			// Parse date: find second occurrence of dateSep
-			p2 := 5 + strings.IndexByte(dateStr[5:], dateSep)
-			if p2 < 5 || p2 >= len(dateStr)-1 {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
-			}
-			var num int64
-			num, err = strconv.ParseInt(dateStr[:4], 10, 32)
-			if err != nil {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
-			}
-			year = int32(num)
-			unum, err = strconv.ParseUint(dateStr[5:p2], 10, 8)
-			if err != nil {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
-			}
-			month = uint8(unum)
-			unum, err = strconv.ParseUint(dateStr[p2+1:], 10, 8)
-			if err != nil {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
-			}
-			day = uint8(unum)
-			if !ValidDate(year, month, day) {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
-			}
 
 			// Parse time: split off microseconds
 			dotIdx := strings.IndexByte(timeStr, '.')
@@ -254,9 +333,6 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
 			}
 			second = uint8(unum)
-			if !ValidTimeInDay(hour, minute, second) {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
-			}
 			if dotIdx >= 0 {
 				if dotIdx == len(timeStr)-1 {
 					return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
@@ -268,6 +344,9 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 			}
 		}
 	} else {
+		if !isAllDigit(s[:14]) {
+			return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+		}
 		year = int32(s[0]-'0')*1000 + int32(s[1]-'0')*100 + int32(s[2]-'0')*10 + int32(s[3]-'0')
 		month = (s[4]-'0')*10 + (s[5] - '0')
 		day = (s[6]-'0')*10 + (s[7] - '0')
@@ -286,7 +365,7 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 			}
 		}
 	}
-	if !ValidDate(year, month, day) {
+	if !ValidDate(year, month, day) || !ValidTimeInDay(hour, minute, second) {
 		return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
 	}
 	result := DatetimeFromClock(year, month, day, hour, minute, second+uint8(carry), msec)
@@ -295,6 +374,28 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 		return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
 	}
 	return result, nil
+}
+
+func isZeroDatetimeString(s string) bool {
+	base := s
+	if dot := strings.IndexByte(s, '.'); dot >= 0 {
+		base = s[:dot]
+		fraction := s[dot+1:]
+		if fraction == "" || !isAllDigit(fraction) {
+			return false
+		}
+		for i := range fraction {
+			if fraction[i] != '0' {
+				return false
+			}
+		}
+	}
+	switch base {
+	case "0000-00-00", "00000000", "0000-00-00 00:00:00", "0000-00-00T00:00:00", "00000000000000":
+		return true
+	default:
+		return false
+	}
 }
 
 // validTimeInDay return true if hour, minute and second can be a time during a day
@@ -312,6 +413,9 @@ func ValidTimeInDay(h, m, s uint8) bool {
 }
 
 func (dt Datetime) UnixTimestamp(loc *time.Location) int64 {
+	if dt == ZeroDatetime {
+		return -1
+	}
 	return dt.ConvertToGoTime(loc).Unix()
 }
 
@@ -339,6 +443,9 @@ func UTC() Datetime {
 }
 
 func (dt Datetime) ToDate() Date {
+	if dt == ZeroDatetime {
+		return ZeroDate
+	}
 	return Date(dt.sec() / SecsPerDay)
 }
 
@@ -389,6 +496,9 @@ func (dt Datetime) ToTime(scale int32) Time {
 //   - 6: microseconds (full precision, no truncation)
 //   - >6: treated as scale 6 (full precision)
 func (dt Datetime) TruncateToScale(scale int32) Datetime {
+	if dt == ZeroDatetime {
+		return ZeroDatetime
+	}
 	// For scale >= 6, return full precision (no truncation)
 	if scale >= 6 {
 		return dt
@@ -409,7 +519,23 @@ func (dt Datetime) TruncateToScale(scale int32) Datetime {
 	return secPart + base*divisor
 }
 
+// TruncateToScaleWithoutRounding discards fractional digits without carrying
+// into the next second/day. It is used for TIME_TRUNCATE_FRACTIONAL casts.
+func (dt Datetime) TruncateToScaleWithoutRounding(scale int32) Datetime {
+	if dt == ZeroDatetime || scale >= 6 {
+		return dt
+	}
+	if scale < 0 {
+		scale = 0
+	}
+	divisor := scaleVal[scale]
+	return (dt/MicroSecsPerSec)*MicroSecsPerSec + (dt%MicroSecsPerSec)/divisor*divisor
+}
+
 func (dt Datetime) Clock() (hour, minute, sec int8) {
+	if dt == ZeroDatetime {
+		return 0, 0, 0
+	}
 	t := dt.sec() % SecsPerDay
 	hour = int8(t / SecsPerHour)
 	minute = int8(t % SecsPerHour / SecsPerMinute)
@@ -439,10 +565,71 @@ func DatetimeFromClock(year int32, month, day, hour, minute, sec uint8, msec uin
 }
 
 func (dt Datetime) ConvertToGoTime(loc *time.Location) time.Time {
+	value, _ := dt.convertToGoTime(loc)
+	return value
+}
+
+func (dt Datetime) convertToGoTime(loc *time.Location) (time.Time, bool) {
+	if loc == nil {
+		loc = time.UTC
+	}
 	year, mon, day, _ := dt.ToDate().Calendar(true)
 	hour, minute, sec := dt.Clock()
 	nsec := dt.MicroSec() * 1000
-	return time.Date(int(year), time.Month(mon), int(day), int(hour), int(minute), int(sec), int(nsec), loc)
+	candidate := time.Date(int(year), time.Month(mon), int(day), int(hour), int(minute), int(sec), int(nsec), loc)
+	if loc == time.UTC || dt == ZeroDatetime {
+		return candidate, false
+	}
+	_, offset := candidate.Zone()
+	if candidate.UnixMicro()+int64(offset)*MicroSecsPerSec+unixEpochMicroSecs == int64(dt) {
+		return candidate, false
+	}
+	if boundary, ok := dt.nonexistentLocalTimeBoundary(loc, candidate); ok {
+		// Preserve the input fractional seconds while moving a nonexistent wall
+		// time to the first representable wall time after the DST gap.
+		return boundary.Truncate(time.Second).Add(time.Duration(dt.MicroSec()) * time.Microsecond), true
+	}
+	return candidate, false
+}
+
+// IsNonexistentLocalTime reports whether dt is a wall-clock value in a
+// forward timezone transition gap. Go's time.Date silently normalizes such
+// values according to an implementation-specific rule; SQL timestamp casts
+// need to distinguish this case so strict mode can reject it.
+func (dt Datetime) IsNonexistentLocalTime(loc *time.Location) bool {
+	if dt == ZeroDatetime || loc == nil {
+		return false
+	}
+	_, ok := dt.convertToGoTime(loc)
+	return ok
+}
+
+func (dt Datetime) nonexistentLocalTimeBoundary(loc *time.Location, candidate time.Time) (time.Time, bool) {
+	// Search the transitions around the normalized candidate. ZoneBounds is
+	// public and also covers locations with recurring DST extension rules.
+	probe := candidate.Add(-48 * time.Hour)
+	limit := candidate.Add(48 * time.Hour)
+	for n := 0; n < 16; n++ {
+		_, end := probe.ZoneBounds()
+		if end.IsZero() || end.After(limit) {
+			break
+		}
+		before := end.Add(-time.Microsecond).In(loc)
+		after := end.In(loc)
+		_, beforeOffset := before.Zone()
+		_, afterOffset := after.Zone()
+		if afterOffset > beforeOffset {
+			beforeWall := DatetimeFromClock(int32(before.Year()), uint8(before.Month()), uint8(before.Day()),
+				uint8(before.Hour()), uint8(before.Minute()), uint8(before.Second()), uint32(before.Nanosecond()/1000))
+			afterWall := DatetimeFromClock(int32(after.Year()), uint8(after.Month()), uint8(after.Day()),
+				uint8(after.Hour()), uint8(after.Minute()), uint8(after.Second()), uint32(after.Nanosecond()/1000))
+			if dt >= beforeWall && dt < afterWall {
+				return after, true
+			}
+		}
+		probe = end.Add(time.Microsecond)
+	}
+	return time.Time{}, false
 }
 
 func (dt Datetime) AddDateTime(addMonth, addYear int64, timeType TimeType) (Datetime, bool) {
@@ -491,10 +678,27 @@ func (dt Datetime) AddInterval(nums int64, its IntervalType, timeType TimeType) 
 	var addMonth, addYear int64
 	switch its {
 	case MicroSecond:
-		// nums is already in microseconds, no conversion needed
-		// For time units (MicroSecond, Second, Minute, Hour), the addition won't change the date part
-		// so we can directly return the result without ValidDatetime check
+		if (nums > 0 && int64(dt) > math.MaxInt64-nums) || (nums < 0 && int64(dt) < math.MinInt64-nums) {
+			return 0, false
+		}
 		newDate := dt + Datetime(nums)
+		// Datetime zero is 0001-01-01 00:00:00. Values below it can be
+		// misread as an in-range calendar date after integer division truncates
+		// toward zero, so reject the encoded domain before calendar conversion.
+		if newDate < 0 {
+			return 0, false
+		}
+		y, m, d, _ := newDate.ToDate().Calendar(true)
+		switch timeType {
+		case DateType:
+			if !ValidDate(y, m, d) {
+				return 0, false
+			}
+		case DateTimeType, TimeStampType:
+			if !ValidDatetime(y, m, d) {
+				return 0, false
+			}
+		}
 		return newDate, true
 	case Second:
 		nums *= MicroSecsPerSec
@@ -559,18 +763,37 @@ func (dt Datetime) DatetimeMinusWithSecond(secondDt Datetime) int64 {
 }
 
 func (dt Datetime) ConvertToMonth(secondDt Datetime) int64 {
+	leftDate, rightDate := dt.ToDate(), secondDt.ToDate()
+	monthDiff := (int64(leftDate.Year())-int64(rightDate.Year()))*12 +
+		int64(leftDate.Month()) - int64(rightDate.Month())
+	if monthDiff == 0 {
+		return 0
+	}
 
-	dayDiff := int64(dt.ToDate().Day()) - int64(secondDt.ToDate().Day())
-	monthDiff := (int64(dt.ToDate().Year())-int64(secondDt.ToDate().Year()))*12 + int64(dt.ToDate().Month()) - int64(secondDt.ToDate().Month())
-
-	if dayDiff >= 0 {
-		return monthDiff
-	} else {
+	// TIMESTAMPDIFF counts complete calendar periods. Compare the entire
+	// month-day-time tuple so a same-day interval that is short by a
+	// microsecond does not look like a complete month. Truncate toward zero
+	// for negative intervals as well.
+	leftClock := int64(dt.Hour())*3600*MicroSecsPerSec +
+		int64(dt.Minute())*60*MicroSecsPerSec +
+		int64(dt.Sec())*MicroSecsPerSec + dt.MicroSec()
+	rightClock := int64(secondDt.Hour())*3600*MicroSecsPerSec +
+		int64(secondDt.Minute())*60*MicroSecsPerSec +
+		int64(secondDt.Sec())*MicroSecsPerSec + secondDt.MicroSec()
+	leftDay, rightDay := int(leftDate.Day()), int(rightDate.Day())
+	if monthDiff > 0 && (leftDay < rightDay || (leftDay == rightDay && leftClock < rightClock)) {
 		return monthDiff - 1
 	}
+	if monthDiff < 0 && (leftDay > rightDay || (leftDay == rightDay && leftClock > rightClock)) {
+		return monthDiff + 1
+	}
+	return monthDiff
 }
 
 func (dt Datetime) MicroSec() int64 {
+	if dt == ZeroDatetime {
+		return 0
+	}
 	return int64(dt) % MicroSecsPerSec
 }
 
@@ -616,7 +839,18 @@ func (dt Datetime) YearWeek(mode int) (year int, week int) {
 }
 
 func (dt Datetime) ToTimestamp(loc *time.Location) Timestamp {
-	return Timestamp(dt.ConvertToGoTime(loc).UnixMicro() + unixEpochMicroSecs)
+	value, _ := dt.ToTimestampWithLocalTimeStatus(loc)
+	return value
+}
+
+// ToTimestampWithLocalTimeStatus converts once and reports a forward-transition
+// gap so SQL casts can apply their statement policy to the normalized result.
+func (dt Datetime) ToTimestampWithLocalTimeStatus(loc *time.Location) (Timestamp, bool) {
+	if dt == ZeroDatetime {
+		return ZeroTimestamp, false
+	}
+	value, nonexistent := dt.convertToGoTime(loc)
+	return Timestamp(value.UnixMicro() + unixEpochMicroSecs), nonexistent
 }
 
 func (dt Datetime) SecondMicrosecondStr() string {

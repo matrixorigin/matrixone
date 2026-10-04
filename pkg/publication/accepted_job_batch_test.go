@@ -222,7 +222,7 @@ func runApplyObjects(t *testing.T, objects map[objectio.ObjectId]*ObjectWithTabl
 		returned <- ApplyObjects(
 			context.Background(), "task", 0, nil, objects,
 			nil, nil, types.TS{}, nil, nil, nil, nil,
-			worker, nil, nil, "account", "publication", nil, nil, nil,
+			worker, nil, nil, "account", "publication", nil, NewAObjectMap(), nil,
 		)
 	}()
 	return returned

@@ -23,10 +23,17 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	sqldatastream "github.com/matrixorigin/matrixone/pkg/sql/datastream"
+	"github.com/matrixorigin/matrixone/pkg/sql/foreignext"
+	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
+	sqlkafka "github.com/matrixorigin/matrixone/pkg/sql/kafka"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
@@ -39,20 +46,76 @@ func ConstructCreateTableSQL(
 	useDbName bool,
 	cloneStmt *tree.CloneTable,
 ) (string, tree.Statement, error) {
+	// This formatter is also used by context-free consumers that do not own a
+	// source catalog snapshot (CDC, publication, and dump). Planner entry points
+	// reconcile index visibility before calling here. Subscription-aware clone
+	// planning additionally passes its scoped publisher identity explicitly.
+	var sourceSubscription *SubscriptionMeta
+	if ctx != nil {
+		sourceSubscription = ctx.GetQueryingSubscription()
+	}
+	return constructCreateTableSQL(
+		ctx, tableDef, snapshot, useDbName, cloneStmt, true,
+		sourceSubscription,
+	)
+}
 
+func createTableIndexVisible(indexDef *plan.IndexDef) bool {
+	if visible, isSet := catalog.GetIndexVisibility(indexDef); isSet {
+		return visible
+	}
+	// A context-free caller cannot query mo_indexes. Preserve proto3's
+	// historical default rather than treating an omitted bool as INVISIBLE.
+	return true
+}
+
+func constructCreateTableSQL(
+	ctx CompilerContext,
+	tableDef *plan.TableDef,
+	snapshot *Snapshot,
+	useDbName bool,
+	cloneStmt *tree.CloneTable,
+	includeChecks bool,
+	sourceSubscription *SubscriptionMeta,
+) (string, tree.Statement, error) {
 	var err error
 	var createStr string
+	sqlMode := ""
+	if ctx != nil {
+		sqlMode = *parserSQLModeFromContext(ctx)
+	}
 	rewritePairs := make([]struct {
 		display string
 		rewrite string
 	}, 0)
-	checkDefs := extractTopLevelCheckDefs(tableDef)
+	var checkDefs []string
+	if includeChecks {
+		checkDefs = constructCheckDefs(tableDef)
+	}
+	var mongoEnvelope sqlmongodb.CreateSQLEnvelope
+	mongoColumns := make(map[string]sqlmongodb.ColumnMapping)
+	if tableDef.TableType == catalog.SystemExternalRel {
+		var isMongoDB bool
+		isMongoDB, err = IsMongoDBTableDef(ctx.GetContext(), tableDef)
+		if err != nil {
+			return "", nil, err
+		}
+		if isMongoDB {
+			mongoEnvelope, _, err = sqlmongodb.ParseCreateSQLEnvelope(ctx.GetContext(), tableDef.Createsql)
+			if err != nil {
+				return "", nil, err
+			}
+			for _, column := range mongoEnvelope.Columns {
+				mongoColumns[strings.ToLower(column.Name)] = column
+			}
+		}
+	}
 
 	tblName := tableDef.Name
 	schemaName := tableDef.DbName
-	dbTblName := fmt.Sprintf("`%s`", formatStr(tblName))
+	dbTblName := sqlquote.Ident(tblName)
 	if useDbName {
-		dbTblName = fmt.Sprintf("`%s`.`%s`", formatStr(schemaName), formatStr(tblName))
+		dbTblName = sqlquote.QualifiedIdent(schemaName, tblName)
 	}
 
 	if tableDef.TableType == catalog.SystemExternalRel {
@@ -68,6 +131,14 @@ func ConstructCreateTableSQL(
 	rowCount := 0
 	var pkDefs []string
 	isClusterTable := util.TableIsClusterTable(tableDef.TableType)
+	displayTableCharset := effectiveTableCharsetForShowCreate(tableDef)
+	columnTableCharset := displayTableCharset
+	if tableDef.TableType == catalog.SystemExternalRel {
+		// External-table grammar has no table charset option. Use a sentinel
+		// that makes every text column emit its own replay-safe collation instead
+		// of relying on a table clause that would make the DDL unparsable.
+		columnTableCharset = uint32(types.CharsetLegacy)
+	}
 
 	// col.Name -> col.OriginName
 	colNameToOriginName := make(map[string]string)
@@ -111,7 +182,8 @@ func ConstructCreateTableSQL(
 		} else {
 			typeStr = strings.ToLower(typeStr)
 		}
-		fmt.Fprintf(buf, "  `%s` %s", formatStr(colNameOrigin), typeStr)
+		fmt.Fprintf(buf, "  %s %s", sqlquote.Ident(colNameOrigin), typeStr)
+		appendTextCharsetForShowCreate(buf, col.Typ, columnTableCharset)
 
 		//-------------------------------------------------------------------------------------------------------------
 		if col.GeneratedCol != nil && col.GeneratedCol.Expr != nil {
@@ -141,7 +213,7 @@ func ConstructCreateTableSQL(
 					buf.WriteString(" DEFAULT NULL")
 				}
 			} else if len(col.Default.OriginString) > 0 {
-				buf.WriteString(" DEFAULT " + formatDefaultExpr(col.Default.OriginString))
+				buf.WriteString(" DEFAULT " + formatDefaultExpr(col.Default.OriginString, col.Default.Expr))
 			}
 
 			if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
@@ -151,6 +223,13 @@ func ConstructCreateTableSQL(
 
 		if col.Comment != "" {
 			buf.WriteString(" COMMENT '" + col.Comment + "'")
+		}
+		if mapping, ok := mongoColumns[strings.ToLower(col.Name)]; ok {
+			buf.WriteString(" MONGODB_PATH '")
+			buf.WriteString(formatStrInSingleQuotesForSQLMode(mapping.Path, sqlMode))
+			buf.WriteString("' MONGODB_CONVERT '")
+			buf.WriteString(formatStrInSingleQuotesForSQLMode(mapping.Conversion, sqlMode))
+			buf.WriteString("'")
 		}
 
 		createStr += buf.String()
@@ -170,9 +249,9 @@ func ConstructCreateTableSQL(
 		for i, def := range pkDefs {
 			def = colNameToOriginName[def]
 			if i == len(pkDefs)-1 {
-				pkStr += fmt.Sprintf("`%s`)", formatStr(def))
+				pkStr += fmt.Sprintf("%s)", sqlquote.Ident(def))
 			} else {
-				pkStr += fmt.Sprintf("`%s`,", formatStr(def))
+				pkStr += fmt.Sprintf("%s,", sqlquote.Ident(def))
 			}
 		}
 		if rowCount != 0 {
@@ -187,6 +266,9 @@ func ConstructCreateTableSQL(
 		indexNames := make(map[string]bool)
 
 		for _, indexdef := range tableDef.Indexes {
+			if indexdef == nil {
+				continue
+			}
 			// Index Name can be empty string when CREATE TABLE with index
 			// avoid duplicate only work when index name is not empty
 			if len(indexdef.IndexName) > 0 {
@@ -198,11 +280,16 @@ func ConstructCreateTableSQL(
 			}
 
 			var indexStr string
-			if !indexdef.Unique && catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
-				indexStr += " FULLTEXT "
+			indexVisible := createTableIndexVisible(indexdef)
+			if !indexdef.Unique && (catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) || catalog.IsFullText2IndexAlgo(indexdef.IndexAlgo)) {
+				if catalog.IsFullText2IndexAlgo(indexdef.IndexAlgo) {
+					indexStr += " FULLTEXT2 "
+				} else {
+					indexStr += " FULLTEXT "
+				}
 
 				if len(indexdef.IndexName) > 0 {
-					indexStr += fmt.Sprintf("`%s`", formatStr(indexdef.IndexName))
+					indexStr += sqlquote.Ident(indexdef.IndexName)
 				}
 				indexStr += "("
 				i := 0
@@ -215,11 +302,21 @@ func ConstructCreateTableSQL(
 					}
 
 					part = colNameToOriginName[part]
-					indexStr += fmt.Sprintf("`%s`", formatStr(part))
+					indexStr += sqlquote.Ident(part)
 					i++
 				}
 
 				indexStr += ")"
+
+				// INCLUDE columns: render so SHOW CREATE round-trips — a rebuild from
+				// the clause-less DDL would silently drop the covering/prefilter columns.
+				// Uses the same helper as the vector-index branch below (INCLUDE is an
+				// order-flexible index_option, so it may precede WITH PARSER).
+				includedColumns, incErr := indexDefIncludedColumns(indexdef)
+				if incErr != nil {
+					return "", nil, incErr
+				}
+				indexStr += indexIncludeColumnsToString(includedColumns, colNameToOriginName)
 
 				if indexdef.IndexAlgoParams != "" {
 					val, err := sonic.Get([]byte(indexdef.IndexAlgoParams), "parser")
@@ -236,22 +333,36 @@ func ConstructCreateTableSQL(
 						}
 					}
 
-					val, err = sonic.Get([]byte(indexdef.IndexAlgoParams), catalog.Async)
-					// ignore err != nil --> value not found
-					if err == nil {
-						async, err := val.StrictString()
+					if catalog.IsFullText2IndexAlgo(indexdef.IndexAlgo) {
+						// fulltext2 carries persisted build options (position_free,
+						// max_index_capacity, max_postings_capacity) plus async / cron
+						// scheduling. Render the FULL set via the shared list so SHOW CREATE
+						// round-trips — a rebuild from parser-only DDL would silently drop
+						// POSITION_FREE and the capacities and build a different index.
+						paramStr, err := catalog.IndexParamsToStringList(indexdef.IndexAlgoParams)
 						if err != nil {
-							// value exists but not string type
 							return "", nil, err
 						}
+						indexStr += paramStr
+					} else {
+						val, err = sonic.Get([]byte(indexdef.IndexAlgoParams), catalog.Async)
+						// ignore err != nil --> value not found
+						if err == nil {
+							async, err := val.StrictString()
+							if err != nil {
+								// value exists but not string type
+								return "", nil, err
+							}
 
-						if async == "true" {
-							indexStr += " ASYNC"
+							if async == "true" {
+								indexStr += " ASYNC"
+							}
 						}
 					}
-
 				}
-
+				if !indexVisible {
+					indexStr += " INVISIBLE"
+				}
 			} else {
 				rewriteIndexStr := ""
 				if catalog.IsRTreeIndexAlgo(indexdef.IndexAlgo) {
@@ -264,8 +375,8 @@ func ConstructCreateTableSQL(
 					indexStr = "  KEY "
 					rewriteIndexStr = "  KEY "
 				}
-				indexStr += fmt.Sprintf("`%s` ", formatStr(indexdef.IndexName))
-				rewriteIndexStr += fmt.Sprintf("`%s` ", formatStr(indexdef.IndexName))
+				indexStr += fmt.Sprintf("%s ", sqlquote.Ident(indexdef.IndexName))
+				rewriteIndexStr += fmt.Sprintf("%s ", sqlquote.Ident(indexdef.IndexName))
 				if !catalog.IsNullIndexAlgo(indexdef.IndexAlgo) && !catalog.IsRTreeIndexAlgo(indexdef.IndexAlgo) {
 					indexStr += fmt.Sprintf("USING %s ", indexdef.IndexAlgo)
 				}
@@ -289,8 +400,8 @@ func ConstructCreateTableSQL(
 					}
 
 					originPart := colNameToOriginName[part]
-					indexStr += fmt.Sprintf("`%s`", formatStr(originPart))
-					rewriteIndexStr += fmt.Sprintf("`%s`", formatStr(originPart))
+					indexStr += sqlquote.Ident(originPart)
+					rewriteIndexStr += sqlquote.Ident(originPart)
 					if length, ok := prefixLengths[part]; ok {
 						prefixLength := fmt.Sprintf("(%d)", length)
 						indexStr += prefixLength
@@ -310,6 +421,17 @@ func ConstructCreateTableSQL(
 					indexStr += paramList
 					rewriteIndexStr += paramList
 				}
+				includedColumns, err := indexDefIncludedColumns(indexdef)
+				if err != nil {
+					return "", nil, err
+				}
+				includeList := indexIncludeColumnsToString(includedColumns, colNameToOriginName)
+				indexStr += includeList
+				rewriteIndexStr += includeList
+				if !indexVisible {
+					indexStr += " INVISIBLE"
+					rewriteIndexStr += " INVISIBLE"
+				}
 				if indexStr != rewriteIndexStr {
 					rewritePairs = append(rewritePairs, struct {
 						display string
@@ -318,8 +440,8 @@ func ConstructCreateTableSQL(
 				}
 			}
 			if indexdef.Comment != "" {
-				indexdef.Comment = strings.Replace(indexdef.Comment, "'", "\\'", -1)
-				indexStr += fmt.Sprintf(" COMMENT '%s'", formatStr(indexdef.Comment))
+				formattedComment := formatStrInSingleQuotesForSQLMode(indexdef.Comment, sqlMode)
+				indexStr += fmt.Sprintf(" COMMENT '%s'", formattedComment)
 				if len(rewritePairs) > 0 && rewritePairs[len(rewritePairs)-1].display != rewritePairs[len(rewritePairs)-1].rewrite &&
 					strings.HasPrefix(indexStr, rewritePairs[len(rewritePairs)-1].display) {
 					rewritePairs[len(rewritePairs)-1] = struct {
@@ -327,7 +449,7 @@ func ConstructCreateTableSQL(
 						rewrite string
 					}{
 						display: indexStr,
-						rewrite: rewritePairs[len(rewritePairs)-1].rewrite + fmt.Sprintf(" COMMENT '%s'", formatStr(indexdef.Comment)),
+						rewrite: rewritePairs[len(rewritePairs)-1].rewrite + fmt.Sprintf(" COMMENT '%s'", formattedComment),
 					}
 				}
 			}
@@ -335,6 +457,14 @@ func ConstructCreateTableSQL(
 				createStr += ",\n"
 			}
 			createStr += indexStr
+		}
+	}
+
+	sourceDatabaseName := ""
+	if cloneStmt != nil {
+		sourceDatabaseName = cloneStmt.SrcTable.SchemaName.String()
+		if sourceSubscription != nil {
+			sourceDatabaseName = sourceSubscription.DbName
 		}
 	}
 
@@ -357,12 +487,20 @@ func ConstructCreateTableSQL(
 			if _, tempTableDef, err = ctx.Resolve(schemaName, fkDef.Name, snap); err != nil {
 				return err
 			}
-
+			if tempTableDef == nil {
+				enabled, resolveErr := IsForeignKeyChecksEnabled(ctx)
+				if resolveErr != nil {
+					return resolveErr
+				}
+				if !enabled {
+					return nil
+				}
+			}
 			fkDef = tempTableDef
 			return err
 		}
 
-		if cloneStmt.SrcTable.SchemaName.String() == fkDef.DbName {
+		if sourceDatabaseName == fkDef.DbName {
 			// within db refer
 			referType = 1
 		} else {
@@ -415,8 +553,8 @@ func ConstructCreateTableSQL(
 		if fk.ForeignTbl == 0 {
 			fkTableDef = tableDef
 		} else {
-			if ctx.GetQueryingSubscription() != nil {
-				if _, fkTableDef, err = ctx.ResolveSubscriptionTableById(fk.ForeignTbl, ctx.GetQueryingSubscription()); err != nil {
+			if sourceSubscription != nil {
+				if _, fkTableDef, err = ctx.ResolveSubscriptionTableById(fk.ForeignTbl, sourceSubscription); err != nil {
 					return "", nil, err
 				}
 				if fkTableDef, err = updateFKTableDef(fkTableDef); err != nil {
@@ -455,12 +593,24 @@ func ConstructCreateTableSQL(
 			createStr += ",\n"
 		}
 
-		fkRefDbTblName := fmt.Sprintf("`%s`", formatStr(fkTableDef.Name))
-		if cloneStmt != nil || tableDef.DbName != fkTableDef.DbName {
-			fkRefDbTblName = fmt.Sprintf("`%s`.`%s`", formatStr(fkTableDef.DbName), formatStr(fkTableDef.Name))
+		fkRefDbName := fkTableDef.DbName
+		if cloneStmt == nil && sourceSubscription != nil && fkRefDbName == sourceSubscription.DbName {
+			fkRefDbName = sourceSubscription.SubName
 		}
-		createStr += fmt.Sprintf("  CONSTRAINT `%s` FOREIGN KEY (`%s`) REFERENCES %s (`%s`) ON DELETE %s ON UPDATE %s",
-			formatStr(fk.Name), strings.Join(colOriginNames, "`,`"), fkRefDbTblName, strings.Join(fkColOriginNames, "`,`"), strings.ReplaceAll(fk.OnDelete.String(), "_", " "), strings.ReplaceAll(fk.OnUpdate.String(), "_", " "))
+		if cloneStmt != nil && (cloneStmt.StmtType == tree.WithinAccCloneDB || cloneStmt.StmtType == tree.BetweenAccCloneDB) &&
+			sourceDatabaseName == fkTableDef.DbName {
+			fkRefDbName = schemaName
+		}
+		fkRefDbTblName := sqlquote.Ident(fkTableDef.Name)
+		// CREATE TABLE LIKE rewrites the target database into tableDef before
+		// rebuilding the source definition. Keep ordinary same-database references
+		// qualified so the recursive planner does not fall back to the session DB.
+		if cloneStmt != nil || tableDef.DbName != fkTableDef.DbName ||
+			(useDbName && sourceSubscription == nil && fkRefDbName != "") {
+			fkRefDbTblName = sqlquote.QualifiedIdent(fkRefDbName, fkTableDef.Name)
+		}
+		createStr += fmt.Sprintf("  CONSTRAINT %s FOREIGN KEY (%s) REFERENCES %s (%s) ON DELETE %s ON UPDATE %s",
+			sqlquote.Ident(fk.Name), joinQuotedIdentifiers(colOriginNames), fkRefDbTblName, joinQuotedIdentifiers(fkColOriginNames), strings.ReplaceAll(fk.OnDelete.String(), "_", " "), strings.ReplaceAll(fk.OnUpdate.String(), "_", " "))
 	}
 
 	for _, checkDef := range checkDefs {
@@ -471,6 +621,9 @@ func ConstructCreateTableSQL(
 		createStr += "\n"
 	}
 	createStr += ")"
+	if tableDef.TableType != catalog.SystemExternalRel {
+		createStr += tableCharsetForShowCreate(ctx, displayTableCharset)
+	}
 
 	var comment string
 	var properties []*plan.Property // Collect non-system properties for PROPERTIES clause
@@ -491,6 +644,9 @@ func ConstructCreateTableSQL(
 	}
 
 	createStr += comment
+	if tableDef.AutoIdCache != 0 {
+		createStr += fmt.Sprintf(" AUTO_ID_CACHE=%d", tableDef.AutoIdCache)
+	}
 
 	if tableDef.Partition != nil {
 		ps := ctx.GetProcess().GetPartitionService()
@@ -543,7 +699,7 @@ func ConstructCreateTableSQL(
 			if i > 0 {
 				propsStr += ", "
 			}
-			propsStr += fmt.Sprintf(`"%s" = "%s"`, prop.Key, prop.Value)
+			propsStr += fmt.Sprintf("%s = %s", formatStrLitForSQLMode(prop.Key, sqlMode), formatStrLitForSQLMode(prop.Value, sqlMode))
 		}
 		propsStr += ")"
 		createStr += propsStr
@@ -563,20 +719,69 @@ func ConstructCreateTableSQL(
 			cbNames := util.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
 			for i, cbName := range cbNames {
 				if i != 0 {
-					clusterby += fmt.Sprintf(", `%s`", formatStr(cbName))
+					clusterby += fmt.Sprintf(", %s", sqlquote.Ident(cbName))
 				} else {
-					clusterby += fmt.Sprintf("`%s`", formatStr(cbName))
+					clusterby += sqlquote.Ident(cbName)
 				}
 			}
 		} else {
 			//single column cluster by
-			clusterby += fmt.Sprintf("`%s`", formatStr(tableDef.ClusterBy.Name))
+			clusterby += sqlquote.Ident(tableDef.ClusterBy.Name)
 		}
 		clusterby += ")"
 		createStr += clusterby
 	}
 
 	if tableDef.TableType == catalog.SystemExternalRel {
+		if env, found, parseErr := sqliceberg.ParseCreateSQLEnvelope(ctx.GetContext(), tableDef.Createsql); parseErr != nil {
+			return "", nil, parseErr
+		} else if found {
+			createStr += formatIcebergTableOptionsForShowCreate(env, sqlMode)
+			var stmt tree.Statement
+			if ctx != nil {
+				stmt, err = getRewriteSQLStmtWithSQLMode(ctx, createStr, sqlMode)
+			}
+			return createStr, stmt, err
+		}
+		if len(mongoColumns) > 0 {
+			createStr += formatMongoDBTableOptionsForShowCreate(mongoEnvelope, sqlMode)
+			var stmt tree.Statement
+			if ctx != nil {
+				stmt, err = getRewriteSQLStmtWithSQLMode(ctx, createStr, sqlMode)
+			}
+			return createStr, stmt, err
+		}
+		if dsCfg, found, parseErr := IsDataStreamTableDef(ctx.GetContext(), tableDef); parseErr != nil {
+			return "", nil, parseErr
+		} else if found {
+			createStr += formatDataStreamTableOptionsForShowCreate(dsCfg, sqlMode)
+			var stmt tree.Statement
+			if ctx != nil {
+				stmt, err = getRewriteSQLStmtWithSQLMode(ctx, createStr, sqlMode)
+			}
+			return createStr, stmt, err
+		}
+		if fCfg, found, parseErr := IsForeignTableDef(ctx.GetContext(), tableDef); parseErr != nil {
+			return "", nil, parseErr
+		} else if found {
+			createStr += formatForeignTableOptionsForShowCreate(fCfg, sqlMode)
+			var stmt tree.Statement
+			if ctx != nil {
+				stmt, err = getRewriteSQLStmtWithSQLMode(ctx, createStr, sqlMode)
+			}
+			return createStr, stmt, err
+		}
+		if kCfg, found, parseErr := IsKafkaTableDef(ctx.GetContext(), tableDef); parseErr != nil {
+			return "", nil, parseErr
+		} else if found {
+			createStr += formatKafkaTableOptionsForShowCreate(kCfg, sqlMode)
+			var stmt tree.Statement
+			if ctx != nil {
+				stmt, err = getRewriteSQLStmtWithSQLMode(ctx, createStr, sqlMode)
+			}
+			return createStr, stmt, err
+		}
+
 		param := &tree.ExternParam{}
 		if err = json.Unmarshal([]byte(tableDef.Createsql), param); err != nil {
 			return "", nil, err
@@ -590,7 +795,7 @@ func ConstructCreateTableSQL(
 				return "", nil, err
 			}
 		}
-		createStr += formatExternalTableOptionsForShowCreate(param)
+		createStr += formatExternalTableOptionsForShowCreate(param, sqlMode)
 
 		fields := ""
 		if param.Tail != nil && param.Tail.Fields != nil {
@@ -598,26 +803,15 @@ func ConstructCreateTableSQL(
 				if param.Tail.Fields.Terminated.Value == "" {
 					fields += " TERMINATED BY \"\""
 				} else {
-					fields += fmt.Sprintf(" TERMINATED BY '%s'", formatStrInSingleQuotes(param.Tail.Fields.Terminated.Value))
+					fields += fmt.Sprintf(" TERMINATED BY '%s'", formatStrInSingleQuotesForSQLMode(param.Tail.Fields.Terminated.Value, sqlMode))
 				}
 			}
 
 			escape := func(value byte) string {
-				switch value {
-				case 0:
+				if value == 0 {
 					return ""
-				case '\\':
-					return "\\\\"
-				case '\'':
-					// The byte sits inside a single-quoted SQL literal. Use quote
-					// doubling rather than a backslash escape: the SHOW CREATE
-					// result embeds this string in a double-quoted SELECT literal
-					// that consumes one level of backslashes, and '' survives that
-					// round-trip displayable and re-executable.
-					return "''"
-				default:
-					return fmt.Sprintf("%c", value)
 				}
+				return formatStrInSingleQuotesForSQLMode(string([]byte{value}), sqlMode)
 			}
 			if param.Tail.Fields.EnclosedBy != nil {
 				fields += " ENCLOSED BY '" + escape(param.Tail.Fields.EnclosedBy.Value) + "'"
@@ -630,10 +824,10 @@ func ConstructCreateTableSQL(
 		line := ""
 		if param.Tail != nil && param.Tail.Lines != nil {
 			if param.Tail.Lines.StartingBy != "" {
-				line += fmt.Sprintf(" STARTING BY '%s'", formatStrInSingleQuotes(param.Tail.Lines.StartingBy))
+				line += fmt.Sprintf(" STARTING BY '%s'", formatStrInSingleQuotesForSQLMode(param.Tail.Lines.StartingBy, sqlMode))
 			}
 			if param.Tail.Lines.TerminatedBy != nil {
-				line += fmt.Sprintf(" TERMINATED BY '%s'", formatLinesTerminatedBy(param.Tail.Lines.TerminatedBy.Value))
+				line += fmt.Sprintf(" TERMINATED BY '%s'", formatLinesTerminatedBy(param.Tail.Lines.TerminatedBy.Value, sqlMode))
 			}
 		}
 
@@ -656,9 +850,108 @@ func ConstructCreateTableSQL(
 		for _, pair := range rewritePairs {
 			rewriteStr = strings.Replace(rewriteStr, pair.display, pair.rewrite, 1)
 		}
-		stmt, err = getRewriteSQLStmt(ctx, rewriteStr)
+		stmt, err = getRewriteSQLStmtWithSQLMode(ctx, rewriteStr, sqlMode)
 	}
 	return createStr, stmt, err
+}
+
+func appendTextCharsetForShowCreate(buf *bytes.Buffer, typ plan.Type, tableCharset uint32) {
+	switch types.T(typ.Id) {
+	case types.T_char, types.T_varchar, types.T_text:
+	default:
+		return
+	}
+
+	switch typ.Charset {
+	case uint32(types.CharsetLegacy):
+		// A migrated table default can coexist with a text column whose old
+		// catalog row still has no charset metadata. Preserve that column's
+		// historical bytewise ordering even when it cannot inherit the table
+		// display default.
+		if tableCharset != uint32(types.CharsetUTF8MB4Bin) {
+			buf.WriteString(" COLLATE utf8mb4_bin")
+		}
+	case uint32(types.CharsetUTF8MB4Bin):
+		buf.WriteString(" COLLATE utf8mb4_bin")
+	case uint32(types.CharsetBinary):
+		// Packed binary values can deliberately use a VARCHAR container. COLLATE
+		// binary is the lossless MO spelling for that representation; CHARACTER
+		// SET binary would instead change the physical type to VARBINARY/BLOB.
+		buf.WriteString(" COLLATE binary")
+	case uint32(types.CharsetUTF8):
+		if tableCharset != uint32(types.CharsetUTF8) {
+			buf.WriteString(" COLLATE utf8mb4_general_ci")
+		}
+	}
+}
+
+func effectiveTableCharsetForShowCreate(tableDef *plan.TableDef) uint32 {
+	if tableDef.DefaultCharset != uint32(types.CharsetLegacy) {
+		return tableDef.DefaultCharset
+	}
+	hasTextColumn := false
+	for _, col := range tableDef.Cols {
+		switch types.T(col.Typ.Id) {
+		case types.T_char, types.T_varchar, types.T_text:
+			hasTextColumn = true
+			if col.Typ.Charset == uint32(types.CharsetLegacy) {
+				// Legacy text was ordered bytewise before charset metadata became
+				// meaningful. There is no SQL spelling for CharsetLegacy, so use
+				// utf8mb4_bin as its replay-safe, nonbinary text identity. Using
+				// COLLATE binary here would incorrectly advertise VARCHAR as binary
+				// protocol data.
+				return uint32(types.CharsetUTF8MB4Bin)
+			}
+		}
+	}
+	if !hasTextColumn {
+		return tableDef.DefaultCharset
+	}
+	// Program-authored system definitions predate the table-default field but
+	// now carry explicit UTF-8 on every text column. Treat UTF-8 as their display
+	// default so SHOW CREATE stays concise. A genuinely legacy column above uses
+	// the bytewise display default, causing explicit general_ci peers to be shown.
+	return uint32(types.CharsetUTF8)
+}
+
+func tableCharsetForShowCreate(ctx CompilerContext, charset uint32) string {
+	switch charset {
+	case uint32(types.CharsetUTF8):
+		// collation_server is runtime-configurable. Spell general_ci whenever it
+		// differs from the effective runtime default. Callers such as CDC and
+		// table dump have no compiler context, so they must also spell it: an
+		// unknown target default is not safe to inherit during DDL replay.
+		if ctx == nil {
+			return " COLLATE=utf8mb4_general_ci"
+		}
+		serverCharset, err := tableDefaultCharset(ctx, nil)
+		if err == nil && serverCharset == uint32(types.CharsetUTF8) {
+			return ""
+		}
+		return " COLLATE=utf8mb4_general_ci"
+	case uint32(types.CharsetUTF8MB4Bin):
+		return " COLLATE=utf8mb4_bin"
+	case uint32(types.CharsetBinary):
+		return " CHARACTER SET=binary"
+	default:
+		return ""
+	}
+}
+
+func indexIncludeColumnsToString(includedColumns []string, colNameToOriginName map[string]string) string {
+	if len(includedColumns) == 0 {
+		return ""
+	}
+
+	names := make([]string, 0, len(includedColumns))
+	for _, colName := range includedColumns {
+		resolvedName := catalog.ResolveAlias(colName)
+		if originName := colNameToOriginName[resolvedName]; originName != "" {
+			resolvedName = originName
+		}
+		names = append(names, fmt.Sprintf("`%s`", formatStr(resolvedName)))
+	}
+	return fmt.Sprintf(" INCLUDE (%s)", strings.Join(names, ", "))
 }
 
 func extractTopLevelCheckDefs(tableDef *plan.TableDef) []string {
@@ -683,6 +976,42 @@ func extractTopLevelCheckDefs(tableDef *plan.TableDef) []string {
 		}
 	}
 	return checks
+}
+
+func constructCheckDefs(tableDef *plan.TableDef) []string {
+	if tableDef == nil || tableDef.TableType == catalog.SystemExternalRel {
+		return nil
+	}
+	if len(tableDef.Checks) == 0 {
+		return extractTopLevelCheckDefs(tableDef)
+	}
+
+	checks := make([]string, 0, len(tableDef.Checks))
+	for _, check := range tableDef.Checks {
+		if check == nil || check.OriginSql == "" {
+			continue
+		}
+		checks = append(
+			checks,
+			fmt.Sprintf(
+				"CONSTRAINT `%s` CHECK (%s)",
+				formatStr(check.Name),
+				check.OriginSql,
+			),
+		)
+	}
+	if len(checks) == 0 {
+		return extractTopLevelCheckDefs(tableDef)
+	}
+	return checks
+}
+
+func joinQuotedIdentifiers(names []string) string {
+	quoted := make([]string, len(names))
+	for i, name := range names {
+		quoted[i] = sqlquote.Ident(name)
+	}
+	return strings.Join(quoted, ",")
 }
 
 func extractCreateTableDefsSection(createSQL string) (string, bool) {
@@ -740,10 +1069,10 @@ func isTopLevelCheckDef(def string) bool {
 
 	trimmed := strings.TrimSpace(def)
 	upper := strings.ToUpper(trimmed)
-	if strings.HasPrefix(upper, "CHECK") {
+	if hasKeywordAt(upper, "CHECK", 0) {
 		return true
 	}
-	if !strings.HasPrefix(upper, "CONSTRAINT") {
+	if !hasKeywordAt(upper, "CONSTRAINT", 0) {
 		return false
 	}
 	return containsKeywordOutsideQuotes(trimmed, "CHECK")
@@ -785,7 +1114,7 @@ func hasKeywordAt(s string, keyword string, pos int) bool {
 }
 
 func isIdentChar(ch byte) bool {
-	return ch == '_' || ch >= '0' && ch <= '9' || ch >= 'A' && ch <= 'Z' || ch >= 'a' && ch <= 'z'
+	return ch == '_' || ch == '$' || ch >= '0' && ch <= '9' || ch >= 'A' && ch <= 'Z' || ch >= 'a' && ch <= 'z'
 }
 
 func findTopLevelByte(s string, target byte) int {
@@ -886,6 +1215,29 @@ func FormatColType(colType plan.Type) string {
 	typ := types.T(colType.Id).ToType()
 
 	ts := typ.String()
+	if typ.Oid == types.T_text {
+		switch colType.Width {
+		case types.MaxTinyTextLen:
+			ts = "TINYTEXT"
+		case types.MaxMediumTextLen:
+			ts = "MEDIUMTEXT"
+		case types.MaxLongTextLen:
+			ts = "LONGTEXT"
+		}
+	} else if typ.Oid == types.T_blob {
+		switch {
+		case colType.Width == 0:
+			// Legacy catalog BLOBs used width zero to mean unbounded. Emit the
+			// widest SQL family so recreation and dump/restore cannot narrow them.
+			ts = "LONGBLOB"
+		case colType.Width > 0 && colType.Width <= types.MaxTinyTextLen:
+			ts = "TINYBLOB"
+		case colType.Width > types.MaxStringSize && colType.Width <= types.MaxMediumTextLen:
+			ts = "MEDIUMBLOB"
+		case colType.Width > types.MaxMediumTextLen:
+			ts = "LONGBLOB"
+		}
+	}
 	// after decimal fix, remove this
 	if typ.Oid.IsDecimal() {
 		ts = "DECIMAL"
@@ -938,51 +1290,208 @@ func FormatColType(colType plan.Type) string {
 	case types.T_bit, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary:
 		suffix = fmt.Sprintf("(%d)", colType.Width)
 
-	case types.T_array_float32, types.T_array_float64:
+	case types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
 		suffix = fmt.Sprintf("(%d)", colType.Width)
 
 	}
 	return ts + suffix
 }
 
-// formatStrInSingleQuotes escapes s for emission inside a single-quoted SQL
-// string literal. A single quote is written as two single quotes (doubling)
-// rather than backslash-escaped: the
-// SHOW CREATE result embeds the DDL in a double-quoted SELECT literal that
-// consumes one level of backslashes, and quote doubling survives that
-// round-trip both displayable and re-executable.
+// formatStrInSingleQuotes returns the contents of a default-mode SQL string
+// literal. Use formatStrInSingleQuotesForSQLMode when the generated DDL will be
+// reparsed under a specific session SQL mode.
 func formatStrInSingleQuotes(s string) string {
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	return strings.ReplaceAll(s, `'`, `''`)
+	return formatStrInSingleQuotesForSQLMode(s, "")
 }
 
-// formatLinesTerminatedBy renders a LINES TERMINATED BY value for SHOW CREATE.
-// TerminatedBy.Value holds the raw bytes, so the newline (\n) and CRLF (\r\n)
-// defaults must be emitted as escape sequences — a literal CR/LF byte in the DDL
-// would be an unparseable embedded newline. The backslashes are doubled because
-// the SHOW CREATE result is delivered through a double-quoted SELECT literal that
-// consumes one backslash level before the DDL is re-parsed (mirrors the \n case
-// that already shipped). \n and \r\n must stay distinct so a CRLF table is
-// recreatable as CRLF, not silently downgraded to LF.
-func formatLinesTerminatedBy(value string) string {
-	switch value {
-	case "\n":
-		return `\\n`
-	case "\r\n":
-		return `\\r\\n`
-	default:
-		return formatStrInSingleQuotes(value)
-	}
+// formatStrInSingleQuotesForSQLMode returns the contents of a string literal
+// that reparses to s under sqlMode. In NO_BACKSLASH_ESCAPES, backslashes must
+// remain single because they are data, while quote doubling remains valid.
+func formatStrInSingleQuotesForSQLMode(s, sqlMode string) string {
+	literal := formatStrLitForSQLMode(s, sqlMode)
+	return literal[1 : len(literal)-1]
 }
 
-func formatExternalTableOptionsForShowCreate(param *tree.ExternParam) string {
+// formatLinesTerminatedBy renders a LINES TERMINATED BY value for SHOW CREATE
+// using the same SQL-mode contract as the surrounding generated DDL. In the
+// default mode, LF and CRLF are emitted as \n and \r\n source escapes; under
+// NO_BACKSLASH_ESCAPES their raw bytes are emitted instead.
+func formatLinesTerminatedBy(value, sqlMode string) string {
+	return formatStrInSingleQuotesForSQLMode(value, sqlMode)
+}
+
+func formatExternalTableOptionsForShowCreate(param *tree.ExternParam, sqlMode string) string {
 	if param.ScanType == tree.S3 {
-		return formatS3ExternalOptionsForShowCreate(param)
+		return formatS3ExternalOptionsForShowCreate(param, sqlMode)
 	}
-	return formatInfileExternalOptionsForShowCreate(param)
+	return formatInfileExternalOptionsForShowCreate(param, sqlMode)
 }
 
-func formatInfileExternalOptionsForShowCreate(param *tree.ExternParam) string {
+func formatIcebergTableOptionsForShowCreate(env sqliceberg.CreateSQLEnvelope, sqlMode string) string {
+	options := []struct {
+		key   string
+		value string
+	}{
+		{key: "catalog", value: env.Catalog},
+		{key: "namespace", value: env.Namespace},
+		{key: "table", value: env.Table},
+		{key: "ref", value: env.DefaultRef},
+		{key: "read_mode", value: env.ReadMode},
+		{key: "write_mode", value: env.WriteMode},
+	}
+	var builder strings.Builder
+	builder.WriteString(" ENGINE = ICEBERG WITH (")
+	for i, option := range options {
+		if i > 0 {
+			builder.WriteString(", ")
+		}
+		builder.WriteString("\"")
+		builder.WriteString(option.key)
+		builder.WriteString("\" = '")
+		builder.WriteString(formatStrInSingleQuotesForSQLMode(option.value, sqlMode))
+		builder.WriteString("'")
+	}
+	builder.WriteString(")")
+	return builder.String()
+}
+
+func formatMongoDBTableOptionsForShowCreate(env sqlmongodb.CreateSQLEnvelope, sqlMode string) string {
+	options := []struct {
+		key   string
+		value string
+	}{
+		{key: "connection", value: env.Connection},
+		{key: "database", value: env.Database},
+		{key: "collection", value: env.Collection},
+		{key: "schema_mode", value: env.SchemaMode},
+		{key: "conversion_mode", value: env.ConversionMode},
+		{key: "max_parallelism", value: fmt.Sprintf("%d", env.MaxParallelism)},
+	}
+	if env.SplitKey != "" {
+		options = append(options, struct {
+			key   string
+			value string
+		}{key: "split_key", value: env.SplitKey})
+	}
+	var builder strings.Builder
+	builder.WriteString(" ENGINE = MONGODB WITH (")
+	for i, option := range options {
+		if i > 0 {
+			builder.WriteString(", ")
+		}
+		builder.WriteString("\"")
+		builder.WriteString(option.key)
+		builder.WriteString("\" = '")
+		builder.WriteString(formatStrInSingleQuotesForSQLMode(option.value, sqlMode))
+		builder.WriteString("'")
+	}
+	builder.WriteString(")")
+	return builder.String()
+}
+
+func formatDataStreamTableOptionsForShowCreate(cfg sqldatastream.Config, sqlMode string) string {
+	options := []struct {
+		key   string
+		value string
+	}{
+		{key: "server", value: cfg.Server},
+		{key: "port", value: fmt.Sprintf("%d", cfg.Port)},
+		{key: "table", value: cfg.Table},
+		{key: "recheck", value: fmt.Sprintf("%t", cfg.Recheck)},
+		// cfg.APIKey is intentionally NOT emitted: SHOW CREATE output is
+		// widely visible and would leak the shared secret. A datastream table
+		// restored from SHOW CREATE (snapshot/PITR replay) must have its
+		// 'apikey' re-supplied if the server requires one.
+	}
+	var builder strings.Builder
+	builder.WriteString(" ENGINE = DATASTREAM WITH (")
+	for i, option := range options {
+		if i > 0 {
+			builder.WriteString(", ")
+		}
+		builder.WriteString("\"")
+		builder.WriteString(option.key)
+		builder.WriteString("\" = '")
+		builder.WriteString(formatStrInSingleQuotesForSQLMode(option.value, sqlMode))
+		builder.WriteString("'")
+	}
+	builder.WriteString(")")
+	return builder.String()
+}
+
+// formatKafkaTableOptionsForShowCreate renders the ENGINE = KAFKA clause of
+// SHOW CREATE TABLE. No option carries a credential in v1, so everything is
+// emitted verbatim and the output round-trips through CREATE.
+func formatKafkaTableOptionsForShowCreate(cfg sqlkafka.Config, sqlMode string) string {
+	options := []struct {
+		key   string
+		value string
+	}{
+		{key: "brokers", value: cfg.Brokers},
+		{key: "topic", value: cfg.Topic},
+		{key: "partition", value: fmt.Sprintf("%d", cfg.Partition)},
+		{key: "autocommit", value: fmt.Sprintf("%t", cfg.Autocommit)},
+		{key: "group", value: cfg.Group},
+		{key: "format", value: cfg.Format},
+	}
+	if cfg.Format == sqlkafka.FormatCSV {
+		options = append(options, struct{ key, value string }{key: "separator", value: cfg.Separator})
+	}
+	var builder strings.Builder
+	builder.WriteString(" ENGINE = KAFKA WITH (")
+	for i, option := range options {
+		if i > 0 {
+			builder.WriteString(", ")
+		}
+		builder.WriteString("\"")
+		builder.WriteString(option.key)
+		builder.WriteString("\" = '")
+		builder.WriteString(formatStrInSingleQuotesForSQLMode(option.value, sqlMode))
+		builder.WriteString("'")
+	}
+	builder.WriteString(")")
+	return builder.String()
+}
+
+func formatForeignTableOptionsForShowCreate(cfg foreignext.Config, sqlMode string) string {
+	var builder strings.Builder
+	builder.WriteString(" ENGINE = ")
+	builder.WriteString(strings.ToUpper(cfg.Kind))
+	options := make([]struct{ key, value string }, 0, 2)
+	if cfg.ConfigJSON != "" {
+		// A config carries credentials (ES password, DSN password): SHOW
+		// CREATE output is widely visible, so it is always redacted. A table
+		// restored from SHOW CREATE (snapshot/PITR replay) must have its
+		// 'config' re-supplied, or be created without one and use the
+		// @esql_tvf_config / @sql_tvf_config session variable.
+		options = append(options, struct{ key, value string }{"config", "<redacted>"})
+	}
+	if cfg.DefaultQuery != "" {
+		options = append(options, struct{ key, value string }{"query", cfg.DefaultQuery})
+	}
+	if cfg.Pushdown {
+		// Only the non-default is rendered: a table that never opted into
+		// pushdown keeps showing exactly the options its owner wrote.
+		options = append(options, struct{ key, value string }{"pushdown", "true"})
+	}
+	if len(options) > 0 {
+		builder.WriteString(" WITH (")
+		for i, option := range options {
+			if i > 0 {
+				builder.WriteString(", ")
+			}
+			builder.WriteString("\"")
+			builder.WriteString(option.key)
+			builder.WriteString("\" = '")
+			builder.WriteString(formatStrInSingleQuotesForSQLMode(option.value, sqlMode))
+			builder.WriteString("'")
+		}
+		builder.WriteString(")")
+	}
+	return builder.String()
+}
+
+func formatInfileExternalOptionsForShowCreate(param *tree.ExternParam, sqlMode string) string {
 	if pattern, writable := GetWriteFilePattern(param); writable {
 		// Writable external tables must be recreatable from their own DDL:
 		// snapshot/PITR restore replays SHOW CREATE output, so masking the
@@ -990,15 +1499,15 @@ func formatInfileExternalOptionsForShowCreate(param *tree.ExternParam) string {
 		// option validator rejects — e.g. 'JSONDATA'='') would silently
 		// produce a table that can write but not read its files.
 		parts := make([]string, 0, 6)
-		appendInfileOptionForShowCreate(&parts, "FILEPATH", param.Filepath)
-		appendInfileOptionForShowCreate(&parts, "COMPRESSION", param.CompressType)
-		appendInfileOptionForShowCreate(&parts, "FORMAT", param.Format)
-		appendInfileOptionForShowCreate(&parts, "JSONDATA", param.JsonData)
-		appendInfileOptionForShowCreate(&parts, "WRITE_FILE_PATTERN", pattern)
+		appendInfileOptionForShowCreate(&parts, "FILEPATH", param.Filepath, sqlMode)
+		appendInfileOptionForShowCreate(&parts, "COMPRESSION", param.CompressType, sqlMode)
+		appendInfileOptionForShowCreate(&parts, "FORMAT", param.Format, sqlMode)
+		appendInfileOptionForShowCreate(&parts, "JSONDATA", param.JsonData, sqlMode)
+		appendInfileOptionForShowCreate(&parts, "WRITE_FILE_PATTERN", pattern, sqlMode)
 		// The CSV reader skips lines whose raw prefix matches COMMENT (the writer
 		// encloses colliding first fields), so the marker affects readback and
 		// must round-trip; omitted when unset.
-		appendInfileOptionForShowCreate(&parts, "COMMENT", GetCSVComment(param))
+		appendInfileOptionForShowCreate(&parts, "COMMENT", GetCSVComment(param), sqlMode)
 		return " INFILE{" + strings.Join(parts, ",") + "}"
 	}
 	filepath := ""
@@ -1006,61 +1515,61 @@ func formatInfileExternalOptionsForShowCreate(param *tree.ExternParam) string {
 		filepath = param.Filepath
 	}
 	parts := []string{
-		"'FILEPATH'=" + formatStrLit(filepath),
-		"'COMPRESSION'=" + formatStrLit(param.CompressType),
-		"'FORMAT'=" + formatStrLit(param.Format),
-		"'JSONDATA'=" + formatStrLit(param.JsonData),
+		formatStrLitForSQLMode("FILEPATH", sqlMode) + "=" + formatStrLitForSQLMode(filepath, sqlMode),
+		formatStrLitForSQLMode("COMPRESSION", sqlMode) + "=" + formatStrLitForSQLMode(param.CompressType, sqlMode),
+		formatStrLitForSQLMode("FORMAT", sqlMode) + "=" + formatStrLitForSQLMode(param.Format, sqlMode),
+		formatStrLitForSQLMode("JSONDATA", sqlMode) + "=" + formatStrLitForSQLMode(param.JsonData, sqlMode),
 	}
 	// The CSV reader skips lines whose raw prefix matches COMMENT, so the marker
 	// changes which rows are returned; round-trip it (omitted when unset).
-	appendInfileOptionForShowCreate(&parts, "COMMENT", GetCSVComment(param))
-	appendHivePartitionOptionsForShowCreate(&parts, param, true)
+	appendInfileOptionForShowCreate(&parts, "COMMENT", GetCSVComment(param), sqlMode)
+	appendHivePartitionOptionsForShowCreate(&parts, param, true, sqlMode)
 	return " INFILE{" + strings.Join(parts, ",") + "}"
 }
 
 // appendInfileOptionForShowCreate appends 'KEY'='value' when the value is
 // non-empty (the read-side option validators reject empty values for keys
 // like jsondata, so omitted is the recreatable form of "unset").
-func appendInfileOptionForShowCreate(parts *[]string, key, value string) {
+func appendInfileOptionForShowCreate(parts *[]string, key, value, sqlMode string) {
 	if value == "" {
 		return
 	}
-	*parts = append(*parts, "'"+key+"'="+formatStrLit(value))
+	*parts = append(*parts, formatStrLitForSQLMode(key, sqlMode)+"="+formatStrLitForSQLMode(value, sqlMode))
 }
 
-func formatS3ExternalOptionsForShowCreate(param *tree.ExternParam) string {
+func formatS3ExternalOptionsForShowCreate(param *tree.ExternParam, sqlMode string) string {
 	parts := make([]string, 0, len(param.Option)/2+2)
 	if param.S3Param != nil {
-		appendExternalOptionForShowCreate(&parts, "endpoint", param.S3Param.Endpoint, false)
-		appendExternalOptionForShowCreate(&parts, "region", param.S3Param.Region, false)
+		appendExternalOptionForShowCreate(&parts, "endpoint", param.S3Param.Endpoint, false, sqlMode)
+		appendExternalOptionForShowCreate(&parts, "region", param.S3Param.Region, false, sqlMode)
 		if hasExternalOption(param, "access_key_id") {
-			appendExternalOptionForShowCreate(&parts, "access_key_id", param.S3Param.APIKey, true)
+			appendExternalOptionForShowCreate(&parts, "access_key_id", param.S3Param.APIKey, true, sqlMode)
 		}
 		if hasExternalOption(param, "secret_access_key") {
-			appendExternalOptionForShowCreate(&parts, "secret_access_key", param.S3Param.APISecret, true)
+			appendExternalOptionForShowCreate(&parts, "secret_access_key", param.S3Param.APISecret, true, sqlMode)
 		}
-		appendExternalOptionForShowCreate(&parts, "bucket", param.S3Param.Bucket, false)
+		appendExternalOptionForShowCreate(&parts, "bucket", param.S3Param.Bucket, false, sqlMode)
 	}
-	appendExternalOptionForShowCreate(&parts, "filepath", param.Filepath, false)
+	appendExternalOptionForShowCreate(&parts, "filepath", param.Filepath, false, sqlMode)
 	if param.S3Param != nil {
-		appendExternalOptionForShowCreate(&parts, "provider", param.S3Param.Provider, false)
-		appendExternalOptionForShowCreate(&parts, "role_arn", param.S3Param.RoleArn, false)
-		appendExternalOptionForShowCreate(&parts, "external_id", param.S3Param.ExternalId, false)
+		appendExternalOptionForShowCreate(&parts, "provider", param.S3Param.Provider, false, sqlMode)
+		appendExternalOptionForShowCreate(&parts, "role_arn", param.S3Param.RoleArn, false, sqlMode)
+		appendExternalOptionForShowCreate(&parts, "external_id", param.S3Param.ExternalId, false, sqlMode)
 	}
-	appendExternalOptionForShowCreate(&parts, "compression", param.CompressType, false)
-	appendExternalOptionForShowCreate(&parts, "format", param.Format, false)
-	appendExternalOptionForShowCreate(&parts, "jsondata", param.JsonData, false)
+	appendExternalOptionForShowCreate(&parts, "compression", param.CompressType, false, sqlMode)
+	appendExternalOptionForShowCreate(&parts, "format", param.Format, false, sqlMode)
+	appendExternalOptionForShowCreate(&parts, "jsondata", param.JsonData, false, sqlMode)
 	if pattern, ok := GetWriteFilePattern(param); ok {
-		appendExternalOptionForShowCreate(&parts, ExternalWriteFilePatternKey, pattern, false)
+		appendExternalOptionForShowCreate(&parts, ExternalWriteFilePatternKey, pattern, false, sqlMode)
 	}
 	// The CSV reader skips lines whose raw prefix matches COMMENT, so the marker
 	// changes which rows are returned; round-trip it (omitted when unset).
-	appendExternalOptionForShowCreate(&parts, CSVCommentKey, GetCSVComment(param), false)
-	appendHivePartitionOptionsForShowCreate(&parts, param, false)
+	appendExternalOptionForShowCreate(&parts, CSVCommentKey, GetCSVComment(param), false, sqlMode)
+	appendHivePartitionOptionsForShowCreate(&parts, param, false, sqlMode)
 	return " URL s3option{" + strings.Join(parts, ",") + "}"
 }
 
-func appendHivePartitionOptionsForShowCreate(parts *[]string, param *tree.ExternParam, upperKey bool) {
+func appendHivePartitionOptionsForShowCreate(parts *[]string, param *tree.ExternParam, upperKey bool, sqlMode string) {
 	if !param.HivePartitioning {
 		return
 	}
@@ -1070,18 +1579,18 @@ func appendHivePartitionOptionsForShowCreate(parts *[]string, param *tree.Extern
 		hivePartitioningKey = "HIVE_PARTITIONING"
 		hivePartitionColsKey = "HIVE_PARTITION_COLUMNS"
 	}
-	appendExternalOptionForShowCreate(parts, hivePartitioningKey, "true", false)
-	appendExternalOptionForShowCreate(parts, hivePartitionColsKey, strings.Join(param.HivePartitionCols, ","), false)
+	appendExternalOptionForShowCreate(parts, hivePartitioningKey, "true", false, sqlMode)
+	appendExternalOptionForShowCreate(parts, hivePartitionColsKey, strings.Join(param.HivePartitionCols, ","), false, sqlMode)
 }
 
-func appendExternalOptionForShowCreate(parts *[]string, key, value string, mask bool) {
+func appendExternalOptionForShowCreate(parts *[]string, key, value string, mask bool, sqlMode string) {
 	if value == "" && !mask {
 		return
 	}
 	if mask {
 		value = "******"
 	}
-	*parts = append(*parts, formatStrLit(key)+"="+formatStrLit(value))
+	*parts = append(*parts, formatStrLitForSQLMode(key, sqlMode)+"="+formatStrLitForSQLMode(value, sqlMode))
 }
 
 func hasExternalOption(param *tree.ExternParam, key string) bool {
@@ -1114,6 +1623,7 @@ func EscapeFormat(s string) string {
 	return buf.String()
 }
 
+// formatStrLit quotes s as a replayable MySQL string literal.
 func formatStrLit(s string) string {
 	var buf strings.Builder
 	buf.Grow(len(s) + 2)
@@ -1138,6 +1648,17 @@ func formatStrLit(s string) string {
 	return buf.String()
 }
 
+// formatStrLitForSQLMode quotes s for a generated SQL statement that will be
+// reparsed under sqlMode. The two MySQL string-literal modes have different
+// meanings for backslashes, so quote doubling alone is sufficient only when
+// NO_BACKSLASH_ESCAPES is active.
+func formatStrLitForSQLMode(s, sqlMode string) string {
+	if mysql.ParseSQLModeFlags(sqlMode).Has(mysql.SQLModeNoBackslashEscapes) {
+		return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+	}
+	return formatStrLit(s)
+}
+
 func formatStr(str string) string {
 	tmp := strings.Replace(str, "`", "``", -1)
 	strLen := len(tmp)
@@ -1150,10 +1671,16 @@ func formatStr(str string) string {
 	return strings.Replace(tmp, "'", "''", -1)
 }
 
-func formatDefaultExpr(expr string) string {
+// formatDefaultExpr escapes literal defaults for the generated CREATE TABLE
+// statement. Non-literal defaults already contain SQL syntax in OriginString,
+// so escaping their quotes as string contents would corrupt the expression.
+func formatDefaultExpr(expr string, defaultExpr *plan.Expr) string {
 	trimmed := strings.TrimSpace(expr)
 	if strings.HasPrefix(trimmed, "(") && strings.HasSuffix(trimmed, ")") {
 		return trimmed
+	}
+	if defaultExpr != nil && defaultExpr.GetLit() == nil {
+		return expr
 	}
 	return formatStr(expr)
 }

@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestMutationControllerAppend(t *testing.T) {
@@ -136,4 +137,23 @@ func TestGetVisibleRow(t *testing.T) {
 	assert.True(t, visible)
 	assert.Equal(t, 0, holes.GetCardinality())
 
+}
+
+func TestPrepareRollbackKeepsAppendRangeAsHole(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	schema := catalog.MockSchema(1, 0)
+	c := catalog.MockCatalog(nil)
+	defer c.Close()
+	db, _ := c.CreateDBEntry("db", "", "", nil)
+	table, _ := db.CreateTableEntry(schema, nil, nil)
+	noid := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&noid, true, false, false)
+	obj, _ := table.CreateObject(nil, &objectio.CreateObjOpt{Stats: stats}, nil)
+	handle := NewAppendMVCCHandle(obj)
+
+	node, _ := handle.AddAppendNodeLocked(nil, 2, 5)
+	require.NoError(t, node.PrepareRollback())
+	require.True(t, node.IsAborted())
+	require.Same(t, node, handle.GetAppendNodeByRowLocked(3))
+	require.Equal(t, uint32(5), handle.GetTotalRow())
 }

@@ -15,9 +15,9 @@
 package aggexec
 
 import (
-	"bytes"
 	io "io"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -104,11 +104,13 @@ func (r *aggResultWithFixedType[T]) Size() int64 {
 }
 
 func (r *aggResultWithFixedType[T]) setupT() {
-	if len(r.optSplitResult.resultList) > 0 {
-		r.values = make([][]T, len(r.optSplitResult.resultList))
-		for i := range r.values {
-			r.values[i] = vector.MustFixedColNoTypeCheck[T](r.optSplitResult.resultList[i])
-		}
+	if len(r.optSplitResult.resultList) == 0 {
+		r.values = nil
+		return
+	}
+	r.values = make([][]T, len(r.optSplitResult.resultList))
+	for i := range r.values {
+		r.values[i] = vector.MustFixedColNoTypeCheck[T](r.optSplitResult.resultList[i])
 	}
 }
 
@@ -226,39 +228,99 @@ type optSplitResult struct {
 	distinct []distinctHash
 }
 
-func (r *optSplitResult) marshalToBuffers(flags [][]uint8, buf *bytes.Buffer) error {
+func (r *optSplitResult) marshalToBuffers(flags [][]uint8, writer io.Writer) error {
 	rvec := vector.NewOffHeapVecWithType(r.resultType)
 	defer rvec.Free(r.mp)
 
 	for i := range r.resultList {
-		rvec.UnionBatch(r.resultList[i], 0, r.resultList[i].Length(), flags[i], r.mp)
+		selection, err := aggregateChunkSelection(
+			flags, i, r.resultList[i].Length())
+		if err != nil {
+			return err
+		}
+		if err := rvec.UnionBatch(
+			r.resultList[i], 0, r.resultList[i].Length(), selection, r.mp,
+		); err != nil {
+			return err
+		}
 	}
-	if err := rvec.MarshalBinaryWithBuffer(buf); err != nil {
+	if err := rvec.MarshalBinaryTo(writer); err != nil {
 		return err
 	}
 
 	var cnt int64
 	cnt = int64(len(r.emptyList))
-	buf.Write(types.EncodeInt64(&cnt))
+	if err := types.WriteInt64(writer, cnt); err != nil {
+		return err
+	}
 	if cnt > 0 {
 		mvec := vector.NewOffHeapVecWithType(types.T_bool.ToType())
 		defer mvec.Free(r.mp)
 		for i := range r.emptyList {
-			mvec.UnionBatch(r.emptyList[i], 0, r.emptyList[i].Length(), flags[i], r.mp)
+			selection, err := aggregateChunkSelection(
+				flags, i, r.emptyList[i].Length())
+			if err != nil {
+				return err
+			}
+			if err := mvec.UnionBatch(
+				r.emptyList[i], 0, r.emptyList[i].Length(), selection, r.mp,
+			); err != nil {
+				return err
+			}
 		}
-		if err := mvec.MarshalBinaryWithBuffer(buf); err != nil {
+		if err := mvec.MarshalBinaryTo(writer); err != nil {
 			return err
 		}
 	}
 
 	cnt = 0
 	if len(r.distinct) == 0 {
-		buf.Write(types.EncodeInt64(&cnt))
+		if err := types.WriteInt64(writer, cnt); err != nil {
+			return err
+		}
 	} else {
-		cnt = int64(rvec.Length())
-		buf.Write(types.EncodeInt64(&cnt))
+		if len(r.distinct) != len(r.resultList) {
+			return moerr.NewInvalidInputNoCtx(
+				"aggregate distinct-state chunks do not match result chunks")
+		}
+		selectedMaps := int64(0)
 		for i := range r.distinct {
-			if err := r.distinct[i].marshalToBuffers(flags[i], buf); err != nil {
+			if len(r.distinct[i].maps) != r.resultList[i].Length() {
+				return moerr.NewInvalidInputNoCtx(
+					"aggregate distinct-state rows do not match result rows")
+			}
+			selection, err := aggregateChunkSelection(
+				flags, i, r.resultList[i].Length())
+			if err != nil {
+				return err
+			}
+			count, err := r.distinct[i].selectedCount(selection)
+			if err != nil {
+				return err
+			}
+			selectedMaps += count
+		}
+		if selectedMaps != int64(rvec.Length()) {
+			return moerr.NewInvalidInputNoCtx(
+				"aggregate selected distinct states do not match result rows")
+		}
+		// Unmarshal compacts every selected result into one physical chunk, so
+		// encode the corresponding distinct maps as one flat frame as well.
+		cnt = 1
+		if err := types.WriteInt64(writer, cnt); err != nil {
+			return err
+		}
+		if err := types.WriteInt64(writer, selectedMaps); err != nil {
+			return err
+		}
+		for i := range r.distinct {
+			selection, err := aggregateChunkSelection(
+				flags, i, r.resultList[i].Length())
+			if err != nil {
+				return err
+			}
+			if err := r.distinct[i].marshalSelectedMaps(
+				selection, writer); err != nil {
 				return err
 			}
 		}
@@ -267,38 +329,49 @@ func (r *optSplitResult) marshalToBuffers(flags [][]uint8, buf *bytes.Buffer) er
 	return nil
 }
 
-func (r *optSplitResult) marshalChunkToBuffer(chunk int, buf *bytes.Buffer) error {
-	if err := r.resultList[chunk].MarshalBinaryWithBuffer(buf); err != nil {
+func (r *optSplitResult) marshalChunkToBuffer(chunk int, writer io.Writer) error {
+	if err := r.resultList[chunk].MarshalBinaryTo(writer); err != nil {
 		return err
 	}
 
 	var cnt int64
 	cnt = int64(len(r.emptyList))
-	buf.Write(types.EncodeInt64(&cnt))
+	if err := types.WriteInt64(writer, cnt); err != nil {
+		return err
+	}
 	if cnt > 0 {
-		if err := r.emptyList[chunk].MarshalBinaryWithBuffer(buf); err != nil {
+		if err := r.emptyList[chunk].MarshalBinaryTo(writer); err != nil {
 			return err
 		}
 	}
 
 	cnt = 0
 	if len(r.distinct) == 0 {
-		buf.Write(types.EncodeInt64(&cnt))
+		if err := types.WriteInt64(writer, cnt); err != nil {
+			return err
+		}
 	} else {
-		cnt = int64(len(r.distinct[chunk].maps))
-		buf.Write(types.EncodeInt64(&cnt))
-		if err := r.distinct[chunk].marshalToBuffers(nil, buf); err != nil {
+		if chunk >= len(r.distinct) ||
+			len(r.distinct[chunk].maps) != r.resultList[chunk].Length() {
+			return moerr.NewInvalidInputNoCtx(
+				"aggregate distinct-state rows do not match result chunk")
+		}
+		cnt = 1
+		if err := types.WriteInt64(writer, cnt); err != nil {
+			return err
+		}
+		if err := r.distinct[chunk].marshalToBuffers(nil, writer); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (r *optSplitResult) unmarshalFromReader(reader io.Reader) error {
+func (r *optSplitResult) unmarshalFromReader(reader io.Reader) (retErr error) {
 	var err error
 	r.free()
 	defer func() {
-		if err != nil {
+		if retErr != nil {
 			r.free()
 		}
 	}()
@@ -315,6 +388,10 @@ func (r *optSplitResult) unmarshalFromReader(reader io.Reader) error {
 	if err != nil {
 		return err
 	}
+	if cnt < 0 {
+		return moerr.NewInvalidInputNoCtxf(
+			"invalid aggregate empty-vector count %d", cnt)
+	}
 	if cnt > 0 {
 		r.emptyList = make([]*vector.Vector, 1)
 		r.bsFromEmptyList = make([][]bool, 1)
@@ -329,13 +406,55 @@ func (r *optSplitResult) unmarshalFromReader(reader io.Reader) error {
 	if err != nil {
 		return err
 	}
+	if cnt < 0 {
+		return moerr.NewInvalidInputNoCtxf(
+			"invalid aggregate distinct-state count %d", cnt)
+	}
 	if cnt > 0 {
-		r.distinct = make([]distinctHash, cnt)
-		for i := range r.distinct {
-			if err = r.distinct[i].unmarshalFromReader(reader, r.mp); err != nil {
+		expectedRows := r.resultList[0].Length()
+		if expectedRows == 0 {
+			return moerr.NewInvalidInputNoCtx(
+				"aggregate distinct state exists for an empty result")
+		}
+		// The current wire writes one flat distinct frame. Older writers used
+		// the selected map count as this outer value and then emitted one frame
+		// per physical result chunk. Accept both forms and normalize them to the
+		// single compacted result chunk decoded above.
+		legacy := cnt != 1
+		if legacy && cnt != int64(expectedRows) {
+			return moerr.NewInvalidInputNoCtxf(
+				"invalid legacy aggregate distinct-state count %d for %d result rows",
+				cnt, expectedRows)
+		}
+		flattened := newDistinctHash(r.mp)
+		for len(flattened.maps) < expectedRows {
+			frame := newDistinctHash(r.mp)
+			if err = frame.unmarshalFromReader(reader, r.mp); err != nil {
+				frame.free()
+				flattened.free()
 				return err
 			}
+			if len(frame.maps) == 0 ||
+				len(frame.maps) > expectedRows-len(flattened.maps) {
+				frame.free()
+				flattened.free()
+				return moerr.NewInvalidInputNoCtx(
+					"aggregate distinct-state frame does not match result rows")
+			}
+			flattened.maps = append(flattened.maps, frame.maps...)
+			flattened.itrs = append(flattened.itrs, frame.itrs...)
+			frame.maps = nil
+			frame.itrs = nil
+			if !legacy {
+				break
+			}
 		}
+		if len(flattened.maps) != expectedRows {
+			flattened.free()
+			return moerr.NewInvalidInputNoCtx(
+				"aggregate distinct-state rows do not match result rows")
+		}
+		r.distinct = []distinctHash{flattened}
 	}
 	return nil
 }
@@ -349,17 +468,23 @@ func (r *optSplitResult) init(
 	r.optInformation.shouldSetNullToEmptyGroup = needEmptyList
 	r.optInformation.chunkSize = GetChunkSizeFromType(typ)
 	r.optInformation.hasDistinct = hasDistinct
+	r.resetEmpty()
+}
 
-	r.resultList = append(r.resultList, vector.NewOffHeapVecWithType(typ))
-	if needEmptyList {
+func (r *optSplitResult) resetEmpty() {
+	r.free()
+	r.resultList = append(r.resultList, vector.NewOffHeapVecWithType(r.resultType))
+	if r.optInformation.doesThisNeedEmptyList {
 		r.emptyList = append(r.emptyList, vector.NewOffHeapVecWithType(types.T_bool.ToType()))
 		r.bsFromEmptyList = append(r.bsFromEmptyList, nil)
 	}
 
-	if hasDistinct {
-		r.distinct = append(r.distinct, newDistinctHash(mp))
+	if r.optInformation.hasDistinct {
+		r.distinct = append(r.distinct, newDistinctHash(r.mp))
 	}
 	r.nowIdx1 = 0
+	r.accessIdx1 = 0
+	r.accessIdx2 = 0
 }
 
 func (r *optSplitResult) getChunkSize() int {
@@ -478,7 +603,7 @@ func (r *optSplitResult) extendResultPurely(more int) error {
 	for i := 0; i < apFullPart; i++ {
 		k := r.appendPartK()
 		if err := r.extendMoreToKthGroup(k, r.optInformation.chunkSize); err != nil {
-			return nil
+			return err
 		}
 		r.setLengthPartK(k, r.optInformation.chunkSize)
 	}

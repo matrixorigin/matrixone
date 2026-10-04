@@ -197,7 +197,7 @@ id INT PRIMARY KEY,
 vec vecf32(8)
 );
 CREATE INDEX idx_inner USING ivfflat ON inner_product_test(vec) lists=4 op_type 'vector_inner_product';
-internal error: invalid op_type: 'vector_inner_product'
+invalid input: invalid op_type: 'vector_inner_product'
 INSERT INTO inner_product_test VALUES
 (1, '[1.0,2.0,3.0,4.0,5.0,6.0,7.0,8.0]'),
 (2, '[8.0,7.0,6.0,5.0,4.0,3.0,2.0,1.0]'),

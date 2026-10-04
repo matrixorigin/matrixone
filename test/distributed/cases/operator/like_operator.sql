@@ -235,3 +235,37 @@ create table t1(a varchar(20));
 insert into t1 values ('abc'), ('ABC'), ('abC');
 select * from t1 where a ilike '%abC%';
 show variables where value ilike "%matrixone%" and variable_name = "version_comment";
+
+-- issue #23104: explicit LIKE/ILIKE ESCAPE semantics
+select 'a_b' like 'a!_b' escape '!' as custom_escape;
+select 'a%b' not like 'a!%b' escape '!' as not_like_escape;
+select 'A_B' ilike 'aX_b' escape 'X' as ilike_escape;
+select 'A%B' not ilike 'aX%b' escape 'X' as not_ilike_escape;
+select 'a_b' like 'a界_b' escape '界' as unicode_escape;
+select 'axb' like 'a_b' escape '' as empty_escape;
+select 'axb' like 'a_b' escape null as null_escape, isnull('axb' like 'a_b' escape null) as null_escape_is_null;
+select 'a_b' like 'a!_b' escape null as null_escape_literal;
+
+prepare like_escape_stmt from 'select ? like ? escape ? as prepared_escape';
+set @like_value = 'a_b';
+set @like_pattern = 'a!_b';
+set @like_escape = '!';
+execute like_escape_stmt using @like_value, @like_pattern, @like_escape;
+set @like_value = 'axb';
+set @like_pattern = 'a_b';
+set @like_escape = null;
+execute like_escape_stmt using @like_value, @like_pattern, @like_escape;
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+execute like_escape_stmt using @like_value, @like_pattern, @like_escape;
+set @like_escape = '';
+execute like_escape_stmt using @like_value, @like_pattern, @like_escape;
+set sql_mode = default;
+deallocate prepare like_escape_stmt;
+
+drop table if exists like_escape_test;
+create table like_escape_test (v varchar(20), esc varchar(2));
+insert into like_escape_test values ('a_b', '!'), ('axb', '!');
+select v from like_escape_test where v like 'a!_%' escape '!' order by v;
+select v from like_escape_test where v like 'a!_b' escape esc;
+select 'a_b' like 'a!_b' escape '!!';
+drop table like_escape_test;

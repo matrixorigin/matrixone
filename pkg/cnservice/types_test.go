@@ -1,0 +1,62 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package cnservice
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/stretchr/testify/require"
+)
+
+func TestValidateRejectsRemovedMemoryEngines(t *testing.T) {
+	for _, engineType := range []EngineType{"memory", "non-distributed-memory"} {
+		t.Run(string(engineType), func(t *testing.T) {
+			cfg := Config{UUID: "cn1"}
+			cfg.Engine.Type = engineType
+			require.ErrorContains(t, cfg.Validate(), "unsupported CN engine")
+		})
+	}
+}
+
+func TestValidateHeartbeatDurations(t *testing.T) {
+	for name, interval := range map[string]time.Duration{
+		"negative interval":       -time.Nanosecond,
+		"exceeds progress budget": logservice.ScheduleCommandPollInterval + time.Nanosecond,
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := Config{UUID: "cn1"}
+			cfg.HAKeeper.HeatbeatInterval.Duration = interval
+			require.ErrorContains(t, cfg.Validate(), "hakeeper heartbeat interval")
+		})
+	}
+	cfg := Config{UUID: "cn1"}
+	cfg.HAKeeper.HeatbeatTimeout.Duration = -time.Nanosecond
+	require.ErrorContains(t, cfg.Validate(), "hakeeper heartbeat timeout")
+}
+
+func TestValidateServiceUUID(t *testing.T) {
+	require.Panics(t, func() { _ = (&Config{}).Validate() })
+	for _, id := range []string{".", "..", "../trace", "../shared2", "./cn", "cn/child", `cn\child`} {
+		t.Run(id, func(t *testing.T) {
+			err := (&Config{UUID: id}).Validate()
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig), "%v", err)
+		})
+	}
+	require.NoError(t, validateCNServiceUUID(strings.Repeat("é", 63)+"x"))
+}

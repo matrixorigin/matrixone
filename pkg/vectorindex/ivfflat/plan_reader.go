@@ -1,0 +1,1225 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package ivfflat
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
+
+// planReader is the IVF-FLAT implementation of an optimizer-visible vector
+// index scan. It owns one execution generation and its direct relation scanner.
+type planReader struct {
+	proc        *process.Process
+	spec        *plan.VectorIndexScan
+	req         searchplugin.Request
+	scanner     *relationScanner
+	closed      bool
+	generation  *planSearchGeneration
+	ownsContext bool
+
+	initialized  bool
+	keys         []any
+	distances    []float64
+	includeData  map[string][]any
+	includeNulls map[string][]bool
+	offset       int
+
+	recordExplainDiagnostics bool
+	explainDiagnostics       []*plan.Query
+	executionStats           *vectorindex.IvfExecutionDiagnostic
+}
+
+var _ engine.Reader = (*planReader)(nil)
+var _ engine.ExplainDiagnosticReader = (*planReader)(nil)
+
+func NewPlanReader(proc *process.Process, spec *plan.VectorIndexScan, req searchplugin.Request) (engine.Reader, error) {
+	if proc == nil || proc.GetTxnOperator() == nil || proc.GetSessionInfo() == nil || proc.GetSessionInfo().StorageEngine == nil {
+		return nil, moerr.NewInvalidStateNoCtx("ivfflat vector scan requires a process, transaction, and storage engine")
+	}
+	if spec == nil || spec.Index == nil || spec.SourceTable == nil {
+		return nil, moerr.NewInvalidInputNoCtx("ivfflat vector scan is missing source or index metadata")
+	}
+	if req.MembershipFilterRequired && !req.HasMembershipFilter {
+		return nil, moerr.NewInvalidStateNoCtx("ivfflat required membership filter is unavailable")
+	}
+	if req.CandidateBudget < req.ResultLimit {
+		return nil, moerr.NewInvalidInputNoCtx("ivfflat candidate budget is smaller than the result limit")
+	}
+	r := &planReader{
+		proc:                     proc,
+		spec:                     spec,
+		req:                      req,
+		recordExplainDiagnostics: req.CollectExplainDiagnostics,
+	}
+	if req.CollectExplainDiagnostics {
+		r.executionStats = new(vectorindex.IvfExecutionDiagnostic)
+	}
+	r.scanner = &relationScanner{
+		proc:           proc,
+		partitionCount: req.Identity.PartitionCount,
+		partitionIndex: req.Identity.PartitionIndex,
+		ownsInMemory:   req.Identity.PartitionCount <= 1 || !req.Identity.IsRemote,
+		txnOffset:      req.Identity.TxnOffset,
+		snapshot:       cloneIvfSnapshot(req.Identity.Snapshot),
+		executionStats: r.executionStats,
+	}
+	if req.Identity.PhysicalAccountID != nil {
+		accountID := *req.Identity.PhysicalAccountID
+		r.scanner.accountID = &accountID
+	}
+	return r, nil
+}
+
+func cloneIvfSnapshot(snapshot *plan.Snapshot) *plan.Snapshot {
+	if snapshot == nil {
+		return nil
+	}
+	clone := *snapshot
+	if snapshot.TS != nil {
+		ts := *snapshot.TS
+		clone.TS = &ts
+	}
+	if snapshot.Tenant != nil {
+		tenant := *snapshot.Tenant
+		clone.Tenant = &tenant
+	}
+	if snapshot.ExtraInfo != nil {
+		extra := *snapshot.ExtraInfo
+		clone.ExtraInfo = &extra
+	}
+	return &clone
+}
+
+func (r *planReader) Close() error {
+	if r == nil || r.closed {
+		return nil
+	}
+	r.closed = true
+	r.keys = nil
+	r.distances = nil
+	r.includeData = nil
+	r.includeNulls = nil
+	r.explainDiagnostics = nil
+	r.executionStats = nil
+	r.scanner = nil
+	r.req.MembershipFilter = nil
+	if r.ownsContext && r.proc != nil && r.proc.Cancel != nil {
+		r.proc.Cancel(nil)
+	}
+	if r.generation != nil {
+		r.generation.release()
+		r.generation = nil
+	}
+	r.proc = nil
+	return nil
+}
+
+// TakeExplainDiagnostics transfers this execution generation's diagnostics to
+// its owning operator. The slice is drained so repeated table-scan calls do not
+// duplicate completed search rounds.
+func (r *planReader) TakeExplainDiagnostics() []*plan.Query {
+	if r == nil || len(r.explainDiagnostics) == 0 {
+		return nil
+	}
+	diagnostics := r.explainDiagnostics
+	r.explainDiagnostics = nil
+	return diagnostics
+}
+
+func (r *planReader) Read(ctx context.Context, attrs []string, _ *plan.Expr, mp *mpool.MPool, out *batch.Batch) (bool, error) {
+	if r.closed {
+		return true, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if !r.initialized {
+		if err := r.initialize(); err != nil {
+			return false, err
+		}
+		r.initialized = true
+	}
+	if r.offset >= len(r.keys) {
+		return true, nil
+	}
+
+	out.CleanOnlyData()
+	end := min(len(r.keys), r.offset+8192)
+	for row := r.offset; row < end; row++ {
+		for col, attr := range attrs {
+			switch {
+			case attr == "pkid":
+				if err := vector.AppendAny(out.Vecs[col], r.keys[row], false, mp); err != nil {
+					return false, err
+				}
+			case attr == "score":
+				if err := vector.AppendFixed(out.Vecs[col], r.distances[row], false, mp); err != nil {
+					return false, err
+				}
+			case strings.HasPrefix(attr, catalog.SystemSI_IVFFLAT_IncludeColPrefix):
+				name := strings.TrimPrefix(attr, catalog.SystemSI_IVFFLAT_IncludeColPrefix)
+				values, ok := r.includeData[name]
+				if !ok || row >= len(values) {
+					return false, moerr.NewInternalErrorNoCtxf("ivfflat include output %q is not aligned", name)
+				}
+				isNull := row < len(r.includeNulls[name]) && r.includeNulls[name][row]
+				if err := vector.AppendAny(out.Vecs[col], values[row], isNull, mp); err != nil {
+					return false, err
+				}
+			default:
+				return false, moerr.NewInternalErrorNoCtxf("unknown ivfflat vector scan output %q", attr)
+			}
+		}
+	}
+	out.SetRowCount(end - r.offset)
+	r.offset = end
+	return false, nil
+}
+
+func (*planReader) SetOrderBy([]*plan.OrderBySpec)       {}
+func (*planReader) GetOrderBy() []*plan.OrderBySpec      { return nil }
+func (*planReader) SetIndexParam(*plan.IndexReaderParam) {}
+func (*planReader) SetFilterZM(objectio.ZoneMap)         {}
+
+func (r *planReader) initialize() error {
+	var err error
+	if r.generation != nil {
+		err = r.generation.search(r)
+	} else {
+		err = r.prepareSearch(false)
+	}
+	if err != nil {
+		return err
+	}
+	r.publishExecutionDiagnostic()
+	return nil
+}
+
+func (r *planReader) publishExecutionDiagnostic() {
+	if r == nil || !r.recordExplainDiagnostics || r.executionStats == nil {
+		return
+	}
+	if r.scanner == nil || r.scanner.partitionIndex == 0 {
+		r.executionStats.SearchCount++
+	}
+	r.executionStats.OutputRows += uint64(len(r.keys))
+	r.explainDiagnostics = append(r.explainDiagnostics,
+		vectorindex.EncodeIvfExecutionDiagnostic(*r.executionStats))
+	r.executionStats = nil
+	if r.scanner != nil {
+		r.scanner.executionStats = nil
+	}
+}
+
+func (r *planReader) newSearchProcess() *sqlexec.SqlProcess {
+	p := sqlexec.NewSqlProcess(r.proc)
+	p.RelationScanner = r.scanner
+	p.IvfRuntimeFilterData = r.req.MembershipFilter
+	p.IvfHasMembershipFilter = r.req.HasMembershipFilter
+	p.IvfMembershipFilterRequired = r.req.MembershipFilterRequired
+	if r.generation != nil {
+		p.IvfMembershipFilterObject = r.generation.membership
+	}
+	p.IndexReaderParam = &plan.IndexReaderParam{
+		Limit: ivfUint64Expr(r.req.CandidateBudget), OrderBy: []*plan.OrderBySpec{{Flag: r.spec.Direction}},
+		OrigFuncName: r.spec.DistanceFunction, DistRange: r.req.DistanceRange,
+	}
+	return p
+}
+
+func (r *planReader) prepareSearch(prepareOnly bool) error {
+	if r.req.CandidateBudget == 0 {
+		return nil
+	}
+	if r.req.HasMembershipFilter && len(r.req.MembershipFilter) == 0 {
+		// UNIQUEJOINKEYS with no payload is an exact empty build side. RF PASS
+		// is represented by HasMembershipFilter=false and must still search.
+		return nil
+	}
+	param := vectorindex.IvfParam{}
+	if err := json.Unmarshal([]byte(r.spec.Index.IndexAlgoParams), &param); err != nil {
+		return err
+	}
+	lists, err := strconv.Atoi(param.Lists)
+	if err != nil || lists <= 0 {
+		return moerr.NewInvalidInputNoCtxf("invalid IVF lists value %q", param.Lists)
+	}
+	metricType, ok := metric.OpTypeToIvfMetric[param.OpType]
+	if !ok {
+		return moerr.NewInvalidInputNoCtxf("invalid IVF op_type %q", param.OpType)
+	}
+	if len(r.spec.Index.Parts) == 0 || r.spec.SourceTableDef == nil || r.spec.SourceTableDef.Pkey == nil {
+		return moerr.NewInvalidInputNoCtx("incomplete IVF source/index metadata")
+	}
+
+	metaTable := r.hiddenTable(catalog.SystemSI_IVFFLAT_TblType_Metadata)
+	centroidTable := r.hiddenTable(catalog.SystemSI_IVFFLAT_TblType_Centroids)
+	entriesTable := r.hiddenTable(catalog.SystemSI_IVFFLAT_TblType_Entries)
+	if metaTable == "" || centroidTable == "" || entriesTable == "" {
+		return moerr.NewInvalidInputNoCtx("IVF vector scan is missing hidden-table references")
+	}
+	partName := r.spec.Index.Parts[0]
+	partPos, ok := r.spec.SourceTableDef.Name2ColIndex[partName]
+	if !ok {
+		return moerr.NewInvalidInputNoCtxf("IVF source vector column %q not found", partName)
+	}
+	pkName := r.spec.SourceTableDef.Pkey.PkeyColName
+	pkPos, ok := r.spec.SourceTableDef.Name2ColIndex[pkName]
+	if !ok {
+		return moerr.NewInvalidInputNoCtxf("IVF source primary key %q not found", pkName)
+	}
+	includeColumns := append([]string(nil), r.spec.Index.IncludedColumns...)
+	if len(includeColumns) == 0 {
+		includeColumns = append(includeColumns, r.spec.IncludedColumns...)
+	}
+	includeTypes := make([]int32, 0, len(includeColumns))
+	for _, name := range includeColumns {
+		pos, found := r.spec.SourceTableDef.Name2ColIndex[name]
+		if !found || pos < 0 || int(pos) >= len(r.spec.SourceTableDef.Cols) {
+			return moerr.NewInvalidInputNoCtxf("IVF included column %q not found in source table", name)
+		}
+		includeTypes = append(includeTypes, r.spec.SourceTableDef.Cols[pos].Typ.Id)
+	}
+
+	tblcfg := vectorindex.IndexTableConfig{
+		DbName:             r.spec.SourceTable.SchemaName,
+		SrcTable:           r.spec.SourceTableDef.Name,
+		MetadataTable:      metaTable,
+		IndexTable:         centroidTable,
+		EntriesTable:       entriesTable,
+		ThreadsSearch:      r.spec.ThreadsSearch,
+		Nprobe:             uint(max(uint32(1), r.spec.InitialProbeCount)),
+		PKeyType:           r.spec.SourceTableDef.Cols[pkPos].Typ.Id,
+		PKey:               pkName,
+		KeyPart:            partName,
+		KeyPartType:        r.spec.SourceTableDef.Cols[partPos].Typ.Id,
+		OrigFuncName:       r.spec.DistanceFunction,
+		IncludeColumns:     includeColumns,
+		IncludeColumnTypes: includeTypes,
+	}
+	sqlproc := r.newSearchProcess()
+	version, err := GetVersion(sqlproc, tblcfg)
+	if err != nil {
+		return err
+	}
+	idxcfg := vectorindex.IndexConfig{
+		Type:   vectorindex.IVFFLAT,
+		OpType: param.OpType,
+	}
+	idxcfg.Ivfflat.Lists = uint(lists)
+	idxcfg.Ivfflat.Metric = uint16(metricType)
+	idxcfg.Ivfflat.Version = version
+	expectedDimensions := r.spec.SourceTableDef.Cols[partPos].Typ.Width
+	idxcfg.Ivfflat.Dimensions = uint(expectedDimensions)
+	idxcfg.Ivfflat.VectorType = tblcfg.KeyPartType
+	idxcfg.Ivfflat.CentroidType = tblcfg.KeyPartType
+	switch types.T(tblcfg.KeyPartType) {
+	case types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+		idxcfg.Ivfflat.CentroidType = int32(types.T_array_float32)
+	}
+	if param.Quantization != "" {
+		if qt, found := quantizer.ToVectorType(param.Quantization); found {
+			idxcfg.Ivfflat.VectorType = int32(qt)
+			idxcfg.Ivfflat.CentroidType = int32(types.T_array_float32)
+		}
+	}
+
+	if idxcfg.Ivfflat.CentroidType == int32(types.T_array_float64) {
+		query, decodeErr := r.queryFloat64()
+		if decodeErr != nil {
+			return decodeErr
+		}
+		if dimensionErr := validateIvfQueryDimensions(expectedDimensions, len(query)); dimensionErr != nil {
+			return dimensionErr
+		}
+		if expectedDimensions <= 0 {
+			idxcfg.Ivfflat.Dimensions = uint(len(query))
+		}
+		return preparePlanReaderSearch(r, sqlproc, idxcfg, tblcfg, query, prepareOnly)
+	}
+	query, err := r.queryFloat32()
+	if err != nil {
+		return err
+	}
+	if err = validateIvfQueryDimensions(expectedDimensions, len(query)); err != nil {
+		return err
+	}
+	if expectedDimensions <= 0 {
+		idxcfg.Ivfflat.Dimensions = uint(len(query))
+	}
+	return preparePlanReaderSearch(r, sqlproc, idxcfg, tblcfg, query, prepareOnly)
+}
+
+func preparePlanReaderSearch[T types.RealNumbers](r *planReader, sqlproc *sqlexec.SqlProcess,
+	idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, query []T, prepareOnly bool) error {
+	if prepareOnly {
+		r.generation.search = func(reader *planReader) error {
+			return searchPlanReader(reader, reader.newSearchProcess(), idxcfg, tblcfg, query, false)
+		}
+	}
+	return searchPlanReader(r, sqlproc, idxcfg, tblcfg, query, prepareOnly)
+}
+
+func validateIvfQueryDimensions(expected int32, actual int) error {
+	if expected > 0 && int(expected) != actual {
+		return moerr.NewArrayInvalidOpNoCtx(int(expected), actual)
+	}
+	return nil
+}
+
+func (r *planReader) hiddenTable(role string) string {
+	for _, table := range r.spec.HiddenTables {
+		if table != nil && table.Role == role && table.Object != nil {
+			return table.Object.ObjName
+		}
+	}
+	return ""
+}
+
+func (r *planReader) queryFloat64() ([]float64, error) {
+	if types.T(r.req.QueryType.Id) != types.T_array_float64 {
+		return nil, moerr.NewInvalidInputNoCtx("f64 IVF centroids require a VECF64 query")
+	}
+	return types.BytesToArray[float64](r.req.QueryVector), nil
+}
+
+func (r *planReader) queryFloat32() ([]float32, error) {
+	switch types.T(r.req.QueryType.Id) {
+	case types.T_array_float32:
+		return types.BytesToArray[float32](r.req.QueryVector), nil
+	case types.T_array_float64:
+		values := types.BytesToArray[float64](r.req.QueryVector)
+		out := make([]float32, len(values))
+		for i, value := range values {
+			out[i] = float32(value)
+		}
+		return out, nil
+	case types.T_array_bf16:
+		return types.BF16ToFloat32Slice(types.BytesToArray[types.BF16](r.req.QueryVector)), nil
+	case types.T_array_float16:
+		return types.Float16ToFloat32Slice(types.BytesToArray[types.Float16](r.req.QueryVector)), nil
+	case types.T_array_int8:
+		return types.Int8ToFloat32Slice(types.BytesToArray[int8](r.req.QueryVector)), nil
+	case types.T_array_uint8:
+		return types.Uint8ToFloat32Slice(types.BytesToArray[uint8](r.req.QueryVector)), nil
+	default:
+		return nil, moerr.NewInvalidInputNoCtxf("unsupported IVF query type %s", types.T(r.req.QueryType.Id))
+	}
+}
+
+func searchPlanReader[T types.RealNumbers](
+	r *planReader,
+	sqlproc *sqlexec.SqlProcess,
+	idxcfg vectorindex.IndexConfig,
+	tblcfg vectorindex.IndexTableConfig,
+	query []T,
+	prepareOnly bool,
+) error {
+	cache.Cache.Once()
+	algo := NewIvfflatSearch[T](idxcfg, tblcfg)
+	algo.forceCPURoute = r.req.MembershipFilterRequired && r.req.Identity.PartitionCount > 1
+	key := fmt.Sprintf("%s:%d", tblcfg.IndexTable, idxcfg.Ivfflat.Version)
+	if source := r.spec.SourceTable; source != nil && source.PubInfo != nil {
+		key = fmt.Sprintf("tenant=%d:%s", source.PubInfo.TenantId, key)
+	}
+	if r.req.Identity.PartitionCount > 1 {
+		key = fmt.Sprintf("%s:%d/%d", key, r.req.Identity.PartitionIndex, r.req.Identity.PartitionCount)
+	}
+	if algo.forceCPURoute {
+		key += ":cpu-route-v1"
+	}
+	if prepareOnly {
+		cursor := new(vectorindex.IvfSearchCursor)
+		_, _, err := cache.Cache.Search(sqlproc, key, algo, query, vectorindex.RuntimeConfig{
+			Probe: uint(max(uint32(1), r.spec.InitialProbeCount)), SearchCursor: cursor, IvfPrepareRouteOnly: true,
+		})
+		if err == nil {
+			r.generation.route = append([]int64(nil), cursor.RankedCentroidIDs...)
+		}
+		return err
+	}
+
+	multiRound := r.req.HasFirstRound || r.spec.BucketExpandStep > 0
+	var cursor *vectorindex.IvfSearchCursor
+	if multiRound {
+		cursor = &vectorindex.IvfSearchCursor{}
+	} else if r.generation != nil {
+		cursor = &vectorindex.IvfSearchCursor{RankedCentroidIDs: r.generation.route}
+	}
+	limit := uint(r.req.CandidateBudget)
+	if uint64(limit) != r.req.CandidateBudget {
+		return moerr.NewInvalidInputNoCtx("IVF candidate limit exceeds platform uint")
+	}
+	if limit == 0 {
+		return nil
+	}
+	firstRoundLimit := uint(0)
+	if r.req.HasFirstRound {
+		if r.req.FirstRoundLimit > uint64(^uint(0)>>1) {
+			return moerr.NewInvalidInputNoCtx("IVF first-round limit is not a platform uint")
+		}
+		firstRoundLimit = uint(r.req.FirstRoundLimit)
+	}
+	r.includeData = make(map[string][]any, len(r.spec.IncludedColumns))
+	r.includeNulls = make(map[string][]bool, len(r.spec.IncludedColumns))
+	for _, name := range r.spec.IncludedColumns {
+		r.includeData[name] = nil
+		r.includeNulls[name] = nil
+	}
+
+	for {
+		includeResult := &vectorindex.IvfIncludeResult{}
+		rt := vectorindex.RuntimeConfig{
+			Limit:                   limit,
+			Probe:                   uint(max(uint32(1), r.spec.InitialProbeCount)),
+			OrigFuncName:            r.spec.DistanceFunction,
+			RuntimeFilterData:       r.req.MembershipFilter,
+			RequestedIncludeColumns: r.spec.IncludedColumns,
+			PushdownFilters:         r.req.PreFilters,
+			IncludeResult:           includeResult,
+			SearchRoundLimit:        firstRoundLimit,
+			BucketExpandStep:        uint(r.spec.BucketExpandStep),
+			SearchCursor:            cursor,
+			IvfRoutePrepared:        r.generation != nil && !multiRound,
+		}
+		keys, distances, err := cache.Cache.Search(sqlproc, key, algo, query, rt)
+		if err != nil {
+			return err
+		}
+		keySlice, ok := keys.([]any)
+		if !ok {
+			return moerr.NewInternalErrorNoCtx("ivfflat keys are not []any")
+		}
+		r.recordSearchRoundDiagnostic(cursor, firstRoundLimit, limit, len(keySlice))
+		r.keys = append(r.keys, keySlice...)
+		r.distances = append(r.distances, distances...)
+		for _, name := range r.spec.IncludedColumns {
+			r.includeData[name] = append(r.includeData[name], includeResult.Data[name]...)
+			r.includeNulls[name] = append(r.includeNulls[name], includeResult.Nulls[name]...)
+		}
+
+		if !multiRound || cursor == nil || cursor.Exhausted || uint64(len(r.keys)) >= uint64(limit) {
+			break
+		}
+		advancePlanCursor(cursor)
+	}
+	r.sortAndLimit(uint64(limit))
+	return nil
+}
+
+func (r *planReader) recordSearchRoundDiagnostic(
+	cursor *vectorindex.IvfSearchCursor,
+	configuredRoundLimit uint,
+	resultLimit uint,
+	outputRows int,
+) {
+	if r == nil || !r.recordExplainDiagnostics || cursor == nil ||
+		cursor.Round == 0 || cursor.CurrentBucketCount == 0 {
+		return
+	}
+	rowLimit := configuredRoundLimit
+	if rowLimit == 0 {
+		rowLimit = resultLimit
+	}
+	rows := uint64(outputRows)
+	if generation := r.generation; generation != nil && generation.parallelism > 1 {
+		// Only single-round readers can share a generation at DOP > 1. Emit
+		// one logical round from its last completed shard, not one per reader.
+		generation.outputRows.Add(rows)
+		if generation.completed.Add(1) != generation.parallelism {
+			return
+		}
+		rows = generation.outputRows.Load()
+	}
+	r.explainDiagnostics = append(r.explainDiagnostics,
+		vectorindex.EncodeIvfSearchRoundDiagnostic(vectorindex.IvfSearchRoundDiagnostic{
+			Round:        uint64(cursor.Round),
+			BucketOffset: uint64(cursor.NextBucketOffset),
+			BucketCount:  uint64(cursor.CurrentBucketCount),
+			RowLimit:     uint64(rowLimit),
+			OutputRows:   rows,
+			Exhausted:    cursor.Exhausted,
+		}))
+}
+
+func advancePlanCursor(cursor *vectorindex.IvfSearchCursor) {
+	if cursor == nil || cursor.Round == 0 || cursor.Exhausted {
+		return
+	}
+	next := cursor.NextBucketOffset + cursor.CurrentBucketCount
+	total := uint(len(cursor.RankedCentroidIDs))
+	if next >= total {
+		cursor.NextBucketOffset = total
+		cursor.CurrentBucketCount = 0
+		cursor.Exhausted = true
+		return
+	}
+	remaining := total - next
+	count := cursor.CurrentBucketCount * 2
+	if count < cursor.CurrentBucketCount {
+		count = remaining
+	}
+	if count > 4096 {
+		count = 4096
+	}
+	if count > remaining {
+		count = remaining
+	}
+	cursor.NextBucketOffset = next
+	cursor.CurrentBucketCount = count
+}
+
+func (r *planReader) sortAndLimit(candidateLimit uint64) {
+	order := make([]int, len(r.keys))
+	for i := range order {
+		order[i] = i
+	}
+	desc := r.spec.Direction&plan.OrderBySpec_DESC != 0
+	sort.SliceStable(order, func(i, j int) bool {
+		left, right := r.distances[order[i]], r.distances[order[j]]
+		if left == right {
+			return fmt.Sprint(r.keys[order[i]]) < fmt.Sprint(r.keys[order[j]])
+		}
+		if desc {
+			return left > right
+		}
+		return left < right
+	})
+	limit := len(order)
+	if candidateLimit < uint64(limit) {
+		limit = int(candidateLimit)
+	}
+	keys := make([]any, 0, limit)
+	distances := make([]float64, 0, limit)
+	includeData := make(map[string][]any, len(r.includeData))
+	includeNulls := make(map[string][]bool, len(r.includeNulls))
+	for name := range r.includeData {
+		includeData[name] = make([]any, 0, limit)
+		includeNulls[name] = make([]bool, 0, limit)
+	}
+	for _, idx := range order[:limit] {
+		keys = append(keys, r.keys[idx])
+		distances = append(distances, r.distances[idx])
+		for name, values := range r.includeData {
+			includeData[name] = append(includeData[name], values[idx])
+			includeNulls[name] = append(includeNulls[name], r.includeNulls[name][idx])
+		}
+	}
+	r.keys, r.distances = keys, distances
+	r.includeData, r.includeNulls = includeData, includeNulls
+}
+
+// relationScanner executes typed hidden-table reads in the caller's current
+// transaction. It is the direct-engine replacement for sqlexec.RunSql.
+type relationScanner struct {
+	proc           *process.Process
+	generation     *planSearchGeneration
+	accountID      *uint32
+	snapshot       *plan.Snapshot
+	partitionCount int32
+	partitionIndex int32
+	ownsInMemory   bool
+	txnOffset      int
+	executionStats *vectorindex.IvfExecutionDiagnostic
+}
+
+var _ sqlexec.RelationScanExecutor = (*relationScanner)(nil)
+
+func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res executor.Result, err error) {
+	res = executor.NewResult(s.proc.Mp())
+	if req.FilterHint.BF != nil {
+		defer req.FilterHint.BF.Free()
+	}
+	ctx := s.proc.Ctx
+	if req.ReadPolicy != 0 {
+		ctx = fileservice.WithFileServicePolicy(ctx, fileservice.GetFileServicePolicy(ctx)|req.ReadPolicy)
+	}
+	if s.accountID != nil {
+		ctx = defines.AttachAccountId(ctx, *s.accountID)
+	}
+	txn := s.proc.GetTxnOperator()
+	if s.generation != nil {
+		txn = s.generation.snapshot
+	} else if s.snapshot != nil && s.snapshot.TS != nil &&
+		(s.snapshot.TS.LogicalTime != 0 || s.snapshot.TS.PhysicalTime != 0) &&
+		s.snapshot.TS.Less(txn.Txn().SnapshotTS) {
+		clone := s.proc.GetCloneTxnOperator()
+		if clone == nil {
+			clone = txn.CloneSnapshotOp(*s.snapshot.TS)
+			s.proc.SetCloneTxnOperator(clone)
+		}
+		txn = clone
+	}
+	db, err := s.proc.GetSessionInfo().StorageEngine.Database(ctx, req.Schema, txn)
+	if err != nil {
+		return res, err
+	}
+	rel, err := db.Relation(ctx, req.Table, s.proc)
+	if err != nil {
+		return res, err
+	}
+	rel = engine.NewRelationHandle(rel)
+	tableDef := rel.GetTableDef(ctx)
+	if tableDef == nil {
+		return res, moerr.NewInvalidStateNoCtxf("ivfflat hidden relation %s.%s has no table definition", req.Schema, req.Table)
+	}
+	var statsStart time.Time
+	if s.executionStats != nil {
+		statsStart = time.Now()
+	}
+
+	partitionCount := req.PartitionCount
+	if partitionCount <= 0 {
+		partitionCount = s.partitionCount
+	}
+	if partitionCount <= 0 {
+		partitionCount = 1
+	}
+	partitionIndex := req.PartitionIndex
+	if req.PartitionCount <= 0 {
+		partitionIndex = s.partitionIndex
+	}
+	txnOffset := s.txnOffset
+
+	rsp := &engine.RangesShuffleParam{
+		Node:              &plan.Node{NodeType: plan.Node_TABLE_SCAN, TableDef: tableDef},
+		CNCNT:             partitionCount,
+		CNIDX:             partitionIndex,
+		IsLocalCN:         s.ownsInMemory,
+		ShuffleByObjectID: partitionCount > 1,
+	}
+	policy := relationScanPolicy(partitionCount, s.ownsInMemory)
+	relData, err := rel.Ranges(ctx, engine.RangesParam{
+		BlockFilters: req.BlockFilters,
+		TxnOffset:    txnOffset,
+		Policy:       policy,
+		Rsp:          rsp,
+	})
+	if err != nil {
+		return res, err
+	}
+	selectedBlocks := 0
+	if relData != nil {
+		selectedBlocks = relData.DataCnt()
+	}
+	readers, err := rel.BuildReaders(
+		ctx,
+		s.proc,
+		req.Filter,
+		relData,
+		1,
+		txnOffset,
+		req.IndexParam != nil && (!req.PostFilterTopOnly || req.FilterBeforeTopK),
+		engine.Policy_CheckAll,
+		req.FilterHint,
+	)
+	if err != nil {
+		return res, err
+	}
+	var readerTopStats []objectio.IndexReaderTopStats
+	if s.executionStats != nil && tableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
+		readerTopStats = make([]objectio.IndexReaderTopStats, len(readers))
+		for i, reader := range readers {
+			if provider, ok := reader.(engine.ExplainVectorTopStatsReader); ok {
+				provider.SetExplainVectorTopStats(&readerTopStats[i])
+			}
+		}
+	}
+	var filterExecutor colexec.ExpressionExecutor
+	if req.Filter != nil {
+		filterExecutor, err = colexec.NewExpressionExecutor(s.proc, req.Filter)
+		if err != nil {
+			for _, reader := range readers {
+				_ = reader.Close()
+			}
+			return res, err
+		}
+		defer filterExecutor.Free()
+	}
+	defer func() {
+		for _, reader := range readers {
+			if closeErr := reader.Close(); err == nil && closeErr != nil {
+				err = closeErr
+			}
+		}
+		if err != nil {
+			res.Close()
+			res.Batches = nil
+		}
+	}()
+	var earlyColumns []int
+	if req.FilterBeforeTopK {
+		// Filtered storage Top-K needs only predicate inputs. Primary keys and
+		// projected INCLUDE columns that do not participate in the predicate
+		// are materialized for the final K rows, not every candidate.
+		earlyColumns = relationPredicateColumns(req.Columns, req.Filter)
+	} else if req.PostFilterTopOnly {
+		// Exact predicates must be evaluated from narrow scalar columns before
+		// the local fallback reads embeddings.
+		earlyColumns = relationFilterEarlyColumns(tableDef, req.Columns, req.Filter)
+	}
+
+	for _, reader := range readers {
+		if !req.PostFilterTopOnly && !req.FilterBeforeTopK {
+			reader.SetIndexParam(req.IndexParam)
+		}
+		for {
+			bat, makeErr := makeRelationScanBatch(tableDef, req.Columns)
+			if makeErr != nil {
+				return res, makeErr
+			}
+			var (
+				end           bool
+				readErr       error
+				filterApplied bool
+				topKApplied   bool
+			)
+			if filterExecutor != nil && len(earlyColumns) > 0 {
+				if topReader, ok := reader.(engine.FilteredTopKReader); ok && req.FilterBeforeTopK {
+					end, topKApplied, readErr = topReader.ReadWithFilterAndTopK(
+						ctx,
+						req.Columns,
+						earlyColumns,
+						func(filtered *batch.Batch, loadedColumns []int) (engine.ReaderFilterResult, error) {
+							return filterRelationBatchRows(s.proc, filterExecutor, filtered, loadedColumns)
+						},
+						req.IndexParam,
+						s.proc.Mp(),
+						bat,
+					)
+					filterApplied = true
+				} else if lateReader, ok := reader.(engine.LateMaterializationReader); ok {
+					end, readErr = lateReader.ReadWithFilter(
+						ctx,
+						req.Columns,
+						earlyColumns,
+						func(filtered *batch.Batch, loadedColumns []int) (engine.ReaderFilterResult, error) {
+							return filterRelationBatchRows(s.proc, filterExecutor, filtered, loadedColumns)
+						},
+						s.proc.Mp(),
+						bat,
+					)
+					filterApplied = true
+				} else {
+					end, readErr = reader.Read(ctx, req.Columns, req.Filter, s.proc.Mp(), bat)
+				}
+			} else {
+				end, readErr = reader.Read(ctx, req.Columns, req.Filter, s.proc.Mp(), bat)
+			}
+			if readErr != nil {
+				bat.Clean(s.proc.Mp())
+				return res, readErr
+			}
+			if end {
+				bat.Clean(s.proc.Mp())
+				break
+			}
+			if topKApplied && !bat.IsEmpty() && len(bat.Vecs) != len(req.Columns)+1 {
+				bat.Clean(s.proc.Mp())
+				return res, moerr.NewInternalErrorNoCtxf(
+					"filtered storage Top-K returned %d vectors, expected %d",
+					len(bat.Vecs), len(req.Columns)+1)
+			}
+			if filterExecutor != nil && !filterApplied && !bat.IsEmpty() {
+				if readErr = filterRelationBatch(s.proc, filterExecutor, bat); readErr != nil {
+					bat.Clean(s.proc.Mp())
+					return res, readErr
+				}
+			}
+			if req.BatchTransform != nil && !bat.IsEmpty() {
+				if readErr = req.BatchTransform(bat); readErr != nil {
+					bat.Clean(s.proc.Mp())
+					return res, readErr
+				}
+			}
+			if bat.IsEmpty() {
+				bat.Clean(s.proc.Mp())
+				continue
+			}
+			res.Batches = append(res.Batches, bat)
+			if vectorTopLimit, ok := relationVectorTopLimit(req.IndexParam, req.PostFilterTopOnly || req.FilterBeforeTopK); ok && resultRowCount(res.Batches) > 2*vectorTopLimit {
+				if err = compactRelationTop(&res, vectorTopLimit, req.IndexParam.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0); err != nil {
+					return res, err
+				}
+			}
+		}
+	}
+	if vectorTopLimit, ok := relationVectorTopLimit(req.IndexParam, req.PostFilterTopOnly || req.FilterBeforeTopK); ok {
+		if err = compactRelationTop(&res, vectorTopLimit, req.IndexParam.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0); err != nil {
+			return res, err
+		}
+	}
+	if s.executionStats != nil {
+		s.recordRelationExecutionStats(
+			tableDef.TableType,
+			selectedBlocks,
+			len(readers),
+			resultRowCount(res.Batches),
+			time.Since(statsStart),
+			readerTopStats,
+		)
+	}
+	return res, nil
+}
+
+func (s *relationScanner) recordRelationExecutionStats(
+	tableType string,
+	blocks int,
+	readers int,
+	rows int,
+	elapsed time.Duration,
+	topStats []objectio.IndexReaderTopStats,
+) {
+	if s == nil || s.executionStats == nil {
+		return
+	}
+	blockCount := uint64(max(blocks, 0))
+	rowCount := uint64(max(rows, 0))
+	elapsedNS := uint64(max(elapsed.Nanoseconds(), int64(0)))
+	switch tableType {
+	case catalog.SystemSI_IVFFLAT_TblType_Metadata:
+		s.executionStats.MetadataBlocks += blockCount
+		s.executionStats.MetadataRows += rowCount
+		s.executionStats.MetadataTimeNS += elapsedNS
+	case catalog.SystemSI_IVFFLAT_TblType_Centroids:
+		s.executionStats.CentroidBlocks += blockCount
+		s.executionStats.CentroidRows += rowCount
+		s.executionStats.CentroidTimeNS += elapsedNS
+	case catalog.SystemSI_IVFFLAT_TblType_Entries:
+		s.executionStats.ReaderCount += uint64(max(readers, 0))
+		s.executionStats.EntryBlocksSelected += blockCount
+		s.executionStats.EntryOutputRows += rowCount
+		s.executionStats.EntryTimeNS += elapsedNS
+		for _, stats := range topStats {
+			s.executionStats.EntryBlocksRead += stats.BlocksRead
+			s.executionStats.StorageFilterInputRows += stats.StorageFilterInputRows
+			s.executionStats.StorageFilterOutputRows += stats.StorageFilterOutputRows
+			s.executionStats.VectorRowsScored += stats.VectorRowsScored
+			s.executionStats.VectorChunksRead += stats.VectorChunksRead
+			s.executionStats.VectorChunkCacheHits += stats.VectorChunkCacheHits
+			s.executionStats.VectorCompressedBytes += stats.VectorCompressedBytes
+			s.executionStats.VectorDecodedBytes += stats.VectorDecodedBytes
+			s.executionStats.TopKOutputRows += stats.TopKOutputRows
+		}
+	}
+}
+
+// relationScanPolicy mirrors the distributed table-scan ownership contract:
+// the coordinator owns in-memory rows independently of its object partition
+// ordinal. Remote partitions read only persisted objects assigned by object ID.
+// Replicated metadata/centroid requests set partitionCount=1 and therefore
+// read all visible data on every executing CN.
+func relationScanPolicy(partitionCount int32, ownsInMemory bool) engine.DataCollectPolicy {
+	if partitionCount > 1 && !ownsInMemory {
+		return engine.Policy_CollectCommittedPersistedData
+	}
+	return engine.Policy_CollectAllData
+}
+
+func filterRelationBatch(proc *process.Process, executor colexec.ExpressionExecutor, bat *batch.Batch) error {
+	_, err := filterRelationBatchRows(proc, executor, bat, nil)
+	return err
+}
+
+func filterRelationBatchRows(
+	proc *process.Process,
+	executor colexec.ExpressionExecutor,
+	bat *batch.Batch,
+	loadedColumns []int,
+) (engine.ReaderFilterResult, error) {
+	result, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
+	if err != nil {
+		return engine.ReaderFilterResult{}, err
+	}
+	values := vector.GenerateFunctionFixedTypeParameter[bool](result)
+	sels := make([]int64, 0, bat.RowCount())
+	for row := 0; row < bat.RowCount(); row++ {
+		value, isNull := values.GetValue(uint64(row))
+		if !isNull && value {
+			sels = append(sels, int64(row))
+		}
+	}
+	return selectRelationBatchRows(bat, sels, loadedColumns), nil
+}
+
+// selectRelationBatchRows preserves unloaded slots when columns were materialized
+// selectively. A nil column list denotes a fully materialized batch.
+func selectRelationBatchRows(bat *batch.Batch, sels []int64, loadedColumns []int) engine.ReaderFilterResult {
+	if len(sels) == bat.RowCount() {
+		return engine.ReaderFilterResult{All: true}
+	}
+	if len(sels) == 0 {
+		bat.CleanOnlyData()
+		return engine.ReaderFilterResult{Sels: sels}
+	}
+	if loadedColumns == nil {
+		bat.Shrink(sels, false)
+	} else {
+		for _, pos := range loadedColumns {
+			bat.Vecs[pos].Shrink(sels, false)
+		}
+		bat.SetRowCount(len(sels))
+	}
+	return engine.ReaderFilterResult{Sels: sels}
+}
+
+// relationFilterEarlyColumns returns the output positions that must be loaded
+// before evaluating an exact relation filter. Wide vector columns unused by
+// the predicate are delayed until after filtering, so INCLUDE predicates do
+// not copy every probed entry vector before discarding most rows.
+func relationFilterEarlyColumns(
+	tableDef *plan.TableDef,
+	columns []string,
+	filter *plan.Expr,
+) []int {
+	if tableDef == nil || filter == nil || len(columns) < 2 {
+		return nil
+	}
+	referenced := make(map[int32]struct{})
+	if !collectRelationFilterColumns(filter, int32(len(columns)), referenced) {
+		return nil
+	}
+	early := make([]int, 0, len(columns))
+	hasLateVector := false
+	for outputPos, name := range columns {
+		defPos, ok := tableDef.Name2ColIndex[name]
+		if !ok {
+			defPos, ok = tableDef.Name2ColIndex[strings.ToLower(name)]
+		}
+		if !ok || defPos < 0 || int(defPos) >= len(tableDef.Cols) || tableDef.Cols[defPos] == nil {
+			return nil
+		}
+		_, usedByFilter := referenced[int32(outputPos)]
+		if types.T(tableDef.Cols[defPos].Typ.Id).IsArrayRelate() && !usedByFilter {
+			hasLateVector = true
+			continue
+		}
+		early = append(early, outputPos)
+	}
+	if !hasLateVector || len(early) == 0 {
+		return nil
+	}
+	return early
+}
+
+// relationPredicateColumns returns exactly the output columns referenced by
+// the exact residual. Filter-before-TopK readers can postpone every other
+// column until the bounded winner set is known.
+func relationPredicateColumns(columns []string, filter *plan.Expr) []int {
+	if filter == nil || len(columns) < 2 {
+		return nil
+	}
+	referenced := make(map[int32]struct{})
+	if !collectRelationFilterColumns(filter, int32(len(columns)), referenced) ||
+		len(referenced) == 0 || len(referenced) >= len(columns) {
+		return nil
+	}
+	earlyColumns := make([]int, 0, len(referenced))
+	for pos := range referenced {
+		earlyColumns = append(earlyColumns, int(pos))
+	}
+	sort.Ints(earlyColumns)
+	return earlyColumns
+}
+
+func collectRelationFilterColumns(expr *plan.Expr, columnCount int32, columns map[int32]struct{}) bool {
+	if expr == nil {
+		return true
+	}
+	switch item := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if item.Col == nil || item.Col.ColPos < 0 || item.Col.ColPos >= columnCount {
+			return false
+		}
+		columns[item.Col.ColPos] = struct{}{}
+		return true
+	case *plan.Expr_F:
+		if item.F == nil {
+			return false
+		}
+		for _, arg := range item.F.Args {
+			if !collectRelationFilterColumns(arg, columnCount, columns) {
+				return false
+			}
+		}
+		return true
+	case *plan.Expr_List:
+		if item.List == nil {
+			return false
+		}
+		for _, arg := range item.List.List {
+			if !collectRelationFilterColumns(arg, columnCount, columns) {
+				return false
+			}
+		}
+		return true
+	case *plan.Expr_Lit:
+		if item.Lit == nil {
+			return false
+		}
+		return collectRelationFilterColumns(item.Lit.Src, columnCount, columns)
+	case *plan.Expr_P:
+		return item.P != nil
+	case *plan.Expr_V:
+		return item.V != nil
+	case *plan.Expr_T:
+		return item.T != nil
+	case *plan.Expr_Max:
+		return item.Max != nil
+	case *plan.Expr_Vec:
+		return item.Vec != nil
+	case *plan.Expr_Fold:
+		return item.Fold != nil
+	case *plan.Expr_Raw, *plan.Expr_W, *plan.Expr_Sub, *plan.Expr_Corr:
+		return false
+	default:
+		return false
+	}
+}
+
+func relationVectorTopLimit(param *plan.IndexReaderParam, postFilterTopOnly bool) (int, bool) {
+	if param == nil || len(param.OrderBy) == 0 || param.OrderBy[0] == nil {
+		return 0, false
+	}
+	if !postFilterTopOnly && param.OrderBy[0].Expr.GetF() == nil {
+		return 0, false
+	}
+	lit := param.GetLimit().GetLit()
+	if lit == nil || lit.Isnull {
+		return 0, false
+	}
+	value, ok := lit.Value.(*plan.Literal_U64Val)
+	if !ok || value.U64Val == 0 || value.U64Val > uint64(^uint(0)>>1) {
+		return 0, false
+	}
+	return int(value.U64Val), true
+}
+
+func resultRowCount(batches []*batch.Batch) int {
+	total := 0
+	for _, bat := range batches {
+		total += bat.RowCount()
+	}
+	return total
+}
+
+type relationTopRow struct {
+	batch int
+	row   int
+	dist  float64
+}
+
+func compactRelationTop(res *executor.Result, limit int, desc bool) error {
+	if res == nil || limit <= 0 || len(res.Batches) == 0 {
+		return nil
+	}
+	rows := make([]relationTopRow, 0, resultRowCount(res.Batches))
+	for batchIdx, bat := range res.Batches {
+		if len(bat.Vecs) == 0 {
+			continue
+		}
+		distVec := bat.Vecs[len(bat.Vecs)-1]
+		for row := 0; row < bat.RowCount(); row++ {
+			if distVec.IsNull(uint64(row)) {
+				continue
+			}
+			rows = append(rows, relationTopRow{
+				batch: batchIdx,
+				row:   row,
+				dist:  vector.GetFixedAtNoTypeCheck[float64](distVec, row),
+			})
+		}
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		if desc {
+			return rows[i].dist > rows[j].dist
+		}
+		return rows[i].dist < rows[j].dist
+	})
+	if len(rows) > limit {
+		rows = rows[:limit]
+	}
+	first := res.Batches[0]
+	out := batch.NewWithSize(len(first.Vecs))
+	out.Attrs = append(out.Attrs, first.Attrs...)
+	for i, src := range first.Vecs {
+		out.Vecs[i] = vector.NewVec(*src.GetType())
+	}
+	for _, selected := range rows {
+		src := res.Batches[selected.batch]
+		for col, vec := range src.Vecs {
+			// Vector top pushdown deliberately clears the entry vector after
+			// consuming it. Preserve that empty slot; scanEntries removes it.
+			if vec.Length() == 0 && src.RowCount() != 0 {
+				continue
+			}
+			if err := out.Vecs[col].UnionOne(vec, int64(selected.row), res.Mp); err != nil {
+				out.Clean(res.Mp)
+				return err
+			}
+		}
+	}
+	out.SetRowCount(len(rows))
+	for _, bat := range res.Batches {
+		bat.Clean(res.Mp)
+	}
+	res.Batches = []*batch.Batch{out}
+	return nil
+}
+
+func makeRelationScanBatch(tableDef *plan.TableDef, columns []string) (*batch.Batch, error) {
+	bat := batch.NewWithSize(len(columns))
+	bat.Attrs = append(bat.Attrs, columns...)
+	for i, name := range columns {
+		pos, ok := tableDef.Name2ColIndex[name]
+		if !ok {
+			pos, ok = tableDef.Name2ColIndex[strings.ToLower(name)]
+		}
+		if !ok || int(pos) >= len(tableDef.Cols) {
+			bat.Clean(nil)
+			return nil, moerr.NewInternalErrorNoCtxf("ivfflat hidden column %q not found in %s", name, tableDef.Name)
+		}
+		colType := tableDef.Cols[pos].Typ
+		bat.Vecs[i] = vector.NewVec(types.New(types.T(colType.Id), colType.Width, colType.Scale))
+	}
+	return bat, nil
+}

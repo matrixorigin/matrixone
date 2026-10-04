@@ -35,9 +35,12 @@ select mo_ctl('dn', 'flush', 'd1.t2');
   ]
 }
 
-select Sleep(1);
-➤ Sleep(1)[-6,8,0]  𝄀
-0
+select table_name, table_cnt from table_stats('d1.t1') g;
+➤ table_name[12,-1,0]  ¦  table_cnt[8,54,0]  𝄀
+d1.t1  ¦  100000.0
+select table_name, table_cnt from table_stats('d1.t2') g;
+➤ table_name[12,-1,0]  ¦  table_cnt[8,54,0]  𝄀
+d1.t2  ¦  1000000.0
 explain select count(*) from t1 where c1 = 1;
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
@@ -56,7 +59,7 @@ Project  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on d1.t1  𝄀
               Filter Cond: (t1.c1 > 10)  𝄀
-              Block Filter Cond: (t1.c1 > 10)
+              Block Filter Cond: (t1.c1 > 10), prefix_in_range(t1.__mo_cbkey_002c1002c2)
 select count(*) from t1 where c1 > 10;
 ➤ count(*)[-5,64,0]  𝄀
 99890
@@ -77,8 +80,8 @@ Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on d1.t1  𝄀
-              Filter Cond: prefix_between(t1.__mo_cbkey_002c1002c2)  𝄀
-              Block Filter Cond: prefix_between(t1.__mo_cbkey_002c1002c2), t1.c1 BETWEEN 1 AND 5
+              Filter Cond: t1.c1 BETWEEN 1 AND 5  𝄀
+              Block Filter Cond: t1.c1 BETWEEN 1 AND 5, prefix_between(t1.__mo_cbkey_002c1002c2)
 select count(*) from t1 where c1 between 1 and 5;
 ➤ count(*)[-5,64,0]  𝄀
 50
@@ -121,8 +124,8 @@ Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on d1.t1  𝄀
-              Filter Cond: t1.__mo_cbkey_002c1002c2 BETWEEN '::' AND '::'  𝄀
-              Block Filter Cond: t1.__mo_cbkey_002c1002c2 BETWEEN '::' AND '::', (t1.c1 = 4), t1.c2 BETWEEN 1 AND 5
+              Filter Cond: t1.__mo_cbkey_002c1002c2 BETWEEN '<opaque>' AND '<opaque>'  𝄀
+              Block Filter Cond: t1.__mo_cbkey_002c1002c2 BETWEEN '<opaque>' AND '<opaque>', (t1.c1 = 4), t1.c2 BETWEEN 1 AND 5
 select count(*) from t1 where c1=4 and c2 between 1 and 5;
 ➤ count(*)[-5,64,0]  𝄀
 10
@@ -144,7 +147,7 @@ Project  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on d1.t2  𝄀
               Filter Cond: (t2.c1 > 10)  𝄀
-              Block Filter Cond: (t2.c1 > 10)
+              Block Filter Cond: (t2.c1 > 10), prefix_in_range(t2.__mo_cpkey_col)
 select count(*) from t2 where c1 > 10;
 ➤ count(*)[-5,64,0]  𝄀
 890000
@@ -165,8 +168,8 @@ Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on d1.t2  𝄀
-              Filter Cond: prefix_between(t2.__mo_cpkey_col)  𝄀
-              Block Filter Cond: prefix_between(t2.__mo_cpkey_col), t2.c1 BETWEEN 1 AND 5
+              Filter Cond: t2.c1 BETWEEN 1 AND 5  𝄀
+              Block Filter Cond: t2.c1 BETWEEN 1 AND 5, prefix_between(t2.__mo_cpkey_col)
 select count(*) from t2 where c1 between 1 and 5;
 ➤ count(*)[-5,64,0]  𝄀
 50000
@@ -209,8 +212,8 @@ Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on d1.t2  𝄀
-              Filter Cond: t2.__mo_cpkey_col BETWEEN '::' AND '::'  𝄀
-              Block Filter Cond: t2.__mo_cpkey_col BETWEEN '::' AND '::', (t2.c1 = 4), t2.c2 BETWEEN 1 AND 5
+              Filter Cond: t2.__mo_cpkey_col BETWEEN '<opaque>' AND '<opaque>'  𝄀
+              Block Filter Cond: t2.__mo_cpkey_col BETWEEN '<opaque>' AND '<opaque>', (t2.c1 = 4), t2.c2 BETWEEN 1 AND 5
 select count(*) from t2 where c1=4 and c2 between 1 and 5;
 ➤ count(*)[-5,64,0]  𝄀
 1
@@ -231,8 +234,8 @@ Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on d1.t2  𝄀
-              Filter Cond: true, t2.__mo_cpkey_col BETWEEN '::' AND '::d'  𝄀
-              Block Filter Cond: t2.__mo_cpkey_col BETWEEN '::' AND '::d', (t2.c1 = 5), (t2.c2 >= 3), (t2.c2 <= 100)
+              Filter Cond: true, t2.__mo_cpkey_col BETWEEN '<opaque>' AND '<opaque>'  𝄀
+              Block Filter Cond: t2.__mo_cpkey_col BETWEEN '<opaque>' AND '<opaque>', (t2.c1 = 5), (t2.c2 >= 3), (t2.c2 <= 100)
 select count(*) from t2 where c1 = 5 and c2 >= 3 and c2 <= 100;
 ➤ count(*)[-5,64,0]  𝄀
 1

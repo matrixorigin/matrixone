@@ -24,6 +24,7 @@ import (
 	"time"
 
 	fallocate "github.com/detailyang/go-fallocate"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -32,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -138,6 +140,40 @@ func TestHnswSearchFloat32(t *testing.T) {
 	}
 }
 
+func TestHnswSearchFloat64Overflow(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
+	idxcfg.Usearch.Metric = usearch.L2sq
+	idxcfg.Usearch.Quantization = usearch.F64
+	tblcfg := vectorindex.IndexTableConfig{}
+
+	s := NewHnswSearch[float64](idxcfg, tblcfg)
+
+	idx, err := usearch.NewIndex(idxcfg.Usearch)
+	require.NoError(t, err)
+	defer idx.Destroy()
+	require.NoError(t, idx.Reserve(1))
+
+	model := &HnswModel[float64]{Id: "abc-0", Index: idx}
+	require.NoError(t, model.Add(0, []float64{0, 0, 0}))
+	s.Indexes = []*HnswModel[float64]{model}
+
+	// A finite float64 query whose squared L2 distance (1e40) overflows float32; usearch
+	// returns the distance as float32 (+Inf), so Search must fail fast rather than serve the
+	// saturated score (#29040 / #29050).
+	rt := vectorindex.RuntimeConfig{Limit: 4, OrigFuncName: metric.DistFn_L2Distance}
+	_, _, err = s.Search(sqlproc, []float64{1e20, 0, 0}, rt)
+	require.Error(t, err)
+
+	// A small-magnitude float64 query stays finite -- no false reject.
+	_, dists, err := s.Search(sqlproc, []float64{1, 0, 0}, rt)
+	require.NoError(t, err)
+	require.NotEmpty(t, dists)
+}
+
 func TestHnswSearchFloat32_BadQueryType(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
@@ -153,6 +189,40 @@ func TestHnswSearchFloat32_BadQueryType(t *testing.T) {
 	// pass non-[]float32 query — Search returns error, SearchFloat32 propagates it
 	err := s.SearchFloat32(sqlproc, "wrong", rt, nil, nil)
 	require.Error(t, err)
+}
+
+func TestHnswSearchCosineRejected(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
+	idxcfg.Usearch.Metric = usearch.Cosine
+	s := NewHnswSearch[float32](idxcfg, vectorindex.IndexTableConfig{})
+
+	// A zero or subnormal (float32-squared-norm-underflowing) cosine query cannot be scored on the
+	// index to the SQL contract; it is rejected fail-fast, not silently rewritten (#29082).
+	_, _, err := s.Search(sqlproc, []float32{0, 0, 0}, vectorindex.RuntimeConfig{
+		Limit:        1,
+		OrigFuncName: "cosine_distance",
+	})
+	require.ErrorContains(t, err, "normalized")
+
+	_, _, err = s.Search(sqlproc, []float32{1e-20, 1e-20, 1e-20}, vectorindex.RuntimeConfig{
+		Limit:        1,
+		OrigFuncName: "cosine_distance",
+	})
+	require.ErrorContains(t, err, "normalized")
+
+	// A normalized cosine query is NOT rejected: it proceeds to the index; with no loaded index
+	// files it simply returns an empty result.
+	keys, dists, err := s.Search(sqlproc, []float32{1, 0, 0}, vectorindex.RuntimeConfig{
+		Limit:        1,
+		OrigFuncName: "cosine_distance",
+	})
+	require.NoError(t, err)
+	require.Empty(t, keys)
+	require.Empty(t, dists)
 }
 
 func TestBoundedHnswSearchLimits(t *testing.T) {
@@ -195,28 +265,39 @@ func TestHnswSearchUnlockSynchronizesWithWaitPredicate(t *testing.T) {
 	require.Zero(t, s.Concurrency.Load())
 }
 
-func TestHnswSearchUpdateConfig(t *testing.T) {
-	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
-	tblcfg := vectorindex.IndexTableConfig{}
-	s := NewHnswSearch[float32](idxcfg, tblcfg)
-	require.NoError(t, s.UpdateConfig(nil))
-}
-
 func TestHnsw(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
-	// stub runSql function
+	oldRunSQL := runSql
+	oldRunSQLStreaming := runSql_streaming
+	oldTTL := cache.VectorIndexCacheTTL
+	oldCache := cache.Cache
+
+	// Stub the SQL functions and isolate the process-global cache state.
 	runSql = mock_runSql
 	runSql_streaming = mock_runSql_streaming
-
-	// init cache
-	cache.VectorIndexCacheTTL = 2 * time.Second
-	cache.VectorIndexCacheTTL = 2 * time.Second
-	cache.Cache = cache.NewVectorIndexCache()
-
-	time.Sleep(1999 * time.Millisecond)
+	cacheTTL := 2 * time.Second
+	nthread := 64
+	iterations := 20000
+	if testing.Short() {
+		// PR CI needs the concurrent load/search/expiry transitions, not the
+		// production-scale stress count.
+		cacheTTL = 100 * time.Millisecond
+		nthread = 16
+		iterations = 1000
+	}
+	cache.VectorIndexCacheTTL = cacheTTL
+	testCache := cache.NewVectorIndexCache()
+	cache.Cache = testCache
+	t.Cleanup(func() {
+		testCache.Destroy()
+		cache.Cache = oldCache
+		cache.VectorIndexCacheTTL = oldTTL
+		runSql = oldRunSQL
+		runSql_streaming = oldRunSQLStreaming
+	})
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
 	idxcfg.Usearch.Metric = usearch.L2sq
@@ -224,17 +305,14 @@ func TestHnsw(t *testing.T) {
 	fp32a := []float32{0, 1, 2}
 
 	var wg sync.WaitGroup
-	nthread := 64
 
 	for i := 0; i < nthread; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for j := 0; j < 20000; j++ {
-				cache.Cache.Once()
-
+			for j := 0; j < iterations; j++ {
 				algo := NewHnswSearch[float32](idxcfg, tblcfg)
-				anykeys, distances, err := cache.Cache.Search(sqlproc, tblcfg.IndexTable, algo, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+				anykeys, distances, err := testCache.Search(sqlproc, tblcfg.IndexTable, algo, fp32a, vectorindex.RuntimeConfig{Limit: 4})
 				require.Nil(t, err)
 				keys, ok := anykeys.([]int64)
 				require.True(t, ok)
@@ -249,8 +327,23 @@ func TestHnsw(t *testing.T) {
 
 	wg.Wait()
 
-	time.Sleep(3 * time.Second)
-	cache.Cache.Destroy()
+	// This stress test intentionally does not start the cache ticker.  Starting
+	// it would introduce a second eviction owner: the ticker can claim the
+	// entry, pause before deleting it, and make the synchronous assertion below
+	// observe an intermediate state.  The cache package owns wall-clock ticker
+	// coverage; this test owns concurrent HNSW load/search and the explicit
+	// idle-eviction invariant.
+	value, loaded := testCache.IndexMap.Load(tblcfg.IndexTable)
+	require.True(t, loaded, "concurrent HNSW searches must leave a resident cache entry")
+	entry, ok := value.(*cache.VectorIndexSearch)
+	require.True(t, ok, "HNSW cache must contain VectorIndexSearch entries")
+	entry.ExpireAt.Store(time.Now().Add(-time.Second).UnixMicro())
+	testCache.HouseKeeping()
+
+	_, loaded = testCache.IndexMap.Load(tblcfg.IndexTable)
+	require.False(t, loaded, "an idle expired HNSW entry must be evicted by HouseKeeping")
+	require.Equal(t, int32(cache.STATUS_DESTROYED), entry.Status.Load(),
+		"HouseKeeping must finish destroying the evicted HNSW entry")
 }
 
 func makeMetaBatch(proc *process.Process) *batch.Batch {
@@ -297,11 +390,11 @@ func makeIndexBatch(proc *process.Process) *batch.Batch {
 }
 
 func TestFallocate(t *testing.T) {
-
-	f, err := os.Create("apple")
-	require.Nil(t, err)
-	fallocate.Fallocate(f, 0, 10000)
-	f.Close()
+	f, err := os.CreateTemp(t.TempDir(), "fallocate-")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = f.Close() })
+	require.NoError(t, fallocate.Fallocate(f, 0, 10000))
+	require.NoError(t, f.Close())
 }
 
 func makeMetaBatch2Files(proc *process.Process) *batch.Batch {
@@ -353,4 +446,240 @@ func makeIndexBatch2Files(proc *process.Process, id int) *batch.Batch {
 	vector.AppendBytes(bat.Vecs[1], dat, false, proc.Mp())
 	bat.SetRowCount(1)
 	return bat
+}
+
+// TestHnswSearchIsStaleUncheckableEvicts: the index model loaded fine but generation capture
+// failed (genValid=false — a transient error on the tiny generation SELECT after the model itself
+// loaded). IsStale must report stale, NOT a no-op: an uncheckable entry whose TTL keeps sliding
+// on every search would otherwise serve pre-CDC/rebuild data forever. Reporting stale forces a
+// bounded evict+reload that retries capture and self-heals once it succeeds.
+func TestHnswSearchIsStaleUncheckableEvicts(t *testing.T) {
+	// genValid=false: model present, generation never captured.
+	s := &HnswSearch[float32]{genValid: false, cnUUID: "some-cn"}
+	stale, err := s.IsStale()
+	require.NoError(t, err)
+	require.True(t, stale, "an entry that can't self-check freshness must be evicted, not pinned")
+
+	// no service to re-query with (cnUUID empty) is equally uncheckable → stale.
+	s2 := &HnswSearch[float32]{genValid: true, cnUUID: ""}
+	stale, err = s2.IsStale()
+	require.NoError(t, err)
+	require.True(t, stale)
+}
+
+// TestHnswSyncNextTimestampMonotonic covers the enforced-monotonic generation: even when the
+// existing max timestamp EXCEEDS the writer's wall-clock (cross-CN clock skew, or a local clock
+// stepping backward), nextTimestamp still allocates strictly above it — so MAX(metadata.timestamp)
+// always advances on a CDC save and HnswSearch.IsStale cannot miss the update.
+func TestHnswSyncNextTimestampMonotonic(t *testing.T) {
+	// existing max is 1h in the FUTURE relative to wall-clock.
+	future := time.Now().UnixMicro() + int64(time.Hour/time.Microsecond)
+	s := &HnswSync[float32]{indexes: []*HnswModel[float32]{{Timestamp: future - 1}, {Timestamp: future}}}
+	require.Equal(t, future+1, s.nextTimestamp(), "must advance past the existing max, not use wall-clock")
+
+	// no existing rows → falls back to wall-clock now (bounded).
+	empty := &HnswSync[float32]{}
+	ts := empty.nextTimestamp()
+	require.Positive(t, ts)
+	require.LessOrEqual(t, ts, time.Now().UnixMicro()+1)
+}
+
+// TestHnswSearchIsStaleQueryError covers the IsStale query path: with a captured generation but
+// an unresolvable CN service, queryHnswGeneration errors, and IsStale treats a query error as
+// stale (so a dropped/rebuilt index's dead cache entry is reclaimed) while surfacing the error.
+func TestHnswSearchIsStaleQueryError(t *testing.T) {
+	s := &HnswSearch[float32]{
+		genValid: true,
+		cnUUID:   "no-such-cn-uuid",
+		Tblcfg:   vectorindex.IndexTableConfig{DbName: "db", MetadataTable: "m", IndexTable: "s"},
+	}
+	stale, err := s.IsStale()
+	require.Error(t, err)
+	require.True(t, stale)
+}
+
+// TestHnswGenerationSql pins the freshness-generation query: the per-model checksum column over the
+// metadata table (the multiset of MD5 model-file checksums is the content fingerprint).
+func TestHnswGenerationSql(t *testing.T) {
+	sql := hnswGenerationSql(vectorindex.IndexTableConfig{DbName: "db", MetadataTable: "__meta"})
+	require.Contains(t, sql, "checksum")
+	require.Contains(t, sql, "`db`.`__meta`")
+}
+
+func genChecksumResult(t *testing.T, mp *mpool.MPool, sums ...string) executor.Result {
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	for _, s := range sums {
+		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte(s), false, mp))
+	}
+	bat.SetRowCount(len(sums))
+	return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}
+}
+
+// TestGenChecksumsFingerprint pins the multiset digest: it is order-independent, sensitive to any
+// checksum change, and the empty result has a well-defined (constant) fingerprint with count 0.
+func TestGenChecksumsFingerprint(t *testing.T) {
+	mp := mpool.MustNewZero()
+	fpAB, n := genChecksums(genChecksumResult(t, mp, "A", "B"))
+	require.Equal(t, int64(2), n)
+	fpBA, _ := genChecksums(genChecksumResult(t, mp, "B", "A"))
+	require.Equal(t, fpAB, fpBA, "fingerprint is a multiset digest (order-independent)")
+	fpAC, _ := genChecksums(genChecksumResult(t, mp, "A", "C"))
+	require.NotEqual(t, fpAB, fpAC, "a changed checksum changes the fingerprint")
+
+	fpEmpty, c := genChecksums(executor.Result{})
+	require.Zero(t, c)
+	fpNil, cNil := genChecksums(executor.Result{Batches: []*batch.Batch{nil}})
+	require.Zero(t, cNil)
+	require.Equal(t, fpEmpty, fpNil) // both empty → same constant fingerprint
+	require.NotEqual(t, fpAB, fpEmpty)
+}
+
+// TestHnswSearchIsStaleContentChange is the regression for the empty-state ABA the checksum
+// generation closes: a rebuild with DIFFERENT model content but the SAME model count — which a
+// timestamp-or-count generation could re-mint after an intermediate (0,0) empty state — produces a
+// different checksum fingerprint, so IsStale still reports stale. Identical content is not stale.
+func TestHnswSearchIsStaleContentChange(t *testing.T) {
+	mp := mpool.MustNewZero()
+	old := runSqlAutoCommit
+	defer func() { runSqlAutoCommit = old }()
+	cfg := vectorindex.IndexTableConfig{DbName: "db", MetadataTable: "m", IndexTable: "s"}
+
+	// current on-disk content: two models {A, C2}. The second model's content changed C1→C2.
+	runSqlAutoCommit = func(_ context.Context, _ string, _ uint32, _, _ string) (executor.Result, error) {
+		return genChecksumResult(t, mp, "A", "C2"), nil
+	}
+
+	// loaded from {A, C1}, count 2 — same count as current, different content.
+	loadedFp, loadedN := genChecksums(genChecksumResult(t, mp, "A", "C1"))
+	s := &HnswSearch[float32]{genValid: true, cnUUID: "cn", Tblcfg: cfg, loadedFp: loadedFp, loadedCount: loadedN}
+	stale, err := s.IsStale()
+	require.NoError(t, err)
+	require.True(t, stale, "different content → different checksum fingerprint, even at the same count")
+
+	// control: loaded at the current content {A, C2} → not stale (identical bytes are not stale).
+	curFp, curN := genChecksums(genChecksumResult(t, mp, "A", "C2"))
+	s2 := &HnswSearch[float32]{genValid: true, cnUUID: "cn", Tblcfg: cfg, loadedFp: curFp, loadedCount: curN}
+	stale, err = s2.IsStale()
+	require.NoError(t, err)
+	require.False(t, stale)
+}
+
+// TestLoadHnswGenerationHappy stubs the live-txn reader to cover the checksum-fingerprint load path
+// (order-independent digest + count) plus the read-error branch.
+func TestLoadHnswGenerationHappy(t *testing.T) {
+	mp := mpool.MustNewZero()
+	cfg := vectorindex.IndexTableConfig{DbName: "db", MetadataTable: "m", IndexTable: "s"}
+	old := runSql
+	defer func() { runSql = old }()
+
+	runSql = func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+		return genChecksumResult(t, mp, "cksA", "cksB", "cksC"), nil
+	}
+	fp, count, err := loadHnswGeneration(nil, cfg)
+	require.NoError(t, err)
+	require.Equal(t, int64(3), count)
+	want, _ := genChecksums(genChecksumResult(t, mp, "cksC", "cksA", "cksB")) // same multiset, different order
+	require.Equal(t, want, fp)
+
+	// read error → propagated.
+	runSql = func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+		return executor.Result{}, moerr.NewInternalErrorNoCtx("read failed")
+	}
+	_, _, err = loadHnswGeneration(nil, cfg)
+	require.Error(t, err)
+}
+
+// TestQueryHnswGenerationReadError covers the background reader's read-error branch.
+func TestQueryHnswGenerationReadError(t *testing.T) {
+	cfg := vectorindex.IndexTableConfig{DbName: "db", MetadataTable: "m", IndexTable: "s"}
+	oldAuto := runSqlAutoCommit
+	defer func() { runSqlAutoCommit = oldAuto }()
+	runSqlAutoCommit = func(_ context.Context, _ string, _ uint32, _, _ string) (executor.Result, error) {
+		return executor.Result{}, moerr.NewInternalErrorNoCtx("read failed")
+	}
+	_, _, err := queryHnswGeneration(context.Background(), "cn", 0, cfg)
+	require.Error(t, err)
+}
+
+// TestSearchIntoUnsupported covers the SearchInto stub.
+func TestSearchIntoUnsupported(t *testing.T) {
+	require.ErrorContains(t, (&HnswSearch[float32]{}).SearchInto(nil, nil, vectorindex.RuntimeConfig{}, nil), "not supported")
+}
+
+// Before Load the models carry metadata only, so GetIndexSize estimates from nrow rather than
+// reporting 0 -- that estimate is what lets the cache reclaim room for an hnsw load ahead of it.
+// The per-row constant is measured against usearch's own memory_usage(); see
+// hnswViewedBytesPerRow.
+// The pre-load estimate is BOTH terms, on the same basis the post-load charge uses: nrow
+// predicts usearch's allocation (measured within 0.4% of MemoryUsage) and FileSize is the
+// mapping. Estimating on the same basis is what makes the reservation match the charge.
+func TestGetIndexSizeEstimatesFromNrowBeforeLoad(t *testing.T) {
+	const file = int64(13 << 20)
+	s := &HnswSearch[float32]{Indexes: []*HnswModel[float32]{
+		{Id: "a", Nrow: 20000, FileSize: file},
+		{Id: "b", Nrow: 5000},
+	}}
+	host, device := s.GetIndexSize()
+	require.EqualValues(t, 25000*hnswViewedBytesPerRow+file, host,
+		"pre-load cost is the allocation estimate PLUS the mapping it will take")
+	require.EqualValues(t, 0, device, "hnsw is never device resident")
+}
+
+// A generation written before the nrow column existed reports 0, and the entry is charged after
+// its load instead. It must not fall back to FileSize, which over-states the host cost ~80x.
+// A generation written before the nrow column existed contributes nothing for the allocation
+// term -- but its mapping is real and its size is known, so FileSize is still charged. Charging
+// zero here is what let N such generations sit resident while the governor saw none of them.
+func TestGetIndexSizeUnknownNrowStillChargesTheMapping(t *testing.T) {
+	const file = int64(13 << 20)
+	s := &HnswSearch[float32]{Indexes: []*HnswModel[float32]{
+		{Id: "legacy", Nrow: 0, FileSize: file},
+	}}
+	host, _ := s.GetIndexSize()
+	require.EqualValues(t, file, host,
+		"an unknown row count drops only the allocation term, never the mapping")
+}
+
+// TestHnswEmptyGeneration: a loaded generation with no models, or only empty (0-vector) models
+// (a freshly created index, or the async-build window before the first model is written), reports
+// EmptyGeneration -> true, so the cache does not retain a vector-less generation. A generation
+// with any populated model reports false.
+func TestHnswEmptyGeneration(t *testing.T) {
+	newModel := func(withVec bool) *HnswModel[float32] {
+		idxcfg := usearch.DefaultConfig(3)
+		idxcfg.Metric = usearch.L2sq
+		uidx, err := usearch.NewIndex(idxcfg)
+		require.NoError(t, err)
+		if withVec {
+			require.NoError(t, uidx.Reserve(1))
+			require.NoError(t, uidx.Add(usearch.Key(0), []float32{1, 2, 3}))
+		}
+		return &HnswModel[float32]{Index: uidx}
+	}
+
+	// No models loaded -> empty generation.
+	require.True(t, (&HnswSearch[float32]{}).EmptyGeneration())
+
+	// All loaded models empty (usearch Len 0) -> empty generation.
+	e1 := newModel(false)
+	defer func() { require.NoError(t, e1.Index.Destroy()) }()
+	require.True(t, (&HnswSearch[float32]{Indexes: []*HnswModel[float32]{e1}}).EmptyGeneration())
+
+	// At least one populated model -> not empty.
+	e2 := newModel(false)
+	defer func() { require.NoError(t, e2.Index.Destroy()) }()
+	full := newModel(true)
+	defer func() { require.NoError(t, full.Index.Destroy()) }()
+	require.False(t, (&HnswSearch[float32]{Indexes: []*HnswModel[float32]{e2, full}}).EmptyGeneration())
+
+	// A model whose size cannot be read (nil usearch handle -> Empty errors) fails CLOSED:
+	// counting it as vector-less would evict a full generation and re-stream every model file
+	// on the next query.
+	e3 := newModel(false)
+	defer func() { require.NoError(t, e3.Index.Destroy()) }()
+	unreadable := &HnswModel[float32]{Id: "no-handle"}
+	_, err := unreadable.Empty()
+	require.Error(t, err, "a nil usearch handle is what makes this model unreadable")
+	require.False(t, (&HnswSearch[float32]{Indexes: []*HnswModel[float32]{e3, unreadable}}).EmptyGeneration())
 }

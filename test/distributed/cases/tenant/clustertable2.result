@@ -98,15 +98,15 @@ Field    Type    Null    Key    Default    Extra    Comment
 id    VARCHAR(128)    NO    PRI    null        
 name    VARCHAR(255)    NO        null        
 account_name    VARCHAR(128)    NO    UNI    null        
-provider    TEXT(0)    NO        null        
-provider_id    TEXT(0)    YES        null        
-region    TEXT(0)    NO        null        
-plan_type    TEXT(0)    NO        null        
-version    TEXT(0)    YES        null        
-status    TEXT(0)    YES        null        
-quota    TEXT(0)    YES        null        
-network_policy    TEXT(0)    YES        null        
-created_by    TEXT(0)    YES        null        
+provider    LONGTEXT    NO        null        
+provider_id    LONGTEXT    YES        null        
+region    LONGTEXT    NO        null        
+plan_type    LONGTEXT    NO        null        
+version    LONGTEXT    YES        null        
+status    LONGTEXT    YES        null        
+quota    LONGTEXT    YES        null        
+network_policy    LONGTEXT    YES        null        
+created_by    LONGTEXT    YES        null        
 created_at    DATETIME(3)    YES        null        
 account_id    INT UNSIGNED(32)    NO    PRI    null        the account_id added by the mo
 create account acc_idx ADMIN_NAME 'root' IDENTIFIED BY '123456';
@@ -115,15 +115,15 @@ Field    Type    Null    Key    Default    Extra    Comment
 id    VARCHAR(128)    NO    PRI    null        
 name    VARCHAR(255)    NO        null        
 account_name    VARCHAR(128)    NO    UNI    null        
-provider    TEXT(0)    NO        null        
-provider_id    TEXT(0)    YES        null        
-region    TEXT(0)    NO        null        
-plan_type    TEXT(0)    NO        null        
-version    TEXT(0)    YES        null        
-status    TEXT(0)    YES        null        
-quota    TEXT(0)    YES        null        
-network_policy    TEXT(0)    YES        null        
-created_by    TEXT(0)    YES        null        
+provider    LONGTEXT    NO        null        
+provider_id    LONGTEXT    YES        null        
+region    LONGTEXT    NO        null        
+plan_type    LONGTEXT    NO        null        
+version    LONGTEXT    YES        null        
+status    LONGTEXT    YES        null        
+quota    LONGTEXT    YES        null        
+network_policy    LONGTEXT    YES        null        
+created_by    LONGTEXT    YES        null        
 created_at    DATETIME(3)    YES        null        
 account_id    INT UNSIGNED(32)    NO    PRI    null        the account_id added by the mo
 drop table mo_instance;

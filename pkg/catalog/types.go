@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -40,6 +42,63 @@ const (
 	PartitionSubTableWildcard = "\\%!\\%%\\%!\\%%"
 
 	ExternalFilePath = "__mo_filepath"
+	// ExternalFilePathColId identifies the synthetic filepath column that the
+	// query builder appends to external scans. It survives column-position
+	// remapping, unlike TbColToDataCol's original file-field indexes.
+	ExternalFilePathColId = ^uint64(0)
+
+	// ExternalQuery is the hidden column of query-driven foreign and MongoDB
+	// external tables. The query text plays the role the file name plays
+	// for __mo_filepath: `__mo_query = '<text>'` predicates select what is sent
+	// to the foreign source, and every returned row carries the text of the
+	// query that produced it. See docs/cn/esql_sql_exttab.md.
+	ExternalQuery      = "__mo_query"
+	ExternalQueryColId = ^uint64(0) - 1
+
+	// Kafka external table (ENGINE = KAFKA) synthetic columns. The four
+	// message columns are selectable per-row metadata; the three read
+	// controls are WHERE-only knobs resolved at compile time (their conjuncts
+	// are consumed, and selecting them returns the effective value used by
+	// the scan). See docs/cn/kafka_exttab.md and issue #27518.
+	KafkaMessageID         = "__mo_message_id"
+	KafkaMessageIDColId    = ^uint64(0) - 2
+	KafkaMessageTS         = "__mo_message_ts"
+	KafkaMessageTSColId    = ^uint64(0) - 3
+	KafkaMessageKey        = "__mo_message_key"
+	KafkaMessageKeyColId   = ^uint64(0) - 4
+	KafkaMessageValue      = "__mo_message_value"
+	KafkaMessageValueColId = ^uint64(0) - 5
+	KafkaReadStartID       = "__mo_read_start_id"
+	KafkaReadStartIDColId  = ^uint64(0) - 6
+	KafkaReadSize          = "__mo_read_size"
+	KafkaReadSizeColId     = ^uint64(0) - 7
+	KafkaReadTimeout       = "__mo_read_timeout"
+	KafkaReadTimeoutColId  = ^uint64(0) - 8
+
+	// External-scan error-mode synthetic columns (issue #27517). They let a
+	// text-format scan (CSV/JSONL, whatever engine delivers the bytes) report a
+	// record it could not parse instead of failing the whole query.
+	//
+	// ExternalFileLine is the physical line the record starts on — for a
+	// multi-line quoted CSV record, its FIRST line. For engines with no file
+	// (Kafka, datastream) it is the record ordinal within the current read.
+	// It is always set, with or without an error.
+	//
+	// ExternalErrorMessage / ExternalErrorText are NULL for a record that
+	// parsed. Requesting either one is what switches the scan into error mode:
+	// a failing record then yields NULL for every user column, the reason in
+	// ExternalErrorMessage and the raw record in ExternalErrorText. Asking only
+	// for ExternalFileLine does NOT enable it — the query still fails — so a
+	// scan that never mentions the error columns keeps today's behavior and
+	// pays nothing.
+	ExternalFileLine      = "__mo_file_line"
+	ExternalFileLineColId = ^uint64(0) - 9
+
+	ExternalErrorMessage      = "__mo_error_message"
+	ExternalErrorMessageColId = ^uint64(0) - 10
+
+	ExternalErrorText      = "__mo_error_text"
+	ExternalErrorTextColId = ^uint64(0) - 11
 
 	// MOAutoIncrTable mo auto increment table name
 	MOAutoIncrTable = "mo_increment_columns"
@@ -48,6 +107,13 @@ const (
 	TableTailAttrCommitTs    = objectio.TombstoneAttr_CommitTs_Attr
 	TableTailAttrAborted     = objectio.TombstoneAttr_Abort_Attr
 	TableTailAttrPKVal       = objectio.TombstoneAttr_PK_Attr
+
+	// TableChanges metadata columns are reserved because table_changes exposes
+	// them in the same row shape as source-table columns.
+	TableChangesAttrChangeType    = "change_type"
+	TableChangesAttrCommitTS      = "commit_ts"
+	TableChangesAttrTableID       = "table_id"
+	TableChangesAttrSchemaVersion = "schema_version"
 
 	MOAccountTable = "mo_account"
 	// MOVersionTable mo version table. This table records information about the
@@ -99,7 +165,86 @@ var InternalTableNames = map[string]int8{
 }
 
 func ContainExternalHidenCol(col string) bool {
+	// Only __mo_filepath is hidden globally BY NAME (pre-existing behavior).
+	// __mo_query is scoped: use IsForeignQueryCol (name + reserved ColId) so a
+	// real __mo_query column in a pre-existing schema keeps working.
 	return col == ExternalFilePath
+}
+
+// IsForeignQueryCol reports whether (name, colId) is the SYNTHETIC __mo_query
+// column of a query-driven foreign or MongoDB external scan, as opposed to a
+// real user column of the same name in a pre-existing schema (new schemas
+// cannot create one: see IsReservedExternalColName). The historical function
+// name is retained because the identity is shared by both scan families.
+func IsForeignQueryCol(name string, colId uint64) bool {
+	return name == ExternalQuery && colId == ExternalQueryColId
+}
+
+// IsKafkaHiddenCol reports whether (name, colId) is one of the SYNTHETIC
+// Kafka external-scan columns (scoped by reserved ColId like
+// IsForeignQueryCol, so a real column of the same name in a pre-existing
+// schema keeps working).
+func IsKafkaHiddenCol(name string, colId uint64) bool {
+	switch name {
+	case KafkaMessageID:
+		return colId == KafkaMessageIDColId
+	case KafkaMessageTS:
+		return colId == KafkaMessageTSColId
+	case KafkaMessageKey:
+		return colId == KafkaMessageKeyColId
+	case KafkaMessageValue:
+		return colId == KafkaMessageValueColId
+	case KafkaReadStartID:
+		return colId == KafkaReadStartIDColId
+	case KafkaReadSize:
+		return colId == KafkaReadSizeColId
+	case KafkaReadTimeout:
+		return colId == KafkaReadTimeoutColId
+	}
+	return false
+}
+
+// IsExternalErrorCol reports whether (name, colId) is one of the SYNTHETIC
+// error-mode columns of an external scan, scoped by reserved ColId like
+// IsForeignQueryCol so a real column of the same name in a pre-existing schema
+// keeps working.
+func IsExternalErrorCol(name string, colId uint64) bool {
+	switch name {
+	case ExternalFileLine:
+		return colId == ExternalFileLineColId
+	case ExternalErrorMessage:
+		return colId == ExternalErrorMessageColId
+	case ExternalErrorText:
+		return colId == ExternalErrorTextColId
+	}
+	return false
+}
+
+// IsExternalErrorToleranceCol reports whether (name, colId) is one of the two
+// columns whose presence in a query switches the scan into error-tolerant mode.
+// ExternalFileLine is deliberately excluded: it is pure position metadata, and
+// selecting it alone must not change whether a parse error fails the query.
+func IsExternalErrorToleranceCol(name string, colId uint64) bool {
+	switch name {
+	case ExternalErrorMessage:
+		return colId == ExternalErrorMessageColId
+	case ExternalErrorText:
+		return colId == ExternalErrorTextColId
+	}
+	return false
+}
+
+// IsReservedExternalColName reports whether a column name is reserved for the
+// synthetic external-scan columns and must be rejected at CREATE/ALTER.
+func IsReservedExternalColName(name string) bool {
+	switch name {
+	case ExternalFilePath, ExternalQuery,
+		KafkaMessageID, KafkaMessageTS, KafkaMessageKey, KafkaMessageValue,
+		KafkaReadStartID, KafkaReadSize, KafkaReadTimeout,
+		ExternalFileLine, ExternalErrorMessage, ExternalErrorText:
+		return true
+	}
+	return false
 }
 
 func IsHiddenTable(name string) bool {
@@ -118,6 +263,18 @@ const (
 	System_Role    = uint32(0)
 	System_Account = uint32(0)
 )
+
+func IsTableChangesMetadataColumn(name string) bool {
+	switch strings.ToLower(name) {
+	case TableChangesAttrChangeType,
+		TableChangesAttrCommitTS,
+		TableChangesAttrTableID,
+		TableChangesAttrSchemaVersion:
+		return true
+	default:
+		return false
+	}
+}
 
 const (
 	MO_COMMENT_NO_DEL_HINT = "[mo_no_del_hint]"
@@ -154,6 +311,11 @@ const (
 	// MO_SUBS subscriptions meta table
 	MO_SUBS = "mo_subs"
 
+	// MO_VIEW_DEPENDENCIES stores exact reverse bindings for persisted Views.
+	MO_VIEW_DEPENDENCIES = "mo_view_dependencies"
+	// MO_VIEW_REFRESH stores monotonic refresh state and worker leases.
+	MO_VIEW_REFRESH = "mo_view_refresh"
+
 	// MO_SNAPSHOTS
 	MO_SNAPSHOTS = "mo_snapshots"
 
@@ -169,6 +331,7 @@ const (
 
 	MO_CDC_TASK      = "mo_cdc_task"
 	MO_CDC_WATERMARK = "mo_cdc_watermark"
+	MO_CDC_SNAPSHOT  = "mo_cdc_snapshot"
 
 	MO_DATA_KEY = "mo_data_key"
 
@@ -213,12 +376,13 @@ const (
 	MO_SQL_STMT_CU    = "sql_statement_cu"
 
 	// default database name for catalog
-	MO_CATALOG   = "mo_catalog"
-	MO_DATABASE  = "mo_database"
-	MO_TABLES    = "mo_tables"
-	MO_COLUMNS   = "mo_columns"
-	MO_USER      = "mo_user"
-	MO_ROLE_RULE = "mo_role_rule"
+	MO_CATALOG        = "mo_catalog"
+	MO_DATABASE       = "mo_database"
+	MO_TABLES         = "mo_tables"
+	MO_COLUMNS        = "mo_columns"
+	MO_COLUMNS_UPDATE = "mo_columns_update"
+	MO_USER           = "mo_user"
+	MO_ROLE_RULE      = "mo_role_rule"
 
 	// mo_tables logical_id index table name (fixed name, no UUID)
 	MO_TABLES_LOGICAL_ID_INDEX_TABLE_NAME = "__mo_index_unique_mo_tables_logical_id"
@@ -322,7 +486,9 @@ const (
 	SystemViewRel         = "v"
 	SystemMaterializedRel = "m"
 	SystemExternalRel     = plan.SystemExternalRel
-	SystemSourceRel       = "s"
+	// Keep the former source relation kind as a catalog tombstone so legacy
+	// objects fail closed and can still be dropped after the feature is removed.
+	SystemSourceRel = "s"
 	//the cluster table created by the sys account
 	//and read only by the general account
 	SystemClusterRel = "cluster"
@@ -335,6 +501,7 @@ const (
 	SystemColNoConstraint = "n"
 
 	SystemDBTypeSubscription = "subscription"
+	SystemDBTypeDataBranch   = "data-branch"
 
 	MOPartitionMetadata = "mo_partition_metadata"
 	MOPartitionTables   = "mo_partition_tables"
@@ -385,6 +552,13 @@ const (
 	SystemSI_IVFFLAT_TblCol_Metadata_key = "__mo_index_key"
 	SystemSI_IVFFLAT_TblCol_Metadata_val = "__mo_index_val"
 
+	// IVF_FLAT MetadataTable - well-known keys (rows in the key/val metadata table)
+	// QuantizeMin/QuantizeMax store the trained int8 scalar-quantizer bounds
+	// (cuVS-style asymmetric): [min,max] is mapped to the full int8 range [-128,127]
+	// via q(x)=round(x*mul+add). Entries and the query use the same transform.
+	SystemSI_IVFFLAT_Metadata_QuantizeMin = "quantize_min"
+	SystemSI_IVFFLAT_Metadata_QuantizeMax = "quantize_max"
+
 	// IVF_FLAT Centroids - Column names
 	SystemSI_IVFFLAT_TblCol_Centroids_version  = "__mo_index_centroid_version"
 	SystemSI_IVFFLAT_TblCol_Centroids_id       = "__mo_index_centroid_id"
@@ -395,6 +569,7 @@ const (
 	SystemSI_IVFFLAT_TblCol_Entries_id      = "__mo_index_centroid_fk_id"
 	SystemSI_IVFFLAT_TblCol_Entries_pk      = IndexTablePrimaryColName
 	SystemSI_IVFFLAT_TblCol_Entries_entry   = "__mo_index_centroid_fk_entry"
+	SystemSI_IVFFLAT_IncludeColPrefix       = "__mo_index_include_"
 
 	/************ 3. FULLTEXT Index **************/
 
@@ -405,6 +580,98 @@ const (
 	FullTextIndex_TabCol_Id       = "doc_id"
 	FullTextIndex_TabCol_Position = "pos"
 
+	/************ 3c. FULLTEXT v2 (VERSION=2) Index **************/
+
+	// Fulltext v2 (CREATE FULLTEXT INDEX ... VERSION=2, the WAND positional engine)
+	// uses the same chunked storage + metadata layout as bm25 — segments are built
+	// and CDC-maintained, no postings table — as opposed to classic v1's single
+	// (word,doc_id,pos) postings table. The index stays algo="fulltext"; the version
+	// param selects the engine and these hidden tables. Values are <= 11 chars
+	// (IndexAlgoTableType varchar(11) limit), so "ftv2_*" not "fulltext2_*".
+	FullText2Index_TblType_Metadata = "ftv2_meta"
+	FullText2Index_TblType_Storage  = "ftv2_index"
+
+	FullText2Index_TblCol_Storage_Index_Id = "index_id"
+	FullText2Index_TblCol_Storage_Chunk_Id = "chunk_id"
+	FullText2Index_TblCol_Storage_Data     = "data"
+	FullText2Index_TblCol_Storage_Tag      = "tag"
+
+	// nrow is the number of source rows this generation indexes, and build_ts is the
+	// TRANSACTION SnapshotTS (physical) its content was built from -- the version of the base
+	// table it reflects.
+	//
+	// build_ts is deliberately distinct from the "timestamp" column, which is a CN wall clock
+	// (time.Now) used only to order generations: a wall clock is skewable and is not comparable
+	// to a named snapshot's TS, so it cannot answer whether a generation actually covers the
+	// data a {snapshot = ...} read is asking for.
+	//
+	// build_ts is recorded only where it is genuinely knowable: a BUILD reads the source table
+	// inside its transaction, so that txn's SnapshotTS is exactly the version it captured. A
+	// CDC-appended generation records 0, because the consumer writing the row cannot see the
+	// change range it applied -- iscp.DataRetriever exposes no timestamps and the iteration's
+	// [from, to] stays upstream -- and the sync txn's own SnapshotTS would say when the sync ran,
+	// not which data version the generation covers.
+	//
+	// build_ts is a bigint holding TS.Physical(), which is exactly how MatrixOne itself stores
+	// a snapshot: mo_snapshots.ts is a bigint too, and a named snapshot's timestamp is always
+	// rebuilt as timestamp.Timestamp{PhysicalTime: record.ts} with logical left at 0. So the
+	// two are directly comparable, and the equal-physical case resolves favourably -- (P,0) <=
+	// (P,L) for any L -- which makes an ordinary snapshot_ts <= build_ts exact here. Logical is
+	// not recoverable from physical (the HLC resets it whenever physical advances), so a
+	// comparison against a timestamp that DOES carry a non-zero logical would have to be
+	// strict; no such comparison arises on this path.
+	//
+	// Both columns are also 0 for a generation written before they existed. Readers must
+	// therefore treat 0 as UNKNOWN, never as "empty" or "built at the epoch": the metadata table
+	// is created per index at CREATE INDEX, and REINDEX rewrites its rows rather than the table,
+	// so a pre-existing index keeps the old shape until something explicitly alters it.
+	FullText2Index_TblCol_Metadata_Index_Id  = "index_id"
+	FullText2Index_TblCol_Metadata_Timestamp = "timestamp"
+	FullText2Index_TblCol_Metadata_Checksum  = "checksum"
+	FullText2Index_TblCol_Metadata_Filesize  = "filesize"
+	FullText2Index_TblCol_Metadata_Recency   = "recency"
+	FullText2Index_TblCol_Metadata_Nrow      = "nrow"
+	FullText2Index_TblCol_Metadata_Build_Ts  = "build_ts"
+
+	// fulltext2_search TVF RESERVED output-column names. Unlike FullTextIndex_TabCol_Id
+	// ("doc_id", a PHYSICAL classic-index column), these are plan-level output ALIASES of
+	// the fulltext2_search TVF (its storage is segments, not a doc_id column). The covered
+	// fast path emits INCLUDE columns as sibling outputs and the runtime classifies the
+	// output batch BY NAME, so the pk/relevance outputs must use names no user INCLUDE
+	// column can equal — hence the reserved "__mo_ft_" prefix. Referenced by the coldef
+	// builders (tablefunc.go, apply_indices_fulltext2.go) and the classifier (fulltext2_search.go).
+	FullText2Search_OutCol_DocId = "__mo_ft_doc_id"
+	FullText2Search_OutCol_Score = "__mo_ft_score"
+
+	/************ Shared vector-index metadata columns ************/
+
+	// hnsw, cagra and ivfpq create the SAME metadata table shape, and three separate things
+	// write to it: each algo's schema builder (CREATE), sqlexec's row/INSERT builder (WRITE),
+	// and the v4_0_7 provenance migration (ALTER). Before these existed, each of those reached
+	// into whichever algo's namespace was nearest -- the writer and the migration both named
+	// the Hnsw_ constants while building SQL for cagra and ivfpq tables. That compiled and ran
+	// only because the strings happened to coincide: renaming one algo's column would have
+	// moved its CREATE and left the INSERT and the ALTER behind, failing at runtime with
+	// "unknown column" rather than at build time.
+	//
+	// These are the names. The per-algo constants below alias them, so the shared shape is a
+	// compile-time fact and a divergence has to be written deliberately (replace an alias with
+	// its own literal) instead of happening by omission.
+	// The three vector-index STORAGE tables share one column set for the same reason as the
+	// metadata tables below: one shape, three namespaces, and any cross-namespace reference
+	// works only while the strings happen to coincide.
+	IndexStorage_TblCol_Index_Id = "index_id"
+	IndexStorage_TblCol_Chunk_Id = "chunk_id"
+	IndexStorage_TblCol_Data     = "data"
+	IndexStorage_TblCol_Tag      = "tag"
+
+	IndexMetadata_TblCol_Index_Id  = "index_id"
+	IndexMetadata_TblCol_Timestamp = "timestamp"
+	IndexMetadata_TblCol_Checksum  = "checksum"
+	IndexMetadata_TblCol_Filesize  = "filesize"
+	IndexMetadata_TblCol_Nrow      = "nrow"
+	IndexMetadata_TblCol_Build_Ts  = "build_ts"
+
 	/************ 4. HNSW Index *************/
 
 	// HNSW Table Types
@@ -413,16 +680,18 @@ const (
 	Hnsw_TblType_Storage  = "hnsw_index"
 
 	// HNSW Storage - Column names
-	Hnsw_TblCol_Storage_Index_Id = "index_id"
-	Hnsw_TblCol_Storage_Chunk_Id = "chunk_id"
-	Hnsw_TblCol_Storage_Data     = "data"
-	Hnsw_TblCol_Storage_Tag      = "tag"
+	Hnsw_TblCol_Storage_Index_Id = IndexStorage_TblCol_Index_Id
+	Hnsw_TblCol_Storage_Chunk_Id = IndexStorage_TblCol_Chunk_Id
+	Hnsw_TblCol_Storage_Data     = IndexStorage_TblCol_Data
+	Hnsw_TblCol_Storage_Tag      = IndexStorage_TblCol_Tag
 
 	// HNSW Metadata - Column names
-	Hnsw_TblCol_Metadata_Index_Id  = "index_id"
-	Hnsw_TblCol_Metadata_Timestamp = "timestamp"
-	Hnsw_TblCol_Metadata_Checksum  = "checksum"
-	Hnsw_TblCol_Metadata_Filesize  = "filesize"
+	Hnsw_TblCol_Metadata_Index_Id  = IndexMetadata_TblCol_Index_Id
+	Hnsw_TblCol_Metadata_Timestamp = IndexMetadata_TblCol_Timestamp
+	Hnsw_TblCol_Metadata_Checksum  = IndexMetadata_TblCol_Checksum
+	Hnsw_TblCol_Metadata_Filesize  = IndexMetadata_TblCol_Filesize
+	Hnsw_TblCol_Metadata_Nrow      = IndexMetadata_TblCol_Nrow
+	Hnsw_TblCol_Metadata_Build_Ts  = IndexMetadata_TblCol_Build_Ts
 
 	/************ Cagra Index *************/
 
@@ -432,16 +701,18 @@ const (
 	Cagra_TblType_Storage  = "cagra_index"
 
 	// CAGRA Storage - Column names
-	Cagra_TblCol_Storage_Index_Id = "index_id"
-	Cagra_TblCol_Storage_Chunk_Id = "chunk_id"
-	Cagra_TblCol_Storage_Data     = "data"
-	Cagra_TblCol_Storage_Tag      = "tag"
+	Cagra_TblCol_Storage_Index_Id = IndexStorage_TblCol_Index_Id
+	Cagra_TblCol_Storage_Chunk_Id = IndexStorage_TblCol_Chunk_Id
+	Cagra_TblCol_Storage_Data     = IndexStorage_TblCol_Data
+	Cagra_TblCol_Storage_Tag      = IndexStorage_TblCol_Tag
 
 	// CAGRA Metadata - Column names
-	Cagra_TblCol_Metadata_Index_Id  = "index_id"
-	Cagra_TblCol_Metadata_Timestamp = "timestamp"
-	Cagra_TblCol_Metadata_Checksum  = "checksum"
-	Cagra_TblCol_Metadata_Filesize  = "filesize"
+	Cagra_TblCol_Metadata_Index_Id  = IndexMetadata_TblCol_Index_Id
+	Cagra_TblCol_Metadata_Timestamp = IndexMetadata_TblCol_Timestamp
+	Cagra_TblCol_Metadata_Checksum  = IndexMetadata_TblCol_Checksum
+	Cagra_TblCol_Metadata_Filesize  = IndexMetadata_TblCol_Filesize
+	Cagra_TblCol_Metadata_Nrow      = IndexMetadata_TblCol_Nrow
+	Cagra_TblCol_Metadata_Build_Ts  = IndexMetadata_TblCol_Build_Ts
 
 	/************ IVF-PQ Index *************/
 
@@ -451,16 +722,18 @@ const (
 	Ivfpq_TblType_Storage  = "ivfpq_index"
 
 	// IVF-PQ Storage - Column names
-	Ivfpq_TblCol_Storage_Index_Id = "index_id"
-	Ivfpq_TblCol_Storage_Chunk_Id = "chunk_id"
-	Ivfpq_TblCol_Storage_Data     = "data"
-	Ivfpq_TblCol_Storage_Tag      = "tag"
+	Ivfpq_TblCol_Storage_Index_Id = IndexStorage_TblCol_Index_Id
+	Ivfpq_TblCol_Storage_Chunk_Id = IndexStorage_TblCol_Chunk_Id
+	Ivfpq_TblCol_Storage_Data     = IndexStorage_TblCol_Data
+	Ivfpq_TblCol_Storage_Tag      = IndexStorage_TblCol_Tag
 
 	// IVF-PQ Metadata - Column names
-	Ivfpq_TblCol_Metadata_Index_Id  = "index_id"
-	Ivfpq_TblCol_Metadata_Timestamp = "timestamp"
-	Ivfpq_TblCol_Metadata_Checksum  = "checksum"
-	Ivfpq_TblCol_Metadata_Filesize  = "filesize"
+	Ivfpq_TblCol_Metadata_Index_Id  = IndexMetadata_TblCol_Index_Id
+	Ivfpq_TblCol_Metadata_Timestamp = IndexMetadata_TblCol_Timestamp
+	Ivfpq_TblCol_Metadata_Checksum  = IndexMetadata_TblCol_Checksum
+	Ivfpq_TblCol_Metadata_Filesize  = IndexMetadata_TblCol_Filesize
+	Ivfpq_TblCol_Metadata_Nrow      = IndexMetadata_TblCol_Nrow
+	Ivfpq_TblCol_Metadata_Build_Ts  = IndexMetadata_TblCol_Build_Ts
 
 	/************ 5. Logical ID Index (mo_tables) ************/
 
@@ -896,7 +1169,6 @@ var (
 	QueryResultMetaDir  string
 	//ProfileDir holds all profiles dumped by the runtime/pprof
 	ProfileDir string
-	TraceDir   string
 )
 
 func init() {
@@ -904,7 +1176,6 @@ func init() {
 	QueryResultMetaPath = fileservice.JoinPath(defines.SharedFileServiceName, "/query_result_meta/%s_%s.blk")
 	QueryResultMetaDir = fileservice.JoinPath(defines.SharedFileServiceName, "/query_result_meta")
 	ProfileDir = fileservice.JoinPath(defines.ETLFileServiceName, "/profile")
-	TraceDir = fileservice.JoinPath(defines.ETLFileServiceName, "/trace")
 }
 
 type Meta struct {
@@ -996,11 +1267,32 @@ var SystemDatabases = []string{
 }
 
 func IsUniqueIndexTable(name string) bool {
-	return strings.HasPrefix(name, UniqueIndexTableNamePrefix)
+	return isIndexTableWithPrefix(name, UniqueIndexTableNamePrefix)
 }
 
 func IsSecondaryIndexTable(name string) bool {
-	return strings.HasPrefix(name, SecondaryIndexTableNamePrefix)
+	return isIndexTableWithPrefix(name, SecondaryIndexTableNamePrefix)
+}
+
+func isIndexTableWithPrefix(name, prefix string) bool {
+	if strings.HasPrefix(name, prefix) {
+		return true
+	}
+	if !defines.IsTempTableName(name) {
+		return false
+	}
+
+	// A temporary index table is stored as
+	// __mo_tmp_<session>_<database>_<original-index-table-name>. Keep using the
+	// generated index UUID as the discriminator: database and table names may
+	// legally contain the internal-looking prefix too.
+	marker := "_" + prefix
+	markerPos := strings.LastIndex(name, marker)
+	if markerPos < 0 {
+		return false
+	}
+	_, err := uuid.Parse(name[markerPos+len(marker):])
+	return err == nil
 }
 
 func IsFullTextIndexTableType(tableType string, tableName string) bool {

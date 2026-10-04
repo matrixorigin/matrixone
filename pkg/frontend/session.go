@@ -17,9 +17,12 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"math"
 	"net"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,21 +38,30 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	pbstats "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -57,12 +69,77 @@ var (
 	MaxPrepareNumberInOneSession atomic.Uint32
 )
 
+func currentProtocolVersion(proc *process.Process) int64 {
+	if proc == nil {
+		return defines.MORPCLatestVersion
+	}
+	return currentProtocolVersionForService(proc.GetService())
+}
+
+func currentProtocolVersionForService(service string) int64 {
+	value, ok := moruntime.ServiceRuntime(service).GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return defines.MORPCVersion4
+	}
+	version, ok := value.(int64)
+	if !ok {
+		return defines.MORPCVersion4
+	}
+	return version
+}
+
+func logtailReadBarrierSupported(ses *Session) bool {
+	rt := moruntime.ServiceRuntime(ses.GetService())
+	if rt == nil {
+		return false
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	version, ok := value.(int64)
+	return ok && version >= defines.MORPCVersion39
+}
+
+func (ses *Session) acquireLogtailReadBarrier(
+	ctx context.Context,
+) (timestamp.Timestamp, error) {
+	pu := getPuIfPresent(ses.GetService())
+	if pu == nil {
+		return timestamp.Timestamp{}, moerr.NewInternalError(
+			ctx, "missing parameter unit for logtail read barrier")
+	}
+	if pu.StorageEngine == nil {
+		return timestamp.Timestamp{}, moerr.NewInternalError(
+			ctx, "missing storage engine for logtail read barrier")
+	}
+	barrier, ok := pu.StorageEngine.(engine.LogtailReadBarrier)
+	if !ok {
+		return timestamp.Timestamp{}, moerr.NewInternalError(
+			ctx, "storage engine does not support logtail read barrier")
+	}
+	return barrier.AcquireLogtailReadBarrier(ctx)
+}
+
+// reusablePlanGenerationSupported reports whether every live service in the
+// rollout understands the logical-plan generation snapshot carried by remote
+// pipeline and lock requests. Deployment keeps MOProtocolVersion at the oldest
+// live service, so cross-transaction plan reuse must remain disabled until the
+// version 32 wire contract is active cluster-wide.
+func reusablePlanGenerationSupported(proc *process.Process) bool {
+	return currentProtocolVersion(proc) >= defines.MORPCVersion32
+}
+
 func init() {
 	MaxPrepareNumberInOneSession.Store(100000)
 }
 
-// TODO: this variable should be configure by set variable
-const MoDefaultErrorCount = 64
+const MoDefaultErrorCount = process.WarningDiagnosticDefaultRetentionLimit
+
+const (
+	warningCountSystemVariable = "warning_count"
+	errorCountSystemVariable   = "error_count"
+)
 
 type ShowStatementType int
 
@@ -132,16 +209,47 @@ type Session struct {
 	ep              *ExportConfig
 	showStmtType    ShowStatementType
 	userDefinedVars map[string]*UserDefinedVar
+	// migrationSystemVarReplayable records whether the latest assignment for a
+	// session system variable is known to be captured by the proxy's raw SET
+	// replay stream. A prepared assignment is not visible to that stream.
+	migrationSystemVarReplayable map[string]bool
 	// tempTables records the relationship between the temporary table created by the session and the actual table.
 	// Key: dbName.alias, Value: realName
 	tempTables map[string]string
 	// tempTablesRev records the reverse relationship.
 	// Key: realName, Value: dbName.alias
-	tempTablesRev   map[string]string
+	tempTablesRev map[string]string
+	// tempTableIdentities preserves the database and alias as separate values.
+	// The legacy tempTables key is intentionally kept for lookup compatibility,
+	// but it cannot be split safely when quoted identifiers contain dots. Index
+	// table aliases are marked internal so connection migration clones only the
+	// user-visible table; cloning that table recreates its hidden index tables.
+	tempTableIdentities map[string]tempTableIdentity
+	// tempTableVersion changes whenever the session's temporary-table name
+	// resolution changes. Prepared statements use it to invalidate plans that
+	// were built against an older temporary-table mapping.
+	tempTableVersion uint64
+	// tempTableTxnJournals mirrors transaction and statement rollback for the
+	// session-local alias map. Physical temporary relations live in the engine
+	// workspace, so publishing an alias without journaling it would let a later
+	// rollback discard the relation while retaining an unusable session name.
+	// The outer key is the engine transaction ID. Entries are allocated lazily,
+	// only when a transaction actually changes a temporary-table alias.
+	tempTableTxnJournals map[string]*tempTableTxnJournal
+	retiredTempTables    map[string]sessionTempTable
+	// ddlVersion changes after every successful session DDL. It covers
+	// transaction-local catalog writes that are not visible in CatalogCache.
+	ddlVersion      atomic.Uint64
 	hasLockedTables atomic.Bool
 
 	prepareStmts map[string]*PrepareStmt
 	lastStmtId   uint32
+
+	// preparedCursorBytes accounts for rows retained by all active server-side
+	// cursors in this session. Cursor results live on the prepared statement,
+	// so a session-level budget is required in addition to a per-cursor bound.
+	preparedCursorBytes atomic.Uint64
+	preparedCursorLimit atomic.Uint64
 
 	priv *privilege
 
@@ -152,6 +260,29 @@ type Session struct {
 	cache       *privilegeCache
 	ruleCache   map[string]string // rewrite rule cache, nil means not loaded
 	ruleCacheMu sync.RWMutex      // protects ruleCache
+
+	// foreignConns caches connections to foreign data sources (Elasticsearch,
+	// external SQL databases) opened by esql_tvf_connect / sql_tvf_connect and
+	// consumed by esql_tvf / sql_tvf. It is session-scoped: every connection is
+	// closed when the session ends (see closeForeignConns in Close). See
+	// session_foreignconn.go for the process.ForeignConnCache implementation.
+	foreignConnMu sync.Mutex
+	foreignConns  map[string]process.ForeignConn // handle -> connection
+	// foreignConnsClosed is the terminal tombstone set by closeForeignConns:
+	// a connector racing with session close (KILL CONNECTION during a slow
+	// connect handshake) must have its late connection rejected and closed,
+	// not silently re-admitted into a cache nobody will ever clean up again.
+	foreignConnsClosed bool
+
+	// lastKafkaMessageID is the offset of the last message a completed Kafka
+	// external-table scan returned in this session; read back by
+	// LAST_KAFKA_MESSAGE_ID(). See session_kafka.go.
+	lastKafkaMessageMu  sync.Mutex
+	lastKafkaMessageID  int64
+	lastKafkaMessageSet bool
+	// kafkaProgressQueue holds drained Kafka scans' deferred progress
+	// finalizers until the statement terminal (see session_kafka.go).
+	kafkaProgressQueue []func(publish bool)
 
 	// rewriteEnabled caches the enable_remap_hint system variable state
 	// to avoid expensive GetSessionSysVar calls on every SQL query
@@ -166,9 +297,20 @@ type Session struct {
 	// result-set statement (SELECT/SHOW...), 0 after DDL, affected rows after DML.
 	lastAffectedRows int64
 
+	// lastFoundRows records the result count exposed by FOUND_ROWS() for the
+	// previous result-set statement.
+	lastFoundRows uint64
+
 	// tStmt is used only to record the StatementInfo
 	// QueryResult please use feSessionImpl.stmtProfile instead.
 	tStmt *motrace.StatementInfo
+	// responseAccounting keeps failed statement completion open until the
+	// terminal protocol response has actually been written. It is owned by the
+	// routine goroutine and deliberately does not participate in session locks.
+	responseAccounting     bool
+	pendingStatementFailed bool
+	pendingStatementError  error
+	responseOutputWait     *responseOutputWaitTracker
 
 	ast tree.Statement
 
@@ -190,8 +332,6 @@ type Session struct {
 	sentRows atomic.Int64
 	// writeBytes count of bytes send back to client.
 	writeBytes int
-	// writeCsvBytes is used to record bytes sent by `select ... into 'file.csv'` for motrace.StatementInfo
-	writeCsvBytes atomic.Int64
 	// packetCounter count the tcp packet send to client.
 	packetCounter atomic.Int64
 	// payloadCounter count the payload send by `load data LOCAL infile`
@@ -207,8 +347,10 @@ type Session struct {
 
 	planCache *planCache
 
-	statsCache   *plan2.StatsCache
-	seqCurValues map[uint64]string
+	statsCacheMu       sync.Mutex
+	statsCache         *plan2.StatsCache
+	statsCacheVersions map[uint64]optimizerStatsCacheTag
+	seqCurValues       map[uint64]string
 
 	/*
 		CORNER CASE:
@@ -262,8 +404,6 @@ type Session struct {
 	clientAddr string
 	proxyAddr  string
 
-	disableTrace bool
-
 	// disableAgg co-operate with RecordStatement
 	// more can see Benchmark_RecordStatement_IsTrue()
 	disableAgg bool
@@ -275,6 +415,62 @@ type Session struct {
 	createVersion string
 }
 
+type tempTableAliasState struct {
+	realName string
+	identity tempTableIdentity
+	exists   bool
+}
+
+type tempTableIdentity struct {
+	dbName   string
+	alias    string
+	internal bool
+}
+
+// A migration snapshot carries identifiers only, not table data. Keep its
+// count bounded nevertheless: every entry becomes a CREATE ... CLONE statement
+// on the target and all entries share the fixed connection-transfer deadline.
+const maxMigrateTempTableCount = 1024
+
+type tempTableTxnJournal struct {
+	before     map[string]tempTableAliasState
+	statements map[string]map[string]tempTableAliasState
+}
+
+func tempTableTxnKey(txnOp TxnOperator) string {
+	if txnOp == nil {
+		return ""
+	}
+	txnID := txnOp.Txn().ID
+	if len(txnID) == 0 {
+		return ""
+	}
+	return string(txnID)
+}
+
+func tempTableStatementKey(ses FeSession, sharedTxn bool) string {
+	if sharedTxn {
+		if owner := upstreamUserSession(ses); owner != nil {
+			stmtID := owner.GetStmtId()
+			return string(stmtID[:])
+		}
+	}
+	stmtID := ses.GetStmtId()
+	return string(stmtID[:])
+}
+
+func tempTableMutationKeys(ses FeSession) (string, string) {
+	if ses == nil || ses.GetTxnHandler() == nil {
+		return "", ""
+	}
+	txnHandler := ses.GetTxnHandler()
+	txnKey := tempTableTxnKey(txnHandler.GetTxn())
+	if txnKey == "" {
+		return "", ""
+	}
+	return txnKey, tempTableStatementKey(ses, txnHandler.IsShareTxn())
+}
+
 func (ses *Session) GetMySQLParser() *mysql.MySQLParser {
 	return &ses.mysqlParser
 }
@@ -284,17 +480,60 @@ func (ses *Session) InitSystemVariables(ctx context.Context, bh BackgroundExec) 
 	if sv, err = GSysVarsMgr.Get(ses.GetTenantInfo().TenantID, ses, ctx, bh); err != nil {
 		return
 	}
+	return ses.initSystemVariablesFromGlobal(ctx, sv)
+}
+
+func (ses *Session) initSystemVariablesFromGlobal(ctx context.Context, sv *SystemVariables) (err error) {
+	if sv == nil {
+		return moerr.NewInternalError(ctx, "global system variables are not initialized")
+	}
+	sessionVars := sv.Clone()
+	// A fresh session generation must initialize runtime state as well as the
+	// values visible through @@session. time_zone is the only registered
+	// variable whose setter owns additional Session state.
+	if value := sessionVars.Get("time_zone"); value != nil {
+		if _, ok := value.(string); !ok {
+			return moerr.NewInternalErrorf(ctx, "invalid time_zone value %T", value)
+		}
+		if err = updateTimeZone(ctx, ses, sessionVars, "time_zone", value); err != nil {
+			return err
+		}
+	}
+	transactionIsolationValue := sessionVars.Get(transactionIsolationSystemVariable)
+	if transactionIsolationValue == nil {
+		transactionIsolationValue = gSysVarsDefs[transactionIsolationSystemVariable].Default
+	}
+	normalizedTransactionIsolation, transactionIsolation, err :=
+		normalizeTxnIsolationSystemValue(ctx, ses.service, transactionIsolationValue)
+	if err != nil {
+		return err
+	}
+	sessionVars.Set(transactionIsolationSystemVariable, normalizedTransactionIsolation)
+	maxErrorCount := process.WarningDiagnosticDefaultRetentionLimit
+	if value := sessionVars.Get("max_error_count"); value != nil {
+		if parsed, ok := sessionWarningRetentionLimit(value); ok {
+			maxErrorCount = parsed
+		}
+	}
+
 	ses.mu.Lock()
-	defer ses.mu.Unlock()
 	ses.gSysVars = sv
-	ses.sesSysVars = ses.gSysVars.Clone()
+	ses.sesSysVars = sessionVars
+	if ses.errInfo != nil {
+		ses.errInfo.setMaxCnt(maxErrorCount)
+	}
+	txnHandler := ses.txnHandler
+	ses.mu.Unlock()
 	atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, -1)
 
 	// Initialize rewriteEnabled cache
-	if v := ses.sesSysVars.Get("enable_remap_hint"); v != nil {
+	if v := sessionVars.Get("enable_remap_hint"); v != nil {
 		if on, convErr := valueIsBoolTrue(v); convErr == nil {
 			ses.rewriteEnabled.Store(on)
 		}
+	}
+	if txnHandler != nil {
+		txnHandler.setSessionTxnIsolation(transactionIsolation)
 	}
 	return
 }
@@ -334,10 +573,138 @@ func (ses *Session) getNextProcessId() string {
 
 // SetUserDefinedVar sets the user defined variable to the value in session
 func (ses *Session) SetUserDefinedVar(name string, value interface{}, sql string) error {
+	return ses.setUserDefinedVar(name, value, sql, false)
+}
+
+func (ses *Session) setUserDefinedVar(name string, value interface{}, sql string, isBin bool) error {
+	return ses.setUserDefinedVarWithTypeAndKind(
+		name, value, sql, isBin, inferUserDefinedVarType(value), prepareParamKindFromValue(value))
+}
+
+func (ses *Session) setUserDefinedVarWithType(name string, value interface{}, sql string, isBin bool, typ plan.Type) error {
+	return ses.setUserDefinedVarWithTypeAndKind(
+		name, value, sql, isBin, typ, prepareParamKindFromType(types.T(typ.Id)))
+}
+
+func (ses *Session) setUserDefinedVarWithKind(
+	name string,
+	value interface{},
+	sql string,
+	isBin bool,
+	kind vector.PrepareParamKind,
+) error {
+	return ses.setUserDefinedVarWithTypeAndKind(
+		name, value, sql, isBin, inferUserDefinedVarType(value), kind)
+}
+
+func (ses *Session) setUserDefinedVarWithKindAndReplayability(
+	name string,
+	value interface{},
+	sql string,
+	isBin bool,
+	kind vector.PrepareParamKind,
+	replayable bool,
+) error {
+	return ses.setUserDefinedVarWithTypeAndKindAndReplayability(
+		name, value, sql, isBin, inferUserDefinedVarType(value), kind, replayable)
+}
+
+func (ses *Session) setUserDefinedVarWithTypeAndKind(
+	name string,
+	value interface{},
+	sql string,
+	isBin bool,
+	typ plan.Type,
+	kind vector.PrepareParamKind,
+) error {
+	return ses.setUserDefinedVarWithTypeAndKindAndReplayability(
+		name, value, sql, isBin, typ, kind, false)
+}
+
+func (ses *Session) setUserDefinedVarWithTypeAndKindAndReplayability(
+	name string,
+	value interface{},
+	sql string,
+	isBin bool,
+	typ plan.Type,
+	kind vector.PrepareParamKind,
+	replayable bool,
+	runtimeDomains ...types.RuntimeStringDomain,
+) error {
+	if typ.Id == 0 {
+		typ = inferUserDefinedVarType(value)
+	}
+	runtimeDomain := types.RuntimeStringInherit
+	if len(runtimeDomains) > 0 {
+		runtimeDomain = runtimeDomains[0]
+		if !runtimeDomain.Valid() {
+			return moerr.NewInvalidInputNoCtxf("invalid user-variable runtime string domain %d", runtimeDomain)
+		}
+	}
+	ses.mu.Lock()
+	key := strings.ToLower(name)
+	if previous := ses.userDefinedVars[key]; previous != nil && !previous.Replayable {
+		replayable = false
+	}
+	ses.userDefinedVars[key] = &UserDefinedVar{
+		Value:               value,
+		Sql:                 sql,
+		IsBin:               isBin,
+		Type:                typ,
+		PrepareParamKind:    kind,
+		RuntimeStringDomain: runtimeDomain,
+		Replayable:          replayable,
+	}
+	ses.mu.Unlock()
+	// User-variable references are typed at bind time. A later assignment can
+	// change that type, so cached plans containing @vars must be rebound.
+	ses.cleanCache()
+	return nil
+}
+
+func (ses *Session) markMigrationSystemVarReplayable(name string, replayable bool) {
+	name = canonicalSystemVariableName(name)
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.userDefinedVars[strings.ToLower(name)] = &UserDefinedVar{Value: value, Sql: sql}
-	return nil
+	if ses.migrationSystemVarReplayable == nil {
+		ses.migrationSystemVarReplayable = make(map[string]bool)
+	}
+	ses.migrationSystemVarReplayable[name] = replayable
+}
+
+func (ses *Session) getMigrationSystemVarReplayability(name string) (bool, bool) {
+	name = canonicalSystemVariableName(name)
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	replayable, tracked := ses.migrationSystemVarReplayable[name]
+	return replayable, tracked
+}
+
+func (ses *Session) restoreMigrationSystemVarReplayability(
+	name string, replayable, tracked bool,
+) {
+	name = canonicalSystemVariableName(name)
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if !tracked {
+		delete(ses.migrationSystemVarReplayable, name)
+		return
+	}
+	if ses.migrationSystemVarReplayable == nil {
+		ses.migrationSystemVarReplayable = make(map[string]bool)
+	}
+	ses.migrationSystemVarReplayable[name] = replayable
+}
+
+func (ses *Session) hasUnreplayableMigrationSystemVars() bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	for _, replayable := range ses.migrationSystemVarReplayable {
+		if !replayable {
+			return true
+		}
+	}
+	return false
 }
 
 // GetUserDefinedVar gets value of the user defined variable
@@ -353,11 +720,109 @@ func (ses *Session) GetUserDefinedVar(name string) (*UserDefinedVar, error) {
 
 // AddTempTable adds the temporary table to the session
 func (ses *Session) AddTempTable(dbName, alias, realName string) {
+	txnKey, stmtKey := tempTableMutationKeys(ses)
+	ses.addTempTableWithIdentity(dbName, alias, realName, false, txnKey, stmtKey)
+}
+
+func (ses *Session) addTempTable(dbName, alias, realName, txnKey, stmtKey string) {
+	ses.addTempTableWithIdentity(dbName, alias, realName, false, txnKey, stmtKey)
+}
+
+// AddTempIndexTable records a hidden physical index table owned by a temporary
+// table. It remains resolvable and participates in session cleanup, but the
+// parent table's CLONE recreates it during connection migration.
+func (ses *Session) AddTempIndexTable(dbName, alias, realName string) {
+	txnKey, stmtKey := tempTableMutationKeys(ses)
+	ses.addTempTableWithIdentity(dbName, alias, realName, true, txnKey, stmtKey)
+}
+
+func (ses *Session) addTempIndexTable(dbName, alias, realName, txnKey, stmtKey string) {
+	ses.addTempTableWithIdentity(dbName, alias, realName, true, txnKey, stmtKey)
+}
+
+func (ses *Session) addTempTableWithIdentity(
+	dbName, alias, realName string,
+	internal bool,
+	txnKey, stmtKey string,
+) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	key := dbName + "." + alias
+	if ses.tempTableIdentities == nil {
+		ses.tempTableIdentities = make(map[string]tempTableIdentity)
+	}
+	identity := tempTableIdentity{
+		dbName: dbName, alias: alias, internal: internal,
+	}
+	if oldRealName, ok := ses.tempTables[key]; ok {
+		if oldRealName == realName {
+			if ses.tempTableIdentityLocked(key) != identity {
+				ses.recordTempTableMutationLocked(txnKey, stmtKey, key)
+				ses.tempTableIdentities[key] = identity
+			}
+			return
+		}
+		ses.recordTempTableMutationLocked(txnKey, stmtKey, key)
+		delete(ses.tempTablesRev, oldRealName)
+	} else {
+		ses.recordTempTableMutationLocked(txnKey, stmtKey, key)
+	}
 	ses.tempTables[key] = realName
 	ses.tempTablesRev[realName] = key
+	ses.tempTableIdentities[key] = identity
+	ses.tempTableVersion++
+}
+
+func (ses *Session) tempTableIdentityLocked(key string) tempTableIdentity {
+	if identity, ok := ses.tempTableIdentities[key]; ok {
+		return identity
+	}
+	dbName, alias, ok := strings.Cut(key, ".")
+	if !ok {
+		return tempTableIdentity{alias: key}
+	}
+	return tempTableIdentity{dbName: dbName, alias: alias}
+}
+
+func (ses *Session) snapshotTempTables() []*query.MigrateTempTable {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	keys := make([]string, 0, len(ses.tempTables))
+	for key := range ses.tempTables {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	result := make([]*query.MigrateTempTable, 0, len(keys))
+	for _, key := range keys {
+		identity := ses.tempTableIdentityLocked(key)
+		if identity.internal {
+			continue
+		}
+		result = append(result, &query.MigrateTempTable{
+			Database:     identity.dbName,
+			Alias:        identity.alias,
+			PhysicalName: ses.tempTables[key],
+		})
+	}
+	return result
+}
+
+// snapshotTempTablesForMigration applies the same wire-size limit used by the
+// typed variable snapshots. The source must reject an oversized snapshot before
+// proxy starts a handoff: the old session remains authoritative and no target
+// clone can be left behind by a transfer that cannot complete in one attempt.
+func (ses *Session) snapshotTempTablesForMigration(ctx context.Context) ([]*query.MigrateTempTable, error) {
+	result := ses.snapshotTempTables()
+	if len(result) > maxMigrateTempTableCount {
+		return nil, moerr.NewInternalErrorf(ctx,
+			"temporary tables exceed the connection migration size limit (table limit %d)",
+			maxMigrateTempTableCount)
+	}
+	if (&query.MigrateConnToRequest{TempTables: result}).ProtoSize() > maxMigrateUserDefinedVarsSize {
+		return nil, moerr.NewInternalError(ctx,
+			"temporary tables exceed the connection migration size limit")
+	}
+	return result, nil
 }
 
 // GetTempTable gets the real name of the temporary table
@@ -368,24 +833,198 @@ func (ses *Session) GetTempTable(dbName, alias string) (string, bool) {
 	return val, ok
 }
 
+// GetTempTableVersion returns the version of the session's temporary-table
+// name mapping.
+func (ses *Session) GetTempTableVersion() uint64 {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.tempTableVersion
+}
+
+func (ses *Session) getDDLVersion() uint64 {
+	return ses.ddlVersion.Load()
+}
+
+func (ses *Session) advanceDDLVersion() {
+	ses.ddlVersion.Add(1)
+}
+
 // RemoveTempTable removes the temporary table alias
 func (ses *Session) RemoveTempTable(dbName, alias string) {
+	txnKey, stmtKey := tempTableMutationKeys(ses)
+	ses.removeTempTable(dbName, alias, txnKey, stmtKey)
+}
+
+// RemoveTempTablesByDatabase removes every temporary-table alias owned by a
+// database that has been dropped. The mutation is journaled so a failed
+// statement or rolled-back transaction restores the aliases with their
+// original physical identities.
+func (ses *Session) RemoveTempTablesByDatabase(dbName string) {
+	txnKey, stmtKey := tempTableMutationKeys(ses)
+	ses.removeTempTablesByDatabase(dbName, txnKey, stmtKey)
+}
+
+func (ses *Session) removeTempTablesByDatabase(dbName, txnKey, stmtKey string) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	changed := false
+	for key, realName := range ses.tempTables {
+		identity, tracked := ses.tempTableIdentities[key]
+		if tracked {
+			if identity.dbName != dbName {
+				continue
+			}
+		} else if !strings.HasPrefix(key, dbName+".") {
+			continue
+		}
+		ses.recordTempTableMutationLocked(txnKey, stmtKey, key)
+		delete(ses.tempTables, key)
+		delete(ses.tempTablesRev, realName)
+		delete(ses.tempTableIdentities, key)
+		changed = true
+	}
+	if changed {
+		ses.tempTableVersion++
+	}
+}
+
+func (ses *Session) removeTempTable(dbName, alias, txnKey, stmtKey string) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	key := dbName + "." + alias
 	if realName, ok := ses.tempTables[key]; ok {
+		ses.recordTempTableMutationLocked(txnKey, stmtKey, key)
 		delete(ses.tempTables, key)
 		delete(ses.tempTablesRev, realName)
+		delete(ses.tempTableIdentities, key)
+		ses.tempTableVersion++
 	}
 }
 
 // RemoveTempTableByRealName removes the temporary table alias by its real name
 func (ses *Session) RemoveTempTableByRealName(realName string) {
+	txnKey, stmtKey := tempTableMutationKeys(ses)
+	ses.removeTempTableByRealName(realName, txnKey, stmtKey)
+}
+
+func (ses *Session) removeTempTableByRealName(realName, txnKey, stmtKey string) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	if alias, ok := ses.tempTablesRev[realName]; ok {
+		ses.recordTempTableMutationLocked(txnKey, stmtKey, alias)
 		delete(ses.tempTables, alias)
 		delete(ses.tempTablesRev, realName)
+		delete(ses.tempTableIdentities, alias)
+		ses.tempTableVersion++
+	}
+}
+
+func (ses *Session) recordTempTableMutationLocked(txnKey, stmtKey, alias string) {
+	if txnKey == "" {
+		return
+	}
+	if ses.tempTableTxnJournals == nil {
+		ses.tempTableTxnJournals = make(map[string]*tempTableTxnJournal)
+	}
+	journal := ses.tempTableTxnJournals[txnKey]
+	if journal == nil {
+		journal = &tempTableTxnJournal{
+			before:     make(map[string]tempTableAliasState),
+			statements: make(map[string]map[string]tempTableAliasState),
+		}
+		ses.tempTableTxnJournals[txnKey] = journal
+	}
+	state := tempTableAliasState{}
+	if realName, ok := ses.tempTables[alias]; ok {
+		state = tempTableAliasState{
+			realName: realName,
+			identity: ses.tempTableIdentityLocked(alias),
+			exists:   true,
+		}
+	}
+	if _, ok := journal.before[alias]; !ok {
+		journal.before[alias] = state
+	}
+	statement := journal.statements[stmtKey]
+	if statement == nil {
+		statement = make(map[string]tempTableAliasState)
+		journal.statements[stmtKey] = statement
+	}
+	if _, ok := statement[alias]; !ok {
+		statement[alias] = state
+	}
+}
+
+func (ses *Session) commitTempTableStatement(txnKey, stmtKey string) {
+	if txnKey == "" {
+		return
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if journal := ses.tempTableTxnJournals[txnKey]; journal != nil {
+		delete(journal.statements, stmtKey)
+	}
+}
+
+func (ses *Session) rollbackTempTableStatement(txnKey, stmtKey string) {
+	if txnKey == "" {
+		return
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if journal := ses.tempTableTxnJournals[txnKey]; journal != nil {
+		ses.restoreTempTableAliasesLocked(journal.statements[stmtKey])
+		delete(journal.statements, stmtKey)
+	}
+}
+
+func (ses *Session) commitTempTableTransaction(txnKey string) {
+	if txnKey == "" {
+		return
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	delete(ses.tempTableTxnJournals, txnKey)
+}
+
+func (ses *Session) rollbackTempTableTransaction(txnKey string) {
+	if txnKey == "" {
+		return
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if journal := ses.tempTableTxnJournals[txnKey]; journal != nil {
+		ses.restoreTempTableAliasesLocked(journal.before)
+		delete(ses.tempTableTxnJournals, txnKey)
+	}
+}
+
+func (ses *Session) restoreTempTableAliasesLocked(before map[string]tempTableAliasState) {
+	changed := false
+	for alias, state := range before {
+		current, exists := ses.tempTables[alias]
+		currentIdentity := ses.tempTableIdentityLocked(alias)
+		if exists == state.exists && (!exists ||
+			(current == state.realName && currentIdentity == state.identity)) {
+			continue
+		}
+		changed = true
+		if exists {
+			delete(ses.tempTablesRev, current)
+		}
+		delete(ses.tempTables, alias)
+		delete(ses.tempTableIdentities, alias)
+		if state.exists {
+			if ses.tempTableIdentities == nil {
+				ses.tempTableIdentities = make(map[string]tempTableIdentity)
+			}
+			ses.tempTables[alias] = state.realName
+			ses.tempTablesRev[state.realName] = alias
+			ses.tempTableIdentities[alias] = state.identity
+		}
+	}
+	if changed {
+		ses.tempTableVersion++
 	}
 }
 
@@ -398,7 +1037,115 @@ func (ses *Session) GetProc() *process.Process {
 }
 
 func (ses *Session) GetStatsCache() *plan2.StatsCache {
+	ses.statsCacheMu.Lock()
+	defer ses.statsCacheMu.Unlock()
 	return ses.statsCache
+}
+
+func (ses *Session) optimizerStatsKey(tableID uint64) optimizerStatsTableKey {
+	return optimizerStatsTableKey{
+		accountID: ses.GetAccountId(),
+		tableID:   tableID,
+	}
+}
+
+type optimizerStatsCacheTag struct {
+	key               optimizerStatsTableKey
+	version           uint64
+	tableDefVersion   uint32
+	tableVersionBound bool
+}
+
+func (ses *Session) getStatsCacheWithVersion(key optimizerStatsTableKey) (*plan2.StatsCache, uint64) {
+	return ses.getStatsCacheForTableDefVersion(key, nil)
+}
+
+func (ses *Session) getStatsCacheForTableDefVersion(
+	key optimizerStatsTableKey,
+	tableDefVersion *uint32,
+) (*plan2.StatsCache, uint64) {
+	ses.statsCacheMu.Lock()
+	defer ses.statsCacheMu.Unlock()
+	ses.initStatsCacheLocked()
+	version := currentOptimizerStatsVersion(ses.GetService(), key)
+	wrapper := ses.statsCache.Get(key.tableID)
+	tag, tagged := ses.statsCacheVersions[key.tableID]
+	if !wrapper.Exists() {
+		delete(ses.statsCacheVersions, key.tableID)
+	} else if !tagged && version == 0 {
+		// Accept caches created before version tracking only in the initial
+		// generation. Once any publication has happened, an untagged entry is
+		// conservatively stale.
+		ses.statsCacheVersions[key.tableID] = optimizerStatsCacheTag{key: key, version: version}
+	} else if tag.key != key || tag.version != version ||
+		(tag.tableVersionBound &&
+			(tableDefVersion == nil || tag.tableDefVersion != *tableDefVersion)) ||
+		(tableDefVersion != nil && !tag.tableVersionBound) {
+		ses.statsCache.Delete(key.tableID)
+		delete(ses.statsCacheVersions, key.tableID)
+	}
+	return ses.statsCache, version
+}
+
+func (ses *Session) cacheStatsIfCurrent(
+	key optimizerStatsTableKey,
+	version uint64,
+	stats *pbstats.StatsInfo,
+) bool {
+	return ses.cacheStatsForTableDefVersionIfCurrent(key, version, nil, stats)
+}
+
+func (ses *Session) cacheStatsForTableDefVersionIfCurrent(
+	key optimizerStatsTableKey,
+	version uint64,
+	tableDefVersion *uint32,
+	stats *pbstats.StatsInfo,
+) bool {
+	ses.statsCacheMu.Lock()
+	defer ses.statsCacheMu.Unlock()
+	if currentOptimizerStatsVersion(ses.GetService(), key) != version {
+		return false
+	}
+	ses.initStatsCacheLocked()
+	if ses.statsCache.SetAndReportReset(key.tableID, stats) {
+		clear(ses.statsCacheVersions)
+	}
+	tag := optimizerStatsCacheTag{key: key, version: version}
+	if tableDefVersion != nil {
+		tag.tableDefVersion = *tableDefVersion
+		tag.tableVersionBound = true
+	}
+	ses.statsCacheVersions[key.tableID] = tag
+	return true
+}
+
+func (ses *Session) cachePublishedStatsForTableDefVersion(
+	key optimizerStatsTableKey,
+	version uint64,
+	tableDefVersion *uint32,
+	stats *pbstats.StatsInfo,
+) {
+	ses.statsCacheMu.Lock()
+	defer ses.statsCacheMu.Unlock()
+	ses.initStatsCacheLocked()
+	if ses.statsCache.SetAndReportReset(key.tableID, stats) {
+		clear(ses.statsCacheVersions)
+	}
+	tag := optimizerStatsCacheTag{key: key, version: version}
+	if tableDefVersion != nil {
+		tag.tableDefVersion = *tableDefVersion
+		tag.tableVersionBound = true
+	}
+	ses.statsCacheVersions[key.tableID] = tag
+}
+
+func (ses *Session) initStatsCacheLocked() {
+	if ses.statsCache == nil {
+		ses.statsCache = plan2.NewStatsCache()
+	}
+	if ses.statsCacheVersions == nil {
+		ses.statsCacheVersions = make(map[uint64]optimizerStatsCacheTag)
+	}
 }
 
 func (ses *Session) GetSessionStart() time.Time {
@@ -516,19 +1263,22 @@ func (ses *Session) CountPayload(length int) {
 	ses.payloadCounter += int64(length)
 }
 
-// CountFlushPackage count the raw conn flush op.
+// CountFlushPackage records MySQL protocol packets whose bytes were fully
+// accepted by the connection writer.
 func (ses *Session) CountFlushPackage(delta int64) {
 	if ses == nil {
 		return
 	}
 	ses.packetCounter.Add(delta)
 }
+
 func (ses *Session) GetFlushPacketCnt() int64 {
 	if ses == nil {
 		return 0
 	}
 	return ses.packetCounter.Load()
 }
+
 func (ses *Session) ResetPacketCounter() {
 	if ses == nil {
 		return
@@ -620,6 +1370,100 @@ func (ses *Session) updateSqlModeNoAutoValueOnZero(val interface{}) {
 	}
 }
 
+func (ses *Session) sqlModeHasMatrixOneNative() bool {
+	if ses == nil {
+		return false
+	}
+	value, err := ses.GetSessionSysVar("sql_mode")
+	if err != nil {
+		return false
+	}
+	has, ok := sqlModeHasMatrixOneNativeValue(value)
+	return ok && has
+}
+
+func (ses *Session) sqlModeHasOnlyFullGroupBy() bool {
+	if ses == nil {
+		return false
+	}
+	value, err := ses.GetSessionSysVar("sql_mode")
+	if err != nil {
+		return false
+	}
+	has, ok := sqlModeHasOnlyFullGroupByValue(value)
+	return ok && has
+}
+
+func (ses *Session) sqlModeHasEnableBoolSumAvg() bool {
+	if ses == nil {
+		return false
+	}
+	value, err := ses.GetSessionSysVar("sql_mode")
+	if err != nil {
+		return false
+	}
+	has, ok := sqlModeHasEnableBoolSumAvgValue(value)
+	return ok && has
+}
+
+func (ses *Session) sqlModeHasHighNotPrecedence() bool {
+	if ses == nil {
+		return false
+	}
+	value, err := ses.GetSessionSysVar("sql_mode")
+	if err != nil {
+		return false
+	}
+	has, ok := sqlModeHasHighNotPrecedenceValue(value)
+	return ok && has
+}
+
+func (ses *Session) sqlModeHasNoUnsignedSubtraction() bool {
+	if ses == nil {
+		return false
+	}
+	value, err := ses.GetSessionSysVar("sql_mode")
+	if err != nil {
+		return false
+	}
+	mode, ok := value.(string)
+	return ok && mysql.HasSQLMode(mode, "NO_UNSIGNED_SUBTRACTION")
+}
+
+func (ses *Session) currentDivPrecisionIncrement() int64 {
+	return int64(sessionDivPrecisionIncrement(ses))
+}
+
+func sessionDivPrecisionIncrement(ses FeSession) int32 {
+	if ses == nil {
+		return function.DefaultDivPrecisionIncrement
+	}
+	value, err := ses.GetSessionSysVar("div_precision_increment")
+	if err != nil {
+		return function.DefaultDivPrecisionIncrement
+	}
+	increment, ok := value.(int64)
+	if !ok {
+		return function.DefaultDivPrecisionIncrement
+	}
+	return int32(increment)
+}
+
+func (ses *Session) sqlModeParserFlags() mysql.SQLModeFlags {
+	if ses == nil {
+		return 0
+	}
+	value, err := ses.GetSessionSysVar("sql_mode")
+	if err != nil {
+		return 0
+	}
+	flags, ok := sqlModeParserFlagsValue(value)
+	if !ok {
+		return 0
+	}
+	return flags
+}
+
 func parseNoAutoValueOnZero(val interface{}) (bool, bool) {
 	mode, ok := val.(string)
 	if !ok {
@@ -629,22 +1473,475 @@ func parseNoAutoValueOnZero(val interface{}) (bool, bool) {
 }
 
 type errInfo struct {
-	codes  []uint16
-	msgs   []string
-	maxCnt int
+	codes                  []uint16
+	msgs                   []string
+	levels                 []string
+	maxCnt                 int
+	totalWarnings          uint64
+	totalErrors            uint64
+	warningBytes           int
+	warningChargeBytes     uint64
+	warningBudget          *process.WarningDiagnosticBudget
+	warningRetentionSealed bool
+}
+
+func isRetainedWarningLevel(level string) bool {
+	return !strings.EqualFold(level, "Error")
+}
+
+func (e *errInfo) ensureWarningBudget() *process.WarningDiagnosticBudget {
+	if e == nil {
+		return nil
+	}
+	if e.warningBudget == nil {
+		e.warningBudget = process.NewWarningDiagnosticBudget(process.WarningDiagnosticMaxBytes)
+	}
+	return e.warningBudget
+}
+
+func (e *errInfo) releaseWarningCharge() {
+	if e == nil || e.warningBudget == nil || e.warningChargeBytes == 0 {
+		return
+	}
+	e.warningBudget.Release(e.warningChargeBytes)
+	e.warningChargeBytes = 0
+}
+
+func (e *errInfo) warningChargeAt(index int) uint64 {
+	if e == nil || index < 0 || index >= len(e.msgs) {
+		return 0
+	}
+	level := "Error"
+	if index < len(e.levels) && e.levels[index] != "" {
+		level = e.levels[index]
+	}
+	if !isRetainedWarningLevel(level) {
+		return 0
+	}
+	return process.WarningDiagnosticRecordBytes(e.msgs[index])
+}
+
+func (e *errInfo) setWarningBudget(budget *process.WarningDiagnosticBudget) {
+	if e == nil {
+		return
+	}
+	if budget == nil {
+		budget = process.NewWarningDiagnosticBudget(process.WarningDiagnosticMaxBytes)
+	}
+	if e.warningBudget == budget {
+		return
+	}
+	e.releaseWarningCharge()
+	e.warningBudget = budget
+	e.warningBytes = 0
+	e.warningChargeBytes = 0
+	e.warningRetentionSealed = false
+	if len(e.codes) == 0 {
+		return
+	}
+	oldCodes, oldMessages, oldLevels := e.codes, e.msgs, e.levels
+	e.codes = make([]uint16, 0, len(oldCodes))
+	e.msgs = make([]string, 0, len(oldMessages))
+	e.levels = make([]string, 0, len(oldLevels))
+	for i := range oldCodes {
+		level := "Error"
+		if i < len(oldLevels) && oldLevels[i] != "" {
+			level = oldLevels[i]
+		}
+		message := ""
+		if i < len(oldMessages) {
+			message = oldMessages[i]
+		}
+		if isRetainedWarningLevel(level) {
+			if e.warningRetentionSealed {
+				continue
+			}
+			charge := process.WarningDiagnosticRecordBytes(message)
+			if !budget.Reserve(charge) {
+				e.warningRetentionSealed = true
+				continue
+			}
+			e.warningBytes += len(message)
+			e.warningChargeBytes += charge
+		}
+		e.codes = append(e.codes, oldCodes[i])
+		e.msgs = append(e.msgs, message)
+		e.levels = append(e.levels, level)
+	}
+	clear(oldCodes)
+	clear(oldMessages)
+	clear(oldLevels)
+}
+
+func sessionWarningRetentionLimit(value interface{}) (int, bool) {
+	var limit int64
+	switch v := value.(type) {
+	case int64:
+		limit = v
+	case int:
+		limit = int64(v)
+	case uint64:
+		if v > uint64(^uint16(0)) {
+			return 0, false
+		}
+		limit = int64(v)
+	case uint32:
+		limit = int64(v)
+	case int32:
+		limit = int64(v)
+	default:
+		return 0, false
+	}
+	if limit < 0 || limit > int64(^uint16(0)) {
+		return 0, false
+	}
+	return int(limit), true
+}
+
+func (e *errInfo) setMaxCnt(limit int) {
+	if e == nil {
+		return
+	}
+	if limit < 0 {
+		limit = 0
+	} else if limit > int(^uint16(0)) {
+		limit = int(^uint16(0))
+	}
+	e.maxCnt = limit
+	if len(e.codes) > limit {
+		for i := limit; i < len(e.codes); i++ {
+			if charge := e.warningChargeAt(i); charge != 0 && e.warningBudget != nil {
+				e.warningBudget.Release(charge)
+			}
+		}
+		clear(e.codes[limit:])
+		clear(e.msgs[limit:])
+		clear(e.levels[limit:])
+		e.codes = e.codes[:limit]
+		e.msgs = e.msgs[:limit]
+		e.levels = e.levels[:limit]
+		e.warningBytes = 0
+		e.warningChargeBytes = 0
+		for i, message := range e.msgs {
+			if i < len(e.levels) && !isRetainedWarningLevel(e.levels[i]) {
+				continue
+			}
+			e.warningBytes += len(message)
+			if e.warningBudget != nil {
+				e.warningChargeBytes += process.WarningDiagnosticRecordBytes(message)
+			}
+		}
+	}
+	if limit == 0 {
+		e.releaseWarningCharge()
+		e.codes = nil
+		e.msgs = nil
+		e.levels = nil
+		e.warningBytes = 0
+		e.warningChargeBytes = 0
+		return
+	}
+	// Do not retain a large backing array after a substantial capacity
+	// reduction. Small changes keep the existing storage to avoid churn.
+	if cap(e.codes) > limit*2 || cap(e.msgs) > limit*2 || cap(e.levels) > limit*2 {
+		// Use exact-length allocations: append(nil, ...) may round a one-element
+		// copy up to a larger capacity, defeating the backing-array bound.
+		codes := make([]uint16, len(e.codes))
+		msgs := make([]string, len(e.msgs))
+		levels := make([]string, len(e.levels))
+		copy(codes, e.codes)
+		copy(msgs, e.msgs)
+		copy(levels, e.levels)
+		e.codes, e.msgs, e.levels = codes, msgs, levels
+	}
 }
 
 func (e *errInfo) push(code uint16, msg string) {
-	if e.maxCnt > 0 && len(e.codes) > e.maxCnt {
-		e.codes = e.codes[1:]
-		e.msgs = e.msgs[1:]
+	e.pushWithLevel(code, msg, "Error")
+}
+
+func (e *errInfo) pushWithLevel(code uint16, msg, level string) {
+	if strings.EqualFold(level, "Error") {
+		e.addErrorCount(1)
+	} else {
+		e.addWarningCount(1)
+	}
+	e.pushStored(code, msg, level)
+}
+
+func (e *errInfo) pushStored(code uint16, msg, level string) {
+	e.pushStoredWithReplacement(code, msg, level, nil)
+}
+
+func (e *errInfo) pushStoredWithReplacement(
+	code uint16,
+	msg string,
+	level string,
+	replacement *uint64,
+) {
+	if e.maxCnt <= 0 || len(e.codes) >= e.maxCnt {
+		return
+	}
+	if !strings.EqualFold(level, "Error") {
+		if e.warningRetentionSealed {
+			return
+		}
+		budget := e.ensureWarningBudget()
+		candidateBytes := len(msg)
+		if candidateBytes > process.WarningDiagnosticMaxMessageBytes {
+			candidateBytes = process.WarningDiagnosticMaxMessageBytes
+		}
+		used := budget.Used()
+		available := uint64(0)
+		if limit := budget.Limit(); used <= limit {
+			available = limit - used
+		}
+		if replacement != nil && *replacement > 0 && *replacement <= used {
+			// The replacement charge is already included in Used(). It will be
+			// atomically exchanged by Reconcile below, so make that capacity
+			// visible to the admission check first.
+			available += *replacement
+		}
+		if uint64(candidateBytes)+process.WarningDiagnosticRecordOverhead > available {
+			e.warningRetentionSealed = true
+			return
+		}
+		msg = process.BoundWarningMessage(msg, process.WarningDiagnosticMaxMessageBytes)
+		charge := process.WarningDiagnosticRecordBytes(msg)
+		reserved := false
+		if replacement != nil && *replacement != 0 {
+			var consumed bool
+			reserved, consumed = budget.Reconcile(*replacement, charge)
+			if consumed {
+				*replacement = 0
+			}
+		} else {
+			reserved = budget.Reserve(charge)
+		}
+		if !reserved {
+			e.warningRetentionSealed = true
+			return
+		}
+		e.warningChargeBytes += charge
+	} else {
+		// Error responses carry their full text through ERR packets. Keep the
+		// existing SHOW ERRORS payload semantics while sharing the same record
+		// capacity with warnings and notes.
+		msg = strings.Clone(msg)
 	}
 	e.codes = append(e.codes, code)
 	e.msgs = append(e.msgs, msg)
+	e.levels = append(e.levels, level)
+	if !strings.EqualFold(level, "Error") {
+		e.warningBytes += len(msg)
+	}
 }
 
-func (e *errInfo) length() int {
+func (e *errInfo) addWarningCount(delta uint64) {
+	e.totalWarnings = saturatingAddUint64(e.totalWarnings, delta)
+}
+
+func (e *errInfo) addErrorCount(delta uint64) {
+	e.totalErrors = saturatingAddUint64(e.totalErrors, delta)
+}
+
+func saturatingAddUint64(value, delta uint64) uint64 {
+	if ^uint64(0)-value < delta {
+		return ^uint64(0)
+	}
+	return value + delta
+}
+
+func (e *errInfo) appendWarningCount(total uint64) {
+	e.addWarningCount(total)
+}
+
+func (e *errInfo) appendWarningBatch(total uint64, codes []uint16, msgs []string) {
+	e.addWarningCount(total)
+	limit := len(codes)
+	if len(msgs) < limit {
+		limit = len(msgs)
+	}
+	if uint64(limit) > total {
+		limit = int(total)
+	}
+	for i := 0; i < limit; i++ {
+		e.pushStored(codes[i], msgs[i], "Warning")
+	}
+}
+
+func (e *errInfo) appendWarningBatchOwned(
+	total uint64,
+	codes []uint16,
+	msgs []string,
+	source *process.WarningDiagnosticBudget,
+	chargedBytes uint64,
+) bool {
+	if e == nil {
+		return false
+	}
+	e.addWarningCount(total)
+	budget := e.ensureWarningBudget()
+	sameBudget := source != nil && source == budget
+	undercharged := false
+	if sameBudget {
+		accounted := uint64(0)
+		for _, msg := range msgs {
+			if len(msg) > process.WarningDiagnosticMaxMessageBytes {
+				// Production producers pass bounded strings. A malformed
+				// caller falls back to the copying path so the destination
+				// still owns a bounded charge before the source is released.
+				sameBudget = false
+				break
+			}
+			accounted += process.WarningDiagnosticRecordBytes(msg)
+		}
+		if sameBudget && chargedBytes < accounted {
+			// Reconcile the source charge atomically with the first retained
+			// payload so another producer cannot consume the freed capacity.
+			undercharged = true
+			sameBudget = false
+		}
+	}
+	if undercharged {
+		replacement := chargedBytes
+		limit := len(codes)
+		if len(msgs) < limit {
+			limit = len(msgs)
+		}
+		if uint64(limit) > total {
+			limit = int(total)
+		}
+		for i := 0; i < limit; i++ {
+			e.pushStoredWithReplacement(codes[i], msgs[i], "Warning", &replacement)
+		}
+		if replacement != 0 {
+			_, consumed := budget.Reconcile(replacement, 0)
+			if consumed {
+				replacement = 0
+			}
+		}
+		return replacement == 0
+	}
+	if !sameBudget {
+		limit := len(codes)
+		if len(msgs) < limit {
+			limit = len(msgs)
+		}
+		if uint64(limit) > total {
+			limit = int(total)
+		}
+		for i := 0; i < limit; i++ {
+			e.pushStored(codes[i], msgs[i], "Warning")
+		}
+		return false
+	}
+	limit := len(codes)
+	if len(msgs) < limit {
+		limit = len(msgs)
+	}
+	if uint64(limit) > total {
+		limit = int(total)
+	}
+	for i := 0; i < len(msgs); i++ {
+		charge := process.WarningDiagnosticRecordBytes(msgs[i])
+		if i >= limit || e.maxCnt <= 0 || len(e.codes) >= e.maxCnt || e.warningRetentionSealed {
+			source.Release(charge)
+			continue
+		}
+		e.codes = append(e.codes, codes[i])
+		e.msgs = append(e.msgs, msgs[i])
+		e.levels = append(e.levels, "Warning")
+		e.warningBytes += len(msgs[i])
+		e.warningChargeBytes += charge
+	}
+	accounted := uint64(0)
+	for _, message := range msgs {
+		accounted += process.WarningDiagnosticRecordBytes(message)
+	}
+	if chargedBytes > accounted {
+		source.Release(chargedBytes - accounted)
+	}
+	return true
+}
+
+func (e *errInfo) reset() {
+	e.releaseWarningCharge()
+	clear(e.codes)
+	clear(e.msgs)
+	clear(e.levels)
+	e.codes = e.codes[:0]
+	e.msgs = e.msgs[:0]
+	e.levels = e.levels[:0]
+	e.totalWarnings = 0
+	e.totalErrors = 0
+	e.warningBytes = 0
+	e.warningChargeBytes = 0
+	e.warningRetentionSealed = false
+}
+
+func (e *errInfo) snapshot() errInfo {
+	return errInfo{
+		codes:         append([]uint16(nil), e.codes...),
+		msgs:          append([]string(nil), e.msgs...),
+		levels:        append([]string(nil), e.levels...),
+		maxCnt:        e.maxCnt,
+		totalWarnings: e.totalWarnings,
+		totalErrors:   e.totalErrors,
+		warningBytes:  e.warningBytes,
+	}
+}
+
+func (e errInfo) length() int {
 	return len(e.codes)
+}
+
+// diagnosticCounts returns the SQL-visible totals. Retained records are only
+// a bounded view for SHOW WARNINGS/ERRORS and must not be used as the count
+// source. The record fallback keeps hand-built test snapshots and any
+// pre-counter state well-defined.
+func (e errInfo) diagnosticCounts() (warningCount, errorCount uint64) {
+	warningCount = e.totalWarnings
+	errorCount = e.totalErrors
+	if warningCount != 0 || errorCount != 0 {
+		return saturatingAddUint64(warningCount, errorCount), errorCount
+	}
+
+	for i := range e.codes {
+		level := "Error"
+		if i < len(e.levels) && e.levels[i] != "" {
+			level = e.levels[i]
+		}
+		if strings.EqualFold(level, "Error") {
+			errorCount = saturatingAddUint64(errorCount, 1)
+		} else {
+			warningCount = saturatingAddUint64(warningCount, 1)
+		}
+	}
+	return saturatingAddUint64(warningCount, errorCount), errorCount
+}
+
+func (e errInfo) warningCount() uint16 {
+	if e.totalWarnings > 0 {
+		if e.totalWarnings >= uint64(^uint16(0)) {
+			return ^uint16(0)
+		}
+		return uint16(e.totalWarnings)
+	}
+	count := 0
+	for i := range e.codes {
+		level := "Error"
+		if i < len(e.levels) && e.levels[i] != "" {
+			level = e.levels[i]
+		}
+		if !strings.EqualFold(level, "Error") {
+			count++
+			if count >= int(^uint16(0)) {
+				return ^uint16(0)
+			}
+		}
+	}
+	return uint16(count)
 }
 
 func NewSession(
@@ -658,7 +1955,6 @@ func NewSession(
 	var txnOp TxnOperator
 	var err error
 	txnHandler := InitTxnHandler(service, getPu(service).StorageEngine, connCtx, txnOp)
-
 	ses := &Session{
 		feSessionImpl: feSessionImpl{
 			pool:       mp,
@@ -671,8 +1967,6 @@ func NewSession(
 			service:        service,
 		},
 		errInfo: &errInfo{
-			codes:  make([]uint16, 0, MoDefaultErrorCount),
-			msgs:   make([]string, 0, MoDefaultErrorCount),
 			maxCnt: MoDefaultErrorCount,
 		},
 		cache:     &privilegeCache{},
@@ -681,14 +1975,17 @@ func NewSession(
 		startedAt: time.Now(),
 		connType:  ConnTypeUnset,
 
-		timestampMap: map[TS]time.Time{},
-		statsCache:   plan2.NewStatsCache(),
+		timestampMap:       map[TS]time.Time{},
+		statsCache:         plan2.NewStatsCache(),
+		statsCacheVersions: make(map[uint64]optimizerStatsCacheTag),
 	}
 	atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, -1)
 
 	ses.userDefinedVars = make(map[string]*UserDefinedVar)
+	ses.migrationSystemVarReplayable = make(map[string]bool)
 	ses.tempTables = make(map[string]string)
 	ses.tempTablesRev = make(map[string]string)
+	ses.tempTableIdentities = make(map[string]tempTableIdentity)
 	ses.prepareStmts = make(map[string]*PrepareStmt)
 	// For seq init values.
 	ses.seqCurValues = make(map[uint64]string)
@@ -726,6 +2023,7 @@ func NewSession(
 		getPu(ses.GetService()).GetTaskService())
 
 	ses.proc.Base.Lim.Size = pu.SV.ProcessLimitationSize
+	ses.proc.Base.Lim.SpillSize = pu.SV.ProcessLimitationSpillSize
 	ses.proc.Base.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
 	ses.proc.Base.Lim.MaxMsgSize = pu.SV.MaxMessageSize
 	ses.proc.Base.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
@@ -749,58 +2047,149 @@ func (ses *Session) ReserveConnAndClose() {
 	ses.Close()
 }
 
-func (ses *Session) Close() {
-	// Clean up temporary tables
-	type tempTableEntry struct {
-		dbName   string
-		realName string
-	}
-	var tempTables []tempTableEntry
+type sessionTempTable struct {
+	retired  bool
+	aliasKey string
+	dbName   string
+	realName string
+	identity tempTableIdentity
+}
+
+func (ses *Session) takeTempTables() ([]sessionTempTable, *TenantInfo) {
 	ses.mu.Lock()
+	tempTables := make([]sessionTempTable, 0, len(ses.tempTables))
 	for key, realName := range ses.tempTables {
-		if db, _, ok := strings.Cut(key, "."); ok {
-			tempTables = append(tempTables, tempTableEntry{dbName: db, realName: realName})
-		} else {
-			tempTables = append(tempTables, tempTableEntry{realName: realName})
-		}
+		identity := ses.tempTableIdentityLocked(key)
+		tempTables = append(tempTables, sessionTempTable{
+			aliasKey: key,
+			dbName:   identity.dbName,
+			realName: realName,
+			identity: identity,
+		})
 	}
+	for _, tbl := range ses.retiredTempTables {
+		tempTables = append(tempTables, tbl)
+	}
+	ses.retiredTempTables = nil
 	ses.tempTables = nil
 	ses.tempTablesRev = nil
+	ses.tempTableIdentities = nil
+	ses.tempTableTxnJournals = nil
+	tenant := ses.tenant
 	ses.mu.Unlock()
+	if tenant != nil {
+		tenant = tenant.Copy()
+	}
+	return tempTables, tenant
+}
 
+func dropSessionTempTables(
+	ctx context.Context,
+	service string,
+	timeZone *time.Location,
+	tenant *TenantInfo,
+	tempTables []sessionTempTable,
+) error {
+	if len(tempTables) == 0 {
+		return nil
+	}
+	serviceRuntime := moruntime.ServiceRuntime(service)
+	if serviceRuntime == nil {
+		return moerr.NewInternalError(ctx, "failed to clean temporary tables: service runtime is not ready")
+	}
+	v, ok := serviceRuntime.GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		return moerr.NewInternalError(ctx, "failed to clean temporary tables: internal SQL executor is not ready")
+	}
+	exec, ok := v.(executor.SQLExecutor)
+	if !ok {
+		return moerr.NewInternalError(ctx, "failed to clean temporary tables: invalid internal SQL executor")
+	}
+	opts := executor.Options{}.WithTimeZone(timeZone)
+	if tenant != nil {
+		opts = opts.WithAccountID(tenant.GetTenantID()).WithStatementOption(
+			executor.StatementOption{}.
+				WithAccountID(tenant.GetTenantID()).
+				WithUserID(tenant.GetUserID()).
+				WithRoleID(tenant.GetDefaultRoleID()),
+		)
+	}
+	var cleanupErr error
+	for _, tbl := range tempTables {
+		dropSQL := "DROP TABLE IF EXISTS " + sqlquote.QualifiedIdent(tbl.dbName, tbl.realName)
+		res, err := exec.Exec(ctx, dropSQL, opts)
+		if err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+			continue
+		}
+		res.Close()
+	}
+	return cleanupErr
+}
+
+// resetTempTables synchronously removes every physical temporary table before
+// a replacement session generation is published. Session.Close may clean up
+// asynchronously because a disconnected client has no generation to reuse.
+func (ses *Session) resetTempTables(ctx context.Context) error {
+	tempTables, tenant := ses.takeTempTables()
+	if err := dropSessionTempTables(ctx, ses.GetService(), ses.GetTimeZone(), tenant, tempTables); err != nil {
+		// Preserve a retryable owner on failure. DROP IF EXISTS makes entries that
+		// were already removed safe to execute again on the next reset attempt.
+		ses.mu.Lock()
+		ses.tempTables = make(map[string]string, len(tempTables))
+		ses.tempTablesRev = make(map[string]string, len(tempTables))
+		ses.tempTableIdentities = make(map[string]tempTableIdentity, len(tempTables))
+		for _, tbl := range tempTables {
+			if tbl.retired {
+				if ses.retiredTempTables == nil {
+					ses.retiredTempTables = make(map[string]sessionTempTable)
+				}
+				ses.retiredTempTables[tbl.realName] = tbl
+				continue
+			}
+			ses.tempTables[tbl.aliasKey] = tbl.realName
+			ses.tempTablesRev[tbl.realName] = tbl.aliasKey
+			ses.tempTableIdentities[tbl.aliasKey] = tbl.identity
+		}
+		ses.mu.Unlock()
+		return err
+	}
+	return nil
+}
+
+func (ses *Session) Close() {
+	// The disconnect path has no next borrower, so temporary-table cleanup can
+	// be asynchronous. Reset uses resetTempTables before it reaches Close.
+	tempTables, tenantInfo := ses.takeTempTables()
 	if len(tempTables) > 0 {
+		service := ses.GetService()
+		timeZone := ses.GetTimeZone()
 		go func() {
-			// use a new context to clean up temp tables
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
 
 			_, _ = ExecuteFuncWithRecover(func() error {
-				// Use an independent background executor.
-				// We use a "minimal" session or just a way to run SQL.
-				// Here we can use the service's background executor if available,
-				// or just create one that doesn't depend on the closing session's pool.
-				// For now, to keep it simple and following the suggestion of "independent executor",
-				// we'll use GetBackgroundExec but we need to be careful.
-				// Actually, the suggestion implies we should not block Close.
-				// In MatrixOne, we can use the internal executor.
-
-				bh := ses.GetBackgroundExec(ctx)
-				defer bh.Close()
-				for _, tbl := range tempTables {
-					var dropSQL string
-					if tbl.dbName != "" {
-						dropSQL = fmt.Sprintf("DROP TABLE IF EXISTS `%s`.`%s`", tbl.dbName, tbl.realName)
-					} else {
-						dropSQL = fmt.Sprintf("DROP TABLE IF EXISTS %s", tbl.realName)
-					}
-					if err := bh.Exec(ctx, dropSQL); err != nil {
-						logutil.Errorf("failed to drop temp table %s: %v", tbl.realName, err)
-					}
+				if err := dropSessionTempTables(ctx, service, timeZone, tenantInfo, tempTables); err != nil {
+					logutil.Errorf("failed to clean temporary tables: %v", err)
 				}
 				return nil
 			})
 		}()
 	}
+
+	if ses.proc != nil {
+		if ses.userLevelLocksMigrated {
+			function.DiscardMigratedUserLevelLocks(ses.proc)
+		} else {
+			function.ReleaseUserLevelLocksOnSessionClose(ses.proc)
+		}
+	}
+
+	// Close any esql_tvf / sql_tvf foreign-data connections opened by this
+	// session so their sockets and driver pools do not outlive it.
+	ses.closeForeignConns()
+	// a session closing mid-statement must not advance the kafka chain
+	ses.FinalizeKafkaProgress(false)
 
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -824,9 +2213,14 @@ func (ses *Session) Close() {
 		stmt.Close()
 	}
 	ses.prepareStmts = nil
+	ses.preparedCursorBytes.Store(0)
+	ses.preparedCursorLimit.Store(0)
 	ses.allResultSet = nil
 	ses.tenant = nil
 	ses.priv = nil
+	if ses.errInfo != nil {
+		ses.errInfo.reset()
+	}
 	ses.errInfo = nil
 	ses.cache = nil
 	ses.debugStr = ""
@@ -886,8 +2280,52 @@ func (ses *Session) IsBackgroundSession() bool {
 	return false
 }
 
-func (ses *Session) cachePlan(sql string, stmts []tree.Statement, plans []*plan.Plan) {
+func (ses *Session) cachePlan(sql string, stmts []tree.Statement, plans []*plan.Plan, versions ...int64) {
+	ses.cachePlanWithSnapshotsAndStatsVersions(
+		sql, stmts, plans, make([]timestamp.Timestamp, len(plans)),
+		make([]map[optimizerStatsTableKey]uint64, len(plans)), versions...)
+}
+
+func (ses *Session) cachePlanWithStatsVersions(
+	sql string,
+	stmts []tree.Statement,
+	plans []*plan.Plan,
+	statsVersions map[optimizerStatsTableKey]uint64,
+	versions ...int64,
+) {
+	ses.cachePlanWithSnapshotsAndStatsVersions(
+		sql, stmts, plans, make([]timestamp.Timestamp, len(plans)),
+		planStatsVersionsFromAggregate(len(plans), statsVersions), versions...)
+}
+
+func (ses *Session) cachePlanWithSnapshots(
+	sql string,
+	stmts []tree.Statement,
+	plans []*plan.Plan,
+	planSnapshotTS []timestamp.Timestamp,
+	versions ...int64,
+) {
+	ses.cachePlanWithSnapshotsAndStatsVersions(
+		sql, stmts, plans, planSnapshotTS,
+		make([]map[optimizerStatsTableKey]uint64, len(plans)), versions...)
+}
+
+func (ses *Session) cachePlanWithSnapshotsAndStatsVersions(
+	sql string,
+	stmts []tree.Statement,
+	plans []*plan.Plan,
+	planSnapshotTS []timestamp.Timestamp,
+	planStatsVersions []map[optimizerStatsTableKey]uint64,
+	versions ...int64,
+) {
 	if len(sql) == 0 {
+		return
+	}
+	statsVersions, versionsConsistent := aggregatePlanStatsVersions(planStatsVersions)
+	if !versionsConsistent || !optimizerStatsVersionsCurrent(ses.GetService(), statsVersions) {
+		// The plan crossed a statistics publication boundary while compiling.
+		// It may execute, but must not enter the cache with stale dependencies.
+		freeStmts(stmts)
 		return
 	}
 	ses.mu.Lock()
@@ -896,7 +2334,12 @@ func (ses *Session) cachePlan(sql string, stmts []tree.Statement, plans []*plan.
 		freeStmts(stmts)
 		return
 	}
-	ses.planCache.cache(sql, stmts, plans)
+	protocolVersion := currentProtocolVersion(ses.proc)
+	if len(versions) > 0 {
+		protocolVersion = versions[0]
+	}
+	ses.planCache.cacheWithPlanSnapshotsAndStatsVersions(
+		sql, stmts, plans, planSnapshotTS, planStatsVersions, protocolVersion)
 }
 
 func (ses *Session) getCachedPlan(sql string) *cachedPlan {
@@ -908,7 +2351,13 @@ func (ses *Session) getCachedPlan(sql string) *cachedPlan {
 	if ses.planCache == nil {
 		return nil
 	}
-	return ses.planCache.get(sql)
+	cached := ses.planCache.get(sql)
+	if cached != nil && (cached.protocolVersion != currentProtocolVersion(ses.proc) ||
+		!optimizerStatsVersionsCurrent(ses.GetService(), cached.statsVersions)) {
+		ses.planCache.remove(sql)
+		return nil
+	}
+	return cached
 }
 
 func (ses *Session) isCached(sql string) bool {
@@ -920,14 +2369,82 @@ func (ses *Session) isCached(sql string) bool {
 	if ses.planCache == nil {
 		return false
 	}
-	return ses.planCache.isCached(sql)
+	if !ses.planCache.isCached(sql) {
+		return false
+	}
+	cached := ses.planCache.cachePool[sql].Value.(*cachedPlan)
+	if cached.protocolVersion != currentProtocolVersion(ses.proc) ||
+		!optimizerStatsVersionsCurrent(ses.GetService(), cached.statsVersions) {
+		// isCached is also queried while wrappers still borrow the cached AST at
+		// the end of execution. Report staleness without releasing that owner;
+		// the next getCachedPlan lookup removes it after all borrowers are gone.
+		return false
+	}
+	return true
+}
+
+func (ses *Session) removeCachedPlan(sql string) {
+	if len(sql) == 0 {
+		return
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.planCache != nil {
+		ses.planCache.remove(sql)
+	}
+}
+
+func (ses *Session) updateCachedPlanGeneration(
+	sql string,
+	index int,
+	expectedPlan *plan.Plan,
+	newPlan *plan.Plan,
+	planSnapshotTS timestamp.Timestamp,
+	statsVersions map[optimizerStatsTableKey]uint64,
+) bool {
+	if len(sql) == 0 {
+		return false
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.planCache == nil {
+		return false
+	}
+	return ses.planCache.updatePlanGeneration(
+		sql, index, expectedPlan, newPlan, planSnapshotTS, statsVersions)
+}
+
+func (ses *Session) invalidateCachedPlanGeneration(
+	sql string,
+	index int,
+	expectedPlan *plan.Plan,
+) {
+	if len(sql) == 0 {
+		return
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.planCache != nil {
+		ses.planCache.invalidatePlanGeneration(sql, index, expectedPlan)
+	}
 }
 
 func (ses *Session) cleanCache() {
+	ses.invalidateCachedPlans(false)
+}
+
+// EXECUTE owns replacement and cleanup; invalidation preserves prepared
+// handles, parameters and buffers until their existing rebuild path runs.
+func (ses *Session) invalidateCachedPlans(prepared bool) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	if ses.planCache != nil {
 		ses.planCache.clean()
+	}
+	if prepared {
+		for _, statement := range ses.prepareStmts {
+			statement.needsRebuild = true
+		}
 	}
 }
 
@@ -1032,6 +2549,9 @@ func (ses *Session) InitBackExec(txnOp TxnOperator, db string, callBack outputCa
 	be.backSes.upstream = ses
 	if len(opts) > 0 && opts[0] != nil {
 		be.backSes.fromRealUser = opts[0].fromRealUser
+		be.backSes.forcePessimisticRC = opts[0].forcePessimisticRC
+		be.backSes.cloneSnapshotUsesBackgroundTxn = opts[0].cloneSnapshotUsesBackgroundTxn
+		be.backSes.cancelTxnCreateWithRequest = opts[0].cancelTxnCreateWithRequest
 	}
 	return be
 }
@@ -1100,14 +2620,176 @@ func (ses *Session) GetOutputCallback(execCtx *ExecCtx) func(*batch.Batch, *perf
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return func(bat *batch.Batch, crs *perfcounter.CounterSet) error {
+		if execCtx != nil && execCtx.input != nil && execCtx.input.isCursorExecute {
+			if err := capturePreparedCursorBatch(ses, execCtx, bat); err != nil {
+				return err
+			}
+			return stagePreparedCursorQueryResult(execCtx, crs, bat)
+		}
 		return ses.outputCallback(ses, execCtx, bat, crs)
 	}
 }
 
-func (ses *Session) GetErrInfo() *errInfo {
+func (ses *Session) resetDiagnostics() {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	return ses.errInfo
+	if ses.errInfo != nil {
+		ses.errInfo.reset()
+	}
+}
+
+// beginWarningDiagnostics fixes the configured session capacity for the next
+// top-level statement and clears the previous statement's retained records.
+// SET max_error_count updates the session variable immediately, but the active
+// diagnostic capacity changes only at this boundary so warnings produced by
+// that SET statement remain observable through the following SHOW command.
+// The returned value is the immutable snapshot to propagate to nested work.
+func (ses *Session) beginWarningDiagnostics() int {
+	limit := process.WarningDiagnosticDefaultRetentionLimit
+	if value, err := ses.GetSessionSysVar("max_error_count"); err == nil {
+		if parsed, ok := sessionWarningRetentionLimit(value); ok {
+			limit = parsed
+		}
+	}
+	budgetLimit := uint64(process.WarningDiagnosticMaxBytes)
+	if ses.proc != nil && ses.proc.Base != nil && ses.proc.Base.Lim.Size > 0 {
+		if statementLimit := uint64(ses.proc.Base.Lim.Size); statementLimit < budgetLimit {
+			budgetLimit = statementLimit
+		}
+	}
+	budget := process.NewWarningDiagnosticBudget(budgetLimit)
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.errInfo != nil {
+		ses.errInfo.reset()
+		ses.errInfo.setMaxCnt(limit)
+		ses.errInfo.setWarningBudget(budget)
+	}
+	return limit
+}
+
+func (ses *Session) appendErrorDiagnostic(code uint16, msg string) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.errInfo != nil {
+		ses.errInfo.push(code, msg)
+	}
+}
+
+func (ses *Session) appendWarningDiagnostic(code uint16, msg string) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.errInfo != nil {
+		ses.errInfo.pushWithLevel(code, msg, "Warning")
+	}
+}
+
+// AppendWarningDiagnostic exposes the diagnostic sink to expression
+// evaluation without coupling the process.Session interface to frontend
+// warning storage.
+func (ses *Session) AppendWarningDiagnostic(code uint16, msg string) {
+	ses.appendWarningDiagnostic(code, msg)
+}
+
+// AppendWarningCount adds warnings whose diagnostic records were omitted by
+// the bounded transport. Callers pass only the count not represented by
+// subsequent AppendWarningDiagnostic calls.
+func (ses *Session) AppendWarningCount(total uint64) {
+	if total == 0 {
+		return
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.errInfo != nil {
+		ses.errInfo.appendWarningCount(total)
+	}
+}
+
+// AppendWarningBatch merges the total warning count from a remote fragment
+// while retaining only the bounded records needed by SHOW WARNINGS.
+func (ses *Session) AppendWarningBatch(total uint64, codes []uint16, messages []string) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.errInfo != nil {
+		ses.errInfo.appendWarningBatch(total, codes, messages)
+	}
+}
+
+func (ses *Session) AppendWarningBatchOwned(
+	total uint64,
+	codes []uint16,
+	messages []string,
+	source *process.WarningDiagnosticBudget,
+	chargedBytes uint64,
+) bool {
+	if ses == nil {
+		return false
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.errInfo == nil {
+		return false
+	}
+	return ses.errInfo.appendWarningBatchOwned(total, codes, messages, source, chargedBytes)
+}
+
+// GetWarningRetentionLimit exposes the session's statement diagnostic
+// capacity through the narrow process warning capability interface.
+func (ses *Session) GetWarningRetentionLimit() int {
+	if ses == nil {
+		return process.WarningDiagnosticDefaultRetentionLimit
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.errInfo == nil {
+		return process.WarningDiagnosticDefaultRetentionLimit
+	}
+	if ses.errInfo.maxCnt < 0 || ses.errInfo.maxCnt > int(^uint16(0)) {
+		return process.WarningDiagnosticDefaultRetentionLimit
+	}
+	return ses.errInfo.maxCnt
+}
+
+func (ses *Session) GetWarningDiagnosticBudget() *process.WarningDiagnosticBudget {
+	if ses == nil {
+		return nil
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.errInfo == nil {
+		return nil
+	}
+	return ses.errInfo.ensureWarningBudget()
+}
+
+func (ses *Session) diagnosticsSnapshot() errInfo {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.errInfo == nil {
+		return errInfo{}
+	}
+	return ses.errInfo.snapshot()
+}
+
+func (ses *Session) warningCount() uint16 {
+	if ses == nil {
+		return 0
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.errInfo == nil {
+		return 0
+	}
+	return ses.errInfo.warningCount()
+}
+
+func (ses *Session) diagnosticsCounts() (warningCount, errorCount uint64) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.errInfo == nil {
+		return 0, 0
+	}
+	return ses.errInfo.diagnosticCounts()
 }
 
 func (ses *Session) GenNewStmtId() uint32 {
@@ -1153,6 +2835,18 @@ func (ses *Session) GetLastAffectedRows() int64 {
 	return ses.lastAffectedRows
 }
 
+func (ses *Session) SetLastFoundRows(num uint64) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.lastFoundRows = num
+}
+
+func (ses *Session) GetLastFoundRows() uint64 {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.lastFoundRows
+}
+
 func (ses *Session) SetCmd(cmd CommandType) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -1181,11 +2875,13 @@ func (ses *Session) GetTenantName() string {
 }
 
 func (ses *Session) SetPrepareStmt(ctx context.Context, name string, prepareStmt *PrepareStmt) error {
+	name = strings.ToLower(name)
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	if stmt, ok := ses.prepareStmts[name]; !ok {
-		if len(ses.prepareStmts) >= int(MaxPrepareNumberInOneSession.Load()) {
-			return moerr.NewInvalidStatef(ctx, "too many prepared statement, max %d", MaxPrepareNumberInOneSession.Load())
+		limit := ses.getMaxPrepareStmtCountLocked()
+		if uint64(len(ses.prepareStmts)) >= limit {
+			return moerr.NewMaxPreparedStmtCountReached(ctx, limit)
 		}
 	} else {
 		stmt.Close()
@@ -1199,10 +2895,22 @@ func (ses *Session) SetPrepareStmt(ctx context.Context, name string, prepareStmt
 	return nil
 }
 
+func (ses *Session) getMaxPrepareStmtCountLocked() uint64 {
+	limit := uint64(MaxPrepareNumberInOneSession.Load())
+	if ses.gSysVars == nil {
+		return limit
+	}
+	if value, ok := ses.gSysVars.Get(maxPreparedStmtCount).(int64); ok && value >= 0 && uint64(value) < limit {
+		return uint64(value)
+	}
+	return limit
+}
+
 func (ses *Session) GetPrepareStmt(ctx context.Context, name string) (*PrepareStmt, error) {
+	normalizedName := strings.ToLower(name)
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	if prepareStmt, ok := ses.prepareStmts[name]; ok {
+	if prepareStmt, ok := ses.prepareStmts[normalizedName]; ok {
 		return prepareStmt, nil
 	}
 	var connID uint32
@@ -1223,13 +2931,17 @@ func (ses *Session) GetPrepareStmts() []*PrepareStmt {
 	return ret
 }
 
-func (ses *Session) RemovePrepareStmt(name string) {
+func (ses *Session) RemovePrepareStmt(name string) bool {
+	name = strings.ToLower(name)
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	if stmt, ok := ses.prepareStmts[name]; ok {
-		stmt.Close()
+	stmt, ok := ses.prepareStmts[name]
+	if !ok {
+		return false
 	}
+	stmt.Close()
 	delete(ses.prepareStmts, name)
+	return true
 }
 
 // RemoveAllPrepareStmts closes and drops every cached prepared statement. It is
@@ -1332,6 +3044,121 @@ func (ses *Session) skipAuthForSpecialUser() bool {
 	return false
 }
 
+// advanceAuthenticationSnapshot is the rolling-upgrade fallback for services
+// predating the TN-ordered logtail read barrier. It is correct but may wait for
+// the full clock uncertainty interval, so new clusters use the generic engine
+// barrier in prepareAuthenticationSnapshot instead.
+func (ses *Session) advanceAuthenticationSnapshot(ctx context.Context) error {
+	minimum, err := ses.legacyLogtailReadFence(ctx)
+	if err != nil {
+		return err
+	}
+	ses.updateLastCommitTS(minimum)
+	return nil
+}
+
+// legacyLogtailReadFence returns a timestamp strictly beyond the local HLC
+// uncertainty window. It is the rolling-upgrade fallback for catalog reads
+// that require cross-CN freshness before the TN-ordered barrier is available.
+func (ses *Session) legacyLogtailReadFence(
+	ctx context.Context,
+) (timestamp.Timestamp, error) {
+	rt := moruntime.ServiceRuntime(ses.GetService())
+	if rt == nil {
+		return timestamp.Timestamp{}, moerr.NewInternalError(
+			ctx, "missing service runtime for catalog read fence")
+	}
+	txnClock := rt.Clock()
+	if txnClock == nil {
+		return timestamp.Timestamp{}, moerr.NewInternalError(
+			ctx, "missing transaction clock for catalog read fence")
+	}
+	if txnClock.MaxOffset() < 0 {
+		return timestamp.Timestamp{}, moerr.NewInternalError(
+			ctx, "negative transaction clock offset for catalog read fence")
+	}
+
+	_, upperBound := txnClock.Now()
+	if upperBound.PhysicalTime < 0 || upperBound.PhysicalTime == math.MaxInt64 {
+		return timestamp.Timestamp{}, moerr.NewInternalError(
+			ctx, "catalog read fence timestamp overflow")
+	}
+
+	// HLC ordering compares the logical component when physical times are equal.
+	// Moving to the next physical tick dominates every logical timestamp at the
+	// uncertainty upper bound, including a remote commit at that exact tick.
+	return timestamp.Timestamp{
+		PhysicalTime: upperBound.PhysicalTime + 1,
+	}, nil
+}
+
+// prepareAuthenticationSnapshot installs a session snapshot minimum only after
+// a generic TN publication barrier has reached this CN's normal apply pipeline.
+// The protocol gate preserves correctness during rolling upgrades by falling
+// back to the legacy HLC uncertainty fence until every service supports the
+// barrier wire contract.
+func (ses *Session) prepareAuthenticationSnapshot(ctx context.Context) error {
+	pu := getPuIfPresent(ses.GetService())
+	if pu == nil || pu.TxnClient == nil {
+		return moerr.NewInternalError(ctx, "missing transaction client for authentication snapshot")
+	}
+
+	if logtailReadBarrierSupported(ses) {
+		frontier, err := ses.acquireLogtailReadBarrier(ctx)
+		if err != nil {
+			return err
+		}
+		ses.updateLastCommitTS(frontier)
+	} else if err := ses.advanceAuthenticationSnapshot(ctx); err != nil {
+		return err
+	}
+
+	minimum := ses.getLastCommitTS()
+	applied, err := pu.TxnClient.WaitLogTailAppliedAt(ctx, minimum)
+	if err != nil {
+		return err
+	}
+	if applied.Less(minimum) {
+		return moerr.NewInternalError(ctx, "authentication snapshot did not reach the required timestamp")
+	}
+	return nil
+}
+
+type authenticationRejectedError struct {
+	cause error
+}
+
+func (e *authenticationRejectedError) Error() string {
+	return e.cause.Error()
+}
+
+func (e *authenticationRejectedError) Unwrap() error {
+	return e.cause
+}
+
+func markAuthenticationRejected(err error) error {
+	if err == nil {
+		return nil
+	}
+	var rejected *authenticationRejectedError
+	if errors.As(err, &rejected) {
+		return err
+	}
+	return &authenticationRejectedError{cause: err}
+}
+
+func isAuthenticationRejected(err error) bool {
+	var rejected *authenticationRejectedError
+	return errors.As(err, &rejected)
+}
+
+// isAuthenticationRequestRejected identifies a deterministic login-request
+// validation failure. Unlike credential rejection, the same client request
+// cannot succeed by trying another cached backend generation.
+func isAuthenticationRequestRejected(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrBadDB)
+}
+
 // AuthenticateUser Verify the user's password, and if the login information contains the database name, verify if the database exists
 func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbName string, authResponse []byte, salt []byte, checkPassword func(pwd []byte, salt []byte, auth []byte) bool) ([]byte, error) {
 	var (
@@ -1370,8 +3197,17 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	ses.UpdateDebugString()
 
 	ses.Debugf(ctx, "check special user")
-	// check the special user for initialization
-	if isSpecial, pwdBytes, specialAccount := isSpecialUser(tenant.GetUser()); isSpecial && specialAccount.IsMoAdminRole() {
+	isSpecial, pwdBytes, specialAccount := isSpecialUser(tenant.GetUser())
+	isBootstrapSpecial := isSpecial && specialAccount.IsMoAdminRole()
+	// Internal special users bootstrap the service before catalog access is
+	// available. External special users are normal client connections and must
+	// observe the same fresh catalog boundary as every other public session.
+	if !isBootstrapSpecial || !ses.isInternal {
+		if err = ses.prepareAuthenticationSnapshot(ctx); err != nil {
+			return nil, err
+		}
+	}
+	if isBootstrapSpecial {
 		ses.SetTenantInfo(specialAccount)
 		if len(ses.requestLabel) == 0 {
 			ses.requestLabel = db_holder.GetLabelSelector()
@@ -1379,7 +3215,10 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		return GetPassWord(HashPassWordWithByte(pwdBytes))
 	}
 
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{fromRealUser: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{
+		fromRealUser:               true,
+		cancelTxnCreateWithRequest: true,
+	})
 	defer bh.Close()
 
 	//step1 : check tenant exists or not in SYS tenant context
@@ -1404,7 +3243,8 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		return nil, err
 	}
 	if !execResultArrayHasData(rsset) {
-		return nil, moerr.NewInternalErrorf(sysTenantCtx, "there is no tenant %s", tenant.GetTenant())
+		return nil, markAuthenticationRejected(
+			moerr.NewInternalErrorf(sysTenantCtx, "there is no tenant %s", tenant.GetTenant()))
 	}
 
 	//account id
@@ -1432,7 +3272,8 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	}
 
 	if strings.ToLower(accountStatus) == tree.AccountStatusSuspend.String() {
-		return nil, moerr.NewInternalErrorf(sysTenantCtx, "Account %s is suspended", tenant.GetTenant())
+		return nil, markAuthenticationRejected(
+			moerr.NewInternalErrorf(sysTenantCtx, "Account %s is suspended", tenant.GetTenant()))
 	}
 
 	if strings.ToLower(accountStatus) == tree.AccountStatusRestricted.String() {
@@ -1463,7 +3304,8 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		return nil, err
 	}
 	if !execResultArrayHasData(userRsset) {
-		return nil, moerr.NewInternalErrorf(tenantCtx, "there is no user %s", tenant.GetUser())
+		return nil, markAuthenticationRejected(
+			moerr.NewInternalErrorf(tenantCtx, "there is no user %s", tenant.GetUser()))
 	}
 
 	userID, err = userRsset[0].GetInt64(tenantCtx, 0, 0)
@@ -1476,21 +3318,21 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		return nil, err
 	}
 
-	//the default_role in the mo_user table.
-	//the default_role is always valid. public or other valid role.
-	defaultRoleID, err = userRsset[0].GetInt64(tenantCtx, 0, 2)
+	// The catalog value may be NULL or stale after a prior REVOKE. Do not use
+	// it as an active role until the implicit-login path validates the grant.
+	defaultRoleID, defaultRoleIDValid, err := readStoredDefaultRoleID(tenantCtx, userRsset[0])
 	if err != nil {
 		return nil, err
 	}
 
 	tenant.SetUserID(uint32(userID))
-	tenant.SetDefaultRoleID(uint32(defaultRoleID))
 	ses.timestampMap[TSCheckUserEnd] = time.Now()
 	v2.CheckUserDurationHistogram.Observe(ses.timestampMap[TSCheckUserEnd].Sub(ses.timestampMap[TSCheckUserStart]).Seconds())
 
 	/*
 		login case 1: tenant:user
 		1.get the default_role of the user in mo_user
+		2.validate that the role is still granted, otherwise use the public grant
 
 		login case 2: tenant:user:role
 		1.check the role has been granted to the user
@@ -1513,7 +3355,8 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		}
 
 		if !execResultArrayHasData(rsset) {
-			return nil, moerr.NewInternalErrorf(tenantCtx, "there is no role %s", tenant.GetDefaultRole())
+			return nil, markAuthenticationRejected(
+				moerr.NewInternalErrorf(tenantCtx, "there is no role %s", tenant.GetDefaultRole()))
 		}
 
 		ses.Debugf(tenantCtx, "check granted role of user %s.", tenant)
@@ -1527,8 +3370,8 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 			return nil, err
 		}
 		if !execResultArrayHasData(rsset) {
-			return nil, moerr.NewInternalErrorf(tenantCtx, "the role %s has not been granted to the user %s",
-				tenant.GetDefaultRole(), tenant.GetUser())
+			return nil, markAuthenticationRejected(moerr.NewInternalErrorf(tenantCtx,
+				"the role %s has not been granted to the user %s", tenant.GetDefaultRole(), tenant.GetUser()))
 		}
 
 		defaultRoleID, err = rsset[0].GetInt64(tenantCtx, 0, 0)
@@ -1540,21 +3383,13 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		v2.CheckRoleDurationHistogram.Observe(ses.timestampMap[TSCheckRoleEnd].Sub(ses.timestampMap[TSCheckRoleStart]).Seconds())
 	} else {
 		ses.timestampMap[TSCheckRoleStart] = time.Now()
-		ses.Debugf(tenantCtx, "check designated role of user %s.", tenant)
-		//the get name of default_role from mo_role
-		sql := getSqlForRoleNameOfRoleId(defaultRoleID)
-		rsset, err = executeSQLInBackgroundSession(tenantCtx, bh, sql)
+		ses.Debugf(tenantCtx, "validate implicit default role of user %s.", tenant)
+		defaultRoleID, defaultRole, err = resolveImplicitDefaultRole(
+			tenantCtx, bh, userID, defaultRoleID, defaultRoleIDValid)
 		if err != nil {
 			return nil, err
 		}
-		if !execResultArrayHasData(rsset) {
-			return nil, moerr.NewInternalErrorf(tenantCtx, "get the default role of the user %s failed", tenant.GetUser())
-		}
-
-		defaultRole, err = rsset[0].GetString(tenantCtx, 0, 0)
-		if err != nil {
-			return nil, err
-		}
+		tenant.SetDefaultRoleID(uint32(defaultRoleID))
 		tenant.SetDefaultRole(defaultRole)
 		ses.timestampMap[TSCheckRoleEnd] = time.Now()
 		v2.CheckRoleDurationHistogram.Observe(ses.timestampMap[TSCheckRoleEnd].Sub(ses.timestampMap[TSCheckRoleStart]).Seconds())
@@ -1613,7 +3448,8 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	}
 
 	if userStatus == userStatusLockForever {
-		return nil, moerr.NewInternalError(tenantCtx, "user is locked, please ask the administrator to unlock")
+		return nil, markAuthenticationRejected(
+			moerr.NewInternalError(tenantCtx, "user is locked, please ask the administrator to unlock"))
 	} else if userStatus == userStatusLock {
 		/*
 			if user lock status is locked
@@ -1624,7 +3460,8 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		}
 
 		if !lockTimeExpired {
-			return nil, moerr.NewInternalError(tenantCtx, "user is locked, please try again later")
+			return nil, markAuthenticationRejected(
+				moerr.NewInternalError(tenantCtx, "user is locked, please try again later"))
 		}
 	}
 
@@ -1695,7 +3532,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 			}
 		}
 
-		return nil, moerr.NewInternalError(tenantCtx, "check password failed")
+		return nil, markAuthenticationRejected(moerr.NewInternalError(tenantCtx, "check password failed"))
 	}
 
 	// If the login information contains the database name, verify if the database exists
@@ -1716,6 +3553,72 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	ses.SetCreateVersion(createVersion)
 
 	return GetPassWord(pwd)
+}
+
+func readStoredDefaultRoleID(ctx context.Context, userResult ExecResult) (int64, bool, error) {
+	isNull, err := userResult.ColumnIsNull(ctx, 0, 2)
+	if err != nil {
+		return 0, false, err
+	}
+	if isNull {
+		return 0, false, nil
+	}
+
+	roleID, err := userResult.GetInt64(ctx, 0, 2)
+	if err != nil {
+		return 0, false, err
+	}
+	if roleID < 0 || roleID > int64(^uint32(0)) {
+		return 0, false, nil
+	}
+	return roleID, true, nil
+}
+
+// resolveImplicitDefaultRole returns a role that is currently granted to the
+// user. A stale, NULL, invalid, or missing catalog default falls back to the
+// user's public grant; it is never activated directly from mo_user metadata.
+func resolveImplicitDefaultRole(
+	ctx context.Context,
+	bh BackgroundExec,
+	userID int64,
+	storedRoleID int64,
+	storedRoleIDValid bool,
+) (int64, string, error) {
+	roleID := storedRoleID
+	if !storedRoleIDValid {
+		roleID = publicRoleID
+	}
+
+	for {
+		sql := getSqlForRoleNameOfUserRole(userID, roleID)
+		rsset, err := executeSQLInBackgroundSession(ctx, bh, sql)
+		if err != nil {
+			return 0, "", err
+		}
+		if execResultArrayHasData(rsset) {
+			roleNameIsNull, err := rsset[0].ColumnIsNull(ctx, 0, 0)
+			if err != nil {
+				return 0, "", err
+			}
+			roleName, err := rsset[0].GetString(ctx, 0, 0)
+			if err != nil {
+				return 0, "", err
+			}
+			roleNameValid := !roleNameIsNull && roleName != ""
+			if roleID == publicRoleID {
+				roleNameValid = roleNameValid && isPublicRole(roleName)
+			}
+			if roleNameValid {
+				return roleID, roleName, nil
+			}
+		}
+
+		if roleID == publicRoleID {
+			return 0, "", markAuthenticationRejected(moerr.NewInternalErrorf(ctx,
+				"get a valid default role of the user %d failed", userID))
+		}
+		roleID = publicRoleID
+	}
 }
 
 func (ses *Session) MaybeUpgradeTenant(ctx context.Context, curVersion string, tenantID int64) error {
@@ -1749,6 +3652,23 @@ func (ses *Session) getGlobalSysVars(ctx context.Context, bh BackgroundExec) (gS
 	for name, sysVar := range gSysVarsDefs {
 		gSysVars[name] = sysVar.Default
 	}
+	// The SQL compatibility defaults must describe the isolation that the txn
+	// client will actually use when no SET GLOBAL override has been persisted.
+	// Pessimistic deployments default to RC while optimistic deployments use SI.
+	// Catalog values below still win, so SET GLOBAL remains account scoped and
+	// is inherited by subsequently initialized sessions.
+	if value, ok := serviceTxnIsolationSystemValue(ses.service); ok {
+		gSysVars[transactionIsolationSystemVariable] = value
+		gSysVars[transactionIsolationSystemVariableAlias] = value
+	}
+	var canonicalIsolationValue interface{}
+	var aliasIsolationValue interface{}
+	var hasCanonicalIsolation bool
+	var hasAliasIsolation bool
+	var canonicalReadOnlyValue interface{}
+	var aliasReadOnlyValue interface{}
+	var hasCanonicalReadOnly bool
+	var hasAliasReadOnly bool
 
 	for _, execResult := range execResults {
 		for i := uint64(0); i < execResult.GetRowCount(); i++ {
@@ -1759,6 +3679,7 @@ func (ses *Session) getGlobalSysVars(ctx context.Context, bh BackgroundExec) (gS
 			if varValue, err = execResult.GetString(tenantCtx, i, 1); err != nil {
 				return
 			}
+			varName = strings.ToLower(varName)
 
 			// overwrite with the values from table `mo_mysql_compatibility`
 			if sv, ok := gSysVarsDefs[varName]; ok {
@@ -1766,9 +3687,62 @@ func (ses *Session) getGlobalSysVars(ctx context.Context, bh BackgroundExec) (gS
 				if val, err = sv.GetType().ConvertFromString(varValue); err != nil {
 					return
 				}
+				if isTransactionIsolationSystemVariable(varName) {
+					if varName == transactionIsolationSystemVariable {
+						canonicalIsolationValue = val
+						hasCanonicalIsolation = true
+					} else {
+						aliasIsolationValue = val
+						hasAliasIsolation = true
+					}
+					continue
+				}
+				if isTransactionReadOnlySystemVariable(varName) {
+					if varName == transactionReadOnlySystemVariable {
+						canonicalReadOnlyValue = val
+						hasCanonicalReadOnly = true
+					} else {
+						aliasReadOnlyValue = val
+						hasAliasReadOnly = true
+					}
+					continue
+				}
 				gSysVars[varName] = val
 			}
 		}
+	}
+
+	// New writes are canonical. Preserve compatibility with old catalogs that
+	// contain only tx_isolation, while making a canonical row authoritative if
+	// both forms happen to exist.
+	var catalogIsolationValue interface{}
+	if hasCanonicalIsolation {
+		catalogIsolationValue = canonicalIsolationValue
+	} else if hasAliasIsolation {
+		catalogIsolationValue = aliasIsolationValue
+	}
+	if catalogIsolationValue != nil {
+		normalized, _, normalizeErr := normalizeTxnIsolationSystemValue(
+			tenantCtx, ses.service, catalogIsolationValue)
+		if normalizeErr != nil {
+			return nil, normalizeErr
+		}
+		gSysVars[transactionIsolationSystemVariable] = normalized
+		gSysVars[transactionIsolationSystemVariableAlias] = normalized
+	}
+
+	// New writes are canonical. Preserve compatibility with old catalogs that
+	// contain only tx_read_only, while making a canonical row authoritative if
+	// both forms happen to exist.
+	var catalogReadOnlyValue interface{}
+	if hasCanonicalReadOnly {
+		catalogReadOnlyValue = canonicalReadOnlyValue
+	} else if hasAliasReadOnly {
+		catalogReadOnlyValue = aliasReadOnlyValue
+	}
+	if catalogReadOnlyValue != nil {
+		gSysVars[transactionReadOnlySystemVariable] = catalogReadOnlyValue
+		gSysVars[transactionReadOnlySystemVariableAlias] = catalogReadOnlyValue
 	}
 
 	return
@@ -1834,11 +3808,12 @@ func (ses *Session) SetNewResponse(category int, affectedRows uint64, cmd int, d
 	// If the stmt has next stmt, should add SERVER_MORE_RESULTS_EXISTS to the server status.
 	var resp *Response
 	serverStatus := ses.GetTxnHandler().GetServerStatus()
+	warnings := ses.warningCount()
 	if !isLastStmt {
-		resp = NewResponse(category, affectedRows, 0, 0,
+		resp = NewResponse(category, affectedRows, 0, warnings,
 			serverStatus|SERVER_MORE_RESULTS_EXISTS, cmd, d)
 	} else {
-		resp = NewResponse(category, affectedRows, 0, 0, serverStatus, cmd, d)
+		resp = NewResponse(category, affectedRows, 0, warnings, serverStatus, cmd, d)
 	}
 	return resp
 }
@@ -1945,9 +3920,30 @@ func (ses *Session) getCleanupContext() context.Context {
 	return context.Background()
 }
 
+// inheritPhysicalConnection copies only metadata owned by the authenticated
+// transport. Identity and session-scoped SQL state are intentionally excluded.
+func (ses *Session) inheritPhysicalConnection(prev *Session) {
+	ses.uuid = prev.uuid
+	ses.fromRealUser = prev.fromRealUser
+	ses.rm = prev.rm
+	ses.rt = prev.rt
+	ses.requestLabel = make(map[string]string, len(prev.requestLabel))
+	for key, value := range prev.requestLabel {
+		ses.requestLabel[key] = value
+	}
+	ses.connType = prev.connType
+	ses.timestampMap = make(map[TS]time.Time, len(prev.timestampMap))
+	for key, value := range prev.timestampMap {
+		ses.timestampMap[key] = value
+	}
+	ses.fromProxy = prev.fromProxy
+	ses.clientAddr = prev.clientAddr
+	ses.proxyAddr = prev.proxyAddr
+}
+
 // reset resets the ses instance and copy some fields of prev, then
 // close the prev.
-func (ses *Session) reset(prev *Session) error {
+func (ses *Session) reset(ctx context.Context, prev *Session) error {
 	if ses == nil || prev == nil {
 		return nil
 	}
@@ -1958,38 +3954,111 @@ func (ses *Session) reset(prev *Session) error {
 	for k, v := range prev.label {
 		ses.label[k] = v
 	}
-	*ses.timeZone = *prev.timeZone
-	ses.uuid = prev.uuid
-	ses.fromRealUser = prev.fromRealUser
-	ses.rm = prev.rm
-	ses.rt = prev.rt
-	ses.requestLabel = make(map[string]string, len(prev.requestLabel))
-	for k, v := range prev.requestLabel {
-		ses.requestLabel[k] = v
-	}
-	ses.connType = prev.connType
-	ses.timestampMap = make(map[TS]time.Time, len(prev.timestampMap))
-	for k, v := range prev.timestampMap {
-		ses.timestampMap[k] = v
-	}
-	ses.fromProxy = prev.fromProxy
-	ses.clientAddr = prev.clientAddr
-	ses.proxyAddr = prev.proxyAddr
+	ses.inheritPhysicalConnection(prev)
 
-	// rollback the transactions in the old session.
-	tempExecCtx := ExecCtx{
-		reqCtx: prev.getCleanupContext(),
-		ses:    prev,
-		txnOpt: FeTxnOption{byRollback: true},
+	// Initialize the unpublished generation from the account's current global
+	// defaults. This deliberately does not copy the old session variables or
+	// their derived runtime state (for example time_zone).
+	initCtx := ctx
+	if initCtx == nil {
+		initCtx = context.Background()
 	}
-	err := prev.GetTxnHandler().Rollback(&tempExecCtx)
+	if tenant := ses.GetTenantInfo(); tenant != nil {
+		initCtx = defines.AttachAccount(
+			initCtx,
+			tenant.GetTenantID(),
+			tenant.GetUserID(),
+			tenant.GetDefaultRoleID(),
+		)
+	}
+	prev.mu.Lock()
+	globalVars := prev.gSysVars
+	prev.mu.Unlock()
+	var err error
+	if globalVars != nil {
+		err = ses.initSystemVariablesFromGlobal(initCtx, globalVars)
+	} else {
+		// This fallback is for internal or partially initialized sessions. Normal
+		// authenticated sessions already retain the account-global snapshot.
+		bh := ses.GetBackgroundExec(initCtx)
+		err = ses.InitSystemVariables(initCtx, bh)
+		bh.Close()
+	}
 	if err != nil {
-		prev.Error(tempExecCtx.reqCtx, "failed to rollback txn",
-			zap.Error(err))
 		return err
 	}
+
+	return prev.closeForReset(ctx)
+}
+
+// errSessionResetConnectionMustClose marks an error after the old session
+// generation has changed state. The MySQL connection must not be reused: an
+// ERR response alone cannot restore physical temporary-table state.
+var errSessionResetConnectionMustClose = moerr.NewInternalErrorNoCtx("session reset must close connection")
+
+// closeForReset retires a session generation while preserving the physical
+// protocol connection. All reusable server-side state must be gone before
+// the replacement generation can be published.
+func (ses *Session) closeForReset(ctx context.Context) error {
+	// rollback the transactions in the old session.
+	rollbackCtx := ses.getCleanupContext()
+	if ctx != nil {
+		cancelCtx, cancel := context.WithCancelCause(rollbackCtx)
+		stopCancel := context.AfterFunc(ctx, func() {
+			cancel(context.Cause(ctx))
+		})
+		defer func() {
+			stopCancel()
+			cancel(nil)
+		}()
+		rollbackCtx = cancelCtx
+		if cause := context.Cause(ctx); cause != nil {
+			return cause
+		}
+	}
+	tempExecCtx := ExecCtx{
+		reqCtx: rollbackCtx,
+		ses:    ses,
+		txnOpt: FeTxnOption{byRollback: true},
+	}
+	err := ses.GetTxnHandler().rollbackWithContext(rollbackCtx, &tempExecCtx)
+	tempExecCtx.Close()
+	if err != nil {
+		ses.Error(rollbackCtx, "failed to rollback txn",
+			zap.Error(err))
+		// rollbackUnsafe invalidates the transaction handle even when the
+		// storage rollback fails or its context expires. The old generation is
+		// therefore no longer an untouched, reusable session: fail closed just
+		// as we do after a partially completed temporary-table cleanup.
+		return errors.Join(err, errSessionResetConnectionMustClose)
+	}
+	if ctx != nil {
+		if cause := context.Cause(ctx); cause != nil {
+			return errors.Join(cause, errSessionResetConnectionMustClose)
+		}
+	}
+	// Internal SQL execution requires a bounded context. The transaction cleanup
+	// context intentionally outlives request contexts and therefore has no
+	// deadline of its own, so carry the reset deadline across when one exists and
+	// otherwise use the same safety bound as asynchronous disconnect cleanup.
+	tempCleanupCtx := rollbackCtx
+	var tempCleanupCancel context.CancelFunc
+	if ctx != nil {
+		if deadline, ok := ctx.Deadline(); ok {
+			tempCleanupCtx, tempCleanupCancel = context.WithDeadline(rollbackCtx, deadline)
+		}
+	}
+	if tempCleanupCancel == nil {
+		tempCleanupCtx, tempCleanupCancel = context.WithTimeout(rollbackCtx, time.Minute)
+	}
+	defer tempCleanupCancel()
+	if err = ses.resetTempTables(tempCleanupCtx); err != nil {
+		ses.Error(tempCleanupCtx, "failed to drop temporary tables during session reset",
+			zap.Error(err))
+		return errors.Join(err, errSessionResetConnectionMustClose)
+	}
 	// close the previous session.
-	prev.ReserveConnAndClose()
+	ses.ReserveConnAndClose()
 	return nil
 }
 
@@ -2059,6 +4128,10 @@ type prepareStmtMigration struct {
 	commitFn   func(*Session, error) error
 }
 
+func quotePrepareStmtName(name string) string {
+	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
+}
+
 func newPrepareStmtMigration(name string, sql string, paramTypes []byte) *prepareStmtMigration {
 	return &prepareStmtMigration{
 		name:       name,
@@ -2072,7 +4145,7 @@ func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error 
 	ses.EnterFPrint(FPMigratePrepareStmt)
 	defer ses.ExitFPrint(FPMigratePrepareStmt)
 	if !strings.HasPrefix(strings.ToLower(p.sql), "prepare") {
-		p.sql = fmt.Sprintf("prepare %s from %s", p.name, p.sql)
+		p.sql = fmt.Sprintf("prepare %s from %s", quotePrepareStmtName(p.name), p.sql)
 	}
 
 	tempExecCtx := &ExecCtx{
@@ -2085,41 +4158,301 @@ func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error 
 	return doComQuery(ses, tempExecCtx, &UserInput{sql: p.sql})
 }
 
-func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
+type migrateTempTableExec func(sql string) error
+
+// isStaleTempTableMigrationError identifies only catalog errors that prove a
+// migration entry cannot be cloned: the database was dropped, or its source
+// physical relation was dropped and the database was subsequently recreated.
+// Other clone errors remain fatal so a target problem is never mistaken for
+// stale source state.
+func isStaleTempTableMigrationError(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrBadDB) ||
+		moerr.IsMoErrCode(err, moerr.ErrNoSuchTable)
+}
+
+func migrateTempTables(
+	ctx context.Context,
+	ses *Session,
+	tables []*query.MigrateTempTable,
+	exec migrateTempTableExec,
+) error {
+	seen := make(map[string]struct{}, len(tables))
+	for _, table := range tables {
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
+		if table == nil || table.Database == "" || table.Alias == "" ||
+			table.PhysicalName == "" || !defines.IsTempTableName(table.PhysicalName) {
+			return moerr.NewInternalError(ctx, "invalid temporary-table migration snapshot")
+		}
+		key := table.Database + "\x00" + table.Alias
+		if _, ok := seen[key]; ok {
+			return moerr.NewInternalErrorf(ctx,
+				"duplicate temporary-table migration entry for %s.%s",
+				table.Database, table.Alias)
+		}
+		seen[key] = struct{}{}
+	}
+
+	for i, table := range tables {
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
+		// Resolve the source physical relation through a short, internal alias.
+		// The destination uses its original logical alias and therefore receives
+		// a physical name owned by the target session. The temporary source alias
+		// is always removed before this function returns, so a failed migration
+		// can close the target without dropping the source session's table.
+		sourceAlias := fmt.Sprintf("__mo_migrate_source_%d", i)
+		for suffix := 0; ; suffix++ {
+			_, exists := ses.GetTempTable(table.Database, sourceAlias)
+			if !exists && sourceAlias != table.Alias {
+				break
+			}
+			sourceAlias = fmt.Sprintf("__mo_migrate_source_%d_%d", i, suffix+1)
+		}
+		ses.addTempTableWithIdentity(
+			table.Database, sourceAlias, table.PhysicalName, true, "", "")
+		sql := "CREATE TEMPORARY TABLE " +
+			sqlquote.QualifiedIdent(table.Database, table.Alias) + " CLONE " +
+			sqlquote.QualifiedIdent(table.Database, sourceAlias)
+		err := func() error {
+			defer ses.removeTempTable(table.Database, sourceAlias, "", "")
+			return exec(sql)
+		}()
+		if err != nil {
+			if isStaleTempTableMigrationError(err) {
+				// DROP DATABASE can originate from a different session, leaving
+				// this session's local alias map stale. The catalog error proves
+				// that this entry has no source relation to preserve; discard just
+				// this entry and continue migrating the usable session state.
+				continue
+			}
+			return moerr.AttachCause(ctx, err)
+		}
+		targetName, ok := ses.GetTempTable(table.Database, table.Alias)
+		if !ok || targetName == table.PhysicalName {
+			if ok {
+				// Never let target-session cleanup claim the source physical
+				// relation, even if a faulty clone path registered it directly.
+				ses.removeTempTable(table.Database, table.Alias, "", "")
+			}
+			return moerr.NewInternalErrorf(ctx,
+				"temporary table %s.%s was not cloned into the target session",
+				table.Database, table.Alias)
+		}
+	}
+	if len(tables) > 0 {
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
+		// Raw compatibility replay may already have restored autocommit=0 on
+		// the target. Migration is admitted only at a client transaction
+		// boundary, so commit the internal clone batch and leave the restored
+		// autocommit mode with no target-only transaction in progress.
+		if err := exec("COMMIT"); err != nil {
+			return moerr.AttachCause(ctx, err)
+		}
+	}
+	return nil
+}
+
+func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest) error {
 	ses.EnterFPrint(FPMigrate)
 	defer ses.ExitFPrint(FPMigrate)
-	// USE and PREPARE are replayed as internal statements and update ROW_COUNT().
-	// Restore the source session value after all replay work has finished.
-	defer restoreRowCount(ses, ses.GetProc(), req.LastAffectedRows)
-	parameters := getPu(ses.GetService()).SV
 
-	//all offspring related to the request inherit the txnCtx
-	cancelRequestCtx, cancelRequestFunc := context.WithTimeoutCause(ses.GetTxnHandler().GetTxnCtx(), parameters.SessionTimeout.Duration, moerr.CauseMigrate)
+	if ctx == nil {
+		ctx = ses.GetTxnHandler().GetTxnCtx()
+	}
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
+	if !req.LastInsertIDExported {
+		// A missing marker means the source or Proxy could not provide an
+		// authoritative value. Do not turn that absence into a zero on the
+		// target session.
+		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
+	parameters := getPu(ses.GetService()).SV
+	// USE and PREPARE are replayed as internal statements and update ROW_COUNT().
+	// Restore the source session values after all replay work has finished.
+	defer restoreRowCount(ses, ses.GetProc(), req.LastAffectedRows)
+	defer func() {
+		ses.SetLastInsertID(req.LastInsertID)
+		if proc := ses.GetProc(); proc != nil {
+			proc.SetLastInsertID(req.LastInsertID)
+		}
+		ses.SetLastFoundRows(req.FoundRows)
+		if proc := ses.GetProc(); proc != nil {
+			proc.SetFoundRows(req.FoundRows)
+		}
+	}()
+	// Migration work is bounded by both its caller/lifecycle context and the
+	// configured session timeout.
+	cancelRequestCtx, cancelRequestFunc := context.WithTimeoutCause(ctx, parameters.SessionTimeout.Duration, moerr.CauseMigrate)
 	defer cancelRequestFunc()
 	ses.UpdateDebugString()
 	tenant := ses.GetTenantInfo()
+	if ses.proc != nil {
+		ses.proc.Base.SessionInfo.ConnectionID = uint64(req.ConnID)
+		if tenant != nil {
+			ses.proc.Base.SessionInfo.Account = tenant.GetTenant()
+		}
+	}
 	nodeCtx := cancelRequestCtx
 	rm := ses.getRoutineManager()
 	if rm != nil && rm.baseService != nil {
 		nodeCtx = context.WithValue(cancelRequestCtx, defines.NodeIDKey{}, rm.baseService.ID())
 	}
-	ctx := defines.AttachAccount(nodeCtx, tenant.GetTenantID(), tenant.GetUserID(), tenant.GetDefaultRoleID())
+	migrationCtx := defines.AttachAccount(nodeCtx, tenant.GetTenantID(), tenant.GetUserID(), tenant.GetDefaultRoleID())
 
-	accountID, err := defines.GetAccountId(ctx)
+	accountID, err := defines.GetAccountId(migrationCtx)
 
 	if err != nil {
-		ses.Errorf(ctx, "failed to get account ID: %v", err)
+		ses.Errorf(migrationCtx, "failed to get account ID: %v", err)
 		return err
 	}
-	userID := defines.GetUserId(ctx)
-	ses.Infof(ctx, "do migration on connection %d, db: %s, account id: %d, user id: %d",
+	userID := defines.GetUserId(migrationCtx)
+	ses.Infof(migrationCtx, "do migration on connection %d, db: %s, account id: %d, user id: %d",
 		req.ConnID, req.DB, accountID, userID)
+	if len(req.UserLevelLocks) > 0 {
+		return moerr.NewInternalError(ctx, "cannot migrate connection while user-level locks are held")
+	}
 
 	dbm := newDBMigration(req.DB)
-	if err := dbm.Migrate(ctx, ses); err != nil {
-		ses.Warnf(ctx, "the database %s may have been deleted, "+
+	if err := dbm.Migrate(migrationCtx, ses); err != nil {
+		if cause := context.Cause(migrationCtx); cause != nil {
+			return cause
+		}
+		ses.Warnf(migrationCtx, "the database %s may have been deleted, "+
 			"so continue to mirgrate session, conn ID: %d, err: %v",
 			req.DB, req.ConnID, err)
+	}
+	if len(req.UserDefinedVars) > 0 && !req.UserDefinedVarsExported {
+		return moerr.NewInternalError(ctx, "user variables were provided without a typed migration snapshot")
+	}
+	var userVars map[string]*UserDefinedVar
+	if req.UserDefinedVarsExported {
+		if currentProtocolVersion(ses.proc) < defines.MORPCVersion22 {
+			return moerr.NewInternalError(ctx, "typed user-variable migration requires protocol version 22")
+		}
+		var err error
+		userVars, err = decodeUserDefinedVars(
+			migrationCtx, req.UserDefinedVars, req.UserDefinedVarsReplayable)
+		if err != nil {
+			return err
+		}
+	}
+	var systemVars []migratedSystemVariable
+	if req.SystemVariablesExported {
+		if currentProtocolVersion(ses.proc) < defines.MORPCVersion22 {
+			return moerr.NewInternalError(ctx, "typed system-variable migration requires protocol version 22")
+		}
+		var err error
+		systemVars, err = decodeSessionSystemVars(migrationCtx, req.SystemVariables)
+		if err != nil {
+			return err
+		}
+	}
+	if len(req.TempTables) > 0 {
+		if currentProtocolVersion(ses.proc) < defines.MORPCVersion38 {
+			return moerr.NewInternalError(ctx,
+				"temporary-table migration requires protocol version 38")
+		}
+		// Clone before typed system-variable restoration. migrateTempTables also
+		// commits explicitly because Proxy compatibility replay may already have
+		// restored autocommit=0 on the target.
+		if err := migrateTempTables(
+			migrationCtx,
+			ses,
+			req.TempTables,
+			func(sql string) error {
+				tempExecCtx := &ExecCtx{
+					reqCtx: migrationCtx, inMigration: true, ses: ses,
+				}
+				defer tempExecCtx.Close()
+				return doComQuery(ses, tempExecCtx, &UserInput{sql: sql})
+			},
+		); err != nil {
+			return err
+		}
+	}
+	if req.UserDefinedVarsExported {
+		ses.installUserDefinedVars(userVars)
+	}
+	if req.SystemVariablesExported {
+		migrationExecCtx := &ExecCtx{
+			reqCtx:      migrationCtx,
+			inMigration: true,
+			ses:         ses,
+		}
+		defer migrationExecCtx.Close()
+		for _, variable := range systemVars {
+			if variable.nextTransaction {
+				isolation, err := txnIsolationFromSystemValue(migrationCtx, variable.value)
+				if err != nil {
+					return err
+				}
+				txnHandler := ses.GetTxnHandler()
+				if txnHandler == nil {
+					return moerr.NewInternalError(migrationCtx, "transaction handler is not initialized")
+				}
+				if err := txnHandler.setNextTxnIsolation(migrationCtx, isolation, false); err != nil {
+					return moerr.AttachCause(migrationCtx, err)
+				}
+				ses.markMigrationSystemVarReplayable(
+					migrationNextTxnIsolationKey, req.SystemVariablesReplayable)
+				continue
+			}
+			var oldAutocommit interface{}
+			if variable.name == "autocommit" {
+				oldAutocommit, err = ses.GetSessionSysVar(variable.name)
+				if err != nil {
+					return moerr.AttachCause(migrationCtx, err)
+				}
+			}
+			if err := ses.SetSessionSysVar(migrationCtx, variable.name, variable.value); err != nil {
+				return moerr.AttachCause(migrationCtx, err)
+			}
+			ses.markMigrationSystemVarReplayable(variable.name, req.SystemVariablesReplayable)
+			if variable.name == "autocommit" {
+				oldValue, err := valueIsBoolTrue(oldAutocommit)
+				if err != nil {
+					return moerr.AttachCause(migrationCtx, err)
+				}
+				newValue, err := valueIsBoolTrue(variable.value)
+				if err != nil {
+					return moerr.AttachCause(migrationCtx, err)
+				}
+				txnHandler := ses.GetTxnHandler()
+				if txnHandler == nil {
+					return moerr.NewInternalError(migrationCtx, "transaction handler is not initialized")
+				}
+				if err := txnHandler.SetAutocommit(migrationExecCtx, oldValue, newValue); err != nil {
+					return moerr.AttachCause(migrationCtx, err)
+				}
+			}
+			if variable.runtimeValuePresent {
+				ses.applySessionSysVarSideEffects(variable.name, variable.runtimeValue)
+			} else {
+				ses.applySessionSysVarSideEffects(variable.name, variable.value)
+			}
+			// The typed snapshot carries only the final value. Invalidate for
+			// both cache-control variables so a source toggle (0->1 or 1->0)
+			// cannot leave stale target entries after migration.
+			if variable.name == "clear_privilege_cache" || variable.name == "enable_privilege_cache" {
+				ses.InvalidatePrivilegeCache()
+			}
+		}
+	} else {
+		for _, stmt := range req.SetVarStmts {
+			tempExecCtx := &ExecCtx{reqCtx: migrationCtx, inMigration: true, ses: ses}
+			err := doComQuery(ses, tempExecCtx, &UserInput{sql: stmt})
+			tempExecCtx.Close()
+			if err != nil {
+				return moerr.AttachCause(migrationCtx, err)
+			}
+		}
 	}
 
 	var maxStmtID uint32
@@ -2128,8 +4461,8 @@ func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
 			continue
 		}
 		pm := newPrepareStmtMigration(p.Name, p.SQL, p.ParamTypes)
-		if err := pm.Migrate(ctx, ses); err != nil {
-			return moerr.AttachCause(ctx, err)
+		if err := pm.Migrate(migrationCtx, ses); err != nil {
+			return moerr.AttachCause(migrationCtx, err)
 		}
 		id := parsePrepareStmtID(p.Name)
 		if id > maxStmtID {
@@ -2139,7 +4472,34 @@ func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
 	if maxStmtID > 0 {
 		ses.SetLastStmtID(maxStmtID)
 	}
+	if cause := context.Cause(migrationCtx); cause != nil {
+		return cause
+	}
 	return nil
+}
+
+func (ses *Session) applySessionSysVarSideEffects(name string, value interface{}) {
+	switch strings.ToLower(name) {
+	case "optimizer_hints", "runtime_filter_limit_in", "runtime_filter_limit_bloom_filter":
+		moruntime.ServiceRuntime(ses.service).SetGlobalVariables(strings.ToLower(name), value)
+	case "disable_agg_statement":
+		boolVal := InitSystemVariableBoolType("_")
+		ses.disableAgg = boolVal.IsTrue(value)
+	case "clear_privilege_cache":
+		boolVal := InitSystemVariableBoolType("_")
+		if boolVal.IsTrue(value) {
+			if cache := ses.GetPrivilegeCache(); cache != nil {
+				cache.invalidate()
+			}
+		}
+	case "enable_privilege_cache":
+		boolVal := InitSystemVariableBoolType("_")
+		if !boolVal.IsTrue(value) {
+			if cache := ses.GetPrivilegeCache(); cache != nil {
+				cache.invalidate()
+			}
+		}
+	}
 }
 
 func (ses *Session) GetLogger() SessionLogger {

@@ -3,6 +3,7 @@
 -- @case
 -- @desc:test for with clause
 -- @label:bvt
+set session sql_mode = default;
 drop table if exists t1;
 create table t1(a int, b int, c int);
 insert into t1 values(null,null,null),(2,3,4);

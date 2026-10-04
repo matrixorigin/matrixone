@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	ivfpqrt "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/runtime"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 )
 
 // ivfpqCatalogHooks is the shared (stateless) catalog-hooks instance used for
@@ -88,7 +89,36 @@ func (Hooks) BuildSecondaryIndexDefs(
 			return nil, nil, moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' is not exist", indexInfo.KeyParts[0].ColName.ColNameOrigin())
 		}
 		if !catalogplugin.SupportsVectorType(ivfpqCatalogHooks, types.T(colMap[name].Typ.Id)) {
-			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "IvfPQ only supports VECF32 column types")
+			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "IvfPQ only supports VECF32 / VECF16 base column types")
+		}
+		// QUANTIZATION is downcast-only: the storage element must be the same width
+		// or narrower than the base column (f16 base -> int8/uint8 OK; f16 base ->
+		// float32 is an upcast and rejected). Mirrors ivfflat's guard.
+		if indexInfo.IndexOption != nil && indexInfo.IndexOption.Quantization != "" {
+			if qt, ok := quantizer.ToVectorType(indexInfo.IndexOption.Quantization); ok {
+				// bf16 storage does not exist on the GPU (cuVS/cgo has no bfloat16
+				// index or quantizer), so reject it explicitly rather than silently
+				// falling back to f32 storage. Supported cuvs storage = f16/int8/uint8.
+				if qt == types.T_array_bf16 {
+					return nil, nil, moerr.NewNotSupportedf(ctx.GetContext(),
+						"IvfPQ does not support '%s' quantization (no GPU bfloat16 storage); use 'float16', 'int8', or 'uint8'",
+						indexInfo.IndexOption.Quantization)
+				}
+				if err := quantizer.CheckNoUpcast("IvfPQ", indexInfo.IndexOption.Quantization,
+					types.T(colMap[name].Typ.Id)); err != nil {
+					return nil, nil, err
+				}
+				// int8/uint8 quantization is L2-only (the affine quantizer breaks
+				// inner-product / cosine geometry). Gated by the per-algo catalog
+				// hook — the single home shared with REINDEX
+				// (compile/ValidateReindexParams) — so CREATE and REINDEX cannot
+				// drift. (bf16 and width/upcast are rejected above with base-column-
+				// aware messages before reaching here.)
+				if err := ivfpqCatalogHooks.ValidQuantization(
+					indexInfo.IndexOption.Quantization, indexInfo.IndexOption.AlgoParamVectorOpType); err != nil {
+					return nil, nil, err
+				}
+			}
 		}
 		for _, existedIndex := range existedIndexes {
 			if existedIndex.IndexAlgo == catalog.MoIndexIvfpqAlgo.ToString() && existedIndex.Parts[0] == name {
@@ -107,6 +137,12 @@ func (Hooks) BuildSecondaryIndexDefs(
 	tableDefs := make([]*plan.TableDef, 2)
 
 	// 1. metadata table
+	provenance := planplugin.ClusterHasIndexProvenance(ctx)
+	metadataCols := 4
+	if provenance {
+		metadataCols = 6
+	}
+
 	{
 		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
 		if err != nil {
@@ -115,7 +151,7 @@ func (Hooks) BuildSecondaryIndexDefs(
 		tableDefs[0] = &plan.TableDef{
 			Name:      indexTableName,
 			TableType: catalog.Ivfpq_TblType_Metadata,
-			Cols:      make([]*plan.ColDef, 4),
+			Cols:      make([]*plan.ColDef, metadataCols),
 		}
 		indexDefs[0], err = planplugin.CreateIndexDef(ctx, indexInfo, indexTableName, catalog.Ivfpq_TblType_Metadata, indexParts, false)
 		if err != nil {
@@ -126,9 +162,10 @@ func (Hooks) BuildSecondaryIndexDefs(
 			Name: catalog.Ivfpq_TblCol_Metadata_Index_Id,
 			Alg:  plan.CompressType_Lz4,
 			Typ: plan.Type{
-				Id:    int32(types.T_varchar),
-				Width: 128,
-				Scale: 0,
+				Id:      int32(types.T_varchar),
+				Width:   128,
+				Scale:   0,
+				Charset: uint32(types.CharsetBinary),
 			},
 			Primary: true,
 			Default: &plan.Default{NullAbility: false, Expr: nil, OriginString: ""},
@@ -137,8 +174,9 @@ func (Hooks) BuildSecondaryIndexDefs(
 			Name: catalog.Ivfpq_TblCol_Metadata_Checksum,
 			Alg:  plan.CompressType_Lz4,
 			Typ: plan.Type{
-				Id:    int32(types.T_varchar),
-				Width: types.MaxVarcharLen,
+				Id:      int32(types.T_varchar),
+				Width:   types.MaxVarcharLen,
+				Charset: uint32(types.CharsetBinary),
 			},
 			Default: &plan.Default{NullAbility: false, Expr: nil, OriginString: ""},
 		}
@@ -161,6 +199,37 @@ func (Hooks) BuildSecondaryIndexDefs(
 				Scale: 0,
 			},
 			Default: &plan.Default{NullAbility: false, Expr: nil, OriginString: ""},
+		}
+
+		// Appended LAST on purpose: readers index the metadata batch positionally, so keeping
+		// 0..3 where they were means a binary that predates these columns still reads a table
+		// that has them.
+		//
+		// Created only once the whole deployment understands them: an old CN's writer INSERTs
+		// four values positionally, which fails on arity against a six-column table, and a
+		// DEFAULT cannot repair a value count. Until then this table is born in the legacy
+		// shape and the tenant's v4_0_7 migration widens it.
+		if provenance {
+			tableDefs[0].Cols[4] = &plan.ColDef{
+				Name: catalog.Ivfpq_TblCol_Metadata_Nrow,
+				Alg:  plan.CompressType_Lz4,
+				Typ: plan.Type{
+					Id:    int32(types.T_int64),
+					Width: 0,
+					Scale: 0,
+				},
+				Default: planplugin.ZeroInt64Default(),
+			}
+			tableDefs[0].Cols[5] = &plan.ColDef{
+				Name: catalog.Ivfpq_TblCol_Metadata_Build_Ts,
+				Alg:  plan.CompressType_Lz4,
+				Typ: plan.Type{
+					Id:    int32(types.T_int64),
+					Width: 0,
+					Scale: 0,
+				},
+				Default: planplugin.ZeroInt64Default(),
+			}
 		}
 
 		tableDefs[0].Pkey = &plan.PrimaryKeyDef{
@@ -198,9 +267,10 @@ func (Hooks) BuildSecondaryIndexDefs(
 			Name: catalog.Ivfpq_TblCol_Storage_Index_Id,
 			Alg:  plan.CompressType_Lz4,
 			Typ: plan.Type{
-				Id:    int32(types.T_varchar),
-				Width: 128,
-				Scale: 0,
+				Id:      int32(types.T_varchar),
+				Width:   128,
+				Scale:   0,
+				Charset: uint32(types.CharsetBinary),
 			},
 			Default: &plan.Default{NullAbility: false, Expr: nil, OriginString: ""},
 		}

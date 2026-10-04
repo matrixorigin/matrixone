@@ -54,6 +54,9 @@ func (Hooks) BuildSecondaryIndexDefs(
 	if !catalogplugin.SupportsPrimaryKeyType(hnswCatalogHooks, types.T(colMap[pkeyName].Typ.Id)) {
 		return nil, nil, moerr.NewInternalErrorNoCtx("type of primary key must be bigint")
 	}
+	if indexInfo.IndexOption != nil && len(indexInfo.IndexOption.IncludeColumns) > 0 {
+		return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "HNSW index does not support INCLUDE columns")
+	}
 
 	indexParts := make([]string, 1)
 	{
@@ -79,6 +82,12 @@ func (Hooks) BuildSecondaryIndexDefs(
 	tableDefs := make([]*plan.TableDef, 2)
 
 	// 1. metadata table
+	provenance := planplugin.ClusterHasIndexProvenance(ctx)
+	metadataCols := 4
+	if provenance {
+		metadataCols = 6
+	}
+
 	{
 		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
 		if err != nil {
@@ -87,7 +96,7 @@ func (Hooks) BuildSecondaryIndexDefs(
 		tableDefs[0] = &plan.TableDef{
 			Name:      indexTableName,
 			TableType: catalog.Hnsw_TblType_Metadata,
-			Cols:      make([]*plan.ColDef, 4),
+			Cols:      make([]*plan.ColDef, metadataCols),
 		}
 		indexDefs[0], err = planplugin.CreateIndexDef(ctx, indexInfo, indexTableName, catalog.Hnsw_TblType_Metadata, indexParts, false)
 		if err != nil {
@@ -98,9 +107,10 @@ func (Hooks) BuildSecondaryIndexDefs(
 			Name: catalog.Hnsw_TblCol_Metadata_Index_Id,
 			Alg:  plan.CompressType_Lz4,
 			Typ: plan.Type{
-				Id:    int32(types.T_varchar),
-				Width: 128,
-				Scale: 0,
+				Id:      int32(types.T_varchar),
+				Width:   128,
+				Scale:   0,
+				Charset: uint32(types.CharsetBinary),
 			},
 			Primary: true,
 			Default: &plan.Default{NullAbility: false, Expr: nil, OriginString: ""},
@@ -109,8 +119,9 @@ func (Hooks) BuildSecondaryIndexDefs(
 			Name: catalog.Hnsw_TblCol_Metadata_Checksum,
 			Alg:  plan.CompressType_Lz4,
 			Typ: plan.Type{
-				Id:    int32(types.T_varchar),
-				Width: types.MaxVarcharLen,
+				Id:      int32(types.T_varchar),
+				Width:   types.MaxVarcharLen,
+				Charset: uint32(types.CharsetBinary),
 			},
 			Default: &plan.Default{NullAbility: false, Expr: nil, OriginString: ""},
 		}
@@ -133,6 +144,37 @@ func (Hooks) BuildSecondaryIndexDefs(
 				Scale: 0,
 			},
 			Default: &plan.Default{NullAbility: false, Expr: nil, OriginString: ""},
+		}
+
+		// Appended LAST on purpose: readers index the metadata batch positionally, so keeping
+		// 0..3 where they were means a binary that predates these columns still reads a table
+		// that has them.
+		//
+		// Created only once the whole deployment understands them: an old CN's writer INSERTs
+		// four values positionally, which fails on arity against a six-column table, and a
+		// DEFAULT cannot repair a value count. Until then this table is born in the legacy
+		// shape and the tenant's v4_0_7 migration widens it.
+		if provenance {
+			tableDefs[0].Cols[4] = &plan.ColDef{
+				Name: catalog.Hnsw_TblCol_Metadata_Nrow,
+				Alg:  plan.CompressType_Lz4,
+				Typ: plan.Type{
+					Id:    int32(types.T_int64),
+					Width: 0,
+					Scale: 0,
+				},
+				Default: planplugin.ZeroInt64Default(),
+			}
+			tableDefs[0].Cols[5] = &plan.ColDef{
+				Name: catalog.Hnsw_TblCol_Metadata_Build_Ts,
+				Alg:  plan.CompressType_Lz4,
+				Typ: plan.Type{
+					Id:    int32(types.T_int64),
+					Width: 0,
+					Scale: 0,
+				},
+				Default: planplugin.ZeroInt64Default(),
+			}
 		}
 
 		tableDefs[0].Pkey = &plan.PrimaryKeyDef{
@@ -170,9 +212,10 @@ func (Hooks) BuildSecondaryIndexDefs(
 			Name: catalog.Hnsw_TblCol_Storage_Index_Id,
 			Alg:  plan.CompressType_Lz4,
 			Typ: plan.Type{
-				Id:    int32(types.T_varchar),
-				Width: 128,
-				Scale: 0,
+				Id:      int32(types.T_varchar),
+				Width:   128,
+				Scale:   0,
+				Charset: uint32(types.CharsetBinary),
 			},
 			Default: &plan.Default{NullAbility: false, Expr: nil, OriginString: ""},
 		}

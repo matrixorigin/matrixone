@@ -120,7 +120,7 @@ std::pair<double, double> run_throughput(Index& index,
         pool.emplace_back([&, t, per_thread]() {
             for (uint32_t i = 0; i < per_thread; ++i) {
                 auto t0 = std::chrono::high_resolution_clock::now();
-                (void)index.search_float_with_filter(
+                (void)index.search_quantize_with_filter(
                     queries.data() + (t * per_thread + i) * cfg.dimension,
                     1, cfg.dimension, cfg.limit, sp, preds_json);
                 auto t1 = std::chrono::high_resolution_clock::now();
@@ -158,7 +158,7 @@ void sweep_selectivities(const std::string& tag, Index& index, const SP& sp,
         index.set_batch_window(window_us);
 
         for (uint32_t w = 0; w < cfg.warmup; ++w) {
-            (void)index.search_float_with_filter(throughput_queries.data(), 1,
+            (void)index.search_quantize_with_filter(throughput_queries.data(), 1,
                                                  cfg.dimension, cfg.limit, sp, "");
         }
 
@@ -173,7 +173,7 @@ void sweep_selectivities(const std::string& tag, Index& index, const SP& sp,
             double qps    = qt.first;
             double lat_us = qt.second;
 
-            auto res = index.search_float_with_filter(
+            auto res = index.search_quantize_with_filter(
                 recall_queries.data(), cfg.n_queries, cfg.dimension, cfg.limit, sp, preds);
             auto r = self_recall(res.neighbors, recall_expected_ids, cats, k,
                                  cfg.n_queries, cfg.limit);
@@ -241,7 +241,7 @@ int main() {
 
     {
         cagra_build_params_t bp = cagra_build_params_default();
-        gpu_cagra_t<float> index(dataset.data(), cfg.n_vectors, cfg.dimension,
+        gpu_cagra_t<float, float> index(dataset.data(), cfg.n_vectors, cfg.dimension,
                                  DistanceType_L2Expanded, bp, devices,
                                  cfg.n_threads, DistributionMode_SINGLE_GPU);
         index.start();
@@ -261,7 +261,7 @@ int main() {
     {
         ivf_flat_build_params_t bp = ivf_flat_build_params_default();
         bp.n_lists = 1024;
-        gpu_ivf_flat_t<float> index(dataset.data(), cfg.n_vectors, cfg.dimension,
+        gpu_ivf_flat_t<float, float> index(dataset.data(), cfg.n_vectors, cfg.dimension,
                                     DistanceType_L2Expanded, bp, devices,
                                     cfg.n_threads, DistributionMode_SINGLE_GPU);
         index.start();
@@ -281,7 +281,7 @@ int main() {
         ivf_pq_build_params_t bp = ivf_pq_build_params_default();
         bp.n_lists = 1024;
         bp.m       = 64;
-        gpu_ivf_pq_t<float> index(dataset.data(), cfg.n_vectors, cfg.dimension,
+        gpu_ivf_pq_t<float, float> index(dataset.data(), cfg.n_vectors, cfg.dimension,
                                   DistanceType_L2Expanded, bp, devices,
                                   cfg.n_threads, DistributionMode_SINGLE_GPU);
         index.start();

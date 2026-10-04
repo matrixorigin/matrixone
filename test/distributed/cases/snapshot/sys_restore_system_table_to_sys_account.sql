@@ -43,20 +43,20 @@ create snapshot udf_dsp03 for account;
 -- @ignore:0,1
 show snapshots;
 
--- @ignore:0,9,10
+-- @ignore:0,10,11
 select * from mo_catalog.mo_user_defined_function;
 
 drop function subab(x int,y int);
 drop function udf_db.concatenate(str1 varchar(255), str2 varchar(255));
 
 restore account sys{snapshot="udf_dsp03"};
--- @ignore:0,9,10
+-- @ignore:0,10,11
 select * from mo_catalog.mo_user_defined_function;
 -- @ignore:0,1
 show snapshots;
 
 restore account sys{snapshot="udf_dsp02"};
--- @ignore:0,9,10
+-- @ignore:0,10,11
 select * from mo_catalog.mo_user_defined_function;
 -- @ignore:0,1
 show snapshots;
@@ -76,7 +76,7 @@ use udf_db2;
 create function `addab`(x int, y int) returns int
 language sql as
 '$1 + $2';
--- @ignore:0,9,10
+-- @ignore:0,10,11
 select * from mo_catalog.mo_user_defined_function;
 
 drop snapshot if exists udf_sp04;
@@ -86,7 +86,7 @@ drop database udf_db2;
 select * from mo_catalog.mo_user_defined_function;
 
 restore account sys{snapshot="udf_sp04"};
--- @ignore:0,9,10
+-- @ignore:0,10,11
 select * from mo_catalog.mo_user_defined_function;
 drop database udf_db2;
 drop snapshot udf_sp04;
@@ -117,8 +117,9 @@ call test_if_hit_elseif_first_elseif();
 drop procedure if exists test_if_hit_if;
 create procedure test_if_hit_if() 'begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end';
 call test_if_hit_if();
+-- @sortkey:1
 -- @ignore:0,9,10
-select * from mo_catalog.mo_stored_procedure;
+select * from mo_catalog.mo_stored_procedure order by name;
 
 drop snapshot if exists sp_sp05;
 create snapshot sp_sp05 for account;
@@ -128,8 +129,9 @@ drop procedure test_if_hit_if;
 
 restore account sys{snapshot="sp_sp05"};
 
+-- @sortkey:1
 -- @ignore:0,9,10
-select * from mo_catalog.mo_stored_procedure;
+select * from mo_catalog.mo_stored_procedure order by name;
 call test_if_hit_elseif_first_elseif();
 call test_if_hit_if();
 drop snapshot sp_sp05;
@@ -163,8 +165,9 @@ call test_if_hit_second_elseif();
 drop procedure if exists test_if_hit_else;
 create procedure test_if_hit_else() 'begin DECLARE v1 INT; SET v1 = 3; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end';
 call test_if_hit_else();
+-- @sortkey:1
 -- @ignore:0,9,10
-select * from mo_catalog.mo_stored_procedure;
+select * from mo_catalog.mo_stored_procedure order by name;
 
 drop snapshot if exists sp_sp06;
 create snapshot sp_sp06 for account;
@@ -172,15 +175,17 @@ create snapshot sp_sp06 for account;
 drop table tbh1;
 drop table tbh2;
 drop procedure test_if_hit_second_elseif;
+-- @sortkey:1
 -- @ignore:0,9,10
-select * from mo_catalog.mo_stored_procedure;
+select * from mo_catalog.mo_stored_procedure order by name;
 
 restore account sys{snapshot="sp_sp06"};
 
 call test_if_hit_else();
 call test_if_hit_second_elseif();
+-- @sortkey:1
 -- @ignore:0,9,10
-select * from mo_catalog.mo_stored_procedure;
+select * from mo_catalog.mo_stored_procedure order by name;
 
 drop snapshot sp_sp06;
 drop procedure test_if_hit_second_elseif;

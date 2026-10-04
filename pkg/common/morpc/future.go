@@ -36,17 +36,35 @@ func newFuture(releaseFunc func(f *Future)) *Future {
 type Future struct {
 	id   uint64
 	send RPCMessage
-	c    chan Message
-	errC chan error
+	// streamOwner is local-only send lifecycle state. It is deliberately kept
+	// out of RPCMessage so ordinary wire envelopes are not enlarged or coupled
+	// to a client-side stream object.
+	streamOwner *stream
+	c           chan Message
+	errC        chan error
 	// used to check error for sending message
-	writtenC    chan error
-	waiting     atomic.Bool
-	releaseFunc func(*Future)
-	oneWay      bool
-	mu          struct {
+	writtenC chan error
+	waiting  atomic.Bool
+	// writtenAt is the backend-relative tick of a successfully flushed ordinary
+	// unary request. Zero plus waiting=false means write admission/in progress;
+	// zero plus waiting=true means terminal send failure.
+	writtenAt atomic.Int64
+	// requestMetricObserved makes terminal request accounting exactly once even
+	// when timeout, transport failure, response delivery, and Close race.
+	requestMetricObserved atomic.Bool
+	requestMetrics        *metrics
+	releaseFunc           func(*Future)
+	sendRelease           func(Message)
+	// responseRelease remains owned by the Future until Get receives the
+	// response. If the caller abandons an already-delivered response and closes
+	// the Future, clear returns it to its application pool.
+	responseRelease func(Message)
+	oneWay          bool
+	mu              struct {
 		sync.Mutex
 		notified bool
 		closed   bool
+		released bool
 		ref      int
 		cb       func()
 	}
@@ -57,14 +75,66 @@ func (f *Future) init(send RPCMessage) {
 		panic("context deadline not set")
 	}
 	f.waiting.Store(false)
+	f.writtenAt.Store(0)
+	f.requestMetricObserved.Store(false)
+	f.requestMetrics = nil
 	f.send = send
+	f.streamOwner = nil
 	f.send.createAt = time.Now()
 	f.id = send.Message.GetID()
 	f.oneWay = send.oneWay
 	f.mu.Lock()
 	f.mu.closed = false
 	f.mu.notified = false
+	f.mu.released = false
 	f.mu.Unlock()
+}
+
+// enableRequestMetrics starts lifecycle accounting for a client-side unary
+// request. Internal heartbeat, stream, and server-side write Futures never call
+// this method, so they remain message-level traffic only.
+func (f *Future) enableRequestMetrics(m *metrics) {
+	if m == nil || f.oneWay || f.send.internal || f.send.stream {
+		return
+	}
+	f.requestMetrics = m
+	m.requestStarted()
+}
+
+func (f *Future) observeRequest(outcome requestOutcome) {
+	m := f.requestMetrics
+	if m == nil || !f.requestMetricObserved.CompareAndSwap(false, true) {
+		return
+	}
+	m.requestCompleted(f.send.createAt, outcome)
+}
+
+func (f *Future) observeRequestError(err error, fallback requestOutcome) {
+	if f.requestMetrics == nil || f.requestMetricObserved.Load() {
+		return
+	}
+	// A deadline/cancellation that happened before a later transport callback is
+	// the terminal condition visible to the caller and must win classification.
+	if f.send.Ctx != nil {
+		if ctxErr := f.send.Ctx.Err(); ctxErr != nil {
+			f.observeRequest(requestOutcomeForError(ctxErr, fallback))
+			return
+		}
+	}
+	f.observeRequest(requestOutcomeForError(err, fallback))
+}
+
+func (f *Future) observeRequestClose() {
+	if f.requestMetrics == nil || f.requestMetricObserved.Load() {
+		return
+	}
+	if f.send.Ctx != nil {
+		if err := f.send.Ctx.Err(); err != nil {
+			f.observeRequest(requestOutcomeForError(err, requestOutcomeAbandoned))
+			return
+		}
+	}
+	f.observeRequest(requestOutcomeAbandoned)
 }
 
 // Get get the response data synchronously, blocking until `context.Done` or the response is received.
@@ -75,55 +145,100 @@ func (f *Future) Get() (Message, error) {
 	// waiting in the send queue after the Get returns, causing concurrent reading and writing on the
 	// request.
 	if err := f.waitSendCompleted(); err != nil {
+		f.observeRequestError(err, requestOutcomeSendError)
 		return nil, err
 	}
 	select {
 	case <-f.send.Ctx.Done():
+		f.observeRequestError(f.send.Ctx.Err(), requestOutcomeCanceled)
 		return nil, f.send.Ctx.Err()
 	case resp := <-f.c:
+		f.observeRequest(requestOutcomeSuccess)
 		return resp, nil
 	case err := <-f.errC:
+		f.observeRequestError(err, requestOutcomeBackendError)
 		return nil, err
 	}
 }
 
-// Close closes the future.
+// Close closes the future. It must be called exactly once; the Future must not
+// be accessed again because Close may return it to an internal object pool.
 func (f *Future) Close() {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	f.mu.closed = true
-	if f.mu.cb != nil {
-		f.mu.cb()
+	if f.mu.closed {
+		f.mu.Unlock()
+		return
 	}
-	f.maybeReleaseLocked()
+	f.observeRequestClose()
+	f.mu.closed = true
+	cb := f.mu.cb
+	f.mu.cb = nil
+	release := f.takeReleaseLocked()
+	f.mu.Unlock()
+	if release != nil {
+		release(f)
+	}
+	if cb != nil {
+		cb()
+	}
 }
 
 func (f *Future) waitSendCompleted() error {
 	if f.oneWay {
 		panic("one way cannot call waitSendCompleted")
 	}
-	return <-f.writtenC
+	if f.sendRelease == nil && !f.send.internal {
+		return <-f.writtenC
+	}
+	select {
+	case err := <-f.writtenC:
+		return err
+	case <-f.send.Ctx.Done():
+		return f.send.Ctx.Err()
+	}
 }
 
 func (f *Future) messageSent(err error) {
 	if !f.oneWay && f.waiting.CompareAndSwap(false, true) {
+		if err != nil {
+			f.observeRequestError(err, requestOutcomeSendError)
+		}
+		if f.sendRelease != nil {
+			f.sendRelease(f.send.Message)
+		}
 		f.writtenC <- err
 		f.unRef()
 	}
 }
 
-func (f *Future) maybeReleaseLocked() {
-	if f.mu.closed && f.mu.ref == 0 && f.releaseFunc != nil {
+func (f *Future) setSendRelease(release func(Message)) {
+	f.sendRelease = release
+}
+
+func (f *Future) setResponseRelease(release func(Message)) {
+	f.responseRelease = release
+}
+
+func (f *Future) clearSendRelease() {
+	f.sendRelease = nil
+}
+
+func (f *Future) takeReleaseLocked() func(*Future) {
+	if f.mu.closed && f.mu.ref == 0 && !f.mu.released && f.releaseFunc != nil {
+		f.mu.released = true
 		f.clear()
-		f.releaseFunc(f)
+		return f.releaseFunc
 	}
+	return nil
 }
 
 func (f *Future) clear() {
 	for {
 		select {
-		case <-f.c:
+		case response := <-f.c:
+			if f.responseRelease != nil {
+				f.responseRelease(response)
+			}
 		case <-f.errC:
 		case <-f.writtenC:
 		default:
@@ -136,62 +251,82 @@ func (f *Future) getSendMessageID() uint64 {
 	return f.id
 }
 
-func (f *Future) done(response Message, cb func()) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	if f.mu.notified {
-		return
-	}
-
-	if !f.mu.closed && !f.timeout() {
-		if response.GetID() != f.getSendMessageID() {
-			return
-		}
-		f.mu.cb = cb
-		f.c <- response
-	} else if cb != nil {
-		cb()
-	}
-	f.mu.notified = true
+// isUserUnary reports whether this Future carries an ordinary user unary
+// request: the only traffic class whose response owns a per-request read
+// window. The writeLoop flush stamp and pendingRequestReadWindow must use this
+// same predicate; a Future counted by the scan but never stamped would read as
+// pending forever, and one stamped but not scanned would lose its window.
+// (The probe-mode trackLiveness predicate in doWrite intentionally differs:
+// it also tracks one-way user traffic.)
+func (f *Future) isUserUnary() bool {
+	return !f.send.internal && !f.send.stream && !f.oneWay
 }
 
-func (f *Future) error(id uint64, err error, cb func()) {
+func (f *Future) done(response Message, cb func()) bool {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	if f.mu.notified {
-		return
-	}
-
-	if !f.mu.closed && !f.timeout() {
-		if id != f.getSendMessageID() {
-			return
+	if f.mu.notified || f.mu.closed || f.timeout() ||
+		response.GetID() != f.getSendMessageID() {
+		f.mu.Unlock()
+		if cb != nil {
+			cb()
 		}
-		f.mu.cb = cb
-		f.errC <- err
-	} else if cb != nil {
-		cb()
+		return false
 	}
+	f.mu.cb = cb
+	f.observeRequest(requestOutcomeSuccess)
+	f.c <- response
 	f.mu.notified = true
+	f.mu.Unlock()
+	return true
+}
+
+func (f *Future) error(id uint64, err error, cb func()) bool {
+	f.mu.Lock()
+	if f.mu.notified || f.mu.closed || f.timeout() ||
+		id != f.getSendMessageID() {
+		f.mu.Unlock()
+		if cb != nil {
+			cb()
+		}
+		return false
+	}
+	f.mu.cb = cb
+	f.observeRequestError(err, requestOutcomeBackendError)
+	f.errC <- err
+	f.mu.notified = true
+	f.mu.Unlock()
+	return true
 }
 
 func (f *Future) ref() {
+	if !f.tryRef() {
+		panic("ref released MORPC Future")
+	}
+}
+
+func (f *Future) tryRef() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	if f.mu.released {
+		return false
+	}
 	f.mu.ref++
+	return true
 }
 
 func (f *Future) unRef() {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-
 	f.mu.ref--
 	if f.mu.ref < 0 {
+		f.mu.Unlock()
 		panic("BUG")
 	}
-	f.maybeReleaseLocked()
+	release := f.takeReleaseLocked()
+	f.mu.Unlock()
+	if release != nil {
+		release(f)
+	}
 }
 
 func (f *Future) reset() {
@@ -200,6 +335,11 @@ func (f *Future) reset() {
 	default:
 	}
 	f.send = RPCMessage{}
+	f.streamOwner = nil
+	f.writtenAt.Store(0)
+	f.sendRelease = nil
+	f.responseRelease = nil
+	f.requestMetrics = nil
 	f.mu.cb = nil
 	f.id = 0
 }

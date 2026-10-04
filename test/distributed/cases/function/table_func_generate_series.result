@@ -28,6 +28,14 @@ select * from generate_series(1, 5, -1) g;
 result
 select * from generate_series(5, 1, 1) g;
 result
+select count(*), count(distinct result), min(result), max(result), sum(mod(result, 2) <> 0)
+from generate_series(0, 480002, 2) g;
+count(*)	count(distinct result)	min(result)	max(result)	sum(mod(result, 2) <> 0)
+240002	240002	0	480002	0
+select count(*), count(distinct result), min(result), max(result), sum(mod(result, 2) <> 0)
+from generate_series(480002, 0, -2) g;
+count(*)	count(distinct result)	min(result)	max(result)	sum(mod(result, 2) <> 0)
+240002	240002	0	480002	0
 select * from generate_series(2147483646, 2147483647,5) g;
 result
 2147483646
@@ -174,9 +182,9 @@ result
 5
 create table t(a int, b text);
 insert into t select result, repeat('foobarzoo', 500) t from generate_series(1, 200000) t;
-select count(*) as ttl from t;
-ttl
-200000
+select count(*) as ttl, min(a) as min_value, max(a) as max_value, count(distinct a) as unique_values from t;
+ttl    min_value    max_value    unique_values
+200000    1    200000    200000
 drop table t;
 create table t(a int, b int);
 explain select t.*, tf.* from t cross apply generate_series(t.a, t.b) tf;
@@ -282,3 +290,72 @@ nth    f64
 8    0.6296099782367262
 9    1.565520076524086
 10    -0.834259977430416
+select nth from generate_random_int64(3, 42, 'int64n', 100) t order by nth;
+nth
+1
+2
+3
+select i64 from generate_random_int64(3, 42, 'int64n', 100) t order by nth;
+i64
+75
+11
+60
+select count(*) as n from generate_random_int64(3, 42, 'int64n', 100) t;
+n
+3
+select min(i64) = 11 and max(i64) = 75 as values_ok from generate_random_int64(3, 42, 'int64n', 100) t;
+values_ok
+1
+select nth from generate_random_float64(3, 42, 'normal') t order by nth;
+nth
+1
+2
+3
+select f64 from generate_random_float64(3, 42, 'normal') t order by nth;
+f64
+1.5536305584564762
+0.12525608682704692
+-0.4943748127704828
+select count(*) as n from generate_random_float64(3, 42, 'normal') t;
+n
+3
+select min(f64) < -0.49 and max(f64) > 1.55 as values_ok from generate_random_float64(3, 42, 'normal') t;
+values_ok
+1
+drop table if exists issue_26431;
+create table issue_26431(i int primary key);
+insert into issue_26431 values (1), (2), (3);
+select count(*) as rhs_count
+from issue_26431 d
+join generate_series(1, 5) g on d.i = g.result;
+rhs_count
+3
+select count(*) as correlated_count
+from issue_26431 d
+join generate_series(d.i, d.i) g on d.i = g.result;
+correlated_count
+3
+select count(*) as lhs_count
+from generate_series(1, 5) g
+join issue_26431 d on d.i = g.result;
+lhs_count
+3
+with gs as (
+select result from generate_series(1, 5) g
+)
+select count(*) as cte_count
+from issue_26431 d
+join gs on d.i = gs.result;
+cte_count
+3
+select count(*) as unnest_count
+from issue_26431 d
+join unnest('[1, 2, 3]') u on true;
+unnest_count
+9
+select count(*) as apply_count
+from issue_26431 d
+cross apply generate_series(1, 5) g;
+apply_count
+15
+drop table issue_26431;

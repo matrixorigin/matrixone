@@ -1,0 +1,852 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package plan
+
+import (
+	"context"
+	"strings"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fulltext2"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/stretchr/testify/require"
+)
+
+// fakeCoverageTxn is a non-nil TxnOperator that only needs to answer SnapshotTS();
+// indexCoversSnapshot reads no other method on this path. Any other call panics,
+// which would surface an unexpected new dependency rather than hide it.
+type fakeCoverageTxn struct{ client.TxnOperator }
+
+func (fakeCoverageTxn) SnapshotTS() timestamp.Timestamp {
+	return timestamp.Timestamp{PhysicalTime: 1_700_000_000_000_000_000}
+}
+
+// Txn answers the read snapshot so EffectiveSnapshotTS can compare a historical read against it
+// (a {snapshot=...} TS earlier than this counts as historical).
+func (fakeCoverageTxn) Txn() txn.TxnMeta {
+	return txn.TxnMeta{SnapshotTS: timestamp.Timestamp{PhysicalTime: 1_700_000_000_000_000_000}}
+}
+
+// CloneSnapshotOp is used to read the source relation as of a historical snapshot; the mocked
+// engine ignores the operator, so returning the same fake is enough.
+func (f fakeCoverageTxn) CloneSnapshotOp(timestamp.Timestamp) client.TxnOperator { return f }
+
+// indexCoversSnapshot is a test-only convenience over decideJSONProbe: it collapses the 3-way
+// decision to the single covered/not-covered bit the older coverage tests assert on.
+func (builder *QueryBuilder) indexCoversSnapshot(scanNode *plan.Node, idx *plan.IndexDef) bool {
+	kind, _ := builder.decideJSONProbe(scanNode, idx)
+	return kind == jsonProbeCovered
+}
+
+func jpColExpr(pos int32) *plan.Expr {
+	return &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: pos}}}
+}
+
+func jpStrLit(s string) *plan.Expr {
+	return &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: s}}}}
+}
+
+func jpFltLit(f float64) *plan.Expr {
+	return &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Dval{Dval: f}}}}
+}
+
+func jpIntLit(i int64) *plan.Expr {
+	return &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: i}}}}
+}
+
+func jpCallExpr(name string, args ...*plan.Expr) *plan.Expr {
+	return &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{ObjName: name},
+		Args: args,
+	}}}
+}
+
+func jpExtractStr(col int32, path string) *plan.Expr {
+	return jpCallExpr("json_extract_string", jpColExpr(col), jpStrLit(path))
+}
+
+func jpExtractFloat(col int32, path string) *plan.Expr {
+	return jpCallExpr("json_extract_float64", jpColExpr(col), jpStrLit(path))
+}
+
+// TestIndexCoversSnapshotReachesCoverageHook drives the async decision under a real mock
+// process/txn: an AlwaysAsync json index NEVER reports covered (it self-completes or fails closed),
+// so indexCoversSnapshot is false. The point is exercising the full reachable path safely (#27926).
+func TestIndexCoversSnapshotReachesCoverageHook(t *testing.T) {
+	mockCtx := NewMockCompilerContext(false)
+	proc := mockCtx.GetProcess()
+	proc.Base.TxnOperator = fakeCoverageTxn{} // the mock proc has no txn otherwise
+	b := &QueryBuilder{compCtx: mockCtx}
+	idx := jpJSONIndex("j", `{"parser":"json"}`)
+	scanNode := jpScanNode("j", idx)
+	scanNode.TableDef.TblId = 424242 // must be non-zero to pass the guard
+
+	require.False(t, b.indexCoversSnapshot(scanNode, idx),
+		"with no live coverage job, an async index must not be treated as covering")
+}
+
+// The headline rewrite from the issue.
+func TestJSONProbeStringEquality(t *testing.T) {
+	p, ok := jsonExtractProbeFromExpr(
+		jpCallExpr("=", jpExtractStr(3, "$.foo"), jpStrLit("bar")))
+	require.True(t, ok)
+	require.Equal(t, int32(3), p.ColPos)
+	require.Equal(t, "foo", p.Tag)
+	require.Empty(t, p.Ranges)
+	// 'bar' is not numeric, so exactly one term: an exact lookup
+	require.Equal(t, []string{fulltext2.JSONStringTerm("foo", "bar")}, p.Terms)
+}
+
+// THE correctness property: the probe must be implied by the predicate. For a
+// document that satisfies the comparison, the probe's term set must intersect
+// the document's indexed terms — otherwise the rewrite drops the row.
+func TestJSONProbeTermsArePresentInMatchingDocuments(t *testing.T) {
+	intersects := func(p jsonProbe, doc string) bool {
+		terms := jpDocTerms(t, doc)
+		for _, term := range p.Terms {
+			if terms[term] {
+				return true
+			}
+		}
+		return false
+	}
+
+	// string equality against a string leaf
+	p, ok := jsonExtractProbeFromExpr(jpCallExpr("=", jpExtractStr(0, "$.foo"), jpStrLit("bar")))
+	require.True(t, ok)
+	require.True(t, intersects(p, `{"foo":"bar"}`))
+	require.True(t, intersects(p, `{"a":{"foo":"bar"}}`), "leaf-only probe is path agnostic")
+	require.False(t, intersects(p, `{"foo":"other"}`))
+	require.False(t, intersects(p, `{"zzz":"bar"}`), "a different key must not match")
+
+	// json_extract_string is NULL for a numeric leaf, so `= '3.14'` is true only
+	// for the STRING "3.14": one term, and the numeric document must NOT match
+	p, ok = jsonExtractProbeFromExpr(jpCallExpr("=", jpExtractStr(0, "$.n"), jpStrLit("3.14")))
+	require.True(t, ok)
+	require.Len(t, p.Terms, 1, "the two extractors are disjoint on leaf type")
+	require.True(t, intersects(p, `{"n":"3.14"}`), "string leaf is reachable")
+	require.False(t, intersects(p, `{"n":3.14}`), "numeric leaf is NULL for json_extract_string")
+
+	// float equality reaches an integer leaf, since all numbers normalize
+	p, ok = jsonExtractProbeFromExpr(jpCallExpr("=", jpExtractFloat(0, "$.n"), jpIntLit(3)))
+	require.True(t, ok)
+	require.True(t, intersects(p, `{"n":3}`))
+	require.True(t, intersects(p, `{"n":3.0}`))
+	require.False(t, intersects(p, `{"n":4}`))
+}
+
+// Everything the rule must decline. Declining is always safe — the original
+// predicate stands alone — so these guard against a probe that is NOT implied.
+func TestJSONProbeDeclines(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		expr *plan.Expr
+	}{
+		{"wildcard path", jpCallExpr("=", jpExtractStr(0, "$.a.*"), jpStrLit("x"))},
+		{"recursive wildcard", jpCallExpr("=", jpExtractStr(0, "$**.b"), jpStrLit("x"))},
+		{"root path has no tag", jpCallExpr("=", jpExtractStr(0, "$"), jpStrLit("x"))},
+		{"subscript only has no tag", jpCallExpr("=", jpExtractStr(0, "$[0]"), jpStrLit("x"))},
+		{"non-constant rhs", jpCallExpr("=", jpExtractStr(0, "$.a"), jpColExpr(9))},
+		{"non-constant path", jpCallExpr("=",
+			jpCallExpr("json_extract_string", jpColExpr(0), jpColExpr(1)), jpStrLit("x"))},
+		{"not-equal is not a range", jpCallExpr("!=", jpExtractStr(0, "$.a"), jpStrLit("x"))},
+		{"not a json_extract", jpCallExpr("=", jpCallExpr("lower", jpColExpr(0)), jpStrLit("x"))},
+		{"json_extract on an expression, not a column", jpCallExpr("=",
+			jpCallExpr("json_extract_string", jpCallExpr("lower", jpColExpr(0)), jpStrLit("$.a")),
+			jpStrLit("x"))},
+		// numeric equality with a string constant would change which leaves the
+		// probe reaches
+		{"float compared to a string constant", jpCallExpr("=", jpExtractFloat(0, "$.n"), jpStrLit("3"))},
+		{"unsupported operator", jpCallExpr("<=>", jpExtractStr(0, "$.a"), jpStrLit("x"))},
+	} {
+		_, ok := jsonExtractProbeFromExpr(tc.expr)
+		require.False(t, ok, tc.name)
+	}
+}
+
+func TestJSONPathTag(t *testing.T) {
+	for _, tc := range []struct {
+		path, tag string
+		ok        bool
+	}{
+		{"$.foo", "foo", true},
+		{"$.a.b.c", "c", true},
+		{"$.a[0]", "a", true},      // array elements index under the enclosing key
+		{"$.a[0].b", "b", true},    // ...and a key below a subscript is still the tag
+		{"$.a[0][1]", "a", true},   // nested subscripts collapse the same way
+		{"  $.foo  ", "foo", true}, // surrounding space is not significant
+		{"$", "", false},
+		{"$[0]", "", false},
+		{"$.a.*", "", false},
+		{"$**.b", "", false},
+		{"foo", "", false}, // not a path
+		{"$.", "", false},
+	} {
+		tag, ok := jsonPathTag(tc.path)
+		require.Equal(t, tc.ok, ok, tc.path)
+		if tc.ok {
+			require.Equal(t, tc.tag, tag, tc.path)
+		}
+	}
+}
+
+// --- index resolution and probe injection ------------------------------------
+
+func jpScanNode(colName string, idx ...*plan.IndexDef) *plan.Node {
+	return &plan.Node{
+		NodeType:    plan.Node_TABLE_SCAN,
+		BindingTags: []int32{7},
+		ObjRef:      &plan.ObjectRef{SchemaName: "db"},
+		TableDef: &plan.TableDef{
+			Cols: []*plan.ColDef{
+				{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
+				{Name: colName, Typ: plan.Type{Id: int32(types.T_json)}},
+			},
+			Indexes: idx,
+		},
+	}
+}
+
+func jpJSONIndex(col, params string) *plan.IndexDef {
+	return &plan.IndexDef{
+		IndexName:          "ftj",
+		TableExist:         true,
+		IndexAlgo:          catalog.MoIndexFullText2Algo.ToString(),
+		IndexAlgoTableType: catalog.FullText2Index_TblType_Storage,
+		Parts:              []string{col},
+		IndexAlgoParams:    params,
+	}
+}
+
+// The index must be resolved from the COLUMN, and only a json-parser fulltext2
+// index that actually holds tuple terms qualifies. Probing anything else finds
+// nothing, which would drop every row.
+func TestFindJSONTupleIndex(t *testing.T) {
+	var b *QueryBuilder
+	// findJSONTupleIndex answers SHAPE only — the right column, parser and term
+	// options. Freshness is a separate gate (indexCoversSnapshot).
+	shaped := jpJSONIndex("j", `{"parser":"json"}`)
+	require.NotNil(t, b.findJSONTupleIndex(jpScanNode("j", shaped), 1))
+
+	// wrong column position
+	require.Nil(t, b.findJSONTupleIndex(jpScanNode("j", shaped), 0))
+
+	for _, tc := range []struct {
+		name string
+		idx  *plan.IndexDef
+	}{
+		{"wrong parser", jpJSONIndex("j", `{"parser":"ngram"}`)},
+		{"no parser", jpJSONIndex("j", "")},
+		{"include_keys off", jpJSONIndex("j", `{"parser":"json","include_keys":"false"}`)},
+		{"different column", jpJSONIndex("other", `{"parser":"json"}`)},
+	} {
+		require.Nil(t, b.findJSONTupleIndex(jpScanNode("j", tc.idx), 1), tc.name)
+	}
+
+	// a metadata def must not be picked up (only the storage def carries Parts)
+	meta := jpJSONIndex("j", `{"parser":"json"}`)
+	meta.IndexAlgoTableType = catalog.FullText2Index_TblType_Metadata
+	require.Nil(t, b.findJSONTupleIndex(jpScanNode("j", meta), 1))
+
+	// a non-materialized index must not be probed
+	gone := jpJSONIndex("j", `{"parser":"json"}`)
+	gone.TableExist = false
+	require.Nil(t, b.findJSONTupleIndex(jpScanNode("j", gone), 1))
+
+	// no indexes at all
+	require.Nil(t, b.findJSONTupleIndex(jpScanNode("j"), 1))
+}
+
+// The term shape must come from the index, never be assumed: an index built one
+// way and probed the other way silently returns nothing.
+func TestJSONIndexTermShapeParams(t *testing.T) {
+	require.True(t, jsonIndexIncludeKeys(jpJSONIndex("j", `{"parser":"json"}`)), "absent => on")
+	require.True(t, jsonIndexIncludeKeys(jpJSONIndex("j", `{"include_keys":"true"}`)))
+	require.False(t, jsonIndexIncludeKeys(jpJSONIndex("j", `{"include_keys":"false"}`)))
+	require.True(t, jsonIndexIncludeKeys(jpJSONIndex("j", `{bad json`)), "malformed => default on")
+
+	require.Equal(t, "", jsonIndexParam(nil, "include_keys"))
+	require.Equal(t, "", jsonIndexParam(jpJSONIndex("j", ""), "include_keys"))
+}
+
+// An async index may only back a mandatory filter when its coverage can be
+// PROVEN. With no compiler context there is no snapshot to check against, so
+// the gate must fail closed and inject nothing.
+func TestAddJSONFulltextProbesRefusesAsyncIndex(t *testing.T) {
+	var b *QueryBuilder
+	node := jpScanNode("j", jpJSONIndex("j", `{"parser":"json"}`))
+	node.FilterList = []*plan.Expr{
+		jpCallExpr("=", jpExtractStr(1, "$.foo"), jpStrLit("bar")),
+	}
+	b.addJSONFulltextProbes(node)
+	require.Len(t, node.FilterList, 1, "no probe may be added for an async index")
+	require.False(t, isJSONProbeMatch(node.FilterList[0]))
+}
+
+// makeJSONProbeMatch is still exercised directly: it is what a future
+// watermark-gated caller will use, and its shape is what findMatchFullTextIndex
+// resolves against.
+func TestMakeJSONProbeMatchShape(t *testing.T) {
+	var b *QueryBuilder
+	node := jpScanNode("j", jpJSONIndex("j", `{"parser":"json"}`))
+	probe, ok := jsonExtractProbeFromExpr(jpCallExpr("=", jpExtractStr(1, "$.foo"), jpStrLit("bar")))
+	require.True(t, ok)
+
+	m := b.makeJSONProbeMatch(node, 1, probe)
+	require.NotNil(t, m)
+	require.True(t, isJSONProbeMatch(m))
+	fn := m.GetF()
+	require.Equal(t, "fulltext_match", fn.Func.ObjName)
+	col := fn.Args[2].GetCol()
+	require.Equal(t, int32(7), col.RelPos, "must carry the scan binding tag")
+	require.Equal(t, "j", col.Name)
+	mode := fn.Args[1].GetLit().Value.(*plan.Literal_I64Val).I64Val
+	require.Equal(t, fulltext2.JSONProbeMode, mode)
+}
+
+// Nothing is added when no index can serve the predicate, or when there is
+// nothing to serve. Declining is always safe.
+func TestAddJSONFulltextProbesDeclines(t *testing.T) {
+	var b *QueryBuilder
+	for _, tc := range []struct {
+		name string
+		node *plan.Node
+	}{
+		{"no index", func() *plan.Node {
+			n := jpScanNode("j")
+			n.FilterList = []*plan.Expr{jpCallExpr("=", jpExtractStr(1, "$.foo"), jpStrLit("bar"))}
+			return n
+		}()},
+		{"wrong parser", func() *plan.Node {
+			n := jpScanNode("j", jpJSONIndex("j", `{"parser":"ngram"}`))
+			n.FilterList = []*plan.Expr{jpCallExpr("=", jpExtractStr(1, "$.foo"), jpStrLit("bar"))}
+			return n
+		}()},
+		{"unprobeable predicate", func() *plan.Node {
+			n := jpScanNode("j", jpJSONIndex("j", `{"parser":"json"}`))
+			n.FilterList = []*plan.Expr{jpCallExpr("=", jpExtractStr(1, "$.a.*"), jpStrLit("x"))}
+			return n
+		}()},
+		{"no filters", jpScanNode("j", jpJSONIndex("j", `{"parser":"json"}`))},
+		{"nil node", nil},
+	} {
+		before := 0
+		if tc.node != nil {
+			before = len(tc.node.FilterList)
+		}
+		b.addJSONFulltextProbes(tc.node)
+		if tc.node != nil {
+			require.Len(t, tc.node.FilterList, before, tc.name)
+		}
+	}
+}
+
+func TestIsJSONProbeMatch(t *testing.T) {
+	require.False(t, isJSONProbeMatch(jpStrLit("x")))
+	require.False(t, isJSONProbeMatch(jpCallExpr("lower", jpColExpr(0))))
+	// an ordinary MATCH is not a probe
+	ordinary := jpCallExpr("fulltext_match", jpStrLit("pattern"), jpIntLit(0), jpColExpr(1))
+	require.False(t, isJSONProbeMatch(ordinary))
+}
+
+// The freshness gate fails closed on every missing input. A synchronously
+// maintained index needs no check at all.
+func TestIndexCoversSnapshotFailsClosed(t *testing.T) {
+	var b *QueryBuilder
+	node := jpScanNode("j", jpJSONIndex("j", `{"parser":"json"}`))
+
+	// always-async + no compiler context ⇒ cannot prove coverage ⇒ decline
+	require.False(t, b.indexCoversSnapshot(node, node.TableDef.Indexes[0]))
+
+	// an algorithm that is not always-async is current by construction
+	sync := jpJSONIndex("j", `{"parser":"json"}`)
+	sync.IndexAlgo = "btree" // registered, not always-async
+	require.True(t, b.indexCoversSnapshot(node, sync))
+
+	// an unregistered algo is not always-async either, so it is not gated here;
+	// findJSONTupleIndex is what rejects it
+	unknown := jpJSONIndex("j", `{"parser":"json"}`)
+	unknown.IndexAlgo = "no-such-algo"
+	require.True(t, b.indexCoversSnapshot(node, unknown))
+
+	// a scan with no ObjRef cannot name the table for the lookup
+	noRef := jpScanNode("j", jpJSONIndex("j", `{"parser":"json"}`))
+	noRef.ObjRef = nil
+	require.False(t, b.indexCoversSnapshot(noRef, noRef.TableDef.Indexes[0]))
+}
+
+// jpDocTerms is the document's indexed tuple terms — what a probe must actually
+// intersect for the rewrite to keep the row.
+func jpDocTerms(t *testing.T, doc string) map[string]bool {
+	t.Helper()
+	bj, err := bytejson.ParseFromString(doc)
+	require.NoError(t, err)
+	m := map[string]bool{}
+	for _, term := range fulltext2.JSONTupleTerms(bj, fulltext2.JSONTermOptions{IncludeKeys: true}) {
+		m[term] = true
+	}
+	return m
+}
+
+// rangeCovers reports whether any of the document's tuple terms falls inside one
+// of the probe's ranges — the necessary condition a range probe asserts.
+func rangeCovers(t *testing.T, p jsonProbe, doc string) bool {
+	t.Helper()
+	for term := range jpDocTerms(t, doc) {
+		for _, r := range p.Ranges {
+			if r.Lo <= term && term <= r.Hi {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// The four inequalities become a single term RANGE. The property that matters is
+// implication: every document the ORIGINAL predicate accepts must hold a term
+// inside the range, or the ANDed probe would drop it.
+func TestJSONProbeNumericRanges(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		op      string
+		bound   float64
+		accepts []string // the predicate is TRUE for these
+		rejects []string // ... and FALSE for these
+	}{
+		{"greater than", ">", 15,
+			[]string{`{"n":20}`, `{"n":30}`, `{"n":15.5}`, `{"n":1e300}`},
+			[]string{`{"n":10}`, `{"n":-5}`}},
+		{"greater or equal", ">=", 15,
+			[]string{`{"n":15}`, `{"n":20}`},
+			[]string{`{"n":14.9}`, `{"n":-5}`}},
+		{"less than", "<", 15,
+			[]string{`{"n":10}`, `{"n":-5}`, `{"n":-1e300}`},
+			[]string{`{"n":20}`, `{"n":15.5}`}},
+		{"less or equal", "<=", 15,
+			[]string{`{"n":15}`, `{"n":10}`},
+			[]string{`{"n":15.1}`, `{"n":20}`}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, ok := jsonExtractProbeFromExpr(
+				jpCallExpr(tc.op, jpExtractFloat(0, "$.n"), jpFltLit(tc.bound)))
+			require.True(t, ok)
+			require.Len(t, p.Ranges, 1)
+			require.Empty(t, p.Terms, "a range probe carries no exact term")
+
+			for _, doc := range tc.accepts {
+				require.True(t, rangeCovers(t, p, doc),
+					"%s must be reachable: dropping it would lose a qualifying row", doc)
+			}
+			for _, doc := range tc.rejects {
+				// the probe MAY be a superset, but on these it should also be
+				// tight enough to exclude — except at the strict boundary,
+				// checked separately below
+				require.False(t, rangeCovers(t, p, doc), "%s should not be selected", doc)
+			}
+
+			// a different key never satisfies the range
+			require.False(t, rangeCovers(t, p, `{"other":20}`))
+			// a STRING leaf under the same key is not in a numeric range
+			require.False(t, rangeCovers(t, p, `{"n":"20"}`))
+		})
+	}
+}
+
+// Both ends are inclusive, so a STRICT inequality is a superset by exactly the
+// boundary value. That is intentional — the retained predicate removes it — and
+// this pins it as a deliberate choice rather than an off-by-one.
+func TestJSONProbeStrictInequalityIsSupersetAtTheBoundary(t *testing.T) {
+	gt, ok := jsonExtractProbeFromExpr(jpCallExpr(">", jpExtractFloat(0, "$.n"), jpFltLit(15)))
+	require.True(t, ok)
+	require.True(t, rangeCovers(t, gt, `{"n":15}`),
+		"the boundary value is included on purpose; the retained predicate drops it")
+
+	lt, ok := jsonExtractProbeFromExpr(jpCallExpr("<", jpExtractFloat(0, "$.n"), jpFltLit(15)))
+	require.True(t, ok)
+	require.True(t, rangeCovers(t, lt, `{"n":15}`))
+}
+
+// String inequalities range over the STRING encoding only, so they never reach a
+// numeric leaf — json_extract_string is NULL for one, so no numeric document can
+// satisfy the predicate anyway.
+func TestJSONProbeStringRanges(t *testing.T) {
+	p, ok := jsonExtractProbeFromExpr(jpCallExpr(">", jpExtractStr(0, "$.a"), jpStrLit("m")))
+	require.True(t, ok)
+	require.Len(t, p.Ranges, 1)
+	require.True(t, rangeCovers(t, p, `{"a":"n"}`))
+	require.True(t, rangeCovers(t, p, `{"a":"zzz"}`))
+	require.False(t, rangeCovers(t, p, `{"a":"a"}`))
+	require.False(t, rangeCovers(t, p, `{"a":20}`), "a numeric leaf is NULL for json_extract_string")
+
+	p, ok = jsonExtractProbeFromExpr(jpCallExpr("<=", jpExtractStr(0, "$.a"), jpStrLit("m")))
+	require.True(t, ok)
+	require.True(t, rangeCovers(t, p, `{"a":"a"}`))
+	require.True(t, rangeCovers(t, p, `{"a":"m"}`))
+	require.False(t, rangeCovers(t, p, `{"a":"n"}`))
+}
+
+// The operand order flips the operator, so a constant on the left builds the
+// mirrored range rather than declining or — worse — the wrong half.
+func TestJSONProbeRangeFlipsOperandOrder(t *testing.T) {
+	// 15 < n  ==  n > 15
+	flipped, ok := jsonExtractProbeFromExpr(
+		jpCallExpr("<", jpFltLit(15), jpExtractFloat(0, "$.n")))
+	require.True(t, ok)
+	direct, ok := jsonExtractProbeFromExpr(
+		jpCallExpr(">", jpExtractFloat(0, "$.n"), jpFltLit(15)))
+	require.True(t, ok)
+	require.Equal(t, direct.Ranges, flipped.Ranges)
+}
+
+// A value past the truncation limit must still produce a SUPERSET: truncation is
+// monotone, so a long bound can only widen the range, never cut a qualifying row.
+func TestJSONProbeRangeWithOverlongBound(t *testing.T) {
+	long := strings.Repeat("a", 300)
+	p, ok := jsonExtractProbeFromExpr(jpCallExpr(">", jpExtractStr(0, "$.a"), jpStrLit(long)))
+	require.True(t, ok)
+	// a value greater than the bound and sharing its truncated prefix still lands
+	// in range rather than being lost to the cut
+	require.True(t, rangeCovers(t, p, `{"a":"`+long+`zzz"}`))
+}
+
+// A json probe must never take a pushed candidate LIMIT. It returns a SUPERSET
+// that the retained predicate then narrows, so truncating it to k candidates
+// yields fewer than k final rows and silently drops qualifying ones.
+//
+// Both of the gate's paths already decline for a probe — its predicate always
+// leaves a residual filter, and its mode is not FULLTEXT_BOOLEAN — but that is
+// incidental, and a later widening of conjunctive eligibility would turn it into
+// a wrong-results bug. This pins the refusal itself.
+func TestCandidateLimitRefusesJSONProbe(t *testing.T) {
+	var b QueryBuilder
+	limit := makePlan2Uint64ConstExprWithType(10)
+
+	probe := jpCallExpr("fulltext_match",
+		jpStrLit("payload"), jpIntLit(fulltext2.JSONProbeMode), jpColExpr(1))
+	require.True(t, isJSONProbeMatch(probe))
+
+	// even with NO residual filter and a literal LIMIT — the shape the gate is
+	// most willing to push — a probe is refused
+	scan := &plan.Node{TableDef: &plan.TableDef{}}
+	require.Nil(t, b.buildFullTextCandidateLimit(
+		scan, nil, []*plan.Expr{probe}, nil, false, false, limit, nil),
+		"a probe must not be truncated, whatever the rest of the shape allows")
+}
+
+// A prepared plan carrying an injected json coverage probe must be flagged so it rebuilds every
+// EXECUTE: its covered/partial decision reflects the async index's freshness at build time, which
+// no schema version tracks, so a reused plan would drop rows committed after it was cached. A user
+// MATCH builds the same fulltext2_search node but is freshness-tolerant, so only JSONProbeMode counts.
+func TestPreparedPlanDependsOnIndexCoverage(t *testing.T) {
+	mkPlan := func(nodes ...*plan.Node) *Plan {
+		return &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: nodes}}}
+	}
+	ftNode := func(mode int64) *plan.Node {
+		return &plan.Node{
+			NodeType: plan.Node_FUNCTION_SCAN,
+			TableDef: &plan.TableDef{TblFunc: &plan.TableFunction{Name: fulltext2_search_func_name}},
+			TblFuncExprList: []*plan.Expr{
+				makePlan2StringConstExprWithType("cfg"),
+				jpStrLit("pattern"),
+				{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: mode}}}},
+			},
+		}
+	}
+	require.False(t, PreparedPlanDependsOnIndexCoverage(nil), "nil plan")
+	require.False(t, PreparedPlanDependsOnIndexCoverage(mkPlan()), "no nodes")
+	require.False(t, PreparedPlanDependsOnIndexCoverage(mkPlan(&plan.Node{NodeType: plan.Node_TABLE_SCAN})),
+		"a plain scan is reusable")
+	require.False(t, PreparedPlanDependsOnIndexCoverage(mkPlan(ftNode(0))),
+		"a user MATCH (non-JSONProbe mode) is freshness-tolerant and reusable")
+	require.True(t, PreparedPlanDependsOnIndexCoverage(mkPlan(ftNode(fulltext2.JSONProbeMode))),
+		"an injected json coverage probe must force a rebuild")
+	require.True(t, PreparedPlanDependsOnIndexCoverage(mkPlan(&plan.Node{NodeType: plan.Node_TABLE_SCAN}, ftNode(fulltext2.JSONProbeMode))),
+		"the probe must be found among other nodes")
+}
+
+// recordJSONProbeTail marks a scan self-completing and records (keyed by node id) both the json
+// predicate rebuilt against the tail's columns (whereSQL, carried to the operator so its tail filters
+// the gap directly, no index) and the full display SQL the join splice publishes on Stats.Sql for
+// EXPLAIN. The display SQL names the source db/table, the pk projection, the plan-time build_ts lower
+// bound, the change_type='insert' filter, and the pushed json predicate.
+func TestRecordJSONProbeTail(t *testing.T) {
+	mockCtx := newFullTextJoinMockCompilerContext()
+	mockCtx.GetProcess().Base.TxnOperator = fakeCoverageTxn{}
+	b := NewQueryBuilder(plan.Query_SELECT, mockCtx, false, true)
+	scanNode := &plan.Node{
+		NodeId: 7,
+		ObjRef: &plan.ObjectRef{SchemaName: "db", ObjName: "docs"},
+		TableDef: &plan.TableDef{
+			Cols: []*plan.ColDef{{Name: "id"}, {Name: "j"}},
+			Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
+		},
+	}
+	// json_extract_string(j, '$.foo') = 'needle' over column j (pos 1).
+	c := jsonComparison{col: 1, path: "$.foo", isString: true, op: "=",
+		lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "needle"}}}
+	require.True(t, b.recordJSONProbeTail(scanNode, c, types.BuildTS(100, 0)))
+	info, ok := b.jsonProbeTail[7]
+	require.True(t, ok)
+	// The pushed predicate uses the public json_extract_string; the fallback/tail SQL runs with
+	// applyIndices=1 so its base-table scan cannot re-trigger the probe rewrite and recurse. The
+	// operator uses it for both tail and fallback.
+	require.Equal(t, "json_extract_string(`j`, '$.foo') = 'needle'", info.whereSQL)
+	// The bar (max source commit as of the read) reaches the operator via the config.
+	require.Equal(t, int64(100), info.bar)
+	// The display SQL: table_changes over the gap, ALIASED (so change_type binds), filtered by the
+	// same (internal-named) predicate. Its lower bound is symbolic -- the operator binds the searched
+	// generation at runtime, so the plan cannot render a concrete `from`.
+	require.Contains(t, info.displaySQL, "table_changes('db', 'docs'")
+	require.Contains(t, info.displaySQL, "AS mo_tc")
+	require.Contains(t, info.displaySQL, "mo_tc.`id`")
+	require.Contains(t, info.displaySQL, "<searched generation>")
+	require.Contains(t, info.displaySQL, "mo_tc.change_type = 'insert'")
+	require.Contains(t, info.displaySQL, "AND (json_extract_string(`j`, '$.foo') = 'needle')")
+	// The display also spells out the other two runtime branches so EXPLAIN is honest: caught up runs
+	// no tail, and an incompatible generation runs the base-table fallback (shown in the comment).
+	require.Contains(t, info.displaySQL, "caught up => no tail")
+	require.Contains(t, info.displaySQL, "SELECT `id` FROM `db`.`docs` WHERE json_extract_string(`j`, '$.foo') = 'needle'")
+}
+
+// recordJSONProbeTail must DECLINE (return false, record nothing) when the json predicate cannot be
+// rendered to SQL -- because the operator's fallback would then be `SELECT pk FROM src` with no WHERE,
+// i.e. every pk, degrading the mandatory join to a full self-join. Returning false makes
+// addJSONFulltextProbes skip the probe so the query runs as a plain Table Scan instead.
+func TestRecordJSONProbeTailDeclines(t *testing.T) {
+	mockCtx := newFullTextJoinMockCompilerContext()
+	b := NewQueryBuilder(plan.Query_SELECT, mockCtx, false, true)
+	scanNode := &plan.Node{
+		NodeId: 9,
+		ObjRef: &plan.ObjectRef{SchemaName: "db", ObjName: "docs"},
+		TableDef: &plan.TableDef{
+			Cols: []*plan.ColDef{{Name: "id"}, {Name: "j"}},
+			Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
+		},
+	}
+	// A literal with no SQL rendering (jsonLiteralToSQL returns false) -> the predicate cannot be built.
+	bad := jsonComparison{col: 1, path: "$.foo", isString: true, op: "=", lit: &plan.Literal{Value: nil}}
+	require.False(t, b.recordJSONProbeTail(scanNode, bad, types.BuildTS(100, 0)))
+	_, ok := b.jsonProbeTail[9]
+	require.False(t, ok, "a declined probe records nothing")
+
+	// A column out of range cannot name the source column -> also declined.
+	badCol := jsonComparison{col: 99, path: "$.foo", isString: true, op: "=",
+		lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "needle"}}}
+	require.False(t, b.recordJSONProbeTail(scanNode, badCol, types.BuildTS(100, 0)))
+}
+
+// fakeSourceEngine/fakeSourceRel provide the minimum decideJSONProbe touches on a current read: a
+// relation that answers SourceCommitTS. Any other engine/relation call panics on the nil embed,
+// surfacing an unexpected dependency rather than hiding it.
+type fakeSourceEngine struct{ engine.Engine }
+
+func (fakeSourceEngine) GetRelationById(context.Context, client.TxnOperator, uint64) (string, string, engine.Relation, error) {
+	return "", "", fakeSourceRel{}, nil
+}
+
+type fakeSourceRel struct{ engine.Relation }
+
+// SourceCommitTS is the max source commit as of the read -- the `bar` decideJSONProbe carries to the
+// operator. A fixed 50 lets the partial case assert the exact bar reaches the plan.
+func (fakeSourceRel) SourceCommitTS(context.Context, types.TS) (types.TS, error) {
+	return types.BuildTS(50, 0), nil
+}
+
+// errCommitEngine's relation answers SourceCommitTS with an error (e.g. an uncommitted write to the
+// source) -- decideJSONProbe must fail closed to a full scan.
+type errCommitEngine struct{ engine.Engine }
+
+func (errCommitEngine) GetRelationById(context.Context, client.TxnOperator, uint64) (string, string, engine.Relation, error) {
+	return "", "", errCommitRel{}, nil
+}
+
+type errCommitRel struct{ engine.Relation }
+
+func (errCommitRel) SourceCommitTS(context.Context, types.TS) (types.TS, error) {
+	return types.TS{}, moerr.NewInternalErrorNoCtx("boom")
+}
+
+// nonProviderEngine's relation does NOT implement SourceCommitTSProvider, so the bar cannot be read
+// -- decideJSONProbe must fail closed.
+type nonProviderEngine struct{ engine.Engine }
+
+func (nonProviderEngine) GetRelationById(context.Context, client.TxnOperator, uint64) (string, string, engine.Relation, error) {
+	return "", "", struct{ engine.Relation }{}, nil
+}
+
+// recordingSourceEngine captures the account id bound on the context GetRelationById is called with,
+// so a test can assert a cross-account snapshot's freshness reads resolve under the snapshot's owner.
+type recordingSourceEngine struct {
+	engine.Engine
+	seen *uint32
+}
+
+func (e recordingSourceEngine) GetRelationById(ctx context.Context, _ client.TxnOperator, _ uint64) (string, string, engine.Relation, error) {
+	if id, err := defines.GetAccountId(ctx); err == nil {
+		*e.seen = id
+	}
+	return "", "", fakeSourceRel{}, nil
+}
+
+// A cross-account {snapshot=...} read must resolve its freshness reads (source relation, ISCP log,
+// index metadata) under the account that OWNS the data -- the snapshot's tenant -- not the reader's.
+// decideJSONProbe binds that account onto the context before GetRelationById; assert it arrives.
+func TestDecideJSONProbeBindsSnapshotAccount(t *testing.T) {
+	idx := jpJSONIndex("j", `{"parser":"json"}`)
+	mockCtx := NewMockCompilerContext(false)
+	proc := mockCtx.GetProcess()
+	proc.Base.TxnOperator = fakeCoverageTxn{}
+	var seen uint32
+	proc.Base.SessionInfo.StorageEngine = recordingSourceEngine{seen: &seen}
+
+	scan := &plan.Node{
+		NodeType:    plan.Node_TABLE_SCAN,
+		BindingTags: []int32{7},
+		ObjRef:      &plan.ObjectRef{SchemaName: "db", ObjName: "t"},
+		TableDef: &plan.TableDef{
+			TblId:     424242,
+			TableType: catalog.SystemOrdinaryRel,
+			Cols: []*plan.ColDef{
+				{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
+				{Name: "j", Typ: plan.Type{Id: int32(types.T_json)}},
+			},
+			Name2ColIndex: map[string]int32{"id": 0, "j": 1},
+			Pkey:          &plan.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+			Indexes:       []*plan.IndexDef{idx},
+		},
+		// A historical snapshot (earlier than the txn) owned by account 42.
+		ScanSnapshot: &plan.Snapshot{
+			TS:     &timestamp.Timestamp{PhysicalTime: 1_600_000_000_000_000_000},
+			Tenant: &plan.SnapshotTenant{TenantID: 42},
+		},
+	}
+
+	b := &QueryBuilder{compCtx: mockCtx}
+	b.decideJSONProbe(scan, idx)
+	require.Equal(t, uint32(42), seen, "cross-account snapshot freshness reads must bind the snapshot's tenant")
+}
+
+// TestDecideJSONProbeMatrix drives the partial / skip decision. A fulltext2 json index is
+// AlwaysAsync, so decideJSONProbe ALWAYS self-completes (jsonProbePartial + the source-commit bar)
+// unless a fail-closed guard declines to a full scan (jsonProbeSkip). No generation-dependent choice
+// is made here -- caught-up / behind / newer / schema-span all move to the operator (§10.4). The bar
+// is read from the source relation's SourceCommitTS.
+func TestDecideJSONProbeMatrix(t *testing.T) {
+	idx := jpJSONIndex("j", `{"parser":"json"}`)
+	newCase := func(eng engine.Engine) (*QueryBuilder, *plan.Node) {
+		mockCtx := NewMockCompilerContext(false)
+		proc := mockCtx.GetProcess()
+		proc.Base.TxnOperator = fakeCoverageTxn{}
+		proc.Base.SessionInfo.StorageEngine = eng
+		scan := &plan.Node{
+			NodeType:    plan.Node_TABLE_SCAN,
+			BindingTags: []int32{7},
+			ObjRef:      &plan.ObjectRef{SchemaName: "db", ObjName: "t"},
+			TableDef: &plan.TableDef{
+				TblId:     424242,
+				TableType: catalog.SystemOrdinaryRel,
+				Cols: []*plan.ColDef{
+					{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
+					{Name: "j", Typ: plan.Type{Id: int32(types.T_json)}},
+				},
+				Name2ColIndex: map[string]int32{"id": 0, "j": 1},
+				Pkey:          &plan.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+				Indexes:       []*plan.IndexDef{idx},
+			},
+		}
+		return &QueryBuilder{compCtx: mockCtx}, scan
+	}
+	asSnapshot := func(scan *plan.Node) {
+		scan.ScanSnapshot = &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 1_600_000_000_000_000_000}}
+	}
+
+	// current read, table_changes-eligible -> partial, carrying the source-commit bar (50).
+	b, scan := newCase(fakeSourceEngine{})
+	kind, bar := b.decideJSONProbe(scan, idx)
+	require.Equal(t, jsonProbePartial, kind)
+	require.Equal(t, int64(50), bar.Physical())
+
+	// snapshot read -> partial too; the bar is read as of S (same fake), so decision is snapshot-agnostic.
+	b, scan = newCase(fakeSourceEngine{})
+	asSnapshot(scan)
+	kind, bar = b.decideJSONProbe(scan, idx)
+	require.Equal(t, jsonProbePartial, kind)
+	require.Equal(t, int64(50), bar.Physical())
+
+	// source-commit read errors (e.g. uncommitted write) -> skip (fail closed).
+	b, scan = newCase(errCommitEngine{})
+	kind, _ = b.decideJSONProbe(scan, idx)
+	require.Equal(t, jsonProbeSkip, kind)
+
+	// relation cannot report a source commit -> skip (fail closed).
+	b, scan = newCase(nonProviderEngine{})
+	kind, _ = b.decideJSONProbe(scan, idx)
+	require.Equal(t, jsonProbeSkip, kind)
+
+	// no storage engine -> skip.
+	b, scan = newCase(nil)
+	kind, _ = b.decideJSONProbe(scan, idx)
+	require.Equal(t, jsonProbeSkip, kind)
+
+	// composite/hidden primary key -> skip: table_changes drops the hidden pk column, so the tail
+	// cannot be anchored; a partial plan would hard-error at the splice, so decline to a full scan.
+	b, scan = newCase(fakeSourceEngine{})
+	scan.TableDef.Cols = append(scan.TableDef.Cols,
+		&plan.ColDef{Name: "__mo_cpkey_col", Hidden: true, Typ: plan.Type{Id: int32(types.T_varchar)}})
+	scan.TableDef.Name2ColIndex["__mo_cpkey_col"] = 2
+	scan.TableDef.Pkey = &plan.PrimaryKeyDef{PkeyColName: "__mo_cpkey_col", Names: []string{"a", "b"}}
+	kind, _ = b.decideJSONProbe(scan, idx)
+	require.Equal(t, jsonProbeSkip, kind, "composite/hidden pk cannot anchor the tail -> full scan")
+
+	// synchronous (non-async) index -> covered, no tail, no engine needed.
+	b, scan = newCase(nil)
+	sync := jpJSONIndex("j", `{"parser":"json"}`)
+	sync.IndexAlgo = "btree"
+	kind, _ = b.decideJSONProbe(scan, sync)
+	require.Equal(t, jsonProbeCovered, kind)
+}
+
+// The self-completing json probe emits a fulltext2_search TVF that can execute on a remote worker;
+// a CN predating the probe_tail contract mishandles it and loses rows. addJSONFulltextProbes must
+// decline the probe (plain Table Scan) until MOProtocolVersion reaches the gate (#28917 review).
+func TestSelfCompletingJSONProbeGate(t *testing.T) {
+	mockCtx := NewMockCompilerContext(false)
+	b := NewQueryBuilder(plan.Query_SELECT, mockCtx, false, true)
+	rt := moruntime.ServiceRuntime(b.compCtx.GetProcess().GetService())
+	require.NotNil(t, rt)
+
+	orig, had := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if had {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, orig)
+		}
+	})
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion73)
+	require.False(t, b.selfCompletingJSONProbeSupported(), "declined below the gate")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, fulltext2.MORPCVersionProbeTail)
+	require.True(t, b.selfCompletingJSONProbeSupported(), "supported at the gate")
+}

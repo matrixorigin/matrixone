@@ -60,7 +60,7 @@ select t1,t2 from text_01 intersect select t1,t2 from text_05;
 select t1,t2 from text_01 minus select t1,t2 from text_05;
 
 -- subquery
-select * from (select * from text_01 where t1 like '%123%');
+select * from (select * from text_01 where t1 like '%123%') as text_sub;
 select * from text_01 where t1 in (select t1 from text_05);
 select * from text_01 where t2 > (select t2 from text_05 where t1='789');
 select t1,t2,t3 from text_01 where t1 < any(select t2 from text_05);
@@ -129,7 +129,7 @@ create table blob_04(a int,b varchar(290));
 insert into blob_04 values(1,load_file('$resources/blob_file/blob1.csv'));
 
 -- 音频文件，图文文件
-create table blob_02(a int,b blob);
+create table blob_02(a int,b mediumblob);
 insert into blob_02 values(3,load_file('$resources/blob_file/blob1.csv'));
 insert into blob_02 values(4,load_file('$resources/blob_file/blob3.jpeg'));
 insert into blob_02 values(5,load_file('$resources/blob_file/blob4.gif'));

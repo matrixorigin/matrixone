@@ -17,6 +17,7 @@ package process
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
@@ -72,9 +73,13 @@ func NewTopProcess(
 		},
 
 		// 1. fields from outer
-		mp:               mp,
-		TxnClient:        txnClient,
-		TxnOperator:      txnOperator,
+		mp:          mp,
+		TxnClient:   txnClient,
+		TxnOperator: txnOperator,
+		SessionInfo: SessionInfo{
+			MaxErrorCount:    WarningDiagnosticDefaultRetentionLimit,
+			MaxErrorCountSet: true,
+		},
 		FileService:      fileService,
 		IncrService:      incrservice.GetAutoIncrementService(sid),
 		LockService:      lockService,
@@ -86,8 +91,9 @@ func NewTopProcess(
 		TaskService:      taskService,
 
 		// 2. fields from make.
-		LastInsertID: new(uint64),
-		AffectedRows: new(int64),
+		LastInsertID:          new(uint64),
+		StatementLastInsertID: new(uint64),
+		AffectedRows:          new(int64),
 
 		// 3. other fields.
 		logger:             util.GetLogger(sid),
@@ -100,16 +106,61 @@ func NewTopProcess(
 	proc := &Process{
 		Base: Base,
 	}
+	if limit, ok := WarningRetentionLimitFromContext(topContext); ok {
+		proc.Base.SessionInfo.MaxErrorCount = limit
+		proc.Base.SessionInfo.MaxErrorCountSet = true
+	}
 	proc.doPrepareForRunningWithoutPipeline()
 	return proc
+}
+
+// NewViewBindingProcess borrows the transaction and services but owns the mutable
+// process context used while binding a nested View. Unlike pipeline children it
+// must not share BaseProcess: SetContext on the child must not change the caller.
+// The caller owns Free on the returned process.
+func (proc *Process) NewViewBindingProcess(ctx context.Context) *Process {
+	child := NewTopProcess(ctx, proc.Base.mp, proc.Base.TxnClient, proc.Base.TxnOperator,
+		proc.Base.FileService, proc.Base.LockService, proc.Base.QueryClient,
+		proc.Base.Hakeeper, proc.Base.UdfService, proc.Base.Aicm, proc.Base.TaskService)
+	// Only borrow identity and binding configuration, which remain immutable
+	// during a statement. The parent SessionInfo also contains result counters,
+	// sequence maps and output buffers that the executing pipeline mutates.
+	info := &proc.Base.SessionInfo
+	child.Base.SessionInfo = SessionInfo{
+		Account: info.Account, User: info.User, Host: info.Host, Role: info.Role,
+		ConnectionID: info.ConnectionID, Database: info.Database, Version: info.Version,
+		TimeZone: info.TimeZone, LockWaitTimeout: info.LockWaitTimeout,
+		LockWaitTimeoutSet: info.LockWaitTimeoutSet, MatrixOneNativeMode: info.MatrixOneNativeMode,
+		IsRestore: info.IsRestore, ExplicitZeroTemporalCastReturnsNull: info.ExplicitZeroTemporalCastReturnsNull,
+		SqlMode: info.SqlMode, AutoIncrementIncrement: info.AutoIncrementIncrement,
+		AutoIncrementOffset: info.AutoIncrementOffset, ApplySQLSelectLimit: info.ApplySQLSelectLimit,
+		CountUpdateChangedRows: info.CountUpdateChangedRows, StorageEngine: info.StorageEngine,
+		SqlHelper: info.SqlHelper, CompilerContext: info.CompilerContext,
+		LogLevel: info.LogLevel, SessionId: info.SessionId,
+	}
+	child.Base.IsFrontend = proc.Base.IsFrontend
+	child.Base.DivByZeroErrorMode = atomic.LoadInt32(&proc.Base.DivByZeroErrorMode)
+	child.Base.resolveVariableFunc = proc.Base.resolveVariableFunc
+	child.Base.resolveVariableTypeFunc = proc.Base.resolveVariableTypeFunc
+	child.Base.resolveVariableIsBinFunc = proc.Base.resolveVariableIsBinFunc
+	child.Base.resolveVariableStringDomainFunc = proc.Base.resolveVariableStringDomainFunc
+	child.Base.resolveVariablePrepareParamKindFunc = proc.Base.resolveVariablePrepareParamKindFunc
+	child.Session = proc.Session
+	child.WarningSink = proc.WarningSink
+	child.CopyPlanSnapshotFrom(proc)
+	return child
 }
 
 // NewNoContextChildProc make a new child process without a context field.
 // This is used for the compile-process, which doesn't need to pass the context.
 func (proc *Process) NewNoContextChildProc(dataEntryCount int) *Process {
 	child := &Process{
-		Base: proc.Base,
+		Base:        proc.Base,
+		Session:     proc.Session,
+		WarningSink: proc.WarningSink,
 	}
+	child.CopyPlanSnapshotFrom(proc)
+	child.CopyStringShuffleHashAlgorithmFrom(proc)
 
 	if dataEntryCount > 0 {
 		child.Reg.MergeReceivers = make([]*WaitRegister, dataEntryCount)
@@ -124,8 +175,12 @@ func (proc *Process) NewNoContextChildProc(dataEntryCount int) *Process {
 // channelBufferSize and nilbatchCnt is the extra information for Reg.
 func (proc *Process) NewNoContextChildProcWithChannel(dataEntryCount int, channelBufferSize []int32, nilbatchCnt []int32) *Process {
 	child := &Process{
-		Base: proc.Base,
+		Base:        proc.Base,
+		Session:     proc.Session,
+		WarningSink: proc.WarningSink,
 	}
+	child.CopyPlanSnapshotFrom(proc)
+	child.CopyStringShuffleHashAlgorithmFrom(proc)
 
 	if dataEntryCount > 0 {
 		child.Reg.MergeReceivers = make([]*WaitRegister, dataEntryCount)
@@ -219,6 +274,7 @@ func (proc *Process) ResetQueryContext() {
 		proc.Base.sqlContext.queryCancel()
 		proc.Base.sqlContext.queryCancel = nil
 	}
+	proc.ResetGroupConcatInputRowCounters()
 	proc.doPrepareForRunningWithoutPipeline()
 }
 
@@ -240,6 +296,13 @@ func (proc *Process) Free() {
 		proc.Base.messageBoard.Reset()
 		proc.Base.messageBoard = nil
 	}
+	proc.Base.cteMemoryBudgetMu.Lock()
+	if proc.Base.cteMemoryBudget != nil {
+		proc.Base.cteMemoryBudget.Close()
+		proc.Base.cteMemoryBudget = nil
+	}
+	proc.Base.cteMemoryBudgetMu.Unlock()
+	proc.setPrepareParams(nil, nil, nil, false)
 }
 
 type QueryBaseContext struct {

@@ -11,7 +11,10 @@ insert into t2 select *,*,* from generate_series(100000) g;
 select mo_ctl('dn', 'flush', 'd1.t1');
 -- @separator:table
 select mo_ctl('dn', 'flush', 'd1.t2');
-select Sleep(1);
+-- @wait_expect(1, 10)
+select table_name, table_cnt from table_stats('d1.t1') g;
+-- @wait_expect(1, 10)
+select table_name, table_cnt from table_stats('d1.t2') g;
 -- @separator:table
 explain select count(*) from t1 right join t2 on t1.c2=t2.c2 where t2.c1 in (1,10,100,1000,10000);
 select count(*) from t1 right join t2 on t1.c2=t2.c2 where t2.c1 in (1,10,100,1000,10000);

@@ -493,6 +493,27 @@ deallocate prepare s;
 
 drop table prepare_bit_numeric;
 
+-- signed integer clients use the same 64-bit payload for BIT(64) values
+drop table if exists prepare_bit64_signed;
+create table prepare_bit64_signed (b bit(64));
+-- an unquoted integer expression preserves its signed 64-bit bit pattern
+insert into prepare_bit64_signed values (-6109877384019645241);
+select hex(b), cast(b as unsigned) from prepare_bit64_signed;
+truncate table prepare_bit64_signed;
+-- the same characters in an SQL string remain string-to-BIT input
+-- @regex("(data out of range|data too long)",true)
+insert into prepare_bit64_signed values ('-6109877384019645241');
+
+-- the signed bit-pattern compatibility is limited to BIT(64)
+drop table if exists prepare_bit63_signed;
+create table prepare_bit63_signed (b bit(63));
+-- @regex("data out of range",true)
+insert into prepare_bit63_signed values (-1);
+select count(*) from prepare_bit63_signed;
+
+drop table prepare_bit64_signed;
+drop table prepare_bit63_signed;
+
 --test order by clause contains placeholder
 CREATE DATABASE mocloud_meta;
 PREPARE mo_stmt_id_1 FROM SELECT SCHEMA_NAME from Information_schema.SCHEMATA where SCHEMA_NAME LIKE ? ORDER BY SCHEMA_NAME=? DESC,SCHEMA_NAME limit 1;
@@ -526,6 +547,207 @@ SELECT * FROM replace_prepare ORDER BY a;
 DEALLOCATE PREPARE rp2;
 drop table if exists replace_prepare;
 drop table if exists replace_prepare_src;
+
+-- test prepared ROWS frame bounds are evaluated for every execution
+drop table if exists prepared_window_frame;
+create table prepared_window_frame(id int primary key, n int);
+insert into prepared_window_frame values (1,10),(3,20),(4,30);
+prepare prepared_rows_frame from 'select id, sum(n) over (order by id rows between ? preceding and ? following) from prepared_window_frame order by id';
+set @before = 1, @after = 1;
+execute prepared_rows_frame using @before, @after;
+set @before = 0, @after = 0;
+execute prepared_rows_frame using @before, @after;
+deallocate prepare prepared_rows_frame;
+
+-- test the issue reproducer: prepared RANGE bounds use values, not row positions, on every execution
+prepare prepared_range_frame from 'select id, sum(n) over (order by id range ? preceding) from prepared_window_frame order by id';
+set @before = 1;
+execute prepared_range_frame using @before;
+set @before = 2;
+execute prepared_range_frame using @before;
+set @before = -1;
+execute prepared_range_frame using @before;
+set @before = null;
+execute prepared_range_frame using @before;
+deallocate prepare prepared_range_frame;
+drop table prepared_window_frame;
+
+-- prepared RANGE arithmetic must not wrap narrow unsigned ORDER BY values
+drop table if exists prepared_window_u8;
+create table prepared_window_u8(id tinyint unsigned primary key, n int);
+insert into prepared_window_u8 values (0,10),(250,20);
+set @range_bound = 10;
+prepare prepared_range_u8_asc_preceding from 'select id, sum(n) over (order by id range between ? preceding and current row) from prepared_window_u8 order by id';
+execute prepared_range_u8_asc_preceding using @range_bound;
+deallocate prepare prepared_range_u8_asc_preceding;
+prepare prepared_range_u8_asc_following from 'select id, sum(n) over (order by id range between current row and ? following) from prepared_window_u8 order by id';
+execute prepared_range_u8_asc_following using @range_bound;
+deallocate prepare prepared_range_u8_asc_following;
+prepare prepared_range_u8_desc_preceding from 'select id, sum(n) over (order by id desc range between ? preceding and current row) from prepared_window_u8 order by id desc';
+execute prepared_range_u8_desc_preceding using @range_bound;
+deallocate prepare prepared_range_u8_desc_preceding;
+prepare prepared_range_u8_desc_following from 'select id, sum(n) over (order by id desc range between current row and ? following) from prepared_window_u8 order by id desc';
+execute prepared_range_u8_desc_following using @range_bound;
+deallocate prepare prepared_range_u8_desc_following;
+set @range_bound = 0;
+prepare prepared_range_u8_zero_asc from 'select id, sum(n) over (order by id range between ? preceding and ? preceding) from prepared_window_u8 order by id';
+execute prepared_range_u8_zero_asc using @range_bound, @range_bound;
+deallocate prepare prepared_range_u8_zero_asc;
+prepare prepared_range_u8_zero_desc from 'select id, sum(n) over (order by id desc range between ? preceding and ? preceding) from prepared_window_u8 order by id desc';
+execute prepared_range_u8_zero_desc using @range_bound, @range_bound;
+deallocate prepare prepared_range_u8_zero_desc;
+drop table prepared_window_u8;
+
+-- @case
+-- @desc:Prepared SET statements retain literal and parameterized expressions
+-- @label:bvt
+set @input = 41;
+prepare prepared_set_literal from 'set @prepared_literal = 41 + 1';
+execute prepared_set_literal;
+select @prepared_literal;
+
+prepare prepared_set_param from 'set @prepared_param = ? + 1';
+execute prepared_set_param using @input;
+select @prepared_param;
+set @input = 9;
+execute prepared_set_param using @input;
+select @prepared_param;
+deallocate prepare prepared_set_literal;
+deallocate prepare prepared_set_param;
+
+-- @case
+-- @desc:Prepared multi-assignment SET preserves parameters and applies only after all expressions succeed
+-- @label:bvt
+drop table if exists prepared_set_values;
+create table prepared_set_values(v int);
+insert into prepared_set_values values (1), (2);
+set @prepared_a = 99, @prepared_b = 'before';
+prepare prepared_set_multi from 'set @prepared_a = ? + 1, @prepared_b = concat(?, "-text")';
+set @prepared_input_a = 41, @prepared_input_b = 'first';
+execute prepared_set_multi using @prepared_input_a, @prepared_input_b;
+select @prepared_a, @prepared_b;
+set @prepared_input_a = 9, @prepared_input_b = null;
+execute prepared_set_multi using @prepared_input_a, @prepared_input_b;
+select @prepared_a, @prepared_b;
+set @prepared_visibility_a = 5, @prepared_visibility_b = 0, @prepared_visibility_input = 41;
+prepare prepared_set_visibility from 'set @prepared_visibility_a = ?, @prepared_visibility_b = @prepared_visibility_a + 1';
+execute prepared_set_visibility using @prepared_visibility_input;
+select @prepared_visibility_a, @prepared_visibility_b;
+set @prepared_self_ref = 5;
+prepare prepared_set_self_ref from 'set @prepared_self_ref = ?, @prepared_self_ref = @prepared_self_ref + 1';
+execute prepared_set_self_ref using @prepared_visibility_input;
+select @prepared_self_ref;
+prepare prepared_set_self_ref_error from 'set @prepared_self_ref = ?, @prepared_self_ref = @prepared_self_ref + 1, @prepared_b = (select v from prepared_set_values)';
+set @prepared_self_ref = 5, @prepared_b = 'unchanged';
+execute prepared_set_self_ref_error using @prepared_visibility_input;
+select @prepared_self_ref, @prepared_b;
+set @prepared_a = 77, @prepared_b = 'stable';
+execute prepared_set_multi using @prepared_input_a;
+select @prepared_a, @prepared_b;
+prepare prepared_set_error from 'set @prepared_a = ?, @prepared_b = (select v from prepared_set_values)';
+set @prepared_a = 88, @prepared_b = 'unchanged';
+execute prepared_set_error using @prepared_input_a;
+select @prepared_a, @prepared_b;
+prepare prepared_set_reserved_error from 'set @names = ?, @prepared_reserved_failure = (select v from prepared_set_values)';
+set @names = 'names-before', @character_set_client = 'client-before', @character_set_connection = 'connection-before', @character_set_results = 'results-before', @prepared_reserved_input = 'mutated';
+execute prepared_set_reserved_error using @prepared_reserved_input;
+select @names, @character_set_client, @character_set_connection, @character_set_results;
+prepare prepared_set_system_error from 'set @prepared_a = ?, transaction_isolation = ?';
+set @prepared_input_a = 7, @prepared_input_b = 'INVALID', @prepared_a = 88, @prepared_isolation_before = @@transaction_isolation;
+execute prepared_set_system_error using @prepared_input_a, @prepared_input_b;
+select @prepared_a, @@transaction_isolation = @prepared_isolation_before;
+deallocate prepare prepared_set_multi;
+deallocate prepare prepared_set_visibility;
+deallocate prepare prepared_set_self_ref;
+deallocate prepare prepared_set_self_ref_error;
+deallocate prepare prepared_set_error;
+deallocate prepare prepared_set_reserved_error;
+deallocate prepare prepared_set_system_error;
+drop table prepared_set_values;
+
+-- @case
+-- @desc:SQL PREPARE rebinds the current user-variable numeric type on every execution
+-- @label:bvt
+prepare issue25408_runtime_reexecute from 'select ? + 1 as plus_one';
+set @issue25408_runtime_value = '2';
+execute issue25408_runtime_reexecute using @issue25408_runtime_value;
+set @issue25408_runtime_value = 2.5;
+execute issue25408_runtime_reexecute using @issue25408_runtime_value;
+set @issue25408_runtime_value = 3.5;
+execute issue25408_runtime_reexecute using @issue25408_runtime_value;
+set @issue25408_runtime_value = -2;
+execute issue25408_runtime_reexecute using @issue25408_runtime_value;
+deallocate prepare issue25408_runtime_reexecute;
+
+prepare issue25408_runtime_divide from 'select ? / 2 as quotient';
+set @issue25408_runtime_value = 2.5;
+execute issue25408_runtime_divide using @issue25408_runtime_value;
+set @issue25408_runtime_value = 9007199254740993.5;
+execute issue25408_runtime_divide using @issue25408_runtime_value;
+set @issue25408_runtime_value = 3.5;
+execute issue25408_runtime_divide using @issue25408_runtime_value;
+deallocate prepare issue25408_runtime_divide;
+
+set @issue25408_runtime_value = 9007199254740993.5;
+select (@issue25408_runtime_value / 2) + 1 as result;
+prepare issue25408_nested_add from 'select (? / 2) + 1 as result';
+execute issue25408_nested_add using @issue25408_runtime_value;
+deallocate prepare issue25408_nested_add;
+select (@issue25408_runtime_value / 2) + 1e0 as result;
+prepare issue25408_nested_scientific from 'select (? / 2) + 1e0 as result';
+execute issue25408_nested_scientific using @issue25408_runtime_value;
+deallocate prepare issue25408_nested_scientific;
+select (@issue25408_runtime_value / 2) + 1e-1 as result;
+prepare issue25408_nested_fractional from 'select (? / 2) + 1e-1 as result';
+execute issue25408_nested_fractional using @issue25408_runtime_value;
+deallocate prepare issue25408_nested_fractional;
+select (@issue25408_runtime_value / 2) + cast(1 as double) as result;
+prepare issue25408_nested_explicit_double from 'select (? / 2) + cast(1 as double) as result';
+execute issue25408_nested_explicit_double using @issue25408_runtime_value;
+deallocate prepare issue25408_nested_explicit_double;
+prepare issue25408_nested_abs from 'select abs(? / 2) as result';
+execute issue25408_nested_abs using @issue25408_runtime_value;
+deallocate prepare issue25408_nested_abs;
+prepare issue25408_nested_multiply from 'select (? / 2) * 3 as result';
+execute issue25408_nested_multiply using @issue25408_runtime_value;
+deallocate prepare issue25408_nested_multiply;
+select abs(@issue25408_runtime_value + 1) as result;
+prepare issue25408_abs_exact from 'select abs(? + 1) as result';
+execute issue25408_abs_exact using @issue25408_runtime_value;
+deallocate prepare issue25408_abs_exact;
+select abs(@issue25408_runtime_value + 1e0) as result;
+prepare issue25408_abs_scientific from 'select abs(? + 1e0) as result';
+execute issue25408_abs_scientific using @issue25408_runtime_value;
+deallocate prepare issue25408_abs_scientific;
+select abs(@issue25408_runtime_value + 1e-1) as result;
+prepare issue25408_abs_fractional from 'select abs(? + 1e-1) as result';
+execute issue25408_abs_fractional using @issue25408_runtime_value;
+deallocate prepare issue25408_abs_fractional;
+select abs(@issue25408_runtime_value + cast(1 as double)) as result;
+prepare issue25408_abs_explicit_double from 'select abs(? + cast(1 as double)) as result';
+execute issue25408_abs_explicit_double using @issue25408_runtime_value;
+deallocate prepare issue25408_abs_explicit_double;
+
+-- @case
+-- @desc:Prepared exact integer comparisons do not pass BIGINT/BIT text through DOUBLE
+-- @label:bvt
+drop table if exists issue27492_exact_cmp;
+create table issue27492_exact_cmp(id int primary key, u bigint unsigned, b bit(64));
+insert into issue27492_exact_cmp values (1, 9007199254740992, 9007199254740992), (2, 9007199254740993, 9007199254740993), (3, 9007199254740994, 9007199254740994);
+prepare issue27492_bigint from 'select id from issue27492_exact_cmp where u = ? order by id';
+prepare issue27492_bit from 'select id from issue27492_exact_cmp where b = ? order by id';
+set @issue27492_value = '9007199254740993';
+execute issue27492_bigint using @issue27492_value;
+execute issue27492_bit using @issue27492_value;
+set @issue27492_value = null;
+execute issue27492_bigint using @issue27492_value;
+execute issue27492_bit using @issue27492_value;
+set @issue27492_value = '9007199254740993';
+execute issue27492_bigint using @issue27492_value;
+execute issue27492_bit using @issue27492_value;
+deallocate prepare issue27492_bigint;
+deallocate prepare issue27492_bit;
+drop table issue27492_exact_cmp;
 
 # reset
 SET TIME_ZONE = "SYSTEM";

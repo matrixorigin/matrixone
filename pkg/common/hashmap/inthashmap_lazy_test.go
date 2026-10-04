@@ -52,7 +52,8 @@ func TestIntHashMapIteratorLazyBuffers(t *testing.T) {
 
 							insertedVs := append([]uint64(nil), vs...)
 							insertedZvs := append([]int64(nil), zvs...)
-							foundVs, foundZvs := itr.Find(0, count, vecs)
+							foundVs, foundZvs, err := itr.Find(0, count, vecs)
+							require.NoError(t, err)
 							if count > 0 {
 								require.Equal(t, insertedVs, foundVs)
 								require.Equal(t, insertedZvs, foundZvs)
@@ -120,6 +121,102 @@ func TestIntHashMapIteratorLazyBuffers(t *testing.T) {
 	})
 }
 
+func TestIntHashMapFloat32ZeroCountWithNonZeroStart(t *testing.T) {
+	for _, scale := range []int32{0, 2} {
+		t.Run(fmt.Sprintf("scale-%d", scale), func(t *testing.T) {
+			m := mpool.MustNewZero()
+			typ := types.T_float32.ToType()
+			typ.Scale = scale
+			vec := vector.NewVec(typ)
+			defer vec.Free(m)
+			vecs := []*vector.Vector{vec}
+
+			intMap, err := NewIntHashMap(false, m)
+			require.NoError(t, err)
+			defer intMap.Free()
+			intItr := intMap.NewIterator()
+			require.NotPanics(t, func() {
+				intItr.encodeHashKeys(vecs, 1, 0)
+			})
+		})
+	}
+}
+
+func TestIntHashMapIteratorReadWriteTransitions(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		types   []types.Type
+		hasNull bool
+		count   int
+	}{
+		{"int32", []types.Type{types.T_int32.ToType()}, false, 2},
+		{"int64", []types.Type{types.T_int64.ToType()}, false, 2},
+		{"composite", []types.Type{types.T_int32.ToType(), types.T_int32.ToType()}, false, 2},
+		{"nullable", []types.Type{types.T_int32.ToType()}, true, 2},
+		{"full-batch", []types.Type{types.T_int64.ToType()}, false, UnitLimit},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := mpool.MustNewZero()
+			t.Cleanup(func() { require.Zero(t, m.CurrNB()) })
+			makeKeys := func(base int) []*vector.Vector {
+				vecs := make([]*vector.Vector, len(tc.types))
+				for j, typ := range tc.types {
+					vec := vector.NewVec(typ)
+					vecs[j] = vec
+					t.Cleanup(func() { vec.Free(m) })
+					for i := 0; i < tc.count; i++ {
+						value := base + i + j*1000
+						if typ.Oid == types.T_int32 {
+							require.NoError(t, vector.AppendFixed(vec, int32(value), tc.hasNull && i == 1 && base == 10, m))
+						} else {
+							require.NoError(t, vector.AppendFixed(vec, int64(value), false, m))
+						}
+					}
+				}
+				return vecs
+			}
+			keys, missing := makeKeys(10), makeKeys(10000)
+			first, err := NewIntHashMap(tc.hasNull, m)
+			require.NoError(t, err)
+			defer first.Free()
+			second, err := NewIntHashMap(tc.hasNull, m)
+			require.NoError(t, err)
+			defer second.Free()
+			itr := first.NewIterator()
+			for _, owner := range []*IntHashMap{first, second} {
+				if owner != first {
+					IteratorClearOwner(itr)
+					IteratorChangeOwner(itr, owner)
+				}
+				// Grow, shrink, and regrow without allocating a new iterator.
+				for _, count := range []int{tc.count, 1, tc.count} {
+					_, _, err = itr.Find(0, count, missing)
+					require.NoError(t, err)
+					inserted, _, err := itr.Insert(0, count, keys)
+					require.NoError(t, err)
+					for i, group := range inserted {
+						require.Equal(t, uint64(i+1), group)
+					}
+					found, _, err := owner.NewIterator().Find(0, count, keys)
+					require.NoError(t, err)
+					require.Equal(t, inserted, found)
+					require.Equal(t, uint64(tc.count), owner.GroupCount())
+				}
+				absent, _, err := itr.Find(0, tc.count, missing)
+				require.NoError(t, err)
+				for _, group := range absent {
+					require.Zero(t, group)
+				}
+				isNew, err := itr.DetectDup(keys, 0)
+				require.NoError(t, err)
+				require.False(t, isNew)
+				_, _, err = itr.Find(0, tc.count, keys)
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 func assertIntIteratorCapacity(t *testing.T, itr *intHashMapIterator, want int, hasNull bool) {
 	t.Helper()
 	if want == 0 {
@@ -140,6 +237,7 @@ func assertIntIteratorCapacity(t *testing.T, itr *intHashMapIterator, want int, 
 var (
 	benchmarkIntIterator *intHashMapIterator
 	benchmarkIntValues   []uint64
+	benchmarkIntZValues  []int64
 )
 
 func BenchmarkIntHashMapIteratorFirstInsert(b *testing.B) {
@@ -166,6 +264,46 @@ func BenchmarkIntHashMapIteratorFirstInsert(b *testing.B) {
 				}
 				benchmarkIntIterator = itr
 				benchmarkIntValues = vs
+			}
+		})
+	}
+}
+
+func BenchmarkIntHashMapFindFloat32(b *testing.B) {
+	const count = UnitLimit
+
+	for _, scale := range []int32{0, 2} {
+		b.Run(fmt.Sprintf("scale-%d/rows-%d", scale, count), func(b *testing.B) {
+			m := mpool.MustNewZero()
+			mp, err := NewIntHashMap(false, m)
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer mp.Free()
+
+			typ := types.T_float32.ToType()
+			typ.Scale = scale
+			vec := vector.NewVec(typ)
+			defer vec.Free(m)
+			for i := 0; i < count; i++ {
+				if err := vector.AppendFixed(vec, float32(i)+0.125, false, m); err != nil {
+					b.Fatal(err)
+				}
+			}
+			vecs := []*vector.Vector{vec}
+			itr := mp.NewIterator()
+			if _, _, err := itr.Insert(0, count, vecs); err != nil {
+				b.Fatal(err)
+			}
+
+			b.ReportAllocs()
+			b.SetBytes(int64(count * types.T_float32.TypeLen()))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				benchmarkIntValues, benchmarkIntZValues, err = itr.Find(0, count, vecs)
+				if err != nil {
+					b.Fatal(err)
+				}
 			}
 		})
 	}

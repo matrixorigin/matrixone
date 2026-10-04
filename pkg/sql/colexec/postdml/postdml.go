@@ -19,8 +19,10 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -80,6 +82,8 @@ func (postdml *PostDml) runPostDml(proc *process.Process, result vm.CallResult) 
 	var values string
 	if !postdml.PostDmlCtx.IsDeleteWithoutFilters {
 		in_list = make([]string, 0, bat.RowCount())
+		var noBackslashEscapes bool
+		var sqlModeResolved bool
 		for i := 0; i < bat.RowCount(); i++ {
 			pkey, err := GetAnyAsString(pkvec, i)
 			if err != nil {
@@ -90,7 +94,15 @@ func (postdml *PostDml) runPostDml(proc *process.Process, result vm.CallResult) 
 			case types.T_date, types.T_datetime, types.T_timestamp, types.T_time, types.T_uuid,
 				types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json,
 				types.T_blob, types.T_text, types.T_datalink:
-				pkey = "'" + pkey + "'"
+				if !sqlModeResolved {
+					noBackslashEscapes = postDmlNoBackslashEscapes(proc)
+					sqlModeResolved = true
+				}
+				if noBackslashEscapes {
+					pkey = "'" + strings.ReplaceAll(pkey, "'", "''") + "'"
+				} else {
+					pkey = sqlquote.String(pkey)
+				}
 			case types.T_array_float32, types.T_array_float64:
 				return moerr.NewInternalError(proc.Ctx, "array cannot be primary key")
 			}
@@ -140,6 +152,22 @@ func (postdml *PostDml) runPostDml(proc *process.Process, result vm.CallResult) 
 	}
 
 	return nil
+}
+
+func postDmlNoBackslashEscapes(proc *process.Process) bool {
+	if proc == nil {
+		return false
+	}
+
+	mode := proc.GetSessionInfo().SqlMode
+	if resolver := proc.GetResolveVariableFunc(); resolver != nil {
+		if value, err := resolver("sql_mode", true, false); err == nil {
+			if sessionMode, ok := value.(string); ok {
+				mode = sessionMode
+			}
+		}
+	}
+	return mysql.HasSQLMode(mode, "NO_BACKSLASH_ESCAPES")
 }
 
 func GetAnyAsString(vec *vector.Vector, i int) (string, error) {

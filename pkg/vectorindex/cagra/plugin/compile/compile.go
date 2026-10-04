@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	cagraruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin/runtime"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 )
 
 // insertIntoCagraIndexTableFormat is the SQL template used to populate the
@@ -59,7 +60,7 @@ type Hooks struct{}
 // (pkg/sql/compile/ddl_index_algo.go:732).
 //
 // The sync-vs-async branch is driven by the index's `async`
-// IndexAlgoParam (catalog.IsIndexAsync). Default (key missing or
+// IndexAlgoParam (catalog.IndexParamAsync). Default (key missing or
 // "false"): forceSync=true — cagra_create runs inline in the user's
 // CREATE INDEX txn before the CDC task is registered. Explicit
 // async="true": forceSync=false — the build SQL is stashed as
@@ -69,7 +70,7 @@ func (h Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map
 	if !ok || metaDef == nil {
 		return h.handleCreate(ctx, indexDefs, true)
 	}
-	async, err := catalog.IsIndexAsync(metaDef.IndexAlgoParams)
+	async, err := catalog.IndexParamAsync(metaDef.IndexAlgoParams)
 	if err != nil {
 		return err
 	}
@@ -80,7 +81,7 @@ func (h Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map
 // forceSync. The idxcron background reindex executor passes
 // forceSync=true so the build happens synchronously inside the txn
 // before the CDC task picks up forward changes. Mirrors IVF-FLAT.
-func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error {
+func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool, _ bool) error {
 	return h.handleCreate(ctx, indexDefs, forceSync)
 }
 
@@ -93,8 +94,27 @@ func (Hooks) RestoreInitSQL(ctx compileplugin.CompileContext, indexDefs map[stri
 	if !ok {
 		return false, "", moerr.NewInternalErrorNoCtx("cagra_meta index definition not found")
 	}
-	return true, fmt.Sprintf("ALTER TABLE `%s`.`%s` ALTER REINDEX `%s` cagra FORCE_SYNC",
-		ctx.QryDatabase(), ctx.OriginalTableDef().Name, metaDef.IndexName), nil
+	return true, fmt.Sprintf("ALTER TABLE %s ALTER REINDEX %s cagra FORCE_SYNC",
+		sqlquote.QualifiedIdent(ctx.QryDatabase(), ctx.OriginalTableDef().Name),
+		sqlquote.Ident(metaDef.IndexName)), nil
+}
+
+// AlterCopyInitSQL — a COPY ALTER's cloneUnaffectedIndexes SKIPS this (SkipWholeIndex) async
+// index, so the replacement hidden tables start EMPTY. The cuvs ISCP consumer is stateless
+// across flushes: CagraSync only APPENDS tag=1 event chunks under the CdcTailId sentinel and
+// never writes a tag=0 sub-index, so the ts=0 replay alone leaves the whole table living in the
+// CDC tail with no base index -- every query brute-forces the overflow, and a table large enough
+// makes that overflow refuse admission. Return a REINDEX FORCE_SYNC as the InitSQL: the CDC's
+// first iteration (post-commit) builds the base from source, then arms the tail at the post-build
+// watermark. Same shape as this algorithm's RestoreInitSQL, and as fulltext2's fix for #28837.
+func (Hooks) AlterCopyInitSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) (bool, string, error) {
+	metaDef, ok := indexDefs[catalog.Cagra_TblType_Metadata]
+	if !ok {
+		return false, "", moerr.NewInternalErrorNoCtx("cagra_meta index definition not found")
+	}
+	return true, fmt.Sprintf("ALTER TABLE %s ALTER REINDEX %s cagra FORCE_SYNC",
+		sqlquote.QualifiedIdent(ctx.QryDatabase(), ctx.OriginalTableDef().Name),
+		sqlquote.Ident(metaDef.IndexName)), nil
 }
 
 // handleCreate is the shared body for HandleCreateIndex and
@@ -148,7 +168,7 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 		return nil
 	}
 
-	cache.Cache.Remove(storageDef.IndexTableName)
+	cache.Cache.RemoveAllGenerations(storageDef.IndexTableName, "ddl")
 
 	sqls, err := genDeleteSQL(indexDefs, ctx.QryDatabase())
 	if err != nil {
@@ -234,18 +254,52 @@ func registerIdxcronUpdate(
 }
 
 func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.ReindexParamUpdate) (map[string]string, error) {
-	return compileplugin.MergeReindexParams(old, alter, "cagra",
+	if err := compileplugin.RejectMerge(alter, "cagra"); err != nil {
+		return nil, err
+	}
+	// Merge first, then validate the EFFECTIVE quantization via the per-algo
+	// catalog hook (the single home shared with CREATE). The merged map is the
+	// index's actual post-reindex config: the value the reindex set, or — when
+	// the reindex omitted QUANTIZATION (e.g. the idxcron-issued rebuild) — the
+	// value already stored on the index. Validating the merge (not the raw alter
+	// delta) means the check is never skipped just because the statement omitted
+	// quantization, and quantization and op_type come from one consistent source.
+	merged, err := compileplugin.MergeReindexParams(old, alter, "cagra",
 		catalog.IndexAlgoParamMaxIndexCapacity,
+		catalog.IndexAlgoParamQuantizerTrainLimit,
 		catalog.IntermediateGraphDegree,
 		catalog.GraphDegree,
 		catalog.ITopkSize,
+		catalog.Quantization,
 	)
+	if err != nil {
+		return nil, err
+	}
+	if err := (cagraruntime.CatalogHooks{}).ValidQuantization(
+		merged[catalog.Quantization], merged[catalog.IndexAlgoParamOpType]); err != nil {
+		return nil, err
+	}
+	if q, changed := compileplugin.ReindexQuantizationChange(old, alter); changed && alter.BaseVectorType != 0 {
+		if err := quantizer.CheckNoUpcast("Cagra", q, alter.BaseVectorType); err != nil {
+			return nil, err
+		}
+	}
+	return merged, nil
 }
 
-// HandleDropIndex is a no-op: generic hidden-table cleanup is sufficient.
 func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, defs map[string]*plan.IndexDef) error {
 	logutil.Infof("[plugin] cagra HandleDropIndex: defs=%d", len(defs))
+	// Evict the cached search index so its GPU resources are freed NOW, rather
+	// than lingering until the 5-min VectorIndexCacheTTL housekeeping reaps it.
+	// Mirrors the create-side cache.Cache.RemoveAllGenerations(storageDef.IndexTableName, "ddl").
+	if storageDef, ok := defs[catalog.Cagra_TblType_Storage]; ok {
+		cache.Cache.RemoveAllGenerations(storageDef.IndexTableName, "ddl")
+	}
 	return nil
+}
+
+func (Hooks) HiddenTableDropPriority(_ string) int {
+	return 0
 }
 
 // IdxcronMetadata pins CAGRA's build-time params into the cron task's

@@ -23,28 +23,39 @@ import (
 	"io"
 	"iter"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"os"
 	gotrace "runtime/trace"
 	"slices"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/tencentyun/cos-go-sdk-v5"
 	"go.uber.org/zap"
 )
 
 type QCloudSDK struct {
-	name            string
-	client          *cos.Client
-	perfCounterSets []*perfcounter.CounterSet
-	listMaxKeys     int
+	name                 string
+	copySourceHost       string
+	client               *cos.Client
+	copyCredentialDomain objectStorageCopyCredentialDomain
+	perfCounterSets      []*perfcounter.CounterSet
+	listMaxKeys          int
 }
+
+const (
+	qcloudMultipartAbortTimeout    = 30 * time.Second
+	qcloudMultipartInitTimeout     = 30 * time.Second
+	qcloudMultipartInitMaxAttempts = 3
+)
 
 func NewQCloudSDK(
 	ctx context.Context,
@@ -119,19 +130,40 @@ func NewQCloudSDK(
 
 	if !args.NoBucketValidation {
 		// validate bucket
-		_, err := DoWithRetry("cos bucket head", func() (*cos.Response, error) {
+		_, err := doQCloudReadWithRetry(ctx, "cos bucket head", func() (*cos.Response, error) {
 			return client.Bucket.Head(ctx, &cos.BucketHeadOptions{})
-		}, maxRetryAttemps, IsRetryableError)
+		})
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	return &QCloudSDK{
-		name:            args.Name,
-		client:          client,
+		name:           args.Name,
+		copySourceHost: baseURL.Host,
+		client:         client,
+		copyCredentialDomain: newObjectStorageCopyCredentialDomain(
+			keyID, keySecret, sessionToken,
+		),
 		perfCounterSets: perfCounterSets,
 	}, nil
+}
+
+var _ objectStorageCopier = new(QCloudSDK)
+var _ objectStorageIdentityReader = new(QCloudSDK)
+
+func (a *QCloudSDK) CopyObject(
+	ctx context.Context,
+	src ObjectStorage,
+	srcKey string,
+	dstKey string,
+) (bool, error) {
+	s, ok := src.(*QCloudSDK)
+	if !ok || !a.copyCredentialDomain.matches(s.copyCredentialDomain) {
+		return false, nil
+	}
+	_, _, err := a.client.Object.Copy(ctx, dstKey, s.copySourceHost+"/"+srcKey, nil)
+	return true, err
 }
 
 var _ ObjectStorage = new(QCloudSDK)
@@ -220,6 +252,63 @@ func (a *QCloudSDK) Stat(
 	return
 }
 
+func (a *QCloudSDK) StatObjectIdentity(ctx context.Context, key string) (ObjectIdentity, error) {
+	header, err := a.statObject(ctx, key)
+	if err != nil {
+		if a.is404(err) {
+			return ObjectIdentity{}, moerr.NewFileNotFoundNoCtx(key)
+		}
+		return ObjectIdentity{}, err
+	}
+	size, err := strconv.ParseInt(header.Get("Content-Length"), 10, 64)
+	if err != nil {
+		return ObjectIdentity{}, err
+	}
+	identity := ObjectIdentity{
+		VersionID: header.Get("x-cos-version-id"),
+		ETag:      header.Get("ETag"),
+		Size:      size,
+	}
+	if modified := header.Get("Last-Modified"); modified != "" {
+		identity.LastModified, err = http.ParseTime(modified)
+		if err != nil {
+			return ObjectIdentity{}, err
+		}
+	}
+	return identity, identity.Validate()
+}
+
+func (a *QCloudSDK) ReadObjectWithIdentity(
+	ctx context.Context,
+	key string,
+	min *int64,
+	max *int64,
+	expected ObjectIdentity,
+) (io.ReadCloser, error) {
+	if err := expected.Validate(); err != nil {
+		return nil, err
+	}
+	r, err := a.getObjectWithIdentity(ctx, key, min, max, &expected)
+	if err != nil {
+		return nil, mapQCloudConditionalReadError(err)
+	}
+	r = mapReadCloserErrors(r, mapQCloudConditionalReadError)
+	if max == nil {
+		return r, nil
+	}
+	return &readCloser{r: io.LimitReader(r, *max-*min), closeFunc: r.Close}, nil
+}
+
+func mapQCloudConditionalReadError(err error) error {
+	var response *cos.ErrorResponse
+	if errors.As(err, &response) && response.Response != nil &&
+		(response.Response.StatusCode == http.StatusNotFound ||
+			response.Response.StatusCode == http.StatusPreconditionFailed) {
+		return errors.Join(ErrObjectChanged, moerr.NewInternalErrorNoCtx("conditional COS read failed"))
+	}
+	return err
+}
+
 func (a *QCloudSDK) Exists(
 	ctx context.Context,
 	key string,
@@ -262,7 +351,7 @@ func (a *QCloudSDK) Write(
 		if err != nil {
 			return err
 		}
-		_, err = DoWithRetry("write", func() (int, error) {
+		_, err = DoWithRetryContext(ctx, "write", func() (int, error) {
 			return 0, a.putObject(
 				ctx,
 				key,
@@ -292,7 +381,7 @@ func (a *QCloudSDK) Write(
 		if err != nil {
 			return err
 		}
-		_, err = DoWithRetry("write", func() (int, error) {
+		_, err = DoWithRetryContext(ctx, "write", func() (int, error) {
 			if _, err := seeker.Seek(offset, io.SeekStart); err != nil {
 				return 0, err
 			}
@@ -314,6 +403,98 @@ func (a *QCloudSDK) Write(
 
 func (a *QCloudSDK) SupportsParallelMultipart() bool {
 	return true
+}
+
+func waitQCloudMultipartInitRetry(ctx context.Context, attempt int) error {
+	delay := initialRetryInterval
+	for i := 0; i < attempt && delay < maxRetryInterval; i++ {
+		delay = time.Duration(float64(delay) * retryIntervalFactor)
+	}
+	if delay > maxRetryInterval {
+		delay = maxRetryInterval
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func (a *QCloudSDK) initiateMultipartUpload(
+	ctx context.Context,
+	key string,
+	opt *cos.InitiateMultipartUploadOptions,
+) (*cos.InitiateMultipartUploadResult, error) {
+	ctx, cancel := context.WithTimeoutCause(ctx, qcloudMultipartInitTimeout, context.DeadlineExceeded)
+	defer cancel()
+
+	var lastErr error
+	for attempt := 0; attempt < qcloudMultipartInitMaxAttempts; attempt++ {
+		var wroteRequest atomic.Bool
+		attemptCtx := httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
+			WroteRequest: func(httptrace.WroteRequestInfo) {
+				wroteRequest.Store(true)
+			},
+		})
+
+		metric.FSMultipartInitAttemptCounter.Inc()
+		output, response, createErr := a.client.Object.InitiateMultipartUpload(attemptCtx, key, opt)
+		if createErr == nil && (output == nil || output.UploadID == "") {
+			createErr = moerr.NewInternalErrorNoCtxf("cos initiate multipart upload returned an empty upload id for key %q", key)
+		}
+		lastErr = createErr
+		if output != nil && output.UploadID != "" {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				cleanupCtx, cleanupCancel := context.WithTimeoutCause(
+					context.WithoutCancel(ctx),
+					qcloudMultipartAbortTimeout,
+					context.DeadlineExceeded,
+				)
+				defer cleanupCancel()
+				if err := a.abortMultipartUpload(cleanupCtx, key, output.UploadID); err != nil {
+					logutil.Warn("failed to clean up canceled cos multipart init", zap.Error(err))
+				} else {
+					metric.FSMultipartInitCleanupCounter.Inc()
+				}
+				return nil, ctxErr
+			}
+			if attempt > 0 || createErr != nil {
+				metric.FSMultipartInitRecoveredCounter.Inc()
+			}
+			return output, nil
+		}
+		definitiveFailure := response != nil && response.Response != nil &&
+			(response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices)
+		commitAmbiguous := !definitiveFailure && (response != nil || wroteRequest.Load())
+		if commitAmbiguous {
+			metric.FSMultipartInitAmbiguousCounter.Inc()
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		if commitAmbiguous {
+			// Without an UploadID, no client can distinguish this request's
+			// server-side state from another CN's upload. Do not list, claim, or
+			// abort candidates here; COS bucket lifecycle must reclaim any orphan.
+			logutil.Warn("cos multipart init is commit-ambiguous; bucket lifecycle must abort incomplete uploads",
+				zap.Error(createErr))
+			return nil, createErr
+		}
+		if !IsRetryableError(createErr) || attempt+1 >= qcloudMultipartInitMaxAttempts {
+			return nil, createErr
+		}
+		// WroteRequest is emitted by net/http once writing starts, including
+		// write failures. Its absence proves this attempt never crossed the
+		// transport write boundary. A non-2xx server response also proves the
+		// attempt failed, so either outcome is safe to retry.
+		if err := waitQCloudMultipartInitRetry(ctx, attempt); err != nil {
+			return nil, err
+		}
+	}
+	return nil, lastErr
 }
 
 func (a *QCloudSDK) WriteMultipartParallel(
@@ -345,44 +526,53 @@ func (a *QCloudSDK) WriteMultipartParallel(
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	bufPool := sync.Pool{
-		New: func() any {
-			buf := make([]byte, options.PartSize)
-			return &buf
-		},
+	type partBuffer struct {
+		buf    []byte
+		n      int
+		tokens int64
 	}
 
-	readChunk := func() (bufPtr *[]byte, buf []byte, n int, err error) {
-		bufPtr = bufPool.Get().(*[]byte)
-		raw := *bufPtr
-		n, err = io.ReadFull(r, raw)
+	releasePartBuffer := func(part *partBuffer) {
+		if part == nil {
+			return
+		}
+		releaseParallelUploadBufferBudget(part.tokens)
+	}
+
+	readChunk := func() (*partBuffer, error) {
+		tokens, err := acquireParallelUploadBufferBudget(ctx, int64(options.PartSize))
+		if err != nil {
+			return nil, err
+		}
+		raw := make([]byte, options.PartSize)
+		n, err := io.ReadFull(r, raw)
 		switch {
 		case errors.Is(err, io.EOF):
-			bufPool.Put(bufPtr)
-			return nil, nil, 0, io.EOF
+			releaseParallelUploadBufferBudget(tokens)
+			return nil, io.EOF
 		case errors.Is(err, io.ErrUnexpectedEOF):
-			err = io.EOF
-			return bufPtr, raw, n, err
+			return &partBuffer{buf: raw, n: n, tokens: tokens}, io.EOF
 		case err != nil:
-			bufPool.Put(bufPtr)
-			return nil, nil, 0, err
+			releaseParallelUploadBufferBudget(tokens)
+			return nil, err
 		default:
-			return bufPtr, raw, n, nil
+			return &partBuffer{buf: raw, n: n, tokens: tokens}, nil
 		}
 	}
 
-	firstBufPtr, firstBuf, firstN, err := readChunk()
+	firstPart, err := readChunk()
 	if err != nil && !errors.Is(err, io.EOF) {
 		return err
 	}
-	if firstN == 0 && errors.Is(err, io.EOF) {
-		return nil
+	if firstPart == nil && errors.Is(err, io.EOF) {
+		size := int64(0)
+		return a.Write(ctx, key, bytes.NewReader(nil), &size, options.Expire)
 	}
-	if errors.Is(err, io.EOF) && int64(firstN) < minMultipartPartSize {
-		data := make([]byte, firstN)
-		copy(data, firstBuf[:firstN])
-		bufPool.Put(firstBufPtr)
-		size := int64(firstN)
+	if errors.Is(err, io.EOF) && int64(firstPart.n) < minMultipartPartSize {
+		data := make([]byte, firstPart.n)
+		copy(data, firstPart.buf[:firstPart.n])
+		size := int64(firstPart.n)
+		releasePartBuffer(firstPart)
 		return a.Write(ctx, key, bytes.NewReader(data), &size, options.Expire)
 	}
 
@@ -396,29 +586,34 @@ func (a *QCloudSDK) WriteMultipartParallel(
 			Expires: expiresHeader,
 		},
 	}
-	output, createErr := DoWithRetry("cos initiate multipart upload", func() (*cos.InitiateMultipartUploadResult, error) {
-		res, _, e := a.client.Object.InitiateMultipartUpload(ctx, key, initOpt)
-		return res, e
-	}, maxRetryAttemps, IsRetryableError)
+	output, createErr := a.initiateMultipartUpload(ctx, key, initOpt)
 	if createErr != nil {
-		bufPool.Put(firstBufPtr)
+		releasePartBuffer(firstPart)
 		return createErr
 	}
 
 	defer func() {
 		if err != nil {
-			_, _ = DoWithRetry("cos abort multipart upload", func() (*cos.Response, error) {
-				return a.client.Object.AbortMultipartUpload(
-					context.WithoutCancel(parentCtx), key, output.UploadID)
-			}, maxRetryAttemps, IsRetryableError)
+			// The upload context is normally canceled on the first part
+			// failure, but abort still needs a live context to remove the
+			// server-side multipart upload. Bound that detached cleanup so a
+			// broken COS endpoint cannot delay the original Write forever.
+			abortCtx, abortCancel := context.WithTimeoutCause(
+				context.WithoutCancel(parentCtx),
+				qcloudMultipartAbortTimeout,
+				context.DeadlineExceeded,
+			)
+			defer abortCancel()
+			if abortErr := a.abortMultipartUpload(abortCtx, key, output.UploadID); abortErr != nil {
+				logutil.Warn("failed to abort cos multipart upload",
+					zap.Error(abortErr))
+			}
 		}
 	}()
 
 	type partJob struct {
-		num    int32
-		buf    []byte
-		bufPtr *[]byte
-		n      int
+		num  int32
+		part *partBuffer
 	}
 
 	var (
@@ -440,127 +635,109 @@ func (a *QCloudSDK) WriteMultipartParallel(
 		})
 	}
 
-	jobCh := make(chan partJob, options.Concurrency*2)
-
-	startWorker := func() error {
-		wg.Add(1)
-		return getParallelUploadPool().Submit(func() {
-			defer wg.Done()
-			for job := range jobCh {
-				if ctx.Err() != nil {
-					if job.bufPtr != nil {
-						bufPool.Put(job.bufPtr)
-					}
-					continue
-				}
-				uploadOpt := &cos.ObjectUploadPartOptions{
-					ContentLength: int64(job.n),
-				}
-				resp, uploadErr := DoWithRetry("cos upload part", func() (*cos.Response, error) {
-					return a.client.Object.UploadPart(ctx, key, output.UploadID, int(job.num), bytes.NewReader(job.buf[:job.n]), uploadOpt)
-				}, maxRetryAttemps, IsRetryableError)
-				if uploadErr != nil {
-					setErr(uploadErr)
-					if job.bufPtr != nil {
-						bufPool.Put(job.bufPtr)
-					}
-					continue
-				}
-				etag := ""
-				if resp != nil && resp.Header != nil {
-					etag = resp.Header.Get("ETag")
-				}
-				if job.bufPtr != nil {
-					bufPool.Put(job.bufPtr)
-				}
-				partsLock.Lock()
-				parts = append(parts, cos.Object{
-					PartNumber: int(job.num),
-					ETag:       etag,
-				})
-				partsLock.Unlock()
-			}
-		})
-	}
-
-	for i := 0; i < options.Concurrency; i++ {
-		if submitErr := startWorker(); submitErr != nil {
-			setErr(submitErr)
-			break
-		}
-	}
-
-	sendJob := func(bufPtr *[]byte, buf []byte, n int) bool {
-		partNum++
-		if partNum > maxMultipartParts {
-			setErr(moerr.NewInternalErrorNoCtxf("too many parts for multipart upload: %d", partNum))
-			if bufPtr != nil {
-				bufPool.Put(bufPtr)
-			}
-			return false
-		}
-		job := partJob{
-			num:    partNum,
-			buf:    buf,
-			bufPtr: bufPtr,
-			n:      n,
-		}
+	uploadSlots := make(chan struct{}, options.Concurrency)
+	startPartUpload := func(job partJob) bool {
 		select {
-		case jobCh <- job:
-			return true
+		case uploadSlots <- struct{}{}:
 		case <-ctx.Done():
-			if bufPtr != nil {
-				bufPool.Put(bufPtr)
-			}
+			releasePartBuffer(job.part)
 			setErr(ctx.Err())
 			return false
 		}
-	}
-
-	if !sendJob(firstBufPtr, firstBuf, firstN) {
-		close(jobCh)
-		wg.Wait()
-		if firstErr != nil {
-			return firstErr
+		select {
+		case getParallelUploadSemaphore() <- struct{}{}:
+		case <-ctx.Done():
+			<-uploadSlots
+			releasePartBuffer(job.part)
+			setErr(ctx.Err())
+			return false
 		}
-		return ctx.Err()
-	}
-
-	for {
-		nextBufPtr, nextBuf, nextN, readErr := readChunk()
-		if errors.Is(readErr, io.EOF) && nextN == 0 {
-			break
-		}
-		if readErr != nil && !errors.Is(readErr, io.EOF) {
-			setErr(readErr)
-			if nextBufPtr != nil {
-				bufPool.Put(nextBufPtr)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() {
+				<-getParallelUploadSemaphore()
+				<-uploadSlots
+			}()
+			if options.beforePartUpload != nil {
+				options.beforePartUpload()
 			}
-			break
-		}
-		if nextN == 0 {
-			if nextBufPtr != nil {
-				bufPool.Put(nextBufPtr)
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				setErr(ctxErr)
+				releasePartBuffer(job.part)
+				return
 			}
-			break
+			uploadOpt := &cos.ObjectUploadPartOptions{
+				ContentLength: int64(job.part.n),
+			}
+			resp, uploadErr := DoWithRetryContext(ctx, "cos upload part", func() (*cos.Response, error) {
+				recordS3PutRequest(ctx, a.perfCounterSets...)
+				return a.client.Object.UploadPart(ctx, key, output.UploadID, int(job.num), bytes.NewReader(job.part.buf[:job.part.n]), uploadOpt)
+			}, maxRetryAttemps, IsRetryableError)
+			if uploadErr != nil {
+				setErr(uploadErr)
+				releasePartBuffer(job.part)
+				return
+			}
+			recordS3AcceptedBytes(ctx, int64(job.part.n), a.perfCounterSets...)
+			etag := ""
+			if resp != nil && resp.Header != nil {
+				etag = resp.Header.Get("ETag")
+			}
+			releasePartBuffer(job.part)
+			partsLock.Lock()
+			parts = append(parts, cos.Object{
+				PartNumber: int(job.num),
+				ETag:       etag,
+			})
+			partsLock.Unlock()
+		}()
+		return true
+	}
+
+	sendJob := func(part *partBuffer) bool {
+		partNum++
+		if partNum > maxMultipartParts {
+			setErr(moerr.NewInternalErrorNoCtxf("too many parts for multipart upload: %d", partNum))
+			releasePartBuffer(part)
+			return false
 		}
-		if !sendJob(nextBufPtr, nextBuf, nextN) {
-			break
+		job := partJob{
+			num:  partNum,
+			part: part,
 		}
-		if readErr != nil && errors.Is(readErr, io.EOF) {
-			break
+		return startPartUpload(job)
+	}
+
+	if sendJob(firstPart) {
+		for {
+			part, readErr := readChunk()
+			if errors.Is(readErr, io.EOF) && part == nil {
+				break
+			}
+			if readErr != nil && !errors.Is(readErr, io.EOF) {
+				setErr(readErr)
+				releasePartBuffer(part)
+				break
+			}
+			if part == nil || part.n == 0 {
+				releasePartBuffer(part)
+				break
+			}
+			if !sendJob(part) {
+				break
+			}
+			if errors.Is(readErr, io.EOF) {
+				break
+			}
 		}
 	}
 
-	close(jobCh)
 	wg.Wait()
 
 	if firstErr != nil {
 		err = firstErr
 		return err
-	}
-	if len(parts) == 0 {
-		return nil
 	}
 	if len(parts) != int(partNum) {
 		return moerr.NewInternalErrorNoCtxf("multipart upload incomplete, expect %d parts got %d", partNum, len(parts))
@@ -573,7 +750,7 @@ func (a *QCloudSDK) WriteMultipartParallel(
 	completeOpt := &cos.CompleteMultipartUploadOptions{
 		Parts: parts,
 	}
-	_, err = DoWithRetry("cos complete multipart upload", func() (*cos.CompleteMultipartUploadResult, error) {
+	_, err = DoWithRetryContext(ctx, "cos complete multipart upload", func() (*cos.CompleteMultipartUploadResult, error) {
 		res, _, e := a.client.Object.CompleteMultipartUpload(ctx, key, output.UploadID, completeOpt)
 		return res, e
 	}, maxRetryAttemps, IsRetryableError)
@@ -582,6 +759,17 @@ func (a *QCloudSDK) WriteMultipartParallel(
 	}
 
 	return nil
+}
+
+func (a *QCloudSDK) abortMultipartUpload(
+	ctx context.Context,
+	key string,
+	uploadID string,
+) error {
+	_, err := DoWithRetryContext(ctx, "cos abort multipart upload", func() (*cos.Response, error) {
+		return a.client.Object.AbortMultipartUpload(ctx, key, uploadID)
+	}, maxRetryAttemps, IsRetryableError)
+	return err
 }
 
 func (a *QCloudSDK) Read(
@@ -692,7 +880,8 @@ func (a *QCloudSDK) listObjects(ctx context.Context, prefix string, marker strin
 		opts.MaxKeys = a.listMaxKeys
 	}
 
-	return DoWithRetry(
+	return doQCloudReadWithRetry(
+		ctx,
 		"s3 list objects",
 		func() (*cos.BucketGetResult, error) {
 			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
@@ -704,8 +893,6 @@ func (a *QCloudSDK) listObjects(ctx context.Context, prefix string, marker strin
 			}
 			return result, nil
 		},
-		maxRetryAttemps,
-		IsRetryableError,
 	)
 }
 
@@ -713,7 +900,8 @@ func (a *QCloudSDK) statObject(ctx context.Context, key string) (http.Header, er
 	ctx, task := gotrace.NewTask(ctx, "QCloudSDK.statObject")
 	defer task.End()
 
-	return DoWithRetry(
+	return doQCloudReadWithRetry(
+		ctx,
 		"s3 head object",
 		func() (http.Header, error) {
 			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
@@ -725,8 +913,6 @@ func (a *QCloudSDK) statObject(ctx context.Context, key string) (http.Header, er
 			}
 			return resp.Header, nil
 		},
-		maxRetryAttemps,
-		IsRetryableError,
 	)
 }
 
@@ -740,9 +926,9 @@ func (a *QCloudSDK) putObject(
 	ctx, task := gotrace.NewTask(ctx, "QCloudSDK.putObject")
 	defer task.End()
 
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.Put.Add(1)
-	}, a.perfCounterSets...)
+	recordS3PutRequest(ctx, a.perfCounterSets...)
+	var n atomic.Int64
+	r = &countingReader{R: r, C: &n}
 
 	// not retryable because Reader may be half consumed
 	opts := &cos.ObjectPutOptions{}
@@ -755,10 +941,21 @@ func (a *QCloudSDK) putObject(
 	if err != nil {
 		return err
 	}
+	recordS3AcceptedBytes(ctx, n.Load(), a.perfCounterSets...)
 	return nil
 }
 
 func (a *QCloudSDK) getObject(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {
+	return a.getObjectWithIdentity(ctx, key, min, max, nil)
+}
+
+func (a *QCloudSDK) getObjectWithIdentity(
+	ctx context.Context,
+	key string,
+	min *int64,
+	max *int64,
+	expected *ObjectIdentity,
+) (io.ReadCloser, error) {
 	ctx, task := gotrace.NewTask(ctx, "QCloudSDK.getObject")
 	defer task.End()
 
@@ -770,21 +967,33 @@ func (a *QCloudSDK) getObject(ctx context.Context, key string, min *int64, max *
 		func(offset int64) (io.ReadCloser, error) {
 			var rang string
 			if max != nil {
-				rang = fmt.Sprintf("bytes=%d-%d", offset, *max)
+				rang = fmt.Sprintf("bytes=%d-%d", offset, *max-1)
 			} else {
 				rang = fmt.Sprintf("bytes=%d-", offset)
 			}
 			opts := &cos.ObjectGetOptions{
 				Range: rang,
 			}
+			if expected != nil && expected.VersionID == "" {
+				headers := make(http.Header)
+				headers.Set("If-Match", expected.ETag)
+				opts.XOptionHeader = &headers
+			}
 
-			return DoWithRetry(
+			return doQCloudReadWithRetry(
+				ctx,
 				"s3 get object",
 				func() (io.ReadCloser, error) {
 					perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 						counter.FileService.S3.Get.Add(1)
 					}, a.perfCounterSets...)
-					resp, err := a.client.Object.Get(ctx, key, opts)
+					var resp *cos.Response
+					var err error
+					if expected != nil && expected.VersionID != "" {
+						resp, err = a.client.Object.Get(ctx, key, opts, expected.VersionID)
+					} else {
+						resp, err = a.client.Object.Get(ctx, key, opts)
+					}
 					if err != nil {
 						return nil, err
 					}
@@ -797,8 +1006,6 @@ func (a *QCloudSDK) getObject(ctx context.Context, key string, min *int64, max *
 						},
 					}, nil
 				},
-				maxRetryAttemps,
-				IsRetryableError,
 			)
 
 		},
@@ -807,10 +1014,51 @@ func (a *QCloudSDK) getObject(ctx context.Context, key string, min *int64, max *
 	)
 }
 
+// doQCloudReadWithRetry keeps cancellation recognizable across the COS SDK's
+// opaque RetryError boundary. It is limited to side-effect-free operations;
+// mutating requests need operation-specific handling for ambiguous outcomes.
+func doQCloudReadWithRetry[T any](
+	ctx context.Context,
+	what string,
+	fn func() (T, error),
+) (T, error) {
+	result, err := DoWithRetryContext(
+		ctx,
+		what,
+		fn,
+		maxRetryAttemps,
+		IsRetryableError,
+	)
+	return result, normalizeQCloudContextError(ctx, err)
+}
+
+func normalizeQCloudContextError(ctx context.Context, err error) error {
+	if err == nil || ctx == nil {
+		return err
+	}
+	contextErr := ctx.Err()
+	if contextErr == nil {
+		return err
+	}
+
+	// cos.RetryError does not implement Unwrap, so an in-flight request can
+	// lose its cancellation identity even when its only child is ctx.Err().
+	// Do not collapse mixed or unrelated storage errors.
+	retryErr, ok := err.(*cos.RetryError)
+	if !ok ||
+		len(retryErr.Errs) != 1 ||
+		!errors.Is(retryErr.Errs[0], contextErr) {
+		return err
+	}
+
+	return contextErr
+}
+
 func (a *QCloudSDK) deleteObject(ctx context.Context, key string) (bool, error) {
 	ctx, task := gotrace.NewTask(ctx, "QCloudSDK.deleteObject")
 	defer task.End()
-	return DoWithRetry(
+	return DoWithRetryContext(
+		ctx,
 		"s3 delete object",
 		func() (bool, error) {
 			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
@@ -829,7 +1077,8 @@ func (a *QCloudSDK) deleteObject(ctx context.Context, key string) (bool, error) 
 func (a *QCloudSDK) deleteObjects(ctx context.Context, keys ...string) (bool, error) {
 	ctx, task := gotrace.NewTask(ctx, "QCloudSDK.deleteObjects")
 	defer task.End()
-	return DoWithRetry(
+	return DoWithRetryContext(
+		ctx,
 		"s3 delete objects",
 		func() (bool, error) {
 			objects := make([]cos.Object, 0, len(keys))

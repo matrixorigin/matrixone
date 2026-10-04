@@ -16,26 +16,51 @@ package window
 
 import (
 	"bytes"
+	"context"
+	"fmt"
 	"math"
+	"os"
+	"strconv"
+	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sort"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const opName = "window"
+
+// A Window call can spend a long time inside one frame evaluation, especially
+// for running frames whose aggregate work is quadratic in the partition size.
+// Keep the cancellation polling overhead bounded while still allowing KILL
+// QUERY / KILL CONNECTION to interrupt that work promptly.
+const cancellationCheckInterval = 1024
+
+func checkCanceled(proc *process.Process, iteration int) error {
+	if iteration&(cancellationCheckInterval-1) != 0 {
+		return nil
+	}
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return err
+	}
+	return nil
+}
 
 func (window *Window) String(buf *bytes.Buffer) {
 	buf.WriteString(opName)
@@ -47,6 +72,7 @@ func (window *Window) OpType() vm.OpType {
 }
 
 func (window *Window) Prepare(proc *process.Process) (err error) {
+	window.ctr.prepareParamKind.Reset(window.Aggs)
 	if window.OpAnalyzer == nil {
 		window.OpAnalyzer = process.NewAnalyzer(window.GetIdx(), window.IsFirst, window.IsLast, "window")
 	} else {
@@ -54,6 +80,21 @@ func (window *Window) Prepare(proc *process.Process) (err error) {
 	}
 
 	ctr := &window.ctr
+
+	// Runtime frames belong to one Prepare generation. Build them off to the
+	// side and publish only after the rest of Prepare succeeds, so neither a
+	// bound-evaluation error nor a later setup error exposes partial state.
+	ctr.runtimeFrames = nil
+	runtimeFrames := make([]*plan.FrameClause, len(window.WinSpecList))
+	for i, expr := range window.WinSpecList {
+		if expr == nil || expr.GetW() == nil {
+			continue
+		}
+		runtimeFrames[i], err = materializeWindowFrame(proc, expr.GetW().Frame)
+		if err != nil {
+			return err
+		}
+	}
 
 	if len(ctr.aggVecs) == 0 {
 		ctr.aggVecs = make([]colexec.ExprEvalVector, len(window.Aggs))
@@ -66,11 +107,189 @@ func (window *Window) Prepare(proc *process.Process) (err error) {
 	}
 
 	w := window.WinSpecList[0].Expr.(*plan.Expr_W).W
-	if len(w.PartitionBy) == 0 {
+	if len(w.PartitionBy) == 0 || window.PartitionTopN {
 		ctr.status = receiveAll
 	}
 
+	ctr.runtimeFrames = runtimeFrames
 	return nil
+}
+
+func materializeWindowFrame(proc *process.Process, planned *plan.FrameClause) (*plan.FrameClause, error) {
+	if planned == nil {
+		return nil, nil
+	}
+
+	runtimeFrame := &plan.FrameClause{Type: planned.Type}
+	var err error
+	if planned.Type == plan.FrameClause_ROWS || planned.Type == plan.FrameClause_RANGE {
+		runtimeFrame.Start, err = materializeWindowBound(proc, planned.Start, planned.Type)
+		if err != nil {
+			return nil, err
+		}
+		runtimeFrame.End, err = materializeWindowBound(proc, planned.End, planned.Type)
+		if err != nil {
+			return nil, err
+		}
+		return runtimeFrame, nil
+	}
+
+	runtimeFrame.Start = cloneFrameBound(planned.Start)
+	runtimeFrame.End = cloneFrameBound(planned.End)
+	return runtimeFrame, nil
+}
+
+func cloneFrameBound(planned *plan.FrameBound) *plan.FrameBound {
+	if planned == nil {
+		return nil
+	}
+	return &plan.FrameBound{
+		Type:      planned.Type,
+		UnBounded: planned.UnBounded,
+		Val:       planned.Val,
+	}
+}
+
+func materializeWindowBound(
+	proc *process.Process,
+	planned *plan.FrameBound,
+	frameType plan.FrameClause_FrameType,
+) (*plan.FrameBound, error) {
+	runtimeBound := cloneFrameBound(planned)
+	if planned == nil || planned.Val == nil || planned.Val.GetLit() != nil {
+		return runtimeBound, nil
+	}
+	// Temporal RANGE bounds are normalized interval expression lists at bind
+	// time. They are already immutable constants, not deferred parameters.
+	if frameType == plan.FrameClause_RANGE && planned.Val.GetList() != nil {
+		return runtimeBound, nil
+	}
+	if frameType == plan.FrameClause_RANGE && planned.Val.GetVec() != nil {
+		_, err := decimal256RangeOffset(planned.Val, planned.Val.Typ)
+		return runtimeBound, err
+	}
+	if proc == nil || proc.GetPrepareParams() == nil {
+		return nil, moerr.NewInvalidInputNoCtx("window frame bound parameter is missing")
+	}
+
+	executor, err := colexec.NewExpressionExecutor(proc, planned.Val)
+	if err != nil {
+		return nil, err
+	}
+	defer executor.Free()
+
+	vec, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	if err != nil {
+		return nil, err
+	}
+	if vec == nil || vec.Length() != 1 {
+		return nil, moerr.NewInvalidInput(proc.Ctx, "window frame bound must evaluate to exactly one value")
+	}
+	if vec.IsNull(0) {
+		return nil, moerr.NewInvalidInput(proc.Ctx, "window frame bound cannot be NULL")
+	}
+	if frameType == plan.FrameClause_ROWS && vec.GetType().Oid != types.T_uint64 {
+		return nil, moerr.NewInvalidInputf(
+			proc.Ctx,
+			"window frame bound must evaluate to uint64, got %s",
+			vec.GetType().String(),
+		)
+	}
+	if frameType == plan.FrameClause_RANGE {
+		if err = validateRangeFrameBound(proc.Ctx, vec); err != nil {
+			return nil, err
+		}
+	}
+	if vec.GetType().Oid == types.T_decimal256 {
+		data, err := vec.MarshalBinary()
+		if err != nil {
+			return nil, err
+		}
+		runtimeBound.Val = &plan.Expr{Typ: planned.Val.Typ, Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{
+			Len: 1, Data: data,
+		}}}
+		return runtimeBound, nil
+	}
+
+	runtimeBound.Val = &plan.Expr{
+		Typ:  planned.Val.Typ,
+		Expr: &plan.Expr_Lit{Lit: rule.GetConstantValue(vec, false, 0)},
+	}
+	return runtimeBound, nil
+}
+
+func validateRangeFrameBound(ctx context.Context, vec *vector.Vector) error {
+	valid := true
+	switch vec.GetType().Oid {
+	case types.T_bit, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+	case types.T_int8:
+		valid = vector.MustFixedColWithTypeCheck[int8](vec)[0] >= 0
+	case types.T_int16:
+		valid = vector.MustFixedColWithTypeCheck[int16](vec)[0] >= 0
+	case types.T_int32:
+		valid = vector.MustFixedColWithTypeCheck[int32](vec)[0] >= 0
+	case types.T_int64:
+		valid = vector.MustFixedColWithTypeCheck[int64](vec)[0] >= 0
+	case types.T_float32:
+		value := vector.MustFixedColWithTypeCheck[float32](vec)[0]
+		valid = value >= 0 && !math.IsInf(float64(value), 0) && !math.IsNaN(float64(value))
+	case types.T_float64:
+		value := vector.MustFixedColWithTypeCheck[float64](vec)[0]
+		valid = value >= 0 && !math.IsInf(value, 0) && !math.IsNaN(value)
+	case types.T_decimal64:
+		valid = !vector.MustFixedColWithTypeCheck[types.Decimal64](vec)[0].Sign()
+	case types.T_decimal128:
+		valid = !vector.MustFixedColWithTypeCheck[types.Decimal128](vec)[0].Sign()
+	case types.T_decimal256:
+		valid = !vector.MustFixedColWithTypeCheck[types.Decimal256](vec)[0].Sign()
+	default:
+		return moerr.NewInvalidInputf(
+			ctx,
+			"window RANGE frame bound must be numeric, got %s",
+			vec.GetType().String(),
+		)
+	}
+	if !valid {
+		return moerr.NewInvalidInput(ctx, "window RANGE frame bound must be a finite non-negative numeric value")
+	}
+	return nil
+}
+
+func (ctr *container) frameAt(idx int, planned *plan.FrameClause) *plan.FrameClause {
+	if idx >= 0 && idx < len(ctr.runtimeFrames) && ctr.runtimeFrames[idx] != nil {
+		return ctr.runtimeFrames[idx]
+	}
+	return planned
+}
+
+// decimal256RangeOffset borrows a bounded singleton encoding and returns its
+// coefficient by value. It neither retains the vector nor allocates in the
+// row-search path. The payload is owned by the immutable plan/runtime frame.
+func decimal256RangeOffset(expr *plan.Expr, orderType plan.Type) (types.Decimal256, error) {
+	var zero types.Decimal256
+	literal := expr.GetVec()
+	// Non-NULL fixed singleton: type, class, length, three length prefixes,
+	// 32 coefficient bytes and sorted flag. Reject unbounded bitmap/area data
+	// before unmarshalling on every row.
+	if literal == nil || literal.Len != 1 || len(literal.Data) != types.TSize+50 ||
+		expr.Typ.Id != int32(types.T_decimal256) || orderType.Id != int32(types.T_decimal256) || expr.Typ.Scale != orderType.Scale ||
+		expr.Typ.Width != orderType.Width {
+		return zero, moerr.NewInvalidInputNoCtx("invalid Decimal256 window RANGE bound")
+	}
+	var value vector.Vector
+	if err := value.UnmarshalBinary(literal.Data); err != nil {
+		return zero, err
+	}
+	typ := value.GetType()
+	if typ.Oid != types.T_decimal256 || typ.Width != orderType.Width || typ.Scale != orderType.Scale ||
+		value.Length() != 1 || value.IsNull(0) || len(value.GetData()) != 32 || len(value.GetArea()) != 0 {
+		return zero, moerr.NewInvalidInputNoCtx("invalid Decimal256 window RANGE bound")
+	}
+	offset := vector.GetFixedAtNoTypeCheck[types.Decimal256](&value, 0)
+	if offset.Sign() {
+		return zero, moerr.NewInvalidInputNoCtx("window RANGE frame bound must be a finite non-negative numeric value")
+	}
+	return offset, nil
 }
 
 func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
@@ -78,8 +297,15 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 
 	var err error
 	ctr := &window.ctr
+	// A returned batch is valid through the caller's processing of it. Once the
+	// next Call begins, release its borrowed input windows and owned result
+	// vector before reusing any operator state.
+	ctr.cleanOutput(proc.Mp())
 
 	for {
+		if err, canceled := vm.CancelCheck(proc); canceled {
+			return vm.CancelResult, err
+		}
 		switch ctr.status {
 		case receiveAll:
 			for {
@@ -95,6 +321,9 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 					}
 					break
 				}
+				if result.Batch.IsEmpty() {
+					continue
+				}
 				ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
 				if err != nil {
 					return result, err
@@ -107,6 +336,8 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			if result.Batch == nil {
 				ctr.status = done
+			} else if result.Batch.IsEmpty() {
+				continue
 			} else {
 				ctr.status = eval
 				if ctr.bat != nil {
@@ -119,77 +350,80 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 		case eval:
 			result := vm.NewCallResult()
+			// A new materialized input batch starts a new aggregate generation.
+			// Normally the previous generation is released after its last chunk;
+			// this also closes reuse after an interrupted or failed generation.
+			ctr.freeRunningAgg()
+			ctr.freeOrderedSetPartitionResults(proc.Mp())
 			if err = ctr.evalAggVector(ctr.bat, proc); err != nil {
 				return result, err
 			}
-
-			ctr.batAggs = make([]aggexec.AggFuncExec, len(window.Aggs))
-			for i, ag := range window.Aggs {
-				// Skip AggFuncExec creation for WIN_VALUE functions (lag/lead/first_value/last_value/nth_value)
-				// as they are handled directly in processValueFunc.
-				winName := window.WinSpecList[i].Expr.(*plan.Expr_W).W.Name
-				if function.GetFunctionIsWinValueFunByName(winName) {
-					continue
-				}
-				// Derive one argument type per aggregate argument so multi-argument
-				// window aggregates (e.g. json_objectagg) receive all their types,
-				// mirroring the group operator (colexec/group/helper.go).
-				argExprs := ag.GetArgExpressions()
-				argTypes := make([]types.Type, len(argExprs))
-				for j, arg := range argExprs {
-					argTypes[j] = types.New(types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale)
-				}
-				ctr.batAggs[i], err = aggexec.MakeAgg(proc.Mp(), ag.GetAggID(), ag.IsDistinct(), argTypes...)
-				if err != nil {
-					return result, err
-				}
-				if config := ag.GetExtraConfig(); config != nil {
-					if err = ctr.batAggs[i].SetExtraInformation(config, 0); err != nil {
-						return result, err
+			if err = ctr.validateLagLeadOffsets(0, window, proc); err != nil {
+				return result, err
+			}
+			for i := range window.Aggs {
+				if i < len(ctr.aggVecs) && len(ctr.aggVecs[i].Vec) > 0 {
+					arg := ctr.aggVecs[i].Vec[0]
+					if arg.Length() > 0 && !arg.AllNull() {
+						ctr.prepareParamKind.Observe(i, arg.GetPrepareParamKind())
 					}
 				}
-				if err = ctr.batAggs[i].GroupGrow(ctr.bat.RowCount()); err != nil {
-					return result, err
-				}
 			}
-			// calculate
-			for i, w := range window.WinSpecList {
-				// sort and partitions
-				if window.Fs = makeOrderBy(w); window.Fs != nil {
-					if len(ctr.orderVecs) == 0 {
-						ctr.orderVecs = make([]colexec.ExprEvalVector, len(window.Fs))
-						for j := range ctr.orderVecs {
-							ctr.orderVecs[j], err = colexec.MakeEvalVector(proc, []*plan.Expr{window.Fs[j].Expr})
-							if err != nil {
-								return result, err
-							}
+
+			// Query planning creates one Window operator per window expression.
+			// Keep the materialized and sorted logical partition, then evaluate it
+			// lazily in bounded output chunks. A LIMIT consumer can stop after the
+			// first chunk without forcing the remaining frame calculations.
+			ctr.ps = nil
+			ctr.os = nil
+			ctr.sels = nil
+			w := window.WinSpecList[0]
+			if window.PartitionTopN {
+				window.Fs = makePartitionTopNOrderBy(w)
+			} else {
+				window.Fs = makeOrderBy(w)
+			}
+			if window.Fs != nil {
+				if len(ctr.orderVecs) == 0 {
+					ctr.orderVecs = make([]colexec.ExprEvalVector, len(window.Fs))
+					for j := range ctr.orderVecs {
+						ctr.orderVecs[j], err = colexec.MakeEvalVector(proc, []*plan.Expr{window.Fs[j].Expr})
+						if err != nil {
+							return result, err
 						}
 					}
-
-					_, err = ctr.processOrder(i, window, ctr.bat, proc)
-					if err != nil {
-						return result, err
-					}
 				}
-				// evaluate func
-				if err = ctr.processFunc(i, window, proc, analyzer); err != nil {
+
+				if _, err = ctr.processOrder(0, window, ctr.bat, proc); err != nil {
 					return result, err
 				}
 			}
-			// we can not reuse agg func
-			ctr.freeAggFun()
+			ctr.emitOffset = 0
+			ctr.status = emit
 
-			if len(window.WinSpecList[0].Expr.(*plan.Expr_W).W.PartitionBy) == 0 {
-				ctr.status = done
-			} else {
-				ctr.status = receive
+		case emit:
+			result := vm.NewCallResult()
+			start := ctr.emitOffset
+			end := min(start+colexec.DefaultBatchSize, ctr.bat.RowCount())
+			vec, err := ctr.processFuncRange(0, window, proc, analyzer, start, end)
+			if err != nil {
+				return result, err
+			}
+			result.Batch, err = ctr.makeResultBatch(start, end, vec)
+			if err != nil {
+				vec.Free(proc.Mp())
+				return result, err
 			}
 
-			if ctr.rBat != nil {
-				result.Batch = ctr.resetResultBatch(ctr.bat, ctr.vec)
-			} else {
-				result.Batch = ctr.makeResultBatch(ctr.bat, ctr.vec)
+			ctr.emitOffset = end
+			if end == ctr.bat.RowCount() {
+				if len(window.WinSpecList[0].Expr.(*plan.Expr_W).W.PartitionBy) == 0 {
+					ctr.status = done
+				} else {
+					ctr.status = receive
+				}
 			}
+
 			result.Status = vm.ExecNext
 			return result, nil
 		case done:
@@ -200,173 +434,925 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) makeResultBatch(bat *batch.Batch, vec *vector.Vector) *batch.Batch {
-	ctr.rBat = batch.NewWithSize(len(bat.Vecs) + 1)
-	i := 0
-	for i < len(bat.Vecs) {
-		ctr.rBat.Vecs[i] = bat.Vecs[i]
-		i++
+func (ctr *container) makeResultBatch(start, end int, vec *vector.Vector) (*batch.Batch, error) {
+	if vec == nil || vec.Length() != end-start {
+		return nil, moerr.NewInternalErrorNoCtx("window result length does not match output chunk")
 	}
-	ctr.rBat.Vecs[i] = vec
-	ctr.rBat.SetRowCount(vec.Length())
-	return ctr.rBat
+	rBat, err := ctr.bat.Window(start, end)
+	if err != nil {
+		return nil, err
+	}
+	rBat.Vecs = append(rBat.Vecs, vec)
+	rBat.SetRowCount(end - start)
+	ctr.rBat = rBat
+	return rBat, nil
 }
 
-func (ctr *container) resetResultBatch(bat *batch.Batch, vec *vector.Vector) *batch.Batch {
-	i := 0
-	for i < len(bat.Vecs) {
-		ctr.rBat.Vecs[i] = bat.Vecs[i]
-		i++
-	}
-	ctr.rBat.Vecs[i] = vec
-	ctr.rBat.SetRowCount(vec.Length())
-	return ctr.rBat
-}
-
+// processFunc retains the full-range helper used by focused cancellation
+// tests. Production Call uses processFuncRange with bounded output ranges.
 func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, analyzer process.Analyzer) error {
-	var err error
-	n := ctr.bat.Vecs[0].Length()
+	vec, err := ctr.processFuncRange(idx, ap, proc, analyzer, 0, ctr.bat.RowCount())
+	if vec != nil {
+		vec.Free(proc.Mp())
+	}
+	return err
+}
+
+func (ctr *container) processFuncRange(
+	idx int,
+	ap *Window,
+	proc *process.Process,
+	analyzer process.Analyzer,
+	outputStart int,
+	outputEnd int,
+) (*vector.Vector, error) {
+	if outputStart < 0 || outputEnd <= outputStart || outputEnd > ctr.bat.RowCount() {
+		return nil, moerr.NewInternalErrorNoCtx("invalid window output range")
+	}
+
 	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
 	funcName := w.Name
-	isWinOrder := function.GetFunctionIsWinOrderFunByName(funcName)
-	isWinValue := function.GetFunctionIsWinValueFunByName(funcName)
-
-	if isWinValue {
-		// WIN_VALUE functions (lag/lead/first_value/last_value/nth_value):
-		// Direct index-based evaluation, bypassing AggFuncExec Fill/Flush entirely.
-		if ctr.vec != nil {
-			ctr.vec.Free(proc.Mp())
-		}
-		ctr.vec, err = ctr.processValueFunc(idx, ap, proc)
-		if err != nil {
-			return err
-		}
-		if ctr.vec != nil {
-			analyzer.Alloc(int64(ctr.vec.Size()))
-		}
-		ctr.os = nil
-		ctr.ps = nil
-		return nil
+	var (
+		vec *vector.Vector
+		err error
+	)
+	switch {
+	case function.GetFunctionIsWinValueFunByName(funcName):
+		// Value window functions use direct source-row lookup and therefore can
+		// materialize only the rows requested by this output chunk.
+		vec, err = ctr.processValueFuncRange(idx, ap, proc, outputStart, outputEnd)
+	case function.GetFunctionIsWinOrderFunByName(funcName):
+		// Rank-family functions are derived directly from the sorted peer
+		// boundaries. This avoids building one aggregate group per input row.
+		vec, err = ctr.processOrderFuncRange(idx, ap, proc, outputStart, outputEnd)
+	default:
+		vec, err = ctr.processAggregateFuncRange(idx, ap, proc, outputStart, outputEnd)
 	}
-
-	if isWinOrder {
-		if ctr.ps == nil {
-			ctr.ps = append(ctr.ps, 0)
-		}
-		if ctr.os == nil {
-			ctr.os = append(ctr.os, 0)
-		}
-		ctr.ps = append(ctr.ps, int64(n))
-		ctr.os = append(ctr.os, int64(n))
-		if len(ctr.os) < len(ctr.ps) {
-			ctr.os = ctr.ps
-		}
-
-		// Special handling for NTILE: evaluate bucket count parameter
-		if funcName == "ntile" && len(ctr.aggVecs[idx].Vec) > 0 {
-			if err = ctr.evalAggVector(ctr.bat, proc); err != nil {
-				return err
-			}
-		}
-
-		vec := vector.NewVec(types.T_int64.ToType())
-		defer vec.Free(proc.Mp())
-		if err = vector.AppendFixedList(vec, ctr.os, nil, proc.Mp()); err != nil {
-			return err
-		}
-
-		o := 0
-		for p := 1; p < len(ctr.ps); p++ {
-			for ; o < len(ctr.os); o++ {
-
-				if ctr.os[o] <= ctr.ps[p] {
-					// For NTILE, pass both os vector and bucket count vector
-					var fillVecs []*vector.Vector
-					if funcName == "ntile" && len(ctr.aggVecs[idx].Vec) > 0 {
-						fillVecs = []*vector.Vector{vec, ctr.aggVecs[idx].Vec[0]}
-					} else {
-						fillVecs = []*vector.Vector{vec}
-					}
-
-					if err = ctr.batAggs[idx].Fill(p-1, o, fillVecs); err != nil {
-						return err
-					}
-
-				} else {
-					o--
-					break
-				}
-
-			}
-		}
-	} else {
-		// plan.Function_AGG
-		for j := 0; j < n; j++ {
-
-			start, end := 0, n
-
-			if ctr.ps != nil {
-				start, end = buildPartitionInterval(ctr.ps, j, n)
-			}
-
-			left, right, err := ctr.buildInterval(j, start, end, ap.WinSpecList[idx].Expr.(*plan.Expr_W).W.Frame)
-			if err != nil {
-				return err
-			}
-
-			if right < start || left > end || left >= right {
-				continue
-			}
-
-			if left < start {
-				left = start
-			}
-			if right > end {
-				right = end
-			}
-
-			for k := left; k < right; k++ {
-				if err = ctr.batAggs[idx].Fill(j, k, ctr.aggVecs[idx].Vec); err != nil {
-					return err
-				}
-			}
-
-		}
-	}
-
-	// result of agg eval is not reuse the vector
-	if ctr.vec != nil {
-		ctr.vec.Free(proc.Mp())
-	}
-	vecs, err := ctr.batAggs[idx].Flush()
 	if err != nil {
+		return nil, err
+	}
+	if !vec.HasPrepareParamKind() {
+		vec.SetPrepareParamKind(ctr.prepareParamKind.Get(idx))
+	}
+	analyzer.Alloc(int64(vec.Size()))
+	return vec, nil
+}
+
+func (ctr *container) makeAggregateExecutor(
+	idx int,
+	ap *Window,
+	proc *process.Process,
+	groupCount int,
+) error {
+	ctr.freeAggFun()
+	ctr.batAggs = make([]aggexec.AggFuncExec, len(ap.Aggs))
+	exec, err := ctr.newAggregateExecutor(idx, ap, proc, groupCount)
+	if err != nil {
+		ctr.batAggs = nil
 		return err
 	}
-	ctr.vec, err = aggexec.MergeSplitResult(vecs, proc.Mp())
-	if err != nil {
-		return err
-	}
-	if isWinOrder {
-		ctr.vec.SetNulls(nil)
-	}
-	if ctr.vec != nil {
-		analyzer.Alloc(int64(ctr.vec.Size()))
-	}
-	ctr.os = nil
-	ctr.ps = nil
+	ctr.batAggs[idx] = exec
 	return nil
+}
+
+func (ctr *container) newAggregateExecutor(
+	idx int,
+	ap *Window,
+	proc *process.Process,
+	groupCount int,
+) (aggexec.AggFuncExec, error) {
+	ag := ap.Aggs[idx]
+	// Derive one argument type per aggregate argument so multi-argument
+	// window aggregates (for example json_objectagg) match Group's contract.
+	argExprs := ag.GetArgExpressions()
+	argTypes := make([]types.Type, len(argExprs))
+	for j, arg := range argExprs {
+		argTypes[j] = types.NewWithCharset(
+			types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale, uint8(arg.Typ.Charset),
+		)
+	}
+
+	exec, err := aggexec.MakeAgg(proc.Mp(), ag.GetAggID(), ag.IsDistinct(), argTypes...)
+	if err != nil {
+		return nil, err
+	}
+	aggexec.ConfigureGroupConcatWarningRetention(
+		exec, process.WarningDiagnosticRetentionLimitForProcess(proc))
+	aggexec.ConfigureGroupConcatWarningBudget(
+		exec, process.WarningDiagnosticBudgetForProcess(proc))
+	aggexec.ConfigureGroupConcatTimeZone(exec, proc.Base.SessionInfo.TimeZone)
+	succeeded := false
+	defer func() {
+		if !succeeded {
+			exec.Free()
+		}
+	}()
+	if config := ag.GetExtraInformation(); config != nil {
+		if err = exec.SetExtraInformation(config, 0); err != nil {
+			return nil, err
+		}
+	}
+	aggexec.ConfigureOrderedPercentileSpill(
+		exec,
+		colexec.ResolveSpillThreshold(ap.SpillThreshold),
+		proc.Ctx,
+		func() (*os.File, error) {
+			spillFS, spillErr := proc.GetSpillFileService()
+			if spillErr != nil {
+				return nil, spillErr
+			}
+			id, _ := uuid.NewV7()
+			return spillFS.CreateAndRemoveFile(
+				proc.Ctx,
+				fmt.Sprintf("window_ordered_percentile_run_%s", id.String()),
+			)
+		},
+		func(bytes, rows, retainedMemory int64) {
+			ap.OpAnalyzer.Spill(bytes)
+			ap.OpAnalyzer.SpillRows(rows)
+			ap.OpAnalyzer.SetMemUsed(retainedMemory)
+		},
+	)
+	if err = exec.GroupGrow(groupCount); err != nil {
+		return nil, err
+	}
+	succeeded = true
+	return exec, nil
+}
+
+func (ctr *container) processAggregateFuncRange(
+	idx int,
+	ap *Window,
+	proc *process.Process,
+	outputStart int,
+	outputEnd int,
+) (*vector.Vector, error) {
+	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
+	frame := ctr.frameAt(idx, w.Frame)
+	if orderedSetWindowAggregate(w.Name) && fullPartitionWindowFrame(frame) {
+		return ctr.processOrderedSetFullPartitionRange(
+			idx, ap, proc, outputStart, outputEnd)
+	}
+
+	if err := ctr.makeAggregateExecutor(idx, ap, proc, outputEnd-outputStart); err != nil {
+		return nil, err
+	}
+	defer ctr.freeAggFun()
+
+	if cumulativeRowsFrame(frame, ctr.ps, ctr.bat.RowCount()) &&
+		aggexec.MergePreservesSource(ctr.batAggs[idx]) {
+		return ctr.processCumulativeAggregateFuncRange(idx, ap, proc, outputStart, outputEnd)
+	}
+	if (boundedSlidingRowsFrame(frame) || boundedSlidingRangeFrame(frame, ctr.orderVecs)) &&
+		aggexec.MergePreservesSource(ctr.batAggs[idx]) &&
+		aggexec.SupportsWindowSliding(ctr.batAggs[idx]) {
+		return ctr.processSlidingAggregateFuncRange(idx, ap, proc, outputStart, outputEnd, frame)
+	}
+
+	n := ctr.bat.RowCount()
+	for j := outputStart; j < outputEnd; j++ {
+		if err := checkCanceled(proc, j-outputStart); err != nil {
+			return nil, err
+		}
+
+		partitionStart, partitionEnd := 0, n
+		if ctr.ps != nil {
+			partitionStart, partitionEnd = buildPartitionInterval(ctr.ps, j, n)
+		}
+
+		left, right, selection, err := ctr.buildIntervalRows(
+			proc, j, partitionStart, partitionEnd, frame)
+		if err != nil {
+			return nil, err
+		}
+		if selection == nil && (right < partitionStart || left > partitionEnd || left >= right) {
+			continue
+		}
+		left = max(left, partitionStart)
+		right = min(right, partitionEnd)
+
+		group := j - outputStart
+		if selection == nil {
+			for k := left; k < right; k++ {
+				if err = checkCanceled(proc, k-left); err != nil {
+					return nil, err
+				}
+				if err = ctr.batAggs[idx].Fill(group, k, ctr.aggVecs[idx].Vec); err != nil {
+					return nil, err
+				}
+			}
+		} else {
+			iteration := 0
+			for _, span := range selection.spans {
+				for frameRow := span.start; frameRow < span.end; frameRow++ {
+					if err = checkCanceled(proc, iteration); err != nil {
+						return nil, err
+					}
+					iteration++
+					if err = ctr.batAggs[idx].Fill(group, frameRow, ctr.aggVecs[idx].Vec); err != nil {
+						return nil, err
+					}
+				}
+			}
+		}
+	}
+
+	vecs, err := aggexec.FlushWithContext(proc.Ctx, ctr.batAggs[idx])
+	if err != nil {
+		return nil, err
+	}
+	// groupCount is bounded by DefaultBatchSize (the aggregate chunk size),
+	// so this is normally the zero-copy one-vector path. Keep the merge for
+	// defensive compatibility with aggregate implementations that split early.
+	vec, err := aggexec.MergeSplitResult(vecs, proc.Mp())
+	if err != nil {
+		return nil, err
+	}
+	aggexec.ReportGroupConcatWarnings(ctr.batAggs[idx], proc.GetWarningSink())
+	// Aggregate state initializes its physical capacity as NULL. Keep only
+	// logical-row nulls so downstream HasNull checks do not see an unused tail.
+	nulls.RemoveRange(vec.GetNulls(), uint64(vec.Length()), math.MaxUint64)
+	return vec, nil
+}
+
+func orderedSetWindowAggregate(name string) bool {
+	return strings.EqualFold(name, "median") ||
+		strings.EqualFold(name, "approx_percentile") ||
+		strings.EqualFold(name, "percentile_cont") ||
+		strings.EqualFold(name, "percentile_disc")
+}
+
+func fullPartitionWindowFrame(frame *plan.FrameClause) bool {
+	return frame != nil && frame.Start != nil && frame.End != nil &&
+		frame.Start.Type == plan.FrameBound_PRECEDING && frame.Start.UnBounded &&
+		frame.End.Type == plan.FrameBound_FOLLOWING && frame.End.UnBounded
+}
+
+// processOrderedSetFullPartitionRange evaluates one aggregate state per
+// partition and broadcasts its result to the output rows in that partition.
+// The compact result vector is retained across bounded output chunks and is
+// released after the final chunk (or by Reset/Free on early termination). The
+// ordinary frame evaluator allocates one state per output row; for exact
+// percentiles over a full partition that would retain the same ordered values
+// repeatedly and turn a linear input into quadratic resident state.
+func (ctr *container) processOrderedSetFullPartitionRange(
+	idx int,
+	ap *Window,
+	proc *process.Process,
+	outputStart int,
+	outputEnd int,
+) (_ *vector.Vector, retErr error) {
+	n := ctr.bat.RowCount()
+	if outputStart != ctr.orderedSetNextRow {
+		ctr.freeOrderedSetPartitionResults(proc.Mp())
+		return nil, moerr.NewInternalErrorNoCtx("ordered-set window output is not sequential")
+	}
+	defer func() {
+		if retErr != nil {
+			ctr.freeOrderedSetPartitionResults(proc.Mp())
+		}
+	}()
+
+	if ctr.orderedSetPartitionResults == nil {
+		partitionCount := 1
+		if len(ctr.ps) > 0 {
+			partitionCount = len(ctr.ps)
+		}
+		if err := ctr.makeAggregateExecutor(idx, ap, proc, partitionCount); err != nil {
+			return nil, err
+		}
+		defer ctr.freeAggFun()
+
+		for group := 0; group < partitionCount; group++ {
+			start := 0
+			if len(ctr.ps) > 0 {
+				start = int(ctr.ps[group])
+			}
+			end := partitionEnd(ctr.ps, group, n)
+			if start < 0 || end <= start || end > n {
+				return nil, moerr.NewInternalErrorNoCtx("invalid full-partition window interval")
+			}
+			for row := start; row < end; row++ {
+				if err := checkCanceled(proc, row-start); err != nil {
+					return nil, err
+				}
+				if err := ctr.batAggs[idx].Fill(group, row, ctr.aggVecs[idx].Vec); err != nil {
+					return nil, err
+				}
+			}
+		}
+
+		vecs, err := aggexec.FlushWithContext(proc.Ctx, ctr.batAggs[idx])
+		if err != nil {
+			return nil, err
+		}
+		ctr.orderedSetPartitionResults, err = aggexec.MergeSplitResult(vecs, proc.Mp())
+		if err != nil {
+			return nil, err
+		}
+		if ctr.orderedSetPartitionResults.Length() != partitionCount {
+			return nil, moerr.NewInternalErrorNoCtx("ordered-set partition result count mismatch")
+		}
+	}
+
+	result := vector.NewVec(*ctr.orderedSetPartitionResults.GetType())
+	defer func() {
+		if retErr != nil {
+			result.Free(proc.Mp())
+		}
+	}()
+	for row := outputStart; row < outputEnd; {
+		group := ctr.orderedSetPartition
+		start := 0
+		if len(ctr.ps) > 0 {
+			if group >= len(ctr.ps) {
+				return nil, moerr.NewInternalErrorNoCtx("ordered-set partition cache exhausted")
+			}
+			start = int(ctr.ps[group])
+		}
+		end := partitionEnd(ctr.ps, group, n)
+		if row < start || row >= end {
+			return nil, moerr.NewInternalErrorNoCtx("invalid ordered-set partition cache position")
+		}
+		visibleEnd := min(end, outputEnd)
+		if err := result.UnionMulti(
+			ctr.orderedSetPartitionResults, int64(group), visibleEnd-row, proc.Mp()); err != nil {
+			return nil, err
+		}
+		row = visibleEnd
+		if row == end {
+			ctr.orderedSetPartition++
+		}
+	}
+	ctr.orderedSetNextRow = outputEnd
+	if outputEnd == n {
+		ctr.freeOrderedSetPartitionResults(proc.Mp())
+	}
+	return result, nil
+}
+
+// cumulativeRowsFrame reports whether every frame in the materialized batch
+// starts at its partition boundary and ends at the current row. A finite
+// PRECEDING bound is equivalent to UNBOUNDED PRECEDING when it covers the
+// largest runtime partition.
+func cumulativeRowsFrame(frame *plan.FrameClause, partitions []int64, rowCount int) bool {
+	if frame == nil || frame.Type != plan.FrameClause_ROWS ||
+		frame.Start == nil || frame.End == nil ||
+		frame.Start.Type != plan.FrameBound_PRECEDING ||
+		frame.End.Type != plan.FrameBound_CURRENT_ROW || frame.End.UnBounded {
+		return false
+	}
+	if frame.Start.UnBounded {
+		return true
+	}
+	if frame.Start.Val == nil || frame.Start.Val.GetLit() == nil {
+		return false
+	}
+	bound, ok := frame.Start.Val.GetLit().Value.(*plan.Literal_U64Val)
+	if !ok {
+		return false
+	}
+
+	maxPartitionRows, ok := largestPartitionSize(partitions, rowCount)
+	if !ok {
+		return false
+	}
+	if maxPartitionRows <= 1 {
+		return true
+	}
+	return bound.U64Val >= uint64(maxPartitionRows-1)
+}
+
+// boundedSlidingRowsFrame recognizes the finite ROWS shape whose left and
+// right edges each advance monotonically by one row. Aggregates that expose an
+// exact inverse can evaluate it with one add and one remove per output row.
+func boundedSlidingRowsFrame(frame *plan.FrameClause) bool {
+	if frame == nil || frame.Type != plan.FrameClause_ROWS ||
+		frame.Start == nil || frame.End == nil ||
+		frame.Start.Type != plan.FrameBound_PRECEDING || frame.Start.UnBounded ||
+		frame.End.Type != plan.FrameBound_CURRENT_ROW || frame.End.UnBounded ||
+		frame.Start.Val == nil || frame.Start.Val.GetLit() == nil {
+		return false
+	}
+	_, ok := frame.Start.Val.GetLit().Value.(*plan.Literal_U64Val)
+	return ok
+}
+
+// boundedSlidingRangeFrame recognizes a contiguous, finite RANGE frame whose
+// boundaries move monotonically and which always contains the current peer
+// group. Floating-point order keys stay on the ordinary evaluator because NaN
+// ordering is not suitable for inverse aggregation. TIMESTAMP stays there too:
+// session-civil frames can be disjoint across a daylight-saving-time fold.
+func boundedSlidingRangeFrame(frame *plan.FrameClause, orderVecs []colexec.ExprEvalVector) bool {
+	if frame == nil || frame.Type != plan.FrameClause_RANGE ||
+		frame.Start == nil || frame.End == nil ||
+		len(orderVecs) != 1 || len(orderVecs[0].Vec) != 1 || orderVecs[0].Vec[0] == nil ||
+		!finiteRangeStart(frame.Start) || !finiteRangeEnd(frame.End) {
+		return false
+	}
+
+	switch orderVecs[0].Vec[0].GetType().Oid {
+	case types.T_bit,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_decimal64, types.T_decimal128,
+		types.T_date, types.T_datetime, types.T_time:
+		return true
+	default:
+		return false
+	}
+}
+
+func finiteRangeStart(bound *plan.FrameBound) bool {
+	switch bound.Type {
+	case plan.FrameBound_CURRENT_ROW:
+		return !bound.UnBounded
+	case plan.FrameBound_PRECEDING:
+		return !bound.UnBounded && bound.Val != nil
+	default:
+		return false
+	}
+}
+
+func finiteRangeEnd(bound *plan.FrameBound) bool {
+	switch bound.Type {
+	case plan.FrameBound_CURRENT_ROW:
+		return !bound.UnBounded
+	case plan.FrameBound_FOLLOWING:
+		return !bound.UnBounded && bound.Val != nil
+	default:
+		return false
+	}
+}
+
+func largestPartitionSize(partitions []int64, rowCount int) (int, bool) {
+	if rowCount < 0 {
+		return 0, false
+	}
+	if len(partitions) == 0 {
+		return rowCount, true
+	}
+	if partitions[0] != 0 {
+		return 0, false
+	}
+
+	maxRows := 0
+	for i, start := range partitions {
+		end := int64(rowCount)
+		if i+1 < len(partitions) {
+			end = partitions[i+1]
+		}
+		if start < 0 || end <= start || end > int64(rowCount) {
+			return 0, false
+		}
+		maxRows = max(maxRows, int(end-start))
+	}
+	return maxRows, true
+}
+
+func partitionEnd(partitions []int64, partition int, rowCount int) int {
+	if len(partitions) == 0 || partition+1 >= len(partitions) {
+		return rowCount
+	}
+	return int(partitions[partition+1])
+}
+
+// cumulativePartitionUsesRunning compares the prefix Fill calls saved by a
+// running aggregate with the AggBatchSize physical state chunk initialized for
+// that partition. Small partitions stay on the direct evaluator; large
+// partitions use one running state. Evaluating this per partition avoids both
+// allocation churn on high-cardinality inputs and quadratic work in mixed
+// inputs that contain a few large partitions.
+func cumulativePartitionUsesRunning(start, end int) bool {
+	rows := end - start
+	if rows <= 1 {
+		return false
+	}
+	savedFills := uint64(rows) * uint64(rows-1) / 2
+	return savedFills > uint64(aggexec.AggBatchSize)
+}
+
+// processCumulativeAggregateFuncRange evaluates small partitions directly and
+// advances one retained aggregate state for each large partition. The running
+// state changes large cumulative aggregates from O(partitionRows^2) Fill calls
+// to O(partitionRows), while remaining valid across output chunks.
+func (ctr *container) processCumulativeAggregateFuncRange(
+	idx int,
+	ap *Window,
+	proc *process.Process,
+	outputStart int,
+	outputEnd int,
+) (_ *vector.Vector, retErr error) {
+	if outputStart != ctr.runningNextRow {
+		ctr.freeRunningAgg()
+		return nil, moerr.NewInternalErrorNoCtx("cumulative window output is not sequential")
+	}
+	defer func() {
+		if retErr != nil {
+			ctr.freeRunningAgg()
+		}
+	}()
+
+	n := ctr.bat.RowCount()
+	currentPartitionStart := 0
+	if len(ctr.ps) > 0 {
+		currentPartitionStart = int(ctr.ps[ctr.runningPartition])
+	}
+	currentPartitionEnd := partitionEnd(ctr.ps, ctr.runningPartition, n)
+	for j := outputStart; j < outputEnd; j++ {
+		if err := checkCanceled(proc, j-outputStart); err != nil {
+			return nil, err
+		}
+		if j == currentPartitionEnd {
+			if ctr.runningAgg != nil {
+				ctr.runningAgg.Free()
+				ctr.runningAgg = nil
+			}
+			ctr.runningPartition++
+			currentPartitionStart = j
+			currentPartitionEnd = partitionEnd(ctr.ps, ctr.runningPartition, n)
+		}
+
+		group := j - outputStart
+		if cumulativePartitionUsesRunning(currentPartitionStart, currentPartitionEnd) {
+			if ctr.runningAgg == nil {
+				ctr.runningAgg, retErr = ctr.newAggregateExecutor(idx, ap, proc, 1)
+				if retErr != nil {
+					return nil, retErr
+				}
+			}
+			if err := ctr.runningAgg.Fill(0, j, ctr.aggVecs[idx].Vec); err != nil {
+				return nil, err
+			}
+			if err := ctr.batAggs[idx].Merge(ctr.runningAgg, group, 0); err != nil {
+				return nil, err
+			}
+		} else {
+			for k := currentPartitionStart; k <= j; k++ {
+				if err := checkCanceled(proc, k-currentPartitionStart); err != nil {
+					return nil, err
+				}
+				if err := ctr.batAggs[idx].Fill(group, k, ctr.aggVecs[idx].Vec); err != nil {
+					return nil, err
+				}
+			}
+		}
+		ctr.runningNextRow = j + 1
+	}
+
+	vecs, err := aggexec.FlushWithContext(proc.Ctx, ctr.batAggs[idx])
+	if err != nil {
+		return nil, err
+	}
+	vec, err := aggexec.MergeSplitResult(vecs, proc.Mp())
+	if err != nil {
+		return nil, err
+	}
+	aggexec.ReportGroupConcatWarnings(ctr.batAggs[idx], proc.GetWarningSink())
+	nulls.RemoveRange(vec.GetNulls(), uint64(vec.Length()), math.MaxUint64)
+	if outputEnd == n {
+		ctr.freeRunningAgg()
+	}
+	return vec, nil
+}
+
+// processSlidingAggregateFuncRange retains one aggregate for a bounded ROWS or
+// RANGE frame. Each boundary change adds the new right edge and removes the
+// expired left edge, reducing bounded SUM/AVG evaluation from O(N*W) to O(N).
+// RANGE peers share boundaries, so their binary searches and state changes are
+// performed once per peer group rather than once per output row.
+func (ctr *container) processSlidingAggregateFuncRange(
+	idx int,
+	ap *Window,
+	proc *process.Process,
+	outputStart int,
+	outputEnd int,
+	frame *plan.FrameClause,
+) (_ *vector.Vector, retErr error) {
+	if outputStart != ctr.runningNextRow {
+		ctr.freeRunningAgg()
+		return nil, moerr.NewInternalErrorNoCtx("sliding window output is not sequential")
+	}
+	defer func() {
+		if retErr != nil {
+			ctr.freeRunningAgg()
+		}
+	}()
+
+	if ctr.runningAgg == nil {
+		ctr.runningAgg, retErr = ctr.newAggregateExecutor(idx, ap, proc, 1)
+		if retErr != nil {
+			return nil, retErr
+		}
+		if !aggexec.SupportsWindowSliding(ctr.runningAgg) {
+			return nil, moerr.NewInternalErrorNoCtx("running aggregate does not support sliding windows")
+		}
+	}
+
+	n := ctr.bat.RowCount()
+	partitionStart := 0
+	if len(ctr.ps) > 0 {
+		partitionStart = int(ctr.ps[ctr.runningPartition])
+	}
+	currentPartitionEnd := partitionEnd(ctr.ps, ctr.runningPartition, n)
+	edgeWork := 0
+	for j := outputStart; j < outputEnd; j++ {
+		if err := checkCanceled(proc, j-outputStart); err != nil {
+			return nil, err
+		}
+		if j == currentPartitionEnd {
+			ctr.runningAgg.Free()
+			ctr.runningAgg, retErr = ctr.newAggregateExecutor(idx, ap, proc, 1)
+			if retErr != nil {
+				return nil, retErr
+			}
+			ctr.runningPartition++
+			partitionStart = j
+			currentPartitionEnd = partitionEnd(ctr.ps, ctr.runningPartition, n)
+			ctr.runningLeft = partitionStart
+			ctr.runningRight = partitionStart
+			ctr.runningPeerEnd = partitionStart
+		}
+
+		if frame.Type != plan.FrameClause_RANGE || j >= ctr.runningPeerEnd {
+			left, right, err := ctr.buildInterval(proc, j, partitionStart, currentPartitionEnd, frame)
+			if err != nil {
+				return nil, err
+			}
+			left = max(left, partitionStart)
+			right = min(right, currentPartitionEnd)
+			if left < ctr.runningLeft || right < ctr.runningRight || left >= right {
+				return nil, moerr.NewInternalErrorNoCtx("invalid sliding window interval")
+			}
+
+			for row := ctr.runningLeft; row < left; row++ {
+				if err = checkCanceled(proc, edgeWork); err != nil {
+					return nil, err
+				}
+				edgeWork++
+				if err = aggexec.RemoveWindowRow(ctr.runningAgg, row, ctr.aggVecs[idx].Vec); err != nil {
+					return nil, err
+				}
+			}
+			for row := ctr.runningRight; row < right; row++ {
+				if err = checkCanceled(proc, edgeWork); err != nil {
+					return nil, err
+				}
+				edgeWork++
+				if err = aggexec.AddWindowRow(ctr.runningAgg, row, ctr.aggVecs[idx].Vec); err != nil {
+					return nil, err
+				}
+			}
+			ctr.runningLeft = left
+			ctr.runningRight = right
+			if frame.Type == plan.FrameClause_RANGE {
+				_, ctr.runningPeerEnd = buildPeerInterval(ctr.os, j, partitionStart, currentPartitionEnd)
+				if ctr.runningPeerEnd <= j {
+					return nil, moerr.NewInternalErrorNoCtx("invalid sliding window peer interval")
+				}
+			}
+		}
+		if err := ctr.batAggs[idx].Merge(ctr.runningAgg, j-outputStart, 0); err != nil {
+			return nil, err
+		}
+		ctr.runningNextRow = j + 1
+	}
+
+	vecs, err := aggexec.FlushWithContext(proc.Ctx, ctr.batAggs[idx])
+	if err != nil {
+		return nil, err
+	}
+	vec, err := aggexec.MergeSplitResult(vecs, proc.Mp())
+	if err != nil {
+		return nil, err
+	}
+	aggexec.ReportGroupConcatWarnings(ctr.batAggs[idx], proc.GetWarningSink())
+	nulls.RemoveRange(vec.GetNulls(), uint64(vec.Length()), math.MaxUint64)
+	if outputEnd == n {
+		ctr.freeRunningAgg()
+	}
+	return vec, nil
+}
+
+func (ctr *container) processOrderFuncRange(
+	idx int,
+	ap *Window,
+	proc *process.Process,
+	outputStart int,
+	outputEnd int,
+) (*vector.Vector, error) {
+	n := ctr.bat.RowCount()
+	funcName := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W.Name
+
+	if funcName == "percent_rank" || funcName == "cume_dist" {
+		values := make([]float64, outputEnd-outputStart)
+		peerIndex, peerStart, peerEnd := peerInterval(ctr.os, outputStart, n)
+		for j := outputStart; j < outputEnd; j++ {
+			if err := checkCanceled(proc, j-outputStart); err != nil {
+				return nil, err
+			}
+			for j >= peerEnd {
+				peerIndex++
+				peerStart = peerEnd
+				peerEnd = n
+				if peerIndex+1 < len(ctr.os) {
+					peerEnd = int(ctr.os[peerIndex+1])
+				}
+			}
+			if funcName == "percent_rank" {
+				if n > 1 {
+					values[j-outputStart] = float64(peerStart) / float64(n-1)
+				}
+			} else {
+				values[j-outputStart] = float64(peerEnd) / float64(n)
+			}
+		}
+		vec := vector.NewVec(types.T_float64.ToType())
+		if err := vector.AppendFixedList(vec, values, nil, proc.Mp()); err != nil {
+			vec.Free(proc.Mp())
+			return nil, err
+		}
+		return vec, nil
+	}
+	switch funcName {
+	case "row_number":
+		values := make([]uint64, outputEnd-outputStart)
+		for j := outputStart; j < outputEnd; j++ {
+			if err := checkCanceled(proc, j-outputStart); err != nil {
+				return nil, err
+			}
+			partitionStart := 0
+			if ctr.ps != nil {
+				partitionStart, _ = buildPartitionInterval(ctr.ps, j, n)
+			}
+			values[j-outputStart] = uint64(j - partitionStart + 1)
+		}
+		vec := vector.NewVec(types.T_uint64.ToType())
+		if err := vector.AppendFixedList(vec, values, nil, proc.Mp()); err != nil {
+			vec.Free(proc.Mp())
+			return nil, err
+		}
+		return vec, nil
+	case "ntile":
+		values := make([]int64, outputEnd-outputStart)
+		bucketCount, err := ctr.ntileBucketCount(idx)
+		if err != nil {
+			return nil, err
+		}
+		for j := outputStart; j < outputEnd; j++ {
+			if err := checkCanceled(proc, j-outputStart); err != nil {
+				return nil, err
+			}
+			values[j-outputStart] = ntileBucket(int64(j), int64(n), bucketCount)
+		}
+		vec := vector.NewVec(types.T_int64.ToType())
+		if err := vector.AppendFixedList(vec, values, nil, proc.Mp()); err != nil {
+			vec.Free(proc.Mp())
+			return nil, err
+		}
+		return vec, nil
+	case "rank", "dense_rank":
+		values := make([]uint64, outputEnd-outputStart)
+		peerIndex, peerStart, peerEnd := peerInterval(ctr.os, outputStart, n)
+		for j := outputStart; j < outputEnd; j++ {
+			if err := checkCanceled(proc, j-outputStart); err != nil {
+				return nil, err
+			}
+			for j >= peerEnd {
+				peerIndex++
+				peerStart = peerEnd
+				peerEnd = n
+				if peerIndex+1 < len(ctr.os) {
+					peerEnd = int(ctr.os[peerIndex+1])
+				}
+			}
+			partitionStart := 0
+			if ctr.ps != nil {
+				partitionStart, _ = buildPartitionInterval(ctr.ps, j, n)
+			}
+			if funcName == "rank" {
+				values[j-outputStart] = uint64(peerStart - partitionStart + 1)
+			} else {
+				partitionPeerIndex, _, _ := peerInterval(ctr.os, partitionStart, n)
+				values[j-outputStart] = uint64(peerIndex - partitionPeerIndex + 1)
+			}
+		}
+		vec := vector.NewVec(types.T_uint64.ToType())
+		if err := vector.AppendFixedList(vec, values, nil, proc.Mp()); err != nil {
+			vec.Free(proc.Mp())
+			return nil, err
+		}
+		return vec, nil
+	default:
+		return nil, moerr.NewInternalErrorNoCtxf("unsupported order window function: %s", funcName)
+	}
+}
+
+func peerInterval(boundaries []int64, row int, rowCount int) (index, start, end int) {
+	if len(boundaries) == 0 {
+		return 0, 0, rowCount
+	}
+	lo, hi := 0, len(boundaries)
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		if boundaries[mid] <= int64(row) {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	index = max(0, lo-1)
+	start = int(boundaries[index])
+	end = rowCount
+	if index+1 < len(boundaries) {
+		end = int(boundaries[index+1])
+	}
+	return index, start, end
+}
+
+func (ctr *container) ntileBucketCount(idx int) (int64, error) {
+	if idx >= len(ctr.aggVecs) || len(ctr.aggVecs[idx].Vec) == 0 {
+		return 1, nil
+	}
+	vec := ctr.aggVecs[idx].Vec[0]
+	if vec.Length() == 0 {
+		return 1, nil
+	}
+	if vec.IsNull(0) {
+		return 0, moerr.NewInvalidInputNoCtx("ntile bucket count cannot be NULL")
+	}
+	bucketCount, ok := getInt64FromVec(vec, 0)
+	if !ok {
+		return 0, moerr.NewInternalErrorNoCtx("ntile bucket count must be integer type")
+	}
+	if bucketCount <= 0 {
+		return 0, moerr.NewInternalErrorNoCtx("ntile bucket count must be positive")
+	}
+	return bucketCount, nil
+}
+
+func ntileBucket(row, rowCount, bucketCount int64) int64 {
+	regularSize := rowCount / bucketCount
+	largerBuckets := rowCount % bucketCount
+	largerSize := regularSize + 1
+	largerRows := largerBuckets * largerSize
+	if row < largerRows {
+		return row/largerSize + 1
+	}
+	// When there are more buckets than rows, every emitted row belongs to
+	// one of the larger buckets and the division below is unreachable.
+	return largerBuckets + (row-largerRows)/regularSize + 1
 }
 
 // processValueFunc handles WIN_VALUE functions (lag/lead/first_value/last_value/nth_value)
 // by directly computing results via index lookup, avoiding O(n²) frame materialization.
 func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Process) (result *vector.Vector, err error) {
-	n := ctr.bat.Vecs[0].Length()
+	return ctr.processValueFuncRange(idx, ap, proc, 0, ctr.bat.RowCount())
+}
+
+// validateLagLeadOffsets checks the complete evaluated offset vector before
+// the first output chunk is emitted. Literal offsets are rejected by the
+// binder; this pass covers prepared parameters and row-dependent expressions.
+func (ctr *container) validateLagLeadOffsets(idx int, ap *Window, proc *process.Process) error {
+	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
+	if (w.Name != "lag" && w.Name != "lead") ||
+		idx >= len(ctr.aggVecs) || len(ctr.aggVecs[idx].Vec) < 2 {
+		return nil
+	}
+
+	offsetVec := ctr.aggVecs[idx].Vec[1]
+	rows := offsetVec.Length()
+	if offsetVec.IsConst() && rows > 1 {
+		rows = 1
+	}
+	for row := 0; row < rows; row++ {
+		if err := checkCanceled(proc, row); err != nil {
+			return err
+		}
+		if _, err := getLagLeadOffsetFromVec(proc.Ctx, w.Name, offsetVec, row); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (ctr *container) processValueFuncRange(
+	idx int,
+	ap *Window,
+	proc *process.Process,
+	outputStart int,
+	outputEnd int,
+) (result *vector.Vector, err error) {
+	n := ctr.bat.RowCount()
 	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
 	funcName := w.Name
 
 	// aggVecs already evaluated by caller (eval case in Call)
 	srcVec := ctr.aggVecs[idx].Vec[0] // the expression column
-	retType := types.New(types.T(w.WindowFunc.Typ.Id), w.WindowFunc.Typ.Width, w.WindowFunc.Typ.Scale)
+	retType := types.NewWithCharset(
+		types.T(w.WindowFunc.Typ.Id), w.WindowFunc.Typ.Width, w.WindowFunc.Typ.Scale,
+		uint8(w.WindowFunc.Typ.Charset),
+	)
 	localResult := vector.NewVec(retType)
 	defer func() {
 		if err != nil && localResult != nil {
@@ -378,38 +1364,41 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 	switch funcName {
 	case "lag":
 		var offsetVec *vector.Vector
-		constOffset, constOK := int64(1), true
+		constOffset := int64(1)
 		if len(ctr.aggVecs[idx].Vec) >= 2 {
 			offsetVec = ctr.aggVecs[idx].Vec[1]
 			if offsetVec.IsConst() {
-				constOffset, constOK = getInt64FromVec(offsetVec, 0)
+				constOffset, err = getLagLeadOffsetFromVec(proc.Ctx, funcName, offsetVec, 0)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 		var defaultVec *vector.Vector
 		if len(ctr.aggVecs[idx].Vec) >= 3 {
 			defaultVec = ctr.aggVecs[idx].Vec[2]
 		}
-		for j := 0; j < n; j++ {
-			offset, ok := constOffset, constOK
-			if offsetVec != nil && !offsetVec.IsConst() {
-				offset, ok = getInt64FromVec(offsetVec, j)
+		for j := outputStart; j < outputEnd; j++ {
+			if err = checkCanceled(proc, j-outputStart); err != nil {
+				return nil, err
 			}
-			if !ok || offset < 0 {
-				if err := appendDefaultOrNull(localResult, defaultVec, j, proc.Mp()); err != nil {
+			offset := constOffset
+			if offsetVec != nil && !offsetVec.IsConst() {
+				offset, err = getLagLeadOffsetFromVec(proc.Ctx, funcName, offsetVec, j)
+				if err != nil {
 					return nil, err
 				}
-				continue
 			}
 			start, _ := 0, n
 			if ctr.ps != nil {
 				start, _ = buildPartitionInterval(ctr.ps, j, n)
 			}
-			srcRow := j - int(offset)
-			if srcRow < start {
+			if offset > int64(j-start) {
 				if err := appendDefaultOrNull(localResult, defaultVec, j, proc.Mp()); err != nil {
 					return nil, err
 				}
 			} else {
+				srcRow := j - int(offset)
 				if err := localResult.UnionOne(srcVec, int64(srcRow), proc.Mp()); err != nil {
 					return nil, err
 				}
@@ -418,38 +1407,41 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 
 	case "lead":
 		var offsetVec *vector.Vector
-		constOffset, constOK := int64(1), true
+		constOffset := int64(1)
 		if len(ctr.aggVecs[idx].Vec) >= 2 {
 			offsetVec = ctr.aggVecs[idx].Vec[1]
 			if offsetVec.IsConst() {
-				constOffset, constOK = getInt64FromVec(offsetVec, 0)
+				constOffset, err = getLagLeadOffsetFromVec(proc.Ctx, funcName, offsetVec, 0)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 		var defaultVec *vector.Vector
 		if len(ctr.aggVecs[idx].Vec) >= 3 {
 			defaultVec = ctr.aggVecs[idx].Vec[2]
 		}
-		for j := 0; j < n; j++ {
-			offset, ok := constOffset, constOK
-			if offsetVec != nil && !offsetVec.IsConst() {
-				offset, ok = getInt64FromVec(offsetVec, j)
+		for j := outputStart; j < outputEnd; j++ {
+			if err = checkCanceled(proc, j-outputStart); err != nil {
+				return nil, err
 			}
-			if !ok || offset < 0 {
-				if err := appendDefaultOrNull(localResult, defaultVec, j, proc.Mp()); err != nil {
+			offset := constOffset
+			if offsetVec != nil && !offsetVec.IsConst() {
+				offset, err = getLagLeadOffsetFromVec(proc.Ctx, funcName, offsetVec, j)
+				if err != nil {
 					return nil, err
 				}
-				continue
 			}
 			_, end := 0, n
 			if ctr.ps != nil {
 				_, end = buildPartitionInterval(ctr.ps, j, n)
 			}
-			srcRow := j + int(offset)
-			if srcRow >= end {
+			if offset >= int64(end-j) {
 				if err := appendDefaultOrNull(localResult, defaultVec, j, proc.Mp()); err != nil {
 					return nil, err
 				}
 			} else {
+				srcRow := j + int(offset)
 				if err := localResult.UnionOne(srcVec, int64(srcRow), proc.Mp()); err != nil {
 					return nil, err
 				}
@@ -457,12 +1449,15 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 		}
 
 	case "first_value":
-		for j := 0; j < n; j++ {
+		for j := outputStart; j < outputEnd; j++ {
+			if err = checkCanceled(proc, j-outputStart); err != nil {
+				return nil, err
+			}
 			start, end := 0, n
 			if ctr.ps != nil {
 				start, end = buildPartitionInterval(ctr.ps, j, n)
 			}
-			left, right, err := ctr.buildInterval(j, start, end, w.Frame)
+			left, right, selection, err := ctr.buildIntervalRows(proc, j, start, end, ctr.frameAt(idx, w.Frame))
 			if err != nil {
 				return nil, err
 			}
@@ -471,6 +1466,16 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 			}
 			if right > end {
 				right = end
+			}
+			if selection != nil {
+				if len(selection.spans) == 0 {
+					if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
+						return nil, err
+					}
+				} else if err := localResult.UnionOne(srcVec, int64(selection.spans[0].start), proc.Mp()); err != nil {
+					return nil, err
+				}
+				continue
 			}
 			if left >= right {
 				if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
@@ -484,12 +1489,15 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 		}
 
 	case "last_value":
-		for j := 0; j < n; j++ {
+		for j := outputStart; j < outputEnd; j++ {
+			if err = checkCanceled(proc, j-outputStart); err != nil {
+				return nil, err
+			}
 			start, end := 0, n
 			if ctr.ps != nil {
 				start, end = buildPartitionInterval(ctr.ps, j, n)
 			}
-			left, right, err := ctr.buildInterval(j, start, end, w.Frame)
+			left, right, selection, err := ctr.buildIntervalRows(proc, j, start, end, ctr.frameAt(idx, w.Frame))
 			if err != nil {
 				return nil, err
 			}
@@ -498,6 +1506,16 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 			}
 			if right > end {
 				right = end
+			}
+			if selection != nil {
+				if len(selection.spans) == 0 {
+					if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
+						return nil, err
+					}
+				} else if err := localResult.UnionOne(srcVec, int64(selection.spans[len(selection.spans)-1].end-1), proc.Mp()); err != nil {
+					return nil, err
+				}
+				continue
 			}
 			if left >= right {
 				if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
@@ -517,13 +1535,22 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 		if len(ctr.aggVecs[idx].Vec) >= 2 {
 			nthVec = ctr.aggVecs[idx].Vec[1]
 			if nthVec.IsConst() {
-				constNth, constOK = getInt64FromVec(nthVec, 0)
+				constNth, constOK, err = getNthValueOffsetFromVec(proc.Ctx, nthVec, 0)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
-		for j := 0; j < n; j++ {
+		for j := outputStart; j < outputEnd; j++ {
+			if err = checkCanceled(proc, j-outputStart); err != nil {
+				return nil, err
+			}
 			nthVal, ok := constNth, constOK
 			if nthVec != nil && !nthVec.IsConst() {
-				nthVal, ok = getInt64FromVec(nthVec, j)
+				nthVal, ok, err = getNthValueOffsetFromVec(proc.Ctx, nthVec, j)
+				if err != nil {
+					return nil, err
+				}
 			}
 			if !ok || nthVal < 1 {
 				if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
@@ -535,7 +1562,7 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 			if ctr.ps != nil {
 				start, end = buildPartitionInterval(ctr.ps, j, n)
 			}
-			left, right, err := ctr.buildInterval(j, start, end, w.Frame)
+			left, right, selection, err := ctr.buildIntervalRows(proc, j, start, end, ctr.frameAt(idx, w.Frame))
 			if err != nil {
 				return nil, err
 			}
@@ -545,12 +1572,23 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 			if right > end {
 				right = end
 			}
-			targetRow := left + int(nthVal) - 1
-			if left >= right || targetRow >= right {
+			if selection != nil {
+				frameRow, ok := selection.nth(int(nthVal))
+				if !ok {
+					if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
+						return nil, err
+					}
+				} else if err := localResult.UnionOne(srcVec, int64(frameRow), proc.Mp()); err != nil {
+					return nil, err
+				}
+				continue
+			}
+			if left >= right || nthVal > int64(right-left) {
 				if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
 					return nil, err
 				}
 			} else {
+				targetRow := left + int(nthVal) - 1
 				if err := localResult.UnionOne(srcVec, int64(targetRow), proc.Mp()); err != nil {
 					return nil, err
 				}
@@ -563,6 +1601,26 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 	}
 
 	return localResult, nil
+}
+
+func getNthValueOffsetFromVec(ctx context.Context, vec *vector.Vector, row int) (int64, bool, error) {
+	if !types.T(vec.GetType().Oid).IsMySQLString() {
+		value, ok := getInt64FromVec(vec, row)
+		return value, ok, nil
+	}
+
+	if vec.IsConst() {
+		row = 0
+	}
+	if vec.Length() == 0 || vec.IsNull(uint64(row)) ||
+		!vec.HasPrepareParamKind() || vec.GetPrepareParamKindAt(row) != vector.PrepareParamInteger {
+		return 0, false, moerr.NewWrongArguments(ctx, "nth_value")
+	}
+	value, err := strconv.ParseUint(vec.GetStringAt(row), 10, 63)
+	if err != nil || value == 0 {
+		return 0, false, moerr.NewWrongArguments(ctx, "nth_value")
+	}
+	return int64(value), true, nil
 }
 
 // getInt64FromVec extracts an int64 value from a vector at the given row.
@@ -597,6 +1655,17 @@ func getInt64FromVec(vec *vector.Vector, row int) (int64, bool) {
 	}
 }
 
+func getLagLeadOffsetFromVec(ctx context.Context, name string, vec *vector.Vector, row int) (int64, error) {
+	if vec.IsConst() {
+		row = 0
+	}
+	offset, ok := getInt64FromVec(vec, row)
+	if !ok || offset < 0 {
+		return 0, moerr.NewWrongArguments(ctx, name)
+	}
+	return offset, nil
+}
+
 // appendDefaultOrNull appends the default value (if provided) or NULL to the result vector.
 func appendDefaultOrNull(result *vector.Vector, defaultVec *vector.Vector, rowIdx int, mp *mpool.MPool) error {
 	if defaultVec == nil {
@@ -607,13 +1676,10 @@ func appendDefaultOrNull(result *vector.Vector, defaultVec *vector.Vector, rowId
 	if !defaultVec.IsConst() {
 		srcRow = int64(rowIdx)
 	}
-	if defaultVec.IsNull(uint64(srcRow)) {
-		return vector.AppendAny(result, nil, true, mp)
-	}
 	return result.UnionOne(defaultVec, srcRow, mp)
 }
 
-func (ctr *container) buildInterval(rowIdx, start, end int, frame *plan.FrameClause) (int, int, error) {
+func (ctr *container) buildInterval(proc *process.Process, rowIdx, start, end int, frame *plan.FrameClause) (int, int, error) {
 	// FrameClause_ROWS
 	if frame.Type == plan.FrameClause_ROWS {
 		start, end = ctr.buildRowsInterval(rowIdx, start, end, frame)
@@ -625,21 +1691,427 @@ func (ctr *container) buildInterval(rowIdx, start, end int, frame *plan.FrameCla
 	}
 
 	// FrameClause_Range
-	return ctr.buildRangeInterval(rowIdx, start, end, frame)
+	return ctr.buildRangeIntervalWithLocation(windowSessionLocation(proc), rowIdx, start, end, frame)
+}
+
+// buildIntervalRows retains the fast contiguous interval representation for
+// ordinary RANGE frames. A TIMESTAMP frame whose session-civil bounds cross a
+// fall-back fold instead returns its qualifying spans in window order: local
+// civil membership can then be split into multiple instant-sorted spans.
+func (ctr *container) buildIntervalRows(
+	proc *process.Process,
+	rowIdx, start, end int,
+	frame *plan.FrameClause,
+) (left, right int, selection *timestampRangeSelection, err error) {
+	left, right, err = ctr.buildInterval(proc, rowIdx, start, end, frame)
+	if err != nil || frame.Type != plan.FrameClause_RANGE || len(ctr.orderVecs) != 1 {
+		return left, right, nil, err
+	}
+
+	vec := ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0]
+	loc := windowSessionLocation(proc)
+	selection, err = ctr.timestampRangeSelection(proc, loc, rowIdx, start, end, vec, frame)
+	return left, right, selection, err
+}
+
+func (ctr *container) timestampRangeSelection(
+	proc *process.Process,
+	loc *time.Location,
+	rowIdx, start, end int,
+	vec *vector.Vector,
+	frame *plan.FrameClause,
+) (*timestampRangeSelection, error) {
+	// A const vector stores one physical value for all logical rows. It cannot
+	// cross a timezone transition, so the ordinary RANGE path already has the
+	// complete peer interval and fold indexing must not address it by logical
+	// row position.
+	if vec.GetType().Oid != types.T_timestamp || vec.IsConst() || vec.GetNulls().Contains(uint64(rowIdx)) {
+		return nil, nil
+	}
+	index, err := ctr.timestampCivilOrderIndex(proc, loc, start, end, vec, ctr.rangeDescending())
+	if err != nil || !index.hasFold {
+		return nil, err
+	}
+
+	desc := ctr.rangeDescending()
+	startBoundary, hasStart, err := timestampRangeCivilBoundary(loc, vec, rowIdx, frame.Start, desc)
+	if err != nil {
+		return nil, err
+	}
+	endBoundary, hasEnd, err := timestampRangeCivilBoundary(loc, vec, rowIdx, frame.End, desc)
+	if err != nil {
+		return nil, err
+	}
+
+	// RANGE bounds are expressed in ORDER BY direction. Convert finite bounds
+	// into the natural civil-time order used for membership; an unbounded side
+	// remains open. This matters at a fall-back fold, where (for example)
+	// UNBOUNDED PRECEDING ... CURRENT ROW is not necessarily an instant prefix.
+	var low, high types.Datetime
+	hasLow, hasHigh := false, false
+	if hasStart && hasEnd {
+		low, high = startBoundary, endBoundary
+		if low > high {
+			low, high = high, low
+		}
+		hasLow, hasHigh = true, true
+	} else if hasStart {
+		if desc {
+			high, hasHigh = startBoundary, true
+		} else {
+			low, hasLow = startBoundary, true
+		}
+	} else if hasEnd {
+		if desc {
+			low, hasLow = endBoundary, true
+		} else {
+			high, hasHigh = endBoundary, true
+		}
+	}
+
+	if !hasLow && !hasHigh {
+		return nil, nil
+	}
+
+	selection := &timestampRangeSelection{}
+	// The civil spans deliberately omit NULL order keys. A NULL peer can still
+	// belong to a frame with an unbounded side: it is included only when that
+	// side reaches the NULL end of the already sorted window order.
+	nullsLast := ctr.rangeNullsLast()
+	if frame.Start.UnBounded && !nullsLast && index.nullPrefixEnd > start {
+		selection.spans = append(selection.spans, timestampCivilOrderSpan{start: start, end: index.nullPrefixEnd})
+	}
+	for _, span := range index.spans {
+		left, right := timestampCivilSpanBounds(vec, loc, span, desc, low, hasLow, high, hasHigh)
+		if left < right {
+			selection.spans = append(selection.spans, timestampCivilOrderSpan{start: left, end: right})
+		}
+	}
+	if frame.End.UnBounded && nullsLast && index.nullSuffixStart < end {
+		selection.spans = append(selection.spans, timestampCivilOrderSpan{start: index.nullSuffixStart, end: end})
+	}
+	return selection, nil
+}
+
+func (ctr *container) rangeDescending() bool {
+	return len(ctr.desc) > 0 && ctr.desc[len(ctr.desc)-1]
+}
+
+func (ctr *container) rangeNullsLast() bool {
+	return len(ctr.nullsLast) > 0 && ctr.nullsLast[len(ctr.nullsLast)-1]
+}
+
+func (ctr *container) timestampCivilOrderIndex(
+	proc *process.Process,
+	loc *time.Location,
+	start, end int,
+	vec *vector.Vector,
+	desc bool,
+) (*timestampCivilOrderIndex, error) {
+	key := timestampCivilOrderKey{vec: vec, loc: loc, start: start, end: end, desc: desc}
+	if index, ok := ctr.timestampCivilOrder[key]; ok {
+		return index, nil
+	}
+	if ctr.timestampCivilOrder == nil {
+		ctr.timestampCivilOrder = make(map[timestampCivilOrderKey]*timestampCivilOrderIndex)
+	}
+
+	index := &timestampCivilOrderIndex{nullPrefixEnd: start, nullSuffixStart: end}
+	col := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)
+	// A sparse vector can cross a fall-back transition without its sampled
+	// civil values reversing (01:00 EDT followed by 01:30 EST, for example).
+	// Find transitions from the instant range itself rather than inferring them
+	// solely from adjacent samples.
+	var firstTimestamp, lastTimestamp types.Timestamp
+	haveFirst, haveLast := false, false
+	for i := start; i < end; i++ {
+		if err := checkCanceled(proc, i-start); err != nil {
+			return nil, err
+		}
+		if vec.GetNulls().Contains(uint64(i)) {
+			continue
+		}
+		index.nullPrefixEnd = i
+		if col[i] == types.ZeroTimestamp {
+			continue
+		}
+		firstTimestamp, haveFirst = col[i], true
+		break
+	}
+	for i := end - 1; i >= start; i-- {
+		if err := checkCanceled(proc, end-1-i); err != nil {
+			return nil, err
+		}
+		if vec.GetNulls().Contains(uint64(i)) {
+			continue
+		}
+		index.nullSuffixStart = i + 1
+		if col[i] == types.ZeroTimestamp {
+			continue
+		}
+		lastTimestamp, haveLast = col[i], true
+		break
+	}
+	foldTransitions, err := timestampCivilFoldTransitions(proc, loc, firstTimestamp, lastTimestamp, haveFirst && haveLast)
+	if err != nil {
+		return nil, err
+	}
+	index.hasFold = len(foldTransitions) != 0
+
+	var previous types.Datetime
+	var previousTimestamp types.Timestamp
+	var previousOffset types.Datetime
+	havePrevious := false
+	spanStart := -1
+	transition := 0
+	if desc {
+		transition = len(foldTransitions) - 1
+	}
+	for i := start; i < end; i++ {
+		if err := checkCanceled(proc, i-start); err != nil {
+			return nil, err
+		}
+		if vec.GetNulls().Contains(uint64(i)) {
+			if spanStart >= 0 {
+				index.spans = append(index.spans, timestampCivilOrderSpan{start: spanStart, end: i})
+				spanStart = -1
+			}
+			havePrevious = false
+			continue
+		}
+		civil := col[i].ToDatetime(loc)
+		if spanStart < 0 {
+			spanStart = i
+		}
+		// Keep a sampled offset proof alongside the ZoneBounds-derived
+		// transition list. ZoneBounds handles sparse and recurring transitions,
+		// while an actual offset decrease between adjacent materialized rows is
+		// an independent, no-extra-scan confirmation that this input crosses a
+		// fold. In particular, it must not be lost when the civil samples happen
+		// to increase or compare equal on opposite sides of the repeated hour.
+		offset := civil - types.Datetime(col[i])
+		crossedFold := false
+		if havePrevious {
+			if !desc {
+				for transition < len(foldTransitions) && previousTimestamp < foldTransitions[transition] && col[i] >= foldTransitions[transition] {
+					crossedFold = true
+					transition++
+				}
+			} else {
+				for transition >= 0 && previousTimestamp >= foldTransitions[transition] && col[i] < foldTransitions[transition] {
+					crossedFold = true
+					transition--
+				}
+			}
+			if (!desc && offset < previousOffset) || (desc && offset > previousOffset) {
+				crossedFold = true
+				index.hasFold = true
+			}
+		}
+		civilReversed := havePrevious && ((!desc && civil < previous) || (desc && civil > previous))
+		if civilReversed {
+			index.hasFold = true
+		}
+		if havePrevious && (crossedFold || civilReversed) {
+			index.spans = append(index.spans, timestampCivilOrderSpan{start: spanStart, end: i})
+			spanStart = i
+		}
+		previous, previousTimestamp, previousOffset, havePrevious = civil, col[i], offset, true
+	}
+	if spanStart >= 0 {
+		index.spans = append(index.spans, timestampCivilOrderSpan{start: spanStart, end: end})
+	}
+	ctr.timestampCivilOrder[key] = index
+	return index, nil
+}
+
+// timestampCivilFoldTransitions returns every UTC-offset decrease in the
+// instant range. ZoneBounds follows a location's recurring rules, so this
+// remains correct for sparse inputs and for ranges beyond its explicit zone
+// transition table.
+func timestampCivilFoldTransitions(
+	proc *process.Process,
+	loc *time.Location,
+	minTimestamp, maxTimestamp types.Timestamp,
+	haveTimestamp bool,
+) ([]types.Timestamp, error) {
+	if !haveTimestamp || loc == nil || minTimestamp == types.ZeroTimestamp || maxTimestamp == types.ZeroTimestamp {
+		return nil, nil
+	}
+	if minTimestamp > maxTimestamp {
+		minTimestamp, maxTimestamp = maxTimestamp, minTimestamp
+	}
+	probe := time.UnixMicro(int64(minTimestamp) - int64(types.UnixToTimestamp(0))).In(loc)
+	maxInstant := time.UnixMicro(int64(maxTimestamp) - int64(types.UnixToTimestamp(0)))
+	var transitions []types.Timestamp
+	for i := 0; ; i++ {
+		if err := checkCanceled(proc, i); err != nil {
+			return nil, err
+		}
+		_, next := probe.ZoneBounds()
+		if next.IsZero() || next.After(maxInstant) {
+			break
+		}
+		_, beforeOffset := time.UnixMicro(next.UnixMicro() - 1).In(loc).Zone()
+		_, afterOffset := next.In(loc).Zone()
+		if afterOffset < beforeOffset {
+			transitions = append(transitions, types.UnixMicroToTimestamp(next.UnixMicro()))
+		}
+		if !next.After(probe) {
+			break
+		}
+		probe = next.In(loc)
+	}
+	return transitions, nil
+}
+
+func (selection *timestampRangeSelection) nth(n int) (int, bool) {
+	for _, span := range selection.spans {
+		if n <= span.end-span.start {
+			return span.start + n - 1, true
+		}
+		n -= span.end - span.start
+	}
+	return 0, false
+}
+
+func timestampCivilSpanBounds(
+	vec *vector.Vector,
+	loc *time.Location,
+	span timestampCivilOrderSpan,
+	desc bool,
+	low types.Datetime,
+	hasLow bool,
+	high types.Datetime,
+	hasHigh bool,
+) (int, int) {
+	col := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)
+	left, right := span.start, span.end
+	if !desc {
+		if hasLow {
+			left = timestampCivilLowerBound(col, loc, span.start, span.end, low)
+		}
+		if hasHigh {
+			right = timestampCivilUpperBound(col, loc, left, span.end, high)
+		}
+		return left, right
+	}
+	if hasHigh {
+		left = timestampCivilDescendingLowerBound(col, loc, span.start, span.end, high)
+	}
+	if hasLow {
+		right = timestampCivilDescendingUpperBound(col, loc, left, span.end, low)
+	}
+	return left, right
+}
+
+func timestampCivilLowerBound(col []types.Timestamp, loc *time.Location, left, right int, target types.Datetime) int {
+	for left < right {
+		mid := left + (right-left)/2
+		if col[mid].ToDatetime(loc) < target {
+			left = mid + 1
+		} else {
+			right = mid
+		}
+	}
+	return left
+}
+
+func timestampCivilUpperBound(col []types.Timestamp, loc *time.Location, left, right int, target types.Datetime) int {
+	for left < right {
+		mid := left + (right-left)/2
+		if col[mid].ToDatetime(loc) <= target {
+			left = mid + 1
+		} else {
+			right = mid
+		}
+	}
+	return left
+}
+
+func timestampCivilDescendingLowerBound(col []types.Timestamp, loc *time.Location, left, right int, target types.Datetime) int {
+	for left < right {
+		mid := left + (right-left)/2
+		if col[mid].ToDatetime(loc) > target {
+			left = mid + 1
+		} else {
+			right = mid
+		}
+	}
+	return left
+}
+
+func timestampCivilDescendingUpperBound(col []types.Timestamp, loc *time.Location, left, right int, target types.Datetime) int {
+	for left < right {
+		mid := left + (right-left)/2
+		if col[mid].ToDatetime(loc) >= target {
+			left = mid + 1
+		} else {
+			right = mid
+		}
+	}
+	return left
+}
+
+func timestampRangeCivilBoundary(
+	loc *time.Location,
+	vec *vector.Vector,
+	rowIdx int,
+	bound *plan.FrameBound,
+	desc bool,
+) (types.Datetime, bool, error) {
+	if bound.UnBounded {
+		return 0, false, nil
+	}
+	current := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)[rowIdx].ToDatetime(loc)
+	if bound.Type == plan.FrameBound_CURRENT_ROW {
+		return current, true, nil
+	}
+
+	diff := bound.Val.Expr.(*plan.Expr_List).List.List[0].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val
+	unit := bound.Val.Expr.(*plan.Expr_List).List.List[1].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val
+	add := bound.Type == plan.FrameBound_FOLLOWING
+	if desc {
+		add = !add
+	}
+	if add {
+		result, err := doDatetimeAdd(current, diff, unit)
+		return result, true, err
+	}
+	result, err := doDatetimeSub(current, diff, unit)
+	return result, true, err
+}
+
+func windowSessionLocation(proc *process.Process) *time.Location {
+	if proc != nil {
+		if sessionInfo := proc.GetSessionInfo(); sessionInfo != nil && sessionInfo.TimeZone != nil {
+			return sessionInfo.TimeZone
+		}
+	}
+	return time.Local
 }
 
 func (ctr *container) buildRowsInterval(rowIdx int, start, end int, frame *plan.FrameClause) (int, int) {
+	partitionStart, partitionEnd := start, end
 	switch frame.Start.Type {
 	case plan.FrameBound_CURRENT_ROW:
 		start = rowIdx
 	case plan.FrameBound_PRECEDING:
 		if !frame.Start.UnBounded {
 			pre := frame.Start.Val.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U64Val).U64Val
-			start = rowIdx - int(pre)
+			if pre >= uint64(rowIdx-partitionStart) {
+				start = partitionStart
+			} else {
+				start = rowIdx - int(pre)
+			}
 		}
 	case plan.FrameBound_FOLLOWING:
 		fol := frame.Start.Val.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U64Val).U64Val
-		start = rowIdx + int(fol)
+		if fol >= uint64(partitionEnd-rowIdx) {
+			start = partitionEnd
+		} else {
+			start = rowIdx + int(fol)
+		}
 	}
 
 	switch frame.End.Type {
@@ -647,17 +2119,29 @@ func (ctr *container) buildRowsInterval(rowIdx int, start, end int, frame *plan.
 		end = rowIdx + 1
 	case plan.FrameBound_PRECEDING:
 		pre := frame.End.Val.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U64Val).U64Val
-		end = rowIdx - int(pre) + 1
+		if pre >= uint64(rowIdx-partitionStart+1) {
+			end = partitionStart
+		} else {
+			end = rowIdx - int(pre) + 1
+		}
 	case plan.FrameBound_FOLLOWING:
 		if !frame.End.UnBounded {
 			fol := frame.End.Val.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U64Val).U64Val
-			end = rowIdx + int(fol) + 1
+			if fol >= uint64(partitionEnd-rowIdx) {
+				end = partitionEnd
+			} else {
+				end = rowIdx + int(fol) + 1
+			}
 		}
 	}
 	return start, end
 }
 
 func (ctr *container) buildRangeInterval(rowIdx int, start, end int, frame *plan.FrameClause) (int, int, error) {
+	return ctr.buildRangeIntervalWithLocation(time.Local, rowIdx, start, end, frame)
+}
+
+func (ctr *container) buildRangeIntervalWithLocation(loc *time.Location, rowIdx int, start, end int, frame *plan.FrameClause) (int, int, error) {
 	var err error
 	var desc bool
 	if len(ctr.desc) > 0 {
@@ -665,19 +2149,23 @@ func (ctr *container) buildRangeInterval(rowIdx int, start, end int, frame *plan
 	}
 	switch frame.Start.Type {
 	case plan.FrameBound_CURRENT_ROW:
-		start, err = searchLeft(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], nil, false, desc)
-		if err != nil {
-			return start, end, err
+		if len(ctr.os) > 0 || end-start <= 1 {
+			start, _ = buildPeerInterval(ctr.os, rowIdx, start, end)
+		} else {
+			start, err = searchLeftWithLocation(loc, start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], nil, false, desc)
+			if err != nil {
+				return start, end, err
+			}
 		}
 	case plan.FrameBound_PRECEDING:
 		if !frame.Start.UnBounded {
-			start, err = searchLeft(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], frame.Start.Val, false, desc)
+			start, err = searchLeftWithLocation(loc, start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], frame.Start.Val, false, desc)
 			if err != nil {
 				return start, end, err
 			}
 		}
 	case plan.FrameBound_FOLLOWING:
-		start, err = searchLeft(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], frame.Start.Val, true, desc)
+		start, err = searchLeftWithLocation(loc, start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], frame.Start.Val, true, desc)
 		if err != nil {
 			return start, end, err
 		}
@@ -685,24 +2173,51 @@ func (ctr *container) buildRangeInterval(rowIdx int, start, end int, frame *plan
 
 	switch frame.End.Type {
 	case plan.FrameBound_CURRENT_ROW:
-		end, err = searchRight(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], nil, false, desc)
-		if err != nil {
-			return start, end, err
+		if len(ctr.os) > 0 || end-start <= 1 {
+			_, end = buildPeerInterval(ctr.os, rowIdx, start, end)
+		} else {
+			end, err = searchRightWithLocation(loc, start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], nil, false, desc)
+			if err != nil {
+				return start, end, err
+			}
 		}
 	case plan.FrameBound_PRECEDING:
-		end, err = searchRight(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], frame.End.Val, true, desc)
+		end, err = searchRightWithLocation(loc, start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], frame.End.Val, true, desc)
 		if err != nil {
 			return start, end, err
 		}
 	case plan.FrameBound_FOLLOWING:
 		if !frame.End.UnBounded {
-			end, err = searchRight(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], frame.End.Val, false, desc)
+			end, err = searchRightWithLocation(loc, start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], frame.End.Val, false, desc)
 			if err != nil {
 				return start, end, err
 			}
 		}
 	}
 	return start, end, nil
+}
+
+// buildPeerInterval returns the peer group containing rowIdx. orderBoundaries
+// contains the first row of every peer group in the sorted window input.
+func buildPeerInterval(orderBoundaries []int64, rowIdx, start, end int) (int, int) {
+	low, high := 0, len(orderBoundaries)
+	for low < high {
+		mid := low + (high-low)/2
+		if orderBoundaries[mid] <= int64(rowIdx) {
+			low = mid + 1
+		} else {
+			high = mid
+		}
+	}
+
+	peerStart, peerEnd := start, end
+	if low > 0 && int(orderBoundaries[low-1]) > peerStart {
+		peerStart = int(orderBoundaries[low-1])
+	}
+	if low < len(orderBoundaries) && int(orderBoundaries[low]) < peerEnd {
+		peerEnd = int(orderBoundaries[low])
+	}
+	return peerStart, peerEnd
 }
 
 func buildPartitionInterval(ps []int64, j int, l int) (int, int) {
@@ -733,11 +2248,13 @@ func (ctr *container) evalAggVector(bat *batch.Batch, proc *process.Process) (er
 			if err != nil {
 				return err
 			}
-
 			if ctr.aggVecs[i].Vec[j] != nil {
 				ctr.aggVecs[i].Vec[j].CleanOnlyData()
 				if err = ctr.aggVecs[i].Vec[j].UnionBatch(vec, 0, vec.Length(), nil, proc.Mp()); err != nil {
 					return err
+				}
+				if !ctr.aggVecs[i].Vec[j].HasPrepareParamKind() {
+					ctr.aggVecs[i].Vec[j].SetPrepareParamKind(vec.GetPrepareParamKind())
 				}
 			} else {
 				ctr.aggVecs[i].Vec[j], err = vec.Dup(proc.Mp())
@@ -773,7 +2290,23 @@ func makeOrderBy(expr *plan.Expr) []*plan.OrderBySpec {
 	return w.OrderBy
 }
 
+func makePartitionTopNOrderBy(expr *plan.Expr) []*plan.OrderBySpec {
+	w := expr.Expr.(*plan.Expr_W).W
+	orderBy := make([]*plan.OrderBySpec, 0, len(w.PartitionBy)+len(w.OrderBy))
+	for _, partitionExpr := range w.PartitionBy {
+		orderBy = append(orderBy, &plan.OrderBySpec{
+			Expr: partitionExpr,
+			Flag: plan.OrderBySpec_INTERNAL,
+		})
+	}
+	return append(orderBy, w.OrderBy...)
+}
+
 func (ctr *container) evalOrderVector(bat *batch.Batch, proc *process.Process) (err error) {
+	// Eval reuses ctr.orderVecs' backing vectors by replacing their data below.
+	// Fold detection is derived from that data, so entries keyed by a vector
+	// pointer must never survive into the next materialized input batch.
+	ctr.timestampCivilOrder = nil
 	input := []*batch.Batch{bat}
 
 	for i := range ctr.orderVecs {
@@ -801,15 +2334,147 @@ func (ctr *container) evalOrderVector(bat *batch.Batch, proc *process.Process) (
 
 func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *process.Process) (bool, error) {
 	makeArgFs(ap)
+	ctr.ps = nil
 
 	if err := ctr.evalOrderVector(bat, proc); err != nil {
 		return false, err
 	}
+	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
+	if ap.PartitionTopN {
+		// Grouping-set sentinels are SQL NULLs to a downstream PARTITION BY.
+		// Normalize only the private order-key copies before external sorting;
+		// otherwise the sorter can compare their physical zero payload with an
+		// ordinary value (for example an empty string) and merge two partitions.
+		for i := 0; i < len(w.PartitionBy); i++ {
+			vec := ctr.orderVecs[i].Vec[0]
+			if vec.HasGrouping() {
+				vec.GetNulls().Or(vec.GetGrouping())
+				vec.SetGrouping(nil)
+			}
+		}
+	}
+
+	sortSize := int64(bat.Size())
+	for i := range ctr.aggVecs {
+		for _, vec := range ctr.aggVecs[i].Vec {
+			if vec != nil && !vec.IsConst() {
+				sortSize += int64(vec.Size())
+			}
+		}
+	}
+	for i := range ctr.orderVecs {
+		for _, vec := range ctr.orderVecs[i].Vec {
+			if vec != nil {
+				sortSize += int64(vec.Size())
+			}
+		}
+	}
+
+	externalSorted := false
+	if bat.RowCount() > 1 && sortSize > colexec.ResolveSpillThreshold(ap.SpillThreshold) {
+		var (
+			orderCols    []*vector.Vector
+			orderRefs    [][2]int
+			extraAggVecs []*vector.Vector
+			extraRefs    [][2]int
+		)
+		if len(ctr.orderVecs) != len(ap.Fs) {
+			return false, moerr.NewInternalErrorNoCtx("window order vector count mismatch")
+		}
+		for i := range ctr.orderVecs {
+			if len(ctr.orderVecs[i].Vec) != 1 || ctr.orderVecs[i].Vec[0] == nil {
+				return false, moerr.NewInternalErrorNoCtx("window order vector is missing")
+			}
+			orderCols = append(orderCols, ctr.orderVecs[i].Vec[0])
+			orderRefs = append(orderRefs, [2]int{i, 0})
+		}
+		for i := range ctr.aggVecs {
+			for j, vec := range ctr.aggVecs[i].Vec {
+				if vec == nil || vec.IsConst() {
+					continue
+				}
+				extraAggVecs = append(extraAggVecs, vec)
+				extraRefs = append(extraRefs, [2]int{i, j})
+			}
+		}
+
+		inputConsumed := func() {
+			// The sorter has copied every row into sorter-owned resident or spill
+			// state. Release the materialized source and the carried expression
+			// vectors before final merge collection so the sorted partition does
+			// not overlap a second full copy of the same window payload.
+			if ctr.bat == bat {
+				bat.Clean(proc.Mp())
+				ctr.bat = nil
+			}
+			for _, ref := range orderRefs {
+				vec := ctr.orderVecs[ref[0]].Vec[ref[1]]
+				if vec != nil {
+					vec.Free(proc.Mp())
+					ctr.orderVecs[ref[0]].Vec[ref[1]] = nil
+				}
+			}
+			for _, ref := range extraRefs {
+				vec := ctr.aggVecs[ref[0]].Vec[ref[1]]
+				if vec != nil {
+					vec.Free(proc.Mp())
+					ctr.aggVecs[ref[0]].Vec[ref[1]] = nil
+				}
+			}
+		}
+
+		sorted, sortedOrderVecs, sortedAggVecs, err := mergeorder.SortBatchWithPrecomputedOrderAndRelease(
+			proc,
+			bat,
+			ap.Fs,
+			ap.SpillThreshold,
+			ap.OpAnalyzer,
+			orderCols,
+			extraAggVecs,
+			inputConsumed,
+		)
+		if err != nil {
+			return false, err
+		}
+		if len(sortedOrderVecs) != len(orderRefs) || len(sortedAggVecs) != len(extraRefs) {
+			for _, vec := range sortedOrderVecs {
+				if vec != nil {
+					vec.Free(proc.Mp())
+				}
+			}
+			for _, vec := range sortedAggVecs {
+				if vec != nil {
+					vec.Free(proc.Mp())
+				}
+			}
+			sorted.Clean(proc.Mp())
+			return false, moerr.NewInternalErrorNoCtx("window sorted vector count mismatch")
+		}
+		ctr.bat = sorted
+		bat = sorted
+		// Keep the values evaluated before sorting. Re-evaluating either the order
+		// expressions or the window arguments would duplicate work and change the
+		// result of volatile expressions.
+		for k, ref := range orderRefs {
+			ctr.orderVecs[ref[0]].Vec[ref[1]] = sortedOrderVecs[k]
+		}
+		for k, ref := range extraRefs {
+			ctr.aggVecs[ref[0]].Vec[ref[1]] = sortedAggVecs[k]
+		}
+		externalSorted = true
+	}
+
 	if bat.RowCount() < 2 {
 		return false, nil
 	}
 
 	ovec := ctr.orderVecs[0].Vec[0]
+	partitionKeyCount := 0
+	if ap.PartitionTopN {
+		// PartitionTopN coalesces input partitions, so its order-vector prefix
+		// contains identity partition keys followed by SQL ORDER BY keys.
+		partitionKeyCount = len(w.PartitionBy)
+	}
 
 	rowCount := bat.RowCount()
 	// if ctr.sels == nil {
@@ -817,59 +2482,89 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 	// }
 	ctr.sels = make([]int64, rowCount)
 	for i := 0; i < rowCount; i++ {
+		if err := checkCanceled(proc, i); err != nil {
+			return false, err
+		}
 		ctr.sels[i] = int64(i)
 	}
 
 	// skip sort for const vector
-	if !ovec.IsConst() {
+	if !externalSorted && !ovec.IsConst() {
+		if err := checkCanceled(proc, 0); err != nil {
+			return false, err
+		}
 		nullCnt := ovec.GetNulls().Count()
 		if nullCnt < ovec.Length() {
-			sort.Sort(ctr.desc[0], ctr.nullsLast[0], nullCnt > 0, ctr.sels, ovec)
+			if partitionKeyCount > 0 {
+				sort.Sort(ctr.desc[0], ctr.nullsLast[0], nullCnt > 0, ctr.sels, ovec)
+			} else {
+				sort.SortForSQLOrder(ctr.desc[0], ctr.nullsLast[0], nullCnt > 0, ctr.sels, ovec)
+			}
+		}
+		if err := checkCanceled(proc, 0); err != nil {
+			return false, err
 		}
 	}
 
 	ps := make([]int64, 0, 16)
 	ds := make([]bool, len(ctr.sels))
-
-	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
-	n := len(w.PartitionBy)
+	var jsonOrderScratch sort.JSONOrderScratch
 
 	i, j := 1, len(ctr.orderVecs)
 	for ; i < j; i++ {
+		if err := checkCanceled(proc, 0); err != nil {
+			return false, err
+		}
 		desc := ctr.desc[i]
 		nullsLast := ctr.nullsLast[i]
-		ps = partition.Partition(ctr.sels, ds, ps, ovec)
+		if i <= partitionKeyCount {
+			ps = partition.Partition(ctr.sels, ds, ps, ovec)
+		} else {
+			ps = partition.PartitionForOrder(ctr.sels, ds, ps, ovec)
+		}
 		vec := ctr.orderVecs[i].Vec[0]
+		var scratch *sort.JSONOrderScratch
+		nullCnt := vec.GetNulls().Count()
+		if i >= partitionKeyCount && !vec.IsConst() && vec.GetType().Oid == types.T_json && nullCnt < vec.Length() {
+			jsonOrderScratch.Prepare(ctr.sels, vec)
+			scratch = &jsonOrderScratch
+		}
 		// skip sort for const vector
-		if !vec.IsConst() {
-			nullCnt := vec.GetNulls().Count()
+		if !externalSorted && !vec.IsConst() {
 			if nullCnt < vec.Length() {
-				for i, j := 0, len(ps); i < j; i++ {
-					if i == j-1 {
-						sort.Sort(desc, nullsLast, nullCnt > 0, ctr.sels[ps[i]:], vec)
+				for group, groupCount := 0, len(ps); group < groupCount; group++ {
+					if err := checkCanceled(proc, group); err != nil {
+						return false, err
+					}
+					start := ps[group]
+					end := int64(len(ctr.sels))
+					if group < groupCount-1 {
+						end = ps[group+1]
+					}
+					if i < partitionKeyCount {
+						sort.Sort(desc, nullsLast, nullCnt > 0, ctr.sels[start:end], vec)
 					} else {
-						sort.Sort(desc, nullsLast, nullCnt > 0, ctr.sels[ps[i]:ps[i+1]], vec)
+						sort.SortForSQLOrderWithScratch(desc, nullsLast, nullCnt > 0, ctr.sels[start:end], vec, scratch)
 					}
 				}
 			}
 		}
+		if err := checkCanceled(proc, 0); err != nil {
+			return false, err
+		}
 		ovec = vec
-		if n == i {
-			ctr.ps = make([]int64, len(ps))
-			copy(ctr.ps, ps)
+		if i == partitionKeyCount {
+			ctr.ps = append(ctr.ps, ps...)
 		}
 	}
 
-	if n == i {
+	if ap.PartitionTopN && partitionKeyCount == i {
 		ps = partition.Partition(ctr.sels, ds, ps, ovec)
-		ctr.ps = make([]int64, len(ps))
-		copy(ctr.ps, ps)
-	} else if n == 0 {
-		ctr.ps = nil
+		ctr.ps = append(ctr.ps, ps...)
 	}
 
-	if len(ap.WinSpecList[idx].Expr.(*plan.Expr_W).W.OrderBy) > 0 {
-		ctr.os = partition.Partition(ctr.sels, ds, ps, ovec)
+	if len(w.OrderBy) > 0 {
+		ctr.os = partition.PartitionForOrder(ctr.sels, ds, ps, ovec)
 	} else {
 		ctr.os = nil
 	}
@@ -896,12 +2591,20 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 		}
 	}
 
-	ctr.ps = nil
-
 	return false, nil
 }
 
 func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plus bool, desc bool) (int, error) {
+	return searchLeftWithLocation(time.Local, start, end, rowIdx, vec, expr, plus, desc)
+}
+
+func searchLeftWithLocation(loc *time.Location, start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plus bool, desc bool) (int, error) {
+	if start >= end {
+		return start, nil
+	}
+	if vec.IsConstNull() {
+		return start, nil
+	}
 	if vec.GetNulls().Contains(uint64(rowIdx)) {
 		// NULL order-key rows are peers; find the start of the NULL peer group
 		left := rowIdx
@@ -920,10 +2623,23 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 	for end > start && vec.GetNulls().Contains(uint64(end-1)) {
 		end--
 	}
+	// A const vector stores one physical value, while the search bounds are
+	// logical rows. Evaluate the one physical row and project its boundary back
+	// to this logical interval instead of indexing the scalar column by mid.
+	if vec.IsConst() && (start != 0 || end != 1 || rowIdx != 0) {
+		boundary, err := searchLeftWithLocation(loc, 0, 1, 0, vec, expr, plus, desc)
+		if err != nil || boundary == 0 {
+			return start, err
+		}
+		return end, nil
+	}
 
 	// For DESC, swap the arithmetic direction.
 	if desc {
 		plus = !plus
+	}
+	if vec.GetType().Oid == types.T_decimal256 {
+		return searchDecimal256Range(start, end, rowIdx, vec, expr, plus, desc, false)
 	}
 
 	var left int
@@ -938,14 +2654,11 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[uint64], cmpl)
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U64Val).U64Val
-			if plus {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[uint64], cmpl)
-			} else {
-				if col[rowIdx] <= c {
-					return start, nil
-				}
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[uint64], cmpl)
+			bound, aboveDomain, ok := uint64RangeBound(col[rowIdx], c, !plus)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			left = genericSearchLeft(start, end-1, col, bound, genericEqual[uint64], cmpl)
 		}
 	case types.T_int8:
 		col := vector.MustFixedColNoTypeCheck[int8](vec)
@@ -957,11 +2670,11 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[int8], cmpl)
 		} else {
 			c := int8(expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I8Val).I8Val)
-			if plus {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[int8], cmpl)
-			} else {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[int8], cmpl)
+			bound, aboveDomain, ok := signedRangeBound(col[rowIdx], c, !plus)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			left = genericSearchLeft(start, end-1, col, bound, genericEqual[int8], cmpl)
 		}
 	case types.T_int16:
 		col := vector.MustFixedColNoTypeCheck[int16](vec)
@@ -973,11 +2686,11 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[int16], cmpl)
 		} else {
 			c := int16(expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I16Val).I16Val)
-			if plus {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[int16], cmpl)
-			} else {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[int16], cmpl)
+			bound, aboveDomain, ok := signedRangeBound(col[rowIdx], c, !plus)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			left = genericSearchLeft(start, end-1, col, bound, genericEqual[int16], cmpl)
 		}
 	case types.T_int32:
 		col := vector.MustFixedColNoTypeCheck[int32](vec)
@@ -989,11 +2702,11 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[int32], cmpl)
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I32Val).I32Val
-			if plus {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[int32], cmpl)
-			} else {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[int32], cmpl)
+			bound, aboveDomain, ok := signedRangeBound(col[rowIdx], c, !plus)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			left = genericSearchLeft(start, end-1, col, bound, genericEqual[int32], cmpl)
 		}
 	case types.T_int64:
 		col := vector.MustFixedColNoTypeCheck[int64](vec)
@@ -1005,11 +2718,11 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[int64], cmpl)
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val
-			if plus {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[int64], cmpl)
-			} else {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[int64], cmpl)
+			bound, aboveDomain, ok := signedRangeBound(col[rowIdx], c, !plus)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			left = genericSearchLeft(start, end-1, col, bound, genericEqual[int64], cmpl)
 		}
 	case types.T_uint8:
 		col := vector.MustFixedColNoTypeCheck[uint8](vec)
@@ -1021,14 +2734,11 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[uint8], cmpl)
 		} else {
 			c := uint8(expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U8Val).U8Val)
-			if plus {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[uint8], cmpl)
-			} else {
-				if col[rowIdx] <= c {
-					return start, nil
-				}
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[uint8], cmpl)
+			bound, aboveDomain, ok := unsignedRangeBound(col[rowIdx], c, !plus)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			left = genericSearchLeft(start, end-1, col, bound, genericEqual[uint8], cmpl)
 		}
 	case types.T_uint16:
 		col := vector.MustFixedColNoTypeCheck[uint16](vec)
@@ -1040,14 +2750,11 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[uint16], cmpl)
 		} else {
 			c := uint16(expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U16Val).U16Val)
-			if plus {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[uint16], cmpl)
-			} else {
-				if col[rowIdx] <= c {
-					return start, nil
-				}
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[uint16], cmpl)
+			bound, aboveDomain, ok := unsignedRangeBound(col[rowIdx], c, !plus)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			left = genericSearchLeft(start, end-1, col, bound, genericEqual[uint16], cmpl)
 		}
 	case types.T_uint32:
 		col := vector.MustFixedColNoTypeCheck[uint32](vec)
@@ -1059,14 +2766,11 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[uint32], cmpl)
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U32Val).U32Val
-			if plus {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[uint32], cmpl)
-			} else {
-				if col[rowIdx] <= c {
-					return start, nil
-				}
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[uint32], cmpl)
+			bound, aboveDomain, ok := unsignedRangeBound(col[rowIdx], c, !plus)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			left = genericSearchLeft(start, end-1, col, bound, genericEqual[uint32], cmpl)
 		}
 	case types.T_uint64:
 		col := vector.MustFixedColNoTypeCheck[uint64](vec)
@@ -1078,45 +2782,42 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[uint64], cmpl)
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U64Val).U64Val
-			if plus {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[uint64], cmpl)
-			} else {
-				if col[rowIdx] <= c {
-					return start, nil
-				}
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[uint64], cmpl)
+			bound, aboveDomain, ok := uint64RangeBound(col[rowIdx], c, !plus)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			left = genericSearchLeft(start, end-1, col, bound, genericEqual[uint64], cmpl)
 		}
 	case types.T_float32:
 		col := vector.MustFixedColNoTypeCheck[float32](vec)
-		cmpl := genericGreater[float32]
+		cmpl := float32OrderAscGreater
 		if desc {
-			cmpl = genericLess[float32]
+			cmpl = float32OrderDescGreater
 		}
 		if expr == nil {
-			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[float32], cmpl)
+			left = genericSearchLeft(start, end-1, col, col[rowIdx], float32OrderEqual, cmpl)
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_Fval).Fval
 			if plus {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[float32], cmpl)
+				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, float32OrderEqual, cmpl)
 			} else {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[float32], cmpl)
+				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, float32OrderEqual, cmpl)
 			}
 		}
 	case types.T_float64:
 		col := vector.MustFixedColNoTypeCheck[float64](vec)
-		cmpl := genericGreater[float64]
+		cmpl := float64OrderAscGreater
 		if desc {
-			cmpl = genericLess[float64]
+			cmpl = float64OrderDescGreater
 		}
 		if expr == nil {
-			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[float64], cmpl)
+			left = genericSearchLeft(start, end-1, col, col[rowIdx], float64OrderEqual, cmpl)
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_Dval).Dval
 			if plus {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[float64], cmpl)
+				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, float64OrderEqual, cmpl)
 			} else {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[float64], cmpl)
+				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, float64OrderEqual, cmpl)
 			}
 		}
 	case types.T_decimal64:
@@ -1181,12 +2882,18 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 			if plus {
 				fol, err := doDateAdd(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, true, diff, desc), nil
+					}
 					return left, err
 				}
 				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Date], cmpl)
 			} else {
 				fol, err := doDateSub(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, false, diff, desc), nil
+					}
 					return left, err
 				}
 				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Date], cmpl)
@@ -1206,12 +2913,18 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 			if plus {
 				fol, err := doDatetimeAdd(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, true, diff, desc), nil
+					}
 					return left, err
 				}
 				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Datetime], cmpl)
 			} else {
 				fol, err := doDatetimeSub(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, false, diff, desc), nil
+					}
 					return left, err
 				}
 				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Datetime], cmpl)
@@ -1231,12 +2944,18 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 			if plus {
 				fol, err := doTimeAdd(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, true, diff, desc), nil
+					}
 					return left, err
 				}
 				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Time], cmpl)
 			} else {
 				fol, err := doTimeSub(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, false, diff, desc), nil
+					}
 					return left, err
 				}
 				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Time], cmpl)
@@ -1254,14 +2973,20 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 			diff := expr.Expr.(*plan.Expr_List).List.List[0].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val
 			unit := expr.Expr.(*plan.Expr_List).List.List[1].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val
 			if plus {
-				fol, err := doTimestampAdd(time.Local, col[rowIdx], diff, unit)
+				fol, err := doTimestampAdd(loc, col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, true, diff, desc), nil
+					}
 					return left, err
 				}
 				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Timestamp], cmpl)
 			} else {
-				fol, err := doTimestampSub(time.Local, col[rowIdx], diff, unit)
+				fol, err := doTimestampSub(loc, col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, false, diff, desc), nil
+					}
 					return left, err
 				}
 				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Timestamp], cmpl)
@@ -1278,6 +3003,15 @@ func doDateSub(start types.Date, diff int64, unit int64) (types.Date, error) {
 	if err != nil {
 		return 0, err
 	}
+	if !temporalRangeIntervalConversionOK(diff, types.IntervalType(unit)) {
+		return 0, moerr.NewOutOfRangeNoCtx("date", "")
+	}
+	if !temporalRangeCalendarIntervalInDomain(start.ToDatetime(), diff, types.IntervalType(unit), true) {
+		return 0, moerr.NewOutOfRangeNoCtx("date", "")
+	}
+	if diff == math.MinInt64 {
+		return 0, moerr.NewOutOfRangeNoCtx("date", "")
+	}
 	dt, success := start.ToDatetime().AddInterval(-diff, types.IntervalType(unit), types.DateType)
 	if success {
 		return dt.ToDate(), nil
@@ -1290,6 +3024,16 @@ func doTimeSub(start types.Time, diff int64, unit int64) (types.Time, error) {
 	err := types.JudgeIntervalNumOverflow(diff, types.IntervalType(unit))
 	if err != nil {
 		return 0, err
+	}
+	if !temporalRangeIntervalConversionOK(diff, types.IntervalType(unit)) {
+		return 0, moerr.NewOutOfRangeNoCtx("time", "")
+	}
+	if types.IntervalType(unit) == types.MicroSecond {
+		t, ok := checkedTimeMicrosecondInterval(start, diff, true)
+		if !ok {
+			return 0, moerr.NewOutOfRangeNoCtx("time", "")
+		}
+		return t, nil
 	}
 	t, success := start.AddInterval(-diff, types.IntervalType(unit))
 	if success {
@@ -1304,6 +3048,15 @@ func doDatetimeSub(start types.Datetime, diff int64, unit int64) (types.Datetime
 	if err != nil {
 		return 0, err
 	}
+	if !temporalRangeIntervalConversionOK(diff, types.IntervalType(unit)) {
+		return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
+	}
+	if !temporalRangeCalendarIntervalInDomain(start, diff, types.IntervalType(unit), true) {
+		return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
+	}
+	if diff == math.MinInt64 {
+		return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
+	}
 	dt, success := start.AddInterval(-diff, types.IntervalType(unit), types.DateTimeType)
 	if success {
 		return dt, nil
@@ -1317,15 +3070,57 @@ func doTimestampSub(loc *time.Location, start types.Timestamp, diff int64, unit 
 	if err != nil {
 		return 0, err
 	}
+	if !temporalRangeIntervalConversionOK(diff, types.IntervalType(unit)) {
+		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
+	}
+	if !temporalRangeCalendarIntervalInDomain(start.ToDatetime(loc), diff, types.IntervalType(unit), true) {
+		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
+	}
+	if diff == math.MinInt64 {
+		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
+	}
 	dt, success := start.ToDatetime(loc).AddInterval(-diff, types.IntervalType(unit), types.DateTimeType)
 	if success {
-		return dt.ToTimestamp(loc), nil
+		return timestampRangeBoundary(dt, loc), nil
 	} else {
 		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
 	}
 }
 
+// timestampRangeBoundary resolves a session-civil frame boundary back to a
+// timestamp instant. Go maps nonexistent civil times in a DST gap to one side
+// of the transition; clamp that result to the transition instant so RANGE uses
+// the first valid local time after the gap, matching MySQL semantics.
+func timestampRangeBoundary(civil types.Datetime, loc *time.Location) types.Timestamp {
+	boundary := civil.ToTimestamp(loc)
+	roundTrip := boundary.ToDatetime(loc)
+	if roundTrip == civil {
+		return boundary
+	}
+
+	instant := time.UnixMicro(
+		int64(boundary) - int64(types.UnixToTimestamp(0))).In(loc)
+	transitionStart, transitionEnd := instant.ZoneBounds()
+	if roundTrip < civil && !transitionEnd.IsZero() {
+		return types.UnixMicroToTimestamp(transitionEnd.UnixMicro())
+	}
+	if roundTrip > civil && !transitionStart.IsZero() {
+		return types.UnixMicroToTimestamp(transitionStart.UnixMicro())
+	}
+	return boundary
+}
+
 func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, sub bool, desc bool) (int, error) {
+	return searchRightWithLocation(time.Local, start, end, rowIdx, vec, expr, sub, desc)
+}
+
+func searchRightWithLocation(loc *time.Location, start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, sub bool, desc bool) (int, error) {
+	if start >= end {
+		return start, nil
+	}
+	if vec.IsConstNull() {
+		return end, nil
+	}
 	if vec.GetNulls().Contains(uint64(rowIdx)) {
 		// NULL order-key rows are peers; find the end of the NULL peer group (exclusive)
 		right := rowIdx + 1
@@ -1344,10 +3139,22 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 	for end > start && vec.GetNulls().Contains(uint64(end-1)) {
 		end--
 	}
+	// See searchLeftWithLocation: resolve scalar storage against one physical
+	// row, then preserve the result's logical interval boundary.
+	if vec.IsConst() && (start != 0 || end != 1 || rowIdx != 0) {
+		boundary, err := searchRightWithLocation(loc, 0, 1, 0, vec, expr, sub, desc)
+		if err != nil || boundary == 0 {
+			return start, err
+		}
+		return end, nil
+	}
 
 	// For DESC, swap the arithmetic direction.
 	if desc {
 		sub = !sub
+	}
+	if vec.GetType().Oid == types.T_decimal256 {
+		return searchDecimal256Range(start, end, rowIdx, vec, expr, !sub, desc, true)
 	}
 
 	var right int
@@ -1362,14 +3169,11 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[uint64])
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U64Val).U64Val
-			if sub {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[uint64], cmpl)
-			} else {
-				if col[rowIdx] <= c {
-					return start, nil
-				}
-				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[uint64], cmpl)
+			bound, aboveDomain, ok := uint64RangeBound(col[rowIdx], c, sub)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			right = genericSearchRight(start, end-1, col, bound, genericEqual[uint64], cmpl)
 		}
 	case types.T_int8:
 		col := vector.MustFixedColNoTypeCheck[int8](vec)
@@ -1381,11 +3185,11 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[int8])
 		} else {
 			c := int8(expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I8Val).I8Val)
-			if sub {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[int8], cmpl)
-			} else {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[int8], cmpl)
+			bound, aboveDomain, ok := signedRangeBound(col[rowIdx], c, sub)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			right = genericSearchRight(start, end-1, col, bound, genericEqual[int8], cmpl)
 		}
 	case types.T_int16:
 		col := vector.MustFixedColNoTypeCheck[int16](vec)
@@ -1397,11 +3201,11 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[int16])
 		} else {
 			c := int16(expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I16Val).I16Val)
-			if sub {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[int16], cmpl)
-			} else {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[int16], cmpl)
+			bound, aboveDomain, ok := signedRangeBound(col[rowIdx], c, sub)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			right = genericSearchRight(start, end-1, col, bound, genericEqual[int16], cmpl)
 		}
 	case types.T_int32:
 		col := vector.MustFixedColNoTypeCheck[int32](vec)
@@ -1413,11 +3217,11 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[int32])
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I32Val).I32Val
-			if sub {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[int32], cmpl)
-			} else {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[int32], cmpl)
+			bound, aboveDomain, ok := signedRangeBound(col[rowIdx], c, sub)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			right = genericSearchRight(start, end-1, col, bound, genericEqual[int32], cmpl)
 		}
 	case types.T_int64:
 		col := vector.MustFixedColNoTypeCheck[int64](vec)
@@ -1429,11 +3233,11 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[int64])
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val
-			if sub {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[int64], cmpl)
-			} else {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[int64], cmpl)
+			bound, aboveDomain, ok := signedRangeBound(col[rowIdx], c, sub)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			right = genericSearchRight(start, end-1, col, bound, genericEqual[int64], cmpl)
 		}
 	case types.T_uint8:
 		col := vector.MustFixedColNoTypeCheck[uint8](vec)
@@ -1445,14 +3249,11 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[uint8])
 		} else {
 			c := uint8(expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U8Val).U8Val)
-			if sub {
-				if col[rowIdx] <= c {
-					return start, nil
-				}
-				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[uint8], cmpl)
-			} else {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[uint8], cmpl)
+			bound, aboveDomain, ok := unsignedRangeBound(col[rowIdx], c, sub)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			right = genericSearchRight(start, end-1, col, bound, genericEqual[uint8], cmpl)
 		}
 	case types.T_uint16:
 		col := vector.MustFixedColNoTypeCheck[uint16](vec)
@@ -1464,14 +3265,11 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[uint16])
 		} else {
 			c := uint16(expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U16Val).U16Val)
-			if sub {
-				if col[rowIdx] <= c {
-					return start, nil
-				}
-				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[uint16], cmpl)
-			} else {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[uint16], cmpl)
+			bound, aboveDomain, ok := unsignedRangeBound(col[rowIdx], c, sub)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			right = genericSearchRight(start, end-1, col, bound, genericEqual[uint16], cmpl)
 		}
 	case types.T_uint32:
 		col := vector.MustFixedColNoTypeCheck[uint32](vec)
@@ -1483,14 +3281,11 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[uint32])
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U32Val).U32Val
-			if sub {
-				if col[rowIdx] <= c {
-					return start, nil
-				}
-				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[uint32], cmpl)
-			} else {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[uint32], cmpl)
+			bound, aboveDomain, ok := unsignedRangeBound(col[rowIdx], c, sub)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			right = genericSearchRight(start, end-1, col, bound, genericEqual[uint32], cmpl)
 		}
 	case types.T_uint64:
 		col := vector.MustFixedColNoTypeCheck[uint64](vec)
@@ -1502,45 +3297,42 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[uint64])
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U64Val).U64Val
-			if sub {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[uint64], cmpl)
-			} else {
-				if col[rowIdx] <= c {
-					return start, nil
-				}
-				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[uint64], cmpl)
+			bound, aboveDomain, ok := uint64RangeBound(col[rowIdx], c, sub)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			right = genericSearchRight(start, end-1, col, bound, genericEqual[uint64], cmpl)
 		}
 	case types.T_float32:
 		col := vector.MustFixedColNoTypeCheck[float32](vec)
-		cmpl := genericGreater[float32]
+		cmpl := float32OrderAscGreater
 		if desc {
-			cmpl = genericLess[float32]
+			cmpl = float32OrderDescGreater
 		}
 		if expr == nil {
-			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[float32])
+			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], float32OrderEqual)
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_Fval).Fval
 			if sub {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[float32], cmpl)
+				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, float32OrderEqual, cmpl)
 			} else {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[float32], cmpl)
+				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, float32OrderEqual, cmpl)
 			}
 		}
 	case types.T_float64:
 		col := vector.MustFixedColNoTypeCheck[float64](vec)
-		cmpl := genericGreater[float64]
+		cmpl := float64OrderAscGreater
 		if desc {
-			cmpl = genericLess[float64]
+			cmpl = float64OrderDescGreater
 		}
 		if expr == nil {
-			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[float64])
+			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], float64OrderEqual)
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_Dval).Dval
 			if sub {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[float64], cmpl)
+				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, float64OrderEqual, cmpl)
 			} else {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[float64], cmpl)
+				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, float64OrderEqual, cmpl)
 			}
 		}
 	case types.T_decimal64:
@@ -1605,12 +3397,18 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 			if sub {
 				fol, err := doDateSub(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, false, diff, desc), nil
+					}
 					return right, err
 				}
 				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Date], cmpl)
 			} else {
 				fol, err := doDateAdd(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, true, diff, desc), nil
+					}
 					return right, err
 				}
 				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Date], cmpl)
@@ -1639,12 +3437,18 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 			if sub {
 				fol, err := doDatetimeSub(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, false, diff, desc), nil
+					}
 					return right, err
 				}
 				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Datetime], cmpl)
 			} else {
 				fol, err := doDatetimeAdd(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, true, diff, desc), nil
+					}
 					return right, err
 				}
 				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Datetime], cmpl)
@@ -1664,12 +3468,18 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 			if sub {
 				fol, err := doTimeSub(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, false, diff, desc), nil
+					}
 					return right, err
 				}
 				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Time], cmpl)
 			} else {
 				fol, err := doTimeAdd(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, true, diff, desc), nil
+					}
 					return right, err
 				}
 				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Time], cmpl)
@@ -1687,14 +3497,20 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 			diff := expr.Expr.(*plan.Expr_List).List.List[0].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val
 			unit := expr.Expr.(*plan.Expr_List).List.List[1].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val
 			if sub {
-				fol, err := doTimestampSub(time.Local, col[rowIdx], diff, unit)
+				fol, err := doTimestampSub(loc, col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, false, diff, desc), nil
+					}
 					return right, err
 				}
 				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Timestamp], cmpl)
 			} else {
-				fol, err := doTimestampAdd(time.Local, col[rowIdx], diff, unit)
+				fol, err := doTimestampAdd(loc, col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, true, diff, desc), nil
+					}
 					return right, err
 				}
 				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Timestamp], cmpl)
@@ -1708,10 +3524,188 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 	return right + 1, nil
 }
 
+type unsignedRangeInteger interface {
+	~uint8 | ~uint16 | ~uint32 | ~uint64
+}
+
+// unsignedRangeBound computes a finite RANGE search key without allowing
+// unsigned arithmetic to wrap into the opposite end of the type domain.
+// aboveDomain distinguishes addition overflow from subtraction underflow.
+func unsignedRangeBound[T unsignedRangeInteger](value, offset T, subtract bool) (bound T, aboveDomain bool, ok bool) {
+	if subtract {
+		if value < offset {
+			return 0, false, false
+		}
+		return value - offset, false, true
+	}
+	if value > ^T(0)-offset {
+		return 0, true, false
+	}
+	return value + offset, false, true
+}
+
+func uint64RangeBound(value, offset uint64, subtract bool) (bound uint64, aboveDomain bool, ok bool) {
+	return unsignedRangeBound(value, offset, subtract)
+}
+
+type signedRangeInteger interface {
+	~int8 | ~int16 | ~int32 | ~int64
+}
+
+// signedRangeBound computes a finite RANGE search key without allowing signed
+// arithmetic to wrap into the opposite end of the type domain. aboveDomain
+// distinguishes overflow above the maximum from underflow below the minimum.
+func signedRangeBound[T signedRangeInteger](value, offset T, subtract bool) (bound T, aboveDomain bool, ok bool) {
+	if subtract {
+		bound = value - offset
+		if (offset > 0 && bound > value) || (offset < 0 && bound < value) {
+			return 0, offset < 0, false
+		}
+		return bound, false, true
+	}
+
+	bound = value + offset
+	if (offset > 0 && bound < value) || (offset < 0 && bound > value) {
+		return 0, offset > 0, false
+	}
+	return bound, false, true
+}
+
+// outOfDomainRangeBoundary maps a conceptual search key outside a numeric type
+// domain to its insertion boundary in the current SQL sort direction.
+func outOfDomainRangeBoundary(start, end int, aboveDomain, desc bool) int {
+	if aboveDomain != desc {
+		return end
+	}
+	return start
+}
+
+// temporalRangeOverflowBoundary maps a temporal search key outside the type
+// domain to the insertion point it would have if that key were representable.
+// A key above the domain sorts after every ASC value and before every DESC
+// value; a key below the domain does the opposite.
+func temporalRangeOverflowBoundary(start, end int, aboveDomain, desc bool) int {
+	if aboveDomain != desc {
+		return end
+	}
+	return start
+}
+
+// temporalRangeIntervalOverflowBoundary derives the side of a temporal-domain
+// overflow from the effective signed arithmetic. A negative interval reverses
+// the operation, so add/sub alone cannot identify the insertion point.
+func temporalRangeIntervalOverflowBoundary(start, end int, add bool, diff int64, desc bool) int {
+	aboveDomain := add
+	if diff < 0 {
+		aboveDomain = !aboveDomain
+	}
+	return temporalRangeOverflowBoundary(start, end, aboveDomain, desc)
+}
+
+// checkedMicrosecondArithmetic performs signed microsecond arithmetic without
+// allowing an int64 wrap to masquerade as an in-domain temporal value.
+func checkedMicrosecondArithmetic(start, diff int64, subtract bool) (int64, bool) {
+	if subtract {
+		if (diff > 0 && start < math.MinInt64+diff) || (diff < 0 && start > math.MaxInt64+diff) {
+			return 0, false
+		}
+		return start - diff, true
+	}
+	if (diff > 0 && start > math.MaxInt64-diff) || (diff < 0 && start < math.MinInt64-diff) {
+		return 0, false
+	}
+	return start + diff, true
+}
+
+// temporalRangeIntervalConversionOK prevents fixed-duration units from
+// wrapping while AddInterval converts them to microseconds. The magnitude
+// check accepts values that fit in an int64, but their later conversion can
+// still overflow before AddInterval validates the temporal domain.
+func temporalRangeIntervalConversionOK(diff int64, unit types.IntervalType) bool {
+	var multiplier int64
+	switch unit {
+	case types.Second:
+		multiplier = types.MicroSecsPerSec
+	case types.Minute:
+		multiplier = types.MicroSecsPerSec * types.SecsPerMinute
+	case types.Hour:
+		multiplier = types.MicroSecsPerSec * types.SecsPerHour
+	case types.Day:
+		multiplier = types.MicroSecsPerSec * types.SecsPerDay
+	case types.Week:
+		multiplier = types.MicroSecsPerSec * types.SecsPerWeek
+	default:
+		return true
+	}
+	return diff <= math.MaxInt64/multiplier && diff >= math.MinInt64/multiplier
+}
+
+// temporalRangeCalendarIntervalInDomain evaluates calendar arithmetic in the
+// wide representation used by AddDateTime before that function narrows the
+// result year to int32. A wrapped year is a valid-looking but incorrect RANGE
+// search key, so calendar bounds outside the temporal domain must follow the
+// same out-of-domain path as fixed-duration bounds.
+func temporalRangeCalendarIntervalInDomain(start types.Datetime, diff int64, unit types.IntervalType, subtract bool) bool {
+	if subtract {
+		if diff == math.MinInt64 {
+			return false
+		}
+		diff = -diff
+	}
+
+	year, month, _, _ := start.ToDate().Calendar(true)
+	boundaryYear := int64(year)
+	boundaryMonth := int64(month)
+	var yearDelta, monthDelta int64
+	switch unit {
+	case types.Month, types.Year_Month:
+		yearDelta = diff / 12
+		monthDelta = diff % 12
+	case types.Quarter:
+		if diff > math.MaxInt64/3 || diff < math.MinInt64/3 {
+			return false
+		}
+		months := diff * 3
+		yearDelta = months / 12
+		monthDelta = months % 12
+	case types.Year:
+		yearDelta = diff
+	default:
+		return true
+	}
+	if (yearDelta > 0 && boundaryYear > math.MaxInt64-yearDelta) ||
+		(yearDelta < 0 && boundaryYear < math.MinInt64-yearDelta) {
+		return false
+	}
+	boundaryYear += yearDelta
+	boundaryMonth += monthDelta
+
+	if boundaryMonth <= 0 {
+		boundaryYear--
+	} else if boundaryMonth > 12 {
+		boundaryYear++
+	}
+	return boundaryYear >= int64(types.MinDatetimeYear) && boundaryYear <= int64(types.MaxDatetimeYear)
+}
+
+func checkedTimeMicrosecondInterval(start types.Time, diff int64, subtract bool) (types.Time, bool) {
+	result, ok := checkedMicrosecondArithmetic(int64(start), diff, subtract)
+	if !ok {
+		return 0, false
+	}
+	return types.Time(result).AddInterval(0, types.MicroSecond)
+}
+
 func doDateAdd(start types.Date, diff int64, unit int64) (types.Date, error) {
 	err := types.JudgeIntervalNumOverflow(diff, types.IntervalType(unit))
 	if err != nil {
 		return 0, err
+	}
+	if !temporalRangeIntervalConversionOK(diff, types.IntervalType(unit)) {
+		return 0, moerr.NewOutOfRangeNoCtx("date", "")
+	}
+	if !temporalRangeCalendarIntervalInDomain(start.ToDatetime(), diff, types.IntervalType(unit), false) {
+		return 0, moerr.NewOutOfRangeNoCtx("date", "")
 	}
 	dt, success := start.ToDatetime().AddInterval(diff, types.IntervalType(unit), types.DateType)
 	if success {
@@ -1726,6 +3720,16 @@ func doTimeAdd(start types.Time, diff int64, unit int64) (types.Time, error) {
 	if err != nil {
 		return 0, err
 	}
+	if !temporalRangeIntervalConversionOK(diff, types.IntervalType(unit)) {
+		return 0, moerr.NewOutOfRangeNoCtx("time", "")
+	}
+	if types.IntervalType(unit) == types.MicroSecond {
+		t, ok := checkedTimeMicrosecondInterval(start, diff, false)
+		if !ok {
+			return 0, moerr.NewOutOfRangeNoCtx("time", "")
+		}
+		return t, nil
+	}
 	t, success := start.AddInterval(diff, types.IntervalType(unit))
 	if success {
 		return t, nil
@@ -1738,6 +3742,12 @@ func doDatetimeAdd(start types.Datetime, diff int64, unit int64) (types.Datetime
 	err := types.JudgeIntervalNumOverflow(diff, types.IntervalType(unit))
 	if err != nil {
 		return 0, err
+	}
+	if !temporalRangeIntervalConversionOK(diff, types.IntervalType(unit)) {
+		return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
+	}
+	if !temporalRangeCalendarIntervalInDomain(start, diff, types.IntervalType(unit), false) {
+		return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
 	}
 	dt, success := start.AddInterval(diff, types.IntervalType(unit), types.DateTimeType)
 	if success {
@@ -1752,9 +3762,15 @@ func doTimestampAdd(loc *time.Location, start types.Timestamp, diff int64, unit 
 	if err != nil {
 		return 0, err
 	}
+	if !temporalRangeIntervalConversionOK(diff, types.IntervalType(unit)) {
+		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
+	}
+	if !temporalRangeCalendarIntervalInDomain(start.ToDatetime(loc), diff, types.IntervalType(unit), false) {
+		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
+	}
 	dt, success := start.ToDatetime(loc).AddInterval(diff, types.IntervalType(unit), types.DateTimeType)
 	if success {
-		return dt.ToTimestamp(loc), nil
+		return timestampRangeBoundary(dt, loc), nil
 	} else {
 		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
 	}
@@ -1810,6 +3826,34 @@ func genericLess[T types.OrderedT](a, b T) bool {
 	return a < b
 }
 
+// The RANGE binary searches operate on vectors sorted with the SQL ORDER BY
+// relation. Native float comparisons do not provide the peer/equality and
+// boundary behavior required for NaNs, so keep the search predicates aligned
+// with the sort relation for both directions.
+func float32OrderEqual(a, b float32) bool {
+	return types.Float32OrderAscCompare(a, b) == 0
+}
+
+func float32OrderAscGreater(a, b float32) bool {
+	return types.Float32OrderAscCompare(a, b) > 0
+}
+
+func float32OrderDescGreater(a, b float32) bool {
+	return types.Float32OrderDescCompare(a, b) > 0
+}
+
+func float64OrderEqual(a, b float64) bool {
+	return types.Float64OrderAscCompare(a, b) == 0
+}
+
+func float64OrderAscGreater(a, b float64) bool {
+	return types.Float64OrderAscCompare(a, b) > 0
+}
+
+func float64OrderDescGreater(a, b float64) bool {
+	return types.Float64OrderDescCompare(a, b) > 0
+}
+
 func decimal64Equal(a, b types.Decimal64) bool {
 	return a.Compare(b) == 0
 }
@@ -1821,6 +3865,45 @@ func decimal64Greater(a, b types.Decimal64) bool {
 func decimal64Less(a, b types.Decimal64) bool {
 	return a.Compare(b) == -1
 }
+
+// searchDecimal256Range returns an insertion boundary in [start,end]. Arithmetic
+// overflow is outside the physical coefficient domain, not a wrapped search key.
+func searchDecimal256Range(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, add, desc, right bool) (int, error) {
+	col := vector.MustFixedColNoTypeCheck[types.Decimal256](vec)
+	boundary := col[rowIdx]
+	if expr != nil {
+		typ := vec.GetType()
+		offset, err := decimal256RangeOffset(expr, plan.Type{
+			Id: int32(typ.Oid), Width: typ.Width, Scale: typ.Scale,
+		})
+		if err != nil {
+			return 0, err
+		}
+		if add {
+			boundary, err = boundary.Add256(offset)
+		} else {
+			boundary, err = boundary.Sub256(offset)
+		}
+		if err != nil {
+			return outOfDomainRangeBoundary(start, end, add, desc), nil
+		}
+	}
+	greater := decimal256Greater
+	if desc {
+		greater = decimal256Less
+	}
+	if right {
+		if expr == nil {
+			return genericSearchEqualRight(rowIdx, end-1, col, boundary, decimal256Equal) + 1, nil
+		}
+		return genericSearchRight(start, end-1, col, boundary, decimal256Equal, greater) + 1, nil
+	}
+	return genericSearchLeft(start, end-1, col, boundary, decimal256Equal, greater), nil
+}
+
+func decimal256Equal(a, b types.Decimal256) bool   { return a.Compare(b) == 0 }
+func decimal256Greater(a, b types.Decimal256) bool { return a.Compare(b) > 0 }
+func decimal256Less(a, b types.Decimal256) bool    { return a.Compare(b) < 0 }
 
 func decimal128Equal(a, b types.Decimal128) bool {
 	return a.Compare(b) == 0

@@ -38,17 +38,40 @@ func (merge *Merge) Prepare(proc *process.Process) error {
 	} else {
 		merge.OpAnalyzer.Reset()
 	}
+	if merge.MaterializedSource != nil {
+		merge.ctr.receiver = nil
+		merge.ctr.materializedPosition = 0
+		merge.ctr.materializedReleased = false
+		merge.cleanMaterializedBatch(proc)
+		return nil
+	}
 
 	if merge.Partial {
-		merge.ctr.receiver = process.InitPipelineSignalReceiver(proc.Ctx, proc.Reg.MergeReceivers[merge.StartIDX:merge.EndIDX])
+		merge.ctr.receiver = process.InitPipelineSignalReceiverFromProcess(proc, proc.Reg.MergeReceivers[merge.StartIDX:merge.EndIDX])
 	} else {
-		merge.ctr.receiver = process.InitPipelineSignalReceiver(proc.Ctx, proc.Reg.MergeReceivers)
+		merge.ctr.receiver = process.InitPipelineSignalReceiverFromProcess(proc, proc.Reg.MergeReceivers)
 	}
 	return nil
 }
 
 func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 	analyzer := merge.OpAnalyzer
+	if merge.MaterializedSource != nil {
+		merge.cleanMaterializedBatch(proc)
+		bat, end, err := merge.MaterializedSource.Next(proc.Ctx, merge.MaterializedReaderID, merge.ctr.materializedPosition)
+		if err != nil {
+			return vm.CancelResult, err
+		}
+		result := vm.NewCallResult()
+		if end {
+			result.Status = vm.ExecStop
+			return result, nil
+		}
+		merge.ctr.materializedPosition++
+		merge.ctr.materializedBatch = bat
+		result.Batch = bat
+		return result, nil
+	}
 
 	var info error
 	result := vm.NewCallResult()

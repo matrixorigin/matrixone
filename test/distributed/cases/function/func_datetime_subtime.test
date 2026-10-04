@@ -49,3 +49,7 @@ SELECT CAST(SUBTIME('2007-12-31 23:59:59.999999', '0 0:0:0.000000') AS CHAR) AS 
 SELECT SUBTIME('2007-12-31 00:00:00', '0 0:0:1') AS one_second_before;
 SELECT SUBTIME('2007-12-31 23:59:59', '0 0:1:0') AS one_minute_before;
 
+# Zero calendar inputs return NULL before arithmetic. Cover typed and string forms.
+SELECT SUBTIME(CAST('0000-00-00 00:00:00' AS DATETIME), '00:00:01') AS zero_datetime;
+SELECT SUBTIME(CAST('0000-00-00 00:00:00' AS TIMESTAMP), '00:00:01') AS zero_timestamp;
+SELECT SUBTIME('0000-00-00 00:00:00', '00:00:01') AS zero_datetime_string;

@@ -246,14 +246,43 @@ func ParseInsert(inputSql string) (result ParseResult, err error) {
 	//  3. "INSERT INTO `db1`.`t1` VALUES (1, 'test', 'db1'), (2, 'test', 'db2'), (3, 'test', 'db3')"
 	//     result.rows: [["1", "test", "db1"], ["2", "test", "db2"], ["3", "test", "db3"]]
 
+	// Parse the INSERT body only. ON DUPLICATE KEY UPDATE contains a VALUES()
+	// expression which is not part of the input rows.
+	insertBody := strings.Split(inputSql, "ON DUPLICATE KEY UPDATE")[0]
+	upperBody := strings.ToUpper(insertBody)
+	// Guarded CDC writes use INSERT ... SELECT over a derived row set. Keep the
+	// lightweight test executor compatible with that production form.
+	if !strings.Contains(upperBody, "VALUES") {
+		fromIndex := strings.Index(upperBody, "FROM (")
+		endIndex := strings.LastIndex(upperBody, ") AS V")
+		if fromIndex < 0 || endIndex <= fromIndex {
+			return result, moerr.NewInternalErrorNoCtxf("VALUES keyword not found in sql: %s", inputSql)
+		}
+		rowsPart := strings.TrimSpace(insertBody[fromIndex+len("FROM (") : endIndex])
+		for _, rowPart := range strings.Split(rowsPart, " UNION ALL ") {
+			rowPart = strings.TrimSpace(strings.TrimPrefix(rowPart, "SELECT "))
+			fields := strings.Split(rowPart, ",")
+			row := make([]string, 0, len(fields))
+			for _, field := range fields {
+				field = strings.TrimSpace(field)
+				if asIndex := strings.LastIndex(strings.ToUpper(field), " AS "); asIndex >= 0 {
+					field = field[:asIndex]
+				}
+				row = append(row, trimQuote(strings.TrimSpace(field)))
+			}
+			result.rows = append(result.rows, row)
+		}
+		return result, nil
+	}
+
 	// Find the position of VALUES keyword
-	valuesIndex := strings.Index(strings.ToUpper(inputSql), "VALUES")
+	valuesIndex := strings.Index(strings.ToUpper(insertBody), "VALUES")
 	if valuesIndex == -1 {
 		return result, moerr.NewInternalErrorNoCtxf("VALUES keyword not found in sql: %s", inputSql)
 	}
 
 	// Extract the part after VALUES
-	valuesPart := inputSql[valuesIndex:]
+	valuesPart := insertBody[valuesIndex:]
 	valuesRe := regexp.MustCompile(`\(([^)]+)\)`)
 	allMatches := valuesRe.FindAllStringSubmatch(valuesPart, -1)
 	if len(allMatches) == 0 {

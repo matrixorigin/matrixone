@@ -220,8 +220,26 @@ func TestLeast(t *testing.T) {
 		default:
 			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, leastFn)
 		}
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info '%s'", tc.info, info))
+	}
+}
+
+func TestLeastGreatestPromoteVarcharMetadataWhenWidthsDiffer(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	inputs := []types.Type{
+		types.New(types.T_varchar, 8, 0),
+		types.New(types.T_varchar, 2, 0),
+	}
+	for _, name := range []string{"least", "greatest"} {
+		t.Run(name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(proc.Ctx, name, inputs)
+			require.NoError(t, err)
+			require.Equal(t, types.T_varchar, resolved.GetReturnType().Oid)
+			require.Equal(t, int32(types.MaxVarcharLen), resolved.GetReturnType().Width)
+		})
 	}
 }
 
@@ -417,7 +435,7 @@ func TestGreatest(t *testing.T) {
 		default:
 			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, greatestFn)
 		}
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 }
@@ -730,6 +748,168 @@ func TestLeastGreatestFunctionResolution(t *testing.T) {
 	}
 }
 
+func TestLeastGreatestStringResolutionPreservesMergedCharset(t *testing.T) {
+	utf8mb4BinVarchar := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8MB4Bin)
+	utf8mb4BinText := types.NewWithCharset(types.T_text, types.MaxVarcharLen, 0, types.CharsetUTF8MB4Bin)
+	generalVarchar := types.NewWithCharset(types.T_varchar, 8, 0, types.CharsetUTF8)
+	binaryVarchar := types.NewWithCharset(types.T_varchar, 8, 0, types.CharsetBinary)
+	legacyVarchar := types.NewWithCharset(types.T_varchar, 8, 0, types.CharsetLegacy)
+
+	tests := []struct {
+		name        string
+		inputs      []types.Type
+		wantOID     types.T
+		wantCharset uint8
+		wantWidth   int32
+	}{
+		{
+			name:        "mixed varchar and text keep utf8mb4 bin",
+			inputs:      []types.Type{utf8mb4BinVarchar, utf8mb4BinText},
+			wantOID:     types.T_text,
+			wantCharset: types.CharsetUTF8MB4Bin,
+		},
+		{
+			name:        "mixed text and varchar keep utf8mb4 bin independent of order",
+			inputs:      []types.Type{utf8mb4BinText, utf8mb4BinVarchar},
+			wantOID:     types.T_text,
+			wantCharset: types.CharsetUTF8MB4Bin,
+		},
+		{
+			name:        "same oid merges stronger collation",
+			inputs:      []types.Type{generalVarchar, utf8mb4BinVarchar},
+			wantOID:     types.T_varchar,
+			wantCharset: types.CharsetUTF8MB4Bin,
+			wantWidth:   types.MaxVarcharLen,
+		},
+		{
+			name:        "json and varchar keep utf8mb4 bin",
+			inputs:      []types.Type{types.T_json.ToType(), utf8mb4BinVarchar},
+			wantOID:     types.T_varchar,
+			wantCharset: types.CharsetUTF8MB4Bin,
+		},
+		{
+			name:        "varchar and json keep utf8mb4 bin independent of order",
+			inputs:      []types.Type{utf8mb4BinVarchar, types.T_json.ToType()},
+			wantOID:     types.T_varchar,
+			wantCharset: types.CharsetUTF8MB4Bin,
+		},
+		{
+			name:        "json and text keep utf8mb4 bin",
+			inputs:      []types.Type{types.T_json.ToType(), utf8mb4BinText},
+			wantOID:     types.T_text,
+			wantCharset: types.CharsetUTF8MB4Bin,
+		},
+		{
+			name:        "json and binary varchar keep opaque bytes",
+			inputs:      []types.Type{types.T_json.ToType(), binaryVarchar},
+			wantOID:     types.T_varchar,
+			wantCharset: types.CharsetBinary,
+		},
+		{
+			name:        "json and legacy varchar keep legacy byte ordering",
+			inputs:      []types.Type{types.T_json.ToType(), legacyVarchar},
+			wantOID:     types.T_varchar,
+			wantCharset: types.CharsetLegacy,
+		},
+		{
+			name:        "json and general varchar keep general ci",
+			inputs:      []types.Type{types.T_json.ToType(), generalVarchar},
+			wantOID:     types.T_varchar,
+			wantCharset: types.CharsetUTF8,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for _, functionName := range []string{"least", "greatest"} {
+				fn, err := GetFunctionByName(context.Background(), functionName, test.inputs)
+				require.NoError(t, err)
+				require.Equal(t, test.wantOID, fn.GetReturnType().Oid)
+				require.Equal(t, test.wantCharset, fn.GetReturnType().Charset)
+				if test.wantWidth != 0 {
+					require.Equal(t, test.wantWidth, fn.GetReturnType().Width)
+				}
+
+				castTypes, shouldCast := fn.ShouldDoImplicitTypeCast()
+				require.True(t, shouldCast)
+				require.Len(t, castTypes, len(test.inputs))
+				for _, castType := range castTypes {
+					require.Equal(t, test.wantOID, castType.Oid)
+					require.Equal(t, test.wantCharset, castType.Charset)
+					if test.wantWidth != 0 {
+						require.Equal(t, test.wantWidth, castType.Width)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestLeastGreatestSameTextOIDKeepsUnboundedWidth(t *testing.T) {
+	generalText := types.NewWithCharset(types.T_text, 0, 0, types.CharsetUTF8)
+	binaryTinyText := types.NewWithCharset(
+		types.T_text, types.MaxTinyTextLen, 0, types.CharsetUTF8MB4Bin)
+
+	for _, functionName := range []string{"least", "greatest"} {
+		fn, err := GetFunctionByName(
+			context.Background(), functionName, []types.Type{generalText, binaryTinyText})
+		require.NoError(t, err)
+		require.Equal(t, types.T_text, fn.GetReturnType().Oid)
+		require.Equal(t, types.CharsetUTF8MB4Bin, fn.GetReturnType().Charset)
+		require.Zero(t, fn.GetReturnType().Width)
+
+		castTypes, shouldCast := fn.ShouldDoImplicitTypeCast()
+		require.True(t, shouldCast)
+		require.Len(t, castTypes, 2)
+		for _, castType := range castTypes {
+			require.Equal(t, types.T_text, castType.Oid)
+			require.Equal(t, types.CharsetUTF8MB4Bin, castType.Charset)
+			require.Zero(t, castType.Width)
+		}
+	}
+}
+
+func TestLeastGreatestTemporalStringResolutionPreservesMergedCharset(t *testing.T) {
+	utf8mb4BinVarchar := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8MB4Bin)
+	tests := []struct {
+		name        string
+		inputs      []types.Type
+		wantTargets []types.T
+	}{
+		{
+			name:        "json date and varchar",
+			inputs:      []types.Type{types.T_json.ToType(), types.T_date.ToType(), utf8mb4BinVarchar},
+			wantTargets: []types.T{types.T_varchar, types.T_date, types.T_varchar},
+		},
+		{
+			name:        "date and varchar",
+			inputs:      []types.Type{types.T_date.ToType(), utf8mb4BinVarchar},
+			wantTargets: []types.T{types.T_date, types.T_varchar},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for _, functionName := range []string{"least", "greatest"} {
+				fn, err := GetFunctionByName(context.Background(), functionName, test.inputs)
+				require.NoError(t, err)
+				require.Equal(t, types.T_varchar, fn.GetReturnType().Oid)
+				require.Equal(t, types.CharsetUTF8MB4Bin, fn.GetReturnType().Charset)
+
+				castTypes, shouldCast := fn.ShouldDoImplicitTypeCast()
+				require.True(t, shouldCast)
+				require.Len(t, castTypes, len(test.wantTargets))
+				for i, wantOID := range test.wantTargets {
+					require.Equal(t, wantOID, castTypes[i].Oid)
+					if castTypes[i].Oid.IsMySQLString() {
+						require.Equal(t, types.CharsetUTF8MB4Bin, castTypes[i].Charset)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestLeastGreatestTemporalResolution(t *testing.T) {
 	cases := []struct {
 		name         string
@@ -1010,6 +1190,7 @@ func TestLeastGreatestPackedDateMaterializesNullRows(t *testing.T) {
 			},
 			NewFunctionTestResult(varcharTyp, false, nil, nil),
 			greatestTemporalFn)
+		defer fcTC.Free()
 		require.NoError(t, fcTC.result.PreExtendAndReset(fcTC.fnLength))
 		require.NoError(t, fcTC.fn(fcTC.parameters, fcTC.result, fcTC.proc, fcTC.fnLength, &FunctionSelectList{AllNull: true}))
 
@@ -1028,6 +1209,7 @@ func TestLeastGreatestPackedDateMaterializesNullRows(t *testing.T) {
 			},
 			NewFunctionTestResult(varcharTyp, false, nil, nil),
 			greatestTemporalFn)
+		defer fcTC.Free()
 		require.NoError(t, fcTC.result.PreExtendAndReset(fcTC.fnLength))
 		require.NoError(t, fcTC.fn(fcTC.parameters, fcTC.result, fcTC.proc, fcTC.fnLength, nil))
 
@@ -1051,6 +1233,7 @@ func TestLeastGreatestVarlenMaterializesNullRows(t *testing.T) {
 			},
 			NewFunctionTestResult(varcharTyp, false, nil, nil),
 			greatestFn)
+		defer fcTC.Free()
 		require.NoError(t, fcTC.result.PreExtendAndReset(fcTC.fnLength))
 		require.NoError(t, fcTC.fn(fcTC.parameters, fcTC.result, fcTC.proc, fcTC.fnLength, &FunctionSelectList{AllNull: true}))
 
@@ -1069,6 +1252,7 @@ func TestLeastGreatestVarlenMaterializesNullRows(t *testing.T) {
 			},
 			NewFunctionTestResult(varcharTyp, false, nil, nil),
 			greatestFn)
+		defer fcTC.Free()
 		require.NoError(t, fcTC.result.PreExtendAndReset(fcTC.fnLength))
 		require.NoError(t, fcTC.fn(fcTC.parameters, fcTC.result, fcTC.proc, fcTC.fnLength, nil))
 
@@ -1102,14 +1286,14 @@ func TestLeastGreatestYearNumericExecutor(t *testing.T) {
 		inputs,
 		NewFunctionTestResult(decimalType, false, parseDecimal("2020.0", "2022.5"), nil),
 		greatestYearNumericFn)
-	ok, info := tcGreatest.Run()
+	ok, info := tcGreatest.RunAndFree()
 	require.True(t, ok, info)
 
 	tcLeast := NewFunctionTestCase(proc,
 		inputs,
 		NewFunctionTestResult(decimalType, false, parseDecimal("2019.5", "2022.0"), nil),
 		leastYearNumericFn)
-	ok, info = tcLeast.Run()
+	ok, info = tcLeast.RunAndFree()
 	require.True(t, ok, info)
 
 	t.Run("double target", func(t *testing.T) {
@@ -1120,13 +1304,13 @@ func TestLeastGreatestYearNumericExecutor(t *testing.T) {
 		greatest := NewFunctionTestCase(proc, inputs,
 			NewFunctionTestResult(types.T_float64.ToType(), false, []float64{2020, 2022.5}, nil),
 			greatestYearNumericFn)
-		ok, info := greatest.Run()
+		ok, info := greatest.RunAndFree()
 		require.True(t, ok, info)
 
 		least := NewFunctionTestCase(proc, inputs,
 			NewFunctionTestResult(types.T_float64.ToType(), false, []float64{2019.5, 2022}, nil),
 			leastYearNumericFn)
-		ok, info = least.Run()
+		ok, info = least.RunAndFree()
 		require.True(t, ok, info)
 	})
 
@@ -1138,13 +1322,13 @@ func TestLeastGreatestYearNumericExecutor(t *testing.T) {
 		greatest := NewFunctionTestCase(proc, inputs,
 			NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{2020, 2023}, nil),
 			greatestYearNumericFn)
-		ok, info := greatest.Run()
+		ok, info := greatest.RunAndFree()
 		require.True(t, ok, info)
 
 		least := NewFunctionTestCase(proc, inputs,
 			NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{2019, 2022}, nil),
 			leastYearNumericFn)
-		ok, info = least.Run()
+		ok, info = least.RunAndFree()
 		require.True(t, ok, info)
 	})
 }
@@ -1213,7 +1397,7 @@ func TestLeastGreatestTemporalExecutor(t *testing.T) {
 		},
 		NewFunctionTestResult(varcharTyp, false, []string{"2020-01-02", "2020-01-03"}, nil),
 		greatestTemporalFn)
-	ok, info := tcGreatest.Run()
+	ok, info := tcGreatest.RunAndFree()
 	require.True(t, ok, info)
 
 	tcLeast := NewFunctionTestCase(proc,
@@ -1223,7 +1407,7 @@ func TestLeastGreatestTemporalExecutor(t *testing.T) {
 		},
 		NewFunctionTestResult(varcharTyp, false, []string{"2020-01-01", "2020-01-01"}, nil),
 		leastTemporalFn)
-	ok, info = tcLeast.Run()
+	ok, info = tcLeast.RunAndFree()
 	require.True(t, ok, info)
 
 	dt0, err := types.ParseDatetime("2019-12-31 23:59:59", 0)
@@ -1240,7 +1424,7 @@ func TestLeastGreatestTemporalExecutor(t *testing.T) {
 		NewFunctionTestResult(types.T_datetime.ToType(), false,
 			[]types.Datetime{d1.ToDatetime(), dt1, dt2}, nil),
 		greatestTemporalFn)
-	ok, info = tcConstDate.Run()
+	ok, info = tcConstDate.RunAndFree()
 	require.True(t, ok, info)
 
 	tcInvalidDatePeer := NewFunctionTestCase(proc,
@@ -1250,7 +1434,7 @@ func TestLeastGreatestTemporalExecutor(t *testing.T) {
 		},
 		NewFunctionTestResult(varcharTyp, true, []string{""}, nil),
 		greatestTemporalFn)
-	ok, info = tcInvalidDatePeer.Run()
+	ok, info = tcInvalidDatePeer.RunAndFree()
 	require.True(t, ok, info)
 
 	// JSON-temporal parameters reach this executor after JSON is cast to
@@ -1262,7 +1446,7 @@ func TestLeastGreatestTemporalExecutor(t *testing.T) {
 		},
 		NewFunctionTestResult(varcharTyp, false, []string{"2020-01-02", "2020-01-03"}, nil),
 		greatestJSONTemporalFn)
-	ok, info = tcJSONGreatest.Run()
+	ok, info = tcJSONGreatest.RunAndFree()
 	require.True(t, ok, info)
 }
 
@@ -1273,8 +1457,8 @@ func TestLeastGreatestTemporalAllocationsDoNotScaleWithRows(t *testing.T) {
 		dates := make([]types.Date, rowCount)
 		datetimes := make([]types.Datetime, rowCount)
 		dateVec := newVectorByType(proc.Mp(), types.T_date.ToType(), dates, nil)
-		datetimeVec := newVectorByType(proc.Mp(), types.T_datetime.ToType(), datetimes, nil)
 		defer dateVec.Free(proc.Mp())
+		datetimeVec := newVectorByType(proc.Mp(), types.T_datetime.ToType(), datetimes, nil)
 		defer datetimeVec.Free(proc.Mp())
 
 		parameters := []*vector.Vector{dateVec, datetimeVec}
@@ -1305,8 +1489,8 @@ func BenchmarkLeastGreatestTemporalFixedReaders(b *testing.B) {
 	const rowCount = 8192
 	proc := testutil.NewProcess(b)
 	dateVec := newVectorByType(proc.Mp(), types.T_date.ToType(), make([]types.Date, rowCount), nil)
-	datetimeVec := newVectorByType(proc.Mp(), types.T_datetime.ToType(), make([]types.Datetime, rowCount), nil)
 	defer dateVec.Free(proc.Mp())
+	datetimeVec := newVectorByType(proc.Mp(), types.T_datetime.ToType(), make([]types.Datetime, rowCount), nil)
 	defer datetimeVec.Free(proc.Mp())
 
 	result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
@@ -1364,7 +1548,7 @@ func TestLeastGreatestMixedTemporalExecutorPreservesMaxScale(t *testing.T) {
 
 	type testCase struct {
 		name     string
-		fn       fEvalFn
+		fn       executeLogicOfOverload
 		first    FunctionTestInput
 		second   FunctionTestInput
 		text     string
@@ -1511,7 +1695,7 @@ func TestLeastGreatestMixedTemporalExecutorPreservesMaxScale(t *testing.T) {
 					NewFunctionTestInput(varcharType, []string{tc.text}, nil),
 				},
 				NewFunctionTestResult(varcharType, false, []string{tc.expected}, nil), tc.fn)
-			ok, info := ftc.Run()
+			ok, info := ftc.RunAndFree()
 			require.True(t, ok, info)
 		})
 	}
@@ -1540,7 +1724,7 @@ func TestLeastGreatestPackedDateFallsBackToLocalTimezone(t *testing.T) {
 			NewFunctionTestResult(types.T_datetime.ToType(), false,
 				[]types.Datetime{timestamp.ToDatetime(time.Local)}, nil),
 			greatestTemporalFn)
-		ok, info := tc.Run()
+		ok, info := tc.RunAndFree()
 		require.True(t, ok, info)
 	})
 
@@ -1553,7 +1737,7 @@ func TestLeastGreatestPackedDateFallsBackToLocalTimezone(t *testing.T) {
 			NewFunctionTestResult(types.T_varchar.ToType(), false,
 				[]string{"2020-01-03 00:00:00"}, nil),
 			greatestTemporalFn)
-		ok, info := tc.Run()
+		ok, info := tc.RunAndFree()
 		require.True(t, ok, info)
 	})
 }
@@ -1580,7 +1764,7 @@ func TestLeastGreatestPackedDateUsesStatementStartForTime(t *testing.T) {
 		NewFunctionTestResult(resultType, false,
 			[]types.Datetime{types.DatetimeFromClock(2024, 5, 6, 12, 34, 56, 0)}, nil),
 		greatestTemporalFn)
-	ok, info := tc.Run()
+	ok, info := tc.RunAndFree()
 	require.True(t, ok, info)
 }
 
@@ -1602,6 +1786,7 @@ func TestLeastGreatestNormalExecutorRestoresTemporalScale(t *testing.T) {
 		},
 		NewFunctionTestResult(types.New(types.T_time, 64, 0), false, []types.Time{second}, nil),
 		greatestFn)
+	defer tc.Free()
 	ok, info := tc.Run()
 	require.True(t, ok, info)
 	require.Equal(t, int32(2), tc.GetResultVectorDirectly().GetType().Scale)
@@ -1688,7 +1873,7 @@ func TestLeastGreatestDecimal256(t *testing.T) {
 		},
 		NewFunctionTestResult(typ, false, mk([]string{"3.00", "20.00", "-5.00"}), nil),
 		leastFn)
-	ok, info := tcLeast.Run()
+	ok, info := tcLeast.RunAndFree()
 	require.True(t, ok, info)
 
 	tcGreatest := NewFunctionTestCase(proc,
@@ -1698,6 +1883,6 @@ func TestLeastGreatestDecimal256(t *testing.T) {
 		},
 		NewFunctionTestResult(typ, false, mk([]string{"10.00", "25.00", "-1.00"}), nil),
 		greatestFn)
-	ok, info = tcGreatest.Run()
+	ok, info = tcGreatest.RunAndFree()
 	require.True(t, ok, info)
 }

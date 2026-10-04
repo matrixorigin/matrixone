@@ -30,6 +30,18 @@ import (
 
 const opName = "partition"
 
+const cancellationCheckInterval = 1024
+
+func checkCanceled(proc *process.Process, iteration int) error {
+	if iteration&(cancellationCheckInterval-1) != 0 {
+		return nil
+	}
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return err
+	}
+	return nil
+}
+
 func (partition *Partition) String(buf *bytes.Buffer) {
 	buf.WriteString(opName)
 	buf.WriteString(": partition([")
@@ -52,6 +64,12 @@ func (partition *Partition) Prepare(proc *process.Process) (err error) {
 	} else {
 		partition.OpAnalyzer.Reset()
 	}
+	if partition.Limit != nil {
+		return partition.prepareTopN(proc)
+	}
+	if partition.Algorithm == plan2.Node_PARTITION_ALGORITHM_HASH {
+		return partition.prepareHash(proc)
+	}
 
 	if len(partition.ctr.executors) > 0 {
 		return nil
@@ -73,6 +91,12 @@ func (partition *Partition) Prepare(proc *process.Process) (err error) {
 }
 
 func (partition *Partition) Call(proc *process.Process) (vm.CallResult, error) {
+	if partition.Limit != nil {
+		return partition.callTopN(proc)
+	}
+	if partition.Algorithm == plan2.Node_PARTITION_ALGORITHM_HASH {
+		return partition.callHash(proc)
+	}
 	analyzer := partition.OpAnalyzer
 
 	ctr := &partition.ctr
@@ -169,7 +193,7 @@ func (ctr *container) generateCompares(fs []*plan.OrderBySpec) {
 		}
 
 		exprTyp := fs[i].Expr.Typ
-		typ := types.New(types.T(exprTyp.Id), exprTyp.Width, exprTyp.Scale)
+		typ := types.NewWithCharset(types.T(exprTyp.Id), exprTyp.Width, exprTyp.Scale, uint8(exprTyp.Charset))
 		ctr.compares[i] = compare.New(typ, desc, nullsLast)
 	}
 }
@@ -191,6 +215,9 @@ func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) 
 	var cols []*vector.Vector
 	fromRemoveBatch := false
 	for {
+		if err = checkCanceled(proc, wholeLength); err != nil {
+			return false, err
+		}
 		if wholeLength == 0 || fromRemoveBatch {
 			choice = ctr.pickFirstRow()
 		} else {

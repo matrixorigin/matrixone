@@ -16,26 +16,16 @@ package merge
 
 import (
 	"cmp"
-	"context"
 	"iter"
 	"slices"
-	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
-type taskHostKind int
-
 const (
-	taskHostDN taskHostKind = iota
-	taskHostCN
-
 	constMaxMemCap = 12 * common.Const1GBytes // max original memory for an object
 )
 
@@ -97,26 +87,6 @@ func IterStats(objs []*objectio.ObjectStats) iter.Seq[*objectio.ObjectStats] {
 			if !yield(obj) {
 				return
 			}
-		}
-	}
-}
-
-func CleanUpUselessFiles(entry *api.MergeCommitEntry, fs fileservice.FileService) {
-	if entry == nil {
-		return
-	}
-	ctx, cancel := context.WithTimeoutCause(context.Background(), 2*time.Minute, moerr.CauseCleanUpUselessFiles)
-	defer cancel()
-	for _, filepath := range entry.BookingLoc {
-		_ = fs.Delete(ctx, filepath)
-	}
-	if len(entry.CreatedObjs) != 0 {
-		for _, obj := range entry.CreatedObjs {
-			if len(obj) == 0 {
-				continue
-			}
-			s := objectio.ObjectStats(obj)
-			_ = fs.Delete(ctx, s.ObjectName().String())
 		}
 	}
 }

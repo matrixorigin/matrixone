@@ -16,6 +16,7 @@ package lockservice
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -46,6 +47,10 @@ var (
 	ErrLockTimeout = moerr.NewLockWaitTimeoutNoCtx()
 	// ErrRemoteLockWaitTimeout remote lock owner-side wait timeout
 	ErrRemoteLockWaitTimeout = moerr.NewRemoteLockWaitTimeoutNoCtx()
+	// errEmptyLock is returned when a stale lock-table entry has no holder or
+	// waiter. Such an entry can be left behind by a failed waiter cleanup, but
+	// it must never be treated as a live lock or cause a panic.
+	errEmptyLock = moerr.NewInvalidStateNoCtx("empty lock")
 )
 
 // Option lockservice option
@@ -135,11 +140,35 @@ type LockService interface {
 	CloseRemoteLockTable(group uint32, tableID, version uint64) (bool, error)
 }
 
+// ExternalTxnLivenessRegistry lets a caller register transaction IDs whose
+// liveness is owned outside the transaction client. The registration remains
+// active until the caller unregisters it after terminal lock cleanup.
+//
+// The separate optional capability keeps ordinary LockService clients from
+// having to implement session-level transaction tracking.
+type ExternalTxnLivenessRegistry interface {
+	// RegisterExternalTxn must be called before issuing the corresponding Lock.
+	// An error leaves the registry unchanged.
+	RegisterExternalTxn(txnID []byte) error
+	// UnregisterExternalTxn must be called only after the corresponding lock
+	// cleanup has completed successfully.
+	UnregisterExternalTxn(txnID []byte)
+}
+
 // UnknownCommitResolver resolves a Commit whose request may have reached TN but
 // whose final response was not received by CN. It must not release the txn's
 // locks until the allocator proves that the txn cannot still be committing.
 // The optional completion callback is invoked exactly once after terminal
-// lock cleanup.
+// lock cleanup. The callback may re-enter LockService.Close, but it must not
+// perform unbounded blocking work. Lockservice bounds callbacks that have been
+// accepted but have not returned; saturation is reported before callback
+// ownership transfers to lockservice. A nil return transfers callback
+// ownership; on error the caller retains it even when lock cleanup was safely
+// scheduled without a callback. Such a scheduled error carries a terminal
+// signal retrievable with UnknownCommitResolutionDone, allowing the caller to
+// retain its own admission until cleanup finishes. Immediately before
+// invocation, execution transfers back to external code; Close does not join
+// the callback body.
 //
 // This is deliberately separate from LockService: callers that only perform
 // regular lock operations do not need to implement the exceptional protocol.
@@ -150,6 +179,27 @@ type UnknownCommitResolver interface {
 		commitSequence uint64,
 		onResolved func(),
 	) error
+}
+
+// UnknownCommitResolutionScheduledError reports that lock cleanup was
+// scheduled but the supplied completion callback was not accepted. The caller
+// retains callback ownership and can wait for ResolutionDone before invoking
+// it itself. This preserves transaction admission until terminal cleanup
+// without adding callback work beyond lockservice's bound.
+type UnknownCommitResolutionScheduledError interface {
+	error
+	ResolutionDone() <-chan struct{}
+}
+
+// UnknownCommitResolutionDone extracts the terminal cleanup signal carried by
+// an UnknownCommitResolutionScheduledError, including through wrapped errors.
+func UnknownCommitResolutionDone(err error) (<-chan struct{}, bool) {
+	var scheduled UnknownCommitResolutionScheduledError
+	if !errors.As(err, &scheduled) {
+		return nil, false
+	}
+	done := scheduled.ResolutionDone()
+	return done, done != nil
 }
 
 // CommitSequenceProvider allocates a source-CN-local sequence for Commit
@@ -195,7 +245,7 @@ type lockTable interface {
 	// Unlock release a set of locks, if txn was committed, commitTS is not empty
 	unlock(txn *activeTxn, ls *cowSlice, commitTS timestamp.Timestamp, mutations ...pb.ExtraMutation)
 	// getLock get a lock
-	getLock(key []byte, txn pb.WaitTxn, fn func(Lock))
+	getLock(ctx context.Context, key []byte, txn pb.WaitTxn, fn func(Lock)) error
 	// getLockHolder returns the current holder if the lock is actively held.
 	getLockHolder(ctx context.Context, key []byte) (pb.WaitTxn, bool, error)
 	// getBind returns lock table binding
@@ -289,6 +339,21 @@ type LockOptions struct {
 	pb.LockOptions
 	async                      bool
 	remoteLockOwnerWaitTimeout time.Duration
+	// replaceTxnLocks is set when the request was coarsened from every lock
+	// recorded for the same transaction and lock table at planning time. The lock
+	// owner merges that replacement into its current bookkeeping at commit time,
+	// preserving any out-of-range key acquired while this request was waiting. A
+	// remote origin must apply the same merge after the owner accepts the range.
+	replaceTxnLocks bool
+	// originalRows and originalOptions retain the logical request before a
+	// cumulative Exclusive-row request is represented as one range. A waiting
+	// owner can fall back to this exact request if concurrent ownership makes the
+	// prepared range ineligible before commit. remoteLockTable also sends this
+	// logical request to the authoritative owner instead of forwarding an
+	// origin-side representation decision.
+	originalRows                  [][]byte
+	originalOptions               pb.LockOptions
+	requireOwnerLocalWaitSnapshot bool
 }
 
 // Lock stores specific lock information. Since there are a large number of lock objects

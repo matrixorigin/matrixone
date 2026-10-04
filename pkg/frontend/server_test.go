@@ -16,14 +16,187 @@ package frontend
 
 import (
 	"context"
+	"errors"
+	"net"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 )
+
+type closeErrorListener struct {
+	net.Listener
+	err error
+}
+
+type testMOServerBaseService struct {
+	MockBaseService
+	id string
+}
+
+func (s *testMOServerBaseService) ID() string {
+	return s.id
+}
+
+func (s *testMOServerBaseService) SessionMgr() *queryservice.SessionManager {
+	return nil
+}
+
+func (l closeErrorListener) Close() error {
+	_ = l.Listener.Close()
+	return l.err
+}
+
+func TestMOServerStopCompletesCleanupAfterListenerCloseError(t *testing.T) {
+	service := t.Name()
+	InitServerLevelVars(service)
+	listenerErr := errors.New("listener close failed")
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	setPu(service, pu)
+	setSessionAlloc(service, NewLeakCheckAllocator())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rm, err := NewRoutineManager(ctx, service)
+	require.NoError(t, err)
+
+	serverConn, clientConn := net.Pipe()
+	defer clientConn.Close()
+
+	rs, err := NewIOSession(serverConn, pu, service)
+	require.NoError(t, err)
+	rm.setRoutine(rs, 1, &Routine{})
+
+	mo := &MOServer{
+		rm:        rm,
+		running:   true,
+		listeners: []net.Listener{closeErrorListener{Listener: listener, err: listenerErr}},
+	}
+
+	err = mo.Stop()
+	require.ErrorIs(t, err, listenerErr)
+	require.False(t, mo.IsRunning())
+	if err := clientConn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		return
+	}
+	_, err = clientConn.Read(make([]byte, 1))
+	require.Error(t, err)
+}
+
+func TestMOServerStopBeforeStartReleasesListener(t *testing.T) {
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	mo := NewMOServer(ctx, "127.0.0.1:0", pu, nil, &testMOServerBaseService{id: t.Name()})
+	addr := mo.listeners[0].Addr().String()
+
+	require.NoError(t, mo.Stop())
+	require.NoError(t, mo.Stop())
+
+	rebound, err := net.Listen("tcp", addr)
+	require.NoError(t, err)
+	require.NoError(t, rebound.Close())
+}
+
+func TestMOServerStopJoinsConnectionCleanup(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	mo := &MOServer{rm: &RoutineManager{ctx: ctx, cancel: cancel}, running: true}
+	serverConn, clientConn := net.Pipe()
+	t.Cleanup(func() { _ = clientConn.Close() })
+	require.True(t, mo.admitConnection(serverConn), "accepted before session registration")
+	release := make(chan struct{})
+	defer close(release)
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		defer mo.releaseConnection(serverConn)
+		<-release // deferred routine cleanup may still use transaction state
+	}()
+	stopped := make(chan error, 2)
+	go func() { stopped <- mo.Stop() }()
+	go func() { stopped <- mo.Stop() }()
+	<-ctx.Done() // Stop has sealed connection admission.
+	late, peer := net.Pipe()
+	defer late.Close()
+	defer peer.Close()
+	require.False(t, mo.admitConnection(late))
+	_, err := clientConn.Read(make([]byte, 1))
+	require.Error(t, err, "Stop interrupts pre-registration socket I/O")
+	select {
+	case <-stopped:
+		t.Fatal("Stop returned before connection cleanup")
+	default:
+	}
+	// Release explicitly, while retaining cleanup if an assertion failed.
+	release <- struct{}{}
+	<-finished
+	require.NoError(t, <-stopped)
+	require.NoError(t, <-stopped)
+	require.NoError(t, mo.Stop())
+	require.Empty(t, mo.connections)
+}
+
+type blockedSessionAllocator struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (a *blockedSessionAllocator) Alloc(int) ([]byte, error) {
+	close(a.entered)
+	<-a.release
+	return nil, errors.New("injected session allocation failure")
+}
+
+func (*blockedSessionAllocator) Free([]byte) {}
+
+func TestMOServerStopJoinsAcceptedSessionInitialization(t *testing.T) {
+	service := t.Name()
+	InitServerLevelVars(service)
+	allocator := &blockedSessionAllocator{entered: make(chan struct{}), release: make(chan struct{})}
+	setSessionAlloc(service, allocator)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	mo := &MOServer{service: service, pu: pu, running: true,
+		rm: &RoutineManager{ctx: ctx, cancel: cancel}, listeners: []net.Listener{listener}}
+	var release sync.Once
+	unblock := func() { release.Do(func() { close(allocator.release) }) }
+	t.Cleanup(func() { unblock(); require.NoError(t, mo.Stop()) })
+	mo.wg.Add(1)
+	go mo.startAccept(ctx, listener)
+	conn, err := net.Dial("tcp", listener.Addr().String())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	<-allocator.entered // real accept -> handleConn -> NewIOSession, before rm.Created
+	stopped := make(chan error, 1)
+	go func() { stopped <- mo.Stop() }()
+	<-ctx.Done()
+	_, err = conn.Read(make([]byte, 1))
+	require.Error(t, err, "Stop must find even an unregistered connection")
+	select {
+	case <-stopped:
+		t.Fatal("Stop returned while session initialization still owned the connection")
+	default:
+	}
+	unblock()
+	require.NoError(t, <-stopped)
+	require.Empty(t, mo.connections)
+}
 
 func Test_handshake(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())

@@ -48,15 +48,17 @@ func (router *routeErrRouter) Connect(*CNServer, *frontend.Packet, *tunnel) (Ser
 }
 
 type popCountConnCache struct {
-	popCount int
+	popCount   int
+	lastClient clientInfo
 }
 
 func (c *popCountConnCache) Push(cacheKey, ServerConn) bool {
 	return false
 }
 
-func (c *popCountConnCache) Pop(cacheKey, uint32, []byte, []byte) ServerConn {
+func (c *popCountConnCache) Pop(_ cacheKey, _ uint32, _ []byte, _ []byte, client clientInfo) ServerConn {
 	c.popCount++
+	c.lastClient = client
 	return nil
 }
 

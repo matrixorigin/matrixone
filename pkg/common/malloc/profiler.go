@@ -103,6 +103,25 @@ func (p *Profiler[T, P]) Sample(
 	return p.getSampleValueFromPCs(pcs, int64(fullStackFraction))
 }
 
+// SampleNamed returns a stable synthetic sample without collecting a runtime
+// stack. It is intended for allocations that already carry explicit, bounded
+// provenance supplied by their owner.
+func (p *Profiler[T, P]) SampleNamed(name string) P {
+	locations := []*profile.Location{p.getMockLocation(name)}
+	locationsHashSum := hashLocations(locations)
+	if v, ok := p.locationsToSample.Load(locationsHashSum); ok {
+		return v.(*SampleInfo[P]).Values
+	}
+
+	var value T
+	P(&value).Init()
+	v, _ := p.locationsToSample.LoadOrStore(locationsHashSum, &SampleInfo[P]{
+		Values:    &value,
+		Locations: locations,
+	})
+	return v.(*SampleInfo[P]).Values
+}
+
 func (p *Profiler[T, P]) getLocation(frame runtime.Frame) *profile.Location {
 	locationKey := LocationKey{
 		File:     frame.File,

@@ -1,0 +1,42 @@
+-- @label:bvt
+drop database if exists view_star_cte_static_columns;
+create database view_star_cte_static_columns;
+use view_star_cte_static_columns;
+
+create table t(a int primary key, b varchar(5));
+insert into t values (1,'x'),(2,'yy');
+
+create view v_cte as
+with recursive c(a,b) as (
+    select * from t
+    union all
+    select a,b from c where false
+)
+select * from c;
+
+select rel_createsql not like '%*%' as create_sql_ok
+from mo_catalog.mo_tables
+where reldatabase = 'view_star_cte_static_columns' and relname = 'v_cte';
+
+alter view v_cte as
+with recursive c(a,b) as (
+    select * from t
+    union all
+    select a,b from c where false
+)
+select * from c;
+
+select rel_createsql not like '%*%' as alter_sql_ok
+from mo_catalog.mo_tables
+where reldatabase = 'view_star_cte_static_columns' and relname = 'v_cte';
+
+alter table t add column c int default 7;
+
+select (select count(*) = 2 from information_schema.columns
+        where table_schema = 'view_star_cte_static_columns' and table_name = 'v_cte')
+       and (select count(*) = 2 from v_cte) as stable_rebind_ok;
+select * from v_cte order by a;
+
+drop view v_cte;
+drop table t;
+drop database view_star_cte_static_columns;

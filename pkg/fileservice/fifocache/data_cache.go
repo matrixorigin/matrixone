@@ -18,6 +18,7 @@ import (
 	"context"
 	"hash/maphash"
 	"math"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
@@ -25,32 +26,85 @@ import (
 )
 
 type DataCache struct {
-	fifo *Cache[fscache.CacheKey, fscache.Data]
+	fifo *Cache[fscache.CacheKey, dataCacheValue]
+}
+
+// dataCacheValue captures the logical length at Set time. Data.Slice may
+// subsequently change the visible length, but cache accounting must describe
+// the entry that was admitted.
+type dataCacheValue struct {
+	data        fscache.Data
+	logicalSize int64
 }
 
 func NewDataCache(
 	capacity fscache.CapacityFunc,
-	postSet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64),
+	postSet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, logicalSize, size int64, seq uint64),
 	postGet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64),
-	postEvict func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64),
+	postEvict func(ctx context.Context, key fscache.CacheKey, value fscache.Data, logicalSize, size int64, seq uint64),
 ) *DataCache {
 	return NewDataCacheWithPrepareSet(capacity, nil, postSet, postGet, postEvict)
 }
 
 func NewDataCacheWithPrepareSet(
 	capacity fscache.CapacityFunc,
-	prepareSet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64) func(inserted bool),
-	postSet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64),
+	prepareSet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, logicalSize, size int64, seq uint64) func(inserted bool),
+	postSet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, logicalSize, size int64, seq uint64),
 	postGet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64),
-	postEvict func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64),
+	postEvict func(ctx context.Context, key fscache.CacheKey, value fscache.Data, logicalSize, size int64, seq uint64),
 ) *DataCache {
+	var fifoPrepareSet func(ctx context.Context, key fscache.CacheKey, value dataCacheValue, size int64, seq uint64) func(inserted bool)
+	if prepareSet != nil {
+		fifoPrepareSet = func(ctx context.Context, key fscache.CacheKey, value dataCacheValue, size int64, seq uint64) func(inserted bool) {
+			return prepareSet(ctx, key, value.data, value.logicalSize, size, seq)
+		}
+	}
+	var fifoPostSet func(ctx context.Context, key fscache.CacheKey, value dataCacheValue, size int64, seq uint64)
+	if postSet != nil {
+		fifoPostSet = func(ctx context.Context, key fscache.CacheKey, value dataCacheValue, size int64, seq uint64) {
+			postSet(ctx, key, value.data, value.logicalSize, size, seq)
+		}
+	}
+	var fifoPostGet func(ctx context.Context, key fscache.CacheKey, value dataCacheValue, size int64)
+	if postGet != nil {
+		fifoPostGet = func(ctx context.Context, key fscache.CacheKey, value dataCacheValue, size int64) {
+			postGet(ctx, key, value.data, size)
+		}
+	}
+	var fifoPostEvict func(ctx context.Context, key fscache.CacheKey, value dataCacheValue, size int64, seq uint64)
+	if postEvict != nil {
+		fifoPostEvict = func(ctx context.Context, key fscache.CacheKey, value dataCacheValue, size int64, seq uint64) {
+			postEvict(ctx, key, value.data, value.logicalSize, size, seq)
+		}
+	}
 	return &DataCache{
-		fifo: NewWithPrepareSet(capacity, shardCacheKey, prepareSet, postSet, postGet, postEvict),
+		fifo: NewWithPrepareSet(capacity, shardCacheKey, fifoPrepareSet, fifoPostSet, fifoPostGet, fifoPostEvict),
 	}
 }
 
 func (d *DataCache) SetAdmissionTarget(admissionTarget func(capacity int64) (int64, bool)) {
 	d.fifo.SetAdmissionTarget(admissionTarget)
+}
+
+func commitDataCacheReservation(value dataCacheValue) {
+	if reservation, ok := value.data.(fscache.DataCacheReservation); ok {
+		reservation.CommitCacheReservation()
+	}
+}
+
+func hasDataCacheReservation(value dataCacheValue) bool {
+	_, ok := value.data.(fscache.DataCacheReservation)
+	return ok
+}
+
+// SetAccountingGuard installs the initialization-only guard used to transfer
+// a MemCache allocation reservation into FIFO usage atomically. The reservation
+// commit callback is bounded, non-blocking, and cannot re-enter the cache.
+func (d *DataCache) SetAccountingGuard(guard sync.Locker) {
+	d.fifo.setAccountingGuard(guard, commitDataCacheReservation)
+	// Values without a reservation have no budget to transfer. Keep their
+	// existing concurrent enqueue path free of the accounting lock.
+	d.fifo.accountingRequired = hasDataCacheReservation
 }
 
 var seed = maphash.MakeSeed()
@@ -66,11 +120,10 @@ func shardCacheKey(key fscache.CacheKey) uint64 {
 }
 
 var _ fscache.DataCache = new(DataCache)
+var _ fscache.DataCacheWithPinAdmission = new(DataCache)
 
 func (d *DataCache) Available() int64 {
-	d.fifo.queueLock.RLock()
-	defer d.fifo.queueLock.RUnlock()
-	ret := d.fifo.capacity() - d.fifo.used1 - d.fifo.used2
+	ret := d.fifo.capacity() - d.fifo.Used()
 	if ret < 0 {
 		ret = 0
 	}
@@ -92,7 +145,7 @@ func (d *DataCache) DeletePaths(ctx context.Context, paths []string) {
 func (d *DataCache) deletePath(ctx context.Context, shardIndex int, path string) {
 	shard := &d.fifo.shards[shardIndex]
 	shard.Lock()
-	var pending []_PendingPostEvict[fscache.CacheKey, fscache.Data]
+	var pending []_PendingPostEvict[fscache.CacheKey, dataCacheValue]
 	for key, item := range shard.values {
 		if key.Path == path {
 			delete(shard.values, key)
@@ -135,7 +188,33 @@ func (d *DataCache) Flush(ctx context.Context) {
 }
 
 func (d *DataCache) Get(ctx context.Context, key query.CacheKey) (fscache.Data, bool) {
-	return d.fifo.Get(ctx, key)
+	value, ok := d.fifo.Get(ctx, key)
+	if !ok {
+		return nil, false
+	}
+	return value.data, true
+}
+
+func (d *DataCache) GetWithPinAdmission(
+	ctx context.Context,
+	key query.CacheKey,
+	admit fscache.DataCachePinAdmission,
+) (data fscache.Data, release func(), ok bool, err error) {
+	if admit == nil {
+		data, ok = d.Get(ctx, key)
+		return data, nil, ok, nil
+	}
+	value, release, ok, err := d.fifo.GetWithAdmission(
+		ctx,
+		key,
+		func(value dataCacheValue, size int64) (func(), error) {
+			return admit(size)
+		},
+	)
+	if !ok || err != nil {
+		return nil, release, ok, err
+	}
+	return value.data, release, true, nil
 }
 
 func (d *DataCache) Contains(key query.CacheKey) bool {
@@ -146,16 +225,22 @@ func (d *DataCache) CurrentSeq(key query.CacheKey) (uint64, bool) {
 	return d.fifo.CurrentSeq(key)
 }
 
-func (d *DataCache) Set(ctx context.Context, key query.CacheKey, value fscache.Data) error {
-	_, rejected := d.fifo.Set(ctx, key, value, int64(len(value.Bytes())))
-	if rejected {
-		return fscache.ErrCacheAdmissionRejected
+func (d *DataCache) Set(ctx context.Context, key query.CacheKey, value fscache.Data) (bool, error) {
+	logicalSize := value.Size()
+	size := value.Capacity()
+	if logicalSize < 0 || size < logicalSize {
+		panic("cache data reports an invalid logical size or backing capacity")
 	}
-	return nil
+	inserted, rejected := d.fifo.Set(ctx, key, dataCacheValue{
+		data:        value,
+		logicalSize: logicalSize,
+	}, size)
+	if rejected {
+		return false, fscache.ErrCacheAdmissionRejected
+	}
+	return inserted, nil
 }
 
 func (d *DataCache) Used() int64 {
-	d.fifo.queueLock.RLock()
-	defer d.fifo.queueLock.RUnlock()
-	return d.fifo.used1 + d.fifo.used2
+	return d.fifo.Used()
 }

@@ -1,0 +1,14 @@
+select round(cast(0.125 as double), 2) as p0125,
+round(cast(2.675 as double), 2) as p2675,
+round(cast(-0.125 as double), 2) as n0125,
+round(cast(-2.675 as double), 2) as n2675;
+➤ p0125[8,54,0]  ¦  p2675[8,54,0]  ¦  n0125[8,54,0]  ¦  n2675[8,54,0]  𝄀
+0.12  ¦  2.68  ¦  -0.12  ¦  -2.68
+select cast(avg(v) as char) as decimal_avg
+from (
+select cast(0.10 as decimal(18,2)) v
+union all
+select cast(0.20 as decimal(18,2))
+) x;
+➤ decimal_avg[12,-1,0]  𝄀
+0.15000000

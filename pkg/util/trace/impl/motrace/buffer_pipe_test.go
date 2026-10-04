@@ -348,7 +348,10 @@ var extra66bytes = `{"task":"gc-process-4","duration":0.048722765,"soft-gc":27.1
 // Test_genCsvData_long_log ut for https://github.com/matrixorigin/MO-Cloud/issues/4235
 func Test_genCsvData_long_log(t *testing.T) {
 	// for case 'single_zap_long_long'
-	GetTracerProvider().MaxLogMessageSize = 64
+	provider := GetTracerProvider()
+	oldMaxLogMessageSize := provider.MaxLogMessageSize
+	t.Cleanup(func() { provider.MaxLogMessageSize = oldMaxLogMessageSize })
+	provider.MaxLogMessageSize = 64
 
 	errorFormatter.Store("%v")
 	logStackFormatter.Store("%n")
@@ -743,8 +746,8 @@ func Test_genCsvData_LongQueryTime(t *testing.T) {
 				queryT: int64(time.Second),
 			},
 			want: `00000000-0000-0000-0000-000000000001,00000000000000000000000000000001,00000000-0000-0000-0000-000000000001,MO,0,moroot,,system,show tables,,show tables,node_uuid,Standalone,0001-01-01 00:00:00.000000,0001-01-01 00:00:00.000000,999999999,Running,0,,{},0,0,"[0,0,0,0,0,0,0,0,0,0,0]",,,0,,0,1,0,0.0000
-00000000-0000-0000-0000-000000000001,00000000000000000000000000000001,00000000-0000-0000-0000-000000000001,MO,0,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,999999999,Running,0,,"{""code"":200,""message"":""no exec plan""}",0,0,"[5,0,0,0,0,0,0,0,0,0,0]",,,0,,0,2,0,0.0000
-00000000-0000-0000-0000-000000000002,00000000000000000000000000000001,00000000-0000-0000-0000-000000000001,MO,0,moroot,,system,show databases,dcl,show databases,node_uuid,Standalone,1970-01-01 00:00:00.000001,1970-01-01 00:00:01.000001,1000000000,Failed,20101,internal error: test error,"{""key"":""val""}",1,1,"[5,1,2.000,3,4,5,0,0,44.0161,0,0]",,,0,internal,0,3,0,44.0161
+00000000-0000-0000-0000-000000000001,00000000000000000000000000000001,00000000-0000-0000-0000-000000000001,MO,0,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,999999999,Running,0,,"{""code"":200,""message"":""no exec plan""}",0,0,"[6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]",,,0,,0,2,0,0.0000
+00000000-0000-0000-0000-000000000002,00000000000000000000000000000001,00000000-0000-0000-0000-000000000001,MO,0,moroot,,system,show databases,dcl,show databases,node_uuid,Standalone,1970-01-01 00:00:00.000001,1970-01-01 00:00:01.000001,1000000000,Failed,20101,internal error: test error,"{""key"":""val""}",1,1,"[6,1,2.000,3,4,5,0,0,44.0161,0,0,0,0,0,0,0,0]",,,0,internal,0,3,0,44.0161
 `,
 		},
 	}

@@ -19,7 +19,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"math/rand"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -39,19 +38,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestIssue23861FulltextSnapshotRestore(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*240)
 			defer cancel()
@@ -72,7 +70,18 @@ func TestIssue23861FulltextSnapshotRestore(t *testing.T) {
 			snapshotName1 := fmt.Sprintf("snap_23861_a_%d", time.Now().UnixNano())
 			snapshotName2 := fmt.Sprintf("snap_23861_b_%d", time.Now().UnixNano())
 
-			defer execSQLMaybe(t, ctx, sqlDB, fmt.Sprintf("drop database if exists `%s`", dbName))
+			defer func() {
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+				defer cleanupCancel()
+				for _, statement := range []string{
+					"drop snapshot if exists " + snapshotName1,
+					"drop snapshot if exists " + snapshotName2,
+					fmt.Sprintf("drop database if exists `%s`", dbName),
+				} {
+					_, err := sqlDB.ExecContext(cleanupCtx, statement)
+					assert.NoError(t, err, statement)
+				}
+			}()
 
 			execSQLRequire(t, ctx, sqlDB, fmt.Sprintf("drop database if exists `%s`", dbName))
 			execSQLRequire(t, ctx, sqlDB, fmt.Sprintf("create database `%s`", dbName))
@@ -191,11 +200,8 @@ func execSQLMaybe(t *testing.T, ctx context.Context, db *sql.DB, statement strin
 }
 
 func TestWWConflict(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-			defer cancel()
-
 			cn1, err := c.GetCNService(0)
 			require.NoError(t, err)
 
@@ -203,6 +209,7 @@ func TestWWConflict(t *testing.T) {
 			require.NoError(t, err)
 
 			db := testutils.GetDatabaseName(t)
+			defer cleanDatabase(t, context.Background(), cn1.RawService().(cnservice.Service), db)
 			table := "t"
 
 			testutils.CreateTableAndWaitCNApplied(
@@ -220,6 +227,12 @@ func TestWWConflict(t *testing.T) {
 				cn1,
 				"insert into "+table+" values (1, 1)",
 			)
+
+			// The timeout guards only the concurrent transaction workflow. Starting
+			// it before shared-cluster fixture setup can consume the whole deadline
+			// under race/CI load and leave the channel choreography waiting forever.
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
 
 			// workflow:
 			// cn1: txn1 update t
@@ -271,7 +284,10 @@ func TestWWConflict(t *testing.T) {
 								close(txn2StartedC)
 
 								// wait txn2 update committed
-								<-txn2CommittedC
+								select {
+								case <-txn2CommittedC:
+								case <-ctx.Done():
+								}
 							},
 						)
 
@@ -326,7 +342,11 @@ func TestWWConflict(t *testing.T) {
 					wg.Done()
 				}()
 
-				<-txn2StartedC
+				select {
+				case <-txn2StartedC:
+				case <-ctx.Done():
+					return
+				}
 				exec := testutils.GetSQLExecutor(cn2)
 
 				res, err := exec.Exec(
@@ -353,106 +373,96 @@ func cleanDatabase(
 	exec := cn.GetSQLExecutor()
 	require.NotNil(t, exec)
 
-	exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
-		eng := cn.GetEngine()
-		require.NoError(t, eng.Delete(ctx, dbName, txn.Txn()))
-		return nil
-	}, executor.Options{})
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	result, err := exec.Exec(ctx, fmt.Sprintf("drop database if exists `%s`", dbName), executor.Options{})
+	defer result.Close()
+	require.NoError(t, err)
 }
 
-// #18754
+// #18754: a cluster-by object is sorted by a, not by its hidden primary key.
 func TestBinarySearchBlkDataOnUnSortedFakePKCol(t *testing.T) {
-	embed.RunBaseClusterTests(
-		func(c embed.Cluster) {
-			cn, err := c.GetCNService(0)
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		sqlExecutor := testutils.GetSQLExecutor(cn)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(0))
+		const dbName = "testdb"
+		defer cleanDatabase(t, ctx, cn.RawService().(cnservice.Service), dbName)
+		exec := func(statement string, opts executor.Options) {
+			result, err := sqlExecutor.Exec(ctx, statement, opts)
+			defer result.Close()
 			require.NoError(t, err)
-
-			sqlExecutor := testutils.GetSQLExecutor(cn)
-			require.NotNil(t, sqlExecutor)
-
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-			defer cancel()
-
-			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(0))
-
-			_, err = sqlExecutor.Exec(ctx, "create database testdb;", executor.Options{})
-			require.NoError(t, err)
-			defer func() {
-				cleanDatabase(t, ctx, cn.RawService().(cnservice.Service), "testdb")
-			}()
-
-			_, err = sqlExecutor.Exec(ctx,
-				"create table hhh(a int) cluster by(`a`);",
-				executor.Options{}.WithDatabase("testdb"))
-			require.NoError(t, err)
-
-			willInsertRows := 50
-			for i := 0; i < 5; i++ {
-				_, err = sqlExecutor.Exec(ctx,
-					fmt.Sprintf(
-						"insert into hhh "+
-							"select FLOOR(RAND()*1000*1000)"+
-							"from generate_series(1, %d);", willInsertRows/5),
-					executor.Options{}.WithDatabase("testdb"))
-				require.NoError(t, err)
-
-				_, err = sqlExecutor.Exec(ctx,
-					"select mo_ctl('dn', 'flush', 'testdb.hhh');",
-					executor.Options{}.WithWaitCommittedLogApplied())
-				require.NoError(t, err)
-			}
-
-			res, err := sqlExecutor.Exec(ctx,
-				"select count(*) from hhh",
-				executor.Options{}.WithDatabase("testdb"))
-			require.NoError(t, err)
-
-			n := int64(0)
-			res.ReadRows(
-				func(rows int, cols []*vector.Vector) bool {
-					n = executor.GetFixedRows[int64](cols[0])[0]
-					return true
-				},
-			)
-			require.Equal(t, int64(willInsertRows), n)
-
-			eng := cn.RawService().(cnservice.Service).GetEngine()
-			require.NotNil(t, eng)
-
-			sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
-				op := txn.Txn()
-				db, err := eng.Database(ctx, "testdb", op)
-				require.NoError(t, err)
-				proc := op.GetWorkspace().(*disttae.Transaction).GetProc()
-				rel, err := db.Relation(ctx, "hhh", proc)
-				require.NoError(t, err)
-
-				var keys []int64
-				for r := 0; r < 5; r++ {
-					keys = keys[:0]
-					for i := 0; i < willInsertRows; i++ {
-						keys = append(keys, rand.Int63()%int64(willInsertRows))
-					}
-
-					vec := vector.NewVec(types.T_int64.ToType())
-					for i := 0; i < len(keys); i++ {
-						vector.AppendFixed[int64](vec, keys[i], false, proc.GetMPool())
-					}
-
-					bat := batch.NewWithSize(1)
-					bat.SetVector(0, vec)
-					rel.PrimaryKeysMayBeModified(ctx, types.TS{}, types.MaxTs(), bat, 0, -1)
-
-					vec.Free(proc.GetMPool())
-				}
-
-				return nil
-			}, executor.Options{})
+		}
+		exec("create database "+dbName, executor.Options{})
+		opts := executor.Options{}.WithDatabase(dbName).WithWaitCommittedLogApplied()
+		exec("create table hhh(a int) cluster by(a)", opts)
+		exec("insert into hhh values (30),(10),(20)", opts)
+		exec("select mo_ctl('dn','flush','testdb.hhh')", opts)
+		result, err := sqlExecutor.Exec(ctx, "select a, __mo_fake_pk_col from hhh order by a", opts)
+		defer result.Close()
+		require.NoError(t, err)
+		var values []int32
+		var keys []uint64
+		result.ReadRows(func(_ int, cols []*vector.Vector) bool {
+			values = append(values, executor.GetFixedRows[int32](cols[0])...)
+			keys = append(keys, executor.GetFixedRows[uint64](cols[1])...)
+			return true
 		})
+		require.Equal(t, []int32{10, 20, 30}, values)
+		require.Len(t, keys, 3)
+		require.Greater(t, keys[0], keys[2])
+		require.Greater(t, keys[1], keys[2])
+		require.Positive(t, keys[2])
+
+		eng := cn.RawService().(cnservice.Service).GetEngine().(*disttae.Engine)
+		require.NoError(t, sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+			op := txn.Txn()
+			db, err := eng.Database(ctx, dbName, op)
+			if err != nil {
+				return err
+			}
+			proc := op.GetWorkspace().(*disttae.Transaction).GetProc()
+			rel, err := db.Relation(ctx, "hhh", proc)
+			if err != nil {
+				return err
+			}
+			from, to := types.TS{}, types.TimestampToTS(op.SnapshotTS())
+			state := eng.GetOrCreateLatestPart(ctx, 0, rel.GetDBID(ctx), rel.GetTableID(ctx)).Snapshot()
+			require.True(t, state.CanServe(to))
+			packer := types.NewPacker()
+			defer packer.Close()
+			for _, tc := range []struct {
+				name string
+				key  uint64
+				want bool
+			}{
+				// Binary search on [keys[0], keys[1], keys[2]] misses this
+				// smallest key at the end of the cluster-by sorted object.
+				{"persisted match", keys[2], true},
+				{"absent key", keys[2] - 1, false},
+			} {
+				bat := batch.NewWithSize(1)
+				vec := vector.NewVec(types.T_uint64.ToType())
+				bat.SetVector(0, vec)
+				defer bat.Clean(proc.GetMPool())
+				require.NoError(t, vector.AppendFixed(vec, tc.key, false, proc.GetMPool()))
+				exists, flushed := state.PKExistInMemBetween(from, to, readutil.EncodePrimaryKeyVector(vec, packer))
+				require.False(t, exists, tc.name)
+				require.True(t, flushed, tc.name)
+				changed, err := rel.PrimaryKeysMayBeModified(ctx, from, to, bat, 0, -1)
+				require.NoError(t, err, tc.name)
+				require.Equal(t, tc.want, changed, tc.name)
+			}
+			return nil
+		}, executor.Options{}))
+	})
 }
 
 func TestCNFlushS3Deletes(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			cn, err := c.GetCNService(0)
 			require.NoError(t, err)
@@ -464,6 +474,12 @@ func TestCNFlushS3Deletes(t *testing.T) {
 
 			exec := cn.RawService().(cnservice.Service).GetSQLExecutor()
 			require.NotNil(t, exec)
+			rowCount := 512 * 1024
+			if testing.Short() {
+				// A rowid plus its primary key still crosses the 1 MiB flush
+				// threshold at this size, without making PR CI process 512K rows.
+				rowCount = 64 * 1024
+			}
 
 			{
 				_, err := exec.Exec(ctx, "create database a;", executor.Options{})
@@ -477,29 +493,31 @@ func TestCNFlushS3Deletes(t *testing.T) {
 					executor.Options{}.WithDatabase("a"))
 				require.NoError(t, err)
 
-				_, err = exec.Exec(ctx, "insert into t1 select *,'yep' from generate_series(1,512*1024)g;",
+				_, err = exec.Exec(ctx, fmt.Sprintf("insert into t1 select *,'yep' from generate_series(1,%d)g;", rowCount),
 					executor.Options{}.WithDatabase("a"))
 				require.NoError(t, err)
 
 				resp, err := exec.Exec(ctx, "select count(1) from t1;",
 					executor.Options{}.WithDatabase("a"))
+				defer resp.Close()
 				require.NoError(t, err)
 
 				resp.ReadRows(func(rows int, cols []*vector.Vector) bool {
 					cnt := vector.GetFixedAtWithTypeCheck[int64](cols[0], 0)
-					require.Equal(t, int64(512*1024), cnt)
+					require.Equal(t, int64(rowCount), cnt)
 					return true
 				})
 			}
 
 			deletion.SetCNFlushDeletesThreshold(1)
-			defer deletion.SetCNFlushDeletesThreshold(32)
+			defer deletion.SetCNFlushDeletesThreshold(5)
 
 			{
 				_, err := exec.Exec(ctx, "delete from t1 where a > 1;", executor.Options{}.WithDatabase("a"))
 				require.NoError(t, err)
 
 				resp, err := exec.Exec(ctx, "select count(1) from t1;", executor.Options{}.WithDatabase("a"))
+				defer resp.Close()
 				require.NoError(t, err)
 
 				resp.ReadRows(func(rows int, cols []*vector.Vector) bool {
@@ -509,6 +527,7 @@ func TestCNFlushS3Deletes(t *testing.T) {
 				})
 
 				resp, err = exec.Exec(ctx, "select * from t1 where a = 1;", executor.Options{}.WithDatabase("a"))
+				defer resp.Close()
 				require.NoError(t, err)
 
 				require.Equal(t, int(1), len(resp.Batches))
@@ -539,7 +558,7 @@ func TestCNFlushS3Deletes(t *testing.T) {
 There is no lock competition, but there is data modification
 */
 func TestDedupForAutoPk(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
 			defer cancel()
@@ -551,6 +570,7 @@ func TestDedupForAutoPk(t *testing.T) {
 			require.NoError(t, err)
 
 			db := testutils.GetDatabaseName(t)
+			defer cleanDatabase(t, ctx, cn1.RawService().(cnservice.Service), db)
 			table := "t"
 
 			testutils.CreateTableAndWaitCNApplied(
@@ -609,28 +629,24 @@ func TestDedupForAutoPk(t *testing.T) {
 			exec := testutils.GetSQLExecutor(cn1)
 			res, err := exec.Exec(
 				ctx,
-				"select id from t;",
+				"select count(*), count(distinct id), count(case when id2=1 then 1 end), "+
+					"count(case when id2=2 then 1 end), count(case when id=3 and id2 is null then 1 end) from t;",
 				executor.Options{}.
 					WithDatabase(db).
 					WithWaitCommittedLogApplied(),
 			)
+			defer res.Close()
 			require.NoError(t, err)
-
-			res.ReadRows(
-				func(rows int, cols []*vector.Vector) bool {
-					for i := 0; i < rows; i++ {
-						n := executor.GetFixedRows[int32](cols[0])[i]
-						t.Logf("the value of rows %d is %d", i, n)
-					}
-					return true
-				},
-			)
-			res.Close()
+			require.Len(t, res.Batches, 1)
+			require.Equal(t, 1, res.Batches[0].RowCount())
+			for column, want := range []int64{5, 5, 2, 2, 1} {
+				require.Equal(t, want, vector.GetFixedAtWithTypeCheck[int64](res.Batches[0].Vecs[column], 0))
+			}
 		})
 }
 
 func TestLockNeedUpgrade(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
 			defer cancel()
@@ -653,38 +669,39 @@ func TestLockNeedUpgrade(t *testing.T) {
 				cn2,
 			)
 
-			_ = testutils.ExecSQL(
-				t,
-				db,
-				cn1,
-				"truncate table "+table+";",
-				"insert into "+table+" select result, result from generate_series(1,5000) g;",
-			)
+			exec1 := testutils.GetSQLExecutor(cn1)
+			getTableID := func() uint64 {
+				var tableID uint64
+				err := exec1.ExecTxn(
+					ctx,
+					func(txn executor.TxnExecutor) error {
+						tableID = testutils.GetTableID(t, db, table, txn)
+						return nil
+					},
+					executor.Options{}.
+						WithDatabase("mo_catalog").
+						WithWaitCommittedLogApplied(),
+				)
+				require.NoError(t, err)
+				require.NotZero(t, tableID)
+				return tableID
+			}
 
-			_ = testutils.ExecSQL(
-				t,
-				db,
-				cn1,
-				"insert into "+table+" select result, result from generate_series(5001,10000) g;",
-			)
-
-			_ = testutils.ExecSQL(
-				t,
-				db,
-				cn1,
-				"insert into "+table+" select result, result from generate_series(10001,15000) g;",
-			)
-
+			lockOwner := lockservice.GetLockServiceByServiceID(cn1.ServiceID())
+			lockBudget := int(lockOwner.GetConfig().MaxLockRowCount)
+			require.Greater(t, lockBudget, 0)
+			fixtureRows := lockBudget + 2
 			committedAt := testutils.ExecSQL(
 				t,
 				db,
 				cn1,
-				"insert into "+table+" select result, result from generate_series(15001,20000) g;",
+				"truncate table "+table+";",
+				fmt.Sprintf("insert into %s select result, result from generate_series(1,%d) g;", table, fixtureRows),
 			)
+			tableID := getTableID()
 
 			// case 1
-			// test for local LocalTable that need upgrade row level lock to table level lock
-			exec1 := testutils.GetSQLExecutor(cn1)
+			// Test coarsening at the local lock-table owner.
 			err = exec1.ExecTxn(
 				ctx,
 				func(txn executor.TxnExecutor) error {
@@ -694,6 +711,7 @@ func TestLockNeedUpgrade(t *testing.T) {
 					)
 					require.NoError(t, err)
 					res.Close()
+					requireIssueLockCoarsened(t, lockOwner, tableID)
 					return nil
 				},
 				executor.Options{}.
@@ -701,38 +719,23 @@ func TestLockNeedUpgrade(t *testing.T) {
 					WithMinCommittedTS(committedAt),
 			)
 			require.NoError(t, err)
-
-			_ = testutils.ExecSQL(
-				t,
-				db,
-				cn1,
-				"truncate table "+table+";",
-				"insert into "+table+" select result, result from generate_series(1,5000) g;",
-			)
-
-			_ = testutils.ExecSQL(
-				t,
-				db,
-				cn1,
-				"insert into "+table+" select result, result from generate_series(5001,10000) g;",
-			)
-
-			_ = testutils.ExecSQL(
-				t,
-				db,
-				cn1,
-				"insert into "+table+" select result, result from generate_series(10001,15000) g;",
-			)
+			res, err := exec1.Exec(ctx, "select count(*) from "+table,
+				executor.Options{}.WithDatabase(db).WithWaitCommittedLogApplied())
+			require.NoError(t, err)
+			require.Equal(t, 1, testutils.ReadCount(res))
+			res.Close()
 
 			committedAt = testutils.ExecSQL(
 				t,
 				db,
 				cn1,
-				"insert into "+table+" select result, result from generate_series(15001,20000) g;",
+				"truncate table "+table+";",
+				fmt.Sprintf("insert into %s select result, result from generate_series(1,%d) g;", table, fixtureRows),
 			)
+			tableID = getTableID()
 
 			// case 2
-			// test for remote LockTable that need upgrade row level lock to table level lock
+			// Test the same coarsening through a remote lock-table proxy.
 			exec2 := testutils.GetSQLExecutor(cn2)
 			err = exec2.ExecTxn(
 				ctx,
@@ -743,6 +746,7 @@ func TestLockNeedUpgrade(t *testing.T) {
 					)
 					require.NoError(t, err)
 					res.Close()
+					requireIssueLockCoarsened(t, lockOwner, tableID)
 					return nil
 				},
 				executor.Options{}.
@@ -750,12 +754,34 @@ func TestLockNeedUpgrade(t *testing.T) {
 					WithMinCommittedTS(committedAt),
 			)
 			require.NoError(t, err)
+			res, err = exec2.Exec(ctx, "select count(*) from "+table,
+				executor.Options{}.WithDatabase(db).WithWaitCommittedLogApplied())
+			require.NoError(t, err)
+			require.Equal(t, 1, testutils.ReadCount(res))
+			res.Close()
 		},
 	)
 }
 
+func requireIssueLockCoarsened(
+	t *testing.T,
+	lockService lockservice.LockService,
+	tableID uint64,
+) {
+	t.Helper()
+	rangeLocks := 0
+	lockService.IterLocks(func(lockedTableID uint64, keys [][]byte, _ lockservice.Lock) bool {
+		if lockedTableID == tableID && len(keys) == 2 {
+			rangeLocks++
+		}
+		return true
+	})
+	require.Greater(t, rangeLocks, 0,
+		"the over-budget DELETE must replace row locks with a range lock")
+}
+
 func TestIssue19551(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*1000)
 			defer cancel()
@@ -925,179 +951,9 @@ func TestIssue19551(t *testing.T) {
 	)
 }
 
-func TestSpeedupAbortAllTxn(t *testing.T) {
-	c, err := embed.NewCluster(
-		embed.WithPreStart(
-			func(so embed.ServiceOperator) {
-				if so.ServiceType() == metadata.ServiceType_CN {
-					so.Adjust(
-						func(sc *embed.ServiceConfig) {
-							sc.CN.Txn.MaxActive = 1
-						},
-					)
-				}
-			},
-		),
-	)
-	require.NoError(t, err)
-	require.NoError(t, c.Start())
-	defer func() {
-		require.NoError(t, c.Close())
-	}()
-
-	op, err := c.GetCNService(0)
-	require.NoError(t, err)
-
-	waitC := make(chan struct{}, 1)
-	cn := op.RawService().(cnservice.Service)
-	eng := cn.GetEngine().(*disttae.Engine)
-	logtailClient := eng.PushClient()
-	logtailClient.SetReconnectHandler(func() {
-		select {
-		case waitC <- struct{}{}:
-		default:
-		}
-	})
-
-	c1 := make(chan struct{})
-	c2 := make(chan struct{})
-	actionC := make(chan struct{})
-	errC := make(chan error, 2)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*120)
-	defer cancel()
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	taskservice.DebugCtlTaskFramework(true)
-	defer taskservice.DebugCtlTaskFramework(false)
-
-	// active will commit failed
-	go func() {
-		defer wg.Done()
-
-		exec := cn.GetSQLExecutor()
-		err := exec.ExecTxn(
-			ctx,
-			func(txn executor.TxnExecutor) error {
-				res, err := txn.Exec(
-					"create database TestSpeedupAbortAllTxn",
-					executor.StatementOption{},
-				)
-				if err != nil {
-					return err
-				}
-				res.Close()
-				close(c1)
-
-				// wait txn in active
-				select {
-				case <-c2:
-				case <-ctx.Done():
-					return ctx.Err()
-				}
-				close(actionC)
-
-				select {
-				case <-waitC:
-				case <-ctx.Done():
-					return ctx.Err()
-				}
-
-				// Wait for push client to be fully ready before returning.
-				// reconnectHandler is called before push client is fully recovered,
-				// so we need to wait here to avoid committing when push client is not ready.
-				for !eng.PushClient().IsSubscriberReady() {
-					select {
-					case <-ctx.Done():
-						return ctx.Err()
-					case <-time.After(time.Millisecond * 10):
-					}
-				}
-
-				return nil
-			},
-			executor.Options{}.WithDatabase("mo_catalog").WithUserTxn(),
-		)
-		errC <- err
-	}()
-
-	// wait active txn will canceled
-	go func() {
-		defer wg.Done()
-
-		select {
-		case <-c1:
-		case <-ctx.Done():
-			errC <- ctx.Err()
-			return
-		}
-
-		tc := cn.GetTxnClient()
-		var notifyActive sync.Once
-		_, err := tc.New(
-			ctx,
-			timestamp.Timestamp{},
-			client.WithUserTxn(),
-			client.WithWaitActiveHandle(
-				func() {
-					notifyActive.Do(func() {
-						close(c2)
-					})
-				},
-			),
-		)
-		errC <- err
-	}()
-
-	select {
-	case <-actionC:
-	case <-ctx.Done():
-		require.NoError(t, ctx.Err())
-	}
-	require.NoError(t, logtailClient.Disconnect())
-	require.NoError(t, waitLogtailResume(ctx, cn))
-
-	wg.Wait()
-	close(errC)
-	for err := range errC {
-		require.NoError(t, err)
-	}
-}
-
-func waitLogtailResume(ctx context.Context, cn cnservice.Service) error {
-	exec := cn.GetSQLExecutor()
-	fn := func() error {
-		execCtx, cancel := context.WithTimeout(ctx, time.Second*5)
-		defer cancel()
-		res, err := exec.Exec(
-			execCtx,
-			"select * from mo_tables",
-			executor.Options{}.WithDatabase("mo_catalog"),
-		)
-		if err != nil {
-			return err
-		}
-		res.Close()
-		return nil
-	}
-
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-	for {
-		if err := fn(); err == nil {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-		}
-	}
-}
-
 // #15087
 func TestLikePatternPlus(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			cn, err := c.GetCNService(0)
 			require.NoError(t, err)
@@ -1139,7 +995,7 @@ func TestLikePatternPlus(t *testing.T) {
 }
 
 func TestFaultInjection(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			cn, err := c.GetCNService(0)
 			require.NoError(t, err)

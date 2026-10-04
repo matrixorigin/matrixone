@@ -37,6 +37,7 @@ func (node *RepeatStmt) Format(ctx *FmtCtx) {
 	node.Cond.Format(ctx)
 	ctx.WriteString(" end repeat")
 	if node.Name != "" {
+		ctx.WriteByte(' ')
 		ctx.WriteString(string(node.Name))
 	}
 }

@@ -39,3 +39,11 @@ DROP TABLE t1;
 # Different years (should return same month name)
 SELECT MONTHNAME('2000-02-03') AS year2000, MONTHNAME('2024-02-03') AS year2024;
 
+# Regression: VARCHAR input must resolve without an implicit unsupported cast.
+SELECT MONTHNAME('2024-06-15') AS string_monthname;
+
+-- Incomplete VARCHAR dates preserve the regular date-cast grammar.
+SELECT MONTHNAME('2001-11-00 12:34:56') AS incomplete_datetime,
+       MONTHNAME('20011100') AS incomplete_compact,
+       MONTHNAME('2001-11-0') AS incomplete_variable,
+       MONTHNAME('0000-00-00 12:34:56') AS zero_datetime;

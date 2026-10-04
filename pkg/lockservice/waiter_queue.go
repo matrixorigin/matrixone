@@ -18,6 +18,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
@@ -34,6 +35,7 @@ type waiterQueue interface {
 	remove(*waiter) (bool, bool)
 	notify(value notifyValue)
 	notifyAll(value notifyValue)
+	notifySharedHolderChange(value notifyValue)
 	first() *waiter
 	removeByTxnID(txnID []byte)
 	beginChange()
@@ -43,6 +45,8 @@ type waiterQueue interface {
 	// read methods, can used any where
 	iter(func(*waiter) bool)
 	size() int
+	hasExclusiveWaiterBefore(*waiter) bool
+	notifyLeadingShared(notifyValue)
 }
 
 func newWaiterQueue() waiterQueue {
@@ -129,6 +133,43 @@ func (q *sliceBasedWaiterQueue) notifyAll(value notifyValue) {
 	v2.TxnLockWaitersTotalHistogram.Observe(float64(len(q.waiters)))
 }
 
+// notifySharedHolderChange wakes only merge/promotion waiters that need to retry
+// after one of several compatible Shared holders leaves. Ordinary lock waiters
+// still wait for the normal admission condition, avoiding spurious wakeups.
+func (q *sliceBasedWaiterQueue) notifySharedHolderChange(value notifyValue) {
+	q.Lock()
+	defer q.Unlock()
+
+	// Keep retrying merge waiters on the same commit-timestamp frontier as
+	// ordinary lock waiters. A holder departure must not make a later retry
+	// observe an older timestamp than a prior queue notification.
+	if value.ts.Less(q.keyCommittedAt) {
+		value.ts = q.keyCommittedAt
+	} else {
+		q.keyCommittedAt = value.ts
+	}
+
+	if q.beginChangeIdx != -1 {
+		panic("BUG: cannot call notify in changing waiter queue")
+	}
+
+	newWaiters := q.waiters[:0]
+	for _, w := range q.waiters {
+		if !w.notifyOnSharedHolderChange {
+			newWaiters = append(newWaiters, w)
+			continue
+		}
+		if !w.notify(value, q.logger) {
+			w.close("sliceBasedWaiterQueue notifySharedHolderChange", q.logger)
+			continue
+		}
+		w.close("sliceBasedWaiterQueue notifySharedHolderChange", q.logger)
+	}
+	clear(q.waiters[len(newWaiters):])
+	q.waiters = newWaiters
+	v2.TxnLockWaitersTotalHistogram.Observe(float64(len(q.waiters)))
+}
+
 func (q *sliceBasedWaiterQueue) notify(value notifyValue) {
 	q.Lock()
 	defer q.Unlock()
@@ -158,7 +199,9 @@ func (q *sliceBasedWaiterQueue) notify(value notifyValue) {
 		skipAt = i
 		q.waiters[i] = nil
 	}
-	q.waiters = append(q.waiters[:0], q.waiters[skipAt+1:]...)
+	newWaiters := append(q.waiters[:0], q.waiters[skipAt+1:]...)
+	clear(q.waiters[len(newWaiters):])
+	q.waiters = newWaiters
 	v2.TxnLockWaitersTotalHistogram.Observe(float64(len(q.waiters)))
 }
 
@@ -185,6 +228,7 @@ func (q *sliceBasedWaiterQueue) removeByTxnID(txnID []byte) {
 		}
 		newWaiters = append(newWaiters, w)
 	}
+	clear(q.waiters[len(newWaiters):])
 	q.waiters = newWaiters
 	v2.TxnLockWaitersTotalHistogram.Observe(float64(len(q.waiters)))
 }
@@ -263,6 +307,52 @@ func (q *sliceBasedWaiterQueue) size() int {
 	q.RLock()
 	defer q.RUnlock()
 	return q.getCommittedIdx()
+}
+
+// hasExclusiveWaiterBefore reports whether an Exclusive request precedes
+// target. A fresh request is not in the queue, so every queued writer precedes
+// it. A notified Shared waiter remains queued until admission and may join the
+// leading Shared cohort when no writer is ahead of it.
+func (q *sliceBasedWaiterQueue) hasExclusiveWaiterBefore(target *waiter) bool {
+	found := false
+	q.iter(func(w *waiter) bool {
+		if w == target {
+			return false
+		}
+		found = w.lockWaitMode == pb.LockMode_Exclusive
+		return !found
+	})
+	return found
+}
+
+// notifyLeadingShared advances one member of the leading Shared cohort. Each
+// admitted member wakes the next, stopping at the first Exclusive waiter.
+func (q *sliceBasedWaiterQueue) notifyLeadingShared(value notifyValue) {
+	q.Lock()
+	defer q.Unlock()
+
+	if value.ts.Less(q.keyCommittedAt) {
+		value.ts = q.keyCommittedAt
+	} else {
+		q.keyCommittedAt = value.ts
+	}
+	if q.beginChangeIdx != -1 {
+		panic("BUG: cannot call notify in changing waiter queue")
+	}
+
+	if len(q.waiters) == 0 {
+		return
+	}
+	w := q.waiters[0]
+	if w.lockWaitMode != pb.LockMode_Shared || w.notifyOnSharedHolderChange {
+		return
+	}
+	// notified/completed can mean that this legitimate head has consumed its
+	// wakeup but has not retried under the lock-table mutex yet. Retain its FIFO
+	// position; cancellation cleanup removes it and invokes this helper again.
+	if w.getStatus() == blocking {
+		w.notify(value, q.logger)
+	}
 }
 
 func (q *sliceBasedWaiterQueue) reset() {

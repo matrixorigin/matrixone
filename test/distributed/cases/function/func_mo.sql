@@ -34,23 +34,23 @@ insert into tmp values ("testdb_nor", "t1"), ("testdb_nor", "t2"), ("testdb_nor"
 insert into tmp values ("testdb_sub", "t1"), ("testdb_sub", "t2"), ("testdb_sub", "t3");
 
 set mo_table_stats.force_update = yes;
-select mo_table_rows(dbName, tblName) from (select * from testdb_nor.tmp order by dbName, tblName asc);
+select mo_table_rows(dbName, tblName) from (select * from testdb_nor.tmp order by dbName, tblName asc) as table_names;
 
 insert into tmp values ("testdb_sub", "t4");
-select mo_table_rows(dbName, tblName) from (select * from testdb_nor.tmp order by dbName, tblName asc);
+select mo_table_rows(dbName, tblName) from (select * from testdb_nor.tmp order by dbName, tblName asc) as table_names;
 
 set mo_table_stats.force_update = no;
 delete from tmp where dbName = "testdb_sub" and tblName = "t4";
 
 set mo_table_stats.use_old_impl = yes;
-select mo_table_rows(dbName, tblName) from (select * from testdb_nor.tmp order by dbName, tblName asc);
+select mo_table_rows(dbName, tblName) from (select * from testdb_nor.tmp order by dbName, tblName asc) as table_names;
 -- @ignore:0
-select mo_table_size(dbName, tblName) from (select * from testdb_nor.tmp order by dbName, tblName asc);
+select mo_table_size(dbName, tblName) from (select * from testdb_nor.tmp order by dbName, tblName asc) as table_names;
 
 insert into tmp values ("testdb_sub", "t4");
-select mo_table_rows(dbName, tblName) from (select * from testdb_nor.tmp order by dbName, tblName asc);
+select mo_table_rows(dbName, tblName) from (select * from testdb_nor.tmp order by dbName, tblName asc) as table_names;
 -- @ignore:0
-select mo_table_size(dbName, tblName) from (select * from testdb_nor.tmp order by dbName, tblName asc);
+select mo_table_size(dbName, tblName) from (select * from testdb_nor.tmp order by dbName, tblName asc) as table_names;
 
 set mo_table_stats.use_old_impl = no;
 

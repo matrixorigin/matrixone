@@ -16,6 +16,7 @@ package task
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -27,7 +28,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+type recordingAllocateTaskService struct {
+	taskservice.TaskService
+	err     error
+	runners []string
+}
+
+func (s *recordingAllocateTaskService) Allocate(
+	_ context.Context,
+	_ task.AsyncTask,
+	taskRunner string,
+) error {
+	s.runners = append(s.runners, taskRunner)
+	return s.err
+}
 
 func TestMain(m *testing.M) {
 	logutil.SetupMOLogger(&logutil.LogConfig{
@@ -171,6 +188,92 @@ func TestScheduleCreatedTasks(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, query)
 	assert.Equal(t, task.TaskStatus_Running, query[0].Status)
+}
+
+func TestScheduleCreatedTasksBalancesBatchAcrossCNs(t *testing.T) {
+	service := newTestTaskService(t)
+	scheduler := NewScheduler("", func() taskservice.TaskService { return service }, hakeeper.Config{})
+
+	require.NoError(t, service.CreateAsyncTask(context.Background(), task.TaskMetadata{ID: "existing"}))
+	scheduler.Schedule(pb.CNState{Stores: map[string]pb.CNStoreInfo{"a": {}}}, 0)
+
+	require.NoError(t, service.CreateBatch(context.Background(), []task.TaskMetadata{
+		{ID: "new-1"},
+		{ID: "new-2"},
+		{ID: "new-3"},
+	}))
+	scheduler.Schedule(pb.CNState{Stores: map[string]pb.CNStoreInfo{"a": {}, "b": {}}}, 0)
+
+	tasks, err := service.QueryAsyncTask(context.Background(),
+		taskservice.WithTaskStatusCond(task.TaskStatus_Running))
+	require.NoError(t, err)
+	counts := make(map[string]int)
+	for _, asyncTask := range tasks {
+		counts[asyncTask.TaskRunner]++
+	}
+	assert.Equal(t, 2, counts["a"])
+	assert.Equal(t, 2, counts["b"])
+}
+
+func TestScheduleCreatedTasksBalancesFilteredBatch(t *testing.T) {
+	service := newTestTaskService(t)
+	scheduler := NewScheduler("", func() taskservice.TaskService { return service }, hakeeper.Config{})
+	store := func(label string, cpu uint64) pb.CNStoreInfo {
+		return pb.CNStoreInfo{
+			Labels: map[string]metadata.LabelList{
+				"group": {Labels: []string{label}},
+			},
+			Resource: pb.Resource{CPUTotal: cpu, MemTotal: 200},
+		}
+	}
+
+	require.NoError(t, service.CreateAsyncTask(context.Background(), task.TaskMetadata{ID: "existing"}))
+	scheduler.Schedule(pb.CNState{Stores: map[string]pb.CNStoreInfo{"a": store("etl", 2)}}, 0)
+
+	options := task.TaskOptions{
+		Labels:   map[string]string{"group": "etl"},
+		Resource: &task.Resource{CPU: 2, Memory: 200},
+	}
+	require.NoError(t, service.CreateBatch(context.Background(), []task.TaskMetadata{
+		{ID: "new-1", Options: options},
+		{ID: "new-2", Options: options},
+		{ID: "new-3", Options: options},
+	}))
+	scheduler.Schedule(pb.CNState{Stores: map[string]pb.CNStoreInfo{
+		"a": store("etl", 2),
+		"b": store("etl", 2),
+		"c": store("etl", 1),
+		"d": store("other", 2),
+	}}, 0)
+
+	tasks, err := service.QueryAsyncTask(context.Background(),
+		taskservice.WithTaskStatusCond(task.TaskStatus_Running))
+	require.NoError(t, err)
+	counts := make(map[string]int)
+	for _, asyncTask := range tasks {
+		counts[asyncTask.TaskRunner]++
+	}
+	assert.Equal(t, 2, counts["a"])
+	assert.Equal(t, 2, counts["b"])
+	assert.Zero(t, counts["c"])
+	assert.Zero(t, counts["d"])
+}
+
+func TestAllocateTaskUpdatesLoadOnlyOnSuccess(t *testing.T) {
+	pool := newCNPoolWithCNState(pb.CNState{Stores: map[string]pb.CNStoreInfo{"a": {}, "b": {}}})
+	storeA, ok := pool.getStore("a")
+	require.True(t, ok)
+	pool.set(storeA, 1)
+
+	service := &recordingAllocateTaskService{err: errors.New("injected allocation failure")}
+	allocateTask("", service, task.AsyncTask{Metadata: task.TaskMetadata{ID: "failed"}}, pool)
+	assert.Equal(t, []string{"b"}, service.runners)
+	assert.Equal(t, uint32(0), pool.getFreq("b"))
+
+	service.err = nil
+	allocateTask("", service, task.AsyncTask{Metadata: task.TaskMetadata{ID: "succeeded"}}, pool)
+	assert.Equal(t, []string{"b", "b"}, service.runners)
+	assert.Equal(t, uint32(1), pool.getFreq("b"))
 }
 
 func TestReallocateExpiredTasks(t *testing.T) {

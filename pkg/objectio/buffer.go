@@ -32,7 +32,7 @@ func NewObjectBuffer(name string) *ObjectBuffer {
 	buffer := &ObjectBuffer{
 		vector: fileservice.IOVector{
 			FilePath: name,
-			Entries:  make([]fileservice.IOEntry, 0, 256),
+			Entries:  make([]fileservice.IOEntry, 0),
 		},
 	}
 	return buffer

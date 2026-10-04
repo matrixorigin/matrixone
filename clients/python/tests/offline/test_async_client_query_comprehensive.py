@@ -636,7 +636,7 @@ class TestAsyncCloneManager(unittest.IsolatedAsyncioTestCase):
 
         await self.clone_manager.clone_database("target_db", "source_db")
 
-        self.mock_client.execute.assert_called_once_with("CREATE DATABASE target_db  CLONE source_db")
+        self.mock_client.execute.assert_called_once_with("CREATE DATABASE target_db CLONE source_db")
 
     async def test_clone_database_with_snapshot(self):
         """Test cloning database with snapshot"""
@@ -645,7 +645,7 @@ class TestAsyncCloneManager(unittest.IsolatedAsyncioTestCase):
         await self.clone_manager.clone_database_with_snapshot("target_db", "source_db", "test_snapshot")
 
         self.mock_client.execute.assert_called_once_with(
-            "CREATE DATABASE target_db  CLONE source_db FOR SNAPSHOT 'test_snapshot'"
+            'CREATE DATABASE target_db CLONE source_db {snapshot = "test_snapshot"}'
         )
 
     async def test_clone_database_if_not_exists(self):
@@ -654,7 +654,19 @@ class TestAsyncCloneManager(unittest.IsolatedAsyncioTestCase):
 
         await self.clone_manager.clone_database("target_db", "source_db", if_not_exists=True)
 
-        self.mock_client.execute.assert_called_once_with("CREATE DATABASE target_db IF NOT EXISTS CLONE source_db")
+        self.mock_client.execute.assert_called_once_with("CREATE DATABASE IF NOT EXISTS target_db CLONE source_db")
+
+    async def test_clone_database_with_snapshot_and_if_not_exists(self):
+        """Test cloning database with both grammar options"""
+        self.mock_client.execute.return_value = AsyncResultSet([], [])
+
+        await self.clone_manager.clone_database(
+            "target_db", "source_db", snapshot_name="test_snapshot", if_not_exists=True
+        )
+
+        self.mock_client.execute.assert_called_once_with(
+            'CREATE DATABASE IF NOT EXISTS target_db CLONE source_db {snapshot = "test_snapshot"}'
+        )
 
     async def test_clone_table(self):
         """Test cloning table"""
@@ -662,7 +674,7 @@ class TestAsyncCloneManager(unittest.IsolatedAsyncioTestCase):
 
         await self.clone_manager.clone_table("target_table", "source_table")
 
-        self.mock_client.execute.assert_called_once_with("CREATE TABLE target_table  CLONE source_table")
+        self.mock_client.execute.assert_called_once_with("CREATE TABLE target_table CLONE source_table")
 
     async def test_clone_table_with_snapshot(self):
         """Test cloning table with snapshot"""
@@ -671,7 +683,27 @@ class TestAsyncCloneManager(unittest.IsolatedAsyncioTestCase):
         await self.clone_manager.clone_table_with_snapshot("target_table", "source_table", "test_snapshot")
 
         self.mock_client.execute.assert_called_once_with(
-            "CREATE TABLE target_table  CLONE source_table FOR SNAPSHOT 'test_snapshot'"
+            'CREATE TABLE target_table CLONE source_table {snapshot = "test_snapshot"}'
+        )
+
+    async def test_clone_table_if_not_exists(self):
+        """Test cloning table with if not exists"""
+        self.mock_client.execute.return_value = AsyncResultSet([], [])
+
+        await self.clone_manager.clone_table("target_table", "source_table", if_not_exists=True)
+
+        self.mock_client.execute.assert_called_once_with("CREATE TABLE IF NOT EXISTS target_table CLONE source_table")
+
+    async def test_clone_table_with_snapshot_and_if_not_exists(self):
+        """Test cloning table with both grammar options"""
+        self.mock_client.execute.return_value = AsyncResultSet([], [])
+
+        await self.clone_manager.clone_table(
+            "target_table", "source_table", snapshot_name="test_snapshot", if_not_exists=True
+        )
+
+        self.mock_client.execute.assert_called_once_with(
+            'CREATE TABLE IF NOT EXISTS target_table CLONE source_table {snapshot = "test_snapshot"}'
         )
 
 

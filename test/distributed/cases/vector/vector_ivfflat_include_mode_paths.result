@@ -1,0 +1,124 @@
+drop database if exists vector_ivfflat_include_phase6;
+create database vector_ivfflat_include_phase6;
+use vector_ivfflat_include_phase6;
+drop table if exists vector_ivfflat_include_phase6;
+create table vector_ivfflat_include_phase6(
+id int primary key,
+embedding vecf32(3),
+title varchar(20),
+category int,
+note varchar(20)
+);
+create index idx_ivf_include_phase6 using ivfflat on vector_ivfflat_include_phase6(embedding)
+lists=2 op_type "vector_l2_ops" include(title, category);
+insert into vector_ivfflat_include_phase6 values
+(1, "[1,2,3]", "alpha", 10, "n1"),
+(2, "[1,2,4]", "beta", 20, "n2"),
+(3, "[9,9,9]", "gamma", 30, "n3"),
+(4, "[2,2,2]", "delta", 40, "n4");
+explain select id, title, category
+from vector_ivfflat_include_phase6
+where category >= 20
+order by l2_distance(embedding, "[1,2,3]")
+limit 2 by rank with option 'mode=post';
+-- @regex("Vector Index Scan", true)
+➤ AP QUERY PLAN ON MULTICN(32 core)[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,3] INTERNAL  𝄀
+        Limit: 2  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (vector_ivfflat_include_phase6.id = #[1,0])  𝄀
+              ->  Table Scan on vector_ivfflat_include_phase6.vector_ivfflat_include_phase6  𝄀
+                    Filter Cond: (vector_ivfflat_include_phase6.category >= 20)  𝄀
+              ->  Vector Index Scan on idx_ivf_include_phase6 [l2_distance]  𝄀
+                    Vector Index: idx_ivf_include_phase6, Metric: l2_distance, Candidate Limit: 2, NProbe: 8
+select id, title, category
+from vector_ivfflat_include_phase6
+where category >= 20
+order by l2_distance(embedding, "[1,2,3]")
+limit 2 by rank with option 'mode=post';
+➤ id[4,32,0]  ¦  title[12,20,0]  ¦  category[4,32,0]  𝄀
+2  ¦  beta  ¦  20  𝄀
+4  ¦  delta  ¦  40
+explain select id, title, category
+from vector_ivfflat_include_phase6
+where category >= 20
+order by l2_distance(embedding, "[1,2,3]")
+limit 2 by rank with option 'mode=include';
+-- @regex("Vector Index Scan", true)
+➤ AP QUERY PLAN ON MULTICN(32 core)[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 2  𝄀
+        ->  Vector Index Scan on idx_ivf_include_phase6 [l2_distance]  𝄀
+              Vector Index: idx_ivf_include_phase6, Metric: l2_distance, Candidate Limit: 2, NProbe: 8, Index Filter: (__mo_index_include_category >= 20)
+select id, title, category
+from vector_ivfflat_include_phase6
+where category >= 20
+order by l2_distance(embedding, "[1,2,3]")
+limit 2 by rank with option 'mode=include';
+➤ id[4,32,0]  ¦  title[12,20,0]  ¦  category[4,32,0]  𝄀
+2  ¦  beta  ¦  20  𝄀
+4  ¦  delta  ¦  40
+explain select id, title, note
+from vector_ivfflat_include_phase6
+where category >= 20 and note in ("n2", "n4")
+order by l2_distance(embedding, "[1,2,3]")
+limit 2 by rank with option 'mode=include';
+-- @regex("Vector Index Scan", true)
+➤ AP QUERY PLAN ON ONE CN(32 core)[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,3] INTERNAL  𝄀
+        Limit: 2  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (vector_ivfflat_include_phase6.id = #[1,0])  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on vector_ivfflat_include_phase6.vector_ivfflat_include_phase6  𝄀
+                    Filter Cond: vector_ivfflat_include_phase6.note in ([n2 n4])  𝄀
+                    Runtime Filter Probe: vector_ivfflat_include_phase6.id  𝄀
+              ->  Join  𝄀
+                    Join Type: SEMI  𝄀
+                    Join Cond: (#[0,0] = vector_ivfflat_include_phase6.id)  𝄀
+                    Runtime Filter Build: #[10,0]  𝄀
+                    ->  Vector Index Scan on idx_ivf_include_phase6 [l2_distance]  𝄀
+                          Runtime Filter Probe: #[8,0]  𝄀
+                          Vector Index: idx_ivf_include_phase6, Metric: l2_distance, Candidate Limit: 2, NProbe: 8, Index Filter: (__mo_index_include_category >= 20)  𝄀
+                    ->  Table Scan on vector_ivfflat_include_phase6.vector_ivfflat_include_phase6  𝄀
+                          Filter Cond: vector_ivfflat_include_phase6.note in ([n2 n4])
+select id, title, note
+from vector_ivfflat_include_phase6
+where category >= 20 and note in ("n2", "n4")
+order by l2_distance(embedding, "[1,2,3]")
+limit 2 by rank with option 'mode=include';
+➤ id[4,32,0]  ¦  title[12,20,0]  ¦  note[12,20,0]  𝄀
+2  ¦  beta  ¦  n2  𝄀
+4  ¦  delta  ¦  n4
+set optimizer_hints = 'vectorLocalDOP=1';
+prepare pre_domain from 'select id from vector_ivfflat_include_phase6 where note=? order by l2_distance(embedding,"[1,2,3]") limit 1 by rank with option ''mode=pre''';
+set @pre_note='n2';
+execute pre_domain using @pre_note;
+➤ id[4,32,0]  𝄀
+2
+set @pre_note='n4';
+execute pre_domain using @pre_note;
+➤ id[4,32,0]  𝄀
+4
+set @pre_note='missing';
+execute pre_domain using @pre_note;
+➤ id[4,32,0]  𝄀
+deallocate prepare pre_domain;
+set optimizer_hints = '';
+create table string_pre(id varchar(8) primary key, embedding vecf32(3), selected int);
+insert into string_pre values ('near','[0,0,0]',0),('member','[2,0,0]',1),('far','[4,0,0]',1);
+create index string_pre_idx using ivfflat on string_pre(embedding) lists=1 op_type 'vector_l2_ops';
+select id from string_pre where selected=1 order by l2_distance(embedding,'[0,0,0]') limit 1 by rank with option 'mode=pre';
+➤ id[12,8,0]  𝄀
+member
+drop table string_pre;
+drop table vector_ivfflat_include_phase6;
+drop database vector_ivfflat_include_phase6;

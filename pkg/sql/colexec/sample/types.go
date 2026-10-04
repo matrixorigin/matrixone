@@ -83,8 +83,16 @@ type container struct {
 	buf *batch.Batch
 
 	// hash map related.
-	intHashMap *hashmap.IntHashMap
-	strHashMap *hashmap.StrHashMap
+	intHashMap      *hashmap.IntHashMap
+	strHashMap      *hashmap.StrHashMap
+	groupingHashMap *hashmap.StrHashMap
+
+	// A grouping-aware key has a domain that cannot be represented by the
+	// normal IntHashMap and cannot be installed into a populated StrHashMap.
+	// These tables translate each map's local IDs into one sample-pool domain.
+	normalGroupIDs   []uint64
+	groupingGroupIDs []uint64
+	nextGroupID      uint64
 }
 
 func init() {
@@ -208,6 +216,9 @@ func (sample *Sample) Free(proc *process.Process, pipelineFailed bool, err error
 		}
 		if sample.ctr.strHashMap != nil {
 			sample.ctr.strHashMap.Free()
+		}
+		if sample.ctr.groupingHashMap != nil {
+			sample.ctr.groupingHashMap.Free()
 		}
 		for _, executor := range sample.ctr.sampleExecutors {
 			if executor != nil {

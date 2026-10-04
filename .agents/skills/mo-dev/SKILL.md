@@ -1,143 +1,248 @@
 ---
 name: mo-dev
-description: MatrixOne database kernel development - deterministic CGo build/test setup, complete test matrices, hung-test diagnosis, GPU builds (MO_CL_CUDA=1 / cuVS), operator lifecycle contracts (Call/Reset), pipeline protocol, and the vector/fulltext index-plugin framework. Use when modifying kernel packages, running CGo-transitive tests, diagnosing compile/link/load/vendor failures or silent hangs, changing colexec/process/compile pipelines, or adding/editing index algorithms.
-metadata:
-  project: matrixone
-  repository: matrixorigin/matrixone
-  language: go
-  cgo: true
+description: Develop and validate MatrixOne kernel changes with design-first gates, first-principles invariants, risk-proportional evidence, deterministic UT/BVT, and repository-specific CGo, operator/pipeline, planner, and index-plugin workflows. Use for MatrixOne production or test changes, bug fixes, feature/refactor design, kernel CI failures/hangs, and implementation review.
 ---
 
-Compatibility: designed for Codex CLI and compatible agents. Requires Go 1.22+, GNU Make, C/C++ toolchain (gcc/clang), and pre-built thirdparties.
+Compatibility: designed for Codex CLI and compatible agents on supported
+MatrixOne development platforms. Use the Go version in `go.mod`. CGo work also
+requires the repository-supported compiler and matching native artifacts.
 
-## Resource Map
+## Outcome and core workflow
 
-Load only the reference needed for the task:
+Produce the smallest general change that restores or introduces an explicit
+contract, then prove every affected boundary with the cheapest valid evidence.
+Rigor is coverage of contracts and unhappy paths, not diff size, command count,
+or repeated full-suite runs.
+
+1. **Resolve scope once.** Record base, head, merge-base, committed plus local
+   changes, and untracked/delivery artifacts. Build the change map and per-closure
+   R0-R3 classification from
+   [validation-evidence.md](references/validation-evidence.md).
+2. **Classify design work.** Apply the feature/major-refactor gate before
+   implementation. Ordinary focused bug fixes are exempt from a design document,
+   but never from invariant, ownership, cost, or validation reasoning.
+3. **State the contract.** Write the problem evidence, invariant and negation,
+   first owner, affected consumers, state transitions, unhappy paths, and
+   performance/resource budget before choosing the patch.
+4. **Load only applicable domain references.** Use the resource map below; do
+   not load or restate every specialized workflow.
+5. **Implement the narrowest complete closure.** Change the common ownership or
+   protocol boundary, not one observed trace. Update consumers/reverse arcs and
+   tests in the same functional unit.
+6. **Validate by information value.** Reuse semantically valid evidence, run the
+   cheapest discriminating checks first, and escalate only along mapped risk
+   dimensions. Do not rerun equivalent author/CI work.
+7. **Review and deliver.** Run `mo-self-review` on the final scope, resolve every
+   blocker, inspect the delivery diff, and report the compact evidence record.
+
+For tests and diagnostic probes, acquire each resource only after its preceding
+step succeeds and schedule its cleanup immediately in the same lexical scope.
+When a loop performs repeated queries or opens rows/statements, use a small
+helper or per-iteration closure so `defer` releases the resource before the
+next iteration; a cleanup call at the bottom of a test is not equivalent on an
+early assertion failure.
+
+For diagnosis-only requests, stop after proving and explaining the cause; do not
+turn diagnosis into an implementation without authorization.
+
+## Resource map
+
+Read a reference when its trigger applies:
 
 | Need | Read |
-|------|------|
-| CGo compile/link/load/module errors, deterministic test execution, layered matrices, hung tests, "pre-existing" claims, GPU/cuVS/CUDA | [references/cgo-build-test.md](references/cgo-build-test.md) |
-| `colexec` operator edits, `process` signal types, pipeline spools, Call/Reset cleanup, hung tests | [references/operator-pipeline.md](references/operator-pipeline.md) |
-| Vector/fulltext index algorithm work, plugin registry, GPU-only algorithm registration, index-plugin review | [references/index-plugin.md](references/index-plugin.md) |
+|---|---|
+| Change/risk map, efficient validation order, CI/local evidence reuse | [references/validation-evidence.md](references/validation-evidence.md) |
+| Credible shared-state/lifecycle/synchronization/timing failure mode | [references/race-validation.md](references/race-validation.md) |
+| Large/complex feature or major refactor; design document review (RFC optional) | [references/feature-design-review.md](references/feature-design-review.md) |
+| UT/BVT purpose, orthogonality, fixture reuse, cost/flakiness, result and execution evidence | [references/testing-contract.md](references/testing-contract.md) |
+| CGo compile/link/load/module errors, local wrapper, hang attribution, clean-baseline proof, GPU/cuVS/CUDA | [references/cgo-build-test.md](references/cgo-build-test.md) |
+| `colexec`/`process`/pipeline lifecycle, typed terminal signals, distributed dispatch/receiver hangs | [references/operator-pipeline.md](references/operator-pipeline.md) |
+| Planner/explain/rewrite correctness, public reachability, independent black-/white-box oracles | [references/counterexample-testing.md](references/counterexample-testing.md) |
+| Vector/fulltext algorithm registry, build-tag registration, ISCP/CDC and index-plugin review | [references/index-plugin.md](references/index-plugin.md) |
 
-## Enforcement Gates
+## Enforcement gates
 
-Consult the referenced material before acting:
+| Gate | Trigger | Required action |
+|---|---|---|
+| **G-FEATURE-DESIGN** | Feature/major refactor reaches the size threshold or any complexity trigger | Read the design contract; require and review an approved, versioned design document before implementation. A failed/missing design makes the review decision `REQUEST_CHANGES`; submit that GitHub review only when the task authorizes the mutation. |
+| **G-CHANGE-MAP** | Before non-trivial implementation, validation, or review | Build one complete change map. Every changed hunk and contract must be covered; deep work is routed per closure rather than repeated over the whole diff. |
+| **G-TEST-CONTRACT** | Production behavior changes or any UT/BVT is added, changed, removed, merged, or optimized | Read the testing contract. Map behavior to UT/BVT, inventory existing cases/fixtures, preserve all distinct oracles, and reject unnecessary data, sleeps, processes, or setup. |
+| **G-CGO** | A selected package is CGo-direct/transitive, native/module/link/load errors occur, or GPU mode is involved | Read the CGo reference and use the controlled wrapper/appropriate GPU workflow. Diagnose the failing layer; do not change product code to mask environment failure. |
+| **G-OPERATOR** | Editing/reviewing `colexec`, process signals, pipeline spool/protocol, or a distributed pipeline hang | Read the operator/pipeline reference before editing or concluding. Trace sender and receiver plus reset/cleanup terminal paths. |
+| **G-COUNTEREXAMPLE** | Planner/explain/rewrite correctness or scenario-overfit risk | Read the counterexample reference. Define invariant/negation/reachability and use independent public and typed oracles where each proves a distinct claim. |
+| **G-INDEXPLUGIN** | Index algorithm dispatch/plugin/registry/ISCP paths change | Read the index-plugin reference and its review section. New SQL/catalog per-algorithm dispatch is forbidden. |
+| **G-STATIC-INCREMENTAL** | Any Go source/test edit or SCA failure | Derive the changed package closure from the merge base (including local staged/unstaged files), run gofmt/vet/lint only for that closure first, and escalate to the full repository scan only under the rules below. |
+| **G-CI-TRIAGE** | A CI job fails, hangs, is cancelled, or is unexpectedly skipped | Capture the exact job step, SHA, platform/toolchain, and terminal result; classify code/static/test failure separately from network/cache/quota/disk/runner failure before changing code or deciding to rerun. |
+| **G-EVIDENCE** | Before claiming pass/done or attributing a failure | Apply semantic evidence validity. Pending/empty selection/partial output is not a pass; a “pre-existing” claim requires the same failure at the verified clean baseline. |
 
-| Gate | When | Action |
-|------|------|--------|
-| **G-MODIFY** | Before editing any `colexec` operator or `process` signal type | Read [operator-pipeline.md](references/operator-pipeline.md). |
-| **G-CGO-ERR** | Any build/test returns module/vendor, header, link, `dyld`, or shared-library errors | Read [cgo-build-test.md](references/cgo-build-test.md) and identify the failing layer before changing code. |
-| **G-GPU** | Before a GPU build/test (`MO_CL_CUDA=1`), or on CUDA/cuVS errors (`CONDA_PREFIX`, `nvcc`, `-lcuvs`/`-lcudart`, `unsupported index type: ivfpq\|cagra`) | Read [cgo-build-test.md](references/cgo-build-test.md) section 6. |
-| **G-IDXPLUGIN** | Before adding/editing an index-algorithm plugin, OR adding any `switch`/`if` on an index **algo** name in `pkg/sql/{compile,plan}` or `pkg/catalog` | Read [index-plugin.md](references/index-plugin.md). Route through `pkg/indexplugin`; new algo switches are forbidden. |
-| **G-IDXREVIEW** | Reviewing a diff that touches index-algorithm dispatch, `pkg/vectorindex/<algo>/plugin/`, `pkg/fulltext/plugin`, or `pkg/indexplugin` | Read [index-plugin.md](references/index-plugin.md) section 9 and run its greps. |
-| **G-DONE** | Before declaring "done"/"complete"/"passes" | Apply the completion gate below. |
-| **G-TEST-FAIL** | `go test` returns non-zero or hangs >10s | Read [operator-pipeline.md](references/operator-pipeline.md) section 4 and [cgo-build-test.md](references/cgo-build-test.md) section 4 before attributing cause. |
-| **G-TEST-EVIDENCE** | A test command yields no final PASS/FAIL, returns a session/process identifier, or leaves a test process alive | Treat it as still running or failed; poll, inspect the process, and capture its real exit status/stack. |
+## First-principles change rules
 
-## Project Structure
+1. Start from the violated/missing invariant and the first owner of state or
+   resources, not the proposed patch, issue spelling, or last stack frame.
+2. Close success, error, cancellation, timeout, retry, partial initialization,
+   reset/reuse, restart, and cleanup only where the mapped contract can reach
+   them. Prove unreachable dimensions instead of testing them ritualistically.
+3. Prefer deleting duplicated state/transitions/cleanup. Every new stateful
+   component needs one effective owner, an explicit bound, admission/publication
+   point, all terminal paths, and a generation/restart rule.
+4. Keep mechanisms proportional. A local fix does not justify a framework,
+   cache, worker, retry layer, global, extension point, or generic abstraction.
+   Require multiple independent recurring needs, a stable contract, and lower
+   total runtime/operational/testing/maintenance complexity.
+5. Treat per-row/batch/message/transaction/query paths as hot until bounded.
+   Account for allocations, copies, scans, synchronization, goroutines, I/O,
+   logs, and metric cardinality; benchmark/profile only when cost can be
+   material.
+6. Avoid incident overfit. Do not encode issue IDs, one plan layout, exact data
+   shape, or timing coincidence in production logic. Test the invariant,
+   nearest control, and counterexample with minimum data and deterministic
+   control.
+7. Preserve user scope and permissions. Read-only review/diagnosis does not
+   authorize production changes, GitHub review submission, or other external
+   mutations.
 
-```
-pkg/sql/compile/       <- DAG compilation, operator instantiation, pipeline build, launch
-pkg/sql/colexec/       <- execution operators (connector/dispatch/merge/join/scan/...)
-pkg/vm/process/        <- execution context (Process), WaitRegister, signal channels
-pkg/vm/pipeline/       <- Pipeline lifecycle management
-pkg/container/         <- Batch/Vector/pSpool and other base data structures
-pkg/frontend/          <- MySQL protocol compatibility layer
-pkg/txn/               <- transaction management and MVCC
-pkg/sql/plan/          <- query plan construction
-cgo/                   <- CGo adapter layer (libmo.dylib / libmo.so)
-```
+## Efficient validation and completion
 
-Operator file convention under `pkg/sql/colexec/<op>/`:
+Use [validation-evidence.md](references/validation-evidence.md) as the source of
+truth. In particular:
 
-- `types.go`: Arg struct definition
-- `<op>.go`: main logic (`Prepare`/`Call`/`Reset`)
-- Optional `sendfunc.go`/`dispatch.go` helpers
+- prove exact package/test/case selection is non-empty;
+- run focused evidence before broader owning-package/group evidence;
+- validate a real consumer when an ownership/API boundary changes;
+- add BVT/topology/restart/upgrade/race/GPU/performance only when the mapped
+  contract requires that dimension;
+- reuse exact-head CI or local evidence whose relevant semantic inputs and mode
+  are unchanged; unrelated docs or PR metadata do not invalidate it;
+- retain real terminal status and diagnose silence by polling the existing
+  process, not by launching duplicates.
 
-Key dependency chain: `compile` instantiates operators -> `colexec` executes -> `process` manages context and signals -> `container` carries data.
+### Incremental static checks (default)
 
-## Quick Test Commands
-
-For ordinary package checks:
+Do not run a repository-wide SCA for every edit. Resolve the merge base once,
+include committed and local tracked/untracked Go files, inspect the resulting
+package list, and run the configured checks only on that list:
 
 ```bash
-go build ./pkg/target/...
-go vet ./pkg/target/...
-go test -v -count=1 -timeout 120s ./pkg/target/...
-go test -v -count=1 -run TestXxx ./pkg/target/...
+set -euo pipefail
+base_ref=${REVIEW_BASE:-origin/main}
+merge_base=$(git merge-base HEAD "$base_ref")
+tracked_go=$(git diff --name-only "$merge_base" -- '*.go')
+untracked_go=$(git ls-files --others --exclude-standard -- '*.go')
+changed_go=$(printf '%s\n%s\n' "$tracked_go" "$untracked_go" |
+  sort -u | sed '/^$/d')
+existing_go=$(printf '%s\n' "$changed_go" | while IFS= read -r file; do
+  if [ -n "$file" ] && [ -f "$file" ]; then printf '%s\n' "$file"; fi
+done)
+
+if [ -n "$existing_go" ]; then
+  format_files=$(printf '%s\n' "$existing_go" | xargs -r gofmt -l)
+  if [ -n "$format_files" ]; then
+    printf 'gofmt required for:\n%s\n' "$format_files" >&2
+    exit 1
+  fi
+fi
+
+changed_dirs=$(printf '%s\n' "$changed_go" | while IFS= read -r file; do
+  if [ -n "$file" ]; then dirname -- "$file"; fi
+done | sort -u)
+changed_pkgs=$(printf '%s\n' "$changed_dirs" | while IFS= read -r dir; do
+  if [ -z "$dir" ]; then continue; fi
+  if [ ! -d "$dir" ]; then
+    printf 'changed Go directory was removed; select affected consumers explicitly: %s\n' "$dir" >&2
+    exit 1
+  fi
+  if ! find "$dir" -maxdepth 1 -type f -name '*.go' -print -quit | grep -q .; then
+    printf 'changed Go directory has no current Go files; select affected consumers explicitly: %s\n' "$dir" >&2
+    exit 1
+  fi
+  GOWORK=off go list -mod=readonly "./${dir#./}" || exit 1
+done | sort -u)
+if [ -n "$changed_go" ] && [ -z "$changed_pkgs" ]; then
+  printf 'changed Go files exist, but no package was discovered\n' >&2
+  exit 1
+fi
+
+if [ -n "$changed_pkgs" ]; then
+  GOWORK=off go vet -mod=readonly $changed_pkgs
+  GOWORK=off golangci-lint run -c .golangci.yml --new-from-rev "$merge_base" $changed_pkgs
+fi
 ```
 
-For CGo-transitive or CGo-direct packages, do not guess flags. Read [references/cgo-build-test.md](references/cgo-build-test.md).
+Use the CGo setup and wrapper from
+[cgo-build-test.md](references/cgo-build-test.md) when the selected closure is
+CGo-direct/transitive. Add directly affected consumers when an exported/API,
+protocol, generated-code, or shared lifecycle contract changed; the package
+list must not be a guessed single leaf. A deleted-only package directory must
+stop this helper and be handled by explicitly selecting its existing consumers;
+do not replace that decision with `./...`. If no Go file changed, run the
+smallest checker for the changed artifact.
 
-For local CPU CGo tests, prefer the deterministic wrapper:
+`make static-check-analysis`, `make static-check`, `golangci-lint run ./...`,
+and equivalent whole-repository commands are the CI/full-scan path, not the
+default edit loop. Escalate to one only when SCA configuration/toolchain or
+workflow files changed, the affected consumer closure cannot be bounded, a
+release/pre-push gate explicitly requires it, or a CI failure must be
+reproduced. Record incremental and full results separately; a focused pass is
+not evidence that full CI SCA is green. Never suppress a finding or delete
+cleanup merely to make a static check pass.
+
+### CI and environment diagnosis
+
+When a CI check is red or silent, do not infer the cause from the check name or
+partial output. Inspect the failing step and terminal log at the exact checked
+SHA, then classify it before editing:
+
+- **Code/static/test:** reproduce the smallest affected package/test locally
+  with the same mode (race, coverage, tags, CGo, platform where possible), and
+  fix the violated contract. Run static checks before an expensive cluster or
+  end-to-end test.
+- **Infrastructure:** network/API fetch failures, rate limits, unavailable
+  caches, runner/toolchain setup, disk exhaustion, or a cancelled/evicted job
+  do not by themselves prove a product failure. Preserve the log and classify
+  the cancellation/eviction reason; rerun only a clearly transient job when
+  authorized, and do not add sleeps, retries, skips, or product workarounds to
+  hide it.
+- **Ambiguous/hung:** keep the existing run as the source of truth; poll for a
+  terminal result, inspect the process/stack and resource state, and avoid
+  launching a duplicate service or test that can contend for ports, native
+  artifacts, or global state. A timeout is evidence of a liveness failure until
+  the wait-for path is explained.
+
+For local native/integration work, preflight the selected toolchain, disk and
+temporary directory, active test-owned processes/ports, and CGo artifact
+provenance. Use the repository wrapper and an explicit temporary directory;
+clean only artifacts owned by the test. Report environment failures separately
+from code evidence, and never claim CI green from a pending, skipped, cancelled,
+or unrelated check.
+
+Ordinary pure-Go examples:
+
+```bash
+GOWORK=off go test -mod=readonly -list 'TestXxx' ./pkg/target
+GOWORK=off go test -mod=readonly -v -count=1 -timeout 120s -run '^TestXxx$' ./pkg/target
+GOWORK=off go test -mod=readonly -v -count=1 -timeout 120s ./pkg/target/...
+GOWORK=off go vet -mod=readonly ./pkg/target/...
+```
+
+For CGo-direct/transitive packages, replace `go test` with:
 
 ```bash
 .agents/skills/mo-dev/scripts/mo-cgo-test -count=1 -timeout=120s ./pkg/target/...
-.agents/skills/mo-dev/scripts/mo-cgo-test -race -count=1 -timeout=240s ./pkg/target/...
 ```
 
-Rule: "`go build` passes" does not mean "`go test` will pass." Test binaries link more CGo.
+Before delivery, the record must show:
 
-## Operator / Pipeline Rules
-
-Read [references/operator-pipeline.md](references/operator-pipeline.md) before changing these paths.
-
-- `Call()` processes one batch. It must not send terminal signals (`End`, `Error`, `Abort`).
-- `Reset()` performs cleanup and notifies downstream completion.
-- If explicit typed signals replaced implicit nil-batch end-of-stream, use `Abort()` instead of `CloseWithTimeout()`.
-- `CloseWithTimeout()` waits for nil batches; with typed signals it can wait for something that will never arrive.
-- When sending terminal signals into bounded channels, record terminal state even if the channel send fails.
-
-## Index-Plugin Rules
-
-Read [references/index-plugin.md](references/index-plugin.md) before touching vector/fulltext index algorithm dispatch.
-
-- Work through `pkg/indexplugin.Get(algo)` and hook interfaces.
-- Do not add new per-algorithm `switch` / `if IsXxxIndexAlgo || ...` in SQL/catalog layers.
-- Do not import `pkg/sql/plan` or `pkg/sql/compile` from plugin packages.
-- Register CPU-safe plugins in `pkg/indexplugin/all/all.go`; register GPU-only plugins in `all_gpu.go`.
-- Keep `var _ AlgoPlugin` and `var _ Hooks` compile-time assertions intact.
-- Add CPU-runnable unit tests for plan/schema/runtime hooks; GPU-gated BVT alone can fail coverage gates.
-
-## Completion Gate
-
-Before declaring any MatrixOne code change done, check all boxes:
-
-```
-□ go build ./pkg/.../modified_package...    -> exit 0
-□ go vet ./pkg/.../modified_package...      -> exit 0
-□ go test -v -count=1 ./pkg/.../...         -> exit 0, no hangs
-□ git diff --stat                            -> inspected, no unintended files
-□ Regression: at least one test from dependent package passes
-□ all evidence is newer than the last semantic edit/rebase and has a real exit code
+```text
+□ resolved range/worktree scope and complete per-closure change map
+□ design-gate decision and approved revision when triggered
+□ invariant/root cause/owner/consumer and relevant unhappy paths closed
+□ UT/BVT and specialized-domain decisions recorded
+□ every required proof is validly reused or passed; gaps/pending work are explicit
+□ generated/delivery artifacts, diff stat, and unintended files checked
+□ `mo-self-review` has zero unresolved blockers
 ```
 
-Hang = failure. If `go test` produces >10s of no output, investigate instead of calling it slow.
-
-Hard rule: never claim a failure is "pre-existing" without proving it from clean HEAD. Use the clean-tree reproduction protocol in [references/cgo-build-test.md](references/cgo-build-test.md) section 5.
-
-## Common Diagnosis Shortcuts
-
-| Symptom | First Place To Look |
-|---------|---------------------|
-| Test hangs exactly 30s | `CloseWithTimeout` waiting for nil-batch that never arrives. Read [operator-pipeline.md](references/operator-pipeline.md). |
-| Test hangs >5s, no output | Deadlock or blocking channel send. Check `done` channel and non-blocking `select`. |
-| `context deadline exceeded` after 30s | Did all senders call `Reset()` and send typed terminal signals? |
-| `fatal error: 'xxhash.h' file not found` | `CGO_CFLAGS`; read [cgo-build-test.md](references/cgo-build-test.md). |
-| `Undefined symbols` / `undefined symbol:` | Inspect the ordered native dependency graph and artifact freshness; read [cgo-build-test.md](references/cgo-build-test.md). |
-| `cannot find -lmo` / `ld: library 'mo' not found` | Use the wrapper; for manual links, place `cgo` package `CgoLDFLAGS` after `-lmo`. Read [cgo-build-test.md](references/cgo-build-test.md). |
-| `dyld`/loader searches a temporary `go-build.../lib` directory | A package-relative rpath was used for a temporary test binary; use the CGo test wrapper or absolute test rpaths. |
-| Only linker warnings appear, no PASS/FAIL | Check the returned session and live test process; do not infer success from partial output. |
-| `unsupported index type: ivfpq|cagra` | CPU binary lacks GPU plugin registration; read [index-plugin.md](references/index-plugin.md) and GPU notes. |
-
-## Forbidden Patterns
-
-1. Never send terminal signals (`End`, `Error`, `Abort`) from `Call()`.
-2. Never call `sp.CloseWithTimeout()` after switching to explicit typed terminal signals.
-3. Never claim "pre-existing" without `git stash` proof.
-4. Never declare done without fresh test output.
-5. Never assume `go build` success means `go test` will pass.
-6. Never skip bottom-up testing: pure Go -> CGo-transitive -> CGo-direct.
-7. Never add a per-algorithm `switch`/`if` on an index algo name in the SQL layer. Route through `indexplugin.Get(algo)`.
-8. Never use distributable-binary relative rpaths as proof that a temporary `go test` binary can load its libraries.
+Never weaken assertions, add sleeps/retries/skips, broaden fixtures, or run an
+unrelated package merely to make a checkbox green. Never claim “systematic”
+from breadth alone: demonstrate one general contract closed across its relevant
+state space with less total complexity than the credible alternatives.

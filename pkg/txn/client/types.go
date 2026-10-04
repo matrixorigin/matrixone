@@ -102,9 +102,7 @@ type TxnState struct {
 	LatestTS timestamp.Timestamp
 }
 
-// TxnOperator operator for transaction clients, handling read and write
-// requests for transactions, and handling distributed transactions across DN
-// nodes.
+// TxnOperator handles transaction client read and write requests.
 // Note: For Error returned by Read/Write/WriteAndCommit/Commit/Rollback, need
 // to check if it is a moerr.ErrDNShardNotFound error, if so, the TN information
 // held is out of date and needs to be reloaded by HAKeeper.
@@ -152,16 +150,15 @@ type TxnOperator interface {
 	// After use, SendResult needs to call the Release method
 	Read(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error)
 	// Write transaction write operation, and the operator will record the DN
-	// nodes written by the current transaction, and when it finds that multiple
-	// TN nodes are written, it will start distributed transaction processing.
+	// nodes written by the current transaction.
 	// The transaction has been aborted if ErrTxnAborted returned.
 	// After use, SendResult needs to call the Release method
 	Write(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error)
 	// WriteAndCommit is similar to Write, but commit the transaction after write.
 	// After use, SendResult needs to call the Release method
 	WriteAndCommit(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error)
-	// Commit the transaction. If data has been written to multiple TN nodes, a
-	// 2pc distributed transaction commit process is used.
+	// Commit the transaction. Transactions spanning multiple TN shards are not
+	// supported.
 	Commit(ctx context.Context) error
 	// Rollback the transaction.
 	Rollback(ctx context.Context) error
@@ -198,7 +195,6 @@ type TxnOperator interface {
 	// method.
 	Debug(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error)
 
-	NextSequence() uint64
 	// EnterRunSqlWithTokenAndSQL registers one SQL execution. The returned token
 	// is opaque, including zero, and must be passed to ExitRunSqlWithToken. Use
 	// TryEnterRunSqlWithTokenAndSQL when rejection reasons are required. This
@@ -223,6 +219,22 @@ type TxnOperator interface {
 // TxnOperator preserves source compatibility for external implementations.
 type RunSQLAdmissionOperator interface {
 	TryEnterRunSqlWithTokenAndSQL(cancel context.CancelFunc, sql string) (uint64, error)
+}
+
+// AutoIncrEpochFenceCommitter is an additive transaction capability used by
+// epoch-aware workspaces to require the V7-only terminal commit method.
+type AutoIncrEpochFenceCommitter interface {
+	RequireAutoIncrEpochFenceCommit()
+}
+
+// RequireAutoIncrEpochFenceCommit marks the transaction and reports whether
+// the operator can provide the V7 terminal-commit contract.
+func RequireAutoIncrEpochFenceCommit(op TxnOperator) bool {
+	if committer, ok := op.(AutoIncrEpochFenceCommitter); ok {
+		committer.RequireAutoIncrEpochFenceCommit()
+		return true
+	}
+	return false
 }
 
 // TryEnterRunSqlWithTokenAndSQL admits one SQL execution using the richer
@@ -360,10 +372,21 @@ type Workspace interface {
 	GetSyncProtectionJobID() string
 }
 
+// TerminalTableDeletionView is an optional workspace capability for services
+// that retire state after a committed physical table deletion. It may only be
+// read synchronously from a committed ClosedEvent, after workspace preparation
+// and before finalization. The implementation must not acquire locks, perform
+// I/O, or call back into the transaction operator.
+type TerminalTableDeletionView interface {
+	IsTableDeletedAtTxnClose(physicalTableID uint64) bool
+}
+
 // TxnOverview txn overview include meta and status
 type TxnOverview struct {
 	// CreateAt create at
 	CreateAt time.Time
+	// AccountID is the account that created the transaction.
+	AccountID uint32
 	// Meta txn metadata
 	Meta txn.TxnMeta
 	// UserTxn true if is a user transaction
@@ -384,12 +407,10 @@ type Lock struct {
 }
 
 type TxnEvent struct {
-	Event     EventType
-	Txn       txn.TxnMeta
-	TableID   uint64
-	Err       error
-	Sequence  uint64
-	Cost      time.Duration
+	Event EventType
+	Txn   txn.TxnMeta
+	Err   error
+	// CostEvent identifies the completion phase of commit/rollback callbacks.
 	CostEvent bool
 }
 
@@ -402,8 +423,16 @@ func (e TxnEvent) Aborted() bool {
 }
 
 type TxnEventCallback struct {
-	Func  func(context.Context, TxnOperator, TxnEvent, any) error
-	Value any
+	Func            func(context.Context, TxnOperator, TxnEvent, any) error
+	Value           any
+	StatementScoped bool // ClosedEvent action discarded if its statement rolls back.
+}
+
+// StatementCallbackOperator is implemented by operators that can discard
+// transaction-close actions owned by a rolled-back statement.
+type StatementCallbackOperator interface {
+	BeginStatementCallbacks()
+	RollbackStatementCallbacks(context.Context) error
 }
 
 func NewTxnEventCallback(f func(context.Context, TxnOperator, TxnEvent, any) error) TxnEventCallback {

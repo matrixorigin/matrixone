@@ -12,17 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-NVCC := /usr/local/cuda/bin/nvcc
-CC   := gcc
-CXX  := g++
+include ../gpu-toolchain.mk
+NVCC := $(MO_GPU_NVCC) -ccbin $(MO_GPU_CXX)
 
 # Libraries
 # -lgomp is needed for OpenMP pragmas in filter.hpp's eval_filter_bitmap_cpu;
 # nvcc's host compiler (gcc) emits libgomp calls when -fopenmp is passed via
 # -Xcompiler below.
-LIBS := -L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64/cudart -L$(CONDA_PREFIX)/lib -lcuvs -lcuvs_c -ldl -lrmm -lrapids_logger -Xlinker -lpthread -Xlinker -lm -Xlinker -lgomp
+LIBS := $(MO_GPU_LDFLAGS) -ldl -lrmm -lrapids_logger -Xlinker -lpthread -Xlinker -lm -Xlinker -lgomp
 
-INCLUDES := -I. -I/usr/local/cuda/include -I$(CONDA_PREFIX)/include -I$(CONDA_PREFIX)/include/rapids -I$(CONDA_PREFIX)/include/raft -I$(CONDA_PREFIX)/include/cuvs
+INCLUDES := -I. $(MO_GPU_CFLAGS) $(foreach root,$(MO_GPU_RAPIDS_INCLUDE_DIRS),-I$(root)/rapids -I$(root)/raft -I$(root)/cuvs)
 
 # NVCC_FLAGS are for compilation only. -x cu tells nvcc to treat .cpp as .cu.
 # -fopenmp is forwarded to the host compiler via -Xcompiler so OpenMP pragmas
@@ -37,7 +36,7 @@ INCLUDES := -I. -I/usr/local/cuda/include -I$(CONDA_PREFIX)/include -I$(CONDA_PR
 # leave HOST_ARCH=native in CI artifacts: deploying onto an older node will
 # fail with SIGILL the moment an AVX-512 (or newer) instruction executes.
 HOST_ARCH ?= haswell
-NVCC_FLAGS := -O3 -std=c++17 -x cu -Xcompiler "-Wall -Wextra -fPIC -fopenmp -march=$(HOST_ARCH)" --extended-lambda --expt-relaxed-constexpr $(INCLUDES) -DLIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE -DRAFT_SYSTEM_LITTLE_ENDIAN=1 \
+NVCC_FLAGS := -O3 -std=c++20 -x cu -Xcompiler "-Wall -Wextra -fPIC -fopenmp -march=$(HOST_ARCH)" --extended-lambda --expt-relaxed-constexpr $(INCLUDES) -DLIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE -DRAFT_SYSTEM_LITTLE_ENDIAN=1 \
     -gencode arch=compute_75,code=sm_75 \
     -gencode arch=compute_80,code=sm_80 \
     -gencode arch=compute_86,code=sm_86 \
@@ -61,8 +60,8 @@ HEADERS := $(wildcard *.h *.hpp)
 
 # Source files
 C_SRCS := brute_force_c.cpp ivf_flat_c.cpp ivf_pq_c.cpp cagra_c.cpp kmeans_c.cpp adhoc_c.cpp distance_c.cpp
-CPP_SRCS := helper.cpp
-TEST_SRCS := test/main_test.cu test/brute_force_test.cu test/ivf_flat_test.cu test/ivf_pq_test.cu test/cagra_test.cu test/kmeans_test.cu test/quantize_test.cu test/distance_test.cu test/adhoc_test.cu test/batching_test.cu test/snmg_test.cu test/verify_half_conversion.cu test/filter_test.cu
+CPP_SRCS := helper.cpp host_meminfo.cpp
+TEST_SRCS := test/main_test.cu test/brute_force_test.cu test/ivf_flat_test.cu test/ivf_pq_test.cu test/cagra_test.cu test/kmeans_test.cu test/quantize_test.cu test/distance_test.cu test/adhoc_test.cu test/batching_test.cu test/snmg_test.cu test/verify_half_conversion.cu test/filter_test.cu test/device_memory_test.cu test/host_meminfo_test.cu test/host_memory_test.cu test/rows_fitting_test.cu
 
 # Object files
 OBJS := $(C_SRCS:.cpp=.o) $(CPP_SRCS:.cpp=.o)
@@ -72,12 +71,19 @@ TEST_OBJS := $(patsubst test/%.cu,obj/test/%.o,$(TEST_SRCS))
 
 all: libmocuvs.so
 
-test: test_cuvs_worker benchmark_cuvs benchmark_filter test_kmeans test_dynb test_ivfpq_filter
+# Builds every standalone binary in this directory, the bench sources included.
+# For the benches this is BUILD coverage, not execution: bench_wiki88 wants a
+# 20 GB card, and test_dynb deliberately reproduces an upstream dynamic_batching
+# deadlock. Building them here is what catches an API break at build time --
+# bench_upload_cost silently rotted through the cuVS 26.08 migration precisely
+# because no target compiled it, and only turned up when built by hand.
+test: test_cuvs_worker benchmark_cuvs benchmark_filter test_kmeans test_dynb test_ivfpq_filter \
+      bench_hostview bench_wiki88 bench_upload_cost
 
 release: all
 
-debug: NVCC_FLAGS := $(filter-out -O3,$(NVCC_FLAGS)) -O0 -g -lineinfo
-debug: LDFLAGS := $(filter-out -O3,$(LDFLAGS)) -g
+debug: override NVCC_FLAGS := $(filter-out -O%,$(NVCC_FLAGS)) -O0 -g -lineinfo
+debug: override LDFLAGS := $(filter-out -O%,$(LDFLAGS)) -O0 -g
 debug: all
 
 # AddressSanitizer build of the host (CPU) side of every cuvs .cpp/.hpp.
@@ -128,6 +134,19 @@ test_kmeans: obj/test/test_kmeans.o $(OBJS)
 	@echo "Linking $@"
 	$(NVCC) $(LDFLAGS) $^ $(LIBS) -o $@
 
+# Standalone reproducer for the uint8 quantization recall collapse
+# (f32->uint8 and f16->uint8). Has its own main(); runs in isolation
+# rather than as part of the full test_cuvs_worker suite.
+uint8_quant_bug: obj/test/uint8_quant_bug.o $(OBJS)
+	@echo "Linking $@"
+	$(NVCC) $(LDFLAGS) $^ $(LIBS) -o $@
+
+# Real-dataset (wiki_all_1M) version of the uint8 collapse reproducer. Loads the
+# .fbin base/queries + .ibin ground truth and grades recall@k at 1M scale.
+wiki1m_uint8_bug: obj/test/wiki1m_uint8_bug.o $(OBJS)
+	@echo "Linking $@"
+	$(NVCC) $(LDFLAGS) $^ $(LIBS) -o $@
+
 # Standalone reproducer for the cuvs::neighbors::dynamic_batching deadlock
 # (conservative_dispatch=true). Intentionally depends on nothing in this
 # project — links only against the cuVS / RAFT / RMM libraries we already
@@ -144,7 +163,26 @@ test_ivfpq_filter: obj/test/test_ivfpq_filter.o
 	@echo "Linking $@"
 	$(NVCC) $(LDFLAGS) $^ $(LIBS) -o $@
 
+# Measures what MO gives up by uploading the dataset itself instead of handing
+# cuVS a raft::host_matrix_view (which samples the trainset on the host and
+# streams the encode in batches). Standalone: cuVS / RAFT / RMM only.
+bench_hostview: obj/test/bench_hostview.o
+	@echo "Linking $@"
+	$(NVCC) $(LDFLAGS) $^ $(LIBS) -o $@
+
+# Projects the wiki_all 88M float16 index against a 20 GB card using the real
+# tuning from mo_vector_benchmark/cfg/templates/88M.json. Measures the train and
+# encode phases separately, because their allocations do not overlap.
+bench_wiki88: obj/test/bench_wiki88.o
+	@echo "Linking $@"
+	$(NVCC) $(LDFLAGS) $^ $(LIBS) -o $@
+
+# A/B for CAGRA and IVF-Flat: what the dataset upload costs each of them.
+bench_upload_cost: obj/test/bench_upload_cost.o
+	@echo "Linking $@"
+	$(NVCC) $(LDFLAGS) $^ $(LIBS) -o $@
+
 clean:
 	@echo "Cleaning up..."
-	rm -f libmocuvs.so *.o test_cuvs_worker benchmark_cuvs benchmark_filter test_kmeans test_dynb test_ivfpq_filter
+	rm -f libmocuvs.so *.o test_cuvs_worker benchmark_cuvs benchmark_filter test_kmeans test_dynb test_ivfpq_filter bench_hostview bench_wiki88 bench_upload_cost
 	rm -rf obj

@@ -117,17 +117,21 @@ func (s *taskService) CreateCronTask(ctx context.Context, value task.TaskMetadat
 }
 
 func (s *taskService) CreateDaemonTask(ctx context.Context, metadata task.TaskMetadata, details *task.Details) error {
+	taskType, err := daemonTaskType(ctx, details)
+	if err != nil {
+		return err
+	}
 	now := time.Now()
 
 	dt := task.DaemonTask{
 		Metadata:   metadata,
-		TaskType:   details.Type(),
+		TaskType:   taskType,
 		TaskStatus: task.TaskStatus_Created,
 		Details:    details,
 		CreateAt:   now,
 		UpdateAt:   now,
 	}
-	_, err := s.store.AddDaemonTask(ctx, dt)
+	_, err = s.store.AddDaemonTask(ctx, dt)
 	return err
 }
 
@@ -282,16 +286,38 @@ func (s *taskService) UpdateDaemonTask(ctx context.Context, tasks []task.DaemonT
 	return s.store.UpdateDaemonTask(ctx, tasks, conds...)
 }
 
+func (s *taskService) UpdateDaemonTaskError(ctx context.Context, claim task.DaemonTask, release bool) (int, error) {
+	return s.store.UpdateDaemonTaskError(ctx, claim, release)
+}
+
+func (s *taskService) UpdateDaemonTaskStatus(
+	ctx context.Context,
+	taskID uint64,
+	status task.TaskStatus,
+	updateAt time.Time,
+	endAt time.Time,
+	conds ...Condition,
+) (int, error) {
+	return s.store.UpdateDaemonTaskStatus(ctx, taskID, status, updateAt, endAt, conds...)
+}
+
 func (s *taskService) QueryDaemonTask(ctx context.Context, conds ...Condition) ([]task.DaemonTask, error) {
 	return s.store.QueryDaemonTask(ctx, conds...)
 }
 
 func (s *taskService) AddCDCTask(ctx context.Context, metadata task.TaskMetadata, details *task.Details, callback func(context.Context, SqlExecutor) (int, error)) (int, error) {
+	taskType, err := daemonTaskType(ctx, details)
+	if err != nil {
+		return 0, err
+	}
+	if taskType != task.TaskType_CreateCdc {
+		return 0, moerr.NewInvalidInput(ctx, "CDC task details must be CreateCdc")
+	}
 	now := time.Now()
 
 	dt := task.DaemonTask{
 		Metadata:   metadata,
-		TaskType:   details.Type(),
+		TaskType:   taskType,
 		TaskStatus: task.TaskStatus_Created,
 		Details:    details,
 		CreateAt:   now,
@@ -299,6 +325,14 @@ func (s *taskService) AddCDCTask(ctx context.Context, metadata task.TaskMetadata
 	}
 
 	return s.store.AddCDCTask(ctx, dt, callback)
+}
+
+func daemonTaskType(ctx context.Context, details *task.Details) (task.TaskType, error) {
+	taskType := details.Type()
+	if taskType == task.TaskType_TypeUnknown {
+		return taskType, moerr.NewInvalidInput(ctx, "daemon task details must have a known type")
+	}
+	return taskType, nil
 }
 
 func (s *taskService) UpdateCDCTask(
@@ -335,6 +369,34 @@ func (s *taskService) HeartbeatDaemonTask(ctx context.Context, t task.DaemonTask
 		return moerr.NewInvalidTask(ctx, t.TaskRunner, t.ID)
 	}
 	return nil
+}
+
+func (s *taskService) ValidateDaemonTask(ctx context.Context, t task.DaemonTask) error {
+	valid, err := s.store.ValidateDaemonTask(ctx, t)
+	if err != nil {
+		return err
+	}
+	if !valid {
+		return moerr.NewInvalidTask(ctx, t.TaskRunner, t.ID)
+	}
+	return nil
+}
+
+// daemonTaskStatusAuthorizesEffect ties status authority to the immutable claim
+// snapshot captured by one executor generation. A normal Running generation
+// loses authority as soon as a control request is durable. Resume/Restart first
+// publish a new last_run while deliberately retaining their request status until
+// startup succeeds, so only that new request-generation may use the transitional
+// status and remain valid after its status is promoted to Running.
+func daemonTaskStatusAuthorizesEffect(claimStatus, currentStatus task.TaskStatus) bool {
+	switch claimStatus {
+	case task.TaskStatus_Running:
+		return currentStatus == task.TaskStatus_Running
+	case task.TaskStatus_ResumeRequested, task.TaskStatus_RestartRequested:
+		return currentStatus == claimStatus || currentStatus == task.TaskStatus_Running
+	default:
+		return false
+	}
 }
 
 func (s *taskService) TruncateCompletedTasks(ctx context.Context) error {

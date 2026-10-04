@@ -35,7 +35,7 @@ internal error: Cannot delete or update a parent row: a foreign key constraint f
 delete from t1 where a = 3;
 delete from t1 where a = 8;
 update t1 set a = 3 where a = 2;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 update t1 set b = NULL where a = 2;
 delete from t1 where  a= 2;
 update t1 set b = NULL where a = 1;
@@ -85,7 +85,7 @@ internal error: Cannot delete or update a parent row: a foreign key constraint f
 delete from t1 where a = 3;
 delete from t1 where a = 8;
 update t1 set a = 3 where a = 2;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 update t1 set b = NULL where a = 2;
 update t1 set a = 3 where a = 2;
 delete from t1 where  a = 2;
@@ -145,7 +145,7 @@ internal error: Cannot delete or update a parent row: a foreign key constraint f
 update t1 set b = NULL where a = 1;
 Cannot add or update a child row: a foreign key constraint fails
 update t1 set b = 2 where a = 1;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 update t1 set c = NULL where a = 1;
 update t1 set b = 2 where a = 1;
 delete from t1 where a = 1;

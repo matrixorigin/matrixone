@@ -1,0 +1,151 @@
+drop database if exists issue_28995;
+create database issue_28995;
+use issue_28995;
+create table parent_t (
+id int primary key
+);
+insert into parent_t values (1), (2);
+create table child_t (
+id int primary key
+);
+insert into child_t values (1);
+alter table child_t
+add column parent_id int null,
+add constraint fk_child_parent foreign key (parent_id) references parent_t(id);
+update child_t set parent_id = 1 where id = 1;
+select id, parent_id from child_t order by id;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  𝄀
+1  ¦  1
+select count(*) from information_schema.key_column_usage
+where constraint_schema = 'issue_28995'
+and table_name = 'child_t'
+and constraint_name = 'fk_child_parent'
+and referenced_table_name = 'parent_t';
+➤ count(*)[-5,64,0]  𝄀
+1
+insert into child_t values (2, 999);
+internal error: Cannot add or update a child row: a foreign key constraint fails
+create table reverse_child_t (
+id int primary key
+);
+alter table reverse_child_t
+add constraint fk_reverse_parent foreign key (parent_id) references parent_t(id),
+add column parent_id int null;
+insert into reverse_child_t values (1, 2);
+insert into reverse_child_t values (2, 999);
+internal error: Cannot add or update a child row: a foreign key constraint fails
+create table preserved_child_t (
+id int primary key,
+existing_parent_id int,
+constraint fk_preserved_existing foreign key (existing_parent_id) references parent_t(id)
+);
+insert into preserved_child_t values (1, 1);
+alter table preserved_child_t
+add column new_parent_id int null,
+add constraint fk_preserved_new foreign key (new_parent_id) references parent_t(id);
+update preserved_child_t set new_parent_id = 2 where id = 1;
+select count(*) from information_schema.key_column_usage
+where constraint_schema = 'issue_28995'
+and table_name = 'preserved_child_t'
+and referenced_table_name = 'parent_t';
+➤ count(*)[-5,64,0]  𝄀
+2
+insert into preserved_child_t values (2, 999, 1);
+internal error: Cannot add or update a child row: a foreign key constraint fails
+insert into preserved_child_t values (3, 1, 999);
+internal error: Cannot add or update a child row: a foreign key constraint fails
+create table invalid_child_t (
+id int primary key
+);
+insert into invalid_child_t values (1);
+alter table invalid_child_t
+add column parent_id int not null default 999,
+add constraint fk_invalid_parent foreign key (parent_id) references parent_t(id);
+internal error: Cannot add or update a child row: a foreign key constraint fails
+select count(*) from information_schema.columns
+where table_schema = 'issue_28995'
+and table_name = 'invalid_child_t'
+and column_name = 'parent_id';
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from information_schema.key_column_usage
+where constraint_schema = 'issue_28995'
+and table_name = 'invalid_child_t'
+and constraint_name = 'fk_invalid_parent';
+➤ count(*)[-5,64,0]  𝄀
+0
+select * from invalid_child_t order by id;
+➤ id[4,32,0]  𝄀
+1
+create table self_child_t (
+id int primary key
+);
+insert into self_child_t values (1);
+alter table self_child_t
+add column parent_id int null,
+add constraint fk_self_parent foreign key (parent_id) references self_child_t(id);
+update self_child_t set parent_id = 1 where id = 1;
+select id, parent_id from self_child_t order by id;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  𝄀
+1  ¦  1
+insert into self_child_t values (2, 999);
+Cannot add or update a child row: a foreign key constraint fails
+create table composite_parent_t (
+a int,
+b int,
+primary key (a, b)
+);
+insert into composite_parent_t values (1, 2);
+create table composite_child_t (
+id int primary key
+);
+alter table composite_child_t
+add column parent_a int null,
+add column parent_b int null,
+add constraint fk_composite_parent foreign key (parent_a, parent_b)
+references composite_parent_t(a, b);
+insert into composite_child_t values (1, 1, 2);
+select id, parent_a, parent_b from composite_child_t order by id;
+➤ id[4,32,0]  ¦  parent_a[4,32,0]  ¦  parent_b[4,32,0]  𝄀
+1  ¦  1  ¦  2
+insert into composite_child_t values (2, 1, 999);
+internal error: Cannot add or update a child row: a foreign key constraint fails
+create table `parent``t` (
+`id``key` int primary key
+);
+insert into `parent``t` values (1);
+create table escaped_external_child (
+`id``key` int primary key
+);
+insert into escaped_external_child values (1);
+alter table escaped_external_child
+add column `parent``id` int not null default 1,
+add constraint `fk``external` foreign key (`parent``id`)
+references `parent``t`(`id``key`);
+select count(*) from escaped_external_child
+where `id``key` = 1 and `parent``id` = 1;
+➤ count(*)[-5,64,0]  𝄀
+1
+create table escaped_self_child (
+`id``key` int primary key
+);
+insert into escaped_self_child values (1);
+alter table escaped_self_child
+add column `parent``id` int not null default 1,
+add constraint `fk``self` foreign key (`parent``id`)
+references escaped_self_child(`id``key`);
+select count(*) from escaped_self_child
+where `id``key` = 1 and `parent``id` = 1;
+➤ count(*)[-5,64,0]  𝄀
+1
+drop table parent_t;
+internal error: can not drop table 'parent_t' referenced by some foreign key constraint
+drop table composite_child_t;
+drop table self_child_t;
+drop table invalid_child_t;
+drop table reverse_child_t;
+drop table preserved_child_t;
+drop table child_t;
+drop table composite_parent_t;
+drop table parent_t;
+drop database issue_28995;

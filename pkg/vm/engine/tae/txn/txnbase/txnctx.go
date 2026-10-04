@@ -97,8 +97,6 @@ func (ctx *TxnCtx) GetMemo() *txnif.TxnMemo {
 	return ctx.Memo
 }
 
-func (ctx *TxnCtx) Is2PC() bool { return len(ctx.Participants) > 1 }
-
 func (ctx *TxnCtx) GetCtx() []byte {
 	return ctx.IDCtx
 }
@@ -158,19 +156,6 @@ func (ctx *TxnCtx) SetCommitTS(cts types.TS) (err error) {
 	ctx.RLock()
 	defer ctx.RUnlock()
 	ctx.CommitTS = cts
-	return
-}
-
-func (ctx *TxnCtx) GetParticipants() []uint64 {
-	ctx.RLock()
-	defer ctx.RUnlock()
-	return ctx.Participants
-}
-
-func (ctx *TxnCtx) SetParticipants(ids []uint64) (err error) {
-	ctx.RLock()
-	defer ctx.RUnlock()
-	ctx.Participants = ids
 	return
 }
 
@@ -250,48 +235,9 @@ func (ctx *TxnCtx) ToPreparingLocked(ts types.TS) error {
 	return nil
 }
 
-func (ctx *TxnCtx) ToPrepared() (err error) {
-	ctx.Lock()
-	defer ctx.Unlock()
-	return ctx.ToPreparedLocked()
-}
-
-func (ctx *TxnCtx) ToPreparedLocked() (err error) {
-	if ctx.State != txnif.TxnStatePreparing {
-		err = moerr.NewTAEPrepareNoCtx("ToPreparedLocked: state is not preparing")
-		return
-	}
-	ctx.State = txnif.TxnStatePrepared
-	return
-}
-
-func (ctx *TxnCtx) ToCommittingFinished() (err error) {
-	ctx.Lock()
-	defer ctx.Unlock()
-	return ctx.ToCommittingFinishedLocked()
-}
-
-func (ctx *TxnCtx) ToCommittingFinishedLocked() (err error) {
-	if ctx.State != txnif.TxnStatePrepared {
-		err = moerr.NewTAECommitNoCtx("ToCommittingFinishedLocked: state is not prepared")
-		return
-	}
-	ctx.State = txnif.TxnStateCommittingFinished
-	return
-}
-
 func (ctx *TxnCtx) ToCommittedLocked() error {
-	if ctx.Is2PC() {
-		if ctx.State != txnif.TxnStateCommittingFinished &&
-			ctx.State != txnif.TxnStatePrepared {
-			return moerr.NewTAECommitNoCtx("ToCommittedLocked: 2PC txn's state " +
-				"is not Prepared or CommittingFinished")
-		}
-		ctx.State = txnif.TxnStateCommitted
-		return nil
-	}
 	if ctx.State != txnif.TxnStatePreparing {
-		return moerr.NewTAECommitNoCtx("ToCommittedLocked: 1PC txn's state is not preparing")
+		return moerr.NewTAECommitNoCtx("ToCommittedLocked: transaction state is not preparing")
 	}
 	ctx.State = txnif.TxnStateCommitted
 	return nil
@@ -317,14 +263,6 @@ func (ctx *TxnCtx) ToRollbackingLocked(ts types.TS) error {
 }
 
 func (ctx *TxnCtx) ToRollbackedLocked() error {
-	if ctx.Is2PC() {
-		if ctx.State != txnif.TxnStatePrepared &&
-			ctx.State != txnif.TxnStateRollbacking {
-			return moerr.NewTAERollbackNoCtxf("state %s", txnif.TxnStrState(ctx.State))
-		}
-		ctx.State = txnif.TxnStateRollbacked
-		return nil
-	}
 	if ctx.State != txnif.TxnStateRollbacking {
 		return moerr.NewTAERollbackNoCtxf("state %s", txnif.TxnStrState(ctx.State))
 	}

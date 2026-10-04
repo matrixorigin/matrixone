@@ -26,6 +26,15 @@ import (
 // 3. >= > < <=
 // 4. Mod
 func fixedTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
+	// MySQL evaluates ENUM by its 1-based index in numeric contexts.  Treat it
+	// as uint16 while selecting binary arithmetic and numeric comparison rules;
+	// the later cast still starts from T_enum and preserves NULL handling.
+	if s1.Oid == types.T_enum {
+		s1 = types.T_uint16.ToType()
+	}
+	if s2.Oid == types.T_enum {
+		s2 = types.T_uint16.ToType()
+	}
 	check := fixedBinaryCastRule1[s1.Oid][s2.Oid]
 	if check.cast {
 		t1, t2 := check.left.ToType(), check.right.ToType()
@@ -97,10 +106,44 @@ func fixedTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
 	return false, s1, s2
 }
 
+// arithmeticTypeCastRule1 applies the fixed coercion rules used by the four
+// arithmetic operators. BIT values are stored and executed as uint64,
+// so pairing BIT with a signed bigint must use the same exact DECIMAL128
+// domain as UINT64 with a signed bigint. Keeping this adjustment here, rather
+// than changing fixedTypeCastRule1, leaves comparison coercion unchanged.
+func arithmeticTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
+	// JSON is a dynamic scalar domain. Numeric arithmetic must retain its
+	// fractional values instead of borrowing an integer peer's domain.
+	hasJSON := s1.Oid == types.T_json || s2.Oid == types.T_json
+	s1, s2 = numericJSONType(s1), numericJSONType(s2)
+	if temporalArithmeticUsesFloat(s1, s2) {
+		// Temporal values participate as packed numeric values. Approximate or
+		// string operands select DOUBLE without discarding fractional seconds.
+		return true, types.T_float64.ToType(), types.T_float64.ToType()
+	}
+	if s1.Oid == types.T_bit && s2.Oid == types.T_int64 {
+		s1.Oid = types.T_uint64
+	} else if s1.Oid == types.T_int64 && s2.Oid == types.T_bit {
+		s2.Oid = types.T_uint64
+	}
+	cast, left, right := fixedTypeCastRule1(s1, s2)
+	return cast || hasJSON, left, right
+}
+
+func temporalArithmeticUsesFloat(left, right types.Type) bool {
+	return (left.Oid.IsDateRelate() && (right.Oid.IsFloat() || right.Oid.IsMySQLString())) ||
+		(right.Oid.IsDateRelate() && (left.Oid.IsFloat() || left.Oid.IsMySQLString()))
+}
+
 // a fixed type cast rule for
 //  1. Div
 //  2. IntegerDiv
 func fixedTypeCastRule2(s1, s2 types.Type) (bool, types.Type, types.Type) {
+	hasJSON := s1.Oid == types.T_json || s2.Oid == types.T_json
+	s1, s2 = numericJSONType(s1), numericJSONType(s2)
+	if temporalArithmeticUsesFloat(s1, s2) {
+		return true, types.T_float64.ToType(), types.T_float64.ToType()
+	}
 	check := fixedBinaryCastRule2[s1.Oid][s2.Oid]
 	if check.cast {
 		t1, t2 := check.left.ToType(), check.right.ToType()
@@ -148,7 +191,14 @@ func fixedTypeCastRule2(s1, s2 types.Type) (bool, types.Type, types.Type) {
 
 		return true, t1, t2
 	}
-	return false, s1, s2
+	return hasJSON, s1, s2
+}
+
+func numericJSONType(source types.Type) types.Type {
+	if source.Oid == types.T_json {
+		return types.T_float64.ToType()
+	}
+	return source
 }
 
 type matchCheckStatus int
@@ -161,9 +211,109 @@ const (
 
 // a fixed type match method.
 func fixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	return fixedTypeMatchExcept(overloads, inputs, -1)
+}
+
+// Native temporal inputs avoid formatting and reparsing. Other inputs retain
+// the historical character coercion (including numeric and NULL arguments).
+func lastDayTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 1 {
+		if inputs[0].Oid == types.T_date {
+			return fixedTypeMatchOnly(overloads, inputs, 2)
+		}
+		if inputs[0].Oid == types.T_datetime {
+			return fixedTypeMatchOnly(overloads, inputs, 3)
+		}
+	}
+	return fixedTypeMatch(overloads[:2], inputs)
+}
+
+// Persisted 4.2 expressions keep overloads 0..4 and their original physical
+// results. Only newly bound EXTRACT expressions select the numeric results.
+func extractNumericTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	// A marker or text column must reach the same tolerant parser as a
+	// VARCHAR literal. Choosing DATETIME by overload order would reject
+	// durations and partial/zero calendars before EXTRACT sees them.
+	if len(inputs) == 2 && (inputs[1].Oid.IsMySQLString() || inputs[1].Oid == types.T_any) {
+		r := fixedTypeMatch(overloads[8:9], inputs)
+		if r.status == succeedMatched || r.status == succeedWithCast {
+			r.idx += 8
+		}
+		return r
+	}
+	r := fixedTypeMatch(overloads[5:], inputs)
+	if r.status == succeedMatched || r.status == succeedWithCast {
+		r.idx += 5
+	}
+	return r
+}
+
+func addTimeTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	return timeArithmeticTypeMatch(overloads, inputs, 9)
+}
+
+func subTimeTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	return timeArithmeticTypeMatch(overloads, inputs, 11)
+}
+
+func timeArithmeticTypeMatch(overloads []overload, inputs []types.Type, legacyCount int) checkResult {
+	r := fixedTypeMatch(overloads[:legacyCount], inputs)
+	if len(inputs) == 2 && (inputs[1].Oid == types.T_float32 || inputs[1].Oid == types.T_float64) &&
+		r.status == succeedWithCast && len(r.finalType) == 2 &&
+		(r.finalType[1].Oid == types.T_varchar || r.finalType[1].Oid == types.T_char) {
+		// FLOAT has no declared decimal scale, but its duration can carry
+		// microseconds. The implicit text cast must not force FSP 0.
+		r.finalType[1].Scale = 6
+	}
+	if (r.status == succeedMatched || r.status == succeedWithCast) && r.idx >= 6 {
+		// The input signatures are unchanged; string results are appended
+		// after the legacy DATETIME-producing string overloads.
+		r.idx += legacyCount - 6
+	}
+	return r
+}
+
+// inetNtoaTypeMatch keeps native numeric inputs on their existing, allocation-
+// free executors while routing value-domain inputs through INET_NTOA's local
+// dynamic executor. This is deliberately a function-local matcher: adding
+// BOOL/temporal/string conversions to the global implicit-cast lattice would
+// silently change unrelated overload resolution.
+func inetNtoaTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) != 1 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	prefer := inputs[0].Oid
+	switch prefer {
+	case types.T_any, types.T_bool, types.T_date, types.T_datetime, types.T_timestamp,
+		types.T_time, types.T_year, types.T_json, types.T_char, types.T_varchar, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_blob:
+		for i, over := range overloads {
+			if len(over.args) == 1 && over.args[0] == prefer {
+				return newCheckResultWithSuccess(i)
+			}
+		}
+	}
+	return fixedTypeMatch(overloads, inputs)
+}
+
+// fixedTypeMatchExcept is the fixed matcher with one overload omitted. Keeping
+// the original overload slice avoids planner-time allocations for matchers
+// that need to reserve a dedicated string overload.
+func fixedTypeMatchExcept(overloads []overload, inputs []types.Type, excluded int) checkResult {
+	return fixedTypeMatchSelection(overloads, inputs, excluded, -1)
+}
+
+func fixedTypeMatchOnly(overloads []overload, inputs []types.Type, selected int) checkResult {
+	return fixedTypeMatchSelection(overloads, inputs, -1, selected)
+}
+
+func fixedTypeMatchSelection(overloads []overload, inputs []types.Type, excluded, selected int) checkResult {
 	minIndex := -1
 	minCost := math.MaxInt
 	for i, ov := range overloads {
+		if i == excluded || (selected >= 0 && i != selected) {
+			continue
+		}
 		if len(ov.args) != len(inputs) {
 			continue
 		}
@@ -191,10 +341,385 @@ func fixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 			castType[i] = inputs[i]
 		} else {
 			castType[i] = ov.args[i].ToType()
+			if ov.args[i] == types.T_varchar && !inputs[i].Oid.IsMySQLString() {
+				castType[i] = formattedScalarStringType(inputs[i])
+			}
 			SetTargetScaleFromSource(&inputs[i], &castType[i])
+			if isCollatedTextType(inputs[i].Oid) && isCollatedTextType(castType[i].Oid) {
+				// CHAR/VARCHAR/TEXT conversions change the storage shape, not the
+				// collation. Retaining it here prevents an implicit overload cast
+				// from erasing metadata before a derived-string return callback runs.
+				castType[i].Charset = inputs[i].Charset
+			}
 		}
 	}
 	return newCheckResultWithCast(minIndex, castType)
+}
+
+// userLevelLockTypeMatch preserves the historical DOUBLE coercion for all
+// non-decimal timeout arguments, while dispatching DECIMAL inputs without an
+// intermediate DOUBLE conversion. MySQL's Item_decimal and Item_float use
+// different integer-conversion rules, so merging these domains loses SQL
+// literal semantics.
+func userLevelLockTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) != 2 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	selected := 0 // the existing FLOAT64 overload remains the compatibility path
+	switch inputs[1].Oid {
+	case types.T_decimal64:
+		selected = 1
+	case types.T_decimal128:
+		selected = 2
+	case types.T_decimal256:
+		selected = 3
+	}
+	return fixedTypeMatchOnly(overloads, inputs, selected)
+}
+
+// binTypeMatch keeps the existing integer, float, and string fast paths while
+// routing types whose numeric representation is decided by their runtime
+// vector (including prepared parameters) through the dynamic BIN executor.
+// This is intentionally local to BIN: adding temporal/decimal/BOOL casts to
+// the global implicit-cast table would change overload resolution for unrelated
+// operators.
+func binTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) != 1 || len(overloads) == 0 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	stringOverload := -1
+	dynamicOverload := -1
+	for i, ov := range overloads {
+		if len(ov.args) == 1 && ov.args[0] == types.T_varchar {
+			if stringOverload == -1 {
+				stringOverload = i
+			}
+		}
+		if len(ov.args) == 1 && ov.args[0] == types.T_any {
+			if dynamicOverload == -1 {
+				dynamicOverload = i
+			}
+		}
+	}
+	if stringOverload == -1 {
+		return fixedTypeMatch(overloads, inputs)
+	}
+	if inputs[0].Oid == types.T_any {
+		if dynamicOverload >= 0 {
+			return newCheckResultWithSuccess(dynamicOverload)
+		}
+		return newCheckResultWithCast(stringOverload, []types.Type{types.T_varchar.ToType()})
+	}
+	if inputs[0].Oid.IsMySQLString() {
+		return newCheckResultWithSuccess(stringOverload)
+	}
+	if dynamicOverload >= 0 {
+		switch inputs[0].Oid {
+		case types.T_bool,
+			types.T_bit,
+			types.T_decimal64, types.T_decimal128, types.T_decimal256,
+			types.T_date, types.T_datetime, types.T_time, types.T_timestamp,
+			types.T_year:
+			return newCheckResultWithSuccess(dynamicOverload)
+		}
+	}
+
+	return fixedTypeMatchExcept(overloads, inputs, stringOverload)
+}
+
+// fixedTypeMatchWithBoolNumericCast applies MySQL's numeric-context rule for
+// BOOL only to callers that explicitly opt in.  BOOL is intentionally not
+// added to fixedCanImplicitCastRule globally: that table is shared by
+// unrelated functions where changing overload resolution would be a silent
+// compatibility regression (for example string/bit and binary functions).
+//
+// The matcher first resolves BOOL as INT64 so overload ordering remains the
+// same as for an integer literal.  It then returns the selected overload's
+// actual target type, forcing a real BOOL cast at execution time.  This keeps
+// direct BOOL expressions and prepared parameters on the same path while
+// preserving the existing string fallback for functions that do not opt in.
+func fixedTypeMatchWithBoolNumericCast(overloads []overload, inputs []types.Type) checkResult {
+	hasBool := false
+	for _, input := range inputs {
+		if input.Oid == types.T_bool {
+			hasBool = true
+			break
+		}
+	}
+	if !hasBool {
+		return fixedTypeMatch(overloads, inputs)
+	}
+
+	normalized := append([]types.Type(nil), inputs...)
+	for i := range normalized {
+		if normalized[i].Oid == types.T_bool {
+			normalized[i] = types.T_int64.ToType()
+		}
+	}
+
+	matched := fixedTypeMatch(overloads, normalized)
+	if matched.status != succeedMatched && matched.status != succeedWithCast {
+		// Preserve the ordinary checker's behavior when this overload set has a
+		// non-numeric BOOL-compatible path.
+		return fixedTypeMatch(overloads, inputs)
+	}
+
+	selected := overloads[matched.idx]
+	for i, input := range inputs {
+		if input.Oid != types.T_bool {
+			continue
+		}
+		target := selected.args[i]
+		if !target.ToType().IsNumeric() || !IfTypeCastSupported(types.T_bool, target) {
+			return fixedTypeMatch(overloads, inputs)
+		}
+	}
+
+	if matched.status == succeedWithCast {
+		finalTypes := append([]types.Type(nil), matched.finalType...)
+		for i, input := range inputs {
+			if input.Oid == types.T_bool {
+				finalTypes[i] = selected.args[i].ToType()
+				SetTargetScaleFromSource(&normalized[i], &finalTypes[i])
+			}
+		}
+		return newCheckResultWithCast(matched.idx, finalTypes)
+	}
+
+	finalTypes := make([]types.Type, len(inputs))
+	for i, input := range inputs {
+		finalTypes[i] = input
+		if input.Oid == types.T_bool {
+			finalTypes[i] = selected.args[i].ToType()
+			SetTargetScaleFromSource(&normalized[i], &finalTypes[i])
+		}
+	}
+	return newCheckResultWithCast(matched.idx, finalTypes)
+}
+
+// stringDomainFixedTypeMatch keeps every MySQL string input in its original
+// OID/width/charset while applying the ordinary fixed matcher to control
+// arguments. Varlena string executors can consume every string family; casting
+// them through VARCHAR would truncate BLOB and erase the binary domain before
+// return-type derivation.
+func stringDomainFixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	return stringDomainFixedTypeMatchIf(overloads, inputs, func(oid types.T) bool { return oid.IsMySQLString() })
+}
+
+// spatialDistanceTypeMatch keeps the historical integer third argument for
+// ST_DISTANCE while making a statically string-backed third argument select
+// the MySQL length-unit overload. fixedTypeMatch treats both conversions as
+// equally valid and then lets registration order choose the SRID overload,
+// which makes a TEXT column containing "kilometre" fail at execution time.
+// T_any remains ambiguous and intentionally follows the legacy SRID overload;
+// the prepared execution rebinder can select the unit overload once the value
+// domain is known.
+func spatialDistanceTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	// The two-argument Fréchet/Hausdorff contracts were corrected to use
+	// geodetic meters for SRID 4326. Keep overloads 0/1 as the historical
+	// planar identities for old serialized plans, and select the new 4/5
+	// identities for newly bound SQL. ST_DISTANCE has no such two-argument
+	// replacement, so the shape check below leaves it on the ordinary matcher.
+	if len(inputs) == 2 {
+		for i := 4; i < len(overloads); i++ {
+			if len(overloads[i].args) == 2 &&
+				overloads[i].args[0] == inputs[0].Oid &&
+				overloads[i].args[1] == inputs[1].Oid {
+				return newCheckResultWithSuccess(i)
+			}
+		}
+	}
+	if len(inputs) == 3 && inputs[2].Oid.IsMySQLString() {
+		return stringDomainFixedTypeMatch(overloads, inputs)
+	}
+	return fixedTypeMatch(overloads, inputs)
+}
+
+// crc32TypeMatch retains CRC32's historical acceptance of every varlen type
+// while extending the function to scalar values through the normal formatted
+// string cast. The executor hashes the resulting bytes, so changing the
+// matcher must not make JSON/vector inputs (which are also varlen internally)
+// stop binding.
+func crc32TypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 1 && (inputs[0].IsVarlen() || inputs[0].Oid == types.T_any) {
+		return newCheckResultWithSuccess(0)
+	}
+	return stringDomainFixedTypeMatch(overloads, inputs)
+}
+
+const (
+	// RegexpMatchStringOperandCount is the subject-pattern pair that owns
+	// matching and any string result domain for every REGEXP function.
+	RegexpMatchStringOperandCount = 2
+	// RegexpReplaceCompatibilityStringOperandCount additionally includes the
+	// replacement in REGEXP_REPLACE's charset compatibility check.
+	RegexpReplaceCompatibilityStringOperandCount = 3
+)
+
+// regexpStringDomainFixedTypeMatch applies the MySQL REGEXP two-stage
+// contract. Statically known binary and nonbinary strings cannot participate
+// in one regexp call, while T_any parameter markers and ordinary NULL remain
+// unresolved until execution. The normal string-domain matcher then preserves
+// every accepted operand instead of erasing its domain through VARCHAR casts.
+func regexpStringDomainFixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	return regexpStringDomainFixedTypeMatchN(overloads, inputs, RegexpMatchStringOperandCount, nil)
+}
+
+func regexpStringDomainTypeMatchWithModes(
+	overloads []overload, inputs []types.Type, modes []StringDomainCheckMode,
+) checkResult {
+	return regexpStringDomainFixedTypeMatchN(overloads, inputs, RegexpMatchStringOperandCount, modes)
+}
+
+// regexpReplaceStringDomainFixedTypeMatch includes the replacement string in
+// the same compatibility domain as the subject and pattern.
+func regexpReplaceStringDomainFixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	return regexpStringDomainFixedTypeMatchN(
+		overloads, inputs, RegexpReplaceCompatibilityStringOperandCount, nil)
+}
+
+func regexpReplaceStringDomainTypeMatchWithModes(
+	overloads []overload, inputs []types.Type, modes []StringDomainCheckMode,
+) checkResult {
+	return regexpStringDomainFixedTypeMatchN(
+		overloads, inputs, RegexpReplaceCompatibilityStringOperandCount, modes)
+}
+
+func regexpStringDomainFixedTypeMatchN(
+	overloads []overload, inputs []types.Type, stringOperands int, modes []StringDomainCheckMode,
+) checkResult {
+	matched := stringDomainFixedTypeMatch(overloads, inputs)
+	if matched.status != succeedMatched && matched.status != succeedWithCast {
+		return matched
+	}
+
+	var firstText, firstBinaryTrigger types.Type
+	hasText, hasBinaryTrigger := false, false
+	if stringOperands > len(inputs) {
+		stringOperands = len(inputs)
+	}
+	for i := 0; i < stringOperands; i++ {
+		mode := StringDomainCheckKnown
+		if i < len(modes) {
+			mode = modes[i]
+		}
+		if mode == StringDomainCheckDeferred || mode == StringDomainCheckDomainless {
+			continue
+		}
+		domain := types.StaticStringDomain(inputs[i])
+		if domain == types.StringDomainNone {
+			// T_any is the binder-visible representation of both an ordinary
+			// untyped NULL and a parameter marker. Non-string scalars are also
+			// regexp-compatible through the ordinary string conversion path.
+			continue
+		}
+		switch domain {
+		case types.StringDomainText:
+			if hasBinaryTrigger {
+				return newCheckResultWithCharacterSetMismatch(
+					regexpCharsetName(firstBinaryTrigger), regexpCharsetName(inputs[i]))
+			}
+			if !hasText {
+				firstText, hasText = inputs[i], true
+			}
+		case types.StringDomainBinary:
+			// MySQL's is_binary_string() is narrower than its binary-compatible
+			// domain: only MYSQL_TYPE_VARCHAR with the binary charset is a 3995
+			// trigger. BINARY (MYSQL_TYPE_STRING), BLOB, and direct PARAM_ITEM
+			// values remain byte-domain operands without making text peers illegal.
+			if mode == StringDomainCheckParamMarker || inputs[i].Oid != types.T_varbinary {
+				continue
+			}
+			if hasText {
+				return newCheckResultWithCharacterSetMismatch(
+					regexpCharsetName(firstText), regexpCharsetName(inputs[i]))
+			}
+			if !hasBinaryTrigger {
+				firstBinaryTrigger, hasBinaryTrigger = inputs[i], true
+			}
+		default:
+			continue
+		}
+		if hasText && hasBinaryTrigger {
+			return newCheckResultWithCharacterSetMismatch(
+				regexpCharsetName(firstText), regexpCharsetName(firstBinaryTrigger))
+		}
+	}
+	return matched
+}
+
+func regexpCharsetName(typ types.Type) string {
+	if types.StaticStringDomain(typ) == types.StringDomainBinary {
+		return "binary"
+	}
+	switch typ.Charset {
+	case types.CharsetUTF8:
+		return "utf8mb4_general_ci"
+	case types.CharsetUTF8MB4Bin, types.CharsetLegacy:
+		return "utf8mb4_bin"
+	default:
+		return "utf8mb4"
+	}
+}
+
+func stringDomainFixedTypeMatchIf(overloads []overload, inputs []types.Type, preserve func(types.T) bool) checkResult {
+	// Never let an earlier castable overload shadow an exact overload.
+	for overloadIndex, ov := range overloads {
+		if len(ov.args) != len(inputs) {
+			continue
+		}
+		if status, _ := tryToMatch(inputs, ov.args); status == matchDirectly {
+			return newCheckResultWithSuccess(overloadIndex)
+		}
+	}
+
+	minIndex, minCost := -1, math.MaxInt
+	var minTargets []types.Type
+	minNeedsCast := false
+	for overloadIndex, ov := range overloads {
+		if len(ov.args) != len(inputs) {
+			continue
+		}
+		targets := make([]types.Type, len(inputs))
+		needsCast, matched, cost := false, true, 0
+		for i, expected := range ov.args {
+			if expected.IsMySQLString() && preserve(inputs[i].Oid) {
+				targets[i] = inputs[i]
+				continue
+			}
+			status, castCost := tryToMatch([]types.Type{inputs[i]}, []types.T{expected})
+			if status == matchFailed {
+				matched = false
+				break
+			}
+			cost += castCost
+			if status == matchByCast {
+				needsCast = true
+				targets[i] = expected.ToType()
+				if expected == types.T_varchar && !inputs[i].Oid.IsMySQLString() {
+					targets[i] = formattedScalarStringType(inputs[i])
+				}
+				SetTargetScaleFromSource(&inputs[i], &targets[i])
+			} else {
+				targets[i] = inputs[i]
+			}
+		}
+		if matched && cost < minCost {
+			minIndex, minCost = overloadIndex, cost
+			minTargets, minNeedsCast = targets, needsCast
+		}
+	}
+	if minIndex == -1 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	if minNeedsCast {
+		return newCheckResultWithCast(minIndex, minTargets)
+	}
+	return newCheckResultWithSuccess(minIndex)
+}
+
+func isCollatedTextType(oid types.T) bool {
+	return oid == types.T_char || oid == types.T_varchar || oid == types.T_text
 }
 
 // a fixed type match method without any type convert. (const null exception)
@@ -237,6 +762,52 @@ func unaryTildeTypeMatch(overloads []overload, inputs []types.Type) checkResult 
 	return fixedDirectlyTypeMatch(overloads, inputs)
 }
 
+func isBitwiseBinaryStringType(oid types.T) bool {
+	switch oid {
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		return true
+	default:
+		return false
+	}
+}
+
+func bitShiftTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	// The first four overloads are the existing numeric signatures. Keep their
+	// matching behavior isolated so adding bytewise overloads cannot make a
+	// numeric or textual left operand bind to a binary implementation.
+	numericOverloads := overloads
+	if len(numericOverloads) > 4 {
+		numericOverloads = numericOverloads[:4]
+	}
+	if len(inputs) != 2 || !isBitwiseBinaryStringType(inputs[0].Oid) {
+		return fixedTypeMatch(numericOverloads, inputs)
+	}
+
+	bestIndex := -1
+	bestCost := math.MaxInt
+	for i, candidate := range overloads {
+		if len(candidate.args) != 2 || candidate.args[0] != inputs[0].Oid {
+			continue
+		}
+		status, cost := tryToMatch([]types.Type{inputs[1]}, []types.T{candidate.args[1]})
+		if status == matchDirectly {
+			return newCheckResultWithSuccess(i)
+		}
+		if status != matchFailed && cost < bestCost {
+			bestIndex = i
+			bestCost = cost
+		}
+	}
+	if bestIndex == -1 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+
+	return newCheckResultWithCast(bestIndex, []types.Type{
+		inputs[0],
+		overloads[bestIndex].args[1].ToType(),
+	})
+}
+
 // return whether `from` can match `to` implicitly, and match cost.
 func tryToMatch(from []types.Type, to []types.T) (sta matchCheckStatus, cost int) {
 	if len(from) != len(to) {
@@ -272,6 +843,22 @@ func fixedImplicitTypeCast(from types.Type, to types.T) (canCast bool, cost int)
 	}
 	rule := fixedCanImplicitCastRule[from.Oid].toList[to]
 	return rule.canCast, rule.preferLevel
+}
+
+// Opaque aggregate states use bytes from any SQL string domain. Keep their
+// physical ABI VARBINARY without imposing the SQL default width on the state.
+func opaqueStateTypeCheck(inputs []types.Type, failure overloadCheckSituation) checkResult {
+	if len(inputs) == 1 {
+		if inputs[0].Oid == types.T_varbinary {
+			return newCheckResultWithSuccess(0)
+		}
+		if inputs[0].Oid == types.T_any || inputs[0].Oid.IsMySQLString() {
+			target := types.T_varbinary.ToType()
+			target.Width = 0
+			return newCheckResultWithCast(0, []types.Type{target})
+		}
+	}
+	return newCheckResultWithFailure(failure)
 }
 
 // a fixed type check method for Agg(only one column).
@@ -400,6 +987,50 @@ func SetTargetScaleFromSource(source, target *types.Type) {
 		}
 		return
 	}
+}
+
+func isTemporalFSPType(oid types.T) bool {
+	return oid == types.T_time || oid == types.T_datetime || oid == types.T_timestamp
+}
+
+// commonTemporalType makes the FSP part of conditional-type resolution rather
+// than leaving it to whichever branch happens to win overload ordering. A
+// temporal value with a larger FSP must not be cast through a scale-zero
+// target, otherwise the executor loses fractional digits before CASE/IF or
+// COALESCE can select the branch.
+func commonTemporalType(result types.Type, source []types.Type) types.Type {
+	if !isTemporalFSPType(result.Oid) {
+		return result
+	}
+	maxScale := result.Scale
+	if maxScale < 0 {
+		maxScale = 0
+	}
+	for _, typ := range source {
+		if isTemporalFSPType(typ.Oid) && typ.Scale > maxScale {
+			maxScale = typ.Scale
+		}
+	}
+	result.Scale = maxScale
+	// Plan temporal widths are the display/FSP marker. A default overload type
+	// has width zero; materialize the selected precision there, while retaining
+	// a caller-provided physical/test width when it is already meaningful.
+	if maxScale > 0 && result.Width <= 0 {
+		result.Width = maxScale
+	}
+	return result
+}
+
+func needTemporalMetadataCast(source []types.Type, target types.Type) bool {
+	if !isTemporalFSPType(target.Oid) {
+		return false
+	}
+	for _, typ := range source {
+		if typ.Oid != target.Oid || typ.Scale != target.Scale {
+			return true
+		}
+	}
+	return false
 }
 
 func setMaxScaleFromSource(t *types.Type, source []types.Type) {
@@ -590,6 +1221,7 @@ func initFixed1() {
 		{types.T_bool, types.T_varbinary, types.T_bool, types.T_bool},
 		{types.T_bool, types.T_blob, types.T_bool, types.T_bool},
 		{types.T_bool, types.T_text, types.T_bool, types.T_bool},
+		{types.T_bool, types.T_json, types.T_bool, types.T_bool},
 		{types.T_int8, types.T_any, types.T_int8, types.T_int8},
 		{types.T_int8, types.T_bool, types.T_int8, types.T_int8},
 		{types.T_int8, types.T_int16, types.T_int16, types.T_int16},
@@ -603,6 +1235,7 @@ func initFixed1() {
 		{types.T_int8, types.T_float64, types.T_float64, types.T_float64},
 		{types.T_int8, types.T_decimal64, types.T_decimal128, types.T_decimal128},
 		{types.T_int8, types.T_decimal128, types.T_decimal128, types.T_decimal128},
+		{types.T_int8, types.T_decimal256, types.T_decimal256, types.T_decimal256},
 		{types.T_int8, types.T_date, types.T_int64, types.T_int64},
 		{types.T_int8, types.T_time, types.T_decimal64, types.T_decimal64},
 		{types.T_int8, types.T_datetime, types.T_decimal128, types.T_decimal128},
@@ -626,6 +1259,7 @@ func initFixed1() {
 		{types.T_int16, types.T_float64, types.T_float64, types.T_float64},
 		{types.T_int16, types.T_decimal64, types.T_decimal128, types.T_decimal128},
 		{types.T_int16, types.T_decimal128, types.T_decimal128, types.T_decimal128},
+		{types.T_int16, types.T_decimal256, types.T_decimal256, types.T_decimal256},
 		{types.T_int16, types.T_date, types.T_int64, types.T_int64},
 		{types.T_int16, types.T_time, types.T_decimal64, types.T_decimal64},
 		{types.T_int16, types.T_datetime, types.T_decimal128, types.T_decimal128},
@@ -649,6 +1283,7 @@ func initFixed1() {
 		{types.T_int32, types.T_float64, types.T_float64, types.T_float64},
 		{types.T_int32, types.T_decimal64, types.T_decimal128, types.T_decimal128},
 		{types.T_int32, types.T_decimal128, types.T_decimal128, types.T_decimal128},
+		{types.T_int32, types.T_decimal256, types.T_decimal256, types.T_decimal256},
 		{types.T_int32, types.T_date, types.T_int64, types.T_int64},
 		{types.T_int32, types.T_time, types.T_decimal64, types.T_decimal64},
 		{types.T_int32, types.T_datetime, types.T_decimal128, types.T_decimal128},
@@ -672,6 +1307,7 @@ func initFixed1() {
 		{types.T_int64, types.T_float64, types.T_float64, types.T_float64},
 		{types.T_int64, types.T_decimal64, types.T_decimal128, types.T_decimal128},
 		{types.T_int64, types.T_decimal128, types.T_decimal128, types.T_decimal128},
+		{types.T_int64, types.T_decimal256, types.T_decimal256, types.T_decimal256},
 		{types.T_int64, types.T_date, types.T_int64, types.T_int64},
 		{types.T_int64, types.T_year, types.T_int64, types.T_int64},
 		{types.T_int64, types.T_time, types.T_decimal64, types.T_decimal64},
@@ -696,6 +1332,7 @@ func initFixed1() {
 		{types.T_uint8, types.T_float64, types.T_float64, types.T_float64},
 		{types.T_uint8, types.T_decimal64, types.T_decimal128, types.T_decimal128},
 		{types.T_uint8, types.T_decimal128, types.T_decimal128, types.T_decimal128},
+		{types.T_uint8, types.T_decimal256, types.T_decimal256, types.T_decimal256},
 		{types.T_uint8, types.T_date, types.T_int64, types.T_int64},
 		{types.T_uint8, types.T_time, types.T_decimal64, types.T_decimal64},
 		{types.T_uint8, types.T_datetime, types.T_decimal128, types.T_decimal128},
@@ -719,6 +1356,7 @@ func initFixed1() {
 		{types.T_uint16, types.T_float64, types.T_float64, types.T_float64},
 		{types.T_uint16, types.T_decimal64, types.T_decimal128, types.T_decimal128},
 		{types.T_uint16, types.T_decimal128, types.T_decimal128, types.T_decimal128},
+		{types.T_uint16, types.T_decimal256, types.T_decimal256, types.T_decimal256},
 		{types.T_uint16, types.T_date, types.T_int64, types.T_int64},
 		{types.T_uint16, types.T_time, types.T_decimal64, types.T_decimal64},
 		{types.T_uint16, types.T_datetime, types.T_decimal128, types.T_decimal128},
@@ -742,6 +1380,7 @@ func initFixed1() {
 		{types.T_uint32, types.T_float64, types.T_float64, types.T_float64},
 		{types.T_uint32, types.T_decimal64, types.T_decimal128, types.T_decimal128},
 		{types.T_uint32, types.T_decimal128, types.T_decimal128, types.T_decimal128},
+		{types.T_uint32, types.T_decimal256, types.T_decimal256, types.T_decimal256},
 		{types.T_uint32, types.T_date, types.T_int64, types.T_int64},
 		{types.T_uint32, types.T_time, types.T_decimal64, types.T_decimal64},
 		{types.T_uint32, types.T_datetime, types.T_decimal128, types.T_decimal128},
@@ -765,6 +1404,7 @@ func initFixed1() {
 		{types.T_uint64, types.T_float64, types.T_float64, types.T_float64},
 		{types.T_uint64, types.T_decimal64, types.T_decimal128, types.T_decimal128},
 		{types.T_uint64, types.T_decimal128, types.T_decimal128, types.T_decimal128},
+		{types.T_uint64, types.T_decimal256, types.T_decimal256, types.T_decimal256},
 		{types.T_uint64, types.T_date, types.T_int64, types.T_int64},
 		{types.T_uint64, types.T_time, types.T_decimal64, types.T_decimal64},
 		{types.T_uint64, types.T_datetime, types.T_decimal128, types.T_decimal128},
@@ -791,6 +1431,7 @@ func initFixed1() {
 		// This applies to comparison, arithmetic, and multiplication operations
 		{types.T_float32, types.T_decimal64, types.T_float64, types.T_float64},
 		{types.T_float32, types.T_decimal128, types.T_float64, types.T_float64},
+		{types.T_float32, types.T_decimal256, types.T_float64, types.T_float64},
 		{types.T_float32, types.T_char, types.T_float32, types.T_float32},
 		{types.T_float32, types.T_varchar, types.T_float32, types.T_float32},
 		{types.T_float32, types.T_binary, types.T_float32, types.T_float32},
@@ -809,6 +1450,7 @@ func initFixed1() {
 		{types.T_float64, types.T_float32, types.T_float64, types.T_float64},
 		{types.T_float64, types.T_decimal64, types.T_float64, types.T_float64},
 		{types.T_float64, types.T_decimal128, types.T_float64, types.T_float64},
+		{types.T_float64, types.T_decimal256, types.T_float64, types.T_float64},
 		{types.T_float64, types.T_char, types.T_float64, types.T_float64},
 		{types.T_float64, types.T_varchar, types.T_float64, types.T_float64},
 		{types.T_float64, types.T_binary, types.T_float64, types.T_float64},
@@ -1035,6 +1677,10 @@ func initFixed1() {
 		{types.T_varchar, types.T_text, types.T_varchar, types.T_varchar},
 		{types.T_varchar, types.T_array_float32, types.T_array_float32, types.T_array_float32},
 		{types.T_varchar, types.T_array_float64, types.T_array_float64, types.T_array_float64},
+		{types.T_varchar, types.T_array_bf16, types.T_array_bf16, types.T_array_bf16},
+		{types.T_varchar, types.T_array_float16, types.T_array_float16, types.T_array_float16},
+		{types.T_varchar, types.T_array_int8, types.T_array_int8, types.T_array_int8},
+		{types.T_varchar, types.T_array_uint8, types.T_array_uint8, types.T_array_uint8},
 		{types.T_json, types.T_any, types.T_json, types.T_json},
 		{types.T_json, types.T_bool, types.T_bool, types.T_bool},
 		{types.T_json, types.T_int8, types.T_int8, types.T_int8},
@@ -1174,6 +1820,21 @@ func initFixed1() {
 		{types.T_text, types.T_array_float32, types.T_array_float32, types.T_array_float32},
 		{types.T_array_float64, types.T_text, types.T_array_float64, types.T_array_float64},
 		{types.T_text, types.T_array_float64, types.T_array_float64, types.T_array_float64},
+		// narrow vector types: string<->narrow for comparison/equality only.
+		// (No scalar-arithmetic rules below are added for these types, so + - * /
+		// still fail to resolve — arithmetic requires an explicit CAST to vecf32.)
+		{types.T_array_bf16, types.T_varchar, types.T_array_bf16, types.T_array_bf16},
+		{types.T_array_bf16, types.T_text, types.T_array_bf16, types.T_array_bf16},
+		{types.T_text, types.T_array_bf16, types.T_array_bf16, types.T_array_bf16},
+		{types.T_array_float16, types.T_varchar, types.T_array_float16, types.T_array_float16},
+		{types.T_array_float16, types.T_text, types.T_array_float16, types.T_array_float16},
+		{types.T_text, types.T_array_float16, types.T_array_float16, types.T_array_float16},
+		{types.T_array_int8, types.T_varchar, types.T_array_int8, types.T_array_int8},
+		{types.T_array_int8, types.T_text, types.T_array_int8, types.T_array_int8},
+		{types.T_text, types.T_array_int8, types.T_array_int8, types.T_array_int8},
+		{types.T_array_uint8, types.T_varchar, types.T_array_uint8, types.T_array_uint8},
+		{types.T_array_uint8, types.T_text, types.T_array_uint8, types.T_array_uint8},
+		{types.T_text, types.T_array_uint8, types.T_array_uint8, types.T_array_uint8},
 
 		/** VEC <Op> Scalar => VEC **/
 		// VECF32 <Op> Scalar => VECF32
@@ -1534,6 +2195,7 @@ func initFixed2() {
 		// Note: Comparison operators still use float32 for performance (see comparison type rules)
 		{types.T_float32, types.T_decimal64, types.T_float64, types.T_float64},
 		{types.T_float32, types.T_decimal128, types.T_float64, types.T_float64},
+		{types.T_float32, types.T_decimal256, types.T_float64, types.T_float64},
 		{types.T_float32, types.T_char, types.T_float64, types.T_float64},
 		{types.T_float32, types.T_varchar, types.T_float64, types.T_float64},
 		{types.T_float32, types.T_binary, types.T_float64, types.T_float64},
@@ -1551,6 +2213,7 @@ func initFixed2() {
 		{types.T_float64, types.T_uint64, types.T_float64, types.T_float64},
 		{types.T_float64, types.T_decimal64, types.T_float64, types.T_float64},
 		{types.T_float64, types.T_decimal128, types.T_float64, types.T_float64},
+		{types.T_float64, types.T_decimal256, types.T_float64, types.T_float64},
 		{types.T_float64, types.T_char, types.T_float64, types.T_float64},
 		{types.T_float64, types.T_varchar, types.T_float64, types.T_float64},
 		{types.T_float64, types.T_binary, types.T_float64, types.T_float64},
@@ -1717,6 +2380,10 @@ func initFixed2() {
 		//A
 		{types.T_varchar, types.T_array_float32, types.T_array_float32, types.T_array_float32},
 		{types.T_varchar, types.T_array_float64, types.T_array_float64, types.T_array_float64},
+		{types.T_varchar, types.T_array_bf16, types.T_array_bf16, types.T_array_bf16},
+		{types.T_varchar, types.T_array_float16, types.T_array_float16, types.T_array_float16},
+		{types.T_varchar, types.T_array_int8, types.T_array_int8, types.T_array_int8},
+		{types.T_varchar, types.T_array_uint8, types.T_array_uint8, types.T_array_uint8},
 		{types.T_binary, types.T_any, types.T_float64, types.T_float64},
 		{types.T_binary, types.T_int8, types.T_float64, types.T_float64},
 		{types.T_binary, types.T_int16, types.T_float64, types.T_float64},
@@ -1791,6 +2458,15 @@ func initFixed2() {
 		{types.T_array_float32, types.T_array_float32, types.T_array_float32, types.T_array_float32},
 		{types.T_array_float64, types.T_varchar, types.T_array_float64, types.T_array_float64},
 		{types.T_array_float64, types.T_array_float32, types.T_array_float64, types.T_array_float64},
+		// narrow vector types: narrow<->string for comparison/equality only.
+		{types.T_array_bf16, types.T_varchar, types.T_array_bf16, types.T_array_bf16},
+		{types.T_array_bf16, types.T_array_bf16, types.T_array_bf16, types.T_array_bf16},
+		{types.T_array_float16, types.T_varchar, types.T_array_float16, types.T_array_float16},
+		{types.T_array_float16, types.T_array_float16, types.T_array_float16, types.T_array_float16},
+		{types.T_array_int8, types.T_varchar, types.T_array_int8, types.T_array_int8},
+		{types.T_array_int8, types.T_array_int8, types.T_array_int8, types.T_array_int8},
+		{types.T_array_uint8, types.T_varchar, types.T_array_uint8, types.T_array_uint8},
+		{types.T_array_uint8, types.T_array_uint8, types.T_array_uint8, types.T_array_uint8},
 		/** VEC <Op> Scalar => VEC **/
 		// VECF32 <Op> Scalar => VECF32
 		{types.T_array_float32, types.T_int32, types.T_array_float32, types.T_float32},
@@ -2289,6 +2965,10 @@ func initFixed3() {
 				//C
 				{toType: types.T_array_float32, preferLevel: 2},
 				{toType: types.T_array_float64, preferLevel: 2},
+				{toType: types.T_array_bf16, preferLevel: 2},
+				{toType: types.T_array_float16, preferLevel: 2},
+				{toType: types.T_array_int8, preferLevel: 2},
+				{toType: types.T_array_uint8, preferLevel: 2},
 			},
 		},
 
@@ -2407,16 +3087,29 @@ func initFixed3() {
 				{toType: types.T_blob, preferLevel: 2},
 				{toType: types.T_array_float32, preferLevel: 2},
 				{toType: types.T_array_float64, preferLevel: 2},
+				{toType: types.T_array_bf16, preferLevel: 2},
+				{toType: types.T_array_float16, preferLevel: 2},
+				{toType: types.T_array_int8, preferLevel: 2},
+				{toType: types.T_array_uint8, preferLevel: 2},
 			},
 		},
 		{
 			from: types.T_enum,
 			toList: []toRule{
+				{toType: types.T_int8, preferLevel: 2},
+				{toType: types.T_int16, preferLevel: 2},
+				{toType: types.T_int32, preferLevel: 2},
+				{toType: types.T_int64, preferLevel: 2},
 				{toType: types.T_uint16, preferLevel: 1},
 				{toType: types.T_uint8, preferLevel: 2},
 				{toType: types.T_uint32, preferLevel: 2},
 				{toType: types.T_uint64, preferLevel: 2},
 				{toType: types.T_uint128, preferLevel: 2},
+				{toType: types.T_float32, preferLevel: 2},
+				{toType: types.T_float64, preferLevel: 2},
+				{toType: types.T_decimal64, preferLevel: 2},
+				{toType: types.T_decimal128, preferLevel: 2},
+				{toType: types.T_decimal256, preferLevel: 2},
 				{toType: types.T_char, preferLevel: 2},
 				{toType: types.T_varchar, preferLevel: 2},
 				{toType: types.T_binary, preferLevel: 2},

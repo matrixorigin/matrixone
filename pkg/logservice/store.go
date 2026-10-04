@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/bootstrap"
@@ -130,17 +131,28 @@ func getRaftConfig(shardID uint64, replicaID uint64) config.Config {
 
 // store manages log shards including the HAKeeper shard on each node.
 type store struct {
-	cfg               Config
-	nh                *dragonboat.NodeHost
-	haKeeperReplicaID uint64
-	checker           hakeeper.Checker
-	alloc             hakeeper.IDAllocator
-	stopper           *stopper.Stopper
-	tickerStopper     *stopper.Stopper
-	runtime           runtime.Runtime
+	catalogExecutor catalogExecutor
 
-	bootstrapCheckCycles uint64
-	bootstrapMgr         *bootstrap.Manager
+	cfg                    Config
+	nh                     *dragonboat.NodeHost
+	haKeeperReplicaID      uint64
+	commandDeliveryEnabled atomic.Bool
+	checker                hakeeper.Checker
+	alloc                  hakeeper.IDAllocator
+	stopper                *stopper.Stopper
+	tickerStopper          *stopper.Stopper
+	runtime                runtime.Runtime
+
+	// The ticker (and its task scheduler) lives until store.close, including
+	// across local HAKeeper replica stop/start and voting-role changes.
+	hakeeperTickerOnce  sync.Once
+	hakeeperTickerErr   error
+	hakeeperCheckWakeup chan struct{}
+
+	bootstrapCheckDeadline time.Time
+	bootstrapMgr           *bootstrap.Manager
+	lastBootstrapLogTime   time.Time
+	bootstrapCommandsAdded func()
 
 	taskScheduler hakeeper.TaskScheduler
 
@@ -179,20 +191,25 @@ func newLogStore(cfg Config,
 		zap.Int64("CNStoreTimeout", int64(hakeeperConfig.CNStoreTimeout)),
 	)
 	ls := &store{
-		cfg:           cfg,
-		nh:            nh,
-		checker:       checkers.NewCoordinator(cfg.UUID, hakeeperConfig),
-		taskScheduler: task.NewScheduler(cfg.UUID, taskServiceGetter, hakeeperConfig),
-		alloc:         newIDAllocator(),
-		stopper:       stopper.NewStopper("log-store"),
-		tickerStopper: stopper.NewStopper("hakeeper-ticker"),
-		runtime:       rt,
+		cfg:                 cfg,
+		nh:                  nh,
+		checker:             checkers.NewCoordinator(cfg.UUID, hakeeperConfig),
+		taskScheduler:       task.NewScheduler(cfg.UUID, taskServiceGetter, hakeeperConfig),
+		alloc:               newIDAllocator(),
+		stopper:             stopper.NewStopper("log-store"),
+		tickerStopper:       stopper.NewStopper("hakeeper-ticker"),
+		hakeeperCheckWakeup: make(chan struct{}, 1),
+		runtime:             rt,
 
 		shardSnapshotInfo: newShardSnapshotInfo(),
 		snapshotMgr:       newSnapshotManager(&cfg),
 		onReplicaChanged:  onReplicaChanged,
 	}
 	ls.mu.metadata = metadata.LogStore{UUID: cfg.UUID}
+	if err := ls.loadCatalogExecutor(); err != nil {
+		nh.Close()
+		return nil, err
+	}
 	if err := ls.stopper.RunNamedTask("truncation-worker", func(ctx context.Context) {
 		rt.SubLogger(runtime.SystemInit).Info("logservice truncation worker started")
 		ls.truncationWorker(ctx)
@@ -253,7 +270,52 @@ type zombieKey struct {
 // HAKeeper has no elected leader.
 var getShardMembershipFn = getShardMembership
 
+// getHAKeeperStateForZombieCheckFn is overridable in tests. Production uses a
+// HAKeeper leader read, which is authoritative for the membership decisions
+// made by the LogService checker.
+var getHAKeeperStateForZombieCheckFn = getHAKeeperStateForZombieCheck
+
 var zombieSelfCheckTimeout = 2 * time.Second
+
+func getHAKeeperStateForZombieCheck(
+	ctx context.Context,
+	sid string,
+	cfg HAKeeperClientConfig,
+) (pb.CheckerState, error) {
+	client, err := NewClusterHAKeeperClient(ctx, sid, cfg)
+	if err != nil {
+		return pb.CheckerState{}, err
+	}
+	defer func() {
+		if closeErr := client.Close(); closeErr != nil {
+			logutil.Warn("failed to close HAKeeper client after zombie self-check",
+				zap.Error(closeErr))
+		}
+	}()
+	return client.GetClusterState(ctx)
+}
+
+func classifyZombiesFromHAKeeperState(
+	shards []metadata.LogShard,
+	state pb.CheckerState,
+) map[zombieKey]struct{} {
+	zombies := make(map[zombieKey]struct{})
+	for _, rec := range shards {
+		if rec.NonVoting {
+			continue
+		}
+		shard, ok := state.LogState.Shards[rec.ShardID]
+		if !ok || shard.Epoch == 0 {
+			// A missing/uninitialized shard is not an authoritative absence.
+			// This is the normal state before the first cluster bootstrap.
+			continue
+		}
+		if _, present := shard.Replicas[rec.ReplicaID]; !present {
+			zombies[zombieKey{shardID: rec.ShardID, replicaID: rec.ReplicaID}] = struct{}{}
+		}
+	}
+	return zombies
+}
 
 // checkZombieReplicas queries live shard membership for each locally-known
 // voting (shardID, replicaID) pair and returns the set of pairs whose
@@ -270,11 +332,17 @@ var zombieSelfCheckTimeout = 2 * time.Second
 // motivated this fix is specific to voting members. Non-voting zombies
 // remain subject to HAKeeper's existing checkZombie cleanup path.
 //
-// For each voting record the probe iterates every configured concrete service
-// address, skipping addresses that resolve to this store's own logservice
-// listener — probing self is useless because startReplicas runs before the RPC
-// server has started. DiscoveryAddress-only deployments skip this check because
-// a reverse proxy address cannot establish unanimity across concrete peers.
+// For each voting record the probe normally iterates every configured concrete
+// service address, skipping addresses that resolve to this store's own
+// logservice listener — probing self is useless because startReplicas runs
+// before the RPC server has started.
+//
+// Discovery-only deployments cannot establish the concrete-peer unanimity
+// rule through a reverse proxy. In that mode the check instead uses discovery
+// to locate the current HAKeeper leader and performs a linearizable
+// GET_CLUSTER_STATE read. The returned LogState is the same membership state
+// used by HAKeeper's LogService checker, so it is authoritative rather than a
+// randomly selected peer's eventually-consistent gossip view.
 //
 // Every peer's gossip-backed membership view is eventually consistent, so a
 // single authoritative reply is not enough: a stale peer could either hide a
@@ -288,12 +356,12 @@ var zombieSelfCheckTimeout = 2 * time.Second
 // existing L/Kill path is still free to clean it up later via the normal
 // recovery flow.
 //
-// The check is best-effort: if no peer answers authoritatively (RPC
-// failure, address is self, or every peer reports "shard unknown"), the
-// shard is treated as "not a zombie" so legitimate cold-start scenarios
-// are not blocked. The whole sweep is bounded by zombieSelfCheckTimeout;
-// if the budget expires, any replicas not already classified are treated as
-// not-a-zombie and normal startup continues.
+// The check is best-effort: if no peer or HAKeeper leader answers
+// authoritatively, the shard is treated as "not a zombie" so legitimate
+// whole-cluster cold starts are not blocked. An absent HAKeeper shard or an
+// epoch-zero shard is likewise considered uninitialized, not evidence of
+// removal. The whole sweep is bounded by zombieSelfCheckTimeout; if the budget
+// expires, normal startup continues.
 func (l *store) checkZombieReplicas(ctx context.Context, shards []metadata.LogShard) map[zombieKey]struct{} {
 	zombies := make(map[zombieKey]struct{})
 	if len(shards) == 0 {
@@ -302,7 +370,27 @@ func (l *store) checkZombieReplicas(ctx context.Context, shards []metadata.LogSh
 
 	addresses := l.zombieCheckAddresses()
 	if len(addresses) == 0 {
-		return zombies
+		if l.cfg.HAKeeperClientConfig.DiscoveryAddress == "" {
+			return zombies
+		}
+		ctx, cancel := context.WithTimeoutCause(
+			ctx,
+			zombieSelfCheckTimeout,
+			moerr.CauseGetCheckerState,
+		)
+		defer cancel()
+		state, err := getHAKeeperStateForZombieCheckFn(
+			ctx,
+			l.cfg.UUID,
+			l.cfg.GetHAKeeperClientConfig(),
+		)
+		if err != nil {
+			err = moerr.AttachCause(ctx, err)
+			l.runtime.Logger().Warn("zombie self-check: get HAKeeper state failed",
+				zap.Error(err))
+			return zombies
+		}
+		return classifyZombiesFromHAKeeperState(shards, state)
 	}
 
 	logger := l.runtime.Logger()
@@ -400,7 +488,24 @@ func (l *store) startReplicas(ctx context.Context) error {
 	shards = append(shards, l.mu.metadata.Shards...)
 	l.mu.Unlock()
 
-	zombies := l.checkZombieReplicas(ctx, shards)
+	checkShards := shards
+	if l.catalogExecutor.enabled {
+		// The maintenance cutover restores admitted HAKeeper metadata before
+		// a quorum exists. Asking that quorum whether its own replicas are
+		// zombies creates a restart dependency cycle. Data shards retain the
+		// normal remote zombie check; HAKeeper uses the durable local permit.
+		checkShards = make([]metadata.LogShard, 0, len(shards))
+		for _, shard := range shards {
+			if shard.ShardID == hakeeper.DefaultHAKeeperShardID {
+				if err := l.recoverCatalogReplica(shard.ReplicaID, shard.NonVoting); err != nil {
+					return err
+				}
+			} else {
+				checkShards = append(checkShards, shard)
+			}
+		}
+	}
+	zombies := l.checkZombieReplicas(ctx, checkShards)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -417,6 +522,10 @@ func (l *store) startReplicas(ctx context.Context) error {
 			continue
 		}
 		if rec.ShardID == hakeeper.DefaultHAKeeperShardID {
+			if l.catalogExecutor.enabled {
+				// Already restored before data-shard checks above.
+				continue
+			}
 			if !rec.NonVoting {
 				if err := l.startHAKeeperReplica(rec.ReplicaID, nil, false); err != nil {
 					return err
@@ -443,6 +552,14 @@ func (l *store) startReplicas(ctx context.Context) error {
 
 func (l *store) startHAKeeperReplica(replicaID uint64,
 	initialReplicas map[uint64]dragonboat.Target, join bool) error {
+	if l.catalogExecutor.enabled {
+		return catalogExecutionError()
+	}
+	return l.startHAKeeperReplicaRaw(replicaID, initialReplicas, join)
+}
+
+func (l *store) startHAKeeperReplicaRaw(replicaID uint64,
+	initialReplicas map[uint64]dragonboat.Target, join bool) error {
 	raftConfig := getRaftConfig(hakeeper.DefaultHAKeeperShardID, replicaID)
 	if err := l.nh.StartReplica(initialReplicas,
 		join, hakeeper.NewStateMachine, raftConfig); err != nil {
@@ -450,18 +567,18 @@ func (l *store) startHAKeeperReplica(replicaID uint64,
 	}
 	l.addMetadata(hakeeper.DefaultHAKeeperShardID, replicaID, false)
 	atomic.StoreUint64(&l.haKeeperReplicaID, replicaID)
-	if !l.cfg.DisableWorkers {
-		if err := l.tickerStopper.RunNamedTask("hakeeper-ticker", func(ctx context.Context) {
-			l.runtime.SubLogger(runtime.SystemInit).Info("HAKeeper ticker started")
-			l.ticker(ctx)
-		}); err != nil {
-			return err
-		}
-	}
-	return nil
+	return l.startHAKeeperTicker()
 }
 
 func (l *store) startHAKeeperNonVotingReplica(replicaID uint64,
+	initialReplicas map[uint64]dragonboat.Target, join bool) error {
+	if l.catalogExecutor.enabled {
+		return catalogExecutionError()
+	}
+	return l.startHAKeeperNonVotingReplicaRaw(replicaID, initialReplicas, join)
+}
+
+func (l *store) startHAKeeperNonVotingReplicaRaw(replicaID uint64,
 	initialReplicas map[uint64]dragonboat.Target, join bool) error {
 	raftConfig := getRaftConfig(hakeeper.DefaultHAKeeperShardID, replicaID)
 	raftConfig.IsNonVoting = true
@@ -471,15 +588,25 @@ func (l *store) startHAKeeperNonVotingReplica(replicaID uint64,
 	}
 	l.addMetadata(hakeeper.DefaultHAKeeperShardID, replicaID, true)
 	atomic.StoreUint64(&l.haKeeperReplicaID, replicaID)
-	if !l.cfg.DisableWorkers {
-		if err := l.tickerStopper.RunNamedTask("hakeeper-ticker", func(ctx context.Context) {
+	return l.startHAKeeperTicker()
+}
+
+func (l *store) startHAKeeperTicker() error {
+	if l.cfg.DisableWorkers {
+		return nil
+	}
+	// StopReplica only removes the local Raft replica. Starting it again must
+	// reuse the existing driver; two checkers would share the allocator and
+	// bootstrap state, and two task tickers could schedule the same tasks.
+	l.hakeeperTickerOnce.Do(func() {
+		l.hakeeperTickerErr = l.tickerStopper.RunNamedTask("hakeeper-ticker", func(ctx context.Context) {
 			l.runtime.SubLogger(runtime.SystemInit).Info("HAKeeper ticker started")
 			l.ticker(ctx)
-		}); err != nil {
-			return err
-		}
-	}
-	return nil
+		})
+	})
+	// Stopper admission fails only after shutdown has begun, which is terminal
+	// for this store. All concurrent callers must observe that same failure.
+	return l.hakeeperTickerErr
 }
 
 func (l *store) startReplica(shardID uint64, replicaID uint64,
@@ -525,6 +652,13 @@ func (l *store) startNonVotingReplica(shardID uint64, replicaID uint64,
 }
 
 func (l *store) stopReplica(shardID uint64, replicaID uint64) error {
+	if shardID == hakeeper.DefaultHAKeeperShardID && l.catalogExecutor.enabled {
+		return catalogExecutionError()
+	}
+	return l.stopReplicaRaw(shardID, replicaID)
+}
+
+func (l *store) stopReplicaRaw(shardID uint64, replicaID uint64) error {
 	if shardID == hakeeper.DefaultHAKeeperShardID {
 		defer func() {
 			atomic.StoreUint64(&l.haKeeperReplicaID, 0)
@@ -545,6 +679,9 @@ func (l *store) requestLeaderTransfer(shardID uint64, targetReplicaID uint64) er
 
 func (l *store) addReplica(shardID uint64, replicaID uint64,
 	target dragonboat.Target, cci uint64) error {
+	if shardID == hakeeper.DefaultHAKeeperShardID && l.catalogExecutor.enabled {
+		return catalogExecutionError()
+	}
 	// Set timeout to a little bigger value to prevent Timeout Error and
 	// returns a dragonboat.ErrRejected at last, in which case, it will take
 	// longer time to finish this operation.
@@ -574,6 +711,9 @@ func (l *store) addNonVotingReplica(
 	target dragonboat.Target,
 	cci uint64,
 ) error {
+	if shardID == hakeeper.DefaultHAKeeperShardID && l.catalogExecutor.enabled {
+		return catalogExecutionError()
+	}
 	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*5, moerr.CauseAddNonVotingReplica)
 	defer cancel()
 	count := 0
@@ -595,6 +735,9 @@ func (l *store) addNonVotingReplica(
 }
 
 func (l *store) removeReplica(shardID uint64, replicaID uint64, cci uint64) error {
+	if shardID == hakeeper.DefaultHAKeeperShardID && l.catalogExecutor.enabled {
+		return catalogExecutionError()
+	}
 	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second, moerr.CauseRemoveReplica)
 	defer cancel()
 	count := 0
@@ -638,14 +781,20 @@ func (l *store) checkHealth(shardID uint64) error {
 		SkipLogInfo: true,
 	}
 	nhi := l.nh.GetNodeHostInfo(opts)
+	shardFound := false
 	for _, ci := range nhi.ShardInfoList {
 		if ci.ShardID == shardID {
+			shardFound = true
 			if ci.Pending {
 				return moerr.NewInternalErrorNoCtxf("shard %d is pending on store %s",
 					shardID, l.cfg.UUID)
 			}
 			break
 		}
+	}
+	if !shardFound {
+		return moerr.NewInternalErrorNoCtxf("shard %d not started on store %s",
+			shardID, l.cfg.UUID)
 	}
 	cs, err := l.getCheckerState()
 	if err != nil {
@@ -800,6 +949,9 @@ func (l *store) addLogStoreHeartbeat(ctx context.Context,
 	} else {
 		var cb pb.CommandBatch
 		MustUnmarshal(&cb, result.Data)
+		if result.Value == hakeeper.HeartbeatCheckNeeded {
+			l.notifyHAKeeperCheck()
+		}
 		return cb, nil
 	}
 }
@@ -815,6 +967,9 @@ func (l *store) addCNStoreHeartbeat(ctx context.Context,
 	} else {
 		var cb pb.CommandBatch
 		MustUnmarshal(&cb, result.Data)
+		if result.Value == hakeeper.HeartbeatCheckNeeded {
+			l.notifyHAKeeperCheck()
+		}
 		return cb, nil
 	}
 }
@@ -827,6 +982,9 @@ func (l *store) cnAllocateID(ctx context.Context,
 	if err != nil {
 		l.runtime.Logger().Error("propose get id failed", zap.Error(err))
 		return 0, err
+	}
+	if result.Value == 0 {
+		return 0, moerr.NewInternalError(ctx, "HAKeeper is not ready for ID allocation")
 	}
 	return result.Value, nil
 }
@@ -842,6 +1000,9 @@ func (l *store) addTNStoreHeartbeat(ctx context.Context,
 	} else {
 		var cb pb.CommandBatch
 		MustUnmarshal(&cb, result.Data)
+		if result.Value == hakeeper.HeartbeatCheckNeeded {
+			l.notifyHAKeeperCheck()
+		}
 		return cb, nil
 	}
 }
@@ -854,6 +1015,299 @@ func (l *store) getCommandBatch(ctx context.Context,
 		return pb.CommandBatch{}, handleNotHAKeeperError(ctx, err)
 	}
 	return *(v.(*pb.CommandBatch)), nil
+}
+
+func (l *store) getCommandDeliveryState(ctx context.Context) (hakeeper.CommandDeliveryState, error) {
+	v, err := l.read(ctx, hakeeper.DefaultHAKeeperShardID,
+		&hakeeper.CommandDeliveryStateQuery{})
+	if err != nil {
+		return hakeeper.CommandDeliveryState{}, handleNotHAKeeperError(ctx, err)
+	}
+	return v.(hakeeper.CommandDeliveryState), nil
+}
+
+func (l *store) getViewMetadataAdmissionState(
+	ctx context.Context,
+) (hakeeper.ViewMetadataAdmissionState, error) {
+	v, err := l.read(ctx, hakeeper.DefaultHAKeeperShardID,
+		&hakeeper.ViewMetadataAdmissionStateQuery{})
+	if err != nil {
+		return hakeeper.ViewMetadataAdmissionState{}, handleNotHAKeeperError(ctx, err)
+	}
+	return v.(hakeeper.ViewMetadataAdmissionState), nil
+}
+
+func (l *store) viewMetadataAdmissionLogStoresReadyWithProtocol(
+	state *pb.CheckerState,
+	requireProtocolV3 bool,
+) bool {
+	if state == nil {
+		return false
+	}
+	shard, ok := state.LogState.Shards[hakeeper.DefaultHAKeeperShardID]
+	if !ok || len(shard.Replicas) == 0 {
+		return false
+	}
+	check := func(uuid string) bool {
+		info, ok := state.LogState.Stores[uuid]
+		if !ok || !info.ViewMetadataAdmissionSupported {
+			return false
+		}
+		return !requireProtocolV3 || info.ViewMetadataAdmissionProtocolV3Supported
+	}
+	// A Store record can outlive membership, but every current voting and
+	// non-voting HAKeeper member is still a Raft recipient. Heartbeat expiry is
+	// therefore not a capability exemption: an old member must advertise V3
+	// before a protocol-bearing entry can be proposed.
+	for _, uuid := range shard.Replicas {
+		if !check(uuid) {
+			return false
+		}
+	}
+	for _, uuid := range shard.NonVotingReplicas {
+		if !check(uuid) {
+			return false
+		}
+	}
+	return true
+}
+
+func (l *store) tryEnableViewMetadataAdmission(
+	ctx context.Context,
+	state *pb.CheckerState,
+) (bool, error) {
+	admission, err := l.getViewMetadataAdmissionState(ctx)
+	if err != nil {
+		return false, err
+	}
+	// A downgraded LogStore must not continue driving admission after the
+	// cluster has committed a floor it cannot understand. Treat the state as
+	// not ready and leave the durable barrier untouched until a compatible
+	// binary takes over.
+	if admission.RequiredProtocolVersion > uint64(defines.MORPCLatestVersion) {
+		return false, nil
+	}
+	if admission.Enabled && !admission.Pending &&
+		!admission.PersistedExpressionProtocolActivationPending &&
+		admission.RequiredProtocolVersion >= uint64(defines.MORPCLatestVersion) {
+		return true, nil
+	}
+	if state == nil {
+		state, err = l.getCheckerStateWithContext(ctx)
+		if err != nil {
+			return false, err
+		}
+	}
+	shard, ok := state.LogState.Shards[hakeeper.DefaultHAKeeperShardID]
+	if !ok || len(shard.Replicas) == 0 {
+		return false, nil
+	}
+	resetBarrier := admission.Preparing &&
+		(admission.LogReady == nil || admission.CNReady == nil || admission.ProxyReady == nil)
+	ready := func(uuid string) bool {
+		if admission.Preparing && !resetBarrier {
+			return admission.LogReady[uuid]
+		}
+		store, ok := state.LogState.Stores[uuid]
+		return ok && store.ViewMetadataAdmissionSupported
+	}
+	for _, uuid := range shard.Replicas {
+		if !ready(uuid) {
+			return false, nil
+		}
+	}
+	for _, uuid := range shard.NonVotingReplicas {
+		if !ready(uuid) {
+			return false, nil
+		}
+	}
+	if !admission.Preparing && !admission.Enabled {
+		if !admission.HAKeeperAdmissionReady ||
+			!l.viewMetadataAdmissionLogStoresReadyWithProtocol(state, true) {
+			return false, nil
+		}
+		cfg := l.cfg.GetHAKeeperConfig()
+		cfg.Fill()
+		requiredProtocol := admission.RequiredProtocolVersion
+		if requiredProtocol < uint64(defines.MORPCLatestVersion) {
+			requiredProtocol = uint64(defines.MORPCLatestVersion)
+		}
+		hasLiveCN := false
+		for _, info := range state.CNState.Stores {
+			if !cfg.CNStoreExpired(info.Tick, state.Tick) {
+				hasLiveCN = true
+				if info.PersistedExpressionProtocolVersion < requiredProtocol {
+					return false, nil
+				}
+			}
+		}
+		if !hasLiveCN {
+			return false, nil
+		}
+	}
+	cmd := hakeeper.GetEnableViewMetadataAdmissionCmd()
+	if !admission.Preparing && !admission.Enabled {
+		requiredProtocol := admission.RequiredProtocolVersion
+		if requiredProtocol < uint64(defines.MORPCLatestVersion) {
+			requiredProtocol = uint64(defines.MORPCLatestVersion)
+		}
+		cmd = hakeeper.GetEnableViewMetadataAdmissionCmdForConfigWithProtocol(
+			l.cfg.GetHAKeeperConfig(), requiredProtocol)
+	} else if admission.Preparing {
+		// The protocol-bearing tag is reserved for the initial floor commit and
+		// later monotonic raises. Phase-two admission reconciliation remains on
+		// the legacy tag after the floor is durable.
+		cmd = hakeeper.GetEnableViewMetadataAdmissionCmdForConfig(
+			l.cfg.GetHAKeeperConfig())
+	} else if admission.Enabled {
+		if admission.Pending {
+			// A pending generation drain can only make progress through the
+			// legacy reconciliation entry, which expires abandoned targets. The
+			// protocol-bearing entry deliberately remains fail-closed while the
+			// durable pending bit is set.
+			cmd = hakeeper.GetEnableViewMetadataAdmissionCmdForConfig(
+				l.cfg.GetHAKeeperConfig())
+		} else if admission.PersistedExpressionProtocolActivationPending ||
+			admission.RequiredProtocolVersion < uint64(defines.MORPCLatestVersion) {
+			if !l.viewMetadataAdmissionLogStoresReadyWithProtocol(state, true) {
+				return false, nil
+			}
+			cmd = hakeeper.GetEnableViewMetadataAdmissionCmdForConfigWithProtocol(
+				l.cfg.GetHAKeeperConfig(), uint64(defines.MORPCLatestVersion))
+		} else {
+			cmd = hakeeper.GetEnableViewMetadataAdmissionCmdForConfig(
+				l.cfg.GetHAKeeperConfig())
+		}
+	}
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	result, err := l.propose(ctx, session, cmd)
+	if err != nil {
+		return false, handleNotHAKeeperError(ctx, err)
+	}
+	return result.Value == 1, nil
+}
+
+func (l *store) commandDeliveryTargetsReady(
+	delivery hakeeper.CommandDeliveryState,
+	state *pb.CheckerState,
+) bool {
+	cfg := l.cfg.GetHAKeeperConfig()
+	cfg.Fill()
+	for uuid, info := range state.CNState.Stores {
+		if !cfg.CNStoreExpired(info.Tick, state.Tick) && !delivery.CNReady[uuid] {
+			return false
+		}
+	}
+	for uuid, info := range state.TNState.Stores {
+		if !cfg.TNStoreExpired(info.Tick, state.Tick) && !delivery.TNReady[uuid] {
+			return false
+		}
+	}
+	return true
+}
+
+func (l *store) commandDeliveryLogStoresReady(state *pb.CheckerState) bool {
+	cfg := l.cfg.GetHAKeeperConfig()
+	cfg.Fill()
+	for _, info := range state.LogState.Stores {
+		if !cfg.LogStoreExpired(info.Tick, state.Tick) &&
+			!info.CommandDeliverySupported {
+			return false
+		}
+	}
+	return true
+}
+
+func (l *store) tryEnableCommandDelivery(
+	ctx context.Context,
+	state *pb.CheckerState,
+) (bool, error) {
+	if l.commandDeliveryEnabled.Load() {
+		return true, nil
+	}
+	delivery, err := l.getCommandDeliveryState(ctx)
+	if err != nil {
+		return false, err
+	}
+	if delivery.Enabled {
+		l.commandDeliveryEnabled.Store(true)
+		return true, nil
+	}
+	// Phase one is proposed only after the leader has observed support from
+	// every current HAKeeper voter/non-voter, every live LogStore that can be
+	// admitted, and every current CN/TN command target, and only after all earlier
+	// HAKeeper admissions have completed. An old replica cannot decode the new
+	// update tag, and an old service would otherwise consume a command
+	// destructively. The committed phase-one barrier then discards these possibly
+	// divergent pre-upgrade observations on every replica.
+	if state == nil {
+		state, err = l.getCheckerStateWithContext(ctx)
+		if err != nil {
+			return false, err
+		}
+	}
+	shard, ok := state.LogState.Shards[hakeeper.DefaultHAKeeperShardID]
+	if !ok || len(shard.Replicas) == 0 {
+		return false, nil
+	}
+	resetServiceBarrier := delivery.Preparing &&
+		(delivery.Ready == nil || delivery.CNReady == nil || delivery.TNReady == nil)
+	cfg := l.cfg.GetHAKeeperConfig()
+	cfg.Fill()
+	allMembers := func(replicas map[uint64]string, predicate func(string) bool) bool {
+		for _, uuid := range replicas {
+			if !predicate(uuid) {
+				return false
+			}
+		}
+		return true
+	}
+	ready := func(uuid string) bool {
+		if delivery.Preparing && !resetServiceBarrier {
+			return delivery.Ready[uuid]
+		}
+		store, ok := state.LogState.Stores[uuid]
+		return ok && store.CommandDeliverySupported
+	}
+	if !allMembers(shard.Replicas, ready) || !allMembers(shard.NonVotingReplicas, ready) {
+		return false, nil
+	}
+	if !delivery.Preparing && !delivery.HAKeeperAdmissionReady {
+		return false, nil
+	}
+	if delivery.Preparing && !resetServiceBarrier {
+		if !l.commandDeliveryTargetsReady(delivery, state) {
+			return false, nil
+		}
+	} else {
+		if !l.commandDeliveryLogStoresReady(state) {
+			return false, nil
+		}
+		for _, info := range state.CNState.Stores {
+			if !cfg.CNStoreExpired(info.Tick, state.Tick) && !info.CommandDeliveryAckSupported {
+				return false, nil
+			}
+		}
+		for _, info := range state.TNState.Stores {
+			if !cfg.TNStoreExpired(info.Tick, state.Tick) && !info.CommandDeliveryAckSupported {
+				return false, nil
+			}
+		}
+	}
+	cmd := hakeeper.GetEnableCommandDeliveryCmd()
+	if delivery.Preparing && !resetServiceBarrier {
+		cmd = hakeeper.GetEnableCommandDeliveryCmdForConfig(l.cfg.GetHAKeeperConfig())
+	}
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	result, err := l.propose(ctx, session, cmd)
+	if err != nil {
+		return false, handleNotHAKeeperError(ctx, err)
+	}
+	enabled := result.Value == 1
+	if enabled {
+		l.commandDeliveryEnabled.Store(true)
+	}
+	return enabled, nil
 }
 
 func (l *store) getClusterDetails(ctx context.Context) (pb.ClusterDetails, error) {
@@ -869,8 +1323,13 @@ func (l *store) addScheduleCommands(ctx context.Context,
 	term uint64, cmds []pb.ScheduleCommand) error {
 	cmd := hakeeper.GetUpdateCommandsCmd(term, cmds)
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
-	if _, err := l.propose(ctx, session, cmd); err != nil {
+	result, err := l.propose(ctx, session, cmd)
+	if err != nil {
 		return handleNotHAKeeperError(ctx, err)
+	}
+	if len(result.Data) != 0 {
+		return moerr.NewInternalError(ctx,
+			"HAKeeper rejected schedule commands while recovery ID watermarks are pending")
 	}
 	return nil
 }
@@ -898,7 +1357,7 @@ func (l *store) updateCNLabel(ctx context.Context, label pb.CNStoreLabel) error 
 }
 
 func (l *store) updateCNWorkState(ctx context.Context, workState pb.CNWorkState) error {
-	state, err := l.getCheckerState()
+	state, err := l.getCheckerStateWithContext(ctx)
 	if err != nil {
 		return err
 	}
@@ -1156,14 +1615,20 @@ func (l *store) queryLogLsn(ctx context.Context, shardID uint64, ts time.Time) (
 	}
 }
 
-func (l *store) tickerForTaskSchedule(ctx context.Context, duration time.Duration) {
+type checkerStateGetter func() (*pb.CheckerState, uint64)
+
+func (l *store) tickerForTaskSchedule(
+	ctx context.Context,
+	duration time.Duration,
+	getCheckerState checkerStateGetter,
+) {
 	ticker := time.NewTicker(duration)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			state, _ := l.getCheckerStateFromLeader()
+			state, _ := getCheckerState()
 			if state != nil && state.State == pb.HAKeeperRunning {
 				l.taskSchedule(state)
 			}
@@ -1184,8 +1649,35 @@ func (l *store) tickerForTaskSchedule(ctx context.Context, duration time.Duratio
 
 }
 
+// startTaskScheduleTicker keeps task scheduling independent from the HAKeeper
+// tick loop while making tickerStopper own and join it before NodeHost.Close.
+func (l *store) startTaskScheduleTicker(
+	getCheckerState checkerStateGetter,
+) error {
+	return l.tickerStopper.RunNamedTask(
+		"hakeeper-task-scheduler",
+		func(ctx context.Context) {
+			l.tickerForTaskSchedule(
+				ctx,
+				l.cfg.HAKeeperCheckInterval.Duration,
+				getCheckerState,
+			)
+		},
+	)
+}
+
+// Committed bootstrap/readiness changes may need work before the next health
+// tick. Coalesce hints; the existing checker remains the only execution owner.
+// The channel is never closed, so late proposals during shutdown are harmless.
+func (l *store) notifyHAKeeperCheck() {
+	select {
+	case l.hakeeperCheckWakeup <- struct{}{}:
+	default:
+	}
+}
+
 func (l *store) ticker(ctx context.Context) {
-	if l.cfg.HAKeeperTickInterval.Duration == 0 {
+	if l.cfg.HAKeeperTickInterval.Duration <= 0 {
 		panic("invalid HAKeeperTickInterval")
 	}
 	l.runtime.Logger().Info("Hakeeper interval configs",
@@ -1193,27 +1685,44 @@ func (l *store) ticker(ctx context.Context) {
 		zap.Int64("HAKeeperCheckInterval", int64(l.cfg.HAKeeperCheckInterval.Duration)))
 	ticker := time.NewTicker(l.cfg.HAKeeperTickInterval.Duration)
 	defer ticker.Stop()
-	if l.cfg.HAKeeperCheckInterval.Duration == 0 {
+	if l.cfg.HAKeeperCheckInterval.Duration <= 0 {
 		panic("invalid HAKeeperCheckInterval")
 	}
 	defer func() {
 		l.runtime.Logger().Info("HAKeeper ticker stopped")
 	}()
-	haTicker := time.NewTicker(l.cfg.HAKeeperCheckInterval.Duration)
+	// Probe once quickly so a newly elected leader can bootstrap without
+	// waiting for the normal health-check interval. Subsequent follower/error
+	// polls use the configured interval, while explicit bootstrap states use
+	// the fast interval.
+	initialCheckInterval := l.cfg.HAKeeperCheckInterval.Duration
+	if initialCheckInterval > bootstrapHAKeeperCheckInterval {
+		initialCheckInterval = bootstrapHAKeeperCheckInterval
+	}
+	haTicker := time.NewTicker(initialCheckInterval)
 	defer haTicker.Stop()
+	checkInterval := initialCheckInterval
+	check := func() {
+		state := l.hakeeperCheck()
+		checkInterval = l.updateHAKeeperCheckTicker(haTicker.Reset, checkInterval, state)
+	}
 
 	// moving task schedule from the ticker normal routine to a
 	// separate goroutine can avoid the hakeeper's health check and tick update
 	// operations being blocked by task schedule, or the tick will be skipped and
 	// can not correctly estimate the time passing.
-	go l.tickerForTaskSchedule(ctx, l.cfg.HAKeeperCheckInterval.Duration)
+	if err := l.startTaskScheduleTicker(l.getCheckerStateFromLeader); err != nil {
+		return
+	}
 
 	for {
 		select {
 		case <-ticker.C:
 			l.hakeeperTick()
 		case <-haTicker.C:
-			l.hakeeperCheck()
+			check()
+		case <-l.hakeeperCheckWakeup:
+			check()
 		case <-ctx.Done():
 			return
 		}
@@ -1233,6 +1742,43 @@ func (l *store) isLeaderHAKeeper() (bool, uint64, error) {
 	}
 	replicaID := atomic.LoadUint64(&l.haKeeperReplicaID)
 	return ok && replicaID != 0 && leaderID == replicaID, term, nil
+}
+
+func (l *store) waitHAKeeperLeaderReady(ctx context.Context, maxWait time.Duration) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, moerr.AttachCause(ctx, err)
+	}
+	leaderID, _, ok, err := l.nh.GetLeaderID(hakeeper.DefaultHAKeeperShardID)
+	if err != nil {
+		return false, err
+	}
+	if ok && leaderID != 0 {
+		return true, nil
+	}
+	if maxWait <= 0 {
+		return false, nil
+	}
+
+	ticker := time.NewTicker(time.Millisecond * 20)
+	defer ticker.Stop()
+	timer := time.NewTimer(maxWait)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return false, moerr.AttachCause(ctx, ctx.Err())
+		case <-timer.C:
+			return false, nil
+		case <-ticker.C:
+		}
+		leaderID, _, ok, err := l.nh.GetLeaderID(hakeeper.DefaultHAKeeperShardID)
+		if err != nil {
+			return false, err
+		}
+		if ok && leaderID != 0 {
+			return true, nil
+		}
+	}
 }
 
 // TODO: add test for this
@@ -1257,13 +1803,22 @@ func (l *store) hakeeperTick() {
 }
 
 func (l *store) getHeartbeatMessage() pb.LogStoreHeartbeat {
+	startResult := l.catalogStartHeartbeat()
 	m := pb.LogStoreHeartbeat{
-		UUID:           l.id(),
-		RaftAddress:    l.cfg.RaftServiceAddr(),
-		ServiceAddress: l.cfg.LogServiceServiceAddr(),
-		GossipAddress:  l.cfg.GossipServiceAddr(),
-		Replicas:       make([]pb.LogReplicaInfo, 0),
-		Locality:       l.cfg.getLocality(),
+		UUID:                                     l.id(),
+		RaftAddress:                              l.cfg.RaftServiceAddr(),
+		ServiceAddress:                           l.cfg.LogServiceServiceAddr(),
+		GossipAddress:                            l.cfg.GossipServiceAddr(),
+		StoreIncarnation:                         l.getStoreIncarnation(),
+		Replicas:                                 make([]pb.LogReplicaInfo, 0),
+		Locality:                                 l.cfg.getLocality(),
+		CommandDeliverySupported:                 true,
+		ViewMetadataAdmissionSupported:           true,
+		ViewMetadataAdmissionProtocolV3Supported: true,
+	}
+	if l.catalogExecutor.enabled {
+		m.CatalogMetadataCapabilities = l.catalogExecutorCapabilities()
+		m.CatalogMetadataStartResult = startResult
 	}
 	opts := dragonboat.NodeHostInfoOption{
 		SkipLogInfo: true,

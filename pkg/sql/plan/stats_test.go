@@ -16,26 +16,312 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	index2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/require"
 )
+
+func TestReCalcInnerJoinCardinality(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	typ := planpb.Type{Id: int32(types.T_int64)}
+	equality, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{
+		GetColExpr(typ, 1, 0), GetColExpr(typ, 2, 0),
+	})
+	require.NoError(t, err)
+	equality.Ndv = 2
+	for _, tc := range []struct {
+		name                                 string
+		left, right, leftSel, rightSel, want float64
+		on                                   bool
+	}{
+		{name: "cartesian", left: 2, right: 3, leftSel: 1, rightSel: 1, want: 6},
+		{name: "singleton", left: 1, right: 3, leftSel: 1, rightSel: 1, want: 3},
+		{name: "empty left", right: 3, leftSel: 1, rightSel: 1},
+		{name: "empty right", left: 3, leftSel: 1, rightSel: 1},
+		{name: "both empty", leftSel: 1, rightSel: 1},
+		{name: "filtered inputs", left: 2, right: 3, leftSel: .25, rightSel: .5, want: 6},
+		{name: "equality control", left: 2, right: 3, leftSel: 1, rightSel: 1, want: 3, on: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+			join := &planpb.Node{NodeType: planpb.Node_JOIN, JoinType: planpb.Node_INNER,
+				Children: []int32{0, 1}, Stats: DefaultStats()}
+			if tc.on {
+				join.OnList = []*planpb.Expr{equality}
+			}
+			builder.qry.Nodes = []*planpb.Node{
+				{NodeType: planpb.Node_VALUE_SCAN, Stats: &planpb.Stats{Outcnt: tc.left, Selectivity: tc.leftSel}},
+				{NodeType: planpb.Node_VALUE_SCAN, Stats: &planpb.Stats{Outcnt: tc.right, Selectivity: tc.rightSel}},
+				join,
+			}
+			for range 2 {
+				ReCalcNodeStats(2, builder, false, false, false)
+				require.Equal(t, tc.want, join.Stats.Outcnt)
+				require.Equal(t, tc.right, join.Stats.HashmapStats.HashmapSize)
+			}
+		})
+	}
+}
+
+func TestReCalcCartesianChainCardinality(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false), false, false)
+	const want = 300_000_000
+	for i, rows := range []float64{1000, 10, 3, 1000, 10} {
+		leafID := int32(len(builder.qry.Nodes))
+		builder.qry.Nodes = append(builder.qry.Nodes, &planpb.Node{
+			NodeType: planpb.Node_VALUE_SCAN, Stats: &planpb.Stats{Outcnt: rows, Selectivity: 1},
+		})
+		if i > 0 {
+			leftID := leafID - 1
+			builder.qry.Nodes = append(builder.qry.Nodes, &planpb.Node{
+				NodeType: planpb.Node_JOIN, JoinType: planpb.Node_INNER,
+				Children: []int32{leftID, leafID}, Stats: DefaultStats(),
+			})
+			ReCalcNodeStats(leafID+1, builder, false, false, false)
+		}
+	}
+	root := builder.qry.Nodes[len(builder.qry.Nodes)-1]
+	require.Equal(t, float64(want), root.Stats.Outcnt)
+	// The row limit is owned by the existing generic stats tail, rather than
+	// reimplemented in cartesian estimation.
+	for _, limit := range []uint64{0, 1, 7} {
+		root.Limit = MakePlan2Uint64ConstExprWithType(limit)
+		ReCalcNodeStats(int32(len(builder.qry.Nodes)-1), builder, false, false, false)
+		require.Equal(t, float64(limit), root.Stats.Outcnt)
+	}
+}
+
+func TestGetExecTypeAdaptiveTopIgnoresDeferredForceOneCN(t *testing.T) {
+	large := &planpb.Stats{BlockNum: int32(BlockThresholdForOneCN + 1), Cost: costThresholdForOneCN + 1}
+	qry := &planpb.Query{
+		Steps: []int32{3},
+		Nodes: []*planpb.Node{
+			{NodeId: 0, NodeType: planpb.Node_VECTOR_INDEX_SCAN, Stats: DeepCopyStats(large)},
+			{NodeId: 1, NodeType: planpb.Node_VECTOR_INDEX_SCAN, Stats: &planpb.Stats{ForceOneCN: true}},
+			{NodeId: 2, NodeType: planpb.Node_TABLE_SCAN, Stats: &planpb.Stats{}},
+			{NodeId: 3, NodeType: planpb.Node_ADAPTIVE_TOP, Children: []int32{0, 1, 2}, Stats: DeepCopyStats(large)},
+		},
+	}
+	require.Equal(t, ExecTypeAP_MULTICN, GetExecType(qry, false, false))
+	require.True(t, qry.Nodes[1].Stats.ForceOneCN, "PRE keeps its activation-time local constraint")
+
+	qry.Steps = []int32{1}
+	require.Equal(t, ExecTypeAP_ONECN, GetExecType(qry, false, false), "an active ForceOneCN scan remains local")
+	qry.Steps = nil
+	require.Equal(t, ExecTypeAP_ONECN, GetExecType(qry, false, false), "an incomplete graph must remain conservative")
+}
+
+func TestHintQueryTypePreservesExecutionContracts(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		hint int
+		want *planpb.Stats
+	}{
+		{name: "no override", want: DefaultStats()},
+		{name: "minimal", hint: 1, want: DefaultMinimalStats()},
+		{name: "big", hint: 2, want: DefaultBigStats()},
+		{name: "huge", hint: 3, want: DefaultHugeStats()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stats := DefaultStats()
+			stats.ForceOneCN = true
+			stats.Dop = 3
+			stats.Sql = "scan source"
+			hashmap := &planpb.HashMapStats{
+				HashmapSize: 7, HashOnPK: true, Shuffle: true,
+				ShuffleColIdx: 2, ShuffleColMin: 1, ShuffleColMax: 9,
+				Ranges: []float64{2, 5},
+			}
+			stats.HashmapStats = hashmap
+			builder := &QueryBuilder{
+				qry:            &planpb.Query{Nodes: []*planpb.Node{{Stats: stats}}},
+				optimizerHints: &OptimizerHints{execType: tc.hint},
+			}
+
+			builder.hintQueryType()
+
+			want := *tc.want
+			want.ForceOneCN, want.Dop, want.Sql, want.HashmapStats = true, 3, "scan source", hashmap
+			require.Equal(t, &want, stats)
+			require.Same(t, hashmap, stats.HashmapStats)
+		})
+	}
+}
+
+func TestHintQueryTypeKeepsRuntimeFilterDeliveryLocal(t *testing.T) {
+	for _, hint := range []int{1, 2, 3} {
+		t.Run(fmt.Sprintf("execType-%d", hint), func(t *testing.T) {
+			builder := newRuntimeFilterSingleTestBuilder(false)
+			join := builder.qry.Nodes[2]
+			join.JoinType = planpb.Node_DEDUP
+			join.RuntimeFilterBuildList = []*planpb.RuntimeFilterSpec{{Tag: 1}}
+			builder.forceJoinOnOneCN(2, false)
+			require.True(t, builder.qry.Nodes[0].Stats.ForceOneCN)
+			builder.optimizerHints = &OptimizerHints{execType: hint}
+
+			builder.hintQueryType()
+
+			require.True(t, builder.qry.Nodes[0].Stats.ForceOneCN,
+				"cost overrides must not distribute a current-CN runtime-filter consumer")
+			require.True(t, builder.qry.Nodes[1].Stats.ForceOneCN)
+			require.NotEqual(t, ExecTypeAP_MULTICN, GetExecType(builder.qry, false, false))
+
+			// The same cost hint still permits distributed execution when there is
+			// no locality constraint. This is not a global single-CN fallback.
+			for _, node := range builder.qry.Nodes {
+				node.Stats.ForceOneCN = false
+			}
+			if hint > 1 {
+				require.Equal(t, ExecTypeAP_MULTICN, GetExecType(builder.qry, false, false))
+			}
+		})
+	}
+}
+
+func TestAggregateBlockEstimateSaturates(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		rows float64
+		want int32
+	}{
+		{name: "partial block", rows: objectio.BlockMaxRows - 1, want: 1},
+		{name: "block boundary", rows: objectio.BlockMaxRows, want: 2},
+		{name: "last representable hint", rows: float64(math.MaxInt32-1) * objectio.BlockMaxRows, want: math.MaxInt32},
+		{name: "hint overflow", rows: float64(math.MaxInt32) * objectio.BlockMaxRows, want: math.MaxInt32},
+		{name: "unknown row upper bound", rows: float64(^uint64(0)), want: math.MaxInt32},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			builder := newRuntimeFilterSingleTestBuilder(false)
+			builder.qry.Nodes[0].Stats.Outcnt = tc.rows
+			builder.qry.Nodes = append(builder.qry.Nodes, &planpb.Node{
+				NodeType: planpb.Node_AGG, NodeId: 3, Children: []int32{0}, Stats: DefaultStats(),
+			})
+			ReCalcNodeStats(3, builder, false, false, false)
+			require.Equal(t, tc.want, builder.qry.Nodes[3].Stats.BlockNum)
+		})
+	}
+}
+
+func TestStatsInfoUsableWithoutPersistedObjects(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		stats *pb.StatsInfo
+		want  bool
+	}{
+		{name: "missing"},
+		{name: "empty", stats: &pb.StatsInfo{}},
+		{name: "negative table count", stats: &pb.StatsInfo{TableCnt: -1}},
+		{name: "nan table count", stats: &pb.StatsInfo{TableCnt: math.NaN()}},
+		{name: "infinite table count", stats: &pb.StatsInfo{TableCnt: math.Inf(1)}},
+		{name: "persisted object with nan table count", stats: &pb.StatsInfo{
+			AccurateObjectNumber: 1, TableCnt: math.NaN(),
+		}},
+		{name: "completed empty table", stats: &pb.StatsInfo{TableName: "events"}, want: true},
+		{name: "persisted objects", stats: &pb.StatsInfo{AccurateObjectNumber: 1}, want: true},
+		{name: "committed rows before flush", stats: &pb.StatsInfo{TableCnt: 1}, want: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, StatsInfoUsable(test.stats))
+		})
+	}
+}
+
+type tableDefStatsTestCompilerContext struct {
+	*MockCompilerContext
+	stats       *pb.StatsInfo
+	gotTableDef *planpb.TableDef
+	gotObject   *planpb.ObjectRef
+	gotSnapshot *Snapshot
+	err         error
+}
+
+func (c *tableDefStatsTestCompilerContext) StatsWithTableDef(
+	obj *planpb.ObjectRef,
+	tableDef *planpb.TableDef,
+	snapshot *Snapshot,
+) (*pb.StatsInfo, error) {
+	c.gotTableDef, c.gotObject, c.gotSnapshot = tableDef, obj, snapshot
+	return c.stats, c.err
+}
+
+func TestStatsForTableDefUsesVersionAwareCompilerContext(t *testing.T) {
+	tableDef := &planpb.TableDef{TblId: 42, Version: 7}
+	want := &pb.StatsInfo{TableCnt: 42}
+	ctx := &tableDefStatsTestCompilerContext{
+		MockCompilerContext: &MockCompilerContext{},
+		stats:               want,
+	}
+
+	got, err := statsForTableDef(ctx, &planpb.ObjectRef{Obj: 42}, tableDef, nil)
+	require.NoError(t, err)
+	require.Same(t, want, got)
+	require.Same(t, tableDef, ctx.gotTableDef)
+}
+
+func TestCalcBlockSelectivityUsingShuffleRangeBareColumn(t *testing.T) {
+	t.Run("bare column uses the generic overlap estimate", func(t *testing.T) {
+		expr := &planpb.Expr{
+			Selectivity: 0.5,
+			Expr: &planpb.Expr_Col{
+				Col: &planpb.ColRef{Name: "enabled"},
+			},
+		}
+
+		require.Equal(t, 1.0, calcBlockSelectivityUsingShuffleRange(nil, "enabled", expr))
+	})
+
+	t.Run("special function keeps its direct estimate", func(t *testing.T) {
+		expr := &planpb.Expr{
+			Selectivity: 0.25,
+			Expr: &planpb.Expr_F{
+				F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: "prefix_eq"}},
+			},
+		}
+
+		require.Equal(t, 0.25, calcBlockSelectivityUsingShuffleRange(nil, "enabled", expr))
+	})
+}
+
+func TestAssertStatsInheritChildWithoutSelectivityDiscount(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_UPDATE, &MockCompilerContext{ctx: context.Background()}, false, false)
+	childStats := &planpb.Stats{
+		TableCnt:    1000,
+		Outcnt:      750,
+		Cost:        1234,
+		Selectivity: 0.75,
+		BlockNum:    9,
+	}
+	builder.qry.Nodes = []*planpb.Node{
+		{NodeType: planpb.Node_TABLE_SCAN, Stats: childStats},
+		{NodeType: planpb.Node_ASSERT, Children: []int32{0}},
+	}
+
+	ReCalcNodeStats(1, builder, false, false, false)
+
+	require.Equal(t, childStats, builder.qry.Nodes[1].Stats)
+	require.NotSame(t, childStats, builder.qry.Nodes[1].Stats)
+}
 
 func TestSafeStatsRatiosAvoidNonFiniteSelectivity(t *testing.T) {
 	t.Run("limit never increases cardinality", func(t *testing.T) {
 		builder := NewQueryBuilder(planpb.Query_SELECT, &MockCompilerContext{ctx: context.Background()}, false, false)
 		node := &planpb.Node{
-			NodeType: planpb.Node_VALUE_SCAN,
-			Stats:    &planpb.Stats{Outcnt: 10, Cost: 10, Selectivity: 1},
-			Limit:    MakePlan2Uint64ConstExprWithType(100),
+			NodeType:   planpb.Node_VALUE_SCAN,
+			RowsetData: &planpb.RowsetData{RowCount: 10},
+			Stats:      &planpb.Stats{Outcnt: 10, Cost: 10, Selectivity: 1},
+			Limit:      MakePlan2Uint64ConstExprWithType(100),
 		}
 		builder.qry.Nodes = []*planpb.Node{node}
 
@@ -47,10 +333,11 @@ func TestSafeStatsRatiosAvoidNonFiniteSelectivity(t *testing.T) {
 	t.Run("offset estimate remains idempotent", func(t *testing.T) {
 		builder := NewQueryBuilder(planpb.Query_SELECT, &MockCompilerContext{ctx: context.Background()}, false, false)
 		node := &planpb.Node{
-			NodeType: planpb.Node_VALUE_SCAN,
-			Stats:    &planpb.Stats{Outcnt: 10, Cost: 10, Selectivity: 1},
-			Limit:    MakePlan2Uint64ConstExprWithType(8),
-			Offset:   MakePlan2Uint64ConstExprWithType(7),
+			NodeType:   planpb.Node_VALUE_SCAN,
+			RowsetData: &planpb.RowsetData{RowCount: 10},
+			Stats:      &planpb.Stats{Outcnt: 10, Cost: 10, Selectivity: 1},
+			Limit:      MakePlan2Uint64ConstExprWithType(8),
+			Offset:     MakePlan2Uint64ConstExprWithType(7),
 		}
 		builder.qry.Nodes = []*planpb.Node{node}
 
@@ -272,11 +559,118 @@ func TestStatsSelectivityClampAvoidsNonFiniteJoin(t *testing.T) {
 		ReCalcNodeStats(2, builder, false, false, false)
 
 		require.True(t, isFinite(join.Stats.Outcnt), "outcnt = %v", join.Stats.Outcnt)
+		require.Equal(t, 50.0, join.Stats.Outcnt)
 		require.GreaterOrEqual(t, join.Stats.Outcnt, 0.0)
 		require.True(t, isFinite(join.Stats.Selectivity), "selectivity = %v", join.Stats.Selectivity)
 		require.GreaterOrEqual(t, join.Stats.Selectivity, 0.0)
 		require.LessOrEqual(t, join.Stats.Selectivity, 1.0)
 	})
+}
+
+func TestAntiJoinCardinalityUsesPrimaryKeyLowerBound(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	intType := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
+	makeEquality := func(leftPos, rightPos int32) *planpb.Expr {
+		expr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{
+			GetColExpr(intType, 10, leftPos),
+			GetColExpr(intType, 20, rightPos),
+		})
+		require.NoError(t, err)
+		return expr
+	}
+	makeBuilder := func(onList []*planpb.Expr) (*QueryBuilder, *planpb.Node) {
+		left := &planpb.Node{
+			NodeId: 0, NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{10},
+			TableDef: &planpb.TableDef{
+				Cols:          []*planpb.ColDef{{Name: "pk1", Typ: intType}, {Name: "pk2", Typ: intType}},
+				Name2ColIndex: map[string]int32{"pk1": 0, "pk2": 1},
+				Pkey:          &planpb.PrimaryKeyDef{Names: []string{"pk1", "pk2"}},
+			},
+			Stats: &planpb.Stats{Outcnt: 1000, Cost: 1000, Selectivity: 1, BlockNum: 1},
+		}
+		right := &planpb.Node{
+			NodeId: 1, NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{20},
+			TableDef: &planpb.TableDef{
+				Cols:          []*planpb.ColDef{{Name: "k1", Typ: intType}, {Name: "k2", Typ: intType}},
+				Name2ColIndex: map[string]int32{"k1": 0, "k2": 1},
+			},
+			Stats: &planpb.Stats{Outcnt: 100, Cost: 100, Selectivity: 1, BlockNum: 1},
+		}
+		join := &planpb.Node{
+			NodeId: 2, NodeType: planpb.Node_JOIN, JoinType: planpb.Node_ANTI,
+			Children: []int32{0, 1}, OnList: onList, Stats: DefaultStats(),
+		}
+		builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+		builder.qry.Nodes = []*planpb.Node{left, right, join}
+		return builder, join
+	}
+
+	t.Run("complete primary key bounds the number of eliminated rows", func(t *testing.T) {
+		builder, join := makeBuilder([]*planpb.Expr{makeEquality(0, 0), makeEquality(1, 1)})
+
+		ReCalcNodeStats(2, builder, false, false, false)
+
+		require.Equal(t, 900.0, join.Stats.Outcnt)
+	})
+
+	t.Run("partial primary key keeps the uncertainty default", func(t *testing.T) {
+		builder, join := makeBuilder([]*planpb.Expr{makeEquality(0, 0)})
+
+		ReCalcNodeStats(2, builder, false, false, false)
+
+		require.Equal(t, 500.0, join.Stats.Outcnt)
+	})
+
+	t.Run("right primary key does not prove a left-side lower bound", func(t *testing.T) {
+		builder, join := makeBuilder([]*planpb.Expr{makeEquality(0, 0), makeEquality(1, 1)})
+		builder.qry.Nodes[0].TableDef.Pkey = nil
+		builder.qry.Nodes[1].TableDef.Pkey = &planpb.PrimaryKeyDef{Names: []string{"k1", "k2"}}
+
+		ReCalcNodeStats(2, builder, false, false, false)
+
+		require.Equal(t, 500.0, join.Stats.Outcnt)
+	})
+
+	t.Run("rollback hint restores the legacy estimate", func(t *testing.T) {
+		builder, join := makeBuilder([]*planpb.Expr{makeEquality(0, 0), makeEquality(1, 1)})
+		builder.optimizerHints = &OptimizerHints{outerAntiPlanning: 1}
+
+		ReCalcNodeStats(2, builder, false, false, false)
+
+		require.Equal(t, 0.0, join.Stats.Outcnt)
+	})
+
+	for _, test := range []struct {
+		name       string
+		rollback   bool
+		wantOutcnt float64
+	}{
+		{name: "enabled", wantOutcnt: 5},
+		{name: "rollback", rollback: true, wantOutcnt: 0},
+	} {
+		t.Run("right anti after physical swap "+test.name, func(t *testing.T) {
+			builder, join := makeBuilder([]*planpb.Expr{makeEquality(0, 0), makeEquality(1, 1)})
+			builder.qry.Nodes[0].Stats = &planpb.Stats{
+				Outcnt: 10, Cost: 10, Selectivity: 1, BlockNum: 2,
+			}
+			builder.qry.Nodes[1].Stats = &planpb.Stats{
+				Outcnt: 10_000, Cost: 10_000, Selectivity: 1, BlockNum: 100,
+			}
+			if test.rollback {
+				builder.optimizerHints = &OptimizerHints{outerAntiPlanning: 1}
+			}
+
+			builder.determineBuildAndProbeSide(2, false)
+			require.True(t, join.IsRightJoin)
+			builder.swapJoinChildren(2)
+			require.Equal(t, []int32{1, 0}, join.Children)
+			reCalcNodeStatsAfterSwap(2, builder, false, false, false)
+
+			require.Equal(t, test.wantOutcnt, join.Stats.Outcnt)
+			require.LessOrEqual(t, join.Stats.Outcnt, 10.0)
+			require.Equal(t, int32(2), join.Stats.BlockNum)
+		})
+	}
 }
 
 func newStatsTestBuilderWithNDV(colName string, ndv float64) *QueryBuilder {
@@ -302,6 +696,274 @@ func newStatsTestBuilderWithNDV(colName string, ndv float64) *QueryBuilder {
 	return builder
 }
 
+func TestEstimateAndSelectivityNormalizesSameColumnRanges(t *testing.T) {
+	statsCache := NewStatsCache()
+	stats := NewStatsInfo()
+	stats.TableCnt = 300_000
+	stats.DataTypeMap["price"] = uint64(types.T_decimal64)
+	stats.MinValMap["price"] = 0.09
+	stats.MaxValMap["price"] = 99.99
+	stats.DataTypeMap["other"] = uint64(types.T_decimal64)
+	stats.MinValMap["other"] = 0.09
+	stats.MaxValMap["other"] = 99.99
+	statsCache.Set(1, stats)
+	ctx := &statsCacheCompilerContext{
+		MockCompilerContext: &MockCompilerContext{ctx: context.Background()},
+		statsCache:          statsCache,
+	}
+	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+	builder.tag2Table[0] = &planpb.TableDef{
+		TblId: 1,
+		Cols: []*planpb.ColDef{
+			{Name: "price", Typ: planpb.Type{Id: int32(types.T_decimal64), Scale: 2}},
+			{Name: "other", Typ: planpb.Type{Id: int32(types.T_decimal64), Scale: 2}},
+		},
+	}
+
+	decimalRange := func(column int32, name string, value int64) *planpb.Expr {
+		columnExpr := &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_decimal64), Scale: 2},
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+				RelPos: 0, ColPos: column, Name: builder.tag2Table[0].Cols[column].Name,
+			}},
+		}
+		literalExpr := &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_decimal64), Scale: 2},
+			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+				Value: &planpb.Literal_Decimal64Val{Decimal64Val: &planpb.Decimal64{A: value}},
+			}},
+		}
+		bound, err := BindFuncExprImplByPlanExpr(context.Background(), name, []*planpb.Expr{columnExpr, literalExpr})
+		require.NoError(t, err)
+		return bound
+	}
+	and := func(left, right *planpb.Expr) *planpb.Expr {
+		return &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_bool)},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "and"},
+				Args: []*planpb.Expr{left, right},
+			}},
+		}
+	}
+
+	// The four predicates represent one interval, [36, 45]. Their estimate
+	// must not shrink merely because equivalent, weaker bounds are repeated.
+	overlapping := and(
+		decimalRange(0, ">=", 3600),
+		and(decimalRange(0, ">=", 3500), and(
+			decimalRange(0, "<=", 4500), decimalRange(0, "<=", 5000))),
+	)
+	wantInterval := (45.0 - 36.0 + 1) / (99.99 - 0.09)
+	require.InDelta(t, wantInterval, estimateExprSelectivity(overlapping, builder, stats), 1e-12)
+
+	strongerLowerBound := and(decimalRange(0, ">=", 3500), decimalRange(0, ">=", 3600))
+	wantLowerBound := (99.99 - 36.0 + 1) / (99.99 - 0.09)
+	require.InDelta(t, wantLowerBound, estimateExprSelectivity(strongerLowerBound, builder, stats), 1e-12)
+
+	contradictory := and(decimalRange(0, ">=", 5000), decimalRange(0, "<=", 4500))
+	require.InDelta(t, 0.00000001, estimateExprSelectivity(contradictory, builder, stats), 1e-15)
+	exclusivePoint := and(decimalRange(0, ">", 4500), decimalRange(0, "<=", 4500))
+	require.InDelta(t, 0.00000001, estimateExprSelectivity(exclusivePoint, builder, stats), 1e-15)
+	inclusivePoint := and(decimalRange(0, ">=", 4500), decimalRange(0, "<=", 4500))
+	require.Greater(t, estimateExprSelectivity(inclusivePoint, builder, stats), 0.00000001)
+
+	// Predicates on different columns remain independent.
+	independent := and(decimalRange(0, ">=", 3600), decimalRange(1, "<=", 4500))
+	wantIndependent := andSelectivity(
+		(99.99-36.0+1)/(99.99-0.09),
+		(45.0-0.09+1)/(99.99-0.09),
+	)
+	require.InDelta(t, wantIndependent, estimateExprSelectivity(independent, builder, stats), 1e-12)
+
+	// Moving an out-of-domain endpoint to the observed boundary must preserve
+	// the fact that the boundary value satisfies the original predicate.
+	stats.MinValMap["price"] = 10
+	stats.MaxValMap["price"] = 10
+	redundantLowerBounds := and(decimalRange(0, ">", 100), decimalRange(0, ">", 200))
+	require.Equal(t, 1.0, estimateExprSelectivity(redundantLowerBounds, builder, stats))
+	redundantUpperBounds := and(decimalRange(0, "<", 2000), decimalRange(0, "<", 3000))
+	require.Equal(t, 1.0, estimateExprSelectivity(redundantUpperBounds, builder, stats))
+}
+
+func TestEstimateIntervalSelectivityPreservesClippedBoundaryMembership(t *testing.T) {
+	const emptySelectivity = 0.00000001
+	tests := []struct {
+		name                     string
+		lower, upper             float64
+		hasLower, lowerInclusive bool
+		hasUpper, upperInclusive bool
+		want                     float64
+	}{
+		{
+			name:  "exclusive lower below singleton domain",
+			lower: 1, hasLower: true,
+			want: 1,
+		},
+		{
+			name:  "exclusive upper above singleton domain",
+			upper: 20, hasUpper: true,
+			want: 1,
+		},
+		{
+			name:  "exclusive bounds outside singleton domain",
+			lower: 1, hasLower: true,
+			upper: 20, hasUpper: true,
+			want: 1,
+		},
+		{
+			name:  "exclusive lower at singleton boundary",
+			lower: 10, hasLower: true,
+			want: emptySelectivity,
+		},
+		{
+			name:  "exclusive upper at singleton boundary",
+			upper: 10, hasUpper: true,
+			want: emptySelectivity,
+		},
+		{
+			name:  "inclusive singleton",
+			lower: 10, hasLower: true, lowerInclusive: true,
+			upper: 10, hasUpper: true, upperInclusive: true,
+			want: 1,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := estimateIntervalSelectivity(
+				10, 10,
+				test.lower, test.hasLower, test.lowerInclusive,
+				test.upper, test.hasUpper, test.upperInclusive,
+			)
+			require.Equal(t, test.want, got)
+		})
+	}
+}
+
+func TestBoundFilterListNormalizesSameColumnRanges(t *testing.T) {
+	mock := NewMockCompilerContext(false)
+	part := mock.tables["part"]
+	require.NotNil(t, part)
+	statsCache := NewStatsCache()
+	stats := NewStatsInfo()
+	stats.TableName = "part"
+	stats.TableCnt = 200_000
+	stats.DataTypeMap["p_retailprice"] = uint64(types.T_decimal64)
+	stats.MinValMap["p_retailprice"] = 0.09
+	stats.MaxValMap["p_retailprice"] = 99.99
+	statsCache.Set(part.TblId, stats)
+	ctx := &fixedStatsCompilerContext{statsCacheCompilerContext: &statsCacheCompilerContext{
+		MockCompilerContext: mock, statsCache: statsCache,
+	}}
+
+	stmts, err := mysql.Parse(ctx.GetContext(), `
+		select p_partkey from part
+		where p_retailprice >= 36.00 and p_retailprice >= 35.00
+		  and p_retailprice <= 45.00 and p_retailprice <= 50.00`, 1)
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+	defer stmts[0].Free()
+	built, err := BuildPlan(ctx, stmts[0], false)
+	require.NoError(t, err)
+
+	var scan *planpb.Node
+	for _, node := range built.GetQuery().Nodes {
+		if node.NodeType == planpb.Node_TABLE_SCAN && node.TableDef.Name == "part" {
+			scan = node
+			break
+		}
+	}
+	require.NotNil(t, scan)
+	require.InDelta(t, (45.0-36.0+1)/(99.99-0.09), scan.Stats.Selectivity, 1e-12)
+}
+
+func TestMissingColumnMapsUseUnknownStatsFallbacks(t *testing.T) {
+	builder := newStatsTestBuilderWithNDV("d", 10)
+	wrapper := builder.compCtx.GetStatsCache().Get(1)
+	stats := wrapper.GetStats()
+	delete(stats.NdvMap, "d")
+	col := &planpb.ColRef{RelPos: 0, ColPos: 0, Name: "d"}
+	expr := &planpb.Expr{Expr: &planpb.Expr_Col{Col: col}}
+
+	require.Equal(t, float64(-1), builder.getColNdv(col))
+	require.Equal(t, 0.1, getNullSelectivity(expr, builder, true))
+	require.Equal(t, 0.9, getNullSelectivity(expr, builder, false))
+}
+
+func TestCompleteStatsSizeMapRejectsPartialGenerations(t *testing.T) {
+	tableDef := &planpb.TableDef{Cols: []*planpb.ColDef{
+		{Name: "a"}, {Name: "b"}, {Name: "__hidden", Hidden: true},
+	}}
+	stats := NewStatsInfo()
+	stats.SizeMap["a"] = 10
+	_, complete := completeStatsSizeMap(stats, tableDef)
+	require.False(t, complete)
+
+	stats.SizeMap["b"] = 20
+	total, complete := completeStatsSizeMap(stats, tableDef)
+	require.True(t, complete)
+	require.Equal(t, uint64(30), total)
+
+	stats.SizeMap["a"] = math.MaxUint64
+	_, complete = completeStatsSizeMap(stats, tableDef)
+	require.False(t, complete)
+}
+
+func TestPrimaryKeyStatsShortcutsRequireSQLEqualityCompatibleKey(t *testing.T) {
+	tests := []struct {
+		name         string
+		typ          planpb.Type
+		wantHighNDV  bool
+		wantNDVRatio float64
+	}{
+		{
+			name:         "integer primary key control",
+			typ:          planpb.Type{Id: int32(types.T_int64), NotNullable: true},
+			wantHighNDV:  true,
+			wantNDVRatio: 1,
+		},
+		{
+			name:         "float signed zero uses measured NDV",
+			typ:          planpb.Type{Id: int32(types.T_float64), NotNullable: true},
+			wantNDVRatio: 0.1,
+		},
+		{
+			name:         "char pad space uses measured NDV",
+			typ:          planpb.Type{Id: int32(types.T_char), Width: 8, NotNullable: true},
+			wantNDVRatio: 0.1,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			builder := newStatsTestBuilderWithNDV("id", 100)
+			table := builder.tag2Table[0]
+			table.Cols[0].Typ = test.typ
+			table.Pkey = &planpb.PrimaryKeyDef{
+				PkeyColName: "id",
+				Names:       []string{"id"},
+			}
+
+			require.Equal(t, test.wantHighNDV, isHighNdvCols([]int32{0}, table, builder))
+			require.Equal(t, test.wantNDVRatio, builder.getColNDVRatio([]int32{0}, table))
+		})
+	}
+}
+
+func TestStatsCacheReportsWholeCacheReset(t *testing.T) {
+	statsCache := NewStatsCache()
+	stats := NewStatsInfo()
+	for tableID := uint64(0); tableID <= statsCacheMaxSize; tableID++ {
+		require.False(t, statsCache.SetAndReportReset(tableID, stats))
+	}
+	require.True(t, statsCache.SetAndReportReset(statsCacheMaxSize+1, stats))
+	removed := statsCache.Get(0)
+	retained := statsCache.Get(statsCacheMaxSize + 1)
+	require.False(t, removed.Exists())
+	require.True(t, retained.Exists())
+}
+
 type statsCacheCompilerContext struct {
 	*MockCompilerContext
 	statsCache *StatsCache
@@ -309,6 +971,18 @@ type statsCacheCompilerContext struct {
 
 func (ctx *statsCacheCompilerContext) GetStatsCache() *StatsCache {
 	return ctx.statsCache
+}
+
+type fixedStatsCompilerContext struct {
+	*statsCacheCompilerContext
+}
+
+func (ctx *fixedStatsCompilerContext) Stats(
+	obj *planpb.ObjectRef,
+	_ *planpb.Snapshot,
+) (*pb.StatsInfo, error) {
+	wrapper := ctx.statsCache.Get(uint64(obj.Obj))
+	return wrapper.GetStats(), nil
 }
 
 func isFinite(v float64) bool {
@@ -330,23 +1004,6 @@ func makeQueryWithScan(tableType string, rowsize float64, blockNum int32) *planp
 	}
 }
 
-func makeQueryWithScanStats(tableType string, rowsize float64, tableCnt float64, blockNum int32, nodes ...*planpb.Node) *planpb.Query {
-	scan := &planpb.Node{
-		NodeType: planpb.Node_TABLE_SCAN,
-		TableDef: &planpb.TableDef{TableType: tableType},
-		Stats: &planpb.Stats{
-			Rowsize:  rowsize,
-			TableCnt: tableCnt,
-			BlockNum: blockNum,
-		},
-	}
-	qryNodes := append([]*planpb.Node{scan}, nodes...)
-	return &planpb.Query{
-		Nodes: qryNodes,
-		Steps: []int32{0},
-	}
-}
-
 func makeLimitExprForStatsTest() *planpb.Expr {
 	return &planpb.Expr{
 		Expr: &planpb.Expr_Lit{
@@ -354,71 +1011,6 @@ func makeLimitExprForStatsTest() *planpb.Expr {
 				Value: &planpb.Literal_U64Val{U64Val: 10},
 			},
 		},
-	}
-}
-
-func makeFunctionScanForStatsTest(funcName string, limit *planpb.Expr) *planpb.Node {
-	param := &planpb.IndexReaderParam{Limit: limit}
-	if funcName == ivfflatplan.IVFFLATSearchFuncName {
-		param.OrigFuncName = "l2_distance"
-	}
-	return &planpb.Node{
-		NodeType: planpb.Node_FUNCTION_SCAN,
-		Stats:    &planpb.Stats{},
-		TableDef: &planpb.TableDef{
-			TableType: "func_table",
-			TblFunc:   &planpb.TableFunction{Name: funcName},
-		},
-		IndexReaderParam: param,
-		Children:         []int32{0},
-	}
-}
-
-func makeShuffleJoinForStatsTest(exprBased bool) *planpb.Node {
-	right := &planpb.Expr{
-		Expr: &planpb.Expr_Col{
-			Col: &planpb.ColRef{ColPos: 1},
-		},
-	}
-	if exprBased {
-		right = &planpb.Expr{
-			Expr: &planpb.Expr_Lit{
-				Lit: &planpb.Literal{Value: &planpb.Literal_U64Val{U64Val: 1}},
-			},
-		}
-	}
-	return &planpb.Node{
-		NodeType: planpb.Node_JOIN,
-		Stats: &planpb.Stats{
-			HashmapStats: &planpb.HashMapStats{
-				Shuffle:       true,
-				ShuffleColIdx: 0,
-			},
-		},
-		OnList: []*planpb.Expr{
-			{
-				Expr: &planpb.Expr_F{
-					F: &planpb.Function{
-						Args: []*planpb.Expr{
-							{
-								Expr: &planpb.Expr_Col{
-									Col: &planpb.ColRef{ColPos: 0},
-								},
-							},
-							right,
-						},
-					},
-				},
-			},
-		},
-	}
-}
-
-func makeIvfEntriesOrderByLimitParamForStatsTest() *planpb.IndexReaderParam {
-	return &planpb.IndexReaderParam{
-		OrderBy:      []*planpb.OrderBySpec{{Expr: &planpb.Expr{}}},
-		Limit:        makeLimitExprForStatsTest(),
-		OrigFuncName: "l2_distance",
 	}
 }
 
@@ -454,465 +1046,996 @@ func TestGetExecType_NonVectorTable_NotForcedByRowsize(t *testing.T) {
 	}
 }
 
-func TestGetExecType_IvfSearchEntries_InternalIndexReaderScanUsesMultiCNEvenWithTinyStats(t *testing.T) {
-	q := makeQueryWithScanStats(
-		catalog.SystemSI_IVFFLAT_TblType_Entries,
-		1,
-		1,
-		1,
-	)
-	q.Nodes[0].IndexReaderParam = makeIvfEntriesOrderByLimitParamForStatsTest()
-
-	got := GetExecType(q, false, false)
-
-	require.Equal(t, ExecTypeAP_MULTICN, got)
-}
-
-func TestGetExecType_IvfSearchEntries_InternalIndexReaderScanDoesNotRequireStatsEstimate(t *testing.T) {
-	q := makeQueryWithScanStats(
-		catalog.SystemSI_IVFFLAT_TblType_Entries,
-		0,
-		0,
-		1,
-	)
-	q.Nodes[0].IndexReaderParam = makeIvfEntriesOrderByLimitParamForStatsTest()
-
-	got := GetExecType(q, false, false)
-
-	require.Equal(t, ExecTypeAP_MULTICN, got)
-}
-
-func TestGetExecType_IvfSearchEntries_RowsizeShortcutDoesNotDowngradeMultiCN(t *testing.T) {
-	q := makeQueryWithScanStats(
-		catalog.SystemSI_IVFFLAT_TblType_Entries,
-		float64(RowSizeThreshold+1),
-		1,
-		LargeBlockThresholdForOneCN+1,
-	)
-	q.Nodes[0].IndexReaderParam = makeIvfEntriesOrderByLimitParamForStatsTest()
-
-	got := GetExecType(q, false, false)
-
-	require.Equal(t, ExecTypeAP_MULTICN, got)
-}
-
-func TestGetExecType_IvfSearchEntries_InternalIndexReaderScanMultiCNCappedForDDL(t *testing.T) {
-	q := makeQueryWithScanStats(
-		catalog.SystemSI_IVFFLAT_TblType_Entries,
-		1,
-		1,
-		1,
-	)
-	q.Nodes[0].IndexReaderParam = makeIvfEntriesOrderByLimitParamForStatsTest()
-
-	got := GetExecType(q, true, false)
-
-	require.Equal(t, ExecTypeAP_ONECN, got)
-}
-
-func TestGetExecType_IvfSearchFunctionScanUsesMultiCNEvenWithTinyStats(t *testing.T) {
-	q := &planpb.Query{
-		Nodes: []*planpb.Node{
-			makeFunctionScanForStatsTest(ivfflatplan.IVFFLATSearchFuncName, makeLimitExprForStatsTest()),
-		},
+func TestGetExecType_VectorIndexScanUsesMultiCN(t *testing.T) {
+	query := &planpb.Query{
 		Steps: []int32{0},
+		Nodes: []*planpb.Node{{
+			NodeId:          0,
+			NodeType:        planpb.Node_VECTOR_INDEX_SCAN,
+			Stats:           &planpb.Stats{BlockNum: 1, Cost: 1, Outcnt: 1},
+			VectorIndexScan: &planpb.VectorIndexScan{},
+		}},
 	}
-
-	got := GetExecType(q, false, false)
-
-	require.Equal(t, ExecTypeAP_MULTICN, got)
+	require.Equal(t, ExecTypeAP_MULTICN, GetExecType(query, false, false))
 }
 
-func TestGetExecType_IvfSearchFunctionScanMultiCNCappedForDDL(t *testing.T) {
-	q := &planpb.Query{
-		Nodes: []*planpb.Node{
-			makeFunctionScanForStatsTest(ivfflatplan.IVFFLATSearchFuncName, makeLimitExprForStatsTest()),
-		},
-		Steps: []int32{0},
-	}
-
-	got := GetExecType(q, true, false)
-
-	require.Equal(t, ExecTypeAP_ONECN, got)
-}
-
-func TestGetExecType_IvfSearchFunctionScanRespectsForceOneCN(t *testing.T) {
-	q := &planpb.Query{
-		Nodes: []*planpb.Node{
-			makeFunctionScanForStatsTest(ivfflatplan.IVFFLATSearchFuncName, makeLimitExprForStatsTest()),
-		},
-		Steps: []int32{0},
-	}
-	q.Nodes[0].Stats.ForceOneCN = true
-
-	got := GetExecType(q, false, false)
-
-	require.Equal(t, ExecTypeAP_ONECN, got)
-}
-
-func TestGetExecType_IvfSearchFunctionScanWithNormalShuffleIsTraversalOrderIndependent(t *testing.T) {
-	tests := []struct {
-		name     string
-		ivfFirst bool
-	}{
-		{name: "ivf before shuffle", ivfFirst: true},
-		{name: "shuffle before ivf"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ivf := makeFunctionScanForStatsTest(ivfflatplan.IVFFLATSearchFuncName, makeLimitExprForStatsTest())
-			shuffle := makeShuffleJoinForStatsTest(false)
-			nodes := []*planpb.Node{shuffle, ivf}
-			if tt.ivfFirst {
-				nodes = []*planpb.Node{ivf, shuffle}
-			}
-			q := &planpb.Query{Nodes: nodes, Steps: []int32{0}}
-
-			got := GetExecType(q, false, false)
-
-			require.Equal(t, ExecTypeAP_MULTICN, got)
-		})
-	}
-}
-
-func TestGetExecType_IvfSearchFunctionScanWithShuffleKeepsHardOneCNBlockers(t *testing.T) {
-	tests := []struct {
-		name             string
-		txnHaveDDL       bool
-		exprBasedShuffle bool
-		forceOneCN       bool
-	}{
-		{name: "transaction DDL or write restriction", txnHaveDDL: true},
-		{name: "expression based shuffle", exprBasedShuffle: true},
-		{name: "explicit ForceOneCN", forceOneCN: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ivf := makeFunctionScanForStatsTest(ivfflatplan.IVFFLATSearchFuncName, makeLimitExprForStatsTest())
-			ivf.Stats.ForceOneCN = tt.forceOneCN
-			q := &planpb.Query{
-				Nodes: []*planpb.Node{ivf, makeShuffleJoinForStatsTest(tt.exprBasedShuffle)},
-				Steps: []int32{0},
-			}
-
-			got := GetExecType(q, tt.txnHaveDDL, false)
-
-			require.Equal(t, ExecTypeAP_ONECN, got)
-		})
-	}
-}
-
-func TestGetExecType_ForceOneCNPrecedesLargeStatsForEveryTraversalOrder(t *testing.T) {
-	largeScan := func(forceOneCN bool) *planpb.Node {
-		return &planpb.Node{
-			NodeType: planpb.Node_TABLE_SCAN,
-			TableDef: &planpb.TableDef{},
-			Stats: &planpb.Stats{
-				BlockNum:   int32(BlockThresholdForOneCN + 1),
-				Cost:       float64(costThresholdForOneCN + 1),
-				ForceOneCN: forceOneCN,
-			},
+func TestGetExecType_VectorIndexScanRespectsOneCNAndDDL(t *testing.T) {
+	makeQuery := func(force bool) *planpb.Query {
+		return &planpb.Query{
+			Steps: []int32{0},
+			Nodes: []*planpb.Node{{
+				NodeId:          0,
+				NodeType:        planpb.Node_VECTOR_INDEX_SCAN,
+				Stats:           &planpb.Stats{BlockNum: 1, Cost: 1, Outcnt: 1, ForceOneCN: force},
+				VectorIndexScan: &planpb.VectorIndexScan{},
+			}},
 		}
 	}
-	forcedIvf := func() *planpb.Node {
-		n := makeFunctionScanForStatsTest(ivfflatplan.IVFFLATSearchFuncName, makeLimitExprForStatsTest())
-		n.Stats.ForceOneCN = true
-		return n
-	}
-
-	tests := []struct {
-		name  string
-		nodes []*planpb.Node
-	}{
-		{name: "large ordinary scan before forced IVF", nodes: []*planpb.Node{largeScan(false), forcedIvf()}},
-		{name: "forced IVF before large ordinary scan", nodes: []*planpb.Node{forcedIvf(), largeScan(false)}},
-		{name: "large forced IVF scan", nodes: []*planpb.Node{func() *planpb.Node {
-			n := forcedIvf()
-			n.Stats.BlockNum = int32(BlockThresholdForOneCN + 1)
-			n.Stats.Cost = float64(costThresholdForOneCN + 1)
-			return n
-		}()}},
-		{name: "large forced ordinary scan", nodes: []*planpb.Node{largeScan(true)}},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := GetExecType(&planpb.Query{Nodes: tt.nodes, Steps: []int32{0}}, false, false)
-			require.Equal(t, ExecTypeAP_ONECN, got)
-		})
-	}
+	require.Equal(t, ExecTypeAP_ONECN, GetExecType(makeQuery(true), false, false))
+	require.Equal(t, ExecTypeAP_ONECN, GetExecType(makeQuery(false), true, false))
 }
 
-func TestGetExecType_ProductionIvfPlanShapeUsesMultiCNWithoutHint(t *testing.T) {
-	baseScan := &planpb.Node{
-		NodeType: planpb.Node_TABLE_SCAN,
-		TableDef: &planpb.TableDef{},
-		Stats: &planpb.Stats{
-			BlockNum: 50,
-			Cost:     400010,
+func TestDetermineBuildSidePreservesDeclaredRuntimeFilterDependency(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false), false, true)
+	builder.qry.Nodes = []*planpb.Node{
+		{NodeId: 0, NodeType: planpb.Node_VECTOR_INDEX_SCAN, Stats: &planpb.Stats{Outcnt: 2}},
+		{NodeId: 1, NodeType: planpb.Node_TABLE_SCAN, Stats: &planpb.Stats{Outcnt: 100}},
+		{
+			NodeId:                 2,
+			NodeType:               planpb.Node_JOIN,
+			JoinType:               planpb.Node_INNER,
+			Children:               []int32{0, 1},
+			Stats:                  &planpb.Stats{HashmapStats: &planpb.HashMapStats{}},
+			RuntimeFilterBuildList: []*planpb.RuntimeFilterSpec{{Tag: 1, UseMembershipFilter: true}},
 		},
 	}
-	ivf := makeFunctionScanForStatsTest(ivfflatplan.IVFFLATSearchFuncName, makeLimitExprForStatsTest())
-	ivf.Stats.Cost = 0
-	join := makeShuffleJoinForStatsTest(false)
-	join.Stats.BlockNum = 50
-	join.Stats.Cost = 400010
+	builder.determineBuildAndProbeSide(2, false)
+	require.Equal(t, []int32{0, 1}, builder.qry.Nodes[2].Children)
+	require.False(t, builder.qry.Nodes[2].IsRightJoin)
+}
 
-	for _, nodes := range [][]*planpb.Node{
-		{baseScan, ivf, join},
-		{baseScan, join, ivf},
-		{join, ivf, baseScan},
-		{join, baseScan, ivf},
-		{ivf, baseScan, join},
-		{ivf, join, baseScan},
+func TestGuardedDiagnosticKeepsLoopJoinSupportedOrientation(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	intType := planpb.Type{Id: int32(types.T_int64)}
+	timeType := planpb.Type{Id: int32(types.T_time)}
+	leftTag, rightTag := int32(10), int32(20)
+	bind := func(name string, args ...*planpb.Expr) *planpb.Expr {
+		expr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), name, args)
+		require.NoError(t, err)
+		return expr
+	}
+	key := bind("=", GetColExpr(intType, leftTag, 0), GetColExpr(intType, rightTag, 0))
+	invalidTime := bind("time", makePlan2StringConstExprWithType("900:00:00"))
+	guard := bind("case",
+		bind("=", GetColExpr(intType, leftTag, 0), makePlan2Int64ConstExprWithType(1)),
+		bind(">", GetColExpr(timeType, leftTag, 1), invalidTime),
+		makePlan2BoolConstExprWithType(true))
+	require.True(t, ContainsGuardedJoinDiagnostic(ctx.GetProcess(), guard))
+
+	for _, joinType := range []planpb.Node_JoinType{
+		planpb.Node_LEFT, planpb.Node_SEMI, planpb.Node_ANTI, planpb.Node_SINGLE,
 	} {
-		got := GetExecType(&planpb.Query{Nodes: nodes, Steps: []int32{0}}, false, false)
-		require.Equal(t, ExecTypeAP_MULTICN, got)
-	}
-}
+		t.Run(joinType.String(), func(t *testing.T) {
+			builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, true)
+			builder.qry.Nodes = []*planpb.Node{
+				{NodeId: 0, NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{leftTag}, Stats: &planpb.Stats{Outcnt: 1}},
+				{NodeId: 1, NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{rightTag}, Stats: &planpb.Stats{Outcnt: 100}},
+				{NodeId: 2, NodeType: planpb.Node_JOIN, JoinType: joinType, Children: []int32{0, 1},
+					OnList: []*planpb.Expr{key}, Stats: &planpb.Stats{HashmapStats: &planpb.HashMapStats{}}},
+			}
+			builder.determineBuildAndProbeSide(2, false)
+			require.True(t, builder.qry.Nodes[2].IsRightJoin, "ordinary equijoin retains its cost choice")
 
-func TestGetExecType_IvfSearchEntries_MultiCNCappedForExprBasedShuffle(t *testing.T) {
-	q := makeQueryWithScanStats(
-		catalog.SystemSI_IVFFLAT_TblType_Entries,
-		1,
-		1,
-		1,
-		&planpb.Node{
-			NodeType: planpb.Node_JOIN,
-			Stats: &planpb.Stats{
-				HashmapStats: &planpb.HashMapStats{
-					Shuffle:       true,
-					ShuffleColIdx: 0,
-				},
-			},
-			OnList: []*planpb.Expr{
-				{
-					Expr: &planpb.Expr_F{
-						F: &planpb.Function{
-							Args: []*planpb.Expr{
-								{
-									Expr: &planpb.Expr_Col{
-										Col: &planpb.ColRef{ColPos: 0},
-									},
-								},
-								{
-									Expr: &planpb.Expr_Lit{
-										Lit: &planpb.Literal{Value: &planpb.Literal_U64Val{U64Val: 1}},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	)
-	q.Nodes[0].IndexReaderParam = makeIvfEntriesOrderByLimitParamForStatsTest()
-
-	got := GetExecType(q, false, false)
-
-	require.Equal(t, ExecTypeAP_ONECN, got)
-}
-
-func TestGetExecType_IvfSearchEntries_MultiCNCappedForDDLEvenWithManyBlocks(t *testing.T) {
-	q := makeQueryWithScanStats(
-		catalog.SystemSI_IVFFLAT_TblType_Entries,
-		float64(RowSizeThreshold+1),
-		500*1024,
-		LargeBlockThresholdForMultiCN+1,
-	)
-	q.Nodes[0].IndexReaderParam = makeIvfEntriesOrderByLimitParamForStatsTest()
-
-	got := GetExecType(q, true, false)
-
-	require.Equal(t, ExecTypeAP_ONECN, got)
-}
-
-func TestGetExecType_IvfSearchEntries_InternalIndexReaderScanRequiresSearchShape(t *testing.T) {
-	tests := []struct {
-		name  string
-		param *planpb.IndexReaderParam
-	}{
-		{
-			name: "nil index reader param",
-		},
-		{
-			name:  "limit only is not enough",
-			param: &planpb.IndexReaderParam{Limit: makeLimitExprForStatsTest()},
-		},
-		{
-			name:  "order only is not enough",
-			param: &planpb.IndexReaderParam{OrderBy: []*planpb.OrderBySpec{{Expr: &planpb.Expr{}}}},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			q := makeQueryWithScanStats(
-				catalog.SystemSI_IVFFLAT_TblType_Entries,
-				1,
-				1,
-				1,
-			)
-			q.Nodes[0].IndexReaderParam = tt.param
-
-			got := GetExecType(q, false, false)
-
-			require.Equal(t, ExecTypeTP, got)
+			builder.qry.Nodes[2].OnList = []*planpb.Expr{key, guard}
+			builder.determineBuildAndProbeSide(2, false)
+			require.False(t, builder.qry.Nodes[2].IsRightJoin)
+			builder.swapJoinChildren(2)
+			require.Equal(t, []int32{0, 1}, builder.qry.Nodes[2].Children)
+			require.Equal(t, joinType, builder.qry.Nodes[2].JoinType)
 		})
 	}
+
+	param := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_P{
+		P: &planpb.ParamRef{Pos: 0},
+	}}
+	params := vector.NewVec(types.T_text.ToType())
+	proc := ctx.GetProcess()
+	defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+	require.NoError(t, vector.AppendBytes(params, []byte("00:00:01"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+	preparedGuard := bind("case",
+		bind("=", GetColExpr(intType, leftTag, 0), makePlan2Int64ConstExprWithType(1)),
+		bind(">", GetColExpr(timeType, leftTag, 1), bind("time", param)),
+		makePlan2BoolConstExprWithType(true))
+	require.True(t, ContainsGuardedJoinDiagnostic(proc, preparedGuard))
+	for _, joinType := range []planpb.Node_JoinType{
+		planpb.Node_LEFT, planpb.Node_SEMI, planpb.Node_ANTI, planpb.Node_SINGLE,
+	} {
+		builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, true)
+		builder.qry.Nodes = []*planpb.Node{
+			{NodeId: 0, NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{leftTag}, Stats: &planpb.Stats{Outcnt: 1}},
+			{NodeId: 1, NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{rightTag}, Stats: &planpb.Stats{Outcnt: 100}},
+			{NodeId: 2, NodeType: planpb.Node_JOIN, JoinType: joinType, Children: []int32{0, 1},
+				OnList: []*planpb.Expr{key, preparedGuard}, Stats: &planpb.Stats{HashmapStats: &planpb.HashMapStats{}}},
+		}
+		builder.qry.Steps = []int32{2}
+		safe, err := ProbePreparedJoinParameterDiagnostics(proc, &Plan{Plan: &planpb.Plan_Query{Query: builder.qry}})
+		require.NoError(t, err)
+		require.True(t, safe)
+		builder.preparedBindingProof = &safe
+		builder.determineBuildAndProbeSide(2, false)
+		require.True(t, builder.qry.Nodes[2].IsRightJoin, "%s safe prepared operand restores cost choice", joinType)
+	}
 }
 
-func TestGetExecType_IvfSearchEntries_FunctionScanDoesNotPromoteUnrelatedEntriesScan(t *testing.T) {
-	searchNode := makeFunctionScanForStatsTest("generate_series", makeLimitExprForStatsTest())
-	q := makeQueryWithScanStats(
-		catalog.SystemSI_IVFFLAT_TblType_Entries,
-		1,
-		1,
-		1,
-		searchNode,
+func TestDetermineBuildSideCostsUnfilteredIndexByRetainedBytes(t *testing.T) {
+	const (
+		indexNodeID    int32 = 0
+		dataScanNodeID int32 = 1
+		dataNodeID     int32 = 2
+		joinNodeID     int32 = 3
 	)
 
-	got := GetExecType(q, false, false)
+	newBuilder := func(indexRows, indexRowSize, dataRows, dataRowSize float64, filteredIndex bool) *QueryBuilder {
+		statsCache := NewStatsCache()
+		dataStats := NewStatsInfo()
+		dataStats.TableCnt = dataRows
+		dataStats.SizeMap = map[string]uint64{
+			"id":      uint64(dataRows * 8),
+			"payload": uint64(dataRows * max(dataRowSize-32, 0)),
+		}
+		statsCache.Set(1, dataStats)
+		indexStats := NewStatsInfo()
+		indexStats.TableCnt = indexRows
+		indexStats.SizeMap = map[string]uint64{
+			catalog.IndexTableIndexColName: uint64(indexRows * max(indexRowSize-24, 0)),
+		}
+		statsCache.Set(2, indexStats)
+		ctx := &statsCacheCompilerContext{
+			MockCompilerContext: NewMockCompilerContext(false),
+			statsCache:          statsCache,
+		}
+		builder := NewQueryBuilder(planpb.Query_UPDATE, ctx, false, true)
+		dataCols := []*planpb.ColDef{
+			{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+			{Name: "payload", Typ: planpb.Type{Id: int32(types.T_varchar), Width: 2_454}},
+			{Name: catalog.Row_ID, Typ: planpb.Type{Id: int32(types.T_Rowid), Width: 16}, Hidden: true},
+		}
+		dataProject := make([]*planpb.Expr, len(dataCols))
+		for i, col := range dataCols {
+			dataProject[i] = &planpb.Expr{
+				Typ: col.Typ,
+				Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+					RelPos: 10, ColPos: int32(i),
+				}},
+			}
+		}
+		indexNode := &planpb.Node{
+			NodeId:   indexNodeID,
+			NodeType: planpb.Node_TABLE_SCAN,
+			TableDef: &planpb.TableDef{
+				TblId:     2,
+				Name:      catalog.SecondaryIndexTableNamePrefix + "build_cost",
+				TableType: catalog.SystemIndexRel,
+				Cols: []*planpb.ColDef{
+					{Name: catalog.IndexTableIndexColName, Typ: planpb.Type{Id: int32(types.T_varchar)}},
+					{Name: catalog.Row_ID, Typ: planpb.Type{Id: int32(types.T_Rowid)}, Hidden: true},
+				},
+			},
+			Stats: &planpb.Stats{Outcnt: indexRows, Rowsize: indexRowSize},
+		}
+		if filteredIndex {
+			indexNode.FilterList = []*planpb.Expr{{}}
+		}
+		builder.qry.Nodes = []*planpb.Node{
+			indexNode,
+			{
+				NodeId:      dataScanNodeID,
+				NodeType:    planpb.Node_TABLE_SCAN,
+				BindingTags: []int32{10},
+				TableDef:    &planpb.TableDef{TblId: 1, Name: "data", TableType: catalog.SystemOrdinaryRel, Cols: dataCols},
+				Stats:       &planpb.Stats{Outcnt: dataRows, Rowsize: dataRowSize},
+			},
+			{
+				NodeId:      dataNodeID,
+				NodeType:    planpb.Node_PROJECT,
+				Children:    []int32{dataScanNodeID},
+				ProjectList: dataProject,
+				Stats:       &planpb.Stats{Outcnt: dataRows, Rowsize: 100},
+			},
+			{
+				NodeId:   joinNodeID,
+				NodeType: planpb.Node_JOIN,
+				JoinType: planpb.Node_INNER,
+				Children: []int32{indexNodeID, dataNodeID},
+				Stats:    &planpb.Stats{HashmapStats: &planpb.HashMapStats{}},
+			},
+		}
+		builder.tag2NodeID[10] = dataScanNodeID
+		return builder
+	}
 
-	require.Equal(t, ExecTypeTP, got)
+	t.Run("equal rows build narrow index", func(t *testing.T) {
+		builder := newBuilder(20_000_000, 32, 20_000_000, 2_454, false)
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{dataNodeID, indexNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("project default width does not hide wider retained target", func(t *testing.T) {
+		builder := newBuilder(100_000, 295, 100_000, 2_312, false)
+		require.Equal(t, float64(100), builder.qry.Nodes[dataNodeID].Stats.Rowsize)
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{dataNodeID, indexNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("project default width does not exaggerate narrow target", func(t *testing.T) {
+		builder := newBuilder(100_000, 32, 100_000, 12, false)
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("index output rowid prevents narrow target regression", func(t *testing.T) {
+		builder := newBuilder(100_000, 32, 100_000, 40, false)
+		indexStats := builder.getStatsInfoByTableID(2).GetStats()
+		indexStats.SizeMap[catalog.IndexTableIndexColName] = 100_000 * 24
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("rewritten wide value is not costed from its old scan width", func(t *testing.T) {
+		builder := newBuilder(100_000, 295, 100_000, 2_312, false)
+		builder.qry.Nodes[dataNodeID].ProjectList[1] = &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_varchar), Width: 2_454},
+		}
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("nested direct projections retain target lineage", func(t *testing.T) {
+		builder := newBuilder(100_000, 295, 100_000, 2_312, false)
+		outerProjectID := int32(len(builder.qry.Nodes))
+		outerProject := &planpb.Node{
+			NodeId:      outerProjectID,
+			NodeType:    planpb.Node_PROJECT,
+			Children:    []int32{dataNodeID},
+			BindingTags: []int32{11},
+			Stats:       &planpb.Stats{Outcnt: 100_000, Rowsize: 100},
+		}
+		for i, expr := range builder.qry.Nodes[dataNodeID].ProjectList {
+			outerProject.ProjectList = append(outerProject.ProjectList, &planpb.Expr{
+				Typ: expr.Typ,
+				Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+					RelPos: 11, ColPos: int32(i),
+				}},
+			})
+		}
+		builder.qry.Nodes = append(builder.qry.Nodes, outerProject)
+		builder.tag2NodeID[11] = dataNodeID
+		builder.qry.Nodes[joinNodeID].Children[1] = outerProjectID
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{outerProjectID, indexNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("projection that drops target schema keeps existing policy", func(t *testing.T) {
+		builder := newBuilder(100_000, 32, 100_000, 2_312, false)
+		builder.qry.Nodes[dataNodeID].ProjectList = builder.qry.Nodes[dataNodeID].ProjectList[:1]
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("projection with mismatched target type keeps existing policy", func(t *testing.T) {
+		builder := newBuilder(100_000, 32, 100_000, 2_312, false)
+		builder.qry.Nodes[dataNodeID].ProjectList[1].Typ.Width++
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("cyclic and malformed projection lineage is bounded", func(t *testing.T) {
+		for _, test := range []struct {
+			name   string
+			mutate func(*QueryBuilder)
+			want   []int32
+		}{
+			{name: "cyclic project", mutate: func(builder *QueryBuilder) {
+				builder.qry.Nodes[dataNodeID].Children[0] = dataNodeID
+			}, want: []int32{indexNodeID, dataNodeID}},
+			{name: "invalid binding", mutate: func(builder *QueryBuilder) {
+				builder.tag2NodeID[10] = int32(len(builder.qry.Nodes) + 1)
+			}, want: []int32{indexNodeID, dataNodeID}},
+			{name: "one invalid slot leaves a valid lower bound", mutate: func(builder *QueryBuilder) {
+				builder.qry.Nodes[dataNodeID].ProjectList[0].GetCol().ColPos = 1_000
+			}, want: []int32{dataNodeID, indexNodeID}},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				builder := newBuilder(100_000, 32, 100_000, 2_312, false)
+				test.mutate(builder)
+				builder.determineBuildAndProbeSide(joinNodeID, false)
+				require.Equal(t, test.want, builder.qry.Nodes[joinNodeID].Children)
+			})
+		}
+	})
+
+	t.Run("many narrow target columns accumulate retained width", func(t *testing.T) {
+		builder := newBuilder(1_000, 64, 1_000, 32, false)
+		scan := builder.qry.Nodes[dataScanNodeID]
+		project := builder.qry.Nodes[dataNodeID]
+		rowIDCol := scan.TableDef.Cols[len(scan.TableDef.Cols)-1]
+		scan.TableDef.Cols = scan.TableDef.Cols[:len(scan.TableDef.Cols)-1]
+		for i := 0; i < 64; i++ {
+			scan.TableDef.Cols = append(scan.TableDef.Cols, &planpb.ColDef{
+				Name: "fixed", Typ: planpb.Type{Id: int32(types.T_int64)},
+			})
+		}
+		scan.TableDef.Cols = append(scan.TableDef.Cols, rowIDCol)
+		project.ProjectList = make([]*planpb.Expr, len(scan.TableDef.Cols))
+		for i, col := range scan.TableDef.Cols {
+			project.ProjectList[i] = &planpb.Expr{
+				Typ: col.Typ,
+				Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+					RelPos: 10, ColPos: int32(i),
+				}},
+			}
+		}
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{dataNodeID, indexNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("complete index schema is an upper bound", func(t *testing.T) {
+		for _, test := range []struct {
+			name     string
+			extraCol *planpb.ColDef
+		}{
+			{name: "observed wide extra column", extraCol: &planpb.ColDef{Name: "extra", Typ: planpb.Type{Id: int32(types.T_varchar)}}},
+			{name: "nil column", extraCol: nil},
+			{name: "unknown future column", extraCol: &planpb.ColDef{Name: "future", Typ: planpb.Type{Id: 255}}},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				builder := newBuilder(1_000, 64, 1_000, 128, false)
+				builder.qry.Nodes[indexNodeID].TableDef.Cols = append(builder.qry.Nodes[indexNodeID].TableDef.Cols, test.extraCol)
+				if test.extraCol != nil && test.extraCol.Name == "extra" {
+					builder.getStatsInfoByTableID(2).GetStats().SizeMap[test.extraCol.Name] = 1_000 * 256
+				}
+				builder.determineBuildAndProbeSide(joinNodeID, false)
+				require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+			})
+		}
+	})
+
+	t.Run("missing variable-width index stats keep existing policy", func(t *testing.T) {
+		builder := newBuilder(100_000, 32, 100_000, 2_312, false)
+		delete(builder.getStatsInfoByTableID(2).GetStats().SizeMap, catalog.IndexTableIndexColName)
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("unknown target width still supplies a safe lower bound", func(t *testing.T) {
+		builder := newBuilder(100_000, 25, 100_000, 2_312, false)
+		delete(builder.getStatsInfoByTableID(1).GetStats().SizeMap, "payload")
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{dataNodeID, indexNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("zero variable-width index stats keep existing policy", func(t *testing.T) {
+		builder := newBuilder(100_000, 24, 100_000, 2_312, false)
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("fixed target type falls back to physical width", func(t *testing.T) {
+		builder := newBuilder(100_000, 32, 100_000, 40, false)
+		builder.qry.Nodes[dataScanNodeID].TableDef.Cols[1].Typ = planpb.Type{Id: int32(types.T_int64)}
+		builder.qry.Nodes[dataNodeID].ProjectList[1].Typ = planpb.Type{Id: int32(types.T_int64)}
+		delete(builder.getStatsInfoByTableID(1).GetStats().SizeMap, "payload")
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{dataNodeID, indexNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("unavailable scan stats keep existing policy", func(t *testing.T) {
+		builder := newBuilder(1_000, 32, 1_000, 2_312, false)
+		builder.qry.Nodes[dataScanNodeID].Stats = DefaultStats()
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("default target root stats keep existing policy", func(t *testing.T) {
+		builder := newBuilder(1_000, 32, 1_000, 2_312, false)
+		builder.qry.Nodes[dataNodeID].Stats = DefaultStats()
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("unavailable index stats keep existing policy", func(t *testing.T) {
+		builder := newBuilder(1_000, 32, 1_000, 2_312, false)
+		builder.qry.Nodes[indexNodeID].Stats = DefaultStats()
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("secondary index identity follows reserved catalog name", func(t *testing.T) {
+		builder := newBuilder(20_000_000, 32, 20_000_000, 2_454, false)
+		builder.qry.Nodes[indexNodeID].TableDef.TableType = catalog.SystemOrdinaryRel
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{dataNodeID, indexNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("stale larger index cardinality does not suppress width win", func(t *testing.T) {
+		builder := newBuilder(20_000_000, 32, 1_000_000, 2_454, false)
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{dataNodeID, indexNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("stale larger right index cardinality does not undo width win", func(t *testing.T) {
+		builder := newBuilder(20_000_000, 32, 1_000_000, 2_454, false)
+		builder.qry.Nodes[joinNodeID].Children = []int32{dataNodeID, indexNodeID}
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{dataNodeID, indexNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("dominating right index remains build side", func(t *testing.T) {
+		builder := newBuilder(20_000_000, 32, 20_000_000, 2_454, false)
+		builder.qry.Nodes[joinNodeID].Children = []int32{dataNodeID, indexNodeID}
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{dataNodeID, indexNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("equal narrow widths preserve target build despite stale rows", func(t *testing.T) {
+		builder := newBuilder(20_000_000, 32, 10, 32, false)
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("filtered index keeps existing cardinality policy", func(t *testing.T) {
+		builder := newBuilder(20, 32, 20, 2_454, true)
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("block-filtered index keeps existing cardinality policy", func(t *testing.T) {
+		builder := newBuilder(20, 32, 20, 2_454, false)
+		builder.qry.Nodes[indexNodeID].BlockFilterList = []*planpb.Expr{{}}
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("paginated index keeps existing cardinality policy", func(t *testing.T) {
+		builder := newBuilder(20, 32, 20, 2_454, false)
+		builder.qry.Nodes[indexNodeID].Limit = makePlan2Int64ConstExprWithType(10)
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("offset index keeps existing cardinality policy", func(t *testing.T) {
+		builder := newBuilder(20, 32, 20, 2_454, false)
+		builder.qry.Nodes[indexNodeID].Offset = makePlan2Int64ConstExprWithType(10)
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("filtered target keeps existing cardinality policy", func(t *testing.T) {
+		builder := newBuilder(20, 32, 20, 2_454, false)
+		builder.qry.Nodes[dataScanNodeID].FilterList = []*planpb.Expr{{}}
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("literal true filters remain unrestricted", func(t *testing.T) {
+		for _, test := range []struct {
+			name        string
+			filterIndex bool
+		}{
+			{name: "target", filterIndex: false},
+			{name: "index", filterIndex: true},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				builder := newBuilder(20, 32, 20, 2_454, false)
+				if test.filterIndex {
+					builder.qry.Nodes[indexNodeID].FilterList = []*planpb.Expr{MakePlan2BoolConstExprWithType(true)}
+				} else {
+					builder.qry.Nodes[dataScanNodeID].FilterList = []*planpb.Expr{MakePlan2BoolConstExprWithType(true)}
+				}
+				builder.determineBuildAndProbeSide(joinNodeID, false)
+				require.Equal(t, []int32{dataNodeID, indexNodeID}, builder.qry.Nodes[joinNodeID].Children)
+			})
+		}
+	})
+
+	t.Run("literal false and mixed filters remain selective", func(t *testing.T) {
+		for _, test := range []struct {
+			name    string
+			filters []*planpb.Expr
+		}{
+			{name: "false", filters: []*planpb.Expr{MakePlan2BoolConstExprWithType(false)}},
+			{name: "true and false", filters: []*planpb.Expr{MakePlan2BoolConstExprWithType(true), MakePlan2BoolConstExprWithType(false)}},
+			{name: "nil", filters: []*planpb.Expr{nil}},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				builder := newBuilder(20, 32, 20, 2_454, false)
+				builder.qry.Nodes[dataScanNodeID].FilterList = test.filters
+				builder.determineBuildAndProbeSide(joinNodeID, false)
+				require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+			})
+		}
+	})
+
+	t.Run("block-filtered target keeps existing cardinality policy", func(t *testing.T) {
+		builder := newBuilder(20, 32, 20, 2_454, false)
+		builder.qry.Nodes[dataScanNodeID].BlockFilterList = []*planpb.Expr{{}}
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("paginated target keeps existing cardinality policy", func(t *testing.T) {
+		builder := newBuilder(20, 32, 20, 2_454, false)
+		builder.qry.Nodes[dataNodeID].Limit = makePlan2Int64ConstExprWithType(10)
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("offset target keeps existing cardinality policy", func(t *testing.T) {
+		builder := newBuilder(20, 32, 20, 2_454, false)
+		builder.qry.Nodes[dataNodeID].Offset = makePlan2Int64ConstExprWithType(10)
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("joined update target keeps existing cardinality policy", func(t *testing.T) {
+		builder := newBuilder(20, 32, 20, 2_454, false)
+		joinedScanID := int32(len(builder.qry.Nodes))
+		builder.qry.Nodes = append(builder.qry.Nodes, &planpb.Node{
+			NodeId: joinedScanID, NodeType: planpb.Node_TABLE_SCAN,
+			TableDef: &planpb.TableDef{Name: "joined", TableType: catalog.SystemOrdinaryRel},
+			Stats:    &planpb.Stats{Outcnt: 20, Rowsize: 32},
+		})
+		joinedInputID := int32(len(builder.qry.Nodes))
+		builder.qry.Nodes = append(builder.qry.Nodes, &planpb.Node{
+			NodeId: joinedInputID, NodeType: planpb.Node_JOIN, JoinType: planpb.Node_INNER,
+			Children: []int32{dataScanNodeID, joinedScanID},
+			Stats:    &planpb.Stats{Outcnt: 20, Rowsize: 2_454, HashmapStats: &planpb.HashMapStats{}},
+		})
+		builder.qry.Nodes[dataNodeID].Children = []int32{joinedInputID}
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("prior secondary maintenance join remains eligible", func(t *testing.T) {
+		builder := newBuilder(20, 32, 20, 2_454, false)
+		priorIndexID := int32(len(builder.qry.Nodes))
+		builder.qry.Nodes = append(builder.qry.Nodes, &planpb.Node{
+			NodeId: priorIndexID, NodeType: planpb.Node_TABLE_SCAN,
+			TableDef: &planpb.TableDef{
+				Name: catalog.SecondaryIndexTableNamePrefix + "prior", TableType: catalog.SystemIndexRel,
+			},
+			Stats: &planpb.Stats{Outcnt: 20, Rowsize: 32},
+		})
+		priorJoinID := int32(len(builder.qry.Nodes))
+		builder.qry.Nodes = append(builder.qry.Nodes, &planpb.Node{
+			NodeId: priorJoinID, NodeType: planpb.Node_JOIN, JoinType: planpb.Node_INNER,
+			Children: []int32{dataNodeID, priorIndexID},
+			Stats:    &planpb.Stats{Outcnt: 20, Rowsize: 2_500, HashmapStats: &planpb.HashMapStats{}},
+		})
+		builder.qry.Nodes[joinNodeID].Children = []int32{indexNodeID, priorJoinID}
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{priorJoinID, indexNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("ordinary join keeps existing cardinality policy", func(t *testing.T) {
+		builder := newBuilder(20, 32, 20, 2_454, false)
+		builder.qry.Nodes[indexNodeID].TableDef.Name = "ordinary_table"
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("internal table cannot stand in for update target", func(t *testing.T) {
+		builder := newBuilder(20, 32, 20, 2_454, false)
+		builder.qry.Nodes[dataScanNodeID].TableDef.Name = catalog.UniqueIndexTableNamePrefix + "not_a_target"
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("nonordinary table cannot stand in for update target", func(t *testing.T) {
+		builder := newBuilder(20, 32, 20, 2_454, false)
+		builder.qry.Nodes[dataScanNodeID].TableDef.TableType = catalog.SystemClusterRel
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("unique hidden index is outside regular secondary maintenance policy", func(t *testing.T) {
+		builder := newBuilder(20, 32, 20, 2_454, false)
+		builder.qry.Nodes[indexNodeID].TableDef.Name = catalog.UniqueIndexTableNamePrefix + "build_cost"
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("fewer index rows but wider index preserves cardinality policy", func(t *testing.T) {
+		builder := newBuilder(10, 2_454, 20, 32, false)
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{dataNodeID, indexNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("equal retained bytes preserve cardinality policy", func(t *testing.T) {
+		builder := newBuilder(20, 32, 20, 32, false)
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("statement join orientation and eligibility cross product", func(t *testing.T) {
+		stmtTypes := []planpb.Query_StatementType{
+			planpb.Query_UNKNOWN,
+			planpb.Query_SELECT,
+			planpb.Query_INSERT,
+			planpb.Query_DELETE,
+			planpb.Query_UPDATE,
+			planpb.Query_MERGE,
+		}
+		joinTypes := []planpb.Node_JoinType{
+			planpb.Node_INNER,
+			planpb.Node_LEFT,
+			planpb.Node_RIGHT,
+			planpb.Node_OUTER,
+			planpb.Node_SEMI,
+			planpb.Node_ANTI,
+			planpb.Node_SINGLE,
+			planpb.Node_MARK,
+			planpb.Node_INDEX,
+			planpb.Node_L2,
+			planpb.Node_DEDUP,
+			planpb.Node_ASOF,
+			planpb.Node_ASOF_LEFT,
+		}
+		type shape struct {
+			name                                string
+			indexWidth, targetWidth             float64
+			filterIndex, filterTarget, eligible bool
+		}
+		shapes := []shape{
+			{name: "eligible wide target", indexWidth: 32, targetWidth: 2_454, eligible: true},
+			{name: "filtered index", indexWidth: 32, targetWidth: 2_454, filterIndex: true},
+			{name: "filtered target", indexWidth: 32, targetWidth: 2_454, filterTarget: true},
+			{name: "index not narrower", indexWidth: 64, targetWidth: 64},
+		}
+
+		for _, stmtType := range stmtTypes {
+			for _, joinType := range joinTypes {
+				for _, indexOnLeft := range []bool{false, true} {
+					for _, shape := range shapes {
+						builder := newBuilder(20, shape.indexWidth, 20, shape.targetWidth, shape.filterIndex)
+						builder.qry.StmtType = stmtType
+						builder.qry.Nodes[joinNodeID].JoinType = joinType
+						if !indexOnLeft {
+							builder.qry.Nodes[joinNodeID].Children = []int32{dataNodeID, indexNodeID}
+						}
+						if shape.filterTarget {
+							builder.qry.Nodes[dataScanNodeID].FilterList = []*planpb.Expr{{}}
+						}
+
+						reference := newBuilder(20, shape.indexWidth, 20, shape.targetWidth, shape.filterIndex)
+						reference.qry.StmtType = planpb.Query_SELECT
+						reference.qry.Nodes[joinNodeID].JoinType = joinType
+						if !indexOnLeft {
+							reference.qry.Nodes[joinNodeID].Children = []int32{dataNodeID, indexNodeID}
+						}
+						if shape.filterTarget {
+							reference.qry.Nodes[dataScanNodeID].FilterList = []*planpb.Expr{{}}
+						}
+
+						builder.determineBuildAndProbeSide(joinNodeID, false)
+						reference.determineBuildAndProbeSide(joinNodeID, false)
+						context := "stmt=%s join=%s indexOnLeft=%t shape=%s"
+						args := []any{stmtType, joinType, indexOnLeft, shape.name}
+						if stmtType == planpb.Query_UPDATE && joinType == planpb.Node_INNER && shape.eligible {
+							require.Equalf(t, []int32{dataNodeID, indexNodeID}, builder.qry.Nodes[joinNodeID].Children, context, args...)
+						} else {
+							require.Equalf(t, reference.qry.Nodes[joinNodeID].Children, builder.qry.Nodes[joinNodeID].Children, context, args...)
+							require.Equalf(t, reference.qry.Nodes[joinNodeID].IsRightJoin, builder.qry.Nodes[joinNodeID].IsRightJoin, context, args...)
+						}
+					}
+				}
+			}
+		}
+	})
+
+	t.Run("eligible decision is invariant across data scale and stats drift", func(t *testing.T) {
+		for _, test := range []struct {
+			name                  string
+			indexRows, targetRows float64
+		}{
+			{name: "one row", indexRows: 1, targetRows: 1},
+			{name: "one thousand rows", indexRows: 1_000, targetRows: 1_000},
+			{name: "one million rows", indexRows: 1_000_000, targetRows: 1_000_000},
+			{name: "index stats much larger", indexRows: 1_000_000_000, targetRows: 1_000},
+			{name: "target stats much larger", indexRows: 1_000, targetRows: 1_000_000_000},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				builder := newBuilder(test.indexRows, 64, test.targetRows, 2_454, false)
+				builder.determineBuildAndProbeSide(joinNodeID, false)
+				require.Equal(t, []int32{dataNodeID, indexNodeID}, builder.qry.Nodes[joinNodeID].Children)
+			})
+		}
+	})
+
+	t.Run("retained width boundary is strict", func(t *testing.T) {
+		for _, test := range []struct {
+			name         string
+			indexRowSize float64
+			want         []int32
+		}{
+			{name: "just narrower", indexRowSize: 63.999, want: []int32{dataNodeID, indexNodeID}},
+			{name: "equal", indexRowSize: 64, want: []int32{indexNodeID, dataNodeID}},
+			{name: "just wider", indexRowSize: 64.001, want: []int32{indexNodeID, dataNodeID}},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				builder := newBuilder(1_000, test.indexRowSize, 1_000, 64, false)
+				builder.determineBuildAndProbeSide(joinNodeID, false)
+				require.Equal(t, test.want, builder.qry.Nodes[joinNodeID].Children)
+			})
+		}
+	})
+
+	t.Run("invalid width falls back to cardinality", func(t *testing.T) {
+		builder := newBuilder(10, math.NaN(), 20, 2_454, false)
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{dataNodeID, indexNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("invalid target scan row count falls back to cardinality", func(t *testing.T) {
+		builder := newBuilder(10, 32, 20, 2_454, false)
+		builder.qry.Nodes[dataScanNodeID].Stats.Outcnt = math.NaN()
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{dataNodeID, indexNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("empty index is a valid zero-byte build", func(t *testing.T) {
+		builder := newBuilder(0, 32, 20_000_000, 2_454, false)
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{dataNodeID, indexNodeID}, builder.qry.Nodes[joinNodeID].Children)
+	})
+
+	t.Run("full outer join remains directional", func(t *testing.T) {
+		builder := newBuilder(20_000_000, 32, 20_000_000, 2_454, false)
+		builder.qry.Nodes[joinNodeID].JoinType = planpb.Node_OUTER
+		builder.determineBuildAndProbeSide(joinNodeID, false)
+		require.Equal(t, []int32{indexNodeID, dataNodeID}, builder.qry.Nodes[joinNodeID].Children)
+		require.True(t, builder.qry.Nodes[joinNodeID].IsRightJoin)
+	})
 }
 
-func TestGetExecType_IvfSearchMultiCN_DoesNotApplyToOtherTableTypes(t *testing.T) {
-	q := makeQueryWithScanStats(
-		catalog.Hnsw_TblType_Storage,
-		1,
-		1,
-		1,
-	)
-	q.Nodes[0].IndexReaderParam = makeIvfEntriesOrderByLimitParamForStatsTest()
-
-	got := GetExecType(q, false, false)
-
-	require.Equal(t, ExecTypeTP, got)
-}
-
-func TestIsIvfSearchEntriesTableScan_UnhappyPaths(t *testing.T) {
-	require.False(t, isIvfSearchEntriesTableScan(nil))
-	require.False(t, isIvfSearchEntriesTableScan(&planpb.Node{NodeType: planpb.Node_VALUE_SCAN}))
-	require.False(t, isIvfSearchEntriesTableScan(&planpb.Node{
-		NodeType: planpb.Node_TABLE_SCAN,
-		TableDef: &planpb.TableDef{TableType: catalog.Hnsw_TblType_Storage},
-	}))
-	require.True(t, isIvfSearchEntriesTableScan(&planpb.Node{
-		NodeType: planpb.Node_TABLE_SCAN,
-		TableDef: &planpb.TableDef{TableType: catalog.SystemSI_IVFFLAT_TblType_Entries},
-	}))
-}
-
-func TestIsIvfEntriesIndexReaderScan_UnhappyPaths(t *testing.T) {
-	require.False(t, isIvfEntriesIndexReaderScan(&planpb.Node{}))
-	require.False(t, isIvfEntriesIndexReaderScan(&planpb.Node{
-		IndexReaderParam: &planpb.IndexReaderParam{Limit: makeLimitExprForStatsTest()},
-	}))
-	require.False(t, isIvfEntriesIndexReaderScan(&planpb.Node{
-		IndexReaderParam: &planpb.IndexReaderParam{OrderBy: []*planpb.OrderBySpec{{Expr: &planpb.Expr{}}}},
-	}))
-	require.False(t, isIvfEntriesIndexReaderScan(&planpb.Node{
-		IndexReaderParam: &planpb.IndexReaderParam{
-			OrderBy: []*planpb.OrderBySpec{{Expr: &planpb.Expr{}}},
-			Limit:   makeLimitExprForStatsTest(),
-		},
-	}))
-	require.True(t, isIvfEntriesIndexReaderScan(&planpb.Node{
-		IndexReaderParam: &planpb.IndexReaderParam{
-			OrigFuncName: "l2_distance",
-		},
-	}))
-}
-
-func TestIsIvfSearchEntriesInternalScan(t *testing.T) {
-	tests := []struct {
+func TestEstimatedHashBuildRetainedBytesRejectsUnsafeStats(t *testing.T) {
+	for _, test := range []struct {
 		name string
 		node *planpb.Node
-		want bool
 	}{
-		{
-			name: "nil node",
-		},
-		{
-			name: "wrong table type",
-			node: &planpb.Node{
-				NodeType: planpb.Node_TABLE_SCAN,
-				TableDef: &planpb.TableDef{TableType: catalog.Hnsw_TblType_Storage},
-				IndexReaderParam: &planpb.IndexReaderParam{
-					OrderBy: []*planpb.OrderBySpec{{Expr: &planpb.Expr{}}},
-					Limit:   makeLimitExprForStatsTest(),
-				},
-			},
-		},
-		{
-			name: "not table scan",
-			node: &planpb.Node{
-				NodeType: planpb.Node_VALUE_SCAN,
-				TableDef: &planpb.TableDef{TableType: catalog.SystemSI_IVFFLAT_TblType_Entries},
-				IndexReaderParam: &planpb.IndexReaderParam{
-					OrderBy: []*planpb.OrderBySpec{{Expr: &planpb.Expr{}}},
-					Limit:   makeLimitExprForStatsTest(),
-				},
-			},
-		},
-		{
-			name: "limit only is not internal search",
-			node: &planpb.Node{
-				NodeType:         planpb.Node_TABLE_SCAN,
-				TableDef:         &planpb.TableDef{TableType: catalog.SystemSI_IVFFLAT_TblType_Entries},
-				IndexReaderParam: &planpb.IndexReaderParam{Limit: makeLimitExprForStatsTest()},
-			},
-		},
-		{
-			name: "order by limit without ivf marker",
-			node: &planpb.Node{
-				NodeType: planpb.Node_TABLE_SCAN,
-				TableDef: &planpb.TableDef{TableType: catalog.SystemSI_IVFFLAT_TblType_Entries},
-				IndexReaderParam: &planpb.IndexReaderParam{
-					OrderBy: []*planpb.OrderBySpec{{Expr: &planpb.Expr{}}},
-					Limit:   makeLimitExprForStatsTest(),
-				},
-			},
-		},
-		{
-			name: "valid original distance function without limit",
-			node: &planpb.Node{
-				NodeType: planpb.Node_TABLE_SCAN,
-				TableDef: &planpb.TableDef{TableType: catalog.SystemSI_IVFFLAT_TblType_Entries},
-				IndexReaderParam: &planpb.IndexReaderParam{
-					OrigFuncName: "l2_distance",
-				},
-			},
-			want: true,
-		},
-		{
-			name: "direct ivf search function without rewrite marker",
-			node: func() *planpb.Node {
-				n := makeFunctionScanForStatsTest(ivfflatplan.IVFFLATSearchFuncName, makeLimitExprForStatsTest())
-				n.IndexReaderParam.OrigFuncName = ""
-				return n
-			}(),
-		},
-		{
-			name: "valid ivf search function scan",
-			node: makeFunctionScanForStatsTest(ivfflatplan.IVFFLATSearchFuncName, makeLimitExprForStatsTest()),
-			want: true,
-		},
-		{
-			name: "unrelated function scan",
-			node: makeFunctionScanForStatsTest("generate_series", makeLimitExprForStatsTest()),
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			require.Equal(t, tt.want, IsIvfSearchEntriesInternalScan(tt.node))
+		{name: "nil node"},
+		{name: "nil stats", node: &planpb.Node{}},
+		{name: "default stats", node: &planpb.Node{Stats: DefaultStats()}},
+		{name: "negative rows", node: &planpb.Node{Stats: &planpb.Stats{Outcnt: -1, Rowsize: 32}}},
+		{name: "nan rows", node: &planpb.Node{Stats: &planpb.Stats{Outcnt: math.NaN(), Rowsize: 32}}},
+		{name: "infinite width", node: &planpb.Node{Stats: &planpb.Stats{Outcnt: 1, Rowsize: math.Inf(1)}}},
+		{name: "zero width", node: &planpb.Node{Stats: &planpb.Stats{Outcnt: 1}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, ok := estimatedHashBuildRetainedBytes(test.node)
+			require.False(t, ok)
 		})
 	}
+
+	t.Run("overflow saturates", func(t *testing.T) {
+		got, ok := estimatedHashBuildRetainedBytes(&planpb.Node{
+			Stats: &planpb.Stats{Outcnt: math.MaxFloat64, Rowsize: 2},
+		})
+		require.True(t, ok)
+		require.Equal(t, math.MaxFloat64, got)
+	})
+
+}
+
+func TestFixedTypeRetainedBytesSchemaMatrix(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		oid  types.T
+		want float64
+	}{
+		{name: "bit", oid: types.T_bit, want: 8},
+		{name: "bool", oid: types.T_bool, want: 1},
+		{name: "int8", oid: types.T_int8, want: 1},
+		{name: "int16", oid: types.T_int16, want: 2},
+		{name: "int32", oid: types.T_int32, want: 4},
+		{name: "int64", oid: types.T_int64, want: 8},
+		{name: "uint8", oid: types.T_uint8, want: 1},
+		{name: "uint16", oid: types.T_uint16, want: 2},
+		{name: "uint32", oid: types.T_uint32, want: 4},
+		{name: "uint64", oid: types.T_uint64, want: 8},
+		{name: "float32", oid: types.T_float32, want: 4},
+		{name: "float64", oid: types.T_float64, want: 8},
+		{name: "decimal64", oid: types.T_decimal64, want: 8},
+		{name: "decimal128", oid: types.T_decimal128, want: 16},
+		{name: "decimal256", oid: types.T_decimal256, want: 32},
+		{name: "date", oid: types.T_date, want: 4},
+		{name: "time", oid: types.T_time, want: 8},
+		{name: "datetime", oid: types.T_datetime, want: 8},
+		{name: "timestamp", oid: types.T_timestamp, want: 8},
+		{name: "year", oid: types.T_year, want: 2},
+		{name: "uuid", oid: types.T_uuid, want: 16},
+		{name: "enum", oid: types.T_enum, want: 2},
+		{name: "transaction timestamp", oid: types.T_TS, want: 12},
+		{name: "row id", oid: types.T_Rowid, want: 24},
+		{name: "block id", oid: types.T_Blockid, want: 20},
+		{name: "object id", oid: types.T_Objectid, want: 18},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := fixedTypeRetainedBytes(test.oid)
+			require.True(t, ok)
+			require.Equal(t, test.want, got)
+		})
+	}
+
+	for _, test := range []struct {
+		name string
+		oid  types.T
+	}{
+		{name: "any", oid: types.T_any},
+		{name: "star", oid: types.T_star},
+		{name: "reserved int128", oid: types.T_int128},
+		{name: "reserved uint128", oid: types.T_uint128},
+		{name: "interval expression", oid: types.T_interval},
+		{name: "tuple", oid: types.T_tuple},
+		{name: "unknown future type", oid: types.T(255)},
+		{name: "char needs observed stats", oid: types.T_char},
+		{name: "varchar needs observed stats", oid: types.T_varchar},
+		{name: "json needs observed stats", oid: types.T_json},
+		{name: "binary needs observed stats", oid: types.T_binary},
+		{name: "varbinary needs observed stats", oid: types.T_varbinary},
+		{name: "geometry needs observed stats", oid: types.T_geometry},
+		{name: "geometry32 needs observed stats", oid: types.T_geometry32},
+		{name: "blob needs observed stats", oid: types.T_blob},
+		{name: "text needs observed stats", oid: types.T_text},
+		{name: "datalink needs observed stats", oid: types.T_datalink},
+		{name: "float32 vector needs observed stats", oid: types.T_array_float32},
+		{name: "float64 vector needs observed stats", oid: types.T_array_float64},
+		{name: "bf16 vector needs observed stats", oid: types.T_array_bf16},
+		{name: "float16 vector needs observed stats", oid: types.T_array_float16},
+		{name: "int8 vector needs observed stats", oid: types.T_array_int8},
+		{name: "uint8 vector needs observed stats", oid: types.T_array_uint8},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := fixedTypeRetainedBytes(test.oid)
+			require.False(t, ok)
+			require.Zero(t, got)
+		})
+	}
+
+	for id := 0; id <= int(^uint8(0)); id++ {
+		got, ok := fixedTypeRetainedBytes(types.T(id))
+		if ok {
+			require.Greater(t, got, float64(0), "type id %d", id)
+			require.False(t, math.IsNaN(got), "type id %d", id)
+			require.False(t, math.IsInf(got, 0), "type id %d", id)
+		} else {
+			require.Zero(t, got, "type id %d", id)
+		}
+	}
+}
+
+func TestHasRecursiveScanHandlesGeneralPlanGraphs(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false), false, true)
+	builder.qry.Nodes = []*planpb.Node{
+		{NodeId: 0, NodeType: planpb.Node_TABLE_SCAN},
+		{NodeId: 1, NodeType: planpb.Node_PROJECT, Children: []int32{0}},
+		{NodeId: 2, NodeType: planpb.Node_JOIN, Children: []int32{1, 1}},
+		{NodeId: 3, NodeType: planpb.Node_RECURSIVE_SCAN},
+		{NodeId: 4, NodeType: planpb.Node_PROJECT, Children: []int32{4}},
+		{NodeId: 5, NodeType: planpb.Node_PROJECT, Children: []int32{-1, 999}},
+		{NodeId: 6, NodeType: planpb.Node_PROJECT, Children: []int32{2, 3}},
+	}
+
+	require.False(t, builder.hasRecursiveScan(nil))
+	require.False(t, builder.hasRecursiveScan(builder.qry.Nodes[0]))
+	require.False(t, builder.hasRecursiveScan(builder.qry.Nodes[2]))
+	require.False(t, builder.hasRecursiveScan(builder.qry.Nodes[4]))
+	require.False(t, builder.hasRecursiveScan(builder.qry.Nodes[5]))
+	require.True(t, builder.hasRecursiveScan(builder.qry.Nodes[3]))
+	require.True(t, builder.hasRecursiveScan(builder.qry.Nodes[6]))
+}
+
+func TestDetermineBuildSidePreservesCTEHashBuildDrainProof(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	intType := planpb.Type{Id: int32(types.T_int64)}
+	joinCond, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{
+		GetColExpr(intType, 10, 0),
+		GetColExpr(intType, 20, 0),
+	})
+	require.NoError(t, err)
+
+	makeBuilder := func(scanOption string) *QueryBuilder {
+		builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, true)
+		builder.qry.Nodes = []*planpb.Node{
+			{
+				NodeId: 0, NodeType: planpb.Node_TABLE_SCAN,
+				BindingTags: []int32{10}, Stats: &planpb.Stats{Outcnt: 10},
+			},
+			{
+				NodeId: 1, NodeType: planpb.Node_SINK_SCAN,
+				BindingTags: []int32{20}, Stats: &planpb.Stats{Outcnt: 1000},
+				ExtraOptions: scanOption,
+			},
+			{
+				NodeId: 2, NodeType: planpb.Node_JOIN, JoinType: planpb.Node_SEMI,
+				Children: []int32{0, 1}, OnList: []*planpb.Expr{joinCond},
+				Stats: &planpb.Stats{HashmapStats: &planpb.HashMapStats{}},
+			},
+		}
+		return builder
+	}
+
+	t.Run("marked build remains logical right", func(t *testing.T) {
+		builder := makeBuilder(materialized.CTEHashBuildScanOption)
+		builder.determineBuildAndProbeSide(2, false)
+		require.False(t, builder.qry.Nodes[2].IsRightJoin)
+	})
+
+	t.Run("unmarked build retains cost choice", func(t *testing.T) {
+		builder := makeBuilder("")
+		builder.determineBuildAndProbeSide(2, false)
+		require.True(t, builder.qry.Nodes[2].IsRightJoin)
+	})
+
+	t.Run("marked LEFT build remains logical right", func(t *testing.T) {
+		builder := makeBuilder(materialized.CTEHashBuildScanOption)
+		builder.qry.Nodes[2].JoinType = planpb.Node_LEFT
+		builder.determineBuildAndProbeSide(2, false)
+		require.False(t, builder.qry.Nodes[2].IsRightJoin)
+	})
+}
+
+func TestDetermineInnerBuildSidePreservesCTEHashBuildDrainProof(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	intType := planpb.Type{Id: int32(types.T_int64)}
+	joinCond, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{
+		GetColExpr(intType, 10, 0),
+		GetColExpr(intType, 20, 0),
+	})
+	require.NoError(t, err)
+
+	makeBuilder := func(leftOption, rightOption string) *QueryBuilder {
+		builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, true)
+		builder.qry.Nodes = []*planpb.Node{
+			{
+				NodeId: 0, NodeType: planpb.Node_SINK_SCAN,
+				BindingTags: []int32{10}, Stats: &planpb.Stats{Outcnt: 10},
+				ExtraOptions: leftOption,
+			},
+			{
+				NodeId: 1, NodeType: planpb.Node_SINK_SCAN,
+				BindingTags: []int32{20}, Stats: &planpb.Stats{Outcnt: 1000},
+				ExtraOptions: rightOption,
+			},
+			{
+				NodeId: 2, NodeType: planpb.Node_JOIN, JoinType: planpb.Node_INNER,
+				Children: []int32{0, 1}, OnList: []*planpb.Expr{joinCond},
+				Stats: &planpb.Stats{HashmapStats: &planpb.HashMapStats{}},
+			},
+		}
+		return builder
+	}
+
+	t.Run("marked logical left moves to build", func(t *testing.T) {
+		builder := makeBuilder(materialized.CTEHashBuildScanOption, "")
+		builder.determineBuildAndProbeSide(2, false)
+		require.Equal(t, []int32{1, 0}, builder.qry.Nodes[2].Children)
+	})
+
+	t.Run("marked logical right remains build", func(t *testing.T) {
+		builder := makeBuilder("", materialized.CTEHashBuildScanOption)
+		builder.determineBuildAndProbeSide(2, false)
+		require.Equal(t, []int32{0, 1}, builder.qry.Nodes[2].Children)
+	})
+
+	t.Run("marked logical right remains shuffle build", func(t *testing.T) {
+		builder := makeBuilder("", materialized.CTEHashBuildScanOption)
+		builder.qry.Nodes[2].Stats.HashmapStats.Shuffle = true
+		builder.determineBuildAndProbeSide(2, false)
+		require.Equal(t, []int32{0, 1}, builder.qry.Nodes[2].Children)
+		require.True(t, builder.qry.Nodes[2].Stats.HashmapStats.Shuffle)
+	})
 }
 
 func TestDeepCopyIndexReaderParamCopiesOrigFuncName(t *testing.T) {
@@ -1232,14 +2355,11 @@ func TestUpdateStatsInfo_Decimal_DifferentScales(t *testing.T) {
 	}
 }
 
-// TestCalcNodeDOP_DistinctAggregation tests that distinct aggregation nodes
-// are correctly set to Dop=1 and ForceOneCN=true
-func TestCalcNodeDOP_DistinctAggregation(t *testing.T) {
-	// Create a plan with an AGG node containing COUNT(DISTINCT ...)
-	// Use a variable to avoid constant overflow when combining COUNT with Distinct flag
-	countVal := uint64(function.COUNT)
-	distinctVal := uint64(function.Distinct)
-	countWithDistinct := int64(countVal | distinctVal)
+// TestCalcNodeDOP_ParallelMergeableDistinctAggregation verifies that exact
+// DISTINCT states supported by MergeGroup retain the normal parallel DOP.
+func TestCalcNodeDOP_ParallelMergeableDistinctAggregation(t *testing.T) {
+	countID := function.EncodeOverloadID(function.COUNT, 0)
+	countWithDistinct := int64(uint64(countID) | uint64(function.Distinct))
 	p := &planpb.Plan{
 		Plan: &planpb.Plan_Query{
 			Query: &planpb.Query{
@@ -1248,14 +2368,14 @@ func TestCalcNodeDOP_DistinctAggregation(t *testing.T) {
 					{
 						NodeId:   0,
 						NodeType: planpb.Node_TABLE_SCAN,
-						Stats:    DefaultStats(),
+						Stats:    &planpb.Stats{BlockNum: 128, HashmapStats: &planpb.HashMapStats{}},
 					},
 					// AGG node with COUNT(DISTINCT ...)
 					{
 						NodeId:   1,
 						NodeType: planpb.Node_AGG,
 						Children: []int32{0},
-						Stats:    DefaultStats(),
+						Stats:    &planpb.Stats{BlockNum: 128, HashmapStats: &planpb.HashMapStats{}},
 						AggList: []*planpb.Expr{
 							{
 								Expr: &planpb.Expr_F{
@@ -1291,16 +2411,14 @@ func TestCalcNodeDOP_DistinctAggregation(t *testing.T) {
 	lencn := 2
 	CalcNodeDOP(p, 1, ncpu, lencn)
 
-	// Verify that the AGG node has Dop=1 and ForceOneCN=true
 	aggNode := p.GetQuery().Nodes[1]
 	require.NotNil(t, aggNode.Stats, "AGG node should have Stats")
-	require.Equal(t, int32(1), aggNode.Stats.Dop, "Distinct aggregation should have Dop=1")
-	require.True(t, aggNode.Stats.ForceOneCN, "Distinct aggregation should have ForceOneCN=true")
+	require.Equal(t, ncpu, aggNode.Stats.Dop)
+	require.False(t, aggNode.Stats.ForceOneCN)
 
-	// Verify that child node also has Dop=1 (recursively set)
 	childNode := p.GetQuery().Nodes[0]
 	require.NotNil(t, childNode.Stats, "Child node should have Stats")
-	require.Equal(t, int32(1), childNode.Stats.Dop, "Child node should have Dop=1 (recursively set)")
+	require.Equal(t, ncpu, childNode.Stats.Dop)
 }
 
 // TestCalcNodeDOP_NonDistinctAggregation tests that non-distinct aggregation nodes
@@ -1364,14 +2482,12 @@ func TestCalcNodeDOP_NonDistinctAggregation(t *testing.T) {
 	require.Greater(t, aggNode.Stats.Dop, int32(0), "Non-distinct aggregation should have Dop > 0")
 }
 
-// TestCalcNodeDOP_DistinctAggregationWithNilStats tests that distinct aggregation
-// nodes with nil Stats are handled correctly
-func TestCalcNodeDOP_DistinctAggregationWithNilStats(t *testing.T) {
-	// Create a plan with an AGG node containing COUNT(DISTINCT ...) but no Stats
-	// Use a variable to avoid constant overflow when combining COUNT with Distinct flag
-	countVal := uint64(function.COUNT)
-	distinctVal := uint64(function.Distinct)
-	countWithDistinct := int64(countVal | distinctVal)
+// TestCalcNodeDOP_NonMergeableDistinctAggregationWithNilStats keeps the
+// conservative single-stage fallback for DISTINCT aggregates without an exact
+// parallel merge contract.
+func TestCalcNodeDOP_NonMergeableDistinctAggregationWithNilStats(t *testing.T) {
+	avgID := function.EncodeOverloadID(function.AVG, 0)
+	avgWithDistinct := int64(uint64(avgID) | uint64(function.Distinct))
 	p := &planpb.Plan{
 		Plan: &planpb.Plan_Query{
 			Query: &planpb.Query{
@@ -1382,21 +2498,19 @@ func TestCalcNodeDOP_DistinctAggregationWithNilStats(t *testing.T) {
 						NodeType: planpb.Node_TABLE_SCAN,
 						Stats:    DefaultStats(),
 					},
-					// AGG node with COUNT(DISTINCT ...) but nil Stats
+					// AGG node with AVG(DISTINCT ...) but nil Stats
 					{
 						NodeId:   1,
 						NodeType: planpb.Node_AGG,
 						Children: []int32{0},
-						Stats:    nil, // nil Stats
+						Stats:    nil,
 						AggList: []*planpb.Expr{
 							{
 								Expr: &planpb.Expr_F{
 									F: &planpb.Function{
 										Func: &planpb.ObjectRef{
-											// COUNT with Distinct flag: use uint64 to avoid overflow, then convert to int64
-											// Similar to having_binder.go:144, we need to convert to uint64 first
-											Obj:     countWithDistinct,
-											ObjName: "count",
+											Obj:     avgWithDistinct,
+											ObjName: "avg",
 										},
 										Args: []*planpb.Expr{
 											{
@@ -1426,8 +2540,8 @@ func TestCalcNodeDOP_DistinctAggregationWithNilStats(t *testing.T) {
 	// Verify that Stats was created and set correctly
 	aggNode := p.GetQuery().Nodes[1]
 	require.NotNil(t, aggNode.Stats, "Stats should be created for distinct aggregation")
-	require.Equal(t, int32(1), aggNode.Stats.Dop, "Distinct aggregation should have Dop=1")
-	require.True(t, aggNode.Stats.ForceOneCN, "Distinct aggregation should have ForceOneCN=true")
+	require.Equal(t, int32(1), aggNode.Stats.Dop)
+	require.True(t, aggNode.Stats.ForceOneCN)
 }
 
 func TestGetExprNdv(t *testing.T) {
@@ -1686,6 +2800,17 @@ func TestGetExprNdv(t *testing.T) {
 		require.Equal(t, -1.0, ndv)
 	})
 
+	t.Run("zero-argument function", func(t *testing.T) {
+		expr := &planpb.Expr{
+			Expr: &planpb.Expr_F{
+				F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "rand"},
+				},
+			},
+		}
+		require.Equal(t, -1.0, getExprNdv(expr, builder))
+	})
+
 	t.Run("column reference", func(t *testing.T) {
 		expr := &planpb.Expr{
 			Expr: &planpb.Expr_Col{Col: colRef},
@@ -1740,5 +2865,273 @@ func TestCompareStatsIsStrictWeakOrdering(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestStatsInfoCacheCompletion(t *testing.T) {
+	for _, tc := range []struct {
+		stats *pb.StatsInfo
+		want  bool
+	}{
+		{nil, false},
+		{&pb.StatsInfo{TableCnt: 5}, false},
+		{&pb.StatsInfo{AccurateObjectNumber: 1, TableCnt: 5}, false},
+		{&pb.StatsInfo{TableName: "t"}, true},
+		{&pb.StatsInfo{TableName: "t", TableCnt: 5}, true},
+		{&pb.StatsInfo{TableName: "t", TableCnt: math.NaN()}, false},
+	} {
+		require.Equal(t, tc.want, StatsInfoUsableForCache(tc.stats))
+	}
+}
+
+func TestEstimatedRowsInt64(t *testing.T) {
+	for _, tc := range []struct {
+		rows float64
+		want int64
+	}{
+		{0, 0}, {5.75, 5}, {-1, 0}, {math.NaN(), 0},
+		{float64(^uint64(0)), math.MaxInt64}, {math.Inf(1), math.MaxInt64},
+	} {
+		require.Equal(t, tc.want, EstimatedRowsInt64(tc.rows))
+	}
+}
+
+func TestCachedPlanStatsChanged(t *testing.T) {
+	ctx := &tableDefStatsTestCompilerContext{MockCompilerContext: NewMockCompilerContext(false)}
+	scan := &planpb.Node{NodeType: planpb.Node_TABLE_SCAN,
+		ObjRef: &planpb.ObjectRef{Obj: 42}, TableDef: &planpb.TableDef{Name: "events", Version: 7},
+		Stats: &planpb.Stats{TableCnt: 5, Outcnt: 1},
+	}
+	p := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{Nodes: []*planpb.Node{scan}, Steps: []int32{0}}}}
+	for _, tc := range []struct {
+		name    string
+		stats   *pb.StatsInfo
+		cached  float64
+		changed bool
+	}{
+		{"stable despite runtime filter", &pb.StatsInfo{TableCnt: 5}, 5, false},
+		{"growth", &pb.StatsInfo{TableCnt: 5000}, 5, true},
+		{"minor growth", &pb.StatsInfo{TableCnt: 148}, 128, false},
+		{"below doubling", &pb.StatsInfo{TableCnt: 255}, 128, false},
+		{"doubling", &pb.StatsInfo{TableCnt: 256}, 128, true},
+		{"above halving", &pb.StatsInfo{TableCnt: 129}, 256, false},
+		{"halving after rollback", &pb.StatsInfo{TableCnt: 128}, 256, true},
+		{"observed empty to one", &pb.StatsInfo{TableCnt: 1}, 0, true},
+		{"stable empty", &pb.StatsInfo{TableName: "events"}, 0, false},
+		{"missing despite nearby default", nil, 1001, true},
+		{"invalid captured", &pb.StatsInfo{TableCnt: 128}, math.NaN(), true},
+		{"invalid observation", &pb.StatsInfo{TableCnt: math.Inf(1)}, 128, true},
+		{"conservative max growth", &pb.StatsInfo{TableCnt: float64(^uint64(0))}, float64(^uint64(0)) / 1.5, true},
+		{"conservative max recovery", &pb.StatsInfo{TableCnt: float64(^uint64(0)) / 1.5}, float64(^uint64(0)), true},
+		{"stable conservative max", &pb.StatsInfo{TableCnt: float64(^uint64(0))}, float64(^uint64(0)), false},
+		{"same-count object transition", &pb.StatsInfo{TableName: "events", AccurateObjectNumber: 1, TableCnt: 5}, 5, false},
+		{"lost observation", nil, 5, true},
+		{"stable unknown default", nil, 1000, false},
+		{"named empty", &pb.StatsInfo{TableName: "events"}, 5, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx.stats, scan.Stats.TableCnt = tc.stats, tc.cached
+			changed, err := CachedPlanStatsChanged(p, ctx)
+			require.NoError(t, err)
+			require.Equal(t, tc.changed, changed)
+			require.Same(t, scan.TableDef, ctx.gotTableDef)
+			require.Same(t, scan.ObjRef, ctx.gotObject)
+			require.Same(t, scan.ScanSnapshot, ctx.gotSnapshot)
+			require.Equal(t, float64(1), scan.Stats.Outcnt, "admission never patches a borrowed plan")
+		})
+	}
+	ctx.err = fmt.Errorf("stats unavailable")
+	changed, err := CachedPlanStatsChanged(p, ctx)
+	require.ErrorIs(t, err, ctx.err)
+	require.False(t, changed, "do not execute or rebuild using a failed observation")
+	scan.Limit = MakePlan2Uint64ConstExprWithType(0)
+	changed, err = CachedPlanStatsChanged(p, ctx)
+	require.NoError(t, err, "minimal LIMIT0 scan model does not read storage statistics")
+	require.False(t, changed)
+}
+
+func TestCachedLimitZeroFinalPlan(t *testing.T) {
+	ctx := &tableDefStatsTestCompilerContext{MockCompilerContext: NewMockCompilerContext(false)}
+	statements, err := mysql.Parse(ctx.GetContext(), "select n_nationkey from nation limit 0", 1)
+	require.NoError(t, err)
+	defer statements[0].Free()
+	p, err := BuildPlan(ctx, statements[0], false)
+	require.NoError(t, err)
+	qry := p.GetQuery()
+	require.NotNil(t, qry)
+	root := qry.Nodes[qry.Steps[0]]
+	require.Equal(t, planpb.Node_PROJECT, root.NodeType)
+	require.Nil(t, root.Limit, "optimizer moves pagination while retaining output projection")
+	scan := qry.Nodes[root.Children[0]]
+	require.Equal(t, planpb.Node_TABLE_SCAN, scan.NodeType)
+	require.NotNil(t, scan.Limit)
+	ctx.stats, ctx.err = &pb.StatsInfo{TableCnt: 5}, fmt.Errorf("unexpected stats read")
+	changed, err := CachedPlanStatsChanged(p, ctx)
+	require.NoError(t, err)
+	require.False(t, changed)
+	scan.Limit = MakePlan2Uint64ConstExprWithType(1)
+	_, err = CachedPlanStatsChanged(p, ctx)
+	require.ErrorIs(t, err, ctx.err, "positive LIMIT still validates the normal scan model")
+}
+
+func TestAggregateBlockEstimateThroughL2(t *testing.T) {
+	builder := newRuntimeFilterSingleTestBuilder(false)
+	builder.qry.Nodes[0].Stats.Outcnt = float64(^uint64(0))
+	builder.qry.Nodes = append(builder.qry.Nodes,
+		&planpb.Node{NodeType: planpb.Node_AGG, Children: []int32{0}, Stats: DefaultStats()},
+		&planpb.Node{NodeType: planpb.Node_PROJECT, Children: []int32{3}, Stats: DefaultStats()},
+		&planpb.Node{NodeType: planpb.Node_JOIN, JoinType: planpb.Node_L2, Children: []int32{4, 1}, Stats: DefaultStats()},
+	)
+	ReCalcNodeStats(5, builder, true, false, false)
+	require.Equal(t, int32(math.MaxInt32), builder.qry.Nodes[5].Stats.BlockNum)
+	for _, tc := range []struct{ blocks, want int32 }{
+		{2, 16}, {268435455, 2147483640}, {268435456, math.MaxInt32},
+	} {
+		builder.qry.Nodes[4].Stats.BlockNum = tc.blocks
+		ReCalcNodeStats(5, builder, false, false, false)
+		require.Equal(t, tc.want, builder.qry.Nodes[5].Stats.BlockNum)
+	}
+}
+
+func TestValueScanCardinality(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		rowset *planpb.RowsetData
+		table  *planpb.TableDef
+		limit  *Expr
+		want   float64
+	}{
+		{name: "dummy", want: 1},
+		{name: "dummy limit zero", limit: MakePlan2Uint64ConstExprWithType(0)},
+		{name: "empty values", rowset: &planpb.RowsetData{}},
+		{name: "one value", rowset: &planpb.RowsetData{RowCount: 1}, want: 1},
+		{name: "multiple values", rowset: &planpb.RowsetData{RowCount: 3}, want: 3},
+		{name: "table control", table: &planpb.TableDef{}, want: 1000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false), false, false)
+			n := &planpb.Node{NodeType: planpb.Node_VALUE_SCAN, RowsetData: tc.rowset, TableDef: tc.table, Limit: tc.limit, Stats: DefaultStats()}
+			b.qry.Nodes = []*planpb.Node{n, {NodeType: planpb.Node_PROJECT, Children: []int32{0}, Stats: DefaultStats()},
+				{NodeType: planpb.Node_VALUE_SCAN, RowsetData: &planpb.RowsetData{RowCount: 10}, Stats: DefaultStats()},
+				{NodeType: planpb.Node_JOIN, JoinType: planpb.Node_INNER, Children: []int32{2, 1}, Stats: DefaultStats()}}
+			for range 2 {
+				ReCalcNodeStats(3, b, true, true, true)
+				require.Equal(t, tc.want, n.Stats.Outcnt)
+				require.Equal(t, tc.want, b.qry.Nodes[1].Stats.Outcnt)
+				require.Equal(t, tc.want, b.qry.Nodes[3].Stats.HashmapStats.HashmapSize)
+				require.Equal(t, 10*tc.want, b.qry.Nodes[3].Stats.Outcnt)
+			}
+		})
+	}
+}
+
+func TestCachedPlanStatsAdmissionQueryShapes(t *testing.T) {
+	for _, tc := range []struct {
+		sql    string
+		strict bool
+	}{
+		{"select n_name from nation where n_nationkey=1", false},
+		{"update nation set n_regionkey=2 where n_nationkey=1", false},
+		{"select n_name from nation where n_nationkey=1 for update", false},
+		{"delete from nation where n_nationkey=1", false},
+		{"select sum(n_regionkey) from nation where n_nationkey>1", false},
+		{"select n_name from nation where n_nationkey>1 order by n_nationkey", false},
+		{"select n_name from nation where n_nationkey>1", false},
+		{"select n_name from nation cross join region", true},
+		{"update nation set n_regionkey=2 where n_nationkey>1", false},
+		{"select n_name from nation where cast(n_nationkey as double)=1", false},
+		{"select n_name from nation limit 1", false},
+		{"select ps_availqty from partsupp where ps_partkey=1 and ps_suppkey=2", false},
+		{"select ps_availqty from partsupp where ps_partkey=1", false},
+		{"select n_name from nation where cast(n_nationkey as bigint)=1", false},
+		{"select n_name from nation where n_nationkey in (1,2)", false},
+		{"select n_name from nation where n_nationkey=1 or n_nationkey=2", false},
+		{"select n_name from nation join region on n_regionkey=r_regionkey where n_nationkey=1", false},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			ctx := &tableDefStatsTestCompilerContext{MockCompilerContext: NewMockCompilerContext(true)}
+			// The legacy TPCH mock uses cluster-key metadata with empty key
+			// names. Supply a real composite primary-key catalog for this test.
+			table := ctx.tables["partsupp"]
+			table.Pkey = &planpb.PrimaryKeyDef{PkeyColName: catalog.CPrimaryKeyColName, Names: []string{"ps_partkey", "ps_suppkey"}}
+			hidden := MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
+			table.Pkey.CompPkeyCol = hidden
+			table.Cols = append(table.Cols, hidden)
+
+			stmts, err := mysql.Parse(ctx.GetContext(), tc.sql, 1)
+			require.NoError(t, err)
+			defer stmts[0].Free()
+			p, err := BuildPlan(ctx, stmts[0], false)
+			require.NoError(t, err)
+			require.Equal(t, tc.strict, cachedPlanRequiresExactStats(p.GetQuery()), "%s", p.String())
+			for _, node := range p.GetQuery().Nodes {
+				if node.NodeType == planpb.Node_TABLE_SCAN {
+					node.Stats.TableCnt = 128
+				}
+			}
+			for _, rows := range []float64{129, 148, 255, 128, 256} {
+				ctx.stats = &pb.StatsInfo{TableCnt: rows}
+				changed, err := CachedPlanStatsChanged(p, ctx)
+				require.NoError(t, err)
+				require.Equal(t, rows == 256 || tc.strict && rows != 128, changed)
+			}
+			for _, node := range p.GetQuery().Nodes {
+				if node.NodeType == planpb.Node_TABLE_SCAN {
+					require.Equal(t, float64(128), node.Stats.TableCnt)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkCachedPointPlanAdmission(b *testing.B) {
+	ctx := NewMockCompilerContext(false)
+	stmts, err := mysql.Parse(ctx.GetContext(), "select n_name from nation where n_nationkey=1", 1)
+	require.NoError(b, err)
+	defer stmts[0].Free()
+	p, err := BuildPlan(ctx, stmts[0], false)
+	require.NoError(b, err)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		changed, err := CachedPlanStatsChanged(p, ctx)
+		if err != nil || changed {
+			b.Fatal("point admission failed", err)
+		}
+	}
+}
+
+func TestCachedPlanStrictStatsReachability(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		joinType planpb.Node_JoinType
+		right    bool
+	}{
+		{"cartesian", planpb.Node_INNER, false}, {"resident dedup", planpb.Node_DEDUP, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scan := &planpb.Node{NodeType: planpb.Node_TABLE_SCAN, TableDef: &planpb.TableDef{Name: "events"}, ObjRef: &planpb.ObjectRef{Obj: 42}, Stats: &planpb.Stats{TableCnt: 128}}
+			q := &planpb.Query{Nodes: []*planpb.Node{scan,
+				{NodeType: planpb.Node_JOIN, JoinType: tc.joinType, IsRightJoin: tc.right, Children: []int32{0, 0}}}, Steps: []int32{0}}
+			p := &planpb.Plan{Plan: &planpb.Plan_Query{Query: q}}
+			ctx := &tableDefStatsTestCompilerContext{MockCompilerContext: NewMockCompilerContext(false), stats: &pb.StatsInfo{TableCnt: 129}}
+			changed, err := CachedPlanStatsChanged(p, ctx)
+			require.NoError(t, err)
+			require.False(t, changed, "abandoned construction joins are not executable")
+			q.Steps = append(q.Steps, 1)
+			changed, err = CachedPlanStatsChanged(p, ctx)
+			require.NoError(t, err)
+			require.True(t, changed, "every executable step contributes its contract")
+			ctx.stats.TableCnt = 128
+			changed, err = CachedPlanStatsChanged(p, ctx)
+			require.NoError(t, err)
+			require.False(t, changed, "strict admission still allows stable reuse")
+			q.Steps = []int32{0}
+			q.BackgroundQueries = []*planpb.Query{{}}
+			ctx.stats.TableCnt = 129
+			changed, err = CachedPlanStatsChanged(p, ctx)
+			require.NoError(t, err)
+			require.True(t, changed, "background contracts retain exact admission")
+		})
 	}
 }

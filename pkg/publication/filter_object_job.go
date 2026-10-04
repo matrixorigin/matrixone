@@ -522,7 +522,8 @@ type FilterObjectJobResult struct {
 	PreviousStats    objectio.ObjectStats
 	CurrentStats     objectio.ObjectStats
 	// DownstreamStats holds the stats for non-appendable objects that were written to fileservice
-	DownstreamStats objectio.ObjectStats
+	DownstreamStats     objectio.ObjectStats
+	DownstreamStatsList []objectio.ObjectStats
 	// RowOffsetMap maps original rowoffset to new rowoffset after sorting
 	// Key: original rowoffset, Value: new rowoffset
 	RowOffsetMap map[uint32]uint32
@@ -549,6 +550,7 @@ type FilterObjectJob struct {
 	txnID                   []byte
 	aobjectMap              *AObjectMap // Used for tombstone rowid rewriting
 	ttlChecker              TTLChecker  // TTL expiration checker
+	cleanupOwner            *CCPRObjectCleanupOwner
 	result                  chan *FilterObjectJobResult
 	completed               atomic.Bool
 }
@@ -570,8 +572,9 @@ func NewFilterObjectJob(
 	txnID []byte,
 	aobjectMap *AObjectMap,
 	ttlChecker TTLChecker,
+	cleanupOwners ...*CCPRObjectCleanupOwner,
 ) *FilterObjectJob {
-	return &FilterObjectJob{
+	job := &FilterObjectJob{
 		ctx:                     ctx,
 		objectStatsBytes:        objectStatsBytes,
 		snapshotTS:              snapshotTS,
@@ -589,6 +592,10 @@ func NewFilterObjectJob(
 		ttlChecker:              ttlChecker,
 		result:                  make(chan *FilterObjectJobResult, 1),
 	}
+	if len(cleanupOwners) != 0 {
+		job.cleanupOwner = cleanupOwners[0]
+	}
+	return job
 }
 
 // Execute runs the FilterObjectJob
@@ -618,6 +625,7 @@ func (j *FilterObjectJob) Execute() {
 		j.txnID,
 		j.aobjectMap,
 		j.ttlChecker,
+		j.cleanupOwner,
 	)
 	res.Err = err
 	if filterResult != nil {
@@ -626,6 +634,7 @@ func (j *FilterObjectJob) Execute() {
 		res.PreviousStats = filterResult.PreviousStats
 		res.CurrentStats = filterResult.CurrentStats
 		res.DownstreamStats = filterResult.DownstreamStats
+		res.DownstreamStatsList = filterResult.DownstreamStatsList
 		res.RowOffsetMap = filterResult.RowOffsetMap
 	}
 	j.complete(res)

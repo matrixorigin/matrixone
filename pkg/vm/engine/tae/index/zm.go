@@ -16,6 +16,7 @@ package index
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/hex"
 	"fmt"
 	"math"
@@ -23,6 +24,8 @@ import (
 	"strconv"
 	"strings"
 	"unsafe"
+
+	"golang.org/x/exp/constraints"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -377,6 +380,27 @@ func (zm ZM) IsInited() bool {
 	return len(zm) == ZMSize && zm[62]&0x80 != 0
 }
 
+// hasNaNBound identifies legacy floating-point zonemaps whose min/max summary
+// cannot safely prove absence. Older writers could publish [NaN, NaN] for a
+// batch beginning with NaN even when the batch also contained ordinary
+// values. Such metadata is indistinguishable from an all-NaN batch, so the
+// runtime-IN pruning chain must fail open.
+func (zm ZM) hasNaNBound() bool {
+	if !zm.IsInited() {
+		return false
+	}
+	switch zm.GetType() {
+	case types.T_float32:
+		return math.IsNaN(float64(types.DecodeFloat32(zm.GetMinBuf()))) ||
+			math.IsNaN(float64(types.DecodeFloat32(zm.GetMaxBuf())))
+	case types.T_float64:
+		return math.IsNaN(types.DecodeFloat64(zm.GetMinBuf())) ||
+			math.IsNaN(types.DecodeFloat64(zm.GetMaxBuf()))
+	default:
+		return false
+	}
+}
+
 func (zm ZM) Reset() {
 	if len(zm) == ZMSize {
 		zm[62] &= 0x7f
@@ -449,6 +473,17 @@ func (zm ZM) getValue(buf []byte) any {
 		return types.BytesToArray[float32](buf)
 	case types.T_array_float64:
 		return types.BytesToArray[float64](buf)
+	// Narrow vector element types. Omitting them made MO_TABLE_COL_MAX panic on
+	// a table that merely CONTAINS a bf16/f16/int8/uint8 vector column, without
+	// the query touching it.
+	case types.T_array_bf16:
+		return types.BytesToArray[types.BF16](buf)
+	case types.T_array_float16:
+		return types.BytesToArray[types.Float16](buf)
+	case types.T_array_int8:
+		return types.BytesToArray[int8](buf)
+	case types.T_array_uint8:
+		return types.BytesToArray[uint8](buf)
 	}
 	panic(fmt.Sprintf("unsupported type: %v", zm.GetType()))
 }
@@ -533,6 +568,9 @@ func (zm ZM) AnyGEByValue(k []byte) bool {
 	if !zm.IsInited() {
 		return false
 	}
+	if zm.hasNaNBound() {
+		return true
+	}
 	if !zm.IsString() || len(k) < 31 {
 		return compute.Compare(zm.GetMaxBuf(), k, zm.GetType(), 0, 0) >= 0
 	}
@@ -545,6 +583,9 @@ func (zm ZM) AnyGEByValue(k []byte) bool {
 func (zm ZM) AnyLEByValue(k []byte) bool {
 	if !zm.IsInited() {
 		return false
+	}
+	if zm.hasNaNBound() {
+		return true
 	}
 	if !zm.IsString() || len(k) < 31 {
 		return compute.Compare(zm.GetMinBuf(), k, zm.GetType(), 0, 0) <= 0
@@ -734,14 +775,24 @@ func (zm ZM) InRange(lb, ub []byte, hint uint8) bool {
 	}
 }
 
+// PrefixIn reports whether any value in vec is a prefix-match for this zone map.
+//
+// PrefixIn scans the physical varlena slots and, unlike AnyIn, never consults
+// the null bitmap; a NULL slot participates as an empty payload. PrefixCompare
+// is not monotonic when one needle is a proper prefix of another, so a
+// binary search can return a false negative even for sorted input. The linear
+// scan also makes this membership check independent of producer ordering.
 func (zm ZM) PrefixIn(vec *vector.Vector) bool {
 	col, area := vector.MustVarlenaRawData(vec)
 	minVal, maxVal := zm.GetMinBuf(), zm.GetMaxBuf()
-	lowerBound := sort.Search(len(col), func(i int) bool {
-		return types.PrefixCompare(minVal, col[i].GetByteSlice(area)) <= 0
-	})
-
-	return lowerBound < len(col) && types.PrefixCompare(maxVal, col[lowerBound].GetByteSlice(area)) >= 0
+	for i := range col {
+		needle := col[i].GetByteSlice(area)
+		if types.PrefixCompare(minVal, needle) <= 0 &&
+			types.PrefixCompare(maxVal, needle) >= 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // anyIn has been called, so there must be a subvector in this zonemap
@@ -754,6 +805,12 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 		return 0, vec.Length()
 	}
 	if vec.Length() <= 3 {
+		return 0, vec.Length()
+	}
+	if !zm.IsInited() {
+		return 0, 0
+	}
+	if zm.hasNaNBound() {
 		return 0, vec.Length()
 	}
 	switch vec.GetType().Oid {
@@ -868,10 +925,10 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 		col := vector.MustFixedColNoTypeCheck[float32](vec)
 		minVal, maxVal := types.DecodeFloat32(zm.GetMinBuf()), types.DecodeFloat32(zm.GetMaxBuf())
 		lowerBound := sort.Search(len(col), func(i int) bool {
-			return minVal <= col[i]
+			return cmp.Compare(minVal, col[i]) <= 0
 		})
 		upperBound := sort.Search(len(col), func(i int) bool {
-			return maxVal < col[i]
+			return cmp.Compare(maxVal, col[i]) < 0
 		})
 		return lowerBound, upperBound
 
@@ -879,10 +936,10 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 		col := vector.MustFixedColNoTypeCheck[float64](vec)
 		minVal, maxVal := types.DecodeFloat64(zm.GetMinBuf()), types.DecodeFloat64(zm.GetMaxBuf())
 		lowerBound := sort.Search(len(col), func(i int) bool {
-			return minVal <= col[i]
+			return cmp.Compare(minVal, col[i]) <= 0
 		})
 		upperBound := sort.Search(len(col), func(i int) bool {
-			return maxVal < col[i]
+			return cmp.Compare(maxVal, col[i]) < 0
 		})
 		return lowerBound, upperBound
 
@@ -1045,12 +1102,29 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 	}
 }
 
+// AnyIn reports whether any value in vec can fall inside this zone map.
+//
+// CONTRACT: vec must be sorted ascending unless it carries NULLs. Without NULLs
+// this binary-searches the values, so an unsorted list makes it probe the wrong
+// element and answer false for a value that is present -- pruning away data that
+// matches. A NULL-bearing vec is scanned linearly (anyInNullableVec) and needs no
+// order.
+//
+// Callers that cannot guarantee the order must establish it (see
+// readutil.normalizePKInVector) or check it before calling
+// (see colexec.zoneMapInVector); a wrong answer here silently drops rows.
 func (zm ZM) AnyIn(vec *vector.Vector) bool {
 	if vec.IsConstNull() {
 		return false
 	}
 	if vec.GetNulls().Any() {
 		return zm.anyInNullableVec(vec)
+	}
+	if !zm.IsInited() {
+		return false
+	}
+	if zm.hasNaNBound() {
+		return true
 	}
 	switch vec.GetType().Oid {
 	case types.T_bool:
@@ -1147,19 +1221,21 @@ func (zm ZM) AnyIn(vec *vector.Vector) bool {
 		col := vector.MustFixedColNoTypeCheck[float32](vec)
 		minVal, maxVal := types.DecodeFloat32(zm.GetMinBuf()), types.DecodeFloat32(zm.GetMaxBuf())
 		lowerBound := sort.Search(len(col), func(i int) bool {
-			return minVal <= col[i]
+			return cmp.Compare(minVal, col[i]) <= 0
 		})
 
-		return lowerBound < len(col) && maxVal >= col[lowerBound]
+		return lowerBound < len(col) &&
+			cmp.Compare(maxVal, col[lowerBound]) >= 0
 
 	case types.T_float64:
 		col := vector.MustFixedColNoTypeCheck[float64](vec)
 		minVal, maxVal := types.DecodeFloat64(zm.GetMinBuf()), types.DecodeFloat64(zm.GetMaxBuf())
 		lowerBound := sort.Search(len(col), func(i int) bool {
-			return minVal <= col[i]
+			return cmp.Compare(minVal, col[i]) <= 0
 		})
 
-		return lowerBound < len(col) && maxVal >= col[lowerBound]
+		return lowerBound < len(col) &&
+			cmp.Compare(maxVal, col[lowerBound]) >= 0
 
 	case types.T_date:
 		col := vector.MustFixedColNoTypeCheck[types.Date](vec)
@@ -1356,253 +1432,165 @@ func ZMMulti(v1, v2, res ZM) ZM {
 	return res
 }
 
+// Metadata arithmetic must be total over its input intervals. An unknown
+// result keeps the block for ordinary evaluation, including overflow errors.
+func checkedIntegerArithmetic[T constraints.Integer](a, b T, op byte) (T, bool) {
+	var result T
+	switch op {
+	case '+':
+		result = a + b
+		return result, !((b > 0 && result < a) || (b < 0 && result > a))
+	case '-':
+		result = a - b
+		return result, !((b > 0 && result > a) || (b < 0 && result < a))
+	case '*':
+		result = a * b
+		if b == 0 {
+			return result, true
+		}
+		return result, result/b == a && !(b < 0 && b+1 == 0 && a < 0 && result == a)
+	default:
+		return result, false
+	}
+}
+
+func checkedFloatArithmetic[T constraints.Float](a, b T, op byte) (T, bool) {
+	var result T
+	if math.IsInf(float64(a), 0) || math.IsInf(float64(b), 0) || math.IsNaN(float64(a)) || math.IsNaN(float64(b)) {
+		return result, false
+	}
+	switch op {
+	case '+':
+		result = a + b
+	case '-':
+		result = a - b
+	case '*':
+		result = a * b
+	default:
+		return result, false
+	}
+	return result, !math.IsInf(float64(result), 0) && !math.IsNaN(float64(result))
+}
+
+func checkedArithmeticBounds[T constraints.Integer | constraints.Float](min1, max1, min2, max2 T, op byte, scalar func(T, T, byte) (T, bool)) (minv, maxv T, ok bool) {
+	switch op {
+	case '+':
+		minv, ok = scalar(min1, min2, op)
+		if !ok {
+			return
+		}
+		maxv, ok = scalar(max1, max2, op)
+	case '-':
+		minv, ok = scalar(min1, max2, op)
+		if !ok {
+			return
+		}
+		maxv, ok = scalar(max1, min2, op)
+	case '*':
+		var corners [4]T
+		pairs := [4][2]T{{min1, min2}, {min1, max2}, {max1, min2}, {max1, max2}}
+		for i, pair := range pairs {
+			corners[i], ok = scalar(pair[0], pair[1], op)
+			if !ok {
+				return
+			}
+		}
+		minv, maxv = compute.GetOrderedMinAndMax(corners[0], corners[1], corners[2], corners[3])
+	}
+	return
+}
+
 func applyArithmetic(v1, v2, res ZM, op byte, scale1, scale2 int32) (ok bool) {
 	ok = true
 	switch v1.GetType() {
 	case types.T_bit:
-		var minv, maxv uint64
-		switch op {
-		case '+':
-			maxv = types.DecodeUint64(v1.GetMaxBuf()) + types.DecodeUint64(v2.GetMaxBuf())
-			minv = types.DecodeUint64(v1.GetMinBuf()) + types.DecodeUint64(v2.GetMinBuf())
-		case '-':
-			maxv = types.DecodeUint64(v1.GetMaxBuf()) - types.DecodeUint64(v2.GetMinBuf())
-			minv = types.DecodeUint64(v1.GetMinBuf()) - types.DecodeUint64(v2.GetMaxBuf())
-		case '*':
-			v1_0, v1_1 := types.DecodeUint64(v1.GetMinBuf()), types.DecodeUint64(v1.GetMaxBuf())
-			v2_0, v2_1 := types.DecodeUint64(v2.GetMinBuf()), types.DecodeUint64(v2.GetMaxBuf())
-			minv, maxv = compute.GetOrderedMinAndMax(v1_0*v2_0, v1_0*v2_1, v1_1*v2_0, v1_1*v2_1)
-		default:
-			ok = false
-			return
+		minv, maxv, valid := checkedArithmeticBounds(types.DecodeUint64(v1.GetMinBuf()), types.DecodeUint64(v1.GetMaxBuf()), types.DecodeUint64(v2.GetMinBuf()), types.DecodeUint64(v2.GetMaxBuf()), op, checkedIntegerArithmetic[uint64])
+		if !valid {
+			return false
 		}
 		UpdateZM(res, types.EncodeUint64(&minv))
 		UpdateZM(res, types.EncodeUint64(&maxv))
 	case types.T_int8:
-		var minv, maxv int8
-		switch op {
-		case '+':
-			maxv = types.DecodeInt8(v1.GetMaxBuf()) + types.DecodeInt8(v2.GetMaxBuf())
-			minv = types.DecodeInt8(v1.GetMinBuf()) + types.DecodeInt8(v2.GetMinBuf())
-		case '-':
-			maxv = types.DecodeInt8(v1.GetMaxBuf()) - types.DecodeInt8(v2.GetMinBuf())
-			minv = types.DecodeInt8(v1.GetMinBuf()) - types.DecodeInt8(v2.GetMaxBuf())
-		case '*':
-			v1_0, v1_1 := types.DecodeInt8(v1.GetMinBuf()), types.DecodeInt8(v1.GetMaxBuf())
-			v2_0, v2_1 := types.DecodeInt8(v2.GetMinBuf()), types.DecodeInt8(v2.GetMaxBuf())
-			minv, maxv = compute.GetOrderedMinAndMax(v1_0*v2_0, v1_0*v2_1, v1_1*v2_0, v1_1*v2_1)
-		default:
-			ok = false
-			return
+		minv, maxv, valid := checkedArithmeticBounds(types.DecodeInt8(v1.GetMinBuf()), types.DecodeInt8(v1.GetMaxBuf()), types.DecodeInt8(v2.GetMinBuf()), types.DecodeInt8(v2.GetMaxBuf()), op, checkedIntegerArithmetic[int8])
+		if !valid {
+			return false
 		}
 		UpdateZM(res, types.EncodeInt8(&minv))
 		UpdateZM(res, types.EncodeInt8(&maxv))
 	case types.T_int16:
-		var minv, maxv int16
-		switch op {
-		case '+':
-			maxv = types.DecodeInt16(v1.GetMaxBuf()) + types.DecodeInt16(v2.GetMaxBuf())
-			minv = types.DecodeInt16(v1.GetMinBuf()) + types.DecodeInt16(v2.GetMinBuf())
-		case '-':
-			maxv = types.DecodeInt16(v1.GetMaxBuf()) - types.DecodeInt16(v2.GetMinBuf())
-			minv = types.DecodeInt16(v1.GetMinBuf()) - types.DecodeInt16(v2.GetMaxBuf())
-		case '*':
-			v1_0, v1_1 := types.DecodeInt16(v1.GetMinBuf()), types.DecodeInt16(v1.GetMaxBuf())
-			v2_0, v2_1 := types.DecodeInt16(v2.GetMinBuf()), types.DecodeInt16(v2.GetMaxBuf())
-			minv, maxv = compute.GetOrderedMinAndMax(v1_0*v2_0, v1_0*v2_1, v1_1*v2_0, v1_1*v2_1)
-		default:
-			ok = false
-			return
+		minv, maxv, valid := checkedArithmeticBounds(types.DecodeInt16(v1.GetMinBuf()), types.DecodeInt16(v1.GetMaxBuf()), types.DecodeInt16(v2.GetMinBuf()), types.DecodeInt16(v2.GetMaxBuf()), op, checkedIntegerArithmetic[int16])
+		if !valid {
+			return false
 		}
 		UpdateZM(res, types.EncodeInt16(&minv))
 		UpdateZM(res, types.EncodeInt16(&maxv))
 	case types.T_int32:
-		var minv, maxv int32
-		switch op {
-		case '+':
-			maxv = types.DecodeInt32(v1.GetMaxBuf()) + types.DecodeInt32(v2.GetMaxBuf())
-			minv = types.DecodeInt32(v1.GetMinBuf()) + types.DecodeInt32(v2.GetMinBuf())
-		case '-':
-			maxv = types.DecodeInt32(v1.GetMaxBuf()) - types.DecodeInt32(v2.GetMinBuf())
-			minv = types.DecodeInt32(v1.GetMinBuf()) - types.DecodeInt32(v2.GetMaxBuf())
-		case '*':
-			v1_0, v1_1 := types.DecodeInt32(v1.GetMinBuf()), types.DecodeInt32(v1.GetMaxBuf())
-			v2_0, v2_1 := types.DecodeInt32(v2.GetMinBuf()), types.DecodeInt32(v2.GetMaxBuf())
-			minv, maxv = compute.GetOrderedMinAndMax(v1_0*v2_0, v1_0*v2_1, v1_1*v2_0, v1_1*v2_1)
-		default:
-			ok = false
-			return
+		minv, maxv, valid := checkedArithmeticBounds(types.DecodeInt32(v1.GetMinBuf()), types.DecodeInt32(v1.GetMaxBuf()), types.DecodeInt32(v2.GetMinBuf()), types.DecodeInt32(v2.GetMaxBuf()), op, checkedIntegerArithmetic[int32])
+		if !valid {
+			return false
 		}
 		UpdateZM(res, types.EncodeInt32(&minv))
 		UpdateZM(res, types.EncodeInt32(&maxv))
 	case types.T_int64:
-		var minv, maxv int64
-		switch op {
-		case '+':
-			maxv = types.DecodeInt64(v1.GetMaxBuf()) + types.DecodeInt64(v2.GetMaxBuf())
-			minv = types.DecodeInt64(v1.GetMinBuf()) + types.DecodeInt64(v2.GetMinBuf())
-		case '-':
-			maxv = types.DecodeInt64(v1.GetMaxBuf()) - types.DecodeInt64(v2.GetMinBuf())
-			minv = types.DecodeInt64(v1.GetMinBuf()) - types.DecodeInt64(v2.GetMaxBuf())
-		case '*':
-			v1_0, v1_1 := types.DecodeInt64(v1.GetMinBuf()), types.DecodeInt64(v1.GetMaxBuf())
-			v2_0, v2_1 := types.DecodeInt64(v2.GetMinBuf()), types.DecodeInt64(v2.GetMaxBuf())
-			minv, maxv = compute.GetOrderedMinAndMax(v1_0*v2_0, v1_0*v2_1, v1_1*v2_0, v1_1*v2_1)
-		default:
-			ok = false
-			return
+		minv, maxv, valid := checkedArithmeticBounds(types.DecodeInt64(v1.GetMinBuf()), types.DecodeInt64(v1.GetMaxBuf()), types.DecodeInt64(v2.GetMinBuf()), types.DecodeInt64(v2.GetMaxBuf()), op, checkedIntegerArithmetic[int64])
+		if !valid {
+			return false
 		}
 		UpdateZM(res, types.EncodeInt64(&minv))
 		UpdateZM(res, types.EncodeInt64(&maxv))
 	case types.T_uint8:
-		var minv, maxv uint8
-		switch op {
-		case '+':
-			maxv = types.DecodeUint8(v1.GetMaxBuf()) + types.DecodeUint8(v2.GetMaxBuf())
-			minv = types.DecodeUint8(v1.GetMinBuf()) + types.DecodeUint8(v2.GetMinBuf())
-		case '-':
-			maxv = types.DecodeUint8(v1.GetMaxBuf()) - types.DecodeUint8(v2.GetMinBuf())
-			minv = types.DecodeUint8(v1.GetMinBuf()) - types.DecodeUint8(v2.GetMaxBuf())
-		case '*':
-			v1_0, v1_1 := types.DecodeUint8(v1.GetMinBuf()), types.DecodeUint8(v1.GetMaxBuf())
-			v2_0, v2_1 := types.DecodeUint8(v2.GetMinBuf()), types.DecodeUint8(v2.GetMaxBuf())
-			minv, maxv = compute.GetOrderedMinAndMax(v1_0*v2_0, v1_0*v2_1, v1_1*v2_0, v1_1*v2_1)
-		default:
-			ok = false
-			return
+		minv, maxv, valid := checkedArithmeticBounds(types.DecodeUint8(v1.GetMinBuf()), types.DecodeUint8(v1.GetMaxBuf()), types.DecodeUint8(v2.GetMinBuf()), types.DecodeUint8(v2.GetMaxBuf()), op, checkedIntegerArithmetic[uint8])
+		if !valid {
+			return false
 		}
 		UpdateZM(res, types.EncodeUint8(&minv))
 		UpdateZM(res, types.EncodeUint8(&maxv))
 	case types.T_uint16:
-		var minv, maxv uint16
-		switch op {
-		case '+':
-			maxv = types.DecodeUint16(v1.GetMaxBuf()) + types.DecodeUint16(v2.GetMaxBuf())
-			minv = types.DecodeUint16(v1.GetMinBuf()) + types.DecodeUint16(v2.GetMinBuf())
-		case '-':
-			maxv = types.DecodeUint16(v1.GetMaxBuf()) - types.DecodeUint16(v2.GetMinBuf())
-			minv = types.DecodeUint16(v1.GetMinBuf()) - types.DecodeUint16(v2.GetMaxBuf())
-		case '*':
-			v1_0, v1_1 := types.DecodeUint16(v1.GetMinBuf()), types.DecodeUint16(v1.GetMaxBuf())
-			v2_0, v2_1 := types.DecodeUint16(v2.GetMinBuf()), types.DecodeUint16(v2.GetMaxBuf())
-			minv, maxv = compute.GetOrderedMinAndMax(v1_0*v2_0, v1_0*v2_1, v1_1*v2_0, v1_1*v2_1)
-		default:
-			ok = false
-			return
+		minv, maxv, valid := checkedArithmeticBounds(types.DecodeUint16(v1.GetMinBuf()), types.DecodeUint16(v1.GetMaxBuf()), types.DecodeUint16(v2.GetMinBuf()), types.DecodeUint16(v2.GetMaxBuf()), op, checkedIntegerArithmetic[uint16])
+		if !valid {
+			return false
 		}
 		UpdateZM(res, types.EncodeUint16(&minv))
 		UpdateZM(res, types.EncodeUint16(&maxv))
 	case types.T_uint32:
-		var minv, maxv uint32
-		switch op {
-		case '+':
-			maxv = types.DecodeUint32(v1.GetMaxBuf()) + types.DecodeUint32(v2.GetMaxBuf())
-			minv = types.DecodeUint32(v1.GetMinBuf()) + types.DecodeUint32(v2.GetMinBuf())
-		case '-':
-			maxv = types.DecodeUint32(v1.GetMaxBuf()) - types.DecodeUint32(v2.GetMinBuf())
-			minv = types.DecodeUint32(v1.GetMinBuf()) - types.DecodeUint32(v2.GetMaxBuf())
-		case '*':
-			v1_0, v1_1 := types.DecodeUint32(v1.GetMinBuf()), types.DecodeUint32(v1.GetMaxBuf())
-			v2_0, v2_1 := types.DecodeUint32(v2.GetMinBuf()), types.DecodeUint32(v2.GetMaxBuf())
-			minv, maxv = compute.GetOrderedMinAndMax(v1_0*v2_0, v1_0*v2_1, v1_1*v2_0, v1_1*v2_1)
-		default:
-			ok = false
-			return
+		minv, maxv, valid := checkedArithmeticBounds(types.DecodeUint32(v1.GetMinBuf()), types.DecodeUint32(v1.GetMaxBuf()), types.DecodeUint32(v2.GetMinBuf()), types.DecodeUint32(v2.GetMaxBuf()), op, checkedIntegerArithmetic[uint32])
+		if !valid {
+			return false
 		}
 		UpdateZM(res, types.EncodeUint32(&minv))
 		UpdateZM(res, types.EncodeUint32(&maxv))
 	case types.T_uint64:
-		var minv, maxv uint64
-		switch op {
-		case '+':
-			maxv = types.DecodeUint64(v1.GetMaxBuf()) + types.DecodeUint64(v2.GetMaxBuf())
-			minv = types.DecodeUint64(v1.GetMinBuf()) + types.DecodeUint64(v2.GetMinBuf())
-		case '-':
-			maxv = types.DecodeUint64(v1.GetMaxBuf()) - types.DecodeUint64(v2.GetMinBuf())
-			minv = types.DecodeUint64(v1.GetMinBuf()) - types.DecodeUint64(v2.GetMaxBuf())
-		case '*':
-			v1_0, v1_1 := types.DecodeUint64(v1.GetMinBuf()), types.DecodeUint64(v1.GetMaxBuf())
-			v2_0, v2_1 := types.DecodeUint64(v2.GetMinBuf()), types.DecodeUint64(v2.GetMaxBuf())
-			minv, maxv = compute.GetOrderedMinAndMax(v1_0*v2_0, v1_0*v2_1, v1_1*v2_0, v1_1*v2_1)
-		default:
-			ok = false
-			return
+		minv, maxv, valid := checkedArithmeticBounds(types.DecodeUint64(v1.GetMinBuf()), types.DecodeUint64(v1.GetMaxBuf()), types.DecodeUint64(v2.GetMinBuf()), types.DecodeUint64(v2.GetMaxBuf()), op, checkedIntegerArithmetic[uint64])
+		if !valid {
+			return false
 		}
 		UpdateZM(res, types.EncodeUint64(&minv))
 		UpdateZM(res, types.EncodeUint64(&maxv))
 	case types.T_float32:
-		var minv, maxv float32
-		switch op {
-		case '+':
-			maxv = types.DecodeFloat32(v1.GetMaxBuf()) + types.DecodeFloat32(v2.GetMaxBuf())
-			minv = types.DecodeFloat32(v1.GetMinBuf()) + types.DecodeFloat32(v2.GetMinBuf())
-		case '-':
-			maxv = types.DecodeFloat32(v1.GetMaxBuf()) - types.DecodeFloat32(v2.GetMinBuf())
-			minv = types.DecodeFloat32(v1.GetMinBuf()) - types.DecodeFloat32(v2.GetMaxBuf())
-		case '*':
-			v1_0, v1_1 := types.DecodeFloat32(v1.GetMinBuf()), types.DecodeFloat32(v1.GetMaxBuf())
-			v2_0, v2_1 := types.DecodeFloat32(v2.GetMinBuf()), types.DecodeFloat32(v2.GetMaxBuf())
-			minv, maxv = compute.GetOrderedMinAndMax(v1_0*v2_0, v1_0*v2_1, v1_1*v2_0, v1_1*v2_1)
-		default:
-			ok = false
-			return
+		minv, maxv, valid := checkedArithmeticBounds(types.DecodeFloat32(v1.GetMinBuf()), types.DecodeFloat32(v1.GetMaxBuf()), types.DecodeFloat32(v2.GetMinBuf()), types.DecodeFloat32(v2.GetMaxBuf()), op, checkedFloatArithmetic[float32])
+		if !valid {
+			return false
 		}
 		UpdateZM(res, types.EncodeFloat32(&minv))
 		UpdateZM(res, types.EncodeFloat32(&maxv))
 	case types.T_float64:
-		var minv, maxv float64
-		switch op {
-		case '+':
-			maxv = types.DecodeFloat64(v1.GetMaxBuf()) + types.DecodeFloat64(v2.GetMaxBuf())
-			minv = types.DecodeFloat64(v1.GetMinBuf()) + types.DecodeFloat64(v2.GetMinBuf())
-		case '-':
-			maxv = types.DecodeFloat64(v1.GetMaxBuf()) - types.DecodeFloat64(v2.GetMinBuf())
-			minv = types.DecodeFloat64(v1.GetMinBuf()) - types.DecodeFloat64(v2.GetMaxBuf())
-		case '*':
-			v1_0, v1_1 := types.DecodeFloat64(v1.GetMinBuf()), types.DecodeFloat64(v1.GetMaxBuf())
-			v2_0, v2_1 := types.DecodeFloat64(v2.GetMinBuf()), types.DecodeFloat64(v2.GetMaxBuf())
-			minv, maxv = compute.GetOrderedMinAndMax(v1_0*v2_0, v1_0*v2_1, v1_1*v2_0, v1_1*v2_1)
-		default:
-			ok = false
-			return
+		minv, maxv, valid := checkedArithmeticBounds(types.DecodeFloat64(v1.GetMinBuf()), types.DecodeFloat64(v1.GetMaxBuf()), types.DecodeFloat64(v2.GetMinBuf()), types.DecodeFloat64(v2.GetMaxBuf()), op, checkedFloatArithmetic[float64])
+		if !valid {
+			return false
 		}
 		UpdateZM(res, types.EncodeFloat64(&minv))
 		UpdateZM(res, types.EncodeFloat64(&maxv))
 	case types.T_date:
-		var minv, maxv types.Date
-		switch op {
-		case '+':
-			maxv = types.DecodeDate(v1.GetMaxBuf()) + types.DecodeDate(v2.GetMaxBuf())
-			minv = types.DecodeDate(v1.GetMinBuf()) + types.DecodeDate(v2.GetMinBuf())
-		case '-':
-			maxv = types.DecodeDate(v1.GetMaxBuf()) - types.DecodeDate(v2.GetMinBuf())
-			minv = types.DecodeDate(v1.GetMinBuf()) - types.DecodeDate(v2.GetMaxBuf())
-		case '*':
-			v1_0, v1_1 := types.DecodeDate(v1.GetMinBuf()), types.DecodeDate(v1.GetMaxBuf())
-			v2_0, v2_1 := types.DecodeDate(v2.GetMinBuf()), types.DecodeDate(v2.GetMaxBuf())
-			minv, maxv = compute.GetOrderedMinAndMax(v1_0*v2_0, v1_0*v2_1, v1_1*v2_0, v1_1*v2_1)
-		default:
-			ok = false
-			return
+		minv, maxv, valid := checkedArithmeticBounds(types.DecodeDate(v1.GetMinBuf()), types.DecodeDate(v1.GetMaxBuf()), types.DecodeDate(v2.GetMinBuf()), types.DecodeDate(v2.GetMaxBuf()), op, checkedIntegerArithmetic[types.Date])
+		if !valid {
+			return false
 		}
 		UpdateZM(res, types.EncodeDate(&minv))
 		UpdateZM(res, types.EncodeDate(&maxv))
 	case types.T_datetime:
-		var minv, maxv types.Datetime
-		switch op {
-		case '+':
-			maxv = types.DecodeDatetime(v1.GetMaxBuf()) + types.DecodeDatetime(v2.GetMaxBuf())
-			minv = types.DecodeDatetime(v1.GetMinBuf()) + types.DecodeDatetime(v2.GetMinBuf())
-		case '-':
-			maxv = types.DecodeDatetime(v1.GetMaxBuf()) - types.DecodeDatetime(v2.GetMinBuf())
-			minv = types.DecodeDatetime(v1.GetMinBuf()) - types.DecodeDatetime(v2.GetMaxBuf())
-		case '*':
-			v1_0, v1_1 := types.DecodeDatetime(v1.GetMinBuf()), types.DecodeDatetime(v1.GetMaxBuf())
-			v2_0, v2_1 := types.DecodeDatetime(v2.GetMinBuf()), types.DecodeDatetime(v2.GetMaxBuf())
-			minv, maxv = compute.GetOrderedMinAndMax(v1_0*v2_0, v1_0*v2_1, v1_1*v2_0, v1_1*v2_1)
-		default:
-			ok = false
-			return
+		minv, maxv, valid := checkedArithmeticBounds(types.DecodeDatetime(v1.GetMinBuf()), types.DecodeDatetime(v1.GetMaxBuf()), types.DecodeDatetime(v2.GetMinBuf()), types.DecodeDatetime(v2.GetMaxBuf()), op, checkedIntegerArithmetic[types.Datetime])
+		if !valid {
+			return false
 		}
 		UpdateZM(res, types.EncodeDatetime(&minv))
 		UpdateZM(res, types.EncodeDatetime(&maxv))

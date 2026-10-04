@@ -99,7 +99,14 @@ insert into t1 values ('NYCLib','NewYork');
 -- @label:bvt
 select * from (select city,libname1,count(libname1) as a from t3 join t1 on libname1=libname3 join t2 on isbn3=isbn2 group by city,libname1) sub ;
 drop table if exists t1;
-create table t1(a int);
-insert into t1 values(1);
+create table t1(a int, b int);
+insert into t1 values(1, 2);
+
+-- derived tables must have aliases
 select * from (select * from t1) tt, (select * from t1);
 select * from (select * from t1), (select * from t1);
+
+-- a derived column-name list must match the SELECT list
+select * from (select * from t1) as d(x);
+select * from (select * from t1) as d(x, y, z);
+select * from (select * from t1) as d(x, y);

@@ -42,7 +42,9 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 	case *tree.SetRole:
 		ses.EnterFPrint(FPSetRole)
 		defer ses.ExitFPrint(FPSetRole)
-		ses.InvalidatePrivilegeCache()
+		if !st.SecondaryRole {
+			ses.InvalidatePrivilegeCache()
+		}
 		//switch role
 		err = handleSwitchRole(ses, execCtx, st)
 		if err != nil {
@@ -67,6 +69,16 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err != nil {
 			return
 		}
+	case *tree.DumpTable:
+		err = handleDumpTable(execCtx.reqCtx, ses, st)
+		if err != nil {
+			return
+		}
+	case *tree.LoadTable:
+		err = handleLoadTable(execCtx.reqCtx, ses, st)
+		if err != nil {
+			return
+		}
 	case *tree.PrepareStmt:
 		ses.EnterFPrint(FPPrepareStmt)
 		defer ses.ExitFPrint(FPPrepareStmt)
@@ -74,7 +86,11 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err != nil {
 			return
 		}
-		_, err = authenticateUserCanExecutePrepareOrExecute(execCtx.reqCtx, ses, execCtx.prepareStmt.PrepareStmt, execCtx.prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
+		_, err = authenticateUserCanExecutePrepareOrExecute(
+			execCtx.reqCtx, ses, execCtx.prepareStmt.PrepareStmt,
+			execCtx.prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan(),
+			execCtx.prepareStmt.defaultDatabase,
+		)
 		if err != nil {
 			ses.RemovePrepareStmt(execCtx.prepareStmt.Name)
 			return
@@ -91,16 +107,13 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err != nil {
 			return
 		}
-		_, err = authenticateUserCanExecutePrepareOrExecute(execCtx.reqCtx, ses, execCtx.prepareStmt.PrepareStmt, execCtx.prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
+		_, err = authenticateUserCanExecutePrepareOrExecute(
+			execCtx.reqCtx, ses, execCtx.prepareStmt.PrepareStmt,
+			execCtx.prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan(),
+			execCtx.prepareStmt.defaultDatabase,
+		)
 		if err != nil {
 			ses.RemovePrepareStmt(execCtx.prepareStmt.Name)
-			return
-		}
-	case *tree.CreateConnector:
-		ses.EnterFPrint(FPCreateConnector)
-		defer ses.ExitFPrint(FPCreateConnector)
-		err = handleCreateConnector(execCtx.reqCtx, ses, st)
-		if err != nil {
 			return
 		}
 	case *tree.PauseDaemonTask:
@@ -160,17 +173,44 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err = handleShowSQLTaskRuns(execCtx.reqCtx, ses, execCtx, st); err != nil {
 			return
 		}
-	case *tree.DropConnector:
-		ses.EnterFPrint(FPDropConnector)
-		defer ses.ExitFPrint(FPDropConnector)
-		err = handleDropConnector(execCtx.reqCtx, ses, st)
-		if err != nil {
+	case *tree.CreateIcebergCatalog:
+		if err = handleCreateIcebergCatalog(execCtx.reqCtx, ses, st); err != nil {
 			return
 		}
-	case *tree.ShowConnectors:
-		ses.EnterFPrint(FPShowConnectors)
-		defer ses.ExitFPrint(FPShowConnectors)
-		if err = handleShowConnectors(execCtx.reqCtx, ses); err != nil {
+	case *tree.AlterIcebergCatalog:
+		if err = handleAlterIcebergCatalog(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.DropIcebergCatalog:
+		if err = handleDropIcebergCatalog(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.ShowIcebergCatalogs:
+		if err = handleShowIcebergCatalogs(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.ShowIcebergNamespaces:
+		if err = handleShowIcebergNamespaces(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.ShowIcebergTables:
+		if err = handleShowIcebergTables(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.CreateMongoDBConnection:
+		if err = handleCreateMongoDBConnection(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.AlterMongoDBConnection:
+		if err = handleAlterMongoDBConnection(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.DropMongoDBConnection:
+		if err = handleDropMongoDBConnection(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.ShowMongoDBConnections:
+		if err = handleShowMongoDBConnections(execCtx.reqCtx, ses, st); err != nil {
 			return
 		}
 	case *tree.Deallocate:
@@ -211,6 +251,8 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 	case *tree.AnalyzeStmt:
 		ses.EnterFPrint(FPAnalyzeStmt)
 		defer ses.ExitFPrint(FPAnalyzeStmt)
+		restoreDatabase := bindSessionDatabaseForStatement(ses, execCtx.effectiveTxnDefaultDatabase)
+		defer restoreDatabase()
 		if err = handleAnalyzeStmt(ses, execCtx, st); err != nil {
 			return
 		}
@@ -545,7 +587,9 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 	case *tree.SetTransaction:
 		ses.EnterFPrint(FPSetTransaction)
 		defer ses.ExitFPrint(FPSetTransaction)
-		//TODO: handle set transaction
+		if err = handleSetTransaction(ses, execCtx, st); err != nil {
+			return
+		}
 	case *tree.LockTableStmt:
 		ses.hasLockedTables.Store(true)
 	case *tree.UnLockTableStmt:
@@ -693,7 +737,7 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 	case *tree.CloneTable:
 		ses.EnterFPrint(FPCloneTable)
 		defer ses.ExitFPrint(FPCloneTable)
-		if _, err = handleCloneTable(execCtx, ses, st, nil); err != nil {
+		if _, err = handleCloneTable(execCtx, ses, st, nil, nil); err != nil {
 			return
 		}
 
@@ -705,6 +749,8 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		*tree.DataBranchDeleteDatabase,
 		*tree.DataBranchCreateDatabase:
 
+		restoreDatabase := bindSessionDatabaseForStatement(ses, execCtx.effectiveTxnDefaultDatabase)
+		defer restoreDatabase()
 		ses.EnterFPrint(FPDataBranch)
 		defer ses.ExitFPrint(FPDataBranch)
 		authStats, authErr := authenticateDataBranchStatement(execCtx.reqCtx, ses, st)

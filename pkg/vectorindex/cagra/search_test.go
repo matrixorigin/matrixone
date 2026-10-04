@@ -34,7 +34,7 @@ import (
 
 // loadedModel builds an index, saves it to a tar, then reloads it into GPU
 // memory from the local file. Returns the model with Index != nil.
-func loadedModel(t *testing.T, id string) *CagraModel[float32] {
+func loadedModel(t *testing.T, id string) *CagraModel[float32, float32] {
 	t.Helper()
 	built := buildTestModel(t, id, nil)
 	tarPath := built.Path
@@ -53,7 +53,7 @@ func loadedModel(t *testing.T, id string) *CagraModel[float32] {
 	}
 	defer func() { runSql = origRunSql }()
 
-	loader := &CagraModel[float32]{
+	loader := &CagraModel[float32, float32]{
 		Id:       id,
 		Path:     tarPath,
 		Checksum: built.Checksum,
@@ -72,7 +72,7 @@ func TestCagraSearchEmpty(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
-	s := NewCagraSearch[float32](testIdxcfg(), testTblcfg(), []int{0})
+	s := NewCagraSearch[float32, float32](testIdxcfg(), testTblcfg(), []int{0})
 	require.Empty(t, s.Indexes)
 
 	rt := vectorindex.RuntimeConfig{Limit: 4}
@@ -98,8 +98,13 @@ func TestCagraSearchTypeMismatch(t *testing.T) {
 	idx := loadedModel(t, "type-mismatch")
 	defer idx.Destroy()
 
-	s := NewCagraSearch[float32](testIdxcfg(), testTblcfg(), []int{0})
-	s.Indexes = []*CagraModel[float32]{idx}
+	s := NewCagraSearch[float32, float32](testIdxcfg(), testTblcfg(), []int{0})
+	s.Indexes = []*CagraModel[float32, float32]{idx}
+	// Build the MultiIndex so Search proceeds past the `MultiIndex == nil` early
+	// return and actually reaches the query-type guard under test (mirrors
+	// TestIvfpqSearchTypeMismatch). Without this, Search returns an empty result
+	// with nil error and the type mismatch is never exercised.
+	s.MultiIndex, _ = s.buildMultiIndex()
 
 	rt := vectorindex.RuntimeConfig{Limit: 4}
 
@@ -117,8 +122,8 @@ func TestCagraSearchAndSearchFloat32(t *testing.T) {
 	idx := loadedModel(t, "search-single")
 	defer idx.Destroy()
 
-	s := NewCagraSearch[float32](testIdxcfg(), testTblcfg(), []int{0})
-	s.Indexes = []*CagraModel[float32]{idx}
+	s := NewCagraSearch[float32, float32](testIdxcfg(), testTblcfg(), []int{0})
+	s.Indexes = []*CagraModel[float32, float32]{idx}
 	s.MultiIndex, _ = s.buildMultiIndex()
 
 	data := generateTestData(testNVectors, testDim)
@@ -158,8 +163,8 @@ func TestCagraSearchMultipleIndexes(t *testing.T) {
 	idx1 := loadedModel(t, "multi-1")
 	defer idx1.Destroy()
 
-	s := NewCagraSearch[float32](testIdxcfg(), testTblcfg(), []int{0})
-	s.Indexes = []*CagraModel[float32]{idx0, idx1}
+	s := NewCagraSearch[float32, float32](testIdxcfg(), testTblcfg(), []int{0})
+	s.Indexes = []*CagraModel[float32, float32]{idx0, idx1}
 	s.MultiIndex, _ = s.buildMultiIndex()
 
 	data := generateTestData(testNVectors, testDim)
@@ -182,6 +187,9 @@ func TestCagraSearchLoad(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
+	// Preload sizes the CDC tail through sqlexec.RunSql, not the runSql stubbed below, and
+	// refuses a tail it cannot size. This model has no tail; say so readably.
+	installEmptyTailSizing(t, proc.GetService())
 
 	built := buildTestModel(t, "search-load", nil)
 	tarPath := built.Path
@@ -212,7 +220,7 @@ func TestCagraSearchLoad(t *testing.T) {
 	}
 	defer func() { runSql_streaming = origStream }()
 
-	s := NewCagraSearch[float32](testIdxcfg(), testTblcfg(), []int{0})
+	s := NewCagraSearch[float32, float32](testIdxcfg(), testTblcfg(), []int{0})
 	err := s.Load(sqlproc)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(s.Indexes))
@@ -230,4 +238,9 @@ func TestCagraSearchLoad(t *testing.T) {
 
 	s.Destroy()
 	require.Empty(t, s.Indexes)
+}
+
+// TestSearchIntoUnsupported covers the SearchInto stub (cagra has not migrated to SearchOutput).
+func TestSearchIntoUnsupported(t *testing.T) {
+	require.ErrorContains(t, (&CagraSearch[float32, float32]{}).SearchInto(nil, nil, vectorindex.RuntimeConfig{}, nil), "not supported")
 }

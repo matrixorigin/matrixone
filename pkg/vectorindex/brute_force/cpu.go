@@ -25,7 +25,7 @@ import (
 // gpuMode is accepted-but-ignored in non-gpu builds — CPU is the only
 // option here. The signature matches the gpu.go version so callers
 // pass the flag uniformly regardless of build tag.
-func NewBruteForceIndex[T types.RealNumbers](dataset [][]T,
+func NewBruteForceIndex[T types.ArrayElement](dataset [][]T,
 	dimension uint,
 	m metric.MetricType,
 	elemsz uint,
@@ -34,6 +34,11 @@ func NewBruteForceIndex[T types.RealNumbers](dataset [][]T,
 
 	return NewCpuBruteForceIndex[T](dataset, dimension, m, elemsz)
 }
+
+// DispatchesToDevice is always false in a non-gpu build: NewBruteForceIndex above ignores
+// gpuMode and returns a CPU index whatever the session asked for, so a caller that sized for the
+// device arena here would reserve bytes the load never puts there.
+func DispatchesToDevice[T types.ArrayElement](bool) bool { return false }
 
 func NewAdhocBruteForceIndex[T types.RealNumbers](dataset [][]T,
 	dimension uint,

@@ -35,7 +35,7 @@ drop index fdx_01 on articles;
 select * from articles where match(title,body)  AGAINST ('database' IN NATURAL LANGUAGE MODE) union select * from articles where match(title,body)  AGAINST ('YourSQL' IN NATURAL LANGUAGE MODE) order by id;
 create fulltext index fdx_01 on articles(title, body);
 select * from articles where match(title,body)  AGAINST ('database' IN NATURAL LANGUAGE MODE) union select * from articles where match(title,body)  AGAINST ('YourSQL' IN NATURAL LANGUAGE MODE) order by id;
-select count(*) from (select * from articles where match(title,body)  AGAINST ('database' IN NATURAL LANGUAGE MODE));
+select count(*) from (select * from articles where match(title,body)  AGAINST ('database' IN NATURAL LANGUAGE MODE)) as matched_articles;
 drop table articles;
 
 create table articles (id INT UNSIGNED AUTO_INCREMENT NOT NULL PRIMARY KEY, title VARCHAR(200), body TEXT);
@@ -65,7 +65,7 @@ drop index fdx_01 on articles;
 select * from articles where match(title,body)  AGAINST ('database' IN NATURAL LANGUAGE MODE) union select * from articles where match(title,body)  AGAINST ('YourSQL' IN NATURAL LANGUAGE MODE) order by id;
 create fulltext index fdx_01 on articles(title, body);
 select * from articles where match(title,body)  AGAINST ('database' IN NATURAL LANGUAGE MODE) union select * from articles where match(title,body)  AGAINST ('YourSQL' IN NATURAL LANGUAGE MODE) order by id;
-select count(*) from (select * from articles where match(title,body)  AGAINST ('database' IN NATURAL LANGUAGE MODE));
+select count(*) from (select * from articles where match(title,body)  AGAINST ('database' IN NATURAL LANGUAGE MODE)) as matched_articles;
 drop table articles;
 
 create table articles (id INT UNSIGNED AUTO_INCREMENT NOT NULL PRIMARY KEY, title json, body json);

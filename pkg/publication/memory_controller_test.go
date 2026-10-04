@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -195,7 +196,10 @@ func TestAcquireReleaseFilterObjectJobResult(t *testing.T) {
 func TestAcquireReleaseAObjectMapping(t *testing.T) {
 	mapping := AcquireAObjectMapping()
 	assert.NotNil(t, mapping)
+	objectIDs := []objectio.ObjectId{objectio.NewObjectid()}
+	mapping.DownstreamObjectIDs = &objectIDs
 	ReleaseAObjectMapping(mapping)
+	assert.Nil(t, mapping.DownstreamObjectIDs)
 	ReleaseAObjectMapping(nil)
 }
 
