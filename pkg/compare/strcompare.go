@@ -44,7 +44,7 @@ func (c *strCompare) Compare(veci, vecj int, vi, vj int64) int {
 	}
 	x := c.vs[veci].GetBytesAt(int(vi))
 	y := c.vs[vecj].GetBytesAt(int(vj))
-	cmp := types.CompareStringValues(*c.vs[veci].GetType(), x, y)
+	cmp = types.CompareStringValues(*c.vs[veci].GetType(), x, y)
 	if c.desc {
 		return -cmp
 	}
