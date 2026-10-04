@@ -5511,9 +5511,8 @@ func parseViewKey(key string) (string, string) {
 	if key == "" {
 		return "", ""
 	}
-	if baseKey, _, ok := splitViewSnapshotSuffix(key); ok {
-		key = baseKey
-	}
+	// OriginViews contains raw object keys. A literal identifier may include
+	// "@ts="; only DirectView carries an appended snapshot suffix.
 	if strings.Contains(key, KeySep) {
 		return splitKey(key)
 	}
@@ -7480,7 +7479,99 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 			})
 		}
 	}
-	return pts
+	return appendLogicalViewPrivilegeTips(pts, p.GetQuery())
+}
+
+// viewSnapshotForPrivilege keeps the existing outer-view snapshot convention
+// common to physical scans and logical references. Metadata is read-only.
+func viewSnapshotForPrivilege(directView string, chain []string, snapshot *plan.Snapshot) *plan.Snapshot {
+	root, ts, historical := splitViewSnapshotSuffix(directView)
+	if !historical || (len(chain) > 0 && root != chain[0]) {
+		return nil
+	}
+	viewSnapshot := &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: ts}}
+	if snapshot != nil {
+		viewSnapshot.Tenant = snapshot.Tenant
+	}
+	return viewSnapshot
+}
+
+// The trie is invocation-local. A complete chain covers its prefixes, but
+// never a sibling branch or a path bound under another snapshot/tenant.
+type viewPrivilegePath struct {
+	children map[string]*viewPrivilegePath
+	covered  bool
+}
+
+func (p *viewPrivilegePath) add(chain []string, covered bool) *viewPrivilegePath {
+	for _, view := range chain {
+		if p.children == nil {
+			p.children = make(map[string]*viewPrivilegePath)
+		}
+		child := p.children[view]
+		if child == nil {
+			child = &viewPrivilegePath{}
+			p.children[view] = child
+		}
+		p = child
+		p.covered = p.covered || covered
+	}
+	return p
+}
+
+func appendLogicalViewPrivilegeTips(tips privilegeTipsArray, query *plan.Query) privilegeTipsArray {
+	if query == nil || len(query.ViewReferences) == 0 {
+		return tips
+	}
+	type contextKey struct {
+		root      string
+		tenantID  uint32
+		hasTenant bool
+	}
+	paths := make(map[contextKey]*viewPrivilegePath)
+	pathFor := func(chain []string, direct string, snapshot *plan.Snapshot, covered bool) *viewPrivilegePath {
+		if direct == "" {
+			direct = chain[0]
+		}
+		key := contextKey{root: direct}
+		if historical := viewSnapshotForPrivilege(direct, chain, snapshot); historical != nil && historical.Tenant != nil {
+			key.tenantID, key.hasTenant = historical.Tenant.TenantID, true
+		}
+		path := paths[key]
+		if path == nil {
+			path = &viewPrivilegePath{}
+			paths[key] = path
+		}
+		return path.add(chain, covered)
+	}
+	for _, tip := range tips {
+		if tip.typ == PrivilegeTypeSelect && len(tip.originViews) > 0 {
+			pathFor(tip.originViews, tip.directView, tip.scanSnapshot, true)
+		}
+	}
+	for _, reference := range query.ViewReferences {
+		if reference != nil && len(reference.OriginViews) > 0 {
+			pathFor(reference.OriginViews, reference.DirectView, reference.Snapshot, false)
+		}
+	}
+	for _, reference := range query.ViewReferences {
+		if reference == nil || len(reference.OriginViews) == 0 {
+			continue
+		}
+		path := pathFor(reference.OriginViews, reference.DirectView, reference.Snapshot, false)
+		if path.covered || len(path.children) > 0 {
+			continue
+		}
+		path.covered = true
+		db, view := parseViewKey(reference.OriginViews[len(reference.OriginViews)-1])
+		tips = append(tips, privilegeTips{
+			typ: PrivilegeTypeSelect, objType: objectTypeView,
+			databaseName: db, tableName: view,
+			originViews: reference.OriginViews, directView: reference.DirectView,
+			scanSnapshot: reference.Snapshot,
+		})
+	}
+	return tips
 }
 
 func isPrivilegeBearingTableScan(node *plan.Node) bool {
@@ -7721,15 +7812,7 @@ func convertPrivilegeTipsToPrivilege(priv *privilege, arr privilegeTipsArray) {
 
 	// NOTE: when the arr is nil, it denotes that there is no operation on the table.
 
-	type pair struct {
-		databaseName string
-		tableName    string
-	}
-
-	dedup := make(map[pair]int8)
-
 	// multi privileges take effect together
-	entries := make([]privilegeEntry, 0, len(arr))
 	multiPrivs := make([]privilegeItem, 0, len(arr))
 	for _, tips := range arr {
 		multiPrivs = append(multiPrivs, privilegeItem{
@@ -7744,24 +7827,14 @@ func convertPrivilegeTipsToPrivilege(priv *privilege, arr privilegeTipsArray) {
 			clusterTableOperation: tips.clusterTableOperation,
 		})
 
-		dedup[pair{tips.databaseName, tips.tableName}] = 1
 	}
 
-	me := &compoundEntry{multiPrivs}
-	entries = append(entries, privilegeEntry{privilegeEntryTyp: privilegeEntryTypeCompound, compound: me})
-
-	// optional predefined privilege : tableAll, ownership
-	predefined := []PrivilegeType{PrivilegeTypeTableAll, PrivilegeTypeTableOwnership}
-	for _, p := range predefined {
-		for par := range dedup {
-			e := privilegeEntriesMap[p]
-			e.databaseName = par.databaseName
-			e.tableName = par.tableName
-			entries = append(entries, e)
-		}
-	}
-
-	priv.entries = entries
+	// ALL and ownership are alternatives for each object, never for the
+	// complete statement: an owned source cannot authorize another source.
+	priv.entries = []privilegeEntry{{
+		privilegeEntryTyp: privilegeEntryTypeCompound,
+		compound:          &compoundEntry{items: multiPrivs},
+	}}
 }
 
 // getSqlFromPrivilegeEntry generates the query sql for the privilege entry
@@ -8063,20 +8136,13 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 							mi.clusterTableOperation)
 						if yes2 {
 							viewChain := mi.originViews
-							directView := mi.directView
-							var viewSnapshot *plan.Snapshot
-							if directView != "" {
-								baseKey, ts, ok := splitViewSnapshotSuffix(directView)
-								if ok {
-									viewSnapshot = &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: ts}}
-									if mi.scanSnapshot != nil && mi.scanSnapshot.Tenant != nil {
-										viewSnapshot.Tenant = mi.scanSnapshot.Tenant
-									}
-									directView = baseKey
+							viewSnapshot := viewSnapshotForPrivilege(mi.directView, viewChain, mi.scanSnapshot)
+							if len(viewChain) == 0 && mi.directView != "" {
+								baseKey := mi.directView
+								if viewSnapshot != nil {
+									baseKey, _, _ = splitViewSnapshotSuffix(mi.directView)
 								}
-							}
-							if len(viewChain) == 0 && directView != "" {
-								viewChain = []string{directView}
+								viewChain = []string{baseKey}
 							}
 
 							checkRoleId := roleId
@@ -8101,7 +8167,7 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 							}
 
 							if viewAllowed {
-								if skipBaseCheck {
+								if skipBaseCheck || (tempEntry.objType == objectTypeView && len(viewChain) > 0) {
 									yes = true
 								} else {
 									useCache := usePrivilegeCache && cache != nil && checkRoleId == roleId
@@ -8109,9 +8175,18 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 									if !useCache {
 										cacheToUse = nil
 									}
-									yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cacheToUse, checkRoleId, tempEntry, pls, useCache)
-									if err != nil {
-										return false, 0, err
+									for i, typ := range [3]PrivilegeType{mi.privilegeTyp, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership} {
+										if i > 0 && tempEntry.objType != objectTypeTable {
+											break
+										}
+										tempEntry.privilegeId = typ
+										yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cacheToUse, checkRoleId, tempEntry, pls, useCache)
+										if err != nil {
+											return false, 0, err
+										}
+										if yes {
+											break
+										}
 									}
 								}
 								if yes && matchedRoleID == 0 {

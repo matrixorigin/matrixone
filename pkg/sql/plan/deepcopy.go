@@ -867,6 +867,18 @@ func DeepCopyQuery(qry *plan.Query) *plan.Query {
 	for idx, dependency := range qry.CatalogDependencies {
 		newQry.CatalogDependencies[idx] = DeepCopyObjectRef(dependency)
 	}
+	if qry.ViewReferences != nil {
+		newQry.ViewReferences = make([]*plan.ViewReference, len(qry.ViewReferences))
+		for i, reference := range qry.ViewReferences {
+			if reference != nil {
+				newQry.ViewReferences[i] = &plan.ViewReference{
+					OriginViews: slices.Clone(reference.OriginViews),
+					DirectView:  reference.DirectView,
+					Snapshot:    DeepCopySnapshot(reference.Snapshot),
+				}
+			}
+		}
+	}
 	if qry.UnresolvedIndexHints != nil {
 		newQry.UnresolvedIndexHints = make([]*plan.UnresolvedIndexHint, len(qry.UnresolvedIndexHints))
 		for idx, hint := range qry.UnresolvedIndexHints {

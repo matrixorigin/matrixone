@@ -11976,6 +11976,13 @@ func (builder *QueryBuilder) bindView(
 		builder.qry.CatalogDependencies,
 		prepareSchemaRefWithSnapshot(obj, tableDef, snapshot),
 	)
+	// Authorization belongs to the bound query, including views whose entire
+	// executable subtree is removed by optimization.
+	builder.qry.ViewReferences = append(builder.qry.ViewReferences, &plan.ViewReference{
+		OriginViews: append([]string(nil), viewCtx.viewChain...),
+		DirectView:  viewCtx.directView,
+		Snapshot:    DeepCopySnapshot(snapshot),
+	})
 	ctx.recordViews([]string{viewDependencyKey})
 	ctx.recordViews(viewCtx.views)
 	return

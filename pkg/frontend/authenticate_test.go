@@ -6695,6 +6695,10 @@ func Test_determineDML(t *testing.T) {
 						tempEntry.privilegeEntryTyp = privilegeEntryTypeGeneral
 						tempEntry.compound = nil
 						makeSql(tempEntry)
+						for _, typ := range []PrivilegeType{PrivilegeTypeTableAll, PrivilegeTypeTableOwnership} {
+							tempEntry.privilegeId = typ
+							makeSql(tempEntry)
+						}
 					}
 				}
 			}
@@ -6788,6 +6792,10 @@ func Test_determineDML(t *testing.T) {
 						tempEntry.privilegeEntryTyp = privilegeEntryTypeGeneral
 						tempEntry.compound = nil
 						makeSql(tempEntry)
+						for _, typ := range []PrivilegeType{PrivilegeTypeTableAll, PrivilegeTypeTableOwnership} {
+							tempEntry.privilegeId = typ
+							makeSql(tempEntry)
+						}
 					}
 				}
 			}
@@ -6874,6 +6882,10 @@ func Test_determineDML(t *testing.T) {
 						tempEntry.privilegeEntryTyp = privilegeEntryTypeGeneral
 						tempEntry.compound = nil
 						makeSql(tempEntry)
+						for _, typ := range []PrivilegeType{PrivilegeTypeTableAll, PrivilegeTypeTableOwnership} {
+							tempEntry.privilegeId = typ
+							makeSql(tempEntry)
+						}
 					}
 				}
 			}
@@ -19090,4 +19102,73 @@ func filterExecutedSQLsForTest(sqls []string, prefix string) []string {
 		}
 	}
 	return result
+}
+
+func TestLogicalViewPrivilegeCoverage(t *testing.T) {
+	ref := func(root string, chain ...string) *plan.ViewReference {
+		return &plan.ViewReference{DirectView: root, OriginViews: chain}
+	}
+	for _, tc := range []struct {
+		name       string
+		physical   privilegeTipsArray
+		references []*plan.ViewReference
+		want       [][]string
+	}{
+		{name: "plain select"},
+		{name: "constant nested", references: []*plan.ViewReference{ref("db.outer", "db.outer"), ref("db.outer", "db.outer", "db.inner")}, want: [][]string{{"db.outer", "db.inner"}}},
+		{name: "scan covers chain", physical: privilegeTipsArray{{typ: PrivilegeTypeSelect, originViews: []string{"db.outer", "db.inner"}, directView: "db.outer"}}, references: []*plan.ViewReference{ref("db.outer", "db.outer"), ref("db.outer", "db.outer", "db.inner")}},
+		{name: "unscanned sibling", physical: privilegeTipsArray{{typ: PrivilegeTypeSelect, originViews: []string{"db.outer", "db.scanned"}, directView: "db.outer"}}, references: []*plan.ViewReference{ref("db.outer", "db.outer", "db.constant")}, want: [][]string{{"db.outer", "db.constant"}}},
+		{name: "different effective roles", references: []*plan.ViewReference{ref("db.a", "db.a", "db.inner"), ref("db.b", "db.b", "db.inner")}, want: [][]string{{"db.a", "db.inner"}, {"db.b", "db.inner"}}},
+		{name: "duplicate reference", references: []*plan.ViewReference{ref("db.outer", "db.outer"), ref("db.outer", "db.outer")}, want: [][]string{{"db.outer"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			q := &plan.Query{ViewReferences: tc.references}
+			original := plan2.DeepCopyQuery(q)
+			tips := appendLogicalViewPrivilegeTips(tc.physical, q)
+			require.Len(t, tips, len(tc.physical)+len(tc.want))
+			for i, chain := range tc.want {
+				tip := tips[len(tc.physical)+i]
+				require.Equal(t, objectTypeView, tip.objType)
+				require.Equal(t, PrivilegeTypeSelect, tip.typ)
+				require.Equal(t, chain, tip.originViews)
+			}
+			require.Equal(t, original.ViewReferences, q.ViewReferences, "authorization must not mutate a cached plan")
+		})
+	}
+	// Equal names/paths under another historical tenant are not the same check.
+	historical := plan2.FormatViewKeyWithSnapshot("db.v", &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 42}})
+	q := &plan.Query{ViewReferences: []*plan.ViewReference{{DirectView: historical, OriginViews: []string{"db.v"}, Snapshot: &plan.Snapshot{Tenant: &plan.SnapshotTenant{TenantID: 9}}}}}
+	tips := appendLogicalViewPrivilegeTips(privilegeTipsArray{{typ: PrivilegeTypeSelect, directView: historical, originViews: []string{"db.v"}, scanSnapshot: &plan.Snapshot{Tenant: &plan.SnapshotTenant{TenantID: 8}}}}, q)
+	require.Len(t, tips, 2)
+	// The same suffix is also valid identifier text, not snapshot metadata.
+	root := "db#v@ts=42"
+	db, view := parseViewKey(root)
+	require.Equal(t, "db", db)
+	require.Equal(t, "v@ts=42", view)
+	require.Nil(t, viewSnapshotForPrivilege(root, []string{root}, nil))
+	snapshot := &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 99}}
+	direct := plan2.FormatViewKeyWithSnapshot(root, snapshot)
+	require.Equal(t, int64(99), viewSnapshotForPrivilege(direct, []string{root}, snapshot).TS.PhysicalTime)
+}
+
+func TestCompoundObjectPrivilegesDoNotAuthorizeSibling(t *testing.T) {
+	ses := newTestSession(t, gomock.NewController(t))
+	t.Cleanup(ses.Close)
+	ses.SetTenantInfo(getDefaultAccount())
+	cache := ses.GetPrivilegeCache()
+	tips := privilegeTipsArray{
+		{typ: PrivilegeTypeSelect, objType: objectTypeTable, databaseName: "app", tableName: "owned"},
+		{typ: PrivilegeTypeSelect, objType: objectTypeTable, databaseName: "app", tableName: "protected"},
+	}
+	priv := &privilege{objType: objectTypeTable}
+	convertPrivilegeTipsToPrivilege(priv, tips)
+	require.Len(t, priv.entries, 1)
+	cache.add(objectTypeTable, privilegeLevelDatabaseTable, "app", "owned", PrivilegeTypeTableOwnership)
+	allowed, err := checkPrivilegeInCache(t.Context(), ses, priv, true)
+	require.NoError(t, err)
+	require.False(t, allowed)
+	cache.add(objectTypeTable, privilegeLevelDatabaseTable, "app", "protected", PrivilegeTypeTableAll)
+	allowed, err = checkPrivilegeInCache(t.Context(), ses, priv, true)
+	require.NoError(t, err)
+	require.True(t, allowed, "object-level alternatives still authorize each object")
 }

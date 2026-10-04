@@ -8889,3 +8889,17 @@ func TestNormalizeGroupingSetDistinctProjectsTypedNull(t *testing.T) {
 		"select distinct snapshot_id from mo_catalog.mo_snapshots group by snapshot_id with rollup")
 	require.NoError(t, err, "UUID grouping-set DISTINCT must build without an ANY-to-UUID cast")
 }
+
+func TestBoundViewReferencesSurviveNodeCompaction(t *testing.T) {
+	builder, root := buildViewForSQLModeTest(t, "constant", ViewData{
+		Stmt: "create view constant as select 42 as id", DefaultDatabase: "db", SecurityType: "DEFINER",
+	})
+	require.Len(t, builder.qry.ViewReferences, 1)
+	reference := builder.qry.ViewReferences[0]
+	require.Equal(t, []string{"db#constant"}, reference.OriginViews)
+	require.Equal(t, "db#constant", reference.DirectView)
+	builder.qry.Steps = []int32{root}
+	optimizer := &BaseOptimizer{qry: builder.qry}
+	optimizer.pruneUsedNodes(builder.qry)
+	require.Equal(t, []*plan.ViewReference{reference}, builder.qry.ViewReferences)
+}

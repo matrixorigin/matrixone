@@ -60,6 +60,27 @@ revoke select on view db_v1.v1 from role_v1;
 use db_v1;
 select * from v1;
 internal error: do not have privilege to execute the statement
+create view v_const as select cast(42 as int) as id;
+create view v_const_chain as select id from v_const;
+grant select on view db_v1.v_const_chain to role_v1;
+select id from db_v1.v_const_chain;
+➤ id[4,32,0]  𝄀
+42
+revoke select on view db_v1.v_const_chain from role_v1;
+select id from db_v1.v_const_chain;
+internal error: do not have privilege to execute the statement
+select count(*) from db_v1.v_const where false;
+internal error: do not have privilege to execute the statement
+select cast(42 as int) as id;
+➤ id[4,32,0]  𝄀
+42
+grant select on view db_v1.v_const to role_v1;
+select id from db_v1.v_const_chain;
+internal error: do not have privilege to execute the statement
+grant select on view db_v1.v_const_chain to role_v1;
+select id from db_v1.v_const_chain;
+➤ id[4,32,0]  𝄀
+42
 drop user user_v1;
 drop user user_no_db;
 drop user user_invoker;

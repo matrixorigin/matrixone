@@ -1731,6 +1731,9 @@ message Query {
   // SHOW View column VALUES were bound using a mutable UDF catalog row.
   // Neither the View nor the UDF catalog table changes schema when that row is replaced.
   bool view_metadata_depends_on_udf = 17;
+
+  // Logical access paths, not grants or resolved security roles.
+  repeated ViewReference view_references = 18;
 }
 
 message TransationControl {
@@ -2400,4 +2403,11 @@ message VectorIndexScanWork {
 message UnresolvedIndexHint {
   ObjectRef table = 1;
   string index_name = 2;
+}
+
+// Bound view authorization survives executable-node elimination and plan reuse.
+message ViewReference {
+  repeated string origin_views = 1;
+  string direct_view = 2;
+  Snapshot snapshot = 3;
 }

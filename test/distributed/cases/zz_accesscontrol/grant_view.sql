@@ -109,6 +109,28 @@ use db_v1;
 select * from v1;
 -- @session
 
+-- Constant-view authorization survives optimizer elimination and revoke.
+create view v_const as select cast(42 as int) as id;
+create view v_const_chain as select id from v_const;
+grant select on view db_v1.v_const_chain to role_v1;
+-- @session:id=1&user=user_v1&password=111
+select id from db_v1.v_const_chain;
+-- @session
+revoke select on view db_v1.v_const_chain from role_v1;
+-- @session:id=1&user=user_v1&password=111
+select id from db_v1.v_const_chain;
+select count(*) from db_v1.v_const where false;
+select cast(42 as int) as id;
+-- @session
+grant select on view db_v1.v_const to role_v1;
+-- @session:id=1&user=user_v1&password=111
+select id from db_v1.v_const_chain;
+-- @session
+grant select on view db_v1.v_const_chain to role_v1;
+-- @session:id=1&user=user_v1&password=111
+select id from db_v1.v_const_chain;
+-- @session
+
 -- cleanup
 drop user user_v1;
 drop user user_no_db;

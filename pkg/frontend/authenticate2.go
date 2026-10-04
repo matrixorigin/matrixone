@@ -150,6 +150,7 @@ var checkPrivilegeInCache = func(ctx context.Context, ses *Session, priv *privil
 					allTrue := true
 					//multi privileges take effect together
 					for _, mi := range entry.compound.items {
+						yes = false
 						if mi.privilegeTyp == PrivilegeTypeCanGrantRoleToOthersInCreateUser {
 							//TODO: normalize the name
 							//TODO: simplify the logic
@@ -180,6 +181,9 @@ var checkPrivilegeInCache = func(ctx context.Context, ses *Session, priv *privil
 								return false, nil
 							}
 							tempEntry := privilegeEntriesMap[mi.privilegeTyp]
+							if mi.objType == objectTypeTable || mi.objType == objectTypeView {
+								tempEntry.objType = mi.objType
+							}
 							tempEntry.databaseName = mi.dbName
 							tempEntry.tableName = mi.tableName
 							tempEntry.privilegeEntryTyp = privilegeEntryTypeGeneral
@@ -201,9 +205,19 @@ var checkPrivilegeInCache = func(ctx context.Context, ses *Session, priv *privil
 
 							if yes2 {
 								//At least there is one success
-								yes, err = verifyPrivilegeEntryInMultiPrivilegeLevelsInCache(ses, cache, tempEntry, pls)
-								if err != nil {
-									return false, err
+								yes = false
+								for i, typ := range [3]PrivilegeType{mi.privilegeTyp, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership} {
+									if i > 0 && mi.objType != objectTypeTable {
+										break
+									}
+									tempEntry.privilegeId = typ
+									yes, err = verifyPrivilegeEntryInMultiPrivilegeLevelsInCache(ses, cache, tempEntry, pls)
+									if err != nil {
+										return false, err
+									}
+									if yes {
+										break
+									}
 								}
 							}
 						}
