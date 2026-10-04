@@ -1221,3 +1221,20 @@ directory count or a whole-CI speedup. Disk/IO tests are outside this change.
 Evidence is in 29249-rounding-fixture-20261004. Final focused normal/race, vet
 and incremental lint passed; molint exits zero with two unsafe-import diagnostics
 in unchanged main files. This fixture-only change needs no service BVT.
+
+
+The same fixture rule applies to the 11 numeric ceil/floor/round/truncate roots
+in func_binary_test.go, including numeric string parsing, NULL/selection,
+precision-frame reuse and dynamic digits. Temporal/format/IO tests are excluded.
+Ten construction sites execute 14 Processes per full family run, avoiding 42
+per-service TempDir requests. Each Process remains independent at its existing
+scope, including parent-scoped shared Processes whose nested tests finish before
+cleanup. The pure integer boundary root still requires no fixture.
+
+Eight alternating same-binary pairs, including per-root cleanup and excluding
+build/link and pre-sample GC, reduce median wall 2.677ms to 1.081ms (-59.6%), CPU
+2.835ms to 1.226ms (-56.7%), allocated bytes 517,124 to 413,220 (-20.1%) and
+allocations 6,178.5 to 5,012 (-18.9%). Inputs, oracles and reuse order remain
+unchanged. Evidence is in 29249-rounding-binary-fixture-20261004. Final focused
+normal/race, vet and incremental lint passed. Molint exits zero with two unsafe
+import diagnostics at unchanged main source sites; no zero-diagnostic claim.
