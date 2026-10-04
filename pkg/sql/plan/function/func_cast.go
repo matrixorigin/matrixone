@@ -6749,13 +6749,6 @@ func decimal128ToBitWithIgnore(
 	return nil
 }
 
-func decimal256ToBit(
-	ctx context.Context,
-	from vector.FunctionParameterWrapper[types.Decimal256],
-	to *vector.FunctionResult[uint64], bitSize int, length int, selectList *FunctionSelectList) error {
-	return decimal256ToBitWithIgnore(ctx, nil, from, to, bitSize, length, selectList)
-}
-
 func decimal256ToBitWithIgnore(
 	ctx context.Context, proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Decimal256],

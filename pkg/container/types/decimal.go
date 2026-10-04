@@ -1222,36 +1222,63 @@ func (x Decimal256) Div256(y Decimal256) (Decimal256, error) {
 	}
 }
 
-func (x Decimal256) div256Trunc(y Decimal256) (Decimal256, error) {
+// div256TruncQuoRem divides unsigned 256-bit magnitudes. Signed callers
+// normalize operands and restore the sign themselves, including the 2^255
+// magnitude of MinInt256. Neither alignment nor subtraction uses signed math.
+func (x Decimal256) div256TruncQuoRem(y Decimal256) (Decimal256, Decimal256, error) {
 	if y.B128_191 == 0 && y.B192_255 == 0 && y.B64_127 == 0 {
 		if y.B0_63 == 0 {
-			return x, moerr.NewInvalidInputNoCtx("Decimal256 Div by Zero")
+			return x, Decimal256{}, moerr.NewInvalidInputNoCtx("Decimal256 Div by Zero")
 		}
-		x = x.Left(1)
-		z := Decimal256{0, 0, 0, 0}
-		z.B192_255, z.B128_191 = bits.Div64(0, x.B192_255, y.B0_63)
-		z.B128_191, z.B64_127 = bits.Div64(z.B128_191, x.B128_191, y.B0_63)
-		z.B64_127, z.B0_63 = bits.Div64(z.B64_127, x.B64_127, y.B0_63)
-		z.B0_63, _ = bits.Div64(z.B0_63, x.B0_63, y.B0_63)
-		return z.Right(1), nil
+		q, r := div256ByUint64(x, y.B0_63)
+		return q, Decimal256{B0_63: r}, nil
 	}
 
-	x = x.Left(1)
-	w := Decimal256{1, 0, 0, 0}
-	z := Decimal256{0, 0, 0, 0}
-	for y.Compare(x) <= 0 {
-		y = y.Left(1)
-		w = w.Left(1)
-	}
-	for y.B0_63 != 0 || y.B64_127 != 0 || y.B128_191 != 0 || y.B192_255 != 0 {
-		y = y.Right(1)
-		w = w.Right(1)
-		if y.Compare(x) <= 0 {
-			z, _ = z.Add256(w)
-			x, _ = x.Sub256(y)
+	bitLen := func(v Decimal256) int {
+		switch {
+		case v.B192_255 != 0:
+			return 192 + bits.Len64(v.B192_255)
+		case v.B128_191 != 0:
+			return 128 + bits.Len64(v.B128_191)
+		case v.B64_127 != 0:
+			return 64 + bits.Len64(v.B64_127)
+		default:
+			return bits.Len64(v.B0_63)
 		}
 	}
-	return z.Right(1), nil
+	shift := bitLen(x) - bitLen(y)
+	if shift < 0 {
+		return Decimal256{}, x, nil
+	}
+	// The aligned highest bit stays within x's bit length. A wide divisor
+	// has at least 65 bits, so this loop processes at most 192 quotient bits.
+	d := y.Left(shift)
+	q := Decimal256{}
+	for i := shift; i >= 0; i-- {
+		q = q.Left(1)
+		var candidate Decimal256
+		var borrow uint64
+		candidate.B0_63, borrow = bits.Sub64(x.B0_63, d.B0_63, 0)
+		candidate.B64_127, borrow = bits.Sub64(x.B64_127, d.B64_127, borrow)
+		candidate.B128_191, borrow = bits.Sub64(x.B128_191, d.B128_191, borrow)
+		candidate.B192_255, borrow = bits.Sub64(x.B192_255, d.B192_255, borrow)
+		if borrow == 0 {
+			x = candidate
+			q.B0_63 |= 1
+		}
+		d = Decimal256{
+			B0_63:    d.B0_63>>1 | d.B64_127<<63,
+			B64_127:  d.B64_127>>1 | d.B128_191<<63,
+			B128_191: d.B128_191>>1 | d.B192_255<<63,
+			B192_255: d.B192_255 >> 1,
+		}
+	}
+	return q, x, nil
+}
+
+func (x Decimal256) div256Trunc(y Decimal256) (Decimal256, error) {
+	q, _, err := x.div256TruncQuoRem(y)
+	return q, err
 }
 
 // Div256Trunc is the exported version of div256Trunc for integer division (DIV)
@@ -1292,16 +1319,11 @@ func (x Decimal128) Mod128(y Decimal128) (Decimal128, error) {
 }
 
 func (x Decimal256) Mod256(y Decimal256) (Decimal256, error) {
-	z, err := x.div256Trunc(y)
+	_, r, err := x.div256TruncQuoRem(y)
 	if err != nil {
 		return x, err
 	}
-	z, err = z.Mul256(y)
-	if err != nil {
-		return x, err
-	}
-	z, err = x.Sub256(z)
-	return z, err
+	return r, nil
 }
 
 func (x Decimal64) Add(y Decimal64, scale1, scale2 int32) (z Decimal64, scale int32, err error) {
@@ -2716,17 +2738,12 @@ func (x Decimal256) Format(scale int32) string {
 	const decimal256FormatBufSize = 80
 	var buf [decimal256FormatBufSize]byte
 	i := len(buf)
-	one := Decimal256{1, 0, 0, 0}
-	ten := Decimal256{10, 0, 0, 0}
 
 	for x.B0_63 != 0 || x.B64_127 != 0 || x.B128_191 != 0 || x.B192_255 != 0 {
-		y, _ := x.Mod256(ten)
+		var remainder uint64
+		x, remainder = div256ByUint64(x, 10)
 		i--
-		buf[i] = byte(y.B0_63) + '0'
-		x, _ = x.Div256(ten)
-		if y.B0_63 >= 5 {
-			x, _ = x.Sub256(one)
-		}
+		buf[i] = byte(remainder) + '0'
 		scale--
 		if scale == 0 {
 			i--

@@ -61,6 +61,7 @@ func Test_NotFn(t *testing.T) {
 // Test_EqualFn tests equality comparison
 func Test_EqualFn(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	defer proc.Free()
 
 	// Test int64 equality
 	{
@@ -104,12 +105,12 @@ func Test_EqualFn(t *testing.T) {
 			info: "select varchar_col1 = varchar_col2",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"hello", "world", "test", "abc"}, []bool{false, false, false, false}),
+					[]string{"hello", "world", "test", "abc", "two", "two"}, []bool{false, false, false, false, false, false}),
 				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"hello", "WORLD", "test", "xyz"}, []bool{false, false, false, false}),
+					[]string{"hello", "WORLD", "test", "xyz", "one", "two"}, []bool{false, false, false, false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
-				[]bool{true, false, true, false}, []bool{false, false, false, false}),
+				[]bool{true, false, true, false, false, true}, []bool{false, false, false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, equalFn)
 		succeed, info := tcc.RunAndFree()
@@ -133,6 +134,7 @@ func Test_EqualFn(t *testing.T) {
 		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
+	require.Zero(t, proc.Mp().CurrNB())
 }
 
 // Test_NotEqualFn tests inequality comparison
