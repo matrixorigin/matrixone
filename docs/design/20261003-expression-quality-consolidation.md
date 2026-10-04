@@ -224,3 +224,50 @@ heap leakage; the existing runtime logs were reclassified without rerunning.
 Full function race remains failed under #29592 and unwaived; #29593 and #29594
 remain unresolved. This local checkpoint cannot clear those gates; #29249 stays
 open.
+
+## Decimal multiplication/modulo kernel consolidation (Refs #29249)
+
+Baseline: `83b47281b875a549eb21460282c920273109ffe4`. One connected test file
+consolidates 15 overlapping wrappers into existing kernel owners. Production,
+shared framework, dependencies and public BVT are unchanged. There are 101 kernel
+calls and 205 logical positions, formerly 110 and 8,366, excluding unchanged
+exceptional owners. Single-purpose batches stay direct; tables contain only
+varying policy fields. `d256MulRef` remains the existing benchmark baseline.
+
+| Retired responsibilities | Retained owners and independent witnesses |
+| --- | --- |
+| D128 multiplication, scales, constants and NULLs | `TestD128Mul`: int64/inline routes, both broadcast orientations, four separate signed-admission boundary identities, rounding and typed overflow |
+| D256 multiplication tiers and large operands | `TestD256Mul`: actual int32/int64/generic routes, MaxInt64 squared, full-width carry, NULL-first mixed batches and scaled generic overflow suppression |
+| Misnamed high-scale/int64 smokes | Reduction 8 is `TestD256Mul_Int32ScaleDown`; the former int64 fixture actually sampled int32. Actual high-scale, declared-width and raw-overflow recovery owners remain in `arith_decimal_wide_test.go` |
+| Modulo helper argument matrices | `TestD256Mod`: caller-derived admission/length/bitmap, both scale directions/chunks, narrowing fallback, dividend sign and full-width remainders |
+| Modulo zero/NULL policies | `TestD256Mod_DivByZeroPaths`: strict typed errors, permissive NULL publication followed by a live row, pre-existing NULL followed by a live row, all-NULL vector-divisor control |
+
+All 105 former named children have concrete retained destinations in the local
+review evidence. Original large-modulo operands, carry and alignment-overflow
+owners remain. The original multi-step helper rounding oracles remain, with four
+caller batches added. Inline adjustments retain their operands but use reachable
+scales `(8,8)` and `(12,12)`. NULL payloads are undefined: compare every live
+coefficient and the complete bitmap. Public wholly-NULL/constant-zero bypass
+remains in its existing public owner. No scratch-result publication is assumed
+on raw errors.
+
+Final focused normal and race runs pass 18 owners and 125 children, zero skips.
+The owning function package passed 2,096 ordinary tests and its fuzz seeds; the
+last three added NULL positions change only two pure test bodies, covered by the
+final focused runs. Unchanged owners reuse that complete-package evidence.
+Vet and configured incremental lint pass (0 incremental issues); MO lint retains
+two byte-identical baseline unsafe-import diagnostics. BVT is not applicable.
+Ten task-private producer variants are rejected by 26 expected runtime assertion
+failures, including NULL early returns, rounded/high-limb values, fallback,
+whole-batch admission and zero policy/class. Formal production is untouched.
+
+Three alternating pairs use the same diagnostic binary and untouched production
+kernels. Summed synchronous test-body medians: wall 4.731ms -> 1.391ms (-70.6%),
+process CPU 5.153ms -> 1.734ms (-66.3%), Go TotalAlloc 1,330,960 -> 326,272 bytes
+(-75.5%), allocations 14,273 -> 4,181 (-70.7%). CPU includes background threads;
+Go allocation excludes native memory and RSS. These exclude initialization,
+fixtures, build/link and queue time; they are not whole-CI or machine gains. An
+initial broad selector accidentally included eight unmeasured wide tests; that
+pair is uncredited. Six corrected exact-scope runs reuse the same built binary.
+These focused results do not clear the failed/unwaived full function race gate
+under #29592. This checkpoint remains local; #29249 is an ongoing task.
