@@ -133,6 +133,78 @@ func TestBuildPrepareStringUsesSessionSQLMode(t *testing.T) {
 	require.NotNil(t, p.GetDcl().GetPrepare().GetPlan())
 }
 
+func TestPreparePublicationUsesFrontendExecutionPlan(t *testing.T) {
+	for _, sql := range []string{
+		"create publication pub database db account all",
+		"alter publication pub account all",
+		"drop publication pub",
+		"show publications",
+		"show publications like 'pub%'",
+		"show publication coverage pub",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			ctx := NewMockCompilerContext(true)
+			stmt := tree.NewPrepareString("stmt", sql)
+			defer stmt.Free()
+			p, err := buildPrepare(stmt, ctx)
+			require.NoError(t, err)
+			prepared := p.GetDcl().GetPrepare()
+			require.NotNil(t, prepared.Plan)
+			require.True(t, prepared.Plan.IsPrepare)
+			require.Nil(t, prepared.Plan.Plan)
+			require.Empty(t, prepared.ParamTypes)
+			require.Empty(t, prepared.Schemas)
+		})
+	}
+}
+
+func TestPreparePublicationLikeParameter(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	for _, binaryPrepare := range []bool{false, true} {
+		t.Run(fmt.Sprintf("binary=%t", binaryPrepare), func(t *testing.T) {
+			var stmt tree.Prepare
+			if binaryPrepare {
+				parsed, err := mysql.Parse(ctx.GetContext(), "show publications like ?", 1)
+				require.NoError(t, err)
+				stmt = tree.NewPrepareStmt("stmt", parsed[0])
+			} else {
+				stmt = tree.NewPrepareString("stmt", "show publications like ?")
+			}
+			defer stmt.Free()
+			p, err := buildPrepare(stmt, ctx)
+			require.NoError(t, err)
+			prepared := p.GetDcl().GetPrepare()
+			require.Equal(t, []int32{int32(types.T_varchar)}, prepared.ParamTypes)
+			require.Empty(t, prepared.Schemas)
+			require.True(t, prepared.Plan.IsPrepare)
+			require.Nil(t, prepared.Plan.Plan)
+		})
+	}
+}
+
+func TestPreparePublicationRejectsUnsupportedPattern(t *testing.T) {
+	t.Run("invalid parameter offset", func(t *testing.T) {
+		ctx := NewMockCompilerContext(true)
+		stmts, err := mysql.Parse(ctx.GetContext(), "show publications like ?", 1)
+		require.NoError(t, err)
+		defer stmts[0].Free()
+		stmts[0].(*tree.ShowPublications).Like.Right.(*tree.ParamExpr).Offset = 2
+		_, _, err = getPreparePlan(ctx, stmts[0])
+		require.ErrorContains(t, err, "requires one LIKE parameter")
+	})
+	for _, sql := range []string{
+		"show publications like concat('pub', ?)",
+		"show publications like 1",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt := tree.NewPrepareString("stmt", sql)
+			defer stmt.Free()
+			_, err := buildPrepare(stmt, NewMockCompilerContext(true))
+			require.ErrorContains(t, err, "requires a string literal or parameter marker LIKE pattern")
+		})
+	}
+}
+
 func TestPrepareDataBranchUsesFrontendExecutionPlan(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -1143,6 +1215,13 @@ func TestOnDuplicateUpdateVarcharFromTextUsesAssignmentCast(t *testing.T) {
 	logicPlan, err := runOneStmt(mock, t, "insert into text_cast_t(id, txt, vc) values (1, repeat('a', 260), '') on duplicate key update vc = txt")
 	assert.NoError(t, err)
 	assert.True(t, planHasTextToVarcharAssignCastWithWidth(logicPlan, 255))
+
+	// INSERT IGNORE keeps the same assignment conversion contract when an
+	// executable ODKU list is present; IGNORE must not route the statement to
+	// the insert-only row-skip path.
+	ignorePlan, err := runOneStmt(mock, t, "insert ignore into text_cast_t(id, txt, vc) values (1, repeat('a', 260), '') on duplicate key update vc = txt")
+	assert.NoError(t, err)
+	assert.True(t, planHasTextToVarcharCastWithNameAndWidth(ignorePlan, "cast_ignore", 255))
 }
 
 // test single table plan building
@@ -1214,7 +1293,7 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 		"select null is not unknown",
 		"select 1 as c,  1/2, abs(-2)",
 
-		"select date('2022-01-01'), adddate(time'00:00:00', interval 1 day), subdate(time'00:00:00', interval 1 week), '2007-01-01' + interval 1 month, '2007-01-01' -  interval 1 hour",
+		"select date('2022-01-01'), adddate(time'00:00:00', interval 1 hour), subdate(time'00:00:00', interval 1 minute), '2007-01-01' + interval 1 month, '2007-01-01' -  interval 1 hour",
 		"SELECT '2024-01-01' + INTERVAL n_nationkey DAY FROM nation",
 		"SELECT '2024-01-01' - INTERVAL n_nationkey HOUR FROM nation",
 		"SELECT '2024-01-01' + INTERVAL n_nationkey % 365 DAY FROM nation",
@@ -2750,6 +2829,8 @@ func TestUnionSqlBuilder(t *testing.T) {
 		"with qn (foo, bar) as (select 1 as col, 2 as coll union select 4, 5) select qn1.bar from qn qn1",
 		"select n_name, n_comment from nation union all select n_name, n_comment from nation2",
 		"select n_name from nation intersect all select n_name from nation2",
+		"select n_name from nation except all select n_name from nation2",
+		"select n_name from nation minus all select n_name from nation2",
 		"(select n_name from nation for update) union all (select n_name from nation2 for update)",
 		"(select n_name from nation for update) union all (select n_name from nation2)",
 		"with qn as (select n_nationkey from nation union all select n_nationkey from nation2) select * from qn for update",
@@ -2777,7 +2858,6 @@ func TestUnionSqlBuilder(t *testing.T) {
 	sqls = []string{
 		"select 1 union select 2, 'a'",
 		"select n_name as a from nation union select n_comment from nation order by n_name",
-		"select n_name from nation minus all select n_name from nation2", // not support
 		"select n_name from nation union all select n_name from nation2 for update",
 	}
 	runTestShouldError(mock, t, sqls)
@@ -8853,6 +8933,7 @@ func TestOrderedGroupConcatInNonEquiCorrelatedScalarSubqueryKeepsConfig(t *testi
 	require.NoError(t, err)
 
 	found := false
+	masked := false
 	for _, node := range logicPlan.GetQuery().Nodes {
 		for _, agg := range node.AggList {
 			fn := agg.GetF()
@@ -8866,9 +8947,18 @@ func TestOrderedGroupConcatInNonEquiCorrelatedScalarSubqueryKeepsConfig(t *testi
 				fn.AggConfigType,
 			)
 			require.NotEmpty(t, fn.AggConfig)
+			if len(fn.Args) == 2 && fn.Args[0].GetF() != nil &&
+				fn.Args[0].GetF().Func.ObjName == "case" {
+				masked = true
+				for _, arg := range fn.Args {
+					require.Equal(t, "case", arg.GetF().Func.ObjName)
+					require.False(t, arg.Typ.NotNullable)
+				}
+			}
 		}
 	}
 	require.True(t, found)
+	require.True(t, masked, "rewritten ordered GROUP_CONCAT keeps both masked arguments")
 }
 
 func TestMysqlCompatibilityMode(t *testing.T) {

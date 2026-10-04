@@ -78,13 +78,18 @@ func (e *fulltext2FlushSQLExecutor) ExecTxn(context.Context, func(executor.TxnEx
 // exercises the cache wrapper, including Preload/Load/Destroy, while keeping the
 // fake search result itself independent from the cache's implementation.
 type cacheFlushProbe struct {
-	loads    atomic.Int32
-	destroys atomic.Int32
-	searches atomic.Int32
+	loads             atomic.Int32
+	destroys          atomic.Int32
+	searches          atomic.Int32
+	committed         *atomic.Bool
+	loadedAfterCommit bool
 }
 
 func (p *cacheFlushProbe) Search(*sqlexec.SqlProcess, any, vectorindex.RuntimeConfig) (any, []float64, error) {
 	p.searches.Add(1)
+	if p.loadedAfterCommit {
+		return []int64{42, 101}, []float64{0.25, 0.5}, nil
+	}
 	return []int64{42}, []float64{0.25}, nil
 }
 
@@ -106,23 +111,32 @@ func (*cacheFlushProbe) Preload(*sqlexec.SqlProcess) error { return nil }
 
 func (p *cacheFlushProbe) Load(*sqlexec.SqlProcess) error {
 	p.loads.Add(1)
+	p.loadedAfterCommit = p.committed != nil && p.committed.Load()
 	return nil
 }
 
 func (*cacheFlushProbe) GetIndexSize() (int64, int64) { return 0, 0 }
+
+func (*cacheFlushProbe) BuildTS() int64 { return 0 }
 
 func (p *cacheFlushProbe) Destroy() { p.destroys.Add(1) }
 
 var _ veccache.VectorIndexSearchIf = (*cacheFlushProbe)(nil)
 var _ executor.SQLExecutor = (*fulltext2FlushSQLExecutor)(nil)
 
-// TestRunFulltext2KeepsWarmCacheOnNonEmptyCDCFlush proves the #28005 contract
-// through the real consumer path. A non-empty encoded writer blob is consumed by
-// RunFulltext2, the tail INSERT and watermark happen before a commit barrier, and
-// a reader of the exact index key still uses the same warm object while that flush
-// is blocked. Only a later, explicitly driven ordinary TTL sweep destroys it and
-// permits a replacement load.
-func TestRunFulltext2KeepsWarmCacheOnNonEmptyCDCFlush(t *testing.T) {
+// TestRunFulltext2KeepsWarmCacheAfterNonEmptyCDCFlush proves the #28005
+// read-only cache contract through the real consumer path. A non-empty encoded
+// writer blob is consumed by RunFulltext2; the tail INSERT and watermark happen
+// before a commit barrier. Two properties are asserted:
+//
+//   - both while the flush is blocked and after it commits, a reader of the exact
+//     index key keeps using the same warm object. CDC does not destroy or reload
+//     the object; normal generation/stale/TTL handling remains responsible for
+//     eventual refresh.
+//   - crossing the ordinary idle TTL boundary destroys that generation once;
+//     the next Load observes the committed row, and final cleanup releases the
+//     replacement once. A permanently retained generation fails this oracle.
+func TestRunFulltext2KeepsWarmCacheAfterNonEmptyCDCFlush(t *testing.T) {
 	const (
 		indexKey    = "__store"
 		serviceID   = "ft2-cache-contract-28005"
@@ -193,10 +207,12 @@ func TestRunFulltext2KeepsWarmCacheOnNonEmptyCDCFlush(t *testing.T) {
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOp, nil)
 	cnEngine.EXPECT().New(gomock.Any(), txnOp).Return(nil)
 	commitStarted := make(chan struct{})
+	var committed atomic.Bool
 	txnOp.EXPECT().Commit(gomock.Any()).DoAndReturn(func(ctx context.Context) error {
 		close(commitStarted)
 		select {
 		case <-commitRelease:
+			committed.Store(true)
 			return nil
 		case <-ctx.Done():
 			return ctx.Err()
@@ -215,7 +231,7 @@ func TestRunFulltext2KeepsWarmCacheOnNonEmptyCDCFlush(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, decoded.Events, 1, "the flush fixture must carry one real INSERT event")
 
-	warm := &cacheFlushProbe{}
+	warm := &cacheFlushProbe{committed: &committed}
 	_, _, err = testCache.Search(nil, indexKey, warm, nil, vectorindex.RuntimeConfig{})
 	require.NoError(t, err)
 	require.Equal(t, int32(1), warm.loads.Load())
@@ -310,26 +326,46 @@ func TestRunFulltext2KeepsWarmCacheOnNonEmptyCDCFlush(t *testing.T) {
 	}
 	require.Equal(t, serviceID, watermarkService.Load())
 	require.Same(t, txnOp, watermarkTxn.Load())
+
+	// CDC does not evict the idle warm entry after commit. The resident object is
+	// still owned by the cache and will be refreshed by the normal lifecycle.
 	require.Equal(t, int32(1), warm.loads.Load())
-	require.Equal(t, int32(0), warm.destroys.Load())
-	require.Same(t, warm, warmEntry.Algo)
-
-	// A separately driven ordinary stale/TTL sweep is allowed to retire the
-	// entry. This is intentionally after the successful flush: it distinguishes
-	// ordinary cache lifecycle from a CDC-triggered invalidation.
-	warmEntry.ExpireAt.Store(time.Now().Add(-time.Second).UnixMicro())
-	testCache.HouseKeeping()
+	require.Equal(t, int32(0), warm.destroys.Load(), "CDC flush must not destroy an idle warm backend")
 	_, stillWarm := testCache.IndexMap.Load(indexKey)
-	require.False(t, stillWarm)
-	require.Equal(t, int32(1), warm.destroys.Load())
+	require.True(t, stillWarm, "CDC flush must keep the idle warm entry resident")
 
-	replacement := &cacheFlushProbe{}
-	_, _, err = testCache.Search(nil, indexKey, replacement, nil, vectorindex.RuntimeConfig{})
+	replacement := &cacheFlushProbe{committed: &committed}
+	keys, _, err := testCache.Search(nil, indexKey, replacement, nil, vectorindex.RuntimeConfig{})
 	require.NoError(t, err)
-	require.Equal(t, int32(1), replacement.loads.Load())
+	require.Equal(t, []int64{42}, keys, "the warm generation deliberately retains its pre-commit snapshot")
+	require.Equal(t, int32(0), replacement.loads.Load(), "the next reader reuses the warm generation")
 	value, ok = testCache.IndexMap.Load(indexKey)
 	require.True(t, ok)
 	replacementEntry, ok := value.(*veccache.VectorIndexSearch)
 	require.True(t, ok)
-	require.Same(t, replacement, replacementEntry.Algo)
+	require.Same(t, warm, replacementEntry.Algo)
+
+	// Advance only this idle entry across its TTL boundary, then invoke the real
+	// housekeeping path. No Remove/Destroy or CDC invalidation forces replacement.
+	// This is deterministic and does not shorten the process-global cache TTL.
+	warmEntry.ExpireAt.Store(time.Now().Add(-time.Second).UnixMicro())
+	testCache.HouseKeeping()
+	_, ok = testCache.IndexMap.Load(indexKey)
+	require.False(t, ok, "ordinary TTL housekeeping must remove the old generation")
+	require.Equal(t, int32(1), warm.destroys.Load())
+	keys, _, err = testCache.Search(nil, indexKey, replacement, nil, vectorindex.RuntimeConfig{})
+	require.NoError(t, err)
+	require.Equal(t, []int64{42, 101}, keys, "replacement Load must observe the committed CDC row")
+	require.Equal(t, int32(1), replacement.loads.Load())
+	require.Equal(t, int32(1), warm.loads.Load())
+	require.Equal(t, int32(0), replacement.destroys.Load())
+
+	// Final cleanup destroys each loaded generation exactly once, including if
+	// teardown is repeated; unused candidates were never loaded or destroyed.
+	testCache.Destroy()
+	testCache.Destroy()
+	require.Equal(t, int32(1), warm.destroys.Load())
+	require.Equal(t, int32(1), replacement.destroys.Load())
+	require.Zero(t, candidate.loads.Load())
+	require.Zero(t, candidate.destroys.Load())
 }

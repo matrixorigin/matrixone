@@ -17,7 +17,7 @@ WHERE TABLE_SCHEMA = DATABASE()
 AND TABLE_NAME = 'ascii_dst_28455'
 AND COLUMN_NAME = 'a';
 ➤ TABLE_NAME[12,256,0]  ¦  DATA_TYPE[12,65535,0]  ¦  COLUMN_TYPE[12,65535,0]  ¦  NUMERIC_PRECISION[-5,64,0]  ¦  NUMERIC_SCALE[-5,64,0]  𝄀
-ascii_dst_28455  ¦  int  ¦  INT(0)  ¦  10  ¦  0
+ascii_dst_28455  ¦  int  ¦  INT  ¦  10  ¦  0
 CREATE VIEW ascii_view_28455 AS SELECT ASCII(s) AS a FROM ascii_src_28455;
 SELECT TABLE_NAME, DATA_TYPE, COLUMN_TYPE, NUMERIC_PRECISION, NUMERIC_SCALE
 FROM information_schema.COLUMNS
@@ -25,7 +25,7 @@ WHERE TABLE_SCHEMA = DATABASE()
 AND TABLE_NAME = 'ascii_view_28455'
 AND COLUMN_NAME = 'a';
 ➤ TABLE_NAME[12,256,0]  ¦  DATA_TYPE[12,65535,0]  ¦  COLUMN_TYPE[12,65535,0]  ¦  NUMERIC_PRECISION[-5,64,0]  ¦  NUMERIC_SCALE[-5,64,0]  𝄀
-ascii_view_28455  ¦  int  ¦  INT(0)  ¦  10  ¦  0
+ascii_view_28455  ¦  int  ¦  INT  ¦  10  ¦  0
 CREATE TABLE ascii_union_28455 AS
 SELECT ASCII(s) AS a FROM ascii_src_28455
 UNION ALL
@@ -36,7 +36,7 @@ WHERE TABLE_SCHEMA = DATABASE()
 AND TABLE_NAME = 'ascii_union_28455'
 AND COLUMN_NAME = 'a';
 ➤ TABLE_NAME[12,256,0]  ¦  DATA_TYPE[12,65535,0]  ¦  COLUMN_TYPE[12,65535,0]  ¦  NUMERIC_PRECISION[-5,64,0]  ¦  NUMERIC_SCALE[-5,64,0]  𝄀
-ascii_union_28455  ¦  bigint  ¦  BIGINT(0)  ¦  19  ¦  0
+ascii_union_28455  ¦  bigint  ¦  BIGINT  ¦  19  ¦  0
 SELECT a FROM ascii_union_28455 ORDER BY a;
 ➤ a[-5,64,0]  𝄀
 null  𝄀

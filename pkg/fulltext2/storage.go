@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
@@ -39,6 +40,12 @@ import (
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
+
+// MORPCVersionProbeTail is the MORPC protocol version that introduced the probe_tail TableConfig
+// contract (the self-completing fulltext2 json index probe). It is named here, next to the
+// contract it gates, so a future MORPC renumber collision changes only this one line rather than
+// every plan-time gate, sender fence, and test that references it.
+const MORPCVersionProbeTail = defines.MORPCVersion82
 
 // TableConfig locates a fulltext2 index's persistent segment store + metadata
 // table; it is the JSON const arg passed to the fulltext2_create / fulltext2_search
@@ -80,6 +87,30 @@ type TableConfig struct {
 	// cfg so Fulltext2Search.Search can map a covering query's RequestedIncludeColumns (by
 	// name) to each result's positional Include values. nil ⇒ no INCLUDE columns.
 	IncludeColumns []string `json:"include_columns,omitempty"`
+	// ProbeTail marks a MANDATORY json_extract probe that the fulltext2_search operator must
+	// self-complete: after searching the bulk index it binds the generation it actually searched
+	// (BuildTS) and emits a table_changes(searched, snapshot] tail so no row committed after the
+	// index's generation is dropped. Set by the planner for an async json probe (current or
+	// snapshot). false = ordinary MATCH / a synchronous covered probe, which needs no tail.
+	ProbeTail bool `json:"probe_tail,omitempty"`
+	// ProbeTailWhere is the json predicate the operator pushes into BOTH its table_changes tail and its
+	// base-table fallback, rendered with the public json_extract_string / json_extract_float64
+	// (json_extract_string(`col`, '$.path') <op> <lit>). The fallback/tail SQL runs with
+	// applyIndices=1 (set by the operator via StatementOption.WithOptimizerHints), so its base-table
+	// scan skips the mandatory-filter rewrite and cannot re-trigger the probe and recurse. It filters
+	// both queries to matching rows -- no index. Empty ⇒ the planner declined the probe (never emitted
+	// with ProbeTail).
+	ProbeTailWhere string `json:"probe_tail_where,omitempty"`
+	// ProbeTailBar / ProbeTailBarLogical are the max source commit as of the read (SourceCommitTS),
+	// carried as its physical and logical halves, computed once at plan time. The operator compares the
+	// searched generation (a physical-only build_ts) against this FULL timestamp to decide, at runtime,
+	// whether the index is caught up (no tail) or behind (→ tail). The logical half MUST be carried:
+	// build_ts is physical-only, so a bar of (P, L>0) with a generation at physical P is NOT caught up
+	// (it may miss the (P, L) commit); comparing physical-only would drop that row at the mandatory
+	// join. It is the plan's only generation-related input; the searched generation is read at execution
+	// so the tail/no-tail/fallback choice is bound to what was searched, not to a plan-time guess.
+	ProbeTailBar        int64  `json:"probe_tail_bar,omitempty"`
+	ProbeTailBarLogical uint32 `json:"probe_tail_bar_logical,omitempty"`
 }
 
 // runSql / runStreamingSql indirect the sqlexec executor entry points so unit tests can
@@ -1110,6 +1141,34 @@ func LoadGeneration(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (ts int64, tai
 	tail = resultScalarInt64(res)
 	res.Close()
 	return ts, tail, nil
+}
+
+// MaxBuildTS returns the greatest base-table version this index reflects:
+// MAX(metadata.build_ts) across base segments and, unless baseOnly, the cdc_tail
+// frames. build_ts records the source commit each segment/frame was built from (a
+// merge preserves the max of its inputs), so this is the coverage point the async
+// freshness gate compares against the query's source commit.
+//
+// Returns 0 (= unknown) when the column is absent (an index predating the build_ts
+// migration) or on any read error. 0 is a safe under-report: it only makes a caller
+// treat the index as less current, never more.
+func MaxBuildTS(sqlproc *sqlexec.SqlProcess, cfg TableConfig, baseOnly bool) int64 {
+	if !sqlexec.HasProvenanceColumns(sqlproc, cfg.DbName, cfg.MetadataTable,
+		catalog.FullText2Index_TblCol_Metadata_Build_Ts) {
+		return 0
+	}
+	sql := fmt.Sprintf("SELECT COALESCE(MAX(%s), 0) FROM %s",
+		catalog.FullText2Index_TblCol_Metadata_Build_Ts,
+		sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable))
+	if baseOnly {
+		sql += " WHERE " + notTailFrame()
+	}
+	res, err := runSql(sqlproc, sql)
+	if err != nil {
+		return 0
+	}
+	defer res.Close()
+	return resultScalarInt64(res)
 }
 
 // QueryGeneration reads the current (timestamp, tailChunk) generation in the BACKGROUND

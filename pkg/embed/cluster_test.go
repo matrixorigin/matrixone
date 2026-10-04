@@ -16,16 +16,19 @@ package embed
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -56,6 +59,96 @@ func (s *closeTrackingService) Close() error {
 
 type closeTrackingFileService struct {
 	closeCount atomic.Int32
+}
+
+// A diagnostic error does not imply that the owner still uses dependencies.
+type completedCloseService struct {
+	closeTrackingService
+	complete bool
+}
+
+func (s *completedCloseService) CloseComplete() bool { return s.complete }
+
+func TestClusterCloseCompletedErrorReleasesOwnership(t *testing.T) {
+	failure := errors.New("final metadata withdrawal failed")
+	cn := &completedCloseService{closeTrackingService: closeTrackingService{closeErr: failure}, complete: true}
+	dependency := &closeTrackingService{}
+	fs := &closeTrackingFileService{}
+	op := &operator{state: started}
+	op.reset.svc, op.reset.fs = cn, fs
+	dep := &operator{state: started}
+	dep.reset.svc = dependency
+	c := &cluster{state: started, services: []*operator{dep, op}}
+	ports, err := acquireClusterPortLease()
+	require.NoError(t, err)
+	c.portLease = ports
+	t.Cleanup(func() { require.NoError(t, ports.lock.Close()) })
+	lease, err := clusteradmission.Acquire(t.Context(), clusteradmission.Exclusive)
+	require.NoError(t, err)
+	c.testAdmission = lease
+	t.Cleanup(func() { require.NoError(t, lease.Release()) })
+	err = c.Close()
+	require.ErrorIs(t, err, failure)
+	require.False(t, op.needsCleanup())
+	require.Equal(t, int32(1), fs.closeCount.Load())
+	require.Equal(t, int32(1), dependency.closeCount.Load())
+	require.Nil(t, c.testAdmission)
+	require.Nil(t, c.portLease)
+	require.True(t, c.CloseComplete())
+	next, err := clusteradmission.Acquire(t.Context(), clusteradmission.Exclusive)
+	require.NoError(t, err, "completed close must not poison the next cluster")
+	t.Cleanup(func() { require.NoError(t, next.Release()) })
+	require.NoError(t, c.Close())
+	require.Equal(t, int32(1), cn.closeCount.Load())
+	require.Equal(t, int32(1), fs.closeCount.Load())
+}
+
+func TestClusterClosePendingOwnerPrecedesDependencies(t *testing.T) {
+	failure := errors.New("pending CN drain")
+	pending := &completedCloseService{closeTrackingService: closeTrackingService{closeErr: failure}}
+	op := &operator{}
+	op.reset.svc = pending
+	depService := &closeTrackingService{}
+	dep := &operator{state: started}
+	dep.reset.svc = depService
+	c := &cluster{state: started, services: []*operator{dep}, pendingCleanup: []*operator{op}}
+	require.ErrorIs(t, c.Close(), failure)
+	require.Zero(t, depService.closeCount.Load())
+	require.False(t, c.CloseComplete())
+	require.ErrorContains(t, c.Start(), "cleanup is incomplete")
+	require.Nil(t, c.portLease, "rejected Start must not allocate a lease")
+	pending.complete = true
+	require.ErrorIs(t, c.Close(), failure)
+	require.Equal(t, int32(1), depService.closeCount.Load())
+	require.Empty(t, c.pendingCleanup)
+	require.True(t, c.CloseComplete())
+}
+
+func TestOperatorStartPreservesIncompleteOwnership(t *testing.T) {
+	svc := &completedCloseService{}
+	op := &operator{}
+	op.reset.svc = svc // partial startup did not reach state=started
+	require.ErrorContains(t, op.Start(), "cleanup is incomplete")
+	require.Same(t, svc, op.reset.svc)
+	require.ErrorContains(t, op.Close(), "cleanup is incomplete", "nil error is not a completion certificate")
+	require.True(t, op.needsCleanup())
+	svc.complete = true
+	require.NoError(t, op.Close())
+	require.False(t, op.needsCleanup())
+}
+
+func TestClusterStartRollbackCompletedErrorReleasesAdmission(t *testing.T) {
+	failure := errors.New("startup and withdrawal failed")
+	svc := &completedCloseService{closeTrackingService: closeTrackingService{closeErr: failure}, complete: true}
+	op := &operator{serviceType: metadata.ServiceType_CN}
+	c := &cluster{services: []*operator{op}}
+	c.options.testing = true
+	c.startFn = func(op *operator) error { op.reset.svc = svc; return failure }
+	t.Cleanup(func() { require.NoError(t, c.Close()) })
+	require.ErrorIs(t, c.Start(), failure)
+	require.Nil(t, c.testAdmission)
+	require.False(t, op.needsCleanup())
+	require.Equal(t, int32(1), svc.closeCount.Load())
 }
 
 func (s *closeTrackingFileService) Close(context.Context) {
@@ -129,7 +222,6 @@ func TestClusterLifecycleAndCNExpansion(t *testing.T) {
 	c, err := NewCluster(
 		WithTesting(),
 		WithPreStart(func(svc ServiceOperator) {
-			adjustClusterStartupRetryIntervals(svc)
 			if svc.ServiceType() == metadata.ServiceType_CN {
 				svc.Adjust(func(config *ServiceConfig) {
 					config.CN.AutomaticUpgrade = true
@@ -145,6 +237,18 @@ func TestClusterLifecycleAndCNExpansion(t *testing.T) {
 	require.Error(t, c.Start())
 
 	validCNCanWork(t, c, 0)
+	assertBootstrapViews(t, c, 0)
+
+	// Exercise recovery of a core-only / partially completed bootstrap using
+	// the existing cluster. A new CN must reconcile missing derived views.
+	firstCN, err := c.GetCNService(0)
+	require.NoError(t, err)
+	exec := firstCN.(*operator).reset.svc.(cnservice.Service).GetSQLExecutor()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	res, err := exec.Exec(ctx, "drop view system.sql_statement_hotspot", executor.Options{})
+	res.Close()
+	require.NoError(t, err)
 
 	_, err = c.GetService("no")
 	require.Error(t, err)
@@ -161,15 +265,18 @@ func TestClusterLifecycleAndCNExpansion(t *testing.T) {
 	require.NoError(t, c.StartNewCNService(2))
 	validCNCanWork(t, c, 1)
 	validCNCanWork(t, c, 2)
+	assertBootstrapViews(t, c, 1)
+	assertBootstrapViews(t, c, 2)
 
 	// Preserve the original dynamic-expansion coverage with the generated CN
 	// defaults after the first three CNs have exercised automatic upgrade.
-	c.(*cluster).options.preStart = adjustClusterStartupRetryIntervals
+	c.(*cluster).options.preStart = nil
 	require.NoError(t, c.StartNewCNService(1))
 	validCNCanWork(t, c, 3)
 	cn, err = c.GetCNService(3)
 	require.NoError(t, err)
 	require.False(t, cn.GetServiceConfig().CN.AutomaticUpgrade)
+	require.Equal(t, 0, cn.GetServiceConfig().CN.Txn.Trace.BufferSize)
 }
 
 func TestSharedBaseClusterCanWorkWithConcurrentCluster(t *testing.T) {
@@ -535,6 +642,7 @@ func TestWithTestingBoundsHeartbeatRecoveryInsideStoreLiveness(t *testing.T) {
 			cfg.HAKeeperClient.BackendReadTimeout.Duration)
 		switch svc.ServiceType() {
 		case metadata.ServiceType_CN:
+			require.Equal(t, 0, cfg.CN.Txn.Trace.BufferSize)
 			require.Equal(t, testHAKeeperHeartbeatTimeout,
 				cfg.CN.HAKeeper.HeatbeatTimeout.Duration)
 			require.Less(t, cfg.CN.HAKeeper.HeatbeatTimeout.Duration,
@@ -552,6 +660,56 @@ func TestWithTestingBoundsHeartbeatRecoveryInsideStoreLiveness(t *testing.T) {
 			require.Less(t, cfg.HAKeeperClient.BackendReadTimeout.Duration,
 				cfg.LogService.HAKeeperConfig.TNStoreTimeout.Duration)
 		}
+	}
+}
+
+func TestTestingServiceDefaultsPreserveOverrides(t *testing.T) {
+	for _, testingMode := range []bool{false, true} {
+		t.Run(fmt.Sprintf("testing=%t", testingMode), func(t *testing.T) {
+			opts := []Option{WithCNCount(2)}
+			if testingMode {
+				opts = append(opts, WithTesting())
+			}
+			opts = append(opts, WithPreStart(func(svc ServiceOperator) {
+				if svc.ServiceType() == metadata.ServiceType_LOG {
+					cfg := svc.GetServiceConfig()
+					wantRTT := uint64(200)
+					wantRetry := time.Second
+					if testingMode {
+						wantRTT = 50
+						wantRetry = basicClusterHAKeeperBootstrapRetryInterval
+					}
+					require.Equal(t, wantRTT, cfg.LogService.RTTMillisecond)
+					require.Equal(t, wantRetry, cfg.LogService.HAKeeperBootstrapRetryInterval.Duration)
+					// This interval also defines the bootstrap failure budget.
+					require.Equal(t, 3*time.Second, cfg.LogService.HAKeeperCheckInterval.Duration)
+					svc.Adjust(func(cfg *ServiceConfig) { cfg.LogService.RTTMillisecond = 75 })
+				}
+
+				if svc.ServiceType() != metadata.ServiceType_CN {
+					return
+				}
+				want := 0
+				require.Equal(t, want, svc.GetServiceConfig().CN.Txn.Trace.BufferSize)
+				svc.Adjust(func(cfg *ServiceConfig) { cfg.CN.Txn.Trace.BufferSize = 8192 })
+			}))
+			c, err := NewCluster(opts...)
+			if c != nil {
+				t.Cleanup(func() { require.NoError(t, c.Close()) })
+			}
+			require.NoError(t, err)
+			for _, svc := range c.(*cluster).services {
+				if svc.ServiceType() == metadata.ServiceType_LOG {
+					require.Equal(t, uint64(75), svc.GetServiceConfig().LogService.RTTMillisecond)
+				}
+			}
+
+			for i := range 2 {
+				cn, err := c.GetCNService(i)
+				require.NoError(t, err)
+				require.Equal(t, 8192, cn.GetServiceConfig().CN.Txn.Trace.BufferSize)
+			}
+		})
 	}
 }
 
@@ -1072,4 +1230,123 @@ func TestRollbackNewServicesDropsTopologyAfterCloseError(t *testing.T) {
 	require.Empty(t, c.pendingCleanup)
 	require.NoError(t, c.Close())
 	require.Equal(t, int32(3), newService.closeCount.Load())
+}
+
+func assertBootstrapViews(t *testing.T, c Cluster, index int) {
+	t.Helper()
+	svc, err := c.GetCNService(index)
+	require.NoError(t, err)
+	exec := svc.(*operator).reset.svc.(cnservice.Service).GetSQLExecutor()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	res, err := exec.Exec(ctx, "select count(*) from mo_catalog.mo_tables where account_id=0 and reldatabase='system' and relkind='v' and relname in ('log_info','error_info','span_info','sql_statement_hotspot')", executor.Options{})
+	require.NoError(t, err)
+	defer res.Close()
+	var count int64
+	res.ReadRows(func(_ int, cols []*vector.Vector) bool { count = executor.GetFixedRows[int64](cols[0])[0]; return true })
+	require.Equal(t, int64(4), count)
+	hotspot, err := exec.Exec(ctx, "select * from system.sql_statement_hotspot limit 1", executor.Options{})
+	hotspot.Close()
+	require.NoError(t, err)
+}
+
+func TestRetiredTransactionTracePreservesRollbackArtifacts(t *testing.T) {
+	// Stopped restart requires an owned cluster, so release the reusable fixture
+	// through its lifecycle owner before acquiring exclusive admission.
+	require.NoError(t, CloseSingleCNBaseClusterTests())
+	root := t.TempDir()
+	var parsed cnservice.Config
+	md, err := toml.Decode(fmt.Sprintf(`[txn.trace]
+enable = true
+buffer-size = -1
+flush-bytes = "1KiB"
+force-flush-duration = "1ms"
+dir = %q
+tables = [1]
+load-to-mo = true
+`, root), &parsed)
+	require.NoError(t, err)
+	require.Empty(t, md.Undecoded())
+	c, err := NewCluster(WithTesting(), WithCNCount(1), WithPreStart(func(svc ServiceOperator) {
+		adjustBasicClusterService(svc)
+		if svc.ServiceType() == metadata.ServiceType_CN {
+			svc.Adjust(func(cfg *ServiceConfig) {
+				// Enabled controls and invalid former queue capacity must be inert.
+				cfg.CN.Txn.Trace = parsed.Txn.Trace
+			})
+		}
+	}))
+	if c != nil {
+		t.Cleanup(func() { require.NoError(t, c.Close()) })
+	}
+	require.NoError(t, err)
+	cn, err := c.GetCNService(0)
+	require.NoError(t, err)
+	// Seed the actual former collector-owned layout before startup.
+	legacyRoot := filepath.Join(cn.GetServiceConfig().DataDir, parsed.Txn.Trace.Dir)
+	legacyDir := filepath.Join(legacyRoot, fmt.Sprintf("cn-%x", sha256.Sum256([]byte(cn.ServiceID()))))
+	require.NoError(t, os.MkdirAll(legacyDir, 0700))
+	marker := filepath.Join(legacyDir, "historical.csv")
+	require.NoError(t, os.WriteFile(marker, []byte("historical trace data"), 0600))
+	require.NoError(t, c.Start())
+
+	check := func(seed bool) {
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+		defer cancel()
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		if seed {
+			var count int
+			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase='mo_debug'").Scan(&count))
+			require.Equal(t, 9, count)
+			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from mo_debug.trace_features where state='disable'").Scan(&count))
+			require.Equal(t, 5, count)
+			// Historical collector rows are seeded through its former internal SQL
+			// ownership path; public writes remain subject to catalog authorization.
+			exec := cn.(*operator).reset.svc.(cnservice.Service).GetSQLExecutor()
+			for _, query := range []string{
+				"insert into mo_debug.trace_statement values (1,'historical','select historical',1)",
+				"update mo_debug.trace_features set state='enable'",
+			} {
+				res, err := exec.Exec(ctx, query, executor.Options{})
+				require.NoError(t, err)
+				res.Close()
+			}
+		}
+		for _, setting := range []string{"0", "1"} {
+			_, err = conn.ExecContext(ctx, "set disable_txn_trace="+setting)
+			require.NoError(t, err)
+			tx, err := conn.BeginTx(ctx, nil)
+			require.NoError(t, err)
+			func() {
+				defer tx.Rollback()
+				_, err = tx.ExecContext(ctx, "select 1")
+				require.NoError(t, err)
+				require.NoError(t, tx.Commit())
+			}()
+		}
+		_, err = conn.ExecContext(ctx, "select mo_ctl('cn','txn-trace','enable txn')")
+		require.ErrorContains(t, err, "command TXN-TRACE not supported")
+		var count int
+		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from mo_debug.trace_statement").Scan(&count))
+		require.Equal(t, 1, count, "retired collector must not append statements")
+		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from mo_debug.trace_features where state='enable'").Scan(&count))
+		require.Equal(t, 5, count, "historical controls must not be rewritten")
+		data, err := os.ReadFile(marker)
+		require.NoError(t, err)
+		require.Equal(t, "historical trace data", string(data))
+		entries, err := os.ReadDir(legacyDir)
+		require.NoError(t, err)
+		require.Len(t, entries, 1, "retired trace must not create output")
+	}
+	check(true)
+	require.NoError(t, c.Close())
+	require.NoError(t, c.Start())
+	check(false)
 }

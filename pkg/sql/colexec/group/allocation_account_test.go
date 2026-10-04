@@ -28,6 +28,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -1711,9 +1712,11 @@ func makeSupportedAggregateSpillInput(
 		types.T_int64.ToType(),
 		types.T_int64.ToType(),
 		types.T_char.ToType(),
+		types.T_uint64.ToType(),
 	}
 	keys := make([]int32, 0, rows)
 	integers := make([]int64, 0, rows)
+	uint64s := make([]uint64, 0, rows)
 	floats := make([]float64, 0, rows)
 	decimals := make([]types.Decimal64, 0, rows)
 	orders := make([]int64, 0, rows)
@@ -1723,6 +1726,7 @@ func makeSupportedAggregateSpillInput(
 		for group := range groups {
 			keys = append(keys, int32(group))
 			integers = append(integers, int64(group%11+pass+1))
+			uint64s = append(uint64s, uint64(group+pass*groups))
 			floats = append(floats, float64(group%7)+float64(pass)+0.25)
 			decimals = append(decimals, types.Decimal64(group*100+pass+1))
 			orders = append(orders, int64(pass))
@@ -1753,6 +1757,8 @@ func makeSupportedAggregateSpillInput(
 		copy(payload[8:], types.EncodeInt64(&count))
 		require.NoError(t, vector.AppendBytes(input.Vecs[7], payload, false, mp))
 	}
+	input.Vecs[8] = vector.NewVec(columnTypes[8])
+	require.NoError(t, vector.AppendFixedList(input.Vecs[8], uint64s, nil, mp))
 	input.SetRowCount(rows)
 	return input, columnTypes
 }
@@ -1798,6 +1804,9 @@ func TestAccountedSupportedAggregateFamiliesResidentAndSpillMatch(t *testing.T) 
 		{name: "count-column", aggID: aggexec.AggIdOfCountColumn, args: []argument{{1, types.T_int64.ToType()}}},
 		{name: "count-column-distinct", aggID: aggexec.AggIdOfCountColumn, distinct: true, args: []argument{{1, types.T_int64.ToType()}}},
 		{name: "count-star", aggID: aggexec.AggIdOfCountStar},
+		{name: "approx-count", aggID: aggexec.AggIdOfApproxCount, args: []argument{{1, types.T_int64.ToType()}}},
+		{name: "approx-percentile", aggID: aggexec.AggIdOfApproxPercentile, args: []argument{{1, types.T_int64.ToType()}}},
+		{name: "bitmap-construct", aggID: aggexec.AggIdOfBitmapConstruct, args: []argument{{8, types.T_uint64.ToType()}}},
 		{name: "group-concat", aggID: aggexec.AggIdOfGroupConcat, args: []argument{{2, types.T_varchar.ToType()}}},
 		{name: "avg-tw-cache", aggID: aggexec.AggIdOfAvgTwCache, args: []argument{{1, types.T_int64.ToType()}}},
 		{name: "avg-tw-result", aggID: aggexec.AggIdOfAvgTwResult, args: []argument{{7, types.T_char.ToType()}}},
@@ -1808,7 +1817,7 @@ func TestAccountedSupportedAggregateFamiliesResidentAndSpillMatch(t *testing.T) 
 		aggID    int64
 		distinct bool
 		args     []argument
-	}, spillMem int64) (map[int32]string, int64) {
+	}, spillMem int64) (map[int32]string, int64, int64) {
 		t.Helper()
 		proc := testutil.NewProcess(t)
 		defer proc.Free()
@@ -1818,8 +1827,12 @@ func TestAccountedSupportedAggregateFamiliesResidentAndSpillMatch(t *testing.T) 
 			require.Equal(t, columnTypes[arg.column], arg.typ)
 			expressions[i] = testAllocationColumnExpr(arg.column, arg.typ)
 		}
+		var config []byte
+		if tc.aggID == aggexec.AggIdOfApproxPercentile {
+			config = []byte("0.5")
+		}
 		agg := aggexec.MakeAggFunctionExpression(
-			tc.aggID, tc.distinct, expressions, nil)
+			tc.aggID, tc.distinct, expressions, config)
 		g := newGroupOp(
 			proc,
 			[]*plan.Expr{testAllocationColumnExpr(0, columnTypes[0])},
@@ -1843,21 +1856,24 @@ func TestAccountedSupportedAggregateFamiliesResidentAndSpillMatch(t *testing.T) 
 			}
 		}
 		records := g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillRecords"]
+		reloads := g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillReloadRecords"]
 		g.Free(proc, false, nil)
 		require.Zero(t, allocation.account.Snapshot().Used)
 		finalizeGroupTestAllocation(t, g, allocation)
 		input.Clean(proc.Mp())
-		return got, records
+		return got, records, reloads
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			resident, residentRecords := run(t, tc, 1<<30)
-			spilled, spillRecords := run(t, tc, 16)
+			resident, residentRecords, residentReloads := run(t, tc, 1<<30)
+			spilled, spillRecords, spillReloads := run(t, tc, 16)
 			require.Len(t, resident, 64)
 			require.Equal(t, resident, spilled)
 			require.Zero(t, residentRecords)
+			require.Zero(t, residentReloads)
 			require.Positive(t, spillRecords)
+			require.Positive(t, spillReloads)
 		})
 	}
 }
@@ -2212,21 +2228,21 @@ func TestAccountedGroupingSetSpillPreservesSentinelDomain(t *testing.T) {
 
 func TestAccountedGroupSpillResourceAdmissionCleans(t *testing.T) {
 	tests := []struct {
-		name      string
-		component process.ExecutionResourceComponent
-		reserve   func(*process.ExecutionResourceGeneration) (func(), error)
+		name    string
+		message string
+		reserve func(*process.ExecutionResourceGeneration) (func(), error)
 	}{
 		{
-			name:      "disk",
-			component: process.ExecutionResourceComponentSpillDisk,
+			name:    "disk",
+			message: "group spill disk budget exceeded",
 			reserve: func(generation *process.ExecutionResourceGeneration) (func(), error) {
 				token, err := generation.ReserveSpillDisk(generation.SpillDiskCap())
 				return func() { token.Release() }, err
 			},
 		},
 		{
-			name:      "file-descriptor",
-			component: process.ExecutionResourceComponentSpillFD,
+			name:    "file-descriptor",
+			message: "group spill file descriptor budget exceeded",
 			reserve: func(generation *process.ExecutionResourceGeneration) (func(), error) {
 				token, err := generation.ReserveSpillFD(generation.SpillFDCap())
 				return func() { token.Release() }, err
@@ -2268,9 +2284,9 @@ func TestAccountedGroupSpillResourceAdmissionCleans(t *testing.T) {
 					t.Fatal("expected spill resource admission error")
 				}
 			}
-			var resourceErr *process.ExecutionResourceError
-			require.ErrorAs(t, err, &resourceErr)
-			require.Equal(t, tc.component, resourceErr.Component)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOOM), err)
+			require.Contains(t, err.Error(), tc.message)
+			require.NotContains(t, err.Error(), process.ErrExecutionResourceAdmission.Error())
 
 			releaseBlocker()
 			released = true

@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minusall"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
@@ -96,26 +97,96 @@ func TestCompileParallelDistinctSetMergesWorkerResults(t *testing.T) {
 	}
 }
 
-func TestCompileParallelIntersectAllKeepsWorkerResults(t *testing.T) {
+func TestCompileSingleScopeMultisetAvoidsConsolidation(t *testing.T) {
+	for _, execution := range []struct {
+		name   string
+		typeID plan2.ExecType
+	}{
+		{"TP", plan2.ExecTypeTP},
+		{"AP", plan2.ExecTypeAP_ONECN},
+	} {
+		for _, nodeType := range []plan.Node_NodeType{plan.Node_INTERSECT_ALL, plan.Node_MINUS_ALL} {
+			t.Run(execution.name+"/"+nodeType.String(), func(t *testing.T) {
+				c := newDistinctSetTestCompile(t)
+				c.execType = execution.typeID
+				left := newDistinctSetTestScope(c)
+				right := newDistinctSetTestScope(c)
+				result := c.compileMinusAndIntersect(newParallelDistinctSetTestNode(nodeType), []*Scope{left}, []*Scope{right}, nodeType)
+				t.Cleanup(func() {
+					for _, scope := range result {
+						scope.FreeOperator(c)
+						scope.release()
+					}
+					c.proc.Free()
+				})
+				require.Len(t, result, 1)
+				require.Len(t, result[0].PreScopes, 2)
+				require.Same(t, left, result[0].PreScopes[0], "single-worker input must feed the owner directly")
+				require.Same(t, right, result[0].PreScopes[1], "single-worker input must feed the owner directly")
+				if nodeType == plan.Node_INTERSECT_ALL {
+					require.IsType(t, &intersectall.IntersectAll{}, result[0].RootOp)
+				} else {
+					require.IsType(t, &minusall.MinusAll{}, result[0].RootOp)
+				}
+				require.False(t, c.anal.isFirst)
+			})
+		}
+	}
+}
+
+func TestCompileParallelIntersectAllUsesSingleMultiplicityOwner(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		scopes int
+		mcpu   int
+	}{
+		{"multiple-scopes", 2, 1},
+		{"one-parallel-scope", 1, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newDistinctSetTestCompile(t)
+			node := newParallelDistinctSetTestNode(plan.Node_INTERSECT_ALL)
+			left := newDistinctSetTestScopes(c, tc.scopes)
+			right := newDistinctSetTestScopes(c, tc.scopes)
+			for _, input := range append(left, right...) {
+				input.NodeInfo.Mcpu = tc.mcpu
+			}
+			result := c.compileMinusAndIntersect(node, left, right, plan.Node_INTERSECT_ALL)
+			t.Cleanup(func() {
+				for _, scope := range result {
+					scope.FreeOperator(c)
+					scope.release()
+				}
+				c.proc.Free()
+			})
+			require.Len(t, result, 1)
+			require.IsType(t, &intersectall.IntersectAll{}, result[0].RootOp)
+			require.Len(t, result[0].PreScopes, 2)
+			for _, input := range result[0].PreScopes {
+				require.Len(t, input.PreScopes, tc.scopes, "parallel producers must each feed the owner once")
+			}
+			require.False(t, c.anal.isFirst)
+		})
+	}
+}
+
+func TestCompileParallelMinusAllUsesSingleMultiplicityOwner(t *testing.T) {
 	c := newDistinctSetTestCompile(t)
-	node := newParallelDistinctSetTestNode(plan.Node_INTERSECT_ALL)
+	node := newParallelDistinctSetTestNode(plan.Node_MINUS_ALL)
 
 	result := c.compileMinusAndIntersect(
 		node,
 		newDistinctSetTestScopes(c, 2),
 		newDistinctSetTestScopes(c, 2),
-		plan.Node_INTERSECT_ALL,
+		plan.Node_MINUS_ALL,
 	)
-	require.Len(t, result, 2)
-	for _, scope := range result {
-		require.IsType(t, &intersectall.IntersectAll{}, scope.RootOp)
-	}
+	require.Len(t, result, 1)
+	require.IsType(t, &minusall.MinusAll{}, result[0].RootOp)
+	require.Len(t, result[0].PreScopes, 2)
 	require.False(t, c.anal.isFirst)
 
-	for _, scope := range result {
-		scope.FreeOperator(c)
-		scope.release()
-	}
+	result[0].FreeOperator(c)
+	result[0].release()
 	c.proc.Free()
 }
 

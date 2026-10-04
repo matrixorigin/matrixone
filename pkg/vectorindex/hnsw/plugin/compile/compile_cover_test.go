@@ -181,13 +181,25 @@ func TestRestoreInitSQL(t *testing.T) {
 	ok, sql, err := Hooks{}.RestoreInitSQL(newRecordingCtx(), hnswDefs(""))
 	require.NoError(t, err)
 	require.True(t, ok)
-	require.Contains(t, sql, "ALTER REINDEX")
-	require.Contains(t, sql, "FORCE_SYNC")
+	// Exact, not Contains: the identifiers go through sqlquote (a name may legally hold a
+	// backtick, and InitSQL that cannot parse is retried by the CDC forever), so the emitted
+	// form is part of the contract.
+	require.Equal(t, "ALTER TABLE `db`.`src` ALTER REINDEX `idx` hnsw FORCE_SYNC", sql)
 
 	defs := hnswDefs("")
 	delete(defs, catalog.Hnsw_TblType_Metadata)
 	_, _, err = Hooks{}.RestoreInitSQL(newRecordingCtx(), defs)
 	require.Error(t, err)
+}
+
+// AlterCopyInitSQL is (false, "") for hnsw: RunHnsw rebuilds the graph from the CDC ts=0 replay,
+// so the copy-alter replacement index converges without an explicit rebuild InitSQL. (Contrast
+// fulltext2, whose consumer writes only a cdc_tail with no base and therefore must REINDEX.) #28837
+func TestAlterCopyInitSQL(t *testing.T) {
+	ok, sql, err := Hooks{}.AlterCopyInitSQL(newRecordingCtx(), hnswDefs(""))
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Empty(t, sql)
 }
 
 // --- SQL generators --------------------------------------------------------

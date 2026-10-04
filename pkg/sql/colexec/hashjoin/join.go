@@ -138,22 +138,26 @@ func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
 			// The physical probe is the logical right input in this mode.
 			probeConditions = hashJoin.EqConds[1]
 		}
-		eqCondExecs, err := hashbuild.NewExpressionExecutors(
+		eqCondExecs, eqActivation, err := hashbuild.NewJoinProbeExpressionExecutors(
 			proc,
 			probeConditions,
 			hashJoin.allocationAccount,
+			hashJoin.JoinDiagnostic,
 		)
 		if err != nil {
 			return err
 		}
 
 		var nonEqCondExec colexec.ExpressionExecutor
+		activation := eqActivation
 		if hashJoin.NonEqCond != nil {
 			var nonEqExecs []colexec.ExpressionExecutor
-			nonEqExecs, err = hashbuild.NewExpressionExecutors(
+			var nonEqActivation []colexec.ExpressionExecutor
+			nonEqExecs, nonEqActivation, err = hashbuild.NewJoinProbeExpressionExecutors(
 				proc,
 				[]*plan.Expr{hashJoin.NonEqCond},
 				hashJoin.allocationAccount,
+				hashJoin.JoinDiagnostic,
 			)
 			if err != nil {
 				for _, exec := range eqCondExecs {
@@ -162,14 +166,36 @@ func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
 				return err
 			}
 			nonEqCondExec = nonEqExecs[0]
+			activation = append(activation, nonEqActivation...)
 		}
 
 		ctr.eqCondVecs = make([]*vector.Vector, len(hashJoin.EqConds[0]))
 		ctr.eqCondExecs = eqCondExecs
 		ctr.nonEqCondExec = nonEqCondExec
+		ctr.joinDiagnosticActivation = activation
 	}
 
 	return err
+}
+
+func (hashJoin *HashJoin) activateJoinDiagnostic(proc *process.Process) error {
+	ctr := &hashJoin.ctr
+	if ctr.joinDiagnosticActivated {
+		return nil
+	}
+	// These are the actual constant children of the probe and residual trees.
+	// Evaluate them with one logical row before hash-match pruning, then use
+	// their folded results if the ordinary residual expression later runs.
+	for _, executor := range ctr.joinDiagnosticActivation {
+		if _, err := executor.Eval(proc, nil, nil); err != nil {
+			return err
+		}
+	}
+	if err := hashJoin.JoinDiagnostic.Activate(proc); err != nil {
+		return err
+	}
+	ctr.joinDiagnosticActivated = true
+	return nil
 }
 
 func isAsofTemporalType(typeID types.T) bool {
@@ -261,6 +287,11 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 				if bat.IsEmpty() {
 					continue
+				}
+				if hashJoin.JoinDiagnostic != nil && ctr.globalBuildRowCnt > 0 {
+					if err = hashJoin.activateJoinDiagnostic(proc); err != nil {
+						return result, err
+					}
 				}
 
 				if ctr.mp == nil && !ctr.probeEmitUnmatched && !ctr.probeMark {
@@ -674,6 +705,8 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 	}
 	leftRowCnt := ctr.leftBat.RowCount()
 	resRowCnt := 0
+	batchUnique := ctr.probeHashOnPK && hashJoin.IsInner() &&
+		!ctr.probeTrackBuildMatches && hashJoin.NonEqCond == nil
 
 	for {
 		switch ctr.probeState {
@@ -701,6 +734,26 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 			}
 
 		case psBatchRow:
+			if batchUnique {
+				count := min(len(ctr.vs)-ctr.vsIdx, colexec.DefaultBatchSize-resRowCnt)
+				matched, err := ctr.appendUniqueMatches(hashJoin, proc, count)
+				if err != nil {
+					return err
+				}
+				ctr.lastIdx += count
+				ctr.vsIdx += count
+				resRowCnt += matched
+				if ctr.vsIdx == len(ctr.vs) {
+					ctr.probeState = psNextBatch
+				}
+				if resRowCnt == colexec.DefaultBatchSize {
+					ctr.resBat.AddRowCount(resRowCnt)
+					result.Batch = ctr.resBat
+					return nil
+				}
+				continue
+			}
+
 			z, v := ctr.zvs[ctr.vsIdx], ctr.vs[ctr.vsIdx]
 			row := int64(ctr.lastIdx)
 			idx := int64(v) - 1
@@ -1644,6 +1697,57 @@ func (ctr *container) appendOneNotMatch(hashJoin *HashJoin, proc *process.Proces
 		}
 	}
 	return nil
+}
+
+// appendUniqueMatches projects one bounded Find chunk for a unique, residual-free
+// inner join. Selections preserve probe order, including repeated build matches.
+func (ctr *container) appendUniqueMatches(hashJoin *HashJoin, proc *process.Process, count int) (int, error) {
+	leftRows, rightRows := &hashJoin.uniqueLeftRows, &hashJoin.uniqueRightRows
+	matched := 0
+	for i := range count {
+		pos := ctr.vsIdx + i
+		if ctr.zvs[pos] != 0 && ctr.vs[pos] != 0 {
+			leftRows[matched] = int64(ctr.lastIdx + i)
+			rightRows[matched] = int64(ctr.vs[pos] - 1)
+			matched++
+		}
+	}
+	if matched == 0 {
+		return 0, nil
+	}
+	for j, rp := range hashJoin.ResultCols {
+		if rp.Rel == 0 {
+			if err := ctr.resBat.Vecs[j].Union(ctr.leftBat.Vecs[rp.Pos], leftRows[:matched], proc.Mp()); err != nil {
+				return 0, err
+			}
+		}
+	}
+	// Only consecutive rows from the same build batch can share a Union call:
+	// grouping all matches by batch would reorder the result stream.
+	for start := 0; start < matched; {
+		batchIdx := rightRows[start] / colexec.DefaultBatchSize
+		end := start
+		for end < matched && rightRows[end]/colexec.DefaultBatchSize == batchIdx {
+			rightRows[end] %= colexec.DefaultBatchSize
+			end++
+		}
+		for j, rp := range hashJoin.ResultCols {
+			if rp.Rel != 0 {
+				src := ctr.rightBats[batchIdx].Vecs[rp.Pos]
+				var err error
+				if end-start == 1 {
+					err = ctr.resBat.Vecs[j].UnionOne(src, rightRows[start], proc.Mp())
+				} else {
+					err = ctr.resBat.Vecs[j].Union(src, rightRows[start:end], proc.Mp())
+				}
+				if err != nil {
+					return 0, err
+				}
+			}
+		}
+		start = end
+	}
+	return matched, nil
 }
 
 func (ctr *container) appendOneMatch(hashJoin *HashJoin, proc *process.Process, leftRow, rIdx1, rIdx2 int64) error {

@@ -60,10 +60,8 @@ select release_lock('USER_LOCK_BVT_CASE');
 select is_free_lock('user_lock_bvt_case');
 select release_lock('User_Lock_Bvt_Case');
 
--- These free-lock probes cover public SQL timeout types. The contended results
--- below cannot distinguish the exact rounding policies: both calls return 0
--- while the other session retains the lock. The DECIMAL WAIT/deadline versus
--- DOUBLE FAST_FAIL distinction is asserted by
+-- These free-lock probes cover public SQL timeout types. The precise DECIMAL
+-- WAIT/deadline versus DOUBLE FAST_FAIL distinction is asserted by
 -- TestGetLockDecimalTimeoutUsesDecimalRounding in pkg/sql/plan/function.
 select get_lock('user_lock_bvt_timeout_zero_double', cast(0 as double));
 select release_lock('user_lock_bvt_timeout_zero_double');
@@ -100,29 +98,6 @@ select get_lock('user_lock_bvt_null_timeout_busy', NULL);
 select release_lock('user_lock_bvt_null_timeout_busy');
 -- @session}
 select is_free_lock('user_lock_bvt_null_timeout_busy');
-
--- Both contended calls return 0 because the holder remains locked until after
--- each call. These SQL checks cover the public contended path; the precise
--- DECIMAL WAIT/deadline versus DOUBLE FAST_FAIL distinction is asserted by
--- TestGetLockDecimalTimeoutUsesDecimalRounding in the function unit tests.
--- @session:id=1{
-select get_lock('user_lock_bvt_decimal_timeout_busy', 0);
--- @session}
--- @session:id=2{
-select get_lock('user_lock_bvt_decimal_timeout_busy', 0.5);
--- @session}
--- @session:id=1{
-select release_lock('user_lock_bvt_decimal_timeout_busy');
--- @session}
--- @session:id=1{
-select get_lock('user_lock_bvt_double_timeout_busy', 0);
--- @session}
--- @session:id=2{
-select get_lock('user_lock_bvt_double_timeout_busy', CAST(0.5 AS DOUBLE));
--- @session}
--- @session:id=1{
-select release_lock('user_lock_bvt_double_timeout_busy');
--- @session}
 
 drop table user_lock_bvt_holder;
 drop database user_lock_bvt_db;

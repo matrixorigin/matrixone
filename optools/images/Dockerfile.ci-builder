@@ -21,9 +21,8 @@ ENV GOWORK=off
 # directory is created before its children can be copied in).
 ENV GOFLAGS=-modcacherw
 
-# PR-time builds must mount the repo at this same path: cgo compile-cache
-# entries hash the -I include paths, so a different workspace path would miss
-# the warm cache for every cgo-dependent package.
+# Container builds retain this checkout/module layout. Without trimpath, Go
+# keys every non-GOROOT package by source directory, not only cgo packages.
 WORKDIR /go/src/github.com/matrixorigin/matrixone
 
 # ENV (not `go env -w`): the Makefile exports its own GOPROXY default via
@@ -47,14 +46,22 @@ RUN make build GOBUILD_OPT=-cover
 # own complete warm build instead of reusing only the -cover objects.
 RUN make build
 
+# Host UT uses the Shanghai runner layout. Move only after both container
+# build flavors are warm; do not duplicate the source/modules in this stage.
+# Avoid global trimpath: tests use runtime.Caller to locate source fixtures.
+RUN mkdir -p /home/runner/_work/matrixone /home/runner/go/pkg && \
+    mv /go/src/github.com/matrixorigin/matrixone /home/runner/_work/matrixone/matrixone && \
+    mv /go/pkg/mod /home/runner/go/pkg/mod
+WORKDIR /home/runner/_work/matrixone/matrixone
+ENV GOMODCACHE=/home/runner/go/pkg/mod
+
 # Warm the UT compile flavors without running any test: -exec /bin/true
 # replaces test-binary execution and -vet=off keeps vet findings out of the
 # nightly warm (PR CI runs vet itself). The CGO_* values mirror
-# optools/run_ut.sh; their absolute paths only key the few cgo packages,
-# which PR runners recompile anyway — everything else is content-addressed
-# and hits the cache from any workspace path. Soft-fail on purpose: a
-# partial warm still speeds PR CI up, and PR CI never depends on these
-# layers for correctness.
+# optools/run_ut.sh. Matching paths enables non-stdlib reuse; different CGo
+# compilers/native inputs can still cause ordinary cache misses. Soft-fail: a
+# partial warm may provide reusable objects, and PR CI never depends on these
+# layers for correctness. Measure total seed cost before enabling host imports.
 #
 # Flavor 1: race + matrixone_test, as optools/run_ut.sh compiles for the UT
 # job in ci.yaml.
@@ -91,6 +98,19 @@ RUN if bash -c 'source optools/ut_tools.bash; install_go_ut_analysis'; then \
       echo "WARNING: UT analysis warm incomplete; PR CI will install it"; \
     fi
 
+# Versioned host-UT contract, validated before consumers copy cache payloads.
+# Paths describe compilation, not the final image's cache export locations.
+# Keep these recipe IDs synchronized with the trusted CI consumer; a manifest
+# and successful warm are compatibility/provenance, not measured cache hits.
+RUN set -eu; \
+    go_env=$(go env -json GOMODCACHE GOVERSION GOOS GOARCH GOAMD64 GOEXPERIMENT); \
+    race=$(sed -n 's/^warm-race=//p' /mo-prebuilt/warm-status); \
+    coverage=$(sed -n 's/^warm-coverage=//p' /mo-prebuilt/warm-status); \
+    case "$race" in ok|FAILED) ;; *) exit 1 ;; esac; \
+    case "$coverage" in ok|FAILED) ;; *) exit 1 ;; esac; \
+    printf '{"schema":2,"profile":"host-ut-v1","checkout":"/home/runner/_work/matrixone/matrixone","go_env":%s,"flavors":{"race":"%s","coverage":"%s"},"race_contract":"readonly-short-matrixone_test-vetoff-race-v1","coverage_contract":"short-matrixone_test-vetoff-covermode-set-filter-driver-aoe-memEngine-catalog-v1"}\n' \
+      "$go_env" "$race" "$coverage" > /mo-prebuilt/go-cache-manifest.json
+
 # Fingerprint the native inputs the prebuilt thirdparties were produced
 # from. Consumers restore thirdparties/install only on an exact match, so a
 # PR that changes thirdparties/, cgo, the compiler, or the native build
@@ -116,12 +136,13 @@ ENV GOFLAGS=-modcacherw
 ARG GOPROXY="https://proxy.golang.org,direct"
 ENV GOPROXY=${GOPROXY}
 
-COPY --from=warm /go/pkg/mod /go/pkg/mod
+COPY --from=warm /home/runner/go/pkg/mod /go/pkg/mod
 COPY --from=warm /root/.cache/go-build /root/.cache/go-build
 # Seeded into the PR tree before make build; the prerequisite-less file
 # targets in thirdparties/Makefile then treat the C libraries as up to date.
 # Consumers must verify thirdparties.fingerprint matches their checkout
 # before restoring the install tree.
-COPY --from=warm /go/src/github.com/matrixorigin/matrixone/thirdparties/install /mo-prebuilt/thirdparties/install
+COPY --from=warm /home/runner/_work/matrixone/matrixone/thirdparties/install /mo-prebuilt/thirdparties/install
 COPY --from=warm /mo-prebuilt/thirdparties.fingerprint /mo-prebuilt/thirdparties.fingerprint
 COPY --from=warm /mo-prebuilt/warm-status /mo-prebuilt/warm-status
+COPY --from=warm /mo-prebuilt/go-cache-manifest.json /mo-prebuilt/go-cache-manifest.json

@@ -392,6 +392,8 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 	warningsEnabled := proc != nil && proc.GetStmtProfile() != nil &&
 		proc.GetStmtProfile().GetStatementIgnore()
 	var duplicateWarnings process.WarningAccumulator
+	duplicateWarnings.SetWarningRetentionForProcess(proc)
+	defer duplicateWarnings.Reset()
 	recordDuplicateWarning := func(keyIdx, row int) {
 		if !warningsEnabled || keyIdx < 0 || keyIdx >= len(keyColumns) {
 			return
@@ -450,7 +452,7 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 		}
 		duplicateWarnings.Add(
 			moerr.ER_DUP_ENTRY,
-			moerr.NewDuplicateEntry(proc.Ctx, rowStr, keyName).Error(),
+			moerr.FormatDuplicateEntry(rowStr, keyName),
 		)
 	}
 	var autoIncrementVec, autoIncrementGeneratedVec *vector.Vector

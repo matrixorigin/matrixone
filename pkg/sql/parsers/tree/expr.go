@@ -960,8 +960,13 @@ type FuncExpr struct {
 	exprImpl
 	Func     ResolvableFunctionReference
 	FuncName *CStr
-	Type     FuncType
-	Exprs    Exprs
+	// IsGeneric is true when the parser recognized a whitespace-sensitive
+	// MySQL function through the generic identifier-function rule rather than
+	// its native built-in rule. That distinction matters when IGNORE_SPACE is
+	// disabled.
+	IsGeneric bool
+	Type      FuncType
+	Exprs     Exprs
 
 	//specify the type of aggregation.
 	AggType AggType
@@ -1002,15 +1007,25 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 		node.Func.Format(ctx)
 	}
 
-	ctx.WriteString("(")
+	if node.IsGeneric {
+		// MySQL's whitespace-sensitive function names are parsed as generic
+		// calls when IGNORE_SPACE is disabled. Preserve that separator so a
+		// format/reparse cycle cannot silently turn the call into a native
+		// built-in.
+		ctx.WriteString(" (")
+	} else {
+		ctx.WriteByte('(')
+	}
 	if node.Type != FUNC_TYPE_DEFAULT && node.Type != FUNC_TYPE_TABLE {
 		ctx.WriteString(node.Type.ToString())
 		ctx.WriteByte(' ')
 	}
-	isConvertUsing := strings.EqualFold(funcName, "convert") && len(node.Exprs) == 2
-	isExtract := strings.EqualFold(funcName, "extract") && len(node.Exprs) == 2
-	isGroupConcat := strings.EqualFold(funcName, "group_concat") ||
-		strings.EqualFold(node.Func.FunctionReference.(*UnresolvedName).ColName(), "group_concat")
+	isConvertUsing := !node.IsGeneric && strings.EqualFold(funcName, "convert") && len(node.Exprs) == 2
+	isExtract := !node.IsGeneric && strings.EqualFold(funcName, "extract") && len(node.Exprs) == 2
+	isPosition := !node.IsGeneric && strings.EqualFold(funcName, "position") && len(node.Exprs) == 2
+	isListAgg := !node.IsGeneric && strings.EqualFold(funcName, "listagg")
+	isGroupConcat := !node.IsGeneric && (strings.EqualFold(funcName, "group_concat") ||
+		strings.EqualFold(node.Func.FunctionReference.(*UnresolvedName).ColName(), "group_concat"))
 	if isConvertUsing {
 		node.Exprs[0].Format(ctx)
 		ctx.WriteString(" using ")
@@ -1023,6 +1038,14 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 		node.Exprs[0].Format(ctx)
 		ctx.WriteString(" from ")
 		node.Exprs[1].Format(ctx)
+	} else if isPosition {
+		node.Exprs[0].Format(ctx)
+		ctx.WriteString(" in ")
+		node.Exprs[1].Format(ctx)
+	} else if isListAgg && len(node.Exprs) == 2 {
+		node.Exprs[0].Format(ctx)
+		ctx.WriteString(", ")
+		node.Exprs[1].Format(ctx)
 	} else if isGroupConcat && len(node.Exprs) > 0 {
 		// The parser stores GROUP_CONCAT's separator as the final expression so
 		// binders can consume it uniformly. It is not a concatenated argument.
@@ -1033,7 +1056,7 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 		}
 		ctx.WriteString(" separator ")
 		node.Exprs[len(node.Exprs)-1].Format(ctx)
-	} else if node.Func.FunctionReference.(*UnresolvedName).ColName() == "trim" {
+	} else if !node.IsGeneric && node.Func.FunctionReference.(*UnresolvedName).ColName() == "trim" {
 		trimExprsFormat(ctx, node.Exprs)
 	} else {
 		formatFuncExprs(ctx, node)
@@ -1221,11 +1244,11 @@ func trimExprsFormat(ctx *FmtCtx, exprs Exprs) {
 		ctx.WriteString(" from ")
 		exprs[3].Format(ctx)
 	case "2":
-		exprs[1].Format(ctx)
+		ctx.WriteString(exprs[1].(*NumVal).String())
 		ctx.WriteString(" from ")
 		exprs[3].Format(ctx)
 	case "3":
-		exprs[1].Format(ctx)
+		ctx.WriteString(exprs[1].(*NumVal).String())
 		ctx.WriteString(" ")
 		exprs[2].Format(ctx)
 		ctx.WriteString(" from ")
@@ -1900,6 +1923,9 @@ type ParamExpr struct {
 }
 
 func (node *ParamExpr) Format(ctx *FmtCtx) {
+	if ctx.parameterCount != nil {
+		*ctx.parameterCount = max(*ctx.parameterCount, node.Offset)
+	}
 	ctx.WriteByte('?')
 	if ctx.paramExprOffset {
 		ctx.WriteString(strconv.Itoa(node.Offset))
@@ -2203,7 +2229,8 @@ func (node *FullTextMatchExpr) Format(ctx *FmtCtx) {
 	ctx.WriteString(") ")
 	ctx.WriteString("AGAINST (")
 	// Post-#24796 the pattern is an Expr: a *NumVal (search_pattern: STRING) for a
-	// literal, or a *ParamExpr (VALUE_ARG) for a prepared '?'. For the string case
+	// literal, a *ParamExpr (VALUE_ARG) for a prepared '?', or an
+	// *UnresolvedName for a stored-procedure variable. For the string case
 	// (the common one) emit it as a single-quoted, escaped SQL string literal
 	// UNCONDITIONALLY — do NOT route it through NumVal.Format / ctx.WriteValue, which
 	// only quotes when the FmtCtx opts in (quoteString/singleQuoteString). The default

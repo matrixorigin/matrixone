@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -200,7 +201,12 @@ func (idx *IvfflatSearchIndex[T]) scanEntriesInDomain(
 		// Optional domains retain their existing transported-filter contract.
 		filterHint.MembershipFilterBytes = sqlproc.IvfMembershipFilter
 	}
+	var readPolicy fileservice.Policy
+	if sqlproc.IvfHasMembershipFilter || len(filters) > 0 {
+		readPolicy = fileservice.SkipFullFilePreloads
+	}
 	res, err := sqlproc.RelationScanner.ScanRelation(sqlexec.RelationScanRequest{
+		ReadPolicy:        readPolicy,
 		Schema:            tblcfg.DbName,
 		Table:             tblcfg.EntriesTable,
 		Columns:           columns,
@@ -217,6 +223,25 @@ func (idx *IvfflatSearchIndex[T]) scanEntriesInDomain(
 				return moerr.NewInternalErrorNoCtxf(
 					"ivfflat storage Top-K returned %d vectors, expected %d", len(bat.Vecs), len(columns)+1)
 			}
+			var loadedColumns []int
+			if storageDistance && bat.RowCount() != 0 {
+				// Storage Top-K may omit the embedding after scoring. Only that
+				// slot may be empty; scalar and distance columns must stay aligned.
+				if bat.Vecs[3].Length() == 0 {
+					loadedColumns = make([]int, 0, len(bat.Vecs)-1)
+				}
+				for pos, vec := range bat.Vecs {
+					if pos == 3 && loadedColumns != nil {
+						continue
+					}
+					if vec.Length() != bat.RowCount() {
+						return moerr.NewInternalErrorNoCtxf("ivfflat storage Top-K column %d has %d rows, expected %d", pos, vec.Length(), bat.RowCount())
+					}
+					if loadedColumns != nil {
+						loadedColumns = append(loadedColumns, pos)
+					}
+				}
+			}
 			if !storageDistance {
 				if transformErr := appendEntryDistances(sqlproc, &batchResult, queryBytes, queryType,
 					metric.MetricTypeToDistFuncName[metricType]); transformErr != nil {
@@ -224,7 +249,7 @@ func (idx *IvfflatSearchIndex[T]) scanEntriesInDomain(
 				}
 			}
 			if transformErr := idx.filterEntryDistanceRange(&batchResult, sqlproc.IndexReaderParam.GetDistRange(),
-				tblcfg.OrigFuncName, metricType); transformErr != nil {
+				tblcfg.OrigFuncName, metricType, loadedColumns); transformErr != nil {
 				return transformErr
 			}
 			// Distance and exact filters have consumed the high-width entry vector.
@@ -525,6 +550,7 @@ func (idx *IvfflatSearchIndex[T]) filterEntryDistanceRange(
 	distRange *plan.DistRange,
 	origFuncName string,
 	metricType metric.MetricType,
+	loadedColumns []int,
 ) error {
 	if distRange == nil || res == nil {
 		return nil
@@ -551,6 +577,13 @@ func (idx *IvfflatSearchIndex[T]) filterEntryDistanceRange(
 	if !hasLower && !hasUpper {
 		return nil
 	}
+	// This is the EXACT source-domain post-filter: the planner peeled the original distance predicate,
+	// so there is no later correction. scoreFromQuantized already returns the distance in the float32
+	// domain the scalar l2_distance exposes, so compare it against the RAW float64 bound -- exactly the
+	// SQL predicate `float32(distance) <op> bound`. Rounding the bound instead would change the
+	// predicate: for a returned distance of 1, `1 < 1.00000001` is true, but rounding the bound to 1
+	// makes `1 < 1` false and drops the row (#29040). Conservative float32 widening belongs only in the
+	// storage/candidate gate (squareL2BoundOutward), never here.
 
 	for _, bat := range res.Batches {
 		if bat == nil || bat.RowCount() == 0 || len(bat.Vecs) == 0 {
@@ -568,13 +601,7 @@ func (idx *IvfflatSearchIndex[T]) filterEntryDistanceRange(
 				sels = append(sels, int64(row))
 			}
 		}
-		switch {
-		case len(sels) == bat.RowCount():
-		case len(sels) == 0:
-			bat.CleanOnlyData()
-		default:
-			bat.Shrink(sels, false)
-		}
+		selectRelationBatchRows(bat, sels, loadedColumns)
 	}
 	return nil
 }

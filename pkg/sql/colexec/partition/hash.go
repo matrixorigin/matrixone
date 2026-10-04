@@ -88,7 +88,7 @@ func (partition *Partition) prepareHash(proc *process.Process) (err error) {
 	for _, expr := range exprs {
 		keyWidth += int32(group.GetKeyWidth(types.T(expr.Typ.Id), expr.Typ.Width, ctr.keyNullable))
 	}
-	ctr.isStrHash = keyWidth > 8
+	ctr.isStrHash = keyWidth > 8 || group.HasVariableLengthKey(exprs)
 
 	if len(ctr.partitionEval.Executor) == 0 {
 		ctr.partitionEval, err = colexec.MakeEvalVector(proc, exprs)

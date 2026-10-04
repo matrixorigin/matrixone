@@ -1,11 +1,128 @@
 # UT 执行模型与 fixture 生命周期优化设计
 
-- 状态：Proposed for this PR，revision 9
-- 适用范围：`optools/run_ut.sh`、Go test package 分组、embedded/shared cluster fixture、CI UT 资源预算
-- 约束：不增加 runner 数量；收益必须来自单 runner 的工作删除、fixture 复用或资源有界的阶段重叠
+- 状态：Proposed for this PR，revision 11
+- 适用范围：`Makefile` UT 默认配置、`optools/run_ut.sh`、Go test package 分组、embedded/shared cluster fixture、CI UT 执行模型与资源预算
+- 约束：UT CI 始终只使用现有的一个 runner；不增加 shard matrix、并发 job 或临时 runner。只考虑该 runner 内有界调度和有证据的测试/fixture 优化
 - 设计 owner：UT runner 与测试基础设施；各测试 package 对自己的 fixture reset/cleanup 契约负责
 - 设计门禁：跨 package、跨进程 admission、runner 取消和集群生命周期，命中 execution、ownership、resource 和 public test-contract 多个边界
-- 决策记录：revision 2 接受本 PR 的 runner 账本、取消/报告所有权和有界分片；compile-only prebuild 保留为显式 opt-in，plan overlap 复用已释放 slot 并默认开启；两者都不扩大默认 heavy 资源预算。跨进程 cluster 共享和动态调度不在本 PR；本 revision 按兼容矩阵落地了一个同进程单 CN fixture 合并，并为后续专用 fixture 增加显式释放边界。
+- 决策记录：`UT_OVERLAP_PLAN=1` 继续复用已释放 slot；light/issues overlap 经实测未达到时间和内存门槛，`UT_OVERLAP_LIGHT` 默认恢复为 `0`，仅保留显式 opt-in。不得增加 runner，也不采用四 shard 并行 CI；在单 runner 上顺序运行 shard 不能减少总工作量，也不是本 revision 的优化。compile-only prebuild 默认关闭；跨进程 cluster 共享、动态调度、任意缩减测试数据均不在本 revision。
+
+## Revision 11: reject the measured light/issues overlap default
+
+### 结果与根因
+
+serial baseline [run 34770551755/job 103759372556](https://github.com/matrixorigin/matrixone/actions/runs/34770551755/job/103759372556?pr=28824)
+耗时 46m16s；light-overlap treatment [run 34773229587/job 103766569633](https://github.com/matrixorigin/matrixone/actions/runs/34773229587/job/103766569633?pr=28824)
+耗时 1h00m53s，均通过。两次 run 的 head SHA 不同（baseline `3d55e1d8`，treatment
+`2140f77a`）；可见代码差异的调度行为只有 `UT_OVERLAP_LIGHT` 默认值从 0 改为 1，其他差异是文档。
+它们使用同一 workflow/job，但不是受控的同一 runner/cache 配对实验，且每种策略只有一次运行。因此该结果足以
+说明 treatment 未达到本 PR 的默认开启验收门槛，不足以估算稳定的平均回归幅度或证明单一因果。
+Treatment 确认实际执行 `UT_OVERLAP_LIGHT=1`，light 使用 `-p2`，并与 issues 并发；baseline 则为
+light `-p6` 后串行 issues。
+
+阶段 checkpoint 显示：baseline light 12m51s + issues 9m20s，共 22m11s；treatment 的
+light/issues 关键路径为 31m35s，反而多 9m24s。两个 run 中 issues package 自身 test 时间接近
+（9m02s vs 9m05s）；treatment 从并发命令启动到 package tests 开始多出约 5m19s，和并发
+编译/资源争用相符，但日志没有单独的 compile wall-time，因此不将其当成已证实的单因果。
+已证实的配置代价是 light 的 package parallelism 从 6 降到 2，而该降幅没有被 overlap 收益抵消。
+
+Treatment 的 HNSW 阶段从 baseline 的 24s 变为 6m04s。HNSW 被移到 light 之前；慢 case 报告
+没有对应的长 HNSW test body，因此这 5m40s 差异更像是 HNSW 首次编译/链接成本从后续被提前，
+但现有成功 artifact 没有编译阶段计时，故仍是推断，不能算作 overlap 的独立因果。embedded
+为 14m14s vs 14m50s，heavy/engine/plan tail 为 5m46s vs 5m04s，基本相近。由此不能把总 job
+差值全部归因于单一因素；不过可见的 light/issues critical path 已明确变差。
+
+Treatment 的 cgroup `memory.max=17179869184`、`memory.peak=17181175808`，`oom=0` 且
+`oom_kill=0`。虽然没有 OOM，但峰值贴近 16-GiB 上限，未满足本设计 `peak <= 0.9 * limit`
+的门槛；job 的 1h00m53s 也超过 60 分钟门槛。因此本次结果不支持默认开启 overlap。恢复
+Makefile 和 runner 脚本的默认值为 `0`；显式 `UT_OVERLAP_LIGHT=1` 仍可用于后续候选验证。
+这个回退只是止损并恢复已测得的 46m16s 调度基线，不代表相对该基线已有新的提速。
+新增 scheduler regression case 固定验证默认关闭，同时保留显式开启、单槽保护、失败传播及
+取消清理用例。不会通过盲目将 `-p2` 提至 `-p4/-p6` 来规避耗时，因为当前内存证据不支持增加
+并发预算。
+
+后续若继续探索单 runner 提速，应先分离 test-body 与编译/链接耗时，并以阶段/包级证据选择
+可重叠子集；不应再用全 light wave 降并行度来换潜在 overlap 上限。保持现有 runner/job 数量，
+也不为构造额外 serial control 重跑 CI。
+
+## Revision 10: race-UT timeout root cause and single-runner overlap
+
+### 现场与根因
+
+PR #28818 的 GitHub run `34746731207` / job `103695929664` 在 race UT 的外层
+`70m` timeout 收到 TERM；test2json 记录到 43,564 个 pass、180 个 skip、零个失败事件，
+但 heavy/plan 阶段尚未完成，因此结果是不完整而非通过或断言失败。checkpoint 显示
+light 用时 21m24s、HNSW 50s、issues 21m42s、embedded 21m12s；约 69m32s 后才进入
+plan。根因是完整套件的阶段关键路径在串行 caller 上超过硬时限，现有证据不能把它归因
+为某条失败 case、过大测试数据或 UT 断言错误。
+
+当前 runner label 是 `amd64-mo-shanghai-8c16g`。同一失败现场的 cgroup memory 峰值约
+17.18 GB（16 GiB 量级）；light 的 `-p6` 阶段已几乎占满预算。已有
+`UT_OVERLAP_LIGHT=1` 会在同一 runner 上重叠 light 与 issues，组合内存尚未测量。本
+revision 直接启用这个有界候选，让本次现有 required UT job 给出结果；不为制造 control
+而额外重跑 `0`。`UT_OVERLAP_PLAN=1` 继续复用 engine 释放的进程槽，不改变测试范围或
+默认 runner 数。
+
+2026-09-13 的 first follow-up run `34770551755` / job `103759372556` 成功完成，耗时
+46m16s，但日志显示 `LIGHT OVERLAP: 0`：`Makefile` 的 `UT_OVERLAP_LIGHT ?= 0` 覆盖了
+`run_ut.sh` 的新默认值。因此该 run 是有效的 serial baseline，不是 overlap treatment。
+它记录到 `memory.max=17179869184`、`memory.peak=17181179904`、`memory.events.max=10`，
+`oom=0`、`oom_kill=0`，且层级/事件可见性均为 complete/hierarchical。后续唯一差异是
+Makefile 默认改为 `1`；用下一次同 runner、同 test scope 的结果与此 run 及其他可比历史
+完整运行比较。
+
+reusable `matrixorigin/CI` 虽提供四个静态 shard，但使用它们会增加并发 runner，违反本任务
+的硬约束；即使把 shard 顺序放到同一 runner，也不会减少总 UT 工作量。本 revision 不改
+`ut_sharded: false`，不添加 PR selector、manual workflow 或额外 job。
+
+同一 runner 上已有的 `UT_OVERLAP_LIGHT=1` 路径是唯一已实现、可直接用现有 CI
+job 评估的跨阶段候选：HNSW 仍先独占；随后 light 使用至多两个 package worker，并与
+`pkg/tests/issues` 的独占 package 阶段重叠；两边各自结束后才进入 embedded。报告私有化、
+合并、失败传播和 TERM 取消已有 scheduler contract tests。它保持 runner 数为一，但总进程
+并发提高、light 的 package 并行度降低。已观察到的 light 21m24s、issues 21m42s 给出的
+阶段间隔消除上限只是 `min(21m24s, 21m42s)=21m24s`；该算术上限没有计入 light 降为两个
+worker及资源争用，实际收益可能显著更低甚至为负。原现场峰值已接近 runner 的 16-GiB
+预算，而 70m run 不完整，因此既未证明并发安全，也未证明端到端 CI 节省。真实 wall-time
+和合并内存峰值仍需在同一 `8c/16GiB` runner 上测量。
+
+慢 case 排名也没有给出任意缩小数据或再合并 fixture 的证据：`pkg/tests/issues` 已共享
+canonical fixture；Arrow LOAD fanout 已是略高于 1 MiB 产品阈值的最小输入；长耗时
+Arrow BVT 的第一个子测试在 parent 开始约 4m17s 后才启动，指向启动/准入成本（这是基于
+事件顺序和源码的推断，尚非分阶段实测）。并发 branch reclamation、quota race、不同
+topology/config/restart/global hook 的 case 必须保留各自压力和隔离语义。没有新的
+fixture 兼容矩阵、reset oracle 和 A/B 数据前，不缩小这些数据、不把隔离 suite 强行合并。
+
+### 本 revision 的安全交付
+
+- 本 revision 的现有 required UT job 直接以 `UT_OVERLAP_LIGHT=1` 跑一次，不新增
+  workflow/job/runner，也不额外重跑 `0` controls。与历史完整成功运行比较，只纳入 runner
+  label、`ut_parallel=6`、`ut_sharded=false`、race/tags、测试选择及 reusable CI resolved SHA
+  相同的样本；记录 workflow run id/head SHA/CI SHA/总耗时/阶段耗时/内存。超时、取消或
+  测试范围不同的历史样本不作总耗时基线；#28818 的 70m timeout 只能用于已完成阶段的
+  局部对比。若无足够可比的完整历史样本，如实标为初步结果，不触发额外 control 重跑。
+  本次 treatment 失败、超时、取消或 OOM，则恢复默认 `0`，不保留默认 overlap。
+- 为审计内存边界，诊断需沿当前 cgroup 到可见层级根逐个检查所有有限硬限制，并为每个
+  scope 记录 limit、current、peak 和 v2 `memory.events` 的 `oom`/`oom_kill`；最紧限制只作
+  摘要，安全门槛对每个有限祖先分别检查，避免较宽松父层被兄弟进程占满。找不到有限可见
+  限制、可见祖先缺失/不可读，或 CI 证据无法确认 cgroup mount/namespace 覆盖 runner 的
+  实际限制边界时，本次样本不能证明 overlap 安全，CI 后恢复默认 `0`；cgroup v1
+  `failcnt` 不是 v2 的 OOM 事件等价物，无法满足 OOM 安全门槛时不保留默认 overlap。
+  v2 `memory.events` 必须确认是
+  hierarchical 模式；若 `/proc/self/mountinfo` 带 `memory_localevents` 或不可验证，样本
+  无效。UT 所有阶段和 helper join 后、heartbeat 停止前必须有一条 `Final race UT` 快照；
+  本次运行使用该末尾快照判定峰值和 OOM 计数。超时/取消样本无效。本 revision 不以 CPU
+  throttling 作门槛（当前未采集）。
+  70m timeout 是 censored 样本，不能作完整总耗时基线。包和 test 选择由 `UT_SHARD=all` 的
+  源码命令比较与现有 complete/disjoint partition 和 scheduler contract tests 证明相同；
+  两边完整 required UT job 必须通过，报告必须合并且无丢失/重复。
+- 只有本次 treatment 完整通过、race-UT job 不超过 60 分钟、每个可见有限 cgroup scope
+  都满足 `memory.peak <= 0.9 * memory.max`，且结束时每个 scope 的 `memory.events`
+  `oom`/`oom_kill` 均为 0，才保留默认 `1`。在可比历史完整样本上，总耗时改善至少 15%
+  才报告为已验证提速；否则如实报告无明确收益/初步结果并继续定位，不额外重跑 serial
+  controls。若内存边界不可验证或发生 OOM/超时，则恢复默认 `0`。
+- issue #28538 已跟踪 70m race UT 超时且目前由 `gouhongshen` 负责；本 revision 不重复
+  建 issue、不改 assignee、不关闭 issue。单 runner overlap 的配置/耗时结果由该 issue 的跟进更新
+  维护。
 
 ## Revision 9: branch SQL regression fixture consolidation
 
@@ -80,7 +197,7 @@ helper report 仅在失败或取消时上传，便于比较正常 run 的阶段�
 两条路径都执行完毕后才进入 embedded 阶段。helper 的 PID、进程组、退出状态和报告消费
 纳入同一 TERM 取消路径，任何一边失败都不会跳过另一边。
 
-并发是有界的：`UT_OVERLAP_LIGHT=0` 默认保持顺序基线，`UT_OVERLAP_LIGHT=1` 提供受限 A/B，
+并发是有界的：`UT_OVERLAP_LIGHT=1` 默认启用单 runner 的 light/issues overlap，
 `UT_OVERLAP_LIGHT_PARALLEL=2` 默认限制 light 的 package 并行度，并在小于该值的
 `UT_PARALLEL` 下自动收窄。开启 overlap 时不同时启动 compile-only embedded prebuild，
 避免叠加第二条编译通道。所有 package 仍只执行一次，测试函数、subtest、race detector、
@@ -135,7 +252,7 @@ the earlier opt-in, extra-slot plan-overlap policy with released-slot scheduling
 3. 每个场景保持独立 session、database、事务和 named oracle；合并 package 不得删除唯一的失败路径，也不得失去 `-run` 定位能力。
 4. admission 只有一个权威所有权记录。诊断中的 owner、waiter 和 stage 信息不能成为第二套锁，也不能绕过资源边界。
 5. 取消必须停止派发，终止本 runner 创建的进程组，并在有界时间内保留原始测试状态和已产生的报告。报告解析失败不能覆盖测试失败。
-6. 任何并行度改变都必须同时检查 cgroup memory、CPU throttling、runner queue、fixture 启停次数和 job critical path；`-p1` 或增加 admission slot 不是默认优化结论。
+6. 任何并行度改变都必须检查 cgroup memory/OOM、runner queue、fixture 启停次数和 job critical path；CPU throttling 只有在现有 runner 指标可用时才纳入，本 revision 不以未采集的 throttling 指标作门槛。`-p1` 或增加 admission slot 不是默认优化结论。
 
 ## 2. 现状证据与根因假设
 
@@ -180,7 +297,11 @@ fixture，避免同时持有两个 complete cluster，且不改变现有 admissi
 
 ### Phase 4：有界并行、静态分片和跨进程共享的重新评估
 
-复用现有完整且不重叠的 UT shard partition。单 runner 内可以先用 `go test -c` 做不执行测试 binary 的预编译，把 embedded 包的 build/link 与 issues 的共享 cluster body 重叠；预编译失败仍由正式测试命令给出权威结果，预编译进程必须接受同一取消路径。本 PR 提供这个路径，但 `UT_PREBUILD_EMBEDDED=0` 是默认值；只有同一 checkout、race/tags、CPU/memory 和缓存模式的 A/B 证明关键路径收益后，才可在 CI 显式打开。再在相同条件下 A/B embedded `-p1` 与 `-p2`，决定是否扩大 package 并发。plan shards 只有在显式消耗一个 heavy 进程 slot、证明非空、全集覆盖、不重复和可清理后才并行；`UT_OVERLAP_PLAN=0` 默认保持顺序。每个 runner 默认一个 active complete cluster。
+compile-only embedded prebuild 保持显式 opt-in（`UT_PREBUILD_EMBEDDED=0`），只有同一
+checkout、race/tags、CPU/memory 和缓存模式的对比证明关键路径收益后，才可在 CI 打开。
+当前 `UT_OVERLAP_PLAN=1` 复用已释放的 engine slot；`UT_OVERLAP_LIGHT=1`。reusable CI
+虽然提供静态四分片，但本任务固定一个 runner，不调用并行 shard matrix；同 runner 上只
+评估现有有界 light/issues overlap，且必须记录其资源竞争和取消/报告行为。
 
 只有当同进程合并、reset 和静态分片后仍有实测的 cluster startup 瓶颈，才另行设计跨进程 cluster service。那时必须补租约、generation、失联、reset、server crash、内部 hook 不可复用和权限隔离契约；本设计不把 daemon、动态 scheduler 或无界 admission slot 作为第一批改动。
 
@@ -188,7 +309,7 @@ fixture，避免同时持有两个 complete cluster，且不改变现有 admissi
 
 事件阶段至少区分 discovery、build/link、process startup、admission wait、service start、readiness、test body 和 cleanup/close。统计使用非重叠区间，避免把父测试、子测试和等待者时长重复相加。admission 诊断区分 `released`、`process-exited/lower-bound`、`still-live` 和 `unknown`；缺少 release 记录不能直接判定泄漏。
 
-每次 A/B 需固定 checkout、UT shard、race/coverage 模式、runner 类型和资源限制，比较：job/stage critical path、runner-minutes、queue、fixture start/close 次数、admission 持有/等待区间、cgroup memory peak/OOM/CPU throttling 和失败诊断完整性。当前 8 个样本只用于建立基线，不预先承诺“50 分钟降到某个固定数值”；后续目标是由多次同配置样本验证关键路径下降，且不能用 runner 成本或失败率换取表面 wall time。
+将本次 overlap run 与历史基线按 runner class、race/coverage 模式、测试范围及 `UT_PARALLEL` 对齐；另记录 light helper 实际 `-p`、两阶段重叠区间、stage critical path、fixture start/close 次数、admission 持有/等待区间、cgroup `memory.max`/`memory.peak`/`memory.events` 和失败诊断完整性。timeout 是被截断的样本，不能当完整 wall time。现有历史完整样本用于基线；不为收集 serial controls 额外消耗 CI。
 
 ## 5. 已否决或暂缓的替代方案
 
@@ -208,14 +329,15 @@ fixture，避免同时持有两个 complete cluster，且不改变现有 admissi
 - 被合并 suite 的 fixture start/close 次数与兼容矩阵预期一致，dirty fixture 不会被复用。
 - 同配置 A/B 能同时给出 wall time、资源成本、排队和失败率；不把累计 wait 当成 wall-time 收益。
 - 新增并发路径必须证明 ownership、generation、cleanup、取消独立性和 boundedness；`go test -race`、定向 failure injection 和原有 UT/BVT 矩阵保持通过。
+- CI 调用方必须继续 `ut_sharded: false`；不得增加并发 runner/job。UT shard 仅能用于选择性诊断，不能把多个 shard 并发执行作为提速方案。
+- 单 runner overlap 必须满足 revision 10 的历史运行比较、coverage、wall-time、`memory.max`/peak 和 OOM 门槛；否则恢复 `UT_OVERLAP_LIGHT=0` 并将结果作为不推广证据。
 
-## 7. 交付拆分
+## 7. 交付拆分与当前决策
 
-1. 本 revision：runner checkpoint、报告早创建、取消进程组清理、`run_ut.sh` 执行阶段的 70 分钟外层兜底、helper 报告所有权和诊断测试。`make ut` 的 `cgo/config` prerequisites 在该 timeout 之前运行；它们仍由各自命令负责失败和重试，不把 70 分钟描述成整个 make job 的硬上限。
-2. 本 revision 提供 compile-only embedded prebuild，但默认关闭（`UT_PREBUILD_EMBEDDED=0`）；plan overlap 同样默认关闭（`UT_OVERLAP_PLAN=0`）。打开任一开关前必须补同资源 A/B 和负向取消证据。
-3. 本 revision：按兼容矩阵迁移一小批可复用 fixture，并提供 fixture/关键路径 before-after；后续继续逐组验证，不跨越不同 topology 或 global hook 合并。
-4. 后续 PR：清理慢测试的重复 setup、无契约等待和过大数据，逐项保留 oracle 证明。
-5. 后续 PR：静态 shard/runner 资源 A/B；只有证据支持时再考虑跨进程共享 cluster。
+1. 已落地的前序 revision/PR：70 分钟执行阶段兜底、进程组取消与报告诊断、兼容 fixture 复用、计划阶段释放 slot 重叠；当前 `UT_OVERLAP_PLAN=1`、`UT_OVERLAP_LIGHT=0`、caller `ut_sharded: false`。
+2. 本 PR 保留 cgroup memory diagnostics 和有界 overlap scheduler，但默认关闭 light/issues overlap。已测 treatment 完整通过却慢于 serial baseline，且不满足 60 分钟/90% 内存门槛；恢复默认 `0`，显式 `UT_OVERLAP_LIGHT=1` 只作为未来候选，不增加 runner/job，不改测试断言、数据、race 覆盖或 shard 分配。
+3. 只有后续明确拆分编译/测试耗时、提出可验证的新调度方案，并在同一 runner 上满足 wall-time 与内存验收门槛后，才重新考虑默认开启；不为制造 serial control 重跑 CI，也不启用四 shard 并行模式。
+4. 后续仅按 profiling 结果提出重复 setup/fixture merge/data 最小化；每项保留 case oracle、reset 证明和同资源前后测量。跨进程 cluster service 仍需独立设计 ownership、租约、generation、reset、crash 和取消契约。
 
 ### Compatible SQL fixture consolidation
 

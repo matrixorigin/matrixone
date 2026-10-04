@@ -68,6 +68,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minusall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mongoscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
@@ -308,6 +309,7 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 		&intersect.Intersect{},
 		&minus.Minus{},
 		&intersectall.IntersectAll{},
+		&minusall.MinusAll{},
 		&merge.Merge{},
 		&mergerecursive.MergeRecursive{},
 		&group.MergeGroup{},
@@ -383,6 +385,7 @@ func Test_convertToVmInstruction(t *testing.T) {
 		{Op: int32(vm.Intersect), SetOp: &pipeline.SetOp{}},
 		{Op: int32(vm.IntersectAll), SetOp: &pipeline.SetOp{}},
 		{Op: int32(vm.Minus), SetOp: &pipeline.SetOp{}},
+		{Op: int32(vm.MinusAll), SetOp: &pipeline.SetOp{}},
 		{Op: int32(vm.Connector), Connect: &pipeline.Connector{}},
 		{Op: int32(vm.Merge), Merge: &pipeline.Merge{}},
 		{Op: int32(vm.MergeRecursive)},
@@ -569,6 +572,16 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 		require.Equal(t, original.KeyExprs, restored.(*intersectall.IntersectAll).KeyExprs)
 	})
 
+	t.Run("MinusAll", func(t *testing.T) {
+		keyExpr := plan.MakePlan2Int64ConstExprWithType(8)
+		original := &minusall.MinusAll{KeyExprs: []*planpb.Expr{keyExpr}}
+		restored := roundTrip(t, original)
+		defer restored.Release()
+		require.IsType(t, &minusall.MinusAll{}, restored)
+		require.Equal(t, vm.MinusAll, restored.OpType())
+		require.Equal(t, original.KeyExprs, restored.(*minusall.MinusAll).KeyExprs)
+	})
+
 	t.Run("Order", func(t *testing.T) {
 		original := order.NewArgument()
 		original.OrderBySpec = []*planpb.OrderBySpec{{
@@ -707,6 +720,35 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 		require.False(t, targets[0].LockTable)
 		require.Equal(t, lockpb.LockMode_Shared, targets[0].Mode)
 	})
+}
+
+func TestRestoreMinusAllBinaryRemoteShape(t *testing.T) {
+	left := merge.NewArgument()
+	right := merge.NewArgument()
+	right.AppendChild(left)
+	scope := &Scope{RootOp: right}
+	op := minusall.NewArgument()
+
+	require.NoError(t, scope.restoreBinarySetChildren(op))
+	require.Same(t, op, scope.RootOp)
+	require.Equal(t, 2, op.GetOperatorBase().NumChildren())
+	require.Same(t, left, op.GetOperatorBase().GetChildren(0))
+	require.Same(t, right, op.GetOperatorBase().GetChildren(1))
+	require.Zero(t, right.GetOperatorBase().NumChildren())
+
+	op.GetOperatorBase().ResetChildren()
+	op.Release()
+	left.Release()
+	right.Release()
+}
+
+func TestRestoreMinusAllRejectsLinearShapeWithoutTwoMerges(t *testing.T) {
+	scope := &Scope{RootOp: merge.NewArgument()}
+	defer scope.RootOp.Release()
+	op := minusall.NewArgument()
+	defer op.Release()
+
+	require.ErrorContains(t, scope.restoreBinarySetChildren(op), "right input")
 }
 
 func TestRemoteRunOrderedPipelineEdgeRoundTrip(t *testing.T) {
@@ -1440,16 +1482,12 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 				Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 2}},
 			})
 		}
-		inputTypes := make([]types.Type, len(args))
-		for i := range args {
-			inputTypes[i] = types.New(types.T(args[i].Typ.Id), args[i].Typ.Width, args[i].Typ.Scale)
-		}
-		resolved, err := planfunction.GetFunctionByName(context.Background(), "format", inputTypes)
-		require.NoError(t, err)
+		// Pin the historical v59 physical signature. New bindings use INT64
+		// precision and have an independent v98 protocol test.
 		return &planpb.Expr{
 			Typ: planpb.Type{Id: int32(types.T_varchar)},
 			Expr: &planpb.Expr_F{F: &planpb.Function{
-				Func: &planpb.ObjectRef{Obj: resolved.GetEncodedOverloadID(), ObjName: "format"},
+				Func: &planpb.ObjectRef{Obj: planfunction.EncodeOverloadID(planfunction.FORMAT, int32(len(args)-2)), ObjName: "format"},
 				Args: args,
 			}},
 		}
@@ -1461,14 +1499,16 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 		}
 		args := []*planpb.Expr{first}
 		if name == "conv" {
+			// This suite isolates the v64 first-argument contract. Row-dependent
+			// bases were never executable by v64 and have a separate v65 fence.
 			args = append(args,
 				&planpb.Expr{
 					Typ:  planpb.Type{Id: int32(types.T_int64)},
-					Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}},
+					Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: 16}}},
 				},
 				&planpb.Expr{
 					Typ:  planpb.Type{Id: int32(types.T_int64)},
-					Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 2}},
+					Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: 10}}},
 				},
 			)
 		}
@@ -5933,6 +5973,7 @@ func TestPartitionTopNPipelineRoundTrip(t *testing.T) {
 	original.Limit = limit
 	original.PartitionByCount = 1
 	original.PreReduce = true
+	original.WithTies = true
 	defer original.Release()
 
 	_, instruction, err := convertToPipelineInstruction(original, nil, ctx, 0)
@@ -5947,9 +5988,31 @@ func TestPartitionTopNPipelineRoundTrip(t *testing.T) {
 	defer restored.Release()
 	require.Equal(t, int32(1), restored.PartitionByCount)
 	require.True(t, restored.PreReduce)
+	require.True(t, restored.WithTies)
 	require.Len(t, restored.OrderBySpecs, 2)
 	require.Equal(t, uint64(7), restored.Limit.GetLit().GetU64Val())
 	require.Equal(t, planpb.OrderBySpec_DESC, restored.OrderBySpecs[1].Flag)
+}
+
+func TestPartitionTopNWithTiesRemoteProtocolValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, hadPrevious := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadPrevious {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion69)
+		}
+	})
+
+	p := &pipeline.Pipeline{Children: []*pipeline.Pipeline{{
+		InstructionList: []*pipeline.Instruction{{PartitionTopNWithTies: true}},
+	}}}
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion68)
+	require.ErrorContains(t, validateRemotePartitionTopNWithTiesPipelineProtocol(proc, p), "protocol version 69")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion69)
+	require.NoError(t, validateRemotePartitionTopNWithTiesPipelineProtocol(proc, p))
 }
 
 // newDispatchSrcScopeForTest builds a cross-CN shuffle dispatch source scope:

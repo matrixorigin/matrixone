@@ -28,6 +28,152 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type filterFoldWarningCounter struct{ count int }
+
+func (c *filterFoldWarningCounter) AppendWarningDiagnostic(uint16, string) { c.count++ }
+
+func TestDiagnosticFilterClassificationExcludesStorageCopy(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(func() { proc.Free() })
+	warnings := &filterFoldWarningCounter{}
+	proc.WarningSink = warnings
+	column := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_float64)},
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{Name: "d"}},
+	}
+	source := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_text)},
+		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "12suffix"}}},
+	}
+	target := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_float64)},
+		Expr: &planpb.Expr_T{T: &planpb.TargetType{}},
+	}
+	cast, err := plan2.BindFuncExprImplByPlanExpr(
+		context.Background(), "cast", []*planpb.Expr{source, target})
+	require.NoError(t, err)
+	filter, err := plan2.BindFuncExprImplByPlanExpr(
+		context.Background(), "=", []*planpb.Expr{column, cast})
+	require.NoError(t, err)
+	require.True(t, plan2.ContainsConstantFilterDiagnostic(proc, filter))
+	storageFilters := filterScanStorageExprs(proc, []*planpb.Expr{filter}, false)
+	require.Empty(t, storageFilters)
+	require.True(t, (&Compile{proc: proc}).needsCoordinatorConstantFilterDiagnostic(
+		&planpb.Node{FilterList: []*planpb.Expr{filter}}))
+	require.True(t, (&Compile{proc: proc, preparedJoinDiagnosticFree: true}).needsCoordinatorConstantFilterDiagnostic(
+		&planpb.Node{FilterList: []*planpb.Expr{filter}}), "a literal warning still needs its owner")
+	require.Zero(t, warnings.count, "the classification probe must not publish diagnostics")
+}
+
+func TestFilterScanStorageExprsUsesPreparedDiagnosticProof(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(func() { proc.Free() })
+	warnings := &filterFoldWarningCounter{}
+	proc.WarningSink = warnings
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("7"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+	t.Cleanup(func() {
+		proc.SetPrepareParams(nil)
+		params.Free(proc.Mp())
+	})
+
+	column := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int32)},
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{Name: "s_w_id"}}}
+	param := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_text)},
+		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+	target := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int32)},
+		Expr: &planpb.Expr_T{T: &planpb.TargetType{}}}
+	cast, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "cast", []*planpb.Expr{param, target})
+	require.NoError(t, err)
+	filter, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "=", []*planpb.Expr{column, cast})
+	require.NoError(t, err)
+	require.True(t, plan2.ContainsStatementInvariantFilterDiagnostic(proc, filter))
+	prepared := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{Nodes: []*planpb.Node{
+		{NodeType: planpb.Node_TABLE_SCAN, FilterList: []*planpb.Expr{filter}},
+	}}}}
+	require.Equal(t, []*planpb.Expr{cast}, plan2.PreparedPlanDiagnosticCandidates(prepared))
+	require.False(t, (&Compile{proc: proc, preparedJoinDiagnosticFree: true}).needsCoordinatorConstantFilterDiagnostic(
+		&planpb.Node{FilterList: []*planpb.Expr{filter}}))
+	derivedBlocks := plan2.CompletePreparedDiagnosticBlockFilters(
+		context.Background(), &planpb.Node{NodeType: planpb.Node_TABLE_SCAN}, []*planpb.Expr{filter}, nil)
+	require.Len(t, derivedBlocks, 1)
+	require.NotSame(t, filter, derivedBlocks[0])
+	require.Len(t, plan2.CompletePreparedDiagnosticBlockFilters(
+		context.Background(), &planpb.Node{NodeType: planpb.Node_TABLE_SCAN}, []*planpb.Expr{filter}, derivedBlocks), 1)
+	require.Empty(t, plan2.CompletePreparedDiagnosticBlockFilters(
+		context.Background(), &planpb.Node{NodeType: planpb.Node_TABLE_SCAN, ExtraOptions: plan2.PreparedBlockFilterDisabledScanOption}, []*planpb.Expr{filter}, nil))
+	require.Empty(t, plan2.CompletePreparedDiagnosticBlockFilters(
+		context.Background(), &planpb.Node{NodeType: planpb.Node_TABLE_SCAN, ExtraOptions: "other-scan-option"}, []*planpb.Expr{filter}, nil))
+
+	for _, tc := range []struct {
+		value string
+		safe  bool
+	}{
+		{value: "7", safe: true},
+		{value: "invalid", safe: false},
+		{value: "8", safe: true},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			require.NoError(t, vector.SetStringAt(params, 0, tc.value, proc.Mp()))
+			proven, err := plan2.ProbeStatementParameterDiagnosticFree(proc, filter)
+			require.NoError(t, err)
+			require.Equal(t, tc.safe, proven)
+			storageFilters := filterScanStorageExprs(proc, []*planpb.Expr{filter}, proven)
+			if tc.safe {
+				require.Equal(t, []*planpb.Expr{filter}, storageFilters)
+			} else {
+				require.Empty(t, storageFilters)
+			}
+			require.Zero(t, warnings.count, "probing must not publish diagnostics")
+		})
+	}
+	t.Run("index prefix IN", func(t *testing.T) {
+		require.NoError(t, vector.SetStringAt(params, 0, "7", proc.Mp()))
+		serial, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "serial", []*planpb.Expr{cast})
+		require.NoError(t, err)
+		filter, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "prefix_in", []*planpb.Expr{
+			{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{Name: "__mo_index_idx_col"}}},
+			{Typ: serial.Typ, Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{serial}}}},
+		})
+		require.NoError(t, err)
+		require.True(t, plan2.ContainsStatementInvariantFilterDiagnostic(proc, filter))
+		prepared := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{Nodes: []*planpb.Node{
+			{NodeType: planpb.Node_TABLE_SCAN, FilterList: []*planpb.Expr{filter}},
+		}}}}
+		candidates := plan2.PreparedPlanDiagnosticCandidates(prepared)
+		require.NotEmpty(t, candidates)
+		proven, err := plan2.ProbePreparedDiagnosticCandidates(proc, candidates)
+		require.NoError(t, err)
+		storageFilters := filterScanStorageExprs(proc, []*planpb.Expr{filter}, proven)
+		require.Len(t, storageFilters, 1,
+			"a warning-free current parameter must retain the secondary index filter")
+		require.Zero(t, warnings.count)
+
+		require.NoError(t, vector.SetStringAt(params, 0, "not-an-int", proc.Mp()))
+		proven, err = plan2.ProbePreparedDiagnosticCandidates(proc, candidates)
+		require.NoError(t, err)
+		storageFilters = filterScanStorageExprs(proc, []*planpb.Expr{filter}, proven)
+		require.Empty(t, storageFilters,
+			"a diagnostic-bearing parameter must keep its row-level owner")
+		require.Zero(t, warnings.count, "the probe must not publish the SQL diagnostic")
+
+		require.NoError(t, vector.SetStringAt(params, 0, "8", proc.Mp()))
+		proven, err = plan2.ProbePreparedDiagnosticCandidates(proc, candidates)
+		require.NoError(t, err)
+		storageFilters = filterScanStorageExprs(proc, []*planpb.Expr{filter}, proven)
+		require.Len(t, storageFilters, 1, "the next execution must recheck its parameter")
+
+		proc.SetPrepareParams(nil)
+		proven, err = plan2.ProbePreparedDiagnosticCandidates(proc, candidates)
+		require.Error(t, err, "an unbound parameter must reject execution-local proof")
+		require.False(t, proven)
+		storageFilters = filterScanStorageExprs(proc, []*planpb.Expr{filter}, proven)
+		require.Empty(t, storageFilters, "an unbound plan has no execution-local proof")
+
+	})
+}
+
 func TestBuildFoldedFilterExprsRollsBackAndCanRetry(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	t.Cleanup(func() { proc.Free() })

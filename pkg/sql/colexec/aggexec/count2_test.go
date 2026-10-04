@@ -16,6 +16,7 @@ package aggexec
 
 import (
 	"bytes"
+	"io"
 	"math"
 	"strconv"
 	"strings"
@@ -176,7 +177,145 @@ func TestCountDistinctSignedZeroUsesOneValue(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
-func TestCountDistinctFixedIndexPreservesFloatNaNIdentity(t *testing.T) {
+func TestCountDistinctFloat64SignedZeroSurvivesIntermediateMerge(t *testing.T) {
+	mp := mpool.MustNewZero()
+	makePartial := func(value float64) []byte {
+		exec := newCountColumnExec(
+			mp, AggIdOfCountColumn, true, []types.Type{types.T_float64.ToType()},
+		).(*countColumnExec)
+		require.NoError(t, exec.GroupGrow(1))
+		vec := testutil.NewFloat64Vector(
+			1, types.T_float64.ToType(), mp, false, nil, []float64{value})
+		require.NoError(t, exec.BatchFill(0, []uint64{1}, []*vector.Vector{vec}))
+		SetCanonicalDistinctKeyWire(exec, false)
+		var encoded bytes.Buffer
+		require.NoError(t, exec.SaveIntermediateResultOfChunk(0, &encoded))
+		vec.Free(mp)
+		exec.Free()
+		return bytes.Clone(encoded.Bytes())
+	}
+
+	minusZero := makePartial(math.Copysign(0, -1))
+	plusZero := makePartial(0)
+	legacyPayload := func(encoded []byte) []byte {
+		r := bytes.NewReader(encoded)
+		magic, err := types.ReadUint64(r)
+		require.NoError(t, err)
+		require.Equal(t, magicNumber, magic)
+		chunks, err := types.ReadInt32(r)
+		require.NoError(t, err)
+		require.Equal(t, int32(1), chunks)
+		rows, err := types.ReadInt32(r)
+		require.NoError(t, err)
+		require.Equal(t, int32(1), rows)
+		count, err := types.ReadUint32(r)
+		require.NoError(t, err)
+		require.Equal(t, uint32(1), count)
+		payload := make([]byte, 8)
+		_, err = io.ReadFull(r, payload)
+		require.NoError(t, err)
+		return payload
+	}
+	// A pre-canonical fixed-width reader compares the wire bytes directly.
+	// The legacy output must therefore carry canonical +0, even when the
+	// retained in-memory representative was -0.
+	require.Equal(t, make([]byte, 8), legacyPayload(minusZero))
+	require.Equal(t, make([]byte, 8), legacyPayload(plusZero))
+	target := newCountColumnExec(
+		mp, AggIdOfCountColumn, true, []types.Type{types.T_float64.ToType()},
+	).(*countColumnExec)
+	other := newCountColumnExec(
+		mp, AggIdOfCountColumn, true, []types.Type{types.T_float64.ToType()},
+	).(*countColumnExec)
+	SetCanonicalDistinctKeyWire(target, false)
+	SetCanonicalDistinctKeyWire(other, false)
+	require.NoError(t, target.UnmarshalFromReader(bytes.NewReader(minusZero), mp))
+	require.NoError(t, other.UnmarshalFromReader(bytes.NewReader(plusZero), mp))
+	require.NoError(t, target.BatchMerge(other, 0, []uint64{1}))
+	result, err := target.Flush()
+	require.NoError(t, err)
+	require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](result[0], 0))
+
+	result[0].Free(mp)
+	target.Free()
+	other.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestCountDistinctUsesCanonicalTypedKeys(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		typ  types.Type
+		fill func(*testing.T, *vector.Vector, *mpool.MPool)
+		want int64
+	}{
+		{
+			name: "char-pad-space",
+			typ:  types.New(types.T_char, 4, 0),
+			fill: func(t *testing.T, vec *vector.Vector, mp *mpool.MPool) {
+				for _, value := range []string{"a", "a ", "a  ", "b"} {
+					require.NoError(t, vector.AppendBytes(vec, []byte(value), false, mp))
+				}
+			},
+			want: 2,
+		},
+		{
+			name: "json-numeric-encoding",
+			typ:  types.T_json.ToType(),
+			fill: func(t *testing.T, vec *vector.Vector, mp *mpool.MPool) {
+				for _, value := range []string{"1", "1.0", "1e0", "2"} {
+					json, err := types.ParseStringToByteJson(value)
+					require.NoError(t, err)
+					encoded, err := types.EncodeJson(json)
+					require.NoError(t, err)
+					require.NoError(t, vector.AppendBytes(vec, encoded, false, mp))
+				}
+			},
+			want: 2,
+		},
+		{
+			name: "vector-signed-zero",
+			typ:  types.T_array_float32.ToType(),
+			fill: func(t *testing.T, vec *vector.Vector, mp *mpool.MPool) {
+				negativeZero := float32(math.Copysign(0, -1))
+				for _, value := range [][]float32{
+					{1, 0, 3}, {1, negativeZero, 3}, {1, 2, 3},
+				} {
+					require.NoError(t, vector.AppendBytes(
+						vec, types.ArrayToBytes(value), false, mp))
+				}
+			},
+			want: 2,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			values := vector.NewVec(tc.typ)
+			tc.fill(t, values, mp)
+			exec := newCountColumnExec(mp, AggIdOfCountColumn, true, []types.Type{tc.typ})
+			require.NoError(t, exec.GroupGrow(1))
+			groups := make([]uint64, values.Length())
+			for i := range groups {
+				groups[i] = 1
+			}
+			require.NoError(t, exec.(BatchCapacityPreflight).PreflightBatchFill(
+				0, groups, []*vector.Vector{values}))
+			require.NoError(t, exec.BatchFill(0, groups, []*vector.Vector{values}))
+			results, err := exec.Flush()
+			require.NoError(t, err)
+			require.Equal(t, tc.want,
+				vector.MustFixedColNoTypeCheck[int64](results[0])[0])
+			for _, result := range results {
+				result.Free(mp)
+			}
+			exec.Free()
+			values.Free(mp)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
+func TestCountDistinctFixedIndexCanonicalizesFloatNaNPeers(t *testing.T) {
 	mp := mpool.MustNewZero()
 	values := []float64{
 		math.Float64frombits(0x7ff8000000000001),
@@ -216,12 +355,11 @@ func TestCountDistinctFixedIndexPreservesFloatNaNIdentity(t *testing.T) {
 		return got
 	}
 
-	// The fixed index must preserve the pre-existing byte-exact aggregate key
-	// contract: equal NaN payloads remain one key, distinct payloads remain
-	// distinct, and signed zeroes remain one key.
+	// The fixed index must use the same SQL equivalence key as the canonical
+	// skiplist path: all NaN payloads are one key and signed zeroes are one key.
 	legacy := count(t, 1)
 	fixed := count(t, distinctFixedIndexMinGroups)
-	require.Equal(t, int64(3), legacy)
+	require.Equal(t, int64(2), legacy)
 	require.Equal(t, legacy, fixed)
 	require.Zero(t, mp.CurrNB())
 }

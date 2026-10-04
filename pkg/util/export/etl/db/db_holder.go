@@ -170,7 +170,7 @@ func buildDBConn(randomCN bool) (*sql.DB, error) {
 		return nil, err
 	}
 	dsn :=
-		fmt.Sprintf("%s:%s@tcp(%s)/?readTimeout=10s&writeTimeout=15s&timeout=15s&maxAllowedPacket=0&disable_txn_trace=1",
+		fmt.Sprintf("%s:%s@tcp(%s)/?readTimeout=10s&writeTimeout=15s&timeout=15s&maxAllowedPacket=0",
 			dbUser.UserName,
 			dbUser.Password,
 			dbAddress)

@@ -50,6 +50,7 @@ const costThresholdForTpQuery = 240000
 const highNDVcolumnThreshHold = 0.95
 const statsCacheInitSize = 128
 const statsCacheMaxSize = 8192
+const defaultTableCount = 1000.0
 
 // StatsInfoUsable reports whether a statistics object contains a real table
 // cardinality observation. Persisted-object statistics use
@@ -62,6 +63,44 @@ func StatsInfoUsable(stats *pb.StatsInfo) bool {
 		return false
 	}
 	return stats.AccurateObjectNumber > 0 || stats.TableCnt > 0 || stats.TableName != ""
+}
+
+// StatsInfoUsableForCache requires a completed published observation. Transient
+// row bounds remain useful to the planner but must be refreshed for admission.
+func StatsInfoUsableForCache(stats *pb.StatsInfo) bool {
+	return StatsInfoUsable(stats) && stats.TableName != ""
+}
+
+// StatsCacheEligible excludes workspace writes and historical snapshots from
+// the ordinary table-ID fast cache.
+func StatsCacheEligible(proc *process.Process, snapshot *plan.Snapshot) bool {
+	if IsSnapshotValid(snapshot) {
+		return false
+	}
+	if proc != nil && proc.GetTxnOperator() != nil {
+		if ws := proc.GetTxnOperator().GetWorkspace(); ws != nil {
+			return ws.Readonly()
+		}
+	}
+	return true
+}
+
+// EstimatedRowsInt64 bounds execution hints before converting a float estimate.
+func EstimatedRowsInt64(rows float64) int64 {
+	if math.IsNaN(rows) || rows <= 0 {
+		return 0
+	}
+	if rows >= float64(math.MaxInt64) {
+		return math.MaxInt64
+	}
+	return int64(rows)
+}
+
+func estimatedBlocks(blocks float64) int32 {
+	if blocks >= float64(math.MaxInt32-1) || math.IsInf(blocks, 1) {
+		return math.MaxInt32
+	}
+	return int32(blocks) + 1
 }
 
 func statsForTableDef(
@@ -1414,13 +1453,9 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		if ndv < 1 {
 			ndv = 1
 		}
-		//assume all join is not cross join
-		//will fix this in the future
-		//isCrossJoin := (len(node.OnList) == 0)
-		isCrossJoin := false
 		leftSelectivity := clampSelectivity(leftStats.Selectivity, 1)
 		rightSelectivity := clampSelectivity(rightStats.Selectivity, 1)
-		selectivity := clampSelectivity(math.Pow(rightSelectivity, math.Pow(leftSelectivity, 0.2)), 1)
+		selectivity := estimateJoinSelectivity(leftSelectivity, rightSelectivity)
 		selectivity_out := andSelectivity(leftSelectivity, rightSelectivity)
 
 		for _, pred := range node.OnList {
@@ -1433,12 +1468,15 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 
 		switch node.JoinType {
 		case plan.Node_INNER:
-			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
-			if !isCrossJoin {
-				outcnt *= selectivity
-			}
-			if outcnt < rightStats.Outcnt && leftStats.Selectivity > 0.95 {
-				outcnt = rightStats.Outcnt
+			// Outcnt already includes filters on each input. A cartesian
+			// product has no join-key NDV or additional join selectivity;
+			// in particular, an empty input must keep its zero result.
+			outcnt := leftStats.Outcnt * rightStats.Outcnt
+			if len(node.OnList) > 0 {
+				outcnt = outcnt / ndv * selectivity
+				if outcnt < rightStats.Outcnt && leftStats.Selectivity > 0.95 {
+					outcnt = rightStats.Outcnt
+				}
 			}
 			node.Stats.Outcnt = outcnt
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
@@ -1513,7 +1551,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.Cost = (leftStats.Cost + rightStats.Cost) * 8
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 			node.Stats.Selectivity = selectivity_out
-			node.Stats.BlockNum = leftStats.BlockNum * 8
+			node.Stats.BlockNum = int32(min(int64(leftStats.BlockNum)*8, int64(math.MaxInt32)))
 		}
 
 	case plan.Node_AGG:
@@ -1549,7 +1587,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.HashmapStats.HashmapSize = 1
 			node.Stats.Selectivity = 1
 		}
-		node.Stats.BlockNum = int32(childStats.Outcnt/objectio.BlockMaxRows) + 1
+		node.Stats.BlockNum = estimatedBlocks(childStats.Outcnt / objectio.BlockMaxRows)
 
 	case plan.Node_UNION:
 		if needResetHashMapStats {
@@ -1617,7 +1655,24 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.Cost = rowCount
 			node.Stats.Outcnt = rowCount
 			node.Stats.Selectivity = 1
+		} else if node.TableDef == nil && len(node.Children) == 0 {
+			// The executor supplies one dummy row for no-FROM/DUAL input.
+			node.Stats.TableCnt = 1
+			node.Stats.Cost = 1
+			node.Stats.Outcnt = 1
+			node.Stats.Selectivity = 1
+			node.Stats.BlockNum = 1
 		}
+
+	case plan.Node_VECTOR_QUERY_TOP:
+		node.Stats = DeepCopyStats(builder.qry.Nodes[node.Children[1]].Stats)
+		node.Stats.ForceOneCN = true
+
+	case plan.Node_VECTOR_QUERY_SOURCE:
+		node.Stats = DefaultStats()
+		node.Stats.Outcnt = 1
+		node.Stats.TableCnt = 1
+		node.Stats.Selectivity = 1
 
 	case plan.Node_SINK_SCAN:
 		sourceNode := builder.qry.Steps[node.GetSourceStep()[0]]
@@ -1744,6 +1799,11 @@ func reCalcNodeStatsAfterSwap(nodeID int32, builder *QueryBuilder, recursive boo
 		node.Stats.Outcnt = preservedStats.Outcnt
 		node.Stats.BlockNum = preservedStats.BlockNum
 		node.Stats.Selectivity = preservedStats.Selectivity
+	case plan.Node_SEMI:
+		matchingStats := builder.qry.Nodes[node.Children[0]].Stats
+		node.Stats.Outcnt = preservedStats.Outcnt * estimateJoinSelectivity(
+			clampSelectivity(preservedStats.Selectivity, 1), clampSelectivity(matchingStats.Selectivity, 1))
+		node.Stats.BlockNum = preservedStats.BlockNum
 	case plan.Node_ANTI:
 		matchingStats := builder.qry.Nodes[node.Children[0]].Stats
 		if builder.outerAntiPlanningDisabled() {
@@ -1760,6 +1820,12 @@ func reCalcNodeStatsAfterSwap(nodeID int32, builder *QueryBuilder, recursive boo
 	if node.Limit != nil {
 		applyLimitToStats(node.Stats, node.Limit, builder)
 	}
+}
+
+// estimateJoinSelectivity retains the directional filtering heuristic for
+// clamped inputs. After a physical swap, the preserved input still comes first.
+func estimateJoinSelectivity(preservedSelectivity, matchingSelectivity float64) float64 {
+	return clampSelectivity(math.Pow(matchingSelectivity, math.Pow(preservedSelectivity, 0.2)), 1)
 }
 
 // estimateAntiJoinOutcnt estimates how many logical-left rows survive an ANTI
@@ -2067,7 +2133,7 @@ func recalcStatsByRuntimeFilter(scanNode *plan.Node, joinNode *plan.Node, builde
 	if scanNode.Stats.Cost < 1 {
 		scanNode.Stats.Cost = 1
 	}
-	newBlockNum := int32(scanNode.Stats.Outcnt/3) + 1
+	newBlockNum := estimatedBlocks(scanNode.Stats.Outcnt / 3)
 	if newBlockNum < scanNode.Stats.BlockNum {
 		scanNode.Stats.BlockNum = newBlockNum
 	}
@@ -2083,9 +2149,6 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	}
 	if InternalTable(node.TableDef) {
 		return DefaultStats()
-	}
-	if shouldReturnMinimalStats(node) {
-		return DefaultMinimalStats()
 	}
 
 	//ts := timestamp.Timestamp{}
@@ -2150,7 +2213,7 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	stats.Selectivity = estimateExprSelectivity(colexec.RewriteFilterExprList(node.FilterList), builder, s)
 	stats.Outcnt = stats.Selectivity * stats.TableCnt
 	stats.Cost = stats.TableCnt * blockSel
-	stats.BlockNum = int32(float64(s.BlockNumber)*blockSel) + 1
+	stats.BlockNum = estimatedBlocks(float64(s.BlockNumber) * blockSel)
 	// estimate average row size from collected table stats: sum(SizeMap)/TableCnt
 	// SizeMap stores approximate persisted bytes per column (using OriginSize); divide by total rows to get bytes/row
 	if totalSize, complete := completeStatsSizeMap(s, node.TableDef); stats.TableCnt > 0 && totalSize > 0 && complete {
@@ -2178,10 +2241,6 @@ func forceScanNodeStatsTP(nodeID int32, builder *QueryBuilder) {
 		stats.BlockNum = 16
 	}
 	stats.Selectivity = safeSelectivityRatio(stats.Outcnt, stats.TableCnt)
-}
-
-func shouldReturnMinimalStats(node *plan.Node) bool {
-	return false
 }
 
 func InternalTable(tableDef *TableDef) bool {
@@ -2223,12 +2282,12 @@ func DefaultBigStats() *plan.Stats {
 }
 
 func IsDefaultStats(stats *plan.Stats) bool {
-	return stats.Cost == 1000 && stats.TableCnt == 1000 && stats.Outcnt == 1000 && stats.Selectivity == 1 && stats.BlockNum == 1 && stats.Rowsize == 100
+	return stats.Cost == 1000 && stats.TableCnt == defaultTableCount && stats.Outcnt == 1000 && stats.Selectivity == 1 && stats.BlockNum == 1 && stats.Rowsize == 100
 }
 
 func DefaultStats() *plan.Stats {
 	stats := new(Stats)
-	stats.TableCnt = 1000
+	stats.TableCnt = defaultTableCount
 	stats.Cost = 1000
 	stats.Outcnt = 1000
 	stats.Selectivity = 1
@@ -2272,6 +2331,20 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 	}
 	if node.NodeType != plan.Node_JOIN {
 		return
+	}
+	if node.JoinType == plan.Node_LEFT || node.JoinType == plan.Node_SEMI ||
+		node.JoinType == plan.Node_ANTI || node.JoinType == plan.Node_SINGLE {
+		// A row-dependent diagnostic needs LoopJoin to evaluate the selected
+		// ON arm even when hash keys do not match. LoopJoin implements these
+		// joins with the logical left input as probe; preserve that layout
+		// across both cost-based and recursive-side orientation choices.
+		for _, expr := range node.OnList {
+			if ContainsGuardedJoinDiagnosticWithProof(builder.compCtx.GetProcess(), expr,
+				builder.preparedParameterDiagnosticsFree()) {
+				node.IsRightJoin = false
+				return
+			}
+		}
 	}
 	// A predeclared runtime-filter pair is a physical dependency: child 1 must
 	// build and publish before child 0 may probe. Reversing the children turns
@@ -2824,7 +2897,19 @@ func (builder *QueryBuilder) disableMemoryUnsafeRightDedup(rootID int32) {
 			budget = perWorkerBudget * workers
 		}
 	}
+	var queryLimit int64
+	if builder.compCtx != nil {
+		if proc := builder.compCtx.GetProcess(); proc != nil && proc.Base != nil {
+			queryLimit = proc.GetLim().Size
+		}
+	}
 	memoryUnsafe := func(totalBytes, totalRows uint64) bool {
+		// Map estimates cover cells only. Leave half of the query cap for
+		// growth, key evaluation and live input; explicit spill thresholds cannot
+		// enlarge that cap. Do not open an execution generation during planning.
+		if queryLimit > 0 && totalBytes > uint64(queryLimit)/2 {
+			return true
+		}
 		if builder.joinSpillMem == 0 {
 			return totalBytes > budget
 		}
@@ -3209,6 +3294,50 @@ func CalcQueryDOP(p *plan.Plan, ncpu int32, lencn int, typ ExecType) {
 	}
 }
 
+func adaptiveDeferredOnlyNodes(qry *plan.Query) map[int32]struct{} {
+	deferred := make(map[int32]struct{})
+	if qry == nil || len(qry.Steps) == 0 {
+		return deferred
+	}
+	active := make(map[int32]struct{})
+	var walk func(int32, map[int32]struct{}, bool)
+	walk = func(id int32, seen map[int32]struct{}, firstCandidateOnly bool) {
+		if id < 0 || int(id) >= len(qry.Nodes) {
+			return
+		}
+		if _, ok := seen[id]; ok {
+			return
+		}
+		seen[id] = struct{}{}
+		node := qry.Nodes[id]
+		if node == nil {
+			return
+		}
+		children := node.Children
+		if firstCandidateOnly && node.NodeType == plan.Node_ADAPTIVE_TOP && len(children) > 0 {
+			children = children[:1]
+		}
+		for _, child := range children {
+			walk(child, seen, firstCandidateOnly)
+		}
+	}
+	for _, node := range qry.Nodes {
+		if node == nil || node.NodeType != plan.Node_ADAPTIVE_TOP || len(node.Children) < 2 {
+			continue
+		}
+		for _, child := range node.Children[1:] {
+			walk(child, deferred, false)
+		}
+	}
+	for _, step := range qry.Steps {
+		walk(step, active, true)
+	}
+	for id := range active {
+		delete(deferred, id)
+	}
+	return deferred
+}
+
 func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 	if GetForceScanOnMultiCN() {
 		return ExecTypeAP_MULTICN
@@ -3219,12 +3348,27 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 	// the equi-join condition is a function expression (not a plain column ref), it's expr-based.
 	hasExprBasedShuffle := false
 	hasForceOneCN := false
-	for _, node := range qry.GetNodes() {
+	vectorID, _, localIndexScans, distributedPRE := RequiredIVFPlacement(qry)
+	deferredOnly := adaptiveDeferredOnlyNodes(qry)
+	for id, node := range qry.GetNodes() {
 		if node == nil {
 			continue
 		}
+		if _, deferred := deferredOnly[int32(id)]; deferred {
+			continue
+		}
 		if node.GetStats().GetForceOneCN() {
-			hasForceOneCN = true
+			_, localIndex := localIndexScans[int32(id)]
+			if !distributedPRE || (!localIndex && int32(id) != vectorID) {
+				hasForceOneCN = true
+			}
+		}
+		if node.NodeType == plan.Node_VECTOR_INDEX_SCAN && !distributedPRE {
+			for _, spec := range node.RuntimeFilterProbeList {
+				if spec != nil && spec.MustApply && spec.UseMembershipFilter {
+					hasForceOneCN = true
+				}
+			}
 		}
 		if node.Stats == nil || node.Stats.HashmapStats == nil {
 			continue
@@ -3253,8 +3397,11 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 	}
 	canUseMultiCN := !txnHaveDDL && !hasExprBasedShuffle && !hasForceOneCN
 	ret := ExecTypeTP
-	for _, node := range qry.GetNodes() {
+	for id, node := range qry.GetNodes() {
 		if node == nil {
+			continue
+		}
+		if _, deferred := deferredOnly[int32(id)]; deferred {
 			continue
 		}
 		switch node.NodeType {
@@ -3280,7 +3427,7 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 		}
 		if node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
 			execType := ExecTypeAP_MULTICN
-			if stats.GetForceOneCN() || !canUseMultiCN {
+			if (stats.GetForceOneCN() && !(distributedPRE && int32(id) == vectorID)) || !canUseMultiCN {
 				execType = ExecTypeAP_ONECN
 			}
 			if execType > ret {
@@ -3422,17 +3569,35 @@ func calcBlockSelectivityUsingShuffleRange(s *pb.StatsInfo, colname string, expr
 }
 
 func (builder *QueryBuilder) canSkipStats() bool {
-	if builder.skipStats {
-		// if already set to true by other parts, just skip stats
-		return true
+	return builder.skipStats || queryCanSkipStats(builder.qry)
+}
+
+func queryCanSkipStats(qry *plan.Query) bool {
+	// LIMIT0 may move from PROJECT into a scan while the projection survives.
+	// Only unary projection paths preserve this intentional zero-row model.
+	if len(qry.Steps) == 1 {
+		node := qry.Nodes[qry.Steps[0]]
+		for {
+			if node.Limit != nil {
+				if literal := node.Limit.GetLit(); literal != nil {
+					if value, ok := literal.Value.(*plan.Literal_U64Val); ok && value.U64Val == 0 {
+						return true
+					}
+				}
+			}
+			if node.NodeType != plan.Node_PROJECT || len(node.Children) != 1 {
+				break
+			}
+			node = qry.Nodes[node.Children[0]]
+		}
 	}
 	//skip stats for select count(*) from xx
-	if len(builder.qry.Steps) == 1 && len(builder.qry.Nodes) == 3 {
-		project := builder.qry.Nodes[builder.qry.Steps[0]]
+	if len(qry.Steps) == 1 && len(qry.Nodes) == 3 {
+		project := qry.Nodes[qry.Steps[0]]
 		if project.NodeType != plan.Node_PROJECT {
 			return false
 		}
-		agg := builder.qry.Nodes[project.Children[0]]
+		agg := qry.Nodes[project.Children[0]]
 		if agg.NodeType != plan.Node_AGG {
 			return false
 		}
@@ -3442,40 +3607,158 @@ func (builder *QueryBuilder) canSkipStats() bool {
 		if agg.AggList[0].GetF() == nil || agg.AggList[0].GetF().Func.ObjName != "starcount" {
 			return false
 		}
-		scan := builder.qry.Nodes[agg.Children[0]]
+		scan := qry.Nodes[agg.Children[0]]
 		return scan.NodeType == plan.Node_TABLE_SCAN
 	}
-	//skip stats for select * from xx limit 0, including view
-	if len(builder.qry.Steps) == 1 {
-		project := builder.qry.Nodes[builder.qry.Steps[0]]
-		if project.NodeType != plan.Node_PROJECT {
-			return false
-		}
-		if project.Limit != nil {
-			if cExpr, ok := project.Limit.Expr.(*plan.Expr_Lit); ok {
-				if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
-					return c.U64Val == 0
-				}
-			}
-		}
-	}
+
 	return false
 }
 
 func (builder *QueryBuilder) hintQueryType() {
-	if builder.optimizerHints != nil && builder.optimizerHints.execType != 0 {
-		for _, node := range builder.qry.GetNodes() {
-			switch builder.optimizerHints.execType {
-			case 1:
-				*node.Stats = *DefaultMinimalStats()
-			case 2:
-				*node.Stats = *DefaultBigStats()
-			case 3:
-				*node.Stats = *DefaultHugeStats()
-			default:
-				panic("wrong optimizer hints for execType!")
-			}
-		}
+	if builder.optimizerHints == nil || builder.optimizerHints.execType == 0 {
 		return
 	}
+	var estimates *plan.Stats
+	switch builder.optimizerHints.execType {
+	case 1:
+		estimates = DefaultMinimalStats()
+	case 2:
+		estimates = DefaultBigStats()
+	case 3:
+		estimates = DefaultHugeStats()
+	default:
+		panic("wrong optimizer hints for execType!")
+	}
+	for _, node := range builder.qry.GetNodes() {
+		// This override runs after runtime-filter generation and placement.
+		// Replace cost estimates only: clearing ForceOneCN can strand a scan
+		// waiting for a current-CN-only filter on a remote CN. HashmapStats
+		// likewise contains already-selected hash/shuffle execution contracts.
+		node.Stats.BlockNum = estimates.BlockNum
+		node.Stats.Cost = estimates.Cost
+		node.Stats.Outcnt = estimates.Outcnt
+		node.Stats.Rowsize = estimates.Rowsize
+		node.Stats.TableCnt = estimates.TableCnt
+		node.Stats.Selectivity = estimates.Selectivity
+	}
+}
+
+// CachedPlanStatsChanged admits reuse against the unfiltered counts captured
+// in this generation. Ordinary estimates may drift by less than a factor of
+// two; this is a reoptimization policy, not a bound on actual resource demand.
+// Cartesian and resident RIGHT DEDUP plans retain exact admission. Execution
+// ranges, Reset and allocation/spill remain responsible for runtime state.
+func CachedPlanStatsChanged(p *plan.Plan, ctx CompilerContext) (bool, error) {
+	qry := p.GetQuery()
+	if qry == nil || queryCanSkipStats(qry) {
+		return false, nil
+	}
+	strict := cachedPlanRequiresExactStats(qry)
+	checkedHints := false
+	for _, node := range qry.Nodes {
+		if node.NodeType != plan.Node_TABLE_SCAN || node.Stats == nil || node.TableDef == nil ||
+			InternalTable(node.TableDef) {
+			continue
+		}
+		if !checkedHints {
+			builder := &QueryBuilder{qry: qry, compCtx: ctx}
+			builder.parseOptimizeHints()
+			if builder.optimizerHints != nil && builder.optimizerHints.execType != 0 {
+				return false, nil
+			}
+			checkedHints = true
+		}
+		stats, err := statsForTableDef(ctx, node.ObjRef, node.TableDef, node.ScanSnapshot)
+		if err != nil {
+			return false, err
+		}
+		rows := defaultTableCount
+		usable := StatsInfoUsable(stats)
+		if usable {
+			rows = stats.TableCnt
+		}
+		if cachedCardinalityNeedsRebuild(node.Stats.TableCnt, rows, strict || !usable) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// Compare with the immutable generation baseline, never the last observation:
+// gradual growth must eventually replan. Zero, unavailable observations and the
+// existing conservative uint64-domain maximum do not receive a drift allowance.
+func cachedCardinalityNeedsRebuild(captured, fresh float64, exact bool) bool {
+	if math.IsNaN(captured) || math.IsInf(captured, 0) || captured < 0 {
+		return true
+	}
+	if captured == fresh {
+		return false
+	}
+	if exact || captured == 0 || fresh == 0 || captured >= float64(^uint64(0)) || fresh >= float64(^uint64(0)) {
+		return true
+	}
+	return fresh >= 2*captured || captured >= 2*fresh
+}
+
+func cachedPlanRequiresExactStats(q *plan.Query) bool {
+	if len(q.BackgroundQueries) != 0 || len(q.Steps) == 0 {
+		return true
+	}
+	strictNode := func(n *plan.Node) bool {
+		return n.NodeType == plan.Node_JOIN &&
+			(n.JoinType == plan.Node_DEDUP && n.IsRightJoin || n.JoinType == plan.Node_INNER && len(n.OnList) == 0)
+	}
+	// Most reusable plans have no strict candidate. Avoid a traversal bitmap
+	// on that hot path, while keeping invalid node references conservative.
+	candidate := false
+	for _, n := range q.Nodes {
+		if n == nil {
+			return true
+		}
+		candidate = candidate || strictNode(n)
+		for _, child := range n.Children {
+			if child < 0 || int(child) >= len(q.Nodes) {
+				return true
+			}
+		}
+	}
+	for _, root := range q.Steps {
+		if root < 0 || int(root) >= len(q.Nodes) {
+			return true
+		}
+	}
+	if !candidate {
+		return false
+	}
+	// Prepared construction may leave abandoned joins in Nodes. Only an
+	// executable strict join changes the policy; shared subtrees are visited
+	// once, and a cycle is treated as unclassifiable.
+	visited := make([]uint8, len(q.Nodes))
+	var visit func(int32) bool
+	visit = func(id int32) bool {
+		if visited[id] == 1 {
+			return true
+		}
+		if visited[id] == 2 {
+			return false
+		}
+		visited[id] = 1
+		n := q.Nodes[id]
+		if strictNode(n) {
+			return true
+		}
+		for _, child := range n.Children {
+			if visit(child) {
+				return true
+			}
+		}
+		visited[id] = 2
+		return false
+	}
+	for _, root := range q.Steps {
+		if visit(root) {
+			return true
+		}
+	}
+	return false
 }

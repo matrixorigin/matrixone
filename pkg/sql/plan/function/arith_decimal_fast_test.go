@@ -2764,6 +2764,224 @@ func TestD256Div(t *testing.T) {
 	})
 }
 
+func TestD256DivViaD128PreservesWideQuotient(t *testing.T) {
+	x, err := types.ParseDecimal256("1", 65, 30)
+	require.NoError(t, err)
+	y, err := types.ParseDecimal256("0.000000000000000003", 65, 18)
+	require.NoError(t, err)
+
+	got := make([]types.Decimal256, 1)
+	resultNulls := nulls.NewWithSize(1)
+	err = d256Div([]types.Decimal256{x}, []types.Decimal256{y}, got, 30, 18, resultNulls, true)
+	require.NoError(t, err)
+	require.Equal(t, "333333333333333333.333333333333333333333333333333", got[0].Format(30))
+
+	// The same quotient cannot fit a Decimal128 result and must remain an
+	// overflow for callers whose declared result domain is Decimal128.
+	x128, err := types.ParseDecimal128("1", 38, 30)
+	require.NoError(t, err)
+	y128, err := types.ParseDecimal128("0.000000000000000003", 38, 18)
+	require.NoError(t, err)
+	got128 := make([]types.Decimal128, 1)
+	err = d128Div([]types.Decimal128{x128}, []types.Decimal128{y128}, got128, 30, 18, nulls.NewWithSize(1), true)
+	require.Error(t, err)
+}
+
+func TestD256DivViaD128NegativePowerOfTwoDivisor(t *testing.T) {
+	const numerator = "18446744073709551616"
+	for _, tc := range []struct {
+		divisor     string
+		quotient    string
+		intQuotient int64
+	}{
+		{"-18446744073709551615", "-1.0000", -1},
+		{"-18446744073709551616", "-1.0000", -1},
+		{"-18446744073709551617", "-1.0000", 0},
+	} {
+		x, err := types.ParseDecimal256(numerator, 65, 0)
+		require.NoError(t, err)
+		y, err := types.ParseDecimal256(tc.divisor, 65, 0)
+		require.NoError(t, err)
+		for _, shape := range []struct {
+			name        string
+			left, right []types.Decimal256
+		}{
+			{"vector/vector", []types.Decimal256{x, x}, []types.Decimal256{y, y}},
+			{"constant/vector", []types.Decimal256{x}, []types.Decimal256{y, y}},
+			{"vector/constant", []types.Decimal256{x, x}, []types.Decimal256{y}},
+		} {
+			t.Run(tc.divisor+"/"+shape.name, func(t *testing.T) {
+				result := make([]types.Decimal256, 2)
+				require.NoError(t, d256DivAtScale(shape.left, shape.right, result, 0, 0, 4, nulls.NewWithSize(2), true))
+				for _, got := range result {
+					require.Equal(t, tc.quotient, got.Format(4))
+				}
+				integers := make([]int64, 2)
+				require.NoError(t, d256IntDiv(shape.left, shape.right, integers, 0, 0, nulls.NewWithSize(2), true))
+				require.Equal(t, []int64{tc.intQuotient, tc.intQuotient}, integers)
+			})
+		}
+	}
+}
+
+func TestDecimalDivisionMaxUint64Rounding(t *testing.T) {
+	const divisor = "18446744073709551615"
+	for _, tc := range []struct {
+		numerator string
+		want      string
+	}{
+		{"0", "0"},
+		{"1", "0"},
+		{"9223372036854775807", "0"},
+		{"9223372036854775808", "1"},
+		{divisor, "1"},
+		{"18446744073709551616", "1"},
+	} {
+		for _, negative := range []bool{false, true} {
+			xText, yText, want := tc.numerator, divisor, tc.want
+			if negative {
+				yText = "-" + yText
+				if want != "0" {
+					want = "-" + want
+				}
+			}
+			x, err := types.ParseDecimal128(xText, 38, 0)
+			require.NoError(t, err)
+			y, err := types.ParseDecimal128(yText, 38, 0)
+			require.NoError(t, err)
+			got := make([]types.Decimal128, 1)
+			require.NoError(t, d128DivAtScale([]types.Decimal128{x}, []types.Decimal128{y}, got, 0, 0, 0, nulls.NewWithSize(1), true))
+			require.Equal(t, want, got[0].Format(0), "numerator=%s divisor=%s", xText, yText)
+		}
+	}
+}
+
+func TestD256DivViaD128AvoidsIntermediateScaleOverflow(t *testing.T) {
+	left, err := types.ParseDecimal256("100000000000000000000", 38, 0)
+	require.NoError(t, err)
+	right, err := types.ParseDecimal256("1", 38, 30)
+	require.NoError(t, err)
+
+	for _, negative := range []bool{false, true} {
+		numerator := left
+		want := "100000000000000000000.000000000000000000000000000000"
+		if negative {
+			numerator = numerator.Minus()
+			want = "-" + want
+		}
+
+		got := make([]types.Decimal256, 1)
+		err = d256DivAtScale(
+			[]types.Decimal256{numerator},
+			[]types.Decimal256{right},
+			got,
+			0,
+			30,
+			30,
+			nulls.NewWithSize(1),
+			true,
+		)
+		require.NoError(t, err, "negative=%t", negative)
+		require.Equal(t, want, got[0].Format(30), "negative=%t", negative)
+	}
+
+	overflowingLeft, err := types.ParseDecimal256("99999999999999999999999999999999999999", 38, 0)
+	require.NoError(t, err)
+	tinyRight, err := types.ParseDecimal256("0.000000000000000000000000000001", 38, 30)
+	require.NoError(t, err)
+	require.Error(t, d256DivAtScale(
+		[]types.Decimal256{overflowingLeft},
+		[]types.Decimal256{tinyRight},
+		make([]types.Decimal256, 1),
+		0,
+		30,
+		30,
+		nulls.NewWithSize(1),
+		true,
+	))
+}
+
+func TestD256DivViaD128MinInt128Divisor(t *testing.T) {
+	const numerator = "85070591730234615865843651857943"
+	const divisor = "-170141183460469231731687303715884105728"
+
+	for _, negativeNumerator := range []bool{false, true} {
+		leftText := numerator
+		want := "-0.000001"
+		if negativeNumerator {
+			leftText = "-" + leftText
+			want = "0.000001"
+		}
+
+		left, err := types.ParseDecimal256(leftText, 65, 0)
+		require.NoError(t, err)
+		right, err := types.ParseDecimal256(divisor, 65, 0)
+		require.NoError(t, err)
+
+		got := make([]types.Decimal256, 1)
+		err = d256Div([]types.Decimal256{left}, []types.Decimal256{right}, got, 0, 0, nulls.NewWithSize(1), true)
+		require.NoError(t, err, "negativeNumerator=%t", negativeNumerator)
+		require.Equal(t, want, got[0].Format(6), "negativeNumerator=%t", negativeNumerator)
+	}
+}
+
+func TestD128DivLargeDivisorHalfUp(t *testing.T) {
+	x, err := types.ParseDecimal128("123456789012345", 38, 0)
+	require.NoError(t, err)
+	y, err := types.ParseDecimal128("999999999999999.999999999999999999", 38, 18)
+	require.NoError(t, err)
+
+	for _, negativeX := range []bool{false, true} {
+		for _, negativeY := range []bool{false, true} {
+			left, right := x, y
+			if negativeX {
+				left = left.Minus()
+			}
+			if negativeY {
+				right = right.Minus()
+			}
+
+			got := make([]types.Decimal128, 1)
+			err := d128Div([]types.Decimal128{left}, []types.Decimal128{right}, got, 0, 18, nulls.NewWithSize(1), true)
+			require.NoError(t, err)
+			want := "0.123457"
+			if negativeX != negativeY {
+				want = "-" + want
+			}
+			require.Equal(t, want, got[0].Format(6), "negativeX=%t negativeY=%t", negativeX, negativeY)
+		}
+	}
+}
+
+func TestD128DivOneToD256FailurePaths(t *testing.T) {
+	x := types.Decimal128{B0_63: 1}
+	zero := types.Decimal128{}
+
+	t.Run("zero divisor returns error", func(t *testing.T) {
+		nul := nulls.NewWithSize(1)
+		var dst types.Decimal256
+		err := d128DivOneToD256(x, zero, &dst, 0, nul, 0, true, 0, 0)
+		require.Error(t, err)
+	})
+
+	t.Run("zero divisor sets null", func(t *testing.T) {
+		nul := nulls.NewWithSize(1)
+		var dst types.Decimal256
+		err := d128DivOneToD256(x, zero, &dst, 0, nul, 0, false, 0, 0)
+		require.NoError(t, err)
+		require.True(t, nul.Contains(0))
+	})
+
+	t.Run("D256 scale-up overflow", func(t *testing.T) {
+		numerator := []types.Decimal256{{B0_63: 20}}
+		divisor := []types.Decimal256{{B0_63: 1}}
+		result := make([]types.Decimal256, 1)
+		err := d256Div(numerator, divisor, result, 0, 76, nulls.NewWithSize(1), true)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "Decimal256 Div overflow")
+	})
+}
+
 func TestD256Div_LargeValues(t *testing.T) {
 	v1 := make([]types.Decimal256, 4)
 	v2 := make([]types.Decimal256, 4)

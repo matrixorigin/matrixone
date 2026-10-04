@@ -1,0 +1,166 @@
+set experimental_fulltext_index = 1;
+drop database if exists ft_agg_having;
+create database ft_agg_having;
+use ft_agg_having;
+create table docs(id int primary key, body text);
+insert into docs values
+(1,'alpha alpha common'),
+(2,'alpha common'),
+(3,'beta common'),
+(4,'alpha beta'),
+(5,'gamma'),
+(6,'alpha alpha alpha');
+create fulltext index ft on docs(body);
+select id from docs group by id, body having match(body) against('alpha') > 0 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+4  𝄀
+6
+select id, max(match(body) against('alpha')) as score
+from docs group by id, body having score > 0 order by id;
+➤ id[4,32,0]  ¦  score[7,23,31]  𝄀
+1  ¦  0.062016264  𝄀
+2  ¦  0.031008132  𝄀
+4  ¦  0.031008132  𝄀
+6  ¦  0.093024395
+select id, max(match(body) against('alpha')) as score
+from docs group by id, body having max(match(body) against('alpha')) > 0 order by id;
+➤ id[4,32,0]  ¦  score[7,23,31]  𝄀
+1  ¦  0.062016264  𝄀
+2  ¦  0.031008132  𝄀
+4  ¦  0.031008132  𝄀
+6  ¦  0.093024395
+select id from docs group by id, body having sum(match(body) against('alpha')) > 0 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+4  𝄀
+6
+explain select id, max(match(body) against('alpha')) as score
+from docs group by id, body having score > 0 order by id;
+-- @regex("fulltext_index_scan", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: docs.id INTERNAL  𝄀
+        ->  Aggregate  𝄀
+              Group Key: docs.id, docs.body  𝄀
+              Hash Key: docs.id  𝄀
+              Aggregate Functions: max(mo_fulltext_alias_0.score)  𝄀
+              Filter Cond: (max(MATCH (body) AGAINST ('alpha')) > 0)  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (docs.id = mo_fulltext_alias_0.doc_id)  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on ft_agg_having.docs  𝄀
+                          Runtime Filter Probe: docs.id  𝄀
+                    ->  Table Function on fulltext_index_scan
+select id from docs group by id, body having min(match(body) against('alpha')) > 0 order by id;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+create table cat_docs(id int primary key, cat int, body text);
+insert into cat_docs values (1,10,'alpha x'),(2,10,'alpha y'),(3,10,'nomatch'),(4,20,'alpha z'),(5,20,'beta only');
+create fulltext index cft on cat_docs(body);
+select cat, count(*) as c, max(match(body) against('alpha')) as s
+from cat_docs group by cat having max(match(body) against('alpha')) > 0 order by cat;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+select cat, max(id) as mx, max(match(body) against('alpha')) as s
+from cat_docs group by cat having s > 0 order by cat;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+create table md(id int primary key, cat int, body text);
+insert into md values (1,10,'alpha'),(2,10,'beta'),(3,20,'alpha'),(4,20,'alpha');
+create fulltext index mdft on md(body);
+select cat, max(match(body) against('alpha')) a, max(match(body) against('beta')) b
+from md group by cat having a > 0 and b > 0 order by cat;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+create table wd(id int primary key, cat int, body text);
+insert into wd values (1,1,'nomatch'),(2,2,'alpha'),(3,3,'alpha');
+create fulltext index wdft on wd(body);
+select cat, score, rn from (
+select cat, max(match(body) against('alpha')) score, row_number() over (order by cat) rn
+from wd group by cat
+) q where score > 0 order by cat;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+select cat, score, rn from (
+select cat, max(match(body) against('alpha')) score, row_number() over (order by cat) rn
+from wd group by cat having max(match(body) against('alpha')) > 0
+) q order by cat;
+➤ cat[4,32,0]  ¦  score[7,23,31]  ¦  rn[-5,64,0]  𝄀
+2  ¦  0.031008132  ¦  1  𝄀
+3  ¦  0.031008132  ¦  2
+select cat from (
+select cat, max(match(body) against('alpha')) score
+from wd group by cat order by cat offset 1
+) q where score > 0 order by cat;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+select cat from wd group by cat
+having max(match(body) against('alpha')) > 0 order by cat offset 1;
+➤ cat[4,32,0]  𝄀
+3
+select id from docs group by id, body having max(match(body) against('alpha')) >= floor(1e-1) order by id;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+create table rd(id int primary key, cat int, body text, digits int);
+insert into rd values
+(1,10,'alpha',null),(2,10,'beta',0),
+(3,20,'alpha',2),(4,20,'gamma',0),
+(5,30,'beta gamma',0),(6,30,'gamma delta',0),
+(7,40,'delta beta',0),(8,40,'gamma beta',0);
+create fulltext index rdft on rd(body);
+explain select cat, sum(round(match(body) against('alpha'), 2)) as total
+from rd group by cat having max(match(body) against('alpha')) > 0 order by cat;
+-- @regex("fulltext_index_scan", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: rd.cat INTERNAL  𝄀
+        ->  Aggregate  𝄀
+              Group Key: rd.cat  𝄀
+              Aggregate Functions: max(mo_fulltext_alias_0.score), sum(round(cast(mo_fulltext_alias_0.score AS DOUBLE), 2))  𝄀
+              Filter Cond: (max(MATCH (body) AGAINST ('alpha')) > 0)  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (rd.id = mo_fulltext_alias_0.doc_id)  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on ft_agg_having.rd  𝄀
+                          Runtime Filter Probe: rd.id  𝄀
+                    ->  Table Function on fulltext_index_scan
+select cat, sum(round(match(body) against('alpha'), 2)) as total
+from rd group by cat having max(match(body) against('alpha')) > 0 order by cat;
+➤ cat[4,32,0]  ¦  total[8,53,31]  𝄀
+10  ¦  0.36  𝄀
+20  ¦  0.36
+select cat, sum(round(match(body) against('alpha'), digits)) as total
+from rd group by cat having max(match(body) against('alpha')) > 0 order by cat;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+create table castrd(id int primary key, cat int, body text);
+insert into castrd values (1,10,'alpha'),(2,10,'beta'),(3,20,'gamma'),(4,30,'delta');
+create fulltext index castft on castrd(body);
+select cat, sum(cast(cast(match(body) against('alpha') as char) as year)) as s
+from castrd group by cat having max(match(body) against('alpha')) > 0 order by cat;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+select cat from castrd group by cat
+having cast(cast(cast(max(match(body) against('alpha')) as signed) as char) as year) > 0 order by cat;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+explain select cat, sum(cast(match(body) against('alpha') as decimal(10,2))) as s
+from castrd group by cat having max(match(body) against('alpha')) > 0 order by cat;
+-- @regex("fulltext_index_scan", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: castrd.cat INTERNAL  𝄀
+        ->  Aggregate  𝄀
+              Group Key: castrd.cat  𝄀
+              Aggregate Functions: max(mo_fulltext_alias_0.score), sum(cast(mo_fulltext_alias_0.score AS DECIMAL64(10, 2)))  𝄀
+              Filter Cond: (max(MATCH (body) AGAINST ('alpha')) > 0)  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (castrd.id = mo_fulltext_alias_0.doc_id)  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on ft_agg_having.castrd  𝄀
+                          Runtime Filter Probe: castrd.id  𝄀
+                    ->  Table Function on fulltext_index_scan
+select cat, sum(cast(match(body) against('alpha') as decimal(10,2))) as s
+from castrd group by cat having max(match(body) against('alpha')) > 0 order by cat;
+➤ cat[4,32,0]  ¦  s[3,32,2]  𝄀
+10  ¦  0.36
+drop database ft_agg_having;

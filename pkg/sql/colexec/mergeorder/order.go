@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -537,7 +538,12 @@ func (ctr *container) initSpillKeyMetadata(fs []*plan.OrderBySpec) {
 	}
 }
 
-func (mergeOrder *MergeOrder) Call(proc *process.Process) (vm.CallResult, error) {
+func (mergeOrder *MergeOrder) Call(
+	proc *process.Process,
+) (callResult vm.CallResult, callErr error) {
+	defer func() {
+		callErr = hashbuild.TerminalBudgetErrorForOperator(proc.Ctx, "merge order", callErr)
+	}()
 	analyzer := mergeOrder.OpAnalyzer
 
 	ctr := &mergeOrder.ctr

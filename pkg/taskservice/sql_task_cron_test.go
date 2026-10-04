@@ -80,10 +80,31 @@ func TestScheduleSQLTaskSkipsManualOnlyTask(t *testing.T) {
 	sqlTask.NextFireTime = 0
 	mustAddTestSQLTask(t, store, 1, sqlTask)
 
+	refreshed := make(chan struct {
+		serviceID string
+		taskIDs   []uint64
+	}, 1)
+	restore := SetSQLTaskRefreshHookForTest(func(serviceID string, taskIDs []uint64) {
+		select {
+		case refreshed <- struct {
+			serviceID string
+			taskIDs   []uint64
+		}{serviceID: serviceID, taskIDs: taskIDs}:
+		default:
+		}
+	}, nil)
+	defer restore()
+
 	ts.StartScheduleSQLTask()
 	defer ts.StopScheduleSQLTask()
 
-	time.Sleep(500 * time.Millisecond)
+	select {
+	case event := <-refreshed:
+		require.Equal(t, ts.rt.ServiceUUID(), event.serviceID)
+		require.Empty(t, event.taskIDs)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for scheduler reconciliation")
+	}
 	tasks, err := store.QueryAsyncTask(context.Background())
 	require.NoError(t, err)
 	require.Empty(t, tasks)

@@ -61,7 +61,7 @@ var fulltext2CompactColDefs = []*plan.ColDef{
 
 func init() {
 	planplugin.RegisterTableFunc(FullText2SearchFuncName, buildFullText2Search)
-	planplugin.RegisterTableFunc(FullText2CreateFuncName, buildFullText2Create)
+	planplugin.RegisterCoordinatorTableFunc(FullText2CreateFuncName, buildFullText2Create)
 	planplugin.RegisterTableFunc(FullText2CompactFuncName, buildFullText2Compact)
 }
 

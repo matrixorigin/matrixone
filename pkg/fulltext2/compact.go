@@ -67,6 +67,11 @@ func CompactSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig, capacity, pos
 	}
 
 	ts := time.Now().UnixMicro()
+	// The merge folds the cdc_tail INTO the base and then deletes both the old bases and
+	// the tail, so the fresh segments must carry the coverage of everything they absorbed:
+	// MAX(build_ts) over base + cdc_tail. Reading base-only would drop the tail's (fresher)
+	// build_ts on every merge; reading it now, before the deletes below, captures both.
+	maxBuildTS := MaxBuildTS(sqlproc, cfg, false /* base + cdc_tail */)
 	uid := fmt.Sprintf("%s:%d", cfg.IndexTable, ts)
 	var bopts []BuildOpt
 	if cfg.PositionFree {
@@ -121,7 +126,7 @@ func CompactSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig, capacity, pos
 		seg.Id = SubIndexId(uid, segIdx)
 		seg.Recency = recency
 		segIdx++
-		sqls, cleanup, e := seg.ToInsertSqls(sqlproc, cfg, ts, 0 /* tag=0 base */, 0 /* merged content: no single base version */)
+		sqls, cleanup, e := seg.ToInsertSqls(sqlproc, cfg, ts, 0 /* tag=0 base */, maxBuildTS)
 		if e != nil {
 			return e
 		}

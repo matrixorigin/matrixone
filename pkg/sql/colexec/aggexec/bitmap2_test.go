@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"math"
 	"slices"
 	"testing"
 
@@ -557,6 +558,47 @@ func TestBitmapConstructExec(t *testing.T) {
 		}
 		require.Equal(t, curNB, mp.CurrNB())
 	})
+}
+
+func TestBitmapConstructRejectsOutOfRangePosition(t *testing.T) {
+	mp := mpool.MustNewZero()
+	for _, value := range []uint64{0, bitmapMaxPosition} {
+		vec := testutil.NewUInt64Vector(1, types.T_uint64.ToType(), mp, false, nil, []uint64{value})
+		exec := makeBmpConstructExec(mp, AggIdOfBitmapConstruct, types.T_uint64.ToType())
+		require.NoError(t, exec.GroupGrow(1))
+		require.NoError(t, exec.BatchFill(0, []uint64{1}, []*vector.Vector{vec}))
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		checkBitmap(t, results[0], 0, []uint32{uint32(value)})
+		results[0].Free(mp)
+		vec.Free(mp)
+		exec.Free()
+	}
+
+	for _, value := range []uint64{bitmapMaxPosition + 1, math.MaxUint32, math.MaxUint64} {
+		vec := testutil.NewUInt64Vector(1, types.T_uint64.ToType(), mp, false, nil, []uint64{value})
+		exec := makeBmpConstructExec(mp, AggIdOfBitmapConstruct, types.T_uint64.ToType())
+		require.NoError(t, exec.GroupGrow(1))
+		require.Error(t, exec.BatchFill(0, []uint64{1}, []*vector.Vector{vec}))
+		require.Nil(t, exec.state[0].mobs[0])
+		vec.Free(mp)
+		exec.Free()
+	}
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestBitmapConstructPropagatesMpoolFailure(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := testutil.NewUInt64Vector(1, types.T_uint64.ToType(), mp, false, nil, []uint64{1})
+	defer vec.Free(mp)
+
+	exec := makeBmpConstructExec(mp, AggIdOfBitmapConstruct, types.T_uint64.ToType())
+	require.NoError(t, exec.GroupGrow(1))
+	exec.mp = nil
+	require.ErrorIs(t, exec.BatchFill(0, []uint64{1}, []*vector.Vector{vec}), mpool.ErrAllocationAccountInvalid)
+	require.Nil(t, exec.state[0].mobs[0])
+	exec.Free()
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestBitmapConstructSaveIntermediateResultOfChunkMinimal(t *testing.T) {

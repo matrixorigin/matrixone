@@ -349,6 +349,22 @@ func (s *SqlProcess) GetAccountID() (uint32, error) {
 
 // run SQL in batch mode. Result batches will stored in memory and return once all result batches received.
 func RunSql(sqlproc *SqlProcess, sql string) (executor.Result, error) {
+	return runSql(sqlproc, sql, "")
+}
+
+// RunSqlWithOptimizerHints is RunSql with a per-statement optimizer_hints string (same
+// comma-separated key=value format as the global optimizer_hints variable), applied via
+// StatementOption.WithOptimizerHints and scoped to THIS call -- not stored on the SqlProcess.
+// Mirrors RunStreamingSqlWithOptimizerHints for the batch path.
+func RunSqlWithOptimizerHints(sqlproc *SqlProcess, sql string, optimizerHints string) (executor.Result, error) {
+	return runSql(sqlproc, sql, optimizerHints)
+}
+
+func runSql(sqlproc *SqlProcess, sql string, optimizerHints string) (executor.Result, error) {
+	stmtOpt := sqlproc.executionStatementOption()
+	if optimizerHints != "" {
+		stmtOpt = stmtOpt.WithOptimizerHints(optimizerHints)
+	}
 	if sqlproc.Proc != nil {
 		proc := sqlproc.Proc
 		v, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
@@ -387,7 +403,7 @@ func RunSql(sqlproc *SqlProcess, sql string) (executor.Result, error) {
 			WithAccountID(accountId).
 			WithResolveVariableFunc(proc.GetResolveVariableFunc()).
 			WithFrontend(proc.Base.IsFrontend).
-			WithStatementOption(sqlproc.executionStatementOption())
+			WithStatementOption(stmtOpt)
 		return exec.Exec(topContext, sql, opts)
 	} else {
 
@@ -411,7 +427,7 @@ func RunSql(sqlproc *SqlProcess, sql string) (executor.Result, error) {
 			WithDatabase(sqlproc.executionDatabase("")).
 			WithAccountID(accountId).
 			WithResolveVariableFunc(sqlctx.GetResolveVariableFunc()).
-			WithStatementOption(sqlproc.executionStatementOption())
+			WithStatementOption(stmtOpt)
 		return exec.Exec(execCtx, sql, opts)
 
 	}
@@ -459,6 +475,39 @@ func RunStreamingSql(
 	stream_chan chan executor.Result,
 	error_chan chan error,
 ) (executor.Result, error) {
+	return runStreamingSql(ctx, sqlproc, sql, "", stream_chan, error_chan)
+}
+
+// RunStreamingSqlWithOptimizerHints is RunStreamingSql with a per-statement optimizer_hints string
+// (same comma-separated key=value format as the global optimizer_hints variable), applied via
+// StatementOption.WithOptimizerHints. The fulltext2 json probe uses it to pass "applyIndices=1" to
+// its fallback/tail SQL so the base-table scan skips the mandatory-filter rewrite and does not
+// re-trigger the probe and recurse. The hint is scoped to THIS call -- it is not stored on the
+// (possibly shared) SqlProcess, so it never leaks to other SQL run on the same SqlProcess.
+func RunStreamingSqlWithOptimizerHints(
+	ctx context.Context,
+	sqlproc *SqlProcess,
+	sql string,
+	optimizerHints string,
+	stream_chan chan executor.Result,
+	error_chan chan error,
+) (executor.Result, error) {
+	return runStreamingSql(ctx, sqlproc, sql, optimizerHints, stream_chan, error_chan)
+}
+
+func runStreamingSql(
+	ctx context.Context,
+	sqlproc *SqlProcess,
+	sql string,
+	optimizerHints string,
+	stream_chan chan executor.Result,
+	error_chan chan error,
+) (executor.Result, error) {
+
+	stmtOpt := sqlproc.executionStatementOption()
+	if optimizerHints != "" {
+		stmtOpt = stmtOpt.WithOptimizerHints(optimizerHints)
+	}
 
 	if sqlproc.Proc != nil {
 		proc := sqlproc.Proc
@@ -494,7 +543,7 @@ func RunStreamingSql(
 			WithStreaming(stream_chan, error_chan).
 			WithResolveVariableFunc(proc.GetResolveVariableFunc()).
 			WithFrontend(proc.Base.IsFrontend).
-			WithStatementOption(sqlproc.executionStatementOption())
+			WithStatementOption(stmtOpt)
 		return exec.Exec(ctx, sql, opts)
 	} else {
 
@@ -520,7 +569,7 @@ func RunStreamingSql(
 			WithAccountID(accountId).
 			WithStreaming(stream_chan, error_chan).
 			WithResolveVariableFunc(sqlctx.GetResolveVariableFunc()).
-			WithStatementOption(sqlproc.executionStatementOption())
+			WithStatementOption(stmtOpt)
 		return exec.Exec(ctx, sql, opts)
 
 	}

@@ -332,10 +332,37 @@ func TestLoadFromStorageRoundTrip(t *testing.T) {
 
 	loaded, err := LoadFromStorage(sp, cfg, "seg0")
 	require.NoError(t, err)
+	t.Cleanup(loaded.Free)
 	require.Equal(t, "seg0", loaded.Id)
 	require.Equal(t, int64(5), loaded.Recency)
 	require.Equal(t, seg.N, loaded.N)
-	loaded.Free()
+	df, ok := loaded.lookupLoadedDF("hello")
+	require.True(t, ok)
+	require.Equal(t, 2, df)
+
+	// A checksum authenticates bytes, not their internal structure. Persist a
+	// matching checksum for a blob whose "hello" entry has a valid DF header but
+	// an invalid block directory. Load does not validate all directories: header DF
+	// remains readable, while search rejects the corrupted entry independently.
+	badDirectory := corruptSerializedTermDirectory(t, buf, "hello")
+	badDirectoryChecksum := vectorindex.CheckSumFromBuffer(badDirectory)
+	swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+		return executor.Result{Mp: mp, Batches: []*batch.Batch{metaBatch(mp, badDirectoryChecksum, int64(len(badDirectory)), 5)}}, nil
+	})
+	swapRunStreamingSql(t, func(_ context.Context, _ *sqlexec.SqlProcess, _ string, sc chan executor.Result, _ chan error) (executor.Result, error) {
+		sc <- executor.Result{Mp: mp, Batches: []*batch.Batch{chunkBatch(mp, badDirectory)}}
+		return executor.Result{}, nil
+	})
+	loaded, err = LoadFromStorage(sp, cfg, "seg0")
+	require.NoError(t, err)
+	t.Cleanup(loaded.Free)
+	df, ok = loaded.lookupLoadedDF("hello")
+	require.True(t, ok)
+	require.Equal(t, 2, df)
+	_, ok = loaded.LookupLoaded("hello")
+	require.False(t, ok)
+	_, ok = loaded.LookupLoaded("world")
+	require.True(t, ok)
 
 	// a checksum mismatch (corrupt stream) is detected and rejected.
 	swapRunStreamingSql(t, func(_ context.Context, _ *sqlexec.SqlProcess, _ string, sc chan executor.Result, _ chan error) (executor.Result, error) {

@@ -333,7 +333,11 @@ func runConcurrentStatements(t *testing.T, ctx context.Context, db *sql.DB, stat
 
 func cleanupIssue26095SQL(t *testing.T, db *sql.DB, statements ...string) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// Account cleanup drops the tenant's built-in catalog as well as scenario
+	// objects. Under race instrumentation it can exceed 30 seconds while each
+	// DDL is still progressing. Use the scenario's bounded allowance rather than
+	// canceling teardown midway and contaminating the shared cluster.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	for _, statement := range statements {
 		if _, err := db.ExecContext(ctx, statement); err != nil {

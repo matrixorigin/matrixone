@@ -91,4 +91,30 @@ func TestOrderedSetPercentileCheck(t *testing.T) {
 		allSupportedFunctions[PERCENTILE_DISC].checkFn(nil, []types.Type{
 			types.New(types.T_decimal128, 38, 0), types.T_float64.ToType(),
 		}).status)
+	for _, typ := range []types.Type{
+		types.New(types.T_varchar, 64, 0),
+		types.T_date.ToType(),
+		types.New(types.T_decimal256, 65, 2),
+		types.T_uuid.ToType(),
+	} {
+		result = allSupportedFunctions[PERCENTILE_DISC].checkFn(nil, []types.Type{
+			typ, types.T_float64.ToType(),
+		})
+		require.Equal(t, succeedMatched, result.status, "type=%s", typ.String())
+	}
+	for _, typ := range []types.Type{
+		types.T_geometry.ToType(),
+		types.T_json.ToType(),
+		types.T_array_float32.ToType(),
+		types.T_array_float64.ToType(),
+		types.T_array_bf16.ToType(),
+		types.T_array_float16.ToType(),
+		types.T_array_int8.ToType(),
+		types.T_array_uint8.ToType(),
+	} {
+		result = allSupportedFunctions[PERCENTILE_DISC].checkFn(nil, []types.Type{
+			typ, types.T_float64.ToType(),
+		})
+		require.Equal(t, failedAggParametersWrong, result.status, "type=%s", typ.String())
+	}
 }

@@ -208,6 +208,230 @@ type changingOwnerCapabilityClient struct {
 	lockCalls int
 }
 
+type writerFairFallbackClient struct {
+	methods []pb.Method
+	opts    []pb.LockOptions
+	newBind *pb.LockTable
+}
+
+type writerFairTransportErrorClient struct {
+	bind    pb.LockTable
+	methods []pb.Method
+}
+
+func (c *writerFairFallbackClient) Send(
+	_ context.Context,
+	req *pb.Request,
+) (*pb.Response, error) {
+	c.methods = append(c.methods, req.Method)
+	c.opts = append(c.opts, req.Lock.Options)
+	if req.Method == pb.Method_LockWriterFair {
+		return nil, moerr.NewNotSupportedNoCtx("legacy owner")
+	}
+	if req.Method != pb.Method_Lock {
+		return nil, io.ErrClosedPipe
+	}
+	resp := acquireResponse()
+	if c.newBind != nil {
+		resp.NewBind = c.newBind
+		return resp, nil
+	}
+	resp.Lock.Result.NewLockAdd = true
+	resp.Lock.TxnWaitingListOnLockTableSupported = true
+	resp.Lock.BatchUnlockSupported = true
+	return resp, nil
+}
+
+func (c *writerFairFallbackClient) AsyncSend(
+	context.Context,
+	*pb.Request,
+) (*morpc.Future, error) {
+	return nil, io.ErrClosedPipe
+}
+
+func (c *writerFairFallbackClient) Close() error { return nil }
+
+func (c *writerFairTransportErrorClient) Send(
+	_ context.Context,
+	req *pb.Request,
+) (*pb.Response, error) {
+	c.methods = append(c.methods, req.Method)
+	switch req.Method {
+	case pb.Method_LockWriterFair:
+		return nil, io.ErrUnexpectedEOF
+	case pb.Method_GetBind:
+		resp := &pb.Response{}
+		resp.GetBind.LockTable = c.bind
+		resp.GetBind.AllocatorID = c.bind.AllocatorID
+		resp.GetBind.AllocatorVersion = c.bind.Version
+		return resp, nil
+	default:
+		return nil, io.ErrClosedPipe
+	}
+}
+
+func (c *writerFairTransportErrorClient) AsyncSend(
+	context.Context,
+	*pb.Request,
+) (*morpc.Future, error) {
+	return nil, io.ErrClosedPipe
+}
+
+func (c *writerFairTransportErrorClient) Close() error { return nil }
+
+func TestRemoteWriterFairLockFallsBackToExclusiveBeforeLegacyAdmission(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		bind := pb.LockTable{
+			Group:       0,
+			Table:       26790,
+			OriginTable: 26790,
+			ServiceID:   "legacy-owner",
+			Version:     1,
+			Valid:       true,
+			AllocatorID: "allocator",
+		}
+		client := &writerFairFallbackClient{}
+		remote := newRemoteLockTable(
+			"new-origin",
+			time.Second,
+			bind,
+			client,
+			func(pb.LockTable) {},
+			getLogger(""),
+		)
+		txnID := []byte("writer-fair-fallback")
+		txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(8), "")
+		defer reuse.Free(txn, nil)
+
+		txn.Lock()
+		var lockErr error
+		remote.lock(
+			context.Background(),
+			txn,
+			newTestRows(1),
+			LockOptions{LockOptions: pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Shared,
+				Policy:      pb.WaitPolicy_Wait,
+				WriterFair:  true,
+			}},
+			func(_ pb.Result, err error) { lockErr = err },
+		)
+		require.NoError(t, lockErr)
+		require.Equal(t,
+			[]pb.Method{pb.Method_LockWriterFair, pb.Method_Lock},
+			client.methods,
+		)
+		require.Equal(t, pb.LockMode_Shared, client.opts[0].Mode)
+		require.True(t, client.opts[0].WriterFair)
+		require.Equal(t, pb.LockMode_Exclusive, client.opts[1].Mode)
+		require.False(t, client.opts[1].WriterFair)
+		txn.Unlock()
+	})
+}
+
+func TestRemoteWriterFairLockDoesNotFallbackAfterTransportError(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		bind := pb.LockTable{
+			Group:       0,
+			Table:       26791,
+			OriginTable: 26791,
+			ServiceID:   "indeterminate-owner",
+			Version:     1,
+			Valid:       true,
+			AllocatorID: "allocator",
+		}
+		client := &writerFairTransportErrorClient{bind: bind}
+		remote := newRemoteLockTable(
+			"new-origin",
+			time.Second,
+			bind,
+			client,
+			func(pb.LockTable) {},
+			getLogger(""),
+		)
+		txnID := []byte("writer-fair-indeterminate")
+		txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(8), "")
+		defer reuse.Free(txn, nil)
+
+		txn.Lock()
+		var lockErr error
+		remote.lock(
+			context.Background(),
+			txn,
+			newTestRows(1),
+			LockOptions{LockOptions: pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Shared,
+				Policy:      pb.WaitPolicy_Wait,
+				WriterFair:  true,
+			}},
+			func(_ pb.Result, err error) { lockErr = err },
+		)
+		require.True(t, moerr.IsMoErrCode(lockErr, moerr.ErrBackendCannotConnect))
+		require.Equal(t,
+			[]pb.Method{pb.Method_LockWriterFair, pb.Method_GetBind},
+			client.methods,
+		)
+		holder := txn.lockHolders[bind.Group]
+		require.NotNil(t, holder)
+		require.Contains(t, holder.remoteUnlockRequiredTables(), bind.Table)
+		txn.Unlock()
+	})
+}
+
+func TestRemoteWriterFairExclusiveFallbackPreservesBindChange(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		bind := pb.LockTable{
+			Group:       0,
+			Table:       26792,
+			OriginTable: 26792,
+			ServiceID:   "legacy-owner",
+			Version:     1,
+			Valid:       true,
+			AllocatorID: "allocator",
+		}
+		newBind := bind
+		newBind.ServiceID = "replacement-owner"
+		newBind.Version++
+		client := &writerFairFallbackClient{newBind: &newBind}
+		var observedBind pb.LockTable
+		remote := newRemoteLockTable(
+			"new-origin",
+			time.Second,
+			bind,
+			client,
+			func(value pb.LockTable) { observedBind = value },
+			getLogger(""),
+		)
+		txnID := []byte("writer-fair-bind-change")
+		txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(8), "")
+		defer reuse.Free(txn, nil)
+
+		txn.Lock()
+		var lockErr error
+		remote.lock(
+			context.Background(),
+			txn,
+			newTestRows(1),
+			LockOptions{LockOptions: pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Shared,
+				Policy:      pb.WaitPolicy_Wait,
+				WriterFair:  true,
+			}},
+			func(_ pb.Result, err error) { lockErr = err },
+		)
+		require.ErrorIs(t, lockErr, ErrLockTableBindChanged)
+		require.Equal(t,
+			[]pb.Method{pb.Method_LockWriterFair, pb.Method_Lock},
+			client.methods,
+		)
+		require.Equal(t, newBind, observedBind)
+		txn.Unlock()
+	})
+}
+
 func (c *changingOwnerCapabilityClient) Send(
 	_ context.Context,
 	req *pb.Request,
@@ -572,15 +796,19 @@ func TestRemoteExactRetryUsesAuthoritativeOwnerSnapshot(t *testing.T) {
 			require.Equal(t, rows[:1], route.all())
 			route.unref()
 
-			waiterDone := make(chan error, len(waiterTxns))
+			type waiterResult struct {
+				txnID []byte
+				err   error
+			}
+			waiterDone := make(chan waiterResult, len(waiterTxns))
 			for idx, txnID := range waiterTxns {
 				row := rows[idx+1]
-				go func() {
+				go func(txnID, row []byte) {
 					_, lockErr := owner.Lock(
 						ctx, table, [][]byte{row}, txnID,
 						newTestRowExclusiveOptions())
-					waiterDone <- lockErr
-				}()
+					waiterDone <- waiterResult{txnID: txnID, err: lockErr}
+				}(txnID, row)
 				waitWaiters(t, owner, table, row, 1)
 			}
 
@@ -602,9 +830,10 @@ func TestRemoteExactRetryUsesAuthoritativeOwnerSnapshot(t *testing.T) {
 			}
 
 			require.NoError(t, origin.Unlock(ctx, holderTxn, timestamp.Timestamp{}))
-			for _, txnID := range waiterTxns {
-				require.NoError(t, <-waiterDone)
-				require.NoError(t, owner.Unlock(ctx, txnID, timestamp.Timestamp{}))
+			for range waiterTxns {
+				result := <-waiterDone
+				require.NoError(t, result.err)
+				require.NoError(t, owner.Unlock(ctx, result.txnID, timestamp.Timestamp{}))
 			}
 		},
 		func(c *Config) {
@@ -2406,7 +2635,7 @@ func TestGetLockHolderRemoteReturnsBindChangedAfterBindRefresh(t *testing.T) {
 	}()
 
 	n := 0
-	refreshedBind := pb.LockTable{ServiceID: "s1", Table: 1, Version: 2}
+	refreshedBind := pb.LockTable{ServiceID: "s1", Table: 1, Version: 2, Valid: true}
 	runRemoteLockTableTests(
 		t,
 		pb.LockTable{ServiceID: "s1", Table: 1, Version: 1},
@@ -2527,6 +2756,7 @@ func TestRemoteWithBindChanged(t *testing.T) {
 		ServiceID: "s2",
 		Table:     1,
 		Version:   2,
+		Valid:     true,
 	}
 
 	c := make(chan pb.LockTable, 1)

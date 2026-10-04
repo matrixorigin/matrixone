@@ -161,3 +161,6 @@ func TestRetryableLoadError(t *testing.T) {
 	require.False(t, IsRetryableLoadError(cause), "a bare error is not retryable")
 	require.False(t, IsRetryableLoadError(nil))
 }
+
+// BuildTS stubs (fulltext2 async-freshness interface method).
+func (m *preloadFailSearch) BuildTS() int64 { return 0 }

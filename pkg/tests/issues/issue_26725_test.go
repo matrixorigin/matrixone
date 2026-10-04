@@ -142,6 +142,18 @@ func TestIssue26725PreparedBit64Numeric(t *testing.T) {
 		execSQLRequire(t, ctx, db, "create database "+dbName)
 		execSQLRequire(t, ctx, db,
 			"create table "+dbName+".t64(id bigint primary key, b bit(64))")
+		execSQLRequire(t, ctx, db,
+			"create table "+dbName+".sql_prepare_t64(id bigint primary key, b bit(64))")
+		execSQLRequire(t, ctx, db,
+			"prepare issue26725_sql_prepare from 'insert into "+dbName+".sql_prepare_t64 values (?, ?)' ")
+		execSQLRequire(t, ctx, db, "set @issue26725_id = 9, @issue26725_bit = 5.0")
+		execSQLRequire(t, ctx, db,
+			"execute issue26725_sql_prepare using @issue26725_id, @issue26725_bit")
+		defer execSQLMaybe(t, context.Background(), db, "deallocate prepare issue26725_sql_prepare")
+		var sqlPrepareBitValue string
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select cast(b as unsigned) from "+dbName+".sql_prepare_t64 where id = 9").Scan(&sqlPrepareBitValue))
+		require.Equal(t, "5", sqlPrepareBitValue)
 
 		stmt, err := db.PrepareContext(ctx,
 			"insert into "+dbName+".t64(id, b) values (?, ?), (?, ?), (?, ?), (?, ?), (?, ?)")
@@ -180,6 +192,14 @@ func TestIssue26725PreparedBit64Numeric(t *testing.T) {
 		require.NoError(t, db.QueryRowContext(ctx,
 			"select cast(b as unsigned) from "+dbName+".t64 where id = 6").Scan(&stringValue))
 		require.Equal(t, "53", stringValue)
+
+		// Specializing the integer assignment must not materialize the sibling
+		// BIT parameter as a metadata-free TEXT literal.
+		_, err = singleStmt.ExecContext(ctx, int64(99), float64(5.0))
+		require.NoError(t, err)
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select cast(b as unsigned) from "+dbName+".t64 where id = 99").Scan(&stringValue))
+		require.Equal(t, "5", stringValue)
 		connMu.Lock()
 		capturedConn := bitConn
 		connMu.Unlock()
@@ -352,6 +372,50 @@ func TestIssue26725PreparedBit64Numeric(t *testing.T) {
 		require.False(t, rows.Next())
 		require.NoError(t, rows.Err())
 		require.NoError(t, rows.Close())
+
+		// Derived VALUES and ON DUPLICATE KEY UPDATE bind assignment markers
+		// through separate numeric-context entry points. Reusing each statement
+		// across source domains must keep the same BIT assignment semantics.
+		execSQLRequire(t, ctx, db, "insert into "+dbName+".t64(id, b) values (933, 0)")
+		upsertStmt, err := db.PrepareContext(ctx,
+			"insert into "+dbName+".t64(id, b) values (?, 0) on duplicate key update b = ?")
+		require.NoError(t, err)
+		defer upsertStmt.Close()
+		for _, tc := range []struct {
+			value any
+			want  string
+		}{
+			{value: float64(5), want: "5"},
+			{value: "5", want: "53"},
+			{value: float64(6), want: "6"},
+		} {
+			_, err = upsertStmt.ExecContext(ctx, int64(933), tc.value)
+			require.NoError(t, err)
+			var actual string
+			require.NoError(t, db.QueryRowContext(ctx,
+				"select cast(b as unsigned) from "+dbName+".t64 where id = 933").Scan(&actual))
+			require.Equal(t, tc.want, actual)
+		}
+		derivedValuesStmt, err := db.PrepareContext(ctx,
+			"insert into "+dbName+".t64(id, b) select ?, x from (values row(?)) as d(x)")
+		require.NoError(t, err)
+		defer derivedValuesStmt.Close()
+		for _, tc := range []struct {
+			id    int64
+			value any
+			want  string
+		}{
+			{id: 930, value: float64(5), want: "5"},
+			{id: 931, value: "5", want: "53"},
+			{id: 932, value: float64(6), want: "6"},
+		} {
+			_, err = derivedValuesStmt.ExecContext(ctx, tc.id, tc.value)
+			require.NoError(t, err)
+			var actual string
+			require.NoError(t, db.QueryRowContext(ctx,
+				"select cast(b as unsigned) from "+dbName+".t64 where id = ?", tc.id).Scan(&actual))
+			require.Equal(t, tc.want, actual)
+		}
 
 		// Aggregates materialize a new result vector. Aggregates that return an
 		// unchanged input value must preserve numeric-vs-string source semantics

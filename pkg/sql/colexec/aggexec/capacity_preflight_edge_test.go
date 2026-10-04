@@ -449,7 +449,7 @@ func TestArgumentArenaGrowthFallsBackUnderCapacityPressure(t *testing.T) {
 	used := uint64(state.argSkl.Arena().Size())
 	require.Less(t, used, uint64(current+1))
 	require.NoError(t, state.preflightArgumentCapacity(
-		mp, uint64(current+1)-used, 0))
+		mp, uint64(current+1)-used, 0, 0))
 	require.Equal(t, int(fallback), len(state.argbuf))
 	require.True(t, state.argSkl.Contains([]byte("kept")))
 	require.Equal(t, fallback, account.Snapshot().Used)
@@ -511,7 +511,7 @@ func TestArgumentArenaGrowthFallsBackAtAllocatorLimit(t *testing.T) {
 	used := uint64(state.argSkl.Arena().Size())
 	require.Less(t, used, uint64(current+1))
 	require.NoError(t, state.preflightArgumentCapacity(
-		mp, uint64(current+1)-used, 0))
+		mp, uint64(current+1)-used, 0, 0))
 	require.Equal(t, int(fallback), len(state.argbuf))
 	require.True(t, state.argSkl.Contains([]byte("kept")))
 	require.Equal(t, fallback, account.Snapshot().Used)

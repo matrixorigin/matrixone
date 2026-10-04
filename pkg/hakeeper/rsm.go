@@ -62,7 +62,11 @@ const (
 )
 
 type IndexQuery struct{}
-type StateQuery struct{}
+type StateQuery struct {
+	// StateOnly omits the cluster snapshot for assertions that only consume State.
+	// The zero value retains the complete independent checker snapshot.
+	StateOnly bool
+}
 type ScheduleCommandQuery struct{ UUID string }
 type CommandDeliveryStateQuery struct{}
 type ClusterDetailsQuery struct{ Cfg Config }
@@ -555,6 +559,12 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 		s.state.ScheduleCommands = make(map[string]pb.CommandBatch)
 	}
 	for _, c := range b.Commands {
+		// Reject terminally obsolete work at its only admission boundary.
+		// Cleanup and recovery remain defense in depth for commands accepted
+		// by an older binary or made stale while already queued.
+		if s.catalogScheduleObsolete(c) {
+			continue
+		}
 		if c.Bootstrapping {
 			s.handleSetStateCmd(GetSetStateCmd(pb.HAKeeperBootstrapCommandsReceived))
 		}
@@ -805,15 +815,18 @@ func (s *stateMachine) getCommandBatchFiltered(
 			pendingIDs = make([]pb.ScheduleCommandID, 0, len(batch.CommandIDs))
 		}
 		for i, cmd := range batch.Commands {
-			if filterHAKeeperAdmissions && !s.logScheduleCommandDeliverable(cmd) {
-				pending = append(pending, cmd)
-				if pendingIDs != nil {
-					pendingIDs = append(pendingIDs, batch.CommandIDs[i])
-				}
+			if s.catalogScheduleObsolete(cmd) {
 				continue
 			}
 			retryable, applied := s.bootstrapReplicaCommandStatus(cmd)
 			if applied {
+				continue
+			}
+			if (filterHAKeeperAdmissions && !s.logScheduleCommandDeliverable(cmd)) || !s.prepareCatalogSchedule(&cmd) {
+				pending = append(pending, cmd)
+				if pendingIDs != nil {
+					pendingIDs = append(pendingIDs, batch.CommandIDs[i])
+				}
 				continue
 			}
 			deliver = append(deliver, cmd)
@@ -879,7 +892,8 @@ func (s *stateMachine) hasPendingHAKeeperAdmission() bool {
 
 func (s *stateMachine) logScheduleCommandDeliverable(cmd pb.ScheduleCommand) bool {
 	if !s.state.CommandDeliveryPreparing && !s.state.CommandDeliveryEnabled &&
-		!s.state.ViewMetadataAdmissionPreparing && !s.state.ViewMetadataAdmissionEnabled {
+		!s.state.ViewMetadataAdmissionPreparing && !s.state.ViewMetadataAdmissionEnabled &&
+		s.state.PersistedExpressionRequiredProtocolVersion == 0 {
 		return true
 	}
 	uuid, admission := hakeeperAdmissionTarget(cmd)
@@ -896,6 +910,14 @@ func (s *stateMachine) logScheduleCommandDeliverable(cmd pb.ScheduleCommand) boo
 	}
 	if (s.state.ViewMetadataAdmissionPreparing || s.state.ViewMetadataAdmissionEnabled) &&
 		!store.ViewMetadataAdmissionSupported {
+		return false
+	}
+	// Once the persisted-expression floor is being activated, a newly admitted
+	// HAKeeper replica must understand the floor as well. The original
+	// ViewMetadataAdmissionSupported bit predates that contract and is not
+	// sufficient to keep a downgraded LogStore out of the RSM membership.
+	if s.state.PersistedExpressionRequiredProtocolVersion > 0 &&
+		!store.ViewMetadataAdmissionProtocolV3Supported {
 		return false
 	}
 	return true
@@ -990,16 +1012,40 @@ func (s *stateMachine) bootstrapReplicaCommandStatus(
 	}
 }
 
-func (s *stateMachine) handleCNHeartbeat(cmd []byte) sm.Result {
+// HeartbeatCheckNeeded is a local proposal result hint, never a wire field or
+// durable state. Older stores ignore it and periodic checks remain the fallback.
+const HeartbeatCheckNeeded uint64 = 1
+
+func (s *stateMachine) handleCNHeartbeat(cmd []byte) (result sm.Result) {
 	data := parseHeartbeatCmd(cmd)
 	var hb pb.CNStoreHeartbeat
 	if err := hb.Unmarshal(data); err != nil {
 		panic(err)
 	}
+	previous, registered := s.state.CNState.Stores[hb.UUID]
+	deliveryReady := s.state.CommandDeliveryCNReady[hb.UUID]
+	admissionReady := s.state.ViewMetadataAdmissionCNReady[hb.UUID]
+	defer func() {
+		current := s.state.CNState.Stores[hb.UUID]
+		// Compare accepted state, including withdrawal by an obsolete heartbeat.
+		// Tick, load, configuration and ordinary receipts are not readiness events.
+		if !registered ||
+			deliveryReady != s.state.CommandDeliveryCNReady[hb.UUID] ||
+			admissionReady != s.state.ViewMetadataAdmissionCNReady[hb.UUID] ||
+			previous.CommandDeliveryAckSupported != current.CommandDeliveryAckSupported ||
+			previous.ViewMetadataAdmissionSupported != current.ViewMetadataAdmissionSupported ||
+			previous.ViewMetadataAdmissionGeneration != current.ViewMetadataAdmissionGeneration ||
+			previous.ViewMetadataObservedEpoch != current.ViewMetadataObservedEpoch ||
+			previous.ViewMetadataCatalogFencedEpoch != current.ViewMetadataCatalogFencedEpoch ||
+			previous.ViewMetadataAdmissionReady != current.ViewMetadataAdmissionReady ||
+			previous.ViewMetadataIngressReady != current.ViewMetadataIngressReady ||
+			previous.PersistedExpressionProtocolVersion != current.PersistedExpressionProtocolVersion {
+			result.Value = HeartbeatCheckNeeded
+		}
+	}()
 	if !s.updateCNViewMetadataAdmission(hb) {
 		return s.attachViewMetadataAdmission(sm.Result{}, hb.UUID, false)
 	}
-	var result sm.Result
 	if s.state.CommandDeliveryPreparing {
 		if s.state.CommandDeliveryCNReady == nil {
 			s.state.CommandDeliveryCNReady = make(map[string]bool)
@@ -1023,13 +1069,23 @@ func (s *stateMachine) handleCNHeartbeat(cmd []byte) sm.Result {
 	return s.attachViewMetadataAdmission(result, hb.UUID, false)
 }
 
-func (s *stateMachine) handleTNHeartbeat(cmd []byte) sm.Result {
+func (s *stateMachine) handleTNHeartbeat(cmd []byte) (result sm.Result) {
 	data := parseHeartbeatCmd(cmd)
 	var hb pb.TNStoreHeartbeat
 	if err := hb.Unmarshal(data); err != nil {
 		panic(err)
 	}
+	previous, registered := s.state.TNState.Stores[hb.UUID]
+	deliveryReady := s.state.CommandDeliveryTNReady[hb.UUID]
 	s.state.TNState.Update(hb, s.state.Tick)
+	defer func() {
+		if !registered ||
+			deliveryReady != s.state.CommandDeliveryTNReady[hb.UUID] ||
+			(len(previous.Shards) > 0) != (len(hb.Shards) > 0) ||
+			previous.CommandDeliveryAckSupported != hb.CommandDeliveryAckSupported {
+			result.Value = HeartbeatCheckNeeded
+		}
+	}()
 	if s.state.CommandDeliveryPreparing {
 		if s.state.CommandDeliveryTNReady == nil {
 			s.state.CommandDeliveryTNReady = make(map[string]bool)
@@ -1048,13 +1104,28 @@ func (s *stateMachine) handleTNHeartbeat(cmd []byte) sm.Result {
 	return s.getCommandBatch(hb.UUID)
 }
 
-func (s *stateMachine) handleLogHeartbeat(cmd []byte) sm.Result {
+func (s *stateMachine) handleLogHeartbeat(cmd []byte) (result sm.Result) {
 	data := parseHeartbeatCmd(cmd)
 	var hb pb.LogStoreHeartbeat
 	if err := hb.Unmarshal(data); err != nil {
 		panic(err)
 	}
+	previous, registered := s.state.LogState.Stores[hb.UUID]
+	deliveryReady := s.state.CommandDeliveryReady[hb.UUID]
+	admissionReady := s.state.ViewMetadataAdmissionLogReady[hb.UUID]
 	s.state.LogState.Update(hb, s.state.Tick)
+	defer func() {
+		if !registered ||
+			deliveryReady != s.state.CommandDeliveryReady[hb.UUID] ||
+			admissionReady != s.state.ViewMetadataAdmissionLogReady[hb.UUID] ||
+			len(previous.Replicas) != len(hb.Replicas) ||
+			previous.CommandDeliverySupported != hb.CommandDeliverySupported ||
+			previous.ViewMetadataAdmissionSupported != hb.ViewMetadataAdmissionSupported ||
+			previous.ViewMetadataAdmissionProtocolV3Supported != hb.ViewMetadataAdmissionProtocolV3Supported {
+			result.Value = HeartbeatCheckNeeded
+		}
+	}()
+	s.observeCatalogStartResult(hb)
 	if s.state.ViewMetadataAdmissionPreparing {
 		if s.state.ViewMetadataAdmissionLogReady == nil {
 			s.state.ViewMetadataAdmissionLogReady = make(map[string]bool)
@@ -1075,7 +1146,7 @@ func (s *stateMachine) handleLogHeartbeat(cmd []byte) sm.Result {
 			delete(s.state.CommandDeliveryReady, hb.UUID)
 		}
 	}
-	return s.getCommandBatchFiltered(hb.UUID, true)
+	return s.attachPendingCatalogStart(s.getCommandBatchFiltered(hb.UUID, true), hb)
 }
 
 func (s *stateMachine) handleTick(cmd []byte) sm.Result {
@@ -1638,6 +1709,10 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 		return s.handleEnableCommandDelivery(cmd), nil
 	case pb.EnableViewMetadataAdmissionUpdate:
 		return s.handleEnableViewMetadataAdmission(cmd), nil
+	case pb.ActivatePersistedExpressionProtocolUpdate:
+		return s.handleActivatePersistedExpressionProtocol(cmd), nil
+	case pb.CatalogMetadataBarrierUpdate:
+		return s.handleCatalogMetadataRequest(cmd), nil
 	case pb.SetTaskTableUserUpdate:
 		s.assertState()
 		return s.handleTaskTableUserCmd(cmd), nil
@@ -1717,6 +1792,8 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 			Epoch:                s.state.ViewMetadataAdmissionEpoch,
 			RevalidationRequired: s.state.ViewMetadataRevalidationRequired,
 			CatalogFencedEpoch:   s.state.ViewMetadataCatalogFencedEpoch,
+			PersistedExpressionRequiredProtocolVersion:   s.state.PersistedExpressionRequiredProtocolVersion,
+			PersistedExpressionProtocolActivationPending: s.state.PersistedExpressionProtocolActivationPending,
 		}
 	}
 	for uuid, info := range s.state.CNState.Stores {
@@ -1834,7 +1911,23 @@ func (s *stateMachine) handlePatchCNStore(cmd []byte) sm.Result {
 }
 
 func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
-	if _, ok := query.(*StateQuery); ok {
+	if _, ok := query.(*CatalogMetadataStateQuery); ok {
+		var result pb.CatalogMetadataBarrierState
+		if s.state.CatalogMetadataBarrier != nil {
+			data, err := s.state.CatalogMetadataBarrier.Marshal()
+			if err != nil {
+				return nil, err
+			}
+			if err := result.Unmarshal(data); err != nil {
+				return nil, err
+			}
+		}
+		return &result, nil
+	}
+	if q, ok := query.(*StateQuery); ok {
+		if q != nil && q.StateOnly {
+			return &pb.CheckerState{State: s.state.State}, nil
+		}
 		return s.handleStateQuery(), nil
 	} else if q, ok := query.(*ScheduleCommandQuery); ok {
 		return s.handleScheduleCommandQuery(q.UUID), nil
@@ -1892,13 +1985,15 @@ func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 			}
 		}
 		return ViewMetadataAdmissionState{
-			Preparing:              s.state.ViewMetadataAdmissionPreparing,
-			Enabled:                s.state.ViewMetadataAdmissionEnabled,
-			Pending:                s.state.ViewMetadataAdmissionPending,
-			HAKeeperAdmissionReady: !s.hasPendingHAKeeperAdmission(),
-			LogReady:               logReady,
-			CNReady:                cnReady,
-			ProxyReady:             proxyReady,
+			Preparing:               s.state.ViewMetadataAdmissionPreparing,
+			Enabled:                 s.state.ViewMetadataAdmissionEnabled,
+			Pending:                 s.state.ViewMetadataAdmissionPending,
+			HAKeeperAdmissionReady:  !s.hasPendingHAKeeperAdmission(),
+			RequiredProtocolVersion: s.state.PersistedExpressionRequiredProtocolVersion,
+			PersistedExpressionProtocolActivationPending: s.state.PersistedExpressionProtocolActivationPending,
+			LogReady:   logReady,
+			CNReady:    cnReady,
+			ProxyReady: proxyReady,
 		}, nil
 	} else if q, ok := query.(*ClusterDetailsQuery); ok {
 		return s.handleClusterDetailsQuery(q.Cfg), nil
@@ -1910,13 +2005,11 @@ func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 
 func (s *stateMachine) SaveSnapshot(w io.Writer,
 	_ sm.ISnapshotFileCollection, _ <-chan struct{}) error {
-	// FIXME: memory recycling when necessary
-	data := make([]byte, s.state.ProtoSize())
-	n, err := s.state.MarshalToSizedBuffer(data)
+	data, err := marshalHAKeeperSnapshot(&s.state, false)
 	if err != nil {
 		return err
 	}
-	_, err = w.Write(data[:n])
+	_, err = w.Write(data)
 	return err
 }
 
@@ -1926,29 +2019,24 @@ func (s *stateMachine) RecoverFromSnapshot(r io.Reader,
 	if err != nil {
 		return err
 	}
-	// The state machine is initialized with maps for normal operation. Clear all
-	// delivery fields before decoding so an older snapshot, or a snapshot
-	// recovery on a reused instance, cannot retain a newer barrier generation or
-	// the one-time BatchID scan marker when those fields are absent on disk.
-	s.state.CommandDeliveryEnabled = false
-	s.state.CommandDeliveryPreparing = false
-	s.state.CommandDeliveryReady = nil
-	s.state.CommandDeliveryCNReady = nil
-	s.state.CommandDeliveryTNReady = nil
-	s.state.CommandDeliveryBatchIDsAssigned = false
-	s.state.CommandDeliveryCommandIDsAssigned = false
-	s.state.ViewMetadataAdmissionPreparing = false
-	s.state.ViewMetadataAdmissionEnabled = false
-	s.state.ViewMetadataAdmissionEpoch = 0
-	s.state.ViewMetadataRevalidationRequired = false
-	s.state.ViewMetadataCatalogFencedEpoch = 0
-	s.state.ViewMetadataAdmissionLogReady = nil
-	s.state.ViewMetadataAdmissionCNReady = nil
-	s.state.ViewMetadataAdmissionProxyReady = nil
-	s.state.ViewMetadataAdmissionCNTargets = nil
-	s.state.ViewMetadataAdmissionProxyTargets = nil
-	s.state.ViewMetadataAdmissionCNTargetTicks = nil
-	s.state.ViewMetadataAdmissionProxyTargetTicks = nil
-	s.state.ViewMetadataAdmissionPending = false
-	return s.state.Unmarshal(data)
+	decoded, err := unmarshalHAKeeperSnapshot(data)
+	if err != nil {
+		return err
+	}
+	// Keep the legacy omitted-map shape for the command-delivery barrier.  The
+	// zero-value is meaningful to the recovery code (it rebuilds these maps on
+	// the next activation), while NewRSMState initializes them for normal
+	// construction.
+	if len(decoded.CommandDeliveryCNReady) == 0 {
+		decoded.CommandDeliveryCNReady = nil
+	}
+	if len(decoded.CommandDeliveryTNReady) == 0 {
+		decoded.CommandDeliveryTNReady = nil
+	}
+	s.state = decoded
+	// Older binaries could snapshot tokenless membership commands after a
+	// later configuration had already been confirmed. They can never become
+	// valid again; reclaim them during publication of the recovered owner.
+	s.pruneObsoleteCatalogSchedule()
+	return nil
 }

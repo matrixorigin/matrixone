@@ -17,6 +17,7 @@ package fulltext2
 import (
 	"encoding/binary"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
@@ -40,30 +41,55 @@ type Membership interface {
 // cbitmap (exact); for other PKs a bloom (its false positives are removed by the
 // downstream join to the filtered source).
 type docFilterMembership struct {
-	seg     *Segment
-	f       docfilter.MembershipFilter
-	scratch [8]byte // reused encode buffer for the hot integer-PK path (Test copies out)
+	seg         *Segment
+	f           docfilter.MembershipFilter
+	scratch     [8]byte   // reused encode buffer for the hot integer-PK path (Test copies out)
+	uuidScratch [16]byte  // query-owned raw UUID probe before the CGo-safe copy
+	uuidProbe   *[16]byte // pointer-free backing object passed to CGo filters
+}
+
+func newDocFilterMembership(seg *Segment, f docfilter.MembershipFilter) *docFilterMembership {
+	return &docFilterMembership{seg: seg, f: f}
 }
 
 func (d *docFilterMembership) Contains(ord int64) bool {
 	if ord < 0 || ord >= int64(d.seg.numDocs()) {
 		return false
 	}
-	// Loaded segments already store canonical PK content bytes in the mmap-backed
-	// docmap. Every supported PK type except UUID uses the same bytes in the
-	// runtime-filter source vector, so probe them directly without boxing the PK
-	// and encoding it again. UUID remains on the typed path because its docmap
-	// representation is the canonical string while docfilter hashes 16 raw bytes.
-	if d.seg.pks == nil && types.T(d.seg.PkType) != types.T_uuid {
+	// Loaded segments store canonical PK content bytes in the mmap-backed docmap. Every
+	// supported PK type except UUID uses the same bytes in the runtime-filter source
+	// vector, so probe them directly without boxing the PK and encoding it again. UUID
+	// docmap content is a string representation while docfilter hashes 16 raw bytes;
+	// parse into this query-owned scratch before probing. pkContent validates the span,
+	// and ParseBytes preserves the existing ParseUuid acceptance set while failing
+	// malformed rows closed without reaching the typed assertion below.
+	if d.seg.pks == nil {
 		raw, err := d.seg.pkContent(ord)
 		if err != nil {
 			return false
 		}
-		return d.f.Test(raw)
+		if types.T(d.seg.PkType) != types.T_uuid {
+			return d.f.Test(raw)
+		}
+		u, err := uuid.ParseBytes(raw)
+		if err != nil {
+			return false
+		}
+		d.uuidScratch = [16]byte(u)
+		// uuidScratch is deliberately owned by this query wrapper, whose surrounding
+		// struct also contains Go pointers; a direct slice into that struct is rejected
+		// by the cgo pointer checks used by the real Bloom filter. Copy into the
+		// per-owner pointer-free backing object once per wrapper, then reuse it for
+		// every probe without boxing or per-probe allocation.
+		if d.uuidProbe == nil {
+			d.uuidProbe = new([16]byte)
+		}
+		*d.uuidProbe = d.uuidScratch
+		return d.f.Test(d.uuidProbe[:])
 	}
-	// pk(ord) decodes on demand on a loaded segment (a small box on this WHERE-prefilter
-	// hot path); the docmap pk encoding differs from the docfilter probe encoding for some
-	// types (uuid raw vs canonical), so the decoded value must be re-encoded below.
+	// Build-side segments retain typed PKs in pks, so preserve the existing typed fallback
+	// below. The loaded path returned above deliberately never reaches pk(ord): its ignored
+	// decode error and typed assertions could turn malformed later rows into a panic.
 	v := d.seg.pk(ord)
 	// Contains runs once per WAND candidate on the block-max walk hot path. For the
 	// common integer PKs, encode straight into the reused scratch buffer (byte-identical
@@ -166,7 +192,7 @@ func mkAllow(seg *Segment, p *prefilter) Membership {
 	}
 	var m Membership
 	if p.docFilter != nil {
-		m = &docFilterMembership{seg: seg, f: p.docFilter}
+		m = newDocFilterMembership(seg, p.docFilter)
 	}
 	if len(p.include) > 0 {
 		m = andAllow(m, &includePredMembership{seg: seg, preds: p.include})

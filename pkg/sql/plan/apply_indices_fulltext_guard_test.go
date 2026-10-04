@@ -17,9 +17,48 @@ package plan
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
+
+func TestFullTextRoutineVariablePatternReachesBothIndexScans(t *testing.T) {
+	for _, fulltext2 := range []bool{false, true} {
+		name := fulltext_index_scan_func_name
+		patternPos := 2
+		if fulltext2 {
+			name = fulltext2_search_func_name
+			patternPos = 1
+		}
+		t.Run(name, func(t *testing.T) {
+			builder, scanID, projID := buildWrappedMatchGuardPlan(t, true)
+			scan := builder.qry.Nodes[scanID]
+			if fulltext2 {
+				idx := scan.TableDef.Indexes[0]
+				idx.IndexAlgo = catalog.MoIndexFullText2Algo.ToString()
+				idx.IndexAlgoTableType = catalog.FullText2Index_TblType_Storage
+				scan.TableDef.Indexes = append(scan.TableDef.Indexes, &planpb.IndexDef{
+					IndexName: idx.IndexName, IndexAlgo: idx.IndexAlgo,
+					IndexAlgoTableType: catalog.FullText2Index_TblType_Metadata,
+					IndexTableName:     "__mo_fts_meta_ft", TableExist: true,
+				})
+			}
+			match := builder.qry.Nodes[projID].ProjectList[0].GetF()
+			match.Args[0] = &planpb.Expr{
+				Typ:  planpb.Type{Id: int32(types.T_varchar)},
+				Expr: &planpb.Expr_V{V: &planpb.VarRef{Name: "q"}},
+			}
+			builder.prepareSpecialIndexGuards(projID)
+			newID, err := builder.applyIndices(projID, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+			require.NoError(t, err)
+			scans := collectFullTextFunctionScans(builder, newID)
+			require.Len(t, scans, 1)
+			require.Equal(t, name, scans[0].TableDef.TblFunc.Name)
+			require.Equal(t, "q", scans[0].TblFuncExprList[patternPos].GetV().Name)
+		})
+	}
+}
 
 // buildWrappedMatchGuardPlan builds `select <match-expr> from ft where base_id = 'b1'`
 // over a table carrying BOTH a fulltext index (title, body) and an ordinary index on the

@@ -69,8 +69,7 @@ func TestBitUnaryTildeUsesUnsigned64Domain(t *testing.T) {
 				[]FunctionTestInput{NewFunctionTestInput(test.typ, test.input, nil)},
 				NewFunctionTestResult(types.T_uint64.ToType(), false, test.result, nil),
 				operatorUnaryTilde[uint64])
-			cleanupBitwiseTestCase(t, &tc)
-			ok, info := tc.Run()
+			ok, info := tc.RunAndFree()
 			require.True(t, ok, info)
 		})
 	}
@@ -133,8 +132,7 @@ func TestIntegerDivBitPreservesFullUnsignedRange(t *testing.T) {
 		NewFunctionTestResult(types.T_uint64.ToType(), false,
 			[]uint64{0, uint64(1) << 63, math.MaxUint64}, nil),
 		integerDivFn)
-	cleanupBitwiseTestCase(t, &tc)
-	ok, info := tc.Run()
+	ok, info := tc.RunAndFree()
 	require.True(t, ok, info)
 
 	tc2 := NewFunctionTestCase(proc,
@@ -145,8 +143,7 @@ func TestIntegerDivBitPreservesFullUnsignedRange(t *testing.T) {
 		NewFunctionTestResult(types.T_uint64.ToType(), false,
 			[]uint64{uint64(1) << 63, uint64(1) << 62}, nil),
 		integerDivFn)
-	cleanupBitwiseTestCase(t, &tc2)
-	ok, info = tc2.Run()
+	ok, info = tc2.RunAndFree()
 	require.True(t, ok, "constant BIT dividend broadcast: %s", info)
 }
 
@@ -160,8 +157,7 @@ func TestIntegerDivBitSignedDivisorAndMinInt64(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{0, 0, 0}, nil),
 		integerDivFn)
-	cleanupBitwiseTestCase(t, &tc1)
-	ok, info := tc1.Run()
+	ok, info := tc1.RunAndFree()
 	require.True(t, ok, info)
 
 	tc2 := NewFunctionTestCase(proc,
@@ -171,7 +167,7 @@ func TestIntegerDivBitSignedDivisorAndMinInt64(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_uint64.ToType(), false, nil, nil),
 		integerDivFn)
-	cleanupBitwiseTestCase(t, &tc2)
+	defer tc2.Free()
 	require.NoError(t, tc2.result.PreExtendAndReset(2))
 	err := tc2.fn(tc2.parameters, tc2.result, proc, 2, nil)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "expected unsigned overflow, got %v", err)
@@ -190,8 +186,7 @@ func TestIntegerDivBitNullConstantAndMaskedRows(t *testing.T) {
 			NewFunctionTestResult(types.T_uint64.ToType(), false,
 				[]uint64{uint64(1) << 63, 0}, []bool{false, true}),
 			integerDivFn)
-		cleanupBitwiseTestCase(t, &tc)
-		ok, info := tc.Run()
+		ok, info := tc.RunAndFree()
 		require.True(t, ok, info)
 	})
 
@@ -204,7 +199,7 @@ func TestIntegerDivBitNullConstantAndMaskedRows(t *testing.T) {
 			},
 			NewFunctionTestResult(types.T_uint64.ToType(), false, nil, nil),
 			integerDivFn).WithSelectList(selectList)
-		cleanupBitwiseTestCase(t, &tc)
+		defer tc.Free()
 		require.NoError(t, tc.result.PreExtendAndReset(2))
 		require.NoError(t, tc.fn(tc.parameters, tc.result, proc, 2, selectList))
 		result := tc.GetResultVectorDirectly()
@@ -227,8 +222,7 @@ func TestIntegerDivBitZeroDivisorRespectsNullAndStrictMode(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_uint64.ToType(), true, nil, nil),
 		integerDivFn)
-	cleanupBitwiseTestCase(t, &tc)
-	ok, info := tc.Run()
+	ok, info := tc.RunAndFree()
 	require.True(t, ok, "nonnull zero divisor should raise despite a NULL sibling: %s", info)
 
 	tc2 := NewFunctionTestCase(proc,
@@ -239,8 +233,7 @@ func TestIntegerDivBitZeroDivisorRespectsNullAndStrictMode(t *testing.T) {
 		NewFunctionTestResult(types.T_uint64.ToType(), false,
 			[]uint64{0, 1}, []bool{true, false}),
 		integerDivFn)
-	cleanupBitwiseTestCase(t, &tc2)
-	ok, info = tc2.Run()
+	ok, info = tc2.RunAndFree()
 	require.True(t, ok, info)
 }
 
@@ -258,7 +251,7 @@ func TestIntegerDivBitUnsignedZeroAndMaskedRows(t *testing.T) {
 			},
 			NewFunctionTestResult(types.T_uint64.ToType(), false, nil, nil),
 			integerDivFn)
-		cleanupBitwiseTestCase(t, &tc)
+		defer tc.Free()
 		require.NoError(t, tc.result.PreExtendAndReset(1))
 		err := tc.fn(tc.parameters, tc.result, proc, 1, nil)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrDivByZero), "expected division-by-zero error, got %v", err)
@@ -273,8 +266,7 @@ func TestIntegerDivBitUnsignedZeroAndMaskedRows(t *testing.T) {
 			NewFunctionTestResult(types.T_uint64.ToType(), false,
 				[]uint64{0, 2}, []bool{true, false}),
 			integerDivFn)
-		cleanupBitwiseTestCase(t, &tc)
-		ok, info := tc.Run()
+		ok, info := tc.RunAndFree()
 		require.True(t, ok, info)
 	})
 
@@ -288,8 +280,7 @@ func TestIntegerDivBitUnsignedZeroAndMaskedRows(t *testing.T) {
 			NewFunctionTestResult(types.T_uint64.ToType(), false,
 				[]uint64{4, 0}, []bool{false, true}),
 			integerDivFn).WithSelectList(selectList)
-		cleanupBitwiseTestCase(t, &tc)
-		ok, info := tc.Run()
+		ok, info := tc.RunAndFree()
 		require.True(t, ok, info)
 	})
 }

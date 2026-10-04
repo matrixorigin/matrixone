@@ -76,8 +76,41 @@ func TestDataBranchDeletePrivateOwnerForcesPessimisticRC(t *testing.T) {
 	require.ErrorIs(t, err, beginErr)
 	err = dataBranchDeleteDatabase(execCtx, ses, &tree.DataBranchDeleteDatabase{})
 	require.ErrorIs(t, err, beginErr)
-	require.Equal(t, []bool{true, true}, forced)
-	require.Equal(t, 2, backExec.closeCalls)
+	err = diffMergeAgency(ses, execCtx, &tree.DataBranchDiff{})
+	require.ErrorIs(t, err, beginErr)
+	require.Equal(t, []bool{true, true, true}, forced)
+	require.Equal(t, 3, backExec.closeCalls)
+}
+
+func TestExplicitCloneInstallsLifecycleValidationOnlyAfterSuccess(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{ByBegin: true}).AnyTimes()
+	txnOp.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
+	ses.proc.Base.TxnOperator = txnOp
+	handler := ses.GetTxnHandler()
+	handler.txnOp = txnOp
+	handler.txnCtx = context.Background()
+
+	bh, cleanup, err := getCloneMutationExecutor(context.Background(), ses, false)
+	require.NoError(t, err)
+	require.NotNil(t, bh)
+	require.NoError(t, cleanup(nil))
+	require.True(t, handler.lineageOwnerLifecycleValidation)
+
+	handler.mu.Lock()
+	handler.lineageOwnerLifecycleValidation = false
+	handler.mu.Unlock()
+
+	bh, cleanup, err = getCloneMutationExecutor(context.Background(), ses, false)
+	require.NoError(t, err)
+	require.NotNil(t, bh)
+	cloneErr := errors.New("clone failed")
+	require.ErrorIs(t, cleanup(cloneErr), cloneErr)
+	require.False(t, handler.lineageOwnerLifecycleValidation)
 }
 
 func TestDataBranchColumnClassification(t *testing.T) {
@@ -175,9 +208,31 @@ func TestValidateDataBranchCreateTxn(t *testing.T) {
 		"CREATE DATA BRANCH is not supported with optimistic transactions")
 }
 
+func TestInstallDataBranchCloneContextRestoresRequestContext(t *testing.T) {
+	type requestKey struct{}
+	baseCtx := context.WithValue(context.Background(), requestKey{}, "request")
+	execCtx := &ExecCtx{reqCtx: baseCtx}
+
+	restore := installDataBranchCloneContext(
+		execCtx, tree.NormalCloneLevelDatabase, catalog.SystemDBTypeDataBranch,
+	)
+	require.Equal(t, tree.NormalCloneLevelDatabase,
+		execCtx.reqCtx.Value(tree.CloneLevelCtxKey{}))
+	require.Equal(t, true, execCtx.reqCtx.Value(dataBranchCloneLockCtxKey{}))
+	require.Equal(t, catalog.SystemDBTypeDataBranch,
+		execCtx.reqCtx.Value(defines.DatTypKey{}))
+	require.Equal(t, "request", execCtx.reqCtx.Value(requestKey{}))
+
+	restore()
+	require.Equal(t, baseCtx, execCtx.reqCtx)
+	require.Nil(t, execCtx.reqCtx.Value(tree.CloneLevelCtxKey{}))
+	require.Nil(t, execCtx.reqCtx.Value(dataBranchCloneLockCtxKey{}))
+	require.Nil(t, execCtx.reqCtx.Value(defines.DatTypKey{}))
+}
+
 func TestBranchQuotaUsageSQLUsesTargetOwnerAndExcludesRootAlterLineage(t *testing.T) {
 	require.Equal(t,
-		"select count(*) from mo_catalog.mo_branch_metadata b join mo_catalog.mo_tables t on b.table_id = t.rel_id where t.account_id = 7 and b.table_deleted = false and b.level != 'alter' for update",
+		"select count(*) from mo_catalog.mo_branch_metadata b join mo_catalog.mo_tables t on b.table_id = t.rel_id where t.account_id = 7 and b.table_deleted = false and b.level != 'alter'",
 		branchQuotaUsageSQL(7),
 	)
 }
@@ -194,63 +249,6 @@ func TestDataBranchFakePKColIdxesUseOnlyVisibleColumns(t *testing.T) {
 		},
 	}
 	require.Equal(t, []int{0, 2, 3}, dataBranchFakePKColIdxes(tblDef))
-}
-
-func TestDataBranchSchemaEquivalentRequiresCompleteLogicalTypes(t *testing.T) {
-	newTableDef := func() *plan.TableDef {
-		return &plan.TableDef{Cols: []*plan.ColDef{
-			{ColId: 1, Name: "id", Primary: true, NotNull: true, Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}},
-			{ColId: 2, Name: "payload", Seqnum: 1, Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
-			{ColId: 3, Name: "amount", Seqnum: 2, Typ: plan.Type{Id: int32(types.T_decimal128), Width: 12, Scale: 2}},
-			{ColId: 4, Name: "color", Seqnum: 3, Typ: plan.Type{Id: int32(types.T_enum), Enumvalues: "red,blue"}},
-		}}
-	}
-
-	t.Run("equal schemas", func(t *testing.T) {
-		require.True(t, isSchemaEquivalent(newTableDef(), newTableDef()))
-	})
-
-	for _, tc := range []struct {
-		name   string
-		mutate func(*plan.TableDef)
-	}{
-		{
-			name: "varchar width",
-			mutate: func(def *plan.TableDef) {
-				def.Cols[1].Typ.Width = 80
-			},
-		},
-		{
-			name: "decimal scale",
-			mutate: func(def *plan.TableDef) {
-				def.Cols[2].Typ.Scale = 4
-			},
-		},
-		{
-			name: "enum definition",
-			mutate: func(def *plan.TableDef) {
-				def.Cols[3].Typ.Enumvalues = "red,green"
-			},
-		},
-		{
-			name: "type nullability",
-			mutate: func(def *plan.TableDef) {
-				def.Cols[1].Typ.NotNullable = true
-			},
-		},
-		{
-			name: "auto increment",
-			mutate: func(def *plan.TableDef) {
-				def.Cols[1].Typ.AutoIncr = true
-			},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			left, right := newTableDef(), newTableDef()
-			tc.mutate(right)
-			require.False(t, isSchemaEquivalent(left, right))
-		})
-	}
 }
 
 func TestFormatValIntoString_StringEscaping(t *testing.T) {
@@ -2256,23 +2254,32 @@ func TestCheckSchemaCompatibility_AllowsStableIdentityRename(t *testing.T) {
 }
 
 func TestCheckSchemaCompatibility_RejectsDifferentTypeAttributes(t *testing.T) {
-	tarDef := &plan.TableDef{
-		Pkey: &plan.PrimaryKeyDef{Names: []string{"a"}, PkeyColName: "a"},
-		Cols: []*plan.ColDef{
-			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
-			{Name: "amount", Typ: plan.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 2}},
-		},
+	for _, tc := range []struct {
+		name   string
+		typ    plan.Type
+		mutate func(*plan.Type)
+	}{
+		{"varchar width", plan.Type{Id: int32(types.T_varchar), Width: 20}, func(typ *plan.Type) { typ.Width = 80 }},
+		{"decimal scale", plan.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 2}, func(typ *plan.Type) { typ.Scale = 0 }},
+		{"enum definition", plan.Type{Id: int32(types.T_enum), Enumvalues: "red,blue"}, func(typ *plan.Type) { typ.Enumvalues = "red,green" }},
+		{"type nullability", plan.Type{Id: int32(types.T_varchar), Width: 20}, func(typ *plan.Type) { typ.NotNullable = true }},
+		{"auto increment", plan.Type{Id: int32(types.T_int64)}, func(typ *plan.Type) { typ.AutoIncr = true }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			table := func() *plan.TableDef {
+				return &plan.TableDef{
+					Pkey: &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+					Cols: []*plan.ColDef{{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}}, {Name: "payload", Typ: tc.typ}},
+				}
+			}
+			target, base := table(), table()
+			_, _, _, err := checkSchemaCompatibility(target, base)
+			require.NoError(t, err)
+			tc.mutate(&base.Cols[1].Typ)
+			_, _, _, err = checkSchemaCompatibility(target, base)
+			require.ErrorContains(t, err, "different type attributes")
+		})
 	}
-	baseDef := &plan.TableDef{
-		Pkey: &plan.PrimaryKeyDef{Names: []string{"a"}, PkeyColName: "a"},
-		Cols: []*plan.ColDef{
-			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
-			{Name: "amount", Typ: plan.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 0}},
-		},
-	}
-
-	_, _, _, err := checkSchemaCompatibility(tarDef, baseDef)
-	require.ErrorContains(t, err, "different type attributes")
 }
 
 func TestCheckSchemaCompatibility_RejectsDifferentColumnNullability(t *testing.T) {

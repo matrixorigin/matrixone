@@ -123,6 +123,13 @@ func hasInactiveGroupingColumn(flags []bool) bool {
 }
 
 func isPhysicalGroupByKey(node *pbplan.Node, groupByPos int) bool {
+	if len(node.GroupingFlag) > 0 {
+		if len(node.GroupingFlag) != len(node.GroupBy) ||
+			groupByPos < 0 || groupByPos >= len(node.GroupingFlag) ||
+			!node.GroupingFlag[groupByPos] {
+			return false
+		}
+	}
 	if len(node.GroupByHashKey) == 0 {
 		return true
 	}

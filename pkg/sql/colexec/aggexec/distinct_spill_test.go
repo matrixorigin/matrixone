@@ -16,6 +16,7 @@ package aggexec
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"math"
 	"testing"
@@ -88,6 +89,431 @@ func TestCountDistinctArgumentDrainCommitAndRestore(t *testing.T) {
 	result[0].Free(mp)
 	restored.Free()
 	require.Equal(t, baseline, mp.CurrNB())
+}
+
+func TestCountDistinctArgumentDrainUsesCanonicalMembershipKey(t *testing.T) {
+	mp := mpool.MustNewZero()
+	input := testutil.NewFloat32Vector(
+		2,
+		types.New(types.T_float32, 10, 2),
+		mp,
+		false,
+		nil,
+		[]float32{1.2300001, 1.23},
+	)
+	defer input.Free(mp)
+
+	exec := newCountColumnExec(
+		mp,
+		AggIdOfCountColumn,
+		true,
+		[]types.Type{types.New(types.T_float32, 10, 2)},
+	)
+	spill := exec.(ExactCountDistinctSpillState)
+	require.NoError(t, spill.GroupGrow(1))
+	require.NoError(t, spill.BatchFill(
+		0, []uint64{1, 1}, []*vector.Vector{input}))
+
+	drain, err := spill.BeginArgumentDrain(nil)
+	require.NoError(t, err)
+	var payloads [][]byte
+	require.NoError(t, drain.ForEach(func(_ int, payload []byte) error {
+		payloads = append(payloads, bytes.Clone(payload))
+		return nil
+	}))
+	require.Len(t, payloads, 1)
+	require.NoError(t, drain.Commit())
+	for _, payload := range payloads {
+		require.NoError(t, spill.InsertDistinctArgument(0, payload))
+	}
+	result, err := spill.Flush()
+	require.NoError(t, err)
+	require.Equal(t, []int64{1}, vector.MustFixedColNoTypeCheck[int64](result[0]))
+	result[0].Free(mp)
+	exec.Free()
+}
+
+func TestCountDistinctArgumentDrainKeepsRepresentative(t *testing.T) {
+	mp := mpool.MustNewZero()
+	json, err := types.ParseStringToByteJson("1")
+	require.NoError(t, err)
+	raw, err := types.EncodeJson(json)
+	require.NoError(t, err)
+	values := vector.NewVec(types.T_json.ToType())
+	require.NoError(t, vector.AppendBytes(values, raw, false, mp))
+
+	exec := newCountColumnExec(
+		mp, AggIdOfCountColumn, true, []types.Type{types.T_json.ToType()},
+	).(*countColumnExec)
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.BatchFill(0, []uint64{1}, []*vector.Vector{values}))
+
+	drain, err := exec.BeginArgumentDrain(nil)
+	require.NoError(t, err)
+	var membership, representative []byte
+	require.NoError(t, drain.ForEachWithRepresentative(
+		func(_ int, payload, value []byte) error {
+			membership = bytes.Clone(payload)
+			representative = bytes.Clone(value)
+			return nil
+		}))
+	require.NotEqual(t, raw, membership)
+	require.Equal(t, raw, representative)
+	drain.Abort()
+
+	exec.Free()
+	values.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestCountDistinctLegacyKeepsNonFloatRepresentative(t *testing.T) {
+	mp := mpool.MustNewZero()
+	json, err := types.ParseStringToByteJson("1")
+	require.NoError(t, err)
+	raw, err := types.EncodeJson(json)
+	require.NoError(t, err)
+	values := vector.NewVec(types.T_json.ToType())
+	require.NoError(t, vector.AppendBytes(values, raw, false, mp))
+
+	exec := newCountColumnExec(
+		mp, AggIdOfCountColumn, true, []types.Type{types.T_json.ToType()},
+	).(*countColumnExec)
+	require.NoError(t, ConfigureLegacyDistinctFloatKeys(exec, true))
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.PreflightBatchFill(
+		0, []uint64{1}, []*vector.Vector{values}))
+	require.NoError(t, exec.BatchFill(0, []uint64{1}, []*vector.Vector{values}))
+
+	drain, err := exec.BeginArgumentDrain(nil)
+	require.NoError(t, err)
+	var membership, representative []byte
+	require.NoError(t, drain.ForEachWithRepresentative(
+		func(_ int, payload, value []byte) error {
+			membership = bytes.Clone(payload)
+			representative = bytes.Clone(value)
+			return nil
+		}))
+	require.NotEqual(t, raw, membership)
+	require.Equal(t, raw, representative)
+	drain.Abort()
+
+	exec.Free()
+	values.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestCountDistinctSpillRestoresAcrossFloatPolicies(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, account, allocation := newTestAggregateAllocation(t)
+	defer finishTestAggregateAllocation(t, registry, account)
+
+	tupleTypes := []types.Type{
+		types.T_float64.ToType(),
+		types.New(types.T_char, 2, 0),
+	}
+	makeExec := func(legacy bool) *countColumnExec {
+		exec := newCountColumnExec(
+			mp, AggIdOfCountColumn, true, tupleTypes,
+		).(*countColumnExec)
+		require.NoError(t, exec.SetAllocationAccount(allocation))
+		require.NoError(t, ConfigureLegacyDistinctFloatKeys(exec, legacy))
+		return exec
+	}
+	makeTuple := func(bits []uint64) ([]*vector.Vector, func()) {
+		floats := make([]float64, len(bits))
+		for i, value := range bits {
+			floats[i] = math.Float64frombits(value)
+		}
+		floatVec := testutil.NewFloat64Vector(
+			len(floats), tupleTypes[0], mp, false, nil, floats)
+		charVec := buildVarlenVec(t, mp, tupleTypes[1],
+			[]string{"a", "a"}[:len(bits)])
+		return []*vector.Vector{floatVec, charVec}, func() {
+			floatVec.Free(mp)
+			charVec.Free(mp)
+		}
+	}
+	withoutPolicyHeader := func(payload []byte) []byte {
+		require.GreaterOrEqual(t, len(payload), 16)
+		// Keep the spill magic and trailer, but remove the v-new policy tag and
+		// policy value. This is the headerless layout emitted by older writers.
+		return append(bytes.Clone(payload[:8]), payload[16:]...)
+	}
+
+	t.Run("legacy-to-modern-normalizes-and-deduplicates", func(t *testing.T) {
+		source := makeExec(true)
+		vectors, freeVectors := makeTuple([]uint64{
+			0x7ff8000000000001,
+			0x7ff8000000000002,
+		})
+		require.NoError(t, source.GroupGrow(1))
+		require.NoError(t, source.BatchFill(
+			0, []uint64{1, 1}, vectors))
+		var spill bytes.Buffer
+		require.NoError(t, source.SaveSpillIntermediateRows(
+			0, []int32{0}, &spill))
+		source.Free()
+		freeVectors()
+
+		target := makeExec(false)
+		require.NoError(t, target.UnmarshalSpillFromReader(
+			bytes.NewReader(spill.Bytes()), mp))
+		one, freeOne := makeTuple([]uint64{0x7ff8000000000001})
+		require.NoError(t, target.BatchFill(0, []uint64{1}, one))
+		result, err := target.Flush()
+		require.NoError(t, err)
+		require.Equal(t, []int64{1},
+			vector.MustFixedColNoTypeCheck[int64](result[0]))
+		result[0].Free(mp)
+		freeOne()
+		target.Free()
+
+		headerlessTarget := makeExec(false)
+		require.NoError(t, headerlessTarget.UnmarshalSpillFromReader(
+			bytes.NewReader(withoutPolicyHeader(spill.Bytes())), mp))
+		headerlessResult, err := headerlessTarget.Flush()
+		require.NoError(t, err)
+		require.Equal(t, []int64{1},
+			vector.MustFixedColNoTypeCheck[int64](headerlessResult[0]))
+		headerlessResult[0].Free(mp)
+		headerlessTarget.Free()
+	})
+
+	t.Run("modern-to-legacy-rejects-before-publication", func(t *testing.T) {
+		source := makeExec(false)
+		vectors, freeVectors := makeTuple([]uint64{
+			// Start with the canonical NaN spelling. A raw-key comparison alone
+			// cannot distinguish this modern representative from a legacy one;
+			// the spill policy header must carry the producer contract explicitly.
+			0x7ff8000000000000,
+			0x7ff8000000000001,
+		})
+		require.NoError(t, source.GroupGrow(1))
+		require.NoError(t, source.BatchFill(0, []uint64{1, 1}, vectors))
+		var spill bytes.Buffer
+		require.NoError(t, source.SaveSpillIntermediateRows(
+			0, []int32{0}, &spill))
+		freeVectors()
+		usedBefore := account.Snapshot().Used
+
+		target := makeExec(true)
+		err := target.UnmarshalSpillFromReader(
+			bytes.NewReader(spill.Bytes()), mp)
+		require.ErrorContains(t, err, "canonical FLOAT DISTINCT spill")
+		require.Equal(t, usedBefore, account.Snapshot().Used)
+		target.Free()
+
+		headerless := withoutPolicyHeader(spill.Bytes())
+		headerlessTarget := makeExec(true)
+		headerlessUsedBefore := account.Snapshot().Used
+		err = headerlessTarget.UnmarshalSpillFromReader(
+			bytes.NewReader(headerless), mp)
+		require.ErrorContains(t, err, "canonical FLOAT DISTINCT spill")
+		require.Equal(t, headerlessUsedBefore, account.Snapshot().Used)
+		headerlessTarget.Free()
+		source.Free()
+	})
+
+	t.Run("modern-fixed-to-legacy-rejects-before-publication", func(t *testing.T) {
+		typ := types.T_float64.ToType()
+		source := newCountColumnExec(
+			mp, AggIdOfCountColumn, true, []types.Type{typ},
+		).(*countColumnExec)
+		require.NoError(t, source.SetAllocationAccount(allocation))
+		require.NoError(t, ConfigureLegacyDistinctFloatKeys(source, false))
+		require.NoError(t, source.GroupGrow(distinctFixedIndexMinGroups))
+		values := testutil.NewFloat64Vector(
+			1, typ, mp, false, nil,
+			[]float64{math.Float64frombits(0x7ff8000000000000)})
+		require.NoError(t, source.PreflightBatchFill(
+			0, []uint64{1}, []*vector.Vector{values}))
+		require.NoError(t, source.BatchFill(
+			0, []uint64{1}, []*vector.Vector{values}))
+		require.True(t, source.state[0].distinctFixedDeferred)
+		var spill bytes.Buffer
+		require.NoError(t, source.SaveSpillIntermediateRows(
+			0, []int32{0}, &spill))
+		values.Free(mp)
+
+		usedBefore := account.Snapshot().Used
+		target := newCountColumnExec(
+			mp, AggIdOfCountColumn, true, []types.Type{typ},
+		).(*countColumnExec)
+		require.NoError(t, target.SetAllocationAccount(allocation))
+		require.NoError(t, ConfigureLegacyDistinctFloatKeys(target, true))
+		err := target.UnmarshalSpillFromReader(
+			bytes.NewReader(spill.Bytes()), mp)
+		require.ErrorContains(t, err, "canonical FLOAT DISTINCT spill")
+		require.Equal(t, usedBefore, account.Snapshot().Used)
+		target.Free()
+
+		headerless := withoutPolicyHeader(spill.Bytes())
+		headerlessTarget := newCountColumnExec(
+			mp, AggIdOfCountColumn, true, []types.Type{typ},
+		).(*countColumnExec)
+		require.NoError(t, headerlessTarget.SetAllocationAccount(allocation))
+		require.NoError(t, ConfigureLegacyDistinctFloatKeys(headerlessTarget, true))
+		headerlessUsedBefore := account.Snapshot().Used
+		err = headerlessTarget.UnmarshalSpillFromReader(
+			bytes.NewReader(headerless), mp)
+		require.ErrorContains(t, err, "canonical FLOAT DISTINCT spill")
+		require.Equal(t, headerlessUsedBefore, account.Snapshot().Used)
+		headerlessTarget.Free()
+		source.Free()
+	})
+}
+
+func TestCountDistinctStateRestoresFloatEquivalencePeers(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		typ  types.Type
+		data [][]byte
+	}{
+		{
+			name: "float32",
+			typ:  types.T_float32.ToType(),
+			data: [][]byte{
+				types.EncodeFixed(math.Float32frombits(0x7fc00000)),
+				types.EncodeFixed(math.Float32frombits(0xffc00001)),
+				types.EncodeFixed(float32(math.Copysign(0, -1))),
+				types.EncodeFixed(float32(0)),
+			},
+		},
+		{
+			name: "float64",
+			typ:  types.T_float64.ToType(),
+			data: [][]byte{
+				types.EncodeFixed(math.Float64frombits(0x7ff8000000000000)),
+				types.EncodeFixed(math.Float64frombits(0xfff8000000000001)),
+				types.EncodeFixed(math.Copysign(0, -1)),
+				types.EncodeFixed(float64(0)),
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			exec := newCountColumnExec(
+				mp, AggIdOfCountColumn, true, []types.Type{tc.typ},
+			).(*countColumnExec)
+			require.NoError(t, exec.GroupGrow(1))
+
+			// This is the pre-canonical fixed-width DISTINCT state: every raw
+			// spelling is present on the wire, even though the receiver must
+			// rebuild SQL-equivalence membership.
+			var wire bytes.Buffer
+			require.NoError(t, types.WriteInt32(&wire, 1))
+			require.NoError(t, types.WriteUint32(&wire, uint32(len(tc.data))))
+			for _, value := range tc.data {
+				_, err := wire.Write(value)
+				require.NoError(t, err)
+			}
+			_, err := exec.state[0].readState(mp, &wire, &exec.aggInfo)
+			require.NoError(t, err)
+
+			result, err := exec.Flush()
+			require.NoError(t, err)
+			require.Equal(t, []int64{2},
+				vector.MustFixedColNoTypeCheck[int64](result[0]))
+			result[0].Free(mp)
+			exec.Free()
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
+func TestCountDistinctStateRestoresLegacyRawOpaqueKeys(t *testing.T) {
+	mp := mpool.MustNewZero()
+	exec := newCountColumnExec(
+		mp,
+		AggIdOfCountColumn,
+		true,
+		[]types.Type{types.New(types.T_char, 2, 0)},
+	).(*countColumnExec)
+	require.NoError(t, exec.GroupGrow(1))
+
+	// This is the pre-canonical opaque DISTINCT state: the two raw CHAR
+	// spellings compare equal after PAD SPACE normalization.
+	var wire bytes.Buffer
+	require.NoError(t, types.WriteInt32(&wire, 1))
+	require.NoError(t, types.WriteUint32(&wire, 2))
+	first := []byte("a ")
+	second := []byte("a")
+	require.NoError(t, types.WriteInt32(&wire, int32(len(first))))
+	_, err := wire.Write(first)
+	require.NoError(t, err)
+	require.NoError(t, types.WriteInt32(&wire, int32(len(second))))
+	_, err = wire.Write(second)
+	require.NoError(t, err)
+
+	_, err = exec.state[0].readState(mp, &wire, &exec.aggInfo)
+	require.NoError(t, err)
+	result, err := exec.Flush()
+	require.NoError(t, err)
+	require.Equal(t, []int64{1}, vector.MustFixedColNoTypeCheck[int64](result[0]))
+	result[0].Free(mp)
+	exec.Free()
+}
+
+func TestCountDistinctStateRestoresLegacyRawTupleKeys(t *testing.T) {
+	mp := mpool.MustNewZero()
+	tupleTypes := []types.Type{
+		types.New(types.T_char, 2, 0),
+		types.New(types.T_char, 2, 0),
+	}
+	exec := newCountColumnExec(mp, AggIdOfCountColumn, true, tupleTypes).(*countColumnExec)
+	require.NoError(t, exec.GroupGrow(1))
+	encodeTuple := func(left, right string) []byte {
+		payload := make([]byte, 8+len(left)+len(right))
+		binary.BigEndian.PutUint32(payload, uint32(len(left)))
+		copy(payload[4:], left)
+		offset := 4 + len(left)
+		binary.BigEndian.PutUint32(payload[offset:], uint32(len(right)))
+		copy(payload[offset+4:], right)
+		return payload
+	}
+	var wire bytes.Buffer
+	require.NoError(t, types.WriteInt32(&wire, 1))
+	require.NoError(t, types.WriteUint32(&wire, 2))
+	for _, payload := range [][]byte{
+		encodeTuple("a ", "b"),
+		encodeTuple("a", "b"),
+	} {
+		require.NoError(t, types.WriteInt32(&wire, int32(len(payload))))
+		_, err := wire.Write(payload)
+		require.NoError(t, err)
+	}
+
+	_, err := exec.state[0].readState(mp, &wire, &exec.aggInfo)
+	require.NoError(t, err)
+	result, err := exec.Flush()
+	require.NoError(t, err)
+	require.Equal(t, []int64{1}, vector.MustFixedColNoTypeCheck[int64](result[0]))
+	result[0].Free(mp)
+	exec.Free()
+}
+
+func TestCountDistinctLegacyPayloadCannotMimicCanonicalWireFrame(t *testing.T) {
+	mp := mpool.MustNewZero()
+	exec := newCountColumnExec(
+		mp, AggIdOfCountColumn, true,
+		[]types.Type{types.New(types.T_varchar, 16, 0)},
+	).(*countColumnExec)
+	require.NoError(t, exec.GroupGrow(1))
+	var wire bytes.Buffer
+	require.NoError(t, types.WriteInt32(&wire, 1))
+	require.NoError(t, types.WriteUint32(&wire, 2))
+	for _, value := range [][]byte{[]byte("MOCDK1a"), []byte("a")} {
+		require.NoError(t, types.WriteInt32(&wire, int32(len(value))))
+		_, err := wire.Write(value)
+		require.NoError(t, err)
+	}
+	_, err := exec.state[0].readState(mp, &wire, &exec.aggInfo)
+	require.NoError(t, err)
+	result, err := exec.Flush()
+	require.NoError(t, err)
+	require.Equal(t, []int64{2}, vector.MustFixedColNoTypeCheck[int64](result[0]))
+	result[0].Free(mp)
+	exec.Free()
 }
 
 func TestCountDistinctArgumentDrainAbortKeepsResidentOwner(t *testing.T) {

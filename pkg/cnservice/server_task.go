@@ -29,8 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/proxy"
@@ -38,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
@@ -348,30 +345,6 @@ func (s *service) registerExecutorsLocked() {
 	s.task.runner.RegisterExecutor(
 		task.TaskCode_MetricStorageUsage,
 		mometric.GetMetricStorageUsageExecutor(s.cfg.UUID, ieFactory))
-	s.task.runner.RegisterExecutor(task.TaskCode_MergeObject,
-		func(ctx context.Context, task task.Task) error {
-			metadata := task.GetMetadata()
-			var mergeTask api.MergeTaskEntry
-			err := mergeTask.Unmarshal(metadata.Context)
-			if err != nil {
-				return err
-			}
-
-			objs := make([]string, len(mergeTask.ToMergeObjs))
-			for i, b := range mergeTask.ToMergeObjs {
-				stats := objectio.ObjectStats(b)
-				objs[i] = stats.ObjectName().String()
-			}
-			sql := fmt.Sprintf("select mo_ctl('CN', 'MERGEOBJECTS', 'o:%d.%d:%s')",
-				mergeTask.TblId, mergeTask.AccountId, strings.Join(objs, ","))
-			ctx, cancel := context.WithTimeoutCause(ctx, 10*time.Minute, moerr.CauseMergeObject)
-			defer cancel()
-			opts := executor.Options{}.WithWaitCommittedLogApplied()
-			_, err = s.sqlExecutor.Exec(ctx, sql, opts)
-			return moerr.AttachCause(ctx, err)
-		},
-	)
-
 	cdcExecutor := frontend.CDCTaskExecutorFactory(
 		s.logger,
 		ieFactory,
@@ -384,6 +357,8 @@ func (s *service) registerExecutorsLocked() {
 	)
 	s.task.runner.RegisterExecutor(task.TaskCode_InitCdc, cdcExecutor)
 	s.task.runner.RegisterExecutor(task.TaskCode_InitCdcStableEpoch, cdcExecutor)
+	s.task.runner.RegisterExecutor(task.TaskCode_InitCdcLosslessStart, cdcExecutor)
+	s.task.runner.RegisterExecutor(task.TaskCode_InitCdcSourcePatternV1, cdcExecutor)
 
 	s.task.runner.RegisterExecutor(task.TaskCode_ISCPExecutor,
 		iscp.ISCPTaskExecutorFactory(
@@ -424,14 +399,36 @@ func (s *service) registerExecutorsLocked() {
 		task.TaskCode_DataBranchLineageGC,
 		compile.DataBranchLineageGCExecutor(s.sqlExecutor),
 	)
-	ctx := defines.AttachAccount(
-		context.Background(), catalog.System_Account, catalog.System_User, catalog.System_Role,
-	)
-	if err := ts.CreateCronTask(
-		ctx,
-		databranchutils.LineageGCTaskMetadata(),
-		databranchutils.LineageGCTaskCronExpr,
-	); err != nil {
-		s.logger.Error("failed to create data branch lineage GC task", zap.Error(err))
+	// Register outside task.Lock and the heartbeat/startup command paths. The
+	// stopper owns both retries and cancellation before task storage is closed.
+	if err := s.stopper.RunNamedTask("register lineage GC cron", func(ctx context.Context) {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		s.registerLineageGCCron(ctx, ts, ticker.C)
+	}); err != nil {
+		if !s.viewMetadataGenerationRevoked.Load() {
+			s.logger.Error("failed to start lineage GC cron registration", zap.Error(err))
+		}
+	}
+}
+
+func (s *service) registerLineageGCCron(ctx context.Context, ts taskservice.TaskService, retry <-chan time.Time) {
+	for {
+		if ctx.Err() != nil || !s.task.runnerReady.Load() || s.viewMetadataGenerationRevoked.Load() {
+			return
+		}
+		attempt, cancel := context.WithTimeout(ctx, 30*time.Second)
+		attempt = defines.AttachAccount(attempt, catalog.System_Account, catalog.System_User, catalog.System_Role)
+		err := ts.CreateCronTask(attempt, databranchutils.LineageGCTaskMetadata(), databranchutils.LineageGCTaskCronExpr)
+		cancel()
+		if err == nil || ctx.Err() != nil {
+			return
+		}
+		s.logger.Warn("failed to register lineage GC cron; retrying", zap.Error(err))
+		select {
+		case <-ctx.Done():
+			return
+		case <-retry:
+		}
 	}
 }

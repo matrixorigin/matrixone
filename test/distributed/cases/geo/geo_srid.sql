@@ -6,6 +6,15 @@ select st_srid(st_geomfromtext('POINT(1 2)', 0)) as srid_0;
 -- No SRID argument -> SRID 0.
 select st_srid(st_geomfromtext('POINT(1 2)')) as srid_default;
 
+-- WKB constructors accept the MySQL two-argument SRID form for all supported
+-- binary input domains. The SRID remains result-type metadata, not payload.
+select st_srid(st_geomfromwkb(st_aswkb(st_geomfromtext('POINT(1 2)')), 4326)) as wkb_blob_srid;
+select st_srid(st_geomfrombinary(st_aswkb(st_geomfromtext('POINT(1 2)')), 3857)) as wkb_binary_srid;
+select st_srid(st_geometryfromwkb(cast(st_aswkb(st_geomfromtext('POINT(1 2)')) as varbinary), 0)) as wkb_varbinary_srid;
+select st_astext(st_geomfromwkb(st_aswkb(st_geomfromtext('POINT(1 2)')), 4326)) as wkb_setter_wkt;
+select st_srid(st_srid(st_geomfromwkb(st_aswkb(st_geomfromtext('POINT(1 2)')), 4326), 3857)) as srid_setter_3857;
+select st_srid(st_srid(st_geomfromwkb(st_aswkb(st_geomfromtext('POINT(1 2)')), 4326), NULL)) as srid_setter_null;
+
 -- SRID propagates through derived geometries (carried by the result type).
 select st_srid(st_centroid(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 4326))) as srid_centroid;
 select st_srid(st_boundary(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 4326))) as srid_boundary;
@@ -33,6 +42,56 @@ insert into gs values (st_geomfromtext('POINT(3 3)', 0));
 -- @regex("does not match",true)
 insert into gs values (st_geomfromtext('POINT(3 3)'));
 drop table gs;
+
+-- Prepared SQL must rebind the SRID metadata for every execution instead of
+-- reusing the first value. NULL is a nullable geometry result, while a
+-- mismatching non-NULL value remains an assignment error.
+set @geo_srid_value = 4326;
+prepare geo_srid_stmt from 'select st_srid(st_srid(st_geomfromtext(''POINT(4 4)''), ?)) as prepared_srid';
+execute geo_srid_stmt using @geo_srid_value;
+set @geo_srid_value = 3857;
+execute geo_srid_stmt using @geo_srid_value;
+set @geo_srid_value = NULL;
+execute geo_srid_stmt using @geo_srid_value;
+set @geo_srid_value = 0;
+execute geo_srid_stmt using @geo_srid_value;
+deallocate prepare geo_srid_stmt;
+
+drop table if exists gs_prepared;
+create table gs_prepared(g point srid 4326);
+prepare gs_prepared_insert from 'insert into gs_prepared values (st_srid(st_geomfromtext(''POINT(4 4)''), ?))';
+set @gs_prepared_srid = 4326;
+execute gs_prepared_insert using @gs_prepared_srid;
+set @gs_prepared_srid = NULL;
+execute gs_prepared_insert using @gs_prepared_srid;
+prepare gs_prepared_wkb from 'insert into gs_prepared values (st_geomfromwkb(st_aswkb(st_geomfromtext(''POINT(5 5)'')), ?))';
+set @gs_prepared_srid = 4326;
+execute gs_prepared_wkb using @gs_prepared_srid;
+deallocate prepare gs_prepared_insert;
+deallocate prepare gs_prepared_wkb;
+
+-- A mismatching value is rejected after EXECUTE-time specialization. The
+-- failed execution invalidates the prepared statement, so it is deliberately
+-- the final use of this statement and needs no trailing DEALLOCATE. A fresh
+-- PREPARE below verifies that a failed execution does not poison the session.
+prepare gs_prepared_invalid from 'insert into gs_prepared values (st_srid(st_geomfromtext(''POINT(4 4)''), ?))';
+set @gs_prepared_srid = 3857;
+-- @regex("does not match",true)
+execute gs_prepared_invalid using @gs_prepared_srid;
+prepare gs_prepared_recovery from 'insert into gs_prepared values (st_srid(st_geomfromtext(''POINT(8 8)''), ?))';
+set @gs_prepared_srid = 4326;
+execute gs_prepared_recovery using @gs_prepared_srid;
+deallocate prepare gs_prepared_recovery;
+select st_astext(g) as prepared_wkt, st_srid(g) as prepared_srid from gs_prepared order by 1;
+
+-- View and CTAS preserve the SRID metadata on the derived column.
+create view gs_srid_view as select st_geomfromwkb(st_aswkb(st_geomfromtext('POINT(6 6)')), 4326) as g;
+select st_srid(g) as view_srid from gs_srid_view;
+drop view gs_srid_view;
+create table gs_srid_ctas as select st_geomfromwkb(st_aswkb(st_geomfromtext('POINT(7 7)')), 4326) as g;
+select st_srid(g) as ctas_srid from gs_srid_ctas;
+drop table gs_srid_ctas;
+drop table gs_prepared;
 
 -- A plain geometry column has SRID 0.
 drop table if exists gp;

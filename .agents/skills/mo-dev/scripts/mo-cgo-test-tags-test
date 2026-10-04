@@ -14,8 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Checks that MO_CL_CUDA=1 always reaches `go test` with the gpu build tag, in whichever
-# form the caller wrote their own -tags.
+# Checks that MO_CL_CUDA=1 and MO_SIRIUS=1 always reach `go test` with the gpu
+# and sirius build tags, in whichever form the caller wrote their own -tags.
 #
 # This exists because the wrapper used to SKIP `-tags gpu` whenever the caller passed any
 # -tags of their own, on the reasoning that go test keeps only the last -tags. The effect
@@ -61,7 +61,8 @@ mkdir -p "$work/bin"
 # the copy has to live inside a real git repository for its paths to resolve.
 fake="$work/repo"
 mkdir -p "$fake/.agents/skills/mo-dev/scripts" "$fake/cgo" \
-         "$fake/thirdparties/install/include" "$fake/thirdparties/install/lib"
+         "$fake/thirdparties/install/include" "$fake/thirdparties/install/lib" \
+         "$fake/optools" "$fake/lib" "$fake/sdk" "$fake/.sirius-sdk"
 git -C "$fake" init --quiet
 # Deliberately not an ELF file. The wrapper only tests these for existence, and a
 # non-ELF stand-in also keeps `readelf -d` from reporting a CUDA dependency, which is what
@@ -70,7 +71,39 @@ git -C "$fake" init --quiet
 : > "$fake/mocl_kernel64.fatbin"
 fake_wrapper="$fake/.agents/skills/mo-dev/scripts/mo-cgo-test"
 cp "$wrapper" "$fake_wrapper"
+cp "$script_dir/../../../../cgo/mo-gpu-env" "$fake/cgo/mo-gpu-env"
 chmod +x "$fake_wrapper"
+cat > "$fake/optools/sirius_sdk.py" <<'PY'
+# The wrapper contract only needs a successful preparation owner here. Real
+# manifest/closure behavior is covered by optools/sirius_sdk_test.py.
+PY
+real_cc=$(command -v cc)
+real_cxx=$(command -v c++)
+cat > "$fake/sdk/link.json" <<EOF
+{"c_compiler":"$real_cc","compiler":"$real_cxx"}
+EOF
+: > "$fake/.sirius-sdk/link.rsp"
+: > "$fake/.sirius-sdk/provenance.json"
+: > "$fake/lib/sirius-provenance.json"
+
+export PIXI_PROJECT_ROOT="$work/pixi-project"
+export PIXI_ENVIRONMENT_NAME=mo
+export CONDA_PREFIX="$PIXI_PROJECT_ROOT/.pixi/envs/mo"
+mkdir -p "$CONDA_PREFIX/conda-meta"
+for gpu_input in pixi.lock \
+    .pixi/envs/mo/bin/x86_64-conda-linux-gnu-cc \
+    .pixi/envs/mo/bin/x86_64-conda-linux-gnu-c++ \
+    .pixi/envs/mo/bin/nvcc \
+    .pixi/envs/mo/targets/x86_64-linux/include/cuda.h \
+    .pixi/envs/mo/targets/x86_64-linux/lib/libcudart.so \
+    .pixi/envs/mo/targets/x86_64-linux/lib/stubs/libcuda.so \
+    .pixi/envs/mo/include/cuvs/core/c_api.h \
+    .pixi/envs/mo/lib/libcuvs.so \
+    .pixi/envs/mo/lib/libcuvs_c.so \
+    .pixi/envs/mo/lib/librmm.so; do
+    mkdir -p "$PIXI_PROJECT_ROOT/$(dirname "$gpu_input")"
+    : >"$PIXI_PROJECT_ROOT/$gpu_input"
+done
 
 cat > "$work/bin/go" <<'STUB'
 #!/bin/sh
@@ -98,11 +131,14 @@ failures=0
 # run_wrapper runs the real wrapper inside the fake repo. It prints the wrapper's combined
 # output and returns its exit status; callers must check that status before parsing.
 run_wrapper() {
-    env MO_CL_CUDA="$MO_CL_CUDA_SETTING" CONDA_PREFIX="$work" PATH="$work/bin:$PATH" \
+    env MO_CL_CUDA="$MO_CL_CUDA_SETTING" MO_SIRIUS="$MO_SIRIUS_SETTING" \
+        SIRIUS_SDK="$fake/sdk" SIRIUS_BUILD_MODE=development \
+        PATH="$work/bin:$PATH" \
         sh "$fake_wrapper" "$@" 2>&1
 }
 
 MO_CL_CUDA_SETTING=1
+MO_SIRIUS_SETTING=
 
 # --- preflight ---------------------------------------------------------------------
 # Prove the harness itself works before drawing conclusions from it. Without this, any
@@ -161,7 +197,19 @@ check "-tags gpu"             -tags gpu ./pkg/x/
 check "-tags=foo,gpu"         -tags=foo,gpu ./pkg/x/
 check "-tags typecheck,gpu"   -count=1 -tags typecheck -race ./pkg/x/
 
+# The two optional build dimensions accumulate into one tag flag; neither may
+# replace the caller's tags or the other native feature.
+MO_SIRIUS_SETTING=1
+check "-tags gpu,sirius"             ./pkg/x/
+check "-tags typecheck,gpu,sirius"   -tags typecheck ./pkg/x/
+
+MO_CL_CUDA_SETTING=
+check "-tags sirius"                 ./pkg/x/
+check "-tags=typecheck,sirius"       -tags=typecheck ./pkg/x/
+
 # The caller's other flags and the package list must survive the rewrite untouched.
+MO_CL_CUDA_SETTING=1
+MO_SIRIUS_SETTING=
 set +e
 full=$(run_wrapper -count=1 -tags typecheck -race ./pkg/x/); full_status=$?
 set -e
@@ -181,6 +229,7 @@ fi
 # Without MO_CL_CUDA the wrapper must not inject gpu at all. The fake libmo is not a CUDA
 # binary, so unlike a real CUDA-built checkout this case asserts instead of skipping.
 MO_CL_CUDA_SETTING=
+MO_SIRIUS_SETTING=
 set +e
 out=$(run_wrapper -tags typecheck ./pkg/x/); status=$?
 set -e

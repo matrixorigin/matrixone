@@ -289,6 +289,14 @@ func resolveNumericBinaryTypes(
 	if !ok {
 		return numericTypeResolution{}, false
 	}
+	if (op == numericOpAdd || op == numericOpSub || op == numericOpMul) &&
+		isMixedUnsignedInteger(left, right) {
+		return numericTypeResolution{
+			left:   left,
+			right:  right,
+			result: types.New(types.T_uint64, 64, -1),
+		}, true
+	}
 
 	var cast bool
 	var castLeft, castRight types.Type
@@ -432,17 +440,11 @@ func decimalMulResultType(left, right types.Type) types.Type {
 }
 
 func decimalDivResultType(left, right types.Type) types.Type {
-	scale := int32(12)
-	if scale > left.Scale+6 {
-		scale = left.Scale + 6
+	parameters := []types.Type{left, right}
+	if result, ok := decimalDivisionReturnType(parameters, parameters, DefaultDivPrecisionIncrement); ok {
+		return result
 	}
-	if scale < left.Scale {
-		scale = left.Scale
-	}
-	if left.Oid == types.T_decimal256 || right.Oid == types.T_decimal256 {
-		return types.New(types.T_decimal256, 65, scale)
-	}
-	return types.New(types.T_decimal128, 38, scale)
+	return left
 }
 
 func max32(left, right int32) int32 {

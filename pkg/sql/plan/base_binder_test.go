@@ -84,6 +84,65 @@ func TestStoredProcedureVariablesUseDeclaredDecimalType(t *testing.T) {
 	}
 }
 
+func TestFullTextPatternRequiresStoredProcedureVariable(t *testing.T) {
+	scopes := []map[string]interface{}{{"q": "outer"}, {"q": "engine"}}
+	typeScopes := []map[string]plan.Type{{"q": {Id: int32(types.T_varchar)}}, {"q": {Id: int32(types.T_varchar)}}}
+	ctx := context.WithValue(context.Background(), defines.VarScopeKey{}, &scopes)
+	ctx = context.WithValue(ctx, defines.VarScopeTypeKey{}, &typeScopes)
+	ctx = context.WithValue(ctx, defines.InSp{}, true)
+
+	name := tree.NewUnresolvedColName("q")
+	binder := NewDefaultBinder(ctx, nil, nil, plan.Type{}, nil)
+	bound, err := binder.BindExpr(name, 0, false)
+	require.NoError(t, err)
+	require.True(t, isStoredProcedureFullTextPattern(ctx, name, bound))
+
+	column := &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{}}}
+	require.False(t, isStoredProcedureFullTextPattern(ctx, name, column))
+	require.False(t, isStoredProcedureFullTextPattern(ctx, tree.NewUnresolvedName(tree.NewCStr("t", 1), tree.NewCStr("q", 1)), bound))
+	require.False(t, isStoredProcedureFullTextPattern(context.Background(), name, bound))
+
+	otherScopes := []map[string]interface{}{{"body": "engine"}}
+	noVariable := context.WithValue(ctx, defines.VarScopeKey{}, &otherScopes)
+	require.False(t, isStoredProcedureFullTextPattern(noVariable, name, bound))
+}
+
+func TestIgnoreSpaceGenericFunctionsDoNotUseBuiltins(t *testing.T) {
+	tests := []struct {
+		name    string
+		query   string
+		mode    string
+		wantErr bool
+	}{
+		{name: "spaced now uses stored function path", query: "select now ()", mode: "STRICT_TRANS_TABLES", wantErr: true},
+		{name: "spaced substring uses stored function path", query: "select substring ('abcdef', 2, 3)", mode: "STRICT_TRANS_TABLES", wantErr: true},
+		{name: "spaced date add uses stored function path", query: "select date_add ('2024-01-01', interval 1 day)", mode: "STRICT_TRANS_TABLES", wantErr: true},
+		{name: "spaced trim string uses stored function path", query: "select trim (' x ') as trimmed", mode: "STRICT_TRANS_TABLES", wantErr: true},
+		{name: "spaced trim numeric uses stored function path", query: "select trim (0) as trimmed", mode: "STRICT_TRANS_TABLES", wantErr: true},
+		{name: "spaced group concat uses stored function path", query: "select group_concat (1) as grouped", mode: "STRICT_TRANS_TABLES", wantErr: true},
+		{name: "native now remains builtin", query: "select now()", mode: "STRICT_TRANS_TABLES"},
+		{name: "ignore space makes spaced now builtin", query: "select now ()", mode: "STRICT_TRANS_TABLES,IGNORE_SPACE"},
+		{name: "ignore space makes spaced trim string builtin", query: "select trim (' x ') as trimmed", mode: "STRICT_TRANS_TABLES,IGNORE_SPACE"},
+		{name: "ignore space makes spaced trim numeric builtin", query: "select trim (0) as trimmed", mode: "STRICT_TRANS_TABLES,IGNORE_SPACE"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOneWithSQLMode(context.Background(), dialect.MYSQL, test.query, 1, test.mode)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			_, err = BuildPlan(NewMockCompilerContext(true), stmt, false)
+			if test.wantErr {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "function '")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 // TestBindFuncExprImplByPlanExpr_PowAlias tests that "pow" is correctly
 // remapped to "power" (line ~1781 in base_binder.go:
 // case "pow": name = "power").
@@ -775,10 +834,9 @@ func TestBinaryLiteralComparisonKeepsVarbinaryColumnUncast(t *testing.T) {
 	testCases := []struct {
 		name   string
 		filter string
-		colArg int
 	}{
-		{name: "column on left", filter: "a = binary x'41'", colArg: 0},
-		{name: "column on right", filter: "binary x'41' = a", colArg: 1},
+		{name: "column on left", filter: "a = binary x'41'"},
+		{name: "column on right", filter: "binary x'41' = a"},
 	}
 
 	for _, tc := range testCases {
@@ -807,8 +865,12 @@ func TestBinaryLiteralComparisonKeepsVarbinaryColumnUncast(t *testing.T) {
 			require.NotNil(t, eq)
 			require.Equal(t, "=", eq.Func.ObjName)
 			require.Len(t, eq.Args, 2)
-			require.NotNil(t, eq.Args[tc.colArg].GetCol(),
+			require.NotNil(t, eq.Args[0].GetCol(),
 				"the indexed VARBINARY column must not be wrapped in a cast")
+			require.Equal(t, int32(types.T_varbinary), eq.Args[0].Typ.Id)
+			require.Equal(t, int32(8), eq.Args[0].Typ.Width)
+			require.Equal(t, uint32(types.CharsetBinary), eq.Args[0].Typ.Charset)
+			require.Equal(t, int32(types.T_varbinary), eq.Args[1].Typ.Id)
 		})
 	}
 }
@@ -1377,7 +1439,7 @@ func TestBuildPlan_DatetimeTimestampComparisonIsZonemappable(t *testing.T) {
 	require.Len(t, filterArgs, 2)
 	require.NotNil(t, filterArgs[0].GetCol())
 	require.Equal(t, int32(types.T_datetime), filterArgs[0].Typ.Id)
-	require.Equal(t, int32(types.T_timestamp), filterArgs[1].Typ.Id)
+	require.Equal(t, int32(types.T_datetime), filterArgs[1].Typ.Id)
 	require.True(t, ExprIsZonemappable(compilerCtx.GetContext(), scan.FilterList[0]))
 }
 

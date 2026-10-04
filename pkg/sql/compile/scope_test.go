@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -419,6 +420,47 @@ func TestScopeSerialization(t *testing.T) {
 
 }
 
+func TestOrderedSetWindowStaysOffRemotePipelineWire(t *testing.T) {
+	rt := runtime.ServiceRuntime("")
+	originalVersion, hadVersion := rt.GetGlobalVariables(runtime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, originalVersion)
+		} else {
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+	// Version 16 predates remote ordered-set aggregate support. The window can
+	// still be planned because its aggregate executor never leaves this CN.
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion16)
+	source := generateScopeCases(t, []string{
+		"select percentile_disc(0.5) within group (order by n_nationkey desc) " +
+			"over (partition by n_regionkey) from nation",
+	})[0]
+	foundWindow := false
+	require.NoError(t, vm.HandleAllOp(source.RootOp, func(_ vm.Operator, op vm.Operator) error {
+		if _, ok := op.(*window.Window); ok {
+			foundWindow = true
+		}
+		return nil
+	}))
+	require.True(t, foundWindow, "the window must execute above the coordinator merge")
+	require.NotEmpty(t, source.PreScopes)
+
+	// Window has no pipeline protobuf representation. Rolling-version safety
+	// relies on compileWin retaining it on the coordinator while only the
+	// existing scan/merge inputs cross the wire.
+	for _, remoteInput := range source.PreScopes {
+		remoteInput.Proc.Base.TxnOperator = fakeTxnOperator{}
+		require.NoError(t, vm.HandleAllOp(remoteInput.RootOp, func(_ vm.Operator, op vm.Operator) error {
+			_, isWindow := op.(*window.Window)
+			require.False(t, isWindow, "window operators must not enter the remote pipeline wire")
+			return nil
+		}))
+		require.True(t, checkPipelineStandaloneExecutableAtRemote(remoteInput))
+	}
+}
+
 func TestCompileOrderByLimitOffsetUsesTopCandidateBudget(t *testing.T) {
 	catalog.SetupDefines("")
 	tests := []struct {
@@ -517,6 +559,110 @@ func TestScopeResetKeepsReusableRelationHandle(t *testing.T) {
 	require.NoError(t, s.Reset(NewMockCompile(t)))
 	require.Nil(t, s.DataSource.R)
 	require.Same(t, rel, s.DataSource.Rel)
+}
+
+func TestPreparedScopeRunReleasesCompletedReader(t *testing.T) {
+	for _, outcome := range []string{"success", "read error", "read panic"} {
+		t.Run(outcome, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.BuildPipelineContext(context.Background())
+			reader := &mockReaderForParallelOrderBy{}
+			rel := &mockRelationForMembershipFilter{}
+			scan := table_scan.NewArgument()
+			scope := &Scope{
+				RootOp: scan,
+				Proc:   proc,
+				DataSource: &Source{
+					R:   reader,
+					Rel: rel,
+				},
+			}
+			reader.onRead = func() {
+				require.Same(t, reader, scope.DataSource.R, "reader must remain live during execution")
+				if outcome == "read panic" {
+					panic("read panic")
+				}
+			}
+			if outcome == "read error" {
+				reader.readErr = moerr.NewInternalErrorNoCtx("read error")
+			}
+			compile := &Compile{proc: proc, isPrepare: true}
+			err := scope.Run(compile)
+			if outcome == "success" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, outcome)
+			}
+			require.Equal(t, 1, reader.closeCalls)
+			require.Nil(t, scan.Reader)
+			require.Nil(t, scope.DataSource.R)
+			require.Same(t, rel, scope.DataSource.Rel)
+		})
+	}
+}
+
+func TestPreparedScopeRunReleasesBuiltReader(t *testing.T) {
+	for _, parallel := range []bool{false, true} {
+		name := "direct"
+		if parallel {
+			name = "parallel single reader"
+		}
+		t.Run(name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.BuildPipelineContext(context.Background())
+			reader := &mockReaderForParallelOrderBy{}
+			rel := &mockRelationForParallelOrderBy{readers: []engine.Reader{reader}}
+			scope := &Scope{
+				RootOp:   table_scan.NewArgument(),
+				Proc:     proc,
+				NodeInfo: engine.Node{Mcpu: 1},
+				DataSource: &Source{
+					Rel:        rel,
+					FilterList: []*plan.Expr{plan2.MakeFalseExpr()},
+				},
+			}
+			reader.onRead = func() {
+				require.Same(t, reader, scope.DataSource.R)
+			}
+			compile := &Compile{proc: proc, isPrepare: true}
+			var err error
+			if parallel {
+				err = scope.ParallelRun(compile)
+			} else {
+				err = scope.Run(compile)
+			}
+			require.NoError(t, err)
+			require.Equal(t, 1, reader.closeCalls)
+			require.Nil(t, scope.DataSource.R)
+			require.Same(t, rel, scope.DataSource.Rel)
+		})
+	}
+}
+
+func TestPreparedParallelWorkersReleaseBuiltReaders(t *testing.T) {
+	c := NewMockCompile(t)
+	c.isPrepare = true
+	readers := []*mockReaderForParallelOrderBy{{}, {}}
+	source := &Scope{
+		RootOp:   table_scan.NewArgument(),
+		Proc:     c.proc,
+		NodeInfo: engine.Node{Mcpu: 2},
+		DataSource: &Source{
+			Rel: &mockRelationForParallelOrderBy{readers: []engine.Reader{
+				readers[0], readers[1],
+			}},
+			FilterList: []*plan.Expr{plan2.MakeFalseExpr()},
+		},
+	}
+	parallel, err := buildScanParallelRun(source, c)
+	require.NoError(t, err)
+	require.Len(t, parallel.PreScopes, 2)
+	for i, worker := range parallel.PreScopes {
+		require.Same(t, readers[i], worker.DataSource.R)
+		require.NoError(t, worker.Run(c))
+		require.Equal(t, 1, readers[i].closeCalls)
+		require.Nil(t, worker.DataSource.R)
+	}
 }
 
 func TestLockMetaResetKeepsReusableRelationHandles(t *testing.T) {
@@ -1601,42 +1747,7 @@ func TestCompileExternScanParquetLoadDefaultFanoutContextCancellationTerminatesA
 	}
 }
 
-func TestSplitIcebergDataFileShardsBalancesFiles(t *testing.T) {
-	tasks := []*pipeline.IcebergDataFileTask{
-		{FilePath: "warehouse/iceberg/part-0.parquet", FileSize: 100, RecordCount: 10},
-		{FilePath: "warehouse/iceberg/part-1.parquet", FileSize: 60, RecordCount: 6},
-		{FilePath: "warehouse/iceberg/part-2.parquet", FileSize: 40, RecordCount: 4},
-		{FilePath: "warehouse/iceberg/part-3.parquet", FileSize: 20, RecordCount: 2},
-	}
-	nodes := engine.Nodes{{Addr: "cn1:6001", Mcpu: 1}, {Addr: "cn2:6001", Mcpu: 1}}
-
-	shards := splitIcebergDataFileShards(tasks, nodes)
-	require.Len(t, shards, 2)
-
-	seen := make(map[string]bool)
-	loads := make(map[string]int64)
-	for _, shard := range shards {
-		require.NotEmpty(t, shard.dataTasks)
-		require.Len(t, shard.fileList, len(shard.dataTasks))
-		require.Len(t, shard.fileSize, len(shard.dataTasks))
-		for i, task := range shard.dataTasks {
-			require.Equal(t, task.FilePath, shard.fileList[i])
-			require.Equal(t, task.FileSize, shard.fileSize[i])
-			seen[task.FilePath] = true
-			loads[shard.node.Addr] += task.FileSize
-		}
-	}
-	require.Equal(t, map[string]bool{
-		"warehouse/iceberg/part-0.parquet": true,
-		"warehouse/iceberg/part-1.parquet": true,
-		"warehouse/iceberg/part-2.parquet": true,
-		"warehouse/iceberg/part-3.parquet": true,
-	}, seen)
-	require.Equal(t, int64(120), loads["cn1:6001"])
-	require.Equal(t, int64(100), loads["cn2:6001"])
-}
-
-func TestCompileExternScanIcebergFileFanout(t *testing.T) {
+func TestCompileExternScanIcebergCoordinator(t *testing.T) {
 	testCompile := NewMockCompile(t)
 	enableProtectedIcebergCNToCNForTest(t, testCompile)
 	testCompile.cnList = engine.Nodes{{Addr: "cn1:6001", Mcpu: 2}, {Addr: "cn2:6001", Mcpu: 2}}
@@ -1685,7 +1796,7 @@ func TestCompileExternScanIcebergFileFanout(t *testing.T) {
 		needRowOrdinal: true,
 	}
 
-	ss, err := testCompile.compileExternScanIcebergFileFanout(n, param, runtime, true)
+	ss, err := testCompile.compileExternScanIcebergCoordinator(n, param, runtime, true)
 	require.NoError(t, err)
 	require.Len(t, ss, 1)
 	require.True(t, param.Parallel)
@@ -2854,14 +2965,21 @@ func (m *mockRelationForMembershipFilter) BuildReaders(
 type mockReaderForParallelOrderBy struct {
 	orderByCalls int
 	orderBy      []*plan.OrderBySpec
+	closeCalls   int
+	onRead       func()
+	readErr      error
 }
 
 func (m *mockReaderForParallelOrderBy) Close() error {
+	m.closeCalls++
 	return nil
 }
 
 func (m *mockReaderForParallelOrderBy) Read(context.Context, []string, *plan.Expr, *mpool.MPool, *batch.Batch) (bool, error) {
-	return true, nil
+	if m.onRead != nil {
+		m.onRead()
+	}
+	return true, m.readErr
 }
 
 func (m *mockReaderForParallelOrderBy) SetOrderBy(orderBy []*plan.OrderBySpec) {

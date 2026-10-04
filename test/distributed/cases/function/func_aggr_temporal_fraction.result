@@ -30,3 +30,19 @@ EXECUTE variance_fraction_stmt USING @variance_fraction_id;
 0.010000000000  ¦  0.020000000000  ¦  0.100000000000  ¦  0.141421356237
 DEALLOCATE PREPARE variance_fraction_stmt;
 DROP TABLE variance_fraction;
+DROP TABLE IF EXISTS temporal_variance_precision;
+CREATE TABLE temporal_variance_precision (
+id INT PRIMARY KEY,
+d DATETIME,
+ts TIMESTAMP
+);
+INSERT INTO temporal_variance_precision VALUES
+(1, '2024-01-01 01:02:03', '2024-01-01 01:02:03'),
+(2, '2024-01-02 02:03:04', '2024-01-02 02:03:04'),
+(3, '2024-01-03 03:04:05', '2024-01-03 03:04:05');
+SELECT CAST(VAR_POP(d) AS DECIMAL(24,6)) AS datetime_var_pop,
+CAST(VAR_POP(ts) AS DECIMAL(24,6)) AS timestamp_var_pop
+FROM temporal_variance_precision;
+➤ datetime_var_pop[3,24,6]  ¦  timestamp_var_pop[3,24,6]  𝄀
+680202686800.666600  ¦  680202686800.666600
+DROP TABLE temporal_variance_precision;

@@ -84,6 +84,98 @@ func isDatetimeTimestampComparison(left, right types.Type) bool {
 		left.Oid == types.T_timestamp && right.Oid == types.T_datetime
 }
 
+func decimalArithmeticDomain(input types.Type) (width, scale int32, ok bool) {
+	if input.Oid.IsDecimal() {
+		width = input.Width
+		if width <= 0 {
+			width = input.Oid.ToType().Width
+		}
+		scale = max(input.Scale, int32(0))
+		return width, scale, true
+	}
+	if input.IsIntOrUint() {
+		return integerIntegralWidth(input.Oid), 0, true
+	}
+	// BIT participates in exact numeric coercion as an unsigned integer even
+	// though it is intentionally outside IsIntOrUint. BIT(64) spans the full
+	// uint64 domain, so reserve all 20 decimal digits when deriving a widened
+	// arithmetic result.
+	if input.Oid == types.T_bit {
+		return 20, 0, true
+	}
+	return 0, 0, false
+}
+
+// widenedDecimalArithmeticInputs derives the Decimal256 cast domains from the
+// original numeric operands. fixedTypeCastRule1 intentionally uses a full
+// Decimal128 envelope for mixed decimal/integer operands, so deciding from its
+// output alone loses the integer's actual 3..20 digit domain and can either
+// miss a required widening or make small literal arithmetic unnecessarily wide.
+func widenedDecimalArithmeticInputs(operator string, inputs, coerced []types.Type) ([]types.Type, bool) {
+	if len(inputs) != 2 || len(coerced) != 2 ||
+		coerced[0].Oid != types.T_decimal128 || coerced[1].Oid != types.T_decimal128 {
+		return nil, false
+	}
+
+	leftWidth, leftScale, leftOK := decimalArithmeticDomain(inputs[0])
+	rightWidth, rightScale, rightOK := decimalArithmeticDomain(inputs[1])
+	if !leftOK || !rightOK || (!inputs[0].Oid.IsDecimal() && !inputs[1].Oid.IsDecimal()) {
+		return nil, false
+	}
+
+	var precision int32
+	switch operator {
+	case "+", "-":
+		scale := max(leftScale, rightScale)
+		integerDigits := max(leftWidth-leftScale, rightWidth-rightScale)
+		precision = integerDigits + scale + 1
+	case "*":
+		precision = leftWidth + rightWidth
+	default:
+		return nil, false
+	}
+	if precision <= types.T_decimal128.ToType().Width {
+		return nil, false
+	}
+	return []types.Type{
+		types.New(types.T_decimal256, leftWidth, leftScale),
+		types.New(types.T_decimal256, rightWidth, rightScale),
+	}, true
+}
+
+func decimalAddSubReturnType(parameters []types.Type) types.Type {
+	scale := max(parameters[0].Scale, parameters[1].Scale)
+	if parameters[0].Oid == types.T_decimal256 || parameters[1].Oid == types.T_decimal256 {
+		integerDigits := max(
+			parameters[0].Width-parameters[0].Scale,
+			parameters[1].Width-parameters[1].Scale,
+		)
+		return types.New(types.T_decimal256, min(integerDigits+scale+1, int32(65)), scale)
+	}
+	if parameters[0].Oid == types.T_decimal128 || parameters[1].Oid == types.T_decimal128 {
+		return types.New(types.T_decimal128, 38, scale)
+	}
+	return types.New(types.T_decimal64, 18, scale)
+}
+
+func decimalMultiplyReturnType(parameters []types.Type) types.Type {
+	scale := int32(12)
+	scale1, scale2 := parameters[0].Scale, parameters[1].Scale
+	if scale1 > scale {
+		scale = scale1
+	}
+	if scale2 > scale {
+		scale = scale2
+	}
+	if scale1+scale2 < scale {
+		scale = scale1 + scale2
+	}
+	if parameters[0].Oid == types.T_decimal256 || parameters[1].Oid == types.T_decimal256 {
+		return types.New(types.T_decimal256, min(parameters[0].Width+parameters[1].Width, int32(65)), scale)
+	}
+	return types.New(types.T_decimal128, 38, scale)
+}
+
 // isJSONBooleanComparison identifies equality predicates whose result depends
 // on the JSON scalar category. Letting the generic cast rule turn both operands
 // into BOOL would make a JSON string such as "true" indistinguishable from the
@@ -94,6 +186,80 @@ func isJSONBooleanComparison(left, right types.Type) bool {
 		left.Oid == types.T_bool && right.Oid == types.T_json
 }
 
+// alignDecimalComparisonTypes preserves integer capacity when comparisons need
+// one coefficient scale. Use the original exact domains: an intermediate cast
+// may have the physical type's default precision rather than the source's.
+func alignDecimalComparisonTypes(targets, inputs []types.Type) (bool, bool) {
+	target := targets[0]
+	aligned := true
+	for _, typ := range targets {
+		if typ.Oid != target.Oid || typ.Scale != target.Scale {
+			aligned = false
+		}
+	}
+	if aligned {
+		return false, true
+	}
+
+	sources := make([]types.Type, len(inputs))
+	for i, input := range inputs {
+		if targets[i].Oid.TypeLen() > target.Oid.TypeLen() {
+			target = targets[i]
+		}
+		if input.Oid.IsDecimal() || input.IsIntOrUint() {
+			sources[i] = input
+			if input.Oid.IsDecimal() && input.Width <= 0 {
+				sources[i].Width = input.Oid.ToType().Width
+			}
+		} else {
+			sources[i] = targets[i]
+		}
+	}
+	if !setSafeDecimalWidthAndScaleFromSource(&target, sources) {
+		// DECIMAL256's declared domains can need more than 76 digits when
+		// combined, yet values inside the physical comparison domain are
+		// still comparable. Keep the largest representable common scale and
+		// let the checked cast reject only values that actually overflow.
+		if target.Oid != types.T_decimal256 {
+			return false, false
+		}
+		maxScale := int32(0)
+		for _, source := range sources {
+			maxScale = max(maxScale, source.Scale)
+		}
+		target = types.New(types.T_decimal256, types.T_decimal256.ToType().Width, maxScale)
+	}
+	for i := range targets {
+		targets[i] = target
+	}
+	return true, true
+}
+
+func equalityTypeCheck(_ []overload, inputs []types.Type) checkResult {
+	if len(inputs) != 2 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	if isJSONBooleanComparison(inputs[0], inputs[1]) {
+		return newCheckResultWithSuccess(0)
+	}
+	hasCast, left, right := comparisonTypeCastRule(inputs[0], inputs[1])
+	if !equalAndNotEqualOperatorSupports(left, right) {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	targets := []types.Type{left, right}
+	if left.Oid.IsDecimal() && right.Oid.IsDecimal() {
+		aligned, ok := alignDecimalComparisonTypes(targets, inputs)
+		if !ok {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+		hasCast = hasCast || aligned
+	}
+	if hasCast {
+		return newCheckResultWithCast(0, targets)
+	}
+	return newCheckResultWithSuccess(0)
+}
+
 var supportedOperators = []FuncNew{
 	// operator `=`
 	// return true if a = b, return false if a != b, return null if one of a and b is null
@@ -101,40 +267,7 @@ var supportedOperators = []FuncNew{
 		functionId: EQUAL,
 		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     COMPARISON_OPERATOR,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			if len(inputs) == 2 {
-				if isJSONBooleanComparison(inputs[0], inputs[1]) {
-					return newCheckResultWithSuccess(0)
-				}
-				has, t1, t2 := comparisonTypeCastRule(inputs[0], inputs[1])
-				if has {
-					if equalAndNotEqualOperatorSupports(t1, t2) {
-						if t1.Oid == t2.Oid && t1.Oid.IsDecimal() {
-							if t1.Scale > t2.Scale {
-								t2.Scale = t1.Scale
-							} else {
-								t1.Scale = t2.Scale
-							}
-						}
-						return newCheckResultWithCast(0, []types.Type{t1, t2})
-					}
-				} else {
-					if equalAndNotEqualOperatorSupports(inputs[0], inputs[1]) {
-						if inputs[0].Oid.IsDecimal() && inputs[0].Scale != inputs[1].Scale {
-							t1, t2 := inputs[0], inputs[1]
-							if t1.Scale > t2.Scale {
-								t2.Scale = t1.Scale
-							} else {
-								t1.Scale = t2.Scale
-							}
-							return newCheckResultWithCast(0, []types.Type{t1, t2})
-						}
-						return newCheckResultWithSuccess(0)
-					}
-				}
-			}
-			return newCheckResultWithFailure(failedFunctionParametersWrong)
-		},
+		checkFn:    equalityTypeCheck,
 
 		Overloads: []overload{
 			{
@@ -155,40 +288,7 @@ var supportedOperators = []FuncNew{
 		functionId: NULL_SAFE_EQUAL,
 		class:      plan.Function_PRODUCE_NO_NULL,
 		layout:     COMPARISON_OPERATOR,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			if len(inputs) == 2 {
-				if isJSONBooleanComparison(inputs[0], inputs[1]) {
-					return newCheckResultWithSuccess(0)
-				}
-				has, t1, t2 := comparisonTypeCastRule(inputs[0], inputs[1])
-				if has {
-					if equalAndNotEqualOperatorSupports(t1, t2) {
-						if t1.Oid == t2.Oid && t1.Oid.IsDecimal() {
-							if t1.Scale > t2.Scale {
-								t2.Scale = t1.Scale
-							} else {
-								t1.Scale = t2.Scale
-							}
-						}
-						return newCheckResultWithCast(0, []types.Type{t1, t2})
-					}
-				} else {
-					if equalAndNotEqualOperatorSupports(inputs[0], inputs[1]) {
-						if inputs[0].Oid.IsDecimal() && inputs[0].Scale != inputs[1].Scale {
-							t1, t2 := inputs[0], inputs[1]
-							if t1.Scale > t2.Scale {
-								t2.Scale = t1.Scale
-							} else {
-								t1.Scale = t2.Scale
-							}
-							return newCheckResultWithCast(0, []types.Type{t1, t2})
-						}
-						return newCheckResultWithSuccess(0)
-					}
-				}
-			}
-			return newCheckResultWithFailure(failedFunctionParametersWrong)
-		},
+		checkFn:    equalityTypeCheck,
 
 		Overloads: []overload{
 			{
@@ -1224,6 +1324,16 @@ var supportedOperators = []FuncNew{
 					return newOpOperatorFixedIn[types.Enum]().operatorIn
 				},
 			},
+			{
+				overloadId: 102,
+				args:       []types.T{types.T_bit, types.T_bit},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[uint64]().operatorIn
+				},
+			},
 		},
 	},
 
@@ -1776,6 +1886,16 @@ var supportedOperators = []FuncNew{
 			// 		return newOpOperatorStrIn().operatorNotIn
 			// 	},
 			// },
+			{
+				overloadId: 102,
+				args:       []types.T{types.T_bit, types.T_bit},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[uint64]().operatorNotIn
+				},
+			},
 		},
 	},
 
@@ -1787,7 +1907,13 @@ var supportedOperators = []FuncNew{
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
+				if isMixedUnsignedInteger(inputs[0], inputs[1]) {
+					return newCheckResultWithCast(2, integerDomainOperands(inputs))
+				}
 				has, t1, t2 := arithmeticTypeCastRule1(inputs[0], inputs[1])
+				if widened, ok := widenedDecimalArithmeticInputs("+", inputs, []types.Type{t1, t2}); ok {
+					return newCheckResultWithCast(0, widened)
+				}
 				if has {
 					if plusOperatorSupportsVectorScalar(t1, t2) {
 						return newCheckResultWithCast(1, []types.Type{t1, t2})
@@ -1809,29 +1935,8 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					// After type conversion, both parameters may be decimal128
 					// Check both parameters to determine result type
-					if parameters[0].Oid == types.T_decimal256 || parameters[1].Oid == types.T_decimal256 {
-						scale1 := parameters[0].Scale
-						scale2 := parameters[1].Scale
-						if scale1 < scale2 {
-							scale1 = scale2
-						}
-						return types.New(types.T_decimal256, 65, scale1)
-					}
-					if parameters[0].Oid == types.T_decimal128 || parameters[1].Oid == types.T_decimal128 {
-						scale1 := parameters[0].Scale
-						scale2 := parameters[1].Scale
-						if scale1 < scale2 {
-							scale1 = scale2
-						}
-						return types.New(types.T_decimal128, 38, scale1)
-					}
-					if parameters[0].Oid == types.T_decimal64 {
-						scale1 := parameters[0].Scale
-						scale2 := parameters[1].Scale
-						if scale1 < scale2 {
-							scale1 = scale2
-						}
-						return types.New(types.T_decimal64, 18, scale1)
+					if parameters[0].Oid.IsDecimal() {
+						return decimalAddSubReturnType(parameters)
 					}
 					return parameters[0]
 				},
@@ -1853,6 +1958,15 @@ var supportedOperators = []FuncNew{
 					return plusFnVectorScalar
 				},
 			},
+			{
+				overloadId: 2,
+				retType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_uint64, 64, -1)
+				},
+				newOp: func() executeLogicOfOverload {
+					return mixedUnsignedPlusFn
+				},
+			},
 		},
 	},
 
@@ -1864,7 +1978,13 @@ var supportedOperators = []FuncNew{
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
+				if isMixedUnsignedInteger(inputs[0], inputs[1]) {
+					return newCheckResultWithCast(2, integerDomainOperands(inputs))
+				}
 				has, t1, t2 := arithmeticTypeCastRule1(inputs[0], inputs[1])
+				if widened, ok := widenedDecimalArithmeticInputs("-", inputs, []types.Type{t1, t2}); ok {
+					return newCheckResultWithCast(0, widened)
+				}
 				if has {
 					if minusOperatorSupportsVectorScalar(t1, t2) {
 						return newCheckResultWithCast(1, []types.Type{t1, t2})
@@ -1884,13 +2004,8 @@ var supportedOperators = []FuncNew{
 			{
 				overloadId: 0,
 				retType: func(parameters []types.Type) types.Type {
-					if parameters[0].Oid == types.T_decimal256 || parameters[1].Oid == types.T_decimal256 {
-						scale1 := parameters[0].Scale
-						scale2 := parameters[1].Scale
-						if scale1 < scale2 {
-							scale1 = scale2
-						}
-						return types.New(types.T_decimal256, 65, scale1)
+					if parameters[0].Oid == types.T_decimal256 {
+						return decimalAddSubReturnType(parameters)
 					}
 					if parameters[0].Oid == types.T_decimal64 {
 						scale1 := parameters[0].Scale
@@ -1928,6 +2043,22 @@ var supportedOperators = []FuncNew{
 					return minusFnVectorScalar
 				},
 			},
+			{
+				overloadId: 2,
+				retType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_uint64, 64, -1)
+				},
+				newOp: func() executeLogicOfOverload {
+					return mixedUnsignedMinusFn
+				},
+			},
+			{
+				overloadId: 3,
+				retType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_int64, 64, -1)
+				},
+				newOp: func() executeLogicOfOverload { return signedUnsignedMinusFn },
+			},
 		},
 	},
 
@@ -1939,19 +2070,33 @@ var supportedOperators = []FuncNew{
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
+				if isMixedUnsignedInteger(inputs[0], inputs[1]) {
+					return newCheckResultWithCast(2, integerDomainOperands(inputs))
+				}
 				has, t1, t2 := arithmeticTypeCastRule1(inputs[0], inputs[1])
+				// D64 is a signed coefficient. MUL's D128 result cannot recover
+				// a UINT64/BIT value narrowed before multiplication.
+				wideUnsigned := inputs[0].Oid == types.T_uint64 || inputs[0].Oid == types.T_bit ||
+					inputs[1].Oid == types.T_uint64 || inputs[1].Oid == types.T_bit
+				if wideUnsigned && t1.Oid == types.T_decimal64 && t2.Oid == types.T_decimal64 {
+					t1 = types.New(types.T_decimal128, 38, t1.Scale)
+					t2 = types.New(types.T_decimal128, 38, t2.Scale)
+					has = true
+				}
+				if widened, ok := widenedDecimalArithmeticInputs("*", inputs, []types.Type{t1, t2}); ok {
+					return newCheckResultWithCast(0, widened)
+				}
 				if has {
 					// Multiply-specific: when coercion promotes intN×D64 to
 					// D128×D128, downgrade to D64×D64. The d64Mul kernel produces
 					// D128 output so overflow is impossible, and it's ~4× faster
 					// than d128Mul (1 vs 4 hardware MUL instructions).
-					// Exclude uint64 (values > max_int64 can't fit in D64=int64).
+					// Exclude UINT64/BIT (their full domain does not fit in D64).
 					if t1.Oid == types.T_decimal128 && t2.Oid == types.T_decimal128 {
 						i0, i1 := inputs[0].Oid, inputs[1].Oid
 						hasD64 := i0 == types.T_decimal64 || i1 == types.T_decimal64
 						noD128 := i0 != types.T_decimal128 && i1 != types.T_decimal128
-						noU64 := i0 != types.T_uint64 && i1 != types.T_uint64
-						if hasD64 && noD128 && noU64 {
+						if hasD64 && noD128 && !wideUnsigned {
 							t1 = types.T_decimal64.ToType()
 							t2 = types.T_decimal64.ToType()
 							SetTargetScaleFromSource(&inputs[0], &t1)
@@ -1977,19 +2122,7 @@ var supportedOperators = []FuncNew{
 				overloadId: 0,
 				retType: func(parameters []types.Type) types.Type {
 					if parameters[0].Oid == types.T_decimal256 || parameters[1].Oid == types.T_decimal256 {
-						scale := int32(12)
-						scale1 := parameters[0].Scale
-						scale2 := parameters[1].Scale
-						if scale1 > scale {
-							scale = scale1
-						}
-						if scale2 > scale {
-							scale = scale2
-						}
-						if scale1+scale2 < scale {
-							scale = scale1 + scale2
-						}
-						return types.New(types.T_decimal256, 65, scale)
+						return decimalMultiplyReturnType(parameters)
 					}
 					if parameters[0].Oid == types.T_decimal64 || parameters[0].Oid == types.T_decimal128 {
 						scale := int32(12)
@@ -2029,6 +2162,15 @@ var supportedOperators = []FuncNew{
 					return multiFnVectorScalar
 				},
 			},
+			{
+				overloadId: 2,
+				retType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_uint64, 64, -1)
+				},
+				newOp: func() executeLogicOfOverload {
+					return mixedUnsignedMultiFn
+				},
+			},
 		},
 	},
 
@@ -2060,27 +2202,17 @@ var supportedOperators = []FuncNew{
 			{
 				overloadId: 0,
 				retType: func(parameters []types.Type) types.Type {
-					if parameters[0].Oid == types.T_decimal256 || parameters[1].Oid == types.T_decimal256 {
-						scale := int32(12)
-						scale1 := parameters[0].Scale
-						if scale > scale1+6 {
-							scale = scale1 + 6
+					if result, ok := decimalDivisionReturnType(
+						parameters, parameters, DefaultDivPrecisionIncrement,
+					); ok {
+						// Context-aware binding promotes operands together with the
+						// result. Keep the raw overload callback physically compatible
+						// for legacy direct execution, which bypasses binding casts.
+						if result.Oid == types.T_decimal256 &&
+							parameters[0].Oid != types.T_decimal256 && parameters[1].Oid != types.T_decimal256 {
+							result = types.New(types.T_decimal128, min(result.Width, int32(38)), result.Scale)
 						}
-						if scale < scale1 {
-							scale = scale1
-						}
-						return types.New(types.T_decimal256, 65, scale)
-					}
-					if parameters[0].Oid.IsDecimal() {
-						scale := int32(12)
-						scale1 := parameters[0].Scale
-						if scale1 > scale {
-							scale = scale1
-						}
-						if scale1+6 < scale {
-							scale = scale1 + 6
-						}
-						return types.New(types.T_decimal128, 38, scale)
+						return result
 					}
 					if parameters[0].Oid == types.T_year {
 						return types.T_float64.ToType()
@@ -2735,7 +2867,7 @@ var supportedOperators = []FuncNew{
 				overloadId: 13,
 				args:       []types.T{types.T_datetime},
 				retType: func(parameters []types.Type) types.Type {
-					return parameters[0]
+					return coalesceTemporalReturnType(types.T_datetime, parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return CoalesceGeneral[types.Datetime]
@@ -2745,9 +2877,7 @@ var supportedOperators = []FuncNew{
 				overloadId: 14,
 				args:       []types.T{types.T_timestamp},
 				retType: func(parameters []types.Type) types.Type {
-					ret := types.T_timestamp.ToType()
-					setMaxScaleFromSource(&ret, parameters)
-					return ret
+					return coalesceTemporalReturnType(types.T_timestamp, parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return CoalesceGeneral[types.Timestamp]
@@ -2807,7 +2937,7 @@ var supportedOperators = []FuncNew{
 				overloadId: 19,
 				args:       []types.T{types.T_time},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_time.ToType()
+					return coalesceTemporalReturnType(types.T_time, parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return CoalesceGeneral[types.Time]
@@ -2846,9 +2976,7 @@ var supportedOperators = []FuncNew{
 			{
 				overloadId: 23,
 				args:       []types.T{types.T_array_float32},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_array_float32.ToType()
-				},
+				retType:    coalesceVectorReturnType,
 				newOp: func() executeLogicOfOverload {
 					return CoalesceStr
 				},
@@ -2856,9 +2984,7 @@ var supportedOperators = []FuncNew{
 			{
 				overloadId: 24,
 				args:       []types.T{types.T_array_float64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_array_float64.ToType()
-				},
+				retType:    coalesceVectorReturnType,
 				newOp: func() executeLogicOfOverload {
 					return CoalesceStr
 				},
@@ -2866,9 +2992,7 @@ var supportedOperators = []FuncNew{
 			{
 				overloadId: 25,
 				args:       []types.T{types.T_array_bf16},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_array_bf16.ToType()
-				},
+				retType:    coalesceVectorReturnType,
 				newOp: func() executeLogicOfOverload {
 					return CoalesceStr
 				},
@@ -2876,9 +3000,7 @@ var supportedOperators = []FuncNew{
 			{
 				overloadId: 26,
 				args:       []types.T{types.T_array_float16},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_array_float16.ToType()
-				},
+				retType:    coalesceVectorReturnType,
 				newOp: func() executeLogicOfOverload {
 					return CoalesceStr
 				},
@@ -2886,9 +3008,7 @@ var supportedOperators = []FuncNew{
 			{
 				overloadId: 27,
 				args:       []types.T{types.T_array_int8},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_array_int8.ToType()
-				},
+				retType:    coalesceVectorReturnType,
 				newOp: func() executeLogicOfOverload {
 					return CoalesceStr
 				},
@@ -2896,8 +3016,26 @@ var supportedOperators = []FuncNew{
 			{
 				overloadId: 28,
 				args:       []types.T{types.T_array_uint8},
+				retType:    coalesceVectorReturnType,
+				newOp: func() executeLogicOfOverload {
+					return CoalesceStr
+				},
+			},
+			{
+				overloadId: 30,
+				args:       []types.T{types.T_binary},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_array_uint8.ToType()
+					return coalesceBinaryStringReturnType(types.T_binary, parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return CoalesceStr
+				},
+			},
+			{
+				overloadId: 31,
+				args:       []types.T{types.T_varbinary},
+				retType: func(parameters []types.Type) types.Type {
+					return coalesceBinaryStringReturnType(types.T_varbinary, parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return CoalesceStr
@@ -2958,6 +3096,38 @@ var supportedOperators = []FuncNew{
 				newOp: func() executeLogicOfOverload {
 					return NewSetOperationCast
 				},
+			},
+			{
+				// Internal binder-only conversion for MySQL numeric evaluation in
+				// BIT_AND/OR/XOR. User-written CAST expressions never select this
+				// overload; it keeps aggregate coercion separate from global CAST.
+				overloadId: 4,
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[1]
+				},
+				newOp: func() executeLogicOfOverload {
+					return NewBitwiseAggregateCast
+				},
+			},
+			{
+				overloadId: int(IntegerArgumentCastOverload),
+				retType:    func(parameters []types.Type) types.Type { return parameters[1] },
+				newOp:      func() executeLogicOfOverload { return NewIntegerArgumentCast },
+			},
+			{
+				overloadId: int(TruncatedIntegerArgumentCastOverload),
+				retType:    func(parameters []types.Type) types.Type { return parameters[1] },
+				newOp:      func() executeLogicOfOverload { return NewTruncatedIntegerArgumentCast },
+			},
+			{
+				overloadId: int(TextIntegerBitsCastOverload),
+				retType:    func(parameters []types.Type) types.Type { return parameters[1] },
+				newOp:      func() executeLogicOfOverload { return NewTextIntegerBitsCast },
+			},
+			{
+				overloadId: int(TemporalIntegerArgumentCastOverload),
+				retType:    func(parameters []types.Type) types.Type { return parameters[1] },
+				newOp:      func() executeLogicOfOverload { return NewTemporalIntegerArgumentCast },
 			},
 		},
 	},
@@ -3669,7 +3839,8 @@ var supportedOperators = []FuncNew{
 
 func isStrictAssignmentCastTarget(target types.T) bool {
 	switch target {
-	case types.T_char, types.T_varchar, types.T_text, types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_year:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_year,
+		types.T_uint32:
 		return true
 	default:
 		return false

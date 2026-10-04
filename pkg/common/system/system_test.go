@@ -312,7 +312,8 @@ func TestDebounceSimulatesK8sScaling(t *testing.T) {
 	}
 
 	// After debounce period, next event should trigger refresh
-	time.Sleep(time.Duration(quotaRefreshDebounceSeconds) * time.Second)
+	lastQuotaRefreshTime.Store(time.Now().UnixNano() -
+		int64(quotaRefreshDebounceSeconds)*int64(time.Second) - 1)
 	if !shouldRefreshQuotaConfig() {
 		t.Error("event after debounce period should trigger refresh")
 	}

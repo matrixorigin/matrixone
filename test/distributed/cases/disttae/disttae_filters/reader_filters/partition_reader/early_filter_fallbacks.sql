@@ -58,4 +58,27 @@ order by a, b;
 rollback;
 select count(*) from workspace_cpk;
 
+-- Keep the in-memory checks above, then force persisted workspace writes and
+-- distributed scans. Only the initiating CN can enumerate these new objects.
+set @saved_optimizer_hints = @@session.optimizer_hints;
+set session optimizer_hints = 'execType=2';
+insert into workspace_cpk values ('p0', 0, 0);
+begin;
+insert into workspace_cpk values
+    ('p1', 1, 1), ('p2', 2, 2), ('p3', 3, 3), ('p4', 4, 4),
+    ('p5', 5, 5), ('p6', 6, 6), ('p7', 7, 7), ('p8', 8, 8);
+select a, b from workspace_cpk
+where a in ('p1', 'p2', 'p3', 'p4', 'p5', 'p6')
+order by a, b;
+select a, b from workspace_cpk where abs(v) between 3 and 5 order by a, b;
+delete from workspace_cpk where a = 'p2' and b = 2;
+select a, b from workspace_cpk where a in ('p1', 'p2', 'p3') order by a, b;
+rollback;
+select a, b from workspace_cpk order by a, b;
+begin;
+insert into workspace_cpk values ('p1', 1, 1), ('p2', 2, 2);
+commit;
+select a, b from workspace_cpk where a in ('p0', 'p1', 'p2') order by a, b;
+set session optimizer_hints = @saved_optimizer_hints;
+
 drop database early_filter_fallbacks;

@@ -49,8 +49,9 @@ var runSql = sqlexec.RunSql
 
 // Ivf search index struct to hold the usearch index
 type IvfflatSearchIndex[T types.RealNumbers] struct {
-	Version   int64
-	Centroids cache.VectorIndexSearchIf
+	forceCPURoute bool
+	Version       int64
+	Centroids     cache.VectorIndexSearchIf
 	// QuantMul/QuantAdd are the int8 scalar-quantizer params (q(x)=round(x*mul+add))
 	// derived from the trained [min,max] in metadata; the query uses the same
 	// transform as the entries. Defaults (1,0) = identity when not int8-quantized.
@@ -60,6 +61,7 @@ type IvfflatSearchIndex[T types.RealNumbers] struct {
 
 // This is the Ivf search implementation that implement VectorIndexSearchIf interface
 type IvfflatSearch[T types.RealNumbers] struct {
+	forceCPURoute bool
 	Idxcfg        vectorindex.IndexConfig
 	Tblcfg        vectorindex.IndexTableConfig
 	Index         *IvfflatSearchIndex[T]
@@ -149,8 +151,13 @@ func (idx *IvfflatSearchIndex[T]) LoadCentroids(proc *sqlexec.SqlProcess, idxcfg
 		return moerr.NewInternalErrorNoCtx("number of centroids in db != Nlist")
 	}
 
-	gpuMode := gpumode.EffectiveGpuMode(proc.GetResolveVariableFunc())
-	bfidx, err := brute_force.NewBruteForceIndex[T](centroids, idxcfg.Ivfflat.Dimensions, metric.MetricType(idxcfg.Ivfflat.Metric), uint(elemsz), uint(nthread), gpuMode)
+	var bfidx cache.VectorIndexSearchIf
+	if idx.forceCPURoute {
+		bfidx, err = brute_force.NewCpuBruteForceIndex[T](centroids, idxcfg.Ivfflat.Dimensions, metric.MetricType(idxcfg.Ivfflat.Metric), uint(elemsz))
+	} else {
+		gpuMode := gpumode.EffectiveGpuMode(proc.GetResolveVariableFunc())
+		bfidx, err = brute_force.NewBruteForceIndex[T](centroids, idxcfg.Ivfflat.Dimensions, metric.MetricType(idxcfg.Ivfflat.Metric), uint(elemsz), uint(nthread), gpuMode)
+	}
 	if err != nil {
 		return err
 	}
@@ -266,6 +273,47 @@ func (idx *IvfflatSearchIndex[T]) loadQuantizeBounds(proc *sqlexec.SqlProcess, t
 	return nil
 }
 
+// probeCentroids ranks the centroids for query and returns their ids, dropping any the index
+// could not rank.
+//
+// cuVS marks a slot it could not fill with -1, and not only when more centroids were asked for
+// than exist: a query whose candidate distances all leave the element domain gets -1 back with an
+// ordinary finite distance beside it. -1 is not a centroid id, and passing it on would put "IN
+// (-1)" in the entries scan -- a silent empty result rather than an error. The Go index refuses
+// to emit one itself, so this only ever fires for the device index.
+func (idx *IvfflatSearchIndex[T]) probeCentroids(sqlproc *sqlexec.SqlProcess, query []T, limit, nlists uint) ([]int64, error) {
+	if limit == 0 {
+		limit = 1
+	}
+	if nlists > 0 && limit > nlists {
+		limit = nlists
+	}
+	queries := [][]T{query}
+	rt := vectorindex.RuntimeConfig{Limit: limit, NThreads: 1}
+	anykeys, _, err := idx.Centroids.Search(sqlproc, queries, rt)
+	if err != nil {
+		return nil, err
+	}
+	keys, ok := anykeys.([]int64)
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtx("ivfflat: ranked centroid ids are not []int64")
+	}
+
+	// compacted in place: keys is not retained by the callee, and the write index trails the read
+	n := 0
+	for _, k := range keys {
+		if k < 0 {
+			continue
+		}
+		keys[n] = k
+		n++
+	}
+	if n == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("ivfflat: no nearest centroid for query; every candidate distance is out of range")
+	}
+	return keys[:n], nil
+}
+
 func (idx *IvfflatSearchIndex[T]) rankCentroids(sqlproc *sqlexec.SqlProcess, query []T, idxcfg vectorindex.IndexConfig) ([]int64, error) {
 	if idx.Centroids == nil {
 		// empty index has id = 1
@@ -276,18 +324,7 @@ func (idx *IvfflatSearchIndex[T]) rankCentroids(sqlproc *sqlexec.SqlProcess, que
 	if limit == 0 {
 		limit = 1
 	}
-	queries := [][]T{query}
-	rt := vectorindex.RuntimeConfig{Limit: limit, NThreads: 1}
-	keys, _, err := idx.Centroids.Search(sqlproc, queries, rt)
-	if err != nil {
-		return nil, err
-	}
-
-	ranked, ok := keys.([]int64)
-	if !ok {
-		return nil, moerr.NewInternalErrorNoCtx("ivfflat: ranked centroid ids are not []int64")
-	}
-	return ranked, nil
+	return idx.probeCentroids(sqlproc, query, limit, idxcfg.Ivfflat.Lists)
 }
 
 func (idx *IvfflatSearchIndex[T]) findCentroids(sqlproc *sqlexec.SqlProcess, query []T, idxcfg vectorindex.IndexConfig, probe uint, _ int64) ([]int64, error) {
@@ -301,14 +338,7 @@ func (idx *IvfflatSearchIndex[T]) findCentroids(sqlproc *sqlexec.SqlProcess, que
 		probe = idxcfg.Ivfflat.Lists
 	}
 
-	rtprobe := probe
-	queries := [][]T{query}
-	rt := vectorindex.RuntimeConfig{Limit: rtprobe, NThreads: 1}
-	keys, _, err := idx.Centroids.Search(sqlproc, queries, rt)
-	if err != nil {
-		return nil, err
-	}
-	return keys.([]int64), nil
+	return idx.probeCentroids(sqlproc, query, probe, idxcfg.Ivfflat.Lists)
 }
 
 /*
@@ -736,6 +766,25 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	_ int64,
 ) (keys any, distances []float64, err error) {
 
+	// The cached table config describes the first load, but the distance function
+	// belongs to this request. Resolve it only in these by-value search configs.
+	if rt.OrigFuncName == "" {
+		rt.OrigFuncName = tblcfg.OrigFuncName
+	}
+	tblcfg.OrigFuncName = rt.OrigFuncName
+
+	// usearch/cuvs and the entries SQL compute distances in float32, so a float64 base can hold a
+	// finite value whose distance overflows float32 and saturates to +/-Inf. Serving that would
+	// silently corrupt the value, Top-K order, and any outer predicate (#29040 / #29050), so fail
+	// fast. Named returns let one deferred check cover every return path; HasFloat64DistanceOverflow
+	// fast-returns for a non-float64 base.
+	defer func() {
+		if err == nil && metric.HasFloat64DistanceOverflow[T](distances) {
+			keys, distances, err = nil, nil, moerr.NewInternalErrorNoCtx(
+				"vector distance exceeds the float32 range the vector index computes in; a float64 vector of this magnitude is unsupported -- use a smaller-magnitude/normalized column or the exact scalar path")
+		}
+	}()
+
 	if sqlproc != nil {
 		prevRuntimeFilterData := sqlproc.IvfRuntimeFilterData
 		prevMembershipFilter := sqlproc.IvfMembershipFilter
@@ -1130,6 +1179,16 @@ func (s *IvfflatSearch[T]) Search(
 		return nil, nil, moerr.NewInternalErrorNoCtx("IvfSearch: query not match with index type")
 	}
 
+	if s.forceCPURoute {
+		if s.Index == nil {
+			return nil, nil, moerr.NewInvalidStateNoCtx("distributed PRE centroid generation is not loaded")
+		}
+		if s.Index.Centroids != nil {
+			if _, ok := s.Index.Centroids.(*brute_force.GoBruteForceIndex[T, T]); !ok {
+				return nil, nil, moerr.NewInvalidStateNoCtx("distributed PRE requires the CPU centroid route")
+			}
+		}
+	}
 	return s.Index.Search(sqlproc, s.Idxcfg, s.Tblcfg, query, rt, s.ThreadsSearch)
 }
 
@@ -1167,7 +1226,7 @@ func (s *IvfflatSearch[T]) Preload(sqlproc *sqlexec.SqlProcess) error {
 	if sqlproc != nil && (sqlproc.Proc != nil || sqlproc.SqlCtx != nil) {
 		resolver = sqlproc.GetResolveVariableFunc()
 	}
-	useGPU := brute_force.DispatchesToDevice[T](gpumode.EffectiveGpuMode(resolver))
+	useGPU := !s.forceCPURoute && brute_force.DispatchesToDevice[T](gpumode.EffectiveGpuMode(resolver))
 
 	elementSize := uint64(util.UnsafeSizeOf[T]())
 	maxUint64 := ^uint64(0)
@@ -1201,7 +1260,7 @@ func (s *IvfflatSearch[T]) Preload(sqlproc *sqlexec.SqlProcess) error {
 
 func (s *IvfflatSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 
-	idx := &IvfflatSearchIndex[T]{}
+	idx := &IvfflatSearchIndex[T]{forceCPURoute: s.forceCPURoute}
 	// load index model
 	err := idx.LoadIndex(sqlproc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch)
 	if err != nil {
@@ -1209,6 +1268,26 @@ func (s *IvfflatSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 	}
 	s.Index = idx
 	return nil
+}
+
+// EmptyGeneration reports a loaded generation with no real centroids: the centroids table for
+// this version holds only the single NULL-vector placeholder row (a freshly created index, or the
+// transient async-build window before the real centroids are committed). LoadCentroids skips the
+// NULL row and leaves Index.Centroids nil, so findCentroids routes every query to bucket 1. The
+// cache declines to retain such a generation, so the next query reloads and picks up the real
+// centroids once the build writes them under the same version -- instead of pinning a
+// bucket-1-only routing model until the housekeeping sweep. A generation with real centroids is
+// cached normally.
+//
+// The entries table deliberately does NOT enter this predicate. The centroids are the only part
+// of an IVF-FLAT index the cache holds resident (GetIndexSize reports them alone; entries are read
+// from the table per query), so a generation with Centroids nil retains nothing either way: not
+// caching it costs one re-read of the single placeholder row, while caching it pins bucket-1
+// routing on a CN that has no IsStale to recover. Counting bucket-1 entries as "populated" would
+// also re-open #29011 whenever entries land under the version before the build commits the real
+// centroids.
+func (s *IvfflatSearch[T]) EmptyGeneration() bool {
+	return s.Index != nil && s.Index.Centroids == nil
 }
 
 // GetIndexSize reports the centroids, the only part of an IVFFLAT index the cache holds
@@ -1227,6 +1306,9 @@ func (s *IvfflatSearch[T]) DeviceResidency() map[int]int64 {
 	}
 	return nil
 }
+
+// BuildTS is the fulltext2 async-freshness hook; ivfflat freshness is handled elsewhere.
+func (s *IvfflatSearch[T]) BuildTS() int64 { return 0 }
 
 func (s *IvfflatSearch[T]) GetIndexSize() (hostBytes, deviceBytes int64) {
 	if s.Index == nil {

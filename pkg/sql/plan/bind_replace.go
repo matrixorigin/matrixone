@@ -133,6 +133,7 @@ func (builder *QueryBuilder) appendReplaceConflictLookup(
 			}},
 			WindowIdx:   0,
 			BindingTags: []int32{ordinalTag},
+			SpillMem:    builder.sortSpillMem,
 		}, bindCtx)
 
 		sourceTag := builder.genNewBindTag()
@@ -1440,7 +1441,7 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 			projList1 = append(projList1, nil)
 			projList2 = append(projList2, nil)
 		} else {
-			defExpr, err := getDefaultExpr(builder.GetContext(), col)
+			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), false)
 			if err != nil {
 				return 0, nil, nil, err
 			}
@@ -1476,10 +1477,13 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 
 	for _, i := range generatedColIdxs {
 		col := tableDef.Cols[i]
-		genExpr := builder.applyGeneratedColumnAssignmentCast(
+		genExpr, err := builder.applyGeneratedColumnAssignmentCast(
 			DeepCopyExpr(col.GeneratedCol.Expr),
 			false,
 		)
+		if err != nil {
+			return 0, nil, nil, err
+		}
 		proj1Pos := genColIdxToProj1Pos[i]
 		columnExprs[int32(i)] = genExpr
 		colIdxToProjPos[int32(i)] = int32(proj1Pos)

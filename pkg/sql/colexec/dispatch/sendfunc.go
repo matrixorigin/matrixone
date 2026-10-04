@@ -102,6 +102,10 @@ func marshalRemoteBatch(proc *process.Process, bat *batch.Batch, buf *bytes.Buff
 	if bat == nil {
 		return nil, moerr.NewInvalidInputNoCtx("cannot marshal a nil remote batch")
 	}
+	if bat.HasGrouping() && remoteBatchWireVersion(proc) < defines.MORPCVersion87 {
+		return nil, moerr.NewInvalidStateNoCtx(
+			"grouping provenance requires MORPCVersion87 for remote dispatch")
+	}
 	wireEnabled := prepareParamKindRemoteWireEnabled(proc)
 	if bat.HasBinaryStringMetadata() && !binaryStringRemoteWireEnabled(proc) {
 		return nil, moerr.NewInvalidStateNoCtx(
@@ -116,7 +120,7 @@ func marshalRemoteBatch(proc *process.Process, bat *batch.Batch, buf *bytes.Buff
 			"prepared parameter provenance requires MORPCVersion12 for remote dispatch")
 	}
 	if wireEnabled {
-		return bat.MarshalBinaryWithPrepareParamKindsForProtocol(
+		return bat.MarshalBinaryForPipeline(
 			buf, true, stringSourceRemoteWireEnabled(proc))
 	}
 	return bat.MarshalBinaryWithBuffer(buf, true)

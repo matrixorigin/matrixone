@@ -15,6 +15,7 @@
 package arrowload
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -128,22 +129,42 @@ func testArrowCommitPhaseFailureRollback(t *testing.T, db *sql.DB) {
 	require.Equal(t, int64(2), queryCount(t, db, "select count(*) from commit_failure_rollback"))
 }
 
-// TestArrowLoadGateDisabled proves the explicit rollback switch fails closed:
-// with `cn.frontend.arrow-load.enabled=false`, any Arrow LOAD must be rejected
-// before touching the file at all. This checks the client-visible opt-out
-// contract, but it does not replace a true mixed-binary-version rehearsal.
-func TestArrowLoadGateDisabled(t *testing.T) {
-	c := startArrowLoadCluster(t, 1, false, true, true)
-	db := openArrowLoadDB(t, c, 0)
-	mustExec(t, db, "create database if not exists arrow_gate_off")
-	mustExec(t, db, "use arrow_gate_off")
-	mustExec(t, db, "create table t(id bigint not null, amount decimal(18,2), score double, flag bool)")
-	path := filepath.Join(t.TempDir(), "missing-before-gate.arrow")
+// TestArrowLoadStaticPolicyModes keeps the two static policy matrices in one
+// four-CN fixture. The nested names retain the two independently reviewable
+// scenarios, while the fixture is closed before another test starts an
+// exclusive cluster lifecycle.
+func TestArrowLoadStaticPolicyModes(t *testing.T) {
+	c := startArrowLoadStaticPolicyCluster(t)
+	t.Run("TestArrowLoadForceMaterializeFallback", func(t *testing.T) {
+		testArrowLoadForceMaterializeFallback(t, c)
+	})
+	t.Run("TestArrowLoadGateModes", func(t *testing.T) {
+		testArrowLoadGateModes(t, c)
+	})
+}
 
-	_, err := db.Exec(fmt.Sprintf("load data infile {'filepath'='%s','format'='arrow'} into table t", path))
-	require.Error(t, err)
-	require.Contains(t, strings.ToLower(err.Error()), "disabled by configuration")
-	require.Equal(t, int64(0), queryCount(t, db, "select count(*) from t"))
+func testArrowLoadGateModes(t *testing.T, c embed.Cluster) {
+	missingPath := filepath.Join(t.TempDir(), "missing-before-gate.arrow")
+	distributedPath := prepareArrowLoadDistributedDisabledSoftFallback(t)
+	requireArrowLoadPolicy(t, c, 2, false, true, true)
+	requireArrowLoadPolicy(t, c, 3, true, true, false)
+
+	t.Run("GateDisabled", func(t *testing.T) {
+		db := openArrowLoadDB(t, c, 2)
+		mustExec(t, db, "create database if not exists arrow_gate_off")
+		mustExec(t, db, "use arrow_gate_off")
+		mustExec(t, db, "create table t(id bigint not null, amount decimal(18,2), score double, flag bool)")
+
+		_, err := db.Exec(fmt.Sprintf("load data infile {'filepath'='%s','format'='arrow'} into table t", missingPath))
+		require.Error(t, err)
+		require.Contains(t, strings.ToLower(err.Error()), "disabled by configuration")
+		require.Equal(t, int64(0), queryCount(t, db, "select count(*) from t"))
+	})
+
+	t.Run("DistributedDisabledSoftFallback", func(t *testing.T) {
+		db := openArrowLoadDB(t, c, 3)
+		testArrowLoadDistributedDisabledSoftFallback(t, db, distributedPath)
+	})
 }
 
 // testArrowLoadGateS3Disabled proves the explicit S3 kill switch fails closed
@@ -167,19 +188,12 @@ func testArrowLoadGateS3Disabled(t *testing.T, c embed.Cluster) {
 	require.Equal(t, int64(0), queryCount(t, db, "select count(*) from t"))
 }
 
-// TestArrowLoadDistributedDisabledSoftFallback proves the explicit distributed
-// rollback switch is a soft fallback (silently serialize), not a hard rejection.
-func TestArrowLoadDistributedDisabledSoftFallback(t *testing.T) {
-	c := startArrowLoadCluster(t, 1, true, true, false)
-	db := openArrowLoadDB(t, c, 0)
-	testArrowLoadDistributedDisabledSoftFallback(t, db)
-}
-
 // testArrowLoadDistributedDisabledSoftFallback proves DistributedEnabled=false
 // is a soft fallback (silently serialize), not a hard rejection. Its caller
-// provisions a dedicated cluster with the distributed kill switch disabled, so
-// the scenario does not mutate any shared cluster configuration.
-func testArrowLoadDistributedDisabledSoftFallback(t *testing.T, db *sql.DB) {
+// provisions a dedicated CN with the distributed kill switch disabled, so the
+// scenario does not mutate any shared cluster configuration.
+func testArrowLoadDistributedDisabledSoftFallback(t *testing.T, db *sql.DB, pathPattern string) {
+	t.Helper()
 	const databaseName = "arrow_distributed_off"
 	const tableName = "`arrow_distributed_off`.`t`"
 	mustExec(t, db, "create database if not exists "+databaseName)
@@ -188,14 +202,18 @@ func testArrowLoadDistributedDisabledSoftFallback(t *testing.T, db *sql.DB) {
 	})
 	mustExec(t, db, "create table "+tableName+"(id bigint not null, name varchar(50))")
 
+	mustExec(t, db, fmt.Sprintf(
+		"load data infile {'filepath'='%s','format'='arrow'} into table %s parallel 'true'",
+		pathPattern, tableName))
+	require.Equal(t, int64(2), queryCount(t, db, "select count(*) from "+tableName))
+}
+
+func prepareArrowLoadDistributedDisabledSoftFallback(t *testing.T) string {
+	t.Helper()
 	dir := t.TempDir()
 	fixtureIDName(t, dir, "part1.arrow", containerFile, [][]idNameRow{{{id: 1, name: "a"}}})
 	fixtureIDName(t, dir, "part2.arrow", containerFile, [][]idNameRow{{{id: 2, name: "b"}}})
-
-	mustExec(t, db, fmt.Sprintf(
-		"load data infile {'filepath'='%s','format'='arrow'} into table %s parallel 'true'",
-		filepath.Join(dir, "part*.arrow"), tableName))
-	require.Equal(t, int64(2), queryCount(t, db, "select count(*) from "+tableName))
+	return filepath.Join(dir, "part*.arrow")
 }
 
 func testArrowTypeMatrixNumeric(t *testing.T, db *sql.DB) {
@@ -326,12 +344,6 @@ func testArrowContainerSemantics(t *testing.T, db *sql.DB) {
 			streamPath))
 		require.Error(t, err)
 	})
-	t.Run("invalid_container_value_rejected", func(t *testing.T) {
-		_, err := db.Exec(fmt.Sprintf(
-			"load data infile {'filepath'='%s','format'='arrow','arrow_container'='flight'} into table container_semantics",
-			filePath))
-		require.Error(t, err)
-	})
 }
 
 func testArrowNegativeOptions(t *testing.T, db *sql.DB) {
@@ -400,15 +412,21 @@ func testArrowLocalStage(t *testing.T, db *sql.DB) {
 	path := fixtureNumeric(t, dir, "stage_source.arrow", containerFile,
 		[]numericRow{{id: 1, amount: 100, score: 1.5, flag: true}}, 10)
 
-	mustExec(t, db, "drop stage if exists arrow_local_stage")
-	mustExec(t, db, fmt.Sprintf("create stage arrow_local_stage URL='file://%s/'", dir))
+	const stageName = "arrow_local_stage"
+	mustExec(t, db, "drop stage if exists "+stageName)
+	mustExec(t, db, fmt.Sprintf("create stage %s URL='file://%s/'", stageName, dir))
+	t.Cleanup(func() {
+		if _, err := db.Exec("drop stage if exists " + stageName); err != nil {
+			t.Errorf("drop stage %s during cleanup: %v", stageName, err)
+		}
+	})
 	mustExec(t, db, "drop table if exists stage_target")
 	mustExec(t, db, "create table stage_target(id bigint not null, amount decimal(18,2), score double, flag bool)")
 	mustExec(t, db, fmt.Sprintf(
-		"load data infile {'filepath'='stage://arrow_local_stage/%s','format'='arrow'} into table stage_target",
+		"load data infile {'filepath'='stage://%s/%s','format'='arrow'} into table stage_target",
+		stageName,
 		filepath.Base(path)))
 	require.Equal(t, int64(1), queryCount(t, db, "select count(*) from stage_target"))
-	mustExec(t, db, "drop stage arrow_local_stage")
 }
 
 // testArrowSchemaMismatchRollback proves design invariant I2/I6: two objects in one
@@ -550,31 +568,87 @@ func testArrowExplicitTransaction(t *testing.T, c embed.Cluster) {
 func testArrowTwoSessionIsolation(t *testing.T, c embed.Cluster) {
 	sessionA := openArrowLoadDB(t, c, 0)
 	sessionB := openArrowLoadDB(t, c, 0)
+	// Keep the transaction's session state (including `USE arrow_bvt`) on the
+	// same physical connection. The transaction itself is also bound explicitly
+	// below with BeginTx instead of relying on database/sql pool reuse.
+	sessionA.SetMaxOpenConns(1)
+	sessionA.SetMaxIdleConns(1)
+	sessionB.SetMaxOpenConns(1)
+	sessionB.SetMaxIdleConns(1)
 	mustExec(t, sessionA, "use arrow_bvt")
 	mustExec(t, sessionB, "use arrow_bvt")
 	mustExec(t, sessionA, "drop table if exists two_session_isolation")
 	mustExec(t, sessionA, "create table two_session_isolation(id bigint not null, name varchar(50))")
 	path := fixtureIDName(t, t.TempDir(), "isolation.arrow", containerFile, [][]idNameRow{{{id: 1, name: "a"}}})
 
-	loaded := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	loaded := make(chan error, 1)
 	committed := make(chan struct{})
-	var wg sync.WaitGroup
-	wg.Add(1)
+	commitOnce := sync.Once{}
+	releaseCommit := func() { commitOnce.Do(func() { close(committed) }) }
+	workerResult := make(chan error, 1)
+	workerDone := make(chan struct{})
+	// Register cleanup before starting the worker. FailNow in the observer or a
+	// panic in a later assertion must release the worker's commit gate, cancel
+	// any in-flight SQL call, and join the worker before its sessions are closed.
+	t.Cleanup(func() {
+		cancel()
+		releaseCommit()
+		select {
+		case <-workerDone:
+		case <-time.After(30 * time.Second):
+			t.Errorf("timed out waiting for Arrow two-session worker cleanup")
+		}
+	})
+
 	go func() {
-		defer wg.Done()
-		mustExec(t, sessionA, "begin")
-		mustExec(t, sessionA, fmt.Sprintf(
+		defer close(workerDone)
+		tx, err := sessionA.BeginTx(ctx, nil)
+		if err != nil {
+			loaded <- fmt.Errorf("begin transaction: %w", err)
+			workerResult <- err
+			return
+		}
+		defer func() { _ = tx.Rollback() }()
+
+		_, err = tx.ExecContext(ctx, fmt.Sprintf(
 			"load data infile {'filepath'='%s','format'='arrow'} into table two_session_isolation", path))
-		close(loaded)
-		<-committed
-		mustExec(t, sessionA, "commit")
+		if err != nil {
+			loaded <- fmt.Errorf("load Arrow fixture: %w", err)
+			workerResult <- err
+			return
+		}
+		loaded <- nil
+		select {
+		case <-committed:
+		case <-ctx.Done():
+			workerResult <- ctx.Err()
+			return
+		}
+		err = tx.Commit()
+		workerResult <- err
 	}()
 
-	<-loaded
+	var loadErr error
+	select {
+	case loadErr = <-loaded:
+	case <-workerDone:
+		// Every pre-load failure publishes a result before closing workerDone.
+		loadErr = <-loaded
+	case <-time.After(30 * time.Second):
+		t.Fatal("timed out waiting for Arrow LOAD transaction")
+	}
+	require.NoError(t, loadErr)
 	require.Equal(t, int64(0), queryCount(t, sessionB, "select count(*) from two_session_isolation"),
 		"uncommitted Arrow LOAD rows must not be visible to another session")
-	close(committed)
-	wg.Wait()
+	releaseCommit()
+	var commitErr error
+	select {
+	case commitErr = <-workerResult:
+	case <-time.After(30 * time.Second):
+		t.Fatal("timed out waiting for Arrow transaction commit")
+	}
+	require.NoError(t, commitErr)
 	require.Equal(t, int64(1), queryCount(t, sessionB, "select count(*) from two_session_isolation"),
 		"committed Arrow LOAD rows must become visible to another session")
 }

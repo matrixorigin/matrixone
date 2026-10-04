@@ -121,6 +121,47 @@ func indexDefs(algoParams string) map[string]*plan.IndexDef {
 	}
 }
 
+// AlterCopyInitSQL must rebuild fulltext2 from source on a COPY ALTER: cloneUnaffectedIndexes
+// SKIPS the storage clone (SkipWholeIndex) and the CDC consumer only appends a cdc_tail (the base
+// tag=0 + metadata are written ONLY by buildFromSource), so without an explicit REINDEX the
+// replacement index has no base and MATCH returns empty (#28837). It differs from RestoreInitSQL,
+// whose "SELECT 1" is valid only because Restore's block clone copies the base.
+func TestAlterCopyInitSQL(t *testing.T) {
+	ctx := newStubCtx()
+
+	startFromNow, initSQL, err := (Hooks{}).AlterCopyInitSQL(ctx, indexDefs(""))
+	require.NoError(t, err)
+	// startFromNow MUST be true. With a non-empty InitSQL the REINDEX FORCE_SYNC rebuilds the
+	// tag=0 base from source and the tail arms from the post-copy registration watermark, so the
+	// first normal CDC iteration does NOT re-collect the copied rows. Returning false here would
+	// make registerJob persist an empty startTs (watermark_updater.go), so the first iteration
+	// would CollectChanges from ts=0 and replay every copied row into cdc_tail on top of the
+	// complete base -- a full-table tail replay that duplicates postings/cache/storage (#28837).
+	require.True(t, startFromNow, "false would arm the tail from ts=0 -> full-table replay of copied rows")
+	require.Equal(t, "ALTER TABLE `db`.`src` ALTER REINDEX `idx` FULLTEXT2 FORCE_SYNC", initSQL)
+
+	// Contrast: RestoreInitSQL is the clone-optimized no-op (the base is cloned there).
+	_, restoreSQL, err := (Hooks{}).RestoreInitSQL(ctx, indexDefs(""))
+	require.NoError(t, err)
+	require.Equal(t, "SELECT 1", restoreSQL)
+
+	// Embedded backticks in db/table/index names are escaped (doubled) via the shared
+	// identifier helper, so the post-commit REINDEX is valid SQL rather than malformed (P2).
+	btctx := newStubCtx()
+	btctx.qryDatabase = "d`b"
+	btctx.origTable = &plan.TableDef{Name: "s`rc", Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"}}
+	btdefs := map[string]*plan.IndexDef{
+		catalog.FullText2Index_TblType_Metadata: {IndexName: "id`x"},
+	}
+	_, btSQL, err := (Hooks{}).AlterCopyInitSQL(btctx, btdefs)
+	require.NoError(t, err)
+	require.Equal(t, "ALTER TABLE `d``b`.`s``rc` ALTER REINDEX `id``x` FULLTEXT2 FORCE_SYNC", btSQL)
+
+	// Fail closed when no index def is available.
+	_, _, err = (Hooks{}).AlterCopyInitSQL(ctx, map[string]*plan.IndexDef{})
+	require.Error(t, err)
+}
+
 // --- param readers ---------------------------------------------------------
 
 func TestParserFromParams(t *testing.T) {

@@ -299,6 +299,41 @@ fi
 	}
 }
 
+func TestAppendUTReportPreservesNumericShardOrder(t *testing.T) {
+	processPath, err := filepath.Abs("ut_process.bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Plan-race recovery uses fixed-width suffixes because append_ut_report
+	// consumes shard files through a lexical glob. Keep a two-digit case here
+	// so shard 10 cannot silently move ahead of shard 2.
+	script := `
+set -o nounset
+source "$1"
+test_dir=$(mktemp -d)
+trap 'rm -rf "$test_dir"' EXIT
+report="$test_dir/plan.out"
+destination="$test_dir/all.out"
+expected="$test_dir/expected.out"
+for (( shard = 0; shard < 12; shard++ )); do
+    suffix=$(printf '%02d' "$shard")
+    printf 'shard-%02d\n' "$shard" > "$report.$suffix"
+    printf 'shard-%02d\n' "$shard" >> "$expected"
+done
+append_ut_report "$report" "$destination"
+if ! cmp -s "$expected" "$destination"; then
+    echo "numeric shard order was not preserved" >&2
+    command cat "$destination" >&2
+    exit 1
+fi
+`
+	cmd := exec.Command("bash", "-c", script, "bash", processPath)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("numeric shard recovery harness failed: %v\n%s", err, output)
+	}
+}
+
 func TestAppendUTReportPreservesSourcesWhenCopyIsInterrupted(t *testing.T) {
 	processPath, err := filepath.Abs("ut_process.bash")
 	if err != nil {

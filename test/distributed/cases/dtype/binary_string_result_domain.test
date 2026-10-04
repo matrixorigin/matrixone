@@ -24,7 +24,7 @@ select export_set(7, 'a', 'b', ',', 3) as bounded_export_set;
 select quote('') as bounded_quote;
 
 -- Real BLOB/VARBINARY inputs must not be narrowed through VARCHAR before execution.
-create table binary_sources(payload blob, needle varbinary(1), replacement varbinary(2));
+create table binary_sources(payload mediumblob, needle varbinary(1), replacement varbinary(2));
 insert into binary_sources values(repeat(X'61', 70000), X'61', X'6262');
 select length(convert(payload using binary)), length(repeat(payload, 1)),
        length(replace(payload, needle, replacement)) from binary_sources;

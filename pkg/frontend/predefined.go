@@ -143,6 +143,10 @@ var (
 			obj_id bigint unsigned,
     		kind varchar(32) not null default 'user'
 			)`, catalog.MO_CATALOG, catalog.MO_SNAPSHOTS)
+	MoCatalogSysSnapshotQuotaIndexDDL = fmt.Sprintf(
+		"create index idx_snapshot_quota_target on %s.%s(account_name, level, obj_id, kind)",
+		catalog.MO_CATALOG, catalog.MO_SNAPSHOTS,
+	)
 
 	MoCatalogMoPitrDDL = fmt.Sprintf(`CREATE TABLE %s.%s (
 			pitr_id uuid unique key,
@@ -178,7 +182,8 @@ var (
     		owner int unsigned,
     		creator int unsigned,
     		comment text,
-			primary key (account_id, pub_name)
+			primary key (account_id, pub_name),
+			key idx_mo_pubs_database_id (database_id)
 	)`
 
 	MoCatalogMoSubsDDL = `create table mo_catalog.mo_subs (
@@ -271,15 +276,17 @@ var (
 			)`
 
 	MoCatalogMoCdcWatermarkDDL = `create table mo_catalog.mo_cdc_watermark (
-    			account_id bigint unsigned,			
-    			task_id uuid,
-				db_name varchar(256),
-				table_name varchar(256),
-				watermark varchar(128),
-				source_table_id bigint unsigned not null default 0,
-				owner_generation bigint unsigned not null default 0,
-				err_msg varchar(256),
-    			primary key(account_id,task_id,db_name,table_name)
+			account_id bigint unsigned,
+			task_id uuid,
+			db_name varchar(256),
+			table_name varchar(256),
+			watermark varchar(128),
+			source_table_id bigint unsigned not null default 0,
+			owner_generation bigint unsigned not null default 0,
+			pending_source_table_id bigint unsigned null,
+			target_identity varchar(256) null,
+			err_msg varchar(256),
+			primary key(account_id,task_id,db_name,table_name)
 			)`
 
 	MoCatalogMoCdcSnapshotDDL = `create table mo_catalog.mo_cdc_snapshot (

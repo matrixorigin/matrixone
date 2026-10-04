@@ -1717,7 +1717,6 @@ func TestReadDirSymlink(t *testing.T) {
 			case ev := <-evChan:
 				t.Logf("notify: %+v", ev)
 			case <-testDone:
-				time.Sleep(time.Second * 3) // wait event
 				// drain
 				for {
 					select {
@@ -1842,6 +1841,9 @@ func TestReadDirSymlink(t *testing.T) {
 	assert.Nil(t, err)
 	t.Logf("Test file removed, waiting for file system events to settle")
 
+	if evChan != nil {
+		notify.Stop(evChan)
+	}
 	close(testDone)
 	<-fsLogDone
 	t.Logf("TestReadDirSymlink completed successfully")

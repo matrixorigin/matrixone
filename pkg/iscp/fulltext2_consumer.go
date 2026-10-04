@@ -126,6 +126,10 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 					errch <- err
 					return
 				}
+				// A successful CDC flush only makes the new tail durable. Search-cache
+				// freshness is governed by the normal generation/stale/TTL lifecycle;
+				// CDC must not evict or refresh a warm read-only search object here.
+				// This also avoids making every ordinary tail flush contend with readers.
 				return
 			}
 

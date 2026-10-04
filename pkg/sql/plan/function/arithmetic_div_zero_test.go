@@ -145,7 +145,7 @@ func TestIntegerDivSmallTypes(t *testing.T) {
 
 	for _, tc := range testCases {
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -168,7 +168,7 @@ func TestDivisionByZeroReturnsNull(t *testing.T) {
 				[]float64{0}, []bool{true}), // NULL
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, divFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -186,7 +186,7 @@ func TestDivisionByZeroReturnsNull(t *testing.T) {
 				[]float64{0}, []bool{true}), // NULL
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, divFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -204,7 +204,7 @@ func TestDivisionByZeroReturnsNull(t *testing.T) {
 				[]int64{0}, []bool{true}), // NULL
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, modFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -227,7 +227,7 @@ func TestIntegerDivOperator(t *testing.T) {
 				[]int64{3, -3, -3}, []bool{false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -245,7 +245,7 @@ func TestIntegerDivOperator(t *testing.T) {
 				[]int64{3, 2, 11}, []bool{false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -263,7 +263,7 @@ func TestIntegerDivOperator(t *testing.T) {
 				[]int64{3, 2, 3}, []bool{false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -283,7 +283,7 @@ func TestIntegerDivOperator(t *testing.T) {
 				[]int64{3, 3}, []bool{false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -301,7 +301,7 @@ func TestIntegerDivOperator(t *testing.T) {
 				[]int64{0}, []bool{true}), // NULL
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -361,7 +361,7 @@ func TestIntegerDivBoundary(t *testing.T) {
 				[]int64{0}, []bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -387,7 +387,7 @@ func TestIntegerDivBoundary(t *testing.T) {
 				[]int64{41152263}, []bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -405,7 +405,7 @@ func TestIntegerDivBoundary(t *testing.T) {
 				[]int64{1}, []bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -428,7 +428,7 @@ func TestIntegerDivNullHandling(t *testing.T) {
 				[]int64{0}, []bool{true}), // NULL
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -446,7 +446,7 @@ func TestIntegerDivNullHandling(t *testing.T) {
 				[]int64{0}, []bool{true}), // NULL
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -464,7 +464,7 @@ func TestIntegerDivNullHandling(t *testing.T) {
 				[]int64{0}, []bool{true}), // NULL
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -501,6 +501,74 @@ func TestDivisionByZeroStrictMode(t *testing.T) {
 	// Test 4: Verify cache is used on subsequent calls (no recomputation)
 	// We can't easily test this without mocking, but the atomic load in checkDivisionByZeroBehavior
 	// will return early if cache is set, which we've verified above
+}
+
+// TestDivisionByZeroSQLModes checks the shared mode semantics at the statement
+// boundary, including cache reuse and reset when the same process is reused.
+func TestDivisionByZeroSQLModes(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	var mode any
+	var resolveErr error
+	calls := 0
+	proc.SetResolveVariableFunc(func(name string, system, global bool) (any, error) {
+		require.Equal(t, "sql_mode", name)
+		require.True(t, system)
+		require.False(t, global)
+		calls++
+		return mode, resolveErr
+	})
+	for _, tc := range []struct {
+		name string
+		mode any
+		want bool
+	}{
+		{"traditional", "TRADITIONAL", true},
+		{"traditional with division flag", "TRADITIONAL,ERROR_FOR_DIVISION_BY_ZERO", true},
+		{"traditional with strict flag", "STRICT_TRANS_TABLES,TRADITIONAL", true},
+		{"case whitespace duplicates", " traditional ,TRADITIONAL, ", true},
+		{"explicit trans", "STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO", true},
+		{"explicit all", "error_for_division_by_zero, strict_all_tables", true},
+		{"strict only", "STRICT_TRANS_TABLES,STRICT_ALL_TABLES", false},
+		{"division only", "ERROR_FOR_DIVISION_BY_ZERO", false},
+		{"empty", "", false},
+		{"unrelated", "ANSI,NO_ZERO_DATE", false},
+		{"traditional exact token", "TRADITIONAL_EXTRA", false},
+		{"strict exact token", "NOT_STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO", false},
+		{"division exact token", "STRICT_ALL_TABLES,ERROR_FOR_DIVISION_BY_ZERO_EXTRA", false},
+		{"nil", nil, false},
+		{"non string", 1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mode = tc.mode
+			for _, stmt := range []struct {
+				name, query string
+				ignore      bool
+				check       bool
+			}{
+				{"Insert", tree.QueryTypeDML, false, true},
+				{"Select", tree.QueryTypeDQL, false, false},
+				{"Update", tree.QueryTypeDML, false, true},
+				{"Insert", tree.QueryTypeDML, true, false},
+				{"Execute", tree.QueryTypeDML, false, true},
+			} {
+				profile := &process.StmtProfile{}
+				proc.SetStmtProfile(profile)
+				profile.SetDivByZeroRuntimeProfile(stmt.name, stmt.query, stmt.ignore)
+				want := tc.want && stmt.check
+				require.Equal(t, want, checkDivisionByZeroBehavior(proc, nil), stmt.name)
+				resolved := calls
+				require.Equal(t, want, checkDivisionByZeroBehavior(proc, nil), stmt.name)
+				require.Equal(t, resolved, calls, "cached check must not resolve again")
+			}
+		})
+	}
+	mode = "TRADITIONAL"
+	resolveErr = fmt.Errorf("mode lookup failed")
+	profile := &process.StmtProfile{}
+	proc.SetStmtProfile(profile)
+	profile.SetDivByZeroRuntimeProfile("Insert", tree.QueryTypeDML, false)
+	require.False(t, checkDivisionByZeroBehavior(proc, nil))
 }
 
 func TestDivisionByZeroInsertIgnoreStrictMode(t *testing.T) {
@@ -549,7 +617,7 @@ func TestIntegerDivNullDividendByZeroStrictMode(t *testing.T) {
 		expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
 	}
 	tcc := NewFunctionTestCase(proc, signedNullOverZero.inputs, signedNullOverZero.expect, integerDivFn)
-	succeed, info := tcc.Run()
+	succeed, info := tcc.RunAndFree()
 	require.True(t, succeed, signedNullOverZero.info, info)
 
 	// Unsigned NULL DIV 0 must not raise either.
@@ -562,7 +630,7 @@ func TestIntegerDivNullDividendByZeroStrictMode(t *testing.T) {
 		expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
 	}
 	tcc = NewFunctionTestCase(proc, unsignedNullOverZero.inputs, unsignedNullOverZero.expect, integerDivFn)
-	succeed, info = tcc.Run()
+	succeed, info = tcc.RunAndFree()
 	require.True(t, succeed, unsignedNullOverZero.info, info)
 
 	// Mixed batch: a non-NULL 5 DIV 0 in the same batch must still error.
@@ -575,7 +643,7 @@ func TestIntegerDivNullDividendByZeroStrictMode(t *testing.T) {
 		expect: NewFunctionTestResult(types.T_int64.ToType(), true, []int64{0, 0}, []bool{true, false}),
 	}
 	tcc = NewFunctionTestCase(proc, nonNullOverZero.inputs, nonNullOverZero.expect, integerDivFn)
-	succeed, info = tcc.Run()
+	succeed, info = tcc.RunAndFree()
 	require.True(t, succeed, nonNullOverZero.info, info)
 }
 
@@ -592,7 +660,7 @@ func TestArithmeticNullDividendOverConstZero(t *testing.T) {
 		name       string
 		inputs     []FunctionTestInput
 		resultType types.Type
-		fn         fEvalFn
+		fn         executeLogicOfOverload
 	}
 
 	decimal64Type := types.New(types.T_decimal64, 18, 2)
@@ -602,14 +670,14 @@ func TestArithmeticNullDividendOverConstZero(t *testing.T) {
 	decimal128DivType := resolvedReturnType(t, DIV, []types.Type{decimal128Type, decimal128Type})
 	decimal256DivType := resolvedReturnType(t, DIV, []types.Type{decimal256Type, decimal256Type})
 	require.Equal(t, types.T_decimal128, decimal64DivType.Oid)
-	require.Equal(t, int32(38), decimal64DivType.Width)
-	require.Equal(t, int32(8), decimal64DivType.Scale)
+	require.Equal(t, int32(24), decimal64DivType.Width)
+	require.Equal(t, int32(6), decimal64DivType.Scale)
 	require.Equal(t, types.T_decimal128, decimal128DivType.Oid)
 	require.Equal(t, int32(38), decimal128DivType.Width)
-	require.Equal(t, int32(8), decimal128DivType.Scale)
+	require.Equal(t, int32(6), decimal128DivType.Scale)
 	require.Equal(t, types.T_decimal256, decimal256DivType.Oid)
 	require.Equal(t, int32(65), decimal256DivType.Width)
-	require.Equal(t, int32(8), decimal256DivType.Scale)
+	require.Equal(t, int32(6), decimal256DivType.Scale)
 	testCases := []testCase{
 		{
 			name: "signed integer divide",
@@ -753,6 +821,7 @@ func TestArithmeticNullDividendOverConstZero(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			tcc := NewFunctionTestCase(proc, tc.inputs,
 				NewFunctionTestResult(tc.resultType, false, nil, nil), tc.fn)
+			defer tcc.Free()
 			require.NoError(t, tcc.result.PreExtendAndReset(2))
 			require.NoError(t, tcc.fn(tcc.parameters, tcc.result, proc, 2, nil))
 			rsVec := tcc.GetResultVectorDirectly()
@@ -772,6 +841,7 @@ func TestArithmeticNullDividendOverConstZero(t *testing.T) {
 			NewFunctionTestConstInput(types.T_float64.ToType(), []float64{0}, []bool{false}),
 		},
 		NewFunctionTestResult(types.T_float64.ToType(), false, nil, nil), divFn)
+	defer maskedTC.Free()
 	require.NoError(t, maskedTC.result.PreExtendAndReset(2))
 	require.NoError(t, maskedTC.fn(maskedTC.parameters, maskedTC.result, proc, 2, maskSecondRow))
 	require.Equal(t, 2, maskedTC.GetResultVectorDirectly().GetNulls().Count())
@@ -784,6 +854,7 @@ func TestArithmeticNullDividendOverConstZero(t *testing.T) {
 			NewFunctionTestConstInput(decimal64Type, []types.Decimal64{0}, []bool{false}),
 		},
 		NewFunctionTestResult(types.T_decimal128.ToType(), false, nil, nil), divFn)
+	defer mixedTC.Free()
 	require.NoError(t, mixedTC.result.PreExtendAndReset(2))
 	require.Error(t, mixedTC.fn(mixedTC.parameters, mixedTC.result, proc, 2, nil))
 
@@ -795,6 +866,7 @@ func TestArithmeticNullDividendOverConstZero(t *testing.T) {
 			NewFunctionTestConstInput(decimal64Type, []types.Decimal64{0}, []bool{false}),
 		},
 		NewFunctionTestResult(types.T_decimal128.ToType(), false, nil, nil), divFn)
+	defer nonStrictTC.Free()
 	require.NoError(t, nonStrictTC.result.PreExtendAndReset(2))
 	require.NoError(t, nonStrictTC.fn(nonStrictTC.parameters, nonStrictTC.result, proc, 2, nil))
 	require.Equal(t, 2, nonStrictTC.GetResultVectorDirectly().GetNulls().Count())
@@ -863,7 +935,7 @@ func TestIntegerDivConstantVector(t *testing.T) {
 
 	for _, tc := range testCases {
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -876,7 +948,7 @@ func TestIntegerDivUnsignedDividendWithSignedDivisor(t *testing.T) {
 		NewFunctionTestInput(types.T_uint64.ToType(), []uint64{1, 10}, []bool{false, false}),
 		NewFunctionTestInput(types.T_int64.ToType(), []int64{-3, -3}, []bool{false, false}),
 	}, NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil), integerDivFn)
-	succeed, info := tc.Run()
+	succeed, info := tc.RunAndFree()
 	require.True(t, succeed, info)
 }
 
@@ -942,7 +1014,7 @@ func TestIntegerDivUnsignedDividendWithSignedDivisorControls(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			tc := NewFunctionTestCase(proc, test.inputs, test.result, integerDivFn)
-			succeed, info := tc.Run()
+			succeed, info := tc.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -959,7 +1031,7 @@ func TestIntegerDivUnsignedDividendWithDecimalDivisor(t *testing.T) {
 		NewFunctionTestInput(types.T_uint64.ToType(), []uint64{1, 10}, []bool{false, false}),
 		NewFunctionTestConstInput(typ, []types.Decimal256{divisor}, []bool{false}),
 	}, NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil), integerDivFn)
-	succeed, info := tc.Run()
+	succeed, info := tc.RunAndFree()
 	require.True(t, succeed, info)
 }
 
@@ -1023,7 +1095,7 @@ func TestIntegerDivUnsignedDividendWithDecimalDivisorControls(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			tc := NewFunctionTestCase(proc, test.inputs, test.result, integerDivFn)
-			succeed, info := tc.Run()
+			succeed, info := tc.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -1064,6 +1136,7 @@ func TestIntegerDivUnsignedDividendWithDecimalConstZeroStrictMode(t *testing.T) 
 				NewFunctionTestInput(types.T_uint64.ToType(), test.dividend, test.nulls),
 				NewFunctionTestConstInput(typ, []types.Decimal256{zero}, []bool{false}),
 			}, NewFunctionTestResult(types.T_int64.ToType(), test.wantError, nil, nil), integerDivFn)
+			defer tc.Free()
 
 			if test.wantError {
 				succeed, info := tc.Run()
@@ -1140,7 +1213,7 @@ func TestDecimal128NegativeDivision(t *testing.T) {
 
 	for _, tc := range testCases {
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -1206,7 +1279,7 @@ func TestDecimal64NegativeDivision(t *testing.T) {
 
 	for _, tc := range testCases {
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -1241,7 +1314,7 @@ func TestUint64DivConsistency(t *testing.T) {
 					[]bool{false}),
 			}
 			tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
-			succeed, info := tcc.Run()
+			succeed, info := tcc.RunAndFree()
 			require.True(t, succeed, tc.info, info)
 		})
 	}

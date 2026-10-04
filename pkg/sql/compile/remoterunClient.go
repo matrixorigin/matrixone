@@ -39,6 +39,7 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
@@ -59,6 +60,13 @@ var (
 // first, Message with error information.
 // second, Message with EndFlag and Analysis Information.
 // third, Message with batch data.
+func remoteExecutionTopology(c *Compile, s *Scope) (map[string]uint32, uuid.UUID) {
+	if s != nil && s.lazyRemoteExecutionID != uuid.Nil {
+		return s.lazyRemoteFragmentCounts, s.lazyRemoteExecutionID
+	}
+	return c.remoteFragmentCounts, c.remoteExecutionID
+}
+
 func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error) {
 	// a defer for safety.
 	defer func() {
@@ -74,12 +82,15 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 	// encode structures which need to send.
 	var scopeEncodeData, processEncodeData []byte
 	var withoutOutput, folded bool
-	scopeEncodeData, withoutOutput, processEncodeData, folded, err = prepareRemoteRunSendingData(
+	remoteFragmentCounts, remoteExecutionID := remoteExecutionTopology(c, s)
+	var requiredVectorProtocol int64
+	scopeEncodeData, withoutOutput, processEncodeData, folded, err = prepareRemoteRunSendingDataWithVectorProtocol(
 		c.sql,
 		s,
 		c.proc,
-		c.remoteFragmentCounts,
-		c.remoteExecutionID,
+		remoteFragmentCounts,
+		remoteExecutionID,
+		&requiredVectorProtocol,
 	)
 	if err != nil {
 		return nil, err
@@ -111,6 +122,11 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 	// before an old RPC callback is delivered; a closed captured sink then drops
 	// that stale callback instead of publishing it into the new attempt.
 	sender.warningSink = s.Proc.GetWarningSink()
+	if requiredVectorProtocol > 0 {
+		if err = sender.confirmProtocolOnStream(requiredVectorProtocol); err != nil {
+			return sender, err
+		}
+	}
 
 	debugMsg := ""
 	_, sub_sql, exist := fault.TriggerFault("inject_send_pipeline")
@@ -234,6 +250,30 @@ func prepareRemoteRunSendingData(
 	remoteFragmentCounts map[string]uint32,
 	remoteExecutionID uuid.UUID,
 ) (scopeData []byte, withoutOutput bool, processData []byte, folded bool, err error) {
+	return prepareRemoteRunSendingDataWithVectorProtocol(sqlStr, s, proc, remoteFragmentCounts, remoteExecutionID, nil)
+}
+
+func prepareRemoteRunSendingDataWithVectorProtocol(
+	sqlStr string,
+	s *Scope,
+	proc *process.Process,
+	remoteFragmentCounts map[string]uint32,
+	remoteExecutionID uuid.UUID,
+	requiredVectorProtocol *int64,
+) (scopeData []byte, withoutOutput bool, processData []byte, folded bool, err error) {
+	// The output dispatch executes on the initiating CN and is stripped from
+	// the encoded scope below. Validate its consumers before losing that edge.
+	if queryNeedsGroupingTransport(s.Plan.GetQuery()) {
+		if output, ok := s.RootOp.(*dispatch.Dispatch); ok && len(output.RemoteRegs) > 0 {
+			workers := make(engine.Nodes, 0, len(output.RemoteRegs))
+			for _, dest := range output.RemoteRegs {
+				workers = append(workers, engine.Node{Addr: dest.NodeAddr})
+			}
+			if err = requireGroupingTransportWorkers(proc, workers); err != nil {
+				return nil, false, nil, false, err
+			}
+		}
+	}
 	if output, ok := s.RootOp.(*connector.Connector); ok &&
 		output.Reg != nil && output.Reg.OrderedStream &&
 		!supportsDistributedOrderedTop(proc.GetService()) {
@@ -248,7 +288,7 @@ func prepareRemoteRunSendingData(
 	}
 
 	// Encode the ScopeList which need to be sent.
-	if scopeData, err = encodeRemoteScope(encodedScope, proc); err != nil {
+	if scopeData, err = encodeRemoteScopeWithVectorProtocol(encodedScope, proc, requiredVectorProtocol); err != nil {
 		return nil, false, nil, false, err
 	}
 
@@ -465,15 +505,16 @@ type messageSenderOnClient struct {
 	// receiveClosed records a terminal signal from the receive channel. It
 	// poisons backend reuse, but does not release the locally owned morpc Stream;
 	// close must still call Stream.Close.
-	receiveClosed      bool
-	reuseEligible      bool
-	terminalNegotiated bool
-	stopResponseTried  bool
-	expectedEnd        pipeline.Method
-	stateMu            sync.Mutex
-	closeOnce          sync.Once
-	requestFinishAck   bool
-	pendingBatchAck    uint64
+	receiveClosed           bool
+	reuseEligible           bool
+	terminalNegotiated      bool
+	stopResponseTried       bool
+	expectedEnd             pipeline.Method
+	reportingRequestStarted bool
+	stateMu                 sync.Mutex
+	closeOnce               sync.Once
+	requestFinishAck        bool
+	pendingBatchAck         uint64
 	// allowCleanupCancellation is set after successful local cleanup. Pipeline
 	// and query contexts may be intentionally cancelled by that cleanup; FIN
 	// then runs on its own bounded context. Cancellation before this transition
@@ -577,8 +618,45 @@ func (sender *messageSenderOnClient) requestStreamProtocols(message *pipeline.Me
 	message.RequestedBatchCreditBytes = pipelineBatchCreditBytes
 }
 
+// The capability query uses a different RPC connection. Confirm on the stream
+// that will carry the pipeline so a replacement old CN cannot run partition zero.
+func (sender *messageSenderOnClient) confirmProtocolOnStream(minimum int64) error {
+	ctx, cancel := context.WithTimeout(sender.ctx, 5*time.Second)
+	defer cancel()
+	message := cnclient.AcquireMessage()
+	message.SetID(sender.streamSender.ID())
+	message.SetMessageType(pipeline.Method_PipelineProtocolCheck)
+	message.ProtocolVersion = minimum
+	if err := sender.streamSender.Send(ctx, message); err != nil {
+		return err
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case val, ok := <-sender.receiveCh:
+		if !ok || val == nil {
+			sender.markReceiveClosed()
+			return moerr.NewStreamClosedNoCtx()
+		}
+		response, ok := val.(*pipeline.Message)
+		if ok {
+			if err, hasError := response.TryToGetMoErr(); hasError {
+				return err
+			}
+		}
+		if !ok || response.GetID() != sender.streamSender.ID() ||
+			response.GetCmd() != pipeline.Method_PipelineProtocolCheck ||
+			response.GetSid() != pipeline.Status_Last ||
+			response.GetProtocolVersion() < minimum {
+			return moerr.NewNotSupportedNoCtx("remote pipeline stream does not support vector partition zero")
+		}
+		return nil
+	}
+}
+
 func (sender *messageSenderOnClient) sendPipeline(
 	scopeData, procData []byte, noDataBack bool, eachMessageSizeLimitation int, debugMsg string) error {
+	sender.markReportingRequestStarted()
 	sdLen := len(scopeData)
 	if sdLen <= eachMessageSizeLimitation {
 		message := cnclient.AcquireMessage()
@@ -706,7 +784,7 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 			}
 			batchSequence = sequence
 		}
-		if m.IsEndMessage() && len(m.GetAnalyse()) > 0 {
+		if m.IsEndMessage() {
 			if err = sender.dealRemoteTerminal(m.GetAnalyse()); err != nil {
 				return nil, false, err
 			}
@@ -858,9 +936,7 @@ func (sender *messageSenderOnClient) waitingTheStopResponse() error {
 			message := val.(*pipeline.Message)
 
 			if message.IsEndMessage() || len(message.GetErr()) > 0 {
-				if len(message.GetAnalyse()) > 0 {
-					_ = sender.dealRemoteTerminal(message.GetAnalyse())
-				}
+				_ = sender.dealRemoteTerminal(message.GetAnalyse())
 				if terminalErr, ok := message.TryToGetMoErr(); ok {
 					sender.markTerminal(message, false)
 					return terminalErr
@@ -950,8 +1026,13 @@ func (sender *messageSenderOnClient) dealRemoteTerminal(data []byte) error {
 		return nil
 	}
 	var envelope remoteTerminalEnvelope
-	if err := json.Unmarshal(data, &envelope); err != nil {
-		return err
+	if len(data) > 0 {
+		if err := json.Unmarshal(data, &envelope); err != nil {
+			if marker, ok := sender.warningSink.(groupConcatCutMarker); ok {
+				marker.markGroupConcatReportingIncomplete()
+			}
+			return err
+		}
 	}
 	if sender.proc != nil && envelope.StatementLastInsertID != 0 {
 		sender.proc.SetStatementLastInsertIDIfEarlier(envelope.StatementLastInsertID)
@@ -967,6 +1048,16 @@ func (sender *messageSenderOnClient) dealRemoteTerminal(data []byte) error {
 			messages = append(messages, warning.Message)
 		}
 		appendWarningBatchToSink(sender.warningSink, envelope.WarningCount, codes, messages)
+	}
+	if envelope.GroupConcatCut {
+		if marker, ok := sender.warningSink.(groupConcatCutMarker); ok {
+			marker.markGroupConcatCut(envelope.GroupConcatCutMessage)
+		}
+	}
+	if !envelope.GroupConcatCutReported {
+		if marker, ok := sender.warningSink.(groupConcatCutMarker); ok {
+			marker.markGroupConcatReportingIncomplete()
+		}
 	}
 	if sender.anal != nil && envelope.TerminalResourceVersion > 0 {
 		if envelope.Allocation.GenerationCount != 0 {
@@ -1005,6 +1096,7 @@ func (sender *messageSenderOnClient) close() {
 		defer sender.gaugeDecOnce.Do(func() { v2.PipelineMessageSenderGauge.Dec() })
 
 		_ = sender.waitingTheStopResponse()
+		sender.markMissingGroupConcatTerminal()
 		sender.stateMu.Lock()
 		receiveClosed, reuseEligible := sender.receiveClosed, sender.reuseEligible
 		sender.stateMu.Unlock()
@@ -1028,4 +1120,27 @@ func (sender *messageSenderOnClient) close() {
 		}
 		_ = sender.streamSender.Close(true)
 	})
+}
+
+func (sender *messageSenderOnClient) markMissingGroupConcatTerminal() {
+	sender.stateMu.Lock()
+	started := sender.reportingRequestStarted
+	sender.stateMu.Unlock()
+	if !started {
+		return
+	}
+	sender.terminalMu.Lock()
+	seen := sender.terminalSeen
+	sender.terminalMu.Unlock()
+	if !seen {
+		if marker, ok := sender.warningSink.(groupConcatCutMarker); ok {
+			marker.markGroupConcatReportingIncomplete()
+		}
+	}
+}
+
+func (sender *messageSenderOnClient) markReportingRequestStarted() {
+	sender.stateMu.Lock()
+	sender.reportingRequestStarted = true
+	sender.stateMu.Unlock()
 }

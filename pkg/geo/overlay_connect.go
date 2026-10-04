@@ -16,6 +16,7 @@ package geo
 
 import (
 	"math"
+	"math/big"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -25,28 +26,129 @@ import (
 // It returns the number of intersection points (0, 1, or 2 for collinear
 // overlap) and the points themselves.
 func segmentIntersection(a1, a2, b1, b2 Coord) (int, Coord, Coord) {
+	return segmentIntersectionAtScale(a1, a2, b1, b2, snapScale, false)
+}
+
+func segmentIntersectionAtScale(a1, a2, b1, b2 Coord, scale float64, allowSnapError bool) (int, Coord, Coord) {
 	va := Coord{X: a2.X - a1.X, Y: a2.Y - a1.Y}
 	vb := Coord{X: b2.X - b1.X, Y: b2.Y - b1.Y}
 	e := Coord{X: b1.X - a1.X, Y: b1.Y - a1.Y}
 	cross := func(u, v Coord) float64 { return u.X*v.Y - u.Y*v.X }
-	dot := func(u, v Coord) float64 { return u.X*v.X + u.Y*v.Y }
 
 	kross := cross(va, vb)
-	if kross != 0 {
-		s := cross(e, vb) / kross
-		if s < 0 || s > 1 {
+	var exactDenominator *big.Float
+	if crossNeedsExact(kross, va, vb) {
+		// A float64 cross product can cancel to zero, or lose enough low bits
+		// to change the intersection ratio, even when the input vectors are
+		// not parallel. Recover the denominator and both numerators together
+		// before choosing the parallel branch. The high-precision fallback is
+		// paid only on this numerically indeterminate path.
+		exactDenominator = exactCross(va, vb)
+		if exactDenominator.Sign() == 0 {
+			kross = 0
+		} else if recovered, _ := exactDenominator.Float64(); recovered != 0 {
+			kross = recovered
+		}
+	}
+	if kross != 0 || (exactDenominator != nil && exactDenominator.Sign() != 0) {
+		nearParallel := allowSnapError && crossWithinSnapError(kross, va, vb, scale)
+		if nearParallel && lineOffsetWithinSnapError(a1, a2, b1, b2, scale) {
+			if n, lo, hi := collinearSegmentIntersection(a1, a2, b1, b2, scale); n == 2 {
+				return n, lo, hi
+			}
+		}
+		s, t := cross(e, vb)/kross, cross(e, va)/kross
+		var exactNumeratorS, exactNumeratorT *big.Float
+		if exactDenominator != nil && exactDenominator.Sign() != 0 {
+			exactNumeratorS = exactCross(e, vb)
+			exactNumeratorT = exactCross(e, va)
+			s = exactRatioFloat(exactNumeratorS, exactDenominator)
+			t = exactRatioFloat(exactNumeratorT, exactDenominator)
+		}
+		if allowSnapError {
+			sTol := snapParameterTolerance(va, scale)
+			tTol := snapParameterTolerance(vb, scale)
+			if !ratioWithinTolerance(exactNumeratorS, exactDenominator, s, sTol) ||
+				!ratioWithinTolerance(exactNumeratorT, exactDenominator, t, tTol) {
+				return 0, Coord{}, Coord{}
+			}
+			s = math.Max(0, math.Min(1, s))
+			t = math.Max(0, math.Min(1, t))
+		} else if !ratioWithinUnit(exactNumeratorS, exactDenominator, s) {
 			return 0, Coord{}, Coord{}
 		}
-		t := cross(e, va) / kross
-		if t < 0 || t > 1 {
+		if !allowSnapError && !ratioWithinUnit(exactNumeratorT, exactDenominator, t) {
 			return 0, Coord{}, Coord{}
 		}
-		return 1, snapCoord(Coord{X: a1.X + s*va.X, Y: a1.Y + s*va.Y}), Coord{}
+		return 1, snapCoordAtScale(Coord{X: a1.X + s*va.X, Y: a1.Y + s*va.Y}, scale), Coord{}
 	}
 	// Parallel segments.
-	if cross(e, va) != 0 {
+	collinear := cross(e, va)
+	if crossNeedsExact(collinear, e, va) {
+		if exact := exactCross(e, va); exact.Sign() != 0 {
+			if recovered, _ := exact.Float64(); recovered != 0 {
+				collinear = recovered
+			}
+		}
+	}
+	if allowSnapError {
+		if !lineOffsetWithinSnapError(a1, a2, b1, b2, scale) {
+			return 0, Coord{}, Coord{} // parallel, not collinear
+		}
+	} else if collinear != 0 {
 		return 0, Coord{}, Coord{} // parallel, not collinear
 	}
+	return collinearSegmentIntersection(a1, a2, b1, b2, scale)
+}
+
+func crossNeedsExact(cross float64, u, v Coord) bool {
+	if cross == 0 {
+		// Axis-aligned zero products are already exact in binary floating point
+		// and dominate ordinary polygon workloads. Avoid constructing big.Float
+		// values for those common parallel pairs; retain the exact path whenever
+		// all four components participate in a cancellation.
+		return u.X != 0 && u.Y != 0 && v.X != 0 && v.Y != 0
+	}
+	terms := math.Abs(u.X*v.Y) + math.Abs(u.Y*v.X)
+	return math.Abs(cross) <= 16*float64Epsilon*terms
+}
+
+func exactRatioFloat(numerator, denominator *big.Float) float64 {
+	if numerator == nil || denominator == nil || denominator.Sign() == 0 {
+		return 0
+	}
+	ratio, _ := new(big.Float).SetPrec(128).Quo(numerator, denominator).Float64()
+	return ratio
+}
+
+func ratioWithinUnit(numerator, denominator *big.Float, value float64) bool {
+	if numerator == nil || denominator == nil || denominator.Sign() == 0 {
+		return value >= 0 && value <= 1
+	}
+	if denominator.Sign() > 0 {
+		return numerator.Sign() >= 0 && numerator.Cmp(denominator) <= 0
+	}
+	return numerator.Sign() <= 0 && numerator.Cmp(denominator) >= 0
+}
+
+func ratioWithinTolerance(numerator, denominator *big.Float, value, tolerance float64) bool {
+	if numerator == nil || denominator == nil || denominator.Sign() == 0 {
+		return value >= -tolerance && value <= 1+tolerance
+	}
+	// The tolerance is deliberately applied after exact ratio evaluation. It
+	// is a parameter-space allowance for one snap cell, not a replacement for
+	// the high-precision sign and denominator checks.
+	low := -tolerance
+	high := 1 + tolerance
+	ratio := exactRatioFloat(numerator, denominator)
+	return ratio >= low && ratio <= high
+}
+
+func collinearSegmentIntersection(a1, a2, b1, b2 Coord, scale float64) (int, Coord, Coord) {
+	va := Coord{X: a2.X - a1.X, Y: a2.Y - a1.Y}
+	vb := Coord{X: b2.X - b1.X, Y: b2.Y - b1.Y}
+	e := Coord{X: b1.X - a1.X, Y: b1.Y - a1.Y}
+	dot := func(u, v Coord) float64 { return u.X*v.X + u.Y*v.Y }
 	sqrLenA := dot(va, va)
 	if sqrLenA == 0 {
 		return 0, Coord{}, Coord{}
@@ -62,9 +164,111 @@ func segmentIntersection(a1, a2, b1, b2 Coord) (int, Coord, Coord) {
 	lo := math.Max(smin, 0)
 	hi := math.Min(smax, 1)
 	if lo == hi {
-		return 1, snapCoord(pt(lo)), Coord{}
+		return 1, snapCoordAtScale(pt(lo), scale), Coord{}
 	}
-	return 2, snapCoord(pt(lo)), snapCoord(pt(hi))
+	return 2, snapCoordAtScale(pt(lo), scale), snapCoordAtScale(pt(hi), scale)
+}
+
+func snapParameterTolerance(vector Coord, scale float64) float64 {
+	length := math.Hypot(vector.X, vector.Y)
+	if length == 0 {
+		return 0
+	}
+	return 1 / (scale * length)
+}
+
+// crossWithinSnapError treats two snapped vectors as collinear when their
+// orientation error is no larger than the error introduced by snap-rounding
+// their endpoints. This is intentionally scale-aware: a one-cell displacement
+// is the topology resolution of the overlay, while a fixed epsilon would
+// incorrectly merge either very small or very large edges. The machine-error
+// term covers the final floating-point multiply/subtract at large ordinates.
+func crossWithinSnapError(cross float64, u, v Coord, scale float64) bool {
+	if scale <= 0 || math.IsNaN(scale) || math.IsInf(scale, 0) {
+		scale = snapScale
+	}
+	grid := 1 / scale
+	snapBound := grid * (math.Abs(u.X) + math.Abs(u.Y) + math.Abs(v.X) + math.Abs(v.Y))
+	roundBound := 16 * float64Epsilon
+	roundBound *= math.Abs(u.X*v.Y) + math.Abs(u.Y*v.X)
+	if math.Abs(cross) > snapBound+roundBound {
+		return false
+	}
+	// The cross product can lose several ulps after multiplying large
+	// projected ordinates. Recompute only this near-degenerate case at higher
+	// precision, so the uncertainty test cannot turn a numerically noisy but
+	// genuinely separated line into an overlap. This check is also required when
+	// the float64 subtraction rounded to exactly zero: zero is not proof of
+	// collinearity for large or nearly cancelling coordinates. Normal Cartesian
+	// callers never enter this helper, and ordinary geodetic intersections return
+	// above.
+	limit := new(big.Float).SetPrec(128).SetFloat64(snapBound)
+	return exactCrossMagnitude(u, v).Cmp(limit) <= 0
+}
+
+// lineOffsetWithinSnapError checks the distance between two nearly parallel
+// lines in both directions. Checking both endpoint sets makes the result
+// invariant under swapping or reversing the segments; a one-way test would
+// accept a short segment that is nearly parallel to a much longer, separated
+// segment simply because its far endpoint is scaled by the longer edge.
+func lineOffsetWithinSnapError(a1, a2, b1, b2 Coord, scale float64) bool {
+	return lineOffsetWithinSnapErrorOneWay(a1, a2, b1, b2, scale) &&
+		lineOffsetWithinSnapErrorOneWay(b1, b2, a1, a2, scale)
+}
+
+func lineOffsetWithinSnapErrorOneWay(a1, a2, b1, b2 Coord, scale float64) bool {
+	if scale <= 0 || math.IsNaN(scale) || math.IsInf(scale, 0) {
+		scale = snapScale
+	}
+	va := Coord{X: a2.X - a1.X, Y: a2.Y - a1.Y}
+	length := math.Hypot(va.X, va.Y)
+	if length == 0 {
+		return false
+	}
+	limit := length / scale
+	limitFloat := new(big.Float).SetPrec(128).SetFloat64(limit)
+	for _, point := range []Coord{b1, b2} {
+		e := Coord{X: point.X - a1.X, Y: point.Y - a1.Y}
+		cross := e.X*va.Y - e.Y*va.X
+		roundBound := 16 * float64Epsilon * (math.Abs(e.X*va.Y) + math.Abs(e.Y*va.X))
+		if cross == 0 {
+			// Cancellation at large projected ordinates can hide a non-zero
+			// line offset. Do not let the cheap float result decide the
+			// tolerant classification; the exact check is still confined to
+			// this near-parallel path.
+			exact := exactCrossMagnitude(e, va)
+			if exact.Cmp(limitFloat) >= 0 {
+				return false
+			}
+			continue
+		}
+		if math.Abs(cross) > limit+roundBound {
+			return false
+		}
+		exact := exactCrossMagnitude(e, va)
+		if exact.Cmp(limitFloat) >= 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func exactCrossMagnitude(u, v Coord) *big.Float {
+	cross := exactCross(u, v)
+	if cross.Sign() < 0 {
+		cross.Neg(cross)
+	}
+	return cross
+}
+
+func exactCross(u, v Coord) *big.Float {
+	const prec = uint(128)
+	left := new(big.Float).SetPrec(prec).SetFloat64(u.X)
+	left.Mul(left, new(big.Float).SetPrec(prec).SetFloat64(v.Y))
+	right := new(big.Float).SetPrec(prec).SetFloat64(u.Y)
+	right.Mul(right, new(big.Float).SetPrec(prec).SetFloat64(v.X))
+	left.Sub(left, right)
+	return left
 }
 
 type overlayBoundaryVertex struct {
@@ -597,6 +801,13 @@ func polygonRings(g Geometry) ([][]Coord, error) {
 
 // Overlay computes a Boolean operation between two areal geometries.
 func Overlay(a, b Geometry, op BoolOp) (Geometry, error) {
+	return overlayWithOptions(a, b, op, snapScale, false)
+}
+
+func overlayWithOptions(a, b Geometry, op BoolOp, scale float64, allowSnapError bool) (Geometry, error) {
+	if scale <= 0 || math.IsNaN(scale) || math.IsInf(scale, 0) {
+		scale = snapScale
+	}
 	ra, err := polygonRings(a)
 	if err != nil {
 		return nil, err
@@ -606,7 +817,7 @@ func Overlay(a, b Geometry, op BoolOp) (Geometry, error) {
 		return nil, err
 	}
 
-	o := &overlay{op: op}
+	o := &overlay{op: op, snapScale: scale, allowSnapError: allowSnapError}
 	for _, r := range ra {
 		o.addRing(r, true)
 	}

@@ -300,7 +300,7 @@ func GatherLayerZeroMergeTasks(ctx context.Context,
 				objs = append(objs, obj)
 			}
 		}
-		return []mergeTask{{objs: objs, note: note, kind: taskHostDN}}
+		return []mergeTask{{objs: objs, note: note}}
 	}
 
 	return nil
