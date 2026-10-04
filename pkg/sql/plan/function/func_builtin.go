@@ -1174,6 +1174,10 @@ func builtInInternalCharacterSet(parameters []*vector.Vector, result vector.Func
 					identity = 1
 				case types.CharsetUTF8:
 					identity = 3
+				case types.CharsetUTF8MB3UnicodeCI:
+					identity = 4
+				case types.CharsetUTF8MB4UnicodeCI:
+					identity = 5
 				}
 				if err := rs.Append(identity, false); err != nil {
 					return err
@@ -3353,6 +3357,11 @@ func (op *opSerial) BuiltInSerialFull(parameters []*vector.Vector, result vector
 }
 
 func getPackFun(v *vector.Vector) (func(v *vector.Vector, idx int, ps *types.Packer), error) {
+	if types.IsUnicodeCollation(v.GetType().Charset) {
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			ps.EncodeStringType(types.CollationKeyOrOriginal(v.GetType().Charset, v.GetBytesAt(idx)))
+		}, nil
+	}
 	switch v.GetType().Oid {
 	case types.T_bool:
 		return func(v *vector.Vector, idx int, ps *types.Packer) {
@@ -3918,12 +3927,12 @@ func SerialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 					}
 					continue
 				}
-				ps[i].EncodeStringType(value)
+				ps[i].EncodeStringType(types.CollationKeyOrOriginal(v.GetType().Charset, value))
 			}
 		} else {
 			vs := vector.ExpandBytesCol(v)
 			for i := range vs {
-				ps[i].EncodeStringType(vs[i])
+				ps[i].EncodeStringType(types.CollationKeyOrOriginal(v.GetType().Charset, vs[i]))
 			}
 		}
 	}

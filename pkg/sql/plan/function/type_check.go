@@ -655,6 +655,10 @@ func regexpCharsetName(typ types.Type) string {
 	switch typ.Charset {
 	case types.CharsetUTF8:
 		return "utf8mb4_general_ci"
+	case types.CharsetUTF8MB3UnicodeCI:
+		return "utf8_unicode_ci"
+	case types.CharsetUTF8MB4UnicodeCI:
+		return "utf8mb4_unicode_ci"
 	case types.CharsetUTF8MB4Bin, types.CharsetLegacy:
 		return "utf8mb4_bin"
 	default:

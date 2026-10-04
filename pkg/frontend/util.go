@@ -2043,6 +2043,10 @@ func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColum
 		// setCharacter uses the older utf8_general_ci protocol default, so
 		// override it with the exact utf8mb4 collation ID.
 		col.SetCharset(uint16(Utf8mb4CollationID))
+	case types.CharsetUTF8MB3UnicodeCI:
+		col.SetCharset(uint16(utf8UnicodeCollationID))
+	case types.CharsetUTF8MB4UnicodeCI:
+		col.SetCharset(uint16(utf8mb4UnicodeCollationID))
 	case types.CharsetUTF8MB4Bin:
 		// A _bin collation still describes nonbinary UTF-8 text. Protocol
 		// collation 63 is reserved for the binary character set.
@@ -2159,6 +2163,10 @@ func mysqlTextMaxBytesPerCharacter(charset uint8) uint32 {
 	switch charset {
 	case types.CharsetUTF8, types.CharsetUTF8MB4Bin:
 		return utf8mb4MaxBytesPerCharacter
+	case types.CharsetUTF8MB4UnicodeCI:
+		return utf8mb4MaxBytesPerCharacter
+	case types.CharsetUTF8MB3UnicodeCI:
+		return 3
 	case types.CharsetBinary:
 		return 1
 	default:

@@ -155,7 +155,9 @@ const (
 	// DefaultCollationID is utf8mb4_bin(46)
 	utf8mb4BinCollationID uint8 = 46
 
-	Utf8mb4CollationID uint8 = 45
+	Utf8mb4CollationID        uint8 = 45
+	utf8UnicodeCollationID    uint8 = 192
+	utf8mb4UnicodeCollationID uint8 = 224
 
 	AuthNativePassword string = "mysql_native_password"
 

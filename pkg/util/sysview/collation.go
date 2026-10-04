@@ -37,10 +37,12 @@ type CollationDefinition struct {
 // the protocol SHOW COLLATION implementation uses the same advertised set.
 var SupportedCollationDefinitions = []CollationDefinition{
 	{Name: "utf8_general_ci", Charset: "utf8", ID: 33, IsDefault: "YES", IsCompiled: "Yes", SortLen: 1, PadAttribute: "PAD SPACE", Advertised: true},
+	{Name: "utf8_unicode_ci", Charset: "utf8", ID: 192, IsDefault: "", IsCompiled: "Yes", SortLen: 8, PadAttribute: "PAD SPACE", Advertised: true},
 	{Name: "binary", Charset: "binary", ID: 63, IsDefault: "YES", IsCompiled: "Yes", SortLen: 1, PadAttribute: "NO PAD", Advertised: true},
 	{Name: "utf8_bin", Charset: "utf8", ID: 83, IsDefault: "", IsCompiled: "Yes", SortLen: 1, PadAttribute: "PAD SPACE", Advertised: true},
 	{Name: "utf8mb4_general_ci", Charset: "utf8mb4", ID: 45, IsDefault: "YES", IsCompiled: "Yes", SortLen: 1, PadAttribute: "PAD SPACE", Advertised: true},
 	{Name: "utf8mb4_bin", Charset: "utf8mb4", ID: 46, IsDefault: "", IsCompiled: "Yes", SortLen: 1, PadAttribute: "PAD SPACE", Advertised: true},
+	{Name: "utf8mb4_unicode_ci", Charset: "utf8mb4", ID: 224, IsDefault: "", IsCompiled: "Yes", SortLen: 8, PadAttribute: "PAD SPACE", Advertised: true},
 	{Name: "utf8mb4_0900_ai_ci", Charset: "utf8mb4", ID: 255, IsDefault: "", IsCompiled: "Yes", SortLen: 1, PadAttribute: "PAD SPACE", Advertised: true},
 }
 

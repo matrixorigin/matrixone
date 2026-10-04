@@ -180,7 +180,34 @@ const (
 	// CharsetUTF8 is the explicit utf8mb4_general_ci text identity. It must not
 	// use zero: old catalog rows have zero in this formerly dummy field.
 	CharsetUTF8 uint8 = 3
+	// CharsetUTF8MB4UnicodeCI and CharsetUTF8MB3UnicodeCI carry the native
+	// MySQL UCA 4.0.0 identities. They are intentionally distinct from the
+	// legacy general-ci identity: utf8mb4_unicode_ci accepts supplementary
+	// characters while utf8_unicode_ci retains the utf8mb3 repertoire limit.
+	CharsetUTF8MB4UnicodeCI uint8 = 4
+	CharsetUTF8MB3UnicodeCI uint8 = 5
 )
+
+// IsCaseInsensitiveCollation reports the text identities whose comparison
+// domain folds case. The UCA identities are not aliases of general_ci; this
+// helper only describes the case-insensitive property used by string helpers.
+func IsCaseInsensitiveCollation(charset uint8) bool {
+	return charset == CharsetUTF8 || charset == CharsetUTF8MB4UnicodeCI ||
+		charset == CharsetUTF8MB3UnicodeCI
+}
+
+// IsUnicodeCollation reports the collations backed by the pinned UCA 4.0.0
+// comparison-key implementation.
+func IsUnicodeCollation(charset uint8) bool {
+	return charset == CharsetUTF8MB4UnicodeCI || charset == CharsetUTF8MB3UnicodeCI
+}
+
+// IsTextCollation is the inverse of the opaque binary identity for MySQL text
+// values. CharsetLegacy remains a valid historical text identity.
+func IsTextCollation(charset uint8) bool {
+	return charset == CharsetLegacy || charset == CharsetUTF8MB4Bin ||
+		charset == CharsetUTF8 || IsUnicodeCollation(charset)
+}
 
 // MergeStringCharset derives one collation identity for a value composed from
 // multiple MySQL strings. Binary bytes must never be reinterpreted as UTF-8;
@@ -198,6 +225,15 @@ func MergeStringCharset(parameters []Type, fallback uint8) uint8 {
 		case CharsetUTF8MB4Bin:
 			if result != CharsetBinary {
 				result = CharsetUTF8MB4Bin
+			}
+		case CharsetUTF8MB4UnicodeCI:
+			if result != CharsetBinary && result != CharsetUTF8MB4Bin {
+				result = CharsetUTF8MB4UnicodeCI
+			}
+		case CharsetUTF8MB3UnicodeCI:
+			if result != CharsetBinary && result != CharsetUTF8MB4Bin &&
+				result != CharsetUTF8MB4UnicodeCI {
+				result = CharsetUTF8MB3UnicodeCI
 			}
 		case CharsetLegacy:
 			if result == CharsetUTF8 {

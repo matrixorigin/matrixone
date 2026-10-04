@@ -537,12 +537,12 @@ func serialWithCompacted(
 					if nulls.Contains(vNull, uint64(i)) {
 						nulls.Add(bitMap, uint64(i))
 					} else {
-						ps[i].EncodeStringType(vs[i].GetByteSlice(area))
+						ps[i].EncodeStringType(types.CollationKeyOrOriginal(v.GetType().Charset, vs[i].GetByteSlice(area)))
 					}
 				}
 			} else {
 				for i := range vs {
-					ps[i].EncodeStringType(vs[i].GetByteSlice(area))
+					ps[i].EncodeStringType(types.CollationKeyOrOriginal(v.GetType().Charset, vs[i].GetByteSlice(area)))
 				}
 			}
 		}

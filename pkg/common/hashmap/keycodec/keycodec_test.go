@@ -680,6 +680,15 @@ func TestCanonicalValuesEqualDoesNotMaterializeCanonicalPayload(t *testing.T) {
 	}
 }
 
+func TestUnicodeCollationUsesUCAEqualityKey(t *testing.T) {
+	typ := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8MB4UnicodeCI)
+	left, right := []byte("Straße"), []byte("STRASSE")
+	canonical := AppendCanonicalValue(nil, typ, left)
+	require.Equal(t, len(canonical), CanonicalValueSize(typ, left))
+	require.True(t, CanonicalValuesEqual(typ, left, right))
+	require.NotEqual(t, left, canonical)
+}
+
 func TestComputeXXHashCanonicalVarlenaGroupingRows(t *testing.T) {
 	mp := mpool.MustNewZero()
 	negativeZero := float32(math.Copysign(0, -1))

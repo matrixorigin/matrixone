@@ -32,7 +32,9 @@ const (
 	UTF8MB4GeneralCI
 	UTF8MB40900AI
 	UTF8MB40900Bin
-	// Foundation only: not admitted by SQL or persisted schema metadata.
+	// Native UCA 4.0.0 domains. SQL metadata maps utf8_unicode_ci and
+	// utf8mb4_unicode_ci to these identities; they remain distinct from the
+	// compatibility general_ci domain.
 	UTF8MB4UnicodeCI
 	UTF8MB3UnicodeCI
 )

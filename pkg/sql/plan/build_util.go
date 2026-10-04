@@ -525,6 +525,10 @@ func collationForName(name string) (uint32, bool) {
 		return uint32(types.CharsetBinary), true
 	case "utf8_bin", "utf8mb3_bin", "utf8mb4_bin", "utf32_bin":
 		return uint32(types.CharsetUTF8MB4Bin), true
+	case "utf8_unicode_ci", "utf8mb3_unicode_ci":
+		return uint32(types.CharsetUTF8MB3UnicodeCI), true
+	case "utf8mb4_unicode_ci":
+		return uint32(types.CharsetUTF8MB4UnicodeCI), true
 	case "utf8_general_ci", "utf8mb3_general_ci", "utf8mb4_general_ci", "utf8mb4_0900_ai_ci",
 		"latin1_swedish_ci", "ascii_general_ci", "utf32_general_ci":
 		// MySQL 8 uses utf8mb4_0900_ai_ci by default. Accept that exact spelling
@@ -546,10 +550,7 @@ func unsupportedCollationError(ctx context.Context, name string) error {
 	// keeping the rejected spelling would falsely promise MySQL UCA semantics.
 	var replacement string
 	switch strings.ToLower(name) {
-	case "utf8_unicode_ci", "utf8mb3_unicode_ci":
-		replacement = "utf8_general_ci"
-	case "utf8mb4_unicode_ci",
-		"utf8mb4_de_pb_0900_ai_ci", "utf8mb4_is_0900_ai_ci", "utf8mb4_lv_0900_ai_ci":
+	case "utf8mb4_de_pb_0900_ai_ci", "utf8mb4_is_0900_ai_ci", "utf8mb4_lv_0900_ai_ci":
 		replacement = "utf8mb4_general_ci"
 	case "utf8mb4_0900_bin":
 		replacement = "utf8mb4_bin"
@@ -567,11 +568,26 @@ func applyTableDefaultCharsetToPlanType(typ *plan.Type, charset uint32) {
 }
 
 func charsetAndCollationCompatible(charset, collation string) bool {
-	charset = canonicalCharsetName(charset)
+	rawCharset := strings.ToLower(charset)
 	collation = strings.ToLower(collation)
-	if charset == "binary" || collation == "binary" {
-		return charset == collation
+	if rawCharset == "binary" || collation == "binary" {
+		return rawCharset == collation
 	}
+	// The native UCA 4.0.0 identities retain MySQL's distinct utf8mb3 and
+	// utf8mb4 repertoire contracts. Do not let the compatibility canonicalizer
+	// collapse them into one general_ci family.
+	if separator := strings.IndexByte(collation, '_'); separator > 0 {
+		collationCharset := collation[:separator]
+		if strings.HasSuffix(collation, "_unicode_ci") {
+			switch collationCharset {
+			case "utf8", "utf8mb3":
+				return rawCharset == "utf8" || rawCharset == "utf8mb3"
+			case "utf8mb4":
+				return rawCharset == "utf8mb4"
+			}
+		}
+	}
+	charset = canonicalCharsetName(rawCharset)
 	if separator := strings.IndexByte(collation, '_'); separator > 0 {
 		return canonicalCharsetName(collation[:separator]) == charset
 	}

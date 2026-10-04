@@ -15,8 +15,7 @@
 package compare
 
 import (
-	"bytes"
-
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -45,8 +44,9 @@ func (c *strCompare) Compare(veci, vecj int, vi, vj int64) int {
 	}
 	x := c.vs[veci].GetBytesAt(int(vi))
 	y := c.vs[vecj].GetBytesAt(int(vj))
+	cmp := types.CompareStringValues(*c.vs[veci].GetType(), x, y)
 	if c.desc {
-		return bytes.Compare(y, x)
+		return -cmp
 	}
-	return bytes.Compare(x, y)
+	return cmp
 }
