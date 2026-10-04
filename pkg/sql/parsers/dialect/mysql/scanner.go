@@ -117,9 +117,20 @@ func PutScanner(scanner *Scanner) {
 }
 
 func (s *Scanner) Scan() (int, string) {
+	return s.scan(false)
+}
+
+// ScanWithComments uses the SQL lexer, including its quote and SQLMode rules,
+// but returns ordinary comments instead of skipping them. Executable comments
+// remain SQL lexical space, just as they are for Scan.
+func (s *Scanner) ScanWithComments() (int, string) {
+	return s.scan(true)
+}
+
+func (s *Scanner) scan(comments bool) (int, string) {
 	if s.MysqlSpecialComment != nil {
 		msc := s.MysqlSpecialComment
-		tok, val := msc.Scan()
+		tok, val := msc.scan(comments)
 		if tok != 0 {
 			return tok, val
 		}
@@ -235,10 +246,10 @@ func (s *Scanner) Scan() (int, string) {
 		case '/':
 			s.inc()
 			id, str := s.scanCommentTypeLine(2)
-			if id == LEX_ERROR {
+			if comments || id == LEX_ERROR {
 				return id, str
 			}
-			return s.Scan()
+			return s.scan(comments)
 		case '*':
 			s.inc()
 			switch s.cur() {
@@ -248,20 +259,20 @@ func (s *Scanner) Scan() (int, string) {
 				if !s.readVersion() {
 					return LEX_ERROR, ""
 				}
-				return s.Scan()
+				return s.scan(comments)
 			default:
 				id, str := s.scanCommentTypeBlock()
-				if id == LEX_ERROR {
+				if comments || id == LEX_ERROR {
 					return id, str
 				}
-				return s.Scan()
+				return s.scan(comments)
 			}
 		default:
 			return int(ch), ""
 		}
 	case ch == '*':
 		if !s.CommentFlag {
-			return s.stepBackOneChar(ch)
+			return s.stepBackOneChar(ch, comments)
 		}
 		s.inc()
 		switch s.cur() {
@@ -271,13 +282,13 @@ func (s *Scanner) Scan() (int, string) {
 			if s.executableCommentEnd == 0 {
 				s.executableCommentEnd = s.Pos
 			}
-			return s.Scan()
+			return s.scan(comments)
 		default:
-			return s.stepBackOneChar(ch)
+			return s.stepBackOneChar(ch, comments)
 		}
 	case ch == '\'':
 		if !s.CommentFlag {
-			return s.stepBackOneChar(ch)
+			return s.stepBackOneChar(ch, comments)
 		}
 		s.inc()
 		switch {
@@ -285,7 +296,7 @@ func (s *Scanner) Scan() (int, string) {
 			s.inc()
 			switch s.cur() {
 			case '\'':
-				return s.Scan()
+				return s.scan(comments)
 			default:
 				return s.scanStringAddPlus(ch, STRING)
 			}
@@ -300,17 +311,17 @@ func (s *Scanner) Scan() (int, string) {
 		case isDigit(s.cur()):
 			return s.scanString(ch, STRING)
 		default:
-			return s.Scan()
+			return s.scan(comments)
 		}
 	case ch == '#':
 		s.inc()
 		id, str := s.scanCommentTypeLine(1)
-		if id == LEX_ERROR {
+		if comments || id == LEX_ERROR {
 			return id, str
 		}
-		return s.Scan()
+		return s.scan(comments)
 	default:
-		return s.stepBackOneChar(ch)
+		return s.stepBackOneChar(ch, comments)
 	}
 }
 
@@ -379,7 +390,7 @@ func (s *Scanner) readVersion() bool {
 	return true
 }
 
-func (s *Scanner) stepBackOneChar(ch uint16) (int, string) {
+func (s *Scanner) stepBackOneChar(ch uint16, comments bool) (int, string) {
 	s.inc()
 	switch ch {
 	case eofChar:
@@ -419,10 +430,10 @@ func (s *Scanner) stepBackOneChar(ch uint16) (int, string) {
 			if nextChar == ' ' || nextChar == '\n' || nextChar == '\t' || nextChar == '\r' || nextChar == eofChar {
 				s.inc()
 				id, str := s.scanCommentTypeLine(2)
-				if id == LEX_ERROR {
+				if comments || id == LEX_ERROR {
 					return id, str
 				}
-				return s.Scan()
+				return s.scan(comments)
 			}
 		case '>':
 			s.inc()

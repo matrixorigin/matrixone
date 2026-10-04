@@ -58,7 +58,7 @@ func canSaveQueryResult(ctx context.Context, ses *Session) bool {
 	}
 
 	stmtProfile := ses.GetStmtProfile()
-	if stmtProfile.GetSqlSourceType() == constant.InternalSql {
+	if stmtProfile.GetSqlSourceType() == constant.InternalSql || stmtProfile.GetSqlSourceType() == constant.CloudNoUserSql {
 		return false
 	}
 	if stmtProfile.GetStmtType() == "Select" && stmtProfile.GetSqlSourceType() != constant.CloudUserSql {
