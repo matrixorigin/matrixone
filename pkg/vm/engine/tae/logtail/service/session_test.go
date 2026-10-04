@@ -272,9 +272,7 @@ func TestSessionError(t *testing.T) {
 	/* ---- 1. send subscription response ---- */
 	err := ss.SendSubscriptionResponse(
 		context.Background(),
-		logtail.TableLogtail{
-			Table: &tableA,
-		},
+		mockLogtail(tableA, mockTimestamp(1, 0)),
 		nil,
 	)
 	require.NoError(t, err)
@@ -285,9 +283,7 @@ func TestSessionError(t *testing.T) {
 	/* ---- 2. send subscription response ---- */
 	err = ss.SendSubscriptionResponse(
 		context.Background(),
-		logtail.TableLogtail{
-			Table: &tableA,
-		},
+		mockLogtail(tableA, mockTimestamp(2, 0)),
 		nil,
 	)
 	require.Error(t, err)
@@ -410,9 +406,7 @@ func TestSession(t *testing.T) {
 	/* ---- 6. send subscription response ---- */
 	err = ss.SendSubscriptionResponse(
 		context.Background(),
-		logtail.TableLogtail{
-			Table: &tableA,
-		},
+		mockLogtail(tableA, mockTimestamp(1, 0)),
 		nil,
 	)
 	require.NoError(t, err)
