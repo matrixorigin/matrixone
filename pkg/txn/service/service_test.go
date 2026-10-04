@@ -19,6 +19,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -51,12 +52,10 @@ func TestTxnServiceDoesNotCloseBorrowedSender(t *testing.T) {
 
 func TestMaybeAddTxnPublishesInitializedContext(t *testing.T) {
 	sender := NewTestSender()
+	t.Cleanup(func() { require.NoError(t, sender.Close()) })
 	txnService := NewTestTxnService(t, 1, sender, NewTestClock(0))
+	t.Cleanup(func() { require.NoError(t, txnService.Close(false)) })
 	require.NoError(t, txnService.Start())
-	t.Cleanup(func() {
-		require.NoError(t, txnService.Close(false))
-		require.NoError(t, sender.Close())
-	})
 
 	s := txnService.(*service)
 	meta := NewTestTxn(1, 1, 1)
@@ -74,6 +73,15 @@ func TestMaybeAddTxnPublishesInitializedContext(t *testing.T) {
 	// either one reaches the competing LoadOrStore.
 	allocated := make(chan *txnContext, 2)
 	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	var workers sync.WaitGroup
+	t.Cleanup(func() {
+		unblock()
+		workers.Wait()
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
 	s.pool = sync.Pool{
 		New: func() any {
 			ctx := &txnContext{}
@@ -90,7 +98,9 @@ func TestMaybeAddTxnPublishesInitializedContext(t *testing.T) {
 	}
 	results := make(chan outcome, 2)
 	for i := 0; i < 2; i++ {
+		workers.Add(1)
 		go func() {
+			defer workers.Done()
 			var result outcome
 			defer func() {
 				result.panicValue = recover()
@@ -100,11 +110,29 @@ func TestMaybeAddTxnPublishesInitializedContext(t *testing.T) {
 		}()
 	}
 
-	ctxA := <-allocated
-	ctxB := <-allocated
-	close(release)
-	resultA := <-results
-	resultB := <-results
+	receiveAllocated := func() *txnContext {
+		select {
+		case allocated := <-allocated:
+			return allocated
+		case <-ctx.Done():
+			t.Fatal("competing transaction allocation did not reach the barrier")
+			return nil
+		}
+	}
+	receiveResult := func() outcome {
+		select {
+		case result := <-results:
+			return result
+		case <-ctx.Done():
+			t.Fatal("competing transaction creation did not finish")
+			return outcome{}
+		}
+	}
+	ctxA := receiveAllocated()
+	ctxB := receiveAllocated()
+	unblock()
+	resultA := receiveResult()
+	resultB := receiveResult()
 
 	require.Nil(t, resultA.panicValue)
 	require.Nil(t, resultB.panicValue)
@@ -116,18 +144,22 @@ func TestMaybeAddTxnPublishesInitializedContext(t *testing.T) {
 	stored := value.(*txnContext)
 	require.Same(t, resultA.ctx, stored)
 
-	stored.mu.RLock()
-	require.Equal(t, meta.ID, stored.mu.txn.ID)
-	require.NotNil(t, stored.nt)
-	require.False(t, stored.createAt.IsZero())
-	stored.mu.RUnlock()
+	func() {
+		stored.mu.RLock()
+		defer stored.mu.RUnlock()
+		require.Equal(t, meta.ID, stored.mu.txn.ID)
+		require.NotNil(t, stored.nt)
+		require.False(t, stored.createAt.IsZero())
+	}()
 
 	loser := ctxA
 	if loser == stored {
 		loser = ctxB
 	}
-	loser.mu.RLock()
-	require.Nil(t, loser.nt)
-	require.Empty(t, loser.mu.txn.ID)
-	loser.mu.RUnlock()
+	func() {
+		loser.mu.RLock()
+		defer loser.mu.RUnlock()
+		require.Nil(t, loser.nt)
+		require.Empty(t, loser.mu.txn.ID)
+	}()
 }
