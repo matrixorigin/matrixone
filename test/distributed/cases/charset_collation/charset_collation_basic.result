@@ -19,19 +19,23 @@ Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
 binary    binary    63    YES    Yes    1    NO PAD
 utf8_bin    utf8    83        Yes    1    PAD SPACE
 utf8_general_ci    utf8    33    YES    Yes    1    PAD SPACE
+utf8_unicode_ci    utf8    192        Yes    8    PAD SPACE
 utf8mb4_0900_ai_ci    utf8mb4    255        Yes    1    PAD SPACE
 utf8mb4_bin    utf8mb4    46        Yes    1    PAD SPACE
 utf8mb4_general_ci    utf8mb4    45    YES    Yes    1    PAD SPACE
+utf8mb4_unicode_ci    utf8mb4    224        Yes    8    PAD SPACE
 SHOW COLLATION LIKE 'utf8mb4%';
 Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
 utf8mb4_0900_ai_ci    utf8mb4    255        Yes    1    PAD SPACE
 utf8mb4_bin    utf8mb4    46        Yes    1    PAD SPACE
 utf8mb4_general_ci    utf8mb4    45    YES    Yes    1    PAD SPACE
+utf8mb4_unicode_ci    utf8mb4    224        Yes    8    PAD SPACE
 SHOW COLLATION WHERE Charset = 'utf8mb4';
 Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
 utf8mb4_0900_ai_ci    utf8mb4    255        Yes    1    PAD SPACE
 utf8mb4_bin    utf8mb4    46        Yes    1    PAD SPACE
 utf8mb4_general_ci    utf8mb4    45    YES    Yes    1    PAD SPACE
+utf8mb4_unicode_ci    utf8mb4    224        Yes    8    PAD SPACE
 SHOW COLLATION WHERE Collation = 'utf8mb4_bin';
 Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
 utf8mb4_bin    utf8mb4    46        Yes    1    PAD SPACE
@@ -114,7 +118,6 @@ CREATE TABLE t_utf8mb4_unicode_ci (
 id INT PRIMARY KEY,
 name VARCHAR(100)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-invalid input: unsupported collation 'utf8mb4_unicode_ci'; replace it with 'utf8mb4_general_ci' when restoring legacy MatrixOne DDL
 CREATE TABLE t_column_charset (
 id INT PRIMARY KEY,
 name_default VARCHAR(100),
