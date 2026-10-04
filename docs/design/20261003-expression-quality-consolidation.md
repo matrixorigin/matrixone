@@ -1196,3 +1196,28 @@ cost, but this is not a resource reduction. These measurements exclude the six
 conversion cells and the function consumer. No total-suite speedup, service BVT,
 or normal SQL reproduction is claimed. Issue publication remains unavailable
 through the integration (earlier HTTP 403); no new issue or PR was created.
+
+
+## Numeric rounding fixture family (2026-10-04)
+
+The 11 roots in func_math_complex_test.go contain 10 Process construction sites;
+the integer boundary helper needs no Process. These numeric functions do not use
+file services, yet NewProcess(t) constructs three disk services via TempDir.
+Reuse existing NewProcess(nil), whose three named services use disabled-cache
+MemoryFS with the same Process configuration. Each root retains its independent
+fixture. No new fixture API, cache, worker, or shared global state is introduced.
+
+Register cleanup immediately: close fixture-owned file services, Free the Process,
+and verify pool zero. Process.Free does not own file-service closure; runtime
+services remain runtime-owned. Original inputs, expected values, NULL/error
+contracts, and assertions are preserved after normalizing the fixture edits.
+
+Eight alternating same-binary paired measurements over all 11 roots include
+per-root cleanup and exclude build/link and pre-sample GC. Median wall falls
+1.496ms to 0.413ms (-72.4%), CPU 1.581ms to 0.494ms (-68.8%), allocated bytes
+239,492 to 179,984 (-24.8%) and allocations 2,444.5 to 1,600 (-34.5%). The change
+avoids 30 per-service TempDir calls per family run; this is not a physical total
+directory count or a whole-CI speedup. Disk/IO tests are outside this change.
+Evidence is in 29249-rounding-fixture-20261004. Final focused normal/race, vet
+and incremental lint passed; molint exits zero with two unsafe-import diagnostics
+in unchanged main files. This fixture-only change needs no service BVT.
