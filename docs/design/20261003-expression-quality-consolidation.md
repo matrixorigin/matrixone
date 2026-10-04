@@ -1347,3 +1347,25 @@ bytes 62.3%, allocations 63.2%. These are costs of the selected 17-case family,
 not package, CI or production performance. Mapping and terminal evidence live in
 `29249-width-family-20261004`. This test-only stage does not require a service BVT;
 earlier production-stage BVT obligations remain open.
+
+### Assignment-ignore string conversion test family
+
+All nine roots and 64 children keep their literal results, warning contents and
+counts, NULL, selection, binary-input and error oracles. One common runner now
+accepts selection explicitly; the nil-only forwarding wrapper is retired.
+Each call retains its own Process and warning session because several children
+perform consecutive conversions and their warning histories must stay isolated.
+`NewProcess(nil)` preserves the default timezone/configuration without disk FS
+setup; these numeric and temporal conversion paths do not access files.
+Case cleanup frees vectors before closing the FileService and Process and checks
+pool zero. Successful results additionally require complete destination Type and
+the original input row domain. Error tails and rollback are not asserted.
+
+Eight alternating same-binary pairs include the entire family, fixtures and
+cleanup, with old resource release normalized. Median wall/CPU fall 77.5%/78.0%,
+allocated bytes 38.4% and allocations 46.6%. These are selected test-family costs,
+not CI or production throughput. Test source gains one line overall; the benefit
+is removal of disk setup and stricter shared ownership/oracles, not source-size
+reduction. Evidence is in `29249-assignment-ignore-family-20261004`.
+This stage changes no production behavior and needs no service BVT; earlier
+production-stage BVT obligations remain pending.
