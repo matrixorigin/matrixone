@@ -40,11 +40,23 @@ propagate. Capture before evaluation: a later commit must invalidate those
 results next time, never stamp them with a newer version.
 
 Role/identity changes, manual clear and cache-mode changes keep their existing
-invalidation. View chains still require metadata checks. EXECUTE validates its
-bound statement once; its shell and BEGIN/COMMIT/ROLLBACK consume no grants and
-need no authorization snapshot. Negative lookups allocate nothing; positive
-scopes are capped at 1,024. Table/view scope storage shares one implementation;
-the unused replacement method and unconsumed atomic counters are removed.
+invalidation. Freshness is checked by the existing privilege and active-role
+consumers, before reading cached decisions. This covers nested SET queries and
+WITH GRANT OPTION without making grant-free controls depend on catalog health.
+Clearing is local; the next authorization revalidates membership in its own RC
+transaction. Ordinary SELECT/UPDATE and bound prepared execution check once;
+transaction controls and Execute shells do not check. Complex multi-object
+operations may require several consuming evaluations.
+
+EXPLAIN authorizes its inner statement. EXPLAIN EXECUTE binding checks the resolved
+AST and plan before releasing the AST. A prepared EXPLAIN EXECUTE rebinds the
+inner mutable handle on execution; its cached query cannot establish that binding.
+Ordinary prepared SELECT/UPDATE retain their plan and compile reuse.
+
+View chains still require metadata checks. Negative lookups allocate nothing;
+positive scopes are capped at 1,024. Table/view scope storage shares one
+implementation; the unused replacement method and unconsumed atomic counters
+are removed.
 
 ## Complexity and validation
 

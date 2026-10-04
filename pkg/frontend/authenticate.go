@@ -8176,6 +8176,11 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 		return false, stats, nil
 	}
 
+	// Freshness belongs to authorization consumption, including nested plans.
+	if err = ses.refreshPrivilegeCache(ctx); err != nil {
+		return false, stats, err
+	}
+
 	enableCache, err = privilegeCacheIsEnabled(ctx, ses)
 	if err != nil {
 		return false, stats, err
@@ -8477,6 +8482,11 @@ func validateActiveRoleGrantForAuthorization(
 	tenant := ses.GetTenantInfo()
 	if !activeRoleGrantNeedsCheck(tenant) {
 		return true, stats, nil
+	}
+
+	// Freshness belongs to authorization consumption, including nested plans.
+	if err = ses.refreshPrivilegeCache(ctx); err != nil {
+		return false, stats, err
 	}
 
 	enableCache, err := privilegeCacheIsEnabled(ctx, ses)

@@ -1768,14 +1768,6 @@ func doSetVar(
 					if cache != nil {
 						cache.invalidate()
 					}
-					// Clearing the cache is also the explicit synchronization point
-					// for externally changed role membership. Refresh it now, outside
-					// the caller's transaction snapshot, instead of allowing the next
-					// authorization check to repopulate the cache from stale state.
-					_, _, err = validateActiveRoleGrantForAuthorization(execCtx.reqCtx, ses)
-					if err != nil {
-						return err
-					}
 				}
 				err = setVarFunc(assign.System, assign.Global, name, value, sql)
 				if err != nil {
@@ -4869,16 +4861,6 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 	if ses.skipAuthForSpecialUser() {
 		return stats, nil
 	}
-	switch stmt.(type) {
-	case *tree.Execute, *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
-		// Transaction control consumes no grants. EXECUTE authorizes the bound
-		// statement in authenticateUserCanExecutePrepareOrExecute; checking its
-		// wrapper too would acquire two freshness snapshots for every execution.
-	default:
-		if err := ses.refreshPrivilegeCache(reqCtx); err != nil {
-			return stats, err
-		}
-	}
 	if ses.GetTenantInfo() != nil {
 		ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))
 		if !canCreateMongoDBTableMapping(stmt, ses.GetTenantInfo()) {
@@ -4954,6 +4936,7 @@ func authenticateCanExecuteStatementAndPlan(reqCtx context.Context, ses *Session
 	if ses.skipAuthForSpecialUser() {
 		return stats, nil
 	}
+	stmt = unwrapExecutableExplainStatement(stmt)
 	yes, delta, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(reqCtx, ses, stmt, p)
 	if err != nil {
 		return stats, err

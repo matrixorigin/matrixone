@@ -23,7 +23,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/stretchr/testify/require"
 )
@@ -137,5 +139,120 @@ func TestPrivilegeCacheTracksRemoteCatalogChanges(t *testing.T) {
 			allReadersExec(setting)
 			check(true)
 		}
+		consume := func(conn *sql.Conn, query string) error {
+			rows, err := conn.QueryContext(ctx, query)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			for rows.Next() {
+			}
+			return rows.Err()
+		}
+		t.Run("nested_authorization", func(t *testing.T) {
+			// Each shell has its own warm cache before a remote revoke.
+			for _, query := range []string{
+				"set @nested_value=(select id from app.t)",
+				"explain select id from app.t",
+				"explain analyze select id from app.t",
+				"explain phyplan select id from app.t",
+				"explain analyze force execute nested_read",
+				"execute nested_set",
+				"execute nested_explain",
+				"binary set",
+			} {
+				t.Run(query, func(t *testing.T) {
+					conn := open(1, "auth_cache#learner#reader")
+					mustExec(t, ctx, conn, "set enable_privilege_cache=on")
+					var binary *sql.Stmt
+					switch query {
+					case "explain analyze force execute nested_read", "execute nested_explain":
+						mustExec(t, ctx, conn, "prepare nested_read from 'select id from app.t'")
+						if query == "execute nested_explain" {
+							mustExec(t, ctx, conn, "prepare nested_explain from 'explain analyze force execute nested_read'")
+						}
+					case "execute nested_set":
+						mustExec(t, ctx, conn, "prepare nested_set from 'set @nested_value=(select id from app.t)'")
+					case "binary set":
+						var err error
+						binary, err = conn.PrepareContext(ctx, "set @nested_value=(select id from app.t)")
+						require.NoError(t, err)
+						defer binary.Close()
+					}
+					run := func() error {
+						if binary != nil {
+							_, err := binary.ExecContext(ctx)
+							return err
+						}
+						return consume(conn, query)
+					}
+					require.NoError(t, run())
+					mustExec(t, ctx, conn, "set @nested_value=-1")
+					mustExec(t, ctx, owner, "revoke select on table app.t from reader")
+					defer mustExec(t, ctx, owner, "grant select on table app.t to reader")
+					require.ErrorContains(t, run(), "privilege")
+					var value int
+					require.NoError(t, conn.QueryRowContext(ctx, "select @nested_value").Scan(&value))
+					require.Equal(t, -1, value, "denied evaluation must not assign a value")
+				})
+			}
+			conn := open(1, "auth_cache#learner#reader")
+			require.ErrorContains(t, consume(conn, "explain analyze update app.t set id=7"), "privilege")
+			var id int
+			require.NoError(t, owner.QueryRowContext(ctx, "select id from app.t").Scan(&id))
+			require.Equal(t, 1, id)
+		})
+		t.Run("grant_option_membership", func(t *testing.T) {
+			mustExec(t, ctx, owner, "create role recipient")
+			mustExec(t, ctx, owner, "grant select on table app.t to reader with grant option")
+			conn := open(1, "auth_cache#learner#reader")
+			const grant = "grant select on table app.t to recipient"
+			mustExec(t, ctx, conn, grant)
+			mustExec(t, ctx, owner, "revoke reader from learner")
+			require.ErrorContains(t, consume(conn, grant), "privilege")
+			mustExec(t, ctx, owner, "grant reader to learner")
+			mustExec(t, ctx, conn, grant)
+		})
+
+		t.Run("catalog_fault", func(t *testing.T) {
+			type control struct {
+				query string
+				conn  *sql.Conn
+			}
+			var controls []control
+			for _, user := range []string{"learner#reader", "admin#accountadmin"} {
+				for _, query := range []string{"set clear_privilege_cache=on", "set enable_privilege_cache=off", "show warnings", "set clear_privilege_cache=1", "set @constant=1+1"} {
+					conn := open(1, "auth_cache#"+user)
+					mustExec(t, ctx, conn, "set enable_privilege_cache=on")
+					require.NoError(t, consume(conn, "select id from app.t"))
+					controls = append(controls, control{query, conn})
+				}
+			}
+			check(true)
+			if fault.Enable() {
+				defer fault.Disable()
+			}
+			remove, err := objectio.InjectLogging(objectio.FJ_CNSubscribeTableFail, "mo_catalog", "mo_role_privs", 0, true)
+			require.NoError(t, err)
+			defer remove()
+			for i, tc := range controls {
+				t.Run(fmt.Sprintf("control_%d/%s", i, tc.query), func(t *testing.T) {
+					require.NoError(t, consume(tc.conn, tc.query))
+				})
+			}
+			// Actual grant consumers must fail closed despite a warm cache.
+			for i, query := range []string{"select id from app.t where id=1", "execute cached_read", "binary"} {
+				var id int
+				var err error
+				if query == "binary" {
+					err = prepared.QueryRowContext(ctx, 1).Scan(&id)
+				} else {
+					err = readers[i].QueryRowContext(ctx, query).Scan(&id)
+				}
+				require.ErrorContains(t, err, "injected subscribe table err", query)
+			}
+		})
+		check(true)
+
 	})
 }
