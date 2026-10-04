@@ -480,24 +480,32 @@ func compareFunctionFixedResult[T types.FixedSizeTExceptStrType](actual, expecte
 
 // DebugRun will not run the compare logic for function result but return the result vector directly.
 func (fc *FunctionTestCase) DebugRun() (*vector.Vector, error) {
-	err := fc.fn(fc.parameters, fc.result, fc.proc, fc.fnLength, nil)
+	if err := fc.result.PreExtendAndReset(fc.fnLength); err != nil {
+		return nil, err
+	}
+	err := fc.fn(fc.parameters, fc.result, fc.proc, fc.fnLength, fc.selectList)
 	return fc.result.GetResultVector(), err
 }
 
-// BenchMarkRun will run the function case N times without correctness check for result.
-func (fc *FunctionTestCase) BenchMarkRun() error {
-	num := 100000
-	for num > 0 {
-		num--
-		err := fc.fn(fc.parameters, fc.result, fc.proc, fc.fnLength, nil)
-		// XXX maybe free is unnecessary.
-		typ := fc.result.GetResultVector().GetType()
-		fc.result.GetResultVector().Reset(*typ)
-		if err != nil {
-			return err
+// Benchmark checks the case once before timing and measures one evaluation per iteration.
+func (fc *FunctionTestCase) Benchmark(b *testing.B) {
+	b.Helper()
+	if ok, info := fc.Run(); !ok {
+		b.Fatal(info)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := fc.result.PreExtendAndReset(fc.fnLength); err != nil {
+			b.Fatal(err)
+		}
+		err := fc.fn(fc.parameters, fc.result, fc.proc, fc.fnLength, fc.selectList)
+		if err != nil && !fc.expected.wantErr {
+			b.Fatal(err)
+		}
+		if err == nil && fc.expected.wantErr {
+			b.Fatal("expected to run failed, but run succeed with no error")
 		}
 	}
-	return nil
 }
 
 func newVectorByType(mp *mpool.MPool, typ types.Type, val any, nsp *nulls.Nulls) *vector.Vector {
@@ -721,6 +729,33 @@ func TestFunctionTestCaseOwnership(t *testing.T) {
 		f32.Free()
 		assertReleased(t)
 
+		mask := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}
+		debug := NewFunctionTestCase(proc, []FunctionTestInput{
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{-7, math.MinInt64}, nil),
+		}, NewFunctionTestResult(types.T_int64.ToType(), false, nil, nil), AbsInt64).WithSelectList(mask)
+		defer debug.Free()
+		result, err := debug.DebugRun()
+		require.NoError(t, err)
+		require.Equal(t, types.T_int64.ToType(), *result.GetType())
+		require.Equal(t, 2, result.Length())
+		values := vector.GenerateFunctionFixedTypeParameter[int64](result)
+		value, isNull := values.GetValue(0)
+		require.False(t, isNull)
+		require.Equal(t, int64(7), value)
+		_, isNull = values.GetValue(1)
+		require.True(t, isNull)
+		require.Equal(t, []int64{-7, math.MinInt64}, vector.MustFixedColNoTypeCheck[int64](debug.parameters[0]))
+		require.Equal(t, []bool{true, false}, mask.SelectList)
+		debug.selectList = nil
+		copy(vector.MustFixedColNoTypeCheck[int64](debug.parameters[0]), []int64{-9, -8})
+		result, err = debug.DebugRun()
+		require.NoError(t, err)
+		require.Equal(t, []int64{9, 8}, vector.MustFixedColNoTypeCheck[int64](result))
+		require.False(t, result.IsNull(0))
+		require.False(t, result.IsNull(1))
+		debug.Free()
+		assertReleased(t)
+
 	})
 	t.Run("terminal comparison panic", func(t *testing.T) {
 		fc := NewFunctionTestCase(proc, []FunctionTestInput{
@@ -769,6 +804,10 @@ func TestFunctionTestCaseOwnership(t *testing.T) {
 		require.NoError(t, err)
 		fc.result.Free()
 		fc.result = result
+		value, debugErr := fc.DebugRun()
+		require.Nil(t, value)
+		require.ErrorIs(t, debugErr, mpool.ErrAllocationAccountCapacity)
+		require.Zero(t, account.Snapshot().Used)
 		var recovered any
 		func() {
 			defer func() { recovered = recover() }()

@@ -54,3 +54,56 @@ from decimal_suffix_t;
 select * from decimal_suffix_v order by d;
 drop view decimal_suffix_v;
 drop table decimal_suffix_t;
+
+-- Scan-backed scale alignment: six operator/direction contracts share three rows.
+drop table if exists decimal_scale_alignment_t;
+create table decimal_scale_alignment_t (id int primary key, x int);
+insert into decimal_scale_alignment_t values (1,1),(2,2),(3,NULL);
+-- @metacmp(true)
+select id,
+(cast(x as decimal(20,0)) + cast('3e-38' as decimal(65,38))) = cast(case id when 1 then '1.00000000000000000000000000000000000003' when 2 then '2.00000000000000000000000000000000000003' end as decimal(65,38)) as add_left,
+(cast('3e-38' as decimal(65,38)) + cast(x as decimal(20,0))) = cast(case id when 1 then '1.00000000000000000000000000000000000003' when 2 then '2.00000000000000000000000000000000000003' end as decimal(65,38)) as add_right,
+(cast(x as decimal(20,0)) - cast('3e-38' as decimal(65,38))) = cast(case id when 1 then '0.99999999999999999999999999999999999997' when 2 then '1.99999999999999999999999999999999999997' end as decimal(65,38)) as sub_left,
+(cast('3e-38' as decimal(65,38)) - cast(x as decimal(20,0))) = cast(case id when 1 then '-0.99999999999999999999999999999999999997' when 2 then '-1.99999999999999999999999999999999999997' end as decimal(65,38)) as sub_right,
+(cast(x as decimal(20,0)) % cast('3e-38' as decimal(65,38))) = cast(case id when 1 then '0.00000000000000000000000000000000000001' when 2 then '0.00000000000000000000000000000000000002' end as decimal(65,38)) as mod_left,
+(cast('3e-38' as decimal(65,38)) % cast(x as decimal(20,0))) = cast(case id when 1 then '0.00000000000000000000000000000000000003' when 2 then '0.00000000000000000000000000000000000003' end as decimal(65,38)) as mod_right
+from decimal_scale_alignment_t order by id;
+-- @metacmp(true)
+select id,
+(cast(x as decimal(20,0)) + cast('3e-39' as decimal(65,39))) = cast(case id when 1 then '1.000000000000000000000000000000000000003' when 2 then '2.000000000000000000000000000000000000003' end as decimal(65,39)) as add_left,
+(cast('3e-39' as decimal(65,39)) + cast(x as decimal(20,0))) = cast(case id when 1 then '1.000000000000000000000000000000000000003' when 2 then '2.000000000000000000000000000000000000003' end as decimal(65,39)) as add_right,
+(cast(x as decimal(20,0)) - cast('3e-39' as decimal(65,39))) = cast(case id when 1 then '0.999999999999999999999999999999999999997' when 2 then '1.999999999999999999999999999999999999997' end as decimal(65,39)) as sub_left,
+(cast('3e-39' as decimal(65,39)) - cast(x as decimal(20,0))) = cast(case id when 1 then '-0.999999999999999999999999999999999999997' when 2 then '-1.999999999999999999999999999999999999997' end as decimal(65,39)) as sub_right,
+(cast(x as decimal(20,0)) % cast('3e-39' as decimal(65,39))) = cast(case id when 1 then '0.000000000000000000000000000000000000001' when 2 then '0.000000000000000000000000000000000000002' end as decimal(65,39)) as mod_left,
+(cast('3e-39' as decimal(65,39)) % cast(x as decimal(20,0))) = cast(case id when 1 then '0.000000000000000000000000000000000000003' when 2 then '0.000000000000000000000000000000000000003' end as decimal(65,39)) as mod_right
+from decimal_scale_alignment_t order by id;
+-- Declared precision65: cancellation fits; the opposite sign exceeds the limit.
+-- @metacmp(true)
+select (-cast(x as decimal(20,0)) + cast('3e-65' as decimal(65,65))) = cast('-0.99999999999999999999999999999999999999999999999999999999999999997' as decimal(65,65)) as add_limit,
+(cast(x as decimal(20,0)) - cast('3e-65' as decimal(65,65))) = cast('0.99999999999999999999999999999999999999999999999999999999999999997' as decimal(65,65)) as sub_limit
+from decimal_scale_alignment_t where id=1;
+select cast(x as decimal(20,0)) + cast('3e-65' as decimal(65,65)) from decimal_scale_alignment_t where id=1;
+-- @metacmp(true)
+select count(*) as rows_after_error from decimal_scale_alignment_t;
+drop table decimal_scale_alignment_t;
+-- @metacmp(true)
+select count(*) as remaining_alignment_tables from information_schema.tables where table_schema=database() and table_name='decimal_scale_alignment_t';
+
+-- Successful scale alignment can use the top signed bits even when both
+-- original coefficients fit Decimal128. Modulo must remain exact and bounded.
+drop table if exists decimal_high_bit_mod_t;
+create table decimal_high_bit_mod_t (id int primary key, x decimal(65,0), y decimal(65,58));
+insert into decimal_high_bit_mod_t values
+(1, 2000000000000000000, cast('85070591730234615865843651857942052864e-58' as decimal(65,58))),
+(2, 4000000000000000000, cast('-85070591730234615865843651857942052864e-58' as decimal(65,58))),
+(3, -2000000000000000000, cast('85070591730234615865843651857942052864e-58' as decimal(65,58))),
+(4, NULL, 0), (5, 4000000000000000000, 0);
+-- @metacmp(true)
+select id, x % y as remainder from decimal_high_bit_mod_t order by id;
+-- @metacmp(true)
+select id, x % cast('85070591730234615865843651857942052864e-58' as decimal(65,58)) as remainder from decimal_high_bit_mod_t order by id;
+-- @metacmp(true)
+select id, cast('2000000000000000000' as decimal(65,0)) % y as remainder from decimal_high_bit_mod_t order by id;
+select count(*) as rows_after_zero from decimal_high_bit_mod_t;
+drop table decimal_high_bit_mod_t;
+select count(*) as remaining_mod_tables from information_schema.tables where table_schema=database() and table_name='decimal_high_bit_mod_t';
