@@ -22,7 +22,7 @@ package function
 // Layout:
 //   - Multiply:    d64Mul, d128Mul, d256Mul
 //   - Add/Sub:     d64Add/d64Sub, d128Add/d128Sub, d256Add/d256Sub
-//   - Division:    d64Div, d128Div, d256Div
+//   - Division:    d64DivAtScale, d128DivAtScale, d256DivAtScale
 //   - Modulo:      d64Mod, d128Mod, d256Mod
 //   - Integer Div: d64IntDiv, d128IntDiv, d256IntDiv (DIV operator)
 
@@ -742,37 +742,14 @@ func d128MulInline(x, y, dst *types.Decimal128, scaleAdj, scale1, scale2 int32) 
 
 // ---- Decimal128 division ----
 
-// d128DivKernel returns a batch division kernel for Decimal128 inputs.
+// d128DivKernelAtScale returns a batch division kernel for Decimal128 inputs.
 // The shouldError flag controls division-by-zero behavior:
 //   - false: mark result as NULL (SQL standard / MySQL default)
 //   - true: return error (strict mode)
-func d128DivKernel(shouldError bool) func(v1, v2 []types.Decimal128, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.Nulls) error {
-	return func(v1, v2 []types.Decimal128, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.Nulls) error {
-		return d128Div(v1, v2, rs, scale1, scale2, rsnull, shouldError)
-	}
-}
-
 func d128DivKernelAtScale(shouldError bool, resultScale int32) func(v1, v2 []types.Decimal128, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.Nulls) error {
 	return func(v1, v2 []types.Decimal128, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.Nulls) error {
 		return d128DivAtScale(v1, v2, rs, scale1, scale2, resultScale, rsnull, shouldError)
 	}
-}
-
-// d64DivKernel returns a batch division kernel for Decimal64 → Decimal128.
-
-func d128Div(v1, v2 []types.Decimal128, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.Nulls, shouldError bool) error {
-	return d128DivAtScale(v1, v2, rs, scale1, scale2, legacyDecimalDivisionScale(scale1), rsnull, shouldError)
-}
-
-func legacyDecimalDivisionScale(scale1 int32) int32 {
-	scale := int32(12)
-	if scale > scale1+6 {
-		scale = scale1 + 6
-	}
-	if scale < scale1 {
-		scale = scale1
-	}
-	return scale
 }
 
 func d128DivAtScale(v1, v2 []types.Decimal128, rs []types.Decimal128, scale1, scale2, resultScale int32, rsnull *nulls.Nulls, shouldError bool) error {
@@ -3253,15 +3230,9 @@ func d256MulInline(x, y *types.Decimal256, dst *types.Decimal256, scale1, scale2
 	return nil
 }
 
-// d256DivKernel returns a batch division kernel for Decimal256.
+// d256DivKernelAtScale returns a batch division kernel for Decimal256.
 
 // ---- Decimal256 division ----
-
-func d256DivKernel(shouldError bool) func(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.Nulls) error {
-	return func(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.Nulls) error {
-		return d256Div(v1, v2, rs, scale1, scale2, rsnull, shouldError)
-	}
-}
 
 func d256DivKernelAtScale(shouldError bool, resultScale int32) func(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.Nulls) error {
 	return func(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.Nulls) error {
@@ -3290,10 +3261,6 @@ func d256NarrowAllAbsFit64(vs []types.Decimal256) bool {
 		}
 	}
 	return true
-}
-
-func d256Div(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.Nulls, shouldError bool) error {
-	return d256DivAtScale(v1, v2, rs, scale1, scale2, legacyDecimalDivisionScale(scale1), rsnull, shouldError)
 }
 
 func d256DivAtScale(v1, v2, rs []types.Decimal256, scale1, scale2, resultScale int32, rsnull *nulls.Nulls, shouldError bool) error {
@@ -4746,20 +4713,10 @@ func d64MulInline(x, y types.Decimal64) types.Decimal128 {
 
 // ---- Decimal64 division ----
 
-func d64DivKernel(shouldError bool) func(v1, v2 []types.Decimal64, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.Nulls) error {
-	return func(v1, v2 []types.Decimal64, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.Nulls) error {
-		return d64Div(v1, v2, rs, scale1, scale2, rsnull, shouldError)
-	}
-}
-
 func d64DivKernelAtScale(shouldError bool, resultScale int32) func(v1, v2 []types.Decimal64, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.Nulls) error {
 	return func(v1, v2 []types.Decimal64, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.Nulls) error {
 		return d64DivAtScale(v1, v2, rs, scale1, scale2, resultScale, rsnull, shouldError)
 	}
-}
-
-func d64Div(v1, v2 []types.Decimal64, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.Nulls, shouldError bool) error {
-	return d64DivAtScale(v1, v2, rs, scale1, scale2, legacyDecimalDivisionScale(scale1), rsnull, shouldError)
 }
 
 func d64DivAtScale(v1, v2 []types.Decimal64, rs []types.Decimal128, scale1, scale2, resultScale int32, rsnull *nulls.Nulls, shouldError bool) error {

@@ -359,3 +359,54 @@ concrete defects. Current focused race exits zero with all 24 cases passing and 
 The earlier superseded race build was cancelled after the review findings, not
 counted as passed. Four scale-39 failures and full-function
 race #29592 remain unchanged and unwaived; #29249 remains unfinished.
+
+### Decimal division — proposed next closure, review changes open
+
+Production `divFn` reads the bound result scale and uses the three AtScale
+adapters/kernels. The old three factories, three default-scale entry points and
+`legacyDecimalDivisionScale` have only test/benchmark consumers. The proposed
+retirement migrates 137 call sites at their original numerical scales before
+removing those seven symbols. This preserves workload semantics; the frozen
+raw scales do not define current SQL type inference. A focused control checkpoint
+separates migration mistakes from later fixture/oracle replacement.
+
+Then consolidate batch contracts into existing `TestD64Div`, `TestD128Div` and
+`TestD256Div` typed tables. Map every old scenario by physical shape, scale
+adjustment, admission operand, actual fallback, signed quotient range, rounding,
+NULL and typed error before deletion. Preserve strong Format/cross-width/integer
+oracles, mixed non-division children and benchmark workloads. Expected limbs
+come from independent integer arithmetic with one final half-away-from-zero
+rounding; production helpers must not calculate expected values.
+
+Names are not branch evidence: D64 inline scaling cannot overflow because
+`2^63 * 10^19 < 2^127`; its six overflow-fallback sites are retirement candidates
+requiring explicit review. Two D128 fallback owners also use numerators too small
+to reach their claimed inline rejection. Preserve their useful value/NULL domains
+and add genuine intermediate-overflow and final-overflow witnesses. Keep the
+D128 fallback and D64 out-of-inline scale paths, which remain reachable.
+
+Existing adapters own all-masked admission, public error translation and result
+precision; existing direct-call/executor owners publish constant results. Reuse
+these consumer tests and strengthen only missing metadata/error assertions.
+Raw singleton cases do not establish arbitrary logical-length broadcasting.
+Require actual normal/race/static terminal results, independent QA rejection and
+matched body-cost measurements. No query-speed or whole-CI gain is claimed.
+This proposal does not resolve scale-39 or #29592, and does not complete #29249.
+
+Independent gpt-6.1-sol xhigh review requests two concrete closures: final-overflow
+assertions after inline rejection in all six D128 shape/NULL loops, and a named
+replacement ledger before deleting scenarios. Use adjustment 10 and
+`X = floor((2^127-1)/10^10)+1`: divisor `10^10` returns exactly X, while divisor 1
+must return `ErrInvalidInput`, with the failing row unmasked. The review accepts
+the D64 dead-branch proof. Both the reviewed requirements and remaining mapping
+work are explicit; the proposal is not yet approved for full consolidation.
+
+Phase A is now implemented locally: all 137 call expressions use explicit scales,
+and the seven unused definitions are removed. An inverse replacement check proves
+all original test data/assertions and benchmark workloads unchanged; only obsolete
+owner comments are also updated. No scenarios or live fallback branches have been
+deleted. All 37 selected migration controls pass with no skips. Current vet and incremental
+lint pass; molint exits zero with two unchanged baseline diagnostics. The independent
+gpt-6.1-sol xhigh review accepts this nonfinal mechanical checkpoint only. Separately, all 12 raw
+D128 inline-fallback success/error witnesses pass on the baseline, covering the six
+shape/NULL loops. That is control evidence, not mutation sensitivity or delivery.
